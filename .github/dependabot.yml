@@ -60,15 +60,17 @@ updates:
       - dependency-name: node
         update-types: [version-update:semver-major]
       # The AI image's wheels are hashed for cp312: a new Python line is a
-      # rebuild of requirements.txt, not a digest bump.
+      # rebuild of the requirements*.txt files, not a digest bump.
       - dependency-name: python
         update-types: [version-update:semver-major, version-update:semver-minor]
     commit-message:
       prefix: chore(docker)
 
-  # The AI service's hashed requirements (infra/ai-ocr). The OCR engine, its
+  # The AI service's hashed requirements (infra/ai-ocr), one file per image
+  # layer (infra/ai-ocr/requirements.txt lists them). The OCR engine, its
   # runtime and OpenCV are what the benchmark measured (ADR 0010): moving
-  # them is a new measurement, not a routine bump.
+  # them is a new measurement, not a routine bump — which is also why they
+  # are the first layers, and what does get bumped is the last one.
   - package-ecosystem: pip
     target-branch: staging
     directory: "/infra/ai-ocr"

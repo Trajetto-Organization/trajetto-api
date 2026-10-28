@@ -4,6 +4,10 @@ import {
   DELIVERY_STATUS_LABELS,
   type DeliveryStatus,
 } from "@/shared/delivery/delivery-rules";
+import {
+  DELIVERY_KIND_LABELS,
+  type DeliveryKind,
+} from "@/shared/delivery/delivery-kind";
 
 /**
  * The rows the deliveries and occurrences exports write, one function each,
@@ -21,6 +25,8 @@ interface DeliveryExportColumns {
   code?: string | null;
   invoice_key?: string | null;
   invoice_number?: string | null;
+  /** Absent reads as the column default, DELIVERY. */
+  kind?: DeliveryKind;
   status: DeliveryStatus;
   recipient_name: string;
   recipient_document?: string | null;
@@ -54,6 +60,10 @@ function deliveryExportRow(
     code: delivery.code ?? null,
     invoice_key: delivery.invoice_key ?? null,
     invoice_number: delivery.invoice_number ?? null,
+
+    // "Entrega" / "Ordem de serviço" / "Coleta", for the same reason as the
+    // status below.
+    kind: DELIVERY_KIND_LABELS[delivery.kind ?? "DELIVERY"],
 
     // Portuguese, because an export is read by a person in Excel and
     // "IN_TRANSIT" in a column called Status has to be explained every

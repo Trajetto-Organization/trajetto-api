@@ -62,6 +62,21 @@ interface ImportRecord {
 
   reversed_at: Date | string | null;
 
+  /**
+   * The undo's progress, written batch by batch, and its result once it
+   * ends. Null (or absent) when nobody asked for it.
+   */
+  reversal?: ReversalProgress | null;
+
+  /**
+   * The lease of the run undoing it right now; null when none is. With a
+   * stale heartbeat (`updated_at`) that run is dead and a retry takes over.
+   */
+  reversal_started_at?: Date | string | null;
+
+  /** The heartbeat of whatever is working on the record. */
+  updated_at?: Date | string;
+
   businessId: string;
   performedById: string;
 
@@ -99,9 +114,11 @@ interface ListImportsProps {
   page: number;
   pageSize: number;
   /**
-   * Whether each row carries its per-row report. Defaults to true, which is
-   * what the web already in production expects; the current web asks for
-   * false and reads one report at a time through `findImportById`.
+   * Whether each row carries its per-row report. Defaults to false: the
+   * Importações tab asked without the flag and every page carried one JSON
+   * entry per spreadsheet line, megabytes deep-copied, stringified and
+   * gzipped on the event loop to draw four counters per row. The report of
+   * one upload comes from `findImportById` when the operator opens it.
    */
   includeReport?: boolean;
   sort?: ImportSortKey;
@@ -151,6 +168,56 @@ interface ReversalResult {
 }
 
 /**
+ * The undo as stored on the record (`reversal`), accumulated batch by batch
+ * (services/import-reversal.ts): what a crash leaves behind is exactly what
+ * the committed batches did, and the retry adds to it.
+ */
+interface ReversalProgress extends ReversalResult {
+  /** The routes are decided once, before the first batch of deliveries. */
+  routesDone: boolean;
+
+  startedAt: string;
+  finishedAt: string | null;
+}
+
+/**
+ * The undo as the client reads it: RUNNING, INTERRUPTED (stopped halfway;
+ * asking again resumes it) or DONE (the record is REVERSED).
+ */
+type ReversalState = "RUNNING" | "INTERRUPTED" | "DONE";
+
+interface ReversalView extends ReversalResult {
+  state: ReversalState;
+  startedAt: string;
+  finishedAt: string | null;
+}
+
+/** One upload as GET /import/get-import serves it. */
+type ImportDetail = Omit<
+  ImportRecord,
+  "reversal" | "reversal_started_at" | "updated_at"
+> & {
+  reversal: ReversalView | null;
+};
+
+/**
+ * Asking for the lease of an undo.
+ *
+ * - claimed: this run holds it; `progress` is where a previous run stopped
+ *   (or zero).
+ * - running: a live run holds it (its heartbeat is fresh).
+ * - reversed: already fully undone.
+ * - in-progress: the upload itself is still writing rows.
+ * - not-found: no such upload in this company.
+ */
+type ReversalClaim =
+  | { outcome: "claimed"; lease: Date; progress: ReversalProgress }
+  | { outcome: "running"; record: ImportRecord }
+  | { outcome: "reversed" }
+  | { outcome: "in-progress" }
+  | { outcome: "not-found" };
+
+/**
  * A delivery the reversal removed, with what a webhook subscriber matches on
  * (our id, their code, the NF-e key).
  */
@@ -168,6 +235,7 @@ export type {
   RemovedDelivery,
   CreateImportProps,
   FinishImportProps,
+  ImportDetail,
   ImportRecord,
   ImportReport,
   ImportRowResult,
@@ -177,6 +245,10 @@ export type {
   ListImportsProps,
   ListImportsPage,
   ListImportsResult,
+  ReversalClaim,
+  ReversalProgress,
   ReversalResult,
+  ReversalState,
+  ReversalView,
   RowOutcome,
 };

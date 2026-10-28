@@ -37,6 +37,7 @@ import {
   type VehicleSortKey,
 } from "../../usecases/list-vehicle/vehicle-list";
 import type { SortOrder } from "@/shared/pagination/list-query";
+import { compareExportKeys } from "@/shared/pagination/export-keyset";
 
 /** A route as the twin sees it: the route twin's rows fit this shape. */
 type RouteRow = VehicleAssignment & { businessId: string };
@@ -463,7 +464,8 @@ class InMemoryVehicleRepository implements IVehicleRepository {
   ): AsyncGenerator<Record<string, unknown>> {
     const rows = this.vehicles
       .filter((vehicle) => this.matches(vehicle, filters))
-      .sort((a, b) => compareNullable(a.id, b.id, "asc"));
+      // The real one's keyset: created_at, then id in code-point order.
+      .sort(compareExportKeys);
 
     for (const vehicle of rows) {
       yield {

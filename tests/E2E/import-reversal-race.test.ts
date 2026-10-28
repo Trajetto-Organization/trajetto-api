@@ -186,11 +186,14 @@ describe("the undo clicked twice", () => {
         .value.removedDeliveries,
     ).toBe(2);
 
+    // The loser of the claim finds the winner still running (it holds the
+    // undo's lease) or already done — a 409 either way, never a second undo.
     expect(rejected).toHaveLength(1);
-    expect(rejected[0].reason).toMatchObject({
-      statusCode: 409,
-      code: "IMPORT_ALREADY_REVERSED",
-    });
+    expect(rejected[0].reason).toMatchObject({ statusCode: 409 });
+    expect([
+      "IMPORT_ALREADY_REVERSED",
+      "IMPORT_REVERSAL_IN_PROGRESS",
+    ]).toContain((rejected[0].reason as { code: string }).code);
 
     // One activity: the trail says it was undone once, because it was.
     expect(activities).toEqual(["Estornada"]);

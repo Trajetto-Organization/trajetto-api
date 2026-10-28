@@ -307,8 +307,10 @@ class InMemoryDeliveryRepository implements IDeliveryRepository {
     pageSize,
     sort,
     order,
-    ...filters
+    ...requested
   }: ListDeliveriesProps): Promise<ListDeliveriesPage> {
+    const { filters, periodApplied } = this.resolveDeliveryPeriod(requested);
+
     const matching = (except?: DeliveryFacet) =>
       this.deliveries.filter((delivery) =>
         this.matchesDeliveryList(delivery, filters, except),
@@ -400,6 +402,7 @@ class InMemoryDeliveryRepository implements IDeliveryRepository {
     );
 
     return {
+      periodApplied,
       data: sorted
         .slice(skip, skip + pageSize)
         .map((delivery) => this.withListRelations(delivery)) as Delivery[],
@@ -417,6 +420,42 @@ class InMemoryDeliveryRepository implements IDeliveryRepository {
     };
   }
 
+  /**
+   * resolveDeliveryPeriod (delivery-search.ts), in memory: an exact id, order
+   * code, NF-e key or NF number of the company (and scope) sets the period
+   * aside; a term under three characters never counts as exact.
+   */
+  private resolveDeliveryPeriod<F extends DeliveryListFilters>(
+    filters: F,
+  ): { filters: F; periodApplied: boolean } {
+    const hasPeriod = Boolean(filters.createdFrom || filters.createdTo);
+    const term = filters.search?.trim().toLowerCase() ?? "";
+
+    if (!hasPeriod || !term) return { filters, periodApplied: hasPeriod };
+
+    const exact =
+      [...term].length >= 3 &&
+      this.deliveries.some(
+        (delivery) =>
+          delivery.businessId === filters.businessId &&
+          (!filters.scopeDriverId ||
+            delivery.driverId === filters.scopeDriverId) &&
+          [
+            delivery.id,
+            delivery.code,
+            delivery.invoice_key,
+            delivery.invoice_number,
+          ].some((value) => (value ?? "").toLowerCase() === term),
+      );
+
+    if (!exact) return { filters, periodApplied: true };
+
+    return {
+      filters: { ...filters, createdFrom: undefined, createdTo: undefined },
+      periodApplied: false,
+    };
+  }
+
   /** deliveryListWhere, in memory. */
   private matchesDeliveryList(
     delivery: Delivery,
@@ -426,6 +465,24 @@ class InMemoryDeliveryRepository implements IDeliveryRepository {
     if (delivery.businessId !== filters.businessId) return false;
 
     if (filters.scopeDriverId && delivery.driverId !== filters.scopeDriverId) {
+      return false;
+    }
+
+    // [createdFrom, createdTo), as the Prisma `where` reads created_at.
+    const createdAt = new Date(delivery.created_at ?? 0).getTime();
+
+    if (filters.createdFrom && createdAt < filters.createdFrom.getTime()) {
+      return false;
+    }
+
+    if (filters.createdTo && createdAt >= filters.createdTo.getTime()) {
+      return false;
+    }
+
+    if (
+      filters.kinds?.length &&
+      !filters.kinds.includes(delivery.kind ?? "DELIVERY")
+    ) {
       return false;
     }
 
@@ -1177,8 +1234,10 @@ class InMemoryDeliveryRepository implements IDeliveryRepository {
   /** The listing's filters (deliveryListWhere), in creation order. */
   /** The listing's filters, in (created_at, id) order, through the shared row. */
   async *streamDeliveriesForExport(
-    filters: DeliveryListFilters,
+    requested: DeliveryListFilters,
   ): AsyncGenerator<Record<string, unknown>> {
+    const { filters } = this.resolveDeliveryPeriod(requested);
+
     const rows = this.deliveries
       .filter((delivery) => this.matchesDeliveryList(delivery, filters))
       .sort(byCreationThenId);

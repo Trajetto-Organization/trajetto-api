@@ -7,6 +7,7 @@ import { sign } from "jsonwebtoken";
 import { container } from "tsyringe";
 
 import auth from "@/config/auth";
+import { importQueue } from "@/modules/import/services/import-queue";
 
 /**
  * The acceptance criterion of Fase 2, made executable.
@@ -363,10 +364,23 @@ describe("a carrier's day, from the spreadsheet to the webhook", () => {
       },
     });
 
-    expect(response.statusCode, response.body.slice(0, 400)).toBe(200);
+    // Accepted and processed after the answer (import-queue.ts); the report
+    // is read from the record, as the web follows it.
+    expect(response.statusCode, response.body.slice(0, 400)).toBe(202);
 
-    const body = response.json();
+    await importQueue.idle();
 
+    const detail = await app.inject({
+      method: "GET",
+      url: `/import/get-import/${response.json().data.id}/business/${CARRIER}`,
+      headers: asManager(),
+    });
+
+    expect(detail.statusCode, detail.body.slice(0, 400)).toBe(200);
+
+    const body = detail.json();
+
+    expect(body.data.status).toBe("COMPLETED");
     expect(body.data.imported).toBe(3);
 
     // The route column is what makes this the entry path for a carrier with

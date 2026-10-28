@@ -7,6 +7,7 @@ const realtime = vi.hoisted(() => ({
 vi.mock("@/shared/route/route-realtime", () => realtime);
 
 import { RecordDriverPositionsUseCase } from "@/modules/route/usecases/record-driver-positions/record-driver-positions-usecase";
+import { InMemoryDriverPositionRepository } from "@/modules/route/repositories/in-memory/in-memory-driver-position-repository";
 import { latestPing } from "@/shared/route/driver-position-rules";
 
 /**
@@ -30,28 +31,33 @@ const ping = (recorded_at: Date, latitude: number) => ({
 
 let useCase: RecordDriverPositionsUseCase;
 
+const users = {
+  findUserById: async () => ({
+    id: "user-1",
+    driverId: "driver-1",
+    businessId: "business-1",
+  }),
+};
+
+const routes = {
+  findDriverRoute: async () => ({ id: "route-1", status: "IN_PROGRESS" }),
+  findActiveRouteForDriver: async () => ({
+    id: "route-1",
+    started_at: new Date(Date.now() - 60 * 60_000),
+  }),
+};
+
 beforeEach(() => {
   realtime.sendDriverPositionToBusiness.mockClear();
 
   useCase = new RecordDriverPositionsUseCase(
-    {
-      findUserById: async () => ({
-        id: "user-1",
-        driverId: "driver-1",
-        businessId: "business-1",
-      }),
-    } as never,
-    {
-      findDriverRoute: async () => ({ id: "route-1", status: "IN_PROGRESS" }),
-      findActiveRouteForDriver: async () => ({
-        id: "route-1",
-        started_at: new Date(Date.now() - 60 * 60_000),
-      }),
-    } as never,
+    users as never,
+    routes as never,
     {
       recordBatch: async ({ pings }: { pings: unknown[] }) => ({
         stored: pings.length,
         dropped: 0,
+        advanced: true,
       }),
     } as never,
   );
@@ -72,6 +78,43 @@ describe("the position the tower is told about", () => {
         latitude: -23.5,
       }),
     );
+  });
+});
+
+/**
+ * Only a batch that moved the driver's last position is announced.
+ *
+ * The repository's "only newer" guard kept the stored row when a resend or a
+ * dead-zone backlog arrived after a fresher fix, and the use case announced
+ * the batch's newest point anyway: every open panel redrew the truck minutes
+ * back along its trail until the next ping.
+ */
+describe("a batch that does not advance the last position", () => {
+  it("is stored but not announced", async () => {
+    const positions = new InMemoryDriverPositionRepository();
+    const recording = new RecordDriverPositionsUseCase(
+      users as never,
+      routes as never,
+      positions,
+    );
+
+    await recording.execute({ userId: "user-1", pings: [ping(newer, -23.5)] });
+
+    expect(realtime.sendDriverPositionToBusiness).toHaveBeenCalledTimes(1);
+
+    // A backlog out of a dead zone, older than the fix already stored.
+    const result = await recording.execute({
+      userId: "user-1",
+      pings: [ping(older, -23.9)],
+    });
+
+    expect(result).toMatchObject({ stored: 1, tracking: true });
+    expect(realtime.sendDriverPositionToBusiness).toHaveBeenCalledTimes(1);
+
+    // And a resend of the newest point: nothing new either.
+    await recording.execute({ userId: "user-1", pings: [ping(newer, -23.5)] });
+
+    expect(realtime.sendDriverPositionToBusiness).toHaveBeenCalledTimes(1);
   });
 });
 

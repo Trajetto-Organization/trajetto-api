@@ -21,6 +21,9 @@ import { sendTransactionalMail } from "@/shared/services/transactional-mail-serv
 import { AppError } from "@/shared/errors/AppError";
 
 import { emailLogoUrl } from "@/shared/providers/mail-provider/email-logo";
+import { logger } from "@/shared/logging/logger";
+
+const log = logger.child({ component: "branch" });
 
 const dependencyLabels: Record<string, string> = {
   vehicles: "veículo(s)",
@@ -101,32 +104,40 @@ class RequestBranchDeletionUseCase {
         code_hash: codeHash,
         expires,
       });
-
-      await sendTransactionalMail({
-        email: findUser.email,
-        name: findUser.name,
-        subject: "Código de confirmação para exclusão de filial",
-        templateName: "branch-deletion-code.hbs",
-        moduleName: "branch",
-        additionalVariablesProperties: {
-          code,
-          branchName: findBranch.corporate_reason,
-          branchCnpj: findBranch.cnpj,
-          businessName: findBusiness.corporate_reason,
-          logo: emailLogoUrl(),
-        },
-      });
-
-      return {
-        message:
-          "Um código de confirmação foi enviado para o seu e-mail. O código expira em 5 minutos.",
-      };
     } catch (error) {
       throw new AppError(
         "Houve um erro ao tentar enviar o código de confirmação! Por favor, tente novamente.",
         500,
       );
     }
+
+    // Sent after the answer, as the company's deletion code is: the code is
+    // stored above, asking again replaces it, and it carries a secret, so it
+    // stays in-process, off the outbox.
+    void sendTransactionalMail({
+      email: findUser.email,
+      name: findUser.name,
+      subject: "Código de confirmação para exclusão de filial",
+      templateName: "branch-deletion-code.hbs",
+      moduleName: "branch",
+      additionalVariablesProperties: {
+        code,
+        branchName: findBranch.corporate_reason,
+        branchCnpj: findBranch.cnpj,
+        businessName: findBusiness.corporate_reason,
+        logo: emailLogoUrl(),
+      },
+    }).catch((error) =>
+      log.error(
+        { err: error, userId: findUser.id, branchId },
+        "branch deletion code e-mail could not be sent",
+      ),
+    );
+
+    return {
+      message:
+        "Um código de confirmação foi enviado para o seu e-mail. O código expira em 5 minutos.",
+    };
   }
 }
 

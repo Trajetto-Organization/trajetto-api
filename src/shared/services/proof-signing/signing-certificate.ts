@@ -4,6 +4,12 @@ import { createPrivateKey, type KeyObject } from "node:crypto";
 
 import { isValidCnpj } from "@/shared/delivery/cnpj";
 
+import {
+  verifyIcpBrasilChain,
+  type IcpChainVerdict,
+  type IcpTrustStore,
+} from "./icp-brasil-chain";
+
 /**
  * The platform's ICP-Brasil A1 certificate (e-CNPJ), opened from the PFX the
  * owner configures (decision 14.8, design §6.3).
@@ -11,6 +17,12 @@ import { isValidCnpj } from "@/shared/delivery/cnpj";
  * Opened once and turned into a STATE, not an exception: a wrong password or
  * an expired certificate must not take the API down — the receipts then go
  * out unsigned and say so, with the reason recorded on each document.
+ *
+ * Whether it is ICP-Brasil is a separate verdict (`icpBrasil`), from its
+ * chain of signatures up to an official root (icp-brasil-chain.ts), never
+ * from its issuer's name. A sound certificate outside that chain still signs
+ * — the file's integrity is still worth a signature — but the document does
+ * not claim the legal validity only ICP-Brasil gives.
  *
  * Nothing here ever logs or returns the PFX, its password or the key.
  */
@@ -36,6 +48,9 @@ interface LoadedCertificate {
 
   notBefore: Date;
   notAfter: Date;
+
+  /** Whether its chain verified up to an official ICP-Brasil root. */
+  icpBrasil: IcpChainVerdict;
 }
 
 type CertificateState =
@@ -58,6 +73,8 @@ interface CertificateInput {
   pfx: Buffer | null;
   password: string | undefined;
   disabled?: boolean;
+  /** The roots the chain must reach; the official ICP-Brasil ones by default. */
+  trustStore?: IcpTrustStore;
 }
 
 /** An attribute's value as text: forge leaves UTF8String as raw bytes. */
@@ -106,13 +123,6 @@ function splitCommonName(commonName: string): {
   return { name: commonName.trim(), cnpj: null };
 }
 
-function isIcpBrasil(certificate: forge.pki.Certificate): boolean {
-  return certificate.issuer.attributes.some(
-    (attribute) =>
-      attribute.shortName === "O" && attributeText(attribute) === "ICP-Brasil",
-  );
-}
-
 function derOf(certificate: forge.pki.Certificate): Buffer {
   return Buffer.from(
     forge.asn1.toDer(forge.pki.certificateToAsn1(certificate)).getBytes(),
@@ -137,9 +147,10 @@ function sameKey(
  * Opens and checks the PFX.
  *
  * READY needs: the password opens it, an RSA key whose certificate is in it,
- * an ICP-Brasil issuer (O=ICP-Brasil), a key usage that allows signing, and
- * a validity window that has started. Past `notAfter` it is EXPIRED (the
- * certificate is still described, for the operations alert).
+ * a key usage that allows signing, and a validity window that has started.
+ * Past `notAfter` it is EXPIRED (the certificate is still described, for the
+ * operations alert). The ICP-Brasil chain does not decide READY: it is the
+ * `icpBrasil` verdict, read by the signing plan.
  */
 function loadSigningCertificate(
   input: CertificateInput,
@@ -187,9 +198,6 @@ function loadSigningCertificate(
 
   if (!signer) return { state: "INVALID", reason: "KEY_CERTIFICATE_MISMATCH" };
 
-  if (!isIcpBrasil(signer))
-    return { state: "INVALID", reason: "NOT_ICP_BRASIL" };
-
   const usage = signer.getExtension("keyUsage") as {
     digitalSignature?: boolean;
     nonRepudiation?: boolean;
@@ -213,9 +221,12 @@ function loadSigningCertificate(
     return { state: "INVALID", reason: "KEY_UNUSABLE" };
   }
 
+  const certificateDer = derOf(signer);
+  const chainDer = certificates.filter((cert) => cert !== signer).map(derOf);
+
   const certificate: LoadedCertificate = {
-    certificateDer: derOf(signer),
-    chainDer: certificates.filter((cert) => cert !== signer).map(derOf),
+    certificateDer,
+    chainDer,
     privateKey,
     signerName: name,
     signerCnpj: cnpj,
@@ -224,6 +235,12 @@ function loadSigningCertificate(
       fieldText(signer.issuer, "CN") ?? fieldText(signer.issuer, "O") ?? "",
     notBefore: signer.validity.notBefore,
     notAfter: signer.validity.notAfter,
+    // Without `now`: the window is re-read per document (isIcpBrasilAt).
+    icpBrasil: verifyIcpBrasilChain({
+      leaf: certificateDer,
+      intermediates: chainDer,
+      trustStore: input.trustStore,
+    }),
   };
 
   return certificateWindowState(certificate, now);

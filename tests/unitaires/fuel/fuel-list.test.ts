@@ -405,14 +405,17 @@ describe("InMemoryFuelRepository keeps what Postgres keeps", () => {
   it("exports through the shared comparator, not localeCompare", async () => {
     // Real ids are lowercase UUIDs, where both orders agree; ids that differ
     // only in case show which comparator the twin uses. localeCompare puts
-    // "a" before "B", code point (compareForOrder, like every other order of
-    // this twin) puts "B" first.
+    // "a" before "B", code point (like Postgres) puts "B" first. The export
+    // reads in creation order (created_at, id), so the four share one
+    // created_at and the id alone breaks the tie.
     const repo = new InMemoryFuelRepository();
+    const sameInstant = new Date("2026-09-01T12:00:00.000Z");
 
     for (const id of ["a-1", "B-2", "b-3", "A-4"]) {
       const fuel = await repo.createFuel(refueling());
 
       fuel.id = id;
+      fuel.created_at = sameInstant;
     }
 
     const ids: string[] = [];

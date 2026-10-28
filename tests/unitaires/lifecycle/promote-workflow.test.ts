@@ -8,7 +8,7 @@ import { hasShell, run, sandbox, type Sandbox } from "./support/shell-harness";
 /**
  * The road to production: build once on staging, promote by digest.
  *
- * Every push to `staging` validates and builds the three images ONCE, as the
+ * Every push to `staging` validates and builds the two images ONCE, as the
  * immutable `sha-<sha>`; the merge into `main` promotes the exact build
  * staging ran for the merged commit, never a rebuild; the manual button is
  * the rollback path, so it must ship exactly the build it is given — and
@@ -90,13 +90,18 @@ describe("the workflow's triggers", () => {
 });
 
 describe("the build (once, on staging)", () => {
-  it("runs only on a push to staging, after the whole validation", () => {
+  it("runs only on staging (a push, or Run workflow there), after the whole validation", () => {
     const build = jobOf("build-and-push");
 
+    // Run workflow on staging is the staging road again (force_ai_build);
+    // on main the same button is the promote, never a build.
     expect(build).toContain(
-      "if: github.event_name == 'push' && github.ref == 'refs/heads/staging'",
+      "if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/staging'",
     );
     expect(build).toContain("needs: [test, ai-ocr, secrets]");
+    expect(jobOf("promote-production")).toContain(
+      "if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')",
+    );
   });
 
   it("validates pull requests into main exactly as a push to staging", () => {
@@ -120,8 +125,13 @@ describe("the build (once, on staging)", () => {
     );
 
     // The API and the AI service (ADR 0010). Database backups are Dokploy's
-    // own, so there is no backup image.
-    expect(metadata).toEqual(["type=sha,prefix=sha-", "type=sha,prefix=sha-"]);
+    // own, so there is no backup image. The AI also carries `src-<tree>`,
+    // the git hash of infra/ai-ocr: immutable too (it names the content the
+    // image was built from), and how a later push finds it to reuse it.
+    expect(metadata).toEqual([
+      "type=sha,prefix=sha-",
+      "type=sha,prefix=sha-\n            type=raw,value=src-${{ steps.ai-source.outputs.tree }}",
+    ]);
     expect(build.match(/flavor: latest=false/g)).toHaveLength(2);
   });
 });
@@ -448,11 +458,15 @@ describe.skipIf(!hasShell("bash"))("before Dokploy exists", () => {
         /::error::.*DOKPLOY_API_KEY DOKPLOY_API_APPLICATION_ID/,
       );
 
-      // The deploy and its checks follow the answer.
+      // The deploy and its checks follow the answer. The staged marker does
+      // not: before Dokploy exists the tags are all there is (as in the
+      // web), and it still runs only after every step before it passed.
       const text = jobOf(jobName);
       const after = text.slice(text.indexOf(`- name: ${deploy}`));
 
       for (const chunk of after.split(/\n {6}- name: /)) {
+        if (chunk.startsWith("Mark this build as staged")) continue;
+
         expect(chunk, chunk.split("\n")[0]).toMatch(
           /if: .*steps\.dokploy\.outputs\.enabled == 'true'/,
         );
@@ -462,16 +476,25 @@ describe.skipIf(!hasShell("bash"))("before Dokploy exists", () => {
 });
 
 describe("the pull request into main", () => {
-  it("waits for the staging images of its head, so the merge has something to promote", () => {
+  it("waits for staging to have DEPLOYED its head, so the merge promotes a build staging ran", () => {
     const check = jobOf("staging-image");
 
     expect(check).toContain("if: github.event_name == 'pull_request'");
     expect(check).toContain(
       "HEAD_SHA: ${{ github.event.pull_request.head.sha }}",
     );
-    expect(check).toContain('tag="sha-${HEAD_SHA::7}"');
+    expect(check).toContain('short="${HEAD_SHA::7}"');
+    // `sha-<sha>` exists as soon as the build pushed it, also when the scan
+    // or the staging deploy failed afterwards: the marker is the proof, on
+    // the same digest.
+    expect(check).toContain('staged=$(digest_of "${image}:staged-${short}")');
+    expect(check).toContain('built=$(digest_of "${image}:sha-${short}")');
+    expect(check).toContain('[ "$staged" != "$built" ]');
+    expect(check).toContain("for image in trajetto-api trajetto-ai; do");
     expect(check).toContain("packages: read");
     expect(check).not.toContain("packages: write");
+    // Branch protection requires the check by this name.
+    expect(check).toContain("name: The PR head was built on staging");
   });
 });
 

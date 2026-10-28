@@ -4,6 +4,10 @@ import {
   DELIVERY_LANES,
   type DeliveryLane,
 } from "@/shared/notifications/pipeline-rules";
+import {
+  webhookDisabledEndpointsSql,
+  webhookQueueSql,
+} from "@/shared/integration/webhook-metrics";
 
 /**
  * The SQL behind /health/metrics and /health/dead-letter (OBS-09, PG-18).
@@ -282,9 +286,104 @@ function aiFailedSinceSql(since: Date): Prisma.Sql {
   `;
 }
 
+/** Outbox events waiting: how many, and the two lags (see the route). */
+function outboxPendingSql(): Prisma.Sql {
+  return Prisma.sql`
+    SELECT
+      count(*)::int AS pending,
+      EXTRACT(EPOCH FROM (
+        now() - MIN(CASE WHEN "availableAt" <= now() THEN "availableAt" END)
+      ))::float AS eligible_seconds,
+      EXTRACT(EPOCH FROM (now() - MIN("created_at")))::float AS any_seconds
+    FROM "domain_outbox_event"
+    WHERE "status" = 'PENDING'
+  `;
+}
+
+/**
+ * Outbox events that gave up. Its own statement, not a FILTER of the one
+ * above: that one reads created_at from the heap, and a FILTER would drag
+ * every FAILED row ever kept through the same heap read; alone, this is an
+ * index-only count on (status, availableAt).
+ */
+function outboxFailedSql(): Prisma.Sql {
+  return Prisma.sql`
+    SELECT count(*)::int AS n
+    FROM "domain_outbox_event"
+    WHERE "status" = 'FAILED'
+  `;
+}
+
+/** The AI queue: waiting and running, index-only on (status, availableAt). */
+function aiQueueSql(): Prisma.Sql {
+  return Prisma.sql`
+    SELECT
+      count(*) FILTER (WHERE "status" = 'PENDING')::int AS pending,
+      count(*) FILTER (WHERE "status" = 'PROCESSING')::int AS running
+    FROM "ai_analysis_request"
+    WHERE "status" IN ('PENDING', 'PROCESSING')
+  `;
+}
+
+/** A row-returning statement as one JSON array column ([] when empty). */
+function asJsonArray(rows: Prisma.Sql): Prisma.Sql {
+  return Prisma.sql`(SELECT coalesce(json_agg(r), '[]'::json) FROM (${rows}) r)`;
+}
+
+/**
+ * Every queue number of /health/metrics in ONE statement.
+ *
+ * They were twenty-odd statements in a row — each one a round trip and a
+ * checkout of the replica's pool — on the screen that is opened when the
+ * pool is the thing in trouble. Each statement above becomes a subquery
+ * here, unchanged: Postgres plans every scalar subquery (and every
+ * json_agg'ed one) on its own, so each still reads the index its plan test
+ * pins (tests/E2E/health-metrics-plans.test.ts EXPLAINs both the parts and
+ * this whole). One statement, one connection, one round trip.
+ *
+ * Row-returning parts (per-channel counts, the backlog of both lanes, the
+ * dead-tuple statistics) come back as JSON arrays; timestamps in them are
+ * timestamptz, so they carry their offset.
+ */
+function operationalSnapshotSql(since: Date): Prisma.Sql {
+  return Prisma.sql`
+    SELECT
+      (SELECT count(*) FROM pg_stat_activity
+        WHERE datname = current_database())::int AS active_connections,
+      current_setting('max_connections') AS max_connections,
+      outbox.pending AS outbox_pending,
+      outbox.eligible_seconds AS outbox_eligible_seconds,
+      outbox.any_seconds AS outbox_any_seconds,
+      (${outboxFailedSql()}) AS outbox_failed,
+      ai.pending AS ai_pending,
+      ai.running AS ai_running,
+      (${aiFailedSinceSql(since)}) AS ai_failed_24h,
+      (${webhookFailedSinceSql(since)}) AS webhooks_failed_24h,
+      (${whatsappFailedSinceSql(since)}) AS whatsapp_failed_24h,
+      (${whatsappMultiSendSinceSql(since)}) AS whatsapp_multi_send_24h,
+      webhook_queue.pending_due AS webhook_pending_due,
+      webhook_queue.held AS webhook_held,
+      webhook_queue.oldest_due_seconds AS webhook_oldest_due_seconds,
+      (${webhookDisabledEndpointsSql()}) AS webhook_disabled_endpoints,
+      ${asJsonArray(deliveriesInWindowSql(since))} AS window_rows,
+      ${asJsonArray(failedByChannelSql())} AS failed_rows,
+      ${asJsonArray(
+        Prisma.sql`(${deliveryBacklogSql("internal")}) UNION ALL (${deliveryBacklogSql("external")})`,
+      )} AS backlog_rows,
+      ${asJsonArray(queueTableStatsSql())} AS queue_table_rows
+    FROM (${outboxPendingSql()}) outbox
+    CROSS JOIN (${aiQueueSql()}) ai
+    CROSS JOIN (${webhookQueueSql()}) webhook_queue
+  `;
+}
+
 export {
   QUEUE_TABLES,
   aiFailedSinceSql,
+  aiQueueSql,
+  operationalSnapshotSql,
+  outboxFailedSql,
+  outboxPendingSql,
   deadLetterCountSql,
   deadLetterPageSql,
   deliveriesInWindowSql,

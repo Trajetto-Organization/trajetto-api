@@ -90,6 +90,8 @@ class GetProofDocumentController {
           signer_cnpj: result.document.signer_cnpj,
           cert_not_after: result.document.cert_not_after,
           signed_at: result.document.signed_at,
+          // Only true lets the web say "ICP-Brasil" next to the signature.
+          icp_brasil: result.document.cert_icp_brasil ?? null,
           unsigned_reason: result.document.unsigned_reason,
         },
         signing_available: result.signingAvailable,

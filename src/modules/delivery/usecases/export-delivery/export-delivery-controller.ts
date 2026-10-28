@@ -17,8 +17,18 @@ class ExportDeliveryController {
     const { id } = request.user;
 
     // Validated and transformed by the route: each facet is a list.
-    const { search, format, businessId, status, shipperId, driverId } =
-      request.query as z.infer<typeof exportDeliverySchema>;
+    const {
+      search,
+      format,
+      businessId,
+      status,
+      shipperId,
+      driverId,
+      kind,
+      period,
+      from,
+      to,
+    } = request.query as z.infer<typeof exportDeliverySchema>;
 
     const exportDeliveryUseCase = container.resolve(ExportDeliveryUseCase);
 
@@ -30,6 +40,10 @@ class ExportDeliveryController {
         statuses: status,
         shipperIds: shipperId,
         driverIds: driverId,
+        kinds: kind,
+        period,
+        from,
+        to,
       },
     );
 

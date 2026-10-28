@@ -366,6 +366,7 @@ describe("one screen, at most two connections", () => {
     const useCase = new ListDeliveryUseCase(
       new UserRepository(),
       new DeliveryRepository(),
+      new BusinessRepository(),
     );
 
     const { peak, result } = await peakOf(() =>

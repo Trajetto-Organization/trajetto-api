@@ -1,8 +1,10 @@
 import database from "@/../infra/database";
 
-import type { IImportRepository } from "./IImport-repository";
 import type {
-  RemovedDelivery,
+  IImportRepository,
+  ReversalRemovedHook,
+} from "./IImport-repository";
+import type {
   CreateImportProps,
   FinishImportProps,
   ImportRecord,
@@ -10,6 +12,8 @@ import type {
   ImportSummary,
   ListImportsProps,
   ListImportsPage,
+  ReversalClaim,
+  ReversalProgress,
   ReversalResult,
 } from "../dtos/import-dto";
 
@@ -17,7 +21,19 @@ import { Prisma } from "@prisma/client";
 
 import { OPEN_STOP_STATUSES } from "@/shared/route/route-rules";
 
-import { ImportAlreadyReversedError } from "../usecases/errors/import-errors";
+import { ImportReversalLeaseLostError } from "../usecases/errors/import-errors";
+import {
+  KEEP_REASON,
+  REVERSAL_BATCH_SIZE,
+  REVERSAL_TRANSACTION_OPTIONS,
+  deliveryKeepReason,
+  emptyReversalProgress,
+  parseReversalProgress,
+  removedDeliveryOf,
+  reverseWholeImport,
+  reversalResultOf,
+  routeKeepReason,
+} from "../services/import-reversal";
 import { resolveOrderBy } from "@/shared/pagination/list-query";
 import {
   IMPORT_SORT,
@@ -185,7 +201,7 @@ class ImportRepository implements IImportRepository {
     businessId,
     page,
     pageSize,
-    includeReport = true,
+    includeReport = false,
     sort,
     order,
     statuses,
@@ -226,237 +242,443 @@ class ImportRepository implements IImportRepository {
   async reverseImport(
     importId: string,
     businessId: string,
-    onRemoved?: (
-      removed: RemovedDelivery[],
-      tx?: Prisma.TransactionClient,
-    ) => Promise<void>,
+    onRemoved?: ReversalRemovedHook,
   ): Promise<ReversalResult> {
-    return this.prisma.$transaction(async (tx) => {
-      // The claim comes first (IDEMP-13). Two clicks both passed the use
-      // case's COMPLETED check; here the second one waits on the first's row
-      // lock, re-reads the row as REVERSED, and matches nothing — instead of
-      // "removing" the same deliveries again and reporting it.
-      const claimed = await tx.import.updateMany({
-        where: { id: importId, businessId, status: "COMPLETED" },
-        data: { status: "REVERSED", reversed_at: new Date() },
+    return reverseWholeImport(this, importId, businessId, onRemoved);
+  }
+
+  async countImportDeliveries(
+    importId: string,
+    businessId: string,
+  ): Promise<number> {
+    return this.prisma.delivery.count({ where: { importId, businessId } });
+  }
+
+  async claimReversal(
+    importId: string,
+    businessId: string,
+    staleBefore: Date,
+  ): Promise<ReversalClaim> {
+    const lease = new Date();
+
+    // The conditional UPDATE is the lock (IDEMP-13): of two clicks racing,
+    // the second waits on the first's row lock, re-reads the row with the
+    // lease taken and a fresh heartbeat, and matches nothing. A lease whose
+    // heartbeat went quiet belongs to a dead run and is taken over.
+    const claimed = await this.prisma.import.updateMany({
+      where: {
+        id: importId,
+        businessId,
+        status: "COMPLETED",
+        OR: [
+          { reversal_started_at: null },
+          { updated_at: { lt: staleBefore } },
+        ],
+      },
+      data: { reversal_started_at: lease, updated_at: lease },
+    });
+
+    const record = (await this.prisma.import.findFirst({
+      where: { id: importId, businessId },
+    })) as unknown as ImportRecord | null;
+
+    if (claimed.count === 0) {
+      if (!record) return { outcome: "not-found" };
+      if (record.status === "REVERSED") return { outcome: "reversed" };
+      if (record.status === "IN_PROGRESS") return { outcome: "in-progress" };
+
+      return { outcome: "running", record };
+    }
+
+    const resumed = parseReversalProgress(record?.reversal, lease);
+
+    if (resumed) return { outcome: "claimed", lease, progress: resumed };
+
+    // First attempt: the progress starts at zero, written under the lease.
+    const progress = emptyReversalProgress(lease);
+
+    await this.prisma.import.updateMany({
+      where: { id: importId, businessId, reversal_started_at: lease },
+      data: { reversal: progress as unknown as Prisma.InputJsonValue },
+    });
+
+    return { outcome: "claimed", lease, progress };
+  }
+
+  async touchReversal(
+    importId: string,
+    businessId: string,
+    lease: Date,
+  ): Promise<void> {
+    await this.prisma.import.updateMany({
+      where: {
+        id: importId,
+        businessId,
+        status: "COMPLETED",
+        reversal_started_at: lease,
+      },
+      data: { updated_at: new Date() },
+    });
+  }
+
+  async runReversal(
+    importId: string,
+    businessId: string,
+    lease: Date,
+    progress: ReversalProgress,
+    {
+      onRemoved,
+      batchSize = REVERSAL_BATCH_SIZE,
+    }: { onRemoved?: ReversalRemovedHook; batchSize?: number },
+  ): Promise<ReversalResult> {
+    let current = progress;
+
+    try {
+      if (!current.routesDone) {
+        current = await this.prisma.$transaction(
+          (tx) => this.reverseRoutes(tx, importId, businessId, lease, current),
+          REVERSAL_TRANSACTION_OPTIONS,
+        );
+      }
+
+      for (;;) {
+        const step = await this.prisma.$transaction(
+          (tx) =>
+            this.reverseDeliveryBatch(
+              tx,
+              importId,
+              businessId,
+              lease,
+              current,
+              {
+                onRemoved,
+                batchSize,
+              },
+            ),
+          REVERSAL_TRANSACTION_OPTIONS,
+        );
+
+        current = step.progress;
+
+        if (step.done) return reversalResultOf(current);
+      }
+    } catch (error) {
+      // The lease goes, the progress stays: the committed batches are
+      // counted on the record, and the retry resumes at once instead of
+      // waiting for the heartbeat to go stale. Only OUR lease: a run that
+      // lost it to another must not release the other's.
+      await this.prisma.import
+        .updateMany({
+          where: { id: importId, businessId, reversal_started_at: lease },
+          data: { reversal_started_at: null },
+        })
+        .catch(() => undefined);
+
+      throw error;
+    }
+  }
+
+  /**
+   * Every batch starts here: the heartbeat, written only while the lease is
+   * still this run's. It also locks the record's row for the rest of the
+   * batch, so a takeover waits for the batch to commit — and a run that lost
+   * its lease rolls its batch back before it deletes or announces anything.
+   */
+  private async fence(
+    tx: Prisma.TransactionClient,
+    importId: string,
+    businessId: string,
+    lease: Date,
+  ): Promise<void> {
+    const held = await tx.import.updateMany({
+      where: {
+        id: importId,
+        businessId,
+        status: "COMPLETED",
+        reversal_started_at: lease,
+      },
+      data: { updated_at: new Date() },
+    });
+
+    if (held.count !== 1) throw new ImportReversalLeaseLostError();
+  }
+
+  private async saveProgress(
+    tx: Prisma.TransactionClient,
+    importId: string,
+    businessId: string,
+    progress: ReversalProgress,
+  ): Promise<void> {
+    await tx.import.updateMany({
+      where: { id: importId, businessId },
+      data: { reversal: progress as unknown as Prisma.InputJsonValue },
+    });
+  }
+
+  /**
+   * The routes, decided once and before any delivery, against EVERY delivery
+   * of the upload: a route goes only if it is still PLANNED and every stop on
+   * it is a delivery of this upload that can go. Deciding per batch would
+   * see a fraction of its stops.
+   */
+  private async reverseRoutes(
+    tx: Prisma.TransactionClient,
+    importId: string,
+    businessId: string,
+    lease: Date,
+    progress: ReversalProgress,
+  ): Promise<ReversalProgress> {
+    await this.fence(tx, importId, businessId, lease);
+
+    const routes = await tx.route.findMany({
+      where: { importId, businessId },
+      select: { id: true, code: true, status: true },
+      orderBy: { id: "asc" },
+    });
+
+    // The routes with a stop whose delivery stays: not this upload's, or
+    // worked. In SQL, over every stop at once, instead of loading 20,000
+    // stops and their deliveries into memory.
+    const withStopThatStays =
+      routes.length === 0
+        ? new Set<string>()
+        : new Set(
+            (
+              await tx.route.findMany({
+                where: {
+                  importId,
+                  businessId,
+                  stops: {
+                    some: {
+                      delivery: {
+                        OR: [
+                          { importId: null },
+                          { importId: { not: importId } },
+                          { businessId: { not: businessId } },
+                          { status: { not: "PENDING" } },
+                          { events: { some: {} } },
+                          { occurrences: { some: {} } },
+                        ],
+                      },
+                    },
+                  },
+                },
+                select: { id: true },
+              })
+            ).map((route) => route.id),
+          );
+
+    const keptRoutes: ReversalResult["keptRoutes"] = [];
+    const removableRouteIds: string[] = [];
+
+    for (const route of routes) {
+      const reason = routeKeepReason({
+        status: route.status,
+        hasStopThatStays: withStopThatStays.has(route.id),
       });
 
-      if (claimed.count === 0) {
-        const current = await tx.import.findFirst({
-          where: { id: importId, businessId },
-          select: { status: true },
+      if (reason) {
+        keptRoutes.push({ id: route.id, code: route.code, reason });
+        continue;
+      }
+
+      removableRouteIds.push(route.id);
+    }
+
+    // Routes before their deliveries: a stop references its delivery, and
+    // the delivery cannot go while a stop still points at it. The status is
+    // asked again in the delete: the reads above take no lock, and a route
+    // released since is not ours to remove any more.
+    const removedRoutes =
+      removableRouteIds.length > 0
+        ? await tx.route.deleteMany({
+            where: {
+              id: { in: removableRouteIds },
+              businessId,
+              status: "PLANNED",
+            },
+          })
+        : { count: 0 };
+
+    // Whatever is kept stops claiming to be part of this upload.
+    await tx.route.updateMany({
+      where: { importId, businessId },
+      data: { importId: null },
+    });
+
+    const next: ReversalProgress = {
+      ...progress,
+      removedRoutes: progress.removedRoutes + removedRoutes.count,
+      keptRoutes: [...progress.keptRoutes, ...keptRoutes],
+      routesDone: true,
+    };
+
+    await this.saveProgress(tx, importId, businessId, next);
+
+    return next;
+  }
+
+  /**
+   * The next `batchSize` deliveries still carrying the upload's id, in id
+   * order. Each one leaves the batch removed or cut loose, so the next batch
+   * — or the retry after a crash — is simply the next ones still carrying it.
+   * The last batch flips the upload to REVERSED and drops the lease.
+   */
+  private async reverseDeliveryBatch(
+    tx: Prisma.TransactionClient,
+    importId: string,
+    businessId: string,
+    lease: Date,
+    progress: ReversalProgress,
+    {
+      onRemoved,
+      batchSize,
+    }: { onRemoved?: ReversalRemovedHook; batchSize: number },
+  ): Promise<{ done: boolean; progress: ReversalProgress }> {
+    await this.fence(tx, importId, businessId, lease);
+
+    const batch = await tx.delivery.findMany({
+      where: { importId, businessId },
+      orderBy: { id: "asc" },
+      take: batchSize,
+      select: {
+        id: true,
+        recipient_name: true,
+        status: true,
+        // What the webhook of a removed delivery carries.
+        code: true,
+        invoice_key: true,
+        invoice_number: true,
+        city: true,
+        uf: true,
+        _count: { select: { events: true, occurrences: true } },
+        // The open stops left. The upload's routes that go are already gone
+        // (reverseRoutes), so an open stop here is on a route that stays — a
+        // route built by hand in the panel, or one of the upload's that was
+        // kept — and deleting the delivery would cascade the stop out of it,
+        // behind the dispatcher's back.
+        stops: {
+          where: { status: { in: OPEN_STOP_STATUSES } },
+          select: { routeId: true },
+        },
+      },
+    });
+
+    const keptDeliveries: ReversalResult["keptDeliveries"] = [];
+    const deletableIds: string[] = [];
+
+    for (const delivery of batch) {
+      const reason =
+        deliveryKeepReason({
+          status: delivery.status,
+          events: delivery._count.events,
+          occurrences: delivery._count.occurrences,
+        }) ??
+        (delivery.stops.length > 0 ? KEEP_REASON.deliveryOnKeptRoute : null);
+
+      if (reason) {
+        keptDeliveries.push({
+          id: delivery.id,
+          recipient_name: delivery.recipient_name,
+          reason,
         });
 
-        if (current?.status === "REVERSED") {
-          throw new ImportAlreadyReversedError();
-        }
-
-        // Another company's upload, or one still running: nothing is touched.
-        return {
-          removedDeliveries: 0,
-          removedRoutes: 0,
-          keptDeliveries: [],
-          keptRoutes: [],
-        };
+        continue;
       }
 
-      const deliveries = await tx.delivery.findMany({
-        where: { importId, businessId },
-        select: {
-          id: true,
-          recipient_name: true,
-          status: true,
-          // What the webhook of a removed delivery carries.
-          code: true,
-          invoice_key: true,
-          invoice_number: true,
-          city: true,
-          uf: true,
-          _count: { select: { events: true, occurrences: true, stops: true } },
-          // The open stops, and on which route: one on a route that is not
-          // going away with this undo keeps its delivery (below).
-          stops: {
-            where: { status: { in: OPEN_STOP_STATUSES } },
-            select: { routeId: true },
-          },
-        },
-      });
+      deletableIds.push(delivery.id);
+    }
 
-      const keptDeliveries: ReversalResult["keptDeliveries"] = [];
-      const removableDeliveryIds: string[] = [];
+    // The tenant is already guaranteed — these ids came out of a read scoped
+    // by it — so this `businessId` changes no outcome and breaks no test. It
+    // is here for the delete that somebody adds later from a list they built
+    // differently, and it is the cheapest possible guard on the one statement
+    // in this file that destroys rows. Do not remove it on the grounds that
+    // the suite stays green.
+    //
+    // The removable criteria are repeated for the same reason as the route's
+    // status: a delivery that was worked, or put on a route, between the read
+    // and here is not deleted.
+    const removedDeliveries =
+      deletableIds.length > 0
+        ? await tx.delivery.deleteMany({
+            where: {
+              id: { in: deletableIds },
+              businessId,
+              status: "PENDING",
+              events: { none: {} },
+              occurrences: { none: {} },
+              stops: { none: { status: { in: OPEN_STOP_STATUSES } } },
+            },
+          })
+        : { count: 0 };
 
-      for (const delivery of deliveries) {
-        // Anything that happened to it means somebody worked it, and an undo
-        // button must not be able to erase that.
-        const reason =
-          delivery.status !== "PENDING"
-            ? "Já saiu do status pendente."
-            : delivery._count.events > 0
-              ? "Já tem registros do motorista."
-              : delivery._count.occurrences > 0
-                ? "Já tem ocorrência registrada."
-                : null;
-
-        if (reason) {
-          keptDeliveries.push({
-            id: delivery.id,
-            recipient_name: delivery.recipient_name,
-            reason,
-          });
-
-          continue;
-        }
-
-        removableDeliveryIds.push(delivery.id);
-      }
-
-      const routes = await tx.route.findMany({
-        where: { importId, businessId },
-        select: {
-          id: true,
-          code: true,
-          status: true,
-          stops: { select: { id: true, deliveryId: true, status: true } },
-        },
-      });
-
-      const keptRoutes: ReversalResult["keptRoutes"] = [];
-      const removableRouteIds: string[] = [];
-
-      const removable = new Set(removableDeliveryIds);
-
-      for (const route of routes) {
-        const reason =
-          route.status !== "PLANNED"
-            ? "Já foi liberada ou já saiu."
-            : // A route whose stops point at deliveries we are keeping would
-              // become a route with holes in it. Keeping the whole route is
-              // the honest outcome — the operator can cancel it.
-              route.stops.some((stop) => !removable.has(stop.deliveryId))
-              ? "Tem paradas de entregas que não puderam ser removidas."
-              : null;
-
-        if (reason) {
-          keptRoutes.push({ id: route.id, code: route.code, reason });
-          continue;
-        }
-
-        removableRouteIds.push(route.id);
-      }
-
-      // A delivery with an open stop on a route this undo is NOT removing — a
-      // route built by hand in the panel, or one of the upload's that was
-      // already released — stays. Deleting it would cascade its stop out of
-      // that route, behind the dispatcher's back.
-      const goingRoutes = new Set(removableRouteIds);
-      const deletableDeliveryIds: string[] = [];
-
-      for (const delivery of deliveries) {
-        if (!removable.has(delivery.id)) continue;
-
-        if (delivery.stops.some((stop) => !goingRoutes.has(stop.routeId))) {
-          keptDeliveries.push({
-            id: delivery.id,
-            recipient_name: delivery.recipient_name,
-            reason: "Está numa rota que não pode ser desfeita.",
-          });
-
-          continue;
-        }
-
-        deletableDeliveryIds.push(delivery.id);
-      }
-
-      // Routes first: a stop references its delivery, and the delivery cannot
-      // go while a stop still points at it. The status is asked again in the
-      // delete: the reads above take no lock, and a route released since is
-      // not ours to remove any more.
-      const removedRoutes =
-        removableRouteIds.length > 0
-          ? await tx.route.deleteMany({
-              where: {
-                id: { in: removableRouteIds },
-                businessId,
-                status: "PLANNED",
-              },
-            })
-          : { count: 0 };
-
-      // Whatever is kept stops claiming to be part of this upload: the import
-      // is being undone, and a row that survived it did so on its own merits.
+    // Whatever this batch kept stops claiming to be part of the upload: it
+    // survived the undo on its own merits, and the next batch must not read
+    // it again.
+    if (batch.length > 0) {
       await tx.delivery.updateMany({
-        where: { importId, businessId },
+        where: { id: { in: batch.map((row) => row.id) }, importId, businessId },
         data: { importId: null },
       });
+    }
 
-      await tx.route.updateMany({
-        where: { importId, businessId },
-        data: { importId: null },
-      });
+    // Which ones actually went: the delete re-checks the criteria, so a row
+    // worked in the meantime survived it and is not announced.
+    if (onRemoved && removedDeliveries.count > 0) {
+      const survivors = new Set(
+        (
+          await tx.delivery.findMany({
+            where: { id: { in: deletableIds }, businessId },
+            select: { id: true },
+          })
+        ).map((row) => row.id),
+      );
 
-      // The tenant is already guaranteed — these ids came out of a read
-      // scoped by it — so this `businessId` changes no outcome and breaks
-      // no test. It is here for the delete that somebody adds later from a
-      // list they built differently, and it is the cheapest possible guard
-      // on the one statement in this file that destroys rows. Do not remove
-      // it on the grounds that the suite stays green.
-      //
-      // The removable criteria are repeated for the same reason as the
-      // route's status: a delivery that was worked, or put on a route, between
-      // the read and here is not deleted.
-      const removedDeliveries =
-        deletableDeliveryIds.length > 0
-          ? await tx.delivery.deleteMany({
-              where: {
-                id: { in: deletableDeliveryIds },
-                businessId,
-                status: "PENDING",
-                events: { none: {} },
-                occurrences: { none: {} },
-                stops: { none: { status: { in: OPEN_STOP_STATUSES } } },
-              },
-            })
-          : { count: 0 };
+      const deletable = new Set(deletableIds);
 
-      // Which ones actually went: the delete re-checks the criteria, so a
-      // row worked in the meantime survived it and is not announced.
-      if (onRemoved && removedDeliveries.count > 0) {
-        const survivors = new Set(
-          (
-            await tx.delivery.findMany({
-              where: { id: { in: deletableDeliveryIds }, businessId },
-              select: { id: true },
-            })
-          ).map((row) => row.id),
-        );
+      await onRemoved(
+        batch
+          .filter((row) => deletable.has(row.id) && !survivors.has(row.id))
+          .map(removedDeliveryOf),
+        tx,
+      );
+    }
 
-        await onRemoved(
-          deliveries
-            .filter(
-              (row) =>
-                deletableDeliveryIds.includes(row.id) && !survivors.has(row.id),
-            )
-            .map((row) => ({
-              id: row.id,
-              code: row.code,
-              invoice_key: row.invoice_key,
-              invoice_number: row.invoice_number,
-              recipient_name: row.recipient_name,
-              city: row.city,
-              uf: row.uf,
-            })),
-          tx,
-        );
-      }
+    const done = batch.length < batchSize;
+    const now = new Date();
 
-      // What was actually removed, from the deletes themselves.
-      return {
-        removedDeliveries: removedDeliveries.count,
-        removedRoutes: removedRoutes.count,
-        keptDeliveries,
-        keptRoutes,
-      };
+    const next: ReversalProgress = {
+      ...progress,
+      removedDeliveries: progress.removedDeliveries + removedDeliveries.count,
+      keptDeliveries: [...progress.keptDeliveries, ...keptDeliveries],
+      finishedAt: done ? now.toISOString() : null,
+    };
+
+    if (!done) {
+      await this.saveProgress(tx, importId, businessId, next);
+
+      return { done, progress: next };
+    }
+
+    // The last batch: REVERSED only now, so the status never says "undone"
+    // about an upload that still has rows to undo.
+    await tx.import.updateMany({
+      where: {
+        id: importId,
+        businessId,
+        status: "COMPLETED",
+        reversal_started_at: lease,
+      },
+      data: {
+        status: "REVERSED",
+        reversed_at: now,
+        reversal_started_at: null,
+        reversal: next as unknown as Prisma.InputJsonValue,
+      },
     });
+
+    return { done, progress: next };
   }
 }
 

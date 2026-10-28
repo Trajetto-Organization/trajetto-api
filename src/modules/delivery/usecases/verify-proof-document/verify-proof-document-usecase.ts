@@ -139,6 +139,8 @@ class VerifyProofDocumentUseCase {
           signerName: found.signer_name ?? null,
           certNotAfter: found.cert_not_after ?? null,
           signedAt: found.signed_at ?? null,
+          // The page says "ICP-Brasil" only when the chain was verified.
+          icpBrasil: found.cert_icp_brasil ?? null,
         },
       },
 

@@ -25,6 +25,11 @@ import {
   serviceOrderListWhere,
   statusCondition,
 } from "../usecases/list-service-order/service-order-list";
+import {
+  EXPORT_ORDER,
+  exportBatchWhere,
+  type ExportKey,
+} from "@/shared/pagination/export-keyset";
 
 class ServiceOrderRepository implements IServiceOrderRepository {
   constructor(private prisma = database) {}
@@ -449,11 +454,12 @@ class ServiceOrderRepository implements IServiceOrderRepository {
     const whereCondition = serviceOrderListWhere(query);
 
     const batchSize = 1000;
-    let cursor: string | undefined = undefined;
+    let after: ExportKey | null = null;
 
+    // Keyset batches in creation order (export-keyset.ts).
     while (true) {
       const serviceOrders: any = await this.prisma.serviceOrder.findMany({
-        where: whereCondition,
+        where: exportBatchWhere(whereCondition, after),
         include: {
           business: { select: { corporate_reason: true } },
           vehicle: { select: { license_plate: true, description: true } },
@@ -468,12 +474,8 @@ class ServiceOrderRepository implements IServiceOrderRepository {
             },
           },
         },
-        orderBy: { id: "asc" },
+        orderBy: [...EXPORT_ORDER],
         take: batchSize,
-        ...(cursor && {
-          skip: 1,
-          cursor: { id: cursor },
-        }),
       });
 
       if (serviceOrders.length === 0) break;
@@ -518,7 +520,10 @@ class ServiceOrderRepository implements IServiceOrderRepository {
         };
       }
 
-      cursor = serviceOrders[serviceOrders.length - 1].id;
+      if (serviceOrders.length < batchSize) break;
+
+      const last: ExportKey = serviceOrders[serviceOrders.length - 1];
+      after = { created_at: last.created_at, id: last.id };
     }
   }
 

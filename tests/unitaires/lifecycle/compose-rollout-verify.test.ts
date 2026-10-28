@@ -686,10 +686,84 @@ describe("the API deploy jobs wait for convergence", () => {
     expect(wait).toContain(
       '"$SERVICE ghcr.io/trajetto-organization/trajetto-api@${DIGEST}"',
     );
-    // Required: the only way around it is the explicit, logged opt-out.
-    expect(wait).toMatch(/if: .*vars\.ROLLOUT_VERIFY != 'off'/);
+    // Which check runs is ROLLOUT_VERIFY's call (see below).
+    expect(wait).toMatch(/if: .*vars\.ROLLOUT_VERIFY/);
     expect(names).toContain("Say the rollout was not verified");
   });
+
+  /**
+   * Two ways to prove the rollout: the Swarm tasks over SSH
+   * (verify-rollout.sh), or the public /health/liveness answering the new
+   * commit (wait-for-version.mjs), which needs no key on the host. Staging
+   * ran with ROLLOUT_VERIFY=off because SSH was the only one; now the public
+   * check is its default, and production keeps SSH as its own. Whatever the
+   * variable says, exactly one check runs — an unknown value falls back to
+   * the default, never to none — and only `off` skips them, logged.
+   */
+  it.each([
+    [
+      "deploy-staging",
+      "Deploy to staging (Dokploy)",
+      "Wait for the API to serve this build",
+      "http",
+      "EXPECTED_SHA: ${{ github.sha }}",
+    ],
+    [
+      "promote-production",
+      "Deploy to production (Dokploy)",
+      "Wait for the API to serve the promoted build",
+      "ssh",
+      'EXPECTED_SHA="${IMAGE_TAG#*-}" node .github/scripts/wait-for-version.mjs',
+    ],
+  ])(
+    "%s runs exactly one rollout check unless ROLLOUT_VERIFY=off",
+    (job, deploy, httpName, byDefault, expected) => {
+      const steps = stepsOf(apiDeploy, job);
+      const names = steps.map((step) => step.name);
+      const text = (name: string) =>
+        steps.find((step) => step.name === name)?.text ?? "";
+      const condition = (name: string) =>
+        text(name).match(/\n\s+if: (.+)\n/)?.[1] ?? "";
+      /** The `if` with ROLLOUT_VERIFY set to `value` (a chain of &&). */
+      const runs = (name: string, value: string) => {
+        const expression = condition(name);
+
+        expect(expression, name).not.toContain("||");
+
+        return [
+          ...expression.matchAll(/vars\.ROLLOUT_VERIFY (==|!=) '([^']*)'/g),
+        ].every(([, operator, literal]) =>
+          operator === "==" ? value === literal : value !== literal,
+        );
+      };
+      const ssh = "Wait for the rollout to converge";
+      const said = "Say the rollout was not verified";
+
+      expect(names.indexOf(httpName)).toBeGreaterThan(names.indexOf(deploy));
+      expect(text(httpName)).toContain("API_URL: ${{ vars.API_PUBLIC_URL }}");
+      expect(text(httpName)).toContain(
+        "node .github/scripts/wait-for-version.mjs",
+      );
+      expect(text(httpName)).toContain(expected);
+
+      for (const value of ["", "http", "ssh", "on", "true"]) {
+        expect(
+          [runs(httpName, value), runs(ssh, value), runs(said, value)],
+          `ROLLOUT_VERIFY='${value}'`,
+        ).toEqual(
+          value === "http" || (value !== "ssh" && byDefault === "http")
+            ? [true, false, false]
+            : [false, true, false],
+        );
+      }
+
+      expect([
+        runs(httpName, "off"),
+        runs(ssh, "off"),
+        runs(said, "off"),
+      ]).toEqual([false, false, true]);
+    },
+  );
 
   it("promotes by the digest it then waits for", () => {
     const promote = stepsOf(apiDeploy, "promote-production").find(

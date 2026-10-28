@@ -89,41 +89,61 @@ const CRON_ERROR_MAX_LENGTH = 500;
 async function readCronJobs(
   registered: ReadonlyArray<{ name: string; schedule: string }>,
 ): Promise<CronJobMetrics[]> {
-  const latest = await database.$queryRaw<
+  // Three reads, one statement (one round trip, one pool checkout): each
+  // json_agg'ed subquery keeps its own plan. Timestamps go through
+  // AT TIME ZONE 'UTC' so the JSON carries an offset: the columns are
+  // timestamp(3) holding UTC, and a bare "2026-10-28T03:00:00" would be
+  // parsed as the reader's local time.
+  const [row] = await database.$queryRaw<
     Array<{
-      jobName: string;
-      status: "RUNNING" | "SUCCEEDED" | "FAILED";
-      scheduledFor: Date;
-      finishedAt: Date | null;
-      attempts: number;
-      lastError: string | null;
+      latest: Array<{
+        jobName: string;
+        status: "RUNNING" | "SUCCEEDED" | "FAILED";
+        scheduledFor: string;
+        finishedAt: string | null;
+        attempts: number;
+        lastError: string | null;
+      }>;
+      succeeded: Array<{ jobName: string; last: string | null }>;
+      stale: Array<{ jobName: string; n: number }>;
     }>
   >`
-    SELECT DISTINCT ON ("jobName")
-      "jobName", "status"::text AS status, "scheduledFor", "finishedAt", "attempts", "lastError"
-    FROM "scheduled_job_execution"
-    ORDER BY "jobName", "scheduledFor" DESC
+    SELECT
+      (SELECT coalesce(json_agg(l), '[]'::json) FROM (
+        SELECT DISTINCT ON ("jobName")
+          "jobName", "status"::text AS status,
+          "scheduledFor" AT TIME ZONE 'UTC' AS "scheduledFor",
+          "finishedAt" AT TIME ZONE 'UTC' AS "finishedAt",
+          "attempts", "lastError"
+        FROM "scheduled_job_execution"
+        ORDER BY "jobName", "scheduledFor" DESC
+      ) l) AS latest,
+      (SELECT coalesce(json_agg(s), '[]'::json) FROM (
+        SELECT "jobName", max("finishedAt") AT TIME ZONE 'UTC' AS last
+        FROM "scheduled_job_execution"
+        WHERE "status" = 'SUCCEEDED'
+        GROUP BY "jobName"
+      ) s) AS succeeded,
+      (SELECT coalesce(json_agg(r), '[]'::json) FROM (
+        SELECT "jobName", count(*)::int AS n
+        FROM "scheduled_job_execution"
+        WHERE "status" = 'RUNNING' AND "leaseExpiresAt" < now()
+        GROUP BY "jobName"
+      ) r) AS stale
   `;
 
-  const succeeded = await database.$queryRaw<
-    Array<{ jobName: string; last: Date | null }>
-  >`
-    SELECT "jobName", max("finishedAt") AS last
-    FROM "scheduled_job_execution"
-    WHERE "status" = 'SUCCEEDED'
-    GROUP BY "jobName"
-  `;
+  const iso = (value: string | null | undefined) =>
+    value ? new Date(value).toISOString() : null;
 
-  const stale = await database.$queryRaw<Array<{ jobName: string; n: number }>>`
-    SELECT "jobName", count(*)::int AS n
-    FROM "scheduled_job_execution"
-    WHERE "status" = 'RUNNING' AND "leaseExpiresAt" < now()
-    GROUP BY "jobName"
-  `;
+  const latest = row?.latest ?? [];
+  const succeeded = row?.succeeded ?? [];
+  const stale = row?.stale ?? [];
 
   const schedules = new Map(registered.map((job) => [job.name, job.schedule]));
   const latestBy = new Map(latest.map((row) => [row.jobName, row]));
-  const succeededBy = new Map(succeeded.map((row) => [row.jobName, row.last]));
+  const succeededBy = new Map(
+    succeeded.map((entry) => [entry.jobName, iso(entry.last)]),
+  );
   const staleBy = new Map(stale.map((row) => [row.jobName, row.n]));
 
   const names = [...new Set([...schedules.keys(), ...latestBy.keys()])].sort();
@@ -135,9 +155,9 @@ async function readCronJobs(
       job,
       schedule: schedules.get(job) ?? null,
       last_status: row?.status ?? null,
-      last_scheduled_for: row?.scheduledFor.toISOString() ?? null,
-      last_finished_at: row?.finishedAt?.toISOString() ?? null,
-      last_succeeded_at: succeededBy.get(job)?.toISOString() ?? null,
+      last_scheduled_for: iso(row?.scheduledFor),
+      last_finished_at: iso(row?.finishedAt),
+      last_succeeded_at: succeededBy.get(job) ?? null,
       attempts: row?.attempts ?? null,
       last_error: row?.lastError?.slice(0, CRON_ERROR_MAX_LENGTH) ?? null,
       stale_running: staleBy.get(job) ?? 0,

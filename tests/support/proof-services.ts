@@ -11,6 +11,11 @@ import { makeTestSigningCertificate } from "./test-signing-certificate";
  * configuration (decision 14.8): no certificate (documents go out unsigned,
  * reason NO_CERTIFICATE), or one generated in the test; and no geocoder or
  * map provider, so nothing leaves the process.
+ *
+ * The generated certificate chains to a test root that the service is told
+ * to trust in place of the official ICP-Brasil roots, so these documents
+ * take the ICP-Brasil path (AD-RB, the legal wording). A test about a
+ * certificate OUTSIDE the chain says so: `selfSignedCertificateSigning`.
  */
 function unsignedSigning(): ProofSigningService {
   return new ProofSigningService({
@@ -24,6 +29,27 @@ function unsignedSigning(): ProofSigningService {
 }
 
 function testCertificateSigning(
+  overrides: Partial<ProofSigningConfig> = {},
+): ProofSigningService {
+  const certificate = makeTestSigningCertificate({ chain: "test-root" });
+
+  return new ProofSigningService({
+    pfx: certificate.pfx,
+    password: certificate.password,
+    profile: "PADES_AD_RB",
+    disabled: false,
+    location: "Rio de Janeiro, RJ",
+    contact: "suporte@trajetto.com.br",
+    trustStore: certificate.trustStore,
+    ...overrides,
+  });
+}
+
+/**
+ * A certificate that only SAYS "O=ICP-Brasil" (self-signed), against the
+ * official roots: signed, never ICP-Brasil.
+ */
+function selfSignedCertificateSigning(
   overrides: Partial<ProofSigningConfig> = {},
 ): ProofSigningService {
   const certificate = makeTestSigningCertificate();
@@ -52,4 +78,9 @@ function noLocationProviders(): ProofLocationService {
   });
 }
 
-export { noLocationProviders, testCertificateSigning, unsignedSigning };
+export {
+  noLocationProviders,
+  selfSignedCertificateSigning,
+  testCertificateSigning,
+  unsignedSigning,
+};

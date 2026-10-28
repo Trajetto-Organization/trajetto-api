@@ -5,6 +5,7 @@ import { randomUUID } from "node:crypto";
 
 import { sign } from "jsonwebtoken";
 import auth from "@/config/auth";
+import { resetOperationalMetricsCache } from "@/shared/health/operational-metrics";
 
 /**
  * What the MASTER's "Sistema" tab needs to see during an incident, and did
@@ -94,6 +95,9 @@ async function delivery(
 }
 
 function metrics(token: string) {
+  // The route serves a 10-second snapshot; each test seeds its own rows.
+  resetOperationalMetricsCache();
+
   return app.inject({
     method: "GET",
     url: "/health/metrics",

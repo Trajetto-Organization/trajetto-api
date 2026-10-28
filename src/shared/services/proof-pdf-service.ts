@@ -476,8 +476,15 @@ async function renderProofPdf(
 
   // ------------------------------------------------------- authentication
   const auth = model.authentication;
-  // Signed: a smaller QR to /verificar sits left of the main one.
-  const qrColumnWidth = QR_SIZE + (model.signed ? SECONDARY_QR_SIZE + 10 : 0);
+  // Signed under ICP-Brasil: the main QR is the ITI's validator and a smaller
+  // one to /verificar sits left of it. Anywhere else the main QR already is
+  // /verificar, and a second one would repeat it.
+  const secondaryQr = Boolean(
+    model.signed &&
+      auth.verificationLine &&
+      auth.verificationLine.url !== auth.qrUrl,
+  );
+  const qrColumnWidth = QR_SIZE + (secondaryQr ? SECONDARY_QR_SIZE + 10 : 0);
   const columnWidth = contentWidth - qrColumnWidth - 14;
 
   const measureAuth = () => {
@@ -545,7 +552,7 @@ async function renderProofPdf(
   // Signed: the main QR is the ITI's validator, as in the model; a smaller
   // one leads to /verificar, where whoever holds the paper downloads the
   // original file to submit there (design §6.6).
-  if (model.signed && auth.verificationLine) {
+  if (secondaryQr && auth.verificationLine) {
     const secondaryTop = authTop + QR_SIZE - SECONDARY_QR_SIZE - 9;
     const secondaryX = qrX - 10 - SECONDARY_QR_SIZE;
 

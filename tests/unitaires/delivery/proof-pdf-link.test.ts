@@ -107,6 +107,7 @@ describe("the links of a SIGNED receipt", () => {
   const signing: ProofSigningIntent = {
     status: "SIGNED",
     signer: { name: "TRAJETTO SISTEMAS LTDA", cnpj: "11222333000181" },
+    icpBrasil: true,
   };
 
   it("point the main QR at the ITI validator, and the rest at /verificar, whole", async () => {

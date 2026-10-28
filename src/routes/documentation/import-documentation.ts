@@ -51,6 +51,37 @@ const importReport = z.object({
   ),
 });
 
+const keptDelivery = z.object({
+  id: z.string(),
+  recipient_name: z.string(),
+  reason: z.string(),
+});
+
+const keptRoute = z.object({
+  id: z.string(),
+  code: z.number(),
+  reason: z.string(),
+});
+
+/** The undo as the client follows it (services/import-reversal.ts). */
+const reversalView = z
+  .object({
+    state: z
+      .enum(["RUNNING", "INTERRUPTED", "DONE"])
+      .describe(
+        "RUNNING: o estorno está removendo as entregas, em lotes. INTERRUPTED: parou no meio (falha ou servidor reiniciado); o que já foi removido está contado aqui, a importação continua COMPLETED e pedir o estorno de novo continua de onde parou. DONE: terminou, e a importação está REVERSED.",
+      ),
+    removedDeliveries: z.number(),
+    removedRoutes: z.number(),
+    keptDeliveries: z.array(keptDelivery),
+    keptRoutes: z.array(keptRoute),
+    startedAt: z.string(),
+    finishedAt: z.string().nullable(),
+  })
+  .describe(
+    "O estorno desta importação: o que já foi removido e o que foi mantido (com o motivo), lote a lote; no fim, o resultado. Nulo quando ninguém pediu o estorno.",
+  );
+
 const importEntity = z.object({
   id: z.string(),
   source: z.enum(["SPREADSHEET", "NFE_XML"]),
@@ -70,6 +101,9 @@ const importEntity = z.object({
 
   reversed_at: isoDateTime.nullable(),
 
+  // Only on the detail (GET /import/get-import): the listing leaves it out.
+  reversal: reversalView.nullable().optional(),
+
   businessId: z.string(),
   performedById: z.string(),
 
@@ -85,14 +119,27 @@ const importSchemas = {
 };
 
 const importResponses = {
-  spreadsheetImported: z.object({
+  /**
+   * The upload accepted and queued (202). Same envelope the synchronous
+   * answer had, so a client that only read `data.id` and the counters keeps
+   * working; the counters are zero and `status` is IN_PROGRESS until the
+   * record is closed.
+   */
+  spreadsheetAccepted: z.object({
     message: z.string(),
     data: z.object({
-      id: z.string(),
+      id: z
+        .string()
+        .describe(
+          "A importação. Acompanhe por GET /import/get-import/:importId/business/:businessId até `status` deixar de ser IN_PROGRESS.",
+        ),
+      status: z.enum(["IN_PROGRESS", "COMPLETED", "REVERSED"]),
       imported: z.number(),
       duplicated: z.number(),
       invalid: z.number(),
-      report: importReport,
+      report: importReport.describe(
+        "Vazio enquanto a importação roda: o relatório linha a linha vem de GET /import/get-import quando `status` for COMPLETED.",
+      ),
     }),
   }),
 
@@ -102,16 +149,25 @@ const importResponses = {
       removedDeliveries: z.number(),
       removedRoutes: z.number(),
 
-      keptDeliveries: z.array(
-        z.object({
-          id: z.string(),
-          recipient_name: z.string(),
-          reason: z.string(),
-        }),
-      ),
-      keptRoutes: z.array(
-        z.object({ id: z.string(), code: z.number(), reason: z.string() }),
-      ),
+      keptDeliveries: z.array(keptDelivery),
+      keptRoutes: z.array(keptRoute),
+    }),
+  }),
+
+  /**
+   * The undo of a big upload accepted and running in the background (202),
+   * or one already running that this click now follows.
+   */
+  importReversalAccepted: z.object({
+    message: z.string(),
+    data: z.object({
+      id: z
+        .string()
+        .describe(
+          "A importação. Acompanhe por GET /import/get-import/:importId/business/:businessId até `status` virar REVERSED (ou `reversal.state` virar INTERRUPTED).",
+        ),
+      status: z.enum(["IN_PROGRESS", "COMPLETED", "REVERSED"]),
+      reversal: reversalView.nullable(),
     }),
   }),
 
@@ -120,7 +176,7 @@ const importResponses = {
     report: importReport
       .optional()
       .describe(
-        "Ausente quando a listagem é pedida com includeReport=false; o relatório de uma importação vem de GET /import/get-import/:importId/business/:businessId.",
+        "Só presente quando a listagem é pedida com includeReport=true; o relatório de uma importação vem de GET /import/get-import/:importId/business/:businessId.",
       ),
   }),
 

@@ -5,6 +5,7 @@ import { randomUUID } from "node:crypto";
 
 import { sign } from "jsonwebtoken";
 import auth from "@/config/auth";
+import { resetOperationalMetricsCache } from "@/shared/health/operational-metrics";
 
 /**
  * The numbers a MASTER uses to decide when to add capacity.
@@ -157,6 +158,10 @@ afterAll(async () => {
 });
 
 function metrics(token: string) {
+  // The route serves a 10-second snapshot; these tests read before and
+  // after writing, milliseconds apart, and must see the write.
+  resetOperationalMetricsCache();
+
   return app.inject({
     method: "GET",
     url: "/health/metrics",

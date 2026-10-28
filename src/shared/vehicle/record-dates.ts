@@ -52,6 +52,29 @@ function formatPickedDay(
   return `${day}/${month}/${year}`;
 }
 
+/**
+ * One formatter per zone. Building an Intl.DateTimeFormat costs far more than
+ * formatting with one, and the exports call formatInstant once per date cell
+ * of every row. The zones are the companies' (a few IANA names), so the map
+ * stays small.
+ */
+const INSTANT_FORMATS = new Map<string, Intl.DateTimeFormat>();
+
+function instantFormat(timeZone: string): Intl.DateTimeFormat {
+  let format = INSTANT_FORMATS.get(timeZone);
+
+  if (!format) {
+    format = new Intl.DateTimeFormat("pt-BR", {
+      dateStyle: "short",
+      timeStyle: "short",
+      timeZone,
+    });
+    INSTANT_FORMATS.set(timeZone, format);
+  }
+
+  return format;
+}
+
 /** "17/09/2026 22:10" in the company's zone; "N/A" when empty. */
 function formatInstant(
   value: Date | string | null | undefined,
@@ -61,11 +84,7 @@ function formatInstant(
 
   if (!date) return "N/A";
 
-  return new Intl.DateTimeFormat("pt-BR", {
-    dateStyle: "short",
-    timeStyle: "short",
-    timeZone,
-  }).format(date);
+  return instantFormat(timeZone).format(date);
 }
 
 const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/;

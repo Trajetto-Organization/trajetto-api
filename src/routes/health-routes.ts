@@ -1,11 +1,4 @@
 import { FastifyInstance } from "fastify";
-import { container } from "tsyringe";
-import { NotificationChannel } from "@prisma/client";
-
-import {
-  connectionUsagePercent,
-  deadTuplePercent,
-} from "@/shared/health/metrics-math";
 
 import { z } from "zod";
 
@@ -15,74 +8,23 @@ import { RedisConnection } from "@/../infra/cache/redis-connection";
 import {
   healthResponses,
   healthSchemas,
-  type ChannelDeliveryMetrics,
-  type QueueTableBloat,
 } from "./documentation/health-documentation";
 
 import { ensureAuthenticated } from "@/modules/middlewares/ensure-authenticated";
 import { verifyUserRole } from "@/modules/middlewares/verify-user-role";
 import { isDraining } from "@/shared/lifecycle/draining";
+import { buildInfo, buildInfoShape } from "@/shared/build-info";
 import { NotificationPipelineService } from "@/shared/notifications/notification-pipeline-service";
-import { readWebhookQueueMetrics } from "@/shared/integration/webhook-metrics";
 import {
-  DELIVERY_LANES,
-  type DeliveryLane,
-} from "@/shared/notifications/pipeline-rules";
-import {
-  QUEUE_TABLES,
-  aiFailedSinceSql,
   deadLetterCountSql,
   deadLetterPageSql,
-  deliveriesInWindowSql,
-  deliveryBacklogSql,
-  failedByChannelSql,
-  queueTableStatsSql,
-  webhookFailedSinceSql,
-  whatsappFailedSinceSql,
-  whatsappMultiSendSinceSql,
   type DeadLetterRow,
 } from "@/shared/health/metrics-queries";
-import {
-  readCronJobs,
-  readPartitionRunway,
-  readWorkerHeartbeats,
-} from "@/shared/health/operational-state";
-import { CronSchedulerService } from "@/shared/services/cron-scheduler-service";
 import { probeDatabase } from "@/shared/health/readiness-probe";
-import {
-  connectionLimitOf,
-  poolFromMetrics,
-} from "@/shared/health/pool-metrics";
-import { runtimeMetrics } from "@/shared/health/runtime-metrics";
-import { providerMetrics } from "@/shared/health/provider-metrics";
+import { readOperationalMetrics } from "@/shared/health/operational-metrics";
 import { readProviderReadiness } from "@/shared/health/provider-readiness";
-import { readRedisMetrics } from "@/shared/health/redis-metrics";
-import { realtimeMetrics } from "@/websocket";
 import { errorResponse } from "./documentation/common-responses";
-import { gateStats } from "@/shared/security/bcrypt-gate";
 import { redactEmails } from "@/shared/logging/redact-email";
-import { legacyContractUsage } from "@/shared/http/legacy-contract-usage";
-import { deviceAgreementTotals } from "@/shared/ai-precheck/device-agreement-metrics";
-// Side effect: registers "ProofSigningService" (@registry).
-import "@/shared/services/proof-signing/proof-signing-service";
-import type { ProofSigningService } from "@/shared/services/proof-signing/proof-signing-service";
-
-interface ConnectionStatsRow {
-  active_connections: bigint;
-  max_connections: string;
-}
-
-interface OutboxLagRow {
-  eligible_seconds: number | null;
-  any_seconds: number | null;
-}
-
-interface QueueTableStatsRow {
-  table_name: string;
-  n_live_tup: bigint;
-  n_dead_tup: bigint;
-  last_autovacuum: Date | null;
-}
 
 interface ServiceHealth {
   status: "healthy" | "unhealthy";
@@ -106,31 +48,6 @@ function publicHealth(probe: ProbeResult): ServiceHealth {
     latency: probe.latency,
   };
 }
-
-interface CountRow {
-  n: number;
-}
-
-interface ChannelStatusCountRow extends CountRow {
-  channel: string;
-  status: string;
-}
-
-interface DeliveryBacklogRow {
-  channel: string;
-  pending_total: number;
-  processing_total: number;
-  processing_lease_expired: number;
-  oldest_pending_seconds: number | null;
-  oldest_eligible_seconds: number | null;
-}
-
-// Window the per-channel notification counters cover. A day is the unit a
-// human actually asks about ("how many e-mails failed yesterday?").
-const NOTIFICATION_METRICS_WINDOW_HOURS = 24;
-
-// The tables watched for dead tuples (written, claimed, leased and updated on
-// every event) live in shared/health/metrics-queries.ts, with the SQL.
 
 // Enough of the provider message to recognise the failure, short enough that a
 // page of dead letters stays readable.
@@ -312,14 +229,17 @@ async function healthRoutes(app: FastifyInstance) {
         tags: ["health"],
         summary: "Sonda de vida (liveness) da aplicação",
         description:
-          "Diz apenas se o processo está de pé e consegue responder. De propósito não verifica nenhuma dependência externa: uma dependência com falha nunca deve reiniciar o container.",
+          "Diz apenas se o processo está de pé e consegue responder. De propósito não verifica nenhuma dependência externa: uma dependência com falha nunca deve reiniciar o container. Informa também o commit do build que responde (`version`, `commit`), que o pipeline lê para confirmar o deploy.",
         response: {
-          200: healthResponses.livenessCheck,
+          // The commit is a constant read at import (build-info.ts): the
+          // probe still touches nothing. The pipeline polls it after a
+          // deploy until the new build answers (wait-for-version.mjs).
+          200: healthResponses.livenessCheck.extend(buildInfoShape),
         },
       },
     },
     async (_request, reply) => {
-      return reply.status(200).send({ status: "alive" });
+      return reply.status(200).send({ status: "alive", ...buildInfo });
     },
   );
 
@@ -404,8 +324,10 @@ async function healthRoutes(app: FastifyInstance) {
    *
    * Every query is served by an index, with statuses as SQL literals so a
    * partial index is usable under a generic plan (OBS-09; the plan test is
-   * tests/E2E/health-metrics-plans.test.ts). They run one after the other so
-   * the endpoint never takes more than one slot of the pool it reports on.
+   * tests/E2E/health-metrics-plans.test.ts). The queue numbers are one
+   * statement and the whole read four, run one after the other so the
+   * endpoint never takes more than one slot of the pool it reports on, and
+   * served from a 10-second snapshot per replica (operational-metrics.ts).
    *
    * MASTER-only: it exposes infrastructure posture, not tenant data.
    */
@@ -419,238 +341,16 @@ async function healthRoutes(app: FastifyInstance) {
         tags: ["health"],
         summary: "Métricas operacionais (filas e uso de conexões)",
         description:
-          "Uso de conexões do Postgres em relação a max_connections, profundidade e atraso do outbox, fila do pipeline de IA, fila e resultado das notificações por canal, mensagens de WhatsApp que a Meta recusou ou recebeu mais de uma vez (pelos callbacks de status), fila de webhooks, inchaço das tabelas de fila, workers de cada réplica, crons, folga das partições de driver_position, runtime e pool do Prisma da réplica que respondeu, contratos legados do app ainda em uso, concordância da pré-checagem do aparelho com a leitura do servidor e estado do certificado de assinatura do comprovante. Orienta decisões de capacidade (PgBouncer, réplicas, broker dedicado) e o disparo de vacuum.",
+          "Uso de conexões do Postgres em relação a max_connections, profundidade e atraso do outbox, fila do pipeline de IA, fila e resultado das notificações por canal, mensagens de WhatsApp que a Meta recusou ou recebeu mais de uma vez (pelos callbacks de status), fila de webhooks, inchaço das tabelas de fila, workers de cada réplica, crons, folga das partições de driver_position, runtime e pool do Prisma da réplica que respondeu, contratos legados do app ainda em uso, concordância da pré-checagem do aparelho com a leitura do servidor e estado do certificado de assinatura do comprovante. Orienta decisões de capacidade (PgBouncer, réplicas, broker dedicado) e o disparo de vacuum. A leitura vale por 10 s em cada réplica (`timestamp` diz quando foi feita): pedidos nesse intervalo recebem a mesma.",
         response: {
           200: healthResponses.operationalMetrics,
         },
       },
     },
     async (_request, reply) => {
-      const notificationsSince = new Date(
-        Date.now() - NOTIFICATION_METRICS_WINDOW_HOURS * 60 * 60 * 1000,
-      );
-
-      const [connectionStats] = await database.$queryRaw<ConnectionStatsRow[]>`
-        SELECT
-          (SELECT count(*) FROM pg_stat_activity
-            WHERE datname = current_database()) AS active_connections,
-          current_setting('max_connections') AS max_connections
-      `;
-
-      /**
-       * Two lags, on purpose.
-       *
-       * `eligible_seconds` only looks at events already due (availableAt <=
-       * now()). It is the classic "is the worker keeping up?" number, and it
-       * is blind by construction: an event pushed into backoff gets a future
-       * availableAt, so a queue in a full retry storm reports null - zero lag
-       * exactly when things are burning.
-       *
-       * `any_seconds` ignores availableAt and measures from creation, which
-       * is the honest answer to "how long has the oldest thing been stuck?".
-       */
-      const [outboxLag] = await database.$queryRaw<OutboxLagRow[]>`
-        SELECT
-          EXTRACT(EPOCH FROM (
-            now() - MIN(CASE WHEN "availableAt" <= now() THEN "availableAt" END)
-          ))::float AS eligible_seconds,
-          EXTRACT(EPOCH FROM (now() - MIN("created_at")))::float AS any_seconds
-        FROM "domain_outbox_event"
-        WHERE "status" = 'PENDING'
-      `;
-
-      const queueTableStats =
-        await database.$queryRaw<QueueTableStatsRow[]>(queueTableStatsSql());
-
-      // One after the other, on purpose: each is an index read of a few
-      // milliseconds (see metrics-queries.ts and its plan test), and running
-      // them side by side would take a slot of the replica's small pool per
-      // query — on the endpoint that is meant to be read while the pool is
-      // the thing in trouble. The counts below use (status, availableAt).
-      const outboxPending = await database.domainOutboxEvent.count({
-        where: { status: "PENDING" },
-      });
-      const outboxFailed = await database.domainOutboxEvent.count({
-        where: { status: "FAILED" },
-      });
-      const aiPending = await database.aIAnalysisRequest.count({
-        where: { status: "PENDING" },
-      });
-      const aiRunning = await database.aIAnalysisRequest.count({
-        where: { status: "PROCESSING" },
-      });
-
-      const deliveriesInWindow = await database.$queryRaw<
-        ChannelStatusCountRow[]
-      >(deliveriesInWindowSql(notificationsSince));
-
-      // No time filter: every FAILED delivery still kept, which is what
-      // /health/dead-letter lists.
-      const failedByChannel =
-        await database.$queryRaw<Array<CountRow & { channel: string }>>(
-          failedByChannelSql(),
-        );
-
-      // The current backlog, one query per lane so each reads its own partial
-      // claim index — not the 24 h window above, which a delivery stuck for
-      // two days had already left.
-      const backlogRows: DeliveryBacklogRow[] = [];
-      for (const lane of Object.keys(DELIVERY_LANES) as DeliveryLane[]) {
-        backlogRows.push(
-          ...(await database.$queryRaw<DeliveryBacklogRow[]>(
-            deliveryBacklogSql(lane),
-          )),
-        );
-      }
-
-      const [webhooksFailed] = await database.$queryRaw<CountRow[]>(
-        webhookFailedSinceSql(notificationsSince),
-      );
-
-      const [aiFailed] = await database.$queryRaw<CountRow[]>(
-        aiFailedSinceSql(notificationsSince),
-      );
-
-      // What Meta said AFTER it accepted a WhatsApp (OUTBOX-07): the failures
-      // and the duplicates only the provider receipts ledger knows about.
-      const [whatsappFailed] = await database.$queryRaw<CountRow[]>(
-        whatsappFailedSinceSql(notificationsSince),
-      );
-
-      const [whatsappMultiSend] = await database.$queryRaw<CountRow[]>(
-        whatsappMultiSendSinceSql(notificationsSince),
-      );
-
-      const windowCounts = new Map<string, number>();
-      for (const row of deliveriesInWindow) {
-        windowCounts.set(`${row.channel}:${row.status}`, row.n);
-      }
-
-      const failedTotals = new Map<string, number>();
-      for (const row of failedByChannel) {
-        failedTotals.set(row.channel, row.n);
-      }
-
-      const backlog = new Map(backlogRows.map((row) => [row.channel, row]));
-
-      // Built from the Prisma enum so a new channel shows up here the day it
-      // is added; every channel is emitted even at zero, so a dashboard never
-      // has to deal with a missing key.
-      const channels: ChannelDeliveryMetrics[] = Object.values(
-        NotificationChannel,
-      ).map((channel) => ({
-        channel,
-        pending: windowCounts.get(`${channel}:PENDING`) ?? 0,
-        processing: windowCounts.get(`${channel}:PROCESSING`) ?? 0,
-        delivered: windowCounts.get(`${channel}:DELIVERED`) ?? 0,
-        failed: windowCounts.get(`${channel}:FAILED`) ?? 0,
-        failed_total: failedTotals.get(channel) ?? 0,
-        pending_total: backlog.get(channel)?.pending_total ?? 0,
-        processing_lease_expired:
-          backlog.get(channel)?.processing_lease_expired ?? 0,
-        oldest_pending_seconds:
-          backlog.get(channel)?.oldest_pending_seconds ?? null,
-        oldest_eligible_seconds:
-          backlog.get(channel)?.oldest_eligible_seconds ?? null,
-      }));
-
-      const queueTables: QueueTableBloat[] = QUEUE_TABLES.map((table) => {
-        const row = queueTableStats.find((stat) => stat.table_name === table);
-
-        const live = Number(row?.n_live_tup ?? 0);
-        const dead = Number(row?.n_dead_tup ?? 0);
-        const total = live + dead;
-
-        return {
-          table,
-          n_live_tup: live,
-          n_dead_tup: dead,
-          dead_tuple_percent: deadTuplePercent(live, dead),
-          last_autovacuum: row?.last_autovacuum
-            ? row.last_autovacuum.toISOString()
-            : null,
-        };
-      });
-
-      // Switched-off endpoints and held events were invisible to operators.
-      const webhooks = await readWebhookQueueMetrics();
-
-      // The machinery behind the queues: a worker hung on one replica, a
-      // cron job that stopped succeeding, a partition runway running out
-      // (OBS-10, INV-07). Each is a few rows of a small table.
-      const workers = await readWorkerHeartbeats();
-      const cronJobs = await readCronJobs(
-        CronSchedulerService.getInstance().registeredJobs(),
-      );
-      const driverPosition = await readPartitionRunway();
-
-      // This replica's own saturation (GAP3-10, OBS-11): the Prisma pool is
-      // what fills first under load, and pg_stat_activity cannot see it.
-      const runtime = {
-        ...runtimeMetrics.snapshot(),
-        prisma_pool: {
-          limit: connectionLimitOf(process.env.DATABASE_URL),
-          ...poolFromMetrics(await database.$metrics.json()),
-        },
-        bcrypt: gateStats(),
-      };
-
-      const activeConnections = Number(
-        connectionStats?.active_connections ?? 0,
-      );
-      const maxConnections = Number(connectionStats?.max_connections ?? 0);
-
-      return reply.status(200).send({
-        timestamp: new Date().toISOString(),
-        database: {
-          active_connections: activeConnections,
-          max_connections: maxConnections,
-          connection_usage_percent: connectionUsagePercent(
-            activeConnections,
-            maxConnections,
-          ),
-        },
-        outbox: {
-          pending: outboxPending,
-          failed: outboxFailed,
-          oldest_pending_seconds: outboxLag?.eligible_seconds ?? null,
-          oldest_pending_any_seconds: outboxLag?.any_seconds ?? null,
-        },
-        ai_pipeline: {
-          pending: aiPending,
-          running: aiRunning,
-          failed_24h: aiFailed?.n ?? 0,
-        },
-        notifications: {
-          window_hours: NOTIFICATION_METRICS_WINDOW_HOURS,
-          failed_total: channels.reduce(
-            (total, metrics) => total + metrics.failed_total,
-            0,
-          ),
-          channels,
-          whatsapp_failed_24h: whatsappFailed?.n ?? 0,
-          whatsapp_multi_send_24h: whatsappMultiSend?.n ?? 0,
-        },
-        queue_tables: queueTables,
-        webhooks: { ...webhooks, failed_24h: webhooksFailed?.n ?? 0 },
-        workers,
-        cron_jobs: cronJobs,
-        driver_position: driverPosition,
-        runtime,
-        // Per replica, since it started (decisions 14.2–14.4, 14.8).
-        legacy_contracts: legacyContractUsage(),
-        ai_device_agreement_total: deviceAgreementTotals(),
-        proof_signing: container
-          .resolve<ProofSigningService>("ProofSigningService")
-          .health(),
-        // Contract §32: provider latency and error rate per channel, the
-        // replica's sockets and Redis — per replica, like `runtime`.
-        providers: providerMetrics.snapshot(),
-        realtime: realtimeMetrics(),
-        redis: await readRedisMetrics(() =>
-          RedisConnection.getInstance().getClient(),
-        ),
-      });
+      // Four statements, one after the other, served from a 10 s snapshot
+      // with one read in flight at a time (operational-metrics.ts).
+      return reply.status(200).send(await readOperationalMetrics());
     },
   );
 
@@ -658,8 +358,9 @@ async function healthRoutes(app: FastifyInstance) {
    * Provider readiness (contract §32/§33): which providers this deployment
    * has configured and whether they answer — Resend and its domain, Meta and
    * each template's approval, Expo, R2, the OCR service and its token, the
-   * proof certificate and the heartbeat. Read-only probes, cached 30 s per
-   * replica so a refreshing screen never turns into calls to Meta.
+   * proof certificate and the heartbeat. Read-only probes, side by side with
+   * a 2.5 s ceiling each, cached 30 s and shared by the replicas (Redis,
+   * fail-open) so a refreshing screen never turns into calls to Meta.
    *
    * MASTER-only: it describes the shared infrastructure. Variable NAMES and
    * states only; no value, no internal host, no heartbeat URL.
@@ -674,7 +375,7 @@ async function healthRoutes(app: FastifyInstance) {
         tags: ["health"],
         summary: "Prontidão dos provedores externos",
         description:
-          "Diz, sem expor segredos, quais provedores estão configurados e respondendo: e-mail (Resend, com o domínio do remetente), WhatsApp (Meta, com o status de cada template), push (Expo → FCM), armazenamento (R2), leitura de fotos (trajetto-ai, com o token), certificado ICP do comprovante e heartbeat do alerta externo. Lista os nomes das variáveis que faltam. As sondas são só de leitura e ficam em cache por 30 s nesta réplica; `refresh=true` sonda de novo. Só MASTER.",
+          "Diz, sem expor segredos, quais provedores estão configurados e respondendo: e-mail (Resend, com o domínio do remetente), WhatsApp (Meta, com o status de cada template), push (Expo → FCM), armazenamento (R2), leitura de fotos (trajetto-ai, com o token), certificado ICP do comprovante e heartbeat do alerta externo. Lista os nomes das variáveis que faltam. As sondas são só de leitura, rodam em paralelo com limite de 2,5 s cada e ficam em cache por 30 s, compartilhado entre as réplicas (`cached` diz se a resposta veio do cache); `refresh=true` sonda de novo, no máximo uma vez a cada 5 s. Só MASTER.",
         querystring: healthSchemas.providersQuery,
         response: {
           200: healthResponses.providerReadiness,

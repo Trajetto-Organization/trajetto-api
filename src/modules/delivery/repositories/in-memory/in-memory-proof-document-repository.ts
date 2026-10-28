@@ -25,6 +25,7 @@ function signatureColumns(data: ProofSignatureColumns): ProofSignatureColumns {
     cert_issuer: data.cert_issuer,
     cert_not_after: data.cert_not_after ? new Date(data.cert_not_after) : null,
     signed_at: data.signed_at ? new Date(data.signed_at) : null,
+    cert_icp_brasil: data.cert_icp_brasil ?? null,
   };
 }
 

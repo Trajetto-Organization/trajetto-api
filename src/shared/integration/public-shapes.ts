@@ -24,6 +24,9 @@ interface PublicDelivery {
   status: string;
   status_label: string;
 
+  /** DELIVERY, SERVICE_ORDER or PICKUP (meeting of 14/10/2026). */
+  kind: string;
+
   recipient: {
     name: string;
     document: string | null;
@@ -109,6 +112,8 @@ function toPublicDelivery(delivery: {
   invoice_key: string | null;
   invoice_number: string | null;
   status: string;
+  /** Absent on a row read without it: the column default. */
+  kind?: string;
   recipient_name: string;
   recipient_document: string | null;
   street: string;
@@ -138,6 +143,8 @@ function toPublicDelivery(delivery: {
       DELIVERY_STATUS_LABELS[
         delivery.status as keyof typeof DELIVERY_STATUS_LABELS
       ] ?? delivery.status,
+
+    kind: delivery.kind ?? "DELIVERY",
 
     recipient: {
       name: delivery.recipient_name,

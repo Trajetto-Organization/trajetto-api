@@ -8,6 +8,7 @@ import { randomUUID } from "node:crypto";
 import auth from "@/config/auth";
 
 import { readSpreadsheet } from "@/shared/delivery/spreadsheet-reader";
+import { importQueue } from "@/modules/import/services/import-queue";
 import { parseDeliverySpreadsheet } from "@/shared/delivery/spreadsheet-parser";
 
 /**
@@ -176,8 +177,14 @@ function row(recipient: string, code: string, route?: string) {
   ];
 }
 
+/**
+ * The upload, as the operator lives it: 202 with the open record, then the
+ * record once the background processing closed it (import-queue.ts). The
+ * rows are processed after the answer, so the report is read where the web
+ * reads it — GET /import/get-import. A refusal comes back as it was sent.
+ */
 async function upload(rows: string[][], as = token) {
-  return app.inject({
+  const response = await app.inject({
     method: "POST",
     url: `/import/import-spreadsheet/${CARRIER}`,
     headers: { authorization: `Bearer ${as}` },
@@ -187,6 +194,22 @@ async function upload(rows: string[][], as = token) {
       shipperId: SHIPPER,
     },
   });
+
+  if (response.statusCode !== 202) return response;
+
+  const accepted = response.json();
+
+  expect(accepted.data.status).toBe("IN_PROGRESS");
+
+  await importQueue.idle();
+
+  const detail = await app.inject({
+    method: "GET",
+    url: `/import/get-import/${accepted.data.id}/business/${CARRIER}`,
+    headers: { authorization: `Bearer ${as}` },
+  });
+
+  return { statusCode: response.statusCode, json: () => detail.json() };
 }
 
 /** The stream, line by line. The first line is the envelope. */
@@ -241,13 +264,13 @@ describe("the model the endpoint serves", () => {
 });
 
 describe("uploading a day's work", () => {
-  it("creates the deliveries and answers with the per-row report", async () => {
+  it("creates the deliveries and closes the record with the per-row report", async () => {
     const response = await upload([
       row("Padaria Central", "PED-001"),
       row("Mercado Novo", "PED-002"),
     ]);
 
-    expect(response.statusCode).toBe(200);
+    expect(response.statusCode).toBe(202);
 
     const body = response.json();
 
@@ -310,13 +333,13 @@ describe("uploading a day's work", () => {
     expect(response.statusCode).toBe(403);
   });
 
-  it("answers 200 with a duplicate report when the same file is sent twice", async () => {
+  it("reports the second sending of the same file as duplicated", async () => {
     // The operator who is not sure whether it went through clicks again.
     await upload([row("Repetida", "PED-040")]);
 
     const again = await upload([row("Repetida", "PED-040")]);
 
-    expect(again.statusCode).toBe(200);
+    expect(again.statusCode).toBe(202);
 
     const body = again.json();
 
@@ -341,7 +364,7 @@ describe("the listing", () => {
     expect(
       (await upload([row("Para a listagem", "PED-050")], listingToken))
         .statusCode,
-    ).toBe(200);
+    ).toBe(202);
 
     const response = await app.inject({
       method: "GET",
@@ -367,7 +390,7 @@ describe("the listing", () => {
   it("never shows another carrier's uploads", async () => {
     expect(
       (await upload([row("Só minha", "PED-060")], listingToken)).statusCode,
-    ).toBe(200);
+    ).toBe(202);
 
     const response = await app.inject({
       method: "GET",
@@ -392,7 +415,7 @@ describe("taking an upload back", () => {
   async function uploaded(rows: string[][]) {
     const response = await upload(rows, undoToken);
 
-    expect(response.statusCode).toBe(200);
+    expect(response.statusCode).toBe(202);
 
     return response.json();
   }

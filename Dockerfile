@@ -51,9 +51,17 @@ FROM base AS builder
 WORKDIR /app
 
 COPY --from=deps /app/node_modules ./node_modules
+
+# The client is generated from the schema alone, BEFORE the source arrives:
+# with `COPY . .` first, every source edit reran `prisma generate` (and its
+# engine download) in CI. Nothing else in the context reaches it — .env* is
+# not in the build context (.dockerignore) — so the output is the same.
+COPY package.json ./
+COPY prisma/schema.prisma ./prisma/schema.prisma
+RUN yarn prisma generate
+
 COPY . .
 
-RUN yarn prisma generate
 RUN yarn build
 
 # ================================
@@ -101,6 +109,16 @@ COPY --from=prod-deps --chown=nodejs:nodejs /app/node_modules ./node_modules
 
 # The Prisma client is generated (`prisma generate`) and resides in node_modules/.prisma.
 # The clean installation above does not produce it, so we bring the artifact from the builder.
+#
+# The musl query engine (~16 MB) is in the image twice, and both copies are
+# used: this one by @prisma/client at run time, and the one @prisma/engines'
+# postinstall put in node_modules/@prisma/engines by the Prisma CLI — `prisma
+# migrate deploy` (docker-entrypoint.sh, also the release step) checks that
+# the query and schema engines exist there and DOWNLOADS what is missing.
+# Removing that copy would turn every migration into a fetch from
+# binaries.prisma.sh, or a failure with no network. node_modules/prisma has
+# no engine here: only `prisma generate` writes one there, and it runs in
+# the builder, whose node_modules this stage does not copy.
 COPY --from=builder --chown=nodejs:nodejs /app/node_modules/.prisma ./node_modules/.prisma
 
 COPY --from=builder --chown=nodejs:nodejs /app/build ./build
@@ -128,6 +146,15 @@ RUN sed -i "s/\r$//" ./docker-entrypoint.sh && chmod +x ./docker-entrypoint.sh
 RUN rm -rf /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/corepack \
     /usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/corepack \
     /opt/yarn-v* /usr/local/bin/yarn /usr/local/bin/yarnpkg
+
+# The commit this image was built from (deploy.yml passes GIT_SHA), which
+# GET /health/liveness answers as `version`/`commit` (src/shared/build-info.ts)
+# so the pipeline can tell, from outside, that the new build is the one
+# serving. After the last RUN on purpose: a build arg in scope of a RUN is in
+# its cache key, and every commit would rebuild that layer. It changes the
+# image config only. Empty in a local build ("dev").
+ARG GIT_SHA=""
+ENV APP_COMMIT_SHA=${GIT_SHA}
 
 USER nodejs
 

@@ -15,12 +15,24 @@ class ReverseImportController {
 
     const useCase = container.resolve(ReverseImportUseCase);
 
-    const result = await useCase.execute({
+    const outcome = await useCase.start({
       userId: id,
       businessId,
       importId,
     });
 
+    // A big upload is undone after this answer, in batches: one transaction
+    // for the whole undo timed out at 15 s (import-reversal.ts). The client
+    // follows the record until `status` is REVERSED.
+    if (outcome.kind === "accepted") {
+      return reply.status(202).send({
+        message:
+          "Estorno em andamento. As entregas estão sendo removidas em segundo plano; o resultado aparece na importação quando terminar.",
+        data: outcome.record,
+      });
+    }
+
+    const { result } = outcome;
     const kept = result.keptDeliveries.length + result.keptRoutes.length;
 
     return reply.status(200).send({

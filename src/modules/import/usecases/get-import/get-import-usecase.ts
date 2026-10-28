@@ -6,8 +6,9 @@ import { IImportRepository } from "../../repositories/IImport-repository";
 import { assertTenantAccess } from "@/modules/middlewares/tenant-authorization";
 import { callerNotFound } from "@/shared/delivery/caller-not-found";
 import { ImportNotFoundError } from "../errors/import-errors";
+import { reversalView } from "../../services/import-reversal";
 
-import type { ImportRecord } from "../../dtos/import-dto";
+import type { ImportDetail } from "../../dtos/import-dto";
 
 interface GetImportRequest {
   userId: string;
@@ -36,7 +37,7 @@ class GetImportUseCase {
     userId,
     businessId,
     importId,
-  }: GetImportRequest): Promise<ImportRecord> {
+  }: GetImportRequest): Promise<ImportDetail> {
     const findUser = await this.user.findUserById(userId);
 
     if (!findUser) throw callerNotFound();
@@ -54,7 +55,17 @@ class GetImportUseCase {
       throw new ImportNotFoundError();
     }
 
-    return found;
+    // The undo of a big upload runs after its answer (202): this is where the
+    // client follows it — RUNNING, INTERRUPTED (asking again resumes it) or
+    // DONE with the result. The lease and the heartbeat stay internal.
+    const {
+      reversal: _progress,
+      reversal_started_at: _lease,
+      updated_at: _heartbeat,
+      ...rest
+    } = found;
+
+    return { ...rest, reversal: reversalView(found) };
   }
 }
 

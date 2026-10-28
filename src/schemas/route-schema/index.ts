@@ -3,6 +3,7 @@ import { tenantLockedShape } from "@/shared/validation/tenant-locked-field";
 
 import { listPagesSchema } from "@/schemas/list-pages-schema";
 import { occurredAtField } from "@/shared/delivery/occurred-at";
+import { DELIVERY_KINDS } from "@/shared/delivery/delivery-kind";
 import {
   facetField,
   idFacetField,
@@ -500,8 +501,12 @@ const listUnroutedDeliveriesSchema = z.object({
     27,
     "UFs",
   ).describe("UFs (duas letras)."),
-  kinds: listParam(z.enum(["DELIVERY", "PICKUP"]), 2, "tipos").describe(
-    "DELIVERY (entrega) e/ou PICKUP (coleta).",
+  kinds: listParam(
+    z.enum(DELIVERY_KINDS),
+    DELIVERY_KINDS.length,
+    "tipos",
+  ).describe(
+    "DELIVERY (entrega), SERVICE_ORDER (ordem de serviço) e/ou PICKUP (coleta).",
   ),
   scheduledFrom: routeDayField("A data inicial é inválida.")
     .optional()

@@ -29,6 +29,11 @@ import {
   type VehicleBranchCount,
   type VehicleListFilters,
 } from "../usecases/list-vehicle/vehicle-list";
+import {
+  EXPORT_ORDER,
+  exportBatchWhere,
+  type ExportKey,
+} from "@/shared/pagination/export-keyset";
 
 /** What a picker needs (DLV-COMBO-1): no odometer, RENAVAM or CNH. */
 const VEHICLE_CHOICE_SELECT = {
@@ -305,8 +310,9 @@ class VehicleRepository implements IVehicleRepository {
     const whereCondition = vehicleListWhere(filters);
 
     const batchSize = 1000;
-    let cursor: string | undefined = undefined;
+    let after: ExportKey | null = null;
 
+    // Keyset batches in creation order (export-keyset.ts).
     while (true) {
       const vehicles: Array<
         Vehicle & {
@@ -316,19 +322,15 @@ class VehicleRepository implements IVehicleRepository {
           branch: { corporate_reason: string } | null;
         }
       > = await this.prisma.vehicle.findMany({
-        where: whereCondition,
+        where: exportBatchWhere(whereCondition, after),
         include: {
           vehicleType: { select: { description: true } },
           fuelType: { select: { description: true } },
           driver: { select: { name: true, cpf: true } },
           branch: { select: { corporate_reason: true } },
         },
-        orderBy: { id: "asc" },
+        orderBy: [...EXPORT_ORDER],
         take: batchSize,
-        ...(cursor && {
-          skip: 1,
-          cursor: { id: cursor },
-        }),
       });
 
       if (vehicles.length === 0) break;
@@ -365,7 +367,11 @@ class VehicleRepository implements IVehicleRepository {
         };
       }
 
-      cursor = vehicles[vehicles.length - 1].id;
+      if (vehicles.length < batchSize) break;
+
+      // The dto widens created_at to Date | string; Prisma hands a Date.
+      const last = vehicles[vehicles.length - 1];
+      after = { created_at: new Date(last.created_at), id: last.id };
     }
   }
 

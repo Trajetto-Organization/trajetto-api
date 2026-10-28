@@ -25,6 +25,7 @@ const deliverySelect = {
   invoice_key: true,
   invoice_number: true,
   status: true,
+  kind: true,
   recipient_name: true,
   recipient_document: true,
   street: true,
@@ -393,6 +394,7 @@ class IntegrationRepository implements IIntegrationRepository {
         neighborhood: true,
         scheduled_date: true,
         notes: true,
+        kind: true,
         // Whether an API key made it: the panel's submissions are not replayed.
         apiKeyId: true,
         items: {

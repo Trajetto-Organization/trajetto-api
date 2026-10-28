@@ -12,6 +12,7 @@ import { isUpgradeExempt } from "@/shared/http/client-version";
 import { MAX_API_KEY_AUTH_FAILURES_PER_MINUTE } from "@/shared/integration/integration-rate-guard";
 import { BUSINESS_API_RATE_PER_MINUTE } from "@/shared/integration/api-key-rules";
 import { DATABASE_RETRY_AFTER_SECONDS } from "@/shared/errors/database-unavailable";
+import { EXPORTS_PER_REPLICA } from "@/shared/services/export/export-slots";
 
 import { ndjsonDocFor, type NdjsonDoc } from "./ndjson";
 import {
@@ -937,6 +938,21 @@ function openapiTransform(input: TransformInput): {
         `RATE_LIMITED: limite de requisições excedido. Espere o tempo de \`retry-after\` antes de repetir. ${describeRateLimit(config.rateLimit)}`,
         ["RATE_LIMITED"],
         RATE_LIMIT_HEADERS,
+      ),
+    );
+  }
+
+  // Every export streams through ExportPipeline, which takes a slot first
+  // (shared/services/export/export-slots.ts): one export per company and
+  // three per replica at a time.
+  if (/\/export-[a-z-]+$/.test(url)) {
+    mergeResponse(
+      responses,
+      "429",
+      errorBody(
+        `EXPORT_BUSY: já há uma exportação desta empresa em andamento, ou ${EXPORTS_PER_REPLICA} exportações ao mesmo tempo neste servidor. Chega antes do primeiro byte do arquivo. Espere o \`retry-after\` e repita.`,
+        ["EXPORT_BUSY"],
+        { "retry-after": RETRY_AFTER_HEADER },
       ),
     );
   }

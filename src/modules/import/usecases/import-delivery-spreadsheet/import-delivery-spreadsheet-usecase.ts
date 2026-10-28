@@ -16,7 +16,14 @@ import { NotificationService } from "@/shared/services/notification-service";
 
 import { assertDispatcher } from "@/shared/delivery/dispatcher-guard";
 
-import { readSpreadsheet } from "@/shared/delivery/spreadsheet-reader";
+import {
+  inspectSpreadsheet,
+  readSpreadsheet,
+} from "@/shared/delivery/spreadsheet-reader";
+import {
+  importQueue as defaultImportQueue,
+  type ImportQueue,
+} from "../../services/import-queue";
 import {
   parseDeliverySpreadsheet,
   type ParsedRow,
@@ -138,13 +145,94 @@ class ImportDeliverySpreadsheetUseCase {
     private webhooks: WebhookFanOutService,
   ) {}
 
-  async execute({
+  /**
+   * The whole upload, start to finish, in the caller's time: validated, read,
+   * every row decided and the record closed before it returns. What the
+   * suites drive; the HTTP route uses `start`, which answers first.
+   */
+  async execute(
+    request: ImportDeliverySpreadsheetRequest,
+  ): Promise<ImportRecord> {
+    const { timeZone } = await this.validate(request);
+
+    const parsed = parseDeliverySpreadsheet(
+      await this.readMatrix(request.filename, request.content),
+    );
+
+    const record = await this.openRecord(request);
+
+    return this.process(record, parsed, { ...request, timeZone });
+  }
+
+  /**
+   * The upload as the HTTP route runs it: validated and opened now, processed
+   * after the answer (import-queue.ts).
+   *
+   * Everything that can be refused without reading the rows is refused here,
+   * with the request still open: the caller, the company, the shipper, a
+   * full replica (429 IMPORT_BUSY), a file too big or not a spreadsheet
+   * (400/413 from the cheap inspection). Then the record is opened — the
+   * id the client follows — and the workbook is loaded and the rows decided
+   * in the background, one upload at a time per replica. A file that passes
+   * the inspection but cannot be read after all closes its record with that
+   * sentence on line 1, instead of answering a request that is long gone.
+   */
+  async start(
+    request: ImportDeliverySpreadsheetRequest,
+    queue: ImportQueue = defaultImportQueue,
+  ): Promise<ImportRecord> {
+    const { timeZone } = await this.validate(request);
+
+    // After the checks that answer 403/404, before anything is written.
+    const ticket = queue.reserve();
+
+    let record: ImportRecord;
+
+    try {
+      try {
+        inspectSpreadsheet(request.filename, request.content);
+      } catch (error) {
+        throw this.unreadable(error);
+      }
+
+      record = await this.openRecord(request);
+    } catch (error) {
+      ticket.cancel();
+
+      throw error;
+    }
+
+    const { businessId } = request;
+
+    ticket.submit({
+      importId: record.id,
+      heartbeat: () => this.importRepository.touchImport(record.id, businessId),
+      run: async () => {
+        let parsed: ReturnType<typeof parseDeliverySpreadsheet>;
+
+        try {
+          parsed = parseDeliverySpreadsheet(
+            await this.readMatrix(request.filename, request.content),
+          );
+        } catch (error) {
+          await this.closeUnreadable(record.id, businessId, error);
+
+          return;
+        }
+
+        await this.process(record, parsed, { ...request, timeZone });
+      },
+    });
+
+    return record;
+  }
+
+  /** The caller, the company and the shipper; the company's zone. */
+  private async validate({
     userId,
     businessId,
-    filename,
-    content,
     shipperId,
-  }: ImportDeliverySpreadsheetRequest): Promise<ImportRecord> {
+  }: ImportDeliverySpreadsheetRequest): Promise<{ timeZone: string }> {
     const findUser = await this.user.findUserById(userId);
 
     if (!findUser) throw callerNotFound();
@@ -175,41 +263,70 @@ class ImportDeliverySpreadsheetUseCase {
 
     // The company's zone: a route row without a date is scheduled for the
     // company's today, not the server's (decision 1.1).
-    const timeZone = resolveTimeZone(
-      (findBusiness as { timezone?: string | null }).timezone,
-    );
+    return {
+      timeZone: resolveTimeZone(
+        (findBusiness as { timezone?: string | null }).timezone,
+      ),
+    };
+  }
 
-    let matrix: unknown[][];
-
+  /** The file as a matrix of cells, or the sentence that says why not. */
+  private async readMatrix(
+    filename: string,
+    content: string,
+  ): Promise<unknown[][]> {
     try {
-      matrix = await readSpreadsheet(filename, content);
+      return await readSpreadsheet(filename, content);
     } catch (error) {
-      // Refused on purpose, with its own sentence (too many rows, too large).
-      if (error instanceof AppError) throw error;
-
-      // A corrupt file, or an .xlsx that is not one. The operator needs to
-      // know it was the FILE and not their data.
-      throw new AppError(
-        "Não foi possível ler a planilha. Confira se o arquivo é .xlsx ou .csv e se não está corrompido.",
-        400,
-        "SPREADSHEET_UNREADABLE",
-      );
+      throw this.unreadable(error);
     }
+  }
 
-    const parsed = parseDeliverySpreadsheet(matrix);
+  private unreadable(error: unknown): AppError {
+    // Refused on purpose, with its own sentence (too many rows, too large).
+    if (error instanceof AppError) return error;
 
-    // The record exists before a single row does, so everything created below
-    // carries its id from birth. A process that dies halfway then leaves an
-    // upload the operator can still undo — once it is closed, by the catch
-    // below or by the close-abandoned-imports sweep; stamping the rows at the
-    // end would leave orphans no undo could ever group again.
-    const record = await this.importRepository.createImport({
+    // A corrupt file, or an .xlsx that is not one. The operator needs to
+    // know it was the FILE and not their data.
+    return new AppError(
+      "Não foi possível ler a planilha. Confira se o arquivo é .xlsx ou .csv e se não está corrompido.",
+      400,
+      "SPREADSHEET_UNREADABLE",
+    );
+  }
+
+  /**
+   * The record exists before a single row does, so everything created later
+   * carries its id from birth. A process that dies halfway then leaves an
+   * upload the operator can still undo — once it is closed, by `process` or
+   * by the close-abandoned-imports sweep; stamping the rows at the end would
+   * leave orphans no undo could ever group again.
+   */
+  private openRecord({
+    userId,
+    businessId,
+    filename,
+  }: ImportDeliverySpreadsheetRequest): Promise<ImportRecord> {
+    return this.importRepository.createImport({
       source: "SPREADSHEET",
       filename,
       businessId,
       performedById: userId,
     });
+  }
 
+  /** The rows of an opened record, closing it whatever happens. */
+  private async process(
+    record: ImportRecord,
+    parsed: ReturnType<typeof parseDeliverySpreadsheet>,
+    {
+      userId,
+      businessId,
+      shipperId,
+      filename,
+      timeZone,
+    }: ImportDeliverySpreadsheetRequest & { timeZone: string },
+  ): Promise<ImportRecord> {
     const progress: ImportProgress = { rows: [], line: null };
 
     try {
@@ -230,6 +347,47 @@ class ImportDeliverySpreadsheetUseCase {
 
       throw error;
     }
+  }
+
+  /**
+   * Closes a queued upload whose file could not be read after all (it passed
+   * the cheap inspection, then the load refused it): COMPLETED, nothing
+   * created, the reason on line 1 where sheet-level problems go — what the
+   * request would have answered with, had it still been open.
+   */
+  private async closeUnreadable(
+    importId: string,
+    businessId: string,
+    error: unknown,
+  ): Promise<void> {
+    const reason: ImportRowResult = {
+      line: 1,
+      outcome: "invalid",
+      recipient_name: null,
+      reference: null,
+      message: this.unreadable(error).message,
+    };
+
+    await this.importRepository
+      .finishImport(importId, businessId, {
+        imported: 0,
+        duplicated: 0,
+        invalid: 1,
+        report: {
+          imported: 0,
+          duplicated: 0,
+          invalid: 1,
+          unknownHeaders: [],
+          rows: [reason],
+          routes: [],
+        },
+      })
+      .catch((failure) => {
+        logger.error(
+          { err: failure, importId },
+          "could not close an unreadable import; the abandoned-import sweep will",
+        );
+      });
   }
 
   /** The rows, the routes and the closing of the record, in that order. */
@@ -319,6 +477,11 @@ class ImportDeliverySpreadsheetUseCase {
               businessId,
               shipperId,
               importId: record.id,
+
+              // The "Tipo" column. The parser always read it; until the
+              // meeting of 14/10/2026 nothing wrote it, and a "coleta" row
+              // was created as an "Entrega".
+              kind: row.kind,
 
               recipient_name: row.recipient_name,
               recipient_document: row.recipient_document,

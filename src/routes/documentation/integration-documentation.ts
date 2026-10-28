@@ -10,6 +10,7 @@ import {
   listWebhookDeliveriesSchema,
   saveWebhookEndpointSchema,
 } from "@/schemas/integration-schema";
+import { DELIVERY_KINDS } from "@/shared/delivery/delivery-kind";
 
 import {
   ALL_TOPICS,
@@ -51,6 +52,12 @@ const publicDelivery = z.object({
 
   status: z.string(),
   status_label: z.string(),
+
+  kind: z
+    .enum(DELIVERY_KINDS)
+    .describe(
+      "Tipo: DELIVERY (entrega), SERVICE_ORDER (ordem de serviço, ex.: recolher cestos retornáveis) ou PICKUP (coleta).",
+    ),
 
   recipient: z.object({
     name: z.string(),

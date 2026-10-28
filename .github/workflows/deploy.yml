@@ -4,20 +4,27 @@ name: Pipeline (staging → produção)
 #
 #   push to staging ─▶ validation (audit, lint, typecheck, unit + coverage
 #                      floor, E2E against Postgres/Redis, AI pytest, gitleaks)
-#                  ─▶ build the three images ONCE ─▶ GHCR `sha-<sha>` (immutable)
-#                  ─▶ move `staging` to those digests ─▶ Dokploy (staging Applications)
-#                  ─▶ wait until Swarm runs them
+#                  ─▶ build the two images ONCE ─▶ GHCR `sha-<sha>` (immutable);
+#                     the AI image is reused, not rebuilt, when infra/ai-ocr
+#                     is the same as in an image already built
+#                  ─▶ per service, its `staging` tag moved by digest and then
+#                     Dokploy (staging Applications): the AI only if its
+#                     digest changed, then the API
+#                  ─▶ wait until the public API answers this commit
+#                  ─▶ `staged-<sha>`: the marker the PR and the promote require
 #
-#   pull request into main ─▶ the same validation, plus: the PR head was
-#                             built on staging (the image to promote exists)
+#   pull request into main ─▶ the same validation, plus: staging deployed
+#                             the PR head (`staged-<sha>` exists)
 #
 #   merge into main ─▶ PROMOTE: the exact digests staging validated, never a
 #                      rebuild ─▶ migrations (job) ─▶ `stable` ─▶ Dokploy
 #                      (production Applications) ─▶ wait until Swarm runs them
 #                      ─▶ release (tag, CHANGELOG, GitHub Release)
 #
-#   Run workflow (manual) ─▶ the same promote with an older immutable tag:
-#                            the rollback button.
+#   Run workflow on main ─▶ the same promote with an older immutable tag:
+#                           the rollback button.
+#   Run workflow on staging ─▶ the staging road again for the branch head
+#                              (force_ai_build: rebuild and redeploy the AI).
 #
 # One image per service for both environments: the API reads all of its
 # configuration at runtime, so staging and production differ only in the
@@ -27,15 +34,29 @@ on:
     branches: [staging, main]
   pull_request:
     branches: [main]
-  # The ROLLBACK button (or a manual re-promote): dispatch it with the
-  # immutable tag of the build to ship. `image_tag` has no default on
+  # On MAIN, the ROLLBACK button (or a manual re-promote): dispatch it with
+  # the immutable tag of the build to ship. `image_tag` has no default on
   # purpose — a moving default (`latest` used to be one) ships whatever was
-  # built last, not the build someone chose.
+  # built last, not the build someone chose — and an empty one is refused by
+  # the promote's validation step. It is not `required` only because the
+  # same form serves staging:
+  #
+  # On STAGING, the staging road again for the branch head (validation,
+  # build, deploy). `force_ai_build` rebuilds and redeploys the AI even when
+  # nothing under infra/ai-ocr changed — the AI is otherwise reused by its
+  # source and redeployed only when its digest changes (build-and-push,
+  # deploy-staging, promote-production): a fix that reached the base image
+  # without a digest bump, or an AI that drifted from its tag, needs this.
+  # On main it only redeploys production's AI (nothing is ever built there).
   workflow_dispatch:
     inputs:
       image_tag:
-        description: "Tag imutável do build a publicar em produção: sha-<sha> (builds antigos: main-<sha>)"
-        required: true
+        description: "Na main (rollback): tag imutável do build a publicar em produção, sha-<sha> (builds antigos: main-<sha>). Na staging: deixe vazio"
+        required: false
+      force_ai_build:
+        description: "Reimplanta a trajetto-ai mesmo sem mudança (na staging também a reconstrói, mesmo sem mudança em infra/ai-ocr)"
+        type: boolean
+        required: false
 
 # Least privilege by default; the jobs that push to GHCR or write releases
 # ask for more themselves.
@@ -227,17 +248,19 @@ jobs:
     name: Build and push the images (once)
     runs-on: ubuntu-latest
     needs: [test, ai-ocr, secrets]
-    # Push to staging only. A pull request validates, and the merge into
-    # main promotes the digests built HERE: rebuilding later could publish
-    # bytes different from the ones staging ran.
-    if: github.event_name == 'push' && github.ref == 'refs/heads/staging'
+    # Staging only (a push, or Run workflow on staging). A pull request
+    # validates, and the merge into main promotes the digests built HERE:
+    # rebuilding later could publish bytes different from the ones staging
+    # ran.
+    if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/staging'
     permissions:
       contents: read
       packages: write
-    # The digests just pushed: staging is moved to exactly these bytes.
+    # The digests this commit ships: staging is moved to exactly these bytes.
+    # The AI's is the image built here, or the one reused for the same source.
     outputs:
       api_digest: ${{ steps.build.outputs.digest }}
-      ai_digest: ${{ steps.build-ai.outputs.digest }}
+      ai_digest: ${{ steps.build-ai.outputs.digest || steps.ai-source.outputs.digest }}
 
     steps:
       - name: Checkout repository
@@ -279,28 +302,73 @@ jobs:
           cache-to: type=gha,mode=max
           # Attestations next to the image in GHCR (INFRA-16): what went into
           # it (SBOM) and how it was built (provenance). `max` records the
-          # build args too; this build has none.
+          # build args too; the only one is the commit, which is no secret.
           sbom: true
           provenance: mode=max
+          # The commit, as APP_COMMIT_SHA in the image: GET /health/liveness
+          # answers it, and deploy-staging waits until the public API does.
+          # Declared after the Dockerfile's last RUN, so no layer depends on it.
+          build-args: |
+            GIT_SHA=${{ github.sha }}
 
       - name: Image digest
         run: echo ${{ steps.build.outputs.digest }}
 
       # The OCR service of the AI readings (infra/ai-ocr, ADR 0010), tagged
-      # like the API — `sha-<sha>` only — and moved with it to staging and
-      # stable. Its pytest suite already ran in the `ai-ocr` job (`--target
-      # test`); this builds the runtime stage only. Own cache scope.
+      # like the API — `sha-<sha>` — and moved with it to staging and stable.
+      #
+      # Rebuilt only when its source changed. The image's whole build input
+      # is infra/ai-ocr (the context: Dockerfile, hashed requirements, the
+      # models' hashes, the code), and git names that directory's content
+      # with one hash. Every AI build is also tagged `src-<that hash>`; a
+      # push that finds the tag reuses that image — same bytes, same digest —
+      # and only adds this commit's `sha-<sha>` to it. A rebuild made a new
+      # digest every time (labels, the commit), so every API push used to
+      # restart the AI and send it over the VPS's flaky route again. Run
+      # workflow on staging with `force_ai_build` rebuilds anyway (a change
+      # that reaches the image without touching infra/ai-ocr, like a build
+      # option here).
+      - name: Is there an AI image for this source already?
+        id: ai-source
+        env:
+          FORCE: ${{ inputs.force_ai_build }}
+        run: |
+          tree=$(git rev-parse HEAD:infra/ai-ocr)
+          echo "tree=${tree}" >> "$GITHUB_OUTPUT"
+          digest=""
+          if [ "$FORCE" = "true" ]; then
+            echo "::notice::force_ai_build: a imagem trajetto-ai é reconstruída mesmo sem mudança em infra/ai-ocr."
+          else
+            digest=$(docker buildx imagetools inspect \
+              "ghcr.io/trajetto-organization/trajetto-ai:src-${tree}" --format '{{.Manifest.Digest}}' 2>/dev/null || true)
+          fi
+          case "$digest" in
+            sha256:*)
+              echo "build=false" >> "$GITHUB_OUTPUT"
+              echo "digest=${digest}" >> "$GITHUB_OUTPUT"
+              echo "trajetto-ai: infra/ai-ocr igual ao de src-${tree::12}; imagem reaproveitada (${digest}), sem rebuild." >> "$GITHUB_STEP_SUMMARY"
+              ;;
+            *)
+              echo "build=true" >> "$GITHUB_OUTPUT"
+              ;;
+          esac
+
+      # Its pytest suite already ran in the `ai-ocr` job (`--target test`);
+      # this builds the runtime stage only. Own cache scope.
       - name: Extract metadata (ai)
         id: meta-ai
+        if: steps.ai-source.outputs.build == 'true'
         uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5.10.0
         with:
           images: ghcr.io/trajetto-organization/trajetto-ai
           flavor: latest=false
           tags: |
             type=sha,prefix=sha-
+            type=raw,value=src-${{ steps.ai-source.outputs.tree }}
 
       - name: Build and push the AI image
         id: build-ai
+        if: steps.ai-source.outputs.build == 'true'
         uses: docker/build-push-action@ca052bb54ab0790a636c9b5f226502c73d547a25 # v5.4.0
         with:
           context: ./infra/ai-ocr
@@ -312,6 +380,22 @@ jobs:
           cache-to: type=gha,mode=max,scope=ai
           sbom: true
           provenance: mode=max
+          # GET /health reports it (Dockerfile: declared in the last stage,
+          # after every layer).
+          build-args: |
+            GIT_SHA=${{ github.sha }}
+
+      # Registry-side, by digest, nothing pulled: this commit's `sha-<sha>`
+      # names the reused image, so the PR check and the promote find the AI
+      # build of every commit by the same name as the API's.
+      - name: Tag the reused AI image for this commit
+        if: steps.ai-source.outputs.build == 'false'
+        env:
+          DIGEST: ${{ steps.ai-source.outputs.digest }}
+        run: |
+          docker buildx imagetools create \
+            --tag "ghcr.io/trajetto-organization/trajetto-ai:sha-${GITHUB_SHA::7}" \
+            "ghcr.io/trajetto-organization/trajetto-ai@${DIGEST}"
 
       # The images just pushed, by digest: CRITICAL vulnerabilities that
       # already have a fix (INFRA-16). Trivy runs from its image pinned by
@@ -331,7 +415,9 @@ jobs:
           TRIVY_USERNAME: ${{ github.actor }}
           TRIVY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
           API_IMAGE: ghcr.io/trajetto-organization/trajetto-api@${{ steps.build.outputs.digest }}
-          AI_IMAGE: ghcr.io/trajetto-organization/trajetto-ai@${{ steps.build-ai.outputs.digest }}
+          # Reused or built: what this commit ships is what gets scanned, so
+          # a reused image meets today's vulnerability database too.
+          AI_IMAGE: ghcr.io/trajetto-organization/trajetto-ai@${{ steps.build-ai.outputs.digest || steps.ai-source.outputs.digest }}
           EXIT_CODE: ${{ vars.IMAGE_SCAN_ENFORCE == 'true' && '1' || '0' }}
         run: |
           for image in "$API_IMAGE" "$AI_IMAGE"; do
@@ -344,17 +430,30 @@ jobs:
       - name: Summary
         env:
           API_DIGEST: ${{ steps.build.outputs.digest }}
+          AI_DIGEST: ${{ steps.build-ai.outputs.digest || steps.ai-source.outputs.digest }}
         run: |
           echo "Imagens publicadas: trajetto-api e trajetto-ai em sha-${GITHUB_SHA::7}." >> "$GITHUB_STEP_SUMMARY"
           echo "trajetto-api@${API_DIGEST}" >> "$GITHUB_STEP_SUMMARY"
+          echo "trajetto-ai@${AI_DIGEST}" >> "$GITHUB_STEP_SUMMARY"
 
   # Staging redeploys on its own, with no approval: that is the whole point of
   # having it. Every push to staging lands here, and the environment is
   # cheap to break.
   #
-  # This job moves the `staging` tag of the three images to the digests this
-  # run just built, asks Dokploy to redeploy the staging Applications (each on
-  # its `:staging` tag) and waits until Swarm actually runs those bytes.
+  # Per service, in the order the API needs (it calls the AI): move the
+  # service's `staging` tag to the digest this run built, then ask Dokploy to
+  # redeploy its Application, which pulls `:staging` again. The AI is
+  # redeployed only when its digest differs from the one `staging` had (an
+  # image reused by its source is already running: a redeploy would only
+  # restart it). Then the job waits until the public API answers this
+  # commit, and writes `staged-<sha>`, the marker the PR check and the
+  # promote require.
+  #
+  # Each tag moves right before its own deploy, never both up front: a failed
+  # AI deploy used to leave the API's `staging` on a build staging never ran.
+  # A Dokploy deploy that fails puts its tag back (the last step), so
+  # `staging` keeps naming what staging runs — the AI's skip compares
+  # against it.
   #
   # Before Dokploy exists the tags still move (so the image staging would run
   # is always visible in GHCR) and the deploy is skipped with a notice. To
@@ -364,7 +463,7 @@ jobs:
     name: Deploy staging
     runs-on: ubuntu-latest
     needs: build-and-push
-    if: github.event_name == 'push' && github.ref == 'refs/heads/staging'
+    if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/staging'
 
     environment: staging
 
@@ -408,20 +507,30 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # By digest, never by a tag that could have moved since the build.
-      - name: Move staging to this build
+      # What `staging` names before this run moves anything: the AI's skip
+      # compares against it, and a failed deploy puts it back.
+      - name: Read what staging runs now
+        id: current
         if: steps.head.outputs.current == 'true'
         env:
-          API_DIGEST: ${{ needs.build-and-push.outputs.api_digest }}
           AI_DIGEST: ${{ needs.build-and-push.outputs.ai_digest }}
+          FORCE: ${{ inputs.force_ai_build }}
         run: |
-          docker buildx imagetools create \
-            --tag ghcr.io/trajetto-organization/trajetto-api:staging \
-            "ghcr.io/trajetto-organization/trajetto-api@${API_DIGEST}"
-          docker buildx imagetools create \
-            --tag ghcr.io/trajetto-organization/trajetto-ai:staging \
-            "ghcr.io/trajetto-organization/trajetto-ai@${AI_DIGEST}"
-          echo "trajetto-api:staging → sha-${GITHUB_SHA::7} (${API_DIGEST})" >> "$GITHUB_STEP_SUMMARY"
+          digest_of() {
+            found=$(docker buildx imagetools inspect "ghcr.io/trajetto-organization/$1:staging" --format '{{.Manifest.Digest}}' 2>/dev/null || true)
+            case "$found" in sha256:*) printf '%s' "$found" ;; esac
+          }
+          api=$(digest_of trajetto-api)
+          ai=$(digest_of trajetto-ai)
+          echo "api=${api}" >> "$GITHUB_OUTPUT"
+          echo "ai=${ai}" >> "$GITHUB_OUTPUT"
+          if [ "$FORCE" != "true" ] && [ -n "$ai" ] && [ "$ai" = "$AI_DIGEST" ]; then
+            echo "ai_deploy=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::trajetto-ai: staging já roda ${AI_DIGEST} (infra/ai-ocr sem mudança); a IA não é reimplantada. Para forçar: Run workflow na staging com force_ai_build."
+            echo "trajetto-ai: sem mudança (${AI_DIGEST}); deploy da IA pulado." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "ai_deploy=true" >> "$GITHUB_OUTPUT"
+          fi
 
       # All three secrets: deploy. None: Dokploy does not exist yet — a
       # notice, and the run stays green. Some: a configuration mistake, which
@@ -449,14 +558,28 @@ jobs:
             exit 1
           fi
 
+      # By digest, never by a tag that could have moved since the build. Only
+      # when the AI changed: otherwise `staging` already names this digest.
+      - name: Move the AI's staging tag to this build
+        id: move-ai
+        if: steps.head.outputs.current == 'true' && steps.current.outputs.ai_deploy == 'true'
+        env:
+          AI_DIGEST: ${{ needs.build-and-push.outputs.ai_digest }}
+        run: |
+          docker buildx imagetools create \
+            --tag ghcr.io/trajetto-organization/trajetto-ai:staging \
+            "ghcr.io/trajetto-organization/trajetto-ai@${AI_DIGEST}"
+          echo "trajetto-ai:staging → ${AI_DIGEST}" >> "$GITHUB_STEP_SUMMARY"
+
       # One Dokploy Application per service, each on its `:staging` tag. The
-      # AI goes first (the API calls it). `done` in Dokploy = the Swarm
-      # manager ACCEPTED the new spec; the API's rollout is checked after.
-      # The AI id is optional: not created yet = a notice. Database backups
-      # are Dokploy's own (docs/deploy.md, "Backup e restauração"), not a
-      # service this pipeline deploys.
+      # AI goes first (the API calls it), and only when its digest changed.
+      # `done` in Dokploy = the Swarm manager ACCEPTED the new spec; the
+      # API's rollout is checked after. The AI id is optional: not created
+      # yet = a notice. Database backups are Dokploy's own (docs/deploy.md,
+      # "Backup e restauração"), not a service this pipeline deploys.
       - name: Deploy the AI service to staging (Dokploy)
-        if: steps.head.outputs.current == 'true' && steps.dokploy.outputs.enabled == 'true'
+        id: deploy-ai
+        if: steps.head.outputs.current == 'true' && steps.dokploy.outputs.enabled == 'true' && steps.current.outputs.ai_deploy == 'true'
         env:
           DOKPLOY_URL: ${{ secrets.DOKPLOY_URL }}
           DOKPLOY_API_KEY: ${{ secrets.DOKPLOY_API_KEY }}
@@ -465,7 +588,20 @@ jobs:
           DOKPLOY_OPTIONAL: "true"
         run: node .github/scripts/dokploy-deploy.mjs
 
+      # The API's tag, once the AI it calls is in place.
+      - name: Move staging to this build
+        id: move-api
+        if: steps.head.outputs.current == 'true'
+        env:
+          API_DIGEST: ${{ needs.build-and-push.outputs.api_digest }}
+        run: |
+          docker buildx imagetools create \
+            --tag ghcr.io/trajetto-organization/trajetto-api:staging \
+            "ghcr.io/trajetto-organization/trajetto-api@${API_DIGEST}"
+          echo "trajetto-api:staging → sha-${GITHUB_SHA::7} (${API_DIGEST})" >> "$GITHUB_STEP_SUMMARY"
+
       - name: Deploy to staging (Dokploy)
+        id: deploy-api
         if: steps.head.outputs.current == 'true' && steps.dokploy.outputs.enabled == 'true'
         env:
           DOKPLOY_URL: ${{ secrets.DOKPLOY_URL }}
@@ -474,10 +610,32 @@ jobs:
           DOKPLOY_APP_LABEL: trajetto-api
         run: node .github/scripts/dokploy-deploy.mjs
 
-      # The same check as the promote (see there): staging is where a build
-      # that does not converge must show up, before anyone merges it.
+      # The proof staging runs THIS build, and the default (ROLLOUT_VERIFY
+      # unset): the public API's /health/liveness answers the commit its
+      # image was built from, and wait-for-version.mjs polls it through the
+      # edge until this commit has answered for 90 s — longer than Swarm's
+      # rollback monitor, and long enough for an old replica still in the
+      # rotation to show up. No SSH key on the host. ROLLOUT_VERIFY=ssh
+      # switches to the Swarm-side check below; `off` skips both, logged.
+      - name: Wait for the API to serve this build
+        id: verify-http
+        if: steps.head.outputs.current == 'true' && steps.dokploy.outputs.enabled == 'true' && vars.ROLLOUT_VERIFY != 'off' && vars.ROLLOUT_VERIFY != 'ssh'
+        env:
+          API_URL: ${{ vars.API_PUBLIC_URL }}
+          EXPECTED_SHA: ${{ github.sha }}
+        run: |
+          if [ -z "$API_URL" ]; then
+            echo "::error::Falta a variável API_PUBLIC_URL no environment staging (a origem pública da API, ex. https://api-staging.intrajetto.com): sem ela o run não prova que o staging serve este build (docs/deploy.md, \"Conferir a convergência\"). Para pular de propósito: ROLLOUT_VERIFY=off."
+            exit 1
+          fi
+          node .github/scripts/wait-for-version.mjs
+
+      # The promote's check (see there), opt-in on staging with
+      # ROLLOUT_VERIFY=ssh: the Swarm tasks themselves, over SSH with a key
+      # restricted to infra/scripts/verify-rollout.sh.
       - name: Wait for the rollout to converge
-        if: steps.head.outputs.current == 'true' && steps.dokploy.outputs.enabled == 'true' && vars.ROLLOUT_VERIFY != 'off'
+        id: verify-ssh
+        if: steps.head.outputs.current == 'true' && steps.dokploy.outputs.enabled == 'true' && vars.ROLLOUT_VERIFY == 'ssh'
         env:
           DIGEST: ${{ needs.build-and-push.outputs.api_digest }}
           SERVICE: ${{ vars.SWARM_API_SERVICE }}
@@ -494,7 +652,7 @@ jobs:
           [ -n "$SSH_KEY" ] || missing="$missing secrets.DEPLOY_VERIFY_SSH_KEY"
           [ -n "$SSH_KNOWN_HOSTS" ] || missing="$missing secrets.DEPLOY_SSH_KNOWN_HOSTS"
           if [ -n "$missing" ]; then
-            echo "::error::Faltam${missing}: sem eles o run não prova que o Swarm terminou o rollout (docs/deploy.md, \"Conferir a convergência\"). Para pular de propósito: ROLLOUT_VERIFY=off."
+            echo "::error::Faltam${missing}: sem eles o run não prova que o Swarm terminou o rollout (docs/deploy.md, \"Conferir a convergência\"). Sem SSH, apague ROLLOUT_VERIFY (vale a conferência pela liveness pública); para pular de propósito: ROLLOUT_VERIFY=off."
             exit 1
           fi
           install -m 700 -d ~/.ssh
@@ -512,13 +670,65 @@ jobs:
           echo "::warning::ROLLOUT_VERIFY=off: o run não confere se o Swarm terminou o rollout ou o reverteu."
           echo "Rollout de staging NÃO verificado (ROLLOUT_VERIFY=off)." >> "$GITHUB_STEP_SUMMARY"
 
+      # The marker the PR check and the promote require, as in trajetto-ui:
+      # written last, so only a build that passed the scan (build-and-push),
+      # became staging's tags, was deployed by Dokploy and — when the check
+      # runs — was served by the staging API gets it. A build whose scan,
+      # deploy or check failed, or whose run was superseded, has `sha-<sha>`
+      # in GHCR but no `staged-<sha>`. Both images, on the digests deployed.
+      # Not gated on Dokploy being configured: before it exists the tags are
+      # all there is, as in the web.
+      - name: Mark this build as staged
+        if: steps.head.outputs.current == 'true'
+        env:
+          API_DIGEST: ${{ needs.build-and-push.outputs.api_digest }}
+          AI_DIGEST: ${{ needs.build-and-push.outputs.ai_digest }}
+        run: |
+          docker buildx imagetools create \
+            --tag "ghcr.io/trajetto-organization/trajetto-api:staged-${GITHUB_SHA::7}" \
+            "ghcr.io/trajetto-organization/trajetto-api@${API_DIGEST}"
+          docker buildx imagetools create \
+            --tag "ghcr.io/trajetto-organization/trajetto-ai:staged-${GITHUB_SHA::7}" \
+            "ghcr.io/trajetto-organization/trajetto-ai@${AI_DIGEST}"
+          echo "staged-${GITHUB_SHA::7}: trajetto-api → ${API_DIGEST}, trajetto-ai → ${AI_DIGEST}" >> "$GITHUB_STEP_SUMMARY"
+
+      # A Dokploy deploy that failed left Swarm on the old spec, so its tag
+      # goes back to what staging still runs: the next run's AI skip compares
+      # against it, and a manual Deploy in the panel must not pull a build
+      # that never came up. Only a failed Dokploy step, never a failed check:
+      # a check that timed out may sit on a build that did converge.
+      - name: Put the staging tags back after a failed deploy
+        if: steps.head.outputs.current == 'true' && steps.dokploy.outputs.enabled == 'true' && failure()
+        env:
+          PREVIOUS_API: ${{ steps.current.outputs.api }}
+          PREVIOUS_AI: ${{ steps.current.outputs.ai }}
+          API_DEPLOY: ${{ steps.deploy-api.outcome }}
+          AI_DEPLOY: ${{ steps.deploy-ai.outcome }}
+        run: |
+          restore() {
+            if [ -z "$2" ]; then
+              echo "::warning::$1:staging não existia antes deste run; fica onde está."
+              return
+            fi
+            docker buildx imagetools create \
+              --tag "ghcr.io/trajetto-organization/$1:staging" "ghcr.io/trajetto-organization/$1@$2"
+            echo "$1:staging voltou para $2 (o deploy falhou; o staging segue no build anterior)." >> "$GITHUB_STEP_SUMMARY"
+          }
+          if [ "$AI_DEPLOY" = "failure" ]; then restore trajetto-ai "$PREVIOUS_AI"; fi
+          if [ "$API_DEPLOY" = "failure" ]; then restore trajetto-api "$PREVIOUS_API"; fi
+
   # ── Pull request into main: is there a validated build to promote? ──
 
-  # The merge promotes the image staging built for the PR head; without it
+  # The merge promotes the build staging DEPLOYED for the PR head; without it
   # the promote fails AFTER the merge. This says so on the PR instead, while
-  # it can still be fixed: push the commit to staging first. It waits a
-  # while, because the PR usually opens while staging is still building that
-  # same commit.
+  # it can still be fixed. The image alone (`sha-<sha>`) is not enough: it is
+  # in GHCR as soon as the build pushed it, also when the scan, the staging
+  # deploy or its check failed afterwards — a build staging never ran could
+  # be merged and promoted. `staged-<sha>` is written by deploy-staging only
+  # after all of that passed, on the digests it deployed (as in trajetto-ui).
+  # It waits up to 45 min, because the PR usually opens while staging is
+  # still building and deploying that same commit. (The job keeps its name:
+  # branch protection requires the check by it.)
   staging-image:
     name: The PR head was built on staging
     runs-on: ubuntu-latest
@@ -535,25 +745,31 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Wait for the staging images of the PR head
+      - name: Wait for the staging deploy of the PR head
         env:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
-          tag="sha-${HEAD_SHA::7}"
-          for attempt in $(seq 1 60); do
+          short="${HEAD_SHA::7}"
+          digest_of() {
+            docker buildx imagetools inspect "ghcr.io/trajetto-organization/$1" --format '{{.Manifest.Digest}}' 2>/dev/null || true
+          }
+          for attempt in $(seq 1 90); do
             missing=""
             for image in trajetto-api trajetto-ai; do
-              docker buildx imagetools inspect "ghcr.io/trajetto-organization/${image}:${tag}" > /dev/null 2>&1 \
-                || missing="$missing ${image}"
+              staged=$(digest_of "${image}:staged-${short}")
+              built=$(digest_of "${image}:sha-${short}")
+              if [ -z "$staged" ] || [ "$staged" != "$built" ]; then
+                missing="$missing ${image}"
+              fi
             done
             if [ -z "$missing" ]; then
-              echo "${tag} existe para as duas imagens: o merge promove exatamente este build." >> "$GITHUB_STEP_SUMMARY"
+              echo "staged-${short} existe para as duas imagens, no digest de sha-${short}: o merge promove exatamente o build que o staging rodou." >> "$GITHUB_STEP_SUMMARY"
               exit 0
             fi
-            echo "tentativa ${attempt}/60: ainda sem${missing}:${tag}"
+            echo "tentativa ${attempt}/90: ainda sem staged-${short} em${missing}"
             sleep 30
           done
-          echo "::error::O commit ${HEAD_SHA} não tem imagem de staging (${tag}). Envie-o para a branch staging, espere o pipeline de staging ficar verde e rode este check de novo. O merge em main só promove o que o staging construiu (docs/deploy.md)."
+          echo "::error::O commit ${HEAD_SHA} não tem o marcador staged-${short}: o staging não construiu, não implantou ou não conferiu esse build (ou o run de staging dele ainda não terminou, ou foi superado por um commit mais novo). Envie-o para a branch staging, espere o pipeline de staging ficar verde e rode este check de novo. O merge em main só promove o que o staging rodou (docs/deploy.md)."
           exit 1
 
   # ── Production ──
@@ -609,7 +825,9 @@ jobs:
   promote-production:
     name: Promote to production
     runs-on: ubuntu-latest
-    if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch'
+    # Run workflow promotes only from main: on staging the same button runs
+    # the staging road instead (build-and-push, deploy-staging).
+    if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
 
     permissions:
       contents: read
@@ -692,6 +910,43 @@ jobs:
             echo "::error::ghcr.io/trajetto-organization/trajetto-api:${IMAGE_TAG} não existe. O commit não passou pelo pipeline de staging (ou o merge foi squash/rebase, que cria um commit que o staging nunca construiu). Use merge commit a partir de staging (docs/deploy.md)."
             exit 1
           fi
+
+      # A merge promotes only what staging actually ran: the build must carry
+      # the `staged-<commit>` marker deploy-staging writes last, on the same
+      # digests. The image alone is not enough — it is pushed before the
+      # scan, and stays in GHCR when the scan, the staging deploy or its
+      # check fails. The Run workflow (rollback) is exempt: it targets older
+      # builds, some made before the marker existed, and a person approves
+      # the tag typed. The same rule as trajetto-ui.
+      - name: Check that staging ran this build
+        if: github.event_name == 'push'
+        env:
+          IMAGE_TAG: ${{ steps.target.outputs.tag }}
+        run: |
+          short="${IMAGE_TAG#sha-}"
+          digest_of() {
+            docker buildx imagetools inspect "ghcr.io/trajetto-organization/$1" --format '{{.Manifest.Digest}}' 2>/dev/null || true
+          }
+          for image in trajetto-api trajetto-ai; do
+            built=$(digest_of "${image}:${IMAGE_TAG}")
+            if [ -z "$built" ]; then
+              # Only the AI can be absent here (the API was checked above): a
+              # build older than the service, which the AI promote skips too.
+              echo "::warning::${image}:${IMAGE_TAG} não existe; nada a conferir para ${image}."
+              continue
+            fi
+            marker="ghcr.io/trajetto-organization/${image}:staged-${short}"
+            staged=$(digest_of "${image}:staged-${short}")
+            if [ -z "$staged" ]; then
+              echo "::error::${image}:${IMAGE_TAG} existe no GHCR, mas o staging nunca rodou esse build (falta ${marker}): o scan, o deploy de staging ou a conferência falhou, ou o run de staging ainda não terminou. Corrija em staging e faça o merge de novo, ou rode este job de novo quando o deploy de staging terminar."
+              exit 1
+            fi
+            if [ "$staged" != "$built" ]; then
+              echo "::error::${marker} aponta para ${staged}, não para ${built} de ${image}:${IMAGE_TAG}: recusado."
+              exit 1
+            fi
+          done
+          echo "staged-${short}: o staging rodou este build." >> "$GITHUB_STEP_SUMMARY"
 
       # Informational, never blocking: a rollback promotes an OLDER build on
       # purpose. The summary says whether the build going out is the one
@@ -776,17 +1031,40 @@ jobs:
       # The AI service moves with the API too (ADR 0010). A build older than
       # the service has no trajetto-ai image: a rollback to it keeps the AI
       # where it is instead of failing the promote.
+      #
+      # As on staging, the AI is redeployed only when its digest changes: a
+      # build whose infra/ai-ocr did not change reuses the AI image of an
+      # earlier one (build-and-push), and production already runs it.
+      # `force_ai_build` on the Run workflow redeploys it anyway. What
+      # `stable` named before is kept, so a failed AI deploy can put it back.
       - name: Promote the AI image to stable
+        id: ai-stable
         env:
           IMAGE_TAG: ${{ steps.target.outputs.tag }}
+          FORCE: ${{ inputs.force_ai_build }}
         run: |
           image="ghcr.io/trajetto-organization/trajetto-ai:${IMAGE_TAG}"
-          if docker buildx imagetools inspect "$image" > /dev/null 2>&1; then
-            docker buildx imagetools create \
-              --tag ghcr.io/trajetto-organization/trajetto-ai:stable "$image"
-            echo "trajetto-ai:stable → ${IMAGE_TAG}" >> "$GITHUB_STEP_SUMMARY"
-          else
+          digest_of() {
+            found=$(docker buildx imagetools inspect "$1" --format '{{.Manifest.Digest}}' 2>/dev/null || true)
+            case "$found" in sha256:*) printf '%s' "$found" ;; esac
+          }
+          digest=$(digest_of "$image")
+          previous=$(digest_of ghcr.io/trajetto-organization/trajetto-ai:stable)
+          echo "previous=${previous}" >> "$GITHUB_OUTPUT"
+          if [ -z "$digest" ]; then
+            echo "deploy=false" >> "$GITHUB_OUTPUT"
             echo "::warning::${image} não existe (build anterior ao serviço de IA local); trajetto-ai:stable não mudou."
+            exit 0
+          fi
+          docker buildx imagetools create \
+            --tag ghcr.io/trajetto-organization/trajetto-ai:stable \
+            "ghcr.io/trajetto-organization/trajetto-ai@${digest}"
+          echo "trajetto-ai:stable → ${IMAGE_TAG} (${digest})" >> "$GITHUB_STEP_SUMMARY"
+          if [ "$FORCE" != "true" ] && [ "$digest" = "$previous" ]; then
+            echo "deploy=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::trajetto-ai: a produção já roda ${digest}; a IA não é reimplantada. Para forçar: Run workflow na main com force_ai_build."
+          else
+            echo "deploy=true" >> "$GITHUB_OUTPUT"
           fi
 
       # As on staging: all three secrets deploy, none skips with a notice
@@ -821,7 +1099,8 @@ jobs:
       # manager ACCEPTED the spec: the API's rollout is checked below.
       # Secrets of the production environment.
       - name: Deploy the AI service to production (Dokploy)
-        if: steps.dokploy.outputs.enabled == 'true'
+        id: deploy-ai
+        if: steps.dokploy.outputs.enabled == 'true' && steps.ai-stable.outputs.deploy == 'true'
         env:
           DOKPLOY_URL: ${{ secrets.DOKPLOY_URL }}
           DOKPLOY_API_KEY: ${{ secrets.DOKPLOY_API_KEY }}
@@ -839,15 +1118,35 @@ jobs:
           DOKPLOY_APP_LABEL: trajetto-api
         run: node .github/scripts/dokploy-deploy.mjs
 
-      # The proof the promote shipped. Swarm rolls a failing image back on its
-      # own (failure_action: rollback) and the old build keeps serving — a
-      # green run with nothing promoted. This waits on the manager, through an
-      # SSH key restricted to infra/scripts/verify-rollout.sh (read-only),
-      # until the API service runs the promoted digest on every replica with
-      # the update completed, and fails on a rollback or at the timeout.
-      # ROLLOUT_VERIFY=off is the explicit opt-out, logged in the summary.
+      # The no-SSH proof, opt-in in production (ROLLOUT_VERIFY=http in the
+      # production environment): the public API's /health/liveness must
+      # answer the promoted commit for 90 s (wait-for-version.mjs, as on
+      # staging). The commit is the tag's: `sha-<7>` is all a promote knows,
+      # and the script takes a prefix. A rollback to a build older than the
+      # version in the liveness never answers one: use the SSH check for it.
+      - name: Wait for the API to serve the promoted build
+        if: steps.dokploy.outputs.enabled == 'true' && vars.ROLLOUT_VERIFY == 'http'
+        env:
+          API_URL: ${{ vars.API_PUBLIC_URL }}
+          IMAGE_TAG: ${{ steps.target.outputs.tag }}
+        run: |
+          if [ -z "$API_URL" ]; then
+            echo "::error::Falta a variável API_PUBLIC_URL no environment production (a origem pública da API): sem ela o run não prova que a produção serve este build (docs/deploy.md, \"Conferir a convergência\")."
+            exit 1
+          fi
+          EXPECTED_SHA="${IMAGE_TAG#*-}" node .github/scripts/wait-for-version.mjs
+
+      # The proof the promote shipped, and the default in production. Swarm
+      # rolls a failing image back on its own (failure_action: rollback) and
+      # the old build keeps serving — a green run with nothing promoted. This
+      # waits on the manager, through an SSH key restricted to
+      # infra/scripts/verify-rollout.sh (read-only), until the API service
+      # runs the promoted digest on every replica with the update completed,
+      # and fails on a rollback or at the timeout. ROLLOUT_VERIFY=http trades
+      # it for the public check above; `off` is the explicit opt-out, logged
+      # in the summary.
       - name: Wait for the rollout to converge
-        if: steps.dokploy.outputs.enabled == 'true' && vars.ROLLOUT_VERIFY != 'off'
+        if: steps.dokploy.outputs.enabled == 'true' && vars.ROLLOUT_VERIFY != 'off' && vars.ROLLOUT_VERIFY != 'http'
         env:
           DIGEST: ${{ steps.stable.outputs.digest }}
           SERVICE: ${{ vars.SWARM_API_SERVICE }}
@@ -881,3 +1180,22 @@ jobs:
         run: |
           echo "::warning::ROLLOUT_VERIFY=off: o run não confere se o Swarm terminou o rollout ou o reverteu. Confira 'docker service ps --no-trunc <appName da Application da API>' no host."
           echo "Rollout de produção NÃO verificado (ROLLOUT_VERIFY=off)." >> "$GITHUB_STEP_SUMMARY"
+
+      # A failed AI deploy left Swarm on the old spec: `trajetto-ai:stable`
+      # goes back to what production still runs, or the next promote of the
+      # same AI digest would skip a deploy that never happened. The API's
+      # `stable` is not touched here: a failed promote is fixed by promoting
+      # again (or rolling back), which moves it on purpose.
+      - name: Put the AI's stable tag back after a failed deploy
+        if: steps.dokploy.outputs.enabled == 'true' && failure() && steps.deploy-ai.outcome == 'failure'
+        env:
+          PREVIOUS_AI: ${{ steps.ai-stable.outputs.previous }}
+        run: |
+          if [ -z "$PREVIOUS_AI" ]; then
+            echo "::warning::trajetto-ai:stable não existia antes desta promoção; fica onde está."
+            exit 0
+          fi
+          docker buildx imagetools create \
+            --tag ghcr.io/trajetto-organization/trajetto-ai:stable \
+            "ghcr.io/trajetto-organization/trajetto-ai@${PREVIOUS_AI}"
+          echo "trajetto-ai:stable voltou para ${PREVIOUS_AI} (o deploy da IA falhou; a produção segue no build anterior)." >> "$GITHUB_STEP_SUMMARY"

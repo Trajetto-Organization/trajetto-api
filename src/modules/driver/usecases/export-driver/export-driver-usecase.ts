@@ -37,13 +37,15 @@ const CONTRACT_LABELS: Record<string, string> = {
  * A civil date — the CNH expiry (`@db.Date`) and the birth date (stored as UTC
  * midnight of the day): read in UTC, printed without a time. The server's zone
  * would print the day before on a machine west of UTC.
+ *
+ * One formatter for the whole process: building an Intl.DateTimeFormat loads
+ * locale data and costs far more than formatting with one, and this ran once
+ * per date cell of every row of the export.
  */
+const CIVIL_DATE = new Intl.DateTimeFormat("pt-BR", { timeZone: "UTC" });
+
 const civilDate = (value?: Date | string | null) =>
-  value
-    ? new Intl.DateTimeFormat("pt-BR", { timeZone: "UTC" }).format(
-        new Date(value),
-      )
-    : "N/A";
+  value ? CIVIL_DATE.format(new Date(value)) : "N/A";
 
 /**
  * The drivers of ONE company, filtered and ordered exactly as the list on
@@ -105,14 +107,15 @@ class ExportDriverUseCase {
     const timeZone = resolveTimeZone(findBusiness.timezone);
 
     // Instants in the company's zone: the file is read by people there.
+    // One formatter per export, not one per cell (see CIVIL_DATE).
+    const instantFormat = new Intl.DateTimeFormat("pt-BR", {
+      dateStyle: "short",
+      timeStyle: "short",
+      timeZone,
+    });
+
     const instant = (value?: Date | string | null) =>
-      value
-        ? new Intl.DateTimeFormat("pt-BR", {
-            dateStyle: "short",
-            timeStyle: "short",
-            timeZone,
-          }).format(new Date(value))
-        : "N/A";
+      value ? instantFormat.format(new Date(value)) : "N/A";
 
     const iterator = this.driver.streamDriversForExport({
       ...filters,

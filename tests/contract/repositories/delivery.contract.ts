@@ -94,6 +94,8 @@ const SEED: Array<{ key: string; minute: number; data: CreateDeliveryProps }> =
       data: base({
         recipient_name: "açougue central",
         driverId: FIXTURE.driverA,
+        // The meeting of 14/10/2026: a stop to perform a service.
+        kind: "SERVICE_ORDER",
       }),
     },
     {
@@ -325,6 +327,66 @@ function deliveryRepositoryContract(harness: () => DeliveryHarness): void {
       });
     });
 
+    it("keeps [createdFrom, createdTo) of created_at, and counts only those rows", async () => {
+      const h = harness();
+      // d2 at minute 2 and d3 at minute 3; minute 4 is outside (exclusive).
+      const page = await list({ createdFrom: minute(2), createdTo: minute(4) });
+
+      expect(page.data.map((row) => row.id).sort()).toEqual(
+        ids(h, ["d2", "d3"]).sort(),
+      );
+      expect(page.periodApplied).toBe(true);
+      expect(page.statusCounts).toEqual([{ value: "PENDING", count: 2 }]);
+      expect(
+        [...page.shipperOptions].sort((x, y) => (x.value < y.value ? -1 : 1)),
+      ).toEqual([
+        { value: FIXTURE.shipperA, label: "Alfa Embarcador", count: 1 },
+        { value: FIXTURE.shipperA2, label: "Alfa Filial", count: 1 },
+      ]);
+      // Without a period nothing is narrowed, and nothing says it was.
+      expect((await list()).periodApplied).toBe(false);
+    });
+
+    it("sets the period aside for an exact id, order code or NF-e key, never for a partial term or another company's id", async () => {
+      const h = harness();
+      // d3, d4 and d5 only: d1 lies outside.
+      const outside = { createdFrom: minute(3), createdTo: minute(5) };
+      const found = async (search: string) => {
+        const page = await list({ ...outside, search });
+        return {
+          ids: page.data.map((row) => row.id).sort(),
+          periodApplied: page.periodApplied,
+        };
+      };
+
+      for (const search of [
+        h.id("d1"),
+        h.id("d1").toUpperCase(),
+        "ped-1",
+        SEED[0].data.invoice_key!,
+      ]) {
+        expect(await found(search)).toEqual({
+          ids: [h.id("d1")],
+          periodApplied: false,
+        });
+      }
+
+      expect(await found("Padaria")).toEqual({ ids: [], periodApplied: true });
+      expect(await found(h.id("b1"))).toEqual({ ids: [], periodApplied: true });
+    });
+
+    it("filters by type, and a create without one is a delivery", async () => {
+      const h = harness();
+
+      expect(
+        (await list({ kinds: ["SERVICE_ORDER"] })).data.map((row) => row.id),
+      ).toEqual([h.id("d3")]);
+      expect((await list({ kinds: ["PICKUP"] })).data).toEqual([]);
+      expect(await h.repo.findDeliveryById(h.id("d1"))).toMatchObject({
+        kind: "DELIVERY",
+      });
+    });
+
     it("counts each facet without its own filter, within the company", async () => {
       const page = await list({
         shipperIds: [FIXTURE.shipperA2],
@@ -546,6 +608,7 @@ function deliveryRepositoryContract(harness: () => DeliveryHarness): void {
         code: "PED-1",
         invoice_key: SEED[0].data.invoice_key,
         invoice_number: "11",
+        kind: "Entrega",
         status: "Pendente",
         recipient_name: "Padaria Estrela",
         recipient_document: null,
@@ -566,10 +629,30 @@ function deliveryRepositoryContract(harness: () => DeliveryHarness): void {
         notes: null,
       });
       expect(rows[1]).toMatchObject({
+        kind: "Ordem de serviço",
         driverName: FIXTURE.driverName,
         vehiclePlate: null,
         routeCode: null,
       });
+    });
+
+    it("write only the period's rows, unless the search is exactly one document", async () => {
+      const h = harness();
+      const period = {
+        businessId: A,
+        createdFrom: minute(3),
+        createdTo: minute(5),
+      };
+
+      const inPeriod = await drain(h.repo.streamDeliveriesForExport(period));
+      const exact = await drain(
+        h.repo.streamDeliveriesForExport({ ...period, search: "ped-1" }),
+      );
+
+      expect(inPeriod.map((row) => row.id).sort()).toEqual(
+        ids(h, ["d3", "d4", "d5"]).sort(),
+      );
+      expect(exact.map((row) => row.id)).toEqual([h.id("d1")]);
     });
 
     it("never write another company's deliveries", async () => {

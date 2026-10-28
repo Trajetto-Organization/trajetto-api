@@ -30,6 +30,8 @@ import { updateDeleteDeliverySchema } from "@/schemas/update-delete-delivery-sch
 
 import { documentedAs } from "./doc-only-responses";
 
+import { DELIVERY_KINDS } from "@/shared/delivery/delivery-kind";
+
 import {
   occurrenceFormAnswersDoc,
   occurrenceFormFieldsDoc,
@@ -138,6 +140,11 @@ const deliveryListEntity = z.object({
   city: z.string(),
   uf: z.string(),
   status: deliveryStatusEnum,
+  kind: z
+    .enum(DELIVERY_KINDS)
+    .describe(
+      "Tipo: DELIVERY (entrega), SERVICE_ORDER (ordem de serviço) ou PICKUP (coleta).",
+    ),
   scheduled_date: z.string().nullable(),
   delivered_at: z.string().nullable(),
   shipper: z.object({ id: z.string(), name: z.string() }).nullable(),
@@ -191,7 +198,11 @@ const deliveryRowEntity = z.object({
     ),
   geo_updated_at: isoDateTime.nullable(),
   status: deliveryStatusEnum,
-  kind: z.enum(["DELIVERY", "PICKUP"]),
+  kind: z
+    .enum(DELIVERY_KINDS)
+    .describe(
+      "Tipo: DELIVERY (entrega), SERVICE_ORDER (ordem de serviço, ex.: recolher cestos retornáveis) ou PICKUP (coleta, criada só pela planilha).",
+    ),
   scheduled_date: isoDateTime.nullable(),
   delivered_at: isoDateTime.nullable(),
   received_by: z.string().nullable(),

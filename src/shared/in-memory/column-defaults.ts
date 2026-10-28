@@ -45,6 +45,9 @@ const OCCURRENCE_TYPE_COLUMN_DEFAULTS = {
 
 const DELIVERY_COLUMN_DEFAULTS = {
   apiKeyId: null,
+  // The meeting of 14/10/2026: a delivery created without a type is an
+  // "Entrega".
+  kind: "DELIVERY",
   // Decision 14.7: the address point for the route map.
   latitude: null,
   longitude: null,
@@ -119,6 +122,7 @@ const DELIVERY_PROOF_DOCUMENT_COLUMN_DEFAULTS = {
   cert_issuer: null,
   cert_not_after: null,
   signed_at: null,
+  cert_icp_brasil: null,
 } as const satisfies Record<string, unknown> & {
   signature_status: ProofSignatureStatus;
 };

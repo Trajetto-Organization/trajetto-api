@@ -80,6 +80,9 @@ const INDEXES: Record<string, string> = {
   // DELIVERY_SEARCH_TEXT sends (delivery-search.ts), or the planner ignores it.
   delivery_search_trgm_idx: `CREATE INDEX delivery_search_trgm_idx ON public.delivery USING gin (lower(((((((((((id || chr(31)) || COALESCE(code, ''::text)) || chr(31)) || COALESCE(invoice_key, ''::text)) || chr(31)) || COALESCE(invoice_number, ''::text)) || chr(31)) || recipient_name) || chr(31)) || city)) gin_trgm_ops)`,
   chat_message_body_trgm_idx: `CREATE INDEX chat_message_body_trgm_idx ON public.chat_message USING gin (body gin_trgm_ops)`,
+  // The case-insensitive e-mail lookup of the login and the password reset:
+  // the expression must stay the one UserRepository.idByEmail sends.
+  user_email_lower_idx: `CREATE INDEX user_email_lower_idx ON public."user" USING btree (lower(email))`,
 
   // Sparse foreign keys and lookups: only the rows that have a value.
   chat_message_delivery_idx: `CREATE INDEX chat_message_delivery_idx ON public.chat_message USING btree ("deliveryId") WHERE ("deliveryId" IS NOT NULL)`,

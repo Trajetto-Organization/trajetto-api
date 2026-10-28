@@ -502,3 +502,63 @@ describe("push, storage, OCR, certificate and heartbeat", () => {
     expect(result.details.last_ping_http_status).toBe(404);
   });
 });
+
+/**
+ * The Sistema screen waits for the slowest provider, so independent probes
+ * run side by side: Meta's number and each template, the OCR service's
+ * /health and its token check. In sequence a provider having a bad minute
+ * held the page for the sum of their timeouts (5 s each, then).
+ */
+describe("independent probes of one provider", () => {
+  /** Every route answers after `ms`; records when each request started. */
+  function slow(ms: number) {
+    const started: Array<{ url: string; at: number }> = [];
+    const routes: Record<string, Route> = {};
+
+    for (const [prefix, route] of Object.entries(HEALTHY)) {
+      routes[prefix] = async (url, init) => {
+        started.push({ url, at: performance.now() });
+        await new Promise((resolve) => setTimeout(resolve, ms));
+
+        return route(url, init);
+      };
+    }
+
+    return { routes, started };
+  }
+
+  it("asks Meta for the number and every template at the same time", async () => {
+    const { routes, started } = slow(80);
+    const begin = performance.now();
+
+    const whatsapp = await checkWhatsApp(deps(routes, { timeoutMs: 2_000 }));
+
+    expect(whatsapp.status).toBe("ok");
+    expect(started.filter((call) => call.url.includes("graph"))).toHaveLength(
+      3,
+    );
+    // One round trip, not three.
+    expect(performance.now() - begin).toBeLessThan(200);
+  });
+
+  it("checks the OCR token while /health is still answering", async () => {
+    const { routes, started } = slow(80);
+    const begin = performance.now();
+
+    const ocr = await checkAiOcr(deps(routes, { timeoutMs: 2_000 }));
+
+    expect(ocr.status).toBe("ok");
+    expect(started.map((call) => new URL(call.url).pathname).sort()).toEqual([
+      "/health",
+      "/v1/read",
+    ]);
+    expect(performance.now() - begin).toBeLessThan(150);
+  });
+
+  it("still reports /health's failure first when both fail", async () => {
+    const report = await checkAiOcr(deps({}, { timeoutMs: 2_000 }));
+
+    expect(report).toMatchObject({ status: "error", reachable: false });
+    expect(report.message).toContain("ENOTFOUND");
+  });
+});

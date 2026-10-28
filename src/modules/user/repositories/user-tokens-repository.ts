@@ -1,6 +1,9 @@
 import database from "@/../infra/database";
 import { hashSingleUseToken } from "@/shared/security/single-use-token";
-import { IUsersTokensRepository } from "./IUsers-tokens-repository";
+import {
+  IUsersTokensRepository,
+  REFRESH_GRACE_MAX_SIBLINGS,
+} from "./IUsers-tokens-repository";
 
 import {
   CreateUserRefreshTokenProps,
@@ -126,6 +129,33 @@ class UserTokensRepository implements IUsersTokensRepository {
         now.getTime() - presented.revoked_at.getTime() < grace_ms;
 
       if (!spentMomentsAgo) return { outcome: "reused" };
+
+      /**
+       * A bounded number of siblings per spent token, not one per
+       * presentation.
+       *
+       * The grace exists for a session racing itself — tabs, the parallel
+       * requests of one page whose access token just expired, a retried
+       * answer. It used to mint a live token on EVERY presentation inside the
+       * window, so a copy replayed moments after the legitimate rotation got
+       * a working session each time and the reuse alarm never rang. A cap of
+       * one was too tight the other way: the third parallel renewal of one
+       * page became "reuse" and logged the person out everywhere. The
+       * conditional update is the lock, like the rotation's: racing late
+       * presentations serialize on the row, each re-reads the count after
+       * the previous commit, and the one past the cap is reuse.
+       */
+      const graced = await transaction.refreshToken.updateMany({
+        where: {
+          userId: user_id,
+          jti: current_jti,
+          token_hash: current_token_hash,
+          grace_siblings: { lt: REFRESH_GRACE_MAX_SIBLINGS },
+        },
+        data: { grace_siblings: { increment: 1 } },
+      });
+
+      if (graced.count !== 1) return { outcome: "reused" };
 
       const token = await transaction.refreshToken.create({
         data: replacement,

@@ -8,7 +8,8 @@ prompt injection never reach this container and a new engine never touches
 a rule.
 
 HTTP contract v1 (docs/desenho/ia-local-implementacao.md, P1):
-  GET  /health                        200 after the warm-up, 503 before it
+  GET  /health                        200 after the warm-up, 503 before it; both
+                                      carry "version"/"commit" (the build's commit)
   POST /v1/read?profile=receipt|digits
        body: the image bytes (Content-Type image/jpeg|png|webp)
        header: Authorization: Bearer <AI_TOKEN>
@@ -106,6 +107,23 @@ def models_fingerprint():
         return hashlib.sha256(path.read_bytes()).hexdigest()[:12]
     except OSError:
         return None
+
+
+def build_info(environ=os.environ):
+    """
+    The commit this image was built from: the Dockerfile turns the GIT_SHA
+    build arg into APP_COMMIT_SHA. /health reports it so whoever deploys can
+    tell the new build from the old one without a shell on the host. Not a
+    secret (it names a commit, nothing more). Anything that is not 7-40 hex
+    digits — a local build has none — reads as "dev".
+    """
+    raw = (environ.get("APP_COMMIT_SHA") or "").strip().lower()
+    if 7 <= len(raw) <= 40 and all(char in "0123456789abcdef" for char in raw):
+        return {"version": raw[:7], "commit": raw}
+    return {"version": "dev", "commit": None}
+
+
+BUILD = build_info()
 
 
 class Busy(Exception):
@@ -287,7 +305,7 @@ def make_handler(service):
                 return
 
             if not service.ready.is_set():
-                self._send(503, {"ok": False, "error": "warming_up"})
+                self._send(503, {"ok": False, "error": "warming_up", **BUILD})
                 return
 
             self._send(
@@ -298,6 +316,7 @@ def make_handler(service):
                     "engineVersion": ENGINE_VERSION,
                     "profiles": list(PROFILES),
                     "modelsSha": service.models_sha,
+                    **BUILD,
                 },
             )
 
@@ -473,6 +492,7 @@ def main():
                 "threads": threads,
                 "maxQueue": max_queue,
                 "modelsSha": service.models_sha,
+                "version": BUILD["version"],
             }
         ),
         flush=True,

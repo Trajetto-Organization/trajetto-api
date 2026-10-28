@@ -145,16 +145,18 @@ describe("one valid token in a loop", () => {
 });
 
 describe("a token that does not verify", () => {
-  it("is counted too, instead of being free forever", async () => {
-    const forged = `${token.slice(0, -4)}abcd`;
+  // Each garbage token used to open a bucket of its own, so inventing a new
+  // one per request reset every per-address limit to zero.
+  it("is charged to the address, so inventing one per request buys nothing", async () => {
+    const address = `177.${octet()}.${octet()}.${octet()}`;
     const statuses: number[] = [];
 
     for (let index = 0; index < 305; index += 1) {
       const response = await app.inject({
         method: "GET",
         url: "/user/me",
-        remoteAddress: `189.${octet()}.${octet()}.${octet()}`,
-        headers: { authorization: `Bearer ${forged}` },
+        remoteAddress: address,
+        headers: { authorization: `Bearer garbage-${randomUUID()}` },
       });
 
       statuses.push(response.statusCode);
@@ -162,5 +164,28 @@ describe("a token that does not verify", () => {
 
     expect(statuses.slice(0, 300).every((status) => status === 401)).toBe(true);
     expect(statuses.slice(300)).toContain(429);
+  }, 120_000);
+
+  it("does not lift the login limit of an address (password spraying)", async () => {
+    const address = `177.${octet()}.${octet()}.${octet()}`;
+    const statuses: number[] = [];
+
+    for (let index = 0; index < 10; index += 1) {
+      const response = await app.inject({
+        method: "POST",
+        url: "/user/session",
+        remoteAddress: address,
+        headers: { authorization: `Bearer ${token.slice(0, -4)}${index}abc` },
+        payload: {
+          email: `spray-${index}@example.com`,
+          password: "nao-e-a-senha",
+        },
+      });
+
+      statuses.push(response.statusCode);
+    }
+
+    expect(statuses.slice(0, 8).every((status) => status !== 429)).toBe(true);
+    expect(statuses.slice(8)).toEqual([429, 429]);
   }, 120_000);
 });

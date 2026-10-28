@@ -53,6 +53,8 @@ const publicDelivery: PublicDelivery = {
   status: "IN_TRANSIT",
   status_label: "Em rota",
 
+  kind: "DELIVERY",
+
   recipient: {
     name: "Mercado Bom Preço Ltda",
     document: "12345678000190",

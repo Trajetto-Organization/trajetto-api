@@ -1,6 +1,9 @@
 import { v7 as uuidV7 } from "uuid";
 import { hashSingleUseToken } from "@/shared/security/single-use-token";
-import { IUsersTokensRepository } from "../IUsers-tokens-repository";
+import {
+  IUsersTokensRepository,
+  REFRESH_GRACE_MAX_SIBLINGS,
+} from "../IUsers-tokens-repository";
 
 import {
   CreateUserRefreshTokenProps,
@@ -40,6 +43,7 @@ class InMemoryUserTokensRepository implements IUsersTokensRepository {
       family_id,
       revoked_at: null,
       replaced_by_jti: null,
+      grace_siblings: 0,
     };
 
     this.refreshTokenItems.push(createRefreshToken);
@@ -113,6 +117,15 @@ class InMemoryUserTokensRepository implements IUsersTokensRepository {
       now.getTime() - (presented.revoked_at as Date).getTime() < grace_ms;
 
     if (!spentMomentsAgo) return { outcome: "reused" };
+
+    // A bounded number of siblings per spent token (see the real
+    // repository). Checked and counted before any await, so two calls cannot
+    // both take the last one.
+    if ((presented.grace_siblings ?? 0) >= REFRESH_GRACE_MAX_SIBLINGS) {
+      return { outcome: "reused" };
+    }
+
+    presented.grace_siblings = (presented.grace_siblings ?? 0) + 1;
 
     return {
       outcome: "raced",

@@ -64,6 +64,26 @@ function isObjectMissing(error: unknown): boolean {
   return candidate.name === "NotFound" || candidate.name === "NoSuchKey";
 }
 
+/**
+ * The signing instant of a read URL: the start of the current half-TTL window.
+ *
+ * Signed with the real clock, every `/user/me` handed out a different avatar
+ * URL. The web re-reads the profile after unrelated changes (2FA, password),
+ * the new `src` made the avatar component drop the loaded image, and the
+ * initials flashed until the same photo downloaded again under a URL the
+ * browser had never cached. Within one window the URL is now identical, so the
+ * browser keeps the image it already has.
+ *
+ * `expiresIn` stays the configured TTL, counted from this instant: a URL never
+ * lives longer than before, and the one handed out has at least half the TTL
+ * left.
+ */
+function stableSigningDate(ttlSeconds: number, now = Date.now()): Date {
+  const windowMs = (ttlSeconds * 1000) / 2;
+
+  return new Date(Math.floor(now / windowMs) * windowMs);
+}
+
 /** The same question of the filesystem, for local-storage development. */
 function isLocalFileMissing(error: unknown): boolean {
   if (typeof error !== "object" || error === null) return false;
@@ -773,7 +793,10 @@ class UploadService {
           Bucket: uploadConfig.r2.bucket,
           Key: normalizedFilePath,
         }),
-        { expiresIn: uploadConfig.signedUrlTtlSeconds },
+        {
+          expiresIn: uploadConfig.signedUrlTtlSeconds,
+          signingDate: stableSigningDate(uploadConfig.signedUrlTtlSeconds),
+        },
       );
     } else {
       // Same rule as the upload side: the caller's own host wins.

@@ -2,6 +2,7 @@ import type { Prisma } from "@prisma/client";
 import { isDeepStrictEqual } from "node:util";
 
 import type { DeliveryStatus } from "@/shared/delivery/delivery-rules";
+import type { DeliveryKind } from "@/shared/delivery/delivery-kind";
 import { buildSearchOr } from "@/shared/pagination/search-or";
 
 import type { FacetCount } from "@/shared/pagination/list-meta";
@@ -73,6 +74,13 @@ interface DeliveryListFilters {
   statuses?: DeliveryStatus[];
   shipperIds?: string[];
   driverIds?: string[];
+  kinds?: DeliveryKind[];
+  /**
+   * The period (delivery-period.ts), already resolved in the company's zone:
+   * created_at >= createdFrom AND created_at < createdTo. Absent = every date.
+   */
+  createdFrom?: Date;
+  createdTo?: Date;
 }
 
 type DeliveryFacet = "status" | "shipperId" | "driverId";
@@ -94,6 +102,17 @@ function deliveryListWhere(
 
   if (filters.scopeDriverId) {
     and.push({ driverId: filters.scopeDriverId });
+  }
+
+  // The period: a range of the (businessId, created_at) index, the same
+  // column the default order walks.
+  if (filters.createdFrom || filters.createdTo) {
+    and.push({
+      created_at: {
+        ...(filters.createdFrom && { gte: filters.createdFrom }),
+        ...(filters.createdTo && { lt: filters.createdTo }),
+      },
+    });
   }
 
   // The search already resolved to the rows it matches (the repository's
@@ -126,6 +145,11 @@ function deliveryListWhere(
     and.push({ driverId: { in: filters.driverIds } });
   }
 
+  // Not a counted facet: it narrows every count, like the search.
+  if (filters.kinds?.length) {
+    and.push({ kind: { in: filters.kinds } });
+  }
+
   const term = filters.search?.trim() ?? "";
 
   if (term) {
@@ -154,12 +178,12 @@ function deliveryListWhere(
 }
 
 /**
- * Whether the listing's `where` is only the tenant (and a driver token's
- * scope). Then every facet count shares that one `where` and the repository
- * may answer them with a single GROUPING SETS read that rebuilds just those
- * two predicates. Derived from the built `where` rather than a list of filter
- * fields, so a filter added to deliveryListWhere later turns the shortcut off
- * instead of being silently left out of the counts.
+ * Whether the listing's `where` is only the tenant, a driver token's scope
+ * and the period. Then every facet count shares that one `where` and the
+ * repository may answer them with a single GROUPING SETS read that rebuilds
+ * just those predicates. Derived from the built `where` rather than a list of
+ * filter fields, so a filter added to deliveryListWhere later turns the
+ * shortcut off instead of being silently left out of the counts.
  */
 function isTenantOnlyDeliveryList(
   filters: Parameters<typeof deliveryListWhere>[0],
@@ -169,6 +193,8 @@ function isTenantOnlyDeliveryList(
     deliveryListWhere({
       businessId: filters.businessId,
       scopeDriverId: filters.scopeDriverId,
+      createdFrom: filters.createdFrom,
+      createdTo: filters.createdTo,
     }),
   );
 }
@@ -179,6 +205,20 @@ interface GroupCount {
   count: number;
 }
 
+/**
+ * The period the numbers cover, in the company's zone, so the screen labels
+ * the range with the server's days rather than the browser's.
+ */
+interface DeliveryListPeriodMeta {
+  from: string;
+  to: string;
+  /**
+   * False when the search was exactly a delivery's id, order code, NF-e key
+   * or NF number: then the period is ignored and the rows may be older.
+   */
+  applied: boolean;
+}
+
 interface DeliveryListSearchMeta {
   /** Cards: every filter except the status facet. */
   statusCounts: Record<string, number>;
@@ -187,6 +227,8 @@ interface DeliveryListSearchMeta {
     shipperId: FacetCount[];
     driverId: FacetCount[];
   };
+  /** Null when no period was asked for (every date). */
+  period?: DeliveryListPeriodMeta | null;
 }
 
 /**
@@ -272,6 +314,7 @@ export {
   summarizeDeliveryList,
   type DeliveryFacet,
   type DeliveryListFilters,
+  type DeliveryListPeriodMeta,
   type DeliveryListSearchMeta,
   type DeliverySortKey,
   type GroupCount,

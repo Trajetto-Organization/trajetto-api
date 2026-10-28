@@ -307,6 +307,10 @@ model User {
   @@index([businessId, created_at])
   // Serves the ON DELETE SET NULL when an access profile is deleted.
   @@index([profileAccessId])
+  // Raw SQL (an expression index cannot be declared here):
+  //   user_email_lower_idx (lower(email)) — the case-insensitive e-mail
+  //   lookup of the login and the password reset (UserRepository.idByEmail,
+  //   migration 20261028120000_user_email_lower_idx).
   @@map("user")
 }
 
@@ -365,6 +369,10 @@ model RefreshToken {
   expires_in      DateTime
   revoked_at      DateTime?
   replaced_by_jti String?
+  /// How many siblings this spent token minted within the grace window
+  /// (concurrent refreshes), at most REFRESH_GRACE_MAX_SIBLINGS. Incremented
+  /// by a conditional UPDATE, so a presentation past the cap is reuse.
+  grace_siblings  Int       @default(0)
   user            User      @relation(fields: [userId], references: [id], onDelete: Cascade)
   userId          String
 
@@ -1838,9 +1846,14 @@ model VehicleChecklist {
 
 // Delivery or pickup. The operation treats them as two kinds of the same
 // record, not as two flows — same route, same driver, same proof.
+//
+// SERVICE_ORDER (meeting of 14/10/2026): a stop to perform a service at the
+// address, e.g. collecting returnable baskets. Not the fleet module's
+// ServiceOrder (a vehicle's maintenance); it only shares the name.
 enum DeliveryKind {
   DELIVERY
   PICKUP
+  SERVICE_ORDER
 }
 
 /// Where a delivery's address coordinate came from (decision 14.7).
@@ -2263,6 +2276,12 @@ model DeliveryProofDocument {
   cert_issuer    String?
   cert_not_after DateTime?
   signed_at      DateTime?
+
+  /// Whether the signer's chain verified up to an official ICP-Brasil root
+  /// (AC Raiz v5/v10/v11) when this file was signed. Only true lets the PDF
+  /// and the /verificar page claim the legal validity of MP 2.200-2. Null
+  /// when unsigned, and on documents signed before the chain was checked.
+  cert_icp_brasil Boolean?
 
   business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
   businessId String
@@ -2775,6 +2794,16 @@ model Import {
 
   reversed_at DateTime?
 
+  /// The undo's progress, written by each batch in its own transaction
+  /// (removed and kept deliveries and routes), and its result once it ends.
+  /// Null when nobody asked for an undo. See services/import-reversal.ts.
+  reversal Json?
+
+  /// The lease of the run undoing this upload right now; null when none is.
+  /// Its heartbeat is updated_at: a lease whose heartbeat went quiet belongs
+  /// to a dead run, and a retry takes it over and resumes.
+  reversal_started_at DateTime?
+
   business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
   businessId String
 
@@ -2900,9 +2929,11 @@ model Delivery {
   driver   Driver? @relation(fields: [driverId], references: [id])
   driverId String?
 
-  // Delivery or pickup. Two kinds of the same record, not two flows: the
-  // operation treats them alike and every endpoint, filter and card built
-  // without this field would have to be revisited later. Cheap now.
+  // Delivery, pickup or service order. Kinds of the same record, not
+  // separate flows: the operation treats them alike and every endpoint,
+  // filter and card built without this field would have to be revisited
+  // later. Cheap now. The panel and the integration write DELIVERY or
+  // SERVICE_ORDER; PICKUP comes from the spreadsheet's "coleta".
   kind DeliveryKind @default(DELIVERY)
 
   items       DeliveryItem[]

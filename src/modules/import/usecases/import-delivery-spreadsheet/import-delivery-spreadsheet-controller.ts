@@ -17,7 +17,10 @@ class ImportDeliverySpreadsheetController {
 
     const useCase = container.resolve(ImportDeliverySpreadsheetUseCase);
 
-    const record = await useCase.execute({
+    // Validated and opened now, processed after this answer: a 20k-row sheet
+    // took longer than the edge's 100 s, and the operator saw a 524 while the
+    // rows kept being created (import-queue.ts).
+    const record = await useCase.start({
       userId: id,
       businessId,
       filename,
@@ -25,14 +28,14 @@ class ImportDeliverySpreadsheetController {
       shipperId,
     });
 
-    // 200 and not 201: a spreadsheet where every row was a duplicate created
-    // nothing, and the operator still needs the report.
-    return reply.status(200).send({
+    // The same envelope the synchronous answer had, with the counters at
+    // zero: the client follows the record until it is closed.
+    return reply.status(202).send({
       message:
-        `${record.imported} entrega(s) importada(s), ` +
-        `${record.duplicated} duplicada(s), ${record.invalid} com erro.`,
+        "Planilha recebida. A importação está em andamento; o relatório aparece em Importações quando terminar.",
       data: {
         id: record.id,
+        status: record.status,
         imported: record.imported,
         duplicated: record.duplicated,
         invalid: record.invalid,

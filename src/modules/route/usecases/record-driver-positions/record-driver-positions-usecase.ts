@@ -118,7 +118,7 @@ class RecordDriverPositionsUseCase {
       return { stored: 0, rejected, tracking };
     }
 
-    const { stored, dropped } = await this.positions.recordBatch({
+    const { stored, dropped, advanced } = await this.positions.recordBatch({
       driverId,
       businessId,
       routeId: route.id,
@@ -129,6 +129,14 @@ class RecordDriverPositionsUseCase {
     // Every point was older than any partition (INV-14): nothing new to
     // announce, and a dot from weeks ago is not where the truck is.
     if (dropped === accepted.length) {
+      return { stored, rejected: rejected + dropped, tracking };
+    }
+
+    // The last position did not move: a resend, or a backlog out of a dead
+    // zone older than the fix already stored. Announcing it anyway redrew
+    // the truck where it was minutes ago on every open panel, until the next
+    // ping put it back — the row the map reloads never went backwards.
+    if (!advanced) {
       return { stored, rejected: rejected + dropped, tracking };
     }
 

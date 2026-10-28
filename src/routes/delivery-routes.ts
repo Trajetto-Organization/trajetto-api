@@ -128,7 +128,7 @@ async function deliveryRoutes(app: FastifyInstance) {
         tags: ["delivery"],
         summary: "Cria uma entrega (cadastro manual)",
         description:
-          "Cadastra uma entrega com destinatário, endereço, chave da NF-e opcional (44 dígitos, âncora da deduplicação) e itens da carga. A data prevista é um dia (AAAA-MM-DD, sem hora). Motorista e veículo não vêm aqui: atribuir é pela atribuição, que cria a rota. Embarcador desativado → 400 SHIPPER_INACTIVE; embarcador inexistente ou de outra empresa → 404 SHIPPER_NOT_FOUND; chave já usada na empresa (inclusive numa corrida entre dois envios) → 409 DELIVERY_INVOICE_KEY_EXISTS.",
+          "Cadastra uma entrega com destinatário, endereço, chave da NF-e opcional (44 dígitos, âncora da deduplicação) e itens da carga. `kind` diz o tipo: DELIVERY (entrega, o padrão quando ausente) ou SERVICE_ORDER (ordem de serviço, ex.: recolher cestos retornáveis); PICKUP só vem da planilha. A data prevista é um dia (AAAA-MM-DD, sem hora). Motorista e veículo não vêm aqui: atribuir é pela atribuição, que cria a rota. Embarcador desativado → 400 SHIPPER_INACTIVE; embarcador inexistente ou de outra empresa → 404 SHIPPER_NOT_FOUND; chave já usada na empresa (inclusive numa corrida entre dois envios) → 409 DELIVERY_INVOICE_KEY_EXISTS.",
         params: deliverySchemas.businessIdParam,
         body: deliverySchemas.createDelivery,
         response: {
@@ -192,7 +192,7 @@ async function deliveryRoutes(app: FastifyInstance) {
         tags: ["delivery"],
         summary: "Lista as entregas",
         description:
-          "Tabela paginada no servidor: ordena por `sort`/`order` e filtra por status, embarcador e motorista (cada filtro com um ou mais valores separados por vírgula), além da busca livre (ID, destinatário, pedido, chave e número da NF-e, cidade, nome ou CNH do motorista). A primeira linha (`meta`) traz o total do filtro e, em `searchMeta`, os cartões por status e as opções dos filtros com as contagens (cada uma com os demais filtros aplicados). Motorista só vê as próprias entregas.",
+          "Tabela paginada no servidor: ordena por `sort`/`order` e filtra por status, embarcador, motorista e tipo (`kind`; cada filtro com um ou mais valores separados por vírgula) e pelo período de criação (`period` = today, 7d, 14d, 30d ou custom com `from`/`to`, até 92 dias, em dias do fuso da empresa; ausente, todas as datas). A tela abre em `period=today`; uma busca que é exatamente o ID, o pedido, a chave ou o número da NF de uma entrega ignora o período (`searchMeta.period.applied = false`), para o link de uma notificação achar a entrega antiga. Busca livre (ID, destinatário, pedido, chave e número da NF-e, cidade, nome ou CNH do motorista). A primeira linha (`meta`) traz o total do filtro e, em `searchMeta`, os cartões por status e as opções dos filtros com as contagens (cada uma com os demais filtros aplicados). Motorista só vê as próprias entregas.",
         querystring: deliverySchemas.listDeliveries,
         response: {
           200: ndjsonList(
@@ -654,7 +654,7 @@ async function deliveryRoutes(app: FastifyInstance) {
         tags: ["delivery"],
         summary: "Exporta as entregas (CSV ou Excel)",
         description:
-          "Responde com o arquivo, NÃO com JSON. `format=csv|excel`; `search`, `status`, `shipperId` e `driverId` são os mesmos da listagem (o arquivo é o que a tela mostra). O MASTER envia `businessId` (sem ele, 400 BUSINESS_NOT_IDENTIFIED). A data prevista sai só com o dia. O nome do arquivo usa o dia da empresa. O motorista só exporta as próprias entregas — a mesma regra que a tela obedece. As linhas saem do banco em blocos por cursor, não de uma vez: é a única tela em que uma empresa pede a operação inteira, e a diferença entre o cursor e um findMany é a diferença entre um download e uma réplica fora do ar. O status vem em português porque quem lê isso está no Excel.",
+          "Responde com o arquivo, NÃO com JSON. `format=csv|excel`; `search`, `status`, `shipperId`, `driverId`, `kind` e o período (`period`, `from`, `to`) são os mesmos da listagem, com a mesma exceção da busca exata (o arquivo é o que a tela mostra). A coluna Tipo diz Entrega, Ordem de serviço ou Coleta. O MASTER envia `businessId` (sem ele, 400 BUSINESS_NOT_IDENTIFIED). A data prevista sai só com o dia. O nome do arquivo usa o dia da empresa. O motorista só exporta as próprias entregas — a mesma regra que a tela obedece. As linhas saem do banco em blocos por cursor, não de uma vez: é a única tela em que uma empresa pede a operação inteira, e a diferença entre o cursor e um findMany é a diferença entre um download e uma réplica fora do ar. O status vem em português porque quem lê isso está no Excel.",
         querystring: deliverySchemas.exportDelivery,
         response: {
           200: exportFileResponse("entregas-<AAAA-MM-DD>"),

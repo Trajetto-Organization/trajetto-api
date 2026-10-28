@@ -5,9 +5,12 @@ import { describe, expect, it } from "vitest";
 
 import { AppError } from "@/shared/errors/AppError";
 import {
+  MAX_SPREADSHEET_CELLS,
   MAX_SPREADSHEET_ROWS,
+  inspectSpreadsheet,
   readSpreadsheet,
 } from "@/shared/delivery/spreadsheet-reader";
+import { tallyWorksheet } from "@/shared/delivery/zip-inflate-guard";
 
 /**
  * What one spreadsheet upload may cost the process that also serves every
@@ -142,5 +145,65 @@ describe("an ordinary spreadsheet", () => {
       ["pedido", "destinatario"],
       ["P1", "Padaria Central"],
     ]);
+  });
+});
+
+/**
+ * A workbook too big to LOAD, refused before exceljs builds it.
+ *
+ * The inflated-size ceiling let a 2.6 MB, 20k × 50 workbook through, and
+ * loading it cost +329 MB of heap and a second of frozen event loop — only
+ * for the row check to run after the price was paid. The cells are counted
+ * on the same inflated bytes the size guard already reads.
+ */
+describe("a workbook with more cells than the importer loads", () => {
+  it("is refused from the zip alone, before the parser, quickly", async () => {
+    const cell = '<c r="A1" t="s"><v>0</v></c>';
+    const sheet = Buffer.from(
+      `<worksheet><sheetData><row r="1">${cell.repeat(MAX_SPREADSHEET_CELLS + 1)}</row></sheetData></worksheet>`,
+    );
+    const workbook = zipWith("xl/worksheets/sheet1.xml", sheet);
+
+    const started = Date.now();
+
+    expect(() =>
+      inspectSpreadsheet("entregas.xlsx", workbook.toString("base64")),
+    ).toThrow(expect.objectContaining({ code: "SPREADSHEET_TOO_LARGE" }));
+
+    const error = await refusal(
+      readSpreadsheet("entregas.xlsx", workbook.toString("base64")),
+    );
+
+    expect(error.statusCode).toBe(413);
+    expect(error.code).toBe("SPREADSHEET_TOO_LARGE");
+    expect(Date.now() - started).toBeLessThan(5_000);
+  }, 30_000);
+
+  it("counts cells and rows with or without a namespace prefix", () => {
+    const tally = { cells: 0, rows: 0 };
+
+    tallyWorksheet(
+      Buffer.from(
+        '<x:worksheet><x:sheetData><x:row r="1"><x:c r="A1"/><x:c r="B1"><x:v>1</x:v></x:c></x:row>' +
+          '<row r="2"><c r="A2"><v>2</v></c><col min="1"/><cfRule/></row></x:sheetData></x:worksheet>',
+      ),
+      tally,
+    );
+
+    expect(tally).toEqual({ cells: 3, rows: 2 });
+  });
+
+  it("lets an ordinary workbook through the inspection", async () => {
+    const workbook = new ExcelJS.Workbook();
+    const sheet = workbook.addWorksheet("Entregas");
+
+    sheet.addRow(["pedido", "destinatario"]);
+    sheet.addRow(["P1", "Padaria Central"]);
+
+    const buffer = Buffer.from(await workbook.xlsx.writeBuffer());
+
+    expect(() =>
+      inspectSpreadsheet("entregas.xlsx", buffer.toString("base64")),
+    ).not.toThrow();
   });
 });

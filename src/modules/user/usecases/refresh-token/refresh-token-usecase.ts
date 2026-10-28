@@ -27,6 +27,11 @@ import { hmacVerifyKey } from "@/shared/security/jwt-verify-key";
  * whose response was lost to a 20s timeout and retried. A minute covers those
  * and the retry after them; a replay of a copy taken later than that still
  * trips the alarm.
+ *
+ * Once per spent token: the window lets ONE more presentation through (it
+ * mints a sibling in the same family), and a third is reuse even inside the
+ * window. Letting every presentation through gave a copy replayed moments
+ * after the rotation a working session each time, with no alarm at all.
  */
 const REFRESH_REUSE_GRACE_MS = 60_000;
 

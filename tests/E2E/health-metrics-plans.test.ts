@@ -5,6 +5,10 @@ import { randomUUID } from "node:crypto";
 
 import {
   aiFailedSinceSql,
+  aiQueueSql,
+  operationalSnapshotSql,
+  outboxFailedSql,
+  outboxPendingSql,
   deadLetterCountSql,
   deadLetterPageSql,
   deliveriesInWindowSql,
@@ -263,6 +267,57 @@ describe("/health/metrics never scans notification_delivery", () => {
 
     const aiPlan = await genericPlan(aiFailedSinceSql(since));
     expect(seqScansOn(aiPlan, "ai_analysis_request")).toHaveLength(0);
+  });
+});
+
+/**
+ * The twenty-odd statements of /health/metrics are now subqueries of one
+ * (operationalSnapshotSql): one round trip and one pool checkout instead of
+ * twenty-two. Postgres plans each subquery on its own, so the whole must keep
+ * every guarantee its parts have — no queue table read sequentially.
+ */
+describe("/health/metrics in one statement", () => {
+  it("scans none of the queue tables sequentially", async () => {
+    const plan = await genericPlan(
+      operationalSnapshotSql(new Date(Date.now() - DAY_MS)),
+    );
+
+    for (const table of [
+      "notification_delivery",
+      "notification_provider_receipt",
+      "domain_outbox_event",
+      "ai_analysis_request",
+      "webhook_delivery",
+    ]) {
+      expect(
+        seqScansOn(plan, table),
+        `${table}: ${JSON.stringify(plan)}`,
+      ).toHaveLength(0);
+    }
+
+    expect(indexesUsed(plan)).toEqual(
+      expect.arrayContaining([
+        "notification_delivery_failed_idx",
+        "notification_delivery_claim_internal_idx",
+        "notification_delivery_claim_external_idx",
+        "webhook_delivery_failed_idx",
+        "notification_provider_receipt_provider_status_created_at_idx",
+      ]),
+    );
+  });
+
+  it.each([
+    [
+      "outbox pending and lags",
+      () => outboxPendingSql(),
+      "domain_outbox_event",
+    ],
+    ["outbox failed", () => outboxFailedSql(), "domain_outbox_event"],
+    ["AI queue", () => aiQueueSql(), "ai_analysis_request"],
+  ])("and its %s part reads an index", async (_label, build, table) => {
+    const plan = await genericPlan(build());
+
+    expect(seqScansOn(plan, table), JSON.stringify(plan)).toHaveLength(0);
   });
 });
 

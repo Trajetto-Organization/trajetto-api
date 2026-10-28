@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
 import { describe, expect, it } from "vitest";
@@ -70,12 +70,22 @@ describe("the image the scanner reads", () => {
   });
 
   it("pins the AI image's Python packages at or above their fixes", () => {
+    // Every runtime requirements file (one per image layer since 28/10/2026),
+    // so a pin cannot dodge this by moving to another layer's file.
+    const runtime = readdirSync(resolve(root, "infra/ai-ocr"))
+      .filter((name) => /^requirements(?:-[\w-]+)?\.txt$/.test(name))
+      .filter((name) => name !== "requirements-test.txt");
+
+    expect(runtime).toContain("requirements.txt");
+
     const pins = Object.fromEntries(
-      [
-        ...read("infra/ai-ocr/requirements.txt").matchAll(
-          /^([A-Za-z0-9_.-]+)==([\d.]+) --hash=sha256:[0-9a-f]{64}$/gm,
-        ),
-      ].map(([, name, version]) => [name.toLowerCase(), version]),
+      runtime.flatMap((name) =>
+        [
+          ...read(`infra/ai-ocr/${name}`).matchAll(
+            /^([A-Za-z0-9_.-]+)==([\d.]+) --hash=sha256:[0-9a-f]{64}$/gm,
+          ),
+        ].map(([, pkg, version]) => [pkg.toLowerCase(), version]),
+      ),
     );
     const atLeast = (version: string, floor: string) => {
       const a = version.split(".").map(Number);

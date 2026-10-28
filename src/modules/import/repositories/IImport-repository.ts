@@ -7,6 +7,8 @@ import type {
   ImportRecord,
   ListImportsProps,
   ListImportsPage,
+  ReversalClaim,
+  ReversalProgress,
   ReversalResult,
 } from "../dtos/import-dto";
 
@@ -71,27 +73,74 @@ interface IImportRepository {
   listImports: (props: ListImportsProps) => Promise<ListImportsPage>;
 
   /**
-   * Undoes what one upload created, as far as it still can.
+   * Undoes what one upload created, as far as it still can, start to finish
+   * in the caller's time: `claimReversal`, then `runReversal`.
    *
    * Removes only what nothing has happened to: a delivery still PENDING with
    * no events and no occurrences, a route still PLANNED. Everything else is
    * kept and reported with the reason — a delivery already proven is a fact
    * about the world, and an undo button must not be able to erase one.
    *
-   * One transaction: a half-undone import is worse than one not undone,
-   * because nobody can tell which half.
+   * Batched (services/import-reversal.ts), and still never "half undone with
+   * nobody able to tell which half": the record carries what every committed
+   * batch did, stays COMPLETED until the last one, and a retry resumes.
    *
-   * `onRemoved` runs inside that transaction with the deliveries actually
-   * deleted, so what is announced about them commits with the deletion.
+   * Throws ImportAlreadyReversedError for an upload already reversed and
+   * ImportReversalRunningError while a live run undoes it; another company's
+   * upload, or one still running, touches nothing.
    */
   reverseImport: (
     importId: string,
     businessId: string,
-    onRemoved?: (
-      removed: RemovedDelivery[],
-      tx?: Prisma.TransactionClient,
-    ) => Promise<void>,
+    onRemoved?: ReversalRemovedHook,
+  ) => Promise<ReversalResult>;
+
+  /** How many deliveries still carry the upload's id (what an undo has left). */
+  countImportDeliveries: (
+    importId: string,
+    businessId: string,
+  ) => Promise<number>;
+
+  /**
+   * Takes the undo's lease, by a conditional write: only a COMPLETED upload
+   * with no lease, or with one whose heartbeat is older than `staleBefore`
+   * (its run died), is claimed. Of two racing, exactly one gets it.
+   */
+  claimReversal: (
+    importId: string,
+    businessId: string,
+    staleBefore: Date,
+  ) => Promise<ReversalClaim>;
+
+  /** The lease's heartbeat while the run waits its turn in the queue. */
+  touchReversal: (
+    importId: string,
+    businessId: string,
+    lease: Date,
+  ) => Promise<void>;
+
+  /**
+   * Runs a claimed undo to its end: the routes once, then the deliveries
+   * `batchSize` at a time in id order, each batch one transaction that
+   * re-checks the lease first, removes, announces (`onRemoved`, inside that
+   * transaction, with the deliveries actually deleted) and records its
+   * progress. The last one flips the upload to REVERSED and drops the lease.
+   * A failure drops the lease too, keeping the progress, so a retry resumes
+   * at once.
+   */
+  runReversal: (
+    importId: string,
+    businessId: string,
+    lease: Date,
+    progress: ReversalProgress,
+    options: { onRemoved?: ReversalRemovedHook; batchSize?: number },
   ) => Promise<ReversalResult>;
 }
 
-export type { IImportRepository };
+/** What is announced about the deliveries a batch removed, in its transaction. */
+type ReversalRemovedHook = (
+  removed: RemovedDelivery[],
+  tx?: Prisma.TransactionClient,
+) => Promise<void>;
+
+export type { IImportRepository, ReversalRemovedHook };

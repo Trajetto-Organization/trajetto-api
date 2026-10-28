@@ -1,0 +1,6 @@
+# Layer 2 of the runtime image (Dockerfile, stage `base`): the inference
+# runtime the benchmark measured (ADR 0010), ignored by Dependabot like
+# OpenCV. Its small dependencies (protobuf, flatbuffers) are NOT here: they
+# get bumped, and a bump of a few hundred KB must not re-ship this layer —
+# they live in requirements.txt, the last layer.
+onnxruntime==1.30.0 --hash=sha256:fa688e7891a6aa206636fe7372e27ee75fd17713289f6b4fc7b190e0a7de9328

@@ -56,30 +56,279 @@ por mês.
 
 ## Visão de componentes
 
-```
- navegador / app / ERP do cliente
-            │ HTTPS + WebSocket
-            ▼
- Cloudflare ─▶ Traefik (Dokploy) ─▶ api ×2 réplicas (mesma imagem)
-                                     │  HTTP (Fastify) + Socket.IO
-                                     │  workers + crons (WORKERS_ENABLED)
-                     ┌───────────────┼──────────────────┬──────────────┐
-                     ▼               ▼                  ▼              ▼
-               PostgreSQL 16     Redis 7         trajetto-ai      Cloudflare R2
-           dados + filas + crons  rate limit +   (OCR local,       (fotos, PDFs;
-                                  pub/sub do     sem domínio)      URLs assinadas)
-                                  Socket.IO
+O mapa abaixo é navegável no GitHub, no mesmo espírito dos diagramas do README
+antigo da `main` (Mermaid renderizado pelo GitHub):
+
+- **Explorar:** o GitHub desenha o diagrama com os controles de zoom, de
+  deslocamento (as setas) e de tela cheia sobre ele.
+- **Clicar:** cada caixa tem um link (`click` do Mermaid) para a seção que a
+  explica, neste documento ou no repositório certo. Se o seu visualizador
+  ignorar o clique (fora do GitHub, ou com a interatividade do Mermaid
+  desligada), use a tabela [Componentes e relações](#componentes-e-relações),
+  que tem os mesmos links.
+- **Expandir:** os fluxos principais (sessão, upload, filas, tempo real e
+  deploy) ficam recolhidos em [Fluxos em detalhe](#fluxos-em-detalhe); abra o
+  que precisar.
+
+Cada relação foi conferida no código (o arquivo está na tabela). Linha cheia é
+chamada síncrona; tracejada é assíncrona ou de volta (callback, push, backup).
+
+```mermaid
+flowchart LR
+  subgraph clientes["Quem chama"]
+    nav["Navegador<br/>painel, site, /acompanhar"]
+    app["App do motorista<br/>trajetto-mobile · Android"]
+    erp["ERP do cliente<br/>/integration/v1"]
+  end
+
+  cf["Cloudflare<br/>DNS, proxy, TLS, Turnstile"]
+
+  subgraph dokploy["VPS · Dokploy (Docker Swarm), rede dokploy-network"]
+    trf["Traefik do Dokploy"]
+    ui["trajetto-ui<br/>Next.js 14, standalone"]
+    api["trajetto-api ×2<br/>Fastify + Socket.IO<br/>workers + crons"]
+    ai["trajetto-ai<br/>OCR em CPU, sem domínio"]
+    pg[("PostgreSQL 16<br/>dados, outbox, filas, leases")]
+    rd[("Redis 7<br/>rate limit, adapter do Socket.IO,<br/>tickets de socket")]
+  end
+
+  r2[("Cloudflare R2<br/>fotos, PDFs, backups")]
+
+  subgraph ext["Provedores"]
+    resend["Resend<br/>e-mail"]
+    meta["Meta<br/>WhatsApp Cloud API"]
+    expo["Expo Push API<br/>→ FCM"]
+    hooks["Webhooks<br/>dos clientes"]
+    hb["Monitor externo<br/>heartbeat"]
+  end
+
+  subgraph entrega["Entrega"]
+    gha["GitHub Actions"]
+    ghcr["GHCR<br/>imagens sha-*, staging, stable"]
+    eas["EAS<br/>Build e Update"]
+  end
+
+  nav -->|"HTTPS"| cf
+  app -->|"HTTPS + WebSocket"| cf
+  erp -->|"HTTPS, chave de API"| cf
+  cf --> trf
+  trf -->|"host da web"| ui
+  trf -->|"host da API"| api
+  ui -->|"HTTP_REQUEST: páginas, Server Actions, relay"| api
+  nav -.->|"Socket.IO com ticket de 30 s"| api
+  nav -->|"PUT pré-assinado"| r2
+  app -->|"PUT pré-assinado"| r2
+  api -->|"Prisma, SKIP LOCKED + lease"| pg
+  api -->|"contadores, pub/sub, tickets"| rd
+  api -->|"POST /v1/read"| ai
+  api -->|"pré-assina, confere, lê"| r2
+  api -->|"SMTP"| resend
+  api -->|"templates"| meta
+  api -->|"push"| expo
+  expo -.->|"FCM"| app
+  api -->|"POST assinado HMAC"| hooks
+  api -->|"a cada minuto"| hb
+  resend -.->|"/webhooks/resend"| api
+  meta -.->|"/webhooks/whatsapp"| api
+  pg -.->|"backup diário do Dokploy"| r2
+  gha -->|"build único"| ghcr
+  ghcr -->|"imagem por digest"| dokploy
+  gha -->|"application.deploy"| dokploy
+  gha -->|"eas update / build"| eas
+  eas -.->|"OTA, APK, AAB"| app
+
+  click nav "https://github.com/Trajetto-Organization/trajetto-ui/blob/staging/docs/arquitetura.md#fluxo-de-dados" "Fluxo de dados da web"
+  click ui "https://github.com/Trajetto-Organization/trajetto-ui/blob/staging/docs/arquitetura.md" "Arquitetura da web"
+  click app "https://github.com/Trajetto-Organization/trajetto-mobile/blob/staging/docs/arquitetura.md" "Arquitetura do app"
+  click erp "https://github.com/Trajetto-Organization/trajetto-api/blob/staging/docs/arquitetura.md#integra%C3%A7%C3%B5es-externas" "API pública e webhooks"
+  click cf "https://github.com/Trajetto-Organization/trajetto-api/blob/staging/docs/deploy.md#11-dom%C3%ADnios-tls-e-a-borda" "Domínios, TLS e a borda"
+  click trf "https://github.com/Trajetto-Organization/trajetto-api/blob/staging/infra/traefik/README.md" "Traefik do Dokploy"
+  click api "https://github.com/Trajetto-Organization/trajetto-api/blob/staging/docs/arquitetura.md#um-processo-v%C3%A1rios-pap%C3%A9is" "Um processo, vários papéis"
+  click ai "https://github.com/Trajetto-Organization/trajetto-api/blob/staging/docs/arquitetura.md#ia-local" "IA local"
+  click pg "https://github.com/Trajetto-Organization/trajetto-api/blob/staging/docs/arquitetura.md#postgres-%C3%A9-a-fila" "Postgres é a fila"
+  click rd "https://github.com/Trajetto-Organization/trajetto-api/blob/staging/docs/arquitetura.md#redis-e-tempo-real" "Redis e tempo real"
+  click r2 "https://github.com/Trajetto-Organization/trajetto-api/blob/staging/docs/arquitetura.md#arquivos" "Arquivos"
+  click resend "https://github.com/Trajetto-Organization/trajetto-api/blob/staging/docs/arquitetura.md#integra%C3%A7%C3%B5es-externas" "E-mail (Resend)"
+  click meta "https://github.com/Trajetto-Organization/trajetto-api/blob/staging/docs/arquitetura.md#integra%C3%A7%C3%B5es-externas" "WhatsApp (Meta)"
+  click expo "https://github.com/Trajetto-Organization/trajetto-mobile/blob/staging/docs/arquitetura.md#tempo-real-e-push" "Push"
+  click hooks "https://github.com/Trajetto-Organization/trajetto-api/blob/staging/docs/arquitetura.md#integra%C3%A7%C3%B5es-externas" "Webhooks"
+  click hb "https://github.com/Trajetto-Organization/trajetto-api/blob/staging/docs/arquitetura.md#sa%C3%BAde-e-observabilidade" "Saúde e observabilidade"
+  click gha "https://github.com/Trajetto-Organization/trajetto-api/blob/staging/docs/deploy.md#3-os-workflows-em-detalhe" "Workflows"
+  click ghcr "https://github.com/Trajetto-Organization/trajetto-api/blob/staging/docs/deploy.md#73-credencial-do-ghcr" "GHCR"
+  click eas "https://github.com/Trajetto-Organization/trajetto-mobile/blob/staging/docs/deploy.md#pipeline" "Pipeline do app"
 ```
 
-Saídas para fora: Meta (WhatsApp Cloud API), Resend (e-mail), Expo (push), os
-endpoints de webhook dos clientes, o provedor de tiles e de geocodificação do
-comprovante, e o heartbeat de monitoramento. Em staging e produção cada caixa
-do desenho é um serviço próprio do Dokploy (Docker Swarm): a API e a IA como
-Applications que puxam a imagem do GHCR, o PostgreSQL e o Redis como
-Databases do Dokploy, todos na rede `dokploy-network`. O backup do banco é o
-Backup do próprio Database PostgreSQL no Dokploy, diário, para o Cloudflare R2
-([`deploy.md`](./deploy.md#18-backup-e-restauração)). A topologia
-(nomes, réplicas, limites) está em [`deploy.md`](./deploy.md#4-a-topologia-no-servidor).
+### Componentes e relações
+
+| Componente                     | O que faz                                                                                   | Relações (conferidas no código)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            | Onde ler mais                                                                       |
+| ------------------------------ | ------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
+| Navegador                      | painel (`/dashboard`, `/admin`, `/driver`), site, `/acompanhar`, `/verificar`               | nunca recebe o token: lê pelo relay `/api/relay/...` da web; abre o Socket.IO na API com um ticket de uso único (`POST /user/socket-ticket`, 30 s); envia arquivos direto ao R2 por URL pré-assinada                                                                                                                                                                                                                                                                                                                                                                                                       | `trajetto-ui/docs/arquitetura.md` (Fluxo de dados, Sessão e segurança, Tempo real)  |
+| `trajetto-ui`                  | Next.js 14 (App Router), sem banco                                                          | Server Components e Server Actions chamam a API em `HTTP_REQUEST` (`src/lib/api-fetch.ts`); login, 2FA, refresh e rastreio levam `RATE_LIMIT_FORWARDER_SECRET` (`src/lib/api-forwarding.ts`); valida o Turnstile no login                                                                                                                                                                                                                                                                                                                                                                                  | `trajetto-ui/docs/arquitetura.md`                                                   |
+| App do motorista               | Expo / React Native, só Android, offline no laço do motorista                               | HTTP em `EXPO_PUBLIC_API_URL` (`utils/api.ts`); Socket.IO na mesma URL com o token (`providers/socket-provider.tsx`); fotos por PUT pré-assinado com upload retomável; registra o token de push na API (`utils/push-token.ts`)                                                                                                                                                                                                                                                                                                                                                                             | `trajetto-mobile/docs/arquitetura.md`                                               |
+| ERP do cliente                 | integração por chave de API                                                                 | `/integration/v1/*` com escopos e `Idempotency-Key`; recebe webhooks assinados                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             | [Integrações externas](#integrações-externas)                                       |
+| Cloudflare                     | DNS, proxy (laranja), TLS de borda, Turnstile                                               | a API só acredita no `CF-Connecting-IP` vindo das faixas da Cloudflare (`RATE_LIMIT_TRUSTED_PROXY=cloudflare`, `src/config/rate-limit.ts`); o formulário público é conferido no Turnstile (`src/shared/security/turnstile.ts`)                                                                                                                                                                                                                                                                                                                                                                             | [`deploy.md`, seção 11](./deploy.md#11-domínios-tls-e-a-borda)                      |
+| Traefik do Dokploy             | roteia por host para cada Application                                                       | um roteador por domínio de Application; WebSocket sem cookie sticky                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        | [`infra/traefik/README.md`](../infra/traefik/README.md)                             |
+| `trajetto-api`                 | HTTP (Fastify), Socket.IO, workers e crons no mesmo processo, 2 réplicas                    | ver as linhas abaixo; desligamento ordenado em `src/shared/lifecycle/shutdown.ts`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          | [Um processo, vários papéis](#um-processo-vários-papéis)                            |
+| PostgreSQL 16                  | dados de todas as empresas, outbox e filas, leases dos crons                                | `domain_outbox_event` gravado na transação do dado (`src/shared/notifications/outbox-service.ts`); `notification_delivery`, `webhook_delivery` e `ai_analysis_request` lidas com `FOR UPDATE SKIP LOCKED` e lease pelos pipelines de `src/workers/index.ts`                                                                                                                                                                                                                                                                                                                                                | [Postgres é a fila](#postgres-é-a-fila)                                             |
+| Redis 7                        | descartável, nada é fonte de verdade                                                        | rate limit do HTTP, do handshake do socket e das falhas de chave da API pública (`src/http.ts`, `src/shared/socket/handshake-rate-limit.ts`, `src/shared/integration/integration-rate-guard.ts`); intervalo de 60 s por destinatário do "esqueci minha senha" (`src/shared/security/mail-cooldown.ts`, chave = HMAC do e-mail); pub/sub do adapter (`src/shared/socket/adapter-redis.ts`); tickets de socket de 30 s (`src/shared/socket/socket-ticket.ts`); fotos curtas de leituras da plataforma só do MASTER, com falha aberta (`src/shared/cache/snapshot-cache.ts`). Nenhum dado de empresa em cache | [Redis e tempo real](#redis-e-tempo-real)                                           |
+| `trajetto-ai`                  | OCR local (RapidOCR, ONNX, CPU), só transcreve                                              | a API chama `POST /v1/read` com bearer (`src/shared/ai/local/local-ocr-reader.ts`); serviço em `infra/ai-ocr/server.py`; sem domínio público                                                                                                                                                                                                                                                                                                                                                                                                                                                               | [IA local](#ia-local)                                                               |
+| Cloudflare R2                  | bucket privado de fotos, assinaturas e PDFs (um por ambiente); outro bucket para os backups | a API pré-assina o PUT e o GET e confere a chave com `HeadObject` (`src/shared/services/upload-service.ts`, rotas em `/uploads`); o backup do Database PostgreSQL vai para o R2 pelo próprio Dokploy                                                                                                                                                                                                                                                                                                                                                                                                       | [Arquivos](#arquivos), [`deploy.md`, seção 18](./deploy.md#18-backup-e-restauração) |
+| Resend                         | e-mail                                                                                      | SMTP `smtp.resend.com` via nodemailer (`src/shared/providers/mail-provider/implementations/resend-mail-provider.ts`); recibos em `/webhooks/resend`                                                                                                                                                                                                                                                                                                                                                                                                                                                        | [Integrações externas](#integrações-externas)                                       |
+| Meta (WhatsApp Cloud API)      | mensagens por template                                                                      | `src/shared/providers/whatsapp-provider/implementations/meta-cloud-api-provider.ts`; status em `/webhooks/whatsapp`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        | [Integrações externas](#integrações-externas)                                       |
+| Expo Push API → FCM            | push no Android                                                                             | a API envia para `exp.host` (`src/shared/notifications/push-provider.ts`), que repassa ao FCM com a credencial do projeto EAS; o cron `check-push-receipts` desativa aparelhos mortos                                                                                                                                                                                                                                                                                                                                                                                                                      | `trajetto-mobile/docs/arquitetura.md` (Tempo real e push)                           |
+| Webhooks dos clientes          | eventos `delivery.*`, `occurrence.*`, `proof.*`, `route.*`                                  | `webhook_delivery` criada na transação do evento e entregue pelo `WebhookDispatchService` (`src/shared/integration/webhook-dispatch-service.ts`), com HMAC, retentativa e disjuntor                                                                                                                                                                                                                                                                                                                                                                                                                        | [Integrações externas](#integrações-externas)                                       |
+| Monitor externo                | dead man's switch                                                                           | o cron `ops-heartbeat` avisa `HEALTHCHECK_PING_URL` a cada minuto (`src/jobs/cron/ops-heartbeat-job.ts`)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   | [`deploy.md`, seção 20](./deploy.md#20-alertas-e-monitoramento)                     |
+| GitHub Actions, GHCR e Dokploy | uma imagem por serviço, promovida por digest                                                | `deploy.yml` constrói `sha-<sha>`, move `staging` e depois `stable` e chama `application.deploy` (`.github/scripts/dokploy-deploy.mjs`); cada serviço é uma Application (provider Docker) ou um Database do Dokploy, nunca Compose                                                                                                                                                                                                                                                                                                                                                                         | [`deploy.md`](./deploy.md)                                                          |
+| EAS                            | build e OTA do app                                                                          | o `deploy.yml` do app publica OTA e, se o lado nativo mudou, APK/AAB; promove o commit, não o artefato                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     | `trajetto-mobile/docs/deploy.md`                                                    |
+| ~~RabbitMQ~~                   | **legado, removido em 09/2026**                                                             | servia só o e-mail; hoje o e-mail sai pelo pipeline de notificações (e o transacional com segredo, como 2FA e senha, por `src/shared/services/transactional-mail-service.ts`). A imagem antiga da `main` ainda exige `RABBITMQ_URL`                                                                                                                                                                                                                                                                                                                                                                        | [Postgres é a fila](#postgres-é-a-fila)                                             |
+
+### Fluxos em detalhe
+
+<details>
+<summary><strong>Sessão no painel web e tenant</strong></summary>
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant N as Navegador
+  participant W as trajetto-ui (servidor)
+  participant A as trajetto-api
+  N->>W: login (e-mail, senha, token do Turnstile)
+  W->>W: confere o Turnstile
+  W->>A: POST /user/session (com RATE_LIMIT_FORWARDER_SECRET)
+  A-->>W: desafio de 2FA ou tokens
+  W->>A: POST /user/two-factor-verification (quando pedido)
+  A-->>W: access + refresh token
+  W-->>N: cookies httpOnly tkey e rkey (o token não vai para o JavaScript)
+  N->>W: página do /dashboard ou do /admin
+  W->>A: GET com Bearer (empresa da sessão, ou no /admin a escolhida, como businessId)
+  A->>A: ensureAuthenticated, guard de tenant (preHandler), módulo e permissão
+  A-->>W: dados só daquela empresa (id de outra empresa = 404)
+  N->>W: leitura no navegador por /api/relay/... (lista fechada, só GET)
+```
+
+O MASTER não tem empresa: no `/admin` (e no app, na tela `select-business`)
+ele escolhe uma, e a API confere que só o MASTER pode pedir outra empresa
+(`src/modules/middlewares/tenant-authorization.ts`). Trocar o papel ou a
+empresa de um usuário encerra as sessões dele.
+
+</details>
+
+<details>
+<summary><strong>Upload por URL pré-assinada</strong></summary>
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant C as Web ou app
+  participant A as trajetto-api
+  participant R as Cloudflare R2
+  C->>A: POST /uploads/presign/:businessId (tipo e tamanho)
+  A->>A: confere dono, tipo e limite
+  A-->>C: URL de PUT assinada + chave
+  C->>R: PUT dos bytes, direto (a API não toca nos bytes)
+  C->>A: grava o registro só com a chave
+  A->>R: HeadObject: existe, tamanho, dono
+  A-->>C: registro criado
+  Note over C,R: leitura também por URL assinada de curta duração
+```
+
+O app re-encoda a foto antes do PUT (tira EXIF e GPS) e guarda a chave de
+cada foto que subiu, para o upload recomeçar de onde parou. Em
+desenvolvimento, `UPLOAD_STORAGE_TYPE=local` grava em `./tmp`; produção
+recusa `local`.
+
+</details>
+
+<details>
+<summary><strong>Outbox, filas e efeitos externos</strong></summary>
+
+```mermaid
+flowchart LR
+  uc["usecase<br/>transação do dado"] -->|"OutboxService.publish(tx)"| ev[("domain_outbox_event")]
+  uc -->|"fan-out na transação do evento"| wh[("webhook_delivery")]
+  uc -->|"pedido de leitura"| air[("ai_analysis_request")]
+  ev -->|"claim SKIP LOCKED + lease"| np["NotificationPipelineService"]
+  np -->|"expande por canal"| nd[("notification_delivery<br/>raias internal e external")]
+  nd --> bell["sino e atividade"]
+  nd --> mail["e-mail · Resend"]
+  nd --> wa["WhatsApp · Meta"]
+  nd --> push["push · Expo"]
+  wh -->|"claim SKIP LOCKED"| wd["WebhookDispatchService"] --> cli["endpoint do cliente"]
+  air -->|"claim SKIP LOCKED"| ap["AIAnalysisPipelineService"] --> ocr["trajetto-ai"]
+  np -.->|"esgotou as tentativas"| dl["dead letter<br/>/health/dead-letter"]
+  wd -.-> dl
+  rmq["RabbitMQ<br/>legado, removido em 09/2026"]
+  classDef legacy stroke-dasharray: 5 5
+  class rmq legacy
+```
+
+O evento só existe se o dado foi gravado (ADR 0003). Retentativa com backoff,
+dead letter com reenvio e idempotência dos efeitos externos (ADRs 0005 e
+0006). Os crons usam um lease no Postgres por horário, então várias réplicas
+não repetem um job.
+
+</details>
+
+<details>
+<summary><strong>Tempo real entre réplicas</strong></summary>
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant N as Navegador
+  participant W as trajetto-ui (servidor)
+  participant A1 as API réplica 1
+  participant RD as Redis (pub/sub)
+  participant A2 as API réplica 2
+  participant M as App do motorista
+  N->>W: mintSocketTicket (Server Action)
+  W->>A1: POST /user/socket-ticket (com o token da sessão)
+  A1->>RD: guarda o hash do ticket (30 s, uso único)
+  W-->>N: ticket
+  N->>A2: handshake Socket.IO com o ticket
+  A2->>RD: consome o ticket
+  M->>A1: handshake Socket.IO com o token
+  A1->>A1: commit de uma mudança (ex. ocorrência autorizada)
+  A1->>RD: emit pelo adapter
+  RD-->>A2: evento
+  A2-->>N: catalogChanged ou evento da sala da empresa
+  A1-->>M: evento da sala do usuário
+```
+
+A entrega é _at-most-once_ (ADR 0007): a verdade está no banco, e as telas
+refazem a consulta ao reconectar. Sem Redis, o tempo real entre réplicas
+degrada e o resto da API continua.
+
+</details>
+
+<details>
+<summary><strong>Do commit à produção</strong></summary>
+
+```mermaid
+flowchart LR
+  dev["branch de trabalho"] -->|"ci.yml"| stg["push em staging"]
+  stg -->|"validação completa"| img["build único<br/>ghcr.io/trajetto-organization/*:sha-*"]
+  img -->|"tag staging por digest"| dks["Dokploy staging<br/>IA → API, a web no pipeline dela"]
+  stg -->|"PR com merge commit"| main["main"]
+  main -->|"aprovação do environment production"| prom["promoção sem rebuild<br/>tag stable por digest"]
+  prom --> dkp["Dokploy produção"]
+  main -.->|"app: commit verde em staging"| ota["EAS: OTA assinada e AAB"]
+  roll["Run workflow image_tag=sha-*"] -.->|"rollback"| prom
+```
+
+Ordem de cada release: API → web → app. Detalhes em
+[`deploy.md`](./deploy.md) e na seção "Os três repositórios juntos", igual nos
+três repositórios.
+
+</details>
+
+Fora do mapa, por serem opcionais: o provedor de tiles e o de geocodificação
+reversa do comprovante (`PROOF_MAP_TILE_URL`, `REVERSE_GEOCODER_URL`). Em
+staging e produção cada caixa do grupo "VPS · Dokploy" é um serviço próprio
+do Dokploy: a API, a IA e a web como Applications que puxam a imagem do GHCR;
+o PostgreSQL e o Redis como Databases do Dokploy. A topologia (nomes,
+réplicas, limites) está em [`deploy.md`](./deploy.md#4-a-topologia-no-servidor).
 
 ## Estrutura do código
 
@@ -307,14 +556,33 @@ primeiro job que apaga dados.
 
 ## Redis e tempo real
 
-**Redis** (ADR 0002) tem só dois usos, e nenhum é fonte de verdade:
+**Redis** (ADR 0002) tem três usos, e nenhum é fonte de verdade:
 
-- contadores de rate limit (HTTP e handshake do socket), que falham aberto;
+- contadores de rate limit (HTTP, handshake do socket e falhas de chave da
+  API pública), que falham aberto;
+- o intervalo por destinatário do "esqueci minha senha"
+  (`src/shared/security/mail-cooldown.ts`): no máximo um e-mail por endereço
+  a cada 60 s, venha o pedido de onde vier (`SET NX EX`). A chave é um HMAC
+  do e-mail normalizado, nunca o endereço; o pedido repetido recebe a mesma
+  resposta e não envia. Sem Redis, o e-mail sai (falha aberta);
 - pub/sub do adapter do Socket.IO, para o evento emitido numa réplica chegar
-  ao cliente conectado em outra.
+  ao cliente conectado em outra;
+- os tickets de socket da web (`src/shared/socket/socket-ticket.ts`): o
+  servidor da web troca o token da sessão por um ticket de uso único, que
+  vale 30 s e abre um socket só; o Redis guarda só o hash. Sem Redis, a web
+  não abre socket novo, e o resto funciona.
+- as fotos curtas de leituras **da plataforma** que só o MASTER vê
+  (`src/shared/cache/snapshot-cache.ts`): a prontidão dos provedores (30 s) e
+  os números do dashboard global do MASTER (60 s). A réplica que recebe o
+  próximo pedido serve a foto em vez de chamar a Meta ou contar a plataforma
+  de novo. Nunca dado de empresa nem de pessoa (o feed de atividades do
+  dashboard é lido a cada visita); leitura e escrita com prazo de 200 ms e
+  falha aberta: sem Redis, cada réplica calcula a sua. Uma leitura por vez em
+  cada réplica (single-flight).
 
-Não há cache, sessão, lock nem fila no Redis. Se ele cair, o tempo real entre
-réplicas degrada e o resto funciona. Em produção ele não persiste nada.
+Não há sessão, lock nem fila no Redis, e cache só o descrito acima. Se ele
+cair, o tempo real entre réplicas degrada e o resto funciona. Em produção ele
+não persiste nada.
 
 **Tempo real** (ADR 0007): Socket.IO só com WebSocket, salas por usuário,
 sessão, empresa (`business:<id>`) e operação (`operations:<id>`). A
@@ -343,6 +611,46 @@ nenhuma linha referencia; na dúvida, guarda (ADR 0006).
 
 Existe um adaptador multipart temporário para abastecimento e checklist (o
 binário antigo do app); ver [compatibilidade](#compatibilidade-com-o-app-do-motorista).
+
+**Importação de planilha** (`POST /import/import-spreadsheet/:businessId`) é
+assíncrona: o pedido valida embarcador e arquivo (tamanho inflado, células e
+linhas contados no zip antes de carregar o .xlsx; `413` acima disso), abre a
+importação e responde `202` com o id; as linhas são processadas depois, numa
+fila por réplica (`src/modules/import/services/import-queue.ts`) que roda uma
+importação por vez e deixa até três esperando (`429 IMPORT_BUSY` com
+`retry-after` além disso). O cliente acompanha por
+`GET /import/get-import/:importId/business/:businessId` até `status` sair de
+`IN_PROGRESS`. Nada da fila sobrevive ao processo: a importação que morre
+junto com a réplica fica sem batimento e o cron `close-abandoned-imports` a
+fecha com o que ela fez; as que esperam na fila mantêm o batimento. Uma
+planilha de 20 mil linhas levava mais que os 100 s da borda, e o operador via
+erro enquanto as entregas continuavam sendo criadas. A listagem
+(`list-imports`) traz só os contadores; o relatório linha a linha vem do
+detalhe (ou de `includeReport=true`).
+
+**Estorno de importação** (`POST /import/reverse-import/:importId/business/:businessId`)
+roda em lotes de 500 entregas, cada lote numa transação
+(`src/modules/import/services/import-reversal.ts`): numa transação só, desfazer
+2.000 entregas levava 29 s e estourava os 15 s do Prisma. As rotas são decididas
+uma vez, antes das entregas, contra todas as entregas da importação; cada lote
+remove, anuncia `delivery.cancelled` e grava o andamento em `import.reversal`
+juntos. A importação continua `COMPLETED` até o último lote, que a vira
+`REVERSED`. Uma execução por vez: o lease `import.reversal_started_at`, tomado
+por `UPDATE` condicional e conferido no começo de cada lote, com o batimento em
+`updated_at`; sem batimento por 5 min, a execução é dada como morta e o próximo
+pedido continua de onde ela parou. Com até 500 entregas a desfazer, o estorno
+roda no pedido e responde `200` com o resultado; acima disso vai para a mesma
+fila das importações e responde `202`, e o cliente acompanha `reversal` no
+detalhe da importação (`RUNNING`, `INTERRUPTED`, `DONE`).
+
+**Exportações** (CSV e Excel, `src/shared/services/export/`) passam por
+`ExportPipeline`, que reserva uma vaga antes do primeiro byte: uma exportação
+por empresa e três por réplica ao mesmo tempo (`429 EXPORT_BUSY` com
+`retry-after`). As linhas saem do banco em lotes por chave (`created_at`,
+`id`); o Excel grava texto em linha (sem a tabela de strings compartilhadas,
+que estourava a memória em 250 mil linhas); o cliente que desconecta encerra
+a exportação; e uma falha depois que o download começou fecha a conexão em vez
+de deixar o navegador esperando.
 
 ## IA local
 
@@ -375,7 +683,33 @@ provedor Anthropic foi removido e `AI_PROVIDER=anthropic` impede o boot).
 digitalizado com tarja, autenticação com QR). Com o certificado A1 ICP-Brasil
 configurado (`PROOF_SIGNING_*`, decisão 14.8), o PDF sai com assinatura PAdES
 (perfil AD-RB) verificável no validar.iti.gov.br; sem certificado, sai sem
-assinatura e diz isso no próprio documento. O link público
+assinatura e diz isso no próprio documento.
+
+**Cadeia ICP-Brasil (reunião de 14/10/2026).** O texto de validade jurídica
+(MP 2.200-2, "Assina-se com Certificado Digital ICP-Brasil", QR do ITI) só sai
+quando a cadeia do certificado é verificada por assinaturas até uma raiz
+oficial (`src/shared/services/proof-signing/icp-brasil-chain.ts`), usando os
+intermediários que vêm no `.pfx`; o nome do emissor (`O=ICP-Brasil`) não basta
+mais. Certificado fora da cadeia continua assinando (CMS simples, sem a
+política AD-RB), o PDF diz que não pertence à cadeia, o log avisa uma vez
+(`proof_signing_not_icp_brasil`) e o documento grava `cert_icp_brasil = false`
+(a web e o `/verificar` só dizem "ICP-Brasil" com `true`). As raízes estão em
+`assets/icp-brasil/ICP-Brasilv{5,10,11}.crt` (PEM, baixadas do repositório do ITI em 28/10/2026, embutidas
+em `icp-brasil-roots.ts`; o teste `icp-brasil-chain.test.ts` confere arquivo e
+impressão digital SHA-256 do DER):
+
+| Raiz                   | Uso no ITI                 | Válida até | SHA-256                                                                                           |
+| ---------------------- | -------------------------- | ---------- | ------------------------------------------------------------------------------------------------- |
+| AC Raiz Brasileira v5  | assinatura (e-CPF, e-CNPJ) | 02/03/2029 | `CA:A5:3F:C6:09:1C:69:51:88:7C:97:6E:37:8F:6E:F8:9A:A6:37:7C:55:D9:7B:64:75:42:2B:71:ED:7E:9B:17` |
+| AC Raiz Brasileira v10 | SSL/TLS                    | 01/07/2032 | `6E:0B:FF:06:9A:26:99:4C:15:DE:2C:48:88:CC:54:AF:84:88:2E:54:95:B7:FB:F6:6B:E9:CC:FF:EC:74:89:F6` |
+| AC Raiz Brasileira v11 | assinatura de código       | 01/07/2032 | `14:06:71:00:58:18:0F:A4:08:1A:AB:3F:24:6F:17:02:42:9C:55:2A:11:FA:31:43:B8:4C:88:CB:3A:B8:E5:E7` |
+
+Não verificados de propósito: revogação (LCR), OIDs de política e restrições
+de nome/caminho — o validador do ITI confere tudo isso no arquivo. **Falta o
+carimbo do tempo RFC 3161 (perfil AD-RT)**: exige uma ACT credenciada na
+ICP-Brasil (serviço pago); até lá a hora da assinatura é a declarada pelo
+servidor, que é o que o AD-RB é. O título do PDF segue o tipo do registro:
+`SERVICE_ORDER` sai como "Comprovante de Ordem de Serviço". O link público
 `/verificar/<token>` da web confere o documento (ADR 0009): o token é uma
 capacidade sem login e expira em `PROOF_VERIFICATION_TTL_DAYS` (1825 dias).
 Mapa estático (`PROOF_MAP_TILE_URL`) e geocodificação reversa
@@ -574,13 +908,13 @@ Regras de implementação que vieram dessa análise:
 
 ## Saúde e observabilidade
 
-| Rota                                                                                       | Para quê                                                                                                                                                                                                                                      |
-| ------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `GET /health/liveness`                                                                     | o processo está vivo (não toca dependências; é a sonda do Swarm)                                                                                                                                                                              |
-| `GET /health/readiness`                                                                    | pode receber tráfego (a sonda dos monitores externos; 503 no desligamento)                                                                                                                                                                    |
-| `GET /health/metrics` (MASTER)                                                             | conexões do Postgres, filas e atraso do outbox, backlog de IA e de notificações, workers e crons de cada réplica, partições, provedores (latência e erro), sockets, Redis, pool, contratos antigos do app ainda em uso, estado do certificado |
-| `GET /health/providers` (MASTER)                                                           | prontidão de Resend, Meta, Expo, R2, trajetto-ai, certificado e heartbeat, sem enviar nada                                                                                                                                                    |
-| `GET /health/dead-letter`, `/health/dead-letter/events`, `POST /health/dead-letter/replay` | o que esgotou as tentativas, e o reenvio                                                                                                                                                                                                      |
+| Rota                                                                                       | Para quê                                                                                                                                                                                                                                                                                                                                     |
+| ------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GET /health/liveness`                                                                     | o processo está vivo (não toca dependências; é a sonda do Swarm)                                                                                                                                                                                                                                                                             |
+| `GET /health/readiness`                                                                    | pode receber tráfego (a sonda dos monitores externos; 503 no desligamento)                                                                                                                                                                                                                                                                   |
+| `GET /health/metrics` (MASTER)                                                             | conexões do Postgres, filas e atraso do outbox, backlog de IA e de notificações, workers e crons de cada réplica, partições, provedores (latência e erro), sockets, Redis, pool, contratos antigos do app ainda em uso, estado do certificado. Quatro consultas em sequência (as filas são uma só), servidas de uma foto de 10 s por réplica |
+| `GET /health/providers` (MASTER)                                                           | prontidão de Resend, Meta, Expo, R2, trajetto-ai, certificado e heartbeat, sem enviar nada. Sondas em paralelo (2,5 s cada), foto de 30 s compartilhada pelas réplicas; `refresh=true` no máximo a cada 5 s                                                                                                                                  |
+| `GET /health/dead-letter`, `/health/dead-letter/events`, `POST /health/dead-letter/replay` | o que esgotou as tentativas, e o reenvio                                                                                                                                                                                                                                                                                                     |
 
 A aba _Sistema_ do `/admin` na web mostra esses números. O heartbeat de
 operações (cron `ops-heartbeat`) empurra o estado para um monitor externo a
@@ -593,21 +927,21 @@ Os ADRs e o documento de decisões da fase final vivem na pasta `docs/` da raiz
 do workspace (fora de qualquer repositório). O resumo do que cada um fixou,
 para quem só tem este repositório:
 
-| ADR / decisão | O que fixou                                                                                              |
-| ------------- | -------------------------------------------------------------------------------------------------------- |
-| ADR 0001      | Postgres como fila única; broker só por gatilho medido                                                   |
-| ADR 0002      | Redis descartável: só rate limit (fail-open) e pub/sub do Socket.IO                                      |
-| ADR 0003      | outbox transacional: o evento nasce na transação do dado                                                 |
-| ADR 0004      | workers no mesmo processo da API, separáveis por flag com a mesma imagem                                 |
-| ADR 0005      | política de retentativa, backoff e dead letter                                                           |
-| ADR 0006      | idempotência de efeitos externos; na dúvida, guardar o objeto                                            |
-| ADR 0007      | tempo real distribuído at-most-once; a verdade está no banco                                             |
-| ADR 0008      | escala horizontal com réplicas idênticas                                                                 |
-| ADR 0009      | comprovante público por token com prazo                                                                  |
-| ADR 0010      | IA local (OCR em CPU, serviço `trajetto-ai`); o provedor externo saiu                                    |
-| Decisão 8.1   | unicidade por empresa (tabela acima)                                                                     |
-| Decisão 12.2  | uma imagem por serviço, promovida por digest de staging para produção; staging não fala com cliente real |
-| Decisão 13.1  | cobertura medida honestamente, com piso no CI                                                            |
-| Decisão 13.5  | teste de mutação nas regras críticas                                                                     |
-| Decisão 14.1  | leitura de fotos sem provedor externo                                                                    |
-| Decisão 14.8  | comprovante assinado com o A1 ICP-Brasil                                                                 |
+| ADR / decisão | O que fixou                                                                                                                                                                                     |
+| ------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| ADR 0001      | Postgres como fila única; broker só por gatilho medido                                                                                                                                          |
+| ADR 0002      | Redis descartável: só rate limit (fail-open) e pub/sub do Socket.IO; os tickets de socket de 30 s e as fotos de 30–60 s das leituras da plataforma do MASTER vieram depois, também descartáveis |
+| ADR 0003      | outbox transacional: o evento nasce na transação do dado                                                                                                                                        |
+| ADR 0004      | workers no mesmo processo da API, separáveis por flag com a mesma imagem                                                                                                                        |
+| ADR 0005      | política de retentativa, backoff e dead letter                                                                                                                                                  |
+| ADR 0006      | idempotência de efeitos externos; na dúvida, guardar o objeto                                                                                                                                   |
+| ADR 0007      | tempo real distribuído at-most-once; a verdade está no banco                                                                                                                                    |
+| ADR 0008      | escala horizontal com réplicas idênticas                                                                                                                                                        |
+| ADR 0009      | comprovante público por token com prazo                                                                                                                                                         |
+| ADR 0010      | IA local (OCR em CPU, serviço `trajetto-ai`); o provedor externo saiu                                                                                                                           |
+| Decisão 8.1   | unicidade por empresa (tabela acima)                                                                                                                                                            |
+| Decisão 12.2  | uma imagem por serviço, promovida por digest de staging para produção; staging não fala com cliente real                                                                                        |
+| Decisão 13.1  | cobertura medida honestamente, com piso no CI                                                                                                                                                   |
+| Decisão 13.5  | teste de mutação nas regras críticas                                                                                                                                                            |
+| Decisão 14.1  | leitura de fotos sem provedor externo                                                                                                                                                           |
+| Decisão 14.8  | comprovante assinado com o A1 ICP-Brasil                                                                                                                                                        |

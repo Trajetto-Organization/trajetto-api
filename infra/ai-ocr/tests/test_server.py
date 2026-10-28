@@ -115,6 +115,33 @@ def test_health_is_503_until_the_warm_up_ran_and_200_after():
         http.shutdown()
 
 
+# The deploy checks which build answers without a shell on the host: the
+# commit comes from the image (Dockerfile: GIT_SHA → APP_COMMIT_SHA), and a
+# value that is not a commit never reaches the body as if it were one.
+def test_health_names_the_commit_the_image_was_built_from(monkeypatch):
+    sha = "0123456789abcdef0123456789abcdef01234567"
+    assert server.build_info({"APP_COMMIT_SHA": sha}) == {"version": "0123456", "commit": sha}
+    assert server.build_info({"APP_COMMIT_SHA": f" {sha.upper()} "})["commit"] == sha
+    for raw in ("", "abc12", "not-a-commit", "g" * 40, "a" * 41):
+        assert server.build_info({"APP_COMMIT_SHA": raw}) == {"version": "dev", "commit": None}
+    assert server.build_info({}) == {"version": "dev", "commit": None}
+
+    monkeypatch.setattr(server, "BUILD", server.build_info({"APP_COMMIT_SHA": sha}))
+    engines = {"receipt": FakeEngine(), "digits": FakeEngine()}
+    service, http, base, _ = start(engines, ready=False)
+    try:
+        status, body, _ = call(base, "/health", token=None)
+        assert status == 503
+        assert body["commit"] == sha
+
+        service.ready.set()
+        status, body, _ = call(base, "/health", token=None)
+        assert status == 200
+        assert (body["version"], body["commit"]) == ("0123456", sha)
+    finally:
+        http.shutdown()
+
+
 # --- authentication ---------------------------------------------------------
 
 

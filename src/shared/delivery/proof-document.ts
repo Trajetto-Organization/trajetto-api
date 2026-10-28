@@ -1,4 +1,5 @@
 import type { DeliveryStatus } from "./delivery-rules";
+import type { DeliveryKind } from "./delivery-kind";
 import {
   documentKind,
   formatCep,
@@ -30,7 +31,9 @@ import { businessDateKey, resolveTimeZone } from "@/shared/time/business-day";
  * Honesty rule: the signed wording (MP 2.200-2, Decreto 10.278, "Assina-se
  * com Certificado Digital ICP-Brasil", validar.iti.gov.br) is only produced
  * when the caller says the document WILL be signed with a certificate it
- * already loaded. Without one the page says it is unsigned, out loud.
+ * already loaded AND whose chain verified up to an official ICP-Brasil root.
+ * Signed outside that chain, the page says it is signed and claims nothing
+ * more; without a certificate it says it is unsigned, out loud.
  */
 
 /** A reverse-geocoded address cached on the proof event (§5.1). */
@@ -48,6 +51,13 @@ interface ProofDocumentSource {
     code: string | null;
 
     status: DeliveryStatus;
+
+    /**
+     * Titles the document (meeting of 14/10/2026): a SERVICE_ORDER is a
+     * "Comprovante de Ordem de Serviço". Absent, DELIVERY and PICKUP keep the
+     * delivery's wording.
+     */
+    kind?: DeliveryKind | null;
 
     invoice_key: string | null;
     invoice_number: string | null;
@@ -184,6 +194,12 @@ type ProofSigningIntent =
       status: "SIGNED";
       /** From the certificate (its CN), never from configuration. */
       signer: { name: string; cnpj: string | null };
+      /**
+       * Whether the certificate's chain verified up to an official
+       * ICP-Brasil root (icp-brasil-chain.ts). Only then may the page claim
+       * the legal validity of MP 2.200-2. Absent reads as false.
+       */
+      icpBrasil?: boolean;
     }
   | { status: "UNSIGNED" };
 
@@ -202,7 +218,14 @@ interface ProofIssuer {
 interface ProofDocumentModel {
   layoutVersion: 2;
 
+  /** The file carries a digital signature. */
   signed: boolean;
+
+  /**
+   * Signed with a certificate that chains to ICP-Brasil: the only case the
+   * page claims legal validity and points to the ITI's validator.
+   */
+  icpBrasil: boolean;
 
   /** PDF /Title and /Author. */
   info: { title: string; author: string };
@@ -371,6 +394,15 @@ function orMissing(value: string | null | undefined): string {
   return value && value.trim() ? value.trim() : MISSING;
 }
 
+/** "RAZÃO SOCIAL – CNPJ 00.000.000/0000-00", or the name alone. */
+function signerLabel(
+  signing: Extract<ProofSigningIntent, { status: "SIGNED" }>,
+): string {
+  return signing.signer.cnpj
+    ? `${signing.signer.name} – CNPJ ${formatCnpj(signing.signer.cnpj)}`
+    : signing.signer.name;
+}
+
 /**
  * The driver's CPF, with only its middle six digits (GAP1-8, ADR 0009).
  *
@@ -505,6 +537,7 @@ function buildProofDocumentModel(
 
   const signing: ProofSigningIntent = props.signing ?? { status: "UNSIGNED" };
   const signed = signing.status === "SIGNED";
+  const icpBrasil = signing.status === "SIGNED" && signing.icpBrasil === true;
 
   const issuer: ProofIssuer = {
     brand: props.issuer?.brand?.trim() || DEFAULT_ISSUER.brand,
@@ -734,31 +767,46 @@ function buildProofDocumentModel(
   const base = props.verificationBaseUrl.replace(/\/+$/, "");
   const verificationUrl = `${base}/verificar/${props.verificationToken}`;
 
-  const subject = failed ? "Registro de Ocorrência" : "Comprovação de Entrega";
+  // The meeting of 14/10/2026: a service order is proven like a delivery
+  // and titled as what it is. PICKUP keeps the delivery's wording.
+  const what =
+    delivery.kind === "SERVICE_ORDER"
+      ? {
+          proof: "Comprovação de Ordem de Serviço",
+          receipt: "Comprovante de Ordem de Serviço",
+          info: "Comprovante de ordem de serviço",
+          legal: "comprovação da ordem de serviço",
+        }
+      : {
+          proof: "Comprovação de Entrega",
+          receipt: "Comprovante de Entrega",
+          info: "Comprovante de entrega",
+          legal: "comprovação da entrega",
+        };
+
+  const subject = failed ? "Registro de Ocorrência" : what.proof;
 
   const header = {
-    title: signed
+    title: icpBrasil
       ? `Certificado Digital ${failed ? "do" : "da"} ${subject}`
       : failed
         ? "Registro de Ocorrência"
-        : "Comprovante de Entrega",
+        : what.receipt,
     number: headerNumber,
   };
 
-  const legalLine = signed
-    ? `Documento de ${failed ? "registro da ocorrência" : "comprovação da entrega"} com validade jurídica conforme os termos do Art. 10, § 1º, da Medida Provisória nº 2.200-2, de 24 de agosto de 2001 e Decreto nº 10.278, de 18 de março de 2020. Assinado com Certificado Digital (normas ICP-Brasil).`
-    : "Documento sem assinatura digital ICP-Brasil. Reúne as informações registradas no momento da entrega; a integridade do arquivo pode ser conferida pelo código de verificação. Não afirma a validade jurídica prevista na MP nº 2.200-2/2001.";
+  const legalLine = icpBrasil
+    ? `Documento de ${failed ? "registro da ocorrência" : what.legal} com validade jurídica conforme os termos do Art. 10, § 1º, da Medida Provisória nº 2.200-2, de 24 de agosto de 2001 e Decreto nº 10.278, de 18 de março de 2020. Assinado com Certificado Digital (normas ICP-Brasil).`
+    : signed
+      ? "Documento assinado digitalmente com certificado que não pertence à cadeia ICP-Brasil validada. A assinatura e o código de verificação permitem conferir a integridade do arquivo; não afirma a validade jurídica prevista na MP nº 2.200-2/2001."
+      : "Documento sem assinatura digital ICP-Brasil. Reúne as informações registradas no momento da entrega; a integridade do arquivo pode ser conferida pelo código de verificação. Não afirma a validade jurídica prevista na MP nº 2.200-2/2001.";
 
-  const authentication: ProofDocumentModel["authentication"] = signed
+  const authentication: ProofDocumentModel["authentication"] = icpBrasil
     ? {
         title: "Autenticação:",
         paragraphs: [
           {
-            text: `A ${issuer.brand} (${
-              signing.signer.cnpj
-                ? `${signing.signer.name} – CNPJ ${formatCnpj(signing.signer.cnpj)}`
-                : signing.signer.name
-            }) garante a autenticidade e integridade deste documento e declara que as informações neste documento são fidedignas às informações capturadas e recebidas em campo. Assina-se com Certificado Digital ICP-Brasil.`,
+            text: `A ${issuer.brand} (${signerLabel(signing)}) garante a autenticidade e integridade deste documento e declara que as informações neste documento são fidedignas às informações capturadas e recebidas em campo. Assina-se com Certificado Digital ICP-Brasil.`,
           },
           {
             text: "Ateste a autenticidade deste documento, de acordo com termos do DECRETO Nº 10.278, DE 18 DE MARÇO DE 2020:",
@@ -777,36 +825,59 @@ function buildProofDocumentModel(
           url: verificationUrl,
         },
       }
-    : {
-        title: "Autenticação:",
-        paragraphs: [
-          {
-            text: `A ${issuer.brand} (${
-              issuer.cnpj
-                ? `${issuer.legalName} – CNPJ ${formatCnpj(issuer.cnpj)}`
-                : issuer.legalName
-            }) gerou este documento a partir das informações capturadas e recebidas em campo.`,
-          },
-          {
-            text: "Este documento não foi assinado digitalmente.",
-            bold: true,
-          },
-        ],
-        steps: [
-          "Para conferir se o arquivo é o original gerado pela Trajetto, acesse o endereço abaixo ou leia o QR ao lado.",
-        ],
-        qrUrl: verificationUrl,
-        verificationLine: { label: "Conferir:", url: verificationUrl },
-      };
+    : signing.status === "SIGNED"
+      ? {
+          // Signed outside ICP-Brasil: the ITI's validator would refute a
+          // claim, so the QR leads to our own integrity check instead.
+          title: "Autenticação:",
+          paragraphs: [
+            {
+              text: `A ${issuer.brand} (${signerLabel(signing)}) gerou e assinou digitalmente este documento a partir das informações capturadas e recebidas em campo.`,
+            },
+            {
+              text: "O certificado da assinatura não pertence à cadeia ICP-Brasil validada.",
+              bold: true,
+            },
+          ],
+          steps: [
+            "Para conferir se o arquivo é o original gerado pela Trajetto, acesse o endereço abaixo ou leia o QR ao lado.",
+          ],
+          qrUrl: verificationUrl,
+          verificationLine: { label: "Conferir:", url: verificationUrl },
+        }
+      : {
+          title: "Autenticação:",
+          paragraphs: [
+            {
+              text: `A ${issuer.brand} (${
+                issuer.cnpj
+                  ? `${issuer.legalName} – CNPJ ${formatCnpj(issuer.cnpj)}`
+                  : issuer.legalName
+              }) gerou este documento a partir das informações capturadas e recebidas em campo.`,
+            },
+            {
+              text: "Este documento não foi assinado digitalmente.",
+              bold: true,
+            },
+          ],
+          steps: [
+            "Para conferir se o arquivo é o original gerado pela Trajetto, acesse o endereço abaixo ou leia o QR ao lado.",
+          ],
+          qrUrl: verificationUrl,
+          verificationLine: { label: "Conferir:", url: verificationUrl },
+        };
 
   return {
     layoutVersion: 2,
     signed,
+    icpBrasil,
 
     info: {
-      title: signed
-        ? `${failed ? "Registro de ocorrência" : "Comprovante de entrega"} assinado`
-        : `${failed ? "Registro de ocorrência" : "Comprovante de entrega"} (sem assinatura digital)`,
+      title: icpBrasil
+        ? `${failed ? "Registro de ocorrência" : what.info} assinado`
+        : signed
+          ? `${failed ? "Registro de ocorrência" : what.info} assinado (sem cadeia ICP-Brasil)`
+          : `${failed ? "Registro de ocorrência" : what.info} (sem assinatura digital)`,
       author: "Trajetto",
     },
 

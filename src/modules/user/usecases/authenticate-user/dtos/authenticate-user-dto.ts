@@ -19,6 +19,8 @@ interface TwoFactorProps {
 }
 
 interface EmailVerificationProps {
+  /** Names the account in the log when the e-mail cannot be sent. */
+  userId: string;
   email: string;
   name: string;
 }

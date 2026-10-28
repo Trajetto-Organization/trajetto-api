@@ -4,6 +4,7 @@ import { ListDeliveryUseCase } from "@/modules/delivery/usecases/list-delivery/l
 
 import { InMemoryDeliveryRepository } from "@/modules/delivery/repositories/in-memory/in-memory-delivery-repository";
 import { InMemoryUserRepository } from "@/modules/user/repositories/in-memory/in-memory-user-repository";
+import { InMemoryBusinessRepository } from "@/modules/business/repositories/in-memory/in-memory-business-repository";
 
 import type { User } from "@/modules/user/dtos/user-dto";
 
@@ -92,7 +93,14 @@ function build() {
 
   const listing = vi.spyOn(deliveries, "listDeliveries");
 
-  return { useCase: new ListDeliveryUseCase(users, deliveries), listing };
+  return {
+    useCase: new ListDeliveryUseCase(
+      users,
+      deliveries,
+      new InMemoryBusinessRepository(),
+    ),
+    listing,
+  };
 }
 
 describe("the pager total and the cards", () => {

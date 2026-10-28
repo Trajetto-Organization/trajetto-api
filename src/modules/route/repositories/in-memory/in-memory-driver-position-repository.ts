@@ -50,7 +50,7 @@ class InMemoryDriverPositionRepository implements IDriverPositionRepository {
     routeStartedAt?: Date | null;
     pings: AcceptedPing[];
   }): Promise<RecordedBatch> {
-    if (pings.length === 0) return { stored: 0, dropped: 0 };
+    if (pings.length === 0) return { stored: 0, dropped: 0, advanced: false };
 
     const route = routeId ? { id: routeId, started_at: routeStartedAt } : null;
 
@@ -88,10 +88,10 @@ class InMemoryDriverPositionRepository implements IDriverPositionRepository {
     const current = this.last.get(driverId);
 
     // ON CONFLICT ... WHERE stored < incoming: never backwards.
-    if (
-      !current ||
-      current.recorded_at.getTime() < latest.recorded_at.getTime()
-    ) {
+    const advanced =
+      !current || current.recorded_at.getTime() < latest.recorded_at.getTime();
+
+    if (advanced) {
       this.last.set(driverId, {
         driverId,
         businessId,
@@ -106,7 +106,7 @@ class InMemoryDriverPositionRepository implements IDriverPositionRepository {
       });
     }
 
-    return { stored, dropped: 0 };
+    return { stored, dropped: 0, advanced };
   }
 
   async listLatestByBusiness(

@@ -16,7 +16,9 @@
  * itself happens after that, and an image that fails its healthcheck is
  * rolled back by Swarm with the old one still serving. A green run of this
  * script is therefore NOT a converged service: deploy.yml follows the API
- * deploy with the convergence check (infra/scripts/verify-rollout.sh over SSH).
+ * deploy with a convergence check (by default, wait-for-version.mjs polling
+ * the public /health/liveness for the new commit; or
+ * infra/scripts/verify-rollout.sh over SSH).
  *
  * What it does catch, unlike a bare webhook (a 2xx the moment the redeploy
  * was queued): a deploy Dokploy could not run at all — an image it cannot
@@ -26,24 +28,31 @@
  * A deployment that ends in `error` is triggered again, up to
  * DOKPLOY_ATTEMPTS times: the failure seen in practice is the image pull
  * from GHCR dying midway ("connection reset by peer" on the VPS's IPv6
- * route, 27/10/2026), which the next pull gets through. A wrong image or
- * registry login fails every attempt the same way, so the run still fails.
- * A `cancelled` deployment was stopped by a person and is not retried.
+ * route, 27/10/2026), which a later pull gets through. The pauses double
+ * (20, 40, 80, 160, 160 s by default): run 40551925038 failed 3/3 with a
+ * fixed 20 s, which retried inside the same bad minute of that route. Docker
+ * keeps the layers a broken pull finished, so each attempt only fetches what
+ * is left. A wrong image or registry login fails every attempt the same
+ * way, so the run still fails — with Dokploy's own reason in the log. A
+ * `cancelled` deployment was stopped by a person and is not retried.
  *
  * Environment:
- *   DOKPLOY_URL              https base URL of the Dokploy panel
- *   DOKPLOY_API_KEY          API key (Dokploy > Settings > Profile > API/CLI)
- *   DOKPLOY_APPLICATION_ID   the Application to deploy (from its URL in the panel)
- *   DOKPLOY_APP_LABEL        the service's name in messages (default "a Application")
- *   DOKPLOY_OPTIONAL         `true`: no application id is a notice, not an error
- *                            (the AI Application may not exist yet)
- *   DOKPLOY_WAIT             `false` only triggers, without following (default true)
- *   DOKPLOY_TIMEOUT_SECONDS  how long to follow each attempt (default 900)
- *   DOKPLOY_POLL_SECONDS     interval between checks (default 10)
- *   DOKPLOY_ATTEMPTS         deploys tried while they end in error (default 3)
- *   DOKPLOY_RETRY_SECONDS    pause before deploying again (default 20)
+ *   DOKPLOY_URL                https base URL of the Dokploy panel
+ *   DOKPLOY_API_KEY            API key (Dokploy > Settings > Profile > API/CLI)
+ *   DOKPLOY_APPLICATION_ID     the Application to deploy (from its URL in the panel)
+ *   DOKPLOY_APP_LABEL          the service's name in messages (default "a Application")
+ *   DOKPLOY_OPTIONAL           `true`: no application id is a notice, not an error
+ *                              (the AI Application may not exist yet)
+ *   DOKPLOY_WAIT               `false` only triggers, without following (default true)
+ *   DOKPLOY_TIMEOUT_SECONDS    how long to follow each attempt (default 900)
+ *   DOKPLOY_POLL_SECONDS       interval between checks (default 10)
+ *   DOKPLOY_ATTEMPTS           deploys tried while they end in error (default 6)
+ *   DOKPLOY_RETRY_SECONDS      first pause before deploying again (default 20),
+ *                              doubled after each failed attempt
+ *   DOKPLOY_RETRY_MAX_SECONDS  ceiling of that pause (default 160)
  *
- * The key is sent only as the `x-api-key` header and never printed.
+ * The key is sent only as the `x-api-key` header and never printed, and is
+ * blanked out of any text Dokploy sends back before it is logged.
  */
 import { appendFileSync } from "node:fs";
 
@@ -113,8 +122,54 @@ const APPLICATION_ID = env.DOKPLOY_APPLICATION_ID;
 const WAIT = env.DOKPLOY_WAIT !== "false";
 const TIMEOUT_MS = Number(env.DOKPLOY_TIMEOUT_SECONDS || 900) * 1000;
 const POLL_MS = Number(env.DOKPLOY_POLL_SECONDS || 10) * 1000;
-const ATTEMPTS = Math.max(1, Math.floor(Number(env.DOKPLOY_ATTEMPTS || 3)));
-const RETRY_MS = Number(env.DOKPLOY_RETRY_SECONDS ?? 20) * 1000;
+const ATTEMPTS = Math.max(1, Math.floor(Number(env.DOKPLOY_ATTEMPTS || 6)));
+const RETRY_MS = Math.max(0, Number(env.DOKPLOY_RETRY_SECONDS ?? 20) * 1000);
+const RETRY_MAX_MS = Math.max(
+  RETRY_MS,
+  Number(env.DOKPLOY_RETRY_MAX_SECONDS ?? 160) * 1000,
+);
+
+/** The pause after failed attempt `number` (1-based): doubling, capped. */
+const retryDelay = (number) =>
+  Math.min(RETRY_MS * 2 ** (number - 1), RETRY_MAX_MS);
+
+/**
+ * Why Dokploy says a deployment failed, fit for a public log: one line, at
+ * most 500 characters, the API key and any credentials in a URL blanked out.
+ * Dokploy records the error of a failed deploy on the deployment itself
+ * (`errorMessage`); older versions leave it empty, and the reason is then
+ * only in the deployment's log in the panel.
+ */
+function reasonOf(deployment) {
+  const raw = [
+    deployment?.errorMessage,
+    deployment?.error,
+    deployment?.message,
+  ].find((value) => typeof value === "string" && value.trim() !== "");
+
+  if (!raw) return null;
+
+  let text = raw.replace(/\s+/g, " ").trim();
+
+  if (env.DOKPLOY_API_KEY) text = text.split(env.DOKPLOY_API_KEY).join("***");
+
+  text = text
+    .replace(/(\/\/)[^/\s:@]+:[^/\s@]+@/g, "$1***@")
+    .replace(
+      /\b(password|passwd|token|secret|api[-_]?key|authorization)(["']?\s*[:=]\s*["']?)[^\s"',;]+/gi,
+      "$1$2***",
+    );
+
+  return text.length > 500 ? `${text.slice(0, 500)}…` : text;
+}
+
+const said = (deployment) => {
+  const reason = reasonOf(deployment);
+
+  return reason
+    ? ` Motivo informado pelo Dokploy: ${reason}`
+    : " O Dokploy não informou o motivo; o log está no painel, em Deployments da Application.";
+};
 
 const headers = {
   "x-api-key": env.DOKPLOY_API_KEY,
@@ -123,6 +178,9 @@ const headers = {
 };
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/** Seconds for a message: whole in production, exact in the tests' 0.01 s. */
+const seconds = (ms) => Number((ms / 1000).toFixed(2));
 
 /** A request, retried on network errors and 5xx (as `curl --retry 3` was). */
 async function call(method, path, body) {
@@ -241,13 +299,13 @@ async function attempt(number) {
     if (current.status === "error") {
       if (number < ATTEMPTS) {
         console.log(
-          `::warning::O deployment ${current.deploymentId} de ${LABEL} terminou em 'error' no Dokploy (o motivo comum é o download da imagem cair no meio). Disparando de novo: tentativa ${number + 1} de ${ATTEMPTS}.`,
+          `::warning::O deployment ${current.deploymentId} de ${LABEL} terminou em 'error' no Dokploy (o motivo comum é o download da imagem cair no meio). Disparando de novo em ${seconds(retryDelay(number))}s: tentativa ${number + 1} de ${ATTEMPTS}.${said(current)}`,
         );
         return "error";
       }
 
       fail(
-        `O deployment ${current.deploymentId} de ${LABEL} terminou em 'error' no Dokploy, depois de ${ATTEMPTS} tentativas. O log está no painel, em Deployments da Application.`,
+        `O deployment ${current.deploymentId} de ${LABEL} terminou em 'error' no Dokploy, depois de ${ATTEMPTS} tentativas.${said(current)}`,
       );
     }
   }
@@ -262,7 +320,7 @@ async function attempt(number) {
 async function main() {
   for (let number = 1; number <= ATTEMPTS; number += 1) {
     if ((await attempt(number)) === "done") return;
-    await sleep(RETRY_MS);
+    await sleep(retryDelay(number));
   }
 }
 

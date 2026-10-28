@@ -259,7 +259,7 @@ async function userRoutes(app: FastifyInstance) {
         tags: ["user"],
         summary: "Pede o link de redefinição de senha",
         description:
-          "Envia o link de redefinição para o e-mail cadastrado. A resposta é a mesma exista ou não a conta, para não confirmar quais e-mails existem.",
+          "Envia o link de redefinição para o e-mail cadastrado. A resposta é a mesma exista ou não a conta, para não confirmar quais e-mails existem. No máximo um e-mail por minuto para o mesmo endereço, venham os pedidos de onde vierem: um pedido repetido dentro desse minuto recebe a mesma resposta e não envia outro link (o anterior continua valendo por uma hora).",
         body: userSchemas.sendForgotPassword,
         response: {
           200: userResponses.forgotPasswordEmailSent,
@@ -300,7 +300,7 @@ async function userRoutes(app: FastifyInstance) {
         tags: ["user"],
         summary: "Renova os tokens da sessão",
         description:
-          "Troca um refresh token válido por um novo par de tokens. Refresh inválido, expirado ou já usado: 401 AUTH_REFRESH_INVALID.",
+          "Troca um refresh token válido por um novo par de tokens. Refresh inválido, expirado ou já usado: 401 AUTH_REFRESH_INVALID. Sessão encerrada (logout, expiração): 401 AUTH_SESSION_INVALIDATED. Um token já trocado ainda vale UMA vez nos 60 s seguintes (duas abas renovando juntas, um app repetindo uma resposta perdida) e recebe outro par da mesma sessão; uma terceira apresentação, mesmo dentro desses 60 s, ou qualquer uma depois deles, é reuso: 401 AUTH_REFRESH_REUSED, todas as sessões da conta são encerradas e o usuário é avisado.",
         body: userSchemas.refreshToken,
         response: {
           200: userResponses.tokenRefreshed,

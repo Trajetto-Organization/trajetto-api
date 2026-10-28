@@ -255,11 +255,17 @@ function bearerOf(request: FastifyRequest): string | null {
  * runs first, and the signature of the access token is enough to know whose
  * bucket this is — the same `user:` bucket as before.
  *
- * A token that does not verify gets a bucket of its OWN (by hash): not the
- * address, which would put a whole office behind one NAT in one bucket
- * whenever their tokens expire together, and not the unverified `sub`, which
- * would let anybody drain someone else's bucket by writing their id into a
- * token.
+ * A token that does not verify is charged to the ADDRESS, like a request
+ * with no token at all — never to the unverified `sub`, which would let
+ * anybody drain someone else's bucket by writing their id into a token.
+ *
+ * It used to get a bucket of its own, by hash, so that an office behind one
+ * NAT would not share a bucket whenever their tokens expired together. But a
+ * bucket per token is a bucket per request for whoever invents the tokens:
+ * a fresh garbage `Authorization` header on each call started at zero every
+ * time, and the 8-per-minute login limit, the password-reset limits and the
+ * global ceiling stopped counting anything. The office pays one 401 per tab
+ * before the refresh (whose bucket is the session); that fits the address.
  */
 function bearerRateLimitKey(request: FastifyRequest): string | null {
   const token = bearerOf(request);
@@ -275,10 +281,10 @@ function bearerRateLimitKey(request: FastifyRequest): string | null {
       return `user:${payload.sub}`;
     }
   } catch {
-    // Expired, forged or garbage: its own bucket, below.
+    // Expired, forged or garbage: counted by address, by the caller.
   }
 
-  return `token:${digest(token).toString("hex").slice(0, 32)}`;
+  return null;
 }
 
 /**

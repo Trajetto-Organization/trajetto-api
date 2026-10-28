@@ -1,0 +1,6 @@
+# Layer 4 of the runtime image (Dockerfile, stage `base`), after the engine
+# (OpenCV, ONNX Runtime, RapidOCR): Dependabot ignores numpy's majors only,
+# so its minor and patch releases come in routinely, and placing it after
+# the engine means such a bump re-ships this layer and the last one, not
+# the engine's.
+numpy==2.2.6 --hash=sha256:fd83c01228a688733f1ded5201c678f0c53ecc1006ffbc404db9f7a899ac6249

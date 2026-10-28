@@ -26,6 +26,7 @@ import type { Vehicle } from "@/modules/vehicle/dtos/vehicle-dto";
 import type { Shipper } from "@/modules/shipper/dtos/shipper-dto";
 
 import { InMemoryWebhookFanOutService } from "@/shared/integration/in-memory/in-memory-webhook-fan-out-service";
+import { ImportQueue } from "@/modules/import/services/import-queue";
 import { BUSINESS_COLUMN_DEFAULTS } from "@/shared/in-memory/column-defaults";
 
 // Each row (and each route) commits with its webhook events; against
@@ -530,5 +531,123 @@ describe("undoing an upload that is still running", () => {
         importId: record.id,
       }),
     ).resolves.toBeDefined();
+  });
+});
+
+/**
+ * The upload as the route runs it: answered with the open record, processed
+ * after the answer. A 20k-row sheet outlived the edge's 100 s inside the
+ * request — the operator saw a 524 while the rows kept being created.
+ */
+describe("an upload started in the background", () => {
+  function start(rows: string[][], queue: ImportQueue, filename?: string) {
+    return context.importSpreadsheet.start(
+      {
+        userId: DISPATCHER,
+        businessId: BUSINESS,
+        filename: filename ?? "entregas-16-09.csv",
+        content: upload(rows),
+        shipperId: SHIPPER,
+      },
+      queue,
+    );
+  }
+
+  it("answers with the record still open, and closes it with the report", async () => {
+    const queue = new ImportQueue();
+
+    const record = await start(
+      [line("Padaria Central"), line("Mercado Novo")],
+      queue,
+    );
+
+    expect(record.status).toBe("IN_PROGRESS");
+
+    await queue.idle();
+
+    const closed = await context.importRepository.findImportById(
+      record.id,
+      BUSINESS,
+    );
+
+    expect(closed).toMatchObject({ status: "COMPLETED", imported: 2 });
+    expect(closed!.report.rows.map((row) => row.line)).toEqual([2, 3]);
+    expect(context.deliveryRepository.deliveries).toHaveLength(2);
+  });
+
+  it("refuses what it can before opening anything: the shipper, the file", async () => {
+    const queue = new ImportQueue();
+
+    await expect(
+      context.importSpreadsheet.start(
+        {
+          userId: DISPATCHER,
+          businessId: BUSINESS,
+          filename: "entregas.csv",
+          content: upload([line("Padaria Central")]),
+          shipperId: OTHER_SHIPPER,
+        },
+        queue,
+      ),
+    ).rejects.toMatchObject({ statusCode: 404, code: "SHIPPER_NOT_FOUND" });
+
+    await expect(
+      context.importSpreadsheet.start(
+        {
+          userId: DISPATCHER,
+          businessId: BUSINESS,
+          filename: "entregas.xlsx",
+          content: Buffer.from("isto não é uma planilha").toString("base64"),
+          shipperId: SHIPPER,
+        },
+        queue,
+      ),
+    ).rejects.toMatchObject({
+      statusCode: 400,
+      code: "SPREADSHEET_UNREADABLE",
+    });
+
+    // Nothing opened, nothing reserved.
+    const listed = await context.importRepository.listImports({
+      businessId: BUSINESS,
+      page: 1,
+      pageSize: 10,
+    });
+
+    expect(listed.data).toHaveLength(0);
+    expect(queue.size()).toBe(0);
+  });
+
+  it("refuses a full replica with 429 IMPORT_BUSY and opens nothing", async () => {
+    const queue = new ImportQueue(0, 0);
+
+    await expect(start([line("Padaria Central")], queue)).rejects.toMatchObject(
+      { statusCode: 429, code: "IMPORT_BUSY" },
+    );
+
+    const listed = await context.importRepository.listImports({
+      businessId: BUSINESS,
+      page: 1,
+      pageSize: 10,
+    });
+
+    expect(listed.data).toHaveLength(0);
+  });
+
+  it("is a no-op the second time: the same file twice is reported as duplicated", async () => {
+    const queue = new ImportQueue();
+
+    await start([line("Repetida", { code: "PED-1" })], queue);
+    const again = await start([line("Repetida", { code: "PED-1" })], queue);
+
+    await queue.idle();
+
+    const closed = await context.importRepository.findImportById(
+      again.id,
+      BUSINESS,
+    );
+
+    expect(closed).toMatchObject({ imported: 0, duplicated: 1 });
+    expect(context.deliveryRepository.deliveries).toHaveLength(1);
   });
 });

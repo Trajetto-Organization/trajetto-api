@@ -1,16 +1,31 @@
 import { v7 as uuidV7 } from "uuid";
 
-import type { IImportRepository } from "../IImport-repository";
-import { ImportAlreadyReversedError } from "../../usecases/errors/import-errors";
 import type {
-  RemovedDelivery,
+  IImportRepository,
+  ReversalRemovedHook,
+} from "../IImport-repository";
+import { ImportReversalLeaseLostError } from "../../usecases/errors/import-errors";
+import type {
   CreateImportProps,
   FinishImportProps,
   ImportRecord,
   ListImportsProps,
   ListImportsPage,
+  ReversalClaim,
+  ReversalProgress,
   ReversalResult,
 } from "../../dtos/import-dto";
+import {
+  KEEP_REASON,
+  REVERSAL_BATCH_SIZE,
+  deliveryKeepReason,
+  emptyReversalProgress,
+  parseReversalProgress,
+  removedDeliveryOf,
+  reverseWholeImport,
+  reversalResultOf,
+  routeKeepReason,
+} from "../../services/import-reversal";
 
 import { compareForOrder } from "@/shared/pagination/in-memory-order";
 import {
@@ -185,7 +200,7 @@ class InMemoryImportRepository implements IImportRepository {
     businessId,
     page,
     pageSize,
-    includeReport = true,
+    includeReport = false,
     sort,
     order,
     statuses,
@@ -245,45 +260,247 @@ class InMemoryImportRepository implements IImportRepository {
   async reverseImport(
     importId: string,
     businessId: string,
-    onRemoved?: (removed: RemovedDelivery[]) => Promise<void>,
+    onRemoved?: ReversalRemovedHook,
   ): Promise<ReversalResult> {
+    return reverseWholeImport(this, importId, businessId, onRemoved);
+  }
+
+  async countImportDeliveries(
+    importId: string,
+    businessId: string,
+  ): Promise<number> {
+    return this.deliveries.filter(
+      (delivery) =>
+        delivery.importId === importId && delivery.businessId === businessId,
+    ).length;
+  }
+
+  async claimReversal(
+    importId: string,
+    businessId: string,
+    staleBefore: Date,
+  ): Promise<ReversalClaim> {
+    const record = this.findRecord(importId, businessId);
+
+    if (!record) return { outcome: "not-found" };
+    if (record.status === "REVERSED") return { outcome: "reversed" };
+    if (record.status === "IN_PROGRESS") return { outcome: "in-progress" };
+
+    // Like the real one: a lease with a fresh heartbeat is a live run; a
+    // quiet one belongs to a dead run and is taken over.
+    if (record.reversal_started_at && this.heartbeatOf(record) >= staleBefore) {
+      return { outcome: "running", record };
+    }
+
+    // A new lease is never equal to the one it replaces, even within the
+    // same millisecond: equality is what fences the old run out.
+    const previous = record.reversal_started_at
+      ? new Date(record.reversal_started_at).getTime()
+      : 0;
+    const lease = new Date(Math.max(Date.now(), previous + 1));
+
+    record.reversal_started_at = lease;
+    this.beat(record, lease);
+
+    const progress =
+      parseReversalProgress(record.reversal, lease) ??
+      emptyReversalProgress(lease);
+
+    record.reversal = progress;
+
+    return { outcome: "claimed", lease, progress };
+  }
+
+  async touchReversal(
+    importId: string,
+    businessId: string,
+    lease: Date,
+  ): Promise<void> {
+    const record = this.findRecord(importId, businessId);
+
+    if (record?.status === "COMPLETED" && sameLease(record, lease)) {
+      this.beat(record);
+    }
+  }
+
+  async runReversal(
+    importId: string,
+    businessId: string,
+    lease: Date,
+    progress: ReversalProgress,
+    {
+      onRemoved,
+      batchSize = REVERSAL_BATCH_SIZE,
+    }: { onRemoved?: ReversalRemovedHook; batchSize?: number },
+  ): Promise<ReversalResult> {
+    let current = progress;
+
+    try {
+      if (!current.routesDone) {
+        current = this.reverseRoutes(importId, businessId, lease, current);
+      }
+
+      for (;;) {
+        const step = await this.reverseDeliveryBatch(
+          importId,
+          businessId,
+          lease,
+          current,
+          { onRemoved, batchSize },
+        );
+
+        current = step.progress;
+
+        if (step.done) return reversalResultOf(current);
+      }
+    } catch (error) {
+      // Like the real one: our lease goes, the progress stays.
+      const record = this.findRecord(importId, businessId);
+
+      if (record && sameLease(record, lease)) record.reversal_started_at = null;
+
+      throw error;
+    }
+  }
+
+  private findRecord(importId: string, businessId: string) {
+    return this.imports.find(
+      (entry) => entry.id === importId && entry.businessId === businessId,
+    );
+  }
+
+  private heartbeatOf(record: ImportRecord): Date {
+    return (
+      this.heartbeats.get(record.id) ??
+      new Date(record.updated_at ?? record.created_at)
+    );
+  }
+
+  private beat(record: ImportRecord, at = new Date()): void {
+    record.updated_at = at;
+    this.heartbeats.set(record.id, at);
+  }
+
+  /** Each batch's first step, like the real one: still our lease? */
+  private fence(
+    importId: string,
+    businessId: string,
+    lease: Date,
+  ): ImportRecord {
+    const record = this.findRecord(importId, businessId);
+
+    if (!record || record.status !== "COMPLETED" || !sameLease(record, lease)) {
+      throw new ImportReversalLeaseLostError();
+    }
+
+    this.beat(record);
+
+    return record;
+  }
+
+  /** The routes, once, against every delivery of the upload. */
+  private reverseRoutes(
+    importId: string,
+    businessId: string,
+    lease: Date,
+    progress: ReversalProgress,
+  ): ReversalProgress {
+    const record = this.fence(importId, businessId, lease);
+
     const own = (entry: { importId: string | null; businessId: string }) =>
       entry.importId === importId && entry.businessId === businessId;
 
-    // The claim first, like the real one: only a COMPLETED upload is undone,
-    // and the loser of a double click is told it already happened.
-    const record = this.imports.find(
-      (entry) => entry.id === importId && entry.businessId === businessId,
+    const removable = new Set(
+      this.deliveries
+        .filter(own)
+        .filter(
+          (delivery) =>
+            deliveryKeepReason({
+              status: delivery.status,
+              events: delivery.eventCount ?? 0,
+              occurrences: delivery.occurrenceCount ?? 0,
+            }) === null,
+        )
+        .map((delivery) => delivery.id),
     );
 
-    if (record && record.status !== "COMPLETED") {
-      if (record.status === "REVERSED") throw new ImportAlreadyReversedError();
+    const keptRoutes: ReversalResult["keptRoutes"] = [];
+    const removableRouteIds = new Set<string>();
 
-      return {
-        removedDeliveries: 0,
-        removedRoutes: 0,
-        keptDeliveries: [],
-        keptRoutes: [],
-      };
+    for (const route of this.routes.filter(own).sort(byId)) {
+      const reason = routeKeepReason({
+        status: route.status,
+        hasStopThatStays: route.stopDeliveryIds.some(
+          (deliveryId) => !removable.has(deliveryId),
+        ),
+      });
+
+      if (reason) {
+        keptRoutes.push({ id: route.id, code: route.code, reason });
+        continue;
+      }
+
+      removableRouteIds.add(route.id);
     }
 
-    if (record) {
-      record.status = "REVERSED";
-      record.reversed_at = new Date();
-    }
+    this.routes = this.routes.filter(
+      (route) => !removableRouteIds.has(route.id),
+    );
+
+    // Whatever is kept stops claiming to be part of this upload.
+    for (const route of this.routes.filter(own)) route.importId = null;
+
+    const next: ReversalProgress = {
+      ...progress,
+      removedRoutes: progress.removedRoutes + removableRouteIds.size,
+      keptRoutes: [...progress.keptRoutes, ...keptRoutes],
+      routesDone: true,
+    };
+
+    record.reversal = next;
+
+    return next;
+  }
+
+  /** The next `batchSize` deliveries still carrying the upload, in id order. */
+  private async reverseDeliveryBatch(
+    importId: string,
+    businessId: string,
+    lease: Date,
+    progress: ReversalProgress,
+    {
+      onRemoved,
+      batchSize,
+    }: { onRemoved?: ReversalRemovedHook; batchSize: number },
+  ): Promise<{ done: boolean; progress: ReversalProgress }> {
+    const record = this.fence(importId, businessId, lease);
+
+    const batch = this.deliveries
+      .filter(
+        (delivery) =>
+          delivery.importId === importId && delivery.businessId === businessId,
+      )
+      .sort(byId)
+      .slice(0, batchSize);
 
     const keptDeliveries: ReversalResult["keptDeliveries"] = [];
-    const removableDeliveryIds: string[] = [];
+    const deletable = new Set<string>();
 
-    for (const delivery of this.deliveries.filter(own)) {
+    for (const delivery of batch) {
+      // The upload's routes that go are already gone: a route still holding
+      // the delivery is one that stays.
+      const onRouteThatStays = this.routes.some(
+        (route) =>
+          route.businessId === businessId &&
+          route.stopDeliveryIds.includes(delivery.id),
+      );
+
       const reason =
-        delivery.status !== "PENDING"
-          ? "Já saiu do status pendente."
-          : (delivery.eventCount ?? 0) > 0
-            ? "Já tem registros do motorista."
-            : (delivery.occurrenceCount ?? 0) > 0
-              ? "Já tem ocorrência registrada."
-              : null;
+        deliveryKeepReason({
+          status: delivery.status,
+          events: delivery.eventCount ?? 0,
+          occurrences: delivery.occurrenceCount ?? 0,
+        }) ?? (onRouteThatStays ? KEEP_REASON.deliveryOnKeptRoute : null);
 
       if (reason) {
         keptDeliveries.push({
@@ -295,95 +512,62 @@ class InMemoryImportRepository implements IImportRepository {
         continue;
       }
 
-      removableDeliveryIds.push(delivery.id);
+      deletable.add(delivery.id);
     }
 
-    const removable = new Set(removableDeliveryIds);
+    const removedRows = batch.filter((row) => deletable.has(row.id));
 
-    const keptRoutes: ReversalResult["keptRoutes"] = [];
-    const removableRouteIds: string[] = [];
-
-    for (const route of this.routes.filter(own)) {
-      const reason =
-        route.status !== "PLANNED"
-          ? "Já foi liberada ou já saiu."
-          : route.stopDeliveryIds.some((id) => !removable.has(id))
-            ? "Tem paradas de entregas que não puderam ser removidas."
-            : null;
-
-      if (reason) {
-        keptRoutes.push({ id: route.id, code: route.code, reason });
-        continue;
-      }
-
-      removableRouteIds.push(route.id);
+    // Announced before anything is applied, so a failing announcement leaves
+    // the batch untouched — the transaction's rollback, mirrored.
+    if (onRemoved && removedRows.length > 0) {
+      await onRemoved(removedRows.map(removedDeliveryOf));
     }
 
-    // A stop on any route that is not going away — this upload's, kept, or
-    // one that never belonged to it — keeps its delivery.
-    const deletableDeliveryIds = removableDeliveryIds.filter((deliveryId) => {
-      const heldBy = this.routes.find(
-        (route) =>
-          route.businessId === businessId &&
-          !removableRouteIds.includes(route.id) &&
-          route.stopDeliveryIds.includes(deliveryId),
-      );
-
-      if (!heldBy) return true;
-
-      const delivery = this.deliveries.find(
-        (entry) => entry.id === deliveryId,
-      )!;
-
-      keptDeliveries.push({
-        id: delivery.id,
-        recipient_name: delivery.recipient_name,
-        reason: "Está numa rota que não pode ser desfeita.",
-      });
-
-      return false;
-    });
-
-    this.routes = this.routes.filter(
-      (route) => !removableRouteIds.includes(route.id),
-    );
-
-    const removedRows = this.deliveries.filter((delivery) =>
-      deletableDeliveryIds.includes(delivery.id),
-    );
+    // The announcement awaited: a run that lost its lease meanwhile applies
+    // nothing, as the real one's batch would roll back.
+    if (!sameLease(record, lease)) throw new ImportReversalLeaseLostError();
 
     this.deliveries = this.deliveries.filter(
-      (delivery) => !deletableDeliveryIds.includes(delivery.id),
+      (delivery) => !deletable.has(delivery.id),
     );
 
-    if (onRemoved && removedRows.length > 0) {
-      await onRemoved(
-        removedRows.map((row) => ({
-          id: row.id,
-          code: row.code ?? null,
-          invoice_key: row.invoice_key ?? null,
-          invoice_number: row.invoice_number ?? null,
-          recipient_name: row.recipient_name,
-          city: row.city ?? "",
-          uf: row.uf ?? "",
-        })),
-      );
+    // Whatever this batch kept stops claiming to be part of the upload.
+    for (const delivery of batch) {
+      if (!deletable.has(delivery.id)) delivery.importId = null;
     }
 
-    // Whatever survived stops claiming to be part of this upload.
-    for (const entry of [...this.deliveries, ...this.routes]) {
-      if (entry.importId === importId && entry.businessId === businessId) {
-        entry.importId = null;
-      }
-    }
+    const done = batch.length < batchSize;
+    const now = new Date();
 
-    return {
-      removedDeliveries: deletableDeliveryIds.length,
-      removedRoutes: removableRouteIds.length,
-      keptDeliveries,
-      keptRoutes,
+    const next: ReversalProgress = {
+      ...progress,
+      removedDeliveries: progress.removedDeliveries + removedRows.length,
+      keptDeliveries: [...progress.keptDeliveries, ...keptDeliveries],
+      finishedAt: done ? now.toISOString() : null,
     };
+
+    record.reversal = next;
+
+    if (done) {
+      record.status = "REVERSED";
+      record.reversed_at = now;
+      record.reversal_started_at = null;
+    }
+
+    return { done, progress: next };
   }
+}
+
+/** The order the real one batches in (ORDER BY id). */
+function byId(a: { id: string }, b: { id: string }): number {
+  return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+}
+
+function sameLease(record: ImportRecord, lease: Date): boolean {
+  return (
+    !!record.reversal_started_at &&
+    new Date(record.reversal_started_at).getTime() === lease.getTime()
+  );
 }
 
 export { InMemoryImportRepository };

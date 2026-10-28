@@ -79,6 +79,10 @@ import {
   configureIntegrationRateGuard,
   createIntegrationRateGuard,
 } from "@/shared/integration/integration-rate-guard";
+import {
+  configureMailCooldown,
+  createRedisMailCooldown,
+} from "@/shared/security/mail-cooldown";
 
 import { enforceRequestedTenant } from "./modules/middlewares/tenant-authorization";
 import { UPLOAD_TYPES, uploadConfig } from "./config/upload";
@@ -250,6 +254,10 @@ attachRedisConnectionLog(rateLimitRedis, "rate-limit");
 // The public API's failed-key budget per address, on the same counters
 // connection (shared/integration/integration-rate-guard.ts).
 configureIntegrationRateGuard(createIntegrationRateGuard(rateLimitRedis));
+
+// The per-recipient cooldown of the anonymous e-mails ("esqueci minha
+// senha"), on the same fail-fast connection (shared/security/mail-cooldown.ts).
+configureMailCooldown(createRedisMailCooldown(rateLimitRedis));
 
 /**
  * The limiter goes FIRST in each route's onRequest, not last.

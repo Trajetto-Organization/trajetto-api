@@ -41,6 +41,13 @@ const SEARCH_PREFILTER_CAP = 1_000;
 /** Trigrams need three characters; shorter terms keep the ILIKE path. */
 const SEARCH_PREFILTER_MIN_LENGTH = 3;
 
+/** A delivery id (uuid v7, stored lowercase). */
+const UUID_SHAPE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** An NF-e access key. */
+const NFE_KEY_SHAPE = /^\d{44}$/;
+
 type NarrowedDeliveryFilters = DeliveryListFilters & {
   /** The deliveries whose text the search matched; replaces `search` when present. */
   ids?: string[];
@@ -89,6 +96,8 @@ async function narrowDeliverySearch(
     FROM "delivery"
     WHERE "businessId" = ${filters.businessId}
       ${filters.scopeDriverId ? Prisma.sql`AND "driverId" = ${filters.scopeDriverId}` : Prisma.empty}
+      ${filters.createdFrom ? Prisma.sql`AND "created_at" >= ${filters.createdFrom}` : Prisma.empty}
+      ${filters.createdTo ? Prisma.sql`AND "created_at" < ${filters.createdTo}` : Prisma.empty}
       AND ${DELIVERY_SEARCH_TEXT} ILIKE ${pattern}
     LIMIT ${SEARCH_PREFILTER_CAP + 1}
   `;
@@ -105,11 +114,113 @@ async function narrowDeliverySearch(
   };
 }
 
+/**
+ * Whether the term is EXACTLY a delivery's id, order code, NF-e key or NF
+ * number in this company (and a driver token's scope), case-insensitively.
+ *
+ * Read through the same trigram index as the search: the ILIKE narrows to
+ * the rows containing the term, the equalities keep the exact ones. A term
+ * shorter than the index's three characters is never exact — a two-letter
+ * order code would otherwise cost a scan of the company per request.
+ */
+async function hasExactDeliveryMatch(
+  prisma: PrismaClient,
+  filters: Pick<DeliveryListFilters, "businessId" | "scopeDriverId">,
+  rawTerm: string,
+): Promise<boolean> {
+  const term = rawTerm.trim();
+
+  if (
+    [...term].length < SEARCH_PREFILTER_MIN_LENGTH ||
+    term.includes(SEARCH_FIELD_SEPARATOR)
+  ) {
+    return false;
+  }
+
+  const lowered = term.toLowerCase();
+
+  // The notification's link carries the id, and an NF-e key is 44 digits:
+  // each has its own unique index, a lookup of well under a millisecond,
+  // where the trigram read below costs ~25 ms for a 36-character term
+  // (measured on 100k deliveries of one tenant). Not found there, the term
+  // may still be an order code of that shape, so the general read follows.
+  const scope = {
+    businessId: filters.businessId,
+    ...(filters.scopeDriverId && { driverId: filters.scopeDriverId }),
+  };
+
+  const byKey = UUID_SHAPE.test(term)
+    ? { id: lowered }
+    : NFE_KEY_SHAPE.test(term)
+      ? { invoice_key: term }
+      : null;
+
+  if (
+    byKey &&
+    (await prisma.delivery.findFirst({
+      where: { ...scope, ...byKey },
+      select: { id: true },
+    }))
+  ) {
+    return true;
+  }
+
+  const pattern = `%${escapeLikePattern(term)}%`;
+
+  const rows = await prisma.$queryRaw<Array<{ found: number }>>`
+    SELECT 1 AS "found"
+    FROM "delivery"
+    WHERE "businessId" = ${filters.businessId}
+      ${filters.scopeDriverId ? Prisma.sql`AND "driverId" = ${filters.scopeDriverId}` : Prisma.empty}
+      AND ${DELIVERY_SEARCH_TEXT} ILIKE ${pattern}
+      AND (
+        lower("id") = ${lowered}
+        OR lower(coalesce("code", '')) = ${lowered}
+        OR lower(coalesce("invoice_key", '')) = ${lowered}
+        OR lower(coalesce("invoice_number", '')) = ${lowered}
+      )
+    LIMIT 1
+  `;
+
+  return rows.length > 0;
+}
+
+/**
+ * The filters with the period dropped when the search names one delivery
+ * exactly (meeting of 14/10/2026).
+ *
+ * The screen opens on today, and a notification's link is `?search=<id>`
+ * (delivery-occurrence-policy): with the period applied, the delivery of last
+ * week it points at would be "not found". An exact id, order code, NF-e key
+ * or NF number is a question about THAT document, whatever its date; a
+ * partial term ("padaria") still searches inside the period.
+ */
+async function resolveDeliveryPeriod<F extends DeliveryListFilters>(
+  prisma: PrismaClient,
+  filters: F,
+): Promise<{ filters: F; periodApplied: boolean }> {
+  const hasPeriod = Boolean(filters.createdFrom || filters.createdTo);
+  const term = filters.search?.trim() ?? "";
+
+  if (!hasPeriod || !term) return { filters, periodApplied: hasPeriod };
+
+  if (!(await hasExactDeliveryMatch(prisma, filters, term))) {
+    return { filters, periodApplied: true };
+  }
+
+  return {
+    filters: { ...filters, createdFrom: undefined, createdTo: undefined },
+    periodApplied: false,
+  };
+}
+
 export {
   DELIVERY_SEARCH_TEXT,
   SEARCH_FIELD_SEPARATOR,
   SEARCH_PREFILTER_CAP,
   SEARCH_PREFILTER_MIN_LENGTH,
+  hasExactDeliveryMatch,
   narrowDeliverySearch,
+  resolveDeliveryPeriod,
 };
 export type { NarrowedDeliveryFilters };

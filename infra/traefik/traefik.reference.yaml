@@ -1,7 +1,9 @@
 # Reference for the Traefik STATIC configuration of the production stack.
 #
 # NOT applied by any deploy. The Traefik that fronts www.intrajetto.com and
-# trajettoapi.thorsolucoes.com.br is Dokploy's (container dokploy-traefik),
+# the API host (api-staging.intrajetto.com in staging; the production API
+# host is still to be defined in docs/deploy.md §26) is Dokploy's (container
+# dokploy-traefik),
 # configured on the host, outside every repository; this file versions the
 # parts of it the security posture depends on, so they can be reviewed, diffed
 # and re-applied. Merge these keys into Dokploy's traefik.yml

@@ -32,7 +32,6 @@ import {
   masterListWhere,
   userListWhere,
 } from "../usecases/list-users/user-list";
-import { insensitiveEquals } from "@/shared/utils/like-pattern";
 import {
   MAX_FAILED_LOGINS,
   failureWindowStart,
@@ -290,14 +289,42 @@ class UserRepository implements IUserRepository {
       : this.prisma.$transaction(deleteKeepingOne);
   }
 
+  /**
+   * The id of the account with this e-mail, ignoring case, through
+   * user_email_lower_idx.
+   *
+   * Addresses are stored as typed, so the lookup has to ignore case — and
+   * `{ mode: "insensitive" }` compiles to ILIKE, which no btree can serve:
+   * every login, password reset and 2FA resend was a sequential scan of the
+   * whole user table (150k rows at the target scale). lower() = lower() is
+   * the same equality on an indexed expression, and a literal comparison, so
+   * "%" and "_" are characters, not wildcards (like-pattern.ts). An exact
+   * spelling wins over a case variant, should two rows ever differ only by
+   * case (the unique index is case-sensitive).
+   */
+  private async idByEmail(
+    email: string,
+    businessId?: string,
+  ): Promise<string | null> {
+    const [match] = await this.prisma.$queryRaw<Array<{ id: string }>>`
+      SELECT "id"
+      FROM "user"
+      WHERE lower("email") = lower(${email})
+        ${businessId === undefined ? Prisma.empty : Prisma.sql`AND "businessId" = ${businessId}`}
+      ORDER BY ("email" = ${email}) DESC, "created_at", "id"
+      LIMIT 1
+    `;
+
+    return match?.id ?? null;
+  }
+
   async findUserByEmail(email: string): Promise<User | null> {
-    const findUserByEmail = await this.prisma.user.findFirst({
-      where: {
-        // Escaped: the value is an ILIKE pattern underneath, and "j_hn@..."
-        // matched "john@..." at the login and the password reset
-        // (like-pattern.ts).
-        email: insensitiveEquals(email),
-      },
+    const id = await this.idByEmail(email);
+
+    if (!id) return null;
+
+    const findUserByEmail = await this.prisma.user.findUnique({
+      where: { id },
       include: {
         business: {
           select: {
@@ -328,11 +355,12 @@ class UserRepository implements IUserRepository {
     email: string,
     businessId: string,
   ): Promise<User | null> {
-    const user = await this.prisma.user.findFirst({
-      where: {
-        email: insensitiveEquals(email),
-        businessId: businessId,
-      },
+    const id = await this.idByEmail(email, businessId);
+
+    if (!id) return null;
+
+    const user = await this.prisma.user.findUnique({
+      where: { id },
       include: {
         profileAccess: {
           select: {

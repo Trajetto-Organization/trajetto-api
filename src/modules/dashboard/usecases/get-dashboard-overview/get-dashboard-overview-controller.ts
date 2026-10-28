@@ -8,7 +8,7 @@ class GetDashboardOverviewController {
     request: FastifyRequest,
     reply: FastifyReply,
   ): Promise<Response> {
-    const { id } = request.user;
+    const { id, entitlements } = request.user;
 
     const getDashboardOverviewUseCase = container.resolve(
       GetDashboardOverviewUseCase,
@@ -16,6 +16,7 @@ class GetDashboardOverviewController {
 
     const result = await getDashboardOverviewUseCase.execute({
       userId: id,
+      entitlements,
     });
 
     return reply.status(200).send(result);

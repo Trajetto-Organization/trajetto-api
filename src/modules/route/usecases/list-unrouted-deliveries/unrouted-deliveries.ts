@@ -2,6 +2,7 @@ import type { Prisma } from "@prisma/client";
 
 import { buildSearchOr } from "@/shared/pagination/search-or";
 import { OPEN_STOP_STATUSES } from "@/shared/route/route-rules";
+import type { DeliveryKind } from "@/shared/delivery/delivery-kind";
 
 /**
  * "Without a route" (decision 14.7, D3): PENDING and no open stop anywhere.
@@ -24,7 +25,7 @@ interface UnroutedDeliveriesQuery {
   shipperIds?: string[];
   cities?: string[];
   ufs?: string[];
-  kinds?: Array<"DELIVERY" | "PICKUP">;
+  kinds?: DeliveryKind[];
 
   /** Civil days (UTC midnight), inclusive. */
   scheduledFrom?: Date;

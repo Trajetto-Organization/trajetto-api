@@ -47,6 +47,7 @@ import {
   type FuelListFilters,
   type FuelListGroup,
 } from "../../usecases/list-fuel/fuel-list";
+import { compareExportKeys } from "@/shared/pagination/export-keyset";
 
 /**
  * litres × price as the column keeps it: Fuel.total_amount is
@@ -771,8 +772,8 @@ class InMemoryFuelRepository implements IFuelRepository {
         (fuel) =>
           this.matchesBase(fuel, filters) && this.matchesFacets(fuel, filters),
       )
-      // Keyset by id ascending, code-point order like Postgres (not locale).
-      .sort((a, b) => compareForOrder(a.id, b.id, "asc"));
+      // The real one's keyset: created_at, then id in code-point order.
+      .sort(compareExportKeys);
 
     for (const fuel of filtered) {
       const row = this.withListRelations(fuel);

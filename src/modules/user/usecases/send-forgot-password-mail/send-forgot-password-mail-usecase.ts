@@ -10,6 +10,7 @@ import { AppError } from "@/shared/errors/AppError";
 import { logger } from "@/shared/logging/logger";
 import { sendTransactionalMail } from "@/shared/services/transactional-mail-service";
 import { emailLogoUrl } from "@/shared/providers/mail-provider/email-logo";
+import { claimMailCooldown } from "@/shared/security/mail-cooldown";
 
 const log = logger.child({ component: "user" });
 
@@ -25,6 +26,19 @@ class SendForgotPasswordMailUseCase {
   ) {}
 
   async execute(email: string): Promise<void> {
+    /**
+     * One reset e-mail per address a minute, whoever asks
+     * (shared/security/mail-cooldown.ts).
+     *
+     * The route's limit is per caller address, so rotating addresses flooded
+     * one person's inbox — and each new link revoked the one before it.
+     * Claimed before the lookup and for every address, so the cooldown says
+     * nothing about which e-mails have an account; inside it the caller gets
+     * the very same answer and nothing is sent. The link already mailed stays
+     * valid for its hour.
+     */
+    if (!(await claimMailCooldown("forgot-password", email))) return;
+
     const findUserByEmail = await this.user.findUserByEmail(email);
 
     // Nothing to send, and the caller gets the same answer as everyone else.

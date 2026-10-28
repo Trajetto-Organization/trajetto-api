@@ -19,6 +19,7 @@ import {
   type CertificateState,
   type LoadedCertificate,
 } from "./signing-certificate";
+import { isIcpBrasilAt, type IcpTrustStore } from "./icp-brasil-chain";
 
 const log = logger.child({ component: "proof-signing" });
 
@@ -26,6 +27,11 @@ const log = logger.child({ component: "proof-signing" });
  * Bytes reserved in /Contents for the CMS. The model's CMS is 2.5 KB with
  * one certificate; a 3-certificate chain stays well under 8 KB. 16 KB also
  * leaves room for an RFC 3161 timestamp (AD-RT) later.
+ *
+ * Still missing, knowingly: that timestamp. AD-RT needs a timestamp from an
+ * ICP-Brasil accredited TSA (a paid service); until then the signing time
+ * is the server's claim (the /M of the signature dictionary), which is what
+ * AD-RB is.
  */
 const SIGNATURE_LENGTH = 16_384;
 
@@ -58,6 +64,13 @@ interface ProofSigningConfig {
 
   /** Bytes reserved for the CMS; SIGNATURE_LENGTH unless a test shrinks it. */
   signatureLength?: number;
+
+  /**
+   * The roots the certificate's chain must reach for the document to claim
+   * ICP-Brasil validity: the official AC Raiz v5/v10/v11 unless a test
+   * brings its own (icp-brasil-chain.ts).
+   */
+  trustStore?: IcpTrustStore;
 }
 
 /** What one document will be: decided before it is drawn. */
@@ -87,6 +100,8 @@ interface SignatureRecord {
   cert_issuer: string | null;
   cert_not_after: Date | null;
   signed_at: Date | null;
+  /** True only when the chain reached an official ICP-Brasil root. */
+  cert_icp_brasil: boolean | null;
 }
 
 type ProofSigningEnv = Pick<
@@ -145,6 +160,9 @@ function configFromEnv(source: ProofSigningEnv = env): ProofSigningConfig {
 class ProofSigningService {
   private loaded: CertificateState | null = null;
 
+  /** The chain warning is said once per process, not once per receipt. */
+  private chainWarningLogged = false;
+
   constructor(private readonly config: ProofSigningConfig = configFromEnv()) {}
 
   /**
@@ -200,9 +218,40 @@ class ProofSigningService {
     }
 
     return loadSigningCertificate(
-      { pfx, password: this.config.password, disabled: this.config.disabled },
+      {
+        pfx,
+        password: this.config.password,
+        disabled: this.config.disabled,
+        trustStore: this.config.trustStore,
+      },
       now,
     );
+  }
+
+  /**
+   * Whether a document signed now may claim ICP-Brasil validity, logging
+   * once when it may not (a certificate outside the chain, or a chain that
+   * lapsed while the process ran). The reason code only: never the subject,
+   * the serial or the CNPJ.
+   */
+  private icpBrasilAt(certificate: LoadedCertificate, now: Date): boolean {
+    const icp = isIcpBrasilAt(certificate.icpBrasil, now);
+
+    if (!icp && !this.chainWarningLogged) {
+      this.chainWarningLogged = true;
+
+      log.warn(
+        {
+          event: "proof_signing_not_icp_brasil",
+          reason: certificate.icpBrasil.valid
+            ? "OUTSIDE_VALIDITY"
+            : certificate.icpBrasil.reason,
+        },
+        "proof signing certificate does not chain to an ICP-Brasil root; proofs are signed without the legal-validity statement",
+      );
+    }
+
+    return icp;
   }
 
   /**
@@ -224,9 +273,15 @@ class ProofSigningService {
         reason: current.state === "INVALID" ? current.reason : undefined,
         notBefore: certificate?.notBefore.toISOString(),
         notAfter: certificate?.notAfter.toISOString(),
+        icpBrasil: certificate
+          ? isIcpBrasilAt(certificate.icpBrasil, now)
+          : undefined,
       },
       "proof signing certificate state",
     );
+
+    // At boot, so the deploy log says it before the first receipt does.
+    if (current.state === "READY") this.icpBrasilAt(current.certificate, now);
 
     return current;
   }
@@ -283,11 +338,21 @@ class ProofSigningService {
 
     const { certificate } = state;
 
+    const icpBrasil = this.icpBrasilAt(certificate, now);
+
+    // AD-RB names the ICP-Brasil signature policy inside the CMS: claimed by
+    // a certificate outside the chain, it is a statement the ITI's validator
+    // refutes. Such a certificate signs the plain CMS instead.
+    const profile: SignatureProfile = icpBrasil
+      ? this.config.profile
+      : "CMS_DETACHED";
+
     return {
       status: "SIGNED",
       intent: {
         status: "SIGNED",
         signer: { name: certificate.signerName, cnpj: certificate.signerCnpj },
+        icpBrasil,
       },
       placeholder: {
         name: certificate.signerName,
@@ -295,12 +360,12 @@ class ProofSigningService {
         location: this.config.location,
         contactInfo: this.config.contact,
         subFilter:
-          this.config.profile === "PADES_AD_RB"
+          profile === "PADES_AD_RB"
             ? SUBFILTER_ETSI_CADES_DETACHED
             : SUBFILTER_ADOBE_PKCS7_DETACHED,
         signatureLength: this.config.signatureLength ?? SIGNATURE_LENGTH,
       },
-      profile: this.config.profile,
+      profile,
       certificate,
     };
   }
@@ -332,6 +397,7 @@ class ProofSigningService {
         cert_issuer: null,
         cert_not_after: null,
         signed_at: null,
+        cert_icp_brasil: null,
       };
     }
 
@@ -345,6 +411,8 @@ class ProofSigningService {
       cert_issuer: plan.certificate.issuerName,
       cert_not_after: plan.certificate.notAfter,
       signed_at: signedAt,
+      cert_icp_brasil:
+        plan.intent.status === "SIGNED" && plan.intent.icpBrasil === true,
     };
   }
 }

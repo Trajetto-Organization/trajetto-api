@@ -40,6 +40,11 @@ import {
   type FuelListFilters,
   type FuelListGroup,
 } from "../usecases/list-fuel/fuel-list";
+import {
+  EXPORT_ORDER,
+  exportBatchWhere,
+  type ExportKey,
+} from "@/shared/pagination/export-keyset";
 
 /** What a list row carries of its relations (the export reads the same). */
 const FUEL_LIST_INCLUDE = {
@@ -598,12 +603,13 @@ class FuelRepository implements IFuelRepository {
     const whereCondition = fuelListWhere(filters, { withFacets: true });
 
     const batchSize = 1000;
-    let cursor: string | undefined = undefined;
+    let after: ExportKey | null = null;
 
-    // Keyset batches by id: a large export never pays for a growing OFFSET.
+    // Keyset batches in creation order (export-keyset.ts): a large export
+    // never pays for a growing OFFSET, nor for a sub-selected cursor.
     while (true) {
       const fuels: any = await this.prisma.fuel.findMany({
-        where: whereCondition,
+        where: exportBatchWhere(whereCondition, after),
         include: {
           branch: {
             select: { corporate_reason: true },
@@ -628,9 +634,8 @@ class FuelRepository implements IFuelRepository {
             },
           },
         },
-        orderBy: { id: "asc" },
+        orderBy: [...EXPORT_ORDER],
         take: batchSize,
-        ...(cursor && { skip: 1, cursor: { id: cursor } }),
       });
 
       if (fuels.length === 0) break;
@@ -668,7 +673,8 @@ class FuelRepository implements IFuelRepository {
 
       if (fuels.length < batchSize) break;
 
-      cursor = fuels[fuels.length - 1].id;
+      const last: ExportKey = fuels[fuels.length - 1];
+      after = { created_at: last.created_at, id: last.id };
     }
   }
 

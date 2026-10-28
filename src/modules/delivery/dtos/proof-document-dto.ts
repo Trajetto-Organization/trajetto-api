@@ -33,6 +33,12 @@ interface ProofSignatureColumns {
   cert_issuer: string | null;
   cert_not_after: Date | string | null;
   signed_at: Date | string | null;
+  /**
+   * Whether the signer's chain verified up to an official ICP-Brasil root
+   * when the file was signed. Null when unsigned, and on documents signed
+   * before the chain was checked (the issuer's name was all that was read).
+   */
+  cert_icp_brasil?: boolean | null;
 }
 
 interface ProofDocumentRecord extends ProofSignatureColumns {
@@ -104,6 +110,8 @@ interface PublicProofSummary {
     signerName: string | null;
     certNotAfter: Date | string | null;
     signedAt: Date | string | null;
+    /** True only when the chain reached an official ICP-Brasil root. */
+    icpBrasil: boolean | null;
   };
 }
 

@@ -175,10 +175,11 @@ afterAll(async () => {
 describe("recording a flush", () => {
   it.each(both())("%s stores only what is new on a resend", async (name) => {
     expect(batches[name]).toEqual([
-      { stored: 3, dropped: 0 },
-      { stored: 1, dropped: 0 },
-      { stored: 1, dropped: 0 },
-      { stored: 1, dropped: 0 },
+      { stored: 3, dropped: 0, advanced: true },
+      { stored: 1, dropped: 0, advanced: true },
+      // The backlog's newest point (T40) is older than the stored T50.
+      { stored: 1, dropped: 0, advanced: false },
+      { stored: 1, dropped: 0, advanced: true },
     ]);
   });
 });

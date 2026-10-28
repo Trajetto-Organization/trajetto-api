@@ -220,8 +220,9 @@ checksum). Detalhes: `docs/arquitetura.md` ("Migrations: expandir e contrair").
 - O deploy chama a API do Dokploy por `.github/scripts/dokploy-deploy.mjs`
   (`application.deploy` com a chave de API e o id de cada Application, na
   ordem IA → API); a web usa o mesmo script, numa cópia
-  idêntica (um teste da web compara as duas), e repete até 3 vezes um
-  deploy que termina em erro.
+  idêntica (um teste da web compara as duas), e repete até 6 vezes, com
+  espera crescente (20 → 160 s), um deploy que termina em erro, registrando
+  o motivo que o Dokploy deu.
 - Entre repositórios: a ordem do primeiro deploy (bancos → IA → API → backup
   do banco → web → app), a ordem de cada release (**API → web → app**) e os valores que
   precisam casar com a web e o app (`HTTP_REQUEST` = origem da web,
@@ -253,7 +254,10 @@ checksum). Detalhes: `docs/arquitetura.md` ("Migrations: expandir e contrair").
 - Não coloque segredo em código, teste, fixture, log ou documentação (só nomes
   e como gerar).
 - Não introduza broker, cache no Redis nem provedor externo de IA: são
-  decisões registradas (ADRs 0001, 0002, 0010).
+  decisões registradas (ADRs 0001, 0002, 0010). A única exceção ao cache é
+  `src/shared/cache/snapshot-cache.ts`: fotos curtas (30–60 s), que falham
+  aberto, de leituras **da plataforma** que só o MASTER vê; nunca dado de
+  empresa.
 - Não exija Turnstile na API (quebraria o login do app); não ponha `TZ` no
   contêiner.
 - Não crie Compose nem template no Dokploy para staging ou produção (decisão

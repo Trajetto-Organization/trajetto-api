@@ -55,14 +55,16 @@ const listImportsSchema = z.object({
     .optional()
     .describe("Só o MASTER envia; ausente, a empresa do usuário."),
 
-  // Optional and true by default: the web already in production reads the
-  // report from the list row, and must keep finding it there.
+  // Optional and false by default: the tab's generic list fetch never sent
+  // the flag, and every page carried each upload's per-row report (MBs
+  // serialized on the event loop) to draw four counters. No web or app build
+  // reads the report from the row: the dialog fetches it from get-import.
   includeReport: z
     .enum(["true", "false"])
     .optional()
-    .transform((value) => value !== "false")
+    .transform((value) => value === "true")
     .describe(
-      "false deixa o relatório por linha fora de cada item (só os contadores); o relatório de uma importação vem de GET /import/get-import/:importId/business/:businessId. Ausente, o relatório continua em cada item.",
+      "true inclui o relatório por linha em cada item. Ausente ou false, cada item traz só os contadores; o relatório de uma importação vem de GET /import/get-import/:importId/business/:businessId.",
     ),
 
   ...sortFields(IMPORT_SORT_KEYS, IMPORT_SORT_FALLBACK),

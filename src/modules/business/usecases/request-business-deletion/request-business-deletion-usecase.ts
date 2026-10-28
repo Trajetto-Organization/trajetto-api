@@ -18,6 +18,9 @@ import { sendTransactionalMail } from "@/shared/services/transactional-mail-serv
 import { AppError } from "@/shared/errors/AppError";
 
 import { emailLogoUrl } from "@/shared/providers/mail-provider/email-logo";
+import { logger } from "@/shared/logging/logger";
+
+const log = logger.child({ component: "business" });
 
 const CODE_EXPIRATION_MINUTES = 5;
 
@@ -86,31 +89,42 @@ class RequestBusinessDeletionUseCase {
         code_hash: codeHash,
         expires,
       });
-
-      await sendTransactionalMail({
-        email: findUser.email,
-        name: findUser.name,
-        subject: "Código de confirmação para exclusão de empresa",
-        templateName: "business-deletion-code.hbs",
-        moduleName: "business",
-        additionalVariablesProperties: {
-          code,
-          businessName: existingBusiness.corporate_reason,
-          businessCnpj: existingBusiness.cnpj,
-          logo: emailLogoUrl(),
-        },
-      });
-
-      return {
-        message:
-          "Um código de confirmação foi enviado para o seu e-mail. O código expira em 5 minutos.",
-      };
     } catch (error) {
       throw new AppError(
         "Houve um erro ao tentar enviar o código de confirmação! Por favor, tente novamente.",
         500,
       );
     }
+
+    /**
+     * Sent after the answer, never before it: the request used to wait on the
+     * SMTP round trip (10 s timeouts). The code is stored above, and asking
+     * again replaces it with a new one, so a lost e-mail costs one more
+     * request. It carries a secret, so it stays in-process, off the outbox.
+     */
+    void sendTransactionalMail({
+      email: findUser.email,
+      name: findUser.name,
+      subject: "Código de confirmação para exclusão de empresa",
+      templateName: "business-deletion-code.hbs",
+      moduleName: "business",
+      additionalVariablesProperties: {
+        code,
+        businessName: existingBusiness.corporate_reason,
+        businessCnpj: existingBusiness.cnpj,
+        logo: emailLogoUrl(),
+      },
+    }).catch((error) =>
+      log.error(
+        { err: error, userId: findUser.id, businessId },
+        "business deletion code e-mail could not be sent",
+      ),
+    );
+
+    return {
+      message:
+        "Um código de confirmação foi enviado para o seu e-mail. O código expira em 5 minutos.",
+    };
   }
 }
 

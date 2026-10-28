@@ -18,6 +18,9 @@ interface UserRefreshTokenProps {
   family_id: string;
   revoked_at?: Date | null;
   replaced_by_jti?: string | null;
+
+  /** How many siblings this spent token minted within the grace window. */
+  grace_siblings?: number;
 }
 
 interface VerificationToken {
@@ -54,7 +57,8 @@ interface RotateUserRefreshTokenProps {
 
   /**
    * How long after a token was rotated its second presentation still counts
-   * as a race rather than a replay.
+   * as a race rather than a replay. Only the second: a spent token mints at
+   * most one sibling.
    */
   grace_ms: number;
 }
@@ -65,8 +69,10 @@ interface RotateUserRefreshTokenProps {
  * - rotated: the normal case — the token was live and is now spent.
  * - raced: the token was spent moments ago by a request of the same session
  *   (two tabs, parallel prefetches, a phone whose first answer was lost). A
- *   sibling was issued in the same family and nothing is revoked.
- * - reused: the token was spent long ago. Somebody is replaying it.
+ *   sibling was issued in the same family and nothing is revoked. Once per
+ *   spent token: the grace is stamped on its row.
+ * - reused: the token was spent long ago, or already minted its sibling.
+ *   Somebody is replaying it.
  * - unknown: no such token any more — the session ended (logout, expiry,
  *   purge). Nothing to rotate and nothing to alarm about.
  */

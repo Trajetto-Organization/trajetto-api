@@ -168,6 +168,84 @@ describe("a replay outside the grace window", () => {
   });
 });
 
+/**
+ * At most three siblings per spent token. The grace used to mint a live token
+ * on every presentation inside the minute: a copy replayed right after the
+ * legitimate rotation got a working session each time and reuse detection
+ * never fired. A cap of one was too tight the other way: a page whose access
+ * token expired renews from several parallel requests, and the third became
+ * a logout on every device. The row counts its siblings (grace_siblings)
+ * with a conditional UPDATE.
+ */
+describe("a presentation past the grace allowance", () => {
+  it("survives the parallel renewals of one page", async () => {
+    const { refresh: token } = await openSession();
+
+    const statuses = (
+      await Promise.all([
+        refresh(token),
+        refresh(token),
+        refresh(token),
+        refresh(token),
+      ])
+    ).map((response) => response.statusCode);
+
+    expect(statuses).toEqual([200, 200, 200, 200]);
+  });
+
+  it("is reuse: refused, and every session of the account ends", async () => {
+    const { refresh: token, familyId } = await openSession();
+
+    for (let presentation = 0; presentation < 4; presentation += 1) {
+      expect((await refresh(token)).statusCode).toBe(200);
+    }
+
+    const before = await sessionVersion();
+    const fifth = await refresh(token);
+
+    expect(fifth.statusCode).toBe(401);
+    expect(fifth.json().code).toBe("AUTH_REFRESH_REUSED");
+    expect(await sessionVersion()).toBe(before + 1);
+    expect(
+      await prisma.refreshToken.count({ where: { family_id: familyId } }),
+    ).toBe(0);
+  });
+
+  it("grants the last sibling to only one of two late presentations racing on Postgres", async () => {
+    const { refresh: token, familyId } = await openSession();
+
+    for (let presentation = 0; presentation < 3; presentation += 1) {
+      expect((await refresh(token)).statusCode).toBe(200);
+    }
+
+    const before = await sessionVersion();
+    const statuses = (await Promise.all([refresh(token), refresh(token)])).map(
+      (response) => response.statusCode,
+    );
+
+    expect(statuses.sort()).toEqual([200, 401]);
+    expect(await sessionVersion()).toBe(before + 1);
+    expect(
+      await prisma.refreshToken.count({ where: { family_id: familyId } }),
+    ).toBe(0);
+  });
+
+  it("counts the siblings on the spent row", async () => {
+    const { refresh: token } = await openSession();
+
+    const [first, second] = await Promise.all([refresh(token), refresh(token)]);
+
+    expect([first.statusCode, second.statusCode]).toEqual([200, 200]);
+
+    const spent = await prisma.refreshToken.findUniqueOrThrow({
+      where: { token_hash: hashRefreshToken(token) },
+    });
+
+    expect(spent.revoked_at).not.toBeNull();
+    expect(spent.grace_siblings).toBe(1);
+  });
+});
+
 describe("a session that already ended", () => {
   it("is refused without logging out the other devices", async () => {
     const other = await openSession();

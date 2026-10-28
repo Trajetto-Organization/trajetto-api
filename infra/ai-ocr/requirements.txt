@@ -2,8 +2,23 @@
 # Resolved on 05/10/2026 inside python:3.12-slim (linux/amd64) from the
 # benchmark's list (scripts/ai-benchmark/ocr-server/Dockerfile): the wheels
 # are x86_64, so this image builds for amd64 only, as the VPS is.
-# rapidocr itself is in requirements-rapidocr.txt: it declares opencv-python
-# (needs libGL), and the headless build below replaces it.
+#
+# One file per image layer, installed in this order (Dockerfile, stage
+# `base`), least likely to change first, so a bump re-ships its own layer and
+# the ones after it, never the engine before it:
+#   1. requirements-opencv.txt       OpenCV headless (measured; Dependabot ignores it)
+#   2. requirements-onnxruntime.txt  ONNX Runtime (measured; ignored)
+#   3. requirements-rapidocr.txt     RapidOCR (measured; ignored; --no-deps
+#                                    because it declares opencv-python, which
+#                                    needs libGL: the headless build replaces it)
+#   4. requirements-numpy.txt        numpy (minor and patch bumps come in)
+#   5. THIS FILE                     the small libraries Dependabot and the
+#                                    image scan move most often
+# A security bump here re-ships only this layer (~12 MB compressed) instead
+# of the whole closure (~157 MB with the models, 28/10/2026). A new
+# dependency goes in the file of its change frequency; a package must never
+# be in two files (tests/unitaires/lifecycle/image-layers.test.ts).
+#
 # 27/10/2026: certifi 2026.10.18 and Pillow 13.0.0, the fixes of the CRITICAL
 # advisories the image scan reported (GHSA-6q48-6c7w-9gw2; Pillow's decoder
 # CVE-2026-112393/112398/112403/112900). Hashes from PyPI, same wheel tags.
@@ -13,10 +28,7 @@ charset-normalizer==3.5.2 --hash=sha256:3d31298449090ab8d47b7b1b2a555ff73cac7ed4
 colorlog==6.12.0 --hash=sha256:30d392604e9110045a2c2aeefc27d7a017abbab63f3a8aee594eac0801df784e
 flatbuffers==25.12.19 --hash=sha256:7634f50c427838bb021c2d66a3d1168e9d199b0607e6329399f04846d42e20b4
 idna==3.20 --hash=sha256:ab7ae7122974553370f0bdb919e1a960b2cd1bc1ef0276416d896db81c14582c
-numpy==2.2.6 --hash=sha256:fd83c01228a688733f1ded5201c678f0c53ecc1006ffbc404db9f7a899ac6249
 omegaconf==2.3.1 --hash=sha256:3d701d14e9a8828f1edd28bb70b725908b34277cdd72cf7d6a83f94dadc6b6a0
-onnxruntime==1.30.0 --hash=sha256:fa688e7891a6aa206636fe7372e27ee75fd17713289f6b4fc7b190e0a7de9328
-opencv-python-headless==4.12.0.88 --hash=sha256:236c8df54a90f4d02076e6f9c1cc763d794542e886c576a6fee46ec8ff75a7a9
 packaging==26.3 --hash=sha256:d7193f7c8e4e93f444fde0262bf90af30e16fa0ad0ad44cb553c87339b23cd1c
 pillow==13.0.0 --hash=sha256:42d63be3af4f9b951b199b0a9d23365d37ab14687e6d77b74940432c8515c4ca
 protobuf==7.36.2 --hash=sha256:89f23aa53c24553a2416fd4fd1ec06f74fa42b14b546d8883128813f775bbfd2

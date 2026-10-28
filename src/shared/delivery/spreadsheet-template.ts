@@ -38,7 +38,7 @@ const TEMPLATE_COLUMNS: TemplateColumn[] = [
     header: "Tipo",
     aliases: ["tipo de registro", "entrega ou coleta"],
     example: "entrega",
-    help: 'Deixe em branco para "entrega". Use "coleta" para buscar carga no endereço.',
+    help: 'Deixe em branco para "entrega". Use "ordem de serviço" para um serviço no endereço (ex.: recolher cestos retornáveis) ou "coleta" para buscar carga.',
   },
 
   {

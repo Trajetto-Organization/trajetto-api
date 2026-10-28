@@ -19,7 +19,14 @@ const isoDateTime = z.union([z.string(), z.date()]);
 const signatureStatus = z
   .enum(["SIGNED", "UNSIGNED"])
   .describe(
-    "SIGNED: o arquivo guardado tem assinatura ICP-Brasil (decisão 14.8). UNSIGNED: não tem, e o próprio PDF diz isso.",
+    "SIGNED: o arquivo guardado tem assinatura digital (decisão 14.8); se ela vale como ICP-Brasil, quem diz é o campo da cadeia (icp_brasil / icpBrasil). UNSIGNED: não tem, e o próprio PDF diz isso.",
+  );
+
+const icpBrasilChain = z
+  .boolean()
+  .nullable()
+  .describe(
+    "true: a cadeia do certificado foi verificada até uma raiz oficial ICP-Brasil (AC Raiz v5/v10/v11) e o PDF afirma a validade jurídica da MP 2.200-2. false: assinado com certificado fora dessa cadeia, sem essa afirmação. null: sem assinatura, ou assinado antes da verificação da cadeia (só o nome do emissor era lido).",
   );
 
 const signatureProfile = z
@@ -88,6 +95,7 @@ const proofDocumentResponses = {
           .describe("CNPJ do certificado (CN depois de ':'), 14 dígitos."),
         cert_not_after: isoDateTime.nullable(),
         signed_at: isoDateTime.nullable(),
+        icp_brasil: icpBrasilChain,
         unsigned_reason: z
           .enum([
             "LEGACY",
@@ -149,6 +157,7 @@ const proofDocumentResponses = {
             signerName: z.string().nullable(),
             certNotAfter: isoDateTime.nullable(),
             signedAt: isoDateTime.nullable(),
+            icpBrasil: icpBrasilChain,
           })
           .describe(
             "O que registramos sobre a assinatura do arquivo. Não afirma validade jurídica: quem a confere é o validar.iti.gov.br, com o PDF.",

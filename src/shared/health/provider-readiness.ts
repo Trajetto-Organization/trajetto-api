@@ -2,7 +2,13 @@ import { HeadBucketCommand, S3Client } from "@aws-sdk/client-s3";
 import { container } from "tsyringe";
 
 import { env } from "@/env";
+import { RedisConnection } from "@/../infra/cache/redis-connection";
 import { uploadConfig } from "@/config/upload";
+import {
+  SnapshotCache,
+  redisSnapshotStore,
+  type SnapshotStore,
+} from "@/shared/cache/snapshot-cache";
 import { senderDomain } from "@/shared/providers/mail-provider/message-id";
 import { TEMPLATE_LANGUAGE } from "@/shared/providers/whatsapp-provider/implementations/meta-cloud-api-provider";
 import {
@@ -114,14 +120,26 @@ interface ReadinessDeps {
   timeoutMs?: number;
 }
 
-/** A probe slower than this counts as unreachable; the page waits for all. */
-const PROBE_TIMEOUT_MS = 5_000;
+/**
+ * A probe slower than this counts as unreachable; the page waits for all.
+ *
+ * 2.5 s, not 5: every provider answers a healthy probe in well under a
+ * second, and the Sistema screen waited for the slowest one — with the
+ * templates and the OCR token checked one after the other, a single provider
+ * having a bad minute held the page for 10–15 s.
+ */
+const PROBE_TIMEOUT_MS = 2_500;
 
 /** A certificate this close to its end is a warning (the alert's 30 days). */
 const CERTIFICATE_WARN_DAYS = 30;
 
 /** A heartbeat older than this on the replica that answered says nothing. */
 const HEARTBEAT_FRESH_MS = 5 * 60 * 1000;
+
+/** "2,5 s": the panel reads pt-BR, and 2.5 s is no longer a whole number. */
+function seconds(ms: number): string {
+  return `${(ms / 1000).toLocaleString("pt-BR")} s`;
+}
 
 function missing(
   env: ReadinessEnv,
@@ -326,7 +344,7 @@ async function checkEmail(deps: ReadinessDeps): Promise<ProviderReadiness> {
       reachable: false,
       message:
         failureKind(error) === "timeout"
-          ? `O Resend não respondeu em ${timeoutMs / 1000}s.`
+          ? `O Resend não respondeu em ${seconds(timeoutMs)}.`
           : "Sem rota até o Resend (rede ou DNS).",
       warnings,
       details: { sender_domain: domain },
@@ -368,68 +386,110 @@ async function checkTemplates(
   const problems: string[] = [];
   const warnings: string[] = [];
 
-  for (const name of names) {
-    try {
-      const url =
-        `https://graph.facebook.com/${env.META_WHATSAPP_API_VERSION}/` +
-        `${env.META_WHATSAPP_BUSINESS_ACCOUNT_ID}/message_templates` +
-        `?name=${encodeURIComponent(name)}&fields=name,status,language&limit=100`;
+  /**
+   * One probe per template, side by side: each is a GET of its own, and in a
+   * loop the page waited for the sum of their timeouts. The verdicts are
+   * collected in the templates' order, so the messages read the same.
+   */
+  const verdicts = await Promise.all(
+    names.map((name) => checkTemplate(deps, name)),
+  );
 
-      const response = await deps.fetch(url, {
-        method: "GET",
-        headers: { Authorization: `Bearer ${env.META_WHATSAPP_ACCESS_TOKEN}` },
-        signal: AbortSignal.timeout(deps.timeoutMs ?? PROBE_TIMEOUT_MS),
-      });
-      const body = (await readJson(response)) as
-        | ({
-            data?: Array<{ name?: string; status?: string; language?: string }>;
-          } & MetaError)
-        | null;
-
-      if (!response.ok) {
-        details[`template:${name}`] = "UNKNOWN";
-        warnings.push(
-          `A lista de templates não pôde ser lida (HTTP ${response.status}${
-            body?.error?.code ? `, código ${body.error.code}` : ""
-          }): confira META_WHATSAPP_BUSINESS_ACCOUNT_ID e a permissão whatsapp_business_management do token.`,
-        );
-        continue;
-      }
-
-      const matches = (body?.data ?? []).filter((item) => item.name === name);
-      const entry =
-        matches.find((item) => item.language === TEMPLATE_LANGUAGE) ??
-        matches[0];
-
-      if (!entry) {
-        details[`template:${name}`] = "MISSING";
-        problems.push(`O template ${name} não existe na conta.`);
-        continue;
-      }
-
-      const status = entry.status ?? "UNKNOWN";
-      details[`template:${name}`] = status;
-
-      if (status !== "APPROVED") {
-        problems.push(
-          `O template ${name} está ${status}, não APPROVED: os envios com ele falham.`,
-        );
-      } else if (entry.language && entry.language !== TEMPLATE_LANGUAGE) {
-        warnings.push(
-          `O template ${name} está aprovado em ${entry.language}, mas os envios pedem ${TEMPLATE_LANGUAGE}.`,
-        );
-      }
-    } catch (error) {
-      details[`template:${name}`] = "UNKNOWN";
-      warnings.push(
-        failureKind(error) === "timeout"
-          ? `A Meta não respondeu sobre o template ${name}.`
-          : `Sem rota até a Meta ao conferir o template ${name}.`,
-      );
-    }
+  for (const verdict of verdicts) {
+    Object.assign(details, verdict.details);
+    problems.push(...verdict.problems);
+    warnings.push(...verdict.warnings);
   }
 
   return { details, problems, warnings };
+}
+
+/** One template's approval, as one GET of the account's template list. */
+async function checkTemplate(
+  deps: ReadinessDeps,
+  name: string,
+): Promise<{
+  details: Record<string, DetailValue>;
+  problems: string[];
+  warnings: string[];
+}> {
+  const { env } = deps;
+  const key = `template:${name}`;
+
+  try {
+    const url =
+      `https://graph.facebook.com/${env.META_WHATSAPP_API_VERSION}/` +
+      `${env.META_WHATSAPP_BUSINESS_ACCOUNT_ID}/message_templates` +
+      `?name=${encodeURIComponent(name)}&fields=name,status,language&limit=100`;
+
+    const response = await deps.fetch(url, {
+      method: "GET",
+      headers: { Authorization: `Bearer ${env.META_WHATSAPP_ACCESS_TOKEN}` },
+      signal: AbortSignal.timeout(deps.timeoutMs ?? PROBE_TIMEOUT_MS),
+    });
+    const body = (await readJson(response)) as
+      | ({
+          data?: Array<{ name?: string; status?: string; language?: string }>;
+        } & MetaError)
+      | null;
+
+    if (!response.ok) {
+      return {
+        details: { [key]: "UNKNOWN" },
+        problems: [],
+        warnings: [
+          `A lista de templates não pôde ser lida (HTTP ${response.status}${
+            body?.error?.code ? `, código ${body.error.code}` : ""
+          }): confira META_WHATSAPP_BUSINESS_ACCOUNT_ID e a permissão whatsapp_business_management do token.`,
+        ],
+      };
+    }
+
+    const matches = (body?.data ?? []).filter((item) => item.name === name);
+    const entry =
+      matches.find((item) => item.language === TEMPLATE_LANGUAGE) ?? matches[0];
+
+    if (!entry) {
+      return {
+        details: { [key]: "MISSING" },
+        problems: [`O template ${name} não existe na conta.`],
+        warnings: [],
+      };
+    }
+
+    const status = entry.status ?? "UNKNOWN";
+
+    if (status !== "APPROVED") {
+      return {
+        details: { [key]: status },
+        problems: [
+          `O template ${name} está ${status}, não APPROVED: os envios com ele falham.`,
+        ],
+        warnings: [],
+      };
+    }
+
+    return {
+      details: { [key]: status },
+      problems: [],
+      warnings:
+        entry.language && entry.language !== TEMPLATE_LANGUAGE
+          ? [
+              `O template ${name} está aprovado em ${entry.language}, mas os envios pedem ${TEMPLATE_LANGUAGE}.`,
+            ]
+          : [],
+    };
+  } catch (error) {
+    return {
+      details: { [key]: "UNKNOWN" },
+      problems: [],
+      warnings: [
+        failureKind(error) === "timeout"
+          ? `A Meta não respondeu sobre o template ${name}.`
+          : `Sem rota até a Meta ao conferir o template ${name}.`,
+      ],
+    };
+  }
 }
 
 async function checkWhatsApp(deps: ReadinessDeps): Promise<ProviderReadiness> {
@@ -466,6 +526,11 @@ async function checkWhatsApp(deps: ReadinessDeps): Promise<ProviderReadiness> {
       ].filter((name): name is string => Boolean(name)),
     ),
   ];
+
+  // The templates are read side by side with the number, not after it: the
+  // page waited for the number's probe plus each template's. Their verdict
+  // is only used when the number answered; checkTemplates never throws.
+  const templatesCheck = checkTemplates(deps, templates);
 
   try {
     const { value: response, ms } = await timed(() =>
@@ -505,7 +570,7 @@ async function checkWhatsApp(deps: ReadinessDeps): Promise<ProviderReadiness> {
       });
     }
 
-    const checked = await checkTemplates(deps, templates);
+    const checked = await templatesCheck;
     const quality = body?.quality_rating ?? null;
     const warnings = [...checked.warnings, ...webhookWarnings];
 
@@ -539,7 +604,7 @@ async function checkWhatsApp(deps: ReadinessDeps): Promise<ProviderReadiness> {
       reachable: false,
       message:
         failureKind(error) === "timeout"
-          ? `A Meta não respondeu em ${timeoutMs / 1000}s.`
+          ? `A Meta não respondeu em ${seconds(timeoutMs)}.`
           : "Sem rota até a Meta (rede ou DNS).",
       warnings: webhookWarnings,
     });
@@ -585,7 +650,7 @@ async function checkPush(deps: ReadinessDeps): Promise<ProviderReadiness> {
       reachable: false,
       message:
         failureKind(error) === "timeout"
-          ? `A Expo não respondeu em ${timeoutMs / 1000}s.`
+          ? `A Expo não respondeu em ${seconds(timeoutMs)}.`
           : "Sem rota até a Expo (rede ou DNS).",
       details: { fcm_credentials: "eas" },
     });
@@ -679,7 +744,7 @@ async function checkStorage(deps: ReadinessDeps): Promise<ProviderReadiness> {
       reachable: false,
       message:
         failureKind(error) === "timeout"
-          ? `O R2 não respondeu em ${timeoutMs / 1000}s.`
+          ? `O R2 não respondeu em ${seconds(timeoutMs)}.`
           : "Sem rota até o R2 (rede ou DNS).",
       details: { storage: "r2", bucket: env.R2_BUCKET_NAME ?? null },
     });
@@ -728,6 +793,29 @@ async function checkAiOcr(deps: ReadinessDeps): Promise<ProviderReadiness> {
     // Left as typed; the schema already requires a URL.
   }
 
+  /**
+   * The token check starts with /health instead of after it: the two are
+   * independent requests, and in sequence the page waited for both timeouts
+   * when the service was slow. Its outcome is only read once /health
+   * answered, and it is settled here so a failure never goes unhandled.
+   *
+   * The service checks the token before anything else, so an empty request
+   * with an unknown profile answers 401 for a wrong token and 400 for a
+   * right one, without reading a photo or taking the slot. No hand-written
+   * Content-Length: fetch sets it for the empty body, as it does for the
+   * readings (local-ocr-reader.ts), which work.
+   */
+  const tokenProbe = deps
+    .fetch(`${url}/v1/read?profile=readiness-probe`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${env.AI_LOCAL_TOKEN}` },
+      signal: AbortSignal.timeout(timeoutMs),
+    })
+    .then(
+      (answer) => ({ ok: true as const, answer }),
+      (error: unknown) => ({ ok: false as const, error }),
+    );
+
   let response: Response;
   let ms: number;
 
@@ -744,7 +832,7 @@ async function checkAiOcr(deps: ReadinessDeps): Promise<ProviderReadiness> {
       reachable: false,
       message:
         failureKind(error) === "timeout"
-          ? `O serviço em ${host} não respondeu em ${timeoutMs / 1000}s.`
+          ? `O serviço em ${host} não respondeu em ${seconds(timeoutMs)}.`
           : `Sem rota até ${host} (${networkCode(error)}): confira se a Application trajetto-ai está de pé e se AI_LOCAL_URL usa o App Name dela (http://<App Name>:8080), não o Name.`,
     });
   }
@@ -776,26 +864,16 @@ async function checkAiOcr(deps: ReadinessDeps): Promise<ProviderReadiness> {
       });
     }
 
-    // The token: the service checks it before anything else, so an empty
-    // request with an unknown profile answers 401 for a wrong token and 400
-    // for a right one, without reading a photo or taking the slot.
-    // No hand-written Content-Length: fetch sets it for the empty body, as it
-    // does for the readings (local-ocr-reader.ts), which work.
-    const tokenProbe = await deps.fetch(
-      `${url}/v1/read?profile=readiness-probe`,
-      {
-        method: "POST",
-        headers: { Authorization: `Bearer ${env.AI_LOCAL_TOKEN}` },
-        signal: AbortSignal.timeout(timeoutMs),
-      },
-    );
+    const token = await tokenProbe;
+
+    if (!token.ok) throw token.error;
 
     const details = {
       engine: body?.engine ?? null,
       engine_version: body?.engineVersion ?? null,
     };
 
-    if (tokenProbe.status === 401) {
+    if (token.answer.status === 401) {
       return base("ai_ocr", label, {
         status: "error",
         reachable: true,
@@ -820,7 +898,7 @@ async function checkAiOcr(deps: ReadinessDeps): Promise<ProviderReadiness> {
       latency_ms: ms,
       message:
         failureKind(error) === "timeout"
-          ? `O serviço em ${host} respondeu /health, mas a conferência do token não respondeu em ${timeoutMs / 1000}s.`
+          ? `O serviço em ${host} respondeu /health, mas a conferência do token não respondeu em ${seconds(timeoutMs)}.`
           : `O serviço em ${host} respondeu /health, mas a conferência do token falhou (${networkCode(error)}).`,
     });
   }
@@ -998,41 +1076,59 @@ function productionDeps(): ReadinessDeps {
 }
 
 /**
- * Probes are cached per replica for this long, and concurrent readers share
- * one probe: refreshing the screen must not turn into calls to Meta.
+ * Probes are cached for this long, and concurrent readers share one probe:
+ * refreshing the screen must not turn into calls to Meta. The report is
+ * platform configuration only (variable names, states, latencies), so the
+ * copy is shared by the replicas through Redis (snapshot-cache.ts): the
+ * replica the next request lands on serves it instead of probing again.
  */
 const READINESS_CACHE_MS = 30 * 1000;
 
-let cached: { at: number; report: ProviderReadinessReport } | null = null;
-let inFlight: Promise<ProviderReadinessReport> | null = null;
+/**
+ * `refresh=true` probes again only once the report is this old: the button
+ * pressed in a loop is one round of probes per interval, not one per click.
+ */
+const READINESS_REFRESH_MIN_MS = 5 * 1000;
 
-async function readProviderReadiness(
-  { refresh = false }: { refresh?: boolean } = {},
-  deps: () => ReadinessDeps = productionDeps,
-): Promise<ProviderReadinessReport & { cached: boolean }> {
-  if (!refresh && cached && Date.now() - cached.at < READINESS_CACHE_MS) {
-    return { ...cached.report, cached: true };
-  }
-
-  inFlight ??= checkProviders(deps()).finally(() => {
-    inFlight = null;
+function readinessCache(
+  deps: () => ReadinessDeps,
+  store: SnapshotStore | null,
+): SnapshotCache<ProviderReadinessReport> {
+  return new SnapshotCache({
+    name: "provider-readiness",
+    ttlMs: READINESS_CACHE_MS,
+    minRefreshMs: READINESS_REFRESH_MIN_MS,
+    compute: () => checkProviders(deps()),
+    store,
   });
-
-  const report = await inFlight;
-
-  cached = { at: Date.now(), report };
-
-  return { ...report, cached: false };
 }
 
-/** For tests: forget the cached report. */
+let cache: SnapshotCache<ProviderReadinessReport> | null = null;
+
+async function readProviderReadiness({
+  refresh = false,
+}: { refresh?: boolean } = {}): Promise<
+  ProviderReadinessReport & { cached: boolean }
+> {
+  cache ??= readinessCache(
+    productionDeps,
+    redisSnapshotStore(() => RedisConnection.getInstance().getClient()),
+  );
+
+  const { value, cached } = await cache.read({ refresh });
+
+  return { ...value, cached };
+}
+
+/** For tests: forget this replica's cached report. */
 function resetProviderReadinessCache(): void {
-  cached = null;
-  inFlight = null;
+  cache?.reset();
 }
 
 export {
+  PROBE_TIMEOUT_MS,
   READINESS_CACHE_MS,
+  READINESS_REFRESH_MIN_MS,
   checkAiOcr,
   checkEmail,
   checkHeartbeat,

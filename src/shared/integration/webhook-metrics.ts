@@ -1,3 +1,5 @@
+import { Prisma } from "@prisma/client";
+
 import database from "@/../infra/database";
 
 import { ENDPOINT_PAUSED_REASON } from "./webhook-dispatch-rules";
@@ -33,14 +35,9 @@ interface WebhookQueueMetrics {
  * carries its real error. A "more than a day ahead" rule missed every held row
  * in the last day of its window — the ones about to be closed unsent.
  */
-async function readWebhookQueueMetrics(): Promise<WebhookQueueMetrics> {
-  const [queue] = await database.$queryRaw<
-    Array<{
-      pending_due: number;
-      held: number;
-      oldest_due_seconds: number | null;
-    }>
-  >`
+/** The queue's three numbers, one row (partial webhook_delivery_claim_idx). */
+function webhookQueueSql(): Prisma.Sql {
+  return Prisma.sql`
     SELECT
       count(*) FILTER (WHERE "availableAt" <= now())::int AS pending_due,
       count(*) FILTER (
@@ -52,12 +49,29 @@ async function readWebhookQueueMetrics(): Promise<WebhookQueueMetrics> {
     FROM "webhook_delivery"
     WHERE "status" = 'PENDING'
   `;
+}
 
-  const [endpoints] = await database.$queryRaw<Array<{ disabled: number }>>`
+/** Endpoints switched off, across every tenant. */
+function webhookDisabledEndpointsSql(): Prisma.Sql {
+  return Prisma.sql`
     SELECT count(*)::int AS disabled
     FROM "webhook_endpoint"
     WHERE "disabled_at" IS NOT NULL
   `;
+}
+
+async function readWebhookQueueMetrics(): Promise<WebhookQueueMetrics> {
+  const [queue] = await database.$queryRaw<
+    Array<{
+      pending_due: number;
+      held: number;
+      oldest_due_seconds: number | null;
+    }>
+  >(webhookQueueSql());
+
+  const [endpoints] = await database.$queryRaw<Array<{ disabled: number }>>(
+    webhookDisabledEndpointsSql(),
+  );
 
   return {
     pending_due: queue?.pending_due ?? 0,
@@ -67,4 +81,9 @@ async function readWebhookQueueMetrics(): Promise<WebhookQueueMetrics> {
   };
 }
 
-export { readWebhookQueueMetrics, type WebhookQueueMetrics };
+export {
+  readWebhookQueueMetrics,
+  webhookDisabledEndpointsSql,
+  webhookQueueSql,
+  type WebhookQueueMetrics,
+};

@@ -578,6 +578,20 @@ const envSchema = z
             "JWT_SECRET_REFRESH_TOKEN deve ser diferente de JWT_SECRET: a mesma chave assinaria os dois tipos de token.",
         });
       }
+
+      // Without the secret the API skips the bot check of the public quote
+      // form (the one form the API checks itself; login and recovery are
+      // checked by the web, and the app's login is never challenged) and only
+      // logged a warning once: a variable missing in a deploy silently opened
+      // it to scripts.
+      if (!env.TURNSTILE_SECRET_KEY) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["TURNSTILE_SECRET_KEY"],
+          message:
+            "TURNSTILE_SECRET_KEY é obrigatório em staging e produção: sem ele o formulário público de orçamento fica sem verificação de robô.",
+        });
+      }
     }
 
     if (env.NODE_ENV !== "production") return;

@@ -30,7 +30,9 @@ import { makeTestSigningCertificate } from "../../support/test-signing-certifica
 /**
  * The ICP-Brasil signature of the proof PDF (decision 14.8, design §6),
  * proven on a real rendered and signed file with a certificate generated
- * HERE (self-signed, "O=ICP-Brasil" in name only — never a real one).
+ * HERE — never a real one. `config()` chains it to a test root the service
+ * is told to trust in place of the official roots, so it takes the ICP path;
+ * a certificate outside any chain is icp-brasil-chain.test.ts's subject.
  *
  * The signature is verified independently of the code that made it: the
  * CMS is parsed from the PDF's /Contents with forge's ASN.1 reader, the
@@ -81,7 +83,7 @@ function source(): ProofDocumentSource {
 function config(
   overrides: Partial<ProofSigningConfig> = {},
 ): ProofSigningConfig {
-  const certificate = makeTestSigningCertificate();
+  const certificate = makeTestSigningCertificate({ chain: "test-root" });
 
   return {
     pfx: certificate.pfx,
@@ -90,6 +92,7 @@ function config(
     disabled: false,
     location: "Rio de Janeiro, RJ",
     contact: "suporte@trajetto.com.br",
+    trustStore: certificate.trustStore,
     ...overrides,
   };
 }
@@ -400,11 +403,6 @@ describe("the platform certificate", () => {
       "KEY_CERTIFICATE_MISMATCH",
     ],
     [
-      "an issuer outside ICP-Brasil",
-      { organization: "Outra AC" },
-      "NOT_ICP_BRASIL",
-    ],
-    [
       "a key usage that does not allow signing",
       {
         keyUsage: {
@@ -614,6 +612,7 @@ describe("a signed proof PDF (PAdES ICP-Brasil AD-RB)", () => {
     expect(plan.intent).toEqual({
       status: "SIGNED",
       signer: { name: "TRAJETTO SISTEMAS TESTE LTDA", cnpj: "11222333000181" },
+      icpBrasil: true,
     });
     expect(
       ProofSigningService.record(plan, new Date("2026-10-05T12:00:00Z")),
@@ -623,6 +622,7 @@ describe("a signed proof PDF (PAdES ICP-Brasil AD-RB)", () => {
       signature_profile: "PADES_AD_RB",
       signer_name: "TRAJETTO SISTEMAS TESTE LTDA",
       signer_cnpj: "11222333000181",
+      cert_icp_brasil: true,
     });
   });
 

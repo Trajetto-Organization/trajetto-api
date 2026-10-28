@@ -34,7 +34,7 @@ import database from "@/../infra/database";
 import { buildSearchOr } from "@/shared/pagination/search-or";
 import { resolveOrderBy } from "@/shared/pagination/list-query";
 import { deliveryExportRow, occurrenceExportRow } from "./export-rows";
-import { narrowDeliverySearch } from "./delivery-search";
+import { narrowDeliverySearch, resolveDeliveryPeriod } from "./delivery-search";
 import { narrowOccurrenceSearch } from "./occurrence-search";
 
 import {
@@ -212,10 +212,17 @@ class DeliveryRepository implements IDeliveryRepository {
   }: ListDeliveriesProps): Promise<ListDeliveriesPage> {
     const skip = (page - 1) * pageSize;
 
+    // An exact id / order / NF search ignores the period (a notification's
+    // link finds last week's delivery); any other search stays inside it.
+    const { filters: periodic, periodApplied } = await resolveDeliveryPeriod(
+      this.prisma,
+      requested,
+    );
+
     // A selective search becomes the ids it matches (trigram index), so the
     // page and the three counts below read those rows instead of the
     // company's whole history each.
-    const filters = await narrowDeliverySearch(this.prisma, requested);
+    const filters = await narrowDeliverySearch(this.prisma, periodic);
 
     // The page and the counts side by side (the two connections a screen may
     // hold). The counts replace a count(*): the pager total and the cards
@@ -265,6 +272,7 @@ class DeliveryRepository implements IDeliveryRepository {
 
     return {
       data: data as Delivery[],
+      periodApplied,
       statusCounts: byStatus.map((group) => ({
         value: group.status,
         count: group._count._all,
@@ -294,12 +302,14 @@ class DeliveryRepository implements IDeliveryRepository {
    * Each facet is counted without its own filter (deliveryListWhere's
    * `except`), so with any facet chosen the three `where`s differ and stay
    * three grouped reads, one after the other. In the board's default view
-   * (the `where` is only the tenant, see isTenantOnlyDeliveryList) the three are the SAME `where` — the company's
-   * whole history — and reading it three times was the heaviest database
-   * work of the load test: 64 + 64 + 28 ms per page on a tenant with 300k
-   * deliveries, a third of the database CPU at 120 req/s
-   * (docs/desempenho/carga-2026-10.md). There, one index-only scan with
-   * GROUPING SETS answers all three.
+   * (the `where` is only the tenant and the period, see
+   * isTenantOnlyDeliveryList) the three are the SAME `where` — the
+   * company's whole history without a period — and reading it three times
+   * was the heaviest database work of the load test: 64 + 64 + 28 ms per page
+   * on a tenant with 300k deliveries, a third of the database CPU at 120
+   * req/s (docs/desempenho/carga-2026-10.md). There, one scan with GROUPING
+   * SETS answers all three, inside the period when there is one (the cards
+   * and the pager count what the table lists, never the whole history).
    */
   private async countListFacets(
     filters: Awaited<ReturnType<typeof narrowDeliverySearch>>,
@@ -312,6 +322,17 @@ class DeliveryRepository implements IDeliveryRepository {
       const scope = filters.scopeDriverId
         ? Prisma.sql`AND "driverId" = ${filters.scopeDriverId}`
         : Prisma.empty;
+
+      // The period, as deliveryListWhere writes it: [createdFrom, createdTo).
+      const period = Prisma.sql`${
+        filters.createdFrom
+          ? Prisma.sql`AND "created_at" >= ${filters.createdFrom}`
+          : Prisma.empty
+      } ${
+        filters.createdTo
+          ? Prisma.sql`AND "created_at" < ${filters.createdTo}`
+          : Prisma.empty
+      }`;
 
       const rows = await this.prisma.$queryRaw<
         Array<{
@@ -327,7 +348,7 @@ class DeliveryRepository implements IDeliveryRepository {
           GROUPING("status", "shipperId", "driverId")::int AS "set",
           count(*)::int AS "count"
         FROM "public"."delivery"
-        WHERE "businessId" = ${filters.businessId} ${scope}
+        WHERE "businessId" = ${filters.businessId} ${scope} ${period}
         GROUP BY GROUPING SETS (("status"), ("shipperId"), ("driverId"))
       `;
 
@@ -1037,9 +1058,14 @@ class DeliveryRepository implements IDeliveryRepository {
     filters: DeliveryListFilters,
   ): AsyncGenerator<Record<string, unknown>> {
     // The listing's own `where` (decision 5.8): the file is what the screen
-    // shows — the id and the driver searches, and every facet, included.
+    // shows — the period (and its exact-search exception), the id and the
+    // driver searches, and every facet, included.
+    const { filters: periodic } = await resolveDeliveryPeriod(
+      this.prisma,
+      filters,
+    );
     const where = deliveryListWhere(
-      await narrowDeliverySearch(this.prisma, filters),
+      await narrowDeliverySearch(this.prisma, periodic),
     );
 
     const batchSize = 1000;

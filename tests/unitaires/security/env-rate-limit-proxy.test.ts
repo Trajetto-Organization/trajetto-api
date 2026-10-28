@@ -17,6 +17,7 @@ const production = {
   HTTP_REQUEST: "https://app.example.com",
   JWT_SECRET: "a".repeat(32),
   JWT_SECRET_REFRESH_TOKEN: "b".repeat(32),
+  TURNSTILE_SECRET_KEY: "0x4AAAAAAATEST-turnstile-secret",
   MASTER_USER_EMAIL: "master@example.com",
   MASTER_USER_INITIAL_PASSWORD: "x",
   UPLOAD_STORAGE_TYPE: "r2",

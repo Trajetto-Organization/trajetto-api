@@ -2,6 +2,13 @@ import type { CountBasis } from "../../shared/count-comparison";
 
 interface DashboardOverviewRequest {
   userId: string;
+
+  /**
+   * The modules the user's company hired, as this request's session lookup
+   * already loaded them (request.user.entitlements). Absent or null, they
+   * are read from the database.
+   */
+  entitlements?: Array<{ module: string; enabled: boolean }> | null;
 }
 
 interface EntityCount {

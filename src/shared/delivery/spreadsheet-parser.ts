@@ -5,6 +5,7 @@ import {
   normalizeHeader,
 } from "./spreadsheet-template";
 import { dateOnlyFromKey } from "@/shared/time/business-day";
+import type { DeliveryKind } from "./delivery-kind";
 
 /**
  * Turning a spreadsheet into deliveries, decided here and nowhere else.
@@ -25,7 +26,7 @@ interface ParsedRow {
   /** 1-based, as the operator sees it in the spreadsheet (header is row 1). */
   line: number;
 
-  kind: "DELIVERY" | "PICKUP";
+  kind: DeliveryKind;
 
   recipient_name: string;
   recipient_document: string | null;
@@ -155,11 +156,28 @@ function parseDecimal(raw: string): number | "invalid" | null {
   return Number.isFinite(parsed) ? parsed : "invalid";
 }
 
-function parseKind(raw: string): "DELIVERY" | "PICKUP" | "invalid" {
+/**
+ * The service order's spellings (meeting of 14/10/2026): what a dispatcher
+ * types in a cell, folded by normalizeHeader like the cell itself (accents,
+ * case, "_" and "." — so "SERVICE_ORDER" and "O.S." match too).
+ */
+const SERVICE_ORDER_WORDS = new Set(
+  [
+    "ordem de serviço",
+    "ordem serviço",
+    "OS",
+    "O.S.",
+    "serviço",
+    "SERVICE_ORDER",
+  ].map(normalizeHeader),
+);
+
+function parseKind(raw: string): DeliveryKind | "invalid" {
   const value = normalizeHeader(raw);
 
   if (!value || value === "entrega" || value === "delivery") return "DELIVERY";
   if (value === "coleta" || value === "pickup") return "PICKUP";
+  if (SERVICE_ORDER_WORDS.has(value)) return "SERVICE_ORDER";
 
   return "invalid";
 }
@@ -271,7 +289,7 @@ function parseDeliverySpreadsheet(matrix: unknown[][]): ParseResult {
     const kind = parseKind(read("tipo"));
 
     if (kind === "invalid") {
-      fail(headerOf("tipo"), 'Use "entrega" ou "coleta".');
+      fail(headerOf("tipo"), 'Use "entrega", "ordem de serviço" ou "coleta".');
     }
 
     const recipient_name = read("recipient_name");
@@ -389,7 +407,7 @@ function parseDeliverySpreadsheet(matrix: unknown[][]): ParseResult {
 
     rows.push({
       line,
-      kind: kind as "DELIVERY" | "PICKUP",
+      kind: kind as DeliveryKind,
 
       recipient_name,
       recipient_document: documentDigits || null,

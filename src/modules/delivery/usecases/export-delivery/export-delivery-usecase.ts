@@ -18,14 +18,20 @@ import { businessDateKey, resolveTimeZone } from "@/shared/time/business-day";
 import { IBusinessRepository } from "@/modules/business/repositories/IBusiness-repository";
 import { formatDateOnlyBR } from "@/shared/delivery/date-only-field";
 import { formatInstant } from "@/shared/vehicle/record-dates";
+import type { DeliveryKind } from "@/shared/delivery/delivery-kind";
+import {
+  deliveryPeriodWindow,
+  type DeliveryPeriodInput,
+} from "@/modules/delivery/usecases/list-delivery/delivery-period";
 
-interface ExportDeliveryRequest {
+interface ExportDeliveryRequest extends DeliveryPeriodInput {
   userId: string;
   businessId?: string;
   search?: string;
   statuses?: DeliveryStatus[];
   shipperIds?: string[];
   driverIds?: string[];
+  kinds?: DeliveryKind[];
 }
 
 /**
@@ -58,6 +64,10 @@ class ExportDeliveryUseCase {
     statuses,
     shipperIds,
     driverIds,
+    kinds,
+    period,
+    from,
+    to,
   }: ExportDeliveryRequest): Promise<{
     iterator: AsyncGenerator<any>;
     columns: ExportColumn[];
@@ -79,6 +89,17 @@ class ExportDeliveryUseCase {
 
     assertTenantAccess(findUser, resolvedBusinessId);
 
+    // The company's zone (decision 1.1): the period's days, the day in the
+    // file name and the hour in "Entregue em", which the server's zone (UTC)
+    // put a day ahead from 21:00 in São Paulo.
+    const findBusiness =
+      await this.business.findBusinessById(resolvedBusinessId);
+    const timeZone = resolveTimeZone(
+      (findBusiness as { timezone?: string | null } | null)?.timezone,
+    );
+
+    const window = deliveryPeriodWindow({ period, from, to }, timeZone);
+
     // The listing's filters, so the file is what the screen shows (decision
     // 5.8). A driver exporting gets their own work, as their listing does.
     const iterator = this.delivery.streamDeliveriesForExport({
@@ -88,16 +109,10 @@ class ExportDeliveryUseCase {
       statuses,
       shipperIds,
       driverIds,
+      kinds,
+      createdFrom: window?.start,
+      createdTo: window?.end,
     });
-
-    // The company's zone (decision 1.1): the day in the file name and the
-    // hour in "Entregue em", which the server's zone (UTC) put a day ahead
-    // from 21:00 in São Paulo.
-    const findBusiness =
-      await this.business.findBusinessById(resolvedBusinessId);
-    const timeZone = resolveTimeZone(
-      (findBusiness as { timezone?: string | null } | null)?.timezone,
-    );
 
     const columns: ExportColumn[] = [
       {
@@ -128,6 +143,14 @@ class ExportDeliveryUseCase {
         header: "Status",
         key: "status",
         width: 14,
+        formatter: ExportFormatters.fallback,
+      },
+      // Meeting of 14/10/2026: "Entrega" / "Ordem de serviço" / "Coleta".
+      // After Status, so the columns before it keep their place.
+      {
+        header: "Tipo",
+        key: "kind",
+        width: 18,
         formatter: ExportFormatters.fallback,
       },
       {

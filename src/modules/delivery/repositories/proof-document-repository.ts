@@ -28,6 +28,7 @@ function signatureColumns(data: ProofSignatureColumns) {
     cert_issuer: data.cert_issuer,
     cert_not_after: data.cert_not_after ? new Date(data.cert_not_after) : null,
     signed_at: data.signed_at ? new Date(data.signed_at) : null,
+    cert_icp_brasil: data.cert_icp_brasil ?? null,
   };
 }
 
@@ -221,6 +222,8 @@ class ProofDocumentRepository implements IProofDocumentRepository {
         id: delivery.id,
         code: delivery.code,
         status: delivery.status as DeliveryStatus,
+        // The document's title (meeting of 14/10/2026).
+        kind: delivery.kind,
 
         invoice_key: delivery.invoice_key,
         invoice_number: delivery.invoice_number,

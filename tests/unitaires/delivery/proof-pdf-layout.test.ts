@@ -203,6 +203,7 @@ function source(): ProofDocumentSource {
 const SIGNED: ProofSigningIntent = {
   status: "SIGNED",
   signer: { name: "TRAJETTO SISTEMAS LTDA", cnpj: "11222333000181" },
+  icpBrasil: true,
 };
 
 const model = (signing: ProofSigningIntent = SIGNED): ProofDocumentModel =>

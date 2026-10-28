@@ -163,6 +163,28 @@ function fuelRepositoryContract(harness: () => FuelHarness): void {
   /** The tie f3/f4 in `id desc`, the order the tiebreaker promises. */
   const tie = (h: FuelHarness) => [h.id("f3"), h.id("f4")].sort().reverse();
 
+  describe("streamFuelsForExport", () => {
+    // The export reads in batches keyed by (created_at, id), the delivery
+    // export's keyset (export-keyset.ts): oldest first, the id breaking a
+    // tie, never another company's rows.
+    it("exports one company in creation order, the id breaking a created_at tie", async () => {
+      const h = harness();
+      const exported: Array<{ id: string }> = [];
+
+      for await (const row of h.repo.streamFuelsForExport({
+        businessId: F.A,
+      })) {
+        exported.push(row);
+      }
+
+      expect(ids(exported)).toEqual([
+        h.id("f1"),
+        h.id("f2"),
+        ...tie(h).reverse(),
+      ]);
+    });
+  });
+
   describe("listFuels", () => {
     it("lists one company newest first, the id breaking a created_at tie, and pages", async () => {
       const h = harness();

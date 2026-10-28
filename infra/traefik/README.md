@@ -1,7 +1,9 @@
 # Traefik de produção — o que está versionado aqui
 
-> O Traefik que atende `www.intrajetto.com`, `intrajetto.com` e
-> `trajettoapi.thorsolucoes.com.br` é o do **Dokploy**: um contêiner
+> O Traefik que atende a web (`www.intrajetto.com`, `intrajetto.com`,
+> `staging.intrajetto.com`) e a API (`api-staging.intrajetto.com`; em
+> produção, o host a definir, previsto `api.intrajetto.com`) é o do
+> **Dokploy**: um contêiner
 > (`dokploy-traefik`) na rede `dokploy-network`, configurado no host, fora de
 > qualquer repositório. Cada serviço é um **Application** do Dokploy (imagem
 > do GHCR, sem compose): o domínio, a porta e o HTTPS de cada um são campos do
@@ -36,7 +38,7 @@ nomes). Nada aqui muda entre ambientes.
   Cloudflare, não com o Traefik. Então o TLS mínimo e o redirect HTTP→HTTPS que
   o usuário vê são configurações da zona na Cloudflare:
   _SSL/TLS → Edge Certificates → Minimum TLS Version = 1.2_ e
-  _Always Use HTTPS = On_, nas zonas `intrajetto.com` e `thorsolucoes.com.br`.
+  _Always Use HTTPS = On_, na zona `intrajetto.com`.
   O `tls.yaml` daqui passa a valer entre Cloudflare e origem (modo _Full
   (strict)_) e para qualquer acesso direto ao IP.
 - **HSTS do apex.** `intrajetto.com` (`WEB_APEX_HOST`) só redireciona para o

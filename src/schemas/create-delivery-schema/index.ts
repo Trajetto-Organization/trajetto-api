@@ -6,6 +6,7 @@ import {
 } from "@/shared/utils/zod-schema-helpers";
 import { dateOnlyField } from "@/shared/delivery/date-only-field";
 import { optionalMultilineText } from "@/shared/delivery/text-rules";
+import { WRITABLE_DELIVERY_KINDS } from "@/shared/delivery/delivery-kind";
 
 const requiredTextField = (label: string, min: number, max: number) =>
   z
@@ -106,6 +107,20 @@ const deliveryItemSchema = z.object({
 
 const createDeliverySchema = z.object({
   shipperId: z.string().min(1, "O embarcador é obrigatório."),
+  // The meeting of 14/10/2026: every new record has a type. Optional on the
+  // wire so the callers written before it keep working; absent is DELIVERY
+  // (the column default). On the edit, absent keeps the current type.
+  kind: z
+    .enum(WRITABLE_DELIVERY_KINDS, {
+      errorMap: () => ({
+        message:
+          "Tipo inválido. Use DELIVERY (entrega) ou SERVICE_ORDER (ordem de serviço).",
+      }),
+    })
+    .optional()
+    .describe(
+      "Tipo: DELIVERY (entrega, o padrão quando ausente) ou SERVICE_ORDER (ordem de serviço — uma parada para executar um serviço no endereço, como recolher cestos retornáveis; não é a ordem de serviço da frota).",
+    ),
   code: optionalTextField("O código do pedido", 60),
   invoice_key: z.preprocess(
     (val) => {

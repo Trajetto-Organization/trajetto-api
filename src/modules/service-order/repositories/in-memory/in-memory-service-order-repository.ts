@@ -27,6 +27,7 @@ import {
   type ServiceOrderSortKey,
   type ServiceOrderStatus,
 } from "../../usecases/list-service-order/service-order-list";
+import { compareExportKeys } from "@/shared/pagination/export-keyset";
 
 /** A part line of an order, as the real table's cascade and totals see it. */
 interface ServiceOrderPartSeed {
@@ -464,10 +465,11 @@ class InMemoryServiceOrderRepository implements IServiceOrderRepository {
   async *streamServiceOrdersForExport(
     query: ServiceOrderListQuery,
   ): AsyncGenerator<any> {
-    // The real one pages by id ascending over the listing's where.
+    // The real one pages in creation order (created_at, id) over the
+    // listing's where.
     const filtered = this.serviceOrders
       .filter((order) => this.matches(order, query))
-      .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+      .sort(compareExportKeys);
 
     for (const order of filtered) {
       const vehicle = this.vehicles.get(order.vehicleId);

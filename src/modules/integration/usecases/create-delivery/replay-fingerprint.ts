@@ -54,6 +54,9 @@ interface DeliveryDraft {
   scheduled_date?: Date | null;
   notes?: string | null;
 
+  /** Absent = DELIVERY, what the column stores for it. */
+  kind?: string | null;
+
   items?: DraftItem[] | null;
 }
 
@@ -173,13 +176,18 @@ function itemKey(item: {
 }
 
 function fingerprint(
-  fields: { [field in (typeof TEXT_FIELDS)[number]]?: string | null },
+  fields: { [field in (typeof TEXT_FIELDS)[number]]?: string | null } & {
+    kind?: string | null;
+  },
   shipperId: string | null,
   scheduledDate: Date | null | undefined,
   items: string[],
 ): string {
   return JSON.stringify({
     shipperId,
+    // The type is part of the document: the same key re-sent as a service
+    // order is another body. Absent is what the column stored for it.
+    kind: fields.kind ?? "DELIVERY",
     ...Object.fromEntries(
       TEXT_FIELDS.map((field) => [field, text(fields[field])]),
     ),

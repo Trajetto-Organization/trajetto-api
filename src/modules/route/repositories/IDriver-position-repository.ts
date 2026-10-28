@@ -23,6 +23,13 @@ interface RecordedBatch {
 
   /** Points no partition can ever hold, dropped so the rest could be written. */
   dropped: number;
+
+  /**
+   * Whether the driver's last position moved to this batch's newest point.
+   * False for a resend or a backlog older than the fix already stored: the
+   * "only newer" guard kept the row, and there is nothing new to announce.
+   */
+  advanced: boolean;
 }
 
 interface LivePosition extends StoredPosition {

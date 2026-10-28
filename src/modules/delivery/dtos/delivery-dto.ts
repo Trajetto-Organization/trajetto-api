@@ -1,4 +1,5 @@
 import { DeliveryStatus } from "@/shared/delivery/delivery-rules";
+import type { DeliveryKind } from "@/shared/delivery/delivery-kind";
 import type { SortOrder } from "@/shared/pagination/list-query";
 
 import type {
@@ -38,6 +39,8 @@ interface Delivery {
   complement?: string | null;
   neighborhood?: string | null;
   status: DeliveryStatus;
+  /** DELIVERY, PICKUP or SERVICE_ORDER (meeting of 14/10/2026). */
+  kind?: DeliveryKind;
   scheduled_date?: Date | string | null;
   delivered_at?: Date | string | null;
   received_by?: string | null;
@@ -74,6 +77,8 @@ interface CreateDeliveryProps {
   neighborhood?: string | null;
   scheduled_date?: Date | null;
   notes?: string | null;
+  /** Absent = DELIVERY (the column default). */
+  kind?: DeliveryKind;
   businessId: string;
   shipperId: string;
   vehicleId?: string | null;
@@ -117,6 +122,7 @@ interface UpdateDeliveryProps {
   neighborhood?: string | null;
   scheduled_date?: Date | null;
   notes?: string | null;
+  kind?: DeliveryKind;
   shipperId?: string;
   // No driverId/vehicleId (DLV-EDIT-4): assignment builds the route.
 
@@ -148,6 +154,11 @@ interface DeliveryFacetOption {
  */
 interface ListDeliveriesPage {
   data: Delivery[];
+  /**
+   * Whether the requested period narrowed the rows: false without one, and
+   * false when an exact id / order / NF search set it aside.
+   */
+  periodApplied: boolean;
   /** Per status, with every filter but the status facet. */
   statusCounts: GroupCount[];
   shipperOptions: DeliveryFacetOption[];

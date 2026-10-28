@@ -73,23 +73,23 @@ class UpdateUserPasswordUseCase {
 
     // The password is already changed: a mail failure must not answer 500,
     // or the person retries with a "current password" that no longer works.
-    try {
-      await sendTransactionalMail({
-        email: findUser.email,
-        name: findUser.name,
-        subject: "Sua senha foi atualizada com sucesso",
-        templateName: "user-password-updated.hbs",
-        moduleName: "user",
-        additionalVariablesProperties: {
-          logo: emailLogoUrl(),
-        },
-      });
-    } catch (error) {
+    // Nor may the answer wait on the SMTP round trip (10 s timeouts) for a
+    // notice the person does not need in order to carry on.
+    void sendTransactionalMail({
+      email: findUser.email,
+      name: findUser.name,
+      subject: "Sua senha foi atualizada com sucesso",
+      templateName: "user-password-updated.hbs",
+      moduleName: "user",
+      additionalVariablesProperties: {
+        logo: emailLogoUrl(),
+      },
+    }).catch((error) =>
       log.error(
         { err: error, userId },
         "password change notice could not be sent",
-      );
-    }
+      ),
+    );
   }
 }
 

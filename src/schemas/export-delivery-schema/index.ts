@@ -3,6 +3,7 @@ import { z } from "zod";
 import { facetField, idFacetField } from "@/shared/pagination/list-query";
 
 import { deliveryListFilterFields } from "@/schemas/list-delivery-schema";
+import { refineDeliveryPeriod } from "@/modules/delivery/usecases/list-delivery/delivery-period";
 import {
   OCCURRENCE_DELIVERY_STATUSES,
   OCCURRENCE_FEED_CATEGORIES,
@@ -37,10 +38,12 @@ const exportBaseFields = {
  * The deliveries export: the listing's own filters (decision 5.8), so the file
  * is what the screen shows. `status` takes one or more values, like the list.
  */
-const exportDeliverySchema = z.object({
-  ...exportBaseFields,
-  ...deliveryListFilterFields,
-});
+const exportDeliverySchema = z
+  .object({
+    ...exportBaseFields,
+    ...deliveryListFilterFields,
+  })
+  .superRefine(refineDeliveryPeriod);
 
 /** The occurrences export: the occurrence feed's own filters. */
 const exportOccurrenceSchema = z.object({

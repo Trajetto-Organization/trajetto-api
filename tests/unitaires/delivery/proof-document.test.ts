@@ -53,9 +53,11 @@ const TOKEN = "9f1c2a4e6b8d0f3a5c7e9b1d3f5a7c9e";
 /** NF-e key, model 55, issuer 31358035000120 (valid check digits). */
 const NFE_KEY = "3226093135803500012055002000045515100045515".padEnd(44, "0");
 
+// Signed by a certificate whose chain reached an ICP-Brasil root.
 const SIGNED: ProofSigningIntent = {
   status: "SIGNED",
   signer: { name: "TRAJETTO SISTEMAS LTDA", cnpj: "11222333000181" },
+  icpBrasil: true,
 };
 
 /** Explicit key presence, not a spread: a null override must stay null. */
@@ -664,7 +666,11 @@ describe("signed and unsigned: the document never claims what it is not", () => 
   it("signed by a certificate without a CNPJ: the name alone, no number invented", () => {
     const model = build(
       {},
-      { status: "SIGNED", signer: { name: "EMPRESA X", cnpj: null } },
+      {
+        status: "SIGNED",
+        signer: { name: "EMPRESA X", cnpj: null },
+        icpBrasil: true,
+      },
     );
 
     expect(model.authentication.paragraphs[0].text).toMatch(
@@ -788,4 +794,92 @@ describe("the bytes", () => {
     },
     30_000,
   );
+});
+
+/**
+ * The type of the record titles its proof (meeting of 14/10/2026): a
+ * service order is proven like a delivery and named as what it is. PICKUP
+ * keeps the delivery's wording, as before the type existed.
+ */
+describe("the title follows the record's type", () => {
+  const delivery = source().delivery;
+
+  it("titles a service order as one, signed or not", () => {
+    const unsigned = build({
+      delivery: { ...delivery, kind: "SERVICE_ORDER" },
+    });
+    const signed = build(
+      { delivery: { ...delivery, kind: "SERVICE_ORDER" } },
+      SIGNED,
+    );
+
+    expect(unsigned.header.title).toBe("Comprovante de Ordem de Serviço");
+    expect(unsigned.info.title).toBe(
+      "Comprovante de ordem de serviço (sem assinatura digital)",
+    );
+    expect(signed.header.title).toBe(
+      "Certificado Digital da Comprovação de Ordem de Serviço",
+    );
+    expect(signed.legalLine).toMatch(
+      /^Documento de comprovação da ordem de serviço com validade jurídica/,
+    );
+  });
+
+  it("keeps the delivery's title for a delivery, a pickup and a row without a type", () => {
+    for (const kind of ["DELIVERY", "PICKUP", undefined] as const) {
+      const model = build({ delivery: { ...delivery, kind } });
+
+      expect(model.header.title).toBe("Comprovante de Entrega");
+    }
+  });
+
+  it("keeps the occurrence record's title for a FAILED service order", () => {
+    const model = build({
+      delivery: { ...delivery, kind: "SERVICE_ORDER", status: "FAILED" },
+    });
+
+    expect(model.header.title).toBe("Registro de Ocorrência");
+  });
+});
+
+/**
+ * The legal statement needs a certificate whose chain reached ICP-Brasil
+ * (icp-brasil-chain.ts). Signed by one outside the chain, the page says it
+ * is signed and nothing more: no MP 2.200-2, no ITI validator.
+ */
+describe("signed outside the ICP-Brasil chain", () => {
+  const OUTSIDE: ProofSigningIntent = {
+    status: "SIGNED",
+    signer: { name: "TRAJETTO TESTE", cnpj: null },
+    icpBrasil: false,
+  };
+
+  it("claims no legal validity and leads to our own check, not the ITI's", () => {
+    const model = build({}, OUTSIDE);
+    const texts = proofDocumentTexts(model).join("\n");
+
+    expect(model.signed).toBe(true);
+    expect(model.icpBrasil).toBe(false);
+    expect(model.header.title).toBe("Comprovante de Entrega");
+    expect(model.info.title).toBe(
+      "Comprovante de entrega assinado (sem cadeia ICP-Brasil)",
+    );
+    expect(model.legalLine).toContain(
+      "não pertence à cadeia ICP-Brasil validada",
+    );
+    expect(texts).not.toContain("com validade jurídica conforme");
+    expect(texts).not.toContain("Assina-se com Certificado Digital ICP-Brasil");
+    expect(texts).not.toContain("validar.iti.gov.br");
+    expect(model.authentication.qrUrl).toBe(model.verificationUrl);
+  });
+
+  it("reads an intent without the chain verdict as outside it", () => {
+    const model = build(
+      {},
+      { status: "SIGNED", signer: { name: "TRAJETTO TESTE", cnpj: null } },
+    );
+
+    expect(model.icpBrasil).toBe(false);
+    expect(model.legalLine).not.toContain("com validade jurídica conforme");
+  });
 });

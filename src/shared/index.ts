@@ -5,6 +5,11 @@ import {
 } from "@/shared/socket/socket-ticket";
 
 import { env } from "@/env";
+import { RedisConnection } from "@/../infra/cache/redis-connection";
+import {
+  SnapshotCache,
+  redisSnapshotStore,
+} from "@/shared/cache/snapshot-cache";
 
 import { IUserRepository } from "@/modules/user/repositories/IUser-repository";
 import { UserRepository } from "@/modules/user/repositories/user-repository";
@@ -107,6 +112,10 @@ import { IAccountPayableRepository } from "@/modules/account-payable/repositorie
 
 import { IDashboardRepository } from "@/modules/dashboard/repositories/IDashboard-repository";
 import { DashboardRepository } from "@/modules/dashboard/repositories/dashboard-repository";
+import {
+  MASTER_OVERVIEW_TTL_MS,
+  type OverviewNumbers,
+} from "@/modules/dashboard/usecases/get-dashboard-overview/get-dashboard-overview-usecase";
 
 import { ActivityRepository } from "@/modules/activity/repositories/activity-repository";
 import { IActivityRepository } from "@/modules/activity/repositories/IActivity-repository";
@@ -245,6 +254,19 @@ container.registerSingleton<IPermissionRepository>(
 container.registerSingleton<IDashboardRepository>(
   "DashboardRepository",
   DashboardRepository,
+);
+
+// The MASTER's platform-wide dashboard numbers: one read a minute for the
+// whole deployment, shared by the replicas through Redis and computed again
+// when Redis is away (shared/cache/snapshot-cache.ts). One instance per
+// process: the single-flight and this replica's copy live in it.
+container.registerInstance<SnapshotCache<OverviewNumbers>>(
+  "MasterOverviewSnapshots",
+  new SnapshotCache<OverviewNumbers>({
+    name: "dashboard-overview-master",
+    ttlMs: MASTER_OVERVIEW_TTL_MS,
+    store: redisSnapshotStore(() => RedisConnection.getInstance().getClient()),
+  }),
 );
 
 container.registerSingleton<IActivityRepository>(

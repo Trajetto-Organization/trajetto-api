@@ -16,10 +16,11 @@ import auth from "@/config/auth";
  * those out of TOAST and held them in the replica's memory at once, to draw a
  * table that shows four numbers per upload.
  *
- * The listing now leaves the report out when the caller says it does not want
- * it, and the report of ONE upload comes from its own endpoint, when the
- * operator opens it. Callers that do not ask — the web already in production —
- * keep getting the report in the list, unchanged, until they are replaced.
+ * The listing now leaves the report out unless the caller asks for it
+ * (includeReport=true), and the report of ONE upload comes from its own
+ * endpoint, when the operator opens it. The default flipped because the tab's
+ * generic list fetch never sent the flag: every page still carried megabytes
+ * of reports, deep-copied and gzipped on the event loop.
  */
 const prisma = new PrismaClient();
 
@@ -205,11 +206,29 @@ describe("the listing, asked without reports", () => {
   });
 });
 
-describe("the listing, asked the way the web in production asks", () => {
-  it("is unchanged: the report still rides along", async () => {
+describe("the listing, asked without the flag", () => {
+  it("leaves the report out by default", async () => {
     const response = await app.inject({
       method: "GET",
       url: "/import/list-imports?page=1&pageSize=10",
+      headers: { authorization: `Bearer ${token}` },
+    });
+
+    expect(response.statusCode).toBe(200);
+
+    const { rows } = readNDJSON(response.body);
+
+    expect(rows).toHaveLength(10);
+    expect(rows.every((entry) => !("report" in entry))).toBe(true);
+    expect(response.body.length).toBeLessThan(20_000);
+  });
+});
+
+describe("the listing, asked with includeReport=true", () => {
+  it("still carries the report for a caller that needs it", async () => {
+    const response = await app.inject({
+      method: "GET",
+      url: "/import/list-imports?page=1&pageSize=10&includeReport=true",
       headers: { authorization: `Bearer ${token}` },
     });
 

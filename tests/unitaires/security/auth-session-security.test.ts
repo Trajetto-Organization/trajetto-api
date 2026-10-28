@@ -119,6 +119,86 @@ describe("auth and tenant security", () => {
     expect(live.map((item) => item.jti).sort()).toEqual(["tab-1", "tab-2"]);
   });
 
+  it("lets a spent token mint at most three siblings: the next presentation in the window is reuse", async () => {
+    // The grace used to mint a live token on every presentation inside the
+    // window, so a copy replayed moments after the rotation got a session
+    // each time and the alarm never rang.
+    const repository = new InMemoryUserTokensRepository();
+    const expires = new Date(Date.now() + 60_000);
+
+    await repository.createUserRefreshToken({
+      userId: "user-1",
+      token_hash: "old-hash",
+      jti: "old-jti",
+      family_id: "family-1",
+      expires_in: expires,
+    });
+
+    const rotate = (jti: string) =>
+      repository.rotateUserRefreshToken({
+        user_id: "user-1",
+        current_jti: "old-jti",
+        current_token_hash: "old-hash",
+        replacement: {
+          userId: "user-1",
+          token_hash: `${jti}-hash`,
+          jti,
+          family_id: "family-1",
+          expires_in: expires,
+        },
+        grace_ms: 60_000,
+      });
+
+    expect((await rotate("tab-1")).outcome).toBe("rotated");
+    expect((await rotate("tab-2")).outcome).toBe("raced");
+    expect((await rotate("tab-3")).outcome).toBe("raced");
+    expect((await rotate("tab-4")).outcome).toBe("raced");
+    expect((await rotate("thief")).outcome).toBe("reused");
+
+    // Nothing was minted past the allowance.
+    expect(
+      repository.refreshTokenItems.some((item) => item.jti === "thief"),
+    ).toBe(false);
+  });
+
+  it("grants the last sibling to only one of two late presentations racing", async () => {
+    const repository = new InMemoryUserTokensRepository();
+    const expires = new Date(Date.now() + 60_000);
+
+    await repository.createUserRefreshToken({
+      userId: "user-1",
+      token_hash: "old-hash",
+      jti: "old-jti",
+      family_id: "family-1",
+      expires_in: expires,
+    });
+
+    const rotate = (jti: string) =>
+      repository.rotateUserRefreshToken({
+        user_id: "user-1",
+        current_jti: "old-jti",
+        current_token_hash: "old-hash",
+        replacement: {
+          userId: "user-1",
+          token_hash: `${jti}-hash`,
+          jti,
+          family_id: "family-1",
+          expires_in: expires,
+        },
+        grace_ms: 60_000,
+      });
+
+    await rotate("tab-1");
+    await rotate("tab-2");
+    await rotate("tab-3");
+
+    const outcomes = (await Promise.all([rotate("tab-4"), rotate("tab-5")]))
+      .map((result) => result.outcome)
+      .sort();
+
+    expect(outcomes).toEqual(["raced", "reused"]);
+  });
+
   it("answers unknown, not reused, for a session that already ended", async () => {
     const repository = new InMemoryUserTokensRepository();
 

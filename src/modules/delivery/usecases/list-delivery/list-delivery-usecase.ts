@@ -6,17 +6,26 @@ import { assertTenantAccess } from "@/modules/middlewares/tenant-authorization";
 
 import { AppError } from "@/shared/errors/AppError";
 import { DeliveryStatus } from "@/shared/delivery/delivery-rules";
+import type { DeliveryKind } from "@/shared/delivery/delivery-kind";
 
 import { ListDeliveriesResult } from "../../dtos/delivery-dto";
 
 import { callerNotFound } from "@/shared/delivery/caller-not-found";
 import type { SortOrder } from "@/shared/pagination/list-query";
 import {
+  loadBusinessTimeZone,
+  type BusinessLookup,
+} from "@/shared/time/business-time-zone";
+import {
   summarizeDeliveryList,
   DeliverySortKey,
 } from "@/modules/delivery/usecases/list-delivery/delivery-list";
+import {
+  deliveryPeriodWindow,
+  type DeliveryPeriodInput,
+} from "@/modules/delivery/usecases/list-delivery/delivery-period";
 
-interface ListDeliveriesRequest {
+interface ListDeliveriesRequest extends DeliveryPeriodInput {
   userId: string;
   businessId?: string;
   page: number;
@@ -27,6 +36,7 @@ interface ListDeliveriesRequest {
   statuses?: DeliveryStatus[];
   shipperIds?: string[];
   driverIds?: string[];
+  kinds?: DeliveryKind[];
 }
 
 @injectable()
@@ -36,6 +46,8 @@ class ListDeliveryUseCase {
     private user: IUserRepository,
     @inject("DeliveryRepository")
     private delivery: IDeliveryRepository,
+    @inject("BusinessRepository")
+    private business: BusinessLookup,
   ) {}
 
   async execute({
@@ -49,6 +61,10 @@ class ListDeliveryUseCase {
     statuses,
     shipperIds,
     driverIds,
+    kinds,
+    period,
+    from,
+    to,
   }: ListDeliveriesRequest): Promise<ListDeliveriesResult> {
     const findUser = await this.user.findUserById(userId);
 
@@ -70,6 +86,15 @@ class ListDeliveryUseCase {
 
     assertTenantAccess(findUser, resolvedBusinessId);
 
+    // "Hoje" is the company's day (decision 1.1), so the zone is read only
+    // when a period was asked for: without one the listing never needed it.
+    const window = period
+      ? deliveryPeriodWindow(
+          { period, from, to },
+          await loadBusinessTimeZone(this.business, resolvedBusinessId),
+        )
+      : null;
+
     try {
       // Drivers only see what they carry — the app never lists the whole
       // operation to the person executing one slice of it. A scope, not a
@@ -85,6 +110,9 @@ class ListDeliveryUseCase {
         statuses,
         shipperIds,
         driverIds,
+        kinds,
+        createdFrom: window?.start,
+        createdTo: window?.end,
       });
 
       // The cards and the filter counts come from the whole set, never from
@@ -95,7 +123,16 @@ class ListDeliveryUseCase {
         { shippers: page_.shipperOptions, drivers: page_.driverOptions },
       );
 
-      return { data: page_.data, total, meta: searchMeta };
+      return {
+        data: page_.data,
+        total,
+        meta: {
+          ...searchMeta,
+          period: window
+            ? { from: window.from, to: window.to, applied: page_.periodApplied }
+            : null,
+        },
+      };
     } catch (error) {
       if (error instanceof AppError) {
         throw error;

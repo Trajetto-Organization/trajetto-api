@@ -241,3 +241,55 @@ describe("a refresh token a sibling spent just before its row lapsed", () => {
     expect((await users.findUserById(userId))?.session_version).toBe(0);
   });
 });
+
+describe("a refresh token presented again within the grace window", () => {
+  /**
+   * The grace is for a session racing itself — two tabs whose tokens expire
+   * together, a phone retrying an answer it lost — and that is ONE extra
+   * presentation. It used to mint a live token on every presentation inside
+   * the minute, so a copy replayed shortly after the legitimate rotation got
+   * a working session each time, silently.
+   */
+  it("serves two concurrent refreshes of one token, and logs nobody out", async () => {
+    const token = await login("web");
+
+    const [first, second] = await Promise.all([
+      refresh.execute(token),
+      refresh.execute(token),
+    ]);
+
+    expect(first.refresh_token).not.toBe(second.refresh_token);
+
+    // Each tab holds a working token of its own.
+    await expect(refresh.execute(first.refresh_token)).resolves.toBeTruthy();
+    await expect(refresh.execute(second.refresh_token)).resolves.toBeTruthy();
+
+    expect(securityEvents).toEqual([]);
+    expect((await users.findUserById(userId))?.session_version).toBe(0);
+  });
+
+  it("treats a presentation past the grace allowance as reuse, even inside the window", async () => {
+    const token = await login("web");
+
+    await refresh.execute(token);
+
+    // Three siblings: the parallel renewals of one page, tabs, a retry.
+    for (let sibling = 0; sibling < 3; sibling += 1) {
+      vi.advanceTimersByTime(5_000);
+      await expect(refresh.execute(token)).resolves.toBeTruthy();
+    }
+
+    vi.advanceTimersByTime(5_000);
+
+    await expect(refresh.execute(token)).rejects.toMatchObject({
+      statusCode: 401,
+      code: "AUTH_REFRESH_REUSED",
+    });
+
+    // The existing reuse path: the family is gone, every session of the
+    // account ended, and the person is warned.
+    expect(tokens.refreshTokenItems).toEqual([]);
+    expect((await users.findUserById(userId))?.session_version).toBe(1);
+    expect(securityEvents).toEqual(["session_compromised"]);
+  });
+});

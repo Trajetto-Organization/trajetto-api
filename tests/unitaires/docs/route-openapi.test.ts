@@ -524,16 +524,27 @@ describe("the import module's published surface", () => {
     expect(success?.headers?.["content-disposition"]).toBeDefined();
   });
 
-  it("describes the per-row report on the upload, not just a count", () => {
+  it("describes the per-row report of an upload, not just a count", () => {
     // "Qual das duzentas falhou?" is the whole reason the response is not a
     // number. A contract that published only the totals would let a client be
-    // built that cannot answer it.
+    // built that cannot answer it. The upload answers 202 and is processed
+    // after the answer (a 20k-row sheet outlived the edge's 100 s), so the
+    // report is published where the client reads it: the record itself.
     const upload = Object.entries(document.paths).find(([path]) =>
       path.includes("/import/import-spreadsheet/"),
     );
+    const detail = Object.entries(document.paths).find(([path]) =>
+      path.includes("/import/get-import/"),
+    );
+
+    const responses = (upload![1].post as OpenApiOperation).responses;
+
+    expect(Object.keys(responses)).toContain("202");
+    expect(Object.keys(responses)).not.toContain("200");
+    expect(JSON.stringify(responses["202"])).toContain("get-import");
 
     const body = JSON.stringify(
-      (upload![1].post as OpenApiOperation).responses["200"] ?? {},
+      (detail![1].get as OpenApiOperation).responses["200"] ?? {},
     );
 
     expect(body).toContain("unknownHeaders");

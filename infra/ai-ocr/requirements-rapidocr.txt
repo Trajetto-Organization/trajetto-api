@@ -1,3 +1,6 @@
-# Installed with --no-deps: its declared opencv-python is replaced by the
-# headless build in requirements.txt (ADR 0010; same as the benchmark).
+# Layer 3 of the runtime image (Dockerfile, stage `base`). Installed with
+# --no-deps: its declared opencv-python is replaced by the headless build in
+# requirements-opencv.txt (ADR 0010; same as the benchmark). The wheel ships
+# the PP-OCRv6 pair and the direction classifier; the PP-OCRv5 pair is
+# downloaded by the `models` stage (fetch_models.py).
 rapidocr==3.9.2 --hash=sha256:04d6b8d151f823d930bd91910555f57bea897c0c44fa6794267b94cf9c1ef9a0

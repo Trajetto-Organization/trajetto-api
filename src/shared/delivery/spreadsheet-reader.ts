@@ -21,6 +21,15 @@ const MAX_XLSX_INFLATED_BYTES = 32 * 1024 * 1024;
  */
 const MAX_SPREADSHEET_ROWS = 20_000;
 
+/**
+ * Cells the workbook may hold, every sheet together, counted before exceljs
+ * loads it: the row ceiling times forty columns (the template has 26, plus
+ * room for what an ERP export adds). A 20k × 50 workbook — 2.6 MB uploaded —
+ * cost +329 MB of heap and a second of frozen event loop to load, only for
+ * the row check to run after the price was paid.
+ */
+const MAX_SPREADSHEET_CELLS = MAX_SPREADSHEET_ROWS * 40;
+
 function tooLarge(message: string, code: string): AppError {
   return new AppError(message, 413, code);
 }
@@ -138,10 +147,17 @@ function parseCsv(text: string): CellMatrix {
   return rows;
 }
 
-async function parseXlsx(buffer: Buffer): Promise<CellMatrix> {
-  // Before the parser, and on the INFLATED size: see zip-inflate-guard.
+/**
+ * The cheap half of reading an .xlsx: the inflated size and how many cells
+ * and rows its sheets hold, from one pass over the zip. Refuses what is too
+ * big to load; throws a plain Error for a file that is not a zip at all.
+ */
+function inspectXlsx(buffer: Buffer): void {
+  let tally: { cells: number; rows: number };
+
+  // On the INFLATED size: see zip-inflate-guard.
   try {
-    assertZipInflatesWithin(buffer, MAX_XLSX_INFLATED_BYTES);
+    tally = assertZipInflatesWithin(buffer, MAX_XLSX_INFLATED_BYTES);
   } catch (error) {
     if (error instanceof SpreadsheetTooLargeError) {
       throw tooLarge(
@@ -152,6 +168,22 @@ async function parseXlsx(buffer: Buffer): Promise<CellMatrix> {
 
     throw error;
   }
+
+  if (tally.cells > MAX_SPREADSHEET_CELLS) {
+    throw tooLarge(
+      "A planilha tem células demais para importar de uma vez. Remova as colunas que não são da importação ou divida o arquivo em partes.",
+      "SPREADSHEET_TOO_LARGE",
+    );
+  }
+
+  // Row elements, empty styled rows included, every sheet together: a coarse
+  // bound (twice the ceiling) that stops an absurd file here; the exact
+  // count of rows with values is checked after the load.
+  if (tally.rows > MAX_SPREADSHEET_ROWS * 2) assertRowCount(tally.rows);
+}
+
+async function parseXlsx(buffer: Buffer): Promise<CellMatrix> {
+  inspectXlsx(buffer);
 
   const workbook = new ExcelJS.Workbook();
 
@@ -202,5 +234,42 @@ async function readSpreadsheet(
   return parseXlsx(buffer);
 }
 
-export { MAX_SPREADSHEET_ROWS, parseCsv, readSpreadsheet };
+/**
+ * What can be refused without reading the file: the cheap checks of
+ * `readSpreadsheet`, run while the request is still open so a file that is
+ * too big or not a spreadsheet answers 400/413 at once, before the upload is
+ * queued. A CSV's lines are counted on its newlines (a quoted newline only
+ * over-counts, never lets a bigger file through); an .xlsx is inspected as
+ * a zip. Throws a plain Error for a file that is not one.
+ */
+function inspectSpreadsheet(filename: string, base64: string): void {
+  const buffer = Buffer.from(base64, "base64");
+
+  if (/\.csv$/i.test(filename)) {
+    let lines = 1;
+    let at = buffer.indexOf(0x0a);
+
+    while (at !== -1 && at < buffer.length - 1) {
+      lines += 1;
+      at = buffer.indexOf(0x0a, at + 1);
+    }
+
+    // Quoted newlines inflate the count: decide on the real parse then.
+    if (lines > MAX_SPREADSHEET_ROWS) {
+      assertRowCount(parseCsv(buffer.toString("utf8")).length);
+    }
+
+    return;
+  }
+
+  inspectXlsx(buffer);
+}
+
+export {
+  MAX_SPREADSHEET_CELLS,
+  MAX_SPREADSHEET_ROWS,
+  inspectSpreadsheet,
+  parseCsv,
+  readSpreadsheet,
+};
 export type { CellMatrix };

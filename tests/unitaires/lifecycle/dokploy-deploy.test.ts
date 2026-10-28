@@ -27,6 +27,7 @@ const KEY = "dokploy-key-that-must-never-be-printed";
 interface Deployment {
   deploymentId: string;
   status: string;
+  errorMessage?: string | null;
 }
 
 interface Fake {
@@ -231,7 +232,7 @@ describe("the Dokploy deploy step", () => {
 
     expect(result.status, result.output).toBe(0);
     expect(result.output).toMatch(
-      /::warning::.*first.*'error'.*tentativa 2 de 3/,
+      /::warning::.*first.*'error'.*tentativa 2 de 6/,
     );
     expect(result.output).toContain("second");
     expect(
@@ -260,7 +261,7 @@ describe("the Dokploy deploy step", () => {
       retries: [failed("a2"), failed("a3")],
     });
 
-    const result = await deploy(valid(fake));
+    const result = await deploy({ ...valid(fake), DOKPLOY_ATTEMPTS: "3" });
 
     expect(result.status).toBe(1);
     expect(result.output).toMatch(
@@ -269,6 +270,72 @@ describe("the Dokploy deploy step", () => {
     expect(
       fake.calls.filter((call) => call.path === "/api/application.deploy"),
     ).toHaveLength(3);
+  });
+
+  it("waits twice as long after each failure, up to a ceiling, six times by default", async () => {
+    // Run 40551925038 (28/10/2026) failed 3/3 with a fixed 20 s between
+    // attempts: every retry landed in the same bad minute of the VPS's IPv6
+    // route to GHCR. The defaults are 20, 40, 80, 160, 160 s; here in
+    // hundredths so the test takes no time.
+    const failed = (id: string) => [[{ deploymentId: id, status: "error" }]];
+    const fake = await fakeDokploy({
+      after: failed("b1"),
+      retries: ["b2", "b3", "b4", "b5", "b6"].map(failed),
+    });
+
+    const result = await deploy({
+      ...valid(fake),
+      DOKPLOY_RETRY_SECONDS: "0.01",
+      DOKPLOY_RETRY_MAX_SECONDS: "0.04",
+    });
+
+    expect(result.status).toBe(1);
+    expect(
+      [...result.output.matchAll(/em ([\d.]+)s: tentativa (\d) de 6/g)].map(
+        ([, wait, next]) => `${next}:${wait}`,
+      ),
+    ).toEqual(["2:0.01", "3:0.02", "4:0.04", "5:0.04", "6:0.04"]);
+    expect(result.output).toMatch(/b6 de .* depois de 6 tentativas/);
+    expect(
+      fake.calls.filter((call) => call.path === "/api/application.deploy"),
+    ).toHaveLength(6);
+  });
+
+  it("logs Dokploy's reason for a failed deployment, on one line and without credentials", async () => {
+    // "error" alone sent whoever read the run to the panel to find out it
+    // was the pull from GHCR dying midway.
+    const fake = await fakeDokploy({
+      after: [
+        [
+          {
+            deploymentId: "x1",
+            status: "error",
+            errorMessage: `Error response from daemon: Get "https://bot:pa55word@ghcr.io/v2/":\nread: connection reset by peer (token=t0k3n, key ${KEY})`,
+          },
+        ],
+      ],
+    });
+
+    const result = await deploy({ ...valid(fake), DOKPLOY_ATTEMPTS: "1" });
+
+    expect(result.status).toBe(1);
+    expect(result.output).toMatch(
+      /::error::.*x1.*Motivo informado pelo Dokploy: Error response from daemon: .*read: connection reset by peer/,
+    );
+    expect(result.output).not.toContain(KEY);
+    expect(result.output).not.toContain("pa55word");
+    expect(result.output).not.toContain("t0k3n");
+  });
+
+  it("says so when Dokploy gives no reason", async () => {
+    const fake = await fakeDokploy({
+      after: [[{ deploymentId: "y1", status: "error", errorMessage: null }]],
+    });
+
+    const result = await deploy({ ...valid(fake), DOKPLOY_ATTEMPTS: "1" });
+
+    expect(result.status).toBe(1);
+    expect(result.output).toMatch(/y1.*não informou o motivo/);
   });
 
   it("does not retry a deployment someone cancelled", async () => {

@@ -125,4 +125,11 @@ interface IUsersTokensRepository {
   consumeForgotPasswordVerificationToken: (tokenId: string) => Promise<boolean>;
 }
 
-export { IUsersTokensRepository };
+/**
+ * How many siblings one spent refresh token may mint within the grace window
+ * (the session racing itself: tabs, one page's parallel renewals, a retried
+ * answer); the next presentation is reuse. Both repositories enforce it.
+ */
+const REFRESH_GRACE_MAX_SIBLINGS = 3;
+
+export { IUsersTokensRepository, REFRESH_GRACE_MAX_SIBLINGS };

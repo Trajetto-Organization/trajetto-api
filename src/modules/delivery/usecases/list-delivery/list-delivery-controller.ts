@@ -25,6 +25,10 @@ class ListDeliveryController {
       status,
       shipperId,
       driverId,
+      kind,
+      period,
+      from,
+      to,
     } = request.query as z.infer<typeof listDeliverySchema>;
 
     const listDeliveryUseCase = container.resolve(ListDeliveryUseCase);
@@ -40,6 +44,10 @@ class ListDeliveryController {
       statuses: status,
       shipperIds: shipperId,
       driverIds: driverId,
+      kinds: kind,
+      period,
+      from,
+      to,
     });
 
     await sendAsNDJSON({

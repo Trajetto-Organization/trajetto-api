@@ -16,7 +16,11 @@ import { InMemoryActivityRepository } from "@/modules/activity/repositories/in-m
 import { InMemoryDeliveryRepository } from "@/modules/delivery/repositories/in-memory/in-memory-delivery-repository";
 import { InMemoryOperationDayRepository } from "@/modules/route/repositories/in-memory/in-memory-operation-day-repository";
 
-import { GetDashboardOverviewUseCase } from "@/modules/dashboard/usecases/get-dashboard-overview/get-dashboard-overview-usecase";
+import {
+  GetDashboardOverviewUseCase,
+  type OverviewNumbers,
+} from "@/modules/dashboard/usecases/get-dashboard-overview/get-dashboard-overview-usecase";
+import { SnapshotCache } from "@/shared/cache/snapshot-cache";
 import { GetDashboardTrendsUseCase } from "@/modules/dashboard/usecases/get-dashboard-trends/get-dashboard-trends-usecase";
 
 /**
@@ -234,6 +238,63 @@ describe("GetDashboardOverviewUseCase", () => {
     expect(result.counts.vehicles.currentMonth).toBe(52);
     expect(result.counts.vehicles.value).toBe(53);
     expect(result.deliveryOperation).toBeNull();
+  });
+
+  /**
+   * The MASTER's counts are over the whole platform — the heaviest reads of
+   * the screen, the same for every MASTER — and are served from a one-minute
+   * snapshot shared by the replicas. Only those: the activity feed names
+   * people and is read on every view, and a company's numbers never touch
+   * the snapshot.
+   */
+  it("serves the MASTER's platform numbers from the snapshot, the feed fresh", async () => {
+    const snapshots = new SnapshotCache<OverviewNumbers>({
+      name: "test-master-overview",
+      ttlMs: 60_000,
+      store: null,
+    });
+    const withSnapshots = new GetDashboardOverviewUseCase(
+      users,
+      dashboard,
+      activities,
+      new InMemoryDeliveryRepository(),
+      businesses,
+      new InMemoryOperationDayRepository(),
+      snapshots,
+    );
+
+    const counted = vi.spyOn(dashboard, "countManyByMonth");
+    const feed = vi.spyOn(activities, "listRecentActivitiesPreview");
+
+    const first = await withSnapshots.execute({ userId: MASTER });
+
+    dashboard.addEntityCount("vehicle", 7, "2026-10-04T15:00:00.000Z", B);
+
+    const second = await withSnapshots.execute({ userId: MASTER });
+
+    expect(counted).toHaveBeenCalledTimes(1);
+    expect(second.counts).toEqual(first.counts);
+    expect(feed).toHaveBeenCalledTimes(2);
+
+    // A company's overview is never served from it.
+    const admin = await withSnapshots.execute({ userId: ADMIN_A });
+
+    expect(counted).toHaveBeenCalledTimes(2);
+    expect(admin.counts.vehicles.value).toBe(3);
+  });
+
+  it("uses the modules the session already loaded instead of reading them again", async () => {
+    const result = await overview().execute({
+      userId: ADMIN_A,
+      entitlements: [
+        { module: "FLEET", enabled: true },
+        { module: "DELIVERIES", enabled: true },
+      ],
+    });
+
+    expect(entitlements.getBusinessEntitlements).not.toHaveBeenCalled();
+    // Entregas is on in the session's copy: the operation is summarised.
+    expect(result.deliveryOperation).not.toBeNull();
   });
 
   it("answers 404 USER_NOT_FOUND for an unknown session user", async () => {

@@ -34,6 +34,9 @@ import { isLoginLocked } from "@/shared/security/login-lockout-rules";
 import { hashOneTimeCode } from "@/shared/security/one-time-code";
 import { issueTwoFactorChallenge } from "../../services/two-factor-challenge";
 import { emailLogoUrl } from "@/shared/providers/mail-provider/email-logo";
+import { logger } from "@/shared/logging/logger";
+
+const log = logger.child({ component: "user" });
 
 /**
  * What an unknown e-mail's password is compared against.
@@ -60,7 +63,11 @@ class AuthenticateUserUseCase {
     private driver: IDriverRepository,
   ) {}
 
-  private async emailVerification({ email, name }: EmailVerificationProps) {
+  private async emailVerification({
+    userId,
+    email,
+    name,
+  }: EmailVerificationProps) {
     const findExistingToken =
       await this.usersTokens.findEmailVerificationTokenByEmail(email);
 
@@ -78,30 +85,45 @@ class AuthenticateUserUseCase {
         token: tokenVerification,
         expires,
       });
-
-      await sendTransactionalMail({
-        email,
-        name,
-        subject: "Verificação de e-mail",
-        templateName: "email-verification.hbs",
-        moduleName: "user",
-        additionalVariablesProperties: {
-          url: `${this.http_request}/new-verification?token=${tokenVerification}`,
-          logo: emailLogoUrl(),
-        },
-      });
-
-      return {
-        emailVerificationMessage:
-          "Um token de verificação foi enviado para este e-mail!",
-        emailVerification: true,
-      };
     } catch (error) {
       throw new AppError(
         "Houve um erro ao tentar enviar o código de verificação! Por favor, tente novamente.",
         500,
       );
     }
+
+    /**
+     * Sent after the answer, never before it.
+     *
+     * The login waited on the SMTP round trip to Resend (10 s timeouts): a
+     * slow provider held the request past the edge's patience and a failing
+     * one answered 500 to a right password. The token is stored above, and
+     * logging in again issues a new link, so a lost e-mail costs one more
+     * attempt. It carries a secret, so it stays in-process, off the outbox.
+     */
+    void sendTransactionalMail({
+      email,
+      name,
+      subject: "Verificação de e-mail",
+      templateName: "email-verification.hbs",
+      moduleName: "user",
+      additionalVariablesProperties: {
+        url: `${this.http_request}/new-verification?token=${tokenVerification}`,
+        logo: emailLogoUrl(),
+      },
+    }).catch((error) =>
+      // The provider's error is already redacted (no address).
+      log.error(
+        { err: error, userId },
+        "e-mail verification link could not be sent",
+      ),
+    );
+
+    return {
+      emailVerificationMessage:
+        "Um token de verificação foi enviado para este e-mail!",
+      emailVerification: true,
+    };
   }
 
   private async twoFactor({
@@ -139,36 +161,48 @@ class AuthenticateUserUseCase {
         token: hashedTwoFactorToken,
         expires: twoFactorExpires,
       });
-
-      await sendTransactionalMail({
-        email,
-        name,
-        subject: "Código de verificação de dois fatores",
-        templateName: "two-factor-verification-code.hbs",
-        moduleName: "user",
-        additionalVariablesProperties: {
-          token: twoFactorToken,
-          logo: emailLogoUrl(),
-        },
-      });
-
-      return {
-        twoFactorVerificationMessage:
-          "Um código de verificação foi enviado para este e-mail!",
-        isTwoFactorVerification: true,
-        // The proof that the password was right, for the code step (WEB-07).
-        twoFactorChallenge: issueTwoFactorChallenge({
-          id: userId,
-          email,
-          session_version: sessionVersion,
-        }),
-      };
     } catch (error) {
       throw new AppError(
         "Houve um erro ao tentar enviar o código de verificação! Por favor, tente novamente.",
         500,
       );
     }
+
+    /**
+     * Sent after the answer, never before it, like the resend
+     * (resend-two-factor-code). The code is stored above, and the code
+     * screen's "reenviar" issues another with the challenge returned here, so
+     * a lost e-mail costs one resend instead of a login held on SMTP or a 500
+     * after a right password. It carries a secret: in-process, off the outbox.
+     */
+    void sendTransactionalMail({
+      email,
+      name,
+      subject: "Código de verificação de dois fatores",
+      templateName: "two-factor-verification-code.hbs",
+      moduleName: "user",
+      additionalVariablesProperties: {
+        token: twoFactorToken,
+        logo: emailLogoUrl(),
+      },
+    }).catch((error) =>
+      log.error(
+        { err: error, userId },
+        "two-factor code e-mail could not be sent",
+      ),
+    );
+
+    return {
+      twoFactorVerificationMessage:
+        "Um código de verificação foi enviado para este e-mail!",
+      isTwoFactorVerification: true,
+      // The proof that the password was right, for the code step (WEB-07).
+      twoFactorChallenge: issueTwoFactorChallenge({
+        id: userId,
+        email,
+        session_version: sessionVersion,
+      }),
+    };
   }
 
   async execute(
@@ -228,6 +262,7 @@ class AuthenticateUserUseCase {
      */
     if (!findUser.email_verified) {
       return await this.emailVerification({
+        userId: findUser.id,
         email: findUser.email,
         name: findUser.name,
       });

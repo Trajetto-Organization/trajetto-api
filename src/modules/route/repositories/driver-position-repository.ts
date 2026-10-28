@@ -51,7 +51,7 @@ class DriverPositionRepository implements IDriverPositionRepository {
     routeStartedAt?: Date | null;
     pings: AcceptedPing[];
   }): Promise<RecordedBatch> {
-    if (pings.length === 0) return { stored: 0, dropped: 0 };
+    if (pings.length === 0) return { stored: 0, dropped: 0, advanced: false };
 
     const owner = {
       driverId,
@@ -60,7 +60,7 @@ class DriverPositionRepository implements IDriverPositionRepository {
     };
 
     try {
-      return { stored: await this.writeBatch(owner, pings), dropped: 0 };
+      return { ...(await this.writeBatch(owner, pings)), dropped: 0 };
     } catch (error) {
       if (!isMissingPartition(error)) throw error;
 
@@ -94,11 +94,12 @@ class DriverPositionRepository implements IDriverPositionRepository {
         "positions with no partition dropped; the rest of the flush was stored",
       );
 
-      return {
-        stored:
-          writable.length > 0 ? await this.writeBatch(owner, writable) : 0,
-        dropped: orphaned.length,
-      };
+      const written =
+        writable.length > 0
+          ? await this.writeBatch(owner, writable)
+          : { stored: 0, advanced: false };
+
+      return { ...written, dropped: orphaned.length };
     }
   }
 
@@ -134,7 +135,7 @@ class DriverPositionRepository implements IDriverPositionRepository {
       route: { id: string; started_at: Date | null } | null;
     },
     pings: AcceptedPing[],
-  ): Promise<number> {
+  ): Promise<{ stored: number; advanced: boolean }> {
     const insertTrail = this.prisma.driverPosition.createMany({
       data: pings.map((ping) => ({
         driverId,
@@ -206,12 +207,14 @@ class DriverPositionRepository implements IDriverPositionRepository {
       WHERE "driver_last_position"."recorded_at" < EXCLUDED."recorded_at"
     `;
 
-    const [{ count }] = await this.prisma.$transaction([
+    const [{ count }, lastPositionRows] = await this.prisma.$transaction([
       insertTrail,
       upsertLastPosition,
     ]);
 
-    return count;
+    // The upsert's row count is the guard's verdict: 1 when the row was
+    // inserted or moved forward, 0 when the stored fix was already newer.
+    return { stored: count, advanced: lastPositionRows > 0 };
   }
 
   /**

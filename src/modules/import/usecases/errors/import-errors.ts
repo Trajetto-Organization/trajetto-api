@@ -25,4 +25,41 @@ class ImportAlreadyReversedError extends AppError {
   }
 }
 
-export { ImportAlreadyReversedError, ImportNotFoundError };
+/**
+ * Another run is undoing this upload right now (it holds the lease and its
+ * heartbeat is fresh). Two runs at once would race over the same rows and
+ * announce the same deliveries twice. The HTTP route answers this case with
+ * the 202 of the run already going; this is what the in-process callers get.
+ */
+class ImportReversalRunningError extends AppError {
+  constructor() {
+    super(
+      "O estorno desta importação já está em andamento.",
+      409,
+      "IMPORT_REVERSAL_IN_PROGRESS",
+    );
+  }
+}
+
+/**
+ * The run lost its lease: it went quiet long enough to be taken for dead and
+ * another run took over. Its batch is rolled back rather than applied twice.
+ * A 409 like the running case — the undo is someone else's now — should it
+ * ever reach a client (in practice it ends a background run, and is logged).
+ */
+class ImportReversalLeaseLostError extends AppError {
+  constructor() {
+    super(
+      "O estorno desta importação passou a ser feito por outra solicitação.",
+      409,
+      "IMPORT_REVERSAL_LEASE_LOST",
+    );
+  }
+}
+
+export {
+  ImportAlreadyReversedError,
+  ImportNotFoundError,
+  ImportReversalLeaseLostError,
+  ImportReversalRunningError,
+};

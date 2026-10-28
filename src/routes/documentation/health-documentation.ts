@@ -714,7 +714,9 @@ const healthSchemas = {
       .enum(["true", "false"])
       .optional()
       .transform((value) => value === "true")
-      .describe("true: ignora o cache de 30 s e sonda os provedores de novo."),
+      .describe(
+        "true: ignora o cache de 30 s e sonda os provedores de novo (no máximo uma vez a cada 5 s; antes disso responde o relatório que já existe).",
+      ),
   }),
   deadLetterEventsQuery: z.object({
     page: z.coerce
