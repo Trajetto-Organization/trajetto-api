@@ -241,25 +241,34 @@ todos resolvidos mantendo as duas mudanças — o comentário de
 sem query engine nem `PRISMA_QUERY_ENGINE_LIBRARY`, com `prisma.config.ts`,
 sem `pglite` e sem os compiladores de outros bancos) e o `README.md`. Os três
 testes E2E novos da rodada passaram a abrir o cliente por
-`createPrismaClient`.
+`createPrismaClient`. Em 29/10/2026 a branch foi rebaseada sobre `d413cb1`
+(a staging com a conferência semanal das faixas da Cloudflare e o IPv4
+preferido pelo sistema), sem conflitos.
 
 A revisão da integração achou o que o Prisma 7 mudou por baixo do código:
 o COMMIT recusado por serialização chega como erro cru do adapter (o retry de
 abastecimento e checklist só olhava `P2034`), pool cheio e conexão que não
 abre chegam como `DatabaseUnavailableError` (o retry da trilha de auditoria
-só olhava `P2024`/`P1001`) e alguns errnos de rede não eram mapeados. As
-correções entraram na árvore final, com testes unitários e dois E2E novos
-(`serializable-commit-retry` e `audit-trail-unavailable-database`), e todos
-os gates foram refeitos nela, em 28/10/2026 à noite, com a env do job `test`
-do `deploy.yml`:
+só olhava `P2024`/`P1001`) e alguns errnos de rede não eram mapeados. Uma
+segunda rodada achou mais dois pontos. O COMMIT de uma `$transaction`
+interativa com o banco indo embora (backend encerrado, conexão resetada)
+também chega como erro cru do adapter e virava 500 em vez de 503 com
+Retry-After. E as filas e as métricas comparam colunas `timestamp(3)` em UTC
+com `now()`, o que só acertava porque o servidor está em UTC; agora o pool
+abre toda sessão com `TimeZone=UTC` (a dependência já existia no Prisma 6).
+As correções entraram na árvore final, com testes unitários e quatro E2E
+novos (`serializable-commit-retry`, `audit-trail-unavailable-database`,
+`commit-database-unavailable-http` e `database-session-timezone`), e todos
+os gates foram refeitos nela depois do rebase, em 29/10/2026 de madrugada,
+com a env do job `test` do `deploy.yml`:
 
 | Gate                                     | Resultado                                                                                                                                             |
 | ---------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `audit-ci`, `prettier --check`, `tsc`    | passam (`tsc` com 0 erros)                                                                                                                            |
-| Suíte unitária com cobertura (env do CI) | 511 arquivos: 510 ok e 1 pulado; 5.625 testes ok, 0 falhas, 29 pulados; cobertura 77,55 / 84,56 / 67,51 / 77,55 % (pisos 70,8 / 82,57 / 57,62 / 70,8) |
-| E2E completo (295 arquivos, lotes de 8)  | 292 ok de primeira, 0 falhas, 3 pulados; 3.243 testes ok e 15 pulados, em 25 min                                                                      |
+| Suíte unitária com cobertura (env do CI) | 512 arquivos: 511 ok e 1 pulado; 5.663 testes ok, 0 falhas, 29 pulados; cobertura 77,56 / 84,57 / 67,53 / 77,56 % (pisos 70,8 / 82,57 / 57,62 / 70,8) |
+| E2E completo (297 arquivos, lotes de 8)  | 294 ok de primeira, 0 falhas, 3 pulados; 3.251 testes ok e 15 pulados, em 25 min                                                                      |
 | `migrate deploy` do zero                 | 135/135, `migrate status` em dia; o `migrate diff` (banco migrado → `schema.prisma`) só mostra os 3 índices de SQL cru já conhecidos                  |
-| Imagem + smoke do CI (`deploy.yml`)      | passa em 36 s: migrations do zero e seeds no modo `migrate`, boot saudável, commit conferido no `/health/liveness`, readiness 200                     |
+| Imagem + smoke do CI (`deploy.yml`)      | passa em 32 s: migrations do zero e seeds no modo `migrate`, boot saudável, commit conferido no `/health/liveness`, readiness 200                     |
 
 O arquivo unitário pulado (`compose-ci-siblings`) e os 29 testes pulados
 dependem dos repositórios irmãos (`trajetto-ui`, `trajetto-mobile`), que não
@@ -271,7 +280,8 @@ Windows a porta cai numa faixa reservada pelo sistema e o pacote não sobe) e
 descartável. Nenhum E2E precisou de reexecução.
 
 Benchmark curto (mesmo método, ABBA, 2 execuções por versão, `a6d0bcc`
-contra a integração no `cd36d53`, antes das correções da revisão):
+contra a integração no `cd36d53`, o primeiro commit do Prisma 7, antes das
+correções da revisão e do rebase):
 
 | Média de 2                     | 6.1 (`a6d0bcc`) | 7.10.1  | Δ    |
 | ------------------------------ | --------------- | ------- | ---- |
@@ -284,10 +294,11 @@ contra a integração no `cd36d53`, antes das correções da revisão):
 | Tempo de execução no Postgres  | 36,5 s          | 28,9 s  | −21% |
 
 Imagem da árvore final (`docker image inspect` / soma do histórico /
-`docker images`), contra a imagem do 6.1 com as mesmas regras de
-`Dockerfile`: comprimida 87,6 → 114,8 MB (+27,2 MB, +31%), descompactada
-285 → 431 MB (+51%), listada 373 → 546 MB (+46%), 14 → 15 camadas (a nova é
-o `prisma.config.ts`). O `node_modules` vai de 27,4 para 59,0 MB comprimidos;
+`docker images`; medida de novo depois do rebase, com os mesmos números),
+contra a imagem do 6.1 com as mesmas regras de `Dockerfile`: comprimida
+87,6 → 114,8 MB (+27,2 MB, +31%), descompactada 285 → 431 MB (+51%),
+listada 373 → 546 MB (+46%), 14 → 15 camadas (a nova é o
+`prisma.config.ts`). O `node_modules` vai de 27,4 para 59,0 MB comprimidos;
 o `.prisma` cai de 7,7 para 3,2 MB. O aumento é o CLI do 7, que a etapa de
 release usa no `migrate deploy` (Studio, `@prisma/dev`, `effect`); separar
 um alvo só de migração no `Dockerfile` (item 3 do menor caminho) é o próximo
