@@ -157,7 +157,7 @@ services:
   # so the seed can never touch a real one. Stop trajetto-itest-pg first if
   # it holds the port (or set LOAD_PG_PORT and seed through that).
   postgres:
-    image: postgres:16-alpine
+    image: postgres:18-alpine
     # pg_stat_statements loaded, for the database side of a run (README).
     command: ["postgres", "-c", "shared_preload_libraries=pg_stat_statements", "-c", "pg_stat_statements.track=all"]
     environment:
