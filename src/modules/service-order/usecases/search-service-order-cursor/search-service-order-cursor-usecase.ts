@@ -17,6 +17,8 @@ interface SearchServiceOrderCursorRequest {
   limit?: number;
   cursor?: string;
   businessId: string;
+  /** The picker's typed term (FLEET-SEARCH-1). */
+  search?: string;
 }
 
 @injectable()
@@ -35,6 +37,7 @@ class SearchServiceOrderCursorUseCase {
     limit = 10,
     cursor,
     businessId,
+    search,
   }: SearchServiceOrderCursorRequest): Promise<CursorPaginatedServiceOrder> {
     const findUser = await this.user.findUserById(userId);
 
@@ -55,6 +58,7 @@ class SearchServiceOrderCursorUseCase {
         limit,
         cursor,
         businessId,
+        search,
       });
 
       return result;

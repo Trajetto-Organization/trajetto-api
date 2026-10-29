@@ -1,0 +1,32 @@
+name: Cloudflare ranges
+
+# Every Monday, Cloudflare's edge as written in src/config/trusted-edge.ts
+# against the list Cloudflare publishes
+# (.github/scripts/check-cloudflare-ranges.mjs). The IPv4 half is also the
+# origin firewall's allowlist (Contabo, ports 80 and 443, docs/deploy.md
+# section 6.1). A red run e-mails the schedule's owner with the ranges to add
+# or remove, before a change turns into 522s.
+on:
+  schedule:
+    # 06:00 in São Paulo.
+    - cron: "0 9 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  ranges:
+    name: Cloudflare ranges
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout the list and the check
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          sparse-checkout: |
+            .github/scripts
+            src/config
+
+      - name: Compare with the published ranges
+        run: node .github/scripts/check-cloudflare-ranges.mjs

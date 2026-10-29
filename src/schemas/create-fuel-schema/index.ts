@@ -1,14 +1,15 @@
 import { z } from "zod";
-import { MultipartFile } from "@fastify/multipart";
+
+import { isPickedDateInput } from "@/shared/vehicle/record-dates";
 
 import { LocationSource, RecordOrigin } from "@prisma/client";
 import { isWithinAllowedDistance } from "@/shared/utils/geolocation";
+import { devicePrecheckField } from "@/shared/ai-precheck/device-precheck";
 
 import {
   hasConsecutiveSpaces,
   hasSpaceAtEdges,
   isEmptyOrWhitespace,
-  isValidDateString,
 } from "@/shared/utils/zod-schema-helpers";
 
 const createFuelSchema = z
@@ -16,7 +17,10 @@ const createFuelSchema = z
     client_submission_id: z
       .string()
       .uuid("A chave de idempotência do envio é inválida.")
-      .optional(),
+      .optional()
+      .describe(
+        "Chave de idempotência do envio (UUID), gerada uma vez pelo app e repetida em cada retentativa; o header Idempotency-Key preenche este campo quando ele vem vazio. Repetir a chave devolve o abastecimento já criado em vez de duplicar. Obrigatória quando created_from = MOBILE_APP.",
+      ),
     current_mileage: z.preprocess(
       (val) => {
         if (typeof val === "string") {
@@ -76,7 +80,9 @@ const createFuelSchema = z
         })
         .positive("O preço por litro deve ser um valor positivo.")
         .min(0.01, "O preço por litro deve ser no mínimo R$ 0,01")
-        .max(999.99, "O preço por litro não pode exceder R$ 999,99."),
+        // Sanity cap (decision 15.9): no fuel costs more than R$ 50/L; a typed
+        // 599 used to be saved as R$ 599/L. Mirrored by the web and the app.
+        .max(50, "O preço por litro não pode exceder R$ 50,00."),
     ),
     notes: z
       .string()
@@ -119,7 +125,7 @@ const createFuelSchema = z
       .string()
       .min(1, "A data do abastecimento é obrigatória.")
       .superRefine((val, ctx) => {
-        if (!isValidDateString(val)) {
+        if (!isPickedDateInput(val)) {
           ctx.addIssue({
             code: z.ZodIssueCode.custom,
             message: "Data do abastecimento inválida.",
@@ -128,20 +134,9 @@ const createFuelSchema = z
           return;
         }
 
-        // Validation: refueling date cannot be in the future
-        const refuelingDate = new Date(val);
-        const today = new Date();
-
-        today.setHours(23, 59, 59, 999); // End of today
-
-        if (refuelingDate > today) {
-          ctx.addIssue({
-            code: z.ZodIssueCode.custom,
-            message: "A data do abastecimento não pode ser no futuro.",
-          });
-
-          return;
-        }
+        // "Not in the future" needs the company's calendar, which a schema
+        // does not have: the use case checks it (fuel-rules.ts). The
+        // server's end of day let tomorrow through from 21:00 in São Paulo.
       }),
     vehicleId: z
       .string({ required_error: "ID do veículo é obrigatório!" })
@@ -223,6 +218,9 @@ const createFuelSchema = z
         message: "Origem inválida. Deve ser MOBILE_APP ou WEB_DASHBOARD.",
       }),
     }),
+
+    // Decision 14.2: the phone's offline check of the odometer photo.
+    device_precheck: devicePrecheckField,
   })
   // 🆕 VALIDATION: Distance check for GPS_MANUAL (manual adjustment)
   .refine(
@@ -267,34 +265,6 @@ const createFuelSchema = z
     }
   });
 
-// Schema for file validation
-const odometerPhotoSchema = z
-  .custom<MultipartFile>()
-  .refine((file) => file !== undefined && file !== null, {
-    message: "A foto do odômetro é obrigatória.",
-  })
-  .refine((file) => file?.mimetype?.startsWith("image/"), {
-    message: "O arquivo deve ser uma imagem.",
-  })
-  .refine(
-    (file) => {
-      const allowedTypes = [
-        "image/jpeg",
-        "image/jpg",
-        "image/png",
-        "image/webp",
-      ];
-      return allowedTypes.includes(file?.mimetype);
-    },
-    {
-      message: "Tipo de arquivo não suportado. Use apenas JPEG, PNG ou WebP.",
-    },
-  );
-
-// Combined schema for multipart request
-const createFuelMultipartSchema = z.object({
-  body: createFuelSchema,
-  file: odometerPhotoSchema,
-});
-
-export { createFuelSchema, odometerPhotoSchema, createFuelMultipartSchema };
+// The odometer photo is validated by `presignedPhotoSchema`: it never reaches
+// this API as a file, only as a key pointing at an object already in storage.
+export { createFuelSchema };

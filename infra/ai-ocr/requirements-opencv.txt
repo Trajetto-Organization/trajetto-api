@@ -1,0 +1,8 @@
+# Layer 1 of the runtime image (Dockerfile, stage `base`), the largest and the
+# one that moves least: OpenCV's headless build, measured by the benchmark
+# (ADR 0010) and ignored by Dependabot (.github/dependabot.yml). Moving it is
+# a new measurement, and invalidates every layer after it.
+# Pinned and hashed (pip --require-hashes), installed with --no-deps: the
+# closure of the runtime is the union of the requirements-*.txt files and
+# requirements.txt, each its own layer (see requirements.txt).
+opencv-python-headless==4.12.0.88 --hash=sha256:236c8df54a90f4d02076e6f9c1cc763d794542e886c576a6fee46ec8ff75a7a9

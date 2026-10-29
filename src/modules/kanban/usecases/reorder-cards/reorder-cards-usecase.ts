@@ -5,8 +5,11 @@ import { IUserRepository } from "@/modules/user/repositories/IUser-repository";
 
 import { ReorderKanbanCardsProps } from "../../dtos/kanban-dto";
 
-import { KanbanNotAllowedReorderCardBusinessError } from "../errors/kanban-not-allowed-reorder-card-business-error";
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
+
+import { KanbanCardNotFoundError } from "../errors/kanban-card-not-found-error";
+import { KanbanColumnNotFoundError } from "../errors/kanban-column-not-found-error";
+import { KanbanCardCrossBoardMoveError } from "../errors/kanban-card-cross-board-move-error";
 
 import { AppError } from "@/shared/errors/AppError";
 
@@ -26,41 +29,61 @@ class ReorderKanbanCardsUseCase {
       throw new ResourceNotFoundError();
     }
 
-    // Group cards by column to check permissions more efficiently
-    const cardsByColumn = new Map<string, string[]>();
+    const isMaster = findUser.role === "MASTER";
 
-    // Verify all cards and check permissions
+    // Resolved once per column: a board reorder touches few columns and many
+    // cards. `null` is a column that does not exist.
+    const columnBusiness = new Map<string, string | null>();
+
+    const businessOfColumn = async (
+      columnId: string,
+    ): Promise<string | null> => {
+      if (columnBusiness.has(columnId)) {
+        return columnBusiness.get(columnId) ?? null;
+      }
+
+      const column = await this.kanban.findColumnById(columnId);
+      const businessId = column?.businessId ?? null;
+
+      columnBusiness.set(columnId, businessId);
+      return businessId;
+    };
+
+    // What the caller may see: the MASTER every board, anyone else their own.
+    const visible = (businessId: string | null): businessId is string =>
+      businessId !== null && (isMaster || businessId === findUser.businessId);
+
+    // Both ends of every move. Checking only the TARGET column let an admin
+    // of one company pull another company's card onto their own board. An end
+    // on another company's board answers as a missing one (decision 11.3).
     for (const cardData of data.cards) {
       const card = await this.kanban.findCardById(cardData.id);
-      if (!card) {
-        throw new AppError(`Card ${cardData.id} não encontrado.`, 404);
+      const sourceBusinessId = card
+        ? await businessOfColumn(card.columnId)
+        : null;
+
+      if (!visible(sourceBusinessId)) {
+        throw new KanbanCardNotFoundError();
       }
 
-      // Store cards by column for permission check
-      if (!cardsByColumn.has(cardData.columnId)) {
-        cardsByColumn.set(cardData.columnId, []);
-      }
-      cardsByColumn.get(cardData.columnId)!.push(cardData.id);
-    }
+      const targetBusinessId = await businessOfColumn(cardData.columnId);
 
-    // Check permissions for each column
-    for (const [columnId, cardIds] of cardsByColumn) {
-      const column = await this.kanban.findColumnById(columnId);
-      if (!column) {
-        throw new AppError(`Coluna ${columnId} não encontrada.`, 404);
+      if (!visible(targetBusinessId)) {
+        throw new KanbanColumnNotFoundError();
       }
 
-      // Verify user permissions
-      if (findUser.role !== "MASTER") {
-        if (findUser.businessId !== column.businessId) {
-          throw new KanbanNotAllowedReorderCardBusinessError();
-        }
+      // Only the MASTER sees two boards; not even they move a card across.
+      if (sourceBusinessId !== targetBusinessId) {
+        throw new KanbanCardCrossBoardMoveError();
       }
     }
 
     try {
       await this.kanban.reorderCards(data);
     } catch (error) {
+      // A column or card deleted meanwhile: the repository says "not found".
+      if (error instanceof AppError) throw error;
+
       throw new AppError(
         "Houve um erro ao tentar reordenar os cards! Por favor, tente novamente.",
         500,

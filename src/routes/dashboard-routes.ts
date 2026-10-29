@@ -10,6 +10,7 @@ import {
   dashboardSchemas,
   dashboardResponses,
 } from "./documentation/dashboard-documentation";
+import { errorResponse } from "./documentation/common-responses";
 
 const getDashboardOverviewController = new GetDashboardOverviewController();
 const getDashboardTrendsController = new GetDashboardTrendsController();
@@ -25,12 +26,15 @@ async function dashboardRoutes(app: FastifyInstance) {
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["dashboard"],
-        summary: "Get dashboard overview data",
+        summary: "Visão geral do painel",
         description:
-          "Retrieve comprehensive dashboard overview including vehicles, drivers, service orders, maintenance and costs statistics",
+          "Contagens do mês, tendência de seis meses, situação da frota, custos de manutenção, operação de hoje e atividades recentes. Meses e 'hoje' seguem o fuso da empresa (Business.timezone); o MASTER vê o total da plataforma no fuso padrão. Séries e custos só aparecem para o perfil que pode lê-los e para a empresa que contratou o módulo.",
         response: {
           200: dashboardResponses.dashboardOverview,
+          401: errorResponse,
+          403: errorResponse,
           404: dashboardResponses.resourceNotFound,
+          429: errorResponse,
           500: dashboardResponses.internalServerError,
         },
       },
@@ -46,13 +50,17 @@ async function dashboardRoutes(app: FastifyInstance) {
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["dashboard"],
-        summary: "Get dashboard trends data",
+        summary: "Tendências do painel por período",
         description:
-          "Retrieve dashboard trends data for charts and analytics based on specified time period",
+          "Série de cadastros e custos de manutenção nos últimos 7 ou 30 dias (por dia) ou 3, 6 ou 12 meses (por mês), no calendário da empresa (Business.timezone). Mesmas regras de visibilidade da visão geral.",
         querystring: dashboardSchemas.trendsQuery,
         response: {
           200: dashboardResponses.dashboardTrends,
+          400: errorResponse,
+          401: errorResponse,
+          403: errorResponse,
           404: dashboardResponses.resourceNotFound,
+          429: errorResponse,
           500: dashboardResponses.internalServerError,
         },
       },

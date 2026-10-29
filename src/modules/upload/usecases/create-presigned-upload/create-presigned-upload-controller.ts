@@ -41,9 +41,16 @@ class CreatePresignedUploadController {
 
       return reply.status(201).send({ uploads });
     } catch (error) {
-      if (error instanceof AppError) {
-        return reply.status(error.statusCode).send({ message: error.message });
-      }
+      // Its own status and code, from the global handler (decision 11.3).
+      if (error instanceof AppError) throw error;
+
+      // The error handler, the one place that logs a stack, never sees this
+      // path: without the line the access log showed a 500 and nothing said
+      // why (OBS-12). The body stays what the clients already handle.
+      request.log.error(
+        { err: error, uploadType },
+        "presigned upload authorization failed",
+      );
 
       return reply
         .status(500)

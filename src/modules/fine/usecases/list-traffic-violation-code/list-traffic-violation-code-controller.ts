@@ -4,7 +4,6 @@ import { container } from "tsyringe";
 import { ListTrafficViolationCodeUseCase } from "./list-traffic-violation-code-usecase";
 import { listTrafficViolationCodeSchema } from "@/schemas/list-traffic-violation-code-schema";
 
-import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
 import { sendAsNDJSON } from "@/config/stream-utils";
 
 class ListTrafficViolationCodeController {
@@ -28,30 +27,22 @@ class ListTrafficViolationCodeController {
       }
     }
 
-    try {
-      const trafficViolationCodesPromise =
-        listTrafficViolationCodeUseCase.execute(
-          id,
-          page,
-          pageSize,
-          decodedSearch,
-          gravity,
-          violatorType,
-        );
-
-      await sendAsNDJSON({
-        reply,
-        dataPromise: trafficViolationCodesPromise,
+    const trafficViolationCodesPromise =
+      listTrafficViolationCodeUseCase.execute(
+        id,
         page,
         pageSize,
-      });
-    } catch (error) {
-      if (error instanceof ResourceNotFoundError) {
-        return reply.status(400).send({ message: error.message });
-      }
+        decodedSearch,
+        gravity,
+        violatorType,
+      );
 
-      throw error;
-    }
+    await sendAsNDJSON({
+      reply,
+      dataPromise: trafficViolationCodesPromise,
+      page,
+      pageSize,
+    });
   }
 }
 

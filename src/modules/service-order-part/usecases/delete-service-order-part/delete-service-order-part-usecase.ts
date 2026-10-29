@@ -15,9 +15,6 @@ import { NotificationService } from "@/shared/services/notification-service";
 import { formatCurrency } from "@/shared/utils/format-values";
 
 import { ServiceOrderPartNotFoundError } from "../errors/service-order-part-not-found-error";
-import { ServiceOrderNotBelongBusinessError } from "@/modules/service-order/usecases/errors/service-order-not-belong-business-error";
-
-import { PartNotBelongServiceOrderError } from "@/modules/part/usecases/errors/part-not-belong-service-order-error";
 
 import { ServiceOrderPart } from "../../dtos/service-order-part-dto";
 import { AppError } from "@/shared/errors/AppError";
@@ -59,25 +56,23 @@ class DeleteServiceOrderPartUseCase {
     const findServiceOrder =
       await this.serviceOrder.findServiceOrderById(serviceOrderId);
 
-    if (!findServiceOrder) {
+    // Another company's order is not found from here either: a distinct
+    // answer confirmed the id exists elsewhere (decision 11.3).
+    if (!findServiceOrder || findServiceOrder.businessId !== businessId) {
       throw new ServiceOrderNotFoundError();
-    }
-
-    if (findServiceOrder.businessId !== businessId) {
-      throw new ServiceOrderNotBelongBusinessError();
     }
 
     // Check if the work order part exists
     const findServiceOrderPart =
       await this.serviceOrderPart.findServiceOrderPartById(serviceOrderPartId);
 
-    if (!findServiceOrderPart) {
+    // A line of another order (possibly another company's) is not found
+    // from here, the same answer update gives.
+    if (
+      !findServiceOrderPart ||
+      findServiceOrderPart.serviceOrderId !== serviceOrderId
+    ) {
       throw new ServiceOrderPartNotFoundError();
-    }
-
-    // Check if the work order part belongs to the work order
-    if (findServiceOrderPart.serviceOrderId !== serviceOrderId) {
-      throw new PartNotBelongServiceOrderError();
     }
 
     try {

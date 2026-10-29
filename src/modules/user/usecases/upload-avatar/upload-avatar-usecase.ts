@@ -7,7 +7,9 @@ import { AppError } from "@/shared/errors/AppError";
 import { User } from "../../dtos/user-dto";
 
 import { UploadService } from "@/shared/services/upload-service";
-import { MultipartFile } from "@fastify/multipart";
+import { logger } from "@/shared/logging/logger";
+
+const log = logger.child({ component: "user" });
 
 @injectable()
 class UploadAvatarUseCase {
@@ -20,11 +22,11 @@ class UploadAvatarUseCase {
 
   async execute(
     userId: string,
-    avatarFile?: MultipartFile,
 
-    // The avatar when the client uploaded it straight to storage. Scoped by
-    // user, not by business: an avatar belongs to a person.
-    presignedPhoto?: { key: string },
+    // The avatar the client uploaded straight to storage. Scoped by user, not
+    // by business: an avatar belongs to a person, and a MASTER user may have
+    // no business at all.
+    presignedPhoto: { key: string },
   ): Promise<User> {
     const findUser = await this.user.findUserById(userId);
 
@@ -36,56 +38,49 @@ class UploadAvatarUseCase {
     const oldAvatarPath = findUser.avatar;
 
     try {
-      // Step 1: Resolve the new avatar first (before touching database or
-      // deleting the old file), whichever route it arrived by.
-      if (presignedPhoto) {
-        const [resolved] = await this.uploadService.resolvePresignedUploads(
-          [presignedPhoto],
-          "avatars",
-          userId,
-        );
+      // Step 1: Resolve the new avatar first, before touching the database or
+      // deleting the old file.
+      const [resolved] = await this.uploadService.resolvePresignedUploads(
+        [presignedPhoto],
+        "avatars",
+        userId,
+      );
 
-        newAvatarPath = resolved.path;
-      } else if (avatarFile) {
-        const buffer = await avatarFile.toBuffer();
-        const uploadResult = await this.uploadService.uploadFile({
-          buffer,
-          filename: avatarFile.filename || "avatar",
-          mimetype: avatarFile.mimetype,
-          uploadType: "avatars",
-        });
-
-        newAvatarPath = uploadResult.path;
-      } else {
-        throw new AppError(
-          "Nenhuma imagem foi enviada.",
-          400,
-          "AVATAR_MISSING",
-        );
-      }
+      newAvatarPath = resolved.path;
 
       // Step 2: Try to update user avatar path in database
       const updatedUser = await this.user.updateAvatar(userId, newAvatarPath);
 
       if (!updatedUser) {
-        // Rollback: Delete the newly uploaded file since database update failed
-        await this.uploadService.deleteFile(newAvatarPath);
-
+        // The catch below removes the new file, once.
         throw new AppError(
           "Houve um erro ao tentar atualizar o avatar do usuário! Por favor, tente novamente.",
           500,
         );
       }
 
-      // Step 3: Only delete old avatar after successful database update
+      // The row now points at the new file: from here on it is the avatar,
+      // never an orphan to clean up, and the change has happened — nothing
+      // that fails next may answer it as a failure.
+      newAvatarPath = null;
+
+      // Step 3: Only delete old avatar after successful database update.
+      // A leftover old file is the orphan sweep's (UPLOAD_ORPHAN_GC).
       if (oldAvatarPath) {
-        await this.uploadService.deleteFile(oldAvatarPath);
+        await this.uploadService
+          .deleteFile(oldAvatarPath)
+          .catch((err: unknown) => {
+            log.error(
+              { err, key: oldAvatarPath, userId },
+              "previous avatar could not be deleted",
+            );
+          });
       }
 
       return {
         ...updatedUser,
         avatar: updatedUser.avatar
-          ? await this.uploadService.getFileUrl(updatedUser.avatar)
+          ? await this.signedAvatarUrl(updatedUser.avatar, userId)
           : null,
       };
     } catch (error) {
@@ -95,7 +90,10 @@ class UploadAvatarUseCase {
           await this.uploadService.deleteFile(newAvatarPath);
         } catch (cleanupError) {
           // Log cleanup error but don't throw to preserve original error
-          console.error("Failed to cleanup uploaded file:", cleanupError);
+          log.error(
+            { err: cleanupError, key: newAvatarPath, userId },
+            "uploaded avatar could not be cleaned up",
+          );
         }
       }
 
@@ -109,6 +107,23 @@ class UploadAvatarUseCase {
         "Houve um erro ao tentar fazer upload do avatar! Por favor, tente novamente.",
         500,
       );
+    }
+  }
+
+  /** The URL to show now, or null: the next /user/me signs it again. */
+  private async signedAvatarUrl(
+    path: string,
+    userId: string,
+  ): Promise<string | null> {
+    try {
+      return await this.uploadService.getFileUrl(path);
+    } catch (err) {
+      log.error(
+        { err, key: path, userId },
+        "new avatar URL could not be signed",
+      );
+
+      return null;
     }
   }
 }

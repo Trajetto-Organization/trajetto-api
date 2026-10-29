@@ -22,19 +22,11 @@ const ExportFormatters = {
     return value ? "Sim" : "Não";
   },
 
-  date(value?: Date) {
-    if (!value) return "N/A";
-    return new Intl.DateTimeFormat("pt-BR").format(new Date(value));
-  },
-
-  datetime(value?: Date) {
-    if (!value) return "N/A";
-
-    return new Intl.DateTimeFormat("pt-BR", {
-      dateStyle: "short",
-      timeStyle: "short",
-    }).format(new Date(value));
-  },
+  // No date formatters here on purpose: a date column needs the company's
+  // zone, which a shared, argument-less formatter cannot know (it printed in
+  // the process's zone, UTC in the container). Use formatPickedDay /
+  // formatInstant from shared/vehicle/record-dates with Business.timezone, or
+  // formatDateOnlyBR for a date-only column.
 
   cpf: (value: any): string => {
     if (!value) return "N/A";

@@ -1,6 +1,8 @@
-class UserExpiredCodeError extends Error {
+import { AppError } from "@/shared/errors/AppError";
+
+class UserExpiredCodeError extends AppError {
   constructor() {
-    super("Código expirado!");
+    super("Código expirado!", 400, "AUTH_2FA_CODE_EXPIRED");
   }
 }
 

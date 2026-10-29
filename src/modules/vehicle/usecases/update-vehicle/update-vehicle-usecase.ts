@@ -13,12 +13,14 @@ import { IUserRepository } from "@/modules/user/repositories/IUser-repository";
 import { NotificationService } from "@/shared/services/notification-service";
 
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
+import { assertTenantAccess } from "@/modules/middlewares/tenant-authorization";
 import { BusinessNotFoundError } from "@/modules/business/usecases/errors/business-not-found-error";
 
 import { VehicleTypeNotFoundError } from "@/modules/vehicle-type/usecases/errors/vehicle-type-not-found-error";
 import { FuelTypeNotFoundError } from "@/modules/fuel-type/usecases/errors/fuel-type-not-found-error";
 
 import { DriverNotFoundError } from "@/modules/driver/usecases/errors/driver-not-found-error";
+import { DriverNotBelongBusinessError } from "@/modules/driver/usecases/errors/driver-not-belong-business-error";
 import { BranchNotFoundError } from "@/modules/branch/usecases/errors/branch-not-found-error";
 
 import { VehicleNotFoundError } from "../errors/vehicle-not-found-error";
@@ -37,7 +39,24 @@ import { BranchNotBelongBusinessError } from "@/modules/branch/usecases/errors/b
 import { VehicleCurrentMileageCanNotBeUpdatedError } from "../errors/vehicle-current-mileage-can-not-be-updated";
 
 import { translateVehicleStatus } from "@/shared/utils/format-values";
+import {
+  canReactivateVehicle,
+  occupiesFleetSlot,
+} from "@/shared/entitlements/entitlement-rules";
+
 import { AppError } from "@/shared/errors/AppError";
+
+import { decideVehicleStatusChange } from "@/shared/vehicle/vehicle-status-change";
+import { vehicleUniqueFieldOf } from "@/shared/vehicle/vehicle-conflicts";
+import {
+  isModelYearCoherent,
+  vehicleYearOf,
+  withVehicleDates,
+} from "@/shared/vehicle/vehicle-years";
+import { logger } from "@/shared/logging/logger";
+import { sendCatalogChangedEvent } from "@/websocket";
+
+const log = logger.child({ component: "vehicle" });
 
 @injectable()
 class UpdateVehicleUseCase {
@@ -72,6 +91,10 @@ class UpdateVehicleUseCase {
       throw new ResourceNotFoundError();
     }
 
+    // The caller's own company, not only the route guard: a job or another
+    // use case reaches this without the HTTP tenant check.
+    assertTenantAccess(findUser, businessId);
+
     const findBusiness = await this.business.findBusinessById(businessId);
 
     if (!findBusiness) {
@@ -88,42 +111,82 @@ class UpdateVehicleUseCase {
       throw new VehicleNotBelongBusinessError();
     }
 
+    const changes: UpdateVehicleProps = { ...vehicleData };
+
+    if (changes.license_plate !== undefined) {
+      changes.license_plate = changes.license_plate.trim().toUpperCase();
+    }
+
+    // The column is NOT NULL: a null here means "not sent", never "erase".
+    if (changes.current_mileage === null) {
+      delete changes.current_mileage;
+    }
+
     if (
       findUser.role !== "MASTER" &&
-      vehicleData.current_mileage !== undefined &&
-      vehicleData.current_mileage !== findVehicle.current_mileage
+      changes.current_mileage !== undefined &&
+      changes.current_mileage !== findVehicle.current_mileage
     ) {
       throw new VehicleCurrentMileageCanNotBeUpdatedError();
     }
 
-    // Check if license plate is being updated and if it already exists
+    // The status against the routes that use the vehicle (decision 8.3).
+    // Counted only when the status really changes: an echo costs nothing.
+    if (changes.status !== undefined && changes.status !== findVehicle.status) {
+      const verdict = decideVehicleStatusChange({
+        current: findVehicle.status,
+        requested: changes.status,
+        openRoutes: await this.vehicle.countOpenRoutesForVehicle(
+          vehicleId,
+          businessId,
+        ),
+      });
+
+      if (verdict.kind === "refused") {
+        throw new AppError(
+          verdict.message,
+          verdict.code === "VEHICLE_STATUS_DERIVED" ? 400 : 409,
+          verdict.code,
+        );
+      }
+    } else {
+      // An older client resends the stored status (IN_ROUTE included) with
+      // an unrelated edit; that is no change, not a request to lie.
+      delete changes.status;
+    }
+
     if (
-      vehicleData.license_plate &&
-      vehicleData.license_plate !== findVehicle.license_plate
+      changes.license_plate &&
+      changes.license_plate !== findVehicle.license_plate
     ) {
       const findVehicleByLicensePlate =
-        await this.vehicle.findVehicleByLicensePlate(vehicleData.license_plate);
+        await this.vehicle.findVehicleByLicensePlate(
+          changes.license_plate,
+          businessId,
+        );
 
-      if (findVehicleByLicensePlate) {
+      if (
+        findVehicleByLicensePlate &&
+        findVehicleByLicensePlate.id !== vehicleId
+      ) {
         throw new VehicleAlreadyExistsError();
       }
     }
 
-    // Check if RENAVAM is being updated and if it already exists
-    if (vehicleData.renavam && vehicleData.renavam !== findVehicle.renavam) {
+    if (changes.renavam && changes.renavam !== findVehicle.renavam) {
       const findVehicleByRenavam = await this.vehicle.findVehicleByRenavam(
-        vehicleData.renavam,
+        changes.renavam,
+        businessId,
       );
 
-      if (findVehicleByRenavam) {
+      if (findVehicleByRenavam && findVehicleByRenavam.id !== vehicleId) {
         throw new VehicleRenavamExistsError();
       }
     }
 
-    // Additional checks for relationships
-    if (vehicleData.vehicleTypeId) {
+    if (changes.vehicleTypeId) {
       const findVehicleType = await this.vehicleType.findVehicleTypeById(
-        vehicleData.vehicleTypeId,
+        changes.vehicleTypeId,
       );
 
       if (!findVehicleType) {
@@ -135,10 +198,9 @@ class UpdateVehicleUseCase {
       }
     }
 
-    // FuelType is mandatory
-    if (vehicleData.fuelTypeId) {
+    if (changes.fuelTypeId) {
       const findFuelType = await this.fuelType.findFuelTypeById(
-        vehicleData.fuelTypeId,
+        changes.fuelTypeId,
       );
 
       if (!findFuelType) {
@@ -150,51 +212,58 @@ class UpdateVehicleUseCase {
       }
     }
 
-    // Validate relationship between model year and year of manufacture
-    let manufacturingYear: number | null = null;
-    let modelYear: number | null = null;
+    // Pairs are judged only when the edit touches them, one side possibly
+    // coming from the row: an unrelated edit must not be refused over data
+    // that was accepted when it was written.
+    if (changes.manufacturing_year || changes.model_year) {
+      const manufacturingYear = vehicleYearOf(
+        changes.manufacturing_year ?? findVehicle.manufacturing_year,
+      );
+      const modelYear = vehicleYearOf(
+        changes.model_year ?? findVehicle.model_year,
+      );
 
-    // Determine the year of manufacture based on update data or existing vehicle
-    if (vehicleData.manufacturing_year) {
-      manufacturingYear = new Date(
-        vehicleData.manufacturing_year,
-      ).getFullYear();
-    } else if (findVehicle.manufacturing_year) {
-      manufacturingYear = new Date(
-        findVehicle.manufacturing_year,
-      ).getFullYear();
-    }
-
-    // Determine model year based on update data or existing vehicle
-    if (vehicleData.model_year) {
-      modelYear = new Date(vehicleData.model_year).getFullYear();
-    } else if (findVehicle.model_year) {
-      modelYear = new Date(findVehicle.model_year).getFullYear();
-    }
-
-    // If both years are known, validate the relationship between them
-    if (manufacturingYear !== null && modelYear !== null) {
-      if (modelYear < manufacturingYear || modelYear > manufacturingYear + 1) {
+      if (!isModelYearCoherent(manufacturingYear, modelYear)) {
         throw new VehicleModelYearError();
       }
     }
 
-    // Driver is optional
-    if (vehicleData.driverId) {
-      const findDriver = await this.driver.findDriverById(vehicleData.driverId);
+    const currentMileage =
+      changes.current_mileage ?? findVehicle.current_mileage;
+    const lastMaintenanceMileage =
+      changes.last_maintenance_mileage !== undefined
+        ? changes.last_maintenance_mileage
+        : findVehicle.last_maintenance_mileage;
+
+    if (
+      (changes.current_mileage != null ||
+        changes.last_maintenance_mileage != null) &&
+      typeof lastMaintenanceMileage === "number" &&
+      lastMaintenanceMileage > currentMileage
+    ) {
+      throw new AppError(
+        "A quilometragem da última revisão não pode ser superior à quilometragem atual.",
+        400,
+        "VEHICLE_MAINTENANCE_MILEAGE_INVALID",
+      );
+    }
+
+    if (changes.driverId) {
+      const findDriver = await this.driver.findDriverById(changes.driverId);
 
       if (!findDriver) {
         throw new DriverNotFoundError();
       }
 
+      // The DRIVER is the foreign record here (FLEET-VEH-9); this used to
+      // answer that the vehicle did not belong to the company.
       if (findDriver.businessId !== businessId) {
-        throw new VehicleNotBelongBusinessError();
+        throw new DriverNotBelongBusinessError();
       }
     }
 
-    // Branch is optional
-    if (vehicleData.branchId) {
-      const findBranch = await this.branch.findBranchById(vehicleData.branchId);
+    if (changes.branchId) {
+      const findBranch = await this.branch.findBranchById(changes.branchId);
 
       if (!findBranch) {
         throw new BranchNotFoundError();
@@ -205,30 +274,68 @@ class UpdateVehicleUseCase {
       }
     }
 
+    // Reactivating an INACTIVE vehicle re-occupies a contracted slot, so it
+    // passes the same locked count as a new registration (FLEET-VEH-7).
+    const isReactivation =
+      changes.status !== undefined &&
+      !occupiesFleetSlot(findVehicle.status) &&
+      occupiesFleetSlot(changes.status);
+
+    const limit = findBusiness.vehicle_limit ?? 0;
+
+    let updatedVehicle: Vehicle | null;
+    let activeCount = 0;
+
     try {
-      const updatedVehicle = await this.vehicle.updateVehicle({
-        vehicleData,
-        vehicleId,
-      });
-
-      // Process activity asynchronously without blocking the main flow
-      this.notificationService.createActivityIfEnabled({
-        type: "Veículo",
-        action: "update",
-        entityId: vehicleId,
-        description: `Veículo ${updatedVehicle.license_plate} atualizado | ID: ${updatedVehicle.id}`,
-        status: translateVehicleStatus(updatedVehicle.status) || "Atualizado",
-        performedBy: userId,
-        businessId,
-      });
-
-      return updatedVehicle;
+      if (isReactivation && limit > 0) {
+        ({ vehicle: updatedVehicle, activeCount } =
+          await this.vehicle.updateVehicleWithinLimit(
+            { vehicleData: withVehicleDates(changes), vehicleId, businessId },
+            { max: limit },
+          ));
+      } else {
+        updatedVehicle = await this.vehicle.updateVehicle({
+          vehicleData: withVehicleDates(changes),
+          vehicleId,
+        });
+      }
     } catch (error) {
+      const conflict = vehicleUniqueFieldOf(error);
+
+      if (conflict === "license_plate") throw new VehicleAlreadyExistsError();
+      if (conflict === "renavam") throw new VehicleRenavamExistsError();
+
+      log.error({ err: error }, "vehicle_update_failed");
+
       throw new AppError(
         "Houve um erro ao tentar atualizar o veículo! Por favor, tente novamente.",
         500,
       );
     }
+
+    if (!updatedVehicle) {
+      const verdict = canReactivateVehicle(activeCount, limit);
+
+      throw new AppError(
+        verdict.reason ?? "Limite de veículos contratados atingido.",
+        409,
+        "VEHICLE_LIMIT_REACHED",
+      );
+    }
+
+    sendCatalogChangedEvent(businessId, "vehicle");
+
+    this.notificationService.createActivityIfEnabled({
+      type: "Veículo",
+      action: "update",
+      entityId: vehicleId,
+      description: `Veículo ${updatedVehicle.license_plate} atualizado | ID: ${updatedVehicle.id}`,
+      status: translateVehicleStatus(updatedVehicle.status) || "Atualizado",
+      performedBy: userId,
+      businessId,
+    });
+
+    return updatedVehicle;
   }
 }
 

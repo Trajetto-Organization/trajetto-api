@@ -17,6 +17,15 @@ interface SearchProfileAccessWithCursorRequest {
   limit?: number;
   cursor?: string;
   businessId: string;
+  /** The typed term, matched against the profile name. */
+  search?: string;
+  /**
+   * Only the profiles the asker may change the permissions of: a
+   * BUSINESS_USER's own profile is left out, as the profile and permission
+   * lists already do. Off for the user form, where giving a colleague the
+   * same profile is legitimate.
+   */
+  editable?: boolean;
 }
 
 @injectable()
@@ -35,6 +44,8 @@ class SearchProfileCursorUseCase {
     limit = 10,
     cursor,
     businessId,
+    search,
+    editable = false,
   }: SearchProfileAccessWithCursorRequest): Promise<CursorPaginatedProfileAccess> {
     const findUser = await this.user.findUserById(userId);
 
@@ -55,6 +66,11 @@ class SearchProfileCursorUseCase {
         limit,
         cursor,
         businessId,
+        search,
+        hideProfileId:
+          editable && findUser.role === "BUSINESS_USER"
+            ? findUser.profileAccessId
+            : null,
       });
 
       return result;

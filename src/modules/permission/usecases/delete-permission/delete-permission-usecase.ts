@@ -14,6 +14,9 @@ import { PermissionNotFoundError } from "../errors/permission-not-found-error";
 
 import { sendSecurityEventToBusiness } from "@/websocket";
 
+import database from "@/../infra/database";
+import { assertTenantAccessToRecord } from "@/modules/middlewares/tenant-authorization";
+
 @injectable()
 class DeletePermissionUseCase {
   constructor(
@@ -47,19 +50,34 @@ class DeletePermissionUseCase {
       throw new PermissionNotFoundError();
     }
 
-    try {
-      const permissionDeleted =
-        await this.permission.deletePermission(permissionId);
+    assertTenantAccessToRecord(
+      findUser,
+      existingPermission.businessId,
+      () => new PermissionNotFoundError(),
+    );
 
-      // Process activity asynchronously without blocking the main flow
-      this.notificationService.createActivityIfEnabled({
-        type: "Permissão",
-        action: "delete",
-        entityId: permissionDeleted.id,
-        description: `Permissão excluída: ${permissionDeleted.action} | ID: ${permissionDeleted.id}`,
-        status: "Deletado",
-        performedBy: userId,
-        businessId: permissionDeleted.businessId,
+    try {
+      // The revocation and its audit entry commit together (OUTBOX-10).
+      const permissionDeleted = await database.$transaction(async (tx) => {
+        const deleted = await this.permission.deletePermission(
+          permissionId,
+          tx,
+        );
+
+        await this.notificationService.createActivityIfEnabled(
+          {
+            type: "Permissão",
+            action: "delete",
+            entityId: deleted.id,
+            description: `Permissão excluída: ${deleted.action} | ID: ${deleted.id}`,
+            status: "Deletado",
+            performedBy: userId,
+            businessId: deleted.businessId,
+          },
+          tx,
+        );
+
+        return deleted;
       });
 
       sendSecurityEventToBusiness(permissionDeleted.businessId, {

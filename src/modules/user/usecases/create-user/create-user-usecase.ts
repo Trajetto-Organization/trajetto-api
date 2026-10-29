@@ -1,4 +1,4 @@
-import { hash } from "bcrypt";
+import { hashSecret } from "@/shared/security/bcrypt-gate";
 import { inject, injectable } from "tsyringe";
 
 import { v4 as uuidV4 } from "uuid";
@@ -24,22 +24,31 @@ import { IUsersTokensRepository } from "../../repositories/IUsers-tokens-reposit
 import { UserProfileAccessNotFoundError } from "../errors/user-profile-access-not-found-error";
 
 import { AppError } from "@/shared/errors/AppError";
+import { permissionDenied } from "@/shared/errors/access-errors";
 import { CreateUserProps, User, UserRole } from "../../dtos/user-dto";
 
 import { ResourceNotFoundError } from "../errors/resource-not-found-error";
 import { UserProfileNotMatchBusinessError } from "../errors/user-profile-not-match-business-error";
 
-import { UserOnlyMasterBeAbleSetPasswordError } from "../errors/user-only-master-be-able-set-password-error";
-import { EmailWorkerAdapter } from "@/jobs/email-worker-adapter";
+import { sendTransactionalMail } from "@/shared/services/transactional-mail-service";
+import { logger } from "@/shared/logging/logger";
 
 import { env } from "@/env";
+import { assertTenantAccess } from "@/modules/middlewares/tenant-authorization";
+
+import { announceDriverLoginChange } from "../../services/driver-login-catalog";
+import {
+  NEW_ACCOUNT_LINK_TTL_MS,
+  issuePasswordSetupLink,
+  unusablePassword,
+} from "../../services/password-setup-link";
+import { emailLogoUrl } from "@/shared/providers/mail-provider/email-logo";
+
+const log = logger.child({ component: "user" });
 
 @injectable()
 class CreateUserUseCase {
   private http_request = env.HTTP_REQUEST;
-  private cloudinaryLogo = env.CLOUDINARY_LOGO_IMAGE;
-
-  private emailQueue: EmailWorkerAdapter;
 
   private allowedRoles: Record<UserRole, UserRole[]> = {
     BUSINESS_USER: ["BUSINESS_USER"],
@@ -66,26 +75,15 @@ class CreateUserUseCase {
     private notificationService: NotificationService,
     @inject("DriverRepository")
     private driver: IDriverRepository,
-  ) {
-    this.emailQueue = new EmailWorkerAdapter("createUserEmailQueue");
-  }
+  ) {}
 
-  // Generate a random password with letters, numbers and special characters
-  private generateRandomPassword(): string {
-    const chars =
-      "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*";
-
-    let password = "";
-    for (let i = 0; i < 12; i++) {
-      password += chars.charAt(Math.floor(Math.random() * chars.length));
-    }
-
-    return password;
-  }
-
+  /**
+   * The welcome e-mail carries a link to set the password, never the password
+   * (decision 4.9): it used to mail a generated one in clear text, readable by
+   * anyone with access to the mailbox or to the provider's logs.
+   */
   private async processNotifications(
     userCreated: User,
-    finalPassword: string,
     performedById: string,
     businessId: string,
   ): Promise<void> {
@@ -93,26 +91,32 @@ class CreateUserUseCase {
       const token = uuidV4();
       const expires = new Date(new Date().getTime() + 3600 * 1000); // 1 hour
 
-      const verificationToken =
-        await this.usersTokens.createEmailVerificationToken({
-          email: userCreated.email,
-          token,
-          expires,
-        });
+      // The link carries the local token: the row only holds its hash.
+      await this.usersTokens.createEmailVerificationToken({
+        email: userCreated.email,
+        token,
+        expires,
+      });
+
+      const setupUrl = await issuePasswordSetupLink(
+        this.usersTokens,
+        userCreated.email,
+        NEW_ACCOUNT_LINK_TTL_MS,
+      );
 
       await Promise.all([
-        this.emailQueue.enqueueEmail({
+        sendTransactionalMail({
           email: userCreated.email,
           name: userCreated.name,
           subject: "Verificação de e-mail",
           templateName: "email-verification.hbs",
           moduleName: "user",
           additionalVariablesProperties: {
-            url: `${this.http_request}/new-verification?token=${verificationToken.token}`,
-            logo: this.cloudinaryLogo,
+            url: `${this.http_request}/new-verification?token=${token}`,
+            logo: emailLogoUrl(),
           },
         }),
-        this.emailQueue.enqueueEmail({
+        sendTransactionalMail({
           email: userCreated.email,
           name: userCreated.name,
           subject: "Conta criada com sucesso",
@@ -120,8 +124,8 @@ class CreateUserUseCase {
           moduleName: "user",
           additionalVariablesProperties: {
             email: userCreated.email,
-            password: finalPassword,
-            logo: this.cloudinaryLogo,
+            url: setupUrl,
+            logo: emailLogoUrl(),
           },
         }),
       ]);
@@ -136,13 +140,15 @@ class CreateUserUseCase {
         businessId,
       });
     } catch (error) {
-      console.error("[Usuário] Erro ao processar notificações:", error);
+      log.error(
+        { err: error, userId: userCreated.id, businessId },
+        "new user e-mails and activity could not be processed",
+      );
     }
   }
 
   async execute(
     {
-      password,
       email,
       name,
       role,
@@ -158,22 +164,20 @@ class CreateUserUseCase {
       throw new ResourceNotFoundError();
     }
 
-    // Only MASTER users can provide custom passwords
-    if (password && findUser.role !== "MASTER") {
-      throw new UserOnlyMasterBeAbleSetPasswordError();
-    }
-
-    // Generate automatic password for non-MASTER users or when no password is provided
-    const finalPassword = password || this.generateRandomPassword();
+    // The company the new account joins must be the creator's own. The request
+    // hook already refuses a foreign businessId, but this is the one write in
+    // the product whose failure hands a stranger an administrator account in
+    // somebody else's company, so it does not depend on a hook alone.
+    assertTenantAccess(findUser, businessId);
 
     if (!this.allowedRoles[findUser.role].includes(role)) {
-      throw new AppError(
+      // The same refusal as a missing permission (decision 4.1).
+      throw permissionDenied(
         `Usuários com o nível de acesso "${
           this.roleDisplayName[findUser.role]
         }" não podem criar usuários com o nível de acesso ${
           this.roleDisplayName[role]
         }.`,
-        403,
       );
     }
 
@@ -227,7 +231,8 @@ class CreateUserUseCase {
       }
     }
 
-    const hashedPassword = await hash(finalPassword, 10);
+    // Nobody knows it: the person sets theirs through the e-mailed link.
+    const hashedPassword = await hashSecret(unusablePassword(), 10);
     const userAlreadyExists = await this.user.findUserByEmail(email);
 
     if (userAlreadyExists) {
@@ -258,8 +263,13 @@ class CreateUserUseCase {
         driverId: cleanDriverId,
       });
 
+      // A driver now has an app login: the chat pickers' "com o app" split
+      // changes for the company's open tabs.
+      if (cleanDriverId) announceDriverLoginChange(businessId);
+
       // Process notifications asynchronously without blocking the main flow
-      this.processNotifications(userCreated, finalPassword, id, businessId);
+      void this.processNotifications(userCreated, id, businessId);
+
       return userCreated;
     } catch (error) {
       throw new AppError(

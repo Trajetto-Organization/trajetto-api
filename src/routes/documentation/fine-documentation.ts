@@ -3,11 +3,15 @@ import { z } from "zod";
 import { createFineSchema } from "@/schemas/create-fine-schema";
 import { updateFineSchema } from "@/schemas/update-fine-schema";
 
-import { updateDeleteFineSchema } from "@/schemas/update-delete-fine-schema";
 import { updateDeleteBusinessSchema } from "@/schemas/update-delete-business-schema";
 
-import { listPagesSchema } from "@/schemas/list-pages-schema";
-import { exportReports } from "@/schemas/export-reports-schema";
+import { listFineSchema } from "@/schemas/list-fine-schema";
+import { exportFineQuerySchema } from "@/schemas/export-fine-schema";
+
+import { searchMetaDoc } from "@/shared/pagination/list-meta";
+import { FINE_STATUSES } from "@/modules/fine/usecases/list-fine/fine-list";
+
+import { errorResponse } from "./common-responses";
 
 const fineBusinessParams = z.object({
   businessId: z.string().uuid("O ID da empresa é obrigatório!"),
@@ -17,394 +21,136 @@ const fineBusinessParams = z.object({
 const fineSchemas = {
   createFine: createFineSchema,
   updateFine: updateFineSchema,
-  updateDeleteFine: updateDeleteFineSchema,
   updateDeleteBusiness: updateDeleteBusinessSchema,
-  listFines: listPagesSchema,
+  listFines: listFineSchema,
   fineBusinessParams: fineBusinessParams,
-  exportFinesQuery: exportReports,
+  exportFinesQuery: exportFineQuerySchema,
 };
 
-const fineResponses = {
-  fineCreated: z.object({
-    message: z.string().default("Multa registrada com sucesso!"),
-  }),
-  fineUpdated: z.object({
-    message: z.string().default("Multa atualizada com sucesso!"),
-  }),
-  fineDeleted: z.object({
-    message: z.string().default("Multa deletada com sucesso!"),
-  }),
-  finesList: z.object({
-    data: z.array(
-      z.object({
-        id: z.string().describe("Fine ID"),
-        violation_date: z
-          .union([z.string(), z.date()])
-          .describe("Date of the traffic violation"),
-        due_date: z
-          .union([z.string(), z.date()])
-          .describe("Fine payment due date"),
-        payment_date: z
-          .union([z.string(), z.date()])
-          .nullable()
-          .describe("Fine payment date"),
-        amount: z.number().describe("Fine amount"),
-        points: z.number().describe("Points deducted from driver's license"),
-        location: z
-          .string()
-          .nullable()
-          .describe("Location where violation occurred"),
-        observation: z.string().nullable().describe("Additional observations"),
-        businessId: z.string().describe("Business ID"),
-        branchId: z.string().describe("Branch ID"),
-        driverId: z.string().describe("Driver ID"),
-        vehicleId: z.string().describe("Vehicle ID"),
-        trafficViolationCodeId: z
-          .string()
-          .describe("Traffic violation code ID"),
-        latitude: z
-          .number()
-          .nullable()
-          .optional()
-          .describe("Location latitude"),
-        longitude: z
-          .number()
-          .nullable()
-          .optional()
-          .describe("Location longitude"),
-        latitude_original: z
-          .number()
-          .nullable()
-          .optional()
-          .describe("Original location latitude"),
-        longitude_original: z
-          .number()
-          .nullable()
-          .optional()
-          .describe("Original location longitude"),
-        location_source: z
-          .string()
-          .nullable()
-          .optional()
-          .describe("Source of location data"),
-        location_edited_by: z
-          .string()
-          .nullable()
-          .optional()
-          .describe("User who edited location"),
-        location_edited_at: z
-          .union([z.string(), z.date()])
-          .nullable()
-          .optional()
-          .describe("When location was edited"),
-        created_from: z.string().describe("Creation source"),
-        created_at: z
-          .union([z.string(), z.date()])
-          .describe("Fine creation timestamp"),
-        updated_at: z
-          .union([z.string(), z.date()])
-          .describe("Fine last update timestamp"),
-        business: z
-          .object({
-            corporate_reason: z.string().describe("Business corporate reason"),
-          })
-          .optional()
-          .describe("Business information"),
-        branch: z
-          .object({
-            corporate_reason: z.string().describe("Branch corporate reason"),
-          })
-          .describe("Branch information"),
-        driver: z
-          .object({
-            name: z.string().describe("Driver name"),
-            cpf: z.string().describe("Driver CPF"),
-          })
-          .describe("Driver information"),
-        vehicle: z
-          .object({
-            license_plate: z.string().describe("Vehicle license plate"),
-            description: z.string().describe("Vehicle description"),
-          })
-          .describe("Vehicle information"),
-        trafficViolationCode: z
-          .object({
-            code: z.string().describe("Traffic violation code"),
-            sub_code: z.string().describe("Traffic violation sub-code"),
-            description: z.string().describe("Traffic violation description"),
-            gravity: z.string().describe("Violation gravity level"),
-            points: z.number().describe("Points deducted"),
-          })
-          .describe("Traffic violation code information"),
-      }),
+const dateValue = z.union([z.string(), z.date()]);
+
+/** One line of GET /fines/list-fine, as FineRepository.listFines selects it. */
+const fineRow = z.object({
+  id: z.string().describe("ID da multa."),
+  status: z
+    .enum(FINE_STATUSES)
+    .describe(
+      "Situação no dia de negócio da empresa: PAID (paga), PENDING (em aberto até o dia do vencimento), OVERDUE (em aberto depois dele).",
     ),
-    total: z.number().describe("Total number of fines"),
-  }),
-  exportFinesSuccess: z.object({
-    buffer: z.any().describe("Excel file buffer"),
-    filename: z.string().describe("Generated filename"),
-    totalRecords: z.number().describe("Total number of exported records"),
-  }),
-  resourceNotFound: z.object({
-    message: z.string().default("Recurso não encontrado!"),
-  }),
-  businessNotFound: z.object({
-    message: z
-      .string()
-      .default("Empresa não encontrada! Por favor, tente novamente."),
-  }),
-  branchNotFound: z.object({
-    message: z.string().default("Filial não encontrada!"),
-  }),
-  driverNotFound: z.object({
-    message: z.string().default("Motorista não encontrado!"),
-  }),
-  fineNotFound: z.object({
-    message: z.string().default("Multa não encontrada!"),
-  }),
-  vehicleNotFound: z.object({
-    message: z.string().default("Veículo não encontrado!"),
-  }),
-  trafficViolationCodeNotFound: z.object({
-    message: z
-      .string()
-      .default("Código de infração de trânsito não encontrado!"),
-  }),
-  fineDateInfractionCannotBeFuture: z.object({
-    message: z.string().default("A data da infração não pode ser futura!"),
-  }),
-  fineDueDateMustBeAfterInfraction: z.object({
-    message: z
-      .string()
-      .default("A data de vencimento deve ser posterior à data da infração!"),
-  }),
-  finePaymentDateCannotBeEarlierInfraction: z.object({
-    message: z
-      .string()
-      .default("A data de pagamento não pode ser anterior à data da infração!"),
-  }),
-  fineLocationNotProvidedAdjustmentValidation: z.object({
-    message: z
-      .string()
-      .default("Localização original não fornecida para validação de ajuste."),
-  }),
-  fineRegistrationsMobileLocationRequired: z.object({
-    message: z
-      .string()
-      .default(
-        "Para registros via aplicativo mobile, a localização é obrigatória.",
+  violation_date: dateValue.describe(
+    "Data da infração: o instante em que o dia começa no fuso da empresa.",
+  ),
+  due_date: dateValue.describe(
+    "Data de vencimento: o instante em que o dia começa no fuso da empresa.",
+  ),
+  payment_date: dateValue
+    .nullable()
+    .describe("Data do pagamento; null se não paga."),
+  violation_day: z
+    .string()
+    .describe(
+      "Dia da infração (AAAA-MM-DD) no fuso da empresa: o que a tela mostra.",
+    ),
+  due_day: z
+    .string()
+    .describe("Dia do vencimento (AAAA-MM-DD) no fuso da empresa."),
+  payment_day: z
+    .string()
+    .nullable()
+    .describe(
+      "Dia do pagamento (AAAA-MM-DD) no fuso da empresa; null se não paga.",
+    ),
+  amount: z.number().describe("Valor da multa, em reais."),
+  points: z.number().int().describe("Pontos na CNH."),
+  location: z.string().nullable().describe("Local da infração."),
+  observation: z.string().nullable().describe("Observações."),
+  businessId: z.string().describe("Empresa."),
+  branchId: z.string().describe("Filial."),
+  driverId: z.string().describe("Motorista."),
+  vehicleId: z.string().describe("Veículo."),
+  trafficViolationCodeId: z.string().describe("Código de infração."),
+  latitude: z.number().nullable().describe("Latitude do ponto da infração."),
+  longitude: z.number().nullable().describe("Longitude do ponto da infração."),
+  latitude_original: z
+    .number()
+    .nullable()
+    .describe("Latitude capturada pelo GPS do app."),
+  longitude_original: z
+    .number()
+    .nullable()
+    .describe("Longitude capturada pelo GPS do app."),
+  location_source: z
+    .string()
+    .nullable()
+    .describe("GPS_AUTO, GPS_MANUAL, USER_MANUAL ou NONE."),
+  location_edited_by: z
+    .string()
+    .nullable()
+    .describe("Quem posicionou o ponto à mão."),
+  location_edited_at: dateValue
+    .nullable()
+    .describe("Quando o ponto foi posicionado à mão."),
+  created_from: z.string().describe("MOBILE_APP ou WEB_DASHBOARD."),
+  client_submission_id: z
+    .string()
+    .nullable()
+    .describe("Chave de idempotência do cadastro."),
+  created_at: dateValue.describe("Criação."),
+  updated_at: dateValue.describe("Última alteração."),
+  branch: z.object({ corporate_reason: z.string() }).describe("Filial."),
+  driver: z
+    .object({ name: z.string(), cpf: z.string() })
+    .describe("Motorista."),
+  vehicle: z
+    .object({ license_plate: z.string(), description: z.string() })
+    .describe("Veículo."),
+  trafficViolationCode: z
+    .object({
+      code: z.string(),
+      sub_code: z.number().int(),
+      description: z.string(),
+      gravity: z.string(),
+      points: z.number().int(),
+    })
+    .describe("Código de infração (tabela nacional)."),
+});
+
+/** The `meta.searchMeta` summarizeFineList builds: the cards and the filter options. */
+const fineListSearchMetaDoc = searchMetaDoc(
+  {
+    total: z
+      .number()
+      .int()
+      .describe(
+        "Multas da busca e dos demais filtros, sem o de situação (o total dos cartões).",
       ),
-  }),
-  fineDueDateInfractionCannotBeLater: z.object({
-    message: z
-      .string()
-      .default(
-        "A nova data da infração não pode ser posterior à data de vencimento existente!",
-      ),
-  }),
-  fineDueDateMustBeLaterInfraction: z.object({
-    message: z
-      .string()
-      .default(
-        "A nova data de vencimento deve ser posterior à data da infração existente!",
-      ),
-  }),
-  fineNotBelongBusiness: z.object({
-    message: z.string().default("Esta multa não pertence a esta empresa!"),
-  }),
-  branchNotBelongBusiness: z.object({
-    message: z
-      .string()
-      .default("A filial informada não pertence à mesma empresa do usuário."),
-  }),
-  driverNotBelongBusiness: z.object({
-    message: z
-      .string()
-      .default(
-        "O motorista informado não pertence à mesma empresa do usuário.",
-      ),
-  }),
-  vehicleNotBelongBusiness: z.object({
-    message: z
-      .string()
-      .default("O veículo informado não pertence à mesma empresa do usuário."),
-  }),
-  validationError: z.object({
-    message: z.string().default("Erro de validação"),
-    issues: z.array(z.string()).describe("List of validation errors"),
-  }),
-  internalServerError: z.object({
-    message: z.string().default("Internal server error"),
-  }),
+    paid: z.number().int().describe("Das quais pagas."),
+    pending: z
+      .number()
+      .int()
+      .describe("Das quais em aberto até o dia do vencimento."),
+    overdue: z
+      .number()
+      .int()
+      .describe("Das quais em aberto depois do dia do vencimento."),
+    totalAmount: z.number().describe("Soma dos valores dessas multas."),
+    openAmount: z
+      .number()
+      .describe("Soma dos valores das que não foram pagas."),
+  },
+  ["status", "branchId", "trafficViolationCodeId"],
+);
 
-  // Grouping errors by route - CREATE (POST) - status 400
-  createFineErrors: z.union([
-    z.object({
-      message: z.string().default("Recurso não encontrado!"),
-    }),
-    z.object({
-      message: z
-        .string()
-        .default("Empresa não encontrada! Por favor, tente novamente."),
-    }),
-    z.object({
-      message: z.string().default("Filial não encontrada!"),
-    }),
-    z.object({
-      message: z.string().default("Motorista não encontrado!"),
-    }),
-    z.object({
-      message: z.string().default("Veículo não encontrado!"),
-    }),
-    z.object({
-      message: z
-        .string()
-        .default("Código de infração de trânsito não encontrado!"),
-    }),
-    z.object({
-      message: z.string().default("A data da infração não pode ser futura!"),
-    }),
-    z.object({
-      message: z
-        .string()
-        .default("A data de vencimento deve ser posterior à data da infração!"),
-    }),
-    z.object({
-      message: z
-        .string()
-        .default(
-          "A data de pagamento não pode ser anterior à data da infração!",
-        ),
-    }),
-    z.object({
-      message: z
-        .string()
-        .default(
-          "Localização original não fornecida para validação de ajuste.",
-        ),
-    }),
-    z.object({
-      message: z
-        .string()
-        .default(
-          "Para registros via aplicativo mobile, a localização é obrigatória.",
-        ),
-    }),
-    z.object({
-      message: z.string().default("Erro de validação"),
-      issues: z.array(z.string()),
-    }),
-  ]),
+const message = (text: string) =>
+  z.object({ message: z.string().default(text) });
 
-  // Forbidden errors for CREATE (status 403)
-  createFineForbiddenErrors: z.union([
-    z.object({
-      message: z
-        .string()
-        .default("A filial informada não pertence à mesma empresa do usuário."),
-    }),
-    z.object({
-      message: z
-        .string()
-        .default(
-          "O motorista informado não pertence à mesma empresa do usuário.",
-        ),
-    }),
-    z.object({
-      message: z
-        .string()
-        .default(
-          "O veículo informado não pertence à mesma empresa do usuário.",
-        ),
-    }),
-  ]),
-
-  // UPDATE errors (PATCH) - status 400
-  updateFineErrors: z.union([
-    z.object({
-      message: z.string().default("Recurso não encontrado!"),
-    }),
-    z.object({
-      message: z.string().default("Filial não encontrada!"),
-    }),
-    z.object({
-      message: z.string().default("Motorista não encontrado!"),
-    }),
-    z.object({
-      message: z.string().default("Veículo não encontrado!"),
-    }),
-    z.object({
-      message: z
-        .string()
-        .default("Código de infração de trânsito não encontrado!"),
-    }),
-    z.object({
-      message: z
-        .string()
-        .default("A data de vencimento deve ser posterior à data da infração!"),
-    }),
-    z.object({
-      message: z
-        .string()
-        .default(
-          "A data de pagamento não pode ser anterior à data da infração!",
-        ),
-    }),
-    z.object({
-      message: z
-        .string()
-        .default(
-          "A nova data da infração não pode ser posterior à data de vencimento existente!",
-        ),
-    }),
-    z.object({
-      message: z
-        .string()
-        .default(
-          "A nova data de vencimento deve ser posterior à data da infração existente!",
-        ),
-    }),
-    z.object({
-      message: z.string().default("Erro de validação"),
-      issues: z.array(z.string()),
-    }),
-  ]),
-
-  // Export errors (GET /export-fine)
-  exportFineErrors: z.union([
-    z.object({
-      message: z.string().default("Recurso não encontrado!"),
-    }),
-    z.object({
-      message: z.string().default("Não existem multas para exportar!"),
-    }),
-  ]),
-
-  // Forbidden errors for UPDATE (status 403)
-  updateFineForbiddenErrors: z.union([
-    z.object({
-      message: z.string().default("Esta multa não pertence a esta empresa!"),
-    }),
-    z.object({
-      message: z
-        .string()
-        .default("A filial informada não pertence à mesma empresa do usuário."),
-    }),
-    z.object({
-      message: z
-        .string()
-        .default(
-          "O motorista informado não pertence à mesma empresa do usuário.",
-        ),
-    }),
-    z.object({
-      message: z
-        .string()
-        .default(
-          "O veículo informado não pertence à mesma empresa do usuário.",
-        ),
-    }),
-  ]),
+const fineResponses = {
+  fineRow,
+  fineListSearchMetaDoc,
+  fineCreated: message("Multa registrada com sucesso!"),
+  fineUpdated: message("Multa atualizada com sucesso!"),
+  fineDeleted: message("Multa deletada com sucesso!"),
+  error: errorResponse,
 };
 
 export { fineSchemas, fineResponses };

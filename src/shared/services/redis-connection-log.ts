@@ -1,5 +1,9 @@
 import type { Redis } from "ioredis";
 
+import { logger } from "@/shared/logging/logger";
+
+const log = logger.child({ component: "redis" });
+
 /**
  * Attaches a persistent `error` handler to an ioredis client and reports the
  * connection state by transition instead of by event.
@@ -35,7 +39,7 @@ function attachRedisConnectionLog(client: Redis, label: string): void {
     down = true;
     suppressed = 0;
 
-    console.error(`[Redis · ${label}] connection lost: ${reason}`);
+    log.error({ client: label, reason }, "Redis connection lost");
   });
 
   client.on("ready", () => {
@@ -43,8 +47,10 @@ function attachRedisConnectionLog(client: Redis, label: string): void {
     // when it is an actual recovery.
     if (!down) return;
 
-    const tail = suppressed > 0 ? ` (${suppressed} suppressed errors)` : "";
-    console.log(`[Redis · ${label}] reconnected${tail}`);
+    log.info(
+      { client: label, suppressedErrors: suppressed },
+      "Redis reconnected",
+    );
 
     down = false;
     suppressed = 0;

@@ -4,53 +4,56 @@ import { z } from "zod";
 import { container } from "tsyringe";
 
 import { ListServiceOrderPartUseCase } from "./list-service-order-part-usecase";
-import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
+import { replyMaintenanceError } from "@/modules/service-order/usecases/errors/maintenance-http-errors";
 
-import { listPagesSchema } from "@/schemas/list-pages-schema";
+import { listServiceOrderPartSchema } from "@/schemas/list-service-order-part-schema";
 import { sendAsNDJSON } from "@/config/stream-utils";
 
 class ListServiceOrderPartController {
   async handle(request: FastifyRequest, reply: FastifyReply): Promise<void> {
     const { id } = request.user;
 
-    const { page, pageSize, search } = request.query as z.infer<
-      typeof listPagesSchema
-    >;
+    // Validated and transformed by the route (each facet is a list).
+    const {
+      businessId,
+      page,
+      pageSize,
+      search,
+      sort,
+      order,
+      partId,
+      serviceOrderId,
+    } = request.query as z.infer<typeof listServiceOrderPartSchema>;
 
     const listServiceOrderPartUseCase = container.resolve(
       ListServiceOrderPartUseCase,
     );
 
-    // Secure handling for URL decoding
-    let decodedSearch: string | undefined = undefined;
-    if (search) {
-      try {
-        // Try to decode, but catch errors
-        decodedSearch = decodeURIComponent(search);
-      } catch (error) {
-        // If it fails, use the value without decoding.
-        decodedSearch = search;
-      }
-    }
-
     try {
-      const serviceOrderPartsPromise = listServiceOrderPartUseCase.execute(
-        id,
-        page,
-        pageSize,
-        decodedSearch,
-      );
-
       await sendAsNDJSON({
         reply,
-        dataPromise: serviceOrderPartsPromise,
+        dataPromise: listServiceOrderPartUseCase
+          .execute({
+            userId: id,
+            businessId,
+            page,
+            pageSize,
+            search,
+            sort,
+            order,
+            partIds: partId,
+            serviceOrderIds: serviceOrderId,
+          })
+          .then((result) => ({
+            data: result.data,
+            total: result.total,
+            meta: result.searchMeta,
+          })),
         page,
         pageSize,
       });
     } catch (error) {
-      if (error instanceof ResourceNotFoundError) {
-        return reply.status(400).send({ message: error.message });
-      }
+      if (replyMaintenanceError(reply, error)) return;
 
       throw error;
     }

@@ -14,8 +14,15 @@ import { ServiceOrderNotFoundError } from "../errors/service-order-not-found-err
 import { AppError } from "@/shared/errors/AppError";
 import { ServiceOrder } from "../../dtos/service-order-dto";
 
-import { ServiceOrderNotBelongBusinessError } from "../errors/service-order-not-belong-business-error";
+import { ServiceOrderDeleteBlockedError } from "../errors/service-order-delete-blocked-error";
+
 import { formatCurrency } from "@/shared/utils/format-values";
+
+interface DeleteServiceOrderResponse {
+  deleted: ServiceOrder;
+  /** Part lines removed with it (ON DELETE CASCADE). */
+  partsRemoved: number;
+}
 
 @injectable()
 class DeleteServiceOrderUseCase {
@@ -34,7 +41,7 @@ class DeleteServiceOrderUseCase {
     serviceOrderId: string,
     businessId: string,
     userId: string,
-  ): Promise<ServiceOrder> {
+  ): Promise<DeleteServiceOrderResponse> {
     const findUser = await this.user.findUserById(userId);
 
     if (!findUser) {
@@ -50,36 +57,52 @@ class DeleteServiceOrderUseCase {
     const findServiceOrder =
       await this.serviceOrder.findServiceOrderById(serviceOrderId);
 
-    if (!findServiceOrder) {
+    // Another company's order is not found from here either: a distinct
+    // answer confirmed the id exists elsewhere (decision 11.3).
+    if (!findServiceOrder || findServiceOrder.businessId !== businessId) {
       throw new ServiceOrderNotFoundError();
     }
 
-    if (findServiceOrder.businessId !== businessId) {
-      throw new ServiceOrderNotBelongBusinessError();
-    }
+    let result: Awaited<
+      ReturnType<IServiceOrderRepository["deleteServiceOrderGuarded"]>
+    >;
 
     try {
-      const deletedServiceOrder =
-        await this.serviceOrder.deleteServiceOrder(serviceOrderId);
-
-      // Process activity asynchronously without blocking the main flow
-      this.notificationService.createActivityIfEnabled({
-        type: "Ordem de serviço",
-        action: "delete",
-        entityId: deletedServiceOrder.id,
-        description: `Ordem de serviço deletada no valor de ${formatCurrency(Number(deletedServiceOrder.total_amount))} | ID: ${deletedServiceOrder.id}`,
-        status: "Deletado",
-        performedBy: userId,
+      // The finished check and the bill count are decided again under the
+      // order's lock: the read above can be stale by now.
+      result = await this.serviceOrder.deleteServiceOrderGuarded(
+        serviceOrderId,
         businessId,
-      });
-
-      return deletedServiceOrder;
+      );
     } catch (error) {
       throw new AppError(
         "Houve um erro ao tentar excluir a ordem de serviço! Por favor, tente novamente.",
         500,
       );
     }
+
+    if ("missing" in result) {
+      throw new ServiceOrderNotFoundError();
+    }
+
+    if ("blocked" in result) {
+      throw new ServiceOrderDeleteBlockedError(result.blocked);
+    }
+
+    const { deleted, partsRemoved } = result;
+
+    // Process activity asynchronously without blocking the main flow
+    this.notificationService.createActivityIfEnabled({
+      type: "Ordem de serviço",
+      action: "delete",
+      entityId: deleted.id,
+      description: `Ordem de serviço deletada no valor de ${formatCurrency(Number(deleted.total_amount))}${partsRemoved > 0 ? ` com ${partsRemoved} peça(s)` : ""} | ID: ${deleted.id}`,
+      status: "Deletado",
+      performedBy: userId,
+      businessId,
+    });
+
+    return { deleted, partsRemoved };
   }
 }
 

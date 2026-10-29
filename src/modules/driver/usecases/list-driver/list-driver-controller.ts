@@ -4,54 +4,56 @@ import { z } from "zod";
 import { container } from "tsyringe";
 
 import { ListDriverUseCase } from "./list-driver-usecase";
-import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
 
-import { listPagesSchema } from "@/schemas/list-pages-schema";
+import { listDriverSchema } from "@/schemas/list-driver-schema";
 import { sendAsNDJSON } from "@/config/stream-utils";
 
 class ListDriverController {
   async handle(request: FastifyRequest, reply: FastifyReply): Promise<void> {
     const { id } = request.user;
 
-    const { page, pageSize, search } = request.query as z.infer<
-      typeof listPagesSchema
-    >;
+    // The route already validated AND transformed the querystring (page is a
+    // number, each facet a list): re-parsing it against the wire schema would
+    // reject its own output.
+    const {
+      businessId,
+      page,
+      pageSize,
+      search,
+      sort,
+      order,
+      status,
+      contract_type,
+      cnh_category,
+      branchId,
+    } = request.query as z.infer<typeof listDriverSchema>;
 
     const listDriverUseCase = container.resolve(ListDriverUseCase);
 
-    // Secure handling for URL decoding
-    let decodedSearch: string | undefined = undefined;
-    if (search) {
-      try {
-        // Try to decode, but catch errors
-        decodedSearch = decodeURIComponent(search);
-      } catch (error) {
-        // If it fails, use the value without decoding.
-        decodedSearch = search;
-      }
-    }
-
-    try {
-      const driversPromise = listDriverUseCase.execute(
-        id,
-        page,
-        pageSize,
-        decodedSearch,
-      );
-
-      await sendAsNDJSON({
-        reply,
-        dataPromise: driversPromise,
-        page,
-        pageSize,
-      });
-    } catch (error) {
-      if (error instanceof ResourceNotFoundError) {
-        return reply.status(400).send({ message: error.message });
-      }
-
-      throw error;
-    }
+    await sendAsNDJSON({
+      reply,
+      page,
+      pageSize,
+      dataPromise: listDriverUseCase
+        .execute({
+          userId: id,
+          businessId,
+          page,
+          pageSize,
+          search: search?.trim() || undefined,
+          sort,
+          order,
+          statuses: status,
+          contractTypes: contract_type,
+          cnhCategories: cnh_category,
+          branchIds: branchId,
+        })
+        .then((result) => ({
+          data: result.data,
+          total: result.total,
+          meta: result.searchMeta,
+        })),
+    });
   }
 }
 

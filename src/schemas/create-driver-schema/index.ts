@@ -4,26 +4,14 @@ import {
   hasConsecutiveSpaces,
   hasSpaceAtEdges,
   isEmptyOrWhitespace,
-  isValidDateString,
 } from "@/shared/utils/zod-schema-helpers";
 
-const isAdult = (date: Date) => {
-  const today = new Date();
-  const birthDate = new Date(date);
-
-  const age = today.getFullYear() - birthDate.getFullYear();
-  const monthDifference = today.getMonth() - birthDate.getMonth();
-
-  // If you haven't had a birthday this year, deduct 1 from your age.
-  if (
-    monthDifference < 0 ||
-    (monthDifference === 0 && today.getDate() < birthDate.getDate())
-  ) {
-    return age - 1 >= 18;
-  }
-
-  return age >= 18;
-};
+import { birthDateField } from "@/schemas/driver-birth-date-field";
+import {
+  cnhCategoryField,
+  cnhExpiresAtField,
+  cnhNumberField,
+} from "@/schemas/driver-cnh-fields";
 
 const createDriverSchema = z.object({
   name: z
@@ -76,32 +64,10 @@ const createDriverSchema = z.object({
         });
       }
     }),
-  birth_date: z
-    .string()
-    .min(1, "A data de nascimento é obrigatória.")
-    .superRefine((val, ctx) => {
-      if (!isValidDateString(val)) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          message: "Data de nascimento inválida.",
-        });
-
-        return;
-      }
-
-      const date = new Date(val);
-
-      if (!isAdult(date)) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          message: "O motorista deve ter pelo menos 18 anos.",
-        });
-      }
-    }),
-  cnh: z
-    .string()
-    .min(1, "O número da CNH é obrigatório.")
-    .max(20, "O número da CNH deve ter no máximo 20 caracteres."),
+  birth_date: birthDateField,
+  cnh: cnhNumberField,
+  cnh_category: cnhCategoryField,
+  cnh_expires_at: cnhExpiresAtField,
   cpf: z.preprocess(
     (val) => {
       if (typeof val === "string") {

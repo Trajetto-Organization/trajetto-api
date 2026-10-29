@@ -12,14 +12,26 @@ import { CursorPaginatedVehicle } from "../../dtos/vehicle-dto";
 import { AppError } from "@/shared/errors/AppError";
 import { assertTenantAccess } from "@/modules/middlewares/tenant-authorization";
 
+import type { VehiclePickerAccess } from "./vehicle-picker-access";
+
 interface SearchVehicleWithCursorRequest {
   userId: string;
   limit?: number;
   cursor?: string;
   businessId: string;
   search?: string;
+  /** What the route guard granted: the fleet record, or only the choice. */
+  access?: VehiclePickerAccess;
 }
 
+/**
+ * The vehicle picker and the driver's "meus veículos".
+ *
+ * A driver gets the vehicles they may operate — the responsible one AND the
+ * one of a released or running route (FLEET-ASSIGN-1); the substitute used to
+ * find an empty list. A dispatcher who only dispatches gets the choice
+ * projection (DLV-COMBO-1).
+ */
 @injectable()
 class SearchVehicleCursorUseCase {
   constructor(
@@ -37,6 +49,7 @@ class SearchVehicleCursorUseCase {
     cursor,
     businessId,
     search,
+    access = "fleet",
   }: SearchVehicleWithCursorRequest): Promise<CursorPaginatedVehicle> {
     const findUser = await this.user.findUserById(userId);
 
@@ -59,6 +72,7 @@ class SearchVehicleCursorUseCase {
         businessId,
         driverId: findUser.driverId ?? undefined,
         search,
+        fields: access === "fleet" ? "full" : "choice",
       });
     } catch (error) {
       throw new AppError(

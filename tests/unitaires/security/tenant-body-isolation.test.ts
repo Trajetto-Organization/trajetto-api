@@ -119,6 +119,57 @@ describe("tenant isolation for body-supplied businessId", () => {
     expect(response.json().code).toBe("TENANT_ACCESS_DENIED");
   });
 
+  // The guard used to pick ONE candidate (params ?? query ?? body), so the
+  // caller chose which one it read. Each case below passed before.
+  it("rejects a foreign body businessId even when the query names the caller's own", async () => {
+    app = buildApp({ role: "BUSINESS_ADMIN", businessId: COMPANY_A });
+
+    const response = await app.inject({
+      method: "POST",
+      url: `/update-profile-access/any-profile-id?businessId=${COMPANY_A}`,
+      payload: { businessId: COMPANY_B },
+    });
+
+    expect(response.statusCode).toBe(403);
+    expect(response.json().code).toBe("TENANT_ACCESS_DENIED");
+  });
+
+  it("rejects an empty businessId instead of skipping the check", async () => {
+    app = buildApp({ role: "BUSINESS_ADMIN", businessId: COMPANY_A });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/update-profile-access/any-profile-id?businessId=",
+      payload: { businessId: COMPANY_B },
+    });
+
+    expect(response.statusCode).toBe(403);
+  });
+
+  it("rejects a repeated businessId when any of the values is foreign", async () => {
+    app = buildApp({ role: "BUSINESS_ADMIN", businessId: COMPANY_A });
+
+    const response = await app.inject({
+      method: "POST",
+      url: `/update-profile-access/any-profile-id?businessId=${COMPANY_A}&businessId=${COMPANY_B}`,
+      payload: { businessId: COMPANY_A },
+    });
+
+    expect(response.statusCode).toBe(403);
+  });
+
+  it("accepts the caller's own businessId repeated in every location", async () => {
+    app = buildApp({ role: "BUSINESS_ADMIN", businessId: COMPANY_A });
+
+    const response = await app.inject({
+      method: "POST",
+      url: `/update-profile-access/any-profile-id?businessId=${COMPANY_A}`,
+      payload: { businessId: COMPANY_A },
+    });
+
+    expect(response.statusCode).toBe(200);
+  });
+
   it("does not break public routes that have no authenticated user", async () => {
     app = buildApp({ authenticated: false });
 

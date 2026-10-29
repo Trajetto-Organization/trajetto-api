@@ -3,37 +3,13 @@ import { container } from "tsyringe";
 
 import { CreateFuelUseCase } from "./create-fuel-usecase";
 
-import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
-import { BusinessNotFoundError } from "@/modules/business/usecases/errors/business-not-found-error";
+import { replyFuelWriteError } from "../errors/fuel-http-errors";
 
-import { VehicleNotFoundError } from "@/modules/vehicle/usecases/errors/vehicle-not-found-error";
-import { DriverNotFoundError } from "@/modules/driver/usecases/errors/driver-not-found-error";
-
-import { FuelTypeNotFoundError } from "@/modules/fuel-type/usecases/errors/fuel-type-not-found-error";
-import { BranchNotFoundError } from "@/modules/branch/usecases/errors/branch-not-found-error";
-
-import { VehicleNotBelongBusinessError } from "@/modules/vehicle/usecases/errors/vehicle-not-belong-business-error";
-import { DriverNotBelongBusinessError } from "@/modules/driver/usecases/errors/driver-not-belong-business-error";
-
-import { FuelTypeNotBelongBusinessError } from "@/modules/fuel-type/usecases/errors/fuel-type-not-belong-business-error";
-import { BranchNotBelongBusinessError } from "@/modules/branch/usecases/errors/branch-not-belong-business-error";
-
-import { VehicleMileageInvalidError } from "../../../vehicle/usecases/errors/vehicle-mileage-invalid-error";
-import { FuelVehicleInvalidStatusForFuelError } from "../errors/fuel-vehicle-invalid-status-for-fuel-error";
-
-import { FuelLocationNotProvidedAdjustmentValidationError } from "../errors/fuel-location-not-provided-adjustment-validation-error";
-import { VehicleNotAssignedToDriverError } from "@/modules/vehicle/usecases/errors/vehicle-not-assigned-to-driver-error";
-
-import { FuelRegistrationsMobileLocationRequiredError } from "../errors/fuel-registrations-mobile-location-required-error";
-
-import { MultipartFile } from "@fastify/multipart";
-import {
-  createFuelMultipartSchema,
-  createFuelSchema,
-} from "@/schemas/create-fuel-schema";
+import { createFuelSchema } from "@/schemas/create-fuel-schema";
 
 import { presignedPhotoSchema } from "@/schemas/presigned-photos-schema";
 import { normalizeFormFields } from "@/shared/utils/normalize-form-field";
+import { submissionKeyOf } from "@/shared/http/submission-key";
 
 import { updateDeleteBusinessSchema } from "@/schemas/update-delete-business-schema";
 
@@ -42,64 +18,58 @@ class CreateFuelController {
     const { id } = request.user;
     const { businessId } = updateDeleteBusinessSchema.parse(request.params);
 
-    const isMultipart = request.isMultipart();
-    const formData: Record<string, any> = {};
+    const createFuelUseCase = container.resolve(CreateFuelUseCase);
 
-    let validatedFile: MultipartFile | undefined;
-    let presignedPhoto: { key: string } | undefined;
+    // A resend of a fueling that already exists is answered with it before
+    // the body is validated: the outbox froze that body on an older version
+    // of the app, and a schema tightened since must not turn a recorded
+    // fueling into a failed one (see `submissionKeyOf`). The route's guards
+    // — tenant, branch, permission, module — have all run by now.
+    const replayKey = submissionKeyOf(
+      request.body,
+      request.headers["idempotency-key"],
+    );
 
-    if (isMultipart) {
-      const file = await request.file();
+    if (replayKey) {
+      const replay = await createFuelUseCase.findReplay(
+        businessId,
+        replayKey,
+        request.user.driverId,
+      );
 
-      if (!file) {
-        return reply.status(400).send({
-          message: "Arquivo de odômetro é obrigatório.",
+      if (replay) {
+        return reply.header("Idempotency-Key", replayKey).status(201).send({
+          message: "Abastecimento criado com sucesso!",
+          id: replay.id,
         });
       }
-
-      // Extract form fields from multipart data
-      if (file.fields) {
-        Object.keys(file.fields).forEach((key) => {
-          const field = file.fields[key];
-          if (field && typeof field === "object" && "value" in field) {
-            formData[key] = field.value;
-          }
-        });
-      }
-
-      validatedFile = createFuelMultipartSchema.parse({
-        body: formData,
-        file,
-      }).file;
-    } else {
-      // JSON body: the photo is already in storage and only its key travels
-      // here. `request.file()` is never called — there is no multipart stream
-      // to read, and asking for one would hang the request.
-      const body = (request.body ?? {}) as Record<string, unknown>;
-      const { photo, ...fields } = body;
-
-      Object.assign(formData, normalizeFormFields(fields));
-
-      const parsed = presignedPhotoSchema.safeParse(photo);
-
-      if (!parsed.success) {
-        return reply.status(400).send({
-          message: "Foto do odômetro é obrigatória.",
-        });
-      }
-
-      presignedPhoto = { key: parsed.data.key };
     }
+
+    // The photo is already in storage and only its key travels here.
+    const body = (request.body ?? {}) as Record<string, unknown>;
+    const { photo, ...fields } = body;
+
+    const formData: Record<string, any> = normalizeFormFields(fields);
+    const parsed = presignedPhotoSchema.safeParse(photo);
+
+    // Codes in `x-error-code` as well: the route's response schema strips
+    // unknown body fields, and the app's queue decides from the code whether
+    // a refusal is on the merits or a contract its build no longer meets.
+    if (!parsed.success) {
+      return reply.header("x-error-code", "PHOTO_REQUIRED").status(400).send({
+        code: "PHOTO_REQUIRED",
+        message: "Foto do odômetro é obrigatória.",
+      });
+    }
+
+    const presignedPhoto = { key: parsed.data.key };
 
     const idempotencyKey = request.headers["idempotency-key"];
     if (!formData.client_submission_id && typeof idempotencyKey === "string") {
       formData.client_submission_id = idempotencyKey;
     }
 
-    // The body half of the schema is shared by both shapes — only the file
-    // half differs, and that was handled above.
     const fuelData = createFuelSchema.parse(formData);
-    const createFuelUseCase = container.resolve(CreateFuelUseCase);
 
     try {
       const fuel = await createFuelUseCase.execute(
@@ -108,7 +78,6 @@ class CreateFuelController {
           businessId,
         },
         id,
-        validatedFile,
         presignedPhoto,
       );
 
@@ -120,65 +89,10 @@ class CreateFuelController {
         .status(201)
         .send({ message: "Abastecimento criado com sucesso!", id: fuel.id });
     } catch (error) {
-      if (error instanceof ResourceNotFoundError) {
-        return reply.status(400).send({ message: error.message });
-      }
-
-      if (error instanceof BusinessNotFoundError) {
-        return reply.status(400).send({ message: error.message });
-      }
-
-      if (error instanceof VehicleNotFoundError) {
-        return reply.status(400).send({ message: error.message });
-      }
-
-      if (error instanceof DriverNotFoundError) {
-        return reply.status(400).send({ message: error.message });
-      }
-
-      if (error instanceof FuelTypeNotFoundError) {
-        return reply.status(400).send({ message: error.message });
-      }
-
-      if (error instanceof BranchNotFoundError) {
-        return reply.status(400).send({ message: error.message });
-      }
-
-      if (error instanceof VehicleNotBelongBusinessError) {
-        return reply.status(400).send({ message: error.message });
-      }
-
-      if (error instanceof DriverNotBelongBusinessError) {
-        return reply.status(400).send({ message: error.message });
-      }
-
-      if (error instanceof FuelTypeNotBelongBusinessError) {
-        return reply.status(400).send({ message: error.message });
-      }
-
-      if (error instanceof BranchNotBelongBusinessError) {
-        return reply.status(400).send({ message: error.message });
-      }
-
-      if (error instanceof VehicleMileageInvalidError) {
-        return reply.status(400).send({ message: error.message });
-      }
-
-      if (error instanceof FuelVehicleInvalidStatusForFuelError) {
-        return reply.status(400).send({ message: error.message });
-      }
-
-      if (error instanceof VehicleNotAssignedToDriverError) {
-        return reply.status(400).send({ message: error.message });
-      }
-
-      if (error instanceof FuelLocationNotProvidedAdjustmentValidationError) {
-        return reply.status(400).send({ message: error.message });
-      }
-
-      if (error instanceof FuelRegistrationsMobileLocationRequiredError) {
-        return reply.status(400).send({ message: error.message });
-      }
+      // One table for every fuel write (fuel-http-errors.ts): a code on each
+      // refusal, and another company's vehicle, driver, fuel type or branch
+      // answered exactly like a missing one.
+      if (replyFuelWriteError(reply, error)) return;
 
       throw error;
     }

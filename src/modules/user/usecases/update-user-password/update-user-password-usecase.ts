@@ -1,17 +1,20 @@
 import { inject, injectable } from "tsyringe";
 
-import { hash, compare } from "bcrypt";
+import { compareSecret, hashSecret } from "@/shared/security/bcrypt-gate";
 import { IUserRepository } from "../../repositories/IUser-repository";
 
 import { ResourceNotFoundError } from "../errors/resource-not-found-error";
 import { UserUpdateUserIsSamePasswordError } from "../errors/user-update-user-is-same-password-error";
 
 import { UserUpdateUserPasswordNotMatchError } from "../errors/user-update-user-password-not-match-error";
-import { EmailWorkerAdapter } from "@/jobs/email-worker-adapter";
+import { sendTransactionalMail } from "@/shared/services/transactional-mail-service";
 
 import { AppError } from "@/shared/errors/AppError";
-import { env } from "@/env";
 import { sendSecurityEventToUser } from "@/websocket";
+import { logger } from "@/shared/logging/logger";
+import { emailLogoUrl } from "@/shared/providers/mail-provider/email-logo";
+
+const log = logger.child({ component: "user" });
 
 interface UpdateUserPasswordProps {
   currentPassword: string;
@@ -21,15 +24,10 @@ interface UpdateUserPasswordProps {
 
 @injectable()
 class UpdateUserPasswordUseCase {
-  private emailQueue: EmailWorkerAdapter;
-  private cloudinaryLogo = env.CLOUDINARY_LOGO_IMAGE;
-
   constructor(
     @inject("UserRepository")
     private user: IUserRepository,
-  ) {
-    this.emailQueue = new EmailWorkerAdapter("updateUserPasswordQueue");
-  }
+  ) {}
 
   async execute({
     currentPassword,
@@ -42,19 +40,22 @@ class UpdateUserPasswordUseCase {
       throw new ResourceNotFoundError();
     }
 
-    const comparePassword = await compare(currentPassword, findUser.password);
+    const comparePassword = await compareSecret(
+      currentPassword,
+      findUser.password,
+    );
 
     if (!comparePassword) {
       throw new UserUpdateUserPasswordNotMatchError();
     }
 
-    const isSamePassword = await compare(newPassword, findUser.password);
+    const isSamePassword = await compareSecret(newPassword, findUser.password);
 
     if (isSamePassword) {
       throw new UserUpdateUserIsSamePasswordError();
     }
 
-    const hashedPassword = await hash(newPassword, 10);
+    const hashedPassword = await hashSecret(newPassword, 10);
 
     try {
       await this.user.updateUserPassword({
@@ -70,16 +71,25 @@ class UpdateUserPasswordUseCase {
       );
     }
 
-    await this.emailQueue.enqueueEmail({
+    // The password is already changed: a mail failure must not answer 500,
+    // or the person retries with a "current password" that no longer works.
+    // Nor may the answer wait on the SMTP round trip (10 s timeouts) for a
+    // notice the person does not need in order to carry on.
+    void sendTransactionalMail({
       email: findUser.email,
       name: findUser.name,
       subject: "Sua senha foi atualizada com sucesso",
       templateName: "user-password-updated.hbs",
       moduleName: "user",
       additionalVariablesProperties: {
-        logo: this.cloudinaryLogo,
+        logo: emailLogoUrl(),
       },
-    });
+    }).catch((error) =>
+      log.error(
+        { err: error, userId },
+        "password change notice could not be sent",
+      ),
+    );
   }
 }
 

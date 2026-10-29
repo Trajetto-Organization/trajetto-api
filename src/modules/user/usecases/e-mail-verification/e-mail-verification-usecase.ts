@@ -51,17 +51,28 @@ class EmailVerificationUseCase {
       throw new ResourceNotFoundError();
     }
 
+    /**
+     * Spend the token first, so the activity log records one verification.
+     *
+     * Same shape as the password reset: two requests with the same link both
+     * passed every check and both wrote — here the damage is only a duplicate
+     * entry in the activity feed and a second notification, but the token
+     * stops being single-use, and that is the property the link is sold on.
+     */
+    const spent = await this.usersTokens.consumeEmailVerificationToken(
+      userEmailVerificationToken.id,
+    );
+
+    if (!spent) {
+      throw new UserInvalidTokenError();
+    }
+
     try {
-      await Promise.all([
-        this.user.updateEmailVerification({
-          userId: user.id,
-          email_verified: new Date(),
-          email: user.email,
-        }),
-        this.usersTokens.deleteEmailVerificationToken(
-          userEmailVerificationToken.id,
-        ),
-      ]);
+      await this.user.updateEmailVerification({
+        userId: user.id,
+        email_verified: new Date(),
+        email: user.email,
+      });
 
       this.notificationService.createActivityIfEnabled({
         type: "Usuário",

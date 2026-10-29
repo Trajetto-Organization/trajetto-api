@@ -22,7 +22,6 @@ import { FuelTypeNotFoundError } from "@/modules/fuel-type/usecases/errors/fuel-
 import { BranchNotFoundError } from "@/modules/branch/usecases/errors/branch-not-found-error";
 
 import { FuelNotFoundError } from "../errors/fuel-not-found-error";
-import { FuelNotBelongBusinessError } from "../errors/fuel-not-belong-business-error";
 
 import { VehicleNotBelongBusinessError } from "@/modules/vehicle/usecases/errors/vehicle-not-belong-business-error";
 import { DriverNotBelongBusinessError } from "@/modules/driver/usecases/errors/driver-not-belong-business-error";
@@ -39,12 +38,18 @@ import { AppError } from "@/shared/errors/AppError";
 import { Fuel, UpdateFuelProps } from "../../dtos/fuel-dto";
 
 import { UploadService } from "@/shared/services/upload-service";
-import { MultipartFile } from "@fastify/multipart";
+import {
+  assertRefuelingNotInTheFuture,
+  businessTimeZone,
+  changedLinks,
+} from "../fuel-rules";
+import { recordDate } from "@/shared/vehicle/odometer-timeline";
+import { pickedDateFromInput } from "@/shared/vehicle/record-dates";
 
-import AIVerificationWorkerService from "@/shared/services/ai-verification-worker-service";
+import { AIAnalysisService } from "@/shared/ai/ai-analysis-service";
+import { logger } from "@/shared/logging/logger";
 
-import { readMultipartFile } from "@/shared/utils/read-multipart-file";
-import { uploadConfig } from "@/config/upload";
+const log = logger.child({ component: "fuel" });
 
 interface UpdateFuelRequest {
   fuelId: string;
@@ -78,10 +83,9 @@ class UpdateFuelUseCase {
   async execute(
     { fuelId, businessId, fuelData }: UpdateFuelRequest,
     userId: string,
-    odometerPhotoFile?: MultipartFile,
 
     // A replacement photo the client uploaded straight to storage. Absent when
-    // the edit does not touch the photo, in either request shape.
+    // the edit does not touch the photo.
     presignedPhoto?: { key: string },
   ): Promise<Fuel> {
     const findUser = await this.user.findUserById(userId);
@@ -105,7 +109,8 @@ class UpdateFuelUseCase {
       );
     }
 
-    // Validate fuel exists and belongs to business
+    // Scoped by company: another company's refueling is not found, the same
+    // answer as a missing one (404 FUEL_NOT_FOUND).
     const findFuel = await this.fuel.getFuelByIdAndBusiness({
       businessId,
       fuelId,
@@ -115,9 +120,24 @@ class UpdateFuelUseCase {
       throw new FuelNotFoundError();
     }
 
-    if (findFuel.businessId !== businessId) {
-      throw new FuelNotBelongBusinessError();
+    // Security: Drivers cannot update fuel records
+    if (findUser.role === "BUSINESS_USER" && findUser.driverId) {
+      throw new FuelDriverCannotUpdateFuelError();
     }
+
+    assertRefuelingNotInTheFuture(fuelData.refueling_date, findBusiness);
+
+    // A bare day is stored as the instant it starts in the company's zone.
+    if (fuelData.refueling_date !== undefined) {
+      fuelData.refueling_date = pickedDateFromInput(
+        fuelData.refueling_date,
+        businessTimeZone(findBusiness),
+      );
+    }
+
+    // What the edit re-points. A link that stays where it was is history,
+    // and history is not re-validated against today's state (FLEET-FUEL-1).
+    const links = changedLinks(findFuel, fuelData);
 
     // Determine the vehicle to use (updated or existing)
     const vehicleId = fuelData.vehicleId || findFuel.vehicleId;
@@ -132,44 +152,38 @@ class UpdateFuelUseCase {
       throw new VehicleNotBelongBusinessError();
     }
 
-    // Security: Drivers cannot update fuel records
-    if (findUser.role === "BUSINESS_USER" && findUser.driverId) {
-      throw new FuelDriverCannotUpdateFuelError();
-    }
-
-    // Validate vehicle status (only ACTIVE or IN_ROUTE vehicles can be fueled)
-    if (findVehicle.status !== "ACTIVE" && findVehicle.status !== "IN_ROUTE") {
+    // Only a vehicle the record MOVES to has to be fuelable today: last
+    // month's fueling of a truck that is now inactive or blocked still gets
+    // its price corrected.
+    if (
+      links.vehicle &&
+      findVehicle.status !== "ACTIVE" &&
+      findVehicle.status !== "IN_ROUTE"
+    ) {
       throw new FuelVehicleInvalidStatusForFuelError();
     }
 
     const effectiveMileage =
       fuelData.current_mileage ?? findFuel.current_mileage;
 
+    const effectiveDate = recordDate(
+      fuelData.refueling_date ?? findFuel.refueling_date,
+    );
+
     const vehicleChanged = vehicleId !== findFuel.vehicleId;
     const mileageChanged = effectiveMileage !== findFuel.current_mileage;
 
-    // Moving a record to another vehicle must also advance that vehicle's
-    // odometer atomically; otherwise the record and vehicle diverge.
-    if (mileageChanged || vehicleChanged) {
-      // New mileage must be strictly greater than current vehicle mileage
-      if (effectiveMileage <= findVehicle.current_mileage) {
-        throw new VehicleMileageInvalidError();
-      }
-    }
+    // The web resends the stored instant when the date is left alone; only a
+    // different instant moves the reading on the timeline.
+    const dateChanged =
+      effectiveDate.getTime() !== new Date(findFuel.refueling_date).getTime();
 
-    // Auto-populate branchId and fuelTypeId for driver users
-    if (findUser.driverId) {
-      const driverUser = await this.driver.findDriverById(findUser.driverId);
-      if (driverUser) {
-        // Force fuelTypeId to match vehicle's fuel type (drivers cannot change it)
-        fuelData.fuelTypeId = findVehicle.fuelTypeId;
-
-        // Force branchId - drivers cannot select branch manually
-        // Priority: Vehicle.branchId → Driver.branchId
-        fuelData.branchId =
-          findVehicle.branchId || driverUser.branchId || undefined;
-      }
-    }
+    // A changed reading, date or vehicle is decided inside the repository's
+    // transaction by placeReading (fuel-rules.ts): at its date, itself left
+    // out. The check that stood here compared an old record with today's
+    // odometer, so no past refueling could have its km corrected, and a
+    // date-only edit was never checked at all: the refueling of 45.500 km
+    // moved before the one of 40.000 was accepted.
 
     // If updating driver, validate it exists and belongs to business
     if (fuelData.driverId) {
@@ -183,9 +197,11 @@ class UpdateFuelUseCase {
         throw new DriverNotBelongBusinessError();
       }
 
-      if (findDriver.status !== "ACTIVE") {
+      // Same rule as the vehicle: the driver who fueled keeps being the one
+      // who fueled after leaving the company.
+      if (links.driver && findDriver.status !== "ACTIVE") {
         throw new AppError(
-          "O motorista selecionado esta inativo.",
+          "O motorista selecionado está inativo.",
           422,
           "DRIVER_INACTIVE",
         );
@@ -219,7 +235,7 @@ class UpdateFuelUseCase {
         throw new BranchNotBelongBusinessError();
       }
 
-      if (findBranch.is_active === false) {
+      if (links.branch && findBranch.is_active === false) {
         throw new AppError(
           "Não é permitido mover o abastecimento para uma filial inativa.",
           409,
@@ -279,33 +295,20 @@ class UpdateFuelUseCase {
 
         uploadedPhotoPath = resolved.path;
         finalFuelData.odometer_photo = resolved.path;
-      } else if (odometerPhotoFile) {
-        // Upload new photo
-        const buffer = await readMultipartFile(odometerPhotoFile, {
-          maxBytes: uploadConfig.getSizeLimit("odometerPhotos"),
-        });
-        const uploadResult = await this.uploadService.uploadFile({
-          buffer,
-          filename: odometerPhotoFile.filename || "odometer-photo",
-          mimetype: odometerPhotoFile.mimetype,
-          uploadType: "odometerPhotos",
-        });
-
-        uploadedPhotoPath = uploadResult.path;
-
-        // Add new photo path to fuel data
-        finalFuelData.odometer_photo = uploadResult.path;
       }
 
       const targetVehicleId = fuelData.vehicleId || findFuel.vehicleId;
 
       const updatedFuel = await this.fuel.updateFuelAndMileage(
         { fuelId, fuelData: finalFuelData },
-        mileageChanged || vehicleChanged
+        mileageChanged || vehicleChanged || dateChanged
           ? {
               businessId,
               vehicleId: targetVehicleId,
               currentMileage: effectiveMileage,
+              at: effectiveDate,
+              timeZone: businessTimeZone(findBusiness),
+              fuelId,
             }
           : undefined,
       );
@@ -335,7 +338,10 @@ class UpdateFuelUseCase {
       // Re-verify AI when photo or mileage changed (fire-and-forget)
       // Skip if business has AI disabled (limit === 0)
       if ((findBusiness.ai_analysis_limit ?? 0) > 0) {
-        const photoChanged = odometerPhotoFile !== undefined;
+        // Was tied to the multipart file, which the presigned path never set —
+        // so replacing only the photo never re-triggered verification, and the
+        // record kept an AI result describing the previous image.
+        const photoChanged = presignedPhoto !== undefined;
         const mileageChanged =
           fuelData.current_mileage &&
           fuelData.current_mileage !== findFuel.current_mileage;
@@ -346,19 +352,21 @@ class UpdateFuelUseCase {
           const mileage = fuelData.current_mileage || findFuel.current_mileage;
 
           if (photoPath) {
-            AIVerificationWorkerService.getInstance()
-              .enqueueVerification({
-                type: "fuel_odometer",
+            AIAnalysisService.getInstance()
+              .requestAnalysis({
+                type: "FUEL_ODOMETER",
                 recordId: fuelId,
                 businessId,
-                userId,
-                odometerPhotoPath: photoPath,
-                reportedMileage: mileage,
+                requestedById: userId,
+                input: {
+                  odometerPhotoPath: photoPath,
+                  reportedMileage: mileage,
+                },
               })
               .catch((err) =>
-                console.error(
-                  "[AI] Failed to enqueue fuel re-verification:",
-                  err,
+                log.error(
+                  { err, fuelId, businessId },
+                  "AI fuel re-verification could not be requested",
                 ),
               );
           }
@@ -371,14 +379,18 @@ class UpdateFuelUseCase {
         await this.uploadService.deleteFile(uploadedPhotoPath);
       }
 
+      // Refusals the transaction decides (the record or the vehicle gone
+      // meanwhile included) keep their own answer instead of a 500.
       if (
         error instanceof VehicleMileageInvalidError ||
+        error instanceof FuelNotFoundError ||
+        error instanceof VehicleNotFoundError ||
         error instanceof AppError
       ) {
         throw error;
       }
 
-      console.error("[UpdateFuelUseCase] Failed to update fuel:", error);
+      log.error({ err: error, fuelId }, "fuel record could not be updated");
       throw new AppError(
         "Houve um erro ao tentar atualizar o abastecimento! Por favor, tente novamente.",
         500,

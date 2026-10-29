@@ -1,5 +1,6 @@
 import { IDriverRepository } from "@/modules/driver/repositories/IDriver-repository";
 import { AppError } from "@/shared/errors/AppError";
+
 import { User } from "../dtos/user-dto";
 
 interface EligibleSession {
@@ -8,7 +9,8 @@ interface EligibleSession {
 
 async function assertSessionEligible(
   user: User,
-  driverRepository: IDriverRepository,
+  // Only the lookup: the socket sweep answers it from rows it loaded in bulk.
+  driverRepository: Pick<IDriverRepository, "findDriverById">,
 ): Promise<EligibleSession> {
   if (user.access_revoked) {
     throw new AppError(
@@ -37,7 +39,20 @@ async function assertSessionEligible(
   let driver: EligibleSession["driver"] = null;
 
   if (user.driverId) {
-    const driverRecord = await driverRepository.findDriverById(user.driverId);
+    // The session lookup already loaded the driver with every field checked
+    // below (same request, same freshness), so it is used as is. Any other
+    // caller — login, refresh, 2FA, the socket sweep — passes a user loaded
+    // without them, and the repository answers as before.
+    const embedded =
+      user.driver &&
+      user.driver.id === user.driverId &&
+      user.driver.businessId !== undefined &&
+      user.driver.branch !== undefined
+        ? user.driver
+        : null;
+
+    const driverRecord =
+      embedded ?? (await driverRepository.findDriverById(user.driverId));
 
     if (!driverRecord || driverRecord.status !== "ACTIVE") {
       throw new AppError(

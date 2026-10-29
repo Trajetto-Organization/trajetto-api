@@ -28,7 +28,9 @@ const driverSchema = z
 const getUserSchema = z.object({
   id: z.string(),
   role: z.nativeEnum(EnumUserRole),
-  email: z.string().email(),
+  // A response, not an input: the address was validated when it was written.
+  // Re-validating here turned one legacy value into a 500 on /user/me.
+  email: z.string(),
   two_factor_enabled: z.boolean().optional(),
   email_notifications_enabled: z.boolean().optional(),
   activity_notifications_enabled: z.boolean().optional(),
@@ -40,6 +42,26 @@ const getUserSchema = z.object({
   driverId: z.string().nullable().optional(),
   driver: driverSchema,
   profileAccess: profileAccessSchema,
+  /**
+   * Sellable modules the session may use. Always present so the client can
+   * enforce the gate without a nullable "unknown" state to reason about.
+   */
+  enabledModules: z.array(z.string()).default([]),
+  /**
+   * Decision 14.2: whether the app runs the offline pre-check of receipt and
+   * odometer photos. Optional so a response without it reads as "off".
+   */
+  ai: z
+    .object({
+      precheck: z.boolean(),
+      reason: z
+        .enum(["not_contracted", "quota_exhausted", "unavailable"])
+        .nullable(),
+    })
+    .optional()
+    .describe(
+      "Pré-checagem offline no celular (decisão 14.2): `precheck` liga a leitura no aparelho; ela só vale com a leitura automática contratada, ligada no servidor e com saldo no período. `reason` diz por que está desligada (só para diagnóstico).",
+    ),
 });
 
 export { getUserSchema };

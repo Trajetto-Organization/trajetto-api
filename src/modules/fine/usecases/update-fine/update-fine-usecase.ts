@@ -3,6 +3,7 @@ import { inject, injectable } from "tsyringe";
 import { IFineRepository } from "../../repositories/IFine-repository";
 import { ITrafficViolationCodeRepository } from "../../repositories/ITraffic-violation-code-repository";
 
+import { IBusinessRepository } from "@/modules/business/repositories/IBusiness-repository";
 import { IBranchRepository } from "@/modules/branch/repositories/IBranch-repository";
 import { IDriverRepository } from "@/modules/driver/repositories/IDriver-repository";
 
@@ -17,31 +18,34 @@ import { BranchNotFoundError } from "@/modules/branch/usecases/errors/branch-not
 import { DriverNotFoundError } from "@/modules/driver/usecases/errors/driver-not-found-error";
 import { VehicleNotFoundError } from "@/modules/vehicle/usecases/errors/vehicle-not-found-error";
 
-import { BranchNotBelongBusinessError } from "@/modules/branch/usecases/errors/branch-not-belong-business-error";
-import { DriverNotBelongBusinessError } from "@/modules/driver/usecases/errors/driver-not-belong-business-error";
-
-import { FineNotFoundError } from "../errors/fine-not-found-error";
-
-import { VehicleNotBelongBusinessError } from "@/modules/vehicle/usecases/errors/vehicle-not-belong-business-error";
 import { TrafficViolationCodeNotFoundError } from "../errors/traffic-violation-code-not-found-error";
 
-import { FineDueDateMustBeAfterInfractionError } from "../errors/fine-due-date-must-be-after-infraction-error";
-import { FinePaymentDateCannotBeEarlierInfractionError } from "../errors/fine-payment-date-cannot-be-earlier-infraction-error";
+import { assertFineDates, fineDateFromInput } from "../fine-dates";
+import { FineNotFoundError } from "../errors/fine-not-found-error";
 
-import { FineDueDateInfractionCannotBeLaterError } from "../errors/fine-due-date-infraction-cannot-be-later-error";
-import { FineNotBelongBusinessError } from "../errors/fine-not-belong-business-error";
-
-import { FineDueDateMustBeLaterInfractionError } from "../errors/fine-due-date-must-be-later-infraction-error";
+import { assertTenantAccess } from "@/modules/middlewares/tenant-authorization";
 import { NotificationService } from "@/shared/services/notification-service";
 
 import { AppError } from "@/shared/errors/AppError";
 import { formatCurrency } from "@/shared/utils/format-values";
+import { loadBusinessTimeZone } from "@/shared/time/business-time-zone";
+
+/** Whether a coordinate pair differs from the stored one. */
+function movedFrom(
+  stored: { latitude?: number | null; longitude?: number | null },
+  latitude: number,
+  longitude: number,
+): boolean {
+  return stored.latitude !== latitude || stored.longitude !== longitude;
+}
 
 @injectable()
 class UpdateFineUseCase {
   constructor(
     @inject("UserRepository")
     private user: IUserRepository,
+    @inject("BusinessRepository")
+    private business: IBusinessRepository,
     @inject("FineRepository")
     private fine: IFineRepository,
     @inject("BranchRepository")
@@ -61,6 +65,7 @@ class UpdateFineUseCase {
     fineId: string,
     userId: string,
     businessId: string,
+    now: Date = new Date(),
   ): Promise<Fine> {
     const findUser = await this.user.findUserById(userId);
 
@@ -68,37 +73,31 @@ class UpdateFineUseCase {
       throw new ResourceNotFoundError();
     }
 
+    assertTenantAccess(findUser, businessId);
+
     const existingFine = await this.fine.findFineById(fineId);
 
-    if (!existingFine) {
+    // The same 404 for "does not exist" and "not yours", as the delete: a
+    // distinct 403 confirmed that another company's fine existed.
+    if (!existingFine || existingFine.businessId !== businessId) {
       throw new FineNotFoundError();
     }
 
-    if (existingFine.businessId !== businessId) {
-      throw new FineNotBelongBusinessError();
-    }
-
+    // Another company's branch, driver or vehicle reads as one that does not
+    // exist, like on the create (decision 8.1).
     if (fineData.branchId) {
       const findBranch = await this.branch.findBranchById(fineData.branchId);
 
-      if (!findBranch) {
+      if (!findBranch || findBranch.businessId !== businessId) {
         throw new BranchNotFoundError();
-      }
-
-      if (findBranch.businessId !== businessId) {
-        throw new BranchNotBelongBusinessError();
       }
     }
 
     if (fineData.driverId) {
       const findDriver = await this.driver.findDriverById(fineData.driverId);
 
-      if (!findDriver) {
+      if (!findDriver || findDriver.businessId !== businessId) {
         throw new DriverNotFoundError();
-      }
-
-      if (findDriver.businessId !== businessId) {
-        throw new DriverNotBelongBusinessError();
       }
     }
 
@@ -107,19 +106,13 @@ class UpdateFineUseCase {
         fineData.vehicleId,
       );
 
-      if (!findVehicle) {
+      if (!findVehicle || findVehicle.businessId !== businessId) {
         throw new VehicleNotFoundError();
-      }
-
-      if (findVehicle.businessId !== businessId) {
-        throw new VehicleNotBelongBusinessError();
       }
     }
 
-    let newTrafficViolationCode = null;
-
     if (fineData.trafficViolationCodeId) {
-      newTrafficViolationCode =
+      const newTrafficViolationCode =
         await this.trafficViolationCode.findTrafficViolationCodeById(
           fineData.trafficViolationCodeId,
         );
@@ -128,68 +121,65 @@ class UpdateFineUseCase {
         throw new TrafficViolationCodeNotFoundError();
       }
 
+      // A new code brings its points unless the caller set them.
       if (
         fineData.trafficViolationCodeId !==
           existingFine.trafficViolationCodeId &&
-        !fineData.points
+        fineData.points === undefined
       ) {
         fineData.points = newTrafficViolationCode.points;
       }
     }
 
-    if (fineData.violation_date && fineData.due_date) {
-      const violationDate = new Date(fineData.violation_date);
-      const dueDate = new Date(fineData.due_date);
+    const timeZone = await loadBusinessTimeZone(this.business, businessId);
 
-      if (dueDate <= violationDate) {
-        throw new FineDueDateMustBeAfterInfractionError();
-      }
-    } else if (fineData.violation_date) {
-      const violationDate = new Date(fineData.violation_date);
-      const existingDueDate = new Date(existingFine.due_date);
+    // A picked day is stored as the instant it starts in the company's zone.
+    if (fineData.violation_date) {
+      fineData.violation_date = fineDateFromInput(
+        fineData.violation_date,
+        timeZone,
+      );
+    }
 
-      if (existingDueDate <= violationDate) {
-        throw new FineDueDateInfractionCannotBeLaterError();
-      }
-    } else if (fineData.due_date) {
-      const dueDate = new Date(fineData.due_date);
-      const existingViolationDate = new Date(existingFine.violation_date);
-
-      if (dueDate <= existingViolationDate) {
-        throw new FineDueDateMustBeLaterInfractionError();
-      }
+    if (fineData.due_date) {
+      fineData.due_date = fineDateFromInput(fineData.due_date, timeZone);
     }
 
     if (fineData.payment_date) {
-      const paymentDate = new Date(fineData.payment_date);
-      const violationDate = new Date(
-        fineData.violation_date || existingFine.violation_date,
+      fineData.payment_date = fineDateFromInput(
+        fineData.payment_date,
+        timeZone,
       );
-
-      if (paymentDate < violationDate) {
-        throw new FinePaymentDateCannotBeEarlierInfractionError();
-      }
     }
 
-    // 📍 GEOLOCATION LOGIC FOR UPDATE: Process location changes
-    // Check if latitude or longitude were explicitly provided (not undefined)
-    const hasLatitude = "latitude" in fineData;
-    const hasLongitude = "longitude" in fineData;
+    // The dates as they will be saved, checked together: the edit used to
+    // compare only the fields it received, so moving the infraction after
+    // the recorded payment, or into the future, went through.
+    assertFineDates(
+      {
+        violation_date: fineData.violation_date ?? existingFine.violation_date,
+        due_date: fineData.due_date ?? existingFine.due_date,
+        payment_date:
+          fineData.payment_date === undefined
+            ? existingFine.payment_date
+            : fineData.payment_date,
+      },
+      timeZone,
+      now,
+    );
 
-    if (hasLatitude || hasLongitude) {
-      // If both latitude and longitude are provided and not null
-      if (
-        fineData.latitude !== null &&
-        fineData.longitude !== null &&
-        fineData.latitude &&
-        fineData.longitude
-      ) {
-        fineData.location_source = "USER_MANUAL";
-        (fineData as any).location_edited_by = userId;
-        (fineData as any).location_edited_at = new Date();
-      }
-      // If either is null, user is removing the location
-      else if (fineData.latitude === null || fineData.longitude === null) {
+    // 📍 The location, when the request names it. Placing it by hand signs
+    // the edit; saving the form with the same point does not re-sign it.
+    if ("latitude" in fineData || "longitude" in fineData) {
+      const { latitude, longitude } = fineData;
+
+      if (typeof latitude === "number" && typeof longitude === "number") {
+        if (movedFrom(existingFine, latitude, longitude)) {
+          fineData.location_source = "USER_MANUAL";
+          fineData.location_edited_by = userId;
+          fineData.location_edited_at = now;
+        }
+      } else if (latitude === null || longitude === null) {
         fineData.latitude = null;
         fineData.longitude = null;
         fineData.location_source = "NONE";
@@ -202,6 +192,7 @@ class UpdateFineUseCase {
       const updatedFine = await this.fine.updateFine({
         fineData,
         fineId,
+        businessId,
       });
 
       // Process activity asynchronously without blocking the main flow

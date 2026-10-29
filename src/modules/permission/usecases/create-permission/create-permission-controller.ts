@@ -1,17 +1,11 @@
 import { FastifyReply, FastifyRequest } from "fastify";
 import { container } from "tsyringe";
 
+import { toHttpError } from "@/shared/errors/http-error-rules";
+import { PERMISSION_BODY_LINK_RULES } from "@/modules/permission/usecases/errors/permission-http-errors";
+
 import { CreatePermissionUseCase } from "./create-permission-usecase";
 import { createPermissionSchema } from "@/schemas/create-permission-schema";
-
-import { PermissionAlreadyAssignedError } from "../errors/permission-already-assigned-error";
-import { PermissionAlreadyExistsError } from "../errors/permission-already-exists-error";
-
-import { BusinessNotFoundError } from "@/modules/business/usecases/errors/business-not-found-error";
-import { UserProfileAccessNotFoundError } from "@/modules/user/usecases/errors/user-profile-access-not-found-error";
-
-import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
-import { PermissionBusinessError } from "../errors/permission-business-error";
 
 class CreatePermissionController {
   async handle(
@@ -42,37 +36,11 @@ class CreatePermissionController {
         },
         id,
       );
-
-      return reply
-        .status(201)
-        .send({ message: "Permissão criada com sucesso!" });
     } catch (error) {
-      if (error instanceof ResourceNotFoundError) {
-        return reply.status(400).send({ message: error.message });
-      }
-
-      if (error instanceof PermissionBusinessError) {
-        return reply.status(400).send({ message: error.message });
-      }
-
-      if (error instanceof PermissionAlreadyAssignedError) {
-        return reply.status(400).send({ message: error.message });
-      }
-
-      if (error instanceof PermissionAlreadyExistsError) {
-        return reply.status(400).send({ message: error.message });
-      }
-
-      if (error instanceof BusinessNotFoundError) {
-        return reply.status(400).send({ message: error.message });
-      }
-
-      if (error instanceof UserProfileAccessNotFoundError) {
-        return reply.status(400).send({ message: error.message });
-      }
-
-      throw error;
+      throw toHttpError(error, PERMISSION_BODY_LINK_RULES);
     }
+
+    return reply.status(201).send({ message: "Permissão criada com sucesso!" });
   }
 }
 

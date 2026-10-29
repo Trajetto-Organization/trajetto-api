@@ -1,5 +1,9 @@
 import { z } from "zod";
 import {
+  hasInlineConsecutiveSpaces,
+  hasSpaceAtLineEdges,
+} from "@/shared/delivery/text-rules";
+import {
   emptyStringToNull,
   hasConsecutiveSpaces,
   hasSpaceAtEdges,
@@ -120,8 +124,15 @@ const createQuoteSchema = z.object({
       message: "Por favor, selecione o tamanho da sua frota",
     }),
   }),
+  // A form post sends every line break as CRLF. Read as one "\n" (what the
+  // web action sends). The multiline rule (decision 5.5): a line break is not
+  // a space, so blank lines between paragraphs pass, while doubled spaces and
+  // a space at either end of a line stay refused, as on the web.
   message: z.preprocess(
-    emptyStringToNull,
+    (value) =>
+      emptyStringToNull(
+        typeof value === "string" ? value.replace(/\r\n?/g, "\n") : value,
+      ),
     z
       .string()
       .max(230, "A mensagem deve ter no máximo 230 caracteres")
@@ -135,7 +146,7 @@ const createQuoteSchema = z.object({
           return;
         }
 
-        if (hasConsecutiveSpaces(value)) {
+        if (hasInlineConsecutiveSpaces(value)) {
           ctx.addIssue({
             code: z.ZodIssueCode.custom,
             message: "A mensagem não deve conter espaços consecutivos.",
@@ -153,10 +164,24 @@ const createQuoteSchema = z.object({
 
           return;
         }
+
+        if (hasSpaceAtLineEdges(value)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message:
+              "As linhas da mensagem não podem começar ou terminar com espaço.",
+          });
+        }
       })
       .nullable()
       .optional(),
   ),
+
+  // The Cloudflare Turnstile token the web's widget produced, forwarded for
+  // the API to verify (src/shared/security/turnstile.ts). Optional in the
+  // schema because Turnstile is off without TURNSTILE_SECRET_KEY (dev, tests);
+  // with the secret set, the check refuses a request without it. Not stored.
+  turnstileToken: z.string().max(2048).optional(),
 });
 
 export { createQuoteSchema };

@@ -23,7 +23,10 @@ import { AppError } from "@/shared/errors/AppError";
 class LocalUploadController {
   async handle(request: FastifyRequest, reply: FastifyReply): Promise<void> {
     if (uploadConfig.storage.type === "r2") {
-      return reply.status(404).send({ message: "Rota não encontrada." });
+      // The same body as any unknown route, code included (decision 11.3).
+      return reply
+        .status(404)
+        .send({ code: "ROUTE_NOT_FOUND", message: "Rota não encontrada." });
     }
 
     const { token } = request.query as { token?: string };

@@ -34,13 +34,35 @@ import {
 } from "../../dtos/vehicle-checklist-dto";
 
 import { UploadService } from "@/shared/services/upload-service";
-import { MultipartFile } from "@fastify/multipart";
 
 import { PhotoValidationService } from "@/shared/services/photo-validation-service";
 import { VehicleChecklistRequiredPhotosMissingError } from "../errors/vehicle-checklist-required-photos-missing-error";
 
-import AIVerificationWorkerService from "@/shared/services/ai-verification-worker-service";
+import { AIAnalysisService } from "@/shared/ai/ai-analysis-service";
+import { refreshChecklistVerdict } from "@/shared/ai/ai-record-store";
 import { uploadConfig } from "@/config/upload";
+import { logger } from "@/shared/logging/logger";
+import { recordDate } from "@/shared/vehicle/odometer-timeline";
+import { pickedDateFromInput } from "@/shared/vehicle/record-dates";
+
+import {
+  assertChecklistNotInTheFuture,
+  changedChecklistLinks,
+  checklistDateMoved,
+  withChecklistDate,
+} from "../checklist-rules";
+
+const log = logger.child({ component: "vehicle-checklist" });
+
+/** Whether the checklist holds per-field AI outcomes to compare again. */
+function hasAiVerdictDetails(details: unknown): boolean {
+  return (
+    typeof details === "object" &&
+    details !== null &&
+    !Array.isArray(details) &&
+    Object.keys(details).length > 0
+  );
+}
 
 @injectable()
 class UpdateVehicleChecklistUseCase {
@@ -68,13 +90,12 @@ class UpdateVehicleChecklistUseCase {
     userId: string,
     checklistId: string,
     businessId: string,
-    checklistPhotoFiles?: MultipartFile[],
     photosByField?: { [key: string]: any },
     photosToRemove?: string[],
 
-    // Photos the client already put in storage. Takes precedence over
-    // `checklistPhotoFiles`: a request uses one route or the other, and both
-    // are accepted only while the web and mobile clients migrate.
+    // Photos the client already put in storage, as keys. Grouped by field in
+    // `photosByField` as well, which is what the required-photo validation
+    // above reads.
     presignedPhotos?: { key: string; fieldName?: string }[],
   ): Promise<VehicleChecklist> {
     const findUser = await this.user.findUserById(userId);
@@ -145,7 +166,8 @@ class UpdateVehicleChecklistUseCase {
       throw new VehicleNotBelongBusinessError();
     }
 
-    // Security: Drivers cannot update checklist records
+    // The route already refuses driver tokens (allowDriver: false); kept as
+    // defence in depth for any other caller of this use case.
     if (findUser.role === "BUSINESS_USER" && findUser.driverId) {
       throw new VehicleChecklistDriverCannotUpdateChecklistError();
     }
@@ -154,24 +176,32 @@ class UpdateVehicleChecklistUseCase {
       checklistData.current_mileage ?? findChecklist.current_mileage;
     const vehicleChanged = vehicleId !== findChecklist.vehicleId;
     const mileageChanged = effectiveMileage !== findChecklist.current_mileage;
+    // A resent day is compared as the instant it is stored at.
+    const dateChanged = checklistDateMoved(
+      findChecklist.checklist_date,
+      pickedDateFromInput(checklistData.checklist_date, findBusiness.timezone),
+    );
 
-    if (mileageChanged || vehicleChanged) {
-      // New mileage must be strictly greater than current vehicle mileage
-      if (effectiveMileage <= findVehicle.current_mileage) {
-        throw new VehicleMileageInvalidError();
-      }
+    // Only a date the edit moves is held to today: the web resends the
+    // stored date on every edit, and a row already dated ahead (the
+    // date-only tomorrows the old rule let through) could not get a note
+    // fixed without also being moved.
+    if (dateChanged) {
+      assertChecklistNotInTheFuture(checklistData.checklist_date, findBusiness);
     }
 
-    // Auto-populate branchId for driver users
-    if (findUser.driverId) {
-      const driverUser = await this.driver.findDriverById(findUser.driverId);
-      if (driverUser) {
-        // Force branchId - drivers cannot select branch manually
-        // Priority: Vehicle.branchId → Driver.branchId
-        checklistData.branchId =
-          findVehicle.branchId || driverUser.branchId || undefined;
-      }
-    }
+    // A changed reading, vehicle or date is decided inside the repository's
+    // transaction, by the checklist's date first (placeReading, the fueling
+    // edit's rule, over shared/vehicle/odometer-timeline): between the
+    // readings around it, itself left out, or above them as the newest, when
+    // the odometer follows. The old check compared an old record with today's
+    // odometer, so no past checklist could have its km corrected, and one
+    // raised above the odometer jumped it past every later record.
+
+    // Only a link the edit re-points is held to today's state (FLEET-FUEL-1):
+    // the web resent every link, and last month's checklist of a driver who
+    // left, or at a branch since closed, could not have a note corrected.
+    const links = changedChecklistLinks(findChecklist, checklistData);
 
     // If updating driver, validate it exists and belongs to business
     if (checklistData.driverId) {
@@ -187,9 +217,9 @@ class UpdateVehicleChecklistUseCase {
         throw new DriverNotBelongBusinessError();
       }
 
-      if (findDriver.status !== "ACTIVE") {
+      if (links.driver && findDriver.status !== "ACTIVE") {
         throw new AppError(
-          "O motorista selecionado esta inativo.",
+          "O motorista selecionado está inativo.",
           422,
           "DRIVER_INACTIVE",
         );
@@ -210,7 +240,7 @@ class UpdateVehicleChecklistUseCase {
         throw new BranchNotBelongBusinessError();
       }
 
-      if (findBranch.is_active === false) {
+      if (links.branch && findBranch.is_active === false) {
         throw new AppError(
           "Não é permitido mover o checklist para uma filial inativa.",
           409,
@@ -245,38 +275,6 @@ class UpdateVehicleChecklistUseCase {
             newPhotoPathsByField[photo.fieldName].push(photo.path);
           }
         }
-      } else if (checklistPhotoFiles && checklistPhotoFiles.length > 0) {
-        // Build filename → fieldName mapping for direct field-to-path resolution
-        const filenameToField: Record<string, string> = {};
-        if (photosByField) {
-          for (const [fieldName, photos] of Object.entries(photosByField)) {
-            for (const photo of photos as any[]) {
-              const fn = photo.filename || "checklist-photo-update";
-              filenameToField[fn] = fieldName;
-            }
-          }
-        }
-
-        for (const photoFile of checklistPhotoFiles) {
-          const buffer = await photoFile.toBuffer();
-          const uploadResult = await this.uploadService.uploadFile({
-            buffer,
-            filename: photoFile.filename || "checklist-photo-update",
-            mimetype: photoFile.mimetype,
-            uploadType: "checklistPhotos",
-          });
-          newPhotoPaths.push(uploadResult.path);
-
-          // Map uploaded path to field name directly (no fragile filename matching)
-          const fieldName =
-            filenameToField[photoFile.filename || "checklist-photo-update"];
-          if (fieldName) {
-            if (!newPhotoPathsByField[fieldName]) {
-              newPhotoPathsByField[fieldName] = [];
-            }
-            newPhotoPathsByField[fieldName].push(uploadResult.path);
-          }
-        }
       }
 
       // Merge existing photos with new photos, considering photos to remove
@@ -289,10 +287,30 @@ class UpdateVehicleChecklistUseCase {
 
       // Remove photos that should be deleted
       if (photosToRemove && photosToRemove.length > 0) {
+        // Only what THIS checklist actually holds. The list comes from the
+        // client, and every entry was deleted from the bucket after the
+        // commit — so any key the caller could name went: another checklist's
+        // photos, a delivery's signed proof PDF, another company's files.
+        const ownedPaths = new Set<string>(findChecklist.photos ?? []);
+
+        const byField = findChecklist.photos_by_field;
+
+        if (byField && typeof byField === "object" && !Array.isArray(byField)) {
+          for (const paths of Object.values(
+            byField as Record<string, unknown>,
+          )) {
+            if (!Array.isArray(paths)) continue;
+
+            for (const path of paths) {
+              if (typeof path === "string") ownedPaths.add(path);
+            }
+          }
+        }
+
         // Convert URLs to relative paths for comparison and deletion
-        oldPhotoPathsToDelete = photosToRemove.map((photoUrl) =>
-          this.uploadService.extractFilePath(photoUrl),
-        );
+        oldPhotoPathsToDelete = photosToRemove
+          .map((photoUrl) => this.uploadService.extractFilePath(photoUrl))
+          .filter((path) => ownedPaths.has(path));
 
         // Remove from array using relative paths
         finalPhotos = finalPhotos.filter(
@@ -335,13 +353,16 @@ class UpdateVehicleChecklistUseCase {
       const photosChanged =
         newPhotoPaths.length > 0 ||
         Boolean(photosToRemove && photosToRemove.length > 0);
-      const checklistDataWithPhotos = photosChanged
-        ? {
-            ...checklistData,
-            photos: finalPhotos,
-            photos_by_field: finalPhotosByField,
-          }
-        : checklistData;
+      const checklistDataWithPhotos = withChecklistDate(
+        photosChanged
+          ? {
+              ...checklistData,
+              photos: finalPhotos,
+              photos_by_field: finalPhotosByField,
+            }
+          : checklistData,
+        findBusiness.timezone,
+      );
       const targetVehicleId =
         checklistData.vehicleId ?? findChecklist.vehicleId;
 
@@ -351,11 +372,18 @@ class UpdateVehicleChecklistUseCase {
             checklistData: checklistDataWithPhotos,
             checklistId,
           },
-          mileageChanged || vehicleChanged
+          mileageChanged || vehicleChanged || dateChanged
             ? {
                 businessId,
                 vehicleId: targetVehicleId,
                 currentMileage: effectiveMileage,
+                at: recordDate(
+                  checklistDataWithPhotos.checklist_date ??
+                    findChecklist.checklist_date,
+                ),
+                checklistId,
+                timeZone: findBusiness.timezone,
+                readingChanged: mileageChanged || vehicleChanged,
               }
             : undefined,
         );
@@ -386,25 +414,44 @@ class UpdateVehicleChecklistUseCase {
         businessId: businessId,
       });
 
+      // An edit of an informed value (no new photo) is compared again with
+      // the readings already paid for (AI-2): a manager who corrected a
+      // condition after the AI flagged it kept "Não confere", and the
+      // "Verificar com IA" button is hidden over issues_found. No provider
+      // call, no quota; it writes only when an outcome changed. Awaited so the
+      // next read shows it; a failure is logged, the edit already committed.
+      if (hasAiVerdictDetails(findChecklist.ai_verification_details)) {
+        try {
+          await refreshChecklistVerdict(updatedChecklist.id);
+        } catch (err) {
+          log.error(
+            { err, checklistId: updatedChecklist.id, businessId },
+            "AI checklist verdict could not be compared again",
+          );
+        }
+      }
+
       // Re-verify AI when new photos were added (fire-and-forget)
       // Skip if business has AI disabled (limit === 0)
       if (
         (findBusiness.ai_analysis_limit ?? 0) > 0 &&
         Object.keys(newPhotoPathsByField).length > 0
       ) {
-        AIVerificationWorkerService.getInstance()
-          .enqueueVerification({
-            type: "checklist",
+        AIAnalysisService.getInstance()
+          .requestAnalysis({
+            type: "CHECKLIST",
             recordId: updatedChecklist.id,
             businessId,
-            userId,
-            photosByField: newPhotoPathsByField,
-            checklistData: checklistData as Record<string, any>,
+            requestedById: userId,
+            input: {
+              photosByField: newPhotoPathsByField,
+              checklistData: checklistData as Record<string, unknown>,
+            },
           })
           .catch((err) =>
-            console.error(
-              "[AI] Failed to enqueue checklist re-verification:",
-              err,
+            log.error(
+              { err, checklistId: updatedChecklist.id, businessId },
+              "AI checklist re-verification could not be requested",
             ),
           );
       }
@@ -419,16 +466,20 @@ class UpdateVehicleChecklistUseCase {
         );
       }
 
+      // The transaction re-reads the checklist and the vehicle: one deleted
+      // meanwhile is a 404/400 like before the edit started, not a 500.
       if (
         error instanceof VehicleMileageInvalidError ||
+        error instanceof VehicleChecklistBusinessNotFoundError ||
+        error instanceof VehicleNotFoundError ||
         error instanceof AppError
       ) {
         throw error;
       }
 
-      console.error(
-        "[UpdateVehicleChecklistUseCase] Failed to update checklist:",
-        error,
+      log.error(
+        { err: error, checklistId },
+        "vehicle checklist could not be updated",
       );
       throw new AppError(
         "Houve um erro ao tentar atualizar o checklist veicular! Por favor, tente novamente.",

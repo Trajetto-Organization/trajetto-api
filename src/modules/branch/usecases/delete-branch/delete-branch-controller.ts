@@ -3,19 +3,6 @@ import { container } from "tsyringe";
 
 import { DeleteBranchUseCase } from "./delete-branch-usecase";
 
-import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
-import { BusinessNotFoundError } from "@/modules/business/usecases/errors/business-not-found-error";
-
-import { BranchNotFoundError } from "../errors/branch-not-found-error";
-import { BranchNotBelongBusinessError } from "../errors/branch-not-belong-business-error";
-
-import { BranchHasChildrenError } from "../errors/branch-has-children-error";
-
-import { BranchDeletionCodeInvalidError } from "../errors/branch-deletion-code-invalid-error";
-import { BranchDeletionCodeExpiredError } from "../errors/branch-deletion-code-expired-error";
-
-import { BranchNoPendingDeletionError } from "../errors/branch-no-pending-deletion-error";
-
 import { updateDeleteBranchSchema } from "@/schemas/update-delete-branch-schema";
 import { confirmDeletionCodeSchema } from "@/schemas/confirm-deletion-code-schema";
 
@@ -32,46 +19,10 @@ class DeleteBranchController {
     const { code } = confirmDeletionCodeSchema.parse(request.body);
     const deleteBranchUseCase = container.resolve(DeleteBranchUseCase);
 
-    try {
-      await deleteBranchUseCase.execute(branchId, businessId, id, code);
-      return reply
-        .status(200)
-        .send({ message: "Filial deletada com sucesso!" });
-    } catch (error) {
-      if (error instanceof ResourceNotFoundError) {
-        return reply.status(400).send({ message: error.message });
-      }
-
-      if (error instanceof BusinessNotFoundError) {
-        return reply.status(400).send({ message: error.message });
-      }
-
-      if (error instanceof BranchNotFoundError) {
-        return reply.status(404).send({ message: error.message });
-      }
-
-      if (error instanceof BranchNotBelongBusinessError) {
-        return reply.status(403).send({ message: error.message });
-      }
-
-      if (error instanceof BranchHasChildrenError) {
-        return reply.status(409).send({ message: error.message });
-      }
-
-      if (error instanceof BranchNoPendingDeletionError) {
-        return reply.status(400).send({ message: error.message });
-      }
-
-      if (error instanceof BranchDeletionCodeExpiredError) {
-        return reply.status(400).send({ message: error.message });
-      }
-
-      if (error instanceof BranchDeletionCodeInvalidError) {
-        return reply.status(400).send({ message: error.message });
-      }
-
-      throw error;
-    }
+    // BRANCH_NOT_FOUND (404, also for another company's branch) is an
+    // AppError and reaches the error handler with its code.
+    await deleteBranchUseCase.execute(branchId, businessId, id, code);
+    return reply.status(200).send({ message: "Filial deletada com sucesso!" });
   }
 }
 

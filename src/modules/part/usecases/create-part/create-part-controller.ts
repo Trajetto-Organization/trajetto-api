@@ -3,13 +3,7 @@ import { container } from "tsyringe";
 
 import { CreatePartUseCase } from "./create-part-usecase";
 
-import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
-import { BusinessNotFoundError } from "@/modules/business/usecases/errors/business-not-found-error";
-
-import { PartAlreadyExistsError } from "../errors/part-already-exists-error";
-
-import { SupplierNotFoundError } from "@/modules/supplier/usecases/errors/supplier-not-found-error";
-import { SupplierNotBelongBusinessError } from "@/modules/supplier/usecases/errors/supplier-not-belong-business-error";
+import { replyMaintenanceError } from "@/modules/service-order/usecases/errors/maintenance-http-errors";
 
 import { createPartSchema } from "@/schemas/create-part-schema";
 import { updateDeleteBusinessSchema } from "@/schemas/update-delete-business-schema";
@@ -36,25 +30,9 @@ class CreatePartController {
 
       return reply.status(201).send({ message: "Peça criada com sucesso!" });
     } catch (error) {
-      if (error instanceof ResourceNotFoundError) {
-        return reply.status(400).send({ message: error.message });
-      }
-
-      if (error instanceof BusinessNotFoundError) {
-        return reply.status(400).send({ message: error.message });
-      }
-
-      if (error instanceof SupplierNotFoundError) {
-        return reply.status(400).send({ message: error.message });
-      }
-
-      if (error instanceof PartAlreadyExistsError) {
-        return reply.status(400).send({ message: error.message });
-      }
-
-      if (error instanceof SupplierNotBelongBusinessError) {
-        return reply.status(403).send({ message: error.message });
-      }
+      // Another company's supplier answers like a missing one (decision
+      // 11.3); the part's own errors are AppErrors the global handler sends.
+      if (replyMaintenanceError(reply, error)) return reply;
 
       throw error;
     }

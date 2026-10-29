@@ -1,20 +1,25 @@
 import { z } from "zod";
+import { tenantLockedShape } from "@/shared/validation/tenant-locked-field";
+
+import { isPickedDateInput } from "@/shared/vehicle/record-dates";
 
 import { LocationSource } from "@prisma/client";
 import { isWithinAllowedDistance } from "@/shared/utils/geolocation";
 
 import {
   emptyStringToNull,
-  isValidDateString,
+  hasConsecutiveSpaces,
+  hasSpaceAtEdges,
 } from "@/shared/utils/zod-schema-helpers";
 
 const updateServiceOrderSchema = z
   .object({
+    ...tenantLockedShape,
     date: z
       .string()
       .min(1, "Data da ordem de serviço é obrigatória.")
       .superRefine((val, ctx) => {
-        if (!isValidDateString(val)) {
+        if (!isPickedDateInput(val)) {
           ctx.addIssue({
             code: z.ZodIssueCode.custom,
             message: "Data da ordem de serviço inválida",
@@ -33,11 +38,38 @@ const updateServiceOrderSchema = z
           .nullable()
           .optional()
           .refine(
-            (val) => !val || isValidDateString(val),
+            (val) => !val || isPickedDateInput(val),
             "Data de conclusão inválida",
           ),
       )
       .nullable(),
+    description: z.preprocess(
+      emptyStringToNull,
+      z
+        .string()
+        .max(500, "A descrição deve ter no máximo 500 caracteres.")
+        .superRefine((value, ctx) => {
+          if (hasConsecutiveSpaces(value)) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              message: "A descrição não deve conter espaços consecutivos.",
+            });
+
+            return;
+          }
+
+          if (hasSpaceAtEdges(value)) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              message:
+                "A descrição não pode começar ou terminar com espaço em branco.",
+            });
+          }
+        })
+        .optional()
+        .nullable()
+        .describe("Descrição livre do que se trata a ordem de serviço."),
+    ),
     maintenance_type: z
       .enum(["INTERNAL", "EXTERNAL"], {
         errorMap: () => ({

@@ -1,5 +1,5 @@
 import { inject, injectable } from "tsyringe";
-import { hash } from "bcrypt";
+import { hashSecret } from "@/shared/security/bcrypt-gate";
 
 import { IUsersTokensRepository } from "../../repositories/IUsers-tokens-repository";
 import { UserInvalidTokenError } from "../errors/user-invalid-token-error";
@@ -46,16 +46,32 @@ class ResetUserPasswordUseCase {
       throw new ResourceNotFoundError();
     }
 
-    const hashedPassword = await hash(password, 10);
+    const hashedPassword = await hashSecret(password, 10);
+
+    /**
+     * The token is spent BEFORE the password changes, and losing means stop.
+     *
+     * The two writes used to run side by side in a `Promise.all`, which is
+     * neither atomic nor ordered: two requests carrying the same token both
+     * read it, both found it valid and both set a password — last one wins,
+     * silently — and if only the delete failed, the password changed while
+     * the reset link stayed live. Spending the token first fails closed: the
+     * request that loses the race changes nothing and is told the token is
+     * invalid, which by then it is.
+     */
+    const spent = await this.usersTokens.consumeForgotPasswordVerificationToken(
+      userToken.id,
+    );
+
+    if (!spent) {
+      throw new UserInvalidTokenError();
+    }
 
     try {
-      await Promise.all([
-        this.user.updateUserPassword({
-          userId: user.id,
-          password: hashedPassword,
-        }),
-        this.usersTokens.deleteForgotPasswordVerificationToken(userToken.id),
-      ]);
+      await this.user.updateUserPassword({
+        userId: user.id,
+        password: hashedPassword,
+      });
 
       sendSecurityEventToUser(user.id, { reason: "password_reset" });
     } catch (error) {

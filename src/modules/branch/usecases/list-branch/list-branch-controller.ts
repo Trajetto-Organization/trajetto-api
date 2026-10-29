@@ -5,59 +5,42 @@ import { z } from "zod";
 
 import { ListBranchUseCase } from "./list-branch-usecase";
 
-import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
-import { BusinessNotFoundError } from "@/modules/business/usecases/errors/business-not-found-error";
-
-import { listPagesSchema } from "@/schemas/list-pages-schema";
+import { listBranchSchema } from "@/schemas/list-branch-schema";
 import { sendAsNDJSON } from "@/config/stream-utils";
 
 class ListBranchController {
   async handle(request: FastifyRequest, reply: FastifyReply): Promise<void> {
     const { id } = request.user;
 
-    const { page, pageSize, search } = request.query as z.infer<
-      typeof listPagesSchema
-    >;
+    // The route already validated AND transformed the querystring (page is a
+    // number, each facet a list): re-parsing it would refuse it.
+    const { businessId, page, pageSize, search, sort, order, status, uf } =
+      request.query as z.infer<typeof listBranchSchema>;
 
     const listBranchUseCase = container.resolve(ListBranchUseCase);
 
-    // Secure handling for URL decoding
-    let decodedSearch: string | undefined = undefined;
-    if (search) {
-      try {
-        // Try to decode, but catch errors
-        decodedSearch = decodeURIComponent(search);
-      } catch (error) {
-        // If it fails, use the value without decoding.
-        decodedSearch = search;
-      }
-    }
-
-    try {
-      const branchList = listBranchUseCase.execute(
-        id,
-        page,
-        pageSize,
-        decodedSearch,
-      );
-
-      await sendAsNDJSON({
-        reply,
-        dataPromise: branchList,
-        page,
-        pageSize,
-      });
-    } catch (error) {
-      if (error instanceof ResourceNotFoundError) {
-        return reply.status(400).send({ message: error.message });
-      }
-
-      if (error instanceof BusinessNotFoundError) {
-        return reply.status(400).send({ message: error.message });
-      }
-
-      throw error;
-    }
+    await sendAsNDJSON({
+      reply,
+      page,
+      pageSize,
+      dataPromise: listBranchUseCase
+        .execute({
+          userId: id,
+          businessId,
+          page,
+          pageSize,
+          search,
+          statuses: status,
+          ufs: uf,
+          sort,
+          order,
+        })
+        .then((result) => ({
+          data: result.data,
+          total: result.total,
+          meta: result.searchMeta,
+        })),
+    });
   }
 }
 

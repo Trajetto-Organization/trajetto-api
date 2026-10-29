@@ -1,7 +1,12 @@
-class VehicleRenavamExistsError extends Error {
+import { AppError } from "@/shared/errors/AppError";
+
+/** RENAVAM taken in this company; see VehicleAlreadyExistsError. */
+class VehicleRenavamExistsError extends AppError {
   constructor() {
     super(
-      "Este renavam não está disponível para cadastro. O renavam de um veículo deve ser único em todo o sistema.",
+      "Já existe um veículo com este RENAVAM nesta empresa. Procure-o na listagem de veículos.",
+      409,
+      "VEHICLE_RENAVAM_TAKEN",
     );
   }
 }

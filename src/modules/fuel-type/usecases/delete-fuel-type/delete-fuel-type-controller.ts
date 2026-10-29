@@ -3,17 +3,10 @@ import { container } from "tsyringe";
 
 import { DeleteFuelTypeUseCase } from "./delete-fuel-type-usecase";
 
-import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
-import { BusinessNotFoundError } from "@/modules/business/usecases/errors/business-not-found-error";
-
 import { updateDeleteBusinessSchema } from "@/schemas/update-delete-business-schema";
 import { updateDeleteFuelTypeSchema } from "@/schemas/update-delete-fuel-type-schema";
 
-import { FuelTypeNotBelongBusinessError } from "../errors/fuel-type-not-belong-business-error";
-import { FuelTypeHasAssociatedVehiclesError } from "../errors/fuel-type-has-associated-vehicles-error";
-
-import { FuelTypeNotFoundError } from "../errors/fuel-type-not-found-error";
-import { FuelTypeHasAssociatedFuelError } from "../errors/fuel-type-has-associated-fuel-error";
+import { replyFuelTypeError } from "../errors/fuel-type-http-errors";
 
 class DeleteFuelTypeController {
   async handle(
@@ -33,29 +26,9 @@ class DeleteFuelTypeController {
         .status(200)
         .send({ message: "Tipo de combustível deletado com sucesso!" });
     } catch (error) {
-      if (error instanceof ResourceNotFoundError) {
-        return reply.status(400).send({ message: error.message });
-      }
-
-      if (error instanceof BusinessNotFoundError) {
-        return reply.status(400).send({ message: error.message });
-      }
-
-      if (error instanceof FuelTypeNotFoundError) {
-        return reply.status(400).send({ message: error.message });
-      }
-
-      if (error instanceof FuelTypeNotBelongBusinessError) {
-        return reply.status(400).send({ message: error.message });
-      }
-
-      if (error instanceof FuelTypeHasAssociatedVehiclesError) {
-        return reply.status(403).send({ message: error.message });
-      }
-
-      if (error instanceof FuelTypeHasAssociatedFuelError) {
-        return reply.status(403).send({ message: error.message });
-      }
+      // Missing or foreign: 404 FUEL_TYPE_NOT_FOUND; still in use: 409
+      // FUEL_TYPE_IN_USE with the count (decision 11.3).
+      if (replyFuelTypeError(reply, error)) return reply;
 
       throw error;
     }

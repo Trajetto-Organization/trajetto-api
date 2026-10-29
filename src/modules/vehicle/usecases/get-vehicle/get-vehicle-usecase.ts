@@ -33,7 +33,7 @@ class GetVehicleUseCase {
     userId: string,
     vehicleId: string,
     businessId: string,
-  ): Promise<VehicleWithLastFuel | null> {
+  ): Promise<VehicleWithLastFuel> {
     const findUser = await this.user.findUserById(userId);
 
     if (!findUser) {
@@ -48,43 +48,44 @@ class GetVehicleUseCase {
       throw new BusinessNotFoundError();
     }
 
-    const findVehicleById = await this.vehicle.findVehicleById(vehicleId);
+    // Scoped by company in the query itself: a vehicle of another company
+    // is simply not found, with nothing that tells it exists.
+    const getVehicle = await this.vehicle.getVehicleByIdAndBusiness({
+      businessId,
+      vehicleId,
+    });
 
-    if (!findVehicleById) {
+    if (!getVehicle) {
       throw new VehicleNotFoundError();
     }
 
-    // Security: If user is a driver, verify vehicle belongs to them
+    // A driver reads only a vehicle they may operate: the one they are
+    // responsible for, or the one their released or running route uses
+    // (FLEET-ASSIGN-1). The substitute driver used to be refused here.
     if (findUser.role === "BUSINESS_USER" && findUser.driverId) {
-      if (findVehicleById.driverId !== findUser.driverId) {
+      const allowed = await this.vehicle.canDriverOperateVehicle({
+        vehicleId,
+        driverId: findUser.driverId,
+        businessId,
+      });
+
+      if (!allowed) {
         throw new VehicleNotAssignedToDriverError();
       }
     }
 
     try {
-      const getVehicle = await this.vehicle.getVehicleByIdAndBusiness({
-        businessId,
-        vehicleId,
-      });
-
-      if (!getVehicle) {
-        return null;
-      }
-
-      // Get the last fuel record for this vehicle
       const lastFuel = await this.fuel.getPreviousFuelByVehicleId(
         vehicleId,
         new Date(),
+        businessId,
       );
 
-      // Return vehicle with last fuel data
-      const vehicleWithLastFuel: VehicleWithLastFuel = {
+      return {
         ...getVehicle,
         last_fuel_mileage: lastFuel?.current_mileage || null,
         last_fuel_date: lastFuel?.refueling_date || null,
       };
-
-      return vehicleWithLastFuel;
     } catch (error) {
       throw new AppError("Não foi possível recuperar o veículo!", 500);
     }

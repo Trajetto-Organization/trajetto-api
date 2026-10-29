@@ -1,5 +1,11 @@
-import { UserRole } from "@/modules/user/dtos/user-dto";
 import { PermissionKey } from "@/config/permissions";
+import type { SortOrder } from "@/shared/pagination/list-query";
+
+import type {
+  PermissionGroupCount,
+  PermissionListFilters,
+  PermissionSortKey,
+} from "../usecases/list-permission/permission-list";
 
 interface CreatePermissionProps {
   action: string;
@@ -28,18 +34,26 @@ interface FindPermissionNameByProfile {
   profileAccessId: string;
 }
 
-interface ListPermission {
-  data: Permission[];
-  total: number;
+/** A line of GET /permission/list-permission. */
+interface PermissionListRow extends Permission {
+  created_at: Date;
+  updated_at: Date;
+  profileAccess: { name: string };
 }
 
-interface ListPermissionProps {
+interface ListPermission {
+  data: PermissionListRow[];
+  /** Permissions per faceted combination over search + tenant. */
+  groups: PermissionGroupCount[];
+  /** Names of the company's profiles present in the groups or selected. */
+  profileNames: Map<string, string>;
+}
+
+interface ListPermissionProps extends PermissionListFilters {
   page: number;
   pageSize: number;
-  search?: string;
-  currentUserRole: UserRole;
-  businessId: string;
-  profileAccessId: string;
+  sort?: PermissionSortKey;
+  order?: SortOrder;
 }
 
 interface UpdatePermission {
@@ -51,6 +65,9 @@ interface UpdatePermission {
   canWrite?: boolean | null;
   permissionKey?: PermissionKey;
 }
+
+/** What a client may send: the company is the permission's own. */
+type UpdatePermissionInput = Omit<UpdatePermission, "businessId">;
 
 interface FindPermissionKeyByProfile {
   permissionKey: string;
@@ -75,9 +92,11 @@ export {
   FindPermissionNameByProfile,
   FindPermissionKeyByProfile,
   UpdatePermission,
+  UpdatePermissionInput,
   Permission,
   ListPermission,
   ListPermissionProps,
+  PermissionListRow,
   BulkConfigurePermissionItem,
   BulkConfigurePermissionsProps,
 };

@@ -16,6 +16,12 @@ import {
   profileAccessResponses,
   profileAccessSchemas,
 } from "./documentation/profile-access-documentation";
+import {
+  ndjsonCursor,
+  ndjsonList,
+  offsetMetaWith,
+} from "./documentation/ndjson";
+import { profileAccessListSearchMetaDoc } from "@/modules/profile-access/usecases/list-profile-access/list-profile-access-documentation";
 
 const createProfileAccessController = new CreateProfileAccessController();
 const listProfileAccessController = new ListProfileAccessController();
@@ -37,13 +43,15 @@ async function profileAccessRoutes(app: FastifyInstance) {
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["profile-access"],
-        summary: "Create a new profile access",
+        summary: "Cria um perfil de acesso",
         description:
-          "Register a new user profile access template with permission sets and role configurations",
+          "Cadastra um perfil de acesso na empresa. As permissões do perfil são configuradas depois (permissões em lote ou uma a uma). Avisa as outras abas da empresa (catalogChanged profile_access).",
         body: profileAccessSchemas.createProfileAccess,
         response: {
           201: profileAccessResponses.profileAccessCreated,
           400: profileAccessResponses.createProfileAccessErrors,
+          404: profileAccessResponses.lookupNotFound,
+          409: profileAccessResponses.profileAccessConflict,
           500: profileAccessResponses.internalServerError,
         },
       },
@@ -59,13 +67,17 @@ async function profileAccessRoutes(app: FastifyInstance) {
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["profile-access"],
-        summary: "List profile access",
+        summary: "Lista os perfis de acesso de uma empresa",
         description:
-          "Retrieve a paginated list of user profile access templates with their permission configurations",
+          "Página de perfis com busca e ordenação no servidor, cada um com quantos usuários e permissões tem. O MASTER informa `businessId`; os demais listam a própria empresa, e um usuário comum não vê o próprio perfil. A linha `meta.searchMeta` traz os cartões da tela sobre toda a busca (não só a página): total de perfis, usuários vinculados, perfis sem usuários e o perfil mais usado.",
         querystring: profileAccessSchemas.listProfileAccess,
         response: {
-          200: profileAccessResponses.profileAccessList,
+          200: ndjsonList(
+            profileAccessResponses.profileAccessListRow,
+            offsetMetaWith(profileAccessListSearchMetaDoc),
+          ),
           400: profileAccessResponses.listProfileAccessErrors,
+          404: profileAccessResponses.lookupNotFound,
           500: profileAccessResponses.internalServerError,
         },
       },
@@ -81,16 +93,18 @@ async function profileAccessRoutes(app: FastifyInstance) {
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["profile-access"],
-        summary: "Search profiles by business (cursor-based)",
+        summary: "Busca perfis de acesso da empresa (cursor)",
         description:
-          "Retrieve profile access templates as NDJSON stream with cursor-based pagination. " +
-          "First line contains meta object: {meta: {nextCursor, hasMore}}. " +
-          "Subsequent lines are individual profile access objects. " +
-          "Use nextCursor value as cursor parameter for the next page.",
+          "Perfis da empresa em NDJSON paginado por cursor, para os seletores. " +
+          "O termo em `search` é comparado com o nome no servidor. " +
+          "Com `editable=true` (formulário de permissões), um usuário comum não recebe o próprio perfil. " +
+          "A primeira linha traz {meta: {total: 0, searchMeta: {nextCursor, hasMore}}}; " +
+          "use nextCursor como `cursor` da próxima página.",
         querystring: profileAccessSchemas.searchProfileCursor,
         response: {
-          200: profileAccessResponses.searchProfileStreamDescription,
+          200: ndjsonCursor(profileAccessResponses.profileAccessRow),
           400: profileAccessResponses.listProfileBusinessErrors,
+          404: profileAccessResponses.lookupNotFound,
           500: profileAccessResponses.internalServerError,
         },
       },
@@ -109,15 +123,17 @@ async function profileAccessRoutes(app: FastifyInstance) {
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["profile-access"],
-        summary: "Update a profile access",
+        summary: "Renomeia um perfil de acesso",
         description:
-          "Update existing profile access template including permission sets and role configurations",
+          "Altera o nome do perfil. O perfil não muda de empresa (decisão 16.100): um `businessId` no corpo, com qualquer valor, responde 400 VALIDATION_ERROR. Avisa as outras abas da empresa (catalogChanged profile_access).",
         params: profileAccessSchemas.updateDeleteProfileAccess,
         body: profileAccessSchemas.updateProfileAccess,
         response: {
           200: profileAccessResponses.profileAccessUpdated,
           400: profileAccessResponses.updateProfileAccessErrors,
           403: profileAccessResponses.profileAccessCannotBeUpdatedByHimself,
+          404: profileAccessResponses.profileAccessWriteNotFound,
+          409: profileAccessResponses.profileAccessConflict,
           500: profileAccessResponses.internalServerError,
         },
       },
@@ -133,14 +149,16 @@ async function profileAccessRoutes(app: FastifyInstance) {
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["profile-access"],
-        summary: "Delete a profile access",
+        summary: "Exclui um perfil de acesso",
         description:
-          "Permanently remove a profile access template and revoke associated user permissions",
+          "Exclui o perfil e as permissões dele. Um perfil ainda ligado a usuários é recusado com 409 PROFILE_ACCESS_IN_USE e a contagem: excluí-lo deixaria essas pessoas sem acesso.",
         params: profileAccessSchemas.updateDeleteProfileAccess,
         response: {
           200: profileAccessResponses.profileAccessDeleted,
           400: profileAccessResponses.deleteProfileAccessErrors,
           403: profileAccessResponses.profileAccessCannotBeDeletedByHimself,
+          404: profileAccessResponses.profileAccessWriteNotFound,
+          409: profileAccessResponses.profileAccessInUse,
           500: profileAccessResponses.internalServerError,
         },
       },

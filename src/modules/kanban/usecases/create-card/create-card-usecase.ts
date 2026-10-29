@@ -6,7 +6,6 @@ import { IUserRepository } from "@/modules/user/repositories/IUser-repository";
 import { KanbanCard, CreateKanbanCardProps } from "../../dtos/kanban-dto";
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
 
-import { KanbanNotAllowedCreateCardBusinessError } from "../errors/kanban-not-allowed-create-card-business-error";
 import { UserAssignedUserNotFoundError } from "@/modules/user/usecases/errors/user-assigned-user-not-found-error";
 
 import { UserNotBelongBusinessError } from "@/modules/user/usecases/errors/user-not-belong-business-error";
@@ -14,136 +13,23 @@ import { KanbanColumnNotFoundError } from "../errors/kanban-column-not-found-err
 
 import { AppError } from "@/shared/errors/AppError";
 
-import { NotificationService } from "@/shared/services/notification-service";
-import { redirectPage } from "@/shared/utils/link-redirect-page";
-
-import { generateWhatsAppInstanceName } from "@/shared/utils/whatsapp-instance-name";
-import { env } from "@/env";
-
-interface KanbanCardNotificationTextProps {
-  title: string;
-  description: string;
-  priority: string;
-  dueDate: string;
-  cardId: string;
-}
+import { OutboxService } from "@/shared/notifications/outbox-service";
+import { IBusinessRepository } from "@/modules/business/repositories/IBusiness-repository";
+import { loadBusinessTimeZone } from "@/shared/time/business-time-zone";
+import database from "@/../infra/database";
 
 @injectable()
 class CreateKanbanCardUseCase {
-  private http_request = env.HTTP_REQUEST;
-
   constructor(
     @inject("UserRepository")
     private user: IUserRepository,
     @inject("KanbanRepository")
     private kanban: IKanbanRepository,
-    @inject("NotificationService")
-    private notificationService: NotificationService,
+    @inject("OutboxService")
+    private outbox: OutboxService,
+    @inject("BusinessRepository")
+    private business: IBusinessRepository,
   ) {}
-
-  private buildKanbanCardNotificationText({
-    title,
-    description,
-    priority,
-    dueDate,
-    cardId,
-  }: KanbanCardNotificationTextProps): string {
-    const getPriorityInfo = (priority: string) => {
-      switch (priority.toLowerCase()) {
-        case "urgent":
-          return { emoji: "🆘", text: "Urgente" };
-        case "high":
-          return { emoji: "🔴", text: "Alta" };
-        case "medium":
-          return { emoji: "🟡", text: "Média" };
-        case "low":
-          return { emoji: "🟢", text: "Baixa" };
-        default:
-          return { emoji: "🟢", text: "Baixa" };
-      }
-    };
-
-    const priorityInfo = getPriorityInfo(priority);
-
-    return [
-      `📋 *Novo Card Atribuído! Você foi designado como responsável por um novo card no kanban*`,
-      `Título: *${title}*`,
-      `Descrição: ${description}`,
-      `Prioridade: ${priorityInfo.emoji} *${priorityInfo.text}*`,
-      `Data de vencimento: *${dueDate}*`,
-      `Identificador do card: *${cardId}*`,
-      `Para mais detalhes, acesse o sistema.`,
-    ].join("\n");
-  }
-
-  private async processNotifications(
-    cardCreated: KanbanCard,
-    cardData: CreateKanbanCardProps,
-    userId: string,
-    businessId: string,
-  ): Promise<void> {
-    try {
-      // Create activity for the user who created the card
-      const activityData = {
-        type: "Card Kanban",
-        action: "create",
-        entityId: cardCreated.id,
-        description: `Card "${cardCreated.title}" criado com sucesso no kanban | ID: ${cardCreated.id}`,
-        status: cardCreated.completed ? "Completo" : "Pendente",
-        performedBy: userId,
-        businessId,
-      };
-
-      // Check if there's an assigned user
-      if (cardData.assignedUserId) {
-        const assignedUser = await this.user.findUserById(
-          cardData.assignedUserId,
-        );
-
-        if (assignedUser) {
-          const linkRedirectPage = redirectPage(
-            assignedUser.role,
-            assignedUser.driverId,
-          );
-
-          const notificationData = {
-            userId: cardData.assignedUserId,
-            type: "kanban-card",
-            title: "Novo Card Atribuído",
-            message: `Você foi designado como responsável pelo card "${cardCreated.title}" no kanban`,
-            entityId: cardCreated.id,
-            link: `${this.http_request}/${linkRedirectPage}/kanban?search=${cardCreated.id}&page=1`,
-            businessId,
-            shouldSendEmail: true,
-            shouldSendWhatsApp: true,
-            whatsAppMessage: this.buildKanbanCardNotificationText({
-              title: cardCreated.title,
-              description: cardCreated.description,
-              priority: cardCreated.priority,
-              dueDate: cardCreated.dueDate,
-              cardId: cardCreated.id,
-            }),
-            instanceName: generateWhatsAppInstanceName(
-              assignedUser.email,
-              businessId,
-            ),
-          };
-
-          // Process notification to assigned user
-          await this.notificationService.processUserNotifications({
-            notification: notificationData,
-            activity: activityData,
-          });
-        }
-      } else {
-        // No assignedUser or assignedUser is the creator, just create activity
-        await this.notificationService.createActivityIfEnabled(activityData);
-      }
-    } catch (error) {
-      console.error("[Kanban Cards] Erro ao processar notificações:", error);
-      // Does not prevent the creation of the card
-    }
-  }
 
   async execute(
     cardData: CreateKanbanCardProps,
@@ -157,15 +43,14 @@ class CreateKanbanCardUseCase {
 
     const findColumn = await this.kanban.findColumnById(cardData.columnId);
 
-    if (!findColumn) {
+    // Another company's column answers as a missing one (decision 11.3): a
+    // 403 "not yours" would confirm the id exists on some other board.
+    if (
+      !findColumn ||
+      (findUser.role !== "MASTER" &&
+        findUser.businessId !== findColumn.businessId)
+    ) {
       throw new KanbanColumnNotFoundError();
-    }
-
-    // Verify user permissions
-    if (findUser.role !== "MASTER") {
-      if (findUser.businessId !== findColumn.businessId) {
-        throw new KanbanNotAllowedCreateCardBusinessError();
-      }
     }
 
     // Verify assigned user exists and belongs to the same business
@@ -174,25 +59,66 @@ class CreateKanbanCardUseCase {
         cardData.assignedUserId,
       );
 
-      if (!assignedUser) {
+      // For everyone, the MASTER included: a card of company A assigned to
+      // a user of company B would page B about A's board. Only the MASTER,
+      // who sees every company, is told why; anyone else hears "not found",
+      // so the check is no probe for another company's user ids.
+      if (
+        !assignedUser ||
+        (findUser.role !== "MASTER" &&
+          assignedUser.businessId !== findColumn.businessId)
+      ) {
         throw new UserAssignedUserNotFoundError();
       }
 
-      if (
-        findUser.role !== "MASTER" &&
-        assignedUser.businessId !== findColumn.businessId
-      ) {
+      if (assignedUser.businessId !== findColumn.businessId) {
         throw new UserNotBelongBusinessError();
       }
     }
 
-    try {
-      const card = await this.kanban.createCard(cardData);
+    // Read before the transaction: the message prints the due day in the
+    // company's zone (decision 1.1), and the render never queries.
+    const timeZone = await loadBusinessTimeZone(
+      this.business,
+      findColumn.businessId,
+    );
 
-      // Process notifications if there's an assigned user
-      this.processNotifications(card, cardData, userId, findColumn.businessId);
+    try {
+      // Card and outbox event commit together; the pipeline notifies the
+      // assigned user (when there is one) and records the activity.
+      const card = await database.$transaction(async (tx) => {
+        const created = await this.kanban.createCard(cardData, tx);
+
+        await this.outbox.publish(tx, {
+          topic: "kanban-card.created",
+          aggregateType: "kanban-card",
+          aggregateId: created.id,
+          businessId: findColumn.businessId,
+          actorId: userId,
+          payload: {
+            cardId: created.id,
+            businessId: findColumn.businessId,
+            title: created.title,
+            description: created.description || null,
+            priority: created.priority,
+            dueDate: created.dueDate
+              ? new Date(created.dueDate).toISOString()
+              : null,
+            timeZone,
+            isCompleted: Boolean(created.completed),
+            assignedUserId: cardData.assignedUserId || null,
+            fromServiceOrder: false,
+          },
+        });
+
+        return created;
+      });
+
       return card;
     } catch (error) {
+      // The column was deleted between the check and the write.
+      if (error instanceof AppError) throw error;
+
       throw new AppError(
         "Houve um erro ao tentar criar o card! Por favor, tente novamente.",
         500,

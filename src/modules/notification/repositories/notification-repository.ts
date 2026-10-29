@@ -1,4 +1,6 @@
 import database from "@/../infra/database";
+import { NotificationPreference } from "@prisma/client";
+
 import {
   Notification,
   CreateNotificationProps,
@@ -8,10 +10,53 @@ import {
 import {
   INotificationRepository,
   ListNotificationsParams,
+  UpsertPreferenceInput,
 } from "./INotification-repository";
 
 class NotificationRepository implements INotificationRepository {
   constructor(private prisma = database) {}
+
+  async markAllAsRead(userId: string): Promise<number> {
+    const result = await this.prisma.notification.updateMany({
+      where: { userId, read: false },
+      data: { read: true },
+    });
+
+    return result.count;
+  }
+
+  async listPreferences(userId: string): Promise<NotificationPreference[]> {
+    return this.prisma.notificationPreference.findMany({
+      where: { userId },
+    });
+  }
+
+  async upsertPreferences(
+    userId: string,
+    preferences: UpsertPreferenceInput[],
+  ): Promise<void> {
+    await this.prisma.$transaction(
+      preferences.map((preference) =>
+        this.prisma.notificationPreference.upsert({
+          where: {
+            userId_category: { userId, category: preference.category },
+          },
+          create: {
+            userId,
+            category: preference.category,
+            inApp: preference.inApp,
+            email: preference.email,
+            whatsapp: preference.whatsapp,
+          },
+          update: {
+            inApp: preference.inApp,
+            email: preference.email,
+            whatsapp: preference.whatsapp,
+          },
+        }),
+      ),
+    );
+  }
 
   async createNotification(
     notificationData: CreateNotificationProps,
@@ -43,9 +88,11 @@ class NotificationRepository implements INotificationRepository {
         cursor: { id: cursor },
         skip: 1, // Skip the cursor item itself
       }),
-      orderBy: {
-        created_at: "desc",
-      },
+      // The id breaks created_at ties. The notification pipeline writes a
+      // whole fan-out in one instant, and a cursor over a non-unique order
+      // re-reads the same tied row on every page (skip: 1 always drops the
+      // first of the ties) while the others are never shown.
+      orderBy: [{ created_at: "desc" }, { id: "desc" }],
     });
 
     // Check if there are more items

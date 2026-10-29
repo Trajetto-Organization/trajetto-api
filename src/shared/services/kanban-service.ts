@@ -3,13 +3,23 @@ import { inject, injectable } from "tsyringe";
 import { IKanbanRepository } from "@/modules/kanban/repositories/IKanban-repository";
 import { IUserRepository } from "@/modules/user/repositories/IUser-repository";
 
-import { NotificationService } from "@/shared/services/notification-service";
+import { OutboxService } from "@/shared/notifications/outbox-service";
 import { formatCurrency } from "@/shared/utils/format-values";
+import { logger } from "@/shared/logging/logger";
+import {
+  businessDayStart,
+  resolveTimeZone,
+  shiftDateKey,
+} from "@/shared/time/business-day";
+import { pickedDayKey } from "@/shared/vehicle/record-dates";
 
-import { redirectPage } from "@/shared/utils/link-redirect-page";
-import { generateWhatsAppInstanceName } from "@/shared/utils/whatsapp-instance-name";
+import database from "@/../infra/database";
 
-import { env } from "@/env";
+/**
+ * The shared logger (OBS-14). The step-by-step narration is debug, and no
+ * line carries a card's contents: they used to be dumped whole on every card.
+ */
+const log = logger.child({ component: "kanban" });
 
 interface CreateCardFromServiceOrderProps {
   serviceOrderId: string;
@@ -21,6 +31,33 @@ interface CreateCardFromServiceOrderProps {
   responsibleUserId?: string;
   businessId: string;
   createdByUserId: string;
+  /** The company's zone (Business.timezone); the default when absent. */
+  timeZone?: string | null;
+}
+
+/** How long a service order's automatic card has, in the company's days. */
+const SERVICE_ORDER_CARD_DAYS = 7;
+
+/**
+ * The due date of a service order's card: the start, in the company's zone,
+ * of the day seven days after the order's day (decision 1.2).
+ *
+ * The order's day follows the fleet records' rule (pickedDayKey): a bare
+ * "YYYY-MM-DD" (00:00 UTC) is that day, anything else is read in the company's
+ * zone. `setDate(getDate() + 7)` counted on the process's calendar instead,
+ * which put a date-only order on the evening before. The company's midnight is
+ * what a card whose date was picked on the web carries.
+ */
+function serviceOrderCardDueDate(
+  orderDate: Date | string,
+  timeZone: string,
+): Date {
+  const orderDay = pickedDayKey(new Date(orderDate), timeZone);
+
+  return businessDayStart(
+    shiftDateKey(orderDay, SERVICE_ORDER_CARD_DAYS),
+    timeZone,
+  );
 }
 
 interface CreateCardFromEntityProps {
@@ -35,25 +72,15 @@ interface CreateCardFromEntityProps {
   entityId?: string;
 }
 
-interface KanbanCardNotificationTextProps {
-  title: string;
-  description: string;
-  priority: string;
-  dueDate: Date;
-  cardId: string;
-}
-
 @injectable()
 class KanbanService {
-  private http_request = env.HTTP_REQUEST;
-
   constructor(
     @inject("KanbanRepository")
     private kanban: IKanbanRepository,
     @inject("UserRepository")
     private user: IUserRepository,
-    @inject("NotificationService")
-    private notificationService: NotificationService,
+    @inject("OutboxService")
+    private outbox: OutboxService,
   ) {}
 
   private async createDefaultKanbanColumns(businessId: string): Promise<void> {
@@ -89,13 +116,14 @@ class KanbanService {
         });
       }
 
-      console.log(
-        `[KanbanService] ${defaultColumns.length} colunas padrão criadas para empresa ${businessId}`,
+      log.info(
+        { businessId, columns: defaultColumns.length },
+        "default kanban columns created",
       );
     } catch (error) {
-      console.error(
-        `[KanbanService] Erro ao criar colunas padrão para empresa ${businessId}:`,
-        error,
+      log.error(
+        { err: error, businessId },
+        "default kanban columns could not be created",
       );
 
       throw error;
@@ -115,10 +143,6 @@ class KanbanService {
 
       if (columns.data.length === 0) {
         // If there are no columns, create the default ones
-        console.log(
-          `[KanbanService] Nenhuma coluna encontrada. Criando colunas padrão para empresa ${businessId}...`,
-        );
-
         await this.createDefaultKanbanColumns(businessId);
 
         // Refetch columns after creation
@@ -128,15 +152,12 @@ class KanbanService {
         );
 
         if (newColumns.data.length === 0) {
-          console.error(
-            `[KanbanService] Erro: Não foi possível criar colunas para empresa ${businessId}`,
+          log.error(
+            { businessId },
+            "kanban columns missing right after creation",
           );
           return null;
         }
-
-        console.log(
-          `[KanbanService] Colunas padrão criadas para empresa ${businessId}`,
-        );
       }
 
       // Determine the correct column based on status
@@ -155,8 +176,9 @@ class KanbanService {
         );
 
         if (completedColumn) {
-          console.log(
-            `[KanbanService] Item concluído - usando coluna: ${completedColumn.title}`,
+          log.debug(
+            { businessId, columnId: completedColumn.id },
+            "completed item goes to the done column",
           );
           return completedColumn;
         }
@@ -171,14 +193,15 @@ class KanbanService {
             col.position === 0,
         ) || allColumns.data[0]; // Fallback to first column
 
-      console.log(
-        `[KanbanService] Item pendente - usando coluna: ${pendingColumn.title}`,
+      log.debug(
+        { businessId, columnId: pendingColumn.id },
+        "pending item goes to the first column",
       );
       return pendingColumn;
     } catch (error) {
-      console.error(
-        `[KanbanService] Erro ao obter/criar colunas para empresa ${businessId}:`,
-        error,
+      log.error(
+        { err: error, businessId },
+        "kanban columns could not be read or created",
       );
       return null;
     }
@@ -197,134 +220,10 @@ class KanbanService {
     return "low";
   }
 
-  private buildKanbanCardNotificationText({
-    title,
-    description,
-    priority,
-    dueDate,
-    cardId,
-  }: KanbanCardNotificationTextProps): string {
-    const getPriorityInfo = (priority: string) => {
-      switch (priority.toLowerCase()) {
-        case "urgent":
-          return { emoji: "🆘", text: "Urgente" };
-        case "high":
-          return { emoji: "🔴", text: "Alta" };
-        case "medium":
-          return { emoji: "🟡", text: "Média" };
-        case "low":
-          return { emoji: "🟢", text: "Baixa" };
-        default:
-          return { emoji: "🟢", text: "Baixa" };
-      }
-    };
-
-    const priorityInfo = getPriorityInfo(priority);
-    const formattedDate = new Date(dueDate).toLocaleDateString("pt-BR");
-
-    return [
-      `📋 *Novo Card Atribuído! Você foi designado como responsável por um novo card no kanban*`,
-      `Título: *${title}*`,
-      `Descrição: ${description}`,
-      `Prioridade: ${priorityInfo.emoji} *${priorityInfo.text}*`,
-      `Data de vencimento: *${formattedDate}*`,
-      `Identificador do card: *${cardId}*`,
-      `Para mais detalhes, acesse o sistema.`,
-    ].join("\n");
-  }
-
-  private async sendCardNotification(
-    cardId: string,
-    cardTitle: string,
-    cardDescription: string,
-    cardPriority: string,
-    cardDueDate: Date,
-    assignedUserId: string,
-    businessId: string,
-    createdByUserId: string,
-  ): Promise<void> {
-    try {
-      // Don't send notification if the assigned user is the creator
-      if (assignedUserId === createdByUserId) {
-        console.log(
-          `[KanbanService] Usuário atribuído é o criador - notificação não enviada`,
-        );
-        return;
-      }
-
-      const assignedUser = await this.user.findUserById(assignedUserId);
-
-      if (!assignedUser) {
-        console.log(
-          `[KanbanService] Usuário atribuído não encontrado - notificação não enviada`,
-        );
-        return;
-      }
-
-      const linkRedirectPage = redirectPage(
-        assignedUser.role,
-        assignedUser.driverId,
-      );
-
-      const activityData = {
-        type: "Card Kanban",
-        action: "create",
-        entityId: cardId,
-        description: `Card "${cardTitle}" criado automaticamente a partir de ordem de serviço | ID: ${cardId}`,
-        status: "Pendente",
-        performedBy: createdByUserId,
-        businessId,
-      };
-
-      const notificationData = {
-        userId: assignedUserId,
-        type: "kanban-card",
-        title: "Novo Card Atribuído",
-        message: `Você foi designado como responsável pelo card "${cardTitle}" no kanban`,
-        entityId: cardId,
-        link: `${this.http_request}/${linkRedirectPage}/kanban?search=${cardId}&page=1`,
-        businessId,
-        shouldSendEmail: true,
-        shouldSendWhatsApp: true,
-        whatsAppMessage: this.buildKanbanCardNotificationText({
-          title: cardTitle,
-          description: cardDescription,
-          priority: cardPriority,
-          dueDate: cardDueDate,
-          cardId,
-        }),
-        instanceName: generateWhatsAppInstanceName(
-          assignedUser.email,
-          businessId,
-        ),
-      };
-
-      // Process notification to assigned user
-      await this.notificationService.processUserNotifications({
-        notification: notificationData,
-        activity: activityData,
-      });
-
-      console.log(
-        `[KanbanService] Notificação enviada para usuário ${assignedUserId}`,
-      );
-    } catch (error) {
-      console.error(
-        `[KanbanService] Erro ao enviar notificação de card:`,
-        error,
-      );
-      // Does not prevent card creation
-    }
-  }
-
   async createCardFromServiceOrder(
     data: CreateCardFromServiceOrderProps,
   ): Promise<void> {
     try {
-      console.log(
-        `[KanbanService] Iniciando criação de card para ordem de serviço ${data.serviceOrderId}`,
-      );
-
       // Search or create kanban columns for this company
       const targetColumn = await this.getOrCreateKanbanColumns(
         data.businessId,
@@ -332,22 +231,15 @@ class KanbanService {
       );
 
       if (!targetColumn) {
-        console.error(
-          `[KanbanService] Erro: Não foi possível obter coluna para empresa ${data.businessId}`,
+        log.error(
+          { businessId: data.businessId, serviceOrderId: data.serviceOrderId },
+          "no kanban column for the service order's card",
         );
         return;
       }
 
-      // Calculate Due Date (7 days from work order date)
-      const orderDate = new Date(data.orderDate);
-      const dueDate = new Date(orderDate);
-
-      dueDate.setDate(orderDate.getDate() + 7);
-
-      console.log(`[KanbanService] Data da ordem: ${orderDate.toISOString()}`);
-      console.log(
-        `[KanbanService] Data de vencimento calculada: ${dueDate.toISOString()}`,
-      );
+      const timeZone = resolveTimeZone(data.timeZone);
+      const dueDate = serviceOrderCardDueDate(data.orderDate, timeZone);
 
       // Determine priority based on value
       const priority = this.calculatePriorityFromAmount(data.totalAmount);
@@ -372,33 +264,56 @@ class KanbanService {
         completed: !!data.completionDate,
       };
 
-      console.log(`[KanbanService] Dados do card a ser criado:`, cardData);
-
-      // Create card in kanban
-      const createdCard = await this.kanban.createCard(cardData);
-
-      console.log(
-        `[KanbanService] Card criado automaticamente para ordem de serviço ${data.serviceOrderId}. Card ID: ${createdCard.id}`,
-      );
-
-      // Send notification to assigned user if there is one
+      // Notifying the creator about their own automatic card is noise, and
+      // the old flow recorded nothing in that case either — preserved here by
+      // simply not publishing an event.
       const assignedUserId = data.responsibleUserId || data.createdByUserId;
-      if (assignedUserId) {
-        await this.sendCardNotification(
-          createdCard.id,
-          cardData.title,
-          cardData.description,
-          cardData.priority,
-          cardData.dueDate,
-          assignedUserId,
-          data.businessId,
-          data.createdByUserId,
-        );
-      }
+      const shouldPublish = assignedUserId !== data.createdByUserId;
+
+      const createdCard = await database.$transaction(async (tx) => {
+        const created = await this.kanban.createCard(cardData, tx);
+
+        if (shouldPublish) {
+          await this.outbox.publish(tx, {
+            topic: "kanban-card.created",
+            aggregateType: "kanban-card",
+            aggregateId: created.id,
+            businessId: data.businessId,
+            actorId: data.createdByUserId,
+            payload: {
+              cardId: created.id,
+              businessId: data.businessId,
+              title: cardData.title,
+              description: cardData.description || null,
+              priority: cardData.priority,
+              dueDate: cardData.dueDate.toISOString(),
+              timeZone,
+              isCompleted: cardData.completed,
+              assignedUserId,
+              fromServiceOrder: true,
+            },
+          });
+        }
+
+        return created;
+      });
+
+      log.debug(
+        {
+          businessId: data.businessId,
+          serviceOrderId: data.serviceOrderId,
+          cardId: createdCard.id,
+        },
+        "kanban card created for a service order",
+      );
     } catch (error) {
-      console.error(
-        `[KanbanService] Erro ao criar card para ordem de serviço ${data.serviceOrderId}:`,
-        error,
+      log.error(
+        {
+          err: error,
+          businessId: data.businessId,
+          serviceOrderId: data.serviceOrderId,
+        },
+        "kanban card for a service order could not be created",
       );
       // Does not impede the main flow
     }
@@ -406,10 +321,6 @@ class KanbanService {
 
   async createCardFromEntity(data: CreateCardFromEntityProps): Promise<void> {
     try {
-      console.log(
-        `[KanbanService] Iniciando criação de card genérico para ${data.entityType || "entidade"} ${data.entityId || ""}`,
-      );
-
       // Search or create kanban columns for this company
       const targetColumn = await this.getOrCreateKanbanColumns(
         data.businessId,
@@ -417,8 +328,13 @@ class KanbanService {
       );
 
       if (!targetColumn) {
-        console.error(
-          `[KanbanService] Erro: Não foi possível obter coluna para empresa ${data.businessId}`,
+        log.error(
+          {
+            businessId: data.businessId,
+            entityType: data.entityType,
+            entityId: data.entityId,
+          },
+          "no kanban column for the card",
         );
 
         return;
@@ -434,19 +350,28 @@ class KanbanService {
         completed: data.completed || false,
       };
 
-      console.log(
-        `[KanbanService] Dados do card genérico a ser criado:`,
-        cardData,
-      );
-
       // Create card in kanban
       const createdCard = await this.kanban.createCard(cardData);
 
-      console.log(
-        `[KanbanService] Card genérico criado. Card ID: ${createdCard.id}`,
+      log.debug(
+        {
+          businessId: data.businessId,
+          entityType: data.entityType,
+          entityId: data.entityId,
+          cardId: createdCard.id,
+        },
+        "kanban card created",
       );
     } catch (error) {
-      console.error(`[KanbanService] Erro ao criar card genérico:`, error);
+      log.error(
+        {
+          err: error,
+          businessId: data.businessId,
+          entityType: data.entityType,
+          entityId: data.entityId,
+        },
+        "kanban card could not be created",
+      );
       // Does not impede the main flow
     }
   }
@@ -456,4 +381,5 @@ export {
   KanbanService,
   CreateCardFromServiceOrderProps,
   CreateCardFromEntityProps,
+  serviceOrderCardDueDate,
 };

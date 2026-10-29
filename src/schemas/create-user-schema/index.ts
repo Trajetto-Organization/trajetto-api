@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import {
+  emptyStringToNull,
   hasConsecutiveSpaces,
   hasSpaceAtEdges,
 } from "@/shared/utils/zod-schema-helpers";
@@ -69,22 +70,23 @@ const createUserSchema = z
         });
       }
     }),
-    password: z
-      .string()
-      .min(7, "A senha deve ter pelo menos 7 caracteres.")
-      .max(100, "A senha deve ter no máximo 100 caracteres.")
-      .refine((value) => !/\s/.test(value), {
-        message: "A senha não deve conter espaços.",
-      })
-      .optional(),
+    // No password here (decision 4.9): the new user receives a single-use
+    // link to set their own, and no password is ever mailed.
     role: roleEnum,
     businessId: z
       .string({ required_error: "ID da empresa é obrigatório!" })
       .uuid("ID da empresa é inválido."),
-    profileAccessId: z
-      .string()
-      .uuid("ID do perfil de acesso é inválido.")
-      .optional(),
+    // The admin form always submits this field; for a BUSINESS_ADMIN it comes
+    // as "" — which a bare .uuid() rejects before the role check can accept
+    // it. Same preprocess the update schema already uses.
+    profileAccessId: z.preprocess(
+      emptyStringToNull,
+      z
+        .string()
+        .uuid("ID do perfil de acesso é inválido.")
+        .optional()
+        .nullable(),
+    ),
     driverId: z
       .string()
       .optional()

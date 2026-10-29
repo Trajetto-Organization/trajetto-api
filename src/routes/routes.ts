@@ -38,8 +38,28 @@ import { trafficViolationCodeRoutes } from "./traffic-violation-code-routes";
 
 import { uploadRoutes } from "./upload-routes";
 import { healthRoutes } from "./health-routes";
+import { publicRoutes } from "./public-routes";
+import { integrationRoutes } from "./integration-routes";
+import { integrationAdminRoutes } from "./integration-admin-routes";
 
 import { whatsappRoutes } from "./whatsapp-routes";
+import { providerWebhookRoutes } from "./provider-webhook-routes";
+import { aiAnalysisRoutes } from "./ai-analysis-routes";
+
+import { shipperRoutes } from "./shipper-routes";
+import { occurrenceTypeRoutes } from "./occurrence-type-routes";
+import { statusChangeReasonRoutes } from "./status-change-reason-routes";
+
+import { deliveryRoutes } from "./delivery-routes";
+import { routeRoutes } from "./route-routes";
+import { importRoutes } from "./import-routes";
+
+import { chatRoutes } from "./chat-routes";
+import { diagnosticsRoutes } from "./diagnostics-routes";
+import { driverPauseRoutes } from "./driver-pause-routes";
+
+import { retiredRoutes } from "./retired-routes";
+import { assetRoutes } from "./asset-routes";
 
 async function routes(app: FastifyInstance) {
   app.register(dashboardRoutes, { prefix: "/dashboard" });
@@ -66,8 +86,27 @@ async function routes(app: FastifyInstance) {
   app.register(fineRoutes, { prefix: "/fines" });
   app.register(trafficViolationCodeRoutes, { prefix: "/traffic-violation" });
   app.register(whatsappRoutes, { prefix: "/whatsapp" });
+  app.register(providerWebhookRoutes, { prefix: "/webhooks" });
+  app.register(aiAnalysisRoutes, { prefix: "/ai-analysis" });
+  app.register(shipperRoutes, { prefix: "/shipper" });
+  app.register(occurrenceTypeRoutes, { prefix: "/occurrence-type" });
+  app.register(statusChangeReasonRoutes, { prefix: "/status-change-reason" });
+  app.register(deliveryRoutes, { prefix: "/delivery" });
+  app.register(routeRoutes, { prefix: "/route" });
+  app.register(importRoutes, { prefix: "/import" });
+  app.register(driverPauseRoutes, { prefix: "/driver-pause" });
+  app.register(chatRoutes, { prefix: "/chat" });
+  app.register(diagnosticsRoutes, { prefix: "/diagnostics" });
   app.register(uploadRoutes, { prefix: "/uploads" });
+  app.register(publicRoutes, { prefix: "/public" });
+  app.register(integrationRoutes, { prefix: "/integration/v1" });
+  app.register(integrationAdminRoutes, { prefix: "/integrations" });
   app.register(healthRoutes);
+  app.register(assetRoutes, { prefix: "/assets" });
+
+  // Endpoints removed by a release, answered 410 instead of 404 while old
+  // web tabs and app builds still call them. Full paths, so no prefix.
+  app.register(retiredRoutes);
 }
 
 export { routes };

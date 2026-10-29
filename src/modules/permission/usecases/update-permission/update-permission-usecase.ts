@@ -9,7 +9,11 @@ import { IBusinessRepository } from "@/modules/business/repositories/IBusiness-r
 
 import { PermissionKey } from "@/config/permissions";
 
-import { Permission, UpdatePermission } from "../../dtos/permission-dto";
+import {
+  Permission,
+  UpdatePermission,
+  UpdatePermissionInput,
+} from "../../dtos/permission-dto";
 import { ProfileAccessNotFoundError } from "@/modules/profile-access/usecases/errors/profile-access-not-found-error";
 
 import { PermissionAlreadyAssignedError } from "../errors/permission-already-assigned-error";
@@ -24,8 +28,12 @@ import { PermissionAlreadyExistsError } from "../errors/permission-already-exist
 
 import { PermissionCannotBeUpdatedByHimselfError } from "../errors/permission-cannot-be-updated-by-himself-error";
 import { PermissionBusinessError } from "../errors/permission-business-error";
+import { assertNotOwnProfile } from "../errors/permission-own-profile-error";
 
 import { sendSecurityEventToBusiness } from "@/websocket";
+
+import database from "@/../infra/database";
+import { assertTenantAccessToRecord } from "@/modules/middlewares/tenant-authorization";
 
 @injectable()
 class UpdatePermissionUseCase {
@@ -42,8 +50,13 @@ class UpdatePermissionUseCase {
     private notificationService: NotificationService,
   ) {}
 
+  /**
+   * The company is not an input (decision 16.100): it is the permission's own,
+   * read from the row. A body businessId used to be written back, so a
+   * MASTER could move a permission onto another company's profile.
+   */
   async execute(
-    permissionData: UpdatePermission,
+    input: UpdatePermissionInput,
     userId: string,
   ): Promise<Permission> {
     const findUser = await this.user.findUserById(userId);
@@ -54,19 +67,37 @@ class UpdatePermissionUseCase {
 
     if (
       findUser.profileAccess?.permissions.some(
-        (permission) => permission.id === permissionData.permissionId,
+        (permission) => permission.id === input.permissionId,
       )
     ) {
       throw new PermissionCannotBeUpdatedByHimselfError();
     }
 
     const existingPermission = await this.permission.findPermissionById(
-      permissionData.permissionId,
+      input.permissionId,
     );
 
     if (!existingPermission) {
       throw new PermissionNotFoundError();
     }
+
+    // The permission's tenant, which is also the only one it may end in.
+    assertTenantAccessToRecord(
+      findUser,
+      existingPermission.businessId,
+      () => new PermissionNotFoundError(),
+    );
+
+    // Spread first: a caller passing a businessId anyway cannot override it.
+    const permissionData: UpdatePermission = {
+      ...input,
+      businessId: existingPermission.businessId,
+    };
+
+    // Neither end may be the actor's own profile: moving a permission INTO
+    // it is a grant to yourself, as much as editing one already there.
+    assertNotOwnProfile(findUser, existingPermission.profileAccessId);
+    assertNotOwnProfile(findUser, permissionData.profileAccessId);
 
     const permissionAlreadyExists =
       await this.permission.findPermissionNameByProfile({
@@ -120,18 +151,27 @@ class UpdatePermissionUseCase {
     }
 
     try {
-      const permissionUpdated =
-        await this.permission.updatePermission(permissionData);
+      // The change and its audit entry commit together (OUTBOX-10).
+      const permissionUpdated = await database.$transaction(async (tx) => {
+        const updated = await this.permission.updatePermission(
+          permissionData,
+          tx,
+        );
 
-      // Process activity asynchronously without blocking the main flow
-      this.notificationService.createActivityIfEnabled({
-        type: "Permissão",
-        action: "update",
-        entityId: permissionUpdated.id,
-        description: `Permissão atualizada com sucesso: ${permissionUpdated.action} | Leitura: ${permissionUpdated.canRead ? "Sim" : "Não"} | Escrita: ${permissionUpdated.canWrite ? "Sim" : "Não"} | ID: ${permissionUpdated.id}`,
-        status: "Atualizado",
-        performedBy: userId,
-        businessId: permissionData.businessId,
+        await this.notificationService.createActivityIfEnabled(
+          {
+            type: "Permissão",
+            action: "update",
+            entityId: updated.id,
+            description: `Permissão atualizada com sucesso: ${updated.action} | Leitura: ${updated.canRead ? "Sim" : "Não"} | Escrita: ${updated.canWrite ? "Sim" : "Não"} | ID: ${updated.id}`,
+            status: "Atualizado",
+            performedBy: userId,
+            businessId: permissionData.businessId,
+          },
+          tx,
+        );
+
+        return updated;
       });
 
       sendSecurityEventToBusiness(permissionData.businessId, {

@@ -1,15 +1,17 @@
 import { z } from "zod";
+import { tenantLockedShape } from "@/shared/validation/tenant-locked-field";
 
-import { MultipartFile } from "@fastify/multipart";
+import { isPickedDateInput } from "@/shared/vehicle/record-dates";
+
 import {
   emptyStringToNull,
   hasConsecutiveSpaces,
   hasSpaceAtEdges,
   isEmptyOrWhitespace,
-  isValidDateString,
 } from "@/shared/utils/zod-schema-helpers";
 
 const updateVehicleChecklistSchema = z.object({
+  ...tenantLockedShape,
   current_mileage: z.preprocess(
     (val) => {
       if (typeof val === "string") {
@@ -34,7 +36,7 @@ const updateVehicleChecklistSchema = z.object({
     .string()
     .min(1, "A data do checklist é obrigatória.")
     .superRefine((val, ctx) => {
-      if (val && !isValidDateString(val)) {
+      if (val && !isPickedDateInput(val)) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
           message: "A data do checklist deve ser uma data válida.",
@@ -251,37 +253,6 @@ const updateVehicleChecklistSchema = z.object({
   ),
 });
 
-// Photo file validation schema
-const photoFileSchema = z
-  .custom<MultipartFile>()
-  .refine((file) => file?.mimetype?.startsWith("image/"), {
-    message: "O arquivo deve ser uma imagem.",
-  })
-  .refine(
-    (file) => {
-      const allowedTypes = [
-        "image/jpeg",
-        "image/jpg",
-        "image/png",
-        "image/webp",
-      ];
-
-      return allowedTypes.includes(file?.mimetype);
-    },
-    {
-      message:
-        "Tipo de arquivo não suportado. Use apenas JPEG, JPG, PNG ou WebP.",
-    },
-  );
-
-// Schema for multipart request with photos - same structure as create but all optional
-const updateVehicleChecklistMultipartSchema = z.object({
-  body: updateVehicleChecklistSchema,
-  photos: z.record(z.string(), z.array(photoFileSchema)).optional(),
-});
-
-export {
-  updateVehicleChecklistSchema,
-  updateVehicleChecklistMultipartSchema,
-  photoFileSchema,
-};
+// Photos are validated by `presignedPhotosSchema`: they never reach this API
+// as files, only as keys pointing at objects already in storage.
+export { updateVehicleChecklistSchema };

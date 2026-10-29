@@ -1,15 +1,8 @@
 import { FastifyReply, FastifyRequest } from "fastify";
 import { container } from "tsyringe";
-
 import { CreateKanbanColumnUseCase } from "./create-column-usecase";
-
 import { createKanbanColumnSchema } from "@/schemas/create-kanban-column-schema";
 import { updateDeleteBusinessSchema } from "@/schemas/update-delete-business-schema";
-
-import { KanbanNotAllowedCreateColumnBusinessError } from "../errors/kanban-not-allowed-create-column-business-error";
-
-import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
-import { BusinessNotFoundError } from "@/modules/business/usecases/errors/business-not-found-error";
 
 class CreateKanbanColumnController {
   async handle(
@@ -25,28 +18,9 @@ class CreateKanbanColumnController {
       CreateKanbanColumnUseCase,
     );
 
-    try {
-      await createKanbanColumnUseCase.execute(
-        { ...columnData, businessId },
-        id,
-      );
+    await createKanbanColumnUseCase.execute({ ...columnData, businessId }, id);
 
-      return reply.status(201).send({ message: "Coluna criada com sucesso!" });
-    } catch (error) {
-      if (error instanceof ResourceNotFoundError) {
-        return reply.status(400).send({ message: error.message });
-      }
-
-      if (error instanceof BusinessNotFoundError) {
-        return reply.status(400).send({ message: error.message });
-      }
-
-      if (error instanceof KanbanNotAllowedCreateColumnBusinessError) {
-        return reply.status(403).send({ message: error.message });
-      }
-
-      throw error;
-    }
+    return reply.status(201).send({ message: "Coluna criada com sucesso!" });
   }
 }
 

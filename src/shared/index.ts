@@ -1,4 +1,15 @@
 import { container } from "tsyringe";
+import {
+  socketTicketStore,
+  type ISocketTicketStore,
+} from "@/shared/socket/socket-ticket";
+
+import { env } from "@/env";
+import { RedisConnection } from "@/../infra/cache/redis-connection";
+import {
+  SnapshotCache,
+  redisSnapshotStore,
+} from "@/shared/cache/snapshot-cache";
 
 import { IUserRepository } from "@/modules/user/repositories/IUser-repository";
 import { UserRepository } from "@/modules/user/repositories/user-repository";
@@ -27,6 +38,54 @@ import { IVehicleTypeRepository } from "@/modules/vehicle-type/repositories/IVeh
 import { FuelTypeRepository } from "@/modules/fuel-type/repositories/fuel-type-repository";
 import { IFuelTypeRepository } from "@/modules/fuel-type/repositories/IFuel-type-repository";
 
+import { ShipperRepository } from "@/modules/shipper/repositories/shipper-repository";
+import { IShipperRepository } from "@/modules/shipper/repositories/IShipper-repository";
+
+import { OccurrenceTypeRepository } from "@/modules/occurrence-type/repositories/occurrence-type-repository";
+import { IOccurrenceTypeRepository } from "@/modules/occurrence-type/repositories/IOccurrence-type-repository";
+
+import { StatusChangeReasonRepository } from "@/modules/status-change-reason/repositories/status-change-reason-repository";
+import { IStatusChangeReasonRepository } from "@/modules/status-change-reason/repositories/IStatus-change-reason-repository";
+
+import { ImportRepository } from "@/modules/import/repositories/import-repository";
+import { IImportRepository } from "@/modules/import/repositories/IImport-repository";
+
+import { DeliveryRepository } from "@/modules/delivery/repositories/delivery-repository";
+
+import { IRouteRepository } from "@/modules/route/repositories/IRoute-repository";
+import type { IDriverPositionRepository } from "@/modules/route/repositories/IDriver-position-repository";
+import { IntegrationRepository } from "@/modules/integration/repositories/integration-repository";
+import type { IIntegrationRepository } from "@/modules/integration/repositories/IIntegration-repository";
+
+import { ProofAuditRepository } from "@/modules/delivery/repositories/proof-audit-repository";
+import type { IProofAuditRepository } from "@/modules/delivery/repositories/IProof-audit-repository";
+
+import { OccurrenceAuthorizationRepository } from "@/modules/delivery/repositories/occurrence-authorization-repository";
+import type { IOccurrenceAuthorizationRepository } from "@/modules/delivery/repositories/IOccurrence-authorization-repository";
+
+import { DeliveryMessageTemplateRepository } from "@/modules/delivery/repositories/delivery-message-template-repository";
+import type { IDeliveryMessageTemplateRepository } from "@/modules/delivery/repositories/IDelivery-message-template-repository";
+
+import { ExternalRecipientRepository } from "@/modules/delivery/repositories/external-recipient-repository";
+import type { IExternalRecipientRepository } from "@/modules/delivery/repositories/IExternal-recipient-repository";
+
+import { ProofDocumentRepository } from "@/modules/delivery/repositories/proof-document-repository";
+import type { IProofDocumentRepository } from "@/modules/delivery/repositories/IProof-document-repository";
+
+import { RouteRepository } from "@/modules/route/repositories/route-repository";
+import { DriverPositionRepository } from "@/modules/route/repositories/driver-position-repository";
+import { OperationDayRepository } from "@/modules/route/repositories/operation-day-repository";
+import type { IOperationDayRepository } from "@/modules/route/repositories/IOperation-day-repository";
+import { IDeliveryRepository } from "@/modules/delivery/repositories/IDelivery-repository";
+
+import { ChatRepository } from "@/modules/chat/repositories/chat-repository";
+import { IChatRepository } from "@/modules/chat/repositories/IChat-repository";
+import { SupportTicketRepository } from "@/modules/chat/repositories/support-ticket-repository";
+import type { ISupportTicketRepository } from "@/modules/chat/repositories/ISupport-ticket-repository";
+import { OccurrenceTicketService } from "@/modules/chat/usecases/shared/ticket-operations";
+import { OpsAlertPreferenceRepository } from "@/modules/chat/repositories/ops-alert-preference-repository";
+import type { IOpsAlertPreferenceRepository } from "@/modules/chat/repositories/IOps-alert-preference-repository";
+
 import { FuelRepository } from "@/modules/fuel/repositories/fuel-repository";
 import { IFuelRepository } from "@/modules/fuel/repositories/IFuel-repository";
 
@@ -53,6 +112,10 @@ import { IAccountPayableRepository } from "@/modules/account-payable/repositorie
 
 import { IDashboardRepository } from "@/modules/dashboard/repositories/IDashboard-repository";
 import { DashboardRepository } from "@/modules/dashboard/repositories/dashboard-repository";
+import {
+  MASTER_OVERVIEW_TTL_MS,
+  type OverviewNumbers,
+} from "@/modules/dashboard/usecases/get-dashboard-overview/get-dashboard-overview-usecase";
 
 import { ActivityRepository } from "@/modules/activity/repositories/activity-repository";
 import { IActivityRepository } from "@/modules/activity/repositories/IActivity-repository";
@@ -76,16 +139,30 @@ import { IPendingDeletionProvider } from "./providers/pending-deletion-provider/
 import { PendingDeletionProvider } from "./providers/pending-deletion-provider/pending-deletion-provider";
 
 import { IWhatsAppProvider } from "./providers/whatsapp-provider/IWhatsApp-provider";
-import { EvolutionApiProvider } from "./providers/whatsapp-provider/implementations/evolution-api-provider";
+import { MetaCloudApiProvider } from "./providers/whatsapp-provider/implementations/meta-cloud-api-provider";
+
+import { IMailProvider } from "./providers/mail-provider/IMail-provider";
+import { ResendMailProvider } from "./providers/mail-provider/implementations/resend-mail-provider";
+
+import { EtherealMailProvider } from "./providers/mail-provider/implementations/ethereal-mail-provider";
 
 import { NotificationService } from "./services/notification-service";
 import { KanbanService } from "./services/kanban-service";
 
 import { UploadService } from "./services/upload-service";
+import { OutboxService } from "./notifications/outbox-service";
+import { WebhookFanOutService } from "./integration/webhook-fan-out-service";
 
 container.registerSingleton<IWhatsAppProvider>(
   "WhatsAppProvider",
-  EvolutionApiProvider,
+  MetaCloudApiProvider,
+);
+
+// Picked here now that the e-mail worker thread (which had its own factory)
+// is gone: outside production every message goes to an Ethereal test inbox.
+container.registerSingleton<IMailProvider>(
+  "MailProvider",
+  env.NODE_ENV === "production" ? ResendMailProvider : EtherealMailProvider,
 );
 container.registerSingleton<NotificationService>(
   "NotificationService",
@@ -99,6 +176,12 @@ container.registerSingleton<IPendingDeletionProvider>(
 
 container.registerSingleton<KanbanService>("KanbanService", KanbanService);
 container.registerSingleton<UploadService>("UploadService", UploadService);
+
+container.registerSingleton<OutboxService>("OutboxService", OutboxService);
+container.registerSingleton<WebhookFanOutService>(
+  "WebhookFanOutService",
+  WebhookFanOutService,
+);
 
 container.registerSingleton<IUserRepository>("UserRepository", UserRepository);
 container.registerSingleton<IUsersTokensRepository>(
@@ -173,6 +256,19 @@ container.registerSingleton<IDashboardRepository>(
   DashboardRepository,
 );
 
+// The MASTER's platform-wide dashboard numbers: one read a minute for the
+// whole deployment, shared by the replicas through Redis and computed again
+// when Redis is away (shared/cache/snapshot-cache.ts). One instance per
+// process: the single-flight and this replica's copy live in it.
+container.registerInstance<SnapshotCache<OverviewNumbers>>(
+  "MasterOverviewSnapshots",
+  new SnapshotCache<OverviewNumbers>({
+    name: "dashboard-overview-master",
+    ttlMs: MASTER_OVERVIEW_TTL_MS,
+    store: redisSnapshotStore(() => RedisConnection.getInstance().getClient()),
+  }),
+);
+
 container.registerSingleton<IActivityRepository>(
   "ActivityRepository",
   ActivityRepository,
@@ -196,3 +292,97 @@ container.registerSingleton<ITrafficViolationCodeRepository>(
   "TrafficViolationCodeRepository",
   TrafficViolationCodeRepository,
 );
+
+container.registerSingleton<IShipperRepository>(
+  "ShipperRepository",
+  ShipperRepository,
+);
+container.registerSingleton<IStatusChangeReasonRepository>(
+  "StatusChangeReasonRepository",
+  StatusChangeReasonRepository,
+);
+
+container.registerSingleton<IImportRepository>(
+  "ImportRepository",
+  ImportRepository,
+);
+
+container.registerSingleton<IOccurrenceTypeRepository>(
+  "OccurrenceTypeRepository",
+  OccurrenceTypeRepository,
+);
+
+container.registerSingleton<IDeliveryRepository>(
+  "DeliveryRepository",
+  DeliveryRepository,
+);
+
+container.registerSingleton<IRouteRepository>(
+  "RouteRepository",
+  RouteRepository,
+);
+
+// Separate from the route repository on purpose: a write-heavy stream
+// with one reader (a map), over a table partitioned by day.
+container.registerSingleton<IDriverPositionRepository>(
+  "DriverPositionRepository",
+  DriverPositionRepository,
+);
+
+// The operation of one company's day: the one definition of "hoje" the
+// tower, the monitoring board and the dashboard share (decision 7.1).
+container.registerSingleton<IOperationDayRepository>(
+  "OperationDayRepository",
+  OperationDayRepository,
+);
+
+container.registerSingleton<IProofDocumentRepository>(
+  "ProofDocumentRepository",
+  ProofDocumentRepository,
+);
+
+container.registerSingleton<IExternalRecipientRepository>(
+  "ExternalRecipientRepository",
+  ExternalRecipientRepository,
+);
+
+container.registerSingleton<IDeliveryMessageTemplateRepository>(
+  "DeliveryMessageTemplateRepository",
+  DeliveryMessageTemplateRepository,
+);
+
+container.registerSingleton<IProofAuditRepository>(
+  "ProofAuditRepository",
+  ProofAuditRepository,
+);
+
+// The tower's authorization of a driver's occurrence (decision 6.3).
+container.registerSingleton<IOccurrenceAuthorizationRepository>(
+  "OccurrenceAuthorizationRepository",
+  OccurrenceAuthorizationRepository,
+);
+
+container.registerSingleton<IIntegrationRepository>(
+  "IntegrationRepository",
+  IntegrationRepository,
+);
+
+container.registerSingleton<IChatRepository>("ChatRepository", ChatRepository);
+
+// Decision 14.5: support tickets, and the one service the delivery flows use
+// to open and close them inside their own transactions.
+container.registerSingleton<ISupportTicketRepository>(
+  "SupportTicketRepository",
+  SupportTicketRepository,
+);
+container.registerSingleton("OccurrenceTicketService", OccurrenceTicketService);
+container.registerSingleton<IOpsAlertPreferenceRepository>(
+  "OpsAlertPreferenceRepository",
+  OpsAlertPreferenceRepository,
+);
+
+// A factory, not a class: the store's Redis connection is the process-wide
+// one the socket handshake redeems from (shared/socket/socket-ticket.ts).
+container.register<ISocketTicketStore>("SocketTicketStore", {
+  useFactory: () => socketTicketStore(),
+});

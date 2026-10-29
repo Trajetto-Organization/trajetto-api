@@ -12,7 +12,14 @@ import { AppError } from "@/shared/errors/AppError";
 import { ProfileAccessNotFoundError } from "../errors/profile-access-not-found-error";
 import { ProfileAccessCannotBeDeletedByHimselfError } from "../errors/profile-access-cannot-be-deleted-by-himself-error";
 
-import { sendSecurityEventToBusiness } from "@/websocket";
+import {
+  sendCatalogChangedEvent,
+  sendSecurityEventToBusiness,
+} from "@/websocket";
+import { ProfileAccessInUseError } from "../errors/profile-access-in-use-error";
+
+import database from "@/../infra/database";
+import { assertTenantAccessToRecord } from "@/modules/middlewares/tenant-authorization";
 
 @injectable()
 class DeleteProfileAccessUseCase {
@@ -42,36 +49,69 @@ class DeleteProfileAccessUseCase {
       throw new ProfileAccessNotFoundError();
     }
 
+    assertTenantAccessToRecord(
+      findUser,
+      existingProfileAccess.businessId,
+      () => new ProfileAccessNotFoundError(),
+    );
+
     if (findUser.profileAccessId === profileAccessId) {
       throw new ProfileAccessCannotBeDeletedByHimselfError();
     }
 
+    // Deleting a profile in use left its people with no profile at all: they
+    // could no longer log in (AUTH_PROFILE_NOT_CONFIGURED) and nobody was
+    // told why. Refused with the count, as the other catalogs do (8.3).
+    const usersCount = await this.user.countUsersWithProfile(profileAccessId);
+
+    if (usersCount > 0) {
+      throw new ProfileAccessInUseError(usersCount);
+    }
+
+    let profileAccessDeleted: ProfileAccess;
+
     try {
-      const profileAccessDeleted =
-        await this.profileAccess.deleteProfileAccess(profileAccessId);
+      // The deletion and its audit entry commit together (OUTBOX-10).
+      profileAccessDeleted = await database.$transaction(async (tx) => {
+        const deleted = await this.profileAccess.deleteProfileAccess(
+          profileAccessId,
+          tx,
+        );
 
-      // Process activity asynchronously without blocking the main flow
-      this.notificationService.createActivityIfEnabled({
-        type: "Perfil de acesso",
-        action: "delete",
-        entityId: profileAccessDeleted.id,
-        description: `Perfil de acesso excluído: ${profileAccessDeleted.name} | ID: ${profileAccessDeleted.id}`,
-        status: "Deletado",
-        performedBy: userId,
-        businessId: profileAccessDeleted.businessId as string,
+        await this.notificationService.createActivityIfEnabled(
+          {
+            type: "Perfil de acesso",
+            action: "delete",
+            entityId: deleted.id,
+            description: `Perfil de acesso excluído: ${deleted.name} | ID: ${deleted.id}`,
+            status: "Deletado",
+            performedBy: userId,
+            businessId: deleted.businessId as string,
+          },
+          tx,
+        );
+
+        return deleted;
       });
-
-      sendSecurityEventToBusiness(profileAccessDeleted.businessId as string, {
-        reason: "permissions_changed",
-      });
-
-      return profileAccessDeleted;
     } catch (error) {
       throw new AppError(
         "Houve um erro ao tentar deletar o perfil de acesso! Por favor, tente novamente.",
         500,
       );
     }
+
+    // After the commit and outside it: a hint that fails to leave must not
+    // turn a deletion that happened into a 500.
+    sendSecurityEventToBusiness(profileAccessDeleted.businessId as string, {
+      reason: "permissions_changed",
+    });
+
+    sendCatalogChangedEvent(
+      profileAccessDeleted.businessId as string,
+      "profile_access",
+    );
+
+    return profileAccessDeleted;
   }
 }
 

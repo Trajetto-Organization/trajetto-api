@@ -1,0 +1,62 @@
+import { FastifyReply, FastifyRequest } from "fastify";
+import { container } from "tsyringe";
+
+import { z } from "zod";
+
+import { ExportDeliveryUseCase } from "./export-delivery-usecase";
+import { exportDeliverySchema } from "@/schemas/export-delivery-schema";
+
+import { ExportPipeline } from "@/shared/services/export/export-pipeline";
+import { CsvWriter } from "@/shared/services/export/writers/csv-writer";
+
+import { ExcelWriter } from "@/shared/services/export/writers/excel-writer";
+import { ExportColumn } from "@/shared/services/export/types";
+
+class ExportDeliveryController {
+  async handle(request: FastifyRequest, reply: FastifyReply) {
+    const { id } = request.user;
+
+    // Validated and transformed by the route: each facet is a list.
+    const {
+      search,
+      format,
+      businessId,
+      status,
+      shipperId,
+      driverId,
+      kind,
+      period,
+      from,
+      to,
+    } = request.query as z.infer<typeof exportDeliverySchema>;
+
+    const exportDeliveryUseCase = container.resolve(ExportDeliveryUseCase);
+
+    const { iterator, columns, filename } = await exportDeliveryUseCase.execute(
+      {
+        userId: id,
+        businessId,
+        search,
+        statuses: status,
+        shipperIds: shipperId,
+        driverIds: driverId,
+        kinds: kind,
+        period,
+        from,
+        to,
+      },
+    );
+
+    const writer = format === "excel" ? new ExcelWriter() : new CsvWriter();
+
+    const pipeline = new ExportPipeline(
+      iterator,
+      columns as ExportColumn[],
+      writer,
+    );
+
+    await pipeline.execute(reply, filename);
+  }
+}
+
+export { ExportDeliveryController };

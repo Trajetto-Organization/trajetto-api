@@ -10,6 +10,12 @@ import {
 } from "../dtos/part-dto";
 
 import database from "@/../infra/database";
+import { Prisma } from "@prisma/client";
+
+import { buildSearchOr } from "@/shared/pagination/search-or";
+import { resolveOrderBy } from "@/shared/pagination/list-query";
+
+import { PART_SORT, partListWhere } from "../usecases/list-part/part-list";
 
 class PartRepository implements IPartRepository {
   constructor(private prisma = database) {}
@@ -40,67 +46,90 @@ class PartRepository implements IPartRepository {
   async listParts({
     page,
     pageSize,
-    businessId,
-    currentUserRole,
-    search,
+    sort,
+    order,
+    ...filters
   }: ListPartByBusinessIdProps): Promise<ListPartProps> {
-    const skip = (page - 1) * pageSize;
-    const normalizedSearch = search ? search.trim().toLowerCase() : "";
-
-    const orConditions: any[] = [];
-
-    if (normalizedSearch) {
-      orConditions.push(
-        { id: { contains: normalizedSearch, mode: "insensitive" } },
-        { supplierId: { contains: normalizedSearch, mode: "insensitive" } },
-        { description: { contains: normalizedSearch, mode: "insensitive" } },
-        {
-          ...(currentUserRole === "MASTER"
-            ? {
-                businessId: { contains: normalizedSearch, mode: "insensitive" },
-              }
-            : {}),
-        },
-      );
-    }
-
-    const whereCondition = {
-      ...(currentUserRole !== "MASTER" && { businessId: businessId }),
-      ...(orConditions.length > 0 && { OR: orConditions }),
-    };
-
-    const [partData, total] = await Promise.all([
+    // Two connections at most: the page, and the counts after one another.
+    const [rows, supplierCounts] = await Promise.all([
       this.prisma.part.findMany({
-        skip,
+        skip: (page - 1) * pageSize,
         take: pageSize,
-        where: whereCondition,
+        where: partListWhere(filters),
+        orderBy: resolveOrderBy(PART_SORT, { sort, order }),
         include: {
-          supplier: {
-            select: {
-              name: true,
-            },
-          },
-          ...(currentUserRole === "MASTER" && {
-            business: {
-              select: {
-                corporate_reason: true,
-              },
-            },
-          }),
-        },
-        orderBy: {
-          created_at: "desc",
+          supplier: { select: { name: true } },
+          business: { select: { corporate_reason: true } },
+          _count: { select: { serviceOrderParts: true } },
         },
       }),
-      this.prisma.part.count({
-        where: whereCondition,
-      }),
+      this.countBySupplier(filters),
     ]);
 
     return {
-      data: partData,
-      total,
+      data: rows.map(({ _count, ...row }) => ({
+        ...row,
+        service_order_parts_count: _count.serviceOrderParts,
+      })),
+      supplierCounts,
     };
+  }
+
+  private async countBySupplier(
+    filters: Omit<
+      ListPartByBusinessIdProps,
+      "page" | "pageSize" | "sort" | "order"
+    >,
+  ): Promise<ListPartProps["supplierCounts"]> {
+    const grouped = await this.prisma.part.groupBy({
+      by: ["supplierId"],
+      where: partListWhere(filters, { except: "supplier" }),
+      _count: { _all: true },
+      _sum: { unit_price: true },
+    });
+
+    const ids = Array.from(
+      new Set([
+        ...grouped.flatMap((group) =>
+          group.supplierId ? [group.supplierId] : [],
+        ),
+        ...(filters.supplierIds ?? []),
+      ]),
+    );
+
+    // Names only from this company: another tenant's id in the URL brings
+    // neither a row nor a name.
+    const suppliers = ids.length
+      ? await this.prisma.supplier.findMany({
+          where: { id: { in: ids }, businessId: filters.businessId },
+          select: { id: true, name: true },
+        })
+      : [];
+
+    const nameOf = new Map(
+      suppliers.map((supplier) => [supplier.id, supplier.name]),
+    );
+
+    const counts: ListPartProps["supplierCounts"] = grouped.map((group) => ({
+      supplierId: group.supplierId,
+      label: group.supplierId ? nameOf.get(group.supplierId) : undefined,
+      count: group._count._all,
+      priceSum: Number(group._sum.unit_price ?? 0),
+    }));
+
+    // A selected supplier with nothing left keeps its chip, with a zero.
+    for (const id of filters.supplierIds ?? []) {
+      if (nameOf.has(id) && !counts.some((entry) => entry.supplierId === id)) {
+        counts.push({
+          supplierId: id,
+          label: nameOf.get(id),
+          count: 0,
+          priceSum: 0,
+        });
+      }
+    }
+
+    return counts;
   }
 
   async updatePart({ partData, partId }: UpdatePart): Promise<Part> {
@@ -154,35 +183,44 @@ class PartRepository implements IPartRepository {
   async findPartByDescription(
     description: string,
     businessId: string,
+    exceptPartId?: string,
   ): Promise<Part | null> {
-    const findPartByDescription = await this.prisma.part.findFirst({
-      where: {
-        description: {
-          equals: description,
-          mode: "insensitive",
-        },
-        businessId: businessId,
-      },
-    });
+    // Plain equality on the index key, not ILIKE: no pattern to escape, and
+    // edge spaces count like FLEET-DUP-1's lower(btrim(description)).
+    const [match] = await this.prisma.$queryRaw<Array<{ id: string }>>`
+      SELECT "id" FROM "part"
+       WHERE "businessId" = ${businessId}
+         AND lower(btrim("description")) = lower(btrim(${description}))
+         ${exceptPartId ? Prisma.sql`AND "id" <> ${exceptPartId}` : Prisma.empty}
+       LIMIT 1`;
 
-    return findPartByDescription;
+    return match ? this.findPartById(match.id) : null;
   }
 
   async searchPartWithCursor({
     limit = 10,
     cursor,
     businessId,
+    search,
   }: SearchPartWithCursorProps): Promise<CursorPaginatedPart> {
+    const term = search?.trim();
+
     const items = await this.prisma.part.findMany({
-      where: { businessId },
+      where: {
+        businessId,
+        ...(term &&
+          buildSearchOr<Prisma.PartWhereInput>([
+            { description: { contains: term, mode: "insensitive" } },
+            { supplier: { name: { contains: term, mode: "insensitive" } } },
+          ])),
+      },
       take: limit + 1,
       ...(cursor && {
         cursor: { id: cursor },
         skip: 1,
       }),
-      orderBy: {
-        created_at: "desc",
-      },
+      // The id breaks created_at ties, so a page boundary never repeats a row.
+      orderBy: [{ created_at: "desc" }, { id: "desc" }],
     });
 
     const hasMore = items.length > limit;
@@ -193,26 +231,8 @@ class PartRepository implements IPartRepository {
     return { data, nextCursor, hasMore };
   }
 
-  async findServiceOrderPartsByPartId(partId: string): Promise<any[]> {
-    const serviceOrderParts = await this.prisma.serviceOrderPart.findMany({
-      where: { partId },
-      include: {
-        serviceOrder: {
-          select: {
-            id: true,
-            date: true,
-            vehicle: {
-              select: {
-                license_plate: true,
-                description: true,
-              },
-            },
-          },
-        },
-      },
-    });
-
-    return serviceOrderParts;
+  async countServiceOrderPartsByPartId(partId: string): Promise<number> {
+    return this.prisma.serviceOrderPart.count({ where: { partId } });
   }
 }
 

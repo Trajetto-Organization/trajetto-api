@@ -22,6 +22,7 @@ import {
   kanbanSchemas,
   kanbanResponses,
 } from "./documentation/kanban-documentation";
+import { ndjsonList } from "./documentation/ndjson";
 
 const createKanbanColumnController = new CreateKanbanColumnController();
 const updateKanbanColumnController = new UpdateKanbanColumnController();
@@ -37,6 +38,14 @@ const updateKanbanCardController = new UpdateKanbanCardController();
 const deleteKanbanCardController = new DeleteKanbanCardController();
 const reorderKanbanCardsController = new ReorderKanbanCardsController();
 
+/**
+ * Said once for every Kanban write: a column or card of another company is
+ * answered exactly as a missing one (404 with a code), never with a 403 that
+ * would confirm the id exists on some other board (decision 11.3).
+ */
+const NOT_FOUND_RULE =
+  " Uma coluna ou um card de outra empresa recebe a mesma resposta de um id inexistente (404 com código), nunca um 403 que confirmaria que o id existe em outro quadro.";
+
 async function kanbanRoutes(app: FastifyInstance) {
   app.post(
     "/column/create/:businessId",
@@ -49,15 +58,16 @@ async function kanbanRoutes(app: FastifyInstance) {
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["kanban"],
-        summary: "Create a new kanban column",
+        summary: "Cria uma coluna no quadro da empresa",
         description:
-          "Create a new kanban board column with title, color, and position for organizing workflow tasks",
+          "Cria uma coluna com título e cor no fim do quadro da empresa. Colunas criadas ao mesmo tempo recebem posições distintas e sem buracos (a posição é calculada sob um lock do quadro).",
         params: kanbanSchemas.businessIdParam,
         body: kanbanSchemas.createColumn,
         response: {
           201: kanbanResponses.columnCreated,
           400: kanbanResponses.createColumnErrors,
-          403: kanbanResponses.kanbanNotAllowedCreateColumn,
+          403: kanbanResponses.forbidden,
+          404: kanbanResponses.createColumnNotFound,
           500: kanbanResponses.internalServerError,
         },
       },
@@ -76,16 +86,17 @@ async function kanbanRoutes(app: FastifyInstance) {
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["kanban"],
-        summary: "Update a kanban column",
+        summary: "Atualiza uma coluna do quadro",
         description:
-          "Update existing kanban column information including title, color, and visual properties",
+          "Altera o título ou a cor de uma coluna do quadro da empresa do caminho. Nem o MASTER edita uma coluna pelo caminho de outra empresa." +
+          NOT_FOUND_RULE,
         params: kanbanSchemas.updateDeleteColumn,
         body: kanbanSchemas.updateColumn,
         response: {
           200: kanbanResponses.columnUpdated,
           400: kanbanResponses.updateColumnErrors,
-          403: kanbanResponses.updateColumnForbiddenErrors,
-          404: kanbanResponses.kanbanColumnNotFound,
+          403: kanbanResponses.forbidden,
+          404: kanbanResponses.columnWriteNotFound,
           500: kanbanResponses.internalServerError,
         },
       },
@@ -101,15 +112,16 @@ async function kanbanRoutes(app: FastifyInstance) {
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["kanban"],
-        summary: "Delete a kanban column",
+        summary: "Exclui uma coluna e os cards dela",
         description:
-          "Permanently remove a kanban column and all associated cards from the board",
+          "Exclui a coluna com todos os seus cards e fecha o buraco nas posições das demais, na mesma transação. Se a coluna for excluída por outra pessoa no meio, a resposta é 404." +
+          NOT_FOUND_RULE,
         params: kanbanSchemas.updateDeleteColumn,
         response: {
           200: kanbanResponses.columnDeleted,
           400: kanbanResponses.deleteColumnErrors,
-          403: kanbanResponses.deleteColumnForbiddenErrors,
-          404: kanbanResponses.kanbanColumnNotFound,
+          403: kanbanResponses.forbidden,
+          404: kanbanResponses.columnWriteNotFound,
           500: kanbanResponses.internalServerError,
         },
       },
@@ -125,14 +137,15 @@ async function kanbanRoutes(app: FastifyInstance) {
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["kanban"],
-        summary: "Reorder kanban columns",
+        summary: "Reordena as colunas do quadro",
         description:
-          "Change the position and order of kanban columns on the board for better workflow organization",
+          "Grava a nova ordem das colunas do quadro da empresa informada. As posições precisam ser distintas; uma coluna inexistente ou de outra empresa recebe 404 (a mesma resposta para os dois casos).",
         body: kanbanSchemas.reorderColumns,
         response: {
           200: kanbanResponses.columnsReordered,
           400: kanbanResponses.reorderColumnsErrors,
-          403: kanbanResponses.kanbanNotAllowedReorderColumn,
+          403: kanbanResponses.forbidden,
+          404: kanbanResponses.reorderColumnsNotFound,
           500: kanbanResponses.internalServerError,
         },
       },
@@ -147,15 +160,16 @@ async function kanbanRoutes(app: FastifyInstance) {
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["kanban"],
-        summary: "List kanban board",
+        summary: "Lista o quadro Kanban da empresa",
         description:
-          "Retrieve complete kanban board with all columns, cards, and task assignments for a specific business",
+          "Devolve em NDJSON as colunas do quadro (paginadas e com busca) e os cards de cada uma. Os cards de todas as colunas da página vêm numa consulta só. Com busca, a coluna encontrada pelo título mostra todos os cards; as demais, só os que batem (título, descrição, id, responsável ou prioridade em português). Quem não tem leitura completa do Kanban vê só as colunas com cards seus, e só esses cards.",
         params: kanbanSchemas.businessIdParam,
         querystring: kanbanSchemas.listKanban,
         response: {
-          200: kanbanResponses.kanbanList,
+          200: ndjsonList(kanbanResponses.kanbanList),
           400: kanbanResponses.listKanbanErrors,
-          403: kanbanResponses.kanbanNotAllowedViewBoard,
+          403: kanbanResponses.forbidden,
+          404: kanbanResponses.listKanbanNotFound,
           500: kanbanResponses.internalServerError,
         },
       },
@@ -171,15 +185,16 @@ async function kanbanRoutes(app: FastifyInstance) {
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["kanban"],
-        summary: "Create a new kanban card",
+        summary: "Cria um card numa coluna",
         description:
-          "Create a new task card with title, description, priority, due date, and assignment details",
+          'Cria o card no fim da coluna (posições sem colisão mesmo com criações simultâneas). O responsável precisa ser da empresa do quadro, inclusive quando quem cria é o MASTER: o MASTER recebe "Este usuário não pertence a esta empresa!", os demais recebem "Usuário atribuído não encontrado.", como para um id inexistente.' +
+          NOT_FOUND_RULE,
         body: kanbanSchemas.createCard,
         response: {
           201: kanbanResponses.cardCreated,
           400: kanbanResponses.createCardErrors,
-          403: kanbanResponses.kanbanNotAllowedCreateCard,
-          404: kanbanResponses.kanbanColumnNotFound,
+          403: kanbanResponses.forbidden,
+          404: kanbanResponses.createCardNotFound,
           500: kanbanResponses.internalServerError,
         },
       },
@@ -195,16 +210,17 @@ async function kanbanRoutes(app: FastifyInstance) {
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["kanban"],
-        summary: "Update a kanban card",
+        summary: "Atualiza um card",
         description:
-          "Update existing task card information including content, priority, completion status, and assignments",
+          "Altera só os campos enviados do card. Trocar o responsável segue a mesma regra da criação: o responsável precisa ser da empresa do quadro, inclusive para o MASTER." +
+          NOT_FOUND_RULE,
         params: kanbanSchemas.updateDeleteCard,
         body: kanbanSchemas.updateCard,
         response: {
           200: kanbanResponses.cardUpdated,
           400: kanbanResponses.updateCardErrors,
-          403: kanbanResponses.kanbanNotAllowedUpdateCard,
-          404: kanbanResponses.updateCardNotFoundErrors,
+          403: kanbanResponses.forbidden,
+          404: kanbanResponses.cardNotFound,
           500: kanbanResponses.internalServerError,
         },
       },
@@ -220,14 +236,17 @@ async function kanbanRoutes(app: FastifyInstance) {
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["kanban"],
-        summary: "Delete a kanban card",
-        description: "Permanently remove a task card from the kanban board",
+        summary: "Exclui um card",
+        description:
+          "Exclui o card e fecha o buraco nas posições da coluna em que ele está no momento, sob o lock dessa coluna. Se o card mudar de coluna repetidas vezes durante a operação, a resposta é 409 KANBAN_BOARD_CHANGED." +
+          NOT_FOUND_RULE,
         params: kanbanSchemas.updateDeleteCard,
         response: {
           200: kanbanResponses.cardDeleted,
-          400: kanbanResponses.resourceNotFound,
-          403: kanbanResponses.kanbanNotAllowedDeleteCard,
-          404: kanbanResponses.deleteCardNotFoundErrors,
+          400: kanbanResponses.deleteCardErrors,
+          403: kanbanResponses.forbidden,
+          404: kanbanResponses.cardNotFound,
+          409: kanbanResponses.boardChanged,
           500: kanbanResponses.internalServerError,
         },
       },
@@ -243,14 +262,17 @@ async function kanbanRoutes(app: FastifyInstance) {
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["kanban"],
-        summary: "Reorder kanban cards",
+        summary: "Reordena ou move cards entre colunas",
         description:
-          "Change the position and order of task cards within columns or move cards between different columns",
+          "Grava a posição e a coluna de cada card enviado, sob o lock das colunas de origem e de destino. Um card nunca vai para o quadro de outra empresa (400 KANBAN_CARD_CROSS_BOARD_MOVE, que só o MASTER pode receber). Uma coluna excluída no meio da operação responde 404." +
+          NOT_FOUND_RULE,
         body: kanbanSchemas.reorderCards,
         response: {
           200: kanbanResponses.cardsReordered,
           400: kanbanResponses.reorderCardsErrors,
-          403: kanbanResponses.kanbanNotAllowedReorderCard,
+          403: kanbanResponses.forbidden,
+          404: kanbanResponses.cardNotFound,
+          409: kanbanResponses.boardChanged,
           500: kanbanResponses.internalServerError,
         },
       },

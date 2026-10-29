@@ -16,6 +16,12 @@ import {
   vehicleTypeSchemas,
   vehicleTypeResponses,
 } from "./documentation/vehicle-type-documentation";
+import {
+  ndjsonCursor,
+  ndjsonList,
+  offsetMetaWith,
+} from "./documentation/ndjson";
+import { vehicleTypeListSearchMetaDoc } from "@/modules/vehicle-type/usecases/list-vehicle-type/list-vehicle-type-documentation";
 
 const createVehicleTypeController = new CreateVehicleTypeController();
 const listVehicleTypeController = new ListVehicleTypeController();
@@ -37,15 +43,17 @@ async function vehicleTypeRoutes(app: FastifyInstance) {
       ],
       schema: {
         security: [{ bearerAuth: [] }],
-        tags: ["vehicleType"],
-        summary: "Create a new vehicle type",
+        tags: ["vehicle-type"],
+        summary: "Cadastra um tipo de veículo",
         description:
-          "Register a new vehicle type category (truck, van, car, etc.) with specifications and classification details",
+          "Cadastra um tipo de veículo da empresa: nome (único na empresa, sem diferenciar maiúsculas), eixos padrão e, opcionalmente, a categoria de CNH exigida para dirigi-lo (decisão 8.5; a atribuição de rota avisa, não bloqueia).",
         params: vehicleTypeSchemas.businessIdParam,
         body: vehicleTypeSchemas.createVehicleType,
         response: {
           201: vehicleTypeResponses.vehicleTypeCreated,
-          400: vehicleTypeResponses.createVehicleTypeErrors,
+          400: vehicleTypeResponses.validationError,
+          404: vehicleTypeResponses.notFound,
+          409: vehicleTypeResponses.nameConflict,
           500: vehicleTypeResponses.internalServerError,
         },
       },
@@ -60,14 +68,18 @@ async function vehicleTypeRoutes(app: FastifyInstance) {
       preHandler: [verifyPermission("vehicle_type_manage", "read")],
       schema: {
         security: [{ bearerAuth: [] }],
-        tags: ["vehicleType"],
-        summary: "List vehicle types",
+        tags: ["vehicle-type"],
+        summary: "Lista os tipos de veículo da empresa",
         description:
-          "Retrieve a paginated list of vehicle type categories with their specifications and classifications",
+          "Tipos de veículo de UMA empresa, paginados: o MASTER informa `businessId`; os demais veem a própria. Ordena no servidor (`sort`/`order`) e busca por ID, nome ou número de eixos. O ID vale inteiro ou só o final que a tabela mostra (pelo menos 8 caracteres hexadecimais). Cada linha traz em `_count.vehicles` quantos veículos usam o tipo; a linha `meta.searchMeta` traz os cartões da tela sobre toda a busca (não só a página): total de tipos, veículos cadastrados, tipos sem veículos e o tipo mais usado.",
         querystring: vehicleTypeSchemas.listVehicleType,
         response: {
-          200: vehicleTypeResponses.vehicleTypeList,
-          400: vehicleTypeResponses.listVehicleTypeErrors,
+          200: ndjsonList(
+            vehicleTypeResponses.vehicleTypeListItem,
+            offsetMetaWith(vehicleTypeListSearchMetaDoc),
+          ),
+          400: vehicleTypeResponses.validationError,
+          404: vehicleTypeResponses.sessionUserNotFound,
           500: vehicleTypeResponses.internalServerError,
         },
       },
@@ -82,17 +94,15 @@ async function vehicleTypeRoutes(app: FastifyInstance) {
       preHandler: [verifyPermission("vehicle_type_manage", "read")],
       schema: {
         security: [{ bearerAuth: [] }],
-        tags: ["vehicleType"],
-        summary: "Search vehicle types by business (cursor-based)",
+        tags: ["vehicle-type"],
+        summary: "Busca tipos de veículo para seleção (cursor)",
         description:
-          "Retrieve vehicle types as NDJSON stream with cursor-based pagination. " +
-          "First line contains meta object: {meta: {nextCursor, hasMore}}. " +
-          "Subsequent lines are individual vehicle type objects. " +
-          "Use nextCursor value as cursor parameter for the next page.",
+          "Tipos de veículo da empresa, por cursor, com busca no servidor pelo nome (`search`). A primeira linha traz `meta.searchMeta.{nextCursor, hasMore}`.",
         querystring: vehicleTypeSchemas.searchVehicleTypeCursor,
         response: {
-          200: vehicleTypeResponses.searchVehicleTypeStreamDescription,
-          400: vehicleTypeResponses.listVehicleTypeBusinessErrors,
+          200: ndjsonCursor(vehicleTypeResponses.vehicleTypeItem),
+          400: vehicleTypeResponses.validationError,
+          404: vehicleTypeResponses.notFound,
           500: vehicleTypeResponses.internalServerError,
         },
       },
@@ -110,16 +120,17 @@ async function vehicleTypeRoutes(app: FastifyInstance) {
       ],
       schema: {
         security: [{ bearerAuth: [] }],
-        tags: ["vehicleType"],
-        summary: "Update a vehicle type",
+        tags: ["vehicle-type"],
+        summary: "Atualiza um tipo de veículo",
         description:
-          "Update existing vehicle type information including specifications and classification details",
+          "Atualiza só os campos enviados. `required_cnh_category: null` remove a exigência. O tipo continua na empresa do caminho; um tipo de outra empresa responde 404.",
         params: vehicleTypeSchemas.vehicleTypeBusinessParams,
         body: vehicleTypeSchemas.updateVehicleType,
         response: {
           200: vehicleTypeResponses.vehicleTypeUpdated,
-          400: vehicleTypeResponses.updateVehicleTypeErrors,
-          403: vehicleTypeResponses.vehicleTypeNotBelongBusinessError,
+          400: vehicleTypeResponses.validationError,
+          404: vehicleTypeResponses.notFound,
+          409: vehicleTypeResponses.nameConflict,
           500: vehicleTypeResponses.internalServerError,
         },
       },
@@ -131,18 +142,21 @@ async function vehicleTypeRoutes(app: FastifyInstance) {
     "/delete-vehicle-type/:vehicleTypeId/business/:businessId",
     {
       onRequest: [ensureAuthenticated],
-      preHandler: [verifyPermission("vehicle_type_manage", "write")],
+      preHandler: [
+        verifyBusinessActive,
+        verifyPermission("vehicle_type_manage", "write"),
+      ],
       schema: {
         security: [{ bearerAuth: [] }],
-        tags: ["vehicleType"],
-        summary: "Delete a vehicle type",
+        tags: ["vehicle-type"],
+        summary: "Exclui um tipo de veículo",
         description:
-          "Permanently remove a vehicle type category from the system and associated vehicle classifications",
+          "Exclui um tipo sem veículos. Com veículos cadastrados nele, responde 409 VEHICLE_TYPE_IN_USE com a contagem (antes, a exclusão tirava o tipo desses veículos em silêncio).",
         params: vehicleTypeSchemas.vehicleTypeBusinessParams,
         response: {
           200: vehicleTypeResponses.vehicleTypeDeleted,
-          400: vehicleTypeResponses.deleteVehicleTypeErrors,
-          403: vehicleTypeResponses.vehicleTypeNotBelongBusinessError,
+          404: vehicleTypeResponses.notFound,
+          409: vehicleTypeResponses.deleteConflict,
           500: vehicleTypeResponses.internalServerError,
         },
       },

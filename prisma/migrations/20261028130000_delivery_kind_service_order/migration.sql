@@ -1,0 +1,11 @@
+-- New value on DeliveryKind, alone in this file (meeting of 14/10/2026).
+--
+--   SERVICE_ORDER  "Ordem de serviço": a stop to perform a service at the
+--                  address (e.g. collecting returnable baskets), not the
+--                  fleet module's service order.
+--
+-- Alone so it commits before any later migration could reference it:
+-- Postgres refuses to use a value added in the same transaction.
+--
+-- enum-expand: DeliveryKind was created after the production baseline (20260914163752_route_and_pickup; the delivery module has not shipped to production), so no production image reads it. On staging, a replica of the previous image that reads a SERVICE_ORDER row fails to parse it until the rollout ends; nothing writes the value before the web sends the new type field.
+ALTER TYPE "DeliveryKind" ADD VALUE IF NOT EXISTS 'SERVICE_ORDER';

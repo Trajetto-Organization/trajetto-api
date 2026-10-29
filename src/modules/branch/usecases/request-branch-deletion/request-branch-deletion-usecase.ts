@@ -1,7 +1,7 @@
 import { inject, injectable } from "tsyringe";
 
 import crypto from "node:crypto";
-import { hash } from "bcrypt";
+import { hashSecret } from "@/shared/security/bcrypt-gate";
 
 import { IBranchRepository } from "@/modules/branch/repositories/IBranch-repository";
 import { IBusinessRepository } from "@/modules/business/repositories/IBusiness-repository";
@@ -13,14 +13,17 @@ import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-n
 import { BusinessNotFoundError } from "@/modules/business/usecases/errors/business-not-found-error";
 
 import { BranchNotFoundError } from "../errors/branch-not-found-error";
-import { BranchNotBelongBusinessError } from "../errors/branch-not-belong-business-error";
+import { assertTenantAccess } from "@/modules/middlewares/tenant-authorization";
 
 import { BranchHasChildrenError } from "../errors/branch-has-children-error";
 
-import { EmailWorkerAdapter } from "@/jobs/email-worker-adapter";
+import { sendTransactionalMail } from "@/shared/services/transactional-mail-service";
 import { AppError } from "@/shared/errors/AppError";
 
-import { env } from "@/env";
+import { emailLogoUrl } from "@/shared/providers/mail-provider/email-logo";
+import { logger } from "@/shared/logging/logger";
+
+const log = logger.child({ component: "branch" });
 
 const dependencyLabels: Record<string, string> = {
   vehicles: "veículo(s)",
@@ -36,9 +39,6 @@ const CODE_EXPIRATION_MINUTES = 5;
 
 @injectable()
 class RequestBranchDeletionUseCase {
-  private cloudinaryLogo = env.CLOUDINARY_LOGO_IMAGE;
-  private emailQueue: EmailWorkerAdapter;
-
   constructor(
     @inject("UserRepository")
     private user: IUserRepository,
@@ -48,9 +48,7 @@ class RequestBranchDeletionUseCase {
     private branch: IBranchRepository,
     @inject("PendingDeletionProvider")
     private pendingDeletion: IPendingDeletionProvider,
-  ) {
-    this.emailQueue = new EmailWorkerAdapter("requestBranchDeletionEmailQueue");
-  }
+  ) {}
 
   async execute(
     branchId: string,
@@ -69,14 +67,13 @@ class RequestBranchDeletionUseCase {
       throw new BusinessNotFoundError();
     }
 
+    assertTenantAccess(findUser, businessId);
+
     const findBranch = await this.branch.findBranchById(branchId);
 
-    if (!findBranch) {
+    // Another company's branch answers like a missing one (decision 11.3).
+    if (!findBranch || findBranch.businessId !== businessId) {
       throw new BranchNotFoundError();
-    }
-
-    if (findBranch.businessId !== businessId) {
-      throw new BranchNotBelongBusinessError();
     }
 
     // Fail fast: don't bother sending code if branch can't be deleted anyway
@@ -95,7 +92,7 @@ class RequestBranchDeletionUseCase {
     }
 
     const code = crypto.randomInt(100_000, 1_000_000).toString();
-    const codeHash = await hash(code, 10);
+    const codeHash = await hashSecret(code, 10);
 
     const expires = new Date(Date.now() + CODE_EXPIRATION_MINUTES * 60 * 1000);
 
@@ -107,32 +104,40 @@ class RequestBranchDeletionUseCase {
         code_hash: codeHash,
         expires,
       });
-
-      await this.emailQueue.enqueueEmail({
-        email: findUser.email,
-        name: findUser.name,
-        subject: "Código de confirmação para exclusão de filial",
-        templateName: "branch-deletion-code.hbs",
-        moduleName: "branch",
-        additionalVariablesProperties: {
-          code,
-          branchName: findBranch.corporate_reason,
-          branchCnpj: findBranch.cnpj,
-          businessName: findBusiness.corporate_reason,
-          logo: this.cloudinaryLogo,
-        },
-      });
-
-      return {
-        message:
-          "Um código de confirmação foi enviado para o seu e-mail. O código expira em 5 minutos.",
-      };
     } catch (error) {
       throw new AppError(
         "Houve um erro ao tentar enviar o código de confirmação! Por favor, tente novamente.",
         500,
       );
     }
+
+    // Sent after the answer, as the company's deletion code is: the code is
+    // stored above, asking again replaces it, and it carries a secret, so it
+    // stays in-process, off the outbox.
+    void sendTransactionalMail({
+      email: findUser.email,
+      name: findUser.name,
+      subject: "Código de confirmação para exclusão de filial",
+      templateName: "branch-deletion-code.hbs",
+      moduleName: "branch",
+      additionalVariablesProperties: {
+        code,
+        branchName: findBranch.corporate_reason,
+        branchCnpj: findBranch.cnpj,
+        businessName: findBusiness.corporate_reason,
+        logo: emailLogoUrl(),
+      },
+    }).catch((error) =>
+      log.error(
+        { err: error, userId: findUser.id, branchId },
+        "branch deletion code e-mail could not be sent",
+      ),
+    );
+
+    return {
+      message:
+        "Um código de confirmação foi enviado para o seu e-mail. O código expira em 5 minutos.",
+    };
   }
 }
 

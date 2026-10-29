@@ -1,0 +1,23 @@
+// Supply-chain gate (INFRA-16): `npx audit-ci` in ci.yml and deploy.yml fails
+// the build on a CRITICAL advisory in a PRODUCTION dependency. Highs are
+// Dependabot's job (security updates): gating on them today would leave the
+// pipeline red for build-time tooling nothing ships.
+//
+// Each allowlist entry says why the advisory does not reach production and
+// when to look again. Take it out as soon as the update lands.
+{
+  "$schema": "https://github.com/IBM/audit-ci/raw/main/docs/schema.json",
+  // yarn.lock is the lockfile. Explicit: auto-detection picks npm when a
+  // stray package-lock.json is left on disk, and audits a different tree.
+  "package-manager": "yarn",
+  "critical": true,
+  "skip-dev": true,
+  "report-type": "important",
+  "allowlist": [
+    // tar <=7.5.18 via bcrypt > @mapbox/node-pre-gyp. node-pre-gyp runs at
+    // INSTALL time (fetches bcrypt's prebuilt binary); the server never
+    // extracts an archive with it. Goes away with bcrypt 6, which has no
+    // node-pre-gyp. Revisar até 2026-12-31.
+    "GHSA-23hp-3jrh-7fpw"
+  ]
+}

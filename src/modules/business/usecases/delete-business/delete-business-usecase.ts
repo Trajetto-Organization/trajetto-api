@@ -1,5 +1,6 @@
 import { inject, injectable } from "tsyringe";
-import { compare } from "bcrypt";
+import { assertCallerRole } from "../errors/business-role-guard";
+import { compareSecret } from "@/shared/security/bcrypt-gate";
 
 import { IBusinessRepository } from "@/modules/business/repositories/IBusiness-repository";
 import { IUserRepository } from "@/modules/user/repositories/IUser-repository";
@@ -20,8 +21,14 @@ import { BusinessNoPendingDeletionError } from "../errors/business-no-pending-de
 import { Business } from "../../dtos/business-dto";
 import { AppError } from "@/shared/errors/AppError";
 
-import { EmailWorkerAdapter } from "@/jobs/email-worker-adapter";
-import { env } from "@/env";
+import { sendTransactionalMail } from "@/shared/services/transactional-mail-service";
+import { logger } from "@/shared/logging/logger";
+import { resolveTimeZone } from "@/shared/time/business-day";
+
+import database from "@/../infra/database";
+import { emailLogoUrl } from "@/shared/providers/mail-provider/email-logo";
+
+const log = logger.child({ component: "business" });
 
 const roleLabels: Record<string, string> = {
   MASTER: "Master",
@@ -31,9 +38,6 @@ const roleLabels: Record<string, string> = {
 
 @injectable()
 class DeleteBusinessUseCase {
-  private cloudinaryLogo = env.CLOUDINARY_LOGO_IMAGE;
-  private notificationEmailQueue: EmailWorkerAdapter;
-
   constructor(
     @inject("UserRepository")
     private user: IUserRepository,
@@ -43,11 +47,7 @@ class DeleteBusinessUseCase {
     private pendingDeletion: IPendingDeletionProvider,
     @inject("NotificationService")
     private notificationService: NotificationService,
-  ) {
-    this.notificationEmailQueue = new EmailWorkerAdapter(
-      "businessDeletionNotificationEmailQueue",
-    );
-  }
+  ) {}
 
   async execute(
     businessId: string,
@@ -59,6 +59,9 @@ class DeleteBusinessUseCase {
     if (!findUser) {
       throw new ResourceNotFoundError();
     }
+
+    // MASTER-only, like the route: see assertCallerRole.
+    assertCallerRole(findUser, ["MASTER"]);
 
     const existingBusiness = await this.business.findBusinessById(businessId);
 
@@ -104,7 +107,7 @@ class DeleteBusinessUseCase {
       throw new BusinessDeletionCodeExpiredError();
     }
 
-    const isCodeValid = await compare(code, pending.code_hash);
+    const isCodeValid = await compareSecret(code, pending.code_hash);
 
     if (!isCodeValid) {
       throw new BusinessDeletionCodeInvalidError();
@@ -114,24 +117,34 @@ class DeleteBusinessUseCase {
     const businessSnapshot = {
       name: existingBusiness.corporate_reason,
       cnpj: existingBusiness.cnpj,
+      timeZone: existingBusiness.timezone,
     };
 
     try {
-      const businessDeleted = await this.business.deleteBusiness(businessId);
-      await this.pendingDeletion.deletePendingDeletion(pending.id);
+      // The deletion and its audit entry commit together (OUTBOX-10).
+      const businessDeleted = await database.$transaction(async (tx) => {
+        const deleted = await this.business.deleteBusiness(businessId, tx);
 
-      this.notificationService.createActivityIfEnabled({
-        type: "Empresa",
-        action: "delete",
-        entityId: businessId,
-        description:
-          `Empresa excluída: ${businessSnapshot.name} | CNPJ: ${businessSnapshot.cnpj} | ID: ${businessDeleted.id} | ` +
-          `Excluída por: ${findUser.name} (${findUser.email}) — ${roleLabels[findUser.role] || findUser.role}`,
-        status: "Deletado",
-        performedBy: userId,
-        businessId: null,
-        tenantName: businessDeleted.corporate_reason,
+        await this.notificationService.createActivityIfEnabled(
+          {
+            type: "Empresa",
+            action: "delete",
+            entityId: businessId,
+            description:
+              `Empresa excluída: ${businessSnapshot.name} | CNPJ: ${businessSnapshot.cnpj} | ID: ${deleted.id} | ` +
+              `Excluída por: ${findUser.name} (${findUser.email}) — ${roleLabels[findUser.role] || findUser.role}`,
+            status: "Deletado",
+            performedBy: userId,
+            businessId: null,
+            tenantName: deleted.corporate_reason,
+          },
+          tx,
+        );
+
+        return deleted;
       });
+
+      await this.pendingDeletion.deletePendingDeletion(pending.id);
 
       // Notify other MASTER users (excluding the deleter)
       this.notifyOtherMasters({
@@ -141,8 +154,12 @@ class DeleteBusinessUseCase {
         deleterRole: roleLabels[findUser.role] || findUser.role,
         businessName: businessSnapshot.name,
         businessCnpj: businessSnapshot.cnpj,
+        businessTimeZone: businessSnapshot.timeZone,
       }).catch((err) => {
-        console.warn("Failed to notify masters about business deletion:", err);
+        log.warn(
+          { err, businessId },
+          "masters could not be notified about a business deletion",
+        );
       });
 
       return businessDeleted;
@@ -161,19 +178,22 @@ class DeleteBusinessUseCase {
     deleterRole: string;
     businessName: string;
     businessCnpj: string;
+    businessTimeZone?: string | null;
   }): Promise<void> {
     const masters = await this.user.findOtherMasters(params.deleterId);
 
     const recipients = masters.filter((m) => m.email_notifications_enabled);
     if (recipients.length === 0) return;
 
+    // Masters have no company of their own: the moment is told on the
+    // deleted company's clock (decision 1.1), the default without one.
     const deletedAt = new Date().toLocaleString("pt-BR", {
-      timeZone: "America/Sao_Paulo",
+      timeZone: resolveTimeZone(params.businessTimeZone),
     });
 
     await Promise.allSettled(
       recipients.map((recipient) =>
-        this.notificationEmailQueue.enqueueEmail({
+        sendTransactionalMail({
           email: recipient.email,
           name: recipient.name,
           subject: `[Trajetto] Empresa "${params.businessName}" foi excluída`,
@@ -186,7 +206,7 @@ class DeleteBusinessUseCase {
             performedByEmail: params.deleterEmail,
             performedByRole: params.deleterRole,
             deletedAt,
-            logo: this.cloudinaryLogo,
+            logo: emailLogoUrl(),
           },
         }),
       ),

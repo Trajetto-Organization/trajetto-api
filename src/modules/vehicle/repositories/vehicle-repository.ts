@@ -1,3 +1,5 @@
+import { Prisma } from "@prisma/client";
+
 import database from "@/../infra/database";
 import { IVehicleRepository } from "./IVehicle-repository";
 
@@ -10,7 +12,46 @@ import {
   GetVehicleByIdAndBusinessProps,
   SearchVehicleWithCursorProps,
   CursorPaginatedVehicle,
+  VehicleUsageCounts,
+  VehicleStatusCounts,
 } from "../dtos/vehicle-dto";
+import { tallyStatuses } from "@/shared/vehicle/vehicle-rules";
+
+import { buildSearchOr } from "@/shared/pagination/search-or";
+import { resolveOrderBy } from "@/shared/pagination/list-query";
+import { insensitiveEquals } from "@/shared/utils/like-pattern";
+
+import { driverOperableVehicleWhere } from "@/shared/vehicle/driver-vehicle-access";
+import type { OpenRouteCounts } from "@/shared/vehicle/vehicle-status-change";
+
+import {
+  VEHICLE_SORT,
+  vehicleListWhere,
+  type VehicleBranchCount,
+  type VehicleListFilters,
+} from "../usecases/list-vehicle/vehicle-list";
+import {
+  EXPORT_ORDER,
+  exportBatchWhere,
+  type ExportKey,
+} from "@/shared/pagination/export-keyset";
+
+/** What a picker needs (DLV-COMBO-1): no odometer, RENAVAM or CNH. */
+const VEHICLE_CHOICE_SELECT = {
+  id: true,
+  description: true,
+  license_plate: true,
+  brand: true,
+  model: true,
+  status: true,
+  businessId: true,
+  driverId: true,
+  vehicleTypeId: true,
+  driver: { select: { name: true } },
+  // The licence the type requires, so the assignment can warn when the
+  // driver's does not cover it (decision 8.5).
+  vehicleType: { select: { description: true, required_cnh_category: true } },
+} satisfies Prisma.VehicleSelect;
 
 class VehicleRepository implements IVehicleRepository {
   constructor(private prisma = database) {}
@@ -26,108 +67,90 @@ class VehicleRepository implements IVehicleRepository {
   async listVehicles({
     page,
     pageSize,
-    businessId,
-    currentUserRole,
-    search,
+    sort,
+    order,
+    ...filters
   }: ListVehicleByBusinessIdProps): Promise<ListVehicleProps> {
-    const skip = (page - 1) * pageSize;
-    const normalizedSearch = search ? search.trim().toLowerCase() : "";
-
-    const orConditions: any[] = [];
-
-    if (normalizedSearch) {
-      orConditions.push(
-        { id: { contains: normalizedSearch, mode: "insensitive" } },
-        { description: { contains: normalizedSearch, mode: "insensitive" } },
-        { license_plate: { contains: normalizedSearch, mode: "insensitive" } },
-        { brand: { contains: normalizedSearch, mode: "insensitive" } },
-        { model: { contains: normalizedSearch, mode: "insensitive" } },
-        { renavam: { contains: normalizedSearch, mode: "insensitive" } },
-        { branchId: { contains: normalizedSearch, mode: "insensitive" } },
-        { driverId: { contains: normalizedSearch, mode: "insensitive" } },
-        { vehicleTypeId: { contains: normalizedSearch, mode: "insensitive" } },
-        { fuelTypeId: { contains: normalizedSearch, mode: "insensitive" } },
-        // Business ID and name (MASTER only)
-        ...(currentUserRole === "MASTER"
-          ? [
-              {
-                businessId: { contains: normalizedSearch, mode: "insensitive" },
-              },
-              {
-                business: {
-                  corporate_reason: {
-                    contains: normalizedSearch,
-                    mode: "insensitive",
-                  },
-                },
-              },
-            ]
-          : []),
-      );
-    }
-
-    const whereCondition = {
-      ...(currentUserRole !== "MASTER" && { businessId: businessId }),
-      ...(orConditions.length > 0 && { OR: orConditions }),
-    };
-
-    const [vehicleData, total] = await Promise.all([
+    // Two reads at a time at most (tests/E2E/connection-fan-out): the page
+    // with the status breakdown, then the branch facet.
+    const [vehicleData, statusGroups] = await Promise.all([
       this.prisma.vehicle.findMany({
-        skip,
+        skip: (page - 1) * pageSize,
         take: pageSize,
-        where: whereCondition,
+        where: vehicleListWhere(filters),
         include: {
-          vehicleType: {
-            select: {
-              description: true,
-            },
-          },
-          fuelType: {
-            select: {
-              description: true,
-            },
-          },
-          driver: {
-            select: {
-              name: true,
-              cnh: true,
-            },
-          },
-          branch: {
-            select: {
-              corporate_reason: true,
-            },
-          },
-          business: {
-            select: {
-              corporate_reason: true,
-            },
-          },
+          vehicleType: { select: { description: true } },
+          fuelType: { select: { description: true } },
+          driver: { select: { name: true, cnh: true } },
+          branch: { select: { corporate_reason: true } },
         },
-        orderBy: {
-          created_at: "desc",
-        },
+        orderBy: resolveOrderBy(VEHICLE_SORT, { sort, order }),
       }),
-      this.prisma.vehicle.count({
-        where: whereCondition,
+      // The cards and the pager total come from this one grouping, so they
+      // cannot disagree; counting the rows on the page would report ten
+      // vehicles as if they were the fleet.
+      this.prisma.vehicle.groupBy({
+        by: ["status"],
+        where: vehicleListWhere(filters, { except: "status" }),
+        _count: { _all: true },
       }),
     ]);
 
+    const branchCounts = await this.countVehiclesByBranch(filters);
+
     return {
       data: vehicleData,
-      total,
+      statusCounts: tallyStatuses(statusGroups),
+      branchCounts,
     };
   }
 
-  async updateVehicle({
-    vehicleData,
-    vehicleId,
-  }: UpdateVehicle): Promise<Vehicle> {
+  /**
+   * The branch facet: vehicles per branch under every filter but the branch
+   * one, named from THIS company's branches only — an id of another company
+   * in the URL gets neither a count nor a name. A selected branch that
+   * matches nothing stays listed with 0 so its chip keeps a name.
+   */
+  private async countVehiclesByBranch(
+    filters: VehicleListFilters,
+  ): Promise<VehicleBranchCount[]> {
+    const groups = await this.prisma.vehicle.groupBy({
+      by: ["branchId"],
+      where: vehicleListWhere(filters, { except: "branch" }),
+      _count: { _all: true },
+    });
+
+    const counts = new Map<string, number>();
+
+    for (const group of groups) {
+      if (group.branchId) counts.set(group.branchId, group._count._all);
+    }
+
+    const ids = [...new Set([...counts.keys(), ...(filters.branchIds ?? [])])];
+
+    if (ids.length === 0) return [];
+
+    const branches = await this.prisma.branch.findMany({
+      where: { id: { in: ids }, businessId: filters.businessId },
+      select: { id: true, corporate_reason: true },
+    });
+
+    return branches.map((branch) => ({
+      id: branch.id,
+      name: branch.corporate_reason,
+      count: counts.get(branch.id) ?? 0,
+    }));
+  }
+
+  async updateVehicle(
+    { vehicleData, vehicleId }: UpdateVehicle,
+    tx?: Prisma.TransactionClient,
+  ): Promise<Vehicle> {
     const filteredData = Object.fromEntries(
       Object.entries(vehicleData).filter(([_, value]) => value !== undefined),
     );
 
-    const updateVehicle = await this.prisma.vehicle.update({
+    const updateVehicle = await (tx ?? this.prisma).vehicle.update({
       where: {
         id: vehicleId,
       },
@@ -135,6 +158,74 @@ class VehicleRepository implements IVehicleRepository {
     });
 
     return updateVehicle;
+  }
+
+  /**
+   * The reactivation twin of createVehicleWithinLimit: the same FOR NO KEY
+   * UPDATE on the company row serialises every write that may take a
+   * contracted slot, so the count below is not a stale read.
+   */
+  async updateVehicleWithinLimit(
+    {
+      vehicleData,
+      vehicleId,
+      businessId,
+    }: UpdateVehicle & { businessId: string },
+    limit: { max: number },
+  ): Promise<{ vehicle: Vehicle | null; activeCount: number }> {
+    return this.prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`
+        SELECT "id" FROM "business"
+        WHERE "id" = ${businessId}
+        FOR NO KEY UPDATE
+      `;
+
+      const activeCount = await tx.vehicle.count({
+        where: {
+          businessId,
+          status: { not: "INACTIVE" },
+          id: { not: vehicleId },
+        },
+      });
+
+      if (limit.max > 0 && activeCount >= limit.max) {
+        return { vehicle: null, activeCount };
+      }
+
+      const vehicle = await this.updateVehicle({ vehicleData, vehicleId }, tx);
+
+      return { vehicle, activeCount };
+    });
+  }
+
+  async advanceMileageAfterService(
+    {
+      vehicleId,
+      businessId,
+      mileage,
+      maintenanceDate,
+    }: {
+      vehicleId: string;
+      businessId: string;
+      mileage: number;
+      maintenanceDate?: Date | string | null;
+    },
+    tx?: Prisma.TransactionClient,
+  ): Promise<boolean> {
+    // The guard is in the WHERE, so it is judged against the row as it is
+    // when the write lands, not as the order read it.
+    const moved = await (tx ?? this.prisma).vehicle.updateMany({
+      where: { id: vehicleId, businessId, current_mileage: { lt: mileage } },
+      data: {
+        current_mileage: mileage,
+        last_maintenance_mileage: mileage,
+        ...(maintenanceDate && {
+          last_maintenance_date: new Date(maintenanceDate),
+        }),
+      },
+    });
+
+    return moved.count === 1;
   }
 
   async deleteVehicle(vehicleId: string): Promise<Vehicle> {
@@ -165,30 +256,27 @@ class VehicleRepository implements IVehicleRepository {
 
   async findVehicleByLicensePlate(
     licensePlate: string,
+    businessId: string,
   ): Promise<Vehicle | null> {
-    const findVehicleByLicensePlate = await this.prisma.vehicle.findFirst({
+    return this.prisma.vehicle.findFirst({
       where: {
-        license_plate: {
-          equals: licensePlate,
-          mode: "insensitive",
-        },
+        businessId,
+        // Escaped: the value is an ILIKE pattern underneath (like-pattern.ts).
+        license_plate: insensitiveEquals(licensePlate),
       },
     });
-
-    return findVehicleByLicensePlate;
   }
 
-  async findVehicleByRenavam(renavam: string): Promise<Vehicle | null> {
-    const findVehicleByRenavam = await this.prisma.vehicle.findFirst({
+  async findVehicleByRenavam(
+    renavam: string,
+    businessId: string,
+  ): Promise<Vehicle | null> {
+    return this.prisma.vehicle.findFirst({
       where: {
-        renavam: {
-          equals: renavam,
-          mode: "insensitive",
-        },
+        businessId,
+        renavam: insensitiveEquals(renavam),
       },
     });
-
-    return findVehicleByRenavam;
   }
 
   async getVehicleByIdAndBusiness({
@@ -218,63 +306,36 @@ class VehicleRepository implements IVehicleRepository {
   }
 
   async *streamVehiclesForExport(
-    businessId: string,
-    userRole: string,
-    search?: string,
-  ): AsyncGenerator<any> {
-    const normalizedSearch = search ? search.trim().toLowerCase() : "";
-    const orConditions: any[] = [];
-
-    if (normalizedSearch) {
-      orConditions.push(
-        { id: { contains: normalizedSearch, mode: "insensitive" } },
-        { description: { contains: normalizedSearch, mode: "insensitive" } },
-        { license_plate: { contains: normalizedSearch, mode: "insensitive" } },
-        { brand: { contains: normalizedSearch, mode: "insensitive" } },
-        { model: { contains: normalizedSearch, mode: "insensitive" } },
-        { renavam: { contains: normalizedSearch, mode: "insensitive" } },
-        { branchId: { contains: normalizedSearch, mode: "insensitive" } },
-        { driverId: { contains: normalizedSearch, mode: "insensitive" } },
-        ...(userRole === "MASTER"
-          ? [
-              {
-                businessId: {
-                  contains: normalizedSearch,
-                  mode: "insensitive",
-                },
-              },
-            ]
-          : []),
-      );
-    }
-
-    const whereCondition: any = {
-      ...(userRole !== "MASTER" && { businessId }),
-      ...(orConditions.length > 0 && { OR: orConditions }),
-    };
+    filters: VehicleListFilters,
+  ): AsyncGenerator<Record<string, unknown>> {
+    const whereCondition = vehicleListWhere(filters);
 
     const batchSize = 1000;
-    let cursor: string | undefined = undefined;
+    let after: ExportKey | null = null;
 
+    // Keyset batches in creation order (export-keyset.ts).
     while (true) {
-      const vehicles: any = await this.prisma.vehicle.findMany({
-        where: whereCondition,
+      const vehicles: Array<
+        Vehicle & {
+          vehicleType: { description: string } | null;
+          fuelType: { description: string } | null;
+          driver: { name: string; cpf: string } | null;
+          branch: { corporate_reason: string } | null;
+        }
+      > = await this.prisma.vehicle.findMany({
+        where: exportBatchWhere(whereCondition, after),
         include: {
           vehicleType: { select: { description: true } },
           fuelType: { select: { description: true } },
           driver: { select: { name: true, cpf: true } },
           branch: { select: { corporate_reason: true } },
-          business: { select: { corporate_reason: true } },
         },
-        orderBy: { id: "asc" },
+        orderBy: [...EXPORT_ORDER],
         take: batchSize,
-        ...(cursor && {
-          skip: 1,
-          cursor: { id: cursor },
-        }),
       });
 
       if (vehicles.length === 0) break;
+
       for (const v of vehicles) {
         yield {
           id: v.id,
@@ -302,16 +363,21 @@ class VehicleRepository implements IVehicleRepository {
           driverCpf: v.driver?.cpf || null,
           branchName: v.branch?.corporate_reason || null,
           businessId: v.businessId,
-          ...(userRole === "MASTER"
-            ? { businessName: v.business.corporate_reason }
-            : {}),
           created_at: v.created_at,
           updated_at: v.updated_at,
         };
       }
 
-      cursor = vehicles[vehicles.length - 1].id;
+      if (vehicles.length < batchSize) break;
+
+      // The dto widens created_at to Date | string; Prisma hands a Date.
+      const last = vehicles[vehicles.length - 1];
+      after = { created_at: new Date(last.created_at), id: last.id };
     }
+  }
+
+  async countVehiclesForExport(filters: VehicleListFilters): Promise<number> {
+    return this.prisma.vehicle.count({ where: vehicleListWhere(filters) });
   }
 
   async searchVehicleWithCursor({
@@ -320,28 +386,51 @@ class VehicleRepository implements IVehicleRepository {
     businessId,
     driverId,
     search,
+    fields = "full",
   }: SearchVehicleWithCursorProps): Promise<CursorPaginatedVehicle> {
-    const items = await this.prisma.vehicle.findMany({
-      where: {
-        businessId,
-        ...(driverId ? { driverId } : {}),
-        status: {
-          in: ["ACTIVE", "IN_ROUTE"],
-        },
-        ...(search && {
-          OR: [
-            { description: { contains: search, mode: "insensitive" } },
-            { license_plate: { contains: search, mode: "insensitive" } },
-            { brand: { contains: search, mode: "insensitive" } },
-            { model: { contains: search, mode: "insensitive" } },
-            { renavam: { contains: search, mode: "insensitive" } },
-          ],
-        }),
+    const where: Prisma.VehicleWhereInput = {
+      businessId,
+      status: {
+        in: ["ACTIVE", "IN_ROUTE"],
       },
+      AND: [
+        ...(driverId ? [driverOperableVehicleWhere(driverId)] : []),
+        buildSearchOr<Prisma.VehicleWhereInput>(
+          search
+            ? [
+                { description: { contains: search, mode: "insensitive" } },
+                { license_plate: { contains: search, mode: "insensitive" } },
+                { brand: { contains: search, mode: "insensitive" } },
+                { model: { contains: search, mode: "insensitive" } },
+                { renavam: { contains: search, mode: "insensitive" } },
+              ]
+            : [],
+        ),
+      ],
+    };
+
+    const page = {
+      where,
       take: limit + 1,
       ...(cursor && { cursor: { id: cursor }, skip: 1 }),
-      orderBy: { created_at: "desc" },
-    });
+      orderBy: [{ created_at: "desc" }, { id: "desc" }],
+    } satisfies Prisma.VehicleFindManyArgs;
+
+    const items: CursorPaginatedVehicle["data"] =
+      fields === "choice"
+        ? await this.prisma.vehicle.findMany({
+            ...page,
+            select: VEHICLE_CHOICE_SELECT,
+          })
+        : await this.prisma.vehicle.findMany({
+            ...page,
+            include: {
+              driver: { select: { name: true } },
+              vehicleType: {
+                select: { description: true, required_cnh_category: true },
+              },
+            },
+          });
 
     const hasMore = items.length > limit;
 
@@ -351,19 +440,142 @@ class VehicleRepository implements IVehicleRepository {
     return { data, nextCursor, hasMore };
   }
 
-  async countVehiclesForExport(
-    businessId: string,
-    userRole: string,
-  ): Promise<number> {
-    const whereCondition: any = {
-      ...(userRole !== "MASTER" && { businessId }),
-    };
-
-    const vehiclesCount = await this.prisma.vehicle.count({
-      where: whereCondition,
+  async canDriverOperateVehicle({
+    vehicleId,
+    driverId,
+    businessId,
+  }: {
+    vehicleId: string;
+    driverId: string;
+    businessId: string;
+  }): Promise<boolean> {
+    const found = await this.prisma.vehicle.count({
+      where: {
+        id: vehicleId,
+        businessId,
+        ...driverOperableVehicleWhere(driverId),
+      },
     });
 
-    return vehiclesCount;
+    return found > 0;
+  }
+
+  async countOpenRoutesForVehicle(
+    vehicleId: string,
+    businessId: string,
+  ): Promise<OpenRouteCounts> {
+    const groups = await this.prisma.route.groupBy({
+      by: ["status"],
+      where: {
+        vehicleId,
+        businessId,
+        status: { in: ["PLANNED", "RELEASED", "IN_PROGRESS"] },
+      },
+      _count: { _all: true },
+    });
+
+    const countOf = (status: string) =>
+      groups.find((group) => group.status === status)?._count._all ?? 0;
+
+    return {
+      planned: countOf("PLANNED"),
+      released: countOf("RELEASED"),
+      inProgress: countOf("IN_PROGRESS"),
+    };
+  }
+
+  async countVehicleUsage(vehicleId: string): Promise<VehicleUsageCounts> {
+    // One statement with five correlated counts, instead of loading every
+    // fuelling of the vehicle to read `.length`.
+    const found = await this.prisma.vehicle.findUnique({
+      where: { id: vehicleId },
+      select: {
+        _count: {
+          select: {
+            Fine: true,
+            Fuel: true,
+            serviceOrders: true,
+            VehicleChecklist: true,
+            accountsPayable: true,
+          },
+        },
+      },
+    });
+
+    return {
+      fines: found?._count.Fine ?? 0,
+      fuels: found?._count.Fuel ?? 0,
+      serviceOrders: found?._count.serviceOrders ?? 0,
+      checklists: found?._count.VehicleChecklist ?? 0,
+      accountsPayable: found?._count.accountsPayable ?? 0,
+    };
+  }
+
+  /**
+   * The plan's fleet in ONE grouped count, scoped to the company: a
+   * contracted slot is occupied by every non-INACTIVE vehicle (see
+   * occupiesFleetSlot in entitlement-rules), and the breakdown by status
+   * comes from the same rows. It replaces two counts that ran side by side.
+   */
+  async countVehiclesByStatusForBusiness(
+    businessId: string,
+  ): Promise<VehicleStatusCounts> {
+    const groups = await this.prisma.vehicle.groupBy({
+      by: ["status"],
+      where: { businessId },
+      _count: { _all: true },
+    });
+
+    return tallyStatuses(groups);
+  }
+
+  /**
+   * Creates the vehicle without exceeding the contracted fleet, even under
+   * concurrency.
+   *
+   * Count-then-create is a read-then-write, and the limit is a BILLING
+   * control: with nine vehicles on a contract of ten, N simultaneous
+   * requests with different plates all read nine, all passed, and the
+   * company ended up with 9+N on a contract of ten.
+   *
+   * Neither an index nor an `updateMany` solves it — "at most N rows per
+   * company" is not a condition Postgres can express. Serialising PER
+   * COMPANY does: the transaction locks the company's row, and a second
+   * registration waits for the first to finish before counting.
+   *
+   * FOR NO KEY UPDATE, not FOR UPDATE. It conflicts with itself, so the
+   * registrations still queue; but it does not conflict with the FOR KEY
+   * SHARE that every insert with a foreign key to `business` takes on this
+   * row. FOR UPDATE did, and every proof, delivery, route, activity and
+   * notification of the company waited for the vehicle to be registered.
+   */
+  async createVehicleWithinLimit(
+    vehicleData: CreateVehicleProps,
+    limit: { max: number; occupiesSlot: boolean },
+  ): Promise<{ vehicle: Vehicle | null; activeCount: number }> {
+    return this.prisma.$transaction(async (tx) => {
+      // The lock. Without it the count below is the same stale read as before.
+      await tx.$queryRaw`
+        SELECT "id" FROM "business"
+        WHERE "id" = ${vehicleData.businessId}
+        FOR NO KEY UPDATE
+      `;
+
+      const activeCount = await tx.vehicle.count({
+        where: {
+          businessId: vehicleData.businessId,
+          status: { not: "INACTIVE" },
+        },
+      });
+
+      if (limit.occupiesSlot && limit.max > 0 && activeCount >= limit.max) {
+        return { vehicle: null, activeCount };
+      }
+
+      const vehicle = await tx.vehicle.create({ data: vehicleData });
+
+      return { vehicle, activeCount };
+    });
   }
 }
 

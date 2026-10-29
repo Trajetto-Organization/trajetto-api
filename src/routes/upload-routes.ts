@@ -36,15 +36,17 @@ async function uploadRoutes(app: FastifyInstance) {
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["upload"],
-        summary: "Authorise a direct upload to storage",
+        summary: "Autoriza um envio direto ao armazenamento",
         description:
-          "Returns one short-lived signed PUT per file so the client uploads straight to the bucket, keeping the file bytes off the API. The object key is generated server-side and namespaced by business; Content-Type and Content-Length are part of the signature, so storage itself rejects a file that does not match what was authorised.",
+          "Devolve um PUT assinado e de vida curta por arquivo, para o cliente enviar direto ao bucket sem passar os bytes pela API. A chave do objeto é gerada no servidor, dentro do prefixo da empresa; Content-Type e Content-Length fazem parte da assinatura, então o próprio armazenamento recusa um arquivo diferente do autorizado. Toda recusa traz o `code`.",
         params: uploadSchemas.businessIdParam,
         body: uploadSchemas.createPresignedUpload,
         response: {
           201: uploadResponses.presignedUploadCreated,
           400: uploadResponses.createPresignedUploadErrors,
+          403: uploadResponses.serverOnlyUploadType,
           500: uploadResponses.internalServerError,
+          503: uploadResponses.storageUnavailable,
         },
       },
     },
@@ -62,14 +64,15 @@ async function uploadRoutes(app: FastifyInstance) {
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["upload"],
-        summary: "Authorise a direct avatar upload to storage",
+        summary: "Autoriza o envio direto de um avatar",
         description:
-          "Same as the business endpoint, but scoped to the authenticated user: the object key is namespaced by user id, so an avatar needs no tenant. Content-Type and Content-Length are part of the signature, so storage itself rejects a file that does not match what was authorised.",
+          "Igual ao envio da empresa, mas do usuário autenticado: a chave fica no prefixo do id do usuário, então o avatar não depende de empresa. Content-Type e Content-Length fazem parte da assinatura, então o próprio armazenamento recusa um arquivo diferente do autorizado. Toda recusa traz o `code`.",
         body: uploadSchemas.createPresignedAvatarUpload,
         response: {
           201: uploadResponses.presignedUploadCreated,
           400: uploadResponses.createPresignedUploadErrors,
           500: uploadResponses.internalServerError,
+          503: uploadResponses.storageUnavailable,
         },
       },
     },
@@ -84,9 +87,9 @@ async function uploadRoutes(app: FastifyInstance) {
       {
         schema: {
           tags: ["upload"],
-          summary: "Receive a direct upload when storage is local",
+          summary: "Recebe um envio direto quando o armazenamento é local",
           description:
-            "Development stand-in for the storage bucket. Accepts the raw image bytes with the signed token from the presign query string; the key, content type and length come from the token, so it enforces the same limits a presigned PUT to R2 would. Not registered when UPLOAD_STORAGE_TYPE is r2.",
+            "Substituto do bucket em desenvolvimento. Recebe os bytes da imagem com o token assinado do presign; chave, tipo e tamanho vêm do token, com os mesmos limites de um PUT assinado no R2. Não é registrada com UPLOAD_STORAGE_TYPE=r2.",
           hide: true,
         },
       },

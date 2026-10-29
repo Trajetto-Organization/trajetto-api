@@ -1,6 +1,4 @@
-import { FastifyRequest } from "fastify";
-
-import { AppError } from "@/shared/errors/AppError";
+import { clientRateLimitKey, rateLimitExceeded } from "@/config/rate-limit";
 import { RateLimitOptions } from "@fastify/rate-limit";
 
 export interface RateLimiterOptions extends RateLimitOptions {
@@ -10,30 +8,18 @@ export interface RateLimiterOptions extends RateLimitOptions {
 }
 
 const getRateLimiterConfig = (options?: RateLimiterOptions) => {
+  // Same key and same refusal as the global limiter — see config/rate-limit —
+  // unless the route has a better notion of "who" than the address.
   return {
     // Defines the maximum number of requests; default 20 if not informed
     max: options?.max ?? 20,
     // Sets the time window in milliseconds; default 1 minute if not informed
     timeWindow: options?.timeWindow ?? 60 * 1000,
-    // Do not skip any requests
-    skip: (request: FastifyRequest) => false,
-    // Generates the unique key for the client based on IP
-    keyGenerator: (request: any) => {
-      const clientIP =
-        request.headers["cf-connecting-ip"] ||
-        request.headers["x-real-ip"] ||
-        request.headers["x-forwarded-for"] ||
-        request.socket.remoteAddress;
-      return clientIP || "";
-    },
-    // Configures the error response if the limit is exceeded
-    errorResponseBuilder: (request: FastifyRequest, context: any) => {
-      throw new AppError(
-        options?.message ??
-          "Muitas solicitações vindas deste IP! Por favor, tente novamente mais tarde.",
-        429,
-      );
-    },
+    keyGenerator: options?.keyGenerator ?? clientRateLimitKey,
+    // A key read from the BODY needs the body parsed: the default hook,
+    // onRequest, runs before that.
+    ...(options?.hook ? { hook: options.hook } : {}),
+    errorResponseBuilder: () => rateLimitExceeded(options?.message),
     // Add rate limiting headers
     addHeaders: {
       "x-ratelimit-limit": true,

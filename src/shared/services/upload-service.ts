@@ -1,280 +1,382 @@
 import { injectable } from "tsyringe";
-import sharp from "sharp";
 
-// AWS SDK v3 (modular). O v2 (`aws-sdk`) empacotava o cliente de TODOS os
-// servicos da AWS para usarmos dois metodos de S3, e esta em maintenance mode
-// desde 2024 — so recebe correcao critica.
+// AWS SDK v3, modular: only the S3 client is bundled.
 import {
   DeleteObjectCommand,
   GetObjectCommand,
   HeadObjectCommand,
+  ListObjectsV2Command,
   PutObjectCommand,
-  PutObjectCommandInput,
   S3Client,
 } from "@aws-sdk/client-s3";
 
-import { Upload } from "@aws-sdk/lib-storage";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 
 import fs from "node:fs";
 import path from "node:path";
 
-import { Readable } from "node:stream";
-import pump from "pump";
-
-import { uploadConfig, UploadType } from "@/config/upload";
+import { uploadConfig, UploadType, UPLOAD_TYPES } from "@/config/upload";
 import { v4 as uuid } from "uuid";
 
+import { getRequestContext } from "@/shared/http/request-context";
 import { env } from "@/env";
 
 import { AppError } from "@/shared/errors/AppError";
+import { logger } from "@/shared/logging/logger";
 import { signLocalUploadToken } from "@/shared/services/local-upload-token";
 
-export interface UploadResult {
-  filename: string;
-  path: string;
-  size: number;
-  mimeType: string;
-  url?: string;
+const log = logger.child({ component: "upload-service" });
+
+/**
+ * Whether storage answered "that object is not here", as opposed to not
+ * answering at all.
+ *
+ * The difference decides whether a driver keeps their proof of delivery. A
+ * missing object is final: the presigned PUT never completed, and asking again
+ * in five minutes returns the same nothing. A bucket that is timing out, a DNS
+ * failure, a 500 from R2 — those are storage being unavailable for a while,
+ * and the object is very likely sitting there intact.
+ *
+ * Collapsing both into a 400 is what the blind `catch` here used to do, and it
+ * is not a cosmetic mistake. The mobile outbox classifies a non-transient 4xx
+ * as `permanent`, marks the submission `failed` and stops retrying it: a
+ * fifteen-second R2 blip would discard a signed receipt the driver cannot
+ * produce again, because the customer has long since walked away.
+ *
+ * Read narrowly on purpose — only an explicit 404, or the SDK's own not-found
+ * error names, count as missing. Anything unrecognised is treated as an
+ * outage, because being wrong in that direction costs one retry and being
+ * wrong in the other costs the proof.
+ */
+function isObjectMissing(error: unknown): boolean {
+  if (typeof error !== "object" || error === null) return false;
+
+  const candidate = error as {
+    name?: string;
+    $metadata?: { httpStatusCode?: number };
+  };
+
+  if (candidate.$metadata?.httpStatusCode === 404) return true;
+
+  // `HeadObject` reports a missing key as `NotFound`; `GetObject` as
+  // `NoSuchKey`. Both carry the 404 above when the response was parsed, but
+  // not when the SDK short-circuits.
+  return candidate.name === "NotFound" || candidate.name === "NoSuchKey";
 }
 
-export interface UploadFileOptions {
-  buffer: Buffer;
-  filename: string;
-  mimetype: string;
-  uploadType: UploadType;
+/**
+ * The signing instant of a read URL: the start of the current half-TTL window.
+ *
+ * Signed with the real clock, every `/user/me` handed out a different avatar
+ * URL. The web re-reads the profile after unrelated changes (2FA, password),
+ * the new `src` made the avatar component drop the loaded image, and the
+ * initials flashed until the same photo downloaded again under a URL the
+ * browser had never cached. Within one window the URL is now identical, so the
+ * browser keeps the image it already has.
+ *
+ * `expiresIn` stays the configured TTL, counted from this instant: a URL never
+ * lives longer than before, and the one handed out has at least half the TTL
+ * left.
+ */
+function stableSigningDate(ttlSeconds: number, now = Date.now()): Date {
+  const windowMs = (ttlSeconds * 1000) / 2;
+
+  return new Date(Math.floor(now / windowMs) * windowMs);
 }
 
-export interface UploadStreamOptions {
-  stream: NodeJS.ReadableStream;
-  filename: string;
-  mimetype: string;
-  uploadType: UploadType;
-  fileSize?: number;
+/** The same question of the filesystem, for local-storage development. */
+function isLocalFileMissing(error: unknown): boolean {
+  if (typeof error !== "object" || error === null) return false;
+
+  return (error as { code?: string }).code === "ENOENT";
+}
+
+/** Final: the object is not there and will not appear. */
+const uploadedObjectNotFound = (): AppError =>
+  new AppError(
+    "Arquivo enviado não foi encontrado no armazenamento.",
+    400,
+    "UPLOADED_FILE_NOT_FOUND",
+  );
+
+/**
+ * Temporary: storage did not answer.
+ *
+ * 503 rather than 500 because it says "come back", and every client already
+ * reads it that way — the mobile outbox retries any status at or above 500,
+ * so a submission that hits this keeps its place in the queue.
+ */
+const storageUnavailable = (): AppError =>
+  new AppError(
+    "O armazenamento de arquivos está indisponível no momento. Tente novamente em instantes.",
+    503,
+    "STORAGE_UNAVAILABLE",
+  );
+
+/**
+ * The file extension each accepted content type lands under.
+ *
+ * A table rather than a ladder, and every allowed type is in it. The ladder
+ * this replaced ended in `: "jpg"`, so every voice note was stored as a .jpg —
+ * the signed url played anyway, but the key lied to storage, to any CDN
+ * sniffing by extension, and to the mobile cache, which takes a note's file
+ * extension from that path. Nothing here re-encodes bytes: the extension has
+ * to follow the content type that was signed, which is what the comment on
+ * `generatePresignedKey` always claimed.
+ *
+ * `bin` for anything unlisted, which the mime allow-list should have refused
+ * long before here — an unknown type is not a jpeg.
+ */
+const EXTENSION_BY_CONTENT_TYPE: Record<string, string> = {
+  "image/jpeg": "jpg",
+  "image/jpg": "jpg",
+  "image/png": "png",
+  "image/webp": "webp",
+  "audio/m4a": "m4a",
+  "audio/x-m4a": "m4a",
+  "audio/mp4": "m4a",
+  "audio/aac": "aac",
+};
+
+/**
+ * Per-attempt bounds of the R2 client.
+ *
+ * The client used to be built with none, and in @smithy/node-http-handler
+ * 4.x every timeout defaults to 0 — "wait forever". An R2 that accepted the
+ * connection and never answered held the HeadObject of an upload
+ * confirmation, and the HTTP request around it, for as long as the socket
+ * lived.
+ *
+ * `requestTimeout` alone is not a bound: in this handler it only logs a
+ * warning unless `throwOnRequestTimeout` is set (dist-cjs setRequestTimeout),
+ * which is why it is set below. `socketTimeout` covers a body that stalls
+ * after the headers arrived.
+ */
+const R2_CLIENT_TIMEOUTS = {
+  /** TCP and TLS handshake. */
+  connectionTimeoutMs: 5_000,
+
+  /** From the request's start to the response headers, per attempt. */
+  requestTimeoutMs: 15_000,
+
+  /** Silence in either direction, per attempt (a body that stopped). */
+  socketTimeoutMs: 15_000,
+
+  /**
+   * The SDK default, written down so it is a decision: one try and two
+   * retries on a timeout, a 5xx or throttling. The deadlines below cap the
+   * total, retries included.
+   */
+  maxAttempts: 3,
+};
+
+type R2ClientTimeouts = typeof R2_CLIENT_TIMEOUTS;
+
+/**
+ * Whole-operation deadlines, every attempt and the body included, passed as
+ * an AbortSignal: the per-attempt bounds above multiply by the attempts, and
+ * a slow trickle of bytes never trips an idle timeout.
+ */
+const R2_DEADLINES_MS = {
+  /** HeadObject on the request path: confirming each presigned upload. */
+  head: 10_000,
+
+  /** A body in or out: the proof PDF, the photos embedded into it. */
+  transfer: 30_000,
+
+  /** Deletes and listings, from cleanups and the orphan collector. */
+  housekeeping: 30_000,
+};
+
+type R2Deadlines = typeof R2_DEADLINES_MS;
+
+/**
+ * The R2 client with its bounds. Presigning is unaffected: getSignedUrl signs
+ * locally with the credentials and the endpoint, and never touches the
+ * request handler.
+ */
+function createR2Client(
+  r2: {
+    accessKeyId: string;
+    secretAccessKey: string;
+    endpoint?: string;
+    forcePathStyle?: boolean;
+  },
+  timeouts: R2ClientTimeouts = R2_CLIENT_TIMEOUTS,
+): S3Client {
+  return new S3Client({
+    credentials: {
+      accessKeyId: r2.accessKeyId,
+      secretAccessKey: r2.secretAccessKey,
+    },
+    endpoint: r2.endpoint,
+    forcePathStyle: r2.forcePathStyle,
+    region: "auto",
+    maxAttempts: timeouts.maxAttempts,
+    requestHandler: {
+      connectionTimeout: timeouts.connectionTimeoutMs,
+      requestTimeout: timeouts.requestTimeoutMs,
+      throwOnRequestTimeout: true,
+      socketTimeout: timeouts.socketTimeoutMs,
+    },
+  });
 }
 
 @injectable()
 class UploadService {
   private s3?: S3Client;
 
+  /** Instance-level so a test can shorten them; production uses the table. */
+  private deadlines: R2Deadlines = R2_DEADLINES_MS;
+
   constructor() {
     if (uploadConfig.storage.type === "r2") {
-      this.s3 = new S3Client({
-        credentials: {
-          accessKeyId: uploadConfig.r2.accessKeyId,
-          secretAccessKey: uploadConfig.r2.secretAccessKey,
-        },
-        endpoint: `https://${uploadConfig.r2.accountId}.r2.cloudflarestorage.com`,
-        region: "auto",
-      });
+      this.s3 = createR2Client(uploadConfig.r2);
     }
   }
 
-  private validateFile(
-    buffer: Buffer,
-    mimetype: string,
-    uploadType: UploadType,
-  ): void {
-    // Validate MIME type
-    if (!uploadConfig.allowedMimeTypes.images.includes(mimetype)) {
-      throw new AppError(
-        "Tipo de arquivo não suportado. Use apenas JPEG, PNG ou WebP.",
-        400,
-      );
-    }
-
-    // Validate file size using function
-    const maxSize = uploadConfig.getSizeLimit(uploadType);
-    if (buffer.length > maxSize) {
-      const maxSizeMB = maxSize / (1024 * 1024);
-      throw new AppError(
-        `Arquivo muito grande. Tamanho máximo permitido: ${maxSizeMB}MB`,
-        400,
-      );
-    }
+  /** One deadline over the whole call (see R2_DEADLINES_MS). */
+  private within(operation: keyof R2Deadlines): { abortSignal: AbortSignal } {
+    return { abortSignal: AbortSignal.timeout(this.deadlines[operation]) };
   }
 
-  private async processImage(
-    buffer: Buffer,
-    uploadType: UploadType,
-  ): Promise<Buffer> {
-    const config = uploadConfig.resize[uploadType];
-
-    // `rotate()` applies EXIF orientation before resize. Sharp strips metadata
-    // by default, which prevents GPS/device EXIF from leaking to clients.
-    let sharpInstance = sharp(buffer, {
-      limitInputPixels: 40_000_000,
-      failOn: "warning",
-    })
-      .rotate()
-      .resize(config.width, config.height, {
-        fit: config.fit,
-        withoutEnlargement: config.withoutEnlargement,
-      });
-
-    // Convert to WebP for better compression while maintaining quality
-    sharpInstance = sharpInstance.webp({
-      quality: uploadConfig.quality.webp,
-    });
-
-    return await sharpInstance.toBuffer();
-  }
-
-  private generateFilename(
-    originalFilename: string,
-    uploadType: UploadType,
-  ): string {
-    const timestamp = Date.now();
-    const randomId = uuid().substring(0, 8);
-
-    // Clean original filename: remove extension, sanitize, and limit length
-    const cleanName = originalFilename
-      .replace(/\.[^/.]+$/, "") // Remove extension
-      .replace(/[^a-zA-Z0-9-_]/g, "-") // Replace special chars with dash
-      .replace(/-+/g, "-") // Replace multiple dashes with single dash
-      .replace(/^-|-$/g, "") // Remove leading/trailing dashes
-      .toLowerCase()
-      .substring(0, 35); // Limit to 35 characters (increased to accommodate vehicle checklist field names)
-
-    // Always save as .webp for processed images
-    const processedExtension = ".webp";
-    return `${uploadType}/${timestamp}-${cleanName}-${randomId}${processedExtension}`;
-  }
-
-  private async ensureDirectoryExists(dirPath: string): Promise<void> {
-    try {
-      await fs.promises.access(dirPath);
-    } catch {
-      await fs.promises.mkdir(dirPath, { recursive: true });
-    }
-  }
-
-  private async uploadToLocal(
-    processedBuffer: Buffer,
-    filename: string,
-  ): Promise<UploadResult> {
-    const fullPath = path.join(uploadConfig.storage.localPath, filename);
-    const dirPath = path.dirname(fullPath);
-
-    await this.ensureDirectoryExists(dirPath);
-
-    // Use streaming for better performance with large files
-    const readableStream = Readable.from(processedBuffer);
-    const writeStream = fs.createWriteStream(fullPath);
-
-    return new Promise((resolve, reject) => {
-      pump(readableStream, writeStream, (error) => {
-        if (error) {
-          reject(new AppError("Erro ao salvar arquivo localmente", 500));
-        } else {
-          resolve({
-            filename: path.basename(filename),
-            path: filename,
-            size: processedBuffer.length,
-            mimeType: "image/webp",
-          });
-        }
-      });
-    });
-  }
-
-  private async uploadToR2(
-    processedBuffer: Buffer,
-    filename: string,
-  ): Promise<UploadResult> {
-    if (!this.s3) {
-      throw new AppError("R2 não foi configurado corretamente", 500);
-    }
-
-    // Use streaming for R2 upload for better memory management
-    const readableStream = Readable.from(processedBuffer);
-
-    const uploadParams: PutObjectCommandInput = {
-      Bucket: uploadConfig.r2.bucket,
-      Key: filename,
-      Body: readableStream,
-      ContentType: "image/webp",
-      Metadata: {
-        "uploaded-at": new Date().toISOString(),
-      },
-    };
+  /**
+   * Removes an object, and answers whether it is gone.
+   *
+   * Never throws: every caller is cleaning up after something else, and a
+   * cleanup that fails must not fail the operation it follows. But a failure
+   * is no longer silent — it is logged WITH the key, and the caller gets
+   * `false` — because a delete that failed quietly is an orphan nobody can
+   * find (R2 refuses deletes under a bucket lock, for one).
+   *
+   * `true` also when the object was already absent: the question the caller
+   * asks is whether it is gone, not whether this call removed it.
+   */
+  async tryDeleteFile(filePath: string): Promise<boolean> {
+    let normalizedFilePath = filePath;
 
     try {
-      // `Upload` do lib-storage e o equivalente ao `.upload()` do v2: aceita
-      // stream e cuida do multipart quando necessario.
-      await new Upload({ client: this.s3, params: uploadParams }).done();
+      normalizedFilePath = this.extractFilePath(filePath);
 
-      return {
-        filename: path.basename(filename),
-        path: filename,
-        size: processedBuffer.length,
-        mimeType: "image/webp",
-        url: await this.getFileUrl(filename),
-      };
-    } catch (error) {
-      console.error("Erro ao fazer upload para R2:", error);
-      throw new AppError("Erro no upload do arquivo", 500);
-    }
-  }
-
-  async uploadFile(options: UploadFileOptions): Promise<UploadResult> {
-    const { buffer, filename, mimetype, uploadType } = options;
-
-    try {
-      // Validate file
-      this.validateFile(buffer, mimetype, uploadType);
-
-      // Process image with Sharp
-      const processedBuffer = await this.processImage(buffer, uploadType);
-
-      // Generate filename
-      const generatedFilename = this.generateFilename(filename, uploadType);
-
-      // Upload based on storage type
-      if (uploadConfig.storage.type === "r2") {
-        return await this.uploadToR2(processedBuffer, generatedFilename);
-      } else {
-        return await this.uploadToLocal(processedBuffer, generatedFilename);
-      }
-    } catch (error) {
-      if (error instanceof AppError) {
-        throw error;
-      }
-      console.error("Erro no serviço de upload:", error);
-      throw new AppError("Erro interno no upload do arquivo", 500);
-    }
-  }
-
-  async deleteFile(filePath: string): Promise<void> {
-    try {
-      const normalizedFilePath = this.extractFilePath(filePath);
       if (uploadConfig.storage.type === "r2") {
         if (!this.s3) {
           throw new AppError("R2 não foi configurado corretamente", 500);
         }
 
+        // S3 semantics: deleting a missing key succeeds, so a success here
+        // covers "already gone" too.
         await this.s3.send(
           new DeleteObjectCommand({
             Bucket: uploadConfig.r2.bucket,
             Key: normalizedFilePath,
           }),
+          this.within("housekeeping"),
         );
-      } else {
-        const fullPath = path.join(
-          uploadConfig.storage.localPath,
-          normalizedFilePath,
-        );
-        try {
-          await fs.promises.access(fullPath);
-          await fs.promises.unlink(fullPath);
-        } catch {
-          // File doesn't exist, ignore
-        }
+
+        return true;
       }
+
+      const fullPath = path.join(
+        uploadConfig.storage.localPath,
+        normalizedFilePath,
+      );
+
+      try {
+        await fs.promises.unlink(fullPath);
+      } catch (error) {
+        if (!isLocalFileMissing(error)) throw error;
+      }
+
+      return true;
     } catch (error) {
-      console.error("Erro ao deletar arquivo:", error);
-      // Don't throw error for file deletion failures
+      log.error(
+        {
+          key: normalizedFilePath,
+          error: error instanceof Error ? error.message : String(error),
+        },
+        "storage object could not be deleted",
+      );
+
+      return false;
     }
+  }
+
+  /**
+   * `tryDeleteFile` for callers that only clean up and do not branch on the
+   * outcome — every use case today. The failure is still logged with its key.
+   */
+  async deleteFile(filePath: string): Promise<void> {
+    await this.tryDeleteFile(filePath);
+  }
+
+  /**
+   * One page of the keys under `prefix`, in storage's own (lexicographic)
+   * order, strictly after `startAfter`.
+   *
+   * For the orphan collector (orphan-uploads.ts), which asks for the narrow
+   * slice of a namespace whose keys fall in its time window: presigned keys
+   * start with their upload timestamp, so `startAfter` jumps straight there.
+   * Throws on a storage error — a listing that silently came back short
+   * would read as "no objects", which is the wrong thing to be sure of.
+   */
+  async listObjectKeys(
+    prefix: string,
+    startAfter?: string,
+    maxKeys = 1000,
+  ): Promise<string[]> {
+    if (uploadConfig.storage.type === "r2") {
+      if (!this.s3) {
+        throw new AppError("R2 não foi configurado corretamente", 500);
+      }
+
+      const page = await this.s3.send(
+        new ListObjectsV2Command({
+          Bucket: uploadConfig.r2.bucket,
+          Prefix: prefix,
+          StartAfter: startAfter,
+          MaxKeys: maxKeys,
+        }),
+        this.within("housekeeping"),
+      );
+
+      return (page.Contents ?? [])
+        .map((object) => object.Key)
+        .filter((key): key is string => Boolean(key));
+    }
+
+    // Local storage: the same answer from the filesystem. Only whole
+    // directory prefixes are meaningful here, which is all the collector
+    // asks for.
+    const root = uploadConfig.storage.localPath;
+    const keys: string[] = [];
+
+    const walk = async (directory: string): Promise<void> => {
+      let entries: fs.Dirent[];
+
+      try {
+        entries = await fs.promises.readdir(path.join(root, directory), {
+          withFileTypes: true,
+        });
+      } catch (error) {
+        if (isLocalFileMissing(error)) return;
+        throw error;
+      }
+
+      for (const entry of entries) {
+        const key = `${directory}${entry.name}`;
+
+        if (entry.isDirectory()) await walk(`${key}/`);
+        else keys.push(key);
+      }
+    };
+
+    await walk(prefix.endsWith("/") ? prefix : `${prefix}/`);
+
+    return keys
+      .filter((key) => key.startsWith(prefix))
+      .filter((key) => startAfter === undefined || key > startAfter)
+      .sort()
+      .slice(0, maxKeys);
   }
 
   extractFilePath(filePathOrUrl: string): string {
@@ -282,11 +384,11 @@ class UploadService {
       const candidate = /^https?:\/\//i.test(filePathOrUrl)
         ? decodeURIComponent(new URL(filePathOrUrl).pathname)
         : decodeURIComponent(filePathOrUrl.split("?")[0]);
-      const uploadPrefix = [
-        "odometerPhotos/",
-        "checklistPhotos/",
-        "avatars/",
-      ].find((prefix) => candidate.includes(prefix));
+      // Derived from the config's one list — a hand-written copy here is
+      // exactly how deliveryPhotos got refused with INVALID_FILE_PATH.
+      const uploadPrefix = UPLOAD_TYPES.map((type) => `${type}/`).find(
+        (prefix) => candidate.includes(prefix),
+      );
 
       if (!uploadPrefix) {
         throw new Error("Unknown upload path");
@@ -330,7 +432,12 @@ class UploadService {
    *   - `ContentType` and `ContentLength` go into the signature, which makes
    *     them signed headers. R2 rejects a PUT whose type or byte count does
    *     not match exactly — so the size limit is enforced by the bucket, not
-   *     by trust.
+   *     by trust. The type is signed only because `signableHeaders` below
+   *     overrides the presigner's default of leaving it out.
+   *   - Neither says anything about the BYTES: a PUT may still carry HTML
+   *     under `image/jpeg`. That object is served only from the bucket's own
+   *     origin under an allow-listed image/audio type, never from the app's
+   *     origin, so it cannot run as a page there.
    *   - The URL is short lived, on its own TTL rather than the read one.
    *
    * The caller must still confirm with `headUploadedObject` before persisting
@@ -347,15 +454,31 @@ class UploadService {
     // useless on a phone, where localhost is the phone.
     publicBaseUrl?: string,
   ): Promise<{ key: string; uploadUrl: string; expiresIn: number }> {
-    if (!uploadConfig.allowedMimeTypes.images.includes(file.contentType)) {
+    // A namespace the server owns is never signed for a client. A receipt PDF
+    // is written by `putObject` and by nothing else; handing out a PUT into
+    // that prefix would let somebody drop their own bytes onto a proof's key.
+    // The verification page would catch it and report that the file no longer
+    // matches its hash — which is the right answer to the wrong question. The
+    // right answer is that the write must not be possible.
+    if (uploadConfig.serverOnlyUploadTypes.includes(uploadType)) {
       throw new AppError(
-        "Tipo de arquivo não suportado. Use apenas JPEG, JPG, PNG ou WebP.",
+        "Este tipo de arquivo é gerado pelo sistema e não aceita envio.",
+        403,
+        "SERVER_ONLY_UPLOAD_TYPE",
+      );
+    }
+
+    if (
+      !uploadConfig.getAllowedMimeTypes(uploadType).includes(file.contentType)
+    ) {
+      throw new AppError(
+        "Tipo de arquivo não suportado para este envio.",
         400,
         "UNSUPPORTED_FILE_TYPE",
       );
     }
 
-    const maxSize = uploadConfig.getSizeLimit(uploadType);
+    const maxSize = uploadConfig.getSizeLimit(uploadType, file.contentType);
 
     if (file.size <= 0 || file.size > maxSize) {
       throw new AppError(
@@ -413,7 +536,18 @@ class UploadService {
         ContentType: file.contentType,
         ContentLength: file.size,
       }),
-      { expiresIn: uploadConfig.presignedUploadTtlSeconds },
+      {
+        expiresIn: uploadConfig.presignedUploadTtlSeconds,
+
+        // The S3 presigner puts `content-type` in its unsignable set on every
+        // presign, so without this the URL signs only `content-length;host`
+        // and R2 stores whatever type the PUT declares. Listing it here
+        // overrides that: the type becomes a signed header, and a PUT whose
+        // Content-Type differs from the authorised one fails the signature —
+        // the same rule the local upload token already enforces in dev.
+        // The web and the app already send the presigned type verbatim.
+        signableHeaders: new Set(["content-type"]),
+      },
     );
 
     return {
@@ -436,16 +570,16 @@ class UploadService {
    *      authorises an upload; it does not prove one happened, and a client is
    *      free to skip the PUT and post the key anyway.
    *
-   * Together these re-establish what parsing the multipart used to guarantee
-   * implicitly, now that the bytes never reach the API.
+   * Together these are the whole guarantee: the bytes never reach the API, so
+   * this is the only place where what landed in storage is checked at all.
    */
   async resolvePresignedUploads(
     photos: { key: string; fieldName?: string }[],
     uploadType: UploadType,
     scopeId: string,
 
-    // Ceiling for the batch as a whole. The multipart path enforced this while
-    // draining the stream; here the only place that knows every real byte count
+    // Ceiling for the batch as a whole, on top of the per-file limit that
+    // storage itself enforces. The only place that knows every real byte count
     // is this loop, after storage has been asked how big each object actually
     // is. Left undefined for uploads that only ever carry one file.
     maxTotalBytes?: number,
@@ -497,9 +631,9 @@ class UploadService {
    * Reads back what actually landed in the bucket.
    *
    * With a direct upload the API never sees the bytes, so this is where the
-   * guarantee that used to come from parsing the multipart is restored: the
-   * object must exist, be within the limit for its type, and carry an image
-   * content type. Called before a key is written to the database.
+   * object is held to the rules at all: it must exist, be within the limit for
+   * its type, and carry an image content type. Called before a key is written
+   * to the database.
    */
   async headUploadedObject(
     key: string,
@@ -515,12 +649,13 @@ class UploadService {
 
       try {
         stats = await fs.promises.stat(fullPath);
-      } catch {
-        throw new AppError(
-          "Arquivo enviado não foi encontrado no armazenamento.",
-          400,
-          "UPLOADED_FILE_NOT_FOUND",
-        );
+      } catch (error) {
+        // ENOENT is the file not being there. EACCES, EIO, ENFILE and the
+        // rest are the machine having a problem, which says nothing about
+        // whether the upload succeeded.
+        throw isLocalFileMissing(error)
+          ? uploadedObjectNotFound()
+          : storageUnavailable();
       }
 
       this.assertUploadedObjectWithinLimits(
@@ -543,13 +678,15 @@ class UploadService {
           Bucket: uploadConfig.r2.bucket,
           Key: key,
         }),
+        // On the request path: storage that does not answer becomes a 503 in
+        // seconds instead of a request held open. An abort carries no 404,
+        // so it lands on storageUnavailable below.
+        this.within("head"),
       );
-    } catch {
-      throw new AppError(
-        "Arquivo enviado não foi encontrado no armazenamento.",
-        400,
-        "UPLOADED_FILE_NOT_FOUND",
-      );
+    } catch (error) {
+      throw isObjectMissing(error)
+        ? uploadedObjectNotFound()
+        : storageUnavailable();
     }
 
     const size = head.ContentLength ?? 0;
@@ -565,7 +702,7 @@ class UploadService {
     contentType: string,
     uploadType: UploadType,
   ): void {
-    if (!uploadConfig.allowedMimeTypes.images.includes(contentType)) {
+    if (!uploadConfig.getAllowedMimeTypes(uploadType).includes(contentType)) {
       throw new AppError(
         "Tipo de arquivo não suportado.",
         400,
@@ -573,7 +710,10 @@ class UploadService {
       );
     }
 
-    if (size <= 0 || size > uploadConfig.getSizeLimit(uploadType)) {
+    if (
+      size <= 0 ||
+      size > uploadConfig.getSizeLimit(uploadType, contentType)
+    ) {
       throw new AppError(
         "Arquivo enviado excede o limite permitido.",
         400,
@@ -597,9 +737,10 @@ class UploadService {
   }
 
   /**
-   * Same shape as `generateFilename`, plus the tenant segment and the real
-   * extension — the client uploads the bytes as they are, so the stored
-   * extension has to match what was actually sent instead of always `.webp`.
+   * Where an upload is allowed to land: the type, then the owner, then a name
+   * that cannot collide. The extension follows the signed content type, since
+   * the client uploads the bytes as they are and nothing re-encodes them on
+   * the way in.
    */
   private generatePresignedKey(
     originalFilename: string,
@@ -618,16 +759,156 @@ class UploadService {
       .toLowerCase()
       .substring(0, 35);
 
-    const extension =
-      contentType === "image/png"
-        ? "png"
-        : contentType === "image/webp"
-          ? "webp"
-          : "jpg";
+    const extension = EXTENSION_BY_CONTENT_TYPE[contentType] ?? "bin";
 
     return `${uploadType}/${scopeId}/${timestamp}-${cleanName || "file"}-${randomId}.${extension}`;
   }
 
+  /**
+   * Writes bytes the SERVER produced, rather than signing a URL for a client
+   * to write through.
+   *
+   * Every upload until now came from a phone or a browser: the API signed a
+   * PUT and never touched the bytes, which is what keeps a Node process out of
+   * the path of a hundred-megabyte video. A generated PDF is the opposite
+   * case — the bytes only exist here, and there is nobody to hand a signature
+   * to.
+   *
+   * The key is given by the caller and not generated, because a proof document
+   * has to be addressable from its delivery: a random key would mean two
+   * concurrent first-readers producing two objects, one of them orphaned in
+   * the bucket forever with nothing pointing at it.
+   */
+  async putObject(
+    key: string,
+    body: Buffer,
+    contentType: string,
+  ): Promise<void> {
+    const normalizedKey = this.extractFilePath(key);
+
+    if (uploadConfig.storage.type === "r2") {
+      if (!this.s3) {
+        throw new AppError("R2 não foi configurado corretamente", 500);
+      }
+
+      try {
+        await this.s3.send(
+          new PutObjectCommand({
+            Bucket: uploadConfig.r2.bucket,
+            Key: normalizedKey,
+            Body: body,
+            ContentType: contentType,
+          }),
+          this.within("transfer"),
+        );
+      } catch (error) {
+        // The deadline's AbortError, a timeout, a 5xx: the same 503 (with
+        // Retry-After) the read and the confirmation answer, instead of a
+        // bare 500 "Internal server error" logged as a bug.
+        log.warn(
+          {
+            key: normalizedKey,
+            error: error instanceof Error ? error.name : String(error),
+          },
+          "storage object could not be written",
+        );
+
+        throw storageUnavailable();
+      }
+
+      return;
+    }
+
+    const fullPath = path.join(uploadConfig.storage.localPath, normalizedKey);
+
+    await fs.promises.mkdir(path.dirname(fullPath), { recursive: true });
+    await fs.promises.writeFile(fullPath, body);
+  }
+
+  /**
+   * Reads an object back into memory.
+   *
+   * Needed to EMBED a stored photo into a generated document: the receipt
+   * picture lives in the bucket and has to end up inside the PDF, and a signed
+   * URL is no use to a renderer that needs the bytes.
+   *
+   * Returns null when the object is gone rather than throwing. A proof whose
+   * photo was purged is still a proof — the document says the photo is
+   * missing, which is a true and useful thing to print, and refusing to build
+   * the whole document over it would leave the customer with nothing.
+   *
+   * Only when it is GONE. Storage that did not answer (a timeout, a 5xx)
+   * throws STORAGE_UNAVAILABLE (503), for the reason isObjectMissing gives:
+   * read as null, a slow R2 printed "photo missing" into a proof PDF that is
+   * then stored for good, and made /verificar answer `intact: false` (the
+   * page's "Arquivo indisponível") for a document sitting whole in the
+   * bucket. A 503 is retried; a stored PDF cannot be taken back.
+   */
+  async readObject(key: string): Promise<Buffer | null> {
+    const normalizedKey = this.extractFilePath(key);
+
+    if (uploadConfig.storage.type === "r2") {
+      if (!this.s3) {
+        throw new AppError("R2 não foi configurado corretamente", 500);
+      }
+
+      try {
+        const result = await this.s3.send(
+          new GetObjectCommand({
+            Bucket: uploadConfig.r2.bucket,
+            Key: normalizedKey,
+          }),
+          // Also bounds the body read below: the abort destroys the request
+          // the body streams from.
+          this.within("transfer"),
+        );
+
+        const body = result.Body as
+          | { transformToByteArray?: () => Promise<Uint8Array> }
+          | undefined;
+
+        if (!body?.transformToByteArray) return null;
+
+        return Buffer.from(await body.transformToByteArray());
+      } catch (error) {
+        if (isObjectMissing(error)) return null;
+
+        log.warn(
+          {
+            key: normalizedKey,
+            error: error instanceof Error ? error.name : String(error),
+          },
+          "storage object could not be read",
+        );
+
+        throw storageUnavailable();
+      }
+    }
+
+    try {
+      return await fs.promises.readFile(
+        path.join(uploadConfig.storage.localPath, normalizedKey),
+      );
+    } catch (error) {
+      if (isLocalFileMissing(error)) return null;
+
+      throw storageUnavailable();
+    }
+  }
+
+  /**
+   * A short-lived read URL for a key a row already holds.
+   *
+   * The object is served with the Content-Type it was stored under, and the
+   * GET deliberately does not re-declare one. Every key that reaches a row
+   * went through `headUploadedObject`'s allow-list (images, the chat's audio,
+   * and server-written PDFs), and since the presigned PUT signs Content-Type
+   * a client can no longer re-PUT the same key under another type within the
+   * URL's lifetime. Forcing `ResponseContentType` from the key's extension
+   * would be wrong: voice notes were stored under `.jpg` keys before the
+   * extension table existed, and re-typing them as images breaks playback.
+   * The URL is on the bucket's own origin, never the app's.
+   */
   async getFileUrl(filePath: string): Promise<string> {
     const normalizedFilePath = this.extractFilePath(filePath);
 
@@ -644,170 +925,32 @@ class UploadService {
           Bucket: uploadConfig.r2.bucket,
           Key: normalizedFilePath,
         }),
-        { expiresIn: uploadConfig.signedUrlTtlSeconds },
+        {
+          expiresIn: uploadConfig.signedUrlTtlSeconds,
+          signingDate: stableSigningDate(uploadConfig.signedUrlTtlSeconds),
+        },
       );
     } else {
-      // For local development, construct full URL to API server
-      const baseUrl = env.API_HTTP_REQUEST || `http://localhost:${env.PORT}`;
+      // Same rule as the upload side: the caller's own host wins.
+      //
+      // `API_HTTP_REQUEST` is a single value, and there is no single right
+      // answer — the browser on the dev machine reaches this API at
+      // `localhost`, the phone reaches it at the LAN address, and each needs
+      // the URL on the host it can actually resolve. Answering `localhost` to
+      // a phone points it at itself, which is why every chat photo, avatar
+      // and voice note loaded forever and then failed there.
+      //
+      // The context is only populated outside production (see the onRequest
+      // hook in http.ts); in production this branch does not run at all,
+      // because R2 signs its own URLs above.
+      const baseUrl =
+        getRequestContext()?.publicBaseUrl ||
+        env.API_HTTP_REQUEST ||
+        `http://localhost:${env.PORT}`;
+
       return `${baseUrl}/tmp/${normalizedFilePath}`;
     }
   }
-
-  // Method for streaming upload directly from request without loading all in memory
-  async uploadFromStream(options: UploadStreamOptions): Promise<UploadResult> {
-    const { stream, filename, mimetype, uploadType, fileSize } = options;
-
-    try {
-      // Validate MIME type
-      if (!uploadConfig.allowedMimeTypes.images.includes(mimetype)) {
-        throw new AppError(
-          "Tipo de arquivo não suportado. Use apenas JPEG, JPG, PNG ou WebP.",
-          400,
-        );
-      }
-
-      // Validate file size if provided
-      if (fileSize) {
-        const maxSize = uploadConfig.getSizeLimit(uploadType);
-        if (fileSize > maxSize) {
-          const maxSizeMB = maxSize / (1024 * 1024);
-          throw new AppError(
-            `Arquivo muito grande. Tamanho máximo permitido: ${maxSizeMB}MB`,
-            400,
-          );
-        }
-      }
-
-      // Generate filename
-      const generatedFilename = this.generateFilename(filename, uploadType);
-
-      // Create Sharp transform stream for processing
-      const sharpTransform = sharp({
-        limitInputPixels: 40_000_000,
-        failOn: "warning",
-      })
-        .rotate()
-        .resize(
-          uploadConfig.resize[uploadType].width,
-          uploadConfig.resize[uploadType].height,
-          {
-            fit: uploadConfig.resize[uploadType].fit,
-            withoutEnlargement:
-              uploadConfig.resize[uploadType].withoutEnlargement,
-          },
-        )
-        .webp({ quality: uploadConfig.quality.webp });
-
-      if (uploadConfig.storage.type === "r2") {
-        return await this.uploadStreamToR2(
-          stream,
-          sharpTransform,
-          generatedFilename,
-          fileSize,
-        );
-      } else {
-        return await this.uploadStreamToLocal(
-          stream,
-          sharpTransform,
-          generatedFilename,
-          fileSize,
-        );
-      }
-    } catch (error) {
-      if (error instanceof AppError) {
-        throw error;
-      }
-
-      console.error("Erro no serviço de upload via streaming:", error);
-      throw new AppError("Erro interno no upload do arquivo", 500);
-    }
-  }
-
-  private async uploadStreamToLocal(
-    inputStream: NodeJS.ReadableStream,
-    sharpTransform: sharp.Sharp,
-    filename: string,
-    fileSize?: number,
-  ): Promise<UploadResult> {
-    const fullPath = path.join(uploadConfig.storage.localPath, filename);
-    const dirPath = path.dirname(fullPath);
-
-    await this.ensureDirectoryExists(dirPath);
-    const writeStream = fs.createWriteStream(fullPath);
-
-    return new Promise((resolve, reject) => {
-      let processedSize = 0;
-
-      pump(inputStream, sharpTransform, writeStream, (error) => {
-        if (error) {
-          reject(
-            new AppError("Erro ao processar e salvar arquivo localmente", 500),
-          );
-        } else {
-          resolve({
-            filename: path.basename(filename),
-            path: filename,
-            size: processedSize || fileSize || 0,
-            mimeType: "image/webp",
-          });
-        }
-      });
-
-      // Track processed size
-      sharpTransform.on("data", (chunk) => {
-        processedSize += chunk.length;
-      });
-    });
-  }
-
-  private async uploadStreamToR2(
-    inputStream: NodeJS.ReadableStream,
-    sharpTransform: sharp.Sharp,
-    filename: string,
-    fileSize?: number,
-  ): Promise<UploadResult> {
-    if (!this.s3) {
-      throw new AppError("R2 não foi configurado corretamente", 500);
-    }
-
-    return new Promise((resolve, reject) => {
-      let processedSize = 0;
-
-      // Create pipeline: input -> sharp processing -> R2
-      const processedStream = inputStream.pipe(sharpTransform);
-
-      // Track processed size
-      processedStream.on("data", (chunk) => {
-        processedSize += chunk.length;
-      });
-
-      const uploadParams: PutObjectCommandInput = {
-        Bucket: uploadConfig.r2.bucket,
-        Key: filename,
-        Body: processedStream,
-        ContentType: "image/webp",
-        Metadata: {
-          "uploaded-at": new Date().toISOString(),
-        },
-      };
-
-      // O v3 nao tem a variante por callback: `Upload.done()` devolve Promise.
-      new Upload({ client: this.s3!, params: uploadParams })
-        .done()
-        .then(async () => {
-          resolve({
-            filename: path.basename(filename),
-            path: filename,
-            size: processedSize || fileSize || 0,
-            mimeType: "image/webp",
-            url: await this.getFileUrl(filename),
-          });
-        })
-        .catch(() => {
-          reject(new AppError("Erro no upload para R2", 500));
-        });
-    });
-  }
 }
 
-export { UploadService };
+export { R2_CLIENT_TIMEOUTS, R2_DEADLINES_MS, UploadService, createR2Client };

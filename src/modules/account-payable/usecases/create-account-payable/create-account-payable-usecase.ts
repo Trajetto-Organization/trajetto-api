@@ -1,4 +1,5 @@
 import { inject, injectable } from "tsyringe";
+import { assertTenantAccess } from "@/modules/middlewares/tenant-authorization";
 import { IAccountPayableRepository } from "@/modules/account-payable/repositories/IAccount-payable-repository";
 
 import { IBusinessRepository } from "@/modules/business/repositories/IBusiness-repository";
@@ -7,41 +8,35 @@ import { IBranchRepository } from "@/modules/branch/repositories/IBranch-reposit
 import { IServiceOrderRepository } from "@/modules/service-order/repositories/IService-order-repository";
 import { IUserRepository } from "@/modules/user/repositories/IUser-repository";
 
+import { ISupplierRepository } from "@/modules/supplier/repositories/ISupplier-repository";
+import { IVehicleRepository } from "@/modules/vehicle/repositories/IVehicle-repository";
+
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
 import { BusinessNotFoundError } from "@/modules/business/usecases/errors/business-not-found-error";
 
-import { BranchNotFoundError } from "@/modules/branch/usecases/errors/branch-not-found-error";
-import { BranchNotBelongBusinessError } from "@/modules/branch/usecases/errors/branch-not-belong-business-error";
-
-import { ServiceOrderNotBelongBusinessError } from "@/modules/service-order/usecases/errors/service-order-not-belong-business-error";
-
-import { ServiceOrderNotFoundError } from "@/modules/service-order/usecases/errors/service-order-not-found-error";
 import { AccountPayableInvalidAmountError } from "../errors/account-payable-invalid-amount-error";
 
-import { generateWhatsAppInstanceName } from "@/shared/utils/whatsapp-instance-name";
 import {
   AccountPayable,
   CreateAccountPayableProps,
 } from "../../dtos/account-payable-dto";
 
-import { formatCurrency } from "@/shared/utils/format-values";
-import { NotificationService } from "@/shared/services/notification-service";
-
-import { buildAccountPayableLink } from "@/shared/utils/link-redirect-page";
+import { OutboxService } from "@/shared/notifications/outbox-service";
 
 import { AppError } from "@/shared/errors/AppError";
-import { env } from "@/env";
+import { isUniqueViolation } from "@/shared/http/idempotency-key";
+import database from "@/../infra/database";
 
-interface AccountPayableNotificationTextProps {
-  serviceOrderId?: string;
-  accountPaybleId: string;
-  amount: string;
-}
+import { assertAccountPayableReferences } from "../account-payable-references";
+import { billDateFromInput } from "../../rules/account-payable-status";
+
+import { serviceOrderOverrunWarning } from "../../rules/service-order-overrun";
+
+/** The bill, plus what the person should look at (never a refusal). */
+type CreatedAccountPayable = AccountPayable & { warnings: string[] };
 
 @injectable()
 class CreateAccountPayableUseCase {
-  private http_request = env.HTTP_REQUEST;
-
   constructor(
     @inject("UserRepository")
     private user: IUserRepository,
@@ -53,101 +48,26 @@ class CreateAccountPayableUseCase {
     private serviceOrder: IServiceOrderRepository,
     @inject("AccountPayableRepository")
     private accountPayable: IAccountPayableRepository,
-    @inject("NotificationService")
-    private notificationService: NotificationService,
+    @inject("OutboxService")
+    private outbox: OutboxService,
+    @inject("SupplierRepository")
+    private supplier: ISupplierRepository,
+    @inject("VehicleRepository")
+    private vehicle: IVehicleRepository,
   ) {}
-
-  private buildAccountPayableNotificationText({
-    amount,
-    serviceOrderId,
-    accountPaybleId,
-  }: AccountPayableNotificationTextProps): string {
-    return [
-      `💰 *Nova Conta a Pagar! Você foi designado como responsável por uma nova conta a pagar*`,
-      `Valor: *${formatCurrency(Number(amount))}*`,
-      `Identificador da conta a pagar: *${accountPaybleId}*`,
-      serviceOrderId && `Identificador da ordem de serviço: *${serviceOrderId}`,
-      `Para mais detalhes, acesse o sistema.`,
-    ].join("\n");
-  }
-
-  private async processNotifications(
-    accountPayableCreated: AccountPayable,
-    accountPayableData: CreateAccountPayableProps,
-    userId: string,
-  ): Promise<void> {
-    try {
-      // Create activity for the user who created the account payable
-      const activityData = {
-        type: "Conta a pagar",
-        action: "create",
-        entityId: accountPayableCreated.id,
-        description: `Conta a pagar criada com sucesso, no valor de ${formatCurrency(Number(accountPayableCreated.amount))} | ID: ${accountPayableCreated.id}`,
-        status: "Completo",
-        performedBy: userId,
-        businessId: accountPayableData.businessId,
-      };
-
-      // Set the registration user to the current user if not provided
-      const registrationUserId = accountPayableData.registrationUserId;
-
-      // Check if the registration user exists
-      const findRegistrationUser =
-        await this.user.findUserById(registrationUserId);
-
-      if (findRegistrationUser) {
-        const notificationLink = buildAccountPayableLink({
-          baseUrl: this.http_request,
-          role: findRegistrationUser.role,
-          driverId: findRegistrationUser.driverId,
-          accountPayableId: accountPayableCreated.id,
-        });
-
-        const notificationData = {
-          userId: registrationUserId,
-          type: "account-payable",
-          title: "Nova Conta a Pagar",
-          message: `Você foi designado como responsável por uma nova conta a pagar ${accountPayableCreated.serviceOrderId ? `| ordem de serviço associada ${accountPayableCreated.serviceOrderId}` : ""}`,
-          entityId: accountPayableCreated.id,
-          link: notificationLink,
-          businessId: accountPayableData.businessId,
-          shouldSendEmail: true,
-          shouldSendWhatsApp: true,
-          whatsAppMessage: this.buildAccountPayableNotificationText({
-            amount: accountPayableCreated.amount as string,
-            serviceOrderId: accountPayableCreated.serviceOrderId as string,
-            accountPaybleId: accountPayableCreated.id,
-          }),
-          instanceName: generateWhatsAppInstanceName(
-            findRegistrationUser.email,
-            accountPayableData.businessId,
-          ),
-        };
-
-        // Process notification to assigned user (if different from creator)
-        await this.notificationService.processUserNotifications({
-          notification: notificationData,
-          activity: activityData,
-        });
-      } else {
-        // Fallback: Create activity even if registration user not found
-        await this.notificationService.createActivityIfEnabled(activityData);
-      }
-    } catch (error) {
-      console.error("[Contas a pagar] Erro ao processar notificações:", error);
-      // Does not prevent the creation of the account payable
-    }
-  }
 
   async execute(
     accountPayableData: CreateAccountPayableProps,
     userId: string,
-  ): Promise<AccountPayable> {
+  ): Promise<CreatedAccountPayable> {
     const findUser = await this.user.findUserById(userId);
 
     if (!findUser) {
       throw new ResourceNotFoundError();
     }
+
+    // Defense in depth: the route guard must not be the only wall between tenants.
+    assertTenantAccess(findUser, accountPayableData.businessId);
 
     const findBusiness = await this.business.findBusinessById(
       accountPayableData.businessId,
@@ -157,33 +77,31 @@ class CreateAccountPayableUseCase {
       throw new BusinessNotFoundError();
     }
 
-    // Check if the branch exists and belongs to the company
-    const findBranch = await this.branch.findBranchById(
-      accountPayableData.branchId,
+    // The same form sent twice — a lost answer, a second click — is the bill
+    // it already created, and notifies nobody again (IDEMP-14).
+    const replay = await this.replayOf(accountPayableData);
+
+    if (replay) return { ...replay, warnings: [] };
+
+    // Branch, service order, payee, vehicle and the responsible person (who
+    // is notified with the amount) all belong to this company.
+    const { serviceOrder } = await assertAccountPayableReferences(
+      {
+        branch: this.branch,
+        serviceOrder: this.serviceOrder,
+        supplier: this.supplier,
+        vehicle: this.vehicle,
+        user: this.user,
+      },
+      accountPayableData.businessId,
+      {
+        branchId: accountPayableData.branchId,
+        serviceOrderId: accountPayableData.serviceOrderId,
+        supplierId: accountPayableData.supplierId,
+        vehicleId: accountPayableData.vehicleId,
+        registrationUserId: accountPayableData.registrationUserId,
+      },
     );
-
-    if (!findBranch) {
-      throw new BranchNotFoundError();
-    }
-
-    if (findBranch.businessId !== accountPayableData.businessId) {
-      throw new BranchNotBelongBusinessError();
-    }
-
-    // Check the work order if provided
-    if (accountPayableData.serviceOrderId) {
-      const findServiceOrder = await this.serviceOrder.findServiceOrderById(
-        accountPayableData.serviceOrderId,
-      );
-
-      if (!findServiceOrder) {
-        throw new ServiceOrderNotFoundError();
-      }
-
-      if (findServiceOrder.businessId !== accountPayableData.businessId) {
-        throw new ServiceOrderNotBelongBusinessError();
-      }
-    }
 
     // Check that the amount paid is not greater than the total amount
     if (
@@ -193,25 +111,94 @@ class CreateAccountPayableUseCase {
       throw new AccountPayableInvalidAmountError();
     }
 
+    const timeZone = (findBusiness as { timezone?: string | null }).timezone;
+
+    const data: CreateAccountPayableProps = {
+      ...accountPayableData,
+      // A picked DAY is stored as the instant it starts in the company's
+      // zone: the status is then decided by that zone's calendar.
+      due_date: billDateFromInput(accountPayableData.due_date, timeZone ?? ""),
+      payment_date: accountPayableData.payment_date
+        ? billDateFromInput(accountPayableData.payment_date, timeZone ?? "")
+        : null,
+      // A registered supplier IS the payee; free text is for the rest.
+      payee_name: accountPayableData.supplierId
+        ? null
+        : (accountPayableData.payee_name ?? null),
+      // Who typed it, from the session — never from the body (decision 8.4).
+      createdById: userId,
+    };
+
+    let accountPayableCreated: AccountPayable;
+
     try {
-      const accountPayableCreated =
-        await this.accountPayable.createAccountPayable(accountPayableData);
+      // Bill and outbox event commit together; the pipeline notifies the
+      // responsible user and records the activity after the commit.
+      accountPayableCreated = await database.$transaction(async (tx) => {
+        const created = await this.accountPayable.createAccountPayable(
+          data,
+          tx,
+        );
 
-      // Process notifications asynchronously without blocking the main flow
-      this.processNotifications(
-        accountPayableCreated,
-        accountPayableData,
-        userId,
-      );
+        await this.outbox.publish(tx, {
+          topic: "account-payable.created",
+          aggregateType: "account-payable",
+          aggregateId: created.id,
+          businessId: accountPayableData.businessId,
+          actorId: userId,
+          payload: {
+            accountPayableId: created.id,
+            businessId: accountPayableData.businessId,
+            amount: Number(created.amount),
+            serviceOrderId: (created.serviceOrderId as string) || null,
+            registrationUserId: accountPayableData.registrationUserId,
+          },
+        });
 
-      return accountPayableCreated;
+        return created;
+      });
     } catch (error) {
+      // The twin of this submission committed after the replay check: the
+      // insert met the unique key, and the twin's bill is the answer.
+      if (isUniqueViolation(error)) {
+        const replay = await this.replayOf(accountPayableData);
+
+        if (replay) return { ...replay, warnings: [] };
+      }
+
       throw new AppError(
         "Houve um erro ao tentar criar a conta a pagar! Por favor, tente novamente.",
         500,
       );
     }
+
+    const warnings: string[] = [];
+
+    if (serviceOrder && accountPayableData.serviceOrderId) {
+      const overrun = serviceOrderOverrunWarning(
+        await this.accountPayable.sumAmountByServiceOrderId(
+          accountPayableData.serviceOrderId,
+        ),
+        serviceOrder.total_amount,
+      );
+
+      if (overrun) warnings.push(overrun);
+    }
+
+    return { ...accountPayableCreated, warnings };
+  }
+
+  private async replayOf(
+    accountPayableData: CreateAccountPayableProps,
+  ): Promise<AccountPayable | null> {
+    if (!accountPayableData.client_submission_id) return null;
+
+    return this.accountPayable.findAccountPayableBySubmissionId(
+      accountPayableData.businessId,
+      accountPayableData.client_submission_id,
+    );
   }
 }
 
 export { CreateAccountPayableUseCase };
+export type { CreatedAccountPayable };

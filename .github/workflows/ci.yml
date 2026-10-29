@@ -1,31 +1,39 @@
 name: CI (branches)
 
-# Fast branch gate. Runs on any branch other than main/master so that
-# the problem surfaces before the PR—not later, in the middle of the heavy pipeline.
+# Fast branch gate. Runs on every work branch — anything but staging and
+# main — so that a problem surfaces before the code reaches staging, not in
+# the middle of the heavy pipeline.
 #
-# Intentionally excluded: E2E tests (they need postgres/rabbitmq/redis running),
-# image building, release, and deployment. All of that is handled by deploy.yml
-# once the code reaches main. Here, there is only one question: is this code
-# healthy enough to become a PR?
+# Intentionally excluded: E2E tests (they need postgres/redis running),
+# image building, release, and deployment. All of that is deploy.yml's job:
+# every push to `staging` runs the full validation, builds the images once
+# and deploys staging; a pull request into `main` runs the same validation;
+# the merge into `main` promotes the image staging validated
+# (docs/deploy.md). Here, there is only one question: is this code healthy
+# enough to go to staging?
 on:
   push:
-    branches-ignore: [main, master]
+    branches-ignore: [main, master, staging]
   workflow_dispatch:
+
+permissions:
+  contents: read
+
+# A newer push to the same branch makes the older run pointless.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 env:
   NODE_ENV: test
   DATABASE_URL: postgresql://postgres:postgres@localhost:5432/test_db
-  RABBITMQ_URL: amqp://guest:guest@localhost:5672
   REDIS_URL: redis://localhost:6379
   HTTP_REQUEST: http://localhost:3000
   API_HTTP_REQUEST: http://localhost:3333
   JWT_SECRET: test-jwt-secret-key-for-github-actions-only
   JWT_SECRET_REFRESH_TOKEN: test-jwt-refresh-secret-key-for-github-actions-only
-  EVOLUTION_API_URL: http://localhost:8080/test
-  EVOLUTION_API_KEY: test-evolution-api-key
-  EVOLUTION_HTTP_REQUEST: http://localhost:3333
-  TRAJETTO_WHATSAPP_BUSINESS_PHONE: 5524999999999
-  TRAJETTO_WHATSAPP_INSTANCE_NAME: Trajetto-Business-Test
+  META_WHATSAPP_TEMPLATE_NAME: trajetto_notification
+  META_WHATSAPP_API_VERSION: v23.0
   UPLOAD_STORAGE_TYPE: local
   UPLOAD_LOCAL_PATH: ./tmp
   MASTER_USER_EMAIL: test-master@example.com
@@ -36,18 +44,113 @@ jobs:
     name: Lint, type-check and unit tests
     runs-on: ubuntu-latest
 
+    # One unit file needs a real Redis: tests/unitaires/socket/
+    # adapter-channel-isolation.test.ts proves that two Socket.IO adapters on
+    # one Redis are kept apart by the channel prefix, not by the database
+    # number. Nothing else in the unit suite touches it (no Postgres here).
+    services:
+      redis:
+        image: redis:7-alpine
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 6379:6379
+
     steps:
+      # Full history: tests/unitaires/contract/retired-routes.test.ts compares
+      # the routes against origin/main at the fork point, and skips itself
+      # when there is no origin/main to read — which a shallow clone never has.
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+
+      # tests/unitaires/contract/client-routes.test.ts reads every URL the web
+      # and the app build from ../trajetto-ui and ../trajetto-mobile, and skips
+      # itself without them. Checked out only when the read-only token exists
+      # (CLIENT_REPOS_READ_TOKEN), and moved out of the workspace at once so
+      # prettier and tsc never see them. The token stays out of the job env and
+      # out of .git/config: nothing installed later can read it.
+      - name: Is the client checkout configured?
+        id: clients
+        env:
+          TOKEN: ${{ secrets.CLIENT_REPOS_READ_TOKEN }}
+        run: |
+          if [ -n "$TOKEN" ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::CLIENT_REPOS_READ_TOKEN ausente: o contrato de rotas com a web e o app foi pulado."
+          fi
+
+      # The same branch in the sibling repository first: a change that spans
+      # the repositories (routes, socket events) is tested against its own
+      # counterpart, not against their default branch. Falls back to the
+      # default branch when there is no branch of that name.
+      - name: Pick the sibling branches
+        id: refs
+        if: steps.clients.outputs.enabled == 'true'
+        env:
+          TOKEN: ${{ secrets.CLIENT_REPOS_READ_TOKEN }}
+          BRANCH: ${{ github.head_ref || github.ref_name }}
+        run: |
+          # The empty extraheader first: this repository's own checkout persisted
+          # one, and two Authorization headers get a 400 (read as "no branch").
+          auth="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$TOKEN" | base64 -w0)"
+          for pair in web:trajetto-ui app:trajetto-mobile; do
+            key=${pair%%:*}
+            repo=${pair#*:}
+            if git -c "http.https://github.com/.extraheader=" -c "http.https://github.com/.extraheader=$auth" ls-remote --exit-code --heads \
+              "https://github.com/Trajetto-Organization/${repo}.git" "refs/heads/${BRANCH}" > /dev/null; then
+              echo "${key}=${BRANCH}" >> "$GITHUB_OUTPUT"
+              echo "${repo}: branch ${BRANCH}"
+            else
+              echo "${repo}: sem a branch ${BRANCH}; usando a padrão"
+            fi
+          done
+
+      - name: Check out the web next to this repository
+        if: steps.clients.outputs.enabled == 'true'
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          repository: Trajetto-Organization/trajetto-ui
+          ref: ${{ steps.refs.outputs.web }}
+          token: ${{ secrets.CLIENT_REPOS_READ_TOKEN }}
+          path: .siblings/trajetto-ui
+          persist-credentials: false
+
+      - name: Check out the app next to this repository
+        if: steps.clients.outputs.enabled == 'true'
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          repository: Trajetto-Organization/trajetto-mobile
+          ref: ${{ steps.refs.outputs.app }}
+          token: ${{ secrets.CLIENT_REPOS_READ_TOKEN }}
+          path: .siblings/trajetto-mobile
+          persist-credentials: false
+
+      - name: Move the clients beside the API
+        if: steps.clients.outputs.enabled == 'true'
+        run: |
+          mv .siblings/trajetto-ui ../trajetto-ui
+          mv .siblings/trajetto-mobile ../trajetto-mobile
+          rmdir .siblings
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: "22"
           cache: "yarn"
 
       - name: Install dependencies
         run: yarn install --frozen-lockfile
+
+      # A CRITICAL advisory in a production dependency fails the branch
+      # (INFRA-16). The reasoned, dated exceptions live in audit-ci.jsonc.
+      - name: Audit production dependencies
+        run: npx --yes audit-ci@7.1.0 --config audit-ci.jsonc
 
       # First check of all, because it is the cheapest one. There is no point
       # spending minutes on tsc and vitest if the code is not even formatted.
@@ -65,5 +168,82 @@ jobs:
       - name: Create tmp directory
         run: mkdir -p src/tmp
 
-      - name: Run unit tests
-        run: yarn test --run --reporter=basic
+      # With coverage, measured, published AND gated: test:coverage carries
+      # the floor (package.json; decision 13.1, docs/testes.md "Cobertura").
+      - name: Run unit tests (with coverage floor)
+        run: yarn test:coverage --reporter=basic --coverage.reporter=text-summary --coverage.reporter=json-summary --coverage.reporter=html
+
+      - name: Publish the coverage report
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: coverage-${{ github.sha }}
+          path: coverage
+          retention-days: 14
+
+  # Secrets in the history (INFRA-21). Every commit, not only the diff: a key
+  # that reached any branch is already out. The CLI runs from its image,
+  # pinned by digest (gitleaks-action needs a paid license on organization
+  # repositories). What the history already had when this was switched on is
+  # in .gitleaksignore, by fingerprint; a new finding fails the job, and
+  # `--redact` keeps the secret itself out of the log.
+  secrets:
+    name: Secret scan (gitleaks)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout repository (full history)
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+
+      - name: Scan every commit for secrets
+        run: |
+          docker run --rm -v "$PWD:/repo" --entrypoint sh \
+            zricethezav/gitleaks:v8.30.1@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f \
+            -c "git config --global --add safe.directory /repo && gitleaks git /repo --redact --no-banner --exit-code 1"
+
+  # The trajetto-ai service (infra/ai-ocr, ADR 0010): its pytest suite runs
+  # INSIDE the image it ships in — the `test` stage builds the same base
+  # (hashed wheels, SHA-256-checked models) and runs as the runtime user.
+  ai-ocr:
+    name: AI OCR service (image + pytest)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Build the image and run its tests
+        run: docker build --target test infra/ai-ocr
+
+  # Opt-in: the API's reader and rules against the real container (needs
+  # Docker and ~1 GiB, so only on a manual run). tests/ai-local.
+  ai-local-e2e:
+    name: AI local contract (manual)
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "22"
+          cache: "yarn"
+
+      - name: Install dependencies
+        run: yarn install --frozen-lockfile
+
+      - name: Run the contract against the container
+        env:
+          AI_LOCAL_E2E: "1"
+        run: npx vitest run tests/ai-local

@@ -4,38 +4,45 @@ import { v4 as uuidV4 } from "uuid";
 import { env } from "@/env";
 import { IUserRepository } from "../../repositories/IUser-repository";
 
-import { UserEmailNotFoundError } from "../errors/user-email-not-found-error";
 import { IUsersTokensRepository } from "../../repositories/IUsers-tokens-repository";
 
 import { AppError } from "@/shared/errors/AppError";
-import { EmailWorkerAdapter } from "@/jobs/email-worker-adapter";
+import { logger } from "@/shared/logging/logger";
+import { sendTransactionalMail } from "@/shared/services/transactional-mail-service";
+import { emailLogoUrl } from "@/shared/providers/mail-provider/email-logo";
+import { claimMailCooldown } from "@/shared/security/mail-cooldown";
+
+const log = logger.child({ component: "user" });
 
 @injectable()
 class SendForgotPasswordMailUseCase {
   private http_request = env.HTTP_REQUEST;
-  private cloudinaryLogo = env.CLOUDINARY_LOGO_IMAGE;
-
-  private emailQueue: EmailWorkerAdapter;
 
   constructor(
     @inject("UserRepository")
     private user: IUserRepository,
     @inject("UsersTokensRepository")
     private usersTokens: IUsersTokensRepository,
-  ) {
-    this.emailQueue = new EmailWorkerAdapter("forgotPasswordUserEmailQueue");
-  }
+  ) {}
 
   async execute(email: string): Promise<void> {
+    /**
+     * One reset e-mail per address a minute, whoever asks
+     * (shared/security/mail-cooldown.ts).
+     *
+     * The route's limit is per caller address, so rotating addresses flooded
+     * one person's inbox — and each new link revoked the one before it.
+     * Claimed before the lookup and for every address, so the cooldown says
+     * nothing about which e-mails have an account; inside it the caller gets
+     * the very same answer and nothing is sent. The link already mailed stays
+     * valid for its hour.
+     */
+    if (!(await claimMailCooldown("forgot-password", email))) return;
+
     const findUserByEmail = await this.user.findUserByEmail(email);
 
-    if (!findUserByEmail) {
-      throw new UserEmailNotFoundError();
-    }
-
-    if (findUserByEmail.access_revoked) {
-      throw new UserEmailNotFoundError();
-    }
+    // Nothing to send, and the caller gets the same answer as everyone else.
+    if (!findUserByEmail || findUserByEmail.access_revoked) return;
 
     const findExistingToken =
       await this.usersTokens.findForgotPasswordVerificationTokenByEmail(email);
@@ -50,23 +57,10 @@ class SendForgotPasswordMailUseCase {
     const expires = new Date(new Date().getTime() + 3600 * 1000); // 1 hour in milliseconds
 
     try {
-      const createForgotPasswordToken =
-        await this.usersTokens.createForgotPasswordVerificationToken({
-          email,
-          expires,
-          token,
-        });
-
-      await this.emailQueue.enqueueEmail({
+      await this.usersTokens.createForgotPasswordVerificationToken({
         email,
-        name: findUserByEmail.name,
-        subject: "Solicitação de redefinição de senha",
-        templateName: "forgot-password.hbs",
-        moduleName: "user",
-        additionalVariablesProperties: {
-          url: `${this.http_request}/forgot/password?token=${createForgotPasswordToken.token}`,
-          logo: this.cloudinaryLogo,
-        },
+        expires,
+        token,
       });
     } catch (error) {
       throw new AppError(
@@ -74,6 +68,36 @@ class SendForgotPasswordMailUseCase {
         500,
       );
     }
+
+    /**
+     * Sent after the answer, never before it (GAP3-11, AUTH-06).
+     *
+     * An unknown address returned at once, while a registered one waited for
+     * the provider — hundreds of milliseconds — and a provider failure was a
+     * 500 for registered addresses only. The same sentence for both was
+     * undone by the clock and the status code. The link is stored above, so
+     * a lost e-mail costs one more request. It carries the reset secret, so
+     * it stays in-process and never rides the outbox.
+     */
+    // The link carries the local token: the row only holds its hash.
+    void sendTransactionalMail({
+      email,
+      name: findUserByEmail.name,
+      subject: "Solicitação de redefinição de senha",
+      templateName: "forgot-password.hbs",
+      moduleName: "user",
+      additionalVariablesProperties: {
+        url: `${this.http_request}/forgot/password?token=${token}`,
+        logo: emailLogoUrl(),
+      },
+    }).catch((error) =>
+      // The provider's error is already redacted (no address); the user id
+      // says whose link it was without writing the typed address anywhere.
+      log.error(
+        { err: error, userId: findUserByEmail.id },
+        "password reset e-mail could not be sent",
+      ),
+    );
   }
 }
 

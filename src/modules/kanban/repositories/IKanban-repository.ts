@@ -1,3 +1,5 @@
+import { Prisma } from "@prisma/client";
+
 import {
   KanbanColumn,
   CreateKanbanColumnProps,
@@ -35,8 +37,14 @@ interface IKanbanRepository {
   ) => Promise<KanbanColumn | null>;
 
   // Card methods
-  createCard: (cardData: CreateKanbanCardProps) => Promise<KanbanCard>;
-  updateCard: ({ cardData, cardId }: UpdateKanbanCard) => Promise<KanbanCard>;
+  createCard: (
+    cardData: CreateKanbanCardProps,
+    tx?: Prisma.TransactionClient,
+  ) => Promise<KanbanCard>;
+  updateCard: (
+    update: UpdateKanbanCard,
+    tx?: Prisma.TransactionClient,
+  ) => Promise<KanbanCard>;
   deleteCard: (cardId: string) => Promise<KanbanCard>;
   findCardById: (cardId: string) => Promise<KanbanCard | null>;
   findCardsByColumnId: (columnId: string) => Promise<KanbanCard[]>;

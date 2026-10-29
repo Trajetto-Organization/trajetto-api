@@ -1,5 +1,9 @@
 import database from "@/../infra/database";
-import { IUsersTokensRepository } from "./IUsers-tokens-repository";
+import { hashSingleUseToken } from "@/shared/security/single-use-token";
+import {
+  IUsersTokensRepository,
+  REFRESH_GRACE_MAX_SIBLINGS,
+} from "./IUsers-tokens-repository";
 
 import {
   CreateUserRefreshTokenProps,
@@ -11,6 +15,7 @@ import {
   TwoFactorConfirmation,
   CreateTwoFactorToken,
   RotateUserRefreshTokenProps,
+  RefreshRotation,
 } from "../dtos/user-tokens-dto";
 
 class UserTokensRepository implements IUsersTokensRepository {
@@ -66,29 +71,97 @@ class UserTokensRepository implements IUsersTokensRepository {
     current_jti,
     current_token_hash,
     replacement,
-  }: RotateUserRefreshTokenProps): Promise<UserRefreshTokenProps | null> {
+    grace_ms,
+  }: RotateUserRefreshTokenProps): Promise<RefreshRotation> {
     return this.prisma.$transaction(async (transaction) => {
+      const now = new Date();
+
+      // The conditional update is the lock: of two requests racing on the same
+      // token, exactly one sees it live. The other waits for that commit,
+      // re-reads the row, and lands in the branch below.
       const rotated = await transaction.refreshToken.updateMany({
         where: {
           userId: user_id,
           jti: current_jti,
           token_hash: current_token_hash,
           revoked_at: null,
-          expires_in: { gt: new Date() },
+          expires_in: { gt: now },
         },
         data: {
-          revoked_at: new Date(),
+          revoked_at: now,
           replaced_by_jti: replacement.jti,
         },
       });
 
-      if (rotated.count !== 1) {
-        return null;
+      if (rotated.count === 1) {
+        const token = await transaction.refreshToken.create({
+          data: replacement,
+        });
+
+        return { outcome: "rotated", token };
       }
 
-      return transaction.refreshToken.create({
+      const presented = await transaction.refreshToken.findFirst({
+        where: {
+          userId: user_id,
+          jti: current_jti,
+          token_hash: current_token_hash,
+        },
+        select: { revoked_at: true, replaced_by_jti: true, expires_in: true },
+      });
+
+      if (!presented) return { outcome: "unknown" };
+
+      // Never spent, yet the update above missed it, or lapsed whatever its
+      // state: a session that ended, not a replay. The row expires with the
+      // JWT, so a lapsed row here is a JWT that passed `verify` in its last
+      // moment and reached this row a few milliseconds late — alone, or just
+      // after a sibling rotated it. Calling it theft logged the person out of
+      // every device.
+      if (presented.revoked_at === null || presented.expires_in <= now) {
+        return { outcome: "unknown" };
+      }
+
+      const spentMomentsAgo =
+        presented.revoked_at !== null &&
+        presented.replaced_by_jti !== null &&
+        presented.expires_in > now &&
+        now.getTime() - presented.revoked_at.getTime() < grace_ms;
+
+      if (!spentMomentsAgo) return { outcome: "reused" };
+
+      /**
+       * A bounded number of siblings per spent token, not one per
+       * presentation.
+       *
+       * The grace exists for a session racing itself — tabs, the parallel
+       * requests of one page whose access token just expired, a retried
+       * answer. It used to mint a live token on EVERY presentation inside the
+       * window, so a copy replayed moments after the legitimate rotation got
+       * a working session each time and the reuse alarm never rang. A cap of
+       * one was too tight the other way: the third parallel renewal of one
+       * page became "reuse" and logged the person out everywhere. The
+       * conditional update is the lock, like the rotation's: racing late
+       * presentations serialize on the row, each re-reads the count after
+       * the previous commit, and the one past the cap is reuse.
+       */
+      const graced = await transaction.refreshToken.updateMany({
+        where: {
+          userId: user_id,
+          jti: current_jti,
+          token_hash: current_token_hash,
+          grace_siblings: { lt: REFRESH_GRACE_MAX_SIBLINGS },
+        },
+        data: { grace_siblings: { increment: 1 } },
+      });
+
+      if (graced.count !== 1) return { outcome: "reused" };
+
+      const token = await transaction.refreshToken.create({
         data: replacement,
       });
+
+      return { outcome: "raced", token };
     });
   }
 
@@ -110,13 +183,24 @@ class UserTokensRepository implements IUsersTokensRepository {
   }
 
   async revokeUserRefreshTokenFamily(familyId: string): Promise<void> {
-    await this.prisma.refreshToken.deleteMany({
-      where: { family_id: familyId },
-    });
+    // The session's devices go with it: a logged-out phone must stop showing
+    // this user's messages even when the app's own unregister lost the race
+    // to this very revoke, or was never sent (forced or offline logout).
+    await this.prisma.$transaction([
+      this.prisma.refreshToken.deleteMany({
+        where: { family_id: familyId },
+      }),
+      this.prisma.pushDeviceToken.deleteMany({
+        where: { session_family_id: familyId },
+      }),
+    ]);
   }
 
   async revokeAllUserRefreshTokens(userId: string): Promise<void> {
-    await this.prisma.refreshToken.deleteMany({ where: { userId } });
+    await this.prisma.$transaction([
+      this.prisma.refreshToken.deleteMany({ where: { userId } }),
+      this.prisma.pushDeviceToken.deleteMany({ where: { userId } }),
+    ]);
   }
 
   async deleteExpiredUserRefreshTokens(now = new Date()): Promise<number> {
@@ -127,16 +211,33 @@ class UserTokensRepository implements IUsersTokensRepository {
     return result.count;
   }
 
+  async deleteOrphanPushTokens(): Promise<number> {
+    // Served by refresh_token (family_id, …): one probe per device row, and
+    // the table has one row per phone. Rows without a family predate the
+    // column and are left alone; the app re-registers them on launch.
+    return this.prisma.$executeRaw`
+      DELETE FROM "push_device_token" AS device
+      WHERE device."session_family_id" IS NOT NULL
+        AND NOT EXISTS (
+          SELECT 1 FROM "refresh_token" AS session
+          WHERE session."family_id" = device."session_family_id"
+        )
+    `;
+  }
+
   async createEmailVerificationToken({
     email,
     token,
     expires,
   }: CreateVerificationToken): Promise<VerificationToken> {
+    // Only the hash is stored: the returned row's `token` is NOT the link's.
+    const tokenHash = hashSingleUseToken(token);
+
     const upsertedVerificationToken =
       await this.prisma.emailVerificationToken.upsert({
         where: { email },
-        update: { token, expires },
-        create: { email, token, expires },
+        update: { token: tokenHash, expires },
+        create: { email, token: tokenHash, expires },
       });
 
     return upsertedVerificationToken;
@@ -158,10 +259,20 @@ class UserTokensRepository implements IUsersTokensRepository {
   ): Promise<VerificationToken | null> {
     const findVerificationTokenByToken =
       await this.prisma.emailVerificationToken.findUnique({
-        where: { token },
+        where: { token: hashSingleUseToken(token) },
       });
 
     return findVerificationTokenByToken;
+  }
+
+  async consumeEmailVerificationToken(tokenId: string): Promise<boolean> {
+    // `deleteMany` and not `delete`: `delete` throws when the row is already
+    // gone, and "someone else spent this token" is an answer, not a fault.
+    const { count } = await this.prisma.emailVerificationToken.deleteMany({
+      where: { id: tokenId },
+    });
+
+    return count === 1;
   }
 
   async deleteEmailVerificationToken(tokenId: string): Promise<void> {
@@ -179,7 +290,10 @@ class UserTokensRepository implements IUsersTokensRepository {
   }: CreateTwoFactorToken): Promise<TwoFactor> {
     const upsertedTwoFactorToken = await this.prisma.twoFactorToken.upsert({
       where: { email },
-      update: { token, expires },
+      // A NEW code starts from zero; otherwise it inherits the previous
+      // code's count and locks out the legitimate user. Requesting codes is
+      // rate limited on its own.
+      update: { token, expires, attempts: 0 },
       create: { email, token, expires },
     });
 
@@ -196,12 +310,30 @@ class UserTokensRepository implements IUsersTokensRepository {
     return findTwoFactorByEmail;
   }
 
+  async consumeTwoFactorToken(twoFactorId: string): Promise<boolean> {
+    const { count } = await this.prisma.twoFactorToken.deleteMany({
+      where: { id: twoFactorId },
+    });
+
+    return count === 1;
+  }
+
   async deleteTwoFactorToken(twoFactorId: string): Promise<void> {
     await this.prisma.twoFactorToken.delete({
       where: {
         id: twoFactorId,
       },
     });
+  }
+
+  async countTwoFactorAttempt(twoFactorId: string): Promise<number> {
+    const updated = await this.prisma.twoFactorToken.update({
+      where: { id: twoFactorId },
+      data: { attempts: { increment: 1 } },
+      select: { attempts: true },
+    });
+
+    return updated.attempts;
   }
 
   async createTwoFactorConfirmation(
@@ -245,11 +377,14 @@ class UserTokensRepository implements IUsersTokensRepository {
     token,
     expires,
   }: CreateVerificationToken): Promise<VerificationToken> {
+    // Only the hash is stored: the returned row's `token` is NOT the link's.
+    const tokenHash = hashSingleUseToken(token);
+
     const upsertedForgotPasswordVerificationToken =
       await this.prisma.forgotPasswordVerificationToken.upsert({
         where: { email },
-        update: { token, expires },
-        create: { email, token, expires },
+        update: { token: tokenHash, expires },
+        create: { email, token: tokenHash, expires },
       });
 
     return upsertedForgotPasswordVerificationToken;
@@ -271,10 +406,21 @@ class UserTokensRepository implements IUsersTokensRepository {
   ): Promise<VerificationToken | null> {
     const findForgotPasswordVerificationTokenByToken =
       await this.prisma.forgotPasswordVerificationToken.findUnique({
-        where: { token },
+        where: { token: hashSingleUseToken(token) },
       });
 
     return findForgotPasswordVerificationTokenByToken;
+  }
+
+  async consumeForgotPasswordVerificationToken(
+    tokenId: string,
+  ): Promise<boolean> {
+    const { count } =
+      await this.prisma.forgotPasswordVerificationToken.deleteMany({
+        where: { id: tokenId },
+      });
+
+    return count === 1;
   }
 
   async deleteForgotPasswordVerificationToken(tokenId: string): Promise<void> {

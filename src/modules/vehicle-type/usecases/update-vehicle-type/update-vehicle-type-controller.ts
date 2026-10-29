@@ -3,24 +3,15 @@ import { container } from "tsyringe";
 
 import { UpdateVehicleTypeUseCase } from "./update-vehicle-type-usecase";
 
-import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
-import { BusinessNotFoundError } from "@/modules/business/usecases/errors/business-not-found-error";
-
-import { VehicleTypeNotFoundError } from "../errors/vehicle-type-not-found-error";
-import { VehicleTypeAlreadyExistsError } from "../errors/vehicle-type-already-exists-error";
-
-import { VehicleTypeNotBelongBusinessError } from "../errors/vehicle-type-not-belong-business-error";
-
 import { updateVehicleTypeSchema } from "@/schemas/update-vehicle-type-schema";
 import { updateDeleteBusinessSchema } from "@/schemas/update-delete-business-schema";
 
 import { updateDeleteVehicleTypeSchema } from "@/schemas/update-delete-vehicle-type-schema";
 
+import { replyVehicleTypeError } from "../errors/vehicle-type-http-errors";
+
 class UpdateVehicleTypeController {
-  async handle(
-    request: FastifyRequest,
-    reply: FastifyReply,
-  ): Promise<Response> {
+  async handle(request: FastifyRequest, reply: FastifyReply): Promise<void> {
     const { id } = request.user;
 
     const { businessId } = updateDeleteBusinessSchema.parse(request.params);
@@ -45,25 +36,7 @@ class UpdateVehicleTypeController {
         .status(200)
         .send({ message: "Tipo de veículo atualizado com sucesso!" });
     } catch (error) {
-      if (error instanceof ResourceNotFoundError) {
-        return reply.status(400).send({ message: error.message });
-      }
-
-      if (error instanceof BusinessNotFoundError) {
-        return reply.status(400).send({ message: error.message });
-      }
-
-      if (error instanceof VehicleTypeNotFoundError) {
-        return reply.status(400).send({ message: error.message });
-      }
-
-      if (error instanceof VehicleTypeNotBelongBusinessError) {
-        return reply.status(403).send({ message: error.message });
-      }
-
-      if (error instanceof VehicleTypeAlreadyExistsError) {
-        return reply.status(400).send({ message: error.message });
-      }
+      if (replyVehicleTypeError(reply, error)) return;
 
       throw error;
     }

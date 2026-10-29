@@ -3,31 +3,45 @@ import { inject, injectable } from "tsyringe";
 import { IQuoteRepository } from "../../repositories/IQuote-repository";
 import { CreateQuoteProps, Quote } from "../../dtos/quote-dto";
 
-import { EmailWorkerAdapter } from "@/jobs/email-worker-adapter";
+import { sendTransactionalMail } from "@/shared/services/transactional-mail-service";
 import { AppError } from "@/shared/errors/AppError";
+import { logger } from "@/shared/logging/logger";
 
 import { env } from "@/env";
+
+const log = logger.child({ component: "quote" });
+
+/** At most one confirmation per requester address in this window. */
+const CONFIRMATION_INTERVAL_MS = 24 * 60 * 60 * 1000;
 
 @injectable()
 class CreateQuoteUseCase {
   private http_request = env.HTTP_REQUEST;
-  private emailQueue: EmailWorkerAdapter;
 
   constructor(
     @inject("QuoteRepository")
     private quoteRepository: IQuoteRepository,
-  ) {
-    this.emailQueue = new EmailWorkerAdapter("quoteEmailQueue");
-  }
+  ) {}
 
   async execute(quoteData: CreateQuoteProps): Promise<Quote> {
     try {
+      // Read BEFORE the new row exists, or it would always find itself. The
+      // form is public and mails the address typed into it: one confirmation
+      // a day per address caps what a flood can send to any one mailbox.
+      const previous = await this.quoteRepository.findQuoteByEmail(
+        quoteData.email.trim(),
+        new Date(Date.now() - CONFIRMATION_INTERVAL_MS),
+      );
+
       // Create a quote request in the bank
       const quote = await this.quoteRepository.createQuote(quoteData);
 
       // Send emails asynchronously
-      this.sendEmails(quote).catch((error) => {
-        console.error("Erro ao enviar emails para quote:", quote.id, error);
+      this.sendEmails(quote, { confirmRequester: !previous }).catch((error) => {
+        log.error(
+          { err: error, quoteId: quote.id },
+          "quote e-mails could not be sent",
+        );
       });
 
       return quote;
@@ -39,10 +53,13 @@ class CreateQuoteUseCase {
     }
   }
 
-  private async sendEmails(quote: Quote): Promise<void> {
+  private async sendEmails(
+    quote: Quote,
+    { confirmRequester }: { confirmRequester: boolean },
+  ): Promise<void> {
     try {
       // Email to sales team
-      await this.emailQueue.enqueueEmail({
+      await sendTransactionalMail({
         email: "contato@intrajetto.com",
         name: "Equipe de Vendas",
         subject: `Nova Solicitação de Orçamento - ${quote.company}`,
@@ -60,24 +77,34 @@ class CreateQuoteUseCase {
         },
       });
 
-      // Confirmation email to customer
-      await this.emailQueue.enqueueEmail({
-        email: quote.email,
-        name: quote.name,
-        subject: "Recebemos sua solicitação de orçamento - Trajetto",
-        templateName: "quote-confirmation.hbs",
-        moduleName: "quote",
-        additionalVariablesProperties: {
-          company: quote.company,
-          fleetSize: this.translateFleetSize(quote.fleet_size),
-          supportEmail: "contato@intrajetto.com",
-          salesPhone: "(11) 99999-9999",
-        },
-      });
+      // Confirmation email to customer.
+      //
+      // Nothing the requester typed goes into it — no name, no company. The
+      // route is public and this mail goes to whatever address was posted,
+      // from the product's own sender: echoing free text made it a way to
+      // send "Olá, golpe.example/resgate! … Seu CPF foi bloqueado" as
+      // Trajetto to anyone. Escaping stops markup, not words. The fleet size
+      // is safe: it is an enum, translated here.
+      if (confirmRequester) {
+        await sendTransactionalMail({
+          email: quote.email,
+          subject: "Recebemos sua solicitação de orçamento - Trajetto",
+          templateName: "quote-confirmation.hbs",
+          moduleName: "quote",
+          additionalVariablesProperties: {
+            fleetSize: this.translateFleetSize(quote.fleet_size),
+            supportEmail: "contato@intrajetto.com",
+            salesPhone: "(11) 99999-9999",
+          },
+        });
+      }
 
-      console.log(`Emails enviados com sucesso para quote: ${quote.id}`);
+      log.info({ quoteId: quote.id }, "quote e-mails sent");
     } catch (error) {
-      console.error(`Erro ao enviar emails para quote ${quote.id}:`, error);
+      log.error(
+        { err: error, quoteId: quote.id },
+        "quote e-mails could not be sent",
+      );
     }
   }
 

@@ -8,11 +8,16 @@ export default defineConfig({
   entry: {
     server: "./src/server.ts",
     seed: "./infra/scripts/seed.ts",
-    "workers/email-worker": "./src/workers/email-worker.ts",
-    "workers/whatsapp-worker": "./src/workers/whatsapp-worker.ts",
-    "workers/ai-verification-worker": "./src/workers/ai-verification-worker.ts",
     "import-violation-codes": "./infra/scripts/import-violation-codes.ts",
-    "seed-whatsapp-instance": "./infra/scripts/seed-whatsapp-instance.ts",
+    // Compiled because it runs in the production image, where tsx does not
+    // exist — only production dependencies are installed there.
+    "wait-for-postgres": "./infra/scripts/wait-for-postgres.ts",
+    // Run once in the production container after WEBHOOK_SECRETS_KEY is
+    // set: seals the webhook credentials written before it.
+    "seal-webhook-secrets": "./infra/scripts/seal-webhook-secrets.ts",
+    // The receipt renderer's worker thread. proof-pdf-renderer.ts loads it
+    // from next to server.js (build/proof-pdf-worker.js) by this name.
+    "proof-pdf-worker": "./src/shared/services/proof-pdf-worker.ts",
   },
   format: ["cjs"],
   target: "es2020",

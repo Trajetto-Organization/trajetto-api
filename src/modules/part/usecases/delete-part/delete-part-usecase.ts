@@ -1,4 +1,5 @@
 import { inject, injectable } from "tsyringe";
+import { Prisma } from "@prisma/client";
 
 import { IPartRepository } from "@/modules/part/repositories/IPart-repository";
 import { IBusinessRepository } from "@/modules/business/repositories/IBusiness-repository";
@@ -9,8 +10,9 @@ import { AppError } from "@/shared/errors/AppError";
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
 import { BusinessNotFoundError } from "@/modules/business/usecases/errors/business-not-found-error";
 
-import { PartNotBelongServiceOrderError } from "../errors/part-not-belong-service-order-error";
 import { PartNotFoundError } from "../errors/part-not-found-error";
+
+import { sendCatalogChangedEvent } from "@/websocket";
 
 import { NotificationService } from "@/shared/services/notification-service";
 import { formatCurrency } from "@/shared/utils/format-values";
@@ -50,45 +52,61 @@ class DeletePartUseCase {
 
     const findPartById = await this.part.findPartById(partId);
 
-    if (!findPartById) {
+    // Another company's part answers like a missing one: "não pertence a
+    // esta empresa" confirmed the id exists elsewhere (decision 11.3).
+    if (!findPartById || findPartById.businessId !== businessId) {
       throw new PartNotFoundError();
     }
 
-    if (findPartById.businessId !== businessId) {
-      throw new PartNotBelongServiceOrderError();
+    // A count, not the lines themselves: only the number is shown.
+    const usage = await this.part.countServiceOrderPartsByPartId(partId);
+
+    if (usage > 0) {
+      throw new PartHasAssociatedServiceOrderPartsError(usage);
     }
 
-    const associatedServiceOrderParts =
-      await this.part.findServiceOrderPartsByPartId(partId);
-
-    if (associatedServiceOrderParts.length > 0) {
-      throw new PartHasAssociatedServiceOrderPartsError(
-        associatedServiceOrderParts.length,
-      );
-    }
+    let partDeleted: Part;
 
     try {
-      const partDeleted = await this.part.deletePart(partId);
-
-      // Process activity asynchronously without blocking the main flow
-      this.notificationService.createActivityIfEnabled({
-        type: "Peça",
-        action: "delete",
-        entityId: partDeleted.id,
-        description: `Peça excluída: ${partDeleted.description} | Preço: ${formatCurrency(Number(partDeleted.unit_price))} | ID: ${partDeleted.id}`,
-        status: "Deletado",
-        performedBy: userId,
-        businessId: businessId,
-      });
-
-      return partDeleted;
+      partDeleted = await this.part.deletePart(partId);
     } catch (error) {
+      // A line saved between the count and the delete: the foreign key
+      // (RESTRICT) refuses it, and that is the same "in use" answer, not a
+      // server fault.
+      if (isForeignKeyViolation(error)) {
+        const lines = await this.part.countServiceOrderPartsByPartId(partId);
+
+        throw new PartHasAssociatedServiceOrderPartsError(Math.max(lines, 1));
+      }
+
       throw new AppError(
         "Houve um erro ao tentar deletar a peça! Por favor, tente novamente.",
         500,
       );
     }
+
+    sendCatalogChangedEvent(businessId, "part");
+
+    // Process activity asynchronously without blocking the main flow
+    this.notificationService.createActivityIfEnabled({
+      type: "Peça",
+      action: "delete",
+      entityId: partDeleted.id,
+      description: `Peça excluída: ${partDeleted.description} | Preço: ${formatCurrency(Number(partDeleted.unit_price))} | ID: ${partDeleted.id}`,
+      status: "Deletado",
+      performedBy: userId,
+      businessId: businessId,
+    });
+
+    return partDeleted;
   }
+}
+
+function isForeignKeyViolation(error: unknown): boolean {
+  return (
+    error instanceof Prisma.PrismaClientKnownRequestError &&
+    error.code === "P2003"
+  );
 }
 
 export { DeletePartUseCase };

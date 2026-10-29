@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { tenantLockedShape } from "@/shared/validation/tenant-locked-field";
 import {
   emptyStringToNull,
   hasConsecutiveSpaces,
@@ -8,6 +9,7 @@ import {
 } from "@/shared/utils/zod-schema-helpers";
 
 const updateKanbanCardSchema = z.object({
+  ...tenantLockedShape,
   title: z
     .string()
     .min(1, "O título do card é obrigatório.")

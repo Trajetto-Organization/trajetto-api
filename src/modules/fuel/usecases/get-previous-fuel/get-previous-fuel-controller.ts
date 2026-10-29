@@ -4,10 +4,7 @@ import { z } from "zod";
 import { container } from "tsyringe";
 import { GetPreviousFuelUseCase } from "./get-previous-fuel-usecase";
 
-import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
-import { BusinessNotFoundError } from "@/modules/business/usecases/errors/business-not-found-error";
-
-import { VehicleNotFoundError } from "@/modules/vehicle/usecases/errors/vehicle-not-found-error";
+import { replyFuelVehicleReadError } from "../errors/fuel-http-errors";
 import {
   getPreviousFuelParamsSchema,
   getPreviousFuelQuerySchema,
@@ -37,17 +34,9 @@ class GetPreviousFuelController {
       // Return 200 with null if no previous fuel is found (not an error)
       return reply.status(200).send(previousFuel);
     } catch (error) {
-      if (error instanceof ResourceNotFoundError) {
-        return reply.status(400).send({ message: error.message });
-      }
-
-      if (error instanceof BusinessNotFoundError) {
-        return reply.status(400).send({ message: error.message });
-      }
-
-      if (error instanceof VehicleNotFoundError) {
-        return reply.status(400).send({ message: error.message });
-      }
+      // Missing and another company's vehicle answer alike, 404 (decision
+      // 11.3); a driver's vehicle they may not operate, 403.
+      if (replyFuelVehicleReadError(reply, error)) return;
 
       throw error;
     }

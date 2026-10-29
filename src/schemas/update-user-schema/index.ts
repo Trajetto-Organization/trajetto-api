@@ -6,6 +6,7 @@ import {
   hasSpaceAtEdges,
 } from "@/shared/utils/zod-schema-helpers";
 import { UserBusinessRole } from "@/modules/user/dtos/user-dto";
+import { tenantLockedShape } from "@/shared/validation/tenant-locked-field";
 
 const roleEnum = z.nativeEnum(UserBusinessRole, {
   errorMap: (issue, ctx) => {
@@ -84,22 +85,18 @@ const updateUserSchema = z
         .optional()
         .nullable(),
     ),
-    password: z.preprocess(
-      emptyStringToNull,
-      z
-        .string()
-        .min(7, "A senha deve ter pelo menos 7 caracteres.")
-        .max(100, "A senha deve ter no máximo 100 caracteres.")
-        .refine((value) => !/\s/.test(value), {
-          message: "A senha não deve conter espaços.",
-        })
-        .optional()
-        .nullable(),
-    ),
+    // Decision 4.9: an administrator never types another person's password,
+    // and no password is mailed. The MASTER asks for a single-use link.
+    sendPasswordSetupLink: z
+      .boolean({ invalid_type_error: "Envio do link de senha inválido." })
+      .optional()
+      .describe(
+        "Só MASTER: envia ao usuário um link de uso único (24 h) para definir uma nova senha. A senha atual continua valendo até ele usar o link.",
+      ),
     role: roleEnum.optional().nullable(),
-    businessId: z
-      .string({ required_error: "ID da empresa é obrigatório!" })
-      .uuid("ID da empresa é inválido."),
+    // Nobody moves a person between companies by editing them, not even
+    // the MASTER (decision 16.100).
+    ...tenantLockedShape,
     profileAccessId: z.preprocess(
       emptyStringToNull,
       z

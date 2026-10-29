@@ -1,4 +1,12 @@
-import { User, UserRole } from "@/modules/user/dtos/user-dto";
+import type { SortOrder } from "@/shared/pagination/list-query";
+
+import type { CatalogUsage } from "@/shared/pagination/catalog-usage";
+
+import type {
+  ProfileListFilters,
+  ProfileListSearchMeta,
+  ProfileSortKey,
+} from "../usecases/list-profile-access/profile-access-list";
 
 interface CreateProfileAccessProps {
   name: string;
@@ -15,33 +23,60 @@ interface ProfileAccess {
   name: string;
   corporate_reason?: string;
   businessId?: string;
-  users?: User[];
+  created_at?: Date;
+  updated_at?: Date;
+
+  /** Users linked to the profile (findProfileAccessById counts them). */
+  usersCount?: number;
+}
+
+/** A line of GET /profile-access/list-profile-access. */
+interface ProfileAccessListRow {
+  id: string;
+  name: string;
+  businessId: string;
+  created_at: Date;
+  updated_at: Date;
+  usersCount: number;
+  permissionsCount: number;
 }
 
 interface UpdateProfileAccess {
   profileAccessId: string;
-  businessId: string;
+  /** Only compared with the profile's own: a profile never changes company. */
+  businessId?: string;
   name?: string | null;
 }
 
 interface ListProfileAccess {
-  data: ProfileAccess[];
+  data: ProfileAccessListRow[];
   total: number;
+  /** Users per profile over the whole search, for the cards. */
+  usage: CatalogUsage[];
 }
 
-interface ListProfileAccessProps {
+/** What the list use case answers: the page, the pager total and the cards. */
+interface ListProfileAccessResult {
+  data: ProfileAccessListRow[];
+  total: number;
+  meta: ProfileListSearchMeta;
+}
+
+interface ListProfileAccessProps extends ProfileListFilters {
   page: number;
   pageSize: number;
-  businessId: string;
-  currentUserRole: UserRole;
-  profileAccessId: string;
-  search?: string;
+  sort?: ProfileSortKey;
+  order?: SortOrder;
 }
 
 interface SearchProfileAccessWithCursorProps {
   limit: number;
   cursor?: string;
   businessId: string;
+  /** The typed term, matched against the profile's name. */
+  search?: string;
+  /** Left out of the answer (the asker's own profile, when it must be). */
+  hideProfileId?: string | null;
 }
 
 interface CursorPaginatedProfileAccess {
@@ -52,9 +87,11 @@ interface CursorPaginatedProfileAccess {
 
 export {
   ProfileAccess,
+  ProfileAccessListRow,
   CreateProfileAccessProps,
   findProfileAccessByNameAndBusiness,
   ListProfileAccess,
+  ListProfileAccessResult,
   UpdateProfileAccess,
   ListProfileAccessProps,
   SearchProfileAccessWithCursorProps,

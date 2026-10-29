@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { tenantLockedShape } from "@/shared/validation/tenant-locked-field";
 import { emptyStringToNull } from "@/shared/utils/zod-schema-helpers";
 
 const allowedFuelTypes = [
@@ -13,6 +14,7 @@ const allowedFuelTypes = [
 ] as const;
 
 const updateFuelTypeSchema = z.object({
+  ...tenantLockedShape,
   description: z.preprocess(
     emptyStringToNull,
     z

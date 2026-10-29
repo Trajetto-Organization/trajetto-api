@@ -11,19 +11,7 @@ import { IVehicleRepository } from "@/modules/vehicle/repositories/IVehicle-repo
 
 import { IUserRepository } from "@/modules/user/repositories/IUser-repository";
 
-import { BranchNotBelongBusinessError } from "@/modules/branch/usecases/errors/branch-not-belong-business-error";
-import { DriverNotBelongBusinessError } from "@/modules/driver/usecases/errors/driver-not-belong-business-error";
-
-import { VehicleNotBelongBusinessError } from "@/modules/vehicle/usecases/errors/vehicle-not-belong-business-error";
-
 import { Fine, CreateFineProps } from "../../dtos/fine-dto";
-import { User } from "@/modules/user/dtos/user-dto";
-
-import { Driver } from "@/modules/driver/dtos/driver-dto";
-import { Vehicle } from "@/modules/vehicle/dtos/vehicle-dto";
-
-import { Branch } from "@/modules/branch/dtos/branch-dto";
-import { TrafficViolationCode } from "../../dtos/traffic-violation-code-dto";
 
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
 
@@ -33,51 +21,23 @@ import { BranchNotFoundError } from "@/modules/branch/usecases/errors/branch-not
 import { DriverNotFoundError } from "@/modules/driver/usecases/errors/driver-not-found-error";
 import { VehicleNotFoundError } from "@/modules/vehicle/usecases/errors/vehicle-not-found-error";
 
-import { FineDateInfractionCannotBeFutureError } from "../errors/fine-date-infraction-cannot-be-future-error";
-import { FineDueDateMustBeAfterInfractionError } from "../errors/fine-due-date-must-be-after-infraction-error";
-
-import { formatCurrency, formatDate } from "@/shared/utils/format-values";
 import { TrafficViolationCodeNotFoundError } from "../errors/traffic-violation-code-not-found-error";
 
-import { FinePaymentDateCannotBeEarlierInfractionError } from "../errors/fine-payment-date-cannot-be-earlier-infraction-error";
 import { FineRegistrationsMobileLocationRequiredError } from "../errors/fine-registrations-mobile-location-required-error";
-
 import { FineLocationNotProvidedAdjustmentValidationError } from "../errors/fine-location-not-provided-adjustment-validation-error";
 
-import { NotificationService } from "@/shared/services/notification-service";
-import { generateWhatsAppInstanceName } from "@/shared/utils/whatsapp-instance-name";
+import { assertFineDates, fineDateFromInput } from "../fine-dates";
 
+import { OutboxService } from "@/shared/notifications/outbox-service";
 import { AppError } from "@/shared/errors/AppError";
-import { env } from "@/env";
+import { logger } from "@/shared/logging/logger";
+import { isUniqueViolation } from "@/shared/http/idempotency-key";
+import { timeZoneOfBusiness } from "@/shared/time/business-time-zone";
 
-interface FineNotificationsTextProps {
-  userName?: string;
-  fineAmount: string;
-  vehiclePlate: string;
-  violationDate: string;
-  location?: string;
-  observation?: string;
-  points?: number;
-  branchName: string;
-  email?: string;
-  fineId: string;
-}
-
-interface ProcessNotificationsParams {
-  fineCreated: Fine;
-  findUser: User;
-  findDriver: Driver;
-  findVehicle: Vehicle;
-  findBranch: Branch;
-  findTrafficViolationCode: TrafficViolationCode;
-  businessId: string;
-  userId: string;
-}
+import database from "@/../infra/database";
 
 @injectable()
 class CreateFineUseCase {
-  private http_request = env.HTTP_REQUEST;
-
   constructor(
     @inject("UserRepository")
     private user: IUserRepository,
@@ -93,140 +53,15 @@ class CreateFineUseCase {
     private fine: IFineRepository,
     @inject("TrafficViolationCodeRepository")
     private trafficViolationCode: ITrafficViolationCodeRepository,
-    @inject("NotificationService")
-    private notificationService: NotificationService,
+    @inject("OutboxService")
+    private outbox: OutboxService,
   ) {}
 
-  private buildFineNotificationText({
-    branchName,
-    email,
-    fineAmount,
-    userName,
-    vehiclePlate,
-    violationDate,
-    location,
-    observation,
-    points,
-    fineId,
-  }: FineNotificationsTextProps): string {
-    const locationPart = location ? `\nLocal: ${location}` : "";
-
-    return [
-      `🚨 *Nova Multa Registrada!*`,
-      userName && `Usuário: *${userName}*`,
-      email && `E-mail: *${email}*`,
-      `Filial: *${branchName}*`,
-      `Veículo: *${vehiclePlate}*`,
-      `Valor: *${fineAmount}*`,
-      `Identificador da multa: *${fineId}*`,
-      `Data da infração: *${violationDate}*${locationPart}`,
-      points && `Pontos na carteira: *${points}`,
-      observation && `Observação: *${observation}`,
-    ]
-      .filter(Boolean)
-      .join("\n");
-  }
-
-  private async processNotifications({
-    fineCreated,
-    findUser,
-    findDriver,
-    findVehicle,
-    findBranch,
-    findTrafficViolationCode,
-    userId,
-    businessId,
-  }: ProcessNotificationsParams): Promise<void> {
-    try {
-      // Create activity for the user who created the fine
-      const activityData = {
-        type: "Multa",
-        action: "create",
-        entityId: fineCreated.id,
-        description: `Multa registrada para o motorista ${findDriver.name} 
-        no valor de ${formatCurrency(Number(fineCreated.amount))} | 
-        Infração: ${findTrafficViolationCode.code}-${findTrafficViolationCode.sub_code} | 
-        Veículo: ${findVehicle.license_plate} | 
-        Pontos: ${fineCreated.points} | 
-        ID: ${fineCreated.id}`,
-        status: "Pendente",
-        performedBy: userId,
-        businessId: businessId,
-      };
-
-      // Get notification recipients based on user role
-      let notificationRecipients: any[] = [];
-
-      if (findUser.role === "MASTER") {
-        notificationRecipients =
-          await this.user.findBusinessAdminsByBusinessId(businessId);
-      } else if (
-        findUser.role === "BUSINESS_ADMIN" ||
-        findUser.role === "BUSINESS_USER"
-      ) {
-        // BUSINESS_ADMIN/USER notificam apenas outros BUSINESS_ADMINs da mesma empresa
-        notificationRecipients = await this.user.findBusinessAdminsByBusinessId(
-          findUser.businessId as string,
-        );
-      }
-
-      // Build WhatsApp message
-      const whatsAppMessage = this.buildFineNotificationText({
-        userName: findUser.role === "MASTER" ? undefined : findUser.name,
-        email: findUser.role === "MASTER" ? undefined : findUser.email,
-        fineAmount: formatCurrency(Number(fineCreated.amount)),
-        vehiclePlate: findVehicle.license_plate,
-        violationDate: formatDate(fineCreated.violation_date, "pt-BR"),
-        location: fineCreated.location || undefined,
-        branchName: findBranch.corporate_reason,
-        observation: fineCreated.observation as string,
-        points: fineCreated.points as number,
-        fineId: fineCreated.id,
-      });
-
-      // Send notifications to each administrator (if any)
-      if (notificationRecipients.length > 0) {
-        const notificationPromises = notificationRecipients.map(
-          async (admin) => {
-            const instanceName = generateWhatsAppInstanceName(
-              admin.email,
-              businessId,
-            );
-
-            const notificationData = {
-              userId: admin.id,
-              type: "fine",
-              title: "Nova Multa Registrada",
-              message: `Nova multa de ${formatCurrency(Number(fineCreated.amount))} foi registrada para o veículo ${findVehicle.license_plate}`,
-              entityId: fineCreated.id,
-              link: `${this.http_request}/dashboard/fine?search=${fineCreated.id}&page=1`,
-              businessId: businessId,
-              shouldSendEmail: admin.email_notifications_enabled,
-              shouldSendWhatsApp: admin.whatsapp_notifications_enabled,
-              whatsAppMessage,
-              instanceName,
-            };
-
-            await this.notificationService.processUserNotifications({
-              notification: notificationData,
-              activity: activityData,
-            });
-          },
-        );
-
-        // Wait for all notifications to process
-        await Promise.allSettled(notificationPromises);
-      } else {
-        // Fallback: Create activity even if no recipients found
-        await this.notificationService.createActivityIfEnabled(activityData);
-      }
-    } catch (error) {
-      console.error("[Fine] Erro ao processar notificações:", error);
-      // Does not prevent the creation of the service order
-    }
-  }
-
-  async execute(fineData: CreateFineProps, userId: string): Promise<Fine> {
+  async execute(
+    fineData: CreateFineProps,
+    userId: string,
+    now: Date = new Date(),
+  ): Promise<Fine> {
     const findUser = await this.user.findUserById(userId);
 
     if (!findUser) {
@@ -241,34 +76,31 @@ class CreateFineUseCase {
       throw new BusinessNotFoundError();
     }
 
+    // The same form sent twice — a lost answer, a second click — is the fine
+    // it already created, and notifies nobody again (IDEMP-14).
+    const replay = await this.replayOf(fineData);
+
+    if (replay) return replay;
+
+    // A branch, driver or vehicle of another company answers exactly like
+    // one that does not exist: a distinct refusal confirmed that the id was
+    // real somewhere else (decision 8.1).
     const findBranch = await this.branch.findBranchById(fineData.branchId);
 
-    if (!findBranch) {
+    if (!findBranch || findBranch.businessId !== fineData.businessId) {
       throw new BranchNotFoundError();
-    }
-
-    if (findBranch.businessId !== fineData.businessId) {
-      throw new BranchNotBelongBusinessError();
     }
 
     const findDriver = await this.driver.findDriverById(fineData.driverId);
 
-    if (!findDriver) {
+    if (!findDriver || findDriver.businessId !== fineData.businessId) {
       throw new DriverNotFoundError();
-    }
-
-    if (findDriver.businessId !== fineData.businessId) {
-      throw new DriverNotBelongBusinessError();
     }
 
     const findVehicle = await this.vehicle.findVehicleById(fineData.vehicleId);
 
-    if (!findVehicle) {
+    if (!findVehicle || findVehicle.businessId !== fineData.businessId) {
       throw new VehicleNotFoundError();
-    }
-
-    if (findVehicle.businessId !== fineData.businessId) {
-      throw new VehicleNotBelongBusinessError();
     }
 
     const findTrafficViolationCode =
@@ -280,30 +112,28 @@ class CreateFineUseCase {
       throw new TrafficViolationCodeNotFoundError();
     }
 
-    const violationDate = new Date(fineData.violation_date);
-    const dueDate = new Date(fineData.due_date);
+    // The days the form picked become the instants they start in the
+    // company's zone, and the rules read them there.
+    const timeZone = timeZoneOfBusiness(findBusiness);
 
-    const today = new Date();
-
-    if (violationDate > today) {
-      throw new FineDateInfractionCannotBeFutureError();
-    }
-
-    if (dueDate <= violationDate) {
-      throw new FineDueDateMustBeAfterInfractionError();
-    }
+    fineData.violation_date = fineDateFromInput(
+      fineData.violation_date,
+      timeZone,
+    );
+    fineData.due_date = fineDateFromInput(fineData.due_date, timeZone);
 
     if (fineData.payment_date) {
-      const paymentDate = new Date(fineData.payment_date);
-
-      if (paymentDate < violationDate) {
-        throw new FinePaymentDateCannotBeEarlierInfractionError();
-      }
+      fineData.payment_date = fineDateFromInput(
+        fineData.payment_date,
+        timeZone,
+      );
     }
 
-    if (!fineData.points) {
-      fineData.points = findTrafficViolationCode.points;
-    }
+    assertFineDates(fineData, timeZone, now);
+
+    // The code's points when the caller did not say. Zero is an answer: some
+    // infractions carry no points on the licence.
+    const points = fineData.points ?? findTrafficViolationCode.points;
 
     // 🆕 GEOLOCATION LOGIC: Validate and process location data
     if (fineData.created_from === "MOBILE_APP") {
@@ -312,65 +142,103 @@ class CreateFineUseCase {
         throw new FineRegistrationsMobileLocationRequiredError();
       }
 
-      // 🆕 VALIDATE DISTANCE IF GPS_MANUAL (manual adjustment)
       if (fineData.location_source === "GPS_MANUAL") {
-        // Verifica se temos a localização original
+        // A manual adjustment is checked against the fix it moved from; the
+        // schema already bounds the distance.
         if (!fineData.latitude_original || !fineData.longitude_original) {
           throw new FineLocationNotProvidedAdjustmentValidationError();
         }
 
-        // A validação de distância já é feita pelo schema com isWithinAllowedDistance
-        // Log de auditoria (opcional)
-        console.log(`[AUDIT] GPS ajustado por ${userId} na multa`);
+        // A structured line, so it can be filtered by event and user (OBS-14).
+        // Persisting it in the activity trail is a separate decision.
+        logger.info(
+          { event: "audit.gps_adjusted", entity: "fine", userId },
+          "GPS location adjusted by the user",
+        );
       } else if (!fineData.location_source) {
-        // Se não tem source, é GPS automático
+        // No source means the GPS fix as captured: it is its own original.
         fineData.location_source = "GPS_AUTO";
-
-        // Copia localização final para original (não foi editada)
         fineData.latitude_original = fineData.latitude;
         fineData.longitude_original = fineData.longitude;
       }
     } else if (fineData.created_from === "WEB_DASHBOARD") {
-      // Web: Location is OPTIONAL
+      // Web: the location is optional and, when given, placed by hand. The
+      // original fix and the source are the server's to decide, never the
+      // form's.
+      fineData.latitude_original = null;
+      fineData.longitude_original = null;
+
       if (fineData.latitude && fineData.longitude) {
         fineData.location_source = "USER_MANUAL";
+        fineData.location_edited_by = userId;
+        fineData.location_edited_at = now;
       } else {
         fineData.location_source = "NONE";
       }
     }
 
-    // Add audit fields for web dashboard manual location
-    if (
-      fineData.created_from === "WEB_DASHBOARD" &&
-      fineData.latitude &&
-      fineData.longitude
-    ) {
-      (fineData as any).location_edited_by = userId;
-      (fineData as any).location_edited_at = new Date();
-    }
-
     try {
-      const fineCreated = await this.fine.createFine(fineData);
+      // Fine and outbox event commit together: the notification pipeline
+      // picks the event up afterwards, so a crash right here can no longer
+      // lose the alert nor announce a fine that was rolled back.
+      const fineCreated = await database.$transaction(async (tx) => {
+        const created = await this.fine.createFine({ ...fineData, points }, tx);
 
-      // Process notifications asynchronously without blocking the main flow
-      this.processNotifications({
-        fineCreated,
-        findUser,
-        findDriver,
-        findVehicle,
-        findBranch,
-        findTrafficViolationCode,
-        userId,
-        businessId: fineData.businessId,
+        await this.outbox.publish(tx, {
+          topic: "fine.created",
+          aggregateType: "fine",
+          aggregateId: created.id,
+          businessId: fineData.businessId,
+          actorId: userId,
+          payload: {
+            fineId: created.id,
+            businessId: fineData.businessId,
+            amount: Number(created.amount),
+            points: created.points,
+            violationDate: new Date(created.violation_date).toISOString(),
+            timeZone,
+            location: created.location || null,
+            observation: (created.observation as string) || null,
+            vehiclePlate: findVehicle.license_plate,
+            driverName: findDriver.name,
+            branchName: findBranch.corporate_reason,
+            violationCode: `${findTrafficViolationCode.code}-${findTrafficViolationCode.sub_code}`,
+            actor: {
+              id: userId,
+              name: findUser.name,
+              email: findUser.email,
+              role: findUser.role,
+            },
+          },
+        });
+
+        return created;
       });
 
       return fineCreated;
     } catch (error) {
+      // The twin of this submission committed after the replay check: the
+      // insert met the unique key, and the twin's fine is the answer.
+      if (isUniqueViolation(error)) {
+        const replay = await this.replayOf(fineData);
+
+        if (replay) return replay;
+      }
+
       throw new AppError(
         "Houve um erro ao tentar registrar a multa! Por favor, tente novamente.",
         500,
       );
     }
+  }
+
+  private async replayOf(fineData: CreateFineProps): Promise<Fine | null> {
+    if (!fineData.client_submission_id) return null;
+
+    return this.fine.findFineBySubmissionId(
+      fineData.businessId,
+      fineData.client_submission_id,
+    );
   }
 }
 

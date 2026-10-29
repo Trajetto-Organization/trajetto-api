@@ -3,10 +3,18 @@ import { container } from "tsyringe";
 
 import { CreateQuoteUseCase } from "./create-quote-usecase";
 import { createQuoteSchema } from "@/schemas/create-quote-schema";
+import { verifyTurnstileToken } from "@/shared/security/turnstile";
 
 class CreateQuoteController {
   async handle(request: FastifyRequest, reply: FastifyReply): Promise<void> {
-    const createQuote = createQuoteSchema.parse(request.body);
+    const { turnstileToken, ...createQuote } = createQuoteSchema.parse(
+      request.body,
+    );
+
+    // Before anything is written or mailed: this route is public and sends
+    // an e-mail to the address in the body, which is what a bot wants.
+    await verifyTurnstileToken(turnstileToken);
+
     const createQuoteUseCase = container.resolve(CreateQuoteUseCase);
 
     try {

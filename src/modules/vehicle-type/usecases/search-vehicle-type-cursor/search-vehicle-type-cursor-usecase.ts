@@ -17,6 +17,8 @@ interface SearchVehicleTypeWithCursorRequest {
   limit?: number;
   cursor?: string;
   businessId: string;
+  /** The typed term, filtered on the server (FLEET-SEARCH-1). */
+  search?: string;
 }
 
 @injectable()
@@ -35,6 +37,7 @@ class SearchVehicleTypeCursorUseCase {
     limit = 10,
     cursor,
     businessId,
+    search,
   }: SearchVehicleTypeWithCursorRequest): Promise<CursorPaginatedVehicleType> {
     const findUser = await this.user.findUserById(userId);
 
@@ -55,6 +58,7 @@ class SearchVehicleTypeCursorUseCase {
         limit,
         cursor,
         businessId,
+        search,
       });
     } catch (error) {
       throw new AppError(

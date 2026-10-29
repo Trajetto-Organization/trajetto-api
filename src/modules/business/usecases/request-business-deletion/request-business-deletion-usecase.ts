@@ -1,7 +1,8 @@
 import { inject, injectable } from "tsyringe";
+import { assertCallerRole } from "../errors/business-role-guard";
 
 import crypto from "node:crypto";
-import { hash } from "bcrypt";
+import { hashSecret } from "@/shared/security/bcrypt-gate";
 
 import { IBusinessRepository } from "@/modules/business/repositories/IBusiness-repository";
 import { IUserRepository } from "@/modules/user/repositories/IUser-repository";
@@ -13,18 +14,18 @@ import { BusinessNotFoundError } from "@/modules/business/usecases/errors/busine
 
 import { BusinessHasChildrenError } from "@/modules/business/usecases/errors/business-has-children-error";
 
-import { EmailWorkerAdapter } from "@/jobs/email-worker-adapter";
+import { sendTransactionalMail } from "@/shared/services/transactional-mail-service";
 import { AppError } from "@/shared/errors/AppError";
 
-import { env } from "@/env";
+import { emailLogoUrl } from "@/shared/providers/mail-provider/email-logo";
+import { logger } from "@/shared/logging/logger";
+
+const log = logger.child({ component: "business" });
 
 const CODE_EXPIRATION_MINUTES = 5;
 
 @injectable()
 class RequestBusinessDeletionUseCase {
-  private cloudinaryLogo = env.CLOUDINARY_LOGO_IMAGE;
-  private emailQueue: EmailWorkerAdapter;
-
   constructor(
     @inject("UserRepository")
     private user: IUserRepository,
@@ -32,11 +33,7 @@ class RequestBusinessDeletionUseCase {
     private business: IBusinessRepository,
     @inject("PendingDeletionProvider")
     private pendingDeletion: IPendingDeletionProvider,
-  ) {
-    this.emailQueue = new EmailWorkerAdapter(
-      "requestBusinessDeletionEmailQueue",
-    );
-  }
+  ) {}
 
   async execute(
     businessId: string,
@@ -47,6 +44,9 @@ class RequestBusinessDeletionUseCase {
     if (!findUser) {
       throw new ResourceNotFoundError();
     }
+
+    // MASTER-only, like the route: see assertCallerRole.
+    assertCallerRole(findUser, ["MASTER"]);
 
     const existingBusiness = await this.business.findBusinessById(businessId);
 
@@ -78,7 +78,7 @@ class RequestBusinessDeletionUseCase {
 
     const code = crypto.randomInt(100_000, 1_000_000).toString();
 
-    const codeHash = await hash(code, 10);
+    const codeHash = await hashSecret(code, 10);
     const expires = new Date(Date.now() + CODE_EXPIRATION_MINUTES * 60 * 1000);
 
     try {
@@ -89,31 +89,42 @@ class RequestBusinessDeletionUseCase {
         code_hash: codeHash,
         expires,
       });
-
-      await this.emailQueue.enqueueEmail({
-        email: findUser.email,
-        name: findUser.name,
-        subject: "Código de confirmação para exclusão de empresa",
-        templateName: "business-deletion-code.hbs",
-        moduleName: "business",
-        additionalVariablesProperties: {
-          code,
-          businessName: existingBusiness.corporate_reason,
-          businessCnpj: existingBusiness.cnpj,
-          logo: this.cloudinaryLogo,
-        },
-      });
-
-      return {
-        message:
-          "Um código de confirmação foi enviado para o seu e-mail. O código expira em 5 minutos.",
-      };
     } catch (error) {
       throw new AppError(
         "Houve um erro ao tentar enviar o código de confirmação! Por favor, tente novamente.",
         500,
       );
     }
+
+    /**
+     * Sent after the answer, never before it: the request used to wait on the
+     * SMTP round trip (10 s timeouts). The code is stored above, and asking
+     * again replaces it with a new one, so a lost e-mail costs one more
+     * request. It carries a secret, so it stays in-process, off the outbox.
+     */
+    void sendTransactionalMail({
+      email: findUser.email,
+      name: findUser.name,
+      subject: "Código de confirmação para exclusão de empresa",
+      templateName: "business-deletion-code.hbs",
+      moduleName: "business",
+      additionalVariablesProperties: {
+        code,
+        businessName: existingBusiness.corporate_reason,
+        businessCnpj: existingBusiness.cnpj,
+        logo: emailLogoUrl(),
+      },
+    }).catch((error) =>
+      log.error(
+        { err: error, userId: findUser.id, businessId },
+        "business deletion code e-mail could not be sent",
+      ),
+    );
+
+    return {
+      message:
+        "Um código de confirmação foi enviado para o seu e-mail. O código expira em 5 minutos.",
+    };
   }
 }
 

@@ -1,4 +1,8 @@
 import database from "@/../infra/database";
+
+import { forgetRequestCache, remember } from "@/shared/http/request-context";
+import { Prisma } from "@prisma/client";
+
 import { IUserRepository } from "./IUser-repository";
 
 import {
@@ -7,20 +11,46 @@ import {
   UpdateUserPassword,
   UpdateUserName,
   UpdateTwoFactorAuthentication,
-  ListUsers,
+  ListUsersPage,
   UpdateUser,
   UserRole,
   ListUsersByRoleAndBusinessProps,
   UpdateUserEmailVerification,
   UpdateUserAccessRevocation,
   UpdateUserWhatsAppSettings,
-  UpdateEmailNotifications,
-  UpdateActivityNotifications,
   CreateMasterUserProps,
   ListMasterUsersProps,
   SearchUserWithCursorProps,
   CursorPaginatedUser,
 } from "../dtos/user-dto";
+
+import { buildSearchOr } from "@/shared/pagination/search-or";
+import { resolveOrderBy } from "@/shared/pagination/list-query";
+
+import {
+  USER_SORT,
+  masterListWhere,
+  userListWhere,
+} from "../usecases/list-users/user-list";
+import {
+  MAX_FAILED_LOGINS,
+  failureWindowStart,
+  lockUntil,
+} from "@/shared/security/login-lockout-rules";
+
+/**
+ * The user listings stream NDJSON, and a stream never passes through the
+ * response serializer: whatever these queries return is exactly what leaves.
+ * They selected the whole row, so every password hash of a company went to
+ * any profile allowed to read its users. The hash stops here.
+ */
+function withoutPassword<T extends { password?: unknown }>(
+  user: T,
+): Omit<T, "password"> {
+  const { password: _password, ...listed } = user;
+
+  return listed;
+}
 
 class UserRepository implements IUserRepository {
   constructor(private prisma = database) {}
@@ -34,6 +64,11 @@ class UserRepository implements IUserRepository {
     businessId,
     driverId,
   }: CreateUserProps): Promise<User> {
+    // Anything cached for this request describes the row before this
+    // write. Kept, it would be read back by the next lookup in the
+    // same request and reported as the current state.
+    forgetRequestCache();
+
     const userCreated = await this.prisma.user.create({
       data: {
         email,
@@ -52,122 +87,70 @@ class UserRepository implements IUserRepository {
   async listUsers({
     page,
     pageSize,
-    businessId,
-    currentUserId,
-    currentUserRole,
-    search,
-  }: ListUsersByRoleAndBusinessProps): Promise<ListUsers> {
-    const skip = (page - 1) * pageSize;
+    sort,
+    order,
+    ...filters
+  }: ListUsersByRoleAndBusinessProps): Promise<ListUsersPage> {
+    const where = userListWhere(filters, { withFacets: true });
 
-    const rolePermissions: Record<UserRole, UserRole[]> = {
-      MASTER: ["BUSINESS_USER", "BUSINESS_ADMIN"],
-      BUSINESS_ADMIN: ["BUSINESS_ADMIN", "BUSINESS_USER"],
-      BUSINESS_USER: ["BUSINESS_USER"],
-    };
-
-    // Role mapping: keys are in lowercase to facilitate partial search
-    const roleMap: Record<string, string> = {
-      administrador: "BUSINESS_ADMIN",
-      usuário: "BUSINESS_USER",
-    };
-
-    // Normalizes the search term (if any)
-    const normalizedSearch = search ? search.trim().toLowerCase() : "";
-    let roleSearch: string | null = null;
-
-    if (normalizedSearch) {
-      for (const [label, roleValue] of Object.entries(roleMap)) {
-        if (label.includes(normalizedSearch)) {
-          roleSearch = roleValue;
-          break;
-        }
-      }
-    }
-
-    const allowedRoles = rolePermissions[currentUserRole];
-
-    // Builds an array of conditions for the OR filter
-    const orConditions: any[] = [];
-
-    if (normalizedSearch) {
-      orConditions.push(
-        { id: { contains: normalizedSearch, mode: "insensitive" } },
-        { name: { contains: normalizedSearch, mode: "insensitive" } },
-        { email: { contains: normalizedSearch, mode: "insensitive" } },
-        {
-          profileAccessId: { contains: normalizedSearch, mode: "insensitive" },
-        },
-        {
-          driverId: { contains: normalizedSearch, mode: "insensitive" },
-        },
-        {
-          ...(currentUserRole === "MASTER"
-            ? {
-                businessId: { contains: normalizedSearch, mode: "insensitive" },
-              }
-            : {}),
-        },
-        {
-          ...(currentUserRole === "MASTER"
-            ? {
-                business: {
-                  corporate_reason: {
-                    contains: normalizedSearch,
-                    mode: "insensitive",
-                  },
-                },
-              }
-            : {}),
-        },
-        {
-          profileAccess: {
-            name: { contains: normalizedSearch, mode: "insensitive" },
-          },
-        },
-      );
-    }
-
-    if (roleSearch) {
-      orConditions.push({ role: roleSearch });
-    }
-
-    const whereCondition = {
-      role: { in: allowedRoles },
-      ...(currentUserRole !== "MASTER" && { businessId }),
-      id: { not: currentUserId },
-      ...(orConditions.length > 0 ? { OR: orConditions } : {}),
-    };
-
-    const [usersAccessData, total] = await Promise.all([
+    // Two at a time (connection budget): the page ‖ the grouped counts over
+    // the base; then, one after the other, the verified-address count and the
+    // names of the profiles the groups mention.
+    const [rows, grouped] = await Promise.all([
       this.prisma.user.findMany({
-        skip,
+        skip: (page - 1) * pageSize,
         take: pageSize,
-        where: whereCondition,
+        where,
         include: {
-          ...(currentUserRole === "MASTER" && {
-            business: {
-              select: {
-                corporate_reason: true,
-              },
-            },
-          }),
-          profileAccess: {
-            select: { name: true },
-          },
-          driver: {
-            select: { name: true },
-          },
+          profileAccess: { select: { name: true } },
+          driver: { select: { name: true } },
         },
-        orderBy: {
-          created_at: "desc", // Sort by created_at
-        },
+        orderBy: resolveOrderBy(USER_SORT, { sort, order }),
       }),
-      this.prisma.user.count({
-        where: whereCondition,
+      this.prisma.user.groupBy({
+        by: ["role", "access_revoked", "two_factor_enabled", "profileAccessId"],
+        where: userListWhere(filters, { withFacets: false }),
+        _count: { _all: true },
       }),
     ]);
 
-    return { data: usersAccessData, total };
+    const emailVerified = await this.prisma.user.count({
+      where: { AND: [where, { email_verified: { not: null } }] },
+    });
+
+    const profileIds = Array.from(
+      new Set([
+        ...grouped.flatMap((group) =>
+          group.profileAccessId ? [group.profileAccessId] : [],
+        ),
+        ...(filters.profileAccessIds ?? []),
+      ]),
+    );
+
+    // Names only of this company's profiles: an id of another company in the
+    // URL brings back neither a row nor a name.
+    const profiles =
+      profileIds.length > 0
+        ? await this.prisma.profileAccess.findMany({
+            where: { id: { in: profileIds }, businessId: filters.businessId },
+            select: { id: true, name: true },
+          })
+        : [];
+
+    return {
+      data: rows.map(withoutPassword),
+      groups: grouped.map((group) => ({
+        role: group.role,
+        access_revoked: group.access_revoked,
+        two_factor_enabled: group.two_factor_enabled,
+        profileAccessId: group.profileAccessId,
+        count: group._count._all,
+      })),
+      profileNames: new Map(
+        profiles.map((profile) => [profile.id, profile.name]),
+      ),
+      emailVerified,
+    };
   }
 
   async updateEmailVerification({
@@ -175,6 +158,11 @@ class UserRepository implements IUserRepository {
     email,
     email_verified,
   }: UpdateUserEmailVerification): Promise<User | null> {
+    // Anything cached for this request describes the row before this
+    // write. Kept, it would be read back by the next lookup in the
+    // same request and reported as the current state.
+    forgetRequestCache();
+
     const updatedEmailVerification = await this.prisma.user.update({
       where: { id: userId },
       data: {
@@ -186,32 +174,36 @@ class UserRepository implements IUserRepository {
     return updatedEmailVerification;
   }
 
-  async updateUser({ userId, userData }: UpdateUser): Promise<User> {
-    // Extract relation fields that need Prisma-specific translation
+  // `tx` lets callers update the user and an outbox event atomically.
+  async updateUser(
+    { userId, userData }: UpdateUser,
+    tx?: Prisma.TransactionClient,
+  ): Promise<User> {
+    // Anything cached for this request describes the row before this
+    // write. Kept, it would be read back by the next lookup in the
+    // same request and reported as the current state.
+    forgetRequestCache();
+
+    // Extract relation fields that need Prisma-specific translation. Nobody
+    // sets another person's password through here any more (decision 4.9):
+    // that goes through the single-use link and updateUserPassword.
     const {
       businessId,
       profileAccessId,
       driverId,
-      userType,
-      password,
+      userType: _userType,
+      sendPasswordSetupLink: _sendPasswordSetupLink,
       ...restData
     } = userData;
 
     // Build Prisma update data from direct fields (excluding undefined values)
-    const updateData: any = {};
+    const updateData: Prisma.UserUpdateInput = {};
 
     Object.entries(restData).forEach(([key, value]) => {
       if (value !== undefined) {
-        updateData[key] = value;
+        (updateData as Record<string, unknown>)[key] = value;
       }
     });
-
-    // Password: only include if provided by use case
-    if (password) {
-      updateData.password = password;
-      updateData.session_version = { increment: 1 };
-      updateData.RefreshToken = { deleteMany: {} };
-    }
 
     // Translate flat IDs to Prisma relation syntax
     // businessId: string → connect
@@ -237,7 +229,7 @@ class UserRepository implements IUserRepository {
           : { connect: { id: driverId } };
     }
 
-    const updatedUser = await this.prisma.user.update({
+    const updatedUser = await (tx ?? this.prisma).user.update({
       where: { id: userId },
       data: updateData,
     });
@@ -245,22 +237,94 @@ class UserRepository implements IUserRepository {
     return updatedUser;
   }
 
-  async deleteUser(userId: string): Promise<User> {
-    const deletedUser = await this.prisma.user.delete({
+  async deleteUser(
+    userId: string,
+    tx?: Prisma.TransactionClient,
+  ): Promise<User> {
+    // Anything cached for this request describes the row before this
+    // write. Kept, it would be read back by the next lookup in the
+    // same request and reported as the current state.
+    forgetRequestCache();
+
+    const deletedUser = await (tx ?? this.prisma).user.delete({
       where: { id: userId },
     });
 
     return deletedUser;
   }
 
+  /**
+   * Deletes a MASTER without leaving the platform with none.
+   *
+   * No Postgres constraint says "at least one MASTER row", so the rows are
+   * locked instead: `FOR UPDATE` over the MASTERs serializes two concurrent
+   * deletions, and the second counts after the first has deleted. Zero
+   * MASTERs would lock the platform from the outside: only a MASTER creates
+   * another.
+   */
+  async deleteMasterUserKeepingOne(
+    userId: string,
+    outerTx?: Prisma.TransactionClient,
+  ): Promise<User | null> {
+    forgetRequestCache();
+
+    const deleteKeepingOne = async (tx: Prisma.TransactionClient) => {
+      const masters = await tx.$queryRaw<Array<{ id: string }>>`
+        SELECT "id" FROM "user" WHERE "role" = 'MASTER' FOR UPDATE
+      `;
+
+      if (masters.length <= 1) return null;
+
+      // The target must be among the locked rows: a non-MASTER or an already
+      // deleted id is a refusal, not a silent no-op.
+      if (!masters.some((master) => master.id === userId)) return null;
+
+      return tx.user.delete({ where: { id: userId } });
+    };
+
+    // The caller's transaction when it has one: the audit entry commits with
+    // the deletion, and the locks are held until then (OUTBOX-10).
+    return outerTx
+      ? deleteKeepingOne(outerTx)
+      : this.prisma.$transaction(deleteKeepingOne);
+  }
+
+  /**
+   * The id of the account with this e-mail, ignoring case, through
+   * user_email_lower_idx.
+   *
+   * Addresses are stored as typed, so the lookup has to ignore case — and
+   * `{ mode: "insensitive" }` compiles to ILIKE, which no btree can serve:
+   * every login, password reset and 2FA resend was a sequential scan of the
+   * whole user table (150k rows at the target scale). lower() = lower() is
+   * the same equality on an indexed expression, and a literal comparison, so
+   * "%" and "_" are characters, not wildcards (like-pattern.ts). An exact
+   * spelling wins over a case variant, should two rows ever differ only by
+   * case (the unique index is case-sensitive).
+   */
+  private async idByEmail(
+    email: string,
+    businessId?: string,
+  ): Promise<string | null> {
+    const [match] = await this.prisma.$queryRaw<Array<{ id: string }>>`
+      SELECT "id"
+      FROM "user"
+      WHERE lower("email") = lower(${email})
+        ${businessId === undefined ? Prisma.empty : Prisma.sql`AND "businessId" = ${businessId}`}
+      ORDER BY ("email" = ${email}) DESC, "created_at", "id"
+      LIMIT 1
+    `;
+
+    return match?.id ?? null;
+  }
+
   async findUserByEmail(email: string): Promise<User | null> {
-    const findUserByEmail = await this.prisma.user.findFirst({
-      where: {
-        email: {
-          equals: email,
-          mode: "insensitive",
-        },
-      },
+    const id = await this.idByEmail(email);
+
+    if (!id) return null;
+
+    const findUserByEmail = await this.prisma.user.findUnique({
+      where: { id },
       include: {
         business: {
           select: {
@@ -291,14 +355,12 @@ class UserRepository implements IUserRepository {
     email: string,
     businessId: string,
   ): Promise<User | null> {
-    const user = await this.prisma.user.findFirst({
-      where: {
-        email: {
-          equals: email,
-          mode: "insensitive",
-        },
-        businessId: businessId,
-      },
+    const id = await this.idByEmail(email, businessId);
+
+    if (!id) return null;
+
+    const user = await this.prisma.user.findUnique({
+      where: { id },
       include: {
         profileAccess: {
           select: {
@@ -320,41 +382,114 @@ class UserRepository implements IUserRepository {
     return user;
   }
 
+  /**
+   * The session lookup, answered once per request instead of twice.
+   *
+   * `ensureAuthenticated` loads the user to decide whether the session is
+   * real, and then every use case loads it again because use cases take a
+   * `userId` and look it up themselves. With the relations this carries that
+   * is three queries, on every authenticated request in the product — 600 a
+   * second at the measured saturation point, answering a question that was
+   * answered a millisecond earlier.
+   *
+   * Memoised per REQUEST, never per process: a process-wide cache would mean
+   * somebody revoking an access profile and the next N seconds of traffic
+   * still seeing the old permissions. Inside one request the user cannot
+   * change under itself — except by that same request writing to it, and
+   * every write here calls `forgetRequestCache`.
+   */
   async findUserById(userId: string): Promise<User | null> {
-    const findUserById = await this.prisma.user.findUnique({
-      where: {
-        id: userId,
-      },
+    return remember(`user:${userId}`, () => this.loadUserById(userId));
+  }
+
+  /**
+   * The user with its company, then its access profile and its driver, each
+   * read only when its key is set.
+   *
+   * One `include` brought all of them, and Prisma 7 runs every relation of
+   * an include even when the foreign key is null (`profile_access WHERE id =
+   * NULL`, `branch IN (NULL)`): seven statements on every authenticated
+   * request, where Prisma 6 skipped the empty ones and spent three to five.
+   * The company stays in the user's read — every account but a master's has
+   * one, so it is one operation as before (route-connection-fan-out counts
+   * them) — and the profile and the driver are read behind their keys. It
+   * costs what Prisma 6 spent, with the same shape: a missing relation is
+   * null. A master, with no company, pays the two empty company lookups.
+   */
+  private async loadUserById(userId: string): Promise<User | null> {
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
       include: {
         business: {
           select: {
             is_active: true,
-          },
-        },
-        profileAccess: {
-          select: {
-            name: true,
-            permissions: {
-              select: {
-                id: true,
-                permissionKey: true,
-                action: true,
-                canRead: true,
-                canWrite: true,
-              },
+            // Hired modules ride along with the session lookup: the web app
+            // gates its navigation with them, and a second round trip on
+            // every navigation would buy nothing.
+            entitlements: {
+              select: { module: true, enabled: true },
             },
-          },
-        },
-        driver: {
-          select: {
-            id: true,
-            status: true,
           },
         },
       },
     });
 
-    return findUserById;
+    if (!user) return null;
+
+    const profileAccess = await this.loadProfilePermissions(
+      user.profileAccessId,
+    );
+
+    const driver = user.driverId
+      ? await this.loadSessionDriver(user.driverId)
+      : null;
+
+    return { ...user, profileAccess, driver };
+  }
+
+  /** The access profile's name and permissions; no query without one. */
+  private async loadProfilePermissions(profileAccessId: string | null) {
+    if (!profileAccessId) return null;
+
+    return this.prisma.profileAccess.findUnique({
+      where: { id: profileAccessId },
+      select: {
+        name: true,
+        permissions: {
+          select: {
+            id: true,
+            permissionKey: true,
+            action: true,
+            canRead: true,
+            canWrite: true,
+          },
+        },
+      },
+    });
+  }
+
+  /**
+   * Everything the session check reads about the driver, so
+   * assertSessionEligible does not load the driver a second time (with its
+   * branch and its user) on every request a driver makes. The branch only
+   * when the driver has one.
+   */
+  private async loadSessionDriver(driverId: string) {
+    const driver = await this.prisma.driver.findUnique({
+      where: { id: driverId },
+      select: { id: true, status: true, businessId: true, branchId: true },
+    });
+
+    if (!driver) return null;
+
+    const branch = driver.branchId
+      ? await this.prisma.branch.findUnique({
+          where: { id: driver.branchId },
+          select: { is_active: true },
+        })
+      : null;
+
+    return { ...driver, branch };
   }
 
   async findUsersByBusiness(businessId: string): Promise<User[]> {
@@ -367,23 +502,107 @@ class UserRepository implements IUserRepository {
     return findUserByBusiness;
   }
 
+  async countUsersWithProfile(profileAccessId: string): Promise<number> {
+    return this.prisma.user.count({ where: { profileAccessId } });
+  }
+
   async updateUserPassword({
     userId,
     password,
   }: UpdateUserPassword): Promise<User | null> {
+    // Anything cached for this request describes the row before this
+    // write. Kept, it would be read back by the next lookup in the
+    // same request and reported as the current state.
+    forgetRequestCache();
+
     const updatedUserPassword = await this.prisma.user.update({
       where: { id: userId },
       data: {
         password,
         session_version: { increment: 1 },
         RefreshToken: { deleteMany: {} },
+        // Every session ends, so every device they registered stops receiving.
+        PushDeviceToken: { deleteMany: {} },
+
+        // A new password is the owner's way out of a lock somebody else
+        // keeps renewing by guessing.
+        failed_login_attempts: 0,
+        failed_login_at: null,
+        login_locked_until: null,
       },
     });
 
     return updatedUserPassword;
   }
 
+  /**
+   * One statement, so that concurrent wrong passwords are all counted: every
+   * SET reads the row as it was before this UPDATE, and Postgres re-reads the
+   * latest version when two of them wait on the same row.
+   *
+   * Raw on purpose: a failed login is not an edit of the user, and Prisma's
+   * `update` would stamp `updated_at` on every guess.
+   */
+  async registerFailedLogin(userId: string, now: Date): Promise<void> {
+    const windowStart = failureWindowStart(now);
+    const lockedUntil = lockUntil(now);
+
+    await this.prisma.$executeRaw`
+      UPDATE "user"
+      SET
+        "failed_login_attempts" = CASE
+          WHEN "failed_login_at" IS NULL OR "failed_login_at" < ${windowStart}
+            THEN 1
+          ELSE "failed_login_attempts" + 1
+        END,
+        "failed_login_at" = ${now},
+        "login_locked_until" = CASE
+          WHEN (CASE
+            WHEN "failed_login_at" IS NULL OR "failed_login_at" < ${windowStart}
+              THEN 1
+            ELSE "failed_login_attempts" + 1
+          END) >= ${MAX_FAILED_LOGINS}
+            THEN ${lockedUntil}
+          ELSE "login_locked_until"
+        END
+      WHERE "id" = ${userId}
+    `;
+  }
+
+  async clearFailedLogins(userId: string, now: Date): Promise<boolean> {
+    // Guarded by the lock itself: a burst of guesses may have locked the
+    // account while this password was being compared, and that lock still
+    // wins. Nothing to clear is the common case, and then nothing is written.
+    //
+    // One round trip: the outer SELECT reads the row as it was before the
+    // CTE's UPDATE (a data-modifying CTE is invisible to its own statement).
+    const [result] = await this.prisma.$queryRaw<Array<{ locked: boolean }>>`
+      WITH "cleared" AS (
+        UPDATE "user"
+        SET
+          "failed_login_attempts" = 0,
+          "failed_login_at" = NULL,
+          "login_locked_until" = NULL
+        WHERE "id" = ${userId}
+          AND ("login_locked_until" IS NULL OR "login_locked_until" <= ${now})
+          AND ("failed_login_attempts" > 0 OR "login_locked_until" IS NOT NULL)
+        RETURNING "id"
+      )
+      SELECT EXISTS (
+        SELECT 1 FROM "user"
+        WHERE "id" = ${userId} AND "login_locked_until" > ${now}
+      ) AS "locked"
+    `;
+
+    return !result?.locked;
+  }
+
   async updateUserName({ userId, name }: UpdateUserName): Promise<User | null> {
+    // Anything cached for this request describes the row before this
+    // write. Kept, it would be read back by the next lookup in the
+    // same request and reported as the current state.
+    forgetRequestCache();
+
     const updatedUserName = await this.prisma.user.update({
       where: { id: userId },
       data: { name },
@@ -396,6 +615,11 @@ class UserRepository implements IUserRepository {
     userId,
     isTwoFactorEnabled,
   }: UpdateTwoFactorAuthentication): Promise<User | null> {
+    // Anything cached for this request describes the row before this
+    // write. Kept, it would be read back by the next lookup in the
+    // same request and reported as the current state.
+    forgetRequestCache();
+
     const updatedTwoFactorAuthentication = await this.prisma.user.update({
       where: { id: userId },
       data: { two_factor_enabled: isTwoFactorEnabled },
@@ -404,16 +628,46 @@ class UserRepository implements IUserRepository {
     return updatedTwoFactorAuthentication;
   }
 
+  async toggleUserAccessRevocation(
+    userId: string,
+    expectedRevoked: boolean,
+  ): Promise<boolean> {
+    // Anything cached for this request describes the row before this write.
+    forgetRequestCache();
+
+    return this.prisma.$transaction(async (tx) => {
+      const { count } = await tx.user.updateMany({
+        where: { id: userId, access_revoked: expectedRevoked },
+        data: { access_revoked: !expectedRevoked },
+      });
+
+      // A revoked person's phone stops receiving their pushes now, not when
+      // the app next asks the API and learns it was revoked. Restoring access
+      // brings nothing back: the app registers again on its next login.
+      if (count === 1 && !expectedRevoked) {
+        await tx.pushDeviceToken.deleteMany({ where: { userId } });
+      }
+
+      return count === 1;
+    });
+  }
+
   async updateUserAccessRevocation({
     userId,
     isAccessRevoke,
   }: UpdateUserAccessRevocation): Promise<User | null> {
+    // Anything cached for this request describes the row before this
+    // write. Kept, it would be read back by the next lookup in the
+    // same request and reported as the current state.
+    forgetRequestCache();
+
     const updateUserAccessRevocation = await this.prisma.user.update({
       where: { id: userId },
       data: {
         access_revoked: isAccessRevoke,
         session_version: { increment: 1 },
         RefreshToken: { deleteMany: {} },
+        PushDeviceToken: { deleteMany: {} },
       },
     });
 
@@ -421,11 +675,45 @@ class UserRepository implements IUserRepository {
   }
 
   async invalidateUserSessions(userId: string): Promise<User | null> {
+    // Anything cached for this request describes the row before this
+    // write. Kept, it would be read back by the next lookup in the
+    // same request and reported as the current state.
+    forgetRequestCache();
+
     return this.prisma.user.update({
       where: { id: userId },
       data: {
         session_version: { increment: 1 },
         RefreshToken: { deleteMany: {} },
+        // Forced logout of every session: their devices go too (MOB-05).
+        PushDeviceToken: { deleteMany: {} },
+      },
+    });
+  }
+
+  async endSessionsAndClearInbox(
+    userId: string,
+    tx?: Prisma.TransactionClient,
+  ): Promise<void> {
+    forgetRequestCache();
+
+    // One statement: the bump, the deletions and the caller's own write
+    // commit or roll back together.
+    await (tx ?? this.prisma).user.update({
+      where: { id: userId },
+      data: {
+        session_version: { increment: 1 },
+        RefreshToken: { deleteMany: {} },
+        PushDeviceToken: { deleteMany: {} },
+        Notification: { deleteMany: {} },
+        // What was fanned out to them and not delivered yet was addressed to
+        // the old role or company: left in place, an IN_APP row would land in
+        // the emptied inbox (another tenant's plates and values) and an
+        // e-mail would carry it outside. DELIVERED and FAILED rows stay: they
+        // are the ledger, and hold no message.
+        NotificationDelivery: {
+          deleteMany: { status: { in: ["PENDING", "PROCESSING"] } },
+        },
       },
     });
   }
@@ -435,15 +723,16 @@ class UserRepository implements IUserRepository {
     whatsapp_notifications_enabled,
     whatsapp_phone,
   }: UpdateUserWhatsAppSettings): Promise<User | null> {
+    // Anything cached for this request describes the row before this
+    // write. Kept, it would be read back by the next lookup in the
+    // same request and reported as the current state.
+    forgetRequestCache();
+
     const updatedWhatsAppSettings = await this.prisma.user.update({
       where: { id: userId },
       data: {
         whatsapp_notifications_enabled: whatsapp_notifications_enabled,
         whatsapp_phone: whatsapp_phone || null,
-        // If disabling, also mark as disconnected
-        ...(whatsapp_notifications_enabled === false && {
-          whatsapp_instance_connected: false,
-        }),
       },
       include: {
         business: true,
@@ -481,6 +770,42 @@ class UserRepository implements IUserRepository {
     return admins;
   }
 
+  async findDeliveryOperators(businessId: string): Promise<User[]> {
+    return this.prisma.user.findMany({
+      where: {
+        businessId,
+        access_revoked: false,
+        // A driver logs in as a BUSINESS_USER too, and holds delivery_manage
+        // for the app: being linked to a driver record is what rules them out.
+        driverId: null,
+        OR: [
+          { role: "BUSINESS_ADMIN" },
+          {
+            role: "BUSINESS_USER",
+            profileAccess: {
+              permissions: {
+                some: {
+                  permissionKey: "delivery_manage",
+                  canRead: true,
+                  canWrite: true,
+                },
+              },
+            },
+          },
+        ],
+      },
+      include: {
+        business: {
+          select: {
+            corporate_reason: true,
+            is_active: true,
+          },
+        },
+      },
+      orderBy: [{ created_at: "asc" }, { id: "asc" }],
+    });
+  }
+
   async findOtherMasters(excludeUserId: string): Promise<User[]> {
     const masters = await this.prisma.user.findMany({
       where: {
@@ -494,113 +819,6 @@ class UserRepository implements IUserRepository {
     });
 
     return masters;
-  }
-
-  async findBusinessAdminsForWhatsApp(businessId: string): Promise<User[]> {
-    const admins = await this.prisma.user.findMany({
-      where: {
-        businessId,
-        role: "BUSINESS_ADMIN",
-        access_revoked: false,
-        whatsapp_notifications_enabled: true,
-        whatsapp_phone: {
-          not: null,
-        },
-      },
-      include: {
-        business: {
-          select: {
-            corporate_reason: true,
-            is_active: true,
-          },
-        },
-      },
-    });
-
-    return admins;
-  }
-
-  async findUsersWithWhatsAppEnabled(businessId: string): Promise<User[]> {
-    const users = await this.prisma.user.findMany({
-      where: {
-        businessId,
-        whatsapp_notifications_enabled: true,
-        whatsapp_phone: {
-          not: null,
-        },
-        access_revoked: false,
-      },
-      include: {
-        business: {
-          select: {
-            corporate_reason: true,
-            is_active: true,
-          },
-        },
-      },
-      orderBy: {
-        name: "asc",
-      },
-    });
-
-    return users;
-  }
-
-  async updateWhatsAppInstanceStatus(
-    userId: string,
-    connected: boolean,
-  ): Promise<User | null> {
-    const updatedUser = await this.prisma.user.update({
-      where: { id: userId },
-      data: {
-        whatsapp_instance_connected: connected,
-      },
-    });
-
-    return updatedUser;
-  }
-
-  async updateEmailNotifications({
-    userId,
-    email_notifications_enabled,
-  }: UpdateEmailNotifications): Promise<User | null> {
-    const updatedUser = await this.prisma.user.update({
-      where: { id: userId },
-      data: {
-        email_notifications_enabled,
-      },
-    });
-
-    return updatedUser;
-  }
-
-  async updateActivityNotifications({
-    userId,
-    activity_notifications_enabled,
-  }: UpdateActivityNotifications): Promise<User | null> {
-    const updatedUser = await this.prisma.user.update({
-      where: { id: userId },
-      data: {
-        activity_notifications_enabled,
-      },
-    });
-
-    return updatedUser;
-  }
-
-  async findUserWithConnectedWhatsAppByPhone(
-    phoneNumber: string,
-  ): Promise<User | null> {
-    const user = await this.prisma.user.findFirst({
-      where: {
-        whatsapp_phone: phoneNumber,
-        whatsapp_notifications_enabled: true,
-        whatsapp_instance_connected: true,
-        access_revoked: false,
-      },
-    });
-
-    return user;
   }
 
   async findUserWithWhatsAppByPhone(
@@ -619,53 +837,33 @@ class UserRepository implements IUserRepository {
     return user;
   }
 
-  async findAllUsersWithDisconnectedWhatsAppByPhone(
-    phoneNumber: string,
-    excludeUserId?: string,
-  ): Promise<User[]> {
-    const users = await this.prisma.user.findMany({
-      where: {
-        whatsapp_phone: phoneNumber,
-        whatsapp_notifications_enabled: true,
-        whatsapp_instance_connected: false,
-        access_revoked: false,
-        ...(excludeUserId && { id: { not: excludeUserId } }),
-      },
-    });
-
-    return users;
-  }
-
   async findUserByDriverId(driverId: string): Promise<User | null> {
     const user = await this.prisma.user.findFirst({
       where: {
         driverId,
       },
-      include: {
-        profileAccess: {
-          select: {
-            name: true,
-            permissions: {
-              select: {
-                id: true,
-                permissionKey: true,
-                action: true,
-                canRead: true,
-                canWrite: true,
-              },
-            },
-          },
-        },
-      },
     });
 
-    return user;
+    if (!user) return null;
+
+    // A driver's user rarely has a profile: read it behind its key, as the
+    // session does (Prisma 7 queries it, and its permissions, under a null).
+    const profileAccess = await this.loadProfilePermissions(
+      user.profileAccessId,
+    );
+
+    return { ...user, profileAccess };
   }
 
   async updateAvatar(
     userId: string,
     avatarPath: string | null,
   ): Promise<User | null> {
+    // Anything cached for this request describes the row before this
+    // write. Kept, it would be read back by the next lookup in the
+    // same request and reported as the current state.
+    forgetRequestCache();
+
     const updatedUser = await this.prisma.user.update({
       where: { id: userId },
       data: { avatar: avatarPath },
@@ -674,12 +872,16 @@ class UserRepository implements IUserRepository {
     return updatedUser;
   }
 
-  async createMasterUser({
-    name,
-    email,
-    password,
-  }: CreateMasterUserProps): Promise<User> {
-    const masterUser = await this.prisma.user.create({
+  async createMasterUser(
+    { name, email, password }: CreateMasterUserProps,
+    tx?: Prisma.TransactionClient,
+  ): Promise<User> {
+    // Anything cached for this request describes the row before this
+    // write. Kept, it would be read back by the next lookup in the
+    // same request and reported as the current state.
+    forgetRequestCache();
+
+    const masterUser = await (tx ?? this.prisma).user.create({
       data: {
         name,
         email,
@@ -694,49 +896,65 @@ class UserRepository implements IUserRepository {
   async listMasterUsers({
     page,
     pageSize,
-    search,
-    currentUserId,
-  }: ListMasterUsersProps): Promise<ListUsers> {
-    const skip = (page - 1) * pageSize;
-    const normalizedSearch = search ? search.trim().toLowerCase() : "";
+    sort,
+    order,
+    ...filters
+  }: ListMasterUsersProps): Promise<ListUsersPage> {
+    const where = masterListWhere(filters, { withFacets: true });
 
-    const whereCondition: any = {
-      role: "MASTER",
-      ...(currentUserId ? { id: { not: currentUserId } } : {}),
-      ...(normalizedSearch
-        ? {
-            OR: [
-              { id: { contains: normalizedSearch, mode: "insensitive" } },
-              { name: { contains: normalizedSearch, mode: "insensitive" } },
-              { email: { contains: normalizedSearch, mode: "insensitive" } },
-            ],
-          }
-        : {}),
-    };
-
-    const [data, total] = await Promise.all([
+    const [rows, grouped] = await Promise.all([
       this.prisma.user.findMany({
-        skip,
+        skip: (page - 1) * pageSize,
         take: pageSize,
-        where: whereCondition,
-        orderBy: { created_at: "desc" },
+        where,
+        orderBy: resolveOrderBy(USER_SORT, { sort, order }),
       }),
-      this.prisma.user.count({ where: whereCondition }),
+      this.prisma.user.groupBy({
+        by: ["role", "access_revoked", "two_factor_enabled", "profileAccessId"],
+        where: masterListWhere(filters, { withFacets: false }),
+        _count: { _all: true },
+      }),
     ]);
 
-    return { data, total };
+    const emailVerified = await this.prisma.user.count({
+      where: { AND: [where, { email_verified: { not: null } }] },
+    });
+
+    return {
+      data: rows.map(withoutPassword),
+      groups: grouped.map((group) => ({
+        role: group.role,
+        access_revoked: group.access_revoked,
+        two_factor_enabled: group.two_factor_enabled,
+        profileAccessId: group.profileAccessId,
+        count: group._count._all,
+      })),
+      profileNames: new Map(),
+      emailVerified,
+    };
   }
 
   async searchUserWithCursor({
     limit = 10,
     cursor,
     businessId,
+    search,
   }: SearchUserWithCursorProps): Promise<CursorPaginatedUser> {
+    const term = search?.trim() ?? "";
+
     const items = await this.prisma.user.findMany({
-      where: { businessId },
+      where: {
+        businessId,
+        ...(term &&
+          buildSearchOr<Prisma.UserWhereInput>([
+            { name: { contains: term, mode: "insensitive" as const } },
+            { email: { contains: term, mode: "insensitive" as const } },
+          ])),
+      },
       take: limit + 1,
       ...(cursor && { cursor: { id: cursor }, skip: 1 }),
-      orderBy: { created_at: "desc" },
+      // The id breaks created_at ties, so a cursor never skips a row.
+      orderBy: [{ created_at: "desc" }, { id: "desc" }],
     });
 
     const hasMore = items.length > limit;
@@ -744,7 +962,7 @@ class UserRepository implements IUserRepository {
     const data = hasMore ? items.slice(0, limit) : items;
     const nextCursor = hasMore ? (data[data.length - 1]?.id ?? null) : null;
 
-    return { data, nextCursor, hasMore };
+    return { data: data.map(withoutPassword), nextCursor, hasMore };
   }
 }
 

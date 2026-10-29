@@ -15,12 +15,10 @@ import { BranchEmailAlreadyExistsError } from "../errors/branch-email-already-ex
 
 import { BranchErpCodeAlreadyExistsError } from "../errors/branch-erp-code-already-exists-error";
 
-import { BusinessCnpjAlreadyExistsError } from "@/modules/business/usecases/errors/business-cnpj-already-exists-error";
-import { BusinessCorporateReasonAlreadyExistsError } from "@/modules/business/usecases/errors/business-corporate-reason-already-exists-error";
+import { branchUniqueViolation } from "../errors/branch-unique-violation";
+import { assertTenantAccess } from "@/modules/middlewares/tenant-authorization";
 
-import { BusinessErpCodeAlreadyExistsError } from "@/modules/business/usecases/errors/business-erp-code-already-exists-error";
-import { BusinessEmailAlreadyExistsError } from "@/modules/business/usecases/errors/business-email-already-exists-error";
-
+import { sendCatalogChangedEvent } from "@/websocket";
 import { AppError } from "@/shared/errors/AppError";
 import { NotificationService } from "@/shared/services/notification-service";
 
@@ -54,9 +52,17 @@ class CreateBranchUseCase {
       throw new BusinessNotFoundError();
     }
 
-    // Checks with other branches
+    // The route guard pins the path to the session; the rule also lives
+    // with the use case for any other caller.
+    assertTenantAccess(findUser, businessId);
+
+    // Uniqueness inside THIS company (decision 8.1): another carrier may
+    // have a branch with the same name, e-mail or ERP code, and it is not
+    // ours to say so. Nothing here looks at other companies' rows except the
+    // CNPJ, which is national, and its answer names nobody.
     const findBranchByCorporateReason =
       await this.branch.findBranchByCorporateReason(
+        businessId,
         branchData.corporate_reason,
       );
 
@@ -64,16 +70,9 @@ class CreateBranchUseCase {
       throw new BranchNameAlreadyExistsError();
     }
 
-    const findBranchByCnpj = await this.branch.findBranchByCnpj(
-      branchData.cnpj,
-    );
-
-    if (findBranchByCnpj) {
-      throw new BranchCnpjAlreadyExistsError();
-    }
-
     if (branchData.erp_code) {
       const findBranchByErpCode = await this.branch.findBranchByErpCode(
+        businessId,
         branchData.erp_code,
       );
 
@@ -83,6 +82,7 @@ class CreateBranchUseCase {
     }
 
     const findBranchByEmail = await this.branch.findBranchByEmail(
+      businessId,
       branchData.email,
     );
 
@@ -90,7 +90,17 @@ class CreateBranchUseCase {
       throw new BranchEmailAlreadyExistsError();
     }
 
-    // New checks with companies (except the company to which this branch will belong)
+    // The CNPJ is one legal establishment: taken by any branch, or by a
+    // company other than this one (the head office carries its own company's
+    // CNPJ). Neutral either way.
+    const findBranchByCnpj = await this.branch.findBranchByCnpj(
+      branchData.cnpj,
+    );
+
+    if (findBranchByCnpj) {
+      throw new BranchCnpjAlreadyExistsError();
+    }
+
     if (branchData.cnpj !== findBusiness.cnpj) {
       const findOtherBusinessByCnpj = await this.business.findBusinessByCnpj(
         branchData.cnpj,
@@ -100,73 +110,44 @@ class CreateBranchUseCase {
         findOtherBusinessByCnpj &&
         findOtherBusinessByCnpj.id !== businessId
       ) {
-        throw new BusinessCnpjAlreadyExistsError();
+        throw new BranchCnpjAlreadyExistsError();
       }
     }
 
-    if (branchData.corporate_reason !== findBusiness.corporate_reason) {
-      const findOtherBusinessByCorporateReason =
-        await this.business.findBusinessByCorporateReason(
-          branchData.corporate_reason,
-        );
-
-      if (
-        findOtherBusinessByCorporateReason &&
-        findOtherBusinessByCorporateReason.id !== businessId
-      ) {
-        throw new BusinessCorporateReasonAlreadyExistsError();
-      }
-    }
-
-    if (branchData.erp_code && branchData.erp_code !== findBusiness.erp_code) {
-      const findOtherBusinessByErpcode =
-        await this.business.findBusinessByErpcode(branchData.erp_code);
-
-      if (
-        findOtherBusinessByErpcode &&
-        findOtherBusinessByErpcode.id !== businessId
-      ) {
-        throw new BusinessErpCodeAlreadyExistsError();
-      }
-    }
-
-    if (branchData.email !== findBusiness.email) {
-      const findOtherBusinessByEmail = await this.business.findBusinessByEmail(
-        branchData.email,
-      );
-
-      if (
-        findOtherBusinessByEmail &&
-        findOtherBusinessByEmail.id !== businessId
-      ) {
-        throw new BusinessEmailAlreadyExistsError();
-      }
-    }
+    let branchCreated: Branch;
 
     try {
-      const branchCreated = await this.branch.createBranch({
+      branchCreated = await this.branch.createBranch({
         ...branchData,
         businessId,
       });
-
-      // Process activity asynchronously without blocking the main flow
-      this.notificationService.createActivityIfEnabled({
-        type: "Filial",
-        action: "create",
-        entityId: branchCreated.id,
-        description: `Filial criada com sucesso: ${branchCreated.corporate_reason} | CNPJ: ${branchCreated.cnpj} | ID: ${branchCreated.id}`,
-        status: "Completo",
-        performedBy: userId,
-        businessId: businessId,
-      });
-
-      return branchCreated;
     } catch (error) {
+      // Two requests that both passed the checks: the loser gets the same 409.
+      const duplicate = branchUniqueViolation(error);
+
+      if (duplicate) throw duplicate;
+
       throw new AppError(
         "Houve um erro ao tentar criar a filial! Por favor, tente novamente.",
         500,
       );
     }
+
+    // Process activity asynchronously without blocking the main flow
+    this.notificationService.createActivityIfEnabled({
+      type: "Filial",
+      action: "create",
+      entityId: branchCreated.id,
+      description: `Filial criada com sucesso: ${branchCreated.corporate_reason} | CNPJ: ${branchCreated.cnpj} | ID: ${branchCreated.id}`,
+      status: "Completo",
+      performedBy: userId,
+      businessId: businessId,
+    });
+
+    // After the write: open screens of this company refresh their pickers.
+    sendCatalogChangedEvent(businessId, "branch");
+
+    return branchCreated;
   }
 }
 

@@ -1,16 +1,7 @@
 import { FastifyReply, FastifyRequest } from "fastify";
 import { container } from "tsyringe";
-
 import { DeleteKanbanColumnUseCase } from "./delete-column-usecase";
 import { updateDeleteKanbanColumnSchema } from "@/schemas/update-delete-kanban-column-schema";
-
-import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
-import { BusinessNotFoundError } from "@/modules/business/usecases/errors/business-not-found-error";
-
-import { KanbanNotAllowedDeleteColumnBusinessError } from "../errors/kanban-not-allowed-delete-column-business-error";
-import { KanbanColumnNotBelongBusinessError } from "../errors/kanban-column-not-belong-business-error";
-
-import { KanbanColumnNotFoundError } from "../errors/kanban-column-not-found-error";
 
 class DeleteKanbanColumnController {
   async handle(
@@ -26,34 +17,8 @@ class DeleteKanbanColumnController {
       DeleteKanbanColumnUseCase,
     );
 
-    try {
-      await deleteKanbanColumnUseCase.execute(columnId, businessId, id);
-      return reply
-        .status(200)
-        .send({ message: "Coluna deletada com sucesso!" });
-    } catch (error) {
-      if (error instanceof ResourceNotFoundError) {
-        return reply.status(400).send({ message: error.message });
-      }
-
-      if (error instanceof BusinessNotFoundError) {
-        return reply.status(400).send({ message: error.message });
-      }
-
-      if (error instanceof KanbanColumnNotFoundError) {
-        return reply.status(404).send({ message: error.message });
-      }
-
-      if (error instanceof KanbanColumnNotBelongBusinessError) {
-        return reply.status(403).send({ message: error.message });
-      }
-
-      if (error instanceof KanbanNotAllowedDeleteColumnBusinessError) {
-        return reply.status(403).send({ message: error.message });
-      }
-
-      throw error;
-    }
+    await deleteKanbanColumnUseCase.execute(columnId, businessId, id);
+    return reply.status(200).send({ message: "Coluna deletada com sucesso!" });
   }
 }
 

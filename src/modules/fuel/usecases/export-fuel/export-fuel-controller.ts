@@ -1,8 +1,9 @@
 import { FastifyReply, FastifyRequest } from "fastify";
 import { container } from "tsyringe";
+import { z } from "zod";
 
 import { ExportFuelUseCase } from "./export-fuel-usecase";
-import { exportReports } from "@/schemas/export-reports-schema";
+import { exportFuelQuerySchema } from "@/schemas/export-fuel-schema";
 
 import { ExportPipeline } from "@/shared/services/export/export-pipeline";
 import { CsvWriter } from "@/shared/services/export/writers/csv-writer";
@@ -10,21 +11,27 @@ import { CsvWriter } from "@/shared/services/export/writers/csv-writer";
 import { ExcelWriter } from "@/shared/services/export/writers/excel-writer";
 import { ExportColumn } from "@/shared/services/export/types";
 
-import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
-import { FuelNoFuelsToExportError } from "../errors/fuel-no-fuels-to-export-error";
+import { replyFuelWriteError } from "../errors/fuel-http-errors";
 
 class ExportFuelController {
   async handle(request: FastifyRequest, reply: FastifyReply) {
     const { id } = request.user;
-    const { search, format } = exportReports.parse(request.query);
+
+    // Validated and transformed by the route (facets arrive as lists).
+    const { search, format, businessId, branchId, vehicleId, fuelTypeId } =
+      request.query as z.infer<typeof exportFuelQuerySchema>;
 
     const exportFuelUseCase = container.resolve(ExportFuelUseCase);
 
     try {
-      const { iterator, columns, filename } = await exportFuelUseCase.execute(
-        id,
+      const { iterator, columns, filename } = await exportFuelUseCase.execute({
+        userId: id,
+        businessId,
         search,
-      );
+        branchIds: branchId,
+        vehicleIds: vehicleId,
+        fuelTypeIds: fuelTypeId,
+      });
 
       // Choose writer
       let writer;
@@ -45,13 +52,9 @@ class ExportFuelController {
 
       await pipeline.execute(reply, filename);
     } catch (error) {
-      if (error instanceof ResourceNotFoundError) {
-        return reply.status(400).send({ message: error.message });
-      }
-
-      if (error instanceof FuelNoFuelsToExportError) {
-        return reply.status(400).send({ message: error.message });
-      }
+      // 400 NOTHING_TO_EXPORT when the filter keeps nothing; the web shows
+      // the sentence, never the raw body.
+      if (replyFuelWriteError(reply, error)) return;
 
       throw error;
     }

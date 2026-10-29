@@ -1,7 +1,14 @@
 import Redis, { Redis as RedisClient } from "ioredis";
 
 import { attachRedisConnectionLog } from "@/shared/services/redis-connection-log";
+import { logger } from "@/shared/logging/logger";
 import { env } from "@/env";
+
+/**
+ * Runs inside the API process (every /health reads through it), so it writes
+ * through the shared logger like src/ does (OBS-14).
+ */
+const log = logger.child({ component: "redis", client: "cache" });
 
 class RedisConnection {
   private static instance: RedisConnection;
@@ -48,7 +55,7 @@ class RedisConnection {
     // each one logging its own errors every couple of seconds.
     if (!this.client) {
       // The URL carries credentials, so it is deliberately not logged.
-      console.log("[Redis] Connecting to Redis");
+      log.info("connecting to Redis");
       this.client = new Redis(env.REDIS_URL, {
         connectionName: "trajetto-cache",
         maxRetriesPerRequest: 3,
@@ -90,7 +97,7 @@ class RedisConnection {
         client.once("error", onError);
       });
 
-      console.log("[Redis] Successfully connected to Redis");
+      log.info("Redis connected");
       return client;
     } catch (error) {
       // Clear the memoized promise so the next caller waits on a fresh
@@ -115,9 +122,9 @@ class RedisConnection {
       // promise, which resolves to the client we just quit.
       this.connectionPromise = null;
 
-      console.log("[Redis] Connection closed successfully");
+      log.info("Redis connection closed");
     } catch (error) {
-      console.error("[Redis] Error closing connection:", error);
+      log.error({ err: error }, "Redis connection could not be closed");
     }
   }
 }

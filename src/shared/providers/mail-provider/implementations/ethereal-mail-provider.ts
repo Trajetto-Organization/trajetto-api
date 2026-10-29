@@ -1,31 +1,33 @@
-import { MailProviderProps } from "../dtos/mail-provider-dto";
+import { MailProviderProps, MailSendResult } from "../dtos/mail-provider-dto";
 import { IMailProvider } from "../IMail-provider";
 
 import nodemailer, { Transporter } from "nodemailer";
-import handlebars from "handlebars";
 
-import fs from "node:fs";
+import { logger } from "@/shared/logging/logger";
+
+import { renderMailTemplate } from "../template-renderer";
+import { toMailDeliveryError } from "../errors/mail-delivery-error";
+import { buildMessageId } from "../message-id";
+
+const log = logger.child({ component: "mail-provider", provider: "ethereal" });
+
+const SMTP_TIMEOUT_MS = 10_000;
 
 class EtherealMailProvider implements IMailProvider {
   private client?: Transporter;
-  private isInitializing: boolean = false;
 
-  private initializationPromise?: Promise<void>;
+  private initializationPromise?: Promise<Transporter>;
 
-  constructor() {
-    // Initialize the client immediately in the constructor
-    this.initializeClient();
-  }
+  private async getClient(): Promise<Transporter> {
+    if (this.client) return this.client;
 
-  private initializeClient(): Promise<void> {
-    if (this.initializationPromise) {
-      return this.initializationPromise;
-    }
-
-    this.isInitializing = true;
-    this.initializationPromise = (async () => {
-      try {
+    // The promise is not cached across failures on purpose: a test account
+    // that could not be created must be retried on the next send instead of
+    // poisoning the provider until the process restarts.
+    if (!this.initializationPromise) {
+      this.initializationPromise = (async () => {
         const account = await nodemailer.createTestAccount();
+
         const transporter = nodemailer.createTransport({
           host: account.smtp.host,
           port: account.smtp.port,
@@ -34,17 +36,20 @@ class EtherealMailProvider implements IMailProvider {
             user: account.user,
             pass: account.pass,
           },
+          pool: true,
+          maxConnections: 3,
+          connectionTimeout: SMTP_TIMEOUT_MS,
+          greetingTimeout: SMTP_TIMEOUT_MS,
+          socketTimeout: SMTP_TIMEOUT_MS,
         });
 
         this.client = transporter;
-        console.log("Ethereal Mail client initialized successfully!");
-      } catch (error) {
-        console.error("Failed to initialize Ethereal Mail client:", error);
+        return transporter;
+      })().catch((error) => {
+        this.initializationPromise = undefined;
         throw error;
-      } finally {
-        this.isInitializing = false;
-      }
-    })();
+      });
+    }
 
     return this.initializationPromise;
   }
@@ -54,44 +59,56 @@ class EtherealMailProvider implements IMailProvider {
     subject,
     variables,
     path,
-  }: MailProviderProps): Promise<void> {
+    referenceId,
+  }: MailProviderProps): Promise<MailSendResult> {
+    const templateHTML = renderMailTemplate(path, variables);
+
     try {
-      // Ensure the client is initialized
-      if (!this.client) {
-        if (this.isInitializing) {
-          console.log("Waiting for Ethereal Mail client initialization...");
-          await this.initializationPromise;
-        } else {
-          console.log(
-            "Ethereal Mail client not initialized. Initializing now...",
-          );
-          await this.initializeClient();
-        }
-      }
+      const client = await this.getClient();
 
-      // Recheck after boot attempt
-      if (!this.client) {
-        throw new Error("Failed to initialize email client after retrying");
-      }
-
-      const templateFileContent = fs.readFileSync(path).toString("utf-8");
-      const templateParse = handlebars.compile(templateFileContent);
-
-      const templateHTML = templateParse(variables);
-
-      const message = await this.client.sendMail({
+      const message = await client.sendMail({
         to,
         from: "Trajetto <noreply@intrajetto.com>",
         subject,
         html: templateHTML,
+        // Same deterministic identity as production, so the dev path
+        // exercises the behaviour rather than diverging from it.
+        ...(referenceId
+          ? {
+              messageId: buildMessageId(referenceId, "intrajetto.com"),
+            }
+          : {}),
+
+        headers: {
+          ...(referenceId ? { "X-Entity-Ref-ID": referenceId } : {}),
+          "X-Mailer": "Trajetto Fleet Management System",
+        },
       });
 
-      // Get display URL
-      const previewUrl = nodemailer.getTestMessageUrl(message);
-      console.log("Preview URL: %s", previewUrl || "URL não disponível");
+      // Dev-only affordance: without the preview link the message is
+      // unreachable, since Ethereal never delivers anywhere.
+      log.info(
+        {
+          previewUrl: nodemailer.getTestMessageUrl(message) || null,
+          referenceId,
+        },
+        "e-mail captured by Ethereal",
+      );
+
+      return { messageId: message.messageId };
     } catch (error) {
-      console.error("Error sending mail:", error);
-      throw error;
+      // No recipient in the text (OBS-15), as in the production provider.
+      const deliveryError = toMailDeliveryError(
+        error,
+        "Falha ao enviar e-mail",
+      );
+
+      log.error(
+        { err: deliveryError, retryable: deliveryError.retryable, referenceId },
+        "e-mail send failed",
+      );
+
+      throw deliveryError;
     }
   }
 }

@@ -2,13 +2,16 @@ import { inject, injectable } from "tsyringe";
 import { IUserRepository } from "../../repositories/IUser-repository";
 
 import { ResourceNotFoundError } from "../errors/resource-not-found-error";
-import { AppError } from "@/shared/errors/AppError";
+import { ToggleConflictError } from "@/modules/business/usecases/errors/toggle-conflict-error";
 
 import { UserRole } from "../../dtos/user-dto";
 import { UserCannotBeRevokeByHimselfError } from "../errors/user-cannot-be-revoke-access-by-himself-error";
 
 import { sendSecurityEventToUser } from "@/websocket";
-import { assertTenantAccess } from "@/modules/middlewares/tenant-authorization";
+import { permissionDenied } from "@/shared/errors/access-errors";
+
+import { announceDriverLoginChange } from "../../services/driver-login-catalog";
+import { assertTenantAccessToRecord } from "@/modules/middlewares/tenant-authorization";
 
 interface UserRevokeAccessProps {
   userId: string;
@@ -51,52 +54,55 @@ class UserRevokeAccessUseCase {
       throw new ResourceNotFoundError();
     }
 
-    if (!findRevokedUser.businessId && findUser.role !== "MASTER") {
-      throw new AppError(
-        "Acesso negado ao usuario informado.",
-        403,
-        "TENANT_ACCESS_DENIED",
-      );
-    }
+    // Another company's user (or a MASTER) answers like a missing id.
+    assertTenantAccessToRecord(
+      findUser,
+      findRevokedUser.businessId,
+      () => new ResourceNotFoundError(),
+    );
 
-    if (findRevokedUser.businessId) {
-      assertTenantAccess(findUser, findRevokedUser.businessId);
-    }
-
+    // A role above the actor's is a permission refusal (decision 4.1), and
+    // this act is revoking, not deleting.
     if (!this.allowedDeletion[findUser.role].includes(findRevokedUser.role)) {
-      throw new AppError(
+      throw permissionDenied(
         `Usuários com o nível de acesso "${
           this.roleDisplayName[findUser.role]
-        }" não podem deletar usuários com o nível de acesso ${
+        }" não podem revogar ou restaurar o acesso de usuários com o nível de acesso ${
           this.roleDisplayName[findRevokedUser.role]
         }.`,
-        403,
-        "USER_ROLE_ACTION_FORBIDDEN",
       );
     }
 
-    try {
-      if (findRevokedUser.access_revoked) {
-        await this.user.updateUserAccessRevocation({
-          userId,
-          isAccessRevoke: false,
-        });
+    /**
+     * The state that was read is the precondition, and the event follows the
+     * write rather than the intention.
+     *
+     * Two administrators acting on the same account at once — one revoking,
+     * one restoring — both read the old value and both wrote. The row ended up
+     * with whichever query landed last, while BOTH pushed a security event
+     * down the socket: the user could be told "your access was restored" and
+     * remain locked out, or be kicked out of a session that was never revoked.
+     * Now the second one writes nothing, sends nothing, and is told why.
+     */
+    const wasRevoked = findRevokedUser.access_revoked ?? false;
 
-        sendSecurityEventToUser(userId, { reason: "access_restored" });
-        return;
-      }
+    const flipped = await this.user.toggleUserAccessRevocation(
+      userId,
+      wasRevoked,
+    );
 
-      await this.user.updateUserAccessRevocation({
-        userId,
-        isAccessRevoke: true,
-      });
+    if (!flipped) {
+      throw new ToggleConflictError("de acesso deste usuário");
+    }
 
-      sendSecurityEventToUser(userId, { reason: "access_revoked" });
-    } catch (error) {
-      throw new AppError(
-        "Não foi possível revogar o acesso deste usuário! Por favor, Tente novamente.",
-        500,
-      );
+    sendSecurityEventToUser(userId, {
+      reason: wasRevoked ? "access_restored" : "access_revoked",
+    });
+
+    // A driver's app login went dark (or came back): the "com o app" split
+    // of the company's chat pickers changed.
+    if (findRevokedUser.driverId) {
+      announceDriverLoginChange(findRevokedUser.businessId);
     }
   }
 }

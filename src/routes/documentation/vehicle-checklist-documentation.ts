@@ -1,32 +1,89 @@
 import { z } from "zod";
 
-import { listPagesSchema } from "@/schemas/list-pages-schema";
+import {
+  exportVehicleChecklistSchema,
+  listVehicleChecklistSchema,
+} from "@/schemas/list-vehicle-checklist-schema";
 
-import { listPagesByBusinessSchema } from "@/schemas/list-pages-by-business-schema";
+import { searchMetaDoc } from "@/shared/pagination/list-meta";
+import { errorResponse } from "./common-responses";
+
 import { updateDeleteBusinessSchema } from "@/schemas/update-delete-business-schema";
 
 import { createVehicleChecklistSchema } from "@/schemas/create-vehicle-checklist-schema";
 import { updateVehicleChecklistSchema } from "@/schemas/update-vehicle-checklist-schema";
 
-import { exportReports } from "@/schemas/export-reports-schema";
+import { presignedPhotosSchema } from "@/schemas/presigned-photos-schema";
+import { idempotencyHeaders } from "./idempotency-documentation";
+
+/**
+ * A checklist refusal: the common error body plus what the photo checks add.
+ * One object instead of a union of messages: the serializer keeps the first
+ * union member that fits, and `{ message }` fitted every body, so `code`,
+ * `missingPhotos` and the rest were dropped from the answer.
+ */
+const checklistRefusal = errorResponse.extend({
+  details: z
+    .string()
+    .optional()
+    .describe("VALIDATION_ERROR: o que o schema recusou."),
+  errors: z
+    .array(z.string())
+    .optional()
+    .describe("PHOTOS_REQUIRED: uma frase por item sem foto."),
+  missingPhotos: z
+    .array(z.string())
+    .optional()
+    .describe("PHOTOS_REQUIRED: os itens (`fieldName`) que precisam de foto."),
+  photoRequirements: z
+    .record(z.string(), z.unknown())
+    .optional()
+    .describe(
+      "PHOTOS_REQUIRED: a regra de foto de cada item, conforme as respostas.",
+    ),
+  fieldsSent: z.array(z.string()).optional(),
+  photosSent: z.array(z.string()).optional(),
+  existingPhotos: z.array(z.string()).optional(),
+  photosToRemove: z.array(z.string()).optional(),
+});
 
 const vehicleChecklistSchemas = {
   createVehicleChecklist: createVehicleChecklistSchema,
   updateVehicleChecklist: updateVehicleChecklistSchema,
-  listVehicleChecklist: listPagesSchema,
-  listVehicleChecklistBusiness: listPagesByBusinessSchema,
+
+  // What the app really POSTs: the form fields the controller validates with
+  // the checklist schema, plus the keys of the photos it already uploaded.
+  // Documentation only (see routes/documentation/openapi-transform).
+  createVehicleChecklistBody: z
+    .object({
+      photos: presignedPhotosSchema.describe(
+        "Fotos já enviadas ao storage (POST /uploads/presign/:businessId), cada uma com o `fieldName` do item que documenta. Alguns itens exigem foto conforme a resposta.",
+      ),
+    })
+    .and(createVehicleChecklistSchema),
+  updateVehicleChecklistBody: z
+    .object({
+      photos: presignedPhotosSchema.describe(
+        "Fotos novas, mesma regra do cadastro.",
+      ),
+    })
+    .and(updateVehicleChecklistSchema),
+  idempotencyHeaders,
+  listVehicleChecklist: listVehicleChecklistSchema,
   updateDeleteVehicleChecklist: z.object({
     checklistId: z.string().uuid(),
     businessId: z.string().uuid(),
   }),
   updateDeleteBusiness: updateDeleteBusinessSchema,
   businessIdParam: updateDeleteBusinessSchema,
-  exportVehicleChecklistsQuery: exportReports,
+  exportVehicleChecklistsQuery: exportVehicleChecklistSchema,
 };
 
 const vehicleChecklistResponses = {
   vehicleChecklistCreated: z.object({
     message: z.string().default("Checklist veicular criado com sucesso!"),
+    // The controller sends it; a schema without it stripped it on the way out.
+    id: z.string().describe("Id do checklist criado."),
   }),
   vehicleChecklistUpdated: z.object({
     message: z.string().default("Checklist veicular atualizado com sucesso!"),
@@ -151,251 +208,106 @@ const vehicleChecklistResponses = {
     ),
     total: z.number().describe("Total number of records"),
   }),
-  resourceNotFound: z.object({
-    message: z.string().default("Recurso não encontrado."),
-  }),
-  businessNotFound: z.object({
-    message: z.string().default("Empresa não encontrada."),
-  }),
-  vehicleChecklistNotFound: z.object({
-    message: z.string().default("Checklist veicular não encontrado."),
-  }),
-  vehicleNotFound: z.object({
-    message: z.string().default("Veículo não encontrado."),
-  }),
-  driverNotFound: z.object({
-    message: z.string().default("Motorista não encontrado."),
-  }),
-  branchNotFound: z.object({
-    message: z.string().default("Filial não encontrada."),
-  }),
-  vehicleChecklistNotBelongBusiness: z.object({
-    message: z
-      .string()
-      .default("Este checklist veicular não pertence a esta empresa."),
-  }),
-  vehicleNotBelongBusiness: z.object({
-    message: z
-      .string()
-      .default("O veículo informado não pertence à mesma empresa do usuário."),
-  }),
-  driverNotBelongBusiness: z.object({
-    message: z
-      .string()
-      .default(
-        "O motorista informado não pertence à mesma empresa do usuário.",
-      ),
-  }),
-  branchNotBelongBusiness: z.object({
-    message: z
-      .string()
-      .default("A filial informada não pertence à mesma empresa do usuário."),
-  }),
-  vehicleMileageInvalid: z.object({
-    message: z
-      .string()
-      .default(
-        "A quilometragem informada não pode ser menor que a quilometragem atual do veículo.",
-      ),
-  }),
-  requiredPhotosMissing: z.object({
-    message: z.string().default("Fotos obrigatórias não fornecidas."),
-    errors: z.array(z.string()).optional(),
-    missingPhotos: z.array(z.string()).optional(),
-  }),
-  fileSizeTooLarge: z.object({
-    message: z
-      .string()
-      .default(
-        "O tamanho total dos arquivos excede o limite permitido de 5MB.",
-      ),
-  }),
-  validationError: z.object({
-    message: z.string().default("Erro de validação nos dados fornecidos."),
-    details: z.string().optional(),
-  }),
-  vehicleNotAssignedToDriver: z.object({
-    message: z.string().default("Veículo não atribuído ao motorista."),
-  }),
-  driverCannotUpdateChecklist: z.object({
-    message: z
-      .string()
-      .default(
-        "Motoristas não possuem permissão para editar registros de checklist veicular. Apenas criar novos.",
-      ),
-  }),
-  driverCannotDeleteChecklist: z.object({
-    message: z
-      .string()
-      .default(
-        "Motoristas não possuem permissão para deletar registros de checklist veicular.",
-      ),
-  }),
-  listVehicleChecklistErrors: z.union([
-    z.object({
-      message: z.string().default("Erro de validação nos dados fornecidos."),
-    }),
-    z.object({ message: z.string().default("Recurso não encontrado.") }),
-  ]),
-  listVehicleChecklistBusinessErrors: z.union([
-    z.object({
-      message: z.string().default("Erro de validação nos dados fornecidos."),
-    }),
-    z.object({ message: z.string().default("Recurso não encontrado.") }),
-    z.object({ message: z.string().default("Empresa não encontrada.") }),
-  ]),
-  createVehicleChecklistErrors: z.union([
-    z.object({
-      message: z.string().default("Erro de validação nos dados fornecidos."),
-      details: z.string().optional(),
-    }),
-    z.object({ message: z.string().default("Recurso não encontrado.") }),
-    z.object({ message: z.string().default("Empresa não encontrada.") }),
-    z.object({ message: z.string().default("Veículo não encontrado.") }),
-    z.object({ message: z.string().default("Motorista não encontrado.") }),
-    z.object({ message: z.string().default("Filial não encontrada.") }),
-    z.object({
-      message: z
-        .string()
-        .default(
-          "O veículo informado não pertence à mesma empresa do usuário.",
-        ),
-    }),
-    z.object({
-      message: z
-        .string()
-        .default(
-          "O motorista informado não pertence à mesma empresa do usuário.",
-        ),
-    }),
-    z.object({
-      message: z
-        .string()
-        .default("A filial informada não pertence à mesma empresa do usuário."),
-    }),
-    z.object({
-      message: z
-        .string()
-        .default(
-          "A quilometragem informada não pode ser menor que a quilometragem atual do veículo.",
-        ),
-    }),
-    z.object({
-      message: z.string().default("Fotos obrigatórias não fornecidas."),
-      errors: z.array(z.string()).optional(),
-      missingPhotos: z.array(z.string()).optional(),
-    }),
-    z.object({
-      message: z
-        .string()
-        .default(
-          "O tamanho total dos arquivos excede o limite permitido de 5MB.",
-        ),
-    }),
-    z.object({
-      message: z.string().default("Veículo não atribuído ao motorista."),
-    }),
-  ]),
-  updateVehicleChecklistErrors: z.union([
-    z.object({
-      message: z.string().default("Erro de validação nos dados fornecidos."),
-      details: z.string().optional(),
-    }),
-    z.object({ message: z.string().default("Recurso não encontrado.") }),
-    z.object({ message: z.string().default("Empresa não encontrada.") }),
-    z.object({
-      message: z.string().default("Checklist veicular não encontrado."),
-    }),
-    z.object({
-      message: z
-        .string()
-        .default("Checklist não encontrado ou não pertence a esta empresa."),
-    }),
-    z.object({ message: z.string().default("Veículo não encontrado.") }),
-    z.object({ message: z.string().default("Motorista não encontrado.") }),
-    z.object({ message: z.string().default("Filial não encontrada.") }),
-    z.object({
-      message: z
-        .string()
-        .default(
-          "O veículo informado não pertence à mesma empresa do usuário.",
-        ),
-    }),
-    z.object({
-      message: z
-        .string()
-        .default(
-          "O motorista informado não pertence à mesma empresa do usuário.",
-        ),
-    }),
-    z.object({
-      message: z
-        .string()
-        .default("A filial informada não pertence à mesma empresa do usuário."),
-    }),
-    z.object({
-      message: z
-        .string()
-        .default(
-          "A quilometragem informada não pode ser menor que a quilometragem atual do veículo.",
-        ),
-    }),
-    z.object({
-      message: z.string().default("Fotos obrigatórias não fornecidas."),
-      errors: z.array(z.string()).optional(),
-      missingPhotos: z.array(z.string()).optional(),
-    }),
-    z.object({
-      message: z
-        .string()
-        .default(
-          "O tamanho total dos arquivos excede o limite permitido de 5MB.",
-        ),
-    }),
-    z.object({
-      message: z
-        .string()
-        .default(
-          "Motoristas não possuem permissão para editar registros de checklist veicular. Apenas criar novos.",
-        ),
-    }),
-  ]),
-
-  deleteVehicleChecklistErrors: z.union([
-    z.object({ message: z.string().default("Recurso não encontrado.") }),
-    z.object({ message: z.string().default("Empresa não encontrada.") }),
-    z.object({
-      message: z.string().default("Checklist veicular não encontrado."),
-    }),
-    z.object({
-      message: z
-        .string()
-        .default("Este checklist veicular não pertence a esta empresa."),
-    }),
-    z.object({
-      message: z
-        .string()
-        .default(
-          "Motoristas não possuem permissão para deletar registros de checklist veicular.",
-        ),
-    }),
-  ]),
+  // Every refusal below carries `code` (decision 11.3), also in the
+  // `x-error-code` header. The schema keeps it: a narrower one stripped the
+  // code from the body of the controllers' own answers.
+  resourceNotFound: errorResponse.describe(
+    "USER_NOT_FOUND: o usuário da sessão não existe mais.",
+  ),
+  vehicleChecklistNotFound: errorResponse.describe(
+    "VEHICLE_CHECKLIST_NOT_FOUND: o checklist não existe nesta empresa. Um checklist de outra empresa recebe exatamente a mesma resposta. BUSINESS_NOT_FOUND: a empresa informada não existe. USER_NOT_FOUND: o usuário da sessão não existe mais.",
+  ),
+  // The use case's 404s; the route guards add theirs (TENANT_NOT_FOUND for
+  // the company in the path, BRANCH_NOT_FOUND for the branch in the body) to
+  // the same status in the published document.
+  createNotFound: errorResponse.describe(
+    "BRANCH_NOT_FOUND: a filial enviada não existe ou é de outra empresa (a mesma resposta). TENANT_NOT_FOUND ou BUSINESS_NOT_FOUND: a empresa informada não existe. USER_NOT_FOUND: o usuário da sessão não existe mais.",
+  ),
+  listVehicleChecklistErrors: errorResponse.describe(
+    "VALIDATION_ERROR (ordenação ou filtro fora da lista) ou BUSINESS_NOT_IDENTIFIED (MASTER sem empresa).",
+  ),
+  createVehicleChecklistErrors: checklistRefusal.describe(
+    "VALIDATION_ERROR (corpo fora do schema; `details` diz o quê), PHOTOS_REQUIRED (`missingPhotos` lista os itens sem foto), CHECKLIST_DATE_IN_FUTURE (data depois de hoje no fuso da empresa; uma data só com dia, AAAA-MM-DD, vale como aquele dia), VEHICLE_MILEAGE_INVALID (não passa a quilometragem do veículo nem cabe entre os registros vizinhos da data), VEHICLE_NOT_FOUND ou DRIVER_NOT_FOUND (inexistente ou de outra empresa: a mesma resposta), BRANCH_NOT_FOUND (só o MASTER, que pode informar qualquer filial, recebe este 400, para a filial de outra empresa; para os demais a filial enviada que não existe ou é de outra empresa é um 404), BRANCH_REQUIRED, DRIVER_REQUIRED ou um código do storage para as fotos (ex.: UPLOADED_FILE_NOT_FOUND).",
+  ),
+  updateVehicleChecklistErrors: checklistRefusal.describe(
+    "VALIDATION_ERROR, PHOTOS_REQUIRED (um item alterado exige foto e ele não tem), CHECKLIST_DATE_IN_FUTURE (só quando a edição muda a data), VEHICLE_MILEAGE_OUT_OF_ORDER (a quilometragem nova, ou a data nova, deixaria a leitura fora de ordem entre os registros vizinhos do veículo; a mensagem diz entre quais leituras ela precisa ficar), VEHICLE_MILEAGE_INVALID (o checklist levado para outro veículo não passa a quilometragem dele nem cabe entre os registros vizinhos lá), VEHICLE_NOT_FOUND, DRIVER_NOT_FOUND ou BRANCH_NOT_FOUND (inexistente ou de outra empresa: a mesma resposta) ou um código do storage para as fotos novas.",
+  ),
+  createForbidden: errorResponse.describe(
+    "PERMISSION_DENIED (o perfil não tem escrita em checklists), MODULE_NOT_ENABLED (a empresa não contratou o módulo Frota), TENANT_INACTIVE (a empresa está desativada), TENANT_ACCESS_DENIED (a requisição nomeia outra empresa), BRANCH_INACTIVE (a filial enviada está desativada) ou VEHICLE_NOT_ASSIGNED_TO_DRIVER (o motorista enviou o checklist de um veículo que não é o dele nem o da rota liberada ou em andamento dele). Definitivo: repetir não muda a resposta.",
+  ),
+  editForbidden: errorResponse.describe(
+    "PERMISSION_DENIED (o perfil não tem escrita em checklists, ou o token é de motorista: motoristas não editam nem excluem checklists, só os enviam pelo app), MODULE_NOT_ENABLED (a empresa não contratou o módulo Frota), TENANT_INACTIVE (a empresa está desativada) ou TENANT_ACCESS_DENIED (a requisição nomeia outra empresa).",
+  ),
 
   internalServerError: z.object({
     message: z.string().default("Internal server error"),
   }),
 
+  // The two refusals the app's outbox has to tell apart from a plain 400.
+  // `code` is listed so the serializer keeps it: the outbox branches on it.
+  writeConflict: z
+    .object({
+      code: z.string().describe("SUBMISSION_OWNER_MISMATCH ou BRANCH_INACTIVE"),
+      message: z.string(),
+    })
+    .describe(
+      "SUBMISSION_OWNER_MISMATCH: a chave de idempotência já foi usada por outro motorista desta empresa — gere uma chave nova e reenvie; repetir a mesma nunca passa. BRANCH_INACTIVE: a filial que o servidor preenche para o motorista (a do veículo ou a dele) está desativada; uma filial desativada enviada no corpo é recusada antes, com 403.",
+    ),
+  driverInactive: z
+    .object({
+      code: z.string().describe("DRIVER_INACTIVE"),
+      message: z.string(),
+    })
+    .describe(
+      "O motorista informado está inativo. Definitivo: repetir não muda a resposta.",
+    ),
+  // The edit's only conflict: it carries no idempotency key to collide with.
+  branchInactive: z
+    .object({
+      code: z.string().describe("BRANCH_INACTIVE"),
+      message: z.string(),
+    })
+    .describe(
+      "BRANCH_INACTIVE: a filial informada está desativada. Nada foi gravado; repetir não muda a resposta.",
+    ),
+
   // Export errors (GET /export-vehicle-checklist)
-  exportVehicleChecklistErrors: z.union([
-    z.object({
-      message: z.string().default("Recurso não encontrado!"),
-    }),
-    z.object({
-      message: z
-        .string()
-        .default("Não existem checklists veiculares para exportar!"),
-    }),
-  ]),
+  exportVehicleChecklistErrors: errorResponse.describe(
+    "NOTHING_TO_EXPORT (nenhum checklist na busca e nos filtros) ou BUSINESS_NOT_IDENTIFIED.",
+  ),
+  exportBusinessNotFound: errorResponse.describe(
+    "BUSINESS_NOT_FOUND (a empresa informada não existe) ou USER_NOT_FOUND (o usuário da sessão não existe mais).",
+  ),
+  // A gone session user is 404; delete's only 400 is a malformed path.
+  deleteValidationError: errorResponse.describe(
+    "VALIDATION_ERROR: um parâmetro do caminho foi recusado (issues diz qual).",
+  ),
+  exportForbidden: errorResponse.describe(
+    "PERMISSION_DENIED (o perfil não tem escrita em checklists), MODULE_NOT_ENABLED (a empresa não contratou o módulo Frota), TENANT_INACTIVE (a empresa está desativada), TENANT_ACCESS_DENIED (a requisição nomeia outra empresa). Motoristas não exportam os checklists da empresa: recebem PERMISSION_DENIED.",
+  ),
 };
 
-export { vehicleChecklistSchemas, vehicleChecklistResponses };
+/** GET /vehicle-checklist/list-vehicle-checklist `meta.searchMeta`. */
+const vehicleChecklistSearchMetaDoc = searchMetaDoc(
+  {
+    total: z
+      .number()
+      .int()
+      .describe(
+        "Checklists da busca e dos demais filtros, sem o de condição (o total dos cartões).",
+      ),
+    approved: z.number().int().describe("Dos quais aprovados."),
+    approvedWithRestrictions: z
+      .number()
+      .int()
+      .describe("Dos quais aprovados com ressalvas."),
+    rejected: z.number().int().describe("Dos quais reprovados."),
+  },
+  ["overall_condition", "branchId", "vehicleId"],
+);
+
+export {
+  vehicleChecklistSchemas,
+  vehicleChecklistResponses,
+  vehicleChecklistSearchMetaDoc,
+};

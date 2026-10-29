@@ -1,216 +1,148 @@
 import {
   Supplier,
   CreateSupplierProps,
-  ListAllSuppliersProps,
-  ListSupplierProps,
+  ListSuppliersProps,
+  ListSuppliersResult,
   UpdateSupplier,
   SearchSupplierWithCursorProps,
   CursorPaginatedSupplier,
+  SupplierReferenceCounts,
 } from "../dtos/supplier-dto";
 
 import { ISupplierRepository } from "./ISupplier-repository";
 import database from "@/../infra/database";
 
+import { resolveOrderBy } from "@/shared/pagination/list-query";
+import { buildSearchOr } from "@/shared/pagination/search-or";
+import { insensitiveEquals } from "@/shared/utils/like-pattern";
+
+import {
+  SUPPLIER_SORT,
+  digitsOf,
+  supplierListWhere,
+} from "../usecases/list-supplier/supplier-list";
+
 class SupplierRepository implements ISupplierRepository {
   constructor(private prisma = database) {}
 
   async createSupplier(supplierData: CreateSupplierProps): Promise<Supplier> {
-    const supplierCreated = await this.prisma.supplier.create({
-      data: supplierData,
-    });
-
-    return supplierCreated;
+    return this.prisma.supplier.create({ data: supplierData });
   }
 
-  async listAllSuppliers({
+  async listSuppliers({
     page,
     pageSize,
-    currentUserRole,
-    businessId,
-    search,
-  }: ListAllSuppliersProps): Promise<ListSupplierProps> {
-    const skip = (page - 1) * pageSize;
-    const normalizedSearch = search ? search.trim().toLowerCase() : "";
-
-    const digitSearch = normalizedSearch.replace(/\D/g, "");
-    let digitSearchPhone = digitSearch;
-
-    if (digitSearchPhone.startsWith("55") && digitSearchPhone.length > 10) {
-      digitSearchPhone = digitSearchPhone.substring(2);
-    }
-
-    const orConditions: any[] = [];
-
-    if (normalizedSearch) {
-      orConditions.push(
-        { id: { contains: normalizedSearch, mode: "insensitive" } },
-        { name: { contains: normalizedSearch, mode: "insensitive" } },
-        { street: { contains: normalizedSearch, mode: "insensitive" } },
-        { address_number: { contains: normalizedSearch, mode: "insensitive" } },
-        { city: { contains: normalizedSearch, mode: "insensitive" } },
-        { uf: { contains: normalizedSearch, mode: "insensitive" } },
-        { complement: { contains: normalizedSearch, mode: "insensitive" } },
-        { email: { contains: normalizedSearch, mode: "insensitive" } },
-        ...(digitSearch
-          ? [
-              { cep: { contains: digitSearch, mode: "insensitive" } },
-              {
-                telephone: { contains: digitSearchPhone, mode: "insensitive" },
-              },
-              { cnpj: { contains: digitSearch, mode: "insensitive" } },
-            ]
-          : []),
-        {
-          ...(currentUserRole === "MASTER"
-            ? {
-                businessId: { contains: normalizedSearch, mode: "insensitive" },
-              }
-            : {}),
-        },
-      );
-    }
-
-    const whereCondition = {
-      ...(currentUserRole !== "MASTER" && { businessId }),
-      ...(orConditions.length > 0 && { OR: orConditions }),
-    };
-
-    const [supplierData, total] = await Promise.all([
+    sort,
+    order,
+    ...filters
+  }: ListSuppliersProps): Promise<ListSuppliersResult> {
+    // The page and one GROUP BY uf side by side (two connections, the
+    // budget of a list screen): the cards, the pager total and the UF
+    // options all come out of the grouped counts.
+    const [data, grouped] = await Promise.all([
       this.prisma.supplier.findMany({
-        skip,
+        skip: (page - 1) * pageSize,
         take: pageSize,
-        where: whereCondition,
-        include: {
-          ...(currentUserRole === "MASTER" && {
-            business: {
-              select: {
-                corporate_reason: true,
-              },
-            },
-          }),
-        },
-        orderBy: {
-          created_at: "desc",
-        },
+        where: supplierListWhere(filters, { withUfFacet: true }),
+        orderBy: resolveOrderBy(SUPPLIER_SORT, { sort, order }),
       }),
-      this.prisma.supplier.count({
-        where: whereCondition,
+      this.prisma.supplier.groupBy({
+        by: ["uf"],
+        where: supplierListWhere(filters, { withUfFacet: false }),
+        // `_count` of a column counts its non-null values.
+        _count: { _all: true, telephone: true, email: true },
       }),
     ]);
 
-    return { data: supplierData, total };
+    return {
+      data,
+      stateCounts: grouped.map((group) => ({
+        uf: group.uf,
+        count: group._count._all,
+        withTelephone: group._count.telephone,
+        withEmail: group._count.email,
+      })),
+    };
   }
 
   async updateSupplier({
     supplierData,
     supplierId,
   }: UpdateSupplier): Promise<Supplier> {
+    // `undefined` = not sent. `businessId` is never written here: a supplier
+    // moved to another company would leave its parts and service orders
+    // pointing across tenants.
     const filteredData = Object.fromEntries(
-      Object.entries(supplierData).filter(([_, value]) => value !== undefined),
+      Object.entries(supplierData).filter(
+        ([key, value]) => value !== undefined && key !== "businessId",
+      ),
     );
 
-    const updatedSupplier = await this.prisma.supplier.update({
-      where: {
-        id: supplierId,
-      },
+    return this.prisma.supplier.update({
+      where: { id: supplierId },
       data: filteredData,
     });
-
-    return updatedSupplier;
   }
 
   async findSupplierById(supplierId: string): Promise<Supplier | null> {
-    const supplier = await this.prisma.supplier.findUnique({
-      where: {
-        id: supplierId,
-      },
-    });
-
-    return supplier;
-  }
-
-  async findSupplierByName(name: string): Promise<Supplier | null> {
-    const supplier = await this.prisma.supplier.findFirst({
-      where: {
-        name: {
-          equals: name,
-          mode: "insensitive",
-        },
-      },
-    });
-
-    return supplier;
-  }
-
-  async findSupplierByCnpj(cnpj: string): Promise<Supplier | null> {
-    const supplier = await this.prisma.supplier.findFirst({
-      where: {
-        cnpj,
-      },
-    });
-
-    return supplier;
+    return this.prisma.supplier.findUnique({ where: { id: supplierId } });
   }
 
   async findSupplierByCnpjAndBusinessId(
     cnpj: string,
     businessId: string,
   ): Promise<Supplier | null> {
-    const supplier = await this.prisma.supplier.findFirst({
+    return this.prisma.supplier.findFirst({ where: { cnpj, businessId } });
+  }
+
+  async findSupplierByEmailAndBusinessId(
+    email: string,
+    businessId: string,
+  ): Promise<Supplier | null> {
+    return this.prisma.supplier.findFirst({
       where: {
-        cnpj,
+        // Escaped: the value is an ILIKE pattern underneath (like-pattern.ts).
+        email: insensitiveEquals(email),
         businessId,
       },
     });
-
-    return supplier;
-  }
-
-  async findSupplierByEmail(email: string): Promise<Supplier | null> {
-    const supplier = await this.prisma.supplier.findFirst({
-      where: {
-        email: {
-          equals: email,
-          mode: "insensitive",
-        },
-      },
-    });
-
-    return supplier;
   }
 
   async findSupplierByNameAndBusinessId(
     name: string,
     businessId: string,
   ): Promise<Supplier | null> {
-    const supplier = await this.prisma.supplier.findFirst({
-      where: {
-        name: {
-          equals: name,
-          mode: "insensitive",
-        },
-        businessId,
-      },
+    return this.prisma.supplier.findFirst({
+      where: { name: insensitiveEquals(name), businessId },
     });
-
-    return supplier;
   }
 
   async searchSupplierWithCursor({
     limit = 10,
     cursor,
     businessId,
+    search,
   }: SearchSupplierWithCursorProps): Promise<CursorPaginatedSupplier> {
+    const term = search?.trim() ?? "";
+    const { digits } = digitsOf(term);
+
     const items = await this.prisma.supplier.findMany({
-      where: { businessId },
+      where: {
+        businessId,
+        ...(term &&
+          buildSearchOr([
+            { name: { contains: term, mode: "insensitive" as const } },
+            { email: { contains: term, mode: "insensitive" as const } },
+            { city: { contains: term, mode: "insensitive" as const } },
+            ...(digits ? [{ cnpj: { contains: digits } }] : []),
+          ])),
+      },
       take: limit + 1,
       ...(cursor && {
         cursor: { id: cursor },
         skip: 1,
       }),
-      orderBy: {
-        created_at: "desc",
-      },
+      orderBy: [{ created_at: "desc" }, { id: "desc" }],
     });
 
     const hasMore = items.length > limit;
@@ -221,14 +153,59 @@ class SupplierRepository implements ISupplierRepository {
     return { data, nextCursor, hasMore };
   }
 
-  async deleteSupplier(supplierId: string): Promise<Supplier> {
-    const deletedSupplier = await this.prisma.supplier.delete({
-      where: {
-        id: supplierId,
+  async countSupplierReferences(
+    supplierId: string,
+  ): Promise<SupplierReferenceCounts> {
+    // One query: a relation `_count` is a correlated subquery per relation.
+    const found = await this.prisma.supplier.findUnique({
+      where: { id: supplierId },
+      select: {
+        _count: {
+          select: { serviceOrders: true, parts: true, accountsPayable: true },
+        },
       },
     });
 
-    return deletedSupplier;
+    return {
+      serviceOrders: found?._count.serviceOrders ?? 0,
+      parts: found?._count.parts ?? 0,
+      accountsPayable: found?._count.accountsPayable ?? 0,
+    };
+  }
+
+  async deleteUnreferencedSupplier(
+    supplierId: string,
+    businessId: string,
+  ): Promise<Supplier | null> {
+    return this.prisma.$transaction(async (tx) => {
+      // FOR UPDATE first. A part, service order or bill inserted with this
+      // supplier holds FOR KEY SHARE on the row until it commits, and the two
+      // locks conflict: once this returns, such an insert has either
+      // committed (and the counts below, each a new READ COMMITTED snapshot,
+      // see it) or waits for this transaction and then fails its foreign key.
+      // A single DELETE … WHERE NOT EXISTS was not enough: its subqueries read
+      // the snapshot taken before it waited, and the SET NULL cascade then
+      // erased the new link.
+      const locked = await tx.$queryRaw<Array<{ id: string }>>`
+        SELECT "id" FROM "supplier"
+         WHERE "id" = ${supplierId} AND "businessId" = ${businessId}
+         FOR UPDATE`;
+
+      if (locked.length === 0) return null;
+
+      // One connection inside the transaction: sequential, not Promise.all.
+      const serviceOrders = await tx.serviceOrder.count({
+        where: { supplierId },
+      });
+      const parts = await tx.part.count({ where: { supplierId } });
+      const accountsPayable = await tx.accountPayable.count({
+        where: { supplierId },
+      });
+
+      if (serviceOrders + parts + accountsPayable > 0) return null;
+
+      return tx.supplier.delete({ where: { id: supplierId } });
+    });
   }
 }
 

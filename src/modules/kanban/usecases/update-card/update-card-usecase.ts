@@ -9,155 +9,29 @@ import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-n
 import { UserAssignedUserNotFoundError } from "@/modules/user/usecases/errors/user-assigned-user-not-found-error";
 import { UserNotBelongBusinessError } from "@/modules/user/usecases/errors/user-not-belong-business-error";
 
-import { KanbanNotAllowedUpdateCardBusinessError } from "../errors/kanban-not-allowed-update-card-business-error";
 import { KanbanCardColumnNotFoundError } from "../errors/kanban-card-column-not-found-error";
 
 import { KanbanCardNotFoundError } from "../errors/kanban-card-not-found-error";
 
-import { NotificationService } from "@/shared/services/notification-service";
-import { redirectPage } from "@/shared/utils/link-redirect-page";
-
-import { generateWhatsAppInstanceName } from "@/shared/utils/whatsapp-instance-name";
 import { AppError } from "@/shared/errors/AppError";
 
-import { env } from "@/env";
-
-interface KanbanCardNotificationTextProps {
-  title: string;
-  description: string;
-  priority: string;
-  dueDate: string;
-  cardId: string;
-}
+import { OutboxService } from "@/shared/notifications/outbox-service";
+import { IBusinessRepository } from "@/modules/business/repositories/IBusiness-repository";
+import { loadBusinessTimeZone } from "@/shared/time/business-time-zone";
+import database from "@/../infra/database";
 
 @injectable()
 class UpdateKanbanCardUseCase {
-  private http_request = env.HTTP_REQUEST;
-
   constructor(
     @inject("UserRepository")
     private user: IUserRepository,
     @inject("KanbanRepository")
     private kanban: IKanbanRepository,
-    @inject("NotificationService")
-    private notificationService: NotificationService,
+    @inject("OutboxService")
+    private outbox: OutboxService,
+    @inject("BusinessRepository")
+    private business: IBusinessRepository,
   ) {}
-
-  private buildKanbanCardNotificationText({
-    title,
-    description,
-    priority,
-    dueDate,
-    cardId,
-  }: KanbanCardNotificationTextProps): string {
-    const getPriorityInfo = (priority: string) => {
-      switch (priority.toLowerCase()) {
-        case "urgent":
-          return { emoji: "🆘", text: "Urgente" };
-        case "high":
-          return { emoji: "🔴", text: "Alta" };
-        case "medium":
-          return { emoji: "🟡", text: "Média" };
-        case "low":
-          return { emoji: "🟢", text: "Baixa" };
-        default:
-          return { emoji: "🟢", text: "Baixa" };
-      }
-    };
-
-    const priorityInfo = getPriorityInfo(priority);
-
-    return [
-      `📝 *Card Atualizado! Você foi designado como responsável por um card atualizado no kanban*`,
-      `Título: *${title}*`,
-      `Descrição: ${description}`,
-      `Prioridade: ${priorityInfo.emoji} *${priorityInfo.text}*`,
-      `Data de vencimento: *${dueDate}*`,
-      `Identificador do card: *${cardId}*`,
-      `Para mais detalhes, acesse o sistema.`,
-    ].join("\n");
-  }
-
-  private async processNotifications(
-    originalCard: KanbanCard,
-    updatedCard: KanbanCard,
-    cardData: UpdateKanbanCardProps,
-    userId: string,
-    businessId: string,
-  ): Promise<void> {
-    try {
-      // Always create activity for card update
-      const activityData = {
-        type: "Card Kanban",
-        action: "update",
-        entityId: updatedCard.id,
-        description: `Card "${updatedCard.title}" atualizado com sucesso no kanban | ID: ${updatedCard.id}`,
-        status: updatedCard.completed ? "Completo" : "Pendente",
-        performedBy: userId,
-        businessId,
-      };
-
-      // Check if assignedUserId changed
-      const assignedUserChanged =
-        cardData.assignedUserId !== undefined &&
-        originalCard.assignedUserId !== cardData.assignedUserId;
-
-      if (assignedUserChanged && cardData.assignedUserId) {
-        // AssignedUser changed, send notification
-        const assignedUser = await this.user.findUserById(
-          cardData.assignedUserId,
-        );
-
-        if (assignedUser) {
-          const linkRedirectPage = redirectPage(
-            assignedUser.role,
-            assignedUser.driverId,
-          );
-
-          const notificationData = {
-            userId: cardData.assignedUserId,
-            type: "kanban-card",
-            title: "Card Atualizado e Atribuído",
-            message: `Você foi designado como responsável pelo card "${updatedCard.title}" que foi atualizado no kanban`,
-            entityId: updatedCard.id,
-            link: `${this.http_request}/${linkRedirectPage}/kanban?search=${updatedCard.id}&page=1`,
-            businessId,
-            shouldSendEmail: true,
-            shouldSendWhatsApp: true,
-            whatsAppMessage: this.buildKanbanCardNotificationText({
-              title: updatedCard.title,
-              description: updatedCard.description,
-              priority: updatedCard.priority,
-              dueDate: updatedCard.dueDate,
-              cardId: updatedCard.id,
-            }),
-            instanceName: generateWhatsAppInstanceName(
-              assignedUser.email,
-              businessId,
-            ),
-          };
-
-          // Process notification to newly assigned user
-          await this.notificationService.processUserNotifications({
-            notification: notificationData,
-            activity: activityData,
-          });
-        } else {
-          // Fallback: Create activity even if assigned user not found
-          await this.notificationService.createActivityIfEnabled(activityData);
-        }
-      } else {
-        // No assignedUser change, just create activity
-        await this.notificationService.createActivityIfEnabled(activityData);
-      }
-    } catch (error) {
-      console.error(
-        "[Kanban Cards Update] Erro ao processar notificações:",
-        error,
-      );
-      // Does not prevent the card update
-    }
-  }
 
   async execute(
     cardData: UpdateKanbanCardProps,
@@ -182,11 +56,12 @@ class UpdateKanbanCardUseCase {
       throw new KanbanCardColumnNotFoundError();
     }
 
-    // Verify user permissions
-    if (findUser.role !== "MASTER") {
-      if (findUser.businessId !== findColumn.businessId) {
-        throw new KanbanNotAllowedUpdateCardBusinessError();
-      }
+    // Another company's card answers as a missing one (decision 11.3).
+    if (
+      findUser.role !== "MASTER" &&
+      findUser.businessId !== findColumn.businessId
+    ) {
+      throw new KanbanCardNotFoundError();
     }
 
     // Verify assigned user if changed
@@ -198,35 +73,70 @@ class UpdateKanbanCardUseCase {
         cardData.assignedUserId,
       );
 
-      if (!assignedUser) {
+      // For everyone, the MASTER included: the card stays inside its board's
+      // company. Only the MASTER is told why; anyone else hears "not found".
+      if (
+        !assignedUser ||
+        (findUser.role !== "MASTER" &&
+          assignedUser.businessId !== findColumn.businessId)
+      ) {
         throw new UserAssignedUserNotFoundError();
       }
 
-      if (
-        findUser.role !== "MASTER" &&
-        assignedUser.businessId !== findColumn.businessId
-      ) {
+      if (assignedUser.businessId !== findColumn.businessId) {
         throw new UserNotBelongBusinessError();
       }
     }
 
-    try {
-      const updatedCard = await this.kanban.updateCard({
-        cardData,
-        cardId,
-      });
+    // Read before the transaction: the message prints the due day in the
+    // company's zone (decision 1.1), and the render never queries.
+    const timeZone = await loadBusinessTimeZone(
+      this.business,
+      findColumn.businessId,
+    );
 
-      // Process notifications (activity + conditionally WhatsApp/Email)
-      this.processNotifications(
-        findCard,
-        updatedCard,
-        cardData,
-        userId,
-        findColumn.businessId,
-      );
+    try {
+      // Only a hand-over pages someone: an update that keeps the assignment
+      // publishes with no recipient and feeds the activity trail alone.
+      const assignedUserChanged =
+        cardData.assignedUserId !== undefined &&
+        findCard.assignedUserId !== cardData.assignedUserId;
+
+      const updatedCard = await database.$transaction(async (tx) => {
+        const updated = await this.kanban.updateCard({ cardData, cardId }, tx);
+
+        await this.outbox.publish(tx, {
+          topic: "kanban-card.updated",
+          aggregateType: "kanban-card",
+          aggregateId: updated.id,
+          businessId: findColumn.businessId,
+          actorId: userId,
+          payload: {
+            cardId: updated.id,
+            businessId: findColumn.businessId,
+            title: updated.title,
+            description: updated.description || null,
+            priority: updated.priority,
+            dueDate: updated.dueDate
+              ? new Date(updated.dueDate).toISOString()
+              : null,
+            timeZone,
+            isCompleted: Boolean(updated.completed),
+            assignedUserId:
+              assignedUserChanged && cardData.assignedUserId
+                ? cardData.assignedUserId
+                : null,
+          },
+        });
+
+        return updated;
+      });
 
       return updatedCard;
     } catch (error) {
+      // Deleted meanwhile: the repository says "not found".
+      if (error instanceof AppError) throw error;
+
       throw new AppError(
         "Houve um erro ao tentar atualizar o card! Por favor, tente novamente.",
         500,

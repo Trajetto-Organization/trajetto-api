@@ -5,8 +5,7 @@ import { createFuelTypeSchema } from "@/schemas/create-fuel-type-schema";
 import { updateDeleteBusinessSchema } from "@/schemas/update-delete-business-schema";
 import { updateFuelTypeSchema } from "@/schemas/update-fuel-type-schema";
 
-import { listPagesSchema } from "@/schemas/list-pages-schema";
-import { listPagesByBusinessSchema } from "@/schemas/list-pages-by-business-schema";
+import { errorResponse, internalErrorResponse } from "./common-responses";
 
 const fuelTypeBusinessParams = z.object({
   businessId: z.string().uuid("O ID da empresa é obrigatório!"),
@@ -15,8 +14,6 @@ const fuelTypeBusinessParams = z.object({
 
 const fuelTypeSchemas = {
   createFuelType: createFuelTypeSchema,
-  listFuelType: listPagesSchema,
-  listFuelTypeBusiness: listPagesByBusinessSchema,
   updateFuelType: updateFuelTypeSchema,
   businessIdParam: updateDeleteBusinessSchema,
   fuelTypeBusinessParams: fuelTypeBusinessParams,
@@ -24,12 +21,21 @@ const fuelTypeSchemas = {
     limit: z
       .string()
       .optional()
-      .describe("Número máximo de empresas a retornar (padrão: 10)"),
+      .describe(
+        "Número máximo de tipos de combustível a retornar (padrão: 10)",
+      ),
     cursor: z
       .string()
       .optional()
-      .describe("ID da última empresa da página anterior para paginação"),
-    search: z.string().trim().max(100).optional(),
+      .describe(
+        "ID do último tipo de combustível da página anterior (paginação)",
+      ),
+    search: z
+      .string()
+      .trim()
+      .max(100)
+      .optional()
+      .describe("Texto livre, até 100 caracteres."),
     businessId: z.string().describe("ID da empresa"),
   }),
 };
@@ -65,158 +71,35 @@ const fuelTypeResponses = {
     message: z.string().default("Tipo de combustível deletado com sucesso!"),
   }),
 
-  searchFuelTypeStreamDescription: z.object({
-    description: z
-      .string()
-      .default(
-        "NDJSON stream. First line contains meta object with {nextCursor, hasMore}. Subsequent lines are fuel type objects.",
-      ),
-  }),
+  internalServerError: internalErrorResponse,
 
-  // Common Error Responses
-  internalServerError: z.object({
-    message: z.string().default("Internal server error"),
-  }),
-
-  resourceNotFound: z.object({
-    message: z.string().default("Recurso não encontrado!"),
-  }),
-
-  validationError: z.object({
-    message: z.string().default("Validation Error"),
-    issues: z.array(z.string()),
-  }),
-
-  fuelTypeNotFound: z.object({
-    message: z.string().default("Tipo de combustível não encontrado!"),
-  }),
-
-  businessNotFound: z.object({
-    message: z
-      .string()
-      .default("Empresa não encontrada! Por favor, tente novamente."),
-  }),
-
-  fuelTypeAlreadyExists: z.object({
-    message: z
-      .string()
-      .default(
-        "Este tipo de combustível não está disponível para cadastro. Já existe um tipo de combustível com este nome.",
-      ),
-  }),
-
-  // Grouping errors by route
-  createFuelTypeErrors: z.union([
-    z.object({
-      message: z.string().default("Validation Error"),
-      issues: z.array(z.string()),
-    }),
-    z.object({
-      message: z.string().default("Recurso não encontrado!"),
-    }),
-    z.object({
-      message: z
-        .string()
-        .default("Empresa não encontrada! Por favor, tente novamente."),
-    }),
-    z.object({
-      message: z
-        .string()
-        .default(
-          "Este tipo de combustível não está disponível para cadastro. Já existe um tipo de combustível com este nome.",
-        ),
-    }),
-  ]),
-
-  listFuelTypeErrors: z.union([
-    z.object({
-      message: z.string().default("Validation Error"),
-      issues: z.array(z.string()),
-    }),
-    z.object({
-      message: z.string().default("Recurso não encontrado!"),
-    }),
-  ]),
-
-  listFuelTypeBusinessErrors: z.union([
-    z.object({
-      message: z.string().default("Validation Error"),
-      issues: z.array(z.string()),
-    }),
-    z.object({
-      message: z.string().default("Recurso não encontrado!"),
-    }),
-    z.object({
-      message: z
-        .string()
-        .default("Empresa não encontrada! Por favor, tente novamente."),
-    }),
-  ]),
-
-  updateFuelTypeErrors: z.union([
-    z.object({
-      message: z.string().default("Validation Error"),
-      issues: z.array(z.string()),
-    }),
-    z.object({
-      message: z.string().default("Recurso não encontrado!"),
-    }),
-    z.object({
-      message: z.string().default("Tipo de combustível não encontrado!"),
-    }),
-    z.object({
-      message: z
-        .string()
-        .default("Empresa não encontrada! Por favor, tente novamente."),
-    }),
-    z.object({
-      message: z
-        .string()
-        .default(
-          "Este tipo de combustível não está disponível para cadastro. Já existe um tipo de combustível com este nome.",
-        ),
-    }),
-  ]),
-
-  updateFuelTypeForbiddenErrors: z.object({
-    message: z
-      .string()
-      .default("Este tipo de combustível não pertence a esta empresa!"),
-  }),
-
-  deleteFuelTypeErrors: z.union([
-    z.object({
-      message: z.string().default("Recurso não encontrado!"),
-    }),
-    z.object({
-      message: z.string().default("Tipo de combustível não encontrado!"),
-    }),
-    z.object({
-      message: z.string().default("Empresa não encontrada!"),
-    }),
-    z.object({
-      message: z
-        .string()
-        .default("Este tipo de combustível não pertence a esta empresa!"),
-    }),
-  ]),
-
-  deleteFuelTypeForbiddenErrors: z.union([
-    z.object({
-      message: z
-        .string()
-        .default(
-          "Não é possível deletar este tipo de combustível pois existem veículo(s) associado(s).",
-        ),
-    }),
-    z.object({
-      message: z
-        .string()
-        .default(
-          "Não é possível deletar este tipo de combustível pois existem registro(s) de abastecimento associado(s).",
-        ),
-    }),
-  ]),
+  // Refusals with their codes (fuel-type-http-errors.ts). `errorResponse`
+  // keeps `code` in the body: the old per-message unions listed only
+  // `message` and none of these codes.
+  writeErrors: errorResponse.describe(
+    "VALIDATION_ERROR (corpo ou parâmetros inválidos) ou USER_NOT_FOUND.",
+  ),
+  listErrors: errorResponse.describe(
+    "VALIDATION_ERROR (parâmetros inválidos, ordenação que o servidor não oferece), BUSINESS_NOT_IDENTIFIED (o MASTER não informou a empresa) ou USER_NOT_FOUND.",
+  ),
+  searchErrors: errorResponse.describe(
+    "VALIDATION_ERROR (parâmetros inválidos) ou USER_NOT_FOUND.",
+  ),
+  businessNotFound: errorResponse.describe(
+    "BUSINESS_NOT_FOUND: a empresa informada não existe.",
+  ),
+  fuelTypeNotFound: errorResponse.describe(
+    "FUEL_TYPE_NOT_FOUND: o tipo de combustível não existe ou é de outra empresa (a mesma resposta). BUSINESS_NOT_FOUND: a empresa informada não existe.",
+  ),
+  alreadyExists: errorResponse.describe(
+    "FUEL_TYPE_ALREADY_EXISTS: a empresa já tem este combustível.",
+  ),
+  updateConflict: errorResponse.describe(
+    "FUEL_TYPE_ALREADY_EXISTS: a empresa já tem um tipo com este combustível.",
+  ),
+  deleteConflict: errorResponse.describe(
+    "FUEL_TYPE_IN_USE: há veículos ou abastecimentos com este tipo; a mensagem traz a contagem. Nada foi excluído.",
+  ),
 };
 
 export { fuelTypeSchemas, fuelTypeResponses };

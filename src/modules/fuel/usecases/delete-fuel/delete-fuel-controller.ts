@@ -3,15 +3,9 @@ import { container } from "tsyringe";
 
 import { DeleteFuelUseCase } from "./delete-fuel-usecase";
 
-import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
-import { BusinessNotFoundError } from "@/modules/business/usecases/errors/business-not-found-error";
-
 import { updateDeleteFuelSchema } from "@/schemas/update-delete-fuel-schema";
 
-import { FuelDriverCannotDeleteFuelError } from "../errors/fuel-driver-cannot-delete-fuel-error";
-import { FuelNotBelongBusinessError } from "../errors/fuel-not-belong-business-error";
-
-import { FuelNotFoundError } from "../errors/fuel-not-found-error";
+import { replyFuelWriteError } from "../errors/fuel-http-errors";
 
 class DeleteFuelController {
   async handle(request: FastifyRequest, reply: FastifyReply): Promise<void> {
@@ -33,35 +27,9 @@ class DeleteFuelController {
         message: "Abastecimento excluído com sucesso!",
       });
     } catch (error) {
-      if (error instanceof ResourceNotFoundError) {
-        return reply.status(404).send({
-          message: error.message,
-        });
-      }
-
-      if (error instanceof BusinessNotFoundError) {
-        return reply.status(404).send({
-          message: error.message,
-        });
-      }
-
-      if (error instanceof FuelNotFoundError) {
-        return reply.status(404).send({
-          message: error.message,
-        });
-      }
-
-      if (error instanceof FuelNotBelongBusinessError) {
-        return reply.status(403).send({
-          message: error.message,
-        });
-      }
-
-      if (error instanceof FuelDriverCannotDeleteFuelError) {
-        return reply.status(400).send({
-          message: error.message,
-        });
-      }
+      // Missing or another company's refueling: 404 FUEL_NOT_FOUND. A driver
+      // token: 403 DRIVER_CANNOT_DELETE_FUEL (fuel-http-errors).
+      if (replyFuelWriteError(reply, error)) return;
 
       throw error;
     }

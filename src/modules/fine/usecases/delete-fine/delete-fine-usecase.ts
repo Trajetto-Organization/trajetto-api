@@ -3,6 +3,7 @@ import { IFineRepository } from "../../repositories/IFine-repository";
 
 import { IUserRepository } from "@/modules/user/repositories/IUser-repository";
 import { AppError } from "@/shared/errors/AppError";
+import { assertTenantAccess } from "@/modules/middlewares/tenant-authorization";
 
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
 import { FineNotFoundError } from "../errors/fine-not-found-error";
@@ -21,21 +22,33 @@ class DeleteFineUseCase {
     private notificationService: NotificationService,
   ) {}
 
-  async execute(fineId: string, userId: string): Promise<Fine> {
+  async execute(
+    fineId: string,
+    userId: string,
+    businessId: string,
+  ): Promise<Fine> {
     const findUser = await this.user.findUserById(userId);
 
     if (!findUser) {
       throw new ResourceNotFoundError();
     }
 
+    assertTenantAccess(findUser, businessId);
+
     const existingFine = await this.fine.findFineById(fineId);
 
-    if (!existingFine) {
+    // The same 404 for "does not exist" and "not yours": a distinct 403
+    // would confirm the fine exists, which is half of what someone
+    // sweeping ids wants to know.
+    if (!existingFine || existingFine.businessId !== businessId) {
       throw new FineNotFoundError();
     }
 
     try {
-      const deletedFine = await this.fine.deleteFine(fineId);
+      // The `businessId` in the repository too, duplicating the check above:
+      // the use case protects the path someone remembered, the `where` the
+      // ones nobody thought of.
+      const deletedFine = await this.fine.deleteFine(fineId, businessId);
 
       // Process activity asynchronously without blocking the main flow
       this.notificationService.createActivityIfEnabled({

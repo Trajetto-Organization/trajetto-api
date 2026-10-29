@@ -1,13 +1,11 @@
 import { z } from "zod";
 
-// Mirrors `UploadType` in config/upload.ts. Kept as an explicit enum so an
-// unknown value is rejected by the schema instead of reaching the service and
-// indexing the size-limit table with `undefined`.
-const uploadTypeSchema = z.enum([
-  "odometerPhotos",
-  "avatars",
-  "checklistPhotos",
-]);
+import { UPLOAD_TYPES } from "@/config/upload";
+
+// Derived from the one list in config/upload.ts: an unknown value is
+// rejected by the schema instead of reaching the service, and a new upload
+// type registers itself here automatically.
+const uploadTypeSchema = z.enum(UPLOAD_TYPES);
 
 const presignedUploadFileSchema = z.object({
   originalFilename: z

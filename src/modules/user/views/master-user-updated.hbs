@@ -80,20 +80,14 @@
         color: #706a7b;
         text-decoration: line-through;
       }
-      .password-box {
-        background-color: #fff5f8;
-        border: 1px solid #f5c6d8;
-        border-radius: 6px;
-        padding: 14px 18px;
-        margin-bottom: 15px;
-        font-size: 14px;
-      }
     </style>
   </head>
   <body>
     <div class="container">
       <div class="logo">
-        <img width="150" src="{{logo}}" alt="Trajetto Logo" />
+        {{#if logo}}
+          <img width="150" src="{{logo}}" alt="Trajetto Logo" />
+        {{/if}}
       </div>
 
       <div class="sections-borders">
@@ -129,21 +123,6 @@
                 <span class="new-value">{{newEmail}}</span>
               </p>
             {{/if}}
-          </div>
-        {{/if}}
-
-        {{#if newPassword}}
-          <div class="password-box">
-            <p style="margin: 0 0 6px 0;">
-              <span class="change-label">Nova senha de acesso</span>
-            </p>
-            <p style="margin: 0; font-size: 16px;">
-              <strong>{{newPassword}}</strong>
-            </p>
-            <p style="margin: 6px 0 0 0; font-size: 12px; color: #706a7b;">
-              Por segurança, recomendamos que você altere esta senha após o
-              próximo acesso.
-            </p>
           </div>
         {{/if}}
 

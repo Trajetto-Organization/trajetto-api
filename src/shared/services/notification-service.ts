@@ -1,8 +1,100 @@
+import { Prisma } from "@prisma/client";
 import { inject, injectable } from "tsyringe";
-import { container } from "tsyringe";
 
-import { IUserRepository } from "@/modules/user/repositories/IUser-repository";
-import { WhatsAppService } from "./whatsapp-service";
+import type { IActivityRepository } from "@/modules/activity/repositories/IActivity-repository";
+import { DatabaseUnavailableError } from "@/shared/database/pg-driver";
+import {
+  driverAdapterCauseOf,
+  isDriverAdapterError,
+  sqlStateOf,
+} from "@/shared/errors/prisma-error-meta";
+import { logger } from "@/shared/logging/logger";
+
+/** How long the one retry waits for the pool or the server to come back. */
+const AUDIT_RETRY_DELAY_MS = 200;
+
+/**
+ * The adapter's kinds for a connection that could not be opened: the host
+ * refused or does not resolve (ECONNREFUSED, ENOTFOUND), Postgres out of
+ * connection slots (53300). P1001 and P2037 for a model query; a raw query
+ * carries them under P2010.
+ */
+const REFUSED_AT_CONNECT_KINDS = new Set([
+  "DatabaseNotReachable",
+  "TooManyConnections",
+]);
+
+/**
+ * SQLSTATEs Postgres sends only while refusing a new connection, before any
+ * statement can run: 57P03 "the database system is starting up" (or in
+ * recovery, or shutting down) and 53300 "too many clients".
+ */
+const REFUSED_AT_CONNECT_SQLSTATES = new Set(["57P03", "53300"]);
+
+/**
+ * Whether the adapter's verdict, wherever it rides, is a connection refused
+ * while being opened. Read from Prisma's error or from the adapter's own
+ * (what a failed COMMIT throws), as isDatabaseUnavailable trusts them; never
+ * from an arbitrary object.
+ *
+ * Under Prisma 7, "the database system is starting up" — a restart or a
+ * failover, the window this retry exists for — arrives as P2039 (a model
+ * query, or a transaction that could not start) or P2010 (a raw one), kind
+ * `postgres`, SQLSTATE 57P03, with no Prisma code of its own to match.
+ */
+function refusedAtConnect(error: unknown): boolean {
+  const trusted =
+    error instanceof Prisma.PrismaClientKnownRequestError ||
+    (error instanceof Error && isDriverAdapterError(error));
+
+  if (!trusted) return false;
+
+  const kind = driverAdapterCauseOf(error)?.kind;
+
+  if (kind && REFUSED_AT_CONNECT_KINDS.has(kind)) return true;
+
+  const state = sqlStateOf(error);
+
+  return state !== undefined && REFUSED_AT_CONNECT_SQLSTATES.has(state);
+}
+
+/**
+ * Failures where the INSERT certainly never ran: no connection could be
+ * taken or opened. Under Prisma 7 the pool is pg's, and its own failures
+ * arrive as DatabaseUnavailableError (src/shared/database/pg-driver.ts): a
+ * full pool and a connection that could not be opened are told by `reason`.
+ * What the adapter maps is told by its verdict (refusedAtConnect): refused
+ * or unknown host (P1001), Postgres out of connection slots (P2037), or
+ * still starting up (57P03).
+ *
+ * A connection lost under the statement and a read timeout are left out on
+ * purpose (`connection-lost`, `query-timeout`, and P1017/P1008, or the kinds
+ * `ConnectionClosed`/`SocketTimeout`, from the adapter), and so is the
+ * server going away under a statement or a COMMIT (57P01, class 08) — a
+ * connection that dies after the COMMIT reached Postgres reports the same,
+ * and retrying that would write the entry twice. A trail that double-counts
+ * is worse than one that is merely incomplete.
+ */
+function neverReachedTheDatabase(error: unknown): boolean {
+  if (error instanceof DatabaseUnavailableError) {
+    return error.reason === "pool-timeout" || error.reason === "connect-failed";
+  }
+
+  if (error instanceof Prisma.PrismaClientInitializationError) return true;
+
+  if (error instanceof Prisma.PrismaClientKnownRequestError) {
+    if (["P1001", "P2037"].includes(error.code)) return true;
+
+    if (
+      error.code === "P2028" &&
+      /unable to start a transaction/i.test(error.message)
+    ) {
+      return true;
+    }
+  }
+
+  return refusedAtConnect(error);
+}
 
 interface CreateActivityProps {
   type: string;
@@ -10,144 +102,89 @@ interface CreateActivityProps {
   entityId: string;
   description: string;
   status: string;
-  performedBy: string;
+  // Null when no person acted: a delivery created through an API key.
+  performedBy: string | null;
   businessId: string | null;
   tenantName?: string | null;
   visibilityLevel?: string;
   performingUserRole?: string;
 }
 
-interface CreateNotificationProps {
-  userId: string;
-  type: string;
-  title: string;
-  message: string;
-  entityId: string;
-  link: string;
-  businessId: string | null;
-  shouldSendEmail?: boolean;
-  shouldSendWhatsApp?: boolean;
-  whatsAppMessage?: string;
-  instanceName?: string;
-}
-
+/**
+ * The audit-trail entry point of the use cases.
+ *
+ * User-facing notifications do not pass through here: use cases publish
+ * their own topics via `OutboxService.publish` inside the business
+ * transaction, and the pipeline's policies do the rest.
+ *
+ * The entry is written straight to the activity table (GAP2-4). It used to
+ * ride the outbox as `activity.recorded` — an event, then an ACTIVITY
+ * delivery, then the row: three rows and two updates for one insert, queued
+ * behind WhatsApp and e-mail. The event was published after the business
+ * commit, outside its transaction, so the queue bought no guarantee the
+ * insert does not already have. Hierarchical visibility is handled at query
+ * time in ActivityRepository.
+ */
 @injectable()
 class NotificationService {
-  private whatsAppService: WhatsAppService;
-
   constructor(
-    @inject("UserRepository")
-    private userRepository: IUserRepository,
-  ) {
-    this.whatsAppService = WhatsAppService.getInstance();
+    @inject("ActivityRepository")
+    private activityRepository: IActivityRepository,
+  ) {}
+
+  /**
+   * Records an audit entry.
+   *
+   * With `tx` — the sensitive sites: permissions, users, profiles, the
+   * company itself — the entry joins the write's transaction, and its failure
+   * propagates: the operation rolls back rather than happening unaudited.
+   * That inversion is deliberate (OUTBOX-10).
+   *
+   * Without `tx` it is written right after the operation, at most once: one
+   * retry when no connection could be had, then a structured error line
+   * (`audit_trail_write_failed`) an alert can match, and the operation is
+   * never failed for it.
+   */
+  async createActivityIfEnabled(
+    activityData: CreateActivityProps,
+    tx?: Prisma.TransactionClient,
+  ): Promise<void> {
+    if (tx) {
+      await this.activityRepository.createActivity(activityData, tx);
+      return;
+    }
+
+    try {
+      await this.writeWithOneRetry(activityData);
+    } catch (error) {
+      logger.error(
+        {
+          event: "audit_trail_write_failed",
+          type: activityData.type,
+          action: activityData.action,
+          entityId: activityData.entityId,
+          businessId: activityData.businessId,
+          performedBy: activityData.performedBy,
+          err: error,
+        },
+        "an audit trail entry could not be written and is lost",
+      );
+    }
   }
 
-  async createActivityIfEnabled(
+  private async writeWithOneRetry(
     activityData: CreateActivityProps,
   ): Promise<void> {
     try {
-      const user = await this.userRepository.findUserById(
-        activityData.performedBy,
-      );
-
-      if (!user) {
-        return;
-      }
-
-      // Always create activity record - no configuration checks needed
-      // Hierarchical visibility is handled at query time in ActivityRepository
-      const { CreateActivityUseCase } = await import(
-        "@/modules/activity/usecases/create-activity/create-activity-usecase"
-      );
-
-      const createActivityUseCase = container.resolve(CreateActivityUseCase);
-      await createActivityUseCase.execute(activityData);
+      await this.activityRepository.createActivity(activityData);
     } catch (error) {
-      console.warn("Erro ao criar activity:", error);
-    }
-  }
+      if (!neverReachedTheDatabase(error)) throw error;
 
-  async createNotificationIfEnabled(
-    notificationData: CreateNotificationProps,
-  ): Promise<void> {
-    try {
-      const user = await this.userRepository.findUserById(
-        notificationData.userId,
-      );
+      await new Promise((resolve) => setTimeout(resolve, AUDIT_RETRY_DELAY_MS));
 
-      if (!user) {
-        return;
-      }
-
-      // All users follow the same notification rules based on their settings
-      const shouldCreateNotification = user.activity_notifications_enabled;
-      const shouldSendEmail =
-        user.email_notifications_enabled && notificationData.shouldSendEmail;
-
-      // WhatsApp for BUSINESS_ADMIN and BUSINESS_USER
-      const shouldSendWhatsApp =
-        user.whatsapp_notifications_enabled &&
-        notificationData.shouldSendWhatsApp &&
-        notificationData.whatsAppMessage;
-
-      // Create notification if activity_notifications_enabled OR if email should be sent
-      // But separate the controls: notification creation vs email sending
-      if (shouldCreateNotification || shouldSendEmail) {
-        const { CreateNotificationUseCase } = await import(
-          "@/modules/notification/usecases/create-notification/create-notification-usecase"
-        );
-        const createNotificationUseCase = container.resolve(
-          CreateNotificationUseCase,
-        );
-
-        await createNotificationUseCase.execute({
-          ...notificationData,
-          shouldSendEmail,
-          shouldCreateInAppNotification: shouldCreateNotification, // New flag to control in-app notification
-        });
-      }
-
-      // Send WhatsApp notification (background processing)
-      if (
-        shouldSendWhatsApp &&
-        user.whatsapp_phone &&
-        notificationData.instanceName
-      ) {
-        await this.whatsAppService.enqueueWhatsAppMessage(
-          `whatsapp-${notificationData.businessId}`,
-          {
-            instanceName: notificationData.instanceName,
-            phoneNumber: user.whatsapp_phone,
-            message: notificationData.whatsAppMessage!,
-            userId: user.id,
-          },
-        );
-      }
-    } catch (error) {
-      console.warn("Erro ao criar notificação:", error);
-    }
-  }
-
-  async processUserNotifications(params: {
-    activity?: CreateActivityProps;
-    notification?: CreateNotificationProps;
-  }): Promise<void> {
-    const promises: Promise<void>[] = [];
-
-    if (params.activity) {
-      promises.push(this.createActivityIfEnabled(params.activity));
-    }
-
-    if (params.notification) {
-      promises.push(this.createNotificationIfEnabled(params.notification));
-    }
-
-    try {
-      await Promise.allSettled(promises);
-    } catch (error) {
-      console.warn("Erro ao processar notificações do usuário:", error);
+      await this.activityRepository.createActivity(activityData);
     }
   }
 }
 
-export { NotificationService, CreateActivityProps, CreateNotificationProps };
+export { NotificationService, CreateActivityProps };

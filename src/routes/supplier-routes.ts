@@ -9,6 +9,7 @@ import { SearchSupplierCursorController } from "@/modules/supplier/usecases/sear
 import { UpdateSupplierController } from "@/modules/supplier/usecases/update-supplier/update-supplier-controller";
 
 import { ensureAuthenticated } from "@/modules/middlewares/ensure-authenticated";
+import { requireModuleForPlugin } from "@/modules/middlewares/verify-module-enabled";
 import { verifyPermission } from "@/modules/middlewares/verify-permission";
 
 import { verifyBusinessActive } from "@/modules/middlewares/verify-tenant-active";
@@ -16,6 +17,11 @@ import {
   supplierResponses,
   supplierSchemas,
 } from "./documentation/supplier-documentation";
+import {
+  ndjsonCursor,
+  ndjsonList,
+  offsetMetaWith,
+} from "./documentation/ndjson";
 
 const createSupplierController = new CreateSupplierController();
 const deleteSupplierController = new DeleteSupplierController();
@@ -26,6 +32,10 @@ const searchSupplierCursorController = new SearchSupplierCursorController();
 const updateSupplierController = new UpdateSupplierController();
 
 async function supplierRoutes(app: FastifyInstance) {
+  // Maintenance supply chain, only meaningful with fleet operations —
+  // gated for the whole plugin.
+  requireModuleForPlugin(app, "FLEET");
+
   app.post(
     "/create-supplier/:businessId",
     {
@@ -37,14 +47,16 @@ async function supplierRoutes(app: FastifyInstance) {
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["supplier"],
-        summary: "Create a new supplier",
+        summary: "Cadastra um fornecedor",
         description:
-          "Register a new supplier company with contact information and business relationship details",
+          "Cadastra uma oficina, loja ou prestador da empresa. Nome (sem diferenciar maiúsculas), CNPJ e e-mail são únicos dentro da empresa — duas transportadoras podem cadastrar a mesma oficina. Avisa as outras telas abertas pelo evento `catalogChanged` (entidade `supplier`).",
         params: supplierSchemas.updateDeleteBusiness,
         body: supplierSchemas.createSupplier,
         response: {
           201: supplierResponses.supplierCreated,
           400: supplierResponses.createSupplierErrors,
+          404: supplierResponses.sessionUserNotFound,
+          409: supplierResponses.supplierConflict,
           500: supplierResponses.internalServerError,
         },
       },
@@ -56,17 +68,26 @@ async function supplierRoutes(app: FastifyInstance) {
     "/list-supplier",
     {
       onRequest: [ensureAuthenticated],
-      preHandler: [verifyPermission("supplier_manage", "read")],
+      // A MASTER naming a switched-off company gets TENANT_INACTIVE, as on
+      // every other route of the plugin.
+      preHandler: [
+        verifyBusinessActive,
+        verifyPermission("supplier_manage", "read"),
+      ],
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["supplier"],
-        summary: "List suppliers",
+        summary: "Lista os fornecedores da empresa",
         description:
-          "Retrieve a paginated list of supplier companies with optional search and filtering capabilities",
+          "Fornecedores de uma empresa numa tabela paginada. Ordena no servidor (`sort`/`order`) e filtra por UF (um ou mais valores separados por vírgula), além da busca livre (ID, nome, e-mail, cidade, rua e os dígitos de CNPJ, CEP e telefone). A primeira linha (`meta`) traz o total do filtro e, em `searchMeta`, os cartões (total, com telefone, com e-mail, principais estados) e as opções do filtro de UF com as contagens — calculados sobre a empresa inteira, nunca sobre a página. O MASTER informa `businessId`.",
         querystring: supplierSchemas.listSupplier,
         response: {
-          200: supplierResponses.supplierList,
+          200: ndjsonList(
+            supplierResponses.supplierRow,
+            offsetMetaWith(supplierResponses.supplierListSearchMeta),
+          ),
           400: supplierResponses.listSupplierErrors,
+          404: supplierResponses.sessionUserNotFound,
           500: supplierResponses.internalServerError,
         },
       },
@@ -78,20 +99,23 @@ async function supplierRoutes(app: FastifyInstance) {
     "/search-supplier-business",
     {
       onRequest: [ensureAuthenticated],
-      preHandler: [verifyPermission("supplier_manage", "read")],
+      // A MASTER naming a switched-off company gets TENANT_INACTIVE, as on
+      // every other route of the plugin.
+      preHandler: [
+        verifyBusinessActive,
+        verifyPermission("supplier_manage", "read"),
+      ],
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["supplier"],
-        summary: "Search suppliers by business (cursor-based)",
+        summary: "Busca fornecedores da empresa (cursor)",
         description:
-          "Retrieve suppliers as NDJSON stream with cursor-based pagination. " +
-          "First line contains meta object: {meta: {nextCursor, hasMore}}. " +
-          "Subsequent lines are individual supplier objects. " +
-          "Use nextCursor value as cursor parameter for the next page.",
+          "Os fornecedores de uma empresa para os seletores, em NDJSON paginado por cursor, mais recentes primeiro. `search` filtra no servidor por nome, e-mail, cidade ou dígitos do CNPJ. A primeira linha traz `meta.searchMeta.{nextCursor, hasMore}`; passe `nextCursor` como `cursor` para a próxima página.",
         querystring: supplierSchemas.searchSupplierCursor,
         response: {
-          200: supplierResponses.searchSupplierStreamDescription,
-          400: supplierResponses.listSupplierBusinessErrors,
+          200: ndjsonCursor(supplierResponses.supplierRow),
+          400: supplierResponses.searchSupplierErrors,
+          404: supplierResponses.sessionUserNotFound,
           500: supplierResponses.internalServerError,
         },
       },
@@ -110,15 +134,17 @@ async function supplierRoutes(app: FastifyInstance) {
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["supplier"],
-        summary: "Update a supplier",
+        summary: "Atualiza um fornecedor",
         description:
-          "Update existing supplier information including contact details and business relationship data",
+          "Atualiza os dados do fornecedor. Ele precisa ser da empresa do caminho — fornecedor não muda de empresa, nem pelo MASTER. Nome, CNPJ e e-mail continuam únicos dentro da empresa. Avisa as outras telas pelo evento `catalogChanged`.",
         params: supplierSchemas.supplierParams,
         body: supplierSchemas.updateSupplier,
         response: {
           200: supplierResponses.supplierUpdated,
           400: supplierResponses.updateSupplierErrors,
+          403: supplierResponses.supplierForbidden,
           404: supplierResponses.supplierNotFound,
+          409: supplierResponses.supplierConflict,
           500: supplierResponses.internalServerError,
         },
       },
@@ -130,18 +156,23 @@ async function supplierRoutes(app: FastifyInstance) {
     "/delete-supplier/:supplierId/business/:businessId",
     {
       onRequest: [ensureAuthenticated],
-      preHandler: [verifyPermission("supplier_manage", "write")],
+      preHandler: [
+        verifyBusinessActive,
+        verifyPermission("supplier_manage", "write"),
+      ],
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["supplier"],
-        summary: "Delete a supplier",
+        summary: "Exclui um fornecedor sem histórico",
         description:
-          "Permanently remove a supplier company from the system and associated business relationships",
+          "Exclui o fornecedor só quando nada o referencia. Com ordens de serviço, peças ou contas a pagar vinculadas, responde 409 SUPPLIER_IN_USE com as contagens: excluir apagaria a oficina das ordens de serviço, a origem das peças e o favorecido das contas. Avisa as outras telas pelo evento `catalogChanged`.",
         params: supplierSchemas.supplierParams,
         response: {
           200: supplierResponses.supplierDeleted,
           400: supplierResponses.deleteSupplierErrors,
+          403: supplierResponses.supplierForbidden,
           404: supplierResponses.supplierNotFound,
+          409: supplierResponses.supplierInUse,
           500: supplierResponses.internalServerError,
         },
       },

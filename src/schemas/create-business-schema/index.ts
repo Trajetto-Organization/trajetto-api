@@ -1,4 +1,6 @@
 import { z } from "zod";
+
+import { businessTimezoneField } from "@/schemas/business-timezone-schema";
 import {
   emptyStringToNull,
   hasConsecutiveSpaces,
@@ -398,6 +400,7 @@ const createBusinessSchema = z.object({
       .optional()
       .nullable(),
   ),
+  timezone: businessTimezoneField.optional(),
 });
 
 export { createBusinessSchema };

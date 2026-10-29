@@ -18,7 +18,12 @@ import { BusinessNotFoundError } from "@/modules/business/usecases/errors/busine
 import { NotificationService } from "@/shared/services/notification-service";
 
 import { ProfileAccessCannotBeUpdatedByHimselfError } from "../errors/profile-access-cannot-be-updated-by-himself-error";
+import { ProfileAccessBusinessLockedError } from "../errors/profile-access-business-locked-error";
 import { AppError } from "@/shared/errors/AppError";
+import { assertTenantAccessToRecord } from "@/modules/middlewares/tenant-authorization";
+import { sendCatalogChangedEvent } from "@/websocket";
+
+import database from "@/../infra/database";
 
 @injectable()
 class UpdateProfileAccessUseCase {
@@ -50,61 +55,90 @@ class UpdateProfileAccessUseCase {
       throw new ProfileAccessNotFoundError();
     }
 
+    // The profile's CURRENT tenant, not the one in the body.
+    assertTenantAccessToRecord(
+      findUser,
+      existingProfile.businessId,
+      () => new ProfileAccessNotFoundError(),
+    );
+
+    // A profile stays in its company. Moving it used to carry its users
+    // along without ending their sessions or clearing their inbox
+    // (decision 4.6); a person changes company through their own record.
+    if (businessId && businessId !== existingProfile.businessId) {
+      throw new ProfileAccessBusinessLockedError();
+    }
+
     if (findUser.profileAccessId === profileAccessId) {
       throw new ProfileAccessCannotBeUpdatedByHimselfError();
     }
 
-    const findBusinessById = await this.business.findBusinessById(businessId);
+    const profileBusinessId = existingProfile.businessId as string;
+
+    const findBusinessById =
+      await this.business.findBusinessById(profileBusinessId);
 
     if (!findBusinessById) {
       throw new BusinessNotFoundError();
     }
 
-    // Always check for duplicates when name or businessId changes
     const targetName = name || existingProfile.name;
-    const targetBusinessId = businessId || existingProfile.businessId;
 
-    const isSameName = targetName === existingProfile.name;
-    const isSameBusiness = targetBusinessId === existingProfile.businessId;
-
-    // Only check for duplicates if name or businessId is changing
-    if (!isSameName || !isSameBusiness) {
-      const exists =
-        await this.profileAccess.findProfileAccessByNameAndBusiness({
-          name: targetName,
-          businessId: targetBusinessId as string,
-        });
-
-      if (exists && exists.id !== profileAccessId) {
-        throw new ProfileAccessAlreadyExistsError();
-      }
+    // Nothing to write: no audit entry, no event.
+    if (targetName === existingProfile.name) {
+      return existingProfile;
     }
 
+    const exists = await this.profileAccess.findProfileAccessByNameAndBusiness({
+      name: targetName,
+      businessId: profileBusinessId,
+    });
+
+    if (exists && exists.id !== profileAccessId) {
+      throw new ProfileAccessAlreadyExistsError();
+    }
+
+    let updatedProfile: ProfileAccess;
+
     try {
-      const updatedProfile = await this.profileAccess.updateProfileAccess({
-        profileAccessId,
-        businessId: businessId || (existingProfile.businessId as string),
-        name: name || existingProfile.name,
-      });
+      // The change and its audit entry commit together (OUTBOX-10).
+      updatedProfile = await database.$transaction(async (tx) => {
+        const updated = await this.profileAccess.updateProfileAccess(
+          {
+            profileAccessId,
+            businessId: profileBusinessId,
+            name: targetName,
+          },
+          tx,
+        );
 
-      // Process activity asynchronously without blocking the main flow
-      this.notificationService.createActivityIfEnabled({
-        type: "Perfil de acesso",
-        action: "update",
-        entityId: updatedProfile.id,
-        description: `Perfil de acesso atualizado com sucesso: ${updatedProfile.name} | ID: ${updatedProfile.id}`,
-        status: "Atualizado",
-        performedBy: userId,
-        businessId: businessId || (existingProfile.businessId as string),
-      });
+        await this.notificationService.createActivityIfEnabled(
+          {
+            type: "Perfil de acesso",
+            action: "update",
+            entityId: updated.id,
+            description: `Perfil de acesso atualizado com sucesso: ${updated.name} | ID: ${updated.id}`,
+            status: "Atualizado",
+            performedBy: userId,
+            businessId: profileBusinessId,
+          },
+          tx,
+        );
 
-      return updatedProfile;
+        return updated;
+      });
     } catch (error) {
       throw new AppError(
         "Houve um erro ao tentar atualizar o perfil de acesso! Por favor, tente novamente.",
         500,
       );
     }
+
+    // After the commit: pickers open in other tabs refetch the new name
+    // (decision 2.3).
+    sendCatalogChangedEvent(profileBusinessId, "profile_access");
+
+    return updatedProfile;
   }
 }
 

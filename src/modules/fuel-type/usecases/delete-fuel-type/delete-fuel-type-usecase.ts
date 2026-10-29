@@ -3,7 +3,6 @@ import { inject, injectable } from "tsyringe";
 import { IFuelTypeRepository } from "@/modules/fuel-type/repositories/IFuel-type-repository";
 import { IBusinessRepository } from "@/modules/business/repositories/IBusiness-repository";
 
-import { IVehicleRepository } from "@/modules/vehicle/repositories/IVehicle-repository";
 import { IUserRepository } from "@/modules/user/repositories/IUser-repository";
 
 import { AppError } from "@/shared/errors/AppError";
@@ -14,12 +13,12 @@ import { BusinessNotFoundError } from "@/modules/business/usecases/errors/busine
 import { NotificationService } from "@/shared/services/notification-service";
 
 import { FuelTypeNotFoundError } from "../errors/fuel-type-not-found-error";
-import { FuelTypeNotBelongBusinessError } from "../errors/fuel-type-not-belong-business-error";
+import { assertTenantAccess } from "@/modules/middlewares/tenant-authorization";
+import { sendCatalogChangedEvent } from "@/websocket";
 
 import { FuelTypeHasAssociatedVehiclesError } from "../errors/fuel-type-has-associated-vehicles-error";
 import { FuelTypeHasAssociatedFuelError } from "../errors/fuel-type-has-associated-fuel-error";
 
-import { IFuelRepository } from "@/modules/fuel/repositories/IFuel-repository";
 import { FuelType } from "../../dtos/fuel-type-dto";
 
 @injectable()
@@ -31,10 +30,6 @@ class DeleteFuelTypeUseCase {
     private business: IBusinessRepository,
     @inject("FuelTypeRepository")
     private fuelType: IFuelTypeRepository,
-    @inject("VehicleRepository")
-    private vehicle: IVehicleRepository,
-    @inject("FuelRepository")
-    private fuel: IFuelRepository,
     @inject("NotificationService")
     private notificationService: NotificationService,
   ) {}
@@ -50,37 +45,42 @@ class DeleteFuelTypeUseCase {
       throw new ResourceNotFoundError();
     }
 
+    assertTenantAccess(findUser, businessId);
+
     const findBusiness = await this.business.findBusinessById(businessId);
 
     if (!findBusiness) {
       throw new BusinessNotFoundError();
     }
 
-    const findFuelTypeById = await this.fuelType.findFuelTypeById(fuelTypeId);
+    // Another company's fuel type answers as missing: a distinct refusal
+    // told the caller that the id exists somewhere else.
+    const findFuelType = await this.fuelType.findFuelTypeByIdAndBusiness(
+      fuelTypeId,
+      businessId,
+    );
 
-    if (!findFuelTypeById) {
+    if (!findFuelType) {
       throw new FuelTypeNotFoundError();
     }
 
-    if (findFuelTypeById.businessId !== businessId) {
-      throw new FuelTypeNotBelongBusinessError();
+    // Counted, not loaded: the old guard read every refueling of the fuel
+    // (thousands) to take `.length`.
+    const usage = await this.fuelType.countFuelTypeUsage(fuelTypeId);
+
+    if (usage.vehicles > 0) {
+      throw new FuelTypeHasAssociatedVehiclesError(usage.vehicles);
     }
 
-    const associatedVehicles =
-      await this.vehicle.findVehiclesByFuelTypeId(fuelTypeId);
-
-    if (associatedVehicles.length > 0) {
-      throw new FuelTypeHasAssociatedVehiclesError(associatedVehicles.length);
-    }
-
-    const associatedFuels = await this.fuel.findFuelsByFuelTypeId(fuelTypeId);
-
-    if (associatedFuels.length > 0) {
-      throw new FuelTypeHasAssociatedFuelError(associatedFuels.length);
+    if (usage.fuels > 0) {
+      throw new FuelTypeHasAssociatedFuelError(usage.fuels);
     }
 
     try {
       const fuelTypeDeleted = await this.fuelType.deleteFuelType(fuelTypeId);
+
+      // After the write: open pickers of this company drop it (decision 2.3).
+      sendCatalogChangedEvent(businessId, "fuel_type");
 
       // Process activity asynchronously without blocking the main flow
       this.notificationService.createActivityIfEnabled({

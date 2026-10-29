@@ -1,7 +1,9 @@
 import { z } from "zod";
+import { tenantLockedShape } from "@/shared/validation/tenant-locked-field";
 import { emptyStringToNull } from "@/shared/utils/zod-schema-helpers";
 
 const updateServiceOrderPartSchema = z.object({
+  ...tenantLockedShape,
   unit_price: z
     .number()
     .positive("O preço unitário deve ser um valor positivo.")

@@ -1,24 +1,22 @@
 import { FastifyReply, FastifyRequest } from "fastify";
 import { container } from "tsyringe";
-
 import { ListQuotesUseCase } from "./list-quotes-usecase";
-import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
-
 import { listQuotesQuerySchema } from "@/schemas/list-quotes-query-schema";
 import { sendAsNDJSON } from "@/config/stream-utils";
-
-import { QuoteAccessDeniedError } from "../errors/quote-access denied-error";
+import { z } from "zod";
 
 class ListQuotesController {
   async handle(request: FastifyRequest, reply: FastifyReply): Promise<void> {
     const { id } = request.user;
 
-    const { page, pageSize, search, status } = listQuotesQuerySchema.parse(
-      request.query,
-    );
+    // The route already validated AND transformed the querystring (page is a
+    // number, each facet a list): re-parsing it would refuse it.
+    const { page, pageSize, search, sort, order, status, fleet_size } =
+      request.query as z.infer<typeof listQuotesQuerySchema>;
 
     const listQuotesUseCase = container.resolve(ListQuotesUseCase);
 
+    // A term the client encoded twice still reads as typed.
     let decodedSearch: string | undefined = undefined;
     if (search) {
       try {
@@ -28,32 +26,27 @@ class ListQuotesController {
       }
     }
 
-    try {
-      const quotesList = listQuotesUseCase.execute({
-        userId: id,
-        page,
-        pageSize,
-        search: decodedSearch,
-        status,
-      });
-
-      await sendAsNDJSON({
-        reply,
-        dataPromise: quotesList,
-        page,
-        pageSize,
-      });
-    } catch (error) {
-      if (error instanceof ResourceNotFoundError) {
-        return reply.status(400).send({ message: error.message });
-      }
-
-      if (error instanceof QuoteAccessDeniedError) {
-        return reply.status(403).send({ message: error.message });
-      }
-
-      throw error;
-    }
+    await sendAsNDJSON({
+      reply,
+      page,
+      pageSize,
+      dataPromise: listQuotesUseCase
+        .execute({
+          userId: id,
+          page,
+          pageSize,
+          search: decodedSearch,
+          statuses: status,
+          fleetSizes: fleet_size,
+          sort,
+          order,
+        })
+        .then((result) => ({
+          data: result.data,
+          total: result.total,
+          meta: result.searchMeta,
+        })),
+    });
   }
 }
 

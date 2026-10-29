@@ -20,11 +20,10 @@ import { SupplierNotFoundError } from "@/modules/supplier/usecases/errors/suppli
 import { SupplierNotBelongBusinessError } from "@/modules/supplier/usecases/errors/supplier-not-belong-business-error";
 import { BranchNotBelongBusinessError } from "@/modules/branch/usecases/errors/branch-not-belong-business-error";
 
-import { ServiceOrderNotBelongBusinessError } from "../errors/service-order-not-belong-business-error";
 import { VehicleNotBelongBusinessError } from "@/modules/vehicle/usecases/errors/vehicle-not-belong-business-error";
 
 import { UserNotBelongBusinessError } from "@/modules/user/usecases/errors/user-not-belong-business-error";
-import { NotificationService } from "@/shared/services/notification-service";
+import { OutboxService } from "@/shared/notifications/outbox-service";
 
 import { ServiceOrderCompletionDateCannotBeEarlierOrderError } from "../errors/service-order-completion-date-cannot-be-earlier-order-date-error";
 import { UserResponsibleNotFoundError } from "@/modules/user/usecases/errors/user-responsible-not-found-error";
@@ -38,22 +37,18 @@ import {
   UpdateServiceOrderProps,
 } from "../../dtos/service-order-dto";
 
-import { formatCurrency } from "@/shared/utils/format-values";
-import { buildServiceOrderLink } from "@/shared/utils/link-redirect-page";
-
-import { generateWhatsAppInstanceName } from "@/shared/utils/whatsapp-instance-name";
-import { env } from "@/env";
-
-interface ServiceOrderNotificationTextProps {
-  totalAmount: string;
-  licensePlate: string;
-  serviceOrderId: string;
-}
+import database from "@/../infra/database";
+import {
+  assertCorrectionAccepted,
+  assertMileageNotBehind,
+  recordMaintenanceMileage,
+  recordMileageCorrection,
+} from "../service-order-mileage";
+import { timeZoneOfBusiness } from "@/shared/time/business-time-zone";
+import { pickedDateFromInput } from "@/shared/vehicle/record-dates";
 
 @injectable()
 class UpdateServiceOrderUseCase {
-  private http_request = env.HTTP_REQUEST;
-
   constructor(
     @inject("UserRepository")
     private user: IUserRepository,
@@ -67,108 +62,9 @@ class UpdateServiceOrderUseCase {
     private supplier: ISupplierRepository,
     @inject("ServiceOrderRepository")
     private serviceOrder: IServiceOrderRepository,
-    @inject("NotificationService")
-    private notificationService: NotificationService,
+    @inject("OutboxService")
+    private outbox: OutboxService,
   ) {}
-
-  private buildServiceOrderNotificationText({
-    totalAmount,
-    licensePlate,
-    serviceOrderId,
-  }: ServiceOrderNotificationTextProps): string {
-    return [
-      `🔧 *Ordem de Serviço Atualizada! Você foi designado como responsável por uma ordem de serviço atualizada*`,
-      `Veículo: *${licensePlate}*`,
-      `Valor total: *${formatCurrency(Number(totalAmount))}*`,
-      `Identificador da OS: *${serviceOrderId}*`,
-      `Para mais detalhes, acesse o sistema.`,
-    ].join("\n");
-  }
-
-  private async processNotifications(
-    originalServiceOrder: ServiceOrder,
-    updatedServiceOrder: ServiceOrder,
-    serviceOrderData: UpdateServiceOrderProps,
-    userId: string,
-    businessId: string,
-    vehicleLicensePlate: string,
-  ): Promise<void> {
-    try {
-      // Always create activity for service order update
-      const activityData = {
-        type: "Ordem de serviço",
-        action: "update",
-        entityId: updatedServiceOrder.id,
-        description: `Ordem de serviço atualizada para o veículo ${vehicleLicensePlate} no valor de ${formatCurrency(Number(updatedServiceOrder.total_amount))} | ID: ${updatedServiceOrder.id}`,
-        status: "Atualizado",
-        performedBy: userId,
-        businessId,
-      };
-
-      // Check if responsibleUserId changed
-      const responsibleUserChanged =
-        serviceOrderData.responsibleUserId !== undefined &&
-        originalServiceOrder.responsibleUserId !==
-          serviceOrderData.responsibleUserId;
-
-      if (responsibleUserChanged && serviceOrderData.responsibleUserId) {
-        // ResponsibleUser changed, send notification
-        const responsibleUser = await this.user.findUserById(
-          serviceOrderData.responsibleUserId,
-        );
-
-        if (responsibleUser) {
-          // 🚗 Build correct link for driver or non-driver users
-          const notificationLink = buildServiceOrderLink({
-            baseUrl: this.http_request,
-            role: responsibleUser.role,
-            driverId: responsibleUser.driverId,
-            vehicleId: updatedServiceOrder.vehicleId,
-            serviceOrderId: updatedServiceOrder.id,
-          });
-
-          const notificationData = {
-            userId: serviceOrderData.responsibleUserId,
-            type: "service-order",
-            title: "Ordem de Serviço Atualizada e Atribuída",
-            message: `Você foi designado como responsável por uma ordem de serviço atualizada para o veículo ${vehicleLicensePlate}`,
-            entityId: updatedServiceOrder.id,
-            link: notificationLink,
-            businessId,
-            shouldSendEmail: true,
-            shouldSendWhatsApp: true,
-            whatsAppMessage: this.buildServiceOrderNotificationText({
-              totalAmount: updatedServiceOrder.total_amount as string,
-              licensePlate: vehicleLicensePlate,
-              serviceOrderId: updatedServiceOrder.id,
-            }),
-            instanceName: generateWhatsAppInstanceName(
-              responsibleUser.email,
-              businessId,
-            ),
-          };
-
-          // Process notification to newly assigned user
-          await this.notificationService.processUserNotifications({
-            notification: notificationData,
-            activity: activityData,
-          });
-        } else {
-          // Fallback: Create activity even if responsible user not found
-          await this.notificationService.createActivityIfEnabled(activityData);
-        }
-      } else {
-        // No responsibleUser change, just create activity
-        await this.notificationService.createActivityIfEnabled(activityData);
-      }
-    } catch (error) {
-      console.error(
-        "[Service Order Update] Erro ao processar notificações:",
-        error,
-      );
-      // Does not prevent the service order update
-    }
-  }
 
   async execute(
     serviceOrderData: UpdateServiceOrderProps,
@@ -191,12 +87,10 @@ class UpdateServiceOrderUseCase {
     const findServiceOrder =
       await this.serviceOrder.findServiceOrderById(serviceOrderId);
 
-    if (!findServiceOrder) {
+    // Another company's order is not found from here either: a distinct
+    // answer confirmed the id exists elsewhere (decision 11.3).
+    if (!findServiceOrder || findServiceOrder.businessId !== businessId) {
       throw new ServiceOrderNotFoundError();
-    }
-
-    if (findServiceOrder.businessId !== businessId) {
-      throw new ServiceOrderNotBelongBusinessError();
     }
 
     // Get current vehicle data for validation
@@ -265,6 +159,15 @@ class UpdateServiceOrderUseCase {
       }
     }
 
+    // A bare day starts in the company's zone (see the create).
+    const zone = timeZoneOfBusiness(findBusiness);
+
+    serviceOrderData.date = pickedDateFromInput(serviceOrderData.date, zone);
+    serviceOrderData.completion_date = pickedDateFromInput(
+      serviceOrderData.completion_date,
+      zone,
+    );
+
     // Validate dates
     const orderDate = serviceOrderData.date
       ? new Date(serviceOrderData.date)
@@ -287,21 +190,69 @@ class UpdateServiceOrderUseCase {
       throw new ServiceOrderNewMileageRequireOrderFinalizedError();
     }
 
-    // 🔧 VALIDATION: New mileage must be > current vehicle mileage (strictly greater)
-    if (serviceOrderData.new_mileage_after_service) {
-      if (
-        serviceOrderData.new_mileage_after_service <=
-        currentVehicle.current_mileage
-      ) {
-        throw new AppError(
-          `A nova quilometragem (${serviceOrderData.new_mileage_after_service} km) deve ser maior que a quilometragem atual do veículo (${currentVehicle.current_mileage} km)`,
-          400,
-        );
-      }
+    /**
+     * Only a reading recorded NOW is judged: finishing the order, or
+     * correcting its reading. The edit form posts every field, so a finished
+     * order's stored reading comes back on each save, and the odometer moves
+     * on after it (the next fuel-up). Judging it again froze the order: no
+     * edit could be saved, while the delete guard sends the user to edit it.
+     * Unchanged, on the same vehicle, it is history — not checked and not
+     * written onto the vehicle again.
+     */
+    const keepsVehicle =
+      !serviceOrderData.vehicleId ||
+      serviceOrderData.vehicleId === findServiceOrder.vehicleId;
+
+    const keepsStoredMileage =
+      wasCompleted &&
+      keepsVehicle &&
+      serviceOrderData.new_mileage_after_service ===
+        findServiceOrder.new_mileage_after_service;
+
+    const recordsMileage =
+      Boolean(serviceOrderData.new_mileage_after_service) &&
+      !keepsStoredMileage;
+
+    // A changed reading of an order already finished, on its own vehicle.
+    const correctsMileage = recordsMileage && wasCompleted && keepsVehicle;
+
+    // The vehicle's last maintenance is this order's when it holds the
+    // reading this order wrote; after a later maintenance (or a hand edit of
+    // the vehicle) it does not, and a correction here must not overwrite it.
+    const isLatestMaintenance =
+      findServiceOrder.new_mileage_after_service !== null &&
+      findServiceOrder.new_mileage_after_service !== undefined &&
+      currentVehicle.last_maintenance_mileage ===
+        findServiceOrder.new_mileage_after_service;
+
+    if (correctsMileage && serviceOrderData.new_mileage_after_service) {
+      // The master may fix the opening reading in the same save.
+      const openingMileage =
+        findUser.role === "MASTER" &&
+        serviceOrderData.current_mileage_at_service !== undefined
+          ? serviceOrderData.current_mileage_at_service
+          : findServiceOrder.current_mileage_at_service;
+
+      assertCorrectionAccepted({
+        mileage: serviceOrderData.new_mileage_after_service,
+        openingMileage,
+        currentMileage: currentVehicle.current_mileage,
+        isLatestMaintenance,
+      });
+    } else if (recordsMileage && serviceOrderData.new_mileage_after_service) {
+      // Equal is accepted: the vehicle may not have moved (FLEET-SO-4).
+      assertMileageNotBehind(
+        serviceOrderData.new_mileage_after_service,
+        currentVehicle.current_mileage,
+      );
     }
 
     // 🔒 PERMISSION CHECK: Only MASTER can update snapshot values
     let updateData: any = { ...serviceOrderData };
+
+    // A MASTER's edit of the vehicle, written in the order's transaction
+    // below: it used to land before the order, and stay when the order failed.
+    const vehicleUpdateData: any = {};
 
     // If user is not MASTER, remove snapshot fields from update
     if (findUser.role !== "MASTER") {
@@ -315,8 +266,6 @@ class UpdateServiceOrderUseCase {
         !findServiceOrder.completion_date &&
         !serviceOrderData.completion_date
       ) {
-        const vehicleUpdateData: any = {};
-
         if (
           updateData.current_mileage_at_service !== undefined &&
           updateData.current_mileage_at_service !==
@@ -342,13 +291,6 @@ class UpdateServiceOrderUseCase {
         ) {
           vehicleUpdateData.last_maintenance_mileage =
             updateData.last_maintenance_mileage_at_service;
-        }
-
-        if (Object.keys(vehicleUpdateData).length > 0) {
-          await this.vehicle.updateVehicle({
-            vehicleData: vehicleUpdateData,
-            vehicleId: serviceOrderData.vehicleId || findServiceOrder.vehicleId,
-          });
         }
       }
     }
@@ -381,63 +323,102 @@ class UpdateServiceOrderUseCase {
     }
 
     try {
-      const updatedServiceOrder = await this.serviceOrder.updateServiceOrder({
-        serviceOrderData: updateData,
-        serviceOrderId,
-      });
-
-      // 🔄 CONDITIONAL UPDATE: If you are finalizing the OS now
-      if (isBeingCompleted && serviceOrderData.new_mileage_after_service) {
-        // Get vehicleId from existing work order or update data
-        const vehicleId =
-          serviceOrderData.vehicleId || findServiceOrder.vehicleId;
-
-        await this.vehicle.updateVehicle({
-          vehicleData: {
-            current_mileage: serviceOrderData.new_mileage_after_service,
-            last_maintenance_date: serviceOrderData.completion_date,
-            last_maintenance_mileage:
-              serviceOrderData.new_mileage_after_service,
-          },
-          vehicleId: vehicleId,
-        });
-      }
-
-      // If already was completed and updating new mileage
-      if (
-        wasCompleted &&
-        serviceOrderData.new_mileage_after_service !== undefined
-      ) {
-        const vehicleId =
-          serviceOrderData.vehicleId || findServiceOrder.vehicleId;
-
-        await this.vehicle.updateVehicle({
-          vehicleData: {
-            current_mileage:
-              serviceOrderData.new_mileage_after_service as number,
-            last_maintenance_mileage:
-              serviceOrderData.new_mileage_after_service,
-          },
-          vehicleId: vehicleId,
-        });
-      }
-
-      const vehicle = await this.vehicle.findVehicleById(
+      // The plate feeds the notification texts; fetched before the update so
+      // the transaction stays write-only.
+      const vehicleForNotification = await this.vehicle.findVehicleById(
         serviceOrderData.vehicleId || findServiceOrder.vehicleId,
       );
 
-      // Process notifications (activity + conditionally WhatsApp/Email)
-      this.processNotifications(
-        findServiceOrder,
-        updatedServiceOrder,
-        serviceOrderData,
-        userId,
-        businessId,
-        vehicle?.license_plate || "N/A",
-      );
+      // Only a hand-over pages someone: an update that keeps the responsible
+      // publishes with no recipient and feeds the activity trail alone.
+      const responsibleUserChanged =
+        serviceOrderData.responsibleUserId !== undefined &&
+        findServiceOrder.responsibleUserId !==
+          serviceOrderData.responsibleUserId;
+
+      const vehicleId =
+        serviceOrderData.vehicleId || findServiceOrder.vehicleId;
+
+      const updatedServiceOrder = await database.$transaction(async (tx) => {
+        // A MASTER's deliberate override of the vehicle: unconditional, but
+        // now atomic with the order it came with.
+        if (Object.keys(vehicleUpdateData).length > 0) {
+          await this.vehicle.updateVehicle(
+            { vehicleData: vehicleUpdateData, vehicleId },
+            tx,
+          );
+        }
+
+        // Finishing the order now (or a finished order moved to another
+        // vehicle): the odometer moves with the order, in the same commit,
+        // and only forward (IDEMP-15). It used to be a plain update after the
+        // commit, judged against the read at the top — a refuelling with a
+        // higher reading committed in between was written over.
+        const movesOdometer =
+          recordsMileage &&
+          !correctsMileage &&
+          (isBeingCompleted || wasCompleted);
+
+        if (correctsMileage && isLatestMaintenance) {
+          await recordMileageCorrection(
+            this.vehicle,
+            {
+              vehicleId,
+              businessId,
+              mileage: serviceOrderData.new_mileage_after_service as number,
+            },
+            tx,
+          );
+        } else if (movesOdometer) {
+          await recordMaintenanceMileage(
+            this.vehicle,
+            {
+              vehicleId,
+              businessId,
+              mileage: serviceOrderData.new_mileage_after_service as number,
+              currentMileage: currentVehicle.current_mileage,
+              // Only a completion dates the maintenance; a correction keeps it.
+              maintenanceDate: isBeingCompleted
+                ? serviceOrderData.completion_date
+                : undefined,
+            },
+            tx,
+          );
+        }
+
+        const updated = await this.serviceOrder.updateServiceOrder(
+          { serviceOrderData: updateData, serviceOrderId },
+          tx,
+        );
+
+        await this.outbox.publish(tx, {
+          topic: "service-order.updated",
+          aggregateType: "service-order",
+          aggregateId: updated.id,
+          businessId,
+          actorId: userId,
+          payload: {
+            serviceOrderId: updated.id,
+            businessId,
+            vehicleId: updated.vehicleId,
+            vehiclePlate: vehicleForNotification?.license_plate || null,
+            totalAmount: Number(updated.total_amount),
+            responsibleUserId:
+              responsibleUserChanged && serviceOrderData.responsibleUserId
+                ? serviceOrderData.responsibleUserId
+                : null,
+          },
+        });
+
+        return updated;
+      });
 
       return updatedServiceOrder;
     } catch (error) {
+      // The refusal of a mileage that fell behind the odometer is the
+      // user's to read, not a server fault.
+      if (error instanceof AppError) throw error;
+
       throw new AppError(
         "Houve um erro ao tentar atualizar a ordem de serviço! Por favor, tente novamente.",
         500,

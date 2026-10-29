@@ -14,6 +14,8 @@ import {
   quoteSchemas,
   quoteResponses,
 } from "./documentation/quote-documentation";
+import { ndjsonList, offsetMetaWith } from "./documentation/ndjson";
+import { errorResponse } from "./documentation/common-responses";
 
 const createQuoteController = new CreateQuoteController();
 const listQuotesController = new ListQuotesController();
@@ -30,15 +32,20 @@ async function quoteRoutes(app: FastifyInstance) {
       },
       schema: {
         tags: ["quote"],
-        summary: "Create a new quote request",
+        summary: "Envia um pedido de orçamento (site)",
         description:
-          "Submit a new quote request from potential customers with company information and fleet size details",
+          "Pedido de orçamento do site, com os dados da empresa e o tamanho da frota. " +
+          "Envie o token do Cloudflare Turnstile em `turnstileToken`: com o Turnstile configurado na API, o token é obrigatório: sem ele, 400 TURNSTILE_REQUIRED; recusado pela Cloudflare, 400 TURNSTILE_FAILED. Sem o Turnstile configurado, o token é ignorado. " +
+          "O e-mail de confirmação não repete nada do que a pessoa digitou e sai no máximo uma vez por dia para cada endereço.",
         body: quoteSchemas.createQuote,
         response: {
           200: quoteResponses.quoteCreated,
           400: quoteResponses.validationError,
           429: quoteResponses.rateLimitExceeded,
           500: quoteResponses.internalServerError,
+          503: errorResponse.describe(
+            "Não foi possível verificar o Turnstile (TURNSTILE_UNAVAILABLE).",
+          ),
         },
       },
     },
@@ -53,14 +60,18 @@ async function quoteRoutes(app: FastifyInstance) {
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["quote"],
-        summary: "List quote requests",
+        summary: "Lista os pedidos de orçamento (tabela do /admin)",
         description:
-          "Retrieve a paginated list of customer quote requests with status filtering and search capabilities",
+          "Pedidos de orçamento do site numa tabela paginada, só para o MASTER. Ordena no servidor (`sort`/`order`) e filtra por estágio (`status`) e tamanho da frota (`fleet_size`) — um ou mais valores separados por vírgula —, além da busca livre (ID, nome, empresa, e-mail, frota, mensagem, anotações e os dígitos do telefone). A primeira linha (`meta`) traz o total do filtro e, em `searchMeta`, os cartões por estágio e as opções dos filtros com as contagens — sobre todos os pedidos, nunca sobre a página.",
         querystring: quoteSchemas.listQuotes,
         response: {
-          200: quoteResponses.quotesList,
+          200: ndjsonList(
+            quoteResponses.quoteRow,
+            offsetMetaWith(quoteResponses.quoteListSearchMeta),
+          ),
           400: quoteResponses.listQuoteErrors,
           403: quoteResponses.listQuoteForbiddenErrors,
+          404: quoteResponses.listQuoteNotFoundErrors,
           500: quoteResponses.internalServerError,
         },
       },
@@ -76,9 +87,9 @@ async function quoteRoutes(app: FastifyInstance) {
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["quote"],
-        summary: "Update quote status",
+        summary: "Muda o estágio de um pedido de orçamento",
         description:
-          "Update the status and internal notes of a customer quote request for sales pipeline management",
+          "Atualiza o estágio e as anotações internas de um pedido, só para o MASTER. Pedido inexistente: 404 QUOTE_NOT_FOUND. Pedido já fechado ou convertido não muda mais: 409 QUOTE_ALREADY_FINALIZED.",
         params: quoteSchemas.quoteIdParam,
         body: quoteSchemas.updateQuoteStatus,
         response: {
@@ -86,6 +97,9 @@ async function quoteRoutes(app: FastifyInstance) {
           400: quoteResponses.updateQuoteStatusErrors,
           403: quoteResponses.updateQuoteStatusForbiddenErrors,
           404: quoteResponses.updateQuoteStatusNotFoundErrors,
+          409: errorResponse.describe(
+            "Pedido já fechado ou convertido (QUOTE_ALREADY_FINALIZED).",
+          ),
           500: quoteResponses.internalServerError,
         },
       },
@@ -101,9 +115,9 @@ async function quoteRoutes(app: FastifyInstance) {
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["quote"],
-        summary: "Delete a quote request",
+        summary: "Exclui um pedido de orçamento",
         description:
-          "Permanently remove a customer quote request from the system",
+          "Remove de vez um pedido de orçamento, só para o MASTER. Pedido inexistente: 404 QUOTE_NOT_FOUND.",
         params: quoteSchemas.quoteIdParam,
         response: {
           200: quoteResponses.quoteDeleted,

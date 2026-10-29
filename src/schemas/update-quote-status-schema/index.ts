@@ -1,10 +1,12 @@
 import { z } from "zod";
+import { tenantLockedShape } from "@/shared/validation/tenant-locked-field";
 import {
   hasConsecutiveSpaces,
   hasSpaceAtEdges,
 } from "@/shared/utils/zod-schema-helpers";
 
 const updateQuoteStatusSchema = z.object({
+  ...tenantLockedShape,
   status: z.enum(["PENDING", "CONTACTED", "CLOSED", "CONVERTED"]),
   notes: z
     .string()

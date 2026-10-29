@@ -7,13 +7,15 @@ import { IUserRepository } from "@/modules/user/repositories/IUser-repository";
 import { AppError } from "@/shared/errors/AppError";
 
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
+import { assertTenantAccess } from "@/modules/middlewares/tenant-authorization";
 import { BusinessNotFoundError } from "@/modules/business/usecases/errors/business-not-found-error";
 
 import { NotificationService } from "@/shared/services/notification-service";
-import { VehicleTypeNotBelongBusinessError } from "../errors/vehicle-type-not-belong-business-error";
 
 import { VehicleTypeNotFoundError } from "../errors/vehicle-type-not-found-error";
+import { VehicleTypeInUseError } from "../errors/vehicle-type-in-use-error";
 import { VehicleType } from "../../dtos/vehicle-type-dto";
+import { sendCatalogChangedEvent } from "@/websocket";
 
 @injectable()
 class DeleteVehicleTypeUseCase {
@@ -39,45 +41,59 @@ class DeleteVehicleTypeUseCase {
       throw new ResourceNotFoundError();
     }
 
+    // The caller's own company, not only the route guard: a job or another
+    // use case reaches this without the HTTP tenant check.
+    assertTenantAccess(findUser, businessId);
+
     const findBusiness = await this.business.findBusinessById(businessId);
 
     if (!findBusiness) {
       throw new BusinessNotFoundError();
     }
 
-    const findVehicleTypeById =
-      await this.vehicleType.findVehicleTypeById(vehicleTypeId);
+    // A type of another company answers like a missing one.
+    const findVehicleType =
+      await this.vehicleType.findVehicleTypeByIdAndBusiness(
+        vehicleTypeId,
+        businessId,
+      );
 
-    if (!findVehicleTypeById) {
+    if (!findVehicleType) {
       throw new VehicleTypeNotFoundError();
     }
 
-    if (findVehicleTypeById.businessId !== businessId) {
-      throw new VehicleTypeNotBelongBusinessError();
+    const vehiclesUsingType =
+      await this.vehicleType.countVehiclesUsingType(vehicleTypeId);
+
+    if (vehiclesUsingType > 0) {
+      throw new VehicleTypeInUseError(vehiclesUsingType);
     }
 
+    let vehicleTypeDeleted: VehicleType;
+
     try {
-      const vehicleTypeDeleted =
+      vehicleTypeDeleted =
         await this.vehicleType.deleteVehicleType(vehicleTypeId);
-
-      // Process activity asynchronously without blocking the main flow
-      this.notificationService.createActivityIfEnabled({
-        type: "Tipo de veículo",
-        action: "delete",
-        entityId: vehicleTypeDeleted.id,
-        description: `Tipo de veículo excluído: ${vehicleTypeDeleted.description} | Eixos: ${vehicleTypeDeleted.number_of_axles} | ID: ${vehicleTypeDeleted.id}`,
-        status: "Deletado",
-        performedBy: userId,
-        businessId: businessId,
-      });
-
-      return vehicleTypeDeleted;
     } catch (error) {
       throw new AppError(
         "Houve um erro ao tentar deletar o tipo de veículo! Por favor, tente novamente.",
         500,
       );
     }
+
+    sendCatalogChangedEvent(businessId, "vehicle_type");
+
+    this.notificationService.createActivityIfEnabled({
+      type: "Tipo de veículo",
+      action: "delete",
+      entityId: vehicleTypeDeleted.id,
+      description: `Tipo de veículo excluído: ${vehicleTypeDeleted.description} | Eixos: ${vehicleTypeDeleted.number_of_axles} | ID: ${vehicleTypeDeleted.id}`,
+      status: "Deletado",
+      performedBy: userId,
+      businessId: businessId,
+    });
+
+    return vehicleTypeDeleted;
   }
 }
 

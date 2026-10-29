@@ -1,55 +1,46 @@
 import { FastifyReply, FastifyRequest } from "fastify";
 import { container } from "tsyringe";
+import { z } from "zod";
 
 import { SearchBranchCursorUseCase } from "./search-branch-cursor-usecase";
 import { cursorPaginationByBusinessSchema } from "@/schemas/cursor-pagination-schema";
-
-import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
-import { BusinessNotFoundError } from "@/modules/business/usecases/errors/business-not-found-error";
 
 import { sendAsNDJSON } from "@/config/stream-utils";
 
 class SearchBranchCursorController {
   async handle(request: FastifyRequest, reply: FastifyReply): Promise<void> {
-    try {
-      const { id } = request.user;
-      const { limit, cursor, businessId, search } =
-        cursorPaginationByBusinessSchema.parse(request.query);
+    const { id } = request.user;
+    // The route already validated AND transformed the querystring (limit
+    // is a number): re-parsing it would refuse it.
+    const { limit, cursor, businessId, search } = request.query as z.infer<
+      typeof cursorPaginationByBusinessSchema
+    >;
 
-      const searchBranchCursorUseCase = container.resolve(
-        SearchBranchCursorUseCase,
-      );
+    const searchBranchCursorUseCase = container.resolve(
+      SearchBranchCursorUseCase,
+    );
 
-      const dataPromise = searchBranchCursorUseCase.execute({
-        userId: id,
-        limit,
-        cursor,
-        businessId,
-        search,
-      });
+    const dataPromise = searchBranchCursorUseCase.execute({
+      userId: id,
+      limit,
+      cursor,
+      businessId,
+      search,
+    });
 
-      return sendAsNDJSON({
-        reply,
-        dataPromise: dataPromise.then((result) => ({
-          data: result.data,
-          total: 0,
-          meta: {
-            nextCursor: result.nextCursor,
-            hasMore: result.hasMore,
-          },
-        })),
-      });
-    } catch (error) {
-      if (error instanceof ResourceNotFoundError) {
-        return reply.status(400).send({ message: error.message });
-      }
-
-      if (error instanceof BusinessNotFoundError) {
-        return reply.status(400).send({ message: error.message });
-      }
-
-      throw error;
-    }
+    // `return await`: the stream opens only after the data resolved, so a
+    // refusal (an AppError) still reaches the error handler with its code.
+    return await sendAsNDJSON({
+      reply,
+      dataPromise: dataPromise.then((result) => ({
+        data: result.data,
+        total: 0,
+        meta: {
+          nextCursor: result.nextCursor,
+          hasMore: result.hasMore,
+        },
+      })),
+    });
   }
 }
 

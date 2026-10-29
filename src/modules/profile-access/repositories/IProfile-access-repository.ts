@@ -1,3 +1,5 @@
+import { Prisma } from "@prisma/client";
+
 import {
   CreateProfileAccessProps,
   findProfileAccessByNameAndBusiness,
@@ -9,11 +11,15 @@ import {
   CursorPaginatedProfileAccess,
 } from "../dtos/profile-access-dto";
 
+/**
+ * The writes take an optional `tx`: a profile change and its audit entry
+ * commit together (OUTBOX-10).
+ */
 interface IProfileAccessRepository {
-  createProfileAccess: ({
-    name,
-    businessId,
-  }: CreateProfileAccessProps) => Promise<ProfileAccess>;
+  createProfileAccess: (
+    { name, businessId }: CreateProfileAccessProps,
+    tx?: Prisma.TransactionClient,
+  ) => Promise<ProfileAccess>;
   listProfileAccess: (
     profileAccess: ListProfileAccessProps,
   ) => Promise<ListProfileAccess>;
@@ -22,8 +28,12 @@ interface IProfileAccessRepository {
   ) => Promise<CursorPaginatedProfileAccess>;
   updateProfileAccess: (
     profileAccessData: UpdateProfileAccess,
+    tx?: Prisma.TransactionClient,
   ) => Promise<ProfileAccess>;
-  deleteProfileAccess: (profileAccessId: string) => Promise<ProfileAccess>;
+  deleteProfileAccess: (
+    profileAccessId: string,
+    tx?: Prisma.TransactionClient,
+  ) => Promise<ProfileAccess>;
   findProfileAccessByNameAndBusiness: ({
     name,
     businessId,

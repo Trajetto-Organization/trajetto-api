@@ -1,0 +1,23 @@
+{
+  "$comment": "Headers produced by signWebhookPayload (trajetto-api/src/shared/integration/webhook-signature.ts) over bodies in the envelope the dispatcher sends ({ id, sequence, topic, created_at, data }), with data built by src/shared/integration/announce.ts. The same file lives in trajetto-ui/tests/unitaires/fixtures, where the guide samples are run against it; trajetto-api tests/unitaires/integration/public-docs-guide-samples.test.ts pins both.",
+  "vectors": [
+    {
+      "name": "um segredo",
+      "secret": "whsec_79a141ed20e358894b2f4a9e75f04edab054432c1bd54c8622cf6bc290df06fb",
+      "previous_secrets": [],
+      "timestamp": 1790690580,
+      "body": "{\"id\":\"01a0e5c2-7f00-7000-8000-000000000001\",\"sequence\":48213,\"topic\":\"delivery.delivered\",\"created_at\":\"2026-09-29T14:02:58.000Z\",\"data\":{\"delivery_id\":\"01a0e5c2-7f00-7000-8000-0000000000aa\",\"code\":\"PED-10452\",\"invoice_key\":\"35260912345678000195550010000104521000104529\",\"invoice_number\":\"10452\",\"status\":\"DELIVERED\",\"recipient_name\":\"Padaria São João Ltda\",\"city\":\"São Paulo\",\"uf\":\"SP\",\"occurred_at\":\"2026-09-29T13:33:00.000Z\"}}",
+      "header": "t=1790690580,v1=6c8242defe2506768332cb27dd61e02a411770a1c3561b4b812dbcabd7a5c0c5"
+    },
+    {
+      "name": "rotação: segredo atual e o anterior",
+      "secret": "whsec_2ec0be7104e29dcdaeed47d451685b9349812721ee6dfb3f06ba4e58eef9b3ad",
+      "previous_secrets": [
+        "whsec_a1b1ba489976896f910be560f2c67a092b6138f8c1894bbc9940a1c7b0249403"
+      ],
+      "timestamp": 1790690640,
+      "body": "{\"id\":\"01a0e5c2-7f00-7000-8000-000000000002\",\"sequence\":48214,\"topic\":\"route.started\",\"created_at\":\"2026-09-29T14:03:59.000Z\",\"data\":{\"route_id\":\"01a0e5c2-7f00-7000-8000-0000000000bb\",\"code\":318,\"name\":\"Rota Zona Sul — manhã\",\"status\":\"IN_PROGRESS\",\"scheduled_date\":\"2026-09-29\",\"destination\":\"Santo Amaro\",\"planned_departure_at\":\"2026-09-29T10:30:00.000Z\",\"planned_arrival_at\":\"2026-09-29T20:00:00.000Z\",\"driver_id\":\"01a0e5c2-7f00-7000-8000-0000000000cc\",\"vehicle_id\":\"01a0e5c2-7f00-7000-8000-0000000000dd\",\"started_at\":\"2026-09-29T14:03:56.000Z\",\"completed_at\":null,\"occurred_at\":\"2026-09-29T14:03:56.000Z\"}}",
+      "header": "t=1790690640,v1=73e0c63e79c5a2ae3873001563a74ab2f4acefe3a02b0a5cee7a6a54c72a973d,v1=e5feb528fea9b09bb3024d36b63480efe837d7ac16a8a0350a195735025dded7"
+    }
+  ]
+}

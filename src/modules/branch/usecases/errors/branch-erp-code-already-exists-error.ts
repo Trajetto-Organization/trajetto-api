@@ -1,7 +1,12 @@
-class BranchErpCodeAlreadyExistsError extends Error {
+import { AppError } from "@/shared/errors/AppError";
+
+/** The ERP code is the carrier's own numbering: unique inside one company. */
+class BranchErpCodeAlreadyExistsError extends AppError {
   constructor() {
     super(
-      "Este código ERP não está disponível para cadastro. Os códigos ERP de filiais devem ser únicos em todo o sistema.",
+      "Já existe uma filial da sua empresa com este código ERP.",
+      409,
+      "BRANCH_ERP_CODE_TAKEN",
     );
   }
 }

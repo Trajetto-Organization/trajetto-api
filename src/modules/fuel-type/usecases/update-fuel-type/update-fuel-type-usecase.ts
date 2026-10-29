@@ -13,7 +13,8 @@ import { NotificationService } from "@/shared/services/notification-service";
 import { FuelTypeAlreadyExistsError } from "../errors/fuel-type-already-exists-error";
 
 import { FuelTypeNotFoundError } from "../errors/fuel-type-not-found-error";
-import { FuelTypeNotBelongBusinessError } from "../errors/fuel-type-not-belong-business-error";
+import { assertTenantAccess } from "@/modules/middlewares/tenant-authorization";
+import { sendCatalogChangedEvent } from "@/websocket";
 
 import { FuelType, UpdateFuelTypeProps } from "../../dtos/fuel-type-dto";
 
@@ -42,39 +43,30 @@ class UpdateFuelTypeUseCase {
       throw new ResourceNotFoundError();
     }
 
+    assertTenantAccess(findUser, businessId);
+
     const findBusiness = await this.business.findBusinessById(businessId);
 
     if (!findBusiness) {
       throw new BusinessNotFoundError();
     }
 
+    // Found only inside the company in the path. The lookup used the body's
+    // businessId, which the schema strips, so it matched the id alone: a
+    // MASTER edit moved the fuel type — with its vehicles and refuelings —
+    // to whichever company the form picked, and anyone else learned that
+    // another company's id existed (403 instead of 404).
     const findFuelTypeByIdAndBusiness =
-      await this.fuelType.findFuelTypeByIdAndBusiness(
-        fuelTypeId,
-        fuelTypeData.businessId as string,
-      );
+      await this.fuelType.findFuelTypeByIdAndBusiness(fuelTypeId, businessId);
 
     if (!findFuelTypeByIdAndBusiness) {
       throw new FuelTypeNotFoundError();
     }
 
-    if (
-      findFuelTypeByIdAndBusiness.businessId !== businessId &&
-      findUser.role !== "MASTER"
-    ) {
-      throw new FuelTypeNotBelongBusinessError();
-    }
-
-    if (
-      fuelTypeData.description ||
-      businessId !== findFuelTypeByIdAndBusiness.businessId
-    ) {
-      const descriptionToCheck =
-        fuelTypeData.description || findFuelTypeByIdAndBusiness.description;
-
+    if (fuelTypeData.description) {
       const findFuelTypeByDescription =
         await this.fuelType.findFuelTypeByDescription(
-          descriptionToCheck,
+          fuelTypeData.description,
           businessId,
         );
 
@@ -88,12 +80,12 @@ class UpdateFuelTypeUseCase {
 
     try {
       const fuelTypeUpdated = await this.fuelType.updateFuelType({
-        fuelTypeData: {
-          description: fuelTypeData.description,
-          businessId,
-        },
+        fuelTypeData: { description: fuelTypeData.description },
         fuelTypeId,
       });
+
+      // After the write: open pickers of this company refetch (decision 2.3).
+      sendCatalogChangedEvent(businessId, "fuel_type");
 
       // Process activity asynchronously without blocking the main flow
       this.notificationService.createActivityIfEnabled({

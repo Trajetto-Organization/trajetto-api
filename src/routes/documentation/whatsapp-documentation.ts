@@ -2,217 +2,47 @@ import { z } from "zod";
 
 import { updateWhatsAppSettingsSchema } from "@/schemas/phone-validation-schema";
 
+import { errorResponse } from "./common-responses";
+
+const whatsappSettingsData = z.object({
+  enabled: z.boolean().describe("Se os avisos por WhatsApp estão ligados"),
+  phoneNumber: z.string().optional().describe("Telefone que recebe os avisos"),
+  serviceConfigured: z
+    .boolean()
+    .describe(
+      "Se o servidor tem as credenciais da Meta Cloud API — false quer dizer que a preferência salva só vale depois que o serviço for configurado",
+    ),
+});
+
 const whatsappSchemas = {
   updateWhatsAppSettings: updateWhatsAppSettingsSchema,
-  webhookInstanceParam: z.object({
-    instanceName: z.string().min(1, "Instance name is required"),
-  }),
 };
 
 const whatsappResponses = {
   settingsRetrieved: z.object({
     success: z.boolean().default(true),
     message: z.string().default("Configurações obtidas com sucesso"),
-    data: z.object({
-      enabled: z
-        .boolean()
-        .describe("Whether WhatsApp notifications are enabled"),
-      phoneNumber: z
-        .string()
-        .optional()
-        .describe("Configured WhatsApp phone number"),
-      instanceConnected: z.boolean().describe("Whether instance is connected"),
-      instanceName: z.string().describe("WhatsApp instance name"),
-    }),
+    data: whatsappSettingsData,
   }),
 
   settingsUpdated: z.object({
     success: z.boolean().default(true),
-    message: z.string().describe("Update success message"),
-    data: z.object({
-      enabled: z
-        .boolean()
-        .describe("Whether WhatsApp notifications are enabled"),
-      phoneNumber: z
-        .string()
-        .optional()
-        .describe("Configured WhatsApp phone number"),
-      instanceConnected: z.boolean().describe("Whether instance is connected"),
-      instanceName: z.string().describe("WhatsApp instance name"),
-    }),
+    message: z.string().describe("Mensagem de sucesso"),
+    data: whatsappSettingsData,
   }),
 
-  statusRetrieved: z.object({
-    success: z.boolean().default(true),
-    message: z.string().default("Status atualizado com sucesso"),
-    data: z.object({
-      instanceName: z.string().describe("WhatsApp instance name"),
-      status: z
-        .enum(["connected", "disconnected", "connecting", "not_exists"])
-        .describe("Connection status"),
-      phoneNumber: z.string().optional().describe("Connected phone number"),
-      qrCodeAvailable: z.boolean().describe("Whether QR code is available"),
-      pairingCodeAvailable: z
-        .boolean()
-        .describe("Whether pairing code is available"),
-    }),
-  }),
+  // Every refusal carries `code` (decision 11.3); the session user who no
+  // longer exists is 404 USER_NOT_FOUND.
+  sessionUserNotFound: errorResponse.describe(
+    "USER_NOT_FOUND: o usuário da sessão não existe mais.",
+  ),
 
-  qrCodeGenerated: z.object({
-    success: z.boolean().default(true),
-    message: z.string().default("QR Code gerado com sucesso"),
-    data: z.object({
-      code: z.string().describe("Base64 encoded QR code"),
-      expiresIn: z
-        .number()
-        .optional()
-        .describe("QR code expiration time in seconds"),
-    }),
-  }),
-
-  webhookReceived: z.object({
-    success: z.boolean().default(true),
-    message: z.string().default("Webhook processed successfully"),
-  }),
-
-  // Error responses
-  resourceNotFound: z.object({
-    message: z.string().default("Recurso não encontrado!"),
-  }),
-
-  whatsappNumberRequired: z.object({
-    message: z
-      .string()
-      .default("O número de telefone é obrigatório para habilitar WhatsApp"),
-  }),
-
-  whatsappPhoneUpdateNotAllowed: z.object({
-    message: z
-      .string()
-      .default(
-        "Para alterar o número, primeiro desabilite as notificações WhatsApp",
-      ),
-  }),
-
-  whatsappPhoneAlreadyInUse: z.object({
-    message: z
-      .string()
-      .default(
-        "Este número já está sendo utilizado por outro usuário conectado",
-      ),
-  }),
-
-  whatsappNotConnected: z.object({
-    message: z
-      .string()
-      .default("WhatsApp não está conectado. Configure e conecte primeiro"),
-  }),
-
-  whatsappNumberNotConfigured: z.object({
-    message: z
-      .string()
-      .default(
-        "Número do WhatsApp não configurado. Configure um número primeiro",
-      ),
-  }),
-
-  whatsappAlreadyConnected: z.object({
-    message: z.string().default("WhatsApp já está conectado para este usuário"),
-  }),
-
-  businessAdminOnly: z.object({
-    message: z
-      .string()
-      .default(
-        "Apenas administradores de empresa podem gerenciar configurações WhatsApp",
-      ),
-  }),
-
-  validationError: z.object({
-    message: z.string().default("Erro de validação"),
-    issues: z
-      .array(z.string())
-      .optional()
-      .describe("List of validation errors"),
-  }),
+  settingsErrors: errorResponse.describe(
+    "VALIDATION_ERROR (corpo recusado; issues diz qual) ou WHATSAPP_NUMBER_REQUIRED (ligar os avisos sem informar o telefone).",
+  ),
 
   internalServerError: z.object({
     message: z.string().default("Internal server error"),
-  }),
-
-  // Grouped error responses
-  settingsErrors: z.union([
-    z.object({
-      message: z.string().default("Recurso não encontrado!"),
-    }),
-    z.object({
-      message: z
-        .string()
-        .default("O número de telefone é obrigatório para habilitar WhatsApp"),
-    }),
-    z.object({
-      message: z
-        .string()
-        .default(
-          "Para alterar o número, primeiro desabilite as notificações WhatsApp",
-        ),
-    }),
-    z.object({
-      message: z
-        .string()
-        .default(
-          "Este número já está sendo utilizado por outro usuário conectado",
-        ),
-    }),
-  ]),
-
-  settingsNotFoundErrors: z.object({
-    message: z.string().default("Instância WhatsApp não encontrada."),
-  }),
-
-  statusErrors: z.union([
-    z.object({
-      message: z.string().default("Recurso não encontrado!"),
-    }),
-    z.object({
-      message: z
-        .string()
-        .default("WhatsApp não está conectado. Configure e conecte primeiro"),
-    }),
-  ]),
-
-  qrCodeErrors: z.union([
-    z.object({
-      message: z.string().default("Recurso não encontrado!"),
-    }),
-    z.object({
-      message: z
-        .string()
-        .default("WhatsApp não está conectado. Configure e conecte primeiro"),
-    }),
-    z.object({
-      message: z
-        .string()
-        .default(
-          "Número do WhatsApp não configurado. Configure um número primeiro",
-        ),
-    }),
-    z.object({
-      message: z
-        .string()
-        .default("WhatsApp já está conectado para este usuário"),
-    }),
-    z.object({
-      message: z
-        .string()
-        .default(
-          "Este número já está sendo utilizado por outro usuário conectado",
-        ),
-    }),
-  ]),
-
-  qrCodeNotFoundErrors: z.object({
-    message: z.string().default("Instância WhatsApp não encontrada."),
   }),
 };
 

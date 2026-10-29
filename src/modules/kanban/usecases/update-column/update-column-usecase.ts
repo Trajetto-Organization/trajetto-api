@@ -11,9 +11,8 @@ import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-n
 import { BusinessNotFoundError } from "@/modules/business/usecases/errors/business-not-found-error";
 
 import { KanbanColumnNotFoundError } from "../errors/kanban-column-not-found-error";
-import { KanbanColumnNotBelongBusinessError } from "../errors/kanban-column-not-belong-business-error";
-
 import { KanbanNotAllowedUpdateColumnBusinessError } from "../errors/kanban-not-allowed-update-column-business-error";
+
 import { AppError } from "@/shared/errors/AppError";
 
 @injectable()
@@ -39,6 +38,12 @@ class UpdateKanbanColumnUseCase {
       throw new ResourceNotFoundError();
     }
 
+    // The path's board first: the answer to another company's board must not
+    // depend on which column id was sent with it.
+    if (findUser.role !== "MASTER" && findUser.businessId !== businessId) {
+      throw new KanbanNotAllowedUpdateColumnBusinessError();
+    }
+
     const findBusiness = await this.business.findBusinessById(businessId);
 
     if (!findBusiness) {
@@ -47,32 +52,18 @@ class UpdateKanbanColumnUseCase {
 
     const findColumn = await this.kanban.findColumnById(columnId);
 
-    if (!findColumn) {
+    // Missing and "on another board" answer alike (decision 11.3). Not even
+    // the MASTER edits a column through another company's path.
+    if (!findColumn || findColumn.businessId !== businessId) {
       throw new KanbanColumnNotFoundError();
     }
 
-    if (findColumn.businessId !== businessId && findUser.role !== "MASTER") {
-      throw new KanbanColumnNotBelongBusinessError();
-    }
-
-    // Verify user permissions
-    if (
-      findUser.role === "BUSINESS_ADMIN" ||
-      findUser.role === "BUSINESS_USER"
-    ) {
-      if (findUser.businessId !== businessId) {
-        throw new KanbanNotAllowedUpdateColumnBusinessError();
-      }
-    }
-
     try {
-      const updatedColumn = await this.kanban.updateColumn({
-        columnData,
-        columnId,
-      });
-
-      return updatedColumn;
+      return await this.kanban.updateColumn({ columnData, columnId });
     } catch (error) {
+      // A concurrent delete: the repository says "not found".
+      if (error instanceof AppError) throw error;
+
       throw new AppError(
         "Houve um erro ao tentar atualizar a coluna! Por favor, tente novamente.",
         500,

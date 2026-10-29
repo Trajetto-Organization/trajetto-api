@@ -1,0 +1,11 @@
+# Traefik DYNAMIC configuration: TLS options for every router that does not
+# name others (the `default` set). Loaded by the file provider declared in
+# ../traefik.reference.yaml.
+#
+# TLS 1.0 and 1.1 are deprecated (RFC 8996) and every browser and phone the
+# product supports speaks 1.2. Go's default cipher list for 1.2 is already the
+# modern one, so only the floor is pinned here.
+tls:
+  options:
+    default:
+      minVersion: VersionTLS12

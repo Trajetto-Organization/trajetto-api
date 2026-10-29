@@ -1,4 +1,15 @@
-import { JsonValue } from "@prisma/client/runtime/library";
+import type { SortOrder } from "@/shared/pagination/list-query";
+
+import type {
+  ChecklistListFilters,
+  ChecklistSortKey,
+  ConditionCounts,
+  NamedCount,
+} from "../usecases/list-vehicle-checklist/checklist-list";
+
+import { RecordOrigin } from "@prisma/client";
+import { JsonValue } from "@prisma/client/runtime/client";
+import type { DevicePrecheck } from "@/shared/ai-precheck/device-precheck";
 
 interface VehicleChecklist {
   id: string;
@@ -46,6 +57,7 @@ interface VehicleChecklist {
 
 interface CreateVehicleChecklistProps {
   client_submission_id?: string;
+  created_from?: RecordOrigin;
   current_mileage: number;
   checklist_date?: Date | string;
   tires_condition: string;
@@ -80,6 +92,15 @@ interface CreateVehicleChecklistProps {
   branchId?: string; // Optional for driver users (auto-populated)
   vehicleId: string;
   driverId?: string; // Optional for driver users (auto-populated)
+
+  /**
+   * The phone's offline check of the odometer photo, as sent (decision
+   * 14.2). The use case moves it to `mileage_device_precheck` or drops it.
+   */
+  device_precheck?: DevicePrecheck | null;
+
+  /** Where the accepted check is stored; set by the use case only. */
+  mileage_device_precheck?: DevicePrecheck;
 }
 
 interface UpdateVehicleChecklistProps {
@@ -122,22 +143,25 @@ interface UpdateVehicleChecklist {
   checklistId: string;
 }
 
+/**
+ * One page plus the raw counts behind its cards and filters (see
+ * usecases/list-vehicle-checklist/checklist-list.ts for the summary).
+ */
 interface ListVehicleChecklistProps {
   data: VehicleChecklist[];
-  total: number;
+  /** Grouped over every filter but the condition one. */
+  conditionCounts: ConditionCounts;
+  /** Grouped over every filter but the branch one, named from this company. */
+  branchCounts: NamedCount[];
+  /** Grouped over every filter but the vehicle one, named from this company. */
+  vehicleCounts: NamedCount[];
 }
 
-interface ListVehicleChecklistByBusinessIdProps {
+interface ListVehicleChecklistByBusinessIdProps extends ChecklistListFilters {
   page: number;
   pageSize: number;
-  businessId: string;
-  currentUserRole?: string;
-  search?: string;
-  vehicleId?: string;
-  driverId?: string;
-  overall_condition?: string;
-  startDate?: string | Date;
-  endDate?: string | Date;
+  sort?: ChecklistSortKey;
+  order?: SortOrder;
 }
 
 interface GetVehicleChecklistByIdAndBusinessProps {

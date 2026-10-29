@@ -57,13 +57,8 @@ const createMasterUserSchema = z.object({
       });
     }
   }),
-  password: z
-    .string()
-    .min(7, "A senha deve ter pelo menos 7 caracteres.")
-    .max(100, "A senha deve ter no máximo 100 caracteres.")
-    .refine((value) => !/\s/.test(value), {
-      message: "A senha não deve conter espaços.",
-    }),
+  // No password here (decision 4.9): the new master receives a single-use
+  // link to set their own, and no password is ever mailed.
 });
 
 export { createMasterUserSchema };

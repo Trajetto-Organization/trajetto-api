@@ -9,6 +9,11 @@ import {
 
 import database from "@/../infra/database";
 
+import { QUOTE_SORT, quoteListWhere } from "../usecases/list-quotes/quote-list";
+
+import { resolveOrderBy } from "@/shared/pagination/list-query";
+import { insensitiveEquals } from "@/shared/utils/like-pattern";
+
 class QuoteRepository implements IQuoteRepository {
   constructor(private prisma = database) {}
 
@@ -33,10 +38,14 @@ class QuoteRepository implements IQuoteRepository {
     return quote;
   }
 
-  async findQuoteByEmail(email: string): Promise<Quote | null> {
+  async findQuoteByEmail(email: string, since?: Date): Promise<Quote | null> {
     const quote = await this.prisma.quote.findFirst({
       where: {
-        email,
+        // One mailbox, however the requester capitalised it.
+        // Escaped too: the value is an ILIKE pattern underneath, and "%@x"
+        // would collapse every request of a domain into one (like-pattern.ts).
+        email: insensitiveEquals(email),
+        ...(since ? { created_at: { gte: since } } : {}),
       },
       orderBy: {
         created_at: "desc",
@@ -46,63 +55,44 @@ class QuoteRepository implements IQuoteRepository {
     return quote;
   }
 
+  /**
+   * One page ‖ the (status, fleet_size) breakdown: at most two connections
+   * (connection-fan-out budget). The cards and facet options are derived
+   * from the breakdown, never from the page (decision 8.8).
+   */
   async listQuotes({
     page,
     pageSize,
     search,
-    status,
+    statuses,
+    fleetSizes,
+    sort,
+    order,
   }: ListQuotesProps): Promise<ListQuotesResult> {
-    const skip = (page - 1) * pageSize;
-    const normalizedSearch = search ? search.trim().toLowerCase() : "";
+    const filters = { search, statuses, fleetSizes };
 
-    const digitSearch = normalizedSearch.replace(/\D/g, "");
-    let digitSearchPhone = digitSearch;
-
-    if (digitSearchPhone.startsWith("55") && digitSearchPhone.length > 10) {
-      digitSearchPhone = digitSearchPhone.substring(2);
-    }
-
-    const orConditions: any[] = [];
-
-    if (normalizedSearch) {
-      orConditions.push(
-        { id: { contains: normalizedSearch, mode: "insensitive" } },
-        { name: { contains: normalizedSearch, mode: "insensitive" } },
-        { company: { contains: normalizedSearch, mode: "insensitive" } },
-        { email: { contains: normalizedSearch, mode: "insensitive" } },
-        { fleet_size: { contains: normalizedSearch, mode: "insensitive" } },
-        { message: { contains: normalizedSearch, mode: "insensitive" } },
-        { notes: { contains: normalizedSearch, mode: "insensitive" } },
-        ...(digitSearch
-          ? [
-              {
-                telephone: { contains: digitSearchPhone, mode: "insensitive" },
-              },
-            ]
-          : []),
-      );
-    }
-
-    const whereCondition = {
-      ...(status && { status }),
-      ...(orConditions.length > 0 && { OR: orConditions }),
-    };
-
-    const [quotes, total] = await Promise.all([
+    const [data, grouped] = await Promise.all([
       this.prisma.quote.findMany({
-        skip,
+        skip: (page - 1) * pageSize,
         take: pageSize,
-        where: whereCondition,
-        orderBy: {
-          created_at: "desc",
-        },
+        where: quoteListWhere(filters),
+        orderBy: resolveOrderBy(QUOTE_SORT, { sort, order }),
       }),
-      this.prisma.quote.count({
-        where: whereCondition,
+      this.prisma.quote.groupBy({
+        by: ["status", "fleet_size"],
+        where: quoteListWhere(filters, { except: "facets" }),
+        _count: { _all: true },
       }),
     ]);
 
-    return { data: quotes, total };
+    return {
+      data,
+      groups: grouped.map((group) => ({
+        status: group.status,
+        fleet_size: group.fleet_size,
+        count: group._count._all,
+      })),
+    };
   }
 
   async updateQuoteStatus({

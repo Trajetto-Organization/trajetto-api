@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { tenantLockedShape } from "@/shared/validation/tenant-locked-field";
 import {
   emptyStringToNull,
   hasConsecutiveSpaces,
@@ -7,6 +8,7 @@ import {
 } from "@/shared/utils/zod-schema-helpers";
 
 const updateBranchSchema = z.object({
+  ...tenantLockedShape,
   cep: z.preprocess(
     (val) => {
       const cleaned = emptyStringToNull(val);

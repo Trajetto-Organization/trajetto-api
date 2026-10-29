@@ -15,10 +15,13 @@ import { DriverLicenseAlreadyExistsError } from "../errors/driver-license-alread
 import { BusinessNotFoundError } from "@/modules/business/usecases/errors/business-not-found-error";
 
 import { BranchNotFoundError } from "@/modules/branch/usecases/errors/branch-not-found-error";
-import { DriverRgAlreadyExistsError } from "../errors/driver-rg-already-exists-error";
+import { driverUniqueViolation } from "../errors/driver-unique-violation";
 
 import { NotificationService } from "@/shared/services/notification-service";
 import { BranchNotBelongBusinessError } from "@/modules/branch/usecases/errors/branch-not-belong-business-error";
+
+import { assertTenantAccess } from "@/modules/middlewares/tenant-authorization";
+import { sendCatalogChangedEvent } from "@/websocket";
 
 import { Driver, CreateDriverProps } from "../../dtos/driver-dto";
 
@@ -47,6 +50,10 @@ class CreateDriverUseCase {
       throw new ResourceNotFoundError();
     }
 
+    // The route's tenant guard already refuses another company's id in the
+    // path; the use case does not rely on being reached only through it.
+    assertTenantAccess(findUser, driverData.businessId);
+
     const findBusiness = await this.business.findBusinessById(
       driverData.businessId,
     );
@@ -69,49 +76,55 @@ class CreateDriverUseCase {
       }
     }
 
-    // Check if there is already a driver with the same CPF
-    const findDriverByCpf = await this.driver.findDriverByCpf(driverData.cpf);
-
-    if (findDriverByCpf) {
+    // CPF and CNH are unique per company (decision 8.1): only this company's
+    // drivers are asked, so the answer can never say anything about another.
+    if (
+      await this.driver.findDriverByCpf(driverData.cpf, driverData.businessId)
+    ) {
       throw new DriverCpfAlreadyExistsError();
     }
 
-    // Check if there is already a driver with the same RG
-    const findDriverByRG = await this.driver.findDriverByRg(driverData.rg);
+    // No RG check: an RG is issued per state and repeats across states, so it
+    // was never an identity (the CPF is). Its unique was dropped in
+    // 20260924090400_tenant_scoped_uniques.
 
-    if (findDriverByRG) {
-      throw new DriverRgAlreadyExistsError();
-    }
-
-    // Check if there is already a driver with the same driver's license
-    const findDriverByDriverLicense =
-      await this.driver.findDriverByDriverLicense(driverData.cnh);
-
-    if (findDriverByDriverLicense) {
+    if (
+      await this.driver.findDriverByCnh(driverData.cnh, driverData.businessId)
+    ) {
       throw new DriverLicenseAlreadyExistsError();
     }
 
+    let driverCreated: Driver;
+
     try {
-      const driverCreated = await this.driver.createDriver(driverData);
-
-      // Process activity asynchronously without blocking the main flow
-      this.notificationService.createActivityIfEnabled({
-        type: "Motorista",
-        action: "create",
-        entityId: driverCreated.id,
-        description: `Motorista criado com sucesso: ${driverCreated.name} | CNH: ${driverCreated.cnh} | CPF: ${driverCreated.cpf} | ID: ${driverCreated.id}`,
-        status: "Completo",
-        performedBy: userId,
-        businessId: driverData.businessId,
-      });
-
-      return driverCreated;
+      driverCreated = await this.driver.createDriver(driverData);
     } catch (error) {
+      const duplicate = driverUniqueViolation(error);
+
+      if (duplicate) throw duplicate;
+
       throw new AppError(
         "Houve um erro ao tentar criar o motorista! Por favor, tente novamente.",
         500,
       );
     }
+
+    // After the write: every open picker of this company refetches its
+    // drivers (decision 2.3).
+    sendCatalogChangedEvent(driverData.businessId, "driver");
+
+    // Process activity asynchronously without blocking the main flow
+    this.notificationService.createActivityIfEnabled({
+      type: "Motorista",
+      action: "create",
+      entityId: driverCreated.id,
+      description: `Motorista criado com sucesso: ${driverCreated.name} | CNH: ${driverCreated.cnh} | CPF: ${driverCreated.cpf} | ID: ${driverCreated.id}`,
+      status: "Completo",
+      performedBy: userId,
+      businessId: driverData.businessId,
+    });
+
+    return driverCreated;
   }
 }
 

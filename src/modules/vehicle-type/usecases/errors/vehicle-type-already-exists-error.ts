@@ -1,7 +1,12 @@
-class VehicleTypeAlreadyExistsError extends Error {
+import { AppError } from "@/shared/errors/AppError";
+
+/** A type with this name already exists in THIS company (names are per company). */
+class VehicleTypeAlreadyExistsError extends AppError {
   constructor() {
     super(
-      "Este tipo de veículo não está disponível para cadastro. Já existe um tipo de veículo com este nome.",
+      "Já existe um tipo de veículo com este nome nesta empresa.",
+      409,
+      "VEHICLE_TYPE_NAME_TAKEN",
     );
   }
 }

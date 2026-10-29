@@ -1,54 +1,48 @@
 import { FastifyReply, FastifyRequest } from "fastify";
-
 import { z } from "zod";
+
 import { container } from "tsyringe";
 
 import { ListPartUseCase } from "./list-part-usecase";
-import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
+import { replyMaintenanceError } from "@/modules/service-order/usecases/errors/maintenance-http-errors";
 
-import { listPagesSchema } from "@/schemas/list-pages-schema";
+import { listPartSchema } from "@/schemas/list-part-schema";
 import { sendAsNDJSON } from "@/config/stream-utils";
 
 class ListPartController {
   async handle(request: FastifyRequest, reply: FastifyReply): Promise<void> {
     const { id } = request.user;
 
-    const { page, pageSize, search } = request.query as z.infer<
-      typeof listPagesSchema
-    >;
+    // Validated and transformed by the route (the facet is a list).
+    const { businessId, page, pageSize, search, sort, order, supplierId } =
+      request.query as z.infer<typeof listPartSchema>;
 
     const listPartUseCase = container.resolve(ListPartUseCase);
 
-    // Secure handling for URL decoding
-    let decodedSearch: string | undefined = undefined;
-    if (search) {
-      try {
-        // Try to decode, but catch errors
-        decodedSearch = decodeURIComponent(search);
-      } catch (error) {
-        // If it fails, use the value without decoding.
-        decodedSearch = search;
-      }
-    }
-
     try {
-      const partsPromise = listPartUseCase.execute(
-        id,
-        page,
-        pageSize,
-        decodedSearch,
-      );
-
       await sendAsNDJSON({
         reply,
-        dataPromise: partsPromise,
+        dataPromise: listPartUseCase
+          .execute({
+            userId: id,
+            businessId,
+            page,
+            pageSize,
+            search,
+            sort,
+            order,
+            supplierIds: supplierId,
+          })
+          .then((result) => ({
+            data: result.data,
+            total: result.total,
+            meta: result.searchMeta,
+          })),
         page,
         pageSize,
       });
     } catch (error) {
-      if (error instanceof ResourceNotFoundError) {
-        return reply.status(400).send({ message: error.message });
-      }
+      if (replyMaintenanceError(reply, error)) return;
 
       throw error;
     }
