@@ -259,16 +259,17 @@ abre toda sessão com `TimeZone=UTC` (a dependência já existia no Prisma 6).
 As correções entraram na árvore final, com testes unitários e quatro E2E
 novos (`serializable-commit-retry`, `audit-trail-unavailable-database`,
 `commit-database-unavailable-http` e `database-session-timezone`), e todos
-os gates foram refeitos nela depois do rebase, em 29/10/2026 de madrugada,
-com a env do job `test` do `deploy.yml`:
+os gates foram refeitos nela depois do rebase e outra vez depois da
+terceira conferência (abaixo), em 29/10/2026 de madrugada, com a env do job
+`test` do `deploy.yml`. A tabela traz a última rodada:
 
 | Gate                                     | Resultado                                                                                                                                             |
 | ---------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `audit-ci`, `prettier --check`, `tsc`    | passam (`tsc` com 0 erros)                                                                                                                            |
-| Suíte unitária com cobertura (env do CI) | 512 arquivos: 511 ok e 1 pulado; 5.663 testes ok, 0 falhas, 29 pulados; cobertura 77,56 / 84,57 / 67,53 / 77,56 % (pisos 70,8 / 82,57 / 57,62 / 70,8) |
-| E2E completo (297 arquivos, lotes de 8)  | 294 ok de primeira, 0 falhas, 3 pulados; 3.251 testes ok e 15 pulados, em 25 min                                                                      |
+| Suíte unitária com cobertura (env do CI) | 512 arquivos: 511 ok e 1 pulado; 5.701 testes ok, 0 falhas, 29 pulados; cobertura 77,57 / 84,57 / 67,54 / 77,57 % (pisos 70,8 / 82,57 / 57,62 / 70,8) |
+| E2E completo (298 arquivos, lotes de 8)  | 295 ok de primeira, 0 falhas, 3 pulados; 3.254 testes ok e 15 pulados, em 25 min                                                                      |
 | `migrate deploy` do zero                 | 135/135, `migrate status` em dia; o `migrate diff` (banco migrado → `schema.prisma`) só mostra os 3 índices de SQL cru já conhecidos                  |
-| Imagem + smoke do CI (`deploy.yml`)      | passa em 32 s: migrations do zero e seeds no modo `migrate`, boot saudável, commit conferido no `/health/liveness`, readiness 200                     |
+| Imagem + smoke do CI (`deploy.yml`)      | passa em 31 s: migrations do zero e seeds no modo `migrate`, boot saudável, commit conferido no `/health/liveness`, readiness 200                     |
 
 O arquivo unitário pulado (`compose-ci-siblings`) e os 29 testes pulados
 dependem dos repositórios irmãos (`trajetto-ui`, `trajetto-mobile`), que não
@@ -279,7 +280,7 @@ Windows a porta cai numa faixa reservada pelo sistema e o pacote não sobe) e
 `upload-storage-roundtrip`, que passou 9/9 à parte contra o MinIO
 descartável. Nenhum E2E precisou de reexecução.
 
-Depois desses gates, uma terceira conferência achou mais dois pontos,
+Depois da primeira rodada, uma terceira conferência achou mais dois pontos,
 corrigidos com testes. A conexão cujo COMMIT o Postgres respondeu com FATAL
 (backend encerrado, 57P01) voltava ao pool como saudável e derrubava com 503
 a query seguinte que a pegasse antes de o `pg` ler o fim do socket (8 de 8 a
@@ -288,8 +289,9 @@ a query seguinte que a pegasse antes de o `pg` ler o fim do socket (8 de 8 a
 repetia a escrita recusada com "the database system is starting up" (57P03,
 que no 7 chega como P2039 ou P2010, sem código próprio), recusa que só
 acontece antes de qualquer instrução; agora repete uma vez, lendo a causa do
-adapter. Para essas duas correções rodaram os arquivos tocados e os E2E de
-banco relacionados, não a suíte completa.
+adapter. Com essas duas correções na árvore, todos os gates da tabela
+rodaram de novo, E2E completo inclusive (o `commit-terminated-connection` é
+o 298º arquivo).
 
 Benchmark curto (mesmo método, ABBA, 2 execuções por versão, `a6d0bcc`
 contra a integração no `cd36d53`, o primeiro commit do Prisma 7, antes das
@@ -306,7 +308,7 @@ correções da revisão e do rebase):
 | Tempo de execução no Postgres  | 36,5 s          | 28,9 s  | −21% |
 
 Imagem da árvore final (`docker image inspect` / soma do histórico /
-`docker images`; medida de novo depois do rebase, com os mesmos números),
+`docker images`; medida de novo após a terceira conferência, mesmos números),
 contra a imagem do 6.1 com as mesmas regras de `Dockerfile`: comprimida
 87,6 → 114,8 MB (+27,2 MB, +31%), descompactada 285 → 431 MB (+51%),
 listada 373 → 546 MB (+46%), 14 → 15 camadas (a nova é o
