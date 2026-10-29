@@ -1,12 +1,12 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
 import { sign } from "jsonwebtoken";
 import { randomUUID } from "node:crypto";
 
 import auth from "@/config/auth";
 import { quotaPeriodFor } from "@/shared/ai/ai-period";
 import { getOrCreateCurrentPeriod } from "@/shared/ai/ai-quota-service";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * The AI quota as the limits card reads it (AI-10, AI-15), over HTTP.
@@ -16,7 +16,7 @@ import { getOrCreateCurrentPeriod } from "@/shared/ai/ai-quota-service";
  * UTC month, reset at 21:00 in Brasília, and the "last reset" came back as a
  * date-only value the browser showed as "31/08 21:00".
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 let app: Awaited<typeof import("@/http")>["app"];
 

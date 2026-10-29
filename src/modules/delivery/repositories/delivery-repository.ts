@@ -1,4 +1,4 @@
-import { Prisma } from "@prisma/client";
+import { Prisma, type PrismaClient } from "@prisma/client";
 
 import {
   IDeliveryRepository,
@@ -33,6 +33,11 @@ import database from "@/../infra/database";
 
 import { buildSearchOr } from "@/shared/pagination/search-or";
 import { resolveOrderBy } from "@/shared/pagination/list-query";
+import {
+  groupedBy,
+  relatedTo,
+  rowsByKey,
+} from "@/shared/database/related-rows";
 import { deliveryExportRow, occurrenceExportRow } from "./export-rows";
 import { narrowDeliverySearch, resolveDeliveryPeriod } from "./delivery-search";
 import { narrowOccurrenceSearch } from "./occurrence-search";
@@ -58,6 +63,56 @@ const listInclude = {
   driver: { select: { id: true, name: true, cnh: true } },
   vehicle: { select: { id: true, license_plate: true } },
 } as const;
+
+/**
+ * listInclude, attached to rows read without it: each relation read for the
+ * keys the rows carry, and not at all when none does. As an include, Prisma 7
+ * queried the vehicle of a page without vehicles, the driver of a page of
+ * unassigned deliveries and all three under an empty page
+ * (shared/database/related-rows.ts). Same shape: a missing relation is null.
+ */
+async function withListRelations<
+  Row extends {
+    shipperId: string;
+    driverId: string | null;
+    vehicleId: string | null;
+  },
+>(client: Pick<PrismaClient, "shipper" | "driver" | "vehicle">, rows: Row[]) {
+  const [shippers, drivers] = await Promise.all([
+    rowsByKey(
+      rows.map((row) => row.shipperId),
+      (ids) =>
+        client.shipper.findMany({
+          where: { id: { in: ids } },
+          select: listInclude.shipper.select,
+        }),
+    ),
+    rowsByKey(
+      rows.map((row) => row.driverId),
+      (ids) =>
+        client.driver.findMany({
+          where: { id: { in: ids } },
+          select: listInclude.driver.select,
+        }),
+    ),
+  ]);
+
+  const vehicles = await rowsByKey(
+    rows.map((row) => row.vehicleId),
+    (ids) =>
+      client.vehicle.findMany({
+        where: { id: { in: ids } },
+        select: listInclude.vehicle.select,
+      }),
+  );
+
+  return rows.map((row) => ({
+    ...row,
+    shipper: relatedTo(shippers, row.shipperId),
+    driver: relatedTo(drivers, row.driverId),
+    vehicle: relatedTo(vehicles, row.vehicleId),
+  }));
+}
 
 /**
  * The batch departure only ever touches deliveries that are NOT on a route.
@@ -96,7 +151,10 @@ async function tenantOfDelivery(
   return businessId;
 }
 
-/** The driver's view of their latest report that asked the tower. */
+/**
+ * The driver's view of their latest report that asked the tower. The type's
+ * name is read apart, for the reports present (shared/database/related-rows.ts).
+ */
 const AUTHORIZATION_REQUEST_SELECT = {
   id: true,
   occurrenceTypeId: true,
@@ -104,22 +162,23 @@ const AUTHORIZATION_REQUEST_SELECT = {
   authorization_note: true,
   authorized_at: true,
   created_at: true,
-  occurrenceType: { select: { name: true } },
 } as const;
 
-function toAuthorizationRequest(row: {
-  id: string;
-  occurrenceTypeId: string;
-  authorization_status: OccurrenceAuthorizationStatus;
-  authorization_note: string | null;
-  authorized_at: Date | null;
-  created_at: Date;
-  occurrenceType: { name: string };
-}) {
+function toAuthorizationRequest(
+  row: {
+    id: string;
+    occurrenceTypeId: string;
+    authorization_status: OccurrenceAuthorizationStatus;
+    authorization_note: string | null;
+    authorized_at: Date | null;
+    created_at: Date;
+  },
+  occurrenceType: { name: string },
+) {
   return {
     occurrenceId: row.id,
     occurrenceTypeId: row.occurrenceTypeId,
-    occurrenceTypeName: row.occurrenceType.name,
+    occurrenceTypeName: occurrenceType.name,
     status: row.authorization_status,
     note: row.authorization_note,
     decidedAt: row.authorized_at,
@@ -227,16 +286,17 @@ class DeliveryRepository implements IDeliveryRepository {
     // The page and the counts side by side (the two connections a screen may
     // hold). The counts replace a count(*): the pager total and the cards
     // both come out of them.
-    const [data, counted] = await Promise.all([
+    const [rows, counted] = await Promise.all([
       this.prisma.delivery.findMany({
         skip,
         take: pageSize,
         where: deliveryListWhere(filters),
-        include: listInclude,
         orderBy: resolveOrderBy(DELIVERY_SORT, { sort, order }),
       }),
       this.countListFacets(filters),
     ]);
+
+    const data = await withListRelations(this.prisma, rows);
 
     const { byStatus, byShipper, byDriver } = counted;
 
@@ -406,44 +466,28 @@ class DeliveryRepository implements IDeliveryRepository {
     return found as Delivery | null;
   }
 
+  /**
+   * The delivery with everything its screen shows.
+   *
+   * The lists come with the row; what they point at (people, reasons,
+   * occurrence types, the import, the list relations) is read afterwards for
+   * the keys present, and not at all when there are none. As one include,
+   * Prisma 7 ran each of those under a null key or an empty list — fifteen
+   * statements for a delivery with no occurrence, message or import, where
+   * Prisma 6 spent seven (shared/database/related-rows.ts). The people of the
+   * trail, the occurrences and the messages are one lookup. Same shape and
+   * key order as the include.
+   */
   async findDeliveryDetailById(deliveryId: string): Promise<unknown | null> {
-    return this.prisma.delivery.findUnique({
+    const found = await this.prisma.delivery.findUnique({
       where: { id: deliveryId },
       include: {
-        ...listInclude,
         items: true,
-        // Where it came from: the edit form locks the items of an NF-e XML
-        // delivery (they are what the note declared) and not a typed one's.
-        import: { select: { source: true } },
         // The trail, newest first: arrivals and proofs from the app, status
         // overrides and notes from the panel. The reason comes along because
         // it is the sentence support is scanning for.
-        events: {
-          orderBy: { created_at: "desc" },
-          include: {
-            reportedBy: { select: { id: true, name: true } },
-            reason: { select: { id: true, name: true } },
-          },
-        },
-        occurrences: {
-          orderBy: { created_at: "desc" },
-          include: {
-            occurrenceType: {
-              select: {
-                id: true,
-                name: true,
-                blocks_delivery: true,
-                // The form the answers are labelled with, and whether the
-                // type asks the tower (decisions 6.2 and 6.3).
-                requires_authorization: true,
-                form_fields: true,
-                form_version: true,
-              },
-            },
-            reportedBy: { select: { id: true, name: true } },
-            authorizedBy: { select: { id: true, name: true } },
-          },
-        },
+        events: { orderBy: { created_at: "desc" } },
+        occurrences: { orderBy: { created_at: "desc" } },
 
         /**
          * The messages that named this delivery as their context.
@@ -461,11 +505,92 @@ class DeliveryRepository implements IDeliveryRepository {
             kind: true,
             body: true,
             created_at: true,
-            sender: { select: { id: true, name: true } },
+            senderId: true,
           },
         },
       },
     });
+
+    if (!found) return null;
+
+    const { items, events, occurrences, chatMessages, ...row } = found;
+
+    const [delivery] = await withListRelations(this.prisma, [row]);
+
+    const [imported, people] = await Promise.all([
+      // Where it came from: the edit form locks the items of an NF-e XML
+      // delivery (they are what the note declared) and not a typed one's.
+      row.importId
+        ? this.prisma.import.findUnique({
+            where: { id: row.importId },
+            select: { source: true },
+          })
+        : null,
+      rowsByKey(
+        [
+          ...events.map((event) => event.reportedById),
+          ...occurrences.flatMap((occurrence) => [
+            occurrence.reportedById,
+            occurrence.authorizedById,
+          ]),
+          ...chatMessages.map((message) => message.senderId),
+        ],
+        (ids) =>
+          this.prisma.user.findMany({
+            where: { id: { in: ids } },
+            select: { id: true, name: true },
+          }),
+      ),
+    ]);
+
+    const [reasons, occurrenceTypes] = await Promise.all([
+      rowsByKey(
+        events.map((event) => event.reasonId),
+        (ids) =>
+          this.prisma.statusChangeReason.findMany({
+            where: { id: { in: ids } },
+            select: { id: true, name: true },
+          }),
+      ),
+      rowsByKey(
+        occurrences.map((occurrence) => occurrence.occurrenceTypeId),
+        (ids) =>
+          this.prisma.occurrenceType.findMany({
+            where: { id: { in: ids } },
+            select: {
+              id: true,
+              name: true,
+              blocks_delivery: true,
+              // The form the answers are labelled with, and whether the
+              // type asks the tower (decisions 6.2 and 6.3).
+              requires_authorization: true,
+              form_fields: true,
+              form_version: true,
+            },
+          }),
+      ),
+    ]);
+
+    return {
+      ...delivery,
+      items,
+      import: imported,
+      events: events.map((event) => ({
+        ...event,
+        reportedBy: relatedTo(people, event.reportedById),
+        reason: relatedTo(reasons, event.reasonId),
+      })),
+      occurrences: occurrences.map((occurrence) => ({
+        ...occurrence,
+        occurrenceType: relatedTo(occurrenceTypes, occurrence.occurrenceTypeId),
+        reportedBy: relatedTo(people, occurrence.reportedById),
+        authorizedBy: relatedTo(people, occurrence.authorizedById),
+      })),
+      chatMessages: chatMessages.map(({ senderId, ...message }) => ({
+        ...message,
+        sender: relatedTo(people, senderId),
+      })),
+    };
   }
 
   async findDeliveryByInvoiceKey(
@@ -793,9 +918,10 @@ class DeliveryRepository implements IDeliveryRepository {
   ): Promise<OperationBacklog> {
     // The columns are UTC timestamps without a zone (how Prisma stores a
     // DateTime), so each bound is converted explicitly instead of leaving the
-    // comparison to the session's TimeZone.
-    const start = Prisma.sql`(${day.start}::timestamptz AT TIME ZONE 'UTC')`;
-    const end = Prisma.sql`(${day.end}::timestamptz AT TIME ZONE 'UTC')`;
+    // comparison to the session's TimeZone — and sent as an ISO string, since
+    // Prisma 7's pg driver sends a Date without its offset.
+    const start = Prisma.sql`(${day.start.toISOString()}::timestamptz AT TIME ZONE 'UTC')`;
+    const end = Prisma.sql`(${day.end.toISOString()}::timestamptz AT TIME ZONE 'UTC')`;
 
     /**
      * "Sem rota": PENDING without a driver, of any date — the dispatcher's
@@ -874,72 +1000,6 @@ class DeliveryRepository implements IDeliveryRepository {
           },
         ],
       },
-      include: {
-        shipper: { select: { id: true, name: true } },
-        items: true,
-
-        /**
-         * The open stop, when this delivery is on a route.
-         *
-         * The dispatcher put the addresses in an order, and until now the
-         * driver could not see it: the app listed the day by date and
-         * creation, which is not the street. One stop at most — the partial
-         * unique index allows a delivery exactly one open stop — so the app
-         * reads `stops[0]` and sorts by its sequence.
-         *
-         * Carried in THIS payload rather than fetched separately because this
-         * is the one the app caches for seven days offline; a second endpoint
-         * would be a second thing to go stale, on a phone with no signal.
-         */
-        stops: {
-          where: { status: { in: ["PENDING", "ARRIVED"] } },
-          select: {
-            id: true,
-            sequence: true,
-            status: true,
-            // "Chegada registrada às HH:MM" for an arrival made on another
-            // phone or before this cache was filled (MOB-11).
-            arrived_at: true,
-            // "A caminho desde HH:MM" (decision 6.4), restored after a
-            // reinstall or on another phone; the app keeps its own marks too.
-            on_the_way_at: true,
-            route: {
-              select: {
-                id: true,
-                code: true,
-                name: true,
-                status: true,
-                // The plan the app prints under each route (DLVP-ROUTE-1).
-                destination: true,
-                planned_departure_at: true,
-                planned_arrival_at: true,
-                // Decision 14.4: the app offers a pause on a RELEASED route
-                // only on its day (date-only, UTC midnight).
-                scheduled_date: true,
-                // Decision 14.7 (design §6): the app keeps it in its cache and
-                // tells the driver once when the plan changed while offline.
-                plan_version: true,
-              },
-            },
-          },
-        },
-
-        // The latest report that asked the tower (decision 6.3): the card
-        // shows "Aguardando autorização" or the answer, from the same cached
-        // payload the app reads offline. Only THIS driver's own request: a
-        // panel report (self-authorized, or filed by an office profile) is
-        // not something the driver asked, nor is the request of the driver
-        // who held the delivery before it was handed over.
-        occurrences: {
-          where: {
-            authorization_status: { not: "NOT_REQUIRED" },
-            reportedBy: { driverId },
-          },
-          orderBy: [{ created_at: "desc" }, { id: "desc" }],
-          take: 1,
-          select: AUTHORIZATION_REQUEST_SELECT,
-        },
-      },
       // Unchanged: dated first, then creation order, undated last.
       //
       // Deliberately NOT ordered by the stop's sequence — Prisma cannot order
@@ -953,12 +1013,146 @@ class DeliveryRepository implements IDeliveryRepository {
       ],
     });
 
-    return rows.map(({ occurrences, ...row }) => ({
-      ...row,
-      authorization_request: occurrences[0]
-        ? toAuthorizationRequest(occurrences[0])
-        : null,
-    }));
+    /**
+     * What the list carries, read for the deliveries present, as the include
+     * did, and nothing for a driver with nothing to do: as an include,
+     * Prisma 7 ran the shipper, items, stops, routes, requests and types
+     * under an empty list — the first screen of every idle driver — and the
+     * routes and types under a list with no stop and no request
+     * (shared/database/related-rows.ts). Same shape, key and item order.
+     */
+    if (rows.length === 0) return [];
+
+    const deliveryIds = rows.map((row) => row.id);
+
+    const [shippers, items] = await Promise.all([
+      rowsByKey(
+        rows.map((row) => row.shipperId),
+        (ids) =>
+          this.prisma.shipper.findMany({
+            where: { id: { in: ids } },
+            select: { id: true, name: true },
+          }),
+      ),
+      this.prisma.deliveryItem.findMany({
+        where: { deliveryId: { in: deliveryIds } },
+      }),
+    ]);
+
+    const [stops, requests] = await Promise.all([
+      /**
+       * The open stop, when this delivery is on a route.
+       *
+       * The dispatcher put the addresses in an order, and until now the
+       * driver could not see it: the app listed the day by date and
+       * creation, which is not the street. One stop at most — the partial
+       * unique index allows a delivery exactly one open stop — so the app
+       * reads `stops[0]` and sorts by its sequence.
+       *
+       * Carried in THIS payload rather than fetched separately because this
+       * is the one the app caches for seven days offline; a second endpoint
+       * would be a second thing to go stale, on a phone with no signal.
+       */
+      this.prisma.routeStop.findMany({
+        where: {
+          deliveryId: { in: deliveryIds },
+          status: { in: ["PENDING", "ARRIVED"] },
+        },
+        select: {
+          id: true,
+          sequence: true,
+          status: true,
+          // "Chegada registrada às HH:MM" for an arrival made on another
+          // phone or before this cache was filled (MOB-11).
+          arrived_at: true,
+          // "A caminho desde HH:MM" (decision 6.4), restored after a
+          // reinstall or on another phone; the app keeps its own marks too.
+          on_the_way_at: true,
+          deliveryId: true,
+          routeId: true,
+        },
+      }),
+
+      // The latest report that asked the tower (decision 6.3): the card
+      // shows "Aguardando autorização" or the answer, from the same cached
+      // payload the app reads offline. Only THIS driver's own request: a
+      // panel report (self-authorized, or filed by an office profile) is
+      // not something the driver asked, nor is the request of the driver
+      // who held the delivery before it was handed over. Newest first with
+      // the id as tiebreak, so the first per delivery is the include's
+      // `take: 1`.
+      this.prisma.deliveryOccurrence.findMany({
+        where: {
+          deliveryId: { in: deliveryIds },
+          authorization_status: { not: "NOT_REQUIRED" },
+          reportedBy: { driverId },
+        },
+        orderBy: [{ created_at: "desc" }, { id: "desc" }],
+        select: { ...AUTHORIZATION_REQUEST_SELECT, deliveryId: true },
+      }),
+    ]);
+
+    const [routes, occurrenceTypes] = await Promise.all([
+      rowsByKey(
+        stops.map((stop) => stop.routeId),
+        (ids) =>
+          this.prisma.route.findMany({
+            where: { id: { in: ids } },
+            select: {
+              id: true,
+              code: true,
+              name: true,
+              status: true,
+              // The plan the app prints under each route (DLVP-ROUTE-1).
+              destination: true,
+              planned_departure_at: true,
+              planned_arrival_at: true,
+              // Decision 14.4: the app offers a pause on a RELEASED route
+              // only on its day (date-only, UTC midnight).
+              scheduled_date: true,
+              // Decision 14.7 (design §6): the app keeps it in its cache and
+              // tells the driver once when the plan changed while offline.
+              plan_version: true,
+            },
+          }),
+      ),
+      rowsByKey(
+        requests.map((request) => request.occurrenceTypeId),
+        (ids) =>
+          this.prisma.occurrenceType.findMany({
+            where: { id: { in: ids } },
+            select: { id: true, name: true },
+          }),
+      ),
+    ]);
+
+    const itemsOf = groupedBy(items, (item) => item.deliveryId);
+    const stopsOf = groupedBy(stops, (stop) => stop.deliveryId);
+    const requestsOf = groupedBy(requests, (request) => request.deliveryId);
+
+    return rows.map((row) => {
+      const request = requestsOf.get(row.id)?.[0];
+
+      return {
+        ...row,
+        // A required relation: the delivery's foreign key keeps its shipper.
+        shipper: shippers.get(row.shipperId)!,
+        items: itemsOf.get(row.id) ?? [],
+        stops: (stopsOf.get(row.id) ?? []).map(
+          ({ deliveryId: _deliveryId, routeId, ...stop }) => ({
+            ...stop,
+            route: relatedTo(routes, routeId),
+          }),
+        ),
+        authorization_request: request
+          ? toAuthorizationRequest(
+              request,
+              // A required relation, like the shipper.
+              occurrenceTypes.get(request.occurrenceTypeId)!,
+            )
+          : null,
+      };
+    });
   }
 
   async countPendingForDriver(

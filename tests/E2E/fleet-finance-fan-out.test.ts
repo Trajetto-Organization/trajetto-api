@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { PrismaClient } from "@prisma/client";
 import { randomUUID } from "node:crypto";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * The accounts payable and supplier lists within the connection budget of a
@@ -13,9 +14,11 @@ import { randomUUID } from "node:crypto";
 const pool = vi.hoisted(() => ({ inFlight: 0, peak: 0 }));
 
 vi.mock("@/../infra/database", async () => {
-  const { PrismaClient: Client } = await import("@prisma/client");
+  const { createPrismaClient } = await import(
+    "@/shared/database/database-client"
+  );
 
-  const counted = new Client().$extends({
+  const counted = createPrismaClient().$extends({
     query: {
       async $allOperations({ args, query }) {
         pool.inFlight += 1;
@@ -43,7 +46,7 @@ import { SupplierRepository } from "@/modules/supplier/repositories/supplier-rep
 import { ListAccountPayableUseCase } from "@/modules/account-payable/usecases/list-account-payable/list-account-payable-usecase";
 import { ListSupplierUseCase } from "@/modules/supplier/usecases/list-supplier/list-supplier-usecase";
 
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 const CARRIER = "018fe400-0000-7000-8000-00000000000a";
 const MANAGER = "018fe400-0000-7000-8000-0000000000a1";

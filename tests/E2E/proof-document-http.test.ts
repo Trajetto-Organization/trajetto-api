@@ -1,6 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
 import { sign } from "jsonwebtoken";
 import { container } from "tsyringe";
 
@@ -17,6 +16,7 @@ import {
   testCertificateSigning,
   unsignedSigning,
 } from "../support/proof-services";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * The receipt, end to end: generated on first request, stored, hashed, and
@@ -28,7 +28,7 @@ import {
  * comes back out of storage, and the public page compares what it found
  * against what was recorded. That comparison is the whole feature.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 let app: Awaited<typeof import("@/http")>["app"];
 

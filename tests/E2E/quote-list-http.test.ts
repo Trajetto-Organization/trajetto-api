@@ -1,11 +1,12 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { PrismaClient, type QuoteStatus } from "@prisma/client";
+import { type QuoteStatus } from "@prisma/client";
 import { sign } from "jsonwebtoken";
 
 import { randomUUID } from "node:crypto";
 
 import auth from "@/config/auth";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * GET /quote/list-quote over real HTTP and Postgres (decision 8.8).
@@ -15,7 +16,7 @@ import auth from "@/config/auth";
  * fleet size among them. The order, the stage and fleet-size facets and the
  * per-stage cards are the server's now, over every quote.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 let app: Awaited<typeof import("@/http")>["app"];
 

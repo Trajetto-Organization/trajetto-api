@@ -1,7 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
-
 import { quotaPeriodFor } from "@/shared/ai/ai-period";
 
 import { FakeProvider } from "./support/fake-provider";
@@ -27,6 +25,7 @@ import {
   waitUntilSettled,
   type ResilienceSeed,
 } from "./support/resilience-seed";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * Case C of contract §11: Postgres goes away in the middle of the drain —
@@ -50,7 +49,7 @@ import {
  */
 const enabled = dockerFailureInjectionEnabled();
 
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 const fake = new FakeProvider();
 
 const BUSINESS = "018fe700-0000-7000-8000-0000000000a1";

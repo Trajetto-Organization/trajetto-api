@@ -2,11 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { randomUUID } from "node:crypto";
 
-import {
-  PrismaClient,
-  WebhookDeliveryStatus,
-  type WebhookDelivery,
-} from "@prisma/client";
+import { WebhookDeliveryStatus, type WebhookDelivery } from "@prisma/client";
 
 import { ApiKeyRepository } from "@/modules/integration/repositories/api-key-repository";
 import { WebhookEndpointRepository } from "@/modules/integration/repositories/webhook-endpoint-repository";
@@ -21,6 +17,7 @@ import type { IWebhookDeliveryRepository } from "@/modules/integration/repositor
 import { ENDPOINT_PAUSED_REASON } from "@/shared/integration/webhook-dispatch-rules";
 
 import { expectPrismaCode } from "../contract/support";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * The integration screens' repositories against Postgres and against their
@@ -28,7 +25,7 @@ import { expectPrismaCode } from "../contract/support";
  * unit test that passes on a twin would pass on the database — quotas,
  * company scoping, the breaker, the monitor's window, order, cap and p95.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 interface Harness {
   apiKeys: IApiKeyRepository;

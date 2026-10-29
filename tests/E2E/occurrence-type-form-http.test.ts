@@ -1,11 +1,11 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
 import { sign } from "jsonwebtoken";
 
 import { randomUUID } from "node:crypto";
 
 import auth from "@/config/auth";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * The occurrence type's form and authorization flag through the catalogue's
@@ -13,7 +13,7 @@ import auth from "@/config/auth";
  * stored in one shape, and form_version moves only when the form changes —
  * the number a driver's answer is filed under.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 let app: Awaited<typeof import("@/http")>["app"];
 

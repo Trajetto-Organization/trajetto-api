@@ -46,7 +46,7 @@ dois módulos contratados separadamente por empresa:
 
 | Repositório (GitHub)                  | O que é                                                           | Tecnologia                                                             |
 | ------------------------------------- | ----------------------------------------------------------------- | ---------------------------------------------------------------------- |
-| `trajetto-api` (este)                 | API HTTP, tempo real, filas, crons, IA local, backup              | Node.js 22, Fastify 5, Prisma 6, PostgreSQL 16, Redis 7, tsyringe, zod |
+| `trajetto-api` (este)                 | API HTTP, tempo real, filas, crons, IA local, backup              | Node.js 22, Fastify 5, Prisma 7, PostgreSQL 16, Redis 7, tsyringe, zod |
 | `trajetto-ui` (`trajetto-ui`)         | painel web (`/dashboard`, `/admin`), site público, portal `/docs` | Next.js 14 (App Router)                                                |
 | `trajetto-mobile` (`trajetto-mobile`) | app de campo do motorista, só Android                             | Expo / React Native                                                    |
 
@@ -796,57 +796,131 @@ OpenStreetMap são recusados.
 
 ## Conexão com o Postgres
 
+A API fala com o Postgres pelo Prisma 7 com o driver adapter
+`@prisma/adapter-pg` (o pool é o do `pg`, não mais o do engine em Rust). Todo
+`PrismaClient` — o da aplicação, o da readiness, o do `wait-for-postgres` e os
+dos testes — nasce em `src/shared/database/database-client.ts`, que monta o
+pool a partir da `DATABASE_URL`.
+
 A `DATABASE_URL` da Application `trajetto-api` em staging e produção (só o
 servidor; migrations e seeds usam `MIGRATION_DATABASE_URL`; a URL inteira, para
-copiar, está em [`variaveis-de-ambiente.md`](./variaveis-de-ambiente.md#2-banco-de-dados)):
+copiar, está em [`variaveis-de-ambiente.md`](./variaveis-de-ambiente.md#2-banco-de-dados))
+não mudou de formato. O `pg` ignora os parâmetros do Prisma 6, então
+`src/shared/database/pool-config.ts` lê cada um e os entrega ao pool de forma
+explícita:
 
-| Parâmetro                      | Valor                                                                                 | Por quê                                                                                                                                                                                                                         |
-| ------------------------------ | ------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `connection_limit`             | 10                                                                                    | pool por réplica; orçamento: réplicas × (10 + 1 da readiness) + migrations (2) + ferramentas < `max_connections`                                                                                                                |
-| `pool_timeout`                 | 20 s                                                                                  | espera por uma conexão livre antes de P2024                                                                                                                                                                                     |
-| `connect_timeout`              | 5 s                                                                                   | explícito (padrão do Prisma)                                                                                                                                                                                                    |
-| `socket_timeout`               | 60 s                                                                                  | uma query sem resposta falha (P1008 → 503 + Retry-After; P2010 sem SQLSTATE também vira 503 pelo classificador `src/shared/errors/database-unavailable.ts`); acima do `statement_timeout` para um servidor vivo responder antes |
-| `max_idle_connection_lifetime` | 300 s                                                                                 | conexão ociosa há 5 min é trocada no próximo uso; o IPVS do Swarm esquece um fluxo ocioso aos 900 s, e escrever num fluxo esquecido trava sem erro                                                                              |
-| `options`                      | `statement_timeout=30s`, `lock_timeout=5s`, `idle_in_transaction_session_timeout=60s` | tetos do lado do servidor                                                                                                                                                                                                       |
+| Parâmetro                      | Valor                                                                                 | Vira no `pg`                              | Por quê                                                                                                                                                                                   |
+| ------------------------------ | ------------------------------------------------------------------------------------- | ----------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `connection_limit`             | 10                                                                                    | `max` do Pool                             | pool por réplica; orçamento: réplicas × (10 + 1 da readiness) + migrations (2) + ferramentas < `max_connections`                                                                          |
+| `pool_timeout`                 | 20 s                                                                                  | `connectionTimeoutMillis` do Pool         | espera por uma conexão livre; estourou, a requisição falha com 503 + Retry-After em vez de esperar para sempre (sem o parâmetro, 10 s, o padrão do Prisma 6)                              |
+| `connect_timeout`              | 5 s                                                                                   | `connectionTimeoutMillis` do Client       | abrir uma conexão nova; separado da espera pelo pool por uma subclasse do Client (o `pg-pool` usa um valor só para as duas coisas)                                                        |
+| `socket_timeout`               | 60 s                                                                                  | `query_timeout` do Client                 | uma query sem resposta falha (503 + Retry-After) e a conexão dela é fechada; acima do `statement_timeout` para um servidor vivo responder antes                                           |
+| `max_idle_connection_lifetime` | 300 s                                                                                 | `idleTimeoutMillis` do Pool               | conexão ociosa há 5 min é fechada; o IPVS do Swarm esquece um fluxo ocioso aos 900 s, e escrever num fluxo esquecido trava sem erro (sem o parâmetro, 300 s; o padrão do `pg` seria 10 s) |
+| `options`                      | `statement_timeout=30s`, `lock_timeout=5s`, `idle_in_transaction_session_timeout=60s` | enviado ao Postgres na conexão, como está | tetos do lado do servidor                                                                                                                                                                 |
+| `schema`                       | `public`                                                                              | opção `schema` do adapter                 | o schema das queries                                                                                                                                                                      |
 
-Provas: `tests/E2E/runtime-database-dead-peer.test.ts` (um proxy "esquece"
-os fluxos sem FIN nem RST), `tests/E2E/runtime-database-timeouts.test.ts` e
+O `keepAlive` do TCP fica ligado (com o tempo do sistema), como no driver do
+Prisma 6. Provas: `tests/unitaires/database/pool-config.test.ts` (o mapeamento
+com a URL de produção do `.env.example`),
+`tests/E2E/runtime-database-dead-peer.test.ts` (um proxy "esquece" os fluxos
+sem FIN nem RST), `tests/E2E/runtime-database-timeouts.test.ts`,
+`tests/E2E/pool-pressure.test.ts` e
 `tests/unitaires/lifecycle/database-dead-connection-params.test.ts`.
 
+**Erros do banco viram 503 por tipo, não por texto**: o adapter mapeia erro de
+socket (recusado, reset, DNS) e SQLSTATE para códigos do Prisma, mas repassa
+cru o que é do próprio `pg` — pool cheio (`timeout exceeded when trying to
+connect`), conexão que morreu (`Connection terminated unexpectedly`) e query
+além do `socket_timeout` (`Query read timeout`). O pool da API
+(`src/shared/database/pg-driver.ts`) tipa essas falhas como
+`DatabaseUnavailableError` na saída, e o classificador
+(`src/shared/errors/database-unavailable.ts`) confia só em classes: além dos
+códigos P1001/P1002/P1008/P1017/P2037 e do P2028 de "não conseguiu começar a
+transação", aceita P2010/P2039 cuja causa no adapter é o banco indo embora
+(`DatabaseNotReachable`, `ConnectionClosed`, SQLSTATE 57P01–57P03, classe 08,
+53300). Violação de unicidade (P2002) agora nomeia o **índice**
+(`driver_businessId_cpf_key`) em `meta.driverAdapterError.cause.constraint`,
+e não mais as colunas em `meta.target`; os leitores usam `uniqueTargetOf`
+(`src/shared/errors/prisma-error-meta.ts`) e casam um trecho do nome — por
+isso os índices parciais da rota são lidos por `active_vehicle` e
+`active_delivery`.
+
+**Parâmetros de SQL cru vão sem tipo**: o Prisma 6 mandava cada parâmetro de
+`$queryRaw`/`$executeRaw` já tipado; o `pg` manda sem tipo e o Postgres deduz
+pelo contexto. Numa coluna de tabela ou numa comparação o resultado é o mesmo,
+mas numa lista `VALUES` solta o parâmetro vira `text`. Faça o cast no SQL
+(`d.receipt::boolean`, `${valor}::int`) sempre que o contexto não disser o
+tipo.
+
 **A readiness tem conexão própria**: `/health/readiness` faz `SELECT 1` num
-`PrismaClient` separado (`connection_limit=1`, timeouts de 2–3 s) e responde
-em até 3 s, abaixo do timeout de 5 s dos monitores. Um pool principal cheio
-não faz a réplica parecer fora do ar; depois de um "não", a probe fecha a conexão
-(`$disconnect()`) e a próxima abre outra no mesmo client (um client novo por
-"não" retinha ~2,3 MB de memória nativa cada).
+`PrismaClient` separado (`max: 1`, espera de 2 s, conexão e query em 3 s) e
+responde em até 3 s, abaixo do timeout de 5 s dos monitores. Um pool principal
+cheio não faz a réplica parecer fora do ar; depois de um "não", a probe fecha o
+pool dela (`$disconnect()`) e a próxima abre outro no mesmo client.
 
-**Conexão fechada pelo Postgres troca o pool inteiro**: no Prisma 6.1 uma
-conexão do pool só é marcada como quebrada quando falha um statement que ela
-já tinha preparado. Preparar um statement novo numa conexão cujo backend
-morreu (restart, failover, `pg_terminate_backend`) falha com P1017 e devolve a
-conexão ao pool como saudável — e ela voltava a ser entregue para sempre, com
-503 em toda requisição até reiniciar a réplica (falha do CI em
-`tests/E2E/database-reconnect.test.ts`, `503 × 25`). O client de
-`infra/database.ts` passa por `withPoolReset`
-(`src/shared/resilience/database-pool-reset.ts`): o primeiro P1017 faz um
-`$disconnect()` (uma vez por rajada) e a query seguinte abre conexões novas.
-Custo: uma transação interativa aberta numa conexão saudável da mesma réplica
-naquele instante se perde.
+**O pool descarta a conexão quebrada sozinho**: no Prisma 6.1 uma conexão que
+o Postgres fechou voltava ao pool como saudável (P1017 em toda requisição até
+reiniciar a réplica), e `withPoolReset` trocava o pool inteiro. O `pg-pool`
+remove a conexão que falhou ou morreu, e o Client da API fecha a que estourou o
+`socket_timeout` (o Prisma 7 devolve ao pool, sem o erro, a conexão de uma
+transação depois do ROLLBACK). `withPoolReset` saiu: com o adapter, um
+`$disconnect()` encerraria o pool debaixo de todas as requisições em curso.
+Prova: `tests/E2E/database-reconnect.test.ts` (todo backend da réplica
+derrubado com `pg_terminate_backend`, e a API volta sozinha).
 
-**Limite conhecido**: no Prisma 6.1, `socket_timeout` limita a execução de um
-statement já preparado; preparar um statement novo numa conexão cujo par
-morreu espera o kernel (`net.ipv4.tcp_retries2=15` ≈ 15 min). O caso comum (o
-IPVS esquecendo um fluxo ocioso) já é coberto por
-`max_idle_connection_lifetime`. Baixar `net.ipv4.tcp_retries2` para `8`
-(~100 s) só na API exigiria um sysctl por contêiner, que a Application do
-Dokploy não expõe; no host inteiro (`sysctl -w net.ipv4.tcp_retries2=8` e
-`/etc/sysctl.d/`) vale para tudo, inclusive o Postgres — decisão a medir antes.
+**Pool observável**: `runtime.prisma_pool` (em `/health/metrics` e na linha de
+métricas por minuto) lê `totalCount`, `idleCount` e `waitingCount` do pool do
+`pg` (`src/shared/health/pool-metrics.ts`); o preview `metrics` do Prisma foi
+removido no 7. Os campos e o significado não mudaram.
 
-**Versão do Prisma**: a API está no Prisma 6.1. A primeira tentativa do
-7.10.1 não passou nos gates (um orçamento de statements estourado e p95 pior
-além do ruído); a segunda, com a sessão e as leituras quentes reescritas,
-passou, e o 7.10.1 entra numa publicação separada. O 8 ainda não saiu, e o 6
-recebe patches de segurança até 19/11/2026. Medições:
+**Relação sem chave ainda custa uma query**: o Prisma 7 roda cada relação de
+um `include` mesmo quando não há o que buscar — FK nula vira `WHERE "id" =
+NULL`, lista vazia vira `IN (NULL)` —, uma query por relação e por nível; o 6
+pulava essas. Nas leituras quentes (sessão, lista e detalhe de entregas, lista
+do motorista, feed da torre, lista de rotas, API pública de entregas, conversas
+do chat, motorista por id e usuário do motorista) as relações opcionais são
+lidas por `src/shared/database/related-rows.ts` (`rowsByKey`, `relatedTo`,
+`groupedBy`): uma query para as chaves presentes, nenhuma sem chave, com o
+mesmo formato e a mesma ordem de chaves do `include`. Leitura nova em caminho
+quente, com relação muitas vezes ausente, segue o mesmo padrão. Provas:
+`tests/E2E/driver-positions-statement-budget.test.ts` e
+`tests/unitaires/database/related-rows.test.ts`.
+
+**Plano com os valores a cada execução**: o `pg` manda statements sem nome, e
+o Postgres planeja cada execução com os valores; o Prisma 6 nomeava os
+statements e, depois de cinco execuções, caía no plano genérico. Query cara de
+planejar ou sensível a estimativa tem de ser boa com os valores: o
+`countDayDeliveries` (torre, resumo e painel) carrega motorista e status em
+cada braço em vez de juntar de volta com `delivery`, porque a estimativa de
+IN_TRANSIT de um tenant grande, feita com o histórico inteiro, levava o plano a
+ler todas as entregas da empresa (37 ms contra 1,6 ms na base de carga).
+
+### ORM: Prisma 7, e por que não o 8
+
+Decisão de 28/10/2026:
+
+- **Prisma 7.10.1**, a versão estável atual. O Prisma 6 recebe só correções de
+  segurança até 19/11/2026
+  ([release status](https://www.prisma.io/docs/orm/release-status)); o 7 tem
+  suporte por 18 meses a partir do lançamento do 8.
+- **Prisma 8 bloqueado**: em 28/10/2026 o CLI só tem release candidates
+  (`8.0.0-rc.*`) e o `@prisma/client` 8 não existe no npm. O guia 7 → 8 exige
+  TypeScript 5.9+ e reescreve a API de queries, e a página "Coming from Prisma
+  ORM 7" lista como ausentes recursos que a API usa (`$extends`,
+  `isolationLevel`/`timeout` de transação, P2002/P2025, `increment`,
+  `Prisma.sql`). Os ~87% do `pg` nativo vêm do blog do Prisma (8 contra 7, um
+  workload, sem Prisma 6) e não valem para o Trajetto sem medição própria.
+- O gerador continua `prisma-client-js` (deprecado no 7, ainda suportado) para
+  não mexer nos ~540 imports de `@prisma/client`; migrar para `prisma-client`
+  é uma mudança separada.
+- O Dependabot move `prisma`, `@prisma/*` e `pg` juntos e não abre PR de major
+  do Prisma (`.github/dependabot.yml`).
+
+**Versão do Prisma**: a API está no Prisma 7.10.1, com `@prisma/adapter-pg`.
+A primeira tentativa não passou nos gates (um orçamento de statements estourado
+e p95 pior além do ruído); a segunda, com a sessão e as leituras quentes
+reescritas, passou, e o 7.10.1 entrou numa publicação própria, depois das
+outras correções da rodada. O 8 ainda não saiu. Medições:
 [ADR 0011](./adr/0011-orm-prisma-6-7-8.md).
 
 ## Migrations: expandir e contrair
@@ -1000,7 +1074,7 @@ Next.js 14 da web está em
 | [ADR 0008](./adr/0008-escala-horizontal.md)                | escala horizontal com réplicas idênticas                                                                                                                                                                                                     |
 | [ADR 0009](./adr/0009-comprovante-publico-por-token.md)    | comprovante público por token com prazo                                                                                                                                                                                                      |
 | [ADR 0010](./adr/0010-ia-local.md)                         | IA local (OCR em CPU, serviço `trajetto-ai`); o provedor externo saiu                                                                                                                                                                        |
-| [ADR 0011](./adr/0011-orm-prisma-6-7-8.md)                 | ORM: 6.1 por enquanto; o 7.10.1 deu no-go na 1ª tentativa e go na 2ª (publicação separada); o 8 ainda não saiu; o 6 sai do suporte em 19/11/2026                                                                                             |
+| [ADR 0011](./adr/0011-orm-prisma-6-7-8.md)                 | ORM: Prisma 7.10.1 com `@prisma/adapter-pg` (no-go na 1ª tentativa, go na 2ª, publicado à parte); o 8 ainda não saiu                                                                                                                         |
 | Decisão 8.1                                                | unicidade por empresa (tabela acima)                                                                                                                                                                                                         |
 | Decisão 12.2                                               | uma imagem por serviço, promovida por digest de staging para produção; staging não fala com cliente real                                                                                                                                     |
 | Decisão 13.1                                               | cobertura medida honestamente, com piso no CI                                                                                                                                                                                                |

@@ -263,26 +263,16 @@ describe("the API image's build stage", () => {
  * - That binary comes as a tree whose directories carry its own mtime, so
  *   the ~46 MB layer is the same blob in every build, cached or not.
  * - prod-deps drops what nothing loads (maps, typings, READMEs, @types, the
- *   exceljs browser bundle) and the CLI's copy of the query engine; the CLI
- *   takes the client's through PRISMA_QUERY_ENGINE_LIBRARY.
+ *   exceljs browser bundle, the pglite of `prisma dev` and the query
+ *   compilers of every database). Prisma 7 has no query engine: the client
+ *   carries its own PostgreSQL compiler, and only the CLI's schema engine
+ *   (`migrate deploy`) is a native binary.
  * - The runner copies the most stable first: a source-only commit re-ships
  *   build/ alone (~1 MB compressed), never node_modules.
  *
  * The image itself runs before the push (deploy.yml, "Smoke test the API
  * image"): migrations from an empty database, the seeds and the boot.
  */
-const schema = read("prisma/schema.prisma");
-
-/** The query engine file of the musl entry of `binaryTargets`. */
-const muslEngine = (() => {
-  const targets = /binaryTargets\s*=\s*\[([^\]]*)\]/.exec(schema)?.[1] ?? "";
-  const musl = /"(linux-musl[^"]*)"/.exec(targets)?.[1];
-
-  expect(musl, "binaryTargets com linux-musl").toBeDefined();
-
-  return `libquery_engine-${musl}.so.node`;
-})();
-
 describe("the API image's runtime base", () => {
   it("is the Alpine minor the node binary was built for", () => {
     const node =
@@ -322,7 +312,7 @@ describe("the API image's runtime base", () => {
     ]);
   });
 
-  it("installs only what node, bcrypt and the Prisma engines link against", () => {
+  it("installs only what node, bcrypt and the Prisma schema engine link against", () => {
     const base = stage(api, "base");
 
     expect(base).toContain(
@@ -347,27 +337,27 @@ describe("the API image's node_modules", () => {
 
     expect(prodDeps[prodDeps.length - 1]).toBe(
       "RUN find node_modules -type f \\( -name '*.map' -o -name '*.d.ts' -o -name '*.d.mts' -o -name '*.d.cts' -o -iname '*.md' -o -iname '*.markdown' \\) -delete && " +
-        "rm -rf node_modules/@types node_modules/exceljs/dist && " +
-        `rm node_modules/@prisma/engines/${muslEngine}`,
+        "rm -rf node_modules/@types node_modules/exceljs/dist " +
+        "node_modules/@electric-sql/pglite " +
+        "node_modules/@prisma/client/runtime/query_compiler_* " +
+        "node_modules/prisma/build/query_compiler_*",
     );
+    // The CLI requires Studio and @prisma/dev when it starts: without them
+    // `migrate deploy` fails ("Cannot find module
+    // '@prisma/studio-core/data/bff'", smoke-tested).
+    expect(prodDeps.join(" ")).not.toMatch(/studio-core|@prisma\/dev\b/);
     // Nothing deletes in the runner: a later layer would only hide files.
     expect(
       stage(api, "runner").filter((line) => /^RUN .*\brm\b/.test(line)),
     ).toEqual([]);
   });
 
-  it("hand the Prisma CLI the client's engine, named after the musl binaryTarget", () => {
-    const runner = stage(api, "runner");
-
-    expect(runner).toContain(
-      `ENV PRISMA_QUERY_ENGINE_LIBRARY=/app/node_modules/.prisma/client/${muslEngine}`,
-    );
-    // Declared before the first COPY: a constant, so no layer changes with it.
-    expect(
-      runner.findIndex((line) =>
-        line.startsWith("ENV PRISMA_QUERY_ENGINE_LIBRARY="),
-      ),
-    ).toBeLessThan(runner.findIndex((line) => /^COPY /.test(line)));
+  it("leave no query engine for the Prisma CLI to point at (Prisma 7)", () => {
+    // Prisma 6 shipped a musl query engine and the CLI took the client's
+    // through PRISMA_QUERY_ENGINE_LIBRARY; Prisma 7 has none, and the schema
+    // has no binaryTargets to name one.
+    expect(api).not.toMatch(/PRISMA_QUERY_ENGINE_LIBRARY|libquery_engine/);
+    expect(read("prisma/schema.prisma")).not.toMatch(/^\s*binaryTargets\s*=/m);
   });
 
   it("copy the most stable first, and build/ last", () => {
@@ -380,6 +370,7 @@ describe("the API image's node_modules", () => {
       "COPY --from=builder --chown=nodejs:nodejs /app/infra/scripts/docker-entrypoint.sh ./docker-entrypoint.sh",
       "COPY --from=builder --chown=nodejs:nodejs /app/package.json ./package.json",
       "COPY --from=builder --chown=nodejs:nodejs /app/prisma ./prisma",
+      "COPY --from=builder --chown=nodejs:nodejs /app/prisma.config.ts ./prisma.config.ts",
       "COPY --from=builder --chown=nodejs:nodejs /app/build/src/modules ./src/modules",
       "COPY --from=builder --chown=nodejs:nodejs /app/build ./build",
     ]);

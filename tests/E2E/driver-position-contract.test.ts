@@ -1,6 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 
 import { DriverPositionRepository } from "@/modules/route/repositories/driver-position-repository";
@@ -17,6 +16,7 @@ import {
 } from "@/shared/time/business-day";
 
 import { seedFleetDriver } from "./support/fleet-driver-seed";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * The positions repository against Postgres and against its in-memory twin
@@ -29,7 +29,7 @@ import { seedFleetDriver } from "./support/fleet-driver-seed";
  * every read. The twin backs the tower's unit tests; if it drifted, those
  * tests would prove a tower that does not exist.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 const CARRIER = "018fe0c0-0000-7000-8000-00000000000a";
 const OTHER = "018fe0c0-0000-7000-8000-00000000000b";

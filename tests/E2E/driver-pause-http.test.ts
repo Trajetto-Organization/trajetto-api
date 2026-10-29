@@ -1,6 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 
 import { sign } from "jsonwebtoken";
@@ -15,6 +14,7 @@ import {
 import { seedFleetDriver, seedUser } from "./support/fleet-driver-seed";
 import { pauseTypeId } from "./support/pause-type-seed";
 import { seedJourneyRoute } from "./support/journey-route-seed";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * Driver pauses through the real application and a real database (decision
@@ -24,7 +24,7 @@ import { seedJourneyRoute } from "./support/journey-route-seed";
  * pause, and the office report — with every guard: driver-only writes,
  * office-only report, module, tenant and MASTER.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 let app: Awaited<typeof import("@/http")>["app"];
 

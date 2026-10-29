@@ -1,6 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 
 import { ImportRepository } from "@/modules/import/repositories/import-repository";
@@ -10,6 +9,7 @@ import { WebhookFanOutService } from "@/shared/integration/webhook-fan-out-servi
 
 import type { NotificationService } from "@/shared/services/notification-service";
 import type { ImportRecord } from "@/modules/import/dtos/import-dto";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * The undo, clicked twice — and the rows it deletes (IDEMP-13).
@@ -22,7 +22,7 @@ import type { ImportRecord } from "@/modules/import/dtos/import-dto";
  * was NOT part of the upload — taking the stop with it by cascade, out of a
  * route the dispatcher had already released.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 const CARRIER = "018fdca0-0000-7000-8000-00000000000a";
 const DISPATCHER = "018fdca0-0000-7000-8000-0000000000a1";

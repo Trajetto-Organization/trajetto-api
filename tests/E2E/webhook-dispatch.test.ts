@@ -1,6 +1,5 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
 import { createServer, type Server } from "node:http";
 import { createGzip } from "node:zlib";
 import type { AddressInfo } from "node:net";
@@ -14,6 +13,7 @@ import {
   signWebhookPayload,
   verifyWebhookSignature,
 } from "@/shared/integration/webhook-signature";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * The dispatcher against a real database and a real HTTP receiver.
@@ -29,7 +29,7 @@ import {
  * what arrives, and verification failing on our own retry is the failure mode
  * that costs a customer a week.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 const CARRIER = "018f8000-0000-7000-8000-00000000000a";
 

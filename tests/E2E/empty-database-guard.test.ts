@@ -4,6 +4,7 @@ import { resolve } from "node:path";
 
 import { PrismaClient } from "@prisma/client";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * The boot refuses to prepare an EMPTY production database on its own.
@@ -46,10 +47,7 @@ function admin(): PrismaClient {
   url.pathname = "/postgres";
   url.searchParams.delete("schema");
 
-  return new PrismaClient({
-    datasources: { db: { url: url.toString() } },
-    log: [],
-  });
+  return createPrismaClient({ log: [] }, { url: url.toString() });
 }
 
 beforeAll(async () => {

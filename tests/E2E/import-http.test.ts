@@ -1,6 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
 import { sign } from "jsonwebtoken";
 
 import { randomUUID } from "node:crypto";
@@ -10,6 +9,7 @@ import auth from "@/config/auth";
 import { readSpreadsheet } from "@/shared/delivery/spreadsheet-reader";
 import { importQueue } from "@/modules/import/services/import-queue";
 import { parseDeliverySpreadsheet } from "@/shared/delivery/spreadsheet-parser";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * The whole loop, over real HTTP: download the model, fill it in, upload it,
@@ -25,7 +25,7 @@ import { parseDeliverySpreadsheet } from "@/shared/delivery/spreadsheet-parser";
  * a client that calls response.json() on it gets a parse error that reads like
  * a server fault.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 let app: Awaited<typeof import("@/http")>["app"];
 

@@ -1,6 +1,7 @@
-import { PrismaClient } from "@prisma/client";
+import type pg from "pg";
+import type { PrismaClient } from "@prisma/client";
 
-import { withPoolReset } from "../src/shared/resilience/database-pool-reset";
+import { createDatabaseClient } from "../src/shared/database/database-client";
 
 /**
  * How long an interactive transaction may wait for a connection, and run.
@@ -11,7 +12,9 @@ import { withPoolReset } from "../src/shared/resilience/database-pool-reset";
  * route transition — was the first request to fail (P2028), and the reads it
  * lost to carried on. Ten seconds is five times that patience, and stays under
  * `pool_timeout` because nothing past it would count: the pool's own timeout
- * (P2024) ends the same wait first. A write can still give up before a read
+ * (pg-pool's "timeout exceeded when trying to connect", typed as
+ * DatabaseUnavailableError in src/shared/database/pg-driver.ts; P2024 under
+ * Prisma 6) ends the same wait first. A write can still give up before a read
  * that waits the full 20 s; what keeps both from waiting that long is that the
  * delivery and dashboard screens take at most two connections each (see
  * DeliveryRepository.operationSummary). Options passed on a single call still
@@ -20,41 +23,52 @@ import { withPoolReset } from "../src/shared/resilience/database-pool-reset";
 const TRANSACTION_OPTIONS = { maxWait: 10_000, timeout: 15_000 } as const;
 
 /**
- * Logged when Postgres closed a connection and the pool is being replaced.
- * Imported on that path only: scripts load this module without the app's
- * environment, and a log line must never be the reason a query fails.
+ * The application's client, on a pool sized and timed by DATABASE_URL
+ * (src/shared/database/pool-config.ts).
+ *
+ * Under Prisma 6 it was wrapped in withPoolReset, which closed the whole pool
+ * on P1017: Prisma 6.1's pool handed a connection Postgres had closed back
+ * out as healthy, and the replica answered 503 until restarted. pg's pool
+ * drops a connection that failed or died (and pg-driver.ts closes one that
+ * outlived socket_timeout), so there is nothing left to reset — and with the
+ * driver adapter, `$disconnect()` would end the pool under every request in
+ * flight. tests/E2E/database-reconnect.test.ts proves the recovery.
  */
-function logPoolReset(error: unknown): void {
-  import("../src/shared/logging/logger")
-    .then(({ logger }) =>
-      logger.warn(
-        { component: "database", err: error },
-        "Postgres closed a connection: replacing the connection pool",
-      ),
-    )
-    .catch(() => {});
-}
-
 const prismaClientSingleton = () => {
-  // See withPoolReset: without it, a connection Postgres closed could stay in
-  // the pool for good and every request answer 503 until a restart.
-  return withPoolReset(
-    new PrismaClient({
-      log: process.env.NODE_ENV === "development" ? ["query"] : [],
-      transactionOptions: TRANSACTION_OPTIONS,
-    }),
-    logPoolReset,
-  );
-};
+  const { client, pool } = createDatabaseClient({
+    log: process.env.NODE_ENV === "development" ? ["query"] : [],
+    transactionOptions: TRANSACTION_OPTIONS,
+  });
 
-type PrismaClientSingleton = ReturnType<typeof prismaClientSingleton>;
+  // Typed back as PrismaClient, as before: every repository takes one.
+  return { client: client as unknown as PrismaClient, pool };
+};
 
 const globalForPrisma = globalThis as unknown as {
-  prisma: PrismaClientSingleton | undefined;
+  prisma: PrismaClient | undefined;
+  prismaPool: (() => pg.Pool | null) | undefined;
 };
 
-const prisma = globalForPrisma.prisma ?? prismaClientSingleton();
-export default prisma;
-export { TRANSACTION_OPTIONS };
+/**
+ * A client a test put on globalThis before importing the app (the statement
+ * budgets count queries that way) is used as it is; its pool is not ours.
+ */
+const connection = globalForPrisma.prisma
+  ? {
+      client: globalForPrisma.prisma,
+      pool: globalForPrisma.prismaPool ?? (() => null),
+    }
+  : prismaClientSingleton();
 
-if (process.env.NODE_ENV !== "production") globalForPrisma.prisma = prisma;
+const prisma = connection.client;
+
+/** The pg Pool behind the client: /health/metrics and the minute log line. */
+const databasePool = connection.pool;
+
+export default prisma;
+export { TRANSACTION_OPTIONS, databasePool };
+
+if (process.env.NODE_ENV !== "production") {
+  globalForPrisma.prisma = prisma;
+  globalForPrisma.prismaPool = databasePool;
+}

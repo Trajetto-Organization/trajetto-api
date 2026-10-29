@@ -1,6 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 
 import { APP_BOOT_TIMEOUT_MS } from "../support/app-boot";
@@ -9,6 +8,7 @@ import {
   sweepToken,
   type CarrierIds,
 } from "./support/idor-sweep-seed";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * Hostile input on the real stack: what reaches PostgreSQL, what the parser
@@ -20,7 +20,7 @@ import {
  * level. Anyone with a session could fill the alerts with "broken release"
  * noise, one request at a time.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 let app: Awaited<typeof import("@/http")>["app"];
 let A: CarrierIds;

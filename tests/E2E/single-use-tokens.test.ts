@@ -9,6 +9,7 @@ import { UserTokensRepository } from "@/modules/user/repositories/user-tokens-re
 import { hashSingleUseToken } from "@/shared/security/single-use-token";
 
 import { ResetUserPasswordUseCase } from "@/modules/user/usecases/reset-user-password/reset-user-password-usecase";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * One link, one use — under real parallelism.
@@ -23,7 +24,7 @@ import { ResetUserPasswordUseCase } from "@/modules/user/usecases/reset-user-pas
  * `write-preconditions.test.ts` passed with the transaction entirely removed
  * until each attempt got its own client.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 const CARRIER = "018fe000-0000-7000-8000-0000000000b1";
 
@@ -108,7 +109,7 @@ async function userWithToken(kind: "reset" | "email" | "two-factor") {
 
 /** One client per attempt: anything less serialises the race away. */
 function racers(count: number): PrismaClient[] {
-  return Array.from({ length: count }, () => new PrismaClient());
+  return Array.from({ length: count }, () => createPrismaClient());
 }
 
 async function release(clients: PrismaClient[]): Promise<void> {

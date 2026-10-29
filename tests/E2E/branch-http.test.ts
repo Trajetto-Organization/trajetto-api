@@ -1,12 +1,12 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
 import { decode, sign } from "jsonwebtoken";
 
 import { randomUUID } from "node:crypto";
 
 import auth from "@/config/auth";
 import { hashSecret } from "@/shared/security/bcrypt-gate";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * Branches over real HTTP and Postgres.
@@ -21,7 +21,7 @@ import { hashSecret } from "@/shared/security/bcrypt-gate";
  *   cards and facet counts over the whole company (decision 8.8).
  * - Another company's branch is a 404, never a 403 that confirms it exists.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 let app: Awaited<typeof import("@/http")>["app"];
 

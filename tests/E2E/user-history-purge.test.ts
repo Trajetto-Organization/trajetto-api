@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { PrismaClient } from "@prisma/client";
 import { randomUUID } from "node:crypto";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * The nightly purge of bell notifications: what it deletes, and how far its
@@ -19,13 +20,13 @@ import { randomUUID } from "node:crypto";
  * app's own client (a logging client is put in place of the singleton before
  * the job is imported), with its real parameters.
  */
-const counted = new PrismaClient({
+const counted = createPrismaClient({
   log: [{ level: "query", emit: "event" }],
 });
 
 (globalThis as unknown as { prisma: PrismaClient }).prisma = counted;
 
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 const CARRIER = "018fdf50-0000-7000-8000-00000000000a";
 const USER = "018fdf50-0000-7000-8000-0000000000a1";

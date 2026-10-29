@@ -1,6 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 
 import { container } from "tsyringe";
@@ -16,6 +15,7 @@ import {
   seedFleetDriver,
   type FleetDriverSeed,
 } from "./support/fleet-driver-seed";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * Proving a delivery is reporting a DELIVERED occurrence (decision 14.3;
@@ -27,7 +27,7 @@ import {
  * `occurrence.reported`). Requirements, replays, races, the tower's approval
  * at the receipt's instant, tenant and role guards.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 const CARRIER = "018fe1d0-0000-7000-8000-00000000000a";
 const OTHER = "018fe1d0-0000-7000-8000-00000000000b";

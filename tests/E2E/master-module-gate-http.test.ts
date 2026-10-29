@@ -1,10 +1,10 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 
 import { sign } from "jsonwebtoken";
 import auth from "@/config/auth";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * The MASTER and the module gate, through the real application (decision
@@ -20,7 +20,7 @@ import auth from "@/config/auth";
  * enumerated from the published document so a new such route fails here
  * until its answer is added to the table below.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 let app: Awaited<typeof import("@/http")>["app"];
 

@@ -1,7 +1,5 @@
 import { afterAll, beforeAll, describe } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
-
 import { VehicleRepository } from "@/modules/vehicle/repositories/vehicle-repository";
 import { InMemoryVehicleRepository } from "@/modules/vehicle/repositories/in-memory/in-memory-vehicle-repository";
 
@@ -18,9 +16,10 @@ import {
   seedDriver,
   seedFuelType,
 } from "../contract/seed";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /** Decision 13.2: the vehicle contract against Postgres and the twin. */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 const prismaRepo = new VehicleRepository(prisma);
 const memory = new InMemoryVehicleRepository();

@@ -1,5 +1,5 @@
 import { AccountPayableCategory } from "@prisma/client";
-import { Decimal } from "@prisma/client/runtime/library";
+import { Decimal } from "@prisma/client/runtime/client";
 
 import type { SortOrder } from "@/shared/pagination/list-query";
 

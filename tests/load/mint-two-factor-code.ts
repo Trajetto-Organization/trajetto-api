@@ -1,3 +1,4 @@
+import { createPrismaClient } from "@/shared/database/database-client";
 /**
  * Replaces the pending two-factor code of one account with a code the browser
  * suite knows.
@@ -11,12 +12,11 @@
  * `hashOneTimeCode` the API verifies against. Nothing else about the flow is
  * bypassed: the challenge, the attempt counter and the expiry stay real.
  */
-import { PrismaClient } from "@prisma/client";
 
 import { hashOneTimeCode } from "../../src/shared/security/one-time-code";
 import { assertDisposableDatabase } from "./lib/disposable-database";
 
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 async function main(): Promise<void> {
   const [email, code] = process.argv.slice(2);

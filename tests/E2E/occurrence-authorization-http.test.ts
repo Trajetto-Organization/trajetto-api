@@ -2,7 +2,6 @@ import "@/shared";
 
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
 import { sign } from "jsonwebtoken";
 
 import { randomUUID } from "node:crypto";
@@ -14,6 +13,7 @@ import auth from "@/config/auth";
 import type { UploadService } from "@/shared/services/upload-service";
 
 import { fakeJpeg } from "./support/fleet-driver-seed";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * The occurrence form (decision 6.2) and the tower's authorization (6.3)
@@ -22,7 +22,7 @@ import { fakeJpeg } from "./support/fleet-driver-seed";
  * supersedes, the driver's day, and the walls — another company, a driver
  * token, a read-only profile.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 let app: Awaited<typeof import("@/http")>["app"];
 let uploads: UploadService;

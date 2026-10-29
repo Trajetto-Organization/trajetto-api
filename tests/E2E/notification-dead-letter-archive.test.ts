@@ -1,12 +1,12 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 
 import { sign } from "jsonwebtoken";
 import auth from "@/config/auth";
 
 import { cleanupNotificationPipelineJob } from "@/jobs/cron/cleanup-notification-pipeline-job";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * A failed delivery outlives the 30-day purge (OUTBOX-18, OBS-16).
@@ -22,7 +22,7 @@ import { cleanupNotificationPipelineJob } from "@/jobs/cron/cleanup-notification
  * Now the job copies each FAILED delivery to notification_dead_letter before
  * the purge, and the archive keeps it 90 days.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 let app: Awaited<typeof import("@/http")>["app"];
 

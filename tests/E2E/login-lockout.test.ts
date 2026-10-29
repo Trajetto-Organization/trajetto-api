@@ -1,6 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 
 import { hash } from "bcrypt";
@@ -9,6 +8,7 @@ import {
   LOGIN_LOCK_MS,
   MAX_FAILED_LOGINS,
 } from "@/shared/security/login-lockout-rules";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * The login's brake on password guessing, against the real database.
@@ -23,7 +23,7 @@ import {
  * increment under concurrency, the lock stamp, the conditional clear — and
  * that a failed login is not reported as an edit of the user.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 const CARRIER = "018fb000-0000-7000-8000-00000000b09a";
 const USER = "018fb000-0000-7000-8000-00000000b0a1";

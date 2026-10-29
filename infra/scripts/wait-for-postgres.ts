@@ -1,4 +1,4 @@
-import { PrismaClient } from "@prisma/client";
+import { createPrismaClient } from "../../src/shared/database/database-client";
 
 import { emptyDatabaseRefusal } from "./database-bootstrap-guard";
 
@@ -42,8 +42,10 @@ async function waitForPostgres(): Promise<void> {
   const deadline = Date.now() + MAX_WAIT_MS;
 
   // Its own client, disconnected at the end: this runs before the app exists,
-  // and a pool left open would outlive the script in the `run-s` chain.
-  const prisma = new PrismaClient({ log: [] });
+  // and a pool left open would outlive the script in the `run-s` chain. Built
+  // like the app's, so connect_timeout bounds each attempt (pg has no connect
+  // timeout of its own).
+  const prisma = createPrismaClient({ log: [] });
 
   let lastError: unknown = null;
   let answered = false;

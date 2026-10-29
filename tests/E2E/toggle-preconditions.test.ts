@@ -6,6 +6,7 @@ import { randomUUID } from "node:crypto";
 import { BusinessRepository } from "@/modules/business/repositories/business-repository";
 import { BranchRepository } from "@/modules/branch/repositories/branch-repository";
 import { UserRepository } from "@/modules/user/repositories/user-repository";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * Two people flipping the same switch, and only one flip happening.
@@ -23,7 +24,7 @@ import { UserRepository } from "@/modules/user/repositories/user-repository";
  * `write-preconditions.test.ts`: one client funnels everything through one
  * connection and serialises the race by accident.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 const CARRIER = "018fe000-0000-7000-8000-0000000000d1";
 const STAFF = "018fe000-0000-7000-8000-0000000000d2";
@@ -101,7 +102,7 @@ afterAll(async () => {
 
 /** One client per attempt: anything less serialises the race away. */
 function racers(count: number): PrismaClient[] {
-  return Array.from({ length: count }, () => new PrismaClient());
+  return Array.from({ length: count }, () => createPrismaClient());
 }
 
 async function release(clients: PrismaClient[]): Promise<void> {

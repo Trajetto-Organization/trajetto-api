@@ -1,6 +1,8 @@
 import database from "@/../infra/database";
 
-import { Prisma } from "@prisma/client";
+import { Prisma, type PrismaClient } from "@prisma/client";
+
+import { relatedTo, rowsByKey } from "@/shared/database/related-rows";
 
 import type {
   CursorPage,
@@ -41,12 +43,39 @@ const deliverySelect = {
   created_at: true,
   updated_at: true,
 
+  // The latest stop's route, read by withStopRoutes for the stops present.
   stops: {
     orderBy: { created_at: "desc" as const },
     take: 1,
-    select: { route: { select: { id: true, code: true } } },
+    select: { routeId: true },
   },
 };
+
+/**
+ * The route of each delivery's latest stop, read once for the page and not
+ * at all when no delivery is on a route. As a nested select, Prisma 7
+ * queried it under a page of stopless deliveries — the usual page of an
+ * integration that is not routing (shared/database/related-rows.ts).
+ */
+async function withStopRoutes<
+  Row extends { stops: Array<{ routeId: string }> },
+>(client: Pick<PrismaClient, "route">, rows: Row[]) {
+  const routes = await rowsByKey(
+    rows.flatMap((row) => row.stops.map((stop) => stop.routeId)),
+    (ids) =>
+      client.route.findMany({
+        where: { id: { in: ids } },
+        select: { id: true, code: true },
+      }),
+  );
+
+  return rows.map((row) => ({
+    ...row,
+    stops: row.stops.map((stop) => ({
+      route: relatedTo(routes, stop.routeId),
+    })),
+  }));
+}
 
 const routeSelect = {
   id: true,
@@ -212,7 +241,9 @@ class IntegrationRepository implements IIntegrationRepository {
 
     const { page, next_cursor } = cursorPage(rows, limit);
 
-    return { data: page.map(toPublicDelivery), next_cursor };
+    const data = await withStopRoutes(this.prisma, page);
+
+    return { data: data.map(toPublicDelivery), next_cursor };
   }
 
   async findDelivery(
@@ -224,7 +255,11 @@ class IntegrationRepository implements IIntegrationRepository {
       select: deliverySelect,
     });
 
-    return found ? toPublicDelivery(found) : null;
+    if (!found) return null;
+
+    const [delivery] = await withStopRoutes(this.prisma, [found]);
+
+    return toPublicDelivery(delivery);
   }
 
   async listRoutes({

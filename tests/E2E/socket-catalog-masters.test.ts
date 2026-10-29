@@ -1,6 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -9,6 +8,7 @@ import { sign } from "jsonwebtoken";
 import auth from "@/config/auth";
 
 import { socketClientEntry } from "./support/socket-client";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * `catalogChanged` reaches the MASTER's /admin tabs (decision 2.3, REV-22).
@@ -19,7 +19,7 @@ import { socketClientEntry } from "./support/socket-client";
  * MASTER sockets hear every company's hint (the web keeps the ones of the
  * company it shows); another company's staff still hears nothing.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 const CARRIER = "018fe7c0-0000-7000-8000-00000000000a";
 const OTHER = "018fe7c0-0000-7000-8000-00000000000b";

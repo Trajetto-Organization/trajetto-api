@@ -1,8 +1,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
-
 import { seedFleetDriver } from "./support/fleet-driver-seed";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * One flush of positions is stored whole or not at all, and one point the
@@ -23,7 +22,7 @@ import { seedFleetDriver } from "./support/fleet-driver-seed";
  *   reached back past it got a 500 for all of it, kept the batch, and sent it
  *   again forever.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 const CARRIER = "018fdd31-0000-7000-8000-00000000000a";
 

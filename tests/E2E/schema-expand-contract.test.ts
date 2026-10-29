@@ -1,6 +1,6 @@
 import { afterAll, describe, expect, it } from "vitest";
 
-import { Prisma, PrismaClient } from "@prisma/client";
+import { Prisma } from "@prisma/client";
 
 import { readFileSync, readdirSync } from "node:fs";
 import { resolve } from "node:path";
@@ -14,6 +14,8 @@ import { COLUMN_DEFAULTS_BY_TABLE } from "@/shared/in-memory/column-defaults";
 import { DriverPauseRepository } from "@/modules/driver-pause/repositories/driver-pause-repository";
 
 import { pauseTypeId } from "./support/pause-type-seed";
+import { createPrismaClient } from "@/shared/database/database-client";
+import { uniqueTargetOf } from "@/shared/errors/prisma-error-meta";
 
 /**
  * The database objects the next release's code is written against.
@@ -28,7 +30,7 @@ import { pauseTypeId } from "./support/pause-type-seed";
  * Like schema-indexes.test.ts, it asserts what the migration FILES produce: the
  * environment builds a fresh database per file with `migrate deploy`.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 afterAll(async () => {
   await prisma.$disconnect();
@@ -892,10 +894,9 @@ describe("final phase: uniques are per company (decision 8.1)", () => {
       create.then(
         () => null,
         (error: Prisma.PrismaClientKnownRequestError) =>
-          [
-            error.code,
-            (error.meta?.target as string[] | undefined)?.join(","),
-          ].join(" "),
+          // The index that refused: Prisma 7 names it (Prisma 6 named its
+          // columns, "businessId,cpf"); the per-company key either way.
+          [error.code, String(uniqueTargetOf(error))].join(" "),
       );
 
     expect(
@@ -904,28 +905,28 @@ describe("final phase: uniques are per company (decision 8.1)", () => {
           data: { ...driverData(carrier, "2"), cnh: "other-cnh" },
         }),
       ),
-    ).toBe("P2002 businessId,cpf");
+    ).toBe("P2002 driver_businessId_cpf_key");
     expect(
       await refusedOn(
         prisma.driver.create({
           data: { ...driverData(carrier, "3"), cpf: "other-cpf" },
         }),
       ),
-    ).toBe("P2002 businessId,cnh");
+    ).toBe("P2002 driver_businessId_cnh_key");
     expect(
       await refusedOn(
         prisma.vehicle.create({
           data: { ...(await vehicleData(carrier)), renavam: "other-renavam" },
         }),
       ),
-    ).toBe("P2002 businessId,license_plate");
+    ).toBe("P2002 vehicle_businessId_license_plate_key");
     expect(
       await refusedOn(
         prisma.vehicle.create({
           data: { ...(await vehicleData(carrier)), license_plate: "XYZ9Z99" },
         }),
       ),
-    ).toBe("P2002 businessId,renavam");
+    ).toBe("P2002 vehicle_businessId_renavam_key");
     expect(
       await refusedOn(
         prisma.branch.create({
@@ -935,7 +936,7 @@ describe("final phase: uniques are per company (decision 8.1)", () => {
           },
         }),
       ),
-    ).toBe("P2002 businessId,corporate_reason");
+    ).toBe("P2002 branch_businessId_corporate_reason_key");
     expect(
       await refusedOn(
         prisma.branch.create({
@@ -945,7 +946,7 @@ describe("final phase: uniques are per company (decision 8.1)", () => {
           },
         }),
       ),
-    ).toBe("P2002 businessId,email");
+    ).toBe("P2002 branch_businessId_email_key");
   });
 
   it("keeps the branch CNPJ national", async () => {
@@ -1110,11 +1111,11 @@ describe("final phase: one open pause per driver", () => {
         mealType,
       );
 
-    // Prisma's raw error carries Postgres's key detail, not the index name:
-    // ("driverId") alone is driver_pause_one_open_idx.
+    // Prisma 7's raw error names the index that refused (Prisma 6 carried
+    // Postgres' key detail instead, `Key ("driverId")=`).
     await start("pause-1", "start-1");
     await expect(start("pause-2", "start-2")).rejects.toThrow(
-      /Key \("driverId"\)=/,
+      /driver_pause_one_open_idx/,
     );
 
     await prisma.$executeRawUnsafe(
@@ -1128,7 +1129,7 @@ describe("final phase: one open pause per driver", () => {
     // open-pause rule is not what refuses it) lands once.
     await expect(
       start("pause-4", "start-1", "2026-09-28 12:00:00"),
-    ).rejects.toThrow(/Key \("businessId", start_submission_id\)=/);
+    ).rejects.toThrow(/driver_pause_businessId_start_submission_id_key/);
   });
 });
 
@@ -1575,7 +1576,7 @@ describe("meeting: occurrence type rules in the database (14.3, 14.4)", () => {
         category: "DELIVERED",
         system_key: "delivered_default",
       }),
-    ).rejects.toThrow(/Key \("businessId", system_key\)=/);
+    ).rejects.toThrow(/occurrence_type_businessId_system_key_key/);
 
     await expect(
       insertType(other, {
@@ -2100,9 +2101,9 @@ describe("meeting: one OPEN ticket per delivery and per route (14.5)", () => {
       );
     });
 
-    expect(outcome).toMatch(
-      /Key \("deliveryId"\)=\(ticket-delivery\) already exists/,
-    );
+    // The per-delivery open-ticket index (Prisma 6's message carried the key
+    // detail, `Key ("deliveryId")=(ticket-delivery)`; Prisma 7's names it).
+    expect(outcome).toMatch(/support_ticket_open_delivery_uq/);
   });
 });
 

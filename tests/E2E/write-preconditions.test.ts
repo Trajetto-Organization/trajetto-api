@@ -1,12 +1,12 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 
 import { DeliveryRepository } from "@/modules/delivery/repositories/delivery-repository";
 import { VehicleRepository } from "@/modules/vehicle/repositories/vehicle-repository";
 import { AccountPayableRepository } from "@/modules/account-payable/repositories/account-payable-repository";
 import { UserRepository } from "@/modules/user/repositories/user-repository";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * Two requests at the same moment, and only one may win.
@@ -19,7 +19,7 @@ import { UserRepository } from "@/modules/user/repositories/user-repository";
  * read-then-write in a place where the product uses a precondition on every
  * neighbour.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 const CARRIER = "018fe000-0000-7000-8000-00000000000a";
 
@@ -221,7 +221,7 @@ describe("the contracted fleet under concurrency", () => {
      * attempt is ten real connections competing, which is what happens with
      * ten replicas serving ten requests.
      */
-    const clients = Array.from({ length: 10 }, () => new PrismaClient());
+    const clients = Array.from({ length: 10 }, () => createPrismaClient());
 
     const attempts = await Promise.all(
       clients.map((client, n) =>
@@ -391,7 +391,7 @@ describe("deleting MASTERs at the same time", () => {
 
     // Separate connections, for the same reason as the fleet limit: with a
     // cliente só as chamadas serializam por acidente.
-    const clients = all.map(() => new PrismaClient());
+    const clients = all.map(() => createPrismaClient());
 
     await Promise.all(
       all.map((master, index) =>

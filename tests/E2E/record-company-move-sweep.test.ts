@@ -1,6 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
 import Redis from "ioredis";
 import { randomUUID } from "node:crypto";
 
@@ -15,6 +14,7 @@ import {
   sweepToken,
   type CarrierIds,
 } from "./support/idor-sweep-seed";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * No edit moves a record to another company (decision 16.100), checked over
@@ -40,7 +40,7 @@ import {
  * businessId check until it is listed); a reference field whose name this
  * file does not know fails the coverage test, naming it.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 let app: Awaited<typeof import("@/http")>["app"];
 let redis: Redis;

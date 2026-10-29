@@ -402,11 +402,23 @@ class UserRepository implements IUserRepository {
     return remember(`user:${userId}`, () => this.loadUserById(userId));
   }
 
+  /**
+   * The user with its company, then its access profile and its driver, each
+   * read only when its key is set.
+   *
+   * One `include` brought all of them, and Prisma 7 runs every relation of
+   * an include even when the foreign key is null (`profile_access WHERE id =
+   * NULL`, `branch IN (NULL)`): seven statements on every authenticated
+   * request, where Prisma 6 skipped the empty ones and spent three to five.
+   * The company stays in the user's read — every account but a master's has
+   * one, so it is one operation as before (route-connection-fan-out counts
+   * them) — and the profile and the driver are read behind their keys. It
+   * costs what Prisma 6 spent, with the same shape: a missing relation is
+   * null. A master, with no company, pays the two empty company lookups.
+   */
   private async loadUserById(userId: string): Promise<User | null> {
-    const findUserById = await this.prisma.user.findUnique({
-      where: {
-        id: userId,
-      },
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
       include: {
         business: {
           select: {
@@ -419,36 +431,65 @@ class UserRepository implements IUserRepository {
             },
           },
         },
-        profileAccess: {
-          select: {
-            name: true,
-            permissions: {
-              select: {
-                id: true,
-                permissionKey: true,
-                action: true,
-                canRead: true,
-                canWrite: true,
-              },
-            },
-          },
-        },
-        // Everything the session check reads about the driver, so
-        // assertSessionEligible does not load the driver a second time (with
-        // its branch and its user) on every request a driver makes.
-        driver: {
+      },
+    });
+
+    if (!user) return null;
+
+    const profileAccess = await this.loadProfilePermissions(
+      user.profileAccessId,
+    );
+
+    const driver = user.driverId
+      ? await this.loadSessionDriver(user.driverId)
+      : null;
+
+    return { ...user, profileAccess, driver };
+  }
+
+  /** The access profile's name and permissions; no query without one. */
+  private async loadProfilePermissions(profileAccessId: string | null) {
+    if (!profileAccessId) return null;
+
+    return this.prisma.profileAccess.findUnique({
+      where: { id: profileAccessId },
+      select: {
+        name: true,
+        permissions: {
           select: {
             id: true,
-            status: true,
-            businessId: true,
-            branchId: true,
-            branch: { select: { is_active: true } },
+            permissionKey: true,
+            action: true,
+            canRead: true,
+            canWrite: true,
           },
         },
       },
     });
+  }
 
-    return findUserById;
+  /**
+   * Everything the session check reads about the driver, so
+   * assertSessionEligible does not load the driver a second time (with its
+   * branch and its user) on every request a driver makes. The branch only
+   * when the driver has one.
+   */
+  private async loadSessionDriver(driverId: string) {
+    const driver = await this.prisma.driver.findUnique({
+      where: { id: driverId },
+      select: { id: true, status: true, businessId: true, branchId: true },
+    });
+
+    if (!driver) return null;
+
+    const branch = driver.branchId
+      ? await this.prisma.branch.findUnique({
+          where: { id: driver.branchId },
+          select: { is_active: true },
+        })
+      : null;
+
+    return { ...driver, branch };
   }
 
   async findUsersByBusiness(businessId: string): Promise<User[]> {
@@ -801,25 +842,17 @@ class UserRepository implements IUserRepository {
       where: {
         driverId,
       },
-      include: {
-        profileAccess: {
-          select: {
-            name: true,
-            permissions: {
-              select: {
-                id: true,
-                permissionKey: true,
-                action: true,
-                canRead: true,
-                canWrite: true,
-              },
-            },
-          },
-        },
-      },
     });
 
-    return user;
+    if (!user) return null;
+
+    // A driver's user rarely has a profile: read it behind its key, as the
+    // session does (Prisma 7 queries it, and its permissions, under a null).
+    const profileAccess = await this.loadProfilePermissions(
+      user.profileAccessId,
+    );
+
+    return { ...user, profileAccess };
   }
 
   async updateAvatar(

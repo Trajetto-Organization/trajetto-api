@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe } from "vitest";
 
-import { PrismaClient, type Prisma } from "@prisma/client";
+import { type Prisma } from "@prisma/client";
 
 import { DeliveryRepository } from "@/modules/delivery/repositories/delivery-repository";
 import { InMemoryDeliveryRepository } from "@/modules/delivery/repositories/in-memory/in-memory-delivery-repository";
@@ -19,9 +19,10 @@ import {
   seedUser,
   seedVehicle,
 } from "../contract/seed";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /** Decision 13.2: the delivery contract against Postgres and the twin. */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 const prismaRepo = new DeliveryRepository(prisma);
 const memory = new InMemoryDeliveryRepository();

@@ -1,6 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 
 import { container } from "tsyringe";
@@ -8,6 +7,7 @@ import { container } from "tsyringe";
 import { RouteRepository } from "@/modules/route/repositories/route-repository";
 import { UpdateDeliveryStatusUseCase } from "@/modules/delivery/usecases/update-delivery-status/update-delivery-status-usecase";
 import { AppError } from "@/shared/errors/AppError";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * A delivery resolved on a running route at the instant the route is
@@ -26,7 +26,7 @@ import { AppError } from "@/shared/errors/AppError";
  * transitionRoute — because that pause is the whole race, and a test that
  * cannot hold it open proves nothing.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 const repository = new RouteRepository(prisma);
 
 const CARRIER = "018fde40-0000-7000-8000-00000000000a";

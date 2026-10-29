@@ -1,6 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 
 import { container } from "tsyringe";
@@ -12,6 +11,7 @@ import {
   seedFleetDriver,
   type FleetDriverSeed,
 } from "./support/fleet-driver-seed";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * A proven delivery always reaches the review queue (INV-08).
@@ -26,7 +26,7 @@ import {
  * Simulated with a trigger that refuses the card for one delivery, the way a
  * failing statement at that exact point would.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 const BUSINESS = "018fd951-0000-7000-8000-00000000000a";
 

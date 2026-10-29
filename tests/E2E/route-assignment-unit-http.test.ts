@@ -1,6 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
 import { sign } from "jsonwebtoken";
 
 import { randomUUID } from "node:crypto";
@@ -10,6 +9,7 @@ import auth from "@/config/auth";
 import { OperationDayRepository } from "@/modules/route/repositories/operation-day-repository";
 import { PLANNING_TIMELINE_EVENTS_ENABLED } from "@/modules/route/usecases/shared/route-plan-rules";
 import { operationDay } from "@/shared/route/operation-day-rules";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * The route as the unit of assignment (decision 14.7) over real HTTP and a
@@ -27,7 +27,7 @@ import { operationDay } from "@/shared/route/operation-day-rules";
  *   field, and the guards as wired: another company, a read-only profile and
  *   a driver token.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 let app: Awaited<typeof import("@/http")>["app"];
 

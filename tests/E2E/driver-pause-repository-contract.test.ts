@@ -1,12 +1,11 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
-
 import { DriverPauseRepository } from "@/modules/driver-pause/repositories/driver-pause-repository";
 import { InMemoryDriverPauseRepository } from "@/modules/driver-pause/repositories/in-memory/in-memory-driver-pause-repository";
 import type { IDriverPauseRepository } from "@/modules/driver-pause/repositories/IDriver-pause-repository";
 import type { DriverPause } from "@/modules/driver-pause/dtos/driver-pause-dto";
 import { pauseTypeId } from "./support/pause-type-seed";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * The pause repository against Postgres and against its in-memory twin
@@ -17,7 +16,7 @@ import { pauseTypeId } from "./support/pause-type-seed";
  * the pause routes, and the twin must refuse the same inserts, in the same
  * order Postgres checks the indexes (start key, end key, one open pause).
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 const COMPANY = "018fe1a0-0000-7000-8000-00000000000a";
 const OTHER = "018fe1a0-0000-7000-8000-00000000000b";

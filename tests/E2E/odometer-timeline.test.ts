@@ -1,6 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 
 import { container } from "tsyringe";
@@ -12,6 +11,7 @@ import {
   seedFleetDriver,
   type FleetDriverSeed,
 } from "./support/fleet-driver-seed";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * A fueling that arrives after the records that came after it (GAP5-10).
@@ -28,7 +28,7 @@ import {
  * never lowers the vehicle's mileage. Everything the old rule accepted is
  * still accepted exactly as before.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 let app: Awaited<typeof import("@/http")>["app"];
 let seed: FleetDriverSeed;

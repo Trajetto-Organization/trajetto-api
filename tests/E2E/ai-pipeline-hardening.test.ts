@@ -9,7 +9,7 @@ import {
   vi,
 } from "vitest";
 
-import { Prisma, PrismaClient } from "@prisma/client";
+import { Prisma } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 import { container } from "tsyringe";
 
@@ -38,6 +38,7 @@ import {
   type FleetDriverSeed,
 } from "./support/fleet-driver-seed";
 import { seedProofCard } from "./support/proof-card-seed";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * The AI pipeline from the provider's TEXT to the record, with the real
@@ -56,7 +57,7 @@ import { seedProofCard } from "./support/proof-card-seed";
  */
 vi.mock("@/websocket", () => ({ sendAIVerificationEvent: vi.fn() }));
 
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 const pipeline = AIAnalysisPipelineService.getInstance() as unknown as {
   provider: unknown;
@@ -1153,23 +1154,28 @@ describe("a receipt, transcribed and compared in code (decision 6.9)", () => {
         },
       });
 
-    const spy = vi
-      .spyOn(database, "$transaction")
-      .mockImplementation(((work: unknown, options?: unknown) =>
-        typeof work === "function"
-          ? originalTransaction(
-              (tx: object) =>
-                (work as (client: object) => Promise<unknown>)(
-                  failCardWriteOnce(tx),
-                ),
-              options as never,
-            )
-          : originalTransaction(work as never, options as never)) as never);
+    // Swapped by assignment, not vi.spyOn: Prisma 7's client is a Proxy
+    // whose property descriptors carry no value, so mockRestore (which
+    // redefines the property from its descriptor) left $transaction undefined
+    // for the rest of the file.
+    const client = database as unknown as { $transaction: unknown };
+    const ownTransaction = client.$transaction;
+
+    client.$transaction = ((work: unknown, options?: unknown) =>
+      typeof work === "function"
+        ? originalTransaction(
+            (tx: object) =>
+              (work as (client: object) => Promise<unknown>)(
+                failCardWriteOnce(tx),
+              ),
+            options as never,
+          )
+        : originalTransaction(work as never, options as never)) as never;
 
     try {
       await pipeline.runCycle();
     } finally {
-      spy.mockRestore();
+      client.$transaction = ownTransaction;
     }
 
     // The injected failure really happened (it is what this case is about).

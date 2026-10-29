@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { Prisma, PrismaClient } from "@prisma/client";
+import { Prisma } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 
 import { sign } from "jsonwebtoken";
@@ -11,6 +11,7 @@ import {
   businessDayRange,
   dateOnlyFromKey,
 } from "@/shared/time/business-day";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * The overview, the "Operação de hoje" block and the monitoring summary,
@@ -31,7 +32,7 @@ import {
  * minute before its midnight is yesterday for the company and today for
  * either of the other two calendars (DLVP-OPS-1).
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 let app: Awaited<typeof import("@/http")>["app"];
 

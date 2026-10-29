@@ -1,6 +1,5 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
 import { sign } from "jsonwebtoken";
 
 import { randomUUID } from "node:crypto";
@@ -12,6 +11,7 @@ import { businessDayRange } from "@/shared/time/business-day";
 import type { UploadService } from "@/shared/services/upload-service";
 
 import { fakeJpeg } from "./support/fleet-driver-seed";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * Editing a refueling that already happened (FLEET-FUEL-1), over real HTTP.
@@ -27,7 +27,7 @@ import { fakeJpeg } from "./support/fleet-driver-seed";
  * previous-fueling lookup behind the details dialog works for the MASTER
  * without opening another company's history.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 let app: Awaited<typeof import("@/http")>["app"];
 

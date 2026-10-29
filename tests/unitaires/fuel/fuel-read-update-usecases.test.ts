@@ -2,7 +2,7 @@ import "reflect-metadata";
 
 import { describe, expect, it, vi } from "vitest";
 
-import { Decimal } from "@prisma/client/runtime/library";
+import { Decimal } from "@prisma/client/runtime/client";
 
 import { GetPreviousFuelUseCase } from "@/modules/fuel/usecases/get-previous-fuel/get-previous-fuel-usecase";
 import { SearchFuelByVehicleCursorUseCase } from "@/modules/fuel/usecases/search-fuel-by-vehicle-cursor/search-fuel-by-vehicle-cursor-usecase";

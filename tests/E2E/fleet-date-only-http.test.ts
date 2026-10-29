@@ -1,6 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 
 import { container } from "tsyringe";
@@ -14,6 +13,7 @@ import {
   type FleetDriverSeed,
 } from "./support/fleet-driver-seed";
 import { seedCarrier, seedProfile, seedUser } from "./support/fleet-maint-seed";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * Fleet records dated with a bare day ("YYYY-MM-DD"), over HTTP and Postgres.
@@ -29,7 +29,7 @@ import { seedCarrier, seedProfile, seedUser } from "./support/fleet-maint-seed";
  * A day is now stored as the instant it starts in the company's zone, the
  * instant the web's picker sends.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 let app: Awaited<typeof import("@/http")>["app"];
 let seed: FleetDriverSeed;

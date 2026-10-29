@@ -9,10 +9,11 @@ import {
   vi,
 } from "vitest";
 
-import { Prisma, PrismaClient } from "@prisma/client";
+import { Prisma } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 // The reader is "configured" so AIAnalysisService queues; the pipeline's
 // wake is stubbed below, and every read goes to a FakeImageReader.
@@ -68,7 +69,7 @@ import { seedProofCard } from "./support/proof-card-seed";
  * and what OCR does not judge (signature, fraud). Real Postgres: the queue,
  * the ledger and the records are the product's own.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 const pipeline = AIAnalysisPipelineService.getInstance() as unknown as {
   provider: unknown;

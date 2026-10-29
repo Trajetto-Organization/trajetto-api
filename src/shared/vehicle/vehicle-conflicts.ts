@@ -1,3 +1,5 @@
+import { uniqueTargetOf } from "@/shared/errors/prisma-error-meta";
+
 /**
  * A unique-constraint violation on a vehicle write, told apart by column.
  *
@@ -27,13 +29,14 @@ function isUniqueViolation(error: unknown): error is {
 
 /**
  * The vehicle column a P2002 names, or null for any other error. `target` is
- * the list of columns (`["businessId", "license_plate"]`) or, on some
- * drivers, the index name; both spellings contain the column.
+ * the list of columns (`["businessId", "license_plate"]`, Prisma 6) or the
+ * index name (`vehicle_businessId_license_plate_key`, Prisma 7); both
+ * spellings contain the column.
  */
 function vehicleUniqueFieldOf(error: unknown): VehicleUniqueField | null {
   if (!isUniqueViolation(error)) return null;
 
-  const target = error.meta?.target;
+  const target = uniqueTargetOf(error);
   const text = Array.isArray(target) ? target.join(",") : String(target ?? "");
 
   if (text.includes("license_plate")) return "license_plate";

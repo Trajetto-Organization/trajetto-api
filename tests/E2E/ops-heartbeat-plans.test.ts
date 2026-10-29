@@ -1,9 +1,10 @@
 import { afterAll, describe, expect, it } from "vitest";
 
-import { Prisma, PrismaClient } from "@prisma/client";
+import { Prisma } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 
 import { aiCredentialFailuresSql } from "@/shared/health/operational-snapshot";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * What the ops heartbeat (OBS-03) costs, once a minute, forever.
@@ -20,7 +21,7 @@ import { aiCredentialFailuresSql } from "@/shared/health/operational-snapshot";
  * applies" shows as a Seq Scan) and a GENERIC plan, the one a reused prepared
  * statement ends up with.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 interface PlanNode {
   "Node Type": string;

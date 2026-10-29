@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { Prisma, PrismaClient } from "@prisma/client";
+import { Prisma } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 
 import { DriverRepository } from "@/modules/driver/repositories/driver-repository";
@@ -16,6 +16,8 @@ import type {
 import { DriverHasOpenRoutesError } from "@/modules/driver/usecases/errors/driver-has-open-routes-error";
 import { summarizeDriverList } from "@/modules/driver/usecases/list-driver/driver-list";
 import { pauseTypeId } from "./support/pause-type-seed";
+import { createPrismaClient } from "@/shared/database/database-client";
+import { uniqueTargetOf } from "@/shared/errors/prisma-error-meta";
 
 /**
  * One suite, two implementations (decision 13.2): the Prisma repository
@@ -24,7 +26,7 @@ import { pauseTypeId } from "./support/pause-type-seed";
  * deactivation guard, the picker and the export. A divergence here is a unit
  * test somewhere passing on behaviour the database does not have.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 const A = "018fe900-0000-7000-8000-00000000000a";
 const B = "018fe900-0000-7000-8000-00000000000b";
@@ -340,7 +342,8 @@ describe.each(both)("lookups and uniqueness (%s)", (_label, repo) => {
 
     const error = await attempt.catch((reason) => reason);
 
-    expect(JSON.stringify(error.meta?.target)).toContain("cpf");
+    // Prisma 6 named the columns, Prisma 7 the index; both carry "cpf".
+    expect(JSON.stringify(uniqueTargetOf(error))).toContain("cpf");
   });
 });
 

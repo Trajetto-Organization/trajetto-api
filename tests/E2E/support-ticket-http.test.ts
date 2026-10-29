@@ -2,12 +2,12 @@ import "@/shared";
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
 import { sign } from "jsonwebtoken";
 
 import { randomUUID } from "node:crypto";
 
 import auth from "@/config/auth";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * Support tickets (decision 14.5) over real HTTP and Postgres: the report
@@ -16,7 +16,7 @@ import auth from "@/config/auth";
  * and who closed, messages land in the ticket, and the walls — another
  * company, another driver, a read-only profile, the MASTER.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 let app: Awaited<typeof import("@/http")>["app"];
 

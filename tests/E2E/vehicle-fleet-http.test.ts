@@ -1,11 +1,11 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
 import { sign } from "jsonwebtoken";
 
 import { randomUUID } from "node:crypto";
 
 import auth from "@/config/auth";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * The fleet catalogue over real HTTP and Postgres (fleet-vehicle package):
@@ -16,7 +16,7 @@ import auth from "@/config/auth";
  * the walls around all of it: another company's rows, ids and names never
  * cross, and only who may read the fleet reads it.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 let app: Awaited<typeof import("@/http")>["app"];
 

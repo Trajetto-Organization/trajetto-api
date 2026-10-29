@@ -1,6 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
 import { sign } from "jsonwebtoken";
 import { randomUUID } from "node:crypto";
 
@@ -11,6 +10,7 @@ import {
   REVERSAL_BATCH_SIZE,
   REVERSAL_STALE_AFTER_MS,
 } from "@/modules/import/services/import-reversal";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * Undoing a big upload on Postgres, through the HTTP route.
@@ -26,7 +26,7 @@ import {
  * rows the undo must keep, a crash halfway that a retry resumes without
  * announcing anything twice, and a run that lost its lease.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 let app: Awaited<typeof import("@/http")>["app"];
 

@@ -1,12 +1,12 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 
 import { SupportTicketRepository } from "@/modules/chat/repositories/support-ticket-repository";
 import { DeliveryRepository } from "@/modules/delivery/repositories/delivery-repository";
 import { SEARCH_PREFILTER_CAP } from "@/modules/delivery/repositories/delivery-search";
 import { occurrenceFeedWhere } from "@/modules/delivery/usecases/list-occurrences/occurrence-feed";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * The occurrence feed's search and the support inbox's search through the
@@ -21,9 +21,11 @@ import { occurrenceFeedWhere } from "@/modules/delivery/usecases/list-occurrence
  * selective term the page and its counts no longer join the recipient or the
  * type/driver name for every row of the company.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
-const capture = new PrismaClient({ log: [{ emit: "event", level: "query" }] });
+const capture = createPrismaClient({
+  log: [{ emit: "event", level: "query" }],
+});
 const sent: Array<{ query: string; params: string }> = [];
 
 capture.$on("query", (event) => {

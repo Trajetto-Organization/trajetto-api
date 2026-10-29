@@ -1,12 +1,12 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
 import { decode, sign } from "jsonwebtoken";
 
 import { randomUUID } from "node:crypto";
 
 import auth from "@/config/auth";
 import { hashSecret } from "@/shared/security/bcrypt-gate";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * Honest statuses on the company and branch routes (decision 11.3), over
@@ -24,7 +24,7 @@ import { hashSecret } from "@/shared/security/bcrypt-gate";
  *
  * Another company's branch keeps answering exactly like a missing one.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 let app: Awaited<typeof import("@/http")>["app"];
 

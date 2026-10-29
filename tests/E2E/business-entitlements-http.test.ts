@@ -1,10 +1,10 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
 import { sign } from "jsonwebtoken";
 import { randomUUID } from "node:crypto";
 
 import auth from "@/config/auth";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * The company's plan as the "Limites de Uso" card reads it, over HTTP and
@@ -17,7 +17,7 @@ import auth from "@/config/auth";
  * the response schema does not declare, so only a real request proves the
  * breakdown reaches the browser.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 let app: Awaited<typeof import("@/http")>["app"];
 

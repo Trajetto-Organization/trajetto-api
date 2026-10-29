@@ -1,7 +1,5 @@
 import { afterAll, beforeAll, describe } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
-
 import { ActivityRepository } from "@/modules/activity/repositories/activity-repository";
 import { InMemoryActivityRepository } from "@/modules/activity/repositories/in-memory/in-memory-activity-repository";
 
@@ -13,9 +11,10 @@ import {
 } from "../contract/repositories/activity.contract";
 import { KINDS, type Kind } from "../contract/support";
 import { seedBusiness, seedUser } from "../contract/seed";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /** Decision 13.2: the activity contract against Postgres and the twin. */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 const memory = new InMemoryActivityRepository();
 
 const harnesses: Record<Kind, ActivityHarness> = {

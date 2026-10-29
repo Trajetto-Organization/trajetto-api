@@ -1,6 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 
 import { AIAnalysisPipelineService } from "@/shared/ai/ai-analysis-pipeline-service";
@@ -12,6 +11,7 @@ import {
 } from "@/shared/ai/testing/fake-image-reader";
 import { quotaPeriodFor } from "@/shared/ai/ai-period";
 import { computeIdempotencyKey } from "@/shared/ai/ai-rules";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /** The period key of now, in the seeded companies' (default) zone. */
 const periodStartFor = (instant: Date) =>
@@ -30,7 +30,7 @@ const periodStartFor = (instant: Date) =>
  */
 vi.mock("@/websocket", () => ({ sendAIVerificationEvent: vi.fn() }));
 
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 const service = AIAnalysisService.getInstance() as unknown as {
   createRequest: (

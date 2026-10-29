@@ -1,6 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 
 import { container } from "tsyringe";
@@ -16,6 +15,7 @@ import {
   seedFleetDriver,
   type FleetDriverSeed,
 } from "./support/fleet-driver-seed";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * What the app's outbox actually does, against a real database: send, lose
@@ -33,7 +33,7 @@ import {
  * schema on version N+1 must not turn a fueling that exists into a red
  * "failed" item on the driver's phone — and, worse, a retyped duplicate.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 let app: Awaited<typeof import("@/http")>["app"];
 let seed: FleetDriverSeed;

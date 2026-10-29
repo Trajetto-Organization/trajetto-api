@@ -8,7 +8,7 @@ import {
   vi,
 } from "vitest";
 
-import { Prisma, PrismaClient } from "@prisma/client";
+import { Prisma } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 
 import { UserRepository } from "@/modules/user/repositories/user-repository";
@@ -19,6 +19,7 @@ import { UpdateAILimitUseCase } from "@/modules/business/usecases/update-ai-limi
 import { OutboxService } from "@/shared/notifications/outbox-service";
 
 import { sendEntitlementsChangedEvent } from "@/websocket";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * A plan change and its notice commit together (OUTBOX-10, GAP6-8).
@@ -41,7 +42,7 @@ vi.mock("@/websocket", () => ({
   sendSecurityEventToUser: vi.fn(),
 }));
 
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 const MASTER = "018fdc10-0000-7000-8000-0000000000a1";
 

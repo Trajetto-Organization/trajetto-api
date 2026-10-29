@@ -155,7 +155,9 @@ async function insertMissingDefaults(
              LIMIT 1),
            d.description,
            d.category::"OccurrenceCategory",
-           d.receipt,
+           -- Cast: the driver sends parameters untyped (Prisma 7), and a
+           -- bare VALUES column of them is text.
+           d.receipt::boolean,
            d.pause_kind::"DriverPauseKind",
            d.system_key,
            now(),

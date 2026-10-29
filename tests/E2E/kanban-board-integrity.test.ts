@@ -1,12 +1,12 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
 import { sign } from "jsonwebtoken";
 
 import { randomUUID } from "node:crypto";
 
 import auth from "@/config/auth";
 import { KanbanRepository } from "@/modules/kanban/repositories/kanban-repository";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * The Kanban board against Postgres (CRIT-16).
@@ -17,7 +17,7 @@ import { KanbanRepository } from "@/modules/kanban/repositories/kanban-repositor
  * - Tenant walls over HTTP: another company's board is refused, and a card is
  *   never assigned to a user of another company — not even by the MASTER.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 let app: Awaited<typeof import("@/http")>["app"];
 
@@ -489,7 +489,7 @@ describe("another company's ids over HTTP are not found", () => {
  * concurrent writer would.
  */
 function holdColumn(columnId: string) {
-  const client = new PrismaClient();
+  const client = createPrismaClient();
 
   let release!: () => void;
   const released = new Promise<void>((resolve) => {

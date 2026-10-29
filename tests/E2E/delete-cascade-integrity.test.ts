@@ -1,8 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
-
 import { randomUUID } from "node:crypto";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * What a hard delete takes with it.
@@ -23,7 +22,7 @@ import { randomUUID } from "node:crypto";
  * assert a refusal exercise the use cases, and these exercise the floor those
  * use cases stand on.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 const CARRIER = "018f2000-0000-7000-8000-00000000000a";
 

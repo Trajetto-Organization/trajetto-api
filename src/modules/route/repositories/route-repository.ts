@@ -1,7 +1,12 @@
-import { Prisma } from "@prisma/client";
+import { Prisma, type PrismaClient } from "@prisma/client";
 
 import database from "@/../infra/database";
 import { resolveOrderBy } from "@/shared/pagination/list-query";
+import {
+  groupedBy,
+  relatedTo,
+  rowsByKey,
+} from "@/shared/database/related-rows";
 
 import {
   OPEN_STOP_STATUSES,
@@ -74,6 +79,7 @@ import type {
 } from "../dtos/route-dto";
 
 import type { RouteStatus } from "@/shared/route/route-rules";
+import { uniqueTargetOf } from "@/shared/errors/prisma-error-meta";
 
 /**
  * Everything a panel or the app needs about a route, in one read. Stops come
@@ -123,6 +129,67 @@ const routeInclude = {
   },
 } as const;
 
+/**
+ * routeInclude, attached to a page of routes read without it: the driver and
+ * the vehicle for the keys present, the stops of the page's routes and their
+ * deliveries for the stops present. As an include, Prisma 7 queried the
+ * deliveries of a page without stops and all four under an empty page
+ * (shared/database/related-rows.ts). Same shape and stop order as the include.
+ */
+async function withRouteInclude<
+  Row extends { id: string; driverId: string | null; vehicleId: string | null },
+>(
+  client: Pick<PrismaClient, "driver" | "vehicle" | "routeStop" | "delivery">,
+  rows: Row[],
+) {
+  const [drivers, vehicles] = await Promise.all([
+    rowsByKey(
+      rows.map((row) => row.driverId),
+      (ids) =>
+        client.driver.findMany({
+          where: { id: { in: ids } },
+          select: routeInclude.driver.select,
+        }),
+    ),
+    rowsByKey(
+      rows.map((row) => row.vehicleId),
+      (ids) =>
+        client.vehicle.findMany({
+          where: { id: { in: ids } },
+          select: routeInclude.vehicle.select,
+        }),
+    ),
+  ]);
+
+  const stops = rows.length
+    ? await client.routeStop.findMany({
+        where: { routeId: { in: rows.map((row) => row.id) } },
+        orderBy: routeInclude.stops.orderBy,
+      })
+    : [];
+
+  const deliveries = await rowsByKey(
+    stops.map((stop) => stop.deliveryId),
+    (ids) =>
+      client.delivery.findMany({
+        where: { id: { in: ids } },
+        select: routeInclude.stops.include.delivery.select,
+      }),
+  );
+
+  const stopsByRoute = groupedBy(stops, (stop) => stop.routeId);
+
+  return rows.map((row) => ({
+    ...row,
+    driver: relatedTo(drivers, row.driverId),
+    vehicle: relatedTo(vehicles, row.vehicleId),
+    stops: (stopsByRoute.get(row.id) ?? []).map((stop) => ({
+      ...stop,
+      delivery: relatedTo(deliveries, stop.deliveryId),
+    })),
+  }));
+}
+
 /** A route may only be edited while it has not been executed. */
 const EDITABLE_STATUSES: RouteStatus[] = ["PLANNED", "RELEASED"];
 
@@ -139,7 +206,12 @@ const RUNNING_ORDER: Prisma.RouteOrderByWithRelationInput[] = [
 /** How many routes or vehicles a warning names before it stops listing. */
 const PREVIEW_LIMIT = 5;
 
-/** Prisma's unique-violation code, and which index raised it. */
+/**
+ * Prisma's unique-violation code, and which index raised it: the columns
+ * ("deliveryId") under Prisma 6, which read them from Postgres' DETAIL; the
+ * index name ("route_stop_active_delivery_idx") under Prisma 7. Callers match
+ * a fragment of either, through the constants below.
+ */
 function violatedIndex(error: unknown): string | null {
   if (
     !(error instanceof Prisma.PrismaClientKnownRequestError) ||
@@ -148,12 +220,28 @@ function violatedIndex(error: unknown): string | null {
     return null;
   }
 
-  const target = error.meta?.target;
+  const target = uniqueTargetOf(error);
 
   if (typeof target === "string") return target;
   if (Array.isArray(target)) return target.join(",");
 
   return "";
+}
+
+/** route_stop_active_delivery_idx: the delivery is on an open stop already. */
+function isDeliveryOnRoute(target: string | null | undefined): boolean {
+  return (
+    !!target &&
+    (target.includes("deliveryId") || target.includes("active_delivery"))
+  );
+}
+
+/** route_active_vehicle_idx: the vehicle is out on another route. */
+function isVehicleOnRoute(target: string | null | undefined): boolean {
+  return (
+    !!target &&
+    (target.includes("vehicleId") || target.includes("active_vehicle"))
+  );
 }
 
 class RouteRepository implements IRouteRepository {
@@ -265,7 +353,7 @@ class RouteRepository implements IRouteRepository {
         throw error;
       }
 
-      if (target.includes("deliveryId")) {
+      if (isDeliveryOnRoute(target)) {
         throw new DeliveryAlreadyOnRouteError(data.deliveryIds.length);
       }
 
@@ -294,7 +382,7 @@ class RouteRepository implements IRouteRepository {
         throw error;
       }
 
-      if (target.includes("deliveryId")) {
+      if (isDeliveryOnRoute(target)) {
         throw new DeliveryAlreadyOnRouteError(data.deliveryIds.length);
       }
 
@@ -955,10 +1043,9 @@ class RouteRepository implements IRouteRepository {
     // screen may hold). The counts replace a count(*): the pager total and
     // the cards both come out of them, without skip/take — they describe the
     // filtered set, never the page.
-    const [data, byStatus] = await Promise.all([
+    const [rows, byStatus] = await Promise.all([
       this.prisma.route.findMany({
         where: routeListWhere(filters),
-        include: routeInclude,
         orderBy: resolveOrderBy(ROUTE_SORT, { sort, order }),
         skip: (page - 1) * pageSize,
         take: pageSize,
@@ -969,6 +1056,8 @@ class RouteRepository implements IRouteRepository {
         _count: { _all: true },
       }),
     ]);
+
+    const data = await withRouteInclude(this.prisma, rows);
 
     // The catalog facets after, one query at a time: each counted without
     // its own facet, and named from the company's own rows only.
@@ -1111,7 +1200,7 @@ class RouteRepository implements IRouteRepository {
       // Raised by route_active_vehicle_idx: a second departure on a vehicle
       // that is already out. Nothing was written — the whole transaction rolls
       // back, including the mirroring.
-      if (violatedIndex(error)?.includes("vehicleId")) {
+      if (isVehicleOnRoute(violatedIndex(error))) {
         throw new RouteVehicleBusyError();
       }
 
@@ -1534,7 +1623,7 @@ class RouteRepository implements IRouteRepository {
     try {
       return outerTx ? await run(outerTx) : await this.prisma.$transaction(run);
     } catch (error) {
-      if (violatedIndex(error)?.includes("deliveryId")) {
+      if (isDeliveryOnRoute(violatedIndex(error))) {
         throw new DeliveryAlreadyOnRouteError(deliveryIds.length);
       }
 

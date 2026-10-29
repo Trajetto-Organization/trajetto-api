@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
 import { randomInt, randomUUID } from "node:crypto";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * How often one person may import.
@@ -11,7 +11,7 @@ import { randomInt, randomUUID } from "node:crypto";
  * its own, only the global 300 a minute. A loop of full imports from one
  * account froze the replica for every tenant on it.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 let app: Awaited<typeof import("@/http")>["app"];
 

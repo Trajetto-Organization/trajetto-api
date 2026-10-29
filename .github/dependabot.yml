@@ -27,8 +27,22 @@ updates:
       timezone: America/Sao_Paulo
     open-pull-requests-limit: 10
     groups:
+      # The Prisma CLI, the client, the pg adapter and pg move in ONE PR: a
+      # CLI that generates for one version and a runtime of another fails at
+      # run time, not in the typecheck (docs/arquitetura.md, "ORM: Prisma 7").
+      # Listed before minor-and-patch, so these never land in that group.
+      prisma:
+        patterns: ["prisma", "@prisma/*", "pg", "@types/pg"]
+        update-types: [minor, patch]
       minor-and-patch:
         update-types: [minor, patch]
+    ignore:
+      # Prisma 8 is a rewrite (new query API, new migration system), not a
+      # bump: it is a decision with its own measurement. Lift this when it is.
+      - dependency-name: prisma
+        update-types: [version-update:semver-major]
+      - dependency-name: "@prisma/*"
+        update-types: [version-update:semver-major]
     commit-message:
       prefix: chore(deps)
 

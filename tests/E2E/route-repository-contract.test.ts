@@ -1,7 +1,5 @@
 import { afterAll, beforeAll, describe } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
-
 import { RouteRepository } from "@/modules/route/repositories/route-repository";
 import { InMemoryRouteRepository } from "@/modules/route/repositories/in-memory/in-memory-route-repository";
 
@@ -18,9 +16,10 @@ import {
   seedShipper,
   seedVehicle,
 } from "../contract/seed";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /** Decision 13.2: the route contract against Postgres and the twin. */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 const SHIPPER_A = "0e5a0000-0000-7000-8000-000000000001";
 const SHIPPER_B = "0e5b0000-0000-7000-8000-000000000001";

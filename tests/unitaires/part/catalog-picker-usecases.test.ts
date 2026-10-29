@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { Decimal } from "@prisma/client/runtime/library";
+import { Decimal } from "@prisma/client/runtime/client";
 
 import { SearchFuelTypeCursorUseCase } from "@/modules/fuel-type/usecases/search-fuel-type-cursor/search-fuel-type-cursor-usecase";
 import { SearchPartCursorUseCase } from "@/modules/part/usecases/search-part-cursor/search-part-cursor-usecase";

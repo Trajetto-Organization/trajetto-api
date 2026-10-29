@@ -1,6 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 
 import { sign } from "jsonwebtoken";
@@ -8,6 +7,7 @@ import { container } from "tsyringe";
 
 import auth from "@/config/auth";
 import { importQueue } from "@/modules/import/services/import-queue";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * The acceptance criterion of Fase 2, made executable.
@@ -32,7 +32,7 @@ import { importQueue } from "@/modules/import/services/import-queue";
  * Everything else — routing, middleware, entitlements, permissions, the
  * transaction boundaries, the outbox — is the real thing.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 let app: Awaited<typeof import("@/http")>["app"];
 

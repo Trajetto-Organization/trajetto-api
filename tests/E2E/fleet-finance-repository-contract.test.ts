@@ -1,6 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 
 import { SupplierRepository } from "@/modules/supplier/repositories/supplier-repository";
@@ -13,6 +12,7 @@ import type { IAccountPayableRepository } from "@/modules/account-payable/reposi
 import type { AccountPayable } from "@/modules/account-payable/dtos/account-payable-dto";
 
 import { businessClock } from "@/modules/account-payable/rules/account-payable-status";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * One suite, two implementations (decision 13.2): the Prisma repositories of
@@ -21,7 +21,7 @@ import { businessClock } from "@/modules/account-payable/rules/account-payable-s
  * filters, search, the per-situation totals at the edge of the business day,
  * uniqueness lookups and the guarded delete.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 const A = "018fea00-0000-7000-8000-00000000000a";
 const B = "018fea00-0000-7000-8000-00000000000b";

@@ -1,12 +1,12 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 
 import { hash } from "bcrypt";
 import { decode } from "jsonwebtoken";
 
 import { issueSessionTokenPair } from "@/modules/user/services/session-service";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * The refresh policy per client, over HTTP and against Postgres (AUTH-07).
@@ -15,7 +15,7 @@ import { issueSessionTokenPair } from "@/modules/user/services/session-service";
  * cannot see — the header read by the login route, the row the Prisma
  * repository writes, and the rotation's SQL at the edge of expiry.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 const CARRIER = "018fb000-0000-7000-8000-00000000c0a1";
 const USER = "018fb000-0000-7000-8000-00000000c0b1";

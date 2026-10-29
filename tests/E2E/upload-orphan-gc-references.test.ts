@@ -8,7 +8,6 @@ import {
   vi,
 } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -17,6 +16,7 @@ import { uploadConfig } from "@/config/upload";
 
 import { seedFleetDriver } from "./support/fleet-driver-seed";
 import { clearLogged, logged } from "../support/log-capture";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 vi.mock("@/shared/logging/logger", async (importOriginal) =>
   (await import("../support/log-capture")).capturingLogger(
@@ -38,7 +38,7 @@ vi.mock("@/shared/logging/logger", async (importOriginal) =>
  * only: the nightly summary is what the decision to switch deleting on is
  * based on, and a run that rejects on the first hiccup never logs it.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 const DAY = 24 * 60 * 60 * 1000;
 const NOW = Date.now();

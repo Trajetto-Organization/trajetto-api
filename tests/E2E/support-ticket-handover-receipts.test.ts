@@ -2,7 +2,6 @@ import "@/shared";
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
 import { sign } from "jsonwebtoken";
 
 import { randomUUID } from "node:crypto";
@@ -18,6 +17,7 @@ import { DriverRepository } from "@/modules/driver/repositories/driver-repositor
 import { RepairUnticketedMessagesUseCase } from "@/modules/chat/usecases/tickets/repair-unticketed-messages/repair-unticketed-messages-usecase";
 import { renderChatMessagePush } from "@/shared/notifications/policies/chat-message-policy";
 import type { ChatMessageSentPayload } from "@/shared/notifications/notification-types";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * Support tickets, round 2 of the review, over real HTTP and Postgres:
@@ -28,7 +28,7 @@ import type { ChatMessageSentPayload } from "@/shared/notifications/notification
  *  - the occurrence report opens its ticket on its own connection;
  *  - a deactivated company stops writing in tickets.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 let app: Awaited<typeof import("@/http")>["app"];
 
@@ -845,9 +845,7 @@ describe("the report opens its ticket on its own connection", () => {
     url.searchParams.set("connection_limit", "1");
     url.searchParams.set("pool_timeout", "3");
 
-    const narrow = new PrismaClient({
-      datasources: { db: { url: url.toString() } },
-    });
+    const narrow = createPrismaClient({}, { url: url.toString() });
 
     try {
       const deliveryId = await inTransit("Uma Conexão", DRIVER_NO_THREAD);

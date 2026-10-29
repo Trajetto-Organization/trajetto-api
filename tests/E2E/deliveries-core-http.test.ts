@@ -1,6 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
 import { sign } from "jsonwebtoken";
 
 import { randomUUID } from "node:crypto";
@@ -11,6 +10,7 @@ import { parseCsv } from "@/shared/delivery/spreadsheet-reader";
 import { violatesUniqueOn } from "@/shared/delivery/unique-violation";
 
 import { OccurrenceTypeRepository } from "@/modules/occurrence-type/repositories/occurrence-type-repository";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * Entregas, over real HTTP and Postgres (package dlv-core).
@@ -20,7 +20,7 @@ import { OccurrenceTypeRepository } from "@/modules/occurrence-type/repositories
  * name in a P2002, which role a route lets through, and what one transaction
  * writes (an XML upload's Importações row, the webhook rows of a reversal).
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 let app: Awaited<typeof import("@/http")>["app"];
 

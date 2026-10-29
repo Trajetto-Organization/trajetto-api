@@ -1,6 +1,5 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -11,6 +10,7 @@ import {
   WebhookDispatchService,
   fanOutWebhookEvent,
 } from "@/shared/integration/webhook-dispatch-service";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 import { FAKE_USAGE, fakeAnalyzer } from "./support/fake-vision";
 import { seedProofCard } from "./support/proof-card-seed";
@@ -53,10 +53,10 @@ const PROOF_ANSWER = {
  * replicas is the database, and separate instances on the pool race for the
  * same rows exactly the way separate processes do.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 /** The "other replica": its own connection, holding row locks. */
-const holder = new PrismaClient();
+const holder = createPrismaClient();
 
 const CARRIER = "018fd000-0000-7000-8000-0000000007a1";
 const RECIPIENT = "018fd000-0000-7000-8000-0000000007c1";

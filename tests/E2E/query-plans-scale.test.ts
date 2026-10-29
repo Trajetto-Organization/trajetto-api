@@ -1,6 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 
 import { DeliveryRepository } from "@/modules/delivery/repositories/delivery-repository";
@@ -11,6 +10,7 @@ import { ProofAuditRepository } from "@/modules/delivery/repositories/proof-audi
 import { WebhookDeliveryRepository } from "@/modules/integration/repositories/webhook-delivery-repository";
 import { IntegrationRepository } from "@/modules/integration/repositories/integration-repository";
 import { SupportTicketRepository } from "@/modules/chat/repositories/support-ticket-repository";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * The plans the db-perf pass of 07/10/2026 fixed (docs/desempenho/banco-2026-10.md).
@@ -25,9 +25,11 @@ import { SupportTicketRepository } from "@/modules/chat/repositories/support-tic
  *
  * Access paths only, never milliseconds: a busy machine must not turn this red.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
-const capture = new PrismaClient({ log: [{ emit: "event", level: "query" }] });
+const capture = createPrismaClient({
+  log: [{ emit: "event", level: "query" }],
+});
 
 const sent: Array<{ query: string; params: string }> = [];
 
@@ -662,9 +664,11 @@ describe("the webhook monitor", () => {
       }),
     );
 
+    // Prisma 7 aliases the count (`COUNT(*) AS "_count$_all"`); the capped
+    // sub-select it wraps is the same.
     const [count] = only(
       statements,
-      /SELECT COUNT\(\*\) FROM \(SELECT .* LIMIT/,
+      /SELECT COUNT\(\*\)(?: AS "[^"]+")? FROM \(SELECT .* LIMIT/,
     );
     const plan = await planOf(count);
 

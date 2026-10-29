@@ -1,6 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 
 import { sign } from "jsonwebtoken";
@@ -11,6 +10,7 @@ import { businessDateKey, shiftDateKey } from "@/shared/time/business-day";
 
 import { seedFleetDriver, seedUser } from "./support/fleet-driver-seed";
 import { seedJourneyRoute } from "./support/journey-route-seed";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * Occurrence categories and pauses as types (decisions 14.3 and 14.4)
@@ -19,7 +19,7 @@ import { seedJourneyRoute } from "./support/journey-route-seed";
  * category), the driver's payload split by category, and the journey rule of
  * the pause routes — with tenant and role guards on each.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 let app: Awaited<typeof import("@/http")>["app"];
 

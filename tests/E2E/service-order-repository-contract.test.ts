@@ -1,7 +1,5 @@
 import { afterAll, beforeAll, describe } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
-
 import { ServiceOrderRepository } from "@/modules/service-order/repositories/service-order-repository";
 import { InMemoryServiceOrderRepository } from "@/modules/service-order/repositories/in-memory/in-memory-service-order-repository";
 
@@ -18,9 +16,10 @@ import {
   seedUser,
   seedVehicle,
 } from "../contract/seed";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /** Decision 13.2: the service order contract against Postgres and the twin. */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 const prismaRepo = new ServiceOrderRepository(prisma);
 const memory = new InMemoryServiceOrderRepository();
 

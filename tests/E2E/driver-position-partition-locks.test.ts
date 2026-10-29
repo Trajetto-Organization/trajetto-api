@@ -1,5 +1,5 @@
-import { PrismaClient } from "@prisma/client";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * The nightly partition DDL must not queue the pings behind itself.
@@ -16,7 +16,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
  * it could not get and tries again the next night — the seven days of
  * lookahead exist for exactly this.
  */
-const holder = new PrismaClient({ log: [] });
+const holder = createPrismaClient({ log: [] });
 const sleep = (ms: number) => new Promise((done) => setTimeout(done, ms));
 
 function nameFor(offsetDays: number): string {

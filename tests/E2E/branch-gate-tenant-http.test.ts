@@ -1,10 +1,10 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 
 import { sign } from "jsonwebtoken";
 import auth from "@/config/auth";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * The branch gate (verifyBranchActive) must not tell one company which
@@ -18,7 +18,7 @@ import auth from "@/config/auth";
  * The inactive foreign branch case was never red (the tenant check already
  * ran before the status check); it stays as a guard on that order.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 let app: Awaited<typeof import("@/http")>["app"];
 

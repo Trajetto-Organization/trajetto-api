@@ -2,7 +2,6 @@ import "@/shared";
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
 import { sign } from "jsonwebtoken";
 
 import { randomUUID } from "node:crypto";
@@ -15,6 +14,7 @@ import { DeliveryRepository } from "@/modules/delivery/repositories/delivery-rep
 import { UserRepository } from "@/modules/user/repositories/user-repository";
 import { DriverRepository } from "@/modules/driver/repositories/driver-repository";
 import { RepairUnticketedMessagesUseCase } from "@/modules/chat/usecases/tickets/repair-unticketed-messages/repair-unticketed-messages-usecase";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * What only the database can settle between replicas (design §7.3): the
@@ -22,7 +22,7 @@ import { RepairUnticketedMessagesUseCase } from "@/modules/chat/usecases/tickets
  * when two openers race, one decision when two operators close at once, and
  * the repair of messages the previous image wrote without a ticket.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 let app: Awaited<typeof import("@/http")>["app"];
 

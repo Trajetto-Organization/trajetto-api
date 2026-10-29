@@ -1,10 +1,10 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 
 import { ImportRepository } from "@/modules/import/repositories/import-repository";
 import { closeAbandonedImportsJob } from "@/jobs/cron/close-abandoned-imports-job";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * An upload whose process died halfway (IDEMP-10).
@@ -19,7 +19,7 @@ import { closeAbandonedImportsJob } from "@/jobs/cron/close-abandoned-imports-jo
  * The sweep closes an upload whose heartbeat (updated_at) stopped, counting
  * what it did create — and leaves a live one alone.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 const imports = new ImportRepository(prisma);
 
 const CARRIER = "018fdc90-0000-7000-8000-00000000000a";

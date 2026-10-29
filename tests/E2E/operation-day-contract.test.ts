@@ -1,6 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 
 import { OperationDayRepository } from "@/modules/route/repositories/operation-day-repository";
@@ -14,6 +13,7 @@ import type {
   OperationDay,
 } from "@/modules/route/repositories/IOperation-day-repository";
 import { operationDay } from "@/shared/route/operation-day-rules";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * The one definition of "the operation of the day" (decision 7.1), run
@@ -25,7 +25,7 @@ import { operationDay } from "@/shared/route/operation-day-rules";
  * implementations agreeing on a wrong answer would otherwise pass — and then
  * the two are compared field by field.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 const CARRIER = "018fa000-0000-7000-8000-00000000000a";
 const OTHER = "018fa000-0000-7000-8000-00000000000b";

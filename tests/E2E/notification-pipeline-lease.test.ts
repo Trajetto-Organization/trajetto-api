@@ -1,9 +1,9 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 
 import { container } from "tsyringe";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * The lease, from both sides, on both queues of the notification pipeline.
@@ -23,7 +23,7 @@ import { container } from "tsyringe";
  * claimed without moving `availableAt` (a rolling deploy), which is why the
  * delivery queue has a third case seeded exactly like that.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 let pipeline: import("@/shared/notifications/notification-pipeline-service").NotificationPipelineService;
 

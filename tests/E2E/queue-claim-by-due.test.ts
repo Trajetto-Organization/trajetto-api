@@ -8,7 +8,6 @@ import {
   vi,
 } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 import {
   createServer,
@@ -19,6 +18,7 @@ import {
 import type { AddressInfo } from "node:net";
 
 import { container } from "tsyringe";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * The queues claim by due time, and a retry storm is not in the way.
@@ -42,9 +42,11 @@ const sent = vi.hoisted(() => ({
 }));
 
 vi.mock("@/../infra/database", async () => {
-  const { PrismaClient: Client } = await import("@prisma/client");
+  const { createPrismaClient } = await import(
+    "@/shared/database/database-client"
+  );
 
-  const client = new Client({
+  const client = createPrismaClient({
     log: [{ emit: "event", level: "query" }],
     transactionOptions: { maxWait: 10_000, timeout: 15_000 },
   });
@@ -59,7 +61,7 @@ vi.mock("@/../infra/database", async () => {
   };
 });
 
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 let pipeline: import("@/shared/notifications/notification-pipeline-service").NotificationPipelineService;
 let webhooks: typeof import("@/shared/integration/webhook-dispatch-service");

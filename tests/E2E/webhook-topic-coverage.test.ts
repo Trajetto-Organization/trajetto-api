@@ -1,6 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 
 import { container } from "tsyringe";
@@ -9,6 +8,7 @@ import { ImportDeliveryXmlUseCase } from "@/modules/delivery/usecases/import-del
 import { ImportDeliverySpreadsheetUseCase } from "@/modules/import/usecases/import-delivery-spreadsheet/import-delivery-spreadsheet-usecase";
 import { AddRouteStopsUseCase } from "@/modules/route/usecases/add-route-stops/add-route-stops-usecase";
 import { UpdateRouteUseCase } from "@/modules/route/usecases/update-route/update-route-usecase";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * The published topics, through the real repositories and the real fan-out.
@@ -21,7 +21,7 @@ import { UpdateRouteUseCase } from "@/modules/route/usecases/update-route/update
  * fact, which is what this checks against Postgres: the rows exist, one per
  * document, carrying who holds it.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 const CARRIER = "018fdc60-0000-7000-8000-00000000000a";
 const ADMIN = "018fdc60-0000-7000-8000-0000000000a1";

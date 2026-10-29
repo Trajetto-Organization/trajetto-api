@@ -1,11 +1,12 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { Prisma, PrismaClient } from "@prisma/client";
+import { Prisma } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 
 import { ChatRepository } from "@/modules/chat/repositories/chat-repository";
 import { OccurrenceTypeRepository } from "@/modules/occurrence-type/repositories/occurrence-type-repository";
 import { getOrCreateCurrentPeriod } from "@/shared/ai/ai-quota-service";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * "Get or create" written as `upsert({ where, create, update: {} })`.
@@ -30,8 +31,8 @@ import { getOrCreateCurrentPeriod } from "@/shared/ai/ai-quota-service";
  * Two PrismaClients, several rounds: the window is short, and one round can
  * happen to serialise on its own.
  */
-const prisma = new PrismaClient();
-const otherConnection = new PrismaClient();
+const prisma = createPrismaClient();
+const otherConnection = createPrismaClient();
 
 const clients = [prisma, otherConnection, prisma, otherConnection, prisma];
 

@@ -1,5 +1,11 @@
 import { Prisma } from "@prisma/client";
 
+import { DatabaseUnavailableError } from "@/shared/database/pg-driver";
+import {
+  driverAdapterCauseOf,
+  sqlStateOf,
+} from "@/shared/errors/prisma-error-meta";
+
 /**
  * How long a caller is told to wait when the database is unavailable.
  *
@@ -17,8 +23,8 @@ const DATABASE_RETRY_AFTER_SECONDS = 5;
  * - P1008: the operation timed out.
  * - P1017: the server closed the connection (restart, failover, a terminated
  *   backend, a proxy recycling its upstream).
- * - P2024: no connection free in the pool within pool_timeout — the database
- *   may be up, but this replica cannot use it now.
+ * - P2024: no connection free in the pool within pool_timeout (Prisma 6; under
+ *   Prisma 7 the pool is pg's, and its timeout is a DatabaseUnavailableError).
  * - P2037: Postgres refused a new connection (max_connections reached).
  *
  * Constraint and not-found codes (P2002, P2025, ...) are deliberately absent:
@@ -42,14 +48,42 @@ const UNAVAILABLE_CODES = new Set([
 const TRANSACTION_START_TIMEOUT = /unable to start a transaction/i;
 
 /**
- * P2010 is every failed `$queryRaw`/`$executeRaw`. Postgres' own refusals
- * carry their SQLSTATE in `meta.code` (42P01, 22003, 57014 for the
- * statement_timeout...) — answers about the SQL, a 500. What never reached
- * an answer carries none: past socket_timeout on a dead peer the engine
- * reports `N/A` as the code AND the message (measured on Prisma 6.1, GAP6-4;
- * tests/E2E/runtime-database-dead-peer.test.ts). A column the engine cannot
- * decode is `N/A` too, but WITH a message of its own — our query's fault,
- * so it stays out. Only the empty pair is the outage.
+ * The driver adapter's kinds for "no answer from the database". A model query
+ * gets them as P1001/P1017/P1008/P2037 (above); a raw query gets every
+ * adapter error as P2010, so the kind is read from the cause.
+ */
+const UNAVAILABLE_KINDS = new Set([
+  "DatabaseNotReachable",
+  "ConnectionClosed",
+  "SocketTimeout",
+  "TooManyConnections",
+]);
+
+/**
+ * SQLSTATEs Postgres sends when it is the one going away: the server shutting
+ * down or recovering (57P01-57P03), the connection itself failing (class 08),
+ * no connection slot left (53300). Under Prisma 7 a model query gets them as
+ * P2039 "Database error" and a raw one as P2010. Everything else Postgres
+ * refuses (42P01, 22003, 57014 for the statement_timeout...) is an answer
+ * about the SQL: a 500.
+ */
+const UNAVAILABLE_SQLSTATES = new Set([
+  "57P01",
+  "57P02",
+  "57P03",
+  "08000",
+  "08001",
+  "08003",
+  "08004",
+  "08006",
+  "53300",
+]);
+
+/**
+ * P2010 is every failed `$queryRaw`/`$executeRaw`. Under Prisma 6, what never
+ * reached an answer carried `N/A` as the code AND the message (measured on
+ * Prisma 6.1, GAP6-4; tests/E2E/runtime-database-dead-peer.test.ts). Kept for
+ * an error built that way; Prisma 7 sends the adapter's cause instead.
  */
 function isRawQueryWithoutAnswer(
   error: Prisma.PrismaClientKnownRequestError,
@@ -61,13 +95,31 @@ function isRawQueryWithoutAnswer(
   return meta?.code === "N/A" && meta?.message === "N/A";
 }
 
+/** P2010/P2039 whose driver-adapter cause is the database going away. */
+function isDriverErrorWithoutAnswer(
+  error: Prisma.PrismaClientKnownRequestError,
+): boolean {
+  if (error.code !== "P2010" && error.code !== "P2039") return false;
+
+  const kind = driverAdapterCauseOf(error)?.kind;
+
+  if (kind && UNAVAILABLE_KINDS.has(kind)) return true;
+
+  const state = sqlStateOf(error);
+
+  return state !== undefined && UNAVAILABLE_SQLSTATES.has(state);
+}
+
 /**
  * Whether an error means the database is unavailable to this replica.
  *
  * Used to answer 503 + Retry-After instead of a 500 that a generic client
  * will not retry, and to keep "the database is down" apart from "the code is
- * broken" in logs and alerts. Only Prisma's own error classes are trusted: a
- * plain Error whose message merely mentions a database proves nothing.
+ * broken" in logs and alerts. Only typed errors are trusted — Prisma's own
+ * classes and the pool's DatabaseUnavailableError (src/shared/database/
+ * pg-driver.ts, which types pg's full-pool, dead-connection and read-timeout
+ * errors at the source): a plain Error whose message merely mentions a
+ * database proves nothing.
  *
  * A 503 from this classifier does NOT mean "not executed". P1017 was observed
  * AFTER a COMMIT had reached Postgres — the connection died on the way back —
@@ -75,10 +127,14 @@ function isRawQueryWithoutAnswer(
  * with an Idempotency-Key; the app's outbox sends one.
  */
 function isDatabaseUnavailable(error: unknown): boolean {
+  if (error instanceof DatabaseUnavailableError) return true;
+
   if (error instanceof Prisma.PrismaClientInitializationError) return true;
 
   if (error instanceof Prisma.PrismaClientKnownRequestError) {
     if (UNAVAILABLE_CODES.has(error.code)) return true;
+
+    if (isDriverErrorWithoutAnswer(error)) return true;
 
     if (isRawQueryWithoutAnswer(error)) return true;
 

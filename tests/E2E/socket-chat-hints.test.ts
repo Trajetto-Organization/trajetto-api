@@ -1,6 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -11,6 +10,7 @@ import type { Server as SocketIOServer } from "socket.io";
 import auth from "@/config/auth";
 
 import { socketClientEntry } from "./support/socket-client";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * Chat hints and presence, through the real server.
@@ -22,7 +22,7 @@ import { socketClientEntry } from "./support/socket-client";
  * - The thread list's presence fetched every socket of the company, and each
  *   answer carried the socket's handshake — its access token included.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 const CARRIER = "018fd000-0000-7000-8000-0000000c4a01";
 const OTHER_CARRIER = "018fd000-0000-7000-8000-0000000c4a02";

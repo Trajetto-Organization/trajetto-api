@@ -1,6 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
 import { sign } from "jsonwebtoken";
 
 import { randomUUID } from "node:crypto";
@@ -8,6 +7,7 @@ import { randomUUID } from "node:crypto";
 import auth from "@/config/auth";
 
 import { RouteRepository } from "@/modules/route/repositories/route-repository";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * The route's plan, search and departure over real HTTP and a real Postgres:
@@ -21,7 +21,7 @@ import { RouteRepository } from "@/modules/route/repositories/route-repository";
  * the per-driver lock two concurrent departures race through, the response
  * serializer that drops a field nobody documented, and the guards as wired.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 let app: Awaited<typeof import("@/http")>["app"];
 

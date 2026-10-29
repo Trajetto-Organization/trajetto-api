@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { PrismaClient } from "@prisma/client";
 import { randomUUID } from "node:crypto";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * How many pool connections the company's plan (Limites de Uso, the master's
@@ -16,9 +17,11 @@ import { randomUUID } from "node:crypto";
 const pool = vi.hoisted(() => ({ inFlight: 0, peak: 0, total: 0 }));
 
 vi.mock("@/../infra/database", async () => {
-  const { PrismaClient: Client } = await import("@prisma/client");
+  const { createPrismaClient } = await import(
+    "@/shared/database/database-client"
+  );
 
-  const counted = new Client().$extends({
+  const counted = createPrismaClient().$extends({
     query: {
       async $allOperations({ args, query }) {
         pool.inFlight += 1;
@@ -44,7 +47,7 @@ import { BusinessRepository } from "@/modules/business/repositories/business-rep
 import { VehicleRepository } from "@/modules/vehicle/repositories/vehicle-repository";
 import { GetBusinessEntitlementsUseCase } from "@/modules/business/usecases/manage-entitlements/manage-entitlements-usecase";
 
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 const CARRIER = "018fef10-0000-7000-8000-00000000000a";
 const MANAGER = "018fef10-0000-7000-8000-0000000000a1";

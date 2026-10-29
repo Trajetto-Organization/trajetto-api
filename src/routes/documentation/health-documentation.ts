@@ -460,7 +460,7 @@ const healthResponses = {
               .number()
               .nullable()
               .describe(
-                "connection_limit of this replica's pool; null when left to Prisma's default.",
+                "connection_limit of this replica's pool (the pg Pool's max); null before the first query when the URL does not set it.",
               ),
             open: z.number(),
             busy: z.number(),
@@ -471,7 +471,9 @@ const healthResponses = {
                 "Queries waiting for a free connection right now. Above zero for a minute is the ADR 0001/0004 pool trigger.",
               ),
           })
-          .describe("This replica's Prisma connection pool (Prisma metrics)."),
+          .describe(
+            "This replica's database connection pool (the pg Pool behind Prisma's driver adapter).",
+          ),
         bcrypt: z
           .object({
             active: z.number(),

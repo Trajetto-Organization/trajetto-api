@@ -1,11 +1,11 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
 import { sign } from "jsonwebtoken";
 
 import { randomUUID } from "node:crypto";
 
 import auth from "@/config/auth";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * The company's time zone is editable by the MASTER (decision 1.1): only
@@ -13,7 +13,7 @@ import auth from "@/config/auth";
  * pushed onto the head-office branch (which has no such column), and a
  * company admin cannot change it. Conflicts answer 409 with a code.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 let app: Awaited<typeof import("@/http")>["app"];
 

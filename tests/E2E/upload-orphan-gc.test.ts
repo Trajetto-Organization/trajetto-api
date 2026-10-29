@@ -8,13 +8,13 @@ import {
   vi,
 } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
 import { uploadConfig } from "@/config/upload";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * The orphan collector against a real Postgres and a real (local) bucket.
@@ -28,7 +28,7 @@ import { uploadConfig } from "@/config/upload";
  * What must never be removed is asserted as hard as what must: a referenced
  * object, a recent one, and one whose key does not carry its own timestamp.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 const DAY = 24 * 60 * 60 * 1000;
 const NOW = Date.now();

@@ -1,6 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
 import { sign } from "jsonwebtoken";
 
 import { randomUUID } from "node:crypto";
@@ -8,6 +7,7 @@ import { randomUUID } from "node:crypto";
 import auth from "@/config/auth";
 
 import { parseCsv } from "@/shared/delivery/spreadsheet-reader";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * The operation leaving as a file.
@@ -23,7 +23,7 @@ import { parseCsv } from "@/shared/delivery/spreadsheet-reader";
  *  - the answer is a FILE. A client reading it as JSON gets a parse error that
  *    looks like a server fault.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 let app: Awaited<typeof import("@/http")>["app"];
 

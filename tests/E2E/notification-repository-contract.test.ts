@@ -1,7 +1,5 @@
 import { afterAll, beforeAll, describe } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
-
 import { NotificationRepository } from "@/modules/notification/repositories/notification-repository";
 import { InMemoryNotificationRepository } from "@/modules/notification/repositories/in-memory/in-memory-notification-repository";
 
@@ -13,9 +11,10 @@ import {
 } from "../contract/repositories/notification.contract";
 import { KINDS, minute, type Kind } from "../contract/support";
 import { seedBusiness, seedUser } from "../contract/seed";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /** Decision 13.2: the notification contract against Postgres and the twin. */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 const prismaRepo = new NotificationRepository(prisma);
 const memory = new InMemoryNotificationRepository();
 

@@ -1,5 +1,5 @@
 import type { Prisma } from "@prisma/client";
-import { Decimal } from "@prisma/client/runtime/library";
+import { Decimal } from "@prisma/client/runtime/client";
 
 import { buildSearchOr } from "@/shared/pagination/search-or";
 import { sumCounts, type FacetCount } from "@/shared/pagination/list-meta";

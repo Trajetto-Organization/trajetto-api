@@ -25,13 +25,14 @@ const API_USAGE_RETENTION_DAYS = 400;
 const MAX_USAGE_ROWS_PER_RUN = 1_000_000;
 
 /**
- * The rows the purge takes. `day` is a DATE (UTC midnight of the civil day)
- * and Prisma binds a Date as timestamptz, so the cutoff is turned into a UTC
- * date explicitly instead of in the session's TimeZone. Exported so the plan
- * can be tested with the exact predicate.
+ * The rows the purge takes. `day` is a DATE (UTC midnight of the civil day),
+ * so the cutoff is turned into a UTC date explicitly instead of in the
+ * session's TimeZone. It goes as an ISO string: Prisma 7's pg driver sends a
+ * Date without its offset. Exported so the plan can be tested with the exact
+ * predicate.
  */
 function apiUsageRowsBefore(cutoff: Date): Prisma.Sql {
-  return Prisma.sql`"day" < (${cutoff}::timestamptz AT TIME ZONE 'UTC')::date`;
+  return Prisma.sql`"day" < (${cutoff.toISOString()}::timestamptz AT TIME ZONE 'UTC')::date`;
 }
 
 /**

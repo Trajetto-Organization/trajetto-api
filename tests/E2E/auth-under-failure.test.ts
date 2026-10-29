@@ -1,10 +1,11 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { Prisma, PrismaClient } from "@prisma/client";
+import { Prisma } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 
 import { sign } from "jsonwebtoken";
 import auth from "@/config/auth";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * What the API answers when it cannot reach its own database.
@@ -24,7 +25,7 @@ import auth from "@/config/auth";
  * rather than by stopping the container: a test that stopped Postgres would
  * take the rest of the suite with it.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 const CARRIER = "018fb000-0000-7000-8000-00000000000a";
 const USER = "018fb000-0000-7000-8000-0000000000a1";

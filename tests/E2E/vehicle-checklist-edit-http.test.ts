@@ -1,6 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 
 import { sign } from "jsonwebtoken";
@@ -12,6 +11,7 @@ import {
   seedFleetDriver,
   type FleetDriverSeed,
 } from "./support/fleet-driver-seed";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * Editing a checklist that already happened, over real HTTP (FLEET-FUEL-1,
@@ -33,7 +33,7 @@ import {
  * - Another company's vehicle, driver, branch or checklist was answered with
  *   "não pertence a esta empresa", confirming the id exists elsewhere.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 let app: Awaited<typeof import("@/http")>["app"];
 

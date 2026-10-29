@@ -1,11 +1,11 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
 import { sign } from "jsonwebtoken";
 
 import { randomUUID } from "node:crypto";
 
 import auth from "@/config/auth";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * The fuel types catalog over real HTTP and Postgres.
@@ -19,7 +19,7 @@ import auth from "@/config/auth";
  * - Another company's id is a 404, never a 403 that confirms it exists.
  * - A fuel type in use is not deleted (409 with the count).
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 let app: Awaited<typeof import("@/http")>["app"];
 

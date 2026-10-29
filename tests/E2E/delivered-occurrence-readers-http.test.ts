@@ -1,6 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 
 import { container } from "tsyringe";
@@ -14,6 +13,7 @@ import {
   seedFleetDriver,
   type FleetDriverSeed,
 } from "./support/fleet-driver-seed";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * The readers of a DELIVERED occurrence (decision 14.3; design §4.5, §7.3,
@@ -27,7 +27,7 @@ import {
  * - the "Ocorrências" feed keeps proofs out of the severities and filters them
  *   by category.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 const CARRIER = "018fe1d2-0000-7000-8000-00000000000a";
 const OTHER = "018fe1d2-0000-7000-8000-00000000000b";

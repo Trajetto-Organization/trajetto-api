@@ -8,10 +8,10 @@ import {
   vi,
 } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 
 import { container } from "tsyringe";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * The outbox's claim covers a BATCH of events under one lease, and the
@@ -24,7 +24,7 @@ import { container } from "tsyringe";
  * the attempt it claimed. An event another replica took over fails the
  * renewal and is left to its new owner.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 let app: Awaited<typeof import("@/http")>["app"];
 let pipeline: import("@/shared/notifications/notification-pipeline-service").NotificationPipelineService;

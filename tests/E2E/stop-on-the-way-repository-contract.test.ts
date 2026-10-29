@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { PrismaClient, type Prisma } from "@prisma/client";
+import { type Prisma } from "@prisma/client";
 
 import database from "@/../infra/database";
 
@@ -12,6 +12,7 @@ import { InMemoryStopOnTheWayRepository } from "@/modules/route/usecases/mark-st
 import type { IStopOnTheWayRepository } from "@/modules/route/usecases/mark-stop-on-the-way/IStop-on-the-way-repository";
 
 import { violatesUniqueOn } from "@/shared/delivery/unique-violation";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * The "a caminho" repository against Postgres and against its in-memory twin
@@ -19,7 +20,7 @@ import { violatesUniqueOn } from "@/shared/delivery/unique-violation";
  * answers — including the tenant in every `where` and the unique index on
  * the submission id.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 const id = (suffix: string) =>
   `018fe000-0000-7000-8000-${suffix.padStart(12, "0")}`;

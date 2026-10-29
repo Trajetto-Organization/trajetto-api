@@ -1,8 +1,8 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
 import { sign } from "jsonwebtoken";
 import { randomUUID } from "node:crypto";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 // The provider is "configured" so requests reach the queue; the pipeline's
 // wake is stubbed below, so nothing is ever sent to it.
@@ -39,7 +39,7 @@ import {
  * readable by any driver; and the checklist's manual request, built from the
  * whole database row, paid for every photo again after each analysis.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 let app: Awaited<typeof import("@/http")>["app"];
 

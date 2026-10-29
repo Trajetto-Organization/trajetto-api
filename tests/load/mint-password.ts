@@ -1,3 +1,4 @@
+import { createPrismaClient } from "@/shared/database/database-client";
 /**
  * Gives an account created during a browser journey the suite's password.
  *
@@ -10,12 +11,11 @@
  * mint-browser-users.ts) and marks the address verified, then signs in through
  * the form like anybody else. Only on the throwaway database.
  */
-import { PrismaClient } from "@prisma/client";
 
 import { hash } from "bcrypt";
 import { assertDisposableDatabase } from "./lib/disposable-database";
 
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 const PASSWORD = process.env.WEB_E2E_PASSWORD ?? "Navegador@E2E2026";
 

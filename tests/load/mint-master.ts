@@ -1,3 +1,4 @@
+import { createPrismaClient } from "@/shared/database/database-client";
 /**
  * Browser sessions for the screens the fixture cannot reach.
  *
@@ -18,7 +19,7 @@
  * Writes next to the load fixture by default, which is where the browser
  * suite already looks for `load-context.json`.
  */
-import { PrismaClient } from "@prisma/client";
+
 import { randomUUID } from "node:crypto";
 import { writeFileSync } from "node:fs";
 import { resolve } from "node:path";
@@ -31,7 +32,7 @@ const MASTER_ID = "018fe000-0000-7000-8000-0000000000a1";
 
 const HOURS = 12;
 
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 /**
  * A signed access token, with the refresh family the guard checks.

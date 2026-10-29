@@ -1,9 +1,9 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 
 import { ImportRepository } from "@/modules/import/repositories/import-repository";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * The undo, against the database that actually performs it.
@@ -15,7 +15,7 @@ import { ImportRepository } from "@/modules/import/repositories/import-repositor
  * (routes before deliveries, because a stop references its delivery) is the
  * one thing a fake with arrays cannot exercise at all.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 const imports = new ImportRepository(prisma);
 
 const CARRIER = "018f4000-0000-7000-8000-00000000000a";

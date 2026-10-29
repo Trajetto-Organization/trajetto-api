@@ -1,7 +1,5 @@
 import { afterAll, describe, it } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
-
 import { AccountPayableRepository } from "@/modules/account-payable/repositories/account-payable-repository";
 import { InMemoryAccountPayableRepository } from "@/modules/account-payable/repositories/in-memory/in-memory-account-payable-repository";
 import { FuelTypeRepository } from "@/modules/fuel-type/repositories/fuel-type-repository";
@@ -25,6 +23,7 @@ import {
   fixedId,
   type Kind,
 } from "../contract/support";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * TEST-PAR-2, for the fleet catalogs: an update or delete of an id that is
@@ -32,7 +31,7 @@ import {
  * bare `Error("... not found")`, which a use case's P2025 branch never
  * recognised, so a unit test proved a 500 where the API answers 404.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 const MISSING = fixedId("0f0f", 99);
 
 interface Repos {

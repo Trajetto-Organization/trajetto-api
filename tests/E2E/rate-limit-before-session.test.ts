@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
 import { randomInt, randomUUID } from "node:crypto";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * What a refused request costs.
@@ -13,7 +13,7 @@ import { randomInt, randomUUID } from "node:crypto";
  * phone, was "rate limited" while still draining the pool for every tenant.
  * And a token that did not verify was never counted at all.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 let app: Awaited<typeof import("@/http")>["app"];
 let UserRepository: typeof import("@/modules/user/repositories/user-repository").UserRepository;

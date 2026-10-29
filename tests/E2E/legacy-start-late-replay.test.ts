@@ -1,11 +1,10 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
-
 import {
   seedFleetDriver,
   type FleetDriverSeed,
 } from "./support/fleet-driver-seed";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * The legacy departure of loose deliveries, replayed late, through the real
@@ -23,7 +22,7 @@ import {
  * The phone runs two hours FAST; only the difference between its stamps
  * counts. A build that sends no time keeps today's behaviour.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 let app: Awaited<typeof import("@/http")>["app"];
 let seed: FleetDriverSeed;

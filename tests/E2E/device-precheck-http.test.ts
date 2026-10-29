@@ -1,6 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 
 import { container } from "tsyringe";
@@ -15,6 +14,7 @@ import {
   seedFleetDriver,
   type FleetDriverSeed,
 } from "./support/fleet-driver-seed";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * The phone's offline pre-check travelling with the submission (decision
@@ -30,7 +30,7 @@ import {
  * - /user/me says whether the app runs it;
  * - tenant and role guards of the routes it rides on.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 const CARRIER = "018fe2a0-0000-7000-8000-00000000000a";
 const NO_AI = "018fe2a0-0000-7000-8000-00000000000b";

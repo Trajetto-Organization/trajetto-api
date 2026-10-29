@@ -1,6 +1,5 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
 import { v7 as uuidV7 } from "uuid";
 
 import {
@@ -8,6 +7,7 @@ import {
   fanOutWebhookEvent,
 } from "@/shared/integration/webhook-dispatch-service";
 import { buildResendRow } from "@/shared/integration/webhook-resend";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * The order of events, as a receiver can reconstruct it.
@@ -21,7 +21,7 @@ import { buildResendRow } from "@/shared/integration/webhook-resend";
  * `sequence` does: increasing (with gaps) in the order events were generated,
  * identical for every endpoint and every resend of one event.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 const CARRIER = "018f8000-0000-7000-8000-0000000000c3";
 

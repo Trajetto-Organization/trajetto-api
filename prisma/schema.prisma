@@ -1,23 +1,20 @@
 generator client {
+  // `prisma-client-js` keeps the client in node_modules/.prisma, so the 540
+  // files importing "@prisma/client" stay as they are. Prisma 7 deprecates it
+  // in favour of `prisma-client` (generated into the repository, ESM or CJS);
+  // moving is a separate change (docs/arquitetura.md, "ORM: Prisma 7").
+  //
+  // There is no query engine binary any more (Prisma 7 compiles queries in
+  // WebAssembly and talks to Postgres through `@prisma/adapter-pg`), so
+  // `binaryTargets` is gone. The `metrics` preview was removed in 7.0: the
+  // pool gauges now come from the pg Pool itself (src/shared/health/pool-metrics.ts).
   provider = "prisma-client-js"
-
-  // Without `binaryTargets`, Prisma downloads the engine for multiple targets "just
-  // in case," and each one adds significant size to the image. Here, we pin the two
-  // we actually use: `native` for the development machine and
-  // `linux-musl-openssl-3.0.x` for the container (`node:22-alpine` uses musl).
-  // If you change the Dockerfile base image, make sure to update this line as well.
-  binaryTargets = ["native", "linux-musl-openssl-3.0.x"]
-
-  // `metrics` adds `$metrics.json()`: the connection pool's open/busy/idle
-  // gauges and the wait for a free connection, per replica. Without it the
-  // pool, which is what saturates first under load (the ADR 0001 and 0004
-  // triggers are written in terms of it), cannot be observed at all.
-  previewFeatures = ["metrics"]
 }
 
+// The URL lives in prisma.config.ts (CLI) and in the pg Pool built by
+// src/shared/database/database-client.ts (runtime).
 datasource db {
   provider = "postgresql"
-  url      = env("DATABASE_URL")
 }
 
 enum UserRole {

@@ -1,12 +1,12 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
 import { sign } from "jsonwebtoken";
 
 import { randomUUID } from "node:crypto";
 
 import auth from "@/config/auth";
 import { businessDayRange } from "@/shared/time/business-day";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * Accounts payable over real HTTP and Postgres (decisions 8.4, 4.5, 8.8).
@@ -19,7 +19,7 @@ import { businessDayRange } from "@/shared/time/business-day";
  * - payee, cost centre, description, document and creator are stored;
  * - nothing crosses companies, and a bill never moves between them.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 let app: Awaited<typeof import("@/http")>["app"];
 

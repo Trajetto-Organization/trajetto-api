@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { Prisma, PrismaClient } from "@prisma/client";
+import { Prisma } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 
 import { ProfileAccessRepository } from "@/modules/profile-access/repositories/profile-access-repository";
@@ -11,6 +11,7 @@ import { InMemoryPermissionRepository } from "@/modules/permission/repositories/
 import type { IProfileAccessRepository } from "@/modules/profile-access/repositories/IProfile-access-repository";
 import type { IPermissionRepository } from "@/modules/permission/repositories/IPermission-repository";
 import type { PermissionKey } from "@/config/permissions";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * One suite, two implementations (decision 13.2): the access-profile and
@@ -21,7 +22,7 @@ import type { PermissionKey } from "@/config/permissions";
  * Postgres comparator, and accepted a second profile (or permission) with
  * a name the database refuses.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 const A = randomUUID();
 const B = randomUUID();

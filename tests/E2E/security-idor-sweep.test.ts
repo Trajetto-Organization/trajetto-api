@@ -1,6 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
 import Redis from "ioredis";
 import { randomUUID } from "node:crypto";
 import { writeFileSync } from "node:fs";
@@ -12,6 +11,7 @@ import {
   sweepToken,
   type CarrierIds,
 } from "./support/idor-sweep-seed";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * The IDOR sweep, built from the OpenAPI document instead of by hand.
@@ -38,7 +38,7 @@ import {
  * slot has a name this file does not know — which the coverage test below
  * turns into a failure that names it.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 let app: Awaited<typeof import("@/http")>["app"];
 let redis: Redis;

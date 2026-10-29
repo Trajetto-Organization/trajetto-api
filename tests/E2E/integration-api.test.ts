@@ -1,9 +1,9 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 
 import { generateApiKey } from "@/shared/integration/api-key-rules";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * The public API as an outside system reaches it: a real key, real scopes, a
@@ -13,7 +13,7 @@ import { generateApiKey } from "@/shared/integration/api-key-rules";
  * this surface is written by somebody who sends their own company's id — and
  * the whole risk of a public API is the request that does not.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 let app: Awaited<typeof import("@/http")>["app"];
 

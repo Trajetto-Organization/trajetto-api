@@ -1,12 +1,12 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 
 import { sign } from "jsonwebtoken";
 import auth from "@/config/auth";
 
 import { generateApiKey } from "@/shared/integration/api-key-rules";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * What a `route.*` webhook tells an ERP about the route, over HTTP against
@@ -19,7 +19,7 @@ import { generateApiKey } from "@/shared/integration/api-key-rules";
  * instant an integrator's parser would shift into its own zone. The public
  * read of a route answers the same facts.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 let app: Awaited<typeof import("@/http")>["app"];
 

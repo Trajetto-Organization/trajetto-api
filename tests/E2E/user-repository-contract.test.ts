@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { Prisma, PrismaClient } from "@prisma/client";
+import { Prisma } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 
 import { UserRepository } from "@/modules/user/repositories/user-repository";
@@ -13,6 +13,7 @@ import type { IUsersTokensRepository } from "@/modules/user/repositories/IUsers-
 import type { UserRole } from "@/modules/user/dtos/user-dto";
 
 import { summarizeUserList } from "@/modules/user/usecases/list-users/user-list";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * One suite, two implementations (decision 13.2, TEST-PAR-3): the Prisma
@@ -23,7 +24,7 @@ import { summarizeUserList } from "@/modules/user/usecases/list-users/user-list"
  * leave refresh tokens alive after a password change or a revocation — so a
  * unit test could pass on behaviour the database does not have.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 const A = randomUUID();
 const B = randomUUID();

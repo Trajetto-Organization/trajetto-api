@@ -20,9 +20,14 @@ import { IDashboardRepository } from "./IDashboard-repository";
 import { DUE_SOON_DAYS } from "./maintenance-standing";
 import { periodBuckets } from "./period-buckets";
 
-/** A UTC timestamp column compared with an instant, whatever the session zone. */
+/**
+ * A UTC timestamp column compared with an instant, whatever the session zone.
+ * The instant goes as an ISO string: Prisma 7's pg driver sends a Date as a
+ * naive "YYYY-MM-DD HH:MM:SS" in UTC, which `::timestamptz` would read in the
+ * session's TimeZone (Prisma 6 bound it as a timestamptz itself).
+ */
 function utc(instant: Date): Prisma.Sql {
-  return Prisma.sql`(${instant}::timestamptz AT TIME ZONE 'UTC')`;
+  return Prisma.sql`(${instant.toISOString()}::timestamptz AT TIME ZONE 'UTC')`;
 }
 
 /**

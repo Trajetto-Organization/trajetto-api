@@ -1,12 +1,13 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { Prisma, PrismaClient } from "@prisma/client";
+import { Prisma } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 
 import { DeliveryRepository } from "@/modules/delivery/repositories/delivery-repository";
 import { DeliveryStatusConflictError } from "@/modules/delivery/usecases/errors/delivery-errors";
 import { FuelRepository } from "@/modules/fuel/repositories/fuel-repository";
 import { ActivityRepository } from "@/modules/activity/repositories/activity-repository";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * The guards that exist only in a Prisma `where`, proved against Postgres.
@@ -23,8 +24,8 @@ import { ActivityRepository } from "@/modules/activity/repositories/activity-rep
  * would. A single client would serialise nothing, but it would also prove
  * nothing about what the database decides.
  */
-const prisma = new PrismaClient();
-const otherConnection = new PrismaClient();
+const prisma = createPrismaClient();
+const otherConnection = createPrismaClient();
 
 const CARRIER = "018fe000-0000-7000-8000-0000000009a1";
 

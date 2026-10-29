@@ -3,6 +3,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { PrismaClient } from "@prisma/client";
 
 import { seedFleetDriver } from "./support/fleet-driver-seed";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * The company gate on a route that names its :businessId (GAP3-9).
@@ -19,13 +20,13 @@ import { seedFleetDriver } from "./support/fleet-driver-seed";
  * also what proves the per-request memo reaches a preHandler — the unit test
  * of the gate only proves the decision.
  */
-const counted = new PrismaClient({
+const counted = createPrismaClient({
   log: [{ level: "query", emit: "event" }],
 });
 
 (globalThis as unknown as { prisma: PrismaClient }).prisma = counted;
 
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 let app: Awaited<typeof import("@/http")>["app"];
 

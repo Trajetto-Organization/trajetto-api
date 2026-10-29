@@ -1,12 +1,12 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
 import { createHmac, randomUUID } from "node:crypto";
 
 import { container } from "tsyringe";
 
 import { env } from "@/env";
 import { MailDeliveryError } from "@/shared/providers/mail-provider/errors/mail-delivery-error";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * OBS-08: DELIVERED means "the provider accepted it", and until now that was
@@ -20,7 +20,7 @@ import { MailDeliveryError } from "@/shared/providers/mail-provider/errors/mail-
  *    webhook. It now lands in the receipts ledger, tied to the delivery by
  *    the Message-ID the pipeline sets (the same header Resend reports back).
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 let app: Awaited<typeof import("@/http")>["app"];
 let pipeline: import("@/shared/notifications/notification-pipeline-service").NotificationPipelineService;

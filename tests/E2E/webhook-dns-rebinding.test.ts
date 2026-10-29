@@ -8,10 +8,10 @@ import {
   vi,
 } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
 import dnsCallbacks from "node:dns";
 import { createServer, type Server } from "node:net";
 import type { AddressInfo } from "node:net";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * DNS rebinding, end to end, through the PRODUCTION dispatcher.
@@ -68,7 +68,7 @@ import {
   fanOutWebhookEvent,
 } from "@/shared/integration/webhook-dispatch-service";
 
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 const CARRIER = "018f8000-0000-7000-8000-0000000000d9";
 

@@ -1,30 +1,25 @@
 /**
- * The Prisma connection pool of THIS replica, read from `$metrics.json()`
- * (OBS-11, GAP3-10; `previewFeatures = ["metrics"]` in schema.prisma).
+ * The database connection pool of THIS replica (OBS-11, GAP3-10), read from
+ * the pg Pool behind Prisma 7's driver adapter.
  *
  * The pool is what saturates first under load: every request and worker of a
  * replica shares `connection_limit` connections, and a request that finds
  * them all busy waits up to pool_timeout before failing. Postgres' own
  * pg_stat_activity/max_connections cannot show it — two replicas of ten
  * against a hundred read 20% while both pools are full.
+ *
+ * Prisma 6 exposed these numbers through the `metrics` preview
+ * (`$metrics.json()`), removed in Prisma 7. pg-pool counts the same things
+ * itself; the fields of `runtime.prisma_pool` keep their names and meaning,
+ * so the Sistema screen, the minute log line and the alert rules read them
+ * as before.
  */
-
-interface MetricEntry {
-  key: string;
-  value: unknown;
-}
-
-interface PrismaMetricsJson {
-  counters: MetricEntry[];
-  gauges: MetricEntry[];
-  histograms: MetricEntry[];
-}
 
 interface PoolMetrics {
   /** Connections the pool holds open. */
   open: number;
 
-  /** Of those, running a query right now. */
+  /** Of those, checked out by a query or a transaction right now. */
   busy: number;
 
   idle: number;
@@ -33,29 +28,38 @@ interface PoolMetrics {
   waiting: number;
 }
 
-function gauge(metrics: PrismaMetricsJson, key: string): number {
-  const value = metrics.gauges.find((entry) => entry.key === key)?.value;
-
-  return typeof value === "number" && Number.isFinite(value) ? value : 0;
+/** What pg-pool exposes, and all this module reads of it. */
+interface PoolStats {
+  readonly totalCount: number;
+  readonly idleCount: number;
+  readonly waitingCount: number;
+  readonly options: { max?: number };
 }
 
-/**
- * Zero for a gauge the running Prisma version does not report: the metrics
- * preview renames things between releases, and a missing gauge must not turn
- * the endpoint into a 500.
- */
-function poolFromMetrics(metrics: PrismaMetricsJson): PoolMetrics {
+function count(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) && value > 0
+    ? value
+    : 0;
+}
+
+/** Zeros before the first query: the pool is built on first use. */
+function poolFromStats(pool: PoolStats | null): PoolMetrics {
+  if (!pool) return { open: 0, busy: 0, idle: 0, waiting: 0 };
+
+  const open = count(pool.totalCount);
+  const idle = count(pool.idleCount);
+
   return {
-    open: gauge(metrics, "prisma_pool_connections_open"),
-    busy: gauge(metrics, "prisma_pool_connections_busy"),
-    idle: gauge(metrics, "prisma_pool_connections_idle"),
-    waiting: gauge(metrics, "prisma_client_queries_wait"),
+    open,
+    busy: Math.max(open - idle, 0),
+    idle,
+    waiting: count(pool.waitingCount),
   };
 }
 
 /**
- * `connection_limit` of a database URL, or null when the URL leaves it to
- * Prisma's default (a function of the CPU count).
+ * `connection_limit` of a database URL, or null when the URL does not set it
+ * (the pool then holds pg's default of 10; see pool-config.ts).
  */
 function connectionLimitOf(databaseUrl: string | undefined): number | null {
   if (!databaseUrl) return null;
@@ -70,23 +74,30 @@ function connectionLimitOf(databaseUrl: string | undefined): number | null {
   }
 }
 
-interface MetricsSource {
-  $metrics: { json(): Promise<PrismaMetricsJson> };
+/** The pool's own `max` once it exists, the URL's until then. */
+function poolLimitOf(
+  pool: PoolStats | null,
+  databaseUrl: string | undefined,
+): number | null {
+  const max = pool?.options.max;
+
+  return typeof max === "number" && Number.isInteger(max) && max > 0
+    ? max
+    : connectionLimitOf(databaseUrl);
 }
 
 /**
- * The pool of the client given (the application's), with the limit read from
- * its URL: `runtime.prisma_pool` of the minute log line (runtime-metrics.ts).
+ * The application's pool with its limit: `runtime.prisma_pool` of the
+ * minute log line (runtime-metrics.ts) and of /health/metrics.
  */
 async function readPrismaPool(
-  source: MetricsSource,
+  source: () => PoolStats | null,
   databaseUrl: string | undefined,
 ): Promise<PoolMetrics & { limit: number | null }> {
-  return {
-    limit: connectionLimitOf(databaseUrl),
-    ...poolFromMetrics(await source.$metrics.json()),
-  };
+  const pool = source();
+
+  return { limit: poolLimitOf(pool, databaseUrl), ...poolFromStats(pool) };
 }
 
-export { connectionLimitOf, poolFromMetrics, readPrismaPool };
-export type { PoolMetrics, PrismaMetricsJson };
+export { connectionLimitOf, poolFromStats, poolLimitOf, readPrismaPool };
+export type { PoolMetrics, PoolStats };

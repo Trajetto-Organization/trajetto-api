@@ -1,6 +1,5 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 
@@ -14,6 +13,7 @@ import {
   MAX_CONSECUTIVE_FAILURES,
   REPLAY_WINDOW_DAYS,
 } from "@/shared/integration/webhook-dispatch-rules";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * An endpoint that may not be delivered to, and what happens to its events.
@@ -34,7 +34,7 @@ import {
  * when somebody saves the endpoint again. The breaker tells the company's
  * admins it tripped.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 const CARRIER = "018f8000-0000-7000-8000-0000000000b5";
 

@@ -1,7 +1,5 @@
 import { afterAll, beforeAll, describe } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
-
 import { BusinessRepository } from "@/modules/business/repositories/business-repository";
 import { InMemoryBusinessRepository } from "@/modules/business/repositories/in-memory/in-memory-business-repository";
 import type { Business } from "@/modules/business/dtos/business-dto";
@@ -13,9 +11,10 @@ import {
 } from "../contract/repositories/business.contract";
 import { clone, KINDS, type Kind } from "../contract/support";
 import { seedBranch, seedDriver, seedUser } from "../contract/seed";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /** Decision 13.2: the business contract against Postgres and the twin. */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 const memory = new InMemoryBusinessRepository();
 let seeded = 0;

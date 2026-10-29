@@ -1,6 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 
 import { DeliveryRepository } from "@/modules/delivery/repositories/delivery-repository";
@@ -16,6 +15,7 @@ import { ControlTowerUseCase } from "@/modules/route/usecases/control-tower/cont
 import { DriverPositionRepository } from "@/modules/route/repositories/driver-position-repository";
 
 import { operationDay } from "@/shared/route/operation-day-rules";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * What the operation summary counts as the company's day, on the real tables.
@@ -41,7 +41,7 @@ import { operationDay } from "@/shared/route/operation-day-rules";
  * of any date; occurrences reported by a driver's account, placed by when
  * they happened on the phone, without the platform's own types (DLVP-OPS-2).
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 const operation = new OperationDayRepository();
 const deliveries = new DeliveryRepository();
 

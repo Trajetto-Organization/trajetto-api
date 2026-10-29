@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
 import { randomUUID } from "node:crypto";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * OBS-03: what the ops heartbeat reads from the database, against a real one.
@@ -9,7 +9,7 @@ import { randomUUID } from "node:crypto";
  * it claims, and that a stuck outbox event and an expired WhatsApp token
  * each turn into a reason the external check receives.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 const BUSINESS = "018fc000-0000-7000-8000-000000000fa1";
 const USER = "018fc000-0000-7000-8000-000000000fa2";

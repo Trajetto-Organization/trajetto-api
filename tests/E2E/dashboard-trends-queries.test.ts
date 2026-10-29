@@ -1,6 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 
 import { DashboardRepository } from "@/modules/dashboard/repositories/dashboard-repository";
@@ -14,6 +13,7 @@ import {
   shiftDateKey,
   zonedWallTimeToUtc,
 } from "@/shared/time/business-day";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * The trend chart: what it costs, and whose calendar it draws.
@@ -30,10 +30,10 @@ import {
  * Visibility: a series is present only when the viewer may see it and the
  * company hired its module (DLVP-ADM-1, DASH-MOD-1).
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 /** A second client, with query logging on, so the queries can be counted. */
-const counted = new PrismaClient({
+const counted = createPrismaClient({
   log: [{ level: "query", emit: "event" }],
 });
 

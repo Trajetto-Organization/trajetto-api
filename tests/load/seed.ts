@@ -1,5 +1,3 @@
-import { PrismaClient } from "@prisma/client";
-
 import { randomUUID } from "node:crypto";
 import { writeFileSync, mkdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
@@ -15,6 +13,7 @@ import {
   dateOnlyFromKey,
 } from "../../src/shared/time/business-day";
 import { assertDisposableDatabase } from "./lib/disposable-database";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * The dataset the load scripts run against.
@@ -31,7 +30,7 @@ import { assertDisposableDatabase } from "./lib/disposable-database";
  * Writes into the throwaway container, never the developer's database. The
  * connection string is required rather than defaulted for exactly that reason.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 const TENANTS = Number(process.env.LOAD_TENANTS ?? 40);
 const DELIVERIES_PER_TENANT = Number(process.env.LOAD_DELIVERIES ?? 500);

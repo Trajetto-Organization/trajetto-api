@@ -1,6 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
 import { sign } from "jsonwebtoken";
 
 import { randomUUID } from "node:crypto";
@@ -8,6 +7,7 @@ import { randomUUID } from "node:crypto";
 import auth from "@/config/auth";
 import { businessDateKey } from "@/shared/time/business-day";
 import { fineResponses } from "@/routes/documentation/fine-documentation";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * Fines over real HTTP and Postgres (CRIT-17: they had only been reviewed on
@@ -25,7 +25,7 @@ import { fineResponses } from "@/routes/documentation/fine-documentation";
  * - Walls: another company's rows, ids and names never cross; read-only,
  *   no-permission, driver and no-FLEET tokens get what their access says.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 let app: Awaited<typeof import("@/http")>["app"];
 

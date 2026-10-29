@@ -4,6 +4,7 @@ import { BranchCnpjAlreadyExistsError } from "./branch-cnpj-already-exists-error
 import { BranchEmailAlreadyExistsError } from "./branch-email-already-exists-error";
 import { BranchErpCodeAlreadyExistsError } from "./branch-erp-code-already-exists-error";
 import { BranchNameAlreadyExistsError } from "./branch-name-already-exists-error";
+import { uniqueTargetOf } from "@/shared/errors/prisma-error-meta";
 
 type BranchConflict =
   | BranchCnpjAlreadyExistsError
@@ -26,7 +27,7 @@ function branchUniqueViolation(error: unknown): BranchConflict | null {
     return null;
   }
 
-  const target = error.meta?.target;
+  const target = uniqueTargetOf(error);
   const fields = Array.isArray(target)
     ? target.join(",")
     : String(target ?? "");

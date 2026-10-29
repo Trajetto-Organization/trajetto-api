@@ -1,6 +1,6 @@
 import database from "@/../infra/database";
 import { Prisma } from "@prisma/client";
-import { Decimal } from "@prisma/client/runtime/library";
+import { Decimal } from "@prisma/client/runtime/client";
 
 import {
   Fine,

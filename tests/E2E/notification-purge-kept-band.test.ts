@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { PrismaClient } from "@prisma/client";
 import { randomUUID } from "node:crypto";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * The band of notifications the nightly purge keeps, and how often it reads it.
@@ -22,13 +23,13 @@ import { randomUUID } from "node:crypto";
  * EXPLAIN ANALYZEd (and rolled back) as its first batch would run. A first
  * batch that fills must not have discarded a single kept row on the way.
  */
-const counted = new PrismaClient({
+const counted = createPrismaClient({
   log: [{ level: "query", emit: "event" }],
 });
 
 (globalThis as unknown as { prisma: PrismaClient }).prisma = counted;
 
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 const CARRIER = "018fe090-0000-7000-8000-00000000000a";
 const USER = "018fe090-0000-7000-8000-0000000000a1";

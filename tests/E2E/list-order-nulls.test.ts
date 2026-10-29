@@ -1,12 +1,13 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { Prisma, PrismaClient } from "@prisma/client";
+import { Prisma } from "@prisma/client";
 
 import {
   compareForOrder,
   type NullsPlacement,
 } from "@/shared/pagination/in-memory-order";
 import type { SortOrder } from "@/shared/pagination/list-query";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * Where Postgres puts NULLs under the orderBy shapes a server-sorted list
@@ -15,7 +16,7 @@ import type { SortOrder } from "@/shared/pagination/list-query";
  * delivered_at, scheduled_date, its driver's name) must order the same in
  * its in-memory twin, or the twin's tests prove another screen.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 const BUSINESS = "018fe200-0000-7000-8000-00000000000a";
 const SHIPPER = "018fe200-0000-7000-8000-0000000000f1";

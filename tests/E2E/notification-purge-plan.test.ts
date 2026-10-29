@@ -1,9 +1,10 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { Prisma, PrismaClient } from "@prisma/client";
+import { Prisma } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 
 import { publishedPurgeBatchSql } from "@/jobs/cron/cleanup-notification-pipeline-job";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * What one night of the notification purge costs at the target scale
@@ -24,7 +25,7 @@ import { publishedPurgeBatchSql } from "@/jobs/cron/cleanup-notification-pipelin
  * is kept. Same conditions as the other plan tests: sequential scans off and a
  * generic plan, so a Seq Scan here means "no index applies".
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 interface PlanNode {
   "Node Type": string;

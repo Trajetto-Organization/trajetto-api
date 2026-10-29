@@ -8,13 +8,13 @@ import {
   vi,
 } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 
 import { sign } from "jsonwebtoken";
 import { container } from "tsyringe";
 
 import auth from "@/config/auth";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * A driver's app login is part of the driver catalogue the web reads: the
@@ -41,7 +41,7 @@ vi.mock("@/websocket", async (importOriginal) => {
   };
 });
 
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 let app: Awaited<typeof import("@/http")>["app"];
 

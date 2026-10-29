@@ -1,6 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 import { createServer, type Server } from "node:http";
 
@@ -8,6 +7,7 @@ import { sign } from "jsonwebtoken";
 
 import { socketClientEntry } from "./support/socket-client";
 import { startReplica, type Replica } from "./support/replica-process";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * The `supportTicket` event across replicas (decision 14.5, design §7.3).
@@ -27,7 +27,7 @@ const ADAPTER_KEY = vi.hoisted(() => {
   return key;
 });
 
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 const CARRIER = "018fec00-0000-7000-8000-00000000000a";
 const OTHER = "018fec00-0000-7000-8000-00000000000b";

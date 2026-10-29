@@ -2,7 +2,6 @@ import "@/shared";
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 import { container } from "tsyringe";
 import type { z } from "zod";
@@ -14,6 +13,7 @@ import { deliveryResponses } from "@/routes/documentation/delivery-documentation
 import { documentedDocFor } from "@/routes/documentation/doc-only-responses";
 
 import { strictIssues } from "../unitaires/contract/support/deep-strict";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * The driver's day and the delivery detail, as documented, against what the
@@ -26,7 +26,7 @@ import { strictIssues } from "../unitaires/contract/support/deep-strict";
  * payload. A column added to Delivery, or an include added to the detail,
  * fails here until /docs says so.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 const CARRIER = "018f3000-0000-7000-8000-0000000005d0";
 const OPERATOR = "018f3000-0000-7000-8000-0000000005d1";

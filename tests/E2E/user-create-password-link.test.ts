@@ -8,7 +8,6 @@ import {
   vi,
 } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 
 import { compare } from "bcrypt";
@@ -16,6 +15,7 @@ import { sign } from "jsonwebtoken";
 import { container } from "tsyringe";
 
 import auth from "@/config/auth";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * A new account never gets its password by e-mail (decision 4.9,
@@ -38,7 +38,7 @@ vi.mock("@/websocket", async (importOriginal) => {
   };
 });
 
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 let app: Awaited<typeof import("@/http")>["app"];
 

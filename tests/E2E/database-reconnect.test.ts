@@ -1,10 +1,10 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 
 import { sign } from "jsonwebtoken";
 import auth from "@/config/auth";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * The API gets its database back without a restart.
@@ -21,10 +21,10 @@ import auth from "@/config/auth";
  * because the test environment gives each file its own database — only this
  * file's connections live in it.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 /** A session of its own, so it survives the terminations it issues. */
-const killer = new PrismaClient();
+const killer = createPrismaClient();
 
 const CARRIER = "018fb000-0000-7000-8000-0000000003a1";
 const USER = "018fb000-0000-7000-8000-0000000003b1";

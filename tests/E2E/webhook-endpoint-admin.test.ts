@@ -1,6 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 
 import { sign } from "jsonwebtoken";
@@ -8,6 +7,7 @@ import auth from "@/config/auth";
 
 import { fanOutWebhookEvent } from "@/shared/integration/webhook-dispatch-service";
 import { openHeaders } from "@/shared/integration/secret-box";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * The admin screens' side of an endpoint: what an edit keeps, and what a
@@ -17,7 +17,7 @@ import { openHeaders } from "@/shared/integration/secret-box";
  * controller: an edit that wrote `headers ?? null` and a resend that never
  * looked at the endpoint it was sending to.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 let app: Awaited<typeof import("@/http")>["app"];
 

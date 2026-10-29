@@ -226,11 +226,6 @@ class DriverRepository implements IDriverRepository {
         id: driverId,
       },
       include: {
-        branch: {
-          select: {
-            is_active: true,
-          },
-        },
         User: {
           select: {
             id: true,
@@ -241,7 +236,22 @@ class DriverRepository implements IDriverRepository {
       },
     });
 
-    return findDriverById;
+    if (!findDriverById) return null;
+
+    // The branch only when the driver has one: Prisma 7 queries a relation
+    // even under a null key (shared/database/related-rows.ts).
+    const branch = findDriverById.branchId
+      ? await this.prisma.branch.findUnique({
+          where: { id: findDriverById.branchId },
+          select: { is_active: true },
+        })
+      : null;
+
+    // The include's key order: the driver, its branch, its user.
+    const { User, ...driver } = findDriverById;
+    const withRelations = { ...driver, branch, User };
+
+    return withRelations;
   }
 
   async findDriverByCpf(

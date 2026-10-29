@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { PrismaClient } from "@prisma/client";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * A write must not be the first thing to give up when the pool is busy.
@@ -29,9 +30,10 @@ beforeAll(async () => {
 
   // Same shape as production's URL, only a smaller pool, so the application's
   // own client is the one under test and not a copy of its options.
-  observer = new PrismaClient({
-    datasources: { db: { url: process.env.DATABASE_URL as string } },
-  });
+  observer = createPrismaClient(
+    {},
+    { url: process.env.DATABASE_URL as string },
+  );
 
   process.env.DATABASE_URL = url.toString();
 
@@ -100,9 +102,7 @@ describe("a transaction on a busy pool", () => {
      * test says so, and the one above stops proving anything.
      */
     const url = new URL(process.env.DATABASE_URL as string);
-    const bare = new PrismaClient({
-      datasources: { db: { url: url.toString() } },
-    });
+    const bare = createPrismaClient({}, { url: url.toString() });
 
     try {
       const held = await holdTheWholePool(bare);

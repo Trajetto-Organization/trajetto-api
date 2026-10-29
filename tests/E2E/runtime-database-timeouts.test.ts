@@ -5,6 +5,7 @@ import {
   productionDatabaseUrlFor,
   type ProductionDatabaseVariable,
 } from "../support/production-database-url";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * The production connection strings, as modelled in .env.example (the API
@@ -42,7 +43,7 @@ afterAll(async () => {
 });
 
 async function settingsOf(url: string) {
-  const client = new PrismaClient({ datasources: { db: { url } }, log: [] });
+  const client = createPrismaClient({ log: [] }, { url: url });
   clients.push(client);
 
   const [row] = await client.$queryRawUnsafe<

@@ -1,12 +1,12 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
 import { sign } from "jsonwebtoken";
 
 import { randomUUID } from "node:crypto";
 
 import auth from "@/config/auth";
 import { pauseTypeId } from "./support/pause-type-seed";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * Registering, editing and deleting drivers over real HTTP and Postgres:
@@ -15,7 +15,7 @@ import { pauseTypeId } from "./support/pause-type-seed";
  * routes still need the driver (decision 8.3), and a delete that no longer
  * ends in a 500 on the pause table's RESTRICT key.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 let app: Awaited<typeof import("@/http")>["app"];
 

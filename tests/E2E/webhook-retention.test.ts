@@ -1,10 +1,11 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { PrismaClient, WebhookDeliveryStatus } from "@prisma/client";
+import { WebhookDeliveryStatus } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 
 import { sign } from "jsonwebtoken";
 import auth from "@/config/auth";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * How long the webhook ledger keeps a row, and what the monitor reads.
@@ -19,7 +20,7 @@ import auth from "@/config/auth";
  * The job is imported lazily: before the fix the module did not exist, and a
  * static import would fail the whole file instead of the one assertion.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 let app: Awaited<typeof import("@/http")>["app"];
 

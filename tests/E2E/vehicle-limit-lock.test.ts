@@ -1,9 +1,9 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 
 import { VehicleRepository } from "@/modules/vehicle/repositories/vehicle-repository";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * What registering a vehicle locks, and who else waits for it.
@@ -22,9 +22,9 @@ import { VehicleRepository } from "@/modules/vehicle/repositories/vehicle-reposi
  * company, with a short lock_timeout so a block shows up as an error instead
  * of a hang.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
-const counted = new PrismaClient({
+const counted = createPrismaClient({
   log: [{ level: "query", emit: "event" }],
 });
 

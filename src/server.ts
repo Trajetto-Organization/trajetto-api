@@ -30,7 +30,7 @@ import { logger } from "./shared/logging/logger";
 import "./shared/services/proof-signing/proof-signing-service";
 import type { ProofSigningService } from "./shared/services/proof-signing/proof-signing-service";
 
-import database from "../infra/database";
+import { databasePool } from "../infra/database";
 
 /**
  * The process's own lines — boot, shutdown, unhandled rejections — through the
@@ -170,7 +170,7 @@ async function bootstrap() {
       // the replica's Prisma pool, which the endpoint shows for one replica
       // only.
       stopRuntimeMetrics = startRuntimeMetrics(app.log, runtimeMetrics, () =>
-        readPrismaPool(database, process.env.DATABASE_URL),
+        readPrismaPool(databasePool, process.env.DATABASE_URL),
       );
     },
 

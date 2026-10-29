@@ -1,11 +1,11 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
 import { sign } from "jsonwebtoken";
 
 import { randomUUID } from "node:crypto";
 
 import auth from "@/config/auth";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * The driver's side of the linked chat (decision 6.7), as the app uses it,
@@ -19,7 +19,7 @@ import auth from "@/config/auth";
  * chat-linked-broadcast-http.test.ts; this pins the driver side, including
  * another driver's and another company's ids.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 let app: Awaited<typeof import("@/http")>["app"];
 

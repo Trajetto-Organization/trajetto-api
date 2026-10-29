@@ -1,6 +1,6 @@
 import { afterAll, describe, expect, it } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * The indexes the schema cannot declare.
@@ -21,7 +21,7 @@ import { PrismaClient } from "@prisma/client";
  * nothing about a long-lived database that has drifted. Dropping the index by
  * hand in a running environment leaves these green.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 afterAll(async () => {
   await prisma.$disconnect();

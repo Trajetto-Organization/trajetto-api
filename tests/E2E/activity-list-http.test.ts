@@ -1,12 +1,12 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
 import { sign } from "jsonwebtoken";
 
 import { randomUUID } from "node:crypto";
 
 import auth from "@/config/auth";
 import { businessDaysRange } from "@/shared/time/business-day";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * The activity table and summary over real HTTP and Postgres.
@@ -19,7 +19,7 @@ import { businessDaysRange } from "@/shared/time/business-day";
  *   admin never reads another company, whatever id it sends.
  * - "7 dias" are civil days in the company's zone (decision 1.1).
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 let app: Awaited<typeof import("@/http")>["app"];
 

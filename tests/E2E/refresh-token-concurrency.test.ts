@@ -1,12 +1,12 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 
 import {
   hashRefreshToken,
   issueSessionTokenPair,
 } from "@/modules/user/services/session-service";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * Refresh-token rotation against the real database, where the race lives.
@@ -22,7 +22,7 @@ import {
  * Asserted on the database: `session_version` is what "log out everywhere"
  * bumps, so it is what tells a race handled from a race that burned the account.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 let app: Awaited<typeof import("@/http")>["app"];
 

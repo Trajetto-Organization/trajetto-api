@@ -1,6 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -9,6 +8,7 @@ import { sign } from "jsonwebtoken";
 import auth from "@/config/auth";
 
 import { socketClientEntry } from "./support/socket-client";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * What a refused handshake says about WHY.
@@ -19,7 +19,7 @@ import { socketClientEntry } from "./support/socket-client";
  * Postgres blink sent the whole fleet to renew perfectly good credentials, all
  * at once, against a database that was already struggling.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 const CARRIER = "018fdb00-0000-7000-8000-00000000000a";
 const USER = "018fdb00-0000-7000-8000-0000000000a1";

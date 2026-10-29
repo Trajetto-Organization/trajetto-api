@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { Prisma, PrismaClient } from "@prisma/client";
+import { Prisma } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 
 import { DashboardRepository } from "@/modules/dashboard/repositories/dashboard-repository";
@@ -8,6 +8,7 @@ import {
   businessMonthStart,
   zonedWallTimeToUtc,
 } from "@/shared/time/business-day";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * The dashboard's counts are index range counts, not a label per row.
@@ -26,8 +27,10 @@ import {
  * that old SQL, run here against the same rows, at month edges where UTC and
  * the company's zone disagree.
  */
-const counted = new PrismaClient({ log: [{ level: "query", emit: "event" }] });
-const prisma = new PrismaClient();
+const counted = createPrismaClient({
+  log: [{ level: "query", emit: "event" }],
+});
+const prisma = createPrismaClient();
 
 const statements: Array<{ query: string; params: string }> = [];
 

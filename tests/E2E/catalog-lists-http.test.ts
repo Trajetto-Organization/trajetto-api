@@ -1,11 +1,11 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
 import { sign } from "jsonwebtoken";
 
 import { randomUUID } from "node:crypto";
 
 import auth from "@/config/auth";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * The Entregas catalog tabs on the server (decision 8.8), over real HTTP and
@@ -17,7 +17,7 @@ import auth from "@/config/auth";
  * each filter's `where`, the GROUP BY behind the cards and the filter counts,
  * the 400s of the whitelist, the tenant and the roles.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 let app: Awaited<typeof import("@/http")>["app"];
 

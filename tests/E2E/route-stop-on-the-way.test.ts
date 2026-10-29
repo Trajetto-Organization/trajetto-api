@@ -1,6 +1,5 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
 import { sign } from "jsonwebtoken";
 import { randomUUID } from "node:crypto";
 
@@ -9,6 +8,7 @@ import { container } from "tsyringe";
 import auth from "@/config/auth";
 
 import { APP_BOOT_TIMEOUT_MS } from "../support/app-boot";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * "Estou a caminho" (decision 6.4) through real HTTP and the real database:
@@ -19,7 +19,7 @@ import { APP_BOOT_TIMEOUT_MS } from "../support/app-boot";
  * Every refusal is checked for what it did NOT write: a refused mark that
  * stamped the stop or queued a message is the bug this file exists for.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 let app: Awaited<typeof import("@/http")>["app"];
 let pipeline: import("@/shared/notifications/notification-pipeline-service").NotificationPipelineService;

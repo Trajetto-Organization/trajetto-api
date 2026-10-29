@@ -4,7 +4,7 @@
   <img alt="Node.js 22" src="https://img.shields.io/badge/Node.js-22-5FA04E?style=for-the-badge&logo=nodedotjs&logoColor=white" />
   <img alt="TypeScript 5.7" src="https://img.shields.io/badge/TypeScript-5.7-3178C6?style=for-the-badge&logo=typescript&logoColor=white" />
   <img alt="Fastify 5.2" src="https://img.shields.io/badge/Fastify-5.2-000000?style=for-the-badge&logo=fastify&logoColor=white" />
-  <img alt="Prisma 6.1" src="https://img.shields.io/badge/Prisma-6.1-2D3748?style=for-the-badge&logo=prisma&logoColor=white" />
+  <img alt="Prisma 7.10" src="https://img.shields.io/badge/Prisma-7.10-2D3748?style=for-the-badge&logo=prisma&logoColor=white" />
   <img alt="PostgreSQL 16" src="https://img.shields.io/badge/PostgreSQL-16-4169E1?style=for-the-badge&logo=postgresql&logoColor=white" />
   <img alt="Redis 7" src="https://img.shields.io/badge/Redis-7-FF4438?style=for-the-badge&logo=redis&logoColor=white" />
   <img alt="Socket.IO 4.8" src="https://img.shields.io/badge/Socket.IO-4.8-010101?style=for-the-badge&logo=socketdotio&logoColor=white" />
@@ -146,29 +146,29 @@ Para avançar por ele em ordem, um assunto por vez, use o
 
 Versões fixadas no `package.json` (sem `^`) e no `yarn.lock`.
 
-| Peça                                          | Versão                                               | Por que está aqui                                                                                                         |
-| --------------------------------------------- | ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
-| Node.js                                       | 22 (imagem `node:22.21.1-alpine`, fixada por digest) | runtime da API, dos workers e dos crons                                                                                   |
-| TypeScript                                    | 5.7.2 (`strict`)                                     | tipos de ponta a ponta, do schema zod ao repositório                                                                      |
-| Fastify + `fastify-type-provider-zod`         | 5.2.0 / 4.0.2                                        | HTTP rápido com schema por rota; o mesmo schema valida a entrada e gera o OpenAPI (`@fastify/swagger` 9.4.2)              |
-| Prisma (`prisma`, `@prisma/client`)           | 6.1.0                                                | acesso tipado ao Postgres e migrations SQL versionadas (expandir/contrair)                                                |
-| PostgreSQL                                    | 16                                                   | dados de todas as empresas **e** as filas (outbox, notificações, webhooks, IA) e os leases dos crons                      |
-| Redis via `ioredis`                           | 7 / 5.10.1                                           | rate limit, pub/sub do Socket.IO, tickets de socket, intervalo do "esqueci minha senha", fotos do MASTER; descartável     |
-| Socket.IO + `@socket.io/redis-adapter`        | 4.8.3 / 8.3.0                                        | tempo real para a web e o app, entre réplicas                                                                             |
-| tsyringe                                      | 4.8.0                                                | injeção de dependência: o usecase recebe o repositório pela interface, e o teste troca pelo gêmeo in-memory               |
-| zod                                           | 3.25.1                                               | validação de entrada (`src/schemas/`) e do ambiente no boot (`src/schemas/env-schema/`)                                   |
-| pino                                          | 9.14.0                                               | log JSON, uma linha por requisição, com censura de segredos                                                               |
-| `@aws-sdk/client-s3` + `s3-request-presigner` | 3.1107.0                                             | Cloudflare R2 (API S3): URLs pré-assinadas de PUT e GET e conferência com `HeadObject`                                    |
-| nodemailer + handlebars                       | 6.9.16 / 4.7.10                                      | e-mail pelo SMTP da Resend (em desenvolvimento, conta de teste Ethereal) e os templates                                   |
-| pdfkit + `@signpdf/*` + node-forge + qrcode   | 0.15.1 / 3.3.0 / 1.4.0 / 1.5.4                       | PDF do comprovante, assinatura PAdES com o A1 e o QR de conferência                                                       |
-| exceljs, fast-xml-parser                      | 4.4.0 / 5.11.0                                       | importação de planilha e de XML de NF-e; exportação CSV/Excel                                                             |
-| node-cron                                     | 4.2.1                                                | agenda dos crons (a exclusão mútua entre réplicas é um lease no Postgres)                                                 |
-| undici                                        | 7.29.0                                               | cliente HTTP dos webhooks dos clientes                                                                                    |
-| bcrypt, jsonwebtoken                          | 6.0.0 / 9.0.2                                        | senhas e tokens de acesso e refresh                                                                                       |
-| Vitest + supertest, Stryker                   | 1.6.0 + 7.0.0, 8.7.1                                 | testes unitários, E2E HTTP e mutação                                                                                      |
-| tsup, tsx                                     | 8.3.5, 4.19.2                                        | build da imagem e execução em desenvolvimento                                                                             |
-| Python (serviço `trajetto-ai`)                | 3.12 (`python:3.12-slim`)                            | RapidOCR 3.9.2 sobre ONNX Runtime 1.30.0, em CPU; servidor HTTP da biblioteca padrão; dependências com `--require-hashes` |
-| Yarn                                          | 1 (`yarn.lock`)                                      | gerenciador de pacotes; nunca npm                                                                                         |
+| Peça                                                             | Versão                                               | Por que está aqui                                                                                                         |
+| ---------------------------------------------------------------- | ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| Node.js                                                          | 22 (imagem `node:22.21.1-alpine`, fixada por digest) | runtime da API, dos workers e dos crons                                                                                   |
+| TypeScript                                                       | 5.7.2 (`strict`)                                     | tipos de ponta a ponta, do schema zod ao repositório                                                                      |
+| Fastify + `fastify-type-provider-zod`                            | 5.2.0 / 4.0.2                                        | HTTP rápido com schema por rota; o mesmo schema valida a entrada e gera o OpenAPI (`@fastify/swagger` 9.4.2)              |
+| Prisma (`prisma`, `@prisma/client`, `@prisma/adapter-pg` + `pg`) | 7.10.1 (`pg` 8.23.1)                                 | acesso tipado ao Postgres pelo driver `pg` e migrations SQL versionadas (expandir/contrair)                               |
+| PostgreSQL                                                       | 16                                                   | dados de todas as empresas **e** as filas (outbox, notificações, webhooks, IA) e os leases dos crons                      |
+| Redis via `ioredis`                                              | 7 / 5.10.1                                           | rate limit, pub/sub do Socket.IO, tickets de socket, intervalo do "esqueci minha senha", fotos do MASTER; descartável     |
+| Socket.IO + `@socket.io/redis-adapter`                           | 4.8.3 / 8.3.0                                        | tempo real para a web e o app, entre réplicas                                                                             |
+| tsyringe                                                         | 4.8.0                                                | injeção de dependência: o usecase recebe o repositório pela interface, e o teste troca pelo gêmeo in-memory               |
+| zod                                                              | 3.25.1                                               | validação de entrada (`src/schemas/`) e do ambiente no boot (`src/schemas/env-schema/`)                                   |
+| pino                                                             | 9.14.0                                               | log JSON, uma linha por requisição, com censura de segredos                                                               |
+| `@aws-sdk/client-s3` + `s3-request-presigner`                    | 3.1107.0                                             | Cloudflare R2 (API S3): URLs pré-assinadas de PUT e GET e conferência com `HeadObject`                                    |
+| nodemailer + handlebars                                          | 6.9.16 / 4.7.10                                      | e-mail pelo SMTP da Resend (em desenvolvimento, conta de teste Ethereal) e os templates                                   |
+| pdfkit + `@signpdf/*` + node-forge + qrcode                      | 0.15.1 / 3.3.0 / 1.4.0 / 1.5.4                       | PDF do comprovante, assinatura PAdES com o A1 e o QR de conferência                                                       |
+| exceljs, fast-xml-parser                                         | 4.4.0 / 5.11.0                                       | importação de planilha e de XML de NF-e; exportação CSV/Excel                                                             |
+| node-cron                                                        | 4.2.1                                                | agenda dos crons (a exclusão mútua entre réplicas é um lease no Postgres)                                                 |
+| undici                                                           | 7.29.0                                               | cliente HTTP dos webhooks dos clientes                                                                                    |
+| bcrypt, jsonwebtoken                                             | 6.0.0 / 9.0.2                                        | senhas e tokens de acesso e refresh                                                                                       |
+| Vitest + supertest, Stryker                                      | 1.6.0 + 7.0.0, 8.7.1                                 | testes unitários, E2E HTTP e mutação                                                                                      |
+| tsup, tsx                                                        | 8.3.5, 4.19.2                                        | build da imagem e execução em desenvolvimento                                                                             |
+| Python (serviço `trajetto-ai`)                                   | 3.12 (`python:3.12-slim`)                            | RapidOCR 3.9.2 sobre ONNX Runtime 1.30.0, em CPU; servidor HTTP da biblioteca padrão; dependências com `--require-hashes` |
+| Yarn                                                             | 1 (`yarn.lock`)                                      | gerenciador de pacotes; nunca npm                                                                                         |
 
 ## Como o código está organizado
 
@@ -453,8 +453,9 @@ npx vitest run tests/E2E/<arquivo>.test.ts
 ```
 
 Um unitário só: `npx vitest run tests/unitaires/<arquivo>.test.ts`.
-No Windows, rode no máximo 8 arquivos E2E por vez (o engine do Prisma pode cair
-com um _napi panic_). As suítes de navegador da web e o E2E do app usam o seed
+No Windows, rode no máximo 8 arquivos E2E por vez (limite herdado do _napi panic_
+do engine do Prisma 6; o Prisma 7 não tem engine nativo, mas lotes maiores não
+foram medidos). As suítes de navegador da web e o E2E do app usam o seed
 de `tests/load/`. Tudo — o que cada suíte prova, cobertura, mutação e as
 regras para escrever testes — em [`docs/testes.md`](./docs/testes.md).
 
@@ -636,26 +637,26 @@ versão do cliente, sem segredo e sem URL assinada.
 
 ## Solução de problemas
 
-| Sintoma                                           | Causa provável                                                                | O que fazer                                                                                                                                 |
-| ------------------------------------------------- | ----------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
-| `Invalid enviroment variables` no boot            | variável obrigatória faltando ou inválida                                     | leia a lista impressa e compare com `docs/variaveis-de-ambiente.md`                                                                         |
-| `wait-for-postgres` desiste                       | Postgres não subiu ou a porta 5432 está ocupada                               | `yarn database:dev:up` e `docker ps`; pare outro Postgres local                                                                             |
-| `P1001` / conexão recusada                        | `DATABASE_URL` aponta para host ou porta errados                              | em dev, confira `POSTGRES_HOST`/`POSTGRES_PORT`; no Dokploy, o host é o App Name do Database PostgreSQL                                     |
-| `P1008` / `P2024` sob carga                       | pool esgotado ou conexão presa                                                | `docs/arquitetura.md` (Conexão com o Postgres)                                                                                              |
-| Pedidos de IA parados em `PENDING`                | `trajetto-ai` fora do ar, `AI_LOCAL_URL` ausente/errada ou `AI_PROVIDER=none` | em dev, suba o serviço com `--profile ai`; no Dokploy, `AI_LOCAL_URL=http://<App Name da IA>:8080`                                          |
-| Toda leitura de IA falha com `401`                | `AI_LOCAL_TOKEN` (API) diferente do `AI_TOKEN` (serviço)                      | use o mesmo valor nos dois e faça Deploy das duas Applications                                                                              |
-| Rota responde 403/404 inesperado                  | permissão, módulo não contratado ou id de outra empresa                       | `src/modules/middlewares/`, `src/config/permissions.ts`; o `code` do erro diz qual                                                          |
-| Login respondendo 429 para todo mundo em produção | `RATE_LIMIT_TRUSTED_PROXY` errado atrás da Cloudflare                         | use `cloudflare` (`docs/deploy.md`, "Domínios, TLS e a borda")                                                                              |
-| Tempo real não chega entre réplicas               | Redis fora ou `SOCKET_ADAPTER_KEY` diferente entre réplicas                   | confira o Redis; o resto da API segue funcionando                                                                                           |
-| Notificação não chegou                            | provedor recusou ou a entrega esgotou as tentativas                           | `GET /health/dead-letter` e `src/shared/notifications/`                                                                                     |
-| `/docs` responde 404 em produção                  | sem `DOCS_USER`/`DOCS_PASSWORD` (ou senha com menos de 20 caracteres)         | defina as duas                                                                                                                              |
-| PDF do comprovante sem assinatura                 | certificado ausente, vencido ou senha errada                                  | veja o estado em `/health/metrics` e o log do boot                                                                                          |
-| E2E cai com _napi panic_ no Windows               | muitos arquivos E2E na mesma execução                                         | rode em lotes de até 8 arquivos                                                                                                             |
-| Boot de produção recusa banco vazio               | Database novo sem migrations                                                  | instalação nova: `ALLOW_EMPTY_DATABASE_BOOTSTRAP=true` uma única vez; com dados, restaure o dump (`docs/deploy.md`, "Backup e restauração") |
-| Depurador não conecta (porta 9229 ocupada)        | `NODE_OPTIONS=--inspect` com o `tsx`, ou outro processo na porta              | `npx tsx watch --inspect src/server.ts` (veja [Depuração](#depuração)); outra porta: `--inspect=9230`                                       |
-| Usuário relata um erro com `requestId`            | o `requestId` é o `x-request-id` do pedido                                    | procure o valor nos logs: toda linha do pedido tem o mesmo `reqId`                                                                          |
-| Promoção falha com "não existe" no GHCR           | o commit não passou pelo staging, ou o merge foi squash/rebase                | leve o commit a `staging`, espere o verde e faça merge commit                                                                               |
-| Deploy "pulado" no resumo do run                  | o environment do GitHub ainda não tem os secrets do Dokploy                   | `docs/deploy.md`, "Configurar o GitHub"                                                                                                     |
+| Sintoma                                                                               | Causa provável                                                                | O que fazer                                                                                                                                 |
+| ------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Invalid enviroment variables` no boot                                                | variável obrigatória faltando ou inválida                                     | leia a lista impressa e compare com `docs/variaveis-de-ambiente.md`                                                                         |
+| `wait-for-postgres` desiste                                                           | Postgres não subiu ou a porta 5432 está ocupada                               | `yarn database:dev:up` e `docker ps`; pare outro Postgres local                                                                             |
+| `P1001` / conexão recusada                                                            | `DATABASE_URL` aponta para host ou porta errados                              | em dev, confira `POSTGRES_HOST`/`POSTGRES_PORT`; no Dokploy, o host é o App Name do Database PostgreSQL                                     |
+| `503` com `timeout exceeded when trying to connect` ou `Query read timeout` sob carga | pool esgotado ou conexão presa                                                | `docs/arquitetura.md` (Conexão com o Postgres)                                                                                              |
+| Pedidos de IA parados em `PENDING`                                                    | `trajetto-ai` fora do ar, `AI_LOCAL_URL` ausente/errada ou `AI_PROVIDER=none` | em dev, suba o serviço com `--profile ai`; no Dokploy, `AI_LOCAL_URL=http://<App Name da IA>:8080`                                          |
+| Toda leitura de IA falha com `401`                                                    | `AI_LOCAL_TOKEN` (API) diferente do `AI_TOKEN` (serviço)                      | use o mesmo valor nos dois e faça Deploy das duas Applications                                                                              |
+| Rota responde 403/404 inesperado                                                      | permissão, módulo não contratado ou id de outra empresa                       | `src/modules/middlewares/`, `src/config/permissions.ts`; o `code` do erro diz qual                                                          |
+| Login respondendo 429 para todo mundo em produção                                     | `RATE_LIMIT_TRUSTED_PROXY` errado atrás da Cloudflare                         | use `cloudflare` (`docs/deploy.md`, "Domínios, TLS e a borda")                                                                              |
+| Tempo real não chega entre réplicas                                                   | Redis fora ou `SOCKET_ADAPTER_KEY` diferente entre réplicas                   | confira o Redis; o resto da API segue funcionando                                                                                           |
+| Notificação não chegou                                                                | provedor recusou ou a entrega esgotou as tentativas                           | `GET /health/dead-letter` e `src/shared/notifications/`                                                                                     |
+| `/docs` responde 404 em produção                                                      | sem `DOCS_USER`/`DOCS_PASSWORD` (ou senha com menos de 20 caracteres)         | defina as duas                                                                                                                              |
+| PDF do comprovante sem assinatura                                                     | certificado ausente, vencido ou senha errada                                  | veja o estado em `/health/metrics` e o log do boot                                                                                          |
+| E2E cai com _napi panic_ no Windows                                                   | muitos arquivos E2E na mesma execução                                         | rode em lotes de até 8 arquivos                                                                                                             |
+| Boot de produção recusa banco vazio                                                   | Database novo sem migrations                                                  | instalação nova: `ALLOW_EMPTY_DATABASE_BOOTSTRAP=true` uma única vez; com dados, restaure o dump (`docs/deploy.md`, "Backup e restauração") |
+| Depurador não conecta (porta 9229 ocupada)                                            | `NODE_OPTIONS=--inspect` com o `tsx`, ou outro processo na porta              | `npx tsx watch --inspect src/server.ts` (veja [Depuração](#depuração)); outra porta: `--inspect=9230`                                       |
+| Usuário relata um erro com `requestId`                                                | o `requestId` é o `x-request-id` do pedido                                    | procure o valor nos logs: toda linha do pedido tem o mesmo `reqId`                                                                          |
+| Promoção falha com "não existe" no GHCR                                               | o commit não passou pelo staging, ou o merge foi squash/rebase                | leve o commit a `staging`, espere o verde e faça merge commit                                                                               |
+| Deploy "pulado" no resumo do run                                                      | o environment do GitHub ainda não tem os secrets do Dokploy                   | `docs/deploy.md`, "Configurar o GitHub"                                                                                                     |
 
 ## Decisões e limites conhecidos
 
@@ -672,9 +673,10 @@ versão do cliente, sem segredo e sem URL assinada.
   banco.
 - **IA sem provedor externo** ([ADR 0010](./docs/adr/0010-ia-local.md)):
   `AI_PROVIDER=anthropic` impede o boot.
-- **Prisma 6.1 por enquanto** ([ADR 0011](./docs/adr/0011-orm-prisma-6-7-8.md)):
-  o 7.10.1 passou nos gates na segunda tentativa e entra numa publicação
-  separada; o 8 ainda não saiu; o 6 sai do suporte de segurança em 19/11/2026.
+- **Prisma 7.10.1 com `@prisma/adapter-pg`** ([ADR 0011](./docs/adr/0011-orm-prisma-6-7-8.md)):
+  a primeira tentativa deu no-go (orçamento de statements e p95), a segunda
+  passou nos gates e entrou numa publicação própria; o 8 ainda está em RC; o 6
+  saía do suporte de segurança em 19/11/2026.
 - **Sem Turnstile na API**, exceto no formulário público: exigir no login
   quebraria o app.
 - **Sem Compose nem template no Dokploy** para staging e produção; o

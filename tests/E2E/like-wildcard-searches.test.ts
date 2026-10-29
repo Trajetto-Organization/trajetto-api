@@ -1,6 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 
 import { BranchRepository } from "@/modules/branch/repositories/branch-repository";
@@ -11,6 +10,7 @@ import { OccurrenceTypeRepository } from "@/modules/occurrence-type/repositories
 import { ShipperRepository } from "@/modules/shipper/repositories/shipper-repository";
 import { StatusChangeReasonRepository } from "@/modules/status-change-reason/repositories/status-change-reason-repository";
 import { SupplierRepository } from "@/modules/supplier/repositories/supplier-repository";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * A list search is a substring search, not a pattern.
@@ -29,7 +29,7 @@ import { SupplierRepository } from "@/modules/supplier/repositories/supplier-rep
  * (fuel type combobox, chat). Each must find the literal text — ignoring case —
  * and nothing that only matches it as a pattern.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 const A = "018fe071-0000-7000-8000-00000000000a";
 

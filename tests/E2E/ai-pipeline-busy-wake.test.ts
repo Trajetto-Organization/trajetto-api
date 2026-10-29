@@ -1,6 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 
 import { AIAnalysisPipelineService } from "@/shared/ai/ai-analysis-pipeline-service";
@@ -10,6 +9,7 @@ import { fakeAnalyzer } from "./support/fake-vision";
 import { OutboxService } from "@/shared/notifications/outbox-service";
 import { workerHeartbeat } from "@/shared/health/worker-heartbeat";
 import { seedProofCard } from "./support/proof-card-seed";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * New work reaching a replica whose cycle is already running (GAP2-2).
@@ -23,7 +23,7 @@ import { seedProofCard } from "./support/proof-card-seed";
  */
 vi.mock("@/websocket", () => ({ sendAIVerificationEvent: vi.fn() }));
 
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 const pipeline = AIAnalysisPipelineService.getInstance() as unknown as {
   provider: unknown;

@@ -10,8 +10,9 @@ import {
   vi,
 } from "vitest";
 
-import { Prisma, PrismaClient } from "@prisma/client";
+import { Prisma } from "@prisma/client";
 import { randomUUID } from "node:crypto";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 // The phone is the only thing faked: the notification pipeline renders and
 // routes for real, and what it hands Expo is recorded here.
@@ -60,7 +61,7 @@ import { seedProofCard } from "./support/proof-card-seed";
  * The earlier proof stopped at the outbox row; the recipient resolution ran
  * only against a stubbed repository.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 const aiPipeline = AIAnalysisPipelineService.getInstance() as unknown as {
   provider: unknown;

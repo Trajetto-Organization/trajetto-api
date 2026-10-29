@@ -1,8 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
-
 import { generateApiKey } from "@/shared/integration/api-key-rules";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * The filters of the public API, as an integrator types them.
@@ -12,7 +11,7 @@ import { generateApiKey } from "@/shared/integration/api-key-rules";
  * 500 — which the customer's usage panel then counted as OUR failure. The
  * caller was wrong, and the answer has to say so, with the values that exist.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 let app: Awaited<typeof import("@/http")>["app"];
 

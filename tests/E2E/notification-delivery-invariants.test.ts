@@ -1,7 +1,8 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { Prisma, PrismaClient } from "@prisma/client";
+import { Prisma } from "@prisma/client";
 import { randomUUID } from "node:crypto";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * The three rules of `notification_delivery` that live only in raw SQL.
@@ -24,7 +25,7 @@ import { randomUUID } from "node:crypto";
  * hand-written migration, a DROP COLUMN that cascades, or a future Prisma that
  * starts modelling partial indexes. Each of those fails here first.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 const BUSINESS = "018fd000-0000-7000-8000-0000000008a1";
 

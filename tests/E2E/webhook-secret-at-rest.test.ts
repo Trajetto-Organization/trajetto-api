@@ -1,6 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
 import { randomBytes, randomUUID } from "node:crypto";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -18,6 +17,7 @@ import {
   openSecret,
   sealSecret,
 } from "@/shared/integration/secret-box";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * A webhook endpoint's credentials, as the database holds them and as the
@@ -28,7 +28,7 @@ import {
  * with their credentials. And the only way to change a leaked secret was to
  * delete the endpoint, which cascades its whole delivery history.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 let app: Awaited<typeof import("@/http")>["app"];
 

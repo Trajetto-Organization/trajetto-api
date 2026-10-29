@@ -1,6 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 
 import { ActivityRepository } from "@/modules/activity/repositories/activity-repository";
@@ -10,6 +9,7 @@ import { OperationDayRepository } from "@/modules/route/repositories/operation-d
 import { DeliveryRepository } from "@/modules/delivery/repositories/delivery-repository";
 import { UserRepository } from "@/modules/user/repositories/user-repository";
 import { GetDashboardOverviewUseCase } from "@/modules/dashboard/usecases/get-dashboard-overview/get-dashboard-overview-usecase";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * The five lines of "recent activity" on the dashboard, and what they cost.
@@ -24,9 +24,9 @@ import { GetDashboardOverviewUseCase } from "@/modules/dashboard/usecases/get-da
  * Nothing about the rows proves that: they are correct either way. Only the
  * statements the database was asked to run show it, so this counts them.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
-const counted = new PrismaClient({
+const counted = createPrismaClient({
   log: [{ level: "query", emit: "event" }],
 });
 

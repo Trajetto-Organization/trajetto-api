@@ -1,6 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 
 import { DashboardRepository } from "@/modules/dashboard/repositories/dashboard-repository";
@@ -8,6 +7,7 @@ import {
   businessMonthStart,
   zonedWallTimeToUtc,
 } from "@/shared/time/business-day";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * The dashboard's numbers, grouped in the database instead of counted one
@@ -21,7 +21,7 @@ import {
  * Every assertion below names its zone and uses instants that fall in
  * different months in different zones.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 const CARRIER = "018fa000-0000-7000-8000-00000000000a";
 const OTHER = "018fa000-0000-7000-8000-00000000000b";

@@ -1,6 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 
 import {
@@ -8,6 +7,7 @@ import {
   RESERVED_API_SCOPES,
   generateApiKey,
 } from "@/shared/integration/api-key-rules";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * The public reference against the API it describes, answer by answer.
@@ -21,7 +21,7 @@ import {
  * for a single resource, an id that does not exist — and each body is held
  * to the schema the document publishes for that status.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 let app: Awaited<typeof import("@/http")>["app"];
 let document: Record<string, any>;

@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { PrismaClient } from "@prisma/client";
 import { randomUUID } from "node:crypto";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * How many connections one screen takes from the pool at the same time.
@@ -24,9 +25,11 @@ import { randomUUID } from "node:crypto";
 const pool = vi.hoisted(() => ({ inFlight: 0, peak: 0 }));
 
 vi.mock("@/../infra/database", async () => {
-  const { PrismaClient: Client } = await import("@prisma/client");
+  const { createPrismaClient } = await import(
+    "@/shared/database/database-client"
+  );
 
-  const counted = new Client().$extends({
+  const counted = createPrismaClient().$extends({
     query: {
       async $allOperations({ args, query }) {
         pool.inFlight += 1;
@@ -63,7 +66,7 @@ import { ListOccurrencesUseCase } from "@/modules/delivery/usecases/list-occurre
 import { ControlTowerUseCase } from "@/modules/route/usecases/control-tower/control-tower-usecase";
 import { OperationDayRepository } from "@/modules/route/repositories/operation-day-repository";
 
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 const CARRIER = "018fdb00-0000-7000-8000-00000000000a";
 const MANAGER = "018fdb00-0000-7000-8000-0000000000a1";

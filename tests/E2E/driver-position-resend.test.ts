@@ -1,8 +1,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
-
 import { seedFleetDriver } from "./support/fleet-driver-seed";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * A position batch sent twice, and a backlog older than the departure
@@ -15,7 +14,7 @@ import { seedFleetDriver } from "./support/fleet-driver-seed";
  * was stamped at RECEPTION: a backlog from the morning's route, flushed after
  * the afternoon one started, was credited to the afternoon route.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 const CARRIER = "018fdcb0-0000-7000-8000-00000000000a";
 

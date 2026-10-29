@@ -1,11 +1,11 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
 import { sign } from "jsonwebtoken";
 
 import { randomUUID } from "node:crypto";
 
 import auth from "@/config/auth";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * Suppliers over real HTTP and Postgres (FLEET-SUP-1, FLEET-SUP-2, 8.1, 8.8):
@@ -13,7 +13,7 @@ import auth from "@/config/auth";
  * depends on the supplier, a supplier that never changes company, and a list
  * whose cards, filter and order are the server's over the whole company.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 let app: Awaited<typeof import("@/http")>["app"];
 

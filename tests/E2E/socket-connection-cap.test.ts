@@ -1,6 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -17,6 +16,7 @@ import {
 } from "@/shared/socket/handshake-rate-limit";
 
 import { socketClientEntry } from "./support/socket-client";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * How many sockets one user may hold open on a replica.
@@ -27,7 +27,7 @@ import { socketClientEntry } from "./support/socket-client";
  * copy of every emit to them. A dispatcher's tabs are a handful; twenty per
  * replica is room to spare.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 const CARRIER = "018fd000-0000-7000-8000-0000000cab01";
 const STAFF = "018fd000-0000-7000-8000-0000000cab11";

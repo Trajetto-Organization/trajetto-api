@@ -1,11 +1,11 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 
 import { sign } from "jsonwebtoken";
 import auth from "@/config/auth";
 import { resetOperationalMetricsCache } from "@/shared/health/operational-metrics";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * The numbers a MASTER uses to decide when to add capacity.
@@ -22,7 +22,7 @@ import { resetOperationalMetricsCache } from "@/shared/health/operational-metric
  * So this seeds a KNOWN state and checks the answer against it. "A number came
  * back" is not the assertion; "this number is that number" is.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 let app: Awaited<typeof import("@/http")>["app"];
 

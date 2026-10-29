@@ -8,7 +8,6 @@ import {
   vi,
 } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 
 import database from "@/../infra/database";
@@ -28,6 +27,7 @@ import { DeleteMasterUserUseCase } from "@/modules/user/usecases/delete-master-u
 
 import { NotificationService } from "@/shared/services/notification-service";
 import { logger } from "@/shared/logging/logger";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * The audit trail of the sensitive actions (GAP2-4, OUTBOX-10).
@@ -52,7 +52,7 @@ vi.mock("@/websocket", () => ({
   sendCatalogChangedEvent: vi.fn(),
 }));
 
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 const MASTER = "018fdc20-0000-7000-8000-0000000000a1";
 const OTHER_MASTER = "018fdc20-0000-7000-8000-0000000000a2";

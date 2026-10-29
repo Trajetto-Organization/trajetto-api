@@ -1,6 +1,6 @@
 import database from "@/../infra/database";
 
-import { Decimal } from "@prisma/client/runtime/library";
+import { Decimal } from "@prisma/client/runtime/client";
 import { Prisma } from "@prisma/client";
 import type {
   FuelMileageUpdate,

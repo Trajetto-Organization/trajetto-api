@@ -1,11 +1,11 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 
 import { sign } from "jsonwebtoken";
 
 import auth from "@/config/auth";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * A record belongs to the company it was created in (decision 16.100): no
@@ -17,7 +17,7 @@ import auth from "@/config/auth";
  * schema runs before the tenant guard, so the answer is the same for a
  * MASTER and for a company administrator — and the row stays where it was.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 let app: Awaited<typeof import("@/http")>["app"];
 

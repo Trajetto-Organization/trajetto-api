@@ -1,6 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 
 import { sign } from "jsonwebtoken";
@@ -12,6 +11,7 @@ import {
   startReplica,
   type Replica,
 } from "./support/replica-process";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * A revoked session, and the socket that did not hear about it.
@@ -31,7 +31,7 @@ import {
  *  - A revocation issued on a replica whose Redis is down, for a socket on
  *    that same replica.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 const CARRIER = "018fde00-0000-7000-8000-00000000000a";
 

@@ -1,3 +1,4 @@
+import { createPrismaClient } from "@/shared/database/database-client";
 /**
  * Real people for the browser suite: accounts that sign in through the FORM.
  *
@@ -15,7 +16,7 @@
  * Re-running retires the previous accounts and companies (see `clean`), so a suite always
  * starts from the same state.
  */
-import { PrismaClient, type BusinessModule } from "@prisma/client";
+import { type BusinessModule } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
@@ -33,7 +34,7 @@ import {
 } from "../../src/shared/time/business-day";
 import { assertDisposableDatabase } from "./lib/disposable-database";
 
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 const PASSWORD = process.env.WEB_E2E_PASSWORD ?? "Navegador@E2E2026";
 

@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
 import { randomInt, randomUUID } from "node:crypto";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * A login refused because the replica is saturated, as the client sees it.
@@ -34,7 +34,7 @@ vi.mock("@/shared/security/bcrypt-gate", async (importOriginal) => {
   return { ...original, compareSecret: busy, hashSecret: busy };
 });
 
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 const BUSINESS = randomUUID();
 const EMAIL = `ocupado-${randomUUID()}@exemplo.com.br`;

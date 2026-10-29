@@ -1,10 +1,10 @@
-# ADR 0011 — ORM: ficar no Prisma 6.1 nesta rodada (no-go do 7.10.1; o 8 não saiu)
+# ADR 0011 — ORM: Prisma 7.10.1 com adapter-pg (no-go na 1ª tentativa, go na 2ª; o 8 não saiu)
 
 - **Status:** aceito em 28/10/2026. A primeira tentativa deu no-go (abaixo);
-  a [segunda tentativa](#resultado-da-segunda-tentativa) deu **go** para o
-  7.10.1. Esta publicação na staging segue no **Prisma 6.1**, com a reescrita
-  de `countDayDeliveries` portada; o 7.10.1 entra numa publicação separada,
-  integrada e validada sobre esta.
+  a [segunda tentativa](#resultado-da-segunda-tentativa) deu **go**, e o
+  **Prisma 7.10.1** foi [adotado](#integração-sobre-a-staging) numa
+  publicação própria, depois da publicação das outras correções da rodada
+  (ainda no 6.1).
 - **Escopo:** `trajetto-api`.
 - **Spec:** §15 de `README_AJUSTES_FINAIS_TRAJETTO.md` (avaliar e, se seguro,
   atualizar do Prisma 6 para o 8).
@@ -223,13 +223,50 @@ acompanhar na staging, não um gate reprovado. RSS e imagem ficam piores pelos
 motivos da [primeira tentativa](#medições) (compilador em WebAssembly e o CLI
 maior), com folga no contêiner.
 
-**Por que não sai junto nesta publicação:** o patch toca 359 arquivos, 17
-deles também alterados nesta rodada. Ele entra por cima do commit publicado,
-com os gates de novo (typecheck, unitários, E2E completo, imagem e smoke do
-CI), para que uma falha no Prisma não segure as outras correções. Quando ele
-entrar, este registro, os badges e a tabela de stack do `README.md` e a
-seção [Conexão com o Postgres](../arquitetura.md#conexão-com-o-postgres) mudam
-no mesmo commit.
+**Por que não saiu junto com as outras correções:** o patch toca 359
+arquivos, 17 deles também alterados nesta rodada. Ele entrou por cima do
+commit publicado (`a6d0bcc`), com os gates de novo, para que uma falha no
+Prisma não segurasse as outras correções.
+
+## Integração sobre a staging
+
+**Data:** 28/10/2026, à noite. **Base:** `a6d0bcc` (staging, Prisma 6.1).
+O patch da segunda tentativa entrou com `git apply --3way`: três conflitos,
+todos resolvidos mantendo as duas mudanças — o comentário de
+`countDayDeliveries` (o SQL reescrito já estava na staging), o `Dockerfile`
+(a base Alpine com o binário do Node e o prune desta rodada, mais o Prisma 7:
+sem query engine nem `PRISMA_QUERY_ENGINE_LIBRARY`, com `prisma.config.ts`,
+sem `pglite` e sem os compiladores de outros bancos) e o `README.md`. Os três
+testes E2E novos da rodada passaram a abrir o cliente por
+`createPrismaClient`.
+
+| Gate                                     | Resultado                                                                                                                 |
+| ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| `audit-ci`, `prettier --check`, `tsc`    | passam                                                                                                                    |
+| Suíte unitária com cobertura (env do CI) | 5.535 ok; cobertura 77,5 / 84,5 / 67,4 / 77,5 %, acima do piso                                                            |
+| E2E completo (293 arquivos)              | 291 ok e 2 pulados de propósito (injeção de falha com Docker); 1 falha sob carga que passou 3/3 sozinha e no lote inteiro |
+| `migrate deploy` do zero                 | 135/135, `migrate status` em dia; o `migrate diff` só mostra os 3 índices de SQL cru já conhecidos                        |
+| Imagem + smoke do CI (`deploy.yml`)      | passa: migrations do zero e seeds no modo `migrate`, boot saudável, readiness 200                                         |
+
+Benchmark curto (mesmo método, ABBA, 2 execuções por versão, `a6d0bcc`
+contra a integração):
+
+| Média de 2                     | 6.1 (`a6d0bcc`) | 7.10.1  | Δ    |
+| ------------------------------ | --------------- | ------- | ---- |
+| p50                            | 20,4 ms         | 19,8 ms | −3%  |
+| p95                            | 41,4 ms         | 41,5 ms | =    |
+| p99                            | 91,7 ms         | 52,2 ms | −43% |
+| CPU do processo por requisição | 10,53 ms        | 7,55 ms | −28% |
+| RSS médio                      | 212 MB          | 293 MB  | +38% |
+| Statements por requisição      | 10,75           | 10,72   | =    |
+| Tempo de execução no Postgres  | 36,5 s          | 28,9 s  | −21% |
+
+Imagem (`docker image inspect` / soma do histórico / `docker images`):
+comprimida 87,6 → 114,8 MB (+31%), descompactada 285 → 431 MB, listada
+373 → 546 MB. O aumento é o CLI do 7, que a etapa de release usa no
+`migrate deploy` (Studio, `@prisma/dev`, `effect`); separar um alvo só de
+migração no `Dockerfile` (item 3 do menor caminho) é o próximo passo para
+devolver esse tamanho.
 
 ## Fontes
 

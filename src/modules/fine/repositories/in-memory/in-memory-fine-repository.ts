@@ -1,6 +1,6 @@
 import { v7 as uuidV7 } from "uuid";
 
-import { Decimal } from "@prisma/client/runtime/library";
+import { Decimal } from "@prisma/client/runtime/client";
 import { IFineRepository } from "../IFine-repository";
 
 import {

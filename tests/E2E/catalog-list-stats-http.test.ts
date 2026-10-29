@@ -1,11 +1,11 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
 import { sign } from "jsonwebtoken";
 
 import { randomUUID } from "node:crypto";
 
 import auth from "@/config/auth";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * The cards above Perfis de acesso, Tipos de veículo and Tipos de combustível
@@ -14,7 +14,7 @@ import auth from "@/config/auth";
  * another company's rows, even when the MASTER asks — and the fuel month
  * appears only with Gestão de Frotas and a profile that reads refuelings.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 let app: Awaited<typeof import("@/http")>["app"];
 

@@ -1,6 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -17,6 +16,7 @@ import {
 } from "@/shared/socket/handshake-rate-limit";
 
 import { socketClientEntry } from "./support/socket-client";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * The connection attempt, counted.
@@ -31,7 +31,7 @@ import { socketClientEntry } from "./support/socket-client";
  * the property under test is "the server consults this bucket", and thirty
  * real connections would test socket.io's connection pool instead.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 const CARRIER = "018fd000-0000-7000-8000-0000000000c1";
 const STAFF = "018fd000-0000-7000-8000-0000000000c2";

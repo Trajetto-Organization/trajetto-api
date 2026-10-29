@@ -8,10 +8,10 @@ import {
   vi,
 } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 
 import { container } from "tsyringe";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * The customer's messages, in the order that is still true.
@@ -23,7 +23,7 @@ import { container } from "tsyringe";
  * arrived. Each attempt now asks the delivery first, and a message the
  * delivery has moved past is dropped with the reason (GAP2-5).
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 let app: Awaited<typeof import("@/http")>["app"];
 let pipeline: import("@/shared/notifications/notification-pipeline-service").NotificationPipelineService;

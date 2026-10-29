@@ -1,10 +1,10 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 
 import { sign } from "jsonwebtoken";
 import auth from "@/config/auth";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * One company trying to reach another, route by route.
@@ -22,7 +22,7 @@ import auth from "@/config/auth";
  * And the answer is always 404, never 403: a distinct 403 would confirm the
  * record exists, which is half of what somebody sweeping ids wants to know.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 let app: Awaited<typeof import("@/http")>["app"];
 

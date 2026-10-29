@@ -1,13 +1,12 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
-
 import {
   seedBranch,
   seedCarrier,
   seedUser,
   seedVehicle,
 } from "./support/fleet-maint-seed";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * Deleting a service order, and finishing one at the same mileage, against
@@ -19,7 +18,7 @@ import {
  * FLEET-SO-4: finishing an order demanded a mileage strictly above the
  * odometer, so a vehicle that stood in the workshop could not be closed.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 let app: Awaited<typeof import("@/http")>["app"];
 

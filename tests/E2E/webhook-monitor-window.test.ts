@@ -1,12 +1,13 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { PrismaClient, WebhookDeliveryStatus } from "@prisma/client";
+import { WebhookDeliveryStatus } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 
 import { sign } from "jsonwebtoken";
 import auth from "@/config/auth";
 
 import { MONITOR_LIST_CAP } from "@/schemas/integration-schema";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * The window behind the monitor's cards — and its list.
@@ -24,7 +25,7 @@ import { MONITOR_LIST_CAP } from "@/schemas/integration-schema";
  * PROCESSING too (DLVB-28, DLVB-29). Now each chip lists exactly what its
  * card counts, in the same period.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 let app: Awaited<typeof import("@/http")>["app"];
 

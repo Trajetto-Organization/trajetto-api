@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
 import { randomUUID } from "node:crypto";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * How many pool connections the driver list takes at once
@@ -15,9 +15,11 @@ import { randomUUID } from "node:crypto";
 const pool = vi.hoisted(() => ({ inFlight: 0, peak: 0 }));
 
 vi.mock("@/../infra/database", async () => {
-  const { PrismaClient: Client } = await import("@prisma/client");
+  const { createPrismaClient } = await import(
+    "@/shared/database/database-client"
+  );
 
-  const counted = new Client().$extends({
+  const counted = createPrismaClient().$extends({
     query: {
       async $allOperations({ args, query }) {
         pool.inFlight += 1;
@@ -37,7 +39,7 @@ vi.mock("@/../infra/database", async () => {
 
 import { DriverRepository } from "@/modules/driver/repositories/driver-repository";
 
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 const CARRIER = "018fe800-0000-7000-8000-00000000000a";
 const BRANCH = "018fe800-0000-7000-8000-0000000000b1";

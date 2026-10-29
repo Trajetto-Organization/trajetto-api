@@ -1,9 +1,8 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
-
 import { RouteRepository } from "@/modules/route/repositories/route-repository";
 import { stopOutcomeForDelivery } from "@/shared/route/route-rules";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * "Back to pending" for a delivery whose stop is on a route that has NOT left
@@ -15,7 +14,7 @@ import { stopOutcomeForDelivery } from "@/shared/route/route-rules";
  * the document had before the mistake. Only a real outcome (delivered,
  * failed, cancelled) takes a stop off a plan.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 const repository = new RouteRepository(prisma);
 
 const CARRIER = "biz-unstarted-pending";

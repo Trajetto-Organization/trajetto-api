@@ -8,10 +8,10 @@ import {
   vi,
 } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 
 import { container } from "tsyringe";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * A company template that cannot be rendered, met by the real pipeline.
@@ -28,7 +28,7 @@ import { container } from "tsyringe";
  * A template that cannot render is a decision the company has to fix, so the
  * delivery fails on its first attempt, with a reason a master can read.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 let app: Awaited<typeof import("@/http")>["app"];
 let pipeline: import("@/shared/notifications/notification-pipeline-service").NotificationPipelineService;

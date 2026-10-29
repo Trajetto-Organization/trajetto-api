@@ -1,7 +1,5 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
-
 import { quotaPeriodFor } from "@/shared/ai/ai-period";
 
 import { FakeProvider } from "./support/fake-provider";
@@ -22,6 +20,7 @@ import {
   waitUntilSettled,
   type ResilienceSeed,
 } from "./support/resilience-seed";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * Case F of contract §11, with real processes: 3, 5 and 10 replicas drain
@@ -36,7 +35,7 @@ import {
  * effects are counted at the fake provider (another process), never on our
  * own rows: "sent twice" is the failure, and our rows cannot see it.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 const fake = new FakeProvider();
 
 const BUSINESS = "018fe500-0000-7000-8000-0000000000a1";

@@ -1,6 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 
 import { SupportTicketRepository } from "@/modules/chat/repositories/support-ticket-repository";
@@ -10,6 +9,7 @@ import { InMemoryChatRepository } from "@/modules/chat/repositories/in-memory/in
 import type { ISupportTicketRepository } from "@/modules/chat/repositories/ISupport-ticket-repository";
 import type { IChatRepository } from "@/modules/chat/repositories/IChat-repository";
 import type { CreateSupportTicketProps } from "@/modules/chat/dtos/support-ticket-dto";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * The ticket repository against Postgres and its in-memory twin (decision
@@ -18,7 +18,7 @@ import type { CreateSupportTicketProps } from "@/modules/chat/dtos/support-ticke
  * conditional writes, the unread cursor GREATEST(ticket, thread) — the twin
  * must decide the same way.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 const A = "018fee00-0000-7000-8000-00000000000a";
 const B = "018fee00-0000-7000-8000-00000000000b";

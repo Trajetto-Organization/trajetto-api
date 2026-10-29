@@ -1,9 +1,9 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 
 import type { CronJobDefinition } from "@/shared/services/cron-scheduler-service";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * A nightly job whose firing was lost comes back the same day (GAP6-9).
@@ -22,7 +22,7 @@ import type { CronJobDefinition } from "@/shared/services/cron-scheduler-service
  * rows FAILED and runs any daily job with no success in its window, through
  * the same election, so replicas sweeping together still run it once.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 const HOUR_MS = 60 * 60 * 1000;
 

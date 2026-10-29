@@ -8,12 +8,12 @@ import {
   vi,
 } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
 import { createHmac, randomUUID } from "node:crypto";
 
 import { container } from "tsyringe";
 
 import { env } from "@/env";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * What a provider says happened to a message AFTER it accepted it.
@@ -25,7 +25,7 @@ import { env } from "@/env";
  * delivery that produced the message, so "we sent it twice" and "it failed
  * after being accepted" become answerable after the fact.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 let app: Awaited<typeof import("@/http")>["app"];
 let pipeline: import("@/shared/notifications/notification-pipeline-service").NotificationPipelineService;

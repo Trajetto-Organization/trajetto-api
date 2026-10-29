@@ -1,9 +1,9 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 
 import { UserRepository } from "@/modules/user/repositories/user-repository";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * The login's e-mail lookup reads an index, not the whole user table.
@@ -17,9 +17,11 @@ import { UserRepository } from "@/modules/user/repositories/user-repository";
  * here, and EXPLAINed with sequential scans off: a Seq Scan then means "no
  * index applies", not "the table is small".
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
-const capture = new PrismaClient({ log: [{ emit: "event", level: "query" }] });
+const capture = createPrismaClient({
+  log: [{ emit: "event", level: "query" }],
+});
 
 const sent: Array<{ query: string; params: string }> = [];
 

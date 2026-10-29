@@ -1,9 +1,9 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 
 import type { CronJobDefinition } from "@/shared/services/cron-scheduler-service";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * The cron election, against Postgres.
@@ -20,7 +20,7 @@ import type { CronJobDefinition } from "@/shared/services/cron-scheduler-service
  * entirely in the database, and two instances on the pool race the same
  * insert that two processes would.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 type Scheduler = {
   claimExecution(jobName: string, scheduledFor: Date): Promise<boolean>;

@@ -64,24 +64,18 @@ describe("startRuntimeMetrics", () => {
   });
 
   it("reads the pool as /health/metrics shows it", async () => {
-    const source = {
-      $metrics: {
-        json: async () => ({
-          counters: [],
-          gauges: [
-            { key: "prisma_pool_connections_open", value: 10 },
-            { key: "prisma_pool_connections_busy", value: 9 },
-            { key: "prisma_pool_connections_idle", value: 1 },
-            { key: "prisma_client_queries_wait", value: 2 },
-          ],
-          histograms: [],
-        }),
-      },
+    // The pg Pool behind the driver adapter: 10 open, 1 of them idle, 2
+    // queries waiting for a connection.
+    const pool = {
+      totalCount: 10,
+      idleCount: 1,
+      waitingCount: 2,
+      options: { max: 10 },
     };
 
     expect(
       await readPrismaPool(
-        source,
+        () => pool,
         "postgresql://u:p@db:5432/d?connection_limit=10",
       ),
     ).toEqual({ limit: 10, open: 10, busy: 9, idle: 1, waiting: 2 });

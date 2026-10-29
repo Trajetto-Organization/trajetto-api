@@ -1,8 +1,8 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
 import Redis from "ioredis";
 import { randomInt, randomUUID } from "node:crypto";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * "Esqueci minha senha" flooded from many addresses at one inbox, through the
@@ -22,7 +22,7 @@ vi.mock("@/shared/services/transactional-mail-service", () => ({
   },
 }));
 
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 const redis = new Redis(process.env.REDIS_URL ?? "redis://127.0.0.1:6379", {
   lazyConnect: true,
   maxRetriesPerRequest: 1,

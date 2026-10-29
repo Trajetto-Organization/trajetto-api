@@ -1,11 +1,11 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
 import { sign } from "jsonwebtoken";
 
 import { randomUUID } from "node:crypto";
 
 import auth from "@/config/auth";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * GET /business/list-business over real HTTP and Postgres (decision 8.8).
@@ -15,7 +15,7 @@ import auth from "@/config/auth";
  * among them. The order, the status and UF facets and the cards are now the
  * server's, over every company, with the disjunctive rule.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 let app: Awaited<typeof import("@/http")>["app"];
 

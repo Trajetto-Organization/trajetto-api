@@ -1,9 +1,9 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 
 import { DEFAULT_BUSINESS_TIMEZONE } from "@/shared/time/business-day";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * What Postgres actually does with the queries the product runs most.
@@ -24,7 +24,7 @@ import { DEFAULT_BUSINESS_TIMEZONE } from "@/shared/time/business-day";
  * The assertions are about ACCESS PATH, never about milliseconds. A test that
  * fails when the machine is busy teaches people to re-run it.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 const CARRIER = "018fda00-0000-7000-8000-00000000000a";
 const OTHER = "018fda00-0000-7000-8000-00000000000b";
@@ -432,7 +432,7 @@ describe("what the operations screens read by tenant", () => {
   const TYPE_CARRIER = randomUUID();
   const TYPE_OTHER = randomUUID();
 
-  const capture = new PrismaClient({
+  const capture = createPrismaClient({
     log: [{ emit: "event", level: "query" }],
   });
 
@@ -667,7 +667,7 @@ describe("what the tower reads for the day", () => {
   const ROUTES_PER_DAY = 40;
   const STOPS_PER_ROUTE = 20;
 
-  const capture = new PrismaClient({
+  const capture = createPrismaClient({
     log: [{ emit: "event", level: "query" }],
   });
 

@@ -1,6 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 
 import { container } from "tsyringe";
@@ -10,6 +9,7 @@ import { DeliveryRepository } from "@/modules/delivery/repositories/delivery-rep
 
 import type { Delivery } from "@/modules/delivery/dtos/delivery-dto";
 import type { Prisma } from "@prisma/client";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * Two uploads of the same order-only sheet, at the same time (IDEMP-04).
@@ -26,7 +26,7 @@ import type { Prisma } from "@prisma/client";
  * transaction-scoped lock is not held back, so the barrier cannot deadlock
  * the fix it is testing.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 const CARRIER = "018fdc70-0000-7000-8000-00000000000a";
 const ADMIN = "018fdc70-0000-7000-8000-0000000000a1";

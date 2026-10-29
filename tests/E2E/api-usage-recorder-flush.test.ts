@@ -1,10 +1,10 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 
 import { ApiUsageRecorder } from "@/shared/integration/api-usage-recorder";
 import { generateApiKey } from "@/shared/integration/api-key-rules";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * The usage counter's write, against Postgres (DLVB-33, DLVB-34).
@@ -14,7 +14,7 @@ import { generateApiKey } from "@/shared/integration/api-key-rules";
  * same bucket add up, a later flush increments, and one bucket that cannot be
  * written (its key is gone) does not take the others down with it.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 const BUSINESS = "018fe220-0000-7000-8000-00000000000a";
 

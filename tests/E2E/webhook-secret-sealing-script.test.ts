@@ -1,6 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
 import { randomBytes, randomUUID } from "node:crypto";
 
 import {
@@ -9,6 +8,7 @@ import {
   openSecret,
 } from "@/shared/integration/secret-box";
 import { sealStoredWebhookSecrets } from "@/shared/integration/seal-stored-webhook-secrets";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * Turning sealing on after the fact.
@@ -18,7 +18,7 @@ import { sealStoredWebhookSecrets } from "@/shared/integration/seal-stored-webho
  * infra/scripts/seal-webhook-secrets.ts, which runs this: every plain value
  * sealed, every sealed one left alone, and a second run a no-op.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 const CARRIER = "018fdc80-0000-7000-8000-00000000000a";
 

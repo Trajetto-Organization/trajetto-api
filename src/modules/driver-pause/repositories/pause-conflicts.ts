@@ -1,4 +1,5 @@
 import { Prisma } from "@prisma/client";
+import { uniqueTargetOf } from "@/shared/errors/prisma-error-meta";
 
 type PauseConflict =
   | "start-submission-taken"
@@ -9,9 +10,10 @@ type PauseConflict =
  * Which unique index of `driver_pause` refused a write, or null when the
  * error is not a unique violation of this table.
  *
- * Prisma names the index columns in `meta.target` (an array) for the
- * `@@unique` keys, and may name the index itself (a string) for the partial
- * `driver_pause_one_open_idx`, created in raw SQL. Both spellings are read.
+ * Prisma 6 named the index columns (an array, read from Postgres' DETAIL);
+ * Prisma 7 names the index itself (`driver_pause_businessId_start_submission_id_key`,
+ * the partial `driver_pause_one_open_idx` created in raw SQL). uniqueTargetOf
+ * reads both spellings, and every fragment below appears in either.
  */
 function pauseConflictOf(error: unknown): PauseConflict | null {
   if (
@@ -21,7 +23,7 @@ function pauseConflictOf(error: unknown): PauseConflict | null {
     return null;
   }
 
-  const target = error.meta?.target;
+  const target = uniqueTargetOf(error);
   const names = Array.isArray(target)
     ? target.map(String)
     : typeof target === "string"

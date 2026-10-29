@@ -2,6 +2,7 @@ import { Prisma } from "@prisma/client";
 
 import { DriverCpfAlreadyExistsError } from "./driver-cpf-already-exists-error";
 import { DriverLicenseAlreadyExistsError } from "./driver-license-already-exists-error";
+import { uniqueTargetOf } from "@/shared/errors/prisma-error-meta";
 
 /**
  * The 409 behind a unique violation of (businessId, cpf) or (businessId, cnh).
@@ -20,7 +21,7 @@ function driverUniqueViolation(
     return null;
   }
 
-  const target = error.meta?.target;
+  const target = uniqueTargetOf(error);
   const fields = Array.isArray(target)
     ? target.join(",")
     : String(target ?? "");

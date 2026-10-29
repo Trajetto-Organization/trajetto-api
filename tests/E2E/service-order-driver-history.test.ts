@@ -1,7 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
-
 import {
   readNdjson,
   seedBranch,
@@ -11,6 +9,7 @@ import {
   seedUser,
   seedVehicle,
 } from "./support/fleet-maint-seed";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * A driver's read of a vehicle's service-order history, against Postgres
@@ -23,7 +22,7 @@ import {
  * company's vehicle answered 403 "não pertence a esta empresa", confirming
  * the id existed somewhere else.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 let app: Awaited<typeof import("@/http")>["app"];
 

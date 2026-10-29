@@ -1,6 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 
 import { BranchRepository } from "@/modules/branch/repositories/branch-repository";
@@ -16,6 +15,7 @@ import { SupplierRepository } from "@/modules/supplier/repositories/supplier-rep
 import { UserRepository } from "@/modules/user/repositories/user-repository";
 import { VehicleRepository } from "@/modules/vehicle/repositories/vehicle-repository";
 import { VehicleTypeRepository } from "@/modules/vehicle-type/repositories/vehicle-type-repository";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * Every "does this already exist?" lookup, probed with a wildcard.
@@ -31,7 +31,7 @@ import { VehicleTypeRepository } from "@/modules/vehicle-type/repositories/vehic
  * it is ILIKE at all), including a legitimate `_` in the value, and must find
  * nothing for a probe that only matches as a pattern.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 const A = "018fe070-0000-7000-8000-00000000000a";
 const B = "018fe070-0000-7000-8000-00000000000b";

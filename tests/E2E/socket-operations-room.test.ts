@@ -1,6 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -9,6 +8,7 @@ import { sign } from "jsonwebtoken";
 import auth from "@/config/auth";
 
 import { socketClientEntry } from "./support/socket-client";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * Who hears where the trucks are.
@@ -27,7 +27,7 @@ import { socketClientEntry } from "./support/socket-client";
  * Asserting only that the dispatcher receives would pass just as well with the
  * old code, so every test here has a counterpart that must NOT receive.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 const CARRIER = "018fd100-0000-7000-8000-00000000000a";
 const OTHER_CARRIER = "018fd100-0000-7000-8000-00000000000b";

@@ -1,8 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
-
 import { DeliveryRepository } from "@/modules/delivery/repositories/delivery-repository";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * A webhook row and the fact it describes commit together, or neither does.
@@ -15,7 +14,7 @@ import { DeliveryRepository } from "@/modules/delivery/repositories/delivery-rep
  * caller does afterwards. That failure is invisible without a real database,
  * which is why it is tested here.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 const CARRIER = "018f7000-0000-7000-8000-00000000000a";
 const SHIPPER = "018f7000-0000-7000-8000-0000000000f1";

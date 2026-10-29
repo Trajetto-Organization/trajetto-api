@@ -20,6 +20,7 @@ import type {
   DeliveryOccurrenceAuthorizationEscalatedPayload,
   PolicyDeps,
 } from "@/shared/notifications/notification-types";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * Decision 6.3 on Postgres: a request nobody answered in ten minutes goes to
@@ -28,11 +29,11 @@ import type {
  * the tower's operators hear the requests and the insucessos, only the
  * administrators hear the escalation.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 // Two replicas: separate pools, separate connections, one database.
-const replicaA = new PrismaClient();
-const replicaB = new PrismaClient();
+const replicaA = createPrismaClient();
+const replicaB = createPrismaClient();
 
 const CARRIER = "018fea00-0000-7000-8000-00000000000a";
 const OTHER = "018fea00-0000-7000-8000-00000000000b";

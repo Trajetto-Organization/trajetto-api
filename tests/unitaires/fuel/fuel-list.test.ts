@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { Decimal } from "@prisma/client/runtime/library";
+import { Decimal } from "@prisma/client/runtime/client";
 
 import {
   FUEL_FACET_OPTION_LIMIT,

@@ -1,11 +1,11 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
 import { sign } from "jsonwebtoken";
 
 import { randomUUID } from "node:crypto";
 
 import auth from "@/config/auth";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * The driver picker (`/driver/search-driver-business`) over real HTTP.
@@ -16,7 +16,7 @@ import auth from "@/config/auth";
  * documents. The catalogue keeps its row. Drivers, profiles with neither key
  * and other companies stay out. The typed term is searched on the server.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 let app: Awaited<typeof import("@/http")>["app"];
 

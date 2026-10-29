@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { PrismaClient, type Prisma } from "@prisma/client";
+import { type Prisma } from "@prisma/client";
 
 import { ShipperRepository } from "@/modules/shipper/repositories/shipper-repository";
 import { InMemoryShipperRepository } from "@/modules/shipper/repositories/in-memory/in-memory-shipper-repository";
@@ -28,6 +28,7 @@ import type {
 } from "@/modules/import/dtos/import-dto";
 
 import { expectPrismaCode } from "../contract/support";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * The catalog repositories' contract (decision 13.2): ONE suite, run against
@@ -50,7 +51,7 @@ import { expectPrismaCode } from "../contract/support";
  * and filters below, so each exact list and group also proves the tenant
  * filter.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 const BUSINESS = "018fde00-0000-7000-8000-00000000000a";
 const OTHER = "018fde00-0000-7000-8000-00000000000b";

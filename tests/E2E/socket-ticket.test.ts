@@ -1,6 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
 import Redis from "ioredis";
 import { randomUUID } from "node:crypto";
 import { createServer, type Server } from "node:http";
@@ -12,6 +11,7 @@ import { socketTicketKey } from "@/shared/socket/socket-ticket";
 
 import { APP_BOOT_TIMEOUT_MS } from "../support/app-boot";
 import { socketClientEntry } from "./support/socket-client";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * POST /user/socket-ticket and its redemption at the Socket.IO handshake.
@@ -22,7 +22,7 @@ import { socketClientEntry } from "./support/socket-client";
  * never twice, never late, never after that session ended or moved company.
  * Real HTTP route, real Redis, real handshake, real Postgres.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 const CARRIER_A = randomUUID();
 const CARRIER_B = randomUUID();

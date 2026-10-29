@@ -1,4 +1,6 @@
-import { PrismaClient } from "@prisma/client";
+import type { PrismaClient } from "@prisma/client";
+
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * The readiness probe's own database connection (OBS-11).
@@ -29,6 +31,9 @@ const READINESS_TIMEOUT_MS = 3_000;
  * The production URL with the probe's own pool settings: one connection, a
  * short wait for it, a short connect and a short query. Everything else —
  * the host, the schema, the statement/lock timeouts in `options` — is kept.
+ * The URL goes through the same mapping as the app's (pool-config.ts), so
+ * under Prisma 7 these become pg's `max: 1`, a 2 s wait for the connection,
+ * a 3 s connect and a 3 s `query_timeout`.
  */
 function probeUrl(databaseUrl: string): string {
   const url = new URL(databaseUrl);
@@ -53,9 +58,10 @@ let reconnecting: Promise<void> | null = null;
 /** Created on first use, so importing this module opens nothing. */
 function probeClient(): PrismaClient {
   if (!client) {
-    client = new PrismaClient({
-      datasourceUrl: probeUrl(process.env.DATABASE_URL ?? ""),
-    });
+    client = createPrismaClient(
+      {},
+      { url: probeUrl(process.env.DATABASE_URL ?? "") },
+    ) as unknown as PrismaClient;
   }
 
   return client;
@@ -74,12 +80,14 @@ function probeClient(): PrismaClient {
  * same, so a "no" stays a "no".
  *
  * `$disconnect()`, not a new client: the next query reconnects the same
- * engine. A PrismaClient built per "no" kept ~2.3 MB of native memory each
- * (the image's musl engine): ~800 MB for an hour of outage probed every
- * 10 s, past the container's limit. The close waits for the query still in
- * flight, which socket_timeout bounds; one stuck preparing a statement is
- * not bounded (docs/arquitetura.md (Conexão com o Postgres)), and until it ends the probe
- * says no.
+ * client. Under Prisma 6 a PrismaClient built per "no" kept ~2.3 MB of
+ * native memory each (the image's musl engine): ~800 MB for an hour of
+ * outage probed every 10 s, past the container's limit. Under Prisma 7 the
+ * disconnect ends the probe's pg Pool and the next query builds another
+ * (database-client.ts); pg already drops a connection whose query failed or
+ * timed out, so this is now a second line, kept because it costs one pool
+ * per "no" and nothing while ready. The close waits for the query still in
+ * flight, which the 3 s query_timeout bounds.
  */
 function reconnectProbeClient(): void {
   if (!client || reconnecting) return;

@@ -91,14 +91,19 @@ Princípios que não mudam:
   oficial (sem npm, yarn, corepack nem os headers de C) e só os pacotes que
   os binários usam (`libstdc++`, `libssl3`, `ca-certificates`, `dumb-init`).
   O estágio `prod-deps` tira do `node_modules` o que nada carrega em execução
-  (sourcemaps, typings, READMEs, `@types`, o bundle de navegador do ExcelJS)
-  e a segunda cópia do query engine do Prisma: a CLI (`migrate deploy` no
-  boot e na etapa de release, `migrate resolve` à mão) usa a do cliente, por
-  `PRISMA_QUERY_ENGINE_LIBRARY`. As camadas vão da mais estável para a menos
-  estável: um commit só de código reenvia só `build/` (~1 MB comprimido).
-  Medido em 28/10/2026, mesmas fontes: 115 → 88 MB comprimidos (o que o
-  registry transfere), 417 → 285 MB descompactados, 533 → 373 MB no
-  `docker images`.
+  (sourcemaps, typings, READMEs, `@types`, o bundle de navegador do ExcelJS,
+  o `pglite` do `prisma dev` e os compiladores de query de todos os bancos).
+  O Prisma 7 não tem query engine: o cliente gerado traz o próprio compilador
+  de PostgreSQL, e só o schema engine da CLI (`migrate deploy` no boot e na
+  etapa de release, `migrate resolve` à mão) é binário nativo;
+  `@prisma/studio-core` e `@prisma/dev` ficam porque a CLI os carrega na
+  partida. As camadas vão da mais estável para a menos estável: um commit só
+  de código reenvia só `build/` (~1 MB comprimido).
+  Medido em 28/10/2026, ainda no Prisma 6.1, mesmas fontes: 115 → 88 MB
+  comprimidos (o que o registry transfere), 417 → 285 MB descompactados,
+  533 → 373 MB no `docker images`. Com o Prisma 7.10.1, cujo CLI é maior:
+  114,8 MB comprimidos, 431 MB descompactados, 546 MB no `docker images`
+  ([ADR 0011](./adr/0011-orm-prisma-6-7-8.md#integração-sobre-a-staging)).
 
 - **Tags**:
 
@@ -2135,7 +2140,9 @@ HTTP-only um publish não drena nada; o evento espera a varredura do worker
 
 ### Conexões presas
 
-`P1008`/"Operations timed out after `60s`" ou `P2024` com o banco de pé:
+503 com `Query read timeout` (o `socket_timeout`) ou `timeout exceeded when
+trying to connect` (pool cheio) no log, com o banco de pé (no Prisma 6:
+`P1008`/"Operations timed out after `60s`" ou `P2024`):
 
 ```sql
 SELECT pid, state, wait_event_type, wait_event, now() - state_change AS há,

@@ -30,7 +30,7 @@ Idioma do produto: pt-BR.
 
 ## Stack
 
-Node.js 22 · TypeScript 5.7 (`strict`) · Fastify 5 · Prisma 6.1 · PostgreSQL 16
+Node.js 22 · TypeScript 5.7 (`strict`) · Fastify 5 · Prisma 7.10 (`@prisma/adapter-pg`) · PostgreSQL 16
 · Redis 7 (ioredis) · Socket.IO 4 · tsyringe (DI) · zod 3 · pino · Vitest 1.6
 · Stryker 8.7 · tsup · Yarn 1 (`yarn.lock`; nunca npm) · Docker (imagem
 `node:22.21.1-alpine`) · Python 3.12 no serviço de IA.
@@ -183,7 +183,8 @@ checksum). Detalhes: `docs/arquitetura.md` ("Migrations: expandir e contrair").
   web e do app.
 - Piso de cobertura no `test:coverage` (statements/linhas 70,8 %, branches
   82,57 %, funções 57,62 %); não baixe.
-- Windows: E2E em lotes de no máximo 8 arquivos (napi panic do Prisma).
+- Windows: E2E em lotes de no máximo 8 arquivos (limite herdado do napi panic do
+  Prisma 6; o Prisma 7 não tem engine nativo, mas lotes maiores não foram medidos).
 
 ## Pipeline e deploy (resumo de `docs/deploy.md`)
 
@@ -266,13 +267,13 @@ checksum). Detalhes: `docs/arquitetura.md` ("Migrations: expandir e contrair").
 
 ## Onde procurar quando…
 
-| Situação                                  | Onde                                                                           |
-| ----------------------------------------- | ------------------------------------------------------------------------------ |
-| uma rota responde 403/404 inesperado      | `src/modules/middlewares/`, `src/config/permissions.ts`, o guard de tenant     |
-| uma notificação não chegou                | `src/shared/notifications/`, `/health/dead-letter`, `docs/deploy.md` (alertas) |
-| leitura de IA parada                      | `src/shared/ai/`, serviço `trajetto-ai`, `/health/providers`                   |
-| conta de dia errada                       | `src/shared/time/business-day.ts`                                              |
-| erro de conexão com o banco (P1008/P2024) | `docs/arquitetura.md` (Conexão com o Postgres)                                 |
-| migration falhou em produção (P3009)      | `docs/deploy.md` (Migrations)                                                  |
-| variável nova ou desconhecida             | `docs/variaveis-de-ambiente.md`, `src/schemas/env-schema/index.ts`             |
-| o deploy não convergiu                    | `docs/deploy.md` (Conferir a convergência, Rollback)                           |
+| Situação                                                           | Onde                                                                           |
+| ------------------------------------------------------------------ | ------------------------------------------------------------------------------ |
+| uma rota responde 403/404 inesperado                               | `src/modules/middlewares/`, `src/config/permissions.ts`, o guard de tenant     |
+| uma notificação não chegou                                         | `src/shared/notifications/`, `/health/dead-letter`, `docs/deploy.md` (alertas) |
+| leitura de IA parada                                               | `src/shared/ai/`, serviço `trajetto-ai`, `/health/providers`                   |
+| conta de dia errada                                                | `src/shared/time/business-day.ts`                                              |
+| erro de conexão com o banco (503 + Retry-After, P1008, pool cheio) | `docs/arquitetura.md` (Conexão com o Postgres)                                 |
+| migration falhou em produção (P3009)                               | `docs/deploy.md` (Migrations)                                                  |
+| variável nova ou desconhecida                                      | `docs/variaveis-de-ambiente.md`, `src/schemas/env-schema/index.ts`             |
+| o deploy não convergiu                                             | `docs/deploy.md` (Conferir a convergência, Rollback)                           |

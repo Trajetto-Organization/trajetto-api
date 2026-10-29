@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { execSync } from "node:child_process";
 
 import { Environment } from "vitest";
-import { PrismaClient } from "@prisma/client";
+import pg from "pg";
 
 import {
   adminConnection,
@@ -36,11 +36,27 @@ loadTestEnv();
  *
  * The cost is one CREATE DATABASE per file. `migrate deploy` was already being
  * paid for, and it dominates.
+ *
+ * The two administrative statements go through a plain pg Client: this
+ * package is copied into node_modules, so it cannot reach the app's client
+ * factory, and CREATE/DROP DATABASE need nothing Prisma adds.
  */
-function adminClient(baseUrl: string): PrismaClient {
-  return new PrismaClient({
-    datasources: { db: { url: adminConnection(baseUrl) } },
+async function onAdminConnection(
+  baseUrl: string,
+  statement: string,
+): Promise<void> {
+  const admin = new pg.Client({
+    connectionString: adminConnection(baseUrl),
+    connectionTimeoutMillis: 10_000,
   });
+
+  await admin.connect();
+
+  try {
+    await admin.query(statement);
+  } finally {
+    await admin.end();
+  }
 }
 
 export default <Environment>{
@@ -54,9 +70,7 @@ export default <Environment>{
     // and an unquoted identifier that does is a syntax error.
     const database = `trajetto_test_${randomUUID().replace(/-/g, "")}`;
 
-    const admin = adminClient(baseUrl);
-    await admin.$executeRawUnsafe(`CREATE DATABASE "${database}"`);
-    await admin.$disconnect();
+    await onAdminConnection(baseUrl, `CREATE DATABASE "${database}"`);
 
     process.env.DATABASE_URL = connectionFor(baseUrl, database);
     execSync("yarn prisma migrate deploy", { stdio: "pipe" });
@@ -66,18 +80,13 @@ export default <Environment>{
         if (originalUrl === undefined) delete process.env.DATABASE_URL;
         else process.env.DATABASE_URL = originalUrl;
 
-        const cleanup = adminClient(baseUrl);
-
-        try {
-          // WITH (FORCE) terminates connections the test left open; without it
-          // a single leaked client makes the drop hang and the database
-          // accumulates run after run.
-          await cleanup.$executeRawUnsafe(
-            `DROP DATABASE IF EXISTS "${database}" WITH (FORCE)`,
-          );
-        } finally {
-          await cleanup.$disconnect();
-        }
+        // WITH (FORCE) terminates connections the test left open; without it
+        // a single leaked client makes the drop hang and the database
+        // accumulates run after run.
+        await onAdminConnection(
+          baseUrl,
+          `DROP DATABASE IF EXISTS "${database}" WITH (FORCE)`,
+        );
       },
     };
   },

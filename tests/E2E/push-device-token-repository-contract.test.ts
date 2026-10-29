@@ -1,7 +1,5 @@
 import { afterAll, beforeAll, describe } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
-
 import { PushDeviceTokenRepository } from "@/modules/notification/repositories/push-device-token-repository";
 import { InMemoryPushDeviceTokenRepository } from "@/modules/notification/repositories/in-memory/in-memory-push-device-token-repository";
 
@@ -12,9 +10,10 @@ import {
 } from "../contract/repositories/push-device-token.contract";
 import { KINDS, type Kind } from "../contract/support";
 import { seedBusiness, seedUser } from "../contract/seed";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /** Decision 13.2: the push device contract against Postgres and the twin. */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 const memory = new InMemoryPushDeviceTokenRepository(new Set([F.ana, F.bia]));
 
 const harnesses: Record<Kind, PushDeviceHarness> = {

@@ -3,7 +3,7 @@ import { FastifyReply } from "fastify";
 import { Readable } from "node:stream";
 import { createGzip } from "node:zlib";
 
-import { Decimal } from "@prisma/client/runtime/library";
+import { Decimal } from "@prisma/client/runtime/client";
 
 interface ListResponse<T> {
   data: T[];

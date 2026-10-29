@@ -1,6 +1,7 @@
 import { afterAll, describe, expect, it } from "vitest";
 
-import { Prisma, PrismaClient } from "@prisma/client";
+import { Prisma } from "@prisma/client";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * The objects that exist only in migration SQL, exactly as they must be.
@@ -21,7 +22,7 @@ import { Prisma, PrismaClient } from "@prisma/client";
  * that appears without being listed fails too, so the next one gets pinned
  * when it is written.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 afterAll(async () => {
   await prisma.$disconnect();

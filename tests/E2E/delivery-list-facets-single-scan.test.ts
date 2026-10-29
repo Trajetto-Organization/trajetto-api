@@ -1,9 +1,10 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { PrismaClient, type DeliveryStatus } from "@prisma/client";
+import { type DeliveryStatus } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 
 import { DeliveryRepository } from "@/modules/delivery/repositories/delivery-repository";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * The board's counts read the company's history ONCE in the default view.
@@ -19,8 +20,10 @@ import { DeliveryRepository } from "@/modules/delivery/repositories/delivery-rep
  * Counted on a logging client handed to the real repository, against the
  * real database; the expected numbers come from independent groupBys.
  */
-const counted = new PrismaClient({ log: [{ level: "query", emit: "event" }] });
-const prisma = new PrismaClient();
+const counted = createPrismaClient({
+  log: [{ level: "query", emit: "event" }],
+});
+const prisma = createPrismaClient();
 
 const statements: string[] = [];
 

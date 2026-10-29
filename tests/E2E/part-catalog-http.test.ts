@@ -1,7 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
-
 import {
   readNdjson,
   seedBranch,
@@ -11,6 +9,7 @@ import {
   seedUser,
   seedVehicle,
 } from "./support/fleet-maint-seed";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * The parts catalog and the service order lines over real HTTP and Postgres.
@@ -21,7 +20,7 @@ import {
  * Lines: cards summed in SQL over exactly the rows the listing filters, and
  * the order's parts checked against its typed total (FLEET-SO-2).
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 let app: Awaited<typeof import("@/http")>["app"];
 

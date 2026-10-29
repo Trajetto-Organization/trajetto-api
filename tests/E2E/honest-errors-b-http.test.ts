@@ -1,11 +1,11 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
 import { sign } from "jsonwebtoken";
 
 import { randomUUID } from "node:crypto";
 
 import auth from "@/config/auth";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * Honest HTTP on the notification, quote, WhatsApp, user, kanban and route
@@ -17,7 +17,7 @@ import auth from "@/config/auth";
  * (no code), a 400 for a conflict, or a 403 that confirmed another user's
  * notification exists.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 let app: Awaited<typeof import("@/http")>["app"];
 

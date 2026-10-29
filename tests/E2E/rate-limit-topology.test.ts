@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
 import { randomInt, randomUUID } from "node:crypto";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * The anonymous limits, in the topology production actually has.
@@ -24,7 +24,7 @@ const FORWARDER_SECRET = vi.hoisted(() => {
   return secret;
 });
 
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 let app: Awaited<typeof import("@/http")>["app"];
 let issueSessionTokenPair: typeof import("@/modules/user/services/session-service").issueSessionTokenPair;

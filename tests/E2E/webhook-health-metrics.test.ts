@@ -1,12 +1,12 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 
 import { sign } from "jsonwebtoken";
 import auth from "@/config/auth";
 
 import { ENDPOINT_PAUSED_REASON } from "@/shared/integration/webhook-dispatch-rules";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * What an operator can see of the webhook queue.
@@ -16,7 +16,7 @@ import { ENDPOINT_PAUSED_REASON } from "@/shared/integration/webhook-dispatch-ru
  * queue of held events, a backlog nobody was draining — none of it showed
  * anywhere but in a customer's reconciliation.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 let app: Awaited<typeof import("@/http")>["app"];
 

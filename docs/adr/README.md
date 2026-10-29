@@ -26,7 +26,7 @@ nesses arquivos.
 | [0008](./0008-escala-horizontal.md)                | Escala horizontal com réplicas idênticas, sem cookie sticky              | aceito                         |
 | [0009](./0009-comprovante-publico-por-token.md)    | Comprovante público por token com prazo                                  | aceito                         |
 | [0010](./0010-ia-local.md)                         | IA local (OCR em CPU, `trajetto-ai`); o provedor externo saiu            | aceito                         |
-| [0011](./0011-orm-prisma-6-7-8.md)                 | ORM: 7.10.1 go na 2ª tentativa, publicado à parte; o 8 não saiu          | aceito                         |
+| [0011](./0011-orm-prisma-6-7-8.md)                 | ORM: Prisma 7.10.1 com adapter-pg (go na 2ª tentativa); o 8 não saiu     | aceito                         |
 
 ## Outras decisões registradas
 

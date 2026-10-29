@@ -1,12 +1,12 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
 import { sign } from "jsonwebtoken";
 
 import { randomUUID } from "node:crypto";
 
 import auth from "@/config/auth";
 import { businessDateKey } from "@/shared/time/business-day";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * The driver list as the /admin and /dashboard screens read it, over real
@@ -15,7 +15,7 @@ import { businessDateKey } from "@/shared/time/business-day";
  * (decision 5.8), and the walls around both — another company's drivers,
  * branch names and ids never cross, and only who may read drivers reads them.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 let app: Awaited<typeof import("@/http")>["app"];
 

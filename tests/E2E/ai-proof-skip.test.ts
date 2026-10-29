@@ -1,11 +1,11 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 
 import { env } from "@/env";
 import { AIAnalysisService } from "@/shared/ai/ai-analysis-service";
 import { buildProofAnalysisInput } from "@/shared/delivery/proof-analysis-input";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * A delivery proof the AI will not read — no provider key, or the company's
@@ -22,7 +22,7 @@ import { buildProofAnalysisInput } from "@/shared/delivery/proof-analysis-input"
  * queue and simply arrives without a suggestion, which is exactly what a
  * reviewer without AI should see.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 const BUSINESS = "018fdc90-0000-7000-8000-0000000000b1";
 const USER = "018fdc90-0000-7000-8000-0000000000c1";

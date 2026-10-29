@@ -1,10 +1,9 @@
 import { beforeAll, afterAll, describe, expect, it } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
-
 import { RouteRepository } from "@/modules/route/repositories/route-repository";
 import { DeliveryRepository } from "@/modules/delivery/repositories/delivery-repository";
 import { DeliveryAlreadyOnRouteError } from "@/modules/route/usecases/errors/route-errors";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * The route's writes, against a real Postgres.
@@ -19,7 +18,7 @@ import { DeliveryAlreadyOnRouteError } from "@/modules/route/usecases/errors/rou
  * data these methods return, and the unit suite covers them; what needs a real
  * database is the half that only a real database enforces.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 const repository = new RouteRepository(prisma);
 const deliveries = new DeliveryRepository(prisma);
 

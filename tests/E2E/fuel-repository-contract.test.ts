@@ -1,7 +1,5 @@
 import { afterAll, beforeAll, describe } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
-
 import { FuelRepository } from "@/modules/fuel/repositories/fuel-repository";
 import { InMemoryFuelRepository } from "@/modules/fuel/repositories/in-memory/in-memory-fuel-repository";
 
@@ -19,9 +17,10 @@ import {
   seedFuelType,
   seedVehicle,
 } from "../contract/seed";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /** Decision 13.2: the fuel contract against Postgres and the twin. */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 const prismaRepo = new FuelRepository(prisma);
 const memory = new InMemoryFuelRepository();
 

@@ -1,7 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
-
 import {
   seedBranch,
   seedCarrier,
@@ -10,6 +8,7 @@ import {
   seedUser,
   seedVehicle,
 } from "./support/fleet-maint-seed";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * Another company's id answers exactly like an id that exists nowhere, on
@@ -22,7 +21,7 @@ import {
  * sends the foreign id and a random one and requires the same status and
  * the same body, with a code.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 let app: Awaited<typeof import("@/http")>["app"];
 

@@ -1,6 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 
 import { container } from "tsyringe";
@@ -14,6 +13,7 @@ import {
   type FleetDriverSeed,
 } from "./support/fleet-driver-seed";
 import { seedJourneyRoute } from "./support/journey-route-seed";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * Contract §10, first question, asked literally of every write the app and
@@ -33,7 +33,7 @@ import { seedJourneyRoute } from "./support/journey-route-seed";
  *    a real conflict, ADR 0006 IDEMP-07);
  *  - one record, one domain event, one webhook row: the effect happened once.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 let app: Awaited<typeof import("@/http")>["app"];
 let fleet: FleetDriverSeed;

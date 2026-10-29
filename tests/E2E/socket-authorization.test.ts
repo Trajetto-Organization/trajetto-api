@@ -1,6 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -9,6 +8,7 @@ import { sign } from "jsonwebtoken";
 import auth from "@/config/auth";
 
 import { socketClientEntry } from "./support/socket-client";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * The socket, and the permission that changed underneath it.
@@ -27,7 +27,7 @@ import { socketClientEntry } from "./support/socket-client";
  * the room whoever no longer belongs in it, and that is what this file proves,
  * through the real channel.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 const CARRIER = "018fd000-0000-7000-8000-00000000000a";
 const STAFF = "018fd000-0000-7000-8000-0000000000a1";

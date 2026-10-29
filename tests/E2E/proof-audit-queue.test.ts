@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { Prisma, PrismaClient } from "@prisma/client";
+import { Prisma } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 
 import { sign } from "jsonwebtoken";
@@ -19,6 +19,7 @@ import {
   seedFleetDriver,
   type FleetDriverSeed,
 } from "./support/fleet-driver-seed";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * Auditoria de comprovantes over real HTTP and a real database (Entregas 10).
@@ -35,7 +36,7 @@ import {
  * The ordering and the rate are also run against the in-memory twin with the
  * same rows, so the two cannot drift (decision 13.2).
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 const COMPANY = "018fd990-0000-7000-8000-00000000000a";
 const OTHER = "018fd990-0000-7000-8000-00000000000b";
@@ -854,9 +855,7 @@ describe("the agreement rate (DLVB-04)", () => {
 
     url.searchParams.set("connection_limit", "1");
 
-    const zoned = new PrismaClient({
-      datasources: { db: { url: url.toString() } },
-    });
+    const zoned = createPrismaClient({}, { url: url.toString() });
 
     try {
       // One connection, so the SET is the zone of every query below.

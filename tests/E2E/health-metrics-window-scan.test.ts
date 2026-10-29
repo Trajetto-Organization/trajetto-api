@@ -1,9 +1,9 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 
 import { deliveriesInWindowSql } from "@/shared/health/metrics-queries";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * The "created in the last 24 h" counters of /health/metrics read the window,
@@ -24,7 +24,7 @@ import { deliveriesInWindowSql } from "@/shared/health/metrics-queries";
  * recent rows written into space freed at the start of each range — and
  * requires the window count to touch a fraction of the table, not all of it.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 const USER = "018fda90-0000-7000-8000-0000000000u1";
 

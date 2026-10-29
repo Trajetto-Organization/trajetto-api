@@ -8,10 +8,10 @@ import {
   vi,
 } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
 import crypto, { randomUUID } from "node:crypto";
 
 import { hash } from "bcrypt";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * Two accounts that draw the same six-digit code, against the real database.
@@ -31,7 +31,7 @@ vi.mock("@/shared/services/transactional-mail-service", () => ({
   sendTransactionalMail: vi.fn(async () => undefined),
 }));
 
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 const CARRIER = randomUUID();
 const FIRST = randomUUID();

@@ -1,6 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 
 import { DeliveryRepository } from "@/modules/delivery/repositories/delivery-repository";
@@ -12,6 +11,7 @@ import {
   type BusinessDayRange,
 } from "@/shared/time/business-day";
 import { operationDay } from "@/shared/route/operation-day-rules";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * What the delivery screens cost once a carrier has a history.
@@ -33,7 +33,7 @@ import { operationDay } from "@/shared/route/operation-day-rules";
  * to after five executions on the same connection — and the plan that cannot
  * see that `status = $2` means 'DELIVERED'.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 const HISTORY = "018fdc00-0000-7000-8000-00000000000a";
 const SMALL = "018fdc00-0000-7000-8000-00000000000b";
@@ -72,7 +72,9 @@ interface Sent {
   params: string;
 }
 
-const capture = new PrismaClient({ log: [{ emit: "event", level: "query" }] });
+const capture = createPrismaClient({
+  log: [{ emit: "event", level: "query" }],
+});
 const sent: Sent[] = [];
 
 capture.$on("query", (event) => {

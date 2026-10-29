@@ -1,6 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 
 import type { RouteOptions } from "fastify";
@@ -12,6 +11,7 @@ import auth from "@/config/auth";
 import { ndjsonDocFor } from "@/routes/documentation/ndjson";
 
 import { strictIssues } from "../unitaires/contract/support/deep-strict";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * The user listings never carry the password hash.
@@ -23,7 +23,7 @@ import { strictIssues } from "../unitaires/contract/support/deep-strict";
  * profile allowed to read its users (and every MASTER's to any MASTER), in
  * the browser, through the web's infinite scroll.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 let app: Awaited<typeof import("@/http")>["app"];
 

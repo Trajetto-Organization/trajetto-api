@@ -1,6 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 import type { AddressInfo } from "node:net";
 
@@ -9,6 +8,7 @@ import auth from "@/config/auth";
 
 import { APP_BOOT_TIMEOUT_MS } from "../support/app-boot";
 import { socketClientEntry } from "./support/socket-client";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * A socket handshake after the session moved on reads the CURRENT user.
@@ -26,7 +26,7 @@ import { socketClientEntry } from "./support/socket-client";
  * AUTH_SESSION_INVALIDATED: on the web, "Não foi possível se conectar ao
  * serviço de notificações" on every page and no realtime at all.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 const CARRIER = randomUUID();
 

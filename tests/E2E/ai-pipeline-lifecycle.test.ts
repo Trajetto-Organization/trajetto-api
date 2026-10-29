@@ -8,7 +8,6 @@ import {
   vi,
 } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 
 import { AIAnalysisPipelineService } from "@/shared/ai/ai-analysis-pipeline-service";
@@ -27,6 +26,7 @@ import {
   fakeAnalyzer,
   resetCircuit,
 } from "./support/fake-vision";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * One AI analysis request from claim to settle, against the real service and
@@ -46,7 +46,7 @@ import {
  */
 vi.mock("@/websocket", () => ({ sendAIVerificationEvent: vi.fn() }));
 
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 const pipeline = AIAnalysisPipelineService.getInstance() as unknown as {
   provider: unknown;

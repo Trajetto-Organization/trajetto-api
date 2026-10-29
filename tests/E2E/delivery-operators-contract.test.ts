@@ -1,6 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 
 import { UserRepository } from "@/modules/user/repositories/user-repository";
@@ -8,6 +7,7 @@ import { InMemoryUserRepository } from "@/modules/user/repositories/in-memory/in
 
 import type { IUserRepository } from "@/modules/user/repositories/IUser-repository";
 import type { UserRole } from "@/modules/user/dtos/user-dto";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * findDeliveryOperators (DLVP-NOTIF-1), the same people in Postgres and in
@@ -16,7 +16,7 @@ import type { UserRole } from "@/modules/user/dtos/user-dto";
  * delivery_manage — never a driver, a revoked account, a reader or another
  * company. Oldest first, ties by id.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 const A = randomUUID();
 const B = randomUUID();

@@ -1,9 +1,9 @@
 import { afterAll, describe, expect, it } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
 import { createHash, randomUUID } from "node:crypto";
 
 import { UserTokensRepository } from "@/modules/user/repositories/user-tokens-repository";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * What the reset and verification tables hold, read straight from Postgres
@@ -14,7 +14,7 @@ import { UserTokensRepository } from "@/modules/user/repositories/user-tokens-re
  * because a fake that hashed while the real repository did not would leave
  * every unit test green and every token readable.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 const tokens = new UserTokensRepository(prisma);
 
 const sha256 = (value: string): string =>

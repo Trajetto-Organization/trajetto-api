@@ -1,12 +1,12 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
 import { sign } from "jsonwebtoken";
 
 import { randomUUID } from "node:crypto";
 
 import auth from "@/config/auth";
 import { parseCsv } from "@/shared/delivery/spreadsheet-reader";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * The refuelings list as the fleet screens read it, over real HTTP and
@@ -23,9 +23,11 @@ import { parseCsv } from "@/shared/delivery/spreadsheet-reader";
 const pool = vi.hoisted(() => ({ inFlight: 0, peak: 0 }));
 
 vi.mock("@/../infra/database", async () => {
-  const { PrismaClient: Client } = await import("@prisma/client");
+  const { createPrismaClient } = await import(
+    "@/shared/database/database-client"
+  );
 
-  const counted = new Client().$extends({
+  const counted = createPrismaClient().$extends({
     query: {
       async $allOperations({ args, query }) {
         pool.inFlight += 1;
@@ -43,7 +45,7 @@ vi.mock("@/../infra/database", async () => {
   return { default: counted };
 });
 
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 let app: Awaited<typeof import("@/http")>["app"];
 

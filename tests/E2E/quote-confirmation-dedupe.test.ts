@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
 import { container } from "tsyringe";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * The public quote form against a real Postgres (INJ-03).
@@ -11,7 +11,7 @@ import { container } from "tsyringe";
  * case, inside the last day. One confirmation per mailbox per day, however
  * many times the form is posted and however the address is capitalised.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 let app: Awaited<typeof import("@/http")>["app"];
 

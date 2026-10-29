@@ -1,7 +1,8 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { Prisma, PrismaClient } from "@prisma/client";
+import { Prisma } from "@prisma/client";
 import { randomUUID } from "node:crypto";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * Retention of the API usage counts (db-perf 10/2026, docs/desempenho/banco-2026-10.md).
@@ -14,7 +15,7 @@ import { randomUUID } from "node:crypto";
  * The job is imported lazily: before the fix the module did not exist, and a
  * static import would fail the whole file instead of each assertion.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 const CARRIER = randomUUID();
 const KEY = randomUUID();

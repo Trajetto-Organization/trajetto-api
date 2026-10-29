@@ -1,13 +1,12 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
-
 import {
   seedBranch,
   seedCarrier,
   seedUser,
   seedVehicle,
 } from "./support/fleet-maint-seed";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * The maintenance cost chart, over real HTTP (FLEET-SO-3).
@@ -18,7 +17,7 @@ import {
  * the zod response schema strips what it does not list: a key renamed in the
  * use case but not in the schema would vanish from the body.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 let app: Awaited<typeof import("@/http")>["app"];
 

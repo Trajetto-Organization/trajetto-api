@@ -1,10 +1,10 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
 import { randomInt, randomUUID } from "node:crypto";
 
 import { getModuleImpact } from "@/shared/entitlements/entitlement-service";
 import { ensureDefaultOccurrenceTypes } from "@/shared/delivery/default-occurrence-types";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * "Desligar o módulo Entregas" lists what the company would lose. Since
@@ -12,7 +12,7 @@ import { ensureDefaultOccurrenceTypes } from "@/shared/delivery/default-occurren
  * ("Entrega normal" and three pauses); counting them told a company that had
  * never created a type that it would lose four (esquema-reuniao §6.1 k).
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 const BUSINESS = randomUUID();
 
 beforeAll(async () => {

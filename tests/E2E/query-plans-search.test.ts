@@ -1,11 +1,11 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 
 import { DeliveryRepository } from "@/modules/delivery/repositories/delivery-repository";
 import { SEARCH_PREFILTER_CAP } from "@/modules/delivery/repositories/delivery-search";
 import { deliveryListWhere } from "@/modules/delivery/usecases/list-delivery/delivery-list";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * The deliveries search through the trigram index (delivery-search.ts,
@@ -18,9 +18,11 @@ import { deliveryListWhere } from "@/modules/delivery/usecases/list-delivery/del
  * read the matching rows, not the company's history (db-perf 10/2026:
  * 1.3 s -> about 100 ms per keystroke for a company with 300k deliveries).
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
-const capture = new PrismaClient({ log: [{ emit: "event", level: "query" }] });
+const capture = createPrismaClient({
+  log: [{ emit: "event", level: "query" }],
+});
 const sent: Array<{ query: string; params: string }> = [];
 
 capture.$on("query", (event) => {

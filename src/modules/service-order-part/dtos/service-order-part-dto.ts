@@ -1,4 +1,4 @@
-import { Decimal } from "@prisma/client/runtime/library";
+import { Decimal } from "@prisma/client/runtime/client";
 
 import type { FacetCount } from "@/shared/pagination/list-meta";
 import type { SortOrder } from "@/shared/pagination/list-query";

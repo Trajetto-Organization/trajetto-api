@@ -1,6 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
 import { hash } from "bcrypt";
 import { createHmac, randomUUID } from "node:crypto";
 import { decode, sign } from "jsonwebtoken";
@@ -9,6 +8,7 @@ import auth from "@/config/auth";
 import { issueTwoFactorChallenge } from "@/modules/user/services/two-factor-challenge";
 
 import { APP_BOOT_TIMEOUT_MS } from "../support/app-boot";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * Someone holding a token, or pieces of one, trying to make it say more.
@@ -19,7 +19,7 @@ import { APP_BOOT_TIMEOUT_MS } from "../support/app-boot";
  * never data. The per-case unit tests of ensure-authenticated prove each
  * branch; this file proves the wiring holds when the token is hostile.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 let app: Awaited<typeof import("@/http")>["app"];
 

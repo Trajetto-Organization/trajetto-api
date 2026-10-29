@@ -1,12 +1,12 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 
 import { sign } from "jsonwebtoken";
 import auth from "@/config/auth";
 
 import { generateApiKey } from "@/shared/integration/api-key-rules";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * The rest of the routes where nothing in the URL names a tenant.
@@ -22,7 +22,7 @@ import { generateApiKey } from "@/shared/integration/api-key-rules";
  * Same premise: knowing another company's id is not an exploit. Ids travel in
  * exports, screenshots and support tickets.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 let app: Awaited<typeof import("@/http")>["app"];
 

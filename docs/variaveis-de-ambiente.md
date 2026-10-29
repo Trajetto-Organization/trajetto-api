@@ -134,7 +134,8 @@ MIGRATION_DATABASE_URL=postgresql://<USUÁRIO>:<SENHA>@<APP NAME DO POSTGRES>:54
 ```
 
 Exemplo de host: `trajetto-postgres-production` (staging:
-`trajetto-postgres-staging`). O porquê de cada parâmetro está em
+`trajetto-postgres-staging`). O porquê de cada parâmetro, e no que cada um vira
+no pool do `pg` (Prisma 7 com `@prisma/adapter-pg`), está em
 [`arquitetura.md`](./arquitetura.md#conexão-com-o-postgres).
 
 | Variável                                                                                        | Obrig. | Segredo      | Formato / padrão                | Dev                                                         | Staging                                | Produção                                          | Para quê                                                                                                                                                                                                                                                          |

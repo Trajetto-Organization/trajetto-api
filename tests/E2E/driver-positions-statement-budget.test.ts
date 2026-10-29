@@ -3,6 +3,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { PrismaClient } from "@prisma/client";
 
 import { seedFleetDriver } from "./support/fleet-driver-seed";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * What one flush of the driver's phone costs the database.
@@ -23,13 +24,13 @@ import { seedFleetDriver } from "./support/fleet-driver-seed";
  * in place of the singleton BEFORE the app is imported, so every repository
  * and middleware talks through it.
  */
-const counted = new PrismaClient({
+const counted = createPrismaClient({
   log: [{ level: "query", emit: "event" }],
 });
 
 (globalThis as unknown as { prisma: PrismaClient }).prisma = counted;
 
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 let app: Awaited<typeof import("@/http")>["app"];
 

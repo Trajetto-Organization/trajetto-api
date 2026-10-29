@@ -22,6 +22,7 @@ import {
 import database from "@/../infra/database";
 import { escapeLikePattern } from "@/shared/utils/like-pattern";
 import { buildSearchOr } from "@/shared/pagination/search-or";
+import { relatedTo, rowsByKey } from "@/shared/database/related-rows";
 
 const messageInclude = {
   sender: { select: { id: true, name: true } },
@@ -151,16 +152,6 @@ class ChatRepository implements IChatRepository {
           // back in any order, and an offset page could repeat or skip one.
           { id: "desc" },
         ],
-        include: {
-          driver: {
-            select: {
-              id: true,
-              name: true,
-              cnh: true,
-              User: { select: { id: true, last_seen_at: true } },
-            },
-          },
-        },
       }),
       this.prisma.chatThread.count({ where: whereCondition }),
     ]);
@@ -192,22 +183,51 @@ class ChatRepository implements IChatRepository {
       unreadRows.map((row) => [row.threadId, row.unread]),
     );
 
-    const data = threads.map((thread) => ({
-      id: thread.id,
-      driver: {
-        id: thread.driver.id,
-        name: thread.driver.name,
-        cnh: thread.driver.cnh,
-      },
-      driverUser: thread.driver.User
-        ? {
-            id: thread.driver.User.id,
-            last_seen_at: thread.driver.User.last_seen_at,
-          }
-        : null,
-      lastMessage: previewByThread.get(thread.id) ?? null,
-      unreadCount: unreadByThread.get(thread.id) ?? 0,
-    }));
+    // The page's drivers and their users, two at a time like the rest, and
+    // not at all for an empty page: as an include, Prisma 7 queried both
+    // under no thread (shared/database/related-rows.ts).
+    const driverIds = threads.map((thread) => thread.driverId);
+
+    const [drivers, driverUsers] = await Promise.all([
+      rowsByKey(driverIds, (ids) =>
+        this.prisma.driver.findMany({
+          where: { id: { in: ids } },
+          select: { id: true, name: true, cnh: true },
+        }),
+      ),
+      rowsByKey(
+        driverIds,
+        (ids) =>
+          this.prisma.user.findMany({
+            where: { driverId: { in: ids } },
+            select: { id: true, last_seen_at: true, driverId: true },
+          }),
+        (user) => user.driverId as string,
+      ),
+    ]);
+
+    const data = threads.map((thread) => {
+      // A required relation: the thread's foreign key keeps the driver.
+      const driver = drivers.get(thread.driverId)!;
+      const driverUser = relatedTo(driverUsers, thread.driverId);
+
+      return {
+        id: thread.id,
+        driver: {
+          id: driver.id,
+          name: driver.name,
+          cnh: driver.cnh,
+        },
+        driverUser: driverUser
+          ? {
+              id: driverUser.id,
+              last_seen_at: driverUser.last_seen_at,
+            }
+          : null,
+        lastMessage: previewByThread.get(thread.id) ?? null,
+        unreadCount: unreadByThread.get(thread.id) ?? 0,
+      };
+    });
 
     return { data, total, totalUnread };
   }

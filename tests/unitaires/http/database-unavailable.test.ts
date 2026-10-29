@@ -8,6 +8,7 @@ import {
   DATABASE_RETRY_AFTER_SECONDS,
   isDatabaseUnavailable,
 } from "@/shared/errors/database-unavailable";
+import { DatabaseUnavailableError } from "@/shared/database/pg-driver";
 
 /**
  * What the API answers when the database, not the request, is the problem.
@@ -40,6 +41,34 @@ const rawFailure = (sqlState: string, detail: string) =>
     { code: "P2010", clientVersion, meta: { code: sqlState, message: detail } },
   );
 
+/**
+ * A failure as Prisma 7 raises it: the driver adapter's error rides in
+ * `meta.driverAdapterError`, its `cause` saying what happened. P2010 for a
+ * raw query, P2039 for a model query Postgres refused. Shapes measured with
+ * @prisma/client 7.10.1 + @prisma/adapter-pg 7.10.1 against Postgres 16.
+ */
+const driverFailure = (
+  code: "P2010" | "P2039",
+  cause: Record<string, unknown>,
+) =>
+  new Prisma.PrismaClientKnownRequestError(
+    code === "P2010" ? "Raw query failed." : "Database error.",
+    {
+      code,
+      clientVersion,
+      meta: {
+        driverAdapterError: Object.assign(new Error("driver adapter error"), {
+          name: "DriverAdapterError",
+          cause,
+        }),
+      },
+    },
+  );
+
+/** pg's own error, as the API's pool types it (src/shared/database/pg-driver.ts). */
+const fromPool = (message: string) =>
+  new DatabaseUnavailableError(new Error(message));
+
 const infrastructure: Record<string, () => Error> = {
   initialization: () =>
     new Prisma.PrismaClientInitializationError(
@@ -68,6 +97,38 @@ const infrastructure: Record<string, () => Error> = {
   // A raw query past socket_timeout: Postgres never answered, so there is no
   // SQLSTATE and no message — only the engine's `N/A`.
   "raw-query-timed-out": () => rawFailure("N/A", "N/A"),
+  // Prisma 7: pg's pool and sockets, typed by the API's pool.
+  "pg-pool-exhausted": () =>
+    fromPool("timeout exceeded when trying to connect"),
+  "pg-read-timeout": () => fromPool("Query read timeout"),
+  "pg-connection-terminated": () =>
+    fromPool("Connection terminated unexpectedly"),
+  "pg-connect-timeout": () =>
+    fromPool("Connection terminated due to connection timeout"),
+  // Prisma 7: a raw query gets every adapter error as P2010.
+  "v7-raw-unreachable": () =>
+    driverFailure("P2010", {
+      kind: "DatabaseNotReachable",
+      host: "127.0.0.1",
+      port: 5432,
+    }),
+  "v7-raw-connection-closed": () =>
+    driverFailure("P2010", { kind: "ConnectionClosed" }),
+  // Postgres going away under a query: the server is shutting down.
+  "v7-raw-admin-shutdown": () =>
+    driverFailure("P2010", {
+      kind: "postgres",
+      originalCode: "57P01",
+      code: "57P01",
+      originalMessage: "terminating connection due to administrator command",
+    }),
+  "v7-model-admin-shutdown": () =>
+    driverFailure("P2039", {
+      kind: "postgres",
+      originalCode: "57P01",
+      code: "57P01",
+      originalMessage: "terminating connection due to administrator command",
+    }),
 };
 
 const notInfrastructure: Record<string, () => Error> = {
@@ -98,6 +159,37 @@ const notInfrastructure: Record<string, () => Error> = {
     new TypeError("Cannot read properties of undefined (reading 'role')"),
   // Only the message says "database": nothing proves it came from Prisma.
   "plain-error": () => new Error("Can't reach database server"),
+  // pg's exact words, but not from the API's pool: still untrusted.
+  "plain-error-with-pg-words": () =>
+    new Error("timeout exceeded when trying to connect"),
+  // Prisma 7: Postgres answered, about the SQL.
+  "v7-raw-sql-error": () =>
+    driverFailure("P2010", {
+      kind: "TableDoesNotExist",
+      originalCode: "42P01",
+      originalMessage: 'relation "gap6_4_no_such_table" does not exist',
+      table: "gap6_4_no_such_table",
+    }),
+  "v7-raw-statement-timeout": () =>
+    driverFailure("P2010", {
+      kind: "postgres",
+      originalCode: "57014",
+      code: "57014",
+      originalMessage: "canceling statement due to statement timeout",
+    }),
+  "v7-model-statement-timeout": () =>
+    driverFailure("P2039", {
+      kind: "postgres",
+      originalCode: "57014",
+      code: "57014",
+      originalMessage: "canceling statement due to statement timeout",
+    }),
+  "v7-unique": () =>
+    driverFailure("P2039", {
+      kind: "UniqueConstraintViolation",
+      originalCode: "23505",
+      constraint: { index: "driver_businessId_cpf_key" },
+    }),
 };
 
 describe("isDatabaseUnavailable", () => {

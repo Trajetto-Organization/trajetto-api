@@ -1,7 +1,7 @@
 import { container } from "tsyringe";
 import { NotificationChannel } from "@prisma/client";
 
-import database from "@/../infra/database";
+import database, { databasePool } from "@/../infra/database";
 import { RedisConnection } from "@/../infra/cache/redis-connection";
 
 import type {
@@ -23,10 +23,7 @@ import {
   readWorkerHeartbeats,
 } from "@/shared/health/operational-state";
 import { CronSchedulerService } from "@/shared/services/cron-scheduler-service";
-import {
-  connectionLimitOf,
-  poolFromMetrics,
-} from "@/shared/health/pool-metrics";
+import { readPrismaPool } from "@/shared/health/pool-metrics";
 import { runtimeMetrics } from "@/shared/health/runtime-metrics";
 import { providerMetrics } from "@/shared/health/provider-metrics";
 import { readRedisMetrics } from "@/shared/health/redis-metrics";
@@ -187,14 +184,11 @@ async function collectOperationalMetrics() {
     };
   });
 
-  // This replica's own saturation (GAP3-10, OBS-11): the Prisma pool is what
-  // fills first under load, and pg_stat_activity cannot see it.
+  // This replica's own saturation (GAP3-10, OBS-11): the pool is what fills
+  // first under load, and pg_stat_activity cannot see it.
   const runtime = {
     ...runtimeMetrics.snapshot(),
-    prisma_pool: {
-      limit: connectionLimitOf(process.env.DATABASE_URL),
-      ...poolFromMetrics(await database.$metrics.json()),
-    },
+    prisma_pool: await readPrismaPool(databasePool, process.env.DATABASE_URL),
     bcrypt: gateStats(),
   };
 

@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { PrismaClient } from "@prisma/client";
 import { randomUUID } from "node:crypto";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * How many pool connections each Entregas catalog tab takes at once.
@@ -18,9 +19,11 @@ import { randomUUID } from "node:crypto";
 const pool = vi.hoisted(() => ({ inFlight: 0, peak: 0 }));
 
 vi.mock("@/../infra/database", async () => {
-  const { PrismaClient: Client } = await import("@prisma/client");
+  const { createPrismaClient } = await import(
+    "@/shared/database/database-client"
+  );
 
-  const counted = new Client().$extends({
+  const counted = createPrismaClient().$extends({
     query: {
       async $allOperations({ args, query }) {
         pool.inFlight += 1;
@@ -51,7 +54,7 @@ import { ListOccurrenceTypeUseCase } from "@/modules/occurrence-type/usecases/li
 import { ListStatusChangeReasonUseCase } from "@/modules/status-change-reason/usecases/list-status-change-reason/list-status-change-reason-usecase";
 import { ListImportsUseCase } from "@/modules/import/usecases/list-imports/list-imports-usecase";
 
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 const CARRIER = "018fde00-0000-7000-8000-00000000000a";
 const MANAGER = "018fde00-0000-7000-8000-0000000000a1";

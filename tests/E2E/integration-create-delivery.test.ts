@@ -1,9 +1,9 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 
 import { generateApiKey } from "@/shared/integration/api-key-rules";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * POST /integration/v1/deliveries (decision 5.10), as an ERP reaches it: a
@@ -14,7 +14,7 @@ import { generateApiKey } from "@/shared/integration/api-key-rules";
  * one `delivery.created` per document — and that the key's company is the
  * only one any of it ever touches.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 let app: Awaited<typeof import("@/http")>["app"];
 

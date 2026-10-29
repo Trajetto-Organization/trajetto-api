@@ -4,6 +4,7 @@ import { BusinessCnpjAlreadyExistsError } from "./business-cnpj-already-exists-e
 import { BusinessCorporateReasonAlreadyExistsError } from "./business-corporate-reason-already-exists-error";
 import { BusinessEmailAlreadyExistsError } from "./business-email-already-exists-error";
 import { BusinessErpCodeAlreadyExistsError } from "./business-erp-code-already-exists-error";
+import { uniqueTargetOf } from "@/shared/errors/prisma-error-meta";
 
 type BusinessConflict =
   | BusinessCnpjAlreadyExistsError
@@ -26,7 +27,7 @@ function businessUniqueViolation(error: unknown): BusinessConflict | null {
     return null;
   }
 
-  const target = error.meta?.target;
+  const target = uniqueTargetOf(error);
   const fields = Array.isArray(target)
     ? target.join(",")
     : String(target ?? "");

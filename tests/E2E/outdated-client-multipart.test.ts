@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
 import { randomUUID } from "node:crypto";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * A driver on a build of the app from before presigned uploads.
@@ -14,7 +14,7 @@ import { randomUUID } from "node:crypto";
  * in a toast. It used to read "Unsupported Media Type: multipart/form-data;
  * boundary=…"; what the driver reads now is something they can act on.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 let app: Awaited<typeof import("@/http")>["app"];
 let accessToken = "";

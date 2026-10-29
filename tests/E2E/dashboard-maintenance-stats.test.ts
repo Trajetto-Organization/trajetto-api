@@ -8,7 +8,7 @@ import {
   vi,
 } from "vitest";
 
-import { Prisma, PrismaClient } from "@prisma/client";
+import { Prisma } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 
 import { DashboardRepository } from "@/modules/dashboard/repositories/dashboard-repository";
@@ -21,6 +21,7 @@ import { DeliveryRepository } from "@/modules/delivery/repositories/delivery-rep
 import { BusinessRepository } from "@/modules/business/repositories/business-repository";
 
 import { zonedWallTimeToUtc } from "@/shared/time/business-day";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * The "Manutenção da frota" card (Atrasada / A vencer / Em dia), counted in
@@ -35,7 +36,7 @@ import { zonedWallTimeToUtc } from "@/shared/time/business-day";
  * The same rows go through the database and through the in-memory twin, so
  * the two stay one rule (decision 13.2).
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 const MANAUS = "America/Manaus"; // UTC-4
 

@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
 import { randomUUID } from "node:crypto";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * What Postgres does for one page of /integration/v1/events.
@@ -18,9 +18,9 @@ import { randomUUID } from "node:crypto";
  * they do in production. The assertions are on rows read, never on
  * milliseconds.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
-const capture = new PrismaClient({
+const capture = createPrismaClient({
   log: [{ emit: "event", level: "query" }],
 });
 

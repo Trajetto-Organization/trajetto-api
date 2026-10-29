@@ -1,11 +1,11 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 
 import { sign } from "jsonwebtoken";
 import auth from "@/config/auth";
 import { resetOperationalMetricsCache } from "@/shared/health/operational-metrics";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * What the MASTER's "Sistema" tab needs to see during an incident, and did
@@ -20,7 +20,7 @@ import { resetOperationalMetricsCache } from "@/shared/health/operational-metric
  *
  * These seed that state and require the numbers that make it visible.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 let app: Awaited<typeof import("@/http")>["app"];
 

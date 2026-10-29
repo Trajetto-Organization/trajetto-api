@@ -1,10 +1,10 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 
 import { DeliveryRepository } from "@/modules/delivery/repositories/delivery-repository";
 import { buildDeliveryTimeline } from "@/shared/delivery/delivery-timeline";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * The support trail, from the database up.
@@ -16,7 +16,7 @@ import { buildDeliveryTimeline } from "@/shared/delivery/delivery-timeline";
  * else — a typo in an include is a screen that renders empty, not a compile
  * error.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 const deliveries = new DeliveryRepository(prisma);
 
 const CARRIER = "018f3000-0000-7000-8000-00000000000a";

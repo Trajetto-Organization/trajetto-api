@@ -1,9 +1,9 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 
 import { seedFleetDriver, seedUser } from "./support/fleet-driver-seed";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * Decision 4.4 through the real application: a driver reads only what is
@@ -17,7 +17,7 @@ import { seedFleetDriver, seedUser } from "./support/fleet-driver-seed";
  * role, or the code REFUSED_WITH names), or it is one of DRIVER_OWN_READS,
  * where it is called with a colleague's records and must carry none of them.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 let app: Awaited<typeof import("@/http")>["app"];
 

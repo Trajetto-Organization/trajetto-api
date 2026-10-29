@@ -8,7 +8,7 @@ import type {
 } from "../usecases/list-vehicle-checklist/checklist-list";
 
 import { RecordOrigin } from "@prisma/client";
-import { JsonValue } from "@prisma/client/runtime/library";
+import { JsonValue } from "@prisma/client/runtime/client";
 import type { DevicePrecheck } from "@/shared/ai-precheck/device-precheck";
 
 interface VehicleChecklist {

@@ -1,6 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { createServer } from "node:net";
@@ -10,6 +9,7 @@ import { sign } from "jsonwebtoken";
 import auth from "@/config/auth";
 
 import { socketClientEntry } from "./support/socket-client";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * An event crossing from one replica to another, and to a third.
@@ -41,7 +41,7 @@ import { socketClientEntry } from "./support/socket-client";
  *     node 1 -> event -> node 2
  *     node 2 -> event -> node 3
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 const CARRIER = "018fdc00-0000-7000-8000-00000000000a";
 const OTHER_CARRIER = "018fdc00-0000-7000-8000-00000000000b";

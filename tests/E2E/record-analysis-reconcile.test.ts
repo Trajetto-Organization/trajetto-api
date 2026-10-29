@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
 import { randomUUID } from "node:crypto";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 // The sweep does nothing without a reader (dev), which is right: the request
 // would only be marked unavailable. Here the reader "exists"; the pipeline
@@ -38,7 +38,7 @@ import {
  * side effect). The proof had a sweep for exactly this (IDEMP-08); these two
  * did not. The sweep asks again with the input the manual button would send.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 const WITH_AI = "018fdc90-0000-7000-8000-00000000000a";
 const WITHOUT_AI = "018fdc90-0000-7000-8000-00000000000b";

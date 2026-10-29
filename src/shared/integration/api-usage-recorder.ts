@@ -9,6 +9,7 @@ import {
   dateOnlyFromKey,
   resolveTimeZone,
 } from "@/shared/time/business-day";
+import { sqlStateOf } from "@/shared/errors/prisma-error-meta";
 
 /** The shared logger (OBS-14): structured lines, filterable by component. */
 const log = logger.child({ component: "api-usage" });
@@ -111,9 +112,10 @@ function isMissingParent(error: unknown): boolean {
   if (error instanceof Prisma.PrismaClientKnownRequestError) {
     if (error.code === "P2003") return true;
 
-    // A raw statement surfaces Postgres' own code.
+    // A raw statement surfaces Postgres' own code (meta.code under Prisma 6,
+    // the driver adapter's originalCode under Prisma 7).
     if (error.code === "P2010") {
-      return String(error.meta?.code ?? "") === "23503";
+      return sqlStateOf(error) === "23503";
     }
   }
 

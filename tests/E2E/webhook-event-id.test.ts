@@ -1,12 +1,12 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 
 import { WebhookDispatchService } from "@/shared/integration/webhook-dispatch-service";
 import { WebhookFanOutService } from "@/shared/integration/webhook-fan-out-service";
 import { buildResendRow } from "@/shared/integration/webhook-resend";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * The id a receiver deduplicates on.
@@ -21,7 +21,7 @@ import { buildResendRow } from "@/shared/integration/webhook-resend";
  * Driven through `WebhookFanOutService.announce`, the path every use case
  * takes, and through `buildResendRow`, what the resend button queues.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 const CARRIER = "018f8000-0000-7000-8000-0000000000e1";
 

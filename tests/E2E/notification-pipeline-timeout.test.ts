@@ -8,10 +8,10 @@ import {
   vi,
 } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 
 import { container } from "tsyringe";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * A provider that answers after the pipeline stopped waiting for it.
@@ -34,7 +34,7 @@ vi.mock("@/shared/notifications/pipeline-rules", async (importOriginal) => ({
 
 const PROVIDER_DELAY_MS = 2_500;
 
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 let pipeline: import("@/shared/notifications/notification-pipeline-service").NotificationPipelineService;
 

@@ -1,6 +1,5 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 
 import { quotaPeriodFor } from "@/shared/ai/ai-period";
@@ -25,6 +24,7 @@ import {
   waitUntilSettled,
   type ResilienceSeed,
 } from "./support/resilience-seed";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * Cases A and E of contract §11 with a real crash: the provider ACCEPTED the
@@ -52,7 +52,7 @@ import {
  * Nothing may stay PROCESSING, and the duplicate window is bounded by what
  * was on the wire when the process died — never the whole batch.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 const fake = new FakeProvider();
 
 const BUSINESS = "018fe600-0000-7000-8000-0000000000a1";

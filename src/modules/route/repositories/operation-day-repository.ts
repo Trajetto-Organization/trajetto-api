@@ -2,6 +2,7 @@ import { Prisma, type PrismaClient } from "@prisma/client";
 
 import { PLANNING_EVENT_TYPES } from "../usecases/shared/route-plan-rules";
 import database from "@/../infra/database";
+import { relatedTo, rowsByKey } from "@/shared/database/related-rows";
 
 import { dateOnlyFromKey, dateOnlyKey } from "@/shared/time/business-day";
 import {
@@ -33,9 +34,14 @@ function lookbackFrom(day: OperationDay): Date {
   );
 }
 
-/** A UTC timestamp column compared with an instant, whatever the session zone. */
+/**
+ * A UTC timestamp column compared with an instant, whatever the session zone.
+ * The instant goes as an ISO string: Prisma 7's pg driver sends a Date as a
+ * naive "YYYY-MM-DD HH:MM:SS" in UTC, which `::timestamptz` would read in the
+ * session's TimeZone (Prisma 6 bound it as a timestamptz itself).
+ */
 function utc(instant: Date): Prisma.Sql {
-  return Prisma.sql`(${instant}::timestamptz AT TIME ZONE 'UTC')`;
+  return Prisma.sql`(${instant.toISOString()}::timestamptz AT TIME ZONE 'UTC')`;
 }
 
 const towerRouteSelect = {
@@ -133,11 +139,12 @@ class OperationDayRepository implements IOperationDayRepository {
    * Every arm already holds the delivery row, so it carries the driver and
    * the status the count groups by, and the tenant filter. The count used to
    * join "active" back to "delivery": a plan built with the values bound
-   * (the first five executions per connection) estimates IN_TRANSIT of a big
-   * tenant from its whole history (thousands of rows for 167), so it hashed
-   * all of the company's deliveries to keep 200 — 37 ms against 2 ms on the
-   * load fixture. In one statement an id always comes with the same driver
-   * and status, so the UNION still keeps each document once.
+   * (every execution on Prisma 7, the first five per connection on 6)
+   * estimates IN_TRANSIT of a big tenant from its whole history (thousands
+   * of rows for 167), so it hashed all of the company's deliveries to keep
+   * 200 — 37 ms against 2 ms on the load fixture. In one statement an id
+   * always comes with the same driver and status, so the UNION still keeps
+   * each document once.
    */
   async countDayDeliveries(
     businessId: string,
@@ -409,20 +416,8 @@ class OperationDayRepository implements IOperationDayRepository {
         created_at: true,
         occurred_at: true,
         routeId: true,
-        route: { select: { code: true } },
-        occurrence: {
-          select: {
-            authorization_status: true,
-            occurrenceType: { select: { name: true, blocks_delivery: true } },
-          },
-        },
-        delivery: {
-          select: {
-            id: true,
-            recipient_name: true,
-            driver: { select: { name: true } },
-          },
-        },
+        occurrenceId: true,
+        deliveryId: true,
       },
     });
 
@@ -443,16 +438,85 @@ class OperationDayRepository implements IOperationDayRepository {
         created_at: true,
         occurred_at: true,
         authorization_status: true,
-        occurrenceType: { select: { name: true, blocks_delivery: true } },
-        delivery: {
-          select: {
-            id: true,
-            recipient_name: true,
-            driver: { select: { name: true } },
-          },
-        },
+        occurrenceTypeId: true,
+        deliveryId: true,
       },
     });
+
+    /**
+     * What the lines point at, read once for both sources and only for the
+     * keys present. As nested selects, Prisma 7 ran each lookup under an
+     * empty feed — eight statements on a quiet morning — and the deliveries,
+     * types and drivers twice, once per source (shared/database/related-rows.ts).
+     */
+    const [routes, eventOccurrences] = await Promise.all([
+      rowsByKey(
+        events.map((event) => event.routeId),
+        (ids) =>
+          this.prisma.route.findMany({
+            where: { id: { in: ids } },
+            select: { id: true, code: true },
+          }),
+      ),
+      rowsByKey(
+        events.map((event) => event.occurrenceId),
+        (ids) =>
+          this.prisma.deliveryOccurrence.findMany({
+            where: { id: { in: ids } },
+            select: {
+              id: true,
+              authorization_status: true,
+              occurrenceTypeId: true,
+            },
+          }),
+      ),
+    ]);
+
+    const [occurrenceTypes, deliveries] = await Promise.all([
+      rowsByKey(
+        [
+          ...[...eventOccurrences.values()].map((row) => row.occurrenceTypeId),
+          ...occurrences.map((occurrence) => occurrence.occurrenceTypeId),
+        ],
+        (ids) =>
+          this.prisma.occurrenceType.findMany({
+            where: { id: { in: ids } },
+            select: { id: true, name: true, blocks_delivery: true },
+          }),
+      ),
+      rowsByKey(
+        [
+          ...events.map((event) => event.deliveryId),
+          ...occurrences.map((occurrence) => occurrence.deliveryId),
+        ],
+        (ids) =>
+          this.prisma.delivery.findMany({
+            where: { id: { in: ids } },
+            select: { id: true, recipient_name: true, driverId: true },
+          }),
+      ),
+    ]);
+
+    const drivers = await rowsByKey(
+      [...deliveries.values()].map((delivery) => delivery.driverId),
+      (ids) =>
+        this.prisma.driver.findMany({
+          where: { id: { in: ids } },
+          select: { id: true, name: true },
+        }),
+    );
+
+    // Deliveries are a required relation of both sources: the foreign key
+    // keeps the row, as the nested select assumed.
+    const deliveryOf = (deliveryId: string) => {
+      const delivery = deliveries.get(deliveryId)!;
+
+      return {
+        id: delivery.id,
+        recipientName: delivery.recipient_name,
+        driverName: relatedTo(drivers, delivery.driverId)?.name ?? null,
+      };
+    };
 
     // The date-only bound as a key: a Date cast to `date` in SQL would pass
     // through timestamptz and move a day under a session outside UTC.
@@ -508,19 +572,20 @@ class OperationDayRepository implements IOperationDayRepository {
     const entries: FeedEntry[] = [];
 
     for (const event of events) {
-      const occurrence = event.occurrence;
-      const type = occurrence?.occurrenceType;
+      const occurrence = relatedTo(eventOccurrences, event.occurrenceId);
+      const type = relatedTo(occurrenceTypes, occurrence?.occurrenceTypeId);
+      const delivery = deliveryOf(event.deliveryId);
 
       entries.push({
         id: `delivery_event:${event.id}`,
         source: "delivery_event",
         type: event.type,
         actor: event.actor,
-        deliveryId: event.delivery.id,
-        recipientName: event.delivery.recipient_name,
+        deliveryId: delivery.id,
+        recipientName: delivery.recipientName,
         routeId: event.routeId,
-        routeCode: event.route?.code ?? null,
-        driverName: event.delivery.driver?.name ?? null,
+        routeCode: relatedTo(routes, event.routeId)?.code ?? null,
+        driverName: delivery.driverName,
         detail: type?.name ?? event.status_to ?? null,
         // The same judgement as the occurrence row below: a blocking report
         // still waiting for a manager has failed nothing yet (decision 6.3).
@@ -537,6 +602,10 @@ class OperationDayRepository implements IOperationDayRepository {
     }
 
     for (const occurrence of occurrences) {
+      const delivery = deliveryOf(occurrence.deliveryId);
+      // A required relation, like the delivery.
+      const type = occurrenceTypes.get(occurrence.occurrenceTypeId)!;
+
       entries.push({
         id: `occurrence:${occurrence.id}`,
         source: "occurrence",
@@ -544,14 +613,14 @@ class OperationDayRepository implements IOperationDayRepository {
         // Occurrences are reported from the app; the auditor's "Comprovante
         // rejeitado" is the one exception and names itself in `detail`.
         actor: "DRIVER_APP",
-        deliveryId: occurrence.delivery.id,
-        recipientName: occurrence.delivery.recipient_name,
+        deliveryId: delivery.id,
+        recipientName: delivery.recipientName,
         routeId: null,
         routeCode: null,
-        driverName: occurrence.delivery.driver?.name ?? null,
-        detail: occurrence.occurrenceType.name,
+        driverName: delivery.driverName,
+        detail: type.name,
         failure: isFailureOccurrence(
-          occurrence.occurrenceType.blocks_delivery,
+          type.blocks_delivery,
           occurrence.authorization_status,
         ),
         occurredAt: factInstant(occurrence.occurred_at, occurrence.created_at),

@@ -1,10 +1,10 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 import pino from "pino";
 
 import { issueSessionTokenPair } from "@/modules/user/services/session-service";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * OBS-12: failures on the client side never reached us. The app's logger only
@@ -17,7 +17,7 @@ import { issueSessionTokenPair } from "@/modules/user/services/session-service";
  * last errors by kind, never content — and the report becomes one structured
  * warn line (`client.diagnostics`) the log search and the alerting can read.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 let app: Awaited<typeof import("@/http")>["app"];
 let written = "";

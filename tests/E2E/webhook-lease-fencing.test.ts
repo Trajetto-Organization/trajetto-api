@@ -1,6 +1,5 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
 import {
   createServer,
   type IncomingMessage,
@@ -13,6 +12,7 @@ import {
   WebhookDispatchService,
   fanOutWebhookEvent,
 } from "@/shared/integration/webhook-dispatch-service";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * Who may write the outcome of a send, and when the process may leave.
@@ -28,7 +28,7 @@ import {
  * sends between the customer's answer and our record of it, and each of those
  * went out again when the lease expired.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 const CARRIER = "018f8000-0000-7000-8000-0000000000f7";
 

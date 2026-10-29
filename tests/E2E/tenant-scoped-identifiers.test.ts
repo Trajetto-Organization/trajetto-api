@@ -1,6 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 
 import { container } from "tsyringe";
@@ -8,6 +7,7 @@ import { container } from "tsyringe";
 import { CreateBranchUseCase } from "@/modules/branch/usecases/create-branch/create-branch-usecase";
 import { BranchErpCodeAlreadyExistsError } from "@/modules/branch/usecases/errors/branch-erp-code-already-exists-error";
 import { CreateDriverUseCase } from "@/modules/driver/usecases/create-driver/create-driver-usecase";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * Identifiers that belong to one carrier, not to the platform.
@@ -20,7 +20,7 @@ import { CreateDriverUseCase } from "@/modules/driver/usecases/create-driver/cre
  * (20260924090400_tenant_scoped_uniques); these are the use cases, which
  * refused before the database was ever asked.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 const A = "018fe080-0000-7000-8000-00000000000a";
 const B = "018fe080-0000-7000-8000-00000000000b";

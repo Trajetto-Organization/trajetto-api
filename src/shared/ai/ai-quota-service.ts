@@ -209,14 +209,15 @@ async function getQuotaUsageByType(
   if (!periodId) return { fuel: 0, checklist: 0, proof: 0 };
 
   // consumedAt is a naive UTC timestamp; the bound is compared as UTC wall
-  // time so the session's zone cannot move the month.
+  // time so the session's zone cannot move the month (an ISO string: Prisma
+  // 7's pg driver sends a Date without its offset).
   const rows = await database.$queryRaw<Array<{ type: string; n: number }>>`
     SELECT r."type"::text AS "type", count(*)::int AS n
     FROM "ai_analysis_request" r
     JOIN "ai_analysis_unit" u ON u."requestId" = r."id"
     WHERE r."periodId" = ${periodId}
       AND u."status" = 'CONSUMED'
-      AND u."consumedAt" >= (${startsAt}::timestamptz AT TIME ZONE 'UTC')
+      AND u."consumedAt" >= (${startsAt.toISOString()}::timestamptz AT TIME ZONE 'UTC')
     GROUP BY r."type"
   `;
 

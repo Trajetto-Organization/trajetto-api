@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
 import { randomUUID } from "node:crypto";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * Connections per request for the reads the db-perf pass (10/2026) found
@@ -22,9 +22,11 @@ import { randomUUID } from "node:crypto";
 const pool = vi.hoisted(() => ({ inFlight: 0, peak: 0, operations: 0 }));
 
 vi.mock("@/../infra/database", async () => {
-  const { PrismaClient: Client } = await import("@prisma/client");
+  const { createPrismaClient } = await import(
+    "@/shared/database/database-client"
+  );
 
-  const counted = new Client().$extends({
+  const counted = createPrismaClient().$extends({
     query: {
       async $allOperations({ args, query }) {
         pool.inFlight += 1;
@@ -50,7 +52,7 @@ import { ProofAuditRepository } from "@/modules/delivery/repositories/proof-audi
 import { ChatRepository } from "@/modules/chat/repositories/chat-repository";
 import { BranchRepository } from "@/modules/branch/repositories/branch-repository";
 
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 const BUDGET = 2;
 

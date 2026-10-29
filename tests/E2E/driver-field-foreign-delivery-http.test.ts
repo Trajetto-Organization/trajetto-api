@@ -1,11 +1,11 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
 import { sign } from "jsonwebtoken";
 
 import { randomUUID } from "node:crypto";
 
 import auth from "@/config/auth";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * The driver's field routes answer another company's delivery exactly like
@@ -16,7 +16,7 @@ import auth from "@/config/auth";
  * difference told any driver token which delivery ids exist elsewhere. The
  * app's outbox treats both as a permanent refusal, so nothing changes there.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 let app: Awaited<typeof import("@/http")>["app"];
 

@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
 import { randomUUID } from "node:crypto";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 // The sweep does nothing without a provider key (dev), which is right: the
 // request would only be marked unavailable. Here the key "exists" and the
@@ -36,7 +36,7 @@ import { businessDateKey } from "@/shared/time/business-day";
  * finds those cards and asks again, with the same input the proof would have
  * sent, so the request's idempotency key is the one the proof would have used.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 const WITH_AI = "018fdc80-0000-7000-8000-00000000000a";
 const WITHOUT_AI = "018fdc80-0000-7000-8000-00000000000b";

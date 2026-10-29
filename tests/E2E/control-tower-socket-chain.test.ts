@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /*
   Before any import reads the environment: the adapter channels of this file,
@@ -13,7 +14,6 @@ const ADAPTER_KEY = vi.hoisted(() => {
   return key;
 });
 
-import { PrismaClient } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 
 import { sign } from "jsonwebtoken";
@@ -43,7 +43,7 @@ import { startReplica, type Replica } from "./support/replica-process";
  * The second leg is the production shape: the phone and the panel are
  * almost never on the same replica.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 const CARRIER = "018fe100-0000-7000-8000-00000000000a";
 const OTHER = "018fe100-0000-7000-8000-00000000000b";

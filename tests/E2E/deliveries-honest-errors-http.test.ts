@@ -1,6 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
 import { sign } from "jsonwebtoken";
 
 import { randomUUID } from "node:crypto";
@@ -9,6 +8,7 @@ import auth from "@/config/auth";
 
 import { OccurrenceTypeRepository } from "@/modules/occurrence-type/repositories/occurrence-type-repository";
 import { InMemoryOccurrenceTypeRepository } from "@/modules/occurrence-type/repositories/in-memory/in-memory-occurrence-type-repository";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * Honest HTTP on the Entregas catalogue and panel routes (decision 11.3):
@@ -19,7 +19,7 @@ import { InMemoryOccurrenceTypeRepository } from "@/modules/occurrence-type/repo
  * answered 403 "não pertence à empresa informada" while a made-up id answered
  * 400: the difference told any caller which ids exist at other carriers.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 let app: Awaited<typeof import("@/http")>["app"];
 

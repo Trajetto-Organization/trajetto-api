@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { Prisma, PrismaClient } from "@prisma/client";
+import { Prisma } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 
 import {
@@ -18,6 +18,7 @@ import {
   whatsappFailedSinceSql,
   whatsappMultiSendSinceSql,
 } from "@/shared/health/metrics-queries";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * What /health/metrics and /health/dead-letter cost at volume (OBS-09, PG-18).
@@ -40,7 +41,7 @@ import {
  *    index is only usable there when its predicate is a literal in the SQL —
  *    `status = $1` cannot prove `status = 'FAILED'`.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 const USER = "018fda60-0000-7000-8000-0000000000u1";
 

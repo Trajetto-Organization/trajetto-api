@@ -1,6 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
 import { sign } from "jsonwebtoken";
 
 import { randomUUID } from "node:crypto";
@@ -9,6 +8,7 @@ import auth from "@/config/auth";
 
 import { parseCsv } from "@/shared/delivery/spreadsheet-reader";
 import { businessDayWindow } from "@/shared/time/business-day";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * The Entregas list's period and the record's type (meeting of 14/10/2026),
@@ -23,7 +23,7 @@ import { businessDayWindow } from "@/shared/time/business-day";
  * - `kind` is written by the create, returned by the list and the detail,
  *   filtered by the list and the export, and printed in the export's Tipo.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 let app: Awaited<typeof import("@/http")>["app"];
 

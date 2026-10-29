@@ -1,9 +1,9 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
 import { randomInt, randomUUID } from "node:crypto";
 
 import { generateApiKey } from "@/shared/integration/api-key-rules";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * The public API's limits, as a caller meets them.
@@ -18,7 +18,7 @@ import { generateApiKey } from "@/shared/integration/api-key-rules";
  *   well-formed made-up keys therefore cost one database lookup each, with no
  *   limit at all, on the pool every tenant shares.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 let app: Awaited<typeof import("@/http")>["app"];
 

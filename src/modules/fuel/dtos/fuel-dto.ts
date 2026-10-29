@@ -1,4 +1,4 @@
-import { Decimal } from "@prisma/client/runtime/library";
+import { Decimal } from "@prisma/client/runtime/client";
 import { LocationSource, RecordOrigin } from "@prisma/client";
 
 import type { SortOrder } from "@/shared/pagination/list-query";

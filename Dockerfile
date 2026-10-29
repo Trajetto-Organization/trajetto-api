@@ -7,9 +7,10 @@
 # its node binary. Node 22 LTS on Alpine; version pinned for reproducible
 # builds.
 #
-# Alpine uses musl instead of glibc, which means the `binaryTargets` in
-# prisma/schema.prisma must include `linux-musl-openssl-3.0.x` — the Debian
-# engine does NOT run here. Revert that along with the base image if switching.
+# Prisma 7 has no query engine binary (queries are compiled in WebAssembly and
+# sent through `@prisma/adapter-pg`), so the client runs on musl as it is. The
+# Prisma CLI still downloads its schema engine (`prisma migrate deploy`) for
+# the platform it detects at install time, linux-musl-openssl-3.0.x here.
 #
 # Pinned by digest too (INFRA-16): a tag can be re-pushed, a digest cannot.
 # Dependabot (docker ecosystem) moves the tag and the digest together. The
@@ -53,11 +54,13 @@ FROM alpine:3.23.7@sha256:ff7f0c727dd796aa36787bfcd9a64bf35a6ce72a73451b3359fde8
 COPY --link --from=node-binary /out/ /
 
 # What the binaries here link against (ldd): node and bcrypt's musl prebuild
-# need libstdc++ (libgcc comes with it); the Prisma engines need libssl3 and
-# libcrypto3, and Prisma picks the engine by finding libssl.so.3 in /usr/lib,
-# so no `openssl` binary is needed. Node bundles its own OpenSSL, CA store
-# and full ICU: pt-BR dates and America/Sao_Paulo need no tzdata. The
-# engines' TLS to Postgres reads the system CA store (ca-certificates).
+# need libstdc++ (libgcc comes with it); the Prisma schema engine (`prisma
+# migrate deploy`) needs libssl3 and libcrypto3, and Prisma picks it by
+# finding libssl.so.3 in /usr/lib, so no `openssl` binary is needed. Node
+# bundles its own OpenSSL, CA store and full ICU: pt-BR dates and
+# America/Sao_Paulo need no tzdata, and the server's own connections (pg,
+# through @prisma/adapter-pg) use Node's TLS. The schema engine's TLS to
+# Postgres reads the system CA store (ca-certificates).
 # dumb-init is the ENTRYPOINT; busybox wget, the HEALTHCHECK, is Alpine's
 # own. Nothing is linked against glibc (no libc6-compat) and nothing calls
 # procps.
@@ -98,10 +101,11 @@ WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 
 # The client is generated from the schema alone, BEFORE the source arrives:
-# with `COPY . .` first, every source edit reran `prisma generate` (and its
-# engine download) in CI. Nothing else in the context reaches it — .env* is
-# not in the build context (.dockerignore) — so the output is the same.
-COPY package.json ./
+# with `COPY . .` first, every source edit reran `prisma generate` in CI.
+# Prisma 7 reads its settings from prisma.config.ts; with no DATABASE_URL here
+# it declares no datasource, which `generate` does not need. Nothing else in
+# the context reaches it — .env* is not in the build context (.dockerignore).
+COPY package.json prisma.config.ts ./
 COPY prisma/schema.prisma ./prisma/schema.prisma
 RUN yarn prisma generate
 
@@ -142,19 +146,20 @@ RUN --mount=type=cache,target=/usr/local/share/.cache/yarn,id=yarn-prod,sharing=
 # - @types (typings only, pulled in as dependencies of engine.io and
 #   @fast-csv) and exceljs/dist, the package's `browser` bundle — its `main`
 #   is excel.js → lib/;
-# - the second copy of the Prisma query engine. @prisma/engines' postinstall
-#   puts one here for the CLI, which only checks that it exists (otherwise
-#   `prisma migrate deploy` downloads it from binaries.prisma.sh, or fails
-#   with no network); the client loads its own, in node_modules/.prisma. The
-#   runner points the CLI at that one (PRISMA_QUERY_ENGINE_LIBRARY). `rm`
-#   without -f: if a Prisma bump renames the file, the build stops here
-#   instead of shipping both copies under a variable that names neither.
-# Measured 28/10/2026: 5,229 files and ~73 MB fewer, nothing else changed;
-# every dependency still loads, the CLI migrates offline, ExcelJS, PDFKit
-# and bcrypt work (and the smoke test in deploy.yml runs the image).
+# - the embedded Postgres of `prisma dev` (pglite, imported only when that
+#   command runs) and the query compilers of every database: the generated
+#   client in .prisma carries its own PostgreSQL one, and the CLI's serve
+#   `prisma generate`, which runs in the builder. The Studio UI
+#   (@prisma/studio-core) and @prisma/dev STAY: the CLI requires both when it
+#   starts, and without them `migrate deploy` fails with "Cannot find module
+#   '@prisma/studio-core/data/bff'" (smoke-tested).
+# Every dependency still loads, the CLI migrates offline, ExcelJS, PDFKit and
+# bcrypt work (and the smoke test in deploy.yml runs the image).
 RUN find node_modules -type f \( -name '*.map' -o -name '*.d.ts' -o -name '*.d.mts' -o -name '*.d.cts' -o -iname '*.md' -o -iname '*.markdown' \) -delete \
     && rm -rf node_modules/@types node_modules/exceljs/dist \
-    && rm node_modules/@prisma/engines/libquery_engine-linux-musl-openssl-3.0.x.so.node
+        node_modules/@electric-sql/pglite \
+        node_modules/@prisma/client/runtime/query_compiler_* \
+        node_modules/prisma/build/query_compiler_*
 
 # ================================
 # Stage: Production Runtime
@@ -177,13 +182,6 @@ ENV HOSTNAME="0.0.0.0"
 # the rest, so a login burst cannot delay DNS, gzip or file reads by seconds.
 ENV UV_THREADPOOL_SIZE=8
 
-# The one musl query engine, the client's: the Prisma CLI (`migrate deploy`
-# in docker-entrypoint.sh, on boot and in the release step; `migrate
-# resolve` by hand) takes it from here instead of the copy prod-deps
-# removed. The file name follows the musl entry of `binaryTargets` in
-# prisma/schema.prisma (a test holds the two together).
-ENV PRISMA_QUERY_ENGINE_LIBRARY=/app/node_modules/.prisma/client/libquery_engine-linux-musl-openssl-3.0.x.so.node
-
 # Most stable first: a layer that changes takes every COPY after it along,
 # and each deploy re-sends what changed over the VPS's flaky route to GHCR.
 # The dependencies change with yarn.lock, the generated client with the
@@ -194,7 +192,10 @@ COPY --from=prod-deps --chown=nodejs:nodejs /app/node_modules ./node_modules
 
 # The Prisma client is generated (`prisma generate`) and resides in
 # node_modules/.prisma. The clean installation above does not produce it, so
-# we bring the artifact from the builder.
+# we bring the artifact from the builder. It carries its own PostgreSQL query
+# compiler (query_compiler_fast_bg.*); the schema engine the CLI needs for
+# `prisma migrate deploy` (docker-entrypoint.sh, also the release step) stays
+# in node_modules/@prisma/engines, put there by its postinstall.
 COPY --from=builder --chown=nodejs:nodejs /app/node_modules/.prisma ./node_modules/.prisma
 
 # Excel file with traffic violation codes — read by build/import-violation-codes.js
@@ -211,6 +212,9 @@ RUN sed -i "s/\r$//" ./docker-entrypoint.sh && chmod +x ./docker-entrypoint.sh
 
 COPY --from=builder --chown=nodejs:nodejs /app/package.json ./package.json
 COPY --from=builder --chown=nodejs:nodejs /app/prisma ./prisma
+# `prisma migrate deploy` reads the schema, the migrations and DATABASE_URL
+# through this file (Prisma 7).
+COPY --from=builder --chown=nodejs:nodejs /app/prisma.config.ts ./prisma.config.ts
 COPY --from=builder --chown=nodejs:nodejs /app/build/src/modules ./src/modules
 COPY --from=builder --chown=nodejs:nodejs /app/build ./build
 

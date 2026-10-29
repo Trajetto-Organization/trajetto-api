@@ -8,7 +8,7 @@ import {
   vi,
 } from "vitest";
 
-import { Prisma, PrismaClient } from "@prisma/client";
+import { Prisma } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 
 import { AIAnalysisPipelineService } from "@/shared/ai/ai-analysis-pipeline-service";
@@ -25,6 +25,7 @@ import {
   fakeAnalyzer,
   resetCircuit,
 } from "./support/fake-vision";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * The AI pipeline under a slow provider and more than one replica
@@ -44,7 +45,7 @@ import {
  */
 vi.mock("@/websocket", () => ({ sendAIVerificationEvent: vi.fn() }));
 
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 const pipeline = AIAnalysisPipelineService.getInstance() as unknown as {
   provider: unknown;
@@ -244,18 +245,29 @@ describe("the fair claim", () => {
     let claim: Prisma.Sql | null = null;
 
     const database = (await import("@/../infra/database")).default;
-    const spy = vi.spyOn(database, "$queryRaw").mockImplementationOnce((async (
+
+    // Swapped by assignment, not vi.spyOn: Prisma 7's client is a Proxy whose
+    // property descriptors carry no value, so mockRestore (and the
+    // restoreAllMocks of beforeEach) left $queryRaw undefined.
+    const client = database as unknown as { $queryRaw: unknown };
+    const ownQueryRaw = client.$queryRaw;
+
+    client.$queryRaw = (async (
       strings: TemplateStringsArray,
       ...values: unknown[]
     ) => {
+      client.$queryRaw = ownQueryRaw;
       claim = Prisma.sql(strings, ...values);
       return [];
-    }) as never);
+    }) as never;
 
     pipeline.provider = fakeAnalyzer({});
 
-    await pipeline.runCycle();
-    spy.mockRestore();
+    try {
+      await pipeline.runCycle();
+    } finally {
+      client.$queryRaw = ownQueryRaw;
+    }
 
     expect(claim).not.toBeNull();
 

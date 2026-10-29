@@ -2,7 +2,7 @@ import "reflect-metadata";
 
 import { describe, expect, it, vi } from "vitest";
 
-import { Decimal } from "@prisma/client/runtime/library";
+import { Decimal } from "@prisma/client/runtime/client";
 
 import { DeleteFuelUseCase } from "@/modules/fuel/usecases/delete-fuel/delete-fuel-usecase";
 import { InMemoryFuelRepository } from "@/modules/fuel/repositories/in-memory/in-memory-fuel-repository";

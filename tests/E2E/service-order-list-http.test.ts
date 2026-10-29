@@ -1,7 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
-
 import {
   readNdjson,
   seedBranch,
@@ -12,6 +10,7 @@ import {
   seedUser,
   seedVehicle,
 } from "./support/fleet-maint-seed";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * The service order listing as the panel reads it, over real HTTP and
@@ -21,7 +20,7 @@ import {
  * walls: one company per request, another company's rows and branch names
  * never cross, and a driver token reads no company-wide list (4.4).
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 let app: Awaited<typeof import("@/http")>["app"];
 

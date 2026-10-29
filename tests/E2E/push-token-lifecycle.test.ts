@@ -1,9 +1,9 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 
 import { issueSessionTokenPair } from "@/modules/user/services/session-service";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * A phone's push token lives and dies with the session that registered it
@@ -18,7 +18,7 @@ import { issueSessionTokenPair } from "@/modules/user/services/session-service";
  *
  * Asserted on the table, because the table is what the push pipeline reads.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 let app: Awaited<typeof import("@/http")>["app"];
 

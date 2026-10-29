@@ -1,7 +1,5 @@
 import { afterAll, beforeAll, describe } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
-
 import { ChatRepository } from "@/modules/chat/repositories/chat-repository";
 import { InMemoryChatRepository } from "@/modules/chat/repositories/in-memory/in-memory-chat-repository";
 import { CHAT_MESSAGE_COLUMN_DEFAULTS } from "@/shared/in-memory/column-defaults";
@@ -26,9 +24,10 @@ import {
   seedShipper,
   seedUser,
 } from "../contract/seed";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /** Decision 13.2: the chat contract against Postgres and the twin. */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 const prismaRepo = new ChatRepository(prisma);
 const memory = new InMemoryChatRepository();
 

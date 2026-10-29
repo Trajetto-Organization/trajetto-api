@@ -110,7 +110,7 @@ class ProofAuditRepository implements IProofAuditRepository {
       WHERE "businessId" = ${businessId}
         AND "status" IN ('APPROVED', 'REJECTED')
         AND "ai_suggestion" IS NOT NULL
-        AND "reviewed_at" >= (${agreementSince}::timestamptz AT TIME ZONE 'UTC')
+        AND "reviewed_at" >= (${agreementSince.toISOString()}::timestamptz AT TIME ZONE 'UTC')
     `;
 
     const rows =

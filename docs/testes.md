@@ -38,8 +38,11 @@
 Tudo com Vitest 1.6 (`vite.config.mts`): `setupTests.ts` carrega o
 `reflect-metadata`; arquivos em `tests/E2E/**` usam o ambiente
 `prisma` (um banco por arquivo) e o pool `forks` (um processo por arquivo —
-o engine do Prisma entra em pânico quando vários arquivos dividem um
-processo).
+o engine nativo do Prisma 6 entrava em pânico quando vários arquivos dividiam
+um processo; o Prisma 7 não tem engine nativo, e o `forks` segue até que
+`threads` seja medido). Todo `PrismaClient` dos testes nasce em
+`createPrismaClient` (`src/shared/database/database-client.ts`), o mesmo
+caminho da aplicação: o Prisma 7 exige o driver adapter.
 
 ## Comandos
 
@@ -275,10 +278,11 @@ uma garantia:
 
 ## Windows
 
-- **E2E em lotes de no máximo 8 arquivos.** Com 12 ou mais arquivos na mesma
-  execução, o query engine do Prisma pode cair com um _napi panic_ ("failed to
-  delete napi ref", exit 127/139). Não é falha do produto: rode de novo em
-  lotes menores. O `yarn test:coverage:e2e` já executa em lotes.
+- **E2E em lotes de no máximo 8 arquivos.** Com o Prisma 6, 12 ou mais
+  arquivos na mesma execução derrubavam o query engine com um _napi panic_
+  ("failed to delete napi ref", exit 127/139). O Prisma 7 não tem engine
+  nativo; o limite fica até que lotes maiores sejam medidos. O
+  `yarn test:coverage:e2e` já executa em lotes.
 - Os testes de script precisam de um `bash`/`sh` que leia caminhos `C:/...`
   (o Git Bash serve; um `bash` que resolve para o WSL faz esses testes se
   pularem).

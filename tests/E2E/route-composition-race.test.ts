@@ -1,12 +1,11 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
-
 import { RouteRepository } from "@/modules/route/repositories/route-repository";
 import {
   DeliveryNoLongerRoutableError,
   RouteStatusConflictError,
 } from "@/modules/route/usecases/errors/route-errors";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * Composing a route while it departs (IDEMP-06).
@@ -22,7 +21,7 @@ import {
  * composition runs inside that window. The interleaving is forced, not hoped
  * for: nothing in these tests depends on timing luck.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 const repository = new RouteRepository(prisma);
 
 const CARRIER = "biz-composition-race";

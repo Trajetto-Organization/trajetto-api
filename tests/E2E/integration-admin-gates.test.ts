@@ -1,6 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 
 import { sign } from "jsonwebtoken";
@@ -15,6 +14,7 @@ import {
 import { FAMILY_WILDCARDS } from "@/shared/integration/webhook-catalogue";
 import { generateApiKey } from "@/shared/integration/api-key-rules";
 import { businessToday, dateOnlyKey } from "@/shared/time/business-day";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * The integrations admin routes, over HTTP against the real database.
@@ -29,7 +29,7 @@ import { businessToday, dateOnlyKey } from "@/shared/time/business-day";
  *   CRIT-24), with the tenant and role checks every write carries.
  * - "Uso da API" answers in the company's calendar (DLVB-33).
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 let app: Awaited<typeof import("@/http")>["app"];
 

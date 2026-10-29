@@ -1,6 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
 import { randomBytes, randomUUID } from "node:crypto";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -11,6 +10,7 @@ import {
 } from "@/shared/integration/webhook-dispatch-service";
 import { WEBHOOK_MAX_ATTEMPTS } from "@/shared/integration/webhook-dispatch-rules";
 import { sealSecret } from "@/shared/integration/secret-box";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * A webhook whose stored credentials cannot be opened.
@@ -27,7 +27,7 @@ import { sealSecret } from "@/shared/integration/secret-box";
  * Now it is an attempt like any other that did not reach the receiver: on the
  * retry schedule, with the reason, never counted against the endpoint.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 const CARRIER = "018fdc81-0000-7000-8000-00000000000a";
 

@@ -5,6 +5,7 @@ import { isDatabaseUnavailable } from "@/shared/errors/database-unavailable";
 
 import { productionDatabaseUrlFor } from "../support/production-database-url";
 import { SilentProxy, settle } from "./support/silent-proxy";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * The production runtime connection, as .env.example models it for the API
@@ -48,7 +49,7 @@ function runtimeClient(): PrismaClient {
     if (url.searchParams.has(name)) url.searchParams.set(name, seconds);
   }
 
-  const client = new PrismaClient({ datasourceUrl: url.toString(), log: [] });
+  const client = createPrismaClient({ log: [] }, { url: url.toString() });
   clients.push(client);
 
   return client;

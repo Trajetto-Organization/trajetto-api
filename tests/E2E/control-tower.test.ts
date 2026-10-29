@@ -1,6 +1,5 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 
 import { sign } from "jsonwebtoken";
@@ -15,6 +14,7 @@ import {
 } from "@/shared/time/business-day";
 
 import { pauseTypeId } from "./support/pause-type-seed";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * The control tower against a real database, including the thing that only a
@@ -26,7 +26,7 @@ import { pauseTypeId } from "./support/pause-type-seed";
  * REFUSED by Postgres, which is a failure that appears at midnight and nowhere
  * else.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 let app: Awaited<typeof import("@/http")>["app"];
 

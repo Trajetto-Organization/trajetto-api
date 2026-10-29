@@ -1,6 +1,5 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 
@@ -11,6 +10,7 @@ import {
 } from "@/shared/integration/webhook-dispatch-service";
 
 import { ENDPOINT_PAUSED_REASON } from "@/shared/integration/webhook-dispatch-rules";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * Releasing what an endpoint held while it was off, when somebody saves it
@@ -27,7 +27,7 @@ import { ENDPOINT_PAUSED_REASON } from "@/shared/integration/webhook-dispatch-ru
  *   the whole thirty days on an endpoint that was working, and was then
  *   closed unsent.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 const CARRIER = "018f8000-0000-7000-8000-0000000000c3";
 
@@ -153,9 +153,7 @@ describe("a month of held events", () => {
     const url = new URL(process.env.DATABASE_URL as string);
     url.searchParams.set("options", "-c statement_timeout=600");
 
-    const capped = new PrismaClient({
-      datasources: { db: { url: url.toString() } },
-    });
+    const capped = createPrismaClient({}, { url: url.toString() });
 
     try {
       await expect(

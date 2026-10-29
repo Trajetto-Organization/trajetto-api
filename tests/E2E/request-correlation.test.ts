@@ -1,6 +1,5 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 
 import pino from "pino";
@@ -9,6 +8,7 @@ import { container } from "tsyringe";
 
 import auth from "@/config/auth";
 import { generateApiKey } from "@/shared/integration/api-key-rules";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * One id from the request to the message that left because of it (OBS-06).
@@ -26,7 +26,7 @@ import { generateApiKey } from "@/shared/integration/api-key-rules";
  * `correlationId`; and the pipeline writes one structured line per delivery
  * outcome carrying it.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 const BUSINESS = "018fc000-0000-7000-8000-0000000006b1";
 const USER = "018fc000-0000-7000-8000-0000000006c1";

@@ -1,6 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 
 import { sign } from "jsonwebtoken";
@@ -29,6 +28,7 @@ import {
   type ResilienceSeed,
 } from "./support/resilience-seed";
 import { socketClientEntry } from "./support/socket-client";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * Case D of contract §11: Redis dies while the API is running, and comes
@@ -51,7 +51,7 @@ import { socketClientEntry } from "./support/socket-client";
  */
 const enabled = dockerFailureInjectionEnabled();
 
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 const fake = new FakeProvider();
 
 const BUSINESS = "018fe800-0000-7000-8000-0000000000a1";

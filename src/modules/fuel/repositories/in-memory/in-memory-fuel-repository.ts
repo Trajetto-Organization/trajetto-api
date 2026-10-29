@@ -6,7 +6,7 @@ import {
 import { v7 as uuidV7 } from "uuid";
 import { FUEL_COLUMN_DEFAULTS } from "@/shared/in-memory/column-defaults";
 
-import { Decimal } from "@prisma/client/runtime/library";
+import { Decimal } from "@prisma/client/runtime/client";
 import type {
   FuelMileageUpdate,
   FuelPlacement,

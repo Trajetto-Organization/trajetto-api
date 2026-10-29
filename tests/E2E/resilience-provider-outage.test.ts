@@ -1,7 +1,5 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
-
 import { FakeProvider } from "./support/fake-provider";
 import {
   startPipelineReplica,
@@ -16,6 +14,7 @@ import {
   waitUntilSettled,
   type ResilienceSeed,
 } from "./support/resilience-seed";
+import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
  * A provider that is down, and one that is slow — contract §11 case B and
@@ -30,7 +29,7 @@ import {
  *    receiver finishes anyway, and the retry carries the same event id, so
  *    the receiver deduplicates what it already processed.
  */
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 const fake = new FakeProvider();
 
 const BUSINESS = "018fea00-0000-7000-8000-0000000000a1";
