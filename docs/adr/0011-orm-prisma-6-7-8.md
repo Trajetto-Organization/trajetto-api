@@ -279,6 +279,18 @@ Windows a porta cai numa faixa reservada pelo sistema e o pacote não sobe) e
 `upload-storage-roundtrip`, que passou 9/9 à parte contra o MinIO
 descartável. Nenhum E2E precisou de reexecução.
 
+Depois desses gates, uma terceira conferência achou mais dois pontos,
+corrigidos com testes. A conexão cujo COMMIT o Postgres respondeu com FATAL
+(backend encerrado, 57P01) voltava ao pool como saudável e derrubava com 503
+a query seguinte que a pegasse antes de o `pg` ler o fim do socket (8 de 8 a
+0 ms, pools de 1 e 10); o Client da API agora fecha a conexão nessa resposta
+(`commit-terminated-connection`, E2E novo). E a trilha de auditoria não
+repetia a escrita recusada com "the database system is starting up" (57P03,
+que no 7 chega como P2039 ou P2010, sem código próprio), recusa que só
+acontece antes de qualquer instrução; agora repete uma vez, lendo a causa do
+adapter. Para essas duas correções rodaram os arquivos tocados e os E2E de
+banco relacionados, não a suíte completa.
+
 Benchmark curto (mesmo método, ABBA, 2 execuções por versão, `a6d0bcc`
 contra a integração no `cd36d53`, o primeiro commit do Prisma 7, antes das
 correções da revisão e do rebase):

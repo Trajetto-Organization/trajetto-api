@@ -28,6 +28,8 @@ import type { DatabasePoolSettings } from "./pool-config";
  *    back to the pool and failed the next request too — the failure mode
  *    withPoolReset existed for under Prisma 6 (P1017). The connection is
  *    closed at the timeout instead: whatever it was doing cannot be trusted.
+ *    The same goes for a statement Postgres answered with a FATAL, which
+ *    ends the session (endsTheConnection, below).
  */
 
 /**
@@ -168,6 +170,51 @@ function rethrowTyped(error: unknown): never {
   throw typedDriverError(error);
 }
 
+/**
+ * The severities with which Postgres ends the session that gets them: FATAL
+ * ends this backend, PANIC every backend.
+ */
+const SESSION_ENDING_SEVERITIES = new Set(["FATAL", "PANIC"]);
+
+/**
+ * The SQLSTATEs of the server leaving (57P01 shutdown, 57P02 crash, 57P03
+ * not accepting connections, 57P04 database dropped, 57P05 idle session
+ * timeout) and of the connection itself failing (class 08).
+ */
+const SESSION_ENDING_SQLSTATE = /^(?:57P0[0-9A-Z]|08[0-9A-Z]{3})$/;
+
+/**
+ * Whether Postgres' answer to a statement means the connection it came on is
+ * finished: a backend terminated in the middle of a COMMIT (a restart, a
+ * failover, pg_terminate_backend) answers FATAL 57P01, then closes the
+ * socket.
+ *
+ * pg rejects the statement on that answer and keeps the connection queryable
+ * until it reads the socket's end. Prisma 7 releases a transaction's
+ * connection without an error after a failed COMMIT, so the pool took it back
+ * as healthy and handed it to the very next query, which failed as
+ * `connection-lost` — a 503 for a request that came after the outage
+ * (measured: 8 of 8 next queries at 0 ms or setImmediate, none at 20 ms,
+ * pools of 1 and 10).
+ *
+ * The SQLSTATE is read as well as the severity: pg takes the severity from
+ * the localized field, which a server with lc_messages in another language
+ * may spell otherwise. Class 08 is also sent at ERROR for a malformed
+ * protocol message (08P01); closing that connection costs one reconnect,
+ * the cheap side of the trade.
+ */
+function endsTheConnection(error: unknown): boolean {
+  if (typeof error !== "object" || error === null) return false;
+
+  const { severity, code } = error as { severity?: unknown; code?: unknown };
+
+  if (typeof severity === "string" && SESSION_ENDING_SEVERITIES.has(severity)) {
+    return true;
+  }
+
+  return typeof code === "string" && SESSION_ENDING_SQLSTATE.test(code);
+}
+
 type AnyFunction = (...args: unknown[]) => unknown;
 
 function isPromise(value: unknown): value is Promise<unknown> {
@@ -229,7 +276,9 @@ function clientClass(connectTimeoutMs: number): typeof pg.Client {
       }) as typeof this.connect;
 
       // Only the promise form: the callback form is pg-pool's `query`, which
-      // already drops the connection on any error.
+      // already drops the connection on any error. The promise form is every
+      // statement of a transaction, its COMMIT included: the adapter runs
+      // them all through the checked-out connection's `query`.
       const query = this.query.bind(this) as AnyFunction;
 
       this.query = ((...args: unknown[]) => {
@@ -239,11 +288,14 @@ function clientClass(connectTimeoutMs: number): typeof pg.Client {
 
         return result.catch((error: unknown) => {
           if (
-            error instanceof Error &&
-            error.message === "Query read timeout"
+            (error instanceof Error &&
+              error.message === "Query read timeout") ||
+            endsTheConnection(error)
           ) {
-            // With a query still pending, end() destroys the socket; the
-            // pool then sees the connection ending and drops it on release.
+            // end() marks the client as ending at once, before the adapter
+            // gets to release it, so the pool drops it on release instead of
+            // handing it out again. With a query still pending it destroys
+            // the socket; after a FATAL it closes what Postgres is closing.
             void this.end().catch(() => {});
           }
 
@@ -297,6 +349,7 @@ export {
   DatabaseUnavailableError,
   UNMAPPED_SOCKET_ERRNOS,
   createPool,
+  endsTheConnection,
   typedDriverError,
 };
 export type { DatabaseUnavailableReason };

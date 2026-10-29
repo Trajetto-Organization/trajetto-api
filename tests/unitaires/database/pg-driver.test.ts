@@ -1,10 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import type pg from "pg";
+import pg from "pg";
 
 import {
   DatabaseUnavailableError,
   createPool,
+  endsTheConnection,
   typedDriverError,
 } from "@/shared/database/pg-driver";
 import { poolSettingsFrom } from "@/shared/database/pool-config";
@@ -137,6 +138,106 @@ describe("typedDriverError", () => {
     const typed = typedDriverError(new Error("Query read timeout"));
 
     expect(typedDriverError(typed)).toBe(typed);
+  });
+});
+
+/**
+ * Whether Postgres' answer to a statement ends the connection it came on.
+ *
+ * A backend terminated during a COMMIT answers FATAL 57P01 and closes the
+ * socket; pg keeps the connection queryable until it reads the socket's end,
+ * and Prisma 7 releases a transaction's connection without an error after a
+ * failed COMMIT — so the pool handed the dead connection to the very next
+ * query, a 503 after the outage (tests/E2E/commit-terminated-connection.test.ts).
+ * The API's Client closes the connection on such an answer; on an answer
+ * about the data it must keep it, or every conflict would cost a reconnect.
+ */
+describe("endsTheConnection", () => {
+  /** Postgres' answer as pg raises it, from the ErrorResponse's fields. */
+  const answer = (severity: string, code: string, message: string) => {
+    const error = new pg.DatabaseError(message, message.length, "error");
+    error.severity = severity;
+    error.code = code;
+
+    return error;
+  };
+
+  it.each([
+    ["FATAL", "57P01", "terminating connection due to administrator command"],
+    [
+      "FATAL",
+      "57P02",
+      "terminating connection because of crash of another server process",
+    ],
+    ["FATAL", "57P03", "the database system is shutting down"],
+    ["FATAL", "08006", "connection to client lost"],
+    [
+      "FATAL",
+      "25P03",
+      "terminating connection due to idle-in-transaction timeout",
+    ],
+    ["PANIC", "XX000", "could not write to file"],
+  ])("a %s %s ends it", (severity, code, message) => {
+    expect(endsTheConnection(answer(severity, code, message))).toBe(true);
+  });
+
+  it.each([
+    [
+      "40001",
+      "could not serialize access due to read/write dependencies among transactions",
+    ],
+    ["40P01", "deadlock detected"],
+    ["23505", "duplicate key value violates unique constraint"],
+    ["57014", "canceling statement due to statement timeout"],
+    ["25P02", "current transaction is aborted"],
+    ["42P01", 'relation "missing" does not exist'],
+  ])(
+    "an ERROR %s does not: an answer about the data or the SQL",
+    (code, message) => {
+      expect(endsTheConnection(answer("ERROR", code, message))).toBe(false);
+    },
+  );
+
+  /**
+   * pg reads the localized severity field, so a server with lc_messages in
+   * another language spells FATAL otherwise (Russian: "ВАЖНО"). The SQLSTATE
+   * of the server leaving or of the connection failing says it on its own.
+   */
+  it.each(["57P01", "57P02", "57P03", "57P04", "57P05", "08006", "08003"])(
+    "%s ends it whatever the severity's spelling",
+    (code) => {
+      expect(endsTheConnection(answer("ВАЖНО", code, "…"))).toBe(true);
+    },
+  );
+
+  it.each(["40001", "23505", "57014", "53300"])(
+    "%s under a translated severity does not",
+    (code) => {
+      expect(endsTheConnection(answer("ОШИБКА", code, "…"))).toBe(false);
+    },
+  );
+
+  it("ends it on a protocol violation sent at ERROR (08P01), the cheap side of the trade", () => {
+    expect(
+      endsTheConnection(
+        answer("ERROR", "08P01", "bind message supplies 1 parameters"),
+      ),
+    ).toBe(true);
+  });
+
+  it("leaves what is not Postgres' answer: pg-pool, sockets, the pool's own error, anything else", () => {
+    expect(endsTheConnection(new Error("Query read timeout"))).toBe(false);
+    expect(endsTheConnection(systemError("ECONNRESET", "read"))).toBe(false);
+    expect(
+      endsTheConnection(
+        typedDriverError(new Error("Connection terminated unexpectedly")),
+      ),
+    ).toBe(false);
+    expect(endsTheConnection(undefined)).toBe(false);
+    expect(endsTheConnection("FATAL")).toBe(false);
+    // A look-alike of the class that is not a SQLSTATE.
+    expect(endsTheConnection({ code: "57P0" })).toBe(false);
+    expect(endsTheConnection({ code: "080000" })).toBe(false);
   });
 });
 

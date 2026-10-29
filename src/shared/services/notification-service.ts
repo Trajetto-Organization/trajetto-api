@@ -3,24 +3,77 @@ import { inject, injectable } from "tsyringe";
 
 import type { IActivityRepository } from "@/modules/activity/repositories/IActivity-repository";
 import { DatabaseUnavailableError } from "@/shared/database/pg-driver";
+import {
+  driverAdapterCauseOf,
+  isDriverAdapterError,
+  sqlStateOf,
+} from "@/shared/errors/prisma-error-meta";
 import { logger } from "@/shared/logging/logger";
 
 /** How long the one retry waits for the pool or the server to come back. */
 const AUDIT_RETRY_DELAY_MS = 200;
 
 /**
+ * The adapter's kinds for a connection that could not be opened: the host
+ * refused or does not resolve (ECONNREFUSED, ENOTFOUND), Postgres out of
+ * connection slots (53300). P1001 and P2037 for a model query; a raw query
+ * carries them under P2010.
+ */
+const REFUSED_AT_CONNECT_KINDS = new Set([
+  "DatabaseNotReachable",
+  "TooManyConnections",
+]);
+
+/**
+ * SQLSTATEs Postgres sends only while refusing a new connection, before any
+ * statement can run: 57P03 "the database system is starting up" (or in
+ * recovery, or shutting down) and 53300 "too many clients".
+ */
+const REFUSED_AT_CONNECT_SQLSTATES = new Set(["57P03", "53300"]);
+
+/**
+ * Whether the adapter's verdict, wherever it rides, is a connection refused
+ * while being opened. Read from Prisma's error or from the adapter's own
+ * (what a failed COMMIT throws), as isDatabaseUnavailable trusts them; never
+ * from an arbitrary object.
+ *
+ * Under Prisma 7, "the database system is starting up" — a restart or a
+ * failover, the window this retry exists for — arrives as P2039 (a model
+ * query, or a transaction that could not start) or P2010 (a raw one), kind
+ * `postgres`, SQLSTATE 57P03, with no Prisma code of its own to match.
+ */
+function refusedAtConnect(error: unknown): boolean {
+  const trusted =
+    error instanceof Prisma.PrismaClientKnownRequestError ||
+    (error instanceof Error && isDriverAdapterError(error));
+
+  if (!trusted) return false;
+
+  const kind = driverAdapterCauseOf(error)?.kind;
+
+  if (kind && REFUSED_AT_CONNECT_KINDS.has(kind)) return true;
+
+  const state = sqlStateOf(error);
+
+  return state !== undefined && REFUSED_AT_CONNECT_SQLSTATES.has(state);
+}
+
+/**
  * Failures where the INSERT certainly never ran: no connection could be
  * taken or opened. Under Prisma 7 the pool is pg's, and its own failures
  * arrive as DatabaseUnavailableError (src/shared/database/pg-driver.ts): a
  * full pool and a connection that could not be opened are told by `reason`.
- * What the adapter maps keeps a Prisma code: refused or unknown host
- * (P1001), Postgres out of connection slots, 53300 (P2037).
+ * What the adapter maps is told by its verdict (refusedAtConnect): refused
+ * or unknown host (P1001), Postgres out of connection slots (P2037), or
+ * still starting up (57P03).
  *
  * A connection lost under the statement and a read timeout are left out on
- * purpose (`connection-lost`, `query-timeout`, and P1017/P1008 from the
- * adapter) — a connection that dies after the COMMIT reached Postgres reports
- * the same, and retrying that would write the entry twice. A trail that
- * double-counts is worse than one that is merely incomplete.
+ * purpose (`connection-lost`, `query-timeout`, and P1017/P1008, or the kinds
+ * `ConnectionClosed`/`SocketTimeout`, from the adapter), and so is the
+ * server going away under a statement or a COMMIT (57P01, class 08) — a
+ * connection that dies after the COMMIT reached Postgres reports the same,
+ * and retrying that would write the entry twice. A trail that double-counts
+ * is worse than one that is merely incomplete.
  */
 function neverReachedTheDatabase(error: unknown): boolean {
   if (error instanceof DatabaseUnavailableError) {
@@ -32,13 +85,15 @@ function neverReachedTheDatabase(error: unknown): boolean {
   if (error instanceof Prisma.PrismaClientKnownRequestError) {
     if (["P1001", "P2037"].includes(error.code)) return true;
 
-    return (
+    if (
       error.code === "P2028" &&
       /unable to start a transaction/i.test(error.message)
-    );
+    ) {
+      return true;
+    }
   }
 
-  return false;
+  return refusedAtConnect(error);
 }
 
 interface CreateActivityProps {

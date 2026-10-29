@@ -872,8 +872,12 @@ essas falhas como `DatabaseUnavailableError` na saída, com o motivo em
 `connection-lost` e `query-timeout` podem ter enviado (uma conexão que morre
 na volta do COMMIT parece igual a uma que morreu antes dele). Por isso a
 trilha de auditoria (`NotificationService`) repete uma vez só a escrita que
-falhou pelos dois primeiros motivos, ou com P1001/P2037, e nunca a que pode
-ter chegado. O classificador
+falhou pelos dois primeiros motivos, ou cuja causa no adapter é a conexão
+recusada na abertura — host recusado (`DatabaseNotReachable`, P1001), sem
+vaga (`TooManyConnections`/53300, P2037) ou o banco ainda subindo (57P03,
+que no Prisma 7 chega como P2039 ou P2010, sem código próprio) —, e nunca a
+que pode ter chegado, inclusive o banco indo embora no meio da instrução ou
+do COMMIT (57P01, classe 08). O classificador
 (`src/shared/errors/database-unavailable.ts`) confia só em classes: além dos
 códigos P1001/P1002/P1008/P1017/P2037 e do P2028 de "não conseguiu começar a
 transação", aceita P2010/P2039 cuja causa no adapter é o banco indo embora
@@ -970,11 +974,20 @@ client.
 o Postgres fechou voltava ao pool como saudável (P1017 em toda requisição até
 reiniciar a réplica), e `withPoolReset` trocava o pool inteiro. O `pg-pool`
 remove a conexão que falhou ou morreu, e o Client da API fecha a que estourou o
-`socket_timeout` (o Prisma 7 devolve ao pool, sem o erro, a conexão de uma
-transação depois do ROLLBACK). `withPoolReset` saiu: com o adapter, um
+`socket_timeout` e a que recebeu do Postgres um erro FATAL ou PANIC (ou
+SQLSTATE 57P0x ou classe 08, que valem com a severidade traduzida) — o
+Prisma 7 devolve ao pool, sem o erro, a conexão de uma transação depois do
+ROLLBACK ou de um COMMIT que falhou. Um backend encerrado no meio do COMMIT
+(reinício, failover) responde FATAL 57P01 e fecha o socket, mas o `pg` mantém
+a conexão utilizável até ler o fim do socket: sem o fechamento, o pool a
+entregava à query seguinte, que falhava com 503 depois da queda (8 de 8 a
+0 ms, pools de 1 e 10). `withPoolReset` saiu: com o adapter, um
 `$disconnect()` encerraria o pool debaixo de todas as requisições em curso.
-Prova: `tests/E2E/database-reconnect.test.ts` (todo backend da réplica
-derrubado com `pg_terminate_backend`, e a API volta sozinha).
+Provas: `tests/E2E/database-reconnect.test.ts` (todo backend da réplica
+derrubado com `pg_terminate_backend`, e a API volta sozinha) e
+`tests/E2E/commit-terminated-connection.test.ts` (o backend encerrado no
+COMMIT e a query seguinte, na hora, numa conexão nova; um COMMIT recusado
+com ERROR, como unicidade, mantém a conexão).
 
 **Pool observável**: `runtime.prisma_pool` (em `/health/metrics` e na linha de
 métricas por minuto) lê `totalCount`, `idleCount` e `waitingCount` do pool do

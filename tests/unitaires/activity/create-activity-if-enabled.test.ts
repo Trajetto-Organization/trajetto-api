@@ -6,6 +6,10 @@ import { container } from "tsyringe";
 import { InMemoryActivityRepository } from "@/modules/activity/repositories/in-memory/in-memory-activity-repository";
 import { createPrismaClient } from "@/shared/database/database-client";
 import { DatabaseUnavailableError } from "@/shared/database/pg-driver";
+import {
+  driverAdapterCauseOf,
+  sqlStateOf,
+} from "@/shared/errors/prisma-error-meta";
 import { NotificationService } from "@/shared/services/notification-service";
 import { logger } from "@/shared/logging/logger";
 
@@ -109,6 +113,45 @@ async function failureAgainst(
   return failureOfCreate(url, fake, hold);
 }
 
+const clientVersion = Prisma.prismaVersion.client;
+
+/**
+ * The driver adapter's own error, its verdict as `cause`: what a failed
+ * COMMIT of an interactive `$transaction` throws under Prisma 7, with no
+ * Prisma class around it (tests/E2E/commit-database-unavailable-http.test.ts).
+ */
+const adapterError = (cause: Record<string, unknown>) =>
+  Object.assign(new Error(String(cause.kind)), {
+    name: "DriverAdapterError",
+    cause,
+  });
+
+/** adapter-pg's cause for a SQLSTATE it has no kind of its own for. */
+const postgresCause = (code: string, message: string) => ({
+  kind: "postgres",
+  originalCode: code,
+  originalMessage: message,
+  code,
+  severity: "FATAL",
+  message,
+});
+
+/**
+ * A failure as Prisma 7 raises it around the adapter's error: P2010 for a
+ * raw query, P2039 for a model query Postgres refused. Shapes measured with
+ * @prisma/client 7.10.1 + @prisma/adapter-pg 7.10.1 against Postgres 16.
+ */
+const prismaFailure = (
+  code: "P2010" | "P2039",
+  cause: Record<string, unknown>,
+) =>
+  new Prisma.PrismaClientKnownRequestError(
+    code === "P2010" ? "Raw query failed." : "Database error.",
+    { code, clientVersion, meta: { driverAdapterError: adapterError(cause) } },
+  );
+
+const STARTING_UP = "the database system is starting up";
+
 /** Nothing was sent: the INSERT never ran. */
 const neverSent: Record<string, () => Promise<unknown>> = {
   "the pool had no connection to give": () =>
@@ -130,6 +173,29 @@ const neverSent: Record<string, () => Promise<unknown>> = {
       sqlState: "53300",
       message: "sorry, too many clients already",
     }),
+  // A restart or a failover: Postgres refuses the startup packet with a
+  // FATAL 57P03 until it accepts connections, so no statement can have run.
+  "the database system was starting up (57P03)": () =>
+    failureAgainst({ kind: "refuse", sqlState: "57P03", message: STARTING_UP }),
+  // The same refusals in the shapes that carry no Prisma code of their own.
+  "a raw INSERT refused while the database started up (P2010, 57P03)":
+    async () => prismaFailure("P2010", postgresCause("57P03", STARTING_UP)),
+  "the adapter's own error, refused while the database started up (57P03)":
+    async () => adapterError(postgresCause("57P03", STARTING_UP)),
+  "a raw INSERT whose host refused the connection (P2010, DatabaseNotReachable)":
+    async () =>
+      prismaFailure("P2010", {
+        kind: "DatabaseNotReachable",
+        host: "127.0.0.1",
+        port: 5432,
+      }),
+  "a raw INSERT with Postgres out of connection slots (P2010, 53300)":
+    async () =>
+      prismaFailure("P2010", {
+        kind: "TooManyConnections",
+        originalCode: "53300",
+        cause: "sorry, too many clients already",
+      }),
 };
 
 /** May have run, even committed: retrying could write the entry twice. */
@@ -138,6 +204,30 @@ const maybeSent: Record<string, () => Promise<unknown>> = {
     failureAgainst({ kind: "ready", onQuery: "close" }),
   "the INSERT got no answer within socket_timeout": () =>
     failureAgainst({ kind: "ready", onQuery: "ignore" }, "socket_timeout=0.3"),
+  // The server going away under a statement or a COMMIT is FATAL too, and
+  // the same adapter kind as 57P03 — but the statement had been sent.
+  "the backend was terminated under the INSERT (P2039, 57P01)": async () =>
+    prismaFailure(
+      "P2039",
+      postgresCause(
+        "57P01",
+        "terminating connection due to administrator command",
+      ),
+    ),
+  "the backend was terminated during the COMMIT (the adapter's own error, 57P01)":
+    async () =>
+      adapterError(
+        postgresCause(
+          "57P01",
+          "terminating connection due to administrator command",
+        ),
+      ),
+  "the connection was reset after the COMMIT ran (the adapter's own error, ConnectionClosed)":
+    async () => adapterError({ kind: "ConnectionClosed" }),
+  "the connection failed under a raw INSERT (P2010, 08006)": async () =>
+    prismaFailure("P2010", postgresCause("08006", "connection failure")),
+  "a raw INSERT got no answer within socket_timeout (P2010, SocketTimeout)":
+    async () => prismaFailure("P2010", { kind: "SocketTimeout" }),
 };
 
 const failures = new Map<string, unknown>();
@@ -175,6 +265,22 @@ describe("the failures the audit trail tells apart, as Prisma 7 raises them", ()
 
     expect(failure).toBeInstanceOf(Prisma.PrismaClientKnownRequestError);
     expect((failure as Prisma.PrismaClientKnownRequestError).code).toBe(code);
+  });
+
+  /**
+   * No Prisma code of its own: the generic "database error", Postgres'
+   * answer read from the adapter's verdict. The retry used to match codes
+   * only, and wrote nothing at all through a restart's startup window.
+   */
+  it("the database system starting up: P2039, kind postgres, SQLSTATE 57P03", () => {
+    const failure = failures.get("the database system was starting up (57P03)");
+
+    expect(failure).toBeInstanceOf(Prisma.PrismaClientKnownRequestError);
+    expect((failure as Prisma.PrismaClientKnownRequestError).code).toBe(
+      "P2039",
+    );
+    expect(driverAdapterCauseOf(failure)?.kind).toBe("postgres");
+    expect(sqlStateOf(failure)).toBe("57P03");
   });
 });
 
@@ -271,6 +377,46 @@ describe("an audit entry recorded by a use case", () => {
       );
     },
   );
+
+  it.each([
+    [
+      "a 57P03 claimed by an error that is neither Prisma's nor the adapter's",
+      () =>
+        Object.assign(new Error(STARTING_UP), {
+          meta: {
+            driverAdapterError: adapterError(
+              postgresCause("57P03", STARTING_UP),
+            ),
+          },
+        }),
+    ],
+    [
+      "a statement timeout (P2039, 57014), an answer about the SQL",
+      () =>
+        prismaFailure("P2039", {
+          ...postgresCause(
+            "57014",
+            "canceling statement due to statement timeout",
+          ),
+          severity: "ERROR",
+        }),
+    ],
+  ])("does not retry %s", async (_name, failure) => {
+    outboxSpy();
+    const repository = activityRepository();
+    vi.spyOn(logger, "error").mockImplementation(() => undefined);
+
+    const create = vi
+      .spyOn(repository, "createActivity")
+      .mockRejectedValueOnce(failure());
+
+    await new NotificationService(repository as never).createActivityIfEnabled(
+      ENTRY,
+    );
+
+    expect(create).toHaveBeenCalledTimes(1);
+    expect(repository.activities).toHaveLength(0);
+  });
 
   it("without a transaction never fails the operation, and logs a loss an alert can match", async () => {
     outboxSpy();
