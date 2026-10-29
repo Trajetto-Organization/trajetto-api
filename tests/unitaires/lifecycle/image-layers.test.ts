@@ -1,7 +1,10 @@
-import { readdirSync, readFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+
+import { hasShell, sandbox, type Sandbox } from "./support/shell-harness";
 
 /**
  * How the images are cut into layers, for the server that pulls them.
@@ -254,8 +257,10 @@ describe("the API image's build stage", () => {
 });
 
 /**
- * The API runtime (§14, measured on 28/10/2026 with the same sources: 115 →
- * 88 MB compressed, 417 → 285 MB unpacked).
+ * The API runtime (§14, measured on 28/10/2026 on Prisma 6.1 with the same
+ * sources: 115 → 88 MB compressed, 417 → 285 MB unpacked; on Prisma 7.10.1,
+ * whose CLI is larger, 114.8 MB compressed and 431 MB unpacked, as measured
+ * in docs/deploy.md).
  *
  * - Alpine plus the node binary: the Node image's npm, corepack, yarn and C
  *   headers no longer ride along under a whiteout, and only what the
@@ -337,8 +342,8 @@ describe("the API image's node_modules", () => {
 
     expect(prodDeps[prodDeps.length - 1]).toBe(
       "RUN find node_modules -type f \\( -name '*.map' -o -name '*.d.ts' -o -name '*.d.mts' -o -name '*.d.cts' -o -iname '*.md' -o -iname '*.markdown' \\) -delete && " +
-        "rm -rf node_modules/@types node_modules/exceljs/dist " +
-        "node_modules/@electric-sql/pglite " +
+        "rm -rf node_modules/@types node_modules/exceljs/dist && " +
+        "rm -r node_modules/@electric-sql/pglite " +
         "node_modules/@prisma/client/runtime/query_compiler_* " +
         "node_modules/prisma/build/query_compiler_*",
     );
@@ -381,5 +386,103 @@ describe("the API image's node_modules", () => {
         "COPY --from=builder --chown=nodejs:nodejs /app/package.json ./package.json",
       ),
     );
+  });
+});
+
+/**
+ * The prune's effect, not only its text: prod-deps' last RUN, executed by sh
+ * on a tree laid out like the Prisma 7.10.1 install. With `rm -rf` and globs,
+ * a Prisma bump that moved pglite or renamed the compilers was a silent no-op
+ * that put them back in the image; the build must stop there instead.
+ */
+describe.skipIf(!hasShell("sh"))("the API image's prune, run on a tree", () => {
+  const REMOVED = [
+    "node_modules/@electric-sql/pglite/dist/index.js",
+    "node_modules/@prisma/client/runtime/query_compiler_fast_bg.postgresql.wasm-base64.js",
+    "node_modules/@prisma/client/runtime/query_compiler_small_bg.mysql.mjs",
+    "node_modules/prisma/build/query_compiler_fast_bg.postgresql.wasm",
+    "node_modules/@types/node/index.d.ts",
+    "node_modules/exceljs/dist/exceljs.min.js",
+    "node_modules/pg/lib/index.js.map",
+    "node_modules/pg/README.md",
+  ];
+  // What the image loads: the client, the CLI and the schema engine that
+  // `migrate deploy` runs, Studio (the CLI requires it), pg, ExcelJS's main.
+  const KEPT = [
+    "node_modules/@prisma/client/runtime/client.js",
+    "node_modules/prisma/build/index.js",
+    "node_modules/@prisma/engines/schema-engine-linux-musl-openssl-3.0.x",
+    "node_modules/@prisma/studio-core/data/bff.js",
+    "node_modules/pg/lib/index.js",
+    "node_modules/exceljs/lib/exceljs.nodejs.js",
+  ];
+
+  let box: Sandbox | undefined;
+
+  afterEach(() => {
+    box?.dispose();
+    box = undefined;
+  });
+
+  function prune(files: string[]) {
+    const prodDeps = stage(api, "prod-deps");
+    const command = prodDeps[prodDeps.length - 1].replace(/^RUN /, "");
+
+    box = sandbox();
+    for (const file of files) box.file(file, "x");
+
+    const result = spawnSync("sh", ["-c", command], {
+      cwd: box.root,
+      encoding: "utf8",
+      timeout: 30_000,
+    });
+    const root = box.root;
+
+    return {
+      status: result.status,
+      stderr: result.stderr ?? "",
+      exists: (file: string) => existsSync(`${root}/${file}`),
+    };
+  }
+
+  it("removes every target and keeps what the image loads", () => {
+    const { status, stderr, exists } = prune([...REMOVED, ...KEPT]);
+
+    expect(status, stderr).toBe(0);
+    expect(REMOVED.filter(exists)).toEqual([]);
+    expect(KEPT.filter((file) => !exists(file))).toEqual([]);
+    expect(exists("node_modules/@electric-sql/pglite")).toBe(false);
+  });
+
+  it.each([
+    [
+      "pglite moved under the CLI",
+      "node_modules/@electric-sql/pglite/dist/index.js",
+      "node_modules/prisma/node_modules/@electric-sql/pglite/dist/index.js",
+      "node_modules/@electric-sql/pglite",
+    ],
+    [
+      "the client's compilers renamed",
+      "node_modules/@prisma/client/runtime/query_compiler_",
+      "node_modules/@prisma/client/runtime/query_planner_",
+      "node_modules/@prisma/client/runtime/query_compiler_*",
+    ],
+    [
+      "the CLI's compilers renamed",
+      "node_modules/prisma/build/query_compiler_",
+      "node_modules/prisma/build/query_planner_",
+      "node_modules/prisma/build/query_compiler_*",
+    ],
+  ])("stops the build when %s", (_case, from, to, missing) => {
+    const files = [...REMOVED, ...KEPT].map((file) =>
+      file.startsWith(from) ? to + file.slice(from.length) : file,
+    );
+
+    expect(files).not.toEqual([...REMOVED, ...KEPT]);
+
+    const { status, stderr } = prune(files);
+
+    expect(status).not.toBe(0);
+    expect(stderr).toContain(missing);
   });
 });

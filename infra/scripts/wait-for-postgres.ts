@@ -43,8 +43,8 @@ async function waitForPostgres(): Promise<void> {
 
   // Its own client, disconnected at the end: this runs before the app exists,
   // and a pool left open would outlive the script in the `run-s` chain. Built
-  // like the app's, so connect_timeout bounds each attempt (pg has no connect
-  // timeout of its own).
+  // like the app's, so connect_timeout (or pool_timeout, when smaller) bounds
+  // each attempt (pg has no connect timeout of its own).
   const prisma = createPrismaClient({ log: [] });
 
   let lastError: unknown = null;

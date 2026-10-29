@@ -38,10 +38,11 @@ export default defineConfig({
       reportOnFailure: true,
     },
     environmentMatchGlobs: [["./tests/E2E/**", "prisma"]],
-    // E2E files load Prisma's Node-API engine; under the default threads pool
-    // they all share one process, and the engine panics ("failed to delete
-    // napi ref") when a worker is freed while others still hold it, killing
-    // the whole run (exit 127/139). A process per file has no shared teardown.
+    // A process per E2E file. Chosen under Prisma 6: its Node-API engine
+    // panicked ("failed to delete napi ref", exit 127/139) when E2E files
+    // shared the default threads pool's process and a worker was freed while
+    // others still held it. Prisma 7 has no native engine; forks stays until
+    // threads is measured with it. A process per file has no shared teardown.
     poolMatchGlobs: [["**/tests/E2E/**", "forks"]],
     setupFiles: ["./setupTests.ts"], // add reflect metadata for all tests
   },

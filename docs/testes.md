@@ -63,6 +63,13 @@ caminho da aplicação: o Prisma 7 exige o driver adapter.
 
 O lint (`yarn lint:check`, Prettier) e o build (`yarn build`) rodam no CI.
 
+**Depois de puxar uma mudança em `prisma/vitest-environment-prisma`** (como a
+do Prisma 7), rode `yarn install --force`. O ambiente do E2E é uma dependência
+`file:` que o Yarn 1 copia para `node_modules` e não recopia num
+`yarn install` comum; sem o `--force`, o E2E roda a cópia antiga (no Prisma 7,
+todo arquivo cai com `Unknown property datasources provided to PrismaClient
+constructor`). O CI e a imagem instalam do zero e não precisam disso.
+
 ## Unitários (`tests/unitaires`)
 
 Uma pasta por domínio (`delivery/`, `route/`, `chat/`, `fuel/`…) e pastas

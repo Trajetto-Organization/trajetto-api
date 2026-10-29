@@ -18,6 +18,7 @@ import {
 // they are decided by one rule (to move into shared/vehicle, see notes).
 import { placeReading } from "@/modules/fuel/usecases/fuel-rules";
 import { resolveTimeZone } from "@/shared/time/business-day";
+import { isSerializationFailure } from "@/shared/errors/prisma-error-meta";
 
 import {
   VehicleChecklist,
@@ -129,8 +130,8 @@ class VehicleChecklistRepository implements IVehicleChecklistRepository {
 
           if (placed.odometer !== null) {
             // Conditional on the odometer read above: a concurrent change
-            // aborts this serializable transaction (P2034) and the retry
-            // below decides again on what is stored then.
+            // aborts this serializable transaction (isSerializationFailure)
+            // and the retry below decides again on what is stored then.
             const moved = await transaction.vehicle.updateMany({
               where: {
                 id: checklistData.vehicleId,
@@ -185,10 +186,7 @@ class VehicleChecklistRepository implements IVehicleChecklistRepository {
           if (existing) return { checklist: existing, created: false };
         }
 
-        const shouldRetry =
-          error instanceof Prisma.PrismaClientKnownRequestError &&
-          error.code === "P2034" &&
-          attempt < 2;
+        const shouldRetry = isSerializationFailure(error) && attempt < 2;
 
         if (!shouldRetry) throw error;
       }
@@ -382,8 +380,8 @@ class VehicleChecklistRepository implements IVehicleChecklistRepository {
 
         if (nextOdometer !== null && nextOdometer !== vehicle.current_mileage) {
           // Conditional on the odometer read above: a concurrent change
-          // aborts this serializable transaction (P2034) and the retry
-          // below decides again on what is stored then.
+          // aborts this serializable transaction (isSerializationFailure)
+          // and the retry below decides again on what is stored then.
           const moved = await transaction.vehicle.updateMany({
             where: {
               id: vehicleId,
@@ -450,9 +448,11 @@ class VehicleChecklistRepository implements IVehicleChecklistRepository {
   }
 
   /**
-   * A serializable transaction retried on P2034: the timeline reads widen
-   * the read set, so a record committed meanwhile aborts it and a fresh
-   * attempt sees that record. Same budget as the create.
+   * A serializable transaction retried on a serialization failure
+   * (isSerializationFailure: P2034, or the bare adapter error Prisma 7 throws
+   * when the COMMIT is refused): the timeline reads widen the read set, so a
+   * record committed meanwhile aborts it and a fresh attempt sees that
+   * record. Same budget as the create.
    */
   private async serializableWithRetry<T>(
     work: (transaction: Prisma.TransactionClient) => Promise<T>,
@@ -463,10 +463,7 @@ class VehicleChecklistRepository implements IVehicleChecklistRepository {
           isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
         });
       } catch (error) {
-        const retryable =
-          error instanceof Prisma.PrismaClientKnownRequestError &&
-          error.code === "P2034" &&
-          attempt < 2;
+        const retryable = isSerializationFailure(error) && attempt < 2;
 
         if (!retryable) throw error;
       }

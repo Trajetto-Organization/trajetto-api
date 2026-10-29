@@ -453,6 +453,10 @@ npx vitest run tests/E2E/<arquivo>.test.ts
 ```
 
 Um unitário só: `npx vitest run tests/unitaires/<arquivo>.test.ts`.
+Depois de puxar uma mudança em `prisma/vitest-environment-prisma` (como a
+do Prisma 7), rode `yarn install --force`: o ambiente é uma dependência
+`file:` que o Yarn 1 copia para `node_modules` e não recopia num
+`yarn install` comum, e o E2E seguiria com a cópia antiga.
 No Windows, rode no máximo 8 arquivos E2E por vez (limite herdado do _napi panic_
 do engine do Prisma 6; o Prisma 7 não tem engine nativo, mas lotes maiores não
 foram medidos). As suítes de navegador da web e o E2E do app usam o seed
@@ -651,7 +655,7 @@ versão do cliente, sem segredo e sem URL assinada.
 | Notificação não chegou                                                                | provedor recusou ou a entrega esgotou as tentativas                           | `GET /health/dead-letter` e `src/shared/notifications/`                                                                                     |
 | `/docs` responde 404 em produção                                                      | sem `DOCS_USER`/`DOCS_PASSWORD` (ou senha com menos de 20 caracteres)         | defina as duas                                                                                                                              |
 | PDF do comprovante sem assinatura                                                     | certificado ausente, vencido ou senha errada                                  | veja o estado em `/health/metrics` e o log do boot                                                                                          |
-| E2E cai com _napi panic_ no Windows                                                   | muitos arquivos E2E na mesma execução                                         | rode em lotes de até 8 arquivos                                                                                                             |
+| E2E falha com `Unknown property datasources provided to PrismaClient constructor`     | `node_modules` com a cópia antiga de `prisma/vitest-environment-prisma`       | `yarn install --force` (veja [Testes](#testes))                                                                                             |
 | Boot de produção recusa banco vazio                                                   | Database novo sem migrations                                                  | instalação nova: `ALLOW_EMPTY_DATABASE_BOOTSTRAP=true` uma única vez; com dados, restaure o dump (`docs/deploy.md`, "Backup e restauração") |
 | Depurador não conecta (porta 9229 ocupada)                                            | `NODE_OPTIONS=--inspect` com o `tsx`, ou outro processo na porta              | `npx tsx watch --inspect src/server.ts` (veja [Depuração](#depuração)); outra porta: `--inspect=9230`                                       |
 | Usuário relata um erro com `requestId`                                                | o `requestId` é o `x-request-id` do pedido                                    | procure o valor nos logs: toda linha do pedido tem o mesmo `reqId`                                                                          |

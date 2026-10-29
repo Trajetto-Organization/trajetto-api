@@ -20,11 +20,13 @@ const NOT_IN_MUTATION_RUN = [
  * The test set Stryker runs against each mutant (stryker.config.mjs).
  *
  * The unit suite only: Stryker drives one Vitest process, and the E2E suite
- * cannot run in one process on every host (the Prisma engine panics past
- * ~12 files), besides needing a database per file. MUTATION_TESTS narrows it
- * further (comma-separated globs), for a focused run on one file. A
- * MUTATION_BATCH run does not set it: its dry run takes the whole unit suite
- * and perTest coverage then picks, per mutant, the tests that reached it.
+ * runs in batches of 8 files per process (a limit inherited from Prisma 6,
+ * whose native engine panicked past ~12 files; Prisma 7 has none, and larger
+ * batches have not been measured), besides needing a database per file.
+ * MUTATION_TESTS narrows it further (comma-separated globs), for a focused
+ * run on one file. A MUTATION_BATCH run does not set it: its dry run takes the
+ * whole unit suite and perTest coverage then picks, per mutant, the tests
+ * that reached it.
  */
 // Spread, not mergeConfig: mergeConfig concatenates arrays, so the base
 // `include` would survive and the narrowing would do nothing.

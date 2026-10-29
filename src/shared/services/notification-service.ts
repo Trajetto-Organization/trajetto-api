@@ -2,6 +2,7 @@ import { Prisma } from "@prisma/client";
 import { inject, injectable } from "tsyringe";
 
 import type { IActivityRepository } from "@/modules/activity/repositories/IActivity-repository";
+import { DatabaseUnavailableError } from "@/shared/database/pg-driver";
 import { logger } from "@/shared/logging/logger";
 
 /** How long the one retry waits for the pool or the server to come back. */
@@ -9,16 +10,27 @@ const AUDIT_RETRY_DELAY_MS = 200;
 
 /**
  * Failures where the INSERT certainly never ran: no connection could be
- * taken or opened. P1017/P1008 are left out on purpose — a connection that
- * dies after the COMMIT reached Postgres reports P1017 too, and retrying
- * that would write the entry twice. A trail that double-counts is worse than
- * one that is merely incomplete.
+ * taken or opened. Under Prisma 7 the pool is pg's, and its own failures
+ * arrive as DatabaseUnavailableError (src/shared/database/pg-driver.ts): a
+ * full pool and a connection that could not be opened are told by `reason`.
+ * What the adapter maps keeps a Prisma code: refused or unknown host
+ * (P1001), Postgres out of connection slots, 53300 (P2037).
+ *
+ * A connection lost under the statement and a read timeout are left out on
+ * purpose (`connection-lost`, `query-timeout`, and P1017/P1008 from the
+ * adapter) — a connection that dies after the COMMIT reached Postgres reports
+ * the same, and retrying that would write the entry twice. A trail that
+ * double-counts is worse than one that is merely incomplete.
  */
 function neverReachedTheDatabase(error: unknown): boolean {
+  if (error instanceof DatabaseUnavailableError) {
+    return error.reason === "pool-timeout" || error.reason === "connect-failed";
+  }
+
   if (error instanceof Prisma.PrismaClientInitializationError) return true;
 
   if (error instanceof Prisma.PrismaClientKnownRequestError) {
-    if (["P1001", "P2024", "P2037"].includes(error.code)) return true;
+    if (["P1001", "P2037"].includes(error.code)) return true;
 
     return (
       error.code === "P2028" &&

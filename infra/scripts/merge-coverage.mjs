@@ -1,10 +1,11 @@
 // Joins the coverage-final.json of several Vitest runs into one report.
 //
-// Why: on Windows the Prisma query engine crashes when one process loads
-// ~12+ E2E files, so the integration suite is measured in batches (see
-// coverage-e2e.sh). Vitest 1.6 has no --merge-reports, and each batch alone
-// under-reports every file the other batches exercise. Istanbul merges hit
-// counts per statement/branch/function, so the union is exact, not averaged.
+// Why: the integration suite is measured in batches (see coverage-e2e.sh;
+// the size comes from Prisma 6, whose native engine crashed on Windows when
+// one process loaded ~12+ E2E files). Vitest 1.6 has no --merge-reports,
+// and each batch alone under-reports every file the other batches exercise.
+// Istanbul merges hit counts per statement/branch/function, so the union is
+// exact, not averaged.
 //
 // That union is only exact when every run saw the same source. If a file
 // changed between runs, Istanbul keeps both statement maps side by side and

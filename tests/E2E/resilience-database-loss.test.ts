@@ -145,7 +145,7 @@ describe.skipIf(!enabled)(
           httpPort: port,
         });
 
-        // The probe's own client starts cold (a query engine to boot, a first
+        // The probe's own client starts cold (a client to start, a first
         // connection): its first answer may be the 3 s "no". Traefik asks again.
         await waitReady();
         expect(

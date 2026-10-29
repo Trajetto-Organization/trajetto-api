@@ -50,6 +50,7 @@ Mesmo GA, o 8 não serviria sem reescrita (matriz abaixo): exige o gerador
 | preview `metrics` (`$metrics.json()`)               | sim     | **removido**                                                      | —                        |
 | pool pela `DATABASE_URL` (`connection_limit` etc.)  | sim     | **ignorado pelo `pg`**: mapeado à mão                             | —                        |
 | `meta.target` no P2002                              | colunas | **nome do índice**, em `meta.driverAdapterError.cause.constraint` | —                        |
+| conflito serializável (40001) no COMMIT             | P2034   | **`DriverAdapterError` cru** (`TransactionWriteConflict`)         | —                        |
 | parâmetros de SQL cru tipados                       | sim     | **não** (o `pg` manda sem tipo)                                   | —                        |
 | `migrate deploy` / `_prisma_migrations`             | sim     | sim (mesmo schema engine)                                         | sistema novo (`db sign`) |
 
@@ -170,7 +171,8 @@ Por superfície (mediana / p95): `dashboard.overview` melhora (90 → 63 /
 Nota para quem integrar a branch: `prisma/vitest-environment-prisma` é uma
 dependência `file:` que o Yarn 1 copia para `node_modules` e não recopia num
 `yarn install` comum. Depois de trazer a branch, rode `yarn install --force`,
-senão o E2E roda o ambiente antigo e falha no Prisma 7.
+senão o E2E roda o ambiente antigo e falha no Prisma 7 (o passo também está
+em [`testes.md`](../testes.md#comandos) e no README).
 
 ## Resultado da segunda tentativa
 
@@ -240,16 +242,35 @@ sem `pglite` e sem os compiladores de outros bancos) e o `README.md`. Os três
 testes E2E novos da rodada passaram a abrir o cliente por
 `createPrismaClient`.
 
-| Gate                                     | Resultado                                                                                                                 |
-| ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
-| `audit-ci`, `prettier --check`, `tsc`    | passam                                                                                                                    |
-| Suíte unitária com cobertura (env do CI) | 5.535 ok; cobertura 77,5 / 84,5 / 67,4 / 77,5 %, acima do piso                                                            |
-| E2E completo (293 arquivos)              | 291 ok e 2 pulados de propósito (injeção de falha com Docker); 1 falha sob carga que passou 3/3 sozinha e no lote inteiro |
-| `migrate deploy` do zero                 | 135/135, `migrate status` em dia; o `migrate diff` só mostra os 3 índices de SQL cru já conhecidos                        |
-| Imagem + smoke do CI (`deploy.yml`)      | passa: migrations do zero e seeds no modo `migrate`, boot saudável, readiness 200                                         |
+A revisão da integração achou o que o Prisma 7 mudou por baixo do código:
+o COMMIT recusado por serialização chega como erro cru do adapter (o retry de
+abastecimento e checklist só olhava `P2034`), pool cheio e conexão que não
+abre chegam como `DatabaseUnavailableError` (o retry da trilha de auditoria
+só olhava `P2024`/`P1001`) e alguns errnos de rede não eram mapeados. As
+correções entraram na árvore final, com testes unitários e dois E2E novos
+(`serializable-commit-retry` e `audit-trail-unavailable-database`), e todos
+os gates foram refeitos nela, em 28/10/2026 à noite, com a env do job `test`
+do `deploy.yml`:
+
+| Gate                                     | Resultado                                                                                                                                             |
+| ---------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `audit-ci`, `prettier --check`, `tsc`    | passam (`tsc` com 0 erros)                                                                                                                            |
+| Suíte unitária com cobertura (env do CI) | 511 arquivos: 510 ok e 1 pulado; 5.625 testes ok, 0 falhas, 29 pulados; cobertura 77,55 / 84,56 / 67,51 / 77,55 % (pisos 70,8 / 82,57 / 57,62 / 70,8) |
+| E2E completo (295 arquivos, lotes de 8)  | 292 ok de primeira, 0 falhas, 3 pulados; 3.243 testes ok e 15 pulados, em 25 min                                                                      |
+| `migrate deploy` do zero                 | 135/135, `migrate status` em dia; o `migrate diff` (banco migrado → `schema.prisma`) só mostra os 3 índices de SQL cru já conhecidos                  |
+| Imagem + smoke do CI (`deploy.yml`)      | passa em 36 s: migrations do zero e seeds no modo `migrate`, boot saudável, commit conferido no `/health/liveness`, readiness 200                     |
+
+O arquivo unitário pulado (`compose-ci-siblings`) e os 29 testes pulados
+dependem dos repositórios irmãos (`trajetto-ui`, `trajetto-mobile`), que não
+existem ao lado do worktree nem no checkout do CI. Os 3 E2E pulados são os mesmos do CI:
+`resilience-database-loss` e `resilience-redis-loss` (injeção de falha com
+Docker, que só arma com os contêineres próprios na porta 54322; neste
+Windows a porta cai numa faixa reservada pelo sistema e o pacote não sobe) e
+`upload-storage-roundtrip`, que passou 9/9 à parte contra o MinIO
+descartável. Nenhum E2E precisou de reexecução.
 
 Benchmark curto (mesmo método, ABBA, 2 execuções por versão, `a6d0bcc`
-contra a integração):
+contra a integração no `cd36d53`, antes das correções da revisão):
 
 | Média de 2                     | 6.1 (`a6d0bcc`) | 7.10.1  | Δ    |
 | ------------------------------ | --------------- | ------- | ---- |
@@ -261,12 +282,15 @@ contra a integração):
 | Statements por requisição      | 10,75           | 10,72   | =    |
 | Tempo de execução no Postgres  | 36,5 s          | 28,9 s  | −21% |
 
-Imagem (`docker image inspect` / soma do histórico / `docker images`):
-comprimida 87,6 → 114,8 MB (+31%), descompactada 285 → 431 MB, listada
-373 → 546 MB. O aumento é o CLI do 7, que a etapa de release usa no
-`migrate deploy` (Studio, `@prisma/dev`, `effect`); separar um alvo só de
-migração no `Dockerfile` (item 3 do menor caminho) é o próximo passo para
-devolver esse tamanho.
+Imagem da árvore final (`docker image inspect` / soma do histórico /
+`docker images`), contra a imagem do 6.1 com as mesmas regras de
+`Dockerfile`: comprimida 87,6 → 114,8 MB (+27,2 MB, +31%), descompactada
+285 → 431 MB (+51%), listada 373 → 546 MB (+46%), 14 → 15 camadas (a nova é
+o `prisma.config.ts`). O `node_modules` vai de 27,4 para 59,0 MB comprimidos;
+o `.prisma` cai de 7,7 para 3,2 MB. O aumento é o CLI do 7, que a etapa de
+release usa no `migrate deploy` (Studio, `@prisma/dev`, `effect`); separar
+um alvo só de migração no `Dockerfile` (item 3 do menor caminho) é o próximo
+passo para devolver esse tamanho.
 
 ## Fontes
 

@@ -16,6 +16,7 @@ import {
   type OdometerTimelineQuery,
 } from "@/shared/vehicle/odometer-timeline";
 import { resolveTimeZone } from "@/shared/time/business-day";
+import { isSerializationFailure } from "@/shared/errors/prisma-error-meta";
 import { FuelNotFoundError } from "../usecases/errors/fuel-not-found-error";
 import { placeReading } from "../usecases/fuel-rules";
 
@@ -69,7 +70,8 @@ interface ReadingWrite extends OdometerTimelineQuery {
 /**
  * Places a refueling's km on its vehicle (placeReading) and writes the
  * odometer it ends with, conditional on the value read: a concurrent change
- * aborts the serializable transaction (P2034) and the caller retries.
+ * aborts the serializable transaction (isSerializationFailure) and the caller
+ * retries.
  */
 async function placeOnVehicle(
   tx: Prisma.TransactionClient,
@@ -226,10 +228,7 @@ class FuelRepository implements IFuelRepository {
           if (existing) return { fuel: existing, created: false };
         }
 
-        const shouldRetry =
-          error instanceof Prisma.PrismaClientKnownRequestError &&
-          error.code === "P2034" &&
-          attempt < 2;
+        const shouldRetry = isSerializationFailure(error) && attempt < 2;
 
         if (!shouldRetry) throw error;
       }
@@ -434,9 +433,11 @@ class FuelRepository implements IFuelRepository {
   }
 
   /**
-   * One serializable transaction, retried on P2034: the timeline reads widen
-   * the read set, so a refueling or checklist committed meanwhile aborts it,
-   * and a fresh attempt sees that record. Same budget as the create.
+   * One serializable transaction, retried on a serialization failure
+   * (isSerializationFailure: P2034, or the bare adapter error Prisma 7 throws
+   * when the COMMIT is refused): the timeline reads widen the read set, so a
+   * refueling or checklist committed meanwhile aborts it, and a fresh attempt
+   * sees that record. Same budget as the create.
    */
   private async serializable<T>(
     work: (transaction: Prisma.TransactionClient) => Promise<T>,
@@ -447,10 +448,7 @@ class FuelRepository implements IFuelRepository {
           isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
         });
       } catch (error) {
-        const retryable =
-          error instanceof Prisma.PrismaClientKnownRequestError &&
-          error.code === "P2034" &&
-          attempt < 2;
+        const retryable = isSerializationFailure(error) && attempt < 2;
 
         if (!retryable) throw error;
       }

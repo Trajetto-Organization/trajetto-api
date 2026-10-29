@@ -1,14 +1,18 @@
+import net from "node:net";
+
 import { Prisma } from "@prisma/client";
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { APP_BOOT_TIMEOUT_MS } from "../../support/app-boot";
+import { closedPort, systemError } from "../../support/fake-postgres";
 
 import {
   DATABASE_RETRY_AFTER_SECONDS,
   isDatabaseUnavailable,
 } from "@/shared/errors/database-unavailable";
-import { DatabaseUnavailableError } from "@/shared/database/pg-driver";
+import { createPrismaClient } from "@/shared/database/database-client";
+import { typedDriverError } from "@/shared/database/pg-driver";
 
 /**
  * What the API answers when the database, not the request, is the problem.
@@ -67,7 +71,11 @@ const driverFailure = (
 
 /** pg's own error, as the API's pool types it (src/shared/database/pg-driver.ts). */
 const fromPool = (message: string) =>
-  new DatabaseUnavailableError(new Error(message));
+  typedDriverError(new Error(message)) as Error;
+
+/** A socket errno as Node raises it, as the API's pool types it. */
+const socketFromPool = (code: string, syscall: string, target?: string) =>
+  typedDriverError(systemError(code, syscall, target)) as Error;
 
 const infrastructure: Record<string, () => Error> = {
   initialization: () =>
@@ -105,6 +113,17 @@ const infrastructure: Record<string, () => Error> = {
     fromPool("Connection terminated unexpectedly"),
   "pg-connect-timeout": () =>
     fromPool("Connection terminated due to connection timeout"),
+  // Prisma 7: socket errnos the adapter does not map, typed by the pool.
+  "pg-host-unreachable": () =>
+    socketFromPool("EHOSTUNREACH", "connect", "10.0.0.9:5432"),
+  "pg-network-unreachable": () =>
+    socketFromPool("ENETUNREACH", "connect", "240.0.0.1:5432"),
+  "pg-dns-try-again": () =>
+    socketFromPool("EAI_AGAIN", "getaddrinfo", "db.internal"),
+  "pg-broken-pipe": () => socketFromPool("EPIPE", "write"),
+  // Prisma 7: the same errno reaching Prisma untyped becomes the code.
+  "v7-untyped-errno": () =>
+    known("EHOSTUNREACH", "connect EHOSTUNREACH 10.0.0.9:5432"),
   // Prisma 7: a raw query gets every adapter error as P2010.
   "v7-raw-unreachable": () =>
     driverFailure("P2010", {
@@ -162,6 +181,9 @@ const notInfrastructure: Record<string, () => Error> = {
   // pg's exact words, but not from the API's pool: still untrusted.
   "plain-error-with-pg-words": () =>
     new Error("timeout exceeded when trying to connect"),
+  // A socket errno from anything else (the mail provider): not the database.
+  "plain-socket-errno": () =>
+    systemError("EHOSTUNREACH", "connect", "10.0.0.9:587"),
   // Prisma 7: Postgres answered, about the SQL.
   "v7-raw-sql-error": () =>
     driverFailure("P2010", {
@@ -216,6 +238,26 @@ type App = Awaited<typeof import("@/http")>["app"];
 
 let app: App;
 
+/**
+ * For the end-to-end case below: connecting to this port fails as the OS
+ * fails a connect, with the errno the request names. Everything above the
+ * socket is real — pg, pg-pool, the API's pool, the adapter, Prisma and the
+ * error handler.
+ */
+let unreachablePort = 0;
+let failConnectWith: () => NodeJS.ErrnoException;
+
+const realConnect = net.Socket.prototype.connect;
+
+/** Where each errno comes from when a connection is being opened. */
+const CONNECT_ERRNOS: Record<string, [syscall: string, target: string]> = {
+  EHOSTUNREACH: ["connect", "10.0.0.9:5432"],
+  ENETUNREACH: ["connect", "240.0.0.1:5432"],
+  EADDRNOTAVAIL: ["connect", "255.255.255.255:5432"],
+  ECONNABORTED: ["connect", "10.0.0.9:5432"],
+  EAI_AGAIN: ["getaddrinfo", "db.internal"],
+};
+
 beforeAll(async () => {
   ({ app } = await import("@/http"));
 
@@ -231,10 +273,55 @@ beforeAll(async () => {
     },
   );
 
+  unreachablePort = await closedPort();
+
+  net.Socket.prototype.connect = function connect(
+    this: net.Socket,
+    ...args: unknown[]
+  ) {
+    const [first] = args as [{ port?: unknown } | number | string];
+    const port = typeof first === "object" ? first.port : first;
+
+    if (Number(port) !== unreachablePort) {
+      return (realConnect as (...a: unknown[]) => net.Socket).apply(this, args);
+    }
+
+    // As Node reports a failed connect: the socket is destroyed with it.
+    process.nextTick(() => this.destroy(failConnectWith()));
+
+    return this;
+  } as typeof realConnect;
+
+  app.get<{ Params: { query: string; errno: string } }>(
+    "/__test/database-route/:query/:errno",
+    { config: { rateLimit: false } },
+    async (request) => {
+      const { query, errno } = request.params;
+      const [syscall, target] = CONNECT_ERRNOS[errno];
+
+      failConnectWith = () => systemError(errno, syscall, target);
+
+      const client = createPrismaClient(
+        { log: [] },
+        { url: `postgresql://u:p@127.0.0.1:${unreachablePort}/d` },
+      );
+
+      try {
+        return query === "raw"
+          ? await client.$queryRaw`SELECT 1`
+          : await client.user.count();
+      } finally {
+        await client.$disconnect();
+      }
+    },
+  );
+
   await app.ready();
 }, APP_BOOT_TIMEOUT_MS);
 
 afterAll(async () => {
+  net.Socket.prototype.connect = realConnect;
+
   await app?.close();
 });
 
@@ -277,5 +364,36 @@ describe("the global error handler", () => {
       expect(response.json().code).toBe("INTERNAL_ERROR");
       expect(response.headers["retry-after"]).toBeUndefined();
     });
+  }
+});
+
+/**
+ * A database host the network cannot reach, end to end. The adapter maps
+ * only ENOTFOUND/ECONNREFUSED/ECONNRESET/ETIMEDOUT; any other errno reached
+ * the handler as a PrismaClientKnownRequestError whose code was the errno,
+ * and the outage answered 500 with no Retry-After (measured with real OS
+ * errnos: 240.0.0.1 gives ENETUNREACH, 255.255.255.255 EADDRNOTAVAIL).
+ * Prisma 6 reported them as an unreachable server, a 503.
+ */
+describe("a database the network cannot reach, through the real driver and handler", () => {
+  for (const errno of Object.keys(CONNECT_ERRNOS)) {
+    for (const query of ["model", "raw"]) {
+      it(`answers 503 with Retry-After for ${errno} on a ${query} query`, async () => {
+        const response = await app.inject({
+          method: "GET",
+          url: `/__test/database-route/${query}/${errno}`,
+        });
+
+        expect(response.statusCode).toBe(503);
+        expect(response.headers["retry-after"]).toBe(
+          String(DATABASE_RETRY_AFTER_SECONDS),
+        );
+        expect(response.json().code).toBe("SERVICE_UNAVAILABLE");
+
+        // Neither the errno nor the address reaches the body.
+        expect(response.body).not.toContain(errno);
+        expect(response.body).not.toContain(CONNECT_ERRNOS[errno][1]);
+      });
+    }
   }
 });

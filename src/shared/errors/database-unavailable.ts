@@ -1,6 +1,9 @@
 import { Prisma } from "@prisma/client";
 
-import { DatabaseUnavailableError } from "@/shared/database/pg-driver";
+import {
+  DatabaseUnavailableError,
+  UNMAPPED_SOCKET_ERRNOS,
+} from "@/shared/database/pg-driver";
 import {
   driverAdapterCauseOf,
   sqlStateOf,
@@ -117,14 +120,16 @@ function isDriverErrorWithoutAnswer(
  * will not retry, and to keep "the database is down" apart from "the code is
  * broken" in logs and alerts. Only typed errors are trusted — Prisma's own
  * classes and the pool's DatabaseUnavailableError (src/shared/database/
- * pg-driver.ts, which types pg's full-pool, dead-connection and read-timeout
- * errors at the source): a plain Error whose message merely mentions a
- * database proves nothing.
+ * pg-driver.ts, which types pg's full-pool, connect, dead-connection and
+ * read-timeout errors, and the socket errnos the adapter does not map, at the
+ * source): a plain Error whose message merely mentions a database proves
+ * nothing.
  *
  * A 503 from this classifier does NOT mean "not executed". P1017 was observed
  * AFTER a COMMIT had reached Postgres — the connection died on the way back —
  * so a write may have landed. Repeating a non-idempotent request is only safe
- * with an Idempotency-Key; the app's outbox sends one.
+ * with an Idempotency-Key; the app's outbox sends one. (The pool's error says
+ * which case it is in `reason`; the audit trail's retry reads it.)
  */
 function isDatabaseUnavailable(error: unknown): boolean {
   if (error instanceof DatabaseUnavailableError) return true;
@@ -133,6 +138,11 @@ function isDatabaseUnavailable(error: unknown): boolean {
 
   if (error instanceof Prisma.PrismaClientKnownRequestError) {
     if (UNAVAILABLE_CODES.has(error.code)) return true;
+
+    // A socket errno the adapter does not map, as Prisma raises one that
+    // reaches it untyped: the errno becomes the code. The API's pool types
+    // them first (pg-driver.ts); this keeps the 503 for one it did not see.
+    if (UNMAPPED_SOCKET_ERRNOS.has(error.code)) return true;
 
     if (isDriverErrorWithoutAnswer(error)) return true;
 

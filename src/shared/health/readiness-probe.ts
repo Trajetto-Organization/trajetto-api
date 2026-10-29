@@ -32,8 +32,10 @@ const READINESS_TIMEOUT_MS = 3_000;
  * short wait for it, a short connect and a short query. Everything else —
  * the host, the schema, the statement/lock timeouts in `options` — is kept.
  * The URL goes through the same mapping as the app's (pool-config.ts), so
- * under Prisma 7 these become pg's `max: 1`, a 2 s wait for the connection,
- * a 3 s connect and a 3 s `query_timeout`.
+ * under Prisma 7 these become pg's `max: 1`, 2 s to get the connection and a
+ * 3 s `query_timeout`. pool_timeout's 2 s covers both the wait and the
+ * opening of a new connection, as it did under Prisma 6, so connect_timeout's
+ * 3 s never comes into play: a host that does not answer is a "no" at 2 s.
  */
 function probeUrl(databaseUrl: string): string {
   const url = new URL(databaseUrl);

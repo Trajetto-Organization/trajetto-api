@@ -7,14 +7,19 @@ import type { DatabasePoolSettings } from "./pool-config";
  * does not do the way the API relies on.
  *
  * 1. Its own failures arrive as plain `Error`s. `@prisma/adapter-pg` maps
- *    socket errors (refused, reset, DNS) and Postgres' SQLSTATEs to Prisma
- *    codes, and rethrows anything else untouched — so a full pool, a
- *    connection that died under a query and a query past `socket_timeout`
- *    reached the app as `new Error("timeout exceeded when trying to
- *    connect")` and friends, where Prisma 6 raised P2024, P1017 and P1008.
+ *    four socket errors (refused, reset, DNS not found, timed out) and
+ *    Postgres' SQLSTATEs to Prisma codes, and rethrows anything else
+ *    untouched — so a full pool, a connection that died under a query and a
+ *    query past `socket_timeout` reached the app as `new Error("timeout
+ *    exceeded when trying to connect")` and friends, where Prisma 6 raised
+ *    P2024, P1017 and P1008; and any other socket errno (EHOSTUNREACH,
+ *    EAI_AGAIN, EPIPE…) as a PrismaClientKnownRequestError whose `code` is
+ *    the errno, where Prisma 6 said the server was unreachable.
  *    isDatabaseUnavailable trusts error classes, never message text from an
  *    arbitrary error, so these are typed HERE, at the only place they can
- *    come from: what leaves this pool.
+ *    come from: what leaves this pool. Each carries why (`reason`), which
+ *    says whether a statement may have reached the database — the audit
+ *    trail retries a write only when it certainly did not.
  *
  * 2. A query past `query_timeout` leaves its connection checked out with the
  *    query still pending. pg-pool drops a connection released with an error,
@@ -25,56 +30,138 @@ import type { DatabasePoolSettings } from "./pool-config";
  *    closed at the timeout instead: whatever it was doing cannot be trusted.
  */
 
+/**
+ * Why the database did not answer, and so whether a statement may have
+ * reached it.
+ *
+ * - `pool-timeout`: no connection came free within `pool_timeout`.
+ * - `connect-failed`: a new connection could not be opened — unreachable,
+ *   timed out, or closed during the handshake.
+ * - `connection-lost`: an open connection died, or was already dead, under a
+ *   statement.
+ * - `query-timeout`: a statement got no answer within `socket_timeout`.
+ *
+ * The first two sent nothing. The last two may have: a connection that dies
+ * on the way back from a COMMIT reports the same as one that died before it.
+ */
+type DatabaseUnavailableReason =
+  | "pool-timeout"
+  | "connect-failed"
+  | "connection-lost"
+  | "query-timeout";
+
 /** pg's and pg-pool's own messages for "no database right now". */
-const UNAVAILABLE_MESSAGES = new Set([
+const UNAVAILABLE_MESSAGES = new Map<string, DatabaseUnavailableReason>([
   // pg-pool: no connection free within connectionTimeoutMillis (P2024 in 6).
-  "timeout exceeded when trying to connect",
+  ["timeout exceeded when trying to connect", "pool-timeout"],
   // pg-pool: a new connection did not open within connectionTimeoutMillis.
-  "Connection terminated due to connection timeout",
+  ["Connection terminated due to connection timeout", "connect-failed"],
   // pg Client: a new connection did not open within its own timeout.
-  "timeout expired",
+  ["timeout expired", "connect-failed"],
   // The socket closed under a query (P1017 in 6), or after we closed it.
-  "Connection terminated unexpectedly",
-  "Connection terminated",
+  // During the handshake it is typed as connect-failed instead (below).
+  ["Connection terminated unexpectedly", "connection-lost"],
+  ["Connection terminated", "connection-lost"],
   // query_timeout, i.e. socket_timeout (P1008 / P2010 "N/A" in 6).
-  "Query read timeout",
+  ["Query read timeout", "query-timeout"],
   // A query sent to a connection already known dead.
-  "Client was closed and is not queryable",
-  "Client has encountered a connection error and is not queryable",
+  ["Client was closed and is not queryable", "connection-lost"],
+  [
+    "Client has encountered a connection error and is not queryable",
+    "connection-lost",
+  ],
 ]);
+
+/**
+ * Socket errnos the adapter does not map, each meaning the network, the host
+ * or the connection is gone: it maps only ENOTFOUND and ECONNREFUSED (P1001),
+ * ECONNRESET (P1017) and ETIMEDOUT (P1008), and Prisma raises any other as
+ * a PrismaClientKnownRequestError with the errno as its code — a 500.
+ */
+const UNMAPPED_SOCKET_ERRNOS = new Set([
+  "EAI_AGAIN",
+  "EAI_FAIL",
+  "EHOSTUNREACH",
+  "EHOSTDOWN",
+  "ENETUNREACH",
+  "ENETDOWN",
+  "EADDRNOTAVAIL",
+  "ECONNABORTED",
+  "EPIPE",
+]);
+
+/** The syscalls that open a connection: an errno from them sent nothing. */
+const CONNECT_SYSCALLS = new Set(["connect", "getaddrinfo"]);
 
 /**
  * The database did not answer: the pool had no connection to give, a
  * connection could not be opened, or one died or went silent under a query.
  * Raised only by the pool built here, wrapping pg's own error as `cause`.
+ *
+ * It has no `code` on purpose: Prisma turns any error with one into a
+ * PrismaClientKnownRequestError with that code, and the class would be lost.
  */
 class DatabaseUnavailableError extends Error {
   // Declared here: the ES2020 lib the API compiles against has no
   // `ErrorOptions.cause`.
   readonly cause: Error;
 
-  constructor(cause: Error) {
+  readonly reason: DatabaseUnavailableReason;
+
+  constructor(cause: Error, reason: DatabaseUnavailableReason) {
     super(cause.message);
     this.name = "DatabaseUnavailableError";
     this.cause = cause;
+    this.reason = reason;
   }
 }
 
-/**
- * pg's own error, typed; anything else as it is. Postgres' errors and socket
- * errors carry a `code` and are left for the adapter to map (P1001, P2002…).
- */
-function typedDriverError(error: unknown): unknown {
-  if (
-    error instanceof Error &&
-    !(error instanceof DatabaseUnavailableError) &&
-    (error as { code?: unknown }).code === undefined &&
-    UNAVAILABLE_MESSAGES.has(error.message)
+function unavailableReason(
+  error: Error,
+  connecting: boolean,
+): DatabaseUnavailableReason | undefined {
+  const { code, syscall } = error as { code?: unknown; syscall?: unknown };
+
+  let reason: DatabaseUnavailableReason | undefined;
+
+  if (code === undefined) {
+    reason = UNAVAILABLE_MESSAGES.get(error.message);
+  } else if (
+    typeof code === "string" &&
+    typeof syscall === "string" &&
+    UNMAPPED_SOCKET_ERRNOS.has(code)
   ) {
-    return new DatabaseUnavailableError(error);
+    reason = CONNECT_SYSCALLS.has(syscall)
+      ? "connect-failed"
+      : "connection-lost";
   }
 
-  return error;
+  // Nothing of the caller's is sent before the connection is open.
+  return reason && connecting ? "connect-failed" : reason;
+}
+
+function typed(error: unknown, connecting: boolean): unknown {
+  if (!(error instanceof Error) || error instanceof DatabaseUnavailableError) {
+    return error;
+  }
+
+  const reason = unavailableReason(error, connecting);
+
+  return reason ? new DatabaseUnavailableError(error, reason) : error;
+}
+
+/**
+ * pg's own error, typed; anything else as it is. Postgres' errors and the
+ * socket errors the adapter maps carry a `code` and are left to it (P1001,
+ * P2037, P2002…).
+ */
+function typedDriverError(error: unknown): unknown {
+  return typed(error, false);
+}
+
+/** The same, for a failure while a connection was being opened. */
+function typedConnectError(error: unknown): unknown {
+  return typed(error, true);
 }
 
 function rethrowTyped(error: unknown): never {
@@ -92,9 +179,15 @@ function isPromise(value: unknown): value is Promise<unknown> {
 }
 
 /**
- * A pg Client that opens connections within `connectTimeoutMs` (the pool's
- * own timeout is the wait for a free connection) and closes its connection
- * when a query outlives `query_timeout`.
+ * A pg Client that opens connections within `connectTimeoutMs`, types what
+ * fails while it does, and closes its connection when a query outlives
+ * `query_timeout`.
+ *
+ * pg-pool also bounds the opening of a connection by its own timeout
+ * (`pool_timeout`), so a connect gives up at the smaller of the two — as
+ * under Prisma 6, whose pool_timeout covered the wait and the connect alike
+ * (measured on both versions: pool_timeout 1 s with connect_timeout 4 s
+ * gives up at 1 s, P2024 in 6).
  */
 function clientClass(connectTimeoutMs: number): typeof pg.Client {
   return class DriverClient extends pg.Client {
@@ -112,6 +205,28 @@ function clientClass(connectTimeoutMs: number): typeof pg.Client {
       // pool and the adapter listen only at times. Its queries fail on their
       // own, so an unheard "error" must not become an uncaught exception.
       this.on("error", () => {});
+
+      // What fails while the connection opens failed before any statement
+      // was sent. Typed here, where that is known: pg says "Connection
+      // terminated unexpectedly" for a socket closed during the handshake
+      // and for one closed under a query alike. pg-pool calls the callback
+      // form.
+      const connect = this.connect.bind(this) as AnyFunction;
+
+      this.connect = ((callback?: unknown) => {
+        if (typeof callback !== "function") {
+          return (connect() as Promise<unknown>).catch((error: unknown) => {
+            throw typedConnectError(error);
+          });
+        }
+
+        return connect((error: unknown, ...rest: unknown[]) =>
+          (callback as AnyFunction)(
+            error ? typedConnectError(error) : error,
+            ...rest,
+          ),
+        );
+      }) as typeof this.connect;
 
       // Only the promise form: the callback form is pg-pool's `query`, which
       // already drops the connection on any error.
@@ -178,4 +293,10 @@ function createPool(settings: DatabasePoolSettings): pg.Pool {
   return pool;
 }
 
-export { DatabaseUnavailableError, createPool, typedDriverError };
+export {
+  DatabaseUnavailableError,
+  UNMAPPED_SOCKET_ERRNOS,
+  createPool,
+  typedDriverError,
+};
+export type { DatabaseUnavailableReason };

@@ -1,11 +1,16 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  DatabaseUnavailableError,
+  createPool,
+} from "@/shared/database/pg-driver";
+import {
   PRISMA_ONLY_PARAMETERS,
   poolSettingsFrom,
 } from "@/shared/database/pool-config";
 import { probeUrl } from "@/shared/health/readiness-probe";
 
+import { fakePostgres } from "../../support/fake-postgres";
 import { productionDatabaseUrl } from "../../support/production-database-url";
 
 /**
@@ -30,8 +35,9 @@ describe("the production runtime DATABASE_URL", () => {
     expect(settings.poolTimeoutMs).toBe(20_000);
   });
 
-  it("gives up on opening a connection after connect_timeout, apart from the pool wait", () => {
+  it("gives up on opening a connection after connect_timeout, inside pool_timeout (which bounds it too)", () => {
     expect(settings.connectTimeoutMs).toBe(5_000);
+    expect(settings.connectTimeoutMs).toBeLessThan(settings.poolTimeoutMs);
   });
 
   it("bounds a query that never gets an answer by socket_timeout", () => {
@@ -76,6 +82,31 @@ describe("the readiness probe's URL", () => {
     expect(settings.poolTimeoutMs).toBe(2_000);
     expect(settings.connectTimeoutMs).toBe(3_000);
     expect(settings.queryTimeoutMs).toBe(3_000);
+  });
+
+  /**
+   * pg-pool bounds the opening of a connection by pool_timeout as well, as
+   * Prisma 6 did: the smaller of the two is the probe's connect.
+   */
+  it("gives up on a host that does not answer at pool_timeout's 2 s, not connect_timeout's 3 s", async () => {
+    const silent = await fakePostgres({ kind: "silent" });
+    const pool = createPool(poolSettingsFrom(probeUrl(silent.url)));
+
+    try {
+      const started = Date.now();
+      const failure = await pool.query("SELECT 1").catch((error) => error);
+      const elapsed = Date.now() - started;
+
+      expect(failure).toBeInstanceOf(DatabaseUnavailableError);
+      expect((failure as Error).message).toBe(
+        "Connection terminated due to connection timeout",
+      );
+      expect(elapsed).toBeGreaterThanOrEqual(1_900);
+      expect(elapsed).toBeLessThan(2_900);
+    } finally {
+      await pool.end();
+      await silent.close();
+    }
   });
 });
 

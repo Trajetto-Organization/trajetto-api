@@ -12,7 +12,9 @@ import config from "../../../vite.config.mjs";
  * and Prisma's Node-API engine panicked when one worker was freed while the
  * others still held it ("failed to delete napi ref"): the whole batch died
  * with exit 127/139 even though every test had passed. Reproduced with
- * multi-replica-events next to any other E2E file; gone with forks.
+ * multi-replica-events next to any other E2E file; gone with forks. That was
+ * Prisma 6: Prisma 7 has no Node-API engine, and forks stays until threads is
+ * measured with it (docs/testes.md).
  *
  * The match is checked with the same call Vitest 1.6 makes (micromatch over
  * the ABSOLUTE file path, glob not resolved against the root), because a

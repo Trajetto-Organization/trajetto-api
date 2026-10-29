@@ -101,8 +101,11 @@ Princípios que não mudam:
   de código reenvia só `build/` (~1 MB comprimido).
   Medido em 28/10/2026, ainda no Prisma 6.1, mesmas fontes: 115 → 88 MB
   comprimidos (o que o registry transfere), 417 → 285 MB descompactados,
-  533 → 373 MB no `docker images`. Com o Prisma 7.10.1, cujo CLI é maior:
-  114,8 MB comprimidos, 431 MB descompactados, 546 MB no `docker images`
+  533 → 373 MB no `docker images`. Com o Prisma 7.10.1, cujo CLI é maior
+  (medido no mesmo dia, na árvore final da integração): 114,8 MB comprimidos
+  (+31%), 431 MB descompactados (+51%), 546 MB no `docker images` (+46%). O
+  `node_modules` vai de 27,4 para 59,0 MB comprimidos e o `.prisma` cai de
+  7,7 para 3,2 MB
   ([ADR 0011](./adr/0011-orm-prisma-6-7-8.md#integração-sobre-a-staging)).
 
 - **Tags**:
@@ -2140,8 +2143,9 @@ HTTP-only um publish não drena nada; o evento espera a varredura do worker
 
 ### Conexões presas
 
-503 com `Query read timeout` (o `socket_timeout`) ou `timeout exceeded when
-trying to connect` (pool cheio) no log, com o banco de pé (no Prisma 6:
+503 com `Query read timeout` (o `socket_timeout`; `err.reason` =
+`query-timeout`) ou `timeout exceeded when trying to connect` (pool cheio;
+`err.reason` = `pool-timeout`) no log, com o banco de pé (no Prisma 6:
 `P1008`/"Operations timed out after `60s`" ou `P2024`):
 
 ```sql

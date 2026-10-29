@@ -2,9 +2,11 @@
 # Measures the integration suite's coverage in batches and merges the result
 # with the unit run (decision 13.1).
 #
-# Batches because the Prisma query engine panics on this kind of host when a
-# single process loads ~12+ E2E files; 8 per process is the measured safe
-# size. Needs the same DATABASE_URL / REDIS_URL the E2E suite needs.
+# Batches of 8 files per process: under Prisma 6 the native query engine
+# panicked on this kind of host when one process loaded ~12+ E2E files, and 8
+# was the measured safe size. Prisma 7 has no native engine; the size stays
+# until larger batches are measured. Needs the same DATABASE_URL / REDIS_URL
+# the E2E suite needs.
 #
 # Run it on a tree nobody is editing: merge-coverage.mjs refuses reports
 # whose source changed between batches, and this script refuses to merge when
@@ -47,8 +49,9 @@ for ((i = 0; i < ${#files[@]}; i += size)); do
   if ! run_batch "$dir" "${chunk[@]}"; then
     echo "batch $batch failed: ${chunk[*]}" >&2
     failed=$((failed + 1))
-    # An engine crash kills the process before the report is written, which
-    # would drop the batch from the total. Re-run it in two halves.
+    # A process that dies (Prisma 6's engine panic was one way) leaves no
+    # report, which would drop the batch from the total. Re-run it in two
+    # halves.
     if [ ! -f "$dir/coverage-final.json" ] && [ "${#chunk[@]}" -gt 1 ]; then
       half=$(((${#chunk[@]} + 1) / 2))
       run_batch "$dir-a" "${chunk[@]:0:half}" || echo "batch $batch-a failed" >&2

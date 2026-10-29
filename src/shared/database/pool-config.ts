@@ -23,9 +23,12 @@
  * | `options` (statement_timeout…) | sent to Postgres at connect, as is  | —                |
  *
  * `0` keeps Prisma 6's meaning, "no limit", for the timeouts. pg-pool applies
- * one `connectionTimeoutMillis` both to waiting for a free connection and to
- * opening a new one; database-client.ts gives the Client its own connect
- * timeout so the two stay apart, as `pool_timeout` and `connect_timeout` were.
+ * its `connectionTimeoutMillis` both to waiting for a free connection and to
+ * opening a new one, and the Client of pg-driver.ts adds `connect_timeout` to
+ * the opening alone: a connect gives up at the smaller of the two. That is
+ * Prisma 6's behaviour too — its `pool_timeout` bounded the whole checkout,
+ * connect included (measured: pool_timeout 1 s and connect_timeout 4 s gave
+ * P2024 at 1 s) — so a `connect_timeout` above `pool_timeout` has no effect.
  *
  * The Prisma-only parameters are removed from the connection string handed
  * to pg; the rest (`options`, `sslmode`, `application_name`…) goes through.
@@ -44,7 +47,10 @@ interface DatabasePoolSettings {
   /** Longest wait for a free connection; 0 waits forever. */
   poolTimeoutMs: number;
 
-  /** Longest wait to open a new connection; 0 waits forever. */
+  /**
+   * Longest wait to open a new connection; 0 waits forever. pg-pool's
+   * `poolTimeoutMs` bounds the opening as well, so the smaller one wins.
+   */
   connectTimeoutMs: number;
 
   /** Longest wait for a query's answer, client side; undefined has none. */

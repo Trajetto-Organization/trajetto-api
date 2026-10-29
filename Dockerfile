@@ -44,8 +44,11 @@ RUN mkdir -p /out/usr/local/bin \
 # which only hid them (the image scan flagged npm's bundled `tar`,
 # CVE-2026-59873, 27/10/2026): layers are additive, so every pull still
 # carried them, with the C headers. Starting from Alpine and copying the one
-# binary leaves them out for real (measured 28/10/2026, same sources, with
-# the prune below: 417 → 285 MB unpacked, 115 → 88 MB compressed).
+# binary leaves them out for real (measured 28/10/2026 on Prisma 6.1, same
+# sources, with that version's prune: 417 → 285 MB unpacked, 115 → 88 MB
+# compressed). On Prisma 7.10.1, whose CLI is larger, the same base with the
+# prune below gives 431 MB unpacked and 114.8 MB compressed (measured
+# 28/10/2026, docs/deploy.md).
 FROM alpine:3.23.7@sha256:ff7f0c727dd796aa36787bfcd9a64bf35a6ce72a73451b3359fde849b6703d63 AS base
 
 # First, and `--link`: a layer of its own that does not depend on the
@@ -153,11 +156,15 @@ RUN --mount=type=cache,target=/usr/local/share/.cache/yarn,id=yarn-prod,sharing=
 #   (@prisma/studio-core) and @prisma/dev STAY: the CLI requires both when it
 #   starts, and without them `migrate deploy` fails with "Cannot find module
 #   '@prisma/studio-core/data/bff'" (smoke-tested).
+# The Prisma paths go to `rm -r` without -f: a path that is gone fails it, and
+# so does a glob that matches nothing (sh leaves it as written). If a Prisma
+# bump moves pglite or renames the compilers, the build stops here instead of
+# shipping them again unnoticed.
 # Every dependency still loads, the CLI migrates offline, ExcelJS, PDFKit and
 # bcrypt work (and the smoke test in deploy.yml runs the image).
 RUN find node_modules -type f \( -name '*.map' -o -name '*.d.ts' -o -name '*.d.mts' -o -name '*.d.cts' -o -iname '*.md' -o -iname '*.markdown' \) -delete \
     && rm -rf node_modules/@types node_modules/exceljs/dist \
-        node_modules/@electric-sql/pglite \
+    && rm -r node_modules/@electric-sql/pglite \
         node_modules/@prisma/client/runtime/query_compiler_* \
         node_modules/prisma/build/query_compiler_*
 

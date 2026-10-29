@@ -813,7 +813,7 @@ explícita:
 | ------------------------------ | ------------------------------------------------------------------------------------- | ----------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `connection_limit`             | 10                                                                                    | `max` do Pool                             | pool por réplica; orçamento: réplicas × (10 + 1 da readiness) + migrations (2) + ferramentas < `max_connections`                                                                          |
 | `pool_timeout`                 | 20 s                                                                                  | `connectionTimeoutMillis` do Pool         | espera por uma conexão livre; estourou, a requisição falha com 503 + Retry-After em vez de esperar para sempre (sem o parâmetro, 10 s, o padrão do Prisma 6)                              |
-| `connect_timeout`              | 5 s                                                                                   | `connectionTimeoutMillis` do Client       | abrir uma conexão nova; separado da espera pelo pool por uma subclasse do Client (o `pg-pool` usa um valor só para as duas coisas)                                                        |
+| `connect_timeout`              | 5 s                                                                                   | `connectionTimeoutMillis` do Client       | abrir uma conexão nova; o `pg-pool` também limita a abertura pelo `pool_timeout`, então vale o menor dos dois, como no Prisma 6 (o `pool_timeout` cobria a espera e a abertura)           |
 | `socket_timeout`               | 60 s                                                                                  | `query_timeout` do Client                 | uma query sem resposta falha (503 + Retry-After) e a conexão dela é fechada; acima do `statement_timeout` para um servidor vivo responder antes                                           |
 | `max_idle_connection_lifetime` | 300 s                                                                                 | `idleTimeoutMillis` do Pool               | conexão ociosa há 5 min é fechada; o IPVS do Swarm esquece um fluxo ocioso aos 900 s, e escrever num fluxo esquecido trava sem erro (sem o parâmetro, 300 s; o padrão do `pg` seria 10 s) |
 | `options`                      | `statement_timeout=30s`, `lock_timeout=5s`, `idle_in_transaction_session_timeout=60s` | enviado ao Postgres na conexão, como está | tetos do lado do servidor                                                                                                                                                                 |
@@ -827,36 +827,99 @@ sem FIN nem RST), `tests/E2E/runtime-database-timeouts.test.ts`,
 `tests/E2E/pool-pressure.test.ts` e
 `tests/unitaires/lifecycle/database-dead-connection-params.test.ts`.
 
-**Erros do banco viram 503 por tipo, não por texto**: o adapter mapeia erro de
-socket (recusado, reset, DNS) e SQLSTATE para códigos do Prisma, mas repassa
-cru o que é do próprio `pg` — pool cheio (`timeout exceeded when trying to
-connect`), conexão que morreu (`Connection terminated unexpectedly`) e query
-além do `socket_timeout` (`Query read timeout`). O pool da API
-(`src/shared/database/pg-driver.ts`) tipa essas falhas como
-`DatabaseUnavailableError` na saída, e o classificador
+**Erros do banco viram 503 por tipo, não por texto**: o adapter mapeia quatro
+erros de socket (`ECONNREFUSED`, `ENOTFOUND`, `ECONNRESET`, `ETIMEDOUT`) e o
+SQLSTATE para códigos do Prisma, mas repassa cru o que é do próprio `pg` —
+pool cheio (`timeout exceeded when trying to connect`), conexão que morreu
+(`Connection terminated unexpectedly`) e query além do `socket_timeout`
+(`Query read timeout`) — e os demais errnos de rede (`EHOSTUNREACH`,
+`ENETUNREACH`, `EAI_AGAIN`, `EPIPE`…), que o Prisma devolveria com o errno
+como código, num 500. O pool da API (`src/shared/database/pg-driver.ts`) tipa
+essas falhas como `DatabaseUnavailableError` na saída, com o motivo em
+`reason`: `pool-timeout` e `connect-failed` não enviaram nada ao banco;
+`connection-lost` e `query-timeout` podem ter enviado (uma conexão que morre
+na volta do COMMIT parece igual a uma que morreu antes dele). Por isso a
+trilha de auditoria (`NotificationService`) repete uma vez só a escrita que
+falhou pelos dois primeiros motivos, ou com P1001/P2037, e nunca a que pode
+ter chegado. O classificador
 (`src/shared/errors/database-unavailable.ts`) confia só em classes: além dos
 códigos P1001/P1002/P1008/P1017/P2037 e do P2028 de "não conseguiu começar a
 transação", aceita P2010/P2039 cuja causa no adapter é o banco indo embora
-(`DatabaseNotReachable`, `ConnectionClosed`, SQLSTATE 57P01–57P03, classe 08,
-53300). Violação de unicidade (P2002) agora nomeia o **índice**
-(`driver_businessId_cpf_key`) em `meta.driverAdapterError.cause.constraint`,
-e não mais as colunas em `meta.target`; os leitores usam `uniqueTargetOf`
+(`DatabaseNotReachable`, `ConnectionClosed`, SQLSTATE 57P01–57P03, classe
+08, 53300) e o erro do Prisma cujo código é um daqueles errnos de rede, caso
+algum chegue sem passar pelo pool. Violação de unicidade (P2002) agora nomeia
+o **índice** (`driver_businessId_cpf_key`) em
+`meta.driverAdapterError.cause.constraint`, e não mais as colunas em
+`meta.target`; os leitores usam `uniqueTargetOf`
 (`src/shared/errors/prisma-error-meta.ts`) e casam um trecho do nome — por
 isso os índices parciais da rota são lidos por `active_vehicle` e
 `active_delivery`.
 
+**Conflito de serialização no COMMIT chega sem classe do Prisma**: quando o
+Postgres recusa o COMMIT de uma `$transaction` interativa com 40001 — o caso
+comum do isolamento serializável entre duas transações que só leem e inserem,
+como dois abastecimentos ou checklists antigos do mesmo veículo —, o Prisma 7
+não converte o erro do adapter, e quem chamou recebe o `DriverAdapterError`
+cru (`cause.kind` = `TransactionWriteConflict`, `cause.originalCode` =
+`40001`), não o P2034 do Prisma 6. Os laços de retentativa serializável
+(abastecimento e checklist, criação e edição) perguntam a
+`isSerializationFailure` (`src/shared/errors/prisma-error-meta.ts`), que
+aceita o P2034, o P2010 de SQL cru com SQLSTATE 40001/40P01 e o erro cru do
+adapter. O deadlock (40P01) conta de propósito: o adapter o mapeia para o
+mesmo `TransactionWriteConflict` e o próprio P2034 já o incluía, e o Postgres
+desfaz a transação inteira da vítima, então rodá-la de novo é seguro (o
+orçamento de três tentativas impede laço; deadlock recorrente se corrige na
+ordem dos locks). Nunca teste `code === "P2034"` direto. Coberto por
+`tests/E2E/serializable-commit-retry.test.ts`, que segura a corrida aberta e
+prova que a primeira tentativa falhou no COMMIT e a segunda gravou.
+
 **Parâmetros de SQL cru vão sem tipo**: o Prisma 6 mandava cada parâmetro de
 `$queryRaw`/`$executeRaw` já tipado; o `pg` manda sem tipo e o Postgres deduz
-pelo contexto. Numa coluna de tabela ou numa comparação o resultado é o mesmo,
-mas numa lista `VALUES` solta o parâmetro vira `text`. Faça o cast no SQL
-(`d.receipt::boolean`, `${valor}::int`) sempre que o contexto não disser o
-tipo.
+pelo contexto. Numa lista `VALUES` solta o parâmetro vira `text`: faça o cast
+no SQL (`d.receipt::boolean`, `${valor}::int`) sempre que o contexto não
+disser o tipo. A exceção é o instante, no parágrafo seguinte.
+
+**Instante em SQL cru vai como texto ISO**: um `Date` do JavaScript agora
+viaja como texto ingênuo em UTC, **sem offset** (`2026-10-28 03:00:00.123`), e
+o Postgres lê esse texto na hora local da sessão sempre que o contexto o tipa
+como `timestamptz`. Por isso `${data}::timestamptz` com um objeto `Date` — o
+padrão antigo do repositório, que o Prisma 6 tipava sozinho — desloca o
+instante pelo fuso da sessão. Mande o instante como string ISO, que leva o
+`Z`: `${data.toISOString()}::timestamptz`, e, contra as colunas do schema
+(`timestamp(3)` sem fuso, gravadas em UTC),
+`(${data.toISOString()}::timestamptz AT TIME ZONE 'UTC')` — o padrão que a
+integração do Prisma 7 aplicou em todos os pontos que usavam o cast antigo.
+Nunca `${data}::timestamptz` com um `Date`.
+
+Numa comparação com `timestamptz` (`now()`, um literal com fuso, um
+`AT TIME ZONE` que devolve instante) sob uma sessão fora de UTC, os dois lados
+precisam ser instantes: o parâmetro vai em ISO com `::timestamptz` (um
+`${data}` solto ali é tipado como `timestamptz` e lido na hora local), e a
+coluna vai com `"coluna" AT TIME ZONE 'UTC'` (comparada direto com
+`timestamptz`, ela também é lida na hora local) — ou leve o instante a UTC
+ingênuo do outro lado, `now() AT TIME ZONE 'UTC'`. Contra a coluna sozinha, um
+`${data}` solto (ou `${data}::timestamp`) acerta, porque a coluna o tipa como
+`timestamp`. Na volta, não devolva `timestamptz` como coluna de um
+`$queryRaw`: o adapter troca o offset do texto por `+00:00` em vez de
+converter, e sob uma sessão fora de UTC o instante chega deslocado (o Prisma 6
+convertia). Devolva `timestamp` em UTC (`"coluna"` como está, ou
+`instante AT TIME ZONE 'UTC'`) ou o valor dentro de JSON (`json_agg` e
+`to_json` escrevem o offset, como em `src/shared/health/operational-state.ts`).
+Numa sessão em UTC os jeitos certo e errado dão o mesmo resultado, e é por
+isso que o erro some nos testes; ele aparece quando o `TimeZone` do servidor
+ou da conexão é outro. As filas e as métricas ainda comparam colunas direto
+com `now()` (`"availableAt" <= now()`, `"leaseExpiresAt" < now()`) e só
+acertam com a sessão em UTC — isso vale desde o Prisma 6. Prova da regra dos
+parâmetros: `tests/E2E/proof-audit-queue.test.ts` (a janela de concordância
+com a sessão em `America/Sao_Paulo`).
 
 **A readiness tem conexão própria**: `/health/readiness` faz `SELECT 1` num
-`PrismaClient` separado (`max: 1`, espera de 2 s, conexão e query em 3 s) e
-responde em até 3 s, abaixo do timeout de 5 s dos monitores. Um pool principal
-cheio não faz a réplica parecer fora do ar; depois de um "não", a probe fecha o
-pool dela (`$disconnect()`) e a próxima abre outro no mesmo client.
+`PrismaClient` separado (`max: 1`, 2 s para obter a conexão — esperar por ela
+ou abrir uma nova, já que o `pool_timeout` limita as duas coisas — e query em
+3 s) e responde em até 3 s, abaixo do timeout de 5 s dos monitores. Um pool
+principal cheio não faz a réplica parecer fora do ar; depois de um "não", a
+probe fecha o pool dela (`$disconnect()`) e a próxima abre outro no mesmo
+client.
 
 **O pool descarta a conexão quebrada sozinho**: no Prisma 6.1 uma conexão que
 o Postgres fechou voltava ao pool como saudável (P1017 em toda requisição até

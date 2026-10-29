@@ -10,6 +10,12 @@ import {
   unreferencedKeys,
 } from "@/shared/services/presigned-ownership";
 import { AppError } from "@/shared/errors/AppError";
+import { isSerializationFailure } from "@/shared/errors/prisma-error-meta";
+
+import {
+  commitWriteConflict,
+  queryWriteConflict,
+} from "../../support/serialization-failure";
 
 /**
  * The odometer photo the app already uploaded, when the fueling does not end
@@ -173,7 +179,14 @@ describe("the ownership rules", () => {
   it("call only a 4xx a final rejection", () => {
     expect(isFinalRejection(new AppError("x", 409))).toBe(true);
     expect(isFinalRejection(new AppError("x", 503))).toBe(false);
-    expect(isFinalRejection(new Error("P2034 write conflict"))).toBe(false);
+
+    // A write conflict that outlived the repository's retries, in both shapes
+    // Prisma 7 gives it: the same submission can still succeed later.
+    for (const conflict of [commitWriteConflict(), queryWriteConflict()]) {
+      expect(isSerializationFailure(conflict)).toBe(true);
+      expect(isFinalRejection(conflict)).toBe(false);
+    }
+
     expect(
       isFinalRejection(new VehicleMileageInvalidError(), [
         VehicleMileageInvalidError,
@@ -283,9 +296,9 @@ describe("a checklist, the same two ways", () => {
   });
 
   it("keeps the photos when the database was merely busy", async () => {
-    createVehicleChecklistWithMileage.mockRejectedValue(
-      new Error("Transaction failed due to a write conflict (P2034)"),
-    );
+    // The conflict a refused COMMIT raises under Prisma 7, once the
+    // repository's retries are spent.
+    createVehicleChecklistWithMileage.mockRejectedValue(commitWriteConflict());
 
     await expect(
       (await checklistUseCase()).execute(checklist(), "admin", PHOTOS),

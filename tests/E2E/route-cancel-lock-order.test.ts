@@ -18,8 +18,9 @@ import { createPrismaClient } from "@/shared/database/database-client";
  * cancellation updated the ROUTE, then its stops, then the DELIVERIES. When
  * they overlapped, each held what the other needed next: Postgres broke the
  * cycle after deadlock_timeout by aborting one of them with 40P01, and the
- * operator got a 500 for a click that was perfectly valid. No use case
- * retries P2034.
+ * operator got a 500 for a click that was perfectly valid. Nothing on this
+ * path retries a serialization failure (isSerializationFailure, in
+ * src/shared/errors/prisma-error-meta.ts): the lock order is the fix.
  *
  * The cancellation is driven by hand in two steps — first its route write,
  * then (once the other side is provably waiting) the rest of the real

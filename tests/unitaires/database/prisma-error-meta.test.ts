@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   driverAdapterCauseOf,
+  isSerializationFailure,
   sqlStateOf,
   uniqueTargetOf,
 } from "@/shared/errors/prisma-error-meta";
@@ -11,6 +12,12 @@ import { driverUniqueViolation } from "@/modules/driver/usecases/errors/driver-u
 import { pauseConflictOf } from "@/modules/driver-pause/repositories/pause-conflicts";
 import { violatesUniqueOn } from "@/shared/delivery/unique-violation";
 import { vehicleUniqueFieldOf } from "@/shared/vehicle/vehicle-conflicts";
+
+import {
+  commitWriteConflict,
+  queryWriteConflict,
+  rawQueryWriteConflict,
+} from "../../support/serialization-failure";
 
 /**
  * Which unique key refused a write, under Prisma 6 and Prisma 7.
@@ -182,5 +189,139 @@ describe("sqlStateOf", () => {
 
     expect(sqlStateOf(raw("23503"))).toBe("23503");
     expect(sqlStateOf(raw("N/A"))).toBeUndefined();
+  });
+});
+
+describe("the bare DriverAdapterError of a refused COMMIT", () => {
+  it("has its cause read like the one Prisma wraps in meta", () => {
+    const error = commitWriteConflict();
+
+    expect(driverAdapterCauseOf(error)?.kind).toBe("TransactionWriteConflict");
+    expect(sqlStateOf(error)).toBe("40001");
+  });
+
+  it("is only trusted under the adapter's own name", () => {
+    const lookalike = Object.assign(new Error("TransactionWriteConflict"), {
+      cause: { kind: "TransactionWriteConflict", originalCode: "40001" },
+    });
+
+    expect(driverAdapterCauseOf(lookalike)).toBeUndefined();
+    expect(sqlStateOf(lookalike)).toBeUndefined();
+  });
+});
+
+/**
+ * Whether a serializable transaction may simply run again.
+ *
+ * The fuel and checklist repositories retried on `P2034` only. Under Prisma
+ * 7.10.1 + adapter-pg the conflict Postgres finds at COMMIT — the usual place
+ * for two transactions that only read and insert — reaches the caller as the
+ * bare adapter error instead, and the loops gave up after one attempt with a
+ * 500. Every shape is listed here; the race itself is reproduced against
+ * Postgres in tests/E2E/serializable-commit-retry.test.ts.
+ */
+describe("isSerializationFailure", () => {
+  /** An adapter error whose kind the client does not map (P2039/P2010). */
+  const genericPostgres = (code: string) =>
+    Object.assign(new Error("postgres"), {
+      name: "DriverAdapterError",
+      cause: { kind: "postgres", code, severity: "ERROR", message: "x" },
+    });
+
+  /** P2010 as Prisma 6 raised it for a refused raw statement. */
+  const rawV6 = (code: string) =>
+    new Prisma.PrismaClientKnownRequestError("Raw query failed", {
+      code: "P2010",
+      clientVersion,
+      meta: { code, message: "x" },
+    });
+
+  it("sees the bare adapter error a refused COMMIT throws", () => {
+    const error = commitWriteConflict();
+
+    // What the old `instanceof ... && code === "P2034"` check missed.
+    expect(error).not.toBeInstanceOf(Prisma.PrismaClientKnownRequestError);
+    expect(isSerializationFailure(error)).toBe(true);
+  });
+
+  it("sees P2034, as Prisma 7 and Prisma 6 raise it", () => {
+    const v6 = new Prisma.PrismaClientKnownRequestError(
+      "Transaction failed due to a write conflict or a deadlock. Please retry your transaction",
+      { code: "P2034", clientVersion },
+    );
+
+    expect(isSerializationFailure(queryWriteConflict())).toBe(true);
+    expect(isSerializationFailure(v6)).toBe(true);
+  });
+
+  it("sees a refused raw statement (P2010), under either version", () => {
+    expect(isSerializationFailure(rawQueryWriteConflict())).toBe(true);
+    expect(isSerializationFailure(rawV6("40001"))).toBe(true);
+  });
+
+  it("reads 40001 under an adapter's generic kind as well", () => {
+    const modelQuery = new Prisma.PrismaClientKnownRequestError(
+      "Database error. Code: `40001`. Message: `x`",
+      {
+        code: "P2039",
+        clientVersion,
+        meta: { driverAdapterError: genericPostgres("40001") },
+      },
+    );
+
+    expect(isSerializationFailure(genericPostgres("40001"))).toBe(true);
+    expect(isSerializationFailure(modelQuery)).toBe(true);
+  });
+
+  it("counts a deadlock (40P01), as Prisma's own P2034 always has", () => {
+    expect(isSerializationFailure(commitWriteConflict("40P01"))).toBe(true);
+    expect(isSerializationFailure(queryWriteConflict("40P01"))).toBe(true);
+    expect(isSerializationFailure(rawQueryWriteConflict("40P01"))).toBe(true);
+    expect(isSerializationFailure(rawV6("40P01"))).toBe(true);
+    expect(isSerializationFailure(genericPostgres("40P01"))).toBe(true);
+  });
+
+  it("refuses the other answers about the data", () => {
+    const closed = new Prisma.PrismaClientKnownRequestError(
+      "Transaction already closed",
+      { code: "P2028", clientVersion },
+    );
+    const uniqueAtCommit = Object.assign(
+      new Error("UniqueConstraintViolation"),
+      {
+        name: "DriverAdapterError",
+        cause: { kind: "UniqueConstraintViolation", originalCode: "23505" },
+      },
+    );
+
+    expect(isSerializationFailure(uniqueV7({ index: "x" }))).toBe(false);
+    expect(isSerializationFailure(closed)).toBe(false);
+    expect(isSerializationFailure(rawV6("23505"))).toBe(false);
+    expect(isSerializationFailure(rawV6("N/A"))).toBe(false);
+    expect(isSerializationFailure(uniqueAtCommit)).toBe(false);
+  });
+
+  it("refuses the rest of class 40 and a COMMIT cut short", () => {
+    // 40003 (statement_completion_unknown): the COMMIT may have landed, and
+    // running the transaction again could write it twice. 57P01: the backend
+    // was terminated — an outage, isDatabaseUnavailable's business.
+    expect(isSerializationFailure(genericPostgres("40003"))).toBe(false);
+    expect(isSerializationFailure(genericPostgres("40002"))).toBe(false);
+    expect(isSerializationFailure(genericPostgres("57P01"))).toBe(false);
+  });
+
+  it("trusts neither a message nor a look-alike", () => {
+    const lookalike = Object.assign(new Error("TransactionWriteConflict"), {
+      cause: { kind: "TransactionWriteConflict", originalCode: "40001" },
+    });
+
+    expect(isSerializationFailure(new Error("P2034 write conflict"))).toBe(
+      false,
+    );
+    expect(isSerializationFailure({ code: "P2034" })).toBe(false);
+    expect(isSerializationFailure(lookalike)).toBe(false);
+    expect(isSerializationFailure("40001")).toBe(false);
+    expect(isSerializationFailure(null)).toBe(false);
+    expect(isSerializationFailure(undefined)).toBe(false);
   });
 });
