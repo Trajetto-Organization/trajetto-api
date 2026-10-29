@@ -425,6 +425,106 @@ Dokploy, em environments diferentes).
    do GitHub. Logado como esse usuário, rode `docker login ghcr.io` (usuário
    do GitHub e, como senha, o mesmo token da credencial): o job de migrations
    puxa a imagem.
+8. **Firewall da VPS** ([6.1](#61-firewall-da-vps-contabo)) e **downloads do
+   GHCR pelo IPv4** ([6.2](#62-downloads-do-ghcr-sempre-pelo-ipv4)).
+
+### 6.1 Firewall da VPS (Contabo)
+
+A VPS só recebe conexões da Cloudflare (e o SSH). No painel da Contabo,
+_Network Services → Firewall_, regras de entrada, aplicadas à VPS:
+
+| Nome              | Ação   | Protocolo | Porta    | Fonte(s)                                              |
+| ----------------- | ------ | --------- | -------- | ----------------------------------------------------- |
+| HTTPS Cloudflare  | ACCEPT | TCP       | 443      | as faixas IPv4 da Cloudflare (abaixo)                 |
+| HTTP Cloudflare   | ACCEPT | TCP       | 80       | as mesmas faixas                                      |
+| SSH               | ACCEPT | TCP       | 22       | Qualquer IPv4                                         |
+| Block all traffic | DROP   | Qualquer  | Qualquer | Qualquer (a regra fixa da Contabo, sempre por último) |
+
+- **Por quê.** Com a 443 aberta a qualquer IPv4, o Traefik respondia direto
+  no IP da VPS, inclusive pelo nome automático da Contabo
+  (`vmi3677364.contaboserver.net`, o DNS reverso da VPS): o painel do Dokploy
+  abria ali, e `staging.intrajetto.com/login` pedido direto à origem
+  respondia 200, sem o Cloudflare Access (pela Cloudflare, 302). Medido em
+  28/10/2026. Com as regras, nada responde direto na origem, nem por IPv4 nem
+  por IPv6, e tudo pela Cloudflare segue respondendo (29/10/2026).
+- **A 80** é da renovação do Let's Encrypt (desafio HTTP-01, que chega pela
+  Cloudflare). Fechada, a renovação falha em silêncio e, quando o certificado
+  vence, a Cloudflare responde 526 (_Full (strict)_). Os certificados de
+  staging vencem entre 19 e 22/01/2027.
+- **A 3000** (o painel direto) fica fechada pelo DROP: o painel é só
+  `https://dokploy.intrajetto.com`, pela Cloudflare. Por isso o secret
+  `DOKPLOY_URL` do GitHub tem de ser esse endereço, nunca o IP.
+- **Sem IPv6 de entrada**: a Cloudflare chega à origem por IPv4; o IPv6 dos
+  usuários termina na borda da Cloudflare (`api-staging` e `staging`
+  respondem por IPv6 normalmente).
+- O campo _Fonte(s)_ aceita CIDR **separado por vírgula** (cada um vira uma
+  tag). Uma faixa por linha é recusada com "forneça um ou mais endereços IPv4
+  ou IPv6 válidos". As faixas são as IPv4 de `src/config/trusted-edge.ts`
+  (<https://www.cloudflare.com/ips-v4>), prontas para colar:
+  ```
+  173.245.48.0/20,103.21.244.0/22,103.22.200.0/22,103.31.4.0/22,141.101.64.0/18,108.162.192.0/18,190.93.240.0/20,188.114.96.0/20,197.234.240.0/22,198.41.128.0/17,162.158.0.0/15,104.16.0.0/13,104.24.0.0/14,172.64.0.0/13,131.0.72.0/22
+  ```
+- **Lista que muda**: o workflow `network-ranges.yml` compara toda
+  segunda-feira a lista publicada pela Cloudflare com `trusted-edge.ts` e
+  falha com as faixas a acrescentar ou tirar (o GitHub avisa por e-mail).
+  Faixa nova: acrescente em `trusted-edge.ts` e nas duas regras.
+- O DNS reverso da Contabo é só o nome do IP: não abre caminho nenhum e não
+  precisa ser mexido.
+
+### 6.2 Downloads do GHCR sempre pelo IPv4
+
+As camadas das imagens vêm de `pkg-containers.githubusercontent.com`, que
+também responde em IPv6 (`2606:50c0:800x::154`); o `ghcr.io` em si (login e
+manifestos) só tem IPv4. A rota IPv6 da VPS até o GitHub derruba downloads
+longos no meio. Em 28/10/2026 o deploy da API perdeu a camada de 46 MB do
+Node nas 6 tentativas:
+
+```
+failed to copy: read tcp [2605:a140:2367:7364::1]:53884->[2606:50c0:8002::154]:443: read: connection reset by peer
+❌ Pulling image failed
+```
+
+(Em 27/10, duas vezes, na imagem da IA.) Repetir o deploy e dividir as
+camadas só melhoravam as chances: uma camada grande nova ainda podia perder
+todas as tentativas.
+
+**Correção**: `infra/scripts/github-ipv4-egress.sh` recusa, na hora, as
+conexões **novas** que o host abre para as faixas IPv6 do GitHub
+(`2606:50c0::/32` e `2a0a:a440::/29`, de <https://api.github.com/meta>), com
+um TCP reset. O daemon do Docker, o curl, o apt e o git passam ao IPv4 do
+mesmo nome sem esperar. O resto do IPv6 não muda: entrada, respostas a
+conexões abertas por outros (só SYN é recusado), tráfego dos contêineres e
+IPv6 para qualquer outra rede. Uma unidade do systemd reaplica as regras no
+boot, e um timer as reaplica a cada 15 minutos (uma recarga de firewall que as
+tire é desfeita).
+
+Instalar (uma vez, como root no host; o repositório é privado, então o
+arquivo vai da sua máquina):
+
+```sh
+scp infra/scripts/github-ipv4-egress.sh root@<ip-da-vps>:/root/
+ssh root@<ip-da-vps> 'sh /root/github-ipv4-egress.sh install && trajetto-github-ipv4-egress check'
+```
+
+O `check` deve mostrar `regras: ativas`, `download do GitHub: IPv4
+(185.199.x.x)` e `IPv6 para o resto: ok`, e termina com erro quando algo pede
+atenção: regras ausentes, download ainda por IPv6, faixas do GitHub
+diferentes das publicadas ou menos de 5 GB livres em `/var/lib/docker`.
+Depois, refaça o deploy que falhou pelo GitHub (**Re-run failed jobs**), não
+pelo painel: depois de um deploy com erro, o pipeline devolve a tag `staging`
+ao build anterior.
+
+Conferido num Linux com `ip6tables` real e rota IPv6 de verdade: sem a
+regra, um download de `pkg-containers.githubusercontent.com` sai por IPv6;
+com ela, sai por IPv4 na primeira tentativa (conexão em 12 ms), uma conexão
+IPv6 a outro destino segue normal, e o `remove` deixa a tabela como estava.
+Os testes de `tests/unitaires/lifecycle/github-ipv4-egress.test.ts` rodam o
+script contra um `ip6tables` simulado (idempotência, recarga de firewall,
+unidade e timer, `remove`, recusa sem root e cada aviso do `check`).
+
+Desfazer: `trajetto-github-ipv4-egress remove`. Faixa nova do GitHub: o
+workflow `network-ranges.yml` avisa; acrescente em `PREFIXES` e rode
+`install` de novo.
 
 ## 7. Montar o Dokploy do zero (staging e produção)
 
@@ -1091,10 +1191,11 @@ O pipeline faz o deploy dela **antes** da API, e só quando o digest muda
 ([seção 3](#como-o-pipeline-fala-com-o-dokploy)): um push que não mexe em
 `infra/ai-ocr` reaproveita a imagem anterior e não reinicia a IA.
 
-**Camadas da imagem** (`infra/ai-ocr/Dockerfile`): a VPS de staging puxa as
-camadas do GHCR por uma rota IPv6 que derruba a conexão no meio do download,
-e o Docker recomeça do zero só a camada que quebrou, guardando as que
-terminaram. A imagem tinha **uma** camada de pip de ~145 MB (comprimida):
+**Camadas da imagem** (`infra/ai-ocr/Dockerfile`): a VPS de staging puxava
+as camadas do GHCR por uma rota IPv6 que derruba a conexão no meio do
+download (a correção no host, que leva os downloads do GitHub ao IPv4, está
+na [seção 6.2](#62-downloads-do-ghcr-sempre-pelo-ipv4)), e o Docker
+recomeça do zero só a camada que quebrou, guardando as que terminaram. A imagem tinha **uma** camada de pip de ~145 MB (comprimida):
 nada sobrevivia entre as tentativas do Dokploy, e um bump do Pillow
 reenviava tudo, junto com os modelos (que ficavam na mesma camada do
 `server.py`). Agora:
@@ -2358,6 +2459,10 @@ Na ordem:
       imagens no GHCR (o deploy aparece como "pulado").
 - [ ] VPS com Dokploy; `daemon.json` com rotação de log e Docker reiniciado;
       `infra/traefik/` aplicado ([seção 6](#6-preparar-o-servidor-uma-vez)).
+- [ ] Firewall da VPS com 80 e 443 só da Cloudflare, e nada respondendo
+      direto no IP ([6.1](#61-firewall-da-vps-contabo)); downloads do GHCR
+      pelo IPv4, com `trajetto-github-ipv4-egress check` passando
+      ([6.2](#62-downloads-do-ghcr-sempre-pelo-ipv4)).
 - [ ] DNS na Cloudflare (proxy, Full strict, TLS 1.2, Always HTTPS) para os
       hosts da API de produção e de staging.
 - [ ] Token classic `read:packages` do GHCR criado (e a data de renovação

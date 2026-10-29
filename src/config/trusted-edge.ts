@@ -5,11 +5,16 @@ import { BlockList, isIP } from "node:net";
  *
  * Production is Cloudflare -> Traefik -> API, and CF-Connecting-IP is the only
  * place the real client address survives that chain. Cloudflare overwrites the
- * header, but only on requests that went THROUGH Cloudflare: the origin also
- * answers on its own IP, and whoever calls it there writes the header
- * themselves. The one thing such a caller cannot choose is the address Traefik
- * saw them connect from, so the header is believed only when that address is
- * one of these.
+ * header, but only on requests that went THROUGH Cloudflare: whoever reaches
+ * the origin on its own IP writes the header themselves. The origin firewall
+ * now admits only these ranges on 80 and 443 (docs/deploy.md, section 6.1),
+ * and this check stays as the second lock: the one thing such a caller cannot
+ * choose is the address Traefik saw them connect from, so the header is
+ * believed only when that address is one of these.
+ *
+ * The IPv4 half below is also that firewall's allowlist, and
+ * .github/workflows/network-ranges.yml compares the whole list with
+ * Cloudflare's every Monday.
  *
  * Which also means a Cloudflare Tunnel is NOT a drop-in origin lock: behind
  * one, Traefik's peer is the cloudflared connector, never one of these ranges,

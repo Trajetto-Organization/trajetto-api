@@ -1,0 +1,36 @@
+name: Network ranges
+
+# Every Monday, the address ranges this repository writes down against the
+# ones their owners publish (.github/scripts/check-network-ranges.mjs):
+#   - Cloudflare's edge, in src/config/trusted-edge.ts; its IPv4 half is also
+#     the origin firewall's allowlist (Contabo, ports 80 and 443,
+#     docs/deploy.md section 6);
+#   - GitHub's IPv6, in infra/scripts/github-ipv4-egress.sh (image pulls go
+#     over IPv4 because the VPS's IPv6 path resets them).
+# A red run e-mails the schedule's owner with the ranges to add or remove,
+# before a change turns into 522s or into pulls back on IPv6.
+on:
+  schedule:
+    # 06:00 in São Paulo.
+    - cron: "0 9 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  ranges:
+    name: Cloudflare and GitHub ranges
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout the lists and the check
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          sparse-checkout: |
+            .github/scripts
+            src/config
+            infra/scripts
+
+      - name: Compare with the published ranges
+        run: node .github/scripts/check-network-ranges.mjs
