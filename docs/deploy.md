@@ -426,7 +426,7 @@ Dokploy, em environments diferentes).
    do GitHub e, como senha, o mesmo token da credencial): o job de migrations
    puxa a imagem.
 8. **Firewall da VPS** ([6.1](#61-firewall-da-vps-contabo)) e **downloads do
-   GHCR pelo IPv4** ([6.2](#62-downloads-do-ghcr-sempre-pelo-ipv4)).
+   GHCR pelo IPv4** ([6.2](#62-downloads-do-ghcr-pelo-ipv4-preferência-do-sistema)).
 
 ### 6.1 Firewall da VPS (Contabo)
 
@@ -464,14 +464,14 @@ _Network Services → Firewall_, regras de entrada, aplicadas à VPS:
   ```
   173.245.48.0/20,103.21.244.0/22,103.22.200.0/22,103.31.4.0/22,141.101.64.0/18,108.162.192.0/18,190.93.240.0/20,188.114.96.0/20,197.234.240.0/22,198.41.128.0/17,162.158.0.0/15,104.16.0.0/13,104.24.0.0/14,172.64.0.0/13,131.0.72.0/22
   ```
-- **Lista que muda**: o workflow `network-ranges.yml` compara toda
+- **Lista que muda**: o workflow `cloudflare-ranges.yml` compara toda
   segunda-feira a lista publicada pela Cloudflare com `trusted-edge.ts` e
   falha com as faixas a acrescentar ou tirar (o GitHub avisa por e-mail).
   Faixa nova: acrescente em `trusted-edge.ts` e nas duas regras.
 - O DNS reverso da Contabo é só o nome do IP: não abre caminho nenhum e não
   precisa ser mexido.
 
-### 6.2 Downloads do GHCR sempre pelo IPv4
+### 6.2 Downloads do GHCR pelo IPv4 (preferência do sistema)
 
 As camadas das imagens vêm de `pkg-containers.githubusercontent.com`, que
 também responde em IPv6 (`2606:50c0:800x::154`); o `ghcr.io` em si (login e
@@ -484,47 +484,59 @@ failed to copy: read tcp [2605:a140:2367:7364::1]:53884->[2606:50c0:8002::154]:4
 ❌ Pulling image failed
 ```
 
-(Em 27/10, duas vezes, na imagem da IA.) Repetir o deploy e dividir as
-camadas só melhoravam as chances: uma camada grande nova ainda podia perder
-todas as tentativas.
+(Em 27/10, duas vezes, na imagem da IA.) O login no GHCR deu certo nas seis
+tentativas: não é credencial nem o Dokploy, é a rede. A mesma assinatura
+aparece em outras VPS que puxam do GHCR, inclusive na Contabo (IPv6 cai,
+IPv4 nunca). Repetir o deploy e dividir as camadas só melhoram as chances.
 
-**Correção**: `infra/scripts/github-ipv4-egress.sh` recusa, na hora, as
-conexões **novas** que o host abre para as faixas IPv6 do GitHub
-(`2606:50c0::/32` e `2a0a:a440::/29`, de <https://api.github.com/meta>), com
-um TCP reset. O daemon do Docker, o curl, o apt e o git passam ao IPv4 do
-mesmo nome sem esperar. O resto do IPv6 não muda: entrada, respostas a
-conexões abertas por outros (só SYN é recusado), tráfego dos contêineres e
-IPv6 para qualquer outra rede. Uma unidade do systemd reaplica as regras no
-boot, e um timer as reaplica a cada 15 minutos (uma recarga de firewall que as
-tire é desfeita).
+**Configuração**, a padrão do sistema, sem desligar o IPv6: o servidor passa
+a preferir IPv4 quando o destino tem os dois endereços.
 
-Instalar (uma vez, como root no host; o repositório é privado, então o
-arquivo vai da sua máquina):
+1. `/etc/gai.conf`, a tabela de preferência de endereços do sistema
+   (RFC 6724). A linha é a que o próprio arquivo traz comentada "para sites
+   que preferem IPv4":
+   ```
+   precedence ::ffff:0:0/96 100
+   ```
+2. O Docker é escrito em Go, e o resolvedor próprio do Go ignora o
+   `gai.conf`. A variável `GODEBUG=netdns=cgo`, documentada no pacote `net`
+   do Go, faz o daemon usar o resolvedor do sistema, que lê o arquivo. Num
+   _drop-in_ do systemd, `/etc/systemd/system/docker.service.d/prefer-ipv4.conf`:
+   ```
+   [Service]
+   Environment="GODEBUG=netdns=cgo"
+   ```
+
+Aplicar, uma vez, como root. Reiniciar o Docker reinicia todos os contêineres
+por alguns segundos (como na rotação de log, passo 3): faça fora do horário
+de uso.
 
 ```sh
-scp infra/scripts/github-ipv4-egress.sh root@<ip-da-vps>:/root/
-ssh root@<ip-da-vps> 'sh /root/github-ipv4-egress.sh install && trajetto-github-ipv4-egress check'
+grep -qxF 'precedence ::ffff:0:0/96 100' /etc/gai.conf || echo 'precedence ::ffff:0:0/96 100' >> /etc/gai.conf
+mkdir -p /etc/systemd/system/docker.service.d
+printf '[Service]\nEnvironment="GODEBUG=netdns=cgo"\n' > /etc/systemd/system/docker.service.d/prefer-ipv4.conf
+systemctl daemon-reload && systemctl restart docker
 ```
 
-O `check` deve mostrar `regras: ativas`, `download do GitHub: IPv4
-(185.199.x.x)` e `IPv6 para o resto: ok`, e termina com erro quando algo pede
-atenção: regras ausentes, download ainda por IPv6, faixas do GitHub
-diferentes das publicadas ou menos de 5 GB livres em `/var/lib/docker`.
-Depois, refaça o deploy que falhou pelo GitHub (**Re-run failed jobs**), não
-pelo painel: depois de um deploy com erro, o pipeline devolve a tag `staging`
-ao build anterior.
+Conferir:
 
-Conferido num Linux com `ip6tables` real e rota IPv6 de verdade: sem a
-regra, um download de `pkg-containers.githubusercontent.com` sai por IPv6;
-com ela, sai por IPv4 na primeira tentativa (conexão em 12 ms), uma conexão
-IPv6 a outro destino segue normal, e o `remove` deixa a tabela como estava.
-Os testes de `tests/unitaires/lifecycle/github-ipv4-egress.test.ts` rodam o
-script contra um `ip6tables` simulado (idempotência, recarga de firewall,
-unidade e timer, `remove`, recusa sem root e cada aviso do `check`).
+```sh
+ldd "$(command -v dockerd)" | grep -q libc.so && echo "dockerd usa a libc: o GODEBUG vale"
+systemctl show docker --property=Environment          # GODEBUG=netdns=cgo
+getent ahosts pkg-containers.githubusercontent.com | head -n 1   # 185.199.x.x primeiro
+docker pull ghcr.io/containerd/busybox:1.36 & sleep 2; ss -tnp | grep dockerd; wait
+docker rmi ghcr.io/containerd/busybox:1.36
+```
 
-Desfazer: `trajetto-github-ipv4-egress remove`. Faixa nova do GitHub: o
-workflow `network-ranges.yml` avisa; acrescente em `PREFIXES` e rode
-`install` de novo.
+O `ss` deve mostrar o `dockerd` conectado a endereços `185.199.x.x:443`
+(IPv4). A prova final é o próximo deploy do pipeline.
+
+O que não muda: o IPv6 continua configurado e funcionando, destinos que só
+têm IPv6 seguem por IPv6, e a entrada (já restrita à Cloudflare pelo
+firewall) não é afetada. Junto disso, o pipeline repete um deploy que termina
+em erro (até 6 vezes, `DOKPLOY_ATTEMPTS`), e o Docker guarda as camadas que
+já baixou. Desfazer: tirar a linha do `gai.conf`, apagar o _drop-in_ e
+`systemctl daemon-reload && systemctl restart docker`.
 
 ## 7. Montar o Dokploy do zero (staging e produção)
 
@@ -1194,7 +1206,7 @@ O pipeline faz o deploy dela **antes** da API, e só quando o digest muda
 **Camadas da imagem** (`infra/ai-ocr/Dockerfile`): a VPS de staging puxava
 as camadas do GHCR por uma rota IPv6 que derruba a conexão no meio do
 download (a correção no host, que leva os downloads do GitHub ao IPv4, está
-na [seção 6.2](#62-downloads-do-ghcr-sempre-pelo-ipv4)), e o Docker
+na [seção 6.2](#62-downloads-do-ghcr-pelo-ipv4-preferência-do-sistema)), e o Docker
 recomeça do zero só a camada que quebrou, guardando as que terminaram. A imagem tinha **uma** camada de pip de ~145 MB (comprimida):
 nada sobrevivia entre as tentativas do Dokploy, e um bump do Pillow
 reenviava tudo, junto com os modelos (que ficavam na mesma camada do
@@ -2460,9 +2472,10 @@ Na ordem:
 - [ ] VPS com Dokploy; `daemon.json` com rotação de log e Docker reiniciado;
       `infra/traefik/` aplicado ([seção 6](#6-preparar-o-servidor-uma-vez)).
 - [ ] Firewall da VPS com 80 e 443 só da Cloudflare, e nada respondendo
-      direto no IP ([6.1](#61-firewall-da-vps-contabo)); downloads do GHCR
-      pelo IPv4, com `trajetto-github-ipv4-egress check` passando
-      ([6.2](#62-downloads-do-ghcr-sempre-pelo-ipv4)).
+      direto no IP ([6.1](#61-firewall-da-vps-contabo)); IPv4 preferido no
+      host (`gai.conf` e `GODEBUG=netdns=cgo` no Docker), com o `dockerd`
+      baixando de `185.199.x.x`
+      ([6.2](#62-downloads-do-ghcr-pelo-ipv4-preferência-do-sistema)).
 - [ ] DNS na Cloudflare (proxy, Full strict, TLS 1.2, Always HTTPS) para os
       hosts da API de produção e de staging.
 - [ ] Token classic `read:packages` do GHCR criado (e a data de renovação

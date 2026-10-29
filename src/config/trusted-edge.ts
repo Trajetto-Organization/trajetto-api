@@ -13,7 +13,7 @@ import { BlockList, isIP } from "node:net";
  * believed only when that address is one of these.
  *
  * The IPv4 half below is also that firewall's allowlist, and
- * .github/workflows/network-ranges.yml compares the whole list with
+ * .github/workflows/cloudflare-ranges.yml compares the whole list with
  * Cloudflare's every Monday.
  *
  * Which also means a Cloudflare Tunnel is NOT a drop-in origin lock: behind
