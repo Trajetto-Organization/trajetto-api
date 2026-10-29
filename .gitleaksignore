@@ -13,9 +13,9 @@
 
 # .env.development / .env.test, committed in c84bfd4 and removed in a92c1de.
 # Dev-only values, all different from production (checked by equality, never
-# printed). EXCEPT anthropic-api-key (2926c01): the same key as the local
-# .env of 2026-09-24 — rotate it in the Anthropic console
-# (docs/deploy.md (Cadeia de suprimentos)).
+# printed). EXCEPT anthropic-api-key (2926c01): a real key, revoked and
+# deleted in the Anthropic console (confirmed 2026-10-29); the API no longer
+# calls Anthropic (ADR 0010, docs/deploy.md (Cadeia de suprimentos)).
 2926c01842b38b2976fa459d8841d70b154b514c:.env.development:anthropic-api-key:52
 7044d51fbf33bd1724172e67476a2bc806ded9e8:.env.development:generic-api-key:42
 c84bfd4795318044551fd4dfcc1a0d10ac7bdcb3:.env.development:generic-api-key:35

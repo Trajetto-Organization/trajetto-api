@@ -2334,8 +2334,9 @@ positivo ou um segredo já rotacionado. O job varre o histórico de **todas** as
 branches do remoto. O `.gitleaks.toml` mantém todas as regras padrão e
 silencia só a `generic-api-key` em `tests/` e no `.env.example`. A baseline
 guarda o que o histórico tinha quando a varredura foi ligada — entre eles uma
-`ANTHROPIC_API_KEY` antiga (commit `2926c01`): revogue-a; a API não usa mais a
-Anthropic (ADR 0010).
+`ANTHROPIC_API_KEY` antiga (commit `2926c01`), revogada e excluída no console
+da Anthropic (confirmado em 29/10/2026); a API não usa mais a Anthropic
+(ADR 0010).
 
 **Segredos no Dokploy**: ficam no _Environment_ de cada Application e nos
 Databases; qualquer usuário do painel com acesso ao projeto os vê. Dê acesso
@@ -2530,8 +2531,7 @@ Na ordem:
 - [ ] Certificado A1 do comprovante (`PROOF_SIGNING_*`) em produção;
       `proof_signing` em `/health/metrics`.
 - [ ] Web promovida **depois** da API (`trajetto-ui/docs/deploy.md`).
-- [ ] Revogar a `ANTHROPIC_API_KEY` antiga do histórico; apagar os secrets
-      obsoletos (`DOKPLOY_COMPOSE_ID`, `DOKPLOY_BACKUP_APPLICATION_ID`,
+- [ ] Apagar os secrets obsoletos (`DOKPLOY_COMPOSE_ID`, `DOKPLOY_BACKUP_APPLICATION_ID`,
       `PORTAINER_*`, `STAGING_ENABLED`); se a Application `trajetto-backup`
       chegou a ser criada no Dokploy, apagá-la.
 
