@@ -16,7 +16,9 @@
  * outside the path that turns the adapter's errors into a
  * PrismaClientKnownRequestError (measured on 7.10.1 + adapter-pg), so the
  * caller gets the bare DriverAdapterError, with the same `{ kind,
- * originalCode }` as its own `cause`. That shape is read too.
+ * originalCode }` as its own `cause`. That shape is read too: a conflict
+ * there is isSerializationFailure's (below), the database going away there
+ * is isDatabaseUnavailable's (database-unavailable.ts).
  */
 
 import { Prisma } from "@prisma/client";
@@ -166,6 +168,7 @@ function isSerializationFailure(error: unknown): boolean {
 
 export {
   driverAdapterCauseOf,
+  isDriverAdapterError,
   isSerializationFailure,
   sqlStateOf,
   uniqueTargetOf,

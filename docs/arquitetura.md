@@ -816,7 +816,7 @@ explícita:
 | `connect_timeout`              | 5 s                                                                                   | `connectionTimeoutMillis` do Client       | abrir uma conexão nova; o `pg-pool` também limita a abertura pelo `pool_timeout`, então vale o menor dos dois, como no Prisma 6 (o `pool_timeout` cobria a espera e a abertura)           |
 | `socket_timeout`               | 60 s                                                                                  | `query_timeout` do Client                 | uma query sem resposta falha (503 + Retry-After) e a conexão dela é fechada; acima do `statement_timeout` para um servidor vivo responder antes                                           |
 | `max_idle_connection_lifetime` | 300 s                                                                                 | `idleTimeoutMillis` do Pool               | conexão ociosa há 5 min é fechada; o IPVS do Swarm esquece um fluxo ocioso aos 900 s, e escrever num fluxo esquecido trava sem erro (sem o parâmetro, 300 s; o padrão do `pg` seria 10 s) |
-| `options`                      | `statement_timeout=30s`, `lock_timeout=5s`, `idle_in_transaction_session_timeout=60s` | enviado ao Postgres na conexão, como está | tetos do lado do servidor                                                                                                                                                                 |
+| `options`                      | `statement_timeout=30s`, `lock_timeout=5s`, `idle_in_transaction_session_timeout=60s` | enviado na conexão, + `TimeZone=UTC`      | tetos do lado do servidor; e a sessão sempre em UTC, que o pool acrescenta no fim (sem `options` na URL, vai só ele), a menos que a própria URL defina `TimeZone` (parágrafo abaixo)      |
 | `schema`                       | `public`                                                                              | opção `schema` do adapter                 | o schema das queries                                                                                                                                                                      |
 
 O `keepAlive` do TCP fica ligado (com o tempo do sistema), como no driver do
@@ -826,6 +826,38 @@ com a URL de produção do `.env.example`),
 sem FIN nem RST), `tests/E2E/runtime-database-timeouts.test.ts`,
 `tests/E2E/pool-pressure.test.ts` e
 `tests/unitaires/lifecycle/database-dead-connection-params.test.ts`.
+
+**A sessão abre sempre em UTC**: as colunas `DateTime` do schema são
+`timestamp(3)` sem fuso, gravadas em UTC, e o SQL cru das filas e das
+métricas as compara com `now()` (`"availableAt" <= now()`,
+`"leaseExpiresAt" < now()`, `now() - MIN("availableAt")`) ou grava `now()`
+nelas (`"updated_at" = now()` nos upserts, e o `DEFAULT CURRENT_TIMESTAMP` de
+um INSERT cru que omite a coluna). O Postgres converte entre `timestamp` e
+`timestamptz` no `TimeZone` da sessão, então tudo isso só acerta com a sessão
+em UTC — o que até aqui valia só porque as imagens do Postgres vêm em UTC (no
+Prisma 6 também). Com o servidor, o banco ou o papel em `America/Sao_Paulo`,
+a fila pegaria com três horas de atraso a linha que o app marcou para agora,
+sem erro nenhum. Por isso `pool-config.ts` acrescenta `-c TimeZone=UTC` ao
+fim do `options` da URL (ou o cria, se a URL não tiver): é parâmetro de
+abertura, sem ida e volta a mais, no mesmo `options` que a URL de produção já
+manda, e vale para todo pool que nasce em `database-client.ts` — o da
+aplicação, o da readiness, o do `wait-for-postgres`, o dos scripts e o dos
+testes. Vai na connection string, e não na config do Pool, porque o `pg` deixa
+o `options` da URL substituir o da config. Um `TimeZone` que a própria URL
+defina é mantido, e nada é acrescentado: o Postgres aplica o último `-c` de
+cada nome, e acrescentar UTC depois desfaria em silêncio uma escolha
+deliberada (rodar um cliente em outro fuso para provar que uma query não
+depende dele) — quem põe outro fuso na URL tira as filas de UTC junto, e as
+URLs de produção não definem `TimeZone`. Um `SET TIME ZONE` na conexão
+continua valendo para aquela sessão. Fora do pool ficam o cliente
+administrativo do ambiente de testes (só `CREATE`/`DROP DATABASE`) e o
+`prisma migrate deploy`, que abre a própria conexão pelo schema engine com a
+`MIGRATION_DATABASE_URL` e segue o padrão do servidor. Provas:
+`tests/unitaires/database/pool-config.test.ts` (o mapeamento, com e sem
+`options` na URL) e `tests/E2E/database-session-timezone.test.ts` (num banco
+com padrão `America/Sao_Paulo`, uma sessão crua abre em São Paulo e não vê a
+linha vencida da outbox; o pool da aplicação e o da readiness abrem em UTC e
+veem).
 
 **Erros do banco viram 503 por tipo, não por texto**: o adapter mapeia quatro
 erros de socket (`ECONNREFUSED`, `ENOTFOUND`, `ECONNRESET`, `ETIMEDOUT`) e o
@@ -847,8 +879,16 @@ códigos P1001/P1002/P1008/P1017/P2037 e do P2028 de "não conseguiu começar a
 transação", aceita P2010/P2039 cuja causa no adapter é o banco indo embora
 (`DatabaseNotReachable`, `ConnectionClosed`, SQLSTATE 57P01–57P03, classe
 08, 53300) e o erro do Prisma cujo código é um daqueles errnos de rede, caso
-algum chegue sem passar pelo pool. Violação de unicidade (P2002) agora nomeia
-o **índice** (`driver_businessId_cpf_key`) em
+algum chegue sem passar pelo pool. Aceita também o `DriverAdapterError` cru
+com a mesma causa, que é o que o COMMIT de uma `$transaction` interativa
+devolve quando o banco vai embora: backend encerrado durante o COMMIT
+(reinício, failover; `postgres`/57P01) ou conexão resetada depois que o
+COMMIT rodou (`ConnectionClosed`). No Prisma 6 os dois eram P1017 e 503; sem
+isso, viravam 500 sem Retry-After
+(`tests/E2E/commit-database-unavailable-http.test.ts`). No segundo caso a
+linha **foi gravada**, por isso nenhum dos dois conta como conflito de
+serialização para os laços de retentativa. Violação de unicidade (P2002)
+agora nomeia o **índice** (`driver_businessId_cpf_key`) em
 `meta.driverAdapterError.cause.constraint`, e não mais as colunas em
 `meta.target`; os leitores usam `uniqueTargetOf`
 (`src/shared/errors/prisma-error-meta.ts`) e casam um trecho do nome — por
@@ -906,12 +946,17 @@ convertia). Devolva `timestamp` em UTC (`"coluna"` como está, ou
 `instante AT TIME ZONE 'UTC'`) ou o valor dentro de JSON (`json_agg` e
 `to_json` escrevem o offset, como em `src/shared/health/operational-state.ts`).
 Numa sessão em UTC os jeitos certo e errado dão o mesmo resultado, e é por
-isso que o erro some nos testes; ele aparece quando o `TimeZone` do servidor
-ou da conexão é outro. As filas e as métricas ainda comparam colunas direto
-com `now()` (`"availableAt" <= now()`, `"leaseExpiresAt" < now()`) e só
-acertam com a sessão em UTC — isso vale desde o Prisma 6. Prova da regra dos
-parâmetros: `tests/E2E/proof-audit-queue.test.ts` (a janela de concordância
-com a sessão em `America/Sao_Paulo`).
+isso que o erro some nos testes. O pool abre toda sessão em UTC (veja "A
+sessão abre sempre em UTC" em [Conexão com o Postgres](#conexão-com-o-postgres)),
+então o erro só aparece quando a sessão sai de UTC: um `TimeZone` na própria
+URL ou um `SET TIME ZONE` na conexão. Siga a regra mesmo assim — ela é o que
+mantém a query certa nesses casos. As filas e as métricas comparam colunas
+direto com `now()` (`"availableAt" <= now()`, `"leaseExpiresAt" < now()`) e
+gravam `now()` em colunas: isso só acerta com a sessão em UTC (valia desde o
+Prisma 6, pelo padrão das imagens do Postgres) e agora é garantido pelo
+`-c TimeZone=UTC` do pool, não mais pela configuração do servidor. Prova da
+regra dos parâmetros: `tests/E2E/proof-audit-queue.test.ts` (a janela de
+concordância com a sessão em `America/Sao_Paulo`).
 
 **A readiness tem conexão própria**: `/health/readiness` faz `SELECT 1` num
 `PrismaClient` separado (`max: 1`, 2 s para obter a conexão — esperar por ela

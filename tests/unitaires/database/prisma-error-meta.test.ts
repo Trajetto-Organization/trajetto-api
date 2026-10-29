@@ -310,6 +310,46 @@ describe("isSerializationFailure", () => {
     expect(isSerializationFailure(genericPostgres("57P01"))).toBe(false);
   });
 
+  it("refuses every way the database can go away at COMMIT", () => {
+    // The bare adapter errors isDatabaseUnavailable answers 503 for. The
+    // reset connection had committed (measured): running the transaction
+    // again would write it twice.
+    const atCommit = (cause: Record<string, unknown>) =>
+      Object.assign(new Error(String(cause.kind)), {
+        name: "DriverAdapterError",
+        cause,
+      });
+
+    const terminated = atCommit({
+      kind: "postgres",
+      originalCode: "57P01",
+      code: "57P01",
+      severity: "FATAL",
+      message: "terminating connection due to administrator command",
+    });
+
+    expect(isSerializationFailure(terminated)).toBe(false);
+    expect(isSerializationFailure(atCommit({ kind: "ConnectionClosed" }))).toBe(
+      false,
+    );
+    expect(
+      isSerializationFailure(atCommit({ kind: "DatabaseNotReachable" })),
+    ).toBe(false);
+    expect(isSerializationFailure(atCommit({ kind: "SocketTimeout" }))).toBe(
+      false,
+    );
+    expect(
+      isSerializationFailure(
+        atCommit({ kind: "TooManyConnections", originalCode: "53300" }),
+      ),
+    ).toBe(false);
+    expect(
+      isSerializationFailure(
+        atCommit({ kind: "postgres", originalCode: "08006", code: "08006" }),
+      ),
+    ).toBe(false);
+  });
+
   it("trusts neither a message nor a look-alike", () => {
     const lookalike = Object.assign(new Error("TransactionWriteConflict"), {
       cause: { kind: "TransactionWriteConflict", originalCode: "40001" },

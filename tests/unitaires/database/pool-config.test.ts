@@ -48,11 +48,11 @@ describe("the production runtime DATABASE_URL", () => {
     expect(settings.idleTimeoutMs).toBe(300_000);
   });
 
-  it("sends the statement, lock and idle-transaction ceilings to Postgres untouched", () => {
+  it("sends the statement, lock and idle-transaction ceilings to Postgres untouched, and the UTC session after them", () => {
     const url = new URL(settings.connectionString);
 
     expect(url.searchParams.get("options")).toBe(
-      "-c statement_timeout=30000 -c lock_timeout=5000 -c idle_in_transaction_session_timeout=60000",
+      "-c statement_timeout=30000 -c lock_timeout=5000 -c idle_in_transaction_session_timeout=60000 -c TimeZone=UTC",
     );
   });
 
@@ -76,6 +76,14 @@ describe("the readiness probe's URL", () => {
 
   it("holds ONE connection, not pg's default ten", () => {
     expect(settings.max).toBe(1);
+  });
+
+  it("runs its session in UTC, with the production ceilings, like the app's pool", () => {
+    const url = new URL(settings.connectionString);
+
+    expect(url.searchParams.get("options")).toBe(
+      "-c statement_timeout=30000 -c lock_timeout=5000 -c idle_in_transaction_session_timeout=60000 -c TimeZone=UTC",
+    );
   });
 
   it("answers well inside Traefik's 5 s", () => {
@@ -131,6 +139,86 @@ describe("a URL without the parameters", () => {
 
     expect(unbounded.queryTimeoutMs).toBeUndefined();
     expect(unbounded.poolTimeoutMs).toBe(0);
+  });
+});
+
+/**
+ * The queues and metrics compare `timestamp(3)` columns holding UTC with
+ * now() in raw SQL, which is right only in a UTC session. The session zone is
+ * asked for at startup, in `options`, so it no longer depends on the
+ * server's, the database's or the role's default
+ * (tests/E2E/database-session-timezone.test.ts proves it on Postgres).
+ */
+describe("the session's TimeZone", () => {
+  function optionsOf(databaseUrl: string): string | null {
+    const { connectionString } = poolSettingsFrom(databaseUrl);
+
+    return new URL(connectionString).searchParams.get("options");
+  }
+
+  it("is UTC when the URL carries no options", () => {
+    expect(optionsOf("postgresql://u:p@db:5432/trajetto")).toBe(
+      "-c TimeZone=UTC",
+    );
+  });
+
+  it("is UTC when the URL's options are empty", () => {
+    expect(optionsOf("postgresql://u:p@db:5432/trajetto?options=")).toBe(
+      "-c TimeZone=UTC",
+    );
+    expect(optionsOf("postgresql://u:p@db:5432/trajetto?options=%20")).toBe(
+      "-c TimeZone=UTC",
+    );
+  });
+
+  it("is appended to the URL's options, which keep their order and text", () => {
+    expect(
+      optionsOf(
+        "postgresql://u:p@db:5432/trajetto?options=-c%20lock_timeout%3D5000%20-c%20search_path%3Dpublic",
+      ),
+    ).toBe("-c lock_timeout=5000 -c search_path=public -c TimeZone=UTC");
+  });
+
+  it("keeps the other parameters pg reads", () => {
+    const url = new URL(
+      poolSettingsFrom(
+        "postgresql://u:p@db:5432/trajetto?sslmode=require&application_name=api&connection_limit=3",
+      ).connectionString,
+    );
+
+    expect(url.searchParams.get("sslmode")).toBe("require");
+    expect(url.searchParams.get("application_name")).toBe("api");
+    expect(url.searchParams.get("options")).toBe("-c TimeZone=UTC");
+  });
+
+  /**
+   * Postgres applies the last `-c` of a name, so appending UTC would silently
+   * overrule a zone the URL asks for on purpose.
+   */
+  it.each([
+    "-c TimeZone=America/Sao_Paulo",
+    "-c timezone=America/Sao_Paulo",
+    "-cTimeZone=America/Sao_Paulo",
+    "--TimeZone=America/Sao_Paulo",
+    "-c statement_timeout=30000 -c TIMEZONE=America/Sao_Paulo",
+  ])("is left to the URL when its options set it (%j)", (options) => {
+    expect(
+      optionsOf(
+        `postgresql://u:p@db:5432/trajetto?options=${encodeURIComponent(options)}`,
+      ),
+    ).toBe(options);
+  });
+
+  it("is not mistaken for timezone_abbreviations, or for a value that mentions it", () => {
+    expect(
+      optionsOf(
+        `postgresql://u:p@db:5432/trajetto?options=${encodeURIComponent(
+          "-c timezone_abbreviations=Default -c application_name=x--timezone=y",
+        )}`,
+      ),
+    ).toBe(
+      "-c timezone_abbreviations=Default -c application_name=x--timezone=y -c TimeZone=UTC",
+    );
   });
 });
 

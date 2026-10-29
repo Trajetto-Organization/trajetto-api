@@ -51,6 +51,7 @@ Mesmo GA, o 8 não serviria sem reescrita (matriz abaixo): exige o gerador
 | pool pela `DATABASE_URL` (`connection_limit` etc.)  | sim     | **ignorado pelo `pg`**: mapeado à mão                             | —                        |
 | `meta.target` no P2002                              | colunas | **nome do índice**, em `meta.driverAdapterError.cause.constraint` | —                        |
 | conflito serializável (40001) no COMMIT             | P2034   | **`DriverAdapterError` cru** (`TransactionWriteConflict`)         | —                        |
+| banco caindo no COMMIT (57P01, conexão resetada)    | P1017   | **`DriverAdapterError` cru** (`postgres`, `ConnectionClosed`)     | —                        |
 | parâmetros de SQL cru tipados                       | sim     | **não** (o `pg` manda sem tipo)                                   | —                        |
 | `migrate deploy` / `_prisma_migrations`             | sim     | sim (mesmo schema engine)                                         | sistema novo (`db sign`) |
 

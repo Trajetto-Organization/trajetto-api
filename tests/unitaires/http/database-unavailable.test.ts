@@ -6,6 +6,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { APP_BOOT_TIMEOUT_MS } from "../../support/app-boot";
 import { closedPort, systemError } from "../../support/fake-postgres";
+import { commitWriteConflict } from "../../support/serialization-failure";
 
 import {
   DATABASE_RETRY_AFTER_SECONDS,
@@ -68,6 +69,29 @@ const driverFailure = (
       },
     },
   );
+
+/**
+ * What a failed COMMIT of an interactive `$transaction` throws under Prisma
+ * 7: the driver adapter's own error, with no Prisma class around it, its
+ * `cause` built by adapter-pg. Shapes measured with @prisma/client 7.10.1 +
+ * @prisma/adapter-pg 7.10.1 against Postgres 16
+ * (tests/E2E/commit-database-unavailable-http.test.ts).
+ */
+const commitFailure = (cause: Record<string, unknown>) =>
+  Object.assign(new Error(String(cause.kind)), {
+    name: "DriverAdapterError",
+    cause,
+  });
+
+/** adapter-pg's cause for a SQLSTATE it has no kind of its own for. */
+const postgresCause = (code: string, message: string) => ({
+  kind: "postgres",
+  originalCode: code,
+  originalMessage: message,
+  code,
+  severity: "FATAL",
+  message,
+});
 
 /** pg's own error, as the API's pool types it (src/shared/database/pg-driver.ts). */
 const fromPool = (message: string) =>
@@ -148,6 +172,42 @@ const infrastructure: Record<string, () => Error> = {
       code: "57P01",
       originalMessage: "terminating connection due to administrator command",
     }),
+  // Prisma 7: a failed COMMIT, the adapter's error bare. The backend running
+  // it was terminated (a restart, a failover): Prisma 6 said P1017.
+  "v7-commit-admin-shutdown": () =>
+    commitFailure(
+      postgresCause(
+        "57P01",
+        "terminating connection due to administrator command",
+      ),
+    ),
+  // The connection reset after the COMMIT ran: it may have landed, and it is
+  // still a 503 (P1017 in Prisma 6), never a 500.
+  "v7-commit-connection-closed": () =>
+    commitFailure({ kind: "ConnectionClosed" }),
+  "v7-commit-unreachable": () =>
+    commitFailure({
+      kind: "DatabaseNotReachable",
+      host: "127.0.0.1",
+      port: 5432,
+    }),
+  "v7-commit-socket-timeout": () => commitFailure({ kind: "SocketTimeout" }),
+  "v7-commit-too-many-connections": () =>
+    commitFailure({
+      kind: "TooManyConnections",
+      originalCode: "53300",
+      originalMessage: "sorry, too many clients already",
+      cause: "sorry, too many clients already",
+    }),
+  "v7-commit-crash-shutdown": () =>
+    commitFailure(
+      postgresCause(
+        "57P02",
+        "terminating connection because of crash of another server process",
+      ),
+    ),
+  "v7-commit-connection-failure": () =>
+    commitFailure(postgresCause("08006", "connection failure")),
 };
 
 const notInfrastructure: Record<string, () => Error> = {
@@ -212,6 +272,30 @@ const notInfrastructure: Record<string, () => Error> = {
       originalCode: "23505",
       constraint: { index: "driver_businessId_cpf_key" },
     }),
+  // Prisma 7: answers about the data at COMMIT, the adapter's error bare. A
+  // serialization conflict is the retry loops' business, not an outage.
+  "v7-commit-write-conflict": () => commitWriteConflict(),
+  "v7-commit-deadlock": () => commitWriteConflict("40P01"),
+  // A deferred unique constraint is checked at COMMIT.
+  "v7-commit-unique": () =>
+    commitFailure({
+      kind: "UniqueConstraintViolation",
+      originalCode: "23505",
+      originalMessage:
+        'duplicate key value violates unique constraint "driver_businessId_cpf_key"',
+      constraint: { index: "driver_businessId_cpf_key" },
+    }),
+  // A deferred trigger past the statement_timeout: a live server cancelled it.
+  "v7-commit-statement-timeout": () =>
+    commitFailure({
+      ...postgresCause("57014", "canceling statement due to statement timeout"),
+      severity: "ERROR",
+    }),
+  // The adapter's cause, but not under the adapter's name: untrusted.
+  "v7-commit-lookalike": () =>
+    Object.assign(new Error("ConnectionClosed"), {
+      cause: { kind: "ConnectionClosed" },
+    }),
 };
 
 describe("isDatabaseUnavailable", () => {
@@ -231,6 +315,13 @@ describe("isDatabaseUnavailable", () => {
     expect(isDatabaseUnavailable(undefined)).toBe(false);
     expect(isDatabaseUnavailable("P1001")).toBe(false);
     expect(isDatabaseUnavailable({ code: "P1001" })).toBe(false);
+    // The adapter's name and cause on a plain object: no class, no trust.
+    expect(
+      isDatabaseUnavailable({
+        name: "DriverAdapterError",
+        cause: { kind: "ConnectionClosed" },
+      }),
+    ).toBe(false);
   });
 });
 
@@ -356,6 +447,8 @@ describe("the global error handler", () => {
     "raw-sql-error",
     "raw-statement-timeout",
     "raw-undecodable-column",
+    "v7-commit-write-conflict",
+    "v7-commit-unique",
   ]) {
     it(`still answers 500 without Retry-After for ${kind}`, async () => {
       const response = await call(kind);

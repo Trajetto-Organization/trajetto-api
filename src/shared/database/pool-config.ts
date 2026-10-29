@@ -20,7 +20,7 @@
  * | `max_idle_connection_lifetime` | Pool `idleTimeoutMillis`            | 300 s (Prisma 6) |
  * | `max_connection_lifetime`      | Pool `maxLifetimeSeconds`           | none (Prisma 6)  |
  * | `schema`                       | adapter `schema`                    | public           |
- * | `options` (statement_timeout…) | sent to Postgres at connect, as is  | —                |
+ * | `options` (statement_timeout…) | sent at connect, + `TimeZone=UTC`   | `TimeZone=UTC`   |
  *
  * `0` keeps Prisma 6's meaning, "no limit", for the timeouts. pg-pool applies
  * its `connectionTimeoutMillis` both to waiting for a free connection and to
@@ -32,6 +32,10 @@
  *
  * The Prisma-only parameters are removed from the connection string handed
  * to pg; the rest (`options`, `sslmode`, `application_name`…) goes through.
+ *
+ * Every session also runs in UTC, whatever the server, database or role
+ * default: `-c TimeZone=UTC` is appended to the URL's `options` (see
+ * sessionOptions below for why, and for the one case it is not).
  */
 
 interface DatabasePoolSettings {
@@ -83,6 +87,51 @@ const PRISMA_ONLY_PARAMETERS = [
   "pgbouncer",
   "statement_cache_size",
 ] as const;
+
+/**
+ * The session zone every connection asks for at startup.
+ *
+ * The schema's DateTime columns are `timestamp(3)` WITHOUT time zone holding
+ * UTC, and raw SQL meets them with `now()` (a timestamptz): the queues claim
+ * by `"availableAt" <= now()` and `"leaseExpiresAt" < now()`, the metrics
+ * measure lag as `now() - MIN("availableAt")`, and upserts write `now()` into
+ * `updated_at`, as a column's DEFAULT CURRENT_TIMESTAMP does. Postgres
+ * converts between the two in the session's TimeZone, so all of that is
+ * right only while the session is UTC: under America/Sao_Paulo a row the app
+ * made due now is claimed three hours late, and a `now()` written by SQL
+ * reads three hours early to the app. The Postgres images default to UTC,
+ * which is the only reason it held so far (Prisma 6 had the same
+ * dependency); a server, database or role set to another zone would have
+ * broken it without an error. Pinned here, it no longer depends on how the
+ * server is configured.
+ *
+ * Sent as a startup parameter, it costs no round trip, and a `SET TIME ZONE`
+ * a caller runs on its own connection still wins for that session.
+ */
+const UTC_SESSION_OPTION = "-c TimeZone=UTC";
+
+/**
+ * An `options` string that already sets TimeZone: `-c TimeZone=…`,
+ * `-cTimeZone=…` or `--TimeZone=…`, in any case (GUC names are
+ * case-insensitive). `timezone_abbreviations` does not match.
+ */
+const SETS_TIME_ZONE = /(?:^|\s)(?:-c\s*|--)timezone=/i;
+
+/**
+ * The URL's `options` with the UTC session appended. A TimeZone the URL sets
+ * itself is kept, and nothing is appended: Postgres applies the LAST `-c` of
+ * a name, so appending would silently overrule what someone wrote on
+ * purpose — the one way to run a client in another zone deliberately (to
+ * prove a query does not depend on it, say). A URL that does so takes the
+ * queues off UTC with it; the production URLs set no TimeZone.
+ */
+function sessionOptions(options: string | null): string {
+  if (options === null || options.trim() === "") return UTC_SESSION_OPTION;
+
+  if (SETS_TIME_ZONE.test(options)) return options;
+
+  return `${options.trimEnd()} ${UTC_SESSION_OPTION}`;
+}
 
 function secondsParameter(url: URL, name: string): number | undefined {
   const raw = url.searchParams.get(name);
@@ -143,6 +192,14 @@ function poolSettingsFrom(
   const schema = url.searchParams.get("schema") || undefined;
 
   for (const name of PRISMA_ONLY_PARAMETERS) url.searchParams.delete(name);
+
+  // In the connection string, not in the Pool config: pg lets a URL's
+  // `options` replace the config's, so this is the one place it cannot be
+  // lost (sessionOptions).
+  url.searchParams.set(
+    "options",
+    sessionOptions(url.searchParams.get("options")),
+  );
 
   return {
     connectionString: url.toString(),
