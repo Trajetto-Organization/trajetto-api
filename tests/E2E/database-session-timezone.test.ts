@@ -67,17 +67,15 @@ const DUE_OUTBOX_SQL = `
 type Queryable = Pick<PrismaClient, "$queryRawUnsafe">;
 
 async function timeZoneOf(client: Queryable): Promise<string> {
-  const [row] = await client.$queryRawUnsafe<Array<{ TimeZone: string }>>(
-    "SHOW TimeZone",
-  );
+  const [row] =
+    await client.$queryRawUnsafe<Array<{ TimeZone: string }>>("SHOW TimeZone");
 
   return row.TimeZone;
 }
 
 async function dueOutboxOf(client: Queryable): Promise<number> {
-  const [row] = await client.$queryRawUnsafe<Array<{ due: number }>>(
-    DUE_OUTBOX_SQL,
-  );
+  const [row] =
+    await client.$queryRawUnsafe<Array<{ due: number }>>(DUE_OUTBOX_SQL);
 
   return row.due;
 }
@@ -120,9 +118,7 @@ describe("a session that asks for no zone", () => {
    */
   it("starts in the database's default, America/Sao_Paulo", async () => {
     const zone = await onPlainSession(async (client) => {
-      const result = await client.query<{ TimeZone: string }>(
-        "SHOW TimeZone",
-      );
+      const result = await client.query<{ TimeZone: string }>("SHOW TimeZone");
 
       return result.rows[0].TimeZone;
     });
