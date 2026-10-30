@@ -1251,6 +1251,15 @@ O _robots.txt gerenciado_ está ligado: a Cloudflare acrescenta, antes do
 `robots.txt` da aplicação, os blocos `Content-Signal` e os `Disallow` para os
 robôs de IA.
 
+Esse bloco traz `User-agent: *` com `Allow: /`. Os buscadores juntam os grupos
+do mesmo robô, aplicam a regra mais longa e, no empate, a que libera. Por isso
+um `Disallow: /` da aplicação empata com ele e não bloqueia nada. A API, que
+responde o próprio `robots.txt` desde 30/10/2026, fecha o host com
+`Disallow: /*` e libera só o console de integração de produção (detalhes em
+[`arquitetura.md`](arquitetura.md), "Integrações externas"). A web de staging
+ainda responde `Disallow: /`; o que a protege de verdade é o Cloudflare Access
+e o `noindex`.
+
 #### Email Address Obfuscation: desligado
 
 Desligado em 29/10/2026, por volta das 17:03 UTC. Onde fica agora: _Security →

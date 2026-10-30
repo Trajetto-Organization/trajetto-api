@@ -773,6 +773,14 @@ OpenStreetMap são recusados.
   para clientes em `/integration/docs` (Scalar, só o que uma chave alcança) e
   no portal `/docs` da web. A referência interna completa fica em `/docs`
   (aberta fora de produção; em produção, só com `DOCS_USER`/`DOCS_PASSWORD`).
+- **Buscadores no host da API**: só o console de produção é indexável
+  (`APP_ENV=production`; fora dele, `noindex`). O host responde o próprio
+  `/robots.txt`, que libera `/integration/docs` (e o `openapi.json` que o
+  console lê) e fecha o resto com `Disallow: /*`, e um `/sitemap.xml` com o
+  console na origem `API_HTTP_REQUEST`. Fora de produção, o `robots.txt` fecha
+  tudo e o sitemap responde 404. O `/*`, e não `/`, porque a Cloudflare
+  antepõe o bloco gerenciado com `Allow: /`: vence a regra mais longa e, no
+  empate, a que libera.
 - **Webhooks**: até 10 endpoints por empresa, só `https`, assinados com
   `X-Trajetto-Signature: t=<timestamp>,v1=<hex>` (HMAC SHA-256 sobre
   `timestamp.corpo`). Tópicos `delivery.*`, `occurrence.*`, `proof.*` e
