@@ -1,3 +1,10 @@
+# [1.2.0](https://github.com/Trajetto-Organization/trajetto-api/compare/v1.1.0...v1.2.0) (2026-10-30)
+
+
+### Features
+
+* **api:** robots.txt e sitemap próprios no host da API ([2d3e547](https://github.com/Trajetto-Organization/trajetto-api/commit/2d3e547f0aa7cb77dd3bc80d132a9e644db53c57))
+
 # [1.1.0](https://github.com/Trajetto-Organization/trajetto-api/compare/v1.0.4...v1.1.0) (2026-10-29)
 
 
