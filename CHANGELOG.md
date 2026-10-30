@@ -1,3 +1,10 @@
+## [1.2.1](https://github.com/Trajetto-Organization/trajetto-api/compare/v1.2.0...v1.2.1) (2026-10-30)
+
+
+### Bug Fixes
+
+* **api:** o yarn dev gera o client do Prisma antes de esperar o banco ([d22d953](https://github.com/Trajetto-Organization/trajetto-api/commit/d22d953bb3eda4a9207b9eccdbb0c082de0d6092))
+
 # [1.2.0](https://github.com/Trajetto-Organization/trajetto-api/compare/v1.1.0...v1.2.0) (2026-10-30)
 
 
