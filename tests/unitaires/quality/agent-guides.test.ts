@@ -12,9 +12,12 @@ import { describe, expect, it } from "vitest";
  * at one of them sends the next reader — a person or a fresh agent session —
  * to a file that does not exist. CLAUDE.md and AGENTS.md are the same guide
  * for two kinds of agent: one drifting from the other means one of them
- * lies. arquitetura-tour.md (28/10/2026) is not a fifth topic: it walks the
+ * lies. arquitetura-tour.md (28/10/2026) is not a new topic: it walks the
  * map of arquitetura.md step by step, and architecture-docs.test.ts keeps the
- * two in step. The ADRs live in docs/adr/, one file per decision.
+ * two in step. infraestrutura.md (29/10/2026) is the fifth topic: the map of
+ * everything configured by hand outside the code (Contabo, Dokploy,
+ * Cloudflare, GitHub, Expo), the only record of it, since there is no
+ * infrastructure as code. The ADRs live in docs/adr/, one file per decision.
  */
 const ROOT = resolve(__dirname, "..", "..", "..");
 const read = (path: string) =>
@@ -24,6 +27,7 @@ const DOCS = [
   "docs/arquitetura.md",
   "docs/arquitetura-tour.md",
   "docs/deploy.md",
+  "docs/infraestrutura.md",
   "docs/testes.md",
   "docs/variaveis-de-ambiente.md",
 ];

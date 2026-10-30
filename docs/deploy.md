@@ -10,8 +10,10 @@
 >
 > Documentos irmãos: [`arquitetura.md`](./arquitetura.md) (como o sistema é
 > por dentro), [`variaveis-de-ambiente.md`](./variaveis-de-ambiente.md) (cada
-> variável, para que serve e onde mora) e [`testes.md`](./testes.md) (o que a
-> validação do pipeline roda). A web tem o próprio guia em
+> variável, para que serve e onde mora), [`testes.md`](./testes.md) (o que a
+> validação do pipeline roda) e [`infraestrutura.md`](./infraestrutura.md) (o
+> mapa das contas e dos painéis — Contabo, Dokploy, Cloudflare, GitHub, Expo,
+> Resend —, o que foi configurado à mão em cada um e por quê). A web tem o próprio guia em
 > `trajetto-ui/docs/deploy.md`; o app, em `trajetto-mobile/docs/deploy.md`.
 
 ## Sumário
@@ -311,7 +313,10 @@ navegador / app / ERP ─TLS─▶ Cloudflare (proxy) ─▶ Traefik do Dokploy 
 ```
 
 Cada environment do Dokploy (`staging` e `production`) tem o mesmo desenho,
-com nomes internos (o _App Name_ de cada serviço) diferentes. Dentro da rede
+com nomes internos (o _App Name_ de cada serviço) diferentes. Os nomes
+`trajetto-*-production` e `trajetto-*-staging` deste documento são marcadores:
+os serviços reais têm o sufixo aleatório que o Dokploy gerou
+([seção 7.2](#72-nomes-name-e-app-name)). Dentro da rede
 `dokploy-network`, um serviço encontra o outro pelo **App Name**: a API fala
 com `trajetto-postgres-production:5432`, `trajetto-redis-production:6379` e
 `http://trajetto-ai-production:8080`. Só a API (e a web) têm domínio; nenhum
@@ -420,9 +425,8 @@ Dokploy, em environments diferentes).
    120 s no `websecure`, TLS ≥ 1.2) — passo a passo em
    `infra/traefik/README.md`.
 5. **DNS na Cloudflare** (proxy laranja), na zona `intrajetto.com`: o host
-   da API de staging (`api-staging.intrajetto.com`) e o de produção (a
-   definir; previsto `api.intrajetto.com`, ver a
-   [seção 26](#26-os-três-repositórios-juntos)) apontando para o IP da VPS;
+   da API de staging (`api-staging.intrajetto.com`) e o de produção
+   (`api.intrajetto.com`, no ar desde 29/10/2026) apontando para o IP da VPS;
    _SSL/TLS_ em **Full (strict)**, _Minimum TLS Version_ 1.2, _Always Use
    HTTPS_ ligado. Detalhes da borda na [seção 11](#11-domínios-tls-e-a-borda).
 6. **Credencial do GHCR** ([seção 7.3](#73-credencial-do-ghcr)): um token do
@@ -449,9 +453,8 @@ _Network Services → Firewall_, regras de entrada, aplicadas à VPS:
 | Block all traffic | DROP   | Qualquer  | Qualquer | Qualquer (a regra fixa da Contabo, sempre por último) |
 
 - **Por quê.** Com a 443 aberta a qualquer IPv4, o Traefik respondia direto
-  no IP da VPS, inclusive pelo nome automático da Contabo
-  (`vmi3677364.contaboserver.net`, o DNS reverso da VPS): o painel do Dokploy
-  abria ali, e `staging.intrajetto.com/login` pedido direto à origem
+  no IP da VPS, inclusive pelo nome automático que a Contabo dá à VPS (o DNS
+  reverso do IP): o painel do Dokploy abria ali, e `staging.intrajetto.com/login` pedido direto à origem
   respondia 200, sem o Cloudflare Access (pela Cloudflare, 302). Medido em
   28/10/2026. Com as regras, nada responde direto na origem, nem por IPv4 nem
   por IPv6, e tudo pela Cloudflare segue respondendo (29/10/2026).
@@ -488,11 +491,12 @@ longos no meio. Em 28/10/2026 o deploy da API perdeu a camada de 46 MB do
 Node nas 6 tentativas:
 
 ```
-failed to copy: read tcp [2605:a140:2367:7364::1]:53884->[2606:50c0:8002::154]:443: read: connection reset by peer
+failed to copy: read tcp [<IPv6 da VPS>]:53884->[2606:50c0:8002::154]:443: read: connection reset by peer
 ❌ Pulling image failed
 ```
 
-(Em 27/10, duas vezes, na imagem da IA.) O login no GHCR deu certo nas seis
+(Em 27/10, na imagem da IA: duas falhas no log do Dokploy, e o run
+40551925038 falhou 3/3.) O login no GHCR deu certo nas seis
 tentativas: não é credencial nem o Dokploy, é a rede. A mesma assinatura
 aparece em outras VPS que puxam do GHCR, inclusive na Contabo (IPv6 cai,
 IPv4 nunca). Repetir o deploy e dividir as camadas só melhoram as chances.
@@ -539,6 +543,10 @@ docker rmi ghcr.io/containerd/busybox:1.36
 O `ss` deve mostrar o `dockerd` conectado a endereços `185.199.x.x:443`
 (IPv4). A prova final é o próximo deploy do pipeline.
 
+Aplicado na VPS em 29/10/2026. Conferido no mesmo dia: o `getent` devolve
+`185.199.x.x` primeiro, o `systemctl show` mostra o `GODEBUG` e um
+`docker pull` de teste só abriu conexões IPv4.
+
 O que não muda: o IPv6 continua configurado e funcionando, destinos que só
 têm IPv6 seguem por IPv6, e a entrada (já restrita à Cloudflare pelo
 firewall) não é afetada. Junto disso, o pipeline repete um deploy que termina
@@ -557,12 +565,12 @@ environment `staging` e outra no `production`, cada uma no projeto
 | Item                                                                                                   | Staging                                                                                                                               | Produção                                                                                |
 | ------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
 | environment do Dokploy                                                                                 | `staging`                                                                                                                             | `production`                                                                            |
-| sufixo dos App Names                                                                                   | `-staging`                                                                                                                            | `-production`                                                                           |
+| sufixo dos App Names                                                                                   | aleatório, gerado pelo Dokploy ([seção 7.2](#72-nomes-name-e-app-name))                                                               | aleatório, gerado pelo Dokploy                                                          |
 | tag das imagens (`trajetto-api`, `trajetto-ai`)                                                        | `:staging`                                                                                                                            | `:stable` (crie antes: [seção 8](#8-primeiro-deploy-na-ordem-com-conferências))         |
-| domínio da API                                                                                         | `api-staging.intrajetto.com`                                                                                                          | a definir (previsto `api.intrajetto.com`)                                               |
+| domínio da API                                                                                         | `api-staging.intrajetto.com`                                                                                                          | `api.intrajetto.com`                                                                    |
 | `APP_ENV`                                                                                              | `staging`                                                                                                                             | `production`                                                                            |
-| `HTTP_REQUEST` / `API_HTTP_REQUEST`                                                                    | `https://staging.intrajetto.com` / `https://api-staging.intrajetto.com`                                                               | `https://www.intrajetto.com` / `https://api.intrajetto.com` (previsto)                  |
-| `AI_LOCAL_URL`                                                                                         | `http://trajetto-ai-staging:8080`                                                                                                     | `http://trajetto-ai-production:8080`                                                    |
+| `HTTP_REQUEST` / `API_HTTP_REQUEST`                                                                    | `https://staging.intrajetto.com` / `https://api-staging.intrajetto.com`                                                               | `https://www.intrajetto.com` / `https://api.intrajetto.com`                             |
+| `AI_LOCAL_URL`                                                                                         | `http://<App Name da IA de staging>:8080`                                                                                             | `http://<App Name da IA de produção>:8080`                                              |
 | segredos (senhas do Postgres e do Redis, `JWT_*`, token da IA, `WEBHOOK_SECRETS_KEY`, `DOCS_PASSWORD`) | **próprios**                                                                                                                          | **outros**; nunca compartilhe entre ambientes                                           |
 | `R2_*`                                                                                                 | bucket de staging (CORS para a web de staging)                                                                                        | bucket de produção                                                                      |
 | backup do banco (aba _Backups_ do PostgreSQL, [seção 18](#18-backup-e-restauração))                    | prefixo `trajetto-staging/` no bucket `trajetto-backups`                                                                              | prefixo `trajetto-production/`; recomendado um bucket próprio (`trajetto-backups-prod`) |
@@ -571,7 +579,7 @@ environment `staging` e outra no `production`, cada uma no projeto
 | `ALLOW_EMPTY_DATABASE_BOOTSTRAP`                                                                       | `true` **só** no primeiro boot                                                                                                        | `false` (`true` só numa instalação nova sem dados a restaurar, uma vez)                 |
 | IA                                                                                                     | opcional: sem a Application `trajetto-ai`, use `AI_PROVIDER=none` na API (economiza ~1 GiB)                                           | `trajetto-ai` com `AI_PROVIDER=local`                                                   |
 | `PROOF_SIGNING_*`                                                                                      | o certificado **de teste** ([seção 7.11](#711-certificado-do-comprovante-a1-icp-brasil)), ou vazio (sem assinatura, e o PDF diz isso) | o certificado A1 (e-CNPJ)                                                               |
-| réplicas da API                                                                                        | 2 (ou 1 para economizar RAM)                                                                                                          | 2                                                                                       |
+| réplicas da API                                                                                        | 1 (hoje; 2 para testar duas réplicas)                                                                                                 | 2                                                                                       |
 | environment do GitHub                                                                                  | `staging` (sem revisores)                                                                                                             | `production` (revisores obrigatórios)                                                   |
 | `SWARM_API_SERVICE` (GitHub)                                                                           | `trajetto-api-staging`                                                                                                                | `trajetto-api-production`                                                               |
 
@@ -581,9 +589,14 @@ Toda vez que o Dokploy pede para criar um serviço, o diálogo tem dois nomes:
 **Name** (o rótulo no painel) e **App Name** (o nome do serviço no Swarm e o
 **nome de rede** pelo qual os outros serviços o encontram). O App Name precisa
 ser único no servidor inteiro, então o Dokploy sugere o Name com um sufixo
-aleatório. **Troque a sugestão pelos nomes abaixo** — o resto deste documento
-os usa. Se a sua versão não deixar editar o App Name, anote o que o Dokploy
-gerou e use-o onde este documento disser `<App Name …>`.
+aleatório. Na montagem de 10/2026 os App Names ficaram com esse sufixo
+aleatório, e o Dokploy instalado (v0.30.10) não deixa editar o App Name depois
+de criado. **Os nomes da tabela abaixo, usados no resto deste documento, são
+marcadores**: troque-os pelo App Name que o painel mostra (o sufixo não causa
+problema e evita colisão entre staging e produção). Na criação, mantenha o App
+Name sugerido (com o sufixo) ou digite o da tabela, se o diálogo deixar; depois
+de criado, ele não muda. Os passos 7.4 a 7.7 dizem `<o App Name sugerido>`
+para esse campo.
 
 | Serviço                     | Onde criar                               | Name                | App Name (staging)          | App Name (produção)            |
 | --------------------------- | ---------------------------------------- | ------------------- | --------------------------- | ------------------------------ |
@@ -628,7 +641,7 @@ a credencial: o deployment da Application termina em `error` com
    | Campo             | Valor                                                                                                        |
    | ----------------- | ------------------------------------------------------------------------------------------------------------ |
    | Name              | `trajetto-postgres`                                                                                          |
-   | App Name          | `trajetto-postgres-staging` (ou `-production`)                                                               |
+   | App Name          | `<o App Name sugerido>` (marcador neste documento: `trajetto-postgres-staging` ou `-production`; seção 7.2)  |
    | Database Name     | `trajetto`                                                                                                   |
    | Database User     | `trajetto`                                                                                                   |
    | Database Password | `openssl rand -hex 24` (hex: entra na URL da API sem precisar de escape); guarde no gerenciador de senhas    |
@@ -654,9 +667,9 @@ a credencial: o deployment da Application termina em `error` com
 ### 7.5 Redis (Database)
 
 1. **Create Service → Database → Redis**.
-2. Preencha: Name `trajetto-redis`; App Name `trajetto-redis-staging` (ou
-   `-production`); Database Password `openssl rand -hex 32` (guarde); Docker
-   Image `redis:7-alpine`.
+2. Preencha: Name `trajetto-redis`; App Name `<o App Name sugerido>`
+   (marcador: `trajetto-redis-staging` ou `-production`; seção 7.2); Database
+   Password `openssl rand -hex 32` (guarde); Docker Image `redis:7-alpine`.
 3. **Create** e **Deploy**. _External Port_ vazio.
 4. **Sem persistência e com teto de memória** (era o comando do compose): o
    Redis só guarda chaves curtas que expiram sozinhas (contadores do rate
@@ -686,7 +699,8 @@ a credencial: o deployment da Application termina em `error` com
 ### 7.6 `trajetto-ai` (Application)
 
 1. **Create Service → Application**. Name `trajetto-ai`; App Name
-   `trajetto-ai-staging` (ou `-production`). **Create**.
+   `<o App Name sugerido>` (marcador: `trajetto-ai-staging` ou `-production`;
+   seção 7.2). **Create**.
 2. Aba _General_ → _Provider_ → **Docker**:
 
    | Campo        | Valor                                                                     |
@@ -776,7 +790,8 @@ pipeline avisa "deploy de trajetto-ai pulado" e segue).
 ### 7.7 `trajetto-api` (Application)
 
 1. **Create Service → Application**. Name `trajetto-api`; App Name
-   `trajetto-api-staging` (ou `-production`). **Create**.
+   `<o App Name sugerido>` (marcador: `trajetto-api-staging` ou `-production`;
+   seção 7.2). **Create**.
 2. Aba _General_ → _Provider_ → **Docker**: _Docker Image_
    `ghcr.io/trajetto-organization/trajetto-api:staging` (produção:
    `:stable`), _Registry URL_ `ghcr.io`, _Username_ e _Password_ da seção 7.3.
@@ -799,7 +814,7 @@ pipeline avisa "deploy de trajetto-ai pulado" e segue).
    REDIS_URL=redis://:<SENHA_DO_REDIS>@trajetto-redis-production:6379
 
    HTTP_REQUEST=https://www.intrajetto.com
-   API_HTTP_REQUEST=https://<host da API de produção; previsto api.intrajetto.com>
+   API_HTTP_REQUEST=https://api.intrajetto.com
    JWT_SECRET=<openssl rand -base64 48>
    JWT_SECRET_REFRESH_TOKEN=<openssl rand -base64 48, outro valor>
    MASTER_USER_EMAIL=<e-mail da equipe>
@@ -863,13 +878,13 @@ pipeline avisa "deploy de trajetto-ai pulado" e segue).
 
 4. Aba _Domains_ → **Add Domain**:
 
-   | Campo                | Valor                                                                                                       |
-   | -------------------- | ----------------------------------------------------------------------------------------------------------- |
-   | Host                 | produção: o host definido para a API (previsto `api.intrajetto.com`); staging: `api-staging.intrajetto.com` |
-   | Path                 | `/`                                                                                                         |
-   | Container Port       | `3333`                                                                                                      |
-   | HTTPS                | ligado                                                                                                      |
-   | Certificate Provider | `Let's Encrypt`                                                                                             |
+   | Campo                | Valor                                                                 |
+   | -------------------- | --------------------------------------------------------------------- |
+   | Host                 | produção: `api.intrajetto.com`; staging: `api-staging.intrajetto.com` |
+   | Path                 | `/`                                                                   |
+   | Container Port       | `3333`                                                                |
+   | HTTPS                | ligado                                                                |
+   | Certificate Provider | `Let's Encrypt`                                                       |
 
    **Create**. O Dokploy escreve `/etc/dokploy/traefik/dynamic/<App Name>.yml`
    com o roteador `web` (redireciona para HTTPS), o roteador `websecure` com o
@@ -959,7 +974,7 @@ cat /etc/dokploy/traefik/dynamic/trajetto-api-production.yml
 ```
 
 Deve ter dois roteadores com a regra ``Host(`<host da API>`)`` (em produção,
-o previsto é `api.intrajetto.com`)
+`api.intrajetto.com`)
 (um no entrypoint `web`, que redireciona para HTTPS, e um no `websecure`, com
 `certResolver: letsencrypt`) e o serviço com
 `url: http://trajetto-api-production:3333` e `passHostHeader: true`. O mesmo
@@ -974,13 +989,23 @@ e a prioridade do roteador. O compose da API não tinha middlewares de borda
 (rate limit e HSTS da web ficam no manual da web); o rate limit da API é da
 própria API.
 
+O registro DNS do host nasce **já com proxy** (nuvem laranja): o firewall só
+admite a Cloudflare ([seção 6.1](#61-firewall-da-vps-contabo)), e o desafio
+HTTP-01 do Let's Encrypt chega ao Traefik pela Cloudflare, na porta 80. Nunca
+crie um registro sem proxy apontando para a VPS: ele não passa pelo firewall e
+publica o IP da origem no DNS público. O procedimento e o teste do desafio
+estão em [`infraestrutura.md` → 5.5](./infraestrutura.md#55-domínios-e-certificados-lets-encrypt).
+
 Se o certificado não sai (o domínio responde com o certificado padrão do
-Traefik e a Cloudflare dá erro 526): com _Always Use HTTPS_ na Cloudflare e
-_Full (strict)_, o desafio HTTP do Let's Encrypt pode não chegar ao Traefik.
-Saída simples: deixe a zona em _Full_ (sem strict) até o certificado aparecer
-no log do Traefik (`docker logs dokploy-traefik 2>&1 | grep -i acme`) e volte
-para _Full (strict)_; ou use um _Origin Certificate_ da Cloudflare como
-certificado próprio do domínio.
+Traefik e a Cloudflare dá erro 526): primeiro rode o teste do desafio (o
+caminho `/.well-known/acme-challenge/` em `http://` tem de responder 404 sem
+redirect). Saída simples: uma _Configuration Rule_ só para o hostname novo,
+com _SSL_ = _Full_, até o certificado aparecer no log do Traefik
+(`docker logs dokploy-traefik 2>&1 | grep -i acme`); depois apague a regra.
+**Não** mude a zona inteira para _Full_ (sem strict): enfraquece a produção
+toda. Outras saídas, não testadas aqui: um _Origin Certificate_ da Cloudflare
+como certificado próprio do domínio, ou o desafio DNS-01 com um token da
+Cloudflare restrito a _Zone · DNS · Edit_ na zona.
 
 ### 7.9 Backup do PostgreSQL (aba Backups do Database)
 
@@ -1004,8 +1029,9 @@ Applications e do **App Name** da API.
   endereços. A URL termina em `.../services/application/<applicationId>`: é
   esse último pedaço (letras, números, `-` e `_`). O script recusa outro
   formato.
-- **App Name**: o nome que você definiu (seção 7.2); confira no topo da página
-  da Application ou com `docker service ls` no host.
+- **App Name**: o que ficou na criação, em geral o sugerido pelo Dokploy,
+  com sufixo (seção 7.2); confira no topo da página da Application ou com
+  `docker service ls` no host.
 
 | Anotação                        | Vira no GitHub (environment do ambiente) |
 | ------------------------------- | ---------------------------------------- |
@@ -1378,8 +1404,8 @@ navegador / app ──TLS──▶ Cloudflare (proxy laranja) ──▶ Traefik 
 ```
 
 **Roteamento**: a aba _Domains_ da Application `trajetto-api` cria o roteador
-do host (`api-staging.intrajetto.com` em staging; em produção, o host a
-definir, previsto `api.intrajetto.com`),
+do host (`api-staging.intrajetto.com` em staging; `api.intrajetto.com` em
+produção),
 entrypoint `websecure`, certificado do resolver `letsencrypt`, serviço na
 porta 3333 com `passHostHeader` ([seção 7.8](#78-o-traefik-da-api-o-que-os-labels-faziam)).
 Sem cookie sticky: o socket é só WebSocket, e o adapter Redis leva os eventos
@@ -1423,7 +1449,8 @@ senha, refresh e handshake do socket) — `RATE_LIMIT_TRUSTED_PROXY`:
    `docker inspect dokploy-traefik --format '{{json .HostConfig.PortBindings}}'`.
    **Nunca** inclua faixas da overlay (`10.0.0.0/8`) como confiáveis.
 2. Trava da origem (defesa em profundidade): firewall aceitando 80/443 só das
-   faixas da Cloudflare, ou Authenticated Origin Pulls. **Não** use Cloudflare
+   faixas da Cloudflare (feito em 29/10/2026,
+   [seção 6.1](#61-firewall-da-vps-contabo)), ou Authenticated Origin Pulls. **Não** use Cloudflare
    Tunnel sem mudar o código antes: o par passaria a ser o `cloudflared` e todo
    mundo cairia num balde só.
 3. `readTimeout` de 120 s no entrypoint `websecure` (a API também corta em
@@ -1484,7 +1511,7 @@ _Add environment secret_ / _Add environment variable_.
 
 | Tipo     | Nome                                                                                    | Valor                                                                                                                                                                                                      | Obrigatório?                                                                               |
 | -------- | --------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
-| secret   | `DOKPLOY_URL`                                                                           | URL do painel, **https** (ex. `https://dokploy.seudominio.com.br`; o script recusa http)                                                                                                                   | sim (com os dois abaixo; nenhum dos três = deploy pulado com aviso)                        |
+| secret   | `DOKPLOY_URL`                                                                           | URL do painel, **https**: `https://dokploy.intrajetto.com`, pela Cloudflare (nunca o IP, que o firewall fecha; o script recusa http)                                                                       | sim (com os dois abaixo; nenhum dos três = deploy pulado com aviso)                        |
 | secret   | `DOKPLOY_API_KEY`                                                                       | a chave da seção 7.10                                                                                                                                                                                      | sim                                                                                        |
 | secret   | `DOKPLOY_API_APPLICATION_ID`                                                            | applicationId da `trajetto-api` de staging                                                                                                                                                                 | sim                                                                                        |
 | secret   | `DOKPLOY_AI_APPLICATION_ID`                                                             | applicationId da `trajetto-ai` de staging                                                                                                                                                                  | não (sem ele: aviso e a IA não é atualizada)                                               |
@@ -1518,12 +1545,12 @@ environments, se ficou lá.
 _Settings → Secrets and variables → Actions_, abas _Secrets_ e _Variables_
 (nível do repositório):
 
-| Tipo     | Nome                      | Para quê                                                                                                                                                                                                                                                                                                                                      |
-| -------- | ------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| variable | `MIGRATIONS_VIA_JOB`      | `true` liga o job único de migrations no promote                                                                                                                                                                                                                                                                                              |
-| variable | `ROLLOUT_VERIFY`          | como o run prova o rollout da API: `http` (padrão no staging) = a liveness pública responde o commit novo por 90 s; `ssh` (padrão na produção) = o Swarm, por SSH; `off` = nenhuma (só em emergência; fica registrado no resumo). Valor vazio ou desconhecido = o padrão do ambiente. Pode ser definida só num environment para valer só nele |
-| variable | `IMAGE_SCAN_ENFORCE`      | `true` faz um CRITICAL corrigível no Trivy falhar o build                                                                                                                                                                                                                                                                                     |
-| secret   | `CLIENT_REPOS_READ_TOKEN` | token só leitura de `Trajetto-Organization/trajetto-ui` e `Trajetto-Organization/trajetto-mobile` (fine-grained, _Contents: Read-only_), para o contrato de rotas do `ci.yml`                                                                                                                                                                 |
+| Tipo     | Nome                      | Para quê                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| -------- | ------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| variable | `MIGRATIONS_VIA_JOB`      | `true` liga o job único de migrations no promote                                                                                                                                                                                                                                                                                                                                                                            |
+| variable | `ROLLOUT_VERIFY`          | como o run prova o rollout da API: `http` (padrão no staging) = a liveness pública responde o commit novo por 90 s; `ssh` (padrão na produção) = o Swarm, por SSH; `off` = nenhuma (só em emergência; fica registrado no resumo). Valor vazio ou desconhecido = o padrão do ambiente. Pode ser definida só num environment para valer só nele. Em uso em 29/10/2026: `http` nos dois ambientes (o SSH não está configurado) |
+| variable | `IMAGE_SCAN_ENFORCE`      | `true` faz um CRITICAL corrigível no Trivy falhar o build                                                                                                                                                                                                                                                                                                                                                                   |
+| secret   | `CLIENT_REPOS_READ_TOKEN` | token só leitura de `Trajetto-Organization/trajetto-ui` e `Trajetto-Organization/trajetto-mobile` (fine-grained, _Contents: Read-only_), para o contrato de rotas do `ci.yml`                                                                                                                                                                                                                                               |
 
 **Apague se existirem** (não são mais lidos por nada):
 `DOKPLOY_COMPOSE_ID` (dos dois environments: era o id do app Compose), a
@@ -1895,15 +1922,15 @@ de 1 dia) saiu do código e do pipeline; nada no repositório agenda backup.
    _Secret Access Key_ e o _Account ID_ da conta.
 2. Dokploy → **Settings → S3 Destinations** → **Add**:
 
-   | Campo             | Valor                                             |
-   | ----------------- | ------------------------------------------------- |
-   | Name              | `r2-trajetto-backups`                             |
-   | Provider          | **Cloudflare**                                    |
-   | Access Key Id     | o _Access Key ID_ do token R2 do bucket de backup |
-   | Secret Access Key | o _Secret Access Key_ do mesmo token              |
-   | Bucket            | `trajetto-backups`                                |
-   | Region            | `auto`                                            |
-   | Endpoint          | `https://<ACCOUNT_ID>.r2.cloudflarestorage.com`   |
+   | Campo             | Valor                                                             |
+   | ----------------- | ----------------------------------------------------------------- |
+   | Name              | `r2-trajetto-backups` (o de staging foi criado como `r2-backups`) |
+   | Provider          | **Cloudflare**                                                    |
+   | Access Key Id     | o _Access Key ID_ do token R2 do bucket de backup                 |
+   | Secret Access Key | o _Secret Access Key_ do mesmo token                              |
+   | Bucket            | `trajetto-backups`                                                |
+   | Region            | `auto`                                                            |
+   | Endpoint          | `https://<ACCOUNT_ID>.r2.cloudflarestorage.com`                   |
 
    **Test** (o Dokploy confere o acesso) e **Create**. O token fica só aqui:
    não vai em Environment nenhum.
@@ -2219,7 +2246,7 @@ Limiares em `DEFAULT_ALERT_THRESHOLDS` (`alert-rules.ts`).
 | ----------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `Canal WHATSAPP: falha de credencial`                 | token da Meta vencido/revogado: gerar token de sistema novo no Business Manager e atualizar `META_WHATSAPP_ACCESS_TOKEN`; as falhas estão em `/health/dead-letter?channel=WHATSAPP` |
 | `Canal EMAIL: falha de credencial`                    | chave do Resend revogada ou domínio desverificado                                                                                                                                   |
-| `Canal PUSH: falha de credencial`                     | token de acesso da Expo (push security)                                                                                                                                             |
+| `Canal PUSH: falha de credencial`                     | a credencial FCM V1 do projeto no EAS (`eas credentials`), ou o _Enhanced Security for Push Notifications_ ligado no projeto Expo: a API não envia token de acesso da Expo          |
 | `Canal X: N entregas falharam de vez`                 | abrir o dead letter do canal e ler o prefixo `[... code=...]` mais comum                                                                                                            |
 | `Outbox` / `Entregas` / `Webhooks` / `Análises de IA` | `workers` em `/health/metrics` e o log da réplica; reiniciar a task travada                                                                                                         |
 | `Cron X`                                              | `cron_jobs` em `/health/metrics` traz `last_error`; o catch-up refaz jobs diários a cada hora                                                                                       |
@@ -2408,7 +2435,7 @@ o recria.
 > **Domínio antigo.** A stack antiga (o `compose.production.yaml` da `main`
 > anterior a este desenho) respondia em `trajettoapi.thorsolucoes.com.br`. A
 > produção no Dokploy usa o host da [seção 26](#26-os-três-repositórios-juntos)
-> (`api.intrajetto.com`, ainda a definir); o domínio antigo só importa enquanto
+> (`api.intrajetto.com`, no ar desde 29/10/2026); o domínio antigo só importa enquanto
 > a stack antiga estiver no ar.
 
 O dado mora no volume do Postgres da stack antiga (`trajetto_postgres_data`,
@@ -2543,7 +2570,10 @@ Na ordem:
 > e
 > [`trajetto-mobile/docs/deploy.md`](https://github.com/Trajetto-Organization/trajetto-mobile/blob/main/docs/deploy.md).
 > Mudou aqui, mude nos outros dois. O detalhe de cada passo fica no manual do
-> repositório dono dele.
+> repositório dono dele. O que foi configurado à mão nos painéis (Contabo,
+> Dokploy, Cloudflare, GitHub, Expo, Resend e R2), os tokens e o porquê de cada
+> escolha ficam em
+> [`trajetto-api/docs/infraestrutura.md`](https://github.com/Trajetto-Organization/trajetto-api/blob/staging/docs/infraestrutura.md).
 
 ### Quem é quem
 

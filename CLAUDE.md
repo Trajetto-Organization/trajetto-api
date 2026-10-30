@@ -27,6 +27,7 @@ Idioma do produto: pt-BR.
 | testes: suítes, comandos, regras                                                              | `docs/testes.md`                |
 | variáveis de ambiente (todas)                                                                 | `docs/variaveis-de-ambiente.md` |
 | pipeline, Dokploy, staging/produção, rollback, backup, alertas                                | `docs/deploy.md`                |
+| contas e painéis feitos à mão (Contabo, Dokploy, Cloudflare, GitHub, Expo), tokens, porquês   | `docs/infraestrutura.md`        |
 
 ## Stack
 
