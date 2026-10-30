@@ -11,7 +11,7 @@
 > registro dessas configurações: uma mudança feita num painel que não chega
 > aqui se perde.
 >
-> Última revisão: 29/10/2026.
+> Última revisão: 30/10/2026.
 
 ## Sumário
 
@@ -246,17 +246,17 @@ Todos na zona `intrajetto.com` da Cloudflare. Só subdomínios de um nível
 (`api-staging`, nunca `api.staging`): o certificado universal gratuito da
 Cloudflare cobre só `*.intrajetto.com`.
 
-| Host                         | Papel                                                                                    | Proteção na borda                              | Destino na origem                                  |
-| ---------------------------- | ---------------------------------------------------------------------------------------- | ---------------------------------------------- | -------------------------------------------------- |
-| `www.intrajetto.com`         | web de produção (site público e sistema logado)                                          | proxy                                          | Application `trajetto-ui` de produção, porta 3000  |
-| `intrajetto.com` (apex)      | só redireciona com 301 para `https://www.intrajetto.com`, com caminho e query            | proxy; Redirect Rule (seção 6.3)               | nenhum: a Cloudflare responde                      |
-| `staging.intrajetto.com`     | web de staging                                                                           | proxy e Cloudflare Access (seção 6.4)          | Application `trajetto-ui` de staging, porta 3000   |
-| `api.intrajetto.com`         | API de produção: REST, Socket.IO, webhooks e integrações                                 | proxy                                          | Application `trajetto-api` de produção, porta 3333 |
-| `api-staging.intrajetto.com` | API de staging                                                                           | proxy, **sem** Access de propósito (seção 6.4) | Application `trajetto-api` de staging, porta 3333  |
-| `dokploy.intrajetto.com`     | painel do Dokploy e a API dele, que o pipeline chama                                     | proxy; regra de Skip do WAF em `/api/`         | o painel do Dokploy                                |
-| `mail.intrajetto.com`        | domínio de envio do Resend (só registros de e-mail; não é site)                          | registros DNS                                  | o Resend                                           |
-| `uptime.intrajetto.com`      | **A confirmar com o dono:** o que roda aqui, quem criou, se tem proxy e como é protegido | —                                              | —                                                  |
-| `monitor.intrajetto.com`     | **A confirmar com o dono:** idem                                                         | —                                              | —                                                  |
+| Host                         | Papel                                                                                                                                                               | Proteção na borda                                                  | Destino na origem                                  |
+| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------ | -------------------------------------------------- |
+| `www.intrajetto.com`         | web de produção (site público e sistema logado)                                                                                                                     | proxy                                                              | Application `trajetto-ui` de produção, porta 3000  |
+| `intrajetto.com` (apex)      | só redireciona com 301 para `https://www.intrajetto.com`, com caminho e query                                                                                       | proxy; Redirect Rule (seção 6.3)                                   | nenhum: a Cloudflare responde                      |
+| `staging.intrajetto.com`     | web de staging                                                                                                                                                      | proxy e Cloudflare Access (seção 6.4)                              | Application `trajetto-ui` de staging, porta 3000   |
+| `api.intrajetto.com`         | API de produção: REST, Socket.IO, webhooks e integrações                                                                                                            | proxy                                                              | Application `trajetto-api` de produção, porta 3333 |
+| `api-staging.intrajetto.com` | API de staging                                                                                                                                                      | proxy, **sem** Access de propósito (seção 6.4)                     | Application `trajetto-api` de staging, porta 3333  |
+| `dokploy.intrajetto.com`     | painel do Dokploy e a API dele, que o pipeline chama                                                                                                                | proxy; regra de Skip do WAF em `/api/`                             | o painel do Dokploy                                |
+| `mail.intrajetto.com`        | domínio de envio do Resend (só registros de e-mail; não é site)                                                                                                     | registros DNS                                                      | o Resend                                           |
+| `uptime.intrajetto.com`      | Uptime Kuma, o monitor de disponibilidade (informado pelo dono em 30/10/2026). **A confirmar com o dono:** onde roda, o que vigia, para onde avisa e quem tem login | proxy (responde com `server: cloudflare`, conferido em 30/10/2026) | **A confirmar com o dono**                         |
+| `monitor.intrajetto.com`     | Beszel, o monitor de recursos do servidor (informado pelo dono em 30/10/2026). **A confirmar com o dono:** onde roda, o que vigia, se alerta e quem tem login       | proxy (idem)                                                       | **A confirmar com o dono**                         |
 
 A IA (`trajetto-ai`) não tem hostname: só a API a alcança, pela rede interna.
 
@@ -285,37 +285,47 @@ A IA (`trajetto-ai`) não tem hostname: só a API a alcança, pela rede interna.
 
 ### 3.1 As contas
 
-| Conta                                       | Para quê                                                        | Quem administra                                                                                 | 2FA                          |
-| ------------------------------------------- | --------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- | ---------------------------- |
-| Contabo                                     | a VPS, o firewall, o console VNC, o Auto Backup da VM           | a conta foi criada por outra pessoa; o dono tem acesso total ao painel                          | **A confirmar com o dono**   |
-| Cloudflare                                  | DNS, TLS, segurança, Access, Turnstile, Web Analytics, R2       | o dono                                                                                          | **A confirmar com o dono**   |
-| Dokploy (`dokploy.intrajetto.com`)          | Applications, Databases, variáveis, domínios, backups           | dois usuários: a conta dona (criada na instalação) e a conta admin pessoal do dono (seção 5.10) | pendente nas duas (seção 14) |
-| GitHub, organização `Trajetto-Organization` | código, Actions, GHCR, secrets                                  | **A confirmar com o dono:** quem são os owners da organização                                   | **A confirmar com o dono**   |
-| Expo, organização `trajetto`                | EAS Build e Update, credenciais do app                          | o dono; o CI usa o robot `github-actions`                                                       | **A confirmar com o dono**   |
-| Firebase, projeto `trajetto`                | push do Android (FCM)                                           | o dono                                                                                          | **A confirmar com o dono**   |
-| Resend                                      | e-mail transacional                                             | o dono                                                                                          | **A confirmar com o dono**   |
-| healthchecks.io                             | o heartbeat da API (seção 10)                                   | o dono                                                                                          | **A confirmar com o dono**   |
-| MapTiler                                    | tiles do mapa (web e comprovante)                               | o dono                                                                                          | **A confirmar com o dono**   |
-| LocationIQ                                  | geocodificação reversa                                          | o dono                                                                                          | **A confirmar com o dono**   |
-| Meta (Business Manager)                     | WhatsApp; hoje bloqueado por política da Meta e não configurado | o dono                                                                                          | **A confirmar com o dono**   |
-| Google Play Console                         | publicação do app                                               | ainda não configurado                                                                           | —                            |
-| Registrador do domínio `intrajetto.com`     | os nameservers que apontam para a Cloudflare                    | **A confirmar com o dono:** qual registrador e quem é o titular                                 | **A confirmar com o dono**   |
+| Conta                                            | Para quê                                                        | Quem administra                                                                                                                        | 2FA                          |
+| ------------------------------------------------ | --------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------- |
+| Contabo                                          | a VPS, o firewall, o console VNC, o Auto Backup da VM           | a conta foi criada por outra pessoa; o dono tem acesso total ao painel                                                                 | **A confirmar com o dono**   |
+| Cloudflare                                       | DNS, TLS, segurança, Access, Turnstile, Web Analytics, R2       | o dono                                                                                                                                 | **A confirmar com o dono**   |
+| Dokploy (`dokploy.intrajetto.com`)               | Applications, Databases, variáveis, domínios, backups           | dois usuários: a conta dona (criada na instalação) e a conta admin pessoal do dono (seção 5.10)                                        | pendente nas duas (seção 14) |
+| GitHub, organização `Trajetto-Organization`      | código, Actions, GHCR, secrets                                  | **A confirmar com o dono:** quem são os owners da organização                                                                          | **A confirmar com o dono**   |
+| Expo, organização `trajetto`                     | EAS Build e Update, credenciais do app                          | o dono; o CI usa o robot `github-actions`                                                                                              | **A confirmar com o dono**   |
+| Firebase, projeto `trajetto`                     | push do Android (FCM)                                           | o dono                                                                                                                                 | **A confirmar com o dono**   |
+| Resend                                           | e-mail transacional                                             | o dono                                                                                                                                 | **A confirmar com o dono**   |
+| healthchecks.io                                  | o heartbeat da API (seção 10)                                   | o dono                                                                                                                                 | **A confirmar com o dono**   |
+| MapTiler                                         | tiles do mapa (web e comprovante)                               | o dono                                                                                                                                 | **A confirmar com o dono**   |
+| LocationIQ                                       | geocodificação reversa                                          | o dono                                                                                                                                 | **A confirmar com o dono**   |
+| Meta (Business Manager)                          | WhatsApp; hoje bloqueado por política da Meta e não configurado | o dono                                                                                                                                 | **A confirmar com o dono**   |
+| Google Play Console                              | publicação do app                                               | ainda não configurado                                                                                                                  | —                            |
+| Registrador do domínio `intrajetto.com`: GoDaddy | os nameservers que apontam para a Cloudflare                    | o dono, pela conta Google da Trajetto (informado em 30/10/2026). **A confirmar com o dono:** o titular do registro (pessoa ou empresa) | **A confirmar com o dono**   |
+
+As contas dos provedores (Cloudflare, GitHub, Expo, Firebase, Resend,
+healthchecks.io, MapTiler, LocationIQ, Meta, GoDaddy e, quando existir, a
+Google Play) estão na conta Google da Trajetto, e o acesso administrativo é
+feito por ela (informado pelo dono em 30/10/2026; o endereço não entra aqui).
+A exceção é a Contabo, criada por outra pessoa. Quem entra nessa conta Google
+recupera a senha de quase todos os provedores: o 2FA dela é o item mais
+importante da [seção 14.2](#142-segurança).
 
 Regras para todas: 2FA ligado, uma conta por pessoa (nada de conta
 compartilhada) e acesso removido no dia em que alguém sai
-([seção 13.2](#132-entrada-e-saída-de-um-dev)).
+([seção 13.2](#132-entrada-e-saída-de-um-dev)). Nos painéis que aceitam
+membros (Dokploy, Cloudflare Access, GitHub, Expo), cada dev entra com o
+próprio usuário, não com a conta Google da Trajetto.
 
 ### 3.2 Dar acesso a um dev novo (o mínimo)
 
 O padrão é **não** dar acesso a painéis de infraestrutura. Um dev que só
 programa precisa de:
 
-| Onde                   | O que dar                                                                                                                                              | Por quê                                                                                       |
-| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------- |
-| GitHub                 | membro da organização, papel **Write** nos repositórios em que vai trabalhar (nunca Admin nem owner), **só depois** das duas proteções do aviso abaixo | push de branches e PRs; Write dá acesso aos secrets pelo código de um workflow (aviso abaixo) |
-| Cloudflare Access      | o e-mail dele na política `Equipe Trajetto` da aplicação `Staging web` (seção 6.4)                                                                     | abrir `staging.intrajetto.com`; não exige conta na Cloudflare                                 |
-| Expo (se mexer no app) | membro da organização `trajetto` com papel _Viewer_; _Developer_ só para quem precisa publicar (aviso abaixo)                                          | baixar APKs de staging e acompanhar builds                                                    |
-| Desenvolvimento local  | nada de produção: o `.env` local nasce do `.env.example` de cada repositório                                                                           | segredos de staging e produção nunca vão para a máquina de um dev                             |
+| Onde                   | O que dar                                                                                                                                              | Por quê                                                                                                                                     |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| GitHub                 | membro da organização, papel **Write** nos repositórios em que vai trabalhar (nunca Admin nem owner), **só depois** das duas proteções do aviso abaixo | push de branches e PRs; Write dá acesso aos secrets pelo código de um workflow (aviso abaixo)                                               |
+| Cloudflare Access      | o e-mail dele na política `Equipe Trajetto` da aplicação `Staging web` (seção 6.4)                                                                     | abrir `staging.intrajetto.com`; não exige conta na Cloudflare                                                                               |
+| Expo (se mexer no app) | membro da organização `trajetto` com papel _Viewer_; _Developer_ só para quem precisa publicar (aviso abaixo)                                          | baixar os APKs de staging e o dev client, que é gerado por quem tem _Developer_ (README do `trajetto-mobile`, passo 3), e acompanhar builds |
+| Desenvolvimento local  | nada de produção: o `.env` local nasce do `.env.example` de cada repositório                                                                           | segredos de staging e produção nunca vão para a máquina de um dev                                                                           |
 
 **Write no GitHub não protege os secrets.** Quem tem Write pode dar push num
 workflow modificado e rodá-lo, e o código do workflow lê os secrets: os de
@@ -948,20 +958,20 @@ _API_. Não escreva aqui.
 
 **Onde**: zona `intrajetto.com` → _DNS → Records_.
 
-| Nome                    | Tipo                       | Proxy                      | Para quê                                                        |
-| ----------------------- | -------------------------- | -------------------------- | --------------------------------------------------------------- |
-| `intrajetto.com` (apex) | A, para o IPv4 da VPS      | sim (laranja)              | só o redirect para o `www`; precisa de proxy para a regra rodar |
-| `www`                   | A, para o IPv4 da VPS      | sim                        | web de produção                                                 |
-| `staging`               | A, para o IPv4 da VPS      | sim                        | web de staging (com Access)                                     |
-| `api`                   | A, para o IPv4 da VPS      | sim                        | API de produção                                                 |
-| `api-staging`           | A, para o IPv4 da VPS      | sim                        | API de staging                                                  |
-| `dokploy`               | A, para o IPv4 da VPS      | sim                        | painel do Dokploy                                               |
-| `uptime`, `monitor`     | **A confirmar com o dono** | **A confirmar com o dono** | **A confirmar com o dono**                                      |
-| `mail` e subnomes       | os que o Resend pediu      | não (registros de e-mail)  | verificação do domínio de envio ([seção 9](#9-e-mail-resend))   |
+| Nome                    | Tipo                       | Proxy                                                             | Para quê                                                                                  |
+| ----------------------- | -------------------------- | ----------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| `intrajetto.com` (apex) | A, para o IPv4 da VPS      | sim (laranja)                                                     | só o redirect para o `www`; precisa de proxy para a regra rodar                           |
+| `www`                   | A, para o IPv4 da VPS      | sim                                                               | web de produção                                                                           |
+| `staging`               | A, para o IPv4 da VPS      | sim                                                               | web de staging (com Access)                                                               |
+| `api`                   | A, para o IPv4 da VPS      | sim                                                               | API de produção                                                                           |
+| `api-staging`           | A, para o IPv4 da VPS      | sim                                                               | API de staging                                                                            |
+| `dokploy`               | A, para o IPv4 da VPS      | sim                                                               | painel do Dokploy                                                                         |
+| `uptime`, `monitor`     | **A confirmar com o dono** | sim (respondem com `server: cloudflare`, conferido em 30/10/2026) | Uptime Kuma (`uptime`) e Beszel (`monitor`); destino na origem **a confirmar com o dono** |
+| `mail` e subnomes       | os que o Resend pediu      | não (registros de e-mail)                                         | verificação do domínio de envio ([seção 9](#9-e-mail-resend))                             |
 
 Não há registros AAAA (confirmado pelo dono em 27/10/2026): a origem não
-recebe IPv6. `uptime` e `monitor` aparecem na lista de origens do Tiered Cache,
-o que indica que recebem tráfego com proxy.
+recebe IPv6. `uptime` e `monitor` aparecem na lista de origens do Tiered Cache
+e, em 30/10/2026, responderam com `server: cloudflare`: têm proxy.
 
 **A confirmar com o dono:** a lista completa de registros (tipo, proxy e para
 que serve cada um), inclusive os do Resend em `mail.intrajetto.com` (SPF,
@@ -1387,10 +1397,10 @@ widget; as chaves não mudam).
 
 **Quem valida cada formulário** (a web mostra o Turnstile nos três):
 
-| Formulário                     | Quem valida o token                                                                                     | Com `TURNSTILE_SECRET_KEY` vazia                                                         |
-| ------------------------------ | ------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
-| login e "esqueci a senha"      | o servidor da web (`src/actions/validate-turnstile`, chamado por `login-user` e `forgot-password-user`) | a validação devolve falso e **nenhum login passa**: na web, a _Secret Key_ é obrigatória |
-| orçamento (formulário público) | a API                                                                                                   | a API deixa de exigir (definida, liga a exigência; vazia, desliga)                       |
+| Formulário                     | Quem valida o token                                                                                     | Com `TURNSTILE_SECRET_KEY` vazia                                                                                                                                                     |
+| ------------------------------ | ------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| login e "esqueci a senha"      | o servidor da web (`src/actions/validate-turnstile`, chamado por `login-user` e `forgot-password-user`) | em staging e produção a web **não sobe**: a _Secret Key_ é obrigatória com `NODE_ENV=production` (`src/env/server.ts`); só na máquina de um dev, sem ela, o token não é conferido    |
+| orçamento (formulário público) | a API                                                                                                   | em staging e produção a API **não sobe** (`src/schemas/env-schema/index.ts`: sem ela o orçamento ficaria sem verificação de robô); só em desenvolvimento a vazia desliga a exigência |
 
 Nunca na API em geral: o login do app quebraria. O login direto na API (o
 app do motorista, scripts) não tem Turnstile e é protegido pelos rate limits
@@ -1818,6 +1828,8 @@ avisa por outro canal (seção 10.1).
 | -------------------------------------- | ------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
 | Heartbeat da API (_dead man's switch_) | healthchecks.io, check `trajetto-api-staging` (período 1 min, tolerância 3 min, alerta por e-mail e Telegram) | a API pinga a cada minuto; uma regra quebrada manda `/fail` com os motivos; banco fora ou scheduler parado = silêncio = alerta |
 | Heartbeat de produção                  | **A confirmar com o dono:** se o check de produção e o `HEALTHCHECK_PING_URL` de produção existem             | —                                                                                                                              |
+| Disponibilidade (Uptime Kuma)          | `uptime.intrajetto.com`                                                                                       | **A confirmar com o dono:** o que vigia, para onde avisa e onde roda (se roda na mesma VPS, não avisa quando a VPS cai)        |
+| Recursos do servidor (Beszel)          | `monitor.intrajetto.com`                                                                                      | **A confirmar com o dono:** o que vigia e se alerta                                                                            |
 | Prontidão dos provedores               | `GET /health/providers`, só MASTER (_Sistema → Provedores_ na web)                                            | Resend, Expo, R2, IA, certificado e heartbeat, sem enviar nada                                                                 |
 | Conferência do deploy                  | o próprio pipeline                                                                                            | `/health/liveness` da API e `/build-id.json` da web respondendo o commit novo                                                  |
 | Falha de backup                        | Dokploy → _Settings → Notifications_                                                                          | **A confirmar com o dono:** se o canal existe                                                                                  |
@@ -1859,8 +1871,10 @@ mudar os dois.
 ### 10.3 O que falta
 
 - monitores de uptime externos para `https://api.intrajetto.com/health/readiness`
-  e `https://www.intrajetto.com/api/health`. **A confirmar com o dono:** se é
-  isso que roda em `uptime.intrajetto.com` ou `monitor.intrajetto.com`;
+  e `https://www.intrajetto.com/api/health`. O Uptime Kuma de
+  `uptime.intrajetto.com` é o lugar natural deles. **A confirmar com o dono:**
+  se já os vigia, e onde ele roda (na mesma VPS, ele não avisa quando a VPS
+  cai);
 - um alerta de validade dos certificados **da origem**. Um monitor externo de
   expiração do TLS vê o certificado de borda da Cloudflare (que ela renova
   sozinha), não o do Let's Encrypt na origem, que é o que vence e causa 526 no
@@ -1923,17 +1937,17 @@ Um valor diferente por ambiente, guardado no _Environment_ do Dokploy e no
 gerenciador de senhas. Os comandos estão em
 [`variaveis-de-ambiente.md` → Como gerar os segredos](./variaveis-de-ambiente.md#como-gerar-os-segredos).
 
-| Segredo                        | Onde precisa estar, igual                                        | O que acontece ao trocar                                                            |
-| ------------------------------ | ---------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
-| senha do Postgres              | o Database PostgreSQL, `DATABASE_URL` e `MIGRATION_DATABASE_URL` | a API cai até as três baterem                                                       |
-| senha do Redis                 | o Database Redis (e o comando dele), `REDIS_URL`                 | idem                                                                                |
-| `AI_TOKEN` / `AI_LOCAL_TOKEN`  | a IA e a API                                                     | a leitura de fotos dá 401 até as duas baterem                                       |
-| `JWT_SECRET`                   | a API                                                            | os tokens de acesso emitidos deixam de valer                                        |
-| `JWT_SECRET_REFRESH_TOKEN`     | a API                                                            | **todo mundo é deslogado**                                                          |
-| `WEBHOOK_SECRETS_KEY`          | a API                                                            | **irrecuperável**: os segredos de webhook dos clientes, cifrados com ela, se perdem |
-| `RATE_LIMIT_FORWARDER_SECRET`  | a API e a web do ambiente                                        | enquanto diferirem, todos os logins contam como um IP só (429 para todo mundo)      |
-| `DOCS_USER` / `DOCS_PASSWORD`  | a API e o environment `production` da web                        | o gate de rotas da web falha até bater                                              |
-| `MASTER_USER_INITIAL_PASSWORD` | a API                                                            | só vale na criação do usuário master                                                |
+| Segredo                        | Onde precisa estar, igual                                        | O que acontece ao trocar                                                                                                                                |
+| ------------------------------ | ---------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| senha do Postgres              | o Database PostgreSQL, `DATABASE_URL` e `MIGRATION_DATABASE_URL` | a API cai até as três baterem                                                                                                                           |
+| senha do Redis                 | o Database Redis (e o comando dele), `REDIS_URL`                 | a API segue no ar, degradada, até as duas baterem: os limites de requisição deixam de contar e o tempo real para (`src/config/redis-client-options.ts`) |
+| `AI_TOKEN` / `AI_LOCAL_TOKEN`  | a IA e a API                                                     | a leitura de fotos dá 401 até as duas baterem                                                                                                           |
+| `JWT_SECRET`                   | a API                                                            | os tokens de acesso emitidos deixam de valer                                                                                                            |
+| `JWT_SECRET_REFRESH_TOKEN`     | a API                                                            | **todo mundo é deslogado**                                                                                                                              |
+| `WEBHOOK_SECRETS_KEY`          | a API                                                            | **irrecuperável**: os segredos de webhook dos clientes, cifrados com ela, se perdem                                                                     |
+| `RATE_LIMIT_FORWARDER_SECRET`  | a API e a web do ambiente                                        | enquanto diferirem, todos os logins contam como um IP só (429 para todo mundo)                                                                          |
+| `DOCS_USER` / `DOCS_PASSWORD`  | a API e o environment `production` da web                        | o gate de rotas da web falha até bater                                                                                                                  |
+| `MASTER_USER_INITIAL_PASSWORD` | a API                                                            | só vale na criação do usuário master                                                                                                                    |
 
 ### 11.4 Temporárias e aposentadas
 
@@ -1965,6 +1979,7 @@ Horários em UTC (São Paulo = UTC−3). Do mais antigo para o mais novo.
 | 27/10/2026      | a web passa a implantar pela API do Dokploy (webhook removido); sondagens mostram a origem exposta; pull da IA falha 3/3 por IPv6; MapTiler e LocationIQ configurados; instruções da produção                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
 | 28/10/2026      | pull da API falha 6/6 por IPv6; exposição da origem medida; `API_PUBLIC_URL` criada no environment `staging` (conferência `http`)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
 | 29/10/2026      | entre 27/10 à noite e 02:14, firewall `default` aplicado à VPS; 02:51–03:00, regras só da Cloudflare; ~03:15, commits `577fc5a` e `d413cb1` da API enviados com o nome automático e o IPv6 da VPS (no texto e numa mensagem de commit; tratados como públicos depois das janelas abaixo, seção 1); ~12:45 e ~14:11, repositórios públicos temporariamente, depois privados (terceira janela da API e da web para os merges de produção); ~13:23, preferência por IPv4 no host; produção no ar (API `01526b0`, web `a1c5242`/v1.1.0), com a correção das URLs do banco e os certificados de `www` e `api` emitidos com o registro já com proxy; domínio da web de produção trocado do apex para `www`; Redirect Rule do apex; HSTS na borda; ~17:03, Email Obfuscation desligado; Web Analytics mantido (CSP e política); build manual do app sem `preview` (`213d6b0`); agendamento noturno das suítes da web removido no commit `7f83d8c` (vale quando chegar à `main`); ~21:50, Smart Tiered Cache; ~21:58, Early Hints; 22:23–22:26, token temporário criado, usado e apagado no mesmo dia; ~22:33, JSD desligado e políticas de bots de IA refeitas; ~22:42 (web) e ~22:48 (API), quarta janela pública, ainda aberta às 23:44 (fechamento a confirmar); ~23:45, pacotes do GHCR conferidos privados; ~23:50, teste do desafio HTTP-01 nos cinco hosts: 404 sem redirect |
+| 30/10/2026      | `APP_ENV=production` na Application da API de produção (o console de integração passa a ser indexável; o staging segue com `noindex`); produção promovida pelo dono, com o `robots.txt` e o `/sitemap.xml` da API (`2d3e547`, `0208102`: em produção, só `/integration/docs`) e, na web, `/login`, `/forgot` e os guias de `/docs` no sitemap; a `trajetto-api` respondia como pública na API do GitHub às ~15:05 (fechamento a confirmar); o dono informa o registrador (GoDaddy), a titularidade das contas na conta Google da Trajetto e o que roda em `uptime` (Uptime Kuma) e `monitor` (Beszel); o `yarn dev` da API passa a gerar o client do Prisma antes de esperar o banco; o dev client do app passa a ser gerado por quem tem _Developer_ na Expo e baixado pelos _Viewers_                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
 
 ---
 
@@ -2441,9 +2456,10 @@ derruba o sistema, depois o que abre uma brecha, depois o resto.
       [Seções 1](#regra-de-ouro-este-arquivo-não-guarda-valores) e
       [11.4](#114-temporárias-e-aposentadas).
 - [ ] **2FA em todas as contas** da seção 3.1 (Contabo, Cloudflare, GitHub,
-      Expo, Firebase, Resend, healthchecks.io, MapTiler, LocationIQ, Meta e o
-      registrador); quem são os owners da organização no GitHub; qual é o
-      registrador do domínio e quem é o titular.
+      Expo, Firebase, Resend, healthchecks.io, MapTiler, LocationIQ, Meta e a
+      GoDaddy), a começar pela **conta Google da Trajetto**, que é a titular
+      de quase todas; quem são os owners da organização no GitHub; quem é o
+      titular do registro do domínio na GoDaddy.
       [Seção 3.1](#31-as-contas).
 - [ ] **Membros da organização `trajetto` na Expo** e o papel de cada um
       (_Viewer_ por padrão).
@@ -2492,7 +2508,8 @@ derruba o sistema, depois o que abre uma brecha, depois o resto.
       [Seção 6.4](#64-zero-trust-access-staging).
 - [ ] Inventário completo do DNS (um _Export_, sem IPs no que vier para
       cá), inclusive os registros do Resend, um eventual DMARC e o MX, e o
-      que são `uptime` e `monitor`. [Seções 2.4](#24-os-hostnames) e
+      tipo e o destino de `uptime` (Uptime Kuma) e `monitor` (Beszel).
+      [Seções 2.4](#24-os-hostnames) e
       [6.1](#61-dns).
 - [ ] Quem criou a regra _Rate limit authentication requests_, o que ela
       cobre e se ocupa a regra gratuita de rate limiting.
@@ -2506,8 +2523,10 @@ derruba o sistema, depois o que abre uma brecha, depois o resto.
       [Seção 10.3](#103-o-que-falta).
 - [ ] Uma cópia do banco interno do Dokploy (`dokploy-postgres`) além do
       Auto Backup da Contabo. [Seção 10.2](#102-backups).
-- [ ] Monitores de uptime externos, alerta de validade dos certificados da
-      origem e heartbeat de backup. [Seção 10.3](#103-o-que-falta).
+- [ ] Monitores de uptime externos (o que o Uptime Kuma já vigia e onde ele
+      roda; o que o Beszel vigia e se alerta), alerta de validade dos
+      certificados da origem e heartbeat de backup.
+      [Seções 10.1](#101-o-que-existe) e [10.3](#103-o-que-falta).
 - [ ] Proteção dos objetos do R2: Bucket Lock nos prefixos de prova e cópia
       periódica. [Seção 6.10](#610-r2).
 - [ ] O nome real do token R2 de staging, e se a produção tem token e

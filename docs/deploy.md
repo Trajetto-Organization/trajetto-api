@@ -1285,8 +1285,10 @@ confere o commit dela de fora (lacuna na
 
 Trocar o token: gere outro (`openssl rand -hex 32`), salve em `AI_TOKEN` da
 IA e em `AI_LOCAL_TOKEN` da API e faça **Deploy** das duas, IA primeiro.
-Entre os dois deploys as leituras falham com 401 e voltam para a fila; nada
-se perde.
+Entre os dois deploys a leitura que estiver em andamento falha com 401, sem
+nova tentativa, e a API pausa os envios por 5 minutos (dobrando até 1 hora)
+para não falhar o resto da fila, que espera em `PENDING` e anda quando o
+token volta a bater. Faça os dois deploys em seguida.
 
 Dimensionamento: pico medido de 0,60–0,63 GiB e p95 de 3,1 s por foto a
 2 CPU / 1 GiB. Mais CPU = suba _CPU Limit_ e `OCR_THREADS` juntos.
@@ -1302,14 +1304,20 @@ o token é o que impede outro contêiner de usar o OCR.
 Comportamento sob carga e falha: o serviço lê uma foto por vez com uma fila
 curta (`AI_MAX_QUEUE`); cheio (ou 10 s esperando), responde 503 `busy` e o
 pedido volta para a fila do Postgres em 5–15 s sem gastar tentativa. Com o
-serviço fora do ar os pedidos esperam na fila; nada se perde e a cota só é
-consumida quando a leitura acontece. `AI_PROVIDER=none` desliga as leituras
-(registros marcados "não analisado").
+serviço fora do ar, cada pedido tenta de novo em 30 s, 2 min e 10 min; depois
+de 5 falhas seguidas a API para de enviar (o disjuntor de
+`src/shared/ai/provider-circuit.ts`) e a fila espera em `PENDING`, sem gastar
+tentativa, com um pedido de teste a cada 1 a 10 minutos. Quando o serviço
+volta, a fila anda sozinha. Numa queda longa, os pedidos de teste gastam
+tentativas e alguns podem acabar como falha depois da quarta. A cota só é
+consumida quando a leitura acontece. `AI_PROVIDER=none`, ou `local` sem URL
+ou sem token, desliga as leituras: nada entra na fila e os registros saem
+"não analisado".
 
 Problemas comuns: toda leitura falha com 401 → `AI_LOCAL_TOKEN` (API) e
-`AI_TOKEN` (IA) diferentes; pedidos parados em `PENDING` → serviço fora,
-`AI_LOCAL_URL` errado ou ausente (a API trata como `none`) ou
-`AI_PROVIDER=none`; `AI_PROVIDER=anthropic` → o boot falha com o motivo (o
+`AI_TOKEN` (IA) diferentes; pedidos parados em `PENDING` → serviço fora ou
+`AI_LOCAL_URL` errado (URL ausente ou `AI_PROVIDER=none` não deixam nada em
+`PENDING`: os registros saem "não analisado"); `AI_PROVIDER=anthropic` → o boot falha com o motivo (o
 provedor externo foi removido).
 
 ## 10. Postgres e Redis
