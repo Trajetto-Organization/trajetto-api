@@ -639,13 +639,64 @@ function renderPublicDocsPage(
 </html>`;
 }
 
+/** The console's path, the one page on this host meant for search. */
+const PUBLIC_DOCS_PATH = "/integration/docs";
+
+/**
+ * The API host's robots.txt. Only the public console, and the OpenAPI
+ * document it renders from (same prefix), is meant for search, and only in
+ * production: staging runs the same image and stays out entirely.
+ *
+ * Cloudflare prepends its managed block to whatever the origin serves, and
+ * that block says `Allow: /` to every crawler. Crawlers take the longest
+ * matching rule and, on a tie, the least restrictive one, so a bare
+ * `Disallow: /` would lose to it; `Disallow: /*` is longer, and the console's
+ * `Allow` longer still.
+ */
+function renderApiRobotsTxt(
+  options: PublicDocsOptions = publicDocsOptionsFromEnv(),
+): string {
+  if (options.environment !== "production") {
+    return "User-agent: *\nDisallow: /*\n";
+  }
+
+  const sitemap = options.serverUrl
+    ? `\nSitemap: ${options.serverUrl}/sitemap.xml\n`
+    : "";
+
+  return `User-agent: *\nAllow: ${PUBLIC_DOCS_PATH}\nDisallow: /*\n${sitemap}`;
+}
+
+/**
+ * The API host's sitemap: the console alone, in production, on the API's own
+ * origin (a sitemap may only list URLs of its host, so the web's cannot). No
+ * lastmod: the page follows the live API, and a date that always says
+ * "today" teaches Google to ignore the field. Null where there is none.
+ */
+function renderApiSitemapXml(
+  options: PublicDocsOptions = publicDocsOptionsFromEnv(),
+): string | null {
+  if (options.environment !== "production" || !options.serverUrl) return null;
+
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <url>
+    <loc>${escapeHtml(options.serverUrl)}${PUBLIC_DOCS_PATH}</loc>
+  </url>
+</urlset>
+`;
+}
+
 export {
   NODE_VERIFICATION_SAMPLE,
   PHP_VERIFICATION_SAMPLE,
   PYTHON_VERIFICATION_SAMPLE,
   PUBLIC_DOCS_CSP_DIRECTIVES,
+  PUBLIC_DOCS_PATH,
   PUBLIC_PREFIX,
   buildPublicApiDocument,
+  renderApiRobotsTxt,
+  renderApiSitemapXml,
   renderPublicDocsPage,
   type OpenApiDocument,
 };

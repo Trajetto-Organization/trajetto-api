@@ -33,6 +33,8 @@ import {
 import {
   PUBLIC_DOCS_CSP_DIRECTIVES,
   buildPublicApiDocument,
+  renderApiRobotsTxt,
+  renderApiSitemapXml,
   renderPublicDocsPage,
   type OpenApiDocument,
 } from "@/shared/integration/public-docs";
@@ -416,6 +418,41 @@ app.register(async (instance) => {
         .header("Cache-Control", "public, max-age=300")
         .status(200)
         .send(renderPublicDocsPage("/integration/docs/openapi.json")),
+  );
+
+  // The host's crawl rules and sitemap: the console above is the one page
+  // here meant for search, and only production's (public-docs.ts).
+  instance.get(
+    "/robots.txt",
+    {
+      schema: { hide: true },
+      config: { rateLimit: { max: 30, timeWindow: "1 minute" } },
+    },
+    async (_request, reply) =>
+      reply
+        .type("text/plain; charset=utf-8")
+        .header("Cache-Control", "public, max-age=3600")
+        .status(200)
+        .send(renderApiRobotsTxt()),
+  );
+
+  instance.get(
+    "/sitemap.xml",
+    {
+      schema: { hide: true },
+      config: { rateLimit: { max: 30, timeWindow: "1 minute" } },
+    },
+    async (_request, reply) => {
+      const sitemap = renderApiSitemapXml();
+
+      if (!sitemap) return reply.callNotFound();
+
+      return reply
+        .type("application/xml; charset=utf-8")
+        .header("Cache-Control", "public, max-age=3600")
+        .status(200)
+        .send(sitemap);
+    },
   );
 });
 
