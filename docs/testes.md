@@ -302,9 +302,9 @@ uma garantia:
 - **Web (Playwright)**: `trajetto-ui/tests/ui`, `tests/a11y` e
   `tests/responsive` rodam contra esta API com o banco `load_test` semeado
   por `tests/load/seed.ts`, `mint-master.ts` e `mint-browser-users.ts`
-  (senha `WEB_E2E_PASSWORD`). A CI noturna da web
-  (`trajetto-ui/.github/workflows/browser-suites.yml`) roda os três nessa
-  ordem. Detalhes em `trajetto-ui/docs/testes.md`.
+  (senha `WEB_E2E_PASSWORD`). As suítes de navegador da web
+  (`trajetto-ui/.github/workflows/browser-suites.yml`, num push em staging,
+  num PR para main e sob demanda) rodam os três nessa ordem. Detalhes em `trajetto-ui/docs/testes.md`.
 - **App (Maestro)**: a suíte do app (`trajetto-mobile/docs/testes.md`) entra
   com as contas que o `seed.ts` cria com `LOAD_MOBILE_E2E=1`
   (`MOBILE_E2E_EMAIL`, `MOBILE_E2E_PASSWORD`, `MOBILE_E2E_TWOFA_EMAIL`,
