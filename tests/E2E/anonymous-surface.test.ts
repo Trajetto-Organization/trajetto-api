@@ -43,6 +43,11 @@ const OPEN_BY_DESIGN: Array<{ pattern: RegExp; reason: string }> = [
       "public integration portal: only the integration endpoints, rate-limited",
   },
   {
+    pattern: /^(GET|HEAD) \/(robots\.txt|sitemap\.xml)$/,
+    reason:
+      "the host's crawl rules and sitemap, for search engines: static text, rate-limited, the sitemap 404 outside production (public-docs.ts)",
+  },
+  {
     pattern: /^(GET|HEAD) \/docs(\/.*)?$/,
     reason:
       "Swagger UI: its own Basic-auth hook (docs-access.ts), not a bearer token",
