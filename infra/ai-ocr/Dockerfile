@@ -8,6 +8,10 @@
 #   docker build -t trajetto-ai infra/ai-ocr                 runtime image (the last stage)
 #   docker build --target test infra/ai-ocr                  runs the pytest suite
 #
+# The build reaches only Docker Hub (the base, by digest) and PyPI (hashed
+# wheels): the models are in models/, and the RUN that checks them has no
+# network.
+#
 # The layers are cut for the server that pulls them. The staging VPS pulls
 # GHCR blobs over an IPv6 route that resets connections mid-download, and
 # Docker restarts a broken layer from zero while keeping the finished ones.
@@ -71,24 +75,38 @@ RUN --mount=type=bind,source=requirements-numpy.txt,target=/tmp/requirements.txt
 RUN --mount=type=bind,source=requirements.txt,target=/tmp/requirements.txt \
     pip install --require-hashes --no-deps -r /tmp/requirements.txt
 
-# --- models: fetched and verified here, shipped as one layer of their own ----
-# Weights fetched in the BUILD, never on the first boot, and verified against
-# the versioned SHA-256 list: two replicas always run the same bytes and the
-# boot needs no network. The exact set is checked (fetch_models.py), then
-# sha256sum -c as the standard second opinion.
+# --- models: verified here, offline, shipped as one layer of their own ------
+# The wheel ships the PP-OCRv6 pair and the direction classifier; the
+# PP-OCRv5 pair of the receipt profile is versioned in models/ (4.8 and
+# 7.9 MB, Apache-2.0, from RapidOCR 3.9.2's own list, the URLs in its
+# default_models.yaml). It used to be downloaded HERE, on every build
+# without cache, from a host in China (www.modelscope.cn): one request, no
+# retry, 60 s of timeout, a CI job hanging on that host. Now the build
+# reaches no host but PyPI and Docker Hub, and this RUN has no network at
+# all: if RapidOCR ever tried to download a model, the build would fail here
+# instead of pulling it.
 #
-# Only what the download ADDED goes to /out (the wheel's own models are
+# Never on the first boot either: two replicas always run the same bytes and
+# the boot needs no network. The exact set is checked (fetch_models.py
+# builds both profiles' engines, which find every file in place, and
+# compares the folder with models.sha256), then sha256sum -c as the standard
+# second opinion. A deliberate model change: fetch_models.py's docstring.
+#
+# Only what is not the wheel's goes to /out (the wheel's own models are
 # already in the rapidocr layer), under its full path, owned by root, 0644,
-# every mtime at the epoch: the same weights always make the same bytes.
+# every mtime at the epoch: the same weights always make the same bytes —
+# the same layer they made when they were downloaded here.
 # This stage needs server.py (fetch_models builds both profiles' engines),
 # so a server edit reruns it in CI; the `COPY --link` of /out below is cached
 # by the content it copies, not by the stage that produced it, so the image
 # keeps the very same models layer and the server never pulls it again.
 FROM base AS models
 COPY models.sha256 fetch_models.py server.py ./
-RUN set -eu; \
+RUN --network=none --mount=type=bind,source=models,target=/tmp/vendored-models \
+    set -eu; \
     models="$(python -c 'import pathlib, rapidocr; print(pathlib.Path(rapidocr.__file__).resolve().parent / "models")')"; \
     shipped="$(ls -A "$models")"; \
+    cp /tmp/vendored-models/*.onnx "$models"/; \
     python fetch_models.py; \
     (cd "$models" && sha256sum -c /app/models.sha256); \
     mkdir -p "/out$models"; \

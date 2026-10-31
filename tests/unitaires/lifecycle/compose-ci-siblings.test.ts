@@ -131,15 +131,22 @@ describe.skipIf(!bash || CASES.length === 0)(
     );
 
     it.each(CASES)(
-      "$file falls back to the default branch when it does not",
+      "$file falls back, with a notice, never to a branch of another name",
       ({ file, siblings }) => {
         const result = pick(read(file), []);
 
         expect(result.status, result.stderr).toBe(0);
+        expect(result.stdout).toMatch(/::notice::/);
 
-        // An empty `ref:` is the checkout action's default branch.
-        for (const key of Object.keys(siblings))
-          expect(result.outputs).not.toContain(`${key}=`);
+        // The sibling's staging (since 30/10/2026; this repository's own probe
+        // is pinned exactly below), or, in a sibling still on the older probe,
+        // no ref at all: the checkout's default branch. Never the work branch
+        // the sibling just said it does not have.
+        for (const key of Object.keys(siblings)) {
+          const ref = new RegExp(`^${key}=(.*)$`, "m").exec(result.outputs);
+
+          expect([undefined, "staging"]).toContain(ref?.[1]);
+        }
       },
     );
 
@@ -182,6 +189,78 @@ describe.skipIf(!bash || CASES.length === 0)(
         }
       },
     );
+
+    /**
+     * Only "no such branch" falls back, to the sibling's staging (where work
+     * branches come from; main can be behind it): `ls-remote --exit-code`
+     * answers 2 for it. A network or credential error (128) used
+     * to fall back too, silently, and tested this branch against the
+     * sibling's default one. Checked on this repository's own workflow only:
+     * the API's CI reads the siblings at their default branch, which moves on
+     * its own schedule.
+     */
+    describe("this repository's probe (ci.yml)", () => {
+      const own = "trajetto-api/.github/workflows/ci.yml";
+
+      beforeEach(() => box.stub("sleep", "exit 0"));
+
+      /** git answers each ls-remote with the next code; the last repeats. */
+      function flaky(codes: number[]) {
+        const counter = `${box.root}/git-count`;
+
+        writeFileSync(counter, "0");
+        box.stub(
+          "git",
+          [
+            `n=$(cat "${counter}"); echo $((n + 1)) > "${counter}"`,
+            `set -- ${codes.join(" ")}`,
+            'i=0; code=0; for c in "$@"; do code=$c; i=$((i + 1)); [ "$i" -gt "$n" ] && break; done',
+            'exit "$code"',
+          ].join("\n"),
+        );
+      }
+
+      it("says, with a notice, that it falls back to the sibling's staging when the sibling has no such branch", () => {
+        const result = pick(read(own), []);
+
+        expect(result.status, result.stderr).toBe(0);
+        expect(result.outputs).toBe("web=staging\napp=staging\n");
+        expect(result.stdout).toMatch(/::notice::trajetto-ui não tem a branch/);
+        expect(result.stdout).toMatch(
+          /::notice::trajetto-mobile não tem a branch/,
+        );
+      });
+
+      it("asks again after a network error, with a warning, and goes on", () => {
+        // trajetto-ui: 128, then the branch exists; trajetto-mobile: no branch.
+        flaky([128, 0, 2]);
+
+        const result = pick(read(own), []);
+
+        expect(result.status, result.stderr).toBe(0);
+        expect(result.outputs).toBe(
+          "web=feat/entregas-chat-e-hardening-2026-09\napp=staging\n",
+        );
+        expect(result.stdout).toMatch(
+          /::warning::A consulta das branches de trajetto-ui falhou \(git ls-remote, código 128; tentativa 1 de 3\)/,
+        );
+        expect(box.calls("sleep")).toEqual(["sleep 10"]);
+      });
+
+      it("fails, instead of testing against a fallback, when GitHub never answers", () => {
+        flaky([128]);
+
+        const result = pick(read(own), []);
+
+        expect(result.status).toBe(1);
+        expect(result.outputs).toBe("");
+        expect(box.calls("git")).toHaveLength(3);
+        expect(box.calls("sleep")).toEqual(["sleep 10", "sleep 20"]);
+        expect(result.stdout).toMatch(
+          /::error::Não deu para consultar as branches de trajetto-ui no GitHub depois de 3 tentativas/,
+        );
+      });
+    });
 
     it.each(CASES)(
       "$file feeds the choice to every sibling checkout",

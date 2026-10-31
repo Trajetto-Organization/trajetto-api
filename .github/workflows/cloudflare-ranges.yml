@@ -15,6 +15,11 @@ on:
 permissions:
   contents: read
 
+# `bash -eo pipefail` for every `run:`, as in the other workflows.
+defaults:
+  run:
+    shell: bash
+
 jobs:
   ranges:
     name: Cloudflare ranges
@@ -27,6 +32,13 @@ jobs:
           sparse-checkout: |
             .github/scripts
             src/config
+
+      # The same Node as every other job (the Dockerfile base), not the
+      # runner's default, which moves with the runner image.
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "22.21.1"
 
       - name: Compare with the published ranges
         run: node .github/scripts/check-cloudflare-ranges.mjs

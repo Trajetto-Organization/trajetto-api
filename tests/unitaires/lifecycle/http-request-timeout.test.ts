@@ -101,9 +101,26 @@ async function serverWith(requestTimeout: number): Promise<FastifyInstance> {
 }
 
 describe("a body sent too slowly", () => {
-  it("is answered 408 and the socket closed", async () => {
+  /**
+   * What the server did is read on the server: the request-timeout error it
+   * raised for that connection (Fastify answers it with a 408 and destroys
+   * the socket), and the socket closing on the client's side.
+   *
+   * The 408 bytes on the client's side are not a reliable witness. The
+   * server destroys the socket while the drip may have a byte in flight that
+   * it never read, and a close with unread data goes out as a TCP RST, which
+   * lets the client's stack drop a 408 already received but not yet read.
+   * That failed this test once, under heavy load on Windows, with the server
+   * having done exactly the right thing.
+   */
+  it("hits the request timeout while it keeps dripping, and the socket is closed", async () => {
     const app = await serverWith(1_000);
     const { port } = app.server.address() as AddressInfo;
+
+    const raised: string[] = [];
+    app.server.on("clientError", (error: NodeJS.ErrnoException) => {
+      raised.push(String(error.code));
+    });
 
     const socket = net.connect(port, "127.0.0.1");
     let received = "";
@@ -119,20 +136,28 @@ describe("a body sent too slowly", () => {
       "POST /x HTTP/1.1\r\nHost: t\r\nContent-Type: application/json\r\nContent-Length: 1000\r\n\r\n",
     );
 
+    // Activity all along: a timer reset by every byte (an idle timeout)
+    // would never fire here, so only a bound on the whole request can.
     const drip = setInterval(() => {
       if (!socket.destroyed) socket.write("a");
     }, 200);
     cleanup.push(() => clearInterval(drip));
     cleanup.push(() => socket.destroy());
 
+    // Without the timeout the socket stays open for as long as the drip
+    // goes on. With it, it closes about a second in; the wait is generous
+    // so a loaded machine cannot make the right behaviour look wrong.
     const elapsed = await Promise.race([
       closed,
-      new Promise<number>((settle) => setTimeout(() => settle(-1), 4_000)),
+      new Promise<number>((settle) => setTimeout(() => settle(-1), 8_000)),
     ]);
 
-    expect(elapsed).toBeGreaterThan(0);
-    expect(received.startsWith("HTTP/1.1 408")).toBe(true);
-  }, 10_000);
+    expect(elapsed, "o socket continuou aberto").toBeGreaterThan(0);
+    expect(raised).toContain("ERR_HTTP_REQUEST_TIMEOUT");
+
+    // When the bytes did arrive before the close, they are the 408.
+    if (received) expect(received.startsWith("HTTP/1.1 408")).toBe(true);
+  }, 15_000);
 });
 
 describe("a websocket", () => {

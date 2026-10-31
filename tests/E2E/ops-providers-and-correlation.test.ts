@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { randomUUID } from "node:crypto";
 
@@ -226,6 +226,36 @@ describe("who may read the providers' readiness", () => {
 });
 
 describe("the providers' readiness, for the MASTER", () => {
+  // The push probe asks Expo for the receipt of an id that does not exist.
+  // Expo is answered here, as it answers that question: no test reaches
+  // exp.host (decision D7, docs/testes.md) — the network guard failed this
+  // file when the probe went out for real.
+  beforeAll(() => {
+    const realFetch = globalThis.fetch;
+
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      const url =
+        input instanceof Request
+          ? input.url
+          : input instanceof URL
+            ? input.href
+            : String(input);
+
+      if (url.startsWith("https://exp.host/")) {
+        return new Response(JSON.stringify({ data: {} }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+
+      return realFetch(input, init);
+    });
+  });
+
+  afterAll(() => {
+    vi.restoreAllMocks();
+  });
+
   it("lists every provider with a status, and no secret value", async () => {
     const response = await get("/health/providers?refresh=true", masterToken);
 

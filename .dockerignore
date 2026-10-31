@@ -47,9 +47,12 @@ docker-compose*.yml
 compose.yaml
 compose.*.yaml
 
-# Documentation
-README.md
-*.md
+# Documentation, at any depth (`*.md` alone matched the root only): no
+# image carries a `*.md` file or docs/, which is what lets a commit that
+# changes only those be promoted with an earlier commit's build
+# (.github/scripts/docs-only.sh, docs/deploy.md "Commits só de
+# documentação").
+**/*.md
 docs/
 
 # The trajetto-ai OCR service builds from its own context (infra/ai-ocr,

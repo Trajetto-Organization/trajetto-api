@@ -129,8 +129,9 @@ describe("API coverage configuration", () => {
     expect(ci).not.toMatch(
       /run: yarn test --run --reporter=basic --coverage\b/,
     );
+    // \r?: a Windows checkout with core.autocrlf has CRLF line endings.
     expect(ci).toMatch(
-      /name: coverage-\$\{\{ github\.sha \}\}\n\s+path: coverage\n/,
+      /name: coverage-\$\{\{ github\.sha \}\}\r?\n\s+path: coverage\r?\n/,
     );
   });
 

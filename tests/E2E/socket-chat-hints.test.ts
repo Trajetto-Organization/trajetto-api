@@ -9,7 +9,14 @@ import type { Server as SocketIOServer } from "socket.io";
 
 import auth from "@/config/auth";
 
+import {
+  chatDriverRoom,
+  chatStaffRoom,
+} from "@/modules/chat/usecases/shared/chat-access-rules";
+import { HINT_BURST, HINT_REFILL_MS } from "@/shared/socket/hint-throttle";
+
 import { socketClientEntry } from "./support/socket-client";
+import { waitForRoom, waitUntil } from "./support/socket-waits";
 import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
@@ -35,6 +42,7 @@ const DRIVER = "018fd000-0000-7000-8000-0000000c4a21";
 const OTHER_DRIVER = "018fd000-0000-7000-8000-0000000c4a22";
 
 interface TestSocket {
+  id: string;
   on: (event: string, handler: (...args: any[]) => void) => void;
   off: (event: string, handler: (...args: any[]) => void) => void;
   emit: (event: string, ...args: unknown[]) => void;
@@ -48,6 +56,15 @@ let io: typeof import("@/websocket");
 let ioServer: SocketIOServer;
 
 let profileId = "";
+
+/**
+ * Cluster-wide `fetchSockets` calls still in flight. A driver's connection
+ * asks the cluster whether they were already online (presence), and on a
+ * shared Redis that question can wait the adapter's timeout for other nodes
+ * before falling back to this replica's own view — a second call. A case
+ * that counts fetches starts after those, not in the middle of them.
+ */
+let fetchesInFlight = 0;
 
 let staff: TestSocket;
 let driver: TestSocket;
@@ -77,7 +94,35 @@ function connectAs(token: string): Promise<TestSocket> {
   });
 }
 
-/** Counts one event on a socket for a while. */
+/**
+ * Every copy of an event that must arrive: waits for the first however long
+ * it takes, then keeps listening `quietMs` for a second one. A fixed window
+ * read a first copy slower than the window as none.
+ */
+async function arrivals(
+  socket: TestSocket,
+  event: string,
+  send: () => void,
+  quietMs = 500,
+): Promise<unknown[]> {
+  const received: unknown[] = [];
+  const handler = (payload: unknown) => received.push(payload);
+
+  socket.on(event, handler);
+
+  try {
+    send();
+
+    await waitUntil(() => received.length > 0, `${event} chegar`);
+    await new Promise((done) => setTimeout(done, quietMs));
+  } finally {
+    socket.off(event, handler);
+  }
+
+  return received;
+}
+
+/** Counts one event on a socket for a while: what a "never" is made of. */
 function count(socket: TestSocket, event: string, forMs: number) {
   return new Promise<unknown[]>((done) => {
     const received: unknown[] = [];
@@ -229,6 +274,17 @@ beforeAll(async () => {
   io = await import("@/websocket");
   ioServer = await io.initializeSocketIO(server);
 
+  const adapter = ioServer.of("/").adapter;
+  const fetchSockets = adapter.fetchSockets.bind(adapter);
+
+  adapter.fetchSockets = ((options: Parameters<typeof fetchSockets>[0]) => {
+    fetchesInFlight += 1;
+
+    return fetchSockets(options).finally(() => {
+      fetchesInFlight -= 1;
+    });
+  }) as typeof adapter.fetchSockets;
+
   ({ io: connect } = await import(/* @vite-ignore */ socketClientEntry()));
 
   staff = await connectAs(await tokenFor(STAFF, CARRIER, null));
@@ -237,8 +293,21 @@ beforeAll(async () => {
     await tokenFor(OTHER_DRIVER_USER, OTHER_CARRIER, OTHER_DRIVER),
   );
 
-  // The connection handler joins rooms after the handshake's queries.
-  await new Promise((done) => setTimeout(done, 1500));
+  // In the rooms the hints are addressed to, as the server records them —
+  // not 1.5 s after the handshake.
+  await waitForRoom(ioServer, staff.id, chatStaffRoom(CARRIER), true);
+  await waitForRoom(
+    ioServer,
+    driver.id,
+    chatDriverRoom(CARRIER, DRIVER_USER),
+    true,
+  );
+  await waitForRoom(
+    ioServer,
+    otherDriver.id,
+    chatDriverRoom(OTHER_CARRIER, OTHER_DRIVER_USER),
+    true,
+  );
 }, 180_000);
 
 afterAll(async () => {
@@ -265,33 +334,56 @@ afterAll(async () => {
 
 describe("a driver's typing hint in a loop", () => {
   it("reaches the SAC a handful of times, not a thousand", async () => {
-    const received = count(staff, "chatTyping", 1_500);
+    const started = Date.now();
 
-    for (let frame = 0; frame < 1_000; frame += 1) {
-      driver.emit("chatTyping");
-    }
+    const hints = await arrivals(
+      staff,
+      "chatTyping",
+      () => {
+        for (let frame = 0; frame < 1_000; frame += 1) {
+          driver.emit("chatTyping");
+        }
+      },
+      1_000,
+    );
 
-    const hints = await received;
+    // The bucket's own arithmetic over the time the flood took: the burst,
+    // then one per refill. Against the clock that actually passed, so a slow
+    // machine is held to the same rule instead of a number tuned on a fast
+    // one.
+    const allowed =
+      HINT_BURST + Math.ceil((Date.now() - started) / HINT_REFILL_MS);
 
     expect(hints.length).toBeGreaterThan(0);
-    expect(hints.length).toBeLessThanOrEqual(8);
+    expect(hints.length).toBeLessThanOrEqual(allowed);
+    expect(allowed).toBeLessThan(100);
   });
 });
 
 describe("a staff typing hint", () => {
-  it("never costs a cluster-wide fetch", { timeout: 20_000 }, async () => {
+  it("never costs a cluster-wide fetch", { timeout: 30_000 }, async () => {
     const adapter = ioServer.of("/").adapter;
+
+    // The presence questions of the connections above are not this case's.
+    await waitUntil(
+      () => fetchesInFlight === 0,
+      "as consultas de presença das conexões terminarem",
+    );
+
     const fetches = vi.spyOn(adapter, "fetchSockets");
 
     try {
-      // Let the budget the loop above spent come back.
-      await new Promise((done) => setTimeout(done, 2_500));
+      // A full bucket for the staff socket: time passing is the refill, not
+      // a guess at how long the server takes.
+      await new Promise((done) =>
+        setTimeout(done, (HINT_BURST + 1) * HINT_REFILL_MS),
+      );
 
-      const reached = count(driver, "chatTyping", 1_000);
+      const reached = await arrivals(driver, "chatTyping", () =>
+        staff.emit("chatTyping", { driverUserId: DRIVER_USER }),
+      );
 
-      staff.emit("chatTyping", { driverUserId: DRIVER_USER });
-
-      expect(await reached).toEqual([{ userName: "Atendente" }]);
+      expect(reached).toEqual([{ userName: "Atendente" }]);
 
       // Another tenant's driver: the room named after the SENDER's company
       // has nobody in it.
@@ -321,18 +413,19 @@ describe("a staff typing hint", () => {
     "still relays recording to the right driver",
     { timeout: 20_000 },
     async () => {
-      await new Promise((done) => setTimeout(done, 2_500));
+      // The bucket refills with time, whatever the machine's load.
+      await new Promise((done) =>
+        setTimeout(done, (HINT_BURST + 1) * HINT_REFILL_MS),
+      );
 
-      const reached = count(driver, "chatRecording", 1_000);
+      const reached = await arrivals(driver, "chatRecording", () =>
+        staff.emit("chatRecording", {
+          driverUserId: DRIVER_USER,
+          recording: true,
+        }),
+      );
 
-      staff.emit("chatRecording", {
-        driverUserId: DRIVER_USER,
-        recording: true,
-      });
-
-      expect(await reached).toEqual([
-        { userName: "Atendente", recording: true },
-      ]);
+      expect(reached).toEqual([{ userName: "Atendente", recording: true }]);
     },
   );
 });

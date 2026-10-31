@@ -5,8 +5,9 @@ import { createPrismaClient } from "@/shared/database/database-client";
  *   DATABASE_URL="...load_test..." npx tsx tests/load/mint-password.ts <email>
  *
  * When the MASTER registers a manager, or a manager registers a driver, the
- * API generates a password and e-mails it (an Ethereal inbox outside
- * production). The journey spec stands in for the person reading that e-mail:
+ * API generates a password and e-mails it (the in-process test inbox under
+ * NODE_ENV=test, as in the browser suites; Ethereal in development). The
+ * journey spec stands in for the person reading that e-mail:
  * it sets the documented test password (WEB_E2E_PASSWORD, or the default of
  * mint-browser-users.ts) and marks the address verified, then signs in through
  * the form like anybody else. Only on the throwaway database.

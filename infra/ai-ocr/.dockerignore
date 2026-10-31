@@ -1,6 +1,7 @@
 # The build context is this directory (infra/ai-ocr). The build reads the
-# requirements files (bind mounts), models.sha256, fetch_models.py,
-# server.py, warmup.jpg and, for the `test` stage, tests/ — nothing else.
+# requirements files and models/ (bind mounts), models.sha256,
+# fetch_models.py, server.py, warmup.jpg and, for the `test` stage, tests/ —
+# nothing else.
 #
 # Patterns are anchored at the context root: `__pycache__/` alone matched
 # only a top-level one, and tests/__pycache__ reached the test stage.

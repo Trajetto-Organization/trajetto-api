@@ -5,6 +5,8 @@ import { createServer, type Server } from "node:http";
 
 import { sign } from "jsonwebtoken";
 
+import { chatStaffRoom } from "@/modules/chat/usecases/shared/chat-access-rules";
+
 import { socketClientEntry } from "./support/socket-client";
 import { startReplica, type Replica } from "./support/replica-process";
 import { createPrismaClient } from "@/shared/database/database-client";
@@ -43,6 +45,7 @@ const OTHER_DRIVER = "018fec00-0000-7000-8000-0000000000d2";
 const NEVER_MS = String(10 * 60 * 1000);
 
 interface TestSocket {
+  id: string;
   on: (event: string, handler: (...args: any[]) => void) => void;
   off: (event: string, handler: (...args: any[]) => void) => void;
   disconnect: () => void;
@@ -58,8 +61,6 @@ let node: typeof import("@/websocket");
 let nodeServer: Server;
 
 const sockets: TestSocket[] = [];
-
-const sleep = (ms: number) => new Promise((done) => setTimeout(done, ms));
 
 async function tokenFor(
   userId: string,
@@ -329,8 +330,12 @@ describe("supportTicket across replicas", () => {
         await tokenFor(OTHER_DRIVER_USER, CARRIER, OTHER_DRIVER),
       );
 
-      // Rooms are joined after the handshake's queries.
-      await sleep(2_000);
+      // Each one in the room the event is addressed to (or, for the two that
+      // must hear nothing, in their own), as its replica records it.
+      await one.waitForRoom(staff.id, chatStaffRoom(CARRIER), true);
+      await one.waitForRoom(foreignStaff.id, chatStaffRoom(OTHER), true);
+      await two.waitForRoom(driver.id, `user:${DRIVER_USER}`, true);
+      await two.waitForRoom(otherDriver.id, `user:${OTHER_DRIVER_USER}`, true);
 
       const towerHears = next(
         staff,
@@ -390,7 +395,8 @@ describe("supportTicket across replicas", () => {
         await tokenFor(DRIVER_USER, CARRIER, DRIVER),
       );
 
-      await sleep(2_000);
+      await two.waitForRoom(staff.id, chatStaffRoom(CARRIER), true);
+      await one.waitForRoom(driver.id, `user:${DRIVER_USER}`, true);
 
       const towerHears = next(
         staff,

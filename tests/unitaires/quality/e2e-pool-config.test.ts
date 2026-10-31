@@ -6,15 +6,15 @@ import { describe, expect, it } from "vitest";
 import config from "../../../vite.config.mjs";
 
 /**
- * E2E files run one process each.
+ * Every test file runs in a process of its own (the forks pool).
  *
- * Under the default threads pool every E2E file shared the runner process,
- * and Prisma's Node-API engine panicked when one worker was freed while the
- * others still held it ("failed to delete napi ref"): the whole batch died
- * with exit 127/139 even though every test had passed. Reproduced with
- * multi-replica-events next to any other E2E file; gone with forks. That was
- * Prisma 6: Prisma 7 has no Node-API engine, and forks stays until threads is
- * measured with it (docs/testes.md).
+ * Under the threads pool the files shared the runner process, and the whole
+ * run died with exit 127 and nothing printed: the E2E batch under Prisma 6
+ * (its Node-API engine panicked when one worker was freed while others still
+ * held it, "failed to delete napi ref"), and on 30/10/2026 the unit suite on
+ * Windows, 3 full runs in 10, each one a heap corruption of node.exe
+ * (0xc0000374) in the Windows event log. Forks: 0 in 8, in the same time
+ * (docs/testes.md).
  *
  * The match is checked with the same call Vitest 1.6 makes (micromatch over
  * the ABSOLUTE file path, glob not resolved against the root), because a
@@ -40,15 +40,18 @@ const poolFor = (relative: string): string => {
   return config.test?.pool ?? "threads";
 };
 
-describe("E2E pool configuration", () => {
+describe("pool configuration", () => {
   it("runs every E2E file in its own forked process", () => {
     expect(poolFor("tests/E2E/multi-replica-events.test.ts")).toBe("forks");
     expect(poolFor("tests/E2E/user-update-sessions.test.ts")).toBe("forks");
   });
 
-  it("keeps unit files on the default threads pool", () => {
+  it("runs every unit file in its own forked process too", () => {
     expect(poolFor("tests/unitaires/quality/e2e-pool-config.test.ts")).toBe(
-      "threads",
+      "forks",
+    );
+    expect(poolFor("tests/unitaires/lifecycle/ghcr-script.test.ts")).toBe(
+      "forks",
     );
   });
 });

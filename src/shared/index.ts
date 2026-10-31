@@ -142,9 +142,7 @@ import { IWhatsAppProvider } from "./providers/whatsapp-provider/IWhatsApp-provi
 import { MetaCloudApiProvider } from "./providers/whatsapp-provider/implementations/meta-cloud-api-provider";
 
 import { IMailProvider } from "./providers/mail-provider/IMail-provider";
-import { ResendMailProvider } from "./providers/mail-provider/implementations/resend-mail-provider";
-
-import { EtherealMailProvider } from "./providers/mail-provider/implementations/ethereal-mail-provider";
+import { mailProviderFor } from "./providers/mail-provider/mail-provider-for";
 
 import { NotificationService } from "./services/notification-service";
 import { KanbanService } from "./services/kanban-service";
@@ -158,11 +156,12 @@ container.registerSingleton<IWhatsAppProvider>(
   MetaCloudApiProvider,
 );
 
-// Picked here now that the e-mail worker thread (which had its own factory)
-// is gone: outside production every message goes to an Ethereal test inbox.
+// Resend in production, the in-process test inbox under NODE_ENV=test (no
+// mail server in the E2E or the web's browser suites), Ethereal in
+// development — see mail-provider-for.ts.
 container.registerSingleton<IMailProvider>(
   "MailProvider",
-  env.NODE_ENV === "production" ? ResendMailProvider : EtherealMailProvider,
+  mailProviderFor(env.NODE_ENV),
 );
 container.registerSingleton<NotificationService>(
   "NotificationService",

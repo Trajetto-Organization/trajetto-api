@@ -36,6 +36,12 @@
  * way, so the run still fails — with Dokploy's own reason in the log. A
  * `cancelled` deployment was stopped by a person and is not retried.
  *
+ * No retry is silent: each one is a ::warning:: with its count (a request to
+ * Dokploy tried again, a status check that failed, a deployment triggered
+ * again), and the job summary lists every failed attempt with Dokploy's
+ * reason — a green run that needed three pulls says so, and a pull route
+ * that went bad again shows up before it fails a deploy.
+ *
  * Environment:
  *   DOKPLOY_URL                https base URL of the Dokploy panel
  *   DOKPLOY_API_KEY            API key (Dokploy > Settings > Profile > API/CLI)
@@ -147,9 +153,12 @@ function reasonOf(deployment) {
     deployment?.message,
   ].find((value) => typeof value === "string" && value.trim() !== "");
 
-  if (!raw) return null;
+  return raw ? redact(raw) : null;
+}
 
-  let text = raw.replace(/\s+/g, " ").trim();
+/** Any text from Dokploy or the network, fit for a public log. */
+function redact(raw) {
+  let text = String(raw).replace(/\s+/g, " ").trim();
 
   if (env.DOKPLOY_API_KEY) text = text.split(env.DOKPLOY_API_KEY).join("***");
 
@@ -182,8 +191,12 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 /** Seconds for a message: whole in production, exact in the tests' 0.01 s. */
 const seconds = (ms) => Number((ms / 1000).toFixed(2));
 
-/** A request, retried on network errors and 5xx (as `curl --retry 3` was). */
+/**
+ * A request, retried on network errors and 5xx (as `curl --retry 3` was),
+ * each retry a ::warning:: with its count.
+ */
 async function call(method, path, body) {
+  const route = `${method} ${path.split("?")[0]}`;
   let last = "";
 
   for (let attempt = 1; attempt <= 3; attempt += 1) {
@@ -199,18 +212,36 @@ async function call(method, path, body) {
 
       if (response.ok) return text ? JSON.parse(text) : null;
 
-      last = `HTTP ${response.status}: ${text.slice(0, 300)}`;
+      last = redact(`HTTP ${response.status}: ${text.slice(0, 300)}`);
 
       // A 4xx will not change on retry: wrong key, wrong id, wrong URL.
       if (response.status < 500) break;
     } catch (error) {
-      last = error instanceof Error ? error.message : String(error);
+      last = redact(error instanceof Error ? error.message : String(error));
     }
 
-    if (attempt < 3) await sleep(Math.min(POLL_MS, 2_000) * attempt);
+    if (attempt < 3) {
+      const pause = Math.min(POLL_MS, 2_000) * attempt;
+
+      console.log(
+        `::warning::Dokploy: ${route} falhou (${last}); tentativa ${attempt + 1} de 3 em ${seconds(pause)}s.`,
+      );
+      await sleep(pause);
+    }
   }
 
   throw new Error(last);
+}
+
+/** Every failed attempt of this deploy, for the summary. */
+const failures = [];
+
+function summarizeFailures() {
+  for (const { number, deploymentId, reason } of failures) {
+    summary(
+      `Dokploy: ${LABEL}, tentativa ${number} de ${ATTEMPTS} terminou em 'error' (deployment ${deploymentId}). ${reason ? `Motivo informado pelo Dokploy: ${reason}` : "O Dokploy não informou o motivo."}`,
+    );
+  }
 }
 
 async function deployments() {
@@ -264,6 +295,7 @@ async function attempt(number) {
 
   const deadline = Date.now() + TIMEOUT_MS;
   let current = null;
+  let checksFailed = 0;
 
   while (Date.now() < deadline) {
     await sleep(POLL_MS);
@@ -273,8 +305,9 @@ async function attempt(number) {
     try {
       list = await deployments();
     } catch (error) {
+      checksFailed += 1;
       console.log(
-        `::warning::Falha ao consultar o Dokploy (${error.message}); tentando de novo.`,
+        `::warning::Falha ao consultar o Dokploy (${redact(error.message)}); consulta ${checksFailed} que falhou nesta tentativa, tentando de novo.`,
       );
       continue;
     }
@@ -284,19 +317,27 @@ async function attempt(number) {
     if (!current) continue;
 
     if (current.status === "done") {
+      summarizeFailures();
       summary(
-        `Dokploy: deployment ${current.deploymentId} de ${LABEL} concluído${number > 1 ? ` na tentativa ${number}` : ""} (spec aceita pelo Swarm).`,
+        `Dokploy: deployment ${current.deploymentId} de ${LABEL} concluído${number > 1 ? ` na tentativa ${number} de ${ATTEMPTS}` : ""} (spec aceita pelo Swarm).`,
       );
       return "done";
     }
 
     if (current.status === "cancelled") {
+      summarizeFailures();
       fail(
         `O deployment ${current.deploymentId} de ${LABEL} terminou em 'cancelled' no Dokploy (cancelado no painel; não é repetido).`,
       );
     }
 
     if (current.status === "error") {
+      failures.push({
+        number,
+        deploymentId: current.deploymentId,
+        reason: reasonOf(current),
+      });
+
       if (number < ATTEMPTS) {
         console.log(
           `::warning::O deployment ${current.deploymentId} de ${LABEL} terminou em 'error' no Dokploy (o motivo comum é o download da imagem cair no meio). Disparando de novo em ${seconds(retryDelay(number))}s: tentativa ${number + 1} de ${ATTEMPTS}.${said(current)}`,
@@ -304,11 +345,14 @@ async function attempt(number) {
         return "error";
       }
 
+      summarizeFailures();
       fail(
         `O deployment ${current.deploymentId} de ${LABEL} terminou em 'error' no Dokploy, depois de ${ATTEMPTS} tentativas.${said(current)}`,
       );
     }
   }
+
+  summarizeFailures();
 
   fail(
     current

@@ -7,7 +7,10 @@ import type { AddressInfo } from "node:net";
 import { sign } from "jsonwebtoken";
 import auth from "@/config/auth";
 
+import { chatStaffRoom } from "@/modules/chat/usecases/shared/chat-access-rules";
+
 import { socketClientEntry } from "./support/socket-client";
+import { waitForRoom } from "./support/socket-waits";
 import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
@@ -39,7 +42,11 @@ let token: string;
 let profileAccessId = "";
 
 let io: typeof import("@/websocket");
+let ioServer: Awaited<
+  ReturnType<typeof import("@/websocket").initializeSocketIO>
+>;
 let client: {
+  id: string;
   on: Function;
   removeAllListeners: Function;
   disconnect: () => void;
@@ -209,14 +216,13 @@ beforeAll(async () => {
   port = (server.address() as AddressInfo).port;
 
   io = await import("@/websocket");
-  await io.initializeSocketIO(server);
+  ioServer = await io.initializeSocketIO(server);
 
   client = await connectClient();
 
-  // The server's connection handler is asynchronous — it reads the user, the
-  // driver and the refresh family before joining any room. Measuring before
-  // that would measure the race, not the rule.
-  await new Promise((resolve) => setTimeout(resolve, 1500));
+  // Measuring before the client is in the company's chat room would measure
+  // the race, not the rule: wait for the room, as the server records it.
+  await waitForRoom(ioServer, client.id, chatStaffRoom(CARRIER), true);
 }, 120_000);
 
 afterAll(async () => {
@@ -302,7 +308,7 @@ describe("when the re-evaluation cannot read the database", () => {
 
     const second = await connectClient();
 
-    await new Promise((resolve) => setTimeout(resolve, 1200));
+    await waitForRoom(ioServer, second.id, chatStaffRoom(CARRIER), true);
 
     // And proven: it IS in the room before anything else happens.
     const before = new Promise((resolve) => {
@@ -335,7 +341,9 @@ describe("when the re-evaluation cannot read the database", () => {
         reason: "permissions_changed",
       });
 
-      await new Promise((resolve) => setTimeout(resolve, 1500));
+      // The failed read takes the socket out of the room; waited for while
+      // the read still fails, not for 1.5 s.
+      await waitForRoom(ioServer, second.id, chatStaffRoom(CARRIER), false);
     } finally {
       UserRepository.prototype.findUserById = original;
     }

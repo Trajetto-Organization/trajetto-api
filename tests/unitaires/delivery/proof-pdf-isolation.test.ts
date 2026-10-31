@@ -1,11 +1,14 @@
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import { resolve } from "node:path";
-import { deflateSync } from "node:zlib";
+import zlib, { deflateSync } from "node:zlib";
 
-import { afterAll, describe, expect, it } from "vitest";
+import PDFDocument from "pdfkit";
+import { afterAll, describe, expect, it, vi } from "vitest";
 
 import { buildProofDocumentModel } from "@/shared/delivery/proof-document";
+import { renderProofPdf } from "@/shared/services/proof-pdf-service";
 
 import { GetProofDocumentUseCase } from "@/modules/delivery/usecases/get-proof-document/get-proof-document-usecase";
 import { InMemoryProofDocumentRepository } from "@/modules/delivery/repositories/in-memory/in-memory-proof-document-repository";
@@ -29,9 +32,14 @@ import {
  * `?regenerate=true` made it repeatable on demand (today by anyone who can
  * write deliveries; it was anyone who could read one).
  *
- * The render now happens on a worker thread. What this measures is the one
- * thing that matters to everybody else on the replica: the longest stretch
- * the main event loop could not run anything.
+ * The render now happens on a worker thread. What this checks is the property
+ * that keeps everybody else on the replica served: for a receipt, neither
+ * pdfkit nor the inflate gate runs on this thread — it posts the job and
+ * copies the bytes back.
+ *
+ * It used to measure the longest event-loop stall (< 50 ms, best of three
+ * renders). That is a duration, and a CI machine descheduling the thread was
+ * enough to fail it with the render already off-thread.
  */
 const BUSINESS = "018f0000-0000-7000-8000-00000000000b";
 const USER = "018f0000-0000-7000-8000-0000000000a1";
@@ -121,31 +129,32 @@ function source(): ProofDocumentSource {
   } as ProofDocumentSource;
 }
 
-/** The longest gap between 5 ms ticks while `work` runs. */
-async function longestStall(work: () => Promise<unknown>): Promise<number> {
-  let last = performance.now();
-  let worst = 0;
+/**
+ * Counts, on THIS thread, the two pieces of a render that block a loop:
+ * pdfkit finishing a document and zlib inflating the photo (the ST-01 gate).
+ * A worker thread has its own copies of both modules, so what it does is
+ * never counted here. `syncBuiltinESMExports` carries the spy to the
+ * `import { inflateSync } from "node:zlib"` bindings as well.
+ */
+function watchThisThread() {
+  const finished = vi.spyOn(PDFDocument.prototype, "end");
+  const inflated = vi.spyOn(zlib, "inflateSync");
 
-  const timer = setInterval(() => {
-    const now = performance.now();
-    worst = Math.max(worst, now - last);
-    last = now;
-  }, 5);
+  syncBuiltinESMExports();
 
-  try {
-    await work();
-  } finally {
-    clearInterval(timer);
-  }
-
-  return worst;
+  return {
+    finished,
+    inflated,
+    restore() {
+      finished.mockRestore();
+      inflated.mockRestore();
+      syncBuiltinESMExports();
+    },
+  };
 }
 
 // About 5 MB, the size limit of a delivery photo.
 const PHOTO = heavyPng(1120, 1120);
-
-/** Measured regenerations; the verdict uses the least-stalled one. */
-const STALL_TRIALS = 3;
 
 afterAll(async () => {
   const renderer = await import("@/shared/services/proof-pdf-renderer").catch(
@@ -185,43 +194,40 @@ describe("generating a receipt", () => {
       noLocationProviders(),
     );
 
-    // A first render warms up whatever is lazy (module loading, the worker)
-    // so the measurement is of rendering, not of starting.
-    await useCase.execute({
-      userId: USER,
-      businessId: BUSINESS,
-      deliveryId: DELIVERY,
-    });
+    const watched = watchThisThread();
 
-    // The best of a few renders, not one. A render on this loop blocks it in
-    // EVERY trial. A gap the OS scheduler adds does not: with the rest of the
-    // suite saturating the cores, this thread was measured descheduled for
-    // 73 ms once in a render that was off-thread, while alone it stays far
-    // below the bar. The minimum keeps the first and drops the second.
-    const stalls: number[] = [];
-
-    for (let trial = 0; trial < STALL_TRIALS; trial += 1) {
-      stalls.push(
-        await longestStall(() =>
-          useCase.execute({
-            userId: USER,
-            businessId: BUSINESS,
-            deliveryId: DELIVERY,
-            regenerate: true,
-          }),
-        ),
+    try {
+      // The watch sees a render on this thread: the in-process renderer, with
+      // the same photo, finishes a document and inflates the photo here.
+      await renderProofPdf(
+        buildProofDocumentModel(source(), {
+          verificationBaseUrl: "https://app.exemplo",
+          verificationToken: "9f1c2a4e6b8d0f3a5c7e9b1d3f5a7c9e",
+        }),
+        { photo: PHOTO, signature: null },
       );
+
+      expect(watched.finished).toHaveBeenCalled();
+      expect(watched.inflated).toHaveBeenCalled();
+
+      watched.finished.mockClear();
+      watched.inflated.mockClear();
+
+      // The receipt, through the use case, first render and a regeneration.
+      for (const regenerate of [false, true]) {
+        await useCase.execute({
+          userId: USER,
+          businessId: BUSINESS,
+          deliveryId: DELIVERY,
+          regenerate,
+        });
+      }
+
+      expect(watched.finished).not.toHaveBeenCalled();
+      expect(watched.inflated).not.toHaveBeenCalled();
+    } finally {
+      watched.restore();
     }
-
-    const stall = Math.min(...stalls);
-
-    // In-process this measured ~110 ms on a fast desktop — pdfkit splitting
-    // the alpha channel pixel by pixel — and a production vCPU is slower.
-    // Off-thread, what is left on this loop is copying the bytes across.
-    expect(
-      stall,
-      `event loop stalled for ${stalls.map((ms) => Math.round(ms)).join(" / ")} ms`,
-    ).toBeLessThan(50);
 
     // Still the same document: the hash recorded is of the bytes stored.
     const saved = documents.documents[0];

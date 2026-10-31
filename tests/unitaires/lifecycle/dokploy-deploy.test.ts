@@ -1,7 +1,9 @@
 import { spawn } from "node:child_process";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, type IncomingMessage, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
-import { resolve } from "node:path";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -60,11 +62,17 @@ async function fakeDokploy(options: {
   after?: Deployment[][];
   retries?: Deployment[][][];
   deployStatus?: number;
+  /** The first N reads of the deployment list answer 503. */
+  listFailures?: number;
+  /** The first N reads after the deploy call answer 503. */
+  failuresAfterDeploy?: number;
 }): Promise<Fake> {
   const calls: Fake["calls"] = [];
   let deployed = false;
   let deploys = 0;
   let polls = 0;
+  let listFailures = options.listFailures ?? 0;
+  let failuresAfterDeploy = options.failuresAfterDeploy ?? 0;
   const walks = () => [options.after ?? [], ...(options.retries ?? [])];
 
   server = createServer((request: IncomingMessage, response) => {
@@ -105,6 +113,14 @@ async function fakeDokploy(options: {
       }
 
       if (path.startsWith("/api/deployment.all?")) {
+        if (listFailures > 0 || (deployed && failuresAfterDeploy > 0)) {
+          if (listFailures > 0) listFailures -= 1;
+          else failuresAfterDeploy -= 1;
+          response.statusCode = 503;
+          response.end(JSON.stringify({ message: "upstream unavailable" }));
+          return;
+        }
+
         const history = options.history ?? [];
         const all = walks();
         const after = all[Math.min(deploys, all.length) - 1] ?? [];
@@ -172,7 +188,12 @@ const valid = (fake: Fake) => ({
   DOKPLOY_APPLICATION_ID: "abc123_XYZ-9",
 });
 
-describe("the Dokploy deploy step", () => {
+// Every case starts a Node process and waits for it to exit. Vitest's 5 s
+// default is a deadline for that exit, and with the whole unit suite
+// saturating the cores two cases missed it on process start-up alone (they
+// take ~0.5 s each on their own). The deadline is generous; the waits inside
+// the script stay the fast ones the env sets above.
+describe("the Dokploy deploy step", { timeout: 30_000 }, () => {
   it("deploys the app it is given and succeeds only when THAT deployment is done", async () => {
     const fake = await fakeDokploy({
       history: [{ deploymentId: "old", status: "done" }],
@@ -444,5 +465,133 @@ describe("the Dokploy deploy step", () => {
     expect(result.status).toBe(1);
     expect(result.output).toContain("DOKPLOY_APPLICATION_ID");
     expect(fake.calls).toEqual([]);
+  });
+
+  /**
+   * No retry is silent (CI audit of 30/10/2026): a green run that needed
+   * three pulls hid a VPS route going bad again until it failed a deploy.
+   */
+  describe("retries in the open", () => {
+    let dir: string | undefined;
+
+    afterEach(() => {
+      if (dir) rmSync(dir, { recursive: true, force: true });
+      dir = undefined;
+    });
+
+    const summaryFile = () => {
+      dir = mkdtempSync(join(tmpdir(), "dokploy-summary-"));
+
+      const file = join(dir, "summary.md");
+
+      writeFileSync(file, "");
+
+      return file;
+    };
+
+    it("warns each request it tries again, with the count, and never the key", async () => {
+      // The snapshot before the deploy reads the list: 503 twice, then fine.
+      const fake = await fakeDokploy({
+        listFailures: 2,
+        after: [[{ deploymentId: "new", status: "done" }]],
+      });
+
+      const result = await deploy(valid(fake));
+
+      expect(result.status, result.output).toBe(0);
+      expect(result.output).toMatch(
+        /::warning::Dokploy: GET \/api\/deployment\.all falhou \(HTTP 503: .*\); tentativa 2 de 3/,
+      );
+      expect(result.output).toMatch(/tentativa 3 de 3/);
+      // The query string (the Application id) stays out of the warning.
+      expect(result.output).not.toMatch(/deployment\.all\?applicationId/);
+      expect(result.output).not.toContain(KEY);
+    });
+
+    it("counts the status checks that failed while it follows a deployment", async () => {
+      // After the deploy call, three reads fail: one status check (a request
+      // tried three times) gives up, and the next one finds the deployment.
+      const fake = await fakeDokploy({
+        failuresAfterDeploy: 3,
+        after: [[{ deploymentId: "new", status: "done" }]],
+      });
+
+      const result = await deploy(valid(fake));
+
+      expect(result.status, result.output).toBe(0);
+      expect(result.output).toMatch(
+        /::warning::Falha ao consultar o Dokploy \(HTTP 503: .*\); consulta 1 que falhou nesta tentativa/,
+      );
+      expect(result.output).toContain("new");
+    });
+
+    it("lists every failed attempt and Dokploy's reason in the job summary", async () => {
+      const summary = summaryFile();
+      const fake = await fakeDokploy({
+        after: [
+          [
+            {
+              deploymentId: "first",
+              status: "error",
+              errorMessage: "pull: read tcp: connection reset by peer",
+            },
+          ],
+        ],
+        retries: [
+          [
+            [
+              {
+                deploymentId: "second",
+                status: "error",
+                errorMessage: null,
+              },
+            ],
+          ],
+          [[{ deploymentId: "third", status: "done" }]],
+        ],
+      });
+
+      const result = await deploy({
+        ...valid(fake),
+        DOKPLOY_APP_LABEL: "trajetto-api",
+        GITHUB_STEP_SUMMARY: summary,
+      });
+      const text = readFileSync(summary, "utf8");
+
+      expect(result.status, result.output).toBe(0);
+      expect(text).toMatch(
+        /trajetto-api, tentativa 1 de 6 terminou em 'error' \(deployment first\)\. Motivo informado pelo Dokploy: pull: read tcp: connection reset by peer/,
+      );
+      expect(text).toMatch(
+        /trajetto-api, tentativa 2 de 6 terminou em 'error' \(deployment second\)\. O Dokploy não informou o motivo\./,
+      );
+      expect(text).toMatch(
+        /deployment third de trajetto-api concluído na tentativa 3 de 6/,
+      );
+    });
+
+    it("writes the failed attempts to the summary when it gives up too", async () => {
+      const summary = summaryFile();
+      const failed = (id: string) => [
+        [{ deploymentId: id, status: "error", errorMessage: `reason ${id}` }],
+      ];
+      const fake = await fakeDokploy({
+        after: failed("z1"),
+        retries: [failed("z2")],
+      });
+
+      const result = await deploy({
+        ...valid(fake),
+        DOKPLOY_ATTEMPTS: "2",
+        GITHUB_STEP_SUMMARY: summary,
+      });
+      const text = readFileSync(summary, "utf8");
+
+      expect(result.status).toBe(1);
+      expect(text).toContain(
+        "tentativa 1 de 2 terminou em 'error' (deployment z1)",
+      );
+      expect(text).toContain("Motivo informado pelo Dokploy: reason z2");
+    });
   });
 });

@@ -91,8 +91,25 @@ COPY prisma/vitest-environment-prisma ./prisma/vitest-environment-prisma
 # shared cache mount, two concurrent `yarn install` runs write to the same
 # directory and corrupt each other's entries, failing with ENOENT on a
 # `.yarn-tarball.tgz`.
+#
+# The Prisma CLI's schema engine comes from @prisma/engines' postinstall,
+# which downloads it from binaries.prisma.sh and fails SILENTLY: a download
+# that died left no engine, and nothing said so until a `migrate deploy`
+# without network. In the same RUN as the install (so a layer without the
+# engine is never cached): when it is missing, the postinstall runs again,
+# up to three times, and then the build stops with the cause.
 RUN --mount=type=cache,target=/usr/local/share/.cache/yarn,id=yarn-dev,sharing=locked \
-    yarn install --frozen-lockfile --production=false
+    yarn install --frozen-lockfile --production=false \
+    && for attempt in 1 2 3; do \
+         ls node_modules/@prisma/engines/schema-engine-* > /dev/null 2>&1 && break; \
+         echo "Prisma schema engine missing after the install (attempt $attempt of 3): downloading it again" >&2; \
+         sleep $((attempt * 10)); \
+         node node_modules/@prisma/engines/scripts/postinstall.js; \
+       done \
+    && if ! ls node_modules/@prisma/engines/schema-engine-* > /dev/null 2>&1; then \
+         echo "The Prisma schema engine was not downloaded from binaries.prisma.sh: the build stops here" >&2; \
+         exit 1; \
+       fi
 
 # ================================
 # Stage: Builder
@@ -137,9 +154,21 @@ WORKDIR /app
 COPY package.json yarn.lock* ./
 COPY prisma/vitest-environment-prisma ./prisma/vitest-environment-prisma
 
-# Separate cache id from the `deps` stage — see the note there.
+# Separate cache id from the `deps` stage — see the note there. The same
+# check of the schema engine as there: this is the copy the image ships, and
+# `migrate deploy` (the release step, staging's boot) runs it.
 RUN --mount=type=cache,target=/usr/local/share/.cache/yarn,id=yarn-prod,sharing=locked \
-    yarn install --frozen-lockfile --production=true
+    yarn install --frozen-lockfile --production=true \
+    && for attempt in 1 2 3; do \
+         ls node_modules/@prisma/engines/schema-engine-* > /dev/null 2>&1 && break; \
+         echo "Prisma schema engine missing after the install (attempt $attempt of 3): downloading it again" >&2; \
+         sleep $((attempt * 10)); \
+         node node_modules/@prisma/engines/scripts/postinstall.js; \
+       done \
+    && if ! ls node_modules/@prisma/engines/schema-engine-* > /dev/null 2>&1; then \
+         echo "The Prisma schema engine was not downloaded from binaries.prisma.sh: the build stops here" >&2; \
+         exit 1; \
+       fi
 
 # `yarn install` brings whole packages; what nothing loads at run time goes
 # before the runner copies them (here, in a stage that is not shipped, a RUN

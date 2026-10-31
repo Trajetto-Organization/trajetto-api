@@ -1,7 +1,12 @@
-// Supply-chain gate (INFRA-16): `npx audit-ci` in ci.yml and deploy.yml fails
-// the build on a CRITICAL advisory in a PRODUCTION dependency. Highs are
-// Dependabot's job (security updates): gating on them today would leave the
-// pipeline red for build-time tooling nothing ships.
+// Supply-chain gate (INFRA-16): audit-ci (a devDependency pinned in
+// yarn.lock), run by .github/scripts/audit-gate.sh in ci.yml and deploy.yml,
+// finds a CRITICAL advisory in a PRODUCTION dependency. It blocks only the
+// push or PR that changes package.json, yarn.lock, a package-lock.json or
+// this file (decision D1); on any other run the finding is a warning and a
+// line in the job summary. An audit that could not reach the registry is
+// tried again and never read as an advisory. Highs are Dependabot's job
+// (security updates): gating on them today would leave the pipeline red for
+// build-time tooling nothing ships.
 //
 // Each allowlist entry says why the advisory does not reach production and
 // when to look again. Take it out as soon as the update lands.
@@ -13,11 +18,7 @@
   "critical": true,
   "skip-dev": true,
   "report-type": "important",
-  "allowlist": [
-    // tar <=7.5.18 via bcrypt > @mapbox/node-pre-gyp. node-pre-gyp runs at
-    // INSTALL time (fetches bcrypt's prebuilt binary); the server never
-    // extracts an archive with it. Goes away with bcrypt 6, which has no
-    // node-pre-gyp. Revisar até 2026-12-31.
-    "GHSA-23hp-3jrh-7fpw"
-  ]
+  // Empty since 30/10/2026: the last entry (tar via bcrypt 5 >
+  // @mapbox/node-pre-gyp) went away with bcrypt 6, which has no node-pre-gyp.
+  "allowlist": []
 }

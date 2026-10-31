@@ -192,13 +192,18 @@ describe("the tag given to the promote", () => {
       expect(run, each.split("\n")[0]).not.toContain(
         "${{ steps.target.outputs.tag }}",
       );
+      expect(run, each.split("\n")[0]).not.toContain(
+        "${{ steps.staged.outputs.tag }}",
+      );
     }
   });
 
   it("is what `stable` moves to, and the digest is recorded", () => {
     const promote = step("Promote image to stable");
 
-    expect(promote).toContain("IMAGE_TAG: ${{ steps.target.outputs.tag }}");
+    // The build the staging check settled on (the commit's own, or the
+    // documentation rule's), never the raw candidate.
+    expect(promote).toContain("IMAGE_TAG: ${{ steps.staged.outputs.tag }}");
     expect(promote).toMatch(/trajetto-api:\$\{IMAGE_TAG\}/);
     expect(promote).toContain("GITHUB_STEP_SUMMARY");
   });
@@ -229,8 +234,13 @@ describe.skipIf(!hasShell("bash"))(
     const FIRST = "1".repeat(40);
     const HEAD = "abcdef0123456789abcdef0123456789abcdef01";
 
-    function resolveTag(env: Record<string, string>, parents = "") {
-      box.stub("gh", `printf '%s\\n' "${parents}"`);
+    function resolveTag(
+      env: Record<string, string>,
+      parents = "",
+      gh = `printf '%s\\n' "${parents}"`,
+    ) {
+      box.stub("gh", gh);
+      box.stub("sleep", "exit 0");
 
       const script = box.file(
         "resolve.sh",
@@ -261,7 +271,8 @@ describe.skipIf(!hasShell("bash"))(
       const result = resolveTag({ EVENT: "push" }, `${FIRST} ${HEAD}`);
 
       expect(result.status, result.stderr).toBe(0);
-      expect(result.outputs).toBe("tag=sha-abcdef0\n");
+      // The full sha too: the staging check walks its history.
+      expect(result.outputs).toBe(`tag=sha-abcdef0\ncommit=${HEAD}\n`);
       expect(box.calls("gh")[0]).toContain(
         `repos/Trajetto-Organization/trajetto-api/commits/${MERGE}`,
       );
@@ -271,7 +282,35 @@ describe.skipIf(!hasShell("bash"))(
       const result = resolveTag({ EVENT: "push" }, FIRST);
 
       expect(result.status, result.stderr).toBe(0);
-      expect(result.outputs).toBe("tag=sha-fffffff\n");
+      expect(result.outputs).toBe(`tag=sha-fffffff\ncommit=${MERGE}\n`);
+    });
+
+    it("asks GitHub again when its API fails, and fails clearly when it never answers", () => {
+      const counter = `${box.root}/gh-count`;
+
+      writeFileSync(counter, "0");
+
+      const flaky = resolveTag(
+        { EVENT: "push" },
+        "",
+        [
+          `n=$(cat "${counter}"); echo $((n + 1)) > "${counter}"`,
+          '[ "$n" -eq 0 ] && { echo "HTTP 502" >&2; exit 1; }',
+          `printf '%s\\n' "${FIRST} ${HEAD}"`,
+        ].join("\n"),
+      );
+
+      expect(flaky.status, flaky.stderr).toBe(0);
+      expect(flaky.outputs).toBe(`tag=sha-abcdef0\ncommit=${HEAD}\n`);
+      expect(flaky.stdout).toMatch(
+        /::warning::A API do GitHub falhou .*tentativa 1 de 3/,
+      );
+
+      const down = resolveTag({ EVENT: "push" }, "", "exit 1");
+
+      expect(down.status).toBe(1);
+      expect(down.outputs).toBe("");
+      expect(down.stdout).toMatch(/::error::A API do GitHub não respondeu/);
     });
 
     it("hands the typed tag over, and nothing that could forge another output", () => {
@@ -483,18 +522,70 @@ describe("the pull request into main", () => {
     expect(check).toContain(
       "HEAD_SHA: ${{ github.event.pull_request.head.sha }}",
     );
-    expect(check).toContain('short="${HEAD_SHA::7}"');
     // `sha-<sha>` exists as soon as the build pushed it, also when the scan
     // or the staging deploy failed afterwards: the marker is the proof, on
-    // the same digest.
-    expect(check).toContain('staged=$(digest_of "${image}:staged-${short}")');
-    expect(check).toContain('built=$(digest_of "${image}:sha-${short}")');
-    expect(check).toContain('[ "$staged" != "$built" ]');
-    expect(check).toContain("for image in trajetto-api trajetto-ai; do");
+    // the same digest — the question staged-build.sh answers, for the PR
+    // check and the promote alike (staged-build.test.ts).
+    expect(check).toContain('bash .github/scripts/staged-build.sh "$HEAD_SHA"');
+    expect(check).toContain("for attempt in $(seq 1 90); do");
     expect(check).toContain("packages: read");
     expect(check).not.toContain("packages: write");
+    // The documentation rule compares the head with older commits: the PR
+    // head itself, with its history.
+    expect(check).toContain("ref: ${{ github.event.pull_request.head.sha }}");
+    expect(check).toContain("fetch-depth: 0");
     // Branch protection requires the check by this name.
     expect(check).toContain("name: The PR head was built on staging");
+  });
+});
+
+describe("a commit that only changes documentation (D11)", () => {
+  it("is promoted with the build of the nearest commit staging ran, by the same rule as the PR check", () => {
+    const check = step("Check that staging ran this build");
+
+    expect(check).toContain("id: staged");
+    expect(check).toContain("CANDIDATE: ${{ steps.target.outputs.commit }}");
+    expect(check).toContain(
+      'bash .github/scripts/staged-build.sh "$CANDIDATE"',
+    );
+    // The history it walks.
+    expect(jobOf("promote-production")).toMatch(
+      /- name: Checkout the deploy script\n\s+uses: [^\n]+\n\s+with:\n\s+fetch-depth: 0\n/,
+    );
+  });
+
+  it("settles the build before anything reads it, and every later step uses that answer", () => {
+    const staged = index("Check that staging ran this build");
+
+    expect(staged).toBeGreaterThan(index("Validate the tag to promote"));
+    expect(staged).toBeLessThan(index("Check the build exists in GHCR"));
+    expect(staged).toBeLessThan(index("Run database migrations"));
+
+    for (const each of steps.slice(staged + 1)) {
+      expect(each, each.split("\n")[0]).not.toContain(
+        "${{ steps.target.outputs.tag }}",
+      );
+    }
+
+    for (const name of [
+      "Check the build exists in GHCR",
+      "Compare with what staging runs",
+      "Run database migrations (once, before the rollout)",
+      "Promote image to stable",
+      "Promote the AI image to stable",
+      "Wait for the API to serve the promoted build",
+    ]) {
+      expect(step(name), name).toContain(
+        "IMAGE_TAG: ${{ steps.staged.outputs.tag }}",
+      );
+    }
+  });
+
+  it("is documented as the one safe use of [skip ci]", () => {
+    const doc = read("docs", "deploy.md");
+
+    expect(doc).toMatch(/### Commits só de documentação/);
+    expect(doc).toMatch(/\[skip ci\]/);
   });
 });
 
@@ -510,8 +601,10 @@ describe("the production Applications", () => {
 
     expect(promote).not.toMatch(/\n\s+if:/);
     expect(promote).toContain('trajetto-api:${IMAGE_TAG}"');
-    expect(promote).toContain(
-      "--tag ghcr.io/trajetto-organization/trajetto-api:stable",
+    // Through ghcr.sh, which retries a GHCR hiccup instead of failing the
+    // promote on it (ghcr-script.test.ts).
+    expect(promote).toMatch(
+      /bash \.github\/scripts\/ghcr\.sh tag \\\n\s+ghcr\.io\/trajetto-organization\/trajetto-api:stable \\\n/,
     );
   });
 });

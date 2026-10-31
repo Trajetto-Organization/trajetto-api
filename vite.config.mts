@@ -1,5 +1,15 @@
-import { coverageConfigDefaults, defineConfig } from "vitest/config";
+import {
+  configDefaults,
+  coverageConfigDefaults,
+  defineConfig,
+} from "vitest/config";
 import tsconfigPaths from "vite-tsconfig-paths";
+
+import {
+  E2E_PHASE_REPLICAS,
+  E2E_PHASE_SHARED,
+  replicaFileGlobs,
+} from "./tests/E2E/support/replica-files";
 
 // Vitest's default coverage exclude also drops `*-spec.ts` / `*-test.ts`, a
 // plausible name for product code (the web's public-spec.ts was lost that
@@ -20,10 +30,25 @@ const DOT_TEST_GLOB = "**/*.{test,spec}?(-d).?(c|m)[jt]s?(x)";
  * The unit run writes coverage/unit; COVERAGE_DIR lets the E2E batches
  * (infra/scripts/coverage-e2e.sh) each write their own report before
  * infra/scripts/merge-coverage.mjs joins them into coverage/all.
+ *
+ * The E2E phases (`yarn test:e2e`, infra/scripts/run-e2e.mjs): the files
+ * that start API replicas as processes of their own run in a phase of their
+ * own, one file at a time, after the rest (tests/E2E/support/replica-files.ts
+ * has the list and the why). E2E_PHASE picks the phase; without it —
+ * `npx vitest run <file>`, the unit suite — every file is included as before.
  */
+const E2E_PHASE = process.env.E2E_PHASE;
+
 export default defineConfig({
   plugins: [tsconfigPaths()],
   test: {
+    ...(E2E_PHASE === E2E_PHASE_SHARED && {
+      exclude: [...configDefaults.exclude, ...replicaFileGlobs()],
+    }),
+    ...(E2E_PHASE === E2E_PHASE_REPLICAS && {
+      include: replicaFileGlobs(),
+      fileParallelism: false,
+    }),
     coverage: {
       provider: "v8",
       all: true,
@@ -38,12 +63,15 @@ export default defineConfig({
       reportOnFailure: true,
     },
     environmentMatchGlobs: [["./tests/E2E/**", "prisma"]],
-    // A process per E2E file. Chosen under Prisma 6: its Node-API engine
-    // panicked ("failed to delete napi ref", exit 127/139) when E2E files
-    // shared the default threads pool's process and a worker was freed while
-    // others still held it. Prisma 7 has no native engine; forks stays until
-    // threads is measured with it. A process per file has no shared teardown.
-    poolMatchGlobs: [["**/tests/E2E/**", "forks"]],
+    // A process per test file, unit and E2E alike: no two files share a
+    // process, so none shares native state or a teardown with another.
+    // Under the threads pool (one process, a worker thread per file) the
+    // whole run died, with nothing printed, as exit 127: the E2E files under
+    // Prisma 6 ("failed to delete napi ref"), and on 30/10/2026 the unit
+    // suite on Windows, 3 runs in 10, each logged by Windows as a heap
+    // corruption of node.exe (0xc0000374). With forks: 0 in 8, in the same
+    // time. Forks is Vitest 2's default for the same reason.
+    pool: "forks",
     setupFiles: ["./setupTests.ts"], // add reflect metadata for all tests
   },
 });

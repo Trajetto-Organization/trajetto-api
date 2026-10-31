@@ -57,10 +57,27 @@ describe("the workflows", () => {
   });
 
   it("fail on a critical advisory in a production dependency, in the branch CI and before a deploy", () => {
+    // Through the gate, which blocks a change to the dependencies and
+    // reports the rest (audit-gate.test.ts).
     for (const name of ["ci.yml", "deploy.yml"]) {
-      expect(read(`.github/workflows/${name}`), name).toMatch(
-        /npx --yes audit-ci@\d+\.\d+\.\d+ --config audit-ci\.jsonc/,
+      expect(read(`.github/workflows/${name}`), name).toContain(
+        "run: bash .github/scripts/audit-gate.sh",
       );
+    }
+
+    expect(read(".github/scripts/audit-gate.sh")).toMatch(
+      /\.\/node_modules\/\.bin\/audit-ci --config audit-ci\.jsonc/,
+    );
+    // The audit tool comes from yarn.lock, installed with the rest: an
+    // `npx --yes audit-ci@x` resolved its transitive dependencies anew on
+    // every run, from the registry, so the gate could change between runs.
+    const manifest = JSON.parse(read("package.json")) as {
+      devDependencies: Record<string, string>;
+    };
+
+    expect(manifest.devDependencies["audit-ci"]).toMatch(/^\d+\.\d+\.\d+$/);
+    for (const { name, text } of workflows) {
+      expect(text, name).not.toMatch(/npx --yes audit-ci/);
     }
   });
 
@@ -79,12 +96,17 @@ describe("the workflows", () => {
       expect(step).toMatch(/provenance: mode=(?:max|min)/);
     }
 
-    // Any other build is a smoke test's: loaded into the runner, never
+    // Any other build is a smoke test's — loaded into the runner, never
     // published, so it carries no attestations (the classic image store
-    // cannot load them).
+    // cannot load them) — or the AI's `test` stage (pytest inside the
+    // image), which outputs nothing at all.
     for (const step of builds.filter((build) => !pushed.includes(build))) {
       expect(step).toMatch(/push: false/);
-      expect(step).toMatch(/load: true/);
+      if (/target: test\b/.test(step)) {
+        expect(step).not.toMatch(/load: true|sbom:|provenance:/);
+      } else {
+        expect(step).toMatch(/load: true/);
+      }
     }
   });
 

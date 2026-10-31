@@ -2,3 +2,7 @@
 # shebang, because "/bin/sh" followed by a carriage return is not an
 # interpreter.
 *.sh text eol=lf
+
+# The OCR weights of the AI image (infra/ai-ocr/models), checked by SHA-256
+# in the build: never converted, never diffed as text.
+*.onnx binary

@@ -275,6 +275,15 @@ function applyDeliveryStaff(socket: Socket, isDeliveryStaff: boolean): void {
 }
 
 /**
+ * Answers a subscribe the client sent with an acknowledgement, once it was
+ * handled — joined, refused or failed alike, and with nothing in it (see
+ * `chatSubscribe`). A client that sent none passes no function here.
+ */
+function acknowledgeHandled(ack: unknown): void {
+  if (typeof ack === "function") ack();
+}
+
+/**
  * Announces why, then drops the socket. The reason is one the clients turn
  * into a logout; a socket dropped in silence just goes quiet with the screen
  * still open.
@@ -842,7 +851,12 @@ async function initializeSocketIO(httpServer: Server): Promise<SocketIOServer> {
     // COPY of a socket living on another replica, so the real one kept saying
     // "staff" and walked straight back in with a subscribe on the same
     // connection.
-    socket.on("chatSubscribe", async (payload?: unknown) => {
+    //
+    // An acknowledgement, when the client asks for one, says only "handled":
+    // it carries no verdict, so it tells nobody more than the silence did.
+    // It is what lets a caller (the E2E suite) wait for the room instead of
+    // sleeping a guessed number of milliseconds. The web emits without one.
+    socket.on("chatSubscribe", async (payload: unknown, ack: unknown) => {
       try {
         const requestedBusinessId = readBusinessIdPayload(payload);
 
@@ -883,6 +897,8 @@ async function initializeSocketIO(httpServer: Server): Promise<SocketIOServer> {
       } catch {
         // A failed subscription must never bring a connection down — and
         // never joins anything either.
+      } finally {
+        acknowledgeHandled(ack);
       }
     });
 
@@ -896,9 +912,10 @@ async function initializeSocketIO(httpServer: Server): Promise<SocketIOServer> {
      * that subscribed once goes quiet after any network blip.
      *
      * Silent on refusal: no disconnect, and no answer that would tell a
-     * caller whether a company id exists.
+     * caller whether a company id exists. The optional acknowledgement is the
+     * chat's: "handled", never which way.
      */
-    socket.on("operationsSubscribe", async (payload?: unknown) => {
+    socket.on("operationsSubscribe", async (payload: unknown, ack: unknown) => {
       try {
         // A uuid or nothing (RT-1): the id becomes a room name, published
         // through Redis with every emit.
@@ -936,6 +953,8 @@ async function initializeSocketIO(httpServer: Server): Promise<SocketIOServer> {
         socket.data.operationsBusinessId = requestedBusinessId;
       } catch {
         // A failed subscription is never worth a dropped connection.
+      } finally {
+        acknowledgeHandled(ack);
       }
     });
 

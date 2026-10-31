@@ -4,6 +4,10 @@ import { randomUUID } from "node:crypto";
 
 import { quotaPeriodFor } from "@/shared/ai/ai-period";
 import { ODOMETER_UNIT_KEY } from "@/shared/ai/ai-rules";
+import {
+  DELIVERY_BATCH_SIZE,
+  DELIVERY_CONCURRENCY,
+} from "@/shared/notifications/pipeline-rules";
 
 import { FakeProvider } from "./support/fake-provider";
 import {
@@ -69,6 +73,12 @@ async function replica(
   const started = await startPipelineReplica({
     fakeProviderUrl: fake.url,
     workers,
+
+    // The notification cases are about what a batch does when its replica
+    // dies, so every row exists before the first claim. Racing the
+    // expansion, the first claim took whatever rows existed by then — and
+    // one of them could be left out of the held batch altogether.
+    expandFirst: workers.includes("notifications"),
   });
 
   replicas.push(started);
@@ -81,6 +91,26 @@ async function rowsOf(channel: string) {
     where: { channel: channel as never },
   });
 }
+
+/** Polls a condition of the database (or of the fake) until it holds. */
+async function until(
+  holds: () => Promise<boolean>,
+  what: string,
+  timeoutMs = 60_000,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+
+  while (!(await holds())) {
+    if (Date.now() > deadline) throw new Error(`tempo esgotado: ${what}`);
+
+    await new Promise((done) => setTimeout(done, 50));
+  }
+}
+
+const externalProcessing = () =>
+  prisma.notificationDelivery.count({
+    where: { channel: { in: ["EMAIL", "WHATSAPP"] }, status: "PROCESSING" },
+  });
 
 beforeAll(async () => {
   await fake.listen();
@@ -379,14 +409,18 @@ describe("a replica killed in the middle of a batch (case E)", () => {
 
       const first = await replica(["notifications"]);
 
-      await fake.waitFor(
-        () => fake.calls.length >= 5,
-        "a primeira leva chegar ao provedor",
+      // A state, not a stopwatch. It used to be "five calls, then 500 ms",
+      // and under load the kill landed while the batch was still being
+      // claimed. Now: every worker holds a call, and the whole batch is
+      // claimed behind them. It lasts until the first held call times out
+      // (10 s), far more than one 50 ms poll.
+      await until(
+        async () =>
+          fake.calls.length >= DELIVERY_CONCURRENCY &&
+          (await externalProcessing()) === DELIVERY_BATCH_SIZE,
+        `${DELIVERY_CONCURRENCY} envios no provedor e ${DELIVERY_BATCH_SIZE} entregas reivindicadas`,
       );
 
-      // Let the replica settle into the wait: whatever it put on the wire by
-      // now is the in-flight window.
-      await new Promise((done) => setTimeout(done, 500));
       await first.kill();
 
       const onTheWire = new Set(fake.calls.map((call) => call.identity));
@@ -478,7 +512,11 @@ describe("a deploy (graceful stop) in the middle of a batch", () => {
     "records what was in flight before exiting, so the next replica finds nothing to recover",
     { timeout: 300_000 },
     async () => {
-      await publishAccountPayables(prisma, seed, 10);
+      // Ten external rows, one claim (the outbox is expanded first), two
+      // waves of five at 1.2 s: what is in flight ends ~2.4 s after the stop,
+      // well inside the 10 s the shutdown waits. Twenty rows were four waves
+      // — 4.8 s plus the writes, too close to that deadline under load.
+      await publishAccountPayables(prisma, seed, 5);
 
       // Slow but answering: the stop arrives with sends in flight.
       fake.behave("email", () => ({ kind: "delay", ms: 1_200 }));
@@ -502,7 +540,7 @@ describe("a deploy (graceful stop) in the middle of a batch", () => {
 
       expect(fake.repeated("email")).toEqual([]);
       expect(fake.repeated("whatsapp")).toEqual([]);
-      expect(fake.calls.length).toBe(20);
+      expect(fake.calls.length).toBe(10);
       expect(sentBefore).toBeGreaterThan(0);
     },
   );

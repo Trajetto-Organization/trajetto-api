@@ -25,6 +25,9 @@ const OUTBOX_LEASE_SECONDS = 60;
  */
 const DELIVERY_LEASE_SECONDS = 180;
 
+/** How many deliveries one claim takes (the batch the lease must cover). */
+const DELIVERY_BATCH_SIZE = 20;
+
 /** How many deliveries of one batch run at the same time. */
 const DELIVERY_CONCURRENCY = 5;
 
@@ -299,6 +302,7 @@ export {
   laneOf,
   OUTBOX_LEASE_SECONDS,
   DELIVERY_LEASE_SECONDS,
+  DELIVERY_BATCH_SIZE,
   DELIVERY_CONCURRENCY,
   PER_DELIVERY_TIMEOUT_MS,
   assertDeliveryLeaseInvariant,

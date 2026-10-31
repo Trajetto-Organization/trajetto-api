@@ -5,7 +5,8 @@ import { createPrismaClient } from "@/shared/database/database-client";
  *
  *   DATABASE_URL="...load_test..." npx tsx tests/load/mint-two-factor-code.ts <email> <code>
  *
- * The real code travels by e-mail (an Ethereal inbox outside production) and
+ * The real code travels by e-mail (the in-process test inbox when the API
+ * runs with NODE_ENV=test, as in the browser suites; Ethereal in development) and
  * only its keyed hash is stored. The spec submits the login form first — so
  * the API issues the challenge and the row exists, exactly as for a person —
  * and then swaps the stored hash for one of a code it chose, with the same

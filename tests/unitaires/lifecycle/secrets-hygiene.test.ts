@@ -175,8 +175,14 @@ describe("the deploy pipeline", () => {
   });
 
   it("builds no image before the scan passes", () => {
-    const builds = [...deploy].filter(([, job]) =>
-      /uses: docker\/build-push-action@/.test(job),
+    // An image that leaves the runner: a build that pushes. The ai-ocr job
+    // builds only its `test` stage (pytest inside the image) and outputs
+    // nothing, in parallel with the scan, as `docker build --target test`
+    // did before it moved to Buildx for the cache.
+    const builds = [...deploy].filter(
+      ([, job]) =>
+        /uses: docker\/build-push-action@/.test(job) &&
+        /\n\s+push: true\r?\n/.test(job),
     );
 
     expect(builds.length).toBeGreaterThan(0);

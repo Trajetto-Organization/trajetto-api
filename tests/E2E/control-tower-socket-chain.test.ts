@@ -21,8 +21,11 @@ import auth from "@/config/auth";
 
 import { businessToday } from "@/shared/time/business-day";
 
+import { operationsRoom } from "@/shared/socket/operations-access";
+
 import { socketClientEntry } from "./support/socket-client";
 import { startReplica, type Replica } from "./support/replica-process";
+import { emitHandled, waitForRoom } from "./support/socket-waits";
 
 /**
  * A phone reports, the dispatcher's map moves — the whole chain, not a piece
@@ -56,9 +59,10 @@ const STRANGER = "018fe100-0000-7000-8000-0000000000a4";
 const DRIVER = "018fe100-0000-7000-8000-0000000000d1";
 
 interface TestSocket {
+  id: string;
   on: Function;
   off: Function;
-  emit: Function;
+  emit: (...args: unknown[]) => unknown;
   disconnect: () => void;
 }
 
@@ -66,6 +70,9 @@ let connect: (url: string, options: unknown) => TestSocket;
 
 let app: Awaited<typeof import("@/http")>["app"];
 let websocket: typeof import("@/websocket");
+let ioServer: Awaited<
+  ReturnType<typeof import("@/websocket").initializeSocketIO>
+>;
 
 let apiPort = 0;
 let replica: Replica | null = null;
@@ -171,8 +178,13 @@ function waitFor(
   });
 }
 
-/** The connection handler reads the database before joining any room. */
-const settle = (ms = 1_500) => new Promise((done) => setTimeout(done, ms));
+/**
+ * The connection handler reads the database before joining any room: wait
+ * for the room the case depends on, as the server records it, instead of
+ * 1.5 s.
+ */
+const joined = (socket: TestSocket, room: string) =>
+  waitForRoom(ioServer, socket.id, room, true);
 
 /** What the phone sends: one fresh point, over the network. */
 async function report(latitude: number): Promise<number> {
@@ -282,7 +294,7 @@ beforeAll(async () => {
   apiPort = (app.server.address() as { port: number }).port;
 
   websocket = await import("@/websocket");
-  await websocket.initializeSocketIO(app.server);
+  ioServer = await websocket.initializeSocketIO(app.server);
 
   ({ io: connect } = await import(/* @vite-ignore */ socketClientEntry()));
 }, 180_000);
@@ -302,7 +314,9 @@ describe("a position posted by the phone", () => {
     const driver = await connectTo(apiPort, driverToken);
     const stranger = await connectTo(apiPort, strangerToken);
 
-    await settle();
+    await joined(dispatcher, operationsRoom(CARRIER));
+    await joined(driver, `user:${DRIVER_USER}`);
+    await joined(stranger, operationsRoom(OTHER));
 
     const heard = waitFor(dispatcher, "driverPosition");
     const driverHeard = waitFor(driver, "driverPosition", 2_500);
@@ -328,13 +342,13 @@ describe("a position posted by the phone", () => {
   it("reaches a MASTER who subscribed, whatever the case of the id (RT-1)", async () => {
     const master = await connectTo(apiPort, masterToken);
 
-    await settle(500);
+    await joined(master, `user:${MASTER}`);
 
     // The rooms are named from database ids, lower case. An upper-case id
     // used to put the socket in a room nobody emits to.
-    master.emit("operationsSubscribe", { businessId: CARRIER.toUpperCase() });
-
-    await settle();
+    await emitHandled(master, "operationsSubscribe", {
+      businessId: CARRIER.toUpperCase(),
+    });
 
     const heard = waitFor(master, "driverPosition");
 
@@ -347,7 +361,8 @@ describe("a position posted by the phone", () => {
     const dispatcher = await connectTo(apiPort, dispatcherToken);
     const driver = await connectTo(apiPort, driverToken);
 
-    await settle();
+    await joined(dispatcher, operationsRoom(CARRIER));
+    await joined(driver, `user:${DRIVER_USER}`);
 
     const heard = waitFor(dispatcher, "routeEvent");
     const driverHeard = waitFor(driver, "routeEvent", 2_500);
@@ -381,7 +396,12 @@ describe("a position posted by the phone", () => {
     const elsewhere = await connectTo(replica.port, dispatcherToken);
     const strangerElsewhere = await connectTo(replica.port, strangerToken);
 
-    await settle();
+    await replica.waitForRoom(elsewhere.id, operationsRoom(CARRIER), true);
+    await replica.waitForRoom(
+      strangerElsewhere.id,
+      operationsRoom(OTHER),
+      true,
+    );
 
     const heard = waitFor(elsewhere, "driverPosition", 10_000);
     const strangerHeard = waitFor(strangerElsewhere, "driverPosition", 4_000);

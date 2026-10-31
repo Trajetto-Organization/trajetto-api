@@ -112,14 +112,14 @@ Princípios que não mudam:
 
 - **Tags**:
 
-  | Tag                                                 | Quem cria/move                                                                     | Muda?                                                                            |
-  | --------------------------------------------------- | ---------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
-  | `sha-<7 primeiros do commit>`                       | o build de cada push em `staging`                                                  | **nunca** (imutável)                                                             |
-  | `staging`                                           | o job `deploy-staging`, por digest                                                 | a cada push em `staging`                                                         |
-  | `staged-<7>`                                        | o job `deploy-staging`, **por último**: depois do scan, do deploy e da conferência | nunca; sem ele o PR e a promoção recusam o commit                                |
-  | `src-<hash git de infra/ai-ocr>` (só `trajetto-ai`) | o build da IA                                                                      | nunca; é por ela que um push acha a imagem da IA de mesmo código e a reaproveita |
-  | `stable`                                            | o job `promote-production`, por digest                                             | a cada promoção ou rollback                                                      |
-  | `main-<sha>`                                        | builds antigos, de antes da branch `staging`                                       | nunca; aceitos só como alvo de rollback                                          |
+  | Tag                                                 | Quem cria/move                                                                     | Muda?                                                                                                             |
+  | --------------------------------------------------- | ---------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+  | `sha-<7 primeiros do commit>`                       | o build de cada push em `staging`                                                  | **nunca** (imutável)                                                                                              |
+  | `staging`                                           | o job `deploy-staging`, por digest                                                 | a cada push em `staging`                                                                                          |
+  | `staged-<7>`                                        | o job `deploy-staging`, **por último**: depois do scan, do deploy e da conferência | nunca; sem ele o PR e a promoção recusam o commit (salvo um commit só de documentação, que usa o de um ancestral) |
+  | `src-<hash git de infra/ai-ocr>` (só `trajetto-ai`) | o build da IA                                                                      | nunca; é por ela que um push acha a imagem da IA de mesmo código e a reaproveita                                  |
+  | `stable`                                            | o job `promote-production`, por digest                                             | a cada promoção ou rollback                                                                                       |
+  | `main-<sha>`                                        | builds antigos, de antes da branch `staging`                                       | nunca; aceitos só como alvo de rollback                                                                           |
 
   Não existem `latest`, `main` nem `pr-*`. As Applications de produção rodam
   `stable`; as de staging, `staging`. O pipeline **nunca** muda a imagem
@@ -136,7 +136,10 @@ Princípios que não mudam:
 - **Só vai para a produção o que o staging rodou.** O `sha-<7>` existe assim
   que o build sobe, mesmo que o scan, o deploy de staging ou a conferência
   falhem depois; o marcador `staged-<7>` só é escrito quando tudo isso passou,
-  e o check do PR e a promoção o exigem no mesmo digest.
+  e o check do PR e a promoção o exigem no mesmo digest. A única exceção é um
+  commit que só muda documentação: ele vai com o build do commit mais
+  próximo que o staging rodou, que tem o mesmo conteúdo de imagem
+  ([seção 16](#16-promover-para-produção), "Commits só de documentação").
 - **Antes de o Dokploy existir, nada quebra.** Sem os secrets do Dokploy nos
   environments do GitHub, os jobs movem as tags (`staging`, `stable`) e pulam
   o deploy com um aviso (`::notice::`). Configuração parcial (um secret
@@ -163,7 +166,10 @@ O fluxo normal:
    imagens, no mesmo digest de `sha-<7>` (espera até 45 min, porque o PR
    costuma abrir enquanto o staging ainda constrói e implanta o mesmo
    commit). Um commit cujo scan, deploy de staging ou conferência falhou tem
-   a imagem, mas não o marcador, e o check falha.
+   a imagem, mas não o marcador, e o check falha. Um head que só muda
+   documentação desde um commit que o staging rodou passa com o marcador
+   desse commit ([seção 16](#16-promover-para-produção), "Commits só de
+   documentação").
 5. **Merge com "Create a merge commit".** Nunca _Squash and merge_ nem
    _Rebase and merge_: os dois criam um commit que o staging nunca construiu,
    e a promoção falha de propósito ("não passou pelo pipeline de staging"). O
@@ -181,7 +187,9 @@ staging, porque a produção só roda imagens construídas lá.
 `chore(release): x.y.z [skip ci]` com o `CHANGELOG.md` em `main`. Traga `main`
 de volta para `staging` de vez em quando (`git merge origin/main` em
 `staging`) para as duas não divergirem; esse merge vira um build de staging
-como qualquer outro.
+como qualquer outro. Como ele só traz o `CHANGELOG.md` (o único arquivo que
+o `@semantic-release/git` commita), pode ir com `[skip ci]` na mensagem
+([seção 16](#16-promover-para-produção), "Commits só de documentação").
 
 O Dependabot abre os PRs dele contra `staging` (`target-branch: staging` em
 `.github/dependabot.yml`), pelo mesmo motivo.
@@ -193,12 +201,12 @@ O Dependabot abre os PRs dele contra `staging` (`target-branch: staging` em
 Roda em todo push de branch que **não** seja `main`, `master` nem `staging`
 (e por _Run workflow_). Um push novo na mesma branch cancela o run anterior.
 
-| Job            | O que faz                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
-| -------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `validate`     | serviço `redis:7-alpine` (um teste unitário do adapter do Socket.IO precisa dele); checkout com histórico completo; os repositórios irmãos (`Trajetto-Organization/trajetto-ui` e `Trajetto-Organization/trajetto-mobile`, na mesma branch quando ela existe lá) para o contrato de rotas, se o secret `CLIENT_REPOS_READ_TOKEN` existir; `audit-ci` (CRITICAL de produção); Prettier; `prisma generate`; `tsc`; unitários com piso de cobertura; publica `coverage-<sha>` |
-| `secrets`      | gitleaks em todo o histórico, imagem fixada por digest                                                                                                                                                                                                                                                                                                                                                                                                                     |
-| `ai-ocr`       | `docker build --target test infra/ai-ocr` (o pytest roda dentro da imagem)                                                                                                                                                                                                                                                                                                                                                                                                 |
-| `ai-local-e2e` | só em _Run workflow_: o contrato da API contra o contêiner real de IA (`tests/ai-local`)                                                                                                                                                                                                                                                                                                                                                                                   |
+| Job            | O que faz                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| -------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `validate`     | serviço `redis:7-alpine` por digest (um teste unitário do adapter do Socket.IO precisa dele); checkout com histórico completo; os repositórios irmãos (`Trajetto-Organization/trajetto-ui` e `Trajetto-Organization/trajetto-mobile`, na mesma branch quando ela existe lá) para o contrato de rotas, se o secret `CLIENT_REPOS_READ_TOKEN` existir — só "a branch não existe" (código 2 do `git ls-remote`) cai na branch padrão, com aviso; erro de rede repete 3 vezes e falha; Node `22.21.1`; cache dos engines do Prisma; auditoria de dependências (`audit-gate.sh`: bloqueia só um push que muda dependência); Prettier; `prisma generate`; `tsc`; unitários com piso de cobertura; publica `coverage-<sha>` |
+| `secrets`      | gitleaks em todo o histórico, imagem fixada por digest                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| `ai-ocr`       | o stage `test` de `infra/ai-ocr` pelo Buildx, com cache do GitHub (escopo `ai-test`): o pytest roda dentro da imagem, e um código que já passou leva segundos                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| `ai-local-e2e` | só em _Run workflow_: o contrato da API contra o contêiner real de IA (`tests/ai-local`)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
 
 Sem E2E, sem imagem, sem deploy: a pergunta é só "esse código pode ir para o
 staging?".
@@ -213,16 +221,16 @@ staging?".
 | _Run workflow_ na `main` (`image_tag`)                  | `promote-production` (o rollback)                                 |
 | _Run workflow_ na `staging` (`force_ai_build` opcional) | os mesmos do push em `staging`                                    |
 
-| Job                  | Detalhes                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `test`               | serviços `postgres:16-alpine` e `redis:7-alpine`; checkout completo (o teste de rotas aposentadas compara com `origin/main`); `yarn install --frozen-lockfile` com cache; `audit-ci`; `lint:check`; `prisma:generate`; `typecheck`; `test:coverage` (o piso de cobertura); publica `coverage-<sha>`; `test:e2e` (um banco por arquivo).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
-| `ai-ocr`             | o pytest do serviço de IA dentro da imagem (`--target test`).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
-| `secrets`            | o mesmo gitleaks do `ci.yml` (mesma imagem, flags, `.gitleaksignore`). Nenhuma imagem é construída antes dele passar.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
-| `build-and-push`     | só no `staging` (push ou _Run workflow_), depois dos três acima. Buildx com cache do GitHub (um escopo por imagem); publica `sha-<7>` das duas imagens com SBOM e proveniência (`provenance: mode=max`; o único build arg é o commit, `GIT_SHA`, que vai para a imagem e sai na liveness). A IA só é reconstruída se o código dela mudou: toda imagem da IA leva também a tag `src-<hash git de infra/ai-ocr>`, e um push que encontra essa tag reaproveita a imagem (mesmo digest) e só acrescenta o `sha-<7>` dele, sem rebuild; `force_ai_build` reconstrói mesmo assim. Varre as duas por digest com Trivy (CRITICAL corrigível; só relata até `IMAGE_SCAN_ENFORCE=true`). Exporta os dois digests.                                                                                                                                                                          |
-| `deploy-staging`     | environment `staging`; um por vez (`concurrency: deploy-staging`, nunca cancelado no meio). Confere se o run ainda é o head de `staging` (runs terminam fora de ordem; o mais velho não volta a tag); anota para onde as tags `staging` apontam; por serviço, na ordem **`trajetto-ai` → `trajetto-api`**, move a tag `staging` para o digest deste run e logo depois pede o deploy da Application (`.github/scripts/dokploy-deploy.mjs`, se os três secrets obrigatórios do Dokploy existirem). A IA só é movida e reimplantada se o digest dela mudou (ou com `force_ai_build`). Depois espera a API pública responder este commit em `/health/liveness` (`wait-for-version.mjs`; `ROLLOUT_VERIFY=ssh` troca pela conferência no Swarm), escreve o marcador `staged-<7>` das duas imagens e, se um deploy do Dokploy falhou, devolve a tag daquele serviço ao digest anterior. |
-| `staging-image`      | só no PR (nome do check: _The PR head was built on staging_): espera (até 45 min) o marcador `staged-<head do PR>` das duas imagens, no mesmo digest de `sha-<head do PR>`. Sem ele o merge promoveria um build que o staging não rodou.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| `promote-production` | environment `production` (revisores obrigatórios = aprovação); um por vez (`concurrency: promote-production`); só a partir de `main`. Resolve o build (2º pai do merge commit; fast-forward = o próprio commit; _Run workflow_ = a tag digitada), valida o formato (`sha-<hex>` ou `main-<hex>`), confere que a imagem existe no GHCR e, num merge, que tem o marcador `staged-<7>` no mesmo digest (o rollback por _Run workflow_ é isento), compara com o que o staging roda (só informa), roda as migrations como job se `MIGRATIONS_VIA_JOB=true`, move `stable` das duas imagens por digest (a IA só se o build tiver essa imagem), pede o deploy das Applications de produção na mesma ordem (se configurado) e espera a convergência da API (SSH por padrão; `ROLLOUT_VERIFY=http` usa a liveness pública).                                                               |
-| `release`            | depois da promoção, só no push em `main`: `semantic-release` cria a tag, o `CHANGELOG.md` (commit com `[skip ci]`) e o GitHub Release.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| Job                  | Detalhes                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `test`               | serviços `postgres:16-alpine` e `redis:7-alpine` fixados por digest; checkout completo (o teste de rotas aposentadas compara com `origin/main`, e a auditoria com a base do push ou do PR); Node `22.21.1`; cache dos engines do Prisma pela versão deles e `yarn install --frozen-lockfile` com cache; confere que o schema engine do Prisma ficou instalado (baixa de novo, até 3 vezes, se o `postinstall` falhou calado); auditoria de dependências (`audit-gate.sh`); `lint:check`; `prisma:generate`; `typecheck`; `test:coverage` (o piso de cobertura); publica `coverage-<sha>`; `test:e2e` (um banco por arquivo; em duas fases, os arquivos que sobem réplicas por último, um por vez).                                                                                                                                                                                                                                                                                                                  |
+| `ai-ocr`             | o pytest do serviço de IA dentro da imagem (stage `test`, Buildx com cache do GitHub no escopo `ai-test`; o build só fala com o Docker Hub e o PyPI, porque os pesos do OCR estão versionados em `infra/ai-ocr/models`).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| `secrets`            | o mesmo gitleaks do `ci.yml` (mesma imagem, flags, `.gitleaksignore`). Nenhuma imagem é construída antes dele passar.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| `build-and-push`     | só no `staging` (push ou _Run workflow_), depois dos três acima. Buildx com cache do GitHub (um escopo por imagem); publica `sha-<7>` das duas imagens com SBOM e proveniência (`provenance: mode=max`; o único build arg é o commit, `GIT_SHA`, que vai para a imagem e sai na liveness). A IA só é reconstruída se o código dela mudou: toda imagem da IA leva também a tag `src-<hash git de infra/ai-ocr>`, e um push que encontra essa tag reaproveita a imagem (mesmo digest) e só acrescenta o `sha-<7>` dele, sem rebuild; `force_ai_build` reconstrói mesmo assim. Varre as duas por digest com Trivy (CRITICAL corrigível; só relata até `IMAGE_SCAN_ENFORCE=true`, e só um achado reprova: o banco de vulnerabilidades é baixado uma vez por run, com cache diário, e falha no download ou erro do Trivy viram aviso). Exporta os dois digests.                                                                                                                                                          |
+| `deploy-staging`     | environment `staging`; um por vez (`concurrency: deploy-staging`, nunca cancelado no meio). Confere se o run ainda é o head de `staging` (runs terminam fora de ordem; o mais velho não volta a tag, a menos que o head só acrescente documentação, como um `[skip ci]` de doc: `docs-only.sh`); anota para onde as tags `staging` apontam; por serviço, na ordem **`trajetto-ai` → `trajetto-api`**, move a tag `staging` para o digest deste run e logo depois pede o deploy da Application (`.github/scripts/dokploy-deploy.mjs`, se os três secrets obrigatórios do Dokploy existirem). A IA só é movida e reimplantada se o digest dela mudou (ou com `force_ai_build`). Depois espera a API pública responder este commit em `/health/liveness` (`wait-for-version.mjs`; `ROLLOUT_VERIFY=ssh` troca pela conferência no Swarm), escreve o marcador `staged-<7>` das duas imagens e, se um deploy do Dokploy falhou, devolve a tag daquele serviço ao digest anterior.                                         |
+| `staging-image`      | só no PR (nome do check: _The PR head was built on staging_): espera (até 45 min) o marcador `staged-<head do PR>` das duas imagens, no mesmo digest de `sha-<head do PR>`, ou que o head só mude documentação desde um commit que o staging rodou (`.github/scripts/staged-build.sh`). Sem isso o merge promoveria um build que o staging não rodou.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| `promote-production` | environment `production` (revisores obrigatórios = aprovação); um por vez (`concurrency: promote-production`); só a partir de `main`. Resolve o build (2º pai do merge commit; fast-forward = o próprio commit; _Run workflow_ = a tag digitada), valida o formato (`sha-<hex>` ou `main-<hex>`), confere num merge que o staging rodou o build — o marcador `staged-<7>` no mesmo digest, esperando até 20 min um deploy de staging ainda em andamento, ou o build do commit mais próximo que o staging rodou, quando o merge só muda documentação desde ele (o rollback por _Run workflow_ é isento) —, confere que a imagem existe no GHCR, compara com o que o staging roda (só informa), roda as migrations como job se `MIGRATIONS_VIA_JOB=true`, move `stable` das duas imagens por digest (a IA só se o build tiver essa imagem), pede o deploy das Applications de produção na mesma ordem (se configurado) e espera a convergência da API (SSH por padrão; `ROLLOUT_VERIFY=http` usa a liveness pública). |
+| `release`            | depois da promoção, só no push em `main`: `semantic-release` cria a tag, o `CHANGELOG.md` (commit com `[skip ci]`) e o GitHub Release.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
 
 Antes do push, o `build-and-push` carrega a imagem da API no runner e roda um
 smoke test contra um Postgres e um Redis descartáveis, numa rede interna sem
@@ -238,6 +246,71 @@ Permissões: o workflow inteiro tem `contents: read`; só `build-and-push`,
 `staging-image` pede `packages: read`; `release` pede `contents`, `issues` e
 `pull-requests: write`. Todas as actions são fixadas por SHA de commit, com a
 versão em comentário (o teste `supply-chain.test.ts` recusa uma tag solta).
+
+### Um vermelho é sempre do código
+
+Regra dos três repositórios desde 30/10/2026: um pipeline vermelho quer
+dizer que o código (ou uma dependência que o próprio commit mudou) está
+errado — nunca a rede, um registry, uma tag que andou ou um passo que travou.
+"Rodar de novo" não é correção. O que garante isso aqui (e os testes que
+guardam cada item, em `tests/unitaires/lifecycle`):
+
+| Causa de vermelho (ou verde) falso                                                                                      | O que o pipeline faz agora                                                                                                                                                                                                                                                                                                                                                     | Teste                                                    |
+| ----------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------- |
+| Um aviso CRITICAL publicado hoje reprovava o push de qualquer commit, até de documentação                               | `.github/scripts/audit-gate.sh`: o `audit-ci` bloqueia só o push ou PR que muda `package.json`, `yarn.lock` ou `package-lock.json` (em qualquer pasta) ou o `audit-ci.jsonc`, ou que não tem base para comparar (branch nova, _Run workflow_, base fora do checkout). Nos outros, roda e relata: `::warning::` e o relatório no resumo do job. O vigia contínuo é o Dependabot | `audit-gate.test.ts`                                     |
+| Uma consulta ao GHCR com erro passageiro virava "a tag não existe" (`2>/dev/null \|\| true`)                            | `.github/scripts/ghcr.sh`: só o "not found" do GHCR é resposta vazia; qualquer outro erro repete (5 tentativas, pausa de 5 s dobrando, `::warning::` com a contagem) e depois falha dizendo que o GHCR está fora. Mover uma tag também repete (é idempotente)                                                                                                                  | `ghcr-script.test.ts`, `staging-deploy-workflow.test.ts` |
+| O download do banco do Trivy (com limite de taxa) duas vezes por run, escondido junto com os achados                    | um download por run, com retentativa, num diretório que o cache do Actions guarda por dia; o scan usa `--skip-db-update`. Falha no download usa a cópia do cache; sem cópia, o scan não roda e o resumo diz isso. Só um achado reprova, e só com `IMAGE_SCAN_ENFORCE=true`                                                                                                     | `ci-stability.test.ts`                                   |
+| Os pesos PP-OCRv5 da IA baixados de `www.modelscope.cn` em todo build sem cache (um pedido, sem retentativa)            | versionados em `infra/ai-ocr/models` (4,8 e 7,9 MB) e conferidos pelo `models.sha256` num `RUN --network=none`; o job `ai-ocr` usa o Buildx com o cache do GitHub                                                                                                                                                                                                              | `image-layers.test.ts`, `ci-stability.test.ts`           |
+| O `postinstall` do `@prisma/engines` baixa o schema engine de `binaries.prisma.sh` e falha calado                       | cache de `~/.cache/prisma` pela versão dos engines; o job `test` confere o engine antes do E2E e baixa de novo (até 3 vezes); o `Dockerfile` faz o mesmo nos dois `yarn install` e para o build com a causa                                                                                                                                                                    | `ci-stability.test.ts`, `image-layers.test.ts`           |
+| Um erro de rede no `git ls-remote` dos irmãos caía calado na branch padrão                                              | só o código 2 ("a branch não existe") cai na padrão, com `::notice::`; outro código repete 3 vezes (10 s, 20 s) e falha                                                                                                                                                                                                                                                        | `compose-ci-siblings.test.ts`                            |
+| `git ls-remote \| cut` sem `pipefail`: uma falha virava "este run não é o head" e o deploy de staging era pulado, verde | `defaults.run.shell: bash` (`-eo pipefail`) nos três workflows; a leitura do head repete 3 vezes e só um sha válido decide; a leitura dos pais do merge (`gh api`) também repete                                                                                                                                                                                               | `ci-stability.test.ts`, `promote-workflow.test.ts`       |
+| Um erro passageiro da borda zerava a janela de 90 s da conferência pela liveness                                        | só uma resposta de outro commit zera; sondagem sem resposta não zera, e cada sequência delas vira `::warning::` com a contagem ([seção 14](#14-conferir-a-convergência))                                                                                                                                                                                                       | `wait-for-version.test.ts`                               |
+| As retentativas do deploy no Dokploy só apareciam no log                                                                | cada retentativa (pedido, consulta, deploy) é `::warning::` com a contagem, e o resumo do job lista cada tentativa que falhou com o motivo do Dokploy                                                                                                                                                                                                                          | `dokploy-deploy.test.ts`                                 |
+| Uma exportação de cache que falhava (429 ou 5xx do serviço de cache) derrubava o build já publicado                     | todo `cache-to: type=gha` com `ignore-error=true`                                                                                                                                                                                                                                                                                                                              | `ci-stability.test.ts`                                   |
+| Um passo travado segurava o runner até 6 h                                                                              | `timeout-minutes` em todo job, com folga sobre o pior medido: `test` 90, `ai-ocr` 30, `secrets` 10, `build-and-push` 45, `deploy-staging` 120, `staging-image` 60, `release` 20, `promote-production` 120; no `ci.yml`, `validate` 30, `ai-ocr` 30, `secrets` 10, `ai-local-e2e` 45                                                                                            | `ci-stability.test.ts`                                   |
+| Um commit `[skip ci]` só de documentação na ponta da `staging` travava a promoção                                       | a regra de documentação abaixo ([seção 16](#16-promover-para-produção)); e o run do commit de código logo abaixo de uma ponta só de documentação implanta mesmo assim (`docs-only.sh`, testado no `ci-stability.test.ts`)                                                                                                                                                      | `staged-build.test.ts`, `promote-workflow.test.ts`       |
+
+Uma borda do `audit-gate.sh`: a base do push é o `before`. Uma mudança de
+dependência que chegue à `staging` sem run próprio (num `[skip ci]`, o que a
+regra de documentação proíbe, ou num run pendente que o GitHub trocou pelo do
+push seguinte) não entra no diff do push seguinte, e ali o achado só avisa. A
+produção continua protegida: o PR `staging → main` compara com a `main`, vê a
+mudança e bloqueia.
+
+O que continua dependendo de fora, de propósito: o npm (instalação e o
+endpoint de auditoria; o `audit-gate.sh` repete 3 vezes um audit que não
+rodou e nunca o confunde com aviso de segurança), o PyPI, o
+Docker Hub, o GHCR e o GitHub. Os testes não falam com mais ninguém (a trava
+de rede do `setupTests.ts`, [`testes.md`](./testes.md#nenhuma-rede-de-fora)).
+
+### Versões fixas
+
+O mesmo commit testa e publica sempre nas mesmas versões:
+
+- **Node**: `node-version: "22.21.1"` em todo `actions/setup-node` dos três
+  workflows, a mesma versão da base do `Dockerfile` (`node:22.21.1-alpine`).
+  Antes era `"22"`, que andava com o _toolcache_ do runner. Quando o
+  Dependabot sobe a base do `Dockerfile`, suba o `node-version` dos
+  workflows no mesmo PR: o `ci-stability.test.ts` falha enquanto os dois
+  não batem.
+- **Imagens dos jobs**, por digest do índice multi-arquitetura, com a tag ao
+  lado em comentário: `postgres:16-alpine` (16.15) e `redis:7-alpine`
+  (7.4.12) nos serviços e no smoke test; o BuildKit do Buildx
+  (`moby/buildkit:v0.33.1`, a versão que o `buildx-stable-1` apontava em
+  30/10/2026); gitleaks e Trivy. Os digests do Postgres e do Redis são os
+  mesmos nos três repositórios. O Dependabot não lê imagens dentro dos
+  workflows: para subir, pegue o digest novo do índice
+  (`docker buildx imagetools inspect postgres:16-alpine`, a linha `Digest:`)
+  e troque em todos os lugares de uma vez, nos três repositórios. O
+  `ci-stability.test.ts` recusa uma imagem sem digest e o mesmo nome com dois
+  digests.
+- **O `docker buildx` dos jobs** é o que vem no runner (só o BuildKit é
+  fixado), e ele muda com a imagem do runner. Uma diferença entre versões já
+  medida: o `--format '{{.Manifest.Digest}}'` que o `ghcr.sh` usa devolve o
+  digest puro no buildx dos runners, mas o cabeçalho inteiro ("Name:",
+  "MediaType:", "Digest:" e a lista de manifests) no buildx 0.30 (medido em
+  30/10/2026). O `ghcr.sh` lê as duas formas, para uma atualização do runner
+  não virar "o GHCR não respondeu" em todo passo (`ghcr-script.test.ts`).
 
 ### Como o pipeline fala com o Dokploy
 
@@ -1246,16 +1319,16 @@ nada sobrevivia entre as tentativas do Dokploy, e um bump do Pillow
 reenviava tudo, junto com os modelos (que ficavam na mesma camada do
 `server.py`). Agora:
 
-| Camada (em ordem)              | Conteúdo                                                                          | Muda quando                                         |
-| ------------------------------ | --------------------------------------------------------------------------------- | --------------------------------------------------- |
-| base                           | `python:3.12-slim` por digest                                                     | o Dependabot move o digest                          |
-| `requirements-opencv.txt`      | OpenCV headless                                                                   | nova medição (o Dependabot ignora)                  |
-| `requirements-onnxruntime.txt` | ONNX Runtime                                                                      | nova medição (o Dependabot ignora)                  |
-| `requirements-rapidocr.txt`    | RapidOCR (com os modelos PP-OCRv6 da roda)                                        | nova medição (o Dependabot ignora)                  |
-| `requirements-numpy.txt`       | numpy                                                                             | minor/patch do numpy                                |
-| `requirements.txt`             | as bibliotecas pequenas (Pillow, certifi, urllib3, requests, protobuf, shapely…)  | os bumps de segurança e do Dependabot, quase sempre |
-| modelos                        | o par PP-OCRv5 baixado e conferido no stage `models`, com dono, modo e data fixos | `models.sha256` (troca deliberada de modelo)        |
-| código                         | `models.sha256`, `fetch_models.py`, `warmup.jpg`; depois, sozinho, `server.py`    | cada mudança no serviço                             |
+| Camada (em ordem)              | Conteúdo                                                                                                                | Muda quando                                         |
+| ------------------------------ | ----------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------- |
+| base                           | `python:3.12-slim` por digest                                                                                           | o Dependabot move o digest                          |
+| `requirements-opencv.txt`      | OpenCV headless                                                                                                         | nova medição (o Dependabot ignora)                  |
+| `requirements-onnxruntime.txt` | ONNX Runtime                                                                                                            | nova medição (o Dependabot ignora)                  |
+| `requirements-rapidocr.txt`    | RapidOCR (com os modelos PP-OCRv6 da roda)                                                                              | nova medição (o Dependabot ignora)                  |
+| `requirements-numpy.txt`       | numpy                                                                                                                   | minor/patch do numpy                                |
+| `requirements.txt`             | as bibliotecas pequenas (Pillow, certifi, urllib3, requests, protobuf, shapely…)                                        | os bumps de segurança e do Dependabot, quase sempre |
+| modelos                        | o par PP-OCRv5, versionado em `infra/ai-ocr/models` e conferido sem rede no stage `models`, com dono, modo e data fixos | `models.sha256` (troca deliberada de modelo)        |
+| código                         | `models.sha256`, `fetch_models.py`, `warmup.jpg`; depois, sozinho, `server.py`                                          | cada mudança no serviço                             |
 
 Cada arquivo de requisitos é instalado com `--require-hashes --no-deps` no
 seu próprio `RUN` (montado, não copiado: um `COPY` de todos poria cada
@@ -1266,6 +1339,15 @@ bump de segurança numa biblioteca pequena reenvia ~12 MB em vez de ~157 MB;
 uma edição do `server.py`, alguns KB. Pacote novo vai no arquivo da
 frequência de mudança dele, e nunca em dois
 (`tests/unitaires/lifecycle/image-layers.test.ts`).
+
+**Os pesos**: o par PP-OCRv5 do perfil do canhoto fica versionado em
+`infra/ai-ocr/models` (4,8 e 7,9 MB; a roda do RapidOCR traz os outros
+três). O build os confere contra `models.sha256` num `RUN --network=none` e
+não baixa nada: até 30/10/2026 eles vinham de `www.modelscope.cn` em todo
+build sem cache, e uma queda desse host derrubava o job `ai-ocr`. A camada
+gerada é a mesma de antes (mesmos bytes, dono, modo e datas), então a VPS não
+puxa os modelos de novo. Trocar um modelo é decisão com benchmark (ADR 0010);
+o passo a passo está no cabeçalho de `infra/ai-ocr/fetch_models.py`.
 
 **Versão no ar**: `GET /health` responde também `version` (7 caracteres) e
 `commit` (o commit do build, gravado na imagem pelo build arg `GIT_SHA`;
@@ -1604,7 +1686,13 @@ promovido. São dois jeitos, escolhidos pela variável `ROLLOUT_VERIFY`
 - Passa quando: a API responde o commit deste run por **90 s seguidos** —
   mais que o monitor de rollback do Swarm (30 s, _Update Config_ da
   Application). Cada pedido cai numa réplica qualquer, então uma réplica
-  antiga ainda no balanceamento zera a janela.
+  antiga ainda no balanceamento zera a janela. Só uma **resposta** zera:
+  outro commit, ou um build sem commit. Uma sondagem sem resposta (timeout,
+  conexão derrubada, 5xx/52x ou outro status de erro da borda, um corpo que
+  não é o JSON da liveness) não diz qual build serve, então não zera nem
+  abre a janela; cada sequência delas vira `::warning::` com a contagem, e o
+  total vai para o resumo. A janela só fecha numa resposta do commit
+  esperado.
 - Falha quando: 600 s sem a janela fechar (rollback do Swarm, réplica nova
   que não sobe, `API_PUBLIC_URL` errada) ou `API_PUBLIC_URL` ausente.
 - Não vê: a IA (sem endereço público; a API não expõe a versão dela sem
@@ -1833,9 +1921,12 @@ UPDATE "_prisma_migrations" SET checksum = '<sha256 do arquivo>'
 2. Merge com **Create a merge commit**.
 3. _Actions_ → o run do push em `main` → job _Promote to production_ →
    _Review deployments_ → aprovar o environment `production`.
-4. O job resolve o build (`sha-<head do PR>`), exige o marcador
+4. O job resolve o commit (o head do PR), exige o marcador
    `staged-<7>` das duas imagens no mesmo digest (o staging rodou este
-   build), compara com o staging, roda as migrations (se
+   build; espera até 20 min se o deploy de staging dele ainda estiver em
+   andamento, em vez de falhar pedindo um _re-run_), ou usa o build do commit
+   mais próximo que o staging rodou, se o merge só muda documentação desde
+   ele (abaixo), compara com o staging, roda as migrations (se
    `MIGRATIONS_VIA_JOB=true`), move `stable` das duas imagens, pede o deploy
    das Applications de produção (IA → API; a IA só se o digest dela mudou) e
    espera a convergência. Verde = o Swarm roda o digest promovido em todas as
@@ -1852,6 +1943,70 @@ docker service inspect trajetto-api-production --format '{{.UpdateStatus.State}}
 **Ordem entre API e web**: API primeiro, web depois. A promoção da web confere
 se a API de produção serve todas as rotas que a web chama
 (`trajetto-ui/docs/deploy.md`).
+
+### Commits só de documentação
+
+Um commit que só muda documentação — um arquivo `*.md` em qualquer pasta, ou
+qualquer coisa em `docs/` — não muda nenhuma imagem (o `.dockerignore` deixa
+os dois de fora, em qualquer profundidade: `**/*.md`; a IA copia só arquivos
+nomeados). Por isso, desde 30/10/2026, ele vai para a produção com o
+build do commit mais próximo que o staging rodou, e **`[skip ci]` só para
+documentação passou a ser seguro**: suba o doc sozinho com `[skip ci]` na
+mensagem (nenhum workflow roda, nenhum minuto de runner), e o check do PR
+`staging → main` e a promoção aceitam o build do commit anterior (com os
+dois cuidados do próprio GitHub listados no fim desta seção).
+
+O que é documentação está num lugar só, `.github/scripts/docs-only.sh`, e é
+a mesma regra da web (`docs-only.mjs`) e do app. A regra de promoção, a
+mesma no check do PR e na promoção (`.github/scripts/staged-build.sh`,
+testada em `staged-build.test.ts`):
+
+1. O commit tem o marcador `staged-<7>` no digest de `sha-<7>`: promove o
+   build dele (o caminho normal).
+2. Não tem: percorre os ancestrais pelo primeiro pai (até 50), do mais
+   próximo para trás. O primeiro que tem o marcador é o build promovido,
+   desde que o `git diff` entre ele e o commit só toque documentação. A
+   busca para no primeiro ancestral cujo diff já inclui outro arquivo, e o
+   check (ou a promoção) falha listando esses arquivos: qualquer outro
+   arquivo exige a execução do staging.
+3. O resumo do run diz qual build foi promovido e por quê, e o
+   `wait-for-version.mjs` espera o commit desse build na liveness.
+
+O doc com `[skip ci]` pode subir a qualquer hora, inclusive enquanto o
+pipeline do commit de código anterior ainda roda (cerca de 1 hora). O
+`deploy-staging` daquele run vê na `staging` uma cabeça mais nova, mas, como
+ela só acrescenta documentação ao commit dele (`docs-only.sh`), implanta e
+grava o `staged-<7>` mesmo assim. Antes, ele saía verde sem implantar, o
+commit de documentação não tinha run, e a promoção travava até o próximo
+push. Se a cabeça mais nova muda qualquer outro arquivo, o run mais velho
+continua saindo sem mexer no staging, e o run da cabeça faz o deploy.
+
+Dois cuidados do próprio GitHub, que nenhuma regra daqui contorna:
+
+- **A ponta do PR `staging → main` com `[skip ci]`**: o GitHub também não
+  roda os workflows de `pull_request` quando o commit da ponta do PR tem
+  `[skip ci]` na mensagem, e os quatro checks exigidos em `main`
+  ([seção 13](#13-configurar-o-github), "Proteção das branches") ficam
+  pendentes. Para destravar, rode _Run workflow_ do _Pipeline (staging →
+  produção)_ na branch `staging`: a validação, o build e o deploy de staging
+  daquele commit rodam, e os checks saem no mesmo commit e aparecem no PR
+  (o _The PR head was built on staging_ aparece como pulado, o que o GitHub
+  conta como aprovado). Um commit vazio sem `[skip ci]`
+  (`git commit --allow-empty`) também destrava. Os dois custam um pipeline
+  inteiro: o `[skip ci]` economiza de verdade quando o commit de
+  documentação não vai ser a ponta de um PR para `main` aberto ou
+  atualizado logo depois.
+- **O título do PR**: num PR de um commit só, o GitHub preenche o título com
+  a mensagem desse commit, e o título vai para o corpo do merge commit. Com
+  `[skip ci]` ali, o push em `main` não roda o `deploy.yml` e nada é
+  promovido. Tire o `[skip ci]` do título antes do merge.
+
+Cuidado: a regra vale só para `*.md` e `docs/`. Um commit que mexe num
+teste, num workflow, num script ou no `.dockerignore` precisa do pipeline
+de staging, mesmo que pareça inofensivo. E os testes que leem a
+documentação (`tests/unitaires/docs`, os guias de agente) só rodam no
+próximo push que roda o pipeline: se eles falharem ali, a correção é no
+doc.
 
 ## 17. Rollback
 
@@ -2333,33 +2488,65 @@ ninguém.
 
 ## 21. Cadeia de suprimentos e segredos
 
-| Controle                                                             | Onde                                                                           | Quando falha                                                                                 |
-| -------------------------------------------------------------------- | ------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------- |
-| Dependabot (npm, actions, imagens base, pip da IA, compose de carga) | `.github/dependabot.yml`, PRs contra `staging`                                 | não falha: abre PRs toda segunda; majors de Node e o motor de OCR ficam de fora de propósito |
-| Actions fixadas por commit                                           | todo `uses:` dos workflows, com `# vX.Y.Z`                                     | `supply-chain.test.ts` recusa um `uses:` por tag                                             |
-| Imagens base por digest                                              | `Dockerfile`, `infra/ai-ocr/Dockerfile`                                        | mesmo teste                                                                                  |
-| Serviço de IA                                                        | rodas Python com `--require-hashes`, modelos conferidos contra `models.sha256` | o build falha num hash diferente; o pytest roda dentro da imagem                             |
-| Gate de audit                                                        | `npx audit-ci` no `ci.yml` e no `deploy.yml`, config em `audit-ci.jsonc`       | advisory CRITICAL numa dependência de produção sem entrada na allowlist                      |
-| SBOM e proveniência                                                  | `build-push-action` (`sbom: true`, `provenance: mode=max`)                     | não falha: anexa as atestações à imagem no GHCR                                              |
-| Scan da imagem (Trivy)                                               | depois do push, por digest                                                     | só com `IMAGE_SCAN_ENFORCE=true`                                                             |
-| Varredura de segredos (gitleaks)                                     | job `secrets` do `ci.yml` e do `deploy.yml`                                    | um segredo novo em qualquer commit do histórico                                              |
+| Controle                                                             | Onde                                                                                                                  | Quando falha                                                                                                                                                |
+| -------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Dependabot (npm, actions, imagens base, pip da IA, compose de carga) | `.github/dependabot.yml`, PRs contra `staging`                                                                        | não falha: abre PRs toda segunda; majors de Node e o motor de OCR ficam de fora de propósito                                                                |
+| Actions fixadas por commit                                           | todo `uses:` dos workflows, com `# vX.Y.Z`                                                                            | `supply-chain.test.ts` recusa um `uses:` por tag                                                                                                            |
+| Imagens base por digest                                              | `Dockerfile`, `infra/ai-ocr/Dockerfile`; nos workflows, os serviços, o smoke test, o BuildKit, gitleaks e Trivy       | `supply-chain.test.ts` e `ci-stability.test.ts`                                                                                                             |
+| Serviço de IA                                                        | rodas Python com `--require-hashes`, modelos versionados em `infra/ai-ocr/models` e conferidos contra `models.sha256` | o build falha num hash diferente; o pytest roda dentro da imagem                                                                                            |
+| Gate de audit                                                        | `.github/scripts/audit-gate.sh` (o `audit-ci` fixado) no `ci.yml` e no `deploy.yml`, config em `audit-ci.jsonc`       | advisory CRITICAL numa dependência de produção sem entrada na allowlist, num push ou PR que muda dependência (ou o `audit-ci.jsonc`); nos outros, só relata |
+| SBOM e proveniência                                                  | `build-push-action` (`sbom: true`, `provenance: mode=max`)                                                            | não falha: anexa as atestações à imagem no GHCR                                                                                                             |
+| Scan da imagem (Trivy)                                               | depois do push, por digest, com o banco de vulnerabilidades baixado uma vez e guardado no cache do Actions            | só um achado, e só com `IMAGE_SCAN_ENFORCE=true`; falha no download ou erro do Trivy viram aviso                                                            |
+| Varredura de segredos (gitleaks)                                     | job `secrets` do `ci.yml` e do `deploy.yml`                                                                           | um segredo novo em qualquer commit do histórico                                                                                                             |
 
 As imagens do Postgres e do Redis não passam pelo Dependabot (são campos do
 Dokploy, não arquivos do repositório): atualize o digest do Postgres à mão,
-numa janela, e só dentro da versão 16.
+numa janela, e só dentro da versão 16. As dos workflows (serviços do CI,
+smoke test, BuildKit) também não: o procedimento está em
+[Versões fixas](#versões-fixas).
 
 **O audit falhou**: leia a advisory; com versão corrigida, atualize (ou aceite
 o PR do Dependabot). Sem correção, entra na allowlist do `audit-ci.jsonc` com
 comentário dizendo por que não chega à produção e `Revisar até AAAA-MM-DD` (o
-teste recusa sem data). Nunca o pacote inteiro. Hoje: `tar` via
-bcrypt/node-pre-gyp (só na instalação; sai com bcrypt 6).
+teste recusa sem data). Nunca o pacote inteiro. Hoje a allowlist está vazia:
+a última exceção (`tar` via bcrypt 5 → node-pre-gyp) saiu em 30/10/2026, com
+o bcrypt 6.
+
+O audit só **bloqueia** o push ou PR que muda o que ele lê: `package.json`,
+`yarn.lock` ou `package-lock.json` em qualquer pasta, ou o próprio
+`audit-ci.jsonc` (tirar uma exceção também precisa passar). A comparação é
+com a base do PR ou com o `before` do push; sem base (branch nova,
+_Run workflow_, base fora do checkout), bloqueia. Num push que não mexe em
+dependência, um aviso novo aparece como `::warning::` e com o relatório no
+resumo do job, sem reprovar: o aviso já está na árvore que roda, quem abre a
+correção é o Dependabot (_alerts_ e _security updates_), e a próxima mudança
+de dependência passa pelo portão de verdade. Um aviso que aparece assim é
+tarefa do dia, não do próximo push.
+
+Um audit que **não rodou** é outra coisa, e o portão diz qual foi. O
+`audit-ci` escreve "Failed security audit due to ..." quando acha um aviso;
+qualquer outra saída com erro é o npm ou o endpoint de auditoria que não
+respondeu (o `audit-ci` 7.1.0 só repete, e sem pausa, um "503 Service
+Unavailable"; uma conexão derrubada saía com o mesmo código de um
+CRITICAL). O portão repete esse caso 3 vezes, com pausa de 10 s e 20 s e um
+`::warning::` a cada uma; se persistir, o resumo diz "não rodou". Bloqueia
+só onde o veredito bloquearia (o run muda dependência, que não passa sem
+auditoria), e a mensagem nunca manda atualizar dependência por causa da
+rede.
 
 **Ligar o scan de imagem de verdade**: quando foi adicionado, a base
 `node:22.21.1-alpine` tinha CRITICALs corrigíveis (OpenSSL em
 libssl3/libcrypto3 e o `tar` do npm embutido; desde 28/10/2026 o runtime
 da API é Alpine com só o binário do `node`, sem npm). Suba a base (PR do
 Dependabot), confira no passo "Scan the images" que não sobrou CRITICAL
-corrigível e ponha `IMAGE_SCAN_ENFORCE=true`.
+corrigível e ponha `IMAGE_SCAN_ENFORCE=true`. Ligado, só um **achado**
+reprova: o banco de vulnerabilidades vem de um registry com limite de taxa
+(`mirror.gcr.io`, depois `ghcr.io`), é baixado uma vez por run (passo
+"Download the vulnerability database", 3 tentativas) e guardado no cache do
+Actions por dia; se o download falhar, o scan usa a cópia do cache, e sem
+cópia não roda — nos dois casos com aviso e uma linha no resumo, nunca como
+achado. Um erro do próprio Trivy (uma imagem que ele não conseguiu puxar)
+repete 3 vezes e vira aviso.
 
 **O gitleaks falhou**: trate como vazamento. Revogue/rotacione na origem
 primeiro; remova do código (reescreva a branch se ainda não foi mergeada; em

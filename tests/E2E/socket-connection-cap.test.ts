@@ -16,6 +16,7 @@ import {
 } from "@/shared/socket/handshake-rate-limit";
 
 import { socketClientEntry } from "./support/socket-client";
+import { waitUntil } from "./support/socket-waits";
 import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
@@ -44,6 +45,9 @@ let profileId = "";
 let redis: Redis;
 
 let io: typeof import("@/websocket");
+let ioServer: Awaited<
+  ReturnType<typeof import("@/websocket").initializeSocketIO>
+>;
 let connect: (url: string, options: unknown) => TestSocket;
 
 const open: TestSocket[] = [];
@@ -151,7 +155,7 @@ beforeAll(async () => {
   port = (server.address() as AddressInfo).port;
 
   io = await import("@/websocket");
-  await io.initializeSocketIO(server);
+  ioServer = await io.initializeSocketIO(server);
 
   ({ io: connect } = await import(/* @vite-ignore */ socketClientEntry()));
 
@@ -200,8 +204,14 @@ describe("sockets held open by one user", () => {
   it("make room again when one of them closes", async () => {
     open.shift()?.disconnect();
 
-    // The server sees the close a moment after the client does.
-    await new Promise((done) => setTimeout(done, 500));
+    // The server sees the close a moment after the client does: wait until
+    // its own count — the room index the ceiling reads — has dropped.
+    await waitUntil(
+      () =>
+        (ioServer.of("/").adapter.rooms.get(`user:${STAFF}`)?.size ?? 0) <
+        SOCKET_MAX_CONNECTIONS_PER_USER,
+      "o servidor ver o socket fechado",
+    );
 
     open.push(await connectOnce());
   }, 30_000);

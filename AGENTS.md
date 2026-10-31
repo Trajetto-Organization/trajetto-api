@@ -84,7 +84,7 @@ yarn typecheck                     # tsc --noEmit
 yarn test                          # unitários
 npx vitest run <arquivo>           # um arquivo
 yarn test:coverage                 # unitários com o piso de cobertura do CI
-yarn test:e2e                      # E2E (precisa de DATABASE_URL/REDIS_URL de um Postgres/Redis DESCARTÁVEL)
+yarn test:e2e                      # E2E em duas fases (precisa de DATABASE_URL/REDIS_URL de um Postgres/Redis DESCARTÁVEL)
 yarn prisma:migrate:dev            # cria uma migration (--create-only); revise o SQL
 yarn prisma:migrate:deploy         # aplica
 docker compose -f compose.development.yaml --profile ai up -d trajetto-ai   # IA local (~1 GiB)
@@ -184,6 +184,16 @@ checksum). Detalhes: `docs/arquitetura.md` ("Migrations: expandir e contrair").
   web e do app.
 - Piso de cobertura no `test:coverage` (statements/linhas 70,8 %, branches
   82,57 %, funções 57,62 %); não baixe.
+- Nenhum teste sai da máquina: a trava de rede do `setupTests.ts` falha o
+  arquivo que conectar fora do loopback e dos bancos configurados; todo
+  terceiro é um falso local (com `NODE_ENV=test`, o e-mail fica numa caixa em
+  memória do processo).
+- Espere por estado, nunca por tempo: `tests/E2E/support/socket-waits.ts`
+  (salas, _acknowledgement_ do subscribe), `vi.waitFor` com prazo; nada de
+  `setTimeout` fixo esperando o servidor.
+- E2E novo que sobe réplicas da API entra em
+  `tests/E2E/support/replica-files.ts` (a fase própria do `yarn test:e2e`, um
+  arquivo por vez); `quality/e2e-replica-isolation.test.ts` cobra.
 - Windows: E2E em lotes de no máximo 8 arquivos (limite herdado do napi panic do
   Prisma 6; o Prisma 7 não tem engine nativo, mas lotes maiores não foram medidos).
 
@@ -196,7 +206,9 @@ checksum). Detalhes: `docs/arquitetura.md` ("Migrations: expandir e contrair").
   pytest da IA, gitleaks), constrói **uma vez** as imagens `trajetto-api` e
   `trajetto-ai` (`sha-<sha>`, SBOM, proveniência, Trivy),
   move `staging` por digest e faz o deploy do staging no Dokploy; PR para
-  `main` revalida e exige a imagem de staging do head; o merge em `main`
+  `main` revalida e exige que o staging tenha rodado o head (ou que o head só
+  mude documentação desde um commit que rodou: `[skip ci]` só para
+  documentação é seguro); o merge em `main`
   **promove** o mesmo digest para `stable` (migrations como job opcional,
   environment `production` com aprovação, conferência da convergência) e roda
   o `semantic-release`. _Run workflow_ com `image_tag=sha-<sha>` = rollback.
