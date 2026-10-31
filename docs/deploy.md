@@ -293,6 +293,11 @@ O mesmo commit testa e publica sempre nas mesmas versões:
   Dependabot sobe a base do `Dockerfile`, suba o `node-version` dos
   workflows no mesmo PR: o `ci-stability.test.ts` falha enquanto os dois
   não batem.
+- **Runner**: `runs-on: ubuntu-24.04` em todo job dos três repositórios,
+  nunca `ubuntu-latest`. O `ubuntu-latest` passou a migrar para o 26.04 em
+  19/10/2026, sem commit nosso, e o Playwright 1.56 recusou o 26.04 nas
+  suítes da web. Troque à mão, nos três no mesmo dia, quando o GitHub
+  anunciar o fim do 24.04 (o `ci-stability.test.ts` recusa `ubuntu-latest`).
 - **Imagens dos jobs**, por digest do índice multi-arquitetura, com a tag ao
   lado em comentário: `postgres:16-alpine` (16.15) e `redis:7-alpine`
   (7.4.12) nos serviços e no smoke test; o BuildKit do Buildx

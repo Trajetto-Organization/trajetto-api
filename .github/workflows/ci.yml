@@ -48,7 +48,7 @@ env:
 jobs:
   validate:
     name: Lint, type-check and unit tests
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # Measured 6-10 min on the 2-vCPU runner.
     timeout-minutes: 30
 
@@ -254,7 +254,7 @@ jobs:
   # `--redact` keeps the secret itself out of the log.
   secrets:
     name: Secret scan (gitleaks)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # Measured under 30 s.
     timeout-minutes: 10
     permissions:
@@ -279,7 +279,7 @@ jobs:
   # ai-ocr job (a branch reads its own cache and the default branch's).
   ai-ocr:
     name: AI OCR service (image + pytest)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # Measured ~1 min; a build with no cache downloads the wheels again.
     timeout-minutes: 30
     permissions:
@@ -308,7 +308,7 @@ jobs:
   ai-local-e2e:
     name: AI local contract (manual)
     if: github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # Builds the AI image (no cache) and reads the fixtures through it.
     timeout-minutes: 45
     permissions:

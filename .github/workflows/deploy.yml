@@ -108,7 +108,7 @@ jobs:
 
   test:
     name: Lint, type-check, unit (coverage floor) and E2E
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     if: github.event_name == 'pull_request' || github.ref == 'refs/heads/staging'
     # Measured: 25-27 min on a 4-vCPU runner (public repository), 32-47 min
     # on the 2-vCPU one (private), most of it the E2E (its second phase runs
@@ -297,7 +297,7 @@ jobs:
   # weights used to come from a host in China on every uncached build.
   ai-ocr:
     name: AI OCR service (image + pytest)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     if: github.event_name == 'pull_request' || github.ref == 'refs/heads/staging'
     # Measured ~1.2 min; a build with no cache downloads the wheels again.
     timeout-minutes: 30
@@ -332,7 +332,7 @@ jobs:
   # rewrites those SHAs.
   secrets:
     name: Secret scan (gitleaks)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     if: github.event_name == 'pull_request' || github.ref == 'refs/heads/staging'
     # Measured under 30 s.
     timeout-minutes: 10
@@ -353,7 +353,7 @@ jobs:
 
   build-and-push:
     name: Build and push the images (once)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: [test, ai-ocr, secrets]
     # Staging only (a push, or Run workflow on staging). A pull request
     # validates, and the merge into main promotes the digests built HERE:
@@ -877,7 +877,7 @@ jobs:
   # the `staging` environment (docs/deploy.md, "GitHub").
   deploy-staging:
     name: Deploy staging
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: build-and-push
     if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/staging'
 
@@ -1218,7 +1218,7 @@ jobs:
   # in .github/scripts/staged-build.sh, which the promote runs too.
   staging-image:
     name: The PR head was built on staging
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     if: github.event_name == 'pull_request'
     # Waits up to 45 min by design (90 rounds of 30 s).
     timeout-minutes: 60
@@ -1285,7 +1285,7 @@ jobs:
   # another promote.
   release:
     name: Release (semantic-release)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: promote-production
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     # Measured ~2 min.
@@ -1331,7 +1331,7 @@ jobs:
   # docs/deploy.md).
   promote-production:
     name: Promote to production
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # Run workflow promotes only from main: on staging the same button runs
     # the staging road instead (build-and-push, deploy-staging).
     if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')

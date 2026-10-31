@@ -246,6 +246,24 @@ describe("pinned versions", () => {
   });
 });
 
+describe("the runner", () => {
+  // ubuntu-latest began moving to 26.04 on 19/10/2026, with no commit of
+  // ours; Playwright 1.56 refused it in the web's suites. Every job runs on
+  // the same pinned image, bumped by hand in the three repositories.
+  it("is a pinned Ubuntu in every job, never ubuntu-latest", () => {
+    for (const { file, text } of workflows) {
+      const runners = [...text.matchAll(/\n\s+runs-on: (\S+)/g)].map(
+        (match) => match[1],
+      );
+
+      expect(runners.length, file).toBeGreaterThan(0);
+      for (const runner of runners) {
+        expect(runner, file).toMatch(/^ubuntu-\d{2}\.\d{2}$/);
+      }
+    }
+  });
+});
+
 describe("the type-check", () => {
   // tsc holds about 2.3 GB live here; Node's default heap on a 7-8 GB
   // runner (a private repository's) is about 2 GB, and the check died with
