@@ -44,7 +44,11 @@ case "$1 $2" in
       fi
       shift
     done ;;
-  "service ps") echo "\${STUB_STATE:-Complete 3 seconds ago}" ;;
+  "service ps")
+    case "$*" in
+      *Error*) echo "\${STUB_ERROR:-}" ;;
+      *) echo "\${STUB_STATE:-Complete 3 seconds ago}" ;;
+    esac ;;
   "service logs") echo "migrate-job-log-line" ;;
   "service rm") ;;
 esac
@@ -82,6 +86,9 @@ describe.skipIf(!sh)("the release migration job", () => {
     "ghcr.io/trajetto-organization/trajetto-api-migrate:staging-0a1b2c3",
     "ghcr.io/trajetto-organization/trajetto-api-migrate@sha256:0a1b2c3",
     "ghcr.io/trajetto-organization/trajetto-ui:sha-0a1b2c3",
+    // A valid first line must not carry a second one onto the docker command
+    // line (grep matches line by line).
+    `${IMAGE}\n--network host`,
     `${IMAGE}; docker swarm leave --force`,
     "",
   ])("refuses %j without touching docker", (image) => {
@@ -215,6 +222,18 @@ describe.skipIf(!sh)("the release migration job", () => {
     expect(result.status).not.toBe(0);
     expect(result.stdout + result.stderr).toContain("migrate-job-log-line");
     expect(result.stderr).toMatch(/P3009/);
+  });
+
+  it("says why a job that never started was refused (a pull GHCR denied leaves no log)", () => {
+    const result = release([IMAGE], {
+      STUB_STATE: "Rejected 3 seconds ago",
+      STUB_ERROR:
+        "No such image: ghcr.io/trajetto-organization/trajetto-api-migrate:sha-0a1b2c3",
+    });
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("No such image");
+    expect(result.stderr).toContain("docker login ghcr.io do usuário deploy");
   });
 
   it("on timeout fails, but leaves a running migration alone", () => {
@@ -500,6 +519,13 @@ describe("the deploy workflows", () => {
     },
   );
 
+  it("has the promote fail closed on a build that lost its release image", () => {
+    const step = promote.steps[promote.index("Run database migrations")];
+
+    expect(step).toContain("EVENT: ${{ github.event_name }}");
+    expect(step).toContain("infra/scripts/schema-guard.ts");
+  });
+
   it("has no switch left to keep migrating on boot", () => {
     // The API image cannot migrate; a variable that pretended otherwise
     // would only mislead.
@@ -513,5 +539,135 @@ describe("the deploy workflows", () => {
       expect(text, file).not.toContain("MIGRATIONS_VIA_JOB");
       expect(text, file).not.toContain("RUN_MIGRATIONS_ON_BOOT");
     }
+  });
+});
+
+/**
+ * The promote's migration step, run: `ghcr.sh` and the CI side of the job
+ * stubbed under .github/scripts, git real, in a repository with one commit
+ * from before the release image (no infra/scripts/schema-guard.ts) and one
+ * from after it. A build with no release image is skipped only when it
+ * provably predates it; any other lost its push, and the step fails before
+ * `stable` moves.
+ */
+describe.skipIf(!bash)("the promote's migration step, run", () => {
+  const workflow = readFileSync(
+    repoFile(".github/workflows/deploy.yml"),
+    "utf8",
+  ).replace(/\r\n/g, "\n");
+  const job = workflow.slice(workflow.indexOf("\n  promote-production:"));
+  const stepText = job
+    .split(/\n      - name: /)
+    .find((step) => step.startsWith("Run database migrations"))!;
+
+  /** The step's `run: |` block, dedented. */
+  const runBlock = (() => {
+    const lines = stepText.split("\n");
+    const at = lines.findIndex((line) => /^\s+run: \|$/.test(line));
+    const indent = lines[at].search(/\S/) + 2;
+    const body: string[] = [];
+
+    for (const line of lines.slice(at + 1)) {
+      if (line.trim() !== "" && line.search(/\S/) < indent) break;
+      body.push(line.slice(indent));
+    }
+
+    return body.join("\n");
+  })();
+
+  let before = "";
+  let after = "";
+
+  beforeEach(() => {
+    // A throwaway repository: no global identity or signing needed.
+    box.file(
+      "tests-git.sh",
+      'exec git -c user.name=t -c user.email=t@example.invalid -c commit.gpgsign=false "$@"\n',
+    );
+    const g = (...args: string[]) =>
+      run("bash", `${box.root}/tests-git.sh`, args, {
+        cwd: box.root,
+      }).stdout.trim();
+
+    g("init", "-q");
+    box.file("README", "x");
+    g("add", "README");
+    g("commit", "-q", "-m", "before the release image");
+    before = g("rev-parse", "HEAD");
+    box.file("infra/scripts/schema-guard.ts", "// the guard");
+    g("add", "infra/scripts/schema-guard.ts");
+    g("commit", "-q", "-m", "the release image");
+    after = g("rev-parse", "HEAD");
+
+    box.file(".github/scripts/ghcr.sh", 'printf "%s" "${STUB_DIGEST:-}"\n');
+    box.file(
+      ".github/scripts/release-migrations.sh",
+      `printf '%s\\n' "$*" >> "${box.root}/released"\n`,
+    );
+  });
+
+  function promote(tag: string, event: string, digest = "") {
+    const summary = `${box.root}/summary`;
+    const script = box.file("step.sh", `set -eo pipefail\n${runBlock}`);
+    const result = run("bash", script, [], {
+      cwd: box.root,
+      env: {
+        IMAGE_TAG: tag,
+        EVENT: event,
+        STUB_DIGEST: digest,
+        GITHUB_STEP_SUMMARY: summary,
+      },
+    });
+    const released = existsSync(`${box.root}/released`)
+      ? readFileSync(`${box.root}/released`, "utf8").trim()
+      : "";
+
+    return { ...result, log: result.stdout + result.stderr, released };
+  }
+
+  it("migrates with the release image of the build, by digest", () => {
+    const digest = `sha256:${"a".repeat(64)}`;
+    const result = promote(`sha-${after.slice(0, 7)}`, "push", digest);
+
+    expect(result.status, result.log).toBe(0);
+    expect(result.released).toBe(
+      `ghcr.io/trajetto-organization/trajetto-api-migrate@${digest}`,
+    );
+  });
+
+  it("fails a merge whose build has no release image: its push failed", () => {
+    const result = promote(`sha-${after.slice(0, 7)}`, "push");
+
+    expect(result.status).toBe(1);
+    expect(result.log).toContain("o push dela falhou");
+    expect(result.released).toBe("");
+  });
+
+  it("fails a rollback to a build from after the release image that has none", () => {
+    const result = promote(`sha-${after.slice(0, 7)}`, "workflow_dispatch");
+
+    expect(result.status).toBe(1);
+    expect(result.released).toBe("");
+  });
+
+  it("skips, with a notice, a rollback to a build from before the release image", () => {
+    const result = promote(`sha-${before.slice(0, 7)}`, "workflow_dispatch");
+
+    expect(result.status, result.log).toBe(0);
+    expect(result.log).toContain("anterior à imagem de migração");
+    expect(result.released).toBe("");
+  });
+
+  it("skips the main-<sha> builds, all from before the staging branch", () => {
+    const result = promote("main-0a1b2c3", "workflow_dispatch");
+
+    expect(result.status, result.log).toBe(0);
+    expect(result.released).toBe("");
+  });
+
+  it("fails closed on a commit it cannot find", () => {
+    const result = promote("sha-ffffff0", "workflow_dispatch");
+
+    expect(result.status).toBe(1);
   });
 });

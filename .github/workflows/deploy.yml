@@ -1663,10 +1663,14 @@ jobs:
       # Prisma CLI) and refuses to boot on a database without its
       # migrations, so a production that deploys needs this configured.
       #
-      # A build with no release image predates it (a rollback by Run
-      # workflow to an older build): production has applied every migration
-      # that build knows, and the job is skipped with a notice. GHCR not
-      # answering is not "no image": ghcr.sh fails the step instead.
+      # A build with no release image is skipped only when it provably
+      # predates it: a `main-<sha>` build, or a Run workflow rollback to a
+      # commit whose tree has no infra/scripts/schema-guard.ts (it came with
+      # the release image). Production has applied every migration such a
+      # build knows. Any other build without one lost its push (the API
+      # image is pushed first): that fails here, before `stable` moves,
+      # instead of shipping a build whose replicas refuse the database.
+      # GHCR not answering is not "no image": ghcr.sh fails the step.
       #
       # On the Dokploy host, infra/scripts/run-release-migrations.sh runs it
       # as a one-off Swarm job; the key reaches only that script (a forced
@@ -1677,6 +1681,7 @@ jobs:
         if: steps.dokploy.outputs.enabled == 'true'
         env:
           ENVIRONMENT: production
+          EVENT: ${{ github.event_name }}
           IMAGE_TAG: ${{ steps.staged.outputs.tag }}
           SSH_HOST: ${{ secrets.DEPLOY_SSH_HOST }}
           SSH_USER: ${{ secrets.DEPLOY_SSH_USER }}
@@ -1685,6 +1690,21 @@ jobs:
         run: |
           digest=$(bash .github/scripts/ghcr.sh digest "ghcr.io/trajetto-organization/trajetto-api-migrate:${IMAGE_TAG}")
           if [ -z "$digest" ]; then
+            presplit=false
+            case "$IMAGE_TAG" in
+              main-*) presplit=true ;;
+              sha-*)
+                if [ "$EVENT" = workflow_dispatch ] \
+                  && commit=$(git rev-parse --verify --quiet "${IMAGE_TAG#sha-}^{commit}") \
+                  && [ -z "$(git ls-tree --name-only "$commit" -- infra/scripts/schema-guard.ts)" ]; then
+                  presplit=true
+                fi
+                ;;
+            esac
+            if [ "$presplit" != true ]; then
+              echo "::error::ghcr.io/trajetto-organization/trajetto-api-migrate:${IMAGE_TAG} não existe, e o build é posterior à imagem de migração (o push dela falhou). Nada foi promovido: rode o pipeline de staging desse commit de novo."
+              exit 1
+            fi
             echo "::notice::${IMAGE_TAG} é anterior à imagem de migração (trajetto-api-migrate): a produção já aplicou todas as migrations desse build, e o job não roda."
             echo "Migrations: job pulado; ${IMAGE_TAG} é anterior à imagem de migração." >> "$GITHUB_STEP_SUMMARY"
             exit 0

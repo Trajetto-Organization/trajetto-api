@@ -194,7 +194,12 @@ case "$STATE" in
     exit 0
     ;;
   Failed* | Rejected* | Shutdown* | Orphaned*)
-    echo "[release-migrations] ERRO: o job terminou em '${STATE}'. Nada foi promovido." >&2
+    # Why the task ended, in Swarm's words: a task that never started (an
+    # image pull refused by GHCR, an expired login of this user) has no log
+    # above, and the job is removed on exit.
+    ERROR="$(docker service ps "$JOB" --no-trunc --format '{{.Error}}' | head -n 1)"
+    echo "[release-migrations] ERRO: o job terminou em '${STATE}'${ERROR:+ (${ERROR})}. Nada foi promovido." >&2
+    echo "[release-migrations] Recusado sem log: confira o docker login ghcr.io do usuário deploy (docs/deploy.md, Migrations)." >&2
     echo "[release-migrations] Se a saída acima fala em P3009 ou numa migration pela metade, siga docs/deploy.md (Migrations)." >&2
     exit 1
     ;;

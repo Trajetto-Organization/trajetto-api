@@ -441,11 +441,18 @@ describe.skipIf(!sh)("the release-migration forced command", () => {
         input.args,
         {
           bin: box.bin,
-          env: { MIGRATE_POLL_SECONDS: "0", ...input.env },
+          // A valid service, so the image check is the only one that can
+          // refuse: without it the script also exits 2, on API_SERVICE.
+          env: {
+            MIGRATE_POLL_SECONDS: "0",
+            API_SERVICE: "trajetto-api-a1b2c3",
+            ...input.env,
+          },
         },
       );
 
       expect(result.status).toBe(2);
+      expect(result.stderr).toContain("imagem inválida");
     }
 
     expect(box.calls("docker")).toEqual([]);

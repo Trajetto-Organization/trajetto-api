@@ -667,7 +667,7 @@ environment `staging` e outra no `production`, cada uma no projeto
 | backup do banco (aba _Backups_ do PostgreSQL, [seção 18](#18-backup-e-restauração))                    | prefixo `trajetto-staging/` no bucket `trajetto-backups`                                                                              | prefixo `trajetto-production/`; recomendado um bucket próprio (`trajetto-backups-prod`) |
 | `META_WHATSAPP_*`, `RESEND_*`                                                                          | **de teste** (número de teste da Meta; domínio de teste)                                                                              | reais                                                                                   |
 | chave SSH do job de migrations ([seção 15](#15-migrations))                                            | `migrate-staging`, presa ao App Name da API de staging                                                                                | `migrate-production`, presa ao App Name da API de produção                              |
-| `ALLOW_EMPTY_DATABASE_BOOTSTRAP`                                                                       | `true` **só** no primeiro boot                                                                                                        | `false` (`true` só numa instalação nova sem dados a restaurar, uma vez)                 |
+| `ALLOW_EMPTY_DATABASE_BOOTSTRAP`                                                                       | `true` **só** ao preparar o banco vazio (Deploy da API e o job de migrations; seção 8, passo 4)                                       | `false` (`true` só numa instalação nova sem dados a restaurar, uma vez)                 |
 | IA                                                                                                     | opcional: sem a Application `trajetto-ai`, use `AI_PROVIDER=none` na API (economiza ~1 GiB)                                           | `trajetto-ai` com `AI_PROVIDER=local`                                                   |
 | `PROOF_SIGNING_*`                                                                                      | o certificado **de teste** ([seção 7.11](#711-certificado-do-comprovante-a1-icp-brasil)), ou vazio (sem assinatura, e o PDF diz isso) | o certificado A1 (e-CNPJ)                                                               |
 | réplicas da API                                                                                        | 1 (hoje; 2 para testar duas réplicas)                                                                                                 | 2                                                                                       |
@@ -1265,11 +1265,17 @@ em produção.
    ```
 3. **`trajetto-ai`** (seção 7.6). Conferir: `docker service ls` mostra
    `trajetto-ai-staging 1/1` (o healthcheck leva até ~1 min no aquecimento).
-4. **`trajetto-api`** (seção 7.7). No **primeiro boot de um banco vazio**,
-   ponha `ALLOW_EMPTY_DATABASE_BOOTSTRAP=true` no Environment antes do Deploy
-   e volte para `false` (Save) assim que a API subir. Em produção com dados
-   vindos do Portainer, **não**: siga a [seção 24](#24-migrar-do-portainer-para-o-dokploy)
-   e restaure antes. Conferir:
+4. **`trajetto-api`** (seção 7.7). A API não migra: num **banco vazio**,
+   ponha `ALLOW_EMPTY_DATABASE_BOOTSTRAP=true` no Environment e dê
+   **Deploy**. O serviço passa a existir, e as réplicas recusam o banco sem
+   migrations (é esperado: elas reiniciam sozinhas). Então rode o job de
+   migrations à mão, uma vez ([seção 15](#15-migrations), "Configurar o job",
+   passos 1 a 3 e 7, com o `sha-<7>` do build que a Application roda): ele
+   copia o env da API, com a flag, e prepara o banco vazio. As réplicas sobem
+   na tentativa seguinte. Depois volte a flag para `false` (Save; vale no
+   próximo Deploy). Em produção com dados vindos do Portainer, **não** ligue
+   a flag: siga a [seção 24](#24-migrar-do-portainer-para-o-dokploy) e
+   restaure antes. Conferir:
    ```sh
    docker service ls | grep trajetto-api-staging                    # 2/2
    curl -s -o /dev/null -w '%{http_code}\n' https://api-staging.intrajetto.com/health/readiness   # 200
@@ -1435,8 +1441,10 @@ App Name na `dokploy-network`. O backup do Postgres é o do próprio Dokploy
 - **A API recusa banco vazio em produção**: o boot consulta
   `_prisma_migrations` e para com "Banco vazio em produção" se nenhuma
   migration foi aplicada (volume novo, Database recriado). Numa instalação
-  nova de verdade, `ALLOW_EMPTY_DATABASE_BOOTSTRAP=true` uma única vez. Em
-  recuperação de desastre, restaure o dump **antes** de subir a API.
+  nova de verdade, `ALLOW_EMPTY_DATABASE_BOOTSTRAP=true` na API (com Deploy)
+  e o job de migrations uma vez ([seção 8](#8-primeiro-deploy-na-ordem-com-conferências),
+  passo 4). Em recuperação de desastre, restaure o dump **antes** de subir a
+  API.
 - **Imagem fixada** por digest no campo da imagem
   ([seção 7.4](#74-postgresql-database), passo 5). Trocar a versão maior
   (16 → 17) não é trocar a imagem: exige dump e restore.
@@ -1815,7 +1823,7 @@ rollout, e a imagem carregava o CLI.
 
 `prisma migrate deploy` e os seeds usam `MIGRATION_DATABASE_URL` (definida na
 Application da API, sem tetos de runtime e com pool de 2; o job copia o
-Environment dela, e a API em si não a usa). A `DATABASE_URL` de runtime leva
+env do serviço da API em execução, e a API em si não a usa). A `DATABASE_URL` de runtime leva
 `statement_timeout=30s` e `lock_timeout=5s`: um `CREATE INDEX` cancelado no
 meio é uma migration falhada. O modo `migrate` do entrypoint roda
 `prisma migrate deploy` (de `/app/migrate`, onde estão o CLI e o
@@ -1891,6 +1899,9 @@ evolução, não uma pendência.
    ```sh
    sudo -iu deploy docker login ghcr.io -u <usuário do GitHub>
    ```
+   Ao trocar esse token, refaça este login antes de revogar o antigo
+   ([`infraestrutura.md`](./infraestrutura.md), rotação do token do GHCR):
+   com ele vencido, o job termina `Rejected` antes de rodar.
 4. **Uma chave por ambiente**, na sua máquina (sem frase-senha: quem a usa é
    o CI):
    ```sh
@@ -1929,10 +1940,14 @@ evolução, não uma pendência.
    `trajetto-api` e a variável de repositório `MIGRATIONS_VIA_JOB` (nada mais
    as lê).
 
-Limite: o job usa o env da versão que está no ar. Se a versão nova exige uma
-variável que o ambiente ainda não tem, acrescente-a ao Environment da
-Application **antes** do deploy (salvar não reinicia nada; o próximo deploy
-usa).
+Limite: o env que o job usa é a spec do serviço da API em execução, ou seja, o
+Environment do último **Deploy** (Save sozinho não muda a spec). Se a versão nova
+exige uma variável que o ambiente ainda não tem (ou uma
+`MIGRATION_DATABASE_URL` nova): _Environment_ → **Save** → **Deploy** da
+versão que já está no ar (ou `docker service update --env-add X=… <App Name
+da API>`, que reinicia as réplicas uma a uma). Só então faça o push ou a
+promoção: sem isso o job roda com o env antigo, e um seed que precise da
+variável falha a cada push.
 
 ### P3009: uma migration ficou pela metade
 
@@ -1964,11 +1979,13 @@ exists` e volta ao P3009.
    da API não traz o CLI), no host, com o env da API daquele ambiente:
    ```sh
    API=<App Name da API>
-   docker service inspect --format '{{range .Spec.TaskTemplate.ContainerSpec.Env}}{{println .}}{{end}}' "$API" > /tmp/api.env
-   chmod 600 /tmp/api.env
+   IMAGE=ghcr.io/trajetto-organization/trajetto-api-migrate:sha-<7>
+   # O pacote é privado e só o usuário deploy tem login no GHCR: ele puxa,
+   # e o daemon (compartilhado) já tem a imagem para o docker run abaixo.
+   sudo -u deploy -H docker pull "$IMAGE"
+   (umask 077; docker service inspect --format '{{range .Spec.TaskTemplate.ContainerSpec.Env}}{{println .}}{{end}}' "$API" > /tmp/api.env)
    docker run --rm --network dokploy-network --env-file /tmp/api.env \
-     -w /app/migrate --entrypoint sh \
-     ghcr.io/trajetto-organization/trajetto-api-migrate:sha-<7> \
+     -w /app/migrate --entrypoint sh "$IMAGE" \
      -c 'DATABASE_URL="${MIGRATION_DATABASE_URL:-$DATABASE_URL}" ./node_modules/.bin/prisma migrate resolve --applied <nome>'
    rm /tmp/api.env
    ```
@@ -2262,8 +2279,9 @@ Num incidente real (banco perdido):
 
 1. Se o Database se perdeu, crie outro ([seção 7.4](#74-postgresql-database))
    com o mesmo usuário, senha e nome de banco (ou ajuste as URLs da API).
-   **Não** ligue `ALLOW_EMPTY_DATABASE_BOOTSTRAP`: com ela a API migraria e
-   semearia um banco novo, por cima do qual o dump não restaura.
+   **Não** ligue `ALLOW_EMPTY_DATABASE_BOOTSTRAP`: com ela o job de
+   migrations prepararia e semearia um banco novo, por cima do qual o dump
+   não restaura.
 2. Pare a API: _Advanced → Cluster Settings → Replicas_ `0` → **Save** →
    **Deploy** (ou `docker service scale trajetto-api-production=0`, que dura
    até o próximo deploy). Desligue o backup agendado (_Enabled_) enquanto
@@ -2793,9 +2811,12 @@ uma API que sobe sobre o banco errado para em vez de semear por cima.
    docker exec pg-antigo pg_dump -U <usuário> -d <banco> -Fc > trajetto-migracao.dump
    docker rm -f pg-antigo
    ```
-5. **API** (7.7) com `ALLOW_EMPTY_DATABASE_BOOTSTRAP=false`. Se ela subir, o
-   banco é o certo (num banco vazio a guarda derruba o boot). Depois o backup
-   do Database (7.9) e os secrets do GitHub.
+5. **API** (7.7) com `ALLOW_EMPTY_DATABASE_BOOTSTRAP=false`, e o job de
+   migrations à mão ([seção 15](#15-migrations), "Configurar o job", passo
+   7): o dump é de uma versão antiga, e a API recusa o banco até as
+   migrations dela rodarem. Num banco vazio, o job para na guarda de banco
+   vazio, e nada é semeado: é o sinal de que o banco não é o certo. Depois o
+   backup do Database (7.9) e os secrets do GitHub.
 6. **Conferir**: `/health/readiness` 200, login, contagem de algumas tabelas
    contra o dump.
 7. **Web** depois da API (`trajetto-ui/docs/deploy.md`).
@@ -2847,8 +2868,8 @@ Na ordem:
       web), `DOCS_PASSWORD`.
 - [ ] **Staging**, no environment `staging` do Dokploy, projeto
       `trajetto-api`: Postgres → Redis (com o comando) → `trajetto-ai` →
-      `trajetto-api` (com `ALLOW_EMPTY_DATABASE_BOOTSTRAP=true` só no primeiro
-      boot) → backup do Database PostgreSQL (aba _Backups_, prefixo
+      `trajetto-api` (com `ALLOW_EMPTY_DATABASE_BOOTSTRAP=true` e o job de
+      migrations à mão, uma vez, no banco vazio; seção 8, passo 4) → backup do Database PostgreSQL (aba _Backups_, prefixo
       `trajetto-staging/`, com um backup manual conferido no bucket), cada um
       com a conferência da [seção 8](#8-primeiro-deploy-na-ordem-com-conferências).
 - [ ] Os dois applicationIds e o App Name da API anotados (seção 7.10).
