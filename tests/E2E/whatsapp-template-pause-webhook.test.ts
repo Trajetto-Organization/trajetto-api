@@ -134,8 +134,16 @@ function heard(change: unknown): boolean {
   );
 }
 
-/** Polls `check` until it holds, up to `ms`. */
-async function eventually(check: () => boolean | Promise<boolean>, ms = 2_000) {
+/**
+ * Polls `check` until it holds, up to `ms`. Every use is something that must
+ * happen (a frame crossing Redis, a pause taking effect), so the deadline is
+ * generous: 2 s was a guess a loaded runner could miss, and the poll returns
+ * as soon as the answer is there.
+ */
+async function eventually(
+  check: () => boolean | Promise<boolean>,
+  ms = 15_000,
+) {
   const deadline = Date.now() + ms;
 
   while (Date.now() < deadline) {
@@ -188,8 +196,22 @@ beforeAll(async () => {
     otherReplica.heard.push(change);
   });
 
-  // The adapters subscribe on construction; give Redis the round trip.
-  await new Promise((done) => setTimeout(done, 500));
+  // The adapters subscribe on construction, asynchronously. A server-side
+  // emit travels on the request channel: until Redis counts both nodes on
+  // it, rather than 500 ms for the round trip.
+  const requestChannel = `${socketAdapterOptions(env).key}-request#/#`;
+
+  expect(
+    await eventually(async () => {
+      const [, subscribers] = (await otherReplica.pub!.pubsub(
+        "NUMSUB",
+        requestChannel,
+      )) as [string, number | string];
+
+      return Number(subscribers) >= 2;
+    }, 15_000),
+    "os dois nós não assinaram o canal de pedidos do adapter",
+  ).toBe(true);
 }, 120_000);
 
 beforeEach(() => {

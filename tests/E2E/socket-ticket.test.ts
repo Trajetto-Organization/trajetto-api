@@ -11,6 +11,7 @@ import { socketTicketKey } from "@/shared/socket/socket-ticket";
 
 import { APP_BOOT_TIMEOUT_MS } from "../support/app-boot";
 import { socketClientEntry } from "./support/socket-client";
+import { waitUntil } from "./support/socket-waits";
 import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
@@ -327,9 +328,13 @@ describe("redeeming a ticket at the handshake", () => {
     const { token } = await seedSession(CARRIER_A);
     const ticket = await mintTicket(token);
 
-    // Same as waiting out the 30 s, without the wait.
+    // Same as waiting out the 30 s, without the wait: until Redis says the
+    // key is gone, not for a guessed 20 ms.
     await redis.pexpire(socketTicketKey(ticket), 1);
-    await new Promise((done) => setTimeout(done, 20));
+    await waitUntil(
+      async () => (await redis.exists(socketTicketKey(ticket))) === 0,
+      "o ticket expirar no Redis",
+    );
 
     expect(await handshake({ ticket })).toEqual({
       connected: false,

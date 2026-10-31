@@ -4,6 +4,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -20,6 +21,10 @@ import { afterEach, describe, expect, it } from "vitest";
  *
  * Runs the real script in a scratch tree, with `npx` stubbed (no vitest, no
  * DB): the stub writes an empty report and, when asked, edits src mid-run.
+ *
+ * The files that start API replicas (tests/E2E/support/replica-files.ts) run
+ * after the batches, one per batch, as `yarn test:e2e` runs them: the stub
+ * records each call's files, and the scratch tree has one such file.
  */
 const API = resolve(__dirname, "..", "..", "..");
 
@@ -36,8 +41,14 @@ const scratchTree = (editSrcDuringBatch: boolean) => {
   }
   mkdirSync(join(dir, "src"));
   writeFileSync(join(dir, "src", "a.ts"), "export const a = 1;\n");
-  mkdirSync(join(dir, "tests", "E2E"), { recursive: true });
+  mkdirSync(join(dir, "tests", "E2E", "support"), { recursive: true });
   writeFileSync(join(dir, "tests", "E2E", "a.test.ts"), "");
+  writeFileSync(join(dir, "tests", "E2E", "b.test.ts"), "");
+  writeFileSync(join(dir, "tests", "E2E", "socket-revocation.test.ts"), "");
+  copyFileSync(
+    join(API, "tests", "E2E", "support", "replica-files.ts"),
+    join(dir, "tests", "E2E", "support", "replica-files.ts"),
+  );
 
   const bin = join(dir, "bin");
   mkdirSync(bin);
@@ -47,6 +58,9 @@ const scratchTree = (editSrcDuringBatch: boolean) => {
       "#!/usr/bin/env bash",
       'mkdir -p "$COVERAGE_DIR"',
       'echo "{}" > "$COVERAGE_DIR/coverage-final.json"',
+      // The test files of each call, one line per batch.
+      'files=(); for a in "$@"; do case "$a" in tests/E2E/*) files+=("$a");; esac; done',
+      'echo "${files[*]}" >> calls.log',
       editSrcDuringBatch ? 'echo "export const b = () => 2;" >> src/a.ts' : "",
       "",
     ].join("\n"),
@@ -87,5 +101,17 @@ describe("coverage-e2e.sh", () => {
     expect(
       existsSync(join(dir, "coverage", "all", "coverage-summary.json")),
     ).toBe(true);
+  });
+
+  it("runs a file that starts replicas after the batches, in a batch of its own", () => {
+    const result = scratchTree(false);
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(
+      readFileSync(join(dir, "calls.log"), "utf8").trim().split("\n"),
+    ).toEqual([
+      "tests/E2E/a.test.ts tests/E2E/b.test.ts",
+      "tests/E2E/socket-revocation.test.ts",
+    ]);
   });
 });

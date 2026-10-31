@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
@@ -181,14 +182,60 @@ describe("the AI image's pip layers", () => {
 });
 
 describe("the AI image's models and code", () => {
-  it("fetch the models in a stage of their own, with fixed owner, mode and mtimes", () => {
+  it("check the models in a stage of their own, offline, with fixed owner, mode and mtimes", () => {
     const models = stage(ai, "models").join("\n");
 
     expect(stage(ai, "models")[0]).toMatch(/^FROM base AS models$/);
+    // The PP-OCRv5 pair came from www.modelscope.cn on every build without
+    // cache (one request, no retry). Now it is versioned in models/, and the
+    // RUN has no network: RapidOCR trying to download fails the build.
+    expect(models).toMatch(
+      /^RUN --network=none --mount=type=bind,source=models,target=\/tmp\/vendored-models /m,
+    );
+    expect(models).toContain('cp /tmp/vendored-models/*.onnx "$models"/');
     expect(models).toContain("python fetch_models.py");
     expect(models).toContain("sha256sum -c /app/models.sha256");
     expect(models).toContain("chown -R 0:0 /out");
     expect(models).toContain("touch -h -d @0");
+    // No RUN names a host to download from.
+    expect(
+      instructions(ai).filter(
+        (line) => /^RUN /.test(line) && /https?:\/\//i.test(line),
+      ),
+    ).toEqual([]);
+  });
+
+  it("version exactly the weights the wheel does not ship, with the pinned hashes", () => {
+    const manifest = Object.fromEntries(
+      read("infra/ai-ocr/models.sha256")
+        .split("\n")
+        .filter((line) => line.trim() && !line.startsWith("#"))
+        .map((line) => {
+          const [sha, name] = line.split(/\s+/);
+
+          return [name, sha] as const;
+        }),
+    );
+    const dir = resolve(ROOT, "infra/ai-ocr/models");
+    const vendored = readdirSync(dir).sort();
+
+    // The wheel (rapidocr 3.9.2) ships the PP-OCRv6 pair and the
+    // classifier; the receipt profile's PP-OCRv5 pair is ours to carry.
+    expect(vendored).toEqual([
+      "ch_PP-OCRv5_det_mobile.onnx",
+      "latin_PP-OCRv5_rec_mobile.onnx",
+    ]);
+
+    for (const name of vendored) {
+      const sha = createHash("sha256")
+        .update(readFileSync(resolve(dir, name)))
+        .digest("hex");
+
+      expect(sha, name).toBe(manifest[name]);
+    }
+
+    // Binary in git: never converted to CRLF, never diffed as text.
+    expect(read(".gitattributes")).toMatch(/^\*\.onnx binary$/m);
   });
 
   it("copy the models as a linked layer, apart from the code that changes", () => {
@@ -486,3 +533,93 @@ describe.skipIf(!hasShell("sh"))("the API image's prune, run on a tree", () => {
     expect(stderr).toContain(missing);
   });
 });
+
+/**
+ * The Prisma schema engine `migrate deploy` runs comes from @prisma/engines'
+ * postinstall, which downloads it from binaries.prisma.sh and fails
+ * SILENTLY: a dead download left no engine, and nothing said so until a
+ * migrate without network. Both installs check it in the same RUN, try the
+ * download again, and stop the build with the cause. Executed by sh on a
+ * tree, with yarn replaced and the postinstall faked.
+ */
+describe.skipIf(!hasShell("sh"))(
+  "the API image's schema engine check, run on a tree",
+  () => {
+    let box: Sandbox | undefined;
+
+    afterEach(() => {
+      box?.dispose();
+      box = undefined;
+    });
+
+    const installs = instructions(api).filter((line) =>
+      /yarn install --frozen-lockfile --production=/.test(line),
+    );
+
+    it("is in both installs, in the same RUN (a layer without the engine is never cached)", () => {
+      expect(installs).toHaveLength(2);
+      expect(stage(api, "deps").some((line) => installs.includes(line))).toBe(
+        true,
+      );
+      expect(
+        stage(api, "prod-deps").some((line) => installs.includes(line)),
+      ).toBe(true);
+    });
+
+    function check(install: string, engine: boolean, downloads: boolean) {
+      const command = install
+        .replace(/^RUN --mount=\S+ /, "")
+        .replace(/yarn install --frozen-lockfile --production=\w+/, "true")
+        .replace(/sleep \$\(\(attempt \* 10\)\);/, "");
+
+      box = sandbox();
+      if (engine) {
+        box.file(
+          "node_modules/@prisma/engines/schema-engine-linux-musl-openssl-3.0.x",
+          "x",
+        );
+      }
+      box.file(
+        "node_modules/@prisma/engines/scripts/postinstall.js",
+        downloads
+          ? 'require("fs").writeFileSync(__dirname + "/../schema-engine-linux-musl-openssl-3.0.x", "x");'
+          : "// the download failed, silently",
+      );
+
+      return spawnSync("sh", ["-c", command], {
+        cwd: box.root,
+        encoding: "utf8",
+        timeout: 30_000,
+      });
+    }
+
+    it.each([0, 1])("passes at once when install %i left the engine", (at) => {
+      const result = check(installs[at], true, false);
+
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stderr).toBe("");
+    });
+
+    it.each([0, 1])("downloads it again when install %i left nothing", (at) => {
+      const result = check(installs[at], false, true);
+
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stderr).toMatch(
+        /Prisma schema engine missing after the install \(attempt 1 of 3\)/,
+      );
+    });
+
+    it.each([0, 1])(
+      "stops the build with the cause when install %i never gets it",
+      (at) => {
+        const result = check(installs[at], false, false);
+
+        expect(result.status).not.toBe(0);
+        expect(result.stderr).toMatch(/attempt 3 of 3/);
+        expect(result.stderr).toMatch(
+          /was not downloaded from binaries\.prisma\.sh/,
+        );
+      },
+    );
+  },
+);

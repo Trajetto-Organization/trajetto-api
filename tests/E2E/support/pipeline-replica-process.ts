@@ -26,6 +26,15 @@ interface ReplicaOptions {
   fakeProviderUrl: string;
   workers: Array<"notifications" | "webhooks" | "ai">;
   httpPort?: number;
+
+  /**
+   * Expands every queued event before the delivery lanes start, so the
+   * first claim sees all the rows (REPLICA_EXPAND_FIRST in
+   * pipeline-replica.ts). For a test about delivering a batch, not about
+   * expansion racing delivery.
+   */
+  expandFirst?: boolean;
+
   env?: Record<string, string>;
 }
 
@@ -49,6 +58,7 @@ async function startPipelineReplica(
         FAKE_PROVIDER_URL: options.fakeProviderUrl,
         REPLICA_WORKERS: options.workers.join(","),
         REPLICA_HTTP_PORT: String(options.httpPort ?? 0),
+        REPLICA_EXPAND_FIRST: options.expandFirst ? "1" : "0",
 
         // The minimum the env schema accepts: a test cannot wait 30 s sweeps.
         PIPELINE_SWEEP_INTERVAL_MS: "500",

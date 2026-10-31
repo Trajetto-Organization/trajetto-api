@@ -27,8 +27,9 @@ import { container } from "tsyringe";
  *    SMTP with STARTTLS to a fixed host has no seam worth faking.
  *
  * Env: FAKE_PROVIDER_URL, REPLICA_WORKERS (comma list of notifications,
- * webhooks, ai), REPLICA_HTTP_PORT (optional: also serve HTTP), plus the
- * usual DATABASE_URL / REDIS_URL. stdin line "stop" shuts down gracefully;
+ * webhooks, ai), REPLICA_HTTP_PORT (optional: also serve HTTP),
+ * REPLICA_EXPAND_FIRST (optional: expand the whole outbox before the
+ * delivery lanes start), plus the usual DATABASE_URL / REDIS_URL. stdin line "stop" shuts down gracefully;
  * a SIGKILL from the parent is the crash.
  */
 const FAKE = process.env.FAKE_PROVIDER_URL ?? "";
@@ -140,6 +141,16 @@ async function main(): Promise<void> {
       "@/shared/notifications/notification-pipeline-service"
     );
     const pipeline = NotificationPipelineService.getInstance();
+
+    // REPLICA_EXPAND_FIRST=1: every queued event is expanded before any
+    // delivery lane claims. Otherwise the external lane's first claim (wake,
+    // or its own 500 ms tick) races the expansion and takes whatever rows
+    // exist by then, so a batch test measured how far the expansion had got
+    // under load, not the batch (case E: "length of 40 but got 34"). The
+    // cycle drains every batch before it returns.
+    if (process.env.REPLICA_EXPAND_FIRST === "1") {
+      await pipeline.runOutboxCycle();
+    }
 
     await pipeline.initialize();
     pipeline.wake();

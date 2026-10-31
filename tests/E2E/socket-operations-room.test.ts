@@ -7,7 +7,14 @@ import type { AddressInfo } from "node:net";
 import { sign } from "jsonwebtoken";
 import auth from "@/config/auth";
 
+import { operationsRoom } from "@/shared/socket/operations-access";
+
 import { socketClientEntry } from "./support/socket-client";
+import {
+  emitHandled,
+  waitForDisconnect,
+  waitForRoom,
+} from "./support/socket-waits";
 import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
@@ -44,16 +51,21 @@ let server: Server;
 let port = 0;
 
 let io: typeof import("@/websocket");
+let ioServer: Awaited<
+  ReturnType<typeof import("@/websocket").initializeSocketIO>
+>;
 
 let dispatcherProfile = "";
 let mechanicProfile = "";
 
 interface TestSocket {
+  id: string;
   on: Function;
   off: Function;
+  once: (event: string, listener: (...args: unknown[]) => void) => unknown;
   removeAllListeners: Function;
   disconnect: () => void;
-  emit: Function;
+  emit: (...args: unknown[]) => unknown;
   connected: boolean;
 }
 
@@ -285,7 +297,7 @@ beforeAll(async () => {
   port = (server.address() as AddressInfo).port;
 
   io = await import("@/websocket");
-  await io.initializeSocketIO(server);
+  ioServer = await io.initializeSocketIO(server);
 
   await loadClient();
 
@@ -300,9 +312,18 @@ beforeAll(async () => {
   );
   master = await connectAs(await tokenFor(MASTER, "MASTER", null, null));
 
-  // The connection handler reads the user, the driver and the refresh family
-  // before joining any room. Measuring before that measures the race.
-  await new Promise((done) => setTimeout(done, 1800));
+  // Measuring before the rooms exist would measure the race, not the rule.
+  // The connection handler joins them; wait for that, as the server records
+  // it, rather than for 1.8 s.
+  await waitForRoom(ioServer, dispatcher.id, operationsRoom(CARRIER), true);
+
+  for (const [socket, userId] of [
+    [driver, DRIVER_USER],
+    [mechanic, MECHANIC],
+    [master, MASTER],
+  ] as const) {
+    await waitForRoom(ioServer, socket.id, `user:${userId}`, true);
+  }
 }, 180_000);
 
 afterAll(async () => {
@@ -425,9 +446,9 @@ describe("a MASTER following a company", () => {
   });
 
   it("hears the operation it subscribed to", async () => {
-    master.emit("operationsSubscribe", { businessId: CARRIER });
-
-    await new Promise((done) => setTimeout(done, 400));
+    // The server re-reads the role before joining; the acknowledgement comes
+    // once that is done.
+    await emitHandled(master, "operationsSubscribe", { businessId: CARRIER });
 
     const received = waitFor(master, "driverPosition");
 
@@ -439,9 +460,9 @@ describe("a MASTER following a company", () => {
   it("stops hearing the first one when it switches company", async () => {
     // One socket watches exactly one operation. Stacking rooms across a
     // switch in the selector would put another tenant's trucks on the map.
-    master.emit("operationsSubscribe", { businessId: OTHER_CARRIER });
-
-    await new Promise((done) => setTimeout(done, 400));
+    await emitHandled(master, "operationsSubscribe", {
+      businessId: OTHER_CARRIER,
+    });
 
     const received = waitFor(master, "driverPosition");
 
@@ -453,9 +474,10 @@ describe("a MASTER following a company", () => {
 
 describe("a user who is not a MASTER cannot subscribe past their company", () => {
   it("is ignored when it asks for another tenant", async () => {
-    dispatcher.emit("operationsSubscribe", { businessId: OTHER_CARRIER });
-
-    await new Promise((done) => setTimeout(done, 400));
+    // Handled — and refused — before the emit below.
+    await emitHandled(dispatcher, "operationsSubscribe", {
+      businessId: OTHER_CARRIER,
+    });
 
     const received = waitFor(dispatcher, "driverPosition");
 
@@ -476,9 +498,7 @@ describe("a user who is not a MASTER cannot subscribe past their company", () =>
   });
 
   it("is ignored when a driver asks for their own company", async () => {
-    driver.emit("operationsSubscribe", { businessId: CARRIER });
-
-    await new Promise((done) => setTimeout(done, 400));
+    await emitHandled(driver, "operationsSubscribe", { businessId: CARRIER });
 
     const received = waitFor(driver, "driverPosition");
 
@@ -500,8 +520,9 @@ describe("when the dispatcher loses the permission mid-connection", () => {
 
     io.sendSecurityEventToBusiness(CARRIER, { reason: "permissions_changed" });
 
-    // The re-evaluation reads the database once per connected socket.
-    await new Promise((done) => setTimeout(done, 2000));
+    // The re-evaluation reads the database once per connected socket, and
+    // takes the dispatcher out of the room when it is done with theirs.
+    await waitForRoom(ioServer, dispatcher.id, operationsRoom(CARRIER), false);
 
     const received = waitFor(dispatcher, "driverPosition");
 
@@ -553,11 +574,9 @@ describe("when a MASTER is demoted mid-connection", () => {
      * the sockets are dropped. This is the test that says the door that
      * exists is the door that closes.
      */
-    master.emit("operationsSubscribe", { businessId: CARRIER });
-
     // The subscription is a round trip: the server checks the role before
     // joining anything.
-    await new Promise((done) => setTimeout(done, 1200));
+    await emitHandled(master, "operationsSubscribe", { businessId: CARRIER });
 
     const before = waitFor(master, "routeEvent");
 
@@ -577,7 +596,7 @@ describe("when a MASTER is demoted mid-connection", () => {
     // user fires this.
     io.sendSecurityEventToUser(MASTER, { reason: "user_updated" });
 
-    await new Promise((done) => setTimeout(done, 1500));
+    await waitForDisconnect(master).catch(() => undefined);
 
     expect(master.connected, "o MASTER rebaixado continuou conectado").toBe(
       false,

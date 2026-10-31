@@ -8,6 +8,7 @@ import { sign } from "jsonwebtoken";
 import auth from "@/config/auth";
 
 import { socketClientEntry } from "./support/socket-client";
+import { waitForRoom, waitUntil } from "./support/socket-waits";
 import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
@@ -30,8 +31,12 @@ let server: Server;
 let port = 0;
 
 let io: typeof import("@/websocket");
+let ioServer: Awaited<
+  ReturnType<typeof import("@/websocket").initializeSocketIO>
+>;
 
 type Client = {
+  id: string;
   on: Function;
   off: Function;
   disconnect: () => void;
@@ -168,15 +173,17 @@ beforeAll(async () => {
   port = (server.address() as AddressInfo).port;
 
   io = await import("@/websocket");
-  await io.initializeSocketIO(server);
+  ioServer = await io.initializeSocketIO(server);
 
   masterClient = await connect(await sessionToken(MASTER, "MASTER", null));
   otherClient = await connect(
     await sessionToken(OTHER_ADMIN, "BUSINESS_ADMIN", OTHER),
   );
 
-  // The connection handler joins its rooms after the handshake resolves.
-  await new Promise((resolve) => setTimeout(resolve, 1000));
+  // The rooms the event goes to (the masters') and the one it must not
+  // (the other company's), as the server records them — not 1 s later.
+  await waitForRoom(ioServer, masterClient.id, "masters", true);
+  await waitForRoom(ioServer, otherClient.id, `business:${OTHER}`, true);
 }, 120_000);
 
 afterAll(async () => {
@@ -191,11 +198,22 @@ afterAll(async () => {
 
 describe("catalogChanged and the MASTER", () => {
   it("reaches a MASTER socket, which belongs to no company", async () => {
-    const master = heard(masterClient);
+    const received: unknown[] = [];
+    const listener = (payload: unknown) => received.push(payload);
 
-    io.sendCatalogChangedEvent(CARRIER, "shipper");
+    masterClient.on("catalogChanged", listener);
 
-    expect(await master).toEqual([{ businessId: CARRIER, entity: "shipper" }]);
+    try {
+      io.sendCatalogChangedEvent(CARRIER, "shipper");
+
+      // The first copy however long it takes, then a window for a second.
+      await waitUntil(() => received.length > 0, "o MASTER ouvir o evento");
+      await new Promise((resolve) => setTimeout(resolve, 500));
+    } finally {
+      masterClient.off("catalogChanged", listener);
+    }
+
+    expect(received).toEqual([{ businessId: CARRIER, entity: "shipper" }]);
   });
 
   it("still does not reach another company's staff", async () => {

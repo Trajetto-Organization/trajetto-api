@@ -277,6 +277,14 @@ dead letter com reenvio e idempotência dos efeitos externos
 [0006](./adr/0006-idempotencia-de-efeitos-externos.md)). Os crons usam um lease no Postgres por horário, então várias réplicas
 não repetem um job.
 
+Depois do commit, o `publish` acorda o pipeline da própria réplica (500 ms
+depois; numa réplica só HTTP, quem pega é a varredura do worker). Quem
+encontra um ciclo do pipeline já rodando (o despertar, a varredura ou um
+teste) entra nesse ciclo, e ele faz **mais uma passada** quando termina: uma
+só, por mais chamadas que cheguem. Antes, a chamada voltava na hora, e o que
+ficava pronto depois do último claim do ciclo esperava a próxima varredura
+(30 s em produção) com um ciclo ali do lado (30/10/2026).
+
 </details>
 
 <details>
@@ -309,6 +317,13 @@ A entrega é _at-most-once_ ([ADR 0007](./adr/0007-tempo-real-at-most-once.md)):
 a verdade está no banco, e as telas
 refazem a consulta ao reconectar. Sem Redis, o tempo real entre réplicas
 degrada e o resto da API continua.
+
+`operationsSubscribe` e `chatSubscribe` aceitam um _acknowledgement_
+opcional: quando o cliente pede um, o servidor responde **vazio** depois de
+tratar o pedido, tenha entrado na sala ou recusado. Não diz o veredito (uma
+recusa continua silenciosa e não revela se a empresa existe); serve para quem
+precisa saber que o pedido já foi tratado, como os testes E2E, que esperam a
+sala em vez de dormir um tempo chutado. A web emite sem _acknowledgement_.
 
 </details>
 
@@ -720,8 +735,10 @@ provedor Anthropic foi removido e `AI_PROVIDER=anthropic` impede o boot).
   conferência humana e **não consomem cota**. Uma foto lida é uma unidade da
   cota, contada uma vez. O app faz uma pré-checagem no aparelho, que é só
   sugestão e nunca consome cota.
-- Modelos embutidos na imagem e conferidos por SHA-256 (`models.sha256`);
-  dependências Python com `--require-hashes`. Benchmark em
+- Modelos embutidos na imagem e conferidos por SHA-256 (`models.sha256`),
+  sem rede no build: o par PP-OCRv5 fica versionado em `infra/ai-ocr/models`
+  e o resto vem na roda do RapidOCR; dependências Python com
+  `--require-hashes`. Benchmark em
   `scripts/ai-benchmark/` (p95 de 3,1 s por foto a 2 CPU / 1 GiB).
 
 ## Comprovante de entrega

@@ -149,6 +149,53 @@ describe("waiting for the API to serve the deployed build", () => {
     expect(result.output).toMatch(/::warning::A API voltou a responder/);
   });
 
+  it("does not throw the window away on a probe that got no answer", async () => {
+    // The edge hiccups (a 502, a 525, a body that is not JSON) inside the
+    // window: no replica answered, so nothing says Swarm rolled back. It
+    // used to restart the window, as if the old build had answered.
+    const flaky = [
+      alive(SHA),
+      { status: 502 },
+      alive(SHA),
+      { status: 525 },
+      alive(SHA),
+      { status: 200, body: "<html>edge error</html>" },
+    ];
+    const api = await fakeApi([...flaky, ...flaky, ...flaky, alive(SHA)]);
+
+    const result = await wait({
+      API_URL: api.url,
+      EXPECTED_SHA: SHA,
+      WAIT_POLL_SECONDS: "0.02",
+      WAIT_STABLE_SECONDS: "0.2",
+      WAIT_TIMEOUT_SECONDS: "5",
+    });
+
+    expect(result.status, result.output).toBe(0);
+    expect(result.output).toContain(`responde ${SHA}`);
+    // Visible, with the count: a warning per streak, the total in the end.
+    expect(result.output).toMatch(
+      /::warning::A sondagem de .* não teve resposta \(HTTP 502; falha 1 até agora\)/,
+    );
+    expect(result.output).toMatch(/\d+ sondagem\(ns\) sem resposta no caminho/);
+    expect(result.output).not.toMatch(/voltou a responder HTTP/);
+  });
+
+  it("closes the window only on an answer of the new commit, never on failed probes", async () => {
+    const api = await fakeApi([alive(SHA), { status: 503 }]);
+
+    const result = await wait({
+      API_URL: api.url,
+      EXPECTED_SHA: SHA,
+      WAIT_STABLE_SECONDS: "0.2",
+      WAIT_TIMEOUT_SECONDS: "0.6",
+    });
+
+    expect(result.status).toBe(1);
+    expect(result.output).toMatch(/::error::A API responde .* há só \d+s/);
+    expect(result.output).toMatch(/sondagem\(ns\) ficaram sem resposta/);
+  });
+
   it("does not take a build with no commit for the new one", async () => {
     const api = await fakeApi([{ body: { status: "alive" } }]);
 

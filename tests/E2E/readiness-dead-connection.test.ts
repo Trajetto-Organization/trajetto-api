@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { SilentProxy, settle } from "./support/silent-proxy";
 
@@ -36,7 +36,17 @@ beforeAll(async () => {
   process.env.DATABASE_URL = throughProxy.toString();
 
   probe = await import("@/shared/health/readiness-probe");
-});
+
+  // Warm: a cold process's first probe loads Prisma 7's query compiler and
+  // opens the connection, inside the probe's own 3 s. With the whole E2E
+  // suite running beside it, that once took longer, and the test failed on
+  // a start-up cost that is not what it checks. Waited for here, generously;
+  // each probe is still bounded by its own timeout.
+  await vi.waitFor(async () => expect(await probe.probeDatabase()).toBe(true), {
+    timeout: 20_000,
+    interval: 250,
+  });
+}, 30_000);
 
 afterAll(async () => {
   await proxy.close();
@@ -48,6 +58,7 @@ describe("readiness after its connection dies in silence", () => {
     "says no while the connection is dead, then yes on a fresh one",
     { timeout: 20_000 },
     async () => {
+      // Warm and connected (beforeAll): this one answers on the open flow.
       expect(await probe.probeDatabase()).toBe(true);
 
       proxy.forgetOpenFlows();
@@ -61,11 +72,13 @@ describe("readiness after its connection dies in silence", () => {
       expect(dead).toMatchObject({ kind: "answered", value: false });
 
       // The database never went anywhere. The next probe must not go out on
-      // the same dead socket again.
+      // the same dead socket again: on it, the query would hang until the
+      // 3 s query_timeout. On a fresh connection it answers within the 2 s
+      // the probe gives a connection to open, so a "yes" inside 2.5 s is the
+      // proof, with no tighter bound for a loaded machine to break.
       const next = await settle(probe.probeDatabase(), 2_500);
 
       expect(next).toMatchObject({ kind: "answered", value: true });
-      expect(next.ms).toBeLessThan(1_500);
     },
   );
 });

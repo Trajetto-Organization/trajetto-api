@@ -1,14 +1,15 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { randomUUID } from "node:crypto";
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { createServer } from "node:net";
-import { resolve } from "node:path";
 
 import { sign } from "jsonwebtoken";
 import auth from "@/config/auth";
 
+import { operationsRoom } from "@/shared/socket/operations-access";
+
 import { socketClientEntry } from "./support/socket-client";
+import { startReplica, type Replica } from "./support/replica-process";
+import { waitUntil } from "./support/socket-waits";
 import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
@@ -70,123 +71,10 @@ let strangerProfile = "";
 const REPLICA_REDIS = process.env.REDIS_URL ?? "redis://localhost:6379";
 const REPLICA_ADAPTER_KEY = `socket.io-e2e-${randomUUID()}`;
 
-interface Replica {
-  process: ChildProcessWithoutNullStreams;
-  port: number;
-
-  /** Resolves once the replica reports the emit went out. */
-  emit: (
-    kind: "routeEvent" | "driverPosition",
-    payload: unknown,
-  ) => Promise<void>;
-}
-
 const replicas: Replica[] = [];
 
-/** A port the OS just said is free, which beats guessing one. */
-function freePort(): Promise<number> {
-  return new Promise((done, fail) => {
-    const probe = createServer();
-
-    probe.once("error", fail);
-
-    probe.listen(0, "127.0.0.1", () => {
-      const { port } = probe.address() as { port: number };
-      probe.close(() => done(port));
-    });
-  });
-}
-
-async function startReplica(businessId: string): Promise<Replica> {
-  const port = await freePort();
-
-  /*
-    node + tsx's own entry, rather than `npx tsx`. On Windows `npx` is a .cmd,
-    and since Node 20 spawning one without a shell fails outright with EINVAL;
-    going through a shell to work around that would put quoting between this
-    test and the thing it is testing.
-  */
-  const child = spawn(
-    process.execPath,
-    [
-      resolve(process.cwd(), "node_modules", "tsx", "dist", "cli.mjs"),
-      "tests/E2E/support/socket-replica.ts",
-      String(port),
-    ],
-    {
-      cwd: process.cwd(),
-      env: {
-        ...process.env,
-
-        /*
-          The per-file database this suite created. A replica pointed at the
-          default one would authenticate against users that do not exist there,
-          and every socket would be refused for the wrong reason.
-        */
-        DATABASE_URL: process.env.DATABASE_URL,
-        REDIS_URL: REPLICA_REDIS,
-        SOCKET_ADAPTER_KEY: REPLICA_ADAPTER_KEY,
-        PORT: String(port),
-      },
-      stdio: ["pipe", "pipe", "pipe"],
-    },
-  ) as ChildProcessWithoutNullStreams;
-
-  const lines: string[] = [];
-
-  let failure = "";
-
-  child.stdout.on("data", (chunk) => {
-    for (const line of String(chunk).split("\n")) {
-      if (line.trim()) lines.push(line.trim());
-    }
-  });
-
-  // Kept so a replica that dies during boot says why, instead of timing out
-  // with no explanation at all.
-  child.stderr.on("data", (chunk) => {
-    failure += String(chunk);
-  });
-
-  const waitForLine = (matches: (line: string) => boolean, timeoutMs: number) =>
-    new Promise<void>((done, fail) => {
-      const deadline = Date.now() + timeoutMs;
-
-      const poll = setInterval(() => {
-        const index = lines.findIndex(matches);
-
-        if (index >= 0) {
-          lines.splice(index, 1);
-          clearInterval(poll);
-          done();
-          return;
-        }
-
-        if (Date.now() > deadline) {
-          clearInterval(poll);
-          fail(
-            new Error(
-              `a réplica na porta ${port} não respondeu a tempo. ${failure.slice(-1200)}`,
-            ),
-          );
-        }
-      }, 50);
-    });
-
-  await waitForLine((line) => line.startsWith("READY"), 180_000);
-
-  return {
-    process: child,
-    port,
-    emit: async (kind, payload) => {
-      child.stdin.write(`${JSON.stringify({ kind, businessId, payload })}\n`);
-
-      await waitForLine((line) => line === `SENT ${kind}`, 15_000);
-    },
-  };
-}
-
 interface TestSocket {
+  id: string;
   on: Function;
   off: Function;
   disconnect: () => void;
@@ -367,7 +255,12 @@ beforeAll(async () => {
   // Three replicas of the same API, on one machine, sharing one Redis and one
   // database — which is what a replica is.
   for (let node = 0; node < 3; node += 1) {
-    replicas.push(await startReplica(CARRIER));
+    replicas.push(
+      await startReplica({
+        REDIS_URL: REPLICA_REDIS,
+        SOCKET_ADAPTER_KEY: REPLICA_ADAPTER_KEY,
+      }),
+    );
   }
 
   await loadClient();
@@ -387,21 +280,21 @@ beforeAll(async () => {
     await tokenFor(STRANGER, OTHER_CARRIER),
   );
 
-  // The connection handler reads the user and the profile before joining any
-  // room; measuring before that measures the race.
-  await new Promise((done) => setTimeout(done, 2_500));
+  // Measuring before the rooms exist measures the race. Each replica says
+  // when its socket is in the operation's room — not a 2.5 s guess.
+  await replicas[1].waitForRoom(onTwo.id, operationsRoom(CARRIER), true);
+  await replicas[2].waitForRoom(onThree.id, operationsRoom(CARRIER), true);
+  await replicas[2].waitForRoom(
+    stranger.id,
+    operationsRoom(OTHER_CARRIER),
+    true,
+  );
 }, 300_000);
 
 afterAll(async () => {
   for (const socket of [onTwo, onThree, stranger]) socket?.disconnect();
 
-  for (const replica of replicas) replica.process.stdin.end();
-
-  await new Promise((done) => setTimeout(done, 2_000));
-
-  for (const replica of replicas) {
-    if (!replica.process.killed) replica.process.kill();
-  }
+  await Promise.all(replicas.map((replica) => replica.stop()));
 
   await prisma.refreshToken.deleteMany({
     where: { userId: { in: [WATCHER_ON_TWO, WATCHER_ON_THREE, STRANGER] } },
@@ -426,10 +319,14 @@ describe("node 1 -> event -> node 2", () => {
   it("a route released on replica 1 reaches whoever is on replica 2", async () => {
     const heard = waitFor(onTwo, "routeEvent");
 
-    await replicas[0].emit("routeEvent", {
-      type: "route.released",
-      routeId: ROUTE,
-      routeCode: 41,
+    await replicas[0].run({
+      kind: "routeEvent",
+      businessId: CARRIER,
+      payload: {
+        type: "route.released",
+        routeId: ROUTE,
+        routeCode: 41,
+      },
     });
 
     const event = await heard;
@@ -448,10 +345,14 @@ describe("node 1 -> event -> node 2", () => {
     // just the next one.
     const heard = waitFor(onThree, "routeEvent");
 
-    await replicas[0].emit("routeEvent", {
-      type: "route.started",
-      routeId: ROUTE,
-      routeCode: 42,
+    await replicas[0].run({
+      kind: "routeEvent",
+      businessId: CARRIER,
+      payload: {
+        type: "route.started",
+        routeId: ROUTE,
+        routeCode: 42,
+      },
     });
 
     const event = await heard;
@@ -475,14 +376,18 @@ describe("node 2 -> event -> node 3", () => {
      */
     const heard = waitFor(onThree, "driverPosition");
 
-    await replicas[1].emit("driverPosition", {
-      driverId: DRIVER,
-      routeId: ROUTE,
-      latitude: -23.55,
-      longitude: -46.63,
-      speed: 42,
-      heading: 180,
-      recordedAt: new Date().toISOString(),
+    await replicas[1].run({
+      kind: "driverPosition",
+      businessId: CARRIER,
+      payload: {
+        driverId: DRIVER,
+        routeId: ROUTE,
+        latitude: -23.55,
+        longitude: -46.63,
+        speed: 42,
+        heading: 180,
+        recordedAt: new Date().toISOString(),
+      },
     });
 
     const event = await heard;
@@ -509,12 +414,20 @@ describe("node 2 -> event -> node 3", () => {
 
     onTwo.on("routeEvent", collect);
 
-    await replicas[1].emit("routeEvent", {
-      type: "route.completed",
-      routeId: ROUTE,
-      routeCode: 43,
+    await replicas[1].run({
+      kind: "routeEvent",
+      businessId: CARRIER,
+      payload: {
+        type: "route.completed",
+        routeId: ROUTE,
+        routeCode: 43,
+      },
     });
 
+    // The first copy, however long it takes; then a quiet window in which a
+    // second one would show up. A fixed 3 s used to be both, and a first copy
+    // slower than that read as none.
+    await waitUntil(() => seen.length > 0, "o evento chegar à réplica 2");
     await new Promise((done) => setTimeout(done, 3_000));
 
     onTwo.off("routeEvent", collect);
@@ -533,10 +446,14 @@ describe("and the reach is still the carrier's", () => {
      */
     const heard = waitFor(stranger, "routeEvent");
 
-    await replicas[0].emit("routeEvent", {
-      type: "route.released",
-      routeId: ROUTE,
-      routeCode: 44,
+    await replicas[0].run({
+      kind: "routeEvent",
+      businessId: CARRIER,
+      payload: {
+        type: "route.released",
+        routeId: ROUTE,
+        routeCode: 44,
+      },
     });
 
     expect(

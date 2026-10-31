@@ -5,6 +5,8 @@ import { createServer, type Server } from "node:http";
 
 import { sign } from "jsonwebtoken";
 
+import { chatStaffRoom } from "@/modules/chat/usecases/shared/chat-access-rules";
+
 import { socketClientEntry } from "./support/socket-client";
 import {
   freePort,
@@ -51,6 +53,7 @@ const DRIVER = "018fe200-0000-7000-8000-0000000000d1";
 const NEVER_MS = String(10 * 60 * 1000);
 
 interface TestSocket {
+  id: string;
   on: (event: string, handler: (...args: any[]) => void) => void;
   off: (event: string, handler: (...args: any[]) => void) => void;
   emit: (event: string, ...args: unknown[]) => void;
@@ -69,8 +72,6 @@ let thirdServer: Server;
 
 let profileId = "";
 const sockets: TestSocket[] = [];
-
-const sleep = (ms: number) => new Promise((done) => setTimeout(done, ms));
 
 async function tokenFor(
   userId: string,
@@ -303,8 +304,9 @@ describe("across replicas", () => {
     async () => {
       staff = await connectTo(two.port, await tokenFor(STAFF, null));
 
-      // Rooms are joined after the handshake's queries.
-      await sleep(1_500);
+      // In the SAC's room on replica 2 before the driver shows up — read from
+      // that replica's room index, not slept on.
+      await two.waitForRoom(staff.id, chatStaffRoom(CARRIER), true);
 
       const online = next(staff, "chatPresence", aboutDriver);
 
@@ -371,7 +373,8 @@ describe("across replicas", () => {
         await tokenFor(DRIVER_USER, DRIVER),
       );
 
-      await sleep(1_500);
+      // Replica 2 holds his second socket before the first one goes away.
+      await two.waitForRoom(driverOnTwo.id, `user:${DRIVER_USER}`, true);
 
       const earlyOffline = next(
         staff,
@@ -419,7 +422,7 @@ describe("a replica whose Redis is unreachable", () => {
     async () => {
       const staff = await connectTo(isolated.port, await tokenFor(STAFF, null));
 
-      await sleep(1_500);
+      await isolated.waitForRoom(staff.id, chatStaffRoom(CARRIER), true);
 
       const online = next(staff, "chatPresence", aboutDriver);
 

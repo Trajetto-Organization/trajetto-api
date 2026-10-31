@@ -164,18 +164,23 @@ describe.skipIf(!hasShell("bash"))(
         });
       });
 
-      it("is built when no image has that source, or when the answer is not a digest", () => {
-        const cases: Array<Record<string, string>> = [
-          {},
-          { [`trajetto-ai:src-${TREE}`]: "garbage" },
-        ];
+      it("is built when no image has that source", () => {
+        const result = step("build-and-push", SOURCE, {});
 
-        for (const tags of cases) {
-          const result = step("build-and-push", SOURCE, tags);
+        expect(result.status, result.stderr).toBe(0);
+        expect(result.outputs).toEqual({ tree: TREE, build: "true" });
+      });
 
-          expect(result.status, result.stderr).toBe(0);
-          expect(result.outputs).toEqual({ tree: TREE, build: "true" });
-        }
+      it("fails, naming GHCR, when the registry does not answer — it used to rebuild", () => {
+        // An answer that is not a digest is GHCR misbehaving, not "no such
+        // image" (ghcr.sh tries it again, then fails).
+        const result = step("build-and-push", SOURCE, {
+          [`trajetto-ai:src-${TREE}`]: "garbage",
+        });
+
+        expect(result.status).not.toBe(0);
+        expect(result.outputs.build).toBeUndefined();
+        expect(result.stderr).toMatch(/::error::GHCR indisponível/);
       });
 
       it("is built anyway with force_ai_build, without even asking GHCR", () => {
@@ -545,6 +550,7 @@ describe.skipIf(!hasShell("bash"))(
         );
 
         expect(result.status, result.stderr).toBe(0);
+        expect(result.outputs.tag).toBe("sha-abcdef0");
       });
 
       it("keeps the pull request waiting, then fails it, while a marker is missing or on another digest", () => {
@@ -572,12 +578,62 @@ describe.skipIf(!hasShell("bash"))(
         );
 
         expect(result.status).toBe(1);
-        expect(result.stdout).toContain(
-          "tentativa 2/90: ainda sem staged-abcdef0 em trajetto-api",
+        expect(result.stdout).toMatch(
+          /tentativa 2\/90: ainda sem staged-abcdef0 \(.*trajetto-api:staged-abcdef0 aponta para/,
         );
-        expect(result.stdout).not.toContain("em trajetto-api trajetto-ai");
         expect(result.stdout).toMatch(
           /::error::O commit abcdef0.* não tem o marcador staged-abcdef0/,
+        );
+      });
+
+      it("fails at once, naming GHCR, when the registry does not answer", () => {
+        const result = step(
+          "staging-image",
+          "Wait for the staging deploy of the PR head",
+          { "trajetto-api:sha-abcdef0": "garbage" },
+          { HEAD_SHA: SHA },
+        );
+
+        expect(result.status).toBe(1);
+        expect(result.stdout).toMatch(/::error::GHCR indisponível/);
+        expect(result.stdout).not.toContain("tentativa 1/90");
+      });
+
+      it("keeps a GHCR retry visible while the pull request waits", () => {
+        box.stub("seq", "printf '1\\n2\\n'");
+
+        // The API's sha-<7> answers a 503 once, then its digest; its marker
+        // never comes, so the check keeps waiting (and fails after the two
+        // rounds stubbed here).
+        const once = `${box.root}/once`;
+
+        box.stub(
+          "docker",
+          [
+            'if [ "$1 $2 $3" = "buildx imagetools inspect" ]; then',
+            `  if [ "$4" = "${REPO}/trajetto-api:sha-abcdef0" ] && [ ! -e "${once}" ]; then`,
+            `    : > "${once}"; echo "ERROR: 503 Service Unavailable" >&2; exit 1`,
+            "  fi",
+            `  found=$(awk -v ref="$4" '$1 == ref { print $2 }' "${box.root}/tags")`,
+            '  [ -n "$found" ] || { echo "not found" >&2; exit 1; }',
+            '  printf "%s\\n" "$found"',
+            "fi",
+          ].join("\n"),
+        );
+
+        const result = step(
+          "staging-image",
+          "Wait for the staging deploy of the PR head",
+          { "trajetto-api:sha-abcdef0": digest("1") },
+          { HEAD_SHA: SHA },
+        );
+
+        expect(result.status).toBe(1);
+        expect(result.stdout).toMatch(
+          /::warning::GHCR: falha ao ler ghcr\.io\/trajetto-organization\/trajetto-api:sha-abcdef0 \(tentativa 1 de 5\)/,
+        );
+        expect(result.stdout).toContain(
+          "tentativa 2/90: ainda sem staged-abcdef0",
         );
       });
 
@@ -587,14 +643,17 @@ describe.skipIf(!hasShell("bash"))(
           "trajetto-api:sha-abcdef0": digest("1"),
           "trajetto-ai:sha-abcdef0": digest("a"),
         };
+        const merge = {
+          EVENT: "push",
+          TARGET_TAG: "sha-abcdef0",
+          CANDIDATE: SHA,
+        };
 
-        it("is required on a merge, before anything is migrated or moved", () => {
+        it("is settled before anything is checked, migrated or moved", () => {
           const names = stepsOf("promote-production").map((step) => step.name);
 
-          expect(stepText("promote-production", CHECK)).toContain(
-            "if: github.event_name == 'push'",
-          );
-          expect(names.indexOf(CHECK)).toBeGreaterThan(
+          expect(stepText("promote-production", CHECK)).toContain("id: staged");
+          expect(names.indexOf(CHECK)).toBeLessThan(
             names.indexOf("Check the build exists in GHCR"),
           );
           expect(names.indexOf(CHECK)).toBeLessThan(
@@ -605,7 +664,7 @@ describe.skipIf(!hasShell("bash"))(
           );
         });
 
-        it("passes when staging ran exactly these digests", () => {
+        it("passes when staging ran exactly these digests, and names that build", () => {
           const result = step(
             "promote-production",
             CHECK,
@@ -614,13 +673,16 @@ describe.skipIf(!hasShell("bash"))(
               "trajetto-api:staged-abcdef0": digest("1"),
               "trajetto-ai:staged-abcdef0": digest("a"),
             },
-            { IMAGE_TAG: "sha-abcdef0" },
+            merge,
           );
 
           expect(result.status, result.stderr).toBe(0);
+          expect(result.outputs).toEqual({ commit: SHA, tag: "sha-abcdef0" });
         });
 
-        it("refuses a build staging never ran, or a marker on another digest", () => {
+        it("waits for a deploy still running, then refuses a build staging never ran", () => {
+          box.stub("seq", "printf '1\\n2\\n'");
+
           const missing = step(
             "promote-production",
             CHECK,
@@ -628,13 +690,21 @@ describe.skipIf(!hasShell("bash"))(
               ...built,
               "trajetto-ai:staged-abcdef0": digest("a"),
             },
-            { IMAGE_TAG: "sha-abcdef0" },
+            merge,
           );
 
           expect(missing.status).toBe(1);
-          expect(missing.stdout).toMatch(
-            /::error::trajetto-api:sha-abcdef0 existe no GHCR, mas o staging nunca rodou esse build/,
+          expect(missing.outputs.tag).toBeUndefined();
+          expect(missing.stdout).toContain(
+            "tentativa 2/40: o staging ainda não rodou abcdef0",
           );
+          expect(missing.stdout).toMatch(
+            /::error::O staging nunca rodou abcdef0 .*muda mais que documentação/,
+          );
+        });
+
+        it("refuses a marker on another digest once the wait is over", () => {
+          box.stub("seq", "printf '1\\n'");
 
           const other = step(
             "promote-production",
@@ -644,12 +714,12 @@ describe.skipIf(!hasShell("bash"))(
               "trajetto-api:staged-abcdef0": digest("1"),
               "trajetto-ai:staged-abcdef0": digest("b"),
             },
-            { IMAGE_TAG: "sha-abcdef0" },
+            merge,
           );
 
           expect(other.status).toBe(1);
           expect(other.stdout).toMatch(
-            /::error::.*trajetto-ai:staged-abcdef0 aponta para/,
+            /::error::O staging nunca rodou abcdef0 .*trajetto-ai:staged-abcdef0 aponta para/,
           );
         });
 
@@ -661,13 +731,30 @@ describe.skipIf(!hasShell("bash"))(
               "trajetto-api:sha-abcdef0": digest("1"),
               "trajetto-api:staged-abcdef0": digest("1"),
             },
-            { IMAGE_TAG: "sha-abcdef0" },
+            merge,
           );
 
           expect(result.status, result.stderr).toBe(0);
           expect(result.stdout).toContain(
             "::warning::trajetto-ai:sha-abcdef0 não existe",
           );
+        });
+
+        it("hands a rollback's typed tag through, exempt from the marker", () => {
+          const result = step(
+            "promote-production",
+            CHECK,
+            {},
+            {
+              EVENT: "workflow_dispatch",
+              TARGET_TAG: "sha-0a1b2c3",
+              CANDIDATE: "",
+            },
+          );
+
+          expect(result.status, result.stderr).toBe(0);
+          expect(result.outputs).toEqual({ tag: "sha-0a1b2c3" });
+          expect(box.calls("docker")).toEqual([]);
         });
       });
     });

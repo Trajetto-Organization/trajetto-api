@@ -710,8 +710,9 @@ describe("the contracted fleet (FLEET-VEH-1, FLEET-VEH-7)", () => {
       ),
     );
 
-    expect(responses.filter((r) => r.statusCode === 200)).toHaveLength(1);
-    expect(responses.filter((r) => r.statusCode === 409)).toHaveLength(2);
+    // The whole list, sorted: a failure shows every status that came back
+    // (one 200 and two 409s, nothing else), not only a wrong count.
+    expect(responses.map((r) => r.statusCode).sort()).toEqual([200, 409, 409]);
     expect(
       await prisma.vehicle.count({
         where: { businessId: LIMITED, status: { not: "INACTIVE" } },

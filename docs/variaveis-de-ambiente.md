@@ -121,6 +121,11 @@ Nenhum segredo vai para o repositório, para o log nem para um print. Segredos
 | `UV_THREADPOOL_SIZE`           | não    |         | número; `8` na imagem                                            | —                 | —                           | —                              | threads do libuv (bcrypt, gzip, fs, dns); só mude com medição                                                                                                                                    |
 | `APP_COMMIT_SHA`               | não    |         | commit (7–40 hex); vazio = `dev`                                 | —                 | — (a imagem traz)           | — (idem)                       | commit do build, gravado na imagem pelo pipeline (build arg `GIT_SHA`); `GET /health/liveness` devolve em `version`/`commit`. Nunca defina à mão                                                 |
 
+`NODE_ENV=test` é o das suítes (o E2E e as suítes de navegador da web, que
+sobem esta API): o e-mail fica numa caixa em memória do processo e nenhum
+servidor de e-mail é chamado; em `development`, o Ethereal; em `production`,
+o Resend (`src/shared/providers/mail-provider/mail-provider-for.ts`).
+
 ## 2. Banco de dados
 
 O banco de staging e o de produção são Databases **PostgreSQL** do Dokploy
@@ -383,13 +388,13 @@ privada restrita ao `run-release-migrations.sh`).
 
 ### Repositório
 
-| Nome                      | Tipo       | Valores                                                                                           | Para quê                                      |
-| ------------------------- | ---------- | ------------------------------------------------------------------------------------------------- | --------------------------------------------- |
-| `MIGRATIONS_VIA_JOB`      | variable   | `true`                                                                                            | migrations como job único no promote          |
-| `ROLLOUT_VERIFY`          | variable   | `off` (só emergência; pode ficar só num environment)                                              | desliga a conferência do rollout              |
-| `IMAGE_SCAN_ENFORCE`      | variable   | `true`                                                                                            | Trivy passa a falhar o build                  |
-| `CLIENT_REPOS_READ_TOKEN` | secret     | token só leitura de `Trajetto-Organization/trajetto-ui` e `Trajetto-Organization/trajetto-mobile` | contrato de rotas no `ci.yml`                 |
-| `GITHUB_TOKEN`            | automático | —                                                                                                 | GHCR (push/retag), `gh api`, semantic-release |
+| Nome                      | Tipo       | Valores                                                                                           | Para quê                                                                                       |
+| ------------------------- | ---------- | ------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
+| `MIGRATIONS_VIA_JOB`      | variable   | `true`                                                                                            | migrations como job único no promote                                                           |
+| `ROLLOUT_VERIFY`          | variable   | `off` (só emergência; pode ficar só num environment)                                              | desliga a conferência do rollout                                                               |
+| `IMAGE_SCAN_ENFORCE`      | variable   | `true`                                                                                            | um achado do Trivy passa a falhar o build (falha no download do banco ou erro do Trivy, nunca) |
+| `CLIENT_REPOS_READ_TOKEN` | secret     | token só leitura de `Trajetto-Organization/trajetto-ui` e `Trajetto-Organization/trajetto-mobile` | contrato de rotas no `ci.yml`                                                                  |
+| `GITHUB_TOKEN`            | automático | —                                                                                                 | GHCR (push/retag), `gh api`, semantic-release                                                  |
 
 Opcionais do `.github/scripts/dokploy-deploy.mjs` (não definidas hoje; o
 workflow define as outras): `DOKPLOY_WAIT` (`false` só dispara),

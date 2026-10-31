@@ -5,12 +5,15 @@ import { randomUUID } from "node:crypto";
 import { sign } from "jsonwebtoken";
 import auth from "@/config/auth";
 
+import { operationsRoom } from "@/shared/socket/operations-access";
+
 import { socketClientEntry } from "./support/socket-client";
 import {
   freePort,
   startReplica,
   type Replica,
 } from "./support/replica-process";
+import { emitHandled, waitForDisconnect } from "./support/socket-waits";
 import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
@@ -66,9 +69,11 @@ let sweeper: Replica;
 let isolated: Replica;
 
 interface TestSocket {
+  id: string;
   on: Function;
   off: Function;
-  emit: Function;
+  once: (event: string, listener: (...args: unknown[]) => void) => unknown;
+  emit: (...args: unknown[]) => unknown;
   disconnect: () => void;
   connected: boolean;
 }
@@ -123,8 +128,6 @@ function waitFor(
     socket.on(event, handler);
   });
 }
-
-const sleep = (ms: number) => new Promise((done) => setTimeout(done, ms));
 
 const position = () => ({
   driverId: "018fde00-0000-7000-8000-0000000000d1",
@@ -290,7 +293,7 @@ describe("a permission removed on another replica", () => {
     const { token } = await sessionFor(RESUBSCRIBER, "BUSINESS_USER", CARRIER);
     const socket = await connectTo(two.port, token);
 
-    await sleep(1_500);
+    await two.waitForRoom(socket.id, operationsRoom(CARRIER), true);
 
     // It IS in the room, across replicas, before anything happens.
     const before = waitFor(socket, "driverPosition");
@@ -309,12 +312,12 @@ describe("a permission removed on another replica", () => {
       payload: { reason: "permissions_changed" },
     });
 
-    await sleep(2_000);
+    // Replica 2 re-reads the dispatcher and takes them out of the room.
+    await two.waitForRoom(socket.id, operationsRoom(CARRIER), false);
 
     // What the control tower does on mount — or anybody, from the console.
-    socket.emit("operationsSubscribe", { businessId: CARRIER });
-
-    await sleep(1_500);
+    // Acknowledged once handled: refused, here, after the database read.
+    await emitHandled(socket, "operationsSubscribe", { businessId: CARRIER });
 
     const after = waitFor(socket, "driverPosition");
     await one.run({
@@ -338,7 +341,7 @@ describe("a MASTER demoted with no event at all", () => {
     const { token } = await sessionFor(MASTER, "MASTER", null);
     const socket = await connectTo(two.port, token);
 
-    await sleep(1_000);
+    await two.waitForRoom(socket.id, `user:${MASTER}`, true);
 
     // The edit whose `user_updated` frame never arrived.
     await prisma.user.update({
@@ -346,7 +349,8 @@ describe("a MASTER demoted with no event at all", () => {
       data: { role: "BUSINESS_USER" },
     });
 
-    const ended = waitFor(socket, "securityAction", 6_000);
+    // A deadline for the database read the subscribe makes, not a guess.
+    const ended = waitFor(socket, "securityAction", 15_000);
 
     socket.emit("operationsSubscribe", { businessId: CARRIER });
 
@@ -388,10 +392,19 @@ describe("the periodic sweep, with nothing announced", () => {
     const lostSocket = await connectTo(sweeper.port, permissionLost.token);
     const untouchedSocket = await connectTo(sweeper.port, untouched.token);
 
-    await sleep(1_500);
+    for (const [socket, userId] of [
+      [revokedSocket, FAMILY_REVOKED],
+      [bumpedSocket, VERSION_BUMPED],
+      [lostSocket, PERMISSION_LOST],
+      [untouchedSocket, UNTOUCHED],
+    ] as const) {
+      await sweeper.waitForRoom(socket.id, `user:${userId}`, true);
+    }
 
-    const revokedEnd = waitFor(revokedSocket, "securityAction", SWEEP_MS * 5);
-    const bumpedEnd = waitFor(bumpedSocket, "securityAction", SWEEP_MS * 5);
+    // Generous deadlines for what must happen; the untouched socket's window
+    // stays five sweeps — that one is a negative.
+    const revokedEnd = waitFor(revokedSocket, "securityAction", 30_000);
+    const bumpedEnd = waitFor(bumpedSocket, "securityAction", 30_000);
     const untouchedEnd = waitFor(
       untouchedSocket,
       "securityAction",
@@ -421,6 +434,11 @@ describe("the periodic sweep, with nothing announced", () => {
     expect(untouchedSocket.connected).toBe(true);
 
     // The permission loss is authorization: out of the room, still connected.
+    // Its change was the last of the three written: a sweep that read between
+    // the second and the third ended the others and kept this one for the
+    // next pass. Waited for, rather than assumed done with the others.
+    await sweeper.waitForRoom(lostSocket.id, operationsRoom(CARRIER), false);
+
     const lostHears = waitFor(lostSocket, "driverPosition");
     const untouchedHears = waitFor(untouchedSocket, "driverPosition");
 
@@ -441,7 +459,7 @@ describe("a revocation while Redis is down", () => {
     const { token } = await sessionFor(ON_DEAD_REDIS, "BUSINESS_USER", CARRIER);
     const socket = await connectTo(isolated.port, token);
 
-    await sleep(1_000);
+    await isolated.waitForRoom(socket.id, `user:${ON_DEAD_REDIS}`, true);
 
     const announced = waitFor(socket, "securityAction");
 
@@ -453,7 +471,7 @@ describe("a revocation while Redis is down", () => {
 
     expect(await announced).toMatchObject({ reason: "access_revoked" });
 
-    await sleep(1_500);
+    await waitForDisconnect(socket).catch(() => undefined);
 
     expect(socket.connected, "o socket revogado continuou conectado").toBe(
       false,

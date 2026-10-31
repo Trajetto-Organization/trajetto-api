@@ -24,6 +24,12 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+# `bash -eo pipefail` for every `run:`, as in deploy.yml (GitHub's default
+# for a step with no `shell:` is `bash -e`, without pipefail).
+defaults:
+  run:
+    shell: bash
+
 env:
   NODE_ENV: test
   DATABASE_URL: postgresql://postgres:postgres@localhost:5432/test_db
@@ -42,15 +48,18 @@ env:
 jobs:
   validate:
     name: Lint, type-check and unit tests
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    # Measured 6-10 min on the 2-vCPU runner.
+    timeout-minutes: 30
 
     # One unit file needs a real Redis: tests/unitaires/socket/
     # adapter-channel-isolation.test.ts proves that two Socket.IO adapters on
     # one Redis are kept apart by the channel prefix, not by the database
     # number. Nothing else in the unit suite touches it (no Postgres here).
+    # Pinned by the same digest as deploy.yml (and the other repositories).
     services:
       redis:
-        image: redis:7-alpine
+        image: redis:7-alpine@sha256:8da19c7399dca900c6822a1cf30f9d2285585e2c4b457ff4095b0f4500054d3f # redis:7-alpine (7.4.12)
         options: >-
           --health-cmd "redis-cli ping"
           --health-interval 10s
@@ -87,8 +96,16 @@ jobs:
 
       # The same branch in the sibling repository first: a change that spans
       # the repositories (routes, socket events) is tested against its own
-      # counterpart, not against their default branch. Falls back to the
-      # default branch when there is no branch of that name.
+      # counterpart. Falls back to the sibling's staging when there is no
+      # branch of that name: work branches come from staging and go back to
+      # it, while main can be behind it (a change on staging not promoted yet
+      # would fail every work branch without a defect of its own).
+      #
+      # Only "no such branch" falls back: `git ls-remote --exit-code` answers
+      # 2 for it, on purpose, with a notice. Any other code (128: network,
+      # credentials) used to fall back too, silently, and tested this branch
+      # against the default one; now it is tried 3 times with growing pauses
+      # and then fails, saying the probe could not reach GitHub.
       - name: Pick the sibling branches
         id: refs
         if: steps.clients.outputs.enabled == 'true'
@@ -102,13 +119,29 @@ jobs:
           for pair in web:trajetto-ui app:trajetto-mobile; do
             key=${pair%%:*}
             repo=${pair#*:}
-            if git -c "http.https://github.com/.extraheader=" -c "http.https://github.com/.extraheader=$auth" ls-remote --exit-code --heads \
-              "https://github.com/Trajetto-Organization/${repo}.git" "refs/heads/${BRANCH}" > /dev/null; then
-              echo "${key}=${BRANCH}" >> "$GITHUB_OUTPUT"
-              echo "${repo}: branch ${BRANCH}"
-            else
-              echo "${repo}: sem a branch ${BRANCH}; usando a padrão"
-            fi
+            for attempt in 1 2 3; do
+              code=0
+              git -c "http.https://github.com/.extraheader=" -c "http.https://github.com/.extraheader=$auth" ls-remote --exit-code --heads \
+                "https://github.com/Trajetto-Organization/${repo}.git" "refs/heads/${BRANCH}" > /dev/null || code=$?
+              case "$code" in
+                0)
+                  echo "${key}=${BRANCH}" >> "$GITHUB_OUTPUT"
+                  echo "${repo}: branch ${BRANCH}"
+                  break
+                  ;;
+                2)
+                  echo "${key}=staging" >> "$GITHUB_OUTPUT"
+                  echo "::notice::${repo} não tem a branch ${BRANCH}: o contrato de rotas usa a staging de ${repo}, de onde saem as branches de trabalho."
+                  break
+                  ;;
+              esac
+              if [ "$attempt" -eq 3 ]; then
+                echo "::error::Não deu para consultar as branches de ${repo} no GitHub depois de 3 tentativas (git ls-remote, código ${code}: rede ou credencial). O contrato de rotas não foi testado contra a staging por engano."
+                exit 1
+              fi
+              echo "::warning::A consulta das branches de ${repo} falhou (git ls-remote, código ${code}; tentativa ${attempt} de 3). De novo em $((attempt * 10))s."
+              sleep $((attempt * 10))
+            done
           done
 
       - name: Check out the web next to this repository
@@ -141,16 +174,41 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
-          node-version: "22"
+          # The Dockerfile base's exact version, as in deploy.yml.
+          node-version: "22.21.1"
           cache: "yarn"
+
+      # The postinstall of @prisma/engines downloads the schema engine from
+      # binaries.prisma.sh on every install; cached by its version, as in
+      # deploy.yml. Nothing here needs it (no migration), so no check.
+      - name: Prisma engines version
+        id: prisma-engines
+        run: |
+          version=$(awk '/^"?@prisma\/engines-version@/ { getline; gsub(/[" \r]/, "", $2); print $2; exit }' yarn.lock)
+          if [ -z "$version" ]; then
+            echo "::error::Não achei a versão de @prisma/engines-version no yarn.lock."
+            exit 1
+          fi
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+
+      - name: Cache the Prisma engines
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ~/.cache/prisma
+          key: prisma-engines-${{ runner.os }}-${{ steps.prisma-engines.outputs.version }}
 
       - name: Install dependencies
         run: yarn install --frozen-lockfile
 
       # A CRITICAL advisory in a production dependency fails the branch
-      # (INFRA-16). The reasoned, dated exceptions live in audit-ci.jsonc.
+      # (INFRA-16) when this push changes the dependencies or audit-ci.jsonc;
+      # otherwise it is reported without blocking (audit-gate.sh). A new
+      # branch's first push has no base to compare, and blocks. The reasoned,
+      # dated exceptions live in audit-ci.jsonc.
       - name: Audit production dependencies
-        run: npx --yes audit-ci@7.1.0 --config audit-ci.jsonc
+        env:
+          AUDIT_BASE: ${{ github.event.before }}
+        run: bash .github/scripts/audit-gate.sh
 
       # First check of all, because it is the cheapest one. There is no point
       # spending minutes on tsc and vitest if the code is not even formatted.
@@ -162,7 +220,14 @@ jobs:
       - name: Generate Prisma client
         run: yarn prisma:generate
 
+      # tsc holds about 2.3 GB live for this project, and Node's default
+      # heap on a 7-8 GB runner (a private repository's) is about 2 GB: the
+      # check died there with "JavaScript heap out of memory", measured in a
+      # 7 GB Linux container on 30/10/2026. A fixed 4 GB no longer depends on
+      # the runner's size.
       - name: Type-check
+        env:
+          NODE_OPTIONS: --max-old-space-size=4096
         run: yarn typecheck
 
       - name: Create tmp directory
@@ -189,7 +254,9 @@ jobs:
   # `--redact` keeps the secret itself out of the log.
   secrets:
     name: Secret scan (gitleaks)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    # Measured under 30 s.
+    timeout-minutes: 10
     permissions:
       contents: read
 
@@ -207,10 +274,14 @@ jobs:
 
   # The trajetto-ai service (infra/ai-ocr, ADR 0010): its pytest suite runs
   # INSIDE the image it ships in — the `test` stage builds the same base
-  # (hashed wheels, SHA-256-checked models) and runs as the runtime user.
+  # (hashed wheels, the versioned models checked by SHA-256, offline) and
+  # runs as the runtime user. The same build and cache scope as deploy.yml's
+  # ai-ocr job (a branch reads its own cache and the default branch's).
   ai-ocr:
     name: AI OCR service (image + pytest)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    # Measured ~1 min; a build with no cache downloads the wheels again.
+    timeout-minutes: 30
     permissions:
       contents: read
 
@@ -218,15 +289,28 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
+        with:
+          driver-opts: image=moby/buildkit:v0.33.1@sha256:cec9f139f45e93c5c69c60f8b07cfad9f43f4ef6b6a6cd917527fea5ff2e3dea
+
       - name: Build the image and run its tests
-        run: docker build --target test infra/ai-ocr
+        uses: docker/build-push-action@ca052bb54ab0790a636c9b5f226502c73d547a25 # v5.4.0
+        with:
+          context: ./infra/ai-ocr
+          target: test
+          push: false
+          cache-from: type=gha,scope=ai-test
+          cache-to: type=gha,mode=max,scope=ai-test,ignore-error=true
 
   # Opt-in: the API's reader and rules against the real container (needs
   # Docker and ~1 GiB, so only on a manual run). tests/ai-local.
   ai-local-e2e:
     name: AI local contract (manual)
     if: github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    # Builds the AI image (no cache) and reads the fixtures through it.
+    timeout-minutes: 45
     permissions:
       contents: read
 
@@ -237,7 +321,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
-          node-version: "22"
+          node-version: "22.21.1"
           cache: "yarn"
 
       - name: Install dependencies

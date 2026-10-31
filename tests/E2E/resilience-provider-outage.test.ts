@@ -1,4 +1,12 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import {
+  afterAll,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 
 import { FakeProvider } from "./support/fake-provider";
 import {
@@ -127,7 +135,6 @@ describe("an e-mail provider that is down (provider outage)", () => {
 
       await waitForAttempt(emails, 1, "a primeira tentativa", ROWS);
 
-      const firstFailedAt = Date.now();
       const afterFirst = await emails();
 
       expect(afterFirst.map((row) => row.status)).toEqual(
@@ -137,8 +144,14 @@ describe("an e-mail provider that is down (provider outage)", () => {
       // The schedule's first step is 30 s ± 20 %: every row is out of the
       // claim's range for at least ~24 s, and they do not all come back at the
       // same instant.
+      //
+      // Measured on each row, from the write that recorded its failure: the
+      // replica sets availableAt (now + backoff) and updated_at in the same
+      // UPDATE, from the same clock. Against the test's clock after the
+      // polling, the time between the first and the last of the 30 failures
+      // ate into the margin under load.
       const dueIn = afterFirst.map(
-        (row) => row.availableAt.getTime() - firstFailedAt,
+        (row) => row.availableAt.getTime() - row.updated_at.getTime(),
       );
 
       expect(Math.min(...dueIn)).toBeGreaterThan(20_000);
@@ -273,10 +286,23 @@ describe("a webhook receiver that is down", () => {
       await waitForAttempt(rows, 2, "a segunda tentativa dos webhooks", 20);
 
       // Ten rows per endpoint, two rounds: twenty failures in a row each.
-      const endpoints = await prisma.webhookEndpoint.findMany();
+      //
+      // Waited for, not read once. The dispatcher records a failed attempt on
+      // its row, THEN counts it on the endpoint, and the twentieth count is
+      // what switches the endpoint off (one more transaction). Every row can
+      // already read "attempt 2, back in the queue" while that last count is
+      // still on its way: the single read landed there under load ("expected
+      // false to be true").
+      await vi.waitFor(
+        async () => {
+          const endpoints = await prisma.webhookEndpoint.findMany();
 
-      expect(endpoints.every((endpoint) => endpoint.disabled_at !== null)).toBe(
-        true,
+          expect(endpoints).toHaveLength(2);
+          expect(
+            endpoints.every((endpoint) => endpoint.disabled_at !== null),
+          ).toBe(true);
+        },
+        { timeout: 30_000, interval: 100 },
       );
 
       const callsWhenSwitchedOff = fake.callsOf("webhook").length;
@@ -284,20 +310,28 @@ describe("a webhook receiver that is down", () => {
       // Due again, and claimed: held until the endpoint is turned back on
       // (up to 30 days), with no call and no attempt spent (WH-05).
       await makeRetriesDue(prisma);
-      await new Promise((done) => setTimeout(done, 3_000));
 
-      expect(fake.callsOf("webhook")).toHaveLength(callsWhenSwitchedOff);
-
-      const held = await rows();
+      // Until every row is parked — a state the claim can no longer reach, so
+      // any call there was to make has been made by then. It used to be a
+      // 3 s sleep that assumed the claim had run in that time.
       const inAWeek = Date.now() + 7 * 24 * 60 * 60 * 1000;
 
-      expect(
-        held.every(
-          (row) =>
-            row.status === "PENDING" && row.availableAt.getTime() > inAWeek,
-        ),
-      ).toBe(true);
-      expect(held.every((row) => row.attempts <= 2)).toBe(true);
+      await vi.waitFor(
+        async () => {
+          const held = await rows();
+
+          expect(
+            held.every(
+              (row) =>
+                row.status === "PENDING" && row.availableAt.getTime() > inAWeek,
+            ),
+          ).toBe(true);
+        },
+        { timeout: 30_000, interval: 100 },
+      );
+
+      expect(fake.callsOf("webhook")).toHaveLength(callsWhenSwitchedOff);
+      expect((await rows()).every((row) => row.attempts <= 2)).toBe(true);
     },
   );
 });

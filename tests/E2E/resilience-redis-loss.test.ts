@@ -27,6 +27,8 @@ import {
   waitUntilSettled,
   type ResilienceSeed,
 } from "./support/resilience-seed";
+import { operationsRoom } from "@/shared/socket/operations-access";
+
 import { socketClientEntry } from "./support/socket-client";
 import { createPrismaClient } from "@/shared/database/database-client";
 
@@ -63,6 +65,7 @@ let httpPort = 0;
 const socketReplicas: Replica[] = [];
 
 interface TestSocket {
+  id: string;
   on: Function;
   off: Function;
   disconnect: () => void;
@@ -296,8 +299,9 @@ describe.skipIf(!enabled)(
 
         watcher = await connectTo(listener.port, await watcherToken());
 
-        // The connection handler reads the user and the profile before joining.
-        await new Promise((done) => setTimeout(done, 2_500));
+        // The connection handler reads the user and the profile before
+        // joining: wait for the room, as the listener records it.
+        await listener.waitForRoom(watcher.id, operationsRoom(BUSINESS), true);
 
         const before = collect(watcher, 1, 4_000);
 

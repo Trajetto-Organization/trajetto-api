@@ -25,6 +25,11 @@ import {
  * Talks over stdin/stdout because that is the least machinery that works:
  * a line in is "emit this", a line out is "done". Anything richer would be a
  * second network to debug when the first one is what is under test.
+ *
+ * One question goes the other way: `members` answers which of THIS replica's
+ * sockets are in a room (`MEMBERS <id> <json>`), read from its own room
+ * index. The tests wait on that instead of sleeping while the replica reads
+ * the database before a join or a leave.
  */
 const port = Number(process.argv[2]);
 
@@ -35,10 +40,15 @@ interface Command {
 
     // What an admin's edit on THIS replica fires; `payload` is the event.
     | "securityToBusiness"
-    | "securityToUser";
+    | "securityToUser"
+
+    // A question, not an emit: `payload` is { id, room }.
+    | "members";
   businessId: string;
   payload: Record<string, unknown>;
 }
+
+let io: Awaited<ReturnType<typeof initializeSocketIO>> | null = null;
 
 async function main(): Promise<void> {
   const server = createServer((_request, response) => {
@@ -47,7 +57,7 @@ async function main(): Promise<void> {
 
   await new Promise<void>((done) => server.listen(port, "127.0.0.1", done));
 
-  await initializeSocketIO(server);
+  io = await initializeSocketIO(server);
 
   // The parent waits for this line before connecting anything.
   process.stdout.write(`READY ${port}\n`);
@@ -81,6 +91,18 @@ async function main(): Promise<void> {
 
 function run(line: string): void {
   const command = JSON.parse(line) as Command;
+
+  if (command.kind === "members") {
+    const members = [
+      ...(io?.of("/").adapter.rooms.get(String(command.payload.room)) ?? []),
+    ];
+
+    process.stdout.write(
+      `MEMBERS ${String(command.payload.id)} ${JSON.stringify(members)}\n`,
+    );
+
+    return;
+  }
 
   if (command.kind === "routeEvent") {
     sendRouteEventToBusiness(command.businessId, command.payload as never);

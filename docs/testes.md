@@ -28,7 +28,7 @@
 | Suíte                    | Onde                              | Como rodar                                           | Precisa de                                                                                                                     | Prova                                                                                                                |
 | ------------------------ | --------------------------------- | ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------- |
 | Unitários                | `tests/unitaires` (~480 arquivos) | `yarn test`                                          | Node; um Redis em `REDIS_URL` para `socket/adapter-channel-isolation.test.ts` (alguns arquivos sobem a API inteira em memória) | regras de negócio com os gêmeos in-memory, schemas, contratos de rota/OpenAPI, workflows e scripts de infra          |
-| E2E                      | `tests/E2E` (~290 arquivos)       | `yarn test:e2e`                                      | Postgres 16 e Redis 7 reais                                                                                                    | HTTP de ponta a ponta, SQL real, autorização e isolamento entre empresas, planos de consulta, filas, crons, réplicas |
+| E2E                      | `tests/E2E` (~300 arquivos)       | `yarn test:e2e` (duas fases)                         | Postgres 16 e Redis 7 reais                                                                                                    | HTTP de ponta a ponta, SQL real, autorização e isolamento entre empresas, planos de consulta, filas, crons, réplicas |
 | Contrato de repositórios | `tests/contract`                  | junto com o E2E (os `*-repository-contract.test.ts`) | Postgres                                                                                                                       | o gêmeo in-memory e o repositório Prisma respondem igual                                                             |
 | Serviço de IA (Python)   | `infra/ai-ocr/tests`              | `docker build --target test infra/ai-ocr`            | Docker                                                                                                                         | o servidor de OCR, dentro da imagem que vai para produção                                                            |
 | Contrato com a IA real   | `tests/ai-local`                  | `AI_LOCAL_E2E=1 npx vitest run tests/ai-local`       | Docker, ~1 GiB                                                                                                                 | o leitor e as regras da API contra o contêiner `trajetto-ai` de verdade                                              |
@@ -36,11 +36,15 @@
 | Mutação                  | `stryker.config.mjs`              | `yarn test:mutation`                                 | Postgres e Redis de teste                                                                                                      | que os testes das regras críticas matam mutantes                                                                     |
 
 Tudo com Vitest 1.6 (`vite.config.mts`): `setupTests.ts` carrega o
-`reflect-metadata`; arquivos em `tests/E2E/**` usam o ambiente
-`prisma` (um banco por arquivo) e o pool `forks` (um processo por arquivo —
-o engine nativo do Prisma 6 entrava em pânico quando vários arquivos dividiam
-um processo; o Prisma 7 não tem engine nativo, e o `forks` segue até que
-`threads` seja medido). Todo `PrismaClient` dos testes nasce em
+`reflect-metadata` e instala a trava de rede (abaixo,
+[Nenhuma rede de fora](#nenhuma-rede-de-fora)); arquivos em `tests/E2E/**` usam o ambiente
+`prisma` (um banco por arquivo). Todo arquivo, unitário ou E2E, roda no pool
+`forks` (um processo por arquivo). Com o pool `threads` (um processo, uma
+thread por arquivo), a rodada inteira morria sem mensagem nenhuma, com exit
+127: o E2E no Prisma 6 (o engine nativo entrava em pânico quando vários
+arquivos dividiam um processo) e, em 30/10/2026, a suíte unitária no
+Windows, 3 rodadas em 10, cada uma registrada pelo Windows como corrupção de
+heap do `node.exe` (0xc0000374). Com `forks`: 0 em 8, no mesmo tempo. Todo `PrismaClient` dos testes nasce em
 `createPrismaClient` (`src/shared/database/database-client.ts`), o mesmo
 caminho da aplicação: o Prisma 7 exige o driver adapter.
 
@@ -50,7 +54,7 @@ caminho da aplicação: o Prisma 7 exige o driver adapter.
 | ------------------------------ | ---------------------------------------------------------------------------------------------------------- |
 | `yarn test`                    | unitários (`vitest run --dir tests/unitaires`)                                                             |
 | `yarn test:watch`              | unitários em modo watch                                                                                    |
-| `yarn test:e2e`                | E2E (`vitest run --dir ./tests/E2E`)                                                                       |
+| `yarn test:e2e`                | E2E em duas fases (`infra/scripts/run-e2e.mjs`): o resto em paralelo, depois as réplicas, um por vez       |
 | `yarn test:e2e:watch`          | E2E em modo watch                                                                                          |
 | `yarn test:coverage`           | unitários com cobertura e **piso** (`coverage/unit`)                                                       |
 | `yarn test:coverage:e2e`       | cobertura do E2E em lotes de 8, juntada com a unitária em `coverage/all` (`infra/scripts/coverage-e2e.sh`) |
@@ -75,16 +79,16 @@ constructor`). O CI e a imagem instalam do zero e não precisam disso.
 Uma pasta por domínio (`delivery/`, `route/`, `chat/`, `fuel/`…) e pastas
 transversais:
 
-| Pasta                                            | O que guarda                                                                                                                                                                                                                                                                                                                                                                        |
-| ------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `contract/`                                      | contratos com os clientes: rotas que a web e o app chamam (`client-routes`, lê `../trajetto-ui` e `../trajetto-mobile` quando existem), rotas aposentadas (`retired-routes`, compara com `origin/main`), corpos do outbox do app (`outbox-body-contract`, fixtures `mobile-outbox-v1`/`-v2`), OpenAPI, NDJSON, exemplos de resposta, classes de erro, defaults dos gêmeos in-memory |
-| `lifecycle/`                                     | infra executada de verdade: workflows (`promote-workflow`, `staging-deploy-workflow`, `supply-chain`, `secrets-hygiene`, `compose-ci-siblings`), imagens (`image-layers`, `image-scan`), scripts (`release-migrations`, `compose-rollout-verify`, `backup-scripts`, `dokploy-deploy`, `wait-for-version`), migrations (`migration-safety`), boot e workers                          |
-| `security/`                                      | JWT, 2FA, mensagens de unicidade, `.env.example` contra o schema                                                                                                                                                                                                                                                                                                                    |
-| `integration/`                                   | API pública, portal de documentação, webhooks                                                                                                                                                                                                                                                                                                                                       |
-| `env/`                                           | o env-schema e a URL do banco de teste                                                                                                                                                                                                                                                                                                                                              |
-| `quality/`                                       | a configuração de cobertura                                                                                                                                                                                                                                                                                                                                                         |
-| `time/`                                          | dia de negócio; varre `src/` atrás de conta de dia com o relógio do servidor                                                                                                                                                                                                                                                                                                        |
-| `health/`, `logging/`, `socket/`, `resilience/`… | o resto do que atravessa domínios                                                                                                                                                                                                                                                                                                                                                   |
+| Pasta                                            | O que guarda                                                                                                                                                                                                                                                                                                                                                                                                            |
+| ------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `contract/`                                      | contratos com os clientes: rotas que a web e o app chamam (`client-routes`, lê `../trajetto-ui` e `../trajetto-mobile` quando existem), rotas aposentadas (`retired-routes`, compara com `origin/main`), corpos do outbox do app (`outbox-body-contract`, fixtures `mobile-outbox-v1`/`-v2`), OpenAPI, NDJSON, exemplos de resposta, classes de erro, defaults dos gêmeos in-memory                                     |
+| `lifecycle/`                                     | infra executada de verdade: workflows (`promote-workflow`, `staging-deploy-workflow`, `supply-chain`, `secrets-hygiene`, `compose-ci-siblings`, `ci-stability`), imagens (`image-layers`, `image-scan`), scripts (`release-migrations`, `compose-rollout-verify`, `backup-scripts`, `dokploy-deploy`, `wait-for-version`, `ghcr-script`, `staged-build`, `audit-gate`), migrations (`migration-safety`), boot e workers |
+| `security/`                                      | JWT, 2FA, mensagens de unicidade, `.env.example` contra o schema                                                                                                                                                                                                                                                                                                                                                        |
+| `integration/`                                   | API pública, portal de documentação, webhooks                                                                                                                                                                                                                                                                                                                                                                           |
+| `env/`                                           | o env-schema e a URL do banco de teste                                                                                                                                                                                                                                                                                                                                                                                  |
+| `quality/`                                       | a configuração de cobertura                                                                                                                                                                                                                                                                                                                                                                                             |
+| `time/`                                          | dia de negócio; varre `src/` atrás de conta de dia com o relógio do servidor                                                                                                                                                                                                                                                                                                                                            |
+| `health/`, `logging/`, `socket/`, `resilience/`… | o resto do que atravessa domínios                                                                                                                                                                                                                                                                                                                                                                                       |
 
 Os testes de usecase usam os gêmeos in-memory (`repositories/in-memory/`), que
 precisam ter a mesma semântica do Prisma (filtros, ordem, nulos, unicidade,
@@ -125,6 +129,119 @@ mesmo valor com `ALTER SYSTEM` e reinicia o contêiner. O `socket.io-client`
 dos testes de socket é devDependency da API (mesma versão da web): basta o
 `yarn install` daqui.
 
+### As duas fases do `yarn test:e2e`
+
+Os arquivos que sobem réplicas inteiras da API como processos próprios
+(`pipeline-replica-process.ts`, `replica-process.ts`) estão listados em
+`tests/E2E/support/replica-files.ts`. O Vitest conta um processo por arquivo;
+uma réplica é mais um, dois ou três que ele não vê. Rodando ao lado do resto
+num runner de 2 ou 4 vCPU (o GitHub dá 2 vCPU a repositório privado e 4 a
+público), eles amplificavam a carga sobre todo teste que depende de tempo.
+Por isso o `yarn test:e2e` roda em duas fases, escolhidas pela variável
+`E2E_PHASE` no `vite.config.mts`:
+
+1. `shared`: todos os outros arquivos, em paralelo;
+2. `replicas`: os da lista, **um arquivo por vez**, depois da primeira fase.
+
+A segunda fase roda mesmo se a primeira falhou (um run do CI mostra todas as
+falhas), e o código de saída é o primeiro diferente de zero. Os argumentos vão
+para as duas fases (o CI passa `--run --reporter=basic`). Com um filtro
+(`yarn test:e2e route`), a fase que não tiver arquivo correspondente passa
+vazia; sem filtro, uma fase sem arquivo falha. Para um arquivo só, continue com
+`npx vitest run tests/E2E/<arquivo>.test.ts` (sem `E2E_PHASE`, tudo entra
+como antes). `quality/e2e-replica-isolation.test.ts` falha se um arquivo que
+sobe réplicas ficar fora da lista ou se a lista citar um que não sobe mais.
+
+### Nenhuma rede de fora
+
+Decisão D7 da auditoria do CI (30/10/2026): um pipeline só pode falhar por
+defeito do código, e um teste que fala com um terceiro falha quando o
+terceiro falha. O `setupTests.ts` instala
+`tests/support/outbound-network-guard.ts` em todo arquivo (unitário e E2E):
+toda conexão TCP vai para o loopback ou para os hosts de `DATABASE_URL`,
+`TEST_DATABASE_URL`, `REDIS_URL`, `REDIS_HOST`, `AI_LOCAL_URL` e
+`MINIO_TEST_ENDPOINT`; qualquer outra
+é recusada antes de resolver o nome (quando quem conecta traz a própria
+resolução, como o cliente de webhooks, vale o endereço que ela devolve;
+`ECONNREFUSED` com a explicação), e o
+arquivo **falha no fim** com a lista, mesmo quando a conexão era "dispare e
+esqueça" e nenhuma asserção perceberia. As réplicas que um teste sobe não
+carregam a trava: apontam cada provedor para o falso local do teste
+(`pipeline-replica.ts`).
+
+O caso que motivou a trava foi o e-mail: com `NODE_ENV=test`, a API mandava
+tudo pelo Ethereal (uma conta criada em `api.nodemailer.com` e uma sessão SMTP
+com `smtp.ethereal.email` a cada run). Agora, com `NODE_ENV=test`, o
+`MailProvider` é a caixa em memória do processo
+(`src/shared/providers/mail-provider/implementations/test-inbox-mail-provider.ts`):
+renderiza o template como os provedores reais e não envia nada. Ela só existe
+com `NODE_ENV=test`, conferido duas vezes no construtor: o `NODE_ENV` do
+ambiente (lido em tempo de execução, então um `NODE_ENV=test` posto numa
+Application passaria sozinho) e o do build (a expressão `process.env.NODE_ENV`
+escrita por extenso, que o tsup troca por `"production"` na imagem). Numa
+imagem ela nunca liga, diga o contêiner o que disser.
+`mail/mail-provider-for.test.ts` prova a escolha (produção → Resend,
+desenvolvimento → Ethereal, teste → caixa em memória) e as duas travas. O
+Turnstile da API fica desligado sem `TURNSTILE_SECRET_KEY`, o WhatsApp sem
+`META_WHATSAPP_*`, e o push só sai para tokens que o teste cadastra (com o
+cliente da Expo trocado por um falso).
+
+### Esperar por estado, nunca por tempo
+
+Um `setTimeout` fixo esperando o servidor "terminar" é chute: numa máquina
+carregada o caso positivo lê como "nunca chegou" e o negativo passa pelo
+motivo errado. As ferramentas:
+
+- **Salas do Socket.IO** (`tests/E2E/support/socket-waits.ts`):
+  `waitForRoom(io, socketId, sala, dentro)` lê o índice de salas do próprio
+  servidor; `emitHandled(socket, evento, payload)` espera o
+  _acknowledgement_ vazio de `operationsSubscribe`/`chatSubscribe` (tratado,
+  sem dizer o veredito); `waitForDisconnect`; `waitUntil` para o resto. Numa
+  réplica de outro processo, `replica.waitForRoom(...)` pergunta à réplica
+  (`MEMBERS`, em `socket-replica.ts`).
+- **Pipeline de notificações**: chamar `runOutboxCycle()`/`runDeliveryCycle()`
+  com um ciclo já rodando entra nele e espera a passada extra (ver
+  [`arquitetura.md`](./arquitetura.md), "Outbox, filas e efeitos externos").
+  Num arquivo que dirige o pipeline à mão, segure o despertar automático
+  (`vi.spyOn(pipeline, "wake").mockImplementation(() => undefined)`), como
+  `route-stop-on-the-way.test.ts` e `notification-pipeline.test.ts`.
+- **Réplicas do pipeline**: `startPipelineReplica({ expandFirst: true })`
+  expande o outbox inteiro antes de as raias de entrega começarem, para um
+  teste de lote não medir até onde a expansão chegou;
+  `resilience-crash-after-accept.test.ts` mata a réplica só quando os 5 envios
+  estão no provedor e as 20 entregas reivindicadas.
+- **Estado que o produto grava em dois passos** (a falha do webhook na linha,
+  depois no contador e no desligamento do endpoint): `vi.waitFor` com prazo,
+  como `resilience-provider-outage.test.ts`.
+- **Duração**: meça na própria linha (o backoff é `availableAt` menos
+  `updated_at`, gravados no mesmo UPDATE) ou afirme a propriedade em vez do
+  tempo (as sondas em paralelo de `health/provider-readiness.test.ts` seguram a
+  resposta até a última começar; `delivery/proof-pdf-isolation.test.ts` espia
+  o pdfkit e o zlib desta thread em vez de medir o travamento do event loop).
+
+Uma janela negativa ("não pode chegar em N s") só vale depois de confirmado o
+estado que torna a resposta certa (o socket na sala, o pedido tratado).
+
+### O relógio do banco
+
+As filas comparam o `now()` do Postgres com horários que o processo gravou
+(`availableAt` vem do cliente do Prisma, e todo backoff é
+`new Date(Date.now() + atraso)`). Com o banco atrasado, uma linha gravada
+"agora" ainda não venceu para o claim, e o teste lê a linha intocada. Nos
+runners Linux (o CI) o contêiner usa o relógio do próprio host e a diferença
+é zero. No Docker Desktop a VM atrasa: segundos depois de a máquina dormir, e
+dezenas de milissegundos numa rodada longa e pesada (medido em 30/10/2026:
+21 a 43 ms atrás durante a fase das réplicas, zero de novo com a máquina
+parada). O ambiente `prisma` mede antes de criar cada banco: com mais de 1 s
+de diferença ele **recusa começar**; com mais de 20 ms atrás, escreve um aviso
+no arquivo (um teste que reivindica uma linha logo depois de gravá-la pode
+falhar ali sem defeito no código). Nos dois casos: `wsl --shutdown` (ou
+reiniciar o Docker Desktop) e rodar de novo. Gravar `availableAt` pelo relógio
+do banco (`@default(dbgenerated(...))`) foi avaliado e descartado: o
+`prisma migrate diff` passa a apontar diferença para sempre nessas colunas.
+
+### O padrão de um E2E HTTP
+
 O padrão de um E2E HTTP: um `PrismaClient` próprio semeia empresas,
 usuários e dados com ids fixos; `import("@/http")` sobe a API; tokens são
 assinados com a chave de teste; as requisições passam pela pilha real
@@ -155,9 +272,11 @@ errada.
 ## Serviço de IA (`infra/ai-ocr` e `tests/ai-local`)
 
 - **Pytest dentro da imagem**: `docker build --target test infra/ai-ocr`. O
-  stage `test` parte da mesma base do `runtime` (rodas com hash, modelos
-  conferidos por SHA-256) e roda como o usuário 10001. Roda no `ci.yml` e no
-  `deploy.yml`.
+  stage `test` parte da mesma base do `runtime` (rodas com hash; os modelos
+  conferidos por SHA-256 sem rede, o par PP-OCRv5 vindo de
+  `infra/ai-ocr/models`) e roda como o usuário 10001. Roda no `ci.yml` e no
+  `deploy.yml`, pelo Buildx com o cache do GitHub (um código que já passou
+  leva segundos); o build só fala com o Docker Hub e o PyPI.
 - **Contrato com o contêiner real** (opt-in):
   `AI_LOCAL_E2E=1 npx vitest run tests/ai-local`. Constrói `infra/ai-ocr` (ou
   usa `AI_LOCAL_E2E_IMAGE`), sobe como na produção (só leitura, sem
@@ -196,9 +315,10 @@ qualquer `exclude` em `src/`), `reportOnFailure: true`.
   `deploy.yml`; abaixo do piso, nenhuma imagem é construída.
 - **E2E**: `yarn test:coverage:e2e` roda em lotes de 8 arquivos (cada lote
   escreve `coverage/e2e/NN`; um lote que morre sem relatório é refeito em duas
-  metades) e junta tudo em `coverage/e2e-only` e, com a unitária, em
-  `coverage/all`. Rode numa árvore parada: o script recusa juntar se `src/`
-  mudou durante os lotes.
+  metades) e, depois deles, os arquivos que sobem réplicas, um por lote (a
+  mesma separação do `yarn test:e2e`); junta tudo em `coverage/e2e-only` e,
+  com a unitária, em `coverage/all`. Rode numa árvore parada: o script recusa
+  juntar se `src/` mudou durante os lotes.
 
 ## Mutação
 
@@ -225,33 +345,40 @@ Testes unitários que protegem decisões de deploy — se um deles falhar depois
 de mudar um workflow ou um script, a mudança provavelmente quebrou
 uma garantia:
 
-| Teste                                       | Guarda                                                                                                                                                                                                                                                                                                                                                                                                          |
-| ------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `lifecycle/promote-workflow.test.ts`        | build só no `staging` (push ou _Run workflow_ lá); tags só `sha-<sha>` (e `src-<hash>` na IA); PR para `main` exige o marcador `staged-<sha>`; a promoção só a partir de `main`, resolve o 2º pai do merge, valida a tag antes de tudo, nunca constrói, move `stable` por digest antes do deploy; deploy pulado com aviso sem os secrets do Dokploy e falha com configuração parcial; `environment: production` |
-| `lifecycle/release-migrations.test.ts`      | o job de migrations só aceita `trajetto-api:sha-<sha>`/`main-<sha>`, roda uma vez, sem healthcheck, e o workflow o chama antes de `stable`                                                                                                                                                                                                                                                                      |
-| `lifecycle/compose-rollout-verify.test.ts`  | a conferência da convergência (script e posição nos workflows da API e da web); exatamente uma conferência por valor de `ROLLOUT_VERIFY` (liveness pública por padrão no staging, SSH na produção, nenhuma só com `off`); um deploy por vez; staging só pelo head da branch                                                                                                                                     |
-| `lifecycle/supply-chain.test.ts`            | actions por SHA, bases por digest, audit, SBOM/proveniência, Trivy                                                                                                                                                                                                                                                                                                                                              |
-| `lifecycle/secrets-hygiene.test.ts`         | gitleaks igual no `ci.yml` e no `deploy.yml`; nenhum build antes dele; `.env*` fora do git                                                                                                                                                                                                                                                                                                                      |
-| `lifecycle/compose-ci-siblings.test.ts`     | o checkout dos repositórios irmãos na mesma branch                                                                                                                                                                                                                                                                                                                                                              |
-| `lifecycle/migration-safety.test.ts`        | expandir/contrair nas migrations novas                                                                                                                                                                                                                                                                                                                                                                          |
-| `lifecycle/dokploy-deploy.test.ts`          | o script de deploy contra um Dokploy falso (`application.deploy` de uma Application por chamada; segue o deployment criado; repete o que termina em erro até 6 vezes com espera dobrando até o teto; escreve o motivo do Dokploy sem credenciais; id opcional vira aviso; nunca imprime a chave)                                                                                                                |
-| `lifecycle/staging-deploy-workflow.test.ts` | os passos do staging e da promoção executados com o GHCR simulado: a IA reaproveitada pelo hash de `infra/ai-ocr` e reimplantada só quando o digest muda (ou com `force_ai_build`); cada tag `staging` movida logo antes do próprio deploy e devolvida quando o deploy falha; o marcador `staged-<sha>` escrito por último e exigido pelo PR e pela promoção no mesmo digest                                    |
-| `lifecycle/wait-for-version.test.ts`        | a conferência pela liveness pública contra uma API falsa: passa só depois de o commit novo responder pela janela inteira, recomeça a janela quando uma réplica antiga responde, aceita o `sha-<7>` da promoção, recusa build sem commit; a janela é maior que o monitor de rollback do Swarm                                                                                                                    |
-| `lifecycle/image-layers.test.ts`            | as camadas das imagens: um arquivo de requisitos com hash por camada, na ordem em que mudam, cada pacote num só; os modelos da IA num stage próprio e copiados com `COPY --link`; o commit (`GIT_SHA`) declarado depois do último `RUN`; o `prisma generate` antes do `COPY . .`                                                                                                                                |
-| `security/env-example.test.ts`              | o `.env.example` tem toda variável do env-schema                                                                                                                                                                                                                                                                                                                                                                |
-| `quality/coverage-config.test.ts`           | a configuração de cobertura e o piso no CI                                                                                                                                                                                                                                                                                                                                                                      |
+| Teste                                       | Guarda                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `lifecycle/promote-workflow.test.ts`        | build só no `staging` (push ou _Run workflow_ lá); tags só `sha-<sha>` (e `src-<hash>` na IA); PR para `main` exige o marcador `staged-<sha>` (ou a regra de documentação, por `staged-build.sh`); a promoção só a partir de `main`, resolve o 2º pai do merge (repetindo a API do GitHub que falha), valida a tag antes de tudo, decide o build pelo marcador ou pela regra de documentação antes de qualquer outro passo, nunca constrói, move `stable` por digest antes do deploy; deploy pulado com aviso sem os secrets do Dokploy e falha com configuração parcial |
+| `lifecycle/release-migrations.test.ts`      | o job de migrations só aceita `trajetto-api:sha-<sha>`/`main-<sha>`, roda uma vez, sem healthcheck, e o workflow o chama antes de `stable`                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| `lifecycle/compose-rollout-verify.test.ts`  | a conferência da convergência (script e posição nos workflows da API e da web); exatamente uma conferência por valor de `ROLLOUT_VERIFY` (liveness pública por padrão no staging, SSH na produção, nenhuma só com `off`); um deploy por vez; staging só pelo head da branch                                                                                                                                                                                                                                                                                              |
+| `lifecycle/supply-chain.test.ts`            | actions por SHA, bases por digest, audit (pelo `audit-gate.sh`), SBOM/proveniência, Trivy                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| `lifecycle/secrets-hygiene.test.ts`         | gitleaks igual no `ci.yml` e no `deploy.yml`; nenhum build antes dele; `.env*` fora do git                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| `lifecycle/compose-ci-siblings.test.ts`     | o checkout dos repositórios irmãos na mesma branch; no `ci.yml` da API, só "a branch não existe" (código 2) cai na padrão, com aviso, e erro de rede repete 3 vezes e falha                                                                                                                                                                                                                                                                                                                                                                                              |
+| `lifecycle/migration-safety.test.ts`        | expandir/contrair nas migrations novas                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| `lifecycle/dokploy-deploy.test.ts`          | o script de deploy contra um Dokploy falso (`application.deploy` de uma Application por chamada; segue o deployment criado; repete o que termina em erro até 6 vezes com espera dobrando até o teto; cada retentativa — pedido, consulta ou deploy — é `::warning::` com a contagem, e o resumo do job lista cada tentativa que falhou com o motivo do Dokploy; escreve o motivo sem credenciais; id opcional vira aviso; nunca imprime a chave)                                                                                                                         |
+| `lifecycle/staging-deploy-workflow.test.ts` | os passos do staging e da promoção executados com o GHCR simulado: a IA reaproveitada pelo hash de `infra/ai-ocr` e reimplantada só quando o digest muda (ou com `force_ai_build`); o GHCR sem resposta falha o passo em vez de virar "não existe"; cada tag `staging` movida logo antes do próprio deploy e devolvida quando o deploy falha; o marcador `staged-<sha>` escrito por último e exigido pelo PR e pela promoção, que espera até 20 min um deploy de staging em andamento                                                                                    |
+| `lifecycle/wait-for-version.test.ts`        | a conferência pela liveness pública contra uma API falsa: passa só depois de o commit novo responder pela janela inteira, recomeça a janela quando uma réplica antiga responde, não recomeça numa sondagem sem resposta (5xx/52x, timeout, corpo que não é a liveness) e avisa com a contagem, aceita o `sha-<7>` da promoção, recusa build sem commit; a janela é maior que o monitor de rollback do Swarm                                                                                                                                                              |
+| `lifecycle/ci-stability.test.ts`            | um vermelho é sempre do código: todo job com `timeout-minutes`; `bash -eo pipefail` em todo workflow e todo `run:` com sintaxe válida; o Node da base do `Dockerfile` em todo `setup-node`; toda imagem dos jobs por digest, o mesmo digest em todo lugar; BuildKit fixado; `cache-to` com `ignore-error=true`; GHCR só pelo `ghcr.sh`; cache dos engines do Prisma e a conferência do engine antes do E2E; o download do banco do Trivy com cache e o scan que só reprova um achado (executados com `docker` simulado); a guarda de cabeça do `deploy-staging`          |
+| `lifecycle/ghcr-script.test.ts`             | `.github/scripts/ghcr.sh`: só o "not found" do GHCR é resposta vazia; erro passageiro repete com pausa dobrando e aviso com a contagem; persistente falha nomeando o GHCR; resposta ilegível não vira digest; mover tag repete e falha na hora se a origem não existe                                                                                                                                                                                                                                                                                                    |
+| `lifecycle/staged-build.test.ts`            | `.github/scripts/staged-build.sh` contra um histórico git de verdade: o próprio commit com o marcador; o ancestral mais próximo com o marcador quando só documentação (`*.md`, `docs/**`) mudou desde ele; recusa (listando os arquivos) quando mudou outra coisa; marcador em outro digest recusado; GHCR fora falha em vez de "não rodou"; o `.dockerignore` sem `**/*.md` nem `docs/`                                                                                                                                                                                 |
+| `lifecycle/audit-gate.test.ts`              | `.github/scripts/audit-gate.sh` contra um histórico git de verdade: bloqueia o push que muda `package.json`/`yarn.lock`/`package-lock.json` (em qualquer pasta) ou o `audit-ci.jsonc`, ou que não tem base; nos outros, a reprovação vira aviso e relatório no resumo; um audit que não rodou (rede) repete e nunca é lido como aviso                                                                                                                                                                                                                                    |
+| `lifecycle/image-layers.test.ts`            | as camadas das imagens: um arquivo de requisitos com hash por camada, na ordem em que mudam, cada pacote num só; os modelos da IA versionados em `infra/ai-ocr/models` (só o par que a roda não traz, nos hashes do `models.sha256`) e conferidos num `RUN --network=none`, copiados com `COPY --link`; o commit (`GIT_SHA`) declarado depois do último `RUN`; o `prisma generate` antes do `COPY . .`; a conferência do schema engine do Prisma nos dois `yarn install`, executada numa árvore                                                                          |
+| `security/env-example.test.ts`              | o `.env.example` tem toda variável do env-schema                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| `quality/coverage-config.test.ts`           | a configuração de cobertura e o piso no CI                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| `quality/e2e-replica-isolation.test.ts`     | os arquivos que sobem réplicas estão todos na lista da segunda fase do `yarn test:e2e`, e só eles; as fases do `vite.config.mts` e do `infra/scripts/run-e2e.mjs`                                                                                                                                                                                                                                                                                                                                                                                                        |
+| `quality/outbound-network-guard.test.ts`    | a trava de rede dos testes: loopback e bancos configurados passam; o resto é recusado antes do DNS e lembrado para falhar o arquivo                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| `mail/mail-provider-for.test.ts`            | o transporte de e-mail por `NODE_ENV`: a caixa em memória só com `test`, e ela se recusa a existir com outro valor ou num build feito para produção                                                                                                                                                                                                                                                                                                                                                                                                                      |
 
 ## O que roda onde (local × CI)
 
-|                               | Local (antes de dizer "pronto")                    | `ci.yml` (branch)  | `deploy.yml` (staging e PR para `main`) |
-| ----------------------------- | -------------------------------------------------- | ------------------ | --------------------------------------- |
-| typecheck                     | `yarn prisma:generate && yarn typecheck`           | sim                | sim                                     |
-| unitários + piso              | `yarn test` (ou o arquivo tocado)                  | sim, com cobertura | sim, com cobertura                      |
-| E2E                           | os arquivos tocados, contra o Postgres descartável | não                | **sim**, a suíte inteira                |
-| lint, build                   | ficam com o CI                                     | lint               | lint (o build é o da imagem)            |
-| audit, gitleaks, pytest da IA | —                                                  | sim                | sim                                     |
-| contrato com a IA real        | opt-in                                             | só _Run workflow_  | não                                     |
-| carga, mutação                | sob demanda                                        | não                | não                                     |
+|                               | Local (antes de dizer "pronto")                    | `ci.yml` (branch)                                      | `deploy.yml` (staging e PR para `main`) |
+| ----------------------------- | -------------------------------------------------- | ------------------------------------------------------ | --------------------------------------- |
+| typecheck                     | `yarn prisma:generate && yarn typecheck`           | sim                                                    | sim                                     |
+| unitários + piso              | `yarn test` (ou o arquivo tocado)                  | sim, com cobertura                                     | sim, com cobertura                      |
+| E2E                           | os arquivos tocados, contra o Postgres descartável | não                                                    | **sim**, a suíte inteira, em duas fases |
+| lint, build                   | ficam com o CI                                     | lint                                                   | lint (o build é o da imagem)            |
+| audit, gitleaks, pytest da IA | —                                                  | sim (o audit bloqueia só um push que muda dependência) | sim (idem)                              |
+| contrato com a IA real        | opt-in                                             | só _Run workflow_                                      | não                                     |
+| carga, mutação                | sob demanda                                        | não                                                    | não                                     |
 
 ## Regras para escrever testes
 
@@ -281,10 +408,23 @@ uma garantia:
    cada arquivo conta o incidente ou a decisão que o teste protege; mantenha
    esse hábito.
 10. Não aumente o orçamento de tempo de um teste para fazê-lo passar numa
-    máquina ocupada sem entender o motivo; o boot da API já tem o seu.
+    máquina ocupada sem entender o motivo; o boot da API já tem o seu. Prazo
+    generoso só para **esperar uma condição** (o processo sair, a sala ter o
+    socket), nunca no lugar dela.
+11. **Nada de rede de fora.** Todo terceiro (Meta, Expo, Resend, SMTP,
+    Turnstile, mapas, CEP) vira um falso local; a trava do `setupTests.ts`
+    falha o arquivo que tentar.
+12. **Espere por estado, não por tempo** (seção
+    [Esperar por estado, nunca por tempo](#esperar-por-estado-nunca-por-tempo)).
+    Sem `setTimeout` fixo esperando o servidor; uma janela negativa só depois
+    de confirmado o estado que a torna válida.
 
 ## Windows
 
+- **O relógio do Docker Desktop**: se o E2E recusar começar ou avisar "O
+  relógio do Postgres de teste está … atrás", rode `wsl --shutdown` (ou
+  reinicie o Docker Desktop) e rode de novo (seção
+  [O relógio do banco](#o-relógio-do-banco)).
 - **E2E em lotes de no máximo 8 arquivos.** Com o Prisma 6, 12 ou mais
   arquivos na mesma execução derrubavam o query engine com um _napi panic_
   ("failed to delete napi ref", exit 127/139). O Prisma 7 não tem engine
@@ -304,7 +444,9 @@ uma garantia:
   por `tests/load/seed.ts`, `mint-master.ts` e `mint-browser-users.ts`
   (senha `WEB_E2E_PASSWORD`). As suítes de navegador da web
   (`trajetto-ui/.github/workflows/browser-suites.yml`, num push em staging,
-  num PR para main e sob demanda) rodam os três nessa ordem. Detalhes em `trajetto-ui/docs/testes.md`.
+  num PR para main e sob demanda) rodam os três nessa ordem. A API sobe ali
+  com `NODE_ENV=test`, então o 2FA e a criação de usuário guardam o e-mail na
+  caixa em memória do processo: nenhuma rede de saída. Detalhes em `trajetto-ui/docs/testes.md`.
 - **App (Maestro)**: a suíte do app (`trajetto-mobile/docs/testes.md`) entra
   com as contas que o `seed.ts` cria com `LOAD_MOBILE_E2E=1`
   (`MOBILE_E2E_EMAIL`, `MOBILE_E2E_PASSWORD`, `MOBILE_E2E_TWOFA_EMAIL`,

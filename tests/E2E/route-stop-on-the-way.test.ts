@@ -1,4 +1,12 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import {
+  afterAll,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 
 import { sign } from "jsonwebtoken";
 import { randomUUID } from "node:crypto";
@@ -321,6 +329,15 @@ beforeAll(async () => {
   pipeline = (
     await import("@/shared/notifications/notification-pipeline-service")
   ).NotificationPipelineService.getInstance();
+
+  // `drain()` is the only thing that runs the pipeline here. Each mark
+  // publishes, and the publish wakes this process's worker 500 ms later: when
+  // the mark and the checks took longer than that under load, the wake's
+  // cycle was the one sending while the test looked (red: "expected [] ...
+  // got +0"). Production has the same shape on an HTTP-only replica: the
+  // request publishes, a worker's cycle delivers. Held for the whole file,
+  // so no wake scheduled by one test fires into the next.
+  vi.spyOn(pipeline, "wake").mockImplementation(() => undefined);
 }, APP_BOOT_TIMEOUT_MS);
 
 beforeEach(() => {

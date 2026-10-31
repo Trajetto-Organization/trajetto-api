@@ -17,6 +17,17 @@
  * the same check as the web's wait-for-build.mjs (trajetto-ui), against
  * the API's probe.
  *
+ * Only an ANSWER resets the window: another commit, or a build with no
+ * commit. A probe that gets no answer — a timeout, a reset connection, a
+ * 5xx/52x or any other non-2xx from the edge, a body that is not the
+ * liveness JSON ({"status": "alive", …}, which every build has answered) —
+ * says nothing about which build serves, so it neither
+ * starts nor resets the window (it used to reset it, and one edge hiccup in
+ * the last second of the 90 threw the whole window away, as if Swarm had
+ * rolled back). Each streak of failed probes is a ::warning:: with the
+ * count, and the total goes to the summary. The window still closes only on
+ * an answer of the expected commit.
+ *
  * What it does not see: the AI service (no public address, docs/deploy.md,
  * "Conferir a convergência"), and a replica the edge never routes to.
  * infra/scripts/verify-rollout.sh over SSH (ROLLOUT_VERIFY=ssh) reads the
@@ -85,7 +96,11 @@ const isExpected = (sha) =>
 
 let attempt = 0;
 
-/** What the API answers now: the commit, or why there is none. */
+/**
+ * What the API answers now. `answered: true` with the commit (or null for a
+ * build with no commit) when a liveness JSON came back; `answered: false`
+ * when nothing did, with why.
+ */
 async function probe() {
   attempt += 1;
 
@@ -98,15 +113,35 @@ async function probe() {
       signal: AbortSignal.timeout(10_000),
     });
 
-    if (!response.ok) return { sha: null, answer: `HTTP ${response.status}` };
+    if (!response.ok) {
+      return { answered: false, sha: null, answer: `HTTP ${response.status}` };
+    }
 
-    const body = await response.json();
+    let body;
+
+    try {
+      body = await response.json();
+    } catch {
+      body = null;
+    }
+
+    // Every build's liveness answers {"status": "alive", …}; anything else
+    // (an edge's error page, a 200 from something in between) is no answer.
+    if (body?.status !== "alive") {
+      return {
+        answered: false,
+        sha: null,
+        answer: "corpo que não é o JSON da liveness",
+      };
+    }
+
     const sha =
       typeof body?.commit === "string" && body.commit
         ? body.commit.toLowerCase()
         : null;
 
     return {
+      answered: true,
       sha,
       answer: sha
         ? `commit ${sha}`
@@ -114,6 +149,7 @@ async function probe() {
     };
   } catch (error) {
     return {
+      answered: false,
       sha: null,
       answer: error instanceof Error ? error.message : String(error),
     };
@@ -124,28 +160,57 @@ async function main() {
   const deadline = Date.now() + TIMEOUT_MS;
   let since = null;
   let last = "";
+  let lastAnswer = "nenhuma resposta ainda";
+  let failed = 0;
+  let streak = 0;
 
   for (;;) {
-    const { sha, answer } = await probe();
+    const { answered, sha, answer } = await probe();
     const now = Date.now();
 
-    if (isExpected(sha)) {
-      since ??= now;
+    if (!answered) {
+      failed += 1;
+      streak += 1;
 
-      if (now - since >= STABLE_MS) {
-        summary(
-          `API: ${ENDPOINT} responde ${EXPECTED} há ${Math.round((now - since) / 1000)}s.`,
+      // Once per streak, with the running total: visible, not noisy.
+      if (streak === 1) {
+        console.log(
+          `::warning::A sondagem de ${ENDPOINT} não teve resposta (${answer}; falha ${failed} até agora). Não zera a janela: só uma resposta de outro commit zera.`,
         );
-        return;
       }
     } else {
-      if (since !== null) {
+      if (streak > 0) {
         console.log(
-          `::warning::A API voltou a responder ${answer} depois de servir ${EXPECTED} (rollback do Swarm, ou uma réplica antiga ainda no ar?).`,
+          `[wait-for-version] a API voltou a responder depois de ${streak} sondagem(ns) sem resposta.`,
         );
       }
 
-      since = null;
+      streak = 0;
+      lastAnswer = answer;
+
+      if (isExpected(sha)) {
+        since ??= now;
+
+        if (now - since >= STABLE_MS) {
+          summary(
+            `API: ${ENDPOINT} responde ${EXPECTED} há ${Math.round((now - since) / 1000)}s.`,
+          );
+          if (failed > 0) {
+            summary(
+              `API: ${failed} sondagem(ns) sem resposta no caminho (erro passageiro da borda ou da rede; não zeraram a janela).`,
+            );
+          }
+          return;
+        }
+      } else {
+        if (since !== null) {
+          console.log(
+            `::warning::A API voltou a responder ${answer} depois de servir ${EXPECTED} (rollback do Swarm, ou uma réplica antiga ainda no ar?).`,
+          );
+        }
+
+        since = null;
+      }
     }
 
     if (answer !== last) {
@@ -154,10 +219,13 @@ async function main() {
     }
 
     if (now >= deadline) {
+      const noAnswer =
+        failed > 0 ? ` ${failed} sondagem(ns) ficaram sem resposta.` : "";
+
       fail(
         since === null
-          ? `A API não responde ${EXPECTED} em ${ENDPOINT} após ${TIMEOUT_MS / 1000}s (responde: ${answer}). O Swarm pode ter revertido o deploy: no host, 'docker service ps --no-trunc <App Name da API>'.`
-          : `A API responde ${EXPECTED} há só ${Math.round((now - since) / 1000)}s, menos que a janela de ${STABLE_MS / 1000}s, ao fim de ${TIMEOUT_MS / 1000}s.`,
+          ? `A API não responde ${EXPECTED} em ${ENDPOINT} após ${TIMEOUT_MS / 1000}s (última resposta: ${lastAnswer}; última sondagem: ${answer}).${noAnswer} O Swarm pode ter revertido o deploy: no host, 'docker service ps --no-trunc <App Name da API>'.`
+          : `A API responde ${EXPECTED} há só ${Math.round((now - since) / 1000)}s, menos que a janela de ${STABLE_MS / 1000}s, ao fim de ${TIMEOUT_MS / 1000}s.${noAnswer}`,
       );
     }
 

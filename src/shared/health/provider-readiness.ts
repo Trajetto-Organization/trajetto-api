@@ -682,7 +682,9 @@ async function checkEmail(deps: ReadinessDeps): Promise<ProviderReadiness> {
       configured: lacking.length === 0,
       missing_env: lacking,
       message:
-        "Fora de produção os e-mails vão para a caixa de teste (Ethereal); o Resend não é usado.",
+        env.NODE_ENV === "test"
+          ? "Em teste (NODE_ENV=test) os e-mails ficam numa caixa em memória do processo; nenhum sai, e o Resend não é usado."
+          : "Em desenvolvimento os e-mails vão para a caixa de teste (Ethereal); o Resend não é usado.",
     });
   }
 

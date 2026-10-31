@@ -35,6 +35,7 @@ import {
 } from "./notification-types";
 
 import {
+  DELIVERY_BATCH_SIZE,
   DELIVERY_CONCURRENCY,
   DELIVERY_LANES,
   DELIVERY_LEASE_SECONDS,
@@ -71,7 +72,6 @@ import { emailLogoUrl } from "@/shared/providers/mail-provider/email-logo";
 const SWEEP_INTERVAL_MS = env.PIPELINE_SWEEP_INTERVAL_MS;
 
 const OUTBOX_BATCH_SIZE = 10;
-const DELIVERY_BATCH_SIZE = 20;
 
 /** Entries of the "channels suppressed" debug line; the total is logged too. */
 const SUPPRESSED_LOG_LIMIT = 50;
@@ -247,6 +247,30 @@ class NotificationPipelineService {
   };
 
   /**
+   * The cycle in flight per queue, and whether somebody asked for another
+   * look while it ran.
+   *
+   * A wake, a sweep tick or a test that found a cycle running used to get
+   * `return` and nothing else. When it came after that cycle's LAST claim,
+   * the work it was announcing waited for the next sweep — 30 s in
+   * production — although a cycle was right there; and a test that drove
+   * the pipeline by hand checked the provider before the send went out
+   * (route-stop-on-the-way, red under load). A caller now joins the cycle in
+   * flight and marks it to run once more when it ends: one extra pass for
+   * however many callers arrived, never one per caller.
+   */
+  private outboxCycle: Promise<boolean> | null = null;
+  private outboxRerun = false;
+  private deliveryCycles: Record<DeliveryLane, Promise<void> | null> = {
+    internal: null,
+    external: null,
+  };
+  private deliveryRerun: Record<DeliveryLane, boolean> = {
+    internal: false,
+    external: false,
+  };
+
+  /**
    * Set when the replica starts going away. The drain loops check it between
    * batches and `wake()` stops starting new ones: shutdown used to only clear
    * the timers, while a draining loop kept claiming batch after batch until
@@ -301,7 +325,8 @@ class NotificationPipelineService {
    * Processes pending work now instead of waiting for the sweep. Called right
    * after an outbox publish commits; expansion chains into both delivery
    * lanes, so a freshly created fine notifies within milliseconds. Safe to
-   * call at any time — cycles are reentrancy-guarded and idempotent.
+   * call at any time — a cycle already running is joined and runs once more
+   * (see `outboxCycle`), and every pass is idempotent.
    *
    * Outside the request that published: `wake` is scheduled from inside a
    * request, and the timer inherits its AsyncLocalStorage — the pipeline then
@@ -363,11 +388,55 @@ class NotificationPipelineService {
   // Outbox: event → deliveries
   // ==========================================================================
 
-  /** Public so a test can drive one cycle against a real database. */
-  public async runOutboxCycle(): Promise<boolean> {
-    if (this.outboxRunning) return false;
+  /**
+   * Public so a test can drive one cycle against a real database.
+   *
+   * Resolves once everything due when it was called has been through a
+   * claim: a call that finds a cycle running joins it, and that cycle runs
+   * one more pass after the current one (see `outboxCycle`). Never rejects
+   * for a caller that joined — the cycle's starter reports its failure.
+   */
+  public runOutboxCycle(): Promise<boolean> {
+    if (this.outboxCycle) {
+      this.outboxRerun = true;
+
+      return this.outboxCycle.catch(() => false);
+    }
+
     this.outboxRunning = true;
 
+    // Assigned before the loop can end: the loop awaits its first pass before
+    // its `finally` clears the field, so the clearing always comes after this.
+    const cycle = this.runOutboxPasses();
+    this.outboxCycle = cycle;
+
+    return cycle;
+  }
+
+  private async runOutboxPasses(): Promise<boolean> {
+    let processedAny = false;
+
+    try {
+      for (;;) {
+        this.outboxRerun = false;
+
+        processedAny = (await this.drainOutbox()) || processedAny;
+
+        if (!this.outboxRerun || this.stopping) break;
+      }
+    } finally {
+      // Same synchronous turn as the last look at `outboxRerun`: a caller
+      // either saw this cycle and was covered by the pass it asked for, or
+      // finds it gone and starts the next one.
+      this.outboxCycle = null;
+      this.outboxRunning = false;
+    }
+
+    return processedAny;
+  }
+
+  /** One pass: claims batches until a short one says the queue is empty. */
+  private async drainOutbox(): Promise<boolean> {
     // A hung await here keeps the flag set forever; the beats make that
     // visible on /health/metrics (OBS-10).
     workerHeartbeat.beginCycle("notification-outbox");
@@ -411,7 +480,6 @@ class NotificationPipelineService {
         if (events.length < OUTBOX_BATCH_SIZE) break;
       }
     } finally {
-      this.outboxRunning = false;
       workerHeartbeat.endCycle("notification-outbox");
     }
 
@@ -789,11 +857,48 @@ class NotificationPipelineService {
   // Deliveries: one row = one recipient × one channel, in two lanes
   // ==========================================================================
 
-  /** Public so a test can drive one cycle against a real database. */
-  public async runDeliveryCycle(lane: DeliveryLane): Promise<void> {
-    if (this.deliveryRunning[lane]) return;
+  /**
+   * Public so a test can drive one cycle against a real database.
+   *
+   * Same contract as `runOutboxCycle`: a call that finds this lane's cycle
+   * running joins it and gets one more pass, instead of returning before
+   * the rows it was called for were claimed.
+   */
+  public runDeliveryCycle(lane: DeliveryLane): Promise<void> {
+    const inFlight = this.deliveryCycles[lane];
+
+    if (inFlight) {
+      this.deliveryRerun[lane] = true;
+
+      return inFlight.catch(() => undefined);
+    }
+
     this.deliveryRunning[lane] = true;
 
+    // Assigned before the loop can end — see runOutboxCycle.
+    const cycle = this.runDeliveryPasses(lane);
+    this.deliveryCycles[lane] = cycle;
+
+    return cycle;
+  }
+
+  private async runDeliveryPasses(lane: DeliveryLane): Promise<void> {
+    try {
+      for (;;) {
+        this.deliveryRerun[lane] = false;
+
+        await this.drainDeliveries(lane);
+
+        if (!this.deliveryRerun[lane] || this.stopping) break;
+      }
+    } finally {
+      this.deliveryCycles[lane] = null;
+      this.deliveryRunning[lane] = false;
+    }
+  }
+
+  /** One pass over a lane: batches until a short one empties it. */
+  private async drainDeliveries(lane: DeliveryLane): Promise<void> {
     const beatName = `notification-delivery-${lane}`;
 
     workerHeartbeat.beginCycle(beatName);
@@ -844,7 +949,6 @@ class NotificationPipelineService {
         if (deliveries.length < DELIVERY_BATCH_SIZE) break;
       }
     } finally {
-      this.deliveryRunning[lane] = false;
       workerHeartbeat.endCycle(beatName);
     }
   }

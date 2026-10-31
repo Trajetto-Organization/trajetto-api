@@ -13,6 +13,11 @@
 # the src tree's digest changed while the batches ran (an added function can
 # leave every statement map intact, so the reports alone cannot show it).
 #
+# The files that start API replicas (tests/E2E/support/replica-files.ts) run
+# after the batches, one file per batch, as `yarn test:e2e` runs them: beside
+# seven other files, the processes they start were load the timing-sensitive
+# tests felt.
+#
 # Usage: bash infra/scripts/coverage-e2e.sh [batch-size]
 #   coverage/unit     — from `yarn test:coverage` (run it first to merge it in)
 #   coverage/e2e/NN   — one report per batch (NN-a / NN-b when it was split)
@@ -30,7 +35,29 @@ src_digest() {
 }
 start_digest=$(src_digest)
 
-mapfile -t files < <(find tests/E2E -name '*.test.ts' | sort)
+mapfile -t replica_names < <(tr -d '\r' < tests/E2E/support/replica-files.ts | sed -n 's/^  "\([^"]*\.test\.ts\)",$/\1/p')
+if [ "${#replica_names[@]}" -eq 0 ]; then
+  echo "tests/E2E/support/replica-files.ts: no file read from the list" >&2
+  exit 1
+fi
+
+is_replica_file() {
+  local name
+  for name in "${replica_names[@]}"; do
+    [ "$1" = "tests/E2E/$name" ] && return 0
+  done
+  return 1
+}
+
+files=()
+replica_files=()
+while IFS= read -r file; do
+  if is_replica_file "$file"; then
+    replica_files+=("$file")
+  else
+    files+=("$file")
+  fi
+done < <(find tests/E2E -name '*.test.ts' | sort)
 failed=0
 batch=0
 
@@ -57,6 +84,15 @@ for ((i = 0; i < ${#files[@]}; i += size)); do
       run_batch "$dir-a" "${chunk[@]:0:half}" || echo "batch $batch-a failed" >&2
       run_batch "$dir-b" "${chunk[@]:half}" || echo "batch $batch-b failed" >&2
     fi
+  fi
+  batch=$((batch + 1))
+done
+
+for file in "${replica_files[@]}"; do
+  dir=$(printf 'coverage/e2e/%02d' "$batch")
+  if ! run_batch "$dir" "$file"; then
+    echo "batch $batch failed: $file" >&2
+    failed=$((failed + 1))
   fi
   batch=$((batch + 1))
 done

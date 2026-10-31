@@ -331,7 +331,7 @@ Todos conferidos no `package.json`.
 | `yarn webhooks:seal`                       | cifra os segredos de webhook já gravados com `WEBHOOK_SECRETS_KEY`                                                  |
 | `yarn test`                                | testes unitários (`tests/unitaires`)                                                                                |
 | `yarn test:watch`                          | unitários em modo watch                                                                                             |
-| `yarn test:e2e`                            | testes E2E contra Postgres e Redis reais (`tests/E2E`)                                                              |
+| `yarn test:e2e`                            | testes E2E contra Postgres e Redis reais (`tests/E2E`), em duas fases (as réplicas por último)                      |
 | `yarn test:e2e:watch`                      | E2E em modo watch                                                                                                   |
 | `yarn test:coverage`                       | cobertura dos unitários (`coverage/unit`), com piso (statements e linhas 70,8 %, branches 82,57 %, funções 57,62 %) |
 | `yarn test:coverage:e2e`                   | cobertura do E2E em lotes, juntada em `coverage/all`                                                                |
@@ -464,8 +464,12 @@ do Prisma 7), rode `yarn install --force`: o ambiente é uma dependência
 No Windows, rode no máximo 8 arquivos E2E por vez (limite herdado do _napi panic_
 do engine do Prisma 6; o Prisma 7 não tem engine nativo, mas lotes maiores não
 foram medidos). As suítes de navegador da web e o E2E do app usam o seed
-de `tests/load/`. Tudo — o que cada suíte prova, cobertura, mutação e as
-regras para escrever testes — em [`docs/testes.md`](./docs/testes.md).
+de `tests/load/`. O `yarn test:e2e` roda em duas fases: os arquivos que sobem
+réplicas da API ficam por último, um por vez. Nenhum teste sai da máquina (a
+trava de rede do `setupTests.ts` falha o arquivo que tentar), e com
+`NODE_ENV=test` o e-mail fica numa caixa em memória do processo. Tudo — o que
+cada suíte prova, cobertura, mutação e as regras para escrever testes — em
+[`docs/testes.md`](./docs/testes.md).
 
 ## Depuração
 
@@ -567,7 +571,8 @@ staging ─push─▶ deploy.yml: validação completa (+ E2E) ─▶ build ÚNI
                             a IA reaproveitada se infra/ai-ocr não mudou)
                             ─▶ tag `staging` por digest ─▶ Dokploy staging (IA, se mudou → API)
                             ─▶ a liveness pública responde o commit novo ─▶ marcador staged-<sha>
-PR staging → main ─▶ a mesma validação + "o staging rodou o head do PR?" (staged-<sha>)
+PR staging → main ─▶ a mesma validação + "o staging rodou o head do PR?" (staged-<sha>;
+                     um head só de documentação usa o de um ancestral que rodou)
 merge em main ─▶ promoção (sem build): migrations ─▶ tag `stable` por digest ─▶ Dokploy produção (IA → API)
                  ─▶ convergência ─▶ release        [aprovação do environment production]
 Run workflow na main ─▶ a mesma promoção com uma tag antiga (rollback)
@@ -594,6 +599,11 @@ Run workflow na staging ─▶ o caminho de staging de novo (force_ai_build reco
   com aviso.
 - **Merge em `main` sempre com merge commit** (nunca squash/rebase): a
   promoção usa o 2º pai do merge para achar o build de staging.
+- **Um vermelho no CI é sempre do código**: rede, registry e tags móveis não
+  reprovam nada (versões e imagens fixadas, consultas ao GHCR que repetem,
+  audit que só bloqueia mudança de dependência, timeout em todo job), e
+  `[skip ci]` só para documentação é seguro
+  ([`docs/deploy.md`](./docs/deploy.md#um-vermelho-é-sempre-do-código)).
 - **Backup do banco**: só o do próprio Dokploy (aba _Backups_ do Database
   PostgreSQL): uma cópia por dia para o Cloudflare R2, 30 cópias guardadas.
 - Ordem de cada release: **API → web → app**.

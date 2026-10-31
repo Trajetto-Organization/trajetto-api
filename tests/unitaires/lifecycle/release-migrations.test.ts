@@ -277,7 +277,8 @@ describe("the promote workflow", () => {
     const step = steps[index("Run database migrations")] ?? "";
 
     expect(step).toContain("if: vars.MIGRATIONS_VIA_JOB == 'true'");
-    expect(step).toContain("IMAGE_TAG: ${{ steps.target.outputs.tag }}");
+    // The build the staging check settled on (promote-workflow.test.ts).
+    expect(step).toContain("IMAGE_TAG: ${{ steps.staged.outputs.tag }}");
     expect(step.slice(step.indexOf("run:"))).not.toContain("${{");
   });
 

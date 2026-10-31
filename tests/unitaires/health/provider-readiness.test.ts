@@ -231,6 +231,17 @@ describe("e-mail (Resend)", () => {
     );
 
     expect(result.status).toBe("disabled");
+    expect(result.message).toContain("Ethereal");
+  });
+
+  it("is off under NODE_ENV=test, where mail stays in the process", async () => {
+    const result = await checkEmail(
+      deps(HEALTHY, { env: fullEnv({ NODE_ENV: "test" }) }),
+    );
+
+    expect(result.status).toBe("disabled");
+    expect(result.message).toContain("memória");
+    expect(result.message).not.toContain("Ethereal");
   });
 });
 
@@ -545,49 +556,64 @@ describe("push, storage, OCR, certificate and heartbeat", () => {
  * held the page for the sum of their timeouts (5 s each, then).
  */
 describe("independent probes of one provider", () => {
-  /** Every route answers after `ms`; records when each request started. */
-  function slow(ms: number) {
-    const started: Array<{ url: string; at: number }> = [];
+  /**
+   * Every route holds its answer until `expected` requests have STARTED.
+   *
+   * The property is "side by side", so that is what is asserted: no answer
+   * comes back before the last probe went out. Probes run one after the
+   * other never get there — the first waits for a second that is only sent
+   * after it — and each attempt runs out its timeout instead. It used to be
+   * measured on the wall clock (< 200 ms for 80 ms routes), and a busy
+   * machine descheduling the thread for 70 ms was enough to fail it.
+   */
+  function gated(expected: number) {
+    const started: string[] = [];
+    let inFlight = 0;
+    let peak = 0;
+    let open = () => {};
+    const allStarted = new Promise<void>((resolve) => (open = resolve));
     const routes: Record<string, Route> = {};
 
     for (const [prefix, route] of Object.entries(HEALTHY)) {
       routes[prefix] = async (url, init) => {
-        started.push({ url, at: performance.now() });
-        await new Promise((resolve) => setTimeout(resolve, ms));
+        started.push(url);
+        inFlight += 1;
+        peak = Math.max(peak, inFlight);
+
+        if (started.length >= expected) open();
+
+        await allStarted;
+        inFlight -= 1;
 
         return route(url, init);
       };
     }
 
-    return { routes, started };
+    return { routes, started, peak: () => peak };
   }
 
   it("asks Meta for the number and every template at the same time", async () => {
-    const { routes, started } = slow(80);
-    const begin = performance.now();
+    const { routes, started, peak } = gated(3);
 
     const whatsapp = await checkWhatsApp(deps(routes, { timeoutMs: 2_000 }));
 
     expect(whatsapp.status).toBe("ok");
-    expect(started.filter((call) => call.url.includes("graph"))).toHaveLength(
-      3,
-    );
-    // One round trip, not three.
-    expect(performance.now() - begin).toBeLessThan(200);
+    expect(started.filter((url) => url.includes("graph"))).toHaveLength(3);
+    // One round trip, not three: all three were out at once.
+    expect(peak()).toBe(3);
   });
 
   it("checks the OCR token while /health is still answering", async () => {
-    const { routes, started } = slow(80);
-    const begin = performance.now();
+    const { routes, started, peak } = gated(2);
 
     const ocr = await checkAiOcr(deps(routes, { timeoutMs: 2_000 }));
 
     expect(ocr.status).toBe("ok");
-    expect(started.map((call) => new URL(call.url).pathname).sort()).toEqual([
+    expect(started.map((url) => new URL(url).pathname).sort()).toEqual([
       "/health",
       "/v1/read",
     ]);
-    expect(performance.now() - begin).toBeLessThan(150);
+    expect(peak()).toBe(2);
   });
 
   it("still reports /health's failure first when both fail", async () => {

@@ -233,6 +233,125 @@ describe("an event, end to end", () => {
   });
 });
 
+/**
+ * A wake, a sweep tick or a test that found a cycle running used to return
+ * at once. Arriving after that cycle's last claim, the work it announced
+ * waited for the next sweep — 30 s in production — with a cycle right there;
+ * and a test driving the pipeline by hand read the provider before the send
+ * went out (route-stop-on-the-way, red under load). The caller now joins the
+ * cycle in flight, which runs ONE more pass when it ends, however many
+ * callers asked.
+ */
+describe("a call that finds a cycle already running", () => {
+  it("resolves only after the deliveries that became due meanwhile went out, in one extra pass", async () => {
+    vi.spyOn(pipeline, "wake").mockImplementation(() => undefined);
+
+    await publish();
+    await pipeline.runOutboxCycle();
+
+    let release = () => {};
+    const held = new Promise<void>((resolve) => (release = resolve));
+
+    // The first e-mail stays on the wire: the cycle has claimed its batch
+    // and is waiting on the provider.
+    mail.behaviour = async () => {
+      await held;
+      return { messageId: "<m@x>" };
+    };
+
+    const claims = vi.spyOn(
+      pipeline as never as {
+        claimDeliveries: (lane: string) => Promise<unknown[]>;
+      },
+      "claimDeliveries",
+    );
+
+    const running = pipeline.runDeliveryCycle("external");
+
+    try {
+      await vi.waitFor(() => expect(mail.sent).toHaveLength(1), {
+        timeout: 15_000,
+        interval: 20,
+      });
+
+      // Due after the running cycle's claim.
+      const later = await publish();
+      await pipeline.runOutboxCycle();
+
+      const joined = Array.from({ length: 5 }, () =>
+        pipeline.runDeliveryCycle("external"),
+      );
+
+      release();
+      await Promise.all(joined);
+
+      const email = (await deliveriesOf(later)).find(
+        (row) => row.channel === "EMAIL",
+      )!;
+
+      expect(email.status).toBe("DELIVERED");
+      expect(mail.sent.map((message) => message.referenceId)).toContain(
+        email.id,
+      );
+      expect(new Set(mail.sent.map((m) => m.referenceId)).size).toBe(
+        mail.sent.length,
+      );
+
+      // The batch it was running, then one pass for all five callers.
+      expect(claims).toHaveBeenCalledTimes(2);
+    } finally {
+      release();
+      await running;
+    }
+  });
+
+  it("expands an event published while the expansion is running", async () => {
+    vi.spyOn(pipeline, "wake").mockImplementation(() => undefined);
+
+    await publish();
+
+    const service = pipeline as never as {
+      expandEvent: (event: unknown) => Promise<void>;
+    };
+    const expand = service.expandEvent.bind(pipeline);
+
+    let release = () => {};
+    const held = new Promise<void>((resolve) => (release = resolve));
+    let entered = () => {};
+    const reached = new Promise<void>((resolve) => (entered = resolve));
+
+    vi.spyOn(service, "expandEvent").mockImplementation(async (event) => {
+      entered();
+      await held;
+
+      return expand(event);
+    });
+
+    const running = pipeline.runOutboxCycle();
+
+    try {
+      await reached;
+
+      const later = await publish();
+      const joined = pipeline.runOutboxCycle();
+
+      release();
+
+      expect(await joined).toBe(true);
+      expect(
+        (
+          await prisma.domainOutboxEvent.findUniqueOrThrow({
+            where: { id: later },
+          })
+        ).status,
+      ).toBe("PUBLISHED");
+    } finally {
+      release();
+      await running;
+    }
+  });
+});
+
 describe("a worker whose lease ran out", () => {
   it("cannot overwrite what the new owner decided", async () => {
     const eventId = await publish();
