@@ -269,10 +269,10 @@ O modelo comentado é o `.env.example`; a referência completa, com o valor de
 cada ambiente, é [`docs/variaveis-de-ambiente.md`](./docs/variaveis-de-ambiente.md).
 A validação acontece no boot (`src/schemas/env-schema/index.ts`): valor
 faltando ou inválido derruba o processo com a lista do que corrigir. Vazio
-conta como ausente. `DATABASE_URL`, `MIGRATION_DATABASE_URL`,
-`RUN_MIGRATIONS_ON_BOOT` e `ALLOW_EMPTY_DATABASE_BOOTSTRAP` ficam fora desse
-schema: quem as lê é o Prisma e o entrypoint da imagem
-(`infra/scripts/docker-entrypoint.sh`).
+conta como ausente. `DATABASE_URL`, `MIGRATION_DATABASE_URL` e
+`ALLOW_EMPTY_DATABASE_BOOTSTRAP` ficam fora desse schema: quem as lê é o
+Prisma, o entrypoint das imagens (`infra/scripts/docker-entrypoint.sh`) e a
+etapa de release (a imagem `trajetto-api-migrate`).
 
 | Onde               | O que vai lá                                                                                       |
 | ------------------ | -------------------------------------------------------------------------------------------------- |
@@ -286,7 +286,7 @@ fictícios):
 | Grupo               | Variáveis                                                                                                                                              |
 | ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | processo            | `NODE_ENV`, `APP_ENV` (`development`, `staging` ou `production`), `PORT`, `LOG_LEVEL`, `WORKERS_ENABLED`                                               |
-| banco               | `DATABASE_URL`, `MIGRATION_DATABASE_URL`, `POSTGRES_*` (só desenvolvimento), `RUN_MIGRATIONS_ON_BOOT`, `ALLOW_EMPTY_DATABASE_BOOTSTRAP`                |
+| banco               | `DATABASE_URL`, `MIGRATION_DATABASE_URL` (a etapa de release), `POSTGRES_*` (só desenvolvimento), `ALLOW_EMPTY_DATABASE_BOOTSTRAP`                     |
 | Redis e tempo real  | `REDIS_URL`, `SOCKET_ADAPTER_KEY`, `SOCKET_REVALIDATE_MS`                                                                                              |
 | URLs e sessão       | `HTTP_REQUEST` (origem da **web**: CORS, Socket.IO e links), `API_HTTP_REQUEST` (URL pública da própria API), `JWT_SECRET`, `JWT_SECRET_REFRESH_TOKEN` |
 | usuário master      | `MASTER_USER_EMAIL`, `MASTER_USER_INITIAL_PASSWORD`                                                                                                    |
@@ -316,7 +316,7 @@ Todos conferidos no `package.json`.
 | `yarn start:dev`                           | o servidor sem recarga                                                                                              |
 | `yarn build`                               | compila com `tsup` (é o build da imagem; não rode localmente sem necessidade)                                       |
 | `yarn start`                               | o entrypoint da imagem (`infra/scripts/docker-entrypoint.sh`)                                                       |
-| `yarn migrate:release`                     | o passo de release: migrations e seeds, sem subir o servidor                                                        |
+| `yarn migrate:release`                     | o passo de release num checkout: migrations e seeds, sem subir o servidor (no deploy, é a imagem de migração)       |
 | `yarn services:dev:up` / `:down` / `:stop` | todos os serviços do `compose.development.yaml`                                                                     |
 | `yarn database:dev:up` / `:down` / `:stop` | só o Postgres de desenvolvimento                                                                                    |
 | `yarn redis:dev:up` / `:down` / `:stop`    | só o Redis de desenvolvimento                                                                                       |
@@ -567,24 +567,28 @@ requisição e de resposta, incluindo 400/401/403/404/409/429.
 
 ```
 branch de trabalho ─push─▶ ci.yml (lint, typecheck, unitários + cobertura, audit, gitleaks, IA)
-staging ─push─▶ deploy.yml: validação completa (+ E2E) ─▶ build ÚNICO das 2 imagens (GHCR sha-<sha>;
-                            a IA reaproveitada se infra/ai-ocr não mudou)
+staging ─push─▶ deploy.yml: validação completa (+ E2E) ─▶ build ÚNICO das 3 imagens (GHCR sha-<sha>:
+                            API, migração e IA; a IA reaproveitada se infra/ai-ocr não mudou)
+                            ─▶ migrations (job único no Swarm, com a imagem de migração)
                             ─▶ tag `staging` por digest ─▶ Dokploy staging (IA, se mudou → API)
                             ─▶ a liveness pública responde o commit novo ─▶ marcador staged-<sha>
 PR staging → main ─▶ a mesma validação + "o staging rodou o head do PR?" (staged-<sha>;
                      um head só de documentação usa o de um ancestral que rodou)
-merge em main ─▶ promoção (sem build): migrations ─▶ tag `stable` por digest ─▶ Dokploy produção (IA → API)
+merge em main ─▶ promoção (sem build): migrations (job único) ─▶ tag `stable` por digest ─▶ Dokploy produção (IA → API)
                  ─▶ convergência ─▶ release        [aprovação do environment production]
 Run workflow na main ─▶ a mesma promoção com uma tag antiga (rollback)
 Run workflow na staging ─▶ o caminho de staging de novo (force_ai_build reconstrói a IA)
 ```
 
 - **Imagens**: `Dockerfile` (multi-stage sobre `node:22.21.1-alpine`, fixada
-  por digest; o entrypoint espera o Postgres, recusa banco vazio em produção,
-  migra se `RUN_MIGRATIONS_ON_BOOT=true` e sobe o servidor) e
+  por digest) gera duas: a da **API** (estágio `runner`, sem o CLI do Prisma:
+  o entrypoint espera o Postgres, recusa banco vazio em produção e banco sem
+  a última migration do build, e sobe o servidor; **nunca migra**) e a de
+  **migração** (estágio `migrate`: a da API mais o CLI, as migrations e os
+  seeds, que roda uma vez, como job do Swarm, antes de cada deploy). Mais
   `infra/ai-ocr/Dockerfile` (com o stage `test`). Publicadas como
-  `trajetto-api` e `trajetto-ai` em `ghcr.io/trajetto-organization/`, com SBOM,
-  proveniência e Trivy.
+  `trajetto-api`, `trajetto-api-migrate` e `trajetto-ai` em
+  `ghcr.io/trajetto-organization/`, com SBOM, proveniência e Trivy.
 - **Uma imagem para os dois ambientes**, construída uma vez em `staging` e
   promovida por digest; staging e produção mudam só o Environment das
   Applications no Dokploy.

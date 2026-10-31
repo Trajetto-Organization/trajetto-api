@@ -124,15 +124,18 @@ describe("the build (once, on staging)", () => {
       (m) => m[1].trim(),
     );
 
-    // The API and the AI service (ADR 0010). Database backups are Dokploy's
-    // own, so there is no backup image. The AI also carries `src-<tree>`,
-    // the git hash of infra/ai-ocr: immutable too (it names the content the
-    // image was built from), and how a later push finds it to reuse it.
+    // The API, its release image (trajetto-api-migrate, which the deploys
+    // run once before the API rolls out) and the AI service (ADR 0010).
+    // Database backups are Dokploy's own, so there is no backup image. The
+    // AI also carries `src-<tree>`, the git hash of infra/ai-ocr: immutable
+    // too (it names the content the image was built from), and how a later
+    // push finds it to reuse it.
     expect(metadata).toEqual([
+      "type=sha,prefix=sha-",
       "type=sha,prefix=sha-",
       "type=sha,prefix=sha-\n            type=raw,value=src-${{ steps.ai-source.outputs.tree }}",
     ]);
-    expect(build.match(/flavor: latest=false/g)).toHaveLength(2);
+    expect(build.match(/flavor: latest=false/g)).toHaveLength(3);
   });
 });
 

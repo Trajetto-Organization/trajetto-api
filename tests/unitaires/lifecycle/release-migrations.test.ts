@@ -18,13 +18,17 @@ import {
  * with `finished_at` NULL in `_prisma_migrations`, and from then on every
  * `migrate deploy` of every image version — the old one included — refused to
  * run (P3009). The next restart of any replica was an outage until someone
- * resolved it by hand. As a one-off Swarm job run by the promote workflow (on
- * the Dokploy host, which runs the Applications in Swarm), a failing migration fails
- * one step, `stable` does not move and the running replicas never notice.
+ * resolved it by hand. As a one-off Swarm job, run by the staging deploy and
+ * by the promote (on the Dokploy host, which runs the Applications in
+ * Swarm), a failing migration fails one step, no tag moves and the running
+ * replicas never notice. The API image no longer carries the Prisma CLI at
+ * all: the job runs the release image (trajetto-api-migrate).
  */
 const sh = hasShell("sh");
+const bash = hasShell("bash");
 
-const IMAGE = "ghcr.io/trajetto-organization/trajetto-api:sha-0a1b2c3";
+const IMAGE = "ghcr.io/trajetto-organization/trajetto-api-migrate:sha-0a1b2c3";
+const BY_DIGEST = `ghcr.io/trajetto-organization/trajetto-api-migrate@sha256:${"0".repeat(64)}`;
 
 const DOCKER = `
 case "$1 $2" in
@@ -70,10 +74,14 @@ function release(args: string[], env: Record<string, string> = {}) {
 
 describe.skipIf(!sh)("the release migration job", () => {
   it.each([
-    "ghcr.io/trajetto-organization/trajetto-api:latest",
-    "ghcr.io/trajetto-organization/trajetto-api:stable",
+    // The API image cannot migrate: it carries no Prisma CLI.
+    "ghcr.io/trajetto-organization/trajetto-api:sha-0a1b2c3",
+    "ghcr.io/trajetto-organization/trajetto-api:main-0a1b2c3",
+    "ghcr.io/trajetto-organization/trajetto-api-migrate:latest",
+    "ghcr.io/trajetto-organization/trajetto-api-migrate:staging",
+    "ghcr.io/trajetto-organization/trajetto-api-migrate:staging-0a1b2c3",
+    "ghcr.io/trajetto-organization/trajetto-api-migrate@sha256:0a1b2c3",
     "ghcr.io/trajetto-organization/trajetto-ui:sha-0a1b2c3",
-    "ghcr.io/trajetto-organization/trajetto-api:staging-0a1b2c3",
     `${IMAGE}; docker swarm leave --force`,
     "",
   ])("refuses %j without touching docker", (image) => {
@@ -83,17 +91,15 @@ describe.skipIf(!sh)("the release migration job", () => {
     expect(box.calls("docker")).toEqual([]);
   });
 
-  it("accepts the main-<sha> builds published before the staging branch (a rollback target)", () => {
-    const result = release([
-      "ghcr.io/trajetto-organization/trajetto-api:main-0a1b2c3",
-    ]);
+  it("accepts the release image by the digest the pipeline built", () => {
+    const result = release([BY_DIGEST]);
 
     expect(result.status, result.stdout + result.stderr).toBe(0);
     expect(
       box
         .calls("docker")
-        .some((call) => call.startsWith("docker service create")),
-    ).toBe(true);
+        .find((call) => call.startsWith("docker service create")),
+    ).toContain(`${BY_DIGEST} ./docker-entrypoint.sh migrate`);
   });
 
   it("runs the image as a one-off job with no healthcheck, and removes it", () => {
@@ -108,7 +114,7 @@ describe.skipIf(!sh)("the release migration job", () => {
     expect(create).toBeDefined();
     expect(create).toContain("--mode replicated-job");
     expect(create).toContain("--restart-condition none");
-    // The image's HEALTHCHECK probes :3333, which a migration never opens:
+    // The API's HEALTHCHECK probes :3333, which a migration never opens:
     // with it, Swarm would kill the job halfway through a migration.
     expect(create).toContain("--no-healthcheck");
     expect(create).toContain("--with-registry-auth");
@@ -139,7 +145,7 @@ describe.skipIf(!sh)("the release migration job", () => {
   });
 
   it("accepts the image through a forced-command SSH key", () => {
-    const result = release([], { SSH_ORIGINAL_COMMAND: IMAGE });
+    const result = release([], { SSH_ORIGINAL_COMMAND: BY_DIGEST });
 
     expect(result.status, result.stderr).toBe(0);
   });
@@ -255,56 +261,257 @@ describe.skipIf(!sh)("the release migration job", () => {
   );
 });
 
-describe("the promote workflow", () => {
+/**
+ * The CI side (.github/scripts/release-migrations.sh), with `ssh` stubbed:
+ * attempt N exits STUB_SSH_EXIT_<N> (else 0) after printing STUB_SSH_OUT_<N>.
+ */
+const SSH = `
+count="$STUB_DIR/ssh-count"
+n=$(cat "$count" 2>/dev/null || echo 0)
+n=$((n + 1))
+echo "$n" > "$count"
+for arg in "$@"; do
+  case "$arg" in UserKnownHostsFile=*) cp "\${arg#UserKnownHostsFile=}" "$STUB_DIR/known-hosts-seen" ;; esac
+done
+eval "out=\\\${STUB_SSH_OUT_$n:-}"
+eval "code=\\\${STUB_SSH_EXIT_$n:-0}"
+[ -z "$out" ] || printf '%s\\n' "$out"
+exit "$code"`;
+
+describe.skipIf(!bash)("the CI side of the release step", () => {
+  const secrets = {
+    ENVIRONMENT: "staging",
+    SSH_HOST: "deploy.example.invalid",
+    SSH_USER: "deploy",
+    SSH_KEY:
+      "-----BEGIN OPENSSH PRIVATE KEY-----\nfake\n-----END OPENSSH PRIVATE KEY-----",
+    SSH_KNOWN_HOSTS: "deploy.example.invalid ssh-ed25519 AAAAfake",
+  };
+
+  function client(args: string[], env: Record<string, string> = {}) {
+    box.stub("ssh", SSH);
+
+    const tmp = `${box.root}/tmp`;
+
+    mkdirSync(tmp, { recursive: true });
+
+    const result = run(
+      "bash",
+      repoFile(".github/scripts/release-migrations.sh"),
+      args,
+      {
+        bin: box.bin,
+        env: {
+          STUB_DIR: box.root,
+          SSH_RETRY_SECONDS: "0",
+          TMPDIR: tmp,
+          ...secrets,
+          ...env,
+        },
+      },
+    );
+
+    return { ...result, log: result.stdout + result.stderr, tmp };
+  }
+
+  it("sends the image and nothing else, to a host it already knows", () => {
+    const result = client([BY_DIGEST]);
+
+    expect(result.status, result.log).toBe(0);
+
+    const [call] = box.calls("ssh");
+
+    expect(call.endsWith(`deploy@deploy.example.invalid ${BY_DIGEST}`)).toBe(
+      true,
+    );
+    expect(call).toContain("-o BatchMode=yes");
+    expect(call).toContain("-o StrictHostKeyChecking=yes");
+    expect(readFileSync(`${box.root}/known-hosts-seen`, "utf8")).toContain(
+      secrets.SSH_KNOWN_HOSTS,
+    );
+  });
+
+  it("keeps the session alive through a long, silent migration", () => {
+    // The host's script prints nothing while it polls (up to 15 min). An
+    // idle TCP flow is dropped by the runner's NAT after a few minutes, and
+    // the step then hangs on a session that no longer exists.
+    client([BY_DIGEST]);
+
+    expect(box.calls("ssh")[0]).toMatch(/-o ServerAliveInterval=\d+/);
+  });
+
+  it("leaves no key behind", () => {
+    const result = client([BY_DIGEST]);
+
+    expect(readdirSync(result.tmp)).toEqual([]);
+  });
+
+  it("refuses to run without the image", () => {
+    const result = client([]);
+
+    expect(result.status).toBe(2);
+    expect(box.calls("ssh")).toEqual([]);
+  });
+
+  it("names every missing secret, and says the deploy cannot go without them", () => {
+    const result = client([BY_DIGEST], { SSH_KEY: "", SSH_KNOWN_HOSTS: "" });
+
+    expect(result.status).toBe(1);
+    expect(result.log).toContain("DEPLOY_SSH_KEY DEPLOY_SSH_KNOWN_HOSTS");
+    expect(result.log).toContain("environment staging");
+    expect(box.calls("ssh")).toEqual([]);
+  });
+
+  it("tries again a connection that never opened, saying so", () => {
+    const result = client([BY_DIGEST], {
+      STUB_SSH_EXIT_1: "255",
+      STUB_SSH_OUT_1:
+        "ssh: connect to host deploy.example.invalid port 22: Connection timed out",
+    });
+
+    expect(result.status, result.log).toBe(0);
+    expect(box.calls("ssh")).toHaveLength(2);
+    expect(result.log).toMatch(
+      /::warning::O SSH .* não abriu \(tentativa 1 de 3/,
+    );
+  });
+
+  it("gives up on the network after three attempts, as a network failure", () => {
+    const result = client([BY_DIGEST], {
+      STUB_SSH_EXIT_1: "255",
+      STUB_SSH_EXIT_2: "255",
+      STUB_SSH_EXIT_3: "255",
+    });
+
+    expect(result.status).toBe(1);
+    expect(box.calls("ssh")).toHaveLength(3);
+    expect(result.log).toContain("Nenhuma migration rodou");
+  });
+
+  it("never tries again once the host answered: the job may be migrating", () => {
+    // A session that dropped after the host started: a second job would
+    // race the first for Prisma's advisory lock.
+    const result = client([BY_DIGEST], {
+      STUB_SSH_EXIT_1: "255",
+      STUB_SSH_OUT_1: `[release-migrations] ${BY_DIGEST} como job trajetto-migrate-1 na rede dokploy-network`,
+    });
+
+    expect(result.status).toBe(255);
+    expect(box.calls("ssh")).toHaveLength(1);
+  });
+
+  it("passes the host's failure through, without trying again", () => {
+    const result = client([BY_DIGEST], {
+      STUB_SSH_EXIT_1: "1",
+      STUB_SSH_OUT_1:
+        "[release-migrations] ERRO: o job terminou em 'Failed 2 seconds ago'.",
+    });
+
+    expect(result.status).toBe(1);
+    expect(box.calls("ssh")).toHaveLength(1);
+    expect(result.log).toContain("O job de migrations falhou no host");
+  });
+});
+
+describe("the deploy workflows", () => {
   const workflow = readFileSync(
     repoFile(".github/workflows/deploy.yml"),
     "utf8",
   );
-  const job = workflow.slice(workflow.indexOf("\n  promote-production:"));
-  const steps = job.split(/\n      - name: /).slice(1);
-  const index = (name: string) =>
-    steps.findIndex((step) => step.startsWith(name));
 
-  it("migrates once, before `stable` moves and before the stack is told to pull", () => {
-    const migrate = index("Run database migrations");
+  function stepsOf(name: string) {
+    const start = workflow.indexOf(`\n  ${name}:`);
+    const end = workflow.indexOf("\n  # ──", start + 1);
+    const job = workflow.slice(start, end === -1 ? undefined : end);
+    const steps = job.split(/\n      - name: /).slice(1);
+    const index = (step: string) =>
+      steps.findIndex((each) => each.startsWith(step));
+
+    return { steps, index };
+  }
+
+  const staging = stepsOf("deploy-staging");
+  const promote = stepsOf("promote-production");
+
+  it("staging migrates once, before any tag moves or Dokploy is told to pull", () => {
+    const migrate = staging.index("Run database migrations");
+
+    expect(migrate, "passo de migração no deploy de staging").toBeGreaterThan(
+      -1,
+    );
+    expect(migrate).toBeGreaterThan(
+      staging.index("Is the staging deploy configured?"),
+    );
+    expect(migrate).toBeLessThan(
+      staging.index("Move the AI's staging tag to this build"),
+    );
+    expect(migrate).toBeLessThan(staging.index("Move staging to this build"));
+    expect(migrate).toBeLessThan(staging.index("Deploy to staging (Dokploy)"));
+  });
+
+  it("staging runs the release image this run built, by digest", () => {
+    const step = staging.steps[staging.index("Run database migrations")];
+
+    expect(step).toContain(
+      "MIGRATE_DIGEST: ${{ needs.build-and-push.outputs.migrate_digest }}",
+    );
+    expect(step).toContain(
+      '"ghcr.io/trajetto-organization/trajetto-api-migrate@${MIGRATE_DIGEST}"',
+    );
+  });
+
+  it("the promote migrates once, before `stable` moves and before production is told to pull", () => {
+    const migrate = promote.index("Run database migrations");
 
     expect(migrate, "passo de migração no promote").toBeGreaterThan(-1);
-    expect(migrate).toBeLessThan(index("Promote image to stable"));
-    expect(migrate).toBeLessThan(index("Deploy to production (Dokploy)"));
+    expect(migrate).toBeGreaterThan(
+      promote.index("Is the production deploy configured?"),
+    );
+    expect(migrate).toBeLessThan(promote.index("Promote image to stable"));
+    expect(migrate).toBeLessThan(
+      promote.index("Deploy to production (Dokploy)"),
+    );
   });
 
-  it("is switched on by a repository variable, and hands over no raw input", () => {
-    const step = steps[index("Run database migrations")] ?? "";
+  it("the promote runs the release image of the promoted build, and skips a build older than it", () => {
+    const step = promote.steps[promote.index("Run database migrations")];
 
-    expect(step).toContain("if: vars.MIGRATIONS_VIA_JOB == 'true'");
     // The build the staging check settled on (promote-workflow.test.ts).
     expect(step).toContain("IMAGE_TAG: ${{ steps.staged.outputs.tag }}");
-    expect(step.slice(step.indexOf("run:"))).not.toContain("${{");
+    expect(step).toContain(
+      'ghcr.sh digest "ghcr.io/trajetto-organization/trajetto-api-migrate:${IMAGE_TAG}"',
+    );
+    expect(step).toMatch(/if \[ -z "\$digest" \]; then[\s\S]*?exit 0/);
   });
 
-  it("keeps the SSH session alive through a long, silent migration", () => {
-    // The script prints nothing while it polls (up to 15 min). An idle TCP
-    // flow is dropped by the runner's NAT after a few minutes, and the step
-    // then hangs on a session that no longer exists.
-    const step = steps[index("Run database migrations")] ?? "";
-    const command = step.slice(step.indexOf("ssh -i"));
+  it.each([
+    ["staging", staging],
+    ["promote", promote],
+  ])(
+    "%s: only when Dokploy deploys, through the shared script, handing over no raw input",
+    (_name, job) => {
+      const step = job.steps[job.index("Run database migrations")];
 
-    // The option on the ssh command line itself, before the destination.
-    expect(command).toMatch(
-      /^ssh -i[\s\S]*?-o ServerAliveInterval=\d+[\s\S]*?"\$SSH_USER@/,
-    );
-  });
-});
+      expect(step).toContain("if: ");
+      expect(step).toContain("steps.dokploy.outputs.enabled == 'true'");
+      expect(step).toContain("bash .github/scripts/release-migrations.sh");
+      expect(step).toContain("SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}");
+      expect(step.slice(step.indexOf("run:"))).not.toContain("${{");
+    },
+  );
 
-describe("the image's boot", () => {
-  it("migrates on boot unless the API Application switches it off for the job", () => {
-    // Unset in the Application's environment, the entrypoint keeps migrating
-    // on boot; MIGRATIONS_VIA_JOB pairs with RUN_MIGRATIONS_ON_BOOT=false.
-    const entrypoint = readFileSync(
-      repoFile("infra/scripts/docker-entrypoint.sh"),
-      "utf8",
-    );
+  it("has no switch left to keep migrating on boot", () => {
+    // The API image cannot migrate; a variable that pretended otherwise
+    // would only mislead.
+    for (const file of [
+      ".github/workflows/deploy.yml",
+      "Dockerfile",
+      "infra/scripts/docker-entrypoint.sh",
+    ]) {
+      const text = readFileSync(repoFile(file), "utf8");
 
-    expect(entrypoint).toContain('"${RUN_MIGRATIONS_ON_BOOT:-true}" = "true"');
+      expect(text, file).not.toContain("MIGRATIONS_VIA_JOB");
+      expect(text, file).not.toContain("RUN_MIGRATIONS_ON_BOOT");
+    }
   });
 });

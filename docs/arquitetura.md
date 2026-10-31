@@ -467,8 +467,12 @@ Cada réplica sobe, no mesmo processo Node (`src/server.ts`):
 
 O boot (`infra/scripts/docker-entrypoint.sh`, sob `dumb-init`) espera o
 Postgres, recusa banco vazio em produção (`database-bootstrap-guard.ts`),
-migra e semeia se `RUN_MIGRATIONS_ON_BOOT=true`, e faz `exec` do servidor —
-o Node é filho direto do `dumb-init`, então o SIGTERM do deploy chega a ele.
+recusa banco sem a última migration do build (`schema-guard.ts`, contra
+`build/schema-version.json`) e faz `exec` do servidor — o Node é filho
+direto do `dumb-init`, então o SIGTERM do deploy chega a ele. A imagem da API
+**nunca migra** (não traz o CLI do Prisma): quem migra é a imagem
+`trajetto-api-migrate`, uma vez, como job do Swarm, antes do rollout
+([`deploy.md`](./deploy.md#15-migrations)).
 
 O desligamento é ordenado (`src/shared/lifecycle/shutdown.ts`): a readiness
 passa a 503, a réplica espera 12 s para sair do balanceamento do serviço,
@@ -1071,8 +1075,8 @@ outras correções da rodada. O 8 ainda não saiu. Medições:
 
 ## Migrations: expandir e contrair
 
-Toda migration roda com a versão **anterior** servindo (no boot da task nova
-de um rollout start-first, ou no job logo antes dele) e continua aplicada
+Toda migration roda com a versão **anterior** servindo (no job de release,
+logo antes do rollout) e continua aplicada
 depois de um rollback automático, que devolve o código velho sobre o schema
 novo. O client Prisma da versão anterior nomeia toda coluna escalar nos SELECT
 e RETURNING e insere sem as colunas que não conhece. Então:

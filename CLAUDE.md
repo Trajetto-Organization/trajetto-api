@@ -203,13 +203,15 @@ checksum). Detalhes: `docs/arquitetura.md` ("Migrations: expandir e contrair").
   commit** (nunca squash/rebase).
 - `ci.yml` valida as branches de trabalho. `deploy.yml`: push em `staging`
   roda a validação completa (audit, lint, typecheck, unitários com piso, E2E,
-  pytest da IA, gitleaks), constrói **uma vez** as imagens `trajetto-api` e
-  `trajetto-ai` (`sha-<sha>`, SBOM, proveniência, Trivy),
-  move `staging` por digest e faz o deploy do staging no Dokploy; PR para
+  pytest da IA, gitleaks), constrói **uma vez** as imagens `trajetto-api`,
+  `trajetto-api-migrate` e `trajetto-ai` (`sha-<sha>`, SBOM, proveniência,
+  Trivy), roda as migrations como job único no Swarm (a imagem de migração,
+  por SSH com chave restrita), move `staging` por digest e faz o deploy do
+  staging no Dokploy; PR para
   `main` revalida e exige que o staging tenha rodado o head (ou que o head só
   mude documentação desde um commit que rodou: `[skip ci]` só para
   documentação é seguro); o merge em `main`
-  **promove** o mesmo digest para `stable` (migrations como job opcional,
+  **promove** o mesmo digest para `stable` (migrations como job único antes,
   environment `production` com aprovação, conferência da convergência) e roda
   o `semantic-release`. _Run workflow_ com `image_tag=sha-<sha>` = rollback.
 - Sem os secrets do Dokploy, os jobs movem as tags e pulam o deploy com

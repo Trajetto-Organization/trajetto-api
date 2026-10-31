@@ -288,7 +288,9 @@ describe("the API image's build stage", () => {
     expect(builder.slice(0, generate)).toContain(
       "COPY prisma/schema.prisma ./prisma/schema.prisma",
     );
-    expect(builder.indexOf("RUN yarn build")).toBeGreaterThan(source);
+    expect(
+      builder.findIndex((line) => line.startsWith("RUN yarn build")),
+    ).toBeGreaterThan(source);
   });
 
   // index.d.ts alone is ~7 MB, and tsup does not type-check.
@@ -301,29 +303,53 @@ describe("the API image's build stage", () => {
     );
     expect(generate + 1).toBeLessThan(builder.indexOf("COPY . ."));
   });
+
+  // The seeds are the release step's: only the `migrate` stage copies
+  // release/, back into its build/.
+  it("moves the seeds out of build/, in the RUN that built them", () => {
+    const builder = stage(api, "builder");
+
+    expect(builder[builder.length - 1]).toBe(
+      "RUN yarn build && mkdir release && mv build/seed.js build/import-violation-codes.js release/",
+    );
+    expect(read("tsup.config.ts")).toMatch(
+      /seed: "\.\/infra\/scripts\/seed\.ts"/,
+    );
+    expect(read("tsup.config.ts")).toMatch(
+      /"import-violation-codes": "\.\/infra\/scripts\/import-violation-codes\.ts"/,
+    );
+  });
 });
 
 /**
- * The API runtime (§14, measured on 28/10/2026 on Prisma 6.1 with the same
- * sources: 115 → 88 MB compressed, 417 → 285 MB unpacked; on Prisma 7.10.1,
- * whose CLI is larger, 114.8 MB compressed and 431 MB unpacked, as measured
- * in docs/deploy.md).
+ * Two images from one Dockerfile (measured on 31/10/2026, Prisma 7.10.1):
  *
+ * - the API image (stage `runner`): 239 MB unpacked, ~68 MB compressed —
+ *   it was 431 MB and 114.8 MB with the Prisma CLI inside (docs/deploy.md).
+ *   No CLI, no schema, no migrations, no seeds: it never migrates, and
+ *   refuses to start on a database that lacks its build's last migration.
+ * - the release image (stage `migrate`, trajetto-api-migrate): the API
+ *   image plus the CLI's own tree (~170 MB unpacked), the schema, the
+ *   migrations and the seeds, as layers on top — the server pulls only
+ *   those to run the release step, once per deploy.
+ *
+ * And what the API image already was:
  * - Alpine plus the node binary: the Node image's npm, corepack, yarn and C
  *   headers no longer ride along under a whiteout, and only what the
  *   binaries link against is installed.
  * - That binary comes as a tree whose directories carry its own mtime, so
  *   the ~46 MB layer is the same blob in every build, cached or not.
- * - prod-deps drops what nothing loads (maps, typings, READMEs, @types, the
- *   exceljs browser bundle, the pglite of `prisma dev` and the query
+ * - The installs drop what nothing loads (maps, typings, READMEs, @types,
+ *   the exceljs browser bundle, the pglite of `prisma dev` and the query
  *   compilers of every database). Prisma 7 has no query engine: the client
  *   carries its own PostgreSQL compiler, and only the CLI's schema engine
  *   (`migrate deploy`) is a native binary.
  * - The runner copies the most stable first: a source-only commit re-ships
  *   build/ alone (~1 MB compressed), never node_modules.
  *
- * The image itself runs before the push (deploy.yml, "Smoke test the API
- * image"): migrations from an empty database, the seeds and the boot.
+ * Both images run before the push (deploy.yml, "Smoke test the API image"):
+ * the API refusing the empty database, the release image migrating it from
+ * scratch with the seeds, and the API's boot on top.
  */
 describe("the API image's runtime base", () => {
   it("is the Alpine minor the node binary was built for", () => {
@@ -352,7 +378,11 @@ describe("the API image's runtime base", () => {
       "FROM node AS deps",
       "FROM node AS builder",
       "FROM node AS prod-deps",
+      "FROM node AS migrate-deps",
       "FROM base AS runner",
+      "FROM runner AS migrate",
+      // The default target: a build without --target is the API image.
+      "FROM runner",
     ]);
     // Its directories take the binary's mtime: stamped with the build's
     // time, every uncached build made a new blob of the same binary.
@@ -383,6 +413,96 @@ describe("the API image's runtime base", () => {
   });
 });
 
+/** The `node -e '…'` that writes a stage's manifest, run on package.json. */
+function derivedManifest(stageName: string) {
+  const install = stage(api, stageName).find((line) =>
+    /yarn install --pure-lockfile/.test(line),
+  );
+  const script = /node -e '([^']*)'/.exec(install ?? "")?.[1];
+
+  expect(script, `${stageName}: node -e '…'`).toBeDefined();
+
+  const box = sandbox();
+
+  try {
+    box.file("package.json", read("package.json"));
+
+    const result = spawnSync("node", ["-e", script as string], {
+      cwd: box.root,
+      encoding: "utf8",
+      timeout: 30_000,
+    });
+
+    expect(result.status, result.stderr).toBe(0);
+
+    return JSON.parse(readFileSync(`${box.root}/package.json`, "utf8")) as {
+      name?: string;
+      private: boolean;
+      dependencies: Record<string, string>;
+      devDependencies?: unknown;
+    };
+  } finally {
+    box.dispose();
+  }
+}
+
+describe("the two installs, from manifests derived from package.json", () => {
+  const pkg = JSON.parse(read("package.json")) as {
+    dependencies: Record<string, string>;
+    devDependencies: Record<string, string>;
+  };
+
+  it("keep the Prisma CLI a devDependency, never a dependency of the API", () => {
+    expect(pkg.dependencies.prisma).toBeUndefined();
+    expect(pkg.devDependencies.prisma).toBe(pkg.dependencies["@prisma/client"]);
+  });
+
+  // With the full manifest, `--production` still installed `prisma` and
+  // `typescript` — devDependencies that are optional peers of
+  // @prisma/client — and the whole CLI with them (measured: 317 → 91 MB).
+  it("give the API image `dependencies` alone", () => {
+    const manifest = derivedManifest("prod-deps");
+
+    expect(manifest.dependencies).toEqual(pkg.dependencies);
+    expect(manifest.devDependencies).toBeUndefined();
+  });
+
+  it("give the release image the CLI and exactly what prisma.config.ts imports, at the repository's versions", () => {
+    const imported = [
+      ...read("prisma.config.ts").matchAll(/^import .* from "([^"]+)";$/gm),
+    ].map(([, from]) =>
+      from.startsWith("@")
+        ? from.split("/").slice(0, 2).join("/")
+        : from.split("/")[0],
+    );
+    const manifest = derivedManifest("migrate-deps");
+
+    expect(Object.keys(manifest.dependencies).sort()).toEqual(
+      [...new Set(["prisma", ...imported])].sort(),
+    );
+    for (const [name, version] of Object.entries(manifest.dependencies)) {
+      expect(version, name).toBe(
+        pkg.dependencies[name] ?? pkg.devDependencies[name],
+      );
+    }
+  });
+
+  // `--frozen-lockfile` refuses a manifest smaller than the lockfile, and a
+  // plain install would rewrite it: `--pure-lockfile` installs every
+  // version as the repository's yarn.lock has it, and never writes it.
+  it("install from the repository's yarn.lock as it is", () => {
+    for (const name of ["prod-deps", "migrate-deps"]) {
+      const lines = stage(api, name);
+
+      expect(lines, name).toContain("COPY package.json yarn.lock ./");
+      expect(
+        lines.find((line) => /yarn install /.test(line)),
+        name,
+      ).toMatch(/yarn install --pure-lockfile --production=true/);
+    }
+  });
+});
+
 describe("the API image's node_modules", () => {
   it("prune what nothing loads at run time, in the stage that is not shipped", () => {
     const prodDeps = stage(api, "prod-deps");
@@ -390,14 +510,8 @@ describe("the API image's node_modules", () => {
     expect(prodDeps[prodDeps.length - 1]).toBe(
       "RUN find node_modules -type f \\( -name '*.map' -o -name '*.d.ts' -o -name '*.d.mts' -o -name '*.d.cts' -o -iname '*.md' -o -iname '*.markdown' \\) -delete && " +
         "rm -rf node_modules/@types node_modules/exceljs/dist && " +
-        "rm -r node_modules/@electric-sql/pglite " +
-        "node_modules/@prisma/client/runtime/query_compiler_* " +
-        "node_modules/prisma/build/query_compiler_*",
+        "rm -r node_modules/@prisma/client/runtime/query_compiler_*",
     );
-    // The CLI requires Studio and @prisma/dev when it starts: without them
-    // `migrate deploy` fails ("Cannot find module
-    // '@prisma/studio-core/data/bff'", smoke-tested).
-    expect(prodDeps.join(" ")).not.toMatch(/studio-core|@prisma\/dev\b/);
     // Nothing deletes in the runner: a later layer would only hide files.
     expect(
       stage(api, "runner").filter((line) => /^RUN .*\brm\b/.test(line)),
@@ -412,17 +526,14 @@ describe("the API image's node_modules", () => {
     expect(read("prisma/schema.prisma")).not.toMatch(/^\s*binaryTargets\s*=/m);
   });
 
-  it("copy the most stable first, and build/ last", () => {
+  it("copy the most stable first, build/ last, and nothing the release step needs", () => {
     const runner = stage(api, "runner");
 
     expect(runner.filter((line) => /^COPY /.test(line))).toEqual([
       "COPY --from=prod-deps --chown=nodejs:nodejs /app/node_modules ./node_modules",
       "COPY --from=builder --chown=nodejs:nodejs /app/node_modules/.prisma ./node_modules/.prisma",
-      "COPY --from=builder --chown=nodejs:nodejs /app/tabela-codigo-infracoes-renainf-xlsx.xlsx ./tabela-codigo-infracoes-renainf-xlsx.xlsx",
       "COPY --from=builder --chown=nodejs:nodejs /app/infra/scripts/docker-entrypoint.sh ./docker-entrypoint.sh",
       "COPY --from=builder --chown=nodejs:nodejs /app/package.json ./package.json",
-      "COPY --from=builder --chown=nodejs:nodejs /app/prisma ./prisma",
-      "COPY --from=builder --chown=nodejs:nodejs /app/prisma.config.ts ./prisma.config.ts",
       "COPY --from=builder --chown=nodejs:nodejs /app/build/src/modules ./src/modules",
       "COPY --from=builder --chown=nodejs:nodejs /app/build ./build",
     ]);
@@ -436,33 +547,84 @@ describe("the API image's node_modules", () => {
   });
 });
 
+describe("the release image (trajetto-api-migrate)", () => {
+  it("adds the CLI, the schema, the migrations and the seeds on top of the API image, most stable first", () => {
+    const migrate = stage(api, "migrate");
+
+    expect(migrate[0]).toBe("FROM runner AS migrate");
+    expect(migrate.filter((line) => /^COPY /.test(line))).toEqual([
+      "COPY --from=migrate-deps --chown=nodejs:nodejs /migrate/node_modules ./migrate/node_modules",
+      "COPY --from=builder --chown=nodejs:nodejs /app/tabela-codigo-infracoes-renainf-xlsx.xlsx ./tabela-codigo-infracoes-renainf-xlsx.xlsx",
+      "COPY --from=builder --chown=nodejs:nodejs /app/prisma.config.ts ./migrate/prisma.config.ts",
+      "COPY --from=builder --chown=nodejs:nodejs /app/prisma/schema.prisma ./migrate/prisma/schema.prisma",
+      "COPY --from=builder --chown=nodejs:nodejs /app/prisma/migrations ./migrate/prisma/migrations",
+      "COPY --from=builder --chown=nodejs:nodejs /app/release/ ./build/",
+    ]);
+    // A later layer would only hide files: nothing runs or deletes here.
+    expect(migrate.filter((line) => /^RUN /.test(line))).toEqual([]);
+  });
+
+  // The API's probe of :3333 would have Swarm kill the job mid-migration.
+  it("declares no healthcheck, and migrates by default", () => {
+    const migrate = stage(api, "migrate");
+
+    expect(migrate).toContain("HEALTHCHECK NONE");
+    expect(migrate[migrate.length - 1]).toBe(
+      'CMD ["./docker-entrypoint.sh", "migrate"]',
+    );
+  });
+
+  it("keeps the release image's CLI apart from the API's node_modules", () => {
+    // The entrypoint runs `prisma migrate deploy` from migrate/, where
+    // prisma.config.ts resolves its imports in migrate/node_modules.
+    expect(read("infra/scripts/docker-entrypoint.sh")).toMatch(
+      /\[ -x migrate\/node_modules\/\.bin\/prisma \]/,
+    );
+  });
+});
+
 /**
- * The prune's effect, not only its text: prod-deps' last RUN, executed by sh
- * on a tree laid out like the Prisma 7.10.1 install. With `rm -rf` and globs,
- * a Prisma bump that moved pglite or renamed the compilers was a silent no-op
- * that put them back in the image; the build must stop there instead.
+ * The prunes' effect, not only their text: each install stage's last RUN,
+ * executed by sh on a tree laid out like the Prisma 7.10.1 install. With
+ * `rm -rf` and globs, a Prisma bump that moved pglite or renamed the
+ * compilers was a silent no-op that put them back in an image; the build
+ * must stop there instead.
  */
-describe.skipIf(!hasShell("sh"))("the API image's prune, run on a tree", () => {
-  const REMOVED = [
-    "node_modules/@electric-sql/pglite/dist/index.js",
-    "node_modules/@prisma/client/runtime/query_compiler_fast_bg.postgresql.wasm-base64.js",
-    "node_modules/@prisma/client/runtime/query_compiler_small_bg.mysql.mjs",
-    "node_modules/prisma/build/query_compiler_fast_bg.postgresql.wasm",
-    "node_modules/@types/node/index.d.ts",
-    "node_modules/exceljs/dist/exceljs.min.js",
-    "node_modules/pg/lib/index.js.map",
-    "node_modules/pg/README.md",
-  ];
-  // What the image loads: the client, the CLI and the schema engine that
-  // `migrate deploy` runs, Studio (the CLI requires it), pg, ExcelJS's main.
-  const KEPT = [
-    "node_modules/@prisma/client/runtime/client.js",
-    "node_modules/prisma/build/index.js",
-    "node_modules/@prisma/engines/schema-engine-linux-musl-openssl-3.0.x",
-    "node_modules/@prisma/studio-core/data/bff.js",
-    "node_modules/pg/lib/index.js",
-    "node_modules/exceljs/lib/exceljs.nodejs.js",
-  ];
+describe.skipIf(!hasShell("sh"))("the prunes, run on a tree", () => {
+  const CASES = {
+    "prod-deps": {
+      removed: [
+        "node_modules/@prisma/client/runtime/query_compiler_fast_bg.postgresql.wasm-base64.js",
+        "node_modules/@prisma/client/runtime/query_compiler_small_bg.mysql.mjs",
+        "node_modules/@types/node/index.d.ts",
+        "node_modules/exceljs/dist/exceljs.min.js",
+        "node_modules/pg/lib/index.js.map",
+        "node_modules/pg/README.md",
+      ],
+      // What the API loads: the client, pg, ExcelJS's main.
+      kept: [
+        "node_modules/@prisma/client/runtime/client.js",
+        "node_modules/pg/lib/index.js",
+        "node_modules/exceljs/lib/exceljs.nodejs.js",
+      ],
+    },
+    "migrate-deps": {
+      removed: [
+        "node_modules/@electric-sql/pglite/dist/index.js",
+        "node_modules/prisma/build/query_compiler_fast_bg.postgresql.wasm",
+        "node_modules/prisma/build/index.js.map",
+        "node_modules/prisma/README.md",
+      ],
+      // What `migrate deploy` loads: the CLI, its schema engine and Studio
+      // (the CLI requires it when it starts).
+      kept: [
+        "node_modules/prisma/build/index.js",
+        "node_modules/@prisma/engines/schema-engine-linux-musl-openssl-3.0.x",
+        "node_modules/@prisma/studio-core/data/bff.js",
+        "node_modules/@prisma/dev/dist/index.js",
+      ],
+    },
+  } as const;
 
   let box: Sandbox | undefined;
 
@@ -471,9 +633,9 @@ describe.skipIf(!hasShell("sh"))("the API image's prune, run on a tree", () => {
     box = undefined;
   });
 
-  function prune(files: string[]) {
-    const prodDeps = stage(api, "prod-deps");
-    const command = prodDeps[prodDeps.length - 1].replace(/^RUN /, "");
+  function prune(stageName: keyof typeof CASES, files: string[]) {
+    const lines = stage(api, stageName);
+    const command = lines[lines.length - 1].replace(/^RUN /, "");
 
     box = sandbox();
     for (const file of files) box.file(file, "x");
@@ -492,58 +654,70 @@ describe.skipIf(!hasShell("sh"))("the API image's prune, run on a tree", () => {
     };
   }
 
-  it("removes every target and keeps what the image loads", () => {
-    const { status, stderr, exists } = prune([...REMOVED, ...KEPT]);
+  it.each(Object.keys(CASES) as (keyof typeof CASES)[])(
+    "%s removes every target and keeps what its image loads",
+    (name) => {
+      const { removed, kept } = CASES[name];
+      const { status, stderr, exists } = prune(name, [...removed, ...kept]);
 
-    expect(status, stderr).toBe(0);
-    expect(REMOVED.filter(exists)).toEqual([]);
-    expect(KEPT.filter((file) => !exists(file))).toEqual([]);
-    expect(exists("node_modules/@electric-sql/pglite")).toBe(false);
-  });
+      expect(status, stderr).toBe(0);
+      expect(removed.filter(exists)).toEqual([]);
+      expect(kept.filter((file) => !exists(file))).toEqual([]);
+    },
+  );
 
   it.each([
     [
-      "pglite moved under the CLI",
-      "node_modules/@electric-sql/pglite/dist/index.js",
-      "node_modules/prisma/node_modules/@electric-sql/pglite/dist/index.js",
-      "node_modules/@electric-sql/pglite",
-    ],
-    [
+      "prod-deps",
       "the client's compilers renamed",
       "node_modules/@prisma/client/runtime/query_compiler_",
       "node_modules/@prisma/client/runtime/query_planner_",
       "node_modules/@prisma/client/runtime/query_compiler_*",
     ],
     [
+      "migrate-deps",
+      "pglite moved under the CLI",
+      "node_modules/@electric-sql/pglite/dist/index.js",
+      "node_modules/prisma/node_modules/@electric-sql/pglite/dist/index.js",
+      "node_modules/@electric-sql/pglite",
+    ],
+    [
+      "migrate-deps",
       "the CLI's compilers renamed",
       "node_modules/prisma/build/query_compiler_",
       "node_modules/prisma/build/query_planner_",
       "node_modules/prisma/build/query_compiler_*",
     ],
-  ])("stops the build when %s", (_case, from, to, missing) => {
-    const files = [...REMOVED, ...KEPT].map((file) =>
-      file.startsWith(from) ? to + file.slice(from.length) : file,
-    );
+  ] as const)(
+    "%s stops the build when %s",
+    (name, _case, from, to, missing) => {
+      const { removed, kept } = CASES[name];
+      const original = [...removed, ...kept];
+      const files = original.map((file) =>
+        file.startsWith(from) ? to + file.slice(from.length) : file,
+      );
 
-    expect(files).not.toEqual([...REMOVED, ...KEPT]);
+      expect(files).not.toEqual(original);
 
-    const { status, stderr } = prune(files);
+      const { status, stderr } = prune(name, files);
 
-    expect(status).not.toBe(0);
-    expect(stderr).toContain(missing);
-  });
+      expect(status).not.toBe(0);
+      expect(stderr).toContain(missing);
+    },
+  );
 });
 
 /**
  * The Prisma schema engine `migrate deploy` runs comes from @prisma/engines'
  * postinstall, which downloads it from binaries.prisma.sh and fails
  * SILENTLY: a dead download left no engine, and nothing said so until a
- * migrate without network. Both installs check it in the same RUN, try the
- * download again, and stop the build with the cause. Executed by sh on a
- * tree, with yarn replaced and the postinstall faked.
+ * migrate without network. The install that ships it (migrate-deps) checks
+ * it in the same RUN, tries the download again, and stops the build with
+ * the cause. Executed by sh on a tree, with the manifest step and yarn
+ * replaced and the postinstall faked.
  */
 describe.skipIf(!hasShell("sh"))(
-  "the API image's schema engine check, run on a tree",
+  "the release image's schema engine check, run on a tree",
   () => {
     let box: Sandbox | undefined;
 
@@ -552,24 +726,34 @@ describe.skipIf(!hasShell("sh"))(
       box = undefined;
     });
 
-    const installs = instructions(api).filter((line) =>
-      /yarn install --frozen-lockfile --production=/.test(line),
-    );
+    const ENGINE_CHECK = /schema-engine-\*/;
 
-    it("is in both installs, in the same RUN (a layer without the engine is never cached)", () => {
-      expect(installs).toHaveLength(2);
-      expect(stage(api, "deps").some((line) => installs.includes(line))).toBe(
-        true,
+    it("is in the install that ships the CLI, in the same RUN (a layer without the engine is never cached), and nowhere else", () => {
+      const install = stage(api, "migrate-deps").find((line) =>
+        /yarn install --pure-lockfile/.test(line),
       );
-      expect(
-        stage(api, "prod-deps").some((line) => installs.includes(line)),
-      ).toBe(true);
+
+      expect(install).toMatch(ENGINE_CHECK);
+      // Nothing in the build runs the schema engine, and the API image has
+      // no CLI: a check there would only add a download that can fail.
+      for (const name of ["deps", "builder", "prod-deps", "runner"]) {
+        expect(
+          stage(api, name).filter((line) => ENGINE_CHECK.test(line)),
+          name,
+        ).toEqual([]);
+      }
     });
 
-    function check(install: string, engine: boolean, downloads: boolean) {
+    function check(engine: boolean, downloads: boolean) {
+      const install = stage(api, "migrate-deps").find((line) =>
+        /yarn install --pure-lockfile/.test(line),
+      ) as string;
       const command = install
         .replace(/^RUN --mount=\S+ /, "")
-        .replace(/yarn install --frozen-lockfile --production=\w+/, "true")
+        .replace(
+          /node -e '[^']*' && yarn install --pure-lockfile --production=\w+/,
+          "true",
+        )
         .replace(/sleep \$\(\(attempt \* 10\)\);/, "");
 
       box = sandbox();
@@ -593,15 +777,15 @@ describe.skipIf(!hasShell("sh"))(
       });
     }
 
-    it.each([0, 1])("passes at once when install %i left the engine", (at) => {
-      const result = check(installs[at], true, false);
+    it("passes at once when the install left the engine", () => {
+      const result = check(true, false);
 
       expect(result.status, result.stderr).toBe(0);
       expect(result.stderr).toBe("");
     });
 
-    it.each([0, 1])("downloads it again when install %i left nothing", (at) => {
-      const result = check(installs[at], false, true);
+    it("downloads it again when the install left nothing", () => {
+      const result = check(false, true);
 
       expect(result.status, result.stderr).toBe(0);
       expect(result.stderr).toMatch(
@@ -609,17 +793,14 @@ describe.skipIf(!hasShell("sh"))(
       );
     });
 
-    it.each([0, 1])(
-      "stops the build with the cause when install %i never gets it",
-      (at) => {
-        const result = check(installs[at], false, false);
+    it("stops the build with the cause when it never gets it", () => {
+      const result = check(false, false);
 
-        expect(result.status).not.toBe(0);
-        expect(result.stderr).toMatch(/attempt 3 of 3/);
-        expect(result.stderr).toMatch(
-          /was not downloaded from binaries\.prisma\.sh/,
-        );
-      },
-    );
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toMatch(/attempt 3 of 3/);
+      expect(result.stderr).toMatch(
+        /was not downloaded from binaries\.prisma\.sh/,
+      );
+    });
   },
 );

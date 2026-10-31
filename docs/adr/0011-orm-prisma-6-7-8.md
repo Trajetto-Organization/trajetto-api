@@ -318,6 +318,14 @@ release usa no `migrate deploy` (Studio, `@prisma/dev`, `effect`); separar
 um alvo só de migração no `Dockerfile` (item 3 do menor caminho) é o próximo
 passo para devolver esse tamanho.
 
+**Feito em 31/10/2026** (item 3): o `Dockerfile` gera a imagem da API
+(estágio `runner`, sem o CLI: 431 → 239 MB descompactada, 114,8 → ~68 MB
+comprimida) e a de migração, `trajetto-api-migrate` (estágio `migrate`: a da
+API mais o CLI, o schema, as migrations e os seeds), que o deploy roda como
+job antes do rollout. O `prisma` passou a `devDependency`; as duas
+instalações saem de manifestos derivados do `package.json` com o
+`yarn.lock` como está (`deploy.md`, seção 15).
+
 ## Fontes
 
 - Status e suporte: <https://www.prisma.io/docs/orm/release-status>.

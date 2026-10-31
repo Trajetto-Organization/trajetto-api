@@ -315,11 +315,12 @@ describe("the harness files", () => {
 /**
  * The replicas boot on a fresh, EMPTY load_test.
  *
- * They run NODE_ENV=production with RUN_MIGRATIONS_ON_BOOT=false, and
- * production's bootstrap guard refuses an empty database (process.exit(1)).
- * The documented order started them first and migrated afterwards: both
- * replicas stayed Exited, Traefik had no backend and every scene hit 404/502.
- * Now a one-off `migrate` service — the image's release step — prepares the
+ * The API image never migrates: it runs NODE_ENV=production, production's
+ * bootstrap guard refuses an empty database (process.exit(1)) and the schema
+ * guard refuses one without the build's migrations. The documented order
+ * started them first and migrated afterwards: both replicas stayed Exited,
+ * Traefik had no backend and every scene hit 404/502. Now a one-off
+ * `migrate` service — the release image, trajetto-api-migrate — prepares the
  * database, and the replicas wait for it to exit 0.
  *
  * Rendered by the real `docker compose config`, so anchors, merges and
@@ -331,6 +332,7 @@ const hasCompose =
 
 type Service = {
   image?: string;
+  build?: { target?: string };
   command?: string[];
   environment?: Record<string, string>;
   depends_on?: Record<string, { condition: string }>;
@@ -378,21 +380,28 @@ describe("the release step runs before the replicas (LOAD-1)", () => {
   });
 
   describe.skipIf(!hasCompose)("as docker compose renders it", () => {
+    // Every container of either image: the API's, and the release image
+    // built on top of it.
     const booting = () => {
       const services = renderHarness();
+      const images = [services.api?.image, services.migrate?.image];
 
-      return Object.entries(services).filter(
-        ([, service]) => service.image === services.api?.image,
+      return Object.entries(services).filter(([, service]) =>
+        images.includes(service.image),
       );
     };
 
-    it("prepares the empty database with the image's release step, bootstrap allowed only there", () => {
+    it("prepares the empty database with the release image, bootstrap allowed only there", () => {
       const services = renderHarness();
       const migrate = services.migrate;
-      const apiImage = services.api?.image;
 
       expect(migrate?.command).toEqual(["./docker-entrypoint.sh", "migrate"]);
-      expect(migrate?.image).toBe(apiImage);
+      // The API image carries no Prisma CLI: the release step is the image
+      // built from the Dockerfile's `migrate` stage, the replicas the
+      // `runner` one.
+      expect(migrate?.image).toBe("trajetto-api-migrate:load");
+      expect(migrate?.build?.target).toBe("migrate");
+      expect(services.api?.build?.target).toBe("runner");
 
       // The same database and secrets as the replicas, plus the one flag.
       const { ALLOW_EMPTY_DATABASE_BOOTSTRAP, ...rest } =

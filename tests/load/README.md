@@ -42,11 +42,13 @@ gargalos e as quatro correções que saíram de lá em
 ## Como rodar
 
 ```bash
-# 1. O harness: Traefik + Postgres + Redis, o `migrate` (o passo de release da
-#    imagem: migrations e seeds no load_test vazio, uma vez) e, só depois de
-#    ele sair com 0, as réplicas da imagem de produção. As réplicas rodam
-#    NODE_ENV=production sem migrar no boot, e o guard de bootstrap recusa
-#    banco vazio: sem o `migrate` antes, elas saíam na hora.
+# 1. O harness: Traefik + Postgres + Redis, o `migrate` (a imagem de
+#    migração, trajetto-api-migrate: migrations e seeds no load_test vazio,
+#    uma vez) e, só depois de ele sair com 0, as réplicas da imagem de
+#    produção. A imagem da API não migra: as réplicas rodam
+#    NODE_ENV=production, o guard de bootstrap recusa banco vazio e o de
+#    schema recusa banco sem as migrations do build; sem o `migrate` antes,
+#    elas saíam na hora.
 #    --env-file .env: as réplicas precisam do MESMO JWT_SECRET que assina os
 #    tokens do seed. A porta 54321 é a do banco descartável. O
 #    trajetto-itest-pg costuma ocupá-la e é compartilhado com as suítes: em
@@ -76,12 +78,13 @@ docker compose --env-file .env -f tests/load/compose.load.yaml --profile k6 \
   run --rm k6 run /load/smoke.js
 
 # 4. Desmontar só o que o harness criou: containers e volumes do projeto do
-#    compose (-v) e a imagem construída no passo 1 (tag trajetto-api:load, ou
-#    a LOAD_API_IMAGE que você passou). Não use `docker builder prune` nem
+#    compose (-v) e as duas imagens construídas no passo 1 (tags
+#    trajetto-api:load e trajetto-api-migrate:load, ou as LOAD_API_IMAGE e
+#    LOAD_MIGRATE_IMAGE que você passou). Não use `docker builder prune` nem
 #    `docker system prune`: o cache de build e as imagens são da máquina
 #    inteira, de outros projetos também.
 docker compose --env-file .env -f tests/load/compose.load.yaml --profile k6 down -v
-docker rmi "${LOAD_API_IMAGE:-trajetto-api:load}"
+docker rmi "${LOAD_API_IMAGE:-trajetto-api:load}" "${LOAD_MIGRATE_IMAGE:-trajetto-api-migrate:load}"
 ```
 
 Variáveis que a medição de 07/10/2026 acrescentou:

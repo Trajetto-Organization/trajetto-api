@@ -1,8 +1,9 @@
 #!/bin/sh
 #
 # Runs the release step — `prisma migrate deploy` plus the idempotent seeds —
-# ONCE, as a one-off Swarm job, with the exact image about to be rolled out,
-# BEFORE the rollout. Runs on a Swarm manager.
+# ONCE, as a one-off Swarm job, with the release image of the exact commit
+# about to be rolled out, BEFORE the rollout. Runs on a Swarm manager. The
+# staging deploy and the promote to production both call it (deploy.yml).
 #
 # Why: migrating at the boot of every replica turned one bad migration into a
 # cluster-wide problem. A migration that failed, or that outlived the liveness
@@ -10,15 +11,18 @@
 # then on every `migrate deploy` of every image version — the running one
 # included — refused to start (P3009), so the next restart of any replica was
 # an outage until someone resolved it by hand. As one job, a failing migration
-# fails one step of the promote workflow: `stable` does not move, Dokploy is
-# not asked to deploy, and the running replicas never notice.
+# fails one step of the deploy: the tag does not move, Dokploy is not asked to
+# deploy, and the running replicas never notice. The API image no longer
+# carries the Prisma CLI at all; only the release image does.
 #
 # Usage, on the manager:
-#   run-release-migrations.sh ghcr.io/trajetto-organization/trajetto-api:sha-<sha>
+#   run-release-migrations.sh ghcr.io/trajetto-organization/trajetto-api-migrate@sha256:<digest>
+#   run-release-migrations.sh ghcr.io/trajetto-organization/trajetto-api-migrate:sha-<sha>
 #
-# `sha-<sha>` is the immutable tag every push to staging publishes. The older
-# `main-<sha>` builds (published before the staging branch existed) are still
-# accepted, so a rollback to one of them can migrate too.
+# Only the release image (Dockerfile, stage `migrate`): by the digest the
+# pipeline built, or by `sha-<sha>`, the immutable tag every push to staging
+# publishes. The API image cannot migrate, and refusing it here says so
+# before anything is created.
 #
 # From CI, through an SSH key restricted to this script (a forced command in
 # authorized_keys), the image arrives in SSH_ORIGINAL_COMMAND instead — and is
@@ -41,10 +45,10 @@ set -eu
 
 IMAGE="${1:-${SSH_ORIGINAL_COMMAND:-}}"
 
-# Only an immutable build of this API. `latest`/`stable` move under our feet,
-# and anything else in this string would end up on a docker command line.
-# One line only: grep matches line by line, so a value whose FIRST line was
-# valid passed whole, newline and all.
+# Only an immutable build of the release image. A moving tag could change
+# under our feet, and anything else in this string would end up on a docker
+# command line. One line only: grep matches line by line, so a value whose
+# FIRST line was valid passed whole, newline and all.
 case "$IMAGE" in
   *'
 '*) IMAGE_LINES=many ;;
@@ -52,9 +56,9 @@ case "$IMAGE" in
 esac
 
 if [ "$IMAGE_LINES" != one ] \
-  || ! printf '%s\n' "$IMAGE" | grep -Eqx 'ghcr\.io/trajetto-organization/trajetto-api:(sha|main)-[0-9a-f]{7,40}'; then
+  || ! printf '%s\n' "$IMAGE" | grep -Eqx 'ghcr\.io/trajetto-organization/trajetto-api-migrate(:sha-[0-9a-f]{7,40}|@sha256:[0-9a-f]{64})'; then
   echo "[release-migrations] ERRO: imagem inválida: '${IMAGE}'" >&2
-  echo "[release-migrations] esperado ghcr.io/trajetto-organization/trajetto-api:sha-<sha> (ou main-<sha>, builds antigos)" >&2
+  echo "[release-migrations] esperado ghcr.io/trajetto-organization/trajetto-api-migrate@sha256:<digest> ou :sha-<sha> (a imagem de migração; a da API não migra)" >&2
   exit 2
 fi
 
@@ -141,8 +145,10 @@ echo "[release-migrations] ${IMAGE} como job ${JOB} na rede ${MIGRATE_NETWORK}"
 # --mode replicated-job + --restart-condition none: runs once, never retried
 #   behind our back — a second attempt over a half-applied migration is how
 #   P3009 gets worse.
-# --no-healthcheck: the image's HEALTHCHECK probes :3333, which the release
-#   step never opens; with it Swarm would kill the job mid-migration.
+# --no-healthcheck: the release image declares none (HEALTHCHECK NONE), and
+#   the API's probe of :3333, which the release step never opens, would
+#   have Swarm kill the job mid-migration; explicit, so no image can bring
+#   one back.
 docker service create \
   --detach \
   --name "$JOB" \

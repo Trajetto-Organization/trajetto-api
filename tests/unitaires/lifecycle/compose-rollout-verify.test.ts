@@ -427,7 +427,7 @@ describe.skipIf(!sh)("the release-migration forced command", () => {
 
   it("refuses an image with a second line, without touching docker", () => {
     const image =
-      "ghcr.io/trajetto-organization/trajetto-api:main-0a1b2c3\n--network host";
+      "ghcr.io/trajetto-organization/trajetto-api-migrate:sha-0a1b2c3\n--network host";
 
     const inputs: Array<{ args: string[]; env: Record<string, string> }> = [
       { args: [image], env: {} },

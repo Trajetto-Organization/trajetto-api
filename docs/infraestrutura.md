@@ -422,11 +422,18 @@ O orçamento de memória dos serviços está em
   staging e produção. Use só como último recurso, numa janela calma, e leia o
   aviso do painel antes de confirmar. **A confirmar com o dono:** o que o
   botão faz nesta VPS (reinicia ou não).
-- O CI não usa SSH hoje. O usuário de deploy e as chaves restritas descritas
-  em [`deploy.md`](./deploy.md#14-conferir-a-convergência) só são necessários
-  com `ROLLOUT_VERIFY=ssh` ou com o job de migrations ligado, e nenhum dos
-  dois está em uso. **A confirmar com o dono:** se existe no host algum
-  usuário criado por nós, além dos da imagem.
+- **O CI usa SSH desde 31/10/2026, para uma coisa só: o job de
+  migrations.** A imagem da API não migra no boot; antes de cada deploy (de
+  staging e de produção), o pipeline entra como o usuário `deploy`, com uma
+  chave por ambiente restrita a `/usr/local/bin/trajetto-release-migrate`
+  (_forced command_ preso ao serviço da API daquele ambiente), e o script
+  roda a imagem de migração como job do Swarm
+  ([`deploy.md` → 15](./deploy.md#15-migrations)). A conferência do rollout
+  por SSH (`ROLLOUT_VERIFY=ssh`, outra chave) continua sem uso. O runner do
+  GitHub não tem IP fixo: a regra `SSH` do firewall fica aberta para IPv4 e
+  o SSH precisa estar só por chave ([seção 13.8](#138-endurecer-o-ssh)).
+  **A confirmar com o dono:** o usuário `deploy` criado no host e as duas
+  chaves no `authorized_keys` dele.
 
 ### 4.3 Firewall
 
@@ -436,12 +443,12 @@ nada).
 
 **Regras de entrada, nesta ordem** (aplicadas em 29/10/2026):
 
-| Nome                | Ação   | Protocolo | Porta    | Fonte(s)                                  | Por quê                                                                             |
-| ------------------- | ------ | --------- | -------- | ----------------------------------------- | ----------------------------------------------------------------------------------- |
-| `HTTPS Cloudflare`  | ACCEPT | TCP       | 443      | as faixas IPv4 publicadas pela Cloudflare | todo o tráfego dos sites e da API chega pela Cloudflare                             |
-| `HTTP Cloudflare`   | ACCEPT | TCP       | 80       | as mesmas faixas                          | a renovação do Let's Encrypt (desafio HTTP-01) chega pela Cloudflare na porta 80    |
-| `SSH`               | ACCEPT | TCP       | 22       | qualquer IPv4                             | administração do servidor; endurecimento e restrição da origem pendentes (seção 14) |
-| `Block all traffic` | DROP   | qualquer  | qualquer | qualquer                                  | a regra fixa da Contabo, sempre a última: fecha todas as outras portas, IPv4 e IPv6 |
+| Nome                | Ação   | Protocolo | Porta    | Fonte(s)                                  | Por quê                                                                                  |
+| ------------------- | ------ | --------- | -------- | ----------------------------------------- | ---------------------------------------------------------------------------------------- |
+| `HTTPS Cloudflare`  | ACCEPT | TCP       | 443      | as faixas IPv4 publicadas pela Cloudflare | todo o tráfego dos sites e da API chega pela Cloudflare                                  |
+| `HTTP Cloudflare`   | ACCEPT | TCP       | 80       | as mesmas faixas                          | a renovação do Let's Encrypt (desafio HTTP-01) chega pela Cloudflare na porta 80         |
+| `SSH`               | ACCEPT | TCP       | 22       | qualquer IPv4                             | administração do servidor e o job de migrations do CI; endurecimento pendente (seção 14) |
+| `Block all traffic` | DROP   | qualquer  | qualquer | qualquer                                  | a regra fixa da Contabo, sempre a última: fecha todas as outras portas, IPv4 e IPv6      |
 
 As regras valem só para conexões **de entrada**. A saída do servidor (pull do
 GHCR, R2, Resend por SMTP, Expo Push, healthchecks.io, LocationIQ) não passa
@@ -492,12 +499,15 @@ porque o `DOKPLOY_URL` passa pela Cloudflare.
   `https://dokploy.intrajetto.com`, pela Cloudflare (ou, numa emergência ou
   numa VPS nova, por um túnel SSH; seção 13.1, passo 4). Por isso o secret
   `DOKPLOY_URL` do GitHub tem de ser esse endereço, nunca o IP.
-- **22 para qualquer IPv4**: é o estado atual, para o dono administrar o
-  servidor de qualquer rede. **A confirmar com o dono:** o motivo de não
-  restringir a origem ao IP dele (por exemplo, um IP que muda). O
-  endurecimento ([seção 13.8](#138-endurecer-o-ssh)) e a restrição da origem,
-  com o VNC como saída de emergência, são a primeira pendência de segurança
-  ([seção 14](#14-pendências-conhecidas)).
+- **22 para qualquer IPv4**: para o dono administrar o servidor de qualquer
+  rede e, desde 31/10/2026, para o job de migrations do CI, que entra por
+  ela antes de todo deploy ([seção 4.2](#42-ssh-e-console-de-emergência)).
+  O runner do GitHub não tem IP fixo, então a origem **não** pode ser
+  restrita ao IP do dono. A proteção é o SSH só por chave
+  ([seção 13.8](#138-endurecer-o-ssh), a primeira pendência de segurança,
+  [seção 14](#14-pendências-conhecidas)) e a chave do CI presa ao script
+  das migrations. Fechar a 22 de vez pede um túnel (Cloudflare Tunnel com
+  Access por _service token_): uma evolução, não uma pendência.
 - **Nenhuma regra IPv6 de entrada**: a Cloudflare chega à origem por IPv4. Os
   usuários que usam IPv6 falam com a borda da Cloudflare, que fala com a
   origem por IPv4. Não existem registros AAAA na zona.
@@ -792,7 +802,6 @@ ambiente de cada uma estão em [`variaveis-de-ambiente.md`](./variaveis-de-ambie
 | `APP_ENV`                                                                                                                            | `staging` ou `production`                                                                                          |
 | `NODE_OPTIONS`, `LOG_LEVEL`                                                                                                          | fixos: `--max-old-space-size=768` e `info`                                                                         |
 | `DATABASE_URL`, `MIGRATION_DATABASE_URL`                                                                                             | senha do Database PostgreSQL + o App Name dele, porta 5432, banco e usuário `trajetto` (modelo em `deploy.md` 7.7) |
-| `RUN_MIGRATIONS_ON_BOOT`                                                                                                             | `true` nos dois ambientes (ainda não há job de migração separado)                                                  |
 | `ALLOW_EMPTY_DATABASE_BOOTSTRAP`                                                                                                     | `false`; `true` só no primeiro boot de um banco vazio, e volta para `false`                                        |
 | `REDIS_URL`                                                                                                                          | senha do Database Redis + o App Name dele, porta 6379                                                              |
 | `HTTP_REQUEST`                                                                                                                       | a origem pública da **web** do ambiente; é a única origem que o CORS da API aceita                                 |
@@ -1590,16 +1599,17 @@ o environment (nível do environment).
 | `IMAGE_SCAN_ENFORCE`         | variable, repositório              | `true`: um CRITICAL corrigível no Trivy falha o build (só um achado: falha no download do banco ou erro do Trivy viram aviso) | —                                                                   |
 | `CLIENT_REPOS_READ_TOKEN`    | secret, repositório                | o contrato de rotas do `ci.yml` lê a web e o app                                                                              | GitHub, token fine-grained (seção 11.1)                             |
 
-`SWARM_API_SERVICE`, `DEPLOY_SSH_HOST`, `DEPLOY_SSH_USER`,
-`DEPLOY_SSH_KNOWN_HOSTS`, `DEPLOY_VERIFY_SSH_KEY` e `DEPLOY_SSH_KEY` só são
-usados com `ROLLOUT_VERIFY=ssh` ou com `MIGRATIONS_VIA_JOB=true`, e não estão
+`DEPLOY_SSH_HOST`, `DEPLOY_SSH_USER`, `DEPLOY_SSH_KEY` e
+`DEPLOY_SSH_KNOWN_HOSTS`: obrigatórios nos environments `staging` e
+`production` desde 31/10/2026 (o job de migrations; a `DEPLOY_SSH_KEY` de
+cada um é a chave daquele ambiente). `SWARM_API_SERVICE` e
+`DEPLOY_VERIFY_SSH_KEY` só são usados com `ROLLOUT_VERIFY=ssh`, e não estão
 configurados.
 
 **A confirmar com o dono:** se o `ROLLOUT_VERIFY=http` está no repositório ou
-em cada environment; que o `MIGRATIONS_VIA_JOB` foi apagado ou está `false`
-(ele chegou a ser definido como `true`, e exige SSH); que o
-`CLIENT_REPOS_READ_TOKEN` existe; e que o `DOKPLOY_AI_APPLICATION_ID` de
-produção está cadastrado.
+em cada environment; que a variável `MIGRATIONS_VIA_JOB` foi apagada (não é
+mais lida: o job sempre roda); que o `CLIENT_REPOS_READ_TOKEN` existe; e que
+o `DOKPLOY_AI_APPLICATION_ID` de produção está cadastrado.
 
 **`trajetto-ui`**:
 
@@ -1918,18 +1928,18 @@ Uma linha por credencial. Nenhum valor. "Notas locais" são os arquivos
 
 ### 11.1 Credenciais de infraestrutura e de CI
 
-| Credencial                                              | Onde é criada                                                                                                      | Permissões                                                    | Onde fica                                                        | Quem usa                                                                                         | Validade e rotação                                                                                  |
-| ------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------- | ---------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------- |
-| Token classic do GHCR (`dokploy-ghcr-pull` ou `-read`)  | GitHub → _Settings → Developer settings → Tokens (classic)_                                                        | só `read:packages`                                            | Dokploy (seção 5.7) e notas locais                               | o Dokploy, para puxar as três imagens                                                            | **A confirmar com o dono:** a validade. Renovar antes de vencer                                     |
-| Chave de API do Dokploy                                 | Dokploy → _Settings → Profile → API/CLI_                                                                           | o painel inteiro, staging e produção                          | `DOKPLOY_API_KEY` nos environments da API e da web; notas locais | os pipelines da API e da web                                                                     | sugerida com 1 ano. **A confirmar com o dono:** a data                                              |
-| `CLIENT_REPOS_READ_TOKEN`                               | GitHub, token fine-grained, _Resource owner_ `Trajetto-Organization`                                               | _Contents: Read-only_ em `trajetto-ui` e `trajetto-mobile`    | secret de repositório da `trajetto-api`                          | o `ci.yml` da API (contrato de rotas)                                                            | **A confirmar com o dono:** se existe, a validade e a conta dona                                    |
-| `API_REPO_READ_TOKEN`                                   | GitHub, token fine-grained, _Resource owner_ `Trajetto-Organization` (criado em 22/10/2026)                        | _Contents: Read-only_ só em `trajetto-api`                    | secret de repositório na web e no app; notas locais              | os pipelines da web e do app                                                                     | **A confirmar com o dono:** a validade e a conta dona. A organização pode exigir aprovação do token |
-| `GITHUB_TOKEN`                                          | automático                                                                                                         | por job (`contents: read`; `packages: write` só onde publica) | —                                                                | GHCR, Trivy (ler as imagens; o banco de vulnerabilidades baixa sem credencial), semantic-release | automática                                                                                          |
-| `EXPO_TOKEN`                                            | expo.dev → org `trajetto` → _Access tokens → Robot users_ (robot `github-actions`, token `github-trajetto-mobile`) | papel _Developer_                                             | secret de repositório na `trajetto-mobile`                       | o pipeline do app                                                                                | sem validade conhecida; revogar e recriar no mesmo lugar                                            |
-| Acesso administrativo à VPS (SSH)                       | na compra da VPS (painel da Contabo)                                                                               | tudo no servidor                                              | com o dono                                                       | o dono, por SSH                                                                                  | endurecimento do SSH pendente (seções 13.8 e 14)                                                    |
-| Senha do VNC                                            | painel da Contabo → VPS → _Manage_ → _VNC_                                                                         | console da VPS                                                | painel da Contabo                                                | emergência                                                                                       | trocável no painel                                                                                  |
-| Usuários do Dokploy (dona e admin)                      | Dokploy                                                                                                            | painel inteiro                                                | com o dono                                                       | o dono                                                                                           | endurecimento da conta dona pendente: 2FA e credenciais (seção 5.10)                                |
-| Chaves SSH do CI (`verify-trajetto`, `deploy-trajetto`) | `ssh-keygen` ([`deploy.md` → 14](./deploy.md#14-conferir-a-convergência))                                          | _forced command_ restrito                                     | —                                                                | ninguém                                                                                          | **não configuradas** (só com `ROLLOUT_VERIFY=ssh` ou o job de migrations)                           |
+| Credencial                                                                    | Onde é criada                                                                                                      | Permissões                                                    | Onde fica                                                        | Quem usa                                                                                         | Validade e rotação                                                                                  |
+| ----------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------- | ---------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------- |
+| Token classic do GHCR (`dokploy-ghcr-pull` ou `-read`)                        | GitHub → _Settings → Developer settings → Tokens (classic)_                                                        | só `read:packages`                                            | Dokploy (seção 5.7) e notas locais                               | o Dokploy, para puxar as três imagens                                                            | **A confirmar com o dono:** a validade. Renovar antes de vencer                                     |
+| Chave de API do Dokploy                                                       | Dokploy → _Settings → Profile → API/CLI_                                                                           | o painel inteiro, staging e produção                          | `DOKPLOY_API_KEY` nos environments da API e da web; notas locais | os pipelines da API e da web                                                                     | sugerida com 1 ano. **A confirmar com o dono:** a data                                              |
+| `CLIENT_REPOS_READ_TOKEN`                                                     | GitHub, token fine-grained, _Resource owner_ `Trajetto-Organization`                                               | _Contents: Read-only_ em `trajetto-ui` e `trajetto-mobile`    | secret de repositório da `trajetto-api`                          | o `ci.yml` da API (contrato de rotas)                                                            | **A confirmar com o dono:** se existe, a validade e a conta dona                                    |
+| `API_REPO_READ_TOKEN`                                                         | GitHub, token fine-grained, _Resource owner_ `Trajetto-Organization` (criado em 22/10/2026)                        | _Contents: Read-only_ só em `trajetto-api`                    | secret de repositório na web e no app; notas locais              | os pipelines da web e do app                                                                     | **A confirmar com o dono:** a validade e a conta dona. A organização pode exigir aprovação do token |
+| `GITHUB_TOKEN`                                                                | automático                                                                                                         | por job (`contents: read`; `packages: write` só onde publica) | —                                                                | GHCR, Trivy (ler as imagens; o banco de vulnerabilidades baixa sem credencial), semantic-release | automática                                                                                          |
+| `EXPO_TOKEN`                                                                  | expo.dev → org `trajetto` → _Access tokens → Robot users_ (robot `github-actions`, token `github-trajetto-mobile`) | papel _Developer_                                             | secret de repositório na `trajetto-mobile`                       | o pipeline do app                                                                                | sem validade conhecida; revogar e recriar no mesmo lugar                                            |
+| Acesso administrativo à VPS (SSH)                                             | na compra da VPS (painel da Contabo)                                                                               | tudo no servidor                                              | com o dono                                                       | o dono, por SSH                                                                                  | endurecimento do SSH pendente (seções 13.8 e 14)                                                    |
+| Senha do VNC                                                                  | painel da Contabo → VPS → _Manage_ → _VNC_                                                                         | console da VPS                                                | painel da Contabo                                                | emergência                                                                                       | trocável no painel                                                                                  |
+| Usuários do Dokploy (dona e admin)                                            | Dokploy                                                                                                            | painel inteiro                                                | com o dono                                                       | o dono                                                                                           | endurecimento da conta dona pendente: 2FA e credenciais (seção 5.10)                                |
+| Chaves SSH do CI (`migrate-staging`, `migrate-production`, `verify-trajetto`) | `ssh-keygen` ([`deploy.md` → 15](./deploy.md#15-migrations) e [14](./deploy.md#14-conferir-a-convergência))        | _forced command_ restrito, uma por ambiente                   | secrets `DEPLOY_SSH_KEY` de cada environment                     | ninguém                                                                                          | as duas `migrate-*` obrigatórias desde 31/10/2026; `verify-trajetto` só com `ROLLOUT_VERIFY=ssh`    |
 
 ### 11.2 Credenciais de provedores
 
@@ -2341,9 +2351,10 @@ fim. `<usuário>` e `<IP_DA_VPS>` estão com o dono e no painel da Contabo.
    tem de responder `Permission denied (publickey)`.
 7. Opcional: `apt install fail2ban` (a configuração padrão já protege o
    sshd).
-8. Opcional: na regra `SSH` do firewall da Contabo
-   ([seção 4.3](#43-firewall)), troque "qualquer IPv4" pelo IP do dono. Se o
-   IP dele mudar, o VNC entra para corrigir.
+8. **Não** restrinja a regra `SSH` do firewall ao IP do dono: o job de
+   migrations do CI entra pela 22 antes de todo deploy, e o runner do GitHub
+   não tem IP fixo ([seção 4.3](#43-firewall)). Restringida, todo deploy
+   para no passo _Run database migrations_.
 9. Se algo der errado: pelo VNC, apague o arquivo do passo 4 e rode
    `systemctl reload ssh`.
 10. Guarde uma cópia de segurança da chave privada, protegida pela
@@ -2401,8 +2412,15 @@ derruba o sistema, depois o que abre uma brecha, depois o resto.
       Android → baixar a keystore → gerenciador de senhas (se o EAS a
       perder, uma build assinada com outra chave não instala por cima do
       app). [Seção 8.2](#82-variáveis-e-credenciais-no-eas).
-- [ ] **`MIGRATIONS_VIA_JOB`** apagado ou `false` na `trajetto-api` (com
-      `true`, a promoção exige SSH, que não está configurado).
+- [ ] **Job de migrations configurado** (desde 31/10/2026 a imagem da API
+      não migra no boot): usuário `deploy` no host com o script e as duas
+      chaves restritas, `docker login ghcr.io` dele, e os secrets
+      `DEPLOY_SSH_HOST`, `DEPLOY_SSH_USER`, `DEPLOY_SSH_KEY` e
+      `DEPLOY_SSH_KNOWN_HOSTS` nos environments `staging` e `production` da
+      `trajetto-api` ([`deploy.md` → 15](./deploy.md#15-migrations)). Depois
+      do primeiro deploy verde, apagar `RUN_MIGRATIONS_ON_BOOT` das duas
+      Applications `trajetto-api` e a variável `MIGRATIONS_VIA_JOB` do
+      repositório (nenhuma das duas é lida mais).
       [Seção 7.4](#74-secrets-e-variables).
 - [ ] **`PLAY_SUBMIT_ENABLED`** vazio até o primeiro AAB manual (com `true`
       e sem a Play Console, o envio falha).
@@ -2432,9 +2450,9 @@ derruba o sistema, depois o que abre uma brecha, depois o resto.
 
 ### 14.2 Segurança
 
-- [ ] **Endurecer o SSH** ([seção 13.8](#138-endurecer-o-ssh)) e restringir
-      a origem da porta 22, ou registrar o motivo de não restringir. É a
-      primeira pendência: o IP da VPS é público
+- [ ] **Endurecer o SSH** ([seção 13.8](#138-endurecer-o-ssh)): só por
+      chave. É a primeira pendência: o IP da VPS é público e a porta 22 fica
+      aberta para IPv4, porque o job de migrations do CI entra por ela
       ([seção 4.3](#43-firewall)).
       [Seção 4.2](#42-ssh-e-console-de-emergência).
 - [ ] **Conta dona do Dokploy**: credenciais próprias e fortes (ou

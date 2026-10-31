@@ -269,18 +269,22 @@ describe.skipIf(!hasShell("bash"))(
 );
 
 /**
- * The API image runs before it is pushed, too (§14/§19).
+ * The API image runs before it is pushed, too (§14/§19), with the release
+ * image built on top of it.
  *
  * Its liveness touches nothing, but the entrypoint waits for Postgres and
- * migrates before the server starts, so the smoke test brings a throwaway
- * Postgres and Redis on an internal network (no route out: the Prisma CLI
- * must not download an engine) and runs the image both ways a deploy does —
- * the release step (`migrate`, from an empty database) and the default
- * command — before the push publishes the same build.
+ * checks the schema before the server starts, so the smoke test brings a
+ * throwaway Postgres and Redis on an internal network (no route out: the
+ * Prisma CLI must not download an engine) and runs both images the way a
+ * deploy does: the API image refusing the empty database, the release image
+ * (`migrate`, from an empty database), and the API image's boot on the
+ * result — before the pushes publish the same builds.
  */
 const API_SMOKE_BUILD = "Build the API image for the smoke test";
+const RELEASE_SMOKE_BUILD = "Build the release image for the smoke test";
 const API_SMOKE = "Smoke test the API image";
 const API_PUSH = "Build and push Docker image";
+const RELEASE_PUSH = "Build and push the release image";
 
 /** A step's `env:` values (one line each). */
 function stepEnv(name: string): Record<string, string> {
@@ -300,43 +304,60 @@ function stepEnv(name: string): Record<string, string> {
 }
 
 describe("the API image's smoke test, in build-and-push", () => {
-  it("runs after the metadata and before the push, on every build", () => {
+  it("runs after the metadata and before the pushes, on every build", () => {
     const names = steps.map((step) => step.name);
 
     expect(names.indexOf(API_SMOKE_BUILD)).toBe(
+      names.indexOf("Extract metadata (release image)") + 1,
+    );
+    expect(names.indexOf("Extract metadata (release image)")).toBe(
       names.indexOf("Extract metadata") + 1,
     );
-    expect(names.indexOf(API_SMOKE)).toBe(names.indexOf(API_SMOKE_BUILD) + 1);
+    expect(names.indexOf(RELEASE_SMOKE_BUILD)).toBe(
+      names.indexOf(API_SMOKE_BUILD) + 1,
+    );
+    expect(names.indexOf(API_SMOKE)).toBe(
+      names.indexOf(RELEASE_SMOKE_BUILD) + 1,
+    );
     expect(names.indexOf(API_PUSH)).toBe(names.indexOf(API_SMOKE) + 1);
+    expect(names.indexOf(RELEASE_PUSH)).toBe(names.indexOf(API_PUSH) + 1);
 
-    for (const name of [API_SMOKE_BUILD, API_SMOKE]) {
+    for (const name of [API_SMOKE_BUILD, RELEASE_SMOKE_BUILD, API_SMOKE]) {
       expect(stepText(name), name).not.toMatch(/^ {8}if:/m);
     }
   });
 
-  it("loads the very build the push publishes, and publishes nothing itself", () => {
-    const smoke = inputs(stepText(API_SMOKE_BUILD));
-    const push = inputs(stepText(API_PUSH));
+  it.each([
+    [API_SMOKE_BUILD, API_PUSH, "runner"],
+    [RELEASE_SMOKE_BUILD, RELEASE_PUSH, "migrate"],
+  ])(
+    "%s loads the very build the push publishes, and publishes nothing itself",
+    (smokeName, pushName, target) => {
+      const smoke = inputs(stepText(smokeName));
+      const push = inputs(stepText(pushName));
 
-    expect(smoke.push).toBe("false");
-    expect(smoke.load).toBe("true");
+      expect(smoke.push).toBe("false");
+      expect(smoke.load).toBe("true");
+      expect(smoke.target).toBe(target);
 
-    for (const key of ["sbom", "provenance", "cache-to"]) {
-      expect(smoke[key], key).toBeUndefined();
-    }
+      for (const key of ["sbom", "provenance", "cache-to"]) {
+        expect(smoke[key], key).toBeUndefined();
+      }
 
-    for (const key of [
-      "context",
-      "file",
-      "build-args",
-      "cache-from",
-      "labels",
-    ]) {
-      expect(smoke[key], key).toBe(push[key]);
-    }
+      for (const key of [
+        "context",
+        "file",
+        "target",
+        "build-args",
+        "cache-from",
+        "labels",
+      ]) {
+        expect(smoke[key], key).toBe(push[key]);
+      }
 
-    expect(push.push).toBe("true");
-  });
+      expect(push.push).toBe("true");
+    },
+  );
 
   it("brings its own Postgres and Redis, pinned, on a network with no way out", () => {
     const script = runBlock(API_SMOKE);
@@ -348,6 +369,8 @@ describe("the API image's smoke test, in build-and-push", () => {
       /^postgres:16-alpine@sha256:[0-9a-f]{64}$/,
     );
     expect(env.REDIS_IMAGE).toMatch(/^redis:7-alpine@sha256:[0-9a-f]{64}$/);
+    expect(env.IMAGE).toBe("trajetto-api:smoke");
+    expect(env.MIGRATE_IMAGE).toBe("trajetto-api-migrate:smoke");
     expect(stepText(API_SMOKE)).not.toContain("secrets.");
     // Values go through a private env file, never a command line.
     expect(script).toContain("umask 077");
@@ -368,9 +391,10 @@ describe.skipIf(!hasShell("bash"))(
 
     beforeEach(() => {
       box = sandbox();
-      // `run` tells the four containers apart by their arguments and keeps
-      // a copy of the env file it was handed; `inspect` answers the canned
-      // states in order, the last one for good.
+      // `run` tells the containers apart by their arguments and keeps a
+      // copy of the env file it was handed; `wait` and `logs` answer for the
+      // API that must refuse the empty database; `inspect` answers the
+      // canned states in order, the last one for good.
       box.stub(
         "docker",
         [
@@ -382,13 +406,19 @@ describe.skipIf(!hasShell("bash"))(
           '      prev="$arg"',
           "    done",
           '    case "$*" in',
+          `      *'--entrypoint sh'*) read -r rc < "${box.root}/content-rc"; exit "$rc" ;;`,
           "      *postgres:16-alpine*) echo cid-pg ;;",
           "      *redis:7-alpine*) echo cid-redis ;;",
-          "      *'docker-entrypoint.sh migrate'*)",
-          "        echo 'migrate: 135 migrations, seeds ok'",
+          "      *trajetto-api-migrate:smoke*)",
+          "        echo 'migrate: 136 migrations, seeds ok'",
           `        read -r rc < "${box.root}/migrate-rc"; exit "$rc" ;;`,
-          "      *) echo cid-api ;;",
+          "      *--health-interval*) echo cid-api ;;",
+          "      *) echo cid-guard ;;",
           "    esac ;;",
+          "  wait)",
+          `    read -r rc < "${box.root}/guard-rc"`,
+          '    [ "$rc" = hang ] && exit 124',
+          '    echo "$rc" ;;',
           "  inspect)",
           `    n=1; [ -f "${box.root}/n" ] && read -r n < "${box.root}/n"`,
           "    at=0",
@@ -403,7 +433,11 @@ describe.skipIf(!hasShell("bash"))(
           `      *readiness*) read -r rc < "${box.root}/ready-rc"; exit "$rc" ;;`,
           `      *) cat "${box.root}/commit" ;;`,
           "    esac ;;",
-          "  logs) echo 'api: boot log line' ;;",
+          "  logs)",
+          '    case "$*" in',
+          `      *cid-guard*) cat "${box.root}/guard-log" ;;`,
+          "      *) echo 'api: boot log line' ;;",
+          "    esac ;;",
           "esac",
         ].join("\n"),
       );
@@ -414,18 +448,30 @@ describe.skipIf(!hasShell("bash"))(
 
     afterEach(() => box.dispose());
 
+    const REFUSAL =
+      "🔴 O banco não tem a migration 20261028140100_import_reversal_progress, que este build exige";
+
     function smoke({
+      content = 0,
+      guard = "1",
+      guardLog = REFUSAL,
       states = ["running/starting", "running/healthy"],
       migrate = 0,
       ready = 0,
       commit = SHA,
     }: {
+      content?: number;
+      guard?: string;
+      guardLog?: string;
       states?: string[];
       migrate?: number;
       ready?: number;
       commit?: string;
     } = {}) {
       writeFileSync(`${box.root}/n`, "1\n");
+      writeFileSync(`${box.root}/content-rc`, `${content}\n`);
+      writeFileSync(`${box.root}/guard-rc`, `${guard}\n`);
+      writeFileSync(`${box.root}/guard-log`, `${guardLog}\n`);
       writeFileSync(`${box.root}/states`, `${states.join("\n")}\n`);
       writeFileSync(`${box.root}/migrate-rc`, `${migrate}\n`);
       writeFileSync(`${box.root}/ready-rc`, `${ready}\n`);
@@ -461,18 +507,22 @@ describe.skipIf(!hasShell("bash"))(
 
     const cleanup = [
       "docker rm -f cid-api",
+      "docker rm -f cid-guard",
       "docker rm -f cid-pg",
       "docker rm -f cid-redis",
       "docker network rm api-smoke-77-1",
     ];
 
-    it("migrates an empty database, then boots healthy, on this commit and ready", () => {
+    it("checks what the API image leaves out, sees it refuse the empty database, migrates it, then boots healthy, on this commit and ready", () => {
       const result = smoke();
       const envFile = `${box.root}/api-smoke.env`;
 
       expect(result.status, result.output).toBe(0);
       expect(result.summary).toContain("trajetto-api: smoke test OK");
-      expect(result.docker.slice(0, 5)).toEqual([
+      expect(result.docker.slice(0, 9)).toEqual([
+        expect.stringMatching(
+          /^docker run --rm --entrypoint sh trajetto-api:smoke -c test ! -e node_modules\/prisma && test ! -e node_modules\/@prisma\/engines && test ! -e prisma && test ! -e prisma\.config\.ts && test ! -e build\/seed\.js && test -f build\/schema-version\.json$/,
+        ),
         "docker network create --internal api-smoke-77-1",
         expect.stringMatching(
           /^docker run -d --network api-smoke-77-1 --network-alias postgres -e POSTGRES_HOST_AUTH_METHOD=trust -e POSTGRES_DB=trajetto postgres:16-alpine@sha256:/,
@@ -480,15 +530,18 @@ describe.skipIf(!hasShell("bash"))(
         expect.stringMatching(
           /^docker run -d --network api-smoke-77-1 --network-alias redis redis:7-alpine@sha256:/,
         ),
-        `docker run --rm --network api-smoke-77-1 --env-file ${envFile} trajetto-api:smoke ./docker-entrypoint.sh migrate`,
+        `docker run -d --network api-smoke-77-1 --env-file ${envFile} trajetto-api:smoke`,
+        "docker wait cid-guard",
+        "docker logs cid-guard",
+        `docker run --rm --network api-smoke-77-1 --env-file ${envFile} trajetto-api-migrate:smoke`,
         `docker run -d --network api-smoke-77-1 --env-file ${envFile} --health-interval 2s --health-start-period 120s trajetto-api:smoke`,
       ]);
       expect(result.docker).toContain(
         "docker exec cid-api wget -q -O /dev/null http://127.0.0.1:3333/health/readiness",
       );
-      expect(result.docker.slice(-4)).toEqual(cleanup);
+      expect(result.docker.slice(-5)).toEqual(cleanup);
 
-      // What the image got: the database it may bootstrap, random keys.
+      // What the images got: the database they may bootstrap, random keys.
       const seen = readFileSync(`${box.root}/env-seen`, "utf8");
 
       expect(seen).toContain(
@@ -501,18 +554,59 @@ describe.skipIf(!hasShell("bash"))(
       expect(existsSync(envFile)).toBe(false);
     });
 
+    it("fails before any database when the API image carries the CLI, migrations or seeds", () => {
+      const result = smoke({ content: 1 });
+
+      expect(result.status).toBe(1);
+      expect(result.output).toContain(
+        "a imagem da API traz o CLI do Prisma, migrations ou seeds",
+      );
+      expect(
+        result.docker.filter((call) =>
+          call.startsWith("docker network create"),
+        ),
+      ).toEqual([]);
+      expect(result.summary).toBe("");
+    });
+
+    it.each([
+      ["serves instead (the wait times out)", { guard: "hang" }, "timeout"],
+      ["exits 0", { guard: "0" }, "0"],
+      [
+        "fails for another reason",
+        { guardLog: "Error: Cannot find module" },
+        "1",
+      ],
+    ])(
+      "fails when the API, on the empty database, %s",
+      (_case, options, code) => {
+        const result = smoke(options);
+
+        expect(result.status).toBe(1);
+        expect(result.output).toContain(
+          `a API não recusou o banco sem as migrations dela (saída ${code})`,
+        );
+        expect(
+          result.docker.filter((call) => call.includes("trajetto-api-migrate")),
+        ).toEqual([]);
+        // The API never started: nothing of it to remove.
+        expect(result.docker.slice(-4)).toEqual(cleanup.slice(1));
+        expect(result.summary).toBe("");
+      },
+    );
+
     it("fails before starting the server when the release step fails", () => {
       const result = smoke({ migrate: 1 });
 
       expect(result.status).toBe(1);
       expect(result.output).toContain(
-        "::error::Smoke test da imagem trajetto-api: a etapa de release (./docker-entrypoint.sh migrate) falhou num banco vazio. Nada foi publicado no GHCR",
+        "::error::Smoke test da imagem trajetto-api: a etapa de release (a imagem trajetto-api-migrate) falhou num banco vazio. Nada foi publicado no GHCR",
       );
-      expect(result.output).toContain("migrate: 135 migrations, seeds ok");
+      expect(result.output).toContain("migrate: 136 migrations, seeds ok");
       expect(
         result.docker.filter((call) => call.includes("--health-interval")),
       ).toEqual([]);
-      expect(result.docker.slice(-3)).toEqual(cleanup.slice(1));
+      expect(result.docker.slice(-4)).toEqual(cleanup.slice(1));
       expect(result.summary).toBe("");
     });
 
@@ -530,7 +624,7 @@ describe.skipIf(!hasShell("bash"))(
           `o container não ficou saudável (${state})`,
         );
         expect(result.output).toContain("api: boot log line");
-        expect(result.docker.slice(-4)).toEqual(cleanup);
+        expect(result.docker.slice(-5)).toEqual(cleanup);
         expect(result.summary).toBe("");
       }
     });
@@ -540,7 +634,7 @@ describe.skipIf(!hasShell("bash"))(
 
       expect(other.status).toBe(1);
       expect(other.output).toContain("/health/liveness informou o commit");
-      expect(other.docker.slice(-4)).toEqual(cleanup);
+      expect(other.docker.slice(-5)).toEqual(cleanup);
 
       const unready = smoke({ ready: 1 });
 
@@ -548,7 +642,7 @@ describe.skipIf(!hasShell("bash"))(
       expect(unready.output).toContain(
         "/health/readiness não respondeu 200 (banco)",
       );
-      expect(unready.docker.slice(-4)).toEqual(cleanup);
+      expect(unready.docker.slice(-5)).toEqual(cleanup);
     });
   },
 );
