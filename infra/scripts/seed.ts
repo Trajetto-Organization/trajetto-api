@@ -1,7 +1,16 @@
-import { env } from "@/env";
+import * as dotenv from "dotenv";
+import * as dotenvExpand from "dotenv-expand";
 import { hash } from "bcrypt";
 
 import database from "@/../infra/database";
+
+// The two variables below, read on their own: not through `@/env`, which
+// validates the API's whole environment (JWT, Redis, R2...). The release
+// step runs this from the Application trajetto-api-migrate, whose
+// Environment holds only the database URL and, on a new installation, these
+// two (docs/deploy.md). `.env` is still read locally, without overriding a
+// variable already set — what `@/env` did.
+dotenvExpand.expand(dotenv.config());
 
 async function checkDatabaseConnection(retries = 5, interval = 1000) {
   for (let i = 0; i < retries; i++) {
@@ -41,8 +50,8 @@ async function seed() {
     }
 
     // Check if environment variables are set
-    const masterEmail = env.MASTER_USER_EMAIL;
-    const masterPassword = env.MASTER_USER_INITIAL_PASSWORD;
+    const masterEmail = process.env.MASTER_USER_EMAIL;
+    const masterPassword = process.env.MASTER_USER_INITIAL_PASSWORD;
 
     if (!masterEmail || !masterPassword) {
       console.error(

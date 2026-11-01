@@ -56,7 +56,7 @@ src/jobs/cron/                crons (index.ts registra)
 src/workers/index.ts          pipelines de notificação e IA, dispatcher de webhooks
 prisma/schema.prisma          modelo de dados; prisma/migrations/ (SQL, expandir/contrair)
 prisma/vitest-environment-prisma/  ambiente de teste: um banco por arquivo E2E
-infra/scripts/                entrypoint da imagem, migrations como job, verify-rollout, backup/restore manuais, seeds, guard de bootstrap
+infra/scripts/                entrypoint da imagem (serve, migrate, release), verify-rollout, backup/restore manuais, seeds, guard de bootstrap
 infra/ai-ocr/                 serviço trajetto-ai (server.py, Dockerfile com stage test, requisitos com hash, modelos)
 infra/traefik/                referência da configuração estática do Traefik do Dokploy
 tests/unitaires/              unitários (por domínio + contract/, lifecycle/, security/, quality/…)
@@ -150,7 +150,8 @@ Windows).
   `.env.example`, em `docs/variaveis-de-ambiente.md` (com onde ela é
   definida) e, se for segredo, na censura do logger
   (`provider-secret-redaction.test.ts` cobra). Em staging e produção ela é
-  digitada à mão no _Environment_ da Application `trajetto-api` no Dokploy
+  digitada à mão no _Environment_ da Application `trajetto-api` (ou na
+  `trajetto-api-migrate`, se quem lê é a etapa de release) no Dokploy
   (nenhum arquivo do repositório leva variáveis ao servidor): diga isso na
   entrega. Vazio conta como ausente.
 - Formatação: Prettier (`.prettierrc`); o CI confere.
@@ -205,21 +206,24 @@ checksum). Detalhes: `docs/arquitetura.md` ("Migrations: expandir e contrair").
   roda a validação completa (audit, lint, typecheck, unitários com piso, E2E,
   pytest da IA, gitleaks), constrói **uma vez** as imagens `trajetto-api`,
   `trajetto-api-migrate` e `trajetto-ai` (`sha-<sha>`, SBOM, proveniência,
-  Trivy), roda as migrations como job único no Swarm (a imagem de migração,
-  por SSH com chave restrita), move `staging` por digest e faz o deploy do
-  staging no Dokploy; PR para
+  Trivy; a de migração e a da IA são reaproveitadas por `src-<hash>` quando o
+  que rodam não mudou), roda as migrations pela Application
+  `trajetto-api-migrate` do Dokploy (só se o banco ainda não aplicou aquela
+  imagem; `dokploy-release.mjs` espera a etapa terminar), move `staging` por
+  digest e faz o deploy do staging no Dokploy; PR para
   `main` revalida e exige que o staging tenha rodado o head (ou que o head só
   mude documentação desde um commit que rodou: `[skip ci]` só para
   documentação é seguro); o merge em `main`
-  **promove** o mesmo digest para `stable` (migrations como job único antes,
+  **promove** o mesmo digest para `stable` (as migrations antes, do mesmo jeito,
   environment `production` com aprovação, conferência da convergência) e roda
   o `semantic-release`. _Run workflow_ com `image_tag=sha-<sha>` = rollback.
 - Sem os secrets do Dokploy, os jobs movem as tags e pulam o deploy com
   aviso.
 - Staging e produção rodam no Dokploy (Docker Swarm), sem Compose nem
   template: em cada environment, o projeto `trajetto-api` tem as Applications
-  `trajetto-api` (2 réplicas, com domínio) e `trajetto-ai` (provider Docker,
-  imagem do GHCR, sem domínio) e os Databases PostgreSQL e Redis do Dokploy, todos na rede `dokploy-network` (um serviço acha o outro
+  `trajetto-api` (2 réplicas, com domínio), `trajetto-api-migrate` (as
+  migrations e os seeds; parada depois da etapa) e `trajetto-ai` (provider
+  Docker, imagem do GHCR, sem domínio) e os Databases PostgreSQL e Redis do Dokploy, todos na rede `dokploy-network` (um serviço acha o outro
   pelo App Name). Imagem, variáveis, domínio, réplicas, limites e healthcheck
   são configurados no painel; o passo a passo e as lacunas em relação ao
   antigo compose estão em `docs/deploy.md`.
@@ -229,8 +233,8 @@ checksum). Detalhes: `docs/arquitetura.md` ("Migrations: expandir e contrair").
   e `restore-postgres.sh` são só para dump manual e ensaio.
 - As garantias do pipeline são guardadas por testes em
   `tests/unitaires/lifecycle/` (`promote-workflow`, `release-migrations`,
-  `compose-rollout-verify`, `supply-chain`, `secrets-hygiene`,
-  `dokploy-deploy`). Se um deles falhar depois de uma mudança em
+  `dokploy-release`, `migrate-source`, `compose-rollout-verify`,
+  `supply-chain`, `secrets-hygiene`, `dokploy-deploy`). Se um deles falhar depois de uma mudança em
   workflow/script, a mudança provavelmente quebrou uma garantia: entenda antes
   de ajustar o teste.
 - O deploy chama a API do Dokploy por `.github/scripts/dokploy-deploy.mjs`
@@ -239,8 +243,8 @@ checksum). Detalhes: `docs/arquitetura.md` ("Migrations: expandir e contrair").
   idêntica (um teste da web compara as duas), e repete até 6 vezes, com
   espera crescente (20 → 160 s), um deploy que termina em erro, registrando
   o motivo que o Dokploy deu.
-- Entre repositórios: a ordem do primeiro deploy (bancos → IA → API → backup
-  do banco → web → app), a ordem de cada release (**API → web → app**) e os valores que
+- Entre repositórios: a ordem do primeiro deploy (bancos → IA → migrations →
+  API → backup do banco → web → app), a ordem de cada release (**API → web → app**) e os valores que
   precisam casar com a web e o app (`HTTP_REQUEST` = origem da web,
   `RATE_LIMIT_FORWARDER_SECRET`, `TURNSTILE_SECRET_KEY`, R2) estão em
   `docs/deploy.md`, seção "Os três repositórios juntos", igual nos três

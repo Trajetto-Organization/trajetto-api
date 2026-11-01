@@ -26,8 +26,8 @@ import { readSchemaVersion, schemaRefusal } from "./schema-guard";
  * step of docker-entrypoint.sh in BOTH modes, before anything is written.
  *
  * `--require-migrations <build/schema-version.json>` (a replica's boot,
- * never the release step) also refuses a database that lacks the build's
- * last migration — see schema-guard.ts.
+ * never the release step) also refuses a database that lacks any of the
+ * build's migrations — see schema-guard.ts.
  *
  * Bounded on purpose. Waiting forever would hide a genuinely wrong
  * DATABASE_URL behind a container that looks like it is starting, and a
@@ -45,11 +45,11 @@ const RETRY_DELAY_MS = 2_000;
 const sleep = (ms: number) => new Promise((done) => setTimeout(done, ms));
 
 /**
- * The migration the boot requires, or null when not asked to check. Read
+ * The migrations the boot requires, or null when not asked to check. Read
  * before waiting: a build without the file is a broken image, not a
  * database that is late.
  */
-function requiredMigration(argv: string[]): string | null {
+function requiredMigrations(argv: string[]): string[] | null {
   const flag = argv.indexOf("--require-migrations");
 
   if (flag === -1) return null;
@@ -64,7 +64,7 @@ function requiredMigration(argv: string[]): string | null {
   }
 
   try {
-    return readSchemaVersion(file).latestMigration;
+    return readSchemaVersion(file).migrations;
   } catch (error) {
     console.error(
       `\n🔴 ${error instanceof Error ? error.message : String(error)}\n`,
@@ -73,7 +73,7 @@ function requiredMigration(argv: string[]): string | null {
   }
 }
 
-const REQUIRED_MIGRATION = requiredMigration(process.argv);
+const REQUIRED_MIGRATIONS = requiredMigrations(process.argv);
 
 async function waitForPostgres(): Promise<void> {
   const deadline = Date.now() + MAX_WAIT_MS;
@@ -96,8 +96,8 @@ async function waitForPostgres(): Promise<void> {
 
         refusal = await emptyDatabaseRefusal(prisma);
 
-        if (!refusal && REQUIRED_MIGRATION) {
-          refusal = await schemaRefusal(prisma, REQUIRED_MIGRATION);
+        if (!refusal && REQUIRED_MIGRATIONS) {
+          refusal = await schemaRefusal(prisma, REQUIRED_MIGRATIONS);
         }
 
         answered = true;

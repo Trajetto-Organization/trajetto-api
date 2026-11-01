@@ -327,7 +327,7 @@ describe("the API image's build stage", () => {
  * - the API image (stage `runner`): 239 MB unpacked, ~68 MB compressed —
  *   it was 431 MB and 114.8 MB with the Prisma CLI inside (docs/deploy.md).
  *   No CLI, no schema, no migrations, no seeds: it never migrates, and
- *   refuses to start on a database that lacks its build's last migration.
+ *   refuses to start on a database that lacks any of its build's migrations.
  * - the release image (stage `migrate`, trajetto-api-migrate): the API
  *   image plus the CLI's own tree (~170 MB unpacked), the schema, the
  *   migrations and the seeds, as layers on top — the server pulls only
@@ -564,13 +564,23 @@ describe("the release image (trajetto-api-migrate)", () => {
     expect(migrate.filter((line) => /^RUN /.test(line))).toEqual([]);
   });
 
-  // The API's probe of :3333 would have Swarm kill the job mid-migration.
-  it("declares no healthcheck, and migrates by default", () => {
+  // As a Dokploy Application, the task's health IS the outcome:
+  // `Starting` while it migrates, `Running` once the marker the `release`
+  // mode writes after the seeds exists (dokploy-release.mjs reads it). The
+  // API's probe of :3333 would mean nothing here, and a short start period
+  // would have Swarm kill a long migration halfway.
+  it("reports the release step done through its healthcheck, and runs it by default", () => {
     const migrate = stage(api, "migrate");
+    const healthcheck = migrate.find((line) => line.startsWith("HEALTHCHECK"));
 
-    expect(migrate).toContain("HEALTHCHECK NONE");
+    expect(healthcheck).toBe(
+      "HEALTHCHECK --interval=5s --timeout=5s --start-period=24h --retries=3 CMD test -f /tmp/trajetto-release-done",
+    );
+    expect(read("infra/scripts/docker-entrypoint.sh")).toContain(
+      "RELEASE_MARKER=/tmp/trajetto-release-done",
+    );
     expect(migrate[migrate.length - 1]).toBe(
-      'CMD ["./docker-entrypoint.sh", "migrate"]',
+      'CMD ["./docker-entrypoint.sh", "release"]',
     );
   });
 

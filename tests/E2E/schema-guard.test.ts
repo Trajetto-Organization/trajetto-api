@@ -13,11 +13,12 @@ import { createPrismaClient } from "@/shared/database/database-client";
  *
  * The API image no longer migrates: the release image does, once, before
  * the rollout. A replica started on a schema it was not written for (a tag
- * deployed without the job) came up "healthy" — the liveness touches no
- * table — and answered 500 wherever it read a new column. Now the boot's
- * first step, infra/scripts/wait-for-postgres.ts with --require-migrations
- * (docker-entrypoint.sh, `serve`), checks the build's last migration
- * (build/schema-version.json) against `_prisma_migrations` and exits first.
+ * deployed without the release step) came up "healthy" — the liveness
+ * touches no table — and answered 500 wherever it read a new column. Now the
+ * boot's first step, infra/scripts/wait-for-postgres.ts with
+ * --require-migrations (docker-entrypoint.sh, `serve`), checks every
+ * migration of the build (build/schema-version.json) against
+ * `_prisma_migrations` and exits first.
  *
  * Run for real here, against the migrated E2E database and an empty one.
  */
@@ -29,13 +30,12 @@ const script = resolve(
   "wait-for-postgres.ts",
 );
 
-const LATEST = readdirSync(resolve(process.cwd(), "prisma", "migrations"), {
+const ALL = readdirSync(resolve(process.cwd(), "prisma", "migrations"), {
   withFileTypes: true,
 })
   .filter((entry) => entry.isDirectory())
   .map((entry) => entry.name)
-  .sort()
-  .pop() as string;
+  .sort();
 
 const emptyName = `trajetto_schema_${randomUUID().replace(/-/g, "")}`;
 const dir = mkdtempSync(join(tmpdir(), "trajetto-schema-"));
@@ -58,11 +58,11 @@ function admin(): PrismaClient {
   return createPrismaClient({ log: [] }, { url: url.toString() });
 }
 
-/** A build/schema-version.json naming `migration`. */
-function schemaVersion(migration: string): string {
+/** A build/schema-version.json listing `migrations`, as tsup writes it. */
+function schemaVersion(migrations: string[]): string {
   const file = join(dir, `${randomUUID()}.json`);
 
-  writeFileSync(file, JSON.stringify({ latestMigration: migration }));
+  writeFileSync(file, JSON.stringify({ migrations }));
 
   return file;
 }
@@ -110,20 +110,20 @@ function boot(args: string[], databaseUrl = process.env.DATABASE_URL) {
 }
 
 describe("the boot's schema check (--require-migrations)", () => {
-  it("passes the migrated database, at the repository's last migration", () => {
+  it("passes the migrated database, with every migration of the repository", () => {
     const { status, output } = boot([
       "--require-migrations",
-      schemaVersion(LATEST),
+      schemaVersion(ALL),
     ]);
 
     expect(status, output).toBe(0);
   });
 
-  it("refuses a database that lacks the build's migration, naming it", () => {
+  it("refuses a database that lacks a migration of the build, naming it", () => {
     const missing = "29991231235959_from_a_build_ahead";
     const { status, output } = boot([
       "--require-migrations",
-      schemaVersion(missing),
+      schemaVersion([...ALL, missing]),
     ]);
 
     expect(status, output).toBe(1);
@@ -131,14 +131,28 @@ describe("the boot's schema check (--require-migrations)", () => {
     expect(output).toContain("trajetto-api-migrate");
   });
 
+  // A branch merged late brings a migration that sorts before ones the
+  // database already has: the newest is applied, this one is not.
+  it("refuses a missing migration older than the newest applied one", () => {
+    const mergedLate = "20000101000000_merged_late";
+    const { status, output } = boot([
+      "--require-migrations",
+      schemaVersion([...ALL, mergedLate]),
+    ]);
+
+    expect(status, output).toBe(1);
+    expect(output).toContain(`O banco não tem a migration ${mergedLate}`);
+  });
+
   it("refuses a database that was never migrated", () => {
     const { status, output } = boot(
-      ["--require-migrations", schemaVersion(LATEST)],
+      ["--require-migrations", schemaVersion(ALL)],
       urlFor(emptyName),
     );
 
     expect(status, output).toBe(1);
-    expect(output).toContain(`O banco não tem a migration ${LATEST}`);
+    expect(output).toContain(`O banco não tem a migration ${ALL[0]}`);
+    expect(output).toContain(`nem outras ${ALL.length - 1}`);
   });
 
   it("takes a broken build for what it is, before waiting for anything", () => {
@@ -148,7 +162,7 @@ describe("the boot's schema check (--require-migrations)", () => {
     ]);
 
     expect(status, output).toBe(64);
-    expect(output).toContain("não diz a última migration do build");
+    expect(output).toContain("não lista as migrations do build");
   });
 
   it("asks nothing of the schema without the flag (the release step, yarn dev)", () => {

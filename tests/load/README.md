@@ -44,7 +44,9 @@ gargalos e as quatro correções que saíram de lá em
 ```bash
 # 1. O harness: Traefik + Postgres + Redis, o `migrate` (a imagem de
 #    migração, trajetto-api-migrate: migrations e seeds no load_test vazio,
-#    uma vez) e, só depois de ele sair com 0, as réplicas da imagem de
+#    uma vez, com o comando `migrate`, que sai ao terminar; o padrão da
+#    imagem, `release`, fica parado para o Swarm do Dokploy ler o
+#    healthcheck) e, só depois de ele sair com 0, as réplicas da imagem de
 #    produção. A imagem da API não migra: as réplicas rodam
 #    NODE_ENV=production, o guard de bootstrap recusa banco vazio e o de
 #    schema recusa banco sem as migrations do build; sem o `migrate` antes,

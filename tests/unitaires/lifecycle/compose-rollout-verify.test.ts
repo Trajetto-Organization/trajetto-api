@@ -410,55 +410,6 @@ describe.skipIf(!sh)("the API rollout check (verify-rollout.sh)", () => {
   });
 });
 
-/**
- * The other forced command on the same host had the same hole: `printf |
- * grep '^...$'` matches line by line, so an image whose FIRST line was valid
- * passed whole, newline and all, on its way to a docker command line.
- */
-describe.skipIf(!sh)("the release-migration forced command", () => {
-  let box: Sandbox;
-
-  beforeEach(() => {
-    box = sandbox();
-    box.stub("docker", "exit 0");
-  });
-
-  afterEach(() => box.dispose());
-
-  it("refuses an image with a second line, without touching docker", () => {
-    const image =
-      "ghcr.io/trajetto-organization/trajetto-api-migrate:sha-0a1b2c3\n--network host";
-
-    const inputs: Array<{ args: string[]; env: Record<string, string> }> = [
-      { args: [image], env: {} },
-      { args: [], env: { SSH_ORIGINAL_COMMAND: image } },
-    ];
-
-    for (const input of inputs) {
-      const result = run(
-        "sh",
-        repoFile("infra/scripts/run-release-migrations.sh"),
-        input.args,
-        {
-          bin: box.bin,
-          // A valid service, so the image check is the only one that can
-          // refuse: without it the script also exits 2, on API_SERVICE.
-          env: {
-            MIGRATE_POLL_SECONDS: "0",
-            API_SERVICE: "trajetto-api-a1b2c3",
-            ...input.env,
-          },
-        },
-      );
-
-      expect(result.status).toBe(2);
-      expect(result.stderr).toContain("imagem inválida");
-    }
-
-    expect(box.calls("docker")).toEqual([]);
-  });
-});
-
 /** A site whose /build-id.json answers `answers` in turn (the last repeats). */
 let server: Server | undefined;
 

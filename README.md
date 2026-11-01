@@ -188,7 +188,7 @@ src/shared/index.ts           registro dos repositórios e serviços no containe
 src/jobs/cron/                crons (index.ts registra)
 src/workers/index.ts          pipelines de notificação e de IA e o dispatcher de webhooks
 prisma/schema.prisma          modelo de dados; prisma/migrations/ (SQL, expandir/contrair)
-infra/scripts/                entrypoint da imagem, migrations como job, seeds, backup/restore manuais
+infra/scripts/                entrypoint da imagem (serve, migrate, release), seeds, backup/restore manuais
 infra/ai-ocr/                 serviço trajetto-ai (Python)
 tests/                        unitaires/, E2E/, contract/, ai-local/, load/
 ```
@@ -272,13 +272,15 @@ faltando ou inválido derruba o processo com a lista do que corrigir. Vazio
 conta como ausente. `DATABASE_URL`, `MIGRATION_DATABASE_URL` e
 `ALLOW_EMPTY_DATABASE_BOOTSTRAP` ficam fora desse schema: quem as lê é o
 Prisma, o entrypoint das imagens (`infra/scripts/docker-entrypoint.sh`) e a
-etapa de release (a imagem `trajetto-api-migrate`).
+etapa de release (a imagem `trajetto-api-migrate`, que em staging e produção
+roda como a Application de mesmo nome, com a URL sem tetos na própria
+`DATABASE_URL`).
 
-| Onde               | O que vai lá                                                                                       |
-| ------------------ | -------------------------------------------------------------------------------------------------- |
-| desenvolvimento    | `.env` na raiz (o único arquivo lido; `.env.development` e afins não são lidos por nada)           |
-| staging e produção | a aba _Environment_ de cada Application no Dokploy (`trajetto-api`, `trajetto-ai`), digitada à mão |
-| CI                 | os environments `staging` e `production` e as variáveis do repositório no GitHub                   |
+| Onde               | O que vai lá                                                                                                               |
+| ------------------ | -------------------------------------------------------------------------------------------------------------------------- |
+| desenvolvimento    | `.env` na raiz (o único arquivo lido; `.env.development` e afins não são lidos por nada)                                   |
+| staging e produção | a aba _Environment_ de cada Application no Dokploy (`trajetto-api`, `trajetto-api-migrate`, `trajetto-ai`), digitada à mão |
+| CI                 | os environments `staging` e `production` e as variáveis do repositório no GitHub                                           |
 
 Os grupos principais (só nomes; os valores de exemplo do `.env.example` são
 fictícios):
@@ -568,13 +570,13 @@ requisição e de resposta, incluindo 400/401/403/404/409/429.
 ```
 branch de trabalho ─push─▶ ci.yml (lint, typecheck, unitários + cobertura, audit, gitleaks, IA)
 staging ─push─▶ deploy.yml: validação completa (+ E2E) ─▶ build ÚNICO das 3 imagens (GHCR sha-<sha>:
-                            API, migração e IA; a IA reaproveitada se infra/ai-ocr não mudou)
-                            ─▶ migrations (job único no Swarm, com a imagem de migração)
+                            API, migração e IA; migração e IA reaproveitadas se o que rodam não mudou)
+                            ─▶ migrations, se o banco não aplicou essa imagem (Application trajetto-api-migrate)
                             ─▶ tag `staging` por digest ─▶ Dokploy staging (IA, se mudou → API)
                             ─▶ a liveness pública responde o commit novo ─▶ marcador staged-<sha>
 PR staging → main ─▶ a mesma validação + "o staging rodou o head do PR?" (staged-<sha>;
                      um head só de documentação usa o de um ancestral que rodou)
-merge em main ─▶ promoção (sem build): migrations (job único) ─▶ tag `stable` por digest ─▶ Dokploy produção (IA → API)
+merge em main ─▶ promoção (sem build): migrations (se preciso) ─▶ tag `stable` por digest ─▶ Dokploy produção (IA → API)
                  ─▶ convergência ─▶ release        [aprovação do environment production]
 Run workflow na main ─▶ a mesma promoção com uma tag antiga (rollback)
 Run workflow na staging ─▶ o caminho de staging de novo (force_ai_build reconstrói a IA)
@@ -582,10 +584,13 @@ Run workflow na staging ─▶ o caminho de staging de novo (force_ai_build reco
 
 - **Imagens**: `Dockerfile` (multi-stage sobre `node:22.21.1-alpine`, fixada
   por digest) gera duas: a da **API** (estágio `runner`, sem o CLI do Prisma:
-  o entrypoint espera o Postgres, recusa banco vazio em produção e banco sem
-  a última migration do build, e sobe o servidor; **nunca migra**) e a de
+  o entrypoint espera o Postgres, recusa banco vazio em produção e banco a
+  que falte qualquer migration do build (`build/schema-version.json` lista
+  todas), e sobe o servidor; **nunca migra**) e a de
   **migração** (estágio `migrate`: a da API mais o CLI, as migrations e os
-  seeds, que roda uma vez, como job do Swarm, antes de cada deploy). Mais
+  seeds; roda como a Application `trajetto-api-migrate` antes do deploy, só
+  quando o banco ainda não a aplicou, e só é reconstruída quando muda o que
+  ela roda). Mais
   `infra/ai-ocr/Dockerfile` (com o stage `test`). Publicadas como
   `trajetto-api`, `trajetto-api-migrate` e `trajetto-ai` em
   `ghcr.io/trajetto-organization/`, com SBOM, proveniência e Trivy.
@@ -594,12 +599,14 @@ Run workflow na staging ─▶ o caminho de staging de novo (force_ai_build reco
   Applications no Dokploy.
 - **Dokploy** (Docker Swarm + Traefik): em cada environment (`staging` e
   `production`), o projeto `trajetto-api` tem as Applications `trajetto-api`
-  (2 réplicas, com domínio) e `trajetto-ai` (sem domínio), com provider
+  (2 réplicas, com domínio), `trajetto-api-migrate` (as migrations) e
+  `trajetto-ai` (sem domínio), com provider
   Docker puxando do GHCR, e os Databases PostgreSQL e Redis. Sem Compose nem
   template.
 - O pipeline chama a API do Dokploy (`application.deploy`, em
   `.github/scripts/dokploy-deploy.mjs`), uma Application por vez, na ordem
-  IA → API. Sem os secrets do Dokploy, os jobs movem as tags e pulam o deploy
+  migrations (se mudaram, esperando a etapa terminar:
+  `.github/scripts/dokploy-release.mjs`) → IA → API. Sem os secrets do Dokploy, os jobs movem as tags e pulam o deploy
   com aviso.
 - **Merge em `main` sempre com merge commit** (nunca squash/rebase): a
   promoção usa o 2º pai do merge para achar o build de staging.
@@ -662,26 +669,26 @@ versão do cliente, sem segredo e sem URL assinada.
 
 ## Solução de problemas
 
-| Sintoma                                                                               | Causa provável                                                                                                                                          | O que fazer                                                                                                                                                                                                                      |
-| ------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `Invalid enviroment variables` no boot                                                | variável obrigatória faltando ou inválida                                                                                                               | leia a lista impressa e compare com `docs/variaveis-de-ambiente.md`                                                                                                                                                              |
-| `wait-for-postgres` desiste                                                           | Postgres não subiu ou a porta 5432 está ocupada                                                                                                         | `yarn database:dev:up` e `docker ps`; pare outro Postgres local                                                                                                                                                                  |
-| `P1001` / conexão recusada                                                            | `DATABASE_URL` aponta para host ou porta errados                                                                                                        | em dev, confira `POSTGRES_HOST`/`POSTGRES_PORT`; no Dokploy, o host é o App Name do Database PostgreSQL                                                                                                                          |
-| `503` com `timeout exceeded when trying to connect` ou `Query read timeout` sob carga | pool esgotado ou conexão presa                                                                                                                          | `docs/arquitetura.md` (Conexão com o Postgres)                                                                                                                                                                                   |
-| Pedidos de IA parados em `PENDING`                                                    | `trajetto-ai` fora do ar ou `AI_LOCAL_URL` errada (sem URL, sem token ou com `AI_PROVIDER=none` nada fica em `PENDING`: o registro sai "não analisado") | em dev, suba o serviço com `--profile ai`; no Dokploy, `AI_LOCAL_URL=http://<App Name da IA>:8080`                                                                                                                               |
-| Toda leitura de IA falha com `401`                                                    | `AI_LOCAL_TOKEN` (API) diferente do `AI_TOKEN` (serviço)                                                                                                | use o mesmo valor nos dois e faça Deploy das duas Applications                                                                                                                                                                   |
-| Rota responde 403/404 inesperado                                                      | permissão, módulo não contratado ou id de outra empresa                                                                                                 | `src/modules/middlewares/`, `src/config/permissions.ts`; o `code` do erro diz qual                                                                                                                                               |
-| Login respondendo 429 para todo mundo em produção                                     | `RATE_LIMIT_TRUSTED_PROXY` errado atrás da Cloudflare                                                                                                   | use `cloudflare` (`docs/deploy.md`, "Domínios, TLS e a borda")                                                                                                                                                                   |
-| Tempo real não chega entre réplicas                                                   | Redis fora ou `SOCKET_ADAPTER_KEY` diferente entre réplicas                                                                                             | confira o Redis; o resto da API segue funcionando                                                                                                                                                                                |
-| Notificação não chegou                                                                | provedor recusou ou a entrega esgotou as tentativas                                                                                                     | `GET /health/dead-letter` e `src/shared/notifications/`                                                                                                                                                                          |
-| `/docs` responde 404 em produção                                                      | sem `DOCS_USER`/`DOCS_PASSWORD` (ou senha com menos de 20 caracteres)                                                                                   | defina as duas                                                                                                                                                                                                                   |
-| PDF do comprovante sem assinatura                                                     | certificado ausente, vencido ou senha errada                                                                                                            | veja o estado em `/health/metrics` e o log do boot                                                                                                                                                                               |
-| E2E falha com `Unknown property datasources provided to PrismaClient constructor`     | `node_modules` com a cópia antiga de `prisma/vitest-environment-prisma`                                                                                 | `yarn install --force` (veja [Testes](#testes))                                                                                                                                                                                  |
-| Boot de produção recusa banco vazio                                                   | Database novo sem migrations                                                                                                                            | instalação nova: `ALLOW_EMPTY_DATABASE_BOOTSTRAP=true` na API (Deploy) e o job de migrations uma vez (`docs/deploy.md`, seção 8, passo 4), depois `false`; com dados, restaure o dump (`docs/deploy.md`, "Backup e restauração") |
-| Depurador não conecta (porta 9229 ocupada)                                            | `NODE_OPTIONS=--inspect` com o `tsx`, ou outro processo na porta                                                                                        | `npx tsx watch --inspect src/server.ts` (veja [Depuração](#depuração)); outra porta: `--inspect=9230`                                                                                                                            |
-| Usuário relata um erro com `requestId`                                                | o `requestId` é o `x-request-id` do pedido                                                                                                              | procure o valor nos logs: toda linha do pedido tem o mesmo `reqId`                                                                                                                                                               |
-| Promoção falha com "não existe" no GHCR                                               | o commit não passou pelo staging, ou o merge foi squash/rebase                                                                                          | leve o commit a `staging`, espere o verde e faça merge commit                                                                                                                                                                    |
-| Deploy "pulado" no resumo do run                                                      | o environment do GitHub ainda não tem os secrets do Dokploy                                                                                             | `docs/deploy.md`, "Configurar o GitHub"                                                                                                                                                                                          |
+| Sintoma                                                                               | Causa provável                                                                                                                                          | O que fazer                                                                                                                                                                                                                              |
+| ------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Invalid enviroment variables` no boot                                                | variável obrigatória faltando ou inválida                                                                                                               | leia a lista impressa e compare com `docs/variaveis-de-ambiente.md`                                                                                                                                                                      |
+| `wait-for-postgres` desiste                                                           | Postgres não subiu ou a porta 5432 está ocupada                                                                                                         | `yarn database:dev:up` e `docker ps`; pare outro Postgres local                                                                                                                                                                          |
+| `P1001` / conexão recusada                                                            | `DATABASE_URL` aponta para host ou porta errados                                                                                                        | em dev, confira `POSTGRES_HOST`/`POSTGRES_PORT`; no Dokploy, o host é o App Name do Database PostgreSQL                                                                                                                                  |
+| `503` com `timeout exceeded when trying to connect` ou `Query read timeout` sob carga | pool esgotado ou conexão presa                                                                                                                          | `docs/arquitetura.md` (Conexão com o Postgres)                                                                                                                                                                                           |
+| Pedidos de IA parados em `PENDING`                                                    | `trajetto-ai` fora do ar ou `AI_LOCAL_URL` errada (sem URL, sem token ou com `AI_PROVIDER=none` nada fica em `PENDING`: o registro sai "não analisado") | em dev, suba o serviço com `--profile ai`; no Dokploy, `AI_LOCAL_URL=http://<App Name da IA>:8080`                                                                                                                                       |
+| Toda leitura de IA falha com `401`                                                    | `AI_LOCAL_TOKEN` (API) diferente do `AI_TOKEN` (serviço)                                                                                                | use o mesmo valor nos dois e faça Deploy das duas Applications                                                                                                                                                                           |
+| Rota responde 403/404 inesperado                                                      | permissão, módulo não contratado ou id de outra empresa                                                                                                 | `src/modules/middlewares/`, `src/config/permissions.ts`; o `code` do erro diz qual                                                                                                                                                       |
+| Login respondendo 429 para todo mundo em produção                                     | `RATE_LIMIT_TRUSTED_PROXY` errado atrás da Cloudflare                                                                                                   | use `cloudflare` (`docs/deploy.md`, "Domínios, TLS e a borda")                                                                                                                                                                           |
+| Tempo real não chega entre réplicas                                                   | Redis fora ou `SOCKET_ADAPTER_KEY` diferente entre réplicas                                                                                             | confira o Redis; o resto da API segue funcionando                                                                                                                                                                                        |
+| Notificação não chegou                                                                | provedor recusou ou a entrega esgotou as tentativas                                                                                                     | `GET /health/dead-letter` e `src/shared/notifications/`                                                                                                                                                                                  |
+| `/docs` responde 404 em produção                                                      | sem `DOCS_USER`/`DOCS_PASSWORD` (ou senha com menos de 20 caracteres)                                                                                   | defina as duas                                                                                                                                                                                                                           |
+| PDF do comprovante sem assinatura                                                     | certificado ausente, vencido ou senha errada                                                                                                            | veja o estado em `/health/metrics` e o log do boot                                                                                                                                                                                       |
+| E2E falha com `Unknown property datasources provided to PrismaClient constructor`     | `node_modules` com a cópia antiga de `prisma/vitest-environment-prisma`                                                                                 | `yarn install --force` (veja [Testes](#testes))                                                                                                                                                                                          |
+| Boot de produção recusa banco vazio                                                   | Database novo sem migrations                                                                                                                            | instalação nova: `ALLOW_EMPTY_DATABASE_BOOTSTRAP=true` na `trajetto-api-migrate`, só no primeiro deploy dela (`docs/deploy.md`, seção 8, passo 4), depois apagada; com dados, restaure o dump (`docs/deploy.md`, "Backup e restauração") |
+| Depurador não conecta (porta 9229 ocupada)                                            | `NODE_OPTIONS=--inspect` com o `tsx`, ou outro processo na porta                                                                                        | `npx tsx watch --inspect src/server.ts` (veja [Depuração](#depuração)); outra porta: `--inspect=9230`                                                                                                                                    |
+| Usuário relata um erro com `requestId`                                                | o `requestId` é o `x-request-id` do pedido                                                                                                              | procure o valor nos logs: toda linha do pedido tem o mesmo `reqId`                                                                                                                                                                       |
+| Promoção falha com "não existe" no GHCR                                               | o commit não passou pelo staging, ou o merge foi squash/rebase                                                                                          | leve o commit a `staging`, espere o verde e faça merge commit                                                                                                                                                                            |
+| Deploy "pulado" no resumo do run                                                      | o environment do GitHub ainda não tem os secrets do Dokploy                                                                                             | `docs/deploy.md`, "Configurar o GitHub"                                                                                                                                                                                                  |
 
 ## Decisões e limites conhecidos
 

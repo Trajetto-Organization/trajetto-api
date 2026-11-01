@@ -30,8 +30,9 @@ export interface BootstrapFacts {
 
 export const EMPTY_DATABASE_REFUSAL =
   "Banco vazio em produção: nenhuma migration foi aplicada neste banco, e nada " +
-  "foi migrado nem semeado. Se é uma instalação NOVA, suba uma única vez com " +
-  "ALLOW_EMPTY_DATABASE_BOOTSTRAP=true. Se não é, o banco que respondeu NÃO é o " +
+  "foi migrado nem semeado. Se é uma instalação NOVA, rode a etapa de release " +
+  "uma única vez com ALLOW_EMPTY_DATABASE_BOOTSTRAP=true na Application " +
+  "trajetto-api-migrate (na API, nunca). Se não é, o banco que respondeu NÃO é o " +
   "de produção — volume novo, stack renomeada ou a task do Postgres reagendada " +
   "em outro nó (o volume é local). Restaure o dump antes de subir a API: " +
   "docs/deploy.md (Backup e restauração).";

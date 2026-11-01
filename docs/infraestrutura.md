@@ -211,6 +211,8 @@ push em staging ──▶ GitHub Actions (deploy.yml)
                      ├─ validação completa
                      ├─ build ÚNICO ──▶ GHCR: sha-<7> (imutável) + tag staging
                      ├─ API do Dokploy (https://dokploy.intrajetto.com, pela Cloudflare)
+                     │    se as migrations mudaram: deploy da trajetto-api-migrate
+                     │    e espera a etapa terminar (seção 5.2)
                      │    POST application.deploy ──▶ o Dokploy puxa :staging do GHCR
                      │    (com o token read:packages, seção 5.7)
                      └─ conferência: /health/liveness (API) ou /build-id.json (web)
@@ -218,6 +220,7 @@ push em staging ──▶ GitHub Actions (deploy.yml)
 PR staging → main ──▶ a mesma validação + "o staging rodou este commit?"
 
 merge em main ──▶ aprovação no environment production
+                  ├─ migrations, se mudaram (trajetto-api-migrate de produção)
                   ├─ tag stable movida para o MESMO digest (sem rebuild)
                   ├─ API do Dokploy: deploy das Applications de produção
                   ├─ conferência
@@ -422,18 +425,17 @@ O orçamento de memória dos serviços está em
   staging e produção. Use só como último recurso, numa janela calma, e leia o
   aviso do painel antes de confirmar. **A confirmar com o dono:** o que o
   botão faz nesta VPS (reinicia ou não).
-- **O CI usa SSH desde 31/10/2026, para uma coisa só: o job de
-  migrations.** A imagem da API não migra no boot; antes de cada deploy (de
-  staging e de produção), o pipeline entra como o usuário `deploy`, com uma
-  chave por ambiente restrita a `/usr/local/bin/trajetto-release-migrate`
-  (_forced command_ preso ao serviço da API daquele ambiente), e o script
-  roda a imagem de migração como job do Swarm
-  ([`deploy.md` → 15](./deploy.md#15-migrations)). A conferência do rollout
-  por SSH (`ROLLOUT_VERIFY=ssh`, outra chave) continua sem uso. O runner do
-  GitHub não tem IP fixo: a regra `SSH` do firewall fica aberta para IPv4 e
-  o SSH precisa estar só por chave ([seção 13.8](#138-endurecer-o-ssh)).
-  **A confirmar com o dono:** o usuário `deploy` criado no host e as duas
-  chaves no `authorized_keys` dele.
+- **O CI não usa SSH.** Desde 31/10/2026 a imagem da API não migra no boot,
+  e as migrations rodam pela Application `trajetto-api-migrate` do Dokploy,
+  chamada pela API do Dokploy como as outras
+  ([seção 5.2](#52-environments-projetos-e-serviços);
+  [`deploy.md` → 15](./deploy.md#15-migrations)). O usuário de deploy e a
+  chave restrita descritos em
+  [`deploy.md`](./deploy.md#14-conferir-a-convergência) só são necessários
+  com `ROLLOUT_VERIFY=ssh`, que não está em uso. **A confirmar com o dono:**
+  se existe no host algum usuário criado por nós, além dos da imagem (um
+  usuário `deploy` criado para o caminho por SSH das migrations, que não
+  chegou a ser usado, pode ser apagado).
 
 ### 4.3 Firewall
 
@@ -443,12 +445,12 @@ nada).
 
 **Regras de entrada, nesta ordem** (aplicadas em 29/10/2026):
 
-| Nome                | Ação   | Protocolo | Porta    | Fonte(s)                                  | Por quê                                                                                  |
-| ------------------- | ------ | --------- | -------- | ----------------------------------------- | ---------------------------------------------------------------------------------------- |
-| `HTTPS Cloudflare`  | ACCEPT | TCP       | 443      | as faixas IPv4 publicadas pela Cloudflare | todo o tráfego dos sites e da API chega pela Cloudflare                                  |
-| `HTTP Cloudflare`   | ACCEPT | TCP       | 80       | as mesmas faixas                          | a renovação do Let's Encrypt (desafio HTTP-01) chega pela Cloudflare na porta 80         |
-| `SSH`               | ACCEPT | TCP       | 22       | qualquer IPv4                             | administração do servidor e o job de migrations do CI; endurecimento pendente (seção 14) |
-| `Block all traffic` | DROP   | qualquer  | qualquer | qualquer                                  | a regra fixa da Contabo, sempre a última: fecha todas as outras portas, IPv4 e IPv6      |
+| Nome                | Ação   | Protocolo | Porta    | Fonte(s)                                  | Por quê                                                                             |
+| ------------------- | ------ | --------- | -------- | ----------------------------------------- | ----------------------------------------------------------------------------------- |
+| `HTTPS Cloudflare`  | ACCEPT | TCP       | 443      | as faixas IPv4 publicadas pela Cloudflare | todo o tráfego dos sites e da API chega pela Cloudflare                             |
+| `HTTP Cloudflare`   | ACCEPT | TCP       | 80       | as mesmas faixas                          | a renovação do Let's Encrypt (desafio HTTP-01) chega pela Cloudflare na porta 80    |
+| `SSH`               | ACCEPT | TCP       | 22       | qualquer IPv4                             | administração do servidor; endurecimento e restrição da origem pendentes (seção 14) |
+| `Block all traffic` | DROP   | qualquer  | qualquer | qualquer                                  | a regra fixa da Contabo, sempre a última: fecha todas as outras portas, IPv4 e IPv6 |
 
 As regras valem só para conexões **de entrada**. A saída do servidor (pull do
 GHCR, R2, Resend por SMTP, Expo Push, healthchecks.io, LocationIQ) não passa
@@ -499,15 +501,16 @@ porque o `DOKPLOY_URL` passa pela Cloudflare.
   `https://dokploy.intrajetto.com`, pela Cloudflare (ou, numa emergência ou
   numa VPS nova, por um túnel SSH; seção 13.1, passo 4). Por isso o secret
   `DOKPLOY_URL` do GitHub tem de ser esse endereço, nunca o IP.
-- **22 para qualquer IPv4**: para o dono administrar o servidor de qualquer
-  rede e, desde 31/10/2026, para o job de migrations do CI, que entra por
-  ela antes de todo deploy ([seção 4.2](#42-ssh-e-console-de-emergência)).
-  O runner do GitHub não tem IP fixo, então a origem **não** pode ser
-  restrita ao IP do dono. A proteção é o SSH só por chave
-  ([seção 13.8](#138-endurecer-o-ssh), a primeira pendência de segurança,
-  [seção 14](#14-pendências-conhecidas)) e a chave do CI presa ao script
-  das migrations. Fechar a 22 de vez pede um túnel (Cloudflare Tunnel com
-  Access por _service token_): uma evolução, não uma pendência.
+- **22 para qualquer IPv4**: é o estado atual, para o dono administrar o
+  servidor de qualquer rede. Nada do CI entra pela 22 (as migrations vão
+  pela API do Dokploy, e a conferência do rollout é a `http`), então a
+  origem **pode** ser restrita ao IP do dono, com o VNC como saída de
+  emergência. **A confirmar com o dono:** o motivo de não restringir (por
+  exemplo, um IP que muda). O endurecimento
+  ([seção 13.8](#138-endurecer-o-ssh)) e a restrição da origem são a
+  primeira pendência de segurança ([seção 14](#14-pendências-conhecidas)).
+  Se um dia usar `ROLLOUT_VERIFY=ssh`, a 22 precisa voltar a aceitar o
+  runner do GitHub, que não tem IP fixo.
 - **Nenhuma regra IPv6 de entrada**: a Cloudflare chega à origem por IPv4. Os
   usuários que usam IPv6 falam com a borda da Cloudflare, que fala com a
   origem por IPv4. Não existem registros AAAA na zona.
@@ -626,10 +629,12 @@ confira `docker service ls` (todos os serviços com as réplicas de pé) e a
   chamadas do pipeline ([seção 6.5](#65-security-ddos-waf-e-bots)).
 - **Recomendado, pendente** ([seção 14](#14-pendências-conhecidas)): pôr o
   painel atrás do Cloudflare Access. O pipeline continua passando com uma
-  aplicação de _Bypass_ restrita às duas rotas que ele chama
-  (`/api/application.deploy` e `/api/deployment.all`) ou com um _Service
-  Token_ (este exige mandar os cabeçalhos `CF-Access-Client-Id` e
-  `CF-Access-Client-Secret` no `.github/scripts/dokploy-deploy.mjs`).
+  aplicação de _Bypass_ restrita às quatro rotas que ele chama
+  (`/api/application.deploy`, `/api/deployment.all`, `/api/application.one`
+  e `/api/docker.getServiceContainersByAppName`; as duas últimas são da etapa
+  de release) ou com um _Service Token_ (este exige mandar os cabeçalhos
+  `CF-Access-Client-Id` e `CF-Access-Client-Secret` nos dois scripts,
+  `.github/scripts/dokploy-deploy.mjs` e `.github/scripts/dokploy-release.mjs`).
 - **Domínio do painel**: nas versões recentes do Dokploy ele fica em
   _Settings → Web Server_, no cartão do domínio do servidor.
   **A confirmar com o dono:** que foi essa a tela usada na v0.30.10.
@@ -638,13 +643,36 @@ confira `docker service ls` (todos os serviços com as réplicas de pé) e a
 
 Dois environments, `staging` e `production`, cada um com dois projetos:
 
-| Projeto        | Serviço             | Tipo no Dokploy       | Imagem                                                              | Domínio (porta)                                            | Recursos                                                       |
-| -------------- | ------------------- | --------------------- | ------------------------------------------------------------------- | ---------------------------------------------------------- | -------------------------------------------------------------- |
-| `trajetto-api` | `trajetto-postgres` | Database → PostgreSQL | `postgres:16-alpine`, fixada por digest; banco e usuário `trajetto` | nenhum; _External Port_ vazio                              | sem teto, de propósito                                         |
-| `trajetto-api` | `trajetto-redis`    | Database → Redis      | `redis:7-alpine`, sem persistência, `--requirepass`                 | nenhum; _External Port_ vazio                              | 512 MiB                                                        |
-| `trajetto-api` | `trajetto-ai`       | Application (Docker)  | `ghcr.io/trajetto-organization/trajetto-ai:staging` / `:stable`     | nenhum                                                     | 1 GiB e 2 CPUs; 1 réplica                                      |
-| `trajetto-api` | `trajetto-api`      | Application (Docker)  | `ghcr.io/trajetto-organization/trajetto-api:staging` / `:stable`    | `api-staging.intrajetto.com` / `api.intrajetto.com` (3333) | 1 GiB por réplica; 1 réplica em staging; produção na seção 2.3 |
-| `trajetto-ui`  | `trajetto-ui`       | Application (Docker)  | `ghcr.io/trajetto-organization/trajetto-ui:staging` / `:stable`     | `staging.intrajetto.com` / `www.intrajetto.com` (3000)     | 768 MiB; 1 réplica                                             |
+| Projeto        | Serviço                | Tipo no Dokploy       | Imagem                                                                   | Domínio (porta)                                            | Recursos                                                               |
+| -------------- | ---------------------- | --------------------- | ------------------------------------------------------------------------ | ---------------------------------------------------------- | ---------------------------------------------------------------------- |
+| `trajetto-api` | `trajetto-postgres`    | Database → PostgreSQL | `postgres:16-alpine`, fixada por digest; banco e usuário `trajetto`      | nenhum; _External Port_ vazio                              | sem teto, de propósito                                                 |
+| `trajetto-api` | `trajetto-redis`       | Database → Redis      | `redis:7-alpine`, sem persistência, `--requirepass`                      | nenhum; _External Port_ vazio                              | 512 MiB                                                                |
+| `trajetto-api` | `trajetto-ai`          | Application (Docker)  | `ghcr.io/trajetto-organization/trajetto-ai:staging` / `:stable`          | nenhum                                                     | 1 GiB e 2 CPUs; 1 réplica                                              |
+| `trajetto-api` | `trajetto-api`         | Application (Docker)  | `ghcr.io/trajetto-organization/trajetto-api:staging` / `:stable`         | `api-staging.intrajetto.com` / `api.intrajetto.com` (3333) | 1 GiB por réplica; 1 réplica em staging; produção na seção 2.3         |
+| `trajetto-api` | `trajetto-api-migrate` | Application (Docker)  | `ghcr.io/trajetto-organization/trajetto-api-migrate:staging` / `:stable` | nenhum                                                     | 1 réplica, _Restart Policy_ `none`; parado depois da etapa (alguns MB) |
+| `trajetto-ui`  | `trajetto-ui`          | Application (Docker)  | `ghcr.io/trajetto-organization/trajetto-ui:staging` / `:stable`          | `staging.intrajetto.com` / `www.intrajetto.com` (3000)     | 768 MiB; 1 réplica                                                     |
+
+A `trajetto-api-migrate` roda as migrations e os seeds antes de cada deploy
+que os muda: o pipeline pede o deploy dela pela API do Dokploy e espera o
+Swarm dizer que a etapa terminou (`Running`, pelo `HEALTHCHECK` da imagem) ou
+falhou (`Failed`); depois o contêiner fica parado até o próximo deploy. O
+pipeline só a roda quando o digest da imagem difere da tag
+`trajetto-api-migrate:staging-applied` (`:stable-applied` na produção) do
+GHCR, que ele move só depois do sucesso; um Database trocado precisa dela de
+novo, à mão ([seção 13.1](#131-recriar-tudo-do-zero), passo 9). Antes do
+deploy, se o Dokploy responde vazia a lista de tarefas do serviço (lida até
+3 vezes), o vazio só é aceito quando o histórico de deployments prova que
+nunca houve um deploy com sucesso (nenhum `done` e menos de 10 registros: o
+Dokploy guarda só os 10 mais recentes); nos outros casos o passo falha antes
+de implantar qualquer coisa. O
+_Environment_ dela tem só a URL do banco sem
+tetos de runtime; o das duas `trajetto-api` mantém
+`RUN_MIGRATIONS_ON_BOOT=false` enquanto um build anterior a 31/10/2026
+puder voltar por rollback (seção 5.6). Configuração e porquês:
+[`deploy.md` → 15](./deploy.md#15-migrations). **A criar pelo
+dono** (staging e produção): até lá, o deploy de cada ambiente falha logo no
+começo, com "configuração parcial" (falta `DOKPLOY_MIGRATE_APPLICATION_ID`),
+sem mexer em nada.
 
 O próprio Dokploy roda como os serviços `dokploy` e `dokploy-postgres` (o
 banco interno dele, que guarda a configuração e o _Environment_ de todas as
@@ -699,9 +727,11 @@ não pode ser editado depois de criado. Por isso:
 - o App Name da web de produção ficou no formato `trajetto-trajettoui-<sufixo>`,
   fora do padrão dos outros. Não tem efeito nenhum.
 
-Os App Names entram em `DATABASE_URL`, `MIGRATION_DATABASE_URL`, `REDIS_URL` e
-`AI_LOCAL_URL` (seção 5.6). Recriar um serviço gera outro sufixo, e essas
-variáveis precisam ser atualizadas.
+Os App Names entram em `DATABASE_URL` (da API e da `trajetto-api-migrate`),
+`REDIS_URL` e `AI_LOCAL_URL` (seção 5.6). Recriar um serviço gera outro sufixo, e essas
+variáveis precisam ser atualizadas. Um Database PostgreSQL recriado também
+precisa da etapa de release de novo, antes da API
+([seção 13.1](#131-recriar-tudo-do-zero), passo 9).
 
 ### 5.5 Domínios e certificados (Let's Encrypt)
 
@@ -797,31 +827,33 @@ ambiente de cada uma estão em [`variaveis-de-ambiente.md`](./variaveis-de-ambie
 
 **Application `trajetto-api`**:
 
-| Variável(is)                                                                                                                         | De onde vem o valor                                                                                                 |
-| ------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------- |
-| `APP_ENV`                                                                                                                            | `staging` ou `production`                                                                                           |
-| `NODE_OPTIONS`, `LOG_LEVEL`                                                                                                          | fixos: `--max-old-space-size=768` e `info`                                                                          |
-| `DATABASE_URL`, `MIGRATION_DATABASE_URL`                                                                                             | senha do Database PostgreSQL + o App Name dele, porta 5432, banco e usuário `trajetto` (modelo em `deploy.md` 7.7)  |
-| `ALLOW_EMPTY_DATABASE_BOOTSTRAP`                                                                                                     | `false`; `true` só para preparar um banco vazio (Deploy da API e o job de migrations uma vez), e volta para `false` |
-| `REDIS_URL`                                                                                                                          | senha do Database Redis + o App Name dele, porta 6379                                                               |
-| `HTTP_REQUEST`                                                                                                                       | a origem pública da **web** do ambiente; é a única origem que o CORS da API aceita                                  |
-| `API_HTTP_REQUEST`                                                                                                                   | a origem pública da **própria API** (logo dos e-mails, servidor da documentação)                                    |
-| `JWT_SECRET`, `JWT_SECRET_REFRESH_TOKEN`                                                                                             | gerados por nós ([seção 11.3](#113-segredos-gerados-por-nós))                                                       |
-| `MASTER_USER_EMAIL`, `MASTER_USER_INITIAL_PASSWORD`                                                                                  | e-mail da equipe; senha gerada                                                                                      |
-| `RATE_LIMIT_TRUSTED_PROXY`                                                                                                           | `cloudflare`                                                                                                        |
-| `RATE_LIMIT_FORWARDER_SECRET`                                                                                                        | gerado; **o mesmo valor** da web do mesmo ambiente                                                                  |
-| `TURNSTILE_SECRET_KEY`                                                                                                               | o widget do ambiente (seção 6.9); **o mesmo valor** da web                                                          |
-| `UPLOAD_STORAGE_TYPE`, `UPLOAD_ORPHAN_GC`                                                                                            | `r2` e `dry-run`                                                                                                    |
-| `R2_ACCOUNT_ID`, `R2_BUCKET_NAME`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`                                                        | Cloudflare → R2: o id da conta (o mesmo nos dois ambientes), o bucket do ambiente e o token só desse bucket         |
-| `AI_PROVIDER`, `AI_LOCAL_URL`, `AI_LOCAL_TOKEN`                                                                                      | `local`; `http://<App Name da IA>:8080`; **o mesmo valor** do `AI_TOKEN` da IA                                      |
-| `RESEND_SECRET_KEY`, `RESEND_FROM_EMAIL`, `RESEND_WEBHOOK_SECRET`                                                                    | Resend: chave de API, remetente do domínio verificado, segredo do webhook ([seção 9](#9-e-mail-resend))             |
-| `HEALTHCHECK_PING_URL`                                                                                                               | healthchecks.io, o check do ambiente (seção 10.1)                                                                   |
-| `PROOF_MAP_TILE_URL`, `PROOF_MAP_TILE_ATTRIBUTION`                                                                                   | MapTiler (a URL leva a chave; a mesma chave da web)                                                                 |
-| `REVERSE_GEOCODER_URL`, `REVERSE_GEOCODER_KEY`, `REVERSE_GEOCODER_KEY_PARAM`                                                         | LocationIQ                                                                                                          |
-| `PROOF_SIGNING_PFX_BASE64`, `PROOF_SIGNING_PFX_PASSWORD`, `PROOF_SIGNER_LOCATION`, `PROOF_SIGNER_CONTACT`, `PROOF_ISSUER_LEGAL_NAME` | certificado A1 do comprovante: de teste no staging; `PROOF_SIGNING_*` vazias em produção até existir o e-CNPJ       |
-| `DOCS_USER`, `DOCS_PASSWORD`                                                                                                         | gerados; os mesmos ficam no environment `production` da web, para o gate de rotas                                   |
-| `WEBHOOK_SECRETS_KEY`                                                                                                                | gerado (32 bytes); perder é irrecuperável                                                                           |
-| `META_WHATSAPP_*`                                                                                                                    | não configuradas em nenhum ambiente (a Meta bloqueou a conta)                                                       |
+| Variável(is)                                                                                                                         | De onde vem o valor                                                                                                                                                                                                                                  |
+| ------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `APP_ENV`                                                                                                                            | `staging` ou `production`                                                                                                                                                                                                                            |
+| `NODE_OPTIONS`, `LOG_LEVEL`                                                                                                          | fixos: `--max-old-space-size=768` e `info`                                                                                                                                                                                                           |
+| `DATABASE_URL`                                                                                                                       | senha do Database PostgreSQL + o App Name dele, porta 5432, banco e usuário `trajetto` (modelo em `deploy.md` 7.7)                                                                                                                                   |
+| `RUN_MIGRATIONS_ON_BOOT`                                                                                                             | `false`, enquanto um build anterior a 31/10/2026 (`main-<sha>`, ou `sha-<7>` de antes da separação) puder ser alvo de rollback: esses builds a leem com padrão `true` e voltariam a migrar no boot. As imagens novas a ignoram, então basta **Save** |
+| `MIGRATION_DATABASE_URL`                                                                                                             | nenhum build a lê com `RUN_MIGRATIONS_ON_BOOT=false` (as imagens novas nunca; as anteriores, só ao migrar no boot), e a URL sem tetos foi para a `trajetto-api-migrate`; pode sair                                                                   |
+| `ALLOW_EMPTY_DATABASE_BOOTSTRAP`                                                                                                     | `false`, sempre: quem prepara um banco vazio é a `trajetto-api-migrate`                                                                                                                                                                              |
+| `REDIS_URL`                                                                                                                          | senha do Database Redis + o App Name dele, porta 6379                                                                                                                                                                                                |
+| `HTTP_REQUEST`                                                                                                                       | a origem pública da **web** do ambiente; é a única origem que o CORS da API aceita                                                                                                                                                                   |
+| `API_HTTP_REQUEST`                                                                                                                   | a origem pública da **própria API** (logo dos e-mails, servidor da documentação)                                                                                                                                                                     |
+| `JWT_SECRET`, `JWT_SECRET_REFRESH_TOKEN`                                                                                             | gerados por nós ([seção 11.3](#113-segredos-gerados-por-nós))                                                                                                                                                                                        |
+| `MASTER_USER_EMAIL`, `MASTER_USER_INITIAL_PASSWORD`                                                                                  | e-mail da equipe; senha gerada                                                                                                                                                                                                                       |
+| `RATE_LIMIT_TRUSTED_PROXY`                                                                                                           | `cloudflare`                                                                                                                                                                                                                                         |
+| `RATE_LIMIT_FORWARDER_SECRET`                                                                                                        | gerado; **o mesmo valor** da web do mesmo ambiente                                                                                                                                                                                                   |
+| `TURNSTILE_SECRET_KEY`                                                                                                               | o widget do ambiente (seção 6.9); **o mesmo valor** da web                                                                                                                                                                                           |
+| `UPLOAD_STORAGE_TYPE`, `UPLOAD_ORPHAN_GC`                                                                                            | `r2` e `dry-run`                                                                                                                                                                                                                                     |
+| `R2_ACCOUNT_ID`, `R2_BUCKET_NAME`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`                                                        | Cloudflare → R2: o id da conta (o mesmo nos dois ambientes), o bucket do ambiente e o token só desse bucket                                                                                                                                          |
+| `AI_PROVIDER`, `AI_LOCAL_URL`, `AI_LOCAL_TOKEN`                                                                                      | `local`; `http://<App Name da IA>:8080`; **o mesmo valor** do `AI_TOKEN` da IA                                                                                                                                                                       |
+| `RESEND_SECRET_KEY`, `RESEND_FROM_EMAIL`, `RESEND_WEBHOOK_SECRET`                                                                    | Resend: chave de API, remetente do domínio verificado, segredo do webhook ([seção 9](#9-e-mail-resend))                                                                                                                                              |
+| `HEALTHCHECK_PING_URL`                                                                                                               | healthchecks.io, o check do ambiente (seção 10.1)                                                                                                                                                                                                    |
+| `PROOF_MAP_TILE_URL`, `PROOF_MAP_TILE_ATTRIBUTION`                                                                                   | MapTiler (a URL leva a chave; a mesma chave da web)                                                                                                                                                                                                  |
+| `REVERSE_GEOCODER_URL`, `REVERSE_GEOCODER_KEY`, `REVERSE_GEOCODER_KEY_PARAM`                                                         | LocationIQ                                                                                                                                                                                                                                           |
+| `PROOF_SIGNING_PFX_BASE64`, `PROOF_SIGNING_PFX_PASSWORD`, `PROOF_SIGNER_LOCATION`, `PROOF_SIGNER_CONTACT`, `PROOF_ISSUER_LEGAL_NAME` | certificado A1 do comprovante: de teste no staging; `PROOF_SIGNING_*` vazias em produção até existir o e-CNPJ                                                                                                                                        |
+| `DOCS_USER`, `DOCS_PASSWORD`                                                                                                         | gerados; os mesmos ficam no environment `production` da web, para o gate de rotas                                                                                                                                                                    |
+| `WEBHOOK_SECRETS_KEY`                                                                                                                | gerado (32 bytes); perder é irrecuperável                                                                                                                                                                                                            |
+| `META_WHATSAPP_*`                                                                                                                    | não configuradas em nenhum ambiente (a Meta bloqueou a conta)                                                                                                                                                                                        |
 
 **Application `trajetto-ai`**: `AI_TOKEN` (gerado; igual ao `AI_LOCAL_TOKEN`
 da API), `OCR_THREADS=2` (igual ao limite de CPU) e `AI_MAX_QUEUE=2`.
@@ -856,11 +888,20 @@ definida.
 - que `ALLOW_EMPTY_DATABASE_BOOTSTRAP=false` está salvo na API de staging
   **e** na de produção (a de produção subiu a primeira vez com `true`, e a de
   staging ainda estava com `true` em 29/10);
+- que `RUN_MIGRATIONS_ON_BOOT=false` está salvo nas duas APIs (ausente, um
+  rollback para um build anterior a 31/10/2026 volta a migrar no boot);
 - o valor salvo no `HTTP_REQUEST` da **web** nos dois ambientes. A decisão
   vigente é a URL pública da API, mas as notas locais do dono têm um endereço
   interno em `http`;
 - que `NODE_ENV` não está no _Environment_ de nenhuma Application (as notas
   locais de staging têm `NODE_ENV=staging`, que o schema da API não aceita).
+
+**Application `trajetto-api-migrate`** (a criar; [`deploy.md` → 15](./deploy.md#15-migrations)):
+
+| Variável(is)                                                                          | De onde vem o valor                                                                                                               |
+| ------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| `DATABASE_URL`                                                                        | a URL do banco **sem** `statement_timeout` nem `lock_timeout` (`connection_limit=2&connect_timeout=10`; modelo no `.env.example`) |
+| `ALLOW_EMPTY_DATABASE_BOOTSTRAP`, `MASTER_USER_EMAIL`, `MASTER_USER_INITIAL_PASSWORD` | só no primeiro deploy de uma instalação nova (banco vazio); apagar depois                                                         |
 
 **O incidente do primeiro boot de produção** (29/10/2026): a `DATABASE_URL` e
 a `MIGRATION_DATABASE_URL` de produção foram salvas com o host escrito como
@@ -878,10 +919,8 @@ fine-grained de forma confiável). O log de cada deploy mostra
 
 - Criado em: GitHub → foto de perfil → _Settings → Developer settings →
   Personal access tokens → Tokens (classic)_.
-- Usado por: as Applications `trajetto-api`, `trajetto-ai` e `trajetto-ui` dos
-  dois ambientes (o mesmo token) e o `docker login ghcr.io` do usuário
-  `deploy` no host, com que o job de migrations puxa a imagem de migração
-  (`deploy.md`, seção 15).
+- Usado por: as Applications `trajetto-api`, `trajetto-api-migrate`,
+  `trajetto-ai` e `trajetto-ui` dos dois ambientes (o mesmo token).
 - Vencido: todo deploy falha no pull, com `unauthorized` ou `denied`.
 
 **A confirmar com o dono:**
@@ -899,7 +938,8 @@ fine-grained de forma confiável). O log de cada deploy mostra
   uma única vez.
 - **Sugestão usada na criação** (26/10/2026): nome `github-trajetto-api-staging`,
   validade de 1 ano e _Rate Limiting_ desligado (o pipeline consulta a cada
-  10 s por até 15 min). O prefixo da chave faz parte do valor e não entra
+  10 s por até 15 min em cada deploy e, na etapa de release, a cada 5 s por
+  até 30 min). O prefixo da chave faz parte do valor e não entra
   aqui.
   **A confirmar com o dono:** o nome e a data de validade reais.
 - **Poder**: controle total do painel inteiro, staging **e** produção. Trate
@@ -1140,20 +1180,23 @@ ativo, em todos os planos, sem configuração.
 - **Restringir essa regra** (recomendado, pendente;
   [seção 14](#14-pendências-conhecidas)): `/api/` cobre também o login e o
   tRPC do próprio painel, que hoje ficam sem as regras gerenciadas do WAF. O
-  pipeline só chama `/api/application.deploy` e `/api/deployment.all`, sempre
-  com o cabeçalho `x-api-key` (`.github/scripts/dokploy-deploy.mjs`). Na regra,
+  pipeline só chama `/api/application.deploy`, `/api/deployment.all`,
+  `/api/application.one` e `/api/docker.getServiceContainersByAppName`,
+  sempre com o cabeçalho `x-api-key` (`.github/scripts/dokploy-deploy.mjs` e,
+  na etapa de release, `.github/scripts/dokploy-release.mjs`). Na regra,
   _Edit expression_, troque a expressão por:
 
   ```
-  (http.host eq "dokploy.intrajetto.com" and (starts_with(http.request.uri.path, "/api/application.deploy") or starts_with(http.request.uri.path, "/api/deployment.all")) and any(len(http.request.headers["x-api-key"][*]) > 0))
+  (http.host eq "dokploy.intrajetto.com" and (starts_with(http.request.uri.path, "/api/application.deploy") or starts_with(http.request.uri.path, "/api/deployment.all") or starts_with(http.request.uri.path, "/api/application.one") or starts_with(http.request.uri.path, "/api/docker.getServiceContainersByAppName")) and any(len(http.request.headers["x-api-key"][*]) > 0))
   ```
 
   Depois, rode um deploy de staging e confira em _Security → Events_ que as
   chamadas do pipeline continuam passando (a regra aparece com a ação
-  _Skip_). Se o editor do plano Free recusar o campo de cabeçalho, fique só
-  com os dois caminhos. Opcional: uma regra de rate limiting nos caminhos de
-  autenticação do painel (a regra gratuita pode já estar ocupada; ver
-  abaixo).
+  _Skip_); `application.one` e `docker.getServiceContainersByAppName` só
+  aparecem num run que roda a etapa de release. Se o editor do plano Free
+  recusar o campo de cabeçalho, fique só com os quatro caminhos. Opcional: uma
+  regra de rate limiting nos caminhos de autenticação do painel (a regra
+  gratuita pode já estar ocupada; ver abaixo).
 
 - O plano Free tem uma regra gratuita de rate limiting, e o roteiro de
   ataque ("Sob ataque", abaixo) conta com ela.
@@ -1590,28 +1633,28 @@ o environment (nível do environment).
 
 **`trajetto-api`**:
 
-| Nome                         | Tipo e nível                       | Para quê                                                                                                                      | Onde se gera o valor                                                |
-| ---------------------------- | ---------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------- |
-| `DOKPLOY_URL`                | secret, `staging` e `production`   | o endereço do painel, `https://dokploy.intrajetto.com` (nunca o IP)                                                           | —                                                                   |
-| `DOKPLOY_API_KEY`            | secret, `staging` e `production`   | chama a API do Dokploy                                                                                                        | Dokploy → _Settings → Profile → API/CLI_ (seção 5.8)                |
-| `DOKPLOY_API_APPLICATION_ID` | secret, `staging` e `production`   | qual Application da API implantar                                                                                             | o fim da URL da Application no painel                               |
-| `DOKPLOY_AI_APPLICATION_ID`  | secret, `staging` e `production`   | qual Application da IA implantar (sem ele, a IA não é atualizada)                                                             | idem                                                                |
-| `API_PUBLIC_URL`             | variable, `staging` e `production` | a conferência do rollout pela `/health/liveness` pública                                                                      | `https://api-staging.intrajetto.com` / `https://api.intrajetto.com` |
-| `ROLLOUT_VERIFY`             | variable                           | como o pipeline prova o rollout; em uso: `http`                                                                               | —                                                                   |
-| `IMAGE_SCAN_ENFORCE`         | variable, repositório              | `true`: um CRITICAL corrigível no Trivy falha o build (só um achado: falha no download do banco ou erro do Trivy viram aviso) | —                                                                   |
-| `CLIENT_REPOS_READ_TOKEN`    | secret, repositório                | o contrato de rotas do `ci.yml` lê a web e o app                                                                              | GitHub, token fine-grained (seção 11.1)                             |
+| Nome                             | Tipo e nível                       | Para quê                                                                                                                      | Onde se gera o valor                                                |
+| -------------------------------- | ---------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------- |
+| `DOKPLOY_URL`                    | secret, `staging` e `production`   | o endereço do painel, `https://dokploy.intrajetto.com` (nunca o IP)                                                           | —                                                                   |
+| `DOKPLOY_API_KEY`                | secret, `staging` e `production`   | chama a API do Dokploy                                                                                                        | Dokploy → _Settings → Profile → API/CLI_ (seção 5.8)                |
+| `DOKPLOY_API_APPLICATION_ID`     | secret, `staging` e `production`   | qual Application da API implantar                                                                                             | o fim da URL da Application no painel                               |
+| `DOKPLOY_AI_APPLICATION_ID`      | secret, `staging` e `production`   | qual Application da IA implantar (sem ele, a IA não é atualizada)                                                             | idem                                                                |
+| `DOKPLOY_MIGRATE_APPLICATION_ID` | secret, `staging` e `production`   | qual Application `trajetto-api-migrate` roda as migrations; obrigatório com os outros `DOKPLOY_*`                             | idem                                                                |
+| `API_PUBLIC_URL`                 | variable, `staging` e `production` | a conferência do rollout pela `/health/liveness` pública                                                                      | `https://api-staging.intrajetto.com` / `https://api.intrajetto.com` |
+| `ROLLOUT_VERIFY`                 | variable                           | como o pipeline prova o rollout; em uso: `http`                                                                               | —                                                                   |
+| `IMAGE_SCAN_ENFORCE`             | variable, repositório              | `true`: um CRITICAL corrigível no Trivy falha o build (só um achado: falha no download do banco ou erro do Trivy viram aviso) | —                                                                   |
+| `CLIENT_REPOS_READ_TOKEN`        | secret, repositório                | o contrato de rotas do `ci.yml` lê a web e o app                                                                              | GitHub, token fine-grained (seção 11.1)                             |
 
-`DEPLOY_SSH_HOST`, `DEPLOY_SSH_USER`, `DEPLOY_SSH_KEY` e
-`DEPLOY_SSH_KNOWN_HOSTS`: obrigatórios nos environments `staging` e
-`production` desde 31/10/2026 (o job de migrations; a `DEPLOY_SSH_KEY` de
-cada um é a chave daquele ambiente). `SWARM_API_SERVICE` e
-`DEPLOY_VERIFY_SSH_KEY` só são usados com `ROLLOUT_VERIFY=ssh`, e não estão
-configurados.
+`SWARM_API_SERVICE`, `DEPLOY_SSH_HOST`, `DEPLOY_SSH_USER`,
+`DEPLOY_SSH_KNOWN_HOSTS` e `DEPLOY_VERIFY_SSH_KEY` só são usados com
+`ROLLOUT_VERIFY=ssh`, e não estão configurados.
 
 **A confirmar com o dono:** se o `ROLLOUT_VERIFY=http` está no repositório ou
-em cada environment; que a variável `MIGRATIONS_VIA_JOB` foi apagada (não é
-mais lida: o job sempre roda); que o `CLIENT_REPOS_READ_TOKEN` existe; e que
-o `DOKPLOY_AI_APPLICATION_ID` de produção está cadastrado.
+em cada environment; o `DOKPLOY_MIGRATE_APPLICATION_ID` nos dois
+environments (a criar com a Application `trajetto-api-migrate`); que a
+variável `MIGRATIONS_VIA_JOB` foi apagada e que não sobrou um secret
+`DEPLOY_SSH_KEY` (nenhum dos dois é lido); que o `CLIENT_REPOS_READ_TOKEN`
+existe; e que o `DOKPLOY_AI_APPLICATION_ID` de produção está cadastrado.
 
 **`trajetto-ui`**:
 
@@ -1930,18 +1973,18 @@ Uma linha por credencial. Nenhum valor. "Notas locais" são os arquivos
 
 ### 11.1 Credenciais de infraestrutura e de CI
 
-| Credencial                                                                    | Onde é criada                                                                                                      | Permissões                                                    | Onde fica                                                                | Quem usa                                                                                         | Validade e rotação                                                                                  |
-| ----------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------- | ------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------- |
-| Token classic do GHCR (`dokploy-ghcr-pull` ou `-read`)                        | GitHub → _Settings → Developer settings → Tokens (classic)_                                                        | só `read:packages`                                            | Dokploy (seção 5.7), o `docker login` do usuário `deploy` e notas locais | o Dokploy, para puxar as imagens das Applications; o usuário `deploy`, para a imagem de migração | **A confirmar com o dono:** a validade. Renovar antes de vencer                                     |
-| Chave de API do Dokploy                                                       | Dokploy → _Settings → Profile → API/CLI_                                                                           | o painel inteiro, staging e produção                          | `DOKPLOY_API_KEY` nos environments da API e da web; notas locais         | os pipelines da API e da web                                                                     | sugerida com 1 ano. **A confirmar com o dono:** a data                                              |
-| `CLIENT_REPOS_READ_TOKEN`                                                     | GitHub, token fine-grained, _Resource owner_ `Trajetto-Organization`                                               | _Contents: Read-only_ em `trajetto-ui` e `trajetto-mobile`    | secret de repositório da `trajetto-api`                                  | o `ci.yml` da API (contrato de rotas)                                                            | **A confirmar com o dono:** se existe, a validade e a conta dona                                    |
-| `API_REPO_READ_TOKEN`                                                         | GitHub, token fine-grained, _Resource owner_ `Trajetto-Organization` (criado em 22/10/2026)                        | _Contents: Read-only_ só em `trajetto-api`                    | secret de repositório na web e no app; notas locais                      | os pipelines da web e do app                                                                     | **A confirmar com o dono:** a validade e a conta dona. A organização pode exigir aprovação do token |
-| `GITHUB_TOKEN`                                                                | automático                                                                                                         | por job (`contents: read`; `packages: write` só onde publica) | —                                                                        | GHCR, Trivy (ler as imagens; o banco de vulnerabilidades baixa sem credencial), semantic-release | automática                                                                                          |
-| `EXPO_TOKEN`                                                                  | expo.dev → org `trajetto` → _Access tokens → Robot users_ (robot `github-actions`, token `github-trajetto-mobile`) | papel _Developer_                                             | secret de repositório na `trajetto-mobile`                               | o pipeline do app                                                                                | sem validade conhecida; revogar e recriar no mesmo lugar                                            |
-| Acesso administrativo à VPS (SSH)                                             | na compra da VPS (painel da Contabo)                                                                               | tudo no servidor                                              | com o dono                                                               | o dono, por SSH                                                                                  | endurecimento do SSH pendente (seções 13.8 e 14)                                                    |
-| Senha do VNC                                                                  | painel da Contabo → VPS → _Manage_ → _VNC_                                                                         | console da VPS                                                | painel da Contabo                                                        | emergência                                                                                       | trocável no painel                                                                                  |
-| Usuários do Dokploy (dona e admin)                                            | Dokploy                                                                                                            | painel inteiro                                                | com o dono                                                               | o dono                                                                                           | endurecimento da conta dona pendente: 2FA e credenciais (seção 5.10)                                |
-| Chaves SSH do CI (`migrate-staging`, `migrate-production`, `verify-trajetto`) | `ssh-keygen` ([`deploy.md` → 15](./deploy.md#15-migrations) e [14](./deploy.md#14-conferir-a-convergência))        | _forced command_ restrito, uma por ambiente                   | secrets `DEPLOY_SSH_KEY` de cada environment                             | ninguém                                                                                          | as duas `migrate-*` obrigatórias desde 31/10/2026; `verify-trajetto` só com `ROLLOUT_VERIFY=ssh`    |
+| Credencial                                             | Onde é criada                                                                                                      | Permissões                                                    | Onde fica                                                        | Quem usa                                                                                         | Validade e rotação                                                                                  |
+| ------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------- | ---------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------- |
+| Token classic do GHCR (`dokploy-ghcr-pull` ou `-read`) | GitHub → _Settings → Developer settings → Tokens (classic)_                                                        | só `read:packages`                                            | Dokploy (seção 5.7) e notas locais                               | o Dokploy, para puxar as imagens das Applications                                                | **A confirmar com o dono:** a validade. Renovar antes de vencer                                     |
+| Chave de API do Dokploy                                | Dokploy → _Settings → Profile → API/CLI_                                                                           | o painel inteiro, staging e produção                          | `DOKPLOY_API_KEY` nos environments da API e da web; notas locais | os pipelines da API e da web                                                                     | sugerida com 1 ano. **A confirmar com o dono:** a data                                              |
+| `CLIENT_REPOS_READ_TOKEN`                              | GitHub, token fine-grained, _Resource owner_ `Trajetto-Organization`                                               | _Contents: Read-only_ em `trajetto-ui` e `trajetto-mobile`    | secret de repositório da `trajetto-api`                          | o `ci.yml` da API (contrato de rotas)                                                            | **A confirmar com o dono:** se existe, a validade e a conta dona                                    |
+| `API_REPO_READ_TOKEN`                                  | GitHub, token fine-grained, _Resource owner_ `Trajetto-Organization` (criado em 22/10/2026)                        | _Contents: Read-only_ só em `trajetto-api`                    | secret de repositório na web e no app; notas locais              | os pipelines da web e do app                                                                     | **A confirmar com o dono:** a validade e a conta dona. A organização pode exigir aprovação do token |
+| `GITHUB_TOKEN`                                         | automático                                                                                                         | por job (`contents: read`; `packages: write` só onde publica) | —                                                                | GHCR, Trivy (ler as imagens; o banco de vulnerabilidades baixa sem credencial), semantic-release | automática                                                                                          |
+| `EXPO_TOKEN`                                           | expo.dev → org `trajetto` → _Access tokens → Robot users_ (robot `github-actions`, token `github-trajetto-mobile`) | papel _Developer_                                             | secret de repositório na `trajetto-mobile`                       | o pipeline do app                                                                                | sem validade conhecida; revogar e recriar no mesmo lugar                                            |
+| Acesso administrativo à VPS (SSH)                      | na compra da VPS (painel da Contabo)                                                                               | tudo no servidor                                              | com o dono                                                       | o dono, por SSH                                                                                  | endurecimento do SSH pendente (seções 13.8 e 14)                                                    |
+| Senha do VNC                                           | painel da Contabo → VPS → _Manage_ → _VNC_                                                                         | console da VPS                                                | painel da Contabo                                                | emergência                                                                                       | trocável no painel                                                                                  |
+| Usuários do Dokploy (dona e admin)                     | Dokploy                                                                                                            | painel inteiro                                                | com o dono                                                       | o dono                                                                                           | endurecimento da conta dona pendente: 2FA e credenciais (seção 5.10)                                |
+| Chave SSH do CI (`verify-trajetto`)                    | `ssh-keygen` ([`deploy.md` → 14](./deploy.md#14-conferir-a-convergência))                                          | _forced command_ restrito                                     | secret `DEPLOY_VERIFY_SSH_KEY`                                   | ninguém                                                                                          | **não configurada** (só com `ROLLOUT_VERIFY=ssh`)                                                   |
 
 ### 11.2 Credenciais de provedores
 
@@ -1971,17 +2014,17 @@ Um valor diferente por ambiente, guardado no _Environment_ do Dokploy e no
 gerenciador de senhas. Os comandos estão em
 [`variaveis-de-ambiente.md` → Como gerar os segredos](./variaveis-de-ambiente.md#como-gerar-os-segredos).
 
-| Segredo                        | Onde precisa estar, igual                                        | O que acontece ao trocar                                                                                                                                |
-| ------------------------------ | ---------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| senha do Postgres              | o Database PostgreSQL, `DATABASE_URL` e `MIGRATION_DATABASE_URL` | a API cai até as três baterem                                                                                                                           |
-| senha do Redis                 | o Database Redis (e o comando dele), `REDIS_URL`                 | a API segue no ar, degradada, até as duas baterem: os limites de requisição deixam de contar e o tempo real para (`src/config/redis-client-options.ts`) |
-| `AI_TOKEN` / `AI_LOCAL_TOKEN`  | a IA e a API                                                     | a leitura de fotos dá 401 até as duas baterem                                                                                                           |
-| `JWT_SECRET`                   | a API                                                            | os tokens de acesso emitidos deixam de valer                                                                                                            |
-| `JWT_SECRET_REFRESH_TOKEN`     | a API                                                            | **todo mundo é deslogado**                                                                                                                              |
-| `WEBHOOK_SECRETS_KEY`          | a API                                                            | **irrecuperável**: os segredos de webhook dos clientes, cifrados com ela, se perdem                                                                     |
-| `RATE_LIMIT_FORWARDER_SECRET`  | a API e a web do ambiente                                        | enquanto diferirem, todos os logins contam como um IP só (429 para todo mundo)                                                                          |
-| `DOCS_USER` / `DOCS_PASSWORD`  | a API e o environment `production` da web                        | o gate de rotas da web falha até bater                                                                                                                  |
-| `MASTER_USER_INITIAL_PASSWORD` | a API                                                            | só vale na criação do usuário master                                                                                                                    |
+| Segredo                        | Onde precisa estar, igual                                                    | O que acontece ao trocar                                                                                                                                |
+| ------------------------------ | ---------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| senha do Postgres              | o Database PostgreSQL, a `DATABASE_URL` da API e a da `trajetto-api-migrate` | a API cai até as três baterem (e a etapa de release falha)                                                                                              |
+| senha do Redis                 | o Database Redis (e o comando dele), `REDIS_URL`                             | a API segue no ar, degradada, até as duas baterem: os limites de requisição deixam de contar e o tempo real para (`src/config/redis-client-options.ts`) |
+| `AI_TOKEN` / `AI_LOCAL_TOKEN`  | a IA e a API                                                                 | a leitura de fotos dá 401 até as duas baterem                                                                                                           |
+| `JWT_SECRET`                   | a API                                                                        | os tokens de acesso emitidos deixam de valer                                                                                                            |
+| `JWT_SECRET_REFRESH_TOKEN`     | a API                                                                        | **todo mundo é deslogado**                                                                                                                              |
+| `WEBHOOK_SECRETS_KEY`          | a API                                                                        | **irrecuperável**: os segredos de webhook dos clientes, cifrados com ela, se perdem                                                                     |
+| `RATE_LIMIT_FORWARDER_SECRET`  | a API e a web do ambiente                                                    | enquanto diferirem, todos os logins contam como um IP só (429 para todo mundo)                                                                          |
+| `DOCS_USER` / `DOCS_PASSWORD`  | a API e o environment `production` da web                                    | o gate de rotas da web falha até bater                                                                                                                  |
+| `MASTER_USER_INITIAL_PASSWORD` | a API                                                                        | só vale na criação do usuário master                                                                                                                    |
 
 ### 11.4 Temporárias e aposentadas
 
@@ -2060,17 +2103,29 @@ Na ordem. Cada passo aponta para o detalhe.
    7).
 9. **Staging**: DNS (sempre com proxy) e domínios, pelo procedimento "Como
    emitir o próximo" da seção 5.5, com o teste do desafio HTTP-01;
-   Databases, IA e API na ordem de
-   [`deploy.md` → 8](./deploy.md#8-primeiro-deploy-na-ordem-com-conferências);
-   o backup; a web
+   Databases, IA, `trajetto-api-migrate` e API na ordem de
+   [`deploy.md` → 8](./deploy.md#8-primeiro-deploy-na-ordem-com-conferências).
+   O GHCR sobrevive à reconstrução, e a tag
+   `trajetto-api-migrate:staging-applied` (`:stable-applied` na produção)
+   registra o que rodou no banco **antigo**: com o mesmo digest, o pipeline
+   pula a etapa de release. Com o Database novo (recriado ou restaurado), dê
+   **Deploy** na `trajetto-api-migrate` do ambiente (a tag `:staging` ou
+   `:stable` já existe num ambiente que já rodou) e espere `Running` antes do
+   deploy da API. Não apague a versão de `-applied` no GHCR: uma versão é o
+   digest, o mesmo de `sha-<7>`, `src-<hash>` e da tag do ambiente, e
+   apagá-la leva todas junto. Vale também para um Database trocado fora de
+   uma reconstrução. Depois: o
+   backup; a web
    ([`trajetto-ui/docs/deploy.md`](https://github.com/Trajetto-Organization/trajetto-ui/blob/staging/docs/deploy.md));
    o app
    ([`trajetto-mobile/docs/deploy.md`](https://github.com/Trajetto-Organization/trajetto-mobile/blob/staging/docs/deploy.md)).
 10. **Produção**: a mesma ordem, com a tag `stable` criada antes
     ([`deploy.md` → 8](./deploy.md#8-primeiro-deploy-na-ordem-com-conferências)).
     Recuperando de um desastre: restaure o banco do R2 antes de subir a API
-    ([`deploy.md` → Restaurar a partir do R2](./deploy.md#restaurar-a-partir-do-r2))
-    e **não** ligue `ALLOW_EMPTY_DATABASE_BOOTSTRAP`.
+    ([`deploy.md` → Restaurar a partir do R2](./deploy.md#restaurar-a-partir-do-r2)),
+    rode a `trajetto-api-migrate` sobre ele como no passo 9 e **não** ligue
+    `ALLOW_EMPTY_DATABASE_BOOTSTRAP` (nem na API, nem na
+    `trajetto-api-migrate`).
 11. **Conferir**: a [seção 13.7](#137-conferir-a-borda-depois-de-mexer-na-cloudflare)
     e o checklist de
     [`deploy.md` → 25](./deploy.md#25-checklist-do-primeiro-deploy).
@@ -2119,18 +2174,18 @@ A regra geral:
 
 Casos com ordem própria:
 
-| Segredo                       | Ordem                                                                                                                                                                                                                              |
-| ----------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| token do GHCR                 | criar o novo → trocar no Dokploy (cada Application ou o registry, seção 5.7) → `sudo -iu deploy docker login ghcr.io -u <usuário>` com o novo → rodar um deploy (o job de migrations prova o login do `deploy`) → revogar o antigo |
-| chave de API do Dokploy       | gerar a nova → trocar `DOKPLOY_API_KEY` nos quatro environments (API e web, staging e produção) → um push em `staging` → apagar a antiga                                                                                           |
-| `RATE_LIMIT_FORWARDER_SECRET` | API e web do mesmo ambiente em seguida, uma logo depois da outra: enquanto diferirem, o login responde 429 para todos                                                                                                              |
-| _Secret Key_ do Turnstile     | _Rotate_ no widget → web e API do ambiente → Deploy das duas                                                                                                                                                                       |
-| token da IA                   | a IA primeiro, depois a API; entre os dois deploys a leitura de fotos dá 401                                                                                                                                                       |
-| senha do Postgres ou do Redis | o Database e as URLs da API na mesma janela; a API fica fora enquanto não batem                                                                                                                                                    |
-| `JWT_SECRET_REFRESH_TOKEN`    | desloga todo mundo: avise antes                                                                                                                                                                                                    |
-| `WEBHOOK_SECRETS_KEY`         | **não rotacione** sem um plano: os segredos cifrados com a chave antiga se perdem, e cada cliente precisa gerar um segredo de webhook novo                                                                                         |
-| tokens R2                     | criar o novo token só no bucket → trocar as variáveis (ou o _S3 Destination_) → Deploy → testar um upload (ou um backup manual) → revogar                                                                                          |
-| `EXPO_TOKEN`                  | criar outro token no robot → trocar o secret → rodar o build manual de `staging` → revogar o antigo                                                                                                                                |
+| Segredo                       | Ordem                                                                                                                                                                                                                                                                                        |
+| ----------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| token do GHCR                 | criar o novo → trocar no Dokploy (cada Application, a `trajetto-api-migrate` inclusive, ou o registry, seção 5.7) → **Deploy** manual da `trajetto-api-migrate` (seguro; esperar `Running`: o pipeline só a roda quando a imagem de migração muda) e um deploy das outras → revogar o antigo |
+| chave de API do Dokploy       | gerar a nova → trocar `DOKPLOY_API_KEY` nos quatro environments (API e web, staging e produção) → um push em `staging` → apagar a antiga                                                                                                                                                     |
+| `RATE_LIMIT_FORWARDER_SECRET` | API e web do mesmo ambiente em seguida, uma logo depois da outra: enquanto diferirem, o login responde 429 para todos                                                                                                                                                                        |
+| _Secret Key_ do Turnstile     | _Rotate_ no widget → web e API do ambiente → Deploy das duas                                                                                                                                                                                                                                 |
+| token da IA                   | a IA primeiro, depois a API; entre os dois deploys a leitura de fotos dá 401                                                                                                                                                                                                                 |
+| senha do Postgres ou do Redis | o Database, a `DATABASE_URL` da API e a da `trajetto-api-migrate` (no Redis, a `REDIS_URL` da API) na mesma janela; a API fica fora (e a etapa de release falha) enquanto não batem                                                                                                          |
+| `JWT_SECRET_REFRESH_TOKEN`    | desloga todo mundo: avise antes                                                                                                                                                                                                                                                              |
+| `WEBHOOK_SECRETS_KEY`         | **não rotacione** sem um plano: os segredos cifrados com a chave antiga se perdem, e cada cliente precisa gerar um segredo de webhook novo                                                                                                                                                   |
+| tokens R2                     | criar o novo token só no bucket → trocar as variáveis (ou o _S3 Destination_) → Deploy → testar um upload (ou um backup manual) → revogar                                                                                                                                                    |
+| `EXPO_TOKEN`                  | criar outro token no robot → trocar o secret → rodar o build manual de `staging` → revogar o antigo                                                                                                                                                                                          |
 
 ### 13.4 Atualizar as faixas da Cloudflare
 
@@ -2353,10 +2408,12 @@ fim. `<usuário>` e `<IP_DA_VPS>` estão com o dono e no painel da Contabo.
    tem de responder `Permission denied (publickey)`.
 7. Opcional: `apt install fail2ban` (a configuração padrão já protege o
    sshd).
-8. **Não** restrinja a regra `SSH` do firewall ao IP do dono: o job de
-   migrations do CI entra pela 22 antes de todo deploy, e o runner do GitHub
-   não tem IP fixo ([seção 4.3](#43-firewall)). Restringida, todo deploy
-   para no passo _Run database migrations_.
+8. Opcional: na regra `SSH` do firewall da Contabo
+   ([seção 4.3](#43-firewall)), troque "qualquer IPv4" pelo IP do dono. Se o
+   IP dele mudar, o VNC entra para corrigir. Nada do CI usa a 22 (as
+   migrations vão pela API do Dokploy e o `ROLLOUT_VERIFY` é `http`); se um
+   dia usar `ROLLOUT_VERIFY=ssh`, a 22 precisa voltar a aceitar o runner do
+   GitHub, que não tem IP fixo.
 9. Se algo der errado: pelo VNC, apague o arquivo do passo 4 e rode
    `systemctl reload ssh`.
 10. Guarde uma cópia de segurança da chave privada, protegida pela
@@ -2414,16 +2471,22 @@ derruba o sistema, depois o que abre uma brecha, depois o resto.
       Android → baixar a keystore → gerenciador de senhas (se o EAS a
       perder, uma build assinada com outra chave não instala por cima do
       app). [Seção 8.2](#82-variáveis-e-credenciais-no-eas).
-- [ ] **Job de migrations configurado** (desde 31/10/2026 a imagem da API
-      não migra no boot): usuário `deploy` no host com o script e as duas
-      chaves restritas, `docker login ghcr.io` dele, e os secrets
-      `DEPLOY_SSH_HOST`, `DEPLOY_SSH_USER`, `DEPLOY_SSH_KEY` e
-      `DEPLOY_SSH_KNOWN_HOSTS` nos environments `staging` e `production` da
-      `trajetto-api` ([`deploy.md` → 15](./deploy.md#15-migrations)). Depois
-      do primeiro deploy verde, apagar `RUN_MIGRATIONS_ON_BOOT` das duas
-      Applications `trajetto-api` e a variável `MIGRATIONS_VIA_JOB` do
-      repositório (nenhuma das duas é lida mais).
-      [Seção 7.4](#74-secrets-e-variables).
+- [ ] **Application `trajetto-api-migrate`** (desde 31/10/2026 a imagem da
+      API não migra no boot): criada em staging e em produção (imagem
+      `:staging` / `:stable` com a credencial do GHCR, `DATABASE_URL` sem
+      tetos de runtime, _Restart Policy_ `{"Condition":"none"}`), e o
+      applicationId de cada uma no secret `DOKPLOY_MIGRATE_APPLICATION_ID`
+      do environment ([`deploy.md` → 15](./deploy.md#15-migrations)).
+      **`RUN_MIGRATIONS_ON_BOOT=false`** salvo no _Environment_ das duas
+      Applications `trajetto-api` (**Save** basta: as imagens novas a
+      ignoram) e mantido assim enquanto um build anterior a 31/10/2026
+      (`main-<sha>`, ou `sha-<7>` de antes da separação) puder ser alvo de
+      rollback: esses builds a leem com padrão `true` e voltariam a migrar no
+      boot. Com ela em `false`, a `MIGRATION_DATABASE_URL` da API não é lida
+      por build nenhum e pode sair; a variável `MIGRATIONS_VIA_JOB` e o secret
+      `DEPLOY_SSH_KEY` do repositório saem, se existirem.
+      [Seções 5.2](#52-environments-projetos-e-serviços) e
+      [5.6](#56-variáveis-por-application).
 - [ ] **`PLAY_SUBMIT_ENABLED`** vazio até o primeiro AAB manual (com `true`
       e sem a Play Console, o envio falha).
       [Seção 7.4](#74-secrets-e-variables).
@@ -2452,9 +2515,9 @@ derruba o sistema, depois o que abre uma brecha, depois o resto.
 
 ### 14.2 Segurança
 
-- [ ] **Endurecer o SSH** ([seção 13.8](#138-endurecer-o-ssh)): só por
-      chave. É a primeira pendência: o IP da VPS é público e a porta 22 fica
-      aberta para IPv4, porque o job de migrations do CI entra por ela
+- [ ] **Endurecer o SSH** ([seção 13.8](#138-endurecer-o-ssh)) e restringir
+      a origem da porta 22, ou registrar o motivo de não restringir. É a
+      primeira pendência: o IP da VPS é público
       ([seção 4.3](#43-firewall)).
       [Seção 4.2](#42-ssh-e-console-de-emergência).
 - [ ] **Conta dona do Dokploy**: credenciais próprias e fortes (ou
@@ -2466,10 +2529,11 @@ derruba o sistema, depois o que abre uma brecha, depois o resto.
       [Seções 7.2](#72-visibilidade-e-a-cota-do-actions) e
       [13.6](#136-abrir-e-fechar-um-repositório-para-usar-o-actions-grátis).
 - [ ] **Painel do Dokploy atrás do Cloudflare Access**, com um _Bypass_ só
-      das duas rotas do CI ou um _Service Token_.
-      [Seção 5.1](#51-o-painel).
-- [ ] **Restringir a regra de Skip do WAF** aos dois caminhos do pipeline e
-      ao cabeçalho `x-api-key`; conferir em _Security → Events_.
+      das quatro rotas do CI (deploy e etapa de release) ou um _Service
+      Token_. [Seção 5.1](#51-o-painel).
+- [ ] **Restringir a regra de Skip do WAF** aos quatro caminhos do pipeline
+      (deploy e etapa de release) e ao cabeçalho `x-api-key`; conferir em
+      _Security → Events_.
       [Seção 6.5](#65-security-ddos-waf-e-bots).
 - [ ] **Ruleset em `staging`** exigindo PR com revisão (só o dono na _Bypass
       list_), antes de dar Write a qualquer pessoa.

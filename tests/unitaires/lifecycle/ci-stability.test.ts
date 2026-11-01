@@ -188,21 +188,39 @@ describe("pinned versions", () => {
     const refs = workflows.flatMap((workflow) =>
       [
         // services.*.image
-        ...workflow.text.matchAll(/^\s+image:\s*(\S+)/gm),
+        ...[...workflow.text.matchAll(/^\s+image:\s*(\S+)/gm)].map(
+          ([, ref]) => ({ key: "image", ref }),
+        ),
         // POSTGRES_IMAGE, TRIVY_IMAGE…
-        ...workflow.text.matchAll(/^\s+[A-Z_]+_IMAGE:\s*(\S+)/gm),
+        ...[...workflow.text.matchAll(/^\s+([A-Z_]+_IMAGE):\s*(\S+)/gm)].map(
+          ([, key, ref]) => ({ key, ref }),
+        ),
         // Buildx's BuildKit
-        ...workflow.text.matchAll(/driver-opts:\s*image=(\S+)/g),
+        ...[...workflow.text.matchAll(/driver-opts:\s*image=(\S+)/g)].map(
+          ([, ref]) => ({ key: "driver-opts", ref }),
+        ),
         // `docker run` straight from a registry (gitleaks)
-        ...workflow.text.matchAll(/^\s+(zricethezav\/\S+|aquasec\/\S+)/gm),
+        ...[
+          ...workflow.text.matchAll(/^\s+(zricethezav\/\S+|aquasec\/\S+)/gm),
+        ].map(([, ref]) => ({ key: "docker run", ref })),
       ]
-        .map(([, ref]) => ({ file: workflow.file, ref }))
+        .map(({ key, ref }) => ({ file: workflow.file, key, ref }))
         // Our own images go by the digest the job just read (an expression),
         // or are the ones this job just built into the runner's Docker for
-        // the smoke test (`trajetto-…:smoke`), which no registry has.
+        // the smoke test (`trajetto-…:smoke`), which no registry has. One
+        // more, by name only: RELEASE_IMAGE, the environment tag the release
+        // Application runs, which no job pulls (dokploy-release.mjs only
+        // checks the Application is set to it).
         .filter(
-          ({ ref }) =>
-            !ref.includes("${{") && !/^trajetto-[\w-]+:smoke$/.test(ref),
+          ({ key, ref }) =>
+            !ref.includes("${{") &&
+            !/^trajetto-[\w-]+:smoke$/.test(ref) &&
+            !(
+              key === "RELEASE_IMAGE" &&
+              /^ghcr\.io\/trajetto-organization\/trajetto-api-migrate:(staging|stable)$/.test(
+                ref,
+              )
+            ),
         ),
     );
 

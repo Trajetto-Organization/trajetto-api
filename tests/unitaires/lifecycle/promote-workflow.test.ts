@@ -125,14 +125,15 @@ describe("the build (once, on staging)", () => {
     );
 
     // The API, its release image (trajetto-api-migrate, which the deploys
-    // run once before the API rolls out) and the AI service (ADR 0010).
-    // Database backups are Dokploy's own, so there is no backup image. The
-    // AI also carries `src-<tree>`, the git hash of infra/ai-ocr: immutable
-    // too (it names the content the image was built from), and how a later
-    // push finds it to reuse it.
+    // run before the API rolls out when the database has not applied it)
+    // and the AI service (ADR 0010). Database backups are Dokploy's own, so
+    // there is no backup image. The release image and the AI also carry
+    // `src-<key>`: the hash of what each one is built from
+    // (migrate-source.sh; the git hash of infra/ai-ocr), immutable too, and
+    // how a later push finds the image to reuse it.
     expect(metadata).toEqual([
       "type=sha,prefix=sha-",
-      "type=sha,prefix=sha-",
+      "type=sha,prefix=sha-\n            type=raw,value=src-${{ steps.migrate-source.outputs.key }}",
       "type=sha,prefix=sha-\n            type=raw,value=src-${{ steps.ai-source.outputs.tree }}",
     ]);
     expect(build.match(/flavor: latest=false/g)).toHaveLength(3);
@@ -151,7 +152,7 @@ describe("the tag given to the promote", () => {
 
     expect(resolveStep, "passo de resolução").toBe(0);
     expect(validate, "passo de validação").toBe(1);
-    expect(validate).toBeLessThan(index("Run database migrations"));
+    expect(validate).toBeLessThan(index("Do the migrations need to run?"));
     expect(validate).toBeLessThan(index("Promote image to stable"));
     expect(validate).toBeLessThan(index("Deploy to production (Dokploy)"));
   });
@@ -215,7 +216,7 @@ describe("the tag given to the promote", () => {
     const check = index("Check the build exists in GHCR");
 
     expect(check).toBeGreaterThan(index("Validate the tag to promote"));
-    expect(check).toBeLessThan(index("Run database migrations"));
+    expect(check).toBeLessThan(index("Do the migrations need to run?"));
     expect(step("Check the build exists in GHCR")).toMatch(
       /::error::.*não existe/,
     );
@@ -436,6 +437,7 @@ describe.skipIf(!hasShell("bash"))("before Dokploy exists", () => {
     DOKPLOY_URL: "https://dokploy.example.com",
     DOKPLOY_API_KEY: "key-never-printed",
     DOKPLOY_API_APPLICATION_ID: "abc123",
+    DOKPLOY_MIGRATE_APPLICATION_ID: "def456",
   };
 
   function configured(
@@ -456,6 +458,7 @@ describe.skipIf(!hasShell("bash"))("before Dokploy exists", () => {
         DOKPLOY_URL: "",
         DOKPLOY_API_KEY: "",
         DOKPLOY_API_APPLICATION_ID: "",
+        DOKPLOY_MIGRATE_APPLICATION_ID: "",
         GITHUB_OUTPUT: output,
         GITHUB_STEP_SUMMARY: `${box.root}/summary`,
         ...env,
@@ -497,7 +500,7 @@ describe.skipIf(!hasShell("bash"))("before Dokploy exists", () => {
 
       expect(half.status).not.toBe(0);
       expect(half.stdout).toMatch(
-        /::error::.*DOKPLOY_API_KEY DOKPLOY_API_APPLICATION_ID/,
+        /::error::.*DOKPLOY_API_KEY DOKPLOY_API_APPLICATION_ID DOKPLOY_MIGRATE_APPLICATION_ID/,
       );
 
       // The deploy and its checks follow the answer. The staged marker does
@@ -562,7 +565,7 @@ describe("a commit that only changes documentation (D11)", () => {
 
     expect(staged).toBeGreaterThan(index("Validate the tag to promote"));
     expect(staged).toBeLessThan(index("Check the build exists in GHCR"));
-    expect(staged).toBeLessThan(index("Run database migrations"));
+    expect(staged).toBeLessThan(index("Do the migrations need to run?"));
 
     for (const each of steps.slice(staged + 1)) {
       expect(each, each.split("\n")[0]).not.toContain(
@@ -573,7 +576,7 @@ describe("a commit that only changes documentation (D11)", () => {
     for (const name of [
       "Check the build exists in GHCR",
       "Compare with what staging runs",
-      "Run database migrations (once, before the rollout)",
+      "Do the migrations need to run?",
       "Promote image to stable",
       "Promote the AI image to stable",
       "Wait for the API to serve the promoted build",

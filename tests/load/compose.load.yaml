@@ -22,8 +22,8 @@
 #
 # Boot order is production's release order: `migrate` prepares load_test once
 # (the release image, trajetto-api-migrate — Dockerfile stage `migrate` —
-# what infra/scripts/run-release-migrations.sh runs before a rollout), and
-# the replicas start only after it exits 0. The API image never migrates: it
+# what the Dokploy Application trajetto-api-migrate runs before a rollout),
+# and the replicas start only after it exits 0. The API image never migrates: it
 # runs NODE_ENV=production, the bootstrap guard of production refuses an
 # EMPTY database (infra/scripts/database-bootstrap-guard.ts) and the schema
 # guard refuses one without the build's migrations
@@ -94,8 +94,10 @@ services:
   # seeds, strictly, then exit. ALLOW_EMPTY_DATABASE_BOOTSTRAP only here:
   # load_test starts empty on purpose, and the replicas keep the guard.
   # The release image is the API image plus the Prisma CLI, the migrations
-  # and the seeds (no healthcheck): built from the same Dockerfile, target
-  # `migrate`, on top of the `api` build below.
+  # and the seeds: built from the same Dockerfile, target `migrate`, on top
+  # of the `api` build below. `migrate`, not the image's default `release`
+  # (which stays up to report to Swarm): the replicas wait for this service
+  # to EXIT successfully.
   migrate:
     image: ${LOAD_MIGRATE_IMAGE:-trajetto-api-migrate:load}
     build:

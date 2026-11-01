@@ -22,10 +22,11 @@ import {
  * until someone ran `migrate resolve` by hand.
  *
  * Now a replica never migrates: `serve` waits for Postgres, refuses a
- * database without the build's last migration and execs the server. The
- * one-shot release step (`migrate`) runs from the trajetto-api-migrate
- * image, the only one with the Prisma CLI: it migrates and seeds once, fails
- * loudly, and never starts the server.
+ * database without all of the build's migrations and execs the server. The
+ * release step runs from the trajetto-api-migrate image, the only one with
+ * the Prisma CLI: it migrates and seeds once, fails loudly, and never starts
+ * the server — `migrate` then exits, `release` (the Dokploy Application's)
+ * marks the step done for the image's healthcheck and idles.
  */
 const sh = hasShell("sh");
 
@@ -147,6 +148,86 @@ describe.skipIf(!sh)("the release step (`migrate` mode)", () => {
 
     expect(status).not.toBe(0);
     expect(calls).toEqual([expect.stringMatching(/^wait-for-postgres /)]);
+  });
+});
+
+/**
+ * The same step as the Dokploy Application trajetto-api-migrate runs it (the
+ * release image's default command). A Swarm service has to keep running to
+ * report success, so after the seeds it marks the step done — the marker the
+ * image's HEALTHCHECK waits for — and idles; a failure exits, and Swarm
+ * shows the task `Failed`. `rm`, `touch` and `tail` are stubbed: the marker
+ * lives in the container's /tmp, and `tail -f` would never return.
+ */
+describe.skipIf(!sh)("the release step as an Application (`release` mode)", () => {
+  const MARKER = "/tmp/trajetto-release-done";
+
+  beforeEach(() => {
+    prismaCli("migrate");
+    box.stub("rm", "exit 0");
+    box.stub("touch", "exit 0");
+    box.stub("tail", "exit 0");
+  });
+
+  function release(env: Record<string, string> = {}) {
+    const result = run(
+      "sh",
+      repoFile("infra/scripts/docker-entrypoint.sh"),
+      ["release"],
+      {
+        cwd: box.root,
+        bin: box.bin,
+        env: { STUB_LOG: box.log, DATABASE_URL: "postgresql://runtime", ...env },
+      },
+    );
+    const calls = readFileSync(box.log, "utf8").split("\n").filter(Boolean);
+
+    return { ...result, calls };
+  }
+
+  it("clears a stale marker, migrates and seeds, then marks the step done and idles", () => {
+    const { status, calls } = release();
+
+    expect(status, calls.join("\n")).toBe(0);
+    expect(calls).toEqual([
+      `rm -f ${MARKER}`,
+      expect.stringMatching(/^wait-for-postgres DATABASE_URL=/),
+      expect.stringMatching(/^prisma migrate deploy cwd=migrate /),
+      expect.stringMatching(/^seed DATABASE_URL=/),
+      expect.stringMatching(/^import-violation-codes DATABASE_URL=/),
+      `touch ${MARKER}`,
+      "tail -f /dev/null",
+    ]);
+  });
+
+  it.each([
+    ["the database is refused", { STUB_WAIT_EXIT: "1" }],
+    ["a migration fails", { STUB_PRISMA_EXIT: "1" }],
+    ["a seed fails", { STUB_SEED_EXIT: "1" }],
+    ["the violation-code import fails", { STUB_IMPORT_EXIT: "1" }],
+  ])("exits without marking anything done when %s", (_case, env) => {
+    const { status, calls } = release(env);
+
+    expect(status).not.toBe(0);
+    expect(calls).not.toContain(`touch ${MARKER}`);
+    expect(calls).not.toContain("tail -f /dev/null");
+    expect(calls.some((line) => line.startsWith("server "))).toBe(false);
+  });
+
+  it("is the mode the release image runs by default, and the marker its healthcheck reads", () => {
+    const dockerfile = readFileSync(repoFile("Dockerfile"), "utf8");
+    const stage = dockerfile.slice(dockerfile.indexOf("FROM runner AS migrate"));
+
+    expect(stage).toContain(`CMD test -f ${MARKER}`);
+    expect(stage).toContain('CMD ["./docker-entrypoint.sh", "release"]');
+  });
+
+  it("leaves the marker alone in `migrate` mode, which simply exits", () => {
+    const { status, calls } = entrypoint(["migrate"]);
+
+    expect(status).toBe(0);
+    expect(readFileSync(box.log, "utf8")).not.toContain(MARKER);
+    expect(calls).not.toContain("tail -f /dev/null");
   });
 });
 

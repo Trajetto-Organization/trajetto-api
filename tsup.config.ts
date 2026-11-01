@@ -42,22 +42,24 @@ export default defineConfig({
         await fs.cp(viewDir, path.join("build", viewDir), { recursive: true });
       }
 
-      // The last migration this build was written against. A replica's boot
-      // refuses a database that lacks it (infra/scripts/schema-guard.ts):
-      // the API image carries no migrations, only this name.
+      // Every migration this build was written against. A replica's boot
+      // refuses a database that lacks any of them
+      // (infra/scripts/schema-guard.ts): the API image carries no
+      // migrations, only their names.
       const migrations = (
         await fs.readdir("prisma/migrations", { withFileTypes: true })
       )
         .filter((entry) => entry.isDirectory())
         .map((entry) => entry.name)
         .sort();
-      const latestMigration = migrations[migrations.length - 1];
 
-      if (!latestMigration) throw new Error("prisma/migrations está vazio");
+      if (migrations.length === 0) {
+        throw new Error("prisma/migrations está vazio");
+      }
 
       await fs.writeFile(
         path.join("build", "schema-version.json"),
-        `${JSON.stringify({ latestMigration })}\n`,
+        `${JSON.stringify({ migrations })}\n`,
       );
 
       console.log("Build completed successfully!");

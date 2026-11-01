@@ -11,7 +11,7 @@ import { describe, expect, it } from "vitest";
  * ships (6.2.1 and 7.4.3 in its bundled tree) and the API's own
  * node_modules, through bcrypt 5 → @mapbox/node-pre-gyp → tar 6.2.1. The
  * runtime starts with ./docker-entrypoint.sh and node, and the migrations
- * run the same script (`migrate`), so no package manager is needed there;
+ * run the same script (`release`), so no package manager is needed there;
  * bcrypt 6 ships prebuilt binaries (musl included) with no node-pre-gyp.
  *
  * The next run stopped on the AI image (infra/ai-ocr): certifi 2026.7.22
@@ -79,8 +79,10 @@ describe("the image the scanner reads", () => {
 
   it("starts and migrates without a package manager", () => {
     expect(runner).toMatch(/^CMD \["\.\/docker-entrypoint\.sh"\]$/m);
-    expect(read("infra/scripts/run-release-migrations.sh")).toMatch(
-      /"\$IMAGE" \.\/docker-entrypoint\.sh migrate/,
+    // The release image (the Application trajetto-api-migrate) runs the
+    // same script, in its `release` mode.
+    expect(code("FROM runner AS migrate")).toMatch(
+      /^CMD \["\.\/docker-entrypoint\.sh", "release"\]$/m,
     );
   });
 

@@ -290,8 +290,8 @@ COPY --from=builder --chown=nodejs:nodejs /app/infra/scripts/docker-entrypoint.s
 RUN sed -i "s/\r$//" ./docker-entrypoint.sh && chmod +x ./docker-entrypoint.sh
 
 # No schema, no migrations, no prisma.config.ts and no seeds: this image
-# never migrates. build/schema-version.json names the last migration the
-# build was written against, and the boot refuses a database without it.
+# never migrates. build/schema-version.json names every migration the
+# build was written against, and the boot refuses a database without any.
 COPY --from=builder --chown=nodejs:nodejs /app/package.json ./package.json
 COPY --from=builder --chown=nodejs:nodejs /app/build/src/modules ./src/modules
 COPY --from=builder --chown=nodejs:nodejs /app/build ./build
@@ -332,11 +332,12 @@ CMD ["./docker-entrypoint.sh"]
 # ================================
 # Stage: The release image (trajetto-api-migrate)
 # ================================
-# The API image plus what migrating needs, as layers on top of it: the
-# server pulls only these when it runs the release step
-# (infra/scripts/run-release-migrations.sh), and the API image never carries
-# them. Built with `--target migrate` (deploy.yml); tagged like the API,
-# `sha-<sha>`.
+# The API image plus what migrating needs, as layers on top of it, and the
+# API image never carries them. The Dokploy Application trajetto-api-migrate
+# runs it before the API rolls out (.github/scripts/dokploy-release.mjs).
+# Built with `--target migrate` (deploy.yml), tagged `sha-<sha>` like the
+# API and `src-<key>` for its source (.github/scripts/migrate-source.sh),
+# and rebuilt only when that source changes.
 #
 # The CLI keeps to migrate/: its node_modules, prisma.config.ts and the
 # schema with its migrations, where `prisma migrate deploy` runs from
@@ -354,12 +355,19 @@ COPY --from=builder --chown=nodejs:nodejs /app/prisma/schema.prisma ./migrate/pr
 COPY --from=builder --chown=nodejs:nodejs /app/prisma/migrations ./migrate/prisma/migrations
 COPY --from=builder --chown=nodejs:nodejs /app/release/ ./build/
 
-# The API's probe of :3333 means nothing to a step that never serves: Swarm
-# would kill the job halfway through a migration (the job script also passes
-# --no-healthcheck, for images built before this stage existed).
-HEALTHCHECK NONE
+# The release step's outcome, as Swarm reports it (docker-entrypoint.sh,
+# mode `release`): healthy once the migrations and the seeds finished, which
+# turns the task from `Starting` to `Running`. The API's probe of :3333
+# means nothing to a step that never serves. The start period is the time a
+# migration may take: no failed probe counts before the marker shows up, so
+# Swarm never kills a long migration for being slow (a probe that passes
+# ends the start period at once).
+HEALTHCHECK --interval=5s --timeout=5s --start-period=24h --retries=3     CMD test -f /tmp/trajetto-release-done
 
-CMD ["./docker-entrypoint.sh", "migrate"]
+# `release`, not `migrate`: a Swarm service must keep running to report
+# success. `migrate` (run and exit) stays for the load harness and
+# `yarn migrate:release`.
+CMD ["./docker-entrypoint.sh", "release"]
 
 # ================================
 # The default target: the API image
