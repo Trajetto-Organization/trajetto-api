@@ -188,7 +188,9 @@ describe("the deploy workflows", () => {
     const { text } = stepsOf("promote-production");
 
     // The build the staging check settled on (promote-workflow.test.ts).
-    expect(text(DECIDE)).toContain("IMAGE_TAG: ${{ steps.staged.outputs.tag }}");
+    expect(text(DECIDE)).toContain(
+      "IMAGE_TAG: ${{ steps.staged.outputs.tag }}",
+    );
     expect(runBlock(text(DECIDE))).toContain(
       'ghcr.sh digest "ghcr.io/trajetto-organization/trajetto-api-migrate:${IMAGE_TAG}"',
     );
@@ -303,7 +305,9 @@ describe.skipIf(!bash)("the staging decision, run", () => {
 
     expect(result.status, result.log).toBe(0);
     expect(result.outputs).toEqual({ run: "false" });
-    expect(result.log).toContain("::notice::Migrations: o banco de staging já aplicou");
+    expect(result.log).toContain(
+      "::notice::Migrations: o banco de staging já aplicou",
+    );
   });
 });
 

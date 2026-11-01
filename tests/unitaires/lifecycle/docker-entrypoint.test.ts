@@ -159,77 +159,86 @@ describe.skipIf(!sh)("the release step (`migrate` mode)", () => {
  * shows the task `Failed`. `rm`, `touch` and `tail` are stubbed: the marker
  * lives in the container's /tmp, and `tail -f` would never return.
  */
-describe.skipIf(!sh)("the release step as an Application (`release` mode)", () => {
-  const MARKER = "/tmp/trajetto-release-done";
+describe.skipIf(!sh)(
+  "the release step as an Application (`release` mode)",
+  () => {
+    const MARKER = "/tmp/trajetto-release-done";
 
-  beforeEach(() => {
-    prismaCli("migrate");
-    box.stub("rm", "exit 0");
-    box.stub("touch", "exit 0");
-    box.stub("tail", "exit 0");
-  });
+    beforeEach(() => {
+      prismaCli("migrate");
+      box.stub("rm", "exit 0");
+      box.stub("touch", "exit 0");
+      box.stub("tail", "exit 0");
+    });
 
-  function release(env: Record<string, string> = {}) {
-    const result = run(
-      "sh",
-      repoFile("infra/scripts/docker-entrypoint.sh"),
-      ["release"],
-      {
-        cwd: box.root,
-        bin: box.bin,
-        env: { STUB_LOG: box.log, DATABASE_URL: "postgresql://runtime", ...env },
-      },
-    );
-    const calls = readFileSync(box.log, "utf8").split("\n").filter(Boolean);
+    function release(env: Record<string, string> = {}) {
+      const result = run(
+        "sh",
+        repoFile("infra/scripts/docker-entrypoint.sh"),
+        ["release"],
+        {
+          cwd: box.root,
+          bin: box.bin,
+          env: {
+            STUB_LOG: box.log,
+            DATABASE_URL: "postgresql://runtime",
+            ...env,
+          },
+        },
+      );
+      const calls = readFileSync(box.log, "utf8").split("\n").filter(Boolean);
 
-    return { ...result, calls };
-  }
+      return { ...result, calls };
+    }
 
-  it("clears a stale marker, migrates and seeds, then marks the step done and idles", () => {
-    const { status, calls } = release();
+    it("clears a stale marker, migrates and seeds, then marks the step done and idles", () => {
+      const { status, calls } = release();
 
-    expect(status, calls.join("\n")).toBe(0);
-    expect(calls).toEqual([
-      `rm -f ${MARKER}`,
-      expect.stringMatching(/^wait-for-postgres DATABASE_URL=/),
-      expect.stringMatching(/^prisma migrate deploy cwd=migrate /),
-      expect.stringMatching(/^seed DATABASE_URL=/),
-      expect.stringMatching(/^import-violation-codes DATABASE_URL=/),
-      `touch ${MARKER}`,
-      "tail -f /dev/null",
-    ]);
-  });
+      expect(status, calls.join("\n")).toBe(0);
+      expect(calls).toEqual([
+        `rm -f ${MARKER}`,
+        expect.stringMatching(/^wait-for-postgres DATABASE_URL=/),
+        expect.stringMatching(/^prisma migrate deploy cwd=migrate /),
+        expect.stringMatching(/^seed DATABASE_URL=/),
+        expect.stringMatching(/^import-violation-codes DATABASE_URL=/),
+        `touch ${MARKER}`,
+        "tail -f /dev/null",
+      ]);
+    });
 
-  it.each([
-    ["the database is refused", { STUB_WAIT_EXIT: "1" }],
-    ["a migration fails", { STUB_PRISMA_EXIT: "1" }],
-    ["a seed fails", { STUB_SEED_EXIT: "1" }],
-    ["the violation-code import fails", { STUB_IMPORT_EXIT: "1" }],
-  ])("exits without marking anything done when %s", (_case, env) => {
-    const { status, calls } = release(env);
+    it.each([
+      ["the database is refused", { STUB_WAIT_EXIT: "1" }],
+      ["a migration fails", { STUB_PRISMA_EXIT: "1" }],
+      ["a seed fails", { STUB_SEED_EXIT: "1" }],
+      ["the violation-code import fails", { STUB_IMPORT_EXIT: "1" }],
+    ])("exits without marking anything done when %s", (_case, env) => {
+      const { status, calls } = release(env);
 
-    expect(status).not.toBe(0);
-    expect(calls).not.toContain(`touch ${MARKER}`);
-    expect(calls).not.toContain("tail -f /dev/null");
-    expect(calls.some((line) => line.startsWith("server "))).toBe(false);
-  });
+      expect(status).not.toBe(0);
+      expect(calls).not.toContain(`touch ${MARKER}`);
+      expect(calls).not.toContain("tail -f /dev/null");
+      expect(calls.some((line) => line.startsWith("server "))).toBe(false);
+    });
 
-  it("is the mode the release image runs by default, and the marker its healthcheck reads", () => {
-    const dockerfile = readFileSync(repoFile("Dockerfile"), "utf8");
-    const stage = dockerfile.slice(dockerfile.indexOf("FROM runner AS migrate"));
+    it("is the mode the release image runs by default, and the marker its healthcheck reads", () => {
+      const dockerfile = readFileSync(repoFile("Dockerfile"), "utf8");
+      const stage = dockerfile.slice(
+        dockerfile.indexOf("FROM runner AS migrate"),
+      );
 
-    expect(stage).toContain(`CMD test -f ${MARKER}`);
-    expect(stage).toContain('CMD ["./docker-entrypoint.sh", "release"]');
-  });
+      expect(stage).toContain(`CMD test -f ${MARKER}`);
+      expect(stage).toContain('CMD ["./docker-entrypoint.sh", "release"]');
+    });
 
-  it("leaves the marker alone in `migrate` mode, which simply exits", () => {
-    const { status, calls } = entrypoint(["migrate"]);
+    it("leaves the marker alone in `migrate` mode, which simply exits", () => {
+      const { status, calls } = entrypoint(["migrate"]);
 
-    expect(status).toBe(0);
-    expect(readFileSync(box.log, "utf8")).not.toContain(MARKER);
-    expect(calls).not.toContain("tail -f /dev/null");
-  });
-});
+      expect(status).toBe(0);
+      expect(readFileSync(box.log, "utf8")).not.toContain(MARKER);
+      expect(calls).not.toContain("tail -f /dev/null");
+    });
+  },
+);
 
 describe.skipIf(!sh)("where `migrate` finds the Prisma CLI", () => {
   it("in a checkout, the repository's own (yarn migrate:release)", () => {
