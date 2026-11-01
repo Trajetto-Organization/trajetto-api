@@ -181,7 +181,7 @@ services:
 
   # As production runs it: nothing persisted, evicting instead of refusing.
   redis:
-    image: redis:7-alpine
+    image: redis:8-alpine
     command: ["redis-server", "--save", "", "--appendonly", "no", "--maxmemory", "256mb", "--maxmemory-policy", "allkeys-lru"]
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
