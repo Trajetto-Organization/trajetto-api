@@ -1,3 +1,15 @@
+# [1.3.0](https://github.com/Trajetto-Organization/trajetto-api/compare/v1.2.2...v1.3.0) (2026-11-01)
+
+
+### Bug Fixes
+
+* **deploy:** achados da revisão do job de migrations ([e961b37](https://github.com/Trajetto-Organization/trajetto-api/commit/e961b372abd4bf81297817d4e02a49bf3dd35ba5))
+
+
+### Features
+
+* **deploy:** migrations fora do boot, num job único antes de cada deploy, e a imagem da API sem o CLI do Prisma ([f72b5b2](https://github.com/Trajetto-Organization/trajetto-api/commit/f72b5b241a0b73132e35165f58b880c336c7a287))
+
 ## [1.2.2](https://github.com/Trajetto-Organization/trajetto-api/compare/v1.2.1...v1.2.2) (2026-10-31)
 
 
