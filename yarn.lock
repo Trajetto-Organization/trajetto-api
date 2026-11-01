@@ -2253,12 +2253,12 @@
     lodash-es "^4.17.21"
     read-package-up "^11.0.0"
 
-"@signpdf/placeholder-pdfkit@3.3.0":
-  version "3.3.0"
-  resolved "https://registry.yarnpkg.com/@signpdf/placeholder-pdfkit/-/placeholder-pdfkit-3.3.0.tgz#96747eb6be20bc57e4bdd02fc247ef3b353bc6d1"
-  integrity sha512-MJbRyjNYKjIbPmnQlcaNllhkY/IDKoCzHPtBCqHpABchr/BjC+jUY/EGJkUszs9cE2f2PC5v2O9QVbbqWVTd3g==
+"@signpdf/placeholder-pdfkit@4.0.0":
+  version "4.0.0"
+  resolved "https://registry.yarnpkg.com/@signpdf/placeholder-pdfkit/-/placeholder-pdfkit-4.0.0.tgz#51485382883294c48058da181a3ff940dc35c90b"
+  integrity sha512-7lbGuswcu92qcRxVRIE8lMs9+dpDxHuch0HIl0QhHLHrf3Mm8a/4xPWQ7wuiQe6goLFS3Wf0GfxidmB8Qe4+FA==
   dependencies:
-    "@signpdf/utils" "^3.3.0"
+    "@signpdf/utils" "^4.0.0"
 
 "@signpdf/signpdf@3.3.0":
   version "3.3.0"
@@ -2271,6 +2271,11 @@
   version "3.3.0"
   resolved "https://registry.yarnpkg.com/@signpdf/utils/-/utils-3.3.0.tgz#b30daf5d2755c614afa56093e35e33d559658644"
   integrity sha512-ArOP0MIhCfdChh1oZkog81TPeSY2e5TvHQmXJ682T4+SKb6Z609uAZhqMQZ9xm+YenEf/eNMSE5KVwU+EudXug==
+
+"@signpdf/utils@^4.0.0":
+  version "4.0.0"
+  resolved "https://registry.yarnpkg.com/@signpdf/utils/-/utils-4.0.0.tgz#388c597e708e2e272748745f73a2582ce9385f0f"
+  integrity sha512-4uiNqyHTVnXGYK+zhwLKrsykX3d4f0mlbzykyI0BGiNVIZssHo61KmwWzUEbAcE//TpheUd2xD7yA8mjxIpaZg==
 
 "@sigstore/bundle@^4.0.0":
   version "4.0.0"

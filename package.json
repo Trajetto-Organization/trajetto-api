@@ -57,7 +57,7 @@
     "@fastify/swagger-ui": "5.2.2",
     "@prisma/adapter-pg": "7.10.1",
     "@prisma/client": "7.10.1",
-    "@signpdf/placeholder-pdfkit": "3.3.0",
+    "@signpdf/placeholder-pdfkit": "4.0.0",
     "@signpdf/signpdf": "3.3.0",
     "@signpdf/utils": "3.3.0",
     "@socket.io/redis-adapter": "8.3.0",
