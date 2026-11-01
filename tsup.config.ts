@@ -42,6 +42,26 @@ export default defineConfig({
         await fs.cp(viewDir, path.join("build", viewDir), { recursive: true });
       }
 
+      // Every migration this build was written against. A replica's boot
+      // refuses a database that lacks any of them
+      // (infra/scripts/schema-guard.ts): the API image carries no
+      // migrations, only their names.
+      const migrations = (
+        await fs.readdir("prisma/migrations", { withFileTypes: true })
+      )
+        .filter((entry) => entry.isDirectory())
+        .map((entry) => entry.name)
+        .sort();
+
+      if (migrations.length === 0) {
+        throw new Error("prisma/migrations está vazio");
+      }
+
+      await fs.writeFile(
+        path.join("build", "schema-version.json"),
+        `${JSON.stringify({ migrations })}\n`,
+      );
+
       console.log("Build completed successfully!");
     } catch (error) {
       console.error("Erro ao copiar assets:", error);

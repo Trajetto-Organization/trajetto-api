@@ -21,12 +21,14 @@
 # they need the same JWT_SECRET pair; nothing else is read from it.
 #
 # Boot order is production's release order: `migrate` prepares load_test once
-# (the image's `./docker-entrypoint.sh migrate`, what
-# infra/scripts/run-release-migrations.sh runs before a rollout), and the
-# replicas start only after it exits 0. They run NODE_ENV=production with
-# RUN_MIGRATIONS_ON_BOOT=false, and the bootstrap guard of production refuses
-# an EMPTY database (infra/scripts/database-bootstrap-guard.ts): started
-# first, every replica exited on the fresh volume.
+# (the release image, trajetto-api-migrate — Dockerfile stage `migrate` —
+# what the Dokploy Application trajetto-api-migrate runs before a rollout),
+# and the replicas start only after it exits 0. The API image never migrates: it
+# runs NODE_ENV=production, the bootstrap guard of production refuses an
+# EMPTY database (infra/scripts/database-bootstrap-guard.ts) and the schema
+# guard refuses one without the build's migrations
+# (infra/scripts/schema-guard.ts): started first, every replica exited on
+# the fresh volume.
 name: trajetto-load
 
 # The replicas' environment, shared with `migrate` so the release step sees
@@ -38,8 +40,6 @@ x-api-environment: &api-environment
   NODE_OPTIONS: --max-old-space-size=${API_HEAP_MB:-768}
   DATABASE_URL: postgresql://trajetto:${LOAD_PG_PASSWORD:-trajetto-password}@postgres:5432/load_test?schema=public&connection_limit=10&pool_timeout=20&connect_timeout=5
   MIGRATION_DATABASE_URL: postgresql://trajetto:${LOAD_PG_PASSWORD:-trajetto-password}@postgres:5432/load_test?schema=public&connection_limit=2
-  # `migrate` below prepares the database; the replicas never migrate.
-  RUN_MIGRATIONS_ON_BOOT: "false"
   REDIS_URL: redis://redis:6379
   HTTP_REQUEST: http://localhost:3000
   API_HTTP_REQUEST: http://localhost:${LOAD_EDGE_PORT:-8080}
@@ -93,17 +93,21 @@ services:
   # The release step, once, before any replica: migrations and the idempotent
   # seeds, strictly, then exit. ALLOW_EMPTY_DATABASE_BOOTSTRAP only here:
   # load_test starts empty on purpose, and the replicas keep the guard.
+  # The release image is the API image plus the Prisma CLI, the migrations
+  # and the seeds: built from the same Dockerfile, target `migrate`, on top
+  # of the `api` build below. `migrate`, not the image's default `release`
+  # (which stays up to report to Swarm): the replicas wait for this service
+  # to EXIT successfully.
   migrate:
-    image: ${LOAD_API_IMAGE:-trajetto-api:load}
-    # Built by `api` below (same image); never pulled: it exists nowhere else.
-    pull_policy: never
+    image: ${LOAD_MIGRATE_IMAGE:-trajetto-api-migrate:load}
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+      target: migrate
     command: ["./docker-entrypoint.sh", "migrate"]
     environment:
       <<: *api-environment
       ALLOW_EMPTY_DATABASE_BOOTSTRAP: "true"
-    # The image's HEALTHCHECK probes :3333, which `migrate` never opens.
-    healthcheck:
-      disable: true
     restart: "no"
     depends_on:
       postgres:
@@ -116,6 +120,7 @@ services:
     build:
       context: ../..
       dockerfile: Dockerfile
+      target: runner
     deploy:
       replicas: ${LOAD_REPLICAS:-2}
       resources:

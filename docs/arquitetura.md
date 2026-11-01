@@ -379,7 +379,7 @@ src/
 infra/
   database.ts          o PrismaClient compartilhado
   cache/               conexão Redis
-  scripts/             entrypoint da imagem, migrations como job, conferência do rollout, backup/restore manuais,
+  scripts/             entrypoint da imagem (serve, migrate, release), conferência do rollout, backup/restore manuais,
                        seeds, guard de bootstrap, cobertura E2E
   ai-ocr/              o serviço de IA (Python): server.py, Dockerfile, requisitos com hash, modelos, pytest
   traefik/             referência da configuração estática do Traefik do Dokploy
@@ -466,9 +466,27 @@ Cada réplica sobe, no mesmo processo Node (`src/server.ts`):
 4. o `apiUsageRecorder` (contadores de uso da API pública), em toda réplica.
 
 O boot (`infra/scripts/docker-entrypoint.sh`, sob `dumb-init`) espera o
-Postgres, recusa banco vazio em produção (`database-bootstrap-guard.ts`),
-migra e semeia se `RUN_MIGRATIONS_ON_BOOT=true`, e faz `exec` do servidor —
-o Node é filho direto do `dumb-init`, então o SIGTERM do deploy chega a ele.
+Postgres, recusa banco vazio em produção (`database-bootstrap-guard.ts`; a
+recusa diz que `ALLOW_EMPTY_DATABASE_BOOTSTRAP` vai na Application
+`trajetto-api-migrate`, nunca na API), recusa banco sem todas as migrations
+do build (`schema-guard.ts`, contra `build/schema-version.json`, que lista
+cada uma; a recusa nomeia as que faltam e manda dar Deploy na
+`trajetto-api-migrate` do ambiente) e faz
+`exec` do servidor — o Node é filho direto do `dumb-init`, então o SIGTERM
+do deploy chega a ele. A imagem da API **nunca migra** (não traz o CLI do
+Prisma): quem migra é a imagem `trajetto-api-migrate`, rodando como a
+Application `trajetto-api-migrate` do Dokploy, antes do rollout e só quando
+o banco ainda não aplicou aquela imagem
+([`deploy.md`](./deploy.md#15-migrations)). Os builds anteriores a
+31/10/2026 migravam no boot, com `RUN_MIGRATIONS_ON_BOOT` no padrão `true`:
+por isso a variável fica `false` nas Applications da API enquanto um deles
+puder ser alvo de rollback
+([`variaveis-de-ambiente.md`](./variaveis-de-ambiente.md#2-banco-de-dados)).
+O comando da `trajetto-api-migrate` (`docker-entrypoint.sh release`) migra,
+roda os seeds e fica parado; a importação dos códigos de infração
+(`infra/scripts/import-violation-codes.ts`) é tudo ou nada, numa transação
+só, e um lote que falha falha a etapa. O `HEALTHCHECK` da imagem só passa
+depois disso, e é por ele que o pipeline sabe que a etapa terminou.
 
 O desligamento é ordenado (`src/shared/lifecycle/shutdown.ts`): a readiness
 passa a 503, a réplica espera 12 s para sair do balanceamento do serviço,
@@ -828,7 +846,8 @@ dos testes — nasce em `src/shared/database/database-client.ts`, que monta o
 pool a partir da `DATABASE_URL`.
 
 A `DATABASE_URL` da Application `trajetto-api` em staging e produção (só o
-servidor; migrations e seeds usam `MIGRATION_DATABASE_URL`; a URL inteira, para
+servidor; migrations e seeds usam a URL sem tetos, a `DATABASE_URL` da
+Application `trajetto-api-migrate`; a URL inteira, para
 copiar, está em [`variaveis-de-ambiente.md`](./variaveis-de-ambiente.md#2-banco-de-dados))
 não mudou de formato. O `pg` ignora os parâmetros do Prisma 6, então
 `src/shared/database/pool-config.ts` lê cada um e os entrega ao pool de forma
@@ -877,7 +896,7 @@ URLs de produção não definem `TimeZone`. Um `SET TIME ZONE` na conexão
 continua valendo para aquela sessão. Fora do pool ficam o cliente
 administrativo do ambiente de testes (só `CREATE`/`DROP DATABASE`) e o
 `prisma migrate deploy`, que abre a própria conexão pelo schema engine com a
-`MIGRATION_DATABASE_URL` e segue o padrão do servidor. Provas:
+URL sem tetos da etapa de release e segue o padrão do servidor. Provas:
 `tests/unitaires/database/pool-config.test.ts` (o mapeamento, com e sem
 `options` na URL) e `tests/E2E/database-session-timezone.test.ts` (num banco
 com padrão `America/Sao_Paulo`, uma sessão crua abre em São Paulo e não vê a
@@ -1071,8 +1090,8 @@ outras correções da rodada. O 8 ainda não saiu. Medições:
 
 ## Migrations: expandir e contrair
 
-Toda migration roda com a versão **anterior** servindo (no boot da task nova
-de um rollout start-first, ou no job logo antes dele) e continua aplicada
+Toda migration roda com a versão **anterior** servindo (na etapa de release,
+pela Application `trajetto-api-migrate`, logo antes do rollout) e continua aplicada
 depois de um rollback automático, que devolve o código velho sobre o schema
 novo. O client Prisma da versão anterior nomeia toda coluna escalar nos SELECT
 e RETURNING e insere sem as colunas que não conhece. Então:

@@ -255,7 +255,13 @@ describe("the container's long-lived process", () => {
       "utf8",
     );
 
-    const cmd = dockerfile
+    // The API image's stage: the release image after it has a CMD of its
+    // own (`migrate`), which never serves.
+    const runner = dockerfile.slice(
+      dockerfile.indexOf("FROM base AS runner"),
+      dockerfile.indexOf("FROM runner AS migrate"),
+    );
+    const cmd = runner
       .split(/\r?\n/)
       .filter((line) => line.startsWith("CMD "))
       .pop();

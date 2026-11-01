@@ -54,8 +54,9 @@ branch de trabalho ──push──▶ ci.yml (lint, typecheck, unitários + cob
         │
         └─ merge/push ─▶ staging ──▶ deploy.yml
                                      ├─ validação completa (+ E2E com Postgres e Redis)
-                                     ├─ build ÚNICO das 2 imagens ─▶ GHCR  sha-<7>  (imutável)
-                                     │  (a IA é reaproveitada, sem rebuild, se infra/ai-ocr não mudou)
+                                     ├─ build ÚNICO das 3 imagens ─▶ GHCR  sha-<7>  (imutável)
+                                     │  (API, migração e IA; a migração e a IA são reaproveitadas, sem rebuild, se o que rodam não mudou)
+                                     ├─ migrations, só se o banco não aplicou essa imagem: Application trajetto-api-migrate (Dokploy)
                                      ├─ por serviço: tag `staging` movida por digest ─▶ Dokploy staging
                                      │  trajetto-ai (só se o digest mudou) → trajetto-api
                                      ├─ a API pública responde este commit? (/health/liveness)
@@ -65,7 +66,7 @@ PR staging → main ──▶ deploy.yml: a mesma validação + "o staging rodou
 
 merge em main ──▶ deploy.yml: PROMOÇÃO (sem build)       [aprovação do environment production]
                   ├─ resolve o build do commit mergeado (2º pai do merge commit)
-                  ├─ migrations (job único, opcional) ─▶ tag `stable` movida por digest
+                  ├─ migrations, se preciso (trajetto-api-migrate, imagem de migração do build) ─▶ tag `stable` movida por digest
                   ├─ Dokploy produção: trajetto-ai → trajetto-api ─▶ convergência
                   └─ release (tag semver, CHANGELOG, GitHub Release)
 
@@ -80,49 +81,65 @@ Princípios que não mudam:
   tempo de execução: staging e produção diferem só no _Environment_ de cada
   Application no Dokploy. O que o staging validou é, byte a byte, o que a
   produção roda.
-- **Duas imagens**, construídas no mesmo job e promovidas juntas (o backup
-  do banco não tem imagem: é o do próprio Dokploy,
-  [seção 18](#18-backup-e-restauração)):
+- **Três imagens**, construídas (ou reaproveitadas) no mesmo job e
+  promovidas juntas (o backup do banco não tem imagem: é o do próprio
+  Dokploy, [seção 18](#18-backup-e-restauração)):
 
-  | Imagem                                       | De onde                                     | Para quê                                | Application no Dokploy |
-  | -------------------------------------------- | ------------------------------------------- | --------------------------------------- | ---------------------- |
-  | `ghcr.io/trajetto-organization/trajetto-api` | `Dockerfile`                                | a API (HTTP, Socket.IO, workers, crons) | `trajetto-api`         |
-  | `ghcr.io/trajetto-organization/trajetto-ai`  | `infra/ai-ocr/Dockerfile` (stage `runtime`) | o OCR local das leituras de IA          | `trajetto-ai`          |
+  | Imagem                                               | De onde                                     | Para quê                                                                                                                    | Application no Dokploy                                                |
+  | ---------------------------------------------------- | ------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------- |
+  | `ghcr.io/trajetto-organization/trajetto-api`         | `Dockerfile` (estágio `runner`)             | a API (HTTP, Socket.IO, workers, crons); **nunca migra**                                                                    | `trajetto-api`                                                        |
+  | `ghcr.io/trajetto-organization/trajetto-api-migrate` | `Dockerfile` (estágio `migrate`)            | a etapa de release: `prisma migrate deploy` e os seeds, antes do rollout, só quando o banco ainda não aplicou aquela imagem | `trajetto-api-migrate`, uma por ambiente ([seção 15](#15-migrations)) |
+  | `ghcr.io/trajetto-organization/trajetto-ai`          | `infra/ai-ocr/Dockerfile` (stage `runtime`) | o OCR local das leituras de IA                                                                                              | `trajetto-ai`                                                         |
 
   A imagem da API roda em Alpine com só o binário do `node` da imagem
   oficial (sem npm, yarn, corepack nem os headers de C) e só os pacotes que
-  os binários usam (`libstdc++`, `libssl3`, `ca-certificates`, `dumb-init`).
-  O estágio `prod-deps` tira do `node_modules` o que nada carrega em execução
-  (sourcemaps, typings, READMEs, `@types`, o bundle de navegador do ExcelJS,
-  o `pglite` do `prisma dev` e os compiladores de query de todos os bancos).
-  O Prisma 7 não tem query engine: o cliente gerado traz o próprio compilador
-  de PostgreSQL, e só o schema engine da CLI (`migrate deploy` no boot e na
-  etapa de release, `migrate resolve` à mão) é binário nativo;
-  `@prisma/studio-core` e `@prisma/dev` ficam porque a CLI os carrega na
-  partida. As camadas vão da mais estável para a menos estável: um commit só
-  de código reenvia só `build/` (~1 MB comprimido).
-  Medido em 28/10/2026, ainda no Prisma 6.1, mesmas fontes: 115 → 88 MB
-  comprimidos (o que o registry transfere), 417 → 285 MB descompactados,
-  533 → 373 MB no `docker images`. Com o Prisma 7.10.1, cujo CLI é maior
-  (medido no mesmo dia, na árvore final da integração): 114,8 MB comprimidos
-  (+31%), 431 MB descompactados (+51%), 546 MB no `docker images` (+46%). O
-  `node_modules` vai de 27,4 para 59,0 MB comprimidos e o `.prisma` cai de
-  7,7 para 3,2 MB
+  os binários usam (`libstdc++`, `libssl3`, `ca-certificates`, `dumb-init`;
+  `libssl3` e `ca-certificates` servem ao schema engine da imagem de
+  migração, que usa a mesma base). Ela **não traz o CLI do Prisma**, o
+  schema, as migrations nem os seeds: só a lista das migrations do build
+  (`build/schema-version.json`), e o boot recusa um banco a que falte
+  qualquer uma delas. O estágio
+  `prod-deps` instala só as `dependencies` (de um manifesto derivado do
+  `package.json`, com o `yarn.lock` como está; o `prisma` é
+  `devDependency`) e tira o que nada carrega em execução (sourcemaps,
+  typings, READMEs, `@types`, o bundle de navegador do ExcelJS e os
+  compiladores de query de todos os bancos: o cliente gerado traz o próprio
+  compilador de PostgreSQL). As camadas vão da mais estável para a menos
+  estável: um commit só de código reenvia só `build/` (~1 MB comprimido).
+
+  A imagem de migração é a da API mais, em camadas por cima, a árvore
+  própria do CLI (`/app/migrate/node_modules`, do estágio `migrate-deps`:
+  `prisma`, `dotenv`, `dotenv-expand`, sem o `pglite` do `prisma dev` nem os
+  compiladores da CLI; `@prisma/studio-core` e `@prisma/dev` ficam porque a
+  CLI os carrega na partida), o `prisma.config.ts`, o schema, as migrations,
+  os seeds e a tabela de infrações. O servidor baixa só essas camadas para
+  rodar a etapa. O comando padrão dela (`release`) migra, roda os seeds e
+  fica parado; o `HEALTHCHECK` dela só passa depois disso, e é assim que o
+  Swarm diz se a etapa terminou ([seção 15](#15-migrations)). Ela só é
+  reconstruída quando muda o que roda (tag `src-<hash>`, como a da IA).
+
+  Medido em 31/10/2026, Prisma 7.10.1: a imagem da API foi de 431 para
+  **239 MB** descompactados e de 114,8 para **~68 MB** comprimidos (o que o
+  registry transfere; o `node_modules` dela, de 317 para 91 MB). A de
+  migração soma ~170 MB descompactados por cima. Antes, em 28/10/2026, no
+  Prisma 6.1: 115 → 88 MB comprimidos, 417 → 285 MB descompactados
   ([ADR 0011](./adr/0011-orm-prisma-6-7-8.md#integração-sobre-a-staging)).
 
 - **Tags**:
 
-  | Tag                                                 | Quem cria/move                                                                     | Muda?                                                                                                             |
-  | --------------------------------------------------- | ---------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
-  | `sha-<7 primeiros do commit>`                       | o build de cada push em `staging`                                                  | **nunca** (imutável)                                                                                              |
-  | `staging`                                           | o job `deploy-staging`, por digest                                                 | a cada push em `staging`                                                                                          |
-  | `staged-<7>`                                        | o job `deploy-staging`, **por último**: depois do scan, do deploy e da conferência | nunca; sem ele o PR e a promoção recusam o commit (salvo um commit só de documentação, que usa o de um ancestral) |
-  | `src-<hash git de infra/ai-ocr>` (só `trajetto-ai`) | o build da IA                                                                      | nunca; é por ela que um push acha a imagem da IA de mesmo código e a reaproveita                                  |
-  | `stable`                                            | o job `promote-production`, por digest                                             | a cada promoção ou rollback                                                                                       |
-  | `main-<sha>`                                        | builds antigos, de antes da branch `staging`                                       | nunca; aceitos só como alvo de rollback                                                                           |
+  | Tag                                                             | Quem cria/move                                                                     | Muda?                                                                                                                  |
+  | --------------------------------------------------------------- | ---------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+  | `sha-<7 primeiros do commit>`                                   | o build de cada push em `staging`                                                  | **nunca** (imutável)                                                                                                   |
+  | `staging`                                                       | o job `deploy-staging`, por digest                                                 | a cada push em `staging`                                                                                               |
+  | `staged-<7>`                                                    | o job `deploy-staging`, **por último**: depois do scan, do deploy e da conferência | nunca; sem ele o PR e a promoção recusam o commit (salvo um commit só de documentação, que usa o de um ancestral)      |
+  | `src-<hash git de infra/ai-ocr>` (só `trajetto-ai`)             | o build da IA                                                                      | nunca; é por ela que um push acha a imagem da IA de mesmo código e a reaproveita                                       |
+  | `src-<hash de migrate-source.sh>` (só `trajetto-api-migrate`)   | o build da imagem de migração                                                      | nunca; é por ela que um push sem mudança nas migrations, nos seeds e no que eles rodam reaproveita a imagem            |
+  | `staging-applied`, `stable-applied` (só `trajetto-api-migrate`) | `deploy-staging` e `promote-production`, **depois** de a etapa de release terminar | a cada etapa que roda; dizem qual imagem de migração o banco do ambiente já aplicou, e a etapa é pulada se for a mesma |
+  | `stable`                                                        | o job `promote-production`, por digest                                             | a cada promoção ou rollback                                                                                            |
+  | `main-<sha>`                                                    | builds antigos, de antes da branch `staging`                                       | nunca; aceitos só como alvo de rollback                                                                                |
 
   Não existem `latest`, `main` nem `pr-*`. As Applications de produção rodam
-  `stable`; as de staging, `staging`. O pipeline **nunca** muda a imagem
+  `stable`; as de staging, `staging` (a `trajetto-api-migrate` também). O pipeline **nunca** muda a imagem
   configurada numa Application: ele move a tag no GHCR e pede ao Dokploy um
   novo deploy, que puxa a tag de novo.
 
@@ -221,25 +238,32 @@ staging?".
 | _Run workflow_ na `main` (`image_tag`)                  | `promote-production` (o rollback)                                 |
 | _Run workflow_ na `staging` (`force_ai_build` opcional) | os mesmos do push em `staging`                                    |
 
-| Job                  | Detalhes                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
-| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `test`               | serviços `postgres:16-alpine` e `redis:7-alpine` fixados por digest; checkout completo (o teste de rotas aposentadas compara com `origin/main`, e a auditoria com a base do push ou do PR); Node `22.21.1`; cache dos engines do Prisma pela versão deles e `yarn install --frozen-lockfile` com cache; confere que o schema engine do Prisma ficou instalado (baixa de novo, até 3 vezes, se o `postinstall` falhou calado); auditoria de dependências (`audit-gate.sh`); `lint:check`; `prisma:generate`; `typecheck`; `test:coverage` (o piso de cobertura); publica `coverage-<sha>`; `test:e2e` (um banco por arquivo; em duas fases, os arquivos que sobem réplicas por último, um por vez).                                                                                                                                                                                                                                                                                                                  |
-| `ai-ocr`             | o pytest do serviço de IA dentro da imagem (stage `test`, Buildx com cache do GitHub no escopo `ai-test`; o build só fala com o Docker Hub e o PyPI, porque os pesos do OCR estão versionados em `infra/ai-ocr/models`).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
-| `secrets`            | o mesmo gitleaks do `ci.yml` (mesma imagem, flags, `.gitleaksignore`). Nenhuma imagem é construída antes dele passar.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
-| `build-and-push`     | só no `staging` (push ou _Run workflow_), depois dos três acima. Buildx com cache do GitHub (um escopo por imagem); publica `sha-<7>` das duas imagens com SBOM e proveniência (`provenance: mode=max`; o único build arg é o commit, `GIT_SHA`, que vai para a imagem e sai na liveness). A IA só é reconstruída se o código dela mudou: toda imagem da IA leva também a tag `src-<hash git de infra/ai-ocr>`, e um push que encontra essa tag reaproveita a imagem (mesmo digest) e só acrescenta o `sha-<7>` dele, sem rebuild; `force_ai_build` reconstrói mesmo assim. Varre as duas por digest com Trivy (CRITICAL corrigível; só relata até `IMAGE_SCAN_ENFORCE=true`, e só um achado reprova: o banco de vulnerabilidades é baixado uma vez por run, com cache diário, e falha no download ou erro do Trivy viram aviso). Exporta os dois digests.                                                                                                                                                          |
-| `deploy-staging`     | environment `staging`; um por vez (`concurrency: deploy-staging`, nunca cancelado no meio). Confere se o run ainda é o head de `staging` (runs terminam fora de ordem; o mais velho não volta a tag, a menos que o head só acrescente documentação, como um `[skip ci]` de doc: `docs-only.sh`); anota para onde as tags `staging` apontam; por serviço, na ordem **`trajetto-ai` → `trajetto-api`**, move a tag `staging` para o digest deste run e logo depois pede o deploy da Application (`.github/scripts/dokploy-deploy.mjs`, se os três secrets obrigatórios do Dokploy existirem). A IA só é movida e reimplantada se o digest dela mudou (ou com `force_ai_build`). Depois espera a API pública responder este commit em `/health/liveness` (`wait-for-version.mjs`; `ROLLOUT_VERIFY=ssh` troca pela conferência no Swarm), escreve o marcador `staged-<7>` das duas imagens e, se um deploy do Dokploy falhou, devolve a tag daquele serviço ao digest anterior.                                         |
-| `staging-image`      | só no PR (nome do check: _The PR head was built on staging_): espera (até 45 min) o marcador `staged-<head do PR>` das duas imagens, no mesmo digest de `sha-<head do PR>`, ou que o head só mude documentação desde um commit que o staging rodou (`.github/scripts/staged-build.sh`). Sem isso o merge promoveria um build que o staging não rodou.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
-| `promote-production` | environment `production` (revisores obrigatórios = aprovação); um por vez (`concurrency: promote-production`); só a partir de `main`. Resolve o build (2º pai do merge commit; fast-forward = o próprio commit; _Run workflow_ = a tag digitada), valida o formato (`sha-<hex>` ou `main-<hex>`), confere num merge que o staging rodou o build — o marcador `staged-<7>` no mesmo digest, esperando até 20 min um deploy de staging ainda em andamento, ou o build do commit mais próximo que o staging rodou, quando o merge só muda documentação desde ele (o rollback por _Run workflow_ é isento) —, confere que a imagem existe no GHCR, compara com o que o staging roda (só informa), roda as migrations como job se `MIGRATIONS_VIA_JOB=true`, move `stable` das duas imagens por digest (a IA só se o build tiver essa imagem), pede o deploy das Applications de produção na mesma ordem (se configurado) e espera a convergência da API (SSH por padrão; `ROLLOUT_VERIFY=http` usa a liveness pública). |
-| `release`            | depois da promoção, só no push em `main`: `semantic-release` cria a tag, o `CHANGELOG.md` (commit com `[skip ci]`) e o GitHub Release.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| Job                  | Detalhes                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| -------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `test`               | serviços `postgres:16-alpine` e `redis:7-alpine` fixados por digest; checkout completo (o teste de rotas aposentadas compara com `origin/main`, e a auditoria com a base do push ou do PR); Node `22.21.1`; cache dos engines do Prisma pela versão deles e `yarn install --frozen-lockfile` com cache; confere que o schema engine do Prisma ficou instalado (baixa de novo, até 3 vezes, se o `postinstall` falhou calado); auditoria de dependências (`audit-gate.sh`); `lint:check`; `prisma:generate`; `typecheck`; `test:coverage` (o piso de cobertura); publica `coverage-<sha>`; `test:e2e` (um banco por arquivo; em duas fases, os arquivos que sobem réplicas por último, um por vez).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| `ai-ocr`             | o pytest do serviço de IA dentro da imagem (stage `test`, Buildx com cache do GitHub no escopo `ai-test`; o build só fala com o Docker Hub e o PyPI, porque os pesos do OCR estão versionados em `infra/ai-ocr/models`).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| `secrets`            | o mesmo gitleaks do `ci.yml` (mesma imagem, flags, `.gitleaksignore`). Nenhuma imagem é construída antes dele passar.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| `build-and-push`     | só no `staging` (push ou _Run workflow_), depois dos três acima. Buildx com cache do GitHub (um escopo por imagem); publica `sha-<7>` das três imagens (API, migração e IA) com SBOM e proveniência (`provenance: mode=max`; o único build arg é o commit, `GIT_SHA`, que vai para a imagem e sai na liveness). A IA só é reconstruída se o código dela mudou: toda imagem da IA leva também a tag `src-<hash git de infra/ai-ocr>`, e um push que encontra essa tag reaproveita a imagem (mesmo digest) e só acrescenta o `sha-<7>` dele, sem rebuild; `force_ai_build` reconstrói mesmo assim. A imagem de migração segue a mesma regra, com a tag `src-<hash>` de `.github/scripts/migrate-source.sh` (as migrations, o schema, os seeds e o que eles importam, o entrypoint, o `Dockerfile` e as dependências). Varre as três por digest com Trivy (CRITICAL corrigível; só relata até `IMAGE_SCAN_ENFORCE=true`, e só um achado reprova: o banco de vulnerabilidades é baixado uma vez por run, com cache diário, e falha no download ou erro do Trivy viram aviso). Exporta os três digests.                                                                                                                                                                                                                                                                                                                                              |
+| `deploy-staging`     | environment `staging`; um por vez (`concurrency: deploy-staging`, nunca cancelado no meio). Confere se o run ainda é o head de `staging` (runs terminam fora de ordem; o mais velho não volta a tag, a menos que o head só acrescente documentação, como um `[skip ci]` de doc: `docs-only.sh`); anota para onde as tags `staging` apontam; as migrations, antes de qualquer tag da API ou da IA andar e só se o banco de staging ainda não aplicou a imagem de migração deste commit (o digest comparado com `trajetto-api-migrate:staging-applied`): move `trajetto-api-migrate:staging`, pede o deploy da Application `trajetto-api-migrate` e espera o Swarm dizer que a etapa terminou ou falhou (`.github/scripts/dokploy-release.mjs`; [seção 15](#15-migrations)), e só então move `staging-applied`; por serviço, na ordem **`trajetto-ai` → `trajetto-api`**, move a tag `staging` para o digest deste run e logo depois pede o deploy da Application (`.github/scripts/dokploy-deploy.mjs`, se os quatro secrets obrigatórios do Dokploy existirem). A IA só é movida e reimplantada se o digest dela mudou (ou com `force_ai_build`). Depois espera a API pública responder este commit em `/health/liveness` (`wait-for-version.mjs`; `ROLLOUT_VERIFY=ssh` troca pela conferência no Swarm), escreve o marcador `staged-<7>` das duas imagens e, se um deploy do Dokploy falhou, devolve a tag daquele serviço ao digest anterior. |
+| `staging-image`      | só no PR (nome do check: _The PR head was built on staging_): espera (até 45 min) o marcador `staged-<head do PR>` das duas imagens, no mesmo digest de `sha-<head do PR>`, ou que o head só mude documentação desde um commit que o staging rodou (`.github/scripts/staged-build.sh`). Sem isso o merge promoveria um build que o staging não rodou.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| `promote-production` | environment `production` (revisores obrigatórios = aprovação); um por vez (`concurrency: promote-production`); só a partir de `main`. Resolve o build (2º pai do merge commit; fast-forward = o próprio commit; _Run workflow_ = a tag digitada), valida o formato (`sha-<hex>` ou `main-<hex>`), confere num merge que o staging rodou o build — o marcador `staged-<7>` no mesmo digest, esperando até 20 min um deploy de staging ainda em andamento, ou o build do commit mais próximo que o staging rodou, quando o merge só muda documentação desde ele (o rollback por _Run workflow_ é isento) —, confere que a imagem existe no GHCR, compara com o que o staging roda (só informa), roda as migrations com a imagem de migração do build pela Application `trajetto-api-migrate` de produção, como no staging, só se o digest dela não é o de `stable-applied` (se o deploy de produção está configurado; um build anterior à imagem de migração pula a etapa com aviso, e um posterior sem ela reprova antes de mover `stable`), move `stable` das duas imagens por digest (a IA só se o build tiver essa imagem), pede o deploy das Applications de produção na mesma ordem (se configurado) e espera a convergência da API (SSH por padrão; `ROLLOUT_VERIFY=http` usa a liveness pública).                                                                                                                                         |
+| `release`            | depois da promoção, só no push em `main`: `semantic-release` cria a tag, o `CHANGELOG.md` (commit com `[skip ci]`) e o GitHub Release.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
 
-Antes do push, o `build-and-push` carrega a imagem da API no runner e roda um
-smoke test contra um Postgres e um Redis descartáveis, numa rede interna sem
-saída para a internet (a CLI do Prisma não pode baixar engine): o modo
-`migrate` (a etapa de release) aplica todas as migrations num banco vazio e
-roda os seeds; depois o comando padrão sobe e precisa passar no próprio
-HEALTHCHECK, responder este commit em `/health/liveness` e 200 em
-`/health/readiness`. Se falhar, nada vai para o GHCR. O push seguinte publica
-o mesmo build, do cache do builder.
+Antes do push, o `build-and-push` carrega as imagens da API e de migração no
+runner e roda um smoke test contra um Postgres e um Redis descartáveis, numa
+rede interna sem saída para a internet (a CLI do Prisma não pode baixar
+engine): confere que a imagem da API não traz o CLI, migrations nem seeds e
+traz `build/schema-version.json`; sobe a API no banco vazio e exige que ela
+**recuse** (a trava de schema); roda a imagem de migração como a Application
+dela a roda (comando `release`, só com o Environment daquela Application:
+`DATABASE_URL`, `ALLOW_EMPTY_DATABASE_BOOTSTRAP` e as duas `MASTER_USER_*`),
+que aplica todas as migrations e os seeds e precisa ficar saudável (o
+próprio `HEALTHCHECK`); e sobe a API de novo, que precisa passar no
+próprio HEALTHCHECK, responder este commit em `/health/liveness` e 200 em
+`/health/readiness`. Se falhar, nada vai para o GHCR. Os pushes seguintes
+publicam os mesmos builds, do cache do builder. Uma imagem de migração
+reaproveitada é baixada do GHCR por digest e é ela que roda no smoke test: é
+a que o deploy vai rodar.
 
 Permissões: o workflow inteiro tem `contents: read`; só `build-and-push`,
 `deploy-staging` e `promote-production` pedem `packages: write`;
@@ -261,7 +285,7 @@ guardam cada item, em `tests/unitaires/lifecycle`):
 | Uma consulta ao GHCR com erro passageiro virava "a tag não existe" (`2>/dev/null \|\| true`)                            | `.github/scripts/ghcr.sh`: só o "not found" do GHCR é resposta vazia; qualquer outro erro repete (5 tentativas, pausa de 5 s dobrando, `::warning::` com a contagem) e depois falha dizendo que o GHCR está fora. Mover uma tag também repete (é idempotente)                                                                                                                  | `ghcr-script.test.ts`, `staging-deploy-workflow.test.ts` |
 | O download do banco do Trivy (com limite de taxa) duas vezes por run, escondido junto com os achados                    | um download por run, com retentativa, num diretório que o cache do Actions guarda por dia; o scan usa `--skip-db-update`. Falha no download usa a cópia do cache; sem cópia, o scan não roda e o resumo diz isso. Só um achado reprova, e só com `IMAGE_SCAN_ENFORCE=true`                                                                                                     | `ci-stability.test.ts`                                   |
 | Os pesos PP-OCRv5 da IA baixados de `www.modelscope.cn` em todo build sem cache (um pedido, sem retentativa)            | versionados em `infra/ai-ocr/models` (4,8 e 7,9 MB) e conferidos pelo `models.sha256` num `RUN --network=none`; o job `ai-ocr` usa o Buildx com o cache do GitHub                                                                                                                                                                                                              | `image-layers.test.ts`, `ci-stability.test.ts`           |
-| O `postinstall` do `@prisma/engines` baixa o schema engine de `binaries.prisma.sh` e falha calado                       | cache de `~/.cache/prisma` pela versão dos engines; o job `test` confere o engine antes do E2E e baixa de novo (até 3 vezes); o `Dockerfile` faz o mesmo nos dois `yarn install` e para o build com a causa                                                                                                                                                                    | `ci-stability.test.ts`, `image-layers.test.ts`           |
+| O `postinstall` do `@prisma/engines` baixa o schema engine de `binaries.prisma.sh` e falha calado                       | cache de `~/.cache/prisma` pela versão dos engines; o job `test` confere o engine antes do E2E e baixa de novo (até 3 vezes); o `Dockerfile` faz o mesmo no `yarn install` da imagem de migração (a única que leva o CLI) e para o build com a causa                                                                                                                           | `ci-stability.test.ts`, `image-layers.test.ts`           |
 | Um erro de rede no `git ls-remote` dos irmãos caía calado na branch padrão                                              | só o código 2 ("a branch não existe") cai na padrão, com `::notice::`; outro código repete 3 vezes (10 s, 20 s) e falha                                                                                                                                                                                                                                                        | `compose-ci-siblings.test.ts`                            |
 | `git ls-remote \| cut` sem `pipefail`: uma falha virava "este run não é o head" e o deploy de staging era pulado, verde | `defaults.run.shell: bash` (`-eo pipefail`) nos três workflows; a leitura do head repete 3 vezes e só um sha válido decide; a leitura dos pais do merge (`gh api`) também repete                                                                                                                                                                                               | `ci-stability.test.ts`, `promote-workflow.test.ts`       |
 | Um erro passageiro da borda zerava a janela de 90 s da conferência pela liveness                                        | só uma resposta de outro commit zera; sondagem sem resposta não zera, e cada sequência delas vira `::warning::` com a contagem ([seção 14](#14-conferir-a-convergência))                                                                                                                                                                                                       | `wait-for-version.test.ts`                               |
@@ -341,13 +365,23 @@ Application:
 | ------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `DOKPLOY_URL`                                                            | secret `DOKPLOY_URL` do environment (precisa ser `https://`; a chave vai no cabeçalho)                                                                                                                                                                                                                                                                                                                                            |
 | `DOKPLOY_API_KEY`                                                        | secret `DOKPLOY_API_KEY` do environment (nunca é impressa)                                                                                                                                                                                                                                                                                                                                                                        |
-| `DOKPLOY_APPLICATION_ID`                                                 | `DOKPLOY_AI_APPLICATION_ID` ou `DOKPLOY_API_APPLICATION_ID`, conforme o passo                                                                                                                                                                                                                                                                                                                                                     |
-| `DOKPLOY_APP_LABEL`                                                      | `trajetto-ai` ou `trajetto-api` (só para as mensagens)                                                                                                                                                                                                                                                                                                                                                                            |
+| `DOKPLOY_APPLICATION_ID`                                                 | `DOKPLOY_AI_APPLICATION_ID`, `DOKPLOY_API_APPLICATION_ID` ou `DOKPLOY_MIGRATE_APPLICATION_ID`, conforme o passo                                                                                                                                                                                                                                                                                                                   |
+| `DOKPLOY_APP_LABEL`                                                      | `trajetto-ai`, `trajetto-api` ou `trajetto-api-migrate` (só para as mensagens)                                                                                                                                                                                                                                                                                                                                                    |
 | `DOKPLOY_OPTIONAL`                                                       | `true` no passo da IA: sem o id, o passo termina verde com aviso ("a Application ainda não existe"); no passo da API o id é obrigatório                                                                                                                                                                                                                                                                                           |
 | `DOKPLOY_WAIT`, `DOKPLOY_TIMEOUT_SECONDS`, `DOKPLOY_POLL_SECONDS`        | não definidas: valem `true`, 900 e 10                                                                                                                                                                                                                                                                                                                                                                                             |
 | `DOKPLOY_ATTEMPTS`, `DOKPLOY_RETRY_SECONDS`, `DOKPLOY_RETRY_MAX_SECONDS` | não definidas: valem 6, 20 e 160. Um deployment que termina em `error` é disparado de novo, com a espera dobrando a cada falha até o teto (20, 40, 80, 160, 160 s: até ~8 min de espera somada). O pull do GHCR que cai no meio (a rota IPv6 da VPS) passa numa tentativa seguinte, e o Docker guarda as camadas que já baixou. Com espera fixa de 20 s, o run 40551925038 falhou 3/3 na imagem da IA. `cancelled` não é repetido |
 
-A ordem importa: a IA vai primeiro porque a API a chama.
+A Application `trajetto-api-migrate` passa por
+`.github/scripts/dokploy-release.mjs` (testado em
+`tests/unitaires/lifecycle/dokploy-release.test.ts`), que antes confere a
+configuração dela (`application.one`), anota as tarefas do serviço
+(`docker.getServiceContainersByAppName`), chama este mesmo script para o
+deploy e depois espera a tarefa **nova** terminar a etapa
+([seção 15](#15-migrations), "Como a etapa roda"): o `done` do Dokploy só diz
+que o Swarm aceitou a spec, não que as migrations rodaram.
+
+A ordem importa: as migrations vão antes de tudo (a API nova recusa um banco
+sem elas), e a IA vai antes da API porque a API a chama.
 Os passos são sequenciais, e a tag `staging` de cada serviço só se move logo
 antes do deploy dele: **um deploy da IA que falha para o job antes de tocar
 na API** (a API antiga continua no ar, e a tag `staging` da API continua no
@@ -402,12 +436,13 @@ serviço publica porta no host. O backup do banco é o do próprio Database
 PostgreSQL (aba _Backups_), que envia as cópias ao Cloudflare R2
 ([seção 18](#18-backup-e-restauração)).
 
-| Serviço (App Name em produção) | Tipo no Dokploy       | Imagem                                   | Porta interna  | Réplicas                              | Health                                    | Limites                        |
-| ------------------------------ | --------------------- | ---------------------------------------- | -------------- | ------------------------------------- | ----------------------------------------- | ------------------------------ |
-| `trajetto-api-production`      | Application (Docker)  | `trajetto-api:stable`                    | 3333 (domínio) | 2, rolling `start-first` com rollback | liveness no Swarm (`/health/liveness`)    | memória 1 GiB, heap 768 MB     |
-| `trajetto-ai-production`       | Application (Docker)  | `trajetto-ai:stable`                     | 8080           | 1                                     | `GET /health` (200 depois do aquecimento) | memória 1 GiB, 2 CPUs          |
-| `trajetto-postgres-production` | Database → PostgreSQL | `postgres:16-alpine` (fixado por digest) | 5432           | 1                                     | do Dokploy                                | sem teto, de propósito         |
-| `trajetto-redis-production`    | Database → Redis      | `redis:7-alpine`                         | 6379           | 1                                     | do Dokploy                                | memória 512 MiB (dados 256 MB) |
+| Serviço (App Name em produção)    | Tipo no Dokploy       | Imagem                                   | Porta interna  | Réplicas                              | Health                                                                       | Limites                        |
+| --------------------------------- | --------------------- | ---------------------------------------- | -------------- | ------------------------------------- | ---------------------------------------------------------------------------- | ------------------------------ |
+| `trajetto-api-production`         | Application (Docker)  | `trajetto-api:stable`                    | 3333 (domínio) | 2, rolling `start-first` com rollback | liveness no Swarm (`/health/liveness`)                                       | memória 1 GiB, heap 768 MB     |
+| `trajetto-ai-production`          | Application (Docker)  | `trajetto-ai:stable`                     | 8080           | 1                                     | `GET /health` (200 depois do aquecimento)                                    | memória 1 GiB, 2 CPUs          |
+| `trajetto-api-migrate-production` | Application (Docker)  | `trajetto-api-migrate:stable`            | nenhuma        | 1, _Restart Policy_ `none`            | o da imagem: saudável quando a etapa de release terminou; depois fica parado | nenhum (alguns MB parado)      |
+| `trajetto-postgres-production`    | Database → PostgreSQL | `postgres:16-alpine` (fixado por digest) | 5432           | 1                                     | do Dokploy                                                                   | sem teto, de propósito         |
+| `trajetto-redis-production`       | Database → Redis      | `redis:7-alpine`                         | 6379           | 1                                     | do Dokploy                                                                   | memória 512 MiB (dados 256 MB) |
 
 Em staging, troque `-production` por `-staging` e `:stable` por `:staging`.
 
@@ -434,10 +469,10 @@ O que isso muda no dia a dia:
   | Valor                           | Onde precisa estar, igual                                                                    |
   | ------------------------------- | -------------------------------------------------------------------------------------------- |
   | token da IA                     | `AI_TOKEN` na Application `trajetto-ai` **e** `AI_LOCAL_TOKEN` na Application `trajetto-api` |
-  | usuário/senha/banco do Postgres | o Database PostgreSQL, a `DATABASE_URL` e a `MIGRATION_DATABASE_URL` da API                  |
+  | usuário/senha/banco do Postgres | o Database PostgreSQL, a `DATABASE_URL` da API e a `DATABASE_URL` da `trajetto-api-migrate`  |
   | senha do Redis                  | o Database Redis (e o comando dele, se personalizado) **e** o `REDIS_URL` da API             |
   | App Name da IA                  | `AI_LOCAL_URL` da API                                                                        |
-  | App Name da API                 | variável `SWARM_API_SERVICE` do environment do GitHub e o comando restrito das migrations    |
+  | App Name da API                 | variável `SWARM_API_SERVICE` do environment do GitHub (só a conferência por SSH)             |
 
 - **Variáveis que o compose montava ou fixava agora são explícitas** na API:
   `AI_LOCAL_URL`, `NODE_OPTIONS`, `RATE_LIMIT_TRUSTED_PROXY`, `APP_ENV`. E
@@ -466,7 +501,7 @@ O que isso muda no dia a dia:
 | Redis sem persistência, `--maxmemory 256mb --maxmemory-policy allkeys-lru`, senha obrigatória        | senha: o Database Redis sempre tem. O resto: comando personalizado do Database ([seção 10](#10-postgres-e-redis)); se a sua versão não tiver o campo, **lacuna** (Redis com snapshot em disco e sem teto de memória)                                                                                                                                                                                                                                                                                                                        |
 | IA com `read_only`, `/tmp` em tmpfs e `cap_drop: ALL`                                                | **lacuna**: a Application não tem esses campos. Continua valendo o usuário 10001 (não root) da imagem, sem domínio e sem porta publicada                                                                                                                                                                                                                                                                                                                                                                                                    |
 | `REDIS_ENFORCE_AUTH` (transição de um Redis sem senha)                                               | não existe mais: o Redis do Dokploy nasce com senha                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| job de migrations na rede `<stack>_backend`, lendo o env de `<stack>_api`                            | o mesmo script, com `API_SERVICE=<App Name da API>` (obrigatória) no comando restrito e a rede `dokploy-network` por padrão ([seção 15](#15-migrations))                                                                                                                                                                                                                                                                                                                                                                                    |
+| job de migrations na rede `<stack>_backend`, lendo o env de `<stack>_api`                            | a Application `trajetto-api-migrate` de cada ambiente, na `dokploy-network`, com o próprio _Environment_ (só a URL do banco) e o deploy pedido pelo pipeline antes da API ([seção 15](#15-migrations))                                                                                                                                                                                                                                                                                                                                      |
 
 ## 6. Preparar o servidor (uma vez)
 
@@ -509,12 +544,12 @@ Dokploy, em environments diferentes).
    HTTPS_ ligado. Detalhes da borda na [seção 11](#11-domínios-tls-e-a-borda).
 6. **Credencial do GHCR** ([seção 7.3](#73-credencial-do-ghcr)): um token do
    GitHub que o Dokploy usa para puxar as imagens privadas.
-7. **Usuário de deploy** no host, no grupo `docker`, para o job de migrations e
-   a conferência do rollout ([seções 14](#14-conferir-a-convergência) e
-   [15](#15-migrations)). O SSH do host precisa aceitar conexões dos runners
-   do GitHub. Logado como esse usuário, rode `docker login ghcr.io` (usuário
-   do GitHub e, como senha, o mesmo token da credencial): o job de migrations
-   puxa a imagem.
+7. **Usuário de deploy** no host, no grupo `docker`, **só** se for usar a
+   conferência do rollout por SSH (`ROLLOUT_VERIFY=ssh`,
+   [seção 14](#14-conferir-a-convergência)); aí o SSH do host precisa aceitar
+   os runners do GitHub. As migrations não usam SSH: rodam pela Application
+   `trajetto-api-migrate` do Dokploy ([seção 15](#15-migrations)). Com
+   `ROLLOUT_VERIFY=http` (o que está em uso), nada do CI entra no host.
 8. **Firewall da VPS** ([6.1](#61-firewall-da-vps-contabo)) e **downloads do
    GHCR pelo IPv4** ([6.2](#62-downloads-do-ghcr-pelo-ipv4-preferência-do-sistema)).
 
@@ -640,26 +675,26 @@ environment `staging` e outra no `production`, cada uma no projeto
 
 ### 7.1 O que muda entre staging e produção
 
-| Item                                                                                                   | Staging                                                                                                                               | Produção                                                                                |
-| ------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
-| environment do Dokploy                                                                                 | `staging`                                                                                                                             | `production`                                                                            |
-| sufixo dos App Names                                                                                   | aleatório, gerado pelo Dokploy ([seção 7.2](#72-nomes-name-e-app-name))                                                               | aleatório, gerado pelo Dokploy                                                          |
-| tag das imagens (`trajetto-api`, `trajetto-ai`)                                                        | `:staging`                                                                                                                            | `:stable` (crie antes: [seção 8](#8-primeiro-deploy-na-ordem-com-conferências))         |
-| domínio da API                                                                                         | `api-staging.intrajetto.com`                                                                                                          | `api.intrajetto.com`                                                                    |
-| `APP_ENV`                                                                                              | `staging`                                                                                                                             | `production`                                                                            |
-| `HTTP_REQUEST` / `API_HTTP_REQUEST`                                                                    | `https://staging.intrajetto.com` / `https://api-staging.intrajetto.com`                                                               | `https://www.intrajetto.com` / `https://api.intrajetto.com`                             |
-| `AI_LOCAL_URL`                                                                                         | `http://<App Name da IA de staging>:8080`                                                                                             | `http://<App Name da IA de produção>:8080`                                              |
-| segredos (senhas do Postgres e do Redis, `JWT_*`, token da IA, `WEBHOOK_SECRETS_KEY`, `DOCS_PASSWORD`) | **próprios**                                                                                                                          | **outros**; nunca compartilhe entre ambientes                                           |
-| `R2_*`                                                                                                 | bucket de staging (CORS para a web de staging)                                                                                        | bucket de produção                                                                      |
-| backup do banco (aba _Backups_ do PostgreSQL, [seção 18](#18-backup-e-restauração))                    | prefixo `trajetto-staging/` no bucket `trajetto-backups`                                                                              | prefixo `trajetto-production/`; recomendado um bucket próprio (`trajetto-backups-prod`) |
-| `META_WHATSAPP_*`, `RESEND_*`                                                                          | **de teste** (número de teste da Meta; domínio de teste)                                                                              | reais                                                                                   |
-| `RUN_MIGRATIONS_ON_BOOT`                                                                               | `true` (staging migra no boot)                                                                                                        | `true` até ligar o job; depois `false` ([seção 15](#15-migrations))                     |
-| `ALLOW_EMPTY_DATABASE_BOOTSTRAP`                                                                       | `true` **só** no primeiro boot                                                                                                        | `false` (`true` só numa instalação nova sem dados a restaurar, uma vez)                 |
-| IA                                                                                                     | opcional: sem a Application `trajetto-ai`, use `AI_PROVIDER=none` na API (economiza ~1 GiB)                                           | `trajetto-ai` com `AI_PROVIDER=local`                                                   |
-| `PROOF_SIGNING_*`                                                                                      | o certificado **de teste** ([seção 7.11](#711-certificado-do-comprovante-a1-icp-brasil)), ou vazio (sem assinatura, e o PDF diz isso) | o certificado A1 (e-CNPJ)                                                               |
-| réplicas da API                                                                                        | 1 (hoje; 2 para testar duas réplicas)                                                                                                 | 2                                                                                       |
-| environment do GitHub                                                                                  | `staging` (sem revisores)                                                                                                             | `production` (revisores obrigatórios)                                                   |
-| `SWARM_API_SERVICE` (GitHub)                                                                           | `trajetto-api-staging`                                                                                                                | `trajetto-api-production`                                                               |
+| Item                                                                                                   | Staging                                                                                                                               | Produção                                                                                          |
+| ------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| environment do Dokploy                                                                                 | `staging`                                                                                                                             | `production`                                                                                      |
+| sufixo dos App Names                                                                                   | aleatório, gerado pelo Dokploy ([seção 7.2](#72-nomes-name-e-app-name))                                                               | aleatório, gerado pelo Dokploy                                                                    |
+| tag das imagens (`trajetto-api`, `trajetto-ai`, `trajetto-api-migrate`)                                | `:staging`                                                                                                                            | `:stable` (crie antes: [seção 8](#8-primeiro-deploy-na-ordem-com-conferências))                   |
+| domínio da API                                                                                         | `api-staging.intrajetto.com`                                                                                                          | `api.intrajetto.com`                                                                              |
+| `APP_ENV`                                                                                              | `staging`                                                                                                                             | `production`                                                                                      |
+| `HTTP_REQUEST` / `API_HTTP_REQUEST`                                                                    | `https://staging.intrajetto.com` / `https://api-staging.intrajetto.com`                                                               | `https://www.intrajetto.com` / `https://api.intrajetto.com`                                       |
+| `AI_LOCAL_URL`                                                                                         | `http://<App Name da IA de staging>:8080`                                                                                             | `http://<App Name da IA de produção>:8080`                                                        |
+| segredos (senhas do Postgres e do Redis, `JWT_*`, token da IA, `WEBHOOK_SECRETS_KEY`, `DOCS_PASSWORD`) | **próprios**                                                                                                                          | **outros**; nunca compartilhe entre ambientes                                                     |
+| `R2_*`                                                                                                 | bucket de staging (CORS para a web de staging)                                                                                        | bucket de produção                                                                                |
+| backup do banco (aba _Backups_ do PostgreSQL, [seção 18](#18-backup-e-restauração))                    | prefixo `trajetto-staging/` no bucket `trajetto-backups`                                                                              | prefixo `trajetto-production/`; recomendado um bucket próprio (`trajetto-backups-prod`)           |
+| `META_WHATSAPP_*`, `RESEND_*`                                                                          | **de teste** (número de teste da Meta; domínio de teste)                                                                              | reais                                                                                             |
+| Application `trajetto-api-migrate` ([seção 15](#15-migrations))                                        | App Name `trajetto-api-migrate-staging`, imagem `:staging`                                                                            | App Name `trajetto-api-migrate-production`, imagem `:stable`                                      |
+| `ALLOW_EMPTY_DATABASE_BOOTSTRAP`                                                                       | `true` **só** na `trajetto-api-migrate`, ao preparar o banco vazio (seção 8, passo 4); a API fica com `false`                         | `false` (`true` na `trajetto-api-migrate` só numa instalação nova sem dados a restaurar, uma vez) |
+| IA                                                                                                     | opcional: sem a Application `trajetto-ai`, use `AI_PROVIDER=none` na API (economiza ~1 GiB)                                           | `trajetto-ai` com `AI_PROVIDER=local`                                                             |
+| `PROOF_SIGNING_*`                                                                                      | o certificado **de teste** ([seção 7.11](#711-certificado-do-comprovante-a1-icp-brasil)), ou vazio (sem assinatura, e o PDF diz isso) | o certificado A1 (e-CNPJ)                                                                         |
+| réplicas da API                                                                                        | 1 (hoje; 2 para testar duas réplicas)                                                                                                 | 2                                                                                                 |
+| environment do GitHub                                                                                  | `staging` (sem revisores)                                                                                                             | `production` (revisores obrigatórios)                                                             |
+| `SWARM_API_SERVICE` (GitHub)                                                                           | `trajetto-api-staging`                                                                                                                | `trajetto-api-production`                                                                         |
 
 ### 7.2 Nomes: Name e App Name
 
@@ -676,13 +711,14 @@ Name sugerido (com o sufixo) ou digite o da tabela, se o diálogo deixar; depois
 de criado, ele não muda. Os passos 7.4 a 7.7 dizem `<o App Name sugerido>`
 para esse campo.
 
-| Serviço                     | Onde criar                               | Name                | App Name (staging)          | App Name (produção)            |
-| --------------------------- | ---------------------------------------- | ------------------- | --------------------------- | ------------------------------ |
-| banco                       | _Create Service → Database → PostgreSQL_ | `trajetto-postgres` | `trajetto-postgres-staging` | `trajetto-postgres-production` |
-| Redis                       | _Create Service → Database → Redis_      | `trajetto-redis`    | `trajetto-redis-staging`    | `trajetto-redis-production`    |
-| IA                          | _Create Service → Application_           | `trajetto-ai`       | `trajetto-ai-staging`       | `trajetto-ai-production`       |
-| API                         | _Create Service → Application_           | `trajetto-api`      | `trajetto-api-staging`      | `trajetto-api-production`      |
-| web (projeto `trajetto-ui`) | `trajetto-ui/docs/deploy.md`             | `trajetto-ui`       | `trajetto-ui-staging`       | `trajetto-ui-production`       |
+| Serviço                     | Onde criar                               | Name                   | App Name (staging)             | App Name (produção)               |
+| --------------------------- | ---------------------------------------- | ---------------------- | ------------------------------ | --------------------------------- |
+| banco                       | _Create Service → Database → PostgreSQL_ | `trajetto-postgres`    | `trajetto-postgres-staging`    | `trajetto-postgres-production`    |
+| Redis                       | _Create Service → Database → Redis_      | `trajetto-redis`       | `trajetto-redis-staging`       | `trajetto-redis-production`       |
+| IA                          | _Create Service → Application_           | `trajetto-ai`          | `trajetto-ai-staging`          | `trajetto-ai-production`          |
+| API                         | _Create Service → Application_           | `trajetto-api`         | `trajetto-api-staging`         | `trajetto-api-production`         |
+| migrations                  | _Create Service → Application_           | `trajetto-api-migrate` | `trajetto-api-migrate-staging` | `trajetto-api-migrate-production` |
+| web (projeto `trajetto-ui`) | `trajetto-ui/docs/deploy.md`             | `trajetto-ui`          | `trajetto-ui-staging`          | `trajetto-ui-production`          |
 
 Onde ver depois: o App Name aparece no topo da página do serviço (e na aba
 _General_ dos Databases, como _Internal Host_). No host, `docker service ls`
@@ -700,11 +736,14 @@ as imagens:
    (classic) → Generate new token (classic)_. Nome `dokploy-ghcr-pull`,
    validade a seu critério (anote a data para renovar), **só** o escopo
    `read:packages`. O GHCR não aceita tokens _fine-grained_. Copie o token.
-2. Ele vai em **cada** Application (seções 7.6 e 7.7), na aba
+2. Ele vai em **cada** Application (seções 7.6, 7.7 e 7.12), na aba
    _General_ → _Provider_ → _Docker_: _Registry URL_ `ghcr.io`, _Username_ =
    o usuário do GitHub dono do token, _Password_ = o token.
-3. O mesmo token serve para o `docker login ghcr.io` do usuário de deploy no
-   host ([seção 6](#6-preparar-o-servidor-uma-vez), passo 7) e para a web.
+3. O mesmo token serve para a web (`trajetto-ui/docs/deploy.md`). No host,
+   ninguém precisa de `docker login`: o Dokploy puxa com a credencial da
+   Application. Só quem for puxar uma imagem à mão (o `resolve` de um P3009
+   numa máquina que não a tem, [seção 15](#15-migrations)) faz um
+   `docker login ghcr.io` com ele.
 
 Se os pacotes forem públicos, os três campos ficam vazios. Sinal de que falta
 a credencial: o deployment da Application termina em `error` com
@@ -885,9 +924,8 @@ pipeline avisa "deploy de trajetto-ai pulado" e segue).
    LOG_LEVEL=info
 
    DATABASE_URL=postgresql://trajetto:<SENHA_DO_POSTGRES>@trajetto-postgres-production:5432/trajetto?schema=public&connection_limit=10&pool_timeout=20&connect_timeout=5&socket_timeout=60&max_idle_connection_lifetime=300&options=-c%20statement_timeout%3D30000%20-c%20lock_timeout%3D5000%20-c%20idle_in_transaction_session_timeout%3D60000
-   MIGRATION_DATABASE_URL=postgresql://trajetto:<SENHA_DO_POSTGRES>@trajetto-postgres-production:5432/trajetto?schema=public&connection_limit=2&connect_timeout=10
-   RUN_MIGRATIONS_ON_BOOT=true
    ALLOW_EMPTY_DATABASE_BOOTSTRAP=false
+   RUN_MIGRATIONS_ON_BOOT=false
 
    REDIS_URL=redis://:<SENHA_DO_REDIS>@trajetto-redis-production:6379
 
@@ -937,12 +975,23 @@ pipeline avisa "deploy de trajetto-ai pulado" e segue).
 
    Cuidados:
 
-   - Os parâmetros depois do `?` das duas URLs do banco são os mesmos do
-     compose antigo, um a um: o pool e os tetos de runtime na `DATABASE_URL`
-     ([`arquitetura.md`](./arquitetura.md#conexão-com-o-postgres)) e nenhum teto
-     na `MIGRATION_DATABASE_URL` (um `CREATE INDEX` cancelado no meio é uma
-     migration falhada). Copie inteiras; troque só a senha, o host e, se
-     mudou, usuário e banco.
+   - Os parâmetros depois do `?` da `DATABASE_URL` são os mesmos do compose
+     antigo, um a um: o pool e os tetos de runtime
+     ([`arquitetura.md`](./arquitetura.md#conexão-com-o-postgres)). Copie
+     inteira; troque só a senha, o host e, se mudou, usuário e banco.
+   - A URL **sem tetos** (`...?schema=public&connection_limit=2&connect_timeout=10`,
+     a antiga `MIGRATION_DATABASE_URL`) não vai aqui: é a `DATABASE_URL` da
+     Application `trajetto-api-migrate` (seção 7.12), porque um
+     `CREATE INDEX` cancelado no meio é uma migration falhada. Numa API
+     montada antes de 31/10/2026, a `MIGRATION_DATABASE_URL` pode sair: com
+     `RUN_MIGRATIONS_ON_BOOT=false`, nenhum build a lê na API (seção 15).
+   - `ALLOW_EMPTY_DATABASE_BOOTSTRAP` fica `false` na API sempre: quem prepara
+     um banco vazio é a etapa de release (seção 8, passo 4).
+   - `RUN_MIGRATIONS_ON_BOOT=false` não muda nada nas imagens de agora (elas
+     a ignoram), mas os builds de antes de 31/10/2026 (`main-<sha>` e os
+     `sha-<7>` anteriores à imagem de migração), que ainda servem de alvo de
+     rollback, a leem com padrão `true` e voltariam a migrar no boot. Não a
+     apague enquanto um deles puder voltar ([seção 15](#15-migrations)).
    - Senha com `@`, `/`, `:`, `#` ou `%` quebra a URL. As senhas geradas com
      `openssl rand -hex` não têm nenhum deles.
    - Não ponha aspas nem espaços em volta do `=`.
@@ -1039,8 +1088,14 @@ pipeline avisa "deploy de trajetto-ai pulado" e segue).
    no host depois de cada deploy (o deploy seguinte o desfaz); ver a lacuna
    na [seção 5](#5-applications-em-vez-de-compose-o-que-mudou-e-o-que-ficou-de-fora).
 
-9. **Deploy**. Acompanhe _Deployments_ e _Logs_ (o boot espera o Postgres,
-   migra, semeia e só então escuta a 3333).
+9. **Deploy**, depois de a `trajetto-api-migrate` ter rodado a etapa de
+   release (seção 7.12; num banco vazio, a seção 8, passo 4). No primeiro
+   deploy de um ambiente, quem faz esse Deploy é o pipeline, logo depois da
+   etapa: em staging, o run da seção 8, passo 4; em produção, o primeiro
+   promote com os quatro `DOKPLOY_*` (seção 8, "Produção", passo 4). Não
+   clique antes. Acompanhe _Deployments_ e _Logs_: o boot espera o Postgres,
+   confere que o banco tem todas as migrations do build e só então escuta
+   a 3333. Ele nunca migra.
 10. Anote o **applicationId** e confirme o App Name (seção 7.10).
 
 ### 7.8 O Traefik da API (o que os labels faziam)
@@ -1100,8 +1155,8 @@ manual e confira o arquivo no bucket.
 
 ### 7.10 Anotar o applicationId e o App Name
 
-O pipeline precisa, por ambiente, do **applicationId** de cada uma das duas
-Applications e do **App Name** da API.
+O pipeline precisa, por ambiente, do **applicationId** de cada uma das três
+Applications e do **App Name** da API (este só para a conferência por SSH).
 
 - **applicationId**: abra a Application no painel e olhe a barra de
   endereços. A URL termina em `.../services/application/<applicationId>`: é
@@ -1111,11 +1166,12 @@ Applications e do **App Name** da API.
   com sufixo (seção 7.2); confira no topo da página da Application ou com
   `docker service ls` no host.
 
-| Anotação                        | Vira no GitHub (environment do ambiente) |
-| ------------------------------- | ---------------------------------------- |
-| applicationId da `trajetto-api` | secret `DOKPLOY_API_APPLICATION_ID`      |
-| applicationId da `trajetto-ai`  | secret `DOKPLOY_AI_APPLICATION_ID`       |
-| App Name da `trajetto-api`      | variable `SWARM_API_SERVICE`             |
+| Anotação                                | Vira no GitHub (environment do ambiente) |
+| --------------------------------------- | ---------------------------------------- |
+| applicationId da `trajetto-api`         | secret `DOKPLOY_API_APPLICATION_ID`      |
+| applicationId da `trajetto-ai`          | secret `DOKPLOY_AI_APPLICATION_ID`       |
+| applicationId da `trajetto-api-migrate` | secret `DOKPLOY_MIGRATE_APPLICATION_ID`  |
+| App Name da `trajetto-api`              | variable `SWARM_API_SERVICE`             |
 
 A chave de API do Dokploy (`DOKPLOY_API_KEY`) é uma só para o painel inteiro:
 _Settings → Profile → API/CLI → Generate_ (o nome do menu varia entre
@@ -1234,16 +1290,27 @@ mostra uma vez `proof_signing_not_icp_brasil` com o motivo
 não pode aparecer: se aparecer, falta o intermediário no `.pfx` (exporte com a
 cadeia completa).
 
+### 7.12 `trajetto-api-migrate` (Application)
+
+A Application que roda as migrations e os seeds antes de cada deploy que os
+muda. O passo a passo, os quatro campos que importam (imagem, `DATABASE_URL`,
+_Restart Policy_ `none` e o applicationId no GitHub) e o porquê de cada um
+estão na [seção 15](#15-migrations), "Configurar a Application
+`trajetto-api-migrate`". Crie-a antes da `trajetto-api` (ou junto): a API não
+sobe num banco sem as migrations do build dela.
+
 ## 8. Primeiro deploy, na ordem, com conferências
 
-A ordem é **bancos → IA → API → backup do banco → web → app**. Cada passo só começa
+A ordem é **bancos → IA → migrations → API → backup do banco → web → app**. Cada passo só começa
 quando o anterior passou na conferência. Faça tudo em staging; depois repita
 em produção.
 
 1. **Imagens existem.** O primeiro push em `staging` (com o environment
    `staging` do GitHub ainda sem os secrets do Dokploy) termina verde e
-   publica `sha-<7>` e `staging` das duas imagens; o deploy aparece como
-   "pulado". Confira em _GitHub → Trajetto-Organization → Packages_.
+   publica `sha-<7>` das três imagens e `staging` da API e da IA; o deploy
+   aparece como "pulado". (A tag `staging` da imagem de migração só nasce no
+   primeiro deploy com o Dokploy configurado: é o pipeline que a move, logo
+   antes de rodar a etapa.) Confira em _GitHub → Trajetto-Organization → Packages_.
 2. **Postgres e Redis** (seções 7.4 e 7.5), com **Deploy** em cada um.
    Conferir:
    ```sh
@@ -1253,11 +1320,26 @@ em produção.
    ```
 3. **`trajetto-ai`** (seção 7.6). Conferir: `docker service ls` mostra
    `trajetto-ai-staging 1/1` (o healthcheck leva até ~1 min no aquecimento).
-4. **`trajetto-api`** (seção 7.7). No **primeiro boot de um banco vazio**,
-   ponha `ALLOW_EMPTY_DATABASE_BOOTSTRAP=true` no Environment antes do Deploy
-   e volte para `false` (Save) assim que a API subir. Em produção com dados
-   vindos do Portainer, **não**: siga a [seção 24](#24-migrar-do-portainer-para-o-dokploy)
-   e restaure antes. Conferir:
+4. **`trajetto-api-migrate` e `trajetto-api`** (seções 7.12 e 7.7), sem
+   Deploy manual: a API não migra e recusa um banco sem as migrations do
+   build, e quem as aplica é a etapa de release, que o pipeline roda antes da
+   API. Crie a `trajetto-api-migrate` ([seção 15](#15-migrations),
+   "Configurar a Application `trajetto-api-migrate`"); num **banco vazio**,
+   ponha no Environment dela, só para este primeiro deploy,
+   `ALLOW_EMPTY_DATABASE_BOOTSTRAP=true`, `MASTER_USER_EMAIL` e
+   `MASTER_USER_INITIAL_PASSWORD`. Crie a `trajetto-api` (seção 7.7, até o
+   passo 8). Configure o environment do GitHub ([seção 13](#13-configurar-o-github),
+   com os quatro `DOKPLOY_*`) e rode o pipeline (_Actions → Pipeline →
+   Run workflow_ na `staging`, ou um push): ele move
+   `trajetto-api-migrate:staging`, faz o deploy da Application de migração,
+   espera a etapa terminar (prepara o banco vazio e cria o usuário master) e
+   só então faz o deploy da IA e da API. Depois apague as três variáveis da
+   `trajetto-api-migrate` (Save; vale no próximo deploy). Em produção com
+   dados vindos do Portainer, **não** ligue a flag: siga a
+   [seção 24](#24-migrar-do-portainer-para-o-dokploy) e restaure antes.
+   Conferir (o passo do pipeline termina com "Migrations:
+   trajetto-api-migrate concluiu a etapa de release"):
+
    ```sh
    docker service ls | grep trajetto-api-staging                    # 2/2
    curl -s -o /dev/null -w '%{http_code}\n' https://api-staging.intrajetto.com/health/readiness   # 200
@@ -1265,15 +1347,29 @@ em produção.
    docker exec $(docker ps -q -f name=trajetto-api-staging | head -n 1) \
      wget -q -O - http://trajetto-ai-staging:8080/health               # resposta 200 do serviço
    ```
+
    E, logado como MASTER na web, _Sistema → Provedores_: a linha "Leitura de
    fotos (trajetto-ai)" sem erro (401 = os tokens dos dois lados diferem).
+
+   **Banco trocado depois** (Database recriado ou restaurado, servidor
+   refeito): a tag `staging-applied` (na produção, `stable-applied`)
+   registra o que rodou no banco **antigo**, e o pipeline pula a etapa para
+   o mesmo digest. Dê **Deploy** na `trajetto-api-migrate` do ambiente (num
+   ambiente que já rodou o pipeline, a tag `:staging` ou `:stable` dela
+   existe) e espere `Running` antes do deploy da API; num banco vazio, com
+   as três variáveis acima de novo. Não apague a versão de `-applied` no
+   GHCR para forçar o pipeline: ela é o mesmo digest de `sha-<7>`,
+   `src-<hash>` e da tag do ambiente da imagem de migração, e apagar a versão
+   apaga todas essas tags ([seção 22](#22-bucket-r2-e-retenção-no-ghcr)).
+
 5. **Backup do banco** (seção 7.9, passo a passo na
    [seção 18](#18-backup-e-restauração)): crie o backup na aba _Backups_ do
    Database PostgreSQL e rode um manual. Conferir o arquivo novo no bucket,
    sob o prefixo `trajetto-staging/`.
-6. **GitHub** ([seção 13](#13-configurar-o-github)): os secrets e variáveis do
-   environment `staging`. Um push em `staging` agora faz o deploy sozinho
-   (IA → API) e termina com "convergiu".
+6. **GitHub** ([seção 13](#13-configurar-o-github)): confira os secrets e
+   variáveis do environment `staging` (configurados no passo 4). Um push em
+   `staging` faz o deploy sozinho (migrations, se mudaram → IA → API) e
+   termina com "convergiu".
 7. **Web e app de staging**: `trajetto-ui/docs/deploy.md` e
    `trajetto-mobile/docs/deploy.md` (resumo na
    [seção 26](#26-os-três-repositórios-juntos)).
@@ -1284,15 +1380,32 @@ em produção.
    GitHub, _Actions → Pipeline (staging → produção) → Run workflow_ (branch
    `main`), `image_tag = sha-<7>` de um build verde de staging, e aprove o
    environment `production`. Como o environment `production` ainda não tem os
-   secrets do Dokploy, o job move `stable` das duas imagens e pula o deploy
-   com um aviso. Assim as Applications de produção já nascem em `:stable`.
-2. Seções 7.4 a 7.9 no environment `production`, com os valores de produção
-   (tabela 7.1). Vindo do Portainer, a [seção 24](#24-migrar-do-portainer-para-o-dokploy)
-   diz em que ponto restaurar o banco.
-3. As mesmas conferências, com `-production` e o host de produção.
+   secrets do Dokploy, o job move `stable` da API e da IA e pula o deploy
+   com um aviso. Assim as Applications de produção já nascem em `:stable`. A
+   `trajetto-api-migrate:stable` nasce no primeiro promote com os secrets: o
+   pipeline a move antes de rodar a etapa.
+2. Seções 7.4 a 7.9 e 7.12 no environment `production`, com os valores de
+   produção (tabela 7.1); a `trajetto-api` até o passo 8 da seção 7.7,
+   **sem Deploy** (a etapa de release ainda não rodou na produção, e ela
+   recusaria o banco). Num banco vazio de verdade, as três variáveis do
+   passo 4 do staging vão na `trajetto-api-migrate` de produção. Vindo do
+   Portainer, a [seção 24](#24-migrar-do-portainer-para-o-dokploy) diz em
+   que ponto restaurar o banco.
+3. As conferências do Postgres, do Redis e da `trajetto-ai` (passos 2 e 3 do
+   staging), com `-production`. A da API vem no passo 5.
 4. Os secrets do environment `production` no GitHub (com revisores
-   obrigatórios). A partir daí, todo merge em `main` promove e faz o deploy.
-5. Web de produção **depois** da API; app por último.
+   obrigatórios, e os quatro `DOKPLOY_*`) e, então, o **primeiro promote**:
+   o merge do PR `staging → main`, ou _Run workflow_ na `main` com o mesmo
+   `sha-<7>` do passo 1. Ele move `trajetto-api-migrate:stable` (que só
+   então passa a existir), roda a etapa de release na produção (um banco com
+   dados: só os seeds idempotentes, ou as migrations que faltarem; um banco
+   vazio: a preparação e o usuário master, e as três variáveis saem depois)
+   e só então faz o deploy da IA e da API. A partir daí, todo merge em `main`
+   promove e faz o deploy.
+5. As conferências da API, as do staging (passo 4) com `-production` e o
+   host de produção: `2/2`, `/health/readiness` 200, a IA alcançável de
+   dentro da API e _Sistema → Provedores_ sem erro.
+6. Web de produção **depois** da API; app por último.
 
 ## 9. O serviço de IA (`trajetto-ai`)
 
@@ -1422,9 +1535,17 @@ App Name na `dokploy-network`. O backup do Postgres é o do próprio Dokploy
   backup conferido.
 - **A API recusa banco vazio em produção**: o boot consulta
   `_prisma_migrations` e para com "Banco vazio em produção" se nenhuma
-  migration foi aplicada (volume novo, Database recriado). Numa instalação
-  nova de verdade, `ALLOW_EMPTY_DATABASE_BOOTSTRAP=true` uma única vez. Em
-  recuperação de desastre, restaure o dump **antes** de subir a API.
+  migration foi aplicada (volume novo, Database recriado), e a etapa de
+  release também. Numa instalação nova de verdade,
+  `ALLOW_EMPTY_DATABASE_BOOTSTRAP=true` só na `trajetto-api-migrate`, no
+  primeiro deploy dela ([seção 8](#8-primeiro-deploy-na-ordem-com-conferências),
+  passo 4). Em recuperação de desastre, restaure o dump **antes** de subir a
+  API. Depois de recriar ou restaurar o Database (ou refazer o servidor),
+  dê **Deploy** na `trajetto-api-migrate` do ambiente e espere `Running`
+  antes do deploy da API: a tag `<ambiente>-applied` registra o que rodou no
+  banco antigo, e o pipeline pularia a etapa para o mesmo digest
+  ([seção 8](#8-primeiro-deploy-na-ordem-com-conferências), passo 4;
+  [seção 18](#18-backup-e-restauração)).
 - **Imagem fixada** por digest no campo da imagem
   ([seção 7.4](#74-postgresql-database), passo 5). Trocar a versão maior
   (16 → 17) não é trocar a imagem: exige dump e restore.
@@ -1606,13 +1727,18 @@ _Add environment secret_ / _Add environment variable_.
 
 | Tipo     | Nome                                                                                    | Valor                                                                                                                                                                                                      | Obrigatório?                                                                               |
 | -------- | --------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
-| secret   | `DOKPLOY_URL`                                                                           | URL do painel, **https**: `https://dokploy.intrajetto.com`, pela Cloudflare (nunca o IP, que o firewall fecha; o script recusa http)                                                                       | sim (com os dois abaixo; nenhum dos três = deploy pulado com aviso)                        |
+| secret   | `DOKPLOY_URL`                                                                           | URL do painel, **https**: `https://dokploy.intrajetto.com`, pela Cloudflare (nunca o IP, que o firewall fecha; o script recusa http)                                                                       | sim (com os três abaixo; nenhum dos quatro = deploy pulado com aviso)                      |
 | secret   | `DOKPLOY_API_KEY`                                                                       | a chave da seção 7.10                                                                                                                                                                                      | sim                                                                                        |
 | secret   | `DOKPLOY_API_APPLICATION_ID`                                                            | applicationId da `trajetto-api` de staging                                                                                                                                                                 | sim                                                                                        |
+| secret   | `DOKPLOY_MIGRATE_APPLICATION_ID`                                                        | applicationId da `trajetto-api-migrate` de staging ([seção 15](#15-migrations))                                                                                                                            | sim                                                                                        |
 | secret   | `DOKPLOY_AI_APPLICATION_ID`                                                             | applicationId da `trajetto-ai` de staging                                                                                                                                                                  | não (sem ele: aviso e a IA não é atualizada)                                               |
 | variable | `API_PUBLIC_URL`                                                                        | a origem pública da API de staging, `https://api-staging.intrajetto.com` (sem barra no fim): o pipeline espera a `/health/liveness` dela responder o commit novo ([seção 14](#14-conferir-a-convergência)) | sim, enquanto `ROLLOUT_VERIFY` não for `off` nem `ssh` (é a conferência padrão do staging) |
 | variable | `SWARM_API_SERVICE`                                                                     | `trajetto-api-staging` (o App Name da API)                                                                                                                                                                 | só com `ROLLOUT_VERIFY=ssh`                                                                |
-| secrets  | `DEPLOY_SSH_HOST`, `DEPLOY_SSH_USER`, `DEPLOY_SSH_KNOWN_HOSTS`, `DEPLOY_VERIFY_SSH_KEY` | conferência do rollout ([seção 14](#14-conferir-a-convergência)); podem ficar no repositório, já que os dois ambientes dividem o host                                                                      | idem                                                                                       |
+| secrets  | `DEPLOY_SSH_HOST`, `DEPLOY_SSH_USER`, `DEPLOY_SSH_KNOWN_HOSTS`, `DEPLOY_VERIFY_SSH_KEY` | conferência do rollout ([seção 14](#14-conferir-a-convergência)); podem ficar no repositório, já que os dois ambientes dividem o host                                                                      | só com `ROLLOUT_VERIFY=ssh`                                                                |
+
+Sem o `DOKPLOY_MIGRATE_APPLICATION_ID`, com os outros três definidos, o job
+falha logo no começo ("configuração parcial"), antes de qualquer tag andar: a
+imagem da API não migra e não sobe num banco sem as migrations dela.
 
 **`production`** — marque **Required reviewers** (você e quem mais puder
 aprovar uma ida para produção) e, em _Deployment branches and tags_,
@@ -1623,13 +1749,15 @@ roda a partir de `main`):
 | -------- | --------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
 | secret   | `DOKPLOY_URL`, `DOKPLOY_API_KEY`                                                        | os mesmos do staging (um painel só)                                                        |
 | secret   | `DOKPLOY_API_APPLICATION_ID`                                                            | applicationId da `trajetto-api` de produção                                                |
+| secret   | `DOKPLOY_MIGRATE_APPLICATION_ID`                                                        | applicationId da `trajetto-api-migrate` de produção ([seção 15](#15-migrations))           |
 | secret   | `DOKPLOY_AI_APPLICATION_ID`                                                             | applicationId da `trajetto-ai` de produção                                                 |
 | variable | `API_PUBLIC_URL`                                                                        | a origem pública da API de produção; só é lida com `ROLLOUT_VERIFY=http` neste environment |
 | variable | `SWARM_API_SERVICE`                                                                     | `trajetto-api-production`                                                                  |
-| secrets  | `DEPLOY_SSH_HOST`, `DEPLOY_SSH_USER`, `DEPLOY_SSH_KNOWN_HOSTS`, `DEPLOY_VERIFY_SSH_KEY` | conferência do rollout                                                                     |
-| secret   | `DEPLOY_SSH_KEY`                                                                        | a chave das migrations ([seção 15](#15-migrations))                                        |
+| secrets  | `DEPLOY_SSH_HOST`, `DEPLOY_SSH_USER`, `DEPLOY_SSH_KNOWN_HOSTS`, `DEPLOY_VERIFY_SSH_KEY` | conferência do rollout (só sem `ROLLOUT_VERIFY=http`)                                      |
 
-Os três `DOKPLOY_*` obrigatórios de um environment: todos = deploy; nenhum =
+Os quatro `DOKPLOY_*` obrigatórios de um environment (`DOKPLOY_URL`,
+`DOKPLOY_API_KEY`, `DOKPLOY_API_APPLICATION_ID` e
+`DOKPLOY_MIGRATE_APPLICATION_ID`): todos = deploy; nenhum =
 o job move a tag e pula o deploy com aviso; só alguns = o job falha
 ("configuração parcial"). O `DOKPLOY_BACKUP_APPLICATION_ID` não existe
 mais (o backup é do Dokploy, sem Application): apague-o dos dois
@@ -1642,14 +1770,16 @@ _Settings → Secrets and variables → Actions_, abas _Secrets_ e _Variables_
 
 | Tipo     | Nome                      | Para quê                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | -------- | ------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| variable | `MIGRATIONS_VIA_JOB`      | `true` liga o job único de migrations no promote                                                                                                                                                                                                                                                                                                                                                                            |
 | variable | `ROLLOUT_VERIFY`          | como o run prova o rollout da API: `http` (padrão no staging) = a liveness pública responde o commit novo por 90 s; `ssh` (padrão na produção) = o Swarm, por SSH; `off` = nenhuma (só em emergência; fica registrado no resumo). Valor vazio ou desconhecido = o padrão do ambiente. Pode ser definida só num environment para valer só nele. Em uso em 29/10/2026: `http` nos dois ambientes (o SSH não está configurado) |
 | variable | `IMAGE_SCAN_ENFORCE`      | `true` faz um CRITICAL corrigível no Trivy falhar o build                                                                                                                                                                                                                                                                                                                                                                   |
 | secret   | `CLIENT_REPOS_READ_TOKEN` | token só leitura de `Trajetto-Organization/trajetto-ui` e `Trajetto-Organization/trajetto-mobile` (fine-grained, _Contents: Read-only_), para o contrato de rotas do `ci.yml`                                                                                                                                                                                                                                               |
 
 **Apague se existirem** (não são mais lidos por nada):
-`DOKPLOY_COMPOSE_ID` (dos dois environments: era o id do app Compose), a
-variável `STAGING_ENABLED` e os secrets `PORTAINER_WEBHOOK_URL` e
+`DOKPLOY_COMPOSE_ID` (dos dois environments: era o id do app Compose), as
+variáveis `STAGING_ENABLED` e `MIGRATIONS_VIA_JOB` (as migrations rodam pela
+Application `trajetto-api-migrate` desde 31/10/2026), o secret
+`DEPLOY_SSH_KEY` (a chave do antigo caminho por SSH das migrations, se chegou
+a ser criada) e os secrets `PORTAINER_WEBHOOK_URL` e
 `PORTAINER_STAGING_WEBHOOK_URL`.
 
 ### Proteção das branches
@@ -1739,8 +1869,8 @@ Instalação, uma vez, no host do Dokploy:
 sudo install -m 755 infra/scripts/verify-rollout.sh /usr/local/bin/trajetto-verify-rollout
 ```
 
-E uma chave **só para isso** no `~/.ssh/authorized_keys` do usuário de deploy,
-separada da chave das migrations — esta só lê:
+E uma chave **só para isso** no `~/.ssh/authorized_keys` do usuário de deploy
+— ela só lê:
 
 ```
 command="/usr/local/bin/trajetto-verify-rollout",no-pty,no-port-forwarding,no-agent-forwarding,no-X11-forwarding ssh-ed25519 AAAA... verify-trajetto
@@ -1765,71 +1895,190 @@ Desligar (só numa emergência, e fica registrado no resumo do run): variável
 
 ### Onde rodam
 
-| Modo                                                                                | Quando                                                                                                          | O que acontece numa migration que falha                                                                                                                                                              |
-| ----------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Boot de cada réplica** (`RUN_MIGRATIONS_ON_BOOT=true`, o padrão)                  | cada réplica da API que sobe roda `prisma migrate deploy` e os seeds antes do servidor                          | a réplica morre; a linha fica em `_prisma_migrations` com `finished_at` nulo e **toda** imagem, inclusive a antiga, passa a sair com P3009 no boot. O próximo restart de qualquer réplica vira queda |
-| **Job único antes do rollout** (`MIGRATIONS_VIA_JOB=true`, recomendado em produção) | a promoção roda `./docker-entrypoint.sh migrate` uma vez, como job do Swarm, com a imagem exata sendo promovida | o passo falha; `stable` não anda, o Dokploy não é chamado e as réplicas em produção nem percebem                                                                                                     |
+**Nunca no boot de uma réplica.** A imagem da API não traz o CLI do Prisma,
+o schema, as migrations nem os seeds. O boot (`docker-entrypoint.sh`, modo
+`serve`) espera o Postgres, recusa um banco vazio em produção e recusa um
+banco a que falte **qualquer** migration do build, não só a mais nova
+(`build/schema-version.json` lista todas; `infra/scripts/schema-guard.ts`):
+a réplica sai antes de servir, com as que faltam no log e o pedido de dar
+**Deploy** na Application `trajetto-api-migrate` do ambiente (rodar o
+pipeline de novo não basta depois de trocar ou restaurar o banco: ele pula
+a etapa quando `<ambiente>-applied` já é aquela imagem), e o Swarm
+(_start-first_, _failure action_ `rollback`) mantém as antigas.
 
-Staging migra no boot (o job só existe no promote); é lá que uma migration
-ruim deve aparecer primeiro.
+Quem migra é a **imagem de migração** (`trajetto-api-migrate`, estágio
+`migrate` do `Dockerfile`), rodando como uma **Application do Dokploy**, a
+`trajetto-api-migrate` de cada ambiente, **antes do rollout** e **só quando o
+banco ainda não aplicou aquela imagem**:
 
-Nos dois modos, `prisma migrate deploy` e os seeds usam
-`MIGRATION_DATABASE_URL` (definida na Application da API, sem tetos de runtime
-e com pool de 2). A `DATABASE_URL` de runtime leva `statement_timeout=30s` e
-`lock_timeout=5s`: um `CREATE INDEX` cancelado no meio é uma migration
-falhada. No modo `migrate`, o entrypoint roda `prisma migrate deploy`,
-`build/seed.js` e `build/import-violation-codes.js` de forma **estrita** e sai
-sem subir o servidor; no boot, uma falha de seed não derruba a réplica, mas
-aparece como `[entrypoint] ERRO: ...` no stderr.
+| Quando                                     | Quem chama                                                                                                                         | O que acontece numa migration que falha                                                                         |
+| ------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| deploy de staging                          | `deploy-staging`, passo _Run the database migrations on staging (Dokploy)_, com a imagem de migração **deste commit**              | o passo falha; nenhuma tag da API ou da IA anda, elas não são reimplantadas e o staging segue no build que roda |
+| promoção (merge em `main`, _Run workflow_) | `promote-production`, passo _Run the database migrations on production (Dokploy)_, com a imagem de migração **do build promovido** | o passo falha; `stable` não anda, nada é reimplantado e as réplicas de produção nem percebem                    |
+
+**Só quando precisa.** A imagem de migração é reconstruída apenas quando
+muda o que ela roda, como a da IA: `.github/scripts/migrate-source.sh` faz um
+hash de tudo que a etapa executa ou lê (as migrations e o `schema.prisma`, os
+seeds e os arquivos que eles importam, a planilha de infrações, o
+entrypoint, o `Dockerfile` e as dependências) e o build a etiqueta
+`src-<hash>`. Um push que não mexe em nada disso reaproveita a imagem
+anterior (mesmo digest) e só ganha a tag `sha-<7>` do commit. Cada ambiente
+guarda a última imagem que **terminou** de rodar no seu banco numa tag:
+`trajetto-api-migrate:staging-applied` e `:stable-applied`, movidas só depois
+do sucesso. Mesmo digest = as mesmas migrations e seeds já rodaram, e a etapa
+é pulada com um aviso. Uma etapa que falhou ou foi interrompida não move a
+tag, e o próximo run a roda de novo. Um teste
+(`tests/unitaires/lifecycle/migrate-source.test.ts`) empacota os scripts da
+etapa como o tsup e reprova se algum importar um arquivo fora da lista.
+
+Um build anterior à imagem de migração (`main-<sha>`, ou um _Run workflow_
+para um commit sem `infra/scripts/schema-guard.ts`) pula a etapa com aviso:
+a produção já aplicou todas as migrations que ele conhece. Um build
+posterior sem ela (o push falhou) reprova o promote antes de mover
+`stable`: rode o pipeline de staging desse commit de novo. Os passos só
+rodam quando o deploy do ambiente está configurado (os quatro `DOKPLOY_*`,
+incluindo `DOKPLOY_MIGRATE_APPLICATION_ID`).
+
+Até 31/10/2026 cada réplica migrava no boot (`RUN_MIGRATIONS_ON_BOOT`): uma
+migration que falhava, ou que passava do orçamento da liveness e era morta,
+deixava `_prisma_migrations` com `finished_at` nulo, e **toda** imagem,
+inclusive a antiga, passava a sair com P3009 no boot — o próximo restart de
+qualquer réplica virava queda. As réplicas também migravam juntas a cada
+rollout, e a imagem carregava o CLI. Os builds daquela época leem a variável
+com padrão `true`: por isso ela fica `false` na API enquanto eles puderem
+ser alvo de rollback ("Configurar a Application `trajetto-api-migrate`",
+passo 7, abaixo).
+
+O modo `release` do entrypoint (o comando padrão da imagem de migração) roda
+`prisma migrate deploy` (de `/app/migrate`, onde estão o CLI e o
+`prisma.config.ts`), `build/seed.js` e `build/import-violation-codes.js` de
+forma **estrita**, sem subir o servidor: qualquer erro reprova a etapa. Os
+dois seeds são idempotentes, e a importação da tabela de infrações é tudo ou
+nada: roda numa transação só, e um lote que falha desfaz a importação
+inteira e reprova a etapa (o banco fica com a tabela de antes). A etapa
+usa `MIGRATION_DATABASE_URL` quando existe e, sem ela, a `DATABASE_URL`,
+que na Application de migração já é a URL **sem os tetos de
+runtime**: a `DATABASE_URL` da API leva `statement_timeout=30s` e
+`lock_timeout=5s`, e um `CREATE INDEX` cancelado no meio é uma migration
+falhada.
 
 As regras para escrever uma migration (expandir/contrair, `lock_timeout`,
 índices) estão em [`arquitetura.md`](./arquitetura.md#migrations-expandir-e-contrair).
 
-### Ligar o job único (uma vez)
+### Como a etapa roda
 
-1. No host do Dokploy, instalar o script:
-   ```sh
-   sudo install -m 755 infra/scripts/run-release-migrations.sh /usr/local/bin/trajetto-release-migrate
+A Application `trajetto-api-migrate` é igual às outras (provider Docker,
+imagem do GHCR na tag do ambiente), com uma diferença: o comando da imagem
+migra, roda os seeds, grava um marcador e **fica parado**, sem servir nada.
+O `HEALTHCHECK` da imagem só passa quando o marcador existe. Assim o próprio
+Swarm diz o resultado na tarefa: `Starting` enquanto migra, `Running` quando
+terminou, `Failed` (com o código de saída) quando uma migration ou um seed
+falhou. O contêiner parado ocupa só alguns MB de memória até o próximo
+deploy.
+
+1. O pipeline lê a Application (`application.one`) e confere a configuração
+   antes de tocar no banco: a imagem certa (`:staging` ou `:stable`),
+   _Restart Policy_ `{"Condition":"none"}`, nenhum _Health Check_ próprio,
+   uma réplica e nenhum _Update Config_ `stop-first`. Algo diferente reprova
+   o passo dizendo o que mudar no painel, e nada é migrado.
+2. Anota as tarefas do serviço (`docker.getServiceContainersByAppName`, a
+   mesma lista da aba _Logs_; a tag do ambiente já foi movida para a imagem
+   de migração do build no passo anterior do workflow) e pede o deploy (o
+   mesmo `dokploy-deploy.mjs` das outras Applications, com as retentativas
+   de download). O Dokploy devolve essa lista **vazia** sempre que o
+   `docker service ps` escreve algo no stderr, e uma lista vazia tomada ao pé
+   da letra faria a tarefa parada da etapa anterior parecer nova: um sucesso
+   que não rodou. Por isso uma lista vazia é lida até três vezes e só é aceita
+   quando o histórico de `deployment.all` prova que nunca houve um deploy com
+   sucesso: nenhum deployment `done` e menos de 10 no histórico (o Dokploy
+   guarda só os 10 mais recentes, então um histórico cheio não prova nada).
+   Nos outros casos o passo reprova **antes** do deploy, e nada é migrado; se
+   o histórico encheu de falhas, um **Deploy** manual da
+   `trajetto-api-migrate` (seguro) volta a pôr um `done` nele.
+3. Lê as tarefas a cada 5 s até uma tarefa **nova** ficar `Running` (ou
+   `Complete`: sucesso) ou `Failed`/`Rejected`/`Orphaned` (falha), por até
+   30 min (`RELEASE_TIMEOUT_SECONDS`). Só as novas contam: com o _Update
+   Config_ padrão do Dokploy (_start-first_, _rollback_), uma etapa que falha
+   deixa a tarefa anterior, parada e saudável, em `Running`.
+4. Sucesso: move `<ambiente>-applied` e segue para a IA e a API. Falha: o
+   passo reprova, a API não é implantada, e o log da migration está no
+   Dokploy, em _Application `trajetto-api-migrate` → Logs_ (o Dokploy não
+   tem API de logs; o Swarm guarda o da tarefa que falhou). Estourou o
+   tempo: o passo falha, mas a etapa **não é interrompida** (matá-la no meio
+   de uma migration é o que gera P3009); acompanhe pela aba _Logs_.
+
+Nenhuma credencial do banco passa pelo CI: a `DATABASE_URL` mora no
+_Environment_ da Application, no Dokploy. Nenhuma chave SSH entra no host.
+
+**Medido em 31/10/2026** num Swarm de teste com a imagem real e o _Update
+Config_ padrão do Dokploy: primeira etapa num banco vazio em ~14 s; as
+seguintes, sem migration nova, em ~10 s; uma `DATABASE_URL` errada e um
+P3009 viraram `Failed` com o passo reprovado, mesmo com a tarefa anterior
+ainda `Running`; e o deploy seguinte, corrigido, passou.
+
+**Por que não um job do Swarm:** uma Application em modo `ReplicatedJob`
+nunca sobe, porque o Dokploy sempre manda `UpdateConfig` e o Docker recusa
+("Jobs may not have an update config", conferido em 31/10/2026 no Docker 27,
+inclusive com `UpdateConfig` vazio). Os _Schedules_ rodam `docker exec` num
+contêiner que já está de pé (a versão antiga) e seguram a requisição até o
+fim (a Cloudflare corta em 100 s). E um job criado por SSH exigia um usuário
+no host, uma chave por ambiente e a porta 22 aberta para o GitHub.
+
+**_Restart Policy_ `none` é obrigatória:** sem ela o Swarm usa `any`, repete
+uma migration que falhou sem parar, e o _rollback_ pode cortar uma repetição
+no meio (deixando P3009). O pipeline recusa a Application sem ela.
+
+### Configurar a Application `trajetto-api-migrate` (uma vez por ambiente)
+
+No mesmo projeto e ambiente do Dokploy da `trajetto-api` (staging e
+produção, cada um a sua):
+
+1. **Create Service → Application**: _Name_ `trajetto-api-migrate`; _App
+   Name_ `trajetto-api-migrate-staging` (produção:
+   `trajetto-api-migrate-production`; [seção 7.2](#72-nomes-name-e-app-name)).
+2. **General → Provider: Docker**: _Docker Image_
+   `ghcr.io/trajetto-organization/trajetto-api-migrate:staging` (produção:
+   `:stable`), com a mesma credencial do GHCR da API
+   ([seção 7.3](#73-credencial-do-ghcr)) → **Save**.
+3. **Environment** → **Save**:
    ```
-2. Uma chave SSH restrita ao script no `~/.ssh/authorized_keys` do usuário de
-   deploy (grupo `docker`). O comando diz qual serviço copiar — `API_SERVICE`
-   é obrigatória (o App Name da API de produção; sem ela o script recusa). A
-   rede padrão do job já é a `dokploy-network`:
+   DATABASE_URL=postgresql://trajetto:<SENHA_DO_POSTGRES>@<App Name do Postgres>:5432/trajetto?schema=public&connection_limit=2&connect_timeout=10
    ```
-   command="API_SERVICE=trajetto-api-production /usr/local/bin/trajetto-release-migrate",no-pty,no-port-forwarding,no-agent-forwarding,no-X11-forwarding ssh-ed25519 AAAA... deploy-trajetto
-   ```
-   O script só aceita `ghcr.io/trajetto-organization/trajetto-api:sha-<sha>`
-   (ou `main-<sha>` de builds antigos), numa linha só. Não reaproveite a chave
-   da conferência do rollout.
-3. `docker login ghcr.io` com esse usuário (token `read:packages`): o job usa
-   `--with-registry-auth`.
-4. GitHub (environment `production`): secrets `DEPLOY_SSH_HOST`,
-   `DEPLOY_SSH_USER`, `DEPLOY_SSH_KEY` e `DEPLOY_SSH_KNOWN_HOSTS`; e a
-   variável de repositório `MIGRATIONS_VIA_JOB=true`.
-5. Rodar uma promoção e conferir no passo _Run database migrations_ a linha
-   `[release-migrations] ok`.
-6. Só então `RUN_MIGRATIONS_ON_BOOT=false` no _Environment_ da Application
-   `trajetto-api` de produção (Save; vale a partir do próximo deploy).
+   A URL **sem** `statement_timeout` nem `lock_timeout` (os tetos da
+   `DATABASE_URL` da API): numa API montada antes de 31/10/2026, é o valor da
+   `MIGRATION_DATABASE_URL` dela. Nada mais: o seed não lê o Environment da
+   API. Numa **instalação nova** (banco vazio,
+   [seção 8](#8-primeiro-deploy-na-ordem-com-conferências)) acrescente, só
+   para o primeiro deploy, `ALLOW_EMPTY_DATABASE_BOOTSTRAP=true`,
+   `MASTER_USER_EMAIL` e `MASTER_USER_INITIAL_PASSWORD`, e apague-as depois.
+4. **Advanced → Swarm Settings → Restart Policy**: `{"Condition":"none"}` →
+   **Save**. Deixe _Health Check_, _Update Config_ e _Mode_ vazios, e
+   _Replicas_ em 1. Sem domínio e sem porta.
+5. **O id**: copie o `applicationId` da URL da Application
+   ([seção 7.10](#710-anotar-o-applicationid-e-o-app-name)) para o secret
+   `DOKPLOY_MIGRATE_APPLICATION_ID` do environment do GitHub (o de staging no
+   `staging`, o de produção no `production`; [seção 13](#13-configurar-o-github)).
+6. **Não precisa clicar em Deploy**: a tag `:staging` (ou `:stable`) da
+   imagem de migração só passa a existir quando o pipeline a move, e ele faz
+   o primeiro deploy. Um **Deploy** manual depois disso é seguro: roda a
+   etapa de novo (migrations já aplicadas não mudam nada). É o que se faz
+   depois de trocar o banco do ambiente
+   ([seção 18](#18-backup-e-restauração)): a tag `<ambiente>-applied` diz
+   o que rodou no banco antigo, e o pipeline pularia a etapa.
+7. **Nas duas Applications `trajetto-api`** (staging e produção): ponha
+   `RUN_MIGRATIONS_ON_BOOT=false` no _Environment_ (**Save** basta; as
+   imagens de depois de 31/10/2026 a ignoram) e **não a apague** enquanto um
+   build anterior a 31/10/2026 (`main-<sha>` e os `sha-<7>` de antes da
+   imagem de migração) puder ser alvo de rollback: eles leem a variável com
+   padrão `true` e voltariam a migrar no boot. A `MIGRATION_DATABASE_URL` da
+   API pode sair: nenhum build a lê ali (os de agora nunca; os de antes, só
+   quando migram no boot). Apague a variável de repositório
+   `MIGRATIONS_VIA_JOB` e o secret `DEPLOY_SSH_KEY`, se existirem (nada mais
+   os lê).
 
-O que o job faz: copia o env da API em execução (`docker service inspect
-trajetto-api-production`) para um arquivo `0600`, apagado assim que o job é
-criado (a senha do banco nunca mora no CI); `docker service create --mode
-replicated-job --restart-condition none --no-healthcheck` na rede
-`dokploy-network` (onde o Postgres está); espera até
-`MIGRATE_TIMEOUT_SECONDS` (900 s). Estourou ou a espera foi interrompida: o
-passo falha, mas o job **não é removido** (matá-lo no meio de uma migration é
-o que gera P3009) — acompanhe com `docker service logs -f <job>` e remova
-depois (`docker service ls --filter name=trajetto-migrate-`).
-
-Limites: imagens anteriores ao modo `migrate` fazem o job falhar e bloqueiam a
-promoção (sem estrago); para voltar a uma delas, desligue `MIGRATIONS_VIA_JOB`
-só nesse promote. O job usa o env da versão que está no ar: se a versão nova
-exige uma variável que a produção ainda não tem, acrescente-a ao Environment
-da Application **antes** do promote (salvar não reinicia nada; o próximo
-deploy usa).
-
-À mão, no host:
-`API_SERVICE=trajetto-api-production trajetto-release-migrate ghcr.io/trajetto-organization/trajetto-api:sha-<sha>`.
+Uma variável nova que a etapa precise vai no _Environment_ da
+`trajetto-api-migrate` (**Save** basta: o deploy do pipeline aplica o
+Environment salvo).
 
 ### P3009: uma migration ficou pela metade
 
@@ -1857,12 +2106,23 @@ migrations will not be applied`.
    dos dois estados e só então resolver. `--rolled-back` sem olhar é o erro
    clássico: se o DDL tinha commitado, o próximo deploy bate em `already
 exists` e volta ao P3009.
-5. Onde rodar o `resolve`: dentro de uma réplica em execução:
+5. Onde rodar o `resolve`: no host, com a imagem de migração que falhou (a
+   da API não traz o CLI; o host já a tem, porque acabou de rodá-la) e o
+   Environment da Application de migração daquele ambiente:
    ```sh
-   docker exec -it $(docker ps -q -f name=trajetto-api-production | head -n 1) \
-     ./node_modules/.bin/prisma migrate resolve --applied <nome>
+   APP=<App Name da trajetto-api-migrate>
+   IMAGE=$(docker service inspect --format '{{.Spec.TaskTemplate.ContainerSpec.Image}}' "$APP")
+   (umask 077; docker service inspect --format '{{range .Spec.TaskTemplate.ContainerSpec.Env}}{{println .}}{{end}}' "$APP" > /tmp/release.env)
+   docker run --rm --network dokploy-network --env-file /tmp/release.env \
+     -w /app/migrate --entrypoint sh "$IMAGE" \
+     -c 'DATABASE_URL="${MIGRATION_DATABASE_URL:-$DATABASE_URL}" ./node_modules/.bin/prisma migrate resolve --applied <nome>'
+   rm /tmp/release.env
    ```
-6. Rodar o job (ou a promoção) de novo.
+   Se o `docker run` disser que a imagem não existe no host (outra máquina),
+   faça antes `docker login ghcr.io` com o token da
+   [seção 7.3](#73-credencial-do-ghcr).
+6. Rodar a etapa de novo: o pipeline de novo, ou **Deploy** na Application
+   `trajetto-api-migrate` (e conferir a aba _Logs_).
 
 ### Contract pendente desta release
 
@@ -1931,8 +2191,10 @@ UPDATE "_prisma_migrations" SET checksum = '<sha256 do arquivo>'
    build; espera até 20 min se o deploy de staging dele ainda estiver em
    andamento, em vez de falhar pedindo um _re-run_), ou usa o build do commit
    mais próximo que o staging rodou, se o merge só muda documentação desde
-   ele (abaixo), compara com o staging, roda as migrations (se
-   `MIGRATIONS_VIA_JOB=true`), move `stable` das duas imagens, pede o deploy
+   ele (abaixo), compara com o staging, roda as migrations se a produção
+   ainda não aplicou a imagem de migração do build (Application
+   `trajetto-api-migrate`; [seção 15](#15-migrations)), move `stable`
+   das duas imagens, pede o deploy
    das Applications de produção (IA → API; a IA só se o digest dela mudou) e
    espera a convergência. Verde = o Swarm roda o digest promovido em todas as
    réplicas da API. O digest fica no resumo do run.
@@ -2015,6 +2277,12 @@ doc.
 
 ## 17. Rollback
 
+Um build anterior a 31/10/2026 (`main-<sha>` e os `sha-<7>` de antes da
+imagem de migração) volta a migrar no boot se a `trajetto-api` não tiver
+`RUN_MIGRATIONS_ON_BOOT=false` no _Environment_: ele lê a variável com
+padrão `true` ([seção 15](#15-migrations)). Confira antes de voltar para um
+deles.
+
 ### Caminho normal: promover o build bom
 
 1. Achar a tag boa: o resumo de uma promoção anterior registra
@@ -2054,8 +2322,11 @@ normal com a tag boa e, se mexeu no painel, **volte o _Docker Image_ para
 As migrations de uma versão ficam aplicadas quando a imagem volta. Uma imagem
 anterior só é segura sobre o schema novo se a versão nova seguiu
 expandir/contrair ([`arquitetura.md`](./arquitetura.md#migrations-expandir-e-contrair)).
-Com o job ligado, o promote de uma imagem anterior roda o `migrate deploy`
-dela, que não tem o que aplicar.
+O promote de uma imagem anterior roda a etapa de release com a imagem de
+migração dela quando o digest difere de `stable-applied`: as migrations dela
+já estão no banco (não há o que aplicar), e os seeds dela rodam de novo,
+idempotentes. Um build anterior à imagem de migração pula a etapa
+([seção 15](#15-migrations)).
 
 ### Quando o Swarm desiste de um serviço
 
@@ -2149,9 +2420,12 @@ banco `trajetto`. O Dokploy baixa a cópia do R2 e a restaura no Database.
 Num incidente real (banco perdido):
 
 1. Se o Database se perdeu, crie outro ([seção 7.4](#74-postgresql-database))
-   com o mesmo usuário, senha e nome de banco (ou ajuste as URLs da API).
-   **Não** ligue `ALLOW_EMPTY_DATABASE_BOOTSTRAP`: com ela a API migraria e
-   semearia um banco novo, por cima do qual o dump não restaura.
+   com o mesmo usuário, senha e nome de banco. Se o Database novo tiver
+   outro App Name (o App Name é o host da URL), ajuste a `DATABASE_URL` da
+   API **e** a da `trajetto-api-migrate` do ambiente.
+   **Não** ligue `ALLOW_EMPTY_DATABASE_BOOTSTRAP` (nem na API nem na
+   `trajetto-api-migrate`): com ela a etapa de release prepararia e semearia
+   um banco novo, por cima do qual o dump não restaura.
 2. Pare a API: _Advanced → Cluster Settings → Replicas_ `0` → **Save** →
    **Deploy** (ou `docker service scale trajetto-api-production=0`, que dura
    até o próximo deploy). Desligue o backup agendado (_Enabled_) enquanto
@@ -2160,8 +2434,15 @@ Num incidente real (banco perdido):
 4. Volte as réplicas da API para `2` (**Save** → **Deploy**) e religue o
    backup.
 
-Um banco restaurado traz `_prisma_migrations` e passa pela guarda; as
-migrations mais novas que o dump rodam no boot (ou no job).
+Um banco restaurado traz `_prisma_migrations` e passa pela guarda de banco
+vazio. Se o dump é mais velho que o build no ar, a API recusa subir até as
+migrations que faltam rodarem: antes de voltar as réplicas (passo 4), dê
+**Deploy** na Application `trajetto-api-migrate` do ambiente e espere a
+tarefa ficar `Running` (aba _Logs_: "etapa de release concluída"). Não conte
+com o pipeline para isso: a tag `<ambiente>-applied` diz que a imagem de
+migração já rodou **no banco de antes**, e o próximo run pularia a etapa. O
+Deploy manual aplica as migrations que o dump não tem
+([seção 15](#15-migrations)).
 
 **Caminho manual** (baixar a cópia e restaurar à mão):
 
@@ -2315,7 +2596,6 @@ sem reiniciar os workers. Separar é isolamento, não correção de falha.
    ```
    WORKERS_ENABLED=true
    PIPELINE_SWEEP_INTERVAL_MS=2000
-   RUN_MIGRATIONS_ON_BOOT=false
    DATABASE_URL=postgresql://...?schema=public&connection_limit=4&pool_timeout=10&connect_timeout=5&socket_timeout=60&max_idle_connection_lifetime=300&options=...
    ```
    Sem domínio, 1 réplica, o mesmo _Swarm Settings_ e _Resources_ da API.
@@ -2596,14 +2876,17 @@ aparece em log nenhum. Em _R2 → bucket → Settings → CORS Policy_:
 Em staging, a origem é a web de staging. Não use `*`. O app não passa por
 CORS. O bucket é **privado**: toda leitura é URL assinada de curta duração.
 
-**Retenção no GHCR**: cada push em `staging` publica `sha-<7>` das duas
+**Retenção no GHCR**: cada push em `staging` publica `sha-<7>` das três
 imagens (a da IA, quando reaproveitada, é só uma tag a mais na mesma versão)
-e o marcador `staged-<7>`. Não há limpeza automática: as versões sem tag
+e o marcador `staged-<7>` da API e da IA. Não há limpeza automática: as versões sem tag
 incluem os manifestos de atestado e os índices que `stable` e `staging`
 usam, e apagá-las às cegas quebra imagens com tag. Limpe à mão, pelo painel
 do pacote, as `sha-<7>`/`staged-<7>` e `main-<sha>` antigas que não são
 `stable` nem `staging` (guarde as últimas como alvo de rollback). Na
-`trajetto-ai`, não apague a versão que a tag `src-<hash>` mais recente
+`trajetto-api-migrate`, guarde as mesmas `sha-<7>` que você guardar na
+`trajetto-api` (o rollback para um build roda a etapa com a imagem de
+migração dele), e não apague as versões que `staging-applied`,
+`stable-applied` e a `src-<hash>` mais recente apontam. Na `trajetto-ai`, não apague a versão que a tag `src-<hash>` mais recente
 aponta: sem ela, o próximo push reconstrói a IA (e a reimplanta).
 
 ## 23. Recursos da VPS e logs
@@ -2677,9 +2960,18 @@ uma API que sobe sobre o banco errado para em vez de semear por cima.
    docker exec pg-antigo pg_dump -U <usuário> -d <banco> -Fc > trajetto-migracao.dump
    docker rm -f pg-antigo
    ```
-5. **API** (7.7) com `ALLOW_EMPTY_DATABASE_BOOTSTRAP=false`. Se ela subir, o
-   banco é o certo (num banco vazio a guarda derruba o boot). Depois o backup
-   do Database (7.9) e os secrets do GitHub.
+5. **`trajetto-api-migrate` e API** (7.12 e 7.7, a API sem Deploy), sem
+   `ALLOW_EMPTY_DATABASE_BOOTSTRAP` em nenhuma das duas: o dump é de uma
+   versão antiga, e a API recusa o banco até as migrations dela rodarem.
+   Configure os secrets do environment `production` do GitHub (os quatro
+   `DOKPLOY_*`) e faça o primeiro promote
+   ([seção 8](#8-primeiro-deploy-na-ordem-com-conferências), "Produção",
+   passo 4): ele roda a etapa de release antes da API. Um **Deploy** manual
+   na `trajetto-api-migrate` (esperando `Running`) só serve depois que um
+   promote com os quatro `DOKPLOY_*` moveu `trajetto-api-migrate:stable`;
+   antes disso a tag não existe, e só o pipeline roda a etapa. Num banco
+   vazio, a etapa para na guarda de banco vazio, e nada é semeado: é o sinal
+   de que o banco não é o certo. Depois o backup do Database (7.9).
 6. **Conferir**: `/health/readiness` 200, login, contagem de algumas tabelas
    contra o dump.
 7. **Web** depois da API (`trajetto-ui/docs/deploy.md`).
@@ -2696,8 +2988,12 @@ está lá.
 
 Sem volume para reaproveitar: monte tudo (seções 6 e 7) até o Database,
 restaure o dump ([seção 18](#18-backup-e-restauração), "Restaurar a partir do
-R2"), crie a API e aponte o DNS. `ALLOW_EMPTY_DATABASE_BOOTSTRAP=true` só
-serve para uma instalação **sem** dados a restaurar.
+R2"), crie a `trajetto-api-migrate` e a API e aponte o DNS. Se a produção
+já tinha rodado a etapa no servidor antigo, `stable-applied` registra o
+banco de lá, e o promote do mesmo build a pularia: dê **Deploy** na
+`trajetto-api-migrate` nova (a `:stable` dela já existe) e espere `Running`
+antes do deploy da API. `ALLOW_EMPTY_DATABASE_BOOTSTRAP=true` só serve para
+uma instalação **sem** dados a restaurar.
 
 ## 25. Checklist do primeiro deploy
 
@@ -2706,8 +3002,9 @@ Na ordem:
 - [ ] Branch `staging` criada no GitHub a partir do estado que vai para
       produção; só merge commit habilitado; proteção de `main` e `staging`
       ([seção 13](#13-configurar-o-github)).
-- [ ] Primeiro push em `staging` verde: `sha-<7>` e `staging` das duas
-      imagens no GHCR (o deploy aparece como "pulado").
+- [ ] Primeiro push em `staging` verde: `sha-<7>` das três imagens e
+      `staging` da API e da IA no GHCR (o deploy aparece como "pulado"; a
+      `staging` da imagem de migração nasce no primeiro deploy).
 - [ ] VPS com Dokploy; `daemon.json` com rotação de log e Docker reiniciado;
       `infra/traefik/` aplicado ([seção 6](#6-preparar-o-servidor-uma-vez)).
 - [ ] Firewall da VPS com 80 e 443 só da Cloudflare, e nada respondendo
@@ -2718,7 +3015,7 @@ Na ordem:
 - [ ] DNS na Cloudflare (proxy, Full strict, TLS 1.2, Always HTTPS) para os
       hosts da API de produção e de staging.
 - [ ] Token classic `read:packages` do GHCR criado (e a data de renovação
-      anotada); `docker login ghcr.io` do usuário de deploy.
+      anotada), informado no provider Docker de cada Application.
 - [ ] Buckets R2: fotos de produção e de staging (com CORS); backup
       (`trajetto-backups`, e o recomendado `trajetto-backups-prod` para
       produção); um token por bucket; os _S3 Destinations_ no Dokploy
@@ -2731,36 +3028,56 @@ Na ordem:
       web), `DOCS_PASSWORD`.
 - [ ] **Staging**, no environment `staging` do Dokploy, projeto
       `trajetto-api`: Postgres → Redis (com o comando) → `trajetto-ai` →
-      `trajetto-api` (com `ALLOW_EMPTY_DATABASE_BOOTSTRAP=true` só no primeiro
-      boot) → backup do Database PostgreSQL (aba _Backups_, prefixo
-      `trajetto-staging/`, com um backup manual conferido no bucket), cada um
-      com a conferência da [seção 8](#8-primeiro-deploy-na-ordem-com-conferências).
-- [ ] Os dois applicationIds e o App Name da API anotados (seção 7.10).
+      `trajetto-api-migrate` (_Restart Policy_ `none`; no banco vazio, com
+      `ALLOW_EMPTY_DATABASE_BOOTSTRAP=true` e as `MASTER_USER_*` só no
+      primeiro deploy; seção 8, passo 4) → `trajetto-api` (sem Deploy: o
+      primeiro é do pipeline, três itens abaixo) → backup do
+      Database PostgreSQL (aba _Backups_, prefixo `trajetto-staging/`, com um
+      backup manual conferido no bucket), cada um com a conferência da
+      [seção 8](#8-primeiro-deploy-na-ordem-com-conferências).
+- [ ] Os três applicationIds e o App Name da API anotados (seção 7.10).
 - [ ] Environment `staging` no GitHub (`DOKPLOY_URL`, `DOKPLOY_API_KEY`,
-      `DOKPLOY_API_APPLICATION_ID`, `DOKPLOY_AI_APPLICATION_ID`,
-      `API_PUBLIC_URL`; `SWARM_API_SERVICE` e o SSH da conferência só com
-      `ROLLOUT_VERIFY=ssh`), sem `ROLLOUT_VERIFY=off`.
-- [ ] Um push em `staging` faz o deploy sozinho (IA → API), termina com "API:
-      … responde <commit>" e escreve o marcador `staged-<7>`.
+      `DOKPLOY_API_APPLICATION_ID`, `DOKPLOY_MIGRATE_APPLICATION_ID`,
+      `DOKPLOY_AI_APPLICATION_ID`, `API_PUBLIC_URL`; `SWARM_API_SERVICE`, os
+      `DEPLOY_SSH_*` e a chave da conferência só com `ROLLOUT_VERIFY=ssh`),
+      sem `ROLLOUT_VERIFY=off`.
+- [ ] Um push em `staging` roda a etapa de release (resumo: "Migrations:
+      trajetto-api-migrate concluiu a etapa de release", ou o aviso de que o
+      banco já aplicou aquela imagem), faz o deploy sozinho (IA → API),
+      termina com "API: … responde <commit>" e escreve o marcador
+      `staged-<7>`.
 - [ ] Tag `stable` criada pelo _Run workflow_ (seção 8, "Produção", passo 1).
-- [ ] **Produção**, no environment `production` do Dokploy, os mesmos quatro
+- [ ] **Produção**, no environment `production` do Dokploy, os mesmos cinco
       serviços e o backup do Database (prefixo `trajetto-production/`) com os
-      valores de produção; vindo do Portainer, a
+      valores de produção, a `trajetto-api` sem Deploy (o primeiro é do
+      promote, dois itens abaixo); conferidos o Postgres, o Redis e a IA;
+      vindo do Portainer, a
       [seção 24](#24-migrar-do-portainer-para-o-dokploy).
 - [ ] Environment `production` no GitHub com **revisores obrigatórios**,
-      _Deployment branches_ = `main`, os `DOKPLOY_*`, `SWARM_API_SERVICE` e SSH.
-- [ ] PR `staging → main`, merge commit, aprovação: promoção verde.
-- [ ] Job de migrations ligado ([seção 15](#15-migrations)) e, depois de um
-      promote com `[release-migrations] ok`, `RUN_MIGRATIONS_ON_BOOT=false` em
-      produção.
+      _Deployment branches_ = `main`, os quatro `DOKPLOY_*` (com o
+      `DOKPLOY_MIGRATE_APPLICATION_ID` de produção) e, sem
+      `ROLLOUT_VERIFY=http`, `SWARM_API_SERVICE`, os `DEPLOY_SSH_*` e a chave
+      da conferência.
+- [ ] Primeiro promote (PR `staging → main` com merge commit, ou _Run
+      workflow_ na `main` com o mesmo `sha-<7>` da tag `stable`), aprovação:
+      promoção verde, com "Migrations: trajetto-api-migrate concluiu a etapa
+      de release" no passo _Run the database migrations on production
+      (Dokploy)_ (ou o aviso de que o banco de produção já aplicou aquela
+      imagem); depois as conferências da API de produção (seção 8,
+      "Produção", passo 5).
 - [ ] `HEALTHCHECK_PING_URL` chegando 1/min; uma cópia diária nova no bucket
       (prefixo do ambiente); um ensaio de restore.
 - [ ] Certificado A1 do comprovante (`PROOF_SIGNING_*`) em produção;
       `proof_signing` em `/health/metrics`.
 - [ ] Web promovida **depois** da API (`trajetto-ui/docs/deploy.md`).
-- [ ] Apagar os secrets obsoletos (`DOKPLOY_COMPOSE_ID`, `DOKPLOY_BACKUP_APPLICATION_ID`,
-      `PORTAINER_*`, `STAGING_ENABLED`); se a Application `trajetto-backup`
-      chegou a ser criada no Dokploy, apagá-la.
+- [ ] Apagar os secrets e variáveis obsoletos do GitHub
+      (`DOKPLOY_COMPOSE_ID`, `DOKPLOY_BACKUP_APPLICATION_ID`, `PORTAINER_*`,
+      `STAGING_ENABLED`, `MIGRATIONS_VIA_JOB`, `DEPLOY_SSH_KEY`), se
+      existirem. No Environment das duas Applications `trajetto-api`:
+      `RUN_MIGRATIONS_ON_BOOT=false` (**não** apagar: os builds de antes de
+      31/10/2026 a leem com padrão `true`; seção 15) e, se quiser, sem a
+      `MIGRATION_DATABASE_URL`. Se a Application `trajetto-backup` chegou a
+      ser criada no Dokploy, apagá-la.
 
 ## 26. Os três repositórios juntos
 
@@ -2777,16 +3094,16 @@ Na ordem:
 
 ### Quem é quem
 
-|                             | API (`Trajetto-Organization/trajetto-api`)                                                                                                                                                                                                                                                                                                   | Web (`Trajetto-Organization/trajetto-ui`)                                                                                                                                                                       | App (`Trajetto-Organization/trajetto-mobile`)                                                                   |
-| --------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
-| Artefato                    | imagens `trajetto-api` e `trajetto-ai` em `ghcr.io/trajetto-organization/`                                                                                                                                                                                                                                                                   | imagem `ghcr.io/trajetto-organization/trajetto-ui`                                                                                                                                                              | APK/AAB (EAS Build) e OTA (EAS Update)                                                                          |
-| Onde roda                   | Dokploy, projeto `trajetto-api` de cada environment (`staging` e `production`): as Applications `trajetto-api` (2 réplicas, com domínio) e `trajetto-ai` (sem domínio), puxando as imagens do GHCR, e os Databases PostgreSQL (com o backup diário do próprio Dokploy para o Cloudflare R2) e Redis                                          | Dokploy, projeto `trajetto-ui` de cada environment: a Application `trajetto-ui`, puxando a imagem do GHCR                                                                                                       | no celular do motorista (APK interno em staging, Play Store em produção)                                        |
-| Nome no Dokploy / EAS       | App Names `trajetto-api-staging` e `trajetto-api-production` (e `trajetto-ai-*`, `trajetto-postgres-*`, `trajetto-redis-*`)                                                                                                                                                                                                                  | Application `trajetto-ui` no projeto `trajetto-ui` de cada environment (App Names `trajetto-ui-staging` e `trajetto-ui-production`)                                                                             | perfis, ambientes e canais `staging` e `production`                                                             |
-| Como o pipeline publica     | API do Dokploy (`.github/scripts/dokploy-deploy.mjs`): `application.deploy` de cada Application, na ordem IA → API, a IA só quando o digest muda, acompanhando cada deployment até o fim e disparando de novo, até 6 vezes e com espera crescente, o que termina em erro; depois espera a `/health/liveness` pública responder o commit novo | API do Dokploy com o **mesmo** `.github/scripts/dokploy-deploy.mjs` (cópia comparada por teste): `application.deploy` da Application `trajetto-ui`, acompanhando o deployment, depois espera o `/build-id.json` | `eas update` e `eas build`                                                                                      |
-| Secrets de deploy no GitHub | environments `staging` e `production`: `DOKPLOY_URL`, `DOKPLOY_API_KEY`, `DOKPLOY_API_APPLICATION_ID` (obrigatórios) e `DOKPLOY_AI_APPLICATION_ID` (opcional); variáveis `API_PUBLIC_URL` (a conferência pela liveness) e `SWARM_API_SERVICE` (a conferência por SSH)                                                                        | environments `staging` e `production`: `DOKPLOY_URL`, `DOKPLOY_API_KEY` e `DOKPLOY_UI_APPLICATION_ID`                                                                                                           | `EXPO_TOKEN` (repositório) e `EXPO_UPDATE_PRIVATE_KEY` (environments `staging` e `production`)                  |
-| Sem os secrets              | move as tags e pula o deploy com `::notice::`                                                                                                                                                                                                                                                                                                | move as tags e pula o deploy com aviso                                                                                                                                                                          | termina verde com aviso, sem publicar                                                                           |
-| De staging para produção    | promove por digest a imagem `sha-<7 do commit>` (tag `staging` → `stable`), sem rebuild, e exige o marcador `staged-<7 do commit>` no mesmo digest                                                                                                                                                                                           | igual à API, e exige o marcador `staged-<7 do commit>` no mesmo digest                                                                                                                                          | promove o **commit** verde em staging (a URL da API é embutida no build, então o artefato não pode ser o mesmo) |
-| Rollback                    | _Run workflow_ do `deploy.yml` com `image_tag=sha-<7>`                                                                                                                                                                                                                                                                                       | _Run workflow_ do `deploy.yml` com `image_tag=sha-<7>`                                                                                                                                                          | `ota-rollback.yml` (republica um grupo de OTA)                                                                  |
+|                             | API (`Trajetto-Organization/trajetto-api`)                                                                                                                                                                                                                                                                                                                                                                                                                               | Web (`Trajetto-Organization/trajetto-ui`)                                                                                                                                                                       | App (`Trajetto-Organization/trajetto-mobile`)                                                                   |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| Artefato                    | imagens `trajetto-api`, `trajetto-api-migrate` e `trajetto-ai` em `ghcr.io/trajetto-organization/`                                                                                                                                                                                                                                                                                                                                                                       | imagem `ghcr.io/trajetto-organization/trajetto-ui`                                                                                                                                                              | APK/AAB (EAS Build) e OTA (EAS Update)                                                                          |
+| Onde roda                   | Dokploy, projeto `trajetto-api` de cada environment (`staging` e `production`): as Applications `trajetto-api` (2 réplicas, com domínio), `trajetto-api-migrate` (as migrations, antes do deploy que as muda) e `trajetto-ai` (sem domínio), puxando as imagens do GHCR, e os Databases PostgreSQL (com o backup diário do próprio Dokploy para o Cloudflare R2) e Redis                                                                                                 | Dokploy, projeto `trajetto-ui` de cada environment: a Application `trajetto-ui`, puxando a imagem do GHCR                                                                                                       | no celular do motorista (APK interno em staging, Play Store em produção)                                        |
+| Nome no Dokploy / EAS       | App Names `trajetto-api-staging` e `trajetto-api-production` (e `trajetto-api-migrate-*`, `trajetto-ai-*`, `trajetto-postgres-*`, `trajetto-redis-*`)                                                                                                                                                                                                                                                                                                                    | Application `trajetto-ui` no projeto `trajetto-ui` de cada environment (App Names `trajetto-ui-staging` e `trajetto-ui-production`)                                                                             | perfis, ambientes e canais `staging` e `production`                                                             |
+| Como o pipeline publica     | API do Dokploy (`.github/scripts/dokploy-deploy.mjs`): quando as migrations mudaram, primeiro a `trajetto-api-migrate`, esperando a etapa terminar (`dokploy-release.mjs`); depois `application.deploy` de cada Application, na ordem IA → API, a IA só quando o digest muda, acompanhando cada deployment até o fim e disparando de novo, até 6 vezes e com espera crescente, o que termina em erro; depois espera a `/health/liveness` pública responder o commit novo | API do Dokploy com o **mesmo** `.github/scripts/dokploy-deploy.mjs` (cópia comparada por teste): `application.deploy` da Application `trajetto-ui`, acompanhando o deployment, depois espera o `/build-id.json` | `eas update` e `eas build`                                                                                      |
+| Secrets de deploy no GitHub | environments `staging` e `production`: `DOKPLOY_URL`, `DOKPLOY_API_KEY`, `DOKPLOY_API_APPLICATION_ID`, `DOKPLOY_MIGRATE_APPLICATION_ID` (obrigatórios) e `DOKPLOY_AI_APPLICATION_ID` (opcional); variáveis `API_PUBLIC_URL` (a conferência pela liveness) e `SWARM_API_SERVICE` (a conferência por SSH)                                                                                                                                                                  | environments `staging` e `production`: `DOKPLOY_URL`, `DOKPLOY_API_KEY` e `DOKPLOY_UI_APPLICATION_ID`                                                                                                           | `EXPO_TOKEN` (repositório) e `EXPO_UPDATE_PRIVATE_KEY` (environments `staging` e `production`)                  |
+| Sem os secrets              | move as tags e pula o deploy com `::notice::`                                                                                                                                                                                                                                                                                                                                                                                                                            | move as tags e pula o deploy com aviso                                                                                                                                                                          | termina verde com aviso, sem publicar                                                                           |
+| De staging para produção    | promove por digest a imagem `sha-<7 do commit>` (tag `staging` → `stable`), sem rebuild, e exige o marcador `staged-<7 do commit>` no mesmo digest                                                                                                                                                                                                                                                                                                                       | igual à API, e exige o marcador `staged-<7 do commit>` no mesmo digest                                                                                                                                          | promove o **commit** verde em staging (a URL da API é embutida no build, então o artefato não pode ser o mesmo) |
+| Rollback                    | _Run workflow_ do `deploy.yml` com `image_tag=sha-<7>`                                                                                                                                                                                                                                                                                                                                                                                                                   | _Run workflow_ do `deploy.yml` com `image_tag=sha-<7>`                                                                                                                                                          | `ota-rollback.yml` (republica um grupo de OTA)                                                                  |
 
 Regras comuns aos três: a branch `staging` recebe o trabalho (push direto do
 dono ou merge de PR) e todo push nela roda a validação completa e publica o
@@ -2802,7 +3119,7 @@ _classic_ `read:packages`, informado no provider Docker de cada Application.
 |                        | Staging                                                                           | Produção                                                           |
 | ---------------------- | --------------------------------------------------------------------------------- | ------------------------------------------------------------------ |
 | Web                    | `https://staging.intrajetto.com`                                                  | `https://www.intrajetto.com` (o apex `intrajetto.com` redireciona) |
-| API (REST e Socket.IO) | `https://api-staging.intrajetto.com`                                              | a definir, ex. `https://api.intrajetto.com`                        |
+| API (REST e Socket.IO) | `https://api-staging.intrajetto.com`                                              | `https://api.intrajetto.com` (no ar desde 29/10/2026)              |
 | Serviço de IA          | sem endereço público: `http://trajetto-ai-staging:8080` na rede `dokploy-network` | sem endereço público: `http://trajetto-ai-production:8080`         |
 
 ### O que precisa casar entre os repositórios
@@ -2836,7 +3153,8 @@ está detalhada no `docs/variaveis-de-ambiente.md` do repositório que a lê.
 2. **Servidor:** VPS com Dokploy, rotação de log no `/etc/docker/daemon.json`,
    Traefik ajustado com `trajetto-api/infra/traefik/`, DNS na Cloudflare (Full
    strict) para os hosts da web e da API, e um token _classic_
-   `read:packages` do GHCR (o mesmo serve para as três imagens: API, IA e web).
+   `read:packages` do GHCR (o mesmo serve para as quatro imagens: API,
+   migração, IA e web).
 3. **Contas externas:** buckets R2 de fotos (um por ambiente, CORS com a
    origem da web) e de backup do banco (`trajetto-backups`, com um prefixo
    por ambiente; recomendado um bucket próprio para produção,
@@ -2845,12 +3163,20 @@ está detalhada no `docs/variaveis-de-ambiente.md` do repositório que a lê.
 4. **API de staging** (manual da API), no projeto `trajetto-api` do
    environment `staging`, nesta ordem e conferindo cada um: Databases
    **PostgreSQL** e **Redis**; Application **`trajetto-ai`** (com o
-   `AI_TOKEN`); Application **`trajetto-api`** (com `AI_LOCAL_TOKEN` igual,
-   `AI_LOCAL_URL` apontando para a IA e as URLs do banco e do Redis); o
-   **backup** na aba _Backups_ do Database PostgreSQL (destino S3 no R2,
-   diário). Confira `/health/readiness` e, como
-   MASTER na web, _Sistema → Provedores_. Depois, os secrets `DOKPLOY_*` e a
-   variável `API_PUBLIC_URL` no environment `staging` da API.
+   `AI_TOKEN`); Application **`trajetto-api-migrate`** (a URL do banco sem
+   tetos e _Restart Policy_ `none`; num banco vazio, também
+   `ALLOW_EMPTY_DATABASE_BOOTSTRAP=true` e as `MASTER_USER_*` só no
+   primeiro deploy, apagadas depois; manual da API, seções 8 e 15);
+   Application **`trajetto-api`** (com `AI_LOCAL_TOKEN` igual,
+   `AI_LOCAL_URL` apontando para a IA e as URLs do banco e do Redis),
+   **sem Deploy**: ela recusa o banco até a etapa de release rodar. Depois,
+   os secrets `DOKPLOY_*` (os quatro obrigatórios, com o
+   `DOKPLOY_MIGRATE_APPLICATION_ID`) e a variável `API_PUBLIC_URL` no
+   environment `staging` da API, e um run do pipeline (push ou _Run
+   workflow_ na `staging`): ele roda as migrations e só então faz o deploy
+   da IA e da API. Confira `/health/readiness` e, como MASTER na web,
+   _Sistema → Provedores_. Por fim, o **backup** na aba _Backups_ do
+   Database PostgreSQL (destino S3 no R2, diário).
 5. **Web de staging** (Application `trajetto-ui` do projeto `trajetto-ui` no
    environment `staging`, manual da web): imagem
    `:staging`, `HTTP_REQUEST` e `PUBLIC_API_URL` apontando para a API de
@@ -2867,10 +3193,15 @@ está detalhada no `docs/variaveis-de-ambiente.md` do repositório que a lê.
 7. **Produção, na mesma ordem:** a tag `stable` da API criada antes (_Run
    workflow_ do `deploy.yml` da API com `image_tag=sha-<7>`, enquanto o
    environment `production` ainda não tem os secrets do Dokploy); as mesmas
-   peças (Databases com o backup, IA e API) no projeto `trajetto-api` do
-   environment `production`, já em `:stable`; os secrets de produção e o PR `staging → main` da API; depois a
-   Application `trajetto-ui` do environment `production` e o PR da web; por último o PR do
-   app, que gera o AAB de produção apontando para a API de produção.
+   peças (Databases com o backup, IA, migrations e API, esta sem Deploy) no
+   projeto `trajetto-api` do environment `production`, já em `:stable`; os
+   secrets de produção (os quatro `DOKPLOY_*`) e o primeiro promote da API
+   (o PR `staging → main`, ou _Run workflow_ na `main` com o mesmo
+   `sha-<7>`), que cria `trajetto-api-migrate:stable`, roda a etapa de
+   release e só então faz o deploy da API; as conferências da API; depois a
+   Application `trajetto-ui` do environment `production` e o PR da web; por
+   último o PR do app, que gera o AAB de produção apontando para a API de
+   produção.
 
 ### Ordem de cada release
 

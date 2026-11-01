@@ -657,7 +657,7 @@ describe.skipIf(!hasShell("bash"))(
             names.indexOf("Check the build exists in GHCR"),
           );
           expect(names.indexOf(CHECK)).toBeLessThan(
-            names.indexOf("Run database migrations (once, before the rollout)"),
+            names.indexOf("Do the migrations need to run?"),
           );
           expect(names.indexOf(CHECK)).toBeLessThan(
             names.indexOf("Promote image to stable"),

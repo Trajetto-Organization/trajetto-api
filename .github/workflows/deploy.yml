@@ -4,9 +4,13 @@ name: Pipeline (staging → produção)
 #
 #   push to staging ─▶ validation (audit, lint, typecheck, unit + coverage
 #                      floor, E2E against Postgres/Redis, AI pytest, gitleaks)
-#                  ─▶ build the two images ONCE ─▶ GHCR `sha-<sha>` (immutable);
-#                     the AI image is reused, not rebuilt, when infra/ai-ocr
-#                     is the same as in an image already built
+#                  ─▶ build the images ONCE ─▶ GHCR `sha-<sha>` (immutable);
+#                     the release image (migrations) and the AI image are
+#                     reused, not rebuilt, when their source is the same as
+#                     in an image already built
+#                  ─▶ the migrations, only when staging's database has not
+#                     applied that release image yet (Dokploy Application
+#                     trajetto-api-migrate), and only then the services
 #                  ─▶ per service, its `staging` tag moved by digest and then
 #                     Dokploy (staging Applications): the AI only if its
 #                     digest changed, then the API
@@ -19,7 +23,7 @@ name: Pipeline (staging → produção)
 #                             staging deployed (.github/scripts/staged-build.sh)
 #
 #   merge into main ─▶ PROMOTE: the exact digests staging validated, never a
-#                      rebuild ─▶ migrations (job) ─▶ `stable` ─▶ Dokploy
+#                      rebuild ─▶ migrations (when needed) ─▶ `stable` ─▶ Dokploy
 #                      (production Applications) ─▶ wait until Swarm runs them
 #                      ─▶ release (tag, CHANGELOG, GitHub Release)
 #
@@ -366,10 +370,13 @@ jobs:
     permissions:
       contents: read
       packages: write
-    # The digests this commit ships: staging is moved to exactly these bytes.
-    # The AI's is the image built here, or the one reused for the same source.
+    # The digests this commit ships: staging is moved to exactly these bytes,
+    # and its database migrated by exactly this release image. The release
+    # image and the AI's are the images built here, or the ones reused for
+    # the same source.
     outputs:
       api_digest: ${{ steps.build.outputs.digest }}
+      migrate_digest: ${{ steps.build-migrate.outputs.digest || steps.migrate-source.outputs.digest }}
       ai_digest: ${{ steps.build-ai.outputs.digest || steps.ai-source.outputs.digest }}
 
     steps:
@@ -402,6 +409,49 @@ jobs:
           tags: |
             type=sha,prefix=sha-
 
+      # The release image (Dockerfile, stage `migrate`): the API image plus
+      # the Prisma CLI, the migrations and the seeds. The deploys run it on
+      # the Dokploy Application trajetto-api-migrate before the API rolls
+      # out (deploy-staging, promote-production).
+      #
+      # Rebuilt only when what it runs changed, as the AI. Every file the
+      # release step runs or reads is listed in
+      # .github/scripts/migrate-source.sh, which hashes them into one key:
+      # the migrations and the schema, the seeds and the code they import,
+      # the entrypoint, the Dockerfile, the dependencies. Every build is also
+      # tagged `src-<key>`; a push that finds the tag reuses that image —
+      # same bytes, same digest — and only adds this commit's `sha-<sha>`.
+      # The deploys run the step only when that digest is not the one their
+      # database last applied, so a push that touches none of those files
+      # neither rebuilds the image nor runs the step again.
+      #
+      # "No such tag" builds; GHCR not answering fails the step after its
+      # retries (ghcr.sh).
+      - name: Is there a release image for this source already?
+        id: migrate-source
+        run: |
+          key=$(bash .github/scripts/migrate-source.sh)
+          echo "key=${key}" >> "$GITHUB_OUTPUT"
+          digest=$(bash .github/scripts/ghcr.sh digest "ghcr.io/trajetto-organization/trajetto-api-migrate:src-${key}")
+          if [ -n "$digest" ]; then
+            echo "build=false" >> "$GITHUB_OUTPUT"
+            echo "digest=${digest}" >> "$GITHUB_OUTPUT"
+            echo "trajetto-api-migrate: migrations, seeds e o que eles rodam iguais aos de src-${key::12}; imagem reaproveitada (${digest}), sem rebuild." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "build=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Extract metadata (release image)
+        id: meta-migrate
+        if: steps.migrate-source.outputs.build == 'true'
+        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5.10.0
+        with:
+          images: ghcr.io/trajetto-organization/trajetto-api-migrate
+          flavor: latest=false
+          tags: |
+            type=sha,prefix=sha-
+            type=raw,value=src-${{ steps.migrate-source.outputs.key }}
+
       # The API image runs BEFORE it is pushed (§14/§19: smoke test of the
       # final image; the `test` job runs the source, never the image).
       # Built into the runner's Docker only — no push, no attestations (the
@@ -413,6 +463,7 @@ jobs:
         with:
           context: .
           file: ./Dockerfile
+          target: runner
           push: false
           load: true
           tags: trajetto-api:smoke
@@ -421,17 +472,64 @@ jobs:
           build-args: |
             GIT_SHA=${{ github.sha }}
 
+      # On top of the API image just built: every layer up to the runner is
+      # CACHED, only the release image's own layers are new.
+      - name: Build the release image for the smoke test
+        if: steps.migrate-source.outputs.build == 'true'
+        uses: docker/build-push-action@ca052bb54ab0790a636c9b5f226502c73d547a25 # v5.4.0
+        with:
+          context: .
+          file: ./Dockerfile
+          target: migrate
+          push: false
+          load: true
+          tags: trajetto-api-migrate:smoke
+          labels: ${{ steps.meta-migrate.outputs.labels }}
+          cache-from: type=gha
+          build-args: |
+            GIT_SHA=${{ github.sha }}
+
+      # A reused release image is the one the deploys will run, so it is the
+      # one the smoke test runs: pulled by digest, under the same local name.
+      # A pull that fails is tried again; persistent, it fails as GHCR's.
+      - name: Pull the reused release image for the smoke test
+        if: steps.migrate-source.outputs.build == 'false'
+        env:
+          DIGEST: ${{ steps.migrate-source.outputs.digest }}
+        run: |
+          image="ghcr.io/trajetto-organization/trajetto-api-migrate@${DIGEST}"
+          for attempt in 1 2 3; do
+            if docker pull --quiet "$image" > /dev/null; then
+              docker tag "$image" trajetto-api-migrate:smoke
+              exit 0
+            fi
+            if [ "$attempt" -lt 3 ]; then
+              echo "::warning::Falha ao baixar ${image} do GHCR (tentativa ${attempt} de 3). De novo em $((attempt * 20))s."
+              sleep $((attempt * 20))
+            fi
+          done
+          echo "::error::Não deu para baixar ${image} do GHCR depois de 3 tentativas. Não é um problema do código."
+          exit 1
+
       # Liveness touches no dependency, but the process never gets there
-      # without Postgres: docker-entrypoint.sh waits for it and migrates
-      # before the server starts. So the image runs against a throwaway
-      # Postgres and Redis on an internal network — no route out, so the
-      # Prisma CLI must find its engines in the image instead of downloading
-      # them — the two ways a deploy runs it:
-      # - `migrate`, the release step: every migration on an empty database,
-      #   then the seeds, strictly (Prisma queries, bcrypt, ExcelJS reading
-      #   the infraction table);
-      # - the default command (staging migrates on boot): it must pass its
-      #   own HEALTHCHECK, report this commit on /health/liveness and be
+      # without Postgres: docker-entrypoint.sh waits for it and checks the
+      # schema before the server starts. So both images run against a
+      # throwaway Postgres and Redis on an internal network — no route out,
+      # so the Prisma CLI must find its engines in the image instead of
+      # downloading them — in the order a deploy runs them:
+      # - the API image carries no Prisma CLI, migrations or seeds, and
+      #   names the migration it was built for (build/schema-version.json);
+      # - on the empty database it REFUSES to start (the schema guard): a
+      #   replica never serves on a schema older than its build;
+      # - the release image, as the Dokploy Application runs it (its default
+      #   command, `release`) and with only the Environment that
+      #   Application has (the database URL; on an empty database also the
+      #   bootstrap flag and the master user): every migration, then the
+      #   seeds, strictly (Prisma queries, bcrypt, ExcelJS reading the
+      #   infraction table), until its own HEALTHCHECK reports the step
+      #   done — the signal dokploy-release.mjs waits for;
+      # - the API image again, now on the migrated database: it must pass
+      #   its own HEALTHCHECK, report this commit on /health/liveness and be
       #   ready (/health/readiness reaches the database).
       # Every value is random or a placeholder, lives only in these
       # containers and goes through an env file, never a command line. A
@@ -440,6 +538,7 @@ jobs:
       - name: Smoke test the API image
         env:
           IMAGE: trajetto-api:smoke
+          MIGRATE_IMAGE: trajetto-api-migrate:smoke
           # The majors production runs, pinned by the same digests as the
           # `test` job's services.
           POSTGRES_IMAGE: postgres:16-alpine@sha256:0cefaabd882e42bcb2a2f3dc56d3ce4770560ba62fd7f197f1a2e008fd5731ab
@@ -447,16 +546,19 @@ jobs:
         run: |
           net="api-smoke-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           envfile="${RUNNER_TEMP}/api-smoke.env"
+          releaseenv="${RUNNER_TEMP}/api-smoke-release.env"
           log="${RUNNER_TEMP}/api-smoke-migrate.log"
           pg=""
           redis=""
+          guard=""
+          release=""
           cid=""
           cleanup() {
-            for container in "$cid" "$pg" "$redis"; do
+            for container in "$cid" "$release" "$guard" "$pg" "$redis"; do
               [ -z "$container" ] || docker rm -f "$container" > /dev/null 2>&1 || true
             done
             docker network rm "$net" > /dev/null 2>&1 || true
-            rm -f "$envfile" "$log"
+            rm -f "$envfile" "$releaseenv" "$log"
           }
           trap cleanup EXIT
 
@@ -490,19 +592,52 @@ jobs:
               echo "R2_ACCESS_KEY_ID=smoke"
               echo "R2_SECRET_ACCESS_KEY=smoke"
             } > "$envfile"
+            # The release Application's Environment, and nothing more
+            # (docs/deploy.md, "Migrations"): a seed that needed the API's
+            # whole environment again would fail here.
+            grep -E '^(DATABASE_URL|ALLOW_EMPTY_DATABASE_BOOTSTRAP|MASTER_USER_EMAIL|MASTER_USER_INITIAL_PASSWORD)=' \
+              "$envfile" > "$releaseenv"
           )
+
+          # Before any database: what the API image does NOT carry.
+          if ! docker run --rm --entrypoint sh "$IMAGE" -c \
+            'test ! -e node_modules/prisma && test ! -e node_modules/@prisma/engines && test ! -e prisma && test ! -e prisma.config.ts && test ! -e build/seed.js && test -f build/schema-version.json'; then
+            fail "a imagem da API traz o CLI do Prisma, migrations ou seeds, ou não traz build/schema-version.json"
+          fi
 
           docker network create --internal "$net" > /dev/null
           pg=$(docker run -d --network "$net" --network-alias postgres \
             -e POSTGRES_HOST_AUTH_METHOD=trust -e POSTGRES_DB=trajetto "$POSTGRES_IMAGE")
           redis=$(docker run -d --network "$net" --network-alias redis "$REDIS_IMAGE")
 
-          # The entrypoint waits for Postgres itself (wait-for-postgres).
-          if ! docker run --rm --network "$net" --env-file "$envfile" \
-            "$IMAGE" ./docker-entrypoint.sh migrate > "$log" 2>&1; then
+          # The entrypoint waits for Postgres itself (wait-for-postgres),
+          # then refuses: nothing is migrated yet. A server that started
+          # instead never exits, and the wait times out.
+          guard=$(docker run -d --network "$net" --env-file "$envfile" "$IMAGE")
+          code=$(timeout 180 docker wait "$guard") || code=timeout
+          docker logs "$guard" > "$log" 2>&1 || true
+          if [ "$code" = "0" ] || [ "$code" = "timeout" ] || ! grep -q "não tem a migration" "$log"; then
             tail -n 100 "$log"
-            fail "a etapa de release (./docker-entrypoint.sh migrate) falhou num banco vazio"
+            fail "a API não recusou o banco sem as migrations dela (saída ${code})"
           fi
+
+          # Done = healthy (the marker); a failed step exits, as the task
+          # does in Swarm.
+          release=$(docker run -d --network "$net" --env-file "$releaseenv" \
+            --health-interval 2s "$MIGRATE_IMAGE")
+          state=""
+          for _ in $(seq 1 90); do
+            state=$(docker inspect --format '{{.State.Status}}/{{if .State.Health}}{{.State.Health.Status}}{{else}}sem-healthcheck{{end}}' "$release")
+            [ "$state" = "running/starting" ] || break
+            sleep 2
+          done
+          docker logs "$release" > "$log" 2>&1 || true
+          if [ "$state" != "running/healthy" ]; then
+            tail -n 100 "$log"
+            fail "a etapa de release (a imagem trajetto-api-migrate) não terminou num banco vazio (${state})"
+          fi
+          docker rm -f "$release" > /dev/null
+          release=""
 
           cid=$(docker run -d --network "$net" --env-file "$envfile" \
             --health-interval 2s --health-start-period 120s "$IMAGE")
@@ -522,7 +657,7 @@ jobs:
           docker exec "$cid" wget -q -O /dev/null http://127.0.0.1:3333/health/readiness \
             || fail "/health/readiness não respondeu 200 (banco)"
 
-          echo "trajetto-api: smoke test OK (migrations do zero e seeds no modo migrate, boot saudável e pronto sem rede externa, commit ${GITHUB_SHA::7})" >> "$GITHUB_STEP_SUMMARY"
+          echo "trajetto-api: smoke test OK (a API recusa o banco sem as migrations dela; a imagem de migração, só com o Environment da Application dela, aplica tudo do zero e os seeds e fica saudável; a API sobe saudável e pronta, sem rede externa, commit ${GITHUB_SHA::7})" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Build and push Docker image
         id: build
@@ -530,6 +665,7 @@ jobs:
         with:
           context: .
           file: ./Dockerfile
+          target: runner
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
@@ -548,8 +684,47 @@ jobs:
           build-args: |
             GIT_SHA=${{ github.sha }}
 
+      # The same build of the release image the smoke test ran, from the
+      # cache, with its own attestations. Its cache export is a superset of
+      # the API's (every stage up to the runner, plus its own). A reused
+      # image skips it.
+      - name: Build and push the release image
+        id: build-migrate
+        if: steps.migrate-source.outputs.build == 'true'
+        uses: docker/build-push-action@ca052bb54ab0790a636c9b5f226502c73d547a25 # v5.4.0
+        with:
+          context: .
+          file: ./Dockerfile
+          target: migrate
+          push: true
+          tags: ${{ steps.meta-migrate.outputs.tags }}
+          labels: ${{ steps.meta-migrate.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max,ignore-error=true
+          sbom: true
+          provenance: mode=max
+          build-args: |
+            GIT_SHA=${{ github.sha }}
+
+      # Registry-side, by digest, nothing pulled: this commit's `sha-<sha>`
+      # names the reused release image, so the promote finds the release
+      # image of every commit by the same name as the API's.
+      - name: Tag the reused release image for this commit
+        if: steps.migrate-source.outputs.build == 'false'
+        env:
+          DIGEST: ${{ steps.migrate-source.outputs.digest }}
+        run: |
+          bash .github/scripts/ghcr.sh tag \
+            "ghcr.io/trajetto-organization/trajetto-api-migrate:sha-${GITHUB_SHA::7}" \
+            "ghcr.io/trajetto-organization/trajetto-api-migrate@${DIGEST}"
+
       - name: Image digest
-        run: echo ${{ steps.build.outputs.digest }}
+        env:
+          API_DIGEST: ${{ steps.build.outputs.digest }}
+          MIGRATE_DIGEST: ${{ steps.build-migrate.outputs.digest || steps.migrate-source.outputs.digest }}
+        run: |
+          echo "trajetto-api@${API_DIGEST}"
+          echo "trajetto-api-migrate@${MIGRATE_DIGEST}"
 
       # The OCR service of the AI readings (infra/ai-ocr, ADR 0010), tagged
       # like the API — `sha-<sha>` — and moved with it to staging and stable.
@@ -774,8 +949,10 @@ jobs:
           TRIVY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
           TRIVY_IMAGE: aquasec/trivy:0.74.0@sha256:62b1e65e8869bc4b4c6aa4fa2b21595256c7c2f6018a9d9ad61caf87187c1969
           API_IMAGE: ghcr.io/trajetto-organization/trajetto-api@${{ steps.build.outputs.digest }}
-          # Reused or built: what this commit ships is what gets scanned, so
-          # a reused image meets today's vulnerability database too.
+          MIGRATE_IMAGE: ghcr.io/trajetto-organization/trajetto-api-migrate@${{ steps.build-migrate.outputs.digest || steps.migrate-source.outputs.digest }}
+          # Reused or built (the release image and the AI's): what this
+          # commit ships is what gets scanned, so a reused image meets
+          # today's vulnerability database too.
           AI_IMAGE: ghcr.io/trajetto-organization/trajetto-ai@${{ steps.build-ai.outputs.digest || steps.ai-source.outputs.digest }}
           ENFORCE: ${{ vars.IMAGE_SCAN_ENFORCE == 'true' }}
           DB: ${{ steps.trivy-db.outputs.db }}
@@ -791,7 +968,7 @@ jobs:
           fi
           cache="$HOME/.cache/trivy"
           found=""
-          for image in "$API_IMAGE" "$AI_IMAGE"; do
+          for image in "$API_IMAGE" "$MIGRATE_IMAGE" "$AI_IMAGE"; do
             name="${image%@*}"
             name="${name##*/}"
             status=error
@@ -844,11 +1021,13 @@ jobs:
       - name: Summary
         env:
           API_DIGEST: ${{ steps.build.outputs.digest }}
+          MIGRATE_DIGEST: ${{ steps.build-migrate.outputs.digest || steps.migrate-source.outputs.digest }}
           AI_DIGEST: ${{ steps.build-ai.outputs.digest || steps.ai-source.outputs.digest }}
         run: |
           {
-            echo "Imagens publicadas: trajetto-api e trajetto-ai em sha-${GITHUB_SHA::7}."
+            echo "Imagens deste commit (sha-${GITHUB_SHA::7}): trajetto-api, trajetto-api-migrate e trajetto-ai (as duas últimas construídas ou reaproveitadas)."
             echo "trajetto-api@${API_DIGEST}"
+            echo "trajetto-api-migrate@${MIGRATE_DIGEST}"
             echo "trajetto-ai@${AI_DIGEST}"
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -856,9 +1035,14 @@ jobs:
   # having it. Every push to staging lands here, and the environment is
   # cheap to break.
   #
-  # Per service, in the order the API needs (it calls the AI): move the
-  # service's `staging` tag to the digest this run built, then ask Dokploy to
-  # redeploy its Application, which pulls `:staging` again. The AI is
+  # First the database, when it needs it: if staging has not applied this
+  # commit's release image yet, the Dokploy Application trajetto-api-migrate
+  # runs it (migrations and seeds) and the run waits for the outcome. A
+  # failing migration stops the run there, before any tag of the API or the
+  # AI moves. Then, per service, in the order the API needs (it calls the
+  # AI): move the service's `staging` tag to the digest this run built, then
+  # ask Dokploy to redeploy its Application, which pulls `:staging` again.
+  # The AI is
   # redeployed only when its digest differs from the one `staging` had (an
   # image reused by its source is already running: a redeploy would only
   # restart it). Then the job waits until the public API answers this
@@ -873,8 +1057,9 @@ jobs:
   #
   # Before Dokploy exists the tags still move (so the image staging would run
   # is always visible in GHCR) and the deploy is skipped with a notice. To
-  # turn it on: secrets DOKPLOY_URL, DOKPLOY_API_KEY and DOKPLOY_API_APPLICATION_ID in
-  # the `staging` environment (docs/deploy.md, "GitHub").
+  # turn it on: secrets DOKPLOY_URL, DOKPLOY_API_KEY, DOKPLOY_API_APPLICATION_ID
+  # and DOKPLOY_MIGRATE_APPLICATION_ID in the `staging` environment
+  # (docs/deploy.md, "GitHub" and "Migrations").
   deploy-staging:
     name: Deploy staging
     runs-on: ubuntu-24.04
@@ -1023,21 +1208,88 @@ jobs:
           DOKPLOY_URL: ${{ secrets.DOKPLOY_URL }}
           DOKPLOY_API_KEY: ${{ secrets.DOKPLOY_API_KEY }}
           DOKPLOY_API_APPLICATION_ID: ${{ secrets.DOKPLOY_API_APPLICATION_ID }}
+          DOKPLOY_MIGRATE_APPLICATION_ID: ${{ secrets.DOKPLOY_MIGRATE_APPLICATION_ID }}
         run: |
           missing=""
           [ -n "$DOKPLOY_URL" ] || missing="$missing DOKPLOY_URL"
           [ -n "$DOKPLOY_API_KEY" ] || missing="$missing DOKPLOY_API_KEY"
           [ -n "$DOKPLOY_API_APPLICATION_ID" ] || missing="$missing DOKPLOY_API_APPLICATION_ID"
+          [ -n "$DOKPLOY_MIGRATE_APPLICATION_ID" ] || missing="$missing DOKPLOY_MIGRATE_APPLICATION_ID"
           if [ -z "$missing" ]; then
             echo "enabled=true" >> "$GITHUB_OUTPUT"
-          elif [ "$missing" = " DOKPLOY_URL DOKPLOY_API_KEY DOKPLOY_API_APPLICATION_ID" ]; then
+          elif [ "$missing" = " DOKPLOY_URL DOKPLOY_API_KEY DOKPLOY_API_APPLICATION_ID DOKPLOY_MIGRATE_APPLICATION_ID" ]; then
             echo "enabled=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::Deploy de staging pulado: o environment staging ainda não tem DOKPLOY_URL, DOKPLOY_API_KEY e DOKPLOY_API_APPLICATION_ID (docs/deploy.md). A tag staging já aponta para este build."
+            echo "::notice::Deploy de staging pulado: o environment staging ainda não tem DOKPLOY_URL, DOKPLOY_API_KEY, DOKPLOY_API_APPLICATION_ID e DOKPLOY_MIGRATE_APPLICATION_ID (docs/deploy.md). A tag staging já aponta para este build."
             echo "Deploy de staging **pulado**: Dokploy ainda não configurado. A tag \`staging\` já aponta para este build." >> "$GITHUB_STEP_SUMMARY"
           else
-            echo "::error::Configuração parcial do Dokploy no environment staging: faltam${missing} (docs/deploy.md)."
+            echo "::error::Configuração parcial do Dokploy no environment staging: faltam${missing} (docs/deploy.md; DOKPLOY_MIGRATE_APPLICATION_ID é o id da Application trajetto-api-migrate, seção Migrations)."
             exit 1
           fi
+
+      # The release step runs only when the database has not applied this
+      # release image yet. `trajetto-api-migrate:staging-applied` names the
+      # last one that FINISHED here: it moves only after the step succeeded
+      # (below), so a failed or interrupted step runs again on the next run.
+      # The same digest means the same migrations and seeds already ran — a
+      # push that touched none of them (migrate-source.sh) reuses the image,
+      # and nothing runs again. GHCR not answering fails here (ghcr.sh),
+      # before anything moved.
+      - name: Do the migrations need to run?
+        id: migrations
+        if: steps.head.outputs.current == 'true' && steps.dokploy.outputs.enabled == 'true'
+        env:
+          MIGRATE_DIGEST: ${{ needs.build-and-push.outputs.migrate_digest }}
+        run: |
+          applied=$(bash .github/scripts/ghcr.sh digest ghcr.io/trajetto-organization/trajetto-api-migrate:staging-applied)
+          if [ -n "$applied" ] && [ "$applied" = "$MIGRATE_DIGEST" ]; then
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Migrations: o banco de staging já aplicou trajetto-api-migrate@${MIGRATE_DIGEST} (migrations e seeds sem mudança); a etapa de release não roda."
+            echo "Migrations: sem mudança; o banco de staging já aplicou ${MIGRATE_DIGEST}." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      # The release Application runs `:staging`: the tag moves to this
+      # build's release image, by digest, right before its deploy.
+      - name: Move the release image's staging tag to this build
+        if: steps.head.outputs.current == 'true' && steps.migrations.outputs.run == 'true'
+        env:
+          MIGRATE_DIGEST: ${{ needs.build-and-push.outputs.migrate_digest }}
+        run: |
+          bash .github/scripts/ghcr.sh tag \
+            ghcr.io/trajetto-organization/trajetto-api-migrate:staging \
+            "ghcr.io/trajetto-organization/trajetto-api-migrate@${MIGRATE_DIGEST}"
+          echo "trajetto-api-migrate:staging → ${MIGRATE_DIGEST}" >> "$GITHUB_STEP_SUMMARY"
+
+      # The release step, ONCE, before the API or the AI moves: Dokploy
+      # redeploys the Application trajetto-api-migrate, and the run waits
+      # until Swarm reports the step finished or failed
+      # (dokploy-release.mjs). A failing migration fails HERE: no tag of the
+      # API or the AI moves, they are not redeployed, and staging keeps the
+      # build it runs. The API image cannot migrate (it carries no Prisma
+      # CLI) and refuses to boot on a database without its migrations.
+      # The database URL lives in the Application's Environment in Dokploy,
+      # never in CI. Setup: docs/deploy.md ("Migrations").
+      - name: Run the database migrations on staging (Dokploy)
+        if: steps.head.outputs.current == 'true' && steps.migrations.outputs.run == 'true'
+        env:
+          DOKPLOY_URL: ${{ secrets.DOKPLOY_URL }}
+          DOKPLOY_API_KEY: ${{ secrets.DOKPLOY_API_KEY }}
+          DOKPLOY_APPLICATION_ID: ${{ secrets.DOKPLOY_MIGRATE_APPLICATION_ID }}
+          DOKPLOY_APP_LABEL: trajetto-api-migrate
+          RELEASE_IMAGE: ghcr.io/trajetto-organization/trajetto-api-migrate:staging
+        run: node .github/scripts/dokploy-release.mjs
+
+      # Only now, after the step finished: the next run compares with this.
+      - name: Record the migrations as applied on staging
+        if: steps.head.outputs.current == 'true' && steps.migrations.outputs.run == 'true'
+        env:
+          MIGRATE_DIGEST: ${{ needs.build-and-push.outputs.migrate_digest }}
+        run: |
+          bash .github/scripts/ghcr.sh tag \
+            ghcr.io/trajetto-organization/trajetto-api-migrate:staging-applied \
+            "ghcr.io/trajetto-organization/trajetto-api-migrate@${MIGRATE_DIGEST}"
+          echo "trajetto-api-migrate:staging-applied → ${MIGRATE_DIGEST}" >> "$GITHUB_STEP_SUMMARY"
 
       # By digest, never by a tag that could have moved since the build. Only
       # when the AI changed: otherwise `staging` already names this digest.
@@ -1343,12 +1595,12 @@ jobs:
     # Required reviewers on this environment (Settings → Environments →
     # production) make every promote and rollback wait for an approval.
     environment: production
-    # Counted from the approval: migrations up to 15 min, six Dokploy
+    # Counted from the approval: the release step up to 30 min, six Dokploy
     # attempts per service with pauses up to 160 s, and the rollout check.
     timeout-minutes: 120
 
     # One promote at a time, never cancelled midway: two would race on
-    # `stable`, and a migration job must not be cut off.
+    # `stable`, and the wait on a migration must not be cut off.
     concurrency:
       group: promote-production
       cancel-in-progress: false
@@ -1517,43 +1769,126 @@ jobs:
             echo "${IMAGE_TAG} NÃO é o build de staging (${staging})." >> "$GITHUB_STEP_SUMMARY"
           fi
 
-      # The release step, ONCE, with the exact image being promoted, before
-      # `stable` moves and before production is redeployed. A failing
-      # migration fails HERE: nothing is promoted and the running replicas
-      # never notice. At the boot of every replica (the fallback while this is
-      # off) it left `_prisma_migrations` in P3009, refusing the boot of every
-      # image version until resolved by hand.
+      # As on staging: all four secrets deploy, none skips with a notice
+      # (`stable` still moves below, and the first Dokploy deploy will run
+      # it), some is a mistake and fails. Before the migrations: they run
+      # only for a production that deploys.
+      - name: Is the production deploy configured?
+        id: dokploy
+        env:
+          DOKPLOY_URL: ${{ secrets.DOKPLOY_URL }}
+          DOKPLOY_API_KEY: ${{ secrets.DOKPLOY_API_KEY }}
+          DOKPLOY_API_APPLICATION_ID: ${{ secrets.DOKPLOY_API_APPLICATION_ID }}
+          DOKPLOY_MIGRATE_APPLICATION_ID: ${{ secrets.DOKPLOY_MIGRATE_APPLICATION_ID }}
+        run: |
+          missing=""
+          [ -n "$DOKPLOY_URL" ] || missing="$missing DOKPLOY_URL"
+          [ -n "$DOKPLOY_API_KEY" ] || missing="$missing DOKPLOY_API_KEY"
+          [ -n "$DOKPLOY_API_APPLICATION_ID" ] || missing="$missing DOKPLOY_API_APPLICATION_ID"
+          [ -n "$DOKPLOY_MIGRATE_APPLICATION_ID" ] || missing="$missing DOKPLOY_MIGRATE_APPLICATION_ID"
+          if [ -z "$missing" ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          elif [ "$missing" = " DOKPLOY_URL DOKPLOY_API_KEY DOKPLOY_API_APPLICATION_ID DOKPLOY_MIGRATE_APPLICATION_ID" ]; then
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Deploy de produção pulado: o environment production ainda não tem DOKPLOY_URL, DOKPLOY_API_KEY, DOKPLOY_API_APPLICATION_ID e DOKPLOY_MIGRATE_APPLICATION_ID (docs/deploy.md). A tag stable já aponta para este build."
+            echo "Deploy de produção **pulado**: Dokploy ainda não configurado. A tag \`stable\` já aponta para este build." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "::error::Configuração parcial do Dokploy no environment production: faltam${missing} (docs/deploy.md; DOKPLOY_MIGRATE_APPLICATION_ID é o id da Application trajetto-api-migrate, seção Migrations)."
+            exit 1
+          fi
+
+      # The release step, ONCE, with the release image of the build being
+      # promoted, before `stable` moves and before production is redeployed,
+      # and only when production's database has not applied it yet:
+      # `trajetto-api-migrate:stable-applied` names the last one that
+      # FINISHED here (moved only after the step succeeded, below). The same
+      # digest means the same migrations and seeds already ran (a build that
+      # changed none of them reuses the release image: migrate-source.sh).
       #
-      # The key is restricted on the Swarm manager (the Dokploy host) to
-      # infra/scripts/run-release-migrations.sh (a forced command), which
-      # validates the image and reuses the running API service's env — no
-      # database credential lives in CI. docs/deploy.md ("Migrations") has the
-      # setup; switch on with the repository variable MIGRATIONS_VIA_JOB=true,
-      # then set RUN_MIGRATIONS_ON_BOOT=false in the production API Application.
-      - name: Run database migrations (once, before the rollout)
-        if: vars.MIGRATIONS_VIA_JOB == 'true'
+      # A build with no release image is skipped only when it provably
+      # predates it: a `main-<sha>` build, or a Run workflow rollback to a
+      # commit whose tree has no infra/scripts/schema-guard.ts (it came with
+      # the release image). Production has applied every migration such a
+      # build knows. Any other build without one lost its push (the API
+      # image is pushed first): that fails here, before `stable` moves,
+      # instead of shipping a build whose replicas refuse the database.
+      # GHCR not answering is not "no image": ghcr.sh fails the step.
+      - name: Do the migrations need to run?
+        id: migrations
+        if: steps.dokploy.outputs.enabled == 'true'
+        env:
+          EVENT: ${{ github.event_name }}
+          IMAGE_TAG: ${{ steps.staged.outputs.tag }}
+        run: |
+          digest=$(bash .github/scripts/ghcr.sh digest "ghcr.io/trajetto-organization/trajetto-api-migrate:${IMAGE_TAG}")
+          if [ -z "$digest" ]; then
+            presplit=false
+            case "$IMAGE_TAG" in
+              main-*) presplit=true ;;
+              sha-*)
+                if [ "$EVENT" = workflow_dispatch ] \
+                  && commit=$(git rev-parse --verify --quiet "${IMAGE_TAG#sha-}^{commit}") \
+                  && [ -z "$(git ls-tree --name-only "$commit" -- infra/scripts/schema-guard.ts)" ]; then
+                  presplit=true
+                fi
+                ;;
+            esac
+            if [ "$presplit" != true ]; then
+              echo "::error::ghcr.io/trajetto-organization/trajetto-api-migrate:${IMAGE_TAG} não existe, e o build é posterior à imagem de migração (o push dela falhou). Nada foi promovido: rode o pipeline de staging desse commit de novo."
+              exit 1
+            fi
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::${IMAGE_TAG} é anterior à imagem de migração (trajetto-api-migrate): a produção já aplicou todas as migrations desse build, e a etapa de release não roda."
+            echo "Migrations: etapa pulada; ${IMAGE_TAG} é anterior à imagem de migração." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          echo "digest=${digest}" >> "$GITHUB_OUTPUT"
+          applied=$(bash .github/scripts/ghcr.sh digest ghcr.io/trajetto-organization/trajetto-api-migrate:stable-applied)
+          if [ -n "$applied" ] && [ "$applied" = "$digest" ]; then
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Migrations: o banco de produção já aplicou trajetto-api-migrate:${IMAGE_TAG} (${digest}); a etapa de release não roda."
+            echo "Migrations: sem mudança; o banco de produção já aplicou ${digest}." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      # The production release Application runs `:stable`.
+      - name: Move the release image's stable tag to this build
+        if: steps.migrations.outputs.run == 'true'
         env:
           IMAGE_TAG: ${{ steps.staged.outputs.tag }}
-          SSH_HOST: ${{ secrets.DEPLOY_SSH_HOST }}
-          SSH_USER: ${{ secrets.DEPLOY_SSH_USER }}
-          SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
-          SSH_KNOWN_HOSTS: ${{ secrets.DEPLOY_SSH_KNOWN_HOSTS }}
+          MIGRATE_DIGEST: ${{ steps.migrations.outputs.digest }}
         run: |
-          install -m 700 -d ~/.ssh
-          printf '%s\n' "$SSH_KEY" > ~/.ssh/deploy_key
-          chmod 600 ~/.ssh/deploy_key
-          printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
-          # ServerAlive: the script is silent while it polls (up to 15 min),
-          # and the runner's NAT drops an idle TCP flow after a few minutes —
-          # the step would then hang on a session that is gone.
-          ssh -i ~/.ssh/deploy_key -o BatchMode=yes -o StrictHostKeyChecking=yes \
-            -o ServerAliveInterval=30 -o ServerAliveCountMax=6 \
-            "$SSH_USER@$SSH_HOST" "ghcr.io/trajetto-organization/trajetto-api:${IMAGE_TAG}"
+          bash .github/scripts/ghcr.sh tag \
+            ghcr.io/trajetto-organization/trajetto-api-migrate:stable \
+            "ghcr.io/trajetto-organization/trajetto-api-migrate@${MIGRATE_DIGEST}"
+          echo "trajetto-api-migrate:stable → ${IMAGE_TAG} (${MIGRATE_DIGEST})" >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Say where migrations run
-        if: vars.MIGRATIONS_VIA_JOB != 'true'
+      # As on staging (dokploy-release.mjs): Dokploy redeploys the
+      # production Application trajetto-api-migrate and the run waits until
+      # Swarm reports the step finished or failed. A failing migration fails
+      # HERE: `stable` of the API and the AI does not move, nothing is
+      # redeployed, and the running replicas never notice. Secrets of the
+      # production environment; setup in docs/deploy.md ("Migrations").
+      - name: Run the database migrations on production (Dokploy)
+        if: steps.migrations.outputs.run == 'true'
+        env:
+          DOKPLOY_URL: ${{ secrets.DOKPLOY_URL }}
+          DOKPLOY_API_KEY: ${{ secrets.DOKPLOY_API_KEY }}
+          DOKPLOY_APPLICATION_ID: ${{ secrets.DOKPLOY_MIGRATE_APPLICATION_ID }}
+          DOKPLOY_APP_LABEL: trajetto-api-migrate
+          RELEASE_IMAGE: ghcr.io/trajetto-organization/trajetto-api-migrate:stable
+        run: node .github/scripts/dokploy-release.mjs
+
+      - name: Record the migrations as applied on production
+        if: steps.migrations.outputs.run == 'true'
+        env:
+          MIGRATE_DIGEST: ${{ steps.migrations.outputs.digest }}
         run: |
-          echo "::warning::MIGRATIONS_VIA_JOB não está ligado: as migrations desta versão rodam no boot de cada réplica (RUN_MIGRATIONS_ON_BOOT). Ver docs/deploy.md, seção Migrations."
+          bash .github/scripts/ghcr.sh tag \
+            ghcr.io/trajetto-organization/trajetto-api-migrate:stable-applied \
+            "ghcr.io/trajetto-organization/trajetto-api-migrate@${MIGRATE_DIGEST}"
+          echo "trajetto-api-migrate:stable-applied → ${MIGRATE_DIGEST}" >> "$GITHUB_STEP_SUMMARY"
 
       # `imagetools create` retags server-side, without pulling or rebuilding,
       # so production runs the exact bytes that were validated.
@@ -1611,31 +1946,6 @@ jobs:
             echo "::notice::trajetto-ai: a produção já roda ${digest}; a IA não é reimplantada. Para forçar: Run workflow na main com force_ai_build."
           else
             echo "deploy=true" >> "$GITHUB_OUTPUT"
-          fi
-
-      # As on staging: all three secrets deploy, none skips with a notice
-      # (`stable` has moved, and the first Dokploy deploy will run it), some
-      # is a mistake and fails.
-      - name: Is the production deploy configured?
-        id: dokploy
-        env:
-          DOKPLOY_URL: ${{ secrets.DOKPLOY_URL }}
-          DOKPLOY_API_KEY: ${{ secrets.DOKPLOY_API_KEY }}
-          DOKPLOY_API_APPLICATION_ID: ${{ secrets.DOKPLOY_API_APPLICATION_ID }}
-        run: |
-          missing=""
-          [ -n "$DOKPLOY_URL" ] || missing="$missing DOKPLOY_URL"
-          [ -n "$DOKPLOY_API_KEY" ] || missing="$missing DOKPLOY_API_KEY"
-          [ -n "$DOKPLOY_API_APPLICATION_ID" ] || missing="$missing DOKPLOY_API_APPLICATION_ID"
-          if [ -z "$missing" ]; then
-            echo "enabled=true" >> "$GITHUB_OUTPUT"
-          elif [ "$missing" = " DOKPLOY_URL DOKPLOY_API_KEY DOKPLOY_API_APPLICATION_ID" ]; then
-            echo "enabled=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::Deploy de produção pulado: o environment production ainda não tem DOKPLOY_URL, DOKPLOY_API_KEY e DOKPLOY_API_APPLICATION_ID (docs/deploy.md). A tag stable já aponta para este build."
-            echo "Deploy de produção **pulado**: Dokploy ainda não configurado. A tag \`stable\` já aponta para este build." >> "$GITHUB_STEP_SUMMARY"
-          else
-            echo "::error::Configuração parcial do Dokploy no environment production: faltam${missing} (docs/deploy.md)."
-            exit 1
           fi
 
       # As on staging: one Dokploy Application per service, now on `:stable`

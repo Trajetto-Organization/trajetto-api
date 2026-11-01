@@ -10,7 +10,9 @@
 # Prisma 7 has no query engine binary (queries are compiled in WebAssembly and
 # sent through `@prisma/adapter-pg`), so the client runs on musl as it is. The
 # Prisma CLI still downloads its schema engine (`prisma migrate deploy`) for
-# the platform it detects at install time, linux-musl-openssl-3.0.x here.
+# the platform it detects at install time, linux-musl-openssl-3.0.x here. Only
+# the release image carries the CLI (stage `migrate`, below); the API image
+# runs without it.
 #
 # Pinned by digest too (INFRA-16): a tag can be re-pushed, a digest cannot.
 # Dependabot (docker ecosystem) moves the tag and the digest together. The
@@ -39,7 +41,8 @@ RUN mkdir -p /out/usr/local/bin \
 # Stage: Runtime base (Alpine + the node binary, nothing else)
 # ================================
 # The container runs ./docker-entrypoint.sh and node, and the release
-# migrations run the same script (`migrate`): no package manager. The runner
+# migrations run the same script (`migrate`, from the trajetto-api-migrate
+# image built on top of this one): no package manager. The runner
 # used to start from the Node image and `rm -rf` its npm, corepack and yarn,
 # which only hid them (the image scan flagged npm's bundled `tar`,
 # CVE-2026-59873, 27/10/2026): layers are additive, so every pull still
@@ -57,9 +60,10 @@ FROM alpine:3.23.7@sha256:ff7f0c727dd796aa36787bfcd9a64bf35a6ce72a73451b3359fde8
 COPY --link --from=node-binary /out/ /
 
 # What the binaries here link against (ldd): node and bcrypt's musl prebuild
-# need libstdc++ (libgcc comes with it); the Prisma schema engine (`prisma
-# migrate deploy`) needs libssl3 and libcrypto3, and Prisma picks it by
-# finding libssl.so.3 in /usr/lib, so no `openssl` binary is needed. Node
+# need libstdc++ (libgcc comes with it); the Prisma schema engine of the
+# release image (`prisma migrate deploy`, stage `migrate`) needs libssl3 and
+# libcrypto3, and Prisma picks it by finding libssl.so.3 in /usr/lib, so no
+# `openssl` binary is needed. Both images share this base. Node
 # bundles its own OpenSSL, CA store and full ICU: pt-BR dates and
 # America/Sao_Paulo need no tzdata, and the server's own connections (pg,
 # through @prisma/adapter-pg) use Node's TLS. The schema engine's TLS to
@@ -86,30 +90,16 @@ WORKDIR /app
 COPY package.json yarn.lock* ./
 COPY prisma/vitest-environment-prisma ./prisma/vitest-environment-prisma
 
-# Dedicated cache id plus `sharing=locked`: this stage and `prod-deps` both
-# depend only on `node`, so BuildKit runs them in parallel. With the default
-# shared cache mount, two concurrent `yarn install` runs write to the same
-# directory and corrupt each other's entries, failing with ENOENT on a
-# `.yarn-tarball.tgz`.
+# Dedicated cache id plus `sharing=locked`: this stage, `prod-deps` and
+# `migrate-deps` depend only on `node`, so BuildKit runs them in parallel.
+# With the default shared cache mount, two concurrent `yarn install` runs
+# write to the same directory and corrupt each other's entries, failing with
+# ENOENT on a `.yarn-tarball.tgz`.
 #
-# The Prisma CLI's schema engine comes from @prisma/engines' postinstall,
-# which downloads it from binaries.prisma.sh and fails SILENTLY: a download
-# that died left no engine, and nothing said so until a `migrate deploy`
-# without network. In the same RUN as the install (so a layer without the
-# engine is never cached): when it is missing, the postinstall runs again,
-# up to three times, and then the build stops with the cause.
+# Nothing in this build runs the Prisma schema engine (`prisma generate`
+# needs none), so its download is checked only where it ships: migrate-deps.
 RUN --mount=type=cache,target=/usr/local/share/.cache/yarn,id=yarn-dev,sharing=locked \
-    yarn install --frozen-lockfile --production=false \
-    && for attempt in 1 2 3; do \
-         ls node_modules/@prisma/engines/schema-engine-* > /dev/null 2>&1 && break; \
-         echo "Prisma schema engine missing after the install (attempt $attempt of 3): downloading it again" >&2; \
-         sleep $((attempt * 10)); \
-         node node_modules/@prisma/engines/scripts/postinstall.js; \
-       done \
-    && if ! ls node_modules/@prisma/engines/schema-engine-* > /dev/null 2>&1; then \
-         echo "The Prisma schema engine was not downloaded from binaries.prisma.sh: the build stops here" >&2; \
-         exit 1; \
-       fi
+    yarn install --frozen-lockfile --production=false
 
 # ================================
 # Stage: Builder
@@ -136,7 +126,11 @@ RUN find node_modules/.prisma -name '*.d.ts' -delete
 
 COPY . .
 
-RUN yarn build
+# The seeds belong to the release step, not to the API: they go to release/,
+# which only the `migrate` stage copies (back into its build/).
+RUN yarn build \
+    && mkdir release \
+    && mv build/seed.js build/import-violation-codes.js release/
 
 # ================================
 # Stage: Production dependencies
@@ -147,18 +141,87 @@ RUN yarn build
 # previously installed packages—meaning `devDependencies` would end up in
 # the final image (typescript, vitest, tsup, semantic-release, and @octokit
 # total over 100 MB).
+#
+# The Prisma CLI is not here: with Studio, `prisma dev`, the schema engine
+# and what only they pull in, it was over half of this tree (measured
+# 31/10/2026: 218 of 393 MB before the prune). It ships in the release image
+# only (migrate-deps).
+#
+# From a manifest of `dependencies` alone, derived from package.json: with
+# the full one, `--production` still installed `prisma` and `typescript`
+# (devDependencies that are also optional peers of @prisma/client — Yarn 1
+# keeps a devDependency something else peers on), and with them the whole
+# CLI. `--pure-lockfile`, as in migrate-deps: every version comes from the
+# repository's yarn.lock as it is, which this smaller manifest would
+# otherwise rewrite (`--frozen-lockfile` refuses it).
 FROM node AS prod-deps
 
 WORKDIR /app
 
-COPY package.json yarn.lock* ./
-COPY prisma/vitest-environment-prisma ./prisma/vitest-environment-prisma
+COPY package.json yarn.lock ./
 
-# Separate cache id from the `deps` stage — see the note there. The same
-# check of the schema engine as there: this is the copy the image ships, and
-# `migrate deploy` (the release step, staging's boot) runs it.
+# Separate cache id from the `deps` stage — see the note there.
 RUN --mount=type=cache,target=/usr/local/share/.cache/yarn,id=yarn-prod,sharing=locked \
-    yarn install --frozen-lockfile --production=true \
+    node -e 'const p = require("./package.json"); \
+      require("fs").writeFileSync("package.json", JSON.stringify({ name: p.name, \
+        private: true, dependencies: p.dependencies }));' \
+    && yarn install --pure-lockfile --production=true
+
+# `yarn install` brings whole packages; what nothing loads at run time goes
+# before the runner copies them (here, in a stage that is not shipped, a RUN
+# of its own reclaims it — only this stage's result is copied):
+# - source maps, typings and READMEs (Node reads a dependency's .map only
+#   with --enable-source-maps; the API's own build has `sourcemap: false`);
+# - @types (typings only, pulled in as dependencies of engine.io and
+#   @fast-csv) and exceljs/dist, the package's `browser` bundle — its `main`
+#   is excel.js → lib/;
+# - the client's query compilers of every database: the generated client in
+#   .prisma carries its own PostgreSQL one.
+# The Prisma path goes to `rm -r` without -f: a glob that matches nothing
+# fails it (sh leaves it as written). If a Prisma bump renames the
+# compilers, the build stops here instead of shipping them again unnoticed.
+# Every dependency still loads, ExcelJS, PDFKit and bcrypt work (and the
+# smoke test in deploy.yml runs the image).
+RUN find node_modules -type f \( -name '*.map' -o -name '*.d.ts' -o -name '*.d.mts' -o -name '*.d.cts' -o -iname '*.md' -o -iname '*.markdown' \) -delete \
+    && rm -rf node_modules/@types node_modules/exceljs/dist \
+    && rm -r node_modules/@prisma/client/runtime/query_compiler_*
+
+# ================================
+# Stage: The release step's dependencies (the Prisma CLI)
+# ================================
+# What `prisma migrate deploy` needs and the API does not: the CLI and what
+# prisma.config.ts imports. Installed on their own, into a tree the release
+# image keeps apart from the API's node_modules (/app/migrate), so the API
+# image ships without them and the release image adds them as layers of its
+# own on top of the API image's.
+#
+# The manifest is derived from package.json, so no version is written twice:
+# the CLI's (a devDependency, moved with the client by the `prisma` group in
+# dependabot.yml) and dotenv's. `--pure-lockfile` installs them from the
+# repository's yarn.lock as it is — every pattern is already resolved there,
+# with its integrity hash — without rewriting it for this smaller manifest
+# (`--frozen-lockfile` refuses the entries this manifest does not use).
+# tests/unitaires/lifecycle/image-layers.test.ts holds the list to
+# prisma.config.ts' imports.
+FROM node AS migrate-deps
+
+WORKDIR /migrate
+
+COPY package.json yarn.lock ./
+
+# The Prisma CLI's schema engine comes from @prisma/engines' postinstall,
+# which downloads it from binaries.prisma.sh and fails SILENTLY: a download
+# that died left no engine, and nothing said so until a `migrate deploy`
+# without network. In the same RUN as the install (so a layer without the
+# engine is never cached): when it is missing, the postinstall runs again,
+# up to three times, and then the build stops with the cause.
+RUN --mount=type=cache,target=/usr/local/share/.cache/yarn,id=yarn-migrate,sharing=locked \
+    node -e 'const p = require("./package.json"); \
+      const version = (name) => p.dependencies[name] || p.devDependencies[name]; \
+      const names = ["prisma", "dotenv", "dotenv-expand"]; \
+      require("fs").writeFileSync("package.json", JSON.stringify({ private: true, \
+        dependencies: Object.fromEntries(names.map((name) => [name, version(name)])) }));' \
+    && yarn install --pure-lockfile --production=true \
     && for attempt in 1 2 3; do \
          ls node_modules/@prisma/engines/schema-engine-* > /dev/null 2>&1 && break; \
          echo "Prisma schema engine missing after the install (attempt $attempt of 3): downloading it again" >&2; \
@@ -170,31 +233,18 @@ RUN --mount=type=cache,target=/usr/local/share/.cache/yarn,id=yarn-prod,sharing=
          exit 1; \
        fi
 
-# `yarn install` brings whole packages; what nothing loads at run time goes
-# before the runner copies them (here, in a stage that is not shipped, a RUN
-# of its own reclaims it — only this stage's result is copied):
-# - source maps, typings and READMEs (Node reads a dependency's .map only
-#   with --enable-source-maps; the API's own build has `sourcemap: false`);
-# - @types (typings only, pulled in as dependencies of engine.io and
-#   @fast-csv) and exceljs/dist, the package's `browser` bundle — its `main`
-#   is excel.js → lib/;
-# - the embedded Postgres of `prisma dev` (pglite, imported only when that
-#   command runs) and the query compilers of every database: the generated
-#   client in .prisma carries its own PostgreSQL one, and the CLI's serve
-#   `prisma generate`, which runs in the builder. The Studio UI
-#   (@prisma/studio-core) and @prisma/dev STAY: the CLI requires both when it
-#   starts, and without them `migrate deploy` fails with "Cannot find module
-#   '@prisma/studio-core/data/bff'" (smoke-tested).
-# The Prisma paths go to `rm -r` without -f: a path that is gone fails it, and
-# so does a glob that matches nothing (sh leaves it as written). If a Prisma
-# bump moves pglite or renames the compilers, the build stops here instead of
-# shipping them again unnoticed.
-# Every dependency still loads, the CLI migrates offline, ExcelJS, PDFKit and
-# bcrypt work (and the smoke test in deploy.yml runs the image).
+# As in prod-deps: maps, typings and READMEs; and the embedded Postgres of
+# `prisma dev` (pglite, imported only when that command runs) and the CLI's
+# query compilers, which serve `prisma generate` (run in the builder). The
+# Studio UI (@prisma/studio-core) and @prisma/dev STAY: the CLI requires both
+# when it starts, and without them `migrate deploy` fails with "Cannot find
+# module '@prisma/studio-core/data/bff'" (smoke-tested). `rm -r` without -f,
+# as there: if a Prisma bump moves pglite or renames the compilers, the build
+# stops here instead of shipping them again unnoticed. The CLI still
+# migrates offline (the smoke test in deploy.yml runs it on an internal
+# network).
 RUN find node_modules -type f \( -name '*.map' -o -name '*.d.ts' -o -name '*.d.mts' -o -name '*.d.cts' -o -iname '*.md' -o -iname '*.markdown' \) -delete \
-    && rm -rf node_modules/@types node_modules/exceljs/dist \
     && rm -r node_modules/@electric-sql/pglite \
-        node_modules/@prisma/client/runtime/query_compiler_* \
         node_modules/prisma/build/query_compiler_*
 
 # ================================
@@ -229,15 +279,8 @@ COPY --from=prod-deps --chown=nodejs:nodejs /app/node_modules ./node_modules
 # The Prisma client is generated (`prisma generate`) and resides in
 # node_modules/.prisma. The clean installation above does not produce it, so
 # we bring the artifact from the builder. It carries its own PostgreSQL query
-# compiler (query_compiler_fast_bg.*); the schema engine the CLI needs for
-# `prisma migrate deploy` (docker-entrypoint.sh, also the release step) stays
-# in node_modules/@prisma/engines, put there by its postinstall.
+# compiler (query_compiler_fast_bg.*).
 COPY --from=builder --chown=nodejs:nodejs /app/node_modules/.prisma ./node_modules/.prisma
-
-# Excel file with traffic violation codes — read by build/import-violation-codes.js
-# (docker-entrypoint.sh, on boot or in the `migrate` release step) from the
-# working directory.
-COPY --from=builder --chown=nodejs:nodejs /app/tabela-codigo-infracoes-renainf-xlsx.xlsx ./tabela-codigo-infracoes-renainf-xlsx.xlsx
 
 # The boot script. Line endings are normalised here because a Windows
 # checkout (core.autocrlf) hands it over with CRLF, and `/bin/sh\r` is not an
@@ -246,11 +289,10 @@ COPY --from=builder --chown=nodejs:nodejs /app/tabela-codigo-infracoes-renainf-x
 COPY --from=builder --chown=nodejs:nodejs /app/infra/scripts/docker-entrypoint.sh ./docker-entrypoint.sh
 RUN sed -i "s/\r$//" ./docker-entrypoint.sh && chmod +x ./docker-entrypoint.sh
 
+# No schema, no migrations, no prisma.config.ts and no seeds: this image
+# never migrates. build/schema-version.json names every migration the
+# build was written against, and the boot refuses a database without any.
 COPY --from=builder --chown=nodejs:nodejs /app/package.json ./package.json
-COPY --from=builder --chown=nodejs:nodejs /app/prisma ./prisma
-# `prisma migrate deploy` reads the schema, the migrations and DATABASE_URL
-# through this file (Prisma 7).
-COPY --from=builder --chown=nodejs:nodejs /app/prisma.config.ts ./prisma.config.ts
 COPY --from=builder --chown=nodejs:nodejs /app/build/src/modules ./src/modules
 COPY --from=builder --chown=nodejs:nodejs /app/build ./build
 
@@ -282,7 +324,55 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
 
 ENTRYPOINT ["dumb-init", "--"]
 
-# Node, not Yarn, as the long-lived process: the script prepares the database
+# Node, not Yarn, as the long-lived process: the script checks the database
 # and then `exec`s the server, so dumb-init delivers SIGTERM straight to it and
 # the graceful shutdown in src/server.ts actually runs. See the script.
 CMD ["./docker-entrypoint.sh"]
+
+# ================================
+# Stage: The release image (trajetto-api-migrate)
+# ================================
+# The API image plus what migrating needs, as layers on top of it, and the
+# API image never carries them. The Dokploy Application trajetto-api-migrate
+# runs it before the API rolls out (.github/scripts/dokploy-release.mjs).
+# Built with `--target migrate` (deploy.yml), tagged `sha-<sha>` like the
+# API and `src-<key>` for its source (.github/scripts/migrate-source.sh),
+# and rebuilt only when that source changes.
+#
+# The CLI keeps to migrate/: its node_modules, prisma.config.ts and the
+# schema with its migrations, where `prisma migrate deploy` runs from
+# (docker-entrypoint.sh). The seeds and the infraction table go where the
+# seeds read them, beside the API's build: build/ and the working directory.
+# Most stable first, as in the runner.
+FROM runner AS migrate
+
+LABEL org.opencontainers.image.description="Trajetto API release step (prisma migrate deploy + seeds)"
+
+COPY --from=migrate-deps --chown=nodejs:nodejs /migrate/node_modules ./migrate/node_modules
+COPY --from=builder --chown=nodejs:nodejs /app/tabela-codigo-infracoes-renainf-xlsx.xlsx ./tabela-codigo-infracoes-renainf-xlsx.xlsx
+COPY --from=builder --chown=nodejs:nodejs /app/prisma.config.ts ./migrate/prisma.config.ts
+COPY --from=builder --chown=nodejs:nodejs /app/prisma/schema.prisma ./migrate/prisma/schema.prisma
+COPY --from=builder --chown=nodejs:nodejs /app/prisma/migrations ./migrate/prisma/migrations
+COPY --from=builder --chown=nodejs:nodejs /app/release/ ./build/
+
+# The release step's outcome, as Swarm reports it (docker-entrypoint.sh,
+# mode `release`): healthy once the migrations and the seeds finished, which
+# turns the task from `Starting` to `Running`. The API's probe of :3333
+# means nothing to a step that never serves. The start period is the time a
+# migration may take: no failed probe counts before the marker shows up, so
+# Swarm never kills a long migration for being slow (a probe that passes
+# ends the start period at once).
+HEALTHCHECK --interval=5s --timeout=5s --start-period=24h --retries=3     CMD test -f /tmp/trajetto-release-done
+
+# `release`, not `migrate`: a Swarm service must keep running to report
+# success. `migrate` (run and exit) stays for the load harness and
+# `yarn migrate:release`.
+CMD ["./docker-entrypoint.sh", "release"]
+
+# ================================
+# The default target: the API image
+# ================================
+# `docker build` without --target builds the last stage. The release image
+# sits on top of the runner, so it comes after it; this keeps a plain build
+# (a developer's, the load harness's `api`) producing the API image.
+FROM runner

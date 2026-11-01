@@ -1,18 +1,20 @@
 import { createPrismaClient } from "../../src/shared/database/database-client";
 
 import { emptyDatabaseRefusal } from "./database-bootstrap-guard";
+import { readSchemaVersion, schemaRefusal } from "./schema-guard";
 
 /**
  * Blocks until Postgres answers, or gives up.
  *
- * It runs before `prisma migrate deploy` in both `dev` and `start`, and in
- * production it is the difference between a restart that waits and a restart
- * that kills the service.
+ * It runs first in `yarn dev` (before `prisma migrate deploy`) and in both
+ * modes of docker-entrypoint.sh: before the release step migrates, and
+ * before a replica serves. In production it is the difference between a
+ * restart that waits and a restart that kills the service.
  *
  * The chain it breaks: a replica whose database is briefly unreachable gets
- * recreated by Swarm, runs `migrate deploy` at boot, fails in seconds against
- * the still-dead database, and exits — a crash loop that, back when the
- * restart policy had `max_attempts`, made Swarm give up on the task for good.
+ * recreated by Swarm, fails in seconds against the still-dead database, and
+ * exits — a crash loop that, back when the restart policy had
+ * `max_attempts`, made Swarm give up on the task for good.
  * Waiting here turns those seconds into minutes, which is long enough for
  * almost every real interruption — a failover, a restart — to resolve on its
  * own.
@@ -22,6 +24,10 @@ import { emptyDatabaseRefusal } from "./database-bootstrap-guard";
  * than be migrated and seeded into a "healthy" empty system — see
  * database-bootstrap-guard.ts. It is checked here because this is the first
  * step of docker-entrypoint.sh in BOTH modes, before anything is written.
+ *
+ * `--require-migrations <build/schema-version.json>` (a replica's boot,
+ * never the release step) also refuses a database that lacks any of the
+ * build's migrations — see schema-guard.ts.
  *
  * Bounded on purpose. Waiting forever would hide a genuinely wrong
  * DATABASE_URL behind a container that looks like it is starting, and a
@@ -37,6 +43,37 @@ const MAX_WAIT_MS = Number(process.env.WAIT_FOR_POSTGRES_TIMEOUT_MS ?? 120_000);
 const RETRY_DELAY_MS = 2_000;
 
 const sleep = (ms: number) => new Promise((done) => setTimeout(done, ms));
+
+/**
+ * The migrations the boot requires, or null when not asked to check. Read
+ * before waiting: a build without the file is a broken image, not a
+ * database that is late.
+ */
+function requiredMigrations(argv: string[]): string[] | null {
+  const flag = argv.indexOf("--require-migrations");
+
+  if (flag === -1) return null;
+
+  const file = argv[flag + 1];
+
+  if (!file) {
+    console.error(
+      "\n🔴 --require-migrations precisa do caminho de schema-version.json.\n",
+    );
+    process.exit(64);
+  }
+
+  try {
+    return readSchemaVersion(file).migrations;
+  } catch (error) {
+    console.error(
+      `\n🔴 ${error instanceof Error ? error.message : String(error)}\n`,
+    );
+    process.exit(64);
+  }
+}
+
+const REQUIRED_MIGRATIONS = requiredMigrations(process.argv);
 
 async function waitForPostgres(): Promise<void> {
   const deadline = Date.now() + MAX_WAIT_MS;
@@ -58,6 +95,11 @@ async function waitForPostgres(): Promise<void> {
         console.log("\n🟢 Postgres is ready and accepting connections!\n");
 
         refusal = await emptyDatabaseRefusal(prisma);
+
+        if (!refusal && REQUIRED_MIGRATIONS) {
+          refusal = await schemaRefusal(prisma, REQUIRED_MIGRATIONS);
+        }
+
         answered = true;
 
         break;

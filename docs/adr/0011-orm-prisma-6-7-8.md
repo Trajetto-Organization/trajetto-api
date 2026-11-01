@@ -163,7 +163,7 @@ Por superfície (mediana / p95): `dashboard.overview` melhora (90 → 63 /
    (statements nomeados, com limite de cache).
 3. **Imagem:** separar um alvo de migração no Dockerfile, com o CLI só na
    imagem do release step e o runtime só com `@prisma/client`, adapter e
-   `pg` (ajusta `infra/scripts/run-release-migrations.sh` e o `deploy.yml`),
+   `pg` (ajusta a etapa de release e o `deploy.yml`),
    ou um prune calculado pelo grafo com smoke do `migrate deploy`.
 4. Reexecutar todos os gates (E2E completo de uma vez, numa máquina sem
    carga de terceiros) e o benchmark ABBAAB.
@@ -317,6 +317,15 @@ o `.prisma` cai de 7,7 para 3,2 MB. O aumento é o CLI do 7, que a etapa de
 release usa no `migrate deploy` (Studio, `@prisma/dev`, `effect`); separar
 um alvo só de migração no `Dockerfile` (item 3 do menor caminho) é o próximo
 passo para devolver esse tamanho.
+
+**Feito em 31/10/2026** (item 3): o `Dockerfile` gera a imagem da API
+(estágio `runner`, sem o CLI: 431 → 239 MB descompactada, 114,8 → ~68 MB
+comprimida) e a de migração, `trajetto-api-migrate` (estágio `migrate`: a da
+API mais o CLI, o schema, as migrations e os seeds), que o deploy roda pela
+Application `trajetto-api-migrate` do Dokploy antes do rollout, só quando o
+banco ainda não a aplicou. O `prisma` passou a `devDependency`; as duas
+instalações saem de manifestos derivados do `package.json` com o
+`yarn.lock` como está (`deploy.md`, seção 15).
 
 ## Fontes
 

@@ -181,26 +181,30 @@ class ImportViolationCodes {
       const batchSize = 50;
       let insertedCount = 0;
 
-      for (let i = 0; i < dataToInsert.length; i += batchSize) {
-        const batch = dataToInsert.slice(i, i + batchSize);
+      // All or nothing. The release step runs this strictly (a failure fails
+      // the step), and the check above skips any table that has a row: a
+      // batch lost midway, logged and skipped, left the table short for
+      // good while the step reported success. In one transaction a failure
+      // leaves the table empty, the step fails, and the next run fills it.
+      await database.$transaction(
+        async (tx) => {
+          for (let i = 0; i < dataToInsert.length; i += batchSize) {
+            const batch = dataToInsert.slice(i, i + batchSize);
 
-        try {
-          await database.trafficViolationCode.createMany({
-            data: batch,
-            skipDuplicates: true,
-          });
+            await tx.trafficViolationCode.createMany({
+              data: batch,
+              skipDuplicates: true,
+            });
 
-          insertedCount += batch.length;
-          console.log(
-            `📦 Lote ${Math.ceil((i + 1) / batchSize)} importado (${insertedCount}/${dataToInsert.length})`,
-          );
-        } catch (error) {
-          console.error(
-            `❌ Erro no lote ${Math.ceil((i + 1) / batchSize)}:`,
-            error,
-          );
-        }
-      }
+            insertedCount += batch.length;
+            console.log(
+              `📦 Lote ${Math.ceil((i + 1) / batchSize)} importado (${insertedCount}/${dataToInsert.length})`,
+            );
+          }
+        },
+        // The client's 15 s budget is for requests; the whole table, here.
+        { timeout: 120_000 },
+      );
 
       console.log(
         `🎉 Importação concluída! ${insertedCount} códigos de infração importados`,

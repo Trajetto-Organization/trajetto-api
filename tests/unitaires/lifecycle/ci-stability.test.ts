@@ -188,17 +188,40 @@ describe("pinned versions", () => {
     const refs = workflows.flatMap((workflow) =>
       [
         // services.*.image
-        ...workflow.text.matchAll(/^\s+image:\s*(\S+)/gm),
+        ...[...workflow.text.matchAll(/^\s+image:\s*(\S+)/gm)].map(
+          ([, ref]) => ({ key: "image", ref }),
+        ),
         // POSTGRES_IMAGE, TRIVY_IMAGE…
-        ...workflow.text.matchAll(/^\s+[A-Z_]+_IMAGE:\s*(\S+)/gm),
+        ...[...workflow.text.matchAll(/^\s+([A-Z_]+_IMAGE):\s*(\S+)/gm)].map(
+          ([, key, ref]) => ({ key, ref }),
+        ),
         // Buildx's BuildKit
-        ...workflow.text.matchAll(/driver-opts:\s*image=(\S+)/g),
+        ...[...workflow.text.matchAll(/driver-opts:\s*image=(\S+)/g)].map(
+          ([, ref]) => ({ key: "driver-opts", ref }),
+        ),
         // `docker run` straight from a registry (gitleaks)
-        ...workflow.text.matchAll(/^\s+(zricethezav\/\S+|aquasec\/\S+)/gm),
+        ...[
+          ...workflow.text.matchAll(/^\s+(zricethezav\/\S+|aquasec\/\S+)/gm),
+        ].map(([, ref]) => ({ key: "docker run", ref })),
       ]
-        .map(([, ref]) => ({ file: workflow.file, ref }))
-        // Our own images go by the digest the job just read (an expression).
-        .filter(({ ref }) => !ref.includes("${{")),
+        .map(({ key, ref }) => ({ file: workflow.file, key, ref }))
+        // Our own images go by the digest the job just read (an expression),
+        // or are the ones this job just built into the runner's Docker for
+        // the smoke test (`trajetto-…:smoke`), which no registry has. One
+        // more, by name only: RELEASE_IMAGE, the environment tag the release
+        // Application runs, which no job pulls (dokploy-release.mjs only
+        // checks the Application is set to it).
+        .filter(
+          ({ key, ref }) =>
+            !ref.includes("${{") &&
+            !/^trajetto-[\w-]+:smoke$/.test(ref) &&
+            !(
+              key === "RELEASE_IMAGE" &&
+              /^ghcr\.io\/trajetto-organization\/trajetto-api-migrate:(staging|stable)$/.test(
+                ref,
+              )
+            ),
+        ),
     );
 
     // The services, the smoke test's Postgres and Redis, Trivy, gitleaks
@@ -770,6 +793,7 @@ describe.skipIf(!hasShell("bash"))("the blocks that decide, run", () => {
       HOME: box.root,
       TRIVY_IMAGE: "aquasec/trivy:0@sha256:x",
       API_IMAGE: `ghcr.io/trajetto-organization/trajetto-api@sha256:${"1".repeat(64)}`,
+      MIGRATE_IMAGE: `ghcr.io/trajetto-organization/trajetto-api-migrate@sha256:${"2".repeat(64)}`,
       AI_IMAGE: `ghcr.io/trajetto-organization/trajetto-ai@sha256:${"a".repeat(64)}`,
       ENFORCE: enforce ? "true" : "false",
       DB: db,
@@ -791,6 +815,9 @@ describe.skipIf(!hasShell("bash"))("the blocks that decide, run", () => {
 
       expect(result.status, result.log).toBe(0);
       expect(result.summary).toContain("trajetto-api sem CRITICAL corrigível");
+      expect(result.summary).toContain(
+        "trajetto-api-migrate sem CRITICAL corrigível",
+      );
       expect(result.summary).toContain("trajetto-ai sem CRITICAL corrigível");
     });
 
@@ -818,13 +845,14 @@ describe.skipIf(!hasShell("bash"))("the blocks that decide, run", () => {
     });
 
     it("tries a Trivy error again and never takes it for a finding, even enforced", () => {
-      // The API's scan errors three times, the AI's is clean.
-      sequenced("docker", [1, 1, 1, 0]);
+      // The API's scan errors three times, the release image's and the
+      // AI's are clean.
+      sequenced("docker", [1, 1, 1, 0, 0]);
 
       const result = exec(SCAN.run, env(true));
 
       expect(result.status, result.log).toBe(0);
-      expect(box.calls("docker")).toHaveLength(4);
+      expect(box.calls("docker")).toHaveLength(5);
       expect(result.log).toMatch(
         /::warning::Trivy: não conseguiu varrer trajetto-api/,
       );
