@@ -24,7 +24,7 @@
 #
 # Base pinned by digest (INFRA-16: a tag can be re-pushed, a digest cannot).
 # The index digest of python:3.12-slim on 05/10/2026; Dependabot moves it.
-FROM python:3.12-slim@sha256:02108f5d322dd89f1c9e552442c25acb0543dfdbc455693a5599624f20d9155d AS base
+FROM python:3.12-slim@sha256:aa943ce411423c7582288f18707ff66eddcbaeb510502d747a72aeb34f30d159 AS base
 
 ENV PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
