@@ -865,8 +865,13 @@ web), `HTTP_REQUEST` e `PUBLIC_API_URL` (a URL pública da API do ambiente),
 `MAP_TILE_ATTRIBUTION` e `MAP_TILE_URL_DARK` (MapTiler),
 `CSP_STORAGE_ORIGINS` (a origem do bucket do ambiente,
 `https://<bucket>.<ACCOUNT_ID>.r2.cloudflarestorage.com`) e
-`NODE_OPTIONS=--max-old-space-size=512`. `BACKGROUND_TRACKING` não está
-definida.
+`NODE_OPTIONS=--max-old-space-size=512`. `BACKGROUND_TRACKING` ainda não
+está definida: ela entra como `true` no `trajetto-ui` de staging **junto com o
+APK novo** com o segundo plano ligado (decisão D16; ação do dono no
+`planejamento.md`, §7.5), para a torre parar de avisar que só vê quem está com
+o app aberto. Na produção fica `false` enquanto o app de produção for o AAB do
+Play Store sem a declaração aprovada (D17). A regra completa está em
+[`trajetto-mobile/docs/deploy.md` → Localização em segundo plano](https://github.com/Trajetto-Organization/trajetto-mobile/blob/staging/docs/deploy.md#localiza%C3%A7%C3%A3o-em-segundo-plano).
 
 **Convenções**:
 
@@ -1758,7 +1763,11 @@ vez ([`deploy.md` → Versões fixas](./deploy.md#versões-fixas)).
 
 **Varredura de segredos**: o gitleaks roda em todo push, em todo o histórico
 de todas as branches, nos três repositórios (job `secrets`). A baseline fica
-em `.gitleaksignore`. Um alerta é tratado como vazamento: revogar primeiro,
+em `.gitleaksignore`, pela impressão digital completa, com o commit. Um valor
+público por design que a regra genérica confunde com chave leva, na própria
+linha que dispara, o comentário de liberação inline do gitleaks, e o teste
+`secrets-hygiene` de cada repositório lista cada um, com a linha inteira. Um
+alerta é tratado como vazamento: revogar primeiro,
 depois limpar ([`deploy.md` → 21](./deploy.md#21-cadeia-de-suprimentos-e-segredos)).
 
 ### 7.8 Workflows agendados
@@ -1805,12 +1814,21 @@ Onde: expo.dev → projeto → _Environment variables_ (ou `eas env:create`).
 | --------------------------------- | -------------------------------------- | ------------------------------------------ |
 | `EXPO_PUBLIC_API_URL`             | `https://api-staging.intrajetto.com`   | `https://api.intrajetto.com`               |
 | `EXPO_PUBLIC_WEB_APPLICATION_URL` | `https://staging.intrajetto.com/login` | `https://www.intrajetto.com/login`         |
-| `EXPO_PUBLIC_BACKGROUND_TRACKING` | `false`                                | `false`                                    |
+| `EXPO_PUBLIC_BACKGROUND_TRACKING` | ausente (ligado, D16)                  | `false` (AAB do Play, D17)                 |
 | `APP_ENV`                         | `preview`                              | `production`                               |
 | `GOOGLE_SERVICES_JSON`            | arquivo, visibilidade _Secret_         | o mesmo arquivo                            |
 
 **A confirmar com o dono:** que as variáveis do ambiente `production` já
 foram cadastradas (na montagem só o `preview` foi feito).
+
+`EXPO_PUBLIC_BACKGROUND_TRACKING` virou só o desligamento (decisão D16): o
+app segue a rota com a tela desligada por padrão, e apenas o valor `false` tira
+a permissão de localização em segundo plano do manifesto. No `preview` (o APK
+de staging, instalado por fora do Play) ela fica **ausente**; se ainda estiver
+cadastrada como `false`, o valor antigo, apague antes do build nativo. No
+`production` ela continua `false` enquanto o perfil `production` gerar o AAB do
+Play Store e a declaração de localização em segundo plano não for aprovada
+(D17). A troca vale só para binário novo (o manifesto muda; OTA não leva).
 
 **Credenciais** (expo.dev → projeto → _Credentials_ → Android, ou
 `eas credentials`):

@@ -15,6 +15,7 @@
 - [Contrato de repositórios (`tests/contract`)](#contrato-de-repositórios-testscontract)
 - [Serviço de IA (`infra/ai-ocr` e `tests/ai-local`)](#serviço-de-ia-infraai-ocr-e-testsai-local)
 - [Carga, estresse, soak e multi-réplica (`tests/load`)](#carga-estresse-soak-e-multi-réplica-testsload)
+- [Simulação do dia de entregas (`tests/simulation`)](#simulação-do-dia-de-entregas-testssimulation)
 - [Cobertura](#cobertura)
 - [Mutação](#mutação)
 - [Os guardas do pipeline e da infraestrutura](#os-guardas-do-pipeline-e-da-infraestrutura)
@@ -33,6 +34,7 @@
 | Serviço de IA (Python)   | `infra/ai-ocr/tests`              | `docker build --target test infra/ai-ocr`            | Docker                                                                                                                         | o servidor de OCR, dentro da imagem que vai para produção                                                            |
 | Contrato com a IA real   | `tests/ai-local`                  | `AI_LOCAL_E2E=1 npx vitest run tests/ai-local`       | Docker, ~1 GiB                                                                                                                 | o leitor e as regras da API contra o contêiner `trajetto-ai` de verdade                                              |
 | Carga                    | `tests/load`                      | ver `tests/load/README.md`                           | Docker e k6                                                                                                                    | capacidade por réplica, gargalos, multi-réplica, injeção de falha                                                    |
+| Simulação do dia         | `tests/simulation`                | ver `tests/simulation/README.md`                     | os containers de teste; a web para filmar                                                                                      | o fluxo de Entregas inteiro pela API HTTP, com réplicas                                                              |
 | Mutação                  | `stryker.config.mjs`              | `yarn test:mutation`                                 | Postgres e Redis de teste                                                                                                      | que os testes das regras críticas matam mutantes                                                                     |
 
 Tudo com Vitest 1.6 (`vite.config.mts`): `setupTests.ts` carrega o
@@ -79,16 +81,16 @@ constructor`). O CI e a imagem instalam do zero e não precisam disso.
 Uma pasta por domínio (`delivery/`, `route/`, `chat/`, `fuel/`…) e pastas
 transversais:
 
-| Pasta                                            | O que guarda                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
-| ------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `contract/`                                      | contratos com os clientes: rotas que a web e o app chamam (`client-routes`, lê `../trajetto-ui` e `../trajetto-mobile` quando existem), rotas aposentadas (`retired-routes`, compara com `origin/main`), corpos do outbox do app (`outbox-body-contract`, fixtures `mobile-outbox-v1`/`-v2`), OpenAPI, NDJSON, exemplos de resposta, classes de erro, defaults dos gêmeos in-memory                                                                          |
-| `lifecycle/`                                     | infra executada de verdade: workflows (`promote-workflow`, `staging-deploy-workflow`, `supply-chain`, `secrets-hygiene`, `compose-ci-siblings`, `ci-stability`), imagens (`image-layers`, `image-scan`), scripts (`release-migrations`, `dokploy-release`, `migrate-source`, `compose-rollout-verify`, `backup-scripts`, `dokploy-deploy`, `wait-for-version`, `ghcr-script`, `staged-build`, `audit-gate`), migrations (`migration-safety`), boot e workers |
-| `security/`                                      | JWT, 2FA, mensagens de unicidade, `.env.example` contra o schema                                                                                                                                                                                                                                                                                                                                                                                             |
-| `integration/`                                   | API pública, portal de documentação, webhooks                                                                                                                                                                                                                                                                                                                                                                                                                |
-| `env/`                                           | o env-schema e a URL do banco de teste                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| `quality/`                                       | a configuração de cobertura                                                                                                                                                                                                                                                                                                                                                                                                                                  |
-| `time/`                                          | dia de negócio; varre `src/` atrás de conta de dia com o relógio do servidor                                                                                                                                                                                                                                                                                                                                                                                 |
-| `health/`, `logging/`, `socket/`, `resilience/`… | o resto do que atravessa domínios                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| Pasta                                            | O que guarda                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| ------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `contract/`                                      | contratos com os clientes: rotas que a web e o app chamam (`client-routes`, lê `../trajetto-ui` e `../trajetto-mobile` quando existem), rotas aposentadas (`retired-routes`, compara com `origin/main`), corpos do outbox do app (`outbox-body-contract`, fixtures `mobile-outbox-v1`/`-v2`), OpenAPI, NDJSON, exemplos de resposta, classes de erro, defaults dos gêmeos in-memory                                                                                                |
+| `lifecycle/`                                     | infra executada de verdade: workflows (`promote-workflow`, `staging-deploy-workflow`, `supply-chain`, `secrets-hygiene`, `compose-ci-siblings`, `ci-stability`), imagens (`image-layers`, `image-scan`), scripts (`release-migrations`, `dokploy-release`, `migrate-source`, `compose-rollout-verify`, `backup-scripts`, `dokploy-deploy`, `wait-for-version`, `ghcr-script`, `staged-build`, `audit-gate`), migrations (`migration-safety`, `migration-prebuild`), boot e workers |
+| `security/`                                      | JWT, 2FA, mensagens de unicidade, `.env.example` contra o schema                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| `integration/`                                   | API pública, portal de documentação, webhooks                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| `env/`                                           | o env-schema e a URL do banco de teste                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| `quality/`                                       | a configuração de cobertura                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| `time/`                                          | dia de negócio; varre `src/` atrás de conta de dia com o relógio do servidor                                                                                                                                                                                                                                                                                                                                                                                                       |
+| `health/`, `logging/`, `socket/`, `resilience/`… | o resto do que atravessa domínios                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 
 Os testes de usecase usam os gêmeos in-memory (`repositories/in-memory/`), que
 precisam ter a mesma semântica do Prisma (filtros, ordem, nulos, unicidade,
@@ -100,7 +102,31 @@ Os testes de script (`tests/unitaires/lifecycle/support/shell-harness.ts`)
 rodam os `.sh` do repositório e os blocos `run:` dos workflows de verdade, com
 os comandos externos (`docker`, `gh`, `git`, `pg_dump`, `rclone`…) trocados por
 stubs que registram cada chamada. Sem `bash`/`sh` utilizável, eles se pulam em
-vez de falhar.
+vez de falhar. O processo do script só é encerrado por uma trava contra
+travamento (5 min, muito acima da rodada mais lenta medida), e ser encerrado
+lança um erro que nomeia o script: a saída parcial nunca chega às asserções
+como se o script tivesse terminado ali (com o limite antigo de 30 s, o laço de
+retentativas do `ghcr.sh` numa rodada paralela cheia no Windows era cortado e
+lido como resposta errada).
+
+Nada de corrida de relógio entre trabalhos de um teste: a ordem que o teste
+prova vem de uma promessa que o próprio teste resolve (um portão), não de um
+`setTimeout` mais longo que o outro, que uma máquina carregada inverte (foi o
+caso do "fair pool" de `webhook-dispatch-rules.test.ts`).
+
+Nem orçamento em milissegundos para provar que algo é barato ou imediato: o
+custo se mede pelo que o código faz, não pelo relógio de uma máquina que pode
+estar ocupada. O relatório de pausas conta as leituras de cada rota, pausa e
+linha, que dobram quando a frota dobra (`pause-report-rules.test.ts`), e a
+prontidão responde com o relógio parado, sem tocar no pool principal
+(`readiness-pool.test.ts`). Os dois tinham limites de 1,5 s e 1 s e falharam
+numa rodada paralela cheia em 03/11/2026, sem defeito no código. Pelo mesmo
+motivo, no mesmo dia, mais dois: a varredura de texto não armazenável conta as
+operações de um corpo com 200 000 níveis e as coletas de lixo de um com
+20 000, em vez de um limite de 2 s (`unstorable-text.test.ts`), e as métricas
+de runtime leem a janela nova no mesmo tick do `rotate`, em vez de exigir que
+os 80 ms seguintes ficassem abaixo de 100 ms, o que falhou com 101,91 ms
+(`runtime-metrics.test.ts`).
 
 ## E2E (`tests/E2E`)
 
@@ -299,6 +325,62 @@ Cenas: `smoke.js` (sempre primeiro: prova que as outras medem algo real),
 07/10/2026 com a imagem de produção: o joelho é ~110–120 req/s por réplica com
 histórico. Tudo em `tests/load/README.md`.
 
+**API pública (plano de 02/11/2026, L10).** O que já é guardado por teste a
+cada push: o plano de cada página de `/integration/v1` não varre o histórico
+da empresa (`integration-events-plan` e `integration-updated-since-plan`, este
+com 300 mil entregas: o `updated_since` de meia hora lê só a janela), a chave
+é conferida com uma consulta só (`ensure-api-key-unit`), e cada exemplo de
+resposta publicado em `/integration/docs` tem as mesmas chaves e tipos do corpo
+real (`public-docs-contract`, "the published response examples"). O que
+ainda é medido à mão, fora do horário de teste do cliente, e anotado aqui
+com a data:
+
+1. O harness com `LOAD_REPLICAS=2`: p95 e erros de `integrationDeliveries`
+   (`lib/mix.js`), do POST idempotente e de `/events`.
+2. No staging, uma chave a 2 req/s (o teto de 120/min) por 10 min: nenhum
+   5xx, e 429 com `retry-after` só acima do teto.
+3. No portal: abrir `/integration/docs` sem login, mandar uma requisição pelo
+   console com uma chave de staging, gerar um cliente do `openapi.json`
+   (openapi-generator) e compilá-lo. O `limit` sai `integer` (L2).
+
+Ainda sem números registrados: os três pedem a imagem de produção, o staging
+e ferramentas que não rodam no CI.
+
+## Simulação do dia de entregas (`tests/simulation`)
+
+Um dia inteiro do módulo de Entregas pela API HTTP de verdade, com os mesmos
+cabeçalhos e corpos do app e da web: cinco motoristas (quatro por CPF e
+senha, um pelo QR Code), cinco rotas de seis paradas saindo do CD da Vila
+Leopoldina, GPS ao longo das ruas reais (geometria do OSRM sobre dados do
+OpenStreetMap, ODbL), geocerca em ALERTAR, comprovantes por PUT
+pré-assinado, "Cliente ausente", autorização da torre, 3 minutos sem sinal
+com a fila do app, entrega adicionada em rota (K12), parada cancelada pelo
+despacho e rota encerrada com pendências (K11). Os telefones se dividem entre
+as réplicas (`SIM_API_URLS`) e a torre fica na réplica A: todo evento causado
+pela réplica B tem de chegar lá.
+
+```bash
+npx tsx tests/simulation/scripts/prepare-database.ts   # o banco trajetto_sim, do zero
+npx tsx tests/simulation/scripts/start-replicas.ts     # réplicas em 3341 e 3342
+SIM_API_URLS=http://127.0.0.1:3341,http://127.0.0.1:3342 npx tsx tests/simulation/delivery-day.ts
+```
+
+Só escreve no banco `trajetto_sim` do container de teste (127.0.0.1:54321)
+e só fala com réplicas desta máquina, nunca nas portas 3333 e 3001; o env
+das réplicas sai das chaves do `.env.example`, com valores descartáveis, e
+nenhum processo da simulação lê o `.env`: as réplicas e o Prisma CLI sobem
+com `tests/simulation/lib/no-env-file.cjs` pré-carregado, porque o
+dotenv-expand copiaria o valor do arquivo por cima de toda chave deixada
+vazia. Tudo o que o telefone manda é horário de
+parede; `SIM_SPEED` (padrão 8) acelera o caminhão e o tempo na porta. Toda
+resposta fora do planejado vai para o log JSONL (`SIM_LOG`) e termina o
+processo com código 1. O log alimenta o gravador da web
+(`trajetto-ui/tests/simulation`, que filma a torre e tira uma foto a cada
+marco) e um futuro replay. Os testes da própria simulação
+(`npx vitest run --config tests/simulation/vitest.config.mts`) ficam fora do
+CI; o typecheck cobre a pasta. Passo a passo, variáveis, cenas e o formato do
+log em `tests/simulation/README.md`.
+
 ## Cobertura
 
 Medida honestamente (decisão 13.1; `vite.config.mts`): provider v8, `all: true`
@@ -357,6 +439,7 @@ uma garantia:
 | `lifecycle/secrets-hygiene.test.ts`                              | gitleaks igual no `ci.yml` e no `deploy.yml`; nenhum build antes dele; `.env*` fora do git                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
 | `lifecycle/compose-ci-siblings.test.ts`                          | o checkout dos repositórios irmãos na mesma branch; no `ci.yml` da API, só "a branch não existe" (código 2) cai na padrão, com aviso, e erro de rede repete 3 vezes e falha                                                                                                                                                                                                                                                                                                                                                                                              |
 | `lifecycle/migration-safety.test.ts`                             | expandir/contrair nas migrations novas                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| `lifecycle/migration-prebuild.test.ts`                           | o roteiro de pré-construir o índice com `CONCURRENTLY` nas migrations desta leva: tipos em `DO $$ ... EXCEPTION WHEN duplicate_object`, `ADD COLUMN IF NOT EXISTS` e o comentário dizendo para criar tipos e colunas antes                                                                                                                                                                                                                                                                                                                                               |
 | `lifecycle/dokploy-deploy.test.ts`                               | o script de deploy contra um Dokploy falso (`application.deploy` de uma Application por chamada; segue o deployment criado; repete o que termina em erro até 6 vezes com espera dobrando até o teto; cada retentativa — pedido, consulta ou deploy — é `::warning::` com a contagem, e o resumo do job lista cada tentativa que falhou com o motivo do Dokploy; escreve o motivo sem credenciais; id opcional vira aviso; nunca imprime a chave)                                                                                                                         |
 | `lifecycle/staging-deploy-workflow.test.ts`                      | os passos do staging e da promoção executados com o GHCR simulado: a IA reaproveitada pelo hash de `infra/ai-ocr` e reimplantada só quando o digest muda (ou com `force_ai_build`); o GHCR sem resposta falha o passo em vez de virar "não existe"; cada tag `staging` movida logo antes do próprio deploy e devolvida quando o deploy falha; o marcador `staged-<sha>` escrito por último e exigido pelo PR e pela promoção, que espera até 20 min um deploy de staging em andamento                                                                                    |
 | `lifecycle/wait-for-version.test.ts`                             | a conferência pela liveness pública contra uma API falsa: passa só depois de o commit novo responder pela janela inteira, recomeça a janela quando uma réplica antiga responde, não recomeça numa sondagem sem resposta (5xx/52x, timeout, corpo que não é a liveness) e avisa com a contagem, aceita o `sha-<7>` da promoção, recusa build sem commit; a janela é maior que o monitor de rollback do Swarm                                                                                                                                                              |
@@ -382,6 +465,7 @@ uma garantia:
 | audit, gitleaks, pytest da IA | —                                                  | sim (o audit bloqueia só um push que muda dependência) | sim (idem)                              |
 | contrato com a IA real        | opt-in                                             | só _Run workflow_                                      | não                                     |
 | carga, mutação                | sob demanda                                        | não                                                    | não                                     |
+| simulação do dia de entregas  | sob demanda                                        | não                                                    | não                                     |
 
 ## Regras para escrever testes
 
@@ -453,7 +537,13 @@ uma garantia:
 - **App (Maestro)**: a suíte do app (`trajetto-mobile/docs/testes.md`) entra
   com as contas que o `seed.ts` cria com `LOAD_MOBILE_E2E=1`
   (`MOBILE_E2E_EMAIL`, `MOBILE_E2E_PASSWORD`, `MOBILE_E2E_TWOFA_EMAIL`,
-  `MOBILE_E2E_NOFLEET_EMAIL`).
+  `MOBILE_E2E_NOFLEET_EMAIL`, `MOBILE_E2E_CHECKLIST_EMAIL`,
+  `MOBILE_E2E_GEOFENCE_BLOCK_EMAIL`, `MOBILE_E2E_GEOFENCE_ALERT_EMAIL`). As
+  três últimas são das empresas de configuração: "E2E Checklist" (Frotas +
+  Entregas, `checklist_requirement` `ROUTE_START_AND_END`), "E2E Geocerca
+  Bloquear" (`BLOCK`, raio de 500 m, duas paradas com ponto `MANUAL` e uma
+  sem ponto, `geocode_status` `NOT_FOUND`) e "E2E Geocerca Alertar"
+  (`ALERT`, raio de 500 m).
 - **Contrato de rotas**: `tests/unitaires/contract/client-routes.test.ts` lê
   as URLs que a web e o app constroem (`../trajetto-ui`, `../trajetto-mobile`)
   e falha se alguma não existir na API.

@@ -16,6 +16,12 @@
 - [Um processo, vários papéis](#um-processo-vários-papéis)
 - [Regras transversais](#regras-transversais)
 - [Papéis, permissões e módulos](#papéis-permissões-e-módulos)
+- [Acesso do motorista](#acesso-do-motorista)
+- [Configurações da empresa](#configurações-da-empresa)
+- [Geocerca e coordenadas do endereço](#geocerca-e-coordenadas-do-endereço)
+- [Frota ligada à rota](#frota-ligada-à-rota)
+- [Entregas na rota: casos de borda](#entregas-na-rota-casos-de-borda)
+- [Rotas esquecidas, a lista e a torre](#rotas-esquecidas-a-lista-e-a-torre)
 - [Postgres é a fila](#postgres-é-a-fila)
 - [Crons](#crons)
 - [Redis e tempo real](#redis-e-tempo-real)
@@ -349,7 +355,9 @@ três repositórios.
 </details>
 
 Fora do mapa, por serem opcionais: o provedor de tiles e o de geocodificação
-reversa do comprovante (`PROOF_MAP_TILE_URL`, `REVERSE_GEOCODER_URL`). Em
+do comprovante e dos endereços das entregas (`PROOF_MAP_TILE_URL`,
+`REVERSE_GEOCODER_URL`; sem este, a geocerca só avalia entregas com
+coordenadas informadas ou marcadas no mapa). Em
 staging e produção cada caixa do grupo "VPS · Dokploy" é um serviço próprio
 do Dokploy: a API, a IA e a web como Applications que puxam a imagem do GHCR;
 o PostgreSQL e o Redis como Databases do Dokploy. A topologia (nomes,
@@ -546,6 +554,30 @@ nas réplicas HTTP e uma Application `worker`), só por gatilho medido:
   cobrados por `verify-module-enabled.ts`, inclusive para o MASTER. A IA não é
   um módulo: é o limite mensal `Business.ai_analysis_limit` (0 desliga; teto de
   10.000 fotos por mês).
+- **O zero dos limites (M2)** quer dizer coisas opostas, de propósito, e está
+  escrito num lugar só (`LIMIT_ZERO_MEANING` em
+  `src/shared/entitlements/entitlement-rules.ts`): `vehicle_limit` = 0 é **sem
+  limite** (não configurado, nunca bloqueia); `ai_analysis_limit` = 0 é **IA
+  desligada** (nenhuma foto é lida). Unificar ligaria a IA de quem não comprou
+  ou passaria a bloquear frotas sem limite preenchido. Leia um limite só por
+  `isVehicleLimitEnforced`/`isAIAnalysisEnabled`, nunca com um `> 0` solto, e
+  todo campo publicado que carrega um limite diz o que o 0 significa. Limite
+  **novo** não reaproveita o zero: coluna anulável, `NULL` = ilimitado e 0 =
+  zero mesmo.
+- **Limite de veículos (M8)**: todo veículo que não está `INACTIVE` ocupa uma
+  vaga. Cadastrar, reativar e qualquer edição que ponha o veículo numa
+  situação que ocupa vaga passam pela mesma trava (`FOR NO KEY UPDATE` na linha
+  da empresa) e contam dentro da transação da escrita; se o veículo já ocupa
+  uma vaga é lido ali, travado, e não da leitura anterior do caso de uso (um
+  desbloqueio que corria com uma inativação e um cadastro novo deixava N+1
+  veículos num plano de N). Recusa: 409 `VEHICLE_LIMIT_REACHED` com a contagem.
+  A trava está no banco, então vale entre réplicas
+  (`tests/E2E/vehicle-limit-http.test.ts`).
+- **Limite de IA (M7)**: a cota é reservada com lock da linha do mês em
+  `AIUsagePeriod` (`reserveUnits`), no mês civil do fuso da empresa. A foto
+  além do limite é aceita sem leitura (pedido `SKIPPED`, "limite atingido" na
+  auditoria de comprovantes) e nunca falha para o motorista; baixar o limite
+  no meio do mês zera o saldo sem desfazer o que já foi lido.
 - Trocar o papel ou a empresa de um usuário encerra as sessões dele
   (`session_version` + refresh tokens revogados) e apaga as notificações
   pessoais; as atividades (auditoria) ficam.
@@ -561,6 +593,566 @@ nas réplicas HTTP e uma Application `worker`), só por gatilho medido:
 | Site público | `quote`                                                                                                                                                                       | `/quote`, `/public`                                                                                                 |
 | Provedores   | `whatsapp`                                                                                                                                                                    | `/webhooks` (callbacks da Meta e do Resend)                                                                         |
 | Arquivos     | `upload`                                                                                                                                                                      | `/uploads` (URLs pré-assinadas)                                                                                     |
+
+## Acesso do motorista
+
+O motorista entra no app sem depender de e-mail (plano de 02/11/2026, itens
+D1 a D8; decisões D01 a D04). Usuário de escritório e MASTER continuam no
+fluxo de sempre: e-mail e senha, link de uso único para definir a senha
+(decisão 4.9) e segundo fator opcional.
+
+| Como entra                    | Rota                                                                         | O que vale                                                                                                                                                                                                                                                                                       |
+| ----------------------------- | ---------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **QR Code** (principal)       | `POST /user/:userId/enrollment` (gestor) → `POST /user/session/enroll` (app) | uso único, 10 minutos; gerar outro anula o anterior; o banco guarda só o SHA-256 do token e do código de 8 caracteres (`driver_enrollment_token`); consumo atômico (dois aparelhos, uma sessão); recusa por motorista inativo conta tentativa, e 5 gastam o código                               |
+| **CPF e senha** (alternativa) | `POST /user/session` com `{ cpf, password }`                                 | o CPF é único só por empresa: a senha é conferida em cada login de motorista com aquele CPF (índice `driver_cpf_idx`); uma empresa entra direto, mais de uma devolve `businessSelection` com as empresas em que a senha conferiu, e o app repete com `businessId`; nada é listado antes da senha |
+| E-mail e senha                | `POST /user/session` com `{ email, password }`                               | o mesmo de sempre (o app N-1 e a web)                                                                                                                                                                                                                                                            |
+
+- **Senha definida pelo gestor (D2, decisão D04):** só no login de um
+  motorista, em `POST /user/create-user` (`password`) e em
+  `PATCH /user/:userId/driver-password`. Nenhum e-mail sai, o e-mail cadastrado
+  fica confirmado e a atividade registra quem definiu; a senha nunca vai para
+  log (o logger censura `password`, `qrToken`, `qrContent` e `accessCode`) nem
+  para a atividade. Para usuário de escritório o campo é recusado (400).
+- **O link de definir senha confirma o e-mail (D1):** gastar o link de uso
+  único grava `email_verified` quando ainda não havia.
+- **Sessão do aparelho (D4, decisão D03):** a sessão aberta pelo QR Code, ou
+  por CPF e senha com `deviceId`, usa a política `driver_device` de
+  `config/auth.ts` (30 dias sem uso, 180 no total) e fica presa ao aparelho: o
+  refresh token assinado leva o SHA-256 do `deviceId`, toda rotação leva o
+  `device_id` para o próximo token, e uma renovação sem o mesmo `deviceId`
+  recebe `401 AUTH_DEVICE_MISMATCH` sem gastar o token. Um cabeçalho nunca
+  escolhe essa política.
+- **Bloqueio e limites:** o login por CPF usa o mesmo freio do e-mail
+  (`login-lockout-rules.ts`): uma senha errada conta contra **todos** os logins
+  do CPF e só quando não confere em nenhum; o limite por endereço da rota
+  continua (8 por minuto). CPF inexistente e senha errada recebem a mesma
+  resposta, depois do mesmo bcrypt. Toda recusa por CPF dura o mesmo que
+  `DRIVER_LOGINS_BY_CPF_LIMIT` comparações (`shared/security/refusal-pacing.ts`):
+  um bcrypt por login do CPF e, para as comparações que faltam, uma espera no
+  ritmo medido na própria requisição. Assim o tempo não diz em quantas
+  transportadoras o CPF tem login, e a tentativa anônima não gasta mais CPU
+  (fazer os bcrypts que faltam encheria o portão de dois do `bcrypt-gate`).
+  O login aceito não espera.
+- **Inativar o motorista (D5):** apaga os refresh tokens e os aparelhos de
+  push do login (`revokeAllUserRefreshTokens`) e o QR Code ainda não usado, sem
+  mexer em `session_version`: a próxima requisição do app ouve
+  `403 AUTH_DRIVER_INACTIVE` (o porquê), e não um 401 genérico (D6). Revogar o
+  acesso do login também apaga o QR Code ainda não usado (restaurar não o traz
+  de volta). O consumo do QR confere o hash do código lido: um "gerar outro"
+  entre a leitura e o consumo deixa o código antigo morto, e as recusas dele
+  não contam contra o novo.
+- **Aparelhos (D7):** `GET /user/:userId/devices` lista os aparelhos com
+  sessão presa a eles; `DELETE /user/:userId/devices/:deviceId` encerra as
+  sessões daquele aparelho e os aparelhos de push delas (evento de segurança
+  `device_revoked`).
+- **Logout sem rede (A3):** `POST /user/session/revoke` encerra uma sessão só
+  com o refresh token (mesmo vencido) e apaga os aparelhos de push dela;
+  idempotente (204).
+- Todas as rotas de gestão (`/user/:userId/...`) exigem
+  `user_registration_manage`, valem só para login de motorista
+  (`409 USER_NOT_DRIVER`) e respondem `404 USER_NOT_FOUND` para usuário de outra
+  empresa, como para um inexistente.
+
+## Configurações da empresa
+
+O que a própria transportadora decide para a operação (plano de 02/11/2026,
+M1), separado do plano que o MASTER vende (módulos e limites). Tabela
+`business_settings`, uma linha por empresa no máximo, gravada no primeiro
+salvamento; sem linha, valem os padrões de
+`src/shared/business/business-settings.ts` (`BUSINESS_SETTINGS_DEFAULTS`),
+iguais aos defaults das colunas (o E2E de schema confere os dois).
+
+| Campo                       | Valores                                                   | Padrão     | Vale com             |
+| --------------------------- | --------------------------------------------------------- | ---------- | -------------------- |
+| `checklist_requirement`     | `NONE`, `ROUTE_START`, `ROUTE_END`, `ROUTE_START_AND_END` | `NONE`     | Frota **e** Entregas |
+| `arrival_geofence_mode`     | `DISABLED`, `ALERT`, `BLOCK`                              | `DISABLED` | Entregas             |
+| `arrival_geofence_radius_m` | 50 a 5.000 (CHECK no banco e zod)                         | 500        | Entregas             |
+
+- **Quem edita:** o `BUSINESS_ADMIN` da própria empresa e o MASTER (D11), por
+  `GET/PUT /business/:businessId/settings`. O guard de tenant recusa o id de
+  outra empresa com 403 `TENANT_ACCESS_DENIED`, exista ele ou não. O PUT
+  grava só os campos enviados, trava a linha da empresa
+  (`FOR NO KEY UPDATE`), publica `business-settings.changed` no outbox na mesma transação
+  (antes, depois e autor; política só de atividade, tipo "Configurações da
+  empresa") e, depois do commit, emite `catalogChanged` com `settings`.
+  Salvar o que já está gravado não grava nem audita nada.
+- **Regra dos módulos (M6):** `effectiveBusinessSettings` lê como `NONE` o
+  checklist de uma empresa sem Frota e Entregas, e como `DISABLED` a geocerca
+  de uma empresa sem Entregas. O valor salvo fica guardado e volta quando o
+  módulo é religado. O GET devolve `available` para a web mostrar só as
+  seções que valem.
+- **Entrega aos clientes:** `/user/me` traz `businessSettings` (nulo para o
+  MASTER) e `GET /delivery/my-deliveries/:businessId` traz `settings`, os dois
+  já com a regra dos módulos, para o app guardar no cache offline. Em
+  `my-deliveries`, cada item de `routes` traz também `vehicle` (`id` e placa;
+  nulo sem veículo) e `checklists.route_start`/`route_end`: o checklist de
+  saída e o de chegada mais recentes feitos **para aquela rota**
+  (`VehicleChecklist.routeId` + `phase`), derivados das linhas e nunca
+  guardados na rota, porque um checklist com fotos pode chegar depois do
+  início (C4).
+- **Geocerca (decisão do dono sobre a D13):** o raio vale para toda ação no
+  endereço do cliente — chegada, comprovante e ocorrência. `ALERT` pede
+  confirmação ao motorista e sinaliza; `BLOCK` impede chegada e comprovante
+  fora do raio, nunca a ocorrência (sinalizada). Precisão ruim ou endereço sem
+  coordenada nunca bloqueiam, e o servidor nunca recusa um envio da fila
+  offline: só sinaliza. O registro fica em `distance_m`, `accuracy_m` e
+  `geofence_outcome` (`INSIDE`, `OUTSIDE`, `NOT_EVALUATED`) de
+  `DeliveryEvent` (chegada, comprovante) e de `DeliveryOccurrence`.
+
+Outras colunas e tabelas da mesma expansão, que as regras das próximas
+etapas usam: `driver_enrollment_token` (o QR de acesso do motorista, D3: só
+hashes, uma linha por login, consumo atômico, repositório
+`DriverEnrollmentRepository`), `RefreshToken.device_id` (o aparelho da sessão
+do motorista, D4/D7), `Vehicle.responsibleUserId` (F1; nulo = admins),
+`Fuel.routeId` (C5/F3), `RouteStop.stop_group_key` (B6),
+`OccurrenceType.code` (único por empresa, L8) e `requirements_changed_at`
+(K2), e o índice `route (businessId, created_at DESC)` da lista de rotas
+(K14). `get-route` devolve `meta.timeZone` (o fuso da empresa, G8).
+
+## Geocerca e coordenadas do endereço
+
+O ponto do endereço da entrega (`Delivery.latitude`/`longitude`) e a
+geocerca das ações no cliente (plano de 02/11/2026, itens E1, E2 e E4;
+decisões D12 a D15 e as do dono de 03/11/2026).
+
+**De onde vem o ponto (E1).** O dispatcher fixa no mapa ou informa na
+criação (`geo_source: MANUAL`, exato) ou o job `geocode-deliveries` acha pelo
+endereço (`GEOCODER`).
+O job roda a cada minuto, fora de qualquer requisição (a criação, o XML, a
+planilha e a API pública não esperam o provedor): pega as
+entregas `PENDING`/`IN_TRANSIT` sem ponto e ainda não resolvidas, das mais
+novas para as mais velhas, num `UPDATE` sobre um `SELECT … FOR UPDATE SKIP
+LOCKED` (índice parcial `delivery_geocode_pending_idx`), e consulta o `/search`
+do mesmo provedor Nominatim-compatível da geocodificação reversa
+(`REVERSE_GEOCODER_*`, `shared/services/proof-location/address-geocoder.ts`).
+Cada execução pega no máximo o lote (20) e nunca passa de
+`DELIVERY_GEOCODING_DAILY_BUDGET` no dia, somando as réplicas (contador no
+Redis). `tests/E2E/import-geocoding-volume.test.ts` prova isso com uma planilha
+de 1.000 linhas e um provedor que aceita a conexão e nunca responde: o import
+termina sem chamar o provedor, as 1.000 entregas ficam na fila sem ponto, e o
+job drena em lotes até o orçamento.
+
+| Resposta do provedor                         | O que grava                                                                   |
+| -------------------------------------------- | ----------------------------------------------------------------------------- |
+| número da casa (`ADDRESS`) ou rua (`STREET`) | ponto, `geo_source = GEOCODER`, `geo_precision`, `geocode_status = RESOLVED`  |
+| só bairro ou cidade                          | `geo_precision`, `geocode_status = COARSE`, **sem ponto** (não avaliável)     |
+| nada                                         | `geocode_status = NOT_FOUND`                                                  |
+| erro, 429, 5xx, tempo esgotado               | `geocode_status = FAILED`; tenta de novo depois de 15 min × tentativas, até 5 |
+
+- Nunca sobrescreve `MANUAL`: a escrita exige `geo_source IS NULL`.
+- **Ponto informado na criação.** O formulário do painel
+  (`POST /delivery/create-delivery`), a planilha (colunas opcionais
+  Latitude e Longitude, com vírgula ou ponto) e a API pública
+  (`POST /integration/v1/deliveries`) aceitam `latitude` e `longitude`
+  opcionais. Uma regra só para as três portas
+  (`shared/delivery/address-coordinates.ts`): as duas juntas ou nenhuma, dentro
+  da caixa do Brasil que o "Fixar no mapa" já usa (um par trocado cai no
+  oceano e é recusado com a dica). O repositório grava o par como ponto do
+  endereço com `geo_source = MANUAL` (`manualAddressPoint`), sem
+  `geo_precision`; um valor novo de enum exigiria duas releases. A fila do job
+  nem pega essa entrega (`latitude IS NULL AND geo_source IS NULL`). A edição
+  não recebe as coordenadas: mover o ponto é o "Fixar no mapa". Na API
+  pública, o ponto faz parte do corpo comparado na repetição com a mesma
+  `Idempotency-Key`, mas só um ponto `MANUAL`: o que o job achou depois não
+  conta.
+- Editar o endereço limpa o ponto e os quatro campos do job
+  (`CLEARED_ADDRESS_POINT`), então o endereço novo é geocodificado de novo, e
+  uma resposta do endereço antigo ainda a caminho não grava nada (a escrita
+  confere `geocode_attempted_at`, que é o lease da reserva).
+- Orçamento: `DELIVERY_GEOCODING_DAILY_BUDGET` consultas por dia (UTC),
+  somando as réplicas, num contador de janela fixa no Redis
+  (`shared/delivery/geocoding/geocoding-budget.ts`). Ao contrário dos limites
+  de requisição, falha **fechado**: sem Redis o job espera o próximo minuto.
+  Até 20 consultas por execução, uma a cada 600 ms.
+- Não mexe em `updated_at` (não é edição do cliente). Aceitar latitude e
+  longitude enviadas na criação (formulário, planilha, API) ainda não existe.
+
+**A regra (E2), igual no servidor e no app.**
+`shared/delivery/geofence/geofence-rules.ts`, com os casos em
+`tests/unitaires/delivery/fixtures/geofence-verdict-cases.json`; o app roda a
+mesma fixture contra a cópia dele. `geofenceVerdict` responde `INSIDE`,
+`OUTSIDE` ou `NOT_EVALUATED`, nesta ordem de motivos:
+
+1. modo `DISABLED` → `NOT_EVALUATED` (`DISABLED`), mas a distância é gravada;
+2. endereço sem ponto, ou em (0, 0) → `NO_ADDRESS_POINT`;
+3. endereço `NEIGHBORHOOD` ou `CITY` (só ponto do geocodificador; ponto
+   `MANUAL` é exato) → `COARSE_ADDRESS`, sem distância;
+4. posição ausente, fora do globo ou em (0, 0) → `NO_POSITION`;
+5. precisão ausente, negativa ou não numérica → `NO_ACCURACY` (todo app
+   anterior a este);
+6. precisão maior que o raio → `POOR_ACCURACY`;
+7. posição de mais de 2 min antes do toque → `STALE_POSITION` (idade
+   desconhecida não conta como velha);
+8. senão, `OUTSIDE` se `distância − precisão > raio`, `INSIDE` se não.
+
+A distância é a de haversine (raio da Terra 6.371.000 m), arredondada a
+0,1 m. `geofenceDecision` diz o que fazer: só `OUTSIDE` importa; `ALERT` →
+`CONFIRM` (o app pergunta, o servidor aceita e sinaliza); `BLOCK` → `REFUSE`
+para chegada e comprovante **feitos agora**, `CONFIRM` para ocorrência e para
+envio da fila offline.
+
+**No servidor (E4).** `GeofenceCheck`
+(`shared/delivery/geofence/geofence-check.ts`), chamado num ponto só da
+chegada e do relato (comprovante e ocorrência), depois da checagem de reenvio
+— um reenvio responde com o que foi decidido e nunca reavalia. O corpo aceita
+`accuracy` (metros) e `position_recorded_at` (quando o GPS obteve a posição,
+pelo relógio do aparelho; a idade é `occurred_at` − `position_recorded_at`, os
+dois do mesmo relógio). "Feito agora" é o toque (`resolveOccurredAt`) de no
+máximo 2 min antes da chegada ao servidor. A recusa é
+`422 ARRIVAL_OUTSIDE_GEOFENCE` com a distância e o raio na mensagem; o relato
+do painel não é avaliado. O resultado fica em `distance_m`, `accuracy_m` e
+`geofence_outcome` do evento (ARRIVAL, PROOF, OCCURRENCE) e da ocorrência.
+
+**Onde a web lê (E5).** Os três campos saem com os mesmos nomes no detalhe
+da entrega (eventos e ocorrências), nos `events` da torre de controle
+(`GET /route/control-tower`; nulos numa movimentação de rota) e nos
+`visitedPoints` do detalhe da rota (`GET /route/get-route`). É o selo "Fora
+do raio (820 m)" da web (`lib/geofence-flag.ts`). Os schemas de resposta
+declaram os campos: sem isso o serializador os descarta. O card da parada
+no detalhe da rota lê `data.stopGeofence` do `get-route`: uma linha por
+entrega com apontamento fora do raio nesta rota, o registro `OUTSIDE` mais
+recente entre chegada, comprovante e ocorrência (`deliveryId`, `type`,
+`distance_m`, `accuracy_m`, `recordedAt`). A ocorrência, que sempre passa
+sinalizada, não é ponto do mapa e por isso não vem em `visitedPoints`;
+antes ela aparecia na torre e na linha do tempo, mas não no card da parada.
+
+## Frota ligada à rota
+
+Checklist e abastecimento como parte da rota e da gestão da frota (plano de
+02/11/2026, itens C4, C5, F1 a F4 e K6; decisões D08 a D10 e D44).
+
+- **Checklist da rota (C4/F3):**
+  `POST /vehicle-checklist/create-vehicle-checklist/:businessId` aceita
+  `routeId` com `phase` (`ROUTE_START` saída, `ROUTE_END` chegada); um sem o
+  outro é 400 (`CHECKLIST_ROUTE_PHASE_REQUIRED`/`CHECKLIST_ROUTE_REQUIRED`). A
+  rota tem de ser do motorista do checklist e ter o veículo dele
+  (`422 ROUTE_LINK_MISMATCH`); rota de outra empresa responde como inexistente
+  (`404 DELIVERY_ROUTE_NOT_FOUND`, o código do módulo de rotas; nunca o
+  `ROUTE_NOT_FOUND` de endpoint inexistente, que o app lê como versão
+  desatualizada e reenvia a cada atualização). O status da rota não importa
+  e o início da rota nunca é recusado no servidor: um checklist com fotos
+  feito sem sinal pode chegar depois (D08). Regra em `shared/vehicle/route-link.ts`. A rota que
+  passa nessa regra também vale como a atribuição do veículo ao motorista
+  (`canDriverOperateVehicle` só olha rota liberada ou em andamento): sem isso,
+  o substituto que levou o caminhão na rota recebia
+  `403 VEHICLE_NOT_ASSIGNED_TO_DRIVER` no checklist de chegada, que abre
+  justamente quando a última parada já concluiu a rota. Essa prova tem
+  limite (`routeProvesCustody`, mesmo arquivo): vale para rota liberada ou
+  em andamento e, numa rota concluída ou cancelada, só se ela chegou a ser
+  liberada (ou iniciada) e só para um registro datado do dia da liberação
+  até `ENDED_ROUTE_CHECKLIST_WINDOW_MS` (24 h) depois do fim (`completed_at`;
+  na cancelada sem ele, o `updated_at`). A data é a do registro, a que o app
+  capturou no gesto (K6), então o que foi feito durante a rota entra mesmo
+  sincronizado dias depois; uma rota planejada, nunca liberada ou de outra
+  época não abre o caminhão de hoje, e vale `canDriverOperateVehicle`.
+- **Abastecimento da rota (C5/F3):** `POST /fuel/create-fuel/:businessId`
+  aceita `routeId`, com a mesma regra (inclusive a atribuição do veículo).
+- **A rota nas listas da frota (contrato C3, 03/11/2026):** cada linha de
+  `GET /fuel/list-fuel`, do histórico do veículo
+  (`GET /fuel/search-fuel-by-vehicle/:vehicleId`) e de
+  `GET /vehicle-checklist/list-vehicle-checklist` traz `routeId` (a coluna,
+  ou null) e `route: { id, code }` (o número da rota como texto, ou null), e
+  o checklist traz `phase` (`ROUTE_START`, `ROUTE_END`, ou null para o
+  `STANDALONE`). A rota vem no mesmo `SELECT` (join pela chave estrangeira,
+  sem consulta a mais) e `listedRoute` (`shared/vehicle/route-columns.ts`) só
+  a nomeia quando é da empresa da linha: a chave estrangeira deixa uma linha
+  apontar para a rota de outra empresa (os contratos de repositório semeiam
+  uma), e essa linha sai com `route: null`. O gêmeo in-memory faz o mesmo.
+- **Horário do envio offline (K6):** os dois aceitam `occurred_at` e o header
+  `X-Client-Sent-At`; o toque corrigido pelo relógio do aparelho
+  (`resolveOccurredAt`) substitui `checklist_date`/`refueling_date`. A web não
+  manda nenhum dos dois e continua com a data escolhida.
+- **Rota liberada tem veículo (D10):** liberar já exigia veículo
+  (`canReleaseRoute`); agora `PATCH /route/update-route` também recusa
+  `vehicleId: null` numa rota `RELEASED` (`400 ROUTE_VEHICLE_REQUIRED`).
+- **Filial do checklist e do abastecimento (revisão de 03/11/2026, contrato
+  C1):** a filial é opcional no veículo e no motorista, mas os dois registros
+  exigem uma. O motorista nunca a escolhe: ela vem do veículo, senão do
+  motorista, senão da **única filial ativa** da empresa
+  (`IBranchRepository.findSoleActiveBranchId`, que lê no máximo duas linhas
+  da própria empresa). O registro do **motorista** passa só por filiais
+  **ativas** (`resolveActiveRecordBranchId` em
+  `shared/vehicle/record-branch.ts`, onda 3.7): a filial desativada do
+  veículo é pulada para a do motorista e depois para a única ativa da
+  empresa, em vez de recusar com `BRANCH_INACTIVE`; filial de outra empresa
+  nunca conta. O gestor que deixa a filial em branco no formulário recebe a
+  resolução de antes (`resolveRecordBranchId`, com `409 BRANCH_INACTIVE`
+  para a filial desativada do veículo e `400 BRANCH_REQUIRED` quando nada
+  resolve): quem pode corrigir é quem está pedindo. Antes, faltando a filial
+  nos dois, o app recebia um 400 (recusa definitiva para a fila) e, com o
+  checklist exigido, a rota nunca iniciava.
+  Para o despachante descobrir antes do motorista: com `checklist_requirement`
+  diferente de `NONE` (e o módulo Frota ligado, M6), liberar a rota
+  (`PATCH /route/release-route`), designar entregas pelo atalho que já libera
+  (`PATCH /delivery/assign-deliveries`) ou trocar o veículo ou o motorista de
+  uma rota `RELEASED` (`PATCH /route/update-route`) responde
+  `409 ROUTE_BRANCH_REQUIRED` quando nenhuma filial ativa resolve, com a
+  mensagem "O checklist desta empresa exige filial: defina a filial do
+  veículo <placa> ou do motorista <nome>." e nada gravado (`RouteBranchGuard`
+  em `modules/route/usecases/shared/route-branch-guard.ts`, que faz a mesma
+  pergunta do checklist do motorista; empresa sem a exigência só lê a linha
+  de configurações). Se nada ativo resolve e o veículo ou o motorista aponta
+  para uma filial **inativa** (desativar uma filial só confere as rotas
+  abertas dos motoristas dela, então um veículo continua apontando para
+  ela), a frase nomeia essa filial: "O checklist desta empresa exige filial
+  ativa: a filial <razão social> do veículo <placa> está inativa. Reative a
+  filial ou troque a filial do veículo." (do motorista, o mesmo com o nome).
+  Uma filial inativa com outra ativa para cair não recusa nada. Uma rota
+  `PLANNED` aceita qualquer equipe: a conferência fica para a liberação.
+- **Filial que muda depois da liberação (onda 3.7):** a conferência da
+  liberação não alcança o que acontece depois dela (a filial do veículo
+  desativada ou trocada, uma segunda filial ativa criada). Pelo princípio de
+  produto (nunca prender o motorista por uma falta de cadastro do lado do
+  gestor; mostrar a falta ao despachante), o checklist da rota (`ROUTE_START`,
+  `ROUTE_END`) e o abastecimento da rota do motorista nunca se perdem por
+  isso: (1) a resolução por filiais ativas acima registra o checklist na
+  filial do motorista ou na única ativa quando a do veículo foi desativada.
+  O build instalado (e os itens que ele deixou na fila) manda no corpo a
+  filial que leu do veículo; o app atual não manda filial para o motorista
+  (trajetto-mobile `checklistBodyOf`/`fuelBodyOf`, ondas 3.7 e 3.9). A
+  guarda de filial (`verifyBranchActive`) recusava essa filial com
+  `403 BRANCH_INACTIVE` antes do caso de uso; por isso, nas duas criações, a
+  `ignoreDriverBranchChoice` descarta a filial do corpo quando quem envia é
+  motorista (a do gestor continua passando pela guarda);
+  (2) quando nada ativo resolve, a recusa fica (`409 BRANCH_REQUIRED`, um
+  conflito com os cadastros da empresa e não com o corpo; o app lê o código,
+  deixa a rota seguir e oferece "Tentar de novo"), e quem opera as entregas
+  (`findDeliveryOperators`: administradores e operadores da torre) é avisado
+  pelo outbox com `route.record_branch_missing` (caixa de entrada,
+  obrigatória, com link para a rota, e uma linha "Pendente" na atividade da
+  rota): "Checklist de saída do motorista <nome> recusado: a rota <código>
+  não tem filial ativa (veículo <placa>)." Essa linha é histórico e continua
+  "Pendente" depois do reenvio: a atividade só recebe linhas novas (nenhum
+  código altera uma linha, e o catálogo não tem status de resolvido), e o
+  reenvio aceito aparece como a linha "Criado" do próprio checklist ou
+  abastecimento. O aviso sai **uma vez por rota e
+  momento** (`route.record_branch_missing:<rota>:ROUTE_START|ROUTE_END|FUEL`):
+  `OutboxService.publishOnce` grava com `ON CONFLICT DO NOTHING` na chave
+  única do outbox, fora de transação (a recusa não grava mais nada), então
+  os reenvios do app e duas réplicas respondendo ao mesmo tempo deixam uma
+  linha só; a chave vale enquanto a linha existir (as `PUBLISHED` são
+  apagadas depois de 30 dias). O aviso que falha é registrado no log e a
+  recusa sai igual; o próximo reenvio tenta de novo. Checklist sem rota
+  (`STANDALONE`) e abastecimento sem rota recebem a mesma recusa, sem aviso:
+  não seguram rota nenhuma. Por que não registrar na filial inativa: ela está
+  fechada para registros novos (pode estar a caminho da exclusão, que apaga
+  em cascata os checklists e abastecimentos dela), e o motorista com a
+  própria filial inativa nem tem sessão (`AUTH_BRANCH_INACTIVE`). Guardar a
+  filial na rota ao liberar foi descartado: pediria migration e congelaria
+  uma filial que o gestor pode corrigir depois. Prova:
+  `tests/unitaires/vehicle/record-branch.test.ts`,
+  `tests/unitaires/route/route-branch-guard.test.ts`,
+  `tests/E2E/route-record-branch-gap-http.test.ts` e
+  `tests/E2E/route-branch-required-http.test.ts`.
+- **Checklist de chegada pendente no app (C4):** com `ROUTE_END` ou
+  `ROUTE_START_AND_END`, `my-deliveries` mantém em `routes` (depois das
+  abertas, com `completed_at` preenchido) a rota que terminou nas últimas
+  24 h sem o checklist de chegada da própria empresa
+  (`listRoutesAwaitingEndChecklist`, até 5). A mesma janela
+  (`ENDED_ROUTE_CHECKLIST_WINDOW_MS`, em `shared/vehicle/driver-vehicle-access.ts`)
+  deixa o motorista dessa rota **ler** o veículo dela em
+  `GET /vehicle/get-vehicle` (`canDriverReadVehicle`): a tela do checklist de
+  chegada preenche a quilometragem e a filial com essa leitura, pedida
+  justamente quando a rota já está `COMPLETED`. Só a leitura: abastecimento,
+  checklist sem rota, a lista de veículos e os históricos continuam em
+  `canDriverOperateVehicle` (rota liberada ou em andamento).
+- **Responsável pela frota (F1):** `Vehicle.responsibleUserId`, no cadastro e
+  na edição do veículo; usuário de outra empresa responde como inexistente
+  (`400 RESPONSIBLE_USER_NOT_FOUND`, como os outros vínculos do formulário);
+  `null` devolve aos administradores. A lista (`GET /vehicle/list-vehicle`) e
+  o detalhe (`GET /vehicle/get-vehicle`) trazem `responsibleUser { name }` e
+  `branch { corporate_reason, name }` (null sem um ou outro; `name` da filial
+  é a razão social, o rótulo dos seletores): a edição mostra o nome do
+  responsável e a OS sugerida (F4) já vem com a filial.
+- **Alerta de checklist com defeito (F2):** só com defeito
+  (`shared/vehicle/checklist-defects.ts`: os itens que o app e
+  `PhotoValidationService` já tratam como defeito com foto, mais os pneus, ou
+  situação reprovado ou aprovado com restrições), o checklist publica
+  `vehicle-checklist.defects_found` no outbox na mesma transação. Vai ao
+  responsável (F1) ou, sem ele (ou se ele saiu da empresa), aos
+  administradores; categoria Manutenção (in-app, push e e-mail conforme as
+  preferências); sem WhatsApp. Checklist limpo continua só na atividade.
+- **OS sugerida (F4):** o link do alerta abre
+  `/dashboard/service-order?new=1&vehicleId=…&checklistId=…&description=…`,
+  com o veículo e os defeitos já escritos; nada bloqueia o veículo sozinho.
+
+## Entregas na rota: casos de borda
+
+O que a rota e as entregas fazem quando o plano muda com o motorista na rua
+(plano de 02/11/2026, itens K2, K7 a K10, K12, K13, K16 e K17; decisões D27 a
+D32).
+
+- **Linhas de planejamento na linha do tempo (K8):**
+  `PLANNING_TIMELINE_EVENTS_ENABLED` está ligado: incluir e retirar paradas
+  grava `ROUTE_ADDED`/`ROUTE_REMOVED` (todos os leitores já conhecem os dois
+  tipos; o feed da torre e a API pública os deixam de fora). Cancelar a rota
+  grava, na mesma transação, `ROUTE_REMOVED` com a nota "Rota N cancelada:
+  motivo" em cada entrega que volta ao pool.
+- **Rota com tudo cancelado fica Cancelada (K8, D32):** a rota que fecha sem
+  nenhuma parada resolvida (`routeClosingStatus`) vira `CANCELLED` com o
+  motivo "Todas as paradas canceladas", sem `completed_at`; o webhook e o
+  socket dizem `route.cancelled`, e o veículo volta.
+- **Editar entrega de rota planejada ou liberada (K9):** `PATCH
+/delivery/update-delivery` trava a rota (`lockRouteOfOpenStop`), sobe o
+  `plan_version` e grava o apontamento "Dados alterados no painel: …" na
+  mesma transação, e depois avisa as telas e, com a rota liberada, o motorista
+  (push de plano alterado). Reenviar os mesmos valores não muda nada.
+- **Adicionar à rota em andamento e "Reentregar" (K12, D30):**
+  `POST /route/add-stops` aceita rota `IN_PROGRESS` (`APPENDABLE_STATUSES`;
+  remover, reordenar e editar seguem só com rota planejada ou liberada). A
+  entrega entra no fim, já EM ROTA, com `delivery.dispatched` ao destinatário,
+  `plan_version` novo e push ao motorista (`announcePlanChange` também avisa
+  rota em andamento). Com `redelivery: { reasonId, note? }`, as entregas com
+  INSUCESSO voltam a PENDENTE com a mudança de status citando o motivo e
+  entram na rota, numa transação só (rota travada primeiro).
+- **Revogar acesso ou desativar filial com rota aberta (K10, D31):** recusado
+  com `409 DRIVER_HAS_OPEN_ROUTES`, as contagens e os passos da inativação do
+  motorista (`openRoutesRefusal` com o ato). Restaurar o acesso e reativar a
+  filial nunca são recusados.
+- **Exigência ligada com relato na fila (K2, D29):**
+  `OccurrenceType.requirements_changed_at` é gravado quando uma exigência de
+  anexo (foto, canhoto, assinatura) muda. O relato do motorista tocado offline
+  antes disso é aceito mesmo sem o anexo e ganha um apontamento do sistema
+  ("Aceita sem …"); tocado depois, ou sem `occurred_at`, segue recusado.
+- **Comprovante depois do cancelamento ou da mudança de status (K7, D27):** o
+  comprovante do motorista da rota de onde a entrega saiu
+  (`findLostStop`: a última parada dele cancelada ou com insucesso) não é mais
+  recusado. Tocado antes disso, com a entrega pendente ou com insucesso, sem
+  outro motorista e sem parada aberta em outra rota: ENTREGUE, de volta ao
+  motorista e ao veículo da rota. Senão (tocado depois, sem `occurred_at`,
+  entrega cancelada, com outro motorista, já planejada de novo em outra rota
+  ou tipo que pede autorização): evidência sem efeito (`SUPERSEDED`, com o
+  canhoto). A entrega planejada de novo fica com a torre porque o comprovante
+  só fecha parada de rota em andamento: aplicado, deixaria a parada da rota
+  nova aberta numa entrega entregue, e essa rota nunca concluiria. Nos dois
+  casos, apontamento do sistema, atendimento para a torre e `late_proof`
+  (`APPLIED`/`EVIDENCE`) na resposta.
+- **Chave de envio reutilizada (K13):** chegada e ocorrência respondem
+  `409 SUBMISSION_ID_REUSED` quando o `client_submission_id` já está em outro
+  registro — outra entrega, outro tipo de evento ou outra empresa (o índice é
+  único na tabela inteira e a busca do reenvio só vê a empresa). Antes era 500
+  ou o sucesso do registro alheio. Trocar o índice por um por empresa fica
+  para uma release de contract.
+- **Exclusão em corrida (K16):** o P2003 da FK na exclusão de embarcador,
+  motivo de status e tipo de ocorrência vira o mesmo 409 da contagem
+  (`isForeignKeyViolation`).
+- **Matriz das exigências (K17):** a fixture compartilhada
+  `occurrence-requirements-cases.json` (API, web e app) cobre cada exigência
+  ligada e desligada em tipos de entrega e de não entrega, e
+  `tests/E2E/occurrence-requirements-matrix-http.test.ts` roda cada caso pela
+  rota real, mais a autorização (aceita, sem efeito até a decisão) e o K2.
+
+## Rotas esquecidas, a lista e a torre
+
+O detalhe e a lista de rotas, a torre e o relatório de pausas (plano de
+02/11/2026, itens F3, G9, H3, H5, H6, J4, K11, K14 e K15; decisões D26, D53 e
+D54).
+
+- **Rota esquecida aberta (D26):** uma rota `IN_PROGRESS` que começou antes
+  de hoje no fuso da empresa, ou há mais de 16 h
+  (`shared/route/route-left-open.ts`, `isRouteLeftOpen`). A mesma regra vale
+  na torre (`activeRoutes[].stale`/`openSince` e `inherited`: as paradas
+  ainda abertas dessas rotas, que o funil conta como Em rota hoje), no
+  Monitoramento por rota (`stale`/`openSince`), no relatório de pausas
+  (alerta `ROUTE_LEFT_OPEN` com os dias e a data; o `DRIVING_REST_SHORT` da
+  jornada vem com `unreliable: true` e a nota "Estimativa não confiável",
+  D54) e no job `alert-routes-left-open`, que avisa os administradores uma
+  vez por rota (`route.left_open`, in-app; carimbo `left_open_alerted_at` sob
+  `SKIP LOCKED` e chave única no outbox).
+- **O que cada número herdou (H3):** `{routes, deliveries, since}`, o
+  resumo `inheritedOpenStops`, para a nota "inclui N de rotas abertas desde
+  dd/mm". Na torre é `inheritedFromRunningRoutes` sobre as rotas em
+  andamento de `listTowerRoutes`; em `GET /delivery/operation-summary`
+  (`data.inherited`) é a mesma conta lida só das rotas esquecidas
+  (`listRoutesLeftOpen`, as duas leituras de `openStopsOnRoutesLeftOpen`
+  abaixo, sem filtro de entrega): os dois números sempre batem (teste de
+  paridade em `operation-summary-day.test.ts` e em `query-plans.test.ts`), e
+  o resumo deixou de ler o dia inteiro da torre a cada chamada (720 linhas
+  de rota e parada contra menos de 160 no plano medido). O painel inicial
+  (dashboard) lê só os totais e não paga essa leitura. Na lista de
+  entregas (`searchMeta.inherited` da linha `meta`) é a parte do cartão Em
+  rota: entregas `IN_TRANSIT` com a busca e os demais filtros (sem o de
+  status, como o cartão), cuja parada aberta está numa rota esquecida. A
+  consulta escolhe as rotas por um instante (`leftOpenStartedBefore`: o
+  maior entre a meia-noite da empresa e agora − 16 h, equivalente a
+  `isRouteLeftOpen` e testado instante a instante) e, numa segunda leitura,
+  agrupa só as paradas abertas dessas rotas (`route (businessId, status, …)`
+  e depois `route_stop (routeId, status)`; o helper compartilhado
+  `src/shared/route/routes-left-open-query.ts`); num dia sem rota esquecida ela
+  não lê nenhuma parada. Não use um `_count` de relação com filtro aqui: o
+  Prisma o escreve como um subselect agrupado sobre todas as paradas abertas
+  do banco, de todas as empresas (o plano está em `query-plans.test.ts`).
+- **`_count` de relação com filtro em listagens:** o mesmo vale fora da torre.
+  A lista de empresas do MASTER (`BusinessRepository.listBusiness`) contava
+  a frota ativa de cada empresa com `_count` filtrado, e o Prisma agregava os
+  veículos de todas as empresas da plataforma a cada página. Agora são duas
+  leituras: a página de empresas e um `vehicle.groupBy(businessId)` restrito
+  aos ids da página (`status` diferente de `INACTIVE`), com a mesma resposta
+  (`vehicle_count`, 0 sem veículo). O plano, com 400 empresas e 10.000
+  veículos, está em `query-plans.test.ts` ("the MASTER's company list").
+- **Fuso na lista de rotas:** a linha `meta` de `GET /route/list-routes`
+  traz `searchMeta.timeZone` (o fuso da empresa), para Previsto, Saída e
+  Conclusão no relógio da empresa, como o detalhe da rota (`meta.timeZone`
+  do `get-route`).
+- **Fuso nas abas Ocorrências, Auditoria e Atendimentos (H6, D22):** as três
+  listas da torre trazem o fuso da empresa ao lado das linhas, para a web
+  mostrar a mesma hora que o detalhe da rota e o Painel (S16, S20):
+  `searchMeta.timeZone` na linha `meta` do NDJSON de
+  `GET /delivery/list-occurrences` e de `GET /delivery/proof-audits` (o mesmo
+  lugar da lista de rotas) e `meta.timeZone` no JSON de `GET /chat/tickets`.
+  Aditivo e declarado nos schemas de resposta (sem isso o serializador
+  descarta o campo do JSON); sem ele, numa API anterior, a web cai no relógio
+  do navegador. Prova: `tests/E2E/tower-tabs-time-zone-http.test.ts`.
+- **Fuso no detalhe da entrega:** `GET /delivery/get-delivery` responde
+  `{ data, meta: { timeZone } }`, com o fuso da empresa (mesma fonte e mesmo
+  padrão de `GET /chat/tickets`, `loadBusinessTimeZone`), lido depois do
+  detalhe: uma leitura recusada nunca chega à linha da empresa. O diálogo de
+  detalhe da web (`lib/delivery-reads.ts`) mostra nele as datas de
+  `messageOptOut` (C2); o app do motorista lê só `data`. Aditivo e declarado
+  no schema de resposta; mesma prova E2E das abas.
+- **Encerrar com pendências (K11):**
+  `POST /route/close-with-pending/:routeId/business/:businessId`, motivo
+  obrigatório, só rota em andamento. Sob a trava da rota: as paradas abertas
+  viram `CANCELLED`, as entregas `IN_TRANSIT` voltam a `PENDING` (sem
+  motorista nem veículo) com `ROUTE_REMOVED` "Rota N encerrada com
+  pendências: motivo", a rota fica `COMPLETED` com `closure_reason`, sobe
+  `plan_version` e o veículo volta. O motorista recebe `route.plan_changed`
+  (push) e `route.stops_changed` (socket); o ERP, `route.completed`. Reenvio:
+  200 com `unchanged: true`. Muda a regra de que a rota só termina sozinha.
+- **Lista enxuta (K14):** cada linha de `GET /route/list-routes` traz
+  `stopCounts` (paradas por status, por `groupBy(routeId, status)`) e nunca
+  as entregas; o detalhe (`get-route`) continua completo. `stops` (id e
+  status) fica uma versão só, para o painel ainda em uso; a release seguinte
+  o tira (patch `_n1/api-k14-route-list-without-stops.patch`). A ordem
+  padrão usa `route_businessId_created_at_idx` (plano em
+  `query-plans.test.ts`).
+- **Consultas da página da rota (G9):** a trilha lê só a janela da rota
+  (`findRouteWindow`) e vem afinada no Postgres (`listTrail` com `max`, a
+  regra de `downsample`, e `recorded` com o total real); os pontos visitados
+  ficam os 400 mais recentes; o seletor "Adicionar entregas" pagina por
+  cursor (`cursor`/`meta.nextCursor`, chave (dia previsto sem dia por
+  último, criação, id)), com `total` e `facets` só na primeira página; `page`
+  continua aceito para o painel em uso.
+- **O que aconteceu com o veículo (F3, leitura):** `get-route` traz
+  `checklists` (`route_start`/`route_end`, o mais recente de cada momento,
+  o formato do `my-deliveries`) e `fuels`; `null` com Gestão de Frotas
+  desligada ou num perfil sem a leitura de checklists/abastecimentos.
+- **Governança de papéis (H5):** a torre, a trilha, os dois monitoramentos e
+  o resumo da operação recusam o motorista já na guarda
+  (`allowDriver: false`, 403 `PERMISSION_DENIED`); a recusa dos casos de uso
+  (`DRIVER_CANNOT_VIEW_PANELS`) continua atrás, como segunda trava.
+- **A fonte de cada número da torre (H6):**
+
+| Aba          | Número                                  | Endpoint                                  | Escopo e janela                                                                                                                                |
+| ------------ | --------------------------------------- | ----------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| Painel       | funil, progresso, pontualidade, eventos | `GET /route/control-tower`                | dia da empresa no fuso dela (`operationDay`); funil = documentos ativos no dia, incluindo os herdados de rotas esquecidas (`inherited`)        |
+| Painel       | veículos no mapa / rotas em andamento   | `GET /route/control-tower`                | mapa: pontos das últimas 12 h; `activeRoutes`: toda rota `IN_PROGRESS`, com `stale` — por isso "1 em andamento · 0 no mapa" se explica sozinho |
+| Rotas        | quadro por rota                         | `GET /route/monitoring`                   | rotas do dia da empresa mais as em andamento de dias anteriores (com `stale`/`openSince`); paginado                                            |
+| Ocorrências  | cartões e lista                         | `GET /delivery/list-occurrences`          | todas as ocorrências da empresa (sem "hoje"); os cartões contam o conjunto filtrado inteiro, com os mesmos filtros da lista, nunca a página    |
+| Ocorrências  | fila de autorizações                    | `GET /delivery/occurrence-authorizations` | pedidos pendentes; o aviso aos administradores conta 10 min da chegada ao servidor                                                             |
+| Atendimentos | selo e balão                            | `GET /chat/tickets/summary`               | contagens por situação (abertos, sem atendente, meus, aguardando autorização, não lidos), sem janela de data                                   |
+| Atendimentos | lista                                   | `GET /chat/tickets`                       | os mesmos tickets, com os filtros da tela                                                                                                      |
+| Auditoria    | fila e taxa de concordância             | `GET /delivery/proof-audits`              | fila sem janela; `agreementRate` cobre os últimos 90 dias civis no fuso da empresa                                                             |
 
 ## Postgres é a fila
 
@@ -590,7 +1182,9 @@ perdidos.
 | `ops-heartbeat`                      | a cada minuto             | avalia as regras de operação e avisa o monitor externo (`HEALTHCHECK_PING_URL`)                                                        |
 | `escalate-occurrence-authorizations` | a cada minuto             | pedido de autorização sem resposta da torre em 10 min vai aos administradores, uma vez                                                 |
 | `repair-unticketed-messages`         | a cada minuto             | arquiva em ticket a mensagem gravada sem ticket por uma imagem antiga                                                                  |
+| `geocode-deliveries`                 | a cada minuto             | geocodifica o endereço das entregas abertas sem ponto (as mais novas primeiro), dentro de `DELIVERY_GEOCODING_DAILY_BUDGET` por dia    |
 | `close-abandoned-imports`            | a cada 5 min              | fecha importação que ficou `IN_PROGRESS` num processo que morreu                                                                       |
+| `alert-routes-left-open`             | de hora em hora (:07)     | avisa os administradores, uma vez, da rota esquecida em andamento (desde antes de hoje no fuso da empresa ou há mais de 16 h)          |
 | `reconcile-proof-analysis`           | a cada 10 min             | pede de novo a leitura de IA de um comprovante cujo pedido se perdeu                                                                   |
 | `reconcile-record-analysis`          | a cada 10 min (:05, :15…) | o mesmo para abastecimentos e checklists `pending` sem pedido e com foto legível, de 10 min a 2 dias, sem gastar quota com o histórico |
 | `check-push-receipts`                | a cada 15 min             | lê os recibos da Expo e desativa aparelhos mortos                                                                                      |
@@ -797,7 +1391,8 @@ servidor, que é o que o AD-RB é. O título do PDF segue o tipo do registro:
 ([ADR 0009](./adr/0009-comprovante-publico-por-token.md)): o token é uma
 capacidade sem login e expira em `PROOF_VERIFICATION_TTL_DAYS` (1825 dias).
 Mapa estático (`PROOF_MAP_TILE_URL`) e geocodificação reversa
-(`REVERSE_GEOCODER_URL`) são opcionais; em produção os servidores públicos do
+(`REVERSE_GEOCODER_URL`, o mesmo provedor que dá o ponto do endereço das
+entregas à geocerca) são opcionais; em produção os servidores públicos do
 OpenStreetMap são recusados.
 
 ## Integrações externas
@@ -821,19 +1416,135 @@ OpenStreetMap são recusados.
   `timestamp.corpo`). Tópicos `delivery.*`, `occurrence.*`, `proof.*` e
   `route.*` (catálogo em `src/shared/integration/webhook-catalogue.ts`). Os
   segredos ficam cifrados em repouso com `WEBHOOK_SECRETS_KEY` (AES-256-GCM;
-  `yarn webhooks:seal` cifra os já gravados).
-- **WhatsApp (Meta Cloud API)**: toda notificação usa um template de
-  utilidade em `pt_BR` com uma única variável (`META_WHATSAPP_TEMPLATE_NAME`);
-  mensagens de uma transportadora ao cliente final usam um template separado
-  (`META_WHATSAPP_CUSTOMER_TEMPLATE_NAME`), para uma denúncia de spam pausar só
-  ele. Template pausado (132015) adia os envios de hora em hora por até ~8 h.
-  Callbacks de status em `/webhooks/whatsapp` com `META_WHATSAPP_APP_SECRET` e
-  `META_WHATSAPP_WEBHOOK_VERIFY_TOKEN`.
+  `yarn webhooks:seal` cifra os já gravados). Com o módulo Entregas
+  **desligado** pelo MASTER (linha de `BusinessEntitlement` desligada; M3,
+  D51), o despachante retém os eventos da empresa como retém os de um endpoint
+  pausado (sem chamada, sem tentativa contada, até 30 dias) e a volta do
+  módulo os libera (`releaseHeldWebhookDeliveriesOfBusiness`, depois do
+  commit; salvar o módulo ligado de novo repete a liberação). As rotas em
+  andamento não são canceladas, e o diálogo de desligar mostra quantas são e
+  quantos webhooks vão pausar (`getDeliveriesImpact`). **Enviar teste** (plano de
+  02/11/2026, L1): `POST /integrations/webhook-endpoint/:id/business/:businessId/test`
+  (`integration_manage` de escrita, 10/min) põe na fila um evento de tópico
+  `ping` só para aquele endpoint, assinado, numerado e registrado em
+  `webhook_delivery` como um evento real; `ping` fica fora de `ALL_TOPICS`,
+  então nenhuma inscrição nem curinga o alcança. Endpoint pausado ou
+  desligado por falhas responde 409 (`WEBHOOK_ENDPOINT_PAUSED`,
+  `WEBHOOK_ENDPOINT_DISABLED`).
+- **Comprovante para o integrador** (L7, [ADR 0009](./adr/0009-comprovante-publico-por-token.md)):
+  `proof_url` na leitura pública da entrega e no `data` dos eventos de
+  documento cujo status depois do evento é DELIVERED ou FAILED. É um link de
+  portador sem estado: `<API_HTTP_REQUEST>/public/delivery-proof/<id>.<hmac>`,
+  HMAC SHA-256 do id e da empresa com chave derivada do `JWT_SECRET` (HKDF,
+  rótulo próprio; `src/shared/integration/proof-link.ts`). Abrir confere a
+  assinatura contra a empresa dona da entrega, o prazo
+  (`PROOF_VERIFICATION_TTL_DAYS`, contado da criação da entrega) e o status,
+  gera o PDF na primeira abertura (o mesmo do painel) e redireciona (302)
+  para o arquivo. Toda recusa é 404 `PROOF_NOT_FOUND`; 30/min por endereço.
+  Trocar o `JWT_SECRET` invalida todos os links já enviados.
+- **Código da ocorrência** (L8): `OccurrenceType.code`, opcional e único por
+  empresa (409 `OCCURRENCE_TYPE_CODE_TAKEN` pelo índice
+  `occurrence_type_businessId_code_key`), sai como `occurrence_code` no
+  webhook `occurrence.reported` e no `data` do mesmo evento em
+  `/integration/v1/events`.
+- **Autenticação da chave** (L5): uma consulta por chamada; a busca da
+  credencial traz junto a linha DELIVERIES de `BusinessEntitlement`.
+- **WhatsApp (Meta Cloud API)**: cada mensagem tem o seu modelo de
+  utilidade em `pt_BR` (plano de 02/11/2026, B1/B2): 17 internos, um por
+  evento e público (`src/shared/notifications/whatsapp-templates.ts`), e 4 ao
+  cliente final, um por momento, com os botões de URL "Acompanhar entrega" e
+  "Parar de receber" (`src/shared/delivery/customer-whatsapp-templates.ts`).
+  O render devolve o nome do modelo e os parâmetros crus; o registro achata
+  cada um numa linha, corta no limite com "…", põe o valor padrão no lugar do
+  vazio e segura o corpo em 1024. O texto livre da transportadora vai só por
+  e-mail; no WhatsApp a linha `delivery_message_template` é só o liga/desliga
+  do momento (B3). O modelo genérico `trajetto_notification` (Marketing) não
+  é mais usado. Pausa (132015) é por modelo e adia só aquele modelo, de hora
+  em hora, por até ~8 h; modelo inexistente ou com outra contagem de
+  variáveis (13200x) falha sem nova tentativa, com erro no log. Callbacks em
+  `/webhooks/whatsapp` com `META_WHATSAPP_APP_SECRET` e
+  `META_WHATSAPP_WEBHOOK_VERIFY_TOKEN`: status de mensagem, status de modelo
+  (pausa por nome) e `template_category_update` (erro no log quando um dos 21
+  sai de UTILITY). Os textos para criar na Meta: [whatsapp-modelos.md](./whatsapp-modelos.md),
+  gerado dos registros por `yarn docs:whatsapp` (um teste falha se divergir).
+- **Mensagem ao cliente por parada** (B6): as paradas de uma rota com o mesmo
+  endereço normalizado e o mesmo destinatário (documento, senão telefone)
+  dividem `RouteStop.stop_group_key` (gravada em `createRoute`/`addStops` e
+  recalculada ao editar a entrega, `src/shared/delivery/stop-group.ts`). Os
+  quatro momentos saem uma vez por parada: `OutboxService.publish` desvia
+  para a linha do grupo (`customerStopGroup` em
+  `src/shared/delivery/customer-notice.ts`) com um `INSERT ... ON CONFLICT`
+  na chave do evento, que junta as entregas em `payload.deliveries` enquanto
+  a linha está PENDING. "Saiu" e "a caminho" saem na hora (o "a caminho"
+  também marca as paradas irmãs); "entregue" e "insucesso" esperam 90 s para
+  juntar as irmãs resolvidas na janela. O link é o da entrega de menor id da
+  parada, e a página de acompanhamento lista as outras (`sameStop`).
+- **Descadastro por telefone e e-mail na transportadora** (B5, D38): o
+  `POST /public/track/:token/opt-out` (o botão "Parar de receber" e as
+  páginas `/acompanhar/<token>/parar` e `/parar/<token>` da web) marca o
+  `external_recipient` da entrega e, na mesma transação, grava em
+  `customer_message_suppression` o telefone e o e-mail desse destinatário
+  para a empresa dona da entrega: `channel` `WHATSAPP` com o telefone como
+  uma linha só, em E.164 sem o "+" (`normalizeSuppressionPhone` em
+  `src/shared/notifications/customer-message-suppression.ts`: os dígitos que
+  o remetente da Meta põe no `to`, de `normalizePhoneNumber`, que já tira o
+  prefixo de discagem "0"/"00" da frente (nenhum código de país nem DDD
+  começa com 0; antes, "011 99123-4567" ia para a Meta como 011991234567, um
+  destino inexistente), mais o nono dígito de um celular antigo de 8
+  dígitos, aquele que começa com 6 a 9; fixo começa com 2 a 5 e não muda; o
+  remetente nunca acrescenta o nono dígito), então "(11) 9123-4567" num
+  cadastro antigo e "011 99123-4567" na NF-e seguinte são o mesmo telefone;
+  `EMAIL` com o
+  endereço sem espaços e em minúsculas, mais a entrega de onde veio o clique
+  (`source_delivery_id`, sem chave estrangeira). O porquê: quem recebe muitas
+  entregas da mesma transportadora continuava recebendo as mensagens da
+  próxima. A gravação é `INSERT ... ON CONFLICT DO NOTHING` na chave única
+  (empresa, canal, endereço): repetir o clique, ou duas réplicas ao mesmo
+  tempo, não grava de novo. Toda mensagem ao cliente (os 4 modelos de
+  WhatsApp, a mensagem por parada do B6 e os e-mails da transportadora)
+  confere a supressão na expansão do evento (sem linha de entrega, motivo
+  `suppressed_address` no log de canais suprimidos) e de novo na hora do
+  envio, a cada tentativa (`loadExternalMessage`): uma mensagem que já estava
+  na fila termina `FAILED` sem nova tentativa, com o motivo em `lastError`.
+  Outra transportadora continua enviando ao mesmo telefone; notificações
+  internas (equipe e motorista) não leem a tabela. Retenção: enquanto a
+  empresa existir (`ON DELETE CASCADE`). A resposta do endpoint continua a
+  mesma frase com token válido ou não.
+- **Estado do descadastro e como desfazer (contrato C2, 03/11/2026):** o
+  detalhe da entrega (`GET /delivery/get-delivery/:deliveryId/business/:businessId`)
+  traz `messageOptOut: { whatsapp, email }`, a data ISO da supressão do
+  telefone e do e-mail **atuais** da entrega nesta empresa (null enquanto
+  recebe ou sem endereço naquele canal; uma linha descadastrada antes da
+  tabela de supressões vale pela própria `opted_out_at`, `messageOptOutOf`).
+  O despachante desfaz com
+  `POST /delivery/reactivate-customer-messages/:deliveryId/business/:businessId`
+  (permissão `delivery_manage` de escrita; o motorista recebe 403
+  `DRIVER_CANNOT_MANAGE_DELIVERIES`; entrega de outra empresa, 404
+  `DELIVERY_NOT_FOUND`): numa transação, apaga as supressões da empresa para
+  o telefone e o e-mail normalizados do destinatário (os atuais da entrega e
+  os que o `external_recipient` guardou, que podem ser de antes de uma
+  correção), limpa `opted_out_at` de todo `external_recipient` da empresa com
+  o mesmo contato normalizado (a leitura é das linhas descadastradas da
+  própria empresa, pelo índice `(businessId, created_at)`; descadastro é
+  raro e o botão também) e grava a atividade "Mensagens ao cliente
+  reativadas" com quem fez. As próximas mensagens de qualquer entrega dessa
+  pessoa voltam a sair (as duas conferências do envio leem exatamente essas
+  linhas); as já descartadas não são reenviadas. Outra transportadora não
+  muda. Idempotente: sem nada a desfazer, responde 200 com o mesmo estado,
+  sem gravar nem registrar atividade. Resposta:
+  `{ message, data: { messageOptOut: { whatsapp: null, email: null } } }`.
 - **E-mail (Resend)**: `DELIVERED` quer dizer aceito pelo provedor; o que
   acontece depois chega por `/webhooks/resend` (assinado com
   `RESEND_WEBHOOK_SECRET`) e fica em `notification_provider_receipt`.
 - **Push**: pela Expo, para o app Android; o cron `check-push-receipts`
-  desativa aparelhos mortos.
+  desativa aparelhos mortos. Cada tópico diz por quanto tempo o push vale
+  (`pushTtlSeconds` na política, `ttl` da Expo; D41): rota e decisão da torre
+  12 h, chat e IA do canhoto 24 h, os demais o padrão do provedor. Com
+  `EXPO_ACCESS_TOKEN`, o envio e os recibos levam `Authorization: Bearer`
+  (exigido quando a "segurança reforçada de push" está ligada no projeto da
+  Expo). A limpeza diária também apaga o aparelho sem sessão vinculada
+  (registrado antes da coluna) sem registro há mais que a maior janela ociosa
+  das sessões (A9).
 - **Turnstile**: o formulário público de orçamento é verificado pela própria
   API; com `TURNSTILE_SECRET_KEY` definida, pedido sem token é recusado.
 
@@ -1079,7 +1790,19 @@ Decisão de 28/10/2026:
   não mexer nos ~540 imports de `@prisma/client`; migrar para `prisma-client`
   é uma mudança separada.
 - O Dependabot move `prisma`, `@prisma/*` e `pg` juntos e não abre PR de major
-  do Prisma (`.github/dependabot.yml`).
+  do Prisma nem do `pg` e do `@types/pg` (`.github/dependabot.yml`; a regra
+  do `pg` é conferida em `tests/unitaires/lifecycle/supply-chain.test.ts`).
+- **`pg` fixo em exatamente 8.23.1, sem ir para o 9**: dentro de uma
+  transação interativa, o interpretador de queries do Prisma 7 dispara
+  queries em paralelo no mesmo client do `pg` (o client checado da
+  transação). O `pg` 8 enfileira essas chamadas e só avisa, uma vez por
+  processo, com um `DeprecationWarning` ("Calling client.query() when the
+  client is already executing a query is deprecated and will be removed in
+  pg@9.0"); o `pg` 9 remove esse enfileiramento. Não suba para o 9 antes de
+  serializar o `DriverClient.query` em `src/shared/database/pg-driver.ts`
+  (uma fila por client) ou de uma correção do Prisma. Até lá o Dependabot
+  ignora os majors do `pg` e do `@types/pg`; tire essa regra junto com a
+  trava.
 
 **Versão do Prisma**: a API está no Prisma 7.10.1, com `@prisma/adapter-pg`.
 A primeira tentativa não passou nos gates (um orçamento de statements estourado
@@ -1112,8 +1835,14 @@ Tabelas e tipos criados depois da última migration de produção estão livres.
 Em tabelas quentes: `SET lock_timeout = '5s';` no topo, `CREATE INDEX IF NOT
 EXISTS`, uma tabela quente por migration; tabela grande → construa o índice à
 mão antes com `CREATE INDEX CONCURRENTLY IF NOT EXISTS`, confira `indisvalid`
-e deixe a migration com o mesmo `IF NOT EXISTS` (vira no-op). Uma migration
-nunca é editada depois de aplicada em algum banco.
+e deixe a migration com o mesmo `IF NOT EXISTS` (vira no-op). Se o índice lê
+colunas que a própria migration cria, o roteiro do comentário cria antes, à
+mão, os tipos e as colunas, e a migration tem de aceitar isso: `CREATE TYPE`
+dentro de `DO $$ BEGIN ... EXCEPTION WHEN duplicate_object THEN NULL; END $$;`
+e `ADD COLUMN IF NOT EXISTS` (sem isso o deploy para em `42710` e trava as
+seguintes; `tests/unitaires/lifecycle/migration-prebuild.test.ts` confere as
+migrations desta leva). Uma migration nunca é editada depois de aplicada em
+algum banco.
 
 O guard `tests/unitaires/lifecycle/migration-safety.test.ts` lê toda migration
 posterior a `LAST_MIGRATION_IN_PRODUCTION` e falha em qualquer statement da
@@ -1122,6 +1851,28 @@ o marcador com o motivo. Atualize `LAST_MIGRATION_IN_PRODUCTION` depois de
 cada release de produção. `tests/E2E/schema-expand-contract.test.ts` prova o
 expandir/contrair contra um banco real. Operação (job, P3009, contract
 pendente): [`deploy.md`](./deploy.md#15-migrations).
+
+**Coluna que vira opcional, na prática.** Na release N o campo já é opcional
+no `schema.prisma` (o client desta release lê NULL sem erro) e todo leitor
+trata a ausência; só os escritores continuam sem gravar NULL. É isso que
+permite voltar para N depois que N+1 começar a gravar NULL. Hoje há duas
+nesse estado (plano de 02/11/2026; a fase seguinte está em
+[`deploy.md`](./deploy.md#expansões-que-pedem-a-release-seguinte-plano-de-02112026)):
+
+- `User.email` (D2): o e-mail só pode faltar no login de motorista. Quem
+  manda e-mail para um usuário passa por `src/modules/user/services/user-mailbox.ts`:
+  `withMailbox` pula quem não tem e-mail numa notificação em massa e
+  `requireMailbox` recusa com 409 `USER_EMAIL_REQUIRED` um fluxo que não
+  existe sem e-mail (código de exclusão, link de senha). O pipeline de
+  notificações não cria a linha EMAIL para quem não tem endereço
+  (`hasEmail` em `pipeline-rules.ts`, suprimida como `no_contact`), e o
+  segundo fator por e-mail não vale para conta sem e-mail.
+- `DeliveryMessageTemplate.body` (B3): o WhatsApp ao cliente sai por modelo
+  fixo aprovado pela Meta e o `body` de uma linha de WhatsApp nunca é lido.
+  Nesta release o save do WhatsApp aceita só `{topic, is_active}` (o resto é
+  ignorado, nunca recusado) e mantém o texto anterior ou grava `''`; a
+  seguinte grava NULL e zera os textos antigos (patch em `_n1` no workspace).
+  O e-mail continua com texto obrigatório (CHECK).
 
 ## Compatibilidade com o app do motorista
 

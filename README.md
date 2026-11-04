@@ -331,6 +331,7 @@ Todos conferidos no `package.json`.
 | `yarn seed`                                | cria o usuário master                                                                                               |
 | `yarn seed:infringement`                   | importa os códigos de infração do RENAINF                                                                           |
 | `yarn webhooks:seal`                       | cifra os segredos de webhook já gravados com `WEBHOOK_SECRETS_KEY`                                                  |
+| `yarn docs:whatsapp`                       | gera `docs/whatsapp-modelos.md` a partir dos modelos de WhatsApp do código                                          |
 | `yarn test`                                | testes unitários (`tests/unitaires`)                                                                                |
 | `yarn test:watch`                          | unitários em modo watch                                                                                             |
 | `yarn test:e2e`                            | testes E2E contra Postgres e Redis reais (`tests/E2E`), em duas fases (as réplicas por último)                      |
@@ -380,17 +381,17 @@ módulos e prefixos: [`docs/arquitetura.md`](./docs/arquitetura.md#papéis-permi
 
 Só o que existe no código:
 
-| Integração                  | Para quê                                                   | Onde                                                                    |
-| --------------------------- | ---------------------------------------------------------- | ----------------------------------------------------------------------- |
-| Cloudflare R2               | fotos, assinaturas e PDFs, por URL pré-assinada            | `src/shared/services/upload-service.ts`, rotas `/uploads`               |
-| Resend                      | e-mail (SMTP) e recibos de entrega (`/webhooks/resend`)    | `src/shared/providers/mail-provider/`                                   |
-| Meta WhatsApp Cloud API     | notificações e mensagens ao cliente final por template     | `src/shared/providers/whatsapp-provider/`, `/webhooks/whatsapp`         |
-| Expo Push API (→ FCM)       | push no app Android                                        | `src/shared/notifications/push-provider.ts`, cron `check-push-receipts` |
-| `trajetto-ai`               | leitura de canhoto e odômetro (OCR local)                  | `src/shared/ai/`, `infra/ai-ocr/`                                       |
-| Cloudflare Turnstile        | captcha do formulário público de orçamento                 | `src/shared/security/turnstile.ts`                                      |
-| Webhooks dos clientes       | eventos `delivery.*`, `occurrence.*`, `proof.*`, `route.*` | `src/shared/integration/webhook-dispatch-service.ts`                    |
-| Monitor externo (heartbeat) | dead man's switch a cada minuto                            | `src/jobs/cron/ops-heartbeat-job.ts`                                    |
-| tiles e geocodificação      | mapa e endereço no PDF do comprovante (opcionais)          | `PROOF_MAP_TILE_URL`, `REVERSE_GEOCODER_URL`                            |
+| Integração                  | Para quê                                                                                                                                                                | Onde                                                                                                              |
+| --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| Cloudflare R2               | fotos, assinaturas e PDFs, por URL pré-assinada                                                                                                                         | `src/shared/services/upload-service.ts`, rotas `/uploads`                                                         |
+| Resend                      | e-mail (SMTP) e recibos de entrega (`/webhooks/resend`)                                                                                                                 | `src/shared/providers/mail-provider/`                                                                             |
+| Meta WhatsApp Cloud API     | notificações (17 modelos) e mensagens ao cliente final (4 modelos com botões), cada uma pelo seu modelo aprovado ([docs/whatsapp-modelos.md](docs/whatsapp-modelos.md)) | `src/shared/notifications/whatsapp-templates.ts`, `src/shared/providers/whatsapp-provider/`, `/webhooks/whatsapp` |
+| Expo Push API (→ FCM)       | push no app Android                                                                                                                                                     | `src/shared/notifications/push-provider.ts`, cron `check-push-receipts`                                           |
+| `trajetto-ai`               | leitura de canhoto e odômetro (OCR local)                                                                                                                               | `src/shared/ai/`, `infra/ai-ocr/`                                                                                 |
+| Cloudflare Turnstile        | captcha do formulário público de orçamento                                                                                                                              | `src/shared/security/turnstile.ts`                                                                                |
+| Webhooks dos clientes       | eventos `delivery.*`, `occurrence.*`, `proof.*`, `route.*`; o `ping` do botão Enviar teste (fora do catálogo, só para o endpoint escolhido)                             | `src/shared/integration/webhook-dispatch-service.ts`                                                              |
+| Monitor externo (heartbeat) | dead man's switch a cada minuto                                                                                                                                         | `src/jobs/cron/ops-heartbeat-job.ts`                                                                              |
+| tiles e geocodificação      | mapa e endereço no PDF do comprovante; ponto do endereço das entregas para a geocerca (job `geocode-deliveries`) (opcionais)                                            | `PROOF_MAP_TILE_URL`, `REVERSE_GEOCODER_URL`                                                                      |
 
 Cada uma aparece em `GET /health/providers` (só MASTER) sem enviar nada.
 

@@ -958,14 +958,20 @@ pipeline avisa "deploy de trajetto-ai pulado" e segue).
 
    META_WHATSAPP_ACCESS_TOKEN=<token>
    META_WHATSAPP_PHONE_NUMBER_ID=<id>
-   META_WHATSAPP_TEMPLATE_NAME=trajetto_notification
    META_WHATSAPP_API_VERSION=v23.0
+   META_WHATSAPP_BUSINESS_ACCOUNT_ID=<id da WABA>
+   EXPO_ACCESS_TOKEN=<token de acesso do projeto na Expo>
    RESEND_SECRET_KEY=<re_…>
    RESEND_FROM_EMAIL=<remetente do domínio verificado>
    ```
 
-   Mais, quando forem usadas: `META_WHATSAPP_CUSTOMER_TEMPLATE_NAME`,
-   `META_WHATSAPP_BUSINESS_ACCOUNT_ID`, `META_WHATSAPP_APP_SECRET`,
+   Os nomes dos 21 modelos de WhatsApp são fixos no código
+   ([whatsapp-modelos.md](./whatsapp-modelos.md)): `META_WHATSAPP_TEMPLATE_NAME`
+   e `META_WHATSAPP_CUSTOMER_TEMPLATE_NAME` não são mais lidas e podem sair do
+   _Environment_. Defina `EXPO_ACCESS_TOKEN` nos dois ambientes **antes** de
+   ligar a "segurança reforçada de push" no projeto da Expo (D43).
+
+   Mais, quando forem usadas: `META_WHATSAPP_APP_SECRET`,
    `META_WHATSAPP_WEBHOOK_VERIFY_TOKEN`, `RESEND_WEBHOOK_SECRET`,
    `TURNSTILE_SECRET_KEY` (definida, o formulário de orçamento exige o token
    do Turnstile), `RATE_LIMIT_EDGE_SECRET`, o
@@ -2138,6 +2144,39 @@ produção: criar a migration de contract (o SQL está no cabeçalho de
 `20260924090000`) com `-- contract-phase: <release> não lê mais estas
 colunas` e remover os três campos `@ignore` no mesmo commit.
 
+### Expansões que pedem a release seguinte (plano de 02/11/2026)
+
+Duas colunas viraram opcionais por `-- nullable-expand:` e **nesta release
+ninguém grava NULL nelas**. O código desta release já lê as duas como
+opcionais (é o que permite voltar a ela depois da próxima):
+
+| Coluna                           | Migration                                       | O que a release seguinte faz                                                                                                                                                                                                     |
+| -------------------------------- | ----------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `user.email`                     | `20261102120100_user_email_nullable`            | liga o cadastro de motorista sem e-mail (D2), depois que API, web e app que tratam o e-mail como opcional estiverem no ar; o e-mail continua obrigatório para quem não é motorista                                               |
+| `delivery_message_template.body` | `20261102120800_message_template_body_nullable` | passa a gravar NULL no WhatsApp e roda a migração de dados que zera `body` e `subject` das linhas de WhatsApp, marcada `-- contract-phase:` (B3); o `CHECK delivery_message_template_email_body_chk` mantém o e-mail obrigatório |
+
+No staging isso são dois pushes da API (o segundo só depois do primeiro no
+ar); em produção, duas releases. Nunca as duas fases juntas: um rollback
+para a imagem anterior encontraria NULL numa coluna que o client dela lê como
+obrigatória (P2032). A fase seguinte do B3 está pronta como patch em
+`_n1/api-b3-whatsapp-template-body-null.patch` no workspace (com o
+`README.md` da pasta: ordem e testes).
+
+**Um campo de resposta pela mesma regra (K14).** A lista de rotas
+(`GET /route/list-routes`) passou a trazer `stopCounts` e, nesta release,
+ainda manda `stops` só com id e status: o painel em produção lê esse campo, e
+tirá-lo junto quebraria a tabela entre o deploy da API e o da web. A release
+seguinte, depois da web que lê `stopCounts` no ar, tira `stops` da lista
+(`_n1/api-k14-route-list-without-stops.patch`, sem migration).
+
+**WhatsApp ao cliente desligado na migração (D35).** Esta release roda
+`20261103110000_whatsapp_customer_messages_off`, que desliga todas as linhas
+WHATSAPP de `delivery_message_template`: o texto passa a ser o modelo fixo
+aprovado pela Meta, que nenhuma empresa viu. Avise as empresas que usam a aba
+"Mensagens ao Cliente": cada uma liga de novo, na web, os momentos que quiser.
+Antes, conte as linhas (Fase 0 do plano):
+`SELECT "businessId", topic, is_active FROM delivery_message_template WHERE channel = 'WHATSAPP';`.
+
 **Depois de cada release de produção**, atualize `LAST_MIGRATION_IN_PRODUCTION`
 em `tests/unitaires/lifecycle/migration-safety.test.ts` para a última
 migration que a release levou.
@@ -2581,6 +2620,49 @@ trajetto-api-production=N`, que o próximo deploy desfaz) e refaça o
   fila fechou: até 22 s); tudo antes dos workers (ADR
   [0001](./adr/0001-filas-e-mensageria.md)).
 
+### Staging com 2 réplicas (plano de 02/11/2026, K15; decisão D53)
+
+O código está pronto para N réplicas, mas o staging roda com 1: os caminhos
+entre réplicas nunca rodam antes da produção. Para a validação (cenário S6):
+
+1. **Antes de subir**: `free -m` na VPS (cada réplica tem até 1 GiB, _Memory
+   Limit_ da [seção 7.7](#77-trajetto-api-application)) e o orçamento de
+   conexões, `réplicas × 11 + migrations (2) + ferramentas < max_connections`
+   (`SHOW max_connections;`, 100 por padrão: com 2 réplicas, 24 + ferramentas).
+2. **Local, antes do staging**: o harness da API com duas réplicas atrás do
+   Traefik, `bash tests/load/multi-replica.sh` (`tests/load/README.md`):
+   balanceamento, rate limit compartilhado, fila sem lease vencido, evento de
+   uma réplica no socket da outra, fila sem duplicata e vazão.
+3. **No Dokploy**: _Advanced → Cluster Settings → Replicas_ `2` e, se a versão
+   tiver, _Stop Grace Period_ `40000000000` (40 s) → **Save** → **Deploy**.
+   Não configure health check no Traefik (ver a lacuna da
+   [seção 5](#5-applications-em-vez-de-compose-o-que-mudou-e-o-que-ficou-de-fora)):
+   o Swarm só põe a réplica no balanceamento depois da liveness.
+4. **No staging, com as duas de pé**: socket conectado numa réplica e evento
+   gerado na outra (a torre recebe a parada resolvida pelo app); os crons
+   novos rodam uma vez por horário:
+   ```sql
+   SELECT "jobName", "scheduledFor", count(*)
+     FROM scheduled_job_execution
+    WHERE "jobName" IN ('alert-routes-left-open', 'geocode-deliveries')
+    GROUP BY 1, 2 HAVING count(*) > 1;   -- tem de voltar vazio
+   ```
+   e uma rota esquecida em andamento gera **um** aviso aos administradores
+   (`route.left_open:<id>` em `domain_outbox_event`), mesmo com as duas
+   réplicas varrendo.
+
+**Estado em memória (auditoria K15, 03/11/2026).** Nada de dado de empresa
+mora num processo. O que fica em memória é de plataforma ou é limite por
+réplica documentado como tal:
+
+| O quê                                                                                                                   | Onde                                                                                                                   | Por que é seguro com N réplicas                                                                                                                            |
+| ----------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| rate limit, ticket do socket, limite de handshakes, orçamento de geocodificação, cota de e-mail                         | Redis (janela fixa, falha aberta)                                                                                      | compartilhado entre as réplicas                                                                                                                            |
+| filas (outbox, IA, webhooks, geocodificação, importação), crons, aviso de rota esquecida                                | Postgres (`SKIP LOCKED`, lease do cron, carimbo `left_open_alerted_at`, chave única do outbox)                         | cada linha é reivindicada por uma réplica só; provado em `cron-scheduler-lock`, `delivery-geocoding-repository-contract` e `route-close-with-pending-http` |
+| snapshots de plataforma (prontidão dos provedores, painel do MASTER)                                                    | memória da réplica + Redis (`snapshot-cache.ts`)                                                                       | sem empresa na chave; alguns segundos de defasagem                                                                                                         |
+| exportações simultâneas, escrita de `last_used_at` da chave de API, contagem de uso da API, pausa de modelo do WhatsApp | memória da réplica (`export-slots.ts`, `last-used-throttle.ts`, `api-usage-recorder.ts`, `meta-cloud-api-provider.ts`) | limites e buffers por réplica, documentados no próprio arquivo: N réplicas = N vezes o teto; o uso da API soma com `increment`                             |
+| formatadores de data, modelos de e-mail compilados, chaves do JWT                                                       | memória da réplica                                                                                                     | derivados do código ou do segredo, iguais em toda réplica                                                                                                  |
+
 ### Separar os workers do HTTP (só por gatilho medido)
 
 Gatilhos (ADR 0001/0004): espera no pool visível em `/health/metrics`
@@ -2732,8 +2814,10 @@ segredo ficar de fora). Os logs de cada Application ficam na aba _Logs_ dela
 ### Prontidão dos provedores (`GET /health/providers`, só MASTER)
 
 Sem enviar nada a ninguém e sem devolver segredo: Resend (`GET /domains`),
-Meta (`GET /{phone_number_id}` e os templates, com
-`META_WHATSAPP_BUSINESS_ACCOUNT_ID`), Expo, R2 (`HeadBucket`; `local` em
+Meta (`GET /{phone_number_id}` e uma listagem só dos modelos, com
+`META_WHATSAPP_BUSINESS_ACCOUNT_ID`: os 21 do código, cada um aprovado, em
+pt_BR, UTILITY e com as variáveis e os botões que o código envia; MARKETING é
+erro), Expo (avisa sem `EXPO_ACCESS_TOKEN`), R2 (`HeadBucket`; `local` em
 produção é erro), trajetto-ai (`/health` e um `POST /v1/read` vazio), o
 certificado e o heartbeat. `not_configured` traz `missing_env` com os nomes que
 faltam. As sondas rodam em paralelo (o número da Meta junto com os
@@ -2775,7 +2859,7 @@ ninguém.
 
 | Controle                                                             | Onde                                                                                                                  | Quando falha                                                                                                                                                |
 | -------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Dependabot (npm, actions, imagens base, pip da IA, compose de carga) | `.github/dependabot.yml`, PRs contra `staging`                                                                        | não falha: abre PRs toda segunda; majors de Node e o motor de OCR ficam de fora de propósito                                                                |
+| Dependabot (npm, actions, imagens base, pip da IA, compose de carga) | `.github/dependabot.yml`, PRs contra `staging`                                                                        | não falha: abre PRs toda segunda; majors de Node, do Prisma e do `pg` e o motor de OCR ficam de fora de propósito                                           |
 | Actions fixadas por commit                                           | todo `uses:` dos workflows, com `# vX.Y.Z`                                                                            | `supply-chain.test.ts` recusa um `uses:` por tag                                                                                                            |
 | Imagens base por digest                                              | `Dockerfile`, `infra/ai-ocr/Dockerfile`; nos workflows, os serviços, o smoke test, o BuildKit, gitleaks e Trivy       | `supply-chain.test.ts` e `ci-stability.test.ts`                                                                                                             |
 | Serviço de IA                                                        | rodas Python com `--require-hashes`, modelos versionados em `infra/ai-ocr/models` e conferidos contra `models.sha256` | o build falha num hash diferente; o pytest roda dentro da imagem                                                                                            |
@@ -2835,9 +2919,19 @@ repete 3 vezes e vira aviso.
 
 **O gitleaks falhou**: trate como vazamento. Revogue/rotacione na origem
 primeiro; remova do código (reescreva a branch se ainda não foi mergeada; em
-`main`/`staging`, não reescreva — já foi rotacionado). Só entra no
-`.gitleaksignore`, pela fingerprint (`commit:arquivo:regra:linha`), um falso
-positivo ou um segredo já rotacionado. O job varre o histórico de **todas** as
+`main`/`staging`, não reescreva — já foi rotacionado). Um valor público por
+design que a regra genérica confunde com chave (hoje só o
+`ACCESS_CODE_ALPHABET` de `src/modules/user/services/driver-enrollment.ts`,
+cuja linha serve de modelo) leva o comentário de liberação inline do gitleaks
+**na própria linha que dispara**, com o motivo escrito logo acima: o
+comentário anda junto com a linha. Cada um fica listado, com a linha inteira,
+no `tests/unitaires/lifecycle/secrets-hygiene.test.ts`, que reprova um novo
+que ninguém revisou em qualquer arquivo, Markdown inclusive (o gitleaks
+respeita o comentário em toda linha que varre, até contra as regras de
+provedor). Segredo de verdade nunca leva o comentário. O `.gitleaksignore`
+fica só com o que já está preso num commit do histórico — a baseline e os
+segredos já rotacionados —, pela impressão digital completa
+(`commit:arquivo:regra:linha`). O job varre o histórico de **todas** as
 branches do remoto. O `.gitleaks.toml` mantém todas as regras padrão e
 silencia só a `generic-api-key` em `tests/` e no `.env.example`. A baseline
 guarda o que o histórico tinha quando a varredura foi ligada — entre eles uma
@@ -3124,20 +3218,21 @@ _classic_ `read:packages`, informado no provider Docker de cada Application.
 
 ### O que precisa casar entre os repositórios
 
-| Valor                             | API (Environment das Applications do projeto `trajetto-api`)                                                                                    | Web (Environment da Application)                                                         | App (ambiente EAS)                                                                    |
-| --------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
-| URL pública da API                | o host na aba _Domains_ da Application `trajetto-api` e `API_HTTP_REQUEST` (a URL; dela sai o logo dos e-mails)                                 | `HTTP_REQUEST` (chamadas do servidor da web) e `PUBLIC_API_URL` (chamadas do navegador)  | `EXPO_PUBLIC_API_URL`                                                                 |
-| Socket.IO                         | o mesmo host da API, com WebSocket liberado na borda                                                                                            | `PUBLIC_API_URL` (o socket roda na própria API; não há variável própria)                 | o socket usa `EXPO_PUBLIC_API_URL`                                                    |
-| Origem da web                     | `HTTP_REQUEST` = a origem da web do ambiente (única origem do CORS e do Socket.IO, base dos links)                                              | `METADATA_BASE`                                                                          | `EXPO_PUBLIC_WEB_APPLICATION_URL` (links de Privacidade e Termos)                     |
-| Limite de tentativas por IP       | `RATE_LIMIT_FORWARDER_SECRET`                                                                                                                   | `RATE_LIMIT_FORWARDER_SECRET`, **o mesmo valor**                                         | —                                                                                     |
-| Captcha (Turnstile)               | `TURNSTILE_SECRET_KEY` (o mesmo widget da web; definida, exige o token)                                                                         | `TURNSTILE_SITE_KEY` e `TURNSTILE_SECRET_KEY`                                            | —                                                                                     |
-| Fotos no R2                       | `R2_*` (um bucket por ambiente)                                                                                                                 | `CSP_STORAGE_ORIGINS` libera a origem do bucket; o CORS do bucket libera a origem da web | envia direto à URL pré-assinada que a API devolve (sem configuração)                  |
-| IA (leitura de fotos)             | `AI_LOCAL_TOKEN` na `trajetto-api` = `AI_TOKEN` na `trajetto-ai` (o mesmo valor, um por ambiente) e `AI_LOCAL_URL=http://<App Name da IA>:8080` | nenhuma variável: a IA chega pela API                                                    | nenhuma variável                                                                      |
-| Push (FCM)                        | nenhuma: a API chama a Expo Push API                                                                                                            | —                                                                                        | `GOOGLE_SERVICES_JSON` (arquivo secreto no EAS) e a chave FCM V1 em `eas credentials` |
-| Rastreamento em segundo plano     | —                                                                                                                                               | `BACKGROUND_TRACKING`                                                                    | `EXPO_PUBLIC_BACKGROUND_TRACKING` (as duas ligam juntas)                              |
-| Versão do app                     | `MIN_MOBILE_CONTRACT` e `MOBILE_STORE_URL`                                                                                                      | —                                                                                        | `CLIENT_CONTRACT` em `utils/client-version.ts`                                        |
-| Gate de rotas da web              | `/docs/json` com `DOCS_USER` e `DOCS_PASSWORD`                                                                                                  | secrets `API_DOCS_URL`, `DOCS_USER`, `DOCS_PASSWORD` no environment `production`         | —                                                                                     |
-| Checkout entre repositórios no CI | `CLIENT_REPOS_READ_TOKEN` (lê a web e o app)                                                                                                    | `API_REPO_READ_TOKEN` (lê a API)                                                         | `API_REPO_READ_TOKEN` (lê a API)                                                      |
+| Valor                             | API (Environment das Applications do projeto `trajetto-api`)                                                                                    | Web (Environment da Application)                                                         | App (ambiente EAS)                                                                                                                                                                                                     |
+| --------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| URL pública da API                | o host na aba _Domains_ da Application `trajetto-api` e `API_HTTP_REQUEST` (a URL; dela sai o logo dos e-mails)                                 | `HTTP_REQUEST` (chamadas do servidor da web) e `PUBLIC_API_URL` (chamadas do navegador)  | `EXPO_PUBLIC_API_URL`                                                                                                                                                                                                  |
+| Socket.IO                         | o mesmo host da API, com WebSocket liberado na borda                                                                                            | `PUBLIC_API_URL` (o socket roda na própria API; não há variável própria)                 | o socket usa `EXPO_PUBLIC_API_URL`                                                                                                                                                                                     |
+| Origem da web                     | `HTTP_REQUEST` = a origem da web do ambiente (única origem do CORS e do Socket.IO, base dos links)                                              | `METADATA_BASE`                                                                          | `EXPO_PUBLIC_WEB_APPLICATION_URL` (links de Privacidade e Termos)                                                                                                                                                      |
+| Limite de tentativas por IP       | `RATE_LIMIT_FORWARDER_SECRET`                                                                                                                   | `RATE_LIMIT_FORWARDER_SECRET`, **o mesmo valor**                                         | —                                                                                                                                                                                                                      |
+| Captcha (Turnstile)               | `TURNSTILE_SECRET_KEY` (o mesmo widget da web; definida, exige o token)                                                                         | `TURNSTILE_SITE_KEY` e `TURNSTILE_SECRET_KEY`                                            | —                                                                                                                                                                                                                      |
+| Fotos no R2                       | `R2_*` (um bucket por ambiente)                                                                                                                 | `CSP_STORAGE_ORIGINS` libera a origem do bucket; o CORS do bucket libera a origem da web | envia direto à URL pré-assinada que a API devolve (sem configuração)                                                                                                                                                   |
+| IA (leitura de fotos)             | `AI_LOCAL_TOKEN` na `trajetto-api` = `AI_TOKEN` na `trajetto-ai` (o mesmo valor, um por ambiente) e `AI_LOCAL_URL=http://<App Name da IA>:8080` | nenhuma variável: a IA chega pela API                                                    | nenhuma variável                                                                                                                                                                                                       |
+| Push (FCM)                        | nenhuma: a API chama a Expo Push API                                                                                                            | —                                                                                        | `GOOGLE_SERVICES_JSON` (arquivo secreto no EAS) e a chave FCM V1 em `eas credentials`                                                                                                                                  |
+| Rastreamento em segundo plano     | —                                                                                                                                               | `BACKGROUND_TRACKING`                                                                    | `EXPO_PUBLIC_BACKGROUND_TRACKING` (mesma regra: ausente é ligado, só `false` desliga)                                                                                                                                  |
+| Versão do app                     | `MIN_MOBILE_CONTRACT` e `MOBILE_STORE_URL`                                                                                                      | —                                                                                        | `CLIENT_CONTRACT` em `utils/client-version.ts`                                                                                                                                                                         |
+| QR Code de acesso do motorista    | `APP_ENV`, que vai dentro do QR Code: `trajetto-enroll:1:<APP_ENV>:<token>`                                                                     | nenhuma variável: o diálogo mostra o QR Code que a API gerou                             | `extra.appEnvironment` do build, tirado de `EAS_BUILD_PROFILE` ou `APP_ENV` (`preview` e `staging` viram `staging`), **igual ao `APP_ENV` da API**; diferente, o app recusa o QR Code e só o código de acesso funciona |
+| Gate de rotas da web              | `/docs/json` com `DOCS_USER` e `DOCS_PASSWORD`                                                                                                  | secrets `API_DOCS_URL`, `DOCS_USER`, `DOCS_PASSWORD` no environment `production`         | —                                                                                                                                                                                                                      |
+| Checkout entre repositórios no CI | `CLIENT_REPOS_READ_TOKEN` (lê a web e o app)                                                                                                    | `API_REPO_READ_TOKEN` (lê a API)                                                         | `API_REPO_READ_TOKEN` (lê a API)                                                                                                                                                                                       |
 
 Segredos nunca são compartilhados entre staging e produção. Cada variável
 está detalhada no `docs/variaveis-de-ambiente.md` do repositório que a lê.
