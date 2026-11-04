@@ -487,7 +487,10 @@ uma garantia:
    `outbox-body-contract` falha, a correção é no servidor. Rota removida entra
    em `retired-routes.ts`.
 7. **Datas pelo dia de negócio** (`business-day.ts`), nunca `setHours` no
-   relógio do servidor; datas `@db.Date` como `YYYY-MM-DD`.
+   relógio do servidor; datas `@db.Date` como `YYYY-MM-DD`. Um instante que
+   precisa cair "hoje" deriva da meia-noite da empresa, não de um
+   deslocamento fixo: "6 horas atrás" cai no dia anterior entre 00:00 e 06:00
+   de São Paulo (`query-plans.test.ts`).
 8. **Nada de dados reais nem segredos** em fixtures. Senhas e tokens de teste
    ficam em `tests/` (o gitleaks silencia só a regra genérica ali); uma chave
    de provedor de verdade falha o job.

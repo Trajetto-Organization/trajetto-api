@@ -746,6 +746,12 @@ describe("what the tower reads for the day", () => {
       // ids are time-ordered like the product's uuid(7), and each route's
       // stops are written together, as the product writes them: that is the
       // physical order the planner prices an index probe by.
+      //
+      // Today's running routes started today in São Paulo, at whatever hour
+      // the suite runs: halfway since the company's midnight, at most six
+      // hours ago. A flat "six hours ago" put them on the previous day from
+      // 00:00 to 06:00 there (03:00-09:00 UTC), and the tower then counted
+      // all of them as left open, not the two the tests move back.
       await prisma.$executeRawUnsafe(
         `
         INSERT INTO route (
@@ -760,6 +766,11 @@ describe("what the tower reads for the day", () => {
                ELSE 'COMPLETED' END::"RouteStatus",
           (now() AT TIME ZONE 'America/Sao_Paulo')::date - ((n - 1) / ${ROUTES_PER_DAY}),
           CASE WHEN (n - 1) / ${ROUTES_PER_DAY} = 0 AND n % 2 = 1 THEN NULL
+               WHEN (n - 1) / ${ROUTES_PER_DAY} = 0
+               THEN now() - LEAST(
+                 interval '6 hours',
+                 (now() - (((now() AT TIME ZONE 'America/Sao_Paulo')::date)::timestamp AT TIME ZONE 'America/Sao_Paulo')) / 2
+               )
                ELSE now() - (((n - 1) / ${ROUTES_PER_DAY}) || ' days')::interval - interval '6 hours' END,
           CASE WHEN (n - 1) / ${ROUTES_PER_DAY} = 0 THEN NULL
                ELSE now() - (((n - 1) / ${ROUTES_PER_DAY}) || ' days')::interval - interval '1 hour' END,
