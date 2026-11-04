@@ -16,6 +16,8 @@ import { UserRepository } from "@/modules/user/repositories/user-repository";
 
 import { BusinessRepository } from "@/modules/business/repositories/business-repository";
 import { IBusinessRepository } from "@/modules/business/repositories/IBusiness-repository";
+import { BusinessSettingsRepository } from "@/modules/business/repositories/business-settings-repository";
+import type { IBusinessSettingsRepository } from "@/modules/business/repositories/IBusiness-settings-repository";
 
 import { BranchRepository } from "@/modules/branch/repositories/branch-repository";
 import { IBranchRepository } from "@/modules/branch/repositories/IBranch-repository";
@@ -28,6 +30,8 @@ import { IPermissionRepository } from "@/modules/permission/repositories/IPermis
 
 import { IUsersTokensRepository } from "@/modules/user/repositories/IUsers-tokens-repository";
 import { UserTokensRepository } from "@/modules/user/repositories/user-tokens-repository";
+import { DriverEnrollmentRepository } from "@/modules/user/repositories/driver-enrollment-repository";
+import type { IDriverEnrollmentRepository } from "@/modules/user/repositories/IDriver-enrollment-repository";
 
 import { SupplierRepository } from "@/modules/supplier/repositories/supplier-repository";
 import { ISupplierRepository } from "@/modules/supplier/repositories/ISupplier-repository";
@@ -150,6 +154,7 @@ import { KanbanService } from "./services/kanban-service";
 import { UploadService } from "./services/upload-service";
 import { OutboxService } from "./notifications/outbox-service";
 import { WebhookFanOutService } from "./integration/webhook-fan-out-service";
+import { GeofenceCheck } from "./delivery/geofence/geofence-check";
 
 container.registerSingleton<IWhatsAppProvider>(
   "WhatsAppProvider",
@@ -187,11 +192,24 @@ container.registerSingleton<IUsersTokensRepository>(
   "UsersTokensRepository",
   UserTokensRepository,
 );
+// Plan of 02/11/2026 (D3): the driver's one-time access by QR code.
+container.registerSingleton<IDriverEnrollmentRepository>(
+  "DriverEnrollmentRepository",
+  DriverEnrollmentRepository,
+);
 
 container.registerSingleton<IBusinessRepository>(
   "BusinessRepository",
   BusinessRepository,
 );
+// Plan of 02/11/2026 (M1): the company's own settings.
+container.registerSingleton<IBusinessSettingsRepository>(
+  "BusinessSettingsRepository",
+  BusinessSettingsRepository,
+);
+// Plan of 02/11/2026 (E4): the geofence of the actions at the customer's
+// address. Stateless (reads the settings on every call), so one is enough.
+container.registerSingleton<GeofenceCheck>("GeofenceCheck", GeofenceCheck);
 container.registerSingleton<IBranchRepository>(
   "BranchRepository",
   BranchRepository,

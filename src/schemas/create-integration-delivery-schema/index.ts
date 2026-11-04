@@ -2,6 +2,7 @@ import { z, ZodError } from "zod";
 
 import { createDeliverySchema } from "@/schemas/create-delivery-schema";
 import { isValidCnpj } from "@/shared/delivery/cnpj";
+import { refineAddressPointPair } from "@/shared/delivery/address-coordinates";
 
 /**
  * The body of POST /integration/v1/deliveries (decision 5.10).
@@ -108,6 +109,10 @@ const createIntegrationDeliverySchema = z
   })
   .strict()
   .superRefine((body, ctx) => {
+    // The panel's pair rule (plan of 02/11/2026, E1): both coordinates of
+    // the address point, or neither.
+    refineAddressPointPair(body, ctx);
+
     const named = [body.shipper_id, body.shipper_cnpj].filter(
       (value) => value !== undefined && value !== null,
     ).length;

@@ -37,6 +37,10 @@ interface RegisterDeliveryProofRequest {
 
   /** The photo stamp and the phone (decision 14.8), for the PROOF event. */
   capture?: ProofCapture;
+
+  /** E4: the fix's accuracy (metres) and age at the tap, for the geofence. */
+  accuracy?: number | null;
+  positionAgeMs?: number | null;
 }
 
 /**
@@ -76,6 +80,8 @@ class RegisterDeliveryProofUseCase {
     occurredAt,
     device_precheck,
     capture,
+    accuracy,
+    positionAgeMs,
   }: RegisterDeliveryProofRequest): Promise<ReportOccurrenceResult> {
     const findUser = await this.user.findUserById(userId);
 
@@ -142,6 +148,8 @@ class RegisterDeliveryProofUseCase {
         occurredAt,
         device_precheck,
         capture,
+        accuracy,
+        positionAgeMs,
         legacy: true,
       });
 

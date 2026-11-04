@@ -7,6 +7,7 @@ import {
 import { occurredAtField } from "@/shared/delivery/occurred-at";
 import { optionalCoordinate } from "@/shared/delivery/optional-coordinate";
 import { devicePrecheckField } from "@/shared/ai-precheck/device-precheck";
+import { geofenceBodyFields } from "@/shared/delivery/geofence/geofence-check";
 
 /**
  * Proof of delivery from the driver app. The photo and signature are
@@ -79,6 +80,8 @@ const deliveryProofSchema = z.object({
   // Decision 14.2: a build with the pre-check may still post a day cached
   // before the delivery types here.
   device_precheck: devicePrecheckField,
+  // Plan of 02/11/2026 (E4): what the company's geofence weighs the position by.
+  ...geofenceBodyFields,
 });
 
 export { deliveryProofSchema };

@@ -7,6 +7,11 @@ import {
 import { dateOnlyField } from "@/shared/delivery/date-only-field";
 import { optionalMultilineText } from "@/shared/delivery/text-rules";
 import { WRITABLE_DELIVERY_KINDS } from "@/shared/delivery/delivery-kind";
+import {
+  addressLatitudeField,
+  addressLongitudeField,
+  refineAddressPointPair,
+} from "@/shared/delivery/address-coordinates";
 
 const requiredTextField = (label: string, min: number, max: number) =>
   z
@@ -181,6 +186,12 @@ const createDeliverySchema = z.object({
   address_number: optionalTextField("O número do endereço", 10),
   complement: optionalTextField("O complemento", 50),
   neighborhood: optionalTextField("O bairro", 100),
+  // Plan of 02/11/2026, E1: the point an operation already has, stored as
+  // the address point (MANUAL). Both or neither: the pair rule is on
+  // createDeliveryBodySchema, because a refinement here would stop the
+  // public create and the edit from deriving their shapes from this object.
+  latitude: addressLatitudeField,
+  longitude: addressLongitudeField,
   // A day, not an instant (decision 1.3): "YYYY-MM-DD", stored as UTC midnight.
   scheduled_date: dateOnlyField("A data prevista").describe(
     "Data prevista (AAAA-MM-DD), sem hora.",
@@ -198,4 +209,14 @@ const createDeliverySchema = z.object({
     .optional(),
 });
 
-export { createDeliverySchema, deliveryItemSchema };
+/**
+ * The panel's create body: the fields above plus the rules across them
+ * (the address point is both coordinates or neither). The route validates
+ * with it and the controller parses with it; derivations use the field
+ * object, createDeliverySchema.
+ */
+const createDeliveryBodySchema = createDeliverySchema.superRefine(
+  refineAddressPointPair,
+);
+
+export { createDeliveryBodySchema, createDeliverySchema, deliveryItemSchema };

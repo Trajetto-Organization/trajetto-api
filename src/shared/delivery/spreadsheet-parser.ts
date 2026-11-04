@@ -6,6 +6,10 @@ import {
 } from "./spreadsheet-template";
 import { dateOnlyFromKey } from "@/shared/time/business-day";
 import type { DeliveryKind } from "./delivery-kind";
+import {
+  ADDRESS_POINT_MESSAGES,
+  addressPointProblem,
+} from "./address-coordinates";
 
 /**
  * Turning a spreadsheet into deliveries, decided here and nowhere else.
@@ -40,6 +44,10 @@ interface ParsedRow {
   address_number: string | null;
   complement: string | null;
   neighborhood: string | null;
+
+  /** The address point the sheet gave (plan E1): both, or both null. */
+  latitude: number | null;
+  longitude: number | null;
 
   invoice_key: string | null;
   invoice_number: string | null;
@@ -400,6 +408,25 @@ function parseDeliverySpreadsheet(matrix: unknown[][]): ParseResult {
       );
     }
 
+    // The address point (plan E1), with the create's own rule and
+    // sentences: a number each, both or neither, inside Brazil.
+    const latitude = parseDecimal(read("latitude"));
+    const longitude = parseDecimal(read("longitude"));
+
+    if (latitude === "invalid") {
+      fail(headerOf("latitude"), ADDRESS_POINT_MESSAGES.latitudeNotNumber);
+    }
+
+    if (longitude === "invalid") {
+      fail(headerOf("longitude"), ADDRESS_POINT_MESSAGES.longitudeNotNumber);
+    }
+
+    if (latitude !== "invalid" && longitude !== "invalid") {
+      for (const problem of addressPointProblem(latitude, longitude)) {
+        fail(headerOf(problem.field), problem.message);
+      }
+    }
+
     if (rowErrors.length > 0) {
       errors.push(...rowErrors);
       return;
@@ -421,6 +448,9 @@ function parseDeliverySpreadsheet(matrix: unknown[][]): ParseResult {
       address_number: read("address_number") || null,
       complement: read("complement") || null,
       neighborhood: read("neighborhood") || null,
+
+      latitude: (latitude as number | null) ?? null,
+      longitude: (longitude as number | null) ?? null,
 
       invoice_key: invoiceKeyDigits || null,
       invoice_number: read("invoice_number") || null,

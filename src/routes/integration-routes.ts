@@ -362,6 +362,8 @@ async function integrationRoutes(app: FastifyInstance) {
           "",
           "As regras são as do cadastro manual no painel, com as mesmas mensagens: destinatário e endereço obrigatórios, CEP com 8 dígitos, data prevista como dia (`AAAA-MM-DD`, sem hora), até 200 itens. O embarcador vem por `shipper_id` ou por `shipper_cnpj` (um dos dois) e precisa ser da sua empresa e estar ativo. Motorista e rota não vêm aqui: a entrega nasce Pendente e é atribuída no painel.",
           "",
+          "Se você já tem o ponto do endereço, mande `latitude` e `longitude` (graus decimais, as duas juntas, dentro do Brasil): ele vira o ponto da entrega no mapa e na geocerca, e o Trajetto não o substitui pela geocodificação. Sem elas, o endereço é localizado automaticamente. As coordenadas fazem parte do corpo comparado na repetição com a mesma Idempotency-Key.",
+          "",
           "`Idempotency-Key` é obrigatória. Repetir a mesma chave com o mesmo corpo devolve 200 com a entrega já criada, sem duplicar nem avisar de novo; com outro corpo, 409 IDEMPOTENCY_KEY_REUSED. A chave da NF-e também não se repete: uma nota já cadastrada na empresa responde 409 DELIVERY_INVOICE_KEY_EXISTS com o `delivery_id` dela.",
           "",
           "Assinantes de `delivery.created` recebem o webhook desta entrega, como no cadastro manual. As chamadas contam no mesmo limite por minuto da chave e da empresa que as leituras.",

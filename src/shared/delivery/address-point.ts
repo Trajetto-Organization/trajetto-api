@@ -35,12 +35,21 @@ function addressChanged(current: AddressFields, next: AddressFields): boolean {
   );
 }
 
-/** The columns an address change clears. */
+/**
+ * The columns an address change clears: the point, and the geocoder's
+ * bookkeeping with it (plan of 02/11/2026, E1), so the new address is
+ * geocoded again — and a lookup of the old one still in flight finds its
+ * claim gone and writes nothing.
+ */
 const CLEARED_ADDRESS_POINT = {
   latitude: null,
   longitude: null,
   geo_source: null,
   geo_updated_at: null,
+  geo_precision: null,
+  geocode_status: null,
+  geocode_attempted_at: null,
+  geocode_attempts: 0,
 } as const;
 
 export { ADDRESS_FIELDS, CLEARED_ADDRESS_POINT, addressChanged };

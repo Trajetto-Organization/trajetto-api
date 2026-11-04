@@ -72,6 +72,13 @@ const ALLOWED: Entry[] = [
       "Partition names follow the partitions' own UTC day bounds, not a company's day.",
   },
   {
+    file: "src/shared/delivery/geocoding/geocoding-budget.ts",
+    pattern: "utc-day-key",
+    count: 1,
+    reason:
+      "The geocoding budget is the provider's daily quota (LocationIQ resets it at UTC midnight), shared by every company: a platform day, not a company's.",
+  },
+  {
     file: "src/jobs/cron/driver-position-partitions-job.ts",
     pattern: "utc-midnight",
     count: 1,

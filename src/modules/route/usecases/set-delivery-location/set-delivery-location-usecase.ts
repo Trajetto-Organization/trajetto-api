@@ -7,6 +7,12 @@ import { assertRouteDispatcher } from "../shared/assert-route-dispatcher";
 import { announcePlanChange } from "../shared/route-plan-change";
 
 import { AppError } from "@/shared/errors/AppError";
+// The box lives with the create's coordinates (plan of 02/11/2026, E1): a
+// pin and a point given at the create are refused by the same rule.
+import {
+  BRAZIL_BOX,
+  isInsideBrazil,
+} from "@/shared/delivery/address-coordinates";
 
 import type { PinnedLocation } from "../../dtos/route-dto";
 
@@ -28,25 +34,6 @@ type SetDeliveryLocationResult = NonNullable<PinnedLocation["delivery"]> & {
   routeId: string | null;
   planVersion: number | null;
 };
-
-/**
- * A rough box around Brazil (decision 14.7, §4.11). A click outside the
- * country on a route map is almost always a slip of the mouse, and a stop
- * pinned in the Atlantic would quietly bend the whole plan line.
- */
-const BRAZIL_BOX = { minLat: -34, maxLat: 6, minLng: -74, maxLng: -34 };
-
-function isInsideBrazil(point: {
-  latitude: number;
-  longitude: number;
-}): boolean {
-  return (
-    point.latitude >= BRAZIL_BOX.minLat &&
-    point.latitude <= BRAZIL_BOX.maxLat &&
-    point.longitude >= BRAZIL_BOX.minLng &&
-    point.longitude <= BRAZIL_BOX.maxLng
-  );
-}
 
 /**
  * "Fixar no mapa": the dispatcher says where the address is (D7). The

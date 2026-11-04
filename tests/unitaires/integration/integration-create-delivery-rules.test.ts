@@ -147,6 +147,50 @@ describe("a retry of the same body", () => {
   });
 });
 
+/**
+ * Plan of 02/11/2026, E1: the address point is part of the body. Only a
+ * MANUAL point can be what a body sent; the geocoder fills the same columns
+ * later, and a retry of a body without coordinates must still be a replay.
+ */
+describe("a retry of a body with an address point", () => {
+  const point = { latitude: -23.5505, longitude: -46.6333 };
+
+  it("matches the MANUAL point it wrote", () => {
+    expect(
+      isSameSubmission(draftOf({ ...body, ...point }), {
+        ...stored,
+        ...point,
+        geo_source: "MANUAL",
+      }),
+    ).toBe(true);
+  });
+
+  it("does not match another point, or none, under the same key", () => {
+    const pinned = { ...stored, ...point, geo_source: "MANUAL" };
+
+    expect(
+      isSameSubmission(
+        draftOf({ ...body, latitude: -22.9068, longitude: -43.1729 }),
+        pinned,
+      ),
+    ).toBe(false);
+    expect(isSameSubmission(draftOf(body), pinned)).toBe(false);
+    expect(isSameSubmission(draftOf({ ...body, ...point }), stored)).toBe(
+      false,
+    );
+  });
+
+  it("still matches a body without one after the geocoder found the address", () => {
+    expect(
+      isSameSubmission(draftOf(body), {
+        ...stored,
+        ...point,
+        geo_source: "GEOCODER",
+      }),
+    ).toBe(true);
+  });
+});
+
 describe("the item amounts the create writes", () => {
   // Floats an ERP computes (3 * 1.115, a sum of cents) next to a rounding
   // boundary. The database read the float at 15 digits and kept the upper

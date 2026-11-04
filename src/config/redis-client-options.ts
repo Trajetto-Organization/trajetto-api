@@ -27,7 +27,8 @@ type RedisRole =
   | "socket-handshake"
   | "socket-ticket"
   | "socket-pub"
-  | "socket-sub";
+  | "socket-sub"
+  | "geocoding-budget";
 
 const KEEP_ALIVE_MS = 10_000;
 const SOCKET_TIMEOUT_MS = 5_000;
@@ -91,6 +92,22 @@ function redisClientOptions(role: RedisRole): RedisOptions {
       return {
         connectionName: "trajetto-socket-sub",
         maxRetriesPerRequest: null,
+        socketTimeout: SOCKET_TIMEOUT_MS,
+        keepAlive: KEEP_ALIVE_MS,
+        lazyConnect: false,
+      };
+
+    case "geocoding-budget":
+      // The geocoding job's daily budget (plan of 02/11/2026, E1; shared/
+      // delivery/geocoding/geocoding-budget.ts): opened per run by a cron
+      // job, never in a request's path. The offline queue lets the first
+      // command wait for the fresh connection; the budget fails CLOSED on
+      // any error, so a slow Redis only puts the run off.
+      return {
+        connectionName: "trajetto-geocoding-budget",
+        maxRetriesPerRequest: 1,
+        enableOfflineQueue: true,
+        commandTimeout: 1_000,
         socketTimeout: SOCKET_TIMEOUT_MS,
         keepAlive: KEEP_ALIVE_MS,
         lazyConnect: false,

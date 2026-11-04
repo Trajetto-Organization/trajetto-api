@@ -551,6 +551,11 @@ class ImportDeliverySpreadsheetUseCase {
               complement: row.complement,
               neighborhood: row.neighborhood,
 
+              // The sheet's point (plan of 02/11/2026, E1): stored as the
+              // address point, MANUAL; without it the geocoder finds it.
+              latitude: row.latitude,
+              longitude: row.longitude,
+
               invoice_key: row.invoice_key,
               invoice_number: row.invoice_number,
               code: row.code,

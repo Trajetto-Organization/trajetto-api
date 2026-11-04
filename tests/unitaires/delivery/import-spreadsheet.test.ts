@@ -651,3 +651,57 @@ describe("an upload started in the background", () => {
     expect(context.deliveryRepository.deliveries).toHaveLength(1);
   });
 });
+
+/**
+ * Plan of 02/11/2026, E1: a sheet that already knows where its customers are
+ * hands the point over in "Latitude"/"Longitude". It becomes the address
+ * point (MANUAL), and the geocoder never looks at that row; a row without it
+ * stays in the geocoder's queue (no point, no source).
+ */
+describe("the address point columns", () => {
+  it("store the sheet's point as MANUAL, and leave a row without one to the geocoder", async () => {
+    const text = [
+      ["Destinatário", "CEP", "Cidade", "UF", "Logradouro", "Lat", "Long"],
+      [
+        "Padaria Central",
+        "01001000",
+        "São Paulo",
+        "SP",
+        "Sé",
+        "-23,5505",
+        "-46,6333",
+      ],
+      ["Mercado Novo", "01001000", "São Paulo", "SP", "Sé", "", ""],
+    ]
+      .map((row) => row.map((cell) => `"${cell}"`).join(";"))
+      .join("\n");
+
+    const record = await context.importSpreadsheet.execute({
+      userId: DISPATCHER,
+      businessId: BUSINESS,
+      filename: "com-coordenadas.csv",
+      content: Buffer.from(text, "utf8").toString("base64"),
+      shipperId: SHIPPER,
+    });
+
+    expect(record.imported).toBe(2);
+
+    const byName = Object.fromEntries(
+      context.deliveryRepository.deliveries.map((row) => [
+        row.recipient_name,
+        row,
+      ]),
+    );
+
+    expect(byName["Padaria Central"]).toMatchObject({
+      latitude: -23.5505,
+      longitude: -46.6333,
+      geo_source: "MANUAL",
+    });
+    expect(byName["Mercado Novo"]).toMatchObject({
+      latitude: null,
+      longitude: null,
+      geo_source: null,
+    });
+  });
+});

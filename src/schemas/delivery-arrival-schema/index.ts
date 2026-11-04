@@ -2,6 +2,7 @@ import { z } from "zod";
 import { tenantLockedShape } from "@/shared/validation/tenant-locked-field";
 
 import { occurredAtField } from "@/shared/delivery/occurred-at";
+import { geofenceBodyFields } from "@/shared/delivery/geofence/geofence-check";
 
 /**
  * Every driver mutation carries a client_submission_id: the app's outbox
@@ -27,6 +28,8 @@ const deliveryArrivalSchema = z.object({
     .min(-180)
     .max(180),
   occurred_at: occurredAtField,
+  // Plan of 02/11/2026 (E4): what the company's geofence weighs the position by.
+  ...geofenceBodyFields,
 });
 
 export { deliveryArrivalSchema };

@@ -3,6 +3,7 @@ import { tenantLockedShape } from "@/shared/validation/tenant-locked-field";
 import { occurredAtField } from "@/shared/delivery/occurred-at";
 import { optionalCoordinate } from "@/shared/delivery/optional-coordinate";
 import { devicePrecheckField } from "@/shared/ai-precheck/device-precheck";
+import { geofenceBodyFields } from "@/shared/delivery/geofence/geofence-check";
 import {
   hasInlineConsecutiveSpaces,
   hasSpaceAtLineEdges,
@@ -145,6 +146,8 @@ const reportDeliveryOccurrenceSchema = z.object({
   // Decision 14.2: the phone's offline check of the receipt photo. Only read
   // on a DELIVERED report that carries a receipt; dropped everywhere else.
   device_precheck: devicePrecheckField,
+  // Plan of 02/11/2026 (E4): what the company's geofence weighs the position by.
+  ...geofenceBodyFields,
 });
 
 export { reportDeliveryOccurrenceSchema };

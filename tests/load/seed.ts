@@ -474,7 +474,11 @@ async function seedTenant(index: number, primary: boolean) {
  * company with Frota and Entregas, a route RELEASED for the company's business
  * day with three stops, and a second driver whose company has no Frota (the
  * module gating flow), plus a third driver with two-factor on (the code flow).
- * Same disposable container, a database of its own.
+ * Then one company per setting the app obeys (plan of 02/11/2026): the
+ * departure and arrival checklists required (C4), and the geofence at the
+ * customer's address under BLOCK and under ALERT (E3), with stops pinned on
+ * the map and one address without a point. Same disposable container, a
+ * database of its own.
  */
 const MOBILE_E2E = process.env.LOAD_MOBILE_E2E === "1";
 const MOBILE_E2E_PASSWORD =
@@ -483,6 +487,23 @@ const MOBILE_E2E_PASSWORD =
 const MOBILE_E2E_OUT = process.env.LOAD_CONTEXT_OUT
   ? resolve(process.env.LOAD_CONTEXT_OUT)
   : resolve(__dirname, "fixtures", "mobile-e2e.json");
+
+interface GeoPoint {
+  latitude: number;
+  longitude: number;
+}
+
+/**
+ * Where the geofence flow's first stop is pinned: on Avenida Paulista, the
+ * seeded street, and the spot trajetto-mobile/.maestro/subflows/gps.yaml
+ * puts the emulator. The flow moves the phone ~800 m and ~300 m north of it
+ * (0.0072 and 0.0027 degrees of latitude).
+ */
+const GEOFENCE_STOP: GeoPoint = { latitude: -23.5614, longitude: -46.6565 };
+const GEOFENCE_SECOND_STOP: GeoPoint = {
+  latitude: -23.563,
+  longitude: -46.6543,
+};
 
 async function seedMobileCompany(options: {
   label: string;
@@ -494,6 +515,26 @@ async function seedMobileCompany(options: {
   plate: string;
   /** Login stops at the e-mailed code (the two-factor flow). */
   twoFactor?: boolean;
+  /**
+   * The company's own settings (business_settings, item M1); absent = the
+   * defaults (no checklist, geofence off).
+   */
+  settings?: {
+    checklist_requirement?:
+      | "NONE"
+      | "ROUTE_START"
+      | "ROUTE_END"
+      | "ROUTE_START_AND_END";
+    arrival_geofence_mode?: "DISABLED" | "ALERT" | "BLOCK";
+    arrival_geofence_radius_m?: number;
+  };
+  /**
+   * The address points of the deliveries, by position: a point is pinned by
+   * hand (geo_source MANUAL, exact); null is an address the geocoder could
+   * not place (NOT_FOUND), so the geocoding job never gives it one. Beyond
+   * the list, deliveries keep no point and no geocoding state, as before.
+   */
+  points?: ReadonlyArray<GeoPoint | null>;
 }): Promise<{ businessId: string; driverId: string; routeId: string }> {
   const businessId = randomUUID();
   const timeZone = "America/Sao_Paulo";
@@ -525,6 +566,12 @@ async function seedMobileCompany(options: {
         : []),
     ],
   });
+
+  if (options.settings) {
+    await prisma.businessSettings.create({
+      data: { businessId, ...options.settings },
+    });
+  }
 
   // Delivered, pause and the other default types, as a company created through
   // the API gets them (the list would seed them lazily anyway).
@@ -666,19 +713,33 @@ async function seedMobileCompany(options: {
     },
   });
 
-  const deliveries = Array.from({ length: options.deliveries }, (_, n) => ({
-    id: randomUUID(),
-    recipient_name: `Cliente E2E ${n + 1}`,
-    code: `E2E-${n + 1}`,
-    city: "São Paulo",
-    uf: "SP",
-    street: "Avenida Paulista",
-    address_number: String(1000 + n),
-    businessId,
-    shipperId: shipper.id,
-    driverId: driver.id,
-    status: "PENDING" as const,
-  }));
+  const deliveries = Array.from({ length: options.deliveries }, (_, n) => {
+    const point = options.points?.[n];
+
+    return {
+      id: randomUUID(),
+      recipient_name: `Cliente E2E ${n + 1}`,
+      code: `E2E-${n + 1}`,
+      city: "São Paulo",
+      uf: "SP",
+      street: "Avenida Paulista",
+      address_number: String(1000 + n),
+      businessId,
+      shipperId: shipper.id,
+      driverId: driver.id,
+      status: "PENDING" as const,
+      ...(point
+        ? {
+            latitude: point.latitude,
+            longitude: point.longitude,
+            geo_source: "MANUAL" as const,
+            geo_updated_at: new Date(),
+          }
+        : point === null
+          ? { geocode_status: "NOT_FOUND" as const }
+          : {}),
+    };
+  });
 
   await prisma.delivery.createMany({ data: deliveries });
 
@@ -726,13 +787,76 @@ async function seedMobileE2E(): Promise<void> {
     twoFactor: true,
   });
 
+  // Both checklists required (C4; flow 12): "Iniciar rota" waits for the
+  // departure checklist, and the arrival one is asked for once the only stop
+  // is proven. Frota and Entregas, since the setting needs both (M6).
+  const checklist = await seedMobileCompany({
+    label: "E2E Checklist",
+    cnpj: "22333444000181",
+    email:
+      process.env.MOBILE_E2E_CHECKLIST_EMAIL ??
+      "motorista.checklist@trajetto.test",
+    fleet: true,
+    deliveries: 1,
+    plate: "E2E3C33",
+    settings: { checklist_requirement: "ROUTE_START_AND_END" },
+  });
+
+  // The geofence at the address (E3; flow 13), radius 500 m. BLOCK refuses an
+  // arrival or a proof outside the radius: two stops pinned by hand, and a
+  // third whose address has no point, which is never blocked.
+  const geofenceBlock = await seedMobileCompany({
+    label: "E2E Geocerca Bloquear",
+    cnpj: "55666777000181",
+    email:
+      process.env.MOBILE_E2E_GEOFENCE_BLOCK_EMAIL ??
+      "motorista.bloquear@trajetto.test",
+    fleet: false,
+    deliveries: 3,
+    plate: "E2E4B44",
+    settings: {
+      arrival_geofence_mode: "BLOCK",
+      arrival_geofence_radius_m: 500,
+    },
+    points: [GEOFENCE_STOP, GEOFENCE_SECOND_STOP, null],
+  });
+
+  // ALERT asks "Registrar mesmo assim?" outside the radius and flags the
+  // record (OUTSIDE).
+  const geofenceAlert = await seedMobileCompany({
+    label: "E2E Geocerca Alertar",
+    cnpj: "88999000000181",
+    email:
+      process.env.MOBILE_E2E_GEOFENCE_ALERT_EMAIL ??
+      "motorista.alertar@trajetto.test",
+    fleet: false,
+    deliveries: 1,
+    plate: "E2E5A55",
+    settings: {
+      arrival_geofence_mode: "ALERT",
+      arrival_geofence_radius_m: 500,
+    },
+    points: [GEOFENCE_STOP],
+  });
+
   mkdirSync(dirname(MOBILE_E2E_OUT), { recursive: true });
 
   // Ids only: the password is the one this process was given (or the default
   // documented in trajetto-mobile/docs/testes.md), never written to disk.
   writeFileSync(
     MOBILE_E2E_OUT,
-    JSON.stringify({ fleet, deliveriesOnly, twoFactor }, null, 2),
+    JSON.stringify(
+      {
+        fleet,
+        deliveriesOnly,
+        twoFactor,
+        checklist,
+        geofenceBlock,
+        geofenceAlert,
+      },
+      null,
+      2,
+    ),
     "utf8",
   );
 

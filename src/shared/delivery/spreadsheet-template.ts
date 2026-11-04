@@ -111,6 +111,23 @@ const TEMPLATE_COLUMNS: TemplateColumn[] = [
     header: "Bairro",
     example: "Sé",
   },
+  // Plan of 02/11/2026, E1: the point a company already has for the
+  // address. Stored as the delivery's point (MANUAL); without it, the
+  // geocoder finds the address.
+  {
+    key: "latitude",
+    header: "Latitude",
+    aliases: ["lat"],
+    example: "-23,5505",
+    help: "Opcional, em graus decimais (vírgula ou ponto). Preencha junto com a longitude; sem as duas, o Trajetto localiza o endereço sozinho.",
+  },
+  {
+    key: "longitude",
+    header: "Longitude",
+    aliases: ["lng", "lon", "long"],
+    example: "-46,6333",
+    help: "Opcional, em graus decimais (vírgula ou ponto). Preencha junto com a latitude.",
+  },
 
   {
     key: "invoice_key",

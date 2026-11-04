@@ -167,6 +167,7 @@ export {
   clientSentAtHeaders,
   isOccurredAtStale,
   occurredAtField,
+  parseInstant,
   resolveOccurredAt,
 };
 export type { ResolveOccurredAtInput };
