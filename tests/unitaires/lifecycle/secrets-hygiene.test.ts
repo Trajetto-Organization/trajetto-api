@@ -4,6 +4,8 @@ import { resolve } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
+import { ACCESS_CODE_ALPHABET } from "@/modules/user/services/driver-enrollment";
+
 /**
  * Secrets stay out of the repository, and a new one is caught (INFRA-21).
  *
@@ -16,6 +18,12 @@ import { describe, expect, it } from "vitest";
  * be added by accident.
  */
 const ROOT = process.cwd();
+
+/**
+ * gitleaks' inline allow comment, put together at run time: spelled out in
+ * this file, it would be one more line for inlineAllowances() to find.
+ */
+const ALLOW_MARKER = ["gitleaks", "allow"].join(":");
 
 function isIgnored(path: string): boolean {
   try {
@@ -99,6 +107,27 @@ describe("the branch CI", () => {
     ).toEqual([]);
   });
 
+  // A value that is public by design but looks like a key to the generic
+  // rule is allowed by gitleaks' inline allow comment on the very line that
+  // fires, so the allowance moves with the line. A .gitleaksignore
+  // fingerprint without its commit (file:rule:line) would pin a line number
+  // instead: the scan turns red as soon as the literal's line lands in a
+  // commit at another number (the file's first commit after a line was
+  // added above it, an edit to that line, a rebase or squash). gitleaks
+  // honours that comment on any line it scans, Markdown and this file
+  // included, and against every rule, a provider's too. So each one is
+  // listed here, whole line and all, wherever it sits: a real secret cannot
+  // be waved through by a comment nobody reviewed, nor slipped onto a line
+  // that was.
+  it("allows each public-by-design value inline, on the line that fires, and nothing else", () => {
+    expect(inlineAllowances()).toEqual([
+      {
+        file: "src/modules/user/services/driver-enrollment.ts",
+        line: `const ACCESS_CODE_ALPHABET = "${ACCESS_CODE_ALPHABET}"; // ${ALLOW_MARKER}`,
+      },
+    ]);
+  });
+
   it("baselines the findings the history already had, by fingerprint", () => {
     const ignore = resolve(ROOT, ".gitleaksignore");
 
@@ -118,6 +147,36 @@ describe("the branch CI", () => {
     }
   });
 });
+
+/**
+ * Every line that carries gitleaks' inline allow comment, in any file git
+ * sees (tracked or not yet committed, never an ignored one), trimmed. No
+ * path is left out: gitleaks scans Markdown and this file too, and the
+ * comment silences every rule on its line.
+ */
+function inlineAllowances(): { file: string; line: string }[] {
+  let hits = "";
+
+  try {
+    hits = execFileSync(
+      "git",
+      ["grep", "--untracked", "-I", "-n", "-F", "-e", ALLOW_MARKER, "--", "."],
+      { cwd: ROOT, encoding: "utf8" },
+    );
+  } catch (error) {
+    // Exit status 1: no match at all.
+    if ((error as { status?: number }).status !== 1) throw error;
+  }
+
+  return hits
+    .split(/\r?\n/)
+    .filter(Boolean)
+    .map((hit) => {
+      const [, file, line] = /^([^:]+):\d+:(.*)$/.exec(hit) ?? [];
+
+      return { file: file ?? hit, line: (line ?? "").trim() };
+    });
+}
 
 /** The jobs of a workflow by key: from `  <key>:` up to the next job. */
 function jobsOf(workflow: string): Map<string, string> {

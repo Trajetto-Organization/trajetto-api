@@ -4,9 +4,14 @@
 # the same file. (The one exception is .gitleaks.toml: the heuristic
 # generic-api-key rule on test fixtures and .env.example, nothing else.)
 # A NEW finding fails the "Secret scan" job of ci.yml and deploy.yml; fix it
-# (rotate the secret, then remove it) instead of adding it here. Only a false
-# positive, or a rotated secret left in a commit of main (never rewritten),
-# joins this list: without it the job stays red and main builds nothing.
+# (rotate the secret, then remove it) instead of adding it here. A new false
+# positive (a value that is public by design but fires a rule) does not come
+# here either: it carries gitleaks' inline allow comment on the very line
+# that fires, as ACCESS_CODE_ALPHABET does in
+# src/modules/user/services/driver-enrollment.ts, and the secrets-hygiene
+# test lists each one. Only a finding stuck in a commit of the history (a
+# rotated secret left in main, never rewritten) joins this list, by its full
+# fingerprint: without it the job stays red and main builds nothing.
 #
 # The history is not rewritten: every clone and tag would break. The values
 # below are dev-only, except the one flagged for rotation in its group.
