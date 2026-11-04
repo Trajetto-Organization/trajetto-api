@@ -2146,13 +2146,13 @@ colunas` e remover os três campos `@ignore` no mesmo commit.
 
 ### Expansões que pedem a release seguinte (plano de 02/11/2026)
 
-Duas colunas viraram opcionais por `-- nullable-expand:` e **nesta release
-ninguém grava NULL nelas**. O código desta release já lê as duas como
-opcionais (é o que permite voltar a ela depois da próxima):
+Duas colunas viraram opcionais por `-- nullable-expand:` e **na release que
+as expandiu ninguém gravava NULL nelas**. O código daquela release já lê as
+duas como opcionais (é o que permite voltar a ela depois da seguinte):
 
 | Coluna                           | Migration                                       | O que a release seguinte faz                                                                                                                                                                                                     |
 | -------------------------------- | ----------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `user.email`                     | `20261102120100_user_email_nullable`            | liga o cadastro de motorista sem e-mail (D2), depois que API, web e app que tratam o e-mail como opcional estiverem no ar; o e-mail continua obrigatório para quem não é motorista                                               |
+| `user.email`                     | `20261102120100_user_email_nullable`            | **já saiu** (D2): liga o cadastro de motorista sem e-mail, que grava NULL; o e-mail continua obrigatório para quem não é motorista. Daqui em diante, um rollback só volta até a release que expandiu a coluna                    |
 | `delivery_message_template.body` | `20261102120800_message_template_body_nullable` | passa a gravar NULL no WhatsApp e roda a migração de dados que zera `body` e `subject` das linhas de WhatsApp, marcada `-- contract-phase:` (B3); o `CHECK delivery_message_template_email_body_chk` mantém o e-mail obrigatório |
 
 No staging isso são dois pushes da API (o segundo só depois do primeiro no

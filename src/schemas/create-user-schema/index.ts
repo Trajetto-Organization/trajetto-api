@@ -32,13 +32,26 @@ const roleEnum = z.nativeEnum(UserBusinessRole, {
   },
 });
 
+const EMAIL_REQUIRED_MESSAGE = "O e-mail é obrigatório.";
+
 const createUserSchema = z
   .object({
-    email: z
-      .string()
-      .min(1, "O e-mail é obrigatório.")
-      .email("O e-mail informado não é válido.")
-      .max(100, "O e-mail deve ter no máximo 100 caracteres."),
+    // Optional for a driver's login only (decision D02, plan of 02/11/2026,
+    // D2 second release): the driver signs in by CPF and password or by QR
+    // code. Blank means none; anybody else must have one (refinement below).
+    email: z.preprocess(
+      emptyStringToNull,
+      z
+        .string()
+        .min(1, EMAIL_REQUIRED_MESSAGE)
+        .email("O e-mail informado não é válido.")
+        .max(100, "O e-mail deve ter no máximo 100 caracteres.")
+        .nullable()
+        .optional()
+        .describe(
+          "Obrigatório, menos no login de um motorista: sem e-mail, ele entra com o CPF e a senha inicial (`password`) ou pelo QR Code.",
+        ),
+    ),
     name: z.string().superRefine((value, ctx) => {
       if (value.length > 100) {
         ctx.addIssue({
@@ -122,6 +135,14 @@ const createUserSchema = z
     userType: z.enum(["employee", "driver"]).optional(),
   })
   .superRefine((data, ctx) => {
+    if ((data.email ?? null) === null && !isDriverLogin(data)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: EMAIL_REQUIRED_MESSAGE,
+        path: ["email"],
+      });
+    }
+
     if (data.password !== undefined && !isDriverLogin(data)) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,

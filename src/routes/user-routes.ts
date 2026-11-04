@@ -131,7 +131,7 @@ async function userRoutes(app: FastifyInstance) {
         tags: ["user"],
         summary: "Cria um usuário",
         description:
-          "Cadastra um usuário na empresa informada, com nível de acesso e perfil de acesso ou motorista vinculado. Nenhuma senha é enviada por e-mail: o usuário recebe um link de uso único (72 h) para definir a própria senha. Exceção, só no login de um motorista: o gestor pode definir a senha inicial em `password`; aí nenhum e-mail é enviado, o e-mail fica confirmado e o motorista entra na hora (com o CPF ou o e-mail e a senha, ou pelo QR Code). A senha não vai para log nem para a atividade, que registra quem a definiu.",
+          "Cadastra um usuário na empresa informada, com nível de acesso e perfil de acesso ou motorista vinculado. Nenhuma senha é enviada por e-mail: o usuário recebe um link de uso único (72 h) para definir a própria senha. Exceção, só no login de um motorista: o gestor pode definir a senha inicial em `password`; aí nenhum e-mail é enviado, o e-mail fica confirmado e o motorista entra na hora (com o CPF ou o e-mail e a senha, ou pelo QR Code). O e-mail é opcional no login de um motorista (sem ele, o motorista entra com o CPF e a senha inicial, ou pelo QR Code) e obrigatório para todos os outros (400). A senha não vai para log nem para a atividade, que registra quem a definiu.",
         body: userSchemas.createUser,
         response: {
           201: userResponses.userCreated,

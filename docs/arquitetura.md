@@ -1855,11 +1855,15 @@ pendente): [`deploy.md`](./deploy.md#15-migrations).
 **Coluna que vira opcional, na prática.** Na release N o campo já é opcional
 no `schema.prisma` (o client desta release lê NULL sem erro) e todo leitor
 trata a ausência; só os escritores continuam sem gravar NULL. É isso que
-permite voltar para N depois que N+1 começar a gravar NULL. Hoje há duas
-nesse estado (plano de 02/11/2026; a fase seguinte está em
+permite voltar para N depois que N+1 começar a gravar NULL. Do plano de
+02/11/2026, uma já passou para a fase seguinte e a outra continua nesse
+estado (ver
 [`deploy.md`](./deploy.md#expansões-que-pedem-a-release-seguinte-plano-de-02112026)):
 
-- `User.email` (D2): o e-mail só pode faltar no login de motorista. Quem
+- `User.email` (D2), já na fase seguinte: o cadastro do login de motorista
+  sem e-mail grava NULL; os outros usuários continuam com e-mail
+  obrigatório, e uma edição nunca apaga um e-mail (o `null` vale "não
+  enviado"). Quem
   manda e-mail para um usuário passa por `src/modules/user/services/user-mailbox.ts`:
   `withMailbox` pula quem não tem e-mail numa notificação em massa e
   `requireMailbox` recusa com 409 `USER_EMAIL_REQUIRED` um fluxo que não

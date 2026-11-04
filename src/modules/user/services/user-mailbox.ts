@@ -5,10 +5,9 @@ import { AppError } from "@/shared/errors/AppError";
  * (decision D02 of the plan of 02/11/2026), which signs in by QR code or by
  * CPF and password and may have no mailbox at all. Office users and MASTERs
  * always have one — their request schemas require it. User.email was
- * loosened in migration 20261102120100 (nullable-expand): this release reads
- * it as optional and never writes NULL; the driver without an e-mail is
- * switched on in the next release, and every flow that mails a user has to
- * be ready for it by then.
+ * loosened in migration 20261102120100 (nullable-expand), and since the
+ * release after it a driver's login may be created without an e-mail, so
+ * every flow that mails a user has to expect a NULL.
  *
  * Two answers, depending on what the mail is:
  *  - a fan-out (notices, digests): the user without an e-mail is skipped, not

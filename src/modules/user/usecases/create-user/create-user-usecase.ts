@@ -199,6 +199,14 @@ class CreateUserUseCase {
       );
     }
 
+    // Only a driver's login may have no e-mail (decision D02): it signs in by
+    // CPF and password or by QR code. Same rule as the schema's.
+    const mailbox = email ?? null;
+
+    if (mailbox === null && !isDriverLogin({ role, driverId })) {
+      throw new AppError("O e-mail é obrigatório.", 400, "USER_EMAIL_REQUIRED");
+    }
+
     const findUser = await this.user.findUserById(id);
 
     if (!findUser) {
@@ -279,9 +287,9 @@ class CreateUserUseCase {
       managerSetPassword ? password : unusablePassword(),
       10,
     );
-    const userAlreadyExists = await this.user.findUserByEmail(email);
-
-    if (userAlreadyExists) {
+    // No address, nothing to collide with: the unique index lets many NULLs
+    // coexist.
+    if (mailbox !== null && (await this.user.findUserByEmail(mailbox))) {
       throw new UserAlreadyExistsError();
     }
 
@@ -300,7 +308,7 @@ class CreateUserUseCase {
 
     try {
       const userCreated = await this.user.createUser({
-        email,
+        email: mailbox,
         password: hashedPassword,
         name,
         role,
@@ -308,8 +316,9 @@ class CreateUserUseCase {
         profileAccessId: cleanProfileAccessId,
         driverId: cleanDriverId,
         // No e-mail goes out to confirm it, so the address the manager typed
-        // stands as confirmed (D2): the driver signs in at once.
-        email_verified: managerSetPassword ? new Date() : null,
+        // stands as confirmed (D2): the driver signs in at once. Without an
+        // address there is nothing to confirm.
+        email_verified: managerSetPassword && mailbox ? new Date() : null,
       });
 
       // A driver now has an app login: the chat pickers' "com o app" split

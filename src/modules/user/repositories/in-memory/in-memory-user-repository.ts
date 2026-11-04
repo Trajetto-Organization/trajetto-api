@@ -207,8 +207,9 @@ class InMemoryUserRepository implements IUserRepository {
     whatsapp_phone,
     email_verified,
   }: CreateUserProps): Promise<User> {
-    // The table's unique indexes, as Postgres raises them.
-    if (this.user.some((user) => user.email === email)) {
+    // The table's unique indexes, as Postgres raises them: NULLs never
+    // collide (a driver's login without an e-mail, D02).
+    if (email && this.user.some((user) => user.email === email)) {
       throw uniqueViolation("email");
     }
 
@@ -221,7 +222,7 @@ class InMemoryUserRepository implements IUserRepository {
       ...USER_COLUMN_DEFAULTS,
       id: uuidV7(),
       role: role || "BUSINESS_USER",
-      email,
+      email: email ?? null,
       name,
       password: password || "default-password",
       businessId,
@@ -454,7 +455,8 @@ class InMemoryUserRepository implements IUserRepository {
 
     // Only skip undefined values — null is a valid value (means "clear/disconnect")
     // — except a null e-mail, "not sent" as in UserRepository.updateUser
-    // (nothing writes a NULL e-mail in the nullable-expand release, D2).
+    // (an edit never clears an e-mail; only a driver's creation writes NULL,
+    // D2).
     const filteredData = Object.fromEntries(
       Object.entries(columns).filter(
         ([key, value]) =>

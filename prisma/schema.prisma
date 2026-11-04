@@ -279,10 +279,10 @@ model User {
   name           String
   /// Optional for a driver's login only (decision D02 of the plan of
   /// 02/11/2026): a driver signs in by QR code or CPF and password. Loosened
-  /// in migration 20261102120100 (nullable-expand): this release reads it as
-  /// optional and still never writes NULL; the driver without an e-mail is
-  /// enabled in the next release. Every other user keeps one (the request
-  /// schemas require it). The unique index allows any number of NULLs.
+  /// in migration 20261102120100 (nullable-expand); since the release after
+  /// it, creating a driver's login without an e-mail writes NULL. Every other
+  /// user keeps one (the request schemas require it), and an edit never
+  /// clears one. The unique index allows any number of NULLs.
   email          String?   @unique
   email_verified DateTime? @map("email_verified")
   password       String

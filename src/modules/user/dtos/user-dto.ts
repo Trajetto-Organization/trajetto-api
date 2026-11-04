@@ -22,7 +22,8 @@ enum UserBusinessRole {
 
 interface CreateUserProps {
   password?: string;
-  email: string;
+  /** Null or absent only for a driver's login (D02; D2 second release). */
+  email?: string | null;
   name: string;
   role: UserRole;
   businessId: string;

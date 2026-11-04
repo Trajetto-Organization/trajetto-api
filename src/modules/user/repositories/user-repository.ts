@@ -206,10 +206,9 @@ class UserRepository implements IUserRepository {
     const updateData: Prisma.UserUpdateInput = {};
 
     Object.entries(restData).forEach(([key, value]) => {
-      // A null e-mail is "not sent", as the edit plan reads it — and the
-      // barrier of the nullable-expand release (migration 20261102120100):
-      // the column takes NULL now, but nothing may write one until the next
-      // release enables the driver without an e-mail (D2).
+      // A null e-mail is "not sent", as the edit plan reads it: an edit never
+      // clears an e-mail. Only the creation of a driver's login writes NULL
+      // (D2, the release after migration 20261102120100).
       if (key === "email" && value === null) return;
 
       if (value !== undefined) {

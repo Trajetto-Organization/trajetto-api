@@ -293,7 +293,7 @@ const userResponses = {
 
   // Grouped errors by route
   createUserErrors: refusal(
-    "VALIDATION_ERROR (corpo inválido; `password` fora do login de um motorista também), USER_PASSWORD_DRIVER_ONLY (a mesma regra, fora do schema), USER_PROFILE_AND_DRIVER (perfil e motorista ao mesmo tempo), PROFILE_ACCESS_NOT_FOUND ou DRIVER_NOT_FOUND (o perfil ou o motorista indicado no corpo não existe ou é de outra empresa — a mesma resposta) ou BUSINESS_NOT_FOUND (a empresa indicada no corpo não existe).",
+    "VALIDATION_ERROR (corpo inválido; `password` fora do login de um motorista, ou e-mail ausente fora dele, também), USER_PASSWORD_DRIVER_ONLY e USER_EMAIL_REQUIRED (as mesmas regras, fora do schema), USER_PROFILE_AND_DRIVER (perfil e motorista ao mesmo tempo), PROFILE_ACCESS_NOT_FOUND ou DRIVER_NOT_FOUND (o perfil ou o motorista indicado no corpo não existe ou é de outra empresa — a mesma resposta) ou BUSINESS_NOT_FOUND (a empresa indicada no corpo não existe).",
   ),
   createUserNotFoundErrors: refusal(
     "USER_NOT_FOUND (o usuário da sessão não existe mais).",
