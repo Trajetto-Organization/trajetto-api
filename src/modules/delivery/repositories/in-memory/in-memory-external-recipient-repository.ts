@@ -34,9 +34,7 @@ interface SuppressionRow {
   created_at: Date;
 }
 
-class InMemoryExternalRecipientRepository
-  implements IExternalRecipientRepository
-{
+class InMemoryExternalRecipientRepository implements IExternalRecipientRepository {
   public recipients: ExternalRecipientRecord[] = [];
 
   /** Stated by the test, the way the proof repository's sources are. */

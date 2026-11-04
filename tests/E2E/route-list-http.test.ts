@@ -186,11 +186,7 @@ async function seedVehicle(
 }
 
 type Status =
-  | "PLANNED"
-  | "RELEASED"
-  | "IN_PROGRESS"
-  | "COMPLETED"
-  | "CANCELLED";
+  "PLANNED" | "RELEASED" | "IN_PROGRESS" | "COMPLETED" | "CANCELLED";
 
 /**
  * Thirteen routes, more than one page of ten, so a sort or a filter that only

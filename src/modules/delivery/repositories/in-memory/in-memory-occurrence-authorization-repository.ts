@@ -24,9 +24,7 @@ type StoredOccurrence = InMemoryDeliveryRepository["occurrences"][number];
  * only" condition, same order (created_at, id), same once-only escalation,
  * and the same liveness rule — the function the SQL transcribes.
  */
-class InMemoryOccurrenceAuthorizationRepository
-  implements IOccurrenceAuthorizationRepository
-{
+class InMemoryOccurrenceAuthorizationRepository implements IOccurrenceAuthorizationRepository {
   constructor(
     private readonly deliveries: InMemoryDeliveryRepository,
     private readonly types: InMemoryOccurrenceTypeRepository,

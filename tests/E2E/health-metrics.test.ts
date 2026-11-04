@@ -417,9 +417,8 @@ describe("the queue tables", () => {
  */
 describe("the meeting-wave numbers", () => {
   it("count the legacy app contracts this replica served", async () => {
-    const { countLegacyContractUse } = await import(
-      "@/shared/http/legacy-contract-usage"
-    );
+    const { countLegacyContractUse } =
+      await import("@/shared/http/legacy-contract-usage");
     const before = (await metrics(masterToken)).json().legacy_contracts;
 
     countLegacyContractUse("legacy_proof_adapter");
@@ -437,9 +436,8 @@ describe("the meeting-wave numbers", () => {
   });
 
   it("count the device pre-check's agreement per kind and result", async () => {
-    const { countDeviceAgreement } = await import(
-      "@/shared/ai-precheck/device-agreement-metrics"
-    );
+    const { countDeviceAgreement } =
+      await import("@/shared/ai-precheck/device-agreement-metrics");
     const before = (await metrics(masterToken)).json()
       .ai_device_agreement_total;
 

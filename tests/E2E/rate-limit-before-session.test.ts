@@ -55,9 +55,8 @@ beforeAll(async () => {
     },
   });
 
-  const { issueSessionTokenPair } = await import(
-    "@/modules/user/services/session-service"
-  );
+  const { issueSessionTokenPair } =
+    await import("@/modules/user/services/session-service");
 
   const pair = issueSessionTokenPair(user as never);
 
@@ -73,9 +72,8 @@ beforeAll(async () => {
 
   token = pair.token;
 
-  ({ UserRepository } = await import(
-    "@/modules/user/repositories/user-repository"
-  ));
+  ({ UserRepository } =
+    await import("@/modules/user/repositories/user-repository"));
 
   ({ app } = await import("@/http"));
   await app.ready();

@@ -227,9 +227,8 @@ beforeAll(async () => {
     },
   });
 
-  const pipelineModule = await import(
-    "@/shared/notifications/notification-pipeline-service"
-  );
+  const pipelineModule =
+    await import("@/shared/notifications/notification-pipeline-service");
 
   pipeline = pipelineModule.NotificationPipelineService.getInstance();
 }, 120_000);

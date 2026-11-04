@@ -66,9 +66,7 @@ function compareNullable(
   return order === "asc" ? base : -base;
 }
 
-class InMemoryVehicleChecklistRepository
-  implements IVehicleChecklistRepository
-{
+class InMemoryVehicleChecklistRepository implements IVehicleChecklistRepository {
   public checklists: VehicleChecklist[] = [];
 
   /**

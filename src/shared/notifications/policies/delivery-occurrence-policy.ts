@@ -62,8 +62,7 @@ async function authorizationNoLongerWaiting(
   deps: PolicyDeps,
 ): Promise<string | null> {
   const repository = deps.occurrenceAuthorizationRepository as
-    | IOccurrenceAuthorizationRepository
-    | undefined;
+    IOccurrenceAuthorizationRepository | undefined;
 
   // Without the lookup there is nothing to say it stopped waiting.
   if (!repository) return null;

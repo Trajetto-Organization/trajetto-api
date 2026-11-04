@@ -23,18 +23,10 @@ import type { GeofenceOutcome } from "@/shared/delivery/geofence/geofence-rules"
  */
 
 type DeliveryStatusName =
-  | "PENDING"
-  | "IN_TRANSIT"
-  | "DELIVERED"
-  | "FAILED"
-  | "CANCELLED";
+  "PENDING" | "IN_TRANSIT" | "DELIVERED" | "FAILED" | "CANCELLED";
 
 type RouteStatusName =
-  | "PLANNED"
-  | "RELEASED"
-  | "IN_PROGRESS"
-  | "COMPLETED"
-  | "CANCELLED";
+  "PLANNED" | "RELEASED" | "IN_PROGRESS" | "COMPLETED" | "CANCELLED";
 
 interface OperationDay {
   /** "YYYY-MM-DD", the company's civil day. */

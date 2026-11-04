@@ -92,8 +92,7 @@ class ProofDocumentRepository implements IProofDocumentRepository {
     });
 
     return found as unknown as
-      | (ProofDocumentRecord & { delivery: unknown })
-      | null;
+      (ProofDocumentRecord & { delivery: unknown }) | null;
   }
 
   async loadSource(

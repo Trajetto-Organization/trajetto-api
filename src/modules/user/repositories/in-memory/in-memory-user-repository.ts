@@ -839,12 +839,12 @@ class InMemoryUserRepository implements IUserRepository {
     const writesDeliveries = (user: StoredUser): boolean =>
       Boolean(
         user.profileAccessId &&
-          (this.profilePermissions.get(user.profileAccessId) ?? []).some(
-            (permission) =>
-              permission.permissionKey === "delivery_manage" &&
-              permission.canRead &&
-              permission.canWrite,
-          ),
+        (this.profilePermissions.get(user.profileAccessId) ?? []).some(
+          (permission) =>
+            permission.permissionKey === "delivery_manage" &&
+            permission.canRead &&
+            permission.canWrite,
+        ),
       );
 
     // created_at asc, id asc: the Prisma order, tiebreaker included.

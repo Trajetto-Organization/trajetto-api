@@ -1,11 +1,7 @@
 import { AppError } from "@/shared/errors/AppError";
 
 type AccountPayableReference =
-  | "branch"
-  | "serviceOrder"
-  | "supplier"
-  | "vehicle"
-  | "responsible";
+  "branch" | "serviceOrder" | "supplier" | "vehicle" | "responsible";
 
 const MESSAGES: Record<AccountPayableReference, string> = {
   branch: "Filial não encontrada nesta empresa.",

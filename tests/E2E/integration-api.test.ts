@@ -444,9 +444,8 @@ describe("the public documentation portal", () => {
  */
 describe("counting what a customer's system asked for", () => {
   it("counts a call, its route pattern and its outcome", async () => {
-    const { apiUsageRecorder } = await import(
-      "@/shared/integration/api-usage-recorder"
-    );
+    const { apiUsageRecorder } =
+      await import("@/shared/integration/api-usage-recorder");
 
     await call("/deliveries?limit=1", readKey);
     await call(`/deliveries/${ourDelivery}`, readKey);
@@ -480,9 +479,8 @@ describe("counting what a customer's system asked for", () => {
   });
 
   it("cannot attribute a call made with an unknown key", async () => {
-    const { apiUsageRecorder } = await import(
-      "@/shared/integration/api-usage-recorder"
-    );
+    const { apiUsageRecorder } =
+      await import("@/shared/integration/api-usage-recorder");
 
     await prisma.apiKeyUsageDaily.deleteMany({});
 
@@ -507,9 +505,8 @@ describe("counting what a customer's system asked for", () => {
   });
 
   it("does not count the open catalogue against anybody's key", async () => {
-    const { apiUsageRecorder } = await import(
-      "@/shared/integration/api-usage-recorder"
-    );
+    const { apiUsageRecorder } =
+      await import("@/shared/integration/api-usage-recorder");
 
     await prisma.apiKeyUsageDaily.deleteMany({
       where: { businessId: CARRIER },
@@ -530,9 +527,8 @@ describe("counting what a customer's system asked for", () => {
   });
 
   it("keeps one company out of another's counters", async () => {
-    const { apiUsageRecorder } = await import(
-      "@/shared/integration/api-usage-recorder"
-    );
+    const { apiUsageRecorder } =
+      await import("@/shared/integration/api-usage-recorder");
 
     await prisma.apiKeyUsageDaily.deleteMany({});
 

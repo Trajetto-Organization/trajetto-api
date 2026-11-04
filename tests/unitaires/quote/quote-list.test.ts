@@ -94,26 +94,23 @@ let useCase: ListQuotesUseCase;
 beforeEach(() => {
   repository = new InMemoryQuoteRepository();
 
-  repository.quotes = SEEDS.map(
-    (seed, index): Quote => ({
-      id:
-        seed.id ?? `018fed40-0000-7000-8000-${String(index).padStart(12, "0")}`,
-      name: `Pessoa ${seed.key}`,
-      company: `Frota ${seed.key}`,
-      email: `${seed.key.toLowerCase()}@lead.exemplo.com.br`,
-      telephone: seed.phone ?? "11988887777",
-      fleet_size: seed.fleet,
-      message: null,
-      status: seed.status,
-      contacted_at:
-        seed.contacted === undefined
-          ? null
-          : new Date(BASE + seed.contacted * 60_000),
-      notes: null,
-      created_at: new Date(BASE + seed.at * 60_000),
-      updated_at: new Date(BASE + seed.at * 60_000),
-    }),
-  );
+  repository.quotes = SEEDS.map((seed, index): Quote => ({
+    id: seed.id ?? `018fed40-0000-7000-8000-${String(index).padStart(12, "0")}`,
+    name: `Pessoa ${seed.key}`,
+    company: `Frota ${seed.key}`,
+    email: `${seed.key.toLowerCase()}@lead.exemplo.com.br`,
+    telephone: seed.phone ?? "11988887777",
+    fleet_size: seed.fleet,
+    message: null,
+    status: seed.status,
+    contacted_at:
+      seed.contacted === undefined
+        ? null
+        : new Date(BASE + seed.contacted * 60_000),
+    notes: null,
+    created_at: new Date(BASE + seed.at * 60_000),
+    updated_at: new Date(BASE + seed.at * 60_000),
+  }));
 
   useCase = new ListQuotesUseCase(users, repository);
 });

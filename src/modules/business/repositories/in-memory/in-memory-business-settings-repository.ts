@@ -13,9 +13,7 @@ import type {
  * defaults on the first save, absent fields kept on the next ones. The
  * radius CHECK lives in the database; the use case's schema bounds it first.
  */
-class InMemoryBusinessSettingsRepository
-  implements IBusinessSettingsRepository
-{
+class InMemoryBusinessSettingsRepository implements IBusinessSettingsRepository {
   public settings: BusinessSettings[] = [];
 
   async findByBusinessId(businessId: string): Promise<BusinessSettings | null> {

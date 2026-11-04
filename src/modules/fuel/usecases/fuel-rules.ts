@@ -153,8 +153,7 @@ interface ReadingOnTimeline {
 
 /** Refused, or accepted with the odometer the vehicle ends with (null: untouched). */
 type ReadingPlacement =
-  | { fits: false }
-  | { fits: true; odometer: number | null };
+  { fits: false } | { fits: true; odometer: number | null };
 
 /**
  * Where a reading may go on its vehicle's odometer timeline: a refueling's

@@ -18,9 +18,8 @@ import { createPrismaClient } from "@/shared/database/database-client";
 vi.mock("@/shared/security/bcrypt-gate", async (importOriginal) => {
   const original =
     await importOriginal<typeof import("@/shared/security/bcrypt-gate")>();
-  const { ServiceBusyError } = await import(
-    "@/shared/errors/service-busy-error"
-  );
+  const { ServiceBusyError } =
+    await import("@/shared/errors/service-busy-error");
 
   const busy = () =>
     Promise.reject(

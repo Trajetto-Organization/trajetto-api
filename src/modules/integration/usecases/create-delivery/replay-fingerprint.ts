@@ -78,8 +78,10 @@ interface StoredItem {
   unit_value: DecimalLike | null;
 }
 
-interface StoredDelivery
-  extends Omit<DeliveryDraft, "shipperId" | "items" | "scheduled_date"> {
+interface StoredDelivery extends Omit<
+  DeliveryDraft,
+  "shipperId" | "items" | "scheduled_date"
+> {
   shipperId: string;
   scheduled_date: Date | null;
   items: StoredItem[];

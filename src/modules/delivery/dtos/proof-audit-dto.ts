@@ -11,12 +11,7 @@ type ProofAuditStatus = "PENDING" | "APPROVED" | "REJECTED";
 
 /** AIAnalysisRequest.status of the latest DELIVERY_PROOF request. */
 type ProofAnalysisStatus =
-  | "PENDING"
-  | "PROCESSING"
-  | "COMPLETED"
-  | "PARTIAL"
-  | "FAILED"
-  | "SKIPPED";
+  "PENDING" | "PROCESSING" | "COMPLETED" | "PARTIAL" | "FAILED" | "SKIPPED";
 
 /**
  * What the card says about the automatic reading. "No reading" used to cover

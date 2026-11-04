@@ -12,8 +12,7 @@ import { resolve } from "node:path";
  * from there.
  */
 export type ProductionDatabaseVariable =
-  | "DATABASE_URL"
-  | "MIGRATION_DATABASE_URL";
+  "DATABASE_URL" | "MIGRATION_DATABASE_URL";
 
 /** The commented `# NAME=postgresql://...` template, as a URL. */
 export function productionDatabaseUrl(name: ProductionDatabaseVariable): URL {

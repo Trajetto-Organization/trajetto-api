@@ -471,15 +471,13 @@ function twins(): Implementations {
   });
 
   imports.imports.push(
-    ...IMPORTS.map(
-      (row): ImportRecord => ({
-        ...row,
-        report: reportOf(row),
-        reversed_at: row.status === "REVERSED" ? at(10) : null,
-        businessId: BUSINESS,
-        performedById: USER,
-      }),
-    ),
+    ...IMPORTS.map((row): ImportRecord => ({
+      ...row,
+      report: reportOf(row),
+      reversed_at: row.status === "REVERSED" ? at(10) : null,
+      businessId: BUSINESS,
+      performedById: USER,
+    })),
     {
       ...OTHER_IMPORT,
       report: reportOf(OTHER_IMPORT),

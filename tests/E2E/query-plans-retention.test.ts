@@ -78,9 +78,8 @@ afterAll(async () => {
 
 describe("the nightly API usage purge", () => {
   it("keeps 400 days and removes what is older", async () => {
-    const { cleanupApiUsageJob, API_USAGE_RETENTION_DAYS } = await import(
-      "@/jobs/cron/cleanup-api-usage-job"
-    );
+    const { cleanupApiUsageJob, API_USAGE_RETENTION_DAYS } =
+      await import("@/jobs/cron/cleanup-api-usage-job");
 
     expect(API_USAGE_RETENTION_DAYS).toBe(400);
 
@@ -103,9 +102,8 @@ describe("the nightly API usage purge", () => {
   });
 
   it("walks the oldest days through the day index, not the table", async () => {
-    const { apiUsageRowsBefore } = await import(
-      "@/jobs/cron/cleanup-api-usage-job"
-    );
+    const { apiUsageRowsBefore } =
+      await import("@/jobs/cron/cleanup-api-usage-job");
 
     const cutoff = new Date(Date.now() - 400 * DAY_MS);
 
@@ -126,9 +124,8 @@ describe("the nightly API usage purge", () => {
   });
 
   it("is scheduled", async () => {
-    const { CronSchedulerService } = await import(
-      "@/shared/services/cron-scheduler-service"
-    );
+    const { CronSchedulerService } =
+      await import("@/shared/services/cron-scheduler-service");
     const { registerCronJobs } = await import("@/jobs/cron");
 
     const names: string[] = [];

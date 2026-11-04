@@ -23,9 +23,8 @@ describe("tolerateEmptyJsonBody over Fastify's default parser", () => {
   const app = fastify();
 
   beforeAll(async () => {
-    const { tolerateEmptyJsonBody } = await import(
-      "@/shared/http/json-body-parser"
-    );
+    const { tolerateEmptyJsonBody } =
+      await import("@/shared/http/json-body-parser");
 
     app.removeContentTypeParser("application/json");
     app.addContentTypeParser(

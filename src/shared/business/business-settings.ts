@@ -10,10 +10,7 @@
  */
 
 type ChecklistRequirement =
-  | "NONE"
-  | "ROUTE_START"
-  | "ROUTE_END"
-  | "ROUTE_START_AND_END";
+  "NONE" | "ROUTE_START" | "ROUTE_END" | "ROUTE_START_AND_END";
 
 /**
  * What an action at the customer's address does when the phone is outside

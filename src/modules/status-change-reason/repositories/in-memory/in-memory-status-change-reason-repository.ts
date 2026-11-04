@@ -24,9 +24,7 @@ import {
   type StatusReasonGroup,
 } from "../../usecases/list-status-change-reason/status-change-reason-list";
 
-class InMemoryStatusChangeReasonRepository
-  implements IStatusChangeReasonRepository
-{
+class InMemoryStatusChangeReasonRepository implements IStatusChangeReasonRepository {
   public statusChangeReasons: StatusChangeReason[] = [];
 
   /**

@@ -97,9 +97,8 @@ afterAll(async () => {
 
 describe("the operational snapshot", () => {
   it("reads every part of the check without error", async () => {
-    const { collectOperationalSnapshot } = await import(
-      "@/shared/health/operational-snapshot"
-    );
+    const { collectOperationalSnapshot } =
+      await import("@/shared/health/operational-snapshot");
 
     const snapshot = await collectOperationalSnapshot();
 
@@ -109,9 +108,8 @@ describe("the operational snapshot", () => {
   });
 
   it("measures the stuck outbox event from when it became due", async () => {
-    const { collectOperationalSnapshot } = await import(
-      "@/shared/health/operational-snapshot"
-    );
+    const { collectOperationalSnapshot } =
+      await import("@/shared/health/operational-snapshot");
 
     const snapshot = await collectOperationalSnapshot();
 
@@ -119,9 +117,8 @@ describe("the operational snapshot", () => {
   });
 
   it("sees the recent credential failure and turns both into reasons", async () => {
-    const { collectOperationalSnapshot } = await import(
-      "@/shared/health/operational-snapshot"
-    );
+    const { collectOperationalSnapshot } =
+      await import("@/shared/health/operational-snapshot");
     const { evaluateAlerts } = await import("@/shared/health/alert-rules");
 
     const snapshot = await collectOperationalSnapshot();
@@ -143,9 +140,8 @@ describe("the operational snapshot", () => {
       data: { status: "PUBLISHED", processedAt: new Date() },
     });
 
-    const { collectOperationalSnapshot } = await import(
-      "@/shared/health/operational-snapshot"
-    );
+    const { collectOperationalSnapshot } =
+      await import("@/shared/health/operational-snapshot");
 
     const snapshot = await collectOperationalSnapshot();
 

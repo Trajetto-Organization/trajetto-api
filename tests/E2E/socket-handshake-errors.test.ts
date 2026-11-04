@@ -143,9 +143,8 @@ afterAll(async () => {
 
 describe("a handshake the database could not answer", () => {
   it("is refused as unavailable, not as a bad token", async () => {
-    const { UserRepository } = await import(
-      "@/modules/user/repositories/user-repository"
-    );
+    const { UserRepository } =
+      await import("@/modules/user/repositories/user-repository");
 
     const original = UserRepository.prototype.findUserById;
 

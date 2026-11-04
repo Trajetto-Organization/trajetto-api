@@ -151,29 +151,26 @@ const users = {
 beforeEach(() => {
   repository = new InMemoryBusinessRepository();
 
-  repository.business = SEEDS.map(
-    (seed, index): Business => ({
-      id:
-        seed.id ?? `018fed20-0000-7000-8000-${String(index).padStart(12, "0")}`,
-      corporate_reason: `Empresa ${seed.key}`,
-      fantasy_name: seed.fantasy ?? null,
-      cep: "01001000",
-      city: seed.city,
-      uf: seed.uf,
-      street: "Rua",
-      address_number: "1",
-      cnpj: String(71222555000100 + index),
-      cnae: "4930202",
-      erp_code: seed.erp ?? null,
-      responsible_name: "Responsável",
-      telephone: "11999999999",
-      email: `${seed.key.toLowerCase()}@lista.exemplo.com.br`,
-      is_active: seed.active ?? true,
-      timezone: "America/Sao_Paulo",
-      created_at: new Date(BASE + seed.at * 60_000),
-      updated_at: new Date(BASE + seed.at * 60_000),
-    }),
-  );
+  repository.business = SEEDS.map((seed, index): Business => ({
+    id: seed.id ?? `018fed20-0000-7000-8000-${String(index).padStart(12, "0")}`,
+    corporate_reason: `Empresa ${seed.key}`,
+    fantasy_name: seed.fantasy ?? null,
+    cep: "01001000",
+    city: seed.city,
+    uf: seed.uf,
+    street: "Rua",
+    address_number: "1",
+    cnpj: String(71222555000100 + index),
+    cnae: "4930202",
+    erp_code: seed.erp ?? null,
+    responsible_name: "Responsável",
+    telephone: "11999999999",
+    email: `${seed.key.toLowerCase()}@lista.exemplo.com.br`,
+    is_active: seed.active ?? true,
+    timezone: "America/Sao_Paulo",
+    created_at: new Date(BASE + seed.at * 60_000),
+    updated_at: new Date(BASE + seed.at * 60_000),
+  }));
 
   useCase = new ListBusinessUseCase(users, repository);
 });

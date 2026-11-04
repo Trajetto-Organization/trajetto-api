@@ -561,9 +561,8 @@ describe("what the operations screens read by tenant", () => {
   it("answers the tower's latest events without reading the history", async () => {
     // The repository the tower reads, with the tower's arguments: today in
     // the company's zone, fifteen entries per source.
-    const { OperationDayRepository } = await import(
-      "@/modules/route/repositories/operation-day-repository"
-    );
+    const { OperationDayRepository } =
+      await import("@/modules/route/repositories/operation-day-repository");
     const { operationDay } = await import("@/shared/route/operation-day-rules");
 
     const queries = await capturing(() =>
@@ -595,9 +594,8 @@ describe("what the operations screens read by tenant", () => {
   });
 
   it("pages the occurrence list without reading the history", async () => {
-    const { DeliveryRepository } = await import(
-      "@/modules/delivery/repositories/delivery-repository"
-    );
+    const { DeliveryRepository } =
+      await import("@/modules/delivery/repositories/delivery-repository");
 
     const queries = await capturing(() =>
       new DeliveryRepository(capture).listOccurrences({
@@ -622,9 +620,8 @@ describe("what the operations screens read by tenant", () => {
   });
 
   it("counts today's occurrences from today's rows only", async () => {
-    const { DeliveryRepository } = await import(
-      "@/modules/delivery/repositories/delivery-repository"
-    );
+    const { DeliveryRepository } =
+      await import("@/modules/delivery/repositories/delivery-repository");
     const { operationDay } = await import("@/shared/route/operation-day-rules");
 
     const queries = await capturing(() =>
@@ -837,9 +834,8 @@ describe("what the tower reads for the day", () => {
   };
 
   const repository = async () => {
-    const { OperationDayRepository } = await import(
-      "@/modules/route/repositories/operation-day-repository"
-    );
+    const { OperationDayRepository } =
+      await import("@/modules/route/repositories/operation-day-repository");
 
     return new OperationDayRepository(capture);
   };
@@ -965,9 +961,8 @@ describe("what the tower reads for the day", () => {
     );
     await prisma.$executeRawUnsafe('ANALYZE "route"');
 
-    const { RouteRepository } = await import(
-      "@/modules/route/repositories/route-repository"
-    );
+    const { RouteRepository } =
+      await import("@/modules/route/repositories/route-repository");
     const routes = new RouteRepository(capture as never);
 
     const queries = await capturing(() =>
@@ -1027,9 +1022,8 @@ describe("what the tower reads for the day", () => {
     );
     await prisma.$executeRawUnsafe('ANALYZE "route"');
 
-    const { DeliveryRepository } = await import(
-      "@/modules/delivery/repositories/delivery-repository"
-    );
+    const { DeliveryRepository } =
+      await import("@/modules/delivery/repositories/delivery-repository");
     const deliveries = new DeliveryRepository(capture as never);
 
     const leftOpenBefore = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000);
@@ -1115,18 +1109,14 @@ describe("what the tower reads for the day", () => {
     );
     await prisma.$executeRawUnsafe('ANALYZE "route"');
 
-    const { OperationSummaryUseCase } = await import(
-      "@/modules/delivery/usecases/operation-summary/operation-summary-usecase"
-    );
-    const { readOperationSummary } = await import(
-      "@/modules/delivery/usecases/operation-summary/read-operation-summary"
-    );
-    const { DeliveryRepository } = await import(
-      "@/modules/delivery/repositories/delivery-repository"
-    );
-    const { inheritedFromRunningRoutes } = await import(
-      "@/shared/route/route-left-open"
-    );
+    const { OperationSummaryUseCase } =
+      await import("@/modules/delivery/usecases/operation-summary/operation-summary-usecase");
+    const { readOperationSummary } =
+      await import("@/modules/delivery/usecases/operation-summary/read-operation-summary");
+    const { DeliveryRepository } =
+      await import("@/modules/delivery/repositories/delivery-repository");
+    const { inheritedFromRunningRoutes } =
+      await import("@/shared/route/route-left-open");
 
     const operation = await repository();
     const delivery = new DeliveryRepository(capture as never);
@@ -1304,9 +1294,8 @@ describe("the MASTER's company list", () => {
   }, 120_000);
 
   it("counts the page's fleets from the page's vehicles, not the platform's", async () => {
-    const { BusinessRepository } = await import(
-      "@/modules/business/repositories/business-repository"
-    );
+    const { BusinessRepository } =
+      await import("@/modules/business/repositories/business-repository");
     const businesses = new BusinessRepository(capture as never);
 
     sent.length = 0;

@@ -15,9 +15,7 @@ import type {
  * per user (upsert), hashes only, the unique token and code (a null code
  * never collides), and a single-winner consumption.
  */
-class InMemoryDriverEnrollmentRepository
-  implements IDriverEnrollmentRepository
-{
+class InMemoryDriverEnrollmentRepository implements IDriverEnrollmentRepository {
   public tokens: DriverEnrollmentToken[] = [];
 
   async issue({

@@ -24,9 +24,8 @@ async function settle(): Promise<void> {
 
 describe("starting a pipeline", () => {
   it("does not drain the notification backlog on its own", async () => {
-    const { NotificationPipelineService } = await import(
-      "@/shared/notifications/notification-pipeline-service"
-    );
+    const { NotificationPipelineService } =
+      await import("@/shared/notifications/notification-pipeline-service");
 
     const pipeline = NotificationPipelineService.getInstance();
     const cycle = vi.spyOn(pipeline, "runOutboxCycle").mockResolvedValue(false);
@@ -42,9 +41,8 @@ describe("starting a pipeline", () => {
   });
 
   it("does not drain the AI analysis backlog on its own", async () => {
-    const { AIAnalysisPipelineService } = await import(
-      "@/shared/ai/ai-analysis-pipeline-service"
-    );
+    const { AIAnalysisPipelineService } =
+      await import("@/shared/ai/ai-analysis-pipeline-service");
 
     const pipeline = AIAnalysisPipelineService.getInstance();
 
@@ -62,12 +60,10 @@ describe("starting a pipeline", () => {
   });
 
   it("drains both when the boot says so", async () => {
-    const { NotificationPipelineService } = await import(
-      "@/shared/notifications/notification-pipeline-service"
-    );
-    const { AIAnalysisPipelineService } = await import(
-      "@/shared/ai/ai-analysis-pipeline-service"
-    );
+    const { NotificationPipelineService } =
+      await import("@/shared/notifications/notification-pipeline-service");
+    const { AIAnalysisPipelineService } =
+      await import("@/shared/ai/ai-analysis-pipeline-service");
     const { drainWorkerBacklog } = await import("@/workers");
 
     const notifications = vi

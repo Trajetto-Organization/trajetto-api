@@ -246,9 +246,8 @@ describe("the render worker", () => {
     });
 
   it("gives up on a render that takes too long, and the next one still works", async () => {
-    const { renderProofPdfOffThread } = await import(
-      "@/shared/services/proof-pdf-renderer"
-    );
+    const { renderProofPdfOffThread } =
+      await import("@/shared/services/proof-pdf-renderer");
 
     await expect(
       renderProofPdfOffThread(
@@ -267,9 +266,8 @@ describe("the render worker", () => {
   }, 60_000);
 
   it("refuses more work than it can queue, instead of queueing without bound", async () => {
-    const { renderProofPdfOffThread, MAX_PENDING_RENDERS } = await import(
-      "@/shared/services/proof-pdf-renderer"
-    );
+    const { renderProofPdfOffThread, MAX_PENDING_RENDERS } =
+      await import("@/shared/services/proof-pdf-renderer");
 
     const images = { photo: null, signature: null };
 
@@ -290,12 +288,10 @@ describe("the render worker", () => {
   }, 60_000);
 
   it("renders the same bytes as the in-process renderer", async () => {
-    const { renderProofPdfOffThread } = await import(
-      "@/shared/services/proof-pdf-renderer"
-    );
-    const { renderProofPdf } = await import(
-      "@/shared/services/proof-pdf-service"
-    );
+    const { renderProofPdfOffThread } =
+      await import("@/shared/services/proof-pdf-renderer");
+    const { renderProofPdf } =
+      await import("@/shared/services/proof-pdf-service");
 
     const images = { photo: null, signature: null };
 

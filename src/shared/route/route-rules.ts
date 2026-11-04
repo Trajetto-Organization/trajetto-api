@@ -12,11 +12,7 @@ import type { DeliveryStatus } from "@/shared/delivery/delivery-rules";
  */
 
 type RouteStatus =
-  | "PLANNED"
-  | "RELEASED"
-  | "IN_PROGRESS"
-  | "COMPLETED"
-  | "CANCELLED";
+  "PLANNED" | "RELEASED" | "IN_PROGRESS" | "COMPLETED" | "CANCELLED";
 
 /**
  * A stop carries its own outcome rather than reading the delivery's, because
@@ -26,11 +22,7 @@ type RouteStatus =
  * support desk needs in order to answer "what happened to invoice X".
  */
 type RouteStopStatus =
-  | "PENDING"
-  | "ARRIVED"
-  | "COMPLETED"
-  | "FAILED"
-  | "CANCELLED";
+  "PENDING" | "ARRIVED" | "COMPLETED" | "FAILED" | "CANCELLED";
 
 const ROUTE_STATUS_LABELS: Record<RouteStatus, string> = {
   PLANNED: "Planejada",

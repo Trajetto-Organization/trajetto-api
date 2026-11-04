@@ -39,11 +39,7 @@ import type { ProofSigningService } from "@/shared/services/proof-signing/proof-
  */
 
 type ReadinessStatus =
-  | "ok"
-  | "warning"
-  | "error"
-  | "not_configured"
-  | "disabled";
+  "ok" | "warning" | "error" | "not_configured" | "disabled";
 
 type ProviderKey =
   | "email"
@@ -61,11 +57,7 @@ type DetailValue = string | number | boolean | null;
  * the provider: it may clear by itself on the next attempt.
  */
 type ProbeFailureKind =
-  | "timeout"
-  | "network"
-  | "http_5xx"
-  | "throttled"
-  | "invalid_response";
+  "timeout" | "network" | "http_5xx" | "throttled" | "invalid_response";
 
 interface ProviderReadiness {
   key: ProviderKey;

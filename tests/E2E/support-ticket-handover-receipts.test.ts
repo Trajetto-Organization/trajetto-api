@@ -45,12 +45,7 @@ const TOWER_TYPE = "018ff100-0000-7000-8000-0000000000e1";
 const PROBLEM_TYPE = "018ff100-0000-7000-8000-0000000000e2";
 
 type Who =
-  | "admin"
-  | "driverA"
-  | "driverB"
-  | "master"
-  | "inactiveAdmin"
-  | "former";
+  "admin" | "driverA" | "driverB" | "master" | "inactiveAdmin" | "former";
 
 const users = {} as Record<Who, { id: string; token: string }>;
 

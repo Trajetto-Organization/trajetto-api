@@ -48,7 +48,7 @@ interface LoginLockoutState {
 function isLoginLocked(state: LoginLockoutState, now: Date): boolean {
   return Boolean(
     state.login_locked_until &&
-      state.login_locked_until.getTime() > now.getTime(),
+    state.login_locked_until.getTime() > now.getTime(),
   );
 }
 

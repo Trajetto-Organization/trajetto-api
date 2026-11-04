@@ -75,8 +75,7 @@ function closeOutcomesFor(
 }
 
 type CloseOutcomeProblem =
-  | "SUPPORT_TICKET_AUTHORIZATION_PENDING"
-  | "SUPPORT_TICKET_NOT_AUTHORIZATION";
+  "SUPPORT_TICKET_AUTHORIZATION_PENDING" | "SUPPORT_TICKET_NOT_AUTHORIZATION";
 
 /** Which refusal an outcome gets against what the ticket allows, or null. */
 function closeOutcomeProblem(

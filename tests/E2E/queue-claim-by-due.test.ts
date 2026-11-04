@@ -42,9 +42,8 @@ const sent = vi.hoisted(() => ({
 }));
 
 vi.mock("@/../infra/database", async () => {
-  const { createPrismaClient } = await import(
-    "@/shared/database/database-client"
-  );
+  const { createPrismaClient } =
+    await import("@/shared/database/database-client");
 
   const client = createPrismaClient({
     log: [{ emit: "event", level: "query" }],

@@ -2,11 +2,7 @@ import type { WebhookDelivery, WebhookDeliveryStatus } from "@prisma/client";
 
 /** The monitor's status chip: "QUEUED" is PENDING and PROCESSING together. */
 type MonitorStatusFilter =
-  | "QUEUED"
-  | "PENDING"
-  | "PROCESSING"
-  | "DELIVERED"
-  | "FAILED";
+  "QUEUED" | "PENDING" | "PROCESSING" | "DELIVERED" | "FAILED";
 
 interface WebhookMonitorQuery {
   businessId: string;

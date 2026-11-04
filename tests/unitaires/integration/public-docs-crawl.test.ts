@@ -91,9 +91,8 @@ function crawlable(robots: string, path: string): boolean {
 
 describe("the API host's robots.txt", () => {
   it("in production, opens the console and its document and nothing else", async () => {
-    const { renderApiRobotsTxt } = await import(
-      "@/shared/integration/public-docs"
-    );
+    const { renderApiRobotsTxt } =
+      await import("@/shared/integration/public-docs");
 
     const robots = renderApiRobotsTxt({
       environment: "production",
@@ -123,9 +122,8 @@ describe("the API host's robots.txt", () => {
   });
 
   it("closes a staging host entirely and advertises no sitemap", async () => {
-    const { renderApiRobotsTxt } = await import(
-      "@/shared/integration/public-docs"
-    );
+    const { renderApiRobotsTxt } =
+      await import("@/shared/integration/public-docs");
 
     const robots = renderApiRobotsTxt({
       environment: "staging",
@@ -150,9 +148,8 @@ describe("the API host's robots.txt", () => {
 
 describe("the API host's sitemap", () => {
   it("lists production's console on the API's own origin", async () => {
-    const { renderApiSitemapXml } = await import(
-      "@/shared/integration/public-docs"
-    );
+    const { renderApiSitemapXml } =
+      await import("@/shared/integration/public-docs");
 
     const xml = renderApiSitemapXml({
       environment: "production",
@@ -169,9 +166,8 @@ describe("the API host's sitemap", () => {
   });
 
   it("does not exist on staging, nor without the API's public URL", async () => {
-    const { renderApiSitemapXml } = await import(
-      "@/shared/integration/public-docs"
-    );
+    const { renderApiSitemapXml } =
+      await import("@/shared/integration/public-docs");
 
     expect(
       renderApiSitemapXml({ environment: "staging", serverUrl: API }),

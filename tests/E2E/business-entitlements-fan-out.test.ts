@@ -17,9 +17,8 @@ import { createPrismaClient } from "@/shared/database/database-client";
 const pool = vi.hoisted(() => ({ inFlight: 0, peak: 0, total: 0 }));
 
 vi.mock("@/../infra/database", async () => {
-  const { createPrismaClient } = await import(
-    "@/shared/database/database-client"
-  );
+  const { createPrismaClient } =
+    await import("@/shared/database/database-client");
 
   const counted = createPrismaClient().$extends({
     query: {

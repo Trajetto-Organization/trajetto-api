@@ -701,8 +701,7 @@ async function initializeSocketIO(httpServer: Server): Promise<SocketIOServer> {
         driverId: user.driverId,
         businessId: user.businessId,
         permissions: user.profileAccess?.permissions as
-          | Array<{ permissionKey: string; canRead: boolean }>
-          | undefined,
+          Array<{ permissionKey: string; canRead: boolean }> | undefined,
       });
 
       // Read once, above, and never again. Kept on the handshake it rode
@@ -1369,14 +1368,13 @@ async function refreshLocalDeliveryRooms(businessId: string): Promise<void> {
         // here was the shortest way to two answers that disagree.
         const stillStaff = Boolean(
           user &&
-            mayReadDeliveries({
-              role: user.role,
-              driverId: user.driverId,
-              businessId: user.businessId,
-              permissions: user.profileAccess?.permissions as
-                | Array<{ permissionKey: string; canRead: boolean }>
-                | undefined,
-            }),
+          mayReadDeliveries({
+            role: user.role,
+            driverId: user.driverId,
+            businessId: user.businessId,
+            permissions: user.profileAccess?.permissions as
+              Array<{ permissionKey: string; canRead: boolean }> | undefined,
+          }),
         );
 
         applyDeliveryStaff(socket, stillStaff);

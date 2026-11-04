@@ -870,9 +870,8 @@ describe("keeping the partitions ahead of the trucks", () => {
   });
 
   it("runs twice without complaining", async () => {
-    const { driverPositionPartitionsJob } = await import(
-      "@/jobs/cron/driver-position-partitions-job"
-    );
+    const { driverPositionPartitionsJob } =
+      await import("@/jobs/cron/driver-position-partitions-job");
 
     // Two replicas run this at the same second. The race between "does it
     // exist" and "create it" is exactly the kind that only shows up in
@@ -1044,9 +1043,8 @@ describe("the trail's day is the company's day", () => {
    * created a week ahead, so a day's partition exists before its points).
    */
   async function ensurePartitionsFor(points: Date[]): Promise<void> {
-    const { partitionName } = await import(
-      "@/jobs/cron/driver-position-partitions-job"
-    );
+    const { partitionName } =
+      await import("@/jobs/cron/driver-position-partitions-job");
     const days = new Set(
       points.map((point) => point.toISOString().slice(0, 10)),
     );
@@ -1108,9 +1106,8 @@ describe("the trail's day is the company's day", () => {
 
   it("reads an explicit day in the company's zone", async () => {
     // Yesterday, so its partitions exist: the job keeps the day before.
-    const { driverPositionPartitionsJob } = await import(
-      "@/jobs/cron/driver-position-partitions-job"
-    );
+    const { driverPositionPartitionsJob } =
+      await import("@/jobs/cron/driver-position-partitions-job");
 
     await driverPositionPartitionsJob.handler();
 
@@ -1134,9 +1131,8 @@ describe("the trail's day is the company's day", () => {
     // Rio Branco (UTC-5): its day is [05:00Z, 05:00Z of the next day). A
     // window in the server's zone — UTC in the container, São Paulo on a
     // laptop — loses the late evening, whichever of the two runs this.
-    const { driverPositionPartitionsJob } = await import(
-      "@/jobs/cron/driver-position-partitions-job"
-    );
+    const { driverPositionPartitionsJob } =
+      await import("@/jobs/cron/driver-position-partitions-job");
 
     await driverPositionPartitionsJob.handler();
 

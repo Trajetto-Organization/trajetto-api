@@ -379,12 +379,10 @@ describe("a webhook event published inside a request", () => {
       },
     });
 
-    const { enterRequestContext } = await import(
-      "@/shared/http/request-context"
-    );
-    const { fanOutWebhookEvent } = await import(
-      "@/shared/integration/webhook-dispatch-service"
-    );
+    const { enterRequestContext } =
+      await import("@/shared/http/request-context");
+    const { fanOutWebhookEvent } =
+      await import("@/shared/integration/webhook-dispatch-service");
     const database = (await import("@/../infra/database")).default;
 
     enterRequestContext({ requestId: "req-ops-webhook-0001" });

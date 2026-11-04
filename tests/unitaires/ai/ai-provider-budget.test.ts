@@ -21,9 +21,8 @@ vi.mock("@/env", () => ({
 
 describe("the configured reader", () => {
   it("is the local OCR service: 15 s per call, no client retry, one read in flight", async () => {
-    const { createConfiguredImageReader } = await import(
-      "@/shared/ai/ai-provider"
-    );
+    const { createConfiguredImageReader } =
+      await import("@/shared/ai/ai-provider");
 
     const reader = createConfiguredImageReader({
       AI_PROVIDER: "local",
@@ -38,9 +37,8 @@ describe("the configured reader", () => {
   });
 
   it("reads only the receipt and the odometer: the other checklist items are not OCR questions", async () => {
-    const { createConfiguredImageReader } = await import(
-      "@/shared/ai/ai-provider"
-    );
+    const { createConfiguredImageReader } =
+      await import("@/shared/ai/ai-provider");
 
     const reader = createConfiguredImageReader({
       AI_PROVIDER: "local",
@@ -56,9 +54,8 @@ describe("the configured reader", () => {
   });
 
   it("is switched off by AI_PROVIDER=none, and by a missing URL or token", async () => {
-    const { aiProviderConfigured, createConfiguredImageReader } = await import(
-      "@/shared/ai/ai-provider"
-    );
+    const { aiProviderConfigured, createConfiguredImageReader } =
+      await import("@/shared/ai/ai-provider");
 
     const config = {
       AI_PROVIDER: "local" as const,
@@ -143,15 +140,12 @@ describe("the environment", () => {
 
 describe("the AI lease invariant", () => {
   it("holds for the local reader's budget", async () => {
-    const { LOCAL_AI_DEFAULT_TIMEOUT_MS, LOCAL_AI_MAX_RETRIES } = await import(
-      "@/shared/ai/ai-provider-defaults"
-    );
-    const { AI_IMAGE_FETCH_TIMEOUT_MS } = await import(
-      "@/shared/ai/ai-provider"
-    );
-    const { AI_CLAIM_LEASE_SECONDS, assertAILeaseInvariant } = await import(
-      "@/shared/ai/ai-rules"
-    );
+    const { LOCAL_AI_DEFAULT_TIMEOUT_MS, LOCAL_AI_MAX_RETRIES } =
+      await import("@/shared/ai/ai-provider-defaults");
+    const { AI_IMAGE_FETCH_TIMEOUT_MS } =
+      await import("@/shared/ai/ai-provider");
+    const { AI_CLAIM_LEASE_SECONDS, assertAILeaseInvariant } =
+      await import("@/shared/ai/ai-rules");
 
     expect(() =>
       assertAILeaseInvariant({

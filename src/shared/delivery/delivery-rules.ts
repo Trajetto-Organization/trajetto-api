@@ -7,11 +7,7 @@
  */
 
 type DeliveryStatus =
-  | "PENDING"
-  | "IN_TRANSIT"
-  | "DELIVERED"
-  | "FAILED"
-  | "CANCELLED";
+  "PENDING" | "IN_TRANSIT" | "DELIVERED" | "FAILED" | "CANCELLED";
 
 const DELIVERY_STATUS_LABELS: Record<DeliveryStatus, string> = {
   PENDING: "Pendente",

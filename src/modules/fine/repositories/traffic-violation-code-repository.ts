@@ -40,9 +40,7 @@ function trafficViolationCodeSearchWhere(
   return buildSearchOr(conditions);
 }
 
-class TrafficViolationCodeRepository
-  implements ITrafficViolationCodeRepository
-{
+class TrafficViolationCodeRepository implements ITrafficViolationCodeRepository {
   constructor(private prisma = database) {}
 
   private getGravityLabel(gravity: string): string {

@@ -7,20 +7,12 @@
  */
 
 type SupportTicketKind =
-  | "OCCURRENCE"
-  | "DELIVERY"
-  | "ROUTE"
-  | "DRIVER"
-  | "LEGACY";
+  "OCCURRENCE" | "DELIVERY" | "ROUTE" | "DRIVER" | "LEGACY";
 
 type SupportTicketStatus = "OPEN" | "CLOSED";
 
 type SupportTicketOpenedVia =
-  | "OCCURRENCE_REPORT"
-  | "DRIVER_APP"
-  | "PANEL"
-  | "LEGACY_ROUTING"
-  | "MIGRATION";
+  "OCCURRENCE_REPORT" | "DRIVER_APP" | "PANEL" | "LEGACY_ROUTING" | "MIGRATION";
 
 type SupportTicketOutcome = "RESOLVED" | "APPROVED" | "DENIED" | "MIGRATED";
 
@@ -37,11 +29,7 @@ type SupportTicketEventType =
 type SupportTicketActorKind = "USER" | "DRIVER_APP" | "SYSTEM";
 
 type OccurrenceAuthorizationState =
-  | "NOT_REQUIRED"
-  | "PENDING"
-  | "APPROVED"
-  | "DENIED"
-  | "SUPERSEDED";
+  "NOT_REQUIRED" | "PENDING" | "APPROVED" | "DENIED" | "SUPERSEDED";
 
 /** The row, exactly as stored. */
 interface SupportTicket {
@@ -142,10 +130,7 @@ interface CreateSupportTicketEventProps {
 
 type SupportTicketStatusFilter = "OPEN" | "CLOSED" | "ALL";
 type SupportTicketScope =
-  | "ALL"
-  | "MINE"
-  | "UNASSIGNED"
-  | "PENDING_AUTHORIZATION";
+  "ALL" | "MINE" | "UNASSIGNED" | "PENDING_AUTHORIZATION";
 
 interface ListSupportTicketsProps {
   businessId: string;

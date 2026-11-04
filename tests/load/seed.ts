@@ -521,10 +521,7 @@ async function seedMobileCompany(options: {
    */
   settings?: {
     checklist_requirement?:
-      | "NONE"
-      | "ROUTE_START"
-      | "ROUTE_END"
-      | "ROUTE_START_AND_END";
+      "NONE" | "ROUTE_START" | "ROUTE_END" | "ROUTE_START_AND_END";
     arrival_geofence_mode?: "DISABLED" | "ALERT" | "BLOCK";
     arrival_geofence_radius_m?: number;
   };

@@ -179,9 +179,8 @@ afterAll(async () => {
 
 describe("the notification purge on an ordinary night", () => {
   it("keeps exactly the unread band", async () => {
-    const { cleanupUserHistoryJob } = await import(
-      "@/jobs/cron/cleanup-user-history-job"
-    );
+    const { cleanupUserHistoryJob } =
+      await import("@/jobs/cron/cleanup-user-history-job");
 
     captured.length = 0;
 

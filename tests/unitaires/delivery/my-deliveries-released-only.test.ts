@@ -82,9 +82,8 @@ describe("the driver's list on the in-memory twin (D8)", () => {
 
 describe("the routes of the driver's list (design §6)", () => {
   it("lists each route of an open stop once, with its plan version", async () => {
-    const { routesOf } = await import(
-      "@/modules/delivery/usecases/list-my-deliveries/list-my-deliveries-usecase"
-    );
+    const { routesOf } =
+      await import("@/modules/delivery/usecases/list-my-deliveries/list-my-deliveries-usecase");
 
     const route = { id: "r1", code: 12, plan_version: 4, status: "RELEASED" };
 
@@ -122,9 +121,8 @@ describe("the routes of the driver's list (design §6)", () => {
   });
 
   it("answers an empty list, not a missing key, when nothing is on a route", async () => {
-    const { routesOf } = await import(
-      "@/modules/delivery/usecases/list-my-deliveries/list-my-deliveries-usecase"
-    );
+    const { routesOf } =
+      await import("@/modules/delivery/usecases/list-my-deliveries/list-my-deliveries-usecase");
 
     expect(routesOf([{ id: "a", stops: [] }, { id: "b" }])).toEqual([]);
   });

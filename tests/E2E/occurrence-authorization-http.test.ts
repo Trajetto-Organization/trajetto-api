@@ -1640,9 +1640,8 @@ describe("who files a request, and when its attempt is over (review r1)", () => 
   });
 
   it("a request decided before its notice fans out rings nobody; one still waiting reaches the tower", async () => {
-    const { NotificationPipelineService } = await import(
-      "@/shared/notifications/notification-pipeline-service"
-    );
+    const { NotificationPipelineService } =
+      await import("@/shared/notifications/notification-pipeline-service");
     const pipeline = NotificationPipelineService.getInstance();
 
     // The order under test is "decided, THEN expanded". A publish wakes this

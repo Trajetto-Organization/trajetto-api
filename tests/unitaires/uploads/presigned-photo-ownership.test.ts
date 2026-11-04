@@ -214,9 +214,8 @@ describe("a checklist, the same two ways", () => {
   const createVehicleChecklistWithMileage = vi.fn();
 
   async function checklistUseCase() {
-    const { CreateVehicleChecklistUseCase } = await import(
-      "@/modules/vehicle-checklist/usecases/create-vehicle-checklist/create-vehicle-checklist-usecase"
-    );
+    const { CreateVehicleChecklistUseCase } =
+      await import("@/modules/vehicle-checklist/usecases/create-vehicle-checklist/create-vehicle-checklist-usecase");
 
     const stub =
       <T>(value: T) =>

@@ -33,8 +33,7 @@ interface SocketSubject {
 }
 
 type SocketVerdict =
-  | { keep: true; isDeliveryStaff: boolean }
-  | { keep: false; reason: string };
+  { keep: true; isDeliveryStaff: boolean } | { keep: false; reason: string };
 
 /**
  * The `securityAction` reason each refusal is announced with.

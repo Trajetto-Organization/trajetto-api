@@ -271,11 +271,7 @@ type GeofenceOutcome = "INSIDE" | "OUTSIDE" | "NOT_EVALUATED";
 
 /** DeliveryOccurrence.authorization_status (decision 6.3). */
 type OccurrenceAuthorizationStatus =
-  | "NOT_REQUIRED"
-  | "PENDING"
-  | "APPROVED"
-  | "DENIED"
-  | "SUPERSEDED";
+  "NOT_REQUIRED" | "PENDING" | "APPROVED" | "DENIED" | "SUPERSEDED";
 
 interface ListOccurrencesProps extends OccurrenceFeedFilters {
   page: number;

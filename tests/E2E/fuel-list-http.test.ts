@@ -23,9 +23,8 @@ import { createPrismaClient } from "@/shared/database/database-client";
 const pool = vi.hoisted(() => ({ inFlight: 0, peak: 0 }));
 
 vi.mock("@/../infra/database", async () => {
-  const { createPrismaClient } = await import(
-    "@/shared/database/database-client"
-  );
+  const { createPrismaClient } =
+    await import("@/shared/database/database-client");
 
   const counted = createPrismaClient().$extends({
     query: {
@@ -665,9 +664,8 @@ describe("GET /fuel/export-fuel — the screen's filters (decision 5.8)", () => 
 describe("the list's connection budget", () => {
   it("never holds more than two connections at once", async () => {
     const { container } = await import("tsyringe");
-    const { ListFuelUseCase } = await import(
-      "@/modules/fuel/usecases/list-fuel/list-fuel-usecase"
-    );
+    const { ListFuelUseCase } =
+      await import("@/modules/fuel/usecases/list-fuel/list-fuel-usecase");
 
     const admin = await prisma.user.findFirstOrThrow({
       where: { businessId: CARRIER, role: "BUSINESS_ADMIN" },

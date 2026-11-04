@@ -437,8 +437,7 @@ function withDocumentedInputs(
 ): FastifySchema {
   const documented = (
     route.config as
-      | { openapi?: { body?: unknown; headers?: unknown } }
-      | undefined
+      { openapi?: { body?: unknown; headers?: unknown } } | undefined
   )?.openapi;
 
   if (!schema || !documented) return schema;
@@ -490,8 +489,7 @@ const RETRY_AFTER_HEADER: JsonSchema = {
 
 function codeDescriptionOf(response: JsonSchema): string | undefined {
   const code = (response.properties as JsonSchema | undefined)?.code as
-    | JsonSchema
-    | undefined;
+    JsonSchema | undefined;
 
   if (!code) return undefined;
 
@@ -597,8 +595,7 @@ function internalErrorSchema(response: JsonSchema): JsonSchema {
 
 function unavailableSchema(response: JsonSchema): JsonSchema {
   const own = (response.properties as JsonSchema | undefined)?.code as
-    | JsonSchema
-    | undefined;
+    JsonSchema | undefined;
   // A route that can only be refused by the database outage (the keyed
   // routes) says so with an enum and a required requestId; both stay.
   const requiresRequestId =

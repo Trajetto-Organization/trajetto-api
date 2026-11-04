@@ -1135,9 +1135,8 @@ describe("the platform's own occurrence type (DLVP-OCC-3)", () => {
 
     // The proof PDF reads the same set: a pending, denied or superseded
     // request is not something that happened to the delivery either.
-    const { ProofDocumentRepository } = await import(
-      "@/modules/delivery/repositories/proof-document-repository"
-    );
+    const { ProofDocumentRepository } =
+      await import("@/modules/delivery/repositories/proof-document-repository");
     const source = await new ProofDocumentRepository(prisma).loadSource(
       delivery.id,
       CARRIER,

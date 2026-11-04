@@ -109,10 +109,13 @@ const harnesses: Record<Kind, () => GeocodingHarness> = {
       );
     },
     async editAddress(id) {
-      Object.assign(memory.deliveries.find((row) => row.id === id)!, {
-        street: "Rua Nova",
-        ...CLEARED_ADDRESS_POINT,
-      });
+      Object.assign(
+        memory.deliveries.find((row) => row.id === id)!,
+        {
+          street: "Rua Nova",
+          ...CLEARED_ADDRESS_POINT,
+        },
+      );
     },
   }),
 };

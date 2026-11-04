@@ -131,9 +131,7 @@ function isModuleSwitchedOff(
 }
 
 type MasterModuleRefusal =
-  | "company-not-found"
-  | "company-inactive"
-  | "module-not-enabled";
+  "company-not-found" | "company-inactive" | "module-not-enabled";
 
 /**
  * Why a MASTER request is refused by the module gate, or null to let it on.

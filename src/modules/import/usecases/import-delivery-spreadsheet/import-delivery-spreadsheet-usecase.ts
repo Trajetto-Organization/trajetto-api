@@ -911,8 +911,8 @@ class ImportDeliverySpreadsheetUseCase {
               name: route.name,
               scheduled_date:
                 route.date ?? first.scheduled_date ?? businessToday(timeZone),
-              deliveryIds: group.map(
-                (row) => createdDeliveryIdByLine.get(row.line)!,
+              deliveryIds: group.map((row) =>
+                createdDeliveryIdByLine.get(row.line)!,
               ),
             },
             tx,

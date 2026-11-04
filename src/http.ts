@@ -308,8 +308,7 @@ app.register(fastifyRateLimit, {
 const moveRateLimiterFirst = async (instance: typeof app) => {
   instance.addHook("onRoute", (routeOptions) => {
     const config = routeOptions.config as
-      | { rateLimit?: { keyGenerator?: unknown } | false }
-      | undefined;
+      { rateLimit?: { keyGenerator?: unknown } | false } | undefined;
 
     if (config?.rateLimit && config.rateLimit.keyGenerator) return;
 

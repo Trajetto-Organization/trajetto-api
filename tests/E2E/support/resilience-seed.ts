@@ -181,9 +181,8 @@ async function queueWebhookRows(
   endpoints: number,
   events: number,
 ): Promise<string[]> {
-  const { fanOutWebhookEvent } = await import(
-    "@/shared/integration/webhook-dispatch-service"
-  );
+  const { fanOutWebhookEvent } =
+    await import("@/shared/integration/webhook-dispatch-service");
 
   for (let index = 0; index < endpoints; index += 1) {
     await prisma.webhookEndpoint.create({

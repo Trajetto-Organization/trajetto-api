@@ -134,9 +134,8 @@ afterAll(async () => {
 
 describe("the notification purge", () => {
   it("deletes exactly what the two retentions say", async () => {
-    const { cleanupUserHistoryJob } = await import(
-      "@/jobs/cron/cleanup-user-history-job"
-    );
+    const { cleanupUserHistoryJob } =
+      await import("@/jobs/cron/cleanup-user-history-job");
 
     captured.length = 0;
 

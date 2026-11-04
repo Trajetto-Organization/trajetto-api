@@ -40,9 +40,7 @@ const FULL_CODE = /^(\d{1,6})-(\d{1,4})$/;
  * printed or a literal case-insensitive substring of code or description;
  * the cursor continues after the given row.
  */
-class InMemoryTrafficViolationCodeRepository
-  implements ITrafficViolationCodeRepository
-{
+class InMemoryTrafficViolationCodeRepository implements ITrafficViolationCodeRepository {
   public codes: TrafficViolationCode[] = [];
 
   add(
@@ -150,8 +148,8 @@ class InMemoryTrafficViolationCodeRepository
       code.description.toLowerCase().includes(needle) ||
       Boolean(
         fullCode &&
-          code.code === fullCode[1] &&
-          code.sub_code === Number(fullCode[2]),
+        code.code === fullCode[1] &&
+        code.sub_code === Number(fullCode[2]),
       )
     );
   }

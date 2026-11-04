@@ -33,9 +33,7 @@ interface GeocodingRow {
  * back-off and settle guards over rows the tests seed. One process, so the
  * SKIP LOCKED half has nothing to model; the lease does.
  */
-class InMemoryDeliveryGeocodingRepository
-  implements IDeliveryGeocodingRepository
-{
+class InMemoryDeliveryGeocodingRepository implements IDeliveryGeocodingRepository {
   public deliveries: GeocodingRow[] = [];
 
   async claim(limit: number, now: Date): Promise<GeocodingClaim[]> {

@@ -24,10 +24,7 @@
  */
 
 type Store =
-  | unknown[]
-  | Map<unknown, unknown>
-  | Set<unknown>
-  | Record<string, unknown>;
+  unknown[] | Map<unknown, unknown> | Set<unknown> | Record<string, unknown>;
 
 const isPlainObject = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" &&

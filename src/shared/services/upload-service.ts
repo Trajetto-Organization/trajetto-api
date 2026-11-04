@@ -864,8 +864,7 @@ class UploadService {
         );
 
         const body = result.Body as
-          | { transformToByteArray?: () => Promise<Uint8Array> }
-          | undefined;
+          { transformToByteArray?: () => Promise<Uint8Array> } | undefined;
 
         if (!body?.transformToByteArray) return null;
 

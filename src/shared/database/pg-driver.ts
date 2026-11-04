@@ -47,10 +47,7 @@ import type { DatabasePoolSettings } from "./pool-config";
  * on the way back from a COMMIT reports the same as one that died before it.
  */
 type DatabaseUnavailableReason =
-  | "pool-timeout"
-  | "connect-failed"
-  | "connection-lost"
-  | "query-timeout";
+  "pool-timeout" | "connect-failed" | "connection-lost" | "query-timeout";
 
 /** pg's and pg-pool's own messages for "no database right now". */
 const UNAVAILABLE_MESSAGES = new Map<string, DatabaseUnavailableReason>([

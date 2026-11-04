@@ -326,9 +326,8 @@ describe("when the re-evaluation cannot read the database", () => {
 
     second.removeAllListeners("chatMessage");
 
-    const { UserRepository } = await import(
-      "@/modules/user/repositories/user-repository"
-    );
+    const { UserRepository } =
+      await import("@/modules/user/repositories/user-repository");
 
     const original = UserRepository.prototype.findUserById;
 

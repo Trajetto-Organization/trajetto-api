@@ -128,9 +128,8 @@ beforeAll(async () => {
 
   // Yesterday's and today's partitions: the day's first minute before the
   // company's midnight may sit in either.
-  const { driverPositionPartitionsJob } = await import(
-    "@/jobs/cron/driver-position-partitions-job"
-  );
+  const { driverPositionPartitionsJob } =
+    await import("@/jobs/cron/driver-position-partitions-job");
 
   await driverPositionPartitionsJob.handler();
 

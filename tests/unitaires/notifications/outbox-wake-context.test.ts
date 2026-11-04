@@ -35,9 +35,8 @@ afterEach(() => {
 
 describe("the pipeline wake scheduled by a publish", () => {
   it("fires outside the request that published", async () => {
-    const { OutboxService } = await import(
-      "@/shared/notifications/outbox-service"
-    );
+    const { OutboxService } =
+      await import("@/shared/notifications/outbox-service");
 
     const outbox = new OutboxService() as unknown as {
       wakePipeline: (delayMs: number) => void;

@@ -31,9 +31,8 @@ let replicaA: Scheduler;
 let replicaB: Scheduler;
 
 beforeAll(async () => {
-  const { CronSchedulerService } = await import(
-    "@/shared/services/cron-scheduler-service"
-  );
+  const { CronSchedulerService } =
+    await import("@/shared/services/cron-scheduler-service");
 
   // The constructor is private (production uses one per process); the test
   // needs two, and the private methods are the election itself.

@@ -8,11 +8,7 @@
  */
 
 type JourneyRouteStatus =
-  | "PLANNED"
-  | "RELEASED"
-  | "IN_PROGRESS"
-  | "COMPLETED"
-  | "CANCELLED";
+  "PLANNED" | "RELEASED" | "IN_PROGRESS" | "COMPLETED" | "CANCELLED";
 
 interface JourneyRoute {
   id: string;

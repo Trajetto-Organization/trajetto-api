@@ -215,9 +215,8 @@ describe("logging out", () => {
 
 describe("ending every session of the user", () => {
   it("unregisters every device when the sessions are invalidated", async () => {
-    const { UserRepository } = await import(
-      "@/modules/user/repositories/user-repository"
-    );
+    const { UserRepository } =
+      await import("@/modules/user/repositories/user-repository");
 
     const token = await registerDevice(await openSession(DRIVER_USER));
 
@@ -227,9 +226,8 @@ describe("ending every session of the user", () => {
   });
 
   it("unregisters every device when the password changes", async () => {
-    const { UserRepository } = await import(
-      "@/modules/user/repositories/user-repository"
-    );
+    const { UserRepository } =
+      await import("@/modules/user/repositories/user-repository");
 
     const token = await registerDevice(await openSession(DRIVER_USER));
 
@@ -242,9 +240,8 @@ describe("ending every session of the user", () => {
   });
 
   it("unregisters every device when access is revoked", async () => {
-    const { UserRepository } = await import(
-      "@/modules/user/repositories/user-repository"
-    );
+    const { UserRepository } =
+      await import("@/modules/user/repositories/user-repository");
 
     const token = await registerDevice(await openSession(DRIVER_USER));
 
@@ -264,9 +261,8 @@ describe("ending every session of the user", () => {
 
 describe("a session that ended without telling the server", () => {
   it("loses its device once the family has expired and been purged", async () => {
-    const { cleanupExpiredRefreshTokensJob } = await import(
-      "@/jobs/cron/cleanup-expired-refresh-tokens-job"
-    );
+    const { cleanupExpiredRefreshTokensJob } =
+      await import("@/jobs/cron/cleanup-expired-refresh-tokens-job");
 
     // An offline logout: the phone forgot the session, the server never heard.
     const session = await openSession(DRIVER_USER);
@@ -296,9 +292,8 @@ describe("a session that ended without telling the server", () => {
    * session may sit idle belongs to a phone whose login is certainly over.
    */
   it("loses a device registered before sessions were tracked once it has been idle past every session window", async () => {
-    const { cleanupExpiredRefreshTokensJob } = await import(
-      "@/jobs/cron/cleanup-expired-refresh-tokens-job"
-    );
+    const { cleanupExpiredRefreshTokensJob } =
+      await import("@/jobs/cron/cleanup-expired-refresh-tokens-job");
     const { default: auth } = await import("@/config/auth");
 
     const longestIdleMs =

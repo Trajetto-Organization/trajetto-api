@@ -371,18 +371,14 @@ describe("DELETE /part/delete-part", () => {
   });
 
   it("answers a line saved between the count and the delete with 409, not 500", async () => {
-    const { DeletePartUseCase } = await import(
-      "@/modules/part/usecases/delete-part/delete-part-usecase"
-    );
-    const { PartRepository } = await import(
-      "@/modules/part/repositories/part-repository"
-    );
-    const { UserRepository } = await import(
-      "@/modules/user/repositories/user-repository"
-    );
-    const { BusinessRepository } = await import(
-      "@/modules/business/repositories/business-repository"
-    );
+    const { DeletePartUseCase } =
+      await import("@/modules/part/usecases/delete-part/delete-part-usecase");
+    const { PartRepository } =
+      await import("@/modules/part/repositories/part-repository");
+    const { UserRepository } =
+      await import("@/modules/user/repositories/user-repository");
+    const { BusinessRepository } =
+      await import("@/modules/business/repositories/business-repository");
 
     const part = await prisma.part.create({
       data: {

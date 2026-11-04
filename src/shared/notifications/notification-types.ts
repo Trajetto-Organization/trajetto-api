@@ -402,8 +402,7 @@ interface DeliveryOccurrenceAuthorizationRequestedPayload {
 }
 
 /** Nobody decided within the window: the company's administrators hear it. */
-interface DeliveryOccurrenceAuthorizationEscalatedPayload
-  extends DeliveryOccurrenceAuthorizationRequestedPayload {
+interface DeliveryOccurrenceAuthorizationEscalatedPayload extends DeliveryOccurrenceAuthorizationRequestedPayload {
   /** Whole minutes the request had waited when it was escalated. */
   waitingMinutes: number;
 }

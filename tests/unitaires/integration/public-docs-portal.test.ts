@@ -181,9 +181,8 @@ describe("the console's configuration", () => {
   });
 
   it("points at the guides when the renderer cannot load", async () => {
-    const { renderPublicDocsPage } = await import(
-      "@/shared/integration/public-docs"
-    );
+    const { renderPublicDocsPage } =
+      await import("@/shared/integration/public-docs");
 
     const html = renderPublicDocsPage("/integration/docs/openapi.json", {
       portalUrl: "https://www.exemplo.com.br/docs",
@@ -195,9 +194,8 @@ describe("the console's configuration", () => {
   });
 
   it("keeps a staging console out of search results, and production's in", async () => {
-    const { renderPublicDocsPage } = await import(
-      "@/shared/integration/public-docs"
-    );
+    const { renderPublicDocsPage } =
+      await import("@/shared/integration/public-docs");
 
     const url = "/integration/docs/openapi.json";
 

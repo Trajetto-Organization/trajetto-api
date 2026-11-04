@@ -39,9 +39,7 @@ interface DeliveryPrincipal {
   businessId: string | null | undefined;
 
   permissions:
-    | Array<{ permissionKey: string; canRead: boolean }>
-    | null
-    | undefined;
+    Array<{ permissionKey: string; canRead: boolean }> | null | undefined;
 }
 
 /**
@@ -101,8 +99,8 @@ function canWatchOperationsOf(
 
   return Boolean(
     subscriber.isDeliveryStaff &&
-      subscriber.businessId &&
-      subscriber.businessId === businessId,
+    subscriber.businessId &&
+    subscriber.businessId === businessId,
   );
 }
 

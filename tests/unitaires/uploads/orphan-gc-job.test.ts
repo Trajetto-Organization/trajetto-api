@@ -47,9 +47,8 @@ describe("the cleanup-orphan-uploads job", () => {
   it("fails the run when no scope could be read at all", async () => {
     run.mockResolvedValue(summary({ scopes: 0, errors: 12 }));
 
-    const { cleanupOrphanUploadsJob } = await import(
-      "@/jobs/cron/cleanup-orphan-uploads-job"
-    );
+    const { cleanupOrphanUploadsJob } =
+      await import("@/jobs/cron/cleanup-orphan-uploads-job");
 
     await expect(cleanupOrphanUploadsJob.handler()).rejects.toThrow(
       /Nenhum escopo/,
@@ -59,9 +58,8 @@ describe("the cleanup-orphan-uploads job", () => {
   it("completes, with a warning, when only some scopes failed", async () => {
     run.mockResolvedValue(summary({ scopes: 40, errors: 1 }));
 
-    const { cleanupOrphanUploadsJob } = await import(
-      "@/jobs/cron/cleanup-orphan-uploads-job"
-    );
+    const { cleanupOrphanUploadsJob } =
+      await import("@/jobs/cron/cleanup-orphan-uploads-job");
 
     await expect(cleanupOrphanUploadsJob.handler()).resolves.toBeUndefined();
 
@@ -77,9 +75,8 @@ describe("the cleanup-orphan-uploads job", () => {
   it("does nothing when switched off", async () => {
     run.mockResolvedValue(null);
 
-    const { cleanupOrphanUploadsJob } = await import(
-      "@/jobs/cron/cleanup-orphan-uploads-job"
-    );
+    const { cleanupOrphanUploadsJob } =
+      await import("@/jobs/cron/cleanup-orphan-uploads-job");
 
     await expect(cleanupOrphanUploadsJob.handler()).resolves.toBeUndefined();
   });

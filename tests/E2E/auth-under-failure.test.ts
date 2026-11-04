@@ -150,9 +150,8 @@ describe("a token the caller got wrong", () => {
 
 describe("a database the API cannot reach", () => {
   it("is 503, never 401", async () => {
-    const { UserRepository } = await import(
-      "@/modules/user/repositories/user-repository"
-    );
+    const { UserRepository } =
+      await import("@/modules/user/repositories/user-repository");
 
     const original = UserRepository.prototype.findUserById;
 
@@ -187,9 +186,8 @@ describe("a database the API cannot reach", () => {
   });
 
   it("is 503 when the session store is the part that is unreachable", async () => {
-    const { UserTokensRepository } = await import(
-      "@/modules/user/repositories/user-tokens-repository"
-    );
+    const { UserTokensRepository } =
+      await import("@/modules/user/repositories/user-tokens-repository");
 
     const original = UserTokensRepository.prototype.hasActiveRefreshTokenFamily;
 
@@ -222,9 +220,8 @@ describe("a bug in the session check", () => {
    * had only a console.error without the request id, and nothing alerted.
    */
   it("is a 500 with the stack in the log, not a transient 503", async () => {
-    const { UserRepository } = await import(
-      "@/modules/user/repositories/user-repository"
-    );
+    const { UserRepository } =
+      await import("@/modules/user/repositories/user-repository");
 
     const original = UserRepository.prototype.findUserById;
 

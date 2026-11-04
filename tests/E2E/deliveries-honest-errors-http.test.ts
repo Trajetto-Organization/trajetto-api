@@ -562,27 +562,20 @@ describe("a conflict is a 409 with a code (decision 11.3)", () => {
   it("answers a name taken between the check and the write with the same 409", async () => {
     // The pre-check is blinded to open the window a twin request would hit;
     // the unique index that closes it is the real one.
-    const { UserRepository } = await import(
-      "@/modules/user/repositories/user-repository"
-    );
-    const { BusinessRepository } = await import(
-      "@/modules/business/repositories/business-repository"
-    );
-    const { StatusChangeReasonRepository } = await import(
-      "@/modules/status-change-reason/repositories/status-change-reason-repository"
-    );
-    const { CreateStatusChangeReasonUseCase } = await import(
-      "@/modules/status-change-reason/usecases/create-status-change-reason/create-status-change-reason-usecase"
-    );
-    const { UpdateStatusChangeReasonUseCase } = await import(
-      "@/modules/status-change-reason/usecases/update-status-change-reason/update-status-change-reason-usecase"
-    );
-    const { CreateOccurrenceTypeUseCase } = await import(
-      "@/modules/occurrence-type/usecases/create-occurrence-type/create-occurrence-type-usecase"
-    );
-    const { UpdateOccurrenceTypeUseCase } = await import(
-      "@/modules/occurrence-type/usecases/update-occurrence-type/update-occurrence-type-usecase"
-    );
+    const { UserRepository } =
+      await import("@/modules/user/repositories/user-repository");
+    const { BusinessRepository } =
+      await import("@/modules/business/repositories/business-repository");
+    const { StatusChangeReasonRepository } =
+      await import("@/modules/status-change-reason/repositories/status-change-reason-repository");
+    const { CreateStatusChangeReasonUseCase } =
+      await import("@/modules/status-change-reason/usecases/create-status-change-reason/create-status-change-reason-usecase");
+    const { UpdateStatusChangeReasonUseCase } =
+      await import("@/modules/status-change-reason/usecases/update-status-change-reason/update-status-change-reason-usecase");
+    const { CreateOccurrenceTypeUseCase } =
+      await import("@/modules/occurrence-type/usecases/create-occurrence-type/create-occurrence-type-usecase");
+    const { UpdateOccurrenceTypeUseCase } =
+      await import("@/modules/occurrence-type/usecases/update-occurrence-type/update-occurrence-type-usecase");
 
     class BlindReasons extends StatusChangeReasonRepository {
       async findStatusChangeReasonByName(): Promise<null> {

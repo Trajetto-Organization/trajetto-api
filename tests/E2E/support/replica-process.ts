@@ -13,10 +13,7 @@ import { resolve } from "node:path";
  */
 interface ReplicaCommand {
   kind:
-    | "routeEvent"
-    | "driverPosition"
-    | "securityToBusiness"
-    | "securityToUser";
+    "routeEvent" | "driverPosition" | "securityToBusiness" | "securityToUser";
   businessId: string;
   payload: Record<string, unknown>;
 }

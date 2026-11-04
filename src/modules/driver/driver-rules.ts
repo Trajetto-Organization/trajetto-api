@@ -43,9 +43,7 @@ const plural = (count: number, one: string, many: string) =>
  * phone's outbox stalls on "auth".
  */
 type DriverLockout =
-  | "DEACTIVATE_DRIVER"
-  | "REVOKE_ACCESS"
-  | "DEACTIVATE_BRANCH";
+  "DEACTIVATE_DRIVER" | "REVOKE_ACCESS" | "DEACTIVATE_BRANCH";
 
 /** How each act opens and closes the sentence; the counts and steps are shared. */
 const LOCKOUT_WORDING: Record<

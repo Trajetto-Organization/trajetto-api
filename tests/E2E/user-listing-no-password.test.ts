@@ -38,8 +38,7 @@ const registered = new Map<string, RouteOptions>();
 
 function documentedLine(url: string): ZodTypeAny {
   const response = registered.get(url)?.schema?.response as
-    | Record<string, unknown>
-    | undefined;
+    Record<string, unknown> | undefined;
 
   const doc = ndjsonDocFor(response?.[200]);
 

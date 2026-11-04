@@ -1956,9 +1956,8 @@ class NotificationPipelineService {
 
     // Same dynamic import the old NotificationService used — the activity
     // module imports shared services, so a static import here would cycle.
-    const { CreateActivityUseCase } = await import(
-      "@/modules/activity/usecases/create-activity/create-activity-usecase"
-    );
+    const { CreateActivityUseCase } =
+      await import("@/modules/activity/usecases/create-activity/create-activity-usecase");
 
     const createActivityUseCase = container.resolve(CreateActivityUseCase);
 

@@ -65,8 +65,7 @@ function successOf(route: IntrospectedRoute): {
 
 function publishedExample(route: IntrospectedRoute, status: string): unknown {
   return route.operation?.responses?.[status]?.content?.["application/json"] as
-    | { example?: unknown }
-    | undefined;
+    { example?: unknown } | undefined;
 }
 
 function covered(): IntrospectedRoute[] {
@@ -99,8 +98,7 @@ describe("the 2xx of the public API and of the driver's loop", () => {
       .filter((route) => {
         const { status } = successOf(route);
         const media = publishedExample(route, status) as
-          | { example?: unknown }
-          | undefined;
+          { example?: unknown } | undefined;
 
         return media?.example === undefined;
       })
@@ -113,8 +111,7 @@ describe("the 2xx of the public API and of the driver's loop", () => {
     const wrong = covered().flatMap((route) => {
       const { status, runtime } = successOf(route);
       const media = publishedExample(route, status) as
-        | { example?: unknown }
-        | undefined;
+        { example?: unknown } | undefined;
 
       if (media?.example === undefined) return [];
 
@@ -133,8 +130,7 @@ describe("the 2xx of the public API and of the driver's loop", () => {
     const changed = covered().flatMap((route) => {
       const { status, runtime } = successOf(route);
       const media = publishedExample(route, status) as
-        | { example?: unknown }
-        | undefined;
+        { example?: unknown } | undefined;
 
       if (media?.example === undefined) return [];
 

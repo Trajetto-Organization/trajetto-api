@@ -12,9 +12,7 @@ import type {
   DeliveryMessageTopic as PrismaTopic,
 } from "@prisma/client";
 
-class DeliveryMessageTemplateRepository
-  implements IDeliveryMessageTemplateRepository
-{
+class DeliveryMessageTemplateRepository implements IDeliveryMessageTemplateRepository {
   constructor(private prisma = database) {}
 
   async findActive(

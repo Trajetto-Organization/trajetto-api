@@ -237,8 +237,7 @@ class RouteBranchInactiveError extends AppError {
   constructor(
     branchName: string,
     holder:
-      | { kind: "vehicle"; plate: string }
-      | { kind: "driver"; name: string },
+      { kind: "vehicle"; plate: string } | { kind: "driver"; name: string },
   ) {
     const of =
       holder.kind === "vehicle"

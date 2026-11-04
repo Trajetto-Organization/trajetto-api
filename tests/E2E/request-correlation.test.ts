@@ -129,13 +129,11 @@ beforeAll(async () => {
 
   ({ app } = await import("@/http"));
 
-  const { ensureAuthenticated } = await import(
-    "@/modules/middlewares/ensure-authenticated"
-  );
+  const { ensureAuthenticated } =
+    await import("@/modules/middlewares/ensure-authenticated");
   const { ensureApiKey } = await import("@/modules/middlewares/ensure-api-key");
-  const { OutboxService } = await import(
-    "@/shared/notifications/outbox-service"
-  );
+  const { OutboxService } =
+    await import("@/shared/notifications/outbox-service");
   const database = (await import("@/../infra/database")).default;
 
   // Test-only routes on the real app, before it boots: the root hooks and the
@@ -364,12 +362,10 @@ describe("an event published by a request", () => {
   });
 
   it("has none when published outside a request (a cron, a worker)", async () => {
-    const { OutboxService } = await import(
-      "@/shared/notifications/outbox-service"
-    );
-    const { withoutRequestContext } = await import(
-      "@/shared/http/request-context"
-    );
+    const { OutboxService } =
+      await import("@/shared/notifications/outbox-service");
+    const { withoutRequestContext } =
+      await import("@/shared/http/request-context");
 
     // As a worker runs. `inject` calls the request hooks from this test's own
     // async context, so the previous request's scope would otherwise still be

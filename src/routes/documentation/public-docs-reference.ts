@@ -193,8 +193,7 @@ function withoutEchoedDescription(
 function withRequestExample(operation: JsonObject): JsonObject {
   const example = PUBLIC_REQUEST_EXAMPLES[String(operation.operationId)];
   const requestBody = operation.requestBody as
-    | { content?: Record<string, JsonObject> }
-    | undefined;
+    { content?: Record<string, JsonObject> } | undefined;
   const media = requestBody?.content?.["application/json"];
 
   if (example === undefined || !media || media.example !== undefined)

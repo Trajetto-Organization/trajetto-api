@@ -51,9 +51,8 @@ describe("when everything is up", () => {
 
 describe("when a dependency stops answering", () => {
   it("gives up on a hung probe instead of holding the answer", async () => {
-    const { RedisConnection } = await import(
-      "@/../infra/cache/redis-connection"
-    );
+    const { RedisConnection } =
+      await import("@/../infra/cache/redis-connection");
 
     const instance = RedisConnection.getInstance();
     // A Redis that accepted the connection and then went silent — the shape

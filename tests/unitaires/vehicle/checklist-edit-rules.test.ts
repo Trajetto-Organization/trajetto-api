@@ -645,9 +645,8 @@ describe("deleting a checklist", () => {
   it("keeps the photos when the row could not be deleted", async () => {
     // Red before: every photo was deleted first, so a delete that then
     // failed left a checklist pointing at photos that no longer existed.
-    const { DeleteVehicleChecklistUseCase } = await import(
-      "@/modules/vehicle-checklist/usecases/delete-vehicle-checklist/delete-vehicle-checklist-usecase"
-    );
+    const { DeleteVehicleChecklistUseCase } =
+      await import("@/modules/vehicle-checklist/usecases/delete-vehicle-checklist/delete-vehicle-checklist-usecase");
 
     const deleteFile = vi.fn().mockResolvedValue(undefined);
     const deps = collaborators("America/Sao_Paulo");

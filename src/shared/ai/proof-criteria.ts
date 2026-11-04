@@ -15,11 +15,7 @@
 
 /** What is checked about the photo, one question at a time. */
 type ProofCriterion =
-  | "isReceipt"
-  | "legible"
-  | "hasSignature"
-  | "dateVisible"
-  | "documentMatches";
+  "isReceipt" | "legible" | "hasSignature" | "dateVisible" | "documentMatches";
 
 /**
  * Three answers, not two — plus "nothing to compare".

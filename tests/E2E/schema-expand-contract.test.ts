@@ -2789,9 +2789,8 @@ describe("plan of 02/11/2026: new columns and tables", () => {
   it("keeps the business settings defaults equal to the code's", async () => {
     // A company without a row reads BUSINESS_SETTINGS_DEFAULTS; the row's
     // first save gets the column defaults. Both must say the same.
-    const { BUSINESS_SETTINGS_DEFAULTS } = await import(
-      "@/shared/business/business-settings"
-    );
+    const { BUSINESS_SETTINGS_DEFAULTS } =
+      await import("@/shared/business/business-settings");
     const columns = await columnsOf("business_settings");
 
     expect(columns.get("checklist_requirement")?.column_default).toBe(

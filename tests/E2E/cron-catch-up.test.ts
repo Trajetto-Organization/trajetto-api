@@ -34,9 +34,8 @@ type Scheduler = {
 let Constructor: new () => Scheduler;
 
 beforeAll(async () => {
-  const { CronSchedulerService } = await import(
-    "@/shared/services/cron-scheduler-service"
-  );
+  const { CronSchedulerService } =
+    await import("@/shared/services/cron-scheduler-service");
 
   // One instance per "replica"; production keeps one per process.
   Constructor = CronSchedulerService as unknown as new () => Scheduler;

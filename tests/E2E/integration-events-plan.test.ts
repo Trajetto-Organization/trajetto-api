@@ -196,9 +196,8 @@ async function planOf(query: { query: string; params: string }) {
 }
 
 async function pageOf(businessId: string, updated_since?: string) {
-  const { IntegrationRepository } = await import(
-    "@/modules/integration/repositories/integration-repository"
-  );
+  const { IntegrationRepository } =
+    await import("@/modules/integration/repositories/integration-repository");
 
   sent.length = 0;
 

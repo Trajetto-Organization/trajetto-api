@@ -87,9 +87,7 @@ const decisionInclude = {
   authorizedBy: { select: { id: true, name: true } },
 } as const;
 
-class OccurrenceAuthorizationRepository
-  implements IOccurrenceAuthorizationRepository
-{
+class OccurrenceAuthorizationRepository implements IOccurrenceAuthorizationRepository {
   constructor(private prisma = database) {}
 
   async findForDecision(

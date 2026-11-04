@@ -151,18 +151,14 @@ describe("the domain errors of the A–F modules", () => {
   });
 
   it("answer another company's branch and driver exactly like missing ones", async () => {
-    const { BranchNotFoundError } = await import(
-      "@/modules/branch/usecases/errors/branch-not-found-error"
-    );
-    const { BranchNotBelongBusinessError } = await import(
-      "@/modules/branch/usecases/errors/branch-not-belong-business-error"
-    );
-    const { DriverNotFoundError } = await import(
-      "@/modules/driver/usecases/errors/driver-not-found-error"
-    );
-    const { DriverNotBelongBusinessError } = await import(
-      "@/modules/driver/usecases/errors/driver-not-belong-business-error"
-    );
+    const { BranchNotFoundError } =
+      await import("@/modules/branch/usecases/errors/branch-not-found-error");
+    const { BranchNotBelongBusinessError } =
+      await import("@/modules/branch/usecases/errors/branch-not-belong-business-error");
+    const { DriverNotFoundError } =
+      await import("@/modules/driver/usecases/errors/driver-not-found-error");
+    const { DriverNotBelongBusinessError } =
+      await import("@/modules/driver/usecases/errors/driver-not-belong-business-error");
 
     const pick = ({ statusCode, code, message }: AppError) => ({
       statusCode,
@@ -185,18 +181,14 @@ describe("the domain errors of the A–F modules", () => {
   });
 
   it("make conflicts with the current state 409 and a wrong confirmation 400", async () => {
-    const branch = await import(
-      "@/modules/branch/usecases/errors/branch-no-pending-deletion-error"
-    );
-    const business = await import(
-      "@/modules/business/usecases/errors/business-no-pending-deletion-error"
-    );
-    const branchInvalid = await import(
-      "@/modules/branch/usecases/errors/branch-deletion-code-invalid-error"
-    );
-    const businessUsed = await import(
-      "@/modules/business/usecases/errors/business-has-children-error"
-    );
+    const branch =
+      await import("@/modules/branch/usecases/errors/branch-no-pending-deletion-error");
+    const business =
+      await import("@/modules/business/usecases/errors/business-no-pending-deletion-error");
+    const branchInvalid =
+      await import("@/modules/branch/usecases/errors/branch-deletion-code-invalid-error");
+    const businessUsed =
+      await import("@/modules/business/usecases/errors/business-has-children-error");
 
     expect(new branch.BranchNoPendingDeletionError()).toMatchObject({
       statusCode: 409,

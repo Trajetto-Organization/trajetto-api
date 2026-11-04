@@ -337,9 +337,8 @@ type Pipeline =
  * reentrancy guards, which is what makes two of them race.
  */
 async function newPipeline(): Promise<Pipeline> {
-  const { NotificationPipelineService } = await import(
-    "@/shared/notifications/notification-pipeline-service"
-  );
+  const { NotificationPipelineService } =
+    await import("@/shared/notifications/notification-pipeline-service");
 
   return new (NotificationPipelineService as unknown as new () => Pipeline)();
 }
@@ -548,14 +547,14 @@ describe("ai_analysis_request", () => {
       const release = await holdRows("ai_analysis_request", held);
 
       try {
-        const { AIAnalysisPipelineService } = await import(
-          "@/shared/ai/ai-analysis-pipeline-service"
-        );
+        const { AIAnalysisPipelineService } =
+          await import("@/shared/ai/ai-analysis-pipeline-service");
 
-        const pipeline =
-          new (AIAnalysisPipelineService as unknown as new () => {
+        const pipeline = new (
+          AIAnalysisPipelineService as unknown as new () => {
             runCycle(): Promise<void>;
-          })();
+          }
+        )();
 
         await withinBudget(pipeline.runCycle(), "a fila de análises IA");
 
@@ -635,17 +634,18 @@ describe("ai_analysis_request", () => {
 
       const reads: string[] = [];
 
-      const { AIAnalysisPipelineService } = await import(
-        "@/shared/ai/ai-analysis-pipeline-service"
-      );
+      const { AIAnalysisPipelineService } =
+        await import("@/shared/ai/ai-analysis-pipeline-service");
 
       // A replica each, with the same fake reader: slow enough that the three
       // claim while the others are mid-batch.
       const replicas = [0, 1, 2].map(() => {
-        const replica = new (AIAnalysisPipelineService as unknown as new () => {
-          runCycle(): Promise<void>;
-          provider: unknown;
-        })();
+        const replica = new (
+          AIAnalysisPipelineService as unknown as new () => {
+            runCycle(): Promise<void>;
+            provider: unknown;
+          }
+        )();
 
         replica.provider = fakeAnalyzer({
           analyzeDeliveryProof: async (photoPath: string) => {

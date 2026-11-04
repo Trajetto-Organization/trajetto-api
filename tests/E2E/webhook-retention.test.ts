@@ -193,9 +193,8 @@ describe("the nightly purge of the webhook ledger", () => {
       ).id;
     }
 
-    const { cleanupWebhookDeliveriesJob } = await import(
-      "@/jobs/cron/cleanup-webhook-deliveries-job"
-    );
+    const { cleanupWebhookDeliveriesJob } =
+      await import("@/jobs/cron/cleanup-webhook-deliveries-job");
 
     await cleanupWebhookDeliveriesJob.handler();
 
@@ -216,9 +215,8 @@ describe("the nightly purge of the webhook ledger", () => {
   });
 
   it("walks the partial purge index, oldest settled row first", async () => {
-    const { settledWebhookDeliveriesBefore } = await import(
-      "@/jobs/cron/cleanup-webhook-deliveries-job"
-    );
+    const { settledWebhookDeliveriesBefore } =
+      await import("@/jobs/cron/cleanup-webhook-deliveries-job");
 
     const cutoff = new Date(Date.now() - 31 * DAY_MS);
 

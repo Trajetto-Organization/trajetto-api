@@ -579,9 +579,8 @@ describe("what the pipeline hands the providers", () => {
       ),
     );
 
-    const { checkPushReceiptsJob } = await import(
-      "@/jobs/cron/check-push-receipts-job"
-    );
+    const { checkPushReceiptsJob } =
+      await import("@/jobs/cron/check-push-receipts-job");
 
     await checkPushReceiptsJob.handler();
 
@@ -630,9 +629,8 @@ describe("the ledger's retention", () => {
       },
     });
 
-    const { cleanupNotificationPipelineJob } = await import(
-      "@/jobs/cron/cleanup-notification-pipeline-job"
-    );
+    const { cleanupNotificationPipelineJob } =
+      await import("@/jobs/cron/cleanup-notification-pipeline-job");
 
     await cleanupNotificationPipelineJob.handler();
 

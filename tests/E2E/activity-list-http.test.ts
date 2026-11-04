@@ -437,9 +437,8 @@ describe("GET /activity/list — the DRIVER facet is the presented DRIVER", () =
 
 describe("ActivityRepository.createActivity — one spelling per status", () => {
   it("stores a raw route enum and a variant as the catalog's label (FLEET-ACT-1/5)", async () => {
-    const { ActivityRepository } = await import(
-      "@/modules/activity/repositories/activity-repository"
-    );
+    const { ActivityRepository } =
+      await import("@/modules/activity/repositories/activity-repository");
     const repository = new ActivityRepository();
 
     const planned = await repository.createActivity({

@@ -439,9 +439,8 @@ describe("the delivery backlog is the current one, not a 24 h window (OUTBOX-15)
 
 describe("a stuck worker or cron job shows up (OBS-10)", () => {
   it("lists each replica's workers and flags the one that stopped beating", async () => {
-    const { WorkerHeartbeatRegistry, flushHeartbeats } = await import(
-      "@/shared/health/worker-heartbeat"
-    );
+    const { WorkerHeartbeatRegistry, flushHeartbeats } =
+      await import("@/shared/health/worker-heartbeat");
 
     // Replica A, healthy: the outbox worker just finished a cycle.
     const healthy = new WorkerHeartbeatRegistry();
@@ -497,9 +496,8 @@ describe("a stuck worker or cron job shows up (OBS-10)", () => {
 
     expect(workers.map((entry) => entry.replica)).not.toContain("replica-gone");
 
-    const { cleanupNotificationPipelineJob } = await import(
-      "@/jobs/cron/cleanup-notification-pipeline-job"
-    );
+    const { cleanupNotificationPipelineJob } =
+      await import("@/jobs/cron/cleanup-notification-pipeline-job");
 
     await cleanupNotificationPipelineJob.handler();
 
@@ -556,9 +554,8 @@ describe("a stuck worker or cron job shows up (OBS-10)", () => {
 
 describe("the driver_position partition runway (INV-07)", () => {
   it("reports how many days of partitions are left", async () => {
-    const { driverPositionPartitionsJob } = await import(
-      "@/jobs/cron/driver-position-partitions-job"
-    );
+    const { driverPositionPartitionsJob } =
+      await import("@/jobs/cron/driver-position-partitions-job");
 
     await driverPositionPartitionsJob.handler();
 

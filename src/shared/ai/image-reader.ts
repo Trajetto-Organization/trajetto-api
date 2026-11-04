@@ -23,11 +23,7 @@ import type { ImageMediaType, ProviderFailureKind } from "./vision-provider";
 
 /** What a photo is read for: the receipt, the odometer, or a checklist item. */
 type ReadingKind =
-  | "proof"
-  | "odometer"
-  | "fuel_level"
-  | "condition"
-  | "working";
+  "proof" | "odometer" | "fuel_level" | "condition" | "working";
 
 /**
  * The reading asked for. A checklist item carries its spec (subject, hint),

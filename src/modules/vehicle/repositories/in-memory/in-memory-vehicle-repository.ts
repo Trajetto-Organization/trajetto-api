@@ -613,21 +613,19 @@ class InMemoryVehicleRepository implements IVehicleRepository {
 
     const data =
       fields === "choice"
-        ? page.map(
-            (vehicle): VehicleChoice => ({
-              id: vehicle.id,
-              description: vehicle.description,
-              license_plate: vehicle.license_plate,
-              brand: vehicle.brand,
-              model: vehicle.model,
-              status: vehicle.status,
-              businessId: vehicle.businessId,
-              driverId: vehicle.driverId ?? null,
-              vehicleTypeId: vehicle.vehicleTypeId ?? null,
-              driver: driverOf(vehicle),
-              vehicleType: typeOf(vehicle),
-            }),
-          )
+        ? page.map((vehicle): VehicleChoice => ({
+            id: vehicle.id,
+            description: vehicle.description,
+            license_plate: vehicle.license_plate,
+            brand: vehicle.brand,
+            model: vehicle.model,
+            status: vehicle.status,
+            businessId: vehicle.businessId,
+            driverId: vehicle.driverId ?? null,
+            vehicleTypeId: vehicle.vehicleTypeId ?? null,
+            driver: driverOf(vehicle),
+            vehicleType: typeOf(vehicle),
+          }))
         : page.map((vehicle) => ({
             ...vehicle,
             driver: driverOf(vehicle),
