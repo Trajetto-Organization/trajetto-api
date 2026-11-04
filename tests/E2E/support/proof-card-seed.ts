@@ -23,7 +23,7 @@ async function ensureBusiness(prisma: PrismaClient, businessId: string) {
   await prisma.business.create({
     data: {
       id: businessId,
-      corporate_reason: `Transportadora ${businessId.slice(-4)}`,
+      corporate_reason: `Transportadora ${businessId}`,
       cep: "01001000",
       city: "São Paulo",
       uf: "SP",

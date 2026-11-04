@@ -102,7 +102,10 @@ async function seedBusiness(id: string, cnpj: string) {
   await prisma.business.create({
     data: {
       id,
-      corporate_reason: `Transportadora ${id.slice(-1)}`,
+      // The whole id: the name is unique (business_corporate_reason_key), and
+      // company() below seeds random ids. Their last character alone collided
+      // with each other and with CARRIER/OTHER in about half of the runs.
+      corporate_reason: `Transportadora ${id}`,
       cep: "69000000",
       city: "Manaus",
       uf: "AM",

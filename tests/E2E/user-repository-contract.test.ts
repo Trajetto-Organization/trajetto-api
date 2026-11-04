@@ -41,7 +41,7 @@ async function seedBusiness(id: string) {
   await prisma.business.create({
     data: {
       id,
-      corporate_reason: `Transportadora ${id.slice(0, 4)}`,
+      corporate_reason: `Transportadora ${id}`,
       cep: "01001000",
       city: "São Paulo",
       uf: "SP",
@@ -365,7 +365,7 @@ beforeAll(async () => {
     entitlements: [{ module: "DELIVERIES", enabled: true }],
     // As seedBusiness writes it: no trade name.
     fantasy_name: null,
-    corporate_reason: `Transportadora ${A.slice(0, 4)}`,
+    corporate_reason: `Transportadora ${A}`,
   });
 
   memory.profiles.set(OPS, { name: "Operação", businessId: A });
@@ -739,7 +739,7 @@ describe.each(harnesses.map((harness) => [harness.name, harness] as const))(
         "driver-1",
       ]);
       expect(logins[0]).toMatchObject({
-        companyName: `Transportadora ${A.slice(0, 4)}`,
+        companyName: `Transportadora ${A}`,
         business: { is_active: true },
         driver: {
           id: DRIVER,

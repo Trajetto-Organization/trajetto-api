@@ -505,6 +505,11 @@ uma garantia:
     [Esperar por estado, nunca por tempo](#esperar-por-estado-nunca-por-tempo)).
     Sem `setTimeout` fixo esperando o servidor; uma janela negativa só depois
     de confirmado o estado que a torna válida.
+13. **Valor único em seed sem sorteio de poucos bits.** Coluna única (razão
+    social, CNPJ, CPF, CNH, placa) recebe o id inteiro ou um contador do
+    arquivo, nunca uma fatia de um id aleatório nem um número sorteado de
+    poucos dígitos: cinco empresas com o último caractere do id colidiam em
+    quase metade das execuções (`ai-usage-http.test.ts`, CI de 04/11/2026).
 
 ## Windows
 

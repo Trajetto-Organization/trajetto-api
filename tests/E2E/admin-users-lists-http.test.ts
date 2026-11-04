@@ -53,7 +53,7 @@ async function seedBusiness(id: string) {
   await prisma.business.create({
     data: {
       id,
-      corporate_reason: `Transportadora ${id.slice(0, 4)}`,
+      corporate_reason: `Transportadora ${id}`,
       cep: "01001000",
       city: "São Paulo",
       uf: "SP",
