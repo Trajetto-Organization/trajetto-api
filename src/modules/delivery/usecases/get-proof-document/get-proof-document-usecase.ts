@@ -140,6 +140,38 @@ class GetProofDocumentUseCase {
       throw new AppError("Entrega não encontrada.", 404, "DELIVERY_NOT_FOUND");
     }
 
+    return this.documentFor(source, deliveryId, businessId, regenerate);
+  }
+
+  /**
+   * The receipt behind an integrator's proof link (plan of 02/11/2026, L7):
+   * no session here — the signed link, bound to this company's delivery, was
+   * the authorisation (see shared/integration/proof-link.ts). The same
+   * document the panel gets, produced on the first opening; never rebuilt.
+   */
+  async executeForProofLink({
+    businessId,
+    deliveryId,
+  }: {
+    businessId: string;
+    deliveryId: string;
+  }): Promise<GetProofDocumentResult> {
+    const source = await this.documents.loadSource(deliveryId, businessId);
+
+    if (!source) {
+      throw new AppError("Entrega não encontrada.", 404, "DELIVERY_NOT_FOUND");
+    }
+
+    return this.documentFor(source, deliveryId, businessId, false);
+  }
+
+  /** The document of a delivery its caller was allowed to reach. */
+  private async documentFor(
+    source: ProofDocumentSource,
+    deliveryId: string,
+    businessId: string,
+    regenerate: boolean | undefined,
+  ): Promise<GetProofDocumentResult> {
     if (!["DELIVERED", "FAILED"].includes(source.delivery.status)) {
       throw new AppError(
         "O comprovante existe depois que a entrega termina — esta ainda está em andamento.",

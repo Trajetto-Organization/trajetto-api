@@ -84,6 +84,16 @@ const TOPIC_DESCRIPTIONS: Record<WebhookTopic, string> = {
   "proof.rejected": "O canhoto foi rejeitado na auditoria.",
 };
 
+/**
+ * The topic of the "Enviar teste" ping (plan of 02/11/2026, L1).
+ *
+ * Deliberately NOT in the catalogue (ALL_TOPICS): nothing can subscribe to
+ * it, no wildcard matches it (no catalogue topic starts with `ping.`), and
+ * the fan-out never sends it — it goes only to the one endpoint somebody
+ * chose, through queueWebhookPing.
+ */
+const PING_TOPIC = "ping";
+
 function isWebhookTopic(value: string): value is WebhookTopic {
   return (ALL_TOPICS as string[]).includes(value);
 }
@@ -163,6 +173,7 @@ export {
   DOCUMENT_TOPICS,
   FAMILY_WILDCARDS,
   LEGACY_WILDCARD_ALIASES,
+  PING_TOPIC,
   ROUTE_TOPICS,
   TOPIC_DESCRIPTIONS,
   TOPIC_FAMILY,

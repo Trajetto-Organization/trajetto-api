@@ -8,6 +8,7 @@ import { assertDispatcher } from "@/shared/delivery/dispatcher-guard";
 
 import {
   categoryValidationError,
+  OccurrenceTypeCodeTakenError,
   OccurrenceTypeNameAlreadyExistsError,
 } from "../errors/occurrence-type-errors";
 import { categoryIssues } from "../../rules/occurrence-category-rules";
@@ -101,6 +102,13 @@ class CreateOccurrenceTypeUseCase {
       // index decided, and the answer is the check's 409.
       if (violatesUniqueOn(error, "name")) {
         throw new OccurrenceTypeNameAlreadyExistsError();
+      }
+
+      // The ERP code (L8) is only checked by the (businessId, code) index:
+      // a read before the write would still race, and the index answers
+      // for both cases with one 409.
+      if (violatesUniqueOn(error, "code")) {
+        throw new OccurrenceTypeCodeTakenError();
       }
 
       throw new AppError(

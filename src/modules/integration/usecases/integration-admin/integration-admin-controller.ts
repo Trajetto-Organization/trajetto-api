@@ -26,6 +26,7 @@ import {
   ReactivateWebhookEndpointUseCase,
   RotateWebhookSecretUseCase,
   SaveWebhookEndpointUseCase,
+  SendWebhookTestUseCase,
 } from "./webhook-endpoint-usecases";
 import {
   ListApiUsageUseCase,
@@ -167,6 +168,24 @@ class IntegrationAdminController {
       message:
         "Novo segredo gerado. Copie agora: ele não será exibido de novo. O anterior continua válido por 24 horas.",
       data: { id, secret },
+    });
+  };
+
+  sendWebhookTest = async (
+    request: FastifyRequest,
+    reply: FastifyReply,
+  ): Promise<void> => {
+    const { businessId } = updateDeleteBusinessSchema.parse(request.params);
+    const { id } = integrationIdParamSchema.parse(request.params);
+
+    const data = await container
+      .resolve(SendWebhookTestUseCase)
+      .execute(request.user.id, businessId, id);
+
+    return reply.status(200).send({
+      message:
+        "Teste enviado para a fila. Em instantes o resultado aparece no monitor de envios.",
+      data,
     });
   };
 

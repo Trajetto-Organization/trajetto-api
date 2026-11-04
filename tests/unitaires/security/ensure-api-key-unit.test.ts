@@ -46,7 +46,11 @@ const storedKey = (over: Record<string, unknown> = {}) => ({
   rate_limit_per_minute: 120,
   revoked_at: null,
   token_hash: hashApiKeySecret(SECRET),
-  business: { is_active: true, timezone: "America/Manaus" },
+  business: {
+    is_active: true,
+    timezone: "America/Manaus",
+    entitlements: [{ module: "DELIVERIES", enabled: true }],
+  },
   ...over,
 });
 
@@ -150,7 +154,13 @@ describe("ensureApiKey", () => {
 
   it("refuses a key of a deactivated company or one without Entregas, with company codes", async () => {
     repository.findCredentialByPrefix.mockResolvedValueOnce(
-      storedKey({ business: { is_active: false, timezone: "UTC" } }),
+      storedKey({
+        business: {
+          is_active: false,
+          timezone: "UTC",
+          entitlements: [{ module: "DELIVERIES", enabled: true }],
+        },
+      }),
     );
     expect(await refusalOf(call(`Bearer ${PREFIX}.${SECRET}`).run)).toEqual({
       status: 403,
@@ -158,18 +168,35 @@ describe("ensureApiKey", () => {
       message: "A empresa desta chave está desativada.",
     });
 
-    entitlements.hasModule.mockResolvedValueOnce(false);
-    expect(await refusalOf(call(`Bearer ${PREFIX}.${SECRET}`).run)).toEqual({
-      status: 403,
-      code: "MODULE_NOT_ENABLED",
-      message:
-        "O módulo de Entregas não está habilitado para a empresa desta chave.",
-    });
-    expect(entitlements.hasModule).toHaveBeenLastCalledWith(
-      "business-1",
-      "DELIVERIES",
-    );
+    // Switched off, never hired, or only the other module: one refusal.
+    for (const rows of [
+      [{ module: "DELIVERIES", enabled: false }],
+      [],
+      [{ module: "FLEET", enabled: true }],
+    ]) {
+      repository.findCredentialByPrefix.mockResolvedValueOnce(
+        storedKey({
+          business: { is_active: true, timezone: "UTC", entitlements: rows },
+        }),
+      );
+      expect(await refusalOf(call(`Bearer ${PREFIX}.${SECRET}`).run)).toEqual({
+        status: 403,
+        code: "MODULE_NOT_ENABLED",
+        message:
+          "O módulo de Entregas não está habilitado para a empresa desta chave.",
+      });
+    }
     expect(guard.recordAuthFailure).not.toHaveBeenCalled();
+  });
+
+  it("decides the module from the credential lookup itself, with no second query", async () => {
+    // Plan of 02/11/2026, L5: every public call read the key AND then the
+    // company's entitlements — two round trips before any work, on the
+    // hottest path of the public API. The lookup brings the module along.
+    await call(`Bearer ${PREFIX}.${SECRET}`).run();
+
+    expect(repository.findCredentialByPrefix).toHaveBeenCalledTimes(1);
+    expect(entitlements.hasModule).not.toHaveBeenCalled();
   });
 
   it("puts the key on the request, names it in the logs and records its use once per throttle", async () => {

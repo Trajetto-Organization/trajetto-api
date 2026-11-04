@@ -28,6 +28,21 @@ class OccurrenceTypeNameAlreadyExistsError extends AppError {
   }
 }
 
+/**
+ * The company's ERP code for a type (L8) is already another type's. Said
+ * "nesta empresa": the same code at another carrier is not a conflict, and
+ * the answer must not suggest one exists there.
+ */
+class OccurrenceTypeCodeTakenError extends AppError {
+  constructor() {
+    super(
+      "Já existe um tipo de ocorrência com este código nesta empresa.",
+      409,
+      "OCCURRENCE_TYPE_CODE_TAKEN",
+    );
+  }
+}
+
 class OccurrenceTypeInUseError extends AppError {
   constructor(details: string) {
     super(
@@ -112,6 +127,7 @@ function categoryValidationError(issues: CategoryIssue[]): ZodError {
 export {
   categoryValidationError,
   OccurrenceTypeCategoryLockedError,
+  OccurrenceTypeCodeTakenError,
   OccurrenceTypeDefaultError,
   OccurrenceTypeLastOfCategoryError,
   OccurrenceTypeNotFoundError,

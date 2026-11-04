@@ -42,6 +42,9 @@ const ANONYMOUS = [
   "GET /health/liveness",
   "GET /health/readiness",
   "GET /integration/v1/catalogue",
+  // The integrator's `proof_url` (plan of 02/11/2026, L7): a signed bearer
+  // link, opened without a session.
+  "GET /public/delivery-proof/{token}",
   "GET /public/track/{token}",
   "GET /public/verify-proof/{token}",
   "GET /user/forgot-verification",
@@ -53,6 +56,10 @@ const ANONYMOUS = [
   "POST /user/resend-two-factor-code",
   "POST /user/reset/password",
   "POST /user/session",
+  // The driver's access QR code (D3) and the logout replayed with only the
+  // refresh token when the network comes back (A3).
+  "POST /user/session/enroll",
+  "POST /user/session/revoke",
   "POST /user/two-factor-verification",
 ];
 

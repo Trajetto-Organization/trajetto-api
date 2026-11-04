@@ -40,6 +40,9 @@ const documentProperties: Record<string, JsonSchema> = {
     description:
       "Quando o fato aconteceu em campo, nos eventos de um ato registrado em campo: `proof.registered` e o `delivery.delivered` que vem do canhoto (a hora do canhoto), e `occurrence.reported` e o `delivery.failed` de uma ocorrência que impede a entrega (a hora do registro). Pode ser horas anterior ao `created_at` do envelope, que é quando o evento foi gerado: o aparelho guarda o que o motorista fez sem sinal e envia depois. Nulo nos demais eventos, inclusive numa mudança de status feita no painel; neles, vale o `created_at`.",
   },
+  proof_url: nullableString(
+    "Link do comprovante (o PDF) quando a entrega terminou com o evento — o `status` dele é DELIVERED ou FAILED: `proof.registered`, `delivery.delivered`, `delivery.failed` e a `occurrence.reported` de uma ocorrência que impede a entrega. Nulo nos demais. É um link de PORTADOR: quem tem o payload abre o comprovante sem login, como quem escaneia o QR impresso nele; guarde-o como guarda o próprio documento. Abrir redireciona (302) para o PDF, gerado na primeira abertura. É o mesmo `proof_url` da leitura em GET /deliveries/{id} e vale enquanto o comprovante vale (5 anos por padrão, contados da criação da entrega).",
+  ),
 };
 
 const WEBHOOK_PAYLOAD_SCHEMAS: Record<string, JsonSchema> = {
@@ -101,6 +104,9 @@ const WEBHOOK_PAYLOAD_SCHEMAS: Record<string, JsonSchema> = {
         type: "string",
         description: "O nome do tipo de ocorrência cadastrado pela empresa.",
       },
+      occurrence_code: nullableString(
+        "O código do tipo de ocorrência no seu ERP, como a empresa o cadastrou no Trajetto. Case por ele, não pelo nome: o nome pode ser renomeado. Nulo quando o tipo não tem código.",
+      ),
       blocks_delivery: {
         type: "boolean",
         description:
@@ -180,6 +186,21 @@ const WEBHOOK_PAYLOAD_SCHEMAS: Record<string, JsonSchema> = {
         description:
           "A hora do fato em campo, em `route.started` (a saída) e `route.completed` (o fim). Pode ser horas anterior ao `created_at` do envelope quando o aparelho enviou depois. Nulo nos demais eventos de rota.",
       },
+    },
+  },
+
+  // The test event of "Enviar teste" (plan of 02/11/2026, L1). Outside the
+  // catalogue, so it has no entry in TOPIC_PAYLOAD: nothing subscribes to it.
+  WebhookPingData: {
+    type: "object",
+    description:
+      "O evento de teste que o botão Enviar teste do painel manda para UM endpoint, assinado como um evento real. Não muda nada: responda 2xx e confira a assinatura.",
+    properties: {
+      endpoint_id: {
+        type: "string",
+        description: "O id do endpoint que recebeu o teste.",
+      },
+      message: { type: "string", description: "Uma frase sobre o teste." },
     },
   },
 };

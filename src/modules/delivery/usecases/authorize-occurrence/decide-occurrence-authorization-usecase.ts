@@ -358,6 +358,7 @@ class DecideOccurrenceAuthorizationUseCase {
             previousStatus,
             nextStatus,
             occurrenceTypeName: found.occurrenceType.name,
+            occurrenceTypeCode: found.occurrenceType.code,
             blocksDelivery: blocks,
             description: found.description,
             photosCount: found.photos.length,

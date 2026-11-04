@@ -70,6 +70,42 @@ const occurrenceTypeDescriptionSchema = z.preprocess(
     .optional(),
 );
 
+/** How long the company's own code for a type can be (L8). */
+const OCCURRENCE_TYPE_CODE_MAX_LENGTH = 40;
+
+/**
+ * The company's own code for the type, the "código do ERP" (plan of
+ * 02/11/2026, L8). An ERP matches an occurrence by it, because the name is
+ * the company's to rename. Optional, unique per company (409
+ * OCCURRENCE_TYPE_CODE_TAKEN from the index), compared exactly as typed —
+ * ERPs that tell "a1" from "A1" exist. "" reads as none, like the description.
+ */
+const occurrenceTypeCodeSchema = z.preprocess(
+  (val) => (val === "" ? null : val),
+  z
+    .string({ invalid_type_error: "O código do tipo deve ser um texto." })
+    .max(
+      OCCURRENCE_TYPE_CODE_MAX_LENGTH,
+      `O código do tipo deve ter no máximo ${OCCURRENCE_TYPE_CODE_MAX_LENGTH} caracteres.`,
+    )
+    .refine(
+      (value) => !hasSpaceAtEdges(value),
+      "O código do tipo não pode começar ou terminar com espaço.",
+    )
+    // A line break or a tab in a code is a key nobody can type back into the
+    // ERP to match it.
+    .refine(
+      // eslint-disable-next-line no-control-regex
+      (value) => !/[\u0000-\u001f\u007f]/.test(value),
+      "O código do tipo não pode ter quebras de linha nem caracteres de controle.",
+    )
+    .nullable()
+    .optional()
+    .describe(
+      `O código deste tipo no seu ERP (opcional, até ${OCCURRENCE_TYPE_CODE_MAX_LENGTH} caracteres, único na empresa e com diferença entre maiúsculas e minúsculas). Sai como \`occurrence_code\` no webhook \`occurrence.reported\` e em /integration/v1/events, para o ERP casar a ocorrência sem depender do nome. Vazio ou nulo = sem código.`,
+    ),
+);
+
 /**
  * The type's form (decision 6.2). Null or [] = no form. Validated whole —
  * keys, labels, options, limits — so the app never renders a form it cannot
@@ -137,9 +173,12 @@ const createOccurrenceTypeSchema = z.object({
       "Exigir a assinatura na tela. Em DELIVERED o quadro de assinatura é sempre oferecido; isto só o torna obrigatório. Não vale em PAUSE.",
     ),
   pause_kind: pauseKindSchema.optional(),
+  code: occurrenceTypeCodeSchema,
 });
 
 export {
+  OCCURRENCE_TYPE_CODE_MAX_LENGTH,
+  occurrenceTypeCodeSchema,
   occurrenceCategorySchema,
   pauseKindSchema,
   createOccurrenceTypeSchema,

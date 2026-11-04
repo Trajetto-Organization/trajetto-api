@@ -241,7 +241,10 @@ describe("what every answer carries", () => {
 
 describe("the webhooks", () => {
   it("are published as the requests we make, one per topic", () => {
-    expect(Object.keys(document.webhooks)).toEqual(ALL_TOPICS);
+    // The catalogue first, in its order (the test ping follows, see below).
+    expect(Object.keys(document.webhooks).slice(0, ALL_TOPICS.length)).toEqual(
+      ALL_TOPICS,
+    );
 
     for (const topic of ALL_TOPICS) {
       const post = document.webhooks[topic].post;
@@ -267,6 +270,27 @@ describe("the webhooks", () => {
         topic,
       ).toBeDefined();
     }
+  });
+
+  it("publishes the test ping too, after the catalogue, with its own data", () => {
+    // Plan of 02/11/2026 (L1): "Enviar teste" posts a `ping`. It is a request
+    // we make, so a receiver built from this document must expect it — but it
+    // stays out of the catalogue, so nobody can subscribe to it.
+    expect(Object.keys(document.webhooks)).toEqual([...ALL_TOPICS, "ping"]);
+
+    const body =
+      document.webhooks.ping.post.requestBody.content["application/json"]
+        .schema;
+
+    expect(body.properties.topic.enum).toEqual(["ping"]);
+    expect(body.properties.data.$ref).toBe(
+      "#/components/schemas/WebhookPingData",
+    );
+    expect(
+      Object.keys(
+        document.components.schemas.WebhookPingData.properties as Json,
+      ),
+    ).toEqual(["endpoint_id", "message"]);
   });
 });
 

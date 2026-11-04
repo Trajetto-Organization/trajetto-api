@@ -1,5 +1,7 @@
 import { DELIVERY_STATUS_LABELS } from "@/shared/delivery/delivery-rules";
 
+import { proofUrlFor } from "./proof-link";
+
 /**
  * What the public API answers with, and — more importantly — what it does not.
  *
@@ -45,6 +47,12 @@ interface PublicDelivery {
   scheduled_date: string | null;
   delivered_at: string | null;
   received_by: string | null;
+
+  /**
+   * The bearer link to the receipt once the delivery ended (L7), null before.
+   * Whoever holds it opens the PDF, like the QR printed on it (ADR 0009).
+   */
+  proof_url: string | null;
 
   /** The route it rides on, by OUR id and the number a person says out loud. */
   route: { id: string; code: number } | null;
@@ -108,6 +116,8 @@ function toIso(value: Date | string | null | undefined): string | null {
  */
 function toPublicDelivery(delivery: {
   id: string;
+  /** Never published: it signs proof_url. */
+  businessId: string;
   code: string | null;
   invoice_key: string | null;
   invoice_number: string | null;
@@ -164,6 +174,8 @@ function toPublicDelivery(delivery: {
     scheduled_date: toIso(delivery.scheduled_date),
     delivered_at: toIso(delivery.delivered_at),
     received_by: delivery.received_by,
+
+    proof_url: proofUrlFor(delivery),
 
     route: route ? { id: route.id, code: route.code } : null,
 

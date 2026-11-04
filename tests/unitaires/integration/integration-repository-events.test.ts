@@ -189,14 +189,47 @@ describe("the public topic of a feed event", () => {
     },
   );
 
-  it("reads the occurrence's category with the event", async () => {
+  it("reads the occurrence's category and its type's ERP code with the event", async () => {
     const { findMany, repository } = repositoryWith();
 
     await repository.listEvents({ businessId: "b1", limit: 50 } as never);
 
+    // The code is occurrence_code on occurrence.reported (L8).
     expect(findMany.mock.calls[0][0].select.occurrence).toEqual({
-      select: { authorization_status: true, category: true },
+      select: {
+        authorization_status: true,
+        category: true,
+        occurrenceType: { select: { code: true } },
+      },
     });
+  });
+
+  it("sends occurrence_code on occurrence.reported only, null on the other topics", async () => {
+    const { data } = await topicsOf([
+      event({
+        type: "OCCURRENCE",
+        occurrence: {
+          authorization_status: "NOT_REQUIRED",
+          category: "NOT_DELIVERED",
+          occurrenceType: { code: "AUS-01" },
+        },
+      }),
+      event({
+        type: "STATUS_CHANGE",
+        status_from: "IN_TRANSIT",
+        status_to: "FAILED",
+        occurrence: {
+          authorization_status: "NOT_REQUIRED",
+          category: "NOT_DELIVERED",
+          occurrenceType: { code: "AUS-01" },
+        },
+      }),
+    ]);
+
+    expect(data.map((row) => [row.topic, row.data.occurrence_code])).toEqual([
+      ["occurrence.reported", "AUS-01"],
+      ["delivery.failed", null],
+    ]);
   });
 
   it("keeps the other names as they were", async () => {

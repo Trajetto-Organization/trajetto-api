@@ -64,22 +64,30 @@ function integrationName(subject: "da chave" | "do endpoint") {
  * an integration that skipped a delivery because one arrived between page 12
  * and page 13 would be an integration that loses documents silently.
  */
+const LIST_LIMIT_DEFAULT = 50;
+const LIST_LIMIT_MAX = 200;
+
 const integrationListSchema = z.object({
+  // Published as the integer it is (plan of 02/11/2026, L2): the spec said
+  // `string`, and every client generated from it typed the page size as text.
+  // The clamp stays tolerant — garbage is never a 400, it is the default —
+  // so the preprocess always hands the inner schema a number it accepts.
   limit: z
-    .string()
-    .optional()
-    // Floored at 1 as well as capped at 200. A negative number went through
-    // the cap untouched, and Prisma reads a negative `take` as "the last N
-    // rows": `limit=-1000000` loaded a tenant's whole history into memory
-    // before the page code choked on it with a 500.
-    .transform((value) => {
+    .preprocess((value) => {
+      // Floored at 1 as well as capped at 200. A negative number went
+      // through the cap untouched, and Prisma reads a negative `take` as
+      // "the last N rows": `limit=-1000000` loaded a tenant's whole history
+      // into memory before the page code choked on it with a 500.
       const parsed = Math.trunc(Number(value));
 
-      return Number.isFinite(parsed) && parsed >= 1
-        ? Math.min(parsed, 200)
-        : 50;
-    })
-    .describe("Até 200 por página. O padrão é 50."),
+      return value !== undefined && Number.isFinite(parsed) && parsed >= 1
+        ? Math.min(parsed, LIST_LIMIT_MAX)
+        : LIST_LIMIT_DEFAULT;
+    }, z.number().int().min(1).max(LIST_LIMIT_MAX))
+    .default(LIST_LIMIT_DEFAULT)
+    .describe(
+      "Itens por página, de 1 a 200. O padrão é 50. Um valor fora da faixa é ajustado (acima de 200 vira 200; zero, negativo ou não numérico vira 50), nunca recusado.",
+    ),
 
   cursor: z.string().optional().describe("O `next_cursor` da página anterior."),
 
@@ -141,6 +149,19 @@ const integrationEventListSchema = integrationListSchema;
 
 const integrationIdParamSchema = z.object({
   id: z.string().uuid("Identificador inválido."),
+});
+
+/**
+ * The token of an integrator's proof link (L7). Only bounded here: its shape
+ * is checked by the use case, which answers every bad token with the same
+ * 404 — a 400 for a malformed one would tell a prober what a real one looks
+ * like.
+ */
+const proofLinkParamsSchema = z.object({
+  token: z
+    .string()
+    .max(128, "Comprovante não encontrado.")
+    .describe("O token do `proof_url`, como veio no payload."),
 });
 
 /** The refusal below agrees in number with however many are still reserved. */
@@ -380,6 +401,7 @@ export {
   integrationRouteListSchema,
   integrationEventListSchema,
   listWebhookDeliveriesSchema,
+  proofLinkParamsSchema,
   saveWebhookEndpointSchema,
 };
 export type { MonitorWindow };

@@ -75,6 +75,13 @@ const publicDelivery = z.object({
   delivered_at: isoDateTime.nullable(),
   received_by: z.string().nullable(),
 
+  proof_url: z
+    .string()
+    .nullable()
+    .describe(
+      "Link do comprovante (o PDF), quando a entrega terminou: status DELIVERED ou FAILED. Nulo antes disso e numa entrega cancelada. É um link de PORTADOR: quem o tem abre o comprovante sem login, como quem escaneia o QR impresso nele — guarde-o como guarda o próprio documento e não o exponha a quem não deve ver o canhoto. Abrir o link redireciona (302) para o PDF, gerado na primeira abertura; vale enquanto o comprovante vale (PROOF_VERIFICATION_TTL_DAYS, 5 anos por padrão, contados da criação da entrega) e é o mesmo em toda leitura e em todo webhook da entrega.",
+    ),
+
   route: z.object({ id: z.string(), code: z.number() }).nullable(),
 
   created_at: isoDateTime,
@@ -182,7 +189,40 @@ const integrationResponses = {
         code: z.string().nullable(),
         invoice_key: z.string().nullable(),
       }),
-      data: z.record(z.unknown()),
+      // Every key, always present (null when it does not apply): one shape
+      // for every topic, as in the webhooks.
+      data: z
+        .object({
+          status_from: z
+            .string()
+            .nullable()
+            .describe(
+              "Status da entrega antes do evento, numa mudança de status; nulo nos demais.",
+            ),
+          status_to: z
+            .string()
+            .nullable()
+            .describe(
+              "Status da entrega depois do evento, numa mudança de status; nulo nos demais.",
+            ),
+          received_by: z
+            .string()
+            .nullable()
+            .describe("Quem recebeu, no comprovante; nulo nos demais."),
+          note: z
+            .string()
+            .nullable()
+            .describe("A anotação registrada com o evento, quando houver."),
+          occurrence_code: z
+            .string()
+            .nullable()
+            .describe(
+              "O código do tipo de ocorrência no seu ERP, em `occurrence.reported` (o mesmo campo do webhook). Nulo nos demais tópicos e quando o tipo não tem código.",
+            ),
+        })
+        .describe(
+          "Os mesmos campos em todo tópico; o que não se aplica vem nulo.",
+        ),
     }),
   ),
 
@@ -379,6 +419,20 @@ const integrationResponses = {
   }),
 
   resent: z.object({ message: z.string() }),
+
+  webhookTestScheduled: z.object({
+    message: z.string(),
+    data: z.object({
+      id: z
+        .string()
+        .describe("A linha do teste no monitor de envios (webhook_delivery)."),
+      event_id: z
+        .string()
+        .describe(
+          "O id do evento de teste: o `id` do corpo e o `X-Trajetto-Event-Id` que o receptor vê.",
+        ),
+    }),
+  }),
 
   resendScheduled: z.object({
     message: z.string(),

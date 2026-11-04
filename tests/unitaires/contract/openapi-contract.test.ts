@@ -5,6 +5,7 @@ import { APP_BOOT_TIMEOUT_MS } from "../../support/app-boot";
 import { ensureAuthenticated } from "@/modules/middlewares/ensure-authenticated";
 import { ensureApiKey } from "@/modules/middlewares/ensure-api-key";
 import {
+  ignoreDriverBranchChoice,
   verifyBranchActive,
   verifyBusinessActive,
 } from "@/modules/middlewares/verify-tenant-active";
@@ -56,6 +57,9 @@ const ANONYMOUS = [
   "GET /health/liveness",
   "GET /health/readiness",
   "GET /integration/v1/catalogue",
+  // The integrator's proof_url (L7): the signed link is the authorisation,
+  // as for the printed QR of verify-proof.
+  "GET /public/delivery-proof/{token}",
   "GET /public/track/{token}",
   "GET /public/verify-proof/{token}",
   "GET /user/forgot-verification",
@@ -67,6 +71,12 @@ const ANONYMOUS = [
   "POST /user/resend-two-factor-code",
   "POST /user/reset/password",
   "POST /user/session",
+  // The driver's phone signing in with the manager's QR code (plan of
+  // 02/11/2026, D3): pre-authentication, limited per address and per code.
+  "POST /user/session/enroll",
+  // A logout that could not reach the server, ended with the refresh token
+  // alone (A3): the token is the proof, as in /user/refresh-token.
+  "POST /user/session/revoke",
   "POST /user/two-factor-verification",
 ];
 
@@ -570,6 +580,21 @@ describe("the writes the driver's app sends", () => {
       expect(conflict, id).not.toContain("SUBMISSION_OWNER_MISMATCH");
     }
   });
+
+  // Wave 3.7: a driver's body branch is dropped before the branch gate, so
+  // the gate's 403 is the manager's only — and the document says so.
+  it("says the branch gate never refuses a driver's record, whose branch the server resolves", () => {
+    for (const id of [CREATE_FUEL, CREATE_CHECKLIST]) {
+      expect(byId(id).preHandler, id).toContain(ignoreDriverBranchChoice);
+      expect(
+        byId(id).preHandler.indexOf(ignoreDriverBranchChoice),
+        id,
+      ).toBeLessThan(byId(id).preHandler.indexOf(verifyBranchActive));
+      expect(JSON.stringify(byId(id).operation.responses["403"]), id).toContain(
+        "A filial enviada por um motorista é ignorada",
+      );
+    }
+  });
 });
 
 /**
@@ -613,8 +638,15 @@ describe("what the document says about the bodies that come back", () => {
   it("gives every operation a success response", () => {
     // The downloads used to publish only 400 and 500: a client could not
     // tell from the document that the call ever succeeds, or with what.
+    // A redirect is a success that names where the answer is: the proof
+    // link (L7) answers 302 to the receipt's file.
     const missing = published
-      .filter((route) => !statusesOf(route).some((status) => /^2/.test(status)))
+      .filter(
+        (route) =>
+          !statusesOf(route).some(
+            (status) => /^2/.test(status) || status === "302",
+          ),
+      )
       .map(({ id }) => id);
 
     expect(missing).toEqual([]);

@@ -21,7 +21,7 @@ import {
   moduleNotEnabled,
   tenantInactive,
 } from "@/shared/errors/access-errors";
-import { hasModule } from "@/shared/entitlements/entitlement-service";
+import { isModuleEnabled } from "@/shared/entitlements/entitlement-rules";
 import {
   API_KEY_AUTH_FAILURE_WINDOW_SECONDS,
   integrationRateGuard,
@@ -133,7 +133,10 @@ async function ensureApiKey(
     throw tenantInactive("A empresa desta chave está desativada.");
   }
 
-  if (!(await hasModule(key.businessId, "DELIVERIES"))) {
+  // Read with the key, in the same query (plan of 02/11/2026, L5): a second
+  // lookup per call doubled the database round trips of the public API
+  // before it did any work.
+  if (!isModuleEnabled(key.business.entitlements, "DELIVERIES")) {
     throw moduleNotEnabled(
       "O módulo de Entregas não está habilitado para a empresa desta chave.",
     );
