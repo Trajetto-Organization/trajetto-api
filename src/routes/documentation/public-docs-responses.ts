@@ -45,7 +45,7 @@ const publicBadRequestResponse = publicErrorBody([
     message: z
       .string()
       .describe(
-        "Em VALIDATION_ERROR é a frase em português do primeiro campo recusado; a lista completa, uma frase por problema, está em `issues`. Em MALFORMED_REQUEST é o motivo dado pelo leitor de JSON, em inglês (por exemplo, a posição em que o JSON quebrou).",
+        "Em VALIDATION_ERROR é a frase em português do primeiro campo recusado; a lista completa, uma frase por problema, está em `issues`. Em MALFORMED_REQUEST é a frase do servidor HTTP, em inglês (por exemplo, `Body is not valid JSON but content-type is set to 'application/json'`).",
       ),
     issues: z
       .array(z.string())

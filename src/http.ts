@@ -852,10 +852,11 @@ app.setErrorHandler((thrown, request, reply) => {
     return sendError(reply, statusCode, {
       code: "MALFORMED_REQUEST",
 
-      // Fastify's own sentence, which names the actual problem — "Body cannot
-      // be empty when content-type is set to 'application/json'", or the
-      // position where the JSON broke. A generic "requisição inválida" would
-      // leave whoever is integrating with nothing to act on.
+      // Fastify's own sentence, which names the kind of problem — "Body cannot
+      // be empty when content-type is set to 'application/json'", or "Body is
+      // not valid JSON…" (FST_ERR_CTP_INVALID_JSON_BODY, which no longer says
+      // where the JSON broke). A generic "requisição inválida" would leave
+      // whoever is integrating with less to act on.
       message: error.message,
     });
   }

@@ -70,7 +70,7 @@ const integrationWriteResponses = {
 
   badRequest: codedError(
     "VALIDATION_ERROR: o corpo não passou nas regras do cadastro manual de entregas (as mesmas frases), ou tem um campo que não existe, no corpo ou num item; cada item de `issues` começa pelo campo. IDEMPOTENCY_KEY_REQUIRED: faltou o cabeçalho Idempotency-Key. IDEMPOTENCY_KEY_INVALID: o valor não segue o formato. SHIPPER_INACTIVE: o embarcador está desativado no painel. MALFORMED_REQUEST: o corpo não é JSON válido. Nada foi gravado: corrija antes de repetir.",
-    "Em VALIDATION_ERROR é a frase em português do primeiro campo recusado; a lista completa, uma frase por problema, está em `issues`. Em MALFORMED_REQUEST é o motivo dado pelo leitor de JSON, em inglês (por exemplo, a posição em que o JSON quebrou). Nos demais códigos, uma frase em português.",
+    "Em VALIDATION_ERROR é a frase em português do primeiro campo recusado; a lista completa, uma frase por problema, está em `issues`. Em MALFORMED_REQUEST é a frase do servidor HTTP, em inglês (por exemplo, `Body is not valid JSON but content-type is set to 'application/json'`). Nos demais códigos, uma frase em português.",
   ),
 
   notFound: codedError(

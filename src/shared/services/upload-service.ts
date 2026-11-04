@@ -521,8 +521,8 @@ class UploadService {
 
         // The token rides in the query string, not the path — the same place
         // S3 puts `X-Amz-Signature`, and the only one that works: Fastify caps
-        // a path parameter at 100 characters and answers 404 past that, which
-        // this token comfortably exceeds.
+        // a path parameter at 100 characters and refuses a longer one (414),
+        // which this token comfortably exceeds.
         uploadUrl: `${baseUrl}/uploads/local?token=${encodeURIComponent(token)}`,
         expiresIn: uploadConfig.presignedUploadTtlSeconds,
       };
