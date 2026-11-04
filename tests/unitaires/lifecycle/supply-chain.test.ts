@@ -36,6 +36,32 @@ describe("Dependabot", () => {
     expect(config).toMatch(/package-ecosystem: docker/);
     expect(config).toMatch(/"\/infra\/ai-ocr"/);
   });
+
+  it("never opens a major of pg: Prisma 7 runs parallel queries on one client, and pg 9 stops queueing them", () => {
+    // docs/arquitetura.md ("pg fixo em exatamente 8.23.1"): the pin holds
+    // until pg-driver.ts serializes `DriverClient.query` or Prisma fixes it.
+    expect(
+      JSON.parse(read("package.json")).dependencies.pg,
+      "pg fixo, sem ^ nem ~",
+    ).toMatch(/^8\.\d+\.\d+$/);
+
+    const config = read(".github/dependabot.yml");
+    const npm = config.slice(
+      config.indexOf("package-ecosystem: npm"),
+      config.indexOf("package-ecosystem: github-actions"),
+    );
+    const ignored = npm.slice(npm.indexOf("ignore:"));
+
+    for (const name of ["pg", "@types/pg"]) {
+      const quoted = name.replace(/[@/]/g, "\\$&");
+
+      expect(ignored, `${name} sem major`).toMatch(
+        new RegExp(
+          `- dependency-name: "?${quoted}"?\\r?\\n\\s+update-types: \\[version-update:semver-major\\]`,
+        ),
+      );
+    }
+  });
 });
 
 describe("the workflows", () => {

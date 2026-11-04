@@ -43,6 +43,15 @@ updates:
         update-types: [version-update:semver-major]
       - dependency-name: "@prisma/*"
         update-types: [version-update:semver-major]
+      # pg is pinned to exactly 8.23.1: inside an interactive transaction
+      # Prisma 7 runs queries in parallel on one pg client, which pg 8 queues
+      # and pg 9 no longer does. Lift this only after src/shared/database/pg-driver.ts
+      # serializes `DriverClient.query`, or Prisma fixes it (docs/arquitetura.md,
+      # "pg fixo em exatamente 8.23.1"). Its types follow the same major.
+      - dependency-name: pg
+        update-types: [version-update:semver-major]
+      - dependency-name: "@types/pg"
+        update-types: [version-update:semver-major]
     commit-message:
       prefix: chore(deps)
 
