@@ -133,7 +133,8 @@ describe("reads that held more than two connections", () => {
     );
 
     expect(result.total).toBe(5);
-    expect(result.facets.city.map((facet) => facet.value).sort()).toEqual([
+    // A first page (no cursor) carries the facets (G9).
+    expect(result.facets!.city.map((facet) => facet.value).sort()).toEqual([
       "Campinas",
       "Santos",
     ]);

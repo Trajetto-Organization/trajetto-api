@@ -388,6 +388,7 @@ describe("one screen, at most two connections", () => {
       new UserRepository(),
       new DeliveryRepository(),
       { getFileUrl: async (key: string) => key } as never,
+      new BusinessRepository(),
     );
 
     const { peak, result } = await peakOf(() =>

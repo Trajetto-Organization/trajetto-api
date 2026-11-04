@@ -261,11 +261,12 @@ describe("the trail of the day", () => {
   it.each(both())(
     "%s starts at the company's midnight, and the window is half-open",
     async (_name, repository) => {
-      const day = await repository.listTrail({
+      const { points: day } = await repository.listTrail({
         businessId: CARRIER,
         driverId: carrierDriver,
         from: DAY.start,
         to: DAY.end,
+        max: 400,
       });
 
       // T(-1) is yesterday's; T(0) is today's first. Before the departure a
@@ -279,11 +280,12 @@ describe("the trail of the day", () => {
         [T(50).toISOString(), routeId],
       ]);
 
-      const cut = await repository.listTrail({
+      const { points: cut } = await repository.listTrail({
         businessId: CARRIER,
         driverId: carrierDriver,
         from: T(-1),
         to: T(50),
+        max: 400,
       });
 
       expect(cut.map((point) => point.recorded_at.toISOString())).toEqual([
@@ -304,8 +306,9 @@ describe("the trail of the day", () => {
           driverId: carrierDriver,
           from: T(-60),
           to: DAY.end,
+          max: 400,
         }),
-      ).toEqual([]);
+      ).toEqual({ recorded: 0, points: [] });
     },
   );
 
@@ -315,6 +318,7 @@ describe("the trail of the day", () => {
       driverId: carrierDriver,
       from: T(-60),
       to: DAY.end,
+      max: 400,
     };
 
     const [fromDatabase, fromTwin] = await Promise.all([
@@ -322,8 +326,38 @@ describe("the trail of the day", () => {
       twin.listTrail(window),
     ]);
 
-    expect(fromDatabase).toHaveLength(5);
+    expect(fromDatabase.points).toHaveLength(5);
+    expect(fromDatabase.recorded).toBe(5);
     expect(fromDatabase).toEqual(fromTwin);
+  });
+
+  // Plan of 02/11/2026, G9: the trail is thinned in Postgres, by the same
+  // rule as downsample (evenly by position, first and last kept), and the
+  // true count comes back beside the kept points. The twin keeps the same
+  // ones.
+  it("thins in the database the way the twin does, keeping the ends and the count", async () => {
+    for (const max of [2, 3, 4]) {
+      const window = {
+        businessId: CARRIER,
+        driverId: carrierDriver,
+        from: T(-60),
+        to: DAY.end,
+        max,
+      };
+
+      const [fromDatabase, fromTwin] = await Promise.all([
+        database.listTrail(window),
+        twin.listTrail(window),
+      ]);
+
+      expect(fromDatabase.recorded, String(max)).toBe(5);
+      expect(fromDatabase.points, String(max)).toHaveLength(max);
+      expect(fromDatabase.points[0].recorded_at).toEqual(T(-1));
+      expect(
+        fromDatabase.points[fromDatabase.points.length - 1].recorded_at,
+      ).toEqual(T(50));
+      expect(fromDatabase, String(max)).toEqual(fromTwin);
+    }
   });
 });
 
@@ -342,12 +376,13 @@ describe("the route page's reads (decision 14.7)", () => {
   it.each(both())(
     "%s narrows the trail to one route",
     async (_name, repository) => {
-      const trail = await repository.listTrail({
+      const { points: trail } = await repository.listTrail({
         businessId: CARRIER,
         driverId: carrierDriver,
         routeId,
         from: T(-60),
         to: DAY.end,
+        max: 400,
       });
 
       // The point before the departure carries no route and stays out.

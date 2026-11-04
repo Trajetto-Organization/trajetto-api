@@ -1,5 +1,6 @@
 import type { Prisma } from "@prisma/client";
 
+import { AppError } from "@/shared/errors/AppError";
 import { buildSearchOr } from "@/shared/pagination/search-or";
 import { OPEN_STOP_STATUSES } from "@/shared/route/route-rules";
 import type { DeliveryKind } from "@/shared/delivery/delivery-kind";
@@ -14,10 +15,29 @@ import type { DeliveryKind } from "@/shared/delivery/delivery-kind";
  */
 type UnroutedFacet = "city" | "uf" | "kind" | "shipper";
 
+/**
+ * Where a picker page ended (plan of 02/11/2026, G9): the last row's place
+ * in the list's order — scheduled day (no day last), creation, id.
+ */
+interface UnroutedKey {
+  scheduled_date: Date | null;
+  created_at: Date;
+  id: string;
+}
+
 interface UnroutedDeliveriesQuery {
   businessId: string;
+
+  /** Offset paging, kept for the web still in the field; ignored with `after`. */
   page: number;
   pageSize: number;
+
+  /**
+   * The keyset: the rows after this one (G9). A picker that scrolls while
+   * colleagues route deliveries away neither repeats nor skips a row, which
+   * an offset did. Pages after the first skip the counts.
+   */
+  after?: UnroutedKey;
 
   /** Code, NF number, NF-e key, recipient or city. */
   search?: string;
@@ -64,13 +84,123 @@ interface LabelledFacetCount extends FacetCount {
 
 interface UnroutedDeliveriesPage {
   data: UnroutedDeliveryRow[];
-  total: number;
-  facets: {
+
+  /** Only on a first page (no `after`): later pages keep the first one's. */
+  total?: number;
+  facets?: {
     city: FacetCount[];
     uf: FacetCount[];
     kind: FacetCount[];
     shipper: LabelledFacetCount[];
   };
+
+  /** The cursor of the next page; null at the end of the list. */
+  nextCursor: string | null;
+}
+
+/** The list's order, the keyset's: scheduled day with no day last, creation, id. */
+const UNROUTED_ORDER = [
+  { scheduled_date: { sort: "asc", nulls: "last" } },
+  { created_at: "asc" },
+  { id: "asc" },
+] as const;
+
+const INVALID_CURSOR = () =>
+  new AppError(
+    "Cursor inválido. Recarregue a lista e tente de novo.",
+    400,
+    "INVALID_CURSOR",
+  );
+
+/** An opaque cursor: the key, as base64url JSON. */
+function encodeUnroutedCursor(key: UnroutedKey): string {
+  return Buffer.from(
+    JSON.stringify({
+      s: key.scheduled_date ? key.scheduled_date.toISOString() : null,
+      c: key.created_at.toISOString(),
+      i: key.id,
+    }),
+  ).toString("base64url");
+}
+
+function decodeUnroutedCursor(cursor: string): UnroutedKey {
+  let parsed: unknown;
+
+  try {
+    parsed = JSON.parse(Buffer.from(cursor, "base64url").toString("utf8"));
+  } catch {
+    throw INVALID_CURSOR();
+  }
+
+  const { s, c, i } = (parsed ?? {}) as Record<string, unknown>;
+
+  const instant = (value: unknown): Date | null => {
+    if (typeof value !== "string") return null;
+
+    const date = new Date(value);
+
+    return Number.isNaN(date.getTime()) ? null : date;
+  };
+
+  const created = instant(c);
+  const scheduled = s === null ? null : instant(s);
+
+  if (
+    !created ||
+    (s !== null && !scheduled) ||
+    typeof i !== "string" ||
+    i.length === 0 ||
+    i.length > 64
+  ) {
+    throw INVALID_CURSOR();
+  }
+
+  return { scheduled_date: scheduled, created_at: created, id: i };
+}
+
+/**
+ * The rows after `after` in UNROUTED_ORDER. Inside the caller's tenant
+ * `where`: a forged cursor moves the start of a company's own list, never
+ * into another company's.
+ */
+function unroutedKeysetAfter(after: UnroutedKey): Prisma.DeliveryWhereInput {
+  const later: Prisma.DeliveryWhereInput = {
+    OR: [
+      { created_at: { gt: after.created_at } },
+      { created_at: after.created_at, id: { gt: after.id } },
+    ],
+  };
+
+  if (after.scheduled_date === null) {
+    return { AND: [{ scheduled_date: null }, later] };
+  }
+
+  return {
+    OR: [
+      { scheduled_date: { gt: after.scheduled_date } },
+      { AND: [{ scheduled_date: after.scheduled_date }, later] },
+      { scheduled_date: null },
+    ],
+  };
+}
+
+/** Same order as UNROUTED_ORDER, for the twin. */
+function compareUnroutedKeys(a: UnroutedKey, b: UnroutedKey): number {
+  const da = a.scheduled_date?.getTime() ?? null;
+  const db = b.scheduled_date?.getTime() ?? null;
+
+  if (da !== db) {
+    if (da === null) return 1;
+    if (db === null) return -1;
+
+    return da - db;
+  }
+
+  const byCreation = a.created_at.getTime() - b.created_at.getTime();
+
+  if (byCreation !== 0) return byCreation;
+
+  return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
 }
 
 /**
@@ -195,8 +325,13 @@ function unroutedDeliveriesWhere(
 export {
   UNROUTED_DELIVERY_SELECT,
   UNROUTED_FACET_LIMIT,
+  UNROUTED_ORDER,
+  compareUnroutedKeys,
+  decodeUnroutedCursor,
+  encodeUnroutedCursor,
   orderShipperFacet,
   unroutedDeliveriesWhere,
+  unroutedKeysetAfter,
 };
 export type {
   FacetCount,
@@ -205,4 +340,5 @@ export type {
   UnroutedDeliveriesQuery,
   UnroutedDeliveryRow,
   UnroutedFacet,
+  UnroutedKey,
 };

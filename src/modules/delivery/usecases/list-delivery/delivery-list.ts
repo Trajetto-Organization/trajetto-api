@@ -7,6 +7,7 @@ import { buildSearchOr } from "@/shared/pagination/search-or";
 
 import type { FacetCount } from "@/shared/pagination/list-meta";
 import type { SortOrder, SortSpec } from "@/shared/pagination/list-query";
+import type { InheritedOpenStops } from "@/shared/route/route-left-open";
 
 /**
  * The deliveries table on the server (decisions 5.8 and 8.8): what it sorts
@@ -229,6 +230,11 @@ interface DeliveryListSearchMeta {
   };
   /** Null when no period was asked for (every date). */
   period?: DeliveryListPeriodMeta | null;
+  /**
+   * What the "Em Rota" card inherited from routes left open (plan of
+   * 02/11/2026, H3): counted like the card, with the tower's rule.
+   */
+  inherited?: InheritedOpenStops;
 }
 
 /**

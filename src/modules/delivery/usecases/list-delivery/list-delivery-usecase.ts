@@ -24,6 +24,10 @@ import {
   deliveryPeriodWindow,
   type DeliveryPeriodInput,
 } from "@/modules/delivery/usecases/list-delivery/delivery-period";
+import {
+  inheritedOpenStops,
+  leftOpenStartedBefore,
+} from "@/shared/route/route-left-open";
 
 interface ListDeliveriesRequest extends DeliveryPeriodInput {
   userId: string;
@@ -86,13 +90,16 @@ class ListDeliveryUseCase {
 
     assertTenantAccess(findUser, resolvedBusinessId);
 
-    // "Hoje" is the company's day (decision 1.1), so the zone is read only
-    // when a period was asked for: without one the listing never needed it.
+    // "Hoje" is the company's day (decision 1.1): the period's days and,
+    // since H3, the routes left open that the "Em Rota" card inherits from
+    // (decision D26) are both read in the company's zone.
+    const timeZone = await loadBusinessTimeZone(
+      this.business,
+      resolvedBusinessId,
+    );
+
     const window = period
-      ? deliveryPeriodWindow(
-          { period, from, to },
-          await loadBusinessTimeZone(this.business, resolvedBusinessId),
-        )
+      ? deliveryPeriodWindow({ period, from, to }, timeZone)
       : null;
 
     try {
@@ -113,6 +120,8 @@ class ListDeliveryUseCase {
         kinds,
         createdFrom: window?.start,
         createdTo: window?.end,
+        // The tower's rule as one departure instant (H3).
+        leftOpenBefore: leftOpenStartedBefore(timeZone, new Date()),
       });
 
       // The cards and the filter counts come from the whole set, never from
@@ -131,6 +140,9 @@ class ListDeliveryUseCase {
           period: window
             ? { from: window.from, to: window.to, applied: page_.periodApplied }
             : null,
+          // The note on the "Em Rota" card: "inclui N de rotas abertas desde
+          // dd/mm" (H3), the tower's summary of the same thing.
+          inherited: inheritedOpenStops(page_.leftOpenRoutes ?? []),
         },
       };
     } catch (error) {

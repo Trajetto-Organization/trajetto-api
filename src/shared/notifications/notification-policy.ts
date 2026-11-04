@@ -6,6 +6,7 @@ import {
 
 import { fineCreatedPolicy } from "./policies/fine-created-policy";
 import { vehicleChecklistCreatedPolicy } from "./policies/vehicle-checklist-created-policy";
+import { vehicleChecklistDefectsFoundPolicy } from "./policies/vehicle-checklist-defects-policy";
 import { fuelCreatedPolicy } from "./policies/fuel-created-policy";
 import { aiVerificationIssuePolicy } from "./policies/ai-verification-issue-policy";
 import { serviceOrderCreatedPolicy } from "./policies/service-order-created-policy";
@@ -21,6 +22,7 @@ import {
   businessLimitChangedPolicy,
   businessModuleChangedPolicy,
 } from "./policies/business-plan-policies";
+import { businessSettingsChangedPolicy } from "./policies/business-settings-policy";
 import {
   deliveryOccurrenceAuthorizationDecidedPolicy,
   deliveryOccurrenceAuthorizationEscalatedPolicy,
@@ -38,7 +40,9 @@ import {
 
 import {
   routeCancelledPolicy,
+  routeLeftOpenPolicy,
   routePlanChangedPolicy,
+  routeRecordBranchMissingPolicy,
   routeReleasedPolicy,
 } from "./policies/route-policies";
 import {
@@ -63,6 +67,8 @@ const notificationPolicies: {
 } = {
   "fine.created": fineCreatedPolicy,
   "vehicle-checklist.created": vehicleChecklistCreatedPolicy,
+  // Plan of 02/11/2026 (F2): only a checklist with a defect publishes it.
+  "vehicle-checklist.defects_found": vehicleChecklistDefectsFoundPolicy,
   "fuel.created": fuelCreatedPolicy,
   "ai-verification.issue": aiVerificationIssuePolicy,
   "service-order.created": serviceOrderCreatedPolicy,
@@ -82,6 +88,7 @@ const notificationPolicies: {
   "master-user.account-updated": masterUserAccountUpdatedPolicy,
   "business-module.changed": businessModuleChangedPolicy,
   "business-limit.changed": businessLimitChangedPolicy,
+  "business-settings.changed": businessSettingsChangedPolicy,
   "delivery-occurrence.reported": deliveryOccurrenceReportedPolicy,
   "delivery-occurrence.authorization_requested":
     deliveryOccurrenceAuthorizationRequestedPolicy,
@@ -93,6 +100,11 @@ const notificationPolicies: {
   "route.released": routeReleasedPolicy,
   "route.cancelled": routeCancelledPolicy,
   "route.plan_changed": routePlanChangedPolicy,
+  // Plan of 02/11/2026, K11 (D26): a route left open, to the admins, once.
+  "route.left_open": routeLeftOpenPolicy,
+  // Wave 3.7: a driver's route record with no active branch, to the people
+  // who run the deliveries, once per route and moment.
+  "route.record_branch_missing": routeRecordBranchMissingPolicy,
   "delivery.status_overridden": deliveryStatusOverriddenPolicy,
 
   "delivery.dispatched": deliveryDispatchedPolicy,

@@ -505,6 +505,90 @@ describe("a driver's workday", () => {
   });
 });
 
+/**
+ * Plan of 02/11/2026, J4 (decisions D26 and D54): "14:57–agora · 73 h 27 min"
+ * read as 73 hours at the wheel. A route forgotten "Em andamento" — started
+ * before the company's today or more than 16 h ago — gets an alert of its
+ * own with the date, and the driving alert of that workday is marked as an
+ * unreliable estimate instead of being trusted.
+ */
+describe("a route left open (J4)", () => {
+  it("raises ROUTE_LEFT_OPEN with the days and the date, and marks the driving estimate unreliable", () => {
+    const [row] = report(source([route(ANA, sp("2026-09-27T14:57"), null)]), {
+      now: sp("2026-09-30T18:24"),
+    });
+
+    expect(row.day).toBe("2026-09-27");
+    expect(codes(row)).toEqual(["DRIVING_REST_SHORT", "ROUTE_LEFT_OPEN"]);
+
+    const leftOpen = row.flags.find((flag) => flag.code === "ROUTE_LEFT_OPEN");
+
+    expect(leftOpen?.message).toContain("Rota aberta há 3 dias");
+    expect(leftOpen?.message).toContain("27/09 às 14:57");
+
+    const driving = row.flags.find(
+      (flag) => flag.code === "DRIVING_REST_SHORT",
+    );
+
+    expect(driving?.unreliable).toBe(true);
+    expect(driving?.message).toContain(
+      "Estimativa não confiável: rota aberta desde 27/09",
+    );
+  });
+
+  it("raises it for a route of today running for more than 16 hours", () => {
+    const [row] = report(source([route(ANA, sp("2026-09-30T00:30"), null)]), {
+      now: sp("2026-09-30T17:00"),
+    });
+
+    const leftOpen = row.flags.find((flag) => flag.code === "ROUTE_LEFT_OPEN");
+
+    expect(leftOpen?.message).toContain("mais de 16 horas");
+  });
+
+  it("leaves a route that left this morning alone, and a closed one too", () => {
+    const [running] = report(
+      source([route(ANA, sp("2026-09-30T06:00"), null)]),
+      { now: sp("2026-09-30T14:00") },
+    );
+    const [closed] = report(
+      source([route(BIA, sp("2026-09-27T08:00"), sp("2026-09-27T12:00"))]),
+      { now: sp("2026-09-30T14:00") },
+    );
+
+    expect(codes(running)).not.toContain("ROUTE_LEFT_OPEN");
+    expect(
+      running.flags.find((flag) => flag.code === "DRIVING_REST_SHORT")
+        ?.unreliable,
+    ).toBeUndefined();
+    expect(codes(closed)).not.toContain("ROUTE_LEFT_OPEN");
+  });
+
+  it("is a facet of the report like every other alert", () => {
+    const rows = report(
+      source([
+        route(ANA, sp("2026-09-27T14:57"), null),
+        route(BIA, sp("2026-09-30T06:00"), sp("2026-09-30T08:00")),
+      ]),
+      { now: sp("2026-09-30T18:24") },
+    );
+
+    const { rows: kept, searchMeta } = summarizePauseReport(
+      rows,
+      { flags: ["ROUTE_LEFT_OPEN"] },
+      new Map([
+        [ANA, "Ana"],
+        [BIA, "Bia"],
+      ]),
+    );
+
+    expect(kept.map((row) => row.driverId)).toEqual([ANA]);
+    expect(
+      searchMeta.facets.flag.find((facet) => facet.value === "ROUTE_LEFT_OPEN"),
+    ).toEqual({ value: "ROUTE_LEFT_OPEN", count: 1 });
+  });
+});
+
 describe("the report's filters and counts", () => {
   const rows = report(
     source(
@@ -706,24 +790,72 @@ describe("the report's cost", () => {
     expect(reads).toBeLessThanOrEqual(4 * input.routes.length);
   });
 
-  it("builds a month of 300 drivers well inside a request's budget", () => {
-    const input = fleet(300, 34);
+  /**
+   * A month's report of `drivers` drivers with every route, pause and row
+   * read through a counter: the report's cost in reads, the same on any
+   * machine. It used to be a wall-clock budget (a month of 300 drivers in
+   * 1.5 s, about 200 ms alone), which a full parallel unit run with coverage
+   * took to 3.5 s on 03/11/2026 with nothing wrong in the code. Reads that
+   * grow linearly (the doubling below) with a bounded number per record hold
+   * for 300 drivers or 3,000, so the fleets here stay small and quick.
+   */
+  function monthOf(drivers: number) {
+    const input = fleet(drivers, 34);
+    const reads = { build: 0, summary: 0 };
 
-    const started = performance.now();
-    const rows = report(input, {
-      from: "2026-08-27",
-      to: "2026-09-26",
-      now: sp("2026-09-29T12:00"),
-    });
+    const counted = <T extends object>(
+      records: T[],
+      phase: keyof typeof reads,
+    ) =>
+      records.map(
+        (record) =>
+          new Proxy(record, {
+            get(target, property, receiver) {
+              reads[phase] += 1;
+
+              return Reflect.get(target, property, receiver);
+            },
+          }),
+      );
+
+    const rows = report(
+      {
+        ...input,
+        routes: counted(input.routes, "build"),
+        pauses: counted(input.pauses, "build"),
+      },
+      { from: "2026-08-27", to: "2026-09-26", now: sp("2026-09-29T12:00") },
+    );
+
     summarizePauseReport(
-      rows,
+      counted(rows, "summary"),
       {},
       new Map(input.drivers.map((driver) => [driver.id, driver.name])),
     );
-    const elapsed = performance.now() - started;
 
-    expect(rows).toHaveLength(300 * 31);
-    // ~150 ms on the dev machine; the pauses × routes scan took 2 to 9 s.
-    expect(elapsed).toBeLessThan(1_500);
+    return {
+      rows: rows.length,
+      records: input.routes.length + input.pauses.length,
+      ...reads,
+    };
+  }
+
+  it("builds a month reading each route, pause and row a bounded number of times", () => {
+    const month = monthOf(80);
+
+    expect(month.rows).toBe(80 * 31);
+    // About 12 reads per route or pause, and per row, today. The pauses ×
+    // routes scan read every route of the company once per pause.
+    expect(month.build).toBeLessThanOrEqual(24 * month.records);
+    expect(month.summary).toBeLessThanOrEqual(24 * month.rows);
+  });
+
+  it("costs twice the reads for twice the drivers, never pauses × routes", () => {
+    const fleetOf40 = monthOf(40);
+    const fleetOf80 = monthOf(80);
+
+    // Linear: exactly twice today. The pauses × routes scan made it 4 times.
+    expect(fleetOf80.build).toBeLessThanOrEqual(2.5 * fleetOf40.build);
+    expect(fleetOf80.summary).toBeLessThanOrEqual(2.5 * fleetOf40.summary);
   });
 });

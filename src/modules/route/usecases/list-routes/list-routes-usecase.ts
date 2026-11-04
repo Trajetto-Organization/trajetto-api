@@ -10,6 +10,10 @@ import { AppError } from "@/shared/errors/AppError";
 
 import type { SortOrder } from "@/shared/pagination/list-query";
 import type { RouteStatus } from "@/shared/route/route-rules";
+import {
+  loadBusinessTimeZone,
+  type BusinessLookup,
+} from "@/shared/time/business-time-zone";
 import type { ListRoutesResult } from "../../dtos/route-dto";
 import type { RouteSortKey } from "./route-list";
 
@@ -47,6 +51,8 @@ class ListRoutesUseCase {
     private route: IRouteRepository,
     @inject("UserRepository")
     private user: IUserRepository,
+    @inject("BusinessRepository")
+    private business: BusinessLookup,
   ) {}
 
   async execute({
@@ -72,7 +78,7 @@ class ListRoutesUseCase {
 
     assertTenantAccess(findUser, resolvedBusinessId);
 
-    return this.route.listRoutes({
+    const listed = await this.route.listRoutes({
       ...query,
       businessId: resolvedBusinessId,
       ...(findUser.driverId && {
@@ -80,6 +86,17 @@ class ListRoutesUseCase {
         driverIds: undefined,
       }),
     });
+
+    // The board's hours (Previsto, Saída, Conclusão) in the company's zone,
+    // as the route's own page reads them from get-route (G8): the browser's
+    // clock disagreed with it for anyone outside that zone.
+    return {
+      ...listed,
+      meta: {
+        ...listed.meta,
+        timeZone: await loadBusinessTimeZone(this.business, resolvedBusinessId),
+      },
+    };
   }
 }
 

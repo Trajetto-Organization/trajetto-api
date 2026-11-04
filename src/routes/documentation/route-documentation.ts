@@ -10,6 +10,7 @@ import {
   addRouteStopsSchema,
   assignmentPreviewSchema,
   cancelRouteSchema,
+  closeRouteWithPendingSchema,
   createRouteSchema,
   listRoutesSchema,
   releaseRouteSchema,
@@ -89,7 +90,7 @@ const routeStopEntity = z.object({
       .nullable()
       .optional()
       .describe(
-        "MANUAL: fixado no mapa pelo despachante; GEOCODER: resolvido pelo endereço.",
+        "MANUAL: fixado no mapa pelo despachante ou informado na criação (formulário, planilha ou API pública); GEOCODER: resolvido pelo endereço.",
       ),
   }),
 });
@@ -111,6 +112,13 @@ const routeEntity = z.object({
   started_at: isoDateTime.nullable(),
   completed_at: isoDateTime.nullable(),
   cancellation_reason: z.string().nullable(),
+  closure_reason: z
+    .string()
+    .nullable()
+    .optional()
+    .describe(
+      "Por que a rota foi encerrada com paradas em aberto (Encerrar com pendências, plano de 02/11/2026 K11); null numa rota que terminou sozinha.",
+    ),
   driverId: z.string(),
   vehicleId: z.string().nullable(),
   driver: z.object({ id: z.string(), name: z.string() }).nullable(),
@@ -152,6 +160,74 @@ const visitedPointEntity = z.object({
   latitude: z.number(),
   longitude: z.number(),
   recordedAt: isoDateTime,
+  // Plan of 02/11/2026 (E5): the stop card's "Fora do raio" flag, with the
+  // names the delivery detail uses.
+  geofence_outcome: z
+    .enum(["INSIDE", "OUTSIDE", "NOT_EVALUATED"])
+    .nullable()
+    .describe(
+      'Geocerca da chegada ou do comprovante (Configurações da empresa): INSIDE, OUTSIDE (o selo "Fora do raio" da parada) ou NOT_EVALUATED. Null num ponto de antes da geocerca.',
+    ),
+  distance_m: z
+    .number()
+    .nullable()
+    .describe(
+      "Distância em metros entre a posição e o ponto do endereço; null quando não avaliada.",
+    ),
+  accuracy_m: z
+    .number()
+    .nullable()
+    .describe(
+      "Precisão da posição em metros, como o aparelho informou; null quando o aparelho não a mandou.",
+    ),
+});
+
+/** A stop recorded outside the radius (E5), for its card's flag. */
+const stopGeofenceEntity = z.object({
+  deliveryId: z.string(),
+  type: z
+    .enum(["ARRIVAL", "PROOF", "OCCURRENCE"])
+    .describe(
+      "O apontamento fora do raio: chegada, comprovante ou ocorrência.",
+    ),
+  geofence_outcome: z.literal("OUTSIDE"),
+  distance_m: z
+    .number()
+    .nullable()
+    .describe("Distância em metros até o ponto do endereço."),
+  accuracy_m: z
+    .number()
+    .nullable()
+    .describe(
+      "Precisão da posição em metros; null quando o aparelho não a mandou.",
+    ),
+  recordedAt: isoDateTime.describe(
+    "Quando aconteceu (relógio do aparelho corrigido).",
+  ),
+});
+
+/** A route checklist as the detail lists it (F3; the driver payload's shape). */
+const routeChecklistEntity = z.object({
+  id: z.string(),
+  checklist_date: isoDateTime,
+  overall_condition: z
+    .string()
+    .describe("approved, approved_with_restrictions ou rejected."),
+});
+
+/** A refuelling made on the route (F3), amounts as numbers. */
+const routeFuelEntity = z.object({
+  id: z.string(),
+  refueling_date: isoDateTime,
+  liters_amount: z.number(),
+  price_per_liter: z.number(),
+  total_amount: z.number(),
+  current_mileage: z.number(),
+  vehicleId: z.string(),
+  driverId: z.string(),
+  odometer_ai_status: z
+    .string()
+    .describe("Situação da leitura do hodômetro pela IA."),
 });
 
 const unroutedDeliveryRow = z.object({
@@ -201,6 +277,7 @@ const routeSchemas = {
   releaseRoute: releaseRouteSchema,
   startRoute: startRouteSchema,
   cancelRoute: cancelRouteSchema,
+  closeRouteWithPending: closeRouteWithPendingSchema,
 
   assignmentPreview: assignmentPreviewSchema,
 };
@@ -261,21 +338,64 @@ const routeResponses = {
             .describe(
               "Rotas por status com a busca e os demais filtros, sem o de status (os cartões). Nunca da página; os cinco status vêm sempre, inclusive zerados.",
             ),
+          timeZone: z
+            .string()
+            .describe(
+              "Fuso da empresa (IANA, ex.: America/Sao_Paulo), para mostrar Previsto, Saída e Conclusão no relógio da empresa, como o detalhe da rota (meta.timeZone do get-route).",
+            ),
         },
         ["status", "driverId", "vehicleId"],
       ),
     }),
   }),
 
-  /** One line of the stream, after the envelope. */
-  routeListRow: routeEntity,
+  /**
+   * One line of the stream, after the envelope (plan of 02/11/2026, K14):
+   * the route without its stops' deliveries — the board reads progress and
+   * blockers from `stopCounts`.
+   */
+  routeListRow: routeEntity.omit({ stops: true }).extend({
+    stopCounts: z
+      .record(routeStopStatusEnum, z.number())
+      .describe(
+        "Paradas da rota por status (PENDING, ARRIVED, COMPLETED, FAILED, CANCELLED; os cinco sempre, inclusive zerados). É daqui que a lista tira o progresso e os bloqueios; as paradas com as entregas ficam no detalhe (get-route).",
+      ),
+    stops: z
+      .array(z.object({ id: z.string(), status: routeStopStatusEnum }))
+      .describe(
+        "OBSOLETO, só nesta versão: as paradas com id e status, sem entrega, para a versão do painel ainda em uso. Use `stopCounts`; o campo sai da lista na próxima versão da API.",
+      ),
+  }),
   routeDetail: z.object({
     data: routeEntity.extend({
       driverPosition: driverPositionEntity,
       visitedPoints: z
         .array(visitedPointEntity)
         .describe(
-          "GPS capturado na chegada e no comprovante das paradas desta rota, para o mapa.",
+          "GPS capturado na chegada e no comprovante das paradas desta rota, para o mapa. Com mais de 400 registros, ficam os 400 mais recentes, em ordem cronológica.",
+        ),
+      stopGeofence: z
+        .array(stopGeofenceEntity)
+        .optional()
+        .describe(
+          'As paradas com apontamento fora do raio nesta rota (plano de 02/11/2026, E5), uma linha por entrega: o registro OUTSIDE mais recente entre a chegada, o comprovante e as ocorrências. É o selo "Fora do raio" do card da parada — a ocorrência, que sempre passa sinalizada, não é ponto do mapa e não vem em `visitedPoints`. Vazio para o aplicativo do motorista.',
+        ),
+      checklists: z
+        .object({
+          route_start: routeChecklistEntity.nullable(),
+          route_end: routeChecklistEntity.nullable(),
+        })
+        .nullable()
+        .optional()
+        .describe(
+          "Checklists do veículo feitos para esta rota (plano de 02/11/2026, F3): o mais recente da saída (ROUTE_START) e o da chegada (ROUTE_END); null no momento sem checklist. O objeto inteiro é null quando quem lê não pode ver checklists (empresa sem Gestão de Frotas ligada, ou perfil sem `vehicle_checklist_manage` leitura).",
+        ),
+      fuels: z
+        .array(routeFuelEntity)
+        .nullable()
+        .optional()
+        .describe(
+          "Abastecimentos feitos nesta rota, do mais antigo ao mais recente (F3). null quando quem lê não pode ver abastecimentos (empresa sem Gestão de Frotas ligada, ou perfil sem `fuel_manage` leitura).",
         ),
     }),
     meta: z.object({
@@ -285,6 +405,12 @@ const routeResponses = {
           .describe("Paradas já resolvidas, de qualquer desfecho."),
         total: z.number(),
       }),
+      timeZone: z
+        .string()
+        .optional()
+        .describe(
+          "O fuso da empresa (IANA), ex.: America/Sao_Paulo: os horários da rota são mostrados nele, com a nota, como na torre (plano de 02/11/2026, G8).",
+        ),
     }),
   }),
   routeReleased: z.object({
@@ -304,6 +430,26 @@ const routeResponses = {
     data: z.object({ id: z.string(), started_at: isoDateTime.nullable() }),
   }),
   routeCancelled: z.object({ message: z.string().default("Rota cancelada.") }),
+  routeClosedWithPending: z.object({
+    message: z.string(),
+    data: z.object({
+      id: z.string(),
+      status: routeStatusEnum,
+      completed_at: isoDateTime.nullable(),
+      closure_reason: z.string().nullable(),
+      cancelledStops: z
+        .number()
+        .describe(
+          "Paradas em aberto que foram canceladas; as entregas delas voltaram a Pendente.",
+        ),
+      planVersion: z.number(),
+      unchanged: z
+        .boolean()
+        .describe(
+          "true quando a rota já estava encerrada com pendências (duplo clique, reenvio): nada foi gravado nem avisado de novo.",
+        ),
+    }),
+  }),
 
   assignmentPreview: z.object({
     data: z.object({
@@ -435,9 +581,18 @@ const routeResponses = {
     meta: z.object({
       total: z
         .number()
-        .describe("Entregas sem rota com a busca e TODOS os filtros."),
+        .optional()
+        .describe(
+          "Entregas sem rota com a busca e TODOS os filtros. Só na primeira página (sem `cursor`).",
+        ),
       page: z.number(),
       pageSize: z.number(),
+      nextCursor: z
+        .string()
+        .nullable()
+        .describe(
+          "Envie como `cursor` para a página seguinte (G9); nulo no fim da lista.",
+        ),
       facets: z
         .object({
           city: z.array(facetCount),
@@ -453,8 +608,9 @@ const routeResponses = {
               "`value` é o id do embarcador (filtro `shipperIds`); no máximo 50, os com mais entregas.",
             ),
         })
+        .optional()
         .describe(
-          "Opções de cada filtro com a busca e os DEMAIS filtros (regra disjuntiva). Cidades e embarcadores: no máximo 50.",
+          "Opções de cada filtro com a busca e os DEMAIS filtros (regra disjuntiva). Cidades e embarcadores: no máximo 50. Só na primeira página (sem `cursor`).",
         ),
     }),
   }),
@@ -494,7 +650,7 @@ const routeResponses = {
     code: z
       .string()
       .describe(
-        "ROUTE_STATUS_CONFLICT, ROUTE_VEHICLE_BUSY, DELIVERY_ALREADY_ON_ROUTE, ROUTE_REORDER_MISMATCH ou ROUTE_PLAN_STALE (a versão do plano mudou desde a leitura) significam a mesma ação do usuário: atualizar a tela. ROUTE_DRIVER_BUSY (saída) diz que o motorista já está com outra rota em andamento; DELIVERY_ON_STARTED_ROUTE, que a entrega está numa rota que já saiu. ROUTE_CODE_TAKEN (criação simultânea na mesma empresa, raro): basta reenviar. Nada foi gravado.",
+        "ROUTE_STATUS_CONFLICT, ROUTE_VEHICLE_BUSY, DELIVERY_ALREADY_ON_ROUTE, ROUTE_REORDER_MISMATCH ou ROUTE_PLAN_STALE (a versão do plano mudou desde a leitura) significam a mesma ação do usuário: atualizar a tela. ROUTE_DRIVER_BUSY (saída) diz que o motorista já está com outra rota em andamento; DELIVERY_ON_STARTED_ROUTE, que a entrega está numa rota que já saiu. ROUTE_CODE_TAKEN (criação simultânea na mesma empresa, raro): basta reenviar. ROUTE_BRANCH_REQUIRED (liberar, ou trocar o veículo ou o motorista de uma rota liberada, com o checklist da rota exigido e sem filial ativa para registrá-lo): mostre a mensagem, que diz qual veículo ou motorista completar, ou qual filial está inativa. Nada foi gravado.",
       ),
     message: z.string(),
   }),

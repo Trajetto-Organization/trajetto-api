@@ -34,3 +34,25 @@ it("schedules the escalation every minute, quietly", () => {
     quiet: true,
   });
 });
+
+// Plan of 02/11/2026, K11 (D26): the warning about a route left open only
+// happens if a replica schedules it — same reason as the escalation above.
+it("schedules the sweep of routes left open hourly, quietly", () => {
+  const jobs: CronJobDefinition[] = [];
+
+  vi.spyOn(
+    CronSchedulerService.getInstance(),
+    "registerJob",
+  ).mockImplementation((definition: CronJobDefinition) => {
+    jobs.push(definition);
+  });
+
+  registerCronJobs();
+
+  expect(
+    jobs.find((job) => job.name === "alert-routes-left-open"),
+  ).toMatchObject({
+    schedule: "7 * * * *",
+    quiet: true,
+  });
+});

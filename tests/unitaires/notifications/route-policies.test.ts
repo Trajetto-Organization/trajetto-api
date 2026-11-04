@@ -2,10 +2,15 @@ import { describe, expect, it } from "vitest";
 
 import {
   renderRouteCancelledPush,
+  renderRouteLeftOpenInApp,
   renderRoutePlanChangedPush,
+  renderRouteRecordBranchMissingActivity,
+  renderRouteRecordBranchMissingInApp,
   renderRouteReleasedPush,
   routeCancelledPolicy,
+  routeLeftOpenPolicy,
   routePlanChangedPolicy,
+  routeRecordBranchMissingPolicy,
   routeReleasedPolicy,
 } from "@/shared/notifications/policies/route-policies";
 
@@ -179,12 +184,19 @@ describe("the shape of the two topics", () => {
   it("registers exactly these route topics and no more", () => {
     // Publishing a topic with no entry fails visibly in the pipeline, so the
     // registry is the real list. A departure and a completion are deliberately
-    // absent: the board shows them and the trail records them.
+    // absent: the board shows them and the trail records them. A route left
+    // open (K11) is the one that goes to the admins, not the driver.
     expect(
       Object.keys(notificationPolicies).filter((topic) =>
         topic.startsWith("route."),
       ),
-    ).toEqual(["route.released", "route.cancelled", "route.plan_changed"]);
+    ).toEqual([
+      "route.released",
+      "route.cancelled",
+      "route.plan_changed",
+      "route.left_open",
+      "route.record_branch_missing",
+    ]);
   });
 });
 
@@ -222,5 +234,157 @@ describe("the plan-changed push", () => {
         userRepository: userRepositoryWith({ id: DRIVER_USER } as User),
       } as never),
     ).toEqual([{ id: DRIVER_USER }]);
+  });
+});
+
+/**
+ * Plan of 02/11/2026, K11 (decision D26): a route left "Em andamento" goes
+ * to the company's admins — the people who can close it — once, in the
+ * inbox, with a link to the route page where "Encerrar com pendências" is.
+ */
+describe("route.left_open", () => {
+  const leftOpen = {
+    routeId: "018f0000-0000-7000-8000-0000000000r9",
+    businessId: "018f0000-0000-7000-8000-00000000000a",
+    code: 1,
+    routeName: null,
+    driverName: "João",
+    startedAt: "2026-10-30T17:57:00.000Z",
+    sinceLabel: "30/10 às 14:57",
+    openDays: 3,
+  };
+
+  it("is registered and goes to the company's admins, in the inbox, mandatory", async () => {
+    expect(notificationPolicies["route.left_open"]).toBe(routeLeftOpenPolicy);
+    expect(routeLeftOpenPolicy.mandatory).toBe(true);
+    expect(routeLeftOpenPolicy.renderPush).toBeUndefined();
+
+    const asked: string[] = [];
+    const admins = [{ id: "admin-1" }] as User[];
+
+    expect(
+      await routeLeftOpenPolicy.resolveRecipients(leftOpen, {
+        userRepository: {
+          findBusinessAdminsByBusinessId: async (businessId: string) => {
+            asked.push(businessId);
+            return admins;
+          },
+        },
+      } as never),
+    ).toBe(admins);
+    expect(asked).toEqual([leftOpen.businessId]);
+  });
+
+  it("says since when, with whom, what it blocks, and links to the route", () => {
+    const rendered = renderRouteLeftOpenInApp(leftOpen, {
+      baseUrl: "https://app.exemplo.com.br",
+    });
+
+    expect(rendered).toEqual({
+      type: "delivery",
+      title: "Rota esquecida em andamento",
+      message:
+        "Rota 1 está em andamento há 3 dias com João (desde 30/10 às 14:57). " +
+        "Enquanto ela não for concluída ou cancelada, o motorista e o veículo não saem em outra rota. " +
+        "Conclua, cancele ou use Encerrar com pendências.",
+      link: `https://app.exemplo.com.br/dashboard/routes/${leftOpen.routeId}`,
+      entityId: leftOpen.routeId,
+    });
+
+    expect(
+      renderRouteLeftOpenInApp(
+        { ...leftOpen, openDays: 0, driverName: null, routeName: "Zona Sul" },
+        { baseUrl: "" },
+      ).message,
+    ).toContain(
+      "Rota 1 (Zona Sul) está em andamento há mais de 16 horas (desde",
+    );
+  });
+});
+
+/**
+ * A driver's route record refused because no active branch files it (wave
+ * 3.7; the product principle: never block the driver over an admin's data
+ * gap, show it to the dispatcher). The app lets the route go on; this tells
+ * the people who run the deliveries — once per route and phase, the outbox
+ * key — what to fix and that the driver resends with "Tentar de novo".
+ */
+describe("route.record_branch_missing", () => {
+  const missing = {
+    routeId: "018f0000-0000-7000-8000-0000000000r7",
+    businessId: "018f0000-0000-7000-8000-00000000000a",
+    code: 42,
+    record: "CHECKLIST" as const,
+    phase: "ROUTE_START" as const,
+    driverName: "Rita Barros",
+    vehiclePlate: "RBR4E21",
+  };
+
+  it("is registered, mandatory, in the inbox of the delivery operators", async () => {
+    expect(notificationPolicies["route.record_branch_missing"]).toBe(
+      routeRecordBranchMissingPolicy,
+    );
+    expect(routeRecordBranchMissingPolicy.mandatory).toBe(true);
+    expect(routeRecordBranchMissingPolicy.renderWhatsApp).toBeUndefined();
+
+    const asked: string[] = [];
+    const operators = [{ id: "operator-1" }] as User[];
+
+    expect(
+      await routeRecordBranchMissingPolicy.resolveRecipients(missing, {
+        userRepository: {
+          findDeliveryOperators: async (businessId: string) => {
+            asked.push(businessId);
+            return operators;
+          },
+        },
+      } as never),
+    ).toBe(operators);
+    expect(asked).toEqual([missing.businessId]);
+  });
+
+  it("names the record, the driver, the route and the plate, says what to fix and links to the route", () => {
+    expect(
+      renderRouteRecordBranchMissingInApp(missing, {
+        baseUrl: "https://app.exemplo.com.br",
+      }),
+    ).toEqual({
+      type: "delivery",
+      title: "Checklist do motorista recusado",
+      message:
+        "Checklist de saída do motorista Rita Barros recusado: a rota 42 não tem filial ativa (veículo RBR4E21). " +
+        "Defina uma filial ativa no veículo ou no motorista; depois, o motorista reenvia em Tentar de novo. A rota segue sem o checklist.",
+      link: `https://app.exemplo.com.br/dashboard/routes/${missing.routeId}`,
+      entityId: missing.routeId,
+    });
+
+    const arrival = renderRouteRecordBranchMissingInApp(
+      { ...missing, phase: "ROUTE_END", driverName: null },
+      { baseUrl: "" },
+    );
+    expect(arrival.message).toContain(
+      "Checklist de chegada do motorista recusado: a rota 42 não tem filial ativa (veículo RBR4E21).",
+    );
+
+    const fuel = renderRouteRecordBranchMissingInApp(
+      { ...missing, record: "FUEL", phase: null },
+      { baseUrl: "" },
+    );
+    expect(fuel.title).toBe("Abastecimento do motorista recusado");
+    expect(fuel.message).toBe(
+      "Abastecimento do motorista Rita Barros recusado: a rota 42 não tem filial ativa (veículo RBR4E21). " +
+        "Defina uma filial ativa no veículo ou no motorista; depois, o motorista reenvia em Tentar de novo.",
+    );
+  });
+
+  it("leaves one entry in the route's trail, from the catalog", () => {
+    expect(renderRouteRecordBranchMissingActivity(missing)).toEqual({
+      type: "Rota",
+      action: "update",
+      entityId: missing.routeId,
+      description:
+        "Checklist de saída do motorista Rita Barros recusado: a rota 42 não tem filial ativa (veículo RBR4E21).",
+      status: "Pendente",
+    });
   });
 });

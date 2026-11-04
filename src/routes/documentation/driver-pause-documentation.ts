@@ -181,10 +181,16 @@ const driverDay = z.object({
       z.object({
         code: flagCode,
         message: z.string().describe("A explicação, em português."),
+        unreliable: z
+          .literal(true)
+          .optional()
+          .describe(
+            "A estimativa por trás do alerta não é confiável (decisão D54): vem em DRIVING_REST_SHORT quando a rota da jornada ficou esquecida aberta, porque a direção conta até agora. Ausente nos demais casos.",
+          ),
       }),
     )
     .describe(
-      "Alertas da Lei 13.103/2015 — só sinalizam, nada é bloqueado. MEAL_MISSING: jornada acima de 6 h sem pausa de refeição. MEAL_SHORT: a maior refeição teve menos de 1 h. DRIVING_REST_SHORT: mais de 6 h de direção estimada sem somar 30 min de descanso. INTERJORNADA_SHORT: menos de 11 h desde o fim da jornada anterior. PAUSE_NOT_ENDED: pausa aberta há mais de 12 h. PAUSE_TOO_LONG: pausa encerrada só depois de mais de 12 h (esquecida aberta); a duração fica fora dos cálculos.",
+      "Alertas da Lei 13.103/2015 — só sinalizam, nada é bloqueado. MEAL_MISSING: jornada acima de 6 h sem pausa de refeição. MEAL_SHORT: a maior refeição teve menos de 1 h. DRIVING_REST_SHORT: mais de 6 h de direção estimada sem somar 30 min de descanso. INTERJORNADA_SHORT: menos de 11 h desde o fim da jornada anterior. PAUSE_NOT_ENDED: pausa aberta há mais de 12 h. PAUSE_TOO_LONG: pausa encerrada só depois de mais de 12 h (esquecida aberta); a duração fica fora dos cálculos. ROUTE_LEFT_OPEN (plano de 02/11/2026, J4; decisão D26): a rota da jornada continua em andamento e começou antes de hoje no fuso da empresa ou há mais de 16 h — a mensagem diz há quantos dias e desde quando; a jornada e a direção desse dia contam até agora.",
     ),
 });
 

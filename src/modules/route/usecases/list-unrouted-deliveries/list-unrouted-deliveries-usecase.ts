@@ -5,13 +5,17 @@ import { IUserRepository } from "@/modules/user/repositories/IUser-repository";
 
 import { assertRouteDispatcher } from "../shared/assert-route-dispatcher";
 
-import type {
-  UnroutedDeliveriesPage,
-  UnroutedDeliveriesQuery,
+import {
+  decodeUnroutedCursor,
+  type UnroutedDeliveriesPage,
+  type UnroutedDeliveriesQuery,
 } from "./unrouted-deliveries";
 
-type ListUnroutedDeliveriesRequest = UnroutedDeliveriesQuery & {
+type ListUnroutedDeliveriesRequest = Omit<UnroutedDeliveriesQuery, "after"> & {
   userId: string;
+
+  /** The previous page's `nextCursor` (G9); absent on the first page. */
+  cursor?: string;
 };
 
 /**
@@ -33,11 +37,15 @@ class ListUnroutedDeliveriesUseCase {
 
   async execute({
     userId,
+    cursor,
     ...query
   }: ListUnroutedDeliveriesRequest): Promise<UnroutedDeliveriesPage> {
     await assertRouteDispatcher(this.user, userId, query.businessId);
 
-    return this.route.listUnroutedDeliveries(query);
+    return this.route.listUnroutedDeliveries({
+      ...query,
+      ...(cursor && { after: decodeUnroutedCursor(cursor) }),
+    });
   }
 }
 

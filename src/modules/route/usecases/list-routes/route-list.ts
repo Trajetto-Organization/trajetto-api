@@ -5,6 +5,7 @@ import { buildSearchOr } from "@/shared/pagination/search-or";
 import {
   routeCodeFromSearch,
   type RouteStatus,
+  type RouteStopStatus,
 } from "@/shared/route/route-rules";
 
 import type { FacetCount } from "@/shared/pagination/list-meta";
@@ -162,6 +163,11 @@ interface RouteListSearchMeta {
     driverId: FacetCount[];
     vehicleId: FacetCount[];
   };
+  /**
+   * The company's zone, for the board's hours; written by the use case
+   * (the repository's summary leaves it out).
+   */
+  timeZone?: string;
 }
 
 interface CatalogOption {
@@ -238,13 +244,41 @@ function summarizeRouteList(
   };
 }
 
+/** Every stop status, in the enum's declared order. */
+const ROUTE_STOP_STATUSES: readonly RouteStopStatus[] = [
+  "PENDING",
+  "ARRIVED",
+  "COMPLETED",
+  "FAILED",
+  "CANCELLED",
+];
+
+/**
+ * A board row's stops, counted by status (plan of 02/11/2026, K14), from the
+ * repository's groupBy(routeId, status) — or from the twin's own stops.
+ * Every status is present, zeros included, so the web never guesses a key.
+ */
+function stopCountsOf(
+  groups: ReadonlyArray<{ status: RouteStopStatus; count: number }>,
+): Record<RouteStopStatus, number> {
+  const counts = Object.fromEntries(
+    ROUTE_STOP_STATUSES.map((status) => [status, 0]),
+  ) as Record<RouteStopStatus, number>;
+
+  for (const group of groups) counts[group.status] += group.count;
+
+  return counts;
+}
+
 export {
   ROUTE_LIST_STATUSES,
+  ROUTE_STOP_STATUSES,
   ROUTE_SORT,
   ROUTE_SORT_FALLBACK,
   ROUTE_SORT_KEYS,
   catalogFacetOptions,
   routeListWhere,
+  stopCountsOf,
   summarizeRouteList,
   type CatalogOption,
   type GroupCount,

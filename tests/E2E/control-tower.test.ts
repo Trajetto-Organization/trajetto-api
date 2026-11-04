@@ -1512,6 +1512,10 @@ describe("the feed says what happened today (TWR-6/TWR-7)", () => {
         occurrenceTypeId: absent.id,
         reportedById: DRIVER_USER,
         occurred_at: earlierToday(0.9),
+        // E5: recorded outside the company's radius.
+        geofence_outcome: "OUTSIDE",
+        distance_m: 1500,
+        accuracy_m: 30,
       },
     });
 
@@ -1557,6 +1561,21 @@ describe("the feed says what happened today (TWR-6/TWR-7)", () => {
       detail: absent.name,
       failure: true,
       recipientName: "Cliente recusou",
+      // E5: the feed's "Fora do raio" flag survives the response schema.
+      geofence_outcome: "OUTSIDE",
+      distance_m: 1500,
+      accuracy_m: 30,
+    });
+
+    expect(
+      events.find(
+        (event: { type: string; routeId: string | null }) =>
+          event.type === "ROUTE_STARTED" && event.routeId === routeId,
+      ),
+    ).toMatchObject({
+      geofence_outcome: null,
+      distance_m: null,
+      accuracy_m: null,
     });
 
     const types = events.map(
@@ -1668,12 +1687,20 @@ describe("who may read the operation", () => {
     }
   });
 
-  it("refuses a driver token on the monitoring boards", async () => {
-    for (const url of ["/route/monitoring", "/route/monitoring/drivers"]) {
+  // Plan of 02/11/2026, H5 (defence in depth): the guard itself refuses the
+  // driver token (allowDriver:false), before any use case runs — the app's
+  // delivery_manage grant is for the driver's own work, never these boards.
+  it("refuses a driver token on the tower, the trail and the monitoring boards at the guard", async () => {
+    for (const url of [
+      "/route/control-tower",
+      `/route/driver-trail/${DRIVER}`,
+      "/route/monitoring",
+      "/route/monitoring/drivers",
+    ]) {
       const response = await get(url, driverToken);
 
       expect(response.statusCode, url).toBe(403);
-      expect(response.json().code, url).toBe("DRIVER_CANNOT_VIEW_PANELS");
+      expect(response.json().code, url).toBe("PERMISSION_DENIED");
     }
   });
 

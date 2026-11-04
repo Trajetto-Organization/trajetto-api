@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { OperationSummaryUseCase } from "@/modules/delivery/usecases/operation-summary/operation-summary-usecase";
+import { ControlTowerUseCase } from "@/modules/route/usecases/control-tower/control-tower-usecase";
+import { InMemoryDriverPositionRepository } from "@/modules/route/repositories/in-memory/in-memory-driver-position-repository";
 
 import { InMemoryDeliveryRepository } from "@/modules/delivery/repositories/in-memory/in-memory-delivery-repository";
 import { InMemoryOperationDayRepository } from "@/modules/route/repositories/in-memory/in-memory-operation-day-repository";
@@ -367,5 +369,113 @@ describe("who may read it", () => {
     });
 
     expect(summary.totals.deliveredToday).toBe(1);
+  });
+});
+
+/**
+ * Plan of 02/11/2026, H3 (decision D26): a route left "Em andamento" since
+ * an earlier day keeps its open stops in today's "Em rota". The summary says
+ * how many, and since when, for the note "inclui N de rotas abertas desde
+ * dd/mm" — with the tower's own rule and summary, so the Painel and the
+ * Rotas tab never disagree.
+ */
+describe("what the summary inherited from routes left open (H3)", () => {
+  /** A route IN_PROGRESS since `startedAt`, with stops in these statuses. */
+  async function runningRoute(
+    repos: Repositories,
+    startedAt: Date,
+    stopStatuses: string[],
+  ) {
+    const routeId = `route-${repos.operation.rows.routes.length + 1}`;
+
+    repos.operation.rows.routes.push({
+      id: routeId,
+      businessId: BUSINESS,
+      code: repos.operation.rows.routes.length + 1,
+      name: null,
+      destination: null,
+      status: "IN_PROGRESS",
+      scheduled_date: new Date(
+        `${startedAt.toISOString().slice(0, 10)}T00:00:00.000Z`,
+      ),
+      planned_departure_at: null,
+      started_at: startedAt,
+      completed_at: null,
+      updated_at: startedAt,
+      driverId: DRIVER_ID,
+      vehicleId: null,
+    });
+
+    for (const [index, status] of stopStatuses.entries()) {
+      const delivery = await seed(repos, {
+        status: status === "COMPLETED" ? "DELIVERED" : "IN_TRANSIT",
+      });
+
+      repos.operation.rows.stops.push({
+        id: `${routeId}-stop-${index}`,
+        routeId,
+        deliveryId: delivery.id!,
+        sequence: (index + 1) * 10,
+        status: status as never,
+        on_the_way_at: null,
+        arrived_at: null,
+        completed_at: null,
+        updated_at: startedAt,
+      });
+    }
+  }
+
+  // Left on the 25th at 08:00 in Manaus and never closed.
+  const LEFT_ON_THE_25TH = new Date("2026-09-25T12:00:00.000Z");
+
+  it("counts the open stops of the routes left open, and since when", async () => {
+    const repos = makeRepositories();
+
+    await runningRoute(repos, LEFT_ON_THE_25TH, [
+      "PENDING",
+      "ARRIVED",
+      "COMPLETED",
+    ]);
+    // This afternoon's route is today's, not inherited.
+    await runningRoute(repos, TODAY_AFTERNOON, ["PENDING"]);
+
+    const summary = await useCase(repos).execute({ userId: MANAGER_ID });
+
+    expect(summary.inherited).toEqual({
+      routes: 1,
+      deliveries: 2,
+      since: LEFT_ON_THE_25TH.toISOString(),
+    });
+  });
+
+  it("is what the tower says for the same company and instant", async () => {
+    const repos = makeRepositories();
+
+    await runningRoute(repos, LEFT_ON_THE_25TH, ["PENDING", "ARRIVED"]);
+    await runningRoute(repos, YESTERDAY_LATE, ["PENDING"]);
+
+    const summary = await useCase(repos).execute({ userId: MANAGER_ID });
+    const tower = await new ControlTowerUseCase(
+      repos.users,
+      new InMemoryDriverPositionRepository(),
+      repos.operation,
+    ).execute({ userId: MANAGER_ID, now: NOW });
+
+    expect(summary.inherited).toEqual(tower.inherited);
+    expect(summary.inherited.deliveries).toBe(3);
+  });
+
+  it("is nothing on a day without routes left open", async () => {
+    const repos = makeRepositories();
+
+    await runningRoute(repos, TODAY_AFTERNOON, ["PENDING"]);
+
+    const summary = await useCase(repos).execute({ userId: MANAGER_ID });
+
+    expect(summary.inherited).toEqual({
+      routes: 0,
+      deliveries: 0,
+      since: null,
+    });
   });
 });

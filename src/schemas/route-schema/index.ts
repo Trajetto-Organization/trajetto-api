@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { optionalMultilineText } from "@/shared/delivery/text-rules";
 import { tenantLockedShape } from "@/shared/validation/tenant-locked-field";
 
 import { listPagesSchema } from "@/schemas/list-pages-schema";
@@ -367,8 +368,23 @@ const addRouteStopsSchema = z.object({
     })
     .min(1, "Selecione ao menos uma entrega para adicionar.")
     .max(100, "Adicione no máximo 100 paradas por vez.")
-    .describe("Entregas pendentes; entram no fim da ordem atual."),
+    .describe(
+      "Entregas pendentes (ou com insucesso, com `redelivery`); entram no fim da ordem atual.",
+    ),
   expectedPlanVersion: expectedPlanVersionField,
+  redelivery: z
+    .object({
+      reasonId: z
+        .string({ required_error: "Informe o motivo da nova tentativa." })
+        .uuid("O motivo deve ter um identificador válido."),
+      // The same note a status change by hand takes.
+      note: optionalMultilineText("A anotação", 500),
+    })
+    .strict()
+    .optional()
+    .describe(
+      '"Reentregar" (K12): as entregas com INSUCESSO da lista voltam a PENDENTE com este motivo do catálogo de motivos de status (e a observação), e entram na rota na mesma transação. Sem este campo, uma entrega com insucesso é recusada (400 DELIVERY_NOT_ROUTABLE).',
+    ),
 });
 
 /** Several stops off the plan at once (decision 14.7, §4.4). */
@@ -483,6 +499,14 @@ const listUnroutedDeliveriesSchema = z.object({
     .max(100, "No máximo 100 por página.")
     .default(50)
     .describe("Itens por página (até 100)."),
+  cursor: z
+    .string()
+    .min(1, "Cursor inválido.")
+    .max(512, "Cursor inválido.")
+    .optional()
+    .describe(
+      "O `meta.nextCursor` da página anterior (plano de 02/11/2026, G9): a página seguinte começa depois da última linha vista, mesmo que colegas roteiem entregas no meio, sem repetir nem pular. Com cursor, `page` é ignorado e a resposta não traz `total` nem `facets` (valem os da primeira página).",
+    ),
   search: z
     .string()
     .max(120, "A busca deve ter no máximo 120 caracteres.")
@@ -586,7 +610,26 @@ const cancelRouteSchema = z.object({
     ),
 });
 
+/**
+ * "Encerrar com pendências" (plan of 02/11/2026, K11; decision D26): the
+ * reason is mandatory, like a cancellation's.
+ */
+const closeRouteWithPendingSchema = z.object({
+  ...tenantLockedShape,
+  reason: z
+    .string({
+      required_error: "Informe o motivo para encerrar a rota com pendências.",
+    })
+    .trim()
+    .min(3, "O motivo deve ter no mínimo 3 caracteres.")
+    .max(255, "O motivo deve ter no máximo 255 caracteres.")
+    .describe(
+      "Obrigatório: por que a rota é encerrada com paradas em aberto (ex.: o motorista esqueceu a rota aberta). Fica na rota (`closure_reason`), na linha do tempo de cada entrega devolvida e na atividade.",
+    ),
+});
+
 export {
+  closeRouteWithPendingSchema,
   deliveryIdParamSchema,
   listUnroutedDeliveriesSchema,
   moveRouteStopsSchema,

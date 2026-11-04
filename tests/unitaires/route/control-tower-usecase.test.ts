@@ -596,6 +596,75 @@ describe("the feed shows occurrences, failures and routes of the day (TWR-6/TWR-
       occurredAt: "2026-09-17T14:00:00.000Z",
     });
   });
+
+  it("carries the geofence record of an arrival and of an occurrence, for the 'Fora do raio' flag (E5)", async () => {
+    // The web's feed flags a record made outside the company's radius
+    // (lib/geofence-flag), with the delivery detail's names. A route move,
+    // or a record from before the geofence, answers null, never a missing key.
+    operation.rows.routes.push(
+      route({
+        id: "r1",
+        driverId: "d1",
+        status: "IN_PROGRESS",
+        started_at: at("2026-09-17T11:00:00.000Z"),
+      }),
+    );
+
+    operation.rows.deliveries.push(
+      delivery({ id: "far", status: "IN_TRANSIT", driverId: "d1" }),
+      delivery({ id: "refused", status: "FAILED", driverId: "d1" }),
+    );
+
+    operation.rows.events.push({
+      id: "arrival-far",
+      businessId: SP,
+      deliveryId: "far",
+      routeId: "r1",
+      occurrenceId: null,
+      type: "ARRIVAL",
+      actor: "DRIVER_APP",
+      status_to: null,
+      occurred_at: at("2026-09-17T13:00:00.000Z"),
+      created_at: at("2026-09-17T13:00:01.000Z"),
+      geofence_outcome: "OUTSIDE",
+      distance_m: 820,
+      accuracy_m: 12,
+    });
+
+    operation.rows.occurrences.push({
+      id: "o-far",
+      businessId: SP,
+      deliveryId: "refused",
+      occurrenceTypeId: "absent",
+      authorization_status: "NOT_REQUIRED",
+      occurred_at: at("2026-09-17T14:00:00.000Z"),
+      created_at: at("2026-09-17T14:00:02.000Z"),
+      geofence_outcome: "OUTSIDE",
+      distance_m: 1500,
+      accuracy_m: 30,
+    });
+
+    const { events } = await tower().execute({ userId: MANAGER.id, now: NOW });
+
+    const byType = (type: string) =>
+      events.find((event) => event.type === type);
+
+    expect(byType("OCCURRENCE")).toMatchObject({
+      geofence_outcome: "OUTSIDE",
+      distance_m: 1500,
+      accuracy_m: 30,
+    });
+    expect(byType("ARRIVAL")).toMatchObject({
+      geofence_outcome: "OUTSIDE",
+      distance_m: 820,
+      accuracy_m: 12,
+    });
+    expect(byType("ROUTE_STARTED")).toMatchObject({
+      geofence_outcome: null,
+      distance_m: null,
+      accuracy_m: null,
+    });
+  });
 });
 
 describe("who may open the tower", () => {
@@ -994,5 +1063,107 @@ describe("the monitoring board by driver reads the tower's day (decision 7.1, DL
     await expect(
       board().execute({ userId: MANAGER.id, day: "2026-02-30", now: NOW }),
     ).rejects.toMatchObject({ statusCode: 400 });
+  });
+});
+
+/**
+ * Plan of 02/11/2026, H3 (decision D26): "0 veículos em rota" beside "Rotas
+ * em andamento (1)", and the Rota 1 of 30/10 counted as today's. A running
+ * route that started before the company's today, or more than 16 h ago, is
+ * flagged (`stale`, `openSince`) wherever a route is listed, and the tower
+ * says how many of the funnel's documents it inherited from such routes.
+ */
+describe("routes left open are flagged, and the funnel says what it inherited (H3)", () => {
+  beforeEach(() => {
+    operation.rows.routes.push(
+      // Left on the 15th at 09:00 in São Paulo and never closed.
+      route({
+        id: "r-old",
+        driverId: "d1",
+        status: "IN_PROGRESS",
+        scheduled_date: day("2026-09-15"),
+        started_at: at("2026-09-15T12:00:00.000Z"),
+      }),
+      // Left this morning at 09:00 (13 h ago at 22:00): today's.
+      route({
+        id: "r-new",
+        driverId: "d2",
+        status: "IN_PROGRESS",
+        started_at: at("2026-09-17T12:00:00.000Z"),
+      }),
+    );
+
+    operation.rows.deliveries.push(
+      delivery({ id: "old-1", status: "IN_TRANSIT", driverId: "d1" }),
+      delivery({ id: "old-2", status: "IN_TRANSIT", driverId: "d1" }),
+      delivery({
+        id: "old-done",
+        status: "DELIVERED",
+        driverId: "d1",
+        delivered_at: at("2026-09-15T15:00:00.000Z"),
+      }),
+      delivery({ id: "new-1", status: "IN_TRANSIT", driverId: "d2" }),
+    );
+
+    operation.rows.stops.push(
+      stop("so1", "r-old", "old-1", "PENDING", 10),
+      stop("so2", "r-old", "old-2", "ARRIVED", 20),
+      stop("so3", "r-old", "old-done", "COMPLETED", 30),
+      stop("sn1", "r-new", "new-1", "PENDING", 10),
+    );
+  });
+
+  it("marks the forgotten route on the tower and leaves today's alone", async () => {
+    const result = await tower().execute({ userId: MANAGER.id, now: NOW });
+
+    const old = result.activeRoutes.find((entry) => entry.routeId === "r-old");
+    const fresh = result.activeRoutes.find(
+      (entry) => entry.routeId === "r-new",
+    );
+
+    expect(old).toMatchObject({
+      stale: true,
+      openSince: "2026-09-15T12:00:00.000Z",
+    });
+    expect(fresh).toMatchObject({ stale: false, openSince: null });
+  });
+
+  it("counts the funnel's documents still open on routes left open, and since when", async () => {
+    const result = await tower().execute({ userId: MANAGER.id, now: NOW });
+
+    // The two open stops of the 15th's route are in today's "Em rota";
+    // the one delivered on the 15th is not today's at all.
+    expect(result.inherited).toEqual({
+      routes: 1,
+      deliveries: 2,
+      since: "2026-09-15T12:00:00.000Z",
+    });
+  });
+
+  it("answers nothing inherited on a day with no route left open", async () => {
+    operation.rows.routes = operation.rows.routes.filter(
+      (row) => row.id !== "r-old",
+    );
+
+    const result = await tower().execute({ userId: MANAGER.id, now: NOW });
+
+    expect(result.inherited).toEqual({ routes: 0, deliveries: 0, since: null });
+  });
+
+  it("flags the same route on the monitoring board", async () => {
+    const result = await new RouteMonitoringUseCase(
+      userRepository,
+      operation,
+    ).execute({ userId: MANAGER.id, page: 1, pageSize: 20, now: NOW });
+
+    const byId = Object.fromEntries(
+      result.routes.map((entry) => [entry.id, entry]),
+    );
+
+    expect(byId["r-old"]).toMatchObject({
+      stale: true,
+      openSince: "2026-09-15T12:00:00.000Z",
+    });
+    expect(byId["r-new"]).toMatchObject({ stale: false, openSince: null });
   });
 });

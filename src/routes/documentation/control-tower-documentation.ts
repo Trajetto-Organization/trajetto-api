@@ -80,7 +80,38 @@ const towerActiveRoute = z.object({
     resolved: z.number().describe("Paradas entregues ou com insucesso."),
     total: z.number().describe("Paradas da rota, sem as canceladas."),
   }),
+
+  stale: z
+    .boolean()
+    .describe(
+      'Rota esquecida aberta (decisão D26, plano de 02/11/2026 H3): começou antes de hoje no fuso da empresa ou há mais de 16 h. O selo diz "Aberta desde dd/mm · conclua ou cancele".',
+    ),
+  openSince: isoDateTime
+    .nullable()
+    .describe(
+      "A saída de uma rota esquecida aberta (para o selo); null numa rota de hoje.",
+    ),
 });
+
+const towerInherited = z
+  .object({
+    routes: z
+      .number()
+      .describe(
+        "Rotas esquecidas abertas em andamento com ao menos uma parada ainda aberta.",
+      ),
+    deliveries: z
+      .number()
+      .describe(
+        "Paradas ainda abertas nessas rotas: documentos que o funil conta como Em rota hoje, herdados de dias anteriores.",
+      ),
+    since: isoDateTime
+      .nullable()
+      .describe("A saída mais antiga entre elas; null quando não há nenhuma."),
+  })
+  .describe(
+    'O que o funil herdou de rotas esquecidas abertas (H3), para a nota "inclui N de rotas abertas desde dd/mm".',
+  );
 
 const towerEvent = z.object({
   id: z.string(),
@@ -109,6 +140,27 @@ const towerEvent = z.object({
   failure: z
     .boolean()
     .describe("Ocorrência impeditiva aplicada ou mudança para Insucesso."),
+
+  // Plan of 02/11/2026 (E5): the geofence record, with the names the
+  // delivery detail uses, for the feed's "Fora do raio" flag.
+  geofence_outcome: z
+    .enum(["INSIDE", "OUTSIDE", "NOT_EVALUATED"])
+    .nullable()
+    .describe(
+      'Geocerca da chegada, do comprovante ou da ocorrência (Configurações da empresa): INSIDE, OUTSIDE (o selo "Fora do raio") ou NOT_EVALUATED (sem precisão, posição antiga ou endereço sem coordenada). Null numa movimentação de rota e num registro de antes da geocerca.',
+    ),
+  distance_m: z
+    .number()
+    .nullable()
+    .describe(
+      "Distância em metros entre a posição e o ponto do endereço; null quando não avaliada.",
+    ),
+  accuracy_m: z
+    .number()
+    .nullable()
+    .describe(
+      "Precisão da posição em metros, como o aparelho informou; null quando o aparelho não a mandou.",
+    ),
 
   occurredAt: isoDateTime,
 });
@@ -169,6 +221,15 @@ const monitoredRoute = z.object({
 
   progress: routeProgress,
   stops: z.array(monitoredStop),
+
+  stale: z
+    .boolean()
+    .describe(
+      "Rota em andamento esquecida aberta (decisão D26, H3): a mesma regra e a mesma data da torre.",
+    ),
+  openSince: isoDateTime
+    .nullable()
+    .describe("A saída de uma rota esquecida aberta; null nas demais."),
 });
 
 const driverDayRow = z.object({
@@ -238,6 +299,7 @@ const controlTowerResponses = {
         .describe(
           "Rotas em andamento, com ou sem posição — a que não tem ponto no mapa aparece aqui.",
         ),
+      inherited: towerInherited,
 
       funnel: z.array(
         z.object({

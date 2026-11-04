@@ -117,11 +117,10 @@ const REFUSED_WITH: Record<string, string> = {
   "GET /route/open-stops/{businessId}": "DRIVER_CANNOT_MANAGE_DELIVERIES",
   "GET /route/unrouted-deliveries/{businessId}":
     "DRIVER_CANNOT_MANAGE_DELIVERIES",
-  "GET /delivery/operation-summary": "DRIVER_CANNOT_VIEW_PANELS",
-  "GET /route/control-tower": "DRIVER_CANNOT_VIEW_PANELS",
-  "GET /route/driver-trail/{driverId}": "DRIVER_CANNOT_VIEW_PANELS",
-  "GET /route/monitoring": "DRIVER_CANNOT_VIEW_PANELS",
-  "GET /route/monitoring/drivers": "DRIVER_CANNOT_VIEW_PANELS",
+  // The tower, the trail, both monitoring boards and the operation summary
+  // refuse a driver at the guard now (plan of 02/11/2026, H5:
+  // allowDriver:false), so they answer the default PERMISSION_DENIED; the
+  // use cases' DRIVER_CANNOT_VIEW_PANELS stays behind it as a second lock.
 };
 
 interface SchemaLike {

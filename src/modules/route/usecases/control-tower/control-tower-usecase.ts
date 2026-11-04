@@ -26,7 +26,12 @@ import {
   type TowerVehicleState,
 } from "@/shared/route/control-tower-rules";
 import { operationDay } from "@/shared/route/operation-day-rules";
+import {
+  inheritedFromRunningRoutes,
+  isRouteLeftOpen,
+} from "@/shared/route/route-left-open";
 import { dateOnlyKey, resolveTimeZone } from "@/shared/time/business-day";
+import type { GeofenceOutcome } from "@/shared/delivery/geofence/geofence-rules";
 
 interface ControlTowerRequest {
   userId: string;
@@ -89,6 +94,29 @@ interface TowerActiveRoute {
   lastSignalAt: string | null;
 
   progress: { resolved: number; total: number };
+
+  /**
+   * Left open (decision D26, plan of 02/11/2026 H3): started before the
+   * company's today or more than 16 h ago. The badge reads "Aberta desde
+   * dd/mm · conclua ou cancele".
+   */
+  stale: boolean;
+
+  /** The departure of a route left open; null for one of today. */
+  openSince: string | null;
+}
+
+/**
+ * What the day's funnel inherited from routes left open (H3): their open
+ * stops are documents "Em rota" today that today's plan never had. The note
+ * reads "inclui N de rotas abertas desde dd/mm".
+ */
+interface TowerInherited {
+  routes: number;
+  deliveries: number;
+
+  /** The oldest departure among them; null when there is none. */
+  since: string | null;
 }
 
 interface TowerEvent {
@@ -108,6 +136,16 @@ interface TowerEvent {
   detail: string | null;
   failure: boolean;
 
+  /**
+   * The geofence record of an arrival, proof or occurrence (plan of
+   * 02/11/2026, E5), named as in the delivery detail: OUTSIDE is the web's
+   * "Fora do raio" flag. Null on a route move and on a record from before
+   * the geofence.
+   */
+  geofence_outcome: GeofenceOutcome | null;
+  distance_m: number | null;
+  accuracy_m: number | null;
+
   occurredAt: string;
 }
 
@@ -118,6 +156,8 @@ interface ControlTower {
 
   positions: TowerPosition[];
   activeRoutes: TowerActiveRoute[];
+
+  inherited: TowerInherited;
 
   funnel: Array<{ status: FunnelStatus; label: string; total: number }>;
   progress: { finished: number; total: number; rate: number | null };
@@ -284,8 +324,12 @@ class ControlTowerUseCase {
       lastSignal.set(signal.driverId, signal.recorded_at);
     }
 
+    const leftOpen = (route: TowerRouteWithStops) =>
+      isRouteLeftOpen(route.started_at, timeZone, now);
+
     const activeRoutes = running.map((route) => {
       const progress = routeProgress(route.stops);
+      const stale = leftOpen(route);
 
       return {
         routeId: route.id,
@@ -304,8 +348,19 @@ class ControlTowerUseCase {
           resolved: progress.delivered + progress.failed,
           total: progress.total - progress.cancelled,
         },
+
+        stale,
+        openSince: stale ? (route.started_at?.toISOString() ?? null) : null,
       } satisfies TowerActiveRoute;
     });
+
+    // The same reading the operation summary gives, and the same summary
+    // as the deliveries list's cards, so the three notes never disagree.
+    const inherited: TowerInherited = inheritedFromRunningRoutes(
+      running,
+      timeZone,
+      now,
+    );
 
     // Punctuality is about the day's plan only: tomorrow's routes are not
     // "não saíram" today, and a cancelled route has no departure to judge.
@@ -321,6 +376,7 @@ class ControlTowerUseCase {
 
       positions: placed,
       activeRoutes,
+      inherited,
 
       funnel: buildFunnel(counts),
       progress: dayProgress(counts),
@@ -344,6 +400,10 @@ class ControlTowerUseCase {
         detail: entry.detail,
         failure: entry.failure,
 
+        geofence_outcome: entry.geofence_outcome ?? null,
+        distance_m: entry.distance_m ?? null,
+        accuracy_m: entry.accuracy_m ?? null,
+
         // Listed in the order they reached us, stamped with when they
         // happened: an offline proof shows its real hour (MOB-08).
         occurredAt: entry.occurredAt.toISOString(),
@@ -359,5 +419,6 @@ export {
   type ControlTower,
   type TowerActiveRoute,
   type TowerEvent,
+  type TowerInherited,
   type TowerPosition,
 };

@@ -23,9 +23,9 @@ import type { PlanBump } from "@/modules/route/dtos/route-dto";
  * commit: an event about a write that rolled back is a lie the client cannot
  * undo.
  *
- * The operations room always; the driver only while the route is RELEASED —
- * a PLANNED route is a draft that is not theirs yet, and an IN_PROGRESS one
- * is not editable.
+ * The operations room always; the driver once the route is theirs — RELEASED,
+ * or IN_PROGRESS since a running route takes new stops at the end (K12). A
+ * PLANNED route is a draft that is not theirs yet.
  */
 async function announcePlanChange(
   users: IUserRepository,
@@ -47,7 +47,7 @@ async function announcePlanChange(
 
   sendRouteEventToBusiness(change.businessId, event);
 
-  if (change.status === "RELEASED") {
+  if (change.status === "RELEASED" || change.status === "IN_PROGRESS") {
     const driverUser = await users.findUserByDriverId(change.driverId);
 
     sendRouteEventToDriver(driverUser?.id ?? null, event);

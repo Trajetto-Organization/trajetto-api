@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import { searchMetaDoc } from "@/shared/pagination/list-meta";
+import { inheritedOpenStopsDoc } from "@/routes/documentation/inherited-open-stops-documentation";
 
 /**
  * The listing's `meta.searchMeta`, as summarizeDeliveryList builds it: the
@@ -35,6 +36,10 @@ const deliveryListSearchMetaDoc = searchMetaDoc(
       .describe(
         "O período que a página e as contagens cobrem; null sem `period` (todas as datas).",
       ),
+    inherited: inheritedOpenStopsDoc(
+      "Entregas Em rota (IN_TRANSIT) do cartão, com a busca e os demais filtros sem o de status, cuja parada ainda aberta está numa dessas rotas.",
+      'A parte do cartão Em rota (`statusCounts.IN_TRANSIT`) que está em rotas esquecidas abertas (H3, decisão D26, a regra da torre), para a nota "inclui N de rotas abertas desde dd/mm". Nunca passa do cartão.',
+    ),
   },
   ["status", "shipperId", "driverId"],
 );

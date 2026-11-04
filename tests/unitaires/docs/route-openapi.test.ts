@@ -73,7 +73,7 @@ afterAll(async () => {
 });
 
 describe("the route module's published surface", () => {
-  it("publishes exactly the twenty-two endpoints the module implements", () => {
+  it("publishes exactly the twenty-three endpoints the module implements", () => {
     // Listed rather than counted: a route added without documentation, or one
     // documented and never registered, both show up here as a diff instead of
     // a number that happens to match.
@@ -92,6 +92,11 @@ describe("the route module's published surface", () => {
       "POST /route/on-the-way/{stopId}/route/{routeId}/business/{businessId}",
 
       "PATCH /route/cancel-route/{routeId}/business/{businessId}",
+
+      // "Encerrar com pendências" (plan of 02/11/2026, K11): the route left
+      // open, closed by the dispatcher with a reason.
+      "POST /route/close-with-pending/{routeId}/business/{businessId}",
+
       "POST /route/add-stops/{routeId}/business/{businessId}",
       "DELETE /route/remove-stop/{stopId}/route/{routeId}/business/{businessId}",
       "PATCH /route/reorder-stops/{routeId}/business/{businessId}",

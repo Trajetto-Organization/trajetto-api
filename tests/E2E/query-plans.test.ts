@@ -938,4 +938,419 @@ describe("what the tower reads for the day", () => {
       ROUTES_PER_DAY * 8 * 3,
     );
   });
+
+  // Plan of 02/11/2026, K14: the routes board's default page (newest first)
+  // reads its twenty routes through route_businessId_created_at_idx instead
+  // of sorting the company's history, and counts the page's stops by status
+  // from the page's routes only — never the deliveries behind them.
+  it("pages the routes board newest first by its index and counts only the page's stops", async () => {
+    // The fixture writes every route in one statement (one created_at);
+    // spread them like a real history, so the order means something.
+    await prisma.$executeRawUnsafe(
+      `UPDATE route SET created_at = now() - (code || ' minutes')::interval
+       WHERE "businessId" IN ($1, $2)`,
+      CARRIER,
+      OTHER,
+    );
+    await prisma.$executeRawUnsafe('ANALYZE "route"');
+
+    const { RouteRepository } = await import(
+      "@/modules/route/repositories/route-repository"
+    );
+    const routes = new RouteRepository(capture as never);
+
+    const queries = await capturing(() =>
+      routes.listRoutes({ businessId: CARRIER, page: 1, pageSize: 20 }),
+    );
+
+    const page = queries.find(
+      (entry) =>
+        /FROM "public"\."route"/.test(entry.query) &&
+        /ORDER BY/.test(entry.query) &&
+        /LIMIT/.test(entry.query),
+    );
+    expect(page, queries.map((entry) => entry.query).join("\n")).toBeDefined();
+
+    const pagePlan = await explain(page!);
+
+    expect(scansSequentially(pagePlan, "route")).toBe(false);
+
+    const read = rowsTouched(pagePlan, "route");
+
+    expect(read, `leu ${read} rotas para mostrar 20`).toBeLessThan(200);
+
+    const counted = queries.find(
+      (entry) =>
+        /FROM "public"\."route_stop"/.test(entry.query) &&
+        /GROUP BY/.test(entry.query),
+    );
+    expect(counted).toBeDefined();
+
+    const countPlan = await explain(counted!);
+
+    expect(scansSequentially(countPlan, "route_stop")).toBe(false);
+
+    const stops = rowsTouched(countPlan, "route_stop");
+
+    expect(stops, `leu ${stops} paradas para contar 20 rotas`).toBeLessThan(
+      20 * STOPS_PER_ROUTE * 2,
+    );
+
+    // No delivery is read for the board at all.
+    expect(
+      queries.some((entry) => /FROM "public"\."delivery"/.test(entry.query)),
+    ).toBe(false);
+  });
+
+  // Plan of 02/11/2026, H3: the deliveries list's "Em Rota" share on routes
+  // left open runs on every listing. It must find those routes through the
+  // route index and count only THEIR open stops — never every open stop of
+  // the database grouped by route and joined afterwards.
+  it("counts the list's share on routes left open from those routes' stops only", async () => {
+    // Two of today's running routes left three days ago; the cutoff is
+    // explicit, so the test does not depend on the hour it runs at.
+    await prisma.$executeRawUnsafe(
+      `UPDATE route SET started_at = now() - interval '3 days'
+       WHERE "businessId" = $1 AND code IN (2, 4)`,
+      CARRIER,
+    );
+    await prisma.$executeRawUnsafe('ANALYZE "route"');
+
+    const { DeliveryRepository } = await import(
+      "@/modules/delivery/repositories/delivery-repository"
+    );
+    const deliveries = new DeliveryRepository(capture as never);
+
+    const leftOpenBefore = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000);
+
+    const listed: {
+      page?: Awaited<ReturnType<typeof deliveries.listDeliveries>>;
+    } = {};
+
+    const queries = await capturing(async () => {
+      listed.page = await deliveries.listDeliveries({
+        businessId: CARRIER,
+        page: 1,
+        pageSize: 10,
+        leftOpenBefore,
+      });
+    });
+
+    // Each route's twenty stops cycle over the four statuses of the
+    // fixture's deliveries: five of them are IN_TRANSIT documents.
+    expect(listed.page?.leftOpenRoutes?.map((route) => route.open)).toEqual([
+      5, 5,
+    ]);
+
+    const sentList = queries.map((entry) => entry.query).join("\n");
+
+    // The routes left open: the company's running routes by the index,
+    // never its sixty days of history.
+    const routesRead = queries.find(
+      (entry) =>
+        /FROM "public"\."route"\s/.test(entry.query) &&
+        /"started_at"/.test(entry.query),
+    );
+    expect(routesRead, sentList).toBeDefined();
+
+    const routesPlan = await explain(routesRead!);
+
+    expect(
+      scansSequentially(routesPlan, "route"),
+      JSON.stringify(routesPlan),
+    ).toBe(false);
+
+    const routes = rowsTouched(routesPlan, "route");
+
+    expect(routes, `leu ${routes} rotas para achar 2`).toBeLessThan(
+      ROUTES_PER_DAY * 2,
+    );
+
+    // Their open stops, counted from those two routes alone.
+    const stopsRead = queries.find(
+      (entry) =>
+        /FROM "public"\."route_stop"/.test(entry.query) &&
+        /GROUP BY/.test(entry.query),
+    );
+    expect(stopsRead, sentList).toBeDefined();
+
+    const stopsPlan = await explain(stopsRead!);
+
+    expect(
+      scansSequentially(stopsPlan, "route_stop"),
+      JSON.stringify(stopsPlan),
+    ).toBe(false);
+
+    const stops = rowsTouched(stopsPlan, "route_stop");
+
+    // Forty stops on the two routes left open, of the 1.600 open stops of
+    // the two companies (and 96.000 stops in all).
+    expect(stops, `leu ${stops} paradas para contar 2 rotas`).toBeLessThan(
+      STOPS_PER_ROUTE * 2 * 4,
+    );
+  });
+
+  it("tells the summary's inherited from the routes left open and their stops only", async () => {
+    // GET /delivery/operation-summary, on every call, answers what its "Em
+    // rota" inherited from routes left open (H3). It read the tower's whole
+    // day for that (listTowerRoutes: the day's routes, the week's ended ones
+    // and every stop of every running route) only to keep two of them.
+    // Measured as the summary's extra rows over the numbers it already
+    // reads: the cost of `inherited` alone.
+    await prisma.$executeRawUnsafe(
+      `UPDATE route SET started_at = now() - interval '3 days'
+       WHERE "businessId" = $1 AND code IN (2, 4)`,
+      CARRIER,
+    );
+    await prisma.$executeRawUnsafe('ANALYZE "route"');
+
+    const { OperationSummaryUseCase } = await import(
+      "@/modules/delivery/usecases/operation-summary/operation-summary-usecase"
+    );
+    const { readOperationSummary } = await import(
+      "@/modules/delivery/usecases/operation-summary/read-operation-summary"
+    );
+    const { DeliveryRepository } = await import(
+      "@/modules/delivery/repositories/delivery-repository"
+    );
+    const { inheritedFromRunningRoutes } = await import(
+      "@/shared/route/route-left-open"
+    );
+
+    const operation = await repository();
+    const delivery = new DeliveryRepository(capture as never);
+    const manager = {
+      findUserById: async () => ({
+        id: "manager",
+        role: "BUSINESS_ADMIN",
+        businessId: CARRIER,
+        driverId: null,
+      }),
+    };
+
+    const summaryCase = new OperationSummaryUseCase(
+      manager as never,
+      delivery,
+      operation,
+    );
+
+    /** Rows the route and route_stop scans of these statements touched. */
+    async function routeRowsOf(
+      queries: Array<{ query: string; params: string }>,
+    ) {
+      let total = 0;
+
+      for (const query of queries) {
+        if (!/FROM "public"\."route(_stop)?"/.test(query.query)) continue;
+
+        const plan = await explain(query);
+
+        total += rowsTouched(plan, "route") + rowsTouched(plan, "route_stop");
+      }
+
+      return total;
+    }
+
+    const day = await today();
+
+    const numbersOnly = await routeRowsOf(
+      await capturing(() =>
+        readOperationSummary({ operation, delivery }, CARRIER, day),
+      ),
+    );
+
+    const answered: {
+      summary?: Awaited<ReturnType<typeof summaryCase.execute>>;
+    } = {};
+
+    const withInherited = await routeRowsOf(
+      await capturing(async () => {
+        answered.summary = await summaryCase.execute({
+          userId: "manager",
+          businessId: CARRIER,
+        });
+      }),
+    );
+
+    // The tower's own reading, for the same company and instant: the two
+    // routes left open, their twenty open stops each.
+    const now = new Date();
+    const tower = inheritedFromRunningRoutes(
+      (await operation.listTowerRoutes(CARRIER, day, now)).filter(
+        (route) => route.status === "IN_PROGRESS",
+      ),
+      DEFAULT_BUSINESS_TIMEZONE,
+      now,
+    );
+
+    expect(tower).toMatchObject({ routes: 2, deliveries: STOPS_PER_ROUTE * 2 });
+    expect(answered.summary?.inherited).toEqual(tower);
+
+    const inheritedCost = withInherited - numbersOnly;
+
+    // Two routes and their forty stops, of the day's 40 routes, the week's
+    // ended ones and the 440 stops of the running routes.
+    expect(
+      inheritedCost,
+      `o herdado leu ${inheritedCost} linhas de rota e de parada para achar 2 rotas`,
+    ).toBeLessThan(STOPS_PER_ROUTE * 2 * 4);
+  });
+});
+
+describe("the MASTER's company list", () => {
+  // The platform's companies, each with its fleet: 3.600 carriers is the
+  // target (escala do Comprovei); 400 with 25 vehicles each (10.000 in all)
+  // is already where reading every vehicle for a page of ten stops being
+  // the cheap plan.
+  const COMPANIES = 400;
+  const VEHICLES_PER_COMPANY = 25;
+  const PAGE_SIZE = 10;
+  const PREFIX = "018fdc0c-0000-7000-8000-";
+
+  const capture = createPrismaClient({
+    log: [{ emit: "event", level: "query" }],
+  });
+
+  const sent: Array<{ query: string; params: string }> = [];
+
+  capture.$on("query", (event) => {
+    sent.push({ query: event.query, params: event.params });
+  });
+
+  beforeAll(async () => {
+    // Newest first by created_at, like the list's default order; ids are
+    // time-ordered like the product's uuid(7).
+    await prisma.$executeRawUnsafe(
+      `
+      INSERT INTO business (
+        id, corporate_reason, cep, city, uf, street, address_number, cnpj,
+        cnae, responsible_name, telephone, email, created_at, updated_at
+      )
+      SELECT
+        $1 || lpad(to_hex(n), 12, '0'),
+        'Empresa Planos ' || n,
+        '01001000', 'São Paulo', 'SP', 'Rua', '1',
+        (63000000000000 + n)::text,
+        '4930202', 'Responsável', '11999999999',
+        'empresa-planos-' || n || '@exemplo.com.br',
+        now() + (n || ' seconds')::interval,
+        now()
+      FROM generate_series(1, ${COMPANIES}) AS n
+      `,
+      PREFIX,
+    );
+
+    await prisma.$executeRawUnsafe(
+      `
+      INSERT INTO fuel_type (id, description, "businessId", created_at, updated_at)
+      SELECT gen_random_uuid()::text, 'Diesel', id, now(), now()
+      FROM business WHERE id LIKE $1 || '%'
+      `,
+      PREFIX,
+    );
+
+    // Every fifth vehicle INACTIVE: it frees its slot and is not counted.
+    // Each company's fleet written together, as the product writes it.
+    await prisma.$executeRawUnsafe(
+      `
+      INSERT INTO vehicle (
+        id, description, license_plate, brand, model, acquisition_date,
+        fleet_type, current_mileage, maintenance_interval_km,
+        maintenance_interval_months, renavam, manufacturing_year, model_year,
+        km_per_liter, number_of_axles, status, "businessId", "fuelTypeId",
+        created_at, updated_at
+      )
+      SELECT
+        gen_random_uuid()::text, 'Caminhão', 'PLN' || k, 'Volvo', 'FH',
+        now(), 'OWNED'::"FleetType", 1000, 10000, 6, 'R' || k,
+        now(), now(), 3, 3,
+        CASE WHEN k % 5 = 0 THEN 'INACTIVE' ELSE 'ACTIVE' END::"VehicleStatus",
+        f."businessId", f.id, now(), now()
+      FROM fuel_type f
+      CROSS JOIN generate_series(1, ${VEHICLES_PER_COMPANY}) AS k
+      WHERE f."businessId" LIKE $1 || '%'
+      ORDER BY f."businessId", k
+      `,
+      PREFIX,
+    );
+
+    await prisma.$executeRawUnsafe('ANALYZE "business"');
+    await prisma.$executeRawUnsafe('ANALYZE "vehicle"');
+  }, 300_000);
+
+  afterAll(async () => {
+    await prisma.vehicle.deleteMany({
+      where: { businessId: { startsWith: PREFIX } },
+    });
+    await prisma.fuelType.deleteMany({
+      where: { businessId: { startsWith: PREFIX } },
+    });
+    await prisma.business.deleteMany({
+      where: { id: { startsWith: PREFIX } },
+    });
+
+    await capture.$disconnect();
+  }, 120_000);
+
+  it("counts the page's fleets from the page's vehicles, not the platform's", async () => {
+    const { BusinessRepository } = await import(
+      "@/modules/business/repositories/business-repository"
+    );
+    const businesses = new BusinessRepository(capture as never);
+
+    sent.length = 0;
+
+    const listed = await businesses.listBusiness({
+      page: 1,
+      pageSize: PAGE_SIZE,
+      businessId: CARRIER,
+      currentUserRole: "MASTER",
+    });
+
+    const queries = [...sent];
+
+    // The newest ten companies, each with 20 vehicles that hold a slot.
+    expect(listed.data).toHaveLength(PAGE_SIZE);
+    expect(
+      listed.data.map((business) => (business as { id: string }).id),
+    ).toEqual(
+      Array.from(
+        { length: PAGE_SIZE },
+        (_, index) =>
+          `${PREFIX}${(COMPANIES - index).toString(16).padStart(12, "0")}`,
+      ),
+    );
+    expect(
+      listed.data.map(
+        (business) => (business as { vehicle_count: number }).vehicle_count,
+      ),
+    ).toEqual(Array(PAGE_SIZE).fill((VEHICLES_PER_COMPANY * 4) / 5));
+
+    const sentList = queries.map((entry) => entry.query).join("\n");
+
+    const vehiclesRead = queries.filter((entry) =>
+      /FROM "public"\."vehicle"/.test(entry.query),
+    );
+
+    expect(vehiclesRead.length, sentList).toBeGreaterThan(0);
+
+    for (const read of vehiclesRead) {
+      const plan = await planOf(
+        read.query,
+        JSON.parse(read.params) as unknown[],
+      );
+
+      expect(scansSequentially(plan, "vehicle"), JSON.stringify(plan)).toBe(
+        false,
+      );
+
+      const vehicles = rowsTouched(plan, "vehicle");
+
+      // Ten companies' 250 vehicles, of the platform's 10.000.
+      expect(
+        vehicles,
+        `leu ${vehicles} veículos para contar a frota de ${PAGE_SIZE} empresas`,
+      ).toBeLessThan(PAGE_SIZE * VEHICLES_PER_COMPANY * 2);
+    }
+  });
 });

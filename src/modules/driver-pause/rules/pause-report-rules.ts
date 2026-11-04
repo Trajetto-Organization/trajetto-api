@@ -4,6 +4,11 @@ import {
   dateOnlyFromKey,
   shiftDateKey,
 } from "@/shared/time/business-day";
+import {
+  ROUTE_LEFT_OPEN_HOURS,
+  isRouteLeftOpen,
+  leftOpenDays,
+} from "@/shared/route/route-left-open";
 
 import type {
   DriverPauseKind,
@@ -31,7 +36,10 @@ import type {
  *   pause start to the last route end or pause end. Time the driver works
  *   outside a route (loading at the depot before leaving) is invisible to
  *   the system and not counted. A route forgotten in progress keeps counting
- *   until it is completed, and absorbs the pauses taken meanwhile.
+ *   until it is completed, and absorbs the pauses taken meanwhile — which
+ *   is why such a route (decision D26: started before the company's today
+ *   or more than 16 h ago) gets an alert of its own, ROUTE_LEFT_OPEN, and
+ *   the driving alert of that workday is marked unreliable (D54).
  *
  * - DRIVING. Approximated as the time routes were in progress minus the
  *   pauses. It includes the minutes stopped at each customer, so it
@@ -95,6 +103,8 @@ const PAUSE_FLAG_CODES = [
   "INTERJORNADA_SHORT",
   "PAUSE_NOT_ENDED",
   "PAUSE_TOO_LONG",
+  // Plan of 02/11/2026, J4 (D26): a route forgotten "Em andamento".
+  "ROUTE_LEFT_OPEN",
 ] as const;
 
 type PauseFlagCode = (typeof PAUSE_FLAG_CODES)[number];
@@ -102,6 +112,13 @@ type PauseFlagCode = (typeof PAUSE_FLAG_CODES)[number];
 interface PauseFlag {
   code: PauseFlagCode;
   message: string;
+
+  /**
+   * The estimate behind the alert cannot be trusted (D54): set on
+   * DRIVING_REST_SHORT when the workday's route was left open, whose
+   * "driving" runs until now. Absent otherwise.
+   */
+  unreliable?: true;
 }
 
 /**
@@ -415,6 +432,9 @@ function flagFor(
     previousEnd?: Date;
     notEndedStart?: Date;
     tooLong?: { start: Date; end: Date; minutes: number };
+    /** The departure of the workday's route left open (J4). */
+    leftOpenSince?: Date;
+    leftOpenDays?: number;
     timeZone: string;
   },
 ): PauseFlag {
@@ -433,11 +453,18 @@ function flagFor(
         code,
         message: `A maior pausa de refeição durou ${formatMinutes(facts.longestMealMinutes ?? 0)}. O intervalo para refeição é de no mínimo 1 hora (CLT, art. 71 e art. 235-C, § 2º).`,
       };
-    case "DRIVING_REST_SHORT":
-      return {
-        code,
-        message: `${formatMinutes(facts.longestDrivingMinutes ?? 0)} de direção estimada sem somar 30 min de descanso. A lei pede 30 min de descanso a cada 6 horas de direção (CTB, art. 67-C, § 1º). A direção é estimada pelo tempo de rota em andamento menos as pausas.`,
-      };
+    case "DRIVING_REST_SHORT": {
+      const message = `${formatMinutes(facts.longestDrivingMinutes ?? 0)} de direção estimada sem somar 30 min de descanso. A lei pede 30 min de descanso a cada 6 horas de direção (CTB, art. 67-C, § 1º). A direção é estimada pelo tempo de rota em andamento menos as pausas.`;
+
+      // D54: still shown, with the note, never trusted.
+      return facts.leftOpenSince
+        ? {
+            code,
+            message: `${message} Estimativa não confiável: rota aberta desde ${wallParts(facts.leftOpenSince, facts.timeZone).date}.`,
+            unreliable: true,
+          }
+        : { code, message };
+    }
     case "INTERJORNADA_SHORT":
       return {
         code,
@@ -466,6 +493,21 @@ function flagFor(
             )}. Mais de 12 horas indica que ela ficou aberta por esquecimento no aplicativo; a duração dela fica fora dos cálculos.`
           : "Uma pausa foi encerrada depois de mais de 12 horas; a duração dela fica fora dos cálculos.",
       };
+    case "ROUTE_LEFT_OPEN": {
+      const days = facts.leftOpenDays ?? 0;
+      const since = facts.leftOpenSince
+        ? wallLabel(facts.leftOpenSince, facts.timeZone)
+        : "—";
+      const howLong =
+        days === 0
+          ? `há mais de ${ROUTE_LEFT_OPEN_HOURS} horas`
+          : `há ${days} ${days === 1 ? "dia" : "dias"}`;
+
+      return {
+        code,
+        message: `Rota aberta ${howLong} (desde ${since}) e ainda em andamento: a jornada e a direção deste dia contam até agora e não são confiáveis. Conclua ou cancele a rota.`,
+      };
+    }
   }
 }
 
@@ -786,7 +828,17 @@ function buildPauseReport({
 
     const workdayMs = end - start;
     const flags: PauseFlag[] = [];
-    const facts = { timeZone };
+
+    // A running route of this workday left open (J4, D26): its "now" end
+    // is not a real end, and every estimate built on it says so.
+    const leftOpen = workday.routes.find(
+      (item) =>
+        item.running && isRouteLeftOpen(item.route.started_at, timeZone, now),
+    );
+    const facts = {
+      timeZone,
+      ...(leftOpen && { leftOpenSince: leftOpen.route.started_at }),
+    };
 
     // A day still going on has not missed its meal yet.
     if (
@@ -852,6 +904,15 @@ function buildPauseReport({
     const closedLate = workday.pauses.find(
       (pause) => pause.status === "TOO_LONG",
     );
+
+    if (leftOpen) {
+      flags.push(
+        flagFor("ROUTE_LEFT_OPEN", {
+          ...facts,
+          leftOpenDays: leftOpenDays(leftOpen.route.started_at, timeZone, now),
+        }),
+      );
+    }
 
     if (closedLate && closedLate.pause.ended_at) {
       flags.push(

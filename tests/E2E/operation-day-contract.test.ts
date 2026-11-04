@@ -770,6 +770,59 @@ describe("the routes the tower reasons about", () => {
   });
 });
 
+describe("the routes left open (H3)", () => {
+  // What GET /delivery/operation-summary inherited from routes left open,
+  // read without the tower's whole day: the running routes that left
+  // before the instant, and their open stops (PENDING or ARRIVED).
+  const byDeparture = (
+    rows: Array<{ started_at: Date | null; open: number }>,
+  ) =>
+    [...rows].sort(
+      (a, b) => (a.started_at?.getTime() ?? 0) - (b.started_at?.getTime() ?? 0),
+    );
+
+  it.each(both())(
+    "%s counts the open stops of the running routes that left before the instant",
+    async (_name, repository) => {
+      // São Paulo's midnight of the 17th: only yesterday's route 102.
+      expect(
+        await repository.listRoutesLeftOpen(
+          CARRIER,
+          at("2026-09-17T03:00:00.000Z"),
+        ),
+      ).toEqual([{ started_at: at("2026-09-16T20:00:00.000Z"), open: 1 }]);
+
+      // Later in the day, today's route 101 too (its one PENDING stop).
+      expect(
+        byDeparture(
+          await repository.listRoutesLeftOpen(
+            CARRIER,
+            at("2026-09-17T13:00:00.000Z"),
+          ),
+        ),
+      ).toEqual([
+        { started_at: at("2026-09-16T20:00:00.000Z"), open: 1 },
+        { started_at: at("2026-09-17T12:05:00.000Z"), open: 1 },
+      ]);
+
+      expect(
+        await repository.listRoutesLeftOpen(
+          CARRIER,
+          at("2026-09-16T00:00:00.000Z"),
+        ),
+      ).toEqual([]);
+
+      // Another company's running route is never read.
+      expect(
+        await repository.listRoutesLeftOpen(
+          OTHER,
+          at("2026-09-18T00:00:00.000Z"),
+        ),
+      ).toEqual([]);
+    },
+  );
+});
+
 describe("the feed of the day", () => {
   it.each(both())(
     "%s lists occurrences and route moves next to the delivery events",

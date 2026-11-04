@@ -15,6 +15,7 @@ import {
   type RouteProgress,
 } from "@/shared/route/control-tower-rules";
 import { operationDay } from "@/shared/route/operation-day-rules";
+import { isRouteLeftOpen } from "@/shared/route/route-left-open";
 import { dateOnlyKey, resolveTimeZone } from "@/shared/time/business-day";
 
 interface RouteMonitoringRequest {
@@ -64,6 +65,13 @@ interface MonitoredRoute {
 
   progress: RouteProgress;
   stops: MonitoredStop[];
+
+  /**
+   * A running route left open (decision D26, H3): the same flag and date
+   * the tower shows, so both boards say "Aberta desde dd/mm".
+   */
+  stale: boolean;
+  openSince: string | null;
 }
 
 interface RouteMonitoring {
@@ -131,36 +139,45 @@ class RouteMonitoringUseCase {
       day: window.date,
       timeZone,
       meta: { total, page, pageSize },
-      routes: routes.map((route) => ({
-        id: route.id,
-        code: route.code,
-        name: route.name,
-        destination: route.destination,
-        status: route.status,
+      routes: routes.map((route) => {
+        const stale =
+          route.status === "IN_PROGRESS" &&
+          isRouteLeftOpen(route.started_at, timeZone, now);
 
-        scheduledDate: dateOnlyKey(route.scheduled_date),
+        return {
+          id: route.id,
+          code: route.code,
+          name: route.name,
+          destination: route.destination,
+          status: route.status,
 
-        plannedDepartureAt: iso(route.planned_departure_at),
-        startedAt: iso(route.started_at),
-        completedAt: iso(route.completed_at),
+          scheduledDate: dateOnlyKey(route.scheduled_date),
 
-        driver: { id: route.driverId, name: route.driverName },
-        vehiclePlate: route.vehiclePlate,
+          plannedDepartureAt: iso(route.planned_departure_at),
+          startedAt: iso(route.started_at),
+          completedAt: iso(route.completed_at),
 
-        progress: routeProgress(route.stops),
+          driver: { id: route.driverId, name: route.driverName },
+          vehiclePlate: route.vehiclePlate,
 
-        stops: route.stops.map((stop) => ({
-          id: stop.id,
-          sequence: stop.sequence,
-          status: stop.status,
-          deliveryId: stop.deliveryId,
-          recipientName: stop.recipientName,
-          city: stop.city,
-          onTheWayAt: iso(stop.on_the_way_at),
-          arrivedAt: iso(stop.arrived_at),
-          completedAt: iso(stop.completed_at),
-        })),
-      })),
+          progress: routeProgress(route.stops),
+
+          stops: route.stops.map((stop) => ({
+            id: stop.id,
+            sequence: stop.sequence,
+            status: stop.status,
+            deliveryId: stop.deliveryId,
+            recipientName: stop.recipientName,
+            city: stop.city,
+            onTheWayAt: iso(stop.on_the_way_at),
+            arrivedAt: iso(stop.arrived_at),
+            completedAt: iso(stop.completed_at),
+          })),
+
+          stale,
+          openSince: stale ? iso(route.started_at) : null,
+        };
+      }),
     };
   }
 }

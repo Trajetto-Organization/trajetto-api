@@ -16,6 +16,8 @@ import { reconcileRecordAnalysisJob } from "./reconcile-record-analysis-job";
 import { closeAbandonedImportsJob } from "./close-abandoned-imports-job";
 import { escalateOccurrenceAuthorizationsJob } from "./escalate-occurrence-authorizations-job";
 import { repairUnticketedMessagesJob } from "./repair-unticketed-messages-job";
+import { geocodeDeliveriesJob } from "./geocode-deliveries-job";
+import { alertRoutesLeftOpenJob } from "./alert-routes-left-open-job";
 
 /**
  * It records all the application's cron jobs.
@@ -74,6 +76,14 @@ function registerCronJobs(): void {
   // Every minute, during the ticket rollout: messages the previous image
   // wrote without a ticket are filed (decision 14.5, design §9.3).
   scheduler.registerJob(repairUnticketedMessagesJob);
+
+  // Every minute: the address points of new deliveries, within the day's
+  // provider budget (plan of 02/11/2026, E1).
+  scheduler.registerJob(geocodeDeliveriesJob);
+
+  // Hourly (:07): a route left "Em andamento" since an earlier day or for
+  // more than 16 h goes to the admins, once (plan of 02/11/2026, K11, D26).
+  scheduler.registerJob(alertRoutesLeftOpenJob);
 }
 
 export { registerCronJobs };

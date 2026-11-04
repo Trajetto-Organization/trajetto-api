@@ -56,6 +56,9 @@ import { InMemoryDeliveryRepository } from "@/modules/delivery/repositories/in-m
 import { InMemoryDriverRepository } from "@/modules/driver/repositories/in-memory/in-memory-driver-repository";
 import { InMemoryVehicleRepository } from "@/modules/vehicle/repositories/in-memory/in-memory-vehicle-repository";
 import { InMemoryUserRepository } from "@/modules/user/repositories/in-memory/in-memory-user-repository";
+import { InMemoryBusinessRepository } from "@/modules/business/repositories/in-memory/in-memory-business-repository";
+import { InMemoryVehicleChecklistRepository } from "@/modules/vehicle-checklist/repositories/in-memory/in-memory-vehicle-checklist-repository";
+import { InMemoryFuelRepository } from "@/modules/fuel/repositories/in-memory/in-memory-fuel-repository";
 
 import { InMemoryWebhookFanOutService } from "@/shared/integration/in-memory/in-memory-webhook-fan-out-service";
 
@@ -212,7 +215,14 @@ function makeContext() {
       userRepository,
     ),
     openStops: new ListOpenStopsUseCase(routeRepository, userRepository),
-    get: new GetRouteUseCase(routeRepository, userRepository, positions),
+    get: new GetRouteUseCase(
+      routeRepository,
+      userRepository,
+      positions,
+      new InMemoryBusinessRepository(),
+      new InMemoryVehicleChecklistRepository(),
+      new InMemoryFuelRepository(),
+    ),
     trail: new DriverTrailUseCase(
       userRepository,
       positions,
@@ -754,7 +764,7 @@ describe("the picker's shipper filter (§5.5, review r1)", () => {
       id: OTHER_SHIPPER,
       name: "Atacado Dois",
     });
-    expect(page.facets.shipper).toEqual([
+    expect(page.facets!.shipper).toEqual([
       { value: OTHER_SHIPPER, count: 1, label: "Atacado Dois" },
       { value: SHIPPER, count: 2, label: "Embarcador" },
     ]);
@@ -765,7 +775,7 @@ describe("the picker's shipper filter (§5.5, review r1)", () => {
       pageSize: 50,
     });
 
-    expect(fromB.facets.shipper).toEqual([]);
+    expect(fromB.facets!.shipper).toEqual([]);
   });
 });
 
@@ -939,7 +949,7 @@ describe("the picker of deliveries without a route (D3)", () => {
     expect(page.total).toBe(1);
 
     // The city facet ignores its own filter: Santos stays an option.
-    expect(page.facets.city).toEqual([
+    expect(page.facets!.city).toEqual([
       { value: "Campinas", count: 1 },
       { value: "Santos", count: 1 },
     ]);

@@ -1105,6 +1105,83 @@ describe("who files a request, and when its attempt is over (review r1)", () => 
     ).toBe(false);
   });
 
+  it("after Reentregar, the new stop's card does not show the previous attempt's answer", async () => {
+    // Red before: the card read the driver's newest request for the
+    // delivery, whatever attempt it belonged to, so the new stop of a
+    // redelivery showed "Autorizado…" from the APPROVED report that left
+    // it FAILED. Only a request made for the open stop counts now.
+    const context = makeContext();
+    const deliveryId = await seedDelivery(context);
+    const typeId = await seedTowerType(context);
+
+    const previous = await context.report.execute({
+      userId: DRIVER_USER,
+      businessId: BUSINESS,
+      deliveryId,
+      occurrenceTypeId: typeId,
+      form_answers: ANSWERS,
+      form_version: 1,
+    });
+
+    await context.decide.execute({
+      userId: OPERATOR,
+      businessId: BUSINESS,
+      occurrenceId: previous.id,
+      decision: "APPROVED",
+    });
+
+    expect(context.deliveries.deliveries[0].status).toBe("FAILED");
+
+    // The previous attempt was an hour ago; "Reentregar" put the delivery
+    // back on the street with a new open stop half an hour ago.
+    context.deliveries.occurrences.find(
+      (occurrence) => occurrence.id === previous.id,
+    )!.created_at = new Date(Date.now() - 60 * 60_000);
+
+    context.deliveries.deliveries[0].status = "IN_TRANSIT";
+    context.deliveries.routeStops.push({
+      routeId: "018f5000-0000-7000-8000-0000000000e2",
+      deliveryId,
+      status: "PENDING",
+      routeStatus: "IN_PROGRESS",
+      created_at: new Date(Date.now() - 30 * 60_000),
+    });
+
+    const cardOf = async () =>
+      (
+        (await context.deliveries.listDriverDeliveries(
+          BUSINESS,
+          DRIVER_ID,
+        )) as Array<{
+          id: string;
+          authorization_request: {
+            occurrenceId: string;
+            status: string;
+          } | null;
+        }>
+      ).find((card) => card.id === deliveryId);
+
+    const card = await cardOf();
+
+    expect(card).toBeDefined();
+    expect(card?.authorization_request).toBeNull();
+
+    // What the driver asks on this attempt is shown.
+    const current = await context.report.execute({
+      userId: DRIVER_USER,
+      businessId: BUSINESS,
+      deliveryId,
+      occurrenceTypeId: typeId,
+      form_answers: ANSWERS,
+      form_version: 1,
+    });
+
+    expect((await cardOf())?.authorization_request).toMatchObject({
+      occurrenceId: current.id,
+      status: "PENDING",
+    });
+  });
+
   it("the driver's card shows only their own request, not the one of who held it before", async () => {
     const context = makeContext();
     const deliveryId = await seedDelivery(context);
