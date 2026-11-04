@@ -179,6 +179,9 @@ const NOT_A_REFERENCE = new Set([
   "clientSubmissionId",
   "end_submission_id",
   "device_id",
+  // The phone a driver's session is bound to (plan of 02/11/2026, D4/D7):
+  // the same fingerprint as `device_id`, never a row of any company.
+  "deviceId",
   "fleet_id",
   "trafficViolationCodeId",
   "quoteId",
@@ -300,6 +303,9 @@ const FIXED_PATH_VALUES: Record<string, string> = {
   recordType: "fuel",
   // Quotes are the platform's own leads, not a tenant's rows.
   quoteId: randomUUID(),
+  // A phone (D7), not a row: the driver's login in the same path is the
+  // slot that names the tenant.
+  deviceId: "5ee0e0c0ffee0001",
 };
 
 /** Not session-authenticated, or tokenised by a link — out of this sweep. */

@@ -27,6 +27,7 @@ import { resolveTimeZone } from "@/shared/time/business-day";
 
 import database from "@/../infra/database";
 import { emailLogoUrl } from "@/shared/providers/mail-provider/email-logo";
+import { withMailbox } from "@/modules/user/services/user-mailbox";
 
 const log = logger.child({ component: "business" });
 
@@ -174,7 +175,7 @@ class DeleteBusinessUseCase {
   private async notifyOtherMasters(params: {
     deleterId: string;
     deleterName: string;
-    deleterEmail: string;
+    deleterEmail: string | null;
     deleterRole: string;
     businessName: string;
     businessCnpj: string;
@@ -182,7 +183,9 @@ class DeleteBusinessUseCase {
   }): Promise<void> {
     const masters = await this.user.findOtherMasters(params.deleterId);
 
-    const recipients = masters.filter((m) => m.email_notifications_enabled);
+    const recipients = withMailbox(
+      masters.filter((m) => m.email_notifications_enabled),
+    );
     if (recipients.length === 0) return;
 
     // Masters have no company of their own: the moment is told on the

@@ -134,6 +134,7 @@ describe("the channels an event left out, and why", () => {
     emailNotificationsEnabled: true,
     whatsappNotificationsEnabled: true,
     hasWhatsAppPhone: true,
+    hasEmail: true,
   };
 
   const content = {
@@ -168,6 +169,23 @@ describe("the channels an event left out, and why", () => {
       suppressedChannels({ ...everything, hasWhatsAppPhone: false }, content),
     ).toEqual([
       { channel: NotificationChannel.WHATSAPP, reason: "no_contact" },
+    ]);
+  });
+
+  // Decision D02 (plan of 02/11/2026): a driver's login may have no e-mail.
+  // That is a missing contact, not something the driver chose.
+  it("tells a missing e-mail apart from an e-mail preference", () => {
+    expect(
+      suppressedChannels({ ...everything, hasEmail: false }, content),
+    ).toEqual([{ channel: NotificationChannel.EMAIL, reason: "no_contact" }]);
+
+    expect(
+      suppressedChannels(
+        { ...everything, hasEmail: false, emailNotificationsEnabled: false },
+        content,
+      ),
+    ).toEqual([
+      { channel: NotificationChannel.EMAIL, reason: "preference_off" },
     ]);
   });
 

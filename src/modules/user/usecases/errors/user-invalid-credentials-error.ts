@@ -11,7 +11,11 @@ import { AppError } from "@/shared/errors/AppError";
 type InvalidCredentialsReason =
   | "unknown_email"
   | "wrong_password"
-  | "account_locked";
+  | "account_locked"
+  // The driver's login by CPF (plan of 02/11/2026, D8): no driver has the
+  // CPF, or the company picked is not one where the password matched.
+  | "unknown_cpf"
+  | "company_not_matched";
 
 class UserInvalidCredentialsError extends AppError {
   readonly reason?: InvalidCredentialsReason;

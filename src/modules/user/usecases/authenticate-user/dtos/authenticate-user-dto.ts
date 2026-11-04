@@ -7,6 +7,26 @@ interface AuthenticateUserProps {
   emailVerificationMessage?: string;
   emailVerification?: boolean;
   role?: string;
+
+  /**
+   * The CPF login's company picker (D8): the CPF and password matched in
+   * more than one company, so no session was opened. Only the companies
+   * where the password matched, by id and name, nothing else.
+   */
+  businessSelection?: { id: string; name: string }[];
+}
+
+/** POST /user/session with the driver's CPF (plan of 02/11/2026, D8). */
+interface CpfLoginProps {
+  /** The 11 digits, already normalized and checked by the schema. */
+  cpf: string;
+  password: string;
+
+  /** The company picked after a previous answer listed several. */
+  businessId?: string;
+
+  /** The phone, which the session is then bound to (D4). */
+  deviceId?: string | null;
 }
 
 // The code, its hash and the verification token are made inside each flow,
@@ -25,4 +45,9 @@ interface EmailVerificationProps {
   name: string;
 }
 
-export { AuthenticateUserProps, TwoFactorProps, EmailVerificationProps };
+export {
+  AuthenticateUserProps,
+  CpfLoginProps,
+  TwoFactorProps,
+  EmailVerificationProps,
+};

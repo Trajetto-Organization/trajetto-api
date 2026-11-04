@@ -17,6 +17,9 @@ interface SessionTokenPair {
   familyId: string;
   expiresAt: Date;
   refreshTokenHash: string;
+
+  /** The phone a `driver_device` session is bound to; null otherwise. */
+  deviceId: string | null;
 }
 
 /**
@@ -25,6 +28,9 @@ interface SessionTokenPair {
  * shorter policy is the default, never the longer one.
  */
 type SessionClient = keyof typeof auth.refresh_policies;
+
+/** What a client may ask for by header: never the phone-bound policy. */
+type HeaderSessionClient = Exclude<SessionClient, "driver_device">;
 
 interface SessionJwtPayload {
   sub: string;
@@ -45,6 +51,13 @@ interface SessionJwtPayload {
 
   /** Refresh tokens only: when the family was born (epoch seconds). */
   familyStartedAt?: number;
+
+  /**
+   * Refresh tokens of a `driver_device` session only: the SHA-256 of the
+   * phone's id (D4). Signed, so a copy of the token works on that phone
+   * alone; hashed, so the token never carries the id itself.
+   */
+  deviceHash?: string;
 }
 
 interface SessionPolicy {
@@ -52,11 +65,54 @@ interface SessionPolicy {
 
   /** Epoch seconds. Defaults to now: a new family. */
   familyStartedAt?: number;
+
+  /** The phone a `driver_device` session is bound to (required for it). */
+  deviceId?: string | null;
 }
 
 /** The value of the `x-trajetto-client` header, as a policy. */
-function parseSessionClient(header: unknown): SessionClient {
+function parseSessionClient(header: unknown): HeaderSessionClient {
   return header === "mobile" ? "mobile" : "web";
+}
+
+/**
+ * The policy a refresh token's signed claim names. Unlike the header, the
+ * claim may name the phone-bound policy: only the server signs it.
+ */
+function sessionClientOfClaims(claim: unknown): SessionClient {
+  return claim === "driver_device"
+    ? "driver_device"
+    : parseSessionClient(claim);
+}
+
+/** One spelling per phone: the app's Android ID is hex in either case. */
+function normalizeSessionDeviceId(deviceId: string): string {
+  return deviceId.trim().toLowerCase();
+}
+
+function hashDeviceId(deviceId: string): string {
+  return crypto
+    .createHash("sha256")
+    .update(normalizeSessionDeviceId(deviceId))
+    .digest("hex");
+}
+
+/** Whether `deviceId` is the phone whose hash a refresh token carries. */
+function isSessionDevice(
+  deviceHash: string,
+  deviceId: string | null | undefined,
+): boolean {
+  if (typeof deviceId !== "string" || deviceId.trim().length === 0) {
+    return false;
+  }
+
+  const expected = Buffer.from(deviceHash, "utf8");
+  const presented = Buffer.from(hashDeviceId(deviceId), "utf8");
+
+  return (
+    expected.length === presented.length &&
+    crypto.timingSafeEqual(expected, presented)
+  );
 }
 
 function hashRefreshToken(token: string): string {
@@ -66,8 +122,19 @@ function hashRefreshToken(token: string): string {
 function issueSessionTokenPair(
   user: User,
   familyId = uuidV7(),
-  { client = "web", familyStartedAt }: SessionPolicy = {},
+  { client = "web", familyStartedAt, deviceId }: SessionPolicy = {},
 ): SessionTokenPair {
+  // The long policy exists only in exchange for the binding: a phone session
+  // without a phone would be a 180-day token that works anywhere.
+  const boundDevice =
+    client === "driver_device" && typeof deviceId === "string"
+      ? normalizeSessionDeviceId(deviceId)
+      : null;
+
+  if (client === "driver_device" && !boundDevice) {
+    throw new Error("a driver_device session needs the phone's id");
+  }
+
   const sessionVersion = user.session_version ?? 0;
 
   const nowSeconds = Math.floor(Date.now() / 1000);
@@ -112,6 +179,7 @@ function issueSessionTokenPair(
       familyId,
       sessionClient: client,
       familyStartedAt: bornAt,
+      ...(boundDevice && { deviceHash: hashDeviceId(boundDevice) }),
       // `iat` from the same clock read as `exp`: left to jsonwebtoken, it
       // read the clock again inside `sign`, and a login at x.999 s issued a
       // token that idled a second short of its policy.
@@ -135,6 +203,7 @@ function issueSessionTokenPair(
     // gap met a row that disagreed with it.
     expiresAt: new Date(refreshExpiresAt * 1000),
     refreshTokenHash: hashRefreshToken(refresh_token),
+    deviceId: boundDevice,
   };
 }
 
@@ -142,8 +211,9 @@ async function createUserSession(
   user: User,
   usersTokens: IUsersTokensRepository,
   client: SessionClient = "web",
+  deviceId: string | null = null,
 ): Promise<Pick<SessionTokenPair, "token" | "refresh_token">> {
-  const pair = issueSessionTokenPair(user, undefined, { client });
+  const pair = issueSessionTokenPair(user, undefined, { client, deviceId });
 
   try {
     await usersTokens.createUserRefreshToken({
@@ -152,6 +222,7 @@ async function createUserSession(
       token_hash: pair.refreshTokenHash,
       jti: pair.refreshJti,
       family_id: pair.familyId,
+      device_id: pair.deviceId,
     });
   } catch {
     throw new AppError(
@@ -165,10 +236,13 @@ async function createUserSession(
 }
 
 export {
+  HeaderSessionClient,
   SessionClient,
   SessionJwtPayload,
   createUserSession,
   hashRefreshToken,
+  isSessionDevice,
   issueSessionTokenPair,
   parseSessionClient,
+  sessionClientOfClaims,
 };

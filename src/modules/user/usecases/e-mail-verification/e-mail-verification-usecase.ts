@@ -12,6 +12,7 @@ import { UserMissingTokenError } from "../errors/user-missing-token-error";
 import { NotificationService } from "@/shared/services/notification-service";
 
 import { AppError } from "@/shared/errors/AppError";
+import { requireMailbox } from "../../services/user-mailbox";
 
 @injectable()
 class EmailVerificationUseCase {
@@ -71,7 +72,8 @@ class EmailVerificationUseCase {
       await this.user.updateEmailVerification({
         userId: user.id,
         email_verified: new Date(),
-        email: user.email,
+        // Found by its address (case-insensitively): keep the stored spelling.
+        email: requireMailbox(user),
       });
 
       this.notificationService.createActivityIfEnabled({

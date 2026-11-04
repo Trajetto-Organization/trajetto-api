@@ -21,6 +21,7 @@ import { sendTransactionalMail } from "@/shared/services/transactional-mail-serv
 import { AppError } from "@/shared/errors/AppError";
 
 import { emailLogoUrl } from "@/shared/providers/mail-provider/email-logo";
+import { requireMailbox } from "@/modules/user/services/user-mailbox";
 import { logger } from "@/shared/logging/logger";
 
 const log = logger.child({ component: "branch" });
@@ -69,6 +70,9 @@ class RequestBranchDeletionUseCase {
 
     assertTenantAccess(findUser, businessId);
 
+    // The code goes to this mailbox: refuse before storing one nobody gets.
+    const mailbox = requireMailbox(findUser);
+
     const findBranch = await this.branch.findBranchById(branchId);
 
     // Another company's branch answers like a missing one (decision 11.3).
@@ -115,7 +119,7 @@ class RequestBranchDeletionUseCase {
     // stored above, asking again replaces it, and it carries a secret, so it
     // stays in-process, off the outbox.
     void sendTransactionalMail({
-      email: findUser.email,
+      email: mailbox,
       name: findUser.name,
       subject: "Código de confirmação para exclusão de filial",
       templateName: "branch-deletion-code.hbs",

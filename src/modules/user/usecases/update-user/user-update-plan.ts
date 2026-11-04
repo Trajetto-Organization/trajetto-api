@@ -17,7 +17,8 @@ import type { UserRole } from "../../dtos/user-dto";
 
 interface UserSnapshot {
   role: UserRole;
-  email: string;
+  /** Null for a driver's login without one (plan of 02/11/2026, D2). */
+  email: string | null;
   name: string;
   businessId?: string | null;
   profileAccessId?: string | null;
@@ -160,7 +161,8 @@ function planUserUpdate(
   }
 
   const data: UserUpdateData = {
-    ...(changes.email && { email }),
+    // A changed e-mail is always a typed one: a blank keeps the stored value.
+    ...(changes.email && email !== null && { email }),
     ...(changes.name && { name }),
     ...(changes.role && { role }),
     ...(changes.profile && { profileAccessId }),

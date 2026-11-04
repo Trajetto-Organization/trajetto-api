@@ -26,6 +26,8 @@ import { InMemoryRouteRepository } from "@/modules/route/repositories/in-memory/
 import { InMemoryDeliveryRepository } from "@/modules/delivery/repositories/in-memory/in-memory-delivery-repository";
 
 import { InMemoryUserRepository } from "@/modules/user/repositories/in-memory/in-memory-user-repository";
+import { InMemoryUserTokensRepository } from "@/modules/user/repositories/in-memory/in-memory-user-tokens-repository";
+import { InMemoryDriverEnrollmentRepository } from "@/modules/user/repositories/in-memory/in-memory-driver-enrollment-repository";
 import { InMemoryBusinessRepository } from "@/modules/business/repositories/in-memory/in-memory-business-repository";
 import { InMemoryBranchRepository } from "@/modules/branch/repositories/in-memory/in-memory-branch-repository";
 
@@ -81,7 +83,9 @@ function driverData(
 }
 
 function makeContext() {
-  const users = new InMemoryUserRepository();
+  const tokens = new InMemoryUserTokensRepository();
+  const enrollments = new InMemoryDriverEnrollmentRepository();
+  const users = new InMemoryUserRepository({ tokens });
   const businesses = new InMemoryBusinessRepository();
   const branches = new InMemoryBranchRepository();
   const routeRepository = new InMemoryRouteRepository();
@@ -114,6 +118,8 @@ function makeContext() {
 
   return {
     users,
+    tokens,
+    enrollments,
     drivers,
     pauses,
     routes: routeRepository.routes,
@@ -130,6 +136,8 @@ function makeContext() {
       branches,
       drivers,
       notificationStub,
+      tokens,
+      enrollments,
     ),
     remove: new DeleteDriverUseCase(
       users,
@@ -223,6 +231,80 @@ describe("deactivating a driver with work pending (decision 8.3)", () => {
     expect(socket.securityEvents).toEqual([
       { userId: DRIVER_USER, reason: "driver_inactive" },
     ]);
+  });
+
+  // Plan of 02/11/2026, D5: the security event only reached an open socket.
+  // The sessions and the phone's push devices stayed on the server, so a
+  // phone kept receiving the driver's messages, and an access QR code still
+  // on the manager's screen could open a new session once the driver was
+  // reactivated. The session version is NOT bumped: the app's next request
+  // must still hear 403 AUTH_DRIVER_INACTIVE (why it was logged out), not a
+  // bare "session ended". The push devices go with the sessions in the same
+  // statement (revokeAllUserRefreshTokens); the token twin has no devices, so
+  // that half is proven against Postgres (driver-inactivation-sessions-http).
+  it("ends the driver's sessions and access QR code", async () => {
+    const driver = await context.create.execute(driverData(A), ADMIN_A);
+
+    context.users.user.push({
+      id: DRIVER_USER,
+      role: "BUSINESS_USER",
+      businessId: A,
+      driverId: driver.id,
+      session_version: 3,
+    } as User);
+
+    await context.tokens.createUserRefreshToken({
+      userId: DRIVER_USER,
+      token_hash: "phone-session",
+      jti: "phone-jti",
+      family_id: "phone-family",
+      expires_in: new Date(Date.now() + 60_000),
+      device_id: "23be03c084165505",
+    });
+    await context.enrollments.issue({
+      userId: DRIVER_USER,
+      businessId: A,
+      token: "qr-ainda-na-tela",
+      code: "ABCDEFGH",
+      expiresAt: new Date(Date.now() + 60_000),
+      createdById: ADMIN_A,
+    });
+
+    await context.update.execute({ status: "INACTIVE" }, driver.id, ADMIN_A, A);
+
+    expect(context.tokens.refreshTokenItems).toHaveLength(0);
+    expect(
+      await context.enrollments.findByToken("qr-ainda-na-tela"),
+    ).toBeNull();
+    expect(
+      context.users.user.find((user) => user.id === DRIVER_USER)
+        ?.session_version,
+    ).toBe(3);
+  });
+
+  it("ends nothing when the deactivation is refused", async () => {
+    const driver = await context.create.execute(driverData(A), ADMIN_A);
+    seedRoute(driver.id, "IN_PROGRESS");
+
+    context.users.user.push({
+      id: DRIVER_USER,
+      role: "BUSINESS_USER",
+      businessId: A,
+      driverId: driver.id,
+    } as User);
+    await context.tokens.createUserRefreshToken({
+      userId: DRIVER_USER,
+      token_hash: "phone-session",
+      jti: "phone-jti",
+      family_id: "phone-family",
+      expires_in: new Date(Date.now() + 60_000),
+    });
+
+    await expect(
+      context.update.execute({ status: "INACTIVE" }, driver.id, ADMIN_A, A),
+    ).rejects.toBeInstanceOf(DriverHasOpenRoutesError);
+
+    expect(context.tokens.refreshTokenItems).toHaveLength(1);
   });
 
   it("does not block editing a driver who is already inactive", async () => {

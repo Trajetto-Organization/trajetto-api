@@ -130,7 +130,10 @@ const kanbanResponses = {
             .object({
               id: z.string().describe("ID do usuário"),
               name: z.string().describe("Nome do usuário"),
-              email: z.string().describe("E-mail do usuário"),
+              email: z
+                .string()
+                .nullable()
+                .describe("E-mail do usuário (nulo num motorista sem e-mail)"),
               avatar: z
                 .string()
                 .nullable()

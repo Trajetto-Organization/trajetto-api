@@ -18,6 +18,7 @@ import { sendTransactionalMail } from "@/shared/services/transactional-mail-serv
 import { AppError } from "@/shared/errors/AppError";
 
 import { emailLogoUrl } from "@/shared/providers/mail-provider/email-logo";
+import { requireMailbox } from "@/modules/user/services/user-mailbox";
 import { logger } from "@/shared/logging/logger";
 
 const log = logger.child({ component: "business" });
@@ -47,6 +48,9 @@ class RequestBusinessDeletionUseCase {
 
     // MASTER-only, like the route: see assertCallerRole.
     assertCallerRole(findUser, ["MASTER"]);
+
+    // The code goes to this mailbox: refuse before storing one nobody gets.
+    const mailbox = requireMailbox(findUser);
 
     const existingBusiness = await this.business.findBusinessById(businessId);
 
@@ -103,7 +107,7 @@ class RequestBusinessDeletionUseCase {
      * request. It carries a secret, so it stays in-process, off the outbox.
      */
     void sendTransactionalMail({
-      email: findUser.email,
+      email: mailbox,
       name: findUser.name,
       subject: "Código de confirmação para exclusão de empresa",
       templateName: "business-deletion-code.hbs",

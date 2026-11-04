@@ -8,11 +8,12 @@ import { v4 as uuidV4 } from "uuid";
 
 import {
   AuthenticateUserProps,
+  CpfLoginProps,
   EmailVerificationProps,
   TwoFactorProps,
 } from "./dtos/authenticate-user-dto";
 
-import { AuthenticateUser } from "../../dtos/user-dto";
+import { AuthenticateUser, DriverLoginByCpf } from "../../dtos/user-dto";
 import { authenticateUserSchema } from "@/schemas/authenticate-user-schema";
 
 import { IUserRepository } from "../../repositories/IUser-repository";
@@ -27,14 +28,21 @@ import { env } from "@/env";
 import { IDriverRepository } from "@/modules/driver/repositories/IDriver-repository";
 import { assertSessionEligible } from "../../services/session-eligibility";
 import {
+  HeaderSessionClient,
   SessionClient,
   createUserSession,
 } from "../../services/session-service";
 import { isLoginLocked } from "@/shared/security/login-lockout-rules";
+import {
+  refusalClock,
+  refusalPaddingMs,
+} from "@/shared/security/refusal-pacing";
+import { DRIVER_LOGINS_BY_CPF_LIMIT } from "../../repositories/IUser-repository";
 import { hashOneTimeCode } from "@/shared/security/one-time-code";
 import { issueTwoFactorChallenge } from "../../services/two-factor-challenge";
 import { emailLogoUrl } from "@/shared/providers/mail-provider/email-logo";
 import { logger } from "@/shared/logging/logger";
+import { hasMailbox, requireMailbox } from "../../services/user-mailbox";
 
 const log = logger.child({ component: "user" });
 
@@ -263,14 +271,16 @@ class AuthenticateUserUseCase {
     if (!findUser.email_verified) {
       return await this.emailVerification({
         userId: findUser.id,
-        email: findUser.email,
+        // Signed in by this address, so it has one (D2: only a driver's
+        // login may not, and it never signs in by e-mail).
+        email: requireMailbox(findUser),
         name: findUser.name,
       });
     }
 
     if (findUser.two_factor_enabled) {
       return await this.twoFactor({
-        email: findUser.email,
+        email: requireMailbox(findUser),
         name: findUser.name,
         userId: findUser.id,
         sessionVersion: findUser.session_version,
@@ -280,6 +290,168 @@ class AuthenticateUserUseCase {
     const session = await createUserSession(findUser, this.usersTokens, client);
 
     return { ...session, role: findUser.role };
+  }
+
+  /**
+   * The driver's login by CPF and password (plan of 02/11/2026, D8; decision
+   * D02), the alternative to the QR code.
+   *
+   * The CPF is unique per company only, so it may name logins in several:
+   * the password is compared with each, and the company is chosen among the
+   * ones where it matched — never listed before, so a CPF alone says nothing
+   * about where it is registered. One match: the session opens. Several: the
+   * answer lists them (id and name) and the app asks again with the company.
+   *
+   * The brakes are the e-mail login's: the per-address route limit, and the
+   * per-account lock (login-lockout-rules) on EVERY login of the CPF — a
+   * wrong password counts against all of them, so guessing by CPF is braked
+   * exactly like guessing by e-mail. A failure is counted only when the
+   * password matched nowhere: a driver entering company A with A's password
+   * is not guessing B's.
+   *
+   * No e-mail verification (decision D01: the driver proves the CPF and the
+   * password, and may have no mailbox); the second factor still applies to a
+   * login that has an e-mail and turned it on.
+   *
+   * Every refusal lasts as long as DRIVER_LOGINS_BY_CPF_LIMIT comparisons
+   * (shared/security/refusal-pacing): one bcrypt per login, then a sleep for
+   * the ones skipped, so the clock does not tell in how many companies the
+   * CPF signs in — and a guess costs no more CPU than before.
+   */
+  async executeByCpf(
+    { cpf, password, businessId, deviceId }: CpfLoginProps,
+    client: HeaderSessionClient = "web",
+  ): Promise<AuthenticateUserProps> {
+    let compared = 0;
+    let comparingMs = 0;
+
+    const compare = async (hash: string): Promise<boolean> => {
+      const startedAt = refusalClock.now();
+
+      try {
+        return await compareSecret(password, hash);
+      } finally {
+        compared += 1;
+        comparingMs += refusalClock.now() - startedAt;
+      }
+    };
+
+    const refuse = async (
+      ...args: ConstructorParameters<typeof UserInvalidCredentialsError>
+    ): Promise<never> => {
+      const padding = refusalPaddingMs(
+        comparingMs,
+        compared,
+        DRIVER_LOGINS_BY_CPF_LIMIT,
+      );
+
+      if (padding > 0) await refusalClock.sleep(padding);
+
+      throw new UserInvalidCredentialsError(...args);
+    };
+
+    const logins = await this.user.findDriverLoginsByCpf(cpf);
+
+    if (logins.length === 0) {
+      // The same bcrypt as one account's comparison, then the same refusal.
+      await compare(DUMMY_PASSWORD_HASH);
+
+      return refuse("unknown_cpf");
+    }
+
+    const now = new Date();
+    const matched: DriverLoginByCpf[] = [];
+    const missed: DriverLoginByCpf[] = [];
+
+    for (const login of logins) {
+      // Compared even when locked, as by e-mail: the time a refusal takes
+      // does not say which account is locked.
+      const matches = await compare(login.password);
+
+      if (isLoginLocked(login, now)) continue;
+
+      (matches ? matched : missed).push(login);
+    }
+
+    const soleId = logins.length === 1 ? logins[0].id : undefined;
+
+    if (matched.length === 0) {
+      await Promise.all(
+        missed.map((login) => this.user.registerFailedLogin(login.id, now)),
+      );
+
+      return refuse(
+        missed.length > 0 ? "wrong_password" : "account_locked",
+        soleId,
+      );
+    }
+
+    const candidates =
+      businessId === undefined
+        ? matched
+        : matched.filter((login) => login.businessId === businessId);
+
+    // A company the password does not open: the same refusal as a wrong
+    // password, so the picker cannot be probed with ids.
+    if (candidates.length === 0) {
+      return refuse("company_not_matched", soleId);
+    }
+
+    const eligible: DriverLoginByCpf[] = [];
+    let refusal: AppError | null = null;
+
+    for (const login of candidates) {
+      try {
+        await assertSessionEligible(login, this.driver);
+        eligible.push(login);
+      } catch (error) {
+        if (!(error instanceof AppError)) throw error;
+
+        refusal ??= error;
+      }
+    }
+
+    // The password was right: the driver hears why (inactive, revoked…), as
+    // by e-mail. An inactive login is never offered in the picker.
+    if (eligible.length === 0) throw refusal!;
+
+    if (eligible.length > 1) {
+      return {
+        businessSelection: eligible.map((login) => ({
+          id: login.businessId!,
+          name: login.companyName,
+        })),
+      };
+    }
+
+    const [chosen] = eligible;
+
+    // A burst of guesses may have locked it while this password was compared.
+    if (!(await this.user.clearFailedLogins(chosen.id, now))) {
+      throw new UserInvalidCredentialsError("account_locked", chosen.id);
+    }
+
+    if (chosen.two_factor_enabled && hasMailbox(chosen)) {
+      return await this.twoFactor({
+        email: chosen.email,
+        name: chosen.name,
+        userId: chosen.id,
+        sessionVersion: chosen.session_version,
+      });
+    }
+
+    // With the phone's id, the long phone-bound session (D4); without it,
+    // what the client header asks for, as by e-mail.
+    const session = deviceId
+      ? await createUserSession(
+          chosen,
+          this.usersTokens,
+          "driver_device",
+          deviceId,
+        )
+      : await createUserSession(chosen, this.usersTokens, client);
+
+    return { ...session, role: chosen.role };
   }
 }
 

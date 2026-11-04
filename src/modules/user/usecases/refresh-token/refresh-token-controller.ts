@@ -10,12 +10,12 @@ class RefreshTokenController {
     request: FastifyRequest,
     reply: FastifyReply,
   ): Promise<Response> {
-    const { token } = refreshTokenSchema.parse(request.body);
+    const { token, deviceId } = refreshTokenSchema.parse(request.body);
     const refreshTokenUseCase = container.resolve(RefreshTokenUseCase);
 
     try {
       const { refresh_token, token: newToken } =
-        await refreshTokenUseCase.execute(token);
+        await refreshTokenUseCase.execute(token, deviceId);
 
       return reply.status(200).send({ refresh_token, token: newToken });
     } catch (error) {

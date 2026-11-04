@@ -61,6 +61,7 @@ const allEnabled = {
   emailNotificationsEnabled: true,
   whatsappNotificationsEnabled: true,
   hasWhatsAppPhone: true,
+  hasEmail: true,
 };
 
 const fullContent = {
@@ -186,6 +187,20 @@ describe("channel gating", () => {
     ).not.toContain(NotificationChannel.WHATSAPP);
   });
 
+  /**
+   * Decision D02 (plan of 02/11/2026): a driver's login may have no e-mail.
+   * Like WhatsApp without a phone, an EMAIL row could only fail.
+   */
+  it("skips e-mail when the recipient has no address, whatever the preference", () => {
+    const channels = channelsForRecipient(
+      { ...allEnabled, hasEmail: false },
+      fullContent,
+    );
+
+    expect(channels).not.toContain(NotificationChannel.EMAIL);
+    expect(channels).toContain(NotificationChannel.IN_APP);
+  });
+
   it("skips WhatsApp when the topic has no WhatsApp content", () => {
     expect(
       channelsForRecipient(allEnabled, {
@@ -236,6 +251,7 @@ describe("channel gating", () => {
           emailNotificationsEnabled: false,
           whatsappNotificationsEnabled: false,
           hasWhatsAppPhone: false,
+          hasEmail: true,
         },
         { ...fullContent, isMandatory: true },
       ),
@@ -261,6 +277,7 @@ describe("preference layering", () => {
       emailNotificationsEnabled: true,
       whatsappNotificationsEnabled: true,
       hasWhatsAppPhone: true,
+      hasEmail: true,
     });
   });
 
@@ -276,6 +293,7 @@ describe("preference layering", () => {
       emailNotificationsEnabled: false,
       whatsappNotificationsEnabled: false,
       hasWhatsAppPhone: true,
+      hasEmail: true,
     });
   });
 
@@ -335,6 +353,31 @@ describe("preference layering", () => {
    * A preference can want WhatsApp all it likes — without a configured
    * number there is nowhere to send, and the phone gate stays in charge.
    */
+  /**
+   * The e-mail gate reads the address itself: null or blank is a driver's
+   * login without one (D2); a caller that did not load the column keeps the
+   * old answer (every account had an address until then).
+   */
+  it("reads a null or blank e-mail as no address, and an absent one as an address", () => {
+    expect(
+      resolveRecipientChannelFlags({ ...legacyAllOn, email: null }, undefined)
+        .hasEmail,
+    ).toBe(false);
+    expect(
+      resolveRecipientChannelFlags({ ...legacyAllOn, email: "" }, undefined)
+        .hasEmail,
+    ).toBe(false);
+    expect(
+      resolveRecipientChannelFlags(
+        { ...legacyAllOn, email: "ana@alfa.com.br" },
+        { inApp: true, email: true, whatsapp: true },
+      ).hasEmail,
+    ).toBe(true);
+    expect(resolveRecipientChannelFlags(legacyAllOn, undefined).hasEmail).toBe(
+      true,
+    );
+  });
+
   it("keeps WhatsApp blocked without a phone even when the row wants it", () => {
     const flags = resolveRecipientChannelFlags(
       { ...legacyAllOn, whatsapp_phone: null },

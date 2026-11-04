@@ -1,4 +1,5 @@
 import { FastifyInstance } from "fastify";
+import { z } from "zod";
 
 import { CreateUserController } from "@/modules/user/usecases/create-user/create-user-controller";
 import { AuthenticateUserController } from "@/modules/user/usecases/authenticate-user/authenticate-user-controller";
@@ -45,6 +46,15 @@ import { UpdateMasterUserController } from "@/modules/user/usecases/update-maste
 import { DeleteMasterUserController } from "@/modules/user/usecases/delete-master-user/delete-master-user-controller";
 
 import { SearchUserCursorController } from "@/modules/user/usecases/search-user-cursor/search-user-cursor-controller";
+
+import { RevokeSessionController } from "@/modules/user/usecases/revoke-session/revoke-session-controller";
+import { EnrollDriverSessionController } from "@/modules/user/usecases/enroll-driver-session/enroll-driver-session-controller";
+import { IssueDriverEnrollmentController } from "@/modules/user/usecases/issue-driver-enrollment/issue-driver-enrollment-controller";
+import { ResetDriverPasswordController } from "@/modules/user/usecases/reset-driver-password/reset-driver-password-controller";
+import {
+  ListDriverDevicesController,
+  RevokeDriverDeviceController,
+} from "@/modules/user/usecases/driver-devices/driver-devices-controllers";
 
 import { userResponses, userSchemas } from "./documentation/user-documentation";
 import {
@@ -100,6 +110,13 @@ const deleteMasterUserController = new DeleteMasterUserController();
 
 const searchUserCursorController = new SearchUserCursorController();
 
+const revokeSessionController = new RevokeSessionController();
+const enrollDriverSessionController = new EnrollDriverSessionController();
+const issueDriverEnrollmentController = new IssueDriverEnrollmentController();
+const resetDriverPasswordController = new ResetDriverPasswordController();
+const listDriverDevicesController = new ListDriverDevicesController();
+const revokeDriverDeviceController = new RevokeDriverDeviceController();
+
 async function userRoutes(app: FastifyInstance) {
   app.post(
     "/create-user",
@@ -114,7 +131,7 @@ async function userRoutes(app: FastifyInstance) {
         tags: ["user"],
         summary: "Cria um usuário",
         description:
-          "Cadastra um usuário na empresa informada, com nível de acesso e perfil de acesso ou motorista vinculado. Nenhuma senha é definida aqui nem enviada por e-mail: o usuário recebe um link de uso único (72 h) para definir a própria senha.",
+          "Cadastra um usuário na empresa informada, com nível de acesso e perfil de acesso ou motorista vinculado. Nenhuma senha é enviada por e-mail: o usuário recebe um link de uso único (72 h) para definir a própria senha. Exceção, só no login de um motorista: o gestor pode definir a senha inicial em `password`; aí nenhum e-mail é enviado, o e-mail fica confirmado e o motorista entra na hora (com o CPF ou o e-mail e a senha, ou pelo QR Code). A senha não vai para log nem para a atividade, que registra quem a definiu.",
         body: userSchemas.createUser,
         response: {
           201: userResponses.userCreated,
@@ -190,9 +207,10 @@ async function userRoutes(app: FastifyInstance) {
       },
       schema: {
         tags: ["user"],
-        summary: "Entra com e-mail e senha",
+        summary: "Entra com e-mail e senha, ou com CPF e senha (motorista)",
         description:
-          "Confere as credenciais e abre uma sessão com os tokens de acesso (ou pede o código de dois fatores). Credenciais erradas: 401 AUTH_INVALID_CREDENTIALS, a mesma frase para e-mail inexistente e senha errada. Conta sem perfil, revogada, motorista inativo ou empresa inativa: 403 com o `code` de cada caso.",
+          "Confere as credenciais e abre uma sessão com os tokens de acesso (ou pede o código de dois fatores). Credenciais erradas: 401 AUTH_INVALID_CREDENTIALS, a mesma frase para e-mail ou CPF inexistente e senha errada. Conta sem perfil, revogada, motorista inativo ou empresa inativa: 403 com o `code` de cada caso. " +
+          "Login do motorista por CPF (`{ cpf, password }`, com ou sem máscara; CPF com dígito verificador errado: 400): a senha é conferida em cada empresa em que o CPF tem login de motorista. Se valer em uma só, a sessão abre; se valer em mais de uma, a resposta traz `businessSelection: true` e `businesses` (id e nome, só as empresas em que a senha conferiu) e o app repete o pedido com `businessId`. Uma senha errada conta contra todos os logins do CPF (10 seguidas bloqueiam por 15 minutos, com a mesma resposta 401). Com `deviceId`, a sessão fica presa ao aparelho: até 30 dias sem uso e 180 no total, renovada só com o mesmo `deviceId`. O login por CPF não pede confirmação de e-mail.",
         body: userSchemas.authenticateUser,
         response: {
           200: userResponses.authenticateUserSuccess,
@@ -205,6 +223,61 @@ async function userRoutes(app: FastifyInstance) {
       },
     },
     authenticateUserController.handle,
+  );
+
+  app.post(
+    "/session/enroll",
+    {
+      // The same per-address limit as the password login: an anonymous route
+      // that opens sessions. Each code also counts its refused presentations.
+      config: {
+        rateLimit: getRateLimiterConfig({ max: 8 }),
+      },
+      schema: {
+        tags: ["user"],
+        summary: "Entra com o QR Code de acesso do motorista",
+        description:
+          "O aparelho do motorista abre a sessão com o QR Code que o gestor mostrou (`qrToken`, o token do conteúdo `trajetto-enroll:1:<ambiente>:<token>`) ou com o código de 8 caracteres (`accessCode`), e o seu `deviceId`. Vale uma vez, por 10 minutos: dois aparelhos lendo o mesmo QR, só um entra. A sessão fica presa ao aparelho (até 30 dias sem uso e 180 no total; renove com o mesmo `deviceId`). Desconhecido, vencido, já usado ou gasto: 401 AUTH_ENROLLMENT_INVALID, a mesma resposta. Motorista que não pode entrar agora: 403 com o `code` do motivo, e a recusa conta contra o código (5 gastam). Sem confirmação de e-mail nem segundo fator.",
+        body: userSchemas.enrollSession,
+        response: {
+          200: userResponses.enrollSessionSuccess,
+          400: errorResponse,
+          401: userResponses.enrollSessionUnauthorized,
+          403: userResponses.enrollSessionForbidden,
+          500: userResponses.internalServerError,
+        },
+      },
+    },
+    enrollDriverSessionController.handle,
+  );
+
+  app.post(
+    "/session/revoke",
+    {
+      // Anonymous, like the refresh, and counted the same way: per session
+      // when the token proves one, per address otherwise.
+      config: {
+        rateLimit: getRateLimiterConfig({
+          max: 10,
+          keyGenerator: refreshSessionRateLimitKey,
+          hook: "preHandler",
+        }),
+      },
+      schema: {
+        tags: ["user"],
+        summary: "Encerra uma sessão só com o refresh token",
+        description:
+          "Para o logout que não chegou ao servidor (aparelho sem rede, token de acesso vencido): o app guarda o refresh token e chama esta rota quando a rede volta, de qualquer tela. Encerra a sessão daquele token (todos os refresh tokens dela) e apaga os aparelhos de push que ela registrou. Aceita o token mesmo vencido, já trocado ou reutilizado, e responde 204 também quando a sessão já tinha terminado. Só um token que não foi assinado por esta API é recusado (401 AUTH_REFRESH_INVALID). As outras sessões do usuário continuam valendo.",
+        body: userSchemas.revokeSession,
+        response: {
+          204: z.null().describe("Sessão encerrada (ou já encerrada)."),
+          400: errorResponse,
+          401: userResponses.revokeSessionUnauthorized,
+          500: userResponses.internalServerError,
+        },
+      },
+    },
+    revokeSessionController.handle,
   );
 
   app.get(
@@ -237,7 +310,7 @@ async function userRoutes(app: FastifyInstance) {
         tags: ["user"],
         summary: "Define a nova senha pelo link",
         description:
-          "Grava a nova senha com o token do link de redefinição. Token inválido ou expirado: 400 AUTH_TOKEN_INVALID ou AUTH_TOKEN_EXPIRED.",
+          "Grava a nova senha com o token do link de redefinição. O link chegou à caixa de e-mail, então gastá-lo também confirma o e-mail, se ainda não estava confirmado: o próximo login não pede outro e-mail. Token inválido ou expirado: 400 AUTH_TOKEN_INVALID ou AUTH_TOKEN_EXPIRED.",
         querystring: userSchemas.forgotPasswordVerification,
         body: userSchemas.forgotPassword,
         response: {
@@ -303,7 +376,7 @@ async function userRoutes(app: FastifyInstance) {
         tags: ["user"],
         summary: "Renova os tokens da sessão",
         description:
-          "Troca um refresh token válido por um novo par de tokens. Refresh inválido, expirado ou já usado: 401 AUTH_REFRESH_INVALID. Sessão encerrada (logout, expiração): 401 AUTH_SESSION_INVALIDATED. Um token já trocado ainda vale UMA vez nos 60 s seguintes (duas abas renovando juntas, um app repetindo uma resposta perdida) e recebe outro par da mesma sessão; uma terceira apresentação, mesmo dentro desses 60 s, ou qualquer uma depois deles, é reuso: 401 AUTH_REFRESH_REUSED, todas as sessões da conta são encerradas e o usuário é avisado.",
+          "Troca um refresh token válido por um novo par de tokens. Refresh inválido, expirado ou já usado: 401 AUTH_REFRESH_INVALID. Sessão encerrada (logout, expiração): 401 AUTH_SESSION_INVALIDATED. Um token já trocado ainda vale UMA vez nos 60 s seguintes (duas abas renovando juntas, um app repetindo uma resposta perdida) e recebe outro par da mesma sessão; uma terceira apresentação, mesmo dentro desses 60 s, ou qualquer uma depois deles, é reuso: 401 AUTH_REFRESH_REUSED, todas as sessões da conta são encerradas e o usuário é avisado. Sessão presa a um aparelho (aberta pelo QR Code ou por CPF e senha com `deviceId`): renova só com o mesmo `deviceId` no corpo; outro aparelho, ou nenhum, recebe 401 AUTH_DEVICE_MISMATCH, sem gastar o token nem encerrar a sessão.",
         body: userSchemas.refreshToken,
         response: {
           200: userResponses.tokenRefreshed,
@@ -575,7 +648,7 @@ async function userRoutes(app: FastifyInstance) {
         tags: ["user"],
         summary: "Revoga ou restaura o acesso de um usuário",
         description:
-          "Alterna o acesso da conta (revogado ↔ liberado). Só MASTER e administradores; um nível de acesso acima do de quem pede é recusado com 403 PERMISSION_DENIED. Se for o login de um motorista, avisa as abas abertas (catalogChanged driver).",
+          "Alterna o acesso da conta (revogado ↔ liberado). Só MASTER e administradores; um nível de acesso acima do de quem pede é recusado com 403 PERMISSION_DENIED. Revogar o login de um motorista com rota planejada, liberada ou em andamento é recusado com 409 DRIVER_HAS_OPEN_ROUTES (a mesma regra da inativação do motorista; restaurar nunca é recusado). Revogar o login de um motorista também anula o QR Code de acesso ainda não usado (restaurar não o traz de volta: gere outro). Se for o login de um motorista, avisa as abas abertas (catalogChanged driver).",
         params: userSchemas.revokeUserAccess,
         response: {
           200: userResponses.userAccessRevoked,
@@ -588,6 +661,112 @@ async function userRoutes(app: FastifyInstance) {
       },
     },
     userRevokeAccessController.handle,
+  );
+
+  // The driver's login, as the manager handles it (plan of 02/11/2026: the
+  // access QR code, D3; the password the manager sets, D2; the phones, D7).
+  app.post(
+    "/:userId/enrollment",
+    {
+      config: {
+        rateLimit: getRateLimiterConfig({ max: 10 }),
+      },
+      onRequest: [ensureAuthenticated],
+      preHandler: [verifyPermission("user_registration_manage", "write")],
+      schema: {
+        security: [{ bearerAuth: [] }],
+        tags: ["user"],
+        summary: "Gera o QR Code de acesso do motorista",
+        description:
+          "Gera o QR Code (e o código de 8 caracteres) com que o motorista entra no app sem e-mail nem senha. Vale uma vez, por 10 minutos; gerar outro anula o anterior. O conteúdo do QR é `qrContent` (marca o ambiente e leva só um token opaco, nunca a senha); o servidor guarda só o hash do token e do código, que aparecem uma única vez nesta resposta. Só para o login de um motorista ativo e com acesso liberado (409 com o `code` do motivo). Usuário de outra empresa: 404 USER_NOT_FOUND, como inexistente. A atividade registra quem gerou.",
+        params: userSchemas.driverLoginParams,
+        response: {
+          201: userResponses.enrollmentIssued,
+          400: userResponses.driverLoginErrors,
+          404: userResponses.driverLoginNotFound,
+          409: userResponses.enrollmentConflict,
+          500: userResponses.internalServerError,
+        },
+      },
+    },
+    issueDriverEnrollmentController.handle,
+  );
+
+  app.patch(
+    "/:userId/driver-password",
+    {
+      config: {
+        rateLimit: getRateLimiterConfig({ max: 10 }),
+      },
+      onRequest: [ensureAuthenticated],
+      preHandler: [verifyPermission("user_registration_manage", "write")],
+      schema: {
+        security: [{ bearerAuth: [] }],
+        tags: ["user"],
+        summary: "Define uma nova senha para o motorista",
+        description:
+          "O gestor define a senha do login de um motorista (o motorista que esqueceu a senha pode não ter e-mail). Nada é enviado por e-mail e a senha não vai para log nem para a atividade, que registra só quem a definiu. Encerra todas as sessões do motorista (e os aparelhos de push delas) e confirma o e-mail cadastrado, se houver. Só para o login de um motorista (409 USER_NOT_DRIVER: o usuário de escritório segue com o link por e-mail). Usuário de outra empresa: 404 USER_NOT_FOUND.",
+        params: userSchemas.driverLoginParams,
+        body: userSchemas.resetDriverPassword,
+        response: {
+          200: userResponses.driverPasswordReset,
+          400: userResponses.driverLoginErrors,
+          404: userResponses.driverLoginNotFound,
+          409: userResponses.driverLoginConflict,
+          500: userResponses.internalServerError,
+          503: authBusyResponse,
+        },
+      },
+    },
+    resetDriverPasswordController.handle,
+  );
+
+  app.get(
+    "/:userId/devices",
+    {
+      onRequest: [ensureAuthenticated],
+      preHandler: [verifyPermission("user_registration_manage", "read")],
+      schema: {
+        security: [{ bearerAuth: [] }],
+        tags: ["user"],
+        summary: "Lista os aparelhos em que o motorista está conectado",
+        description:
+          "Os aparelhos com sessão aberta pelo QR Code ou por CPF e senha (sessões presas ao aparelho), do mais recente para o mais antigo, com a última atividade e quando a sessão cai sem uso. Sessões do painel web e do app abertas por e-mail não aparecem. Só para o login de um motorista (409 USER_NOT_DRIVER). Usuário de outra empresa: 404 USER_NOT_FOUND.",
+        params: userSchemas.driverLoginParams,
+        response: {
+          200: userResponses.driverDevices,
+          400: userResponses.driverLoginErrors,
+          404: userResponses.driverLoginNotFound,
+          409: userResponses.driverLoginConflict,
+          500: userResponses.internalServerError,
+        },
+      },
+    },
+    listDriverDevicesController.handle,
+  );
+
+  app.delete(
+    "/:userId/devices/:deviceId",
+    {
+      onRequest: [ensureAuthenticated],
+      preHandler: [verifyPermission("user_registration_manage", "write")],
+      schema: {
+        security: [{ bearerAuth: [] }],
+        tags: ["user"],
+        summary: "Desconecta um aparelho do motorista",
+        description:
+          "Encerra todas as sessões do motorista naquele aparelho e apaga os aparelhos de push delas: o app sai na próxima requisição (e na hora, se estiver conectado ao tempo real: evento de segurança `device_revoked`). Os outros aparelhos continuam. Responde 204 também quando o aparelho já não tinha sessão. Só para o login de um motorista (409 USER_NOT_DRIVER). Usuário de outra empresa: 404 USER_NOT_FOUND.",
+        params: userSchemas.driverDeviceParams,
+        response: {
+          204: z.null().describe("Aparelho desconectado (ou já sem sessão)."),
+          400: userResponses.driverLoginErrors,
+          404: userResponses.driverLoginNotFound,
+          409: userResponses.driverLoginConflict,
+          500: userResponses.internalServerError,
+        },
+      },
+    },
+    revokeDriverDeviceController.handle,
   );
 
   app.patch(

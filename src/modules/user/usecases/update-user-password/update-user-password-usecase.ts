@@ -74,7 +74,10 @@ class UpdateUserPasswordUseCase {
     // The password is already changed: a mail failure must not answer 500,
     // or the person retries with a "current password" that no longer works.
     // Nor may the answer wait on the SMTP round trip (10 s timeouts) for a
-    // notice the person does not need in order to carry on.
+    // notice the person does not need in order to carry on. A driver's login
+    // without an e-mail (D2) gets no notice: there is no mailbox.
+    if (!findUser.email) return;
+
     void sendTransactionalMail({
       email: findUser.email,
       name: findUser.name,

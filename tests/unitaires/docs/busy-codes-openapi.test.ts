@@ -47,6 +47,7 @@ const GATED_USE_CASES: Record<string, string> = {
   "user/usecases/create-master-user": "POST /user/create-master-user",
   "user/usecases/create-user": "POST /user/create-user",
   "user/usecases/reset-user-password": "POST /user/reset/password",
+  "user/usecases/reset-driver-password": "PATCH /user/{userId}/driver-password",
   // Through verifyOneTimeCode: a code stored as bcrypt before the HMAC
   // format is still compared through the gate.
   "user/usecases/two-factor-verification": "POST /user/two-factor-verification",

@@ -155,7 +155,7 @@ async function driverRoutes(app: FastifyInstance) {
         tags: ["driver"],
         summary: "Edita um motorista",
         description:
-          "Edita os dados do motorista da empresa do caminho. Inativar um motorista com rota planejada, liberada ou em andamento é recusado com 409 DRIVER_HAS_OPEN_ROUTES e a contagem (decisão 8.3): a rota em andamento precisa terminar ou ser cancelada, e as outras, ir para outro motorista ou ser canceladas. Motorista de outra empresa responde 404, como um inexistente. Avisa as telas abertas da empresa (`catalogChanged`, entidade `driver`).",
+          "Edita os dados do motorista da empresa do caminho. Inativar um motorista com rota planejada, liberada ou em andamento é recusado com 409 DRIVER_HAS_OPEN_ROUTES e a contagem (decisão 8.3): a rota em andamento precisa terminar ou ser cancelada, e as outras, ir para outro motorista ou ser canceladas. Inativar encerra todas as sessões do login do motorista (e apaga os aparelhos de push delas) e anula o QR Code de acesso ainda não usado; a próxima requisição do app recebe 403 AUTH_DRIVER_INACTIVE. Motorista de outra empresa responde 404, como um inexistente. Avisa as telas abertas da empresa (`catalogChanged`, entidade `driver`).",
         params: driverSchemas.driverBusinessParams,
         body: driverSchemas.updateDriver,
         response: {

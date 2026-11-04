@@ -6,6 +6,22 @@ import {
   hasSpaceAtEdges,
 } from "@/shared/utils/zod-schema-helpers";
 import { UserBusinessRole } from "@/modules/user/dtos/user-dto";
+import { passwordField } from "@/schemas/authenticate-user-schema";
+
+const DRIVER_ONLY_PASSWORD_MESSAGE =
+  "A senha inicial só pode ser definida no login de um motorista.";
+
+/** A driver's login: a plain user linked to a driver (D2). */
+function isDriverLogin(data: {
+  role: string;
+  driverId?: string | null;
+}): boolean {
+  return (
+    data.role === "BUSINESS_USER" &&
+    typeof data.driverId === "string" &&
+    data.driverId.trim() !== ""
+  );
+}
 
 const roleEnum = z.nativeEnum(UserBusinessRole, {
   errorMap: (issue, ctx) => {
@@ -70,8 +86,15 @@ const createUserSchema = z
         });
       }
     }),
-    // No password here (decision 4.9): the new user receives a single-use
-    // link to set their own, and no password is ever mailed.
+    // No password for an office user (decision 4.9): they receive a
+    // single-use link to set their own, and no password is ever mailed. A
+    // DRIVER's login may get one from the manager (plan of 02/11/2026, D2;
+    // decision D04), with the login's own rule; see the refinement below.
+    password: passwordField
+      .optional()
+      .describe(
+        "Só no login de um motorista: a senha inicial definida pelo gestor. Com ela nenhum e-mail é enviado e o e-mail fica confirmado; o motorista entra com o CPF (ou o e-mail) e esta senha, ou pelo QR Code.",
+      ),
     role: roleEnum,
     businessId: z
       .string({ required_error: "ID da empresa é obrigatório!" })
@@ -99,6 +122,14 @@ const createUserSchema = z
     userType: z.enum(["employee", "driver"]).optional(),
   })
   .superRefine((data, ctx) => {
+    if (data.password !== undefined && !isDriverLogin(data)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: DRIVER_ONLY_PASSWORD_MESSAGE,
+        path: ["password"],
+      });
+    }
+
     // BUSINESS_ADMIN does not need profileAccessId or driverId
     if (data.role === "BUSINESS_ADMIN") {
       if (data.profileAccessId || data.driverId) {
@@ -153,4 +184,4 @@ const createUserSchema = z
     }
   });
 
-export { createUserSchema };
+export { DRIVER_ONLY_PASSWORD_MESSAGE, createUserSchema, isDriverLogin };

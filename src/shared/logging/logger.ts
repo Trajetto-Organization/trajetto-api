@@ -25,6 +25,7 @@ const SECRET_ENV_KEYS = [
   "META_WHATSAPP_ACCESS_TOKEN",
   "META_WHATSAPP_APP_SECRET",
   "META_WHATSAPP_WEBHOOK_VERIFY_TOKEN",
+  "EXPO_ACCESS_TOKEN",
   "RESEND_SECRET_KEY",
   "RESEND_WEBHOOK_SECRET",
   "R2_ACCESS_KEY_ID",
@@ -54,6 +55,11 @@ const SECRET_FIELD_NAMES = [
   "refreshToken",
   "access_token",
   "accessToken",
+  // The driver's access QR code and its short code (plan of 02/11/2026,
+  // D3): each opens a session while it lives.
+  "qrToken",
+  "qrContent",
+  "accessCode",
 ] as const;
 
 /**

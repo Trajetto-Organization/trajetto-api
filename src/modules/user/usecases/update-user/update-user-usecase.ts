@@ -48,6 +48,7 @@ import { describeChanges, planUserUpdate } from "./user-update-plan";
 
 import database from "@/../infra/database";
 import { emailLogoUrl } from "@/shared/providers/mail-provider/email-logo";
+import { requireMailbox } from "../../services/user-mailbox";
 
 const log = logger.child({ component: "user" });
 
@@ -186,7 +187,8 @@ class UpdateUserUseCase {
       }
     }
 
-    if (changes.email) {
+    // A changed e-mail is always a typed one (never null).
+    if (changes.email && next.email) {
       const sameEmail = await this.user.findUserByEmail(next.email);
 
       if (sameEmail && sameEmail.id !== target.id) {
@@ -195,6 +197,10 @@ class UpdateUserUseCase {
     }
 
     const sendLink = userData.sendPasswordSetupLink === true;
+
+    // The link goes by e-mail: a driver's login without one (D2) gets a new
+    // password from the manager instead, and asking for a link is refused.
+    const linkMailbox = sendLink ? requireMailbox(next) : null;
 
     // Nothing differs and nothing was asked: no write, no audit entry, no
     // e-mail and, above all, nobody logged out.
@@ -205,8 +211,8 @@ class UpdateUserUseCase {
     // The link is stored before anything commits: when it cannot be, the
     // request fails whole and changes nothing, instead of answering
     // success for a link that does not exist (SEC-MAIL-1).
-    const resetUrl = sendLink
-      ? await this.issueResetLink(next.email, userId)
+    const resetUrl = linkMailbox
+      ? await this.issueResetLink(linkMailbox, userId)
       : null;
 
     let updated: User;
@@ -276,10 +282,10 @@ class UpdateUserUseCase {
     }
 
     // The e-mail itself leaves after the answer, never inside the commit.
-    if (resetUrl) {
+    if (resetUrl && linkMailbox) {
       void this.mailPasswordSetupLink(
         resetUrl,
-        next.email,
+        linkMailbox,
         next.name,
         actor.name,
         userId,
@@ -342,13 +348,16 @@ class UpdateUserUseCase {
 
   private async mailAccountUpdated(
     before: User,
-    email: string,
+    email: string | null,
     name: string,
     emailChanged: boolean,
   ): Promise<void> {
     // The old address hears about it too: it is the one that can say "that
-    // was not me" when an account is being taken over.
-    const recipients = emailChanged ? [email, before.email] : [email];
+    // was not me" when an account is being taken over. A driver's login
+    // without an e-mail (D2) has nowhere to be told.
+    const recipients = (emailChanged ? [email, before.email] : [email]).filter(
+      (address): address is string => Boolean(address),
+    );
 
     await Promise.all(
       recipients.map((recipient) =>

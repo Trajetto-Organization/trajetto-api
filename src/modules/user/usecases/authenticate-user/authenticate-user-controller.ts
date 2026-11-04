@@ -2,7 +2,7 @@ import { FastifyReply, FastifyRequest } from "fastify";
 import { container } from "tsyringe";
 
 import { AuthenticateUserUseCase } from "./authenticate-user-usecase";
-import { authenticateUserSchema } from "@/schemas/authenticate-user-schema";
+import { sessionLoginSchema } from "@/schemas/authenticate-user-schema";
 
 import { UserInvalidCredentialsError } from "../errors/user-invalid-credentials-error";
 import { UserNotFoundPermissionOrProfileAccess } from "../errors/user-not-found-permission-profile-access-error";
@@ -20,8 +20,13 @@ class AuthenticateUserController {
     request: FastifyRequest,
     reply: FastifyReply,
   ): Promise<Response> {
-    const { email, password } = authenticateUserSchema.parse(request.body);
+    const { email, cpf, password, businessId, deviceId } =
+      sessionLoginSchema.parse(request.body);
     const authenticateUserUseCase = container.resolve(AuthenticateUserUseCase);
+
+    // Picks the refresh policy of the caller's own new session: the app
+    // idles for a week, the web for a day (see config/auth).
+    const client = parseSessionClient(request.headers["x-trajetto-client"]);
 
     try {
       const {
@@ -30,15 +35,30 @@ class AuthenticateUserController {
         twoFactorChallenge,
         emailVerification,
         emailVerificationMessage,
+        businessSelection,
         token,
         refresh_token,
         role,
-      } = await authenticateUserUseCase.execute(
-        { email, password },
-        // Picks the refresh policy of the caller's own new session: the app
-        // idles for a week, the web for a day (see config/auth).
-        parseSessionClient(request.headers["x-trajetto-client"]),
-      );
+      } =
+        cpf !== undefined
+          ? await authenticateUserUseCase.executeByCpf(
+              { cpf, password, businessId, deviceId },
+              client,
+            )
+          : await authenticateUserUseCase.execute(
+              { email: email as string, password },
+              client,
+            );
+
+      // The CPF matched in more than one company: the app asks which, and
+      // sends the same body again with `businessId` (D8).
+      if (businessSelection) {
+        return reply.status(200).send({
+          message: "Escolha a empresa para entrar.",
+          businessSelection: true,
+          businesses: businessSelection,
+        });
+      }
 
       if (emailVerificationMessage) {
         return reply.status(200).send({
@@ -73,7 +93,9 @@ class AuthenticateUserController {
             event: "auth.login_failed",
             reason: error.reason ?? "invalid_credentials",
             userId: error.userId ?? null,
-            account: accountFingerprint(email),
+            // The CPF, like the e-mail, only as a keyed fingerprint (LGPD).
+            account: accountFingerprint(cpf ?? email ?? ""),
+            identifier: cpf !== undefined ? "cpf" : "email",
             clientAddress: clientAddress(request),
           },
           "Login failed",

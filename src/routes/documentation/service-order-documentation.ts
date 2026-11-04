@@ -123,7 +123,8 @@ const serviceOrderResponses = {
         responsibleUser: z
           .object({
             name: z.string(),
-            email: z.string(),
+            // Null only on a driver's login without an e-mail (D2).
+            email: z.string().nullable(),
           })
           .optional(),
         branch: z

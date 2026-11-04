@@ -5,6 +5,8 @@ import { IBusinessRepository } from "@/modules/business/repositories/IBusiness-r
 
 import { IBranchRepository } from "@/modules/branch/repositories/IBranch-repository";
 import { IUserRepository } from "@/modules/user/repositories/IUser-repository";
+import { IUsersTokensRepository } from "@/modules/user/repositories/IUsers-tokens-repository";
+import type { IDriverEnrollmentRepository } from "@/modules/user/repositories/IDriver-enrollment-repository";
 
 import { AppError } from "@/shared/errors/AppError";
 
@@ -40,6 +42,10 @@ class UpdateDriverUseCase {
     private driver: IDriverRepository,
     @inject("NotificationService")
     private notificationService: NotificationService,
+    @inject("UsersTokensRepository")
+    private usersTokens: IUsersTokensRepository,
+    @inject("DriverEnrollmentRepository")
+    private driverEnrollment: IDriverEnrollmentRepository,
   ) {}
 
   async execute(
@@ -138,12 +144,32 @@ class UpdateDriverUseCase {
 
     sendCatalogChangedEvent(businessId, "driver");
 
-    // If the driver was just deactivated, notify the linked user in real-time
-    if (changes.status === "INACTIVE" && findDriverById.status !== "INACTIVE") {
+    /**
+     * An inactive driver keeps nothing on the server (plan of 02/11/2026, D5).
+     *
+     * The security event only reached an open socket: the sessions and the
+     * push devices stayed, so the phone kept receiving the driver's messages,
+     * and an access QR code still on a screen could open a session the day
+     * the driver was reactivated. Every session, its devices and the QR code
+     * now go — on every save that asks for INACTIVE, not only the switch, so
+     * a retry after a failure here still cleans up (each step is idempotent).
+     *
+     * The session version is left alone on purpose: the app's next request
+     * then hears 403 AUTH_DRIVER_INACTIVE from the session check — why it is
+     * being signed out — instead of a bare 401 "session ended".
+     */
+    if (changes.status === "INACTIVE") {
       const driverUser = await this.user.findUserByDriverId(driverId);
 
       if (driverUser) {
-        sendSecurityEventToUser(driverUser.id, { reason: "driver_inactive" });
+        await this.usersTokens.revokeAllUserRefreshTokens(driverUser.id);
+        await this.driverEnrollment.revokeForUser(driverUser.id);
+
+        if (findDriverById.status !== "INACTIVE") {
+          sendSecurityEventToUser(driverUser.id, {
+            reason: "driver_inactive",
+          });
+        }
       }
     }
 

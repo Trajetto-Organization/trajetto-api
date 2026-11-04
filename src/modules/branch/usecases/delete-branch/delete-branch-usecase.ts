@@ -28,6 +28,7 @@ import { sendTransactionalMail } from "@/shared/services/transactional-mail-serv
 
 import { AppError } from "@/shared/errors/AppError";
 import { logger } from "@/shared/logging/logger";
+import { withMailbox } from "@/modules/user/services/user-mailbox";
 import { emailLogoUrl } from "@/shared/providers/mail-provider/email-logo";
 
 const log = logger.child({ component: "branch" });
@@ -182,7 +183,7 @@ class DeleteBranchUseCase {
     businessId: string;
     deleterId: string;
     deleterName: string;
-    deleterEmail: string;
+    deleterEmail: string | null;
     deleterRole: string;
     branchName: string;
     branchCnpj: string;
@@ -194,8 +195,10 @@ class DeleteBranchUseCase {
       params.businessId,
     );
 
-    const recipients = admins.filter(
-      (a) => a.id !== params.deleterId && a.email_notifications_enabled,
+    const recipients = withMailbox(
+      admins.filter(
+        (a) => a.id !== params.deleterId && a.email_notifications_enabled,
+      ),
     );
 
     if (recipients.length === 0) return;

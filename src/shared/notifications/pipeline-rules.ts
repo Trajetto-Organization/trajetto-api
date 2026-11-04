@@ -167,6 +167,13 @@ interface RecipientChannelFlags {
   emailNotificationsEnabled: boolean;
   whatsappNotificationsEnabled: boolean;
   hasWhatsAppPhone: boolean;
+
+  /**
+   * A driver's login may have no e-mail (decision D02 of the plan of
+   * 02/11/2026): like WhatsApp without a phone, no preference conjures one,
+   * so no EMAIL row is created for them.
+   */
+  hasEmail: boolean;
 }
 
 interface RecipientLegacyToggles {
@@ -174,6 +181,7 @@ interface RecipientLegacyToggles {
   email_notifications_enabled?: boolean;
   whatsapp_notifications_enabled?: boolean;
   whatsapp_phone?: string | null;
+  email?: string | null;
 }
 
 interface CategoryPreference {
@@ -206,6 +214,9 @@ function resolveRecipientChannelFlags(
       ? preference.whatsapp
       : (recipient.whatsapp_notifications_enabled ?? false),
     hasWhatsAppPhone: Boolean(recipient.whatsapp_phone),
+    // null or "" = a driver without a mailbox. Absent = the caller did not
+    // load the column, which until D2 could only hold an address: mailable.
+    hasEmail: recipient.email === undefined || Boolean(recipient.email),
   };
 }
 
@@ -263,7 +274,11 @@ function channelsForRecipient(
     channels.push(NotificationChannel.PUSH);
   }
 
-  if (options.hasEmailContent && flags.emailNotificationsEnabled) {
+  if (
+    options.hasEmailContent &&
+    flags.emailNotificationsEnabled &&
+    flags.hasEmail
+  ) {
     channels.push(NotificationChannel.EMAIL);
   }
 

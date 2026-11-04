@@ -1571,6 +1571,7 @@ describe("chat push policy", () => {
       emailNotificationsEnabled: false,
       whatsappNotificationsEnabled: false,
       hasWhatsAppPhone: false,
+      hasEmail: true,
     };
 
     // Mandatory chat topic + device: push, and push alone.

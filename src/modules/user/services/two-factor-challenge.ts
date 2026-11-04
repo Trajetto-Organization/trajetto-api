@@ -51,7 +51,11 @@ const key = Buffer.from(
 
 interface ChallengedUser {
   id: string;
-  email: string;
+  /**
+   * The code travels by e-mail, so an account without one (a driver's login,
+   * plan of 02/11/2026, D2) has no second factor to prove.
+   */
+  email: string | null;
   session_version?: number | null;
 }
 
@@ -67,6 +71,11 @@ function normalizedEmail(email: string): string {
 }
 
 function issueTwoFactorChallenge(user: ChallengedUser): string {
+  // Only a password login by e-mail reaches the second factor.
+  if (!user.email) {
+    throw new Error("two-factor challenge for an account without an e-mail");
+  }
+
   return sign(
     {
       tokenType: CHALLENGE_TYPE,
@@ -88,7 +97,7 @@ function isTwoFactorChallengeFor(
   challenge: string | undefined,
   user: ChallengedUser,
 ): boolean {
-  if (!challenge) return false;
+  if (!challenge || !user.email) return false;
 
   try {
     const payload = verify(challenge, hmacVerifyKey(key), {

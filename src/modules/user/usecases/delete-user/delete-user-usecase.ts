@@ -131,7 +131,10 @@ class DeleteUserUseCase {
             type: "Usuário",
             action: "delete",
             entityId: deleted.id,
-            description: `Usuário ${deleted.name} | ${deleted.email} deletado | ID: ${deleted.id}`,
+            // A driver's login may have no e-mail (plan of 02/11/2026, D2).
+            description: deleted.email
+              ? `Usuário ${deleted.name} | ${deleted.email} deletado | ID: ${deleted.id}`
+              : `Usuário ${deleted.name} (sem e-mail) deletado | ID: ${deleted.id}`,
             status: "Deletado",
             performedBy: id,
             businessId: deleted.businessId as string,

@@ -71,6 +71,10 @@ class ResetUserPasswordUseCase {
       await this.user.updateUserPassword({
         userId: user.id,
         password: hashedPassword,
+        // The link reached this mailbox, which proves it (plan of
+        // 02/11/2026, D1): the invited person sets the password and signs in,
+        // instead of being sent a second e-mail to verify the address.
+        markEmailVerifiedAt: user.email_verified ? undefined : now,
       });
 
       sendSecurityEventToUser(user.id, { reason: "password_reset" });

@@ -203,7 +203,11 @@ function suppressedChannels(
   if (options.hasEmailContent && !chosen.has(NotificationChannel.EMAIL)) {
     suppressed.push({
       channel: NotificationChannel.EMAIL,
-      reason: "preference_off",
+      // A driver's login without an e-mail (D2) is no preference of theirs.
+      reason:
+        flags.emailNotificationsEnabled && !flags.hasEmail
+          ? "no_contact"
+          : "preference_off",
     });
   }
 

@@ -29,6 +29,7 @@ import {
   issuePasswordSetupLink,
 } from "../../services/password-setup-link";
 import { emailLogoUrl } from "@/shared/providers/mail-provider/email-logo";
+import { requireMailbox } from "../../services/user-mailbox";
 
 const log = logger.child({ component: "user" });
 
@@ -82,26 +83,6 @@ class UpdateMasterUserUseCase {
     return { notificationText: text, activityText: text, passwordLinkSent };
   }
 
-  private buildWhatsAppText({
-    masterName,
-    changesText,
-    performingUserName,
-    performingUserEmail,
-  }: {
-    masterName: string;
-    changesText: string;
-    performingUserName: string;
-    performingUserEmail: string;
-  }): string {
-    return [
-      `✏️ *Usuário Master Atualizado!*`,
-      `Usuário: *${masterName}*`,
-      `Campos alterados: *${changesText}*`,
-      `Atualizado por: *${performingUserName}* (${performingUserEmail})`,
-      `Para mais detalhes, acesse o sistema.`,
-    ].join("\n");
-  }
-
   /**
    * The update e-mail. It never carries a password (decision 4.9); a reset
    * travels as a single-use link, in its own e-mail.
@@ -115,7 +96,7 @@ class UpdateMasterUserUseCase {
   ): Promise<void> {
     try {
       await sendTransactionalMail({
-        email: updatedMaster.email,
+        email: requireMailbox(updatedMaster),
         name: updatedMaster.name,
         subject: "Sua conta Master foi atualizada",
         templateName: "master-user-updated.hbs",
@@ -177,6 +158,9 @@ class UpdateMasterUserUseCase {
     master: User,
     performingUserName: string,
   ): void {
+    // A MASTER always has an e-mail (only a driver's login may not, D2).
+    if (!master.email) return;
+
     void sendTransactionalMail({
       email: master.email,
       name: master.name,
@@ -211,6 +195,9 @@ class UpdateMasterUserUseCase {
     if (performingUser.role !== "MASTER") {
       throw new UserCannotUpdateMasterUserError();
     }
+
+    // Named in every notice of this change; a MASTER always has one (D2).
+    const performingUserEmail = requireMailbox(performingUser);
 
     // Cannot update yourself
     if (performedById === masterUserId) {
@@ -247,7 +234,7 @@ class UpdateMasterUserUseCase {
 
     const resetUrl = sendLink
       ? await this.issuePasswordLink(
-          emailChanged ? (data.email as string) : masterUser.email,
+          emailChanged ? (data.email as string) : requireMailbox(masterUser),
           masterUserId,
         )
       : null;
@@ -285,7 +272,7 @@ class UpdateMasterUserUseCase {
             changesActivityText: changes.activityText,
             actorUserId: performedById,
             performingUserName: performingUser.name,
-            performingUserEmail: performingUser.email,
+            performingUserEmail,
           },
         });
 
@@ -299,7 +286,7 @@ class UpdateMasterUserUseCase {
             masterName: updated.name,
             changesNotificationText: changes.notificationText,
             performingUserName: performingUser.name,
-            performingUserEmail: performingUser.email,
+            performingUserEmail,
           },
         });
 
@@ -326,7 +313,7 @@ class UpdateMasterUserUseCase {
           updatedMaster,
           changes,
           performingUser.name,
-          performingUser.email,
+          performingUserEmail,
         );
       }
 
