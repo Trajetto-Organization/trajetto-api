@@ -5,6 +5,7 @@ import {
   NotificationPolicyEntry,
   RenderedPush,
 } from "../notification-types";
+import { PUSH_TTL_SECONDS } from "../push-validity";
 
 import type { User } from "@/modules/user/dtos/user-dto";
 import type { IUserRepository } from "@/modules/user/repositories/IUser-repository";
@@ -67,6 +68,7 @@ const deliveryStatusOverriddenPolicy: NotificationPolicyEntry<DeliveryStatusOver
     },
 
     renderPush: renderDeliveryStatusOverriddenPush,
+    pushTtlSeconds: PUSH_TTL_SECONDS.towerDecision,
   };
 
 export { deliveryStatusOverriddenPolicy, renderDeliveryStatusOverriddenPush };

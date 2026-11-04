@@ -7,6 +7,7 @@ import {
   RenderedInApp,
   RenderedPush,
 } from "../notification-types";
+import { PUSH_TTL_SECONDS } from "../push-validity";
 
 /**
  * The driver hears that the receipt they sent looks wrong (decision 6.9).
@@ -98,6 +99,7 @@ const proofAIFeedbackPolicy: NotificationPolicyEntry<DeliveryProofAIFlaggedPaylo
 
     renderInApp: renderProofFeedbackInApp,
     renderPush: renderProofFeedbackPush,
+    pushTtlSeconds: PUSH_TTL_SECONDS.proofFeedback,
   };
 
 export {

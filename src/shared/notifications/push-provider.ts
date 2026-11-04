@@ -1,3 +1,4 @@
+import { env } from "@/env";
 import {
   httpOutcome,
   observeProviderCall,
@@ -21,6 +22,24 @@ const EXPO_RECEIPTS_ENDPOINT = "https://exp.host/--/api/v2/push/getReceipts";
  * Ten seconds sits under the pipeline's own per-delivery backstop.
  */
 const REQUEST_TIMEOUT_MS = 10_000;
+
+/**
+ * The headers of every call to Expo. With "enhanced push security" turned on
+ * in the Expo project, a send or a receipts query without the project's
+ * access token is refused with 401 — every push at once (plan of 02/11/2026,
+ * item A8). The token is optional: without it nothing changes, and the owner
+ * turns the setting on only after the variable is live in both environments
+ * (decision D43). Read per call, so a test or a hot env change is honoured.
+ */
+function expoHeaders(): Record<string, string> {
+  return {
+    "Content-Type": "application/json",
+    Accept: "application/json",
+    ...(env.EXPO_ACCESS_TOKEN
+      ? { Authorization: `Bearer ${env.EXPO_ACCESS_TOKEN}` }
+      : {}),
+  };
+}
 
 interface ExpoPushTicket {
   status: "ok" | "error";
@@ -63,6 +82,15 @@ interface PushContent {
    * get four. Without it they stay non-collapsible (up to 100 stored).
    */
   collapseKey?: string;
+
+  /**
+   * How long Expo (and FCM/APNs behind it) keeps the message for a phone
+   * that is off or out of signal, in seconds. Absent = the provider's
+   * default of a month — which is how a driver whose phone came back on
+   * Monday got Friday's "rota liberada" (plan of 02/11/2026, A7). Each topic
+   * states its own value on its policy (`pushTtlSeconds`, decision D41).
+   */
+  ttlSeconds?: number;
 }
 
 interface PushSendResult {
@@ -95,6 +123,7 @@ async function sendExpoPushMessages(
     sound: "default",
     channelId: "default",
     priority: "high",
+    ...(content.ttlSeconds ? { ttl: content.ttlSeconds } : {}),
     ...(content.collapseKey ? { tag: content.collapseKey } : {}),
     ...(content.collapseKey && iosTokens.has(token)
       ? { collapseId: content.collapseKey }
@@ -107,10 +136,7 @@ async function sendExpoPushMessages(
     () =>
       fetch(EXPO_PUSH_ENDPOINT, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Accept: "application/json",
-        },
+        headers: expoHeaders(),
         body: JSON.stringify(messages),
         signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
       }),
@@ -166,10 +192,7 @@ async function fetchExpoPushReceipts(
 
   const response = await fetch(EXPO_RECEIPTS_ENDPOINT, {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Accept: "application/json",
-    },
+    headers: expoHeaders(),
     body: JSON.stringify({ ids }),
     signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
   });
@@ -185,5 +208,5 @@ async function fetchExpoPushReceipts(
   return result.data ?? {};
 }
 
-export { fetchExpoPushReceipts, sendExpoPushMessages };
+export { expoHeaders, fetchExpoPushReceipts, sendExpoPushMessages };
 export type { ExpoPushReceipt, PushContent, PushSendResult };
