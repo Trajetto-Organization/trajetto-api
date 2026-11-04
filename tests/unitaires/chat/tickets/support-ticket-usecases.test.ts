@@ -913,7 +913,29 @@ describe("ReopenSupportTicketUseCase", () => {
 describe("reading tickets", () => {
   const get = () =>
     new GetSupportTicketUseCase(users, tickets, {} as never, uploadStub);
-  const list = () => new ListSupportTicketsUseCase(users, tickets);
+  // Company A runs on Manaus time (H6).
+  const businesses = {
+    findBusinessById: async (id: string) =>
+      id === A ? { id, timezone: "America/Manaus" } : null,
+  };
+  const list = () =>
+    new ListSupportTicketsUseCase(users, tickets, businesses as never);
+
+  it("answers the company's zone beside the tickets, for the Atendimentos tab (H6)", async () => {
+    // Red before: no zone, so the tab printed the hours on the browser's
+    // clock while the route detail used the company's.
+    await generalTicket();
+
+    const listed = await list().execute({
+      userId: OPERATOR,
+      status: "OPEN",
+      scope: "ALL",
+      page: 1,
+      pageSize: 20,
+    });
+
+    expect(listed.meta).toEqual({ timeZone: "America/Manaus" });
+  });
 
   it("tells the operator, the read-only profile and the driver what each may do", async () => {
     const ticket = await generalTicket();

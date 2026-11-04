@@ -111,7 +111,18 @@ async function makeFeed() {
   await seed("Bruno", "IN_TRANSIT", AUSENTE, 10);
   await seed("De outra empresa", "FAILED", FOREIGN_TYPE, 5, OTHER_BUSINESS);
 
-  const useCase = new ListOccurrencesUseCase(users, deliveries, uploadStub);
+  // The company runs on Manaus time (H6): the tab prints in its zone.
+  const businesses = {
+    findBusinessById: async (id: string) =>
+      id === BUSINESS ? { id, timezone: "America/Manaus" } : null,
+  };
+
+  const useCase = new ListOccurrencesUseCase(
+    users,
+    deliveries,
+    uploadStub,
+    businesses as never,
+  );
 
   const list = (input: Partial<Parameters<typeof useCase.execute>[0]> = {}) =>
     useCase.execute({ userId: MANAGER_ID, page: 1, pageSize: 10, ...input });
@@ -131,6 +142,16 @@ type FeedRow = {
 
 const recipients = (data: unknown[]) =>
   (data as FeedRow[]).map((row) => row.delivery.recipient_name);
+
+describe("the zone the tab prints in (H6)", () => {
+  it("answers the company's zone with the rows, not the browser's", async () => {
+    // Red before: no zone, so the Ocorrências tab printed the hours on the
+    // browser's clock while the route detail used the company's (S16/S20).
+    const { list } = await makeFeed();
+
+    expect((await list()).searchMeta.timeZone).toBe("America/Manaus");
+  });
+});
 
 describe("occurrence feed order", () => {
   it("defaults to newest first, not insertion order", async () => {

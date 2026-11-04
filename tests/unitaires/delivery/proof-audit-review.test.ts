@@ -862,6 +862,37 @@ describe("the order of each tab (DLVB-02)", () => {
   });
 });
 
+describe("the zone the Auditoria tab prints in (H6)", () => {
+  it("answers the company's zone in the meta line, the one the window already counts in", async () => {
+    // Red before: resolved for the agreement window and never returned, so
+    // the tab printed on the browser's clock.
+    audits.businesses.set(BUSINESS, {
+      timezone: "America/Manaus",
+      ai_analysis_limit: 0,
+    });
+
+    const listed = await list.execute({
+      userId: REVIEWER,
+      status: "PENDING",
+      page: 1,
+      pageSize: 10,
+    });
+
+    expect(listed.meta).toMatchObject({ timeZone: "America/Manaus" });
+  });
+
+  it("falls back to the default zone for a company without one", async () => {
+    const listed = await list.execute({
+      userId: REVIEWER,
+      status: "PENDING",
+      page: 1,
+      pageSize: 10,
+    });
+
+    expect(listed.meta).toMatchObject({ timeZone: "America/Sao_Paulo" });
+  });
+});
+
 describe("the agreement rate's window (DLVB-04)", () => {
   it("counts only the decisions of the last 90 days, and says so", async () => {
     const recent = await enqueue("recent", BUSINESS);

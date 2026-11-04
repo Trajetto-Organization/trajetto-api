@@ -8,6 +8,10 @@ import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-n
 
 import { assertTenantAccess } from "@/modules/middlewares/tenant-authorization";
 import { AppError } from "@/shared/errors/AppError";
+import {
+  loadBusinessTimeZone,
+  type BusinessLookup,
+} from "@/shared/time/business-time-zone";
 
 import type { DeliveryStatus } from "@/shared/delivery/delivery-rules";
 import type { SortOrder } from "@/shared/pagination/list-query";
@@ -38,8 +42,11 @@ interface ListOccurrencesResponse {
   data: unknown[];
   /** Rows of search + every facet: what the pager counts. */
   total: number;
-  /** The NDJSON meta line's `searchMeta`: cards and filter options. */
-  searchMeta: OccurrenceFeedSearchMeta;
+  /**
+   * The NDJSON meta line's `searchMeta`: cards and filter options, and the
+   * company's zone the tab prints its times in (H6, D22).
+   */
+  searchMeta: OccurrenceFeedSearchMeta & { timeZone: string };
 }
 
 /**
@@ -61,6 +68,8 @@ class ListOccurrencesUseCase {
     private delivery: IDeliveryRepository,
     @inject("UploadService")
     private uploadService: UploadService,
+    @inject("BusinessRepository")
+    private business: BusinessLookup,
   ) {}
 
   async execute({
@@ -119,6 +128,15 @@ class ListOccurrencesUseCase {
         occurrenceTypeIds,
       });
 
+      // The tab prints on the company's clock, like the route detail and
+      // the Painel (H6, decision D22): the same occurrence read the same
+      // hour in every tab for someone outside the zone. After the list,
+      // never beside it: one connection per request.
+      const timeZone = await loadBusinessTimeZone(
+        this.business,
+        resolvedBusinessId,
+      );
+
       // Storage keys become short-lived signed URLs at read time — the
       // panel renders thumbnails straight away, same rule as the detail.
       const data = await Promise.all(
@@ -146,7 +164,7 @@ class ListOccurrencesUseCase {
         })),
       );
 
-      return { data, total, searchMeta };
+      return { data, total, searchMeta: { ...searchMeta, timeZone } };
     } catch (error) {
       if (error instanceof AppError) {
         throw error;

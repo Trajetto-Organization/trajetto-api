@@ -29,6 +29,12 @@ const occurrenceFeedSearchMetaDoc = searchMetaDoc(
       .describe(
         "Das quais entregas comprovadas (categoria DELIVERED, decisão 14.3); não entram nas gravidades.",
       ),
+    timeZone: z
+      .string()
+      .optional()
+      .describe(
+        "O fuso da empresa (IANA), ex.: America/Sao_Paulo: a aba da torre mostra os horários nele, com a nota, como o detalhe da rota (plano de 02/11/2026, H6; decisão D22). Sem ele (versão anterior da API), o navegador.",
+      ),
   },
   ["severity", "category", "occurrenceTypeId"],
 );

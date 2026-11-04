@@ -45,6 +45,12 @@ const proofAuditResponses = {
           .describe(
             "Janela da taxa de concordância, em dias corridos (hoje incluído), contada no fuso da empresa.",
           ),
+        timeZone: z
+          .string()
+          .optional()
+          .describe(
+            "O fuso da empresa (IANA), ex.: America/Sao_Paulo: a aba da torre mostra os horários nele, com a nota, como o detalhe da rota (plano de 02/11/2026, H6; decisão D22). Sem ele (versão anterior da API), o navegador.",
+          ),
       }),
     }),
   }),

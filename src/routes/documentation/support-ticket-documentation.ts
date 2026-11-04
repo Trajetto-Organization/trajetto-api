@@ -155,11 +155,21 @@ const supportTicketResponses = {
       data: z.array(z.unknown()),
       total: z.number(),
       counts: z.unknown(),
+      meta: z.object({ timeZone: z.string() }).optional(),
     }),
     z.object({
       data: z.array(ticketSummary),
       total: z.number().int(),
       counts: ticketCounts,
+      meta: z
+        .object({
+          timeZone: z
+            .string()
+            .describe(
+              "O fuso da empresa (IANA), ex.: America/Sao_Paulo: a aba da torre mostra os horários nele, com a nota, como o detalhe da rota (plano de 02/11/2026, H6; decisão D22). Sem ele (versão anterior da API), o navegador.",
+            ),
+        })
+        .optional(),
     }),
   ),
   summary: documentedAs(z.object({}).passthrough(), ticketCounts),
