@@ -3,7 +3,11 @@ import "./shared";
 // Installs zod's pt-BR default sentences before any schema is parsed.
 import { validationErrorMessage } from "./shared/validation/zod-pt-br";
 
-import fastify, { type FastifyBaseLogger, type FastifyReply } from "fastify";
+import fastify, {
+  type FastifyBaseLogger,
+  type FastifyError,
+  type FastifyReply,
+} from "fastify";
 
 import fastifyRateLimit from "@fastify/rate-limit";
 import fastifyCompress from "@fastify/compress";
@@ -609,7 +613,27 @@ function sendError(
     .send(JSON.stringify(body));
 }
 
-app.setErrorHandler((error, request, reply) => {
+/**
+ * What was thrown, as the handler below reads it. Fastify hands the handler
+ * the thrown value as is, and types it `unknown` (5.12; 5.2 said
+ * FastifyError): a promise rejected with nothing, or with null, arrives as
+ * `undefined`/`null`, and reading `.code` off it threw inside this handler,
+ * so the client got Fastify's default body — no `code`, no `requestId` —
+ * instead of ours. Objects pass through untouched, so every `instanceof`
+ * below still sees the original; anything else becomes an Error that names
+ * it.
+ */
+function asThrownError(thrown: unknown): FastifyError {
+  if (typeof thrown === "object" && thrown !== null) {
+    return thrown as FastifyError;
+  }
+
+  return new Error(`Non-error thrown: ${String(thrown)}`) as FastifyError;
+}
+
+app.setErrorHandler((thrown, request, reply) => {
+  const error = asThrownError(thrown);
+
   // Raised by the local upload route when the body exceeds its parser limit.
   // In production the equivalent refusal comes from R2, which rejects a PUT
   // whose length does not match the signed `ContentLength`.

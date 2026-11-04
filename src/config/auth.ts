@@ -3,7 +3,9 @@ import { env } from "@/env";
 export default {
   secret_token: env.JWT_SECRET,
   secret_refresh_token: env.JWT_SECRET_REFRESH_TOKEN,
-  expires_in_token: "15m",
+  // `as const`: jsonwebtoken types `expiresIn` as a duration ("15m"), and a
+  // plain string widened from this literal no longer type-checks.
+  expires_in_token: "15m" as const,
 
   /**
    * How long a session may go unused before its refresh token lapses, and

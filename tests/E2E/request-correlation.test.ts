@@ -177,6 +177,13 @@ beforeAll(async () => {
     throw new Error("falha interna simulada");
   });
 
+  // A library that rejects with no reason, or throws null: not an Error.
+  app.get("/__test__/boom-nothing", () => Promise.reject());
+
+  app.get("/__test__/boom-null", async () => {
+    throw null;
+  });
+
   await app.ready();
 
   // After the app registered the real providers: the last registration wins.
@@ -306,6 +313,21 @@ describe("the request id", () => {
       requestId: response.headers["x-request-id"],
     });
   });
+
+  // Reading `.code` off `undefined` used to throw inside the error handler,
+  // and Fastify's default body went out instead: no code, no request id.
+  it.each(["/__test__/boom-nothing", "/__test__/boom-null"])(
+    "is in the body of a 500 when what was thrown is not an Error (%s)",
+    async (url) => {
+      const response = await app.inject({ method: "GET", url });
+
+      expect(response.statusCode).toBe(500);
+      expect(response.json()).toMatchObject({
+        code: "INTERNAL_ERROR",
+        requestId: response.headers["x-request-id"],
+      });
+    },
+  );
 });
 
 describe("an authenticated request", () => {
