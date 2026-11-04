@@ -5,6 +5,7 @@ import { isPickedDateInput } from "@/shared/vehicle/record-dates";
 import { LocationSource, RecordOrigin } from "@prisma/client";
 import { isWithinAllowedDistance } from "@/shared/utils/geolocation";
 import { devicePrecheckField } from "@/shared/ai-precheck/device-precheck";
+import { occurredAtField } from "@/shared/delivery/occurred-at";
 
 import {
   hasConsecutiveSpaces,
@@ -221,6 +222,20 @@ const createFuelSchema = z
 
     // Decision 14.2: the phone's offline check of the odometer photo.
     device_precheck: devicePrecheckField,
+
+    // Plan of 02/11/2026 (C5/F3): the route the refuelling was made on.
+    routeId: z
+      .string()
+      .uuid("ID da rota é inválido.")
+      .nullable()
+      .optional()
+      .describe(
+        "A rota em que o abastecimento foi feito (abastecimento a partir da rota no app). A rota tem de ser do motorista do abastecimento e ter o veículo dele (senão 422 ROUTE_LINK_MISMATCH); rota inexistente ou de outra empresa: 404 DELIVERY_ROUTE_NOT_FOUND. O status da rota não importa: um abastecimento feito sem sinal pode chegar depois do fim. A rota informada também vale como a atribuição do veículo ao motorista, mesmo depois do fim.",
+      ),
+
+    // K6: when the driver refuelled, for a refuelling the app queued
+    // offline. With X-Client-Sent-At it replaces refueling_date.
+    occurred_at: occurredAtField,
   })
   // 🆕 VALIDATION: Distance check for GPS_MANUAL (manual adjustment)
   .refine(

@@ -20,6 +20,7 @@ import { ROUTE_STATUS_LABELS, isStopOpen } from "@/shared/route/route-rules";
 
 import { assertRoutePlan } from "../shared/route-plan";
 import { assertDriverStillActive } from "../shared/driver-still-active";
+import { RouteBranchGuard } from "../shared/route-branch-guard";
 import {
   announcePlanChange,
   planWriteFailure,
@@ -84,6 +85,11 @@ class UpdateRouteUseCase {
     private notificationService: NotificationService,
     @inject("WebhookFanOutService")
     private webhooks: WebhookFanOutService,
+    // Contract C1 (03/11/2026): a released route's new crew must still let
+    // the checklist be filed. Optional so callers built before it keep
+    // working; the container always provides it.
+    @inject(RouteBranchGuard)
+    private branchGuard?: Pick<RouteBranchGuard, "assertResolvable">,
   ) {}
 
   async execute({
@@ -150,6 +156,18 @@ class UpdateRouteUseCase {
       }
     }
 
+    // Decision D10 (plan of 02/11/2026): a released route keeps a vehicle.
+    // Releasing requires one (canReleaseRoute), and the departure checklist
+    // the app holds "Iniciar rota" for (C4) is about it; clearing it after
+    // the release left the driver a route with no truck to inspect.
+    if (vehicleId === null && findRoute.status === "RELEASED") {
+      throw new AppError(
+        "Uma rota liberada precisa de veículo. Para retirá-lo, volte a rota ao planejamento.",
+        400,
+        "ROUTE_VEHICLE_REQUIRED",
+      );
+    }
+
     /**
      * The window, checked as it WILL be: a partial edit that moves only the
      * day (or only one end) is judged against the stored values of the
@@ -180,6 +198,17 @@ class UpdateRouteUseCase {
     const reassigned =
       (driverId !== undefined && driverId !== findRoute.driverId) ||
       (vehicleId !== undefined && vehicleId !== findRoute.vehicleId);
+
+    // The release asked whether the checklist's branch resolves (C1); a new
+    // vehicle or driver on the released route must not undo that. A planned
+    // route is asked when it is released.
+    if (reassigned && findRoute.status === "RELEASED") {
+      await this.branchGuard?.assertResolvable({
+        businessId,
+        vehicleId: vehicleId !== undefined ? vehicleId : findRoute.vehicleId,
+        driverId: driverId ?? findRoute.driverId,
+      });
+    }
 
     try {
       const updated = await database.$transaction(async (tx) => {

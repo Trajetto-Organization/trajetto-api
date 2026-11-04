@@ -68,13 +68,37 @@ const vehicleListItem = z.object({
   fuelTypeId: z.string(),
   driverId: z.string().nullable().describe("O motorista responsável (fixo)."),
   branchId: z.string().nullable(),
+  responsibleUserId: z
+    .string()
+    .nullable()
+    .optional()
+    .describe(
+      "O usuário responsável pela frota deste veículo (plano de 02/11/2026, F1); null = os administradores.",
+    ),
   businessId: z.string(),
   created_at: dateLike,
   updated_at: dateLike,
   vehicleType: z.object({ description: z.string() }).nullable(),
   fuelType: z.object({ description: z.string() }).nullable(),
   driver: z.object({ name: z.string(), cnh: z.string() }).nullable(),
-  branch: z.object({ corporate_reason: z.string() }).nullable(),
+  branch: z
+    .object({
+      corporate_reason: z.string(),
+      name: z
+        .string()
+        .optional()
+        .describe(
+          "O nome da filial como os seletores mostram (a razão social).",
+        ),
+    })
+    .nullable(),
+  responsibleUser: z
+    .object({ name: z.string() })
+    .nullable()
+    .optional()
+    .describe(
+      "O nome do responsável pela frota (F1); null = sem responsável (os administradores).",
+    ),
 });
 
 /** One line of the picker search, as a fleet reader receives it. */
@@ -191,6 +215,27 @@ const vehicleResponses = {
       .optional()
       .describe("ID do motorista responsável"),
     branchId: z.string().nullable().optional().describe("ID da filial"),
+    responsibleUserId: z
+      .string()
+      .nullable()
+      .optional()
+      .describe(
+        "ID do usuário responsável pela frota deste veículo, que recebe o alerta de checklist com defeito (plano de 02/11/2026, F1); null = os administradores da empresa",
+      ),
+    responsibleUser: z
+      .object({ name: z.string() })
+      .nullable()
+      .optional()
+      .describe(
+        "O nome do responsável pela frota (F1), para a edição mostrar quem é; null sem responsável",
+      ),
+    branch: z
+      .object({ corporate_reason: z.string(), name: z.string() })
+      .nullable()
+      .optional()
+      .describe(
+        "A filial do veículo; `name` é o nome que os seletores mostram (a razão social), usado pela OS para já trazer a filial (F4); null sem filial",
+      ),
     last_fuel_mileage: z
       .number()
       .nullable()
@@ -207,10 +252,10 @@ const vehicleResponses = {
   // Every refusal leaves in the handler's shape (`code` + `message`); the
   // descriptions list the codes a client branches on.
   validationError: errorResponse.describe(
-    "VALIDATION_ERROR (campo inválido, ordenação ou filtro fora da lista), BUSINESS_NOT_IDENTIFIED (MASTER sem empresa), VEHICLE_MODEL_YEAR_INVALID, VEHICLE_MILEAGE_READ_ONLY, VEHICLE_MAINTENANCE_MILEAGE_INVALID, VEHICLE_STATUS_DERIVED ou um cadastro relacionado (tipo, combustível, motorista, filial) que não existe nesta empresa.",
+    "VALIDATION_ERROR (campo inválido, ordenação ou filtro fora da lista), BUSINESS_NOT_IDENTIFIED (MASTER sem empresa), VEHICLE_MODEL_YEAR_INVALID, VEHICLE_MILEAGE_READ_ONLY, VEHICLE_MAINTENANCE_MILEAGE_INVALID, VEHICLE_STATUS_DERIVED ou um cadastro relacionado (tipo, combustível, motorista, filial, RESPONSIBLE_USER_NOT_FOUND para o responsável pela frota) que não existe nesta empresa.",
   ),
   forbidden: errorResponse.describe(
-    "PERMISSION_DENIED (inclui o motorista na listagem da frota) ou VEHICLE_NOT_ASSIGNED_TO_DRIVER (o motorista pediu um veículo que não é o dele nem o da rota liberada ou em andamento).",
+    "PERMISSION_DENIED (inclui o motorista na listagem da frota) ou VEHICLE_NOT_ASSIGNED_TO_DRIVER (o motorista pediu um veículo que não é o dele nem o da rota liberada ou em andamento; na consulta de um veículo, também não é o da rota dele concluída nas últimas 24 horas).",
   ),
   notFound: errorResponse.describe(
     "VEHICLE_NOT_FOUND, BUSINESS_NOT_FOUND ou USER_NOT_FOUND (o usuário da sessão não existe mais). Um veículo de outra empresa responde exatamente como um inexistente.",

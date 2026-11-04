@@ -145,6 +145,31 @@ async function verifyBranchActive(
   request.branch = branch;
 }
 
+/**
+ * A driver never picks the branch of a record they file (a checklist or a
+ * refuelling): the use case files it under an ACTIVE branch it resolves
+ * itself (shared/vehicle/record-branch, wave 3.7). The app still sends one —
+ * the installed build and the current one both put the vehicle's in the
+ * form — and that branch may have been switched off after the route's
+ * release. Judged by `verifyBranchActive`, it refused the record with 403
+ * BRANCH_INACTIVE before the use case could fall back to an active branch,
+ * and nobody in the office heard of it. So a driver's body branch is dropped
+ * before the gate, on the routes that list this; a manager's is still
+ * judged by it.
+ */
+async function ignoreDriverBranchChoice(
+  request: FastifyRequest,
+  _reply: FastifyReply,
+): Promise<void> {
+  if (!request.user?.driverId) return;
+
+  const body = request.body;
+
+  if (body !== null && typeof body === "object" && "branchId" in body) {
+    delete (body as { branchId?: unknown }).branchId;
+  }
+}
+
 async function verifyBranchBelongsToBusiness(
   request: FastifyRequest,
   _reply: FastifyReply,
@@ -161,6 +186,7 @@ async function verifyBranchBelongsToBusiness(
 
 export {
   businessNotFound,
+  ignoreDriverBranchChoice,
   inactiveBusiness,
   verifyBusinessActive,
   verifyBranchActive,

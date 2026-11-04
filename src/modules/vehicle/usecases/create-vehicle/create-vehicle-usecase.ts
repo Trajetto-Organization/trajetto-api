@@ -50,6 +50,7 @@ import {
 } from "@/shared/vehicle/vehicle-years";
 import { logger } from "@/shared/logging/logger";
 import { sendCatalogChangedEvent } from "@/websocket";
+import { assertResponsibleUser } from "../vehicle-responsible";
 
 const log = logger.child({ component: "vehicle" });
 
@@ -180,6 +181,13 @@ class CreateVehicleUseCase {
         throw new BranchNotBelongBusinessError();
       }
     }
+
+    // F1: a user of this company, or nobody (the admins).
+    await assertResponsibleUser(
+      this.user,
+      vehicleData.responsibleUserId,
+      vehicleData.businessId,
+    );
 
     let created: Vehicle | null;
     let activeCount: number;

@@ -24,6 +24,7 @@ import database from "@/../infra/database";
 import { AppError } from "@/shared/errors/AppError";
 
 import { assertRouteDispatcher } from "@/modules/route/usecases/shared/assert-route-dispatcher";
+import { RouteBranchGuard } from "@/modules/route/usecases/shared/route-branch-guard";
 import { announcePlanChange } from "@/modules/route/usecases/shared/route-plan-change";
 
 interface AssignDeliveriesRequest {
@@ -113,6 +114,11 @@ class AssignDeliveriesUseCase {
     private cancelRoute: CancelRouteUseCase,
     @inject(UpdateRouteUseCase)
     private updateRoute: UpdateRouteUseCase,
+    // The shortcut releases the route it builds, so it asks what the release
+    // asks (contract C1). Optional so callers built before it keep working;
+    // the container always provides it.
+    @inject(RouteBranchGuard)
+    private branchGuard?: Pick<RouteBranchGuard, "assertResolvable">,
   ) {}
 
   async execute({
@@ -236,6 +242,14 @@ class AssignDeliveriesUseCase {
      * were gone from the other driver's phone.
      */
     const validated = await this.createRoute.validate(asked);
+
+    // The route is born RELEASED: the release's check of the checklist's
+    // branch (409 ROUTE_BRANCH_REQUIRED), before anything is detached.
+    await this.branchGuard?.assertResolvable({
+      businessId,
+      vehicleId,
+      driverId,
+    });
 
     // The day and the label on the company's clock: the day used to be the
     // SERVER's midnight (UTC in the container), so from 21:00 in São Paulo

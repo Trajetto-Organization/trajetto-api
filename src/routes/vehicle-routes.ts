@@ -161,7 +161,7 @@ async function vehicleRoutes(app: FastifyInstance) {
         tags: ["vehicle"],
         summary: "Consulta um veículo",
         description:
-          "Um veículo da empresa, com a quilometragem e a data do último abastecimento. O motorista só consulta o veículo que pode operar (responsável ou da rota liberada ou em andamento dele).",
+          "Um veículo da empresa, com a quilometragem e a data do último abastecimento. O motorista só consulta o veículo que pode operar (responsável ou da rota liberada ou em andamento dele) e, só para leitura, o da rota dele concluída nas últimas 24 horas: é quando o app pede o checklist de chegada e lê a quilometragem e a filial do veículo. Essa leitura não libera abastecimento, checklist sem rota, lista nem históricos.",
         params: vehicleSchemas.getVehicle,
         response: {
           200: vehicleResponses.vehicleReturned,

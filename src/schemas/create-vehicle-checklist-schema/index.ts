@@ -10,6 +10,7 @@ import {
   isEmptyOrWhitespace,
 } from "@/shared/utils/zod-schema-helpers";
 import { devicePrecheckField } from "@/shared/ai-precheck/device-precheck";
+import { occurredAtField } from "@/shared/delivery/occurred-at";
 
 const createVehicleChecklistSchema = z.object({
   client_submission_id: z
@@ -230,6 +231,33 @@ const createVehicleChecklistSchema = z.object({
   // Decision 14.2: the phone's offline check of the "Foto do Odômetro"
   // (field current_mileage). Dropped without that photo.
   device_precheck: devicePrecheckField,
+
+  // Plan of 02/11/2026 (C4/F3): the route this checklist was made for and
+  // its moment. Both or neither; the use case checks the route is the
+  // driver's and the vehicle is the route's.
+  routeId: z
+    .string()
+    .uuid("ID da rota é inválido.")
+    .nullable()
+    .optional()
+    .describe(
+      "A rota para a qual o checklist foi feito (checklist de saída ou de chegada). Exige `phase`. A rota tem de ser do motorista do checklist e ter o veículo do checklist (senão 422 ROUTE_LINK_MISMATCH); rota inexistente ou de outra empresa: 404 DELIVERY_ROUTE_NOT_FOUND. O status da rota não importa: um checklist feito sem sinal pode chegar depois do início, e o de chegada abre quando a última parada já concluiu a rota. A rota informada também vale como a atribuição do veículo ao motorista (o substituto que levou o caminhão na rota faz o checklist dele mesmo depois do fim).",
+    ),
+  phase: z
+    .enum(["STANDALONE", "ROUTE_START", "ROUTE_END"], {
+      errorMap: () => ({
+        message:
+          "Fase inválida. Deve ser STANDALONE, ROUTE_START ou ROUTE_END.",
+      }),
+    })
+    .optional()
+    .describe(
+      "O momento: ROUTE_START (saída) ou ROUTE_END (chegada) com `routeId`; STANDALONE (padrão) sem rota.",
+    ),
+
+  // K6: when the driver finished the inspection, for a checklist the app
+  // queued offline. With X-Client-Sent-At it replaces checklist_date.
+  occurred_at: occurredAtField,
 });
 
 // Photos are validated by `presignedPhotosSchema`: they never reach this API

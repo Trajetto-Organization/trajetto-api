@@ -12,6 +12,7 @@ import { WebhookFanOutService } from "@/shared/integration/webhook-fan-out-servi
 import { routeEventPayload } from "@/shared/integration/announce";
 
 import { assertRouteDispatcher } from "../shared/assert-route-dispatcher";
+import { RouteBranchGuard } from "../shared/route-branch-guard";
 import { assertDriverStillActive } from "../shared/driver-still-active";
 import {
   assertPlanVersion,
@@ -83,6 +84,11 @@ class ReleaseRouteUseCase {
     private outbox: OutboxService,
     @inject("WebhookFanOutService")
     private webhooks: WebhookFanOutService,
+    // Contract C1 (03/11/2026): the checklist's record branch, asked before
+    // the driver is at the truck. Optional so callers built before it keep
+    // working; the container always provides it.
+    @inject(RouteBranchGuard)
+    private branchGuard?: Pick<RouteBranchGuard, "assertResolvable">,
   ) {}
 
   async execute({
@@ -132,6 +138,15 @@ class ReleaseRouteUseCase {
       if (!readiness.allowed) {
         throw new AppError(readiness.reason!, 400, "ROUTE_NOT_RELEASABLE");
       }
+
+      // 409 ROUTE_BRANCH_REQUIRED when the company asks for the checklist
+      // and its branch resolves to nothing: the dispatcher completes the
+      // vehicle or the driver now, instead of the driver being refused.
+      await this.branchGuard?.assertResolvable({
+        businessId,
+        vehicleId: findRoute.vehicleId,
+        driverId: findRoute.driverId,
+      });
     } else {
       // Pulling back is only legal while nothing was executed. Once a stop has
       // been worked, the route is a record of what the driver did, and editing

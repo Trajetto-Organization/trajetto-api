@@ -4,6 +4,7 @@ import { container } from "tsyringe";
 import { CreateFuelController } from "@/modules/fuel/usecases/create-fuel/create-fuel-controller";
 import { CreateFuelUseCase } from "@/modules/fuel/usecases/create-fuel/create-fuel-usecase";
 import { acceptLegacyMultipart } from "@/shared/http/legacy-multipart";
+import { clientSentAtHeaders } from "@/shared/delivery/occurred-at";
 import { ListFuelController } from "@/modules/fuel/usecases/list-fuel/list-fuel-controller";
 
 import { UpdateFuelController } from "@/modules/fuel/usecases/update-fuel/update-fuel-controller";
@@ -19,6 +20,7 @@ import { requireModuleForPlugin } from "@/modules/middlewares/verify-module-enab
 import { verifyPermission } from "@/modules/middlewares/verify-permission";
 
 import {
+  ignoreDriverBranchChoice,
   verifyBranchActive,
   verifyBusinessActive,
 } from "@/modules/middlewares/verify-tenant-active";
@@ -74,12 +76,15 @@ async function fuelRoutes(app: FastifyInstance) {
           // Parsed by hand in the controller; see idempotency-documentation.
           openapi: {
             body: fuelSchemas.createFuelBody,
-            headers: fuelSchemas.idempotencyHeaders,
+            // X-Client-Sent-At dates a refuelling queued offline (K6).
+            headers: fuelSchemas.idempotencyHeaders.merge(clientSentAtHeaders),
           },
         },
         onRequest: [ensureAuthenticated],
         preHandler: [
           verifyBusinessActive,
+          // A driver's branch is the server's to resolve (wave 3.7).
+          ignoreDriverBranchChoice,
           verifyBranchActive,
           verifyPermission("fuel_manage", "write"),
           materializeLegacyUploads,
@@ -89,7 +94,7 @@ async function fuelRoutes(app: FastifyInstance) {
           tags: ["fuel"],
           summary: "Registra um abastecimento",
           description:
-            "Registra um abastecimento de um veículo: filial, motorista, combustível, quilometragem, litros, preço por litro, data e localização. A foto do odômetro é obrigatória e vai em `photo`, a chave já enviada ao storage por POST /uploads/presign/:businessId. O valor total é calculado pelo servidor (litros × preço). A data não pode ser posterior ao dia de hoje no fuso da empresa. A quilometragem é posta na data do abastecimento antes de qualquer mudança no odômetro: havendo registro em dia posterior (abastecimento lançado com atraso, fila offline do app), ela fica entre a leitura anterior e a seguinte e o odômetro do veículo não muda; sendo o registro mais recente (registros do mesmo dia não contam, pois a data do web é o dia, não a hora), ela fica à frente do odômetro, que avança com ela; fora disso, 400 VEHICLE_MILEAGE_INVALID. O motorista abastece só o veículo em que é responsável ou o da sua rota liberada ou em andamento; a filial, o combustível e o motorista dele são preenchidos pelo servidor. Reenvio com a mesma chave de idempotência devolve o registro já criado. Vínculo de outra empresa responde como inexistente.",
+            "Registra um abastecimento de um veículo: filial, motorista, combustível, quilometragem, litros, preço por litro, data e localização. A foto do odômetro é obrigatória e vai em `photo`, a chave já enviada ao storage por POST /uploads/presign/:businessId. O valor total é calculado pelo servidor (litros × preço). A data não pode ser posterior ao dia de hoje no fuso da empresa. A quilometragem é posta na data do abastecimento antes de qualquer mudança no odômetro: havendo registro em dia posterior (abastecimento lançado com atraso, fila offline do app), ela fica entre a leitura anterior e a seguinte e o odômetro do veículo não muda; sendo o registro mais recente (registros do mesmo dia não contam, pois a data do web é o dia, não a hora), ela fica à frente do odômetro, que avança com ela; fora disso, 400 VEHICLE_MILEAGE_INVALID. O motorista abastece só o veículo em que é responsável ou o da sua rota liberada ou em andamento; a filial, o combustível e o motorista dele são preenchidos pelo servidor. Reenvio com a mesma chave de idempotência devolve o registro já criado. Vínculo de outra empresa responde como inexistente. Abastecimento a partir da rota (plano de 02/11/2026, C5/F3): `routeId`; a rota tem de ser do motorista do abastecimento e ter o veículo dele (422 ROUTE_LINK_MISMATCH; rota inexistente ou de outra empresa, 404 DELIVERY_ROUTE_NOT_FOUND), em qualquer status. Para o motorista, a rota também prova que o veículo estava com ele, mas só num abastecimento datado do dia da liberação da rota até 24 h depois do fim dela (concluída ou cancelada); uma rota planejada, nunca liberada ou de outra época não prova nada, e vale a regra do veículo acima (403 VEHICLE_NOT_ASSIGNED_TO_DRIVER). A filial do motorista é sempre uma filial ATIVA (a enviada no corpo é ignorada): a do veículo, senão a dele, senão a única filial ativa da empresa, pulando as desativadas; sem nenhuma, 409 BRANCH_REQUIRED e, com `routeId`, quem opera as entregas é avisado uma vez por rota (`route.record_branch_missing`). Feito sem sinal (K6): `occurred_at` (o momento do abastecimento, pelo relógio do aparelho) com o header X-Client-Sent-At substitui `refueling_date`, corrigido pelo erro do relógio do aparelho.",
           params: fuelSchemas.updateDeleteBusiness,
           consumes: ["application/json"],
           response: {
@@ -98,7 +103,7 @@ async function fuelRoutes(app: FastifyInstance) {
             403: fuelResponses.writeForbidden,
             404: fuelResponses.createNotFound,
             409: fuelResponses.writeConflict,
-            422: fuelResponses.driverInactive,
+            422: fuelResponses.createUnprocessable,
             500: fuelResponses.internalServerError,
           },
         },

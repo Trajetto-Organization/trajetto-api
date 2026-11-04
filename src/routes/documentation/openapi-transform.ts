@@ -5,6 +5,7 @@ import { z, type ZodTypeAny } from "zod";
 import { ensureApiKey } from "@/modules/middlewares/ensure-api-key";
 import { ensureAuthenticated } from "@/modules/middlewares/ensure-authenticated";
 import {
+  ignoreDriverBranchChoice,
   verifyBranchActive,
   verifyBusinessActive,
 } from "@/modules/middlewares/verify-tenant-active";
@@ -728,6 +729,9 @@ function openapiTransform(input: TransformInput): {
 
   const businessGate = preHandler.includes(verifyBusinessActive);
   const branchGate = preHandler.includes(verifyBranchActive);
+  // A driver's record whose branch the server resolves (wave 3.7): the
+  // driver's body branch never reaches the gate.
+  const driverBranchIgnored = preHandler.includes(ignoreDriverBranchChoice);
 
   const config = (route.config ?? {}) as {
     rateLimit?: unknown;
@@ -863,7 +867,9 @@ function openapiTransform(input: TransformInput): {
     if (branchGate) {
       forbiddenCodes.push("BRANCH_INACTIVE");
       forbiddenReasons.push(
-        "BRANCH_INACTIVE: a filial informada está desativada.",
+        driverBranchIgnored
+          ? "BRANCH_INACTIVE: a filial informada está desativada. A filial enviada por um motorista é ignorada (o servidor a resolve entre as filiais ativas), então o motorista não recebe este código."
+          : "BRANCH_INACTIVE: a filial informada está desativada.",
       );
     }
 

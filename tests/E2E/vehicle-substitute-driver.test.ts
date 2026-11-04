@@ -23,7 +23,8 @@ import { createPrismaClient } from "@/shared/database/database-client";
  * a você"), could not do its checklist, and did not see it in his vehicle
  * list. Here: through the real routes, guards and database, before the route
  * (refused), while it is released (allowed) and after it ends (refused
- * again).
+ * again, except the read of the vehicle the arrival checklist needs, for
+ * the same window the driver's list keeps the ended route).
  */
 const prisma = createPrismaClient();
 
@@ -306,5 +307,38 @@ describe("once the route is over", () => {
     expectNotAssigned(await checklist());
     expect(await myVehicles()).toEqual([]);
     expect((await history("fuel")).statusCode).not.toBe(200);
+  });
+
+  it("still lets Bruno read the truck for the arrival checklist, and nothing more", async () => {
+    // Red before: 403 VEHICLE_NOT_ASSIGNED_TO_DRIVER. The route closes
+    // itself on its last stop, which is exactly when the app asks for the
+    // arrival checklist and reads the vehicle (mileage, branch) to fill it.
+    // The writes and the list above stay refused.
+    const response = await getVehicle();
+
+    expect(response.statusCode, response.body).toBe(200);
+    expect(response.json()).toMatchObject({
+      id: seed.vehicleId,
+      branchId: seed.branchId,
+      current_mileage: await currentMileage(),
+    });
+  });
+
+  it("hands the read back too once the arrival checklist window is over", async () => {
+    await prisma.route.update({
+      where: { id: routeId },
+      data: { completed_at: new Date(Date.now() - 25 * 60 * 60 * 1000) },
+    });
+
+    expectNotAssigned(await getVehicle());
+  });
+
+  it("never reads through a cancelled route", async () => {
+    await prisma.route.update({
+      where: { id: routeId },
+      data: { status: "CANCELLED", completed_at: new Date() },
+    });
+
+    expectNotAssigned(await getVehicle());
   });
 });

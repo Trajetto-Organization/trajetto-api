@@ -6,7 +6,10 @@ import { IUserRepository } from "@/modules/user/repositories/IUser-repository";
 import { UploadService } from "@/shared/services/upload-service";
 
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
-import { VehicleChecklist } from "../../dtos/vehicle-checklist-dto";
+import {
+  VehicleChecklist,
+  VehicleChecklistListRow,
+} from "../../dtos/vehicle-checklist-dto";
 
 import { AppError } from "@/shared/errors/AppError";
 import { assertTenantAccess } from "@/modules/middlewares/tenant-authorization";
@@ -34,7 +37,8 @@ interface ListVehicleChecklistRequest {
 }
 
 interface ListVehicleChecklistResponse {
-  data: VehicleChecklist[];
+  /** With the route columns of contract C3. */
+  data: VehicleChecklistListRow[];
   /** Rows of search + every facet: what the pager counts. */
   total: number;
   /** The NDJSON meta line's `searchMeta`: cards and filter options. */

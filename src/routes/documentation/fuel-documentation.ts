@@ -106,6 +106,26 @@ const fuelRow = z.object({
   vehicleId: z.string().describe("Veículo."),
   driverId: z.string().describe("Motorista."),
   fuelTypeId: z.string().describe("Tipo de combustível."),
+  // Contract C3 (03/11/2026).
+  routeId: z
+    .string()
+    .nullable()
+    .describe(
+      "Rota em que o abastecimento foi feito pelo app (plano de 02/11/2026, C5/F3); null fora de rota.",
+    ),
+  route: z
+    .object({
+      id: z.string().describe("ID da rota."),
+      code: z
+        .string()
+        .describe(
+          'Número da rota, como texto (ex.: "318"): o "Rota 318" das telas.',
+        ),
+    })
+    .nullable()
+    .describe(
+      "A rota em que foi feito, para o link da linha. Só uma rota desta empresa é nomeada: null fora de rota (e para uma rota que não seja da empresa do registro).",
+    ),
   branch: z
     .object({
       corporate_reason: z.string().describe("Razão social da filial."),
@@ -169,7 +189,7 @@ const fuelResponses = {
   // Refusals with their codes. `errorResponse` keeps `code` in the body: a
   // schema that listed only `message` stripped it on the way out.
   createFuelErrors: errorResponse.describe(
-    "Recusa com `code` (também no header x-error-code): VALIDATION_ERROR, PHOTO_REQUIRED, USER_NOT_FOUND, VEHICLE_NOT_FOUND, DRIVER_NOT_FOUND ou FUEL_TYPE_NOT_FOUND (inexistente ou de outra empresa, a mesma resposta), VEHICLE_MILEAGE_INVALID (a quilometragem não se encaixa no histórico do veículo), VEHICLE_NOT_FUELABLE (veículo que não está ativo nem em rota), REFUELING_DATE_IN_FUTURE, LOCATION_REQUIRED, LOCATION_ORIGINAL_REQUIRED ou LOCATION_ADJUSTMENT_TOO_FAR (o ponto ajustado à mão está a mais de 500 m do capturado pelo GPS).",
+    "Recusa com `code` (também no header x-error-code): VALIDATION_ERROR, PHOTO_REQUIRED, USER_NOT_FOUND, VEHICLE_NOT_FOUND, DRIVER_NOT_FOUND ou FUEL_TYPE_NOT_FOUND (inexistente ou de outra empresa, a mesma resposta), VEHICLE_MILEAGE_INVALID (a quilometragem não se encaixa no histórico do veículo), VEHICLE_NOT_FUELABLE (veículo que não está ativo nem em rota), REFUELING_DATE_IN_FUTURE, BRANCH_REQUIRED (o gestor deixou a filial em branco e nada a resolve: nem o veículo, nem o motorista informado, nem uma única filial ativa da empresa; para o abastecimento do motorista, a mesma falta responde 409), DRIVER_REQUIRED, LOCATION_REQUIRED, LOCATION_ORIGINAL_REQUIRED ou LOCATION_ADJUSTMENT_TOO_FAR (o ponto ajustado à mão está a mais de 500 m do capturado pelo GPS).",
   ),
   updateFuelErrors: errorResponse.describe(
     "Recusa com `code`: VALIDATION_ERROR, USER_NOT_FOUND, VEHICLE_NOT_FOUND, DRIVER_NOT_FOUND ou FUEL_TYPE_NOT_FOUND (vínculo inexistente ou de outra empresa, a mesma resposta), VEHICLE_MILEAGE_INVALID (a quilometragem não se encaixa no histórico do veículo), VEHICLE_NOT_FUELABLE (mover para um veículo que não está ativo nem em rota) ou REFUELING_DATE_IN_FUTURE.",
@@ -177,7 +197,7 @@ const fuelResponses = {
   // The use case's 404s; the route guards add theirs (TENANT_NOT_FOUND,
   // BRANCH_NOT_FOUND) to the same status in the published document.
   createNotFound: errorResponse.describe(
-    "BRANCH_NOT_FOUND: a filial não existe ou é de outra empresa (a mesma resposta, também para o MASTER). BUSINESS_NOT_FOUND: a empresa informada não existe.",
+    "BRANCH_NOT_FOUND: a filial não existe ou é de outra empresa (a mesma resposta, também para o MASTER). DELIVERY_ROUTE_NOT_FOUND: a rota enviada (`routeId`) não existe ou é de outra empresa (a mesma resposta). BUSINESS_NOT_FOUND: a empresa informada não existe.",
   ),
   writeForbidden: errorResponse.describe(
     "PERMISSION_DENIED, MODULE_NOT_ENABLED, TENANT_INACTIVE, TENANT_ACCESS_DENIED, VEHICLE_NOT_ASSIGNED_TO_DRIVER (o motorista só abastece o veículo em que é responsável ou o da sua rota liberada ou em andamento), DRIVER_CANNOT_UPDATE_FUEL ou DRIVER_CANNOT_DELETE_FUEL (motoristas só criam).",
@@ -201,15 +221,21 @@ const fuelResponses = {
     "VALIDATION_ERROR, BUSINESS_NOT_IDENTIFIED (o MASTER não informou a empresa), USER_NOT_FOUND ou NOTHING_TO_EXPORT (o filtro não trouxe nenhum abastecimento).",
   ),
 
-  // The two refusals the app's outbox has to tell apart from a plain 400.
+  // The refusals the app's outbox has to tell apart from a plain 400.
   // `code` is listed so the serializer keeps it: the outbox branches on it.
   writeConflict: z
     .object({
-      code: z.string().describe("SUBMISSION_OWNER_MISMATCH ou BRANCH_INACTIVE"),
+      code: z
+        .string()
+        .describe(
+          "SUBMISSION_OWNER_MISMATCH, BRANCH_REQUIRED ou BRANCH_INACTIVE",
+        ),
       message: z.string(),
     })
     .describe(
-      "SUBMISSION_OWNER_MISMATCH: a chave de idempotência já foi usada por outro motorista desta empresa — gere uma chave nova e reenvie; repetir a mesma nunca passa. BRANCH_INACTIVE: a filial do abastecimento está desativada.",
+      "SUBMISSION_OWNER_MISMATCH: a chave de idempotência já foi usada por outro motorista desta empresa — gere uma chave nova e reenvie; repetir a mesma nunca passa. " +
+        "BRANCH_REQUIRED: não há filial ATIVA para registrar o abastecimento do motorista: nem a do veículo, nem a dele, nem uma única filial ativa da empresa (as desativadas são puladas). Com `routeId`, quem opera as entregas é avisado uma vez por rota (`route.record_branch_missing`, na caixa de entrada e na atividade da rota); reenvie depois que o gestor corrigir a filial: os reenvios não repetem o aviso. " +
+        "BRANCH_INACTIVE: a filial do abastecimento do gestor está desativada. O abastecimento do motorista nunca vai para uma filial desativada: a filial que o app dele envia no corpo é ignorada.",
     ),
   driverInactive: z
     .object({
@@ -218,6 +244,15 @@ const fuelResponses = {
     })
     .describe(
       "O motorista informado está inativo. Definitivo: repetir não muda a resposta.",
+    ),
+  // The create's 422: an inactive driver, or a route that cannot carry it.
+  createUnprocessable: z
+    .object({
+      code: z.string().describe("DRIVER_INACTIVE ou ROUTE_LINK_MISMATCH"),
+      message: z.string(),
+    })
+    .describe(
+      "DRIVER_INACTIVE: o motorista informado está inativo. ROUTE_LINK_MISMATCH: a rota informada é de outro motorista, ainda não tem veículo ou tem outro veículo (plano de 02/11/2026, C5/F3). Definitivos: repetir não muda a resposta.",
     ),
   // The edit's only conflict: it carries no idempotency key to collide with.
   branchInactive: z

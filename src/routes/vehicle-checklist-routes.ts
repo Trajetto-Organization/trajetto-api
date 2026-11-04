@@ -4,6 +4,7 @@ import { container } from "tsyringe";
 import { CreateVehicleChecklistController } from "@/modules/vehicle-checklist/usecases/create-vehicle-checklist/create-vehicle-checklist-controller";
 import { CreateVehicleChecklistUseCase } from "@/modules/vehicle-checklist/usecases/create-vehicle-checklist/create-vehicle-checklist-usecase";
 import { acceptLegacyMultipart } from "@/shared/http/legacy-multipart";
+import { clientSentAtHeaders } from "@/shared/delivery/occurred-at";
 import { ListVehicleChecklistController } from "@/modules/vehicle-checklist/usecases/list-vehicle-checklist/list-vehicle-checklist-controller";
 
 import { DeleteVehicleChecklistController } from "@/modules/vehicle-checklist/usecases/delete-vehicle-checklist/delete-vehicle-checklist-controller";
@@ -16,6 +17,7 @@ import { requireModuleForPlugin } from "@/modules/middlewares/verify-module-enab
 import { verifyPermission } from "@/modules/middlewares/verify-permission";
 
 import {
+  ignoreDriverBranchChoice,
   verifyBranchActive,
   verifyBusinessActive,
 } from "@/modules/middlewares/verify-tenant-active";
@@ -62,12 +64,18 @@ async function vehicleChecklistRoutes(app: FastifyInstance) {
           // Parsed by hand in the controller; see idempotency-documentation.
           openapi: {
             body: vehicleChecklistSchemas.createVehicleChecklistBody,
-            headers: vehicleChecklistSchemas.idempotencyHeaders,
+            // X-Client-Sent-At dates a checklist queued offline (K6).
+            headers:
+              vehicleChecklistSchemas.idempotencyHeaders.merge(
+                clientSentAtHeaders,
+              ),
           },
         },
         onRequest: [ensureAuthenticated],
         preHandler: [
           verifyBusinessActive,
+          // A driver's branch is the server's to resolve (wave 3.7).
+          ignoreDriverBranchChoice,
           verifyBranchActive,
           verifyPermission("vehicle_checklist_manage", "write"),
           materializeLegacyUploads,
@@ -77,7 +85,7 @@ async function vehicleChecklistRoutes(app: FastifyInstance) {
           tags: ["vehicle-checklist"],
           summary: "Registra um checklist veicular",
           description:
-            "Registra a inspeção de um veículo com motorista, filial e itens. O motorista só inspeciona o veículo que pode operar (o de sua responsabilidade ou o da rota liberada ou em andamento dele). A quilometragem precisa passar a do veículo ou, para um checklist que chega depois de registros mais novos (fila offline do app), caber entre os registros vizinhos da data dele. A data não pode ser posterior ao dia de hoje no fuso da empresa (400 CHECKLIST_DATE_IN_FUTURE); uma data só com dia (AAAA-MM-DD) vale como aquele dia. Um veículo que o motorista não pode operar é recusado com 403 VEHICLE_NOT_ASSIGNED_TO_DRIVER. Um veículo, motorista ou filial de outra empresa recebe a mesma resposta de um inexistente. As fotos são separadas por item e algumas são obrigatórias conforme as respostas; vão em `photos`, as chaves já enviadas ao storage por POST /uploads/presign/:businessId.",
+            "Registra a inspeção de um veículo com motorista, filial e itens. O motorista só inspeciona o veículo que pode operar (o de sua responsabilidade ou o da rota liberada ou em andamento dele). A quilometragem precisa passar a do veículo ou, para um checklist que chega depois de registros mais novos (fila offline do app), caber entre os registros vizinhos da data dele. A data não pode ser posterior ao dia de hoje no fuso da empresa (400 CHECKLIST_DATE_IN_FUTURE); uma data só com dia (AAAA-MM-DD) vale como aquele dia. Um veículo que o motorista não pode operar é recusado com 403 VEHICLE_NOT_ASSIGNED_TO_DRIVER. Um veículo, motorista ou filial de outra empresa recebe a mesma resposta de um inexistente. As fotos são separadas por item e algumas são obrigatórias conforme as respostas; vão em `photos`, as chaves já enviadas ao storage por POST /uploads/presign/:businessId. Checklist da rota (plano de 02/11/2026, C4/F3): `routeId` com `phase` ROUTE_START (saída) ou ROUTE_END (chegada); a rota tem de ser do motorista do checklist e ter o veículo dele (422 ROUTE_LINK_MISMATCH; rota inexistente ou de outra empresa, 404 DELIVERY_ROUTE_NOT_FOUND), em qualquer status, porque um checklist feito sem sinal pode chegar depois do início. Para o motorista, a rota também prova que o veículo estava com ele, mas só num checklist datado do dia da liberação da rota até 24 h depois do fim dela (concluída ou cancelada); uma rota planejada, nunca liberada ou de outra época não prova nada, e vale a regra do veículo (403 VEHICLE_NOT_ASSIGNED_TO_DRIVER). A filial do motorista é preenchida pelo servidor (a enviada no corpo é ignorada) e é sempre uma filial ATIVA: a do veículo, senão a dele, senão a única filial ativa da empresa, pulando as desativadas (uma filial desativada depois da liberação não prende o checklist); sem nenhuma, 409 BRANCH_REQUIRED e, com `routeId`, quem opera as entregas é avisado uma vez por rota e momento (`route.record_branch_missing`). Feito sem sinal (K6): `occurred_at` (o momento do checklist, pelo relógio do aparelho) com o header X-Client-Sent-At substitui `checklist_date`, corrigido pelo erro do relógio do aparelho.",
           consumes: ["application/json"],
           params: vehicleChecklistSchemas.businessIdParam,
           response: {
@@ -86,7 +94,7 @@ async function vehicleChecklistRoutes(app: FastifyInstance) {
             403: vehicleChecklistResponses.createForbidden,
             404: vehicleChecklistResponses.createNotFound,
             409: vehicleChecklistResponses.writeConflict,
-            422: vehicleChecklistResponses.driverInactive,
+            422: vehicleChecklistResponses.createUnprocessable,
             500: vehicleChecklistResponses.internalServerError,
           },
         },

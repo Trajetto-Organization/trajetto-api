@@ -158,12 +158,17 @@ function legacyChecklist(
   ]);
 }
 
-function postMultipart(url: string, payload: Buffer, submissionId: string) {
+function postMultipart(
+  url: string,
+  payload: Buffer,
+  submissionId: string,
+  token: string = seed.driverToken,
+) {
   return app.inject({
     method: "POST",
     url,
     headers: {
-      authorization: `Bearer ${seed.driverToken}`,
+      authorization: `Bearer ${token}`,
       "content-type": `multipart/form-data; boundary=${BOUNDARY}`,
       "idempotency-key": submissionId,
       "user-agent": "okhttp/4.9.2",
@@ -275,6 +280,8 @@ describe("a fueling posted as multipart by the app build in drivers' hands", () 
     expect(await storedObjects("odometerPhotos")).toEqual(before);
   });
 
+  // The manager picks the branch, so theirs goes through the gate; a
+  // driver's is the server's to resolve (wave 3.7), below.
   it("goes through the branch guard, which reads the branch from the multipart fields", async () => {
     const inactive = await prisma.branch.create({
       data: {
@@ -303,6 +310,7 @@ describe("a fueling posted as multipart by the app build in drivers' hands", () 
         branchId: inactive.id,
       }),
       key,
+      seed.managerToken,
     );
 
     expect(response.statusCode, response.body).toBe(403);
@@ -310,6 +318,24 @@ describe("a fueling posted as multipart by the app build in drivers' hands", () 
 
     // Refused before a single byte reached storage.
     expect(await storedObjects("odometerPhotos")).toEqual(before);
+
+    // The driver's build sends the vehicle's branch as it last read it: a
+    // switched-off one is not theirs to pick, and the refuelling is filed
+    // under the active branch the server resolves (the vehicle's here).
+    const fromDriver = randomUUID();
+    const filed = await postMultipart(
+      fuelUrl(),
+      legacyFuel((await vehicleMileage()) + 100, fromDriver, {
+        branchId: inactive.id,
+      }),
+      fromDriver,
+    );
+
+    expect(filed.statusCode, filed.body).toBe(201);
+    expect(
+      (await prisma.fuel.findUniqueOrThrow({ where: { id: filed.json().id } }))
+        .branchId,
+    ).toBe(seed.branchId);
   });
 
   it("refuses a part that is not an image, and keeps nothing", async () => {

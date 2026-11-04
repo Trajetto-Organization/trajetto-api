@@ -51,8 +51,28 @@ import {
 import { timeZoneOfBusiness } from "@/shared/time/business-time-zone";
 import { aiProviderConfigured } from "@/shared/ai/ai-provider";
 import { acceptDevicePrecheck } from "@/shared/ai-precheck/device-precheck";
+import type { IRouteRepository } from "@/modules/route/repositories/IRoute-repository";
+import {
+  checklistPhaseRefusal,
+  routeLinkRefusal,
+  routeProvesCustody,
+} from "@/shared/vehicle/route-link";
+import {
+  checklistDefects,
+  hasDefects,
+} from "@/shared/vehicle/checklist-defects";
+import {
+  activeBranchLookups,
+  announceRecordBranchGap,
+  driverRecordBranchRequired,
+  resolveActiveRecordBranchId,
+  resolveRecordBranchId,
+} from "@/shared/vehicle/record-branch";
 
 const log = logger.child({ component: "vehicle-checklist" });
+
+/** The route a checklist names, once it holds; null when it names none. */
+type LinkedRoute = Awaited<ReturnType<IRouteRepository["findRouteById"]>>;
 
 @injectable()
 class CreateVehicleChecklistUseCase {
@@ -73,6 +93,10 @@ class CreateVehicleChecklistUseCase {
     private outbox: OutboxService,
     @inject("UploadService")
     private uploadService: UploadService,
+    // Plan of 02/11/2026 (C4/F3): the route a checklist names. Optional so
+    // callers built before it keep working; the container always provides it.
+    @inject("RouteRepository")
+    private route?: Pick<IRouteRepository, "findRouteById">,
   ) {}
 
   /**
@@ -112,6 +136,30 @@ class CreateVehicleChecklistUseCase {
     }
 
     return existingChecklist;
+  }
+
+  /**
+   * The route a checklist names (C4/F3): refused unless it is this driver's,
+   * with this vehicle (shared/vehicle/route-link.ts). The route when one was
+   * named and holds — which also answers the driver's custody of the
+   * vehicle, after the route ended too — and null when none was named.
+   */
+  private async assertRouteLink(
+    routeId: string | null | undefined,
+    businessId: string,
+    driverId: string | null | undefined,
+    vehicleId: string,
+  ): Promise<LinkedRoute> {
+    if (!routeId) return null;
+
+    if (!this.route) throw new Error("RouteRepository was not injected");
+
+    const route = await this.route.findRouteById(routeId, businessId);
+    const refusal = routeLinkRefusal(route, { driverId, vehicleId });
+
+    if (refusal) throw refusal;
+
+    return route;
   }
 
   async execute(
@@ -181,10 +229,50 @@ class CreateVehicleChecklistUseCase {
       throw new VehicleNotBelongBusinessError();
     }
 
+    // C4/F3: a checklist made for a route names its moment, and the route
+    // must be this driver's, with this vehicle. Never its status here
+    // (decision D08): a departure checklist queued offline may land after
+    // the start, and the arrival one opens once the last stop closed the
+    // route (custody is asked below).
+    const phaseRefusal = checklistPhaseRefusal(
+      checklistData.routeId,
+      checklistData.phase,
+    );
+
+    if (phaseRefusal) throw phaseRefusal;
+
+    const linkedRoute = await this.assertRouteLink(
+      checklistData.routeId,
+      checklistData.businessId,
+      // A driver's own records are theirs whatever the body says (forced
+      // below); a manager names the driver in the form.
+      findUser.driverId ?? checklistData.driverId,
+      findVehicle.id,
+    );
+
     // A driver inspects only a vehicle they may operate: the responsible
     // one, or the one of their released or running route (FLEET-ASSIGN-1,
     // decision 8.2; the rule lives in shared/vehicle/driver-vehicle-access).
-    if (findUser.role === "BUSINESS_USER" && findUser.driverId) {
+    // The route the checklist names — theirs, with this vehicle — is that
+    // proof too, after it ended: the substitute who drove truck X on it
+    // still does its arrival checklist. Only for a checklist dated while the
+    // route had the truck (routeProvesCustody): an old, cancelled or never
+    // released route opens nothing.
+    // The date the row will carry: a bare day starts in the company's zone,
+    // and none sent is the database's now().
+    const checklistDate = withChecklistDate(
+      { checklist_date: checklistData.checklist_date },
+      timeZoneOfBusiness(findBusiness),
+    ).checklist_date;
+    const routeProof =
+      linkedRoute !== null &&
+      routeProvesCustody(
+        linkedRoute,
+        checklistDate ? new Date(checklistDate) : new Date(),
+        timeZoneOfBusiness(findBusiness),
+      );
+
+    if (findUser.role === "BUSINESS_USER" && findUser.driverId && !routeProof) {
       const allowed = await this.vehicle.canDriverOperateVehicle({
         vehicleId: findVehicle.id,
         driverId: findUser.driverId,
@@ -196,16 +284,29 @@ class CreateVehicleChecklistUseCase {
       }
     }
 
+    // The driver's own record, when the caller is one: what the dispatcher
+    // is told names them.
+    let filedByDriver: { name: string | null } | null = null;
+
     // Auto-populate branchId and driverId for driver users
     if (findUser.driverId) {
       const driverUser = await this.driver.findDriverById(findUser.driverId);
       if (driverUser) {
         checklistData.driverId = findUser.driverId;
+        filedByDriver = { name: driverUser.name ?? null };
 
-        // Force branchId - drivers cannot select branch manually
-        // Priority: Vehicle.branchId → Driver.branchId
+        // Drivers never pick the branch, and theirs goes under an ACTIVE one
+        // only: vehicle → driver → the company's single active branch,
+        // skipping what is switched off (shared/vehicle/record-branch, wave
+        // 3.7). A blank or closed branch must not strand the driver.
         checklistData.branchId =
-          findVehicle.branchId || driverUser.branchId || undefined;
+          (await resolveActiveRecordBranchId(
+            {
+              vehicleBranchId: findVehicle.branchId,
+              driverBranchId: driverUser.branchId,
+            },
+            activeBranchLookups(this.branch, checklistData.businessId),
+          )) ?? undefined;
       }
     }
 
@@ -237,6 +338,23 @@ class CreateVehicleChecklistUseCase {
       }
     }
 
+    // A manager who left the branch blank gets the same resolution, with
+    // the driver they named (validated above, so of this company).
+    if (!checklistData.branchId && !findUser.driverId) {
+      const namedDriver = checklistData.driverId
+        ? await this.driver.findDriverById(checklistData.driverId)
+        : null;
+
+      checklistData.branchId =
+        (await resolveRecordBranchId(
+          {
+            vehicleBranchId: findVehicle.branchId,
+            driverBranchId: namedDriver?.branchId,
+          },
+          () => this.branch.findSoleActiveBranchId(checklistData.businessId),
+        )) ?? undefined;
+    }
+
     // Validate branch exists and belongs to business (if branchId is provided)
     if (checklistData.branchId) {
       const findBranch = await this.branch.findBranchById(
@@ -260,7 +378,28 @@ class CreateVehicleChecklistUseCase {
       }
     }
 
+    // Only when even the company's branches name none (no active branch, or
+    // several): the route release warns the dispatcher before this
+    // (ROUTE_BRANCH_REQUIRED), and what changed after the release is told to
+    // the dispatcher now, once per route and moment (wave 3.7).
     if (!checklistData.branchId) {
+      if (filedByDriver) {
+        if (linkedRoute) {
+          await announceRecordBranchGap(this.outbox, {
+            route: linkedRoute,
+            businessId: checklistData.businessId,
+            actorId: userId,
+            record: "CHECKLIST",
+            phase:
+              checklistData.phase === "ROUTE_END" ? "ROUTE_END" : "ROUTE_START",
+            driverName: filedByDriver.name,
+            vehiclePlate: findVehicle.license_plate,
+          });
+        }
+
+        throw driverRecordBranchRequired("CHECKLIST");
+      }
+
       throw new AppError(
         "A filial é obrigatória para registrar o checklist.",
         400,
@@ -339,11 +478,15 @@ class CreateVehicleChecklistUseCase {
       // Record creation, mileage advancement and the outbox event are
       // committed atomically; the pipeline turns the event into the activity
       // trail entry after the commit.
+      // F2: what the inspection found wrong, if anything. Only a defect
+      // alerts the fleet; a clean checklist stays activity-only.
+      const defects = checklistDefects(checklistData);
+
       const { checklist: checklistCreated, created } =
         await this.vehicleChecklist.createVehicleChecklistWithMileage(
           checklistDataWithPhotos,
-          (tx, checklist) =>
-            this.outbox.publish(tx, {
+          async (tx, checklist) => {
+            await this.outbox.publish(tx, {
               topic: "vehicle-checklist.created",
               aggregateType: "vehicle-checklist",
               aggregateId: checklist.id,
@@ -357,7 +500,31 @@ class CreateVehicleChecklistUseCase {
                 vehicleDescription: findVehicle.description,
                 origin: checklistData.created_from ?? "WEB_DASHBOARD",
               },
-            }),
+            });
+
+            // In the same commit as the checklist, so the alert can neither
+            // ring about a rolled-back inspection nor miss a recorded one.
+            if (hasDefects(defects)) {
+              await this.outbox.publish(tx, {
+                topic: "vehicle-checklist.defects_found",
+                aggregateType: "vehicle-checklist",
+                aggregateId: checklist.id,
+                businessId: checklistData.businessId,
+                actorId: userId,
+                eventKey: `vehicle-checklist.defects_found:${checklist.id}`,
+                payload: {
+                  checklistId: checklist.id,
+                  businessId: checklistData.businessId,
+                  vehicleId: findVehicle.id,
+                  vehiclePlate: findVehicle.license_plate,
+                  vehicleDescription: findVehicle.description,
+                  responsibleUserId: findVehicle.responsibleUserId ?? null,
+                  defects: defects.items,
+                  verdict: defects.verdict,
+                },
+              });
+            }
+          },
           // Which readings fall on a later civil day of the company.
           { timeZone: timeZoneOfBusiness(findBusiness) },
         );

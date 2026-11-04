@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 
 import {
   canDriverOperateVehicle,
+  canDriverReadVehicle,
+  ENDED_ROUTE_CHECKLIST_WINDOW_MS,
   ROUTE_STATUSES_HANDING_OVER_VEHICLE,
 } from "@/shared/vehicle/driver-vehicle-access";
 import {
@@ -65,6 +67,108 @@ describe("canDriverOperateVehicle", () => {
   it("never matches an empty driver id against a truck with no responsible", () => {
     expect(
       canDriverOperateVehicle({ id: "truck", driverId: null }, "", []),
+    ).toBe(false);
+  });
+});
+
+describe("canDriverReadVehicle", () => {
+  // The arrival checklist (C4, D08) is asked right after the route closes
+  // itself on its last stop: the app reads the vehicle (mileage, branch) at
+  // that moment. The substitute was refused that read as soon as the route
+  // turned COMPLETED, so he could never send the checklist the create
+  // accepts. Only the read widens; the writes keep canDriverOperateVehicle.
+  const NOW = new Date("2026-11-03T18:00:00.000Z");
+  const ended = (msAgo: number) => new Date(NOW.getTime() - msAgo);
+
+  it("lets the substitute read the truck of the route he just completed", () => {
+    expect(
+      canDriverReadVehicle(
+        TRUCK,
+        "bruno",
+        [
+          {
+            vehicleId: "truck",
+            driverId: "bruno",
+            status: "COMPLETED",
+            completed_at: ended(10 * 60_000),
+          },
+        ],
+        NOW,
+      ),
+    ).toBe(true);
+  });
+
+  it("stops at the end of the arrival checklist window", () => {
+    expect(
+      canDriverReadVehicle(
+        TRUCK,
+        "bruno",
+        [
+          {
+            vehicleId: "truck",
+            driverId: "bruno",
+            status: "COMPLETED",
+            completed_at: ended(ENDED_ROUTE_CHECKLIST_WINDOW_MS + 60_000),
+          },
+        ],
+        NOW,
+      ),
+    ).toBe(false);
+  });
+
+  it("never reads through a cancelled route, another driver's or another truck's", () => {
+    expect(
+      canDriverReadVehicle(
+        TRUCK,
+        "bruno",
+        [
+          {
+            vehicleId: "truck",
+            driverId: "bruno",
+            status: "CANCELLED",
+            completed_at: ended(60_000),
+          },
+          {
+            vehicleId: "truck",
+            driverId: "carla",
+            status: "COMPLETED",
+            completed_at: ended(60_000),
+          },
+          {
+            vehicleId: "van",
+            driverId: "bruno",
+            status: "COMPLETED",
+            completed_at: ended(60_000),
+          },
+          { vehicleId: "truck", driverId: "bruno", status: "COMPLETED" },
+        ],
+        NOW,
+      ),
+    ).toBe(false);
+  });
+
+  it("keeps everything the operate rule allows", () => {
+    expect(canDriverReadVehicle(TRUCK, "ana", [], NOW)).toBe(true);
+    expect(
+      canDriverReadVehicle(
+        TRUCK,
+        "bruno",
+        [{ vehicleId: "truck", driverId: "bruno", status: "IN_PROGRESS" }],
+        NOW,
+      ),
+    ).toBe(true);
+  });
+
+  it("does not widen the operate rule (fuel, checklist, list) at all", () => {
+    expect(
+      canDriverOperateVehicle(TRUCK, "bruno", [
+        {
+          vehicleId: "truck",
+          driverId: "bruno",
+          status: "COMPLETED",
+          completed_at: ended(60_000),
+        },
+      ]),
     ).toBe(false);
   });
 });
