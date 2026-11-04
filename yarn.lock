@@ -1131,10 +1131,10 @@
     rfdc "^1.3.1"
     yaml "^2.4.1"
 
-"@fastify/swagger@9.9.2":
-  version "9.9.2"
-  resolved "https://registry.yarnpkg.com/@fastify/swagger/-/swagger-9.9.2.tgz#ace5743a908844f3dcb18f62cc1bcc63b0328255"
-  integrity sha512-ayxItVgf/1axBvw33lqsA5ns02YMpT1r59G/HCJraRNWWBzvLgN+oiCBPhuzTiN67TvctlCYkG0+40WLKYuusQ==
+"@fastify/swagger@9.9.3":
+  version "9.9.3"
+  resolved "https://registry.yarnpkg.com/@fastify/swagger/-/swagger-9.9.3.tgz#f4bdb1524c3b49408e3286a378f2c7be23b21d09"
+  integrity sha512-1whjjguZlh4VV6OP2SD7w7ZNXXuLPwLcxbKIu7GckhHGgCyIYwtOyBskc3TLZa7LsaRmZZRiB1nz/JTaCI5grQ==
   dependencies:
     fastify-plugin "^6.0.0"
     json-schema-resolver "^3.0.0"
