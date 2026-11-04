@@ -81,10 +81,15 @@ class WebhookEndpointRepository implements IWebhookEndpointRepository {
   async find(
     id: string,
     businessId: string,
-  ): Promise<{ id: string; name: string; is_active: boolean } | null> {
+  ): Promise<{
+    id: string;
+    name: string;
+    is_active: boolean;
+    disabled_at: Date | null;
+  } | null> {
     return this.prisma.webhookEndpoint.findFirst({
       where: { id, businessId },
-      select: { id: true, name: true, is_active: true },
+      select: { id: true, name: true, is_active: true, disabled_at: true },
     });
   }
 

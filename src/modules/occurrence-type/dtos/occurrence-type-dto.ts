@@ -44,6 +44,16 @@ interface OccurrenceType {
   system_key?: string | null;
   /** When is_active last went false; null while active. */
   deactivated_at?: Date | null;
+  /**
+   * The company's own code for the type, the "código do ERP" (plan of
+   * 02/11/2026, L8). Optional, unique per company.
+   */
+  code?: string | null;
+  /**
+   * When a requires_* flag last changed (plan of 02/11/2026, K2): a report
+   * tapped offline before it keeps the rules it was made with.
+   */
+  requirements_changed_at?: Date | null;
   businessId: string;
   created_at?: Date | string;
   updated_at?: Date | string;
@@ -69,6 +79,8 @@ interface CreateOccurrenceTypeProps {
   requires_receipt_photo?: boolean;
   requires_signature?: boolean;
   pause_kind?: PauseKindKey | null;
+  /** L8: unique per company (P2002 on occurrence_type_businessId_code_key). */
+  code?: string | null;
   businessId: string;
 }
 
@@ -91,6 +103,10 @@ interface UpdateOccurrenceTypeProps {
   pause_kind?: PauseKindKey | null;
   /** Written by the use case with is_active: now() off, null on. */
   deactivated_at?: Date | null;
+  /** L8: undefined keeps it, null clears it. */
+  code?: string | null;
+  /** K2: written by the use case when a requires_* flag changes. */
+  requirements_changed_at?: Date | null;
 }
 
 /** What the driver's app needs of a type (the my-deliveries payload). */

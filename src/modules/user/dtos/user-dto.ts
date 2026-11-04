@@ -30,6 +30,13 @@ interface CreateUserProps {
   driverId?: string | null;
   whatsapp_notifications_enabled?: boolean;
   whatsapp_phone?: string | null;
+
+  /**
+   * A driver's login created with the password the manager set (plan of
+   * 02/11/2026, D2): nothing is mailed to confirm, so the address the
+   * manager typed counts as confirmed from the start.
+   */
+  email_verified?: Date | null;
 }
 
 interface UpdateUserProps {
@@ -60,7 +67,7 @@ interface UpdateUserEmailVerification {
 interface User {
   id: string;
   role: UserRole;
-  email: string;
+  email: string | null;
   email_verified?: Date | null;
   two_factor_enabled?: boolean;
   access_revoked: boolean;
@@ -118,9 +125,27 @@ interface User {
   whatsapp_phone?: string | null;
 }
 
+/**
+ * A driver's login found by the driver's CPF (plan of 02/11/2026, D8), with
+ * what the CPF login reads: the password and lockout state, everything the
+ * session check reads (company state, the driver with its branch), and the
+ * name the company picker shows — the trade name, or the legal name when the
+ * company has none.
+ */
+interface DriverLoginByCpf extends User {
+  companyName: string;
+}
+
 interface UpdateUserPassword {
   userId: string;
   password: string;
+
+  /**
+   * Also stamps `email_verified` (plan of 02/11/2026, D1): the single-use
+   * link that set this password reached the mailbox, which proves it. Left
+   * out when the e-mail was already confirmed, so the first stamp stays.
+   */
+  markEmailVerifiedAt?: Date;
 }
 
 interface UpdateTwoFactorAuthentication {
@@ -152,7 +177,7 @@ interface AuthenticateUser {
 interface ListUsersProps {
   id: string;
   role: UserRole;
-  email: string;
+  email: string | null;
   email_verified?: Date | null;
   two_factor_enabled?: boolean;
   access_revoked: boolean;
@@ -248,6 +273,7 @@ interface CursorPaginatedUser {
 
 export {
   CreateUserProps,
+  DriverLoginByCpf,
   UpdateUserPassword,
   UpdateUserName,
   UpdateTwoFactorAuthentication,

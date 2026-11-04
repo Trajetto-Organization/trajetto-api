@@ -291,6 +291,43 @@ function routeRepositoryContract(harness: () => RouteHarness): void {
       expect(await found("Rota 1")).toEqual([h.route("r1")]);
     });
 
+    // Plan of 02/11/2026, K14: a board page used to carry every stop of every
+    // route with its delivery (up to 20 × 200 rows and twenty columns each).
+    // A row now carries the stops counted by status (progress and blockers
+    // read only that) and never a delivery. `stops` stays one release as a
+    // bare {id, status} list for the web still in the field (_n1 drops it).
+    it("list rows carry the stops counted by status and never a delivery (K14)", async () => {
+      const h = harness();
+      const rows = (await list()).data;
+
+      const r1 = rows.find((route) => route.id === h.route("r1"))!;
+      const r3 = rows.find((route) => route.id === h.route("r3"))!;
+
+      expect(r1.stopCounts).toEqual({
+        PENDING: 2,
+        ARRIVED: 0,
+        COMPLETED: 0,
+        FAILED: 0,
+        CANCELLED: 0,
+      });
+      expect(r1.driver).toEqual({ id: F.driverA1, name: F.driverA1Name });
+      expect(r1.vehicle).toEqual({ id: F.vehicleA, license_plate: F.plate });
+      expect(r1.stops.map((stop) => Object.keys(stop).sort())).toEqual([
+        ["id", "status"],
+        ["id", "status"],
+      ]);
+      expect(JSON.stringify(rows)).not.toContain('"delivery"');
+
+      expect(r3.stopCounts).toEqual({
+        PENDING: 0,
+        ARRIVED: 0,
+        COMPLETED: 0,
+        FAILED: 0,
+        CANCELLED: 0,
+      });
+      expect(r3.stops).toEqual([]);
+    });
+
     it("filter by the scheduled day and by driver, counting facets without their own filter", async () => {
       const h = harness();
 

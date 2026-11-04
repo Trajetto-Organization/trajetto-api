@@ -4,6 +4,7 @@ import { DeliveryStatus } from "@/shared/delivery/delivery-rules";
 import type { OperationDay } from "@/modules/route/repositories/IOperation-day-repository";
 import {
   Delivery,
+  DeliveryItemInput,
   CreateDeliveryProps,
   UpdateDeliveryProps,
   ListDeliveriesProps,
@@ -79,7 +80,17 @@ interface IDeliveryRepository {
     deliveryId: string,
     deliveryData: UpdateDeliveryProps,
     expectedStatus?: DeliveryStatus,
+    /**
+     * The caller's transaction, when it has one: an edit of a delivery on a
+     * route commits with the route's lock and plan version (K9).
+     */
+    tx?: Prisma.TransactionClient,
   ) => Promise<Delivery>;
+  /**
+   * The delivery's item list as stored (quantity 1 and empty unit NULL),
+   * in insertion order. An edit compares the list it got against it (K9).
+   */
+  findDeliveryItems: (deliveryId: string) => Promise<DeliveryItemInput[]>;
   /**
    * Where the delivery came from: the source of the upload that created it,
    * or null for one typed in the panel (or whose upload was reversed).
@@ -132,6 +143,11 @@ interface IDeliveryRepository {
     businessId: string,
   ) => Promise<{
     id: string;
+    /**
+     * The delivery the key was spent on: the same key on another delivery
+     * is a reused key (409), never a replay (K13).
+     */
+    deliveryId: string;
     /** A replay answers with where the first submission stands (6.3). */
     authorization_status: OccurrenceAuthorizationStatus;
     /** Decision 14.3: a delivered replay also answers the delivery's status. */
@@ -272,6 +288,12 @@ interface IDeliveryRepository {
     eventData: CreateDeliveryEventProps,
     expectedStatus: DeliveryStatus,
     tx?: Prisma.TransactionClient,
+    /**
+     * A late proof (K7, decision D27) of a delivery the driver lost after
+     * the tap: the driver and vehicle that delivered it go back on the row,
+     * as a resolved delivery keeps who resolved it.
+     */
+    owner?: { driverId: string; vehicleId: string | null },
   ) => Promise<string[]>;
 }
 

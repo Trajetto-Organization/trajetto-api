@@ -4,9 +4,12 @@ import type {
   AssignmentContext,
   AssignmentPreview,
   AssignmentPreviewProps,
+  CloseWithPendingProps,
   CreateRouteProps,
+  LeftOpenRoute,
   ListRoutesProps,
   ListRoutesResult,
+  LostStop,
   OpenStopRoute,
   PinnedLocation,
   DetachResult,
@@ -19,9 +22,11 @@ import type {
   RouteStop,
   RouteStopWithDelivery,
   RouteTransition,
+  RouteWindow,
   RouteWithStops,
   UpdateRouteProps,
   VisitedPoint,
+  StopGeofenceFlag,
 } from "../dtos/route-dto";
 import type {
   UnroutedDeliveriesPage,
@@ -138,6 +143,48 @@ interface IRouteRepository {
     /** Read inside the caller's transaction, after its own write. */
     tx?: Prisma.TransactionClient,
   ) => Promise<RouteWithStops | null>;
+
+  /**
+   * "Encerrar com pendências" (plan of 02/11/2026, K11; decision D26):
+   * IN_PROGRESS → COMPLETED with the reason, under the route's row lock. The
+   * open stops are CANCELLED and their IN_TRANSIT deliveries go back to
+   * PENDING, each with a ROUTE_REMOVED line saying why; plan_version moves
+   * and the vehicle is back. RouteStatusConflictError when the route is not
+   * running (any more), or is another company's.
+   */
+  closeWithPending: (
+    routeId: string,
+    businessId: string,
+    props: CloseWithPendingProps,
+    tx?: Prisma.TransactionClient,
+  ) => Promise<{ route: Route; cancelledStops: number }>;
+
+  /**
+   * Every company's running routes the left-open sweep has not warned about
+   * yet, oldest departure first, with the company's zone (K11). No lock: the
+   * claim is claimLeftOpenAlerts.
+   */
+  listUnalertedRunningRoutes: (limit: number) => Promise<LeftOpenRoute[]>;
+
+  /**
+   * Stamps left_open_alerted_at on those of these routes still running and
+   * not stamped, skipping rows another sweep holds (SKIP LOCKED). The ids
+   * returned are the ones this caller must warn about — exactly once.
+   */
+  claimLeftOpenAlerts: (
+    routeIds: string[],
+    at: Date,
+    tx: Prisma.TransactionClient,
+  ) => Promise<string[]>;
+
+  /**
+   * The route's driver and execution window only, inside the tenant (plan
+   * of 02/11/2026, G9): the trail reads three columns, never the stops.
+   */
+  findRouteWindow: (
+    routeId: string,
+    businessId: string,
+  ) => Promise<RouteWindow | null>;
 
   /**
    * The route a driver is expected to be working: the one in progress, or the
@@ -358,6 +405,15 @@ interface IRouteRepository {
     businessId: string,
   ) => Promise<VisitedPoint[]>;
 
+  /**
+   * Per stop recorded outside the radius on this route, its newest OUTSIDE
+   * arrival, proof or occurrence (E5): the stop card's flag.
+   */
+  listStopGeofence: (
+    routeId: string,
+    businessId: string,
+  ) => Promise<StopGeofenceFlag[]>;
+
   /** PENDING deliveries with no open stop (D3), for the route picker. */
   listUnroutedDeliveries: (
     query: UnroutedDeliveriesQuery,
@@ -449,6 +505,18 @@ interface IRouteRepository {
     businessId: string,
     tx: Prisma.TransactionClient,
   ) => Promise<string | null>;
+
+  /**
+   * The latest stop of this delivery on one of this driver's routes that
+   * ended without the delivery (CANCELLED, or FAILED by a status change),
+   * of this company; null when there is none. A proof the driver made
+   * offline before that instant is the late proof of K7 (decision D27).
+   */
+  findLostStop: (
+    deliveryId: string,
+    driverId: string,
+    businessId: string,
+  ) => Promise<LostStop | null>;
 
   /**
    * How many routes reference this driver or this vehicle, of any status.

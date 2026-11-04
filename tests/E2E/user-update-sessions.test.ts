@@ -411,7 +411,7 @@ describe("an edit that changes nothing sensitive (USR-EDIT-1)", () => {
 
     const response = await patch(admin, target.id, {
       name: before.name,
-      email: before.email.toUpperCase(),
+      email: before.email!.toUpperCase(),
       role: "BUSINESS_USER",
       profileAccessId: profileA1,
     });
@@ -422,7 +422,7 @@ describe("an edit that changes nothing sensitive (USR-EDIT-1)", () => {
       where: { id: target.id },
     });
 
-    expect(after.email).toBe(before.email.toUpperCase());
+    expect(after.email).toBe(before.email!.toUpperCase());
     expect(after.session_version).toBe(0);
     expect(events.user.every((event) => event.reason !== "role_changed")).toBe(
       true,

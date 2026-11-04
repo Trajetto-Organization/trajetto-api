@@ -7,9 +7,10 @@ import type {
   NamedCount,
 } from "../usecases/list-vehicle-checklist/checklist-list";
 
-import { RecordOrigin } from "@prisma/client";
+import { ChecklistPhase, RecordOrigin } from "@prisma/client";
 import { JsonValue } from "@prisma/client/runtime/client";
 import type { DevicePrecheck } from "@/shared/ai-precheck/device-precheck";
+import type { ListedPhase, ListedRoute } from "@/shared/vehicle/route-columns";
 
 interface VehicleChecklist {
   id: string;
@@ -51,6 +52,12 @@ interface VehicleChecklist {
   branchId: string;
   vehicleId: string;
   driverId: string;
+  /**
+   * The route it was made for and the moment of it (plan of 02/11/2026,
+   * C4/F3). STANDALONE and null outside a route.
+   */
+  routeId?: string | null;
+  phase?: ChecklistPhase;
   created_at: Date | string;
   updated_at: Date | string;
 }
@@ -92,6 +99,13 @@ interface CreateVehicleChecklistProps {
   branchId?: string; // Optional for driver users (auto-populated)
   vehicleId: string;
   driverId?: string; // Optional for driver users (auto-populated)
+
+  /**
+   * C4/F3: the route and the moment. The use case checks the route is the
+   * driver's and the vehicle is the route's; absent = STANDALONE.
+   */
+  routeId?: string | null;
+  phase?: ChecklistPhase;
 
   /**
    * The phone's offline check of the odometer photo, as sent (decision
@@ -147,8 +161,18 @@ interface UpdateVehicleChecklist {
  * One page plus the raw counts behind its cards and filters (see
  * usecases/list-vehicle-checklist/checklist-list.ts for the summary).
  */
+/**
+ * A checklist as the list sends it (contract C3): the route it was made for
+ * (null outside one or when the route is not the row's company's) and its
+ * moment, with STANDALONE as null.
+ */
+type VehicleChecklistListRow = Omit<VehicleChecklist, "phase"> & {
+  route: ListedRoute | null;
+  phase: ListedPhase;
+};
+
 interface ListVehicleChecklistProps {
-  data: VehicleChecklist[];
+  data: VehicleChecklistListRow[];
   /** Grouped over every filter but the condition one. */
   conditionCounts: ConditionCounts;
   /** Grouped over every filter but the branch one, named from this company. */
@@ -231,12 +255,41 @@ interface VehicleChecklistWithRelations {
   };
 }
 
+/**
+ * A checklist made for a route (plan of 02/11/2026, C4): what the driver's
+ * payload and the route detail derive "checklist de saída/chegada feito?"
+ * from. Never a STANDALONE one.
+ */
+interface RouteChecklistSummary {
+  id: string;
+  routeId: string;
+  phase: Exclude<ChecklistPhase, "STANDALONE">;
+  checklist_date: Date | string;
+  overall_condition: string;
+}
+
+/**
+ * A route of the driver that ended without its arrival checklist (the
+ * wave-1 C4 follow-up): what the driver's payload keeps so the app can still
+ * ask for it after the last stop resolved and the route left the list.
+ */
+interface RouteAwaitingEndChecklist {
+  id: string;
+  code: number;
+  plan_version: number;
+  vehicle: { id: string; license_plate: string } | null;
+  completed_at: Date | null;
+}
+
 export {
+  RouteAwaitingEndChecklist,
+  RouteChecklistSummary,
   VehicleChecklist,
   CreateVehicleChecklistProps,
   UpdateVehicleChecklistProps,
   UpdateVehicleChecklist,
   ListVehicleChecklistProps,
+  VehicleChecklistListRow,
   ListVehicleChecklistByBusinessIdProps,
   GetVehicleChecklistByIdAndBusinessProps,
   VehicleChecklistWithRelations,

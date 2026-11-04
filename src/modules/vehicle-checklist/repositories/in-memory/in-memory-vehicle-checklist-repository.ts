@@ -3,9 +3,14 @@ import { v7 as uuidV7 } from "uuid";
 import { VEHICLE_CHECKLIST_COLUMN_DEFAULTS } from "@/shared/in-memory/column-defaults";
 import {
   IVehicleChecklistRepository,
+  ROUTES_AWAITING_END_CHECKLIST_LIMIT,
   type ChecklistMileageUpdate,
   type ChecklistPlacement,
 } from "../IVehicle-checklist-repository";
+import type {
+  RouteAwaitingEndChecklist,
+  RouteChecklistSummary,
+} from "../../dtos/vehicle-checklist-dto";
 import { VehicleMileageInvalidError } from "@/modules/vehicle/usecases/errors/vehicle-mileage-invalid-error";
 import { editedReadingRefusal } from "@/modules/vehicle/usecases/errors/vehicle-mileage-out-of-order-error";
 import { VehicleChecklistBusinessNotFoundError } from "../../usecases/errors/vehicle-checklist-business-not-found-error";
@@ -16,6 +21,7 @@ import {
 } from "@/shared/vehicle/odometer-timeline";
 import { placeReading } from "@/modules/fuel/usecases/fuel-rules";
 import { businessDayRange, resolveTimeZone } from "@/shared/time/business-day";
+import { listedPhase, listedRoute } from "@/shared/vehicle/route-columns";
 
 import {
   VehicleChecklist,
@@ -64,6 +70,19 @@ class InMemoryVehicleChecklistRepository
   implements IVehicleChecklistRepository
 {
   public checklists: VehicleChecklist[] = [];
+
+  /**
+   * The routes the twin can see, seeded by the tests (it has no route
+   * table): what listRoutesAwaitingEndChecklist reads, with the vehicle
+   * already joined as the real query selects it.
+   */
+  public routes: Array<
+    RouteAwaitingEndChecklist & {
+      businessId: string;
+      driverId: string;
+      status: string;
+    }
+  > = [];
 
   /**
    * The rows behind the relations the real query joins, seeded by the tests
@@ -275,6 +294,8 @@ class InMemoryVehicleChecklistRepository
       branchId: checklistData.branchId || "",
       vehicleId: checklistData.vehicleId,
       driverId: checklistData.driverId || "",
+      routeId: checklistData.routeId ?? null,
+      phase: checklistData.phase ?? VEHICLE_CHECKLIST_COLUMN_DEFAULTS.phase,
       ai_verification_status: "",
       created_at: new Date(),
       updated_at: new Date(),
@@ -473,7 +494,17 @@ class InMemoryVehicleChecklistRepository
     };
 
     return {
-      data: rows.slice(skip, skip + pageSize),
+      data: rows.slice(skip, skip + pageSize).map((checklist) => {
+        const route = this.routes.find((row) => row.id === checklist.routeId);
+
+        // Contract C3, as the real query's LEFT JOIN and listedRoute.
+        return {
+          ...checklist,
+          routeId: checklist.routeId ?? null,
+          route: listedRoute(checklist, route),
+          phase: listedPhase(checklist.phase),
+        };
+      }),
       conditionCounts,
       branchCounts: this.namedCounts(
         this.checklists.filter((checklist) =>
@@ -643,6 +674,80 @@ class InMemoryVehicleChecklistRepository
     return this.checklists.filter((checklist) =>
       this.matches(checklist, filters),
     ).length;
+  }
+
+  async listRouteChecklists(
+    businessId: string,
+    routeIds: string[],
+  ): Promise<RouteChecklistSummary[]> {
+    const wanted = new Set(routeIds);
+    const time = (value: Date | string) => new Date(value).getTime();
+
+    return this.checklists
+      .flatMap((checklist) =>
+        checklist.businessId === businessId &&
+        checklist.routeId &&
+        wanted.has(checklist.routeId) &&
+        checklist.phase &&
+        checklist.phase !== "STANDALONE"
+          ? [
+              {
+                id: checklist.id,
+                routeId: checklist.routeId,
+                phase: checklist.phase,
+                checklist_date: checklist.checklist_date,
+                overall_condition: checklist.overall_condition,
+              },
+            ]
+          : [],
+      )
+      .sort(
+        (a, b) =>
+          time(b.checklist_date) - time(a.checklist_date) ||
+          (a.id < b.id ? 1 : a.id > b.id ? -1 : 0),
+      );
+  }
+
+  async listRoutesAwaitingEndChecklist({
+    businessId,
+    driverId,
+    completedSince,
+  }: {
+    businessId: string;
+    driverId: string;
+    completedSince: Date;
+  }): Promise<RouteAwaitingEndChecklist[]> {
+    const ended = (route: (typeof this.routes)[number]) =>
+      route.completed_at ? route.completed_at.getTime() : 0;
+
+    return this.routes
+      .filter(
+        (route) =>
+          route.businessId === businessId &&
+          route.driverId === driverId &&
+          route.status === "COMPLETED" &&
+          route.completed_at !== null &&
+          route.completed_at.getTime() >= completedSince.getTime() &&
+          // Only an arrival checklist of the route's own company counts.
+          !this.checklists.some(
+            (checklist) =>
+              checklist.businessId === businessId &&
+              checklist.routeId === route.id &&
+              checklist.phase === "ROUTE_END",
+          ),
+      )
+      .sort(
+        (a, b) =>
+          ended(b) - ended(a) || (a.id < b.id ? 1 : a.id > b.id ? -1 : 0),
+      )
+      .slice(0, ROUTES_AWAITING_END_CHECKLIST_LIMIT)
+      .map(({ id, code, plan_version, vehicle, completed_at }) => ({
+        id,
+        code,
+        plan_version,
+        vehicle: vehicle ? { ...vehicle } : null,
+        completed_at,
+      }));
   }
 }
 

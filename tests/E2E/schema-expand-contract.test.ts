@@ -498,6 +498,30 @@ const MEETING_NULLABLE_COLUMNS: Array<[string, string]> = [
   ["chat_message", "ticketId"],
 ];
 
+// ── The plan of 02/11/2026 (Fase 2), 20261102120000..20261102121100 ──
+// planejamento.md §4.1 and §7.1 commit 1: the expansions the rules of Fase 3
+// are written against.
+
+const PLAN_2026_11_NULLABLE_COLUMNS: Array<[string, string]> = [
+  // C4/F3: a checklist or a refuelling made for a route
+  ["vehicle_checklist", "routeId"],
+  ["fuel", "routeId"],
+  // F1: who answers for the vehicle (null = the admins)
+  ["vehicle", "responsibleUserId"],
+  // E4: the geofence record of an action at the customer's address
+  ["delivery_event", "distance_m"],
+  ["delivery_event", "accuracy_m"],
+  ["delivery_event", "geofence_outcome"],
+  ["delivery_occurrence", "distance_m"],
+  ["delivery_occurrence", "accuracy_m"],
+  ["delivery_occurrence", "geofence_outcome"],
+  // B6: one customer message per stop
+  ["route_stop", "stop_group_key"],
+  // K2/L8: the requirements' clock and the ERP code
+  ["occurrence_type", "code"],
+  ["occurrence_type", "requirements_changed_at"],
+];
+
 describe("final phase: new columns", () => {
   it.each(FINAL_PHASE_NULLABLE_COLUMNS)(
     "%s.%s exists and is nullable",
@@ -575,6 +599,7 @@ describe("final phase: new columns", () => {
     const missing = [
       ...FINAL_PHASE_NULLABLE_COLUMNS,
       ...MEETING_NULLABLE_COLUMNS,
+      ...PLAN_2026_11_NULLABLE_COLUMNS,
     ].filter(
       ([table, column]) =>
         (COLUMN_DEFAULTS_BY_TABLE as Record<string, Record<string, unknown>>)[
@@ -2684,5 +2709,253 @@ describe("meeting: the recorded proofs become DELIVERED occurrences (prisma/back
       // No author: skipped, not invented.
       expect.objectContaining({ id: "proof-unauthored", category: null }),
     ]);
+  });
+});
+
+describe("plan of 02/11/2026: new columns and tables", () => {
+  it.each([
+    ...PLAN_2026_11_NULLABLE_COLUMNS,
+    ["refresh_token", "device_id"],
+    ["business_settings", "updatedById"],
+    ["driver_enrollment_token", "code_hash"],
+    ["driver_enrollment_token", "consumed_at"],
+    ["driver_enrollment_token", "createdById"],
+    ["driver_enrollment_token", "device_id"],
+  ] as Array<[string, string]>)(
+    "%s.%s exists and is nullable, with no default",
+    async (table, column) => {
+      expect((await columnsOf(table)).get(column)).toMatchObject({
+        is_nullable: "YES",
+        column_default: null,
+      });
+    },
+  );
+
+  it.each([
+    ["vehicle_checklist", "phase", `'STANDALONE'::"ChecklistPhase"`],
+    [
+      "business_settings",
+      "checklist_requirement",
+      `'NONE'::"ChecklistRequirement"`,
+    ],
+    [
+      "business_settings",
+      "arrival_geofence_mode",
+      `'DISABLED'::"GeofenceMode"`,
+    ],
+    ["business_settings", "arrival_geofence_radius_m", "500"],
+    ["driver_enrollment_token", "attempts", "0"],
+  ])(
+    "%s.%s is NOT NULL with the default the code reads as the default",
+    async (table, column, defaultValue) => {
+      expect((await columnsOf(table)).get(column)).toMatchObject({
+        is_nullable: "NO",
+        column_default: defaultValue,
+      });
+    },
+  );
+
+  it("has the enums the plan names, with every value", async () => {
+    const rows = await prisma.$queryRawUnsafe<
+      Array<{ type: string; value: string }>
+    >(
+      `SELECT t.typname AS type, e.enumlabel AS value
+         FROM pg_enum e JOIN pg_type t ON t.oid = e.enumtypid
+        WHERE t.typname IN ('ChecklistRequirement', 'GeofenceMode', 'ChecklistPhase', 'GeofenceOutcome')
+        ORDER BY t.typname, e.enumsortorder`,
+    );
+    const valuesOf = (type: string) =>
+      rows.filter((row) => row.type === type).map((row) => row.value);
+
+    expect(valuesOf("ChecklistRequirement")).toEqual([
+      "NONE",
+      "ROUTE_START",
+      "ROUTE_END",
+      "ROUTE_START_AND_END",
+    ]);
+    expect(valuesOf("GeofenceMode")).toEqual(["DISABLED", "ALERT", "BLOCK"]);
+    expect(valuesOf("ChecklistPhase")).toEqual([
+      "STANDALONE",
+      "ROUTE_START",
+      "ROUTE_END",
+    ]);
+    expect(valuesOf("GeofenceOutcome")).toEqual([
+      "INSIDE",
+      "OUTSIDE",
+      "NOT_EVALUATED",
+    ]);
+  });
+
+  it("keeps the business settings defaults equal to the code's", async () => {
+    // A company without a row reads BUSINESS_SETTINGS_DEFAULTS; the row's
+    // first save gets the column defaults. Both must say the same.
+    const { BUSINESS_SETTINGS_DEFAULTS } = await import(
+      "@/shared/business/business-settings"
+    );
+    const columns = await columnsOf("business_settings");
+
+    expect(columns.get("checklist_requirement")?.column_default).toBe(
+      `'${BUSINESS_SETTINGS_DEFAULTS.checklist_requirement}'::"ChecklistRequirement"`,
+    );
+    expect(columns.get("arrival_geofence_mode")?.column_default).toBe(
+      `'${BUSINESS_SETTINGS_DEFAULTS.arrival_geofence_mode}'::"GeofenceMode"`,
+    );
+    expect(columns.get("arrival_geofence_radius_m")?.column_default).toBe(
+      String(BUSINESS_SETTINGS_DEFAULTS.arrival_geofence_radius_m),
+    );
+  });
+
+  it("orders a company's routes newest first through an index (K14)", async () => {
+    expect(await indexDefinition("route_businessId_created_at_idx")).toMatch(
+      /ON public\.route USING btree \("businessId", created_at DESC\)/,
+    );
+    expect(
+      await indexDefinition("route_stop_routeId_stop_group_key_idx"),
+    ).toMatch(/\("routeId", stop_group_key\)/);
+  });
+});
+
+describe("plan of 02/11/2026: the nullable expansions (D2, B3)", () => {
+  /**
+   * Release N loosens; nothing writes NULL until the next release
+   * (-- nullable-expand:). The database already takes it, so this release's
+   * reads have to — and the unique on the e-mail never counts NULLs as equal.
+   */
+  it("lets user.email be NULL, many times over, and still refuses a repeated address", async () => {
+    expect((await columnsOf("user")).get("email")?.is_nullable).toBe("YES");
+
+    const outcome = await rolledBack(async (tx) => {
+      const carrier = await seedBusiness(tx);
+      const insert = (id: string, email: string | null) =>
+        tx.$executeRawUnsafe(
+          `INSERT INTO "user" ("id", "name", "email", "password", "role", "businessId", "updated_at")
+           VALUES ($1, 'Motorista', $2, 'x', 'BUSINESS_USER', $3, now())`,
+          id,
+          email,
+          carrier,
+        );
+
+      await insert("018f3000-0000-7000-8000-00000000d201", null);
+      await insert("018f3000-0000-7000-8000-00000000d202", null);
+      await insert("018f3000-0000-7000-8000-00000000d203", "repetido@x.com.br");
+
+      const repeated = await tx
+        .$executeRawUnsafe("SAVEPOINT before_repeat")
+        .then(() =>
+          insert("018f3000-0000-7000-8000-00000000d204", "repetido@x.com.br"),
+        )
+        .then(
+          () => "accepted",
+          async () => {
+            await tx.$executeRawUnsafe("ROLLBACK TO SAVEPOINT before_repeat");
+            return "refused";
+          },
+        );
+
+      return { repeated };
+    });
+
+    expect(outcome.repeated).toBe("refused");
+  });
+
+  it("lets a WhatsApp template's body be NULL, never an e-mail's", async () => {
+    expect(
+      (await columnsOf("delivery_message_template")).get("body")?.is_nullable,
+    ).toBe("YES");
+
+    const outcome = await rolledBack(async (tx) => {
+      const carrier = await seedBusiness(tx);
+      const insert = (id: string, channel: string, body: string | null) =>
+        tx.$executeRawUnsafe(
+          `INSERT INTO "delivery_message_template" ("id", "topic", "channel", "body", "businessId", "updated_at")
+           VALUES ($1, 'DISPATCHED', $2::"NotificationChannel", $3, $4, now())`,
+          id,
+          channel,
+          body,
+          carrier,
+        );
+
+      await insert("018f3000-0000-7000-8000-00000000e301", "WHATSAPP", null);
+
+      const email = await tx
+        .$executeRawUnsafe("SAVEPOINT before_email")
+        .then(() =>
+          insert("018f3000-0000-7000-8000-00000000e302", "EMAIL", null),
+        )
+        .then(
+          () => "accepted",
+          async () => {
+            await tx.$executeRawUnsafe("ROLLBACK TO SAVEPOINT before_email");
+            return "refused";
+          },
+        );
+
+      return { email };
+    });
+
+    expect(outcome.email).toBe("refused");
+  });
+});
+
+describe("plan of 02/11/2026: rules in the database", () => {
+  it("bounds the geofence radius to 50..5,000 m", async () => {
+    const outcome = await rolledBack(async (tx) => {
+      const carrier = await seedBusiness(tx);
+      const attempt = async (radius: number) => {
+        await tx.$executeRawUnsafe("SAVEPOINT radius");
+
+        try {
+          await tx.$executeRawUnsafe(
+            `INSERT INTO "business_settings" ("id", "businessId", "arrival_geofence_radius_m", "updated_at")
+             VALUES (gen_random_uuid()::text, $1, $2, now())`,
+            carrier,
+            radius,
+          );
+          await tx.$executeRawUnsafe("ROLLBACK TO SAVEPOINT radius");
+          return "accepted";
+        } catch {
+          await tx.$executeRawUnsafe("ROLLBACK TO SAVEPOINT radius");
+          return "refused";
+        }
+      };
+
+      return {
+        below: await attempt(49),
+        floor: await attempt(50),
+        ceiling: await attempt(5000),
+        above: await attempt(5001),
+      };
+    });
+
+    expect(outcome).toEqual({
+      below: "refused",
+      floor: "accepted",
+      ceiling: "accepted",
+      above: "refused",
+    });
+  });
+
+  it("keeps one settings row per company", async () => {
+    expect(await indexDefinition("business_settings_businessId_key")).toMatch(
+      /UNIQUE INDEX .*\("businessId"\)/,
+    );
+  });
+
+  it("keeps an occurrence type's code unique per company, and a null code never collides (L8)", async () => {
+    expect(
+      await indexDefinition("occurrence_type_businessId_code_key"),
+    ).toMatch(/UNIQUE INDEX .*\("businessId", code\)/);
+  });
+
+  it("keeps one live access code per driver login, and each hash unique (D3)", async () => {
+    expect(await indexDefinition("driver_enrollment_token_userId_key")).toMatch(
+      /UNIQUE INDEX .*\("userId"\)/,
+    );
+    expect(
+      await indexDefinition("driver_enrollment_token_token_hash_key"),
+    ).toMatch(/UNIQUE INDEX .*\(token_hash\)/);
+    expect(
+      await indexDefinition("driver_enrollment_token_code_hash_key"),
+    ).toMatch(/UNIQUE INDEX .*\(code_hash\)/);
   });
 });

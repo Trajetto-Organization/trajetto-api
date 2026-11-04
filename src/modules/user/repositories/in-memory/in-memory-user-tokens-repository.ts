@@ -16,7 +16,9 @@ import {
   CreateTwoFactorToken,
   RotateUserRefreshTokenProps,
   RefreshRotation,
+  UserDeviceSession,
 } from "../../dtos/user-tokens-dto";
+import { groupDeviceSessions } from "../../services/device-sessions";
 
 class InMemoryUserTokensRepository implements IUsersTokensRepository {
   public refreshTokenItems: UserRefreshTokenProps[] = [];
@@ -33,6 +35,7 @@ class InMemoryUserTokensRepository implements IUsersTokensRepository {
     userId,
     jti,
     family_id,
+    device_id,
   }: CreateUserRefreshTokenProps): Promise<UserRefreshTokenProps> {
     const createRefreshToken: UserRefreshTokenProps = {
       id: uuidV7(),
@@ -44,6 +47,8 @@ class InMemoryUserTokensRepository implements IUsersTokensRepository {
       revoked_at: null,
       replaced_by_jti: null,
       grace_siblings: 0,
+      device_id: device_id ?? null,
+      created_at: new Date(),
     };
 
     this.refreshTokenItems.push(createRefreshToken);
@@ -156,6 +161,50 @@ class InMemoryUserTokensRepository implements IUsersTokensRepository {
     this.refreshTokenItems = this.refreshTokenItems.filter(
       (item) => item.userId !== userId,
     );
+  }
+
+  async listUserDeviceSessions(
+    userId: string,
+    now = new Date(),
+  ): Promise<UserDeviceSession[]> {
+    return groupDeviceSessions(
+      this.refreshTokenItems
+        .filter(
+          (item) =>
+            item.userId === userId &&
+            Boolean(item.device_id) &&
+            !item.revoked_at &&
+            item.expires_in > now,
+        )
+        .map((item) => ({
+          device_id: item.device_id ?? null,
+          family_id: item.family_id,
+          created_at: item.created_at ?? new Date(0),
+          expires_in: item.expires_in,
+        })),
+    );
+  }
+
+  /** No push devices in this fake: the real one is proven against Postgres. */
+  async revokeUserDeviceSessions(
+    userId: string,
+    deviceId: string,
+  ): Promise<string[]> {
+    const families = [
+      ...new Set(
+        this.refreshTokenItems
+          .filter(
+            (item) => item.userId === userId && item.device_id === deviceId,
+          )
+          .map((item) => item.family_id),
+      ),
+    ];
+
+    this.refreshTokenItems = this.refreshTokenItems.filter(
+      (item) => !(item.userId === userId && families.includes(item.family_id)),
+    );
+
+    return families;
   }
 
   async deleteExpiredUserRefreshTokens(now = new Date()): Promise<number> {

@@ -1,3 +1,5 @@
+import type { GeofenceOutcome } from "@/shared/delivery/geofence/geofence-rules";
+
 /**
  * The operation of one company's day, read in one place (decision 7.1).
  *
@@ -116,6 +118,16 @@ interface FeedEntry {
   /** A blocking occurrence that applied, or a move to FAILED. */
   failure: boolean;
 
+  /**
+   * The geofence record of an arrival, proof or occurrence (plan of
+   * 02/11/2026, E4/E5), with the column names the delivery detail uses:
+   * OUTSIDE is the web's "Fora do raio (820 m)" flag. Absent (or null) on a
+   * route move and on a record from before the geofence.
+   */
+  geofence_outcome?: GeofenceOutcome | null;
+  distance_m?: number | null;
+  accuracy_m?: number | null;
+
   /** When it happened (device time for the app's facts). */
   occurredAt: Date;
 
@@ -161,6 +173,17 @@ interface IOperationDayRepository {
     day: OperationDay,
     endedSince: Date,
   ) => Promise<TowerRouteWithStops[]>;
+
+  /**
+   * The company's running routes that left before `startedBefore`
+   * (leftOpenStartedBefore) with their open stops (PENDING or ARRIVED)
+   * counted; routes holding none are left out (H3). What the operation
+   * summary inherited, without reading the tower's whole day.
+   */
+  listRoutesLeftOpen: (
+    businessId: string,
+    startedBefore: Date,
+  ) => Promise<Array<{ started_at: Date | null; open: number }>>;
 
   /** The newest facts that reached the server in the day, newest first. */
   listFeed: (

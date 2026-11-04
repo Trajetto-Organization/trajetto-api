@@ -76,6 +76,17 @@ interface IIntegrationRepository {
     businessId: string,
     idempotencyKey: string,
   ) => Promise<(StoredDelivery & { id: string }) | null>;
+
+  /**
+   * Who owns the delivery a proof link names, and whether it has a receipt
+   * to show (L7). Unscoped by design: the link carries no company, and the
+   * owner read here is what its signature is then checked against.
+   */
+  findProofLinkTarget: (deliveryId: string) => Promise<{
+    businessId: string;
+    status: string;
+    created_at: Date;
+  } | null>;
 }
 
 export type { CursorPage, IIntegrationRepository, IntegrationListProps };

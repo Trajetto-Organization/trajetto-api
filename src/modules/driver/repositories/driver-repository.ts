@@ -49,11 +49,16 @@ function definedOnly<T extends object>(data: T): Partial<T> {
 
 async function openRoutesOf(
   client: Client,
-  driverId: string,
+  driverId: string | { branchId: string },
 ): Promise<OpenRouteCounts> {
   const grouped = await client.route.groupBy({
     by: ["status"],
-    where: { driverId, status: { in: [...OPEN_ROUTE_STATUSES] } },
+    where: {
+      ...(typeof driverId === "string"
+        ? { driverId }
+        : { driver: { branchId: driverId.branchId } }),
+      status: { in: [...OPEN_ROUTE_STATUSES] },
+    },
     _count: { _all: true },
   });
 
@@ -423,6 +428,10 @@ class DriverRepository implements IDriverRepository {
 
   async countOpenRoutes(driverId: string): Promise<OpenRouteCounts> {
     return openRoutesOf(this.prisma, driverId);
+  }
+
+  async countOpenRoutesOfBranch(branchId: string): Promise<OpenRouteCounts> {
+    return openRoutesOf(this.prisma, { branchId });
   }
 
   async countDriverPauses(driverId: string): Promise<number> {

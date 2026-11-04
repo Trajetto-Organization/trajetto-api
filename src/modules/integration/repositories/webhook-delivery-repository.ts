@@ -4,6 +4,7 @@ import database from "@/../infra/database";
 
 import { buildResendRow } from "@/shared/integration/webhook-resend";
 import {
+  queueWebhookPing,
   releaseHeldRowIfEndpointBack,
   releaseParkedWebhookDeliveries,
 } from "@/shared/integration/webhook-dispatch-service";
@@ -166,6 +167,13 @@ class WebhookDeliveryRepository implements IWebhookDeliveryRepository {
 
   async releaseParked(endpointId: string): Promise<number> {
     return releaseParkedWebhookDeliveries(endpointId, this.prisma);
+  }
+
+  async queuePing(
+    endpointId: string,
+    businessId: string,
+  ): Promise<{ id: string; eventId: string } | null> {
+    return queueWebhookPing(endpointId, businessId, this.prisma);
   }
 
   async releaseHeldIfEndpointBack(

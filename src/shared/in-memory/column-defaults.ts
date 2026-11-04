@@ -1,4 +1,5 @@
 import type {
+  ChecklistPhase,
   OccurrenceAuthorizationStatus,
   OccurrenceCategory,
   ProofSignatureStatus,
@@ -41,6 +42,9 @@ const OCCURRENCE_TYPE_COLUMN_DEFAULTS = {
   pause_kind: null,
   system_key: null,
   deactivated_at: null,
+  // Plan of 02/11/2026: the ERP code (L8) and the requirements' clock (K2).
+  code: null,
+  requirements_changed_at: null,
 } as const satisfies Record<string, unknown> & { category: OccurrenceCategory };
 
 const DELIVERY_COLUMN_DEFAULTS = {
@@ -53,6 +57,11 @@ const DELIVERY_COLUMN_DEFAULTS = {
   longitude: null,
   geo_source: null,
   geo_updated_at: null,
+  // Plan of 02/11/2026 (E1): the geocoder's level and its bookkeeping.
+  geo_precision: null,
+  geocode_status: null,
+  geocode_attempted_at: null,
+  geocode_attempts: 0,
 } as const;
 
 const DELIVERY_EVENT_COLUMN_DEFAULTS = {
@@ -63,6 +72,10 @@ const DELIVERY_EVENT_COLUMN_DEFAULTS = {
   gps_address: null,
   gps_address_source: null,
   gps_geocoded_at: null,
+  // Plan of 02/11/2026 (E4): the geofence record of the action.
+  distance_m: null,
+  accuracy_m: null,
+  geofence_outcome: null,
 } as const;
 
 const DELIVERY_OCCURRENCE_COLUMN_DEFAULTS = {
@@ -78,6 +91,10 @@ const DELIVERY_OCCURRENCE_COLUMN_DEFAULTS = {
   receipt_photo: null,
   signature: null,
   received_by: null,
+  // Plan of 02/11/2026 (E3/E4): the geofence record of the report.
+  distance_m: null,
+  accuracy_m: null,
+  geofence_outcome: null,
 } as const satisfies Record<string, unknown> & {
   authorization_status: OccurrenceAuthorizationStatus;
   category: OccurrenceCategory;
@@ -89,10 +106,15 @@ const ROUTE_COLUMN_DEFAULTS = {
   released_at: null,
   plan_version: 0,
   client_submission_id: null,
+  // Plan of 02/11/2026, K11 (D26).
+  closure_reason: null,
+  left_open_alerted_at: null,
 } as const;
 
 const ROUTE_STOP_COLUMN_DEFAULTS = {
   on_the_way_at: null,
+  // Plan of 02/11/2026 (B6): a stop of its own until the key is written.
+  stop_group_key: null,
 } as const;
 
 const CHAT_MESSAGE_COLUMN_DEFAULTS = {
@@ -135,11 +157,21 @@ const DELIVERY_PROOF_AUDIT_COLUMN_DEFAULTS = {
 const FUEL_COLUMN_DEFAULTS = {
   odometer_device_precheck: null,
   odometer_device_agreement: null,
+  // Plan of 02/11/2026 (C5/F3): made outside a route.
+  routeId: null,
 } as const;
 
 const VEHICLE_CHECKLIST_COLUMN_DEFAULTS = {
   mileage_device_precheck: null,
   mileage_device_agreement: null,
+  // Plan of 02/11/2026 (C4/F3): made outside a route.
+  routeId: null,
+  phase: "STANDALONE",
+} as const satisfies Record<string, unknown> & { phase: ChecklistPhase };
+
+// Plan of 02/11/2026 (F1): no responsible = the company's admins.
+const VEHICLE_COLUMN_DEFAULTS = {
+  responsibleUserId: null,
 } as const;
 
 const ACCOUNT_PAYABLE_COLUMN_DEFAULTS = {
@@ -179,6 +211,7 @@ const COLUMN_DEFAULTS_BY_TABLE = {
   delivery_proof_audit: DELIVERY_PROOF_AUDIT_COLUMN_DEFAULTS,
   fuel: FUEL_COLUMN_DEFAULTS,
   vehicle_checklist: VEHICLE_CHECKLIST_COLUMN_DEFAULTS,
+  vehicle: VEHICLE_COLUMN_DEFAULTS,
 } as const satisfies Record<string, Record<string, unknown>>;
 
 /** A defaulted key is always present: the caller's value or the default. */
@@ -226,6 +259,7 @@ export {
   SHIPPER_COLUMN_DEFAULTS,
   USER_COLUMN_DEFAULTS,
   VEHICLE_CHECKLIST_COLUMN_DEFAULTS,
+  VEHICLE_COLUMN_DEFAULTS,
   VEHICLE_TYPE_COLUMN_DEFAULTS,
   withColumnDefaults,
 };

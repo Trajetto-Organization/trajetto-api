@@ -14,6 +14,7 @@ import {
   stopSettledAt,
   type RouteMoveKind,
 } from "@/shared/route/operation-day-rules";
+import type { GeofenceOutcome } from "@/shared/delivery/geofence/geofence-rules";
 
 import type {
   DayDeliveryCount,
@@ -101,6 +102,11 @@ interface OperationRows {
     status_to: DeliveryStatusName | null;
     occurred_at: Date | null;
     created_at: Date;
+
+    /** E4/E5; optional so the fixtures written before the geofence type-check. */
+    geofence_outcome?: GeofenceOutcome | null;
+    distance_m?: number | null;
+    accuracy_m?: number | null;
   }>;
 
   /** Optional so the fixtures written before pauses still type-check. */
@@ -123,6 +129,11 @@ interface OperationRows {
 
     occurred_at: Date | null;
     created_at: Date;
+
+    /** E4/E5, as on the events. */
+    geofence_outcome?: GeofenceOutcome | null;
+    distance_m?: number | null;
+    accuracy_m?: number | null;
   }>;
 }
 
@@ -460,6 +471,29 @@ class InMemoryOperationDayRepository implements IOperationDayRepository {
       }));
   }
 
+  async listRoutesLeftOpen(
+    businessId: string,
+    startedBefore: Date,
+  ): Promise<Array<{ started_at: Date | null; open: number }>> {
+    return this.rows.routes
+      .filter(
+        (route) =>
+          route.businessId === businessId &&
+          route.status === "IN_PROGRESS" &&
+          route.started_at !== null &&
+          route.started_at.getTime() < startedBefore.getTime(),
+      )
+      .map((route) => ({
+        started_at: route.started_at,
+        open: this.rows.stops.filter(
+          (stop) =>
+            stop.routeId === route.id &&
+            (stop.status === "PENDING" || stop.status === "ARRIVED"),
+        ).length,
+      }))
+      .filter((route) => route.open > 0);
+  }
+
   async listFeed(
     businessId: string,
     day: OperationDay,
@@ -527,6 +561,9 @@ class InMemoryOperationDayRepository implements IOperationDayRepository {
               type?.blocks_delivery,
               occurrence?.authorization_status,
             )),
+        geofence_outcome: event.geofence_outcome ?? null,
+        distance_m: event.distance_m ?? null,
+        accuracy_m: event.accuracy_m ?? null,
         occurredAt: factInstant(event.occurred_at, event.created_at),
         receivedAt: event.created_at,
       });
@@ -565,6 +602,9 @@ class InMemoryOperationDayRepository implements IOperationDayRepository {
           type?.blocks_delivery,
           occurrence.authorization_status,
         ),
+        geofence_outcome: occurrence.geofence_outcome ?? null,
+        distance_m: occurrence.distance_m ?? null,
+        accuracy_m: occurrence.accuracy_m ?? null,
         occurredAt: factInstant(occurrence.occurred_at, occurrence.created_at),
         receivedAt: occurrence.created_at,
       });

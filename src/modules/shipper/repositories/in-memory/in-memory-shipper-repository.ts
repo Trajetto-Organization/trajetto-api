@@ -7,6 +7,7 @@ import {
 import { IShipperRepository } from "../IShipper-repository";
 
 import {
+  foreignKeyViolation,
   requireIndex,
   uniqueViolation,
 } from "@/shared/in-memory/prisma-errors";
@@ -247,6 +248,13 @@ class InMemoryShipperRepository implements IShipperRepository {
       (s) => s.id === shipperId,
       "delete",
     );
+
+    // delivery.shipperId is RESTRICT: Postgres refuses a shipper deliveries
+    // still name, whatever the use case counted before.
+    if ((this.deliveryCounts.get(shipperId) ?? 0) > 0) {
+      throw foreignKeyViolation("delivery_shipperId_fkey");
+    }
+
     return this.shippers.splice(index, 1)[0];
   }
 

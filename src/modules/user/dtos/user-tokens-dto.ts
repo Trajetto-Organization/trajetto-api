@@ -4,6 +4,13 @@ interface CreateUserRefreshTokenProps {
   token_hash: string;
   jti: string;
   family_id: string;
+
+  /**
+   * The phone the session is bound to (plan of 02/11/2026, D3/D4/D7): set
+   * when a driver signs in by QR code or CPF and password, and carried by
+   * every rotation of the family. Absent on web sessions.
+   */
+  device_id?: string | null;
 }
 
 interface UserRefreshTokenProps {
@@ -21,6 +28,26 @@ interface UserRefreshTokenProps {
 
   /** How many siblings this spent token minted within the grace window. */
   grace_siblings?: number;
+
+  /** The phone the session is bound to (D3/D4/D7); null on web sessions. */
+  device_id?: string | null;
+
+  /** When this token was issued: the login, or the renewal that minted it. */
+  created_at?: Date;
+}
+
+/**
+ * One phone of a driver, as the manager's list shows it (plan of 02/11/2026,
+ * D7): the live sessions bound to it, grouped.
+ */
+interface UserDeviceSession {
+  device_id: string;
+  /** Live sessions (families) on this phone; usually one. */
+  sessions: number;
+  /** The latest renewal: the app renews while in use, every 15 minutes. */
+  last_activity_at: Date;
+  /** When the last of them lapses if the phone stays silent. */
+  expires_at: Date;
 }
 
 interface VerificationToken {
@@ -115,4 +142,5 @@ export {
   TwoFactor,
   RotateUserRefreshTokenProps,
   RefreshRotation,
+  UserDeviceSession,
 };

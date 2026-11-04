@@ -1,4 +1,5 @@
 import {
+  downsample,
   routeOfPing,
   type AcceptedPing,
 } from "@/shared/route/driver-position-rules";
@@ -154,14 +155,16 @@ class InMemoryDriverPositionRepository implements IDriverPositionRepository {
     from,
     to,
     routeId,
+    max,
   }: {
     businessId: string;
     driverId: string;
     from: Date;
     to: Date;
     routeId?: string;
-  }): Promise<StoredPosition[]> {
-    return this.trail
+    max: number;
+  }): Promise<{ recorded: number; points: StoredPosition[] }> {
+    const window = this.trail
       .filter(
         (row) =>
           row.businessId === businessId &&
@@ -172,6 +175,12 @@ class InMemoryDriverPositionRepository implements IDriverPositionRepository {
       )
       .sort((a, b) => a.recorded_at.getTime() - b.recorded_at.getTime())
       .map(({ businessId: _businessId, ...row }) => row);
+
+    // The same positions the SQL keeps: downsample's rule (G9).
+    return {
+      recorded: window.length,
+      points: downsample(window, Math.max(2, max)),
+    };
   }
 
   async findLast(

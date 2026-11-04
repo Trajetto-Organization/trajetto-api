@@ -23,6 +23,9 @@ const VEHICLE_FIXTURE = {
   vehicleTypeA: fixedId("0ff8", 1),
   driverA: fixedId("0ff9", 1),
   branchA: fixedId("0ffa", 1),
+  // Plan of 02/11/2026 (F1): a user of A who can answer for a vehicle.
+  responsibleA: fixedId("0ffb", 1),
+  responsibleName: "Pessoa Contrato 1",
   vehicleTypeName: "Truck Baú",
   driverName: "Zeca Pagodinho",
   branchName: "Filial Centro",
@@ -241,6 +244,87 @@ function vehicleRepositoryContract(harness: () => VehicleHarness): void {
         }),
         "P2002",
       );
+    });
+
+    // Plan of 02/11/2026 (F1): null = the company's admins, on every legacy
+    // row; set, kept by an edit that does not name it, and cleared by null.
+    it("stores, keeps and clears the vehicle's responsible user", async () => {
+      const h = harness();
+      const before = await h.repo.findVehicleById(h.id("v1"));
+
+      expect(before?.responsibleUserId).toBeNull();
+
+      await h.repo.updateVehicle({
+        vehicleId: h.id("v1"),
+        vehicleData: { responsibleUserId: F.responsibleA },
+      });
+      await h.repo.updateVehicle({
+        vehicleId: h.id("v1"),
+        vehicleData: {
+          maintenance_interval_months: before?.maintenance_interval_months,
+        },
+      });
+
+      expect(
+        (await h.repo.findVehicleById(h.id("v1")))?.responsibleUserId,
+      ).toBe(F.responsibleA);
+
+      await h.repo.updateVehicle({
+        vehicleId: h.id("v1"),
+        vehicleData: { responsibleUserId: null },
+      });
+
+      expect(
+        (await h.repo.findVehicleById(h.id("v1")))?.responsibleUserId,
+      ).toBeNull();
+    });
+
+    // The names the edit and the OS prefill read (F1, F4): the responsible
+    // user's and the branch's, null without one, on the list and the detail.
+    it("names the responsible user and the branch on the list and the detail", async () => {
+      const h = harness();
+
+      await h.repo.updateVehicle({
+        vehicleId: h.id("v1"),
+        vehicleData: { responsibleUserId: F.responsibleA },
+      });
+
+      try {
+        const page = await list({ search: "AAA1B11" });
+        const named = page.data.find((row) => row.id === h.id("v1"));
+
+        expect(named).toMatchObject({
+          responsibleUser: { name: F.responsibleName },
+          branch: { corporate_reason: F.branchName, name: F.branchName },
+        });
+
+        const bare = (await list({ search: "AAA2B22" })).data.find(
+          (row) => row.id === h.id("v2"),
+        );
+
+        expect(bare).toMatchObject({ responsibleUser: null, branch: null });
+
+        expect(
+          await h.repo.getVehicleByIdAndBusiness({
+            businessId: A,
+            vehicleId: h.id("v1"),
+          }),
+        ).toMatchObject({
+          responsibleUser: { name: F.responsibleName },
+          branch: { corporate_reason: F.branchName, name: F.branchName },
+        });
+        expect(
+          await h.repo.getVehicleByIdAndBusiness({
+            businessId: A,
+            vehicleId: h.id("v2"),
+          }),
+        ).toMatchObject({ responsibleUser: null, branch: null });
+      } finally {
+        await h.repo.updateVehicle({
+          vehicleId: h.id("v1"),
+          vehicleData: { responsibleUserId: null },
+        });
+      }
     });
 
     it("finds a plate and a RENAVAM whatever the case, inside the company only", async () => {

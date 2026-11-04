@@ -42,6 +42,8 @@ interface OccurrenceForDecision {
   occurrenceType: {
     id: string;
     name: string;
+    /** The company's ERP code (L8): occurrence_code on the approval's webhook. */
+    code: string | null;
     blocks_delivery: boolean;
     requires_authorization: boolean;
     form_fields: unknown;

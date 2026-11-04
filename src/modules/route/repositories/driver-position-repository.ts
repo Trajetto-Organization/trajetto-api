@@ -278,41 +278,64 @@ class DriverPositionRepository implements IDriverPositionRepository {
     from,
     to,
     routeId,
+    max,
   }: {
     businessId: string;
     driverId: string;
     from: Date;
     to: Date;
     routeId?: string;
-  }): Promise<StoredPosition[]> {
+    max: number;
+  }): Promise<{ recorded: number; points: StoredPosition[] }> {
+    // Thinned in Postgres (plan of 02/11/2026, G9): a ten-hour day is 2.400
+    // points per driver, and every one of them used to cross the wire to be
+    // dropped in Node. The window functions still walk the driver's points
+    // through (driverId, recorded_at); only the kept ones come back.
+    //
+    // The kept positions are downsample's: rn = round(i * stride) for
+    // i < max - 1, plus the last. For a position rn the only candidate i is
+    // round(rn / stride) (stride > 1 once there are more points than max),
+    // so the test below is that rule, in exact numeric arithmetic.
+    const ceiling = Math.max(2, max);
+
     // `businessId` in the where even though `driverId` already implies it.
     // The use case checks the driver belongs to the company; this is the
     // second lock, and the one that holds when somebody adds a caller that
-    // forgot the first.
-    const rows = await this.prisma.driverPosition.findMany({
-      where: {
-        businessId,
-        driverId,
-        // Half-open, like the business day: a point at midnight belongs to
-        // the day it starts, not to both.
-        recorded_at: { gte: from, lt: to },
-        ...(routeId && { routeId }),
-      },
-      select: {
-        driverId: true,
-        routeId: true,
-        latitude: true,
-        longitude: true,
-        accuracy: true,
-        speed: true,
-        heading: true,
-        battery: true,
-        recorded_at: true,
-      },
-      orderBy: { recorded_at: "asc" },
-    });
+    // forgot the first. Half-open, like the business day: a point at
+    // midnight belongs to the day it starts, not to both.
+    const rows = await this.prisma.$queryRaw<
+      Array<StoredPosition & { total: number }>
+    >(Prisma.sql`
+      WITH "trail" AS (
+        SELECT
+          "driverId", "routeId", "latitude", "longitude", "accuracy",
+          "speed", "heading", "battery", "recorded_at",
+          (row_number() OVER (ORDER BY "recorded_at") - 1)::int AS "rn",
+          (count(*) OVER ())::int AS "total"
+        FROM "driver_position"
+        WHERE "businessId" = ${businessId}
+          AND "driverId" = ${driverId}
+          AND "recorded_at" >= ${from}
+          AND "recorded_at" < ${to}
+          ${routeId ? Prisma.sql`AND "routeId" = ${routeId}` : Prisma.empty}
+      )
+      SELECT
+        "driverId", "routeId", "latitude", "longitude", "accuracy",
+        "speed", "heading", "battery", "recorded_at", "total"
+      FROM "trail"
+      WHERE "total" <= ${ceiling}
+         OR "rn" = "total" - 1
+         OR "rn" = ROUND(
+              ROUND("rn" / (("total" - 1)::numeric / ${ceiling - 1}))
+              * (("total" - 1)::numeric / ${ceiling - 1})
+            )
+      ORDER BY "recorded_at" ASC
+    `);
 
-    return rows;
+    return {
+      recorded: rows[0]?.total ?? 0,
+      points: rows.map(({ total: _total, ...point }) => point),
+    };
   }
 
   async findLast(

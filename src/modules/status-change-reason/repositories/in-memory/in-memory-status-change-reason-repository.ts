@@ -14,6 +14,7 @@ import {
   compareForOrder,
 } from "@/shared/pagination/in-memory-order";
 import {
+  foreignKeyViolation,
   requireIndex,
   uniqueViolation,
 } from "@/shared/in-memory/prisma-errors";
@@ -214,6 +215,12 @@ class InMemoryStatusChangeReasonRepository
       (reason) => reason.id === reasonId,
       "delete",
     );
+
+    // delivery_event.reasonId is RESTRICT: Postgres refuses a reason the
+    // history cites, whatever the use case counted before.
+    if ((this.eventCountByReasonId.get(reasonId) ?? 0) > 0) {
+      throw foreignKeyViolation("delivery_event_reasonId_fkey");
+    }
 
     const [removed] = this.statusChangeReasons.splice(index, 1);
 

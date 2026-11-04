@@ -2,9 +2,14 @@ import database from "@/../infra/database";
 import { Prisma } from "@prisma/client";
 import {
   IVehicleChecklistRepository,
+  ROUTES_AWAITING_END_CHECKLIST_LIMIT,
   type ChecklistMileageUpdate,
   type ChecklistPlacement,
 } from "./IVehicle-checklist-repository";
+import type {
+  RouteAwaitingEndChecklist,
+  RouteChecklistSummary,
+} from "../dtos/vehicle-checklist-dto";
 import { VehicleMileageInvalidError } from "@/modules/vehicle/usecases/errors/vehicle-mileage-invalid-error";
 import { editedReadingRefusal } from "@/modules/vehicle/usecases/errors/vehicle-mileage-out-of-order-error";
 import { VehicleNotFoundError } from "@/modules/vehicle/usecases/errors/vehicle-not-found-error";
@@ -19,6 +24,11 @@ import {
 import { placeReading } from "@/modules/fuel/usecases/fuel-rules";
 import { resolveTimeZone } from "@/shared/time/business-day";
 import { isSerializationFailure } from "@/shared/errors/prisma-error-meta";
+import {
+  ROUTE_LINK_SELECT,
+  listedPhase,
+  listedRoute,
+} from "@/shared/vehicle/route-columns";
 
 import {
   VehicleChecklist,
@@ -231,6 +241,9 @@ class VehicleChecklistRepository implements IVehicleChecklistRepository {
               cnh: true,
             },
           },
+          // Contract C3: the route it was made for, in the same query;
+          // listedRoute keeps only the company's own.
+          route: ROUTE_LINK_SELECT,
         },
         orderBy: resolveOrderBy(CHECKLIST_SORT, { sort, order }),
       }),
@@ -287,7 +300,11 @@ class VehicleChecklistRepository implements IVehicleChecklistRepository {
       : [];
 
     return {
-      data: checklistsData,
+      data: checklistsData.map(({ route, ...checklist }) => ({
+        ...checklist,
+        route: listedRoute(checklist, route),
+        phase: listedPhase(checklist.phase),
+      })),
       conditionCounts: tallyConditions(conditionGroups),
       branchCounts: branches.map((branch) => ({
         id: branch.id,
@@ -609,6 +626,69 @@ class VehicleChecklistRepository implements IVehicleChecklistRepository {
   ): Promise<number> {
     return this.prisma.vehicleChecklist.count({
       where: checklistListWhere(filters),
+    });
+  }
+
+  async listRouteChecklists(
+    businessId: string,
+    routeIds: string[],
+  ): Promise<RouteChecklistSummary[]> {
+    // Nothing to read for a driver with no route: no query either.
+    if (routeIds.length === 0) return [];
+
+    const rows = await this.prisma.vehicleChecklist.findMany({
+      // By routeId (vehicle_checklist_routeId_idx), always inside the tenant.
+      where: {
+        businessId,
+        routeId: { in: routeIds },
+        phase: { in: ["ROUTE_START", "ROUTE_END"] },
+      },
+      orderBy: [{ checklist_date: "desc" }, { id: "desc" }],
+      select: {
+        id: true,
+        routeId: true,
+        phase: true,
+        checklist_date: true,
+        overall_condition: true,
+      },
+    });
+
+    return rows.flatMap((row) =>
+      row.routeId && row.phase !== "STANDALONE"
+        ? [{ ...row, routeId: row.routeId, phase: row.phase }]
+        : [],
+    );
+  }
+
+  async listRoutesAwaitingEndChecklist({
+    businessId,
+    driverId,
+    completedSince,
+  }: {
+    businessId: string;
+    driverId: string;
+    completedSince: Date;
+  }): Promise<RouteAwaitingEndChecklist[]> {
+    // The driver's routes by (businessId, driverId, status); the arrival
+    // checklist through vehicle_checklist_routeId_idx — and only one of
+    // this company counts, whatever a foreign row names.
+    return this.prisma.route.findMany({
+      where: {
+        businessId,
+        driverId,
+        status: "COMPLETED",
+        completed_at: { gte: completedSince },
+        vehicleChecklists: { none: { businessId, phase: "ROUTE_END" } },
+      },
+      orderBy: [{ completed_at: "desc" }, { id: "desc" }],
+      take: ROUTES_AWAITING_END_CHECKLIST_LIMIT,
+      select: {
+        id: true,
+        code: true,
+        plan_version: true,
+        vehicle: { select: { id: true, license_plate: true } },
+        completed_at: true,
+      },
     });
   }
 }

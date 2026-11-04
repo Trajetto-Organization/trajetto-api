@@ -3,10 +3,14 @@ import database from "@/../infra/database";
 import { forgetRequestCache, remember } from "@/shared/http/request-context";
 import { Prisma } from "@prisma/client";
 
-import { IUserRepository } from "./IUser-repository";
+import {
+  DRIVER_LOGINS_BY_CPF_LIMIT,
+  IUserRepository,
+} from "./IUser-repository";
 
 import {
   CreateUserProps,
+  DriverLoginByCpf,
   User,
   UpdateUserPassword,
   UpdateUserName,
@@ -63,6 +67,7 @@ class UserRepository implements IUserRepository {
     profileAccessId,
     businessId,
     driverId,
+    email_verified,
   }: CreateUserProps): Promise<User> {
     // Anything cached for this request describes the row before this
     // write. Kept, it would be read back by the next lookup in the
@@ -78,6 +83,7 @@ class UserRepository implements IUserRepository {
         businessId,
         profileAccessId: profileAccessId || null,
         driverId: driverId || null,
+        email_verified: email_verified ?? null,
       },
     });
 
@@ -200,6 +206,12 @@ class UserRepository implements IUserRepository {
     const updateData: Prisma.UserUpdateInput = {};
 
     Object.entries(restData).forEach(([key, value]) => {
+      // A null e-mail is "not sent", as the edit plan reads it — and the
+      // barrier of the nullable-expand release (migration 20261102120100):
+      // the column takes NULL now, but nothing may write one until the next
+      // release enables the driver without an e-mail (D2).
+      if (key === "email" && value === null) return;
+
       if (value !== undefined) {
         (updateData as Record<string, unknown>)[key] = value;
       }
@@ -492,6 +504,57 @@ class UserRepository implements IUserRepository {
     return { ...driver, branch };
   }
 
+  async findDriverLoginsByCpf(cpf: string): Promise<DriverLoginByCpf[]> {
+    // Served by driver_cpf_idx: the CPF is unique per company only
+    // (@@unique([businessId, cpf]) leads with the company), and a login by
+    // CPF does not know the company yet.
+    const rows = await this.prisma.user.findMany({
+      where: { driver: { cpf } },
+      include: {
+        business: {
+          select: {
+            is_active: true,
+            fantasy_name: true,
+            corporate_reason: true,
+          },
+        },
+        profileAccess: {
+          select: {
+            name: true,
+            permissions: {
+              select: {
+                id: true,
+                permissionKey: true,
+                action: true,
+                canRead: true,
+                canWrite: true,
+              },
+            },
+          },
+        },
+        // What assertSessionEligible reads, so it does not load it again.
+        driver: {
+          select: {
+            id: true,
+            status: true,
+            businessId: true,
+            branchId: true,
+            branch: { select: { is_active: true } },
+          },
+        },
+      },
+      orderBy: [{ created_at: "asc" }, { id: "asc" }],
+      take: DRIVER_LOGINS_BY_CPF_LIMIT,
+    });
+
+    return rows.map(({ business, ...user }) => ({
+      ...user,
+      business: business ? { is_active: business.is_active } : null,
+      companyName:
+        business?.fantasy_name?.trim() || business?.corporate_reason || "",
+    }));
+  }
+
   async findUsersByBusiness(businessId: string): Promise<User[]> {
     const findUserByBusiness = await this.prisma.user.findMany({
       where: {
@@ -509,6 +572,7 @@ class UserRepository implements IUserRepository {
   async updateUserPassword({
     userId,
     password,
+    markEmailVerifiedAt,
   }: UpdateUserPassword): Promise<User | null> {
     // Anything cached for this request describes the row before this
     // write. Kept, it would be read back by the next lookup in the
@@ -519,6 +583,7 @@ class UserRepository implements IUserRepository {
       where: { id: userId },
       data: {
         password,
+        ...(markEmailVerifiedAt && { email_verified: markEmailVerifiedAt }),
         session_version: { increment: 1 },
         RefreshToken: { deleteMany: {} },
         // Every session ends, so every device they registered stops receiving.

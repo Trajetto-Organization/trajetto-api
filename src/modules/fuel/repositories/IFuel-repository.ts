@@ -9,6 +9,7 @@ import {
   GetFuelByIdAndBusinessProps,
   SearchFuelByVehicleWithCursorProps,
   CursorPaginatedFuel,
+  RouteFuelSummary,
 } from "../dtos/fuel-dto";
 
 import type { FuelListFilters } from "../usecases/list-fuel/fuel-list";
@@ -97,6 +98,15 @@ interface IFuelRepository {
     props: SearchFuelByVehicleWithCursorProps,
   ) => Promise<CursorPaginatedFuel>;
   countFuelForExport: (filters: FuelListFilters) => Promise<number>;
+
+  /**
+   * The refuellings made on a route, oldest first, inside the company (plan
+   * of 02/11/2026, F3): what the route detail lists.
+   */
+  listRouteFuels: (
+    businessId: string,
+    routeId: string,
+  ) => Promise<RouteFuelSummary[]>;
 }
 
 export { IFuelRepository };

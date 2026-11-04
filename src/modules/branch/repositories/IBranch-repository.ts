@@ -44,6 +44,13 @@ interface IBranchRepository {
     tx?: Prisma.TransactionClient,
   ) => Promise<Branch>;
   findBranchById: (branchId: string) => Promise<Branch | null>;
+  /**
+   * The id of the company's only ACTIVE branch, or null when it has none or
+   * several: the fallback a checklist or refuelling is filed under when
+   * neither the vehicle nor the driver names a branch
+   * (shared/vehicle/record-branch.ts). Within one company.
+   */
+  findSoleActiveBranchId: (businessId: string) => Promise<string | null>;
   /** Within one company: the ERP code is unique per business, not global. */
   findBranchByErpCode: (
     businessId: string,

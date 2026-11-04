@@ -283,6 +283,16 @@ class InMemoryBranchRepository implements IBranchRepository {
     return this.branches.find((branch) => branch.id === branchId) || null;
   }
 
+  async findSoleActiveBranchId(businessId: string): Promise<string | null> {
+    const active = this.branches.filter(
+      // The column defaults to true, as createBranch writes it.
+      (branch) =>
+        branch.businessId === businessId && (branch.is_active ?? true),
+    );
+
+    return active.length === 1 ? active[0].id : null;
+  }
+
   async findBranchByErpCode(
     businessId: string,
     erp_code: string,

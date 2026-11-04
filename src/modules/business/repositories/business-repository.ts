@@ -60,9 +60,9 @@ class BusinessRepository implements IBusinessRepository {
 
   /**
    * One page of companies ‖ the (is_active, uf) breakdown, then the top
-   * cities: at most two connections at a time (connection-fan-out budget).
-   * The cards and filters are derived from the breakdowns, never from the
-   * page (decision 8.8).
+   * cities ‖ the page's fleet sizes: at most two connections at a time
+   * (connection-fan-out budget). The cards and filters are derived from the
+   * breakdowns, never from the page (decision 8.8).
    */
   async listBusiness({
     page,
@@ -88,14 +88,6 @@ class BusinessRepository implements IBusinessRepository {
         take: pageSize,
         where: businessListWhere(filters),
         orderBy: resolveOrderBy(BUSINESS_SORT, { sort, order }),
-        include: {
-          _count: {
-            // Active fleet only — INACTIVE vehicles free their slot.
-            select: {
-              vehicles: { where: { status: { not: "INACTIVE" } } },
-            },
-          },
-        },
       }),
       this.prisma.business.groupBy({
         by: ["is_active", "uf"],
@@ -104,20 +96,42 @@ class BusinessRepository implements IBusinessRepository {
       }),
     ]);
 
-    // By city AND state: two "São José" (SC and SP) are two places.
-    const cities = await this.prisma.business.groupBy({
-      by: ["city", "uf"],
-      where: businessListWhere(filters),
-      _count: { _all: true },
-      orderBy: [{ _count: { city: "desc" } }, { city: "asc" }, { uf: "asc" }],
-      take: TOP_PLACES,
-    });
+    const pageIds = businessRows.map((business) => business.id);
 
-    // Flatten the relation count so the API exposes registered fleet size
-    // next to the contracted limit (vehicle_limit).
-    const data = businessRows.map(({ _count, ...business }) => ({
+    const [cities, fleets] = await Promise.all([
+      // By city AND state: two "São José" (SC and SP) are two places.
+      this.prisma.business.groupBy({
+        by: ["city", "uf"],
+        where: businessListWhere(filters),
+        _count: { _all: true },
+        orderBy: [{ _count: { city: "desc" } }, { city: "asc" }, { uf: "asc" }],
+        take: TOP_PLACES,
+      }),
+      // The page's fleets only — active fleet, INACTIVE vehicles free their
+      // slot. Not a filtered relation `_count` on the page: Prisma writes it
+      // as a LEFT JOIN on a subselect grouped over EVERY vehicle of the
+      // platform (a sequential scan of 10.000 vehicles for a page of ten in
+      // tests/E2E/query-plans.test.ts), which grows with every carrier.
+      pageIds.length > 0
+        ? this.prisma.vehicle.groupBy({
+            by: ["businessId"],
+            where: {
+              businessId: { in: pageIds },
+              status: { not: "INACTIVE" },
+            },
+            _count: { _all: true },
+          })
+        : Promise.resolve([]),
+    ]);
+
+    const fleetOf = new Map(
+      fleets.map((fleet) => [fleet.businessId, fleet._count._all]),
+    );
+
+    // The registered fleet size next to the contracted limit (vehicle_limit).
+    const data = businessRows.map((business) => ({
       ...business,
-      vehicle_count: _count.vehicles,
+      vehicle_count: fleetOf.get(business.id) ?? 0,
     }));
 
     return {

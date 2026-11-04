@@ -15,6 +15,7 @@ import {
   seedBusiness,
   seedDriver,
   seedFuelType,
+  seedUser,
 } from "../contract/seed";
 import { createPrismaClient } from "@/shared/database/database-client";
 
@@ -62,6 +63,10 @@ beforeAll(async () => {
     },
   });
   await seedDriver(prisma, F.A, 1, { id: F.driverA, name: F.driverName });
+  await seedUser(prisma, F.A, 1, {
+    id: F.responsibleA,
+    role: "BUSINESS_ADMIN",
+  });
   await seedBranch(prisma, F.A, 1, F.branchA).then((row) =>
     prisma.branch.update({
       where: { id: row.id },
@@ -72,6 +77,7 @@ beforeAll(async () => {
   memory.driverNames[F.driverA] = F.driverName;
   memory.vehicleTypeNames[F.vehicleTypeA] = F.vehicleTypeName;
   memory.branchNames[F.branchA] = F.branchName;
+  memory.userNames[F.responsibleA] = F.responsibleName;
 
   ids.prisma = await seedVehicles(prismaRepo, async (id, at) => {
     await prisma.vehicle.update({ where: { id }, data: { created_at: at } });

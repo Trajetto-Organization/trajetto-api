@@ -38,6 +38,9 @@ const INDEXES: Record<string, string> = {
   notification_delivery_claim_external_idx: `CREATE INDEX notification_delivery_claim_external_idx ON public.notification_delivery USING btree ("availableAt") WHERE ((status = ANY (ARRAY['PENDING'::"NotificationDeliveryStatus", 'PROCESSING'::"NotificationDeliveryStatus"])) AND (channel = ANY (ARRAY['EMAIL'::"NotificationChannel", 'WHATSAPP'::"NotificationChannel"])))`,
   webhook_delivery_claim_idx: `CREATE INDEX webhook_delivery_claim_idx ON public.webhook_delivery USING btree ("availableAt") WHERE (status = ANY (ARRAY['PENDING'::"WebhookDeliveryStatus", 'PROCESSING'::"WebhookDeliveryStatus"]))`,
   delivery_proof_audit_queue_idx: `CREATE INDEX delivery_proof_audit_queue_idx ON public.delivery_proof_audit USING btree ("businessId", created_at) WHERE (status = 'PENDING'::"ProofAuditStatus")`,
+  // The geocoding job's claim (plan of 02/11/2026, E1): the open deliveries
+  // still without a point and not settled by the geocoder, newest first.
+  delivery_geocode_pending_idx: `CREATE INDEX delivery_geocode_pending_idx ON public.delivery USING btree (created_at) WHERE ((latitude IS NULL) AND (geo_source IS NULL) AND ((geocode_status IS NULL) OR (geocode_status = 'FAILED'::"DeliveryGeocodeStatus")) AND (status = ANY (ARRAY['PENDING'::"DeliveryStatus", 'IN_TRANSIT'::"DeliveryStatus"])))`,
   // The abandoned-import sweep: only the uploads running right now (IDEMP-10).
   import_in_progress_heartbeat_idx: `CREATE INDEX import_in_progress_heartbeat_idx ON public.import USING btree (updated_at) WHERE (status = 'IN_PROGRESS'::"ImportStatus")`,
   // The tower's authorization queue and the 10-minute escalation sweep:
@@ -114,6 +117,13 @@ const CHECKS: Record<string, string> = {
   occurrence_type_pause_kind_chk: `CHECK (((category = 'PAUSE'::"OccurrenceCategory") = (pause_kind IS NOT NULL)))`,
   occurrence_type_blocks_only_not_delivered_chk: `CHECK (((category = 'NOT_DELIVERED'::"OccurrenceCategory") OR (blocks_delivery = false)))`,
   occurrence_type_pause_requirements_chk: `CHECK (((category <> 'PAUSE'::"OccurrenceCategory") OR ((requires_photo = false) AND (requires_receipt_photo = false) AND (requires_signature = false) AND (requires_authorization = false))))`,
+  // Plan of 02/11/2026 (M1, decision D12): the geofence radius is bounded in
+  // the database too — a few metres would block honest drivers on GPS noise,
+  // tens of kilometres would be no control at all.
+  business_settings_geofence_radius_chk: `CHECK (((arrival_geofence_radius_m >= 50) AND (arrival_geofence_radius_m <= 5000)))`,
+  // Plan of 02/11/2026 (B3): the body may go NULL only on WhatsApp, which
+  // goes out as a fixed template; the e-mail always has the company's text.
+  delivery_message_template_email_body_chk: `CHECK (((channel <> 'EMAIL'::"NotificationChannel") OR (body IS NOT NULL)))`,
 };
 
 type Client = Pick<Prisma.TransactionClient, "$queryRaw">;

@@ -175,6 +175,7 @@ model Business {
   deliveries          Delivery[]
 
   externalRecipients     ExternalRecipient[]
+  customerSuppressions   CustomerMessageSuppression[]
   deliveryProofDocuments DeliveryProofDocument[]
   deliveryProofAudits    DeliveryProofAudit[]
 
@@ -187,12 +188,70 @@ model Business {
 
   driverPauses DriverPause[]
 
+  settings               BusinessSettings?
+  driverEnrollmentTokens DriverEnrollmentToken[]
+
   @@map("business")
 }
 
 enum BusinessModule {
   FLEET
   DELIVERIES
+}
+
+/// When a driver's route asks for the vehicle checklist (plan of 02/11/2026,
+/// item C4). The app holds "Iniciar rota" until the departure checklist is
+/// done (offline too); the server records, never refuses (decision D08).
+enum ChecklistRequirement {
+  NONE
+  ROUTE_START
+  ROUTE_END
+  ROUTE_START_AND_END
+}
+
+/// What an action at the customer's address does when the phone is outside
+/// the radius (items E3/E4; decisions D12-D14). It covers every action there
+/// — arrival, proof and occurrence (the owner's call on D13). ALERT asks the
+/// driver to confirm and flags the record; BLOCK refuses an arrival or a
+/// proof made outside the radius, never an occurrence (flagged instead). A
+/// position without accuracy, or an address without a point, never blocks,
+/// and the server never refuses a queued offline submission, only flags it.
+enum GeofenceMode {
+  DISABLED
+  ALERT
+  BLOCK
+}
+
+/// The company's own settings (item M1): what its admin decides for the
+/// operation, as opposed to the plan the MASTER sells (modules, limits).
+/// One row per company at most, written on the first save; a company without
+/// it reads BUSINESS_SETTINGS_DEFAULTS (src/shared/business/business-settings.ts),
+/// the same values as the column defaults. A setting only applies while its
+/// module is on (item M6): the checklist needs FLEET and DELIVERIES, the
+/// geofence DELIVERIES.
+model BusinessSettings {
+  id String @id @default(uuid(7))
+
+  business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  businessId String   @unique
+
+  checklist_requirement ChecklistRequirement @default(NONE)
+
+  /// Named after the arrival for history, but it governs every action at the
+  /// customer's address (see GeofenceMode).
+  arrival_geofence_mode     GeofenceMode @default(DISABLED)
+  /// Metres, 50 to 5,000 (CHECK business_settings_geofence_radius_chk).
+  arrival_geofence_radius_m Int          @default(500)
+
+  /// Who saved last. SET NULL: removing that user keeps the settings.
+  updatedBy   User?   @relation(fields: [updatedById], references: [id], onDelete: SetNull)
+  updatedById String?
+
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  @@index([updatedById])
+  @@map("business_settings")
 }
 
 // Sellable modules per company — the on/off of access. A missing row means
@@ -218,7 +277,13 @@ model BusinessEntitlement {
 model User {
   id             String    @id @default(uuid(7))
   name           String
-  email          String    @unique
+  /// Optional for a driver's login only (decision D02 of the plan of
+  /// 02/11/2026): a driver signs in by QR code or CPF and password. Loosened
+  /// in migration 20261102120100 (nullable-expand): this release reads it as
+  /// optional and still never writes NULL; the driver without an e-mail is
+  /// enabled in the next release. Every other user keeps one (the request
+  /// schemas require it). The unique index allows any number of NULLs.
+  email          String?   @unique
   email_verified DateTime? @map("email_verified")
   password       String
   avatar         String?
@@ -295,6 +360,14 @@ model User {
   // Stamped when the user's last socket disconnects — the "visto por
   // último" the SAC sees next to a driver's name in the chat.
   last_seen_at DateTime?
+
+  // Plan of 02/11/2026: the vehicles this person answers for (F1), the
+  // company settings they saved last (M1) and the driver's access codes (D3):
+  // their own, and the ones they issued as a manager.
+  responsibleVehicles          Vehicle[]               @relation("VehicleResponsible")
+  businessSettingsUpdates      BusinessSettings[]
+  driverEnrollmentTokens       DriverEnrollmentToken[] @relation("DriverEnrollmentTokenUser")
+  issuedDriverEnrollmentTokens DriverEnrollmentToken[] @relation("DriverEnrollmentTokenIssuer")
 
   created_at DateTime @default(now())
   updated_at DateTime @updatedAt
@@ -373,12 +446,58 @@ model RefreshToken {
   user            User      @relation(fields: [userId], references: [id], onDelete: Cascade)
   userId          String
 
+  /// The phone this session is bound to (plan of 02/11/2026, D3/D4/D7): the
+  /// app's Android ID, sent when a driver signs in by QR code or by CPF and
+  /// password, and carried by every rotation of the family. Null on web
+  /// sessions and on mobile sessions opened before it existed.
+  device_id String?
+
   created_at DateTime @default(now())
 
   @@index([userId, family_id])
   @@index([family_id, revoked_at])
   @@index([expires_in])
   @@map("refresh_token")
+}
+
+/// The one-time access a manager shows a driver as a QR code (or reads out as
+/// an 8-character code), so the driver signs in without e-mail or password
+/// (plan of 02/11/2026, item D3; decision D01). Only hashes are stored — the
+/// QR's opaque token and the short code are shown once. One row per driver
+/// login: issuing a new one replaces it (upsert on userId), so a single code
+/// is ever live. It expires in about ten minutes, is consumed atomically once
+/// (consumed_at), counts refused presentations (attempts) and records the
+/// phone that consumed it (device_id), which the session is bound to (D4).
+/// Inactivating the driver deletes it (D5).
+model DriverEnrollmentToken {
+  id String @id @default(uuid(7))
+
+  user   User   @relation("DriverEnrollmentTokenUser", fields: [userId], references: [id], onDelete: Cascade)
+  userId String @unique
+
+  business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  businessId String
+
+  /// SHA-256 (hex) of the QR's opaque token.
+  token_hash String  @unique
+  /// SHA-256 (hex) of the normalized short code; null = issued without one.
+  code_hash  String? @unique
+
+  expires_at  DateTime
+  consumed_at DateTime?
+
+  /// The manager who issued it. SET NULL: removing them keeps the record.
+  createdBy   User?   @relation("DriverEnrollmentTokenIssuer", fields: [createdById], references: [id], onDelete: SetNull)
+  createdById String?
+
+  device_id String?
+  attempts  Int     @default(0)
+
+  created_at DateTime @default(now())
+
+  @@index([businessId])
+  @@index([createdById])
+  @@map("driver_enrollment_token")
 }
 
 model ForgotPasswordVerificationToken {
@@ -631,6 +750,9 @@ model Driver {
   @@index([businessId, created_at])
   // ON DELETE SET NULL when a branch is deleted.
   @@index([branchId])
+  // The driver's login by CPF (D8) looks in every company: the unique above
+  // leads with the company and cannot serve it.
+  @@index([cpf])
   @@map("driver")
 }
 
@@ -676,6 +798,13 @@ model Vehicle {
   branch   Branch? @relation(fields: [branchId], references: [id])
   branchId String?
 
+  /// Who answers for this vehicle in the company (plan of 02/11/2026, F1;
+  /// decision D44): the person a failed checklist alerts (F2). Null = the
+  /// company's admins. A user of the same company (the use case checks it);
+  /// SET NULL when that user is removed.
+  responsibleUser   User?   @relation("VehicleResponsible", fields: [responsibleUserId], references: [id], onDelete: SetNull)
+  responsibleUserId String?
+
   serviceOrders ServiceOrder[]
 
   created_at       DateTime           @default(now())
@@ -699,6 +828,7 @@ model Vehicle {
   @@index([driverId])
   @@index([fuelTypeId])
   @@index([vehicleTypeId])
+  @@index([responsibleUserId])
   @@map("vehicle")
 }
 
@@ -1741,12 +1871,19 @@ model Fuel {
   fuelType   FuelType @relation(fields: [fuelTypeId], references: [id])
   fuelTypeId String
 
+  /// The route the refuelling was made on, when it came from the route
+  /// (plan of 02/11/2026, C5/F3). SET NULL: the refuelling is a record of the
+  /// vehicle and outlives the route.
+  route   Route?  @relation(fields: [routeId], references: [id], onDelete: SetNull)
+  routeId String?
+
   created_at DateTime @default(now())
   updated_at DateTime @updatedAt
 
   @@unique([businessId, client_submission_id])
   @@index([businessId, created_at])
   @@index([branchId])
+  @@index([routeId])
   // Replaces ([vehicleId]) and ([refueling_date]), absorbing the first as its
   // prefix. Serves getPreviousFuelByVehicleId, which runs on every refuelling
   // created (consumption maths) and used to either sort or walk a global date
@@ -1827,6 +1964,15 @@ model VehicleChecklist {
   driver   Driver @relation(fields: [driverId], references: [id])
   driverId String
 
+  /// The route this checklist was made for, and for which moment of it
+  /// (plan of 02/11/2026, C4/F3; decision D09: one per route). STANDALONE =
+  /// made outside a route, every legacy row included. The route's "checklist
+  /// done?" is derived from these rows, never stored on the route. SET NULL:
+  /// the checklist outlives the route.
+  route   Route?         @relation(fields: [routeId], references: [id], onDelete: SetNull)
+  routeId String?
+  phase   ChecklistPhase @default(STANDALONE)
+
   created_at DateTime @default(now())
   updated_at DateTime @updatedAt
 
@@ -1836,7 +1982,15 @@ model VehicleChecklist {
   @@index([vehicleId])
   @@index([driverId])
   @@index([checklist_date])
+  @@index([routeId])
   @@map("vehicle_checklist")
+}
+
+/// Which moment of a route a checklist answered (plan of 02/11/2026, C4).
+enum ChecklistPhase {
+  STANDALONE
+  ROUTE_START
+  ROUTE_END
 }
 
 // ── Deliveries module ────────────────────────────────────────────────────
@@ -1857,6 +2011,22 @@ enum DeliveryKind {
 enum DeliveryGeoSource {
   MANUAL // a dispatcher pinned it on the route map
   GEOCODER // resolved from the address by the geocoding provider (slice 2)
+}
+
+/// How precisely the geocoder placed an address (plan of 02/11/2026, E1).
+enum DeliveryGeoPrecision {
+  ADDRESS // the house number
+  STREET // the street, not the number
+  NEIGHBORHOOD // only the district: no point stored
+  CITY // only the city: no point stored
+}
+
+/// Where the geocoding of a delivery's address stands (E1).
+enum DeliveryGeocodeStatus {
+  RESOLVED // point stored (ADDRESS or STREET)
+  COARSE // only a district or a city: no point, "não avaliável"
+  NOT_FOUND // the provider knows no such address
+  FAILED // the provider failed (timeout, 429, 5xx): retried, a few times
 }
 
 enum RouteStatus {
@@ -1911,6 +2081,16 @@ model Route {
   // Required to cancel a route that already left, so the trail says why.
   cancellation_reason String?
 
+  /// Why a dispatcher closed the route with stops still open ("Encerrar com
+  /// pendências", plan of 02/11/2026 K11, decision D26): the open stops were
+  /// cancelled and their deliveries went back to PENDING. Null on a route
+  /// that closed by itself.
+  closure_reason String?
+
+  /// When the hourly sweep warned the admins that this route was left open
+  /// (K11, D26): the claim that makes the warning once per route.
+  left_open_alerted_at DateTime?
+
   /// When the route was last released to the driver; null while PLANNED (an
   /// "unrelease" clears it). Tells, for a pause tapped offline, whether a
   /// released route existed at the tap (decision 14.4).
@@ -1949,6 +2129,10 @@ model Route {
   chatMessages   ChatMessage[]
   supportTickets SupportTicket[]
 
+  // What happened to the vehicle on this route (plan of 02/11/2026, C4/F3).
+  vehicleChecklists VehicleChecklist[]
+  fuels             Fuel[]
+
   created_at DateTime @default(now())
   updated_at DateTime @updatedAt
 
@@ -1956,6 +2140,13 @@ model Route {
   @@unique([businessId, client_submission_id])
   // Serves the panel: routes of a company by status and day.
   @@index([businessId, status, scheduled_date])
+  // The routes list newest first (plan of 02/11/2026, K14): without it every
+  // page read and sorted all of the company's routes.
+  @@index([businessId, created_at(sort: Desc)])
+  // The public API's incremental sync, `updated_since` (plan of 02/11/2026,
+  // L6): without it a page read every route of the company (or of the
+  // table) to find the few that changed.
+  @@index([businessId, updated_at])
   // Serves the app: the released or running route of one driver.
   @@index([businessId, driverId, status])
   // A vehicle may be in at most ONE route in progress — the truck is on one
@@ -1997,11 +2188,19 @@ model RouteStop {
   delivery   Delivery @relation(fields: [deliveryId], references: [id], onDelete: Cascade)
   deliveryId String
 
+  /// Which stops of the route are the same visit (plan of 02/11/2026, B6;
+  /// decision D37): a hash of the normalized address with the recipient's
+  /// document or phone. Siblings share one customer message per moment.
+  /// Null = a group of its own (every stop made before it existed).
+  stop_group_key String?
+
   created_at DateTime @default(now())
   updated_at DateTime @updatedAt
 
   @@unique([routeId, sequence])
   @@index([routeId, status])
+  // The siblings of a stop in its route (B6).
+  @@index([routeId, stop_group_key])
   // A delivery may have at most ONE open stop across all routes. Also a
   // partial unique index in raw SQL — see the migration.
   @@index([deliveryId])
@@ -2113,6 +2312,16 @@ model OccurrenceType {
   /// pause tapped BEFORE this instant is still accepted.
   deactivated_at DateTime?
 
+  /// The company's own code for this type, the "código do ERP" (plan of
+  /// 02/11/2026, L8): what an ERP matches an occurrence by, since the name
+  /// can be renamed. Optional, unique per company (a null never collides).
+  code String?
+
+  /// When a requires_* flag last changed (plan of 02/11/2026, K2; decision
+  /// D29). A driver's report tapped offline BEFORE it is accepted under the
+  /// rules it was made with and flagged for review, like deactivated_at.
+  requirements_changed_at DateTime?
+
   business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
   businessId String
 
@@ -2125,6 +2334,8 @@ model OccurrenceType {
   @@unique([businessId, name])
   // A null system_key never collides: company types have none.
   @@unique([businessId, system_key])
+  // Likewise a null code.
+  @@unique([businessId, code])
   // ([businessId]) removed: the uniques and the index below lead with it.
   // The app's payload and the web's pickers read one category's active types.
   @@index([businessId, category, is_active])
@@ -2214,6 +2425,43 @@ model ExternalRecipient {
 
   @@index([businessId, created_at])
   @@map("external_recipient")
+}
+
+/// "Parar de receber" by phone and e-mail inside the carrier (plan of
+/// 02/11/2026, B5, decision D38). The opt-out link used to stop only the
+/// delivery it came from (ExternalRecipient.opted_out_at); somebody who
+/// receives many deliveries from the same carrier kept getting the next
+/// one's messages. The click now also writes one row per address the
+/// recipient row holds, and every customer message checks it at expansion
+/// and again at send time. Internal notifications never read it.
+///
+/// Kept while the carrier exists (cascade with the business); the carrier's
+/// team undoes it from the delivery (POST /delivery/reactivate-customer-
+/// messages, contract C2), which deletes the rows of that recipient's phone
+/// and e-mail. Upsert by the unique key: a second click, or two replicas, is
+/// a no-op.
+model CustomerMessageSuppression {
+  id String @id @default(uuid(7))
+
+  business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  businessId String
+
+  channel CustomerMessageChannel
+
+  /// WHATSAPP: the phone as one line, E.164 without the "+"
+  /// (normalizeSuppressionPhone: the digits the WhatsApp sender puts in
+  /// `to`, a dialling prefix dropped, the ninth digit of an old 8-digit
+  /// mobile added). EMAIL: trimmed and lower-cased.
+  address String
+
+  /// The delivery whose link was clicked. No foreign key on purpose: the row
+  /// outlives that delivery, and the hot delivery table stays untouched.
+  source_delivery_id String?
+
+  created_at DateTime @default(now())
+
+  @@unique([businessId, channel, address])
+  @@map("customer_message_suppression")
 }
 
 /// The consolidated PDF a delivery leaves behind.
@@ -2326,7 +2574,12 @@ model DeliveryMessageTemplate {
   /// Ignored by WhatsApp and SMS-shaped channels, which carry no subject.
   subject String?
 
-  body String
+  /// Required on the e-mail (CHECK delivery_message_template_email_body_chk).
+  /// Meaningless on WhatsApp, which goes out as a fixed template approved by
+  /// Meta (plan of 02/11/2026, B3): loosened in migration 20261102120800
+  /// (nullable-expand) and still never written NULL in this release —
+  /// readers treat a WhatsApp row's body as absent.
+  body String?
 
   is_active Boolean @default(true)
 
@@ -2885,6 +3138,18 @@ model Delivery {
   geo_source     DeliveryGeoSource?
   geo_updated_at DateTime?
 
+  /// How precisely the geocoder placed the address (plan of 02/11/2026, E1):
+  /// ADDRESS or STREET with a point; NEIGHBORHOOD or CITY never get one (a
+  /// district's centre is no customer's door), and the geofence does not
+  /// weigh them. Meaningless on a MANUAL point, which is exact.
+  geo_precision        DeliveryGeoPrecision?
+  /// The geocoding job's bookkeeping (E1): null = not tried yet (or the
+  /// address changed since: update-delivery clears all four with the
+  /// point). geocode_attempted_at doubles as the claim's lease.
+  geocode_status       DeliveryGeocodeStatus?
+  geocode_attempted_at DateTime?
+  geocode_attempts     Int                    @default(0)
+
   status         DeliveryStatus @default(PENDING)
   // A civil date, no time window (decision 1.5); see Route.scheduled_date.
   scheduled_date DateTime?      @db.Date
@@ -2996,6 +3261,12 @@ model Delivery {
   // without it a small company's page walked the primary key of every
   // company until it found its own hundred rows.
   @@index([businessId, id])
+  // The public API's incremental sync, `updated_since` (plan of 02/11/2026,
+  // L6): the window read, then the page sorted, instead of (businessId, id)
+  // walked until a page of changed rows turned up — the whole history of the
+  // company for an ERP polling every minute. Costs no HOT update: updated_at
+  // was already indexed (delivery_failed_recent_idx, below).
+  @@index([businessId, updated_at])
   // Raw SQL, because Prisma cannot declare a partial index (`migrate diff`
   // ignores them — never "clean them up"; see
   // migrations/20260924090500_delivery_read_indexes). They serve the
@@ -3005,6 +3276,12 @@ model Delivery {
   //     INCLUDE ("driverId") WHERE status = 'DELIVERED'
   //   delivery_failed_recent_idx ("businessId", "updated_at")
   //     INCLUDE ("driverId") WHERE status = 'FAILED'
+  // And the geocoding job's claim (plan of 02/11/2026, E1; migration
+  // 20261103120000), newest first, only the open deliveries still without a
+  // point and not settled by the geocoder:
+  //   delivery_geocode_pending_idx ("created_at") WHERE latitude IS NULL
+  //     AND geo_source IS NULL AND (geocode_status IS NULL OR
+  //     geocode_status = 'FAILED') AND status IN ('PENDING', 'IN_TRANSIT')
   @@map("delivery")
 }
 
@@ -3102,6 +3379,13 @@ model DeliveryOccurrence {
   /// The ticket this occurrence opened, if any (decision 14.5).
   supportTicket SupportTicket?
 
+  /// The geofence record, as on DeliveryEvent (plan of 02/11/2026, E3/E4).
+  /// An occurrence is never refused for the radius, so OUTSIDE here is
+  /// always a flag for review, read by the "Ocorrências" list.
+  distance_m       Float?
+  accuracy_m       Float?
+  geofence_outcome GeofenceOutcome?
+
   created_at DateTime @default(now())
   updated_at DateTime @updatedAt
 
@@ -3177,6 +3461,23 @@ enum DeviceAgreement {
 enum GeocodeSource {
   PROVIDER // the configured reverse geocoder answered
   UNAVAILABLE // tried and failed or disabled: the PDF prints the delivery address, labelled
+}
+
+/// The channel a customer suppression applies to (D38): only the two that
+/// reach somebody outside the company.
+enum CustomerMessageChannel {
+  WHATSAPP
+  EMAIL
+}
+
+/// Where an action at the customer's address was made, relative to the
+/// company's radius (plan of 02/11/2026, E2). NOT_EVALUATED: no address
+/// point, accuracy worse than the radius, a stale position, or the geofence
+/// off — never a reason to block.
+enum GeofenceOutcome {
+  INSIDE
+  OUTSIDE
+  NOT_EVALUATED
 }
 
 /// Who produced an event, which the timeline has to show and cannot infer.
@@ -3269,6 +3570,16 @@ model DeliveryEvent {
   gps_address_source GeocodeSource?
   /// UNAVAILABLE is retried only after 24 h from this instant.
   gps_geocoded_at    DateTime?
+
+  /// The geofence record of an action at the customer's address (plan of
+  /// 02/11/2026, E2/E4): metres to the address point and the phone's
+  /// accuracy, as the server computed them, and the verdict. OUTSIDE is the
+  /// "fora do raio" flag (an ALERT the driver confirmed, or a queued offline
+  /// submission the server accepted). Stored, so a replay answers with what
+  /// was decided then and a later radius does not rewrite the past.
+  distance_m       Float?
+  accuracy_m       Float?
+  geofence_outcome GeofenceOutcome?
 
   // OCCURRENCE (and the STATUS_CHANGE an authorization decision causes): the
   // occurrence this event is about, so the feed can name its type. SetNull

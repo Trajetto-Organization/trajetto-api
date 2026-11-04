@@ -95,7 +95,13 @@ interface IDriverPositionRepository {
     driverIds: string[],
   ) => Promise<Array<{ driverId: string; recorded_at: Date }>>;
 
-  /** Every point of one driver in [from, to), oldest first, for the trail. */
+  /**
+   * One driver's points in [from, to), oldest first, thinned WHERE THEY ARE
+   * to at most `max` (plan of 02/11/2026, G9): evenly spaced by position,
+   * first and last always kept — the rule of `downsample`, which the twin
+   * applies to the same rows. `recorded` is how many points exist before
+   * thinning; the screen says so.
+   */
   listTrail: (props: {
     businessId: string;
     driverId: string;
@@ -104,7 +110,10 @@ interface IDriverPositionRepository {
 
     /** Only the points recorded on this route (decision 14.7). */
     routeId?: string;
-  }) => Promise<StoredPosition[]>;
+
+    /** The most points handed back; at least 2. */
+    max: number;
+  }) => Promise<{ recorded: number; points: StoredPosition[] }>;
 
   /**
    * Whether the driver is one of this company's. The trail asks before

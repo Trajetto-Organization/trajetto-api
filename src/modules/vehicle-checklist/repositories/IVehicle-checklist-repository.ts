@@ -7,6 +7,8 @@ import {
   ListVehicleChecklistByBusinessIdProps,
   UpdateVehicleChecklist,
   GetVehicleChecklistByIdAndBusinessProps,
+  RouteChecklistSummary,
+  RouteAwaitingEndChecklist,
 } from "../dtos/vehicle-checklist-dto";
 import type { ChecklistListFilters } from "../usecases/list-vehicle-checklist/checklist-list";
 
@@ -105,7 +107,32 @@ interface IVehicleChecklistRepository {
     filters: ChecklistListFilters,
   ): AsyncGenerator<Record<string, unknown>>;
   countChecklistForExport: (filters: ChecklistListFilters) => Promise<number>;
+  /**
+   * The departure and arrival checklists of these routes of the company
+   * (plan of 02/11/2026, C4), newest first. Read with the route, never
+   * stored on it: a checklist with photos that arrives after the start
+   * still counts.
+   */
+  listRouteChecklists: (
+    businessId: string,
+    routeIds: string[],
+  ) => Promise<RouteChecklistSummary[]>;
+  /**
+   * This driver's routes that ended (COMPLETED) at or after `completedSince`
+   * without an arrival checklist of their own company (the wave-1 C4
+   * follow-up), newest first, at most ROUTES_AWAITING_END_CHECKLIST_LIMIT.
+   * The driver's payload keeps them: once the last stop resolves the route
+   * has no open stop, and the app still has to ask for that checklist.
+   */
+  listRoutesAwaitingEndChecklist: (input: {
+    businessId: string;
+    driverId: string;
+    completedSince: Date;
+  }) => Promise<RouteAwaitingEndChecklist[]>;
 }
 
-export { IVehicleChecklistRepository };
+/** A driver works one route at a time; a handful covers any backlog. */
+const ROUTES_AWAITING_END_CHECKLIST_LIMIT = 5;
+
+export { IVehicleChecklistRepository, ROUTES_AWAITING_END_CHECKLIST_LIMIT };
 export type { ChecklistMileageUpdate, ChecklistPlacement };

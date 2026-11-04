@@ -88,6 +88,7 @@ class InMemoryOccurrenceAuthorizationRepository
       occurrenceType: {
         id: occurrence.occurrenceTypeId,
         name: type?.name ?? "Tipo de ocorrência",
+        code: type?.code ?? null,
         blocks_delivery: type?.blocks_delivery === true,
         requires_authorization: type?.requires_authorization === true,
         form_fields: type?.form_fields ?? null,

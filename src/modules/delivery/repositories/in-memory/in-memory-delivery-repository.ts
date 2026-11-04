@@ -20,6 +20,7 @@ import {
 } from "@/shared/in-memory/column-defaults";
 import { asDateColumn } from "@/shared/in-memory/date-column";
 import { factInstant } from "@/shared/route/operation-day-rules";
+import { manualAddressPoint } from "@/shared/delivery/address-coordinates";
 import type { OperationDay } from "@/modules/route/repositories/IOperation-day-repository";
 
 import {
@@ -187,6 +188,8 @@ class InMemoryDeliveryRepository implements IDeliveryRepository {
     routeId?: string;
     // The status of the stop's route, for findOpenStopRoute.
     routeStatus?: string;
+    // route.started_at, for the cards' share on routes left open (H3).
+    routeStartedAt?: Date | null;
     // route_stop.created_at: a new stop is a new attempt for the tower's
     // liveness rule. Absent reads as older than anything, like createdBy.
     created_at?: Date;
@@ -219,15 +222,17 @@ class InMemoryDeliveryRepository implements IDeliveryRepository {
   }
 
   async createDelivery(deliveryData: CreateDeliveryProps): Promise<Delivery> {
-    const { items, ...given } = deliveryData;
+    const { items, latitude, longitude, ...given } = deliveryData;
 
     // As the Prisma create: an empty code, key or number is NULL, so two
-    // deliveries without an NF-e key never collide on the unique index.
+    // deliveries without an NF-e key never collide on the unique index; a
+    // whole pair is the address point, MANUAL (plan E1), half of one none.
     const delivery = {
       ...given,
       code: given.code || null,
       invoice_key: given.invoice_key || null,
       invoice_number: given.invoice_number || null,
+      ...manualAddressPoint(latitude, longitude, new Date()),
     };
 
     // The unique (businessId, invoice_key) index: a second row with the same
@@ -307,6 +312,7 @@ class InMemoryDeliveryRepository implements IDeliveryRepository {
     pageSize,
     sort,
     order,
+    leftOpenBefore,
     ...requested
   }: ListDeliveriesProps): Promise<ListDeliveriesPage> {
     const { filters, periodApplied } = this.resolveDeliveryPeriod(requested);
@@ -401,8 +407,50 @@ class InMemoryDeliveryRepository implements IDeliveryRepository {
         .map(([id, entry]) => [id, entry.name]),
     );
 
+    // As the Prisma read (H3): per running route that left before the
+    // cutoff, its open stops whose document is IN_TRANSIT and in the card's
+    // set (every filter but the status); routes holding none left out.
+    const leftOpenRoutes = (() => {
+      if (!leftOpenBefore) return undefined;
+
+      const card = new Set(
+        matching("status")
+          .filter((delivery) => delivery.status === "IN_TRANSIT")
+          .map((delivery) => delivery.id),
+      );
+
+      const byRoute = new Map<
+        string,
+        { started_at: Date | null; open: number }
+      >();
+
+      for (const stop of this.routeStops) {
+        if (
+          !stop.routeId ||
+          stop.routeStatus !== "IN_PROGRESS" ||
+          !stop.routeStartedAt ||
+          stop.routeStartedAt.getTime() >= leftOpenBefore.getTime() ||
+          (stop.status !== "PENDING" && stop.status !== "ARRIVED") ||
+          !card.has(stop.deliveryId)
+        ) {
+          continue;
+        }
+
+        const entry = byRoute.get(stop.routeId) ?? {
+          started_at: stop.routeStartedAt,
+          open: 0,
+        };
+
+        entry.open += 1;
+        byRoute.set(stop.routeId, entry);
+      }
+
+      return [...byRoute.values()];
+    })();
+
     return {
       periodApplied,
+      ...(leftOpenRoutes && { leftOpenRoutes }),
       data: sorted
         .slice(skip, skip + pageSize)
         .map((delivery) => this.withListRelations(delivery)) as Delivery[],
@@ -693,6 +741,12 @@ class InMemoryDeliveryRepository implements IDeliveryRepository {
     return this.deliveries[index];
   }
 
+  async findDeliveryItems(deliveryId: string): Promise<DeliveryItemInput[]> {
+    return (this.deliveryItems.get(deliveryId) ?? []).map((item) => ({
+      ...item,
+    }));
+  }
+
   async findOpenStopRoute(
     deliveryId: string,
   ): Promise<{ routeId: string; status: string } | null> {
@@ -838,6 +892,7 @@ class InMemoryDeliveryRepository implements IDeliveryRepository {
     businessId: string,
   ): Promise<{
     id: string;
+    deliveryId: string;
     authorization_status: OccurrenceAuthorizationStatus;
     category: "DELIVERED" | "NOT_DELIVERED" | "PAUSE";
   } | null> {
@@ -856,6 +911,7 @@ class InMemoryDeliveryRepository implements IDeliveryRepository {
     return found
       ? {
           id: found.id,
+          deliveryId: found.deliveryId,
           // A row pushed straight into the array by a test has no status:
           // the column default.
           authorization_status: found.authorization_status ?? "NOT_REQUIRED",
@@ -1080,30 +1136,41 @@ class InMemoryDeliveryRepository implements IDeliveryRepository {
                     stop.routeStatus === "IN_PROGRESS"),
               ))),
       )
-      .map((delivery) => ({
-        ...delivery,
-
+      .map((delivery) => {
         // The open stop rides along, as the real include does: the app needs
         // the dispatcher's order and this is the payload it caches. At most
         // one — the partial unique index allows a delivery exactly one.
-        stops: this.routeStops.filter(
+        const stops = this.routeStops.filter(
           (stop) =>
             stop.deliveryId === delivery.id &&
             (stop.status === "PENDING" || stop.status === "ARRIVED"),
-        ),
+        );
 
-        authorization_request: this.latestAuthorizationRequest(
-          delivery.id!,
-          driverId,
-        ),
-      }));
+        return {
+          ...delivery,
+          stops,
+          authorization_request: this.latestAuthorizationRequest(
+            delivery.id!,
+            driverId,
+            // A stop seeded without a creation time reads as older than
+            // anything, as elsewhere in the twin.
+            stops[0] ? (stops[0].created_at ?? new Date(0)) : undefined,
+          ),
+        };
+      });
   }
 
   /**
    * The delivery's newest report that asked the tower, in the Prisma
-   * mapping's shape (created_at desc, id desc as the tiebreaker).
+   * mapping's shape (created_at desc, id desc as the tiebreaker). On a
+   * route, only one made since the open stop was created: the attempt's
+   * boundary, as the Prisma forOpenAttempt.
    */
-  private latestAuthorizationRequest(deliveryId: string, driverId: string) {
+  private latestAuthorizationRequest(
+    deliveryId: string,
+    driverId: string,
+    openStopCreatedAt?: Date,
+  ) {
     const latest = this.occurrences
       .filter(
         (occurrence) =>
@@ -1111,7 +1178,9 @@ class InMemoryDeliveryRepository implements IDeliveryRepository {
           (occurrence.authorization_status ?? "NOT_REQUIRED") !==
             "NOT_REQUIRED" &&
           // reportedBy.driverId = driverId: only this driver's own request.
-          this.driverOfUser.get(occurrence.reportedById) === driverId,
+          this.driverOfUser.get(occurrence.reportedById) === driverId &&
+          (!openStopCreatedAt ||
+            occurrence.created_at.getTime() >= openStopCreatedAt.getTime()),
       )
       .sort(
         (a, b) =>
@@ -1400,6 +1469,8 @@ class InMemoryDeliveryRepository implements IDeliveryRepository {
   async registerDeliveryProof(
     eventData: CreateDeliveryEventProps,
     expectedStatus: DeliveryStatus,
+    _tx?: unknown,
+    owner?: { driverId: string; vehicleId: string | null },
   ): Promise<string[]> {
     // Mirrors the Prisma transaction: event and DELIVERED stamp together, and
     // only while the delivery still holds the status the caller validated.
@@ -1413,6 +1484,17 @@ class InMemoryDeliveryRepository implements IDeliveryRepository {
       throw new DeliveryStatusConflictError();
     }
 
+    // client_submission_id is @unique on the whole table, the PROOF's too.
+    if (
+      eventData.client_submission_id &&
+      this.events.some(
+        (event) =>
+          event.client_submission_id === eventData.client_submission_id,
+      )
+    ) {
+      throw uniqueViolation(["client_submission_id"]);
+    }
+
     this.events.push({
       ...withColumnDefaults(DELIVERY_EVENT_COLUMN_DEFAULTS, eventData),
       type: "PROOF",
@@ -1423,6 +1505,11 @@ class InMemoryDeliveryRepository implements IDeliveryRepository {
     delivery.status = "DELIVERED";
     delivery.delivered_at = eventData.occurred_at ?? new Date();
     delivery.received_by = eventData.received_by ?? null;
+
+    if (owner) {
+      delivery.driverId = owner.driverId;
+      delivery.vehicleId = owner.vehicleId;
+    }
 
     // Decision 6.3, as the Prisma write: the proof supersedes what still
     // waits for the tower, and says which.

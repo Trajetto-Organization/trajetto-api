@@ -112,7 +112,18 @@ class ApiKeyRepository implements IApiKeyRepository {
         rate_limit_per_minute: true,
         revoked_at: true,
         businessId: true,
-        business: { select: { is_active: true, timezone: true } },
+        business: {
+          select: {
+            is_active: true,
+            timezone: true,
+            // The module gate of every public call, in this same query
+            // (L5): one row at most, by the (businessId, module) unique.
+            entitlements: {
+              where: { module: "DELIVERIES" },
+              select: { module: true, enabled: true },
+            },
+          },
+        },
       },
     });
   }

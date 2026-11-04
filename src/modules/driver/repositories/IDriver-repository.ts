@@ -71,6 +71,13 @@ interface IDriverRepository {
   /** The driver's routes that still need them, by status. */
   countOpenRoutes: (driverId: string) => Promise<OpenRouteCounts>;
 
+  /**
+   * The routes that still need a driver of this branch, by status: what
+   * deactivating the branch would strand (K10) — its drivers can no longer
+   * sign in.
+   */
+  countOpenRoutesOfBranch: (branchId: string) => Promise<OpenRouteCounts>;
+
   /** Pauses on the driver's record (DriverPause, RESTRICT on delete). */
   countDriverPauses: (driverId: string) => Promise<number>;
 }

@@ -23,6 +23,8 @@ import type { StoredDelivery } from "../usecases/create-delivery/replay-fingerpr
 /** The columns the public delivery shape reads, and no others. */
 const deliverySelect = {
   id: true,
+  // Never published: it signs proof_url (L7).
+  businessId: true,
   code: true,
   invoice_key: true,
   invoice_number: true,
@@ -347,8 +349,15 @@ class IntegrationRepository implements IIntegrationRepository {
         note: true,
 
         delivery: { select: { id: true, code: true, invoice_key: true } },
-        // Whether an occurrence report took effect (see publicEventTopic).
-        occurrence: { select: { authorization_status: true, category: true } },
+        // Whether an occurrence report took effect (see publicEventTopic),
+        // and its type's ERP code (L8).
+        occurrence: {
+          select: {
+            authorization_status: true,
+            category: true,
+            occurrenceType: { select: { code: true } },
+          },
+        },
       },
 
       orderBy: { id: "asc" },
@@ -388,6 +397,14 @@ class IntegrationRepository implements IIntegrationRepository {
           status_to: event.status_to,
           received_by: event.received_by,
           note: event.note,
+
+          // The key the webhook of the same topic carries (L8): what an ERP
+          // matches an occurrence by, since the name can be renamed. Only on
+          // occurrence.reported, as in the webhook; null elsewhere.
+          occurrence_code:
+            topic === "occurrence.reported"
+              ? (event.occurrence?.occurrenceType?.code ?? null)
+              : null,
         },
       })),
 
@@ -430,6 +447,11 @@ class IntegrationRepository implements IIntegrationRepository {
         scheduled_date: true,
         notes: true,
         kind: true,
+        // The point the body gave is MANUAL; a GEOCODER one came later and is
+        // not compared (replay-fingerprint, plan E1).
+        latitude: true,
+        longitude: true,
+        geo_source: true,
         // Whether an API key made it: the panel's submissions are not replayed.
         apiKeyId: true,
         items: {
@@ -441,6 +463,17 @@ class IntegrationRepository implements IIntegrationRepository {
           },
         },
       },
+    });
+  }
+
+  async findProofLinkTarget(deliveryId: string): Promise<{
+    businessId: string;
+    status: string;
+    created_at: Date;
+  } | null> {
+    return this.prisma.delivery.findUnique({
+      where: { id: deliveryId },
+      select: { businessId: true, status: true, created_at: true },
     });
   }
 }

@@ -5,6 +5,7 @@ import database from "@/../infra/database";
 import { relatedTo, rowsByKey } from "@/shared/database/related-rows";
 
 import { dateOnlyFromKey, dateOnlyKey } from "@/shared/time/business-day";
+import { openStopsOnRoutesLeftOpen } from "@/shared/route/routes-left-open-query";
 import {
   ROUTE_LOOKBACK_DAYS,
   factInstant,
@@ -382,6 +383,18 @@ class OperationDayRepository implements IOperationDayRepository {
     }));
   }
 
+  async listRoutesLeftOpen(
+    businessId: string,
+    startedBefore: Date,
+  ): Promise<Array<{ started_at: Date | null; open: number }>> {
+    // The list's two reads (routes, then only their stops, grouped), with
+    // every open stop counted, as the tower counts them.
+    return openStopsOnRoutesLeftOpen(this.prisma, {
+      businessId,
+      startedBefore,
+    });
+  }
+
   /**
    * Three sources, each the newest `limit` of the day by arrival.
    *
@@ -418,6 +431,10 @@ class OperationDayRepository implements IOperationDayRepository {
         routeId: true,
         occurrenceId: true,
         deliveryId: true,
+        // E5: the record the web flags as "Fora do raio".
+        geofence_outcome: true,
+        distance_m: true,
+        accuracy_m: true,
       },
     });
 
@@ -440,6 +457,9 @@ class OperationDayRepository implements IOperationDayRepository {
         authorization_status: true,
         occurrenceTypeId: true,
         deliveryId: true,
+        geofence_outcome: true,
+        distance_m: true,
+        accuracy_m: true,
       },
     });
 
@@ -596,6 +616,9 @@ class OperationDayRepository implements IOperationDayRepository {
               type?.blocks_delivery,
               occurrence?.authorization_status,
             )),
+        geofence_outcome: event.geofence_outcome,
+        distance_m: event.distance_m,
+        accuracy_m: event.accuracy_m,
         occurredAt: factInstant(event.occurred_at, event.created_at),
         receivedAt: event.created_at,
       });
@@ -623,6 +646,9 @@ class OperationDayRepository implements IOperationDayRepository {
           type.blocks_delivery,
           occurrence.authorization_status,
         ),
+        geofence_outcome: occurrence.geofence_outcome,
+        distance_m: occurrence.distance_m,
+        accuracy_m: occurrence.accuracy_m,
         occurredAt: factInstant(occurrence.occurred_at, occurrence.created_at),
         receivedAt: occurrence.created_at,
       });

@@ -77,6 +77,7 @@ const decisionInclude = {
     select: {
       id: true,
       name: true,
+      code: true,
       blocks_delivery: true,
       requires_authorization: true,
       form_fields: true,

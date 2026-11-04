@@ -154,6 +154,12 @@ interface ListProofAuditsResult {
      * computing it never scans a tenant's whole history (DLVB-04).
      */
     agreementWindowDays: number;
+
+    /**
+     * The company's zone (IANA), the one the window counts in: the
+     * Auditoria tab prints its times in it (plan of 02/11/2026, H6; D22).
+     */
+    timeZone: string;
   };
 }
 

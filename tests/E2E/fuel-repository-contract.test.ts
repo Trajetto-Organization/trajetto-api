@@ -84,6 +84,18 @@ async function seedPostgres(): Promise<void> {
       fuelTypeId: vehicle.businessId === F.A ? F.typeA : F.typeB,
     });
   }
+
+  // Plan of 02/11/2026 (C5/F3): the route the contract links a refuelling to.
+  await prisma.route.create({
+    data: {
+      id: F.routeA,
+      code: 1,
+      businessId: F.A,
+      driverId: F.dA2,
+      vehicleId: F.vA2,
+      scheduled_date: new Date("2026-09-05T00:00:00.000Z"),
+    },
+  });
 }
 
 function seedTwin(): void {
@@ -111,6 +123,8 @@ function seedTwin(): void {
   }
 
   memory.fuelTypes.set(F.typeA, { businessId: F.A, description: "Diesel S10" });
+  // Contract C3: the route the list names (code 1, company A).
+  memory.routes.set(F.routeA, { businessId: F.A, code: 1 });
   memory.fuelTypes.set(F.typeB, { businessId: F.B, description: "Diesel S10" });
 }
 

@@ -13,6 +13,8 @@ import {
 } from "../usecases/errors/delivery-errors";
 
 import { DeliveryStatus } from "@/shared/delivery/delivery-rules";
+import { refreshStopGroupKeysOfDelivery } from "@/shared/delivery/stop-group";
+import { openStopsOnRoutesLeftOpen } from "@/shared/route/routes-left-open-query";
 import type { OperationDay } from "@/modules/route/repositories/IOperation-day-repository";
 
 import {
@@ -24,6 +26,7 @@ import {
   CreateOccurrenceProps,
   CreateDeliveryEventProps,
   DeliveryEventRecord,
+  DeliveryItemInput,
   ListOccurrencesProps,
   ListOccurrencesResult,
   OccurrenceAuthorizationStatus,
@@ -41,6 +44,7 @@ import {
 import { deliveryExportRow, occurrenceExportRow } from "./export-rows";
 import { narrowDeliverySearch, resolveDeliveryPeriod } from "./delivery-search";
 import { narrowOccurrenceSearch } from "./occurrence-search";
+import { manualAddressPoint } from "@/shared/delivery/address-coordinates";
 
 import {
   OCCURRENCE_SORT,
@@ -164,6 +168,26 @@ const AUTHORIZATION_REQUEST_SELECT = {
   created_at: true,
 } as const;
 
+/**
+ * The driver's newest request (the list is newest first) that belongs to
+ * the delivery's current attempt. On a route, that is one made since its
+ * open stop was created: after "Reentregar" the new stop used to show
+ * "Autorizado…" from the APPROVED report that left the delivery FAILED.
+ * The table has no stop column; a request for this stop can only be filed
+ * once the stop exists, so its creation time is the boundary. Loose work
+ * (no open stop) keeps the newest request.
+ */
+function forOpenAttempt<T extends { created_at: Date }>(
+  newestFirst: ReadonlyArray<T>,
+  openStopCreatedAt: Date | undefined,
+): T | undefined {
+  if (!openStopCreatedAt) return newestFirst[0];
+
+  return newestFirst.find(
+    (request) => request.created_at.getTime() >= openStopCreatedAt.getTime(),
+  );
+}
+
 function toAuthorizationRequest(
   row: {
     id: string;
@@ -220,7 +244,7 @@ class DeliveryRepository implements IDeliveryRepository {
     deliveryData: CreateDeliveryProps,
     tx?: Prisma.TransactionClient,
   ): Promise<Delivery> {
-    const { items, ...delivery } = deliveryData;
+    const { items, latitude, longitude, ...delivery } = deliveryData;
 
     const deliveryCreated = await (tx ?? this.prisma).delivery.create({
       data: {
@@ -228,6 +252,9 @@ class DeliveryRepository implements IDeliveryRepository {
         code: delivery.code || null,
         invoice_key: delivery.invoice_key || null,
         invoice_number: delivery.invoice_number || null,
+        // A whole pair is the address point, MANUAL (plan E1); anything else
+        // writes no point and the geocoder's queue picks the row up.
+        ...manualAddressPoint(latitude, longitude, new Date()),
         ...(items &&
           items.length > 0 && {
             items: {
@@ -267,6 +294,7 @@ class DeliveryRepository implements IDeliveryRepository {
     pageSize,
     sort,
     order,
+    leftOpenBefore,
     ...requested
   }: ListDeliveriesProps): Promise<ListDeliveriesPage> {
     const skip = (page - 1) * pageSize;
@@ -330,9 +358,14 @@ class DeliveryRepository implements IDeliveryRepository {
         })
       : [];
 
+    const leftOpenRoutes = leftOpenBefore
+      ? await this.countLeftOpenShare(filters, leftOpenBefore)
+      : undefined;
+
     return {
       data: data as Delivery[],
       periodApplied,
+      ...(leftOpenRoutes && { leftOpenRoutes }),
       statusCounts: byStatus.map((group) => ({
         value: group.status,
         count: group._count._all,
@@ -354,6 +387,35 @@ class DeliveryRepository implements IDeliveryRepository {
         new Map(drivers.map((driver) => [driver.id, driver.name])),
       ),
     };
+  }
+
+  /**
+   * H3 (plan of 02/11/2026): the "Em Rota" card's share that sits on routes
+   * left open — per running route that left before the cutoff, its open
+   * stops whose document is in the card's set (IN_TRANSIT, every filter but
+   * the status). Routes holding none are left out.
+   *
+   * The two reads of openStopsOnRoutesLeftOpen (the routes, then only their
+   * stops, grouped), shared with the operation summary's `inherited`; never
+   * a filtered relation `_count`, which Prisma groups over every open stop
+   * of the database (query-plans.test.ts).
+   */
+  private async countLeftOpenShare(
+    filters: Awaited<ReturnType<typeof narrowDeliverySearch>>,
+    leftOpenBefore: Date,
+  ): Promise<Array<{ started_at: Date | null; open: number }>> {
+    return openStopsOnRoutesLeftOpen(this.prisma, {
+      businessId: filters.businessId,
+      startedBefore: leftOpenBefore,
+      stops: {
+        delivery: {
+          AND: [
+            deliveryListWhere(filters, { except: "status" }),
+            { status: "IN_TRANSIT" },
+          ],
+        },
+      },
+    });
   }
 
   /**
@@ -620,6 +682,7 @@ class DeliveryRepository implements IDeliveryRepository {
     deliveryId: string,
     deliveryData: UpdateDeliveryProps,
     expectedStatus?: DeliveryStatus,
+    outerTx?: Prisma.TransactionClient,
   ): Promise<Delivery> {
     const { items, ...fields } = deliveryData;
 
@@ -629,7 +692,8 @@ class DeliveryRepository implements IDeliveryRepository {
 
     // One commit for the row and its item list: an edit that saved the
     // address but lost the items (or the reverse) is an edit nobody asked for.
-    return this.prisma.$transaction(async (tx) => {
+    // A caller with its own transaction (K9) owns that commit.
+    const run = async (tx: Prisma.TransactionClient): Promise<Delivery> => {
       const { count } = await tx.delivery.updateMany({
         where: {
           id: deliveryId,
@@ -659,12 +723,37 @@ class DeliveryRepository implements IDeliveryRepository {
         }
       }
 
+      // A new address or recipient may be another visit now (B6, K9).
+      await refreshStopGroupKeysOfDelivery(tx, deliveryId);
+
       const updated = await tx.delivery.findUniqueOrThrow({
         where: { id: deliveryId },
       });
 
       return updated as Delivery;
+    };
+
+    return outerTx ? run(outerTx) : this.prisma.$transaction(run);
+  }
+
+  async findDeliveryItems(deliveryId: string): Promise<DeliveryItemInput[]> {
+    const items = await this.prisma.deliveryItem.findMany({
+      where: { deliveryId },
+      orderBy: { id: "asc" },
+      select: {
+        description: true,
+        quantity: true,
+        unit: true,
+        unit_value: true,
+      },
     });
+
+    return items.map((item) => ({
+      description: item.description,
+      quantity: Number(item.quantity),
+      unit: item.unit,
+      unit_value: item.unit_value === null ? null : Number(item.unit_value),
+    }));
   }
 
   async findOpenStopRoute(
@@ -802,6 +891,10 @@ class DeliveryRepository implements IDeliveryRepository {
         receipt_photo: occurrenceData.receipt_photo ?? null,
         signature: occurrenceData.signature ?? null,
         received_by: occurrenceData.received_by ?? null,
+        // Plan of 02/11/2026 (E3/E4): the geofence record of the report.
+        distance_m: occurrenceData.distance_m ?? null,
+        accuracy_m: occurrenceData.accuracy_m ?? null,
+        geofence_outcome: occurrenceData.geofence_outcome ?? null,
       },
       select: { id: true },
     });
@@ -812,6 +905,7 @@ class DeliveryRepository implements IDeliveryRepository {
     businessId: string,
   ): Promise<{
     id: string;
+    deliveryId: string;
     authorization_status: OccurrenceAuthorizationStatus;
     category: "DELIVERED" | "NOT_DELIVERED" | "PAUSE";
   } | null> {
@@ -823,7 +917,12 @@ class DeliveryRepository implements IDeliveryRepository {
         client_submission_id: clientSubmissionId,
         delivery: { businessId },
       },
-      select: { id: true, authorization_status: true, category: true },
+      select: {
+        id: true,
+        deliveryId: true,
+        authorization_status: true,
+        category: true,
+      },
     });
   }
 
@@ -1070,6 +1169,8 @@ class DeliveryRepository implements IDeliveryRepository {
           on_the_way_at: true,
           deliveryId: true,
           routeId: true,
+          // Which requests belong to this attempt (forOpenAttempt); not sent.
+          created_at: true,
         },
       }),
 
@@ -1080,7 +1181,8 @@ class DeliveryRepository implements IDeliveryRepository {
       // not something the driver asked, nor is the request of the driver
       // who held the delivery before it was handed over. Newest first with
       // the id as tiebreak, so the first per delivery is the include's
-      // `take: 1`.
+      // `take: 1`. On a route, only a request of the open stop's attempt
+      // counts (forOpenAttempt).
       this.prisma.deliveryOccurrence.findMany({
         where: {
           deliveryId: { in: deliveryIds },
@@ -1113,6 +1215,10 @@ class DeliveryRepository implements IDeliveryRepository {
               // Decision 14.7 (design §6): the app keeps it in its cache and
               // tells the driver once when the plan changed while offline.
               plan_version: true,
+              // Plan of 02/11/2026 (C2): the plate on the route's card, and
+              // the vehicle a checklist or a refuelling from the route is for
+              // (C4/C5). Null while the route has none (PLANNED only).
+              vehicle: { select: { id: true, license_plate: true } },
             },
           }),
       ),
@@ -1131,15 +1237,24 @@ class DeliveryRepository implements IDeliveryRepository {
     const requestsOf = groupedBy(requests, (request) => request.deliveryId);
 
     return rows.map((row) => {
-      const request = requestsOf.get(row.id)?.[0];
+      const openStops = stopsOf.get(row.id) ?? [];
+      const request = forOpenAttempt(
+        requestsOf.get(row.id) ?? [],
+        openStops[0]?.created_at,
+      );
 
       return {
         ...row,
         // A required relation: the delivery's foreign key keeps its shipper.
         shipper: shippers.get(row.shipperId)!,
         items: itemsOf.get(row.id) ?? [],
-        stops: (stopsOf.get(row.id) ?? []).map(
-          ({ deliveryId: _deliveryId, routeId, ...stop }) => ({
+        stops: openStops.map(
+          ({
+            deliveryId: _deliveryId,
+            routeId,
+            created_at: _createdAt,
+            ...stop
+          }) => ({
             ...stop,
             route: relatedTo(routes, routeId),
           }),
@@ -1406,6 +1521,11 @@ class DeliveryRepository implements IDeliveryRepository {
 
         occurrenceId: eventData.occurrenceId ?? null,
         routeId: eventData.routeId ?? null,
+
+        // Plan of 02/11/2026 (E2/E4): the geofence record of the action.
+        distance_m: eventData.distance_m ?? null,
+        accuracy_m: eventData.accuracy_m ?? null,
+        geofence_outcome: eventData.geofence_outcome ?? null,
       },
     });
   }
@@ -1414,6 +1534,7 @@ class DeliveryRepository implements IDeliveryRepository {
     eventData: CreateDeliveryEventProps,
     expectedStatus: DeliveryStatus,
     tx?: Prisma.TransactionClient,
+    owner?: { driverId: string; vehicleId: string | null },
   ): Promise<string[]> {
     // Event and status stamp land together or not at all: a proof without
     // the DELIVERED transition (or vice versa) would lie in the trail.
@@ -1440,6 +1561,11 @@ class DeliveryRepository implements IDeliveryRepository {
           // moment the upload finally went through (MOB-08).
           delivered_at: eventData.occurred_at ?? new Date(),
           received_by: eventData.received_by ?? null,
+          // A late proof (K7): who delivered it, back on the row.
+          ...(owner && {
+            driverId: owner.driverId,
+            vehicleId: owner.vehicleId,
+          }),
         },
       });
 
@@ -1469,6 +1595,10 @@ class DeliveryRepository implements IDeliveryRepository {
           device_id: eventData.device_id ?? null,
           photo_taken_at: eventData.photo_taken_at ?? null,
           routeId: eventData.routeId ?? null,
+          // Plan of 02/11/2026 (E2/E4): the geofence record of the proof.
+          distance_m: eventData.distance_m ?? null,
+          accuracy_m: eventData.accuracy_m ?? null,
+          geofence_outcome: eventData.geofence_outcome ?? null,
         },
       });
 

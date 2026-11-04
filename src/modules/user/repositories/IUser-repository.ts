@@ -16,7 +16,15 @@ import {
   ListMasterUsersProps,
   SearchUserWithCursorProps,
   CursorPaginatedUser,
+  DriverLoginByCpf,
 } from "../dtos/user-dto";
+
+/**
+ * How many accounts one CPF login compares the password against. The CPF is
+ * unique per company only, so an independent driver may have a login in a
+ * few; each comparison is a bcrypt, so the count is bounded.
+ */
+const DRIVER_LOGINS_BY_CPF_LIMIT = 10;
 
 interface IUserRepository {
   createUser: ({ email, password, name }: CreateUserProps) => Promise<User>;
@@ -56,6 +64,13 @@ interface IUserRepository {
     businessId: string,
   ) => Promise<User | null>;
   findUserById: (userId: string) => Promise<User | null>;
+
+  /**
+   * The driver logins whose driver has this CPF (11 digits), in every company
+   * (plan of 02/11/2026, D8): any driver status and access state — the login
+   * decides — oldest first, at most DRIVER_LOGINS_BY_CPF_LIMIT.
+   */
+  findDriverLoginsByCpf: (cpf: string) => Promise<DriverLoginByCpf[]>;
   findUsersByBusiness: (businessId: string) => Promise<User[]>;
 
   /** How many users an access profile is linked to (the delete guard). */
@@ -152,4 +167,4 @@ interface IUserRepository {
   ) => Promise<CursorPaginatedUser>;
 }
 
-export { IUserRepository };
+export { DRIVER_LOGINS_BY_CPF_LIMIT, IUserRepository };

@@ -5,6 +5,7 @@ import {
 } from "@/shared/in-memory/prisma-errors";
 import { v7 as uuidV7 } from "uuid";
 import { FUEL_COLUMN_DEFAULTS } from "@/shared/in-memory/column-defaults";
+import { listedRoute } from "@/shared/vehicle/route-columns";
 
 import { Decimal } from "@prisma/client/runtime/client";
 import type {
@@ -32,6 +33,7 @@ import {
   GetFuelByIdAndBusinessProps,
   SearchFuelByVehicleWithCursorProps,
   CursorPaginatedFuel,
+  RouteFuelSummary,
 } from "../../dtos/fuel-dto";
 
 import { resolveOrderBy, type SortOrder } from "@/shared/pagination/list-query";
@@ -224,6 +226,7 @@ class InMemoryFuelRepository implements IFuelRepository {
       // The column default, as Postgres writes it.
       odometer_ai_status: "pending",
       created_from: fuelData.created_from,
+      routeId: fuelData.routeId ?? null,
       created_at: new Date(),
       updated_at: new Date(),
     };
@@ -388,6 +391,9 @@ class InMemoryFuelRepository implements IFuelRepository {
     { businessId: string; description: string }
   >();
 
+  /** The routes a refuelling can name (contract C3): company and code. */
+  public routes = new Map<string, { businessId: string; code: number }>();
+
   private branchLabels(): Map<string, { businessId: string; label: string }> {
     return new Map(
       Array.from(this.branches.entries()).map(([id, row]) => [
@@ -418,9 +424,16 @@ class InMemoryFuelRepository implements IFuelRepository {
   private withListRelations(fuel: Fuel) {
     const vehicle = this.vehicles.get(fuel.vehicleId);
     const driver = this.drivers.get(fuel.driverId);
+    const route = fuel.routeId ? this.routes.get(fuel.routeId) : undefined;
 
     return {
       ...fuel,
+      routeId: fuel.routeId ?? null,
+      // Contract C3: only a route of the row's own company is named.
+      route: listedRoute(
+        fuel,
+        route && fuel.routeId ? { id: fuel.routeId, ...route } : null,
+      ),
       branch: {
         corporate_reason:
           this.branches.get(fuel.branchId)?.corporate_reason ?? "",
@@ -807,6 +820,35 @@ class InMemoryFuelRepository implements IFuelRepository {
         updated_at: fuel.updated_at,
       };
     }
+  }
+
+  async listRouteFuels(
+    businessId: string,
+    routeId: string,
+  ): Promise<RouteFuelSummary[]> {
+    const time = (value: Date | string) => new Date(value).getTime();
+
+    // Same order as the real read: the refuelling date, then the id.
+    return this.fuels
+      .filter(
+        (fuel) => fuel.businessId === businessId && fuel.routeId === routeId,
+      )
+      .sort(
+        (a, b) =>
+          time(a.refueling_date) - time(b.refueling_date) ||
+          (a.id < b.id ? -1 : a.id > b.id ? 1 : 0),
+      )
+      .map((fuel) => ({
+        id: fuel.id,
+        refueling_date: new Date(fuel.refueling_date),
+        liters_amount: Number(fuel.liters_amount),
+        price_per_liter: Number(fuel.price_per_liter),
+        total_amount: Number(fuel.total_amount),
+        current_mileage: fuel.current_mileage,
+        vehicleId: fuel.vehicleId,
+        driverId: fuel.driverId,
+        odometer_ai_status: fuel.odometer_ai_status,
+      }));
   }
 
   async countFuelForExport(filters: FuelListFilters): Promise<number> {

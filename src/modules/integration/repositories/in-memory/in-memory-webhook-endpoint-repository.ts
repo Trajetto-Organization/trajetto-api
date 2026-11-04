@@ -93,11 +93,21 @@ class InMemoryWebhookEndpointRepository implements IWebhookEndpointRepository {
   async find(
     id: string,
     businessId: string,
-  ): Promise<{ id: string; name: string; is_active: boolean } | null> {
+  ): Promise<{
+    id: string;
+    name: string;
+    is_active: boolean;
+    disabled_at: Date | null;
+  } | null> {
     const endpoint = this.owned(id, businessId);
 
     return endpoint
-      ? { id: endpoint.id, name: endpoint.name, is_active: endpoint.is_active }
+      ? {
+          id: endpoint.id,
+          name: endpoint.name,
+          is_active: endpoint.is_active,
+          disabled_at: endpoint.disabled_at,
+        }
       : null;
   }
 

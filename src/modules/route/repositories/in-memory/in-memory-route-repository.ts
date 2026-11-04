@@ -2,13 +2,17 @@ import { Prisma } from "@prisma/client";
 import { v7 as uuidV7 } from "uuid";
 
 import {
+  ROUTE_ALL_STOPS_CANCELLED_REASON,
   isStopOpen,
   nextSequence,
   resequence,
+  routeCancelledNote,
+  routeClosingStatus,
   routeCodeFromSearch,
   routeCompletedAt,
 } from "@/shared/route/route-rules";
 import { resolveTimeZone } from "@/shared/time/business-day";
+import { routeClosedWithPendingNote } from "@/shared/route/route-left-open";
 import {
   ROUTE_COLUMN_DEFAULTS,
   ROUTE_STOP_COLUMN_DEFAULTS,
@@ -25,6 +29,7 @@ import {
   ROUTE_LIST_STATUSES,
   ROUTE_SORT_FALLBACK,
   catalogFacetOptions,
+  stopCountsOf,
   summarizeRouteList,
   type GroupCount,
   type RouteFacet,
@@ -50,7 +55,11 @@ import type {
   UnroutedDeliveriesQuery,
   UnroutedFacet,
 } from "../../usecases/list-unrouted-deliveries/unrouted-deliveries";
-import { orderShipperFacet } from "../../usecases/list-unrouted-deliveries/unrouted-deliveries";
+import {
+  compareUnroutedKeys,
+  encodeUnroutedCursor,
+  orderShipperFacet,
+} from "../../usecases/list-unrouted-deliveries/unrouted-deliveries";
 
 import type { IRouteRepository } from "../IRoute-repository";
 import type {
@@ -58,9 +67,12 @@ import type {
   AssignmentPreview,
   AssignmentPreviewProps,
   AssignmentRouteRef,
+  CloseWithPendingProps,
   CreateRouteProps,
+  LeftOpenRoute,
   ListRoutesProps,
   ListRoutesResult,
+  LostStop,
   OpenStopRoute,
   PinnedLocation,
   DetachResult,
@@ -70,12 +82,15 @@ import type {
   PlanStopsRemoved,
   PlanWriteOptions,
   Route,
+  RouteListRow,
   RouteStop,
   RouteStopWithDelivery,
   RouteTransition,
+  RouteWindow,
   RouteWithStops,
   UpdateRouteProps,
   VisitedPoint,
+  StopGeofenceFlag,
 } from "../../dtos/route-dto";
 
 import type { RouteStatus, RouteStopStatus } from "@/shared/route/route-rules";
@@ -92,6 +107,12 @@ import type { RouteStatus, RouteStopStatus } from "@/shared/route/route-rules";
  * company behaves exactly like a route that does not exist.
  */
 const EDITABLE_STATUSES: RouteStatus[] = ["PLANNED", "RELEASED"];
+
+/** Where a stop may still be appended: a running route too (K12). */
+const APPENDABLE_STATUSES: RouteStatus[] = [
+  ...EDITABLE_STATUSES,
+  "IN_PROGRESS",
+];
 
 /** How many routes or vehicles a preview lists, as the real query takes. */
 const PREVIEW_LIMIT = 5;
@@ -194,6 +215,11 @@ interface PlanEventMirror {
   longitude?: number | null;
   occurred_at?: Date | null;
   created_at: Date;
+
+  /** E4/E5: the geofence record of an arrival, a proof or an occurrence. */
+  geofence_outcome?: "INSIDE" | "OUTSIDE" | "NOT_EVALUATED" | null;
+  distance_m?: number | null;
+  accuracy_m?: number | null;
 }
 
 class InMemoryRouteRepository implements IRouteRepository {
@@ -490,7 +516,24 @@ class InMemoryRouteRepository implements IRouteRepository {
     };
   }
 
-  private mirror(route: Route): void {
+  /**
+   * A board row, as the Prisma read builds it (K14): the hydrated route's
+   * driver and vehicle, its stops counted by status and the one-release
+   * bridge of bare {id, status} stops — never a delivery.
+   */
+  private listRow(route: Route): RouteListRow {
+    const { stops, ...rest } = this.hydrate(route);
+
+    return {
+      ...rest,
+      stopCounts: stopCountsOf(
+        stops.map((stop) => ({ status: stop.status, count: 1 })),
+      ),
+      stops: stops.map((stop) => ({ id: stop.id, status: stop.status })),
+    };
+  }
+
+  private mirror(route: Route, actorId?: string | null): void {
     const ending = route.status === "COMPLETED" || route.status === "CANCELLED";
 
     const open = this.stopsOf(route.id).filter((stop) =>
@@ -499,8 +542,34 @@ class InMemoryRouteRepository implements IRouteRepository {
 
     if (open.length === 0) return;
 
+    // As the real mirror: each delivery a cancellation — or a close with
+    // pending stops (K11) — hands back says why.
+    const closedWithPending =
+      route.status === "COMPLETED" && Boolean(route.closure_reason);
+
+    if (route.status === "CANCELLED" || closedWithPending) {
+      this.pushPlanEvents(
+        open.map((stop) => ({
+          deliveryId: stop.deliveryId,
+          note: closedWithPending
+            ? routeClosedWithPendingNote(route)
+            : routeCancelledNote(route),
+        })),
+        "ROUTE_REMOVED",
+        route,
+        actorId,
+      );
+    }
+
     if (ending) {
-      for (const stop of open) stop.status = "CANCELLED";
+      // updated_at moves too, as Prisma's updateMany stamps @updatedAt: it is
+      // when the stop was called off (findLostStop reads it, K7).
+      const now = new Date();
+
+      for (const stop of open) {
+        stop.status = "CANCELLED";
+        stop.updated_at = now;
+      }
     }
 
     for (const stop of open) {
@@ -800,6 +869,22 @@ class InMemoryRouteRepository implements IRouteRepository {
     const route = this.routeOf(routeId, businessId);
 
     return route ? this.hydrate(route) : null;
+  }
+
+  async findRouteWindow(
+    routeId: string,
+    businessId: string,
+  ): Promise<RouteWindow | null> {
+    const route = this.routeOf(routeId, businessId);
+
+    return route
+      ? {
+          id: route.id,
+          driverId: route.driverId,
+          started_at: route.started_at,
+          completed_at: route.completed_at,
+        }
+      : null;
   }
 
   async findDriverRoute(
@@ -1188,7 +1273,7 @@ class InMemoryRouteRepository implements IRouteRepository {
     return {
       data: filtered
         .slice((page - 1) * pageSize, page * pageSize)
-        .map((route) => this.hydrate(route)),
+        .map((route) => this.listRow(route)),
       total,
       meta: searchMeta,
     };
@@ -1232,17 +1317,92 @@ class InMemoryRouteRepository implements IRouteRepository {
 
     route.updated_at = new Date();
 
-    this.mirror(route);
+    this.mirror(route, transition.actorId);
     this.syncVehicleStatus(route);
 
     return route;
   }
 
-  /** lockEditableRoute's answer: null when gone, foreign or already left. */
-  private editableRoute(routeId: string, businessId: string): Route | null {
+  async closeWithPending(
+    routeId: string,
+    businessId: string,
+    { reason, actorId, at }: CloseWithPendingProps,
+  ): Promise<{ route: Route; cancelledStops: number }> {
     const route = this.routeOf(routeId, businessId);
 
-    return route && EDITABLE_STATUSES.includes(route.status) ? route : null;
+    // The real where: id, tenant and IN_PROGRESS, one empty answer.
+    if (!route || route.status !== "IN_PROGRESS") {
+      throw new RouteStatusConflictError();
+    }
+
+    route.status = "COMPLETED";
+    route.completed_at = at;
+    route.closure_reason = reason;
+    route.plan_version += 1;
+    route.updated_at = new Date();
+
+    const cancelledStops = this.stopsOf(route.id).filter((stop) =>
+      isStopOpen(stop.status),
+    ).length;
+
+    this.mirror(route, actorId);
+    this.syncVehicleStatus(route);
+
+    return { route, cancelledStops };
+  }
+
+  async listUnalertedRunningRoutes(limit: number): Promise<LeftOpenRoute[]> {
+    return this.routes
+      .filter(
+        (route) =>
+          route.status === "IN_PROGRESS" &&
+          !route.left_open_alerted_at &&
+          route.started_at !== null,
+      )
+      .sort(
+        (a, b) =>
+          a.started_at!.getTime() - b.started_at!.getTime() ||
+          (a.id < b.id ? -1 : a.id > b.id ? 1 : 0),
+      )
+      .slice(0, limit)
+      .map((route) => ({
+        id: route.id,
+        code: route.code,
+        name: route.name,
+        businessId: route.businessId,
+        driverId: route.driverId,
+        driverName: this.driverName(route.businessId, route.driverId),
+        started_at: route.started_at!,
+        timeZone: resolveTimeZone(this.timeZones[route.businessId]),
+      }));
+  }
+
+  async claimLeftOpenAlerts(routeIds: string[], at: Date): Promise<string[]> {
+    const claimed: string[] = [];
+
+    for (const route of this.routes) {
+      if (
+        routeIds.includes(route.id) &&
+        route.status === "IN_PROGRESS" &&
+        !route.left_open_alerted_at
+      ) {
+        route.left_open_alerted_at = at;
+        claimed.push(route.id);
+      }
+    }
+
+    return claimed.sort();
+  }
+
+  /** lockEditableRoute's answer: null when gone, foreign or already left. */
+  private editableRoute(
+    routeId: string,
+    businessId: string,
+    statuses: RouteStatus[] = EDITABLE_STATUSES,
+  ): Route | null {
+    const route = this.routeOf(routeId, businessId);
+
+    return route && statuses.includes(route.status) ? route : null;
   }
 
   private planResult(route: Route) {
@@ -1312,7 +1472,8 @@ class InMemoryRouteRepository implements IRouteRepository {
     _outerTx?: Prisma.TransactionClient,
     options: PlanWriteOptions = {},
   ): Promise<PlanStopsAdded> {
-    const route = this.editableRoute(routeId, businessId);
+    // A running route takes new stops too (K12), as the real addStops.
+    const route = this.editableRoute(routeId, businessId, APPENDABLE_STATUSES);
 
     if (!route) throw new RouteStatusConflictError();
 
@@ -1363,6 +1524,11 @@ class InMemoryRouteRepository implements IRouteRepository {
       if (delivery) {
         delivery.driverId = route.driverId;
         delivery.vehicleId = route.vehicleId;
+
+        // On a running route the load leaves now, as the real write does.
+        if (route.status === "IN_PROGRESS" && delivery.status === "PENDING") {
+          delivery.status = "IN_TRANSIT";
+        }
       }
     }
 
@@ -1589,24 +1755,66 @@ class InMemoryRouteRepository implements IRouteRepository {
     routeId: string,
     businessId: string,
   ): Promise<VisitedPoint[]> {
-    return this.events
+    return (
+      this.events
+        .filter(
+          (event) =>
+            event.routeId === routeId &&
+            event.businessId === businessId &&
+            (event.type === "ARRIVAL" || event.type === "PROOF") &&
+            event.latitude != null &&
+            event.longitude != null,
+        )
+        .sort((a, b) => a.created_at.getTime() - b.created_at.getTime())
+        // The newest under the cap, in order (G9), like the real read.
+        .slice(-2 * ROUTE_MAX_STOPS)
+        .map((event) => ({
+          deliveryId: event.deliveryId,
+          type: event.type as VisitedPoint["type"],
+          latitude: event.latitude as number,
+          longitude: event.longitude as number,
+          recordedAt: event.occurred_at ?? event.created_at,
+          geofence_outcome: event.geofence_outcome ?? null,
+          distance_m: event.distance_m ?? null,
+          accuracy_m: event.accuracy_m ?? null,
+        }))
+    );
+  }
+
+  async listStopGeofence(
+    routeId: string,
+    businessId: string,
+  ): Promise<StopGeofenceFlag[]> {
+    const flagged = new Map<string, StopGeofenceFlag>();
+
+    // Newest first, like the real read; the first per delivery is its flag.
+    const outside = this.events
       .filter(
         (event) =>
           event.routeId === routeId &&
           event.businessId === businessId &&
-          (event.type === "ARRIVAL" || event.type === "PROOF") &&
-          event.latitude != null &&
-          event.longitude != null,
+          (event.type === "ARRIVAL" ||
+            event.type === "PROOF" ||
+            event.type === "OCCURRENCE") &&
+          event.geofence_outcome === "OUTSIDE",
       )
-      .sort((a, b) => a.created_at.getTime() - b.created_at.getTime())
-      .slice(0, 2 * ROUTE_MAX_STOPS)
-      .map((event) => ({
+      .sort((a, b) => b.created_at.getTime() - a.created_at.getTime())
+      .slice(0, 3 * ROUTE_MAX_STOPS);
+
+    for (const event of outside) {
+      if (flagged.has(event.deliveryId)) continue;
+
+      flagged.set(event.deliveryId, {
         deliveryId: event.deliveryId,
-        type: event.type as VisitedPoint["type"],
-        latitude: event.latitude as number,
-        longitude: event.longitude as number,
+        type: event.type as StopGeofenceFlag["type"],
+        geofence_outcome: "OUTSIDE",
+        distance_m: event.distance_m ?? null,
+        accuracy_m: event.accuracy_m ?? null,
         recordedAt: event.occurred_at ?? event.created_at,
-      }));
+      });
+    }
+
+    return [...flagged.values()];
   }
 
   async listUnroutedDeliveries(
@@ -1741,59 +1949,73 @@ class InMemoryRouteRepository implements IRouteRepository {
       );
     }
 
-    // The real ORDER BY: scheduled day ascending with no day last, then the
-    // oldest row, then the id.
+    // The real ORDER BY (UNROUTED_ORDER): scheduled day ascending with no day
+    // last, then the oldest row, then the id.
+    const keyOf = (delivery: DeliveryMirror) => ({
+      scheduled_date:
+        delivery.scheduled_date == null
+          ? null
+          : new Date(day(delivery.scheduled_date)!),
+      created_at: delivery.created_at
+        ? new Date(delivery.created_at)
+        : new Date(0),
+      id: delivery.id ?? "",
+    });
+
     const rows = this.deliveries
       .filter((delivery) => matches(delivery, null))
-      .sort((a, b) => {
-        const da = day(a.scheduled_date);
-        const db = day(b.scheduled_date);
+      .sort((a, b) => compareUnroutedKeys(keyOf(a), keyOf(b)));
 
-        if (da !== db) {
-          if (da === null) return 1;
-          if (db === null) return -1;
+    // The keyset (G9) or the legacy offset, one row past the page.
+    const after = query.after;
+    const read = after
+      ? rows
+          .filter((delivery) => compareUnroutedKeys(keyOf(delivery), after) > 0)
+          .slice(0, query.pageSize + 1)
+      : rows.slice(
+          (query.page - 1) * query.pageSize,
+          query.page * query.pageSize + 1,
+        );
 
-          return da - db;
-        }
+    const page = read.slice(0, query.pageSize);
+    const last = page[page.length - 1];
 
-        const ca = a.created_at ? new Date(a.created_at).getTime() : 0;
-        const cb = b.created_at ? new Date(b.created_at).getTime() : 0;
+    const nextCursor =
+      read.length > query.pageSize && last
+        ? encodeUnroutedCursor(keyOf(last))
+        : null;
 
-        if (ca !== cb) return ca - cb;
+    const data = page.map((delivery) => ({
+      id: delivery.id!,
+      code: delivery.code ?? null,
+      kind: delivery.kind ?? "DELIVERY",
+      invoice_number: delivery.invoice_number ?? null,
+      recipient_name: delivery.recipient_name ?? "",
+      street: delivery.street ?? "",
+      address_number: null,
+      neighborhood: null,
+      city: delivery.city ?? "",
+      uf: delivery.uf ?? "",
+      scheduled_date:
+        delivery.scheduled_date == null
+          ? null
+          : new Date(delivery.scheduled_date),
+      latitude: delivery.latitude ?? null,
+      longitude: delivery.longitude ?? null,
+      // The relation as the real select reads it.
+      shipper: (() => {
+        const name = shipperName(delivery.shipperId);
 
-        return (a.id ?? "") < (b.id ?? "") ? -1 : 1;
-      });
+        return name ? { id: delivery.shipperId!, name } : null;
+      })(),
+    }));
 
-    const page = rows.slice(
-      (query.page - 1) * query.pageSize,
-      query.page * query.pageSize,
-    );
+    // A later page skips the counts, like the real read.
+    if (after) return { data, nextCursor };
 
     return {
-      data: page.map((delivery) => ({
-        id: delivery.id!,
-        code: delivery.code ?? null,
-        kind: delivery.kind ?? "DELIVERY",
-        invoice_number: delivery.invoice_number ?? null,
-        recipient_name: delivery.recipient_name ?? "",
-        street: delivery.street ?? "",
-        address_number: null,
-        neighborhood: null,
-        city: delivery.city ?? "",
-        uf: delivery.uf ?? "",
-        scheduled_date:
-          delivery.scheduled_date == null
-            ? null
-            : new Date(delivery.scheduled_date),
-        latitude: delivery.latitude ?? null,
-        longitude: delivery.longitude ?? null,
-        // The relation as the real select reads it.
-        shipper: (() => {
-          const name = shipperName(delivery.shipperId);
-
-          return name ? { id: delivery.shipperId!, name } : null;
-        })(),
-      })),
+      data,
+      nextCursor,
       total: rows.length,
       facets: {
         city: facet("city", "city"),
@@ -1867,6 +2089,40 @@ class InMemoryRouteRepository implements IRouteRepository {
     });
 
     return stop?.routeId ?? null;
+  }
+
+  async findLostStop(
+    deliveryId: string,
+    driverId: string,
+    businessId: string,
+  ): Promise<LostStop | null> {
+    // The same match as the real query: the tenant and the driver ride on
+    // the route; the latest stop that ended without the delivery wins.
+    const [stop] = this.stops
+      .filter(
+        (entry) =>
+          entry.deliveryId === deliveryId &&
+          (entry.status === "CANCELLED" || entry.status === "FAILED") &&
+          this.routeOf(entry.routeId, businessId)?.driverId === driverId,
+      )
+      .sort(
+        (a, b) =>
+          b.updated_at.getTime() - a.updated_at.getTime() ||
+          (a.id < b.id ? 1 : -1),
+      );
+
+    if (!stop) return null;
+
+    const route = this.routeOf(stop.routeId, businessId)!;
+
+    return {
+      routeId: route.id,
+      routeCode: route.code,
+      routeStatus: route.status,
+      vehicleId: route.vehicleId,
+      stopStatus: stop.status as LostStop["stopStatus"],
+      lostAt: stop.completed_at ?? stop.updated_at,
+    };
   }
 
   async settleStopForDelivery(
@@ -1953,6 +2209,22 @@ class InMemoryRouteRepository implements IRouteRepository {
     );
 
     if (stillOpen) return { stop, closedRoute: null };
+
+    // Cancelada when nothing on it was worked, as the real closeIfFinished
+    // decides it (K8, D32): the reason, no completed_at.
+    if (
+      routeClosingStatus(
+        this.stopsOf(route.id).map((entry) => entry.status),
+      ) === "CANCELLED"
+    ) {
+      route.status = "CANCELLED";
+      route.cancellation_reason = ROUTE_ALL_STOPS_CANCELLED_REASON;
+      route.updated_at = new Date();
+
+      this.syncVehicleStatus(route);
+
+      return { stop, closedRoute: route };
+    }
 
     // By the time of the facts, as the real closeIfFinished dates it.
     const resolvedAt = this.stopsOf(route.id)

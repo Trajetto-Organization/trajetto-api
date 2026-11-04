@@ -415,6 +415,51 @@ describe.each(both)("the deactivation guard (%s)", (label, repo) => {
     await repo.updateDriver({ driverId, driverData: { status: "ACTIVE" } });
   });
 
+  it("counts a branch's open routes through its drivers, and only theirs (K10)", async () => {
+    // Caio and Enzo are in Norte; Ana is in no branch.
+    const inNorte = ids[label === "prisma" ? 2 : 4];
+    const outside = ids[1];
+    const routes = [
+      { driverId: inNorte, status: "IN_PROGRESS" },
+      { driverId: inNorte, status: "COMPLETED" },
+      { driverId: outside, status: "RELEASED" },
+    ] as const;
+
+    if (label === "prisma") {
+      await prisma.route.createMany({
+        data: routes.map((route, index) => ({
+          code: 100 + index,
+          scheduled_date: new Date("2026-09-28"),
+          businessId: A,
+          ...route,
+        })),
+      });
+    } else {
+      memoryRoutes.push(...routes.map((route) => ({ ...route })));
+    }
+
+    expect(await repo.countOpenRoutesOfBranch(NORTE)).toEqual({
+      PLANNED: 0,
+      RELEASED: 0,
+      IN_PROGRESS: 1,
+    });
+
+    if (label === "prisma") {
+      await prisma.route.updateMany({
+        where: { driverId: { in: [inNorte, outside] } },
+        data: { status: "CANCELLED" },
+      });
+    } else {
+      for (const route of memoryRoutes) route.status = "CANCELLED";
+    }
+
+    expect(await repo.countOpenRoutesOfBranch(NORTE)).toEqual({
+      PLANNED: 0,
+      RELEASED: 0,
+      IN_PROGRESS: 0,
+    });
+  });
+
   it("stores the expiry as the civil day and clears it with null", async () => {
     const driverId = ids[4];
 

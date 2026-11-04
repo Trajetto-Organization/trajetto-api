@@ -9,6 +9,7 @@ import type {
   FuelSortKey,
 } from "../usecases/list-fuel/fuel-list";
 import type { DevicePrecheck } from "@/shared/ai-precheck/device-precheck";
+import type { ListedRoute } from "@/shared/vehicle/route-columns";
 
 interface Fuel {
   id: string;
@@ -49,6 +50,9 @@ interface Fuel {
   odometer_ai_details?: any;
   odometer_ai_analyzed_at?: Date | string | null;
 
+  /** The route it was made on (plan of 02/11/2026, C5/F3); null outside one. */
+  routeId?: string | null;
+
   created_at: Date | string;
   updated_at: Date | string;
 }
@@ -82,6 +86,12 @@ interface CreateFuelProps {
 
   // 🆕 RECORD ORIGIN: Track where the record was created
   created_from: RecordOrigin;
+
+  /**
+   * The route it was made on (plan of 02/11/2026, C5/F3). The use case
+   * checks it is the driver's route and the vehicle is the route's.
+   */
+  routeId?: string | null;
 
   /**
    * The phone's offline check of the odometer photo, as sent (decision
@@ -126,8 +136,15 @@ interface UpdateFuel {
   fuelId: string;
 }
 
+/**
+ * A refuelling as the list and the vehicle history send it: the record, its
+ * relation names, and the route it was made on (contract C3; null outside
+ * one or when the route is not the row's company's).
+ */
+type FuelListRow = Fuel & { route: ListedRoute | null };
+
 interface ListFuelProps {
-  data: Fuel[];
+  data: FuelListRow[];
   /** Refuelings per facet combination over the base (search + scope). */
   groups: FuelListGroup[];
   /** Names of the branches, vehicles and fuel types the options point at. */
@@ -207,7 +224,7 @@ interface SearchFuelByVehicleWithCursorProps {
 }
 
 interface CursorPaginatedFuel {
-  data: Fuel[];
+  data: FuelListRow[];
   nextCursor: string | null;
   hasMore: boolean;
 }
@@ -223,6 +240,22 @@ interface PreviousFuelReading {
   liters_amount: number;
 }
 
+/**
+ * A refuelling made on a route, as the route detail lists it (plan of
+ * 02/11/2026, F3): the amounts as plain numbers, no photo or location.
+ */
+interface RouteFuelSummary {
+  id: string;
+  refueling_date: Date;
+  liters_amount: number;
+  price_per_liter: number;
+  total_amount: number;
+  current_mileage: number;
+  vehicleId: string;
+  driverId: string;
+  odometer_ai_status: string;
+}
+
 export {
   Fuel,
   CreateFuelProps,
@@ -231,8 +264,10 @@ export {
   ListFuelProps,
   ListFuelByBusinessIdProps,
   GetFuelByIdAndBusinessProps,
+  FuelListRow,
   FuelWithRelations,
   SearchFuelByVehicleWithCursorProps,
   CursorPaginatedFuel,
   PreviousFuelReading,
+  RouteFuelSummary,
 };

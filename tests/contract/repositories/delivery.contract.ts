@@ -106,7 +106,13 @@ const SEED: Array<{ key: string; minute: number; data: CreateDeliveryProps }> =
     {
       key: "d5",
       minute: 4,
-      data: base({ recipient_name: "Zebra Atacado", invoice_number: "" }),
+      data: base({
+        recipient_name: "Zebra Atacado",
+        invoice_number: "",
+        // Plan of 02/11/2026, E1: a point given at the create.
+        latitude: -23.5505,
+        longitude: -46.6333,
+      }),
     },
     // Another company, with the same NF-e key and submission key as A's rows.
     {
@@ -226,6 +232,28 @@ function deliveryRepositoryContract(harness: () => DeliveryHarness): void {
         status: "PENDING",
       });
       expect(d5).toMatchObject({ invoice_number: null });
+    });
+
+    it("stores a point given at the create as the MANUAL address point, and none otherwise", async () => {
+      // Plan of 02/11/2026, E1: the geocoder's queue skips a row with a
+      // point, so the source and the pair must be written together.
+      const h = harness();
+      const d4 = await h.repo.findDeliveryById(h.id("d4"));
+      const d5 = await h.repo.findDeliveryById(h.id("d5"));
+
+      expect(d5).toMatchObject({
+        latitude: -23.5505,
+        longitude: -46.6333,
+        geo_source: "MANUAL",
+        geo_precision: null,
+      });
+      expect(d5?.geo_updated_at).toBeInstanceOf(Date);
+      expect(d4).toMatchObject({
+        latitude: null,
+        longitude: null,
+        geo_source: null,
+        geo_updated_at: null,
+      });
     });
 
     it("refuses the same NF-e key or submission key twice in a company (P2002), not across companies", async () => {
@@ -428,6 +456,15 @@ function deliveryRepositoryContract(harness: () => DeliveryHarness): void {
         city: "São Paulo",
       });
     });
+
+    it("reads back the item list as stored, and none for a delivery without items (K9)", async () => {
+      const h = harness();
+
+      expect(await h.repo.findDeliveryItems(h.id("d1"))).toEqual([
+        { description: "Caixa", quantity: 2, unit: null, unit_value: 10.5 },
+      ]);
+      expect(await h.repo.findDeliveryItems(MISSING)).toEqual([]);
+    });
   });
 
   describe("the detail", () => {
@@ -571,6 +608,7 @@ function deliveryRepositoryContract(harness: () => DeliveryHarness): void {
       expect(await h.repo.findOccurrenceBySubmissionId("occ-sub-1", A)).toEqual(
         {
           id: h.occurrence("o-new"),
+          deliveryId: h.id("d1"),
           authorization_status: "APPROVED",
           category: "NOT_DELIVERED",
         },

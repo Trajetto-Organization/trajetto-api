@@ -7,6 +7,7 @@ import {
   TokenByIdAndRefreshTokenProps,
   TwoFactor,
   TwoFactorConfirmation,
+  UserDeviceSession,
   UserRefreshTokenProps,
   VerificationToken,
 } from "../dtos/user-tokens-dto";
@@ -35,6 +36,26 @@ interface IUsersTokensRepository {
   /** Ends one session: its refresh tokens and the push devices it registered. */
   revokeUserRefreshTokenFamily: (familyId: string) => Promise<void>;
   revokeAllUserRefreshTokens: (userId: string) => Promise<void>;
+
+  /**
+   * The user's phones with a live session bound to them (plan of 02/11/2026,
+   * D7), most recently active first. Sessions without a phone (the web, and
+   * mobile sessions opened by e-mail) are not listed.
+   */
+  listUserDeviceSessions: (
+    userId: string,
+    now?: Date,
+  ) => Promise<UserDeviceSession[]>;
+
+  /**
+   * Ends every session of the user bound to this phone — its refresh tokens
+   * and the push devices those sessions registered — in one transaction, and
+   * returns the sessions (family ids) it ended, for the socket.
+   */
+  revokeUserDeviceSessions: (
+    userId: string,
+    deviceId: string,
+  ) => Promise<string[]>;
   deleteExpiredUserRefreshTokens: (now?: Date) => Promise<number>;
 
   /**

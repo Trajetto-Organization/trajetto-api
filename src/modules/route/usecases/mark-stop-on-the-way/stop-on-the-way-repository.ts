@@ -1,6 +1,7 @@
 import type { Prisma } from "@prisma/client";
 
 import database from "@/../infra/database";
+import { markSiblingStopsOnTheWay } from "@/shared/delivery/stop-group";
 
 import type {
   ApplyOnTheWayInput,
@@ -158,6 +159,13 @@ class StopOnTheWayRepository implements IStopOnTheWayRepository {
     });
 
     if (stamped.count === 0) throw new StopOnTheWayWriteMissedError();
+
+    // The stop's other NF-e at the same door are on the way too (B6).
+    await markSiblingStopsOnTheWay(tx, {
+      routeId: input.routeId,
+      stopId: input.stopId,
+      at: input.stopOnTheWayAt,
+    });
 
     await tx.deliveryEvent.create({
       data: {

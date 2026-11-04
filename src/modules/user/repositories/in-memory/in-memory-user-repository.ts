@@ -3,7 +3,10 @@ import { Prisma } from "@prisma/client";
 import { USER_COLUMN_DEFAULTS } from "@/shared/in-memory/column-defaults";
 import { v7 as uuidV7 } from "uuid";
 
-import { IUserRepository } from "../IUser-repository";
+import {
+  DRIVER_LOGINS_BY_CPF_LIMIT,
+  IUserRepository,
+} from "../IUser-repository";
 
 import {
   afterFailedLogin,
@@ -12,6 +15,7 @@ import {
 
 import {
   CreateUserProps,
+  DriverLoginByCpf,
   ListUsersByRoleAndBusinessProps,
   ListUsersPage,
   ListUsersProps,
@@ -68,6 +72,10 @@ interface PermissionSeed {
 interface BusinessSeed {
   is_active: boolean;
   entitlements: { module: string; enabled: boolean }[];
+
+  /** The names the CPF login's company picker shows (D8). */
+  fantasy_name?: string | null;
+  corporate_reason?: string;
 }
 
 /** The driver as the session lookup selects it. */
@@ -77,6 +85,9 @@ interface DriverSeed {
   businessId: string;
   branchId: string | null;
   branch: { is_active: boolean } | null;
+
+  /** The 11 digits the CPF login looks the driver up by (D8). */
+  cpf?: string;
 }
 
 /** A notification delivery addressed to a user (Prisma: NotificationDelivery). */
@@ -194,6 +205,7 @@ class InMemoryUserRepository implements IUserRepository {
     driverId,
     whatsapp_notifications_enabled,
     whatsapp_phone,
+    email_verified,
   }: CreateUserProps): Promise<User> {
     // The table's unique indexes, as Postgres raises them.
     if (this.user.some((user) => user.email === email)) {
@@ -218,7 +230,7 @@ class InMemoryUserRepository implements IUserRepository {
       two_factor_enabled: false,
       access_revoked: false,
       session_version: 0,
-      email_verified: null,
+      email_verified: email_verified ?? null,
       avatar: null,
       whatsapp_notifications_enabled: whatsapp_notifications_enabled ?? false,
       email_notifications_enabled: true,
@@ -441,8 +453,13 @@ class InMemoryUserRepository implements IUserRepository {
     } = userData;
 
     // Only skip undefined values — null is a valid value (means "clear/disconnect")
+    // — except a null e-mail, "not sent" as in UserRepository.updateUser
+    // (nothing writes a NULL e-mail in the nullable-expand release, D2).
     const filteredData = Object.fromEntries(
-      Object.entries(columns).filter(([, value]) => value !== undefined),
+      Object.entries(columns).filter(
+        ([key, value]) =>
+          value !== undefined && !(key === "email" && value === null),
+      ),
     );
 
     if (
@@ -530,7 +547,7 @@ class InMemoryUserRepository implements IUserRepository {
 
     return (
       this.user.find(
-        (user) => user.email.toLocaleLowerCase("en-US") === wanted,
+        (user) => user.email?.toLocaleLowerCase("en-US") === wanted,
       ) ?? null
     );
   }
@@ -569,7 +586,13 @@ class InMemoryUserRepository implements IUserRepository {
         : undefined;
 
       if (!user.businessId) relations.business = null;
-      else if (business) relations.business = business;
+      else if (business) {
+        // What the session lookup selects, never the picker's names.
+        relations.business = {
+          is_active: business.is_active,
+          entitlements: business.entitlements,
+        };
+      }
     }
 
     if (user.driver === undefined) {
@@ -578,15 +601,57 @@ class InMemoryUserRepository implements IUserRepository {
         : undefined;
 
       if (!user.driverId) relations.driver = null;
-      else if (driver) relations.driver = driver;
+      else if (driver) {
+        // The session lookup never selects the CPF.
+        const { cpf: _cpf, ...selected } = driver;
+
+        relations.driver = selected;
+      }
     }
 
     return { ...user, ...relations };
   }
 
+  async findDriverLoginsByCpf(cpf: string): Promise<DriverLoginByCpf[]> {
+    const matches = this.user
+      .filter((user) => {
+        const driver = user.driverId ? this.drivers.get(user.driverId) : null;
+
+        return driver?.cpf === cpf;
+      })
+      .sort(
+        (left, right) =>
+          (time(left.created_at) ?? 0) - (time(right.created_at) ?? 0) ||
+          left.id.localeCompare(right.id),
+      )
+      .slice(0, DRIVER_LOGINS_BY_CPF_LIMIT);
+
+    const logins: DriverLoginByCpf[] = [];
+
+    for (const match of matches) {
+      const loaded = (await this.findUserById(match.id))!;
+      const seed = match.businessId
+        ? this.businesses.get(match.businessId)
+        : undefined;
+      const { cpf: _cpf, ...driver } = this.drivers.get(match.driverId!)!;
+
+      logins.push({
+        ...loaded,
+        // The real query selects these from the rows, never from a relation a
+        // test left on the user.
+        business: seed ? { is_active: seed.is_active } : null,
+        driver,
+        companyName: seed?.fantasy_name?.trim() || seed?.corporate_reason || "",
+      });
+    }
+
+    return logins;
+  }
+
   async updateUserPassword({
     userId,
     password,
+    markEmailVerifiedAt,
   }: UpdateUserPassword): Promise<User | null> {
     const user = this.user.find((user) => user.id === userId);
 
@@ -594,6 +659,7 @@ class InMemoryUserRepository implements IUserRepository {
     if (!user) throw recordNotFound();
 
     user.password = password;
+    if (markEmailVerifiedAt) user.email_verified = markEmailVerifiedAt;
     user.session_version = (user.session_version ?? 0) + 1;
     user.failed_login_attempts = 0;
     user.failed_login_at = null;
@@ -670,7 +736,7 @@ class InMemoryUserRepository implements IUserRepository {
     return (
       this.user.find(
         (user) =>
-          user.email.toLocaleLowerCase("en-US") === wanted &&
+          user.email?.toLocaleLowerCase("en-US") === wanted &&
           user.businessId === businessId,
       ) ?? null
     );

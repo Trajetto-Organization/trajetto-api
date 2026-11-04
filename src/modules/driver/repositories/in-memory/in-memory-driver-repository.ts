@@ -521,6 +521,22 @@ class InMemoryDriverRepository implements IDriverRepository {
     return counts;
   }
 
+  async countOpenRoutesOfBranch(branchId: string): Promise<OpenRouteCounts> {
+    const counts: OpenRouteCounts = { ...NO_OPEN_ROUTES };
+
+    for (const driver of this.drivers) {
+      if (driver.branchId !== branchId || !driver.id) continue;
+
+      const own = await this.countOpenRoutes(driver.id);
+
+      counts.PLANNED += own.PLANNED;
+      counts.RELEASED += own.RELEASED;
+      counts.IN_PROGRESS += own.IN_PROGRESS;
+    }
+
+    return counts;
+  }
+
   async countDriverPauses(driverId: string): Promise<number> {
     return this.pauses.filter((pause) => pause.driverId === driverId).length;
   }

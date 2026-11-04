@@ -29,6 +29,7 @@ import {
   GetFuelByIdAndBusinessProps,
   SearchFuelByVehicleWithCursorProps,
   CursorPaginatedFuel,
+  RouteFuelSummary,
 } from "../dtos/fuel-dto";
 
 import { resolveOrderBy } from "@/shared/pagination/list-query";
@@ -46,10 +47,18 @@ import {
   exportBatchWhere,
   type ExportKey,
 } from "@/shared/pagination/export-keyset";
+import {
+  ROUTE_LINK_SELECT,
+  listedRoute,
+  type RouteLinkRow,
+} from "@/shared/vehicle/route-columns";
 
 /** What a list row carries of its relations (the export reads the same). */
 const FUEL_LIST_INCLUDE = {
   branch: { select: { corporate_reason: true } },
+  // Contract C3: the route it was made on, in the same query (a join, not
+  // one more round trip); listedRoute keeps only the company's own.
+  route: ROUTE_LINK_SELECT,
   vehicle: {
     select: {
       description: true,
@@ -61,6 +70,22 @@ const FUEL_LIST_INCLUDE = {
   driver: { select: { name: true, cnh: true } },
   fuelType: { select: { description: true } },
 } as const;
+
+/** The joined route row out, the listed one in (contract C3). */
+function withListedRoute<
+  Row extends {
+    businessId: string;
+    routeId: string | null;
+    route: RouteLinkRow | null;
+  },
+>({
+  route,
+  ...row
+}: Row): Omit<Row, "route"> & {
+  route: ReturnType<typeof listedRoute>;
+} {
+  return { ...row, route: listedRoute(row, route) };
+}
 
 interface ReadingWrite extends OdometerTimelineQuery {
   mileage: number;
@@ -300,7 +325,7 @@ class FuelRepository implements IFuelRepository {
       : [];
 
     return {
-      data,
+      data: data.map(withListedRoute),
       groups,
       labels: {
         branchId: Object.fromEntries(
@@ -753,15 +778,46 @@ class FuelRepository implements IFuelRepository {
             description: true,
           },
         },
+        // Contract C3, as in the list.
+        route: ROUTE_LINK_SELECT,
       },
     });
 
     const hasMore = items.length > limit;
 
-    const data = hasMore ? items.slice(0, limit) : items;
+    const data = (hasMore ? items.slice(0, limit) : items).map(withListedRoute);
     const nextCursor = hasMore ? (data[data.length - 1]?.id ?? null) : null;
 
     return { data, nextCursor, hasMore };
+  }
+
+  async listRouteFuels(
+    businessId: string,
+    routeId: string,
+  ): Promise<RouteFuelSummary[]> {
+    // By fuel_routeId_idx, always inside the tenant (F3).
+    const rows = await this.prisma.fuel.findMany({
+      where: { businessId, routeId },
+      orderBy: [{ refueling_date: "asc" }, { id: "asc" }],
+      select: {
+        id: true,
+        refueling_date: true,
+        liters_amount: true,
+        price_per_liter: true,
+        total_amount: true,
+        current_mileage: true,
+        vehicleId: true,
+        driverId: true,
+        odometer_ai_status: true,
+      },
+    });
+
+    return rows.map((row) => ({
+      ...row,
+      liters_amount: Number(row.liters_amount),
+      price_per_liter: Number(row.price_per_liter),
+      total_amount: Number(row.total_amount),
+    }));
   }
 
   async countFuelForExport(filters: FuelListFilters): Promise<number> {

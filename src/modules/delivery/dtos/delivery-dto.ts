@@ -56,6 +56,17 @@ interface Delivery {
    * origin INTEGRATION (decision 5.10). Null for the panel and the imports.
    */
   apiKeyId?: string | null;
+  /**
+   * The ADDRESS point (decision 14.7): pinned by the dispatcher or given at
+   * the create (MANUAL), or found by the geocoder (GEOCODER, plan of
+   * 02/11/2026 E1, with the level it reached in geo_precision). What the
+   * geofence measures from (E2/E4).
+   */
+  latitude?: number | null;
+  longitude?: number | null;
+  geo_source?: "MANUAL" | "GEOCODER" | null;
+  geo_updated_at?: Date | null;
+  geo_precision?: "ADDRESS" | "STREET" | "NEIGHBORHOOD" | "CITY" | null;
   created_at?: Date | string;
   updated_at?: Date | string;
 }
@@ -75,6 +86,17 @@ interface CreateDeliveryProps {
   address_number?: string | null;
   complement?: string | null;
   neighborhood?: string | null;
+
+  /**
+   * The address point given at the create — the panel's form, the
+   * spreadsheet, the public API (plan of 02/11/2026, E1). The repository
+   * stores a whole pair as the point with geo_source MANUAL
+   * (manualAddressPoint) and nothing otherwise, so the geocoder's queue
+   * keeps a row created without one.
+   */
+  latitude?: number | null;
+  longitude?: number | null;
+
   scheduled_date?: Date | null;
   notes?: string | null;
   /** Absent = DELIVERY (the column default). */
@@ -127,11 +149,16 @@ interface UpdateDeliveryProps {
   // No driverId/vehicleId (DLV-EDIT-4): assignment builds the route.
 
   // Never from the request: the use case clears the address point when the
-  // address changes (decision 14.7, design §4.11).
+  // address changes (decision 14.7, design §4.11) — and the geocoder's
+  // bookkeeping with it (plan of 02/11/2026, E1).
   latitude?: null;
   longitude?: null;
   geo_source?: null;
   geo_updated_at?: null;
+  geo_precision?: null;
+  geocode_status?: null;
+  geocode_attempted_at?: null;
+  geocode_attempts?: 0;
 }
 
 interface ListDeliveriesProps extends DeliveryListFilters {
@@ -139,6 +166,13 @@ interface ListDeliveriesProps extends DeliveryListFilters {
   pageSize: number;
   sort?: DeliverySortKey;
   order?: SortOrder;
+
+  /**
+   * leftOpenStartedBefore for the company's zone and now (plan of
+   * 02/11/2026, H3): when given, the page also counts, per route left open,
+   * the open stops of the documents the "Em Rota" card counts.
+   */
+  leftOpenBefore?: Date;
 }
 
 /** A catalog facet's options, labelled from the company's own records. */
@@ -163,6 +197,14 @@ interface ListDeliveriesPage {
   statusCounts: GroupCount[];
   shipperOptions: DeliveryFacetOption[];
   driverOptions: DeliveryFacetOption[];
+
+  /**
+   * With `leftOpenBefore`: each route left open (IN_PROGRESS, started
+   * before it) holding open stops (PENDING/ARRIVED) of IN_TRANSIT documents
+   * that match every filter but the status — the card's own set — and how
+   * many. Routes holding none are left out. Absent without `leftOpenBefore`.
+   */
+  leftOpenRoutes?: Array<{ started_at: Date | null; open: number }>;
 }
 
 interface ListDeliveriesResult {
@@ -209,7 +251,23 @@ interface CreateOccurrenceProps {
   signature?: string | null;
   /** DELIVERED only: who received it. */
   received_by?: string | null;
+
+  /**
+   * The geofence record of the report (plan of 02/11/2026, E3/E4): metres
+   * to the address point, the phone's accuracy and the verdict. An
+   * occurrence is never refused for the radius; OUTSIDE flags it for review.
+   * Absent = not evaluated by this server (null in the row).
+   */
+  distance_m?: number | null;
+  accuracy_m?: number | null;
+  geofence_outcome?: GeofenceOutcome | null;
 }
+
+/**
+ * Where an action at the customer's address was made, relative to the
+ * company's radius (plan of 02/11/2026, E2): the GeofenceOutcome enum.
+ */
+type GeofenceOutcome = "INSIDE" | "OUTSIDE" | "NOT_EVALUATED";
 
 /** DeliveryOccurrence.authorization_status (decision 6.3). */
 type OccurrenceAuthorizationStatus =
@@ -346,6 +404,15 @@ interface CreateDeliveryEventProps {
 
   /** PROOF from the app: when the receipt photo was taken (server clock). */
   photo_taken_at?: Date | null;
+
+  /**
+   * ARRIVAL and PROOF (plan of 02/11/2026, E2/E4): metres to the address
+   * point and the phone's accuracy, as the server computed them, and the
+   * verdict. OUTSIDE is the "fora do raio" flag. Absent = not evaluated.
+   */
+  distance_m?: number | null;
+  accuracy_m?: number | null;
+  geofence_outcome?: GeofenceOutcome | null;
 }
 
 interface DeliveryEventRecord {
@@ -365,6 +432,7 @@ export {
   ListDeliveriesResult,
   DeliveryFacetOption,
   CreateOccurrenceProps,
+  GeofenceOutcome,
   OccurrenceAuthorizationStatus,
   ListOccurrencesProps,
   ListOccurrencesResult,
