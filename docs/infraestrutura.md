@@ -1742,20 +1742,35 @@ janela ([seção 13.6](#136-abrir-e-fechar-um-repositório-para-usar-o-actions-g
 
 ### 7.7 Dependabot e varredura de segredos
 
-| Repositório       | Ecossistemas                                               | Quando                                            | PRs contra                                   |
-| ----------------- | ---------------------------------------------------------- | ------------------------------------------------- | -------------------------------------------- |
-| `trajetto-api`    | npm, github-actions e docker; pip da IA e compose de carga | segunda, 06:00 (São Paulo); pip e compose mensais | `staging`                                    |
-| `trajetto-ui`     | npm, github-actions e docker                               | segunda, 06:00 (São Paulo)                        | `staging`                                    |
-| `trajetto-mobile` | npm e github-actions                                       | segunda, 06:00 (São Paulo)                        | `main` (sem `target-branch`; ver pendências) |
+| Repositório       | Ecossistemas                                               | Quando                           | PRs contra |
+| ----------------- | ---------------------------------------------------------- | -------------------------------- | ---------- |
+| `trajetto-api`    | npm, github-actions e docker; pip da IA e compose de carga | dia 1º do mês, 06:00 (São Paulo) | `staging`  |
+| `trajetto-ui`     | npm, github-actions e docker                               | dia 1º do mês, 06:00 (São Paulo) | `staging`  |
+| `trajetto-mobile` | npm e github-actions                                       | dia 1º do mês, 06:00 (São Paulo) | `staging`  |
 
-Ligados fora dos arquivos, nas configurações do repositório ou da organização:
-_Dependabot alerts_, _security updates_, _CodeQL default setup_ e a política
-de actions fixadas por SHA. **A confirmar com o dono:** o que está ligado.
+O `dependabot.yml` só vale a partir da branch padrão (`main`): uma mudança
+feita na `staging` passa a valer na promoção seguinte, e o Dependabot roda na
+hora em que ela chega. A configuração de 04/11/2026 (mensal, cooldown de 7
+dias e de 30 para major, sem rebase automático, as majors num PR só que é
+lista de tarefas, e o `target-branch: staging` que faltava no app) existe
+por causa da cota do Actions ([seção 7.2](#72-visibilidade-e-a-cota-do-actions)):
+cada atualização de branch do Dependabot roda o CI, e no ritmo semanal de
+antes elas sozinhas gastavam boa parte dos 2.000 minutos do mês.
 
-Desde 30/10/2026, os _Dependabot alerts_ e os _security updates_ são o vigia
-contínuo das dependências: o `audit-ci` do CI só bloqueia um push que muda
-dependência e, nos outros, só relata
-([`deploy.md` → 21](./deploy.md#21-cadeia-de-suprimentos-e-segredos)). O
+Nas configurações do repositório ou da organização: _Dependabot alerts_
+ligados, _security updates_ **desligados**, _CodeQL default setup_ e a
+política de actions fixadas por SHA ligados. **A confirmar com o dono:** que
+está assim nos três.
+
+Desde 04/11/2026, os _Dependabot alerts_ são o vigia contínuo das
+dependências: o `audit-ci` do CI só bloqueia um push que muda dependência e,
+nos outros, só relata
+([`deploy.md` → 21](./deploy.md#21-cadeia-de-suprimentos-e-segredos)). Os
+_security updates_ ficam desligados porque o GitHub só os abre contra a
+`main`, sem aplicar o `target-branch`: ali um PR não tem build de staging
+para promover e, na API, ainda rodaria a validação de PR do `deploy.yml`
+(cerca de duas horas de runner). Um alerta é corrigido numa branch de
+trabalho a partir da `staging`, como qualquer mudança. O
 Dependabot também não move o que está fixado dentro dos workflows: o
 `node-version` (a mesma versão da base do `Dockerfile`) e os digests do
 Postgres, do Redis e do BuildKit sobem à mão, nos três repositórios de uma
@@ -2661,16 +2676,16 @@ derruba o sistema, depois o que abre uma brecha, depois o resto.
 - [ ] Environments, Rulesets e o bypass do GitHub Actions nos três
       repositórios, e o _Prevent self-review_.
       [Seções 7.3](#73-environments) e [7.5](#75-proteção-das-branches).
-- [ ] Dependabot do app sem `target-branch`: os PRs vão para `main`, o que
-      contraria a regra de que `main` só recebe PR de `staging`. Pôr
-      `target-branch: staging`, como na API e na web.
+- [ ] Os 11 PRs antigos do Dependabot do app contra `main`: o
+      `target-branch: staging` entrou na staging do app em 04/11/2026 e vale
+      quando chegar à `main`. Depois disso, feche os que sobrarem, anotando a
+      lista antes (fechar à mão pode fazer o Dependabot pular aquela versão).
       [Seção 7.7](#77-dependabot-e-varredura-de-segredos).
 - [ ] Apagar os secrets obsoletos. [Seção 7.4](#74-secrets-e-variables).
-- [ ] O que está ligado fora dos arquivos: _Dependabot alerts_, _security
-      updates_, _CodeQL default setup_ e a política de actions fixadas por
-      SHA. Desde 30/10/2026 os _alerts_ e os _security updates_ são o vigia
-      das dependências (o `audit-ci` só bloqueia push que muda dependência):
-      confirme que estão ligados nos três.
+- [ ] O que está ligado fora dos arquivos, nos três repositórios:
+      _Dependabot alerts_ ligado, _security updates_ desligado (decisão de
+      04/11/2026), _CodeQL default setup_ e a política de actions fixadas por
+      SHA ligados. Confirme.
       [Seção 7.7](#77-dependabot-e-varredura-de-segredos).
 - [ ] O valor de `IMAGE_SCAN_ENFORCE` na `trajetto-api` (ligado em 27/10
       para as primeiras correções; ligado, só um achado do Trivy reprova).

@@ -2857,16 +2857,16 @@ ninguém.
 
 ## 21. Cadeia de suprimentos e segredos
 
-| Controle                                                             | Onde                                                                                                                  | Quando falha                                                                                                                                                |
-| -------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Dependabot (npm, actions, imagens base, pip da IA, compose de carga) | `.github/dependabot.yml`, PRs contra `staging`                                                                        | não falha: abre PRs toda segunda; majors de Node, do Prisma e do `pg` e o motor de OCR ficam de fora de propósito                                           |
-| Actions fixadas por commit                                           | todo `uses:` dos workflows, com `# vX.Y.Z`                                                                            | `supply-chain.test.ts` recusa um `uses:` por tag                                                                                                            |
-| Imagens base por digest                                              | `Dockerfile`, `infra/ai-ocr/Dockerfile`; nos workflows, os serviços, o smoke test, o BuildKit, gitleaks e Trivy       | `supply-chain.test.ts` e `ci-stability.test.ts`                                                                                                             |
-| Serviço de IA                                                        | rodas Python com `--require-hashes`, modelos versionados em `infra/ai-ocr/models` e conferidos contra `models.sha256` | o build falha num hash diferente; o pytest roda dentro da imagem                                                                                            |
-| Gate de audit                                                        | `.github/scripts/audit-gate.sh` (o `audit-ci` fixado) no `ci.yml` e no `deploy.yml`, config em `audit-ci.jsonc`       | advisory CRITICAL numa dependência de produção sem entrada na allowlist, num push ou PR que muda dependência (ou o `audit-ci.jsonc`); nos outros, só relata |
-| SBOM e proveniência                                                  | `build-push-action` (`sbom: true`, `provenance: mode=max`)                                                            | não falha: anexa as atestações à imagem no GHCR                                                                                                             |
-| Scan da imagem (Trivy)                                               | depois do push, por digest, com o banco de vulnerabilidades baixado uma vez e guardado no cache do Actions            | só um achado, e só com `IMAGE_SCAN_ENFORCE=true`; falha no download ou erro do Trivy viram aviso                                                            |
-| Varredura de segredos (gitleaks)                                     | job `secrets` do `ci.yml` e do `deploy.yml`                                                                           | um segredo novo em qualquer commit do histórico                                                                                                             |
+| Controle                                                             | Onde                                                                                                                  | Quando falha                                                                                                                                                                                                                                        |
+| -------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Dependabot (npm, actions, imagens base, pip da IA, compose de carga) | `.github/dependabot.yml`, PRs contra `staging`                                                                        | não falha: abre PRs no dia 1º de cada mês, só de versões publicadas há 7 dias (30 para major), com as majors num PR só, que é lista de tarefas; majors de Node, do Prisma, do `pg` e do `dotenv-expand` e o motor de OCR ficam de fora de propósito |
+| Actions fixadas por commit                                           | todo `uses:` dos workflows, com `# vX.Y.Z`                                                                            | `supply-chain.test.ts` recusa um `uses:` por tag                                                                                                                                                                                                    |
+| Imagens base por digest                                              | `Dockerfile`, `infra/ai-ocr/Dockerfile`; nos workflows, os serviços, o smoke test, o BuildKit, gitleaks e Trivy       | `supply-chain.test.ts` e `ci-stability.test.ts`                                                                                                                                                                                                     |
+| Serviço de IA                                                        | rodas Python com `--require-hashes`, modelos versionados em `infra/ai-ocr/models` e conferidos contra `models.sha256` | o build falha num hash diferente; o pytest roda dentro da imagem                                                                                                                                                                                    |
+| Gate de audit                                                        | `.github/scripts/audit-gate.sh` (o `audit-ci` fixado) no `ci.yml` e no `deploy.yml`, config em `audit-ci.jsonc`       | advisory CRITICAL numa dependência de produção sem entrada na allowlist, num push ou PR que muda dependência (ou o `audit-ci.jsonc`); nos outros, só relata                                                                                         |
+| SBOM e proveniência                                                  | `build-push-action` (`sbom: true`, `provenance: mode=max`)                                                            | não falha: anexa as atestações à imagem no GHCR                                                                                                                                                                                                     |
+| Scan da imagem (Trivy)                                               | depois do push, por digest, com o banco de vulnerabilidades baixado uma vez e guardado no cache do Actions            | só um achado, e só com `IMAGE_SCAN_ENFORCE=true`; falha no download ou erro do Trivy viram aviso                                                                                                                                                    |
+| Varredura de segredos (gitleaks)                                     | job `secrets` do `ci.yml` e do `deploy.yml`                                                                           | um segredo novo em qualquer commit do histórico                                                                                                                                                                                                     |
 
 As imagens do Postgres e do Redis não passam pelo Dependabot (são campos do
 Dokploy, não arquivos do repositório): atualize o digest do Postgres à mão,
@@ -2887,9 +2887,10 @@ O audit só **bloqueia** o push ou PR que muda o que ele lê: `package.json`,
 com a base do PR ou com o `before` do push; sem base (branch nova,
 _Run workflow_, base fora do checkout), bloqueia. Num push que não mexe em
 dependência, um aviso novo aparece como `::warning::` e com o relatório no
-resumo do job, sem reprovar: o aviso já está na árvore que roda, quem abre a
-correção é o Dependabot (_alerts_ e _security updates_), e a próxima mudança
-de dependência passa pelo portão de verdade. Um aviso que aparece assim é
+resumo do job, sem reprovar: o aviso já está na árvore que roda, o alerta do
+Dependabot avisa e a correção vai numa branch de trabalho a partir da
+`staging` (os _security updates_ ficam desligados: o GitHub só os abre contra
+a `main`), e a próxima mudança de dependência passa pelo portão de verdade. Um aviso que aparece assim é
 tarefa do dia, não do próximo push.
 
 Um audit que **não rodou** é outra coisa, e o portão diz qual foi. O
@@ -2944,9 +2945,11 @@ Databases; qualquer usuário do painel com acesso ao projeto os vê. Dê acesso
 ao Dokploy só a quem pode ver produção, e renove o token do GHCR
 (`read:packages`) antes de vencer — vencido, todo deploy falha no pull.
 
-Configuração fora do repositório: _Dependabot alerts_ e _security updates_
-ligados; _CodeQL default setup_ ligado; política da organização exigindo
-actions fixadas por SHA.
+Configuração fora do repositório: _Dependabot alerts_ ligados e _security
+updates_ desligados (abririam PRs contra a `main`, que não os promove; decisão
+de 04/11/2026, [`infraestrutura.md` → 7.7](./infraestrutura.md#77-dependabot-e-varredura-de-segredos));
+_CodeQL default setup_ ligado; política da organização exigindo actions
+fixadas por SHA.
 
 ## 22. Bucket R2 e retenção no GHCR
 
