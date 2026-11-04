@@ -72,6 +72,11 @@ tmp/*
 # token in a repository is a token in every clone of it.
 tests/load/fixtures/
 
+# The delivery-day simulation's run folder: the replicas' throwaway env file
+# and logs, their PIDs, the JSONL log and sim-context.json (which carries the
+# run's throwaway dispatcher password).
+tests/simulation/output/
+
 # CI creates src/tmp for local uploads during the unit run; never content.
 /src/tmp/
 
