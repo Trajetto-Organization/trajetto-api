@@ -258,7 +258,7 @@ const createBusinessSchema = z.object({
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
           message:
-            "O razão social deve conter apenas letras (inclusive acentos), números, espaços e traços, sem outros caracteres.",
+            "A razão social deve conter apenas letras (inclusive acentos), números, espaços e traços, sem outros caracteres.",
         });
       }
     }),
