@@ -17,7 +17,12 @@ import { describe, expect, it } from "vitest";
  * two in step. infraestrutura.md (29/10/2026) is the fifth topic: the map of
  * everything configured by hand outside the code (Contabo, Dokploy,
  * Cloudflare, GitHub, Expo), the only record of it, since there is no
- * infrastructure as code. The ADRs live in docs/adr/, one file per decision.
+ * infrastructure as code. whatsapp-modelos.md (03/11/2026, plan item B7) is
+ * not a topic either: it is generated from the WhatsApp template registries
+ * by `yarn docs:whatsapp` — the exact copy the owner pastes into Meta —,
+ * whatsapp-templates-doc.test.ts fails when it drifts from them, and
+ * whatsapp-templates.test.ts holds the registry to Meta's rules. The ADRs live in docs/adr/, one file
+ * per decision.
  */
 const ROOT = resolve(__dirname, "..", "..", "..");
 const read = (path: string) =>
@@ -30,6 +35,7 @@ const DOCS = [
   "docs/infraestrutura.md",
   "docs/testes.md",
   "docs/variaveis-de-ambiente.md",
+  "docs/whatsapp-modelos.md",
 ];
 
 const RETIRED = /docs\/(?:runbook-[\w-]+|decisao-uniques-multi-tenant)\.md/;

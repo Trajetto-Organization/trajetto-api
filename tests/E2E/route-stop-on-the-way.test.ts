@@ -51,7 +51,10 @@ let driverTokenNoTemplate: string;
 let driverTokenNoModule: string;
 
 const whatsapp = {
-  sent: [] as Array<{ phoneNumber: string; message: string }>,
+  sent: [] as Array<{
+    phoneNumber: string;
+    template: { name: string; parameters: string[] };
+  }>,
 };
 
 let cnpjSeq = 0;
@@ -300,7 +303,8 @@ beforeAll(async () => {
       businessId: CARRIER_A,
       topic: "ON_THE_WAY",
       channel: "WHATSAPP",
-      body: "{{destinatario}}, o motorista está a caminho. {{link}} Sair: {{link_descadastro}}",
+      // The WhatsApp row is the moment's switch (plan of 02/11/2026, B3).
+      body: "",
     },
   });
 
@@ -310,7 +314,7 @@ beforeAll(async () => {
         businessId: CARRIER_NO_TEMPLATE,
         topic,
         channel: "WHATSAPP",
-        body: `Momento ${topic}. {{link}} Sair: {{link_descadastro}}`,
+        body: "",
       },
     });
   }
@@ -320,7 +324,10 @@ beforeAll(async () => {
 
   container.registerInstance("WhatsAppProvider", {
     isConfigured: () => true,
-    sendMessage: async (props: { phoneNumber: string; message: string }) => {
+    sendMessage: async (props: {
+      phoneNumber: string;
+      template: { name: string; parameters: string[] };
+    }) => {
       whatsapp.sent.push(props);
       return { success: true, messageId: `wamid.${randomUUID()}` };
     },
@@ -700,9 +707,9 @@ describe("the message to the person waiting", () => {
     );
 
     expect(sent).toHaveLength(1);
-    expect(sent[0].message).toContain(
-      "Padaria Central, o motorista está a caminho.",
-    );
+    // Plan of 02/11/2026 (B2): the fixed "a caminho" template.
+    expect(sent[0].template.name).toBe("trajetto_cliente_a_caminho");
+    expect(sent[0].template.parameters[0]).toBe("Padaria Central");
   });
 
   it("does not go out when the company wrote no ON_THE_WAY template", async () => {

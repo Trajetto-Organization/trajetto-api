@@ -19,10 +19,6 @@ import type {
 
 import { callerNotFound } from "@/shared/delivery/caller-not-found";
 import { sendCatalogChangedEvent } from "@/websocket";
-import {
-  WHATSAPP_BODY_MAX,
-  minimumWhatsAppLength,
-} from "@/shared/delivery/whatsapp-body";
 
 /**
  * Parses a template for the save, turning a syntax error into the 400 the
@@ -52,7 +48,13 @@ interface SaveMessageTemplateRequest {
   channel: "EMAIL" | "WHATSAPP";
 
   subject: string | null;
-  body: string;
+
+  /**
+   * The e-mail's text. Ignored on WhatsApp (plan of 02/11/2026, B3), which
+   * goes out as Meta's fixed template: the web before this release still
+   * sends one there, and it is neither refused nor stored.
+   */
+  body?: string | null;
 
   is_active: boolean;
 }
@@ -68,6 +70,10 @@ interface SaveMessageTemplateRequest {
  * validating them at all. A dispatcher who typed `{{motorista}}` has to find
  * out in the form — the alternative is a customer receiving a message with a
  * blank where a word should be, days later, with nobody able to say why.
+ *
+ * WhatsApp is only the moment's switch (plan of 02/11/2026, B3, decision
+ * D34): the text is the fixed template approved by Meta, with the "Parar de
+ * receber" button built in, so there is nothing of the company's to check.
  */
 @injectable()
 class SaveMessageTemplateUseCase {
@@ -93,6 +99,65 @@ class SaveMessageTemplateUseCase {
 
     assertDispatcher(findUser);
     assertTenantAccess(findUser, businessId);
+
+    const saved =
+      channel === "WHATSAPP"
+        ? await this.saveWhatsAppSwitch(businessId, topic, is_active)
+        : await this.saveEmail(businessId, topic, subject, body, is_active);
+
+    // Another dispatcher with the editor open sees the saved state.
+    sendCatalogChangedEvent(businessId, "message_template");
+
+    return saved;
+  }
+
+  /**
+   * The WhatsApp row is the switch of the moment and nothing else. Its body
+   * column was loosened in 20261102120800 (nullable-expand), and in THIS
+   * release it is still never written NULL: the image before this one reads
+   * a WhatsApp row's body as a string, and a rollback must find one. So the
+   * row keeps whatever text it had, or '' when it is new; the next release
+   * writes NULL and clears the old texts (contract phase).
+   */
+  private async saveWhatsAppSwitch(
+    businessId: string,
+    topic: DeliveryMessageTopic,
+    is_active: boolean,
+  ): Promise<DeliveryMessageTemplateRecord> {
+    const rows = await this.templates.listByBusiness(businessId);
+
+    const existing = rows.find(
+      (row) => row.topic === topic && row.channel === "WHATSAPP",
+    );
+
+    return this.templates.save({
+      businessId,
+      topic,
+      channel: "WHATSAPP",
+      // WhatsApp carries no subject, and storing one would show a field in
+      // the editor that never reaches anybody.
+      subject: null,
+      body: existing?.body ?? "",
+      is_active,
+    });
+  }
+
+  private async saveEmail(
+    businessId: string,
+    topic: DeliveryMessageTopic,
+    subject: string | null,
+    body: string | null | undefined,
+    is_active: boolean,
+  ): Promise<DeliveryMessageTemplateRecord> {
+    // The schema already demands it; repeated here as the authority for any
+    // other caller. The database's CHECK would refuse it anyway.
+    if (!body || body.trim().length === 0) {
+      throw new AppError(
+        "O texto da mensagem é obrigatório.",
+        400,
+        "TEMPLATE_BODY_REQUIRED",
+      );
+    }
 
     // Parsed, not pattern-matched. A regex for `{{name}}` let every other
     // Handlebars form through — partials, blocks, helpers with arguments —
@@ -135,50 +200,14 @@ class SaveMessageTemplateUseCase {
       );
     }
 
-    // A message with no way out is a message that earns a spam complaint, and
-    // the company that wrote it will not be the one Meta suspends first.
-    // Read from the parsed template: a substring check was satisfied by the
-    // link inside a comment, which the customer never receives.
-    if (
-      channel === "WHATSAPP" &&
-      !bodyInspection.used.includes("link_descadastro")
-    ) {
-      throw new AppError(
-        "A mensagem de WhatsApp precisa incluir {{link_descadastro}}, para que o destinatário possa parar de receber.",
-        400,
-        "MISSING_OPT_OUT_LINK",
-      );
-    }
-
-    // The form counts the TEMPLATE's characters; each link then grows by
-    // about a hundred. Past the cap the company's text would be cut on every
-    // single send — the send keeps the opt-out link, but not their words.
-    if (
-      channel === "WHATSAPP" &&
-      minimumWhatsAppLength(body) > WHATSAPP_BODY_MAX
-    ) {
-      throw new AppError(
-        `Com os links, a mensagem de WhatsApp passa de ${WHATSAPP_BODY_MAX} caracteres e seria cortada. Encurte o texto.`,
-        400,
-        "WHATSAPP_TEMPLATE_TOO_LONG",
-      );
-    }
-
-    const saved = await this.templates.save({
+    return this.templates.save({
       businessId,
       topic,
-      channel,
-      // WhatsApp carries no subject, and storing one would show a field in the
-      // editor that never reaches anybody.
-      subject: channel === "WHATSAPP" ? null : subject,
+      channel: "EMAIL",
+      subject,
       body,
       is_active,
     });
-
-    // Another dispatcher with the editor open sees the saved text.
-    sendCatalogChangedEvent(businessId, "message_template");
-
-    return saved;
   }
 }
 

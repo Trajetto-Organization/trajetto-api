@@ -1,5 +1,8 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 
+import { CUSTOMER_WHATSAPP_TEMPLATES } from "@/shared/delivery/customer-whatsapp-templates";
+import { INTERNAL_WHATSAPP_TEMPLATES } from "@/shared/notifications/whatsapp-templates";
+
 /**
  * Reading what Meta posts to the status webhook. Pure, so the parts that
  * decide whether a body is trusted and what it says can be proven without a
@@ -7,8 +10,9 @@ import { createHmac, timingSafeEqual } from "node:crypto";
  *
  * Shape: developers.facebook.com/docs/whatsapp/cloud-api/webhooks/components
  * — `entry[].changes[]` with `field: "messages"` carrying `value.statuses[]`,
- * and `field: "message_template_status_update"` carrying a template's new
- * state (APPROVED, PAUSED, DISABLED...).
+ * `field: "message_template_status_update"` carrying a template's new
+ * state (APPROVED, PAUSED, DISABLED...), and `field: "template_category_update"`
+ * carrying a recategorization (plan of 02/11/2026, B7).
  */
 
 /** One status Meta reported for one message. */
@@ -43,6 +47,23 @@ interface MetaTemplateUpdate {
    * The entry's `time`: when Meta says it happened. A callback Meta
    * redelivers after an outage on our side can arrive hours later.
    */
+  occurredAt: Date | null;
+}
+
+/**
+ * Meta moved a template to another category (UTILITY → MARKETING, say). It
+ * announces it a day ahead (`correct_category`) and when it happens
+ * (`new_category`, with `previous_category`).
+ */
+interface MetaCategoryUpdate {
+  templateName: string | null;
+  language: string | null;
+  previousCategory: string | null;
+  newCategory: string | null;
+
+  /** The notice a day ahead, not the change itself. */
+  announced: boolean;
+
   occurredAt: Date | null;
 }
 
@@ -200,6 +221,63 @@ function extractMetaTemplateUpdates(body: unknown): MetaTemplateUpdate[] {
 }
 
 /**
+ * Recategorizations in a callback body (plan of 02/11/2026, B7). Anything
+ * malformed is skipped, like the other readers here.
+ */
+function extractMetaCategoryUpdates(body: unknown): MetaCategoryUpdate[] {
+  const entries = (body as { entry?: unknown })?.entry;
+
+  if (!Array.isArray(entries)) return [];
+
+  return entries.flatMap((entry) => {
+    const seconds = Number((entry as { time?: unknown })?.time);
+    const occurredAt =
+      Number.isFinite(seconds) && seconds > 0 ? new Date(seconds * 1000) : null;
+
+    return changesOf({ entry: [entry] })
+      .filter((change) => change.field === "template_category_update")
+      .map((change) => {
+        const value = (change.value ?? {}) as Record<string, unknown>;
+        const newCategory = text(value.new_category);
+        const correctCategory = text(value.correct_category);
+
+        return {
+          templateName: text(value.message_template_name),
+          language: text(value.message_template_language),
+          previousCategory: text(value.previous_category),
+          newCategory: (newCategory ?? correctCategory)?.toUpperCase() ?? null,
+          announced: !newCategory && Boolean(correctCategory),
+          occurredAt,
+        };
+      });
+  });
+}
+
+/** Every template name the code sends, internal and customer. */
+const OUR_TEMPLATES = new Set<string>([
+  ...Object.values(INTERNAL_WHATSAPP_TEMPLATES).map((t) => t.name),
+  ...Object.values(CUSTOMER_WHATSAPP_TEMPLATES).map((t) => t.name),
+]);
+
+/**
+ * The updates that must raise an alarm: one of OUR templates, in our
+ * language (pt_BR, or a callback without one), leaving UTILITY. A template
+ * of the account the code never sends is somebody else's business.
+ */
+function templateCategoryAlarms(
+  updates: MetaCategoryUpdate[],
+): MetaCategoryUpdate[] {
+  return updates.filter(
+    (update) =>
+      update.templateName !== null &&
+      OUR_TEMPLATES.has(update.templateName) &&
+      (!update.language || update.language === "pt_BR") &&
+      update.newCategory !== null &&
+      update.newCategory !== "UTILITY",
+  );
+}
+
+/**
  * How far along a message is, as Meta reports it. A status only ever replaces
  * a lower one: callbacks arrive out of order, and a late 'sent' must not undo
  * a 'read'. 'failed' is final.
@@ -213,10 +291,12 @@ const META_STATUS_RANK: Record<string, number> = {
 
 export {
   META_STATUS_RANK,
+  extractMetaCategoryUpdates,
   extractMetaStatuses,
   extractMetaTemplateUpdates,
   isMetaVerifyTokenValid,
+  templateCategoryAlarms,
   verifyMetaSignature,
 };
 
-export type { MetaStatusReport, MetaTemplateUpdate };
+export type { MetaCategoryUpdate, MetaStatusReport, MetaTemplateUpdate };

@@ -206,6 +206,20 @@ const proofDocumentResponses = {
         .describe(
           "A página pública de verificação, não o arquivo. Uma porta só, uma história só sobre o documento ser legítimo.",
         ),
+
+      sameStop: z
+        .array(
+          z.object({
+            invoiceNumber: z.string().nullable(),
+            code: z.string().nullable(),
+            status: z.string(),
+            statusLabel: z.string(),
+            deliveredAt: isoDateTime.nullable(),
+          }),
+        )
+        .describe(
+          "As outras entregas da mesma visita (mesmo endereço e mesmo destinatário, na rota atual): a mensagem ao cliente sai uma por parada, com o link de uma delas, e a página lista as demais. Vazio quando a entrega é a única da parada.",
+        ),
     }),
   }),
 
@@ -225,11 +239,38 @@ const proofDocumentResponses = {
         topic: z.enum(["DISPATCHED", "ON_THE_WAY", "DELIVERED", "FAILED"]),
         channel: z.string(),
         subject: z.string().nullable(),
-        body: z.string(),
+        body: z
+          .string()
+          .nullable()
+          .describe(
+            "Texto da mensagem. Sempre presente no e-mail; no WhatsApp, que sai por modelo fixo aprovado pela Meta, pode vir nulo.",
+          ),
         is_active: z.boolean(),
         businessId: z.string(),
       }),
     ),
+    whatsapp_previews: z
+      .array(
+        z.object({
+          topic: z.enum(["DISPATCHED", "ON_THE_WAY", "DELIVERED", "FAILED"]),
+          template: z
+            .string()
+            .describe("Nome do modelo aprovado pela Meta para o momento."),
+          body: z
+            .string()
+            .describe(
+              "Texto fixo do modelo, com cada variável entre colchetes (ex.: [destinatário]).",
+            ),
+          buttons: z
+            .array(z.string())
+            .describe(
+              'Rótulos dos botões do modelo: "Acompanhar entrega" e "Parar de receber".',
+            ),
+        }),
+      )
+      .describe(
+        "A prévia fixa do WhatsApp de cada um dos quatro momentos, com linha gravada ou não. No WhatsApp a empresa só liga ou desliga o momento; o texto é o do modelo aprovado pela Meta.",
+      ),
   }),
 
   genericError: z.object({ message: z.string() }),

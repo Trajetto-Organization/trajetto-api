@@ -146,7 +146,8 @@ describe("whether anybody is told", () => {
 });
 
 describe("what it says", () => {
-  it("renders the company's ON_THE_WAY template with the way out", async () => {
+  // Plan of 02/11/2026 (B2): the fixed template trajetto_cliente_a_caminho.
+  it("goes out as the fixed ON_THE_WAY template, with the way out in its button", async () => {
     await seed("ON_THE_WAY", "WHATSAPP");
 
     const [recipient] = await deliveryOnTheWayPolicy.resolveExternalRecipients!(
@@ -161,10 +162,16 @@ describe("what it says", () => {
       "WHATSAPP",
     );
 
-    expect(rendered!.body).toContain(
-      "Padaria Central Ltda, o motorista da Silva Log está a caminho.",
-    );
-    expect(rendered!.body).toContain(recipient.access_token);
+    expect(rendered!.whatsapp!.name).toBe("trajetto_cliente_a_caminho");
+    expect(rendered!.whatsapp!.parameters.slice(0, 2)).toEqual([
+      "Padaria Central Ltda",
+      "Silva Log",
+    ]);
+    expect(rendered!.whatsapp!.urlButtonSuffixes).toEqual([
+      recipient.access_token,
+      recipient.access_token,
+    ]);
+    expect(rendered!.body).toContain("está a caminho do seu endereço");
   });
 });
 

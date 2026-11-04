@@ -11,13 +11,32 @@ import {
  * client and the pipeline are stand-ins; the service is the real one.
  */
 
-const afterCommit = vi.hoisted(() => ({ created: [] as unknown[] }));
+const afterCommit = vi.hoisted(() => ({
+  created: [] as unknown[],
+  many: [] as Array<{ data: unknown[]; skipDuplicates?: boolean }>,
+  // The keys the table already holds: createMany skips them, as Postgres
+  // does with ON CONFLICT DO NOTHING.
+  keys: new Set<string>(),
+}));
 const woken = vi.hoisted(() => ({ count: 0 }));
 
 vi.mock("@/../infra/database", () => ({
   default: {
     domainOutboxEvent: {
       create: async (args: unknown) => void afterCommit.created.push(args),
+      createMany: async (args: {
+        data: Array<{ eventKey: string }>;
+        skipDuplicates?: boolean;
+      }) => {
+        afterCommit.many.push(args);
+
+        const fresh = args.data.filter(
+          (row) => !afterCommit.keys.has(row.eventKey),
+        );
+        for (const row of fresh) afterCommit.keys.add(row.eventKey);
+
+        return { count: fresh.length };
+      },
     },
   },
 }));
@@ -50,6 +69,8 @@ const settle = () => new Promise((resolve) => setTimeout(resolve, 30));
 beforeEach(() => {
   created.length = 0;
   afterCommit.created.length = 0;
+  afterCommit.many.length = 0;
+  afterCommit.keys.clear();
   woken.count = 0;
 });
 
@@ -131,6 +152,53 @@ describe("OutboxService.publishAfterCommit", () => {
     await settle();
 
     expect(afterCommit.created).toHaveLength(1);
+    expect(woken.count).toBe(1);
+  });
+});
+
+/**
+ * A notice whose only write is the event (wave 3.7: a driver's route record
+ * with no active branch, told to the dispatcher once per route and moment).
+ * The insert skips a key already there, so retries never fail on the unique
+ * key and never write a second row; only a written row wakes the pipeline.
+ */
+describe("OutboxService.publishOnce", () => {
+  const notice = {
+    ...base,
+    eventKey: "route.record_branch_missing:route-1:ROUTE_START",
+    businessId: "business-1",
+    actorId: "driver-user-1",
+  };
+
+  it("writes the row once per key, skipping duplicates, and says whether it wrote", async () => {
+    const outbox = new OutboxService();
+
+    const first = await withoutRequestContext(() =>
+      outbox.publishOnce(notice as never),
+    );
+    const again = await withoutRequestContext(() =>
+      outbox.publishOnce(notice as never),
+    );
+    await settle();
+
+    expect([first, again]).toEqual([true, false]);
+    expect(afterCommit.many).toHaveLength(2);
+    expect(afterCommit.many[0]).toEqual({
+      data: [
+        {
+          eventKey: notice.eventKey,
+          topic: "delivery.created",
+          aggregateType: "Delivery",
+          aggregateId: "delivery-1",
+          businessId: "business-1",
+          actorId: "driver-user-1",
+          payload: { deliveryId: "delivery-1" },
+          correlationId: null,
+        },
+      ],
+      skipDuplicates: true,
+    });
+    // Only the row that was written woke the pipeline.
     expect(woken.count).toBe(1);
   });
 });

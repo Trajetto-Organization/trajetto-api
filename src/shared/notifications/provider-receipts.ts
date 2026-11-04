@@ -5,6 +5,8 @@ import { logger } from "@/shared/logging/logger";
 
 import {
   META_STATUS_RANK,
+  templateCategoryAlarms,
+  type MetaCategoryUpdate,
   type MetaStatusReport,
   type MetaTemplateUpdate,
 } from "@/shared/providers/whatsapp-provider/meta-webhook";
@@ -223,6 +225,36 @@ async function warnAboutRepeatedSends(
  * pause (see MetaCloudApiProvider), which the route now feeds from this same
  * callback (template-lane.ts), is what keeps the rows from failing.
  */
+/**
+ * Meta moved templates to another category (plan of 02/11/2026, B7). One of
+ * ours leaving UTILITY is an ERROR line — the alert: it is billed and
+ * treated as Marketing from then on, for every tenant. The rest is info.
+ */
+function logTemplateCategoryUpdates(updates: MetaCategoryUpdate[]): void {
+  const alarms = new Set(templateCategoryAlarms(updates));
+
+  for (const update of updates) {
+    const fields = {
+      template: update.templateName,
+      language: update.language,
+      previousCategory: update.previousCategory,
+      newCategory: update.newCategory,
+      announced: update.announced,
+    };
+
+    if (alarms.has(update)) {
+      log.error(
+        fields,
+        update.announced
+          ? "whatsapp template will be recategorized by Meta: review its text before it leaves UTILITY"
+          : "whatsapp template recategorized by Meta out of UTILITY",
+      );
+    } else {
+      log.info(fields, "whatsapp template category changed");
+    }
+  }
+}
+
 function logTemplateUpdates(updates: MetaTemplateUpdate[]): void {
   for (const update of updates) {
     const fields = {
@@ -273,6 +305,7 @@ export {
   EXPO_STATUS_RANK,
   advanceProviderStatus,
   furthestPerDelivery,
+  logTemplateCategoryUpdates,
   logTemplateUpdates,
   recordExpoTickets,
   recordMetaStatuses,

@@ -17,9 +17,15 @@ import { workerHeartbeat } from "@/shared/health/worker-heartbeat";
 import { IMailProvider } from "@/shared/providers/mail-provider/IMail-provider";
 import { MailDeliveryError } from "@/shared/providers/mail-provider/errors/mail-delivery-error";
 import { InvalidMessageTemplateError } from "@/shared/delivery/message-template";
+import type { IExternalRecipientRepository } from "@/modules/delivery/repositories/IExternal-recipient-repository";
+import { SUPPRESSED_ADDRESS_REASON } from "./customer-message-suppression";
 
 import { getNotificationPolicy } from "./notification-policy";
 import { sendExpoPushMessages } from "./push-provider";
+import {
+  WhatsAppTemplateMismatchError,
+  prepareInternalWhatsApp,
+} from "./whatsapp-templates";
 import { recordExpoTickets } from "./provider-receipts";
 import {
   formatDeliveryError,
@@ -654,7 +660,16 @@ class NotificationPipelineService {
       const options = {
         hasInAppContent: Boolean(policy.renderInApp),
         hasEmailContent: Boolean(policy.renderInApp) && !policy.suppressEmail,
-        hasWhatsAppContent: Boolean(policy.renderWhatsApp),
+        // Asked of the render itself, per recipient (B1): a topic whose
+        // WhatsApp exists for one audience and not another (the automatic
+        // card of a service order) creates no row it could never send.
+        hasWhatsAppContent: Boolean(
+          policy.renderWhatsApp?.(payload, {
+            id: recipient.id,
+            role: recipient.role,
+            driverId: recipient.driverId,
+          }),
+        ),
         isMandatory: Boolean(policy.mandatory),
         hasPushDevice: pushOwners.has(recipient.id),
         hasStandalonePushContent: Boolean(policy.renderPush),
@@ -690,11 +705,24 @@ class NotificationPipelineService {
         continue;
       }
 
+      // The same person opted out from another delivery of this company
+      // (D38): their phone or e-mail is suppressed for every one of them.
+      const blocked = await this.suppressedChannelsOf(
+        event.businessId,
+        external,
+      );
+
       if (!external.email) {
         suppressed.push({
           externalRecipientId: external.id,
           channel: NotificationChannel.EMAIL,
           reason: "no_contact",
+        });
+      } else if (blocked.has("EMAIL")) {
+        suppressed.push({
+          externalRecipientId: external.id,
+          channel: NotificationChannel.EMAIL,
+          reason: "suppressed_address",
         });
       }
 
@@ -704,13 +732,19 @@ class NotificationPipelineService {
           channel: NotificationChannel.WHATSAPP,
           reason: "no_contact",
         });
+      } else if (blocked.has("WHATSAPP")) {
+        suppressed.push({
+          externalRecipientId: external.id,
+          channel: NotificationChannel.WHATSAPP,
+          reason: "suppressed_address",
+        });
       }
 
       // The channels follow the contact details we actually hold. No in-app,
       // no push: there is no app and no inbox. No preferences either — an
       // outsider never had a row to express one, and the way they say stop is
       // the opt-out link in the message itself.
-      if (external.email) {
+      if (external.email && !blocked.has("EMAIL")) {
         rows.push({
           outboxEventId: event.id,
           externalRecipientId: external.id,
@@ -718,7 +752,7 @@ class NotificationPipelineService {
         });
       }
 
-      if (external.telephone) {
+      if (external.telephone && !blocked.has("WHATSAPP")) {
         rows.push({
           outboxEventId: event.id,
           externalRecipientId: external.id,
@@ -1366,6 +1400,9 @@ class NotificationPipelineService {
         ...content,
         data: { ...content.data, deliveryId: delivery.id },
         collapseKey: delivery.id,
+        // The topic's validity (D41): a stale "rota liberada" is worse than
+        // none on a phone that comes back after days.
+        ttlSeconds: policy.pushTtlSeconds,
       },
       // Collapsing in transit is iPhone-only: on Android it would cap what
       // FCM keeps for an offline phone at four messages.
@@ -1502,6 +1539,15 @@ class NotificationPipelineService {
 
     this.assertStillReachable(user);
 
+    // Expansion never queues an EMAIL row for a user without an address
+    // (hasEmail); this is the e-mail removed after the row was queued, the
+    // same as a WhatsApp phone removed in between.
+    if (!user.email) {
+      throw new NonRetryableDeliveryError(
+        "Recipient no longer has an e-mail address",
+      );
+    }
+
     const rendered = policy.renderInApp(
       payload,
       { baseUrl: env.HTTP_REQUEST },
@@ -1605,12 +1651,41 @@ class NotificationPipelineService {
       );
     }
 
+    const rendered = policy.renderWhatsApp(payload, {
+      id: user.id,
+      role: user.role,
+      driverId: user.driverId,
+    });
+
+    // Expansion asked the same render before creating this row; a null now
+    // is a payload that changed meaning in between — nothing to send.
+    if (!rendered) {
+      throw new NonRetryableDeliveryError(
+        "The WhatsApp render has nothing for this recipient",
+      );
+    }
+
+    // The approved template and its fitted parameters (whatsapp-templates.ts,
+    // B1). A render that does not match its template is a bug that fails the
+    // same way on every attempt, so it is not retried.
+    let template: { name: string; parameters: string[] };
+
+    try {
+      template = prepareInternalWhatsApp(rendered);
+    } catch (error) {
+      if (error instanceof WhatsAppTemplateMismatchError) {
+        throw new NonRetryableDeliveryError(error.message);
+      }
+
+      throw error;
+    }
+
     const whatsAppProvider =
       container.resolve<IWhatsAppProvider>("WhatsAppProvider");
 
     const result = await whatsAppProvider.sendMessage({
       phoneNumber: user.whatsapp_phone,
-      message: policy.renderWhatsApp(payload),
+      template,
       // Comes back on Meta's status callbacks: every wamid of this delivery,
       // a resend after a crash included, lands in the receipts ledger.
       referenceId: delivery.id,
@@ -1663,11 +1738,13 @@ class NotificationPipelineService {
    *
    * Three things differ from the internal path and each of them is the point:
    *
-   *  - the WORDS are the company's, from their own template, not ours;
+   *  - the WORDS are the company's on the e-mail, from their own template;
+   *    on WhatsApp they are the moment's fixed template approved by Meta
+   *    (plan of 02/11/2026, B2), with the carrier's name in it;
    *  - the LINK is their tracking page, not a dashboard they cannot open;
-   *  - a missing template is a DECISION. A carrier that never wrote the
-   *    "saiu para entrega" message does not want one sent, so the delivery is
-   *    dropped as non-retryable rather than failing forever.
+   *  - a missing or switched-off row is a DECISION. A carrier that turned
+   *    the "saiu para entrega" message off does not want one sent, so the
+   *    delivery is dropped as non-retryable rather than failing forever.
    */
   private async loadExternalMessage(
     delivery: ClaimedDelivery,
@@ -1713,6 +1790,19 @@ class NotificationPipelineService {
       );
     }
 
+    // Or opted out from another delivery of this company since (D38): the
+    // phone or e-mail this channel writes to is suppressed. Asked on every
+    // attempt, so a message already queued is dropped the moment they click.
+    const blocked = await this.suppressedChannelsOf(external.businessId, {
+      email: channel === NotificationChannel.EMAIL ? external.email : null,
+      telephone:
+        channel === NotificationChannel.WHATSAPP ? external.telephone : null,
+    });
+
+    if (blocked.size > 0) {
+      throw new NonRetryableDeliveryError(SUPPRESSED_ADDRESS_REASON);
+    }
+
     // The three customer messages are separate events on separate retry
     // schedules: a "saiu para entrega" in backoff used to land after the
     // "entregue" that overtook it. Asked on every attempt, so a message still
@@ -1743,6 +1833,25 @@ class NotificationPipelineService {
     }
 
     return { external, rendered };
+  }
+
+  /**
+   * The channels a company's customers asked to stop at this contact's
+   * phone or e-mail (D38). Only customer messages ask; a company-less event
+   * has no customer to suppress.
+   */
+  private async suppressedChannelsOf(
+    businessId: string | null,
+    contact: { email: string | null; telephone: string | null },
+  ): Promise<Set<"EMAIL" | "WHATSAPP">> {
+    if (!businessId) return new Set();
+
+    return container
+      .resolve<IExternalRecipientRepository>("ExternalRecipientRepository")
+      .suppressedChannels(businessId, {
+        email: contact.email,
+        telephone: contact.telephone,
+      });
   }
 
   private async deliverExternalEmail(
@@ -1810,16 +1919,22 @@ class NotificationPipelineService {
       );
     }
 
+    // The moment's fixed template (B2). A render without it is a policy that
+    // never learnt the fixed templates — nothing a retry can fix, and never
+    // a reason to fall back to free text.
+    if (!rendered.whatsapp) {
+      throw new NonRetryableDeliveryError(
+        "Customer WhatsApp rendered without its approved template",
+      );
+    }
+
     const whatsAppProvider =
       container.resolve<IWhatsAppProvider>("WhatsAppProvider");
 
     const result = await whatsAppProvider.sendMessage({
       phoneNumber: external.telephone,
-      message: rendered.body,
+      template: rendered.whatsapp,
       referenceId: delivery.id,
-      // The customer template, when configured: a spam report on a carrier's
-      // message must not pause the template every driver depends on.
-      audience: "customer",
     });
 
     return this.whatsAppOutcome(result);

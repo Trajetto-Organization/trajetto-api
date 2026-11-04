@@ -199,6 +199,49 @@ describe("the published document, for a client of the other version", () => {
     expect(stats.required).toEqual(["pending", "recent", "overdue"]);
   });
 
+  /**
+   * Plan of 02/11/2026 (D2): the e-mail is loosened in this release and
+   * written NULL only in the next one. This release must already serve a
+   * row without one — a required field would make the serializer answer
+   * 500 to the driver's /user/me after a rollback from the next release.
+   */
+  it("serves a user without an e-mail on /user/me, with the settings optional (D2, M1)", () => {
+    const nullable = (schema: Json) =>
+      schema?.nullable === true ||
+      (Array.isArray(schema?.type) && schema.type.includes("null")) ||
+      Boolean(schema?.anyOf?.some((option: Json) => option.type === "null"));
+
+    const me = body("/user/me", "get", "200").properties.user;
+
+    expect(nullable(me.properties.email)).toBe(true);
+    // M1: the settings are new, and the app reads them as optional too.
+    expect(me.properties).toHaveProperty("businessSettings");
+    expect(me.required ?? []).not.toContain("businessSettings");
+  });
+
+  it("serves a WhatsApp template without a body on the template list (B3)", () => {
+    const nullable = (schema: Json) =>
+      schema?.nullable === true ||
+      (Array.isArray(schema?.type) && schema.type.includes("null")) ||
+      Boolean(schema?.anyOf?.some((option: Json) => option.type === "null"));
+
+    const operations = Object.entries(document.paths ?? {})
+      .filter(([path]) => path.includes("message-template"))
+      .flatMap(([, methods]) => Object.values(methods as Json) as Json[]);
+    const item = operations.flatMap((operation) =>
+      operation?.responses?.["200"]?.content?.["application/json"]?.schema
+        ?.properties?.data?.items
+        ? [
+            operation.responses["200"].content["application/json"].schema
+              .properties.data.items,
+          ]
+        : [],
+    )[0];
+
+    expect(item, "a message-template list with items").toBeDefined();
+    expect(nullable(item.properties.body)).toBe(true);
+  });
+
   it("keeps the probe fields optional: the shared provider report may predate them", () => {
     const item = body("/health/providers", "get", "200").properties.providers
       .items;

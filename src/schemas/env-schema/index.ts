@@ -59,17 +59,20 @@ const envSchema = z
     // with a clear error instead of blocking startup.
     META_WHATSAPP_ACCESS_TOKEN: z.string().optional(),
     META_WHATSAPP_PHONE_NUMBER_ID: z.string().optional(),
-    META_WHATSAPP_TEMPLATE_NAME: z.string().default("trajetto_notification"),
-    META_WHATSAPP_API_VERSION: z.string().default("v23.0"),
 
-    // The template a carrier's message to ITS customer goes out under, apart
-    // from the internal one: a customer's spam report then risks this
-    // template only. Unset (or empty), those messages keep using
-    // META_WHATSAPP_TEMPLATE_NAME, as before.
+    // Neither is read any more (plan of 02/11/2026, B1/B2/B7): every message
+    // names its own approved template — the 17 internal ones and the
+    // customer's four, by fixed names (src/shared/notifications/
+    // whatsapp-templates.ts, src/shared/delivery/customer-whatsapp-templates.ts)
+    // — and the generic one-parameter template is retired. Kept declared
+    // until the rollout is confirmed, since the environments and the CI still
+    // set them; removed from the code afterwards.
+    META_WHATSAPP_TEMPLATE_NAME: z.string().default("trajetto_notification"),
     META_WHATSAPP_CUSTOMER_TEMPLATE_NAME: z.preprocess(
       (value) => (value === "" ? undefined : value),
       z.string().optional(),
     ),
+    META_WHATSAPP_API_VERSION: z.string().default("v23.0"),
 
     // The WhatsApp Business Account that owns the templates. Read only by
     // /health/providers, to say whether each template is APPROVED; sends do
@@ -94,6 +97,17 @@ const envSchema = z
       z.string().optional(),
     ),
     META_WHATSAPP_WEBHOOK_VERIFY_TOKEN: z.preprocess(
+      (value) => (value === "" ? undefined : value),
+      z.string().optional(),
+    ),
+
+    // The Expo project's access token (expo.dev > Access tokens), sent as
+    // Bearer on every push and receipts query (plan of 02/11/2026, A8).
+    // Required by Expo only once "enhanced push security" is turned on in the
+    // project — then every call without it is refused with 401. Optional:
+    // unset, nothing changes; set it in both environments BEFORE turning the
+    // setting on (decision D43). A secret. Empty counts as absent.
+    EXPO_ACCESS_TOKEN: z.preprocess(
       (value) => (value === "" ? undefined : value),
       z.string().optional(),
     ),
@@ -246,7 +260,10 @@ const envSchema = z
      * Reverse geocoding of the proof's GPS fix (design §5.1): a Nominatim-
      * compatible base URL (our own container or a commercial provider).
      * Unset: the PDF prints the delivery's registered address, labelled as
-     * such. The key is a SECRET.
+     * such. The same provider's forward search gives the deliveries'
+     * addresses their point (job geocode-deliveries, plan E1): unset, the
+     * geofence only judges deliveries with typed or map-pinned coordinates.
+     * The key is a SECRET.
      */
     REVERSE_GEOCODER_URL: z.preprocess(
       (value) => (value === "" ? undefined : value),
@@ -267,6 +284,19 @@ const envSchema = z
     REVERSE_GEOCODER_TIMEOUT_MS: z.preprocess(
       (value) => (value === "" ? undefined : value),
       z.coerce.number().int().min(200).default(2500),
+    ),
+
+    /**
+     * Plan of 02/11/2026 (E1; decision D15): how many delivery addresses
+     * the geocode-deliveries job may look up per UTC day, across every
+     * replica, on the same provider as the reverse lookup (REVERSE_GEOCODER_*,
+     * which must be set for the job to run). The provider has a quota and a
+     * price shared with the proof's reverse lookup (LocationIQ's free tier:
+     * 5,000 a day), so the default leaves room for it. 0 switches the job off.
+     */
+    DELIVERY_GEOCODING_DAILY_BUDGET: z.preprocess(
+      (value) => (value === "" ? undefined : value),
+      z.coerce.number().int().min(0).max(1_000_000).default(2000),
     ),
 
     // AI readings: the local OCR service trajetto-ai (ADR 0010, 05/10/2026).

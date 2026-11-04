@@ -8,7 +8,10 @@ import type {
   RenderedExternalMessage,
 } from "../notification-types";
 
-import type { IExternalRecipientRepository } from "@/modules/delivery/repositories/IExternal-recipient-repository";
+import type {
+  DeliveryContactState,
+  IExternalRecipientRepository,
+} from "@/modules/delivery/repositories/IExternal-recipient-repository";
 import type {
   DeliveryMessageTopic,
   IDeliveryMessageTemplateRepository,
@@ -18,10 +21,11 @@ import {
   renderDeliveryMessage,
   type DeliveryMessageVariables,
 } from "@/shared/delivery/message-template";
+import { customerLinks } from "@/shared/delivery/whatsapp-body";
 import {
-  customerLinks,
-  fitWhatsAppBody,
-} from "@/shared/delivery/whatsapp-body";
+  buildCustomerWhatsApp,
+  deliveryReference,
+} from "@/shared/delivery/customer-whatsapp-templates";
 
 import type { IBusinessRepository } from "@/modules/business/repositories/IBusiness-repository";
 
@@ -83,13 +87,31 @@ function buildVariables(
   recipient: ExternalRecipient,
   carrierName: string,
   timeZone?: string | null,
+
+  /** Every delivery of the stop the message speaks of (B6), when several. */
+  members?: ReadonlyArray<{
+    invoiceNumber: string | null;
+    code: string | null;
+  }>,
 ): DeliveryMessageVariables {
+  const several = members && members.length > 1 ? members : null;
+
+  const joined = (values: Array<string | null>) =>
+    [
+      ...new Set(values.filter((value): value is string => Boolean(value))),
+    ].join(", ");
+
   return {
     destinatario: recipient.name ?? payload.recipientName,
     transportadora: carrierName,
 
-    nota: payload.invoiceNumber ?? "",
-    pedido: payload.code ?? "",
+    // One message per stop lists every NF-e (and order) of the stop.
+    nota: several
+      ? joined(several.map((member) => member.invoiceNumber))
+      : (payload.invoiceNumber ?? ""),
+    pedido: several
+      ? joined(several.map((member) => member.code))
+      : (payload.code ?? ""),
 
     cidade: payload.city,
     uf: payload.uf,
@@ -138,6 +160,68 @@ function customerMessageStillTrue(
   return !OVERTAKEN_AT[topic].has(deliveryStatus);
 }
 
+interface StopMember {
+  deliveryId: string;
+  invoiceNumber: string | null;
+  code: string | null;
+  state: DeliveryContactState;
+}
+
+/**
+ * The deliveries a message speaks of, as they are NOW: one, or every NF-e of
+ * the stop (B6). A delivery deleted since is left out.
+ */
+async function stopMembers(
+  payload: DeliveryCustomerPayload,
+  repository: IExternalRecipientRepository,
+): Promise<StopMember[]> {
+  const listed = payload.deliveries?.length
+    ? payload.deliveries
+    : [
+        {
+          deliveryId: payload.deliveryId,
+          invoiceNumber: payload.invoiceNumber,
+          code: payload.code,
+        },
+      ];
+
+  // The merge of "entregue" can list one twice (a proof replayed inside the
+  // window): the first entry wins.
+  const unique = [
+    ...new Map(listed.map((member) => [member.deliveryId, member])).values(),
+  ];
+
+  const states = await Promise.all(
+    unique.map((member) => repository.findDeliveryState(member.deliveryId)),
+  );
+
+  return unique.flatMap((member, index) => {
+    const state = states[index];
+
+    return state
+      ? [
+          {
+            deliveryId: member.deliveryId,
+            invoiceNumber: member.invoiceNumber ?? null,
+            code: member.code ?? null,
+            state,
+          },
+        ]
+      : [];
+  });
+}
+
+/**
+ * Whose link the stop's message carries: the lowest delivery id of the stop,
+ * so "saiu", "a caminho" and "entregue" of one visit point at the same
+ * tracking page — which lists the stop's other deliveries (B6).
+ */
+function anchorOf(members: StopMember[]): StopMember {
+  return members.reduce((lowest, member) =>
+    member.deliveryId < lowest.deliveryId ? member : lowest,
+  );
+}
+
 /**
  * Creates the recipient row if this delivery has never had one, and refuses to
  * invent contact details it does not have.
@@ -160,17 +244,21 @@ async function resolveCustomer(
   const repository =
     deps.externalRecipientRepository as IExternalRecipientRepository;
 
-  const current = await repository.findDeliveryState(payload.deliveryId);
+  const members = await stopMembers(payload, repository);
 
   // Deleted since: nobody to tell, and no row to create for it.
-  if (!current) return [];
+  if (members.length === 0) return [];
+
+  const anchor = anchorOf(members);
+  const current = anchor.state;
 
   if (!current.email && !current.telephone) return [];
 
-  // A channel without the company's active template for this moment is a
+  // A channel without the company's active row for this moment is a
   // DECISION not to send (DLVP-NOTIF-2). Deciding it here, before any row
   // exists, is what keeps it out of the failure counters: a row created for
   // it could only ever end as a non-retryable "no active template" failure.
+  // On WhatsApp the row is only the on/off switch (B3): the text is fixed.
   const templates =
     deps.messageTemplateRepository as IDeliveryMessageTemplateRepository;
 
@@ -183,7 +271,8 @@ async function resolveCustomer(
       : Promise.resolve(null),
   ]);
 
-  const email = emailTemplate ? current.email : null;
+  // An e-mail row without text (impossible by the CHECK) sends nothing.
+  const email = emailTemplate?.body ? current.email : null;
   const telephone = whatsappTemplate ? current.telephone : null;
 
   if (!email && !telephone) {
@@ -196,22 +285,29 @@ async function resolveCustomer(
   }
 
   const recipient = (await repository.ensureForDelivery({
-    deliveryId: payload.deliveryId,
+    deliveryId: anchor.deliveryId,
     businessId: payload.businessId,
     name: current.name || payload.recipientName,
     email: current.email,
     telephone: current.telephone,
   })) as unknown as ExternalRecipient;
 
+  // Somebody who asked any message of this stop to stop has asked them all:
+  // an earlier message of the stop may have carried another delivery's link.
+  const optedOut =
+    recipient.opted_out_at ??
+    (members.some((member) => member.state.optedOut) ? new Date() : null);
+
   // The stored contact stays whole (the next moment may have a template for
   // the other channel); only the channels this moment can use are offered.
-  return [{ ...recipient, email, telephone }];
+  return [{ ...recipient, email, telephone, opted_out_at: optedOut }];
 }
 
 /**
  * Why this message should no longer go out, or null. Asked before every
  * attempt: a "saiu para entrega" held in backoff must not land after the
- * "entregue" that overtook it (GAP2-5).
+ * "entregue" that overtook it (GAP2-5). For a stop's message (B6), only once
+ * every delivery it speaks of has moved past it.
  */
 async function customerSupersededReason(
   topic: DeliveryMessageTopic,
@@ -221,12 +317,16 @@ async function customerSupersededReason(
   const repository =
     deps.externalRecipientRepository as IExternalRecipientRepository;
 
-  const current = await repository.findDeliveryState(payload.deliveryId);
+  const members = await stopMembers(payload, repository);
 
-  if (!current) return "A entrega não existe mais";
+  if (members.length === 0) return "A entrega não existe mais";
 
-  if (!customerMessageStillTrue(topic, current.status)) {
-    return `Mensagem ${topic} superada: a entrega está ${current.status}`;
+  if (
+    members.every(
+      (member) => !customerMessageStillTrue(topic, member.state.status),
+    )
+  ) {
+    return `Mensagem ${topic} superada: a entrega está ${anchorOf(members).state.status}`;
   }
 
   return null;
@@ -248,10 +348,16 @@ async function renderCustomer(
     channel,
   );
 
-  // Null, not a default sentence. A carrier that has not written this message
-  // does not want one sent in their name. Read BEFORE the business, so a
-  // company with no template costs one query instead of two.
+  // Null, not a default sentence. A carrier that switched this message off
+  // (or never wrote its e-mail) does not want one sent in their name. Read
+  // BEFORE the business, so a company without it costs one query, not two.
   if (!template) return null;
+
+  // The e-mail is the company's text; without it there is nothing to send.
+  // A WhatsApp row's body is never read (B3): its text is Meta's template.
+  const emailBody = template.body;
+
+  if (channel !== "WHATSAPP" && emailBody === null) return null;
 
   const businesses = deps.businessRepository as IBusinessRepository;
 
@@ -260,28 +366,58 @@ async function renderCustomer(
   const carrierName =
     business?.fantasy_name?.trim() || business?.corporate_reason || "";
 
+  const timeZone = (business as { timezone?: string | null } | null)?.timezone;
+
+  // The deliveries of the stop the message still speaks of (B6).
+  const members = await stopMembers(
+    payload,
+    deps.externalRecipientRepository as IExternalRecipientRepository,
+  );
+
+  const live = members.filter((member) =>
+    customerMessageStillTrue(topic, member.state.status),
+  );
+
+  const spoken = live.length > 0 ? live : members;
+
   const variables = buildVariables(
     payload,
     recipient,
     carrierName,
-    (business as { timezone?: string | null } | null)?.timezone,
+    timeZone,
+    spoken,
   );
+
+  if (channel === "WHATSAPP") {
+    const whatsapp = buildCustomerWhatsApp(topic, {
+      recipientName: variables.destinatario,
+      carrierName,
+      reference: deliveryReference(
+        spoken.length > 0
+          ? spoken
+          : [{ invoiceNumber: payload.invoiceNumber, code: payload.code }],
+      ),
+      deliveredAt: variables.data_entrega,
+      accessToken: recipient.access_token,
+    });
+
+    return {
+      subject: "",
+      body: whatsapp.preview,
+      link: variables.link,
+      whatsapp: {
+        name: whatsapp.name,
+        parameters: whatsapp.parameters,
+        urlButtonSuffixes: whatsapp.urlButtonSuffixes,
+      },
+    };
+  }
 
   return {
     subject: template.subject
       ? renderDeliveryMessage(template.subject, variables)
       : `${carrierName} — atualização da sua entrega`,
-
-    // WhatsApp's body is capped, and the provider's cut takes the END — where
-    // the opt-out link sits. Fitted here instead: the company's text is cut,
-    // the way out never is.
-    body:
-      channel === "WHATSAPP"
-        ? fitWhatsAppBody(
-            renderDeliveryMessage(template.body, variables),
-            variables.link_descadastro,
-          )
-        : renderDeliveryMessage(template.body, variables),
+    body: renderDeliveryMessage(emailBody as string, variables),
     link: variables.link,
   };
 }

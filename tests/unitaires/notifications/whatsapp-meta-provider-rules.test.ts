@@ -59,6 +59,31 @@ describe("normalizePhoneNumber", () => {
       "5511991234567",
     );
   });
+
+  /**
+   * NF-e and ERP exports often keep the dialling prefix: the trunk "0" in
+   * front of the area code, or the international "00" in front of the
+   * country code. Kept, "011 99123-4567" went to Meta as 011991234567, a
+   * destination that does not exist. No country code and no Brazilian area
+   * code starts with 0, so leading zeros are never part of the number.
+   */
+  it("drops the trunk and international dialling prefixes before adding the country code", () => {
+    expect(normalizePhoneNumber("011 99123-4567")).toBe("5511991234567");
+    expect(normalizePhoneNumber("0 11 3123-4567")).toBe("551131234567");
+    expect(normalizePhoneNumber("(055) 99123-4567")).toBe("5555991234567");
+    expect(normalizePhoneNumber("0055 11 99123-4567")).toBe("5511991234567");
+    expect(normalizePhoneNumber("00 351 912 345 678")).toBe("351912345678");
+  });
+
+  /**
+   * The ninth digit is only the opt-out's comparison key
+   * (normalizeSuppressionPhone): the sender writes the line as typed, so an
+   * old 8-digit mobile is not rewritten into a number nobody confirmed.
+   */
+  it("never adds the ninth digit to an old 8-digit mobile", () => {
+    expect(normalizePhoneNumber("011 9123-4567")).toBe("551191234567");
+    expect(normalizePhoneNumber("(11) 9123-4567")).toBe("551191234567");
+  });
 });
 
 describe("classifyMetaError", () => {

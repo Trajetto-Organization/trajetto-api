@@ -87,6 +87,17 @@ function buildTrackingView(
     proofUrl: source.proofToken
       ? `${base}/verificar/${source.proofToken}`
       : null,
+
+    // The same visit's other NF-e (B6): same door, same person.
+    sameStop: (source.sameStop ?? []).map((sibling) => ({
+      invoiceNumber: sibling.invoice_number,
+      code: sibling.code,
+      status: sibling.status as DeliveryStatus,
+      statusLabel:
+        DELIVERY_STATUS_LABELS[sibling.status as DeliveryStatus] ??
+        sibling.status,
+      deliveredAt: sibling.delivered_at,
+    })),
   };
 }
 

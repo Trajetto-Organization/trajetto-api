@@ -1,6 +1,19 @@
+/**
+ * One approved template, ready to go: its name, its body parameters in order
+ * ({{1}}, {{2}}…), already fitted by the registry (whatsapp-templates.ts),
+ * and the suffix of each URL button in order (index 0, 1…). Plan of
+ * 02/11/2026, B1/B2: every message has its own template — there is no more
+ * generic one with the whole text in a single parameter.
+ */
+interface WhatsAppTemplateMessage {
+  name: string;
+  parameters: string[];
+  urlButtonSuffixes?: string[];
+}
+
 interface SendMessageProps {
   phoneNumber: string;
-  message: string;
+  template: WhatsAppTemplateMessage;
 
   /**
    * The notification delivery this send belongs to. Travels to Meta as
@@ -10,14 +23,6 @@ interface SendMessageProps {
    * only way a duplicate becomes visible (Meta has no idempotency key).
    */
   referenceId?: string;
-
-  /**
-   * Who reads it. `customer` is a carrier writing to its own customer, which
-   * goes out under the customer template when one is configured, so a spam
-   * report there cannot pause the template the internal notices use.
-   * Absent means `internal`.
-   */
-  audience?: "internal" | "customer";
 }
 
 /**
@@ -55,4 +60,4 @@ interface WhatsAppResponse<T = unknown> {
   data?: T;
 }
 
-export { SendMessageProps, WhatsAppResponse };
+export { SendMessageProps, WhatsAppResponse, WhatsAppTemplateMessage };

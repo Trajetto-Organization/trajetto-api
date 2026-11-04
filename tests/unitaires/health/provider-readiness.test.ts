@@ -20,6 +20,11 @@ import {
   type ReadinessDeps,
   type ReadinessEnv,
 } from "@/shared/health/provider-readiness";
+import { CUSTOMER_WHATSAPP_TEMPLATES } from "@/shared/delivery/customer-whatsapp-templates";
+import {
+  INTERNAL_WHATSAPP_TEMPLATES,
+  type WhatsAppTemplateDefinition,
+} from "@/shared/notifications/whatsapp-templates";
 
 /**
  * Provider readiness (contract §32/§33): "just set the env vars" has to be
@@ -37,6 +42,7 @@ const SECRETS = {
   R2_ACCESS_KEY_ID: "SECRET_r2_id",
   AI_LOCAL_TOKEN: "SECRET_ai_token_0123456789abcdef0123",
   HEALTHCHECK_PING_URL: "https://hc-ping.com/SECRET-uuid",
+  EXPO_ACCESS_TOKEN: "SECRET_expo_access_token",
 };
 
 function fullEnv(overrides: Partial<ReadinessEnv> = {}): ReadinessEnv {
@@ -46,7 +52,6 @@ function fullEnv(overrides: Partial<ReadinessEnv> = {}): ReadinessEnv {
     RESEND_WEBHOOK_SECRET: "whsec_SECRET",
     META_WHATSAPP_PHONE_NUMBER_ID: "1234567890",
     META_WHATSAPP_TEMPLATE_NAME: "trajetto_notification",
-    META_WHATSAPP_CUSTOMER_TEMPLATE_NAME: "trajetto_cliente",
     META_WHATSAPP_API_VERSION: "v23.0",
     META_WHATSAPP_BUSINESS_ACCOUNT_ID: "998877665544",
     UPLOAD_STORAGE_TYPE: "r2",
@@ -60,6 +65,63 @@ function fullEnv(overrides: Partial<ReadinessEnv> = {}): ReadinessEnv {
 }
 
 type Route = (url: string, init?: RequestInit) => Response | Promise<Response>;
+
+/**
+ * The 21 templates of the registry (plan of 02/11/2026, B7), as Meta's list
+ * returns them when everything is right: approved, pt_BR, UTILITY, the same
+ * body and, for the customer's four, the two URL buttons.
+ */
+const REGISTRY: WhatsAppTemplateDefinition[] = [
+  ...Object.values(INTERNAL_WHATSAPP_TEMPLATES),
+  ...Object.values(CUSTOMER_WHATSAPP_TEMPLATES),
+];
+
+function metaTemplate(
+  definition: WhatsAppTemplateDefinition,
+  overrides: Record<string, unknown> = {},
+): Record<string, unknown> {
+  return {
+    name: definition.name,
+    status: "APPROVED",
+    language: "pt_BR",
+    category: "UTILITY",
+    components: [
+      { type: "BODY", text: definition.body },
+      ...(definition.buttons
+        ? [
+            {
+              type: "BUTTONS",
+              buttons: definition.buttons.map((button) => ({
+                type: "URL",
+                text: button.text,
+                url: `https://www.intrajetto.com/${button.path}`,
+              })),
+            },
+          ]
+        : []),
+    ],
+    ...overrides,
+  };
+}
+
+const TEMPLATE_LIST =
+  "https://graph.facebook.com/v23.0/998877665544/message_templates?fields=";
+
+/** Meta's template list with one template changed (or removed: null). */
+function templateList(
+  changes: Record<string, Record<string, unknown> | null> = {},
+): Route {
+  return () =>
+    json(200, {
+      data: REGISTRY.flatMap((definition) => {
+        if (!(definition.name in changes)) return [metaTemplate(definition)];
+
+        const change = changes[definition.name];
+
+        return change ? [metaTemplate(definition, change)] : [];
+      }),
+    });
+}
 
 function json(status: number, body: unknown): Response {
   return new Response(JSON.stringify(body), {
@@ -114,24 +176,7 @@ const HEALTHY: Record<string, Route> = {
       verified_name: "Trajetto",
       quality_rating: "GREEN",
     }),
-  "https://graph.facebook.com/v23.0/998877665544/message_templates?name=trajetto_notification":
-    () =>
-      json(200, {
-        data: [
-          {
-            name: "trajetto_notification",
-            status: "APPROVED",
-            language: "pt_BR",
-          },
-        ],
-      }),
-  "https://graph.facebook.com/v23.0/998877665544/message_templates?name=trajetto_cliente":
-    () =>
-      json(200, {
-        data: [
-          { name: "trajetto_cliente", status: "APPROVED", language: "pt_BR" },
-        ],
-      }),
+  [TEMPLATE_LIST]: templateList(),
   "https://exp.host/--/api/v2/push/getReceipts": () => json(200, { data: {} }),
   "http://trajetto-ai:8080/health": () =>
     json(200, { ok: true, engine: "rapidocr", engineVersion: "3.9.2" }),
@@ -265,36 +310,133 @@ describe("WhatsApp (Meta)", () => {
     const result = await checkWhatsApp(
       deps({
         ...HEALTHY,
-        "https://graph.facebook.com/v23.0/998877665544/message_templates?name=trajetto_cliente":
-          () =>
-            json(200, {
-              data: [
-                {
-                  name: "trajetto_cliente",
-                  status: "PAUSED",
-                  language: "pt_BR",
-                },
-              ],
-            }),
+        [TEMPLATE_LIST]: templateList({
+          trajetto_cliente_entregue: { status: "PAUSED" },
+        }),
       }),
     );
 
     expect(result.status).toBe("error");
-    expect(result.details["template:trajetto_cliente"]).toBe("PAUSED");
-    expect(result.details["template:trajetto_notification"]).toBe("APPROVED");
+    expect(result.details["template:trajetto_cliente_entregue"]).toBe("PAUSED");
+    expect(result.details["template:trajetto_multa_registrada"]).toBe(
+      "APPROVED",
+    );
   });
 
   it("is an error when a template does not exist", async () => {
     const result = await checkWhatsApp(
       deps({
         ...HEALTHY,
-        "https://graph.facebook.com/v23.0/998877665544/message_templates?name=trajetto_cliente":
-          () => json(200, { data: [] }),
+        [TEMPLATE_LIST]: templateList({ trajetto_entrega_insucesso: null }),
       }),
     );
 
-    expect(result.details["template:trajetto_cliente"]).toBe("MISSING");
+    expect(result.details["template:trajetto_entrega_insucesso"]).toBe(
+      "MISSING",
+    );
     expect(result.status).toBe("error");
+    expect(result.message).toContain("trajetto_entrega_insucesso");
+  });
+
+  // Plan of 02/11/2026, B7: the whole point of the 21 templates is that none
+  // is Marketing. A recategorization is a problem, not a warning.
+  it("is an error when Meta filed a template as MARKETING", async () => {
+    const result = await checkWhatsApp(
+      deps({
+        ...HEALTHY,
+        [TEMPLATE_LIST]: templateList({
+          trajetto_ordem_servico: { category: "MARKETING" },
+        }),
+      }),
+    );
+
+    expect(result.status).toBe("error");
+    expect(result.message).toContain("trajetto_ordem_servico");
+    expect(result.message).toContain("MARKETING");
+  });
+
+  it("is an error when a template takes another number of variables than the code sends", async () => {
+    const result = await checkWhatsApp(
+      deps({
+        ...HEALTHY,
+        [TEMPLATE_LIST]: templateList({
+          trajetto_multa_registrada: {
+            components: [
+              {
+                type: "BODY",
+                text: "Multa {{1}} no veículo {{2}}, registrada no Trajetto.",
+              },
+            ],
+          },
+        }),
+      }),
+    );
+
+    expect(result.status).toBe("error");
+    expect(result.message).toContain("trajetto_multa_registrada");
+    expect(result.message).toContain("11");
+  });
+
+  it("is an error when a customer template lacks its two URL buttons", async () => {
+    const definition = CUSTOMER_WHATSAPP_TEMPLATES.ON_THE_WAY;
+
+    const result = await checkWhatsApp(
+      deps({
+        ...HEALTHY,
+        [TEMPLATE_LIST]: templateList({
+          [definition.name]: {
+            components: [{ type: "BODY", text: definition.body }],
+          },
+        }),
+      }),
+    );
+
+    expect(result.status).toBe("error");
+    expect(result.message).toContain(definition.name);
+  });
+
+  it("reads every template from one list, following Meta's pages", async () => {
+    const calls: string[] = [];
+    const half = Math.ceil(REGISTRY.length / 2);
+
+    const result = await checkWhatsApp(
+      deps({
+        ...HEALTHY,
+        [TEMPLATE_LIST]: (url) => {
+          calls.push(url);
+
+          return json(200, {
+            data: REGISTRY.slice(0, half).map((definition) =>
+              metaTemplate(definition),
+            ),
+            paging: {
+              next: "https://graph.facebook.com/v23.0/998877665544/message_templates/page2",
+            },
+          });
+        },
+        "https://graph.facebook.com/v23.0/998877665544/message_templates/page2":
+          (url) => {
+            calls.push(url);
+
+            return json(200, {
+              data: REGISTRY.slice(half).map((definition) =>
+                metaTemplate(definition),
+              ),
+            });
+          },
+      }),
+    );
+
+    expect(calls).toHaveLength(2);
+    expect(result.status).toBe("ok");
+
+    // The 21, each with its state.
+    const states = Object.entries(result.details).filter(([key]) =>
+      key.startsWith("template:"),
+    );
+
+    expect(states).toHaveLength(21);
+    expect(states.every(([, state]) => state === "APPROVED")).toBe(true);
   });
 
   it("never reads a template list that arrived cut or malformed as 'does not exist'", async () => {
@@ -310,15 +452,15 @@ describe("WhatsApp (Meta)", () => {
       const result = await checkWhatsApp(
         deps({
           ...HEALTHY,
-          "https://graph.facebook.com/v23.0/998877665544/message_templates?name=trajetto_cliente":
-            answer,
+          [TEMPLATE_LIST]: answer,
         }),
       );
 
-      expect(result.details["template:trajetto_cliente"]).toBe("UNKNOWN");
+      expect(result.details["template:trajetto_cliente_entregue"]).toBe(
+        "UNKNOWN",
+      );
       expect(result.status).toBe("warning");
       expect(result.message).not.toContain("não existe");
-      expect(result.warnings.join(" ")).toContain("trajetto_cliente");
     }
   });
 
@@ -330,7 +472,9 @@ describe("WhatsApp (Meta)", () => {
     );
 
     expect(result.status).toBe("warning");
-    expect(result.details["template:trajetto_notification"]).toBe("UNKNOWN");
+    expect(result.details["template:trajetto_entrega_insucesso"]).toBe(
+      "UNKNOWN",
+    );
     expect(result.warnings.join(" ")).toContain(
       "META_WHATSAPP_BUSINESS_ACCOUNT_ID",
     );
@@ -351,6 +495,46 @@ describe("push, storage, OCR, certificate and heartbeat", () => {
     );
 
     expect(result.status).toBe("error");
+  });
+
+  // Plan of 02/11/2026 (A8): with Expo's "enhanced push security" on, every
+  // call without the project's access token is refused with 401.
+  it("push probes with the Expo access token, and warns while it is missing", async () => {
+    let authorization: string | null = null;
+
+    const withToken = await checkPush(
+      deps({
+        "https://exp.host": (_url, init) => {
+          authorization = new Headers(init?.headers).get("authorization");
+          return json(200, { data: {} });
+        },
+      }),
+    );
+
+    expect(authorization).toBe(`Bearer ${SECRETS.EXPO_ACCESS_TOKEN}`);
+    expect(withToken.status).toBe("ok");
+    expect(withToken.warnings).toEqual([]);
+    expect(JSON.stringify(withToken)).not.toContain(SECRETS.EXPO_ACCESS_TOKEN);
+
+    const without = await checkPush(
+      deps(HEALTHY, { env: fullEnv({ EXPO_ACCESS_TOKEN: undefined }) }),
+    );
+
+    // A warning, the house's way of saying "set it before it bites".
+    expect(without.status).toBe("warning");
+    expect(without.warnings.join(" ")).toContain("EXPO_ACCESS_TOKEN");
+  });
+
+  it("push says the enhanced security needs EXPO_ACCESS_TOKEN when Expo answers 401", async () => {
+    const result = await checkPush(
+      deps(
+        { "https://exp.host": () => json(401, {}) },
+        { env: fullEnv({ EXPO_ACCESS_TOKEN: undefined }) },
+      ),
+    );
+
+    expect(result.status).toBe("error");
+    expect(result.message).toContain("EXPO_ACCESS_TOKEN");
   });
 
   it("storage says the credential was refused on a 403", async () => {
@@ -592,15 +776,16 @@ describe("independent probes of one provider", () => {
     return { routes, started, peak: () => peak };
   }
 
-  it("asks Meta for the number and every template at the same time", async () => {
-    const { routes, started, peak } = gated(3);
+  // Plan of 02/11/2026 (B7): the 21 templates come in ONE listing.
+  it("asks Meta for the number and the template list at the same time", async () => {
+    const { routes, started, peak } = gated(2);
 
     const whatsapp = await checkWhatsApp(deps(routes, { timeoutMs: 2_000 }));
 
     expect(whatsapp.status).toBe("ok");
-    expect(started.filter((url) => url.includes("graph"))).toHaveLength(3);
-    // One round trip, not three: all three were out at once.
-    expect(peak()).toBe(3);
+    expect(started.filter((url) => url.includes("graph"))).toHaveLength(2);
+    // One round trip, not two: both were out at once.
+    expect(peak()).toBe(2);
   });
 
   it("checks the OCR token while /health is still answering", async () => {
