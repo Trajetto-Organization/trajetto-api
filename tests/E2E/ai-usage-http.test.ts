@@ -4,8 +4,12 @@ import { sign } from "jsonwebtoken";
 import { randomUUID } from "node:crypto";
 
 import auth from "@/config/auth";
+import { env } from "@/env";
 import { quotaPeriodFor } from "@/shared/ai/ai-period";
 import { getOrCreateCurrentPeriod } from "@/shared/ai/ai-quota-service";
+import { AIAnalysisService } from "@/shared/ai/ai-analysis-service";
+import { buildProofAnalysisInput } from "@/shared/delivery/proof-analysis-input";
+import { shiftMonthKey } from "@/shared/time/business-day";
 import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
@@ -293,5 +297,163 @@ describe("GET /business/get-ai-usage", () => {
     expect(Object.keys(route.responses)).toEqual(
       expect.arrayContaining(["200", "400", "401", "403", "404", "429"]),
     );
+  });
+});
+
+/**
+ * The AI limit end to end (plan M7): the cases the owner asked to see
+ * proven — a limit lowered in the middle of the month, 0 switching the AI
+ * off, and the month turning at midnight in the company's own zone.
+ */
+describe("the AI limit across a month (M7)", () => {
+  const saved = {
+    provider: env.AI_PROVIDER,
+    url: env.AI_LOCAL_URL,
+    token: env.AI_LOCAL_TOKEN,
+    workers: env.WORKERS_ENABLED,
+  };
+
+  beforeAll(() => {
+    // A configured reader, and an HTTP-only replica: a queued reading waits
+    // for the worker service instead of running behind the assertions.
+    env.AI_PROVIDER = "local";
+    env.AI_LOCAL_URL = "http://127.0.0.1:9";
+    env.AI_LOCAL_TOKEN = "t".repeat(40);
+    env.WORKERS_ENABLED = false;
+  });
+
+  afterAll(() => {
+    env.AI_PROVIDER = saved.provider;
+    env.AI_LOCAL_URL = saved.url;
+    env.AI_LOCAL_TOKEN = saved.token;
+    env.WORKERS_ENABLED = saved.workers;
+  });
+
+  let cnpjSeq = 0;
+
+  async function company(limit: number): Promise<string> {
+    const id = randomUUID();
+
+    cnpjSeq += 1;
+    await seedBusiness(id, String(62777777100000 + cnpjSeq));
+    await prisma.business.update({
+      where: { id },
+      data: { ai_analysis_limit: limit },
+    });
+
+    return id;
+  }
+
+  // A proof's reading: the one kind with no record row to mark when it is
+  // refused (a refused fuel reading marks the fuelling skipped).
+  function askToRead(businessId: string) {
+    return AIAnalysisService.getInstance().requestAnalysis({
+      type: "DELIVERY_PROOF",
+      recordId: randomUUID(),
+      businessId,
+      requestedById: randomUUID(),
+      input: buildProofAnalysisInput({
+        photoPath: `deliveryPhotos/${businessId}/${randomUUID()}.jpg`,
+        signaturePath: null,
+        delivery: { invoice_number: "45118", recipient_name: "Cliente" },
+        provenAt: new Date(),
+      }),
+    });
+  }
+
+  function usage(businessId: string) {
+    return app.inject({
+      method: "GET",
+      url: `/business/get-ai-usage/${businessId}`,
+      headers: { authorization: `Bearer ${masterToken}` },
+    });
+  }
+
+  function setLimit(businessId: string, limit: number) {
+    return app.inject({
+      method: "PATCH",
+      url: `/business/update-ai-limit/${businessId}`,
+      headers: { authorization: `Bearer ${masterToken}` },
+      payload: { ai_analysis_limit: limit },
+    });
+  }
+
+  it("reads a limit lowered below this month's use as spent, and refuses the next photo", async () => {
+    const lowered = await company(10);
+
+    for (let photo = 0; photo < 6; photo += 1) {
+      expect(await askToRead(lowered)).toBe("queued");
+    }
+
+    const lowering = await setLimit(lowered, 4);
+
+    expect(lowering.statusCode, lowering.body).toBe(200);
+
+    const data = (await usage(lowered)).json().data;
+
+    // What was read stays read; nothing is left, never a negative balance.
+    expect(data.ai_analysis_limit).toBe(4);
+    expect(data.ai_analysis_used + data.ai_analysis_in_progress).toBe(6);
+    expect(data.ai_analysis_remaining).toBe(0);
+    expect(data.ai_analysis_enabled).toBe(true);
+
+    expect(await askToRead(lowered)).toBe("denied");
+
+    // Raised again within the month: the room comes back at once.
+    await setLimit(lowered, 7);
+
+    expect(await askToRead(lowered)).toBe("queued");
+    expect(await askToRead(lowered)).toBe("denied");
+  });
+
+  it("switches the AI off at 0 and says so on the card", async () => {
+    const off = await company(3);
+
+    expect((await setLimit(off, 0)).statusCode).toBe(200);
+
+    const data = (await usage(off)).json().data;
+
+    expect(data.ai_analysis_enabled).toBe(false);
+    expect(data.ai_analysis_remaining).toBe(0);
+
+    expect(await askToRead(off)).toBe("denied");
+  });
+
+  it("starts a new month at midnight in the company's zone, with last month's use behind it", async () => {
+    // Manaus (seedBusiness), whose month starts at 04:00 UTC.
+    const turned = await company(1);
+
+    const thisMonth = quotaPeriodFor(new Date(), "America/Manaus");
+    const lastMonthKey = shiftMonthKey(
+      thisMonth.periodStart.toISOString().slice(0, 7),
+      -1,
+    );
+
+    // Last month spent to the last photo.
+    await prisma.aIUsagePeriod.create({
+      data: {
+        businessId: turned,
+        periodStart: new Date(`${lastMonthKey}-01T00:00:00.000Z`),
+        consumedUnits: 1,
+      },
+    });
+
+    expect(await askToRead(turned)).toBe("queued");
+
+    const request = await prisma.aIAnalysisRequest.findFirstOrThrow({
+      where: { businessId: turned },
+      include: { period: true },
+    });
+
+    // Charged to the company's month, keyed by its own day 1.
+    expect(request.period.periodStart.toISOString()).toBe(
+      thisMonth.periodStart.toISOString(),
+    );
+
+    const data = (await usage(turned)).json().data;
+
+    expect(data.ai_analysis_timezone).toBe("America/Manaus");
+    expect(data.ai_analysis_reset_at).toBe(thisMonth.startsAt.toISOString());
+    expect(data.ai_analysis_remaining).toBe(0);
   });
 });

@@ -35,7 +35,7 @@ import {
 import { signWebhookPayload } from "./webhook-signature";
 import { openHeaders, openSecret } from "./secret-box";
 import { readBoundedBody } from "./bounded-body";
-import { endpointWantsTopic } from "./webhook-catalogue";
+import { PING_TOPIC, endpointWantsTopic } from "./webhook-catalogue";
 import {
   UNREACHABLE_REASON,
   UNRESOLVED_REASON,
@@ -45,6 +45,7 @@ import {
 } from "./webhook-destination";
 
 import { withRetryJitter } from "@/shared/notifications/pipeline-rules";
+import { hasModuleSwitchedOff } from "@/shared/entitlements/entitlement-service";
 import { workerHeartbeat } from "@/shared/health/worker-heartbeat";
 import { logger } from "@/shared/logging/logger";
 import { providerMetrics } from "@/shared/health/provider-metrics";
@@ -185,6 +186,87 @@ const CREDENTIALS_UNREADABLE_REASON =
   "de novo. Se persistir, gere um novo segredo e salve os cabeçalhos outra vez.";
 
 /**
+ * The bytes every webhook posts: `{ id, sequence, topic, created_at, data }`,
+ * fixed once so a retry and a manual resend send the same body.
+ *
+ * The sequence is drawn inside the caller's transaction, after its write:
+ * two writes to the same delivery or route are serialised by that row's
+ * lock, so their numbers follow the order of the facts. Increasing, with gaps
+ * (a rolled-back transaction burns its number) — never a count.
+ */
+async function envelopeBody(
+  client: Prisma.TransactionClient,
+  eventId: string,
+  topic: string,
+  payload: Record<string, unknown>,
+): Promise<string> {
+  const [{ sequence }] = await client.$queryRaw<Array<{ sequence: bigint }>>`
+    SELECT nextval('webhook_event_seq') AS "sequence"
+  `;
+
+  return JSON.stringify({
+    id: eventId,
+    sequence: Number(sequence),
+    topic,
+    created_at: new Date().toISOString(),
+    data: payload,
+  });
+}
+
+/**
+ * Queues a test event for ONE endpoint of the company: signed, sequenced and
+ * recorded exactly like an event, so the receiver checks what it will check
+ * on every real one and the monitor shows what it answered. Null when the
+ * endpoint is not this company's.
+ */
+async function queueWebhookPing(
+  endpointId: string,
+  businessId: string,
+  client: Prisma.TransactionClient = database,
+): Promise<{ id: string; eventId: string } | null> {
+  const endpoint = await client.webhookEndpoint.findFirst({
+    where: { id: endpointId, businessId },
+    select: { id: true, secret: true },
+  });
+
+  if (!endpoint) return null;
+
+  const eventId = uuidV7();
+
+  const body = await envelopeBody(client, eventId, PING_TOPIC, {
+    endpoint_id: endpoint.id,
+    message:
+      "Teste enviado pelo painel do Trajetto. Confira a assinatura e responda com qualquer 2xx.",
+  });
+
+  const row = await client.webhookDelivery.create({
+    data: {
+      endpointId: endpoint.id,
+      businessId,
+      topic: PING_TOPIC,
+      sourceEventId: eventId,
+      payload: JSON.parse(body) as Prisma.InputJsonValue,
+      signed_body: body,
+      signature: fanOutSignature(endpoint.secret, body),
+    },
+    select: { id: true },
+  });
+
+  log.info(
+    {
+      correlationId: getRequestContext()?.requestId ?? null,
+      sourceEventId: eventId,
+      topic: PING_TOPIC,
+      businessId,
+      endpoints: 1,
+    },
+    "webhook ping queued",
+  );
+
+  return { id: row.id, eventId };
+}
+
+/**
  * Turns one domain event into one row per interested endpoint.
  *
  * The BYTES are fixed here, once, with the event id in them: a retry three
@@ -284,22 +366,9 @@ async function fanOutWebhookEvent(
 
   // The order a receiver can rebuild. Delivery is concurrent and retried, so
   // arrival order means nothing: a `delivery.in_transit` retried after a 503
-  // lands after the `delivery.delivered` that followed it. Drawn inside the
-  // caller's transaction, after its write: two writes to the same delivery or
-  // route are serialised by that row's lock, so their numbers follow the
-  // order of the facts. Increasing, with gaps (a rolled-back transaction
-  // burns its number) — never a count.
-  const [{ sequence }] = await client.$queryRaw<Array<{ sequence: bigint }>>`
-    SELECT nextval('webhook_event_seq') AS "sequence"
-  `;
-
-  const body = JSON.stringify({
-    id: eventId,
-    sequence: Number(sequence),
-    topic: event.topic,
-    created_at: new Date().toISOString(),
-    data: event.payload,
-  });
+  // lands after the `delivery.delivered` that followed it — hence the
+  // envelope's `sequence` (see envelopeBody).
+  const body = await envelopeBody(client, eventId, event.topic, event.payload);
 
   const rows = interested.map((endpoint) => {
     const signature = fanOutSignature(endpoint.secret, body);
@@ -458,10 +527,13 @@ async function releaseHeldRowIfEndpointBack(
 ): Promise<void> {
   const endpoint = await database.webhookEndpoint.findUnique({
     where: { id: endpointId },
-    select: { is_active: true, disabled_at: true },
+    select: { is_active: true, disabled_at: true, businessId: true },
   });
 
   if (!endpoint?.is_active || endpoint.disabled_at !== null) return;
+
+  // Held because Entregas was off (plan M3): back only with the module.
+  if (await hasModuleSwitchedOff(endpoint.businessId, "DELIVERIES")) return;
 
   await database.webhookDelivery.updateMany({
     where: {
@@ -471,6 +543,34 @@ async function releaseHeldRowIfEndpointBack(
     },
     data: { availableAt: new Date(), lastError: null },
   });
+}
+
+/**
+ * Sends what the company's endpoints held while Entregas was switched off
+ * (plan M3): called after the switch back on has committed — the module's
+ * "I fixed it", as a save is the endpoint's.
+ *
+ * Only endpoints that may be delivered to: one the customer paused or our
+ * breaker switched off keeps holding, for its own save to release. Safe to
+ * run again — a released row is no longer held — so the switch saved on a
+ * second time is the retry of a release that failed.
+ */
+async function releaseHeldWebhookDeliveriesOfBusiness(
+  businessId: string,
+): Promise<number> {
+  const endpoints = await database.webhookEndpoint.findMany({
+    where: { businessId, is_active: true, disabled_at: null },
+    select: { id: true },
+    orderBy: { id: "asc" },
+  });
+
+  let released = 0;
+
+  for (const endpoint of endpoints) {
+    released += await releaseParkedWebhookDeliveries(endpoint.id);
+  }
+
+  return released;
 }
 
 /**
@@ -737,7 +837,18 @@ class WebhookDispatchService {
     // had just stopped trusting, or at ten seconds a row to one our breaker
     // had just given up on. No DNS, no fetch, no failure counted: the row is
     // held for the endpoint's return, within the replay window.
-    if (!endpoint.is_active || endpoint.disabled_at !== null) {
+    //
+    // The same hold while the MASTER has Entregas switched off for the
+    // company (plan M3, D51): the public API already answered 403
+    // MODULE_NOT_ENABLED, yet the dispatcher kept draining the queue to the
+    // customer's ERP. Read here, on every send, so a switch reaches every
+    // replica at once; the switch back on releases the rows
+    // (`releaseHeldWebhookDeliveriesOfBusiness`).
+    if (
+      !endpoint.is_active ||
+      endpoint.disabled_at !== null ||
+      (await hasModuleSwitchedOff(endpoint.businessId, "DELIVERIES"))
+    ) {
       await this.park(row);
       return;
     }
@@ -1308,7 +1419,9 @@ const webhookDispatchService = WebhookDispatchService.getInstance();
 export {
   WebhookDispatchService,
   fanOutWebhookEvent,
+  queueWebhookPing,
   releaseHeldRowIfEndpointBack,
+  releaseHeldWebhookDeliveriesOfBusiness,
   releaseParkedWebhookDeliveries,
   webhookDispatchService,
 };

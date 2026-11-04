@@ -41,6 +41,7 @@ import { VehicleCurrentMileageCanNotBeUpdatedError } from "../errors/vehicle-cur
 import { translateVehicleStatus } from "@/shared/utils/format-values";
 import {
   canReactivateVehicle,
+  isVehicleLimitEnforced,
   occupiesFleetSlot,
 } from "@/shared/entitlements/entitlement-rules";
 
@@ -55,6 +56,7 @@ import {
 } from "@/shared/vehicle/vehicle-years";
 import { logger } from "@/shared/logging/logger";
 import { sendCatalogChangedEvent } from "@/websocket";
+import { assertResponsibleUser } from "../vehicle-responsible";
 
 const log = logger.child({ component: "vehicle" });
 
@@ -274,12 +276,25 @@ class UpdateVehicleUseCase {
       }
     }
 
+    // F1: only a person the edit actually changes to is checked; null hands
+    // the vehicle back to the admins, absent keeps who it is.
+    if (changes.responsibleUserId !== findVehicle.responsibleUserId) {
+      await assertResponsibleUser(
+        this.user,
+        changes.responsibleUserId,
+        businessId,
+      );
+    }
+
     // Reactivating an INACTIVE vehicle re-occupies a contracted slot, so it
     // passes the same locked count as a new registration (FLEET-VEH-7).
-    const isReactivation =
-      changes.status !== undefined &&
-      !occupiesFleetSlot(findVehicle.status) &&
-      occupiesFleetSlot(changes.status);
+    // Every status that takes a slot goes through it, and the repository
+    // decides there, under the company's lock, whether the vehicle already
+    // holds one (M8): `findVehicle` is older, and an inactivation plus a new
+    // registration in between turned an unblocking into an uncounted
+    // reactivation.
+    const takesSlot =
+      changes.status !== undefined && occupiesFleetSlot(changes.status);
 
     const limit = findBusiness.vehicle_limit ?? 0;
 
@@ -287,7 +302,7 @@ class UpdateVehicleUseCase {
     let activeCount = 0;
 
     try {
-      if (isReactivation && limit > 0) {
+      if (takesSlot && isVehicleLimitEnforced(limit)) {
         ({ vehicle: updatedVehicle, activeCount } =
           await this.vehicle.updateVehicleWithinLimit(
             { vehicleData: withVehicleDates(changes), vehicleId, businessId },

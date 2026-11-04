@@ -1,12 +1,19 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  LIMIT_ZERO_MEANING,
   canRegisterVehicle,
   canReactivateVehicle,
+  isAIAnalysisEnabled,
+  isVehicleLimitEnforced,
   occupiesFleetSlot,
   isModuleEnabled,
+  isModuleSwitchedOff,
   masterModuleRefusal,
 } from "@/shared/entitlements/entitlement-rules";
+import { businessResponses } from "@/routes/documentation/business-documentation";
+import { updateAILimitSchema } from "@/schemas/update-ai-limit-schema";
+import { updateVehicleLimitSchema } from "@/schemas/update-vehicle-limit-schema";
 
 describe("vehicle quota", () => {
   /**
@@ -150,5 +157,101 @@ describe("masterModuleRefusal", () => {
         [{ id: A, isActive: false, moduleEnabled: true }],
       ),
     ).toBeNull();
+  });
+});
+
+/**
+ * Plan M2: "0" means opposite things in the two limits that exist, and that
+ * is kept on purpose — unifying it would switch the AI on for companies that
+ * never bought it, or start blocking fleets whose limit was never filled.
+ * The rule lives in one place (entitlement-rules) and every published field
+ * says it, so nobody reads one limit with the other's zero.
+ */
+describe("what zero means in each limit (plan M2)", () => {
+  it("is written down once, one meaning per limit", () => {
+    expect(LIMIT_ZERO_MEANING).toEqual({
+      vehicle_limit: "unlimited",
+      ai_analysis_limit: "disabled",
+    });
+  });
+
+  it("leaves a fleet of any size alone while vehicle_limit is 0", () => {
+    expect(isVehicleLimitEnforced(0)).toBe(false);
+    expect(isVehicleLimitEnforced(null)).toBe(false);
+    expect(isVehicleLimitEnforced(undefined)).toBe(false);
+    expect(isVehicleLimitEnforced(1)).toBe(true);
+
+    // The verdicts follow the same rule, not a copy of it.
+    expect(canRegisterVehicle(10_000, 0).allowed).toBe(true);
+    expect(canReactivateVehicle(10_000, 0).allowed).toBe(true);
+  });
+
+  it("switches the AI off while ai_analysis_limit is 0", () => {
+    expect(isAIAnalysisEnabled(0)).toBe(false);
+    expect(isAIAnalysisEnabled(null)).toBe(false);
+    expect(isAIAnalysisEnabled(undefined)).toBe(false);
+    expect(isAIAnalysisEnabled(1)).toBe(true);
+  });
+
+  it("is stated on every published field that carries a limit", () => {
+    const usage = businessResponses.aiUsageData.shape.data.shape;
+    const aiLimitSaved = businessResponses.aiLimitUpdated.shape.data.shape;
+    const plan = businessResponses.entitlementsData.shape.data.shape;
+
+    for (const description of [
+      usage.ai_analysis_limit.description,
+      aiLimitSaved.ai_analysis_limit.description,
+      updateAILimitSchema.shape.ai_analysis_limit.description,
+    ]) {
+      expect(description).toMatch(/0 = IA desligada/);
+    }
+
+    expect(usage.ai_analysis_enabled.description).toMatch(
+      /`ai_analysis_limit` > 0/,
+    );
+
+    for (const description of [
+      plan.vehicle_limit.description,
+      updateVehicleLimitSchema.shape.vehicle_limit.description,
+    ]) {
+      expect(description).toMatch(/0 = sem limite/);
+    }
+  });
+});
+
+/**
+ * Plan M3 (D51): switching Entregas off pauses the company's webhooks with
+ * it. The pause follows the MASTER's switch — a row that exists and is off.
+ * A company with no row never hired the module, so it could never register
+ * an endpoint (the integration screens and the API key are gated): there is
+ * nothing of its to hold.
+ */
+describe("a module switched off (the webhook pause)", () => {
+  it("is a row that exists and is off", () => {
+    expect(
+      isModuleSwitchedOff(
+        [
+          { module: "FLEET", enabled: true },
+          { module: "DELIVERIES", enabled: false },
+        ],
+        "DELIVERIES",
+      ),
+    ).toBe(true);
+  });
+
+  it("is not a module that is on", () => {
+    expect(
+      isModuleSwitchedOff(
+        [{ module: "DELIVERIES", enabled: true }],
+        "DELIVERIES",
+      ),
+    ).toBe(false);
+  });
+
+  it("is not a module that was never hired", () => {
+    expect(isModuleSwitchedOff([], "DELIVERIES")).toBe(false);
+    expect(
+      isModuleSwitchedOff([{ module: "FLEET", enabled: false }], "DELIVERIES"),
+    ).toBe(false);
   });
 });

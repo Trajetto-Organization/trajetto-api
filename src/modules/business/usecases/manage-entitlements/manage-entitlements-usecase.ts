@@ -17,11 +17,15 @@ import {
   setModuleEnabled,
   type ModuleImpact,
 } from "@/shared/entitlements/entitlement-service";
-import { occupiesFleetSlot } from "@/shared/entitlements/entitlement-rules";
+import {
+  isVehicleLimitEnforced,
+  occupiesFleetSlot,
+} from "@/shared/entitlements/entitlement-rules";
 import { VEHICLE_STATUSES } from "@/shared/vehicle/vehicle-rules";
 
 import { sendEntitlementsChangedEvent } from "@/websocket";
 import { OutboxService } from "@/shared/notifications/outbox-service";
+import { releaseHeldWebhookDeliveriesOfBusiness } from "@/shared/integration/webhook-dispatch-service";
 
 import database from "@/../infra/database";
 
@@ -84,7 +88,8 @@ class GetBusinessEntitlementsUseCase {
       vehicle_limit: findBusiness.vehicle_limit ?? 0,
       vehicle_count: occupyingCount,
       vehicle_inactive_count: statusCounts.INACTIVE,
-      vehicle_limit_enabled: (findBusiness.vehicle_limit ?? 0) > 0,
+      // 0 = no limit (plan M2: LIMIT_ZERO_MEANING).
+      vehicle_limit_enabled: isVehicleLimitEnforced(findBusiness.vehicle_limit),
       vehicle_status_counts: statusCounts,
     };
   }
@@ -220,12 +225,19 @@ class UpdateBusinessEntitlementUseCase {
       return true;
     });
 
-    if (!changed) return;
-
     // After the commit: connected clients redraw their navigation for a
     // change that happened; nobody is disconnected — the module gate on the
     // API is the enforcement point.
-    sendEntitlementsChangedEvent(businessId, { module, enabled });
+    if (changed) sendEntitlementsChangedEvent(businessId, { module, enabled });
+
+    // Plan M3 (D51): while Entregas was off, the company's webhooks were held
+    // by the dispatcher; the switch back on sends them. After the commit,
+    // like an endpoint's save: a long backlog must not hold the plan's
+    // transaction. Also when nothing changed — saving the module on again is
+    // how a release that failed after the commit is retried.
+    if (module === "DELIVERIES" && enabled) {
+      await releaseHeldWebhookDeliveriesOfBusiness(businessId);
+    }
   }
 }
 

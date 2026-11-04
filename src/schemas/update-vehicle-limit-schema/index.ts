@@ -9,7 +9,7 @@ const updateVehicleLimitSchema = z.object({
     .min(0, "O limite não pode ser negativo.")
     .max(100000, "O limite não pode exceder 100.000 veículos.")
     .describe(
-      "Nº de veículos contratados (base de cobrança por veículo; 0 = não configurado, nunca bloqueia).",
+      "Nº de veículos contratados (base de cobrança por veículo; 0 = sem limite: não configurado, nunca bloqueia).",
     ),
 });
 

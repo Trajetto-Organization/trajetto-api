@@ -68,6 +68,7 @@ interface RouteRow {
   driverId: string;
   status: string;
   businessId: string;
+  completed_at?: Date | null;
 }
 
 function makeContext({ vehicleLimit = 0 } = {}) {
@@ -284,6 +285,45 @@ describe("registering a vehicle", () => {
       { businessId: BUSINESS, entity: "vehicle" },
     ]);
   });
+
+  it("takes a responsible person of the same company and nobody else's (F1)", async () => {
+    // Plan of 02/11/2026, F1: the person a failed checklist alerts. Another
+    // company's user answers exactly like one that does not exist.
+    const FOREIGN_USER = "018f0000-0000-7000-8000-0000000000a9";
+
+    context.users.user.push({
+      id: FOREIGN_USER,
+      role: "BUSINESS_ADMIN",
+      businessId: OTHER_BUSINESS,
+    } as User);
+
+    const created = await context.create.execute(
+      registration({ responsibleUserId: ADMIN }),
+      ADMIN,
+    );
+
+    expect(created.responsibleUserId).toBe(ADMIN);
+
+    for (const responsibleUserId of [
+      FOREIGN_USER,
+      "018f0000-0000-7000-8000-0000000000ff",
+    ]) {
+      await expect(
+        context.create.execute(
+          registration({
+            license_plate: "XYZ9Z99",
+            renavam: "55555555555",
+            responsibleUserId,
+          }),
+          ADMIN,
+        ),
+      ).rejects.toMatchObject({
+        statusCode: 400,
+        code: "RESPONSIBLE_USER_NOT_FOUND",
+        message: "Usuário responsável não encontrado!",
+      });
+    }
+  });
 });
 
 describe("editing a vehicle", () => {
@@ -399,6 +439,50 @@ describe("editing a vehicle", () => {
     );
   });
 
+  // Plan M8: unblocking (BLOCKED → ACTIVE) read the truck before writing; an
+  // inactivation and a new registration in between left it uncounted. Every
+  // status that takes a slot is now decided in the locked write, from the
+  // truck as it is there.
+  it("counts an unblocking whose truck was inactivated meanwhile (M8)", async () => {
+    context = makeContext({ vehicleLimit: 1 });
+    seedVehicle(context, {
+      id: VAN,
+      license_plate: "BBB2B22",
+      renavam: "00000000002",
+    });
+    const truck = seedVehicle(context, { status: "INACTIVE" });
+
+    // What the use case read a moment before: still BLOCKED.
+    vi.spyOn(context.vehicles, "findVehicleById").mockResolvedValueOnce({
+      ...truck,
+      status: "BLOCKED",
+    });
+
+    await expect(
+      context.update.execute({ status: "ACTIVE" }, TRUCK, BUSINESS, ADMIN),
+    ).rejects.toMatchObject({ statusCode: 409, code: "VEHICLE_LIMIT_REACHED" });
+
+    expect(context.vehicles.vehicles.find((v) => v.id === TRUCK)?.status).toBe(
+      "INACTIVE",
+    );
+  });
+
+  it("unblocks a truck above a lowered limit, since it already holds its slot (M8)", async () => {
+    context = makeContext({ vehicleLimit: 1 });
+    seedVehicle(context, {
+      id: VAN,
+      license_plate: "BBB2B22",
+      renavam: "00000000002",
+    });
+    seedVehicle(context, { status: "BLOCKED" });
+
+    await context.update.execute({ status: "ACTIVE" }, TRUCK, BUSINESS, ADMIN);
+
+    expect(context.vehicles.vehicles.find((v) => v.id === TRUCK)?.status).toBe(
+      "ACTIVE",
+    );
+  });
+
   it("answers another company's vehicle as not found", async () => {
     seedVehicle(context, { businessId: OTHER_BUSINESS });
 
@@ -474,6 +558,43 @@ describe("the driver and the vehicles they may operate (FLEET-ASSIGN-1)", () => 
 
     const detail = await context.get.execute(DRIVER_USER, TRUCK, BUSINESS);
     expect(detail.id).toBe(TRUCK);
+  });
+
+  it("lets the substitute read the truck of the route he just completed, for the arrival checklist", async () => {
+    // Red before: the route closes itself on its last stop (COMPLETED) and
+    // the app reads the vehicle for the arrival checklist right then; the
+    // substitute got 403 VEHICLE_NOT_ASSIGNED_TO_DRIVER.
+    context.routes.push({
+      vehicleId: TRUCK,
+      driverId: BRUNO,
+      status: "COMPLETED",
+      businessId: BUSINESS,
+      completed_at: new Date(Date.now() - 30 * 60_000),
+    });
+
+    const detail = await context.get.execute(DRIVER_USER, TRUCK, BUSINESS);
+    expect(detail.id).toBe(TRUCK);
+
+    // Only the read: the truck stays out of his vehicle list.
+    const page = await context.search.execute({
+      userId: DRIVER_USER,
+      businessId: BUSINESS,
+    });
+    expect(page.data).toEqual([]);
+  });
+
+  it("refuses the truck of a route that ended before the arrival checklist window", async () => {
+    context.routes.push({
+      vehicleId: TRUCK,
+      driverId: BRUNO,
+      status: "COMPLETED",
+      businessId: BUSINESS,
+      completed_at: new Date(Date.now() - 25 * 60 * 60_000),
+    });
+
+    await expect(
+      context.get.execute(DRIVER_USER, TRUCK, BUSINESS),
+    ).rejects.toBeInstanceOf(VehicleNotAssignedToDriverError);
   });
 
   it("still refuses a vehicle neither his nor on his route", async () => {

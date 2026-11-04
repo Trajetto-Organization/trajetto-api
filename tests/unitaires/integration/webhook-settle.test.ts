@@ -41,6 +41,11 @@ const db = vi.hoisted(() => {
         return { count: 1 };
       }),
     },
+    // No entitlement row: the company's Entregas switch is not off, so the
+    // send is not held (plan M3).
+    businessEntitlement: {
+      findUnique: vi.fn(async () => null),
+    },
     webhookDelivery: {
       findUnique: vi.fn(async () => ({
         payload: {},

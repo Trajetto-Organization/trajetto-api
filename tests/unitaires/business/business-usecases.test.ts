@@ -14,6 +14,9 @@ const entitlements = vi.hoisted(() => ({
   getModuleImpact: vi.fn(),
   setModuleEnabled: vi.fn(),
 }));
+const webhooks = vi.hoisted(() => ({
+  releaseHeldWebhookDeliveriesOfBusiness: vi.fn(async () => 0),
+}));
 
 vi.mock("@/websocket", () => ({
   sendCatalogChangedEvent,
@@ -27,6 +30,9 @@ vi.mock("@/shared/services/transactional-mail-service", () => ({
 // the entitlement E2E cover them); here only how the use case composes them.
 vi.mock("@/shared/ai/ai-quota-service", () => quota);
 vi.mock("@/shared/entitlements/entitlement-service", () => entitlements);
+// The release itself is SQL (tests/E2E/deliveries-module-off-in-flight);
+// here only when the switch asks for it.
+vi.mock("@/shared/integration/webhook-dispatch-service", () => webhooks);
 // The twins have no database to open a transaction on; the row lock taken
 // inside it is SQL, proven against Postgres by the E2E suites.
 vi.mock("@/../infra/database", () => ({
@@ -1076,6 +1082,62 @@ describe("the company's plan (modules)", () => {
       module: "FLEET",
       enabled: false,
     });
+  });
+
+  // Plan M3 (D51): the company's webhooks were held while Entregas was off.
+  it("sends the held webhooks when Entregas is switched back on, and on a second save", async () => {
+    const switchOn = () =>
+      new UpdateBusinessEntitlementUseCase(
+        users,
+        businesses,
+        outbox as never,
+      ).execute({
+        userId: MASTER,
+        businessId: alfaId,
+        module: "DELIVERIES",
+        enabled: true,
+      });
+
+    await switchOn();
+
+    expect(
+      webhooks.releaseHeldWebhookDeliveriesOfBusiness,
+    ).toHaveBeenCalledWith(alfaId);
+
+    // Already on: no write and no notice, but the release runs again — the
+    // retry of one that failed after the switch had committed.
+    entitlements.getBusinessEntitlements.mockResolvedValue([
+      { module: "DELIVERIES", enabled: true },
+    ]);
+    webhooks.releaseHeldWebhookDeliveriesOfBusiness.mockClear();
+    outbox.publish.mockClear();
+
+    await switchOn();
+
+    expect(outbox.publish).not.toHaveBeenCalled();
+    expect(
+      webhooks.releaseHeldWebhookDeliveriesOfBusiness,
+    ).toHaveBeenCalledWith(alfaId);
+  });
+
+  it("releases nothing when a module is switched off, or when Frota is switched on", async () => {
+    const execute = (module: "FLEET" | "DELIVERIES", enabled: boolean) =>
+      new UpdateBusinessEntitlementUseCase(
+        users,
+        businesses,
+        outbox as never,
+      ).execute({ userId: MASTER, businessId: alfaId, module, enabled });
+
+    entitlements.getBusinessEntitlements.mockResolvedValue([
+      { module: "DELIVERIES", enabled: true },
+    ]);
+
+    await execute("DELIVERIES", false);
+    await execute("FLEET", true);
+
+    expect(
+      webhooks.releaseHeldWebhookDeliveriesOfBusiness,
+    ).not.toHaveBeenCalled();
   });
 });
 
