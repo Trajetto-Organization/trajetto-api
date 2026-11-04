@@ -193,27 +193,50 @@ describe("the fair pool", () => {
   });
 
   it("keeps the other slots moving while one key is slow", async () => {
+    // The slow key is held by a gate, not by a longer timer. It used to be
+    // 40 ms against 1 ms, and a loaded machine that stalled the event loop
+    // past 40 ms (a full parallel run) let the slow timers fire first: the
+    // order came from the clock, not from the pool. Now nothing slow can
+    // finish until the gate opens, and the gate opens only after every
+    // pending promise turn ran — what the fast work needs, and all it needs.
     const finished: string[] = [];
+
+    let openGate!: () => void;
+    const gate = new Promise<void>((open) => {
+      openGate = open;
+    });
 
     const items = [
       ...Array.from({ length: 6 }, () => ({ key: "slow" })),
       ...Array.from({ length: 6 }, (_, index) => ({ key: `fast-${index}` })),
     ];
 
-    await inFairPool(
+    const pool = inFairPool(
       items,
       { concurrency: 5, perKey: 2, keyOf: (item) => item.key },
       async (item) => {
-        await sleep(item.key === "slow" ? 40 : 1);
+        if (item.key === "slow") await gate;
         finished.push(item.key);
       },
     );
 
-    // In waves, the fast ones would have waited for the slow ones in front.
-    const firstSlow = finished.indexOf("slow");
-    const fastBeforeIt = finished.slice(0, firstSlow).length;
+    // One macrotask turn runs every microtask queued before it: the pool
+    // refills slots on promise settlement alone.
+    await new Promise<void>((turn) => setImmediate(turn));
 
-    expect(fastBeforeIt).toBe(6);
+    // In waves, the fast ones behind the first five would still be waiting
+    // for the slow ones in front: 3 here instead of 6.
+    const fastWhileSlowHeld = [...finished];
+
+    openGate();
+    await pool;
+
+    expect(fastWhileSlowHeld).toHaveLength(6);
+    expect(fastWhileSlowHeld.every((key) => key.startsWith("fast-"))).toBe(
+      true,
+    );
+    expect(finished.indexOf("slow")).toBe(6);
+    expect(finished).toHaveLength(12);
   });
 
   it("finishes the rest when one piece of work throws", async () => {
