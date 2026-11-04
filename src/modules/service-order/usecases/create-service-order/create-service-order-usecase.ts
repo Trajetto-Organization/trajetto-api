@@ -385,6 +385,13 @@ class CreateServiceOrderUseCase {
               (serviceOrderData.new_mileage_after_service as number) ?? null,
             isCompleted: Boolean(created.completion_date),
             responsibleUserId: serviceOrderData.responsibleUserId,
+            // What the WhatsApp template prints (B1).
+            description: created.description ?? null,
+            maintenanceType: created.maintenance_type ?? null,
+            orderDate: created.date
+              ? new Date(created.date).toISOString()
+              : null,
+            timeZone: timeZoneOfBusiness(findBusiness),
           },
         });
 

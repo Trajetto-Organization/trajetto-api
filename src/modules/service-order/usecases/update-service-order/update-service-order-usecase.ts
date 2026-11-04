@@ -407,6 +407,17 @@ class UpdateServiceOrderUseCase {
               responsibleUserChanged && serviceOrderData.responsibleUserId
                 ? serviceOrderData.responsibleUserId
                 : null,
+            // What the WhatsApp template prints (B1).
+            description: updated.description ?? null,
+            maintenanceType: updated.maintenance_type ?? null,
+            orderDate: updated.date
+              ? new Date(updated.date).toISOString()
+              : null,
+            timeZone: timeZoneOfBusiness(findBusiness),
+            currentMileage:
+              (updated.current_mileage_at_service as number | null) ?? null,
+            newMileage:
+              (updated.new_mileage_after_service as number | null) ?? null,
           },
         });
 

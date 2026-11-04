@@ -91,10 +91,29 @@ describe("the request to the tower", () => {
     expect(rendered.message.endsWith("...")).toBe(true);
   });
 
-  it("lists every answer on WhatsApp", () => {
-    expect(renderAuthorizationRequestedWhatsApp(requested)).toContain(
-      "Ligou para o cliente: *Sim*",
-    );
+  // Plan of 02/11/2026 (B1): trajetto_autorizacao_ocorrencia, the answers
+  // on one line, the requester with the role.
+  it("lists every answer on WhatsApp, on one line", () => {
+    expect(renderAuthorizationRequestedWhatsApp(requested)).toEqual({
+      template: "trajetto_autorizacao_ocorrencia",
+      parameters: [
+        "Mercado Central",
+        "Cliente ausente",
+        "João Motorista (motorista)",
+        "Quem atendeu: Porteiro; Ligou para o cliente: Sim",
+        null,
+      ],
+    });
+  });
+
+  it("caps the answers at 200 characters on WhatsApp", () => {
+    const answers = renderAuthorizationRequestedWhatsApp({
+      ...requested,
+      answers: [{ label: "Detalhes", value: "x".repeat(400) }],
+    }).parameters[3] as string;
+
+    expect(answers.length).toBeLessThanOrEqual(200);
+    expect(answers.endsWith("…")).toBe(true);
   });
 
   it("is mandatory: it blocks a driver at an address", () => {
@@ -110,9 +129,15 @@ describe("the escalation", () => {
     expect(renderAuthorizationEscalatedInApp(payload, ctx).message).toContain(
       "Há 12 min",
     );
-    expect(renderAuthorizationEscalatedWhatsApp(payload)).toContain(
-      "há 12 min",
-    );
+    expect(renderAuthorizationEscalatedWhatsApp(payload)).toEqual({
+      template: "trajetto_autorizacao_sem_resposta",
+      parameters: [
+        "Mercado Central",
+        "12",
+        "Cliente ausente",
+        "João Motorista (motorista, aguardando no endereço)",
+      ],
+    });
   });
 });
 
@@ -254,11 +279,9 @@ describe("a delivery request", () => {
     expect(renderAuthorizationRequestedInApp(deliveryRequest, ctx).title).toBe(
       "Entrega aguardando autorização",
     );
-    expect(
-      renderAuthorizationRequestedWhatsApp(deliveryRequest).startsWith(
-        "⏳ *Entrega aguardando autorização*",
-      ),
-    ).toBe(true);
+    expect(renderAuthorizationRequestedWhatsApp(deliveryRequest).template).toBe(
+      "trajetto_autorizacao_entrega",
+    );
   });
 
   it("answers the driver with Entrega autorizada / não autorizada", () => {
@@ -398,17 +421,17 @@ describe("a notice about a request that no longer waits (review r1)", () => {
   it("a request filed from the panel does not say a driver is waiting", () => {
     const fromPanel = { ...requested, fromDriver: false, waitingMinutes: 12 };
 
-    expect(renderAuthorizationRequestedWhatsApp(fromPanel)).toContain(
-      "Registrado por: *João Motorista*",
+    expect(renderAuthorizationRequestedWhatsApp(fromPanel).parameters[2]).toBe(
+      "João Motorista",
     );
-    expect(renderAuthorizationEscalatedWhatsApp(fromPanel)).not.toContain(
-      "O motorista está parado",
+    expect(renderAuthorizationEscalatedWhatsApp(fromPanel).parameters[3]).toBe(
+      "João Motorista",
     );
     expect(
       renderAuthorizationEscalatedWhatsApp({
         ...requested,
         waitingMinutes: 12,
-      }),
-    ).toContain("O motorista está parado aguardando");
+      }).parameters[3],
+    ).toBe("João Motorista (motorista, aguardando no endereço)");
   });
 });

@@ -41,22 +41,39 @@ describe("delivery occurrence policy renders", () => {
     expect(rendered.entityId).toBe("delivery-1");
   });
 
-  it("tells the WhatsApp story with the fate the delivery took", () => {
-    const message = renderDeliveryOccurrenceWhatsApp(payload());
-
-    expect(message).toContain("Entrega com insucesso");
-    expect(message).toContain("Recusa da mercadoria");
-    expect(message).toContain("Cliente recusou por avaria na caixa");
-    expect(message).toContain("Fotos anexadas: *2*");
-    expect(message).toContain("Insucesso");
+  // Plan of 02/11/2026 (B1): trajetto_entrega_insucesso.
+  it("tells the WhatsApp story in its own template", () => {
+    expect(renderDeliveryOccurrenceWhatsApp(payload())).toEqual({
+      template: "trajetto_entrega_insucesso",
+      parameters: [
+        "Mercado Central",
+        "Recusa da mercadoria",
+        "João Motorista",
+        "Cliente recusou por avaria na caixa",
+        "2",
+      ],
+    });
   });
 
-  it("omits what the report did not carry", () => {
-    const message = renderDeliveryOccurrenceWhatsApp(
-      payload({ description: null, photosCount: 0 }),
+  it("leaves to the fallbacks what the report did not carry", () => {
+    const rendered = renderDeliveryOccurrenceWhatsApp(
+      payload({ description: "  \n ", photosCount: 0 }),
     );
 
-    expect(message).not.toContain("Relato:");
-    expect(message).not.toContain("Fotos anexadas");
+    expect(rendered?.parameters[3]).toBeNull();
+    expect(rendered?.parameters[4]).toBeNull();
+  });
+
+  /**
+   * The approved text says "Insucesso": the topic is published only when a
+   * blocking occurrence moved the delivery to FAILED. Anything else would
+   * make Meta's fixed text false, so no WhatsApp goes out for it.
+   */
+  it("sends no WhatsApp unless the delivery ended as an insucesso", () => {
+    expect(
+      renderDeliveryOccurrenceWhatsApp(
+        payload({ deliveryStatusAfter: "Em rota" }),
+      ),
+    ).toBeNull();
   });
 });

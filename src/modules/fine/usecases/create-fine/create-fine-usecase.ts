@@ -203,6 +203,11 @@ class CreateFineUseCase {
             driverName: findDriver.name,
             branchName: findBranch.corporate_reason,
             violationCode: `${findTrafficViolationCode.code}-${findTrafficViolationCode.sub_code}`,
+            // The WhatsApp template's "Infração" and "Vencimento" (B1).
+            violationDescription: findTrafficViolationCode.description || null,
+            dueDate: created.due_date
+              ? new Date(created.due_date).toISOString()
+              : null,
             actor: {
               id: userId,
               name: findUser.name,

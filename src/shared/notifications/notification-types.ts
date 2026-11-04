@@ -3,6 +3,8 @@ import { NotificationCategory } from "@prisma/client";
 import { IUserRepository } from "@/modules/user/repositories/IUser-repository";
 import { User } from "@/modules/user/dtos/user-dto";
 
+import type { RenderedWhatsApp } from "./whatsapp-templates";
+
 /**
  * Contract between use cases (that publish events) and the pipeline (that
  * turns them into notifications).
@@ -32,10 +34,20 @@ interface FineCreatedPayload {
   driverName: string;
   branchName: string;
   violationCode: string;
+
+  /**
+   * The infraction's description from the code table, and the fine's due
+   * day (ISO) — the WhatsApp template's "Infração" and "Vencimento" (plan of
+   * 02/11/2026, B1). Optional: an event queued before them renders the code
+   * alone and the variable's fallback.
+   */
+  violationDescription?: string | null;
+  dueDate?: string | null;
   actor: {
     id: string;
     name: string;
-    email: string;
+    /** Null for a driver's login without an e-mail (plan of 02/11/2026, D2). */
+    email: string | null;
     role: string;
   };
 }
@@ -48,6 +60,24 @@ interface VehicleChecklistCreatedPayload {
 
   /** MOBILE_APP | WEB_DASHBOARD. Optional: events published before the field existed. */
   origin?: string;
+}
+
+/**
+ * A checklist with a defect (plan of 02/11/2026, F2): published with the
+ * checklist, only when shared/vehicle/checklist-defects.ts finds one.
+ */
+interface VehicleChecklistDefectsFoundPayload {
+  checklistId: string;
+  businessId: string;
+  vehicleId: string;
+  vehiclePlate: string;
+  vehicleDescription: string;
+  /** The vehicle's responsible person when published (F1); null = admins. */
+  responsibleUserId: string | null;
+  /** The failed items, by label, worst first. */
+  defects: string[];
+  /** "Reprovado" / "Aprovado com restrições"; null when approved. */
+  verdict: string | null;
 }
 
 interface FuelCreatedPayload {
@@ -105,9 +135,38 @@ interface ServiceOrderCreatedPayload {
   newMileage: number | null;
   isCompleted: boolean;
   responsibleUserId: string;
+
+  /**
+   * What the WhatsApp template prints (plan of 02/11/2026, B1). Optional:
+   * an event queued before them goes out with the variables' fallbacks.
+   */
+  description?: string | null;
+  /** INTERNAL | EXTERNAL. */
+  maintenanceType?: string | null;
+  /** ISO of the order's date, printed in `timeZone`. */
+  orderDate?: string | null;
+  timeZone?: string;
 }
 
-interface AccountPayableCreatedPayload {
+/**
+ * What the WhatsApp template of a bill prints (plan of 02/11/2026, B1).
+ * Every field optional: an event queued before them goes out with the
+ * variables' fallbacks.
+ */
+interface AccountPayableNoticeFields {
+  /** The supplier's name, or the payee typed on the bill. */
+  payeeName?: string | null;
+  /** ISO of the due day, printed in `timeZone`. */
+  dueDate?: string | null;
+  timeZone?: string;
+  category?: string | null;
+  categoryDescription?: string | null;
+  description?: string | null;
+  /** The linked order's vehicle, next to its short code. */
+  serviceOrderVehiclePlate?: string | null;
+}
+
+interface AccountPayableCreatedPayload extends AccountPayableNoticeFields {
   accountPayableId: string;
   businessId: string;
   amount: number;
@@ -127,9 +186,17 @@ interface ServiceOrderUpdatedPayload {
    * unchanged assignment updates the order without paging anyone.
    */
   responsibleUserId: string | null;
+
+  /** Same optional fields as the creation's (plan of 02/11/2026, B1). */
+  description?: string | null;
+  maintenanceType?: string | null;
+  orderDate?: string | null;
+  timeZone?: string;
+  currentMileage?: number | null;
+  newMileage?: number | null;
 }
 
-interface AccountPayableUpdatedPayload {
+interface AccountPayableUpdatedPayload extends AccountPayableNoticeFields {
   accountPayableId: string;
   businessId: string;
   amount: number;
@@ -241,7 +308,8 @@ interface BusinessModuleChangedPayload {
   actor: {
     id: string;
     name: string;
-    email: string;
+    /** A MASTER, who always has one; typed as the User column (D2). */
+    email: string | null;
     role: string;
   };
 }
@@ -256,7 +324,34 @@ interface BusinessLimitChangedPayload {
   actor: {
     id: string;
     name: string;
-    email: string;
+    /** A MASTER, who always has one; typed as the User column (D2). */
+    email: string | null;
+    role: string;
+  };
+}
+
+/**
+ * A company's own settings changed (plan of 02/11/2026, M1): the checklist
+ * on the route or the geofence. The movement is the record — before, after
+ * and who — so the audit trail states it without a query.
+ */
+interface BusinessSettingsChangedPayload {
+  businessId: string;
+  businessName: string;
+  changes: Array<{
+    field:
+      | "checklist_requirement"
+      | "arrival_geofence_mode"
+      | "arrival_geofence_radius_m";
+    from: string | number;
+    to: string | number;
+  }>;
+  /** The audit sentence, already in pt-BR (describeSettingsChange). */
+  description: string;
+  actor: {
+    id: string;
+    name: string;
+    email: string | null;
     role: string;
   };
 }
@@ -425,6 +520,51 @@ interface RoutePlanChangedPayload {
   planVersion: number;
 }
 
+/**
+ * A route left open (plan of 02/11/2026, K11; decision D26): still "Em
+ * andamento", started before the company's today or more than 16 h ago. The
+ * admins hear it once per route, from the hourly sweep. The labels are
+ * written in the company's zone by the sweep, so the policy formats nothing.
+ */
+interface RouteLeftOpenPayload {
+  routeId: string;
+  businessId: string;
+  code: number;
+  routeName: string | null;
+  driverName: string | null;
+
+  /** The departure, ISO. */
+  startedAt: string;
+
+  /** "30/10 às 14:57", in the company's zone. */
+  sinceLabel: string;
+
+  /** Calendar days open in the company's zone; 0 = today, past 16 h. */
+  openDays: number;
+}
+
+/**
+ * A driver's route record refused for want of an active branch (wave 3.7):
+ * neither the vehicle nor the driver names an active branch, and the company
+ * has no single active one. The people who run the deliveries hear it once
+ * per route and moment (the event key, `route.record_branch_missing:
+ * <routeId>:<ROUTE_START|ROUTE_END|FUEL>`); the app lets the route go on and
+ * resends with "Tentar de novo" once the branch is fixed.
+ */
+interface RouteRecordBranchMissingPayload {
+  routeId: string;
+  businessId: string;
+  code: number;
+
+  /** The route's departure or arrival checklist, or a refuelling on it. */
+  record: "CHECKLIST" | "FUEL";
+
+  /** The checklist's moment; null for a refuelling. */
+  phase: "ROUTE_START" | "ROUTE_END" | null;
+  driverName: string | null;
+  vehiclePlate: string;
+}
+
 interface RouteCancelledPayload {
   routeId: string;
   businessId: string;
@@ -505,6 +645,23 @@ interface DeliveryCustomerPayload {
   scheduledDate: Date | string | null;
   deliveredAt: Date | string | null;
   receivedBy: string | null;
+
+  /**
+   * One message per stop, not per NF-e (plan of 02/11/2026, B6; decision
+   * D37): the route and the stop's group (RouteStop.stop_group_key) it was
+   * published for, and every delivery of that group the message speaks of —
+   * the first one is `deliveryId`. "Entregue" and "insucesso" wait 90 s
+   * and merge the siblings resolved meanwhile into `deliveries`. Absent on
+   * an event published before it, or for a stop of its own: the message is
+   * about `deliveryId` alone, as before.
+   */
+  routeId?: string | null;
+  stopGroupKey?: string | null;
+  deliveries?: Array<{
+    deliveryId: string;
+    invoiceNumber: string | null;
+    code: string | null;
+  }>;
 }
 
 /**
@@ -527,6 +684,7 @@ interface WebhookEndpointDisabledPayload {
 interface TopicPayloadMap {
   "fine.created": FineCreatedPayload;
   "vehicle-checklist.created": VehicleChecklistCreatedPayload;
+  "vehicle-checklist.defects_found": VehicleChecklistDefectsFoundPayload;
   "fuel.created": FuelCreatedPayload;
   "ai-verification.issue": AIVerificationIssuePayload;
   "service-order.created": ServiceOrderCreatedPayload;
@@ -547,10 +705,14 @@ interface TopicPayloadMap {
   "delivery-occurrence.authorization_escalated": DeliveryOccurrenceAuthorizationEscalatedPayload;
   "delivery-occurrence.authorization_decided": DeliveryOccurrenceAuthorizationDecidedPayload;
   "business-limit.changed": BusinessLimitChangedPayload;
+  // Plan of 02/11/2026 (M1): the company's own settings.
+  "business-settings.changed": BusinessSettingsChangedPayload;
   "chat-message.sent": ChatMessageSentPayload;
   "route.released": RouteReleasedPayload;
   "route.cancelled": RouteCancelledPayload;
   "route.plan_changed": RoutePlanChangedPayload;
+  "route.left_open": RouteLeftOpenPayload;
+  "route.record_branch_missing": RouteRecordBranchMissingPayload;
   "delivery.status_overridden": DeliveryStatusOverriddenPayload;
 
   // The three moments a carrier tells the person waiting for their delivery.
@@ -645,6 +807,18 @@ interface RenderedExternalMessage {
 
   /** Where the message sends them. Their tracking page, not our dashboard. */
   link: string;
+
+  /**
+   * WhatsApp only: the moment's fixed template approved by Meta, its fitted
+   * parameters and the suffix of each URL button (plan of 02/11/2026, B2).
+   * `body` then is the text as the customer reads it, for diagnostics; the
+   * carrier's own words go only by e-mail.
+   */
+  whatsapp?: {
+    name: string;
+    parameters: string[];
+    urlButtonSuffixes: string[];
+  };
 }
 
 interface PolicyDeps {
@@ -755,8 +929,17 @@ interface NotificationPolicyEntry<TPayload> {
     recipient: RecipientRenderContext,
   ): RenderedInApp;
 
-  /** Absent = this topic never sends WhatsApp. */
-  renderWhatsApp?(payload: TPayload): string;
+  /**
+   * Absent = this topic never sends WhatsApp. Which approved template and
+   * its raw parameters (whatsapp-templates.ts, plan of 02/11/2026, B1): the
+   * recipient decides the text where one event speaks to two audiences
+   * (masters and the company's admins). Null = nothing for this recipient —
+   * asked when the rows are created, so no WHATSAPP row exists for it.
+   */
+  renderWhatsApp?(
+    payload: TPayload,
+    recipient: RecipientRenderContext,
+  ): RenderedWhatsApp | null;
 
   /** Absent = no activity trail entry. Recorded once, for the actor. */
   renderActivity?(payload: TPayload): RenderedActivity;
@@ -772,6 +955,14 @@ interface NotificationPolicyEntry<TPayload> {
     payload: TPayload,
     recipient: RecipientRenderContext,
   ): RenderedPush;
+
+  /**
+   * How long the push is worth delivering to a phone that is off or out of
+   * signal, in seconds (Expo's `ttl`; plan of 02/11/2026, A7, decision D41).
+   * Absent = the provider's default (a month). Conservative on purpose: a
+   * value too short drops the message during a long gap in signal.
+   */
+  pushTtlSeconds?: number;
 }
 
 export type {
@@ -782,8 +973,11 @@ export type {
   DeliveryStatusOverriddenPayload,
   RouteCancelledPayload,
   RoutePlanChangedPayload,
+  RouteLeftOpenPayload,
+  RouteRecordBranchMissingPayload,
   FineCreatedPayload,
   VehicleChecklistCreatedPayload,
+  VehicleChecklistDefectsFoundPayload,
   FuelCreatedPayload,
   AIVerificationIssuePayload,
   DeliveryProofAIFlaggedPayload,
@@ -800,6 +994,7 @@ export type {
   MasterUserAccountUpdatedPayload,
   BusinessModuleChangedPayload,
   BusinessLimitChangedPayload,
+  BusinessSettingsChangedPayload,
   TopicPayloadMap,
   DeliveryOccurrenceReportedPayload,
   DeliveryOccurrenceAuthorizationRequestedPayload,

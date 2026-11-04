@@ -68,8 +68,9 @@ describe("update topics page only on hand-over", () => {
     );
   });
 
-  it("account payable WhatsApp closes the order id formatting", () => {
-    const text = renderAccountPayableUpdatedWhatsApp({
+  // Plan of 02/11/2026 (B1): the same template as the creation's.
+  it("account payable WhatsApp uses the bill's template with the order's code", () => {
+    const rendered = renderAccountPayableUpdatedWhatsApp({
       accountPayableId: "ap-1",
       businessId: "biz-1",
       amount: 100,
@@ -77,6 +78,11 @@ describe("update topics page only on hand-over", () => {
       registrationUserId: "user-9",
     });
 
-    expect(text).toContain("Identificador da ordem de serviço: *os-1*");
+    expect(rendered.template).toBe("trajetto_conta_pagar");
+    expect(String(rendered.parameters[0]).replace(/\s/g, " ")).toBe(
+      "R$ 100,00",
+    );
+    // Not a UUID: the id goes whole.
+    expect(rendered.parameters[5]).toBe("os-1");
   });
 });

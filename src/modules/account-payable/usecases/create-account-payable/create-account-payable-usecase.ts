@@ -1,4 +1,5 @@
 import { inject, injectable } from "tsyringe";
+import { accountPayableNoticeFields } from "@/shared/notifications/whatsapp-parameters";
 import { assertTenantAccess } from "@/modules/middlewares/tenant-authorization";
 import { IAccountPayableRepository } from "@/modules/account-payable/repositories/IAccount-payable-repository";
 
@@ -152,6 +153,8 @@ class CreateAccountPayableUseCase {
             amount: Number(created.amount),
             serviceOrderId: (created.serviceOrderId as string) || null,
             registrationUserId: accountPayableData.registrationUserId,
+            // What the WhatsApp template prints (B1).
+            ...accountPayableNoticeFields(created, timeZone),
           },
         });
 

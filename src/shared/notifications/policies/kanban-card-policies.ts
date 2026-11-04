@@ -1,6 +1,5 @@
 import { NotificationCategory } from "@prisma/client";
 
-import { formatDate } from "@/shared/utils/format-values";
 import { redirectPage } from "@/shared/utils/link-redirect-page";
 
 import {
@@ -13,6 +12,8 @@ import {
   RenderedActivity,
   RenderedInApp,
 } from "../notification-types";
+import type { RenderedWhatsApp } from "../whatsapp-templates";
+import { dayLabel, oneLine } from "../whatsapp-parameters";
 
 /**
  * Notification policies for kanban cards.
@@ -55,38 +56,58 @@ function kanbanCardLink(
   return `${ctx.baseUrl}/${basePath}/kanban?search=${cardId}&page=1`;
 }
 
-function kanbanCardWhatsAppBody(
-  header: string,
+/**
+ * The four parameters both kanban templates share (B1): the title instead of
+ * the card's UUID, the priority with its emoji, the due day and the
+ * description on one line — its lines joined with " · " first, so the
+ * automatic card of a service order (four lines) still reads as a list.
+ */
+function kanbanCardParameters(
   card: KanbanCardContent,
-): string {
-  const priority = priorityInfo(card.priority);
+): RenderedWhatsApp["parameters"] {
+  const priority = priorityInfo(card.priority ?? "");
+  const description = card.description
+    ? oneLine(
+        card.description
+          .split(/\r?\n/)
+          .map((line) => line.trim())
+          .filter(Boolean)
+          .join(" · "),
+      )
+    : null;
 
   return [
-    header,
-    `Título: *${card.title}*`,
-    card.description && `Descrição: ${card.description}`,
-    `Prioridade: ${priority.emoji} *${priority.text}*`,
-    card.dueDate &&
-      `Data de vencimento: *${formatDate(card.dueDate, card.timeZone)}*`,
-    `Identificador do card: *${card.cardId}*`,
-    `Para mais detalhes, acesse o sistema.`,
-  ]
-    .filter(Boolean)
-    .join("\n");
+    oneLine(card.title),
+    `${priority.emoji} ${priority.text}`,
+    dayLabel(card.dueDate, card.timeZone),
+    description,
+  ];
 }
 
-function renderKanbanCardCreatedWhatsApp(card: KanbanCardContent): string {
-  return kanbanCardWhatsAppBody(
-    `📋 *Novo Card Atribuído! Você foi designado como responsável por um novo card no kanban*`,
-    card,
-  );
+/**
+ * trajetto_kanban_card_criado. Null for the card a service order created on
+ * its own: the responsible already got the order's WhatsApp, and a second
+ * one about the same work is noise (the in-app and the e-mail stay).
+ */
+function renderKanbanCardCreatedWhatsApp(
+  card: KanbanCardContent & { fromServiceOrder?: boolean },
+): RenderedWhatsApp | null {
+  if (card.fromServiceOrder) return null;
+
+  return {
+    template: "trajetto_kanban_card_criado",
+    parameters: kanbanCardParameters(card),
+  };
 }
 
-function renderKanbanCardUpdatedWhatsApp(card: KanbanCardContent): string {
-  return kanbanCardWhatsAppBody(
-    `📝 *Card Atualizado! Você foi designado como responsável por um card atualizado no kanban*`,
-    card,
-  );
+/** trajetto_kanban_card_atualizado: sent only when the card changed hands. */
+function renderKanbanCardUpdatedWhatsApp(
+  card: KanbanCardContent,
+): RenderedWhatsApp {
+  return {
+    template: "trajetto_kanban_card_atualizado",
+    parameters: kanbanCardParameters(card),
+  };
 }
 
 async function resolveAssignedRecipient(

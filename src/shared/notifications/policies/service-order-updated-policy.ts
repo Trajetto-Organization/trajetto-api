@@ -11,6 +11,8 @@ import {
   RenderedInApp,
   ServiceOrderUpdatedPayload,
 } from "../notification-types";
+import type { RenderedWhatsApp } from "../whatsapp-templates";
+import { serviceOrderWhatsApp } from "./service-order-created-policy";
 
 /**
  * Notification policy for an updated service order.
@@ -40,16 +42,11 @@ function renderServiceOrderUpdatedInApp(
   };
 }
 
+/** trajetto_ordem_servico (B1), sent only when the responsible changed. */
 function renderServiceOrderUpdatedWhatsApp(
   payload: ServiceOrderUpdatedPayload,
-): string {
-  return [
-    `🔧 *Ordem de Serviço Atualizada! Você foi designado como responsável por uma ordem de serviço atualizada*`,
-    `Veículo: *${payload.vehiclePlate || "N/A"}*`,
-    `Valor total: *${formatCurrency(payload.totalAmount)}*`,
-    `Identificador da OS: *${payload.serviceOrderId}*`,
-    `Para mais detalhes, acesse o sistema.`,
-  ].join("\n");
+): RenderedWhatsApp {
+  return serviceOrderWhatsApp(payload);
 }
 
 function renderServiceOrderUpdatedActivity(

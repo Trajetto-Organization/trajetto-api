@@ -11,6 +11,8 @@ import {
   RenderedActivity,
   RenderedInApp,
 } from "../notification-types";
+import type { RenderedWhatsApp } from "../whatsapp-templates";
+import { accountPayableWhatsApp } from "./account-payable-created-policy";
 
 /**
  * Notification policy for an updated account payable — same hand-over rule
@@ -40,19 +42,11 @@ function renderAccountPayableUpdatedInApp(
   };
 }
 
+/** trajetto_conta_pagar (B1), sent only when the responsible changed. */
 function renderAccountPayableUpdatedWhatsApp(
   payload: AccountPayableUpdatedPayload,
-): string {
-  return [
-    `💰 *Conta a Pagar Atualizada! Você foi designado como responsável por uma conta a pagar atualizada*`,
-    `Valor: *${formatCurrency(payload.amount)}*`,
-    `Identificador da conta a pagar: *${payload.accountPayableId}*`,
-    payload.serviceOrderId &&
-      `Identificador da ordem de serviço: *${payload.serviceOrderId}*`,
-    `Para mais detalhes, acesse o sistema.`,
-  ]
-    .filter(Boolean)
-    .join("\n");
+): RenderedWhatsApp {
+  return accountPayableWhatsApp(payload);
 }
 
 function renderAccountPayableUpdatedActivity(

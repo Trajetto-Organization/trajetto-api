@@ -65,32 +65,60 @@ describe("service-order.created in-app render", () => {
   });
 });
 
+/**
+ * Plan of 02/11/2026 (B1): trajetto_ordem_servico, with the order's short
+ * code instead of its raw id and the mileage in whole kilometres.
+ */
 describe("service-order.created WhatsApp render", () => {
-  it("carries vehicle, value, mileage transition and id", () => {
-    const text = renderServiceOrderCreatedWhatsApp(payload());
+  it("names its template, with vehicle, code, value and mileage in order", () => {
+    const raw = renderServiceOrderCreatedWhatsApp({
+      ...payload(),
+      serviceOrderId: "018f0000-0000-7000-8000-8f2c4a9e1b3d",
+      description: "Troca de óleo",
+      maintenanceType: "EXTERNAL",
+      orderDate: "2026-11-02T12:00:00.000Z",
+      timeZone: "America/Sao_Paulo",
+    });
 
-    expect(text).toContain("ABC1D23");
-    expect(text).toContain("80000km → 80450km");
-    expect(text).toContain("os-1");
+    // Intl puts a non-breaking space after "R$"; the registry flattens it.
+    const rendered = {
+      ...raw,
+      parameters: raw.parameters.map((value) =>
+        typeof value === "string" ? value.replace(/\s/g, " ") : value,
+      ),
+    };
+
+    expect(rendered).toEqual({
+      template: "trajetto_ordem_servico",
+      parameters: [
+        "ABC1D23",
+        "8f2c4a9e1b3d",
+        "Troca de óleo",
+        "Externa",
+        "02/11/2026",
+        "R$ 1.250,50",
+        "80.000 km na abertura e 80.450 km após o serviço",
+      ],
+    });
   });
 
-  it("drops the mileage line when there is no reading", () => {
-    const text = renderServiceOrderCreatedWhatsApp({
+  it("leaves the mileage to its fallback when there is no reading", () => {
+    const rendered = renderServiceOrderCreatedWhatsApp({
       ...payload(),
       currentMileage: null,
       newMileage: null,
     });
 
-    expect(text).not.toContain("Quilometragem");
+    expect(rendered.parameters[6]).toBeNull();
   });
 
-  it("falls back to N/A for a vehicle without plate", () => {
-    const text = renderServiceOrderCreatedWhatsApp({
+  it("leaves a vehicle without plate to its fallback", () => {
+    const rendered = renderServiceOrderCreatedWhatsApp({
       ...payload(),
       vehiclePlate: null,
     });
 
-    expect(text).toContain("Veículo: *N/A*");
+    expect(rendered.parameters[0]).toBeNull();
   });
 });
 

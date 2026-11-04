@@ -11,6 +11,13 @@ import {
   RenderedActivity,
   RenderedInApp,
 } from "../notification-types";
+import type { RenderedWhatsApp } from "../whatsapp-templates";
+import {
+  accountPayableCategoryLabel,
+  dayLabel,
+  oneLine,
+  shortId,
+} from "../whatsapp-parameters";
 
 /**
  * Notification policy for a newly registered account payable.
@@ -42,19 +49,52 @@ function renderAccountPayableCreatedInApp(
   };
 }
 
+/** trajetto_conta_pagar (B1): the same template for created and updated. */
 function renderAccountPayableCreatedWhatsApp(
   payload: AccountPayableCreatedPayload,
-): string {
-  return [
-    `💰 *Nova Conta a Pagar! Você foi designado como responsável por uma nova conta a pagar*`,
-    `Valor: *${formatCurrency(payload.amount)}*`,
-    `Identificador da conta a pagar: *${payload.accountPayableId}*`,
-    payload.serviceOrderId &&
-      `Identificador da ordem de serviço: *${payload.serviceOrderId}*`,
-    `Para mais detalhes, acesse o sistema.`,
-  ]
-    .filter(Boolean)
-    .join("\n");
+): RenderedWhatsApp {
+  return accountPayableWhatsApp(payload);
+}
+
+/**
+ * Shared with account-payable.updated: "foi atribuída a você como
+ * responsável" is true of both. The amount opens the text because it is
+ * what the notification preview shows.
+ */
+function accountPayableWhatsApp(
+  payload: Pick<
+    AccountPayableCreatedPayload,
+    | "amount"
+    | "serviceOrderId"
+    | "payeeName"
+    | "dueDate"
+    | "timeZone"
+    | "category"
+    | "categoryDescription"
+    | "description"
+    | "serviceOrderVehiclePlate"
+  >,
+): RenderedWhatsApp {
+  const linkedOrder = payload.serviceOrderId
+    ? oneLine(payload.serviceOrderVehiclePlate)
+      ? `${shortId(payload.serviceOrderId)} (veículo ${oneLine(payload.serviceOrderVehiclePlate)})`
+      : shortId(payload.serviceOrderId)
+    : null;
+
+  return {
+    template: "trajetto_conta_pagar",
+    parameters: [
+      formatCurrency(Number(payload.amount) || 0),
+      oneLine(payload.payeeName),
+      dayLabel(payload.dueDate, payload.timeZone),
+      accountPayableCategoryLabel(
+        payload.category,
+        payload.categoryDescription,
+      ),
+      oneLine(payload.description),
+      linkedOrder,
+    ],
+  };
 }
 
 function renderAccountPayableCreatedActivity(
@@ -91,4 +131,5 @@ export {
   renderAccountPayableCreatedInApp,
   renderAccountPayableCreatedWhatsApp,
   renderAccountPayableCreatedActivity,
+  accountPayableWhatsApp,
 };

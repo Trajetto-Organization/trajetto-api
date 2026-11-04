@@ -125,13 +125,70 @@ describe("business plan notification policies", () => {
     expect(limitActivity.visibilityLevel).toBe("TENANT_VISIBLE");
   });
 
-  it("carries the change to WhatsApp for whoever configured a number", () => {
-    expect(
-      businessModuleChangedPolicy.renderWhatsApp!(modulePayload),
-    ).toContain("Entregas");
+  // Plan of 02/11/2026 (B1): one template per audience. The other masters
+  // read who did it; the company's admins read "pelo Suporte Trajetto".
+  it("carries the change to WhatsApp, in the template of each audience", () => {
+    const master = { id: "master-2", role: "MASTER" };
+    const admin = { id: "admin-1", role: "BUSINESS_ADMIN" };
 
-    expect(businessLimitChangedPolicy.renderWhatsApp!(limitPayload)).toContain(
-      "34",
-    );
+    expect(
+      businessModuleChangedPolicy.renderWhatsApp!(modulePayload, master),
+    ).toEqual({
+      template: "trajetto_modulo_plano",
+      parameters: [
+        "Business Test",
+        "Entregas",
+        "Desabilitado",
+        "Gabriel (gabriel@trajetto.com)",
+      ],
+    });
+
+    expect(
+      businessModuleChangedPolicy.renderWhatsApp!(modulePayload, admin),
+    ).toEqual({
+      template: "trajetto_modulo_desabilitado_empresa",
+      parameters: ["Business Test", "Entregas"],
+    });
+
+    expect(
+      businessLimitChangedPolicy.renderWhatsApp!(limitPayload, master),
+    ).toEqual({
+      template: "trajetto_limite_plano",
+      parameters: [
+        "Business Test",
+        "Veículos contratados",
+        "34 veículos",
+        "20 veículos",
+        "Gabriel (gabriel@trajetto.com)",
+      ],
+    });
+
+    expect(
+      businessLimitChangedPolicy.renderWhatsApp!(limitPayload, admin),
+    ).toEqual({
+      template: "trajetto_limite_plano_empresa",
+      parameters: [
+        "Business Test",
+        "Veículos contratados",
+        "34 veículos",
+        "20 veículos",
+      ],
+    });
+  });
+
+  it("never shows the master's name or e-mail to the company's admins", () => {
+    const admin = { id: "admin-1", role: "BUSINESS_ADMIN" };
+
+    const rendered = JSON.stringify([
+      businessModuleChangedPolicy.renderWhatsApp!(modulePayload, admin),
+      businessModuleChangedPolicy.renderWhatsApp!(
+        { ...modulePayload, enabled: true },
+        admin,
+      ),
+      businessLimitChangedPolicy.renderWhatsApp!(limitPayload, admin),
+    ]);
+
+    expect(rendered).not.toContain(actor.name);
+    expect(rendered).not.toContain(actor.email);
   });
 });
