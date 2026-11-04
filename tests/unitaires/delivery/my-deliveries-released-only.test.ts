@@ -99,8 +99,25 @@ describe("the routes of the driver's list (design §6)", () => {
         },
       ]),
     ).toEqual([
-      { id: "r1", code: 12, plan_version: 4 },
-      { id: "r2", code: 13, plan_version: 1 },
+      // Plan of 02/11/2026 (C2, C4): no vehicle on these stops' routes and
+      // no checklist read here (routesOf's second argument); a route with an
+      // open stop has not ended (completed_at null).
+      {
+        id: "r1",
+        code: 12,
+        plan_version: 4,
+        vehicle: null,
+        checklists: { route_start: null, route_end: null },
+        completed_at: null,
+      },
+      {
+        id: "r2",
+        code: 13,
+        plan_version: 1,
+        vehicle: null,
+        checklists: { route_start: null, route_end: null },
+        completed_at: null,
+      },
     ]);
   });
 

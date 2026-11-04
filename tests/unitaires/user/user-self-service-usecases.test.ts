@@ -42,6 +42,7 @@ import type { Business } from "@/modules/business/dtos/business-dto";
 import { InMemoryUserRepository } from "@/modules/user/repositories/in-memory/in-memory-user-repository";
 import { InMemoryUserTokensRepository } from "@/modules/user/repositories/in-memory/in-memory-user-tokens-repository";
 import { InMemoryBusinessRepository } from "@/modules/business/repositories/in-memory/in-memory-business-repository";
+import { InMemoryBusinessSettingsRepository } from "@/modules/business/repositories/in-memory/in-memory-business-settings-repository";
 
 import { UpdateUserNameUseCase } from "@/modules/user/usecases/update-user-name/update-user-name-usecase";
 import { UpdateUserPasswordUseCase } from "@/modules/user/usecases/update-user-password/update-user-password-usecase";
@@ -59,6 +60,7 @@ const UNKNOWN = "018f3200-0000-7000-8000-0000000000ff";
 let users: InMemoryUserRepository;
 let tokens: InMemoryUserTokensRepository;
 let businesses: InMemoryBusinessRepository;
+let settings: InMemoryBusinessSettingsRepository;
 
 /** The storage boundary, recording what was deleted. */
 function storage(overrides: Partial<UploadService> = {}) {
@@ -88,6 +90,7 @@ beforeEach(async () => {
   users = new InMemoryUserRepository();
   tokens = new InMemoryUserTokensRepository();
   businesses = new InMemoryBusinessRepository();
+  settings = new InMemoryBusinessSettingsRepository();
 
   users.user.push(
     {
@@ -278,9 +281,12 @@ describe("checking a forgot-password link", () => {
 describe("reading your own session (/user/me)", () => {
   it("gives the MASTER every module and no offline pre-check", async () => {
     const { service } = storage();
-    const me = await new GetUserUseCase(users, service, businesses).execute(
-      MASTER,
-    );
+    const me = await new GetUserUseCase(
+      users,
+      service,
+      businesses,
+      settings,
+    ).execute(MASTER);
 
     expect(me.enabledModules).toEqual(expect.arrayContaining(["FLEET"]));
     expect(me.ai).toEqual({ precheck: false, reason: "not_contracted" });
@@ -295,9 +301,12 @@ describe("reading your own session (/user/me)", () => {
     } as never;
 
     const { service } = storage();
-    const me = await new GetUserUseCase(users, service, businesses).execute(
-      PERSON,
-    );
+    const me = await new GetUserUseCase(
+      users,
+      service,
+      businesses,
+      settings,
+    ).execute(PERSON);
 
     expect(me.enabledModules).toEqual(["FLEET"]);
     expect(me.ai).toEqual({ precheck: false, reason: "not_contracted" });
@@ -308,9 +317,12 @@ describe("reading your own session (/user/me)", () => {
     users.user[0].avatar = "avatars/ana.png";
 
     const { service } = storage();
-    const me = await new GetUserUseCase(users, service, businesses).execute(
-      PERSON,
-    );
+    const me = await new GetUserUseCase(
+      users,
+      service,
+      businesses,
+      settings,
+    ).execute(PERSON);
 
     expect(me.avatar).toBe("https://cdn.test/avatars/ana.png?signed");
   });
@@ -319,8 +331,82 @@ describe("reading your own session (/user/me)", () => {
     const { service } = storage();
 
     await expect(
-      new GetUserUseCase(users, service, businesses).execute(UNKNOWN),
+      new GetUserUseCase(users, service, businesses, settings).execute(UNKNOWN),
     ).rejects.toMatchObject({ statusCode: 404 });
+  });
+  /**
+   * Plan of 02/11/2026 (M1, M6): the session carries the company's settings,
+   * which the app caches for its offline window. A company that never saved
+   * reads the defaults; a setting whose module is off reads as its neutral
+   * value, and the MASTER belongs to no company.
+   */
+  it("carries the defaults for a company that never saved its settings", async () => {
+    const { service } = storage();
+    const me = await new GetUserUseCase(
+      users,
+      service,
+      businesses,
+      settings,
+    ).execute(PERSON);
+
+    expect(me.businessSettings).toEqual({
+      checklist_requirement: "NONE",
+      arrival_geofence_mode: "DISABLED",
+      arrival_geofence_radius_m: 500,
+    });
+  });
+
+  it("carries the saved settings, each only while its module is on", async () => {
+    await settings.save({
+      businessId: CARRIER,
+      updatedById: PERSON,
+      checklist_requirement: "ROUTE_START_AND_END",
+      arrival_geofence_mode: "BLOCK",
+      arrival_geofence_radius_m: 300,
+    });
+
+    const read = async (modules: string[]) => {
+      users.user[0].business = {
+        is_active: true,
+        entitlements: modules.map((module) => ({ module, enabled: true })),
+      };
+
+      const { service } = storage();
+
+      return (
+        await new GetUserUseCase(users, service, businesses, settings).execute(
+          PERSON,
+        )
+      ).businessSettings;
+    };
+
+    expect(await read(["FLEET", "DELIVERIES"])).toEqual({
+      checklist_requirement: "ROUTE_START_AND_END",
+      arrival_geofence_mode: "BLOCK",
+      arrival_geofence_radius_m: 300,
+    });
+    // Deliveries without the fleet: no checklist on the route.
+    expect(await read(["DELIVERIES"])).toMatchObject({
+      checklist_requirement: "NONE",
+      arrival_geofence_mode: "BLOCK",
+    });
+    // The fleet alone: neither applies.
+    expect(await read(["FLEET"])).toMatchObject({
+      checklist_requirement: "NONE",
+      arrival_geofence_mode: "DISABLED",
+    });
+  });
+
+  it("carries no settings for the MASTER", async () => {
+    const { service } = storage();
+    const me = await new GetUserUseCase(
+      users,
+      service,
+      businesses,
+      settings,
+    ).execute(MASTER);
+
+    expect(me.businessSettings).toBeNull();
   });
 });
 

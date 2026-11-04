@@ -22,6 +22,10 @@ import {
 } from "@/modules/business/usecases/manage-entitlements/manage-entitlements-controller";
 
 import { GetAIUsageController } from "@/modules/business/usecases/get-ai-usage/get-ai-usage-controller";
+import {
+  GetBusinessSettingsController,
+  UpdateBusinessSettingsController,
+} from "@/modules/business/usecases/manage-settings/manage-settings-controller";
 import { verifyUserRole } from "@/modules/middlewares/verify-user-role";
 
 import {
@@ -59,6 +63,8 @@ const updateBusinessEntitlementController =
   new UpdateBusinessEntitlementController();
 const getModuleImpactController = new GetModuleImpactController();
 const getAIUsageController = new GetAIUsageController();
+const getBusinessSettingsController = new GetBusinessSettingsController();
+const updateBusinessSettingsController = new UpdateBusinessSettingsController();
 
 async function businessRoutes(app: FastifyInstance) {
   app.post(
@@ -280,7 +286,7 @@ async function businessRoutes(app: FastifyInstance) {
         tags: ["business"],
         summary: "Mostra o que a empresa tem em jogo num módulo",
         description:
-          "Contagens de registros, trabalho em andamento e quantos usuários perdem itens do menu se o módulo for desligado. Alimenta o diálogo de confirmação; desligar um módulo não exclui nada.",
+          "Contagens de registros, trabalho em andamento e quantos usuários perdem itens do menu se o módulo for desligado. Alimenta o diálogo de confirmação; desligar um módulo não exclui nada. Em DELIVERIES, `inFlight` traz as rotas em andamento (ficam como estão, sem cancelar nem concluir, e retomam ao religar), as entregas pendentes e em rota e os webhooks ativos, que ficam pausados até o módulo voltar.",
         params: businessSchemas.moduleImpactParams,
         response: {
           200: businessResponses.moduleImpactData,
@@ -303,7 +309,7 @@ async function businessRoutes(app: FastifyInstance) {
         tags: ["business"],
         summary: "Liga ou desliga um módulo da empresa",
         description:
-          "Liga ou desliga um módulo vendável (FLEET, DELIVERIES) da empresa. As rotas de um módulo recusam a empresa que não o tem ligado (403 MODULE_NOT_ENABLED).",
+          "Liga ou desliga um módulo vendável (FLEET, DELIVERIES) da empresa. As rotas de um módulo recusam a empresa que não o tem ligado (403 MODULE_NOT_ENABLED). Com DELIVERIES desligado, a API pública responde 403 MODULE_NOT_ENABLED e os webhooks da empresa ficam pausados: os eventos já na fila e os gerados no meio-tempo são guardados por até 30 dias (a janela de reenvio) e saem quando o módulo é religado. Rotas em andamento não são canceladas: ficam como estão e o app do motorista guarda os comprovantes até o módulo voltar. Salvar DELIVERIES ligado de novo, mesmo sem mudança, reenvia o que ainda estiver retido.",
         params: businessSchemas.updateDeleteBusiness,
         body: businessSchemas.updateEntitlement,
         response: {
@@ -315,6 +321,66 @@ async function businessRoutes(app: FastifyInstance) {
       },
     },
     updateBusinessEntitlementController.handle,
+  );
+
+  // -------------------------------------------------------------------
+  // Plan of 02/11/2026 (M1; decision D11): the company's own settings,
+  // for its BUSINESS_ADMIN and for a MASTER. The tenant guard (preHandler)
+  // refuses another company's id with 403 TENANT_ACCESS_DENIED, whether it
+  // exists or not.
+  // -------------------------------------------------------------------
+
+  app.get(
+    "/:businessId/settings",
+    {
+      onRequest: [ensureAuthenticated],
+      preHandler: [verifyUserRole(["MASTER", "BUSINESS_ADMIN"])],
+      schema: {
+        security: [{ bearerAuth: [] }],
+        tags: ["business"],
+        summary: "Consulta as configurações da empresa",
+        description:
+          "As configurações que a própria empresa decide (plano de 02/11/2026, M1): quando a rota exige o checklist do veículo (`checklist_requirement`) e o apontamento fora do raio do cliente — chegada, comprovante e ocorrência — com o modo (`arrival_geofence_mode`) e o raio em metros (`arrival_geofence_radius_m`). Uma empresa que nunca salvou lê o padrão (NONE, DISABLED, 500) e `updated_at` nulo. `available` diz quais seções valem pelos módulos ligados (o checklist exige Frota e Entregas; a geocerca, Entregas). Só o administrador da própria empresa e o MASTER: outros papéis recebem 403 AUTH_ROLE_FORBIDDEN, e o id de outra empresa, 403 TENANT_ACCESS_DENIED. Empresa inexistente: 404 BUSINESS_NOT_FOUND.",
+        params: businessSchemas.updateDeleteBusiness,
+        response: {
+          200: businessResponses.businessSettingsData,
+          400: businessResponses.businessParamErrors,
+          401: errorResponse,
+          403: errorResponse,
+          404: businessResponses.businessNotFoundCodedPath,
+          429: errorResponse,
+          500: businessResponses.internalServerError,
+        },
+      },
+    },
+    getBusinessSettingsController.handle,
+  );
+
+  app.put(
+    "/:businessId/settings",
+    {
+      onRequest: [ensureAuthenticated],
+      preHandler: [verifyUserRole(["MASTER", "BUSINESS_ADMIN"])],
+      schema: {
+        security: [{ bearerAuth: [] }],
+        tags: ["business"],
+        summary: "Salva as configurações da empresa",
+        description:
+          "Salva os campos enviados (ao menos um) das configurações da empresa; os ausentes ficam como estão. `checklist_requirement`: NONE, ROUTE_START, ROUTE_END ou ROUTE_START_AND_END. `arrival_geofence_mode`: DISABLED, ALERT (o app pede confirmação e o apontamento fica sinalizado) ou BLOCK (o app impede chegada e comprovante fora do raio; a ocorrência nunca é impedida, só sinalizada; precisão ruim ou endereço sem coordenada nunca bloqueiam; envio da fila offline nunca é recusado pelo servidor). `arrival_geofence_radius_m`: inteiro de 50 a 5.000. Salvar o que já está gravado não muda nada nem registra atividade. Uma mudança fica na atividade da empresa (com o antes e o depois) e avisa as telas e os apps abertos (catalogChanged `settings`), que passam a usar o valor novo em segundos. `businessId` no corpo é recusado (400). Mesmos papéis e respostas de erro da consulta.",
+        params: businessSchemas.updateDeleteBusiness,
+        body: businessSchemas.updateBusinessSettings,
+        response: {
+          200: businessResponses.businessSettingsSaved,
+          400: businessResponses.businessParamErrors,
+          401: errorResponse,
+          403: errorResponse,
+          404: businessResponses.businessNotFoundCodedPath,
+          429: errorResponse,
+          500: businessResponses.internalServerError,
+        },
+      },
+    },
+    updateBusinessSettingsController.handle,
   );
 
   app.post(

@@ -14,6 +14,18 @@ import { updateAILimitSchema } from "@/schemas/update-ai-limit-schema";
 import { updateVehicleLimitSchema } from "@/schemas/update-vehicle-limit-schema";
 
 import { confirmDeletionCodeSchema } from "@/schemas/confirm-deletion-code-schema";
+import {
+  businessSettingsValuesSchema,
+  updateBusinessSettingsSchema,
+} from "@/schemas/business-settings-schema";
+
+// What 0 means differs per limit, on purpose (plan M2, LIMIT_ZERO_MEANING in
+// shared/entitlements/entitlement-rules): every field that carries one says it.
+const AI_LIMIT_DESCRIPTION =
+  "Fotos que a IA pode ler por mês, no fuso da empresa (0 = IA desligada: nenhuma foto é lida).";
+
+const VEHICLE_LIMIT_DESCRIPTION =
+  "Nº de veículos contratados, base da cobrança (0 = sem limite: não configurado, nunca bloqueia).";
 
 const businessSchemas = {
   createBusiness: createBusinessSchema,
@@ -49,7 +61,44 @@ const businessSchemas = {
     enabled: z.boolean().describe("Habilitar (true) ou desabilitar (false)."),
   }),
   confirmDeletionCode: confirmDeletionCodeSchema,
+  // Plan of 02/11/2026 (M1).
+  updateBusinessSettings: updateBusinessSettingsSchema,
 };
+
+/** GET/PUT /business/:businessId/settings (plan of 02/11/2026, M1). */
+const businessSettingsView = businessSettingsValuesSchema.extend({
+  businessId: z.string(),
+  available: z
+    .object({
+      checklist: z
+        .boolean()
+        .describe("O checklist na rota vale: a empresa tem Frota e Entregas."),
+      geofence: z
+        .boolean()
+        .describe("A geocerca vale: a empresa tem Entregas."),
+    })
+    .describe(
+      "Quais seções valem, pelos módulos ligados (M6). Uma configuração cujo módulo está desligado fica guardada e é ignorada pelo app e pela API.",
+    ),
+  limits: z
+    .object({
+      geofence_radius_min_m: z.number().int(),
+      geofence_radius_max_m: z.number().int(),
+    })
+    .describe("Os limites do raio, para o formulário."),
+  updated_at: z
+    .union([z.string(), z.date()])
+    .nullable()
+    .describe(
+      "Quando foram salvas pela última vez; nulo enquanto a empresa usa o padrão.",
+    ),
+  updated_by: z
+    .object({ id: z.string(), name: z.string() })
+    .nullable()
+    .describe(
+      "Quem salvou por último; nulo sem alteração ou se a conta foi excluída.",
+    ),
+});
 
 /** An error body with the `code` a client branches on (decision 11.3). */
 const codedError = (description: string) =>
@@ -93,11 +142,7 @@ const businessResponses = {
     timezone: z
       .string()
       .describe("Fuso horário da empresa (IANA), um dos fusos do Brasil."),
-    vehicle_limit: z
-      .number()
-      .describe(
-        "Nº de veículos contratados (base de cobrança; 0 = não configurado).",
-      ),
+    vehicle_limit: z.number().describe(VEHICLE_LIMIT_DESCRIPTION),
     vehicle_count: z
       .number()
       .describe("Veículos ativos (ocupando vaga do plano)."),
@@ -292,7 +337,7 @@ const businessResponses = {
       id: z.string(),
       corporate_reason: z.string(),
       fantasy_name: z.string().nullable(),
-      ai_analysis_limit: z.number(),
+      ai_analysis_limit: z.number().describe(AI_LIMIT_DESCRIPTION),
     }),
   }),
   vehicleLimitUpdated: z.object({
@@ -301,7 +346,7 @@ const businessResponses = {
       id: z.string(),
       corporate_reason: z.string(),
       fantasy_name: z.string().nullable(),
-      vehicle_limit: z.number(),
+      vehicle_limit: z.number().describe(VEHICLE_LIMIT_DESCRIPTION),
     }),
   }),
   moduleImpactData: z.object({
@@ -320,9 +365,7 @@ const businessResponses = {
           enabled: z.boolean(),
         }),
       ),
-      vehicle_limit: z
-        .number()
-        .describe("Nº de veículos contratados (0 = não configurado)."),
+      vehicle_limit: z.number().describe(VEHICLE_LIMIT_DESCRIPTION),
       vehicle_count: z
         .number()
         .describe(
@@ -333,7 +376,9 @@ const businessResponses = {
         .describe("Veículos inativos (histórico preservado, sem ocupar vaga)."),
       vehicle_limit_enabled: z
         .boolean()
-        .describe("Se há limite configurado (`vehicle_limit` > 0)."),
+        .describe(
+          "Se há limite configurado (`vehicle_limit` > 0); falso = frota sem limite.",
+        ),
       vehicle_status_counts: z
         .object({
           ACTIVE: z.number().describe("Ativos (ocupam vaga)"),
@@ -349,12 +394,17 @@ const businessResponses = {
   entitlementUpdated: z.object({
     message: z.string().default("Módulo da empresa atualizado com sucesso!"),
   }),
+  businessSettingsData: z.object({ data: businessSettingsView }),
+  businessSettingsSaved: z.object({
+    message: z.string().default("Configurações da empresa salvas com sucesso!"),
+    data: businessSettingsView,
+  }),
   aiUsageData: z.object({
     data: z.object({
       id: z.string(),
       corporate_reason: z.string(),
       fantasy_name: z.string().nullable(),
-      ai_analysis_limit: z.number(),
+      ai_analysis_limit: z.number().describe(AI_LIMIT_DESCRIPTION),
       ai_analysis_used: z
         .number()
         .describe(
@@ -383,8 +433,16 @@ const businessResponses = {
         .string()
         .nullable()
         .describe("Fuso da empresa em que o mês da cota é contado."),
-      ai_analysis_remaining: z.number(),
-      ai_analysis_enabled: z.boolean(),
+      ai_analysis_remaining: z
+        .number()
+        .describe(
+          "Fotos que ainda podem ser lidas no período: o limite menos as lidas e as em andamento, nunca abaixo de 0 (um limite reduzido abaixo do uso dá 0).",
+        ),
+      ai_analysis_enabled: z
+        .boolean()
+        .describe(
+          "Se a IA está ligada para a empresa (`ai_analysis_limit` > 0). Falso = nenhuma foto é lida e os registros chegam sem sugestão.",
+        ),
       ai_analysis_used_by_type: z
         .object({
           fuel: z.number().describe("Fotos de odômetro de abastecimentos."),

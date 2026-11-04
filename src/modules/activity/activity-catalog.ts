@@ -80,6 +80,8 @@ interface ActivityTypeEntry {
 const ACTIVITY_TYPE_CATALOG = [
   { value: "Empresa", module: "CORE" },
   { value: "Plano", module: "CORE" },
+  // Plan of 02/11/2026 (M1): the company's own settings.
+  { value: "Configurações da empresa", module: "CORE" },
   { value: "Filial", module: "CORE" },
   { value: "Usuário", module: "CORE" },
   { value: "Perfil de acesso", module: "CORE" },

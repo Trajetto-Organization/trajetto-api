@@ -1451,7 +1451,10 @@ type CatalogEntity =
   | "part"
   | "vehicle_type"
   | "fuel_type"
-  | "profile_access";
+  | "profile_access"
+  // Plan of 02/11/2026 (M1): the company's own settings (checklist on the
+  // route, geofence). The app refetches its payload and applies them.
+  | "settings";
 
 /**
  * Tells every open screen of a company that a catalog it may be showing in a

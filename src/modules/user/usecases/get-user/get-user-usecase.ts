@@ -3,6 +3,7 @@ import { BusinessModule } from "@prisma/client";
 
 import { IUserRepository } from "../../repositories/IUser-repository";
 import { IBusinessRepository } from "@/modules/business/repositories/IBusiness-repository";
+import type { IBusinessSettingsRepository } from "@/modules/business/repositories/IBusiness-settings-repository";
 
 import { User } from "../../dtos/user-dto";
 import { ResourceNotFoundError } from "../errors/resource-not-found-error";
@@ -14,6 +15,10 @@ import {
   sessionPrecheckFlag,
   type SessionPrecheckFlag,
 } from "@/shared/ai-precheck/device-precheck";
+import {
+  effectiveBusinessSettings,
+  type BusinessSettingsValues,
+} from "@/shared/business/business-settings";
 
 @injectable()
 class GetUserUseCase {
@@ -24,23 +29,49 @@ class GetUserUseCase {
     private uploadService: UploadService,
     @inject("BusinessRepository")
     private business: IBusinessRepository,
+    @inject("BusinessSettingsRepository")
+    private settings: IBusinessSettingsRepository,
   ) {}
 
-  async execute(userId: string): Promise<User & { ai: SessionPrecheckFlag }> {
+  async execute(userId: string): Promise<
+    User & {
+      ai: SessionPrecheckFlag;
+      businessSettings: BusinessSettingsValues | null;
+    }
+  > {
     const findUser = await this.user.findUserById(userId);
 
     if (!findUser) {
       throw new ResourceNotFoundError();
     }
 
+    const enabledModules = resolveEnabledModules(findUser);
+
     return {
       ...findUser,
-      enabledModules: resolveEnabledModules(findUser),
+      enabledModules,
       ai: await this.sessionAi(findUser),
+      businessSettings: await this.sessionSettings(findUser, enabledModules),
       avatar: findUser.avatar
         ? await this.uploadService.getFileUrl(findUser.avatar)
         : null,
     };
+  }
+
+  /**
+   * The company's settings as this session applies them (plan of 02/11/2026,
+   * M1 and M6), read with the session so the app caches them for its offline
+   * window. A MASTER belongs to no company.
+   */
+  private async sessionSettings(
+    user: User,
+    enabledModules: string[],
+  ): Promise<BusinessSettingsValues | null> {
+    if (user.role === "MASTER" || !user.businessId) return null;
+
+    const stored = await this.settings.findByBusinessId(user.businessId);
+
+    return effectiveBusinessSettings(stored, enabledModules);
   }
 
   /**
@@ -94,4 +125,4 @@ function resolveEnabledModules(user: User): string[] {
     .map((row) => row.module);
 }
 
-export { GetUserUseCase };
+export { GetUserUseCase, resolveEnabledModules };

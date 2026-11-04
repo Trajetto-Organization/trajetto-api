@@ -21,6 +21,8 @@ import { InMemoryRouteRepository } from "@/modules/route/repositories/in-memory/
 
 import { InMemoryOccurrenceTypeRepository } from "@/modules/occurrence-type/repositories/in-memory/in-memory-occurrence-type-repository";
 import { InMemoryVehicleRepository } from "@/modules/vehicle/repositories/in-memory/in-memory-vehicle-repository";
+import { InMemoryBusinessSettingsRepository } from "@/modules/business/repositories/in-memory/in-memory-business-settings-repository";
+import { InMemoryVehicleChecklistRepository } from "@/modules/vehicle-checklist/repositories/in-memory/in-memory-vehicle-checklist-repository";
 
 import type { NotificationService } from "@/shared/services/notification-service";
 import type { UploadService } from "@/shared/services/upload-service";
@@ -234,6 +236,8 @@ describe("driver surface: my-deliveries", () => {
         [],
         [{ id: BUSINESS, timezone: "America/Sao_Paulo" }],
       ),
+      new InMemoryBusinessSettingsRepository(),
+      new InMemoryVehicleChecklistRepository(),
     );
 
     const result = await useCase.execute({
@@ -266,6 +270,8 @@ describe("driver surface: my-deliveries", () => {
         [],
         [{ id: BUSINESS, timezone: "America/Sao_Paulo" }],
       ),
+      new InMemoryBusinessSettingsRepository(),
+      new InMemoryVehicleChecklistRepository(),
     );
 
     await expect(
