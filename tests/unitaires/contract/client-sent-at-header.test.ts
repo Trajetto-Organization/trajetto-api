@@ -55,6 +55,10 @@ describe("the X-Client-Sent-At header", () => {
       "POST /route/start-route/{routeId}/business/{businessId}",
       "POST /driver-pause/start/{businessId}",
       "POST /driver-pause/end/{businessId}",
+      // Plan of 02/11/2026 (K6): the checklist and the refuelling the app
+      // queues offline are dated by the tap too.
+      "POST /vehicle-checklist/create-vehicle-checklist/{businessId}",
+      "POST /fuel/create-fuel/{businessId}",
     ];
 
     const readers = published

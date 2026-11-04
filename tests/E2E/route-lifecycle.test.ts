@@ -374,6 +374,51 @@ describe("cancelling a route that already left", () => {
     expect(row.status).toBe("PENDING");
     expect(row.driverId).toBeNull();
     expect(row.vehicleId).toBeNull();
+
+    // And its timeline says why, in the same commit (K8); the proven one
+    // gets no line.
+    const route = await prisma.route.findUniqueOrThrow({
+      where: { id: routeId },
+    });
+    const lines = await prisma.deliveryEvent.findMany({
+      where: { routeId, type: "ROUTE_REMOVED" },
+    });
+
+    expect(lines.map((line) => [line.deliveryId, line.note])).toEqual([
+      [untouched, `Rota ${route.code} cancelada: Caminhão quebrou`],
+    ]);
+    expect(lines[0].businessId).toBe(CARRIER);
+  });
+
+  it("closes as Cancelada when its last open stop is called off and nothing was worked (K8)", async () => {
+    const first = await seedDelivery();
+    const second = await seedDelivery();
+
+    const routeId = await runningRoute([first, second]);
+
+    const one = await repository.settleStopForDelivery(first, CARRIER, {
+      from: ["PENDING", "ARRIVED"],
+      status: "CANCELLED",
+    });
+
+    expect(one?.closedRoute).toBeNull();
+
+    const last = await repository.settleStopForDelivery(second, CARRIER, {
+      from: ["PENDING", "ARRIVED"],
+      status: "CANCELLED",
+    });
+
+    expect(last?.closedRoute).toMatchObject({
+      status: "CANCELLED",
+      cancellation_reason: "Todas as paradas canceladas",
+      completed_at: null,
+    });
+
+    const row = await prisma.route.findUniqueOrThrow({
+      where: { id: routeId },
+    });
+
+    expect(row.status).toBe("CANCELLED");
   });
 
   it("frees the returned delivery for another route", async () => {

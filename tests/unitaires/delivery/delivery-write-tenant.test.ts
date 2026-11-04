@@ -200,7 +200,12 @@ describe("CreateDeliveryUseCase", () => {
 
 describe("UpdateDeliveryUseCase", () => {
   const edit = (userId: string, deliveryId: string) =>
-    new UpdateDeliveryUseCase(users, shippers, deliveries).execute({
+    new UpdateDeliveryUseCase(
+      users,
+      shippers,
+      deliveries,
+      new InMemoryRouteRepository(),
+    ).execute({
       userId,
       businessId: ALFA,
       deliveryId,

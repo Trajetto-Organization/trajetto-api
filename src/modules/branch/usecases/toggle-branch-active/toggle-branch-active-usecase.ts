@@ -16,6 +16,10 @@ import { assertTenantAccess } from "@/modules/middlewares/tenant-authorization";
 import { NotificationService } from "@/shared/services/notification-service";
 import { sendCatalogChangedEvent } from "@/websocket";
 
+import type { IDriverRepository } from "@/modules/driver/repositories/IDriver-repository";
+import { totalOpenRoutes } from "@/modules/driver/driver-rules";
+import { DriverHasOpenRoutesError } from "@/modules/driver/usecases/errors/driver-has-open-routes-error";
+
 @injectable()
 class ToggleBranchActiveUseCase {
   constructor(
@@ -27,6 +31,8 @@ class ToggleBranchActiveUseCase {
     private branch: IBranchRepository,
     @inject("NotificationService")
     private notificationService: NotificationService,
+    @inject("DriverRepository")
+    private driver: IDriverRepository,
   ) {}
 
   async execute(
@@ -53,6 +59,18 @@ class ToggleBranchActiveUseCase {
     // Another company's branch answers like a missing one (decision 11.3).
     if (!findBranch || findBranch.businessId !== businessId) {
       throw new BranchNotFoundError();
+    }
+
+    // An inactive branch locks its drivers out of the app (session
+    // eligibility), so a route one of them still has would never close — the
+    // same reason a driver with open routes is not deactivated (K10, decision
+    // D31). Only deactivating: reactivating is what lets such a route run.
+    if (findBranch.is_active !== false) {
+      const openRoutes = await this.driver.countOpenRoutesOfBranch(branchId);
+
+      if (totalOpenRoutes(openRoutes) > 0) {
+        throw new DriverHasOpenRoutesError(openRoutes, "DEACTIVATE_BRANCH");
+      }
     }
 
     /**

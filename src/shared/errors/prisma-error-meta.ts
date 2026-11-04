@@ -166,9 +166,27 @@ function isSerializationFailure(error: unknown): boolean {
   return state !== undefined && SERIALIZATION_SQLSTATES.has(state);
 }
 
+/**
+ * Whether a write was refused by a foreign key: P2003 (Prisma's model
+ * queries), or SQLSTATE 23503 when the statement was raw. A DELETE that
+ * counted the references first and met one committed in between lands here
+ * — a conflict to answer like the count would have (409), not a 500.
+ */
+function isForeignKeyViolation(error: unknown): boolean {
+  if (
+    error instanceof Prisma.PrismaClientKnownRequestError &&
+    error.code === "P2003"
+  ) {
+    return true;
+  }
+
+  return sqlStateOf(error) === "23503";
+}
+
 export {
   driverAdapterCauseOf,
   isDriverAdapterError,
+  isForeignKeyViolation,
   isSerializationFailure,
   sqlStateOf,
   uniqueTargetOf,

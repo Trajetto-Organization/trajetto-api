@@ -153,6 +153,7 @@ class CancelRouteUseCase {
         expectedStatus: route.status,
         status: "CANCELLED",
         cancellation_reason: reason,
+        actorId: userId,
       },
       tx,
     );

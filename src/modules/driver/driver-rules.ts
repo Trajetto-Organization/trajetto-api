@@ -35,7 +35,45 @@ const plural = (count: number, one: string, many: string) =>
  * another driver or cancelled. Each step speaks of one route or of several,
  * as the count says.
  */
-function openRoutesRefusal(counts: OpenRouteCounts): string {
+/**
+ * The acts that lock a driver out of the app, and so are refused while a
+ * route still needs them: deactivating the driver (decision 8.3), revoking
+ * their login and deactivating their branch (K10, decision D31) — the session
+ * check refuses all three alike, so a route left open never closes and the
+ * phone's outbox stalls on "auth".
+ */
+type DriverLockout =
+  | "DEACTIVATE_DRIVER"
+  | "REVOKE_ACCESS"
+  | "DEACTIVATE_BRANCH";
+
+/** How each act opens and closes the sentence; the counts and steps are shared. */
+const LOCKOUT_WORDING: Record<
+  DriverLockout,
+  { refusal: string; holder: string; before: string }
+> = {
+  DEACTIVATE_DRIVER: {
+    refusal: "Não é possível inativar este motorista",
+    holder: "ele tem",
+    before: "Antes de inativá-lo",
+  },
+  REVOKE_ACCESS: {
+    refusal: "Não é possível revogar o acesso deste usuário",
+    holder: "o motorista vinculado tem",
+    before: "Antes de revogar o acesso",
+  },
+  DEACTIVATE_BRANCH: {
+    refusal: "Não é possível desativar esta filial",
+    holder: "os motoristas dela têm",
+    before: "Antes de desativá-la",
+  },
+};
+
+function openRoutesRefusal(
+  counts: OpenRouteCounts,
+  act: DriverLockout = "DEACTIVATE_DRIVER",
+): string {
+  const wording = LOCKOUT_WORDING[act];
   const waiting = counts.PLANNED + counts.RELEASED;
 
   const parts = [
@@ -61,8 +99,8 @@ function openRoutesRefusal(counts: OpenRouteCounts): string {
   ].filter(Boolean);
 
   return (
-    `Não é possível inativar este motorista: ele tem ${parts.join(" e ")}. ` +
-    `Antes de inativá-lo, ${steps.join(" e ")}.`
+    `${wording.refusal}: ${wording.holder} ${parts.join(" e ")}. ` +
+    `${wording.before}, ${steps.join(" e ")}.`
   );
 }
 
@@ -271,6 +309,7 @@ export {
   openRoutesRefusal,
   totalOpenRoutes,
   type CnhValidity,
+  type DriverLockout,
   type OpenRouteCounts,
   type OpenRouteStatus,
 };

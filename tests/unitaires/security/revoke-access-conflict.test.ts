@@ -10,10 +10,14 @@ const sendSecurityEventToUser = vi.fn();
 vi.mock("@/websocket", () => ({
   sendSecurityEventToUser: (...args: unknown[]) =>
     sendSecurityEventToUser(...args),
+  // A driver's login going dark refreshes the chat pickers' "com o app".
+  sendCatalogChangedEvent: () => undefined,
 }));
 
 import { InMemoryUserRepository } from "@/modules/user/repositories/in-memory/in-memory-user-repository";
 import { UserRevokeAccessUseCase } from "@/modules/user/usecases/user-revoke-access/user-revoke-access-usecase";
+import { InMemoryDriverRepository } from "@/modules/driver/repositories/in-memory/in-memory-driver-repository";
+import { InMemoryDriverEnrollmentRepository } from "@/modules/user/repositories/in-memory/in-memory-driver-enrollment-repository";
 import { ToggleConflictError } from "@/modules/business/usecases/errors/toggle-conflict-error";
 
 /**
@@ -107,7 +111,11 @@ describe("when another administrator flips first", () => {
     sendSecurityEventToUser.mockClear();
 
     users = new UsersLostRace();
-    revokeAccess = new UserRevokeAccessUseCase(users);
+    revokeAccess = new UserRevokeAccessUseCase(
+      users,
+      new InMemoryDriverRepository(),
+      new InMemoryDriverEnrollmentRepository(),
+    );
 
     targetId = await seed(users);
   });
@@ -138,7 +146,11 @@ describe("when the flip lands", () => {
     sendSecurityEventToUser.mockClear();
 
     users = new InMemoryUserRepository();
-    revokeAccess = new UserRevokeAccessUseCase(users);
+    revokeAccess = new UserRevokeAccessUseCase(
+      users,
+      new InMemoryDriverRepository(),
+      new InMemoryDriverEnrollmentRepository(),
+    );
 
     targetId = await seed(users);
   });
@@ -166,5 +178,57 @@ describe("when the flip lands", () => {
     expect(sendSecurityEventToUser).toHaveBeenCalledWith(targetId, {
       reason: "access_restored",
     });
+  });
+});
+
+describe("revoking a driver's login", () => {
+  /**
+   * The access QR code still on the manager's screen dies with the access
+   * (plan of 02/11/2026, D3/D5). While revoked it cannot be consumed anyway,
+   * but restoring the access within its ten minutes used to bring it back: a
+   * screenshot that went to the wrong person — often the very reason the
+   * access was revoked — opened a session after the restore.
+   */
+  it("deletes the access QR code not yet used, and restoring does not bring it back", async () => {
+    sendSecurityEventToUser.mockClear();
+
+    const users = new InMemoryUserRepository();
+    const enrollment = new InMemoryDriverEnrollmentRepository();
+    const revokeAccess = new UserRevokeAccessUseCase(
+      users,
+      new InMemoryDriverRepository(),
+      enrollment,
+    );
+
+    await seed(users);
+    const driverLogin = await users.createUser({
+      email: "motorista@exemplo.com",
+      name: "Motorista",
+      role: "BUSINESS_USER",
+      password: "x",
+      businessId: CARRIER,
+      driverId: "driver-1",
+    });
+
+    await enrollment.issue({
+      userId: driverLogin.id,
+      businessId: CARRIER,
+      token: "qr-token-on-screen",
+      code: "ABCD2345",
+      expiresAt: new Date(Date.now() + 10 * 60_000),
+      createdById: ADMIN,
+    });
+
+    await revokeAccess.execute({ id: ADMIN, userId: driverLogin.id });
+
+    expect(await enrollment.findByToken("qr-token-on-screen")).toBeNull();
+
+    await revokeAccess.execute({ id: ADMIN, userId: driverLogin.id });
+
+    expect((await users.findUserById(driverLogin.id))?.access_revoked).toBe(
+      false,
+    );
+    expect(await enrollment.findByToken("qr-token-on-screen")).toBeNull();
+    expect(await enrollment.findByCode("ABCD2345")).toBeNull();
   });
 });

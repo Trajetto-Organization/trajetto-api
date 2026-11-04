@@ -255,6 +255,33 @@ describe("shippers", () => {
     expect(shippers.shippers).toHaveLength(0);
   });
 
+  it("answers a delivery written after the count with the same 409, not a 500 (K16)", async () => {
+    // The count said zero; a delivery committed before the DELETE, and the
+    // foreign key (RESTRICT) refused it with P2003.
+    const created = await create().execute(shipperOf(), DISPATCHER);
+    shippers.deliveryCounts.set(created.id as string, 1);
+
+    const count = shippers.countDeliveriesByShipperId.bind(shippers);
+    let reads = 0;
+
+    shippers.countDeliveriesByShipperId = async (id) =>
+      (reads += 1) === 1 ? 0 : count(id);
+
+    await expect(
+      remove().execute({
+        userId: DISPATCHER,
+        businessId: CARRIER,
+        shipperId: created.id as string,
+      }),
+    ).rejects.toMatchObject({
+      statusCode: 409,
+      code: "SHIPPER_HAS_DELIVERIES",
+      message: expect.stringContaining("1 entrega(s)"),
+    });
+
+    expect(shippers.shippers).toHaveLength(1);
+  });
+
   it("refuses a driver on edit and delete (403)", async () => {
     const created = await create().execute(shipperOf(), DISPATCHER);
 
@@ -421,6 +448,27 @@ describe("status change reasons", () => {
     await remove().execute(created.id as string, CARRIER, DISPATCHER);
 
     expect(reasons.statusChangeReasons).toHaveLength(0);
+  });
+
+  it("answers an override citing it after the count with the same 409, not a 500 (K16)", async () => {
+    const created = await create().execute(reasonOf() as never, DISPATCHER);
+    reasons.eventCountByReasonId.set(created.id as string, 1);
+
+    const count = reasons.countEventsByReasonId.bind(reasons);
+    let reads = 0;
+
+    reasons.countEventsByReasonId = async (id) =>
+      (reads += 1) === 1 ? 0 : count(id);
+
+    await expect(
+      remove().execute(created.id as string, CARRIER, DISPATCHER),
+    ).rejects.toMatchObject({
+      statusCode: 409,
+      code: "STATUS_CHANGE_REASON_IN_USE",
+      message: expect.stringContaining("explica 1 mudança"),
+    });
+
+    expect(reasons.statusChangeReasons).toHaveLength(1);
   });
 
   it("refuses a driver on edit and delete (403)", async () => {

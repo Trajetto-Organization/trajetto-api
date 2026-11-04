@@ -11,6 +11,7 @@ import {
 } from "../errors/occurrence-type-errors";
 
 import { AppError } from "@/shared/errors/AppError";
+import { isForeignKeyViolation } from "@/shared/errors/prisma-error-meta";
 
 import { callerNotFound } from "@/shared/delivery/caller-not-found";
 import { sendCatalogChangedEvent } from "@/websocket";
@@ -90,6 +91,15 @@ class DeleteOccurrenceTypeUseCase {
       });
     } catch (error) {
       if (error instanceof AppError) throw error;
+
+      // A report or pause committed between the in-use check and the
+      // DELETE: the foreign key (RESTRICT) refused it. The same 409 the
+      // check gives, instead of a 500 (K16).
+      if (isForeignKeyViolation(error)) {
+        throw new OccurrenceTypeInUseError(
+          "Existem registros de ocorrência ou pausa com ele.",
+        );
+      }
 
       throw new AppError(
         "Houve um erro ao tentar excluir o tipo de ocorrência! Por favor, tente novamente.",

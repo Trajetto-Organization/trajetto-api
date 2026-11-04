@@ -9,9 +9,18 @@ import {
 } from "../errors/shipper-errors";
 
 import { AppError } from "@/shared/errors/AppError";
+import { isForeignKeyViolation } from "@/shared/errors/prisma-error-meta";
 
 import { callerNotFound } from "@/shared/delivery/caller-not-found";
 import { sendCatalogChangedEvent } from "@/websocket";
+
+function hasDeliveries(count: number): ShipperHasDeliveriesError {
+  return new ShipperHasDeliveriesError(
+    count > 0
+      ? `Existem ${count} entrega(s) vinculada(s) a ele.`
+      : "Existem entregas vinculadas a ele.",
+  );
+}
 
 interface DeleteShipperRequest {
   userId: string;
@@ -58,14 +67,21 @@ class DeleteShipperUseCase {
       await this.shipper.countDeliveriesByShipperId(shipperId);
 
     if (deliveryCount > 0) {
-      throw new ShipperHasDeliveriesError(
-        `Existem ${deliveryCount} entrega(s) vinculada(s) a ele.`,
-      );
+      throw hasDeliveries(deliveryCount);
     }
 
     try {
       await this.shipper.deleteShipper(shipperId);
     } catch (error) {
+      // A delivery committed between the count and the DELETE: the foreign
+      // key (RESTRICT) refused it. The same 409 the count gives, counted
+      // again, instead of a 500 (K16).
+      if (isForeignKeyViolation(error)) {
+        throw hasDeliveries(
+          await this.shipper.countDeliveriesByShipperId(shipperId),
+        );
+      }
+
       throw new AppError(
         "Houve um erro ao tentar excluir o embarcador! Por favor, tente novamente.",
         500,

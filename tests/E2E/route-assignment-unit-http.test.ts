@@ -1190,6 +1190,9 @@ const DOCUMENTED_TIMELINE_KINDS = [
   "ON_THE_WAY",
   "OCCURRENCE",
   "MESSAGE",
+  // The planning lines, since PLANNING_TIMELINE_EVENTS_ENABLED (K8).
+  "ROUTE_ADDED",
+  "ROUTE_REMOVED",
 ];
 
 describe("the delivery's trail after plan changes (review r1 blocker)", () => {

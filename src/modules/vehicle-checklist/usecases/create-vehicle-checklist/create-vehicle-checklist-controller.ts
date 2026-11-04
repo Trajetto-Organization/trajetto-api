@@ -13,6 +13,10 @@ import { createVehicleChecklistSchema } from "@/schemas/create-vehicle-checklist
 import { PhotoValidationService } from "@/shared/services/photo-validation-service";
 import { normalizeFormFields } from "@/shared/utils/normalize-form-field";
 import { submissionKeyOf } from "@/shared/http/submission-key";
+import {
+  CLIENT_SENT_AT_HEADER,
+  resolveOccurredAt,
+} from "@/shared/delivery/occurred-at";
 
 class CreateVehicleChecklistController {
   async handle(request: FastifyRequest, reply: FastifyReply): Promise<void> {
@@ -111,10 +115,22 @@ class CreateVehicleChecklistController {
         });
     }
 
+    // K6: the inspection's own moment, moved onto the server's clock by the
+    // phone's send stamp, for a checklist the app queued offline (the device
+    // clock alone stamped it before). The web sends neither and keeps the
+    // date it picked. Not a column: it only decides checklist_date.
+    const { occurred_at: tappedAt, ...checklistFields } = checklistData;
+    const occurredAt = resolveOccurredAt({
+      occurredAt: tappedAt,
+      clientSentAt: request.headers[CLIENT_SENT_AT_HEADER],
+    });
+
+    if (occurredAt) checklistFields.checklist_date = occurredAt.toISOString();
+
     try {
       const checklist = await createVehicleChecklistUseCase.execute(
         {
-          ...checklistData,
+          ...checklistFields,
           businessId,
         },
         id,

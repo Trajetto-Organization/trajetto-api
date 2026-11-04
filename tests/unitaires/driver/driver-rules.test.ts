@@ -150,6 +150,34 @@ describe("openRoutesRefusal speaks of one route or of several", () => {
   });
 });
 
+describe("openRoutesRefusal for the other acts that take a driver off the road (K10)", () => {
+  // Revoking the login and deactivating the branch lock the driver out of
+  // the app exactly like the deactivation: same counts, same steps.
+  it("speaks of the account when the access is revoked", () => {
+    expect(
+      openRoutesRefusal(
+        { PLANNED: 0, RELEASED: 0, IN_PROGRESS: 1 },
+        "REVOKE_ACCESS",
+      ),
+    ).toBe(
+      "Não é possível revogar o acesso deste usuário: o motorista vinculado tem 1 rota em andamento. " +
+        "Antes de revogar o acesso, conclua ou cancele a rota em andamento.",
+    );
+  });
+
+  it("speaks of the branch's drivers when the branch is deactivated", () => {
+    expect(
+      openRoutesRefusal(
+        { PLANNED: 1, RELEASED: 1, IN_PROGRESS: 0 },
+        "DEACTIVATE_BRANCH",
+      ),
+    ).toBe(
+      "Não é possível desativar esta filial: os motoristas dela têm 2 rotas planejadas ou liberadas. " +
+        "Antes de desativá-la, designe outro motorista ou cancele as rotas que ainda não saíram.",
+    );
+  });
+});
+
 describe("birthDateKeyOf", () => {
   it("takes a YYYY-MM-DD as the day itself", () => {
     expect(birthDateKeyOf("1990-05-10")).toBe("1990-05-10");

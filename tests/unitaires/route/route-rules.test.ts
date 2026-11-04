@@ -10,6 +10,7 @@ import {
   isTerminalRouteStatus,
   nextSequence,
   resequence,
+  routeClosingStatus,
   routeProgress,
   SEQUENCE_STEP,
 } from "@/shared/route/route-rules";
@@ -179,6 +180,24 @@ describe("when a route is finished", () => {
 
   it("closes a route whose remaining stops were all cancelled", () => {
     expect(isRouteFinished(["COMPLETED", "CANCELLED"])).toBe(true);
+  });
+});
+
+describe("what a finished route closes as (K8, decision D32)", () => {
+  it("is Concluída once any stop reached an outcome", () => {
+    expect(routeClosingStatus(["COMPLETED", "CANCELLED"])).toBe("COMPLETED");
+    expect(routeClosingStatus(["FAILED"])).toBe("COMPLETED");
+  });
+
+  it("is Cancelada when every stop was called off", () => {
+    // Nothing was worked: "Concluída" would claim a route nobody ran.
+    expect(routeClosingStatus(["CANCELLED", "CANCELLED"])).toBe("CANCELLED");
+  });
+
+  it("does not close while a stop is open, nor an empty route", () => {
+    expect(routeClosingStatus(["CANCELLED", "ARRIVED"])).toBeNull();
+    expect(routeClosingStatus(["PENDING"])).toBeNull();
+    expect(routeClosingStatus([])).toBeNull();
   });
 
   it("never closes a route with no stops at all", () => {

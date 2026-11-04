@@ -10,6 +10,10 @@ import { createFuelSchema } from "@/schemas/create-fuel-schema";
 import { presignedPhotoSchema } from "@/schemas/presigned-photos-schema";
 import { normalizeFormFields } from "@/shared/utils/normalize-form-field";
 import { submissionKeyOf } from "@/shared/http/submission-key";
+import {
+  CLIENT_SENT_AT_HEADER,
+  resolveOccurredAt,
+} from "@/shared/delivery/occurred-at";
 
 import { updateDeleteBusinessSchema } from "@/schemas/update-delete-business-schema";
 
@@ -69,7 +73,19 @@ class CreateFuelController {
       formData.client_submission_id = idempotencyKey;
     }
 
-    const fuelData = createFuelSchema.parse(formData);
+    const { occurred_at: tappedAt, ...fuelData } =
+      createFuelSchema.parse(formData);
+
+    // K6: the refuelling's own moment, moved onto the server's clock by the
+    // phone's send stamp, for one the app queued offline (the device clock
+    // alone stamped it before). The web sends neither and keeps the date it
+    // picked. Not a column: it only decides refueling_date.
+    const occurredAt = resolveOccurredAt({
+      occurredAt: tappedAt,
+      clientSentAt: request.headers[CLIENT_SENT_AT_HEADER],
+    });
+
+    if (occurredAt) fuelData.refueling_date = occurredAt.toISOString();
 
     try {
       const fuel = await createFuelUseCase.execute(

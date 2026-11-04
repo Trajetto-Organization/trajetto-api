@@ -40,9 +40,13 @@ function announceStopSettled(
 
   // The route ended on this stop. Nobody pressed a button, so nobody is
   // watching for a response — which is exactly why the board has to be told.
+  // A route whose every stop was called off closed as Cancelada (K8, D32).
   if (settled.closedRoute) {
     sendRouteEventToBusiness(businessId, {
-      type: "route.completed",
+      type:
+        settled.closedRoute.status === "CANCELLED"
+          ? "route.cancelled"
+          : "route.completed",
       routeId: settled.closedRoute.id,
       routeCode: settled.closedRoute.code,
     } satisfies RouteRealtimeEvent);

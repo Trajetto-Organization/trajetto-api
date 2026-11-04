@@ -30,6 +30,16 @@ import {
   CLEARED_ADDRESS_POINT,
   addressChanged,
 } from "@/shared/delivery/address-point";
+import {
+  deliveryEditChanges,
+  deliveryEditNote,
+} from "@/shared/delivery/delivery-edit-changes";
+
+import database from "@/../infra/database";
+
+import type { IRouteRepository } from "@/modules/route/repositories/IRoute-repository";
+import type { PlanBump } from "@/modules/route/dtos/route-dto";
+import { announceDroppedPlans } from "@/modules/route/usecases/shared/route-plan-change";
 
 interface UpdateDeliveryRequest {
   userId: string;
@@ -47,6 +57,8 @@ class UpdateDeliveryUseCase {
     private shipper: IShipperRepository,
     @inject("DeliveryRepository")
     private delivery: IDeliveryRepository,
+    @inject("RouteRepository")
+    private route: IRouteRepository,
   ) {}
 
   async execute({
@@ -120,6 +132,16 @@ class UpdateDeliveryUseCase {
     // driver's hands is an assignment, which builds the route and its stop
     // (assign-deliveries); the edit schema does not carry them.
 
+    // What the edit really changes, against the row and its items as read:
+    // the form resends every field, and a resend is not a change (K9).
+    const changes = deliveryEditChanges(
+      findDelivery,
+      deliveryData.items !== undefined
+        ? await this.delivery.findDeliveryItems(deliveryId)
+        : [],
+      deliveryData,
+    );
+
     try {
       // The status the gate above approved, carried to the write. Reads sit
       // between them (import source, shipper), and that is the window in which
@@ -130,11 +152,48 @@ class UpdateDeliveryUseCase {
         ? { ...deliveryData, ...CLEARED_ADDRESS_POINT }
         : deliveryData;
 
-      return await this.delivery.updateDelivery(
-        deliveryId,
-        data,
-        findDelivery.status,
-      );
+      // A delivery on a route is on the driver's phone (K9). The route row
+      // is taken first — the order every writer takes route then delivery
+      // in, so a departure or a plan edit waits or wins — and the edit, the
+      // plan's new version and the trail's line commit together.
+      const { updated, bumps } = await database.$transaction(async (tx) => {
+        const routeId =
+          changes.length > 0
+            ? await this.route.lockRouteOfOpenStop(deliveryId, businessId, tx)
+            : null;
+
+        const row = await this.delivery.updateDelivery(
+          deliveryId,
+          data,
+          findDelivery.status,
+          tx,
+        );
+
+        if (!routeId) return { updated: row, bumps: [] as PlanBump[] };
+
+        await this.delivery.createDeliveryEvent(
+          {
+            type: "NOTE",
+            deliveryId,
+            actor: "USER",
+            reportedById: userId,
+            note: deliveryEditNote(changes),
+            routeId,
+          },
+          tx,
+        );
+
+        return {
+          updated: row,
+          bumps: await this.route.bumpPlanVersions([routeId], businessId, tx),
+        };
+      });
+
+      // After the commit: the screens refetch the plan, and the driver of a
+      // released route is pushed (announcePlanChange).
+      await announceDroppedPlans(this.user, businessId, bumps);
+
+      return updated;
     } catch (error) {
       if (error instanceof DeliveryStatusConflictError) {
         throw new AppError(error.message, 409, "DELIVERY_STATUS_CONFLICT");

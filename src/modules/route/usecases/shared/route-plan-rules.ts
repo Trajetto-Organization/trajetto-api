@@ -25,18 +25,15 @@ const PLANNING_EVENT_TYPES = ["ROUTE_ADDED", "ROUTE_REMOVED"] as const;
 /**
  * Whether plan changes write those two types on the delivery's trail.
  *
- * Off until every reader knows them: the delivery timeline builder, its
- * documented enum, the web timeline's KIND_META (which dereferences the kind
- * and crashed the delivery dialog on an unknown one) and the public events
- * feed. Those live outside the route module; flip this together with them.
- *
- * API readers are ready: the timeline builder titles both kinds, the
- * documented enums carry them and the public feed leaves them out. Still
- * waiting: the web timeline's KIND_META (and its fallback for an unknown
- * kind). When flipping, add both kinds to DOCUMENTED_TIMELINE_KINDS in
- * tests/E2E/route-assignment-unit-http.test.ts.
+ * It was off until every reader knew them: the delivery timeline builder,
+ * its documented enum, the public events feed (which leaves them out) and the
+ * web timeline's KIND_META (which dereferenced the kind and crashed the
+ * delivery dialog on an unknown one). All of them do now — the web carries
+ * both kinds and a fallback for any newer one since its 1.1.0 — so it is on:
+ * a cancelled route's "Rota N cancelada: motivo" line (K8) is one of these.
+ * Kept as a constant so the tests read one switch.
  */
-const PLANNING_TIMELINE_EVENTS_ENABLED = false;
+const PLANNING_TIMELINE_EVENTS_ENABLED = true;
 
 /**
  * The version check every plan write makes under the route lock. Absent

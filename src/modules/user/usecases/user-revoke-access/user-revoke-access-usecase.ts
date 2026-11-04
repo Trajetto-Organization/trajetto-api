@@ -11,6 +11,10 @@ import { sendSecurityEventToUser } from "@/websocket";
 import { permissionDenied } from "@/shared/errors/access-errors";
 
 import { announceDriverLoginChange } from "../../services/driver-login-catalog";
+import type { IDriverRepository } from "@/modules/driver/repositories/IDriver-repository";
+import type { IDriverEnrollmentRepository } from "../../repositories/IDriver-enrollment-repository";
+import { totalOpenRoutes } from "@/modules/driver/driver-rules";
+import { DriverHasOpenRoutesError } from "@/modules/driver/usecases/errors/driver-has-open-routes-error";
 import { assertTenantAccessToRecord } from "@/modules/middlewares/tenant-authorization";
 
 interface UserRevokeAccessProps {
@@ -35,6 +39,10 @@ class UserRevokeAccessUseCase {
   constructor(
     @inject("UserRepository")
     private user: IUserRepository,
+    @inject("DriverRepository")
+    private driver: IDriverRepository,
+    @inject("DriverEnrollmentRepository")
+    private driverEnrollment: IDriverEnrollmentRepository,
   ) {}
 
   async execute({ userId, id }: UserRevokeAccessProps): Promise<void> {
@@ -86,6 +94,22 @@ class UserRevokeAccessUseCase {
      */
     const wasRevoked = findRevokedUser.access_revoked ?? false;
 
+    // A driver's revoked login strands a route that still needs them, as
+    // deactivating the driver would (K10, decision D31): refused with the
+    // same counts. Only revoking: giving the login back is what lets such a
+    // route run. Read before the flip, like the driver deactivation's count
+    // used to be; a route released in the instant between is the same rare
+    // window it was there, and the dispatcher sees the driver locked out.
+    if (!wasRevoked && findRevokedUser.driverId) {
+      const openRoutes = await this.driver.countOpenRoutes(
+        findRevokedUser.driverId,
+      );
+
+      if (totalOpenRoutes(openRoutes) > 0) {
+        throw new DriverHasOpenRoutesError(openRoutes, "REVOKE_ACCESS");
+      }
+    }
+
     const flipped = await this.user.toggleUserAccessRevocation(
       userId,
       wasRevoked,
@@ -93,6 +117,15 @@ class UserRevokeAccessUseCase {
 
     if (!flipped) {
       throw new ToggleConflictError("de acesso deste usuário");
+    }
+
+    // The access QR code still on a screen dies with the access (plan of
+    // 02/11/2026, D3/D5). Revoked, it could not be consumed anyway; but a
+    // restore within its ten minutes brought it back, and a screenshot that
+    // went to the wrong person is a common reason to revoke in the first
+    // place. Restoring issues nothing: the manager shows a new code.
+    if (!wasRevoked && findRevokedUser.driverId) {
+      await this.driverEnrollment.revokeForUser(userId);
     }
 
     sendSecurityEventToUser(userId, {

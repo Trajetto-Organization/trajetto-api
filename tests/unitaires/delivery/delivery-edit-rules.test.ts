@@ -4,6 +4,7 @@ import { UpdateDeliveryUseCase } from "@/modules/delivery/usecases/update-delive
 import { CreateDeliveryUseCase } from "@/modules/delivery/usecases/create-delivery/create-delivery-usecase";
 
 import { InMemoryDeliveryRepository } from "@/modules/delivery/repositories/in-memory/in-memory-delivery-repository";
+import { InMemoryRouteRepository } from "@/modules/route/repositories/in-memory/in-memory-route-repository";
 import { InMemoryShipperRepository } from "@/modules/shipper/repositories/in-memory/in-memory-shipper-repository";
 import { InMemoryUserRepository } from "@/modules/user/repositories/in-memory/in-memory-user-repository";
 import { InMemoryBusinessRepository } from "@/modules/business/repositories/in-memory/in-memory-business-repository";
@@ -79,7 +80,12 @@ beforeEach(() => {
     } as Shipper,
   );
 
-  update = new UpdateDeliveryUseCase(users, shippers, deliveries);
+  update = new UpdateDeliveryUseCase(
+    users,
+    shippers,
+    deliveries,
+    new InMemoryRouteRepository(),
+  );
 
   create = new CreateDeliveryUseCase(
     users,

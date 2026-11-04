@@ -199,6 +199,42 @@ function isRouteFinished(stopStatuses: RouteStopStatus[]): boolean {
 }
 
 /**
+ * What a finished route closes as, or null while it is not finished.
+ *
+ * Concluída once any stop reached an outcome (delivered or failed). A route
+ * whose every stop was called off was never worked: "Concluída" claimed a
+ * route nobody ran, so it closes as Cancelada (K8, decision D32), with
+ * ROUTE_ALL_STOPS_CANCELLED_REASON as its reason.
+ */
+function routeClosingStatus(
+  stopStatuses: RouteStopStatus[],
+): Extract<RouteStatus, "COMPLETED" | "CANCELLED"> | null {
+  if (!isRouteFinished(stopStatuses)) return null;
+
+  return stopStatuses.every((status) => status === "CANCELLED")
+    ? "CANCELLED"
+    : "COMPLETED";
+}
+
+/** The cancellation reason of a route that closed with nothing worked (D32). */
+const ROUTE_ALL_STOPS_CANCELLED_REASON = "Todas as paradas canceladas";
+
+/**
+ * The timeline line of a delivery a cancelled route handed back (K8): why it
+ * is Pendente again, in the dispatcher's own words.
+ */
+function routeCancelledNote(route: {
+  code: number;
+  cancellation_reason?: string | null;
+}): string {
+  const reason = route.cancellation_reason?.trim();
+
+  return reason
+    ? `Rota ${route.code} cancelada: ${reason}`
+    : `Rota ${route.code} cancelada.`;
+}
+
+/**
  * Sequence numbers for stops appended to a route.
  *
  * Spaced by ten so a stop can be moved between two others by giving it the
@@ -415,6 +451,7 @@ function routeCompletedAt({
 
 export {
   OPEN_STOP_STATUSES,
+  ROUTE_ALL_STOPS_CANCELLED_REASON,
   ROUTE_STATUS_LABELS,
   ROUTE_STOP_STATUS_LABELS,
   ROUTE_STOP_TRANSITIONS,
@@ -431,6 +468,8 @@ export {
   nextSequence,
   resequence,
   routeCodeFromSearch,
+  routeCancelledNote,
+  routeClosingStatus,
   routeCompletedAt,
   routeProgress,
   stopOutcomeForDelivery,

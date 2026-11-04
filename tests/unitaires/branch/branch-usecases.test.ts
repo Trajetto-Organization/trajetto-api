@@ -12,6 +12,7 @@ vi.mock("@/shared/services/transactional-mail-service", () => ({
 }));
 
 import { InMemoryBranchRepository } from "@/modules/branch/repositories/in-memory/in-memory-branch-repository";
+import { InMemoryDriverRepository } from "@/modules/driver/repositories/in-memory/in-memory-driver-repository";
 import { CreateBranchUseCase } from "@/modules/branch/usecases/create-branch/create-branch-usecase";
 import { UpdateBranchUseCase } from "@/modules/branch/usecases/update-branch/update-branch-usecase";
 import { ToggleBranchActiveUseCase } from "@/modules/branch/usecases/toggle-branch-active/toggle-branch-active-usecase";
@@ -112,6 +113,7 @@ const setup = () => ({
     business,
     branches,
     notifications,
+    new InMemoryDriverRepository(),
   ),
   list: new ListBranchUseCase(users, branches),
 });

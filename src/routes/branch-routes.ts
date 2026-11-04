@@ -210,7 +210,7 @@ async function branchRoutes(app: FastifyInstance) {
         tags: ["branch"],
         summary: "Ativa ou inativa uma filial",
         description:
-          "Inverte a situação da filial. Filial inativa sai dos seletores. Se o status mudou enquanto a tela estava aberta, nada é gravado (409 TOGGLE_CONFLICT). Avisa as outras telas pelo evento `catalogChanged`.",
+          "Inverte a situação da filial. Filial inativa sai dos seletores e seus motoristas não entram no aplicativo; por isso, desativar uma filial cujos motoristas têm rota planejada, liberada ou em andamento é recusado (409 DRIVER_HAS_OPEN_ROUTES, com as contagens; reativar nunca é recusado). Se o status mudou enquanto a tela estava aberta, nada é gravado (409 TOGGLE_CONFLICT). Avisa as outras telas pelo evento `catalogChanged`.",
         params: branchSchemas.updateDeleteBranch,
         response: {
           200: branchResponses.branchToggled,
