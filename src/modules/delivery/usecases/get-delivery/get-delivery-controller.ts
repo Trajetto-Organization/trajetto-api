@@ -14,13 +14,15 @@ class GetDeliveryController {
 
     const getDeliveryUseCase = container.resolve(GetDeliveryUseCase);
 
-    const delivery = await getDeliveryUseCase.execute({
+    // `{ data, meta: { timeZone } }`: the company's zone beside the detail
+    // (decision D22), additive for every reader of `data`.
+    const answer = await getDeliveryUseCase.read({
       userId: id,
       businessId,
       deliveryId,
     });
 
-    return reply.status(200).send({ data: delivery });
+    return reply.status(200).send(answer);
   }
 }
 

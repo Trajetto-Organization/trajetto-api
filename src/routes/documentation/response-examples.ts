@@ -7,6 +7,7 @@ import {
   TOPIC_FAMILY,
   WEBHOOK_API_VERSION,
 } from "@/shared/integration/webhook-catalogue";
+import { DEFAULT_BUSINESS_TIMEZONE } from "@/shared/time/business-day";
 
 import { buildCatalogue } from "./integration-documentation";
 
@@ -72,6 +73,9 @@ const publicDelivery: PublicDelivery = {
   scheduled_date: "2026-09-24T00:00:00.000Z",
   delivered_at: null,
   received_by: null,
+
+  // Plan of 02/11/2026 (L7): the receipt's link, once the delivery ended.
+  proof_url: null,
 
   route: { id: ROUTE_ID, code: 318 },
 
@@ -148,6 +152,7 @@ const publicEvents: PublicEvent[] = [
       status_to: "DELIVERED",
       received_by: "Maria Souza",
       note: null,
+      occurrence_code: null,
     },
   },
   {
@@ -164,6 +169,25 @@ const publicEvents: PublicEvent[] = [
       status_to: null,
       received_by: "Maria Souza",
       note: null,
+      occurrence_code: null,
+    },
+  },
+  {
+    id: "0192f7f2-9c0d-7e1f-8a2b-3c4d5e6f7a8b",
+    topic: "occurrence.reported",
+    occurred_at: "2026-09-24T10:12:44.000Z",
+    delivery: {
+      id: DELIVERY_ID,
+      code: "PED-10452",
+      invoice_key: INVOICE_KEY,
+    },
+    // Plan of 02/11/2026 (L8): the type's ERP code.
+    data: {
+      status_from: null,
+      status_to: null,
+      received_by: null,
+      note: null,
+      occurrence_code: "AUS-01",
     },
   },
 ];
@@ -327,6 +351,10 @@ const deliveryDetail = {
       created_at: "2026-09-24T08:15:32.000Z",
       reportedBy: driverPerson,
       reason: null,
+      // Plan of 02/11/2026 (E4): where the arrival was, against the radius.
+      distance_m: 38.4,
+      accuracy_m: 12,
+      geofence_outcome: "INSIDE",
     },
   ],
   occurrences: [],
@@ -373,6 +401,8 @@ const deliveryDetail = {
       blocking: false,
     },
   ],
+  // Contract C2: the recipient asked to stop WhatsApp; e-mail still goes.
+  messageOptOut: { whatsapp: "2026-09-24T09:02:11.000Z", email: null },
 };
 
 const RESPONSE_EXAMPLES: ResponseExamples = {
@@ -392,14 +422,33 @@ const RESPONSE_EXAMPLES: ResponseExamples = {
   },
   "GET /integration/v1/routes/:id": { 200: publicRoute },
   "GET /integration/v1/events": {
-    200: { data: publicEvents, next_cursor: publicEvents[1].id },
+    200: { data: publicEvents, next_cursor: publicEvents[2].id },
   },
 
   "GET /delivery/my-deliveries/:businessId": {
     200: {
       data: [myDelivery],
       // Decision 14.7: the plan the app caches, to notice a change offline.
-      routes: [{ id: ROUTE_ID, code: 318, plan_version: 4 }],
+      // Plan of 02/11/2026 (C2, C4): the route's plate and its checklists.
+      routes: [
+        {
+          id: ROUTE_ID,
+          code: 318,
+          plan_version: 4,
+          vehicle: {
+            id: "0192f7a0-1e2f-7a3b-8c4d-5e6f7a8b9c21",
+            license_plate: "ABC1D23",
+          },
+          checklists: {
+            route_start: {
+              id: "0192f7a0-1e2f-7a3b-8c4d-5e6f7a8b9c22",
+              checklist_date: "2026-10-05T10:42:00.000Z",
+              overall_condition: "approved",
+            },
+            route_end: null,
+          },
+        },
+      ],
       occurrence_types: [occurrenceType],
       // Decision 14.3: proving a delivery is reporting one of these.
       delivered_types: [
@@ -434,10 +483,20 @@ const RESPONSE_EXAMPLES: ResponseExamples = {
         day: "2026-10-05",
         time_zone: "America/Sao_Paulo",
       },
+      // Plan of 02/11/2026 (M1, M6): what the company decided.
+      settings: {
+        checklist_requirement: "ROUTE_START",
+        arrival_geofence_mode: "ALERT",
+        arrival_geofence_radius_m: 500,
+      },
     },
   },
   "GET /delivery/get-delivery/:deliveryId/business/:businessId": {
-    200: { data: deliveryDetail },
+    // The company's zone; a company that never set one answers the default.
+    200: {
+      data: deliveryDetail,
+      meta: { timeZone: DEFAULT_BUSINESS_TIMEZONE },
+    },
   },
   "POST /delivery/start-route/:businessId": {
     200: { message: "Rota iniciada com sucesso!", data: { started: 12 } },

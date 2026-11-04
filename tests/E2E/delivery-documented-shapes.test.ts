@@ -241,11 +241,13 @@ describe("the delivery bodies, as documented", () => {
       deliveredTypes,
       pauseTypes,
       journey,
+      settings,
     } = await container
       .resolve(ListMyDeliveriesUseCase)
       .execute({ userId: DRIVER_USER, businessId: CARRIER });
 
-    // The controller's own envelope (decisions 14.3, 14.4 and 14.7 add keys).
+    // The controller's own envelope (decisions 14.3, 14.4 and 14.7 add keys;
+    // the plan of 02/11/2026, M1, adds the settings).
     const body = wire({
       data: deliveries,
       routes,
@@ -253,6 +255,7 @@ describe("the delivery bodies, as documented", () => {
       delivered_types: deliveredTypes,
       pause_types: pauseTypes,
       journey,
+      settings,
     }) as {
       data: Array<{ stops: unknown[]; items: unknown[] }>;
     };
@@ -294,15 +297,19 @@ describe("the delivery bodies, as documented", () => {
   });
 
   it("describes the detail exactly as the panel receives it", async () => {
-    const detail = await container.resolve(GetDeliveryUseCase).execute({
+    // What the controller sends: the detail and `meta.timeZone` (D22).
+    const answer = await container.resolve(GetDeliveryUseCase).read({
       userId: OPERATOR,
       businessId: CARRIER,
       deliveryId,
     });
 
-    const body = wire({ data: detail }) as {
+    const body = wire(answer) as {
       data: Record<string, unknown[]>;
+      meta: { timeZone: string };
     };
+
+    expect(body.meta.timeZone).toBe("America/Sao_Paulo");
 
     for (const nested of [
       "items",

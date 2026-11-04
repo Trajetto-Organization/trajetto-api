@@ -168,6 +168,81 @@ describe("GetDeliveryUseCase", () => {
   });
 });
 
+/**
+ * The detail dialog prints the opt-out dates (C2) on the company's clock,
+ * like the route detail and the tower's tabs (decision D22): the response
+ * carries the company's zone beside the delivery, in `meta.timeZone`.
+ */
+describe("GetDeliveryUseCase.read", () => {
+  const zones: Record<string, string | null> = {
+    [A]: "America/Manaus",
+    [B]: null,
+  };
+
+  const asked: string[] = [];
+
+  const businesses = {
+    findBusinessById: async (id: string) => {
+      asked.push(id);
+      return id in zones ? { id, timezone: zones[id] } : null;
+    },
+  };
+
+  const read = () =>
+    new GetDeliveryUseCase(
+      users,
+      deliveries,
+      uploadStub,
+      undefined,
+      businesses,
+    );
+
+  beforeEach(() => {
+    asked.length = 0;
+  });
+
+  it("answers the detail with the company's zone in meta", async () => {
+    const id = await delivery();
+
+    const answer = await read().read({
+      userId: ADMIN_A,
+      businessId: A,
+      deliveryId: id,
+    });
+
+    expect((answer.data as { id: string }).id).toBe(id);
+    expect(answer.meta).toEqual({ timeZone: "America/Manaus" });
+    expect(asked).toEqual([A]);
+  });
+
+  it("falls back to the default zone for a company that never set one, and for the driver too", async () => {
+    users.user.push({
+      id: "018f5400-0000-7000-8000-0000000000b2",
+      role: "BUSINESS_USER",
+      businessId: B,
+      driverId: OTHER_DRIVER,
+    } as User);
+    const id = await delivery(B, OTHER_DRIVER);
+
+    const answer = await read().read({
+      userId: "018f5400-0000-7000-8000-0000000000b2",
+      businessId: B,
+      deliveryId: id,
+    });
+
+    expect(answer.meta).toEqual({ timeZone: "America/Sao_Paulo" });
+  });
+
+  it("reads no zone for a delivery it refuses", async () => {
+    const foreign = await delivery(B, null);
+
+    await expect(
+      read().read({ userId: ADMIN_A, businessId: A, deliveryId: foreign }),
+    ).rejects.toMatchObject({ statusCode: 404, code: "DELIVERY_NOT_FOUND" });
+    expect(asked).toEqual([]);
+  });
+});
+
 describe("ListMessageTemplatesUseCase", () => {
   let templates: InMemoryDeliveryMessageTemplateRepository;
 

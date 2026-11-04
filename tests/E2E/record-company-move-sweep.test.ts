@@ -177,10 +177,18 @@ const NO_BODY = [
   "POST /ai-analysis/request/{recordType}/{recordId}",
   "POST /branch/request-branch-deletion/{branchId}/business/{businessId}",
   "POST /business/request-business-deletion/{businessId}",
+  // Undoes the opt-out of the delivery's recipient (contract C2): acts on
+  // the delivery in the path and the company's rows of that contact.
+  "POST /delivery/reactivate-customer-messages/{deliveryId}/business/{businessId}",
   "POST /import/reverse-import/{importId}/business/{businessId}",
   "POST /integrations/webhook-delivery/{id}/business/{businessId}/resend",
   "POST /integrations/webhook-endpoint/{id}/business/{businessId}/reactivate",
   "POST /integrations/webhook-endpoint/{id}/business/{businessId}/rotate-secret",
+  // Queues one signed ping for this endpoint: acts on the record in the path.
+  "POST /integrations/webhook-endpoint/{id}/business/{businessId}/test",
+  // Issues the driver's access QR code and voids the previous one: an edit
+  // of the login in the path, not a create (nothing new is addressable).
+  "POST /user/{userId}/enrollment",
   "PATCH /branch/toggle-branch-active/{branchId}/business/{businessId}",
   "PATCH /business/toggle-business-active/{businessId}",
   "PATCH /notification/read-all",

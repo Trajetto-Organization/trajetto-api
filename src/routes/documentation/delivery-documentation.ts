@@ -3,8 +3,9 @@ import { z } from "zod";
 import { errorResponse, internalErrorResponse } from "./common-responses";
 
 import { OPERATION_COUNTER_TEXT } from "./operation-day-texts";
+import { inheritedOpenStopsDoc } from "./inherited-open-stops-documentation";
 
-import { createDeliverySchema } from "@/schemas/create-delivery-schema";
+import { createDeliveryBodySchema } from "@/schemas/create-delivery-schema";
 import { updateDeliverySchema } from "@/schemas/update-delivery-schema";
 
 import { updateDeliveryStatusSchema } from "@/schemas/update-delivery-status-schema";
@@ -26,6 +27,7 @@ import {
 } from "@/schemas/export-delivery-schema";
 
 import { updateDeleteBusinessSchema } from "@/schemas/update-delete-business-schema";
+import { businessSettingsValuesSchema } from "@/schemas/business-settings-schema";
 import { updateDeleteDeliverySchema } from "@/schemas/update-delete-delivery-schema";
 
 import { documentedAs } from "./doc-only-responses";
@@ -96,13 +98,64 @@ const driverPauseTypeEntity = z.object({
   is_default: z.boolean(),
 });
 
+/** Plan of 02/11/2026 (C2): the plate on the route's card. */
+const routeVehicleEntity = z
+  .object({
+    id: z.string(),
+    license_plate: z.string(),
+  })
+  .nullable()
+  .describe(
+    "O veículo da rota (a placa no card e o veículo do checklist e do abastecimento feitos pela rota); nulo enquanto a rota não tem veículo.",
+  );
+
+/** Plan of 02/11/2026 (C4): one checklist made for the route, at one moment. */
+const routeChecklistEntity = z
+  .object({
+    id: z.string(),
+    // isoDateTime is declared further down this file.
+    checklist_date: z
+      .union([z.string(), z.date()])
+      .describe("Quando o checklist foi feito."),
+    overall_condition: z
+      .string()
+      .describe("approved, approved_with_restrictions ou rejected."),
+  })
+  .nullable();
+
 const myDeliveriesRouteEntity = z.object({
   id: z.string(),
   code: z.number(),
   plan_version: z
     .number()
     .describe("Sobe a cada mudança do plano (paradas, ordem, liberação)."),
+  vehicle: routeVehicleEntity.optional(),
+  checklists: z
+    .object({
+      route_start: routeChecklistEntity.describe(
+        "O checklist de saída mais recente feito para esta rota; nulo = pendente.",
+      ),
+      route_end: routeChecklistEntity.describe(
+        "O checklist de chegada mais recente feito para esta rota; nulo = pendente.",
+      ),
+    })
+    .optional()
+    .describe(
+      "Plano de 02/11/2026 (C4): o status do checklist de saída e de chegada, derivado dos checklists feitos para a rota. Só diz o que foi feito; o que é exigido está em `settings.checklist_requirement`.",
+    ),
+  completed_at: z
+    .union([z.string(), z.date()])
+    .nullable()
+    .optional()
+    .describe(
+      "Plano de 02/11/2026 (C4): nulo numa rota com parada aberta. Preenchido numa rota que já terminou (a última parada foi resolvida) e só continua na lista porque a empresa exige o checklist de chegada (ROUTE_END ou ROUTE_START_AND_END) e ele ainda não foi feito; sai da lista quando o checklist chega ou 24 h depois do fim. Vem depois das rotas abertas.",
+    ),
 });
+
+/** Plan of 02/11/2026 (M1, M6): what the company decided, as the app applies it. */
+const businessSettingsEntity = businessSettingsValuesSchema.describe(
+  "Configurações da empresa (plano de 02/11/2026, M1), já com a regra dos módulos (M6): sem Frota e Entregas ligados, o checklist vale NONE; sem Entregas, a geocerca vale DISABLED. O app guarda no cache offline; sem o campo (API antiga), vale o padrão: NONE, DISABLED, 500.",
+);
 
 const driverJourneyEntity = z
   .object({
@@ -194,9 +247,34 @@ const deliveryRowEntity = z.object({
     .enum(["MANUAL", "GEOCODER"])
     .nullable()
     .describe(
-      "MANUAL: fixado no mapa pelo despachante. Some quando o endereço muda.",
+      "MANUAL: fixado no mapa pelo despachante ou informado na criação (formulário, planilha ou API pública). GEOCODER: achado pelo endereço (plano de 02/11/2026, E1). Some quando o endereço muda.",
     ),
   geo_updated_at: isoDateTime.nullable(),
+  // Plan of 02/11/2026 (E1): the geocoder's level and its bookkeeping.
+  // Optional: a body written by the previous API does not have them.
+  geo_precision: z
+    .enum(["ADDRESS", "STREET", "NEIGHBORHOOD", "CITY"])
+    .nullable()
+    .optional()
+    .describe(
+      "Até onde o geocodificador chegou: ADDRESS (o número) ou STREET (a rua) têm ponto; NEIGHBORHOOD ou CITY ficam sem ponto e a geocerca não avalia. Só vale com geo_source GEOCODER (um ponto MANUAL é exato).",
+    ),
+  geocode_status: z
+    .enum(["RESOLVED", "COARSE", "NOT_FOUND", "FAILED"])
+    .nullable()
+    .optional()
+    .describe(
+      "A geocodificação do endereço: nula = ainda não tentada; RESOLVED (ponto gravado), COARSE (só bairro ou cidade, sem ponto), NOT_FOUND ou FAILED (tentada de novo depois).",
+    ),
+  geocode_attempted_at: isoDateTime
+    .nullable()
+    .optional()
+    .describe("A última tentativa de geocodificação."),
+  geocode_attempts: z
+    .number()
+    .int()
+    .optional()
+    .describe("Quantas vezes o endereço foi consultado no geocodificador."),
   status: deliveryStatusEnum,
   kind: z
     .enum(DELIVERY_KINDS)
@@ -296,6 +374,7 @@ const myDeliveryEntity = deliveryRowEntity.extend({
             .describe(
               "Versão do plano da rota (decisão 14.7); a mesma de routes[].",
             ),
+          vehicle: routeVehicleEntity.optional(),
         }),
       }),
     )
@@ -317,9 +396,32 @@ const myDeliveryEntity = deliveryRowEntity.extend({
     })
     .nullable()
     .describe(
-      "O último pedido de autorização da torre (decisão 6.3) feito nesta entrega pelo próprio motorista que consulta: PENDING = 'Aguardando autorização'. Nulo quando ele não pediu; relatos do painel e pedidos de outro motorista que tinha a entrega antes não aparecem.",
+      "O último pedido de autorização da torre (decisão 6.3) feito nesta entrega pelo próprio motorista que consulta: PENDING = 'Aguardando autorização'. Nulo quando ele não pediu; relatos do painel e pedidos de outro motorista que tinha a entrega antes não aparecem. Numa rota, só conta o pedido feito para a parada aberta (criado depois dela): depois de 'Reentregar', a resposta da tentativa anterior não aparece na parada nova.",
     ),
 });
+
+/**
+ * The geofence record of an action at the customer's address (plan of
+ * 02/11/2026, E2-E4): on arrivals, proofs and occurrences.
+ */
+const geofenceRecordShape = {
+  distance_m: z
+    .number()
+    .nullable()
+    .describe(
+      "Distância, em metros, entre a posição do celular e o ponto do endereço, calculada pelo servidor; nula sem coordenada de um dos lados.",
+    ),
+  accuracy_m: z
+    .number()
+    .nullable()
+    .describe("A precisão informada pelo celular, em metros."),
+  geofence_outcome: z
+    .enum(["INSIDE", "OUTSIDE", "NOT_EVALUATED"])
+    .nullable()
+    .describe(
+      'Dentro ou fora do raio da empresa. OUTSIDE é o selo "Fora do raio" (apontamento confirmado pelo motorista no modo Alertar, ocorrência, ou envio da fila offline aceito e sinalizado). NOT_EVALUATED: sem coordenada no endereço, precisão pior que o raio, posição velha ou geocerca desligada. Nulo nos registros anteriores à geocerca.',
+    ),
+};
 
 const deliveryEventEntity = z.object({
   id: z.string(),
@@ -389,6 +491,7 @@ const deliveryEventEntity = z.object({
   reason: person
     .nullable()
     .describe("O motivo do catálogo, na mudança manual."),
+  ...geofenceRecordShape,
 });
 
 const deliveryOccurrenceEntity = z.object({
@@ -441,6 +544,7 @@ const deliveryOccurrenceEntity = z.object({
   authorizedBy: person
     .nullable()
     .describe("Quem autorizou ou negou; nulo enquanto pendente ou sem pedido."),
+  ...geofenceRecordShape,
 });
 
 const timelineEntryEntity = z.object({
@@ -474,6 +578,29 @@ const timelineEntryEntity = z.object({
   blocking: z.boolean(),
 });
 
+/**
+ * Contract C2 (03/11/2026): since when the delivery's recipient stopped
+ * receiving this company's customer messages, per channel.
+ */
+const messageOptOutEntity = z
+  .object({
+    whatsapp: z
+      .string()
+      .nullable()
+      .describe(
+        'Desde quando (ISO 8601) o telefone do destinatário desta entrega não recebe WhatsApp desta transportadora (descadastro por "Parar de receber", D38); null enquanto recebe ou sem telefone.',
+      ),
+    email: z
+      .string()
+      .nullable()
+      .describe(
+        "Desde quando (ISO 8601) o e-mail do destinatário desta entrega não recebe e-mail desta transportadora; null enquanto recebe ou sem e-mail.",
+      ),
+  })
+  .describe(
+    "O descadastro do destinatário nesta transportadora, pelo telefone e pelo e-mail atuais da entrega (comparados na forma normalizada, como no envio). Desfeito por POST /delivery/reactivate-customer-messages.",
+  );
+
 const deliveryDetailEntity = deliveryRowEntity.extend({
   shipper: person,
   import: z
@@ -505,6 +632,7 @@ const deliveryDetailEntity = deliveryRowEntity.extend({
   timeline: z
     .array(timelineEntryEntity)
     .describe("Tudo o que aconteceu com a entrega, mais recente primeiro."),
+  messageOptOut: messageOptOutEntity,
 });
 
 const deliverySchemas = {
@@ -512,7 +640,7 @@ const deliverySchemas = {
   deliveryBusinessParams: updateDeleteBusinessSchema.merge(
     updateDeleteDeliverySchema,
   ),
-  createDelivery: createDeliverySchema,
+  createDelivery: createDeliveryBodySchema,
   updateDelivery: updateDeliverySchema,
   updateDeliveryStatus: updateDeliveryStatusSchema,
   assignDeliveries: assignDeliveriesSchema,
@@ -563,6 +691,7 @@ const deliveryResponses = {
       delivered_types: z.array(driverDeliveredTypeEntity),
       pause_types: z.array(driverPauseTypeEntity),
       journey: driverJourneyEntity,
+      settings: businessSettingsEntity.optional(),
     }),
     z.object({
       data: z.array(myDeliveryEntity),
@@ -585,6 +714,7 @@ const deliveryResponses = {
         .array(driverPauseTypeEntity)
         .describe("Contrato 3: os tipos de PAUSA ativos."),
       journey: driverJourneyEntity,
+      settings: businessSettingsEntity,
     }),
   ),
   routeStarted: z.object({
@@ -645,6 +775,12 @@ const deliveryResponses = {
         .describe(
           "O atendimento (ticket) aberto pelo relato (decisão 14.5): pedido de autorização ou ocorrência do motorista. Null quando o relato não abre atendimento. Num reenvio, o mesmo atendimento.",
         ),
+      late_proof: z
+        .enum(["APPLIED", "EVIDENCE"])
+        .optional()
+        .describe(
+          'Só num comprovante que chegou depois de a entrega sair das mãos do motorista que o enviou (K7, decisão D27: a rota foi cancelada ou o status mudou no painel enquanto ele estava sem sinal). APPLIED: o toque (`occurred_at`) foi antes disso e a entrega ainda podia ser entregue — aceita como ENTREGUE, de volta ao motorista e ao veículo da rota, com um apontamento do sistema na linha do tempo e um atendimento para a torre. EVIDENCE: tocado depois, sem `occurred_at`, entrega cancelada, com outro motorista, já planejada de novo em outra rota ou tipo que pede autorização — guardada como evidência sem efeito (`authorization_status` SUPERSEDED, canhoto e assinatura preservados), com o apontamento e o atendimento. O app mostra "Enviado para análise da central". Ausente em todo outro relato.',
+        ),
     }),
   }),
   occurrenceFormInvalid: z
@@ -677,14 +813,16 @@ const deliveryResponses = {
     .object({
       code: z
         .string()
-        .describe("OCCURRENCE_FORM_OUTDATED ou DELIVERY_STATUS_CONFLICT"),
+        .describe(
+          "OCCURRENCE_FORM_OUTDATED, DELIVERY_STATUS_CONFLICT ou SUBMISSION_ID_REUSED",
+        ),
       message: z.string(),
       field_errors: z.record(z.string()).optional(),
       form_fields: occurrenceFormFieldsDoc.optional(),
       form_version: z.number().optional(),
     })
     .describe(
-      "OCCURRENCE_FORM_OUTDATED: o formulário mudou desde que o app o exibiu e as respostas não servem mais; traz o formulário atual (`form_fields`, `form_version`) para reabrir com as respostas. DELIVERY_STATUS_CONFLICT: a entrega mudou de status durante o envio e nada foi gravado.",
+      "OCCURRENCE_FORM_OUTDATED: o formulário mudou desde que o app o exibiu e as respostas não servem mais; traz o formulário atual (`form_fields`, `form_version`) para reabrir com as respostas. DELIVERY_STATUS_CONFLICT: a entrega mudou de status durante o envio e nada foi gravado. SUBMISSION_ID_REUSED: o `client_submission_id` já foi usado em outro registro (outra entrega, outro tipo de evento ou outra empresa); nada foi gravado e repetir a mesma chave nunca passa — gere uma chave nova.",
     ),
   occurrenceAuthorizationDecided: z.object({
     message: z.string(),
@@ -840,9 +978,23 @@ const deliveryResponses = {
   }),
   // Same rule as myDeliveries: passed through at runtime, typed in the
   // document, held to the real payload by the E2E drift test.
+  // `meta` is declared on the runtime schema too: the serializer drops a
+  // key it does not list.
   deliveryDetail: documentedAs(
-    z.object({ data: z.unknown() }),
-    z.object({ data: deliveryDetailEntity }),
+    z.object({
+      data: z.unknown(),
+      meta: z.object({ timeZone: z.string() }),
+    }),
+    z.object({
+      data: deliveryDetailEntity,
+      meta: z.object({
+        timeZone: z
+          .string()
+          .describe(
+            "O fuso da empresa (IANA), ex.: America/Sao_Paulo: o detalhe mostra nele as datas da entrega, como as de `messageOptOut`, igual ao detalhe da rota e às abas da torre (decisão D22). Sem ele (versão anterior da API), o navegador.",
+          ),
+      }),
+    }),
   ),
   /**
    * One line of the occurrence feed. The feed is NDJSON, so this documents
@@ -942,6 +1094,10 @@ const deliveryResponses = {
         .describe(
           "Os mesmos motoristas e contagens de GET /route/monitoring/drivers para o mesmo dia; 'hoje' é o dia civil no fuso da empresa.",
         ),
+      inherited: inheritedOpenStopsDoc(
+        "Paradas ainda abertas (pendentes ou com chegada) nessas rotas: documentos que `inRoute` conta hoje, herdados de dias anteriores.",
+        'O que `inRoute` herdou de rotas esquecidas abertas (H3), com a mesma regra e os mesmos números do `inherited` de GET /route/control-tower, para a nota "inclui N de rotas abertas desde dd/mm".',
+      ),
     }),
   }),
   genericError: errorResponse,
@@ -956,13 +1112,20 @@ const deliveryResponses = {
   }),
   statusConflict: z
     .object({
-      code: z.string().describe("DELIVERY_STATUS_CONFLICT"),
+      code: z
+        .string()
+        .describe("DELIVERY_STATUS_CONFLICT ou SUBMISSION_ID_REUSED"),
       message: z.string(),
     })
     .describe(
-      "O status da entrega mudou entre a leitura e a gravação (outra tela, outro aparelho) e nada foi gravado. Atualize a entrega e decida de novo; repetir o mesmo envio não passa.",
+      "DELIVERY_STATUS_CONFLICT: o status da entrega mudou entre a leitura e a gravação (outra tela, outro aparelho) e nada foi gravado. Atualize a entrega e decida de novo; repetir o mesmo envio não passa. SUBMISSION_ID_REUSED (só nas rotas do motorista com `client_submission_id`): a chave já foi usada em outro registro (outra entrega, outro tipo de evento ou outra empresa); nada foi gravado — gere uma chave nova.",
     ),
   internalServerError: internalErrorResponse,
+  // Contract C2: the undo answers the state as the detail shows it.
+  customerMessagesReactivated: z.object({
+    message: z.string().default("Mensagens ao cliente reativadas."),
+    data: z.object({ messageOptOut: messageOptOutEntity }),
+  }),
 };
 
 export { deliverySchemas, deliveryResponses };
