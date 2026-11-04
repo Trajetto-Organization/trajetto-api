@@ -52,14 +52,18 @@ describe("tolerateEmptyJsonBody over Fastify's default parser", () => {
   it("refuses a body that carries __proto__", async () => {
     const response = await send(POISONED_PROTO);
 
+    // The body is valid JSON: only the prototype guard refuses it. Fastify
+    // 5.12 answers every refusal of its JSON parser with one generic sentence
+    // (5.2 named the poisoning), so the code is what shows the parser said no.
     expect(response.statusCode).toBe(400);
-    expect(response.json().message).toMatch(/prototype/i);
+    expect(response.json().code).toBe("FST_ERR_CTP_INVALID_JSON_BODY");
   });
 
   it("refuses a body that carries constructor.prototype", async () => {
     const response = await send(POISONED_CONSTRUCTOR);
 
     expect(response.statusCode).toBe(400);
+    expect(response.json().code).toBe("FST_ERR_CTP_INVALID_JSON_BODY");
   });
 
   it("still accepts an empty body as undefined", async () => {

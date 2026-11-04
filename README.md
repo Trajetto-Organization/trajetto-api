@@ -3,7 +3,7 @@
 <p align="center">
   <img alt="Node.js 22" src="https://img.shields.io/badge/Node.js-22-5FA04E?style=for-the-badge&logo=nodedotjs&logoColor=white" />
   <img alt="TypeScript 5.7" src="https://img.shields.io/badge/TypeScript-5.7-3178C6?style=for-the-badge&logo=typescript&logoColor=white" />
-  <img alt="Fastify 5.2" src="https://img.shields.io/badge/Fastify-5.2-000000?style=for-the-badge&logo=fastify&logoColor=white" />
+  <img alt="Fastify 5.12" src="https://img.shields.io/badge/Fastify-5.12-000000?style=for-the-badge&logo=fastify&logoColor=white" />
   <img alt="Prisma 7.10" src="https://img.shields.io/badge/Prisma-7.10-2D3748?style=for-the-badge&logo=prisma&logoColor=white" />
   <img alt="PostgreSQL 16" src="https://img.shields.io/badge/PostgreSQL-16-4169E1?style=for-the-badge&logo=postgresql&logoColor=white" />
   <img alt="Redis 7" src="https://img.shields.io/badge/Redis-7-FF4438?style=for-the-badge&logo=redis&logoColor=white" />
