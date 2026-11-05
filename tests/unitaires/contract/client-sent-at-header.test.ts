@@ -90,6 +90,40 @@ describe("the X-Client-Sent-At header", () => {
     }
   });
 
+  it("comes with X-Client-Queued-At wherever its presence decides the answer", () => {
+    // The app's offline queue sends it on every resend of every kind; the
+    // refuelling and the pause start read it (05/11/2026): a second
+    // refuelling within 30 minutes, or a pause started within 5 minutes of
+    // the previous one, that the queue resends is recorded, never refused —
+    // nobody can be asked any more.
+    const queuedAt = (route: { operation: OpenApiOperation }) =>
+      route.operation.parameters?.find(
+        (parameter) =>
+          parameter.in === "header" && parameter.name === "x-client-queued-at",
+      );
+
+    const readers = published
+      .filter((route) =>
+        String(route.handler).includes("CLIENT_QUEUED_AT_HEADER"),
+      )
+      .map(({ id }) => id)
+      .sort();
+
+    expect(readers).toEqual([
+      "POST /driver-pause/start/{businessId}",
+      "POST /fuel/create-fuel/{businessId}",
+    ]);
+
+    for (const route of published.filter((entry) =>
+      readers.includes(entry.id),
+    )) {
+      const header = queuedAt(route);
+
+      expect(header?.required ?? false, route.id).toBe(false);
+      expect(header?.description, route.id).toMatch(/fila offline/);
+    }
+  });
+
   it("keeps the Idempotency-Key the occurrence already declared", () => {
     const occurrence = published.find(
       (route) =>

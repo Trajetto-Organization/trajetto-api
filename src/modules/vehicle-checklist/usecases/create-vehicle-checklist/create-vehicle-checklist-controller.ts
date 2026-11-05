@@ -17,6 +17,10 @@ import {
   CLIENT_SENT_AT_HEADER,
   resolveOccurredAt,
 } from "@/shared/delivery/occurred-at";
+import {
+  CLIENT_VERSION_HEADER,
+  parseClientVersion,
+} from "@/shared/http/client-version";
 
 class CreateVehicleChecklistController {
   async handle(request: FastifyRequest, reply: FastifyReply): Promise<void> {
@@ -135,6 +139,10 @@ class CreateVehicleChecklistController {
         },
         id,
         presignedPhotos,
+        // Which app build sent it: from contract 5 on, an early arrival
+        // checklist is refused instead of flagged. The web and the build in
+        // drivers' hands today send no header (null).
+        parseClientVersion(request.headers[CLIENT_VERSION_HEADER]),
       );
 
       return reply

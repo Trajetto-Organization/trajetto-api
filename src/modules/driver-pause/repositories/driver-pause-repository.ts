@@ -85,6 +85,28 @@ class DriverPauseRepository implements IDriverPauseRepository {
     });
   }
 
+  async findLastEndedPause({
+    businessId,
+    driverId,
+    before,
+  }: {
+    businessId: string;
+    driverId: string;
+    before: Date;
+  }): Promise<DriverPause | null> {
+    // A backward walk of (driverId, started_at) that stops at the first
+    // closed one: at most the one open pause is skipped.
+    return this.prisma.driverPause.findFirst({
+      where: {
+        businessId,
+        driverId,
+        ended_at: { not: null },
+        started_at: { lt: before },
+      },
+      orderBy: [{ started_at: "desc" }, { id: "desc" }],
+    });
+  }
+
   async findRouteRunningAt(
     businessId: string,
     driverId: string,

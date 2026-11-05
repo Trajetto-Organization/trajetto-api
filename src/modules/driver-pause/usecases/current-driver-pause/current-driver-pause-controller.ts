@@ -26,6 +26,9 @@ class CurrentDriverPauseController {
       ),
       pause_allowed: current.pauseAllowed,
       journey_route_id: current.journeyRouteId,
+      last_ended_at: current.cooldown.last_ended_at,
+      next_pause_allowed_at: current.cooldown.next_pause_allowed_at,
+      next_pause_in_seconds: current.cooldown.next_pause_in_seconds,
     });
   }
 }

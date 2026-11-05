@@ -393,6 +393,9 @@ describe("a checklist posted as multipart by the app build in drivers' hands", (
 
     expect(checklist.current_mileage).toBe(mileage);
     expect(checklist.photos).toHaveLength(3);
+    // That build never sends `created_from`: a driver's checklist is the
+    // app's by the server's decision, so the panel badges it "App".
+    expect(checklist.created_from).toBe("MOBILE_APP");
 
     const byField = checklist.photos_by_field as Record<string, string[]>;
 
@@ -405,6 +408,30 @@ describe("a checklist posted as multipart by the app build in drivers' hands", (
     for (const keys of Object.values(byField)) {
       expect(keys[0]).toMatch(new RegExp(`^checklistPhotos/${BUSINESS}/`));
     }
+  });
+
+  it("is the app's when the office makes it there too: its key, no `created_from`", async () => {
+    // That build lets an admin pick the driver and the branch, and sends the
+    // same key and no origin; the backfill reads such a row as the app's.
+    const key = randomUUID();
+
+    const response = await postMultipart(
+      checklistUrl(),
+      legacyChecklist((await vehicleMileage()) + 100, key),
+      key,
+      seed.managerToken,
+    );
+
+    expect(response.statusCode, response.body).toBe(201);
+
+    const checklist = await prisma.vehicleChecklist.findUniqueOrThrow({
+      where: { id: response.json().id },
+    });
+
+    expect(checklist).toMatchObject({
+      created_from: "MOBILE_APP",
+      client_submission_id: key,
+    });
   });
 
   it("leaves no photo behind when the controller refuses it before the use case runs", async () => {

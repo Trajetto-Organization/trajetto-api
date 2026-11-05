@@ -376,6 +376,7 @@ export {
   shiftDateKey,
   shiftDateKeyByMonths,
   shiftMonthKey,
+  wallClock,
   zonedWallTimeToUtc,
 };
 export type { BrazilianTimeZone, BusinessDayRange, BusinessWindow };

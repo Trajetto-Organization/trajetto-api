@@ -1,8 +1,10 @@
 import type {
   ChecklistPhase,
+  FuelAlert,
   OccurrenceAuthorizationStatus,
   OccurrenceCategory,
   ProofSignatureStatus,
+  RecordOrigin,
 } from "@prisma/client";
 
 import { DEFAULT_BUSINESS_TIMEZONE } from "@/shared/time/business-day";
@@ -159,7 +161,14 @@ const FUEL_COLUMN_DEFAULTS = {
   odometer_device_agreement: null,
   // Plan of 02/11/2026 (C5/F3): made outside a route.
   routeId: null,
-} as const;
+  // 20261105130000: no alert, and nothing behind one. A fake copies the
+  // array before storing it (one row's alerts are never another's).
+  alerts: [],
+  recent_refuel_reason: null,
+  recent_refuel_previous_at: null,
+} as const satisfies Record<string, unknown> & {
+  alerts: readonly FuelAlert[];
+};
 
 const VEHICLE_CHECKLIST_COLUMN_DEFAULTS = {
   mileage_device_precheck: null,
@@ -167,7 +176,13 @@ const VEHICLE_CHECKLIST_COLUMN_DEFAULTS = {
   // Plan of 02/11/2026 (C4/F3): made outside a route.
   routeId: null,
   phase: "STANDALONE",
-} as const satisfies Record<string, unknown> & { phase: ChecklistPhase };
+  // 20261105120000: what the web's form gets, which sends no origin and no
+  // key (shared/vehicle/record-origin.ts).
+  created_from: "WEB_DASHBOARD",
+} as const satisfies Record<string, unknown> & {
+  phase: ChecklistPhase;
+  created_from: RecordOrigin;
+};
 
 // Plan of 02/11/2026 (F1): no responsible = the company's admins.
 const VEHICLE_COLUMN_DEFAULTS = {

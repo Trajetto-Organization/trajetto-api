@@ -376,6 +376,14 @@ function fuelUseCase(
     price_per_liter: 5,
     refueling_date: new Date(Date.now() - 60_000).toISOString(),
     created_from: "WEB_DASHBOARD",
+    // A driver's refuelling is the app's whatever the body says, so it
+    // carries what the app sends: the key and the GPS point.
+    ...(caller.driverId && {
+      created_from: "MOBILE_APP",
+      client_submission_id: "018fb400-0000-7000-8000-0000000000a9",
+      latitude: -23.55,
+      longitude: -46.63,
+    }),
     ...(crew.routed && { routeId: ROUTE }),
   };
 

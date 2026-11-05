@@ -1,4 +1,5 @@
 import { inject, injectable } from "tsyringe";
+import type { FuelAlert } from "@prisma/client";
 
 import { IFuelRepository } from "@/modules/fuel/repositories/IFuel-repository";
 import { IUserRepository } from "@/modules/user/repositories/IUser-repository";
@@ -26,6 +27,8 @@ interface ListFuelRequest {
   branchIds?: string[];
   vehicleIds?: string[];
   fuelTypeIds?: string[];
+  /** Records with any of these alerts (05/11/2026). */
+  alerts?: FuelAlert[];
   sort?: FuelSortKey;
   order?: SortOrder;
 }
@@ -68,6 +71,7 @@ class ListFuelUseCase {
     branchIds,
     vehicleIds,
     fuelTypeIds,
+    alerts,
     sort,
     order,
   }: ListFuelRequest): Promise<ListFuelResponse> {
@@ -89,7 +93,7 @@ class ListFuelUseCase {
 
     assertTenantAccess(findUser, resolvedBusinessId);
 
-    const facets = { branchIds, vehicleIds, fuelTypeIds };
+    const facets = { branchIds, vehicleIds, fuelTypeIds, alerts };
 
     try {
       const result = await this.fuel.listFuels({

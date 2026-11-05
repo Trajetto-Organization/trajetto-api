@@ -558,6 +558,9 @@ describe("final phase: new columns", () => {
     const literalOf = (columnDefault: string | null | undefined): unknown => {
       if (columnDefault == null) return undefined;
 
+      // An empty array (fuel.alerts, 20261105130000), in either spelling.
+      if (/^(ARRAY\[\]|'\{\}')::/.test(columnDefault)) return [];
+
       const quoted = /^'(.*)'::/.exec(columnDefault);
       if (quoted) return quoted[1];
       if (columnDefault === "true" || columnDefault === "false") {
@@ -588,7 +591,8 @@ describe("final phase: new columns", () => {
           continue;
         }
 
-        expect(literalOf(real?.column_default), `${table}.${column}`).toBe(
+        // toEqual: an array default compares by its items.
+        expect(literalOf(real?.column_default), `${table}.${column}`).toEqual(
           value,
         );
       }
@@ -2956,5 +2960,234 @@ describe("plan of 02/11/2026: rules in the database", () => {
     expect(
       await indexDefinition("driver_enrollment_token_code_hash_key"),
     ).toMatch(/UNIQUE INDEX .*\(code_hash\)/);
+  });
+});
+
+describe("the checklist's origin (20261105120000, 20261105120100)", () => {
+  const COLUMN = "20261105120000_vehicle_checklist_created_from";
+  const BACKFILL = "20261105120100_vehicle_checklist_created_from_backfill";
+
+  it("adds the column alone, apart from the backfill", () => {
+    // Each migration is one transaction, and the ADD COLUMN's ACCESS
+    // EXCLUSIVE lock lasts until it commits: with the backfill's read of the
+    // whole activity trail in the same one, every checklist read and write
+    // would fail with a 500 after the API's lock_timeout.
+    expect(
+      migrationStatements(COLUMN).map((statement) => statement.split(/\s/)[0]),
+    ).toEqual(["SET", "ALTER"]);
+    expect(
+      migrationStatements(BACKFILL).map(
+        (statement) => statement.split(/\s/)[0],
+      ),
+    ).toEqual(["SET", "UPDATE"]);
+  });
+
+  it("vehicle_checklist.created_from is NOT NULL, WEB_DASHBOARD by default", async () => {
+    // The previous image's INSERTs leave it out and get the default.
+    expect(
+      (await columnsOf("vehicle_checklist")).get("created_from"),
+    ).toMatchObject({
+      is_nullable: "NO",
+      column_default: `'WEB_DASHBOARD'::"RecordOrigin"`,
+    });
+  });
+
+  it("marks as the app's the checklists its trail entry or its key says came from it, and only them", async () => {
+    const backfill = statementStartingWith(BACKFILL, "UPDATE");
+
+    const outcome = await rolledBack(async (tx) => {
+      const carrier = await seedBusiness(tx);
+      const k = (name: string) => `${name}-${carrier}`;
+
+      await tx.branch.create({
+        data: {
+          id: k("branch"),
+          corporate_reason: `Filial ${carrier}`,
+          cep: "01001000",
+          city: "São Paulo",
+          uf: "SP",
+          street: "Rua",
+          address_number: "1",
+          cnpj: `cnpj-${k("branch")}`,
+          cnae: "4930202",
+          responsible_name: "Responsável",
+          telephone: "11999999999",
+          email: `${k("branch")}@exemplo.com.br`,
+          businessId: carrier,
+        },
+      });
+      await seedDriverRow(tx, carrier, k("driver"));
+      await tx.fuelType.create({
+        data: { id: k("diesel"), description: "Diesel", businessId: carrier },
+      });
+      await tx.vehicle.create({
+        data: {
+          id: k("truck"),
+          description: "Caminhão",
+          license_plate: `P-${carrier.slice(-6)}`,
+          brand: "Scania",
+          model: "R450",
+          acquisition_date: new Date("2024-01-10T00:00:00.000Z"),
+          fleet_type: "OWNED",
+          current_mileage: 1_000,
+          maintenance_interval_km: 10_000,
+          maintenance_interval_months: 6,
+          renavam: `rnv-${carrier}`,
+          manufacturing_year: new Date("2023-01-01T00:00:00.000Z"),
+          model_year: new Date("2024-01-01T00:00:00.000Z"),
+          km_per_liter: 3,
+          number_of_axles: 3,
+          status: "ACTIVE",
+          businessId: carrier,
+          fuelTypeId: k("diesel"),
+        },
+      });
+
+      const checklist = (name: string, extra: object = {}) =>
+        tx.vehicleChecklist.create({
+          data: {
+            id: k(name),
+            current_mileage: 1_000,
+            tires_condition: "good",
+            bumpers_condition: "good",
+            windshield_condition: "good",
+            mirrors_condition: "good",
+            steering_wheel_condition: "good",
+            battery_condition: "good",
+            spare_tire_condition: "good",
+            overall_condition: "approved",
+            photos: [],
+            businessId: carrier,
+            branchId: k("branch"),
+            vehicleId: k("truck"),
+            driverId: k("driver"),
+            ...extra,
+          },
+        });
+
+      const trail = (name: string, origin: string | null, action = "create") =>
+        tx.activity.create({
+          data: {
+            type: "Checklist Veicular",
+            action,
+            entityId: k(name),
+            description: `Checklist veicular criado para o veículo P-1 - Caminhão${
+              origin ? ` | Origem: ${origin}` : ""
+            }`,
+            status: "Criado",
+            businessId: carrier,
+          },
+        });
+
+      // The multipart build: its key, and a trail that says "Web" because
+      // it never sends the field.
+      const keyed = await checklist("keyed", {
+        client_submission_id: "018fec20-0000-7000-8000-0000000000f1",
+      });
+      await trail("keyed", "Web");
+
+      // A build that sent MOBILE_APP: the trail says so.
+      await checklist("trail-app");
+      await trail("trail-app", "Aplicativo");
+
+      // The web's form: no key, the trail says "Web".
+      await checklist("web");
+      await trail("web", "Web");
+
+      // From before the trail named an origin, with no key: unknowable.
+      await checklist("old");
+      await trail("old", null);
+
+      // Only the creation's entry counts.
+      await checklist("edited");
+      await trail("edited", "Web");
+      await trail("edited", "Aplicativo", "update");
+
+      const first = await tx.$executeRawUnsafe(backfill);
+      // Idempotent: nothing left to mark.
+      const second = await tx.$executeRawUnsafe(backfill);
+
+      const rows = await tx.vehicleChecklist.findMany({
+        where: { businessId: carrier },
+        select: { id: true, created_from: true, updated_at: true },
+      });
+      const byName = (name: string) => rows.find((row) => row.id === k(name));
+
+      return {
+        first,
+        second,
+        origins: Object.fromEntries(
+          ["keyed", "trail-app", "web", "old", "edited"].map((name) => [
+            name,
+            byName(name)?.created_from,
+          ]),
+        ),
+        keyedUpdatedAtKept:
+          byName("keyed")?.updated_at.getTime() === keyed.updated_at.getTime(),
+      };
+    });
+
+    expect(outcome.first).toBe(2);
+    expect(outcome.second).toBe(0);
+    expect(outcome.origins).toEqual({
+      keyed: "MOBILE_APP",
+      "trail-app": "MOBILE_APP",
+      web: "WEB_DASHBOARD",
+      old: "WEB_DASHBOARD",
+      edited: "WEB_DASHBOARD",
+    });
+    // How the row was always made, not an edit.
+    expect(outcome.keyedUpdatedAtKept).toBe(true);
+  });
+});
+
+describe("the refuelling's alerts (20261105130000)", () => {
+  const MIGRATION = "20261105130000_fuel_recent_refuel_alert";
+
+  it("creates the enum idempotently, then adds the columns under lock_timeout", () => {
+    // One table, catalog-only: the type in a DO block that skips
+    // duplicate_object (it can be created by hand first), the columns with
+    // IF NOT EXISTS.
+    expect(
+      migrationStatements(MIGRATION).map(
+        (statement) => statement.split(/\s/)[0],
+      ),
+    ).toEqual(["DO", "SET", "ALTER"]);
+  });
+
+  it("fuel.alerts is NOT NULL and empty by default; the other two are nullable", async () => {
+    const columns = await columnsOf("fuel");
+
+    // The previous image's INSERTs leave all three out.
+    expect(columns.get("alerts")).toMatchObject({
+      is_nullable: "NO",
+      data_type: "ARRAY",
+    });
+    expect(columns.get("alerts")?.column_default).toMatch(
+      /^(ARRAY\[\]|'\{\}')::"FuelAlert"\[\]$/,
+    );
+    expect(columns.get("recent_refuel_reason")).toMatchObject({
+      is_nullable: "YES",
+      column_default: null,
+      data_type: "character varying",
+    });
+    expect(columns.get("recent_refuel_previous_at")).toMatchObject({
+      is_nullable: "YES",
+      column_default: null,
+    });
+
+    const values = await prisma.$queryRawUnsafe<Array<{ value: string }>>(
+      `SELECT unnest(enum_range(NULL::"FuelAlert"))::text AS value`,
+    );
+
+    expect(values.map((row) => row.value)).toEqual(["RECENT_REFUEL"]);
+  });
+
+  it("runs again over itself without failing (the by-hand recipe)", async () => {
+    await rolledBack(async (tx) => {
+      for (const statement of migrationStatements(MIGRATION)) {
+        await tx.$executeRawUnsafe(statement);
+      }
+    });
   });
 });

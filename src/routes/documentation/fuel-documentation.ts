@@ -8,6 +8,7 @@ import { updateDeleteBusinessSchema } from "@/schemas/update-delete-business-sch
 import { updateDeleteVehicleSchema } from "@/schemas/update-delete-vehicle-schema";
 
 import { presignedPhotoSchema } from "@/schemas/presigned-photos-schema";
+import { FUEL_ALERTS } from "@/modules/fuel/usecases/list-fuel/fuel-list";
 import { idempotencyHeaders } from "./idempotency-documentation";
 import { errorResponse, internalErrorResponse } from "./common-responses";
 
@@ -101,6 +102,24 @@ const fuelRow = z.object({
   created_from: z
     .string()
     .describe("Origem do registro: MOBILE_APP ou WEB_DASHBOARD."),
+  // 05/11/2026 (20261105130000).
+  alerts: z
+    .array(z.enum(FUEL_ALERTS))
+    .describe(
+      "O que o escritório deve olhar neste abastecimento; vazio quando nada. RECENT_REFUEL: outro abastecimento do mesmo veículo a menos de 30 minutos deste, antes ou depois, decidido quando ele foi gravado (e de novo quando uma edição muda a data ou o veículo). Os gravados antes de 05/11/2026 não foram marcados.",
+    ),
+  recent_refuel_reason: z
+    .string()
+    .nullable()
+    .describe(
+      "O motivo que o motorista informou ao confirmar o segundo abastecimento em menos de 30 minutos; null quando não confirmou (escritório, fila offline, app antigo) ou sem RECENT_REFUEL.",
+    ),
+  recent_refuel_previous_at: z
+    .union([z.string(), z.date()])
+    .nullable()
+    .describe(
+      "A data e hora (ISO 8601) do outro abastecimento que gerou RECENT_REFUEL; null sem o alerta. Fica como estava mesmo se aquele abastecimento for excluído depois.",
+    ),
   businessId: z.string().describe("Empresa."),
   branchId: z.string().describe("Filial."),
   vehicleId: z.string().describe("Veículo."),
@@ -228,14 +247,29 @@ const fuelResponses = {
       code: z
         .string()
         .describe(
-          "SUBMISSION_OWNER_MISMATCH, BRANCH_REQUIRED ou BRANCH_INACTIVE",
+          "SUBMISSION_OWNER_MISMATCH, BRANCH_REQUIRED, BRANCH_INACTIVE ou FUEL_RECENT_REFUEL",
         ),
       message: z.string(),
+      // Sent by replyFuelWriteError with FUEL_RECENT_REFUEL only.
+      previous_refuel: z
+        .object({
+          id: z.string().describe("ID do outro abastecimento."),
+          refueling_date: z.string().describe("Data e hora dele (ISO 8601)."),
+          liters_amount: z.number().describe("Litros abastecidos nele."),
+          current_mileage: z
+            .number()
+            .describe("Quilometragem registrada nele."),
+        })
+        .optional()
+        .describe(
+          "FUEL_RECENT_REFUEL: o outro abastecimento do veículo, o mais próximo da data deste, para o app mostrar na pergunta.",
+        ),
     })
     .describe(
       "SUBMISSION_OWNER_MISMATCH: a chave de idempotência já foi usada por outro motorista desta empresa — gere uma chave nova e reenvie; repetir a mesma nunca passa. " +
         "BRANCH_REQUIRED: não há filial ATIVA para registrar o abastecimento do motorista: nem a do veículo, nem a dele, nem uma única filial ativa da empresa (as desativadas são puladas). Com `routeId`, quem opera as entregas é avisado uma vez por rota (`route.record_branch_missing`, na caixa de entrada e na atividade da rota); reenvie depois que o gestor corrigir a filial: os reenvios não repetem o aviso. " +
-        "BRANCH_INACTIVE: a filial do abastecimento do gestor está desativada. O abastecimento do motorista nunca vai para uma filial desativada: a filial que o app dele envia no corpo é ignorada.",
+        "BRANCH_INACTIVE: a filial do abastecimento do gestor está desativada. O abastecimento do motorista nunca vai para uma filial desativada: a filial que o app dele envia no corpo é ignorada. " +
+        "FUEL_RECENT_REFUEL: o veículo já tem outro abastecimento a menos de 30 minutos da data deste (antes ou depois), e o motorista não confirmou. Só para o motorista cujo app manda `contract` 5 ou maior em `x-trajetto-client-version` e não é a fila offline (sem X-Client-Queued-At); o app de versão anterior, o reenvio da fila e o escritório têm o abastecimento gravado com o alerta RECENT_REFUEL. `previous_refuel` traz o outro abastecimento. Nada foi gravado e a foto continua no storage: reenvie o mesmo corpo, com a mesma chave e a mesma foto, mais `confirm_recent: true` e `recent_reason` (3 a 300 caracteres). O reenvio de um abastecimento já gravado é respondido com ele antes dessa regra.",
     ),
   driverInactive: z
     .object({

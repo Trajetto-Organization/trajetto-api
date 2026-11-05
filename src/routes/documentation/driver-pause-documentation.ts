@@ -83,6 +83,23 @@ const currentPause = z.object({
     .string()
     .nullable()
     .describe("A rota da jornada agora; nula fora de jornada."),
+  last_ended_at: isoDateTime
+    .nullable()
+    .describe(
+      "Quando terminou a última pausa encerrada do motorista, de qualquer dia; nulo quando ele nunca encerrou uma.",
+    ),
+  next_pause_allowed_at: isoDateTime
+    .nullable()
+    .describe(
+      "Quando uma nova pausa pode começar: `last_ended_at` mais 5 minutos (05/11/2026); nulo sem pausa encerrada.",
+    ),
+  next_pause_in_seconds: z
+    .number()
+    .int()
+    .min(0)
+    .describe(
+      "Segundos inteiros, arredondados para cima, de agora (relógio do servidor) até `next_pause_allowed_at`; 0 quando já passou ou sem pausa encerrada. O app conta a espera no próprio relógio a partir deste número, nunca do instante: o relógio do aparelho costuma estar errado.",
+    ),
 });
 
 const reportPause = z.object({
@@ -273,8 +290,28 @@ const driverPauseResponses = {
     "PAUSE_NOT_FOUND: nenhuma pausa com esse `start_submission_id` nesta empresa, e o fim não trouxe `start` para criá-la. OCCURRENCE_TYPE_NOT_FOUND: `start.occurrence_type_id` não é um tipo desta empresa.",
   ),
   startConflict: withCodes(
-    "PAUSE_ALREADY_OPEN: o motorista já tem outra pausa aberta (chave diferente); leia GET /driver-pause/current para saber qual. SUBMISSION_OWNER_MISMATCH: a chave já foi usada por outro motorista; gere outra. PAUSE_TOO_OLD: início novo tocado há mais de 7 dias; nada foi gravado e o item sai da fila. PAUSE_REQUIRES_ROUTE: no instante do toque o motorista não tinha rota liberada ou em andamento do dia (decisão 14.4); nada foi gravado.",
-  ),
+    "PAUSE_ALREADY_OPEN: o motorista já tem outra pausa aberta (chave diferente); leia GET /driver-pause/current para saber qual. SUBMISSION_OWNER_MISMATCH: a chave já foi usada por outro motorista; gere outra. PAUSE_TOO_OLD: início novo tocado há mais de 7 dias; nada foi gravado e o item sai da fila. PAUSE_REQUIRES_ROUTE: no instante do toque o motorista não tinha rota liberada ou em andamento do dia (decisão 14.4); nada foi gravado. PAUSE_COOLDOWN: início novo tocado menos de 5 minutos depois do fim da pausa anterior do motorista, enviado agora (sem X-Client-Queued-At) por um app de `contract` 5 ou maior; nada foi gravado, e o corpo traz `last_ended_at`, `next_pause_allowed_at` e `next_pause_in_seconds`.",
+  ).extend({
+    // Sent by the start controller with PAUSE_COOLDOWN only.
+    last_ended_at: isoDateTime
+      .optional()
+      .describe(
+        "PAUSE_COOLDOWN: quando terminou a pausa anterior do motorista.",
+      ),
+    next_pause_allowed_at: isoDateTime
+      .optional()
+      .describe(
+        "PAUSE_COOLDOWN: quando uma nova pausa pode começar (`last_ended_at` mais 5 minutos).",
+      ),
+    next_pause_in_seconds: z
+      .number()
+      .int()
+      .min(0)
+      .optional()
+      .describe(
+        "PAUSE_COOLDOWN: segundos inteiros, arredondados para cima, de agora (relógio do servidor) até `next_pause_allowed_at`; 0 quando já passou. O app conta a espera no próprio relógio a partir deste número.",
+      ),
+  }),
   endConflict: withCodes(
     "PAUSE_ALREADY_ENDED: a pausa já foi encerrada por outro fim (chave diferente); nada muda. PAUSE_SUBMISSION_REUSED: esta chave de fim já encerrou outra pausa; gere outra. SUBMISSION_OWNER_MISMATCH: a pausa (ou a chave) é de outro motorista. PAUSE_TOO_OLD: a pausa teria de ser criada a partir de `start` com um toque de mais de 7 dias; nada foi gravado e o item sai da fila. PAUSE_REQUIRES_ROUTE: a pausa teria de ser criada a partir de `start`, e no toque do início não havia rota liberada ou em andamento do dia; nada foi gravado.",
   ),

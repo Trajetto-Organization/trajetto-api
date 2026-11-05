@@ -3,8 +3,8 @@ import database from "@/../infra/database";
 import { Decimal } from "@prisma/client/runtime/client";
 import { Prisma } from "@prisma/client";
 import type {
+  FuelCreation,
   FuelMileageUpdate,
-  FuelPlacement,
   IFuelRepository,
 } from "./IFuel-repository";
 import { VehicleMileageInvalidError } from "@/modules/vehicle/usecases/errors/vehicle-mileage-invalid-error";
@@ -18,7 +18,16 @@ import {
 import { resolveTimeZone } from "@/shared/time/business-day";
 import { isSerializationFailure } from "@/shared/errors/prisma-error-meta";
 import { FuelNotFoundError } from "../usecases/errors/fuel-not-found-error";
-import { placeReading } from "../usecases/fuel-rules";
+import {
+  RECENT_REFUEL_CANDIDATE_LIMIT,
+  findRecentRefuel,
+  placeReading,
+  recentRefuelAlert,
+  recentRefuelWindow,
+  recheckedRecentRefuel,
+  type RecentRefuelColumns,
+  type RefuelNearby,
+} from "../usecases/fuel-rules";
 
 import {
   Fuel,
@@ -115,6 +124,8 @@ async function placeOnVehicle(
     odometer: vehicle.current_mileage,
     maintenanceFloor: vehicle.last_maintenance_mileage,
     previousMileage,
+    at: query.at,
+    timeZone: query.timeZone,
   });
 
   if (!placement.fits) throw new VehicleMileageInvalidError();
@@ -131,6 +142,38 @@ async function placeOnVehicle(
   });
 
   if (moved.count !== 1) throw new VehicleMileageInvalidError();
+}
+
+/**
+ * The vehicle's refuellings within the window around `at` (recentRefuelWindow),
+ * inside the company, by the (vehicleId, refueling_date) index. Inside the
+ * serializable transaction this read is what makes two refuellings sent at
+ * once see each other: each one's range read conflicts with the other's
+ * insert, one of them is retried, and the retry finds the first.
+ */
+async function refuelsNear(
+  client: Prisma.TransactionClient,
+  businessId: string,
+  vehicleId: string,
+  at: Date,
+): Promise<RefuelNearby[]> {
+  const { after, before } = recentRefuelWindow(at);
+
+  return client.fuel.findMany({
+    where: {
+      businessId,
+      vehicleId,
+      refueling_date: { gt: after, lt: before },
+    },
+    select: {
+      id: true,
+      refueling_date: true,
+      liters_amount: true,
+      current_mileage: true,
+    },
+    orderBy: [{ refueling_date: "asc" }, { id: "asc" }],
+    take: RECENT_REFUEL_CANDIDATE_LIMIT,
+  });
 }
 
 class FuelRepository implements IFuelRepository {
@@ -179,7 +222,7 @@ class FuelRepository implements IFuelRepository {
   async createFuelWithMileage(
     fuelData: CreateFuelProps,
     afterCreate?: (tx: Prisma.TransactionClient, fuel: Fuel) => Promise<void>,
-    placement?: FuelPlacement,
+    creation?: FuelCreation,
   ): Promise<{ fuel: Fuel; created: boolean }> {
     const executeTransaction = async () =>
       this.prisma.$transaction(
@@ -197,17 +240,35 @@ class FuelRepository implements IFuelRepository {
             }
           }
 
+          const at = recordDate(fuelData.refueling_date);
+          const timeZone = resolveTimeZone(creation?.timeZone);
+
           // Placed by its date before any odometer move (placeReading): the
           // forward rule used to run first, so a past refueling typed above
           // the later ones moved the odometer and froze the vehicle.
           await placeOnVehicle(transaction, {
             businessId: fuelData.businessId,
             vehicleId: fuelData.vehicleId,
-            at: recordDate(fuelData.refueling_date),
-            timeZone: resolveTimeZone(placement?.timeZone),
+            at,
+            timeZone,
             mileage: fuelData.current_mileage,
             previousMileage: null,
           });
+
+          // Another refuelling of the vehicle within 30 minutes, either side:
+          // flagged for the office, whoever sends this one (fuel-rules.ts).
+          const alert = recentRefuelAlert(
+            findRecentRefuel(
+              await refuelsNear(
+                transaction,
+                fuelData.businessId,
+                fuelData.vehicleId,
+                at,
+              ),
+              { at, timeZone },
+            ),
+            creation?.recentRefuelReason ?? null,
+          );
 
           const litersAmount = new Decimal(fuelData.liters_amount.toString());
           const pricePerLiter = new Decimal(
@@ -224,6 +285,7 @@ class FuelRepository implements IFuelRepository {
               odometer_photo: fuelData.odometer_photo as string,
               branchId: fuelData.branchId!,
               driverId: fuelData.driverId!,
+              ...alert,
             },
           });
 
@@ -262,6 +324,14 @@ class FuelRepository implements IFuelRepository {
     throw new Error("Could not complete fuel transaction");
   }
 
+  async findRefuelsNear(
+    businessId: string,
+    vehicleId: string,
+    at: Date,
+  ): Promise<RefuelNearby[]> {
+    return refuelsNear(this.prisma, businessId, vehicleId, at);
+  }
+
   async listFuels({
     page,
     pageSize,
@@ -280,8 +350,16 @@ class FuelRepository implements IFuelRepository {
         orderBy: resolveOrderBy(FUEL_SORT, { sort, order }),
         include: FUEL_LIST_INCLUDE,
       }),
+      // `alerts` is an array column with few distinct values (none, or
+      // RECENT_REFUEL), so the groups barely grow.
       this.prisma.fuel.groupBy({
-        by: ["branchId", "vehicleId", "fuelTypeId", "odometer_verified"],
+        by: [
+          "branchId",
+          "vehicleId",
+          "fuelTypeId",
+          "odometer_verified",
+          "alerts",
+        ],
         where: fuelListWhere(filters, { withFacets: false }),
         _count: { _all: true },
         _sum: { liters_amount: true, total_amount: true },
@@ -293,6 +371,7 @@ class FuelRepository implements IFuelRepository {
       vehicleId: group.vehicleId,
       fuelTypeId: group.fuelTypeId,
       odometer_verified: group.odometer_verified,
+      alerts: group.alerts ?? [],
       count: group._count._all,
       liters: (group._sum.liters_amount ?? new Decimal(0)).toString(),
       amount: (group._sum.total_amount ?? new Decimal(0)).toString(),
@@ -385,13 +464,21 @@ class FuelRepository implements IFuelRepository {
     mileageUpdate?: FuelMileageUpdate,
   ): Promise<Fuel> {
     return this.serializable(async (transaction) => {
+      // Set when the edit moves the date or the vehicle.
+      let recentRefuel: RecentRefuelColumns | null = null;
+
       if (mileageUpdate) {
         const { businessId, vehicleId } = mileageUpdate;
         const excludeFuelId = mileageUpdate.fuelId ?? fuelId;
 
         const stored = await transaction.fuel.findFirst({
           where: { id: fuelId, businessId },
-          select: { vehicleId: true, current_mileage: true },
+          select: {
+            vehicleId: true,
+            current_mileage: true,
+            refueling_date: true,
+            alerts: true,
+          },
         });
 
         if (!stored) throw new FuelNotFoundError();
@@ -420,6 +507,30 @@ class FuelRepository implements IFuelRepository {
             leaving: stored.current_mileage,
             excludeFuelId,
           });
+        }
+
+        // A new date or vehicle measures the window again, the record
+        // itself left out; the driver's reason stays (fuel-rules.ts).
+        if (
+          !sameVehicle ||
+          stored.refueling_date.getTime() !== mileageUpdate.at.getTime()
+        ) {
+          recentRefuel = recheckedRecentRefuel(
+            stored.alerts,
+            findRecentRefuel(
+              await refuelsNear(
+                transaction,
+                businessId,
+                vehicleId,
+                mileageUpdate.at,
+              ),
+              {
+                id: fuelId,
+                at: mileageUpdate.at,
+                timeZone: resolveTimeZone(mileageUpdate.timeZone),
+              },
+            ),
+          );
         }
       }
 
@@ -452,7 +563,7 @@ class FuelRepository implements IFuelRepository {
 
       return transaction.fuel.update({
         where: { id: fuelId },
-        data: filteredData,
+        data: { ...filteredData, ...recentRefuel },
       });
     });
   }
@@ -689,6 +800,10 @@ class FuelRepository implements IFuelRepository {
           location_edited_by: fuel.location_edited_by,
           location_edited_at: fuel.location_edited_at,
           created_from: fuel.created_from,
+          // 05/11/2026: the alerts and what raised RECENT_REFUEL.
+          alerts: fuel.alerts,
+          recentRefuelPreviousAt: fuel.recent_refuel_previous_at,
+          recentRefuelReason: fuel.recent_refuel_reason,
           created_at: fuel.created_at,
           updated_at: fuel.updated_at,
         };
@@ -809,6 +924,9 @@ class FuelRepository implements IFuelRepository {
         vehicleId: true,
         driverId: true,
         odometer_ai_status: true,
+        alerts: true,
+        recent_refuel_reason: true,
+        recent_refuel_previous_at: true,
       },
     });
 

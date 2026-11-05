@@ -1,5 +1,12 @@
 import { RouteNotFoundError } from "@/modules/route/usecases/errors/route-errors";
+import { VehicleChecklistArrivalRouteOpenError } from "@/modules/vehicle-checklist/usecases/errors/vehicle-checklist-arrival-route-open-error";
 import { AppError } from "@/shared/errors/AppError";
+import {
+  isStopOpen,
+  isTerminalRouteStatus,
+  type RouteStatus,
+  type RouteStopStatus,
+} from "@/shared/route/route-rules";
 import { businessDateKey, resolveTimeZone } from "@/shared/time/business-day";
 import {
   ENDED_ROUTE_CHECKLIST_WINDOW_MS,
@@ -12,11 +19,13 @@ import {
  * vehicle on that route, so the route must be the record's driver's and
  * carry the record's vehicle.
  *
- * The route's status is never asked, on purpose: the app queues a departure
- * checklist with photos offline, and it may reach the server after the route
- * left or even ended. The server records it; only the app holds "Iniciar
- * rota" back until the checklist exists (decision D08). A route of another
- * company reads exactly like one that does not exist.
+ * The link never asks the route's status, on purpose: the app queues a
+ * departure checklist with photos offline, and it may reach the server after
+ * the route left or even ended. The server records it; only the app holds
+ * "Iniciar rota" back until the checklist exists (decision D08). A route of
+ * another company reads exactly like one that does not exist. The arrival
+ * checklist is the one moment that asks more, and only of a driver's build
+ * that holds it the same way (arrivalChecklistRefusal).
  *
  * Whether that link also proves a DRIVER had the vehicle is another question
  * (routeProvesCustody): there the status and the record's date count.
@@ -165,5 +174,76 @@ function checklistPhaseRefusal(
   return null;
 }
 
-export { checklistPhaseRefusal, routeLinkRefusal, routeProvesCustody };
-export type { ChecklistPhaseValue, CustodyRoute, LinkedRoute };
+/** The route facts the arrival rule reads (a RouteWithStops has them). */
+interface ArrivalRoute {
+  status: RouteStatus;
+  started_at?: Date | string | null;
+  stops: ReadonlyArray<{ status: RouteStopStatus }>;
+}
+
+/**
+ * The first app contract (`contract` in x-trajetto-client-version,
+ * CLIENT_CONTRACT in trajetto-mobile/utils/client-version.ts) whose build
+ * holds the arrival checklist until the route is resolved, and so the first
+ * the server refuses an early one from.
+ */
+const ARRIVAL_CHECKLIST_RULE_CONTRACT = 5;
+
+/**
+ * Why the arrival checklist (ROUTE_END) cannot be made on this route yet, or
+ * null when it can — and always null for any other moment: the departure
+ * one keeps decision D08.
+ *
+ * The arrival is the end of the route's work, so it waits for the route to
+ * have left (started_at, or a route already running or ended) and for EVERY
+ * stop to be in a final status (COMPLETED, FAILED, CANCELLED; isStopOpen).
+ * Every stop, not "the last delivery of the list": stops resolve in any
+ * order, and the dispatcher may add stops to a running route (K12), which
+ * opens it again. A route that ended has nothing open (its cancellation and
+ * "Encerrar com pendências" call off the open stops), so its arrival opens.
+ *
+ * The refusal carries the open stops; the caller decides whom it applies to
+ * (enforcesArrivalChecklistRule).
+ */
+function arrivalChecklistRefusal(
+  phase: ChecklistPhaseValue | null | undefined,
+  route: ArrivalRoute,
+): VehicleChecklistArrivalRouteOpenError | null {
+  if (phase !== "ROUTE_END") return null;
+
+  const openStops = route.stops.filter((stop) => isStopOpen(stop.status));
+  const started =
+    toDate(route.started_at) !== null ||
+    route.status === "IN_PROGRESS" ||
+    isTerminalRouteStatus(route.status);
+
+  if (started && openStops.length === 0) return null;
+
+  return new VehicleChecklistArrivalRouteOpenError(openStops.length);
+}
+
+/**
+ * Whether an early arrival checklist is refused for the build that sent it:
+ * only from ARRIVAL_CHECKLIST_RULE_CONTRACT on. An older build (or one that
+ * sends no x-trajetto-client-version, like the app in drivers' hands today)
+ * lets the driver make it whenever, and its outbox would fail a refusal it
+ * never offered to avoid: that one is recorded, and flagged in the trail.
+ */
+function enforcesArrivalChecklistRule(
+  clientContract: number | null | undefined,
+): boolean {
+  return (
+    typeof clientContract === "number" &&
+    clientContract >= ARRIVAL_CHECKLIST_RULE_CONTRACT
+  );
+}
+
+export {
+  ARRIVAL_CHECKLIST_RULE_CONTRACT,
+  arrivalChecklistRefusal,
+  checklistPhaseRefusal,
+  enforcesArrivalChecklistRule,
+  routeLinkRefusal,
+  routeProvesCustody,
+};
+export type { ArrivalRoute, ChecklistPhaseValue, CustodyRoute, LinkedRoute };

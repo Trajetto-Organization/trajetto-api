@@ -217,8 +217,11 @@ const createVehicleChecklistSchema = z.object({
   driverId: z.string().uuid("ID do motorista é inválido.").optional(),
   branchId: z.string().uuid("ID da filial é inválido.").optional(),
 
-  // Optional on purpose: the web forms omit it and the column default
-  // (WEB_DASHBOARD) applies; the mobile app sends MOBILE_APP explicitly.
+  // Optional on purpose: the web's form omits it, sends no key and gets
+  // WEB_DASHBOARD. A driver's checklist is MOBILE_APP whatever this says, and
+  // one that omits it with a key is MOBILE_APP too: the use case decides it
+  // (shared/vehicle/record-origin.ts), so the app build that never sent the
+  // field is badged "App", whoever used it.
   created_from: z
     .nativeEnum(RecordOrigin, {
       errorMap: () => ({
@@ -226,7 +229,9 @@ const createVehicleChecklistSchema = z.object({
       }),
     })
     .optional()
-    .describe("Origem do cadastro (MOBILE_APP ou WEB_DASHBOARD)."),
+    .describe(
+      "Origem do cadastro (MOBILE_APP ou WEB_DASHBOARD). Ausente, vale MOBILE_APP quando o envio traz a chave de idempotência (no corpo ou no header Idempotency-Key), que só o app manda, e WEB_DASHBOARD quando não traz. Para o motorista, o servidor grava sempre MOBILE_APP, seja qual for o valor enviado.",
+    ),
 
   // Decision 14.2: the phone's offline check of the "Foto do Odômetro"
   // (field current_mileage). Dropped without that photo.
@@ -234,14 +239,15 @@ const createVehicleChecklistSchema = z.object({
 
   // Plan of 02/11/2026 (C4/F3): the route this checklist was made for and
   // its moment. Both or neither; the use case checks the route is the
-  // driver's and the vehicle is the route's.
+  // driver's and the vehicle is the route's, and that a driver's arrival
+  // waits for the route to be resolved (shared/vehicle/route-link.ts).
   routeId: z
     .string()
     .uuid("ID da rota é inválido.")
     .nullable()
     .optional()
     .describe(
-      "A rota para a qual o checklist foi feito (checklist de saída ou de chegada). Exige `phase`. A rota tem de ser do motorista do checklist e ter o veículo do checklist (senão 422 ROUTE_LINK_MISMATCH); rota inexistente ou de outra empresa: 404 DELIVERY_ROUTE_NOT_FOUND. O status da rota não importa: um checklist feito sem sinal pode chegar depois do início, e o de chegada abre quando a última parada já concluiu a rota. A rota informada também vale como a atribuição do veículo ao motorista (o substituto que levou o caminhão na rota faz o checklist dele mesmo depois do fim).",
+      "A rota para a qual o checklist foi feito (checklist de saída ou de chegada). Exige `phase`. A rota tem de ser do motorista do checklist e ter o veículo do checklist (senão 422 ROUTE_LINK_MISMATCH); rota inexistente ou de outra empresa: 404 DELIVERY_ROUTE_NOT_FOUND. Para o checklist de saída o status da rota não importa: um checklist feito sem sinal pode chegar depois do início. O de chegada do motorista só vale com a rota iniciada (ou já encerrada) e todas as paradas resolvidas (concluída, com insucesso ou cancelada), quaisquer que sejam a ordem e as paradas incluídas com a rota em andamento; antes disso, o app que envia `contract` 5 ou maior em `x-trajetto-client-version` recebe 409 CHECKLIST_ARRIVAL_ROUTE_OPEN, e o de versão anterior (ou sem o cabeçalho) tem o checklist gravado e marcado na atividade com as paradas em aberto. O checklist feito pelo escritório não passa por essa regra. A rota informada também vale como a atribuição do veículo ao motorista (o substituto que levou o caminhão na rota faz o checklist dele mesmo depois do fim).",
     ),
   phase: z
     .enum(["STANDALONE", "ROUTE_START", "ROUTE_END"], {
@@ -252,7 +258,7 @@ const createVehicleChecklistSchema = z.object({
     })
     .optional()
     .describe(
-      "O momento: ROUTE_START (saída) ou ROUTE_END (chegada) com `routeId`; STANDALONE (padrão) sem rota.",
+      "O momento: ROUTE_START (saída) ou ROUTE_END (chegada) com `routeId`; STANDALONE (padrão) sem rota. A chegada do motorista espera a rota iniciada e todas as paradas resolvidas (ver `routeId`).",
     ),
 
   // K6: when the driver finished the inspection, for a checklist the app

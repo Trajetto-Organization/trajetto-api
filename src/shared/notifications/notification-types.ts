@@ -60,6 +60,14 @@ interface VehicleChecklistCreatedPayload {
 
   /** MOBILE_APP | WEB_DASHBOARD. Optional: events published before the field existed. */
   origin?: string;
+
+  /**
+   * A driver's arrival checklist (ROUTE_END) made before its route was
+   * resolved, from an app build older than the arrival rule (contract < 5,
+   * shared/vehicle/route-link.ts): the stops still open then — 0 only for a
+   * route that had not left and held none. Absent on every other checklist.
+   */
+  arrivalOpenStops?: number;
 }
 
 /**
@@ -88,6 +96,15 @@ interface FuelCreatedPayload {
 
   /** MOBILE_APP | WEB_DASHBOARD. Optional: events published before the field existed. */
   origin?: string;
+
+  /**
+   * RECENT_REFUEL (05/11/2026, fuel-rules.ts): the other refuelling's time,
+   * "HH:MM" on the company's clock. Absent on a refuelling without it.
+   */
+  recentRefuelAt?: string;
+
+  /** The driver's reason, when they confirmed it. */
+  recentRefuelReason?: string;
 }
 
 // Published by the AI pipeline ONLY when the verification found something

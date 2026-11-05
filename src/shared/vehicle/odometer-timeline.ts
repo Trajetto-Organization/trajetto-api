@@ -29,7 +29,25 @@ import { businessDayRange } from "@/shared/time/business-day";
  * readings on a later day cannot jump the odometer, and the newest one can be
  * corrected downwards. The "forward first" order that used to run on the
  * creates let a back-dated record typed too high drag the odometer along.
+ *
+ * The odometer never goes backwards, but it may stand still for a short
+ * while (05/11/2026): a reading may EQUAL the one before or after it when
+ * that record is less than SAME_READING_WINDOW_MINUTES away (placeReading).
+ * That is why the neighbours carry the record that holds each reading.
  */
+
+/** The two kinds of record that carry a vehicle's odometer reading. */
+type ReadingKind = "fuel" | "checklist";
+
+/** One record's reading on its vehicle's timeline. */
+interface TimelineReading {
+  kind: ReadingKind;
+  id: string;
+  mileage: number;
+
+  /** The record's date (refueling_date, checklist_date). */
+  at: Date;
+}
 
 interface OdometerNeighbours {
   /** The highest reading dated at or before the record. Null when none. */
@@ -37,6 +55,64 @@ interface OdometerNeighbours {
 
   /** The lowest reading dated after the record. Null when none. */
   after: number | null;
+
+  /**
+   * The record that holds `before`; of several with that km, the nearest
+   * to the date (the latest). Null when none. Left out where nobody read it
+   * (a test's literal): an equal reading is then refused, the strict rule.
+   */
+  beforeReading?: TimelineReading | null;
+
+  /**
+   * The record that holds `after`; of several with that km, the nearest to
+   * the date (the earliest). Null when none; left out, as `beforeReading`.
+   */
+  afterReading?: TimelineReading | null;
+}
+
+/**
+ * The neighbours of `at` among a vehicle's readings: the highest dated at or
+ * before it and the lowest dated after it, each with the record that holds
+ * it — the nearest to `at` when several hold the same km, then the first
+ * given. odometerNeighbours picks from the top row of each kind and side;
+ * the in-memory twins from every row of the vehicle. One choice for both.
+ */
+function neighboursAmong(
+  readings: Iterable<TimelineReading>,
+  at: Date,
+): OdometerNeighbours {
+  const instant = at.getTime();
+  let before: TimelineReading | null = null;
+  let after: TimelineReading | null = null;
+
+  for (const reading of readings) {
+    const time = reading.at.getTime();
+
+    if (Number.isNaN(time)) continue;
+
+    if (time <= instant) {
+      const higher =
+        before === null ||
+        reading.mileage > before.mileage ||
+        (reading.mileage === before.mileage && time > before.at.getTime());
+
+      if (higher) before = reading;
+    } else {
+      const lower =
+        after === null ||
+        reading.mileage < after.mileage ||
+        (reading.mileage === after.mileage && time < after.at.getTime());
+
+      if (lower) after = reading;
+    }
+  }
+
+  return {
+    before: before?.mileage ?? null,
+    after: after?.mileage ?? null,
+    beforeReading: before,
+    afterReading: after,
+  };
 }
 
 /**
@@ -48,6 +124,8 @@ interface OdometerNeighbours {
  * the mileage the vehicle was registered with, which no fueling or checklist
  * carries, so any reading below the next record would pass — 9 000 km on a
  * vehicle registered at 50 000, a typo or a fake the forward rule refused.
+ * Strict on both sides: it has no dates, so the reading that equals a
+ * neighbour less than 30 minutes away is placeReading's to accept.
  */
 function fitsOdometerTimeline(
   mileage: number,
@@ -77,6 +155,11 @@ interface OdometerNeighboursQuery {
  * of record that carry the vehicle's odometer. Run inside the caller's
  * serializable transaction, so a record committed concurrently either is seen
  * here or makes this transaction retry.
+ *
+ * Four reads, as the MAX/MIN aggregates they replace, over the same ranges
+ * of the company's vehicle: the top row of each kind on each side, by km
+ * and then by nearness to the date, so the reading comes with the record
+ * that holds it (its id and date) at no extra round trip.
  */
 async function odometerNeighbours(
   tx: Prisma.TransactionClient,
@@ -93,55 +176,98 @@ async function odometerNeighbours(
     ? { id: { not: excludeChecklistId } }
     : {};
 
-  const fuelBefore = await tx.fuel.aggregate({
+  const fuelSelect = { id: true, current_mileage: true, refueling_date: true };
+  const checklistSelect = {
+    id: true,
+    current_mileage: true,
+    checklist_date: true,
+  };
+
+  const fuelBefore = await tx.fuel.findFirst({
     where: { businessId, vehicleId, refueling_date: { lte: at }, ...notFuel },
-    _max: { current_mileage: true },
+    orderBy: [
+      { current_mileage: "desc" },
+      { refueling_date: "desc" },
+      { id: "desc" },
+    ],
+    select: fuelSelect,
   });
 
-  const fuelAfter = await tx.fuel.aggregate({
+  const fuelAfter = await tx.fuel.findFirst({
     where: { businessId, vehicleId, refueling_date: { gt: at }, ...notFuel },
-    _min: { current_mileage: true },
+    orderBy: [
+      { current_mileage: "asc" },
+      { refueling_date: "asc" },
+      { id: "asc" },
+    ],
+    select: fuelSelect,
   });
 
-  const checklistBefore = await tx.vehicleChecklist.aggregate({
+  const checklistBefore = await tx.vehicleChecklist.findFirst({
     where: {
       businessId,
       vehicleId,
       checklist_date: { lte: at },
       ...notChecklist,
     },
-    _max: { current_mileage: true },
+    orderBy: [
+      { current_mileage: "desc" },
+      { checklist_date: "desc" },
+      { id: "desc" },
+    ],
+    select: checklistSelect,
   });
 
-  const checklistAfter = await tx.vehicleChecklist.aggregate({
+  const checklistAfter = await tx.vehicleChecklist.findFirst({
     where: {
       businessId,
       vehicleId,
       checklist_date: { gt: at },
       ...notChecklist,
     },
-    _min: { current_mileage: true },
+    orderBy: [
+      { current_mileage: "asc" },
+      { checklist_date: "asc" },
+      { id: "asc" },
+    ],
+    select: checklistSelect,
   });
 
-  const highest = (...values: Array<number | null>) => {
-    const present = values.filter((value): value is number => value !== null);
-    return present.length > 0 ? Math.max(...present) : null;
-  };
+  const fuels = [fuelBefore, fuelAfter].flatMap((row) =>
+    row ? [fuelReading(row)] : [],
+  );
+  const checklists = [checklistBefore, checklistAfter].flatMap((row) =>
+    row ? [checklistReading(row)] : [],
+  );
 
-  const lowest = (...values: Array<number | null>) => {
-    const present = values.filter((value): value is number => value !== null);
-    return present.length > 0 ? Math.min(...present) : null;
-  };
+  return neighboursAmong([...fuels, ...checklists], at);
+}
 
+/** A refueling row as the timeline reads it. */
+function fuelReading(row: {
+  id: string;
+  current_mileage: number;
+  refueling_date: Date | string;
+}): TimelineReading {
   return {
-    before: highest(
-      fuelBefore._max.current_mileage,
-      checklistBefore._max.current_mileage,
-    ),
-    after: lowest(
-      fuelAfter._min.current_mileage,
-      checklistAfter._min.current_mileage,
-    ),
+    kind: "fuel",
+    id: row.id,
+    mileage: row.current_mileage,
+    at: new Date(row.refueling_date),
+  };
+}
+
+/** A checklist row as the timeline reads it. */
+function checklistReading(row: {
+  id: string;
+  current_mileage: number;
+  checklist_date: Date | string;
+}): TimelineReading {
+  return {
+    kind: "checklist",
+    id: row.id,
+    mileage: row.current_mileage,
+    at: new Date(row.checklist_date),
   };
 }
 
@@ -172,7 +298,7 @@ interface OdometerTimeline {
 /**
  * The history placeReading decides on, read inside the caller's
  * serializable transaction. The newest reading (the usual case) costs the
- * four aggregates it always did; the day and overall reads only run for a
+ * four reads it always did; the day and overall reads only run for a
  * record with readings after its date. Shared by the fueling and the
  * checklist edits: one timeline holds both.
  */
@@ -271,7 +397,10 @@ function recordDate(value: Date | string | null | undefined): Date {
 
 export {
   END_OF_TIME,
+  checklistReading,
   fitsOdometerTimeline,
+  fuelReading,
+  neighboursAmong,
   odometerNeighbours,
   odometerTimeline,
   recordDate,
@@ -282,5 +411,7 @@ export type {
   OdometerNeighboursQuery,
   OdometerTimeline,
   OdometerTimelineQuery,
+  ReadingKind,
   ReleasedReading,
+  TimelineReading,
 };

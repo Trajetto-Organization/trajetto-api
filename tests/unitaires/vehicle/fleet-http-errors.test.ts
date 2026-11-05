@@ -19,6 +19,7 @@ import { VehicleChecklistNotFoundError } from "@/modules/vehicle-checklist/useca
 import { VehicleChecklistBusinessNotFoundError } from "@/modules/vehicle-checklist/usecases/errors/vehicle-checklist-business-not-found-error";
 import { VehicleMileageInvalidError } from "@/modules/vehicle/usecases/errors/vehicle-mileage-invalid-error";
 import { VehicleMileageOutOfOrderError } from "@/modules/vehicle/usecases/errors/vehicle-mileage-out-of-order-error";
+import { VehicleChecklistArrivalRouteOpenError } from "@/modules/vehicle-checklist/usecases/errors/vehicle-checklist-arrival-route-open-error";
 
 /**
  * Another company's id answers exactly like an id that exists nowhere
@@ -29,7 +30,7 @@ import { VehicleMileageOutOfOrderError } from "@/modules/vehicle/usecases/errors
 interface Sent {
   status?: number;
   header?: string;
-  body?: { code?: string; message?: string };
+  body?: { code?: string; message?: string; open_stops?: number };
 }
 
 function answer(
@@ -143,5 +144,30 @@ describe("the checklist routes' answers", () => {
       header: "VEHICLE_NOT_ASSIGNED_TO_DRIVER",
       body: { code: "VEHICLE_NOT_ASSIGNED_TO_DRIVER" },
     });
+  });
+
+  it("refuses an early arrival checklist with 409, saying how many stops are left", () => {
+    // The global handler would answer the AppError with code and message
+    // only; the table's answer keeps the count. The app reads the code and
+    // shows the message, never the count.
+    expect(
+      answer(replyChecklistError, new VehicleChecklistArrivalRouteOpenError(3)),
+    ).toEqual({
+      status: 409,
+      header: "CHECKLIST_ARRIVAL_ROUTE_OPEN",
+      body: {
+        code: "CHECKLIST_ARRIVAL_ROUTE_OPEN",
+        message:
+          "O checklist de chegada só pode ser feito depois que todas as entregas da rota forem resolvidas (faltam 3).",
+        open_stops: 3,
+      },
+    });
+
+    expect(
+      answer(replyChecklistError, new VehicleChecklistArrivalRouteOpenError(1))
+        .body?.message,
+    ).toBe(
+      "O checklist de chegada só pode ser feito depois que todas as entregas da rota forem resolvidas (falta 1).",
+    );
   });
 });

@@ -25,6 +25,7 @@ import {
 
 import { updateDeleteBusinessSchema } from "@/schemas/update-delete-business-schema";
 import { searchMetaDoc } from "@/shared/pagination/list-meta";
+import { FUEL_ALERTS } from "@/modules/fuel/usecases/list-fuel/fuel-list";
 
 /**
  * What the API actually answers, not what would look tidy.
@@ -228,6 +229,23 @@ const routeFuelEntity = z.object({
   odometer_ai_status: z
     .string()
     .describe("Situação da leitura do hodômetro pela IA."),
+  // 05/11/2026 (20261105130000), as the fuel list.
+  alerts: z
+    .array(z.enum(FUEL_ALERTS))
+    .describe(
+      "Alertas do abastecimento; vazio quando nada. RECENT_REFUEL: outro abastecimento do mesmo veículo a menos de 30 minutos deste.",
+    ),
+  recent_refuel_reason: z
+    .string()
+    .nullable()
+    .describe(
+      "O motivo que o motorista informou ao confirmar; null sem confirmação ou sem o alerta.",
+    ),
+  recent_refuel_previous_at: isoDateTime
+    .nullable()
+    .describe(
+      "A data do outro abastecimento (RECENT_REFUEL); null sem o alerta.",
+    ),
 });
 
 const unroutedDeliveryRow = z.object({

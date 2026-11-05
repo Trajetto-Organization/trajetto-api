@@ -54,7 +54,9 @@ interface IVehicleChecklistRepository {
    * The checklist and, when it is the newest reading, the vehicle's odometer,
    * in one transaction. Placed by its date first (placeReading, the fueling
    * create's rule): between the readings around it the vehicle stays; above a
-   * reading of a later civil day it is refused (VehicleMileageInvalidError).
+   * reading of a later civil day it is refused (VehicleMileageInvalidError);
+   * at the km of a neighbouring record less than 30 minutes away (a
+   * refuelling just before the arrival), it is stored and the vehicle stays.
    */
   createVehicleChecklistWithMileage: (
     checklistData: CreateVehicleChecklistProps,

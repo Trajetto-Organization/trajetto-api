@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import type { IFuelRepository } from "@/modules/fuel/repositories/IFuel-repository";
 import type { CreateFuelProps } from "@/modules/fuel/dtos/fuel-dto";
+import { VehicleMileageInvalidError } from "@/modules/vehicle/usecases/errors/vehicle-mileage-invalid-error";
 
 import { expectPrismaCode, fixedId, type Kind } from "../support";
 
@@ -556,6 +557,10 @@ function fuelRepositoryContract(harness: () => FuelHarness): void {
         vehicleId: F.vA2,
         driverId: F.dA2,
         odometer_ai_status: expect.any(String),
+        // 05/11/2026: none on a plain insert.
+        alerts: [],
+        recent_refuel_reason: null,
+        recent_refuel_previous_at: null,
       });
 
       expect(await h.repo.listRouteFuels(F.A, F.missing)).toEqual([]);
@@ -622,6 +627,184 @@ function fuelRepositoryContract(harness: () => FuelHarness): void {
         routeId: null,
         route: null,
       });
+    });
+  });
+
+  // 05/11/2026 (20261105130000): another refuelling of the vehicle within 30
+  // minutes, either side, flags the new one inside the create's transaction;
+  // an edit that moves the date measures it again and keeps the reason; the
+  // list filters and groups by it. Last in the file: the dates (October) sit
+  // after every other row of vB, so each write is the vehicle's newest.
+  describe("the recent-refuel alert", () => {
+    const ZONE = { timeZone: "America/Sao_Paulo" };
+    const FIRST = "2026-10-01T13:00:00.000Z";
+    const SECOND = "2026-10-01T13:15:00.000Z";
+
+    it("reads the vehicle's refuellings inside the window, open at both ends, in the company", async () => {
+      const h = harness();
+
+      // f2 and f4 are vA1's at 2026-09-02T10:00.
+      const near = await h.repo.findRefuelsNear(
+        F.A,
+        F.vA1,
+        new Date("2026-09-02T10:20:00.000Z"),
+      );
+
+      expect(near.map((row) => row.id)).toEqual(
+        [h.id("f2"), h.id("f4")].sort(),
+      );
+      expect(near[0]).toMatchObject({
+        refueling_date: new Date("2026-09-02T10:00:00.000Z"),
+        current_mileage: expect.any(Number),
+      });
+
+      // Exactly 30 minutes away is out.
+      expect(
+        await h.repo.findRefuelsNear(
+          F.A,
+          F.vA1,
+          new Date("2026-09-02T10:30:00.000Z"),
+        ),
+      ).toEqual([]);
+      // Another company's vehicle, by id, reads nothing here.
+      expect(
+        await h.repo.findRefuelsNear(
+          F.A,
+          F.vB,
+          new Date("2026-09-01T10:00:00.000Z"),
+        ),
+      ).toEqual([]);
+    });
+
+    it("flags a create 15 minutes after another, with the reason; edits measure again", async () => {
+      const h = harness();
+
+      const first = await h.repo.createFuelWithMileage(
+        fuel(F.B, F.branchB, F.vB, F.dB, F.typeB, FIRST, {
+          current_mileage: 5_000,
+        }),
+        undefined,
+        ZONE,
+      );
+
+      expect(first.fuel).toMatchObject({
+        alerts: [],
+        recent_refuel_previous_at: null,
+        recent_refuel_reason: null,
+      });
+
+      const second = await h.repo.createFuelWithMileage(
+        fuel(F.B, F.branchB, F.vB, F.dB, F.typeB, SECOND, {
+          current_mileage: 5_100,
+        }),
+        undefined,
+        { ...ZONE, recentRefuelReason: "Tanque na reserva" },
+      );
+
+      expect(second.created).toBe(true);
+      expect(second.fuel).toMatchObject({
+        alerts: ["RECENT_REFUEL"],
+        recent_refuel_previous_at: new Date(FIRST),
+        recent_refuel_reason: "Tanque na reserva",
+      });
+
+      // The office moves it two hours later: no longer recent, reason kept.
+      const later = new Date("2026-10-01T15:15:00.000Z");
+      const moved = await h.repo.updateFuelAndMileage(
+        { fuelId: second.fuel.id, fuelData: { refueling_date: later } },
+        {
+          ...ZONE,
+          businessId: F.B,
+          vehicleId: F.vB,
+          currentMileage: 5_100,
+          at: later,
+          fuelId: second.fuel.id,
+        },
+      );
+
+      expect(moved).toMatchObject({
+        alerts: [],
+        recent_refuel_previous_at: null,
+        recent_refuel_reason: "Tanque na reserva",
+      });
+
+      // The list filters by it and groups the base by it.
+      const back = new Date(SECOND);
+
+      await h.repo.updateFuelAndMileage(
+        { fuelId: second.fuel.id, fuelData: { refueling_date: back } },
+        {
+          ...ZONE,
+          businessId: F.B,
+          vehicleId: F.vB,
+          currentMileage: 5_100,
+          at: back,
+          fuelId: second.fuel.id,
+        },
+      );
+
+      const flagged = await h.repo.listFuels({
+        businessId: F.B,
+        page: 1,
+        pageSize: 100,
+        alerts: ["RECENT_REFUEL"],
+      });
+
+      expect(ids(flagged.data)).toEqual([second.fuel.id]);
+      expect(flagged.data[0]).toMatchObject({
+        alerts: ["RECENT_REFUEL"],
+        recent_refuel_previous_at: new Date(FIRST),
+        recent_refuel_reason: "Tanque na reserva",
+      });
+      expect(
+        flagged.groups
+          .filter((group) => group.alerts.includes("RECENT_REFUEL"))
+          .reduce((sum, group) => sum + group.count, 0),
+      ).toBe(1);
+      expect(
+        await h.repo.countFuelForExport({
+          businessId: F.B,
+          alerts: ["RECENT_REFUEL"],
+        }),
+      ).toBe(1);
+    });
+  });
+
+  // 05/11/2026: the odometer stands still for a short while. A refuelling
+  // may read the km of the record before it when that record is less than 30
+  // minutes away (fuel-rules.ts placeReading, over the timeline reads that
+  // bring each reading's record); 30 minutes or more apart, the strict rule.
+  // After the recent-refuel alert, on the next day: each write is vB's
+  // newest, and the twin's odometer is seeded like Postgres' (1 000 km).
+  describe("the odometer standing still", () => {
+    const ZONE = { timeZone: "America/Sao_Paulo" };
+    const STOP = "2026-10-02T13:00:00.000Z";
+
+    it("stores a refuelling at the km of one 10 minutes before, and refuses it 35 minutes after the last", async () => {
+      const h = harness();
+      const at = (iso: string) =>
+        h.repo.createFuelWithMileage(
+          fuel(F.B, F.branchB, F.vB, F.dB, F.typeB, iso, {
+            current_mileage: 5_200,
+          }),
+          undefined,
+          ZONE,
+        );
+
+      expect((await at(STOP)).created).toBe(true);
+
+      const second = await at("2026-10-02T13:10:00.000Z");
+
+      expect(second.created).toBe(true);
+      expect(second.fuel).toMatchObject({
+        current_mileage: 5_200,
+        alerts: ["RECENT_REFUEL"],
+        recent_refuel_previous_at: new Date(STOP),
+      });
+
+      await expect(at("2026-10-02T13:45:00.000Z")).rejects.toBeInstanceOf(
+        VehicleMileageInvalidError,
+      );
     });
   });
 }

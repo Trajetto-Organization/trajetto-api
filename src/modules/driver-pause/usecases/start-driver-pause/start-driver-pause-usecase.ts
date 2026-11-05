@@ -1,10 +1,16 @@
 import { inject, injectable } from "tsyringe";
 
+import type { ClientVersion } from "@/shared/http/client-version";
+import { logger } from "@/shared/logging/logger";
+import { resolveTimeZone } from "@/shared/time/business-day";
+
 import type { IDriverPauseRepository } from "../../repositories/IDriver-pause-repository";
 import type { DriverPause, DriverPauseKind } from "../../dtos/driver-pause-dto";
+import { enforcesPauseCooldown, pauseCooldown } from "../../rules/pause-rules";
 
 import {
   PauseAlreadyOpenError,
+  PauseCooldownError,
   PauseTooOldError,
   PauseTypeWrongCategoryError,
 } from "../errors/driver-pause-errors";
@@ -13,6 +19,8 @@ import {
   journeyRouteOrRefuse,
   resolvePauseType,
 } from "../pause-type-and-journey";
+
+const log = logger.child({ component: "driver-pause" });
 
 interface StartDriverPauseRequest {
   businessId: string;
@@ -44,6 +52,16 @@ interface StartDriverPauseRequest {
   longitude?: number;
   note?: string | null;
 
+  /**
+   * The app build that sent it (x-trajetto-client-version), null when the
+   * request does not say: from contract 5 on, a start inside the cooldown
+   * is refused instead of recorded.
+   */
+  client?: ClientVersion | null;
+
+  /** Sent by the app's offline queue (X-Client-Queued-At): never refused for the cooldown. */
+  queued?: boolean;
+
   /** The clock. Only tests pass it. */
   now?: Date;
 }
@@ -72,6 +90,13 @@ interface StartDriverPauseResult {
  * chosen one, or the default of `kind`'s nature for the installed app), and
  * only inside a journey — a route of the driver released or in progress that
  * day at the tap — or 409 PAUSE_REQUIRES_ROUTE with nothing written.
+ *
+ * Owner, 05/11/2026: a new start tapped less than PAUSE_COOLDOWN_MINUTES
+ * after the driver's previous pause ended is refused with 409
+ * PAUSE_COOLDOWN, nothing written — only from a build that holds the wait
+ * itself (contract 5 on) sending now (no X-Client-Queued-At). Anything else
+ * inside the cooldown is recorded, with a warn line. Checked last, right
+ * before the insert, so every refusal above wins over it.
  */
 @injectable()
 class StartDriverPauseUseCase {
@@ -109,6 +134,8 @@ class StartDriverPauseUseCase {
     latitude,
     longitude,
     note,
+    client = null,
+    queued = false,
     now = new Date(),
   }: StartDriverPauseRequest): Promise<
     Omit<StartDriverPauseResult, "typeNames">
@@ -147,6 +174,32 @@ class StartDriverPauseUseCase {
       at,
     );
 
+    // Measured from the tap, like the journey: the previous pause is the
+    // one that ended before this start was tapped, never one sent later.
+    const previous = await this.pauses.findLastEndedPause({
+      businessId,
+      driverId: driver,
+      before: at,
+    });
+    const cooldown = pauseCooldown({
+      lastEndedAt: previous?.ended_at ?? null,
+      tap: at,
+      now,
+    });
+    const enforced = enforcesPauseCooldown({
+      clientContract: client?.contract,
+      queued,
+    });
+
+    if (cooldown.blocks && enforced && previous?.ended_at) {
+      await this.refuseInsideCooldown(
+        businessId,
+        driver,
+        previous.ended_at,
+        now,
+      );
+    }
+
     const result = await this.pauses.createPause({
       kind: type.pause_kind,
       occurrenceTypeId: type.id,
@@ -161,6 +214,23 @@ class StartDriverPauseUseCase {
     });
 
     if (result.status === "created") {
+      // Said once the pause is recorded, never for a start refused above or
+      // a resend (answered by the replay lookup): tells when the builds that
+      // do not hold the wait, and the queue's late starts, stop toggling.
+      if (cooldown.blocks && previous) {
+        log.warn(
+          {
+            pauseId: result.pause.id,
+            previousPauseId: previous.id,
+            businessId,
+            driverId: driver,
+            clientContract: client?.contract ?? null,
+            queued,
+          },
+          "Pause started inside the cooldown by a queued resend or a build without the rule: recorded",
+        );
+      }
+
       return { pause: result.pause, replayed: false };
     }
 
@@ -181,6 +251,25 @@ class StartDriverPauseUseCase {
       throw new PauseTypeWrongCategoryError();
 
     throw new Error(`Unexpected pause conflict: ${result.status}`);
+  }
+
+  /**
+   * The cooldown's refusal, unless another pause of the driver is still
+   * open: then the insert answers PAUSE_ALREADY_OPEN, the more fundamental
+   * of the two (the app's state is stale, and it reads /current to learn the
+   * open one). The zone is read only here, for the sentence.
+   */
+  private async refuseInsideCooldown(
+    businessId: string,
+    driverId: string,
+    lastEndedAt: Date,
+    now: Date,
+  ): Promise<void> {
+    if (await this.pauses.findOpenPause(businessId, driverId)) return;
+
+    const zone = await this.pauses.timeZoneOf(businessId);
+
+    throw new PauseCooldownError(lastEndedAt, resolveTimeZone(zone), now);
   }
 }
 

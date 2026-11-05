@@ -58,6 +58,11 @@ interface VehicleChecklist {
    */
   routeId?: string | null;
   phase?: ChecklistPhase;
+  /**
+   * Where it was made: MOBILE_APP or WEB_DASHBOARD, the column's default. A
+   * driver's is always MOBILE_APP (shared/vehicle/record-origin.ts).
+   */
+  created_from?: RecordOrigin;
   created_at: Date | string;
   updated_at: Date | string;
 }

@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 
 import {
   fitsOdometerTimeline,
+  neighboursAmong,
   recordDate,
+  type TimelineReading,
 } from "@/shared/vehicle/odometer-timeline";
 import { VehicleMileageInvalidError } from "@/modules/vehicle/usecases/errors/vehicle-mileage-invalid-error";
 import {
@@ -64,6 +66,74 @@ describe("fitsOdometerTimeline", () => {
   });
 });
 
+/**
+ * The neighbours carry the record that holds each reading (05/11/2026): a
+ * reading may equal one less than 30 minutes away (placeReading), so the
+ * date of the record that holds it is part of the answer. The Postgres read
+ * takes the top row of each kind and side; the twins hand every row of the
+ * vehicle. Both choose here.
+ */
+describe("neighboursAmong", () => {
+  const at = new Date("2026-11-05T14:00:00.000Z");
+  const reading = (
+    kind: TimelineReading["kind"],
+    id: string,
+    mileage: number,
+    iso: string,
+  ): TimelineReading => ({ kind, id, mileage, at: new Date(iso) });
+
+  it("is the highest reading at or before the date and the lowest after it, with its record", () => {
+    const neighbours = neighboursAmong(
+      [
+        reading("fuel", "yesterday", 49_000, "2026-11-04T14:00:00.000Z"),
+        reading("checklist", "departure", 50_000, "2026-11-05T13:50:00.000Z"),
+        // At the very date: before, as `lte` reads it.
+        reading("fuel", "same-instant", 49_500, "2026-11-05T14:00:00.000Z"),
+        reading("fuel", "afternoon", 50_400, "2026-11-05T16:00:00.000Z"),
+        reading("checklist", "arrival", 50_300, "2026-11-05T15:00:00.000Z"),
+      ],
+      at,
+    );
+
+    expect(neighbours).toMatchObject({
+      before: 50_000,
+      after: 50_300,
+      beforeReading: { kind: "checklist", id: "departure" },
+      afterReading: { kind: "checklist", id: "arrival" },
+    });
+  });
+
+  it("names the record nearest to the date when several hold the same km", () => {
+    // Two tanks at the same stop before it, two readings at the same km
+    // after it: the one minutes away is the one that counts.
+    const neighbours = neighboursAmong(
+      [
+        reading("fuel", "first-tank", 50_000, "2026-11-05T13:20:00.000Z"),
+        reading("fuel", "second-tank", 50_000, "2026-11-05T13:40:00.000Z"),
+        reading("checklist", "late", 50_300, "2026-11-05T15:00:00.000Z"),
+        reading("fuel", "soon", 50_300, "2026-11-05T14:20:00.000Z"),
+      ],
+      at,
+    );
+
+    expect(neighbours.beforeReading?.id).toBe("second-tank");
+    expect(neighbours.afterReading?.id).toBe("soon");
+  });
+
+  it("is empty with nothing around, and skips a date that is not one", () => {
+    expect(neighboursAmong([], at)).toEqual({
+      before: null,
+      after: null,
+      beforeReading: null,
+      afterReading: null,
+    });
+    expect(
+      neighboursAmong([reading("fuel", "broken", 50_000, "not a date")], at)
+        .before,
+    ).toBeNull();
+  });
+});
+
 describe("recordDate", () => {
   it("reads the date the record carries, or now when it carries none", () => {
     expect(recordDate("2026-09-20T12:00:00.000Z").toISOString()).toBe(
@@ -122,5 +192,78 @@ describe("editedReadingRefusal", () => {
 
     expect(moved).not.toBeInstanceOf(VehicleMileageOutOfOrderError);
     expect(moved.message).toBe(new VehicleMileageInvalidError().message);
+  });
+
+  it("says a bound may be repeated when its record is less than 30 minutes away", () => {
+    // "Maior que 18.200" alone sent the office to type 18.201 for the second
+    // tank of the same stop (05/11/2026).
+    const record = {
+      at: new Date("2026-11-05T14:10:00.000Z"),
+      timeZone: "America/Sao_Paulo",
+    };
+    const around = (beforeIso: string, afterIso: string) => ({
+      neighbours: {
+        before: 18_200,
+        after: 18_600,
+        beforeReading: {
+          kind: "fuel" as const,
+          id: "first-tank",
+          mileage: 18_200,
+          at: new Date(beforeIso),
+        },
+        afterReading: {
+          kind: "checklist" as const,
+          id: "arrival",
+          mileage: 18_600,
+          at: new Date(afterIso),
+        },
+      },
+      laterDay: 18_600,
+    });
+
+    const near = editedReadingRefusal(
+      true,
+      around("2026-11-05T14:00:00.000Z", "2026-11-05T14:20:00.000Z"),
+      record,
+    );
+
+    expect(near.message).toContain("entre 18.200 km e 18.600 km");
+    expect(near.message).toContain(
+      "Também pode ser igual a 18.200 km ou 18.600 km, de um registro com menos de 30 minutos de diferença.",
+    );
+
+    const oneSide = editedReadingRefusal(
+      true,
+      around("2026-11-05T14:00:00.000Z", "2026-11-05T18:00:00.000Z"),
+      record,
+    );
+
+    expect(oneSide.message).toContain(
+      "Também pode ser igual a 18.200 km, de um registro",
+    );
+    expect(oneSide.message).not.toContain("18.600 km, de um registro");
+
+    // An hour away, or without the record's date: the strict sentence.
+    for (const strict of [
+      editedReadingRefusal(
+        true,
+        around("2026-11-05T13:00:00.000Z", "2026-11-05T18:00:00.000Z"),
+        record,
+      ),
+      editedReadingRefusal(
+        true,
+        around("2026-11-05T14:00:00.000Z", "2026-11-05T14:20:00.000Z"),
+      ),
+    ]) {
+      expect(strict.message).not.toContain("Também pode ser igual");
+    }
+  });
+
+  it("tells the create's refusal that the same km is fine minutes apart", () => {
+    // VEHICLE_MILEAGE_INVALID: "maior que" alone stopped being the rule. The
+    // web sends only the day, which never stands still: the sentence says so.
+    expect(new VehicleMileageInvalidError().message).toBe(
+      "A quilometragem informada deve ser maior que a quilometragem atual do veículo, ou igual à de outro registro com menos de 30 minutos de diferença, os dois com hora (não só o dia)!",
+    );
   });
 });

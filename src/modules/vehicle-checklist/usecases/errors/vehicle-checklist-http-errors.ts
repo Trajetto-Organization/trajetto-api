@@ -18,6 +18,7 @@ import { VehicleChecklistNotFoundError } from "./vehicle-checklist-not-found-err
 import { VehicleChecklistBusinessNotFoundError } from "./vehicle-checklist-business-not-found-error";
 import { VehicleChecklistDriverCannotUpdateChecklistError } from "./vehicle-checklist-driver-cannot-update-checklist-error";
 import { VehicleChecklistDriverCannotDeleteChecklistError } from "./vehicle-checklist-driver-cannot-delete-checklist-error";
+import { VehicleChecklistArrivalRouteOpenError } from "./vehicle-checklist-arrival-route-open-error";
 
 type ErrorClass = abstract new (...args: never[]) => Error;
 
@@ -88,6 +89,19 @@ const CHECKLIST_HTTP_ERRORS: ReadonlyArray<ChecklistHttpError> = [
  * the table does not know (the caller rethrows it to the error handler).
  */
 function replyChecklistError(reply: FastifyReply, error: unknown): boolean {
+  // The one refusal whose body carries more than code and message: how many
+  // stops the route still has open. An AppError, so the global handler would
+  // answer it too, but with code and message only.
+  if (error instanceof VehicleChecklistArrivalRouteOpenError) {
+    reply.header("x-error-code", error.code).status(error.statusCode).send({
+      code: error.code,
+      message: error.message,
+      open_stops: error.openStops,
+    });
+
+    return true;
+  }
+
   const entry = CHECKLIST_HTTP_ERRORS.find(([type]) => error instanceof type);
 
   if (!entry) return false;

@@ -2177,6 +2177,61 @@ aprovado pela Meta, que nenhuma empresa viu. Avise as empresas que usam a aba
 Antes, conte as linhas (Fase 0 do plano):
 `SELECT "businessId", topic, is_active FROM delivery_message_template WHERE channel = 'WHATSAPP';`.
 
+**Origem dos checklists (05/11/2026).** Esta release roda duas migrations
+para a origem (e uma terceira, a do alerta de abastecimento, logo abaixo).
+`20261105120000_vehicle_checklist_created_from` cria
+`vehicle_checklist.created_from` (padrão `WEB_DASHBOARD`): só catálogo, e o
+lock exclusivo que ela toma na tabela dura só essa mudança. Depois,
+`20261105120100_vehicle_checklist_created_from_backfill` marca como
+`MOBILE_APP` os checklists antigos do app (atividade "Origem: Aplicativo" ou
+`client_submission_id` preenchido), numa transação à parte de propósito: na
+mesma do `ADD COLUMN`, o lock exclusivo duraria o `UPDATE` inteiro e, como a
+API roda com `lock_timeout=5s`, toda leitura e gravação de checklist (lista,
+cadastro, edição, exclusão, análise de IA, detalhe da rota) que chegasse
+nesse meio-tempo não esperaria: falharia com 500 depois de 5 s. Sozinho, o
+`UPDATE` não trava leitura nem cadastro; só a edição, a exclusão ou a análise
+de IA de um checklist que ele marca espera o fim dele, e falha com 500 depois
+de 5 s. Ele lê a tabela `activity`, que não tem índice em `type`, a partir de
+14/09/2026 (antes disso a atividade não trazia a origem). Antes do deploy,
+meça a tabela inteira,
+`SELECT count(*), pg_size_pretty(pg_total_relation_size('activity')) FROM activity;`,
+e a parte que o `UPDATE` lê,
+`SELECT count(*) FROM activity WHERE created_at >= '2026-09-14';`; se for
+grande, suba fora do pico. A imagem anterior grava `WEB_DASHBOARD` em todo
+checklist novo, inclusive os do app: os que ela gravar entre as migrations e
+o fim do rollout (ou durante um rollback) ficam "Web". O `UPDATE` do backfill
+é idempotente e não contradiz esta release, que já grava como `MOBILE_APP` o
+checklist com chave e sem origem; para corrigi-los, rode-o de novo à mão no
+banco depois que esta release estiver servindo.
+
+**Alerta de abastecimento repetido (05/11/2026).** A mesma release roda
+`20261105130000_fuel_recent_refuel_alert`: cria o enum `FuelAlert` (num bloco
+`DO` que ignora `duplicate_object`) e, em `fuel`, `alerts` (`FuelAlert[]`,
+`NOT NULL`, padrão vazio), `recent_refuel_reason` (`VARCHAR(300)`) e
+`recent_refuel_previous_at`, todos com `ADD COLUMN IF NOT EXISTS` sob
+`lock_timeout=5s`. Só catálogo (o padrão é constante): o lock exclusivo em
+`fuel` dura a mudança do catálogo, sem reescrever nem varrer a tabela. **Sem
+backfill:** os abastecimentos gravados antes não são marcados, e o filtro
+"Alertas" da lista começa daqui. A imagem anterior não conhece as colunas:
+o que ela gravar durante o rollout (ou depois de um rollback) fica sem
+alerta, e nada mais muda para ela. A recusa `409 FUEL_RECENT_REFUEL` só vale
+para o app de `contract` 5 em diante, que ainda não está nas mãos dos
+motoristas: até lá todo segundo abastecimento é gravado e marcado.
+
+**Intervalo entre pausas (05/11/2026).** Sem migration: a pausa anterior é
+lida pelo índice `driver_pause (driverId, started_at)`, que já existe. O
+início de uma pausa nova menos de 5 minutos depois do fim da anterior
+responde `409 PAUSE_COOLDOWN` só para o app de `contract` 5 em diante num
+envio direto (sem `X-Client-Queued-At`); a fila offline, o app em produção
+(sem o cabeçalho) e a web continuam gravando como antes, e cada início assim
+deixa a linha `warn` "Pause started inside the cooldown by a queued resend or
+a build without the rule: recorded". Encerrar uma pausa nunca é recusado. A
+imagem anterior não conhece a regra nem os três campos novos de
+`GET /driver-pause/current` (`last_ended_at`, `next_pause_allowed_at`,
+`next_pause_in_seconds`): durante o rollout (ou depois de um rollback), a
+réplica com ela responde `/current` sem esses campos e grava todo início,
+como antes.
+
 **Depois de cada release de produção**, atualize `LAST_MIGRATION_IN_PRODUCTION`
 em `tests/unitaires/lifecycle/migration-safety.test.ts` para a última
 migration que a release levou.

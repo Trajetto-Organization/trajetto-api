@@ -91,6 +91,14 @@ enum RecordOrigin {
   WEB_DASHBOARD // Created via web dashboard
 }
 
+/// What the office should look at on a refuelling (05/11/2026,
+/// 20261105130000). Stored on the record, never a refusal of its own.
+enum FuelAlert {
+  /// Another refuelling of the same vehicle less than 30 minutes away from
+  /// this one's date, either side (modules/fuel/usecases/fuel-rules.ts).
+  RECENT_REFUEL
+}
+
 model Business {
   id               String  @id @default(uuid(7))
   corporate_reason String  @unique
@@ -1856,6 +1864,18 @@ model Fuel {
   // 🆕 RECORD ORIGIN: Track where the record was created
   created_from RecordOrigin @default(WEB_DASHBOARD) // Enum: MOBILE_APP, WEB_DASHBOARD
 
+  /// What the office should look at (05/11/2026, 20261105130000), decided
+  /// inside the create's serializable transaction for every refuelling,
+  /// whoever sends it. Empty for the records made before it (no backfill).
+  alerts                    FuelAlert[] @default([])
+  /// The driver's reason when they confirmed a second refuelling of the
+  /// vehicle within 30 minutes (RECENT_REFUEL). Kept when an edit clears the
+  /// alert.
+  recent_refuel_reason      String?     @db.VarChar(300)
+  /// The refueling_date of the other refuelling that raised RECENT_REFUEL.
+  /// A historical fact: deleting that refuelling leaves it as it is.
+  recent_refuel_previous_at DateTime?
+
   business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
   businessId String
 
@@ -1951,6 +1971,11 @@ model VehicleChecklist {
   mileage_device_precheck  Json?
   /// The server's verdict on that pre-check (§P5.2); null = not compared yet.
   mileage_device_agreement DeviceAgreement?
+
+  /// Where the checklist was made (the web's "App"/"Web" badge). A driver's
+  /// is always MOBILE_APP, decided by the server from the caller
+  /// (shared/vehicle/record-origin.ts); the web's form sends none.
+  created_from RecordOrigin @default(WEB_DASHBOARD) // Enum: MOBILE_APP, WEB_DASHBOARD
 
   business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
   businessId String

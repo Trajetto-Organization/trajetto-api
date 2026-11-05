@@ -5,6 +5,7 @@ import { randomUUID } from "node:crypto";
 import { container } from "tsyringe";
 
 import type { UploadService } from "@/shared/services/upload-service";
+import type { RouteStopStatus } from "@/shared/route/route-rules";
 import { createPrismaClient } from "@/shared/database/database-client";
 import { businessDateKey, dateOnlyFromKey } from "@/shared/time/business-day";
 
@@ -25,7 +26,10 @@ import {
  *   vehicle. Another driver's route, another vehicle, or a route without a
  *   vehicle is 422 ROUTE_LINK_MISMATCH; another company's route reads like a
  *   missing one (404 DELIVERY_ROUTE_NOT_FOUND, never the router's ROUTE_NOT_FOUND).
- *   The route's status is never asked.
+ *   The link never asks the route's status. A driver's arrival checklist
+ *   does, from an app build of contract 5 on: it waits for the route to have
+ *   left and every stop to be resolved (409 CHECKLIST_ARRIVAL_ROUTE_OPEN);
+ *   an older build's is recorded and flagged in the trail.
  * - A checklist or a refuelling the app queued offline carries the tap
  *   (occurred_at) and the send stamp (X-Client-Sent-At): the stored date is
  *   the tap on the server's clock, whatever the phone's clock said.
@@ -812,6 +816,308 @@ describe("a route proves custody only for the span it handed the truck over", ()
 
     expect(checklist.statusCode, checklist.body).toBe(201);
     expect(fuel.statusCode, fuel.body).toBe(201);
+  });
+});
+
+describe("the arrival checklist waits for the route to be resolved (05/11/2026)", () => {
+  // A driver's arrival (ROUTE_END) is made once the route left and EVERY
+  // stop is final (COMPLETED, FAILED, CANCELLED), whatever their order and
+  // however many the dispatcher added on the way. Refused, 409
+  // CHECKLIST_ARRIVAL_ROUTE_OPEN, only for an app build of contract 5 on; an
+  // older build — or mobile `main`, which sends no header — is recorded as
+  // before and the trail says how many stops were still open. The office is
+  // never asked, and a resend is answered with the record first.
+  const CONTRACT_5 =
+    "platform=android; version=1.5.0; build=50; runtime=e2e; update=embedded; contract=5; outbox=1";
+  const CONTRACT_4 =
+    "platform=android; version=1.4.0; build=40; runtime=e2e; update=embedded; contract=4; outbox=1";
+
+  let shipperId = "";
+
+  beforeAll(async () => {
+    shipperId = (
+      await prisma.shipper.create({
+        data: { name: "Embarcador da chegada", businessId: CARRIER },
+        select: { id: true },
+      })
+    ).id;
+  });
+
+  /** A truck of its own: one vehicle runs at most one route at a time. */
+  async function truckOfItsOwn(): Promise<string> {
+    const truck = await prisma.vehicle.findUniqueOrThrow({
+      where: { id: carrier.vehicleId },
+    });
+    const {
+      id: _id,
+      created_at: _created,
+      updated_at: _updated,
+      driverId: _driver,
+      responsibleUserId: _responsible,
+      ...copy
+    } = truck;
+
+    return (
+      await prisma.vehicle.create({
+        data: {
+          ...copy,
+          license_plate: randomUUID().slice(0, 7).toUpperCase(),
+          renavam: randomUUID().slice(0, 11),
+        },
+        select: { id: true },
+      })
+    ).id;
+  }
+
+  async function addStop(
+    routeId: string,
+    sequence: number,
+    status: RouteStopStatus,
+  ): Promise<string> {
+    const delivery = await prisma.delivery.create({
+      data: {
+        businessId: CARRIER,
+        shipperId,
+        recipient_name: "Cliente",
+        city: "São Paulo",
+        uf: "SP",
+        street: "Rua",
+        status: status === "PENDING" ? "PENDING" : "IN_TRANSIT",
+        driverId: carrier.driverId,
+      },
+      select: { id: true },
+    });
+
+    return (
+      await prisma.routeStop.create({
+        data: { routeId, deliveryId: delivery.id, sequence, status },
+        select: { id: true },
+      })
+    ).id;
+  }
+
+  /** The driver's running route, on a truck of its own, with these stops. */
+  async function runningRoute(stops: RouteStopStatus[]) {
+    const vehicleId = await truckOfItsOwn();
+
+    routeCode += 1;
+
+    const routeId = (
+      await prisma.route.create({
+        data: {
+          code: routeCode,
+          businessId: CARRIER,
+          driverId: carrier.driverId,
+          vehicleId,
+          status: "IN_PROGRESS",
+          scheduled_date: dateOnlyFromKey(
+            businessDateKey(new Date(), "America/Sao_Paulo"),
+          ),
+          released_at: new Date(Date.now() - 2 * 60 * 60 * 1000),
+          started_at: new Date(Date.now() - 60 * 60 * 1000),
+        },
+        select: { id: true },
+      })
+    ).id;
+
+    const stopIds: string[] = [];
+
+    for (const [index, status] of stops.entries()) {
+      stopIds.push(await addStop(routeId, (index + 1) * 10, status));
+    }
+
+    return { routeId, vehicleId, stopIds };
+  }
+
+  const arrival = async (
+    token: string,
+    route: { routeId: string; vehicleId: string },
+    headers: Record<string, string> = {},
+    extra: Record<string, unknown> = {},
+  ) =>
+    post(
+      checklistUrl,
+      token,
+      await checklistBody(carrier, {
+        vehicleId: route.vehicleId,
+        driverId: carrier.driverId,
+        routeId: route.routeId,
+        phase: "ROUTE_END",
+        ...extra,
+      }),
+      headers,
+    );
+
+  it("refuses a contract 5 build while stops are open, saying how many, and writes nothing", async () => {
+    const route = await runningRoute(["COMPLETED", "PENDING", "ARRIVED"]);
+    const key = randomUUID();
+
+    const response = await arrival(
+      carrier.driverToken,
+      route,
+      { "x-trajetto-client-version": CONTRACT_5 },
+      { client_submission_id: key },
+    );
+
+    expect(response.statusCode, response.body).toBe(409);
+    expect(response.headers["x-error-code"]).toBe(
+      "CHECKLIST_ARRIVAL_ROUTE_OPEN",
+    );
+    expect(response.json()).toEqual({
+      code: "CHECKLIST_ARRIVAL_ROUTE_OPEN",
+      message:
+        "O checklist de chegada só pode ser feito depois que todas as entregas da rota forem resolvidas (faltam 2).",
+      open_stops: 2,
+    });
+    expect(
+      await prisma.vehicleChecklist.count({
+        where: { client_submission_id: key },
+      }),
+    ).toBe(0);
+  });
+
+  it("records it once every stop is final, in any order", async () => {
+    // The last stop of the list was the first to be resolved.
+    const route = await runningRoute(["PENDING", "ARRIVED", "COMPLETED"]);
+
+    await prisma.routeStop.update({
+      where: { id: route.stopIds[0] },
+      data: { status: "FAILED", completed_at: new Date() },
+    });
+    await prisma.routeStop.update({
+      where: { id: route.stopIds[1] },
+      data: { status: "CANCELLED" },
+    });
+
+    const response = await arrival(carrier.driverToken, route, {
+      "x-trajetto-client-version": CONTRACT_5,
+    });
+
+    expect(response.statusCode, response.body).toBe(201);
+    expect(
+      await prisma.vehicleChecklist.findUniqueOrThrow({
+        where: { id: response.json().id },
+      }),
+    ).toMatchObject({ routeId: route.routeId, phase: "ROUTE_END" });
+  });
+
+  it("refuses it again once the dispatcher adds a stop to the running route", async () => {
+    const route = await runningRoute(["COMPLETED", "FAILED"]);
+
+    await addStop(route.routeId, 30, "PENDING");
+
+    const response = await arrival(carrier.driverToken, route, {
+      "x-trajetto-client-version": CONTRACT_5,
+    });
+
+    expect(response.statusCode, response.body).toBe(409);
+    expect(response.json()).toMatchObject({
+      code: "CHECKLIST_ARRIVAL_ROUTE_OPEN",
+      open_stops: 1,
+    });
+  });
+
+  it("refuses a released route that never left", async () => {
+    // releasedRoute: the carrier's own truck, released, nothing to count.
+    const response = await post(
+      checklistUrl,
+      carrier.driverToken,
+      await checklistBody(carrier, {
+        routeId: releasedRoute,
+        phase: "ROUTE_END",
+      }),
+      { "x-trajetto-client-version": CONTRACT_5 },
+    );
+
+    expect(response.statusCode, response.body).toBe(409);
+    expect(response.json()).toEqual({
+      code: "CHECKLIST_ARRIVAL_ROUTE_OPEN",
+      message:
+        "O checklist de chegada só pode ser feito depois que a rota for iniciada e todas as entregas forem resolvidas.",
+      open_stops: 0,
+    });
+  });
+
+  it("records it from an older build, or one that sends no header, and the trail says how many were open", async () => {
+    for (const headers of [
+      { "x-trajetto-client-version": CONTRACT_4 },
+      {} as Record<string, string>,
+    ]) {
+      const route = await runningRoute(["COMPLETED", "PENDING"]);
+
+      const response = await arrival(carrier.driverToken, route, headers);
+
+      expect(response.statusCode, response.body).toBe(201);
+
+      const created = await prisma.domainOutboxEvent.findFirstOrThrow({
+        where: {
+          topic: "vehicle-checklist.created",
+          aggregateId: response.json().id,
+        },
+      });
+
+      expect(created.payload).toMatchObject({
+        origin: "MOBILE_APP",
+        arrivalOpenStops: 1,
+      });
+    }
+  });
+
+  it("never asks the office, whatever the build", async () => {
+    const route = await runningRoute(["PENDING", "PENDING"]);
+
+    const response = await arrival(carrier.managerToken, route, {
+      "x-trajetto-client-version": CONTRACT_5,
+    });
+
+    expect(response.statusCode, response.body).toBe(201);
+
+    const created = await prisma.domainOutboxEvent.findFirstOrThrow({
+      where: {
+        topic: "vehicle-checklist.created",
+        aggregateId: response.json().id,
+      },
+    });
+
+    expect(created.payload).not.toHaveProperty("arrivalOpenStops");
+  });
+
+  it("never asks the departure checklist (D08)", async () => {
+    const route = await runningRoute(["PENDING"]);
+
+    const response = await arrival(
+      carrier.driverToken,
+      route,
+      { "x-trajetto-client-version": CONTRACT_5 },
+      { phase: "ROUTE_START" },
+    );
+
+    expect(response.statusCode, response.body).toBe(201);
+  });
+
+  it("answers a resend of a recorded arrival with it, even after a stop was added", async () => {
+    const route = await runningRoute(["COMPLETED"]);
+    const body = await checklistBody(carrier, {
+      vehicleId: route.vehicleId,
+      driverId: carrier.driverId,
+      routeId: route.routeId,
+      phase: "ROUTE_END",
+    });
+    const headers = { "x-trajetto-client-version": CONTRACT_5 };
+
+    const first = await post(checklistUrl, carrier.driverToken, body, headers);
+
+    expect(first.statusCode, first.body).toBe(201);
+
+    await addStop(route.routeId, 20, "PENDING");
+
+    const resend = await post(checklistUrl, carrier.driverToken, body, {
+      ...headers,
+      "idempotency-key": body.client_submission_id,
+    });
+
+    expect(resend.statusCode, resend.body).toBe(201);
+    expect(resend.json().id).toBe(first.json().id);
   });
 });
 

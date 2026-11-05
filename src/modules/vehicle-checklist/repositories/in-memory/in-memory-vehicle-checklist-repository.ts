@@ -16,10 +16,14 @@ import { editedReadingRefusal } from "@/modules/vehicle/usecases/errors/vehicle-
 import { VehicleChecklistBusinessNotFoundError } from "../../usecases/errors/vehicle-checklist-business-not-found-error";
 import {
   END_OF_TIME,
+  checklistReading,
+  fuelReading,
+  neighboursAmong,
   type OdometerNeighbours,
   type OdometerTimeline,
 } from "@/shared/vehicle/odometer-timeline";
 import { placeReading } from "@/modules/fuel/usecases/fuel-rules";
+import type { Fuel } from "@/modules/fuel/dtos/fuel-dto";
 import { businessDayRange, resolveTimeZone } from "@/shared/time/business-day";
 import { listedPhase, listedRoute } from "@/shared/vehicle/route-columns";
 
@@ -102,42 +106,50 @@ class InMemoryVehicleChecklistRepository implements IVehicleChecklistRepository 
   /**
    * The vehicles' odometers, seeded by the tests that exercise the mileage
    * rule (the twin has no vehicle table). An unseeded vehicle is not checked.
-   * Fuelings live in another twin, so only this twin's checklists bound a
-   * reading on the timeline.
+   * Fuelings live in another twin: only this twin's checklists bound a
+   * reading on the timeline, unless a test links that twin's rows in `fuels`.
    */
   public vehicleMileage: Record<string, number> = {};
 
   /** Vehicles' last maintenance km (Vehicle.last_maintenance_mileage). */
   public vehicleMaintenanceMileage: Record<string, number> = {};
 
-  /** odometerNeighbours over this twin's checklists, one left out. */
+  /**
+   * Refuelings on the same timeline (odometerNeighbours reads both kinds).
+   * Empty unless a test links the fuel twin's rows, and its odometers with
+   * `vehicleMileage`, to cross the two kinds of record.
+   */
+  public fuels: Array<
+    Pick<
+      Fuel,
+      "id" | "businessId" | "vehicleId" | "current_mileage" | "refueling_date"
+    >
+  > = [];
+
+  /**
+   * odometerNeighbours over this twin's checklists, one left out, and the
+   * linked refuelings, each reading with the record that holds it.
+   */
   private neighboursOf(
     { businessId, vehicleId }: { businessId: string; vehicleId: string },
     at: Date,
     excludeChecklistId?: string,
   ): OdometerNeighbours {
-    const around = this.checklists.filter(
-      (checklist) =>
-        checklist.businessId === businessId &&
-        checklist.vehicleId === vehicleId &&
-        checklist.id !== excludeChecklistId,
-    );
-    const instant = at.getTime();
-    const before = around
-      .filter(
-        (checklist) => new Date(checklist.checklist_date).getTime() <= instant,
-      )
-      .map((checklist) => checklist.current_mileage);
-    const after = around
-      .filter(
-        (checklist) => new Date(checklist.checklist_date).getTime() > instant,
-      )
-      .map((checklist) => checklist.current_mileage);
+    const ofVehicle = (row: { businessId: string; vehicleId: string }) =>
+      row.businessId === businessId && row.vehicleId === vehicleId;
 
-    return {
-      before: before.length > 0 ? Math.max(...before) : null,
-      after: after.length > 0 ? Math.min(...after) : null,
-    };
+    return neighboursAmong(
+      [
+        ...this.fuels.filter(ofVehicle).map(fuelReading),
+        ...this.checklists
+          .filter(
+            (checklist) =>
+              ofVehicle(checklist) && checklist.id !== excludeChecklistId,
+          )
+          .map(checklistReading),
+      ],
+      at,
+    );
   }
 
   /** odometerTimeline over this twin's checklists. */
@@ -177,6 +189,8 @@ class InMemoryVehicleChecklistRepository implements IVehicleChecklistRepository 
       maintenanceFloor:
         this.vehicleMaintenanceMileage[update.vehicleId] ?? null,
       previousMileage: null,
+      at: update.at,
+      timeZone: resolveTimeZone(update.timeZone),
     });
 
     if (!placed.fits) throw new VehicleMileageInvalidError();
@@ -208,6 +222,10 @@ class InMemoryVehicleChecklistRepository implements IVehicleChecklistRepository 
       );
       const previousMileage =
         stored.vehicleId === update.vehicleId ? stored.current_mileage : null;
+      const record = {
+        at: update.at,
+        timeZone: resolveTimeZone(update.timeZone),
+      };
 
       const placement = placeReading({
         mileage: update.currentMileage,
@@ -216,10 +234,11 @@ class InMemoryVehicleChecklistRepository implements IVehicleChecklistRepository 
         maintenanceFloor:
           this.vehicleMaintenanceMileage[update.vehicleId] ?? null,
         previousMileage,
+        ...record,
       });
 
       if (!placement.fits) {
-        throw editedReadingRefusal(previousMileage !== null, timeline);
+        throw editedReadingRefusal(previousMileage !== null, timeline, record);
       }
 
       const nextOdometer =
@@ -294,6 +313,9 @@ class InMemoryVehicleChecklistRepository implements IVehicleChecklistRepository 
       driverId: checklistData.driverId || "",
       routeId: checklistData.routeId ?? null,
       phase: checklistData.phase ?? VEHICLE_CHECKLIST_COLUMN_DEFAULTS.phase,
+      created_from:
+        checklistData.created_from ??
+        VEHICLE_CHECKLIST_COLUMN_DEFAULTS.created_from,
       ai_verification_status: "",
       created_at: new Date(),
       updated_at: new Date(),
@@ -660,6 +682,7 @@ class InMemoryVehicleChecklistRepository implements IVehicleChecklistRepository 
         overall_condition: checklist.overall_condition,
         notes: checklist.notes,
         branchName: this.branchNames[checklist.branchId] ?? null,
+        created_from: checklist.created_from,
         created_at: checklist.created_at,
         updated_at: checklist.updated_at,
       };

@@ -1,11 +1,13 @@
 import { z } from "zod";
 
 import { isPickedDateInput } from "@/shared/vehicle/record-dates";
+import { APP_SUBMISSION_KEY_REQUIRED } from "@/shared/vehicle/record-origin";
 
 import { LocationSource, RecordOrigin } from "@prisma/client";
 import { isWithinAllowedDistance } from "@/shared/utils/geolocation";
 import { devicePrecheckField } from "@/shared/ai-precheck/device-precheck";
 import { occurredAtField } from "@/shared/delivery/occurred-at";
+import { RECENT_REASON_MAX_LENGTH } from "@/modules/fuel/usecases/fuel-rules";
 
 import {
   hasConsecutiveSpaces,
@@ -20,7 +22,7 @@ const createFuelSchema = z
       .uuid("A chave de idempotência do envio é inválida.")
       .optional()
       .describe(
-        "Chave de idempotência do envio (UUID), gerada uma vez pelo app e repetida em cada retentativa; o header Idempotency-Key preenche este campo quando ele vem vazio. Repetir a chave devolve o abastecimento já criado em vez de duplicar. Obrigatória quando created_from = MOBILE_APP.",
+        "Chave de idempotência do envio (UUID), gerada uma vez pelo app e repetida em cada retentativa; o header Idempotency-Key preenche este campo quando ele vem vazio. Repetir a chave devolve o abastecimento já criado em vez de duplicar. Obrigatória quando created_from = MOBILE_APP e em todo abastecimento de motorista, cuja origem é sempre MOBILE_APP.",
       ),
     current_mileage: z.preprocess(
       (val) => {
@@ -213,12 +215,18 @@ const createFuelSchema = z
     // 🆕 GEOLOCATION AUDIT: Track location source
     location_source: z.nativeEnum(LocationSource).optional().nullable(),
 
-    // 🆕 RECORD ORIGIN: Track where the record was created
-    created_from: z.nativeEnum(RecordOrigin, {
-      errorMap: () => ({
-        message: "Origem inválida. Deve ser MOBILE_APP ou WEB_DASHBOARD.",
-      }),
-    }),
+    // 🆕 RECORD ORIGIN: Track where the record was created. A driver's is
+    // MOBILE_APP whatever this says: the use case decides it from the caller
+    // (shared/vehicle/record-origin.ts), and the app's rules follow it.
+    created_from: z
+      .nativeEnum(RecordOrigin, {
+        errorMap: () => ({
+          message: "Origem inválida. Deve ser MOBILE_APP ou WEB_DASHBOARD.",
+        }),
+      })
+      .describe(
+        "Origem do cadastro: MOBILE_APP ou WEB_DASHBOARD. Para o motorista, o servidor grava sempre MOBILE_APP, seja qual for o valor enviado, e exige o que o app sempre manda: a localização GPS e a chave de idempotência.",
+      ),
 
     // Decision 14.2: the phone's offline check of the odometer photo.
     device_precheck: devicePrecheckField,
@@ -236,6 +244,29 @@ const createFuelSchema = z
     // K6: when the driver refuelled, for a refuelling the app queued
     // offline. With X-Client-Sent-At it replaces refueling_date.
     occurred_at: occurredAtField,
+
+    // 05/11/2026: the driver's answer to "another refuelling of this
+    // vehicle less than 30 minutes ago" (fuel-rules.ts). Not columns: the
+    // use case keeps the reason only when the alert holds.
+    confirm_recent: z
+      .boolean({
+        invalid_type_error: "A confirmação deve ser verdadeiro ou falso.",
+      })
+      .optional()
+      .describe(
+        "O motorista confirmou um segundo abastecimento do veículo em menos de 30 minutos. Vale com `recent_reason` de 3 caracteres ou mais; sem os dois, o app de `contract` 5 ou maior recebe 409 FUEL_RECENT_REFUEL.",
+      ),
+    recent_reason: z
+      .string({ invalid_type_error: "O motivo deve ser um texto." })
+      .trim()
+      .max(
+        RECENT_REASON_MAX_LENGTH,
+        `O motivo deve ter no máximo ${RECENT_REASON_MAX_LENGTH} caracteres.`,
+      )
+      .optional()
+      .describe(
+        "Por que o motorista abasteceu de novo em menos de 30 minutos (de 3 a 300 caracteres, sem os espaços das pontas). Guardado no abastecimento, com o alerta RECENT_REFUEL, quando `confirm_recent` é true.",
+      ),
   })
   // 🆕 VALIDATION: Distance check for GPS_MANUAL (manual adjustment)
   .refine(
@@ -271,10 +302,11 @@ const createFuelSchema = z
       data.created_from === RecordOrigin.MOBILE_APP &&
       !data.client_submission_id
     ) {
+      // The use case refuses a driver's refuelling without it in the same
+      // words, whatever origin the body claimed (appSubmissionKeyRefusal).
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
-        message:
-          "A chave de idempotência é obrigatória para envios do aplicativo.",
+        message: APP_SUBMISSION_KEY_REQUIRED,
         path: ["client_submission_id"],
       });
     }

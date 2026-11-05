@@ -22,6 +22,7 @@
 - [Frota ligada à rota](#frota-ligada-à-rota)
 - [Entregas na rota: casos de borda](#entregas-na-rota-casos-de-borda)
 - [Rotas esquecidas, a lista e a torre](#rotas-esquecidas-a-lista-e-a-torre)
+- [Pausas do motorista](#pausas-do-motorista)
 - [Postgres é a fila](#postgres-é-a-fila)
 - [Crons](#crons)
 - [Redis e tempo real](#redis-e-tempo-real)
@@ -829,14 +830,16 @@ Checklist e abastecimento como parte da rota e da gestão da frota (plano de
   (`422 ROUTE_LINK_MISMATCH`); rota de outra empresa responde como inexistente
   (`404 DELIVERY_ROUTE_NOT_FOUND`, o código do módulo de rotas; nunca o
   `ROUTE_NOT_FOUND` de endpoint inexistente, que o app lê como versão
-  desatualizada e reenvia a cada atualização). O status da rota não importa
-  e o início da rota nunca é recusado no servidor: um checklist com fotos
-  feito sem sinal pode chegar depois (D08). Regra em `shared/vehicle/route-link.ts`. A rota que
+  desatualizada e reenvia a cada atualização). Para o vínculo o status da
+  rota não importa, e o checklist de saída nunca é recusado por ele no
+  servidor: um checklist com fotos feito sem sinal pode chegar depois do
+  início (D08). O de chegada do motorista tem regra própria (item abaixo).
+  Regra em `shared/vehicle/route-link.ts`. A rota que
   passa nessa regra também vale como a atribuição do veículo ao motorista
   (`canDriverOperateVehicle` só olha rota liberada ou em andamento): sem isso,
   o substituto que levou o caminhão na rota recebia
-  `403 VEHICLE_NOT_ASSIGNED_TO_DRIVER` no checklist de chegada, que abre
-  justamente quando a última parada já concluiu a rota. Essa prova tem
+  `403 VEHICLE_NOT_ASSIGNED_TO_DRIVER` no checklist de chegada, que só abre
+  com todas as paradas resolvidas — o que já concluiu a rota. Essa prova tem
   limite (`routeProvesCustody`, mesmo arquivo): vale para rota liberada ou
   em andamento e, numa rota concluída ou cancelada, só se ela chegou a ser
   liberada (ou iniciada) e só para um registro datado do dia da liberação
@@ -845,8 +848,49 @@ Checklist e abastecimento como parte da rota e da gestão da frota (plano de
   capturou no gesto (K6), então o que foi feito durante a rota entra mesmo
   sincronizado dias depois; uma rota planejada, nunca liberada ou de outra
   época não abre o caminhão de hoje, e vale `canDriverOperateVehicle`.
+- **Checklist de chegada só com a rota resolvida (05/11/2026, D08/D09):** o
+  checklist de chegada (`ROUTE_END`) do motorista só vale com a rota
+  iniciada (`started_at`, ou a rota já em andamento ou encerrada) e **todas**
+  as paradas em status final (`COMPLETED`, `FAILED` ou `CANCELLED`; ver
+  `isStopOpen` em `shared/route/route-rules.ts`). Todas, e não "a última
+  entrega da lista": as paradas se resolvem em qualquer ordem, e o despachante
+  pode incluir paradas numa rota em andamento (K12,
+  `add-route-stops-usecase.ts`), o que a reabre. Uma rota encerrada não tem
+  parada aberta (o cancelamento e o "Encerrar com pendências" cancelam as
+  abertas), então a chegada dela abre. Regra pura `arrivalChecklistRefusal`
+  em `shared/vehicle/route-link.ts`, chamada pelo caso de uso logo depois do
+  vínculo com a rota já carregada. A recusa é
+  `409 CHECKLIST_ARRIVAL_ROUTE_OPEN` com a frase "O checklist de chegada só
+  pode ser feito depois que todas as entregas da rota forem resolvidas (faltam
+  N)." (singular "falta 1"; numa rota que nem saiu e não tem parada aberta,
+  "O checklist de chegada só pode ser feito depois que a rota for iniciada e
+  todas as entregas forem resolvidas.", a mesma ideia do texto do app) e
+  `open_stops` no corpo (enviado por
+  `replyChecklistError`, porque o handler global só manda `code` e
+  `message`); o app decide só pelo `code` e mostra a mensagem. **Portão de
+  contrato:** a recusa só vale para o motorista (`BUSINESS_USER` com
+  motorista, o mesmo teste de `record-origin.ts`) cujo app manda `contract`
+  5 ou mais em `x-trajetto-client-version` (`enforcesArrivalChecklistRule`;
+  o controller passa o `parseClientVersion` do cabeçalho). O build de antes
+  (`contract` < 5, ou sem o cabeçalho, como o `main` em produção) deixava o
+  motorista fazer a chegada a qualquer hora e o outbox dele falharia uma
+  recusa que ele nunca evitou: o checklist é gravado como antes e
+  **marcado** — o evento `vehicle-checklist.created` leva `arrivalOpenStops`
+  e a linha da atividade ganha "Checklist de chegada feito com N paradas em
+  aberto" (ou "feito antes de a rota começar"), antes da "Origem", que segue
+  no fim por causa do backfill de `created_from`; uma linha de log `warn`
+  ("Early arrival checklist from a build without the arrival rule"), escrita
+  só depois que o checklist é gravado, diz quando esses builds pararam de
+  mandar: uma por checklist, sem contar o pedido recusado depois da regra
+  (custódia, filial, quilometragem), que o outbox reenvia, nem o reenvio do
+  que já foi gravado. O checklist do escritório (gestor,
+  administrador ligado a motorista, web) nunca passa por essa regra. O reenvio
+  de um checklist já gravado é respondido com ele antes de qualquer regra (a
+  busca do reenvio continua primeiro), e a recusa de data no futuro continua
+  antes do reenvio, como era. A regra de saída (`ROUTE_START`) não muda.
 - **Abastecimento da rota (C5/F3):** `POST /fuel/create-fuel/:businessId`
-  aceita `routeId`, com a mesma regra (inclusive a atribuição do veículo).
+  aceita `routeId`, com a mesma regra de vínculo (inclusive a atribuição do
+  veículo); a regra da chegada é só do checklist.
 - **A rota nas listas da frota (contrato C3, 03/11/2026):** cada linha de
   `GET /fuel/list-fuel`, do histórico do veículo
   (`GET /fuel/search-fuel-by-vehicle/:vehicleId`) e de
@@ -862,6 +906,159 @@ Checklist e abastecimento como parte da rota e da gestão da frota (plano de
   `X-Client-Sent-At`; o toque corrigido pelo relógio do aparelho
   (`resolveOccurredAt`) substitui `checklist_date`/`refueling_date`. A web não
   manda nenhum dos dois e continua com a data escolhida.
+- **Origem do checklist e do abastecimento (05/11/2026):** os dois guardam
+  `created_from` (`MOBILE_APP` ou `WEB_DASHBOARD`), que é o selo "App"/"Web"
+  do painel e a "Origem" da atividade. O checklist só ganhou a coluna em
+  `20261105120000` (até ali todo checklist do app aparecia como "Web"), e
+  `20261105120100` marcou como `MOBILE_APP` os checklists antigos do app: os
+  que a atividade registrou com "Origem: Aplicativo" e os que têm
+  `client_submission_id`, que só o app manda. **A origem do registro do
+  motorista é decidida pelo servidor:** para um `BUSINESS_USER` com motorista
+  ela é sempre `MOBILE_APP`, seja qual for o corpo
+  (`shared/vehicle/record-origin.ts`), porque o corpo é a palavra do cliente e
+  a área do motorista na web só lê. No abastecimento isso traz as regras do
+  app: localização GPS (`400 LOCATION_REQUIRED`) e chave de idempotência
+  (`400 VALIDATION_ERROR`, com a mesma frase e o mesmo `issues` do schema).
+  Quem não é motorista mantém a origem enviada, e o administrador ligado a um
+  motorista continua com a do escritório. No checklist, o único que pode vir
+  sem origem, a ausência vale `MOBILE_APP` quando o envio traz a chave de
+  idempotência (no corpo ou no header `Idempotency-Key`), o mesmo sinal da
+  migration: o build do app em uso (`main`, multipart) não manda a origem e
+  também é usado por gestores e usuários de perfil. Sem chave, como no
+  formulário da web, vale `WEB_DASHBOARD`. O reenvio de um registro já gravado
+  é respondido antes de tudo isso.
+- **Linha do tempo do odômetro (abastecimento e checklist, cadastro e
+  edição):** a quilometragem é posta na data do registro, antes de qualquer
+  mudança no odômetro (`placeReading` em
+  `modules/fuel/usecases/fuel-rules.ts`, sobre o que `odometerTimeline` em
+  `shared/vehicle/odometer-timeline.ts` lê dentro da transação serializável
+  da escrita, com abastecimentos e checklists do veículo na mesma linha do
+  tempo, sempre pela empresa e pelo veículo). Entre a leitura anterior e a
+  seguinte, estritamente, o registro fica e o odômetro não muda; como o mais
+  recente (leituras do mesmo dia civil não contam: a data da web é o dia),
+  precisa passar o odômetro, que avança com ele; um registro novo sem
+  leitura antes dele é recusado; uma leitura de dia civil posterior sempre o
+  limita; a edição do registro que definiu o odômetro o leva à maior leitura
+  restante, nunca abaixo da última manutenção. **O odômetro nunca volta, mas
+  pode ficar parado um pouco (05/11/2026):** a leitura pode ser **igual** à
+  do registro vizinho — o anterior ou o seguinte na linha do tempo,
+  abastecimento ou checklist — quando a data dele está a menos de
+  `SAME_READING_WINDOW_MINUTES` (30) da data deste, antes ou depois, e
+  nenhuma das duas é só um dia (`standsStillWith`, que usa `isDayOnlyDate`:
+  dois registros que o escritório digitou para o mesmo dia ficam com a regra
+  estrita). São o segundo tanque, completar o tanque ou a bomba que parou
+  antes, no mesmo posto (as razões da pergunta do segundo abastecimento); o
+  abastecimento na base logo depois do checklist de saída; o checklist de
+  chegada logo depois de um abastecimento; e o registro que a fila offline
+  entrega depois de outro da mesma quilometragem já enviado (o vizinho
+  "seguinte" é igual). Antes o motorista tinha de inventar 1 km a mais. Essa
+  saída só vale para o que a regra estrita recusaria: nada que ela aceita
+  muda. Como o mais recente, um registro novo (ou levado de outro veículo)
+  que repete a leitura anterior também não pode ficar abaixo do odômetro:
+  se uma ordem de serviço (`advanceMileageAfterService`) ou um MASTER o
+  subiu depois daquela leitura, vale a regra estrita, senão o histórico
+  mostraria o odômetro voltando; a edição de um registro que já é do
+  veículo fica abaixo dele como toda correção. A leitura igual nunca move o
+  odômetro para frente nem o baixa (como registro mais recente com a
+  quilometragem do odômetro, nenhum `UPDATE` no veículo); só a correção do
+  registro que definiu o odômetro para a leitura igual o leva, como em toda
+  correção, à maior leitura restante, que é a igual. Para isso os vizinhos trazem o registro de cada leitura
+  (`beforeReading`/`afterReading`: tipo, id e data; de vários com a mesma
+  quilometragem, o mais próximo da data): as quatro leituras de
+  `odometerNeighbours` deixaram o `MAX`/`MIN` pela primeira linha de cada
+  tipo e lado (pela quilometragem e depois pela proximidade da data), sem
+  consulta a mais, e `neighboursAmong` escolhe entre elas — a mesma função
+  que os gêmeos in-memory usam sobre todas as linhas do veículo (cada gêmeo
+  aceita as linhas do outro tipo, `fuels.checklists` e `checklists.fuels`,
+  nos testes que cruzam os dois). Um abastecimento aceito assim está, por
+  definição, na janela de `RECENT_REFUEL` do outro abastecimento (a janela
+  do odômetro nunca é maior que a dele): continua perguntado (`409`) e
+  marcado. As mensagens: `VEHICLE_MILEAGE_INVALID` diz "maior que a
+  quilometragem atual do veículo, ou igual à de outro registro com menos de
+  30 minutos de diferença, os dois com hora (não só o dia)" — a web manda
+  só o dia, que nunca conta (a do abastecimento, que explica a linha do
+  tempo, ganha "Repetir a leitura de outro registro só vale com menos de 30
+  minutos de diferença entre eles, os dois com hora (não só o dia); se for
+  o mais recente e novo, sem ficar abaixo da quilometragem atual do
+  veículo."); `VEHICLE_MILEAGE_OUT_OF_ORDER`, da edição do checklist,
+  acrescenta "Também pode ser igual a X km, de um registro com menos de 30
+  minutos de diferença." só quando o vizinho está na janela. O app tem a
+  sua cópia do número (`SAME_READING_WINDOW_MINUTES` e
+  `RECENT_REFUEL_WINDOW_MINUTES` em trajetto-mobile), presa à da API por
+  `tests/unitaires/contract/app-reading-windows.test.ts` quando o
+  repositório irmão está ao lado. Prova:
+  `tests/unitaires/fuel/fuel-rules.test.ts`,
+  `tests/unitaires/vehicle/odometer-timeline.test.ts`,
+  `tests/unitaires/vehicle/odometer-standing-still.test.ts` e
+  `tests/E2E/odometer-standing-still-http.test.ts`.
+- **Segundo abastecimento em menos de 30 minutos (05/11/2026,
+  `20261105130000`):** o dono pediu que o motorista não registrasse
+  abastecimento "toda hora", mas **não há bloqueio por tempo**: numa viagem
+  longa vários abastecimentos por dia são legítimos (é o que Samsara e Geotab
+  assumem). Em vez disso o app mostra o último abastecimento do veículo
+  (`GET /fuel/get-previous-fuel/:vehicleId`, mais os da fila offline dele) e,
+  para um segundo do **mesmo veículo** a menos de
+  `RECENT_REFUEL_WINDOW_MINUTES` (30) do outro, pede confirmação e motivo; o
+  registro leva o alerta para o escritório. Regras puras em
+  `modules/fuel/usecases/fuel-rules.ts`. **"Recente"** é outro abastecimento
+  do veículo, na mesma empresa, com `refueling_date` a menos de 30 minutos
+  da do registro, **antes ou depois** (a fila offline chega atrasada), sem
+  contar o próprio registro: vale a data do registro, nunca a hora em que
+  chegou (`findRecentRefuel`, o mais próximo; empate, o mais antigo). Uma
+  data que é só um dia — o formulário da web manda o início do dia no fuso
+  da empresa, e um cliente de API o "AAAA-MM-DD" (00:00 UTC) — não é um
+  momento e não entra na conta, de nenhum dos lados (`isDayOnlyDate`): dois
+  abastecimentos que o escritório digitou para o mesmo dia ficariam a zero
+  minuto um do outro. **Confirmado** é `confirm_recent: true` com
+  `recent_reason` de 3 a 300 caracteres (sem os espaços das pontas;
+  `confirmedRecentReason`); os dois campos são opcionais no corpo, então os
+  corpos já congelados no outbox continuam passando. **Recusa**
+  (`409 FUEL_RECENT_REFUEL`, `FuelRecentRefuelError`): "Este veículo já tem
+  um abastecimento registrado às HH:MM. Para registrar outro em menos de 30
+  minutos, confirme e informe o motivo." (HH:MM no fuso da empresa), com
+  `previous_refuel: { id, refueling_date, liters_amount, current_mileage }`
+  no corpo (enviado por `replyFuelWriteError`, porque o handler global só
+  manda `code` e `message`). Só quando tudo vale (`asksAboutRecentRefuel`):
+  quem chama é motorista (`BUSINESS_USER` com motorista, o teste de
+  `record-origin.ts` e da regra da chegada), o app manda `contract` 5 ou mais
+  em `x-trajetto-client-version`, **sem** `X-Client-Queued-At` (a fila
+  offline: ninguém mais pode ser perguntado), o envio não está confirmado e
+  existe o outro abastecimento. Só nesse caso o caso de uso lê a janela
+  (`findRefuelsNear`), depois de todas as outras validações e **antes** de
+  tocar na foto (as chaves pré-assinadas): o app reenvia o mesmo corpo, a
+  mesma chave e a mesma foto com a confirmação, e a foto continua lá. A busca
+  do reenvio continua primeiro: o reenvio de um abastecimento já gravado
+  nunca recebe 409. **Alerta gravado**, em todo caminho de criação
+  (motorista, escritório, fila offline, build antigo, multipart legado):
+  `Fuel.alerts` (`FuelAlert[]`, vazio por padrão) recebe `RECENT_REFUEL`,
+  `recent_refuel_previous_at` a data do outro e `recent_refuel_reason` o
+  motivo, só quando confirmado; sem outro abastecimento, nada (o motivo
+  enviado mesmo assim não fica). É decidido dentro da transação serializável
+  do cadastro (`recentRefuelAlert` em `createFuelWithMileage`): a leitura da
+  janela pelo índice `(vehicleId, refueling_date)` conflita com a inserção
+  do outro, uma das duas é refeita e enxerga a primeira, então dois
+  abastecimentos enviados juntos ficam marcados. Só o registro que chega por
+  último leva o alerta. A **edição** do escritório que muda a data ou o
+  veículo mede de novo (`recheckedRecentRefuel` em `updateFuelAndMileage`):
+  põe ou tira `RECENT_REFUEL` e a data do outro, mantendo o motivo do
+  motorista. **Excluir** o outro abastecimento deixa o alerta como está: é
+  um fato histórico (o que a API viu quando o registro chegou). **Sem
+  backfill:** os gravados antes desta release não foram marcados. **Leituras:**
+  cada linha de `GET /fuel/list-fuel` e do histórico do veículo traz
+  `alerts`, `recent_refuel_reason` e `recent_refuel_previous_at`, e também
+  os `fuels` do detalhe da rota (`get-route`); a lista filtra por `alerts`
+  (valores separados por vírgula: os com qualquer um deles), com a faceta em
+  `searchMeta.facets.alerts` (todos os valores de `FuelAlert`, mesmo com 0,
+  sem rótulo, como a condição do checklist); a exportação aceita o mesmo
+  filtro e ganha as colunas Alertas, Abastecimento Anterior (alerta) e
+  Motivo Informado; a atividade do cadastro ganha
+  " | Alerta: outro abastecimento do veículo às HH:MM" e, com motivo,
+  " (motivo: …)", antes da "Origem", que segue no fim. O motorista lê o
+  último abastecimento de todo veículo que pode abastecer na hora do toque:
+  `canDriverOperateVehicle` cobre o veículo de que é responsável e o da rota
+  liberada ou em andamento, e o app só oferece o abastecimento da rota com
+  ela em andamento (a prova da rota encerrada há menos de 24 h vale para o
+  registro que a fila entrega depois, não para a pergunta).
 - **Rota liberada tem veículo (D10):** liberar já exigia veículo
   (`canReleaseRoute`); agora `PATCH /route/update-route` também recusa
   `vehicleId: null` numa rota `RELEASED` (`400 ROUTE_VEHICLE_REQUIRED`).
@@ -1153,6 +1350,66 @@ D54).
 | Atendimentos | selo e balão                            | `GET /chat/tickets/summary`               | contagens por situação (abertos, sem atendente, meus, aguardando autorização, não lidos), sem janela de data                                   |
 | Atendimentos | lista                                   | `GET /chat/tickets`                       | os mesmos tickets, com os filtros da tela                                                                                                      |
 | Auditoria    | fila e taxa de concordância             | `GET /delivery/proof-audits`              | fila sem janela; `agreementRate` cobre os últimos 90 dias civis no fuso da empresa                                                             |
+
+## Pausas do motorista
+
+O motorista registra as próprias pausas pelo app (`/driver-pause`, decisão
+6.1; tipos e jornada na decisão 14.4): o início e o fim são dois envios do
+outbox, cada um idempotente pela própria chave, e o relatório da Lei
+13.103/2015 só sinaliza, nunca bloqueia.
+
+- **Intervalo entre pausas (05/11/2026):** o dono viu o motorista ligar e
+  desligar a pausa sem parar e pediu um bloqueio. A lei não deixa bloquear
+  descanso: o fim de uma pausa **nunca** é recusado, o descanso de 30 minutos
+  da direção pode ser fracionado (CTB, art. 67-C) e a refeição tem pelo menos
+  1 h (CLT, art. 71 e art. 235-C). Por isso só o **início de uma pausa nova**
+  espera, e pouco: `PAUSE_COOLDOWN_MINUTES` (5, fixo, não é configuração da
+  empresa) depois do fim da pausa anterior, o bastante para parar o
+  liga-desliga. Regras puras em `modules/driver-pause/rules/pause-rules.ts`;
+  o app tem a cópia com o mesmo nome (`features/pauses/pause-rules.ts` em
+  trajetto-mobile), presa à da API por
+  `tests/unitaires/contract/app-reading-windows.test.ts`. **A pausa
+  anterior** é a última encerrada do motorista, da empresa e do motorista
+  (`findLastEndedPause`), que começou antes do toque do início novo — pelo
+  índice `(driverId, started_at)`, sem migration. **A recusa**
+  (`409 PAUSE_COOLDOWN`, `PauseCooldownError`): o toque corrigido
+  (`resolveOccurredAt`) menos de 5 minutos **menos 30 s de folga** (a
+  correção do relógio do aparelho) depois daquele fim; um toque antes do fim
+  também conta. Nada é gravado, e o corpo traz `last_ended_at`,
+  `next_pause_allowed_at` (o fim mais 5 minutos, sem folga) e
+  `next_pause_in_seconds` (de agora, no relógio do servidor, até lá,
+  arredondado para cima e nunca negativo), enviados pelo controller do início
+  (o handler global só manda `code` e `message`), e a frase "Você encerrou
+  uma pausa às HH:MM. Uma nova pausa fica disponível às HH:MM." no fuso da
+  empresa (o fim cortado no minuto, como nas outras telas; o próximo início
+  arredondado para cima, o mesmo minuto do botão do app: o início tocado no
+  minuto mostrado sempre passa, mesmo sem a folga). O app conta a espera no
+  próprio relógio a partir dos segundos, nunca do instante: o relógio do
+  aparelho costuma estar errado, e o app nunca pode bloquear mais que o
+  servidor. **Só quando tudo vale** (`enforcesPauseCooldown`): quem chama é
+  motorista (`assertPauseDriver`, como em todo o módulo), o app manda
+  `contract` 5 ou mais em `x-trajetto-client-version` e o envio é direto, sem
+  `X-Client-Queued-At` — o início que a fila offline reenvia nunca é recusado
+  por uma regra de tempo, e a web e os builds sem o cabeçalho (o `main` em
+  produção) também não. Esses são gravados como antes, sem marca que o
+  escritório veja (nem coluna, nem alerta, nem texto na atividade): o único
+  rastro é uma linha de log `warn` ("Pause started inside the cooldown by a
+  queued resend or a build without the rule: recorded", só ids) escrita
+  depois da gravação. **Ordem no caso de uso:** o reenvio de uma chave que
+  já entrou é respondido antes de tudo (200 com a pausa, mesmo dentro dos 5
+  minutos); depois PAUSE_TOO_OLD,
+  o tipo e a jornada (PAUSE_REQUIRES_ROUTE); o intervalo por último, logo
+  antes do insert, então a recusa mais fundamental vence — e com outra pausa
+  ainda aberta a resposta é PAUSE_ALREADY_OPEN, não o intervalo. O fim,
+  inclusive o que chega antes do início e cria a pausa já encerrada, nunca
+  passa por essa regra. **Leitura:** `GET /driver-pause/current` traz os
+  mesmos `last_ended_at` (de qualquer dia; nulo sem pausa encerrada),
+  `next_pause_allowed_at` e `next_pause_in_seconds` (0 quando já pode), para o
+  app segurar a espera também depois de reinstalar ou trocar de aparelho.
+  Prova: `tests/unitaires/driver-pause/pause-cooldown-rules.test.ts`,
+  `tests/unitaires/driver-pause/pause-cooldown-usecases.test.ts`,
+  `tests/E2E/driver-pause-cooldown-http.test.ts` e o contrato do repositório
+  em `tests/E2E/driver-pause-repository-contract.test.ts`.
 
 ## Postgres é a fila
 
@@ -1897,7 +2154,20 @@ corpo) e o entrega dias depois a qualquer API que estiver no ar. Quatro regras:
    em toda requisição, e a API registra o valor em toda linha de log
    (`req.client`). `contract` é `CLIENT_CONTRACT` em
    `trajetto-mobile/utils/client-version.ts`: suba-o em todo release do app
-   que mude o que ele envia.
+   que mude o que ele envia. Uma regra nova que o build antigo não sabe
+   evitar vale só a partir do `contract` que a segue; o que o build de antes
+   manda é gravado como antes e marcado onde o escritório vê (ex.: checklist
+   de chegada com a rota aberta e segundo abastecimento em menos de 30
+   minutos, os dois de `contract` 5, em "Frota ligada à rota") ou, quando não
+   há onde marcar, só registrado numa linha de log `warn` (ex.: o intervalo
+   de 5 minutos entre pausas, também de `contract` 5, em "Pausas do
+   motorista": sem coluna, alerta nem texto na atividade). A fila offline do
+   app manda também `X-Client-Queued-At` (o instante em que o item entrou na
+   fila, pelo relógio do aparelho) em todo reenvio de qualquer tipo, nunca no
+   envio direto; a API só olha a presença (`isQueuedResend` em
+   `shared/http/client-version.ts`): o motorista já tocou antes e não pode
+   mais ser perguntado. O valor não data nada (para isso, `occurred_at` com
+   `X-Client-Sent-At`).
 3. **Gate de atualização** (`MIN_MOBILE_CONTRACT`, desligado por padrão):
    abaixo dele, `426 CLIENT_UPGRADE_REQUIRED` (exceto login, 2FA, refresh e
    logout), com `storeUrl` = `MOBILE_STORE_URL` se definida. Só vale para quem

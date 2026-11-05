@@ -9,17 +9,30 @@ import { listedRoute } from "@/shared/vehicle/route-columns";
 
 import { Decimal } from "@prisma/client/runtime/client";
 import type {
+  FuelCreation,
   FuelMileageUpdate,
-  FuelPlacement,
   IFuelRepository,
 } from "../IFuel-repository";
 import { VehicleMileageInvalidError } from "@/modules/vehicle/usecases/errors/vehicle-mileage-invalid-error";
-import type { OdometerNeighbours } from "@/shared/vehicle/odometer-timeline";
+import {
+  checklistReading,
+  fuelReading,
+  neighboursAmong,
+  type OdometerNeighbours,
+} from "@/shared/vehicle/odometer-timeline";
+import type { VehicleChecklist } from "@/modules/vehicle-checklist/dtos/vehicle-checklist-dto";
 import { resolveTimeZone } from "@/shared/time/business-day";
 import {
+  RECENT_REFUEL_CANDIDATE_LIMIT,
   endOfBusinessDay,
+  findRecentRefuel,
   placeReading,
+  recentRefuelAlert,
+  recentRefuelWindow,
+  recheckedRecentRefuel,
   releasedOdometer,
+  type RecentRefuelColumns,
+  type RefuelNearby,
 } from "../../usecases/fuel-rules";
 
 import { FuelNotFoundError } from "../../usecases/errors/fuel-not-found-error";
@@ -44,7 +57,9 @@ import {
 import {
   FUEL_FACETS,
   FUEL_SORT,
+  hasSelectedAlert,
   labelIdsOf,
+  selectedAlerts,
   selectedOf,
   type FuelListFilters,
   type FuelListGroup,
@@ -87,32 +102,39 @@ class InMemoryFuelRepository implements IFuelRepository {
   public vehicleMaintenanceMileage: Record<string, number> = {};
 
   /**
-   * The readings around `at` — this twin knows refuelings only — with one
-   * refueling left out, as odometerNeighbours reads them.
+   * Checklists on the same timeline (odometerNeighbours reads both kinds).
+   * Empty unless a test links the checklist twin's rows, and its odometers
+   * with `vehicleMileage`, to cross the two kinds of record.
+   */
+  public checklists: Array<
+    Pick<
+      VehicleChecklist,
+      "id" | "businessId" | "vehicleId" | "current_mileage" | "checklist_date"
+    >
+  > = [];
+
+  /**
+   * The readings around `at`, with one refueling left out, as
+   * odometerNeighbours reads them: this twin's refuelings and the linked
+   * checklists, each reading with the record that holds it.
    */
   private neighboursOf(
     { businessId, vehicleId }: { businessId: string; vehicleId: string },
     at: Date,
     excludeFuelId?: string,
   ): OdometerNeighbours {
-    const around = this.fuels.filter(
-      (fuel) =>
-        fuel.businessId === businessId &&
-        fuel.vehicleId === vehicleId &&
-        fuel.id !== excludeFuelId,
-    );
-    const instant = at.getTime();
-    const before = around
-      .filter((fuel) => new Date(fuel.refueling_date).getTime() <= instant)
-      .map((fuel) => fuel.current_mileage);
-    const after = around
-      .filter((fuel) => new Date(fuel.refueling_date).getTime() > instant)
-      .map((fuel) => fuel.current_mileage);
+    const ofVehicle = (row: { businessId: string; vehicleId: string }) =>
+      row.businessId === businessId && row.vehicleId === vehicleId;
 
-    return {
-      before: before.length > 0 ? Math.max(...before) : null,
-      after: after.length > 0 ? Math.min(...after) : null,
-    };
+    return neighboursAmong(
+      [
+        ...this.fuels
+          .filter((fuel) => ofVehicle(fuel) && fuel.id !== excludeFuelId)
+          .map(fuelReading),
+        ...this.checklists.filter(ofVehicle).map(checklistReading),
+      ],
+      at,
+    );
   }
 
   /** The highest reading of a vehicle, one refueling left out. */
@@ -136,10 +158,11 @@ class InMemoryFuelRepository implements IFuelRepository {
 
     if (odometer === undefined) return;
 
+    const timeZone = resolveTimeZone(update.timeZone);
     const neighbours = this.neighboursOf(update, update.at, excludeFuelId);
     const restOfDay = this.neighboursOf(
       update,
-      endOfBusinessDay(update.at, resolveTimeZone(update.timeZone)),
+      endOfBusinessDay(update.at, timeZone),
       excludeFuelId,
     );
 
@@ -152,6 +175,8 @@ class InMemoryFuelRepository implements IFuelRepository {
       maintenanceFloor:
         this.vehicleMaintenanceMileage[update.vehicleId] ?? null,
       previousMileage,
+      at: update.at,
+      timeZone,
     });
 
     if (!placement.fits) throw new VehicleMileageInvalidError();
@@ -159,6 +184,45 @@ class InMemoryFuelRepository implements IFuelRepository {
     if (placement.odometer !== null) {
       this.vehicleMileage[update.vehicleId] = placement.odometer;
     }
+  }
+
+  /**
+   * The repository's refuelsNear: the vehicle's refuellings inside the
+   * window, oldest first (then the id), bounded the same way.
+   */
+  private refuelsNear(
+    businessId: string,
+    vehicleId: string,
+    at: Date,
+  ): RefuelNearby[] {
+    const { after, before } = recentRefuelWindow(at);
+
+    return this.fuels
+      .filter((fuel) => {
+        const time = new Date(fuel.refueling_date).getTime();
+
+        return (
+          fuel.businessId === businessId &&
+          fuel.vehicleId === vehicleId &&
+          time > after.getTime() &&
+          time < before.getTime()
+        );
+      })
+      .sort(
+        (a, b) =>
+          compareForOrder(
+            new Date(a.refueling_date),
+            new Date(b.refueling_date),
+            "asc",
+          ) || compareForOrder(a.id, b.id, "asc"),
+      )
+      .slice(0, RECENT_REFUEL_CANDIDATE_LIMIT)
+      .map((fuel) => ({
+        id: fuel.id,
+        refueling_date: new Date(fuel.refueling_date),
+        liters_amount: fuel.liters_amount,
+        current_mileage: fuel.current_mileage,
+      }));
   }
 
   /** The repository's releaseOdometer, over refuelings. */
@@ -227,6 +291,8 @@ class InMemoryFuelRepository implements IFuelRepository {
       odometer_ai_status: "pending",
       created_from: fuelData.created_from,
       routeId: fuelData.routeId ?? null,
+      // A copy of the default: one row's array is never another's.
+      alerts: [...FUEL_COLUMN_DEFAULTS.alerts],
       created_at: new Date(),
       updated_at: new Date(),
     };
@@ -251,7 +317,7 @@ class InMemoryFuelRepository implements IFuelRepository {
   async createFuelWithMileage(
     fuelData: CreateFuelProps,
     _afterCreate?: unknown,
-    placement?: FuelPlacement,
+    creation?: FuelCreation,
   ): Promise<{ fuel: Fuel; created: boolean }> {
     if (fuelData.client_submission_id) {
       const existing = await this.findBySubmissionId(
@@ -261,20 +327,43 @@ class InMemoryFuelRepository implements IFuelRepository {
       if (existing) return { fuel: existing, created: false };
     }
 
+    const at = fuelData.refueling_date
+      ? new Date(fuelData.refueling_date)
+      : new Date();
+
     this.place(
       {
         businessId: fuelData.businessId,
         vehicleId: fuelData.vehicleId,
         currentMileage: fuelData.current_mileage,
-        at: fuelData.refueling_date
-          ? new Date(fuelData.refueling_date)
-          : new Date(),
-        timeZone: placement?.timeZone,
+        at,
+        timeZone: creation?.timeZone,
       },
       null,
     );
 
-    return { fuel: await this.createFuel(fuelData), created: true };
+    // Decided before the row exists, as inside the repository's transaction.
+    const alert = recentRefuelAlert(
+      findRecentRefuel(
+        this.refuelsNear(fuelData.businessId, fuelData.vehicleId, at),
+        { at, timeZone: resolveTimeZone(creation?.timeZone) },
+      ),
+      creation?.recentRefuelReason ?? null,
+    );
+
+    const fuel = await this.createFuel(fuelData);
+
+    Object.assign(fuel, alert);
+
+    return { fuel, created: true };
+  }
+
+  async findRefuelsNear(
+    businessId: string,
+    vehicleId: string,
+    at: Date,
+  ): Promise<RefuelNearby[]> {
+    return this.refuelsNear(businessId, vehicleId, at);
   }
 
   async listFuels({
@@ -305,11 +394,13 @@ class InMemoryFuelRepository implements IFuelRepository {
     const groups = new Map<string, FuelListGroup>();
 
     for (const fuel of base) {
+      const alerts = fuel.alerts ?? [];
       const key = [
         fuel.branchId,
         fuel.vehicleId,
         fuel.fuelTypeId,
         fuel.odometer_verified,
+        alerts.join(","),
       ].join("|");
 
       const group = groups.get(key) ?? {
@@ -317,6 +408,7 @@ class InMemoryFuelRepository implements IFuelRepository {
         vehicleId: fuel.vehicleId,
         fuelTypeId: fuel.fuelTypeId,
         odometer_verified: fuel.odometer_verified,
+        alerts: [...alerts],
         count: 0,
         liters: "0",
         amount: "0",
@@ -478,11 +570,14 @@ class InMemoryFuelRepository implements IFuelRepository {
   }
 
   private matchesFacets(fuel: Fuel, filters: FuelListFilters): boolean {
-    return FUEL_FACETS.every((facet) => {
-      const selected = selectedOf(filters, facet);
+    return (
+      hasSelectedAlert(fuel.alerts ?? [], selectedAlerts(filters)) &&
+      FUEL_FACETS.every((facet) => {
+        const selected = selectedOf(filters, facet);
 
-      return !selected || selected.includes(fuel[facet]);
-    });
+        return !selected || selected.includes(fuel[facet]);
+      })
+    );
   }
 
   /**
@@ -578,6 +673,9 @@ class InMemoryFuelRepository implements IFuelRepository {
       throw new Error("Fuel not found");
     }
 
+    // Set when the edit moves the date or the vehicle, as the repository.
+    let recentRefuel: RecentRefuelColumns | null = null;
+
     if (mileageUpdate) {
       const excludeFuelId = mileageUpdate.fuelId ?? update.fuelId;
       const stored = this.fuels.find(
@@ -589,6 +687,28 @@ class InMemoryFuelRepository implements IFuelRepository {
       if (!stored) throw new FuelNotFoundError();
 
       const sameVehicle = stored.vehicleId === mileageUpdate.vehicleId;
+      const moved =
+        !sameVehicle ||
+        new Date(stored.refueling_date).getTime() !==
+          mileageUpdate.at.getTime();
+
+      if (moved) {
+        recentRefuel = recheckedRecentRefuel(
+          stored.alerts ?? [],
+          findRecentRefuel(
+            this.refuelsNear(
+              mileageUpdate.businessId,
+              mileageUpdate.vehicleId,
+              mileageUpdate.at,
+            ),
+            {
+              id: update.fuelId,
+              at: mileageUpdate.at,
+              timeZone: resolveTimeZone(mileageUpdate.timeZone),
+            },
+          ),
+        );
+      }
 
       this.place(
         mileageUpdate,
@@ -605,7 +725,11 @@ class InMemoryFuelRepository implements IFuelRepository {
       }
     }
 
-    return this.updateFuel(update);
+    const updated = await this.updateFuel(update);
+
+    if (recentRefuel) Object.assign(updated, recentRefuel);
+
+    return updated;
   }
 
   async deleteFuel(fuelId: string): Promise<Fuel> {
@@ -816,6 +940,9 @@ class InMemoryFuelRepository implements IFuelRepository {
         location_edited_by: fuel.location_edited_by ?? null,
         location_edited_at: fuel.location_edited_at ?? null,
         created_from: fuel.created_from,
+        alerts: fuel.alerts ?? [],
+        recentRefuelPreviousAt: fuel.recent_refuel_previous_at ?? null,
+        recentRefuelReason: fuel.recent_refuel_reason ?? null,
         created_at: fuel.created_at,
         updated_at: fuel.updated_at,
       };
@@ -848,6 +975,11 @@ class InMemoryFuelRepository implements IFuelRepository {
         vehicleId: fuel.vehicleId,
         driverId: fuel.driverId,
         odometer_ai_status: fuel.odometer_ai_status,
+        alerts: [...(fuel.alerts ?? [])],
+        recent_refuel_reason: fuel.recent_refuel_reason ?? null,
+        recent_refuel_previous_at: fuel.recent_refuel_previous_at
+          ? new Date(fuel.recent_refuel_previous_at)
+          : null,
       }));
   }
 

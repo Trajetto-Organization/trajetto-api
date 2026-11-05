@@ -14,6 +14,12 @@ import {
   CLIENT_SENT_AT_HEADER,
   resolveOccurredAt,
 } from "@/shared/delivery/occurred-at";
+import {
+  CLIENT_QUEUED_AT_HEADER,
+  CLIENT_VERSION_HEADER,
+  isQueuedResend,
+  parseClientVersion,
+} from "@/shared/http/client-version";
 
 import { updateDeleteBusinessSchema } from "@/schemas/update-delete-business-schema";
 
@@ -95,6 +101,15 @@ class CreateFuelController {
         },
         id,
         presignedPhoto,
+        {
+          // From contract 5 on, an unconfirmed second refuelling within 30
+          // minutes is refused instead of only flagged — unless the app's
+          // offline queue sent it (X-Client-Queued-At): nobody can be asked.
+          // The web and the build in drivers' hands send neither (the
+          // multipart one included, which reaches here the same way).
+          client: parseClientVersion(request.headers[CLIENT_VERSION_HEADER]),
+          queued: isQueuedResend(request.headers[CLIENT_QUEUED_AT_HEADER]),
+        },
       );
 
       return reply

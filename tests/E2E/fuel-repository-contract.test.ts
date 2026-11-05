@@ -109,6 +109,9 @@ function seedTwin(): void {
   });
 
   for (const vehicle of VEHICLES) {
+    // The odometer Postgres seeds (seedVehicle: 1 000 km), so the twin
+    // decides the mileage writes the contract makes as the repository does.
+    memory.vehicleMileage[vehicle.id] = 1_000;
     memory.vehicles.set(vehicle.id, {
       businessId: vehicle.businessId,
       license_plate: vehicle.plate,

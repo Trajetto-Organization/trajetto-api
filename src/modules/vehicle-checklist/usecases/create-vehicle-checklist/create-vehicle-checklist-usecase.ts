@@ -52,8 +52,11 @@ import { timeZoneOfBusiness } from "@/shared/time/business-time-zone";
 import { aiProviderConfigured } from "@/shared/ai/ai-provider";
 import { acceptDevicePrecheck } from "@/shared/ai-precheck/device-precheck";
 import type { IRouteRepository } from "@/modules/route/repositories/IRoute-repository";
+import type { ClientVersion } from "@/shared/http/client-version";
 import {
+  arrivalChecklistRefusal,
   checklistPhaseRefusal,
+  enforcesArrivalChecklistRule,
   routeLinkRefusal,
   routeProvesCustody,
 } from "@/shared/vehicle/route-link";
@@ -68,6 +71,7 @@ import {
   resolveActiveRecordBranchId,
   resolveRecordBranchId,
 } from "@/shared/vehicle/record-branch";
+import { resolveRecordOrigin } from "@/shared/vehicle/record-origin";
 
 const log = logger.child({ component: "vehicle-checklist" });
 
@@ -169,6 +173,11 @@ class CreateVehicleChecklistUseCase {
     // Photos the client already uploaded straight to storage. Only their keys
     // reach this API — the bytes went from the device to the bucket.
     presignedPhotos?: { key: string; fieldName?: string }[],
+
+    // The app build that sent it (x-trajetto-client-version), null when the
+    // request does not say: its `contract` decides whether an early arrival
+    // checklist is refused or only flagged.
+    client?: ClientVersion | null,
   ): Promise<VehicleChecklist> {
     // The phone's check of the odometer photo (decision 14.2) is not a field
     // of the row as sent — nor of the AI request's input, which is hashed
@@ -216,6 +225,17 @@ class CreateVehicleChecklistUseCase {
       if (existingChecklist) return existingChecklist;
     }
 
+    // A driver's checklist is the app's whatever the body says; anybody
+    // else's keeps what was sent and, when nothing was, is the app's if it
+    // carries a key (an office user on the app build that names no origin)
+    // and WEB_DASHBOARD if not (the web's form sends neither). Stored, and
+    // named in the outbox event below (shared/vehicle/record-origin.ts).
+    checklistData.created_from = resolveRecordOrigin(
+      findUser,
+      checklistData.created_from,
+      checklistData.client_submission_id,
+    );
+
     // Validate vehicle exists and belongs to business
     const findVehicle = await this.vehicle.findVehicleById(
       checklistData.vehicleId,
@@ -230,10 +250,10 @@ class CreateVehicleChecklistUseCase {
     }
 
     // C4/F3: a checklist made for a route names its moment, and the route
-    // must be this driver's, with this vehicle. Never its status here
-    // (decision D08): a departure checklist queued offline may land after
-    // the start, and the arrival one opens once the last stop closed the
-    // route (custody is asked below).
+    // must be this driver's, with this vehicle. The departure never asks the
+    // route's status (decision D08): one queued offline may land after the
+    // start. The arrival does, for a driver, right below (custody is asked
+    // further down).
     const phaseRefusal = checklistPhaseRefusal(
       checklistData.routeId,
       checklistData.phase,
@@ -249,6 +269,27 @@ class CreateVehicleChecklistUseCase {
       findUser.driverId ?? checklistData.driverId,
       findVehicle.id,
     );
+
+    // The arrival closes the route's work: a driver makes it once the route
+    // left and every stop is resolved (shared/vehicle/route-link.ts). Refused
+    // only for a build that holds it the same way (contract 5 on); an older
+    // one — mobile `main` sends no header — offered it at any time and its
+    // outbox would fail what it never avoided, so that checklist is recorded
+    // and the trail says how many stops were still open. The office, which
+    // types arrivals after the fact, is never asked: a driver is a
+    // BUSINESS_USER with a driver, as resolveRecordOrigin reads it above.
+    const callerIsDriver =
+      findUser.role === "BUSINESS_USER" && Boolean(findUser.driverId);
+    const arrivalRefusal =
+      callerIsDriver && linkedRoute
+        ? arrivalChecklistRefusal(checklistData.phase, linkedRoute)
+        : null;
+
+    if (arrivalRefusal && enforcesArrivalChecklistRule(client?.contract)) {
+      throw arrivalRefusal;
+    }
+
+    const arrivalOpenStops = arrivalRefusal?.openStops;
 
     // A driver inspects only a vehicle they may operate: the responsible
     // one, or the one of their released or running route (FLEET-ASSIGN-1,
@@ -498,7 +539,9 @@ class CreateVehicleChecklistUseCase {
                 businessId: checklistData.businessId,
                 vehiclePlate: findVehicle.license_plate,
                 vehicleDescription: findVehicle.description,
-                origin: checklistData.created_from ?? "WEB_DASHBOARD",
+                origin: checklistData.created_from,
+                // Only on a driver's early arrival from an older build.
+                ...(arrivalOpenStops !== undefined && { arrivalOpenStops }),
               },
             });
 
@@ -565,6 +608,23 @@ class CreateVehicleChecklistUseCase {
       }
 
       databaseCommitted = true;
+
+      // Said once the row is recorded, never for a request a later check
+      // refused (custody, branch, mileage): the outbox retries those, and
+      // each retry would count again. A resend of this one is answered by the
+      // replay lookup and never gets here.
+      if (arrivalOpenStops !== undefined) {
+        log.warn(
+          {
+            checklistId: checklistCreated.id,
+            businessId: checklistData.businessId,
+            routeId: checklistData.routeId,
+            openStops: arrivalOpenStops,
+            clientContract: client?.contract ?? null,
+          },
+          "Early arrival checklist from a build without the arrival rule: recorded and flagged",
+        );
+      }
 
       // Request AI verification for checklist photos (fire-and-forget)
       // Skip if business has AI disabled (limit === 0)

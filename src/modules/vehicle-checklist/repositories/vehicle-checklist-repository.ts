@@ -123,17 +123,22 @@ class VehicleChecklistRepository implements IVehicleChecklistRepository {
 
           if (!vehicle) throw new VehicleMileageInvalidError();
 
+          const at = recordDate(checklistData.checklist_date);
+          const timeZone = resolveTimeZone(placement?.timeZone);
+
           const placed = placeReading({
             mileage: checklistData.current_mileage,
             ...(await odometerTimeline(transaction, {
               businessId: checklistData.businessId,
               vehicleId: checklistData.vehicleId,
-              at: recordDate(checklistData.checklist_date),
-              timeZone: resolveTimeZone(placement?.timeZone),
+              at,
+              timeZone,
             })),
             odometer: vehicle.current_mileage,
             maintenanceFloor: vehicle.last_maintenance_mileage,
             previousMileage: null,
+            at,
+            timeZone,
           });
 
           if (!placed.fits) throw new VehicleMileageInvalidError();
@@ -154,16 +159,9 @@ class VehicleChecklistRepository implements IVehicleChecklistRepository {
             if (moved.count !== 1) throw new VehicleMileageInvalidError();
           }
 
-          // `created_from` is accepted by the schema (the app stamps
-          // MOBILE_APP) and read by the use case for the outbox event's
-          // `origin`, but vehicle_checklist has no such column: spread into
-          // the insert, it failed every checklist the app sent with a 500,
-          // which the outbox then retried forever as a server error.
-          const { created_from: _origin, ...row } = checklistData;
-
           const checklist = await transaction.vehicleChecklist.create({
             data: {
-              ...row,
+              ...checklistData,
               photos: checklistData.photos,
               branchId: checklistData.branchId!,
               driverId: checklistData.driverId!,
@@ -366,11 +364,15 @@ class VehicleChecklistRepository implements IVehicleChecklistRepository {
 
         if (!vehicle) throw new VehicleNotFoundError();
 
+        const record = {
+          at: mileageUpdate.at,
+          timeZone: resolveTimeZone(mileageUpdate.timeZone),
+        };
+
         const timeline = await odometerTimeline(transaction, {
           businessId,
           vehicleId,
-          at: mileageUpdate.at,
-          timeZone: resolveTimeZone(mileageUpdate.timeZone),
+          ...record,
           excludeChecklistId: mileageUpdate.checklistId ?? checklistId,
         });
 
@@ -383,10 +385,15 @@ class VehicleChecklistRepository implements IVehicleChecklistRepository {
           odometer: vehicle.current_mileage,
           maintenanceFloor: vehicle.last_maintenance_mileage,
           previousMileage,
+          ...record,
         });
 
         if (!placement.fits) {
-          throw editedReadingRefusal(previousMileage !== null, timeline);
+          throw editedReadingRefusal(
+            previousMileage !== null,
+            timeline,
+            record,
+          );
         }
 
         // A date-only move re-checks the order and leaves the odometer as
@@ -612,6 +619,7 @@ class VehicleChecklistRepository implements IVehicleChecklistRepository {
           overall_condition: checklist.overall_condition,
           notes: checklist.notes,
           branchName: checklist.branch?.corporate_reason,
+          created_from: checklist.created_from,
           created_at: checklist.created_at,
           updated_at: checklist.updated_at,
         };

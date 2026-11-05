@@ -21,6 +21,8 @@ import { FuelDriverCannotDeleteFuelError } from "./fuel-driver-cannot-delete-fue
 import { FuelLocationNotProvidedAdjustmentValidationError } from "./fuel-location-not-provided-adjustment-validation-error";
 import { FuelRegistrationsMobileLocationRequiredError } from "./fuel-registrations-mobile-location-required-error";
 import { FuelNoFuelsToExportError } from "./fuel-no-fuels-to-export-error";
+import { FuelRecentRefuelError } from "./fuel-recent-refuel-error";
+import { SAME_READING_WINDOW_MINUTES } from "../fuel-rules";
 
 type ErrorClass = abstract new (...args: never[]) => Error;
 
@@ -33,10 +35,14 @@ const VEHICLE_NOT_FOUND = "Veículo não encontrado!";
  * The vehicle error says "above the vehicle's current mileage", which is the
  * rule for the newest refueling only: every refueling is placed by its date
  * first (fuel-rules.ts placeReading). Refusing a correction or a back-dated
- * refueling with that sentence told people the wrong rule.
+ * refueling with that sentence told people the wrong rule. A reading may
+ * also repeat a neighbouring record's within SAME_READING_WINDOW_MINUTES
+ * (05/11/2026: a second tank at the same stop), and the sentence says so,
+ * with what standsStillWith and placeReading ask of it: both dated with the
+ * hour (the web's day never counts), and a new newest one not below the
+ * vehicle's odometer.
  */
-const FUEL_MILEAGE_INVALID =
-  "A quilometragem não se encaixa no histórico do veículo: havendo registros em dias posteriores à data do abastecimento, ela precisa ficar entre a leitura anterior e a seguinte; no abastecimento mais recente, precisa superar a leitura anterior (e, se for novo, a quilometragem atual do veículo).";
+const FUEL_MILEAGE_INVALID = `A quilometragem não se encaixa no histórico do veículo: havendo registros em dias posteriores à data do abastecimento, ela precisa ficar entre a leitura anterior e a seguinte; no abastecimento mais recente, precisa superar a leitura anterior (e, se for novo, a quilometragem atual do veículo). Repetir a leitura de outro registro só vale com menos de ${SAME_READING_WINDOW_MINUTES} minutos de diferença entre eles, os dois com hora (não só o dia); se for o mais recente e novo, sem ficar abaixo da quilometragem atual do veículo.`;
 
 /**
  * The fuel routes' domain errors, each with an honest status and a stable
@@ -152,6 +158,19 @@ function replyFrom(
  * the table does not know (the caller rethrows it to the error handler).
  */
 function replyFuelWriteError(reply: FastifyReply, error: unknown): boolean {
+  // The one refusal whose body carries more than code and message: the
+  // other refuelling, for the app's question. An AppError, so the global
+  // handler would answer it too, but with code and message only.
+  if (error instanceof FuelRecentRefuelError) {
+    reply.header("x-error-code", error.code).status(error.statusCode).send({
+      code: error.code,
+      message: error.message,
+      previous_refuel: error.previousRefuel,
+    });
+
+    return true;
+  }
+
   return replyFrom(FUEL_WRITE_ERRORS, reply, error);
 }
 

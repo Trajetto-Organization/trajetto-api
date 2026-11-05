@@ -1,4 +1,5 @@
 import { inject, injectable } from "tsyringe";
+import type { FuelAlert } from "@prisma/client";
 import { AppError } from "@/shared/errors/AppError";
 
 import { IUserRepository } from "@/modules/user/repositories/IUser-repository";
@@ -13,8 +14,22 @@ import { ExportColumn } from "@/shared/services/export/types";
 import { IBusinessRepository } from "@/modules/business/repositories/IBusiness-repository";
 import { assertTenantAccess } from "@/modules/middlewares/tenant-authorization";
 import { businessDateKey } from "@/shared/time/business-day";
-import { businessTimeZone } from "../fuel-rules";
+import { RECENT_REFUEL_WINDOW_MINUTES, businessTimeZone } from "../fuel-rules";
 import { formatInstant, formatPickedDay } from "@/shared/vehicle/record-dates";
+
+/** How each alert reads in the file (the web labels the same values). */
+const FUEL_ALERT_TEXT: Record<FuelAlert, string> = {
+  RECENT_REFUEL: `Outro abastecimento do veículo em menos de ${RECENT_REFUEL_WINDOW_MINUTES} min`,
+};
+
+/** The record's alerts in words, "; " between them; "Nenhum" without any. */
+function fuelAlertsText(alerts: unknown): string {
+  const list = Array.isArray(alerts) ? (alerts as FuelAlert[]) : [];
+
+  return list.length > 0
+    ? list.map((alert) => FUEL_ALERT_TEXT[alert] ?? alert).join("; ")
+    : "Nenhum";
+}
 
 interface ExportFuelRequest {
   userId: string;
@@ -23,6 +38,8 @@ interface ExportFuelRequest {
   branchIds?: string[];
   vehicleIds?: string[];
   fuelTypeIds?: string[];
+  /** Records with any of these alerts (05/11/2026), as the list. */
+  alerts?: FuelAlert[];
 }
 
 @injectable()
@@ -50,6 +67,7 @@ class ExportFuelUseCase {
     branchIds,
     vehicleIds,
     fuelTypeIds,
+    alerts,
   }: ExportFuelRequest): Promise<{
     iterator: AsyncGenerator<any>;
     columns: ExportColumn[];
@@ -87,6 +105,7 @@ class ExportFuelUseCase {
       branchIds,
       vehicleIds,
       fuelTypeIds,
+      alerts,
     };
 
     const total = await this.fuelRepository.countFuelForExport(filters);
@@ -233,6 +252,28 @@ class ExportFuelUseCase {
         formatter: ExportFormatters.fallback,
       },
 
+      // 05/11/2026: what the list's Alertas column shows, in words.
+      {
+        header: "Alertas",
+        key: "alerts",
+        width: 30,
+        formatter: (value) => fuelAlertsText(value),
+      },
+
+      {
+        header: "Abastecimento Anterior (alerta)",
+        key: "recentRefuelPreviousAt",
+        width: 22,
+        formatter: (value) => formatInstant(value, timeZone),
+      },
+
+      {
+        header: "Motivo Informado",
+        key: "recentRefuelReason",
+        width: 40,
+        formatter: ExportFormatters.fallback,
+      },
+
       {
         header: "Criado em",
         key: "created_at",
@@ -259,5 +300,5 @@ class ExportFuelUseCase {
   }
 }
 
-export { ExportFuelUseCase };
+export { ExportFuelUseCase, fuelAlertsText };
 export type { ExportFuelRequest };

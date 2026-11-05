@@ -196,6 +196,11 @@ const vehicleChecklistResponses = {
           .describe(
             "O momento da rota: ROUTE_START (saída) ou ROUTE_END (chegada); null para o checklist feito fora de uma rota.",
           ),
+        created_from: z
+          .enum(["MOBILE_APP", "WEB_DASHBOARD"])
+          .describe(
+            "Origem do registro: MOBILE_APP (app do motorista) ou WEB_DASHBOARD (painel). O checklist de um motorista é sempre MOBILE_APP, decidido pelo servidor.",
+          ),
         business: z
           .object({
             corporate_reason: z.string(),
@@ -253,10 +258,10 @@ const vehicleChecklistResponses = {
     "VALIDATION_ERROR (ordenação ou filtro fora da lista) ou BUSINESS_NOT_IDENTIFIED (MASTER sem empresa).",
   ),
   createVehicleChecklistErrors: checklistRefusal.describe(
-    "VALIDATION_ERROR (corpo fora do schema; `details` diz o quê), PHOTOS_REQUIRED (`missingPhotos` lista os itens sem foto), CHECKLIST_DATE_IN_FUTURE (data depois de hoje no fuso da empresa; uma data só com dia, AAAA-MM-DD, vale como aquele dia), VEHICLE_MILEAGE_INVALID (não passa a quilometragem do veículo nem cabe entre os registros vizinhos da data), VEHICLE_NOT_FOUND ou DRIVER_NOT_FOUND (inexistente ou de outra empresa: a mesma resposta), BRANCH_NOT_FOUND (só o MASTER, que pode informar qualquer filial, recebe este 400, para a filial de outra empresa; para os demais a filial enviada que não existe ou é de outra empresa é um 404), BRANCH_REQUIRED (o gestor deixou a filial em branco e nada a resolve: nem o veículo, nem o motorista informado, nem uma única filial ativa da empresa; para o checklist do motorista, a mesma falta responde 409), DRIVER_REQUIRED, CHECKLIST_ROUTE_PHASE_REQUIRED (`routeId` sem `phase` de rota), CHECKLIST_ROUTE_REQUIRED (`phase` de rota sem `routeId`) ou um código do storage para as fotos (ex.: UPLOADED_FILE_NOT_FOUND).",
+    "VALIDATION_ERROR (corpo fora do schema; `details` diz o quê), PHOTOS_REQUIRED (`missingPhotos` lista os itens sem foto), CHECKLIST_DATE_IN_FUTURE (data depois de hoje no fuso da empresa; uma data só com dia, AAAA-MM-DD, vale como aquele dia), VEHICLE_MILEAGE_INVALID (não passa a quilometragem do veículo, não cabe entre os registros vizinhos da data nem repete a leitura de um deles com menos de 30 minutos de diferença), VEHICLE_NOT_FOUND ou DRIVER_NOT_FOUND (inexistente ou de outra empresa: a mesma resposta), BRANCH_NOT_FOUND (só o MASTER, que pode informar qualquer filial, recebe este 400, para a filial de outra empresa; para os demais a filial enviada que não existe ou é de outra empresa é um 404), BRANCH_REQUIRED (o gestor deixou a filial em branco e nada a resolve: nem o veículo, nem o motorista informado, nem uma única filial ativa da empresa; para o checklist do motorista, a mesma falta responde 409), DRIVER_REQUIRED, CHECKLIST_ROUTE_PHASE_REQUIRED (`routeId` sem `phase` de rota), CHECKLIST_ROUTE_REQUIRED (`phase` de rota sem `routeId`) ou um código do storage para as fotos (ex.: UPLOADED_FILE_NOT_FOUND).",
   ),
   updateVehicleChecklistErrors: checklistRefusal.describe(
-    "VALIDATION_ERROR, PHOTOS_REQUIRED (um item alterado exige foto e ele não tem), CHECKLIST_DATE_IN_FUTURE (só quando a edição muda a data), VEHICLE_MILEAGE_OUT_OF_ORDER (a quilometragem nova, ou a data nova, deixaria a leitura fora de ordem entre os registros vizinhos do veículo; a mensagem diz entre quais leituras ela precisa ficar), VEHICLE_MILEAGE_INVALID (o checklist levado para outro veículo não passa a quilometragem dele nem cabe entre os registros vizinhos lá), VEHICLE_NOT_FOUND, DRIVER_NOT_FOUND ou BRANCH_NOT_FOUND (inexistente ou de outra empresa: a mesma resposta) ou um código do storage para as fotos novas.",
+    "VALIDATION_ERROR, PHOTOS_REQUIRED (um item alterado exige foto e ele não tem), CHECKLIST_DATE_IN_FUTURE (só quando a edição muda a data), VEHICLE_MILEAGE_OUT_OF_ORDER (a quilometragem nova, ou a data nova, deixaria a leitura fora de ordem entre os registros vizinhos do veículo; a mensagem diz entre quais leituras ela precisa ficar e qual delas pode repetir, a de um registro com menos de 30 minutos de diferença), VEHICLE_MILEAGE_INVALID (o checklist levado para outro veículo não passa a quilometragem dele nem cabe entre os registros vizinhos lá), VEHICLE_NOT_FOUND, DRIVER_NOT_FOUND ou BRANCH_NOT_FOUND (inexistente ou de outra empresa: a mesma resposta) ou um código do storage para as fotos novas.",
   ),
   createForbidden: errorResponse.describe(
     "PERMISSION_DENIED (o perfil não tem escrita em checklists), MODULE_NOT_ENABLED (a empresa não contratou o módulo Frota), TENANT_INACTIVE (a empresa está desativada), TENANT_ACCESS_DENIED (a requisição nomeia outra empresa), BRANCH_INACTIVE (a filial enviada pelo gestor está desativada; a enviada pelo motorista é ignorada, o servidor a resolve) ou VEHICLE_NOT_ASSIGNED_TO_DRIVER (o motorista enviou o checklist de um veículo que não é o dele nem o da rota liberada ou em andamento dele). Definitivo: repetir não muda a resposta.",
@@ -276,14 +281,23 @@ const vehicleChecklistResponses = {
       code: z
         .string()
         .describe(
-          "SUBMISSION_OWNER_MISMATCH, BRANCH_REQUIRED ou BRANCH_INACTIVE",
+          "SUBMISSION_OWNER_MISMATCH, BRANCH_REQUIRED, BRANCH_INACTIVE ou CHECKLIST_ARRIVAL_ROUTE_OPEN",
         ),
       message: z.string(),
+      // Sent by replyChecklistError with the arrival refusal only.
+      open_stops: z
+        .number()
+        .int()
+        .optional()
+        .describe(
+          "CHECKLIST_ARRIVAL_ROUTE_OPEN: quantas paradas da rota ainda estão em aberto (pendente ou no local). Informativo: decida pelo `code`.",
+        ),
     })
     .describe(
       "SUBMISSION_OWNER_MISMATCH: a chave de idempotência já foi usada por outro motorista desta empresa — gere uma chave nova e reenvie; repetir a mesma nunca passa. " +
         "BRANCH_REQUIRED: não há filial ATIVA para registrar o checklist do motorista: nem a do veículo, nem a dele, nem uma única filial ativa da empresa (as desativadas são puladas). Com `routeId`, quem opera as entregas é avisado uma vez por rota e momento, saída ou chegada (`route.record_branch_missing`, na caixa de entrada e na atividade da rota); reenvie depois que o gestor corrigir a filial: os reenvios não repetem o aviso. " +
-        "BRANCH_INACTIVE: a filial que o servidor preenche quando o gestor a deixa em branco (a do veículo, ou a do motorista informado) está desativada; uma filial desativada enviada no corpo pelo gestor é recusada antes, com 403. O checklist do motorista nunca vai para uma filial desativada: a filial que o app dele envia no corpo é ignorada.",
+        "BRANCH_INACTIVE: a filial que o servidor preenche quando o gestor a deixa em branco (a do veículo, ou a do motorista informado) está desativada; uma filial desativada enviada no corpo pelo gestor é recusada antes, com 403. O checklist do motorista nunca vai para uma filial desativada: a filial que o app dele envia no corpo é ignorada. " +
+        "CHECKLIST_ARRIVAL_ROUTE_OPEN: o checklist de chegada (`phase` ROUTE_END) do motorista chegou antes de a rota estar resolvida — ela ainda não começou ou tem parada em aberto (pendente ou no local); `open_stops` diz quantas. Só para o app que envia `contract` 5 ou maior em `x-trajetto-client-version`: o de versão anterior, ou sem o cabeçalho, tem o checklist gravado e marcado na atividade, e o do escritório nunca passa por essa regra. Nada foi gravado; reenvie depois que todas as paradas forem resolvidas. O reenvio de um checklist já gravado é respondido com ele antes dessa regra.",
     ),
   driverInactive: z
     .object({

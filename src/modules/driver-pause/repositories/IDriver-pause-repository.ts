@@ -31,6 +31,19 @@ interface IDriverPauseRepository {
   ): Promise<DriverPause | null>;
 
   /**
+   * The driver's latest ENDED pause that started before `before`, scoped by
+   * the company AND the driver: what the cooldown between pauses is measured
+   * from (pause-rules.ts pauseCooldown). Latest by start, then id: one
+   * driver's pauses do not overlap (one open at a time), so the last started
+   * is the last ended, and the index (driverId, started_at) serves it.
+   */
+  findLastEndedPause(query: {
+    businessId: string;
+    driverId: string;
+    before: Date;
+  }): Promise<DriverPause | null>;
+
+  /**
    * The driver's route that was on the street at `at`: started at or before
    * it and not yet finished (completed, or cancelled) by then.
    */

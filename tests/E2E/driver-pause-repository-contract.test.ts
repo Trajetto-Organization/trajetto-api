@@ -645,4 +645,35 @@ describe.each(both())("the pause repository (%s)", (_name, repo) => {
       { id: D6, name: "Motorista 6" },
     ]);
   });
+
+  // Last on purpose: it opens a pause for D1, whom the reads above count.
+  it("finds the driver's latest ended pause before an instant, by company and driver", async () => {
+    const last = async (businessId: string, driverId: string, before: Date) =>
+      (await repo.findLastEndedPause({ businessId, driverId, before }))?.id ??
+      null;
+
+    // The seeded tie on started_at: the bigger id, as the order says.
+    expect(await last(COMPANY, D1, at(100))).toBe(id("p0", 2));
+    // Only a pause that started before the instant.
+    expect(await last(COMPANY, D1, at(30))).toBe(id("p0", 3));
+    expect(await last(COMPANY, D1, at(-5000))).toBeNull();
+
+    // Never another company's, nor another driver's.
+    expect(await last(OTHER, D1, at(100))).toBeNull();
+    expect(await last(COMPANY, DX, at(100))).toBeNull();
+    expect(await last(OTHER, DX, at(100))).toBe(id("px", 1));
+
+    // An open pause started later is skipped: the last ENDED one answers.
+    const open = await repo.createPause({
+      kind: "REST",
+      started_at: at(-4000),
+      start_submission_id: id("e1", 1),
+      driverId: D1,
+      businessId: COMPANY,
+    });
+
+    expect(open.status).toBe("created");
+    expect(await last(COMPANY, D1, at(-3000))).toBe(id("p0", 3));
+    expect(await last(COMPANY, D1, at(100))).toBe(id("p0", 2));
+  });
 });

@@ -27,6 +27,7 @@ const group = (overrides: Partial<FuelListGroup>): FuelListGroup => ({
   vehicleId: "v1",
   fuelTypeId: "diesel",
   odometer_verified: false,
+  alerts: [],
   count: 1,
   liters: "10",
   amount: "55",

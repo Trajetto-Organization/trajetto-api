@@ -572,12 +572,143 @@ describe("the writes the driver's app sends", () => {
       "DRIVER_INACTIVE",
     );
 
+    // The early arrival checklist (contract 5 on): the code, the count the
+    // body carries, and the header that decides it, where the app reads.
+    const arrivalConflict = JSON.stringify(
+      byId(CREATE_CHECKLIST).operation.responses["409"],
+    );
+
+    expect(arrivalConflict).toContain("CHECKLIST_ARRIVAL_ROUTE_OPEN");
+    expect(arrivalConflict).toContain('"open_stops"');
+    expect(
+      byId(CREATE_CHECKLIST).operation.parameters?.some(
+        (parameter) =>
+          parameter.in === "header" &&
+          parameter.name === "x-trajetto-client-version" &&
+          Boolean(parameter.description),
+      ),
+    ).toBe(true);
+
+    // A second refuelling within 30 minutes (contract 5 on): the code, the
+    // other refuelling the body carries, and the two headers that decide it
+    // (the build, and whether the offline queue sent it).
+    const recentConflict = JSON.stringify(
+      byId(CREATE_FUEL).operation.responses["409"],
+    );
+
+    expect(recentConflict).toContain("FUEL_RECENT_REFUEL");
+    expect(recentConflict).toContain('"previous_refuel"');
+
+    for (const header of ["x-trajetto-client-version", "x-client-queued-at"]) {
+      expect(
+        byId(CREATE_FUEL).operation.parameters?.some(
+          (parameter) =>
+            parameter.in === "header" &&
+            parameter.name === header &&
+            !parameter.required &&
+            Boolean(parameter.description),
+        ),
+        header,
+      ).toBe(true);
+    }
+
+    for (const field of ["confirm_recent", "recent_reason"]) {
+      expect(
+        JSON.stringify(byId(CREATE_FUEL).operation.requestBody),
+        field,
+      ).toContain(`"${field}"`);
+    }
+
     for (const id of [UPDATE_FUEL, UPDATE_CHECKLIST]) {
       const conflict = JSON.stringify(byId(id).operation.responses["409"]);
 
       expect(conflict, id).toContain("BRANCH_INACTIVE");
       // An edit carries no idempotency key, so it cannot collide with one.
       expect(conflict, id).not.toContain("SUBMISSION_OWNER_MISMATCH");
+    }
+  });
+
+  it("documents the refuellings' alerts: the list's filter and facet, the row's fields, the route's", () => {
+    const list = byId("GET /fuel/list-fuel");
+    const alerts = list.operation.parameters?.find(
+      (parameter) => parameter.in === "query" && parameter.name === "alerts",
+    );
+
+    expect(alerts?.description).toContain("RECENT_REFUEL");
+
+    const listed = JSON.stringify(list.operation.responses["200"]);
+
+    for (const field of [
+      "alerts",
+      "recent_refuel_reason",
+      "recent_refuel_previous_at",
+    ]) {
+      expect(listed, field).toContain(`"${field}"`);
+    }
+
+    expect(
+      byId("GET /fuel/export-fuel").operation.parameters?.some(
+        (parameter) => parameter.in === "query" && parameter.name === "alerts",
+      ),
+    ).toBe(true);
+
+    const route = JSON.stringify(
+      byId("GET /route/get-route/{routeId}/business/{businessId}").operation
+        .responses["200"],
+    );
+
+    expect(route).toContain('"recent_refuel_previous_at"');
+  });
+
+  it("documents the 5 minutes between pauses: the start's refusal and headers, and what /current says", () => {
+    const START_PAUSE = "POST /driver-pause/start/{businessId}";
+
+    // The code, the cooldown the body carries, and the two headers that
+    // decide it (the build, and whether the offline queue sent it).
+    const conflict = JSON.stringify(
+      byId(START_PAUSE).operation.responses["409"],
+    );
+
+    expect(conflict).toContain("PAUSE_COOLDOWN");
+
+    for (const field of [
+      "last_ended_at",
+      "next_pause_allowed_at",
+      "next_pause_in_seconds",
+    ]) {
+      expect(conflict, field).toContain(`"${field}"`);
+    }
+
+    for (const header of ["x-trajetto-client-version", "x-client-queued-at"]) {
+      expect(
+        byId(START_PAUSE).operation.parameters?.some(
+          (parameter) =>
+            parameter.in === "header" &&
+            parameter.name === header &&
+            !parameter.required &&
+            Boolean(parameter.description),
+        ),
+        header,
+      ).toBe(true);
+    }
+
+    // Ending is never blocked, and the document says so.
+    expect(
+      byId("POST /driver-pause/end/{businessId}").operation.description,
+    ).toContain("nunca recusa um fim");
+
+    // The serializer keeps only what the schema lists: the three fields
+    // have to be there, or /current would strip them.
+    const current = JSON.stringify(
+      byId("GET /driver-pause/current/{businessId}").operation.responses["200"],
+    );
+
+    for (const field of [
+      "last_ended_at",
+      "next_pause_allowed_at",
+      "next_pause_in_seconds",
+    ]) {
+      expect(current, field).toContain(`"${field}"`);
     }
   });
 

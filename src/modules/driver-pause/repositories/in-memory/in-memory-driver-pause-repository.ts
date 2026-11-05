@@ -180,6 +180,28 @@ class InMemoryDriverPauseRepository implements IDriverPauseRepository {
     );
   }
 
+  async findLastEndedPause({
+    businessId,
+    driverId,
+    before,
+  }: {
+    businessId: string;
+    driverId: string;
+    before: Date;
+  }): Promise<DriverPause | null> {
+    const latest = this.pauses
+      .filter(
+        (pause) =>
+          pause.businessId === businessId &&
+          pause.driverId === driverId &&
+          pause.ended_at !== null &&
+          pause.started_at < before,
+      )
+      .sort((a, b) => byStart(b, a))[0];
+
+    return latest ? { ...latest } : null;
+  }
+
   async findRouteRunningAt(
     businessId: string,
     driverId: string,

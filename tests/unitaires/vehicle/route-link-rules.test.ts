@@ -1,7 +1,12 @@
 import { describe, expect, it } from "vitest";
 
+import { VehicleChecklistArrivalRouteOpenError } from "@/modules/vehicle-checklist/usecases/errors/vehicle-checklist-arrival-route-open-error";
+import type { RouteStatus, RouteStopStatus } from "@/shared/route/route-rules";
 import {
+  ARRIVAL_CHECKLIST_RULE_CONTRACT,
+  arrivalChecklistRefusal,
   checklistPhaseRefusal,
+  enforcesArrivalChecklistRule,
   routeLinkRefusal,
   routeProvesCustody,
 } from "@/shared/vehicle/route-link";
@@ -10,9 +15,10 @@ import {
  * What ties a checklist or a refuelling to a route (plan of 02/11/2026, C4,
  * C5 and F3). The route must be the record's driver's and carry the
  * record's vehicle; a checklist names the moment (departure or arrival)
- * exactly when it names a route. The route's status is never asked: a
+ * exactly when it names a route. The link never asks the route's status: a
  * departure checklist with photos may arrive after the route left, or even
- * after it ended (decision D08: the server records, never refuses).
+ * after it ended (decision D08: the server records, never refuses). Only a
+ * driver's arrival waits for the route to be resolved (05/11/2026).
  */
 const ROUTE = {
   id: "018fea00-0000-7000-8000-0000000000r1",
@@ -287,5 +293,188 @@ describe("routeProvesCustody", () => {
         ZONE,
       ),
     ).toBe(true);
+  });
+});
+
+describe("arrivalChecklistRefusal", () => {
+  // The arrival closes the route's work: it waits for the route to have
+  // left (started_at, or a route running or ended) and for EVERY stop to be
+  // final — COMPLETED, FAILED or CANCELLED. Not "the last delivery of the
+  // list": stops resolve in any order, and the dispatcher may add one to a
+  // running route (K12), which opens it again.
+  const startedAt = new Date("2026-11-05T11:00:00.000Z");
+
+  const route = (
+    status: RouteStatus,
+    stops: RouteStopStatus[],
+    started_at: Date | null = status === "PLANNED" || status === "RELEASED"
+      ? null
+      : startedAt,
+  ) => ({
+    status,
+    started_at,
+    stops: stops.map((stopStatus) => ({ status: stopStatus })),
+  });
+
+  const SENTENCE =
+    "O checklist de chegada só pode ser feito depois que todas as entregas da rota forem resolvidas";
+
+  it("refuses a running route with stops still open, counting them", () => {
+    const refusal = arrivalChecklistRefusal(
+      "ROUTE_END",
+      route("IN_PROGRESS", ["COMPLETED", "PENDING", "ARRIVED", "FAILED"]),
+    );
+
+    expect(refusal).toBeInstanceOf(VehicleChecklistArrivalRouteOpenError);
+    expect(refusal).toMatchObject({
+      statusCode: 409,
+      code: "CHECKLIST_ARRIVAL_ROUTE_OPEN",
+      openStops: 2,
+      message: `${SENTENCE} (faltam 2).`,
+    });
+  });
+
+  it("says one stop in the singular", () => {
+    expect(
+      arrivalChecklistRefusal(
+        "ROUTE_END",
+        route("IN_PROGRESS", ["COMPLETED", "ARRIVED"]),
+      ),
+    ).toMatchObject({ openStops: 1, message: `${SENTENCE} (falta 1).` });
+  });
+
+  it("counts every open stop, whatever its place in the list", () => {
+    // The last stop of the list resolved first; the first one is still open.
+    expect(
+      arrivalChecklistRefusal(
+        "ROUTE_END",
+        route("IN_PROGRESS", ["PENDING", "COMPLETED", "COMPLETED"]),
+      ),
+    ).toMatchObject({ openStops: 1 });
+  });
+
+  it("refuses again once the dispatcher adds a stop to the running route", () => {
+    expect(
+      arrivalChecklistRefusal(
+        "ROUTE_END",
+        route("IN_PROGRESS", ["COMPLETED", "FAILED", "PENDING"]),
+      ),
+    ).toMatchObject({ openStops: 1 });
+  });
+
+  it("accepts a started route whose every stop is final", () => {
+    expect(
+      arrivalChecklistRefusal(
+        "ROUTE_END",
+        route("IN_PROGRESS", ["COMPLETED", "FAILED", "CANCELLED"]),
+      ),
+    ).toBeNull();
+  });
+
+  it("accepts a route whose every stop was called off", () => {
+    expect(
+      arrivalChecklistRefusal(
+        "ROUTE_END",
+        route("IN_PROGRESS", ["CANCELLED", "CANCELLED"]),
+      ),
+    ).toBeNull();
+    // Closed as Cancelada by the last cancellation (D32), never started.
+    expect(
+      arrivalChecklistRefusal(
+        "ROUTE_END",
+        route("CANCELLED", ["CANCELLED", "CANCELLED"], null),
+      ),
+    ).toBeNull();
+  });
+
+  it("accepts a route that ended, even without its start stamped", () => {
+    expect(
+      arrivalChecklistRefusal(
+        "ROUTE_END",
+        route("COMPLETED", ["COMPLETED", "FAILED"]),
+      ),
+    ).toBeNull();
+    expect(
+      arrivalChecklistRefusal(
+        "ROUTE_END",
+        route("COMPLETED", ["COMPLETED", "CANCELLED"], null),
+      ),
+    ).toBeNull();
+    // Closed with pending stops (K11): those were called off.
+    expect(
+      arrivalChecklistRefusal(
+        "ROUTE_END",
+        route("COMPLETED", ["COMPLETED", "CANCELLED"]),
+      ),
+    ).toBeNull();
+    // The ended routes the custody tests seed carry no stops at all.
+    expect(arrivalChecklistRefusal("ROUTE_END", route("COMPLETED", []))).toBe(
+      null,
+    );
+  });
+
+  it("refuses a planned or released route that never left", () => {
+    for (const status of ["PLANNED", "RELEASED"] as const) {
+      expect(
+        arrivalChecklistRefusal(
+          "ROUTE_END",
+          route(status, ["PENDING", "PENDING", "PENDING"]),
+        ),
+        status,
+      ).toMatchObject({
+        code: "CHECKLIST_ARRIVAL_ROUTE_OPEN",
+        openStops: 3,
+        message: `${SENTENCE} (faltam 3).`,
+      });
+    }
+  });
+
+  it("refuses a route that never left even with nothing open, naming the start", () => {
+    // No count, and no deliveries to resolve: the driver is told to start
+    // the route, as the app's own reason says.
+    const NOT_STARTED =
+      "O checklist de chegada só pode ser feito depois que a rota for iniciada e todas as entregas forem resolvidas.";
+
+    expect(
+      arrivalChecklistRefusal("ROUTE_END", route("RELEASED", ["CANCELLED"])),
+    ).toMatchObject({ openStops: 0, message: NOT_STARTED });
+    expect(
+      arrivalChecklistRefusal("ROUTE_END", route("PLANNED", [])),
+    ).toMatchObject({ openStops: 0, message: NOT_STARTED });
+  });
+
+  it("reads a running route as started, the stamp or not", () => {
+    expect(
+      arrivalChecklistRefusal(
+        "ROUTE_END",
+        route("IN_PROGRESS", ["COMPLETED"], null),
+      ),
+    ).toBeNull();
+  });
+
+  it("never asks the departure or a standalone checklist (D08)", () => {
+    const open = route("RELEASED", ["PENDING"]);
+
+    expect(arrivalChecklistRefusal("ROUTE_START", open)).toBeNull();
+    expect(arrivalChecklistRefusal("STANDALONE", open)).toBeNull();
+    expect(arrivalChecklistRefusal(undefined, open)).toBeNull();
+    expect(arrivalChecklistRefusal(null, open)).toBeNull();
+  });
+});
+
+describe("enforcesArrivalChecklistRule", () => {
+  it("refuses from the contract that holds the arrival back, 5, on", () => {
+    expect(ARRIVAL_CHECKLIST_RULE_CONTRACT).toBe(5);
+    expect(enforcesArrivalChecklistRule(5)).toBe(true);
+    expect(enforcesArrivalChecklistRule(6)).toBe(true);
+  });
+
+  it("only flags an older build, or one that does not say", () => {
+    // Mobile `main`, in drivers' hands today, sends no header at all.
+    expect(enforcesArrivalChecklistRule(4)).toBe(false);
+    expect(enforcesArrivalChecklistRule(1)).toBe(false);
+    expect(enforcesArrivalChecklistRule(0)).toBe(false);
+    expect(enforcesArrivalChecklistRule(undefined)).toBe(false);
+    expect(enforcesArrivalChecklistRule(null)).toBe(false);
   });
 });

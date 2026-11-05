@@ -13,6 +13,10 @@ import { verifyBusinessActive } from "@/modules/middlewares/verify-tenant-active
 import { verifyModuleEnabled } from "@/modules/middlewares/verify-module-enabled";
 
 import { clientSentAtHeaders } from "@/shared/delivery/occurred-at";
+import {
+  clientQueuedAtHeaders,
+  clientVersionHeaders,
+} from "@/shared/http/client-version";
 
 import {
   businessParam,
@@ -58,11 +62,24 @@ const driverWriteConfig = {
   openapi: { headers: clientSentAtHeaders },
 };
 
+/**
+ * The start reads two more: the build's contract and whether the offline
+ * queue sent it decide whether a start inside the cooldown is refused.
+ */
+const startConfig = {
+  ...driverWriteConfig,
+  openapi: {
+    headers: clientSentAtHeaders
+      .merge(clientVersionHeaders)
+      .merge(clientQueuedAtHeaders),
+  },
+};
+
 async function driverPauseRoutes(app: FastifyInstance) {
   app.post(
     "/start/:businessId",
     {
-      config: driverWriteConfig,
+      config: startConfig,
       onRequest: [ensureAuthenticated],
       preHandler: [
         verifyBusinessActive,
@@ -74,7 +91,7 @@ async function driverPauseRoutes(app: FastifyInstance) {
         tags: ["driver-pause"],
         summary: "O motorista inicia uma pausa",
         description:
-          "Refeição (MEAL), descanso (REST) ou outra (OTHER), pelo aplicativo do motorista, inclusive sem sinal (decisão 6.1). Só o próprio motorista registra: outro usuário recebe 403 PERMISSION_DENIED. Idempotente por `start_submission_id`: o reenvio da mesma chave responde 200 com a mesma pausa (`replayed: true`), aberta ou já encerrada, sem gravar nada; a primeira vez responde 201. No máximo uma pausa aberta por motorista, garantido pelo banco mesmo sob concorrência: outro início com chave diferente responde 409 PAUSE_ALREADY_OPEN. Uma chave já usada por outro motorista responde 409 SUBMISSION_OWNER_MISMATCH. `occurred_at` (opcional) é o instante do toque, corrigido pelo header `X-Client-Sent-At`; nunca no futuro; ausente ou ilegível, vale a hora do recebimento. Um início NOVO tocado há mais de 7 dias (fora do horizonte offline) responde 409 PAUSE_TOO_OLD e nada é gravado: datá-lo pela chegada abriria agora uma pausa que o motorista não começou; o reenvio de um início que já entrou continua respondendo 200. Decisão 14.4: o corpo traz `occurrence_type_id`, o tipo da categoria Pausa escolhido (a natureza gravada em `kind` é a do tipo; tipo desativado é aceito, porque a pausa aconteceu); o aplicativo instalado manda só `kind`, e a pausa vai para o tipo padrão dessa natureza. Tipo de outra empresa → 404 OCCURRENCE_TYPE_NOT_FOUND; tipo de outra categoria → 400 OCCURRENCE_TYPE_WRONG_CATEGORY. Pausa só existe dentro de uma jornada: sem rota do motorista liberada ou em andamento do dia (no fuso da empresa) no instante do toque, 409 PAUSE_REQUIRES_ROUTE e nada é gravado. A pausa guarda a rota dessa jornada.",
+          'Refeição (MEAL), descanso (REST) ou outra (OTHER), pelo aplicativo do motorista, inclusive sem sinal (decisão 6.1). Só o próprio motorista registra: outro usuário recebe 403 PERMISSION_DENIED. Idempotente por `start_submission_id`: o reenvio da mesma chave responde 200 com a mesma pausa (`replayed: true`), aberta ou já encerrada, sem gravar nada; a primeira vez responde 201. No máximo uma pausa aberta por motorista, garantido pelo banco mesmo sob concorrência: outro início com chave diferente responde 409 PAUSE_ALREADY_OPEN. Uma chave já usada por outro motorista responde 409 SUBMISSION_OWNER_MISMATCH. `occurred_at` (opcional) é o instante do toque, corrigido pelo header `X-Client-Sent-At`; nunca no futuro; ausente ou ilegível, vale a hora do recebimento. Um início NOVO tocado há mais de 7 dias (fora do horizonte offline) responde 409 PAUSE_TOO_OLD e nada é gravado: datá-lo pela chegada abriria agora uma pausa que o motorista não começou; o reenvio de um início que já entrou continua respondendo 200. Decisão 14.4: o corpo traz `occurrence_type_id`, o tipo da categoria Pausa escolhido (a natureza gravada em `kind` é a do tipo; tipo desativado é aceito, porque a pausa aconteceu); o aplicativo instalado manda só `kind`, e a pausa vai para o tipo padrão dessa natureza. Tipo de outra empresa → 404 OCCURRENCE_TYPE_NOT_FOUND; tipo de outra categoria → 400 OCCURRENCE_TYPE_WRONG_CATEGORY. Pausa só existe dentro de uma jornada: sem rota do motorista liberada ou em andamento do dia (no fuso da empresa) no instante do toque, 409 PAUSE_REQUIRES_ROUTE e nada é gravado. A pausa guarda a rota dessa jornada. Intervalo entre pausas (05/11/2026): um início NOVO tocado menos de 5 minutos depois do fim da pausa anterior do motorista responde 409 PAUSE_COOLDOWN e nada é gravado, com `last_ended_at`, `next_pause_allowed_at` (o fim mais 5 minutos) e `next_pause_in_seconds` (a espera em segundos a partir de agora, para o app contar no próprio relógio) no corpo, e a frase "Você encerrou uma pausa às HH:MM. Uma nova pausa fica disponível às HH:MM." no fuso da empresa. Só para o app que manda `contract` 5 ou maior em `x-trajetto-client-version`, num envio direto (sem X-Client-Queued-At); a fila offline, o app de versão anterior e a web têm o início gravado como antes. O servidor dá 30 segundos de folga pela correção do relógio do aparelho. Só o início é limitado: encerrar uma pausa nunca é recusado por isso (Lei 13.103/2015: o descanso pode ser fracionado), e o reenvio de um início que já entrou continua respondendo 200, mesmo dentro dos 5 minutos.',
         params: businessParam,
         body: startPauseBody,
         response: {
@@ -108,7 +125,7 @@ async function driverPauseRoutes(app: FastifyInstance) {
         tags: ["driver-pause"],
         summary: "O motorista encerra uma pausa",
         description:
-          "Aponta a pausa pela chave do início (`start_submission_id`), porque sem sinal o aplicativo ainda não conhece o id dela. Idempotente por `end_submission_id`: o reenvio responde 200 com a pausa já encerrada (`replayed: true`). Seguro em qualquer ordem de entrega da fila: se o fim chega antes do início, a pausa é criada já encerrada a partir de `start` (o início repetido), e o início, quando chegar, responde 200 com ela; sem `start`, 404 PAUSE_NOT_FOUND. Dois fins concorrentes encerram uma vez só: o outro recebe 409 PAUSE_ALREADY_ENDED. Uma chave de fim que já encerrou outra pausa: 409 PAUSE_SUBMISSION_REUSED. Pausa ou chave de outro motorista: 409 SUBMISSION_OWNER_MISMATCH. `occurred_at` segue a mesma correção do início (`X-Client-Sent-At`, também para o `occurred_at` de `start`); o fim nunca fica antes do início. Criar a pausa a partir de `start` quando o início ou o fim foram tocados há mais de 7 dias responde 409 PAUSE_TOO_OLD e nada é gravado; já encerrar uma pausa que existe nunca é recusado por isso (o fim vale a hora do recebimento, e o relatório sinaliza a pausa encerrada depois de 12 h). Encerrar uma pausa que existe nunca é recusado por falta de rota; um fim que CRIA a pausa (o início ainda não chegou) segue a regra de jornada no instante do início (409 PAUSE_REQUIRES_ROUTE). `start.occurrence_type_id` segue as regras do início. Só o próprio motorista registra.",
+          "Aponta a pausa pela chave do início (`start_submission_id`), porque sem sinal o aplicativo ainda não conhece o id dela. Idempotente por `end_submission_id`: o reenvio responde 200 com a pausa já encerrada (`replayed: true`). Seguro em qualquer ordem de entrega da fila: se o fim chega antes do início, a pausa é criada já encerrada a partir de `start` (o início repetido), e o início, quando chegar, responde 200 com ela; sem `start`, 404 PAUSE_NOT_FOUND. Dois fins concorrentes encerram uma vez só: o outro recebe 409 PAUSE_ALREADY_ENDED. Uma chave de fim que já encerrou outra pausa: 409 PAUSE_SUBMISSION_REUSED. Pausa ou chave de outro motorista: 409 SUBMISSION_OWNER_MISMATCH. `occurred_at` segue a mesma correção do início (`X-Client-Sent-At`, também para o `occurred_at` de `start`); o fim nunca fica antes do início. Criar a pausa a partir de `start` quando o início ou o fim foram tocados há mais de 7 dias responde 409 PAUSE_TOO_OLD e nada é gravado; já encerrar uma pausa que existe nunca é recusado por isso (o fim vale a hora do recebimento, e o relatório sinaliza a pausa encerrada depois de 12 h). Encerrar uma pausa que existe nunca é recusado por falta de rota; um fim que CRIA a pausa (o início ainda não chegou) segue a regra de jornada no instante do início (409 PAUSE_REQUIRES_ROUTE). `start.occurrence_type_id` segue as regras do início. O intervalo de 5 minutos entre pausas (409 PAUSE_COOLDOWN do início) nunca recusa um fim, nem o que cria a pausa já encerrada: encerrar nunca é bloqueado. Só o próprio motorista registra.",
         params: businessParam,
         body: endPauseBody,
         response: {
@@ -139,7 +156,7 @@ async function driverPauseRoutes(app: FastifyInstance) {
         tags: ["driver-pause"],
         summary: "A pausa aberta do motorista e as pausas de hoje",
         description:
-          "O que o aplicativo lê para saber se o motorista está em pausa (depois de reinstalar, trocar de aparelho ou entrar de novo): `open` é a pausa aberta, de qualquer dia, e traz a `start_submission_id` que o fim precisa nomear; `today` são as pausas iniciadas hoje, no fuso da empresa. `pause_allowed` diz se uma pausa pode começar agora (rota liberada ou em andamento do dia; decisão 14.4) e `journey_route_id` é essa rota. Só o próprio motorista: outro usuário recebe 403 PERMISSION_DENIED.",
+          "O que o aplicativo lê para saber se o motorista está em pausa (depois de reinstalar, trocar de aparelho ou entrar de novo): `open` é a pausa aberta, de qualquer dia, e traz a `start_submission_id` que o fim precisa nomear; `today` são as pausas iniciadas hoje, no fuso da empresa. `pause_allowed` diz se uma pausa pode começar agora (rota liberada ou em andamento do dia; decisão 14.4) e `journey_route_id` é essa rota. `last_ended_at` é o fim da última pausa encerrada do motorista (de qualquer dia), `next_pause_allowed_at` esse fim mais 5 minutos e `next_pause_in_seconds` quantos segundos faltam a partir de agora (0 quando já pode; os dois primeiros nulos sem pausa encerrada): o intervalo entre pausas do app de `contract` 5. Só o próprio motorista: outro usuário recebe 403 PERMISSION_DENIED.",
         params: businessParam,
         response: {
           200: responses.currentPause,

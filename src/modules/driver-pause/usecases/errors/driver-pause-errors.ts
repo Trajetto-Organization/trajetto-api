@@ -1,5 +1,11 @@
 import { AppError } from "@/shared/errors/AppError";
 
+import {
+  pauseCooldownMessage,
+  pauseCooldownView,
+  type PauseCooldownView,
+} from "../../rules/pause-rules";
+
 /**
  * The refusals of the pause routes, each with its own code (decision 11.3):
  * the app's outbox decides from the code whether an item is done, retried or
@@ -91,6 +97,26 @@ class PauseRequiresRouteError extends AppError {
   }
 }
 
+/**
+ * Owner, 05/11/2026: a NEW pause tapped less than PAUSE_COOLDOWN_MINUTES
+ * after the driver's previous one ended (pause-rules.ts pauseCooldown),
+ * sent now by a build that holds the wait itself (enforcesPauseCooldown).
+ * Nothing written. 409, like the other refusals the app's outbox files on
+ * the merits; the cooldown rides along (the start controller sends it as
+ * `last_ended_at`, `next_pause_allowed_at` and `next_pause_in_seconds`; the
+ * global handler would send code and message only), so the app can count
+ * down on its own clock. Never raised by an end: ending is never blocked.
+ */
+class PauseCooldownError extends AppError {
+  readonly cooldown: PauseCooldownView;
+
+  constructor(lastEndedAt: Date, timeZone: string, now: Date = new Date()) {
+    super(pauseCooldownMessage(lastEndedAt, timeZone), 409, "PAUSE_COOLDOWN");
+    this.name = "PauseCooldownError";
+    this.cooldown = pauseCooldownView(lastEndedAt, now);
+  }
+}
+
 /** The occurrence_type_id is not one of this company's types. */
 class PauseTypeNotFoundError extends AppError {
   constructor() {
@@ -119,6 +145,7 @@ export {
   PauseTypeWrongCategoryError,
   PauseAlreadyEndedError,
   PauseAlreadyOpenError,
+  PauseCooldownError,
   PauseNotFoundError,
   PauseReportRangeError,
   PauseSubmissionReusedError,

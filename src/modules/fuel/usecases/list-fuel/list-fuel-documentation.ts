@@ -4,8 +4,9 @@ import { searchMetaDoc } from "@/shared/pagination/list-meta";
 
 /**
  * The list's `meta.searchMeta`, as summarizeFuelList builds it: the four
- * cards over the whole filtered set and the options of the Filial, Veículo
- * and Combustível filters with their counts.
+ * cards over the whole filtered set and the options of the Filial, Veículo,
+ * Combustível and Alertas filters with their counts (`alerts` lists every
+ * FuelAlert, zeros included, without a label: the web names them).
  */
 const fuelListSearchMetaDoc = searchMetaDoc(
   {
@@ -28,7 +29,7 @@ const fuelListSearchMetaDoc = searchMetaDoc(
       .int()
       .describe("Desses, quantos têm o odômetro verificado."),
   },
-  ["branchId", "vehicleId", "fuelTypeId"],
+  ["branchId", "vehicleId", "fuelTypeId", "alerts"],
 );
 
 export { fuelListSearchMetaDoc };
