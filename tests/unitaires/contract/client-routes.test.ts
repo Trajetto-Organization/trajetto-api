@@ -192,6 +192,33 @@ const APP_CALL_BY_NAME =
 /** `const NAME = "/path"`, wherever in the app the constant lives. */
 const PATH_CONSTANT = /\bconst\s+([A-Z][A-Z0-9_]*)\s*=\s*[`"](\/[^`"\s]*)[`"]/g;
 
+/** The constants of `sources` and the shapes of the ones passed to apiClient. */
+function constantCalls(sources: string[]): {
+  constants: Map<string, string>;
+  called: string[];
+} {
+  const constants = new Map<string, string>();
+  const passed = new Set<string>();
+
+  for (const source of sources) {
+    for (const [, name, path] of source.matchAll(PATH_CONSTANT)) {
+      constants.set(name, shapeOf(path));
+    }
+
+    for (const [, name] of source.matchAll(APP_CALL_BY_NAME)) {
+      passed.add(name);
+    }
+  }
+
+  const called = [...passed].flatMap((name) => {
+    const shape = constants.get(name);
+
+    return shape ? [shape] : [];
+  });
+
+  return { constants, called };
+}
+
 const appFiles = (): string[] =>
   ["app", "features", "hooks", "providers", "store", "utils"].flatMap((dir) =>
     sourceFiles(join(APP, dir)),
@@ -213,29 +240,29 @@ describe.skipIf(!existsSync(APP))("what the app calls", () => {
     expect(unmatched(files, APP_CALL, routes)).toEqual([]);
   });
 
+  it("reads a path passed by a constant", () => {
+    // The parser, on the shape features/live-map/use-map-config.ts has: proven
+    // on a fixed snippet, whatever app sits next to the API. The API ships
+    // before the app that calls its new routes (docs/deploy.md), so its CI
+    // also runs against an app from before them.
+    const { constants, called } = constantCalls([
+      'const MAP_CONFIG_PATH = "/config/map";',
+      'await apiClient.request<unknown>(MAP_CONFIG_PATH, { method: "GET", signal }),',
+    ]);
+
+    expect(constants.get("MAP_CONFIG_PATH")).toBe("/config/map");
+    expect(called).toEqual(["/config/map"]);
+  });
+
   it("has a route for every path it names by a constant", () => {
-    const constants = new Map<string, string>();
-    const passed = new Set<string>();
+    const { constants, called } = constantCalls(
+      appFiles().map((file) => readFileSync(file, "utf8")),
+    );
 
-    for (const file of appFiles()) {
-      const source = readFileSync(file, "utf8");
-
-      for (const [, name, path] of source.matchAll(PATH_CONSTANT)) {
-        constants.set(name, shapeOf(path));
-      }
-
-      for (const [, name] of source.matchAll(APP_CALL_BY_NAME)) {
-        passed.add(name);
-      }
+    // An app with the live map (wave 5) passes its base map's path by name.
+    if (constants.has("MAP_CONFIG_PATH")) {
+      expect(called).toContain("/config/map");
     }
-
-    const called = [...passed].flatMap((name) => {
-      const shape = constants.get(name);
-
-      return shape ? [shape] : [];
-    });
-
-    expect(called).toContain("/config/map");
     expect(
       called.filter(
         (shape) => !routes.some((route) => route.pattern.test(shape)),
