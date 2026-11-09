@@ -91,7 +91,7 @@ const DRIVER_OWN_READS: Record<string, string> = {
     "only a vehicle the driver drives",
   "GET /fuel/get-previous-fuel/{vehicleId}": "only a vehicle the driver drives",
   "GET /service-order/search-service-order-by-vehicle/{vehicleId}":
-    "only a vehicle the driver drives",
+    "only a vehicle the driver may operate, without money (wave 3's driver view)",
   "GET /service-order/mine":
     "the orders the driver is responsible for and his vehicles' (wave 3), without money",
   "GET /service-order/{serviceOrderId}":

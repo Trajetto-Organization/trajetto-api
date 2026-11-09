@@ -8,7 +8,8 @@ import { expectPrismaCode, fixedId, type Kind } from "../support";
 /**
  * The service order repository's contract (decision 13.2): what a create
  * stores (origin and original GPS), the submission key, the guarded delete's
- * tenant wall, and the list's order and search.
+ * tenant wall, the list's order and search, and the reads of wave 3 (the
+ * detail, "Minhas OS" and a vehicle's history).
  */
 
 const A = fixedId("05ea", 1);
@@ -231,6 +232,52 @@ function serviceOrderRepositoryContract(
     // Another company's vehicle brings none of its orders into A.
     expect((await vehicle(F.userA, [F.vehicleB])).data).toEqual([]);
     expect((await vehicle(F.userB, [])).data).toEqual([]);
+  });
+
+  // The web's driver page: the detail's rows, which the use case cuts per
+  // reader. It read the whole row, the location audit and the submission
+  // key included.
+  it("lists a vehicle's orders as detail rows, newest first, inside its company", async () => {
+    const h = harness();
+    const history = (vehicleId: string, cursor?: string) =>
+      h.repo.searchServiceOrderByVehicleWithCursor({
+        limit: 1,
+        cursor,
+        vehicleId,
+        businessId: A,
+      });
+
+    const first = await history(F.vehicleA);
+
+    expect(first.data.map((row) => row.id)).toEqual([h.id("web")]);
+    expect(first.hasMore).toBe(true);
+    expect(first.data[0]).toMatchObject({
+      vehicle: {
+        id: F.vehicleA,
+        license_plate: F.plateA,
+        description: `Caminhão ${F.plateA}`,
+      },
+      responsibleUser: { id: F.userA },
+      parts: [],
+    });
+    expect(Number(first.data[0]?.total_amount)).toBe(150);
+
+    const second = await history(F.vehicleA, first.nextCursor ?? undefined);
+
+    expect(second.data.map((row) => row.id)).toEqual([h.id("app")]);
+    expect(second.hasMore).toBe(false);
+
+    for (const column of [
+      "client_submission_id",
+      "latitude_original",
+      "location_source",
+      "location_edited_by",
+    ]) {
+      expect(second.data[0], column).not.toHaveProperty(column);
+    }
+
+    // Another company's vehicle brings none of its orders into A.
+    expect((await history(F.vehicleB)).data).toEqual([]);
   });
 }
 

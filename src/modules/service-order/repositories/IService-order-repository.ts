@@ -62,9 +62,14 @@ interface IServiceOrderRepository {
   searchServiceOrderWithCursor: (
     props: SearchServiceOrderWithCursorProps,
   ) => Promise<CursorPaginatedServiceOrder>;
+  /**
+   * One vehicle's orders as the detail reads them, newest first by cursor,
+   * inside one company. The use case cuts each one for its reader: a driver
+   * never gets the money (service-order-views.ts).
+   */
   searchServiceOrderByVehicleWithCursor: (
     props: SearchServiceOrderByVehicleWithCursorProps,
-  ) => Promise<CursorPaginatedServiceOrder>;
+  ) => Promise<CursorPaginatedServiceOrderDetail>;
   countServiceOrderForExport: (query: ServiceOrderListQuery) => Promise<number>;
   /**
    * One order with its links and parts, inside this company only: another

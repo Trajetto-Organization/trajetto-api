@@ -4,7 +4,6 @@ import { IKanbanRepository } from "@/modules/kanban/repositories/IKanban-reposit
 import { IUserRepository } from "@/modules/user/repositories/IUser-repository";
 
 import { OutboxService } from "@/shared/notifications/outbox-service";
-import { formatCurrency } from "@/shared/utils/format-values";
 import { logger } from "@/shared/logging/logger";
 import {
   businessDayStart,
@@ -58,6 +57,33 @@ function serviceOrderCardDueDate(
     shiftDateKey(orderDay, SERVICE_ORDER_CARD_DAYS),
     timeZone,
   );
+}
+
+/**
+ * The text of a service order's automatic card: the plate, whether someone
+ * is responsible and the kind of maintenance, one per line.
+ *
+ * No amount (wave 3, owner's decision: a driver sees the orders he works on
+ * WITHOUT costs). The card goes to the order's responsible, a driver
+ * included, and the driver reads it whole through GET /kanban/card/:cardId,
+ * which the app opens from the notification, and in the WhatsApp of a card
+ * handed over to him. The text is free and the card can change hands, so no
+ * read can filter the line out: it is not written at all, and the total
+ * stays on the order, which the office opens. The migration
+ * 20261109120000_kanban_service_order_card_without_amount takes it out of
+ * the cards already written.
+ */
+function serviceOrderCardDescription(
+  data: Pick<
+    CreateCardFromServiceOrderProps,
+    "vehicleLicensePlate" | "responsibleUserId" | "maintenanceType"
+  >,
+): string {
+  return [
+    `Veículo: ${data.vehicleLicensePlate || "N/A"}`,
+    `Responsável: ${data.responsibleUserId ? "Atribuído" : "Não atribuído"}`,
+    `Tipo: ${data.maintenanceType === "INTERNAL" ? "Interno" : "Externo"}`,
+  ].join("\n");
 }
 
 interface CreateCardFromEntityProps {
@@ -244,15 +270,7 @@ class KanbanService {
       // Determine priority based on value
       const priority = this.calculatePriorityFromAmount(data.totalAmount);
 
-      // Create card description
-      const description = [
-        `Veículo: ${data.vehicleLicensePlate || "N/A"}`,
-        `Valor: ${formatCurrency(data.totalAmount)}`,
-        `Responsável: ${data.responsibleUserId ? "Atribuído" : "Não atribuído"}`,
-        `Tipo: ${data.maintenanceType === "INTERNAL" ? "Interno" : "Externo"}`,
-      ]
-        .filter(Boolean)
-        .join("\n");
+      const description = serviceOrderCardDescription(data);
 
       const cardData = {
         title: `Manutenção ${data.vehicleLicensePlate || data.serviceOrderId}`,
@@ -381,5 +399,6 @@ export {
   KanbanService,
   CreateCardFromServiceOrderProps,
   CreateCardFromEntityProps,
+  serviceOrderCardDescription,
   serviceOrderCardDueDate,
 };

@@ -11,6 +11,7 @@ import {
   seedVehicle,
 } from "./support/fleet-maint-seed";
 import { createPrismaClient } from "@/shared/database/database-client";
+import type { KanbanService } from "@/shared/services/kanban-service";
 import { TENANT_MOVE_REFUSED } from "@/shared/validation/tenant-locked-field";
 
 /**
@@ -664,6 +665,37 @@ describe("GET /kanban/card/:id", () => {
     expect(colleague.statusCode, colleague.body).toBe(404);
     expect(colleague.json().code).toBe("KANBAN_CARD_NOT_FOUND");
     expect(colleague.json()).toEqual(missing.json());
+  });
+
+  it("shows the driver his service order's automatic card without its amount", async () => {
+    // What a new order writes for its responsible (create-service-order-
+    // usecase.ts): the card used to say "Valor: R$ 12.500,00".
+    const { container } = await import("tsyringe");
+
+    await container
+      .resolve<KanbanService>("KanbanService")
+      .createCardFromServiceOrder({
+        serviceOrderId: orders.pickupMine,
+        vehicleLicensePlate: "APP3C33",
+        totalAmount: 12_500,
+        maintenanceType: "EXTERNAL",
+        orderDate: "2026-11-06T00:00:00.000Z",
+        responsibleUserId: users.driver,
+        businessId: CARRIER,
+        createdByUserId: users.admin,
+      });
+
+    const card = await prisma.kanbanCard.findFirstOrThrow({
+      where: { title: "Manutenção APP3C33", assignedUserId: users.driver },
+    });
+
+    const response = await get(`/kanban/card/${card.id}`, tokens.driver);
+
+    expect(response.statusCode, response.body).toBe(200);
+    expect(response.json().card.description).toBe(
+      "Veículo: APP3C33\nResponsável: Atribuído\nTipo: Externo",
+    );
+    expect(response.body).not.toMatch(/Valor|R\$|12\.500/);
   });
 });
 

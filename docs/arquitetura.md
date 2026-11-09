@@ -813,13 +813,14 @@ continua abrindo os avisos. O `userId` e o `businessId` deixam o app
 recusar um aviso antigo de outro login que ficou na bandeja de um celular
 compartilhado.
 
-| Rota                                     | Quem lê                                                                                                                                                                                                     | Resposta                                                                                       |
-| ---------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
-| `GET /service-order/:serviceOrderId`     | admin da empresa; perfil com `service_order_manage:read`; MASTER com `?businessId=` (sem ele, `400 BUSINESS_NOT_IDENTIFIED`); motorista só na ordem em que é o responsável ou de um veículo que pode operar | `{ view: "driver" ou "full", serviceOrder }`                                                   |
-| `GET /service-order/mine?scope=`         | só login de motorista (`403 DRIVER_ONLY` para os demais)                                                                                                                                                    | NDJSON por cursor, mais novas primeiro, sempre a visão `driver`                                |
-| `GET /account-payable/:accountPayableId` | admin; perfil com `account_payable_manage:read`; MASTER com `?businessId=`; os demais (o motorista inclusive) só a conta em que são o responsável                                                           | `{ accountPayable }`, a linha das listagens com a situação pelo dia de negócio                 |
-| `GET /kanban/card/:cardId`               | o responsável pelo card (o motorista inclusive); quem tem leitura completa do Kanban (admin, MASTER, perfil com `kanban_manage:read`)                                                                       | `{ card }`: título, descrição, prioridade, prazo, concluído, coluna; o responsável só com nome |
-| `POST /notification/read-by-entity`      | a própria pessoa, nas próprias notificações; um `businessId` no corpo é `400 VALIDATION_ERROR`, a trava de tenant de toda edição (decisão 16.100)                                                           | `{ message, count }`                                                                           |
+| Rota                                                            | Quem lê                                                                                                                                                                                                     | Resposta                                                                                       |
+| --------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
+| `GET /service-order/:serviceOrderId`                            | admin da empresa; perfil com `service_order_manage:read`; MASTER com `?businessId=` (sem ele, `400 BUSINESS_NOT_IDENTIFIED`); motorista só na ordem em que é o responsável ou de um veículo que pode operar | `{ view: "driver" ou "full", serviceOrder }`                                                   |
+| `GET /service-order/mine?scope=`                                | só login de motorista (`403 DRIVER_ONLY` para os demais)                                                                                                                                                    | NDJSON por cursor, mais novas primeiro, sempre a visão `driver`                                |
+| `GET /service-order/search-service-order-by-vehicle/:vehicleId` | admin da empresa; perfil com `service_order_manage:read`; motorista só no veículo que pode operar (`403 VEHICLE_NOT_ASSIGNED_TO_DRIVER`); o MASTER não usa                                                  | NDJSON por cursor, mais novas primeiro: visão `driver` para o motorista, `full` para os demais |
+| `GET /account-payable/:accountPayableId`                        | admin; perfil com `account_payable_manage:read`; MASTER com `?businessId=`; os demais (o motorista inclusive) só a conta em que são o responsável                                                           | `{ accountPayable }`, a linha das listagens com a situação pelo dia de negócio                 |
+| `GET /kanban/card/:cardId`                                      | o responsável pelo card (o motorista inclusive); quem tem leitura completa do Kanban (admin, MASTER, perfil com `kanban_manage:read`)                                                                       | `{ card }`: título, descrição, prioridade, prazo, concluído, coluna; o responsável só com nome |
+| `POST /notification/read-by-entity`                             | a própria pessoa, nas próprias notificações; um `businessId` no corpo é `400 VALIDATION_ERROR`, a trava de tenant de toda edição (decisão 16.100)                                                           | `{ message, count }`                                                                           |
 
 - **Fora do alcance é 404, com o corpo de um id que não existe**
   (`SERVICE_ORDER_NOT_FOUND`, `ACCOUNT_PAYABLE_NOT_FOUND`,
@@ -843,11 +844,20 @@ compartilhado.
   campo: sem total, sem preço ou desconto de peça, sem fornecedor; as peças
   só com nome e quantidade (o que foi feito no caminhão que ele dirige é
   assunto dele, o preço não). Coluna nova na OS fica fora até alguém
-  decidir. O histórico do veículo (`search-service-order-by-vehicle`) ainda
-  traz os preços e o fornecedor ao motorista: o app novo deixa de usá-lo
-  para isso, e o corte nessa rota fica para quando nenhum build em campo
-  depender dela. A visão `full` (escritório e MASTER) traz o total, a soma
-  das peças, preço e desconto de cada peça, o fornecedor e a localização.
+  decidir. Desde 09/11/2026 o histórico do veículo
+  (`search-service-order-by-vehicle`, a página /driver da web) usa as
+  mesmas duas visões: login de motorista recebe a `driver`, o escritório a
+  `full`. Ele mandava a linha crua, com o preço de cada peça e o
+  fornecedor; nenhum build do app chamou essa rota. A visão `full`
+  (escritório e MASTER) traz o total, a soma das peças, preço e desconto de
+  cada peça, o fornecedor e a localização. O card que a OS cria no Kanban
+  para o responsável (`serviceOrderCardDescription`, em
+  `kanban-service.ts`) também saiu sem o valor, desde 09/11/2026: o
+  motorista lê a descrição inteira em `GET /kanban/card/:cardId` e no
+  WhatsApp do card repassado a ele, e um texto livre que troca de mãos não
+  se filtra na leitura. A migration
+  `20261109120000_kanban_service_order_card_without_amount` tirou a linha
+  "Valor:" dos cards já gravados. A prioridade do card ainda vem do total.
 - **Conta a pagar**: o motorista vê só a conta em que é responsável, como em
   "minhas contas" (decisão 4.5); quem lê a empresa vê qualquer uma. Valores
   saem como número.

@@ -60,7 +60,7 @@ function kanbanCardLink(
  * The four parameters both kanban templates share (B1): the title instead of
  * the card's UUID, the priority with its emoji, the due day and the
  * description on one line — its lines joined with " · " first, so the
- * automatic card of a service order (four lines) still reads as a list.
+ * automatic card of a service order (three lines) still reads as a list.
  */
 function kanbanCardParameters(
   card: KanbanCardContent,

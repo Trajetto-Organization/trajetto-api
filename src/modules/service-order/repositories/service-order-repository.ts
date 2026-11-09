@@ -35,9 +35,10 @@ import {
 } from "@/shared/pagination/export-keyset";
 
 /**
- * What the detail and "Minhas OS" read of an order (wave 3): its columns and
- * the names of its links, never the related rows whole (a user row holds a
- * password hash). The use case cuts it further for a driver.
+ * What the detail, "Minhas OS" and a vehicle's history read of an order
+ * (wave 3): its columns and the names of its links, never the related rows
+ * whole (a user row holds a password hash). The use case cuts it further
+ * for a driver.
  */
 const SERVICE_ORDER_DETAIL_SELECT = {
   id: true,
@@ -435,53 +436,16 @@ class ServiceOrderRepository implements IServiceOrderRepository {
     cursor,
     vehicleId,
     businessId,
-  }: SearchServiceOrderByVehicleWithCursorProps): Promise<CursorPaginatedServiceOrder> {
+  }: SearchServiceOrderByVehicleWithCursorProps): Promise<CursorPaginatedServiceOrderDetail> {
     const items = await this.prisma.serviceOrder.findMany({
       where: { vehicleId, businessId },
       take: limit + 1,
       ...(cursor && { cursor: { id: cursor }, skip: 1 }),
       orderBy: [{ created_at: "desc" }, { id: "desc" }],
-      include: {
-        vehicle: {
-          select: {
-            id: true,
-            license_plate: true,
-            description: true,
-            brand: true,
-            model: true,
-          },
-        },
-        responsibleUser: {
-          select: {
-            id: true,
-            name: true,
-          },
-        },
-        branch: {
-          select: {
-            id: true,
-            corporate_reason: true,
-          },
-        },
-        supplier: {
-          select: {
-            id: true,
-            name: true,
-          },
-        },
-        parts: {
-          select: {
-            id: true,
-            quantity: true,
-            unit_price: true,
-            part: {
-              select: {
-                description: true,
-              },
-            },
-          },
-        },
-      },
+      // The detail's select, not `include`: every column of the row went
+      // out (the location audit, the submission key), and the use case then
+      // cuts it per reader like the detail.
+      select: SERVICE_ORDER_DETAIL_SELECT,
     });
 
     const hasMore = items.length > limit;

@@ -2,23 +2,28 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { v7 as uuidV7 } from "uuid";
 
 import type { User } from "@/modules/user/dtos/user-dto";
+import type { Business } from "@/modules/business/dtos/business-dto";
 import type { Vehicle } from "@/modules/vehicle/dtos/vehicle-dto";
 import type { ServiceOrder } from "@/modules/service-order/dtos/service-order-dto";
 
 import { InMemoryUserRepository } from "@/modules/user/repositories/in-memory/in-memory-user-repository";
+import { InMemoryBusinessRepository } from "@/modules/business/repositories/in-memory/in-memory-business-repository";
 import { InMemoryServiceOrderRepository } from "@/modules/service-order/repositories/in-memory/in-memory-service-order-repository";
 import { InMemoryVehicleRepository } from "@/modules/vehicle/repositories/in-memory/in-memory-vehicle-repository";
 
 import { GetServiceOrderUseCase } from "@/modules/service-order/usecases/get-service-order/get-service-order-usecase";
 import { SearchMyServiceOrdersUseCase } from "@/modules/service-order/usecases/search-my-service-orders/search-my-service-orders-usecase";
+import { SearchServiceOrderByVehicleCursorUseCase } from "@/modules/service-order/usecases/search-service-order-by-vehicle-cursor/search-service-order-by-vehicle-cursor-usecase";
+import { VehicleNotAssignedToDriverError } from "@/modules/vehicle/usecases/errors/vehicle-not-assigned-to-driver-error";
 import {
   toServiceOrderDriverView,
   toServiceOrderFullView,
 } from "@/modules/service-order/usecases/service-order-views";
 
 /**
- * The app's reads of service orders (wave 3, owner's decision), on the twins:
- * GET /service-order/:id and GET /service-order/mine.
+ * The driver's reads of service orders (wave 3, owner's decision), on the
+ * twins: GET /service-order/:id and GET /service-order/mine (the app), and
+ * GET /service-order/search-service-order-by-vehicle (the web's driver page).
  *
  * The notification goes to the order's RESPONSIBLE, while the only read the
  * driver had was the history of a vehicle he may operate: a driver
@@ -79,7 +84,30 @@ const MONEY_KEYS = [
   "amount",
 ];
 
+/** The driver's view, key by key: anything else on a line is a leak. */
+const DRIVER_VIEW_KEYS = [
+  "branch",
+  "branchId",
+  "businessId",
+  "completion_date",
+  "created_at",
+  "current_mileage_at_service",
+  "date",
+  "description",
+  "id",
+  "maintenance_type",
+  "new_mileage_after_service",
+  "parts",
+  "responsibleUser",
+  "responsibleUserId",
+  "status",
+  "updated_at",
+  "vehicle",
+  "vehicleId",
+].sort();
+
 let users: InMemoryUserRepository;
+let businesses: InMemoryBusinessRepository;
 let orders: InMemoryServiceOrderRepository;
 let vehicles: InMemoryVehicleRepository;
 
@@ -132,8 +160,14 @@ function keysDeep(value: unknown): string[] {
 
 beforeEach(() => {
   users = new InMemoryUserRepository();
+  businesses = new InMemoryBusinessRepository();
   orders = new InMemoryServiceOrderRepository();
   vehicles = new InMemoryVehicleRepository();
+
+  businesses.business.push(
+    { id: CARRIER } as Business,
+    { id: OTHER } as Business,
+  );
 
   users.user.push(
     { id: ADMIN, role: "BUSINESS_ADMIN", businessId: CARRIER } as User,
@@ -250,6 +284,13 @@ beforeEach(() => {
 
 const getOrder = () => new GetServiceOrderUseCase(users, orders, vehicles);
 const mine = () => new SearchMyServiceOrdersUseCase(users, orders, vehicles);
+const byVehicle = () =>
+  new SearchServiceOrderByVehicleCursorUseCase(
+    orders,
+    vehicles,
+    users,
+    businesses,
+  );
 
 async function expectNotFound(promise: Promise<unknown>) {
   await expect(promise).rejects.toMatchObject({
@@ -510,32 +551,197 @@ describe("GET /service-order/mine", () => {
   });
 });
 
+/**
+ * The vehicle history the web's /driver page reads. It streamed the raw row
+ * to the driver (the total, each part's unit price, the supplier) as NDJSON,
+ * where no response schema filters anything. Now it is the detail's two
+ * views, picked by the same test as GET /:id.
+ */
+describe("GET /service-order/search-service-order-by-vehicle — the web's driver page", () => {
+  it("serves the driver his truck's orders without money, parts as name and quantity", async () => {
+    const page = await byVehicle().execute({
+      userId: DRIVER_USER,
+      vehicleId: TRUCK,
+    });
+
+    expect(page.view).toBe("driver");
+    expect(page.data.map((row) => row.id)).toEqual([
+      ORDER.truckMine,
+      ORDER.truck,
+    ]);
+    expect(page.data.find((row) => row.id === ORDER.truck)?.parts).toEqual([
+      { id: "part-line-1", description: "Filtro de óleo", quantity: 2 },
+      { id: "part-line-2", description: "Óleo 15W40", quantity: 30 },
+    ]);
+    expect(keysDeep(page).filter((key) => MONEY_KEYS.includes(key))).toEqual(
+      [],
+    );
+    expect(JSON.stringify(page)).not.toContain("Oficina Central");
+    expect(JSON.stringify(page)).not.toContain("1850");
+    expect(JSON.stringify(page)).not.toContain("85.5");
+  });
+
+  it("puts nothing on a driver's line beyond the driver's view", async () => {
+    const page = await byVehicle().execute({
+      userId: DRIVER_USER,
+      vehicleId: TRUCK,
+    });
+
+    expect(page.data).toHaveLength(2);
+
+    for (const row of page.data) {
+      expect(Object.keys(row).sort()).toEqual(DRIVER_VIEW_KEYS);
+    }
+  });
+
+  it("serves the substitute of a released route the same view, without money", async () => {
+    const page = await byVehicle().execute({
+      userId: SUBSTITUTE_USER,
+      vehicleId: VAN,
+    });
+
+    expect(page.view).toBe("driver");
+    expect(page.data.map((row) => row.id)).toEqual([ORDER.van]);
+    expect(keysDeep(page).filter((key) => MONEY_KEYS.includes(key))).toEqual(
+      [],
+    );
+  });
+
+  it("keeps refusing a driver a truck he may not operate", async () => {
+    await expect(
+      byVehicle().execute({ userId: DRIVER_USER, vehicleId: PICKUP }),
+    ).rejects.toBeInstanceOf(VehicleNotAssignedToDriverError);
+  });
+
+  it("gives the admin the full view, with the money and the workshop", async () => {
+    const page = await byVehicle().execute({ userId: ADMIN, vehicleId: TRUCK });
+
+    expect(page.view).toBe("full");
+    expect(page.data.find((row) => row.id === ORDER.truck)).toMatchObject({
+      total_amount: 1850,
+      // 85.5 × 2 − 10 % + 42 × 30
+      parts_total: 1413.9,
+      supplierId: SUPPLIER,
+      supplier: { id: SUPPLIER, name: "Oficina Central" },
+      parts: [
+        {
+          id: "part-line-1",
+          description: "Filtro de óleo",
+          quantity: 2,
+          unit_price: 85.5,
+          discount_percentage: 10,
+        },
+        {
+          id: "part-line-2",
+          description: "Óleo 15W40",
+          quantity: 30,
+          unit_price: 42,
+          discount_percentage: null,
+        },
+      ],
+    });
+  });
+
+  it("gives a profile with service_order_manage:read the full view", async () => {
+    const page = await byVehicle().execute({
+      userId: READER,
+      vehicleId: PICKUP,
+    });
+
+    expect(page.view).toBe("full");
+    expect(page.data.map((row) => row.id)).toEqual([
+      ORDER.pickup,
+      ORDER.pickupMine,
+    ]);
+  });
+
+  /**
+   * A login linked to a driver reads as the driver whatever else it holds.
+   * The view follows the link (findUser.driverId), never the role or the
+   * keys: either would hand these two logins the money, the first through
+   * its profile, the second because the permission check lets an admin
+   * through before it looks at the driver.
+   */
+  function driverLoginOnTheTruck(login: Partial<User>, driverId: string) {
+    users.user.push({ ...login, businessId: CARRIER, driverId } as User);
+
+    const routes = vehicles.routeSource();
+
+    vehicles.routeSource = () => [
+      ...routes,
+      {
+        vehicleId: TRUCK,
+        driverId,
+        status: "IN_PROGRESS",
+        businessId: CARRIER,
+      },
+    ];
+  }
+
+  it("gives a driver login that also holds a maintenance profile the driver's view", async () => {
+    const login = "018f3300-0000-7000-8000-0000000000a8";
+
+    driverLoginOnTheTruck(
+      {
+        id: login,
+        role: "BUSINESS_USER",
+        profileAccess: {
+          name: "Manutenção",
+          permissions: [
+            {
+              permissionKey: "service_order_manage",
+              canRead: true,
+              canWrite: true,
+            },
+          ],
+        },
+      } as unknown as Partial<User>,
+      "018f3300-0000-7000-8000-0000000000d4",
+    );
+
+    const page = await byVehicle().execute({ userId: login, vehicleId: TRUCK });
+
+    expect(page.view).toBe("driver");
+    expect(page.data.map((row) => row.id)).toEqual([
+      ORDER.truckMine,
+      ORDER.truck,
+    ]);
+    expect(keysDeep(page).filter((key) => MONEY_KEYS.includes(key))).toEqual(
+      [],
+    );
+    expect(JSON.stringify(page)).not.toContain("Oficina Central");
+  });
+
+  it("gives an admin login linked to a driver the driver's view", async () => {
+    const login = "018f3300-0000-7000-8000-0000000000a9";
+
+    driverLoginOnTheTruck(
+      { id: login, role: "BUSINESS_ADMIN" },
+      "018f3300-0000-7000-8000-0000000000d5",
+    );
+
+    const page = await byVehicle().execute({ userId: login, vehicleId: TRUCK });
+
+    expect(page.view).toBe("driver");
+    expect(keysDeep(page).filter((key) => MONEY_KEYS.includes(key))).toEqual(
+      [],
+    );
+    expect(JSON.stringify(page)).not.toContain("Oficina Central");
+
+    // And, as a driver, only the trucks he may operate.
+    await expect(
+      byVehicle().execute({ userId: login, vehicleId: PICKUP }),
+    ).rejects.toBeInstanceOf(VehicleNotAssignedToDriverError);
+  });
+});
+
 describe("the two views of an order", () => {
   it("builds the driver's view from an allowlist: a new column stays out", async () => {
     const detail = await orders.findServiceOrderDetail(ORDER.truck, CARRIER);
     const withExtra = { ...detail!, secret_cost_column: 999 } as never;
 
     expect(Object.keys(toServiceOrderDriverView(withExtra)).sort()).toEqual(
-      [
-        "branch",
-        "branchId",
-        "businessId",
-        "completion_date",
-        "created_at",
-        "current_mileage_at_service",
-        "date",
-        "description",
-        "id",
-        "maintenance_type",
-        "new_mileage_after_service",
-        "parts",
-        "responsibleUser",
-        "responsibleUserId",
-        "status",
-        "updated_at",
-        "vehicle",
-        "vehicleId",
-      ].sort(),
+      DRIVER_VIEW_KEYS,
     );
   });
 

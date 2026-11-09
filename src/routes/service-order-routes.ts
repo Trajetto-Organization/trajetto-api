@@ -55,8 +55,9 @@ const deleteServiceOrderController = new DeleteServiceOrderController();
  * Company-wide reads are not the driver's (decision 4.4): the driver sees the
  * orders of the vehicle they drive through search-service-order-by-vehicle,
  * which checks that link, and his own through /mine and /:serviceOrderId
- * (wave 3), which check theirs. The key alone (`service_order_manage:read`)
- * would let a driver token list every order of the company.
+ * (wave 3), which check theirs, all three without money (wave 3's driver
+ * view). The key alone (`service_order_manage:read`) would let a driver
+ * token list every order of the company.
  */
 const managerRead = verifyPermission("service_order_manage", "read", {
   allowDriver: false,
@@ -189,12 +190,15 @@ async function serviceOrderRoutes(app: FastifyInstance) {
         description:
           "NDJSON com cursor, mais novas primeiro. O motorista consulta o veículo que pode operar: aquele em que é o responsável ou o da sua rota liberada ou em andamento; outro veículo da empresa recebe 403 VEHICLE_NOT_ASSIGNED_TO_DRIVER. " +
           "Veículo inexistente ou de outra empresa recebe 404 VEHICLE_NOT_FOUND (a resposta não confirma que ele existe). " +
+          "Cada ordem vem na visão de quem lê, a mesma de GET /service-order/{serviceOrderId}: o login de motorista recebe a ordem SEM valores (sem total, sem preço ou desconto de peça, sem fornecedor; as peças só com nome e quantidade), que é o item documentado; os demais recebem também o total, a soma das peças (`parts_total`), o preço e o desconto de cada peça, o fornecedor e a localização. " +
           "A primeira linha é {meta: {total: 0, searchMeta: {nextCursor, hasMore}}}; as seguintes, uma ordem por linha. " +
           "Passe nextCursor como `cursor` para a próxima página.",
         params: serviceOrderSchemas.searchServiceOrderByVehicleParams,
         querystring: serviceOrderSchemas.searchServiceOrderByVehicleCursor,
         response: {
-          200: ndjsonCursor(itemOf(serviceOrderResponses.serviceOrderList)),
+          // Every line carries at least the driver's view (NDJSON items are
+          // open-ended); the office's extra fields are in the description.
+          200: ndjsonCursor(serviceOrderResponses.serviceOrderDriverView),
           400: serviceOrderResponses.genericError,
           403: serviceOrderResponses.genericError,
           404: serviceOrderResponses.genericError,

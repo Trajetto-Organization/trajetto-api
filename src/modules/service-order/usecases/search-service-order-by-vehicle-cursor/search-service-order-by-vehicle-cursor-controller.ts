@@ -43,6 +43,8 @@ class SearchServiceOrderByVehicleCursorController {
       return await sendAsNDJSON({
         reply,
         dataPromise: dataPromise.then((result) => ({
+          // Already in the reader's view (the use case): the stream has no
+          // serializer that would cut a line down to its schema.
           data: result.data,
           total: 0,
           meta: {

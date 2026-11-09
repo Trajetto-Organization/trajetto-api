@@ -30,6 +30,13 @@ import type { UploadService } from "@/shared/services/upload-service";
  * - The web declares the same fields optional, so the previous API's answer
  *   still renders (read from the sibling checkout when it is there, like
  *   client-routes.test.ts).
+ * - A driver's vehicle history carries no money from 09/11/2026 (wave 3's
+ *   driver view). The web's driver page reads none of it, only fields the
+ *   previous API sends too, so that web may go before this API. In the usual
+ *   order (API → web) the previous web shows the driver "R$ 0,00" and "N/A"
+ *   where the total and the supplier were (no crash, no NaN; a null would
+ *   read the same) until the new web serves and the tab reloads.
+ *   docs/deploy.md has the order for staging and for production.
  */
 type Json = Record<string, any>;
 
@@ -151,6 +158,12 @@ function body(route: string, method: string, status: string): Json {
     ?.schema as Json;
 }
 
+/** What every line after the meta line of an NDJSON listing is said to carry. */
+function ndjsonItem(route: string, method: string): Json {
+  return response(route, method, "200").content?.["application/x-ndjson"]
+    ?.schema?.oneOf?.[1] as Json;
+}
+
 describe("the published document, for a client of the other version", () => {
   it("documents the storage 503 on the public proof check, with retry-after", () => {
     const unavailable = response("/public/verify-proof/{token}", "get", "503");
@@ -242,6 +255,30 @@ describe("the published document, for a client of the other version", () => {
     expect(nullable(item.properties.body)).toBe(true);
   });
 
+  it("documents a vehicle's history line as the driver's view, promising no money", () => {
+    const item = ndjsonItem(
+      "/service-order/search-service-order-by-vehicle/{vehicleId}",
+      "get",
+    );
+
+    expect(item?.properties).toHaveProperty("parts");
+
+    for (const key of [
+      "total_amount",
+      "parts_total",
+      "supplier",
+      "supplierId",
+    ]) {
+      expect(item.properties, key).not.toHaveProperty(key);
+    }
+
+    const part = item.properties.parts.items.properties;
+
+    expect(part).toHaveProperty("quantity");
+    expect(part).not.toHaveProperty("unit_price");
+    expect(part).not.toHaveProperty("discount_percentage");
+  });
+
   it("keeps the probe fields optional: the shared provider report may predate them", () => {
     const item = body("/health/providers", "get", "200").properties.providers
       .items;
@@ -260,7 +297,7 @@ function webSource(...path: string[]): string {
 }
 
 describe.skipIf(!existsSync(WEB))(
-  "the web, against the previous API (sibling checkout)",
+  "the web, against the other API version (sibling checkout)",
   () => {
     it("reads the fleet breakdown as optional", () => {
       expect(
@@ -292,6 +329,21 @@ describe.skipIf(!existsSync(WEB))(
       expect(providers).toMatch(/attempts\?:/);
       expect(providers).toMatch(/transient\?:/);
       expect(providers).toMatch(/failure_kind\?:/);
+    });
+
+    it("shows a vehicle's service orders to the driver without the money this API stopped sending", () => {
+      const card = webSource(
+        "app",
+        "(protected)",
+        "_components",
+        "driver",
+        "service-orders",
+        "index.tsx",
+      );
+
+      expect(card).not.toMatch(
+        /total_amount|supplier|unit_price|formatToBrazilianCurrency/,
+      );
     });
   },
 );

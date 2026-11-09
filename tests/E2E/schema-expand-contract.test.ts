@@ -3448,3 +3448,131 @@ describe("the trusted phones and the manager-set password (20261106120000..0200)
     ]);
   });
 });
+
+describe("the service order's automatic card without its amount (20261109120000)", () => {
+  const MIGRATION = "20261109120000_kanban_service_order_card_without_amount";
+
+  it("is one UPDATE under a lock timeout", () => {
+    expect(
+      migrationStatements(MIGRATION).map(
+        (statement) => statement.split(/\s/)[0],
+      ),
+    ).toEqual(["SET", "UPDATE"]);
+  });
+
+  it("drops the amount line of the cards the API wrote, and nothing else", async () => {
+    const strip = statementStartingWith(MIGRATION, "UPDATE");
+
+    const outcome = await rolledBack(async (tx) => {
+      const carrier = await seedBusiness(tx);
+      const k = (name: string) => `${name}-${carrier}`;
+
+      await tx.$executeRawUnsafe(
+        `INSERT INTO "kanban_column" ("id", "title", "color", "position", "businessId", "updated_at")
+         VALUES ($1, 'A fazer', '#e2e8f0', 0, $2, now())`,
+        k("column"),
+        carrier,
+      );
+
+      let position = 0;
+
+      const card = (name: string, title: string, description: string) => {
+        position += 1;
+
+        return tx.$executeRawUnsafe(
+          `INSERT INTO "kanban_card" ("id", "title", "description", "priority", "due_date",
+             "position", "columnId", "updated_at")
+           VALUES ($1, $2, $3, 'Média', now(), $4, $5, '2026-11-01 12:00:00'::timestamp)`,
+          k(name),
+          title,
+          description,
+          position,
+          k("column"),
+        );
+      };
+
+      // What the previous image wrote: four lines, the amount second.
+      await card(
+        "written",
+        "Manutenção ABC1D23",
+        "Veículo: ABC1D23\nValor: R$ 1.850,00\nResponsável: Atribuído\nTipo: Externo",
+      );
+      // An order without a plate or a responsible.
+      await card(
+        "bare",
+        `Manutenção ${k("order")}`,
+        "Veículo: N/A\nValor: R$ 0,00\nResponsável: Não atribuído\nTipo: Interno",
+      );
+      // The office added a note below the API's lines: the note stays.
+      await card(
+        "noted",
+        "Manutenção DEF4G56",
+        "Veículo: DEF4G56\nValor: R$ 12.500,00\nResponsável: Atribuído\nTipo: Externo\n\nLevar à oficina na segunda",
+      );
+      // The office rewrote the text: left as it is.
+      await card(
+        "rewritten",
+        "Manutenção HIJ7K89",
+        "Trocar os pneus\nValor: R$ 900,00",
+      );
+      // Not a service order's card.
+      await card(
+        "manual",
+        "Revisar contrato",
+        "Veículo: ABC1D23\nValor: R$ 10,00",
+      );
+      // Already written without the amount.
+      await card(
+        "current",
+        "Manutenção ABC1D23",
+        "Veículo: ABC1D23\nResponsável: Atribuído\nTipo: Externo",
+      );
+
+      const first = await tx.$executeRawUnsafe(strip);
+      // Idempotent: what is left no longer matches.
+      const second = await tx.$executeRawUnsafe(strip);
+
+      const rows = await tx.$queryRawUnsafe<
+        Array<{ id: string; description: string; untouched: boolean }>
+      >(
+        `SELECT "id", "description",
+                ("updated_at" = '2026-11-01 12:00:00'::timestamp) AS "untouched"
+           FROM "kanban_card" WHERE "columnId" = $1`,
+        k("column"),
+      );
+
+      return {
+        first,
+        second,
+        cards: Object.fromEntries(
+          rows.map((row) => [row.id.replace(`-${carrier}`, ""), row]),
+        ),
+      };
+    });
+
+    expect(outcome.first).toBe(3);
+    expect(outcome.second).toBe(0);
+
+    const description = (name: string) => outcome.cards[name]?.description;
+
+    expect(description("written")).toBe(
+      "Veículo: ABC1D23\nResponsável: Atribuído\nTipo: Externo",
+    );
+    expect(description("bare")).toBe(
+      "Veículo: N/A\nResponsável: Não atribuído\nTipo: Interno",
+    );
+    expect(description("noted")).toBe(
+      "Veículo: DEF4G56\nResponsável: Atribuído\nTipo: Externo\n\nLevar à oficina na segunda",
+    );
+    expect(description("rewritten")).toBe("Trocar os pneus\nValor: R$ 900,00");
+    expect(description("manual")).toBe("Veículo: ABC1D23\nValor: R$ 10,00");
+    expect(description("current")).toBe(
+      "Veículo: ABC1D23\nResponsável: Atribuído\nTipo: Externo",
+    );
+
+    // Nobody edited a card: updated_at stays where it was.
+    expect(Object.values(outcome.cards).map((card) => card.untouched)).toEqual(
+      Array(6).fill(true),
+    );
+  });
+});

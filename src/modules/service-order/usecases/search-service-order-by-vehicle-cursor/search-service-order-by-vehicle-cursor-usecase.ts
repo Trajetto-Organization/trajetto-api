@@ -12,9 +12,16 @@ import { VehicleNotBelongBusinessError } from "@/modules/vehicle/usecases/errors
 
 import { IBusinessRepository } from "@/modules/business/repositories/IBusiness-repository";
 
-import { CursorPaginatedServiceOrder } from "../../dtos/service-order-dto";
+import type { CursorPaginatedServiceOrderDetail } from "../../dtos/service-order-dto";
 import { AppError } from "@/shared/errors/AppError";
 import { VehicleNotAssignedToDriverError } from "@/modules/vehicle/usecases/errors/vehicle-not-assigned-to-driver-error";
+
+import {
+  toServiceOrderDriverView,
+  toServiceOrderFullView,
+  type ServiceOrderDriverView,
+  type ServiceOrderFullView,
+} from "../service-order-views";
 
 interface SearchServiceOrderByVehicleCursorRequest {
   userId: string;
@@ -23,6 +30,32 @@ interface SearchServiceOrderByVehicleCursorRequest {
   cursor?: string;
 }
 
+/** One reader, one view: `view` says which one every line of the page is. */
+type SearchServiceOrderByVehicleCursorResponse =
+  | {
+      view: "driver";
+      data: ServiceOrderDriverView[];
+      nextCursor: string | null;
+      hasMore: boolean;
+    }
+  | {
+      view: "full";
+      data: ServiceOrderFullView[];
+      nextCursor: string | null;
+      hasMore: boolean;
+    };
+
+/**
+ * A vehicle's service orders, newest first by cursor: the web's driver page
+ * (/driver/vehicles/:vehicleId/service-orders) and the office.
+ *
+ * Each order leaves in its reader's view (wave 3, owner's decision), the
+ * one GET /service-order/:serviceOrderId picks by the same test: a driver
+ * login gets the view without money — no total, no part price or discount,
+ * no supplier — and everyone else the full one. It carried the raw row to
+ * the driver, part prices and the workshop included, and it streams as
+ * NDJSON, so no response schema filtered anything on the way out.
+ */
 @injectable()
 class SearchServiceOrderByVehicleCursorUseCase {
   constructor(
@@ -41,7 +74,7 @@ class SearchServiceOrderByVehicleCursorUseCase {
     vehicleId,
     limit = 10,
     cursor,
-  }: SearchServiceOrderByVehicleCursorRequest): Promise<CursorPaginatedServiceOrder> {
+  }: SearchServiceOrderByVehicleCursorRequest): Promise<SearchServiceOrderByVehicleCursorResponse> {
     const findUser = await this.user.findUserById(userId);
 
     if (!findUser) {
@@ -83,22 +116,41 @@ class SearchServiceOrderByVehicleCursorUseCase {
       throw new BusinessNotFoundError();
     }
 
-    try {
-      const result =
-        await this.serviceOrder.searchServiceOrderByVehicleWithCursor({
-          limit,
-          cursor,
-          vehicleId,
-          businessId: findUser.businessId as string,
-        });
+    let page: CursorPaginatedServiceOrderDetail;
 
-      return result;
+    try {
+      page = await this.serviceOrder.searchServiceOrderByVehicleWithCursor({
+        limit,
+        cursor,
+        vehicleId,
+        businessId: findUser.businessId as string,
+      });
     } catch (error) {
       throw new AppError(
         "Houve um erro ao tentar listar as ordens de serviço do veículo!",
         500,
       );
     }
+
+    const { nextCursor, hasMore } = page;
+
+    // The test the check above and GET /:serviceOrderId use: a login linked
+    // to a driver reads as the driver, whatever its role.
+    if (findUser.driverId) {
+      return {
+        view: "driver",
+        data: page.data.map(toServiceOrderDriverView),
+        nextCursor,
+        hasMore,
+      };
+    }
+
+    return {
+      view: "full",
+      data: page.data.map(toServiceOrderFullView),
+      nextCursor,
+      hasMore,
+    };
   }
 }
 

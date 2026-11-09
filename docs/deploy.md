@@ -2313,6 +2313,39 @@ da release anterior confere o identificador antes de mandar o `DELETE`
 aparelho" dela recusa o hash na própria tela e o rótulo mostra o fim do hash.
 A web desta release lê o hash; a ordem de sempre (API → web) fecha a janela.
 
+**Ordens de serviço sem valores para o motorista (09/11/2026).** O histórico
+de um veículo (`GET /service-order/search-service-order-by-vehicle/:vehicleId`),
+que a página `/driver/vehicles/:vehicleId/service-orders` da web lê, passa a
+mandar ao login de motorista a visão sem valores da onda 3: sem total, sem
+preço ou desconto de peça, sem fornecedor. O escritório continua recebendo
+tudo. A web desta release não mostra mais valor nem fornecedor e só lê campos
+que a API anterior também manda, então pode subir antes da API. **A web da
+release anterior**, contra esta API, mostra ao motorista "Valor Total R$ 0,00"
+e "Fornecedor: N/A" (não quebra nem mostra NaN; mandar `null` daria o mesmo)
+até a web nova estar no ar e a aba recarregar. Nunca mostra o valor real.
+
+- **No staging**, suba a web primeiro e a API depois que a web estiver no ar.
+- **Em produção**, o lote vai API → web, porque o gate de rotas da web exige
+  a API das ondas 2 a 5 no ar. Promova a web logo depois da convergência da
+  API: na janela entre as duas, o motorista que abrir essa página vê o total
+  zerado e o fornecedor "N/A".
+
+**Card automático da ordem de serviço sem valor (09/11/2026).** O card que
+cada ordem cria no Kanban para o responsável, motorista inclusive, deixou de
+trazer a linha "Valor: R$ …". O motorista lê o card inteiro em
+`GET /kanban/card/:cardId`, que o app abre pelo aviso, e no WhatsApp de um
+card repassado a ele. A prioridade do card continua calculada pelo total da
+ordem (Urgente acima de R$ 10.000, Alta acima de R$ 5.000, Média acima de
+R$ 2.000). A migration `20261109120000_kanban_service_order_card_without_amount`
+tira a linha dos cards já gravados: só essa linha, e só nos cards com título
+"Manutenção …" cujo texto ainda começa como a API o escreveu ("Veículo: …" e
+logo depois "Valor: …"). O card que o escritório reescreveu fica como está, e
+`updated_at` não muda. É um `UPDATE` simples sob `lock_timeout=5s`, que não
+trava leitura nem cadastro; só mover ou editar um desses cards espera o fim
+dele. A imagem anterior ainda escreve a linha nos cards das ordens criadas
+durante o rollout (ou depois de um rollback). O `UPDATE` é idempotente: rode-o
+de novo à mão no banco depois que esta release estiver servindo.
+
 **Contract pendente (release seguinte): o 2FA sem corpo.** `PATCH
 /user/twofactor` sem corpo ainda inverte o estado, sem senha, só para a web
 da release anterior que roda durante o rollout. Cada uso deixa a linha `warn`
@@ -3469,14 +3502,19 @@ está detalhada no `docs/variaveis-de-ambiente.md` do repositório que a lê.
 1. **API**, com as três migrations só de expansão
    (`20261106120000_user_must_change_password`,
    `20261106120100_driver_trusted_device` e
-   `20261106120200_driver_trusted_device_backfill`), que o pipeline roda
-   pela `trajetto-api-migrate` antes do deploy (nada à mão). Antes do
+   `20261106120200_driver_trusted_device_backfill`) e a de dados
+   `20261109120000_kanban_service_order_card_without_amount`, que o pipeline
+   roda pela `trajetto-api-migrate` antes do deploy. Depois do rollout, rode
+   de novo à mão o `UPDATE` dessa última ("Card automático da ordem de
+   serviço sem valor", na seção 15). Antes do
    deploy, o dono define as quatro `MAP_TILE_*` no _Environment_ da
    Application `trajetto-api`, em staging e em produção, com os valores da
    web do mesmo ambiente. Já com esta API, o login por CPF passa a valer só
    num aparelho confiável para aquele login, em todos os builds do app
    (manual da API, seção 15, "Conta e acesso do motorista, onda 2").
-2. **Web:** depois da API, como sempre.
+2. **Web:** logo depois da API. Até ela subir, a web anterior mostra ao
+   motorista "R$ 0,00" e "N/A" no histórico de ordens de serviço do veículo
+   ("Ordens de serviço sem valores para o motorista", na seção 15).
 3. **App:** por OTA, sem binário novo, com o contrato 6, e só com a API do
    passo 1 em produção. Antes da OTA de produção, confira num aparelho com
    o build de staging que os tiles do MapTiler aparecem no mapa ao vivo (a

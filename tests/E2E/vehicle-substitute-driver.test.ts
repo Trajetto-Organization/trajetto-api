@@ -153,7 +153,7 @@ async function myVehicles(): Promise<string[]> {
     .map((line) => (JSON.parse(line) as { id: string }).id);
 }
 
-/** The vehicle's histories the app opens from its card. */
+/** The vehicle's histories the web's driver page opens. */
 function history(kind: "fuel" | "service-order") {
   const url =
     kind === "fuel"

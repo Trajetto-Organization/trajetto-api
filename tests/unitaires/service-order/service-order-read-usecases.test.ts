@@ -20,8 +20,8 @@ import { VehicleNotAssignedToDriverError } from "@/modules/vehicle/usecases/erro
 
 /**
  * The service order reads (TEST-UC-1): the offset list, the picker cursor and
- * a vehicle's history as the app asks for it. Run on the twins, which hold
- * the real filters and order; the HTTP side is in
+ * a vehicle's history as the web's driver page asks for it. Run on the twins,
+ * which hold the real filters and order; the HTTP side is in
  * tests/E2E/service-order-list-http.test.ts and
  * tests/E2E/service-order-driver-history.test.ts.
  */
@@ -290,13 +290,14 @@ describe("the service order picker (cursor)", () => {
   });
 });
 
-describe("a vehicle's service history (the app)", () => {
-  it("serves the driver the vehicle they are responsible for", async () => {
+describe("a vehicle's service history (the web's driver page)", () => {
+  it("serves the driver the vehicle they are responsible for, in the driver's view", async () => {
     const result = await byVehicle().execute({
       userId: DRIVER_USER,
       vehicleId: TRUCK,
     });
 
+    expect(result.view).toBe("driver");
     expect(result.data.map((row) => row.id)).toEqual([
       "018f3100-0000-7000-8000-000000000002",
       "018f3100-0000-7000-8000-000000000001",
@@ -309,9 +310,10 @@ describe("a vehicle's service history (the app)", () => {
     ).rejects.toBeInstanceOf(VehicleNotAssignedToDriverError);
   });
 
-  it("lets the manager read any vehicle of the company", async () => {
+  it("lets the manager read any vehicle of the company, in the full view", async () => {
     const result = await byVehicle().execute({ userId: ADMIN, vehicleId: VAN });
 
+    expect(result.view).toBe("full");
     expect(result.data).toHaveLength(1);
   });
 

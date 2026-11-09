@@ -571,7 +571,7 @@ class InMemoryServiceOrderRepository implements IServiceOrderRepository {
     cursor,
     vehicleId,
     businessId,
-  }: SearchServiceOrderByVehicleWithCursorProps): Promise<CursorPaginatedServiceOrder> {
+  }: SearchServiceOrderByVehicleWithCursorProps): Promise<CursorPaginatedServiceOrderDetail> {
     let filtered = this.serviceOrders
       .filter(
         (order) =>
@@ -589,7 +589,7 @@ class InMemoryServiceOrderRepository implements IServiceOrderRepository {
 
     const hasMore = filtered.length > limit;
 
-    const data = filtered.slice(0, limit);
+    const data = filtered.slice(0, limit).map((order) => this.detailOf(order));
     const nextCursor = hasMore ? (data[data.length - 1]?.id ?? null) : null;
 
     return { data, nextCursor, hasMore };

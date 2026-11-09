@@ -6,6 +6,7 @@ import {
   seedCarrier,
   seedDriver,
   seedProfile,
+  seedSupplier,
   seedUser,
   seedVehicle,
 } from "./support/fleet-maint-seed";
@@ -21,6 +22,11 @@ import { createPrismaClient } from "@/shared/database/database-client";
  * 500 "erro no servidor" instead of "este veículo não é seu". Another
  * company's vehicle answered 403 "não pertence a esta empresa", confirming
  * the id existed somewhere else.
+ *
+ * And it streamed the raw row to the driver: the total, each part's unit
+ * price and the supplier (wave 3, owner's decision: the driver sees his
+ * vehicles' orders WITHOUT costs). Since 09/11/2026 a driver's line is the
+ * driver's view of GET /service-order/:id, and the office keeps the money.
  */
 const prisma = createPrismaClient();
 
@@ -43,7 +49,43 @@ const tokens = {
   substitute: "",
   admin: "",
   noMaintenance: "",
+  profiledDriver: "",
 };
+
+const SUPPLIER_NAME = "Oficina Preço Alto";
+const PART_NAME = "Filtro de óleo premium";
+
+/** Keys that carry money or the workshop: none may reach a driver. */
+const MONEY_KEYS = [
+  '"total_amount"',
+  '"parts_total"',
+  '"unit_price"',
+  '"discount_percentage"',
+  '"supplier"',
+  '"supplierId"',
+];
+
+/** The driver's view, key by key (service-order-views.ts). */
+const DRIVER_VIEW_KEYS = [
+  "branch",
+  "branchId",
+  "businessId",
+  "completion_date",
+  "created_at",
+  "current_mileage_at_service",
+  "date",
+  "description",
+  "id",
+  "maintenance_type",
+  "new_mileage_after_service",
+  "parts",
+  "responsibleUser",
+  "responsibleUserId",
+  "status",
+  "updated_at",
+  "vehicle",
+  "vehicleId",
+].sort();
 
 let routeCode = 0;
 
@@ -72,8 +114,9 @@ async function order(
   vehicleId: string,
   responsibleUserId: string,
   description: string,
-): Promise<void> {
-  await prisma.serviceOrder.create({
+  supplierId: string | null = null,
+): Promise<string> {
+  const created = await prisma.serviceOrder.create({
     data: {
       description,
       maintenance_type: "EXTERNAL",
@@ -82,12 +125,15 @@ async function order(
       branchId,
       vehicleId,
       responsibleUserId,
+      supplierId,
     },
   });
+
+  return created.id;
 }
 
 const history = (vehicleId: string, token: string) =>
-  readNdjson<{ description: string }>(
+  readNdjson<Record<string, unknown> & { description: string }>(
     app,
     `/service-order/search-service-order-by-vehicle/${vehicleId}?limit=50`,
     token,
@@ -154,13 +200,50 @@ beforeAll(async () => {
     })
   ).token;
 
+  // A driver login that also holds a maintenance profile: the driver map
+  // lets it through, and the profile alone would pass the office's key.
+  const profiledDriver = await seedDriver(prisma, CARRIER);
+
+  tokens.profiledDriver = (
+    await seedUser(prisma, "Motorista com perfil", "BUSINESS_USER", CARRIER, {
+      driverId: profiledDriver,
+      profileAccessId: await seedProfile(prisma, CARRIER, [
+        { key: "service_order_manage", write: true },
+      ]),
+    })
+  ).token;
+
+  await route(profiledDriver, vehicles.own, "RELEASED");
   await route(substituteDriver, vehicles.released, "RELEASED");
   await route(substituteDriver, vehicles.running, "IN_PROGRESS");
   await route(substituteDriver, vehicles.planned, "PLANNED");
   // A finished route hands the truck back: no reading its history after.
   await route(substituteDriver, vehicles.own, "COMPLETED");
 
-  await order(CARRIER, branchId, vehicles.own, admin.id, "Revisão do próprio");
+  // The money a driver must not see: a workshop and a priced part.
+  const supplier = await seedSupplier(prisma, CARRIER, SUPPLIER_NAME);
+  const part = await prisma.part.create({
+    data: { description: PART_NAME, unit_price: 85.5, businessId: CARRIER },
+  });
+
+  const review = await order(
+    CARRIER,
+    branchId,
+    vehicles.own,
+    admin.id,
+    "Revisão do próprio",
+    supplier,
+  );
+  await prisma.serviceOrderPart.create({
+    data: {
+      serviceOrderId: review,
+      partId: part.id,
+      businessId: CARRIER,
+      unit_price: 85.5,
+      quantity: 2,
+      discount_percentage: 10,
+    },
+  });
   await order(CARRIER, branchId, vehicles.own, admin.id, "Pneus do próprio");
   await order(CARRIER, branchId, vehicles.released, admin.id, "Freios da rota");
   await order(
@@ -273,6 +356,88 @@ describe("GET /service-order/search-service-order-by-vehicle — the driver's ve
     const foreign = await history(vehicles.foreign, tokens.admin);
 
     expect(foreign.status).toBe(404);
+  });
+
+  it("gives the responsible driver no money: no total, no part price, no supplier", async () => {
+    const result = await history(vehicles.own, tokens.responsible);
+
+    expect(result.status, result.body).toBe(200);
+
+    for (const key of MONEY_KEYS) {
+      expect(result.body, key).not.toContain(key);
+    }
+
+    expect(result.body).not.toContain(SUPPLIER_NAME);
+    expect(result.body).not.toContain("85.5");
+
+    const review = result.rows.find(
+      (row) => row.description === "Revisão do próprio",
+    );
+
+    expect(review?.parts).toEqual([
+      { id: expect.any(String), description: PART_NAME, quantity: 2 },
+    ]);
+
+    // Nothing beyond the driver's view: the location audit and the
+    // submission key the whole row carried are gone too.
+    for (const row of result.rows) {
+      expect(Object.keys(row).sort()).toEqual(DRIVER_VIEW_KEYS);
+    }
+  });
+
+  it("gives the substitute of a released or running route no money either", async () => {
+    for (const vehicleId of [vehicles.released, vehicles.running]) {
+      const result = await history(vehicleId, tokens.substitute);
+
+      expect(result.status, result.body).toBe(200);
+      expect(result.rows).toHaveLength(1);
+
+      for (const key of MONEY_KEYS) {
+        expect(result.body, key).not.toContain(key);
+      }
+    }
+  });
+
+  it("gives a driver login with a maintenance profile the driver's view too", async () => {
+    // The view follows the login's link to a driver, never its keys.
+    const result = await history(vehicles.own, tokens.profiledDriver);
+
+    expect(result.status, result.body).toBe(200);
+    expect(result.rows).toHaveLength(2);
+
+    for (const key of MONEY_KEYS) {
+      expect(result.body, key).not.toContain(key);
+    }
+
+    expect(result.body).not.toContain(SUPPLIER_NAME);
+    expect(result.body).not.toContain("85.5");
+
+    for (const row of result.rows) {
+      expect(Object.keys(row).sort()).toEqual(DRIVER_VIEW_KEYS);
+    }
+  });
+
+  it("keeps the office's money on the same vehicle", async () => {
+    const result = await history(vehicles.own, tokens.admin);
+
+    expect(result.status, result.body).toBe(200);
+
+    const review = result.rows.find(
+      (row) => row.description === "Revisão do próprio",
+    );
+
+    expect(review).toMatchObject({
+      total_amount: 300,
+      supplier: { name: SUPPLIER_NAME },
+      parts: [
+        {
+          description: PART_NAME,
+          quantity: 2,
+          unit_price: 85.5,
+          discount_percentage: 10,
+        },
+      ],
+    });
   });
 
   it("refuses an office profile without the maintenance key, with PERMISSION_DENIED", async () => {
