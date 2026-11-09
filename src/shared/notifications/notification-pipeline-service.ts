@@ -22,6 +22,7 @@ import { SUPPRESSED_ADDRESS_REASON } from "./customer-message-suppression";
 
 import { getNotificationPolicy } from "./notification-policy";
 import { sendExpoPushMessages } from "./push-provider";
+import { inAppPushData, withPushOwner } from "./push-data";
 import {
   WhatsAppTemplateMismatchError,
   prepareInternalWhatsApp,
@@ -1274,7 +1275,7 @@ class NotificationPipelineService {
       case NotificationChannel.WHATSAPP:
         return this.deliverWhatsApp(delivery, event.payload, policy);
       case NotificationChannel.PUSH:
-        return this.deliverPush(delivery, event.payload, policy);
+        return this.deliverPush(delivery, event.payload, policy, event);
       case NotificationChannel.ACTIVITY:
         return this.deliverActivity(delivery, event.payload, policy, event);
       default:
@@ -1331,13 +1332,15 @@ class NotificationPipelineService {
    * System-tray push via Expo. A push-only topic (chat) renders through
    * `renderPush`; every other topic reuses the in-app render (push IS the
    * in-app message, on the phone's tray) and its data payload tells the app
-   * to open the notifications screen on tap. Dead tokens reported by the
-   * provider are pruned so they stop generating work.
+   * to open the notifications screen on tap — and, since wave 3, which item
+   * and whose (push-data.ts). Dead tokens reported by the provider are
+   * pruned so they stop generating work.
    */
   private async deliverPush(
     delivery: ClaimedDelivery,
     payload: AnyPayload,
     policy: AnyPolicy,
+    event: { businessId: string | null },
   ): Promise<undefined> {
     if (!policy.renderPush && !policy.renderInApp) {
       throw new NonRetryableDeliveryError(
@@ -1352,6 +1355,10 @@ class NotificationPipelineService {
 
     const recipient = { id: user.id, role: user.role, driverId: user.driverId };
 
+    // The same company the inbox row stores (deliverInApp), so the app can
+    // compare a tray notice with the row and with its session.
+    const owner = { userId: user.id, businessId: event.businessId };
+
     const content = policy.renderPush
       ? (() => {
           const rendered = policy.renderPush!(payload, recipient);
@@ -1359,7 +1366,10 @@ class NotificationPipelineService {
           return {
             title: rendered.title,
             body: rendered.body,
-            data: rendered.data ?? { url: "/notifications" },
+            data: withPushOwner(
+              rendered.data ?? { url: "/notifications" },
+              owner,
+            ),
           };
         })()
       : (() => {
@@ -1372,11 +1382,7 @@ class NotificationPipelineService {
           return {
             title: rendered.title,
             body: rendered.message,
-            data: {
-              url: "/notifications",
-              link: rendered.link ?? null,
-              type: rendered.type,
-            },
+            data: inAppPushData(rendered, owner),
           };
         })();
 

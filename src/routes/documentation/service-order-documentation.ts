@@ -12,6 +12,9 @@ import {
 
 import { cursorPaginationByBusinessSchema } from "@/schemas/cursor-pagination-schema";
 import { updateDeleteVehicleSchema } from "@/schemas/update-delete-vehicle-schema";
+import { updateDeleteServiceOrderSchema } from "@/schemas/update-delete-service-order-schema";
+import { selectedCompanyQuerySchema } from "@/schemas/selected-company-query-schema";
+import { myServiceOrdersQuerySchema } from "@/schemas/my-service-orders-schema";
 
 import { searchMetaDoc } from "@/shared/pagination/list-meta";
 import { errorResponse } from "./common-responses";
@@ -51,6 +54,80 @@ const serviceOrderBusinessParams = z.object({
   serviceOrderId: z.string().uuid("O ID da ordem de serviço é obrigatório!"),
 });
 
+const isoDateTime = z.union([z.string(), z.date()]);
+
+/**
+ * The order as a driver reads it (wave 3): an allowlist without money — no
+ * total, no part price or discount, no supplier (service-order-views.ts).
+ * Strict about nothing it does not name: the serializer drops any other key.
+ */
+const serviceOrderDriverView = z.object({
+  id: z.string(),
+  status: z
+    .enum(["open", "completed"])
+    .describe("completed quando a ordem tem data de conclusão."),
+  date: isoDateTime,
+  completion_date: isoDateTime.nullable(),
+  maintenance_type: z.enum(["INTERNAL", "EXTERNAL"]),
+  description: z.string().nullable(),
+  current_mileage_at_service: z
+    .number()
+    .nullable()
+    .describe("Hodômetro do veículo na abertura da ordem."),
+  new_mileage_after_service: z
+    .number()
+    .nullable()
+    .describe("Hodômetro informado na conclusão."),
+  businessId: z.string(),
+  branchId: z.string(),
+  vehicleId: z.string(),
+  responsibleUserId: z.string(),
+  vehicle: z
+    .object({
+      id: z.string(),
+      license_plate: z.string(),
+      description: z.string(),
+    })
+    .nullable(),
+  responsibleUser: z.object({ id: z.string(), name: z.string() }).nullable(),
+  branch: z.object({ id: z.string(), corporate_reason: z.string() }).nullable(),
+  parts: z
+    .array(
+      z.object({
+        id: z.string(),
+        description: z.string().describe("A peça do catálogo."),
+        quantity: z.number().int(),
+      }),
+    )
+    .describe("As peças lançadas, só nome e quantidade."),
+  created_at: isoDateTime,
+  updated_at: isoDateTime,
+});
+
+/** The office's view: the driver's plus the money and the workshop. */
+const serviceOrderFullView = serviceOrderDriverView.extend({
+  total_amount: z.number(),
+  parts_total: z
+    .number()
+    .describe("Soma das peças (preço × quantidade − desconto)."),
+  maintenance_interval_km_at_service: z.number().nullable(),
+  last_maintenance_mileage_at_service: z.number().nullable(),
+  latitude: z.number().nullable(),
+  longitude: z.number().nullable(),
+  created_from: z.enum(["MOBILE_APP", "WEB_DASHBOARD"]),
+  supplierId: z.string().nullable(),
+  supplier: z.object({ id: z.string(), name: z.string() }).nullable(),
+  parts: z.array(
+    z.object({
+      id: z.string(),
+      description: z.string(),
+      quantity: z.number().int(),
+      unit_price: z.number(),
+      discount_percentage: z.number().nullable(),
+    }),
+  ),
+});
+
 const serviceOrderSchemas = {
   createServiceOrder: createServiceOrderSchema,
   listServiceOrder: listServiceOrderSchema,
@@ -60,6 +137,9 @@ const serviceOrderSchemas = {
   serviceOrderBusinessParams: serviceOrderBusinessParams,
   exportServiceOrderQuery: exportServiceOrderSchema,
   searchServiceOrderBusinessCursor: cursorPaginationByBusinessSchema,
+  serviceOrderIdParam: updateDeleteServiceOrderSchema,
+  selectedCompanyQuery: selectedCompanyQuerySchema,
+  myServiceOrdersQuery: myServiceOrdersQuerySchema,
   searchServiceOrderByVehicleCursor: z.object({
     limit: z
       .string()
@@ -75,6 +155,41 @@ const serviceOrderSchemas = {
 };
 
 const serviceOrderResponses = {
+  serviceOrderDriverView,
+
+  // `view` says which shape follows; the serializer parses the body with the
+  // branch it names, so a driver's body can never carry a money field.
+  serviceOrderRead: z.discriminatedUnion("view", [
+    z.object({
+      view: z
+        .literal("driver")
+        .describe("Login de motorista: a ordem sem valores."),
+      serviceOrder: serviceOrderDriverView,
+    }),
+    z.object({
+      view: z
+        .literal("full")
+        .describe("Administrador, perfil com leitura de OS ou MASTER."),
+      serviceOrder: serviceOrderFullView,
+    }),
+  ]),
+
+  serviceOrderReadErrors: codedError(
+    "VALIDATION_ERROR: o ID ou a empresa informada é inválido. BUSINESS_NOT_IDENTIFIED: o MASTER não informou `businessId`.",
+  ),
+
+  serviceOrderReadNotFound: codedError(
+    "SERVICE_ORDER_NOT_FOUND: a ordem não existe, é de outra empresa ou, para o motorista, não é dele nem de um veículo que ele pode operar — sempre o mesmo corpo, que não confirma que o ID existe. TENANT_NOT_FOUND: a empresa informada pelo MASTER não existe. USER_NOT_FOUND: o usuário da sessão não existe mais.",
+  ),
+
+  myServiceOrdersErrors: codedError(
+    "VALIDATION_ERROR: seção (`scope`), limite ou cursor inválidos.",
+  ),
+
+  myServiceOrdersForbidden: codedError(
+    "DRIVER_ONLY: a lista é do login de motorista; o escritório e o MASTER usam a listagem da empresa.",
+  ),
+
   serviceOrderCreated: z.object({
     message: z.string().default("Ordem de serviço criada com sucesso!"),
   }),

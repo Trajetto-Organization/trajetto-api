@@ -64,14 +64,24 @@ interface ChallengePayload {
   sub?: string;
   email?: string;
   sessionVersion?: number;
+
+  /**
+   * Wave 2: a challenge started by a CPF login carries the SHA-256 of the
+   * phone it came from, so the code step binds the session to that phone
+   * (and only that phone may finish it). Hashed, never the id itself.
+   */
+  deviceHash?: string;
 }
 
 function normalizedEmail(email: string): string {
   return email.trim().toLowerCase();
 }
 
-function issueTwoFactorChallenge(user: ChallengedUser): string {
-  // Only a password login by e-mail reaches the second factor.
+function issueTwoFactorChallenge(
+  user: ChallengedUser,
+  deviceHash?: string,
+): string {
+  // Only an account with an e-mail reaches the second factor.
   if (!user.email) {
     throw new Error("two-factor challenge for an account without an e-mail");
   }
@@ -81,6 +91,7 @@ function issueTwoFactorChallenge(user: ChallengedUser): string {
       tokenType: CHALLENGE_TYPE,
       email: normalizedEmail(user.email),
       sessionVersion: user.session_version ?? 0,
+      ...(deviceHash && { deviceHash }),
     },
     key,
     {
@@ -92,28 +103,49 @@ function issueTwoFactorChallenge(user: ChallengedUser): string {
   );
 }
 
-/** Whether `challenge` proves the password step of THIS user, still valid. */
-function isTwoFactorChallengeFor(
+/**
+ * The proof inside `challenge`, when it is the password step of THIS user and
+ * still valid; null otherwise. `deviceHash` is the phone a CPF login named.
+ */
+function twoFactorChallengeFor(
   challenge: string | undefined,
   user: ChallengedUser,
-): boolean {
-  if (!challenge || !user.email) return false;
+): { deviceHash: string | null } | null {
+  if (!challenge || !user.email) return null;
 
   try {
     const payload = verify(challenge, hmacVerifyKey(key), {
       algorithms: ["HS256"],
     }) as ChallengePayload;
 
-    return (
+    const proven =
       payload.tokenType === CHALLENGE_TYPE &&
       payload.sub === user.id &&
       payload.email === normalizedEmail(user.email) &&
-      payload.sessionVersion === (user.session_version ?? 0)
-    );
+      payload.sessionVersion === (user.session_version ?? 0);
+
+    if (!proven) return null;
+
+    return {
+      deviceHash:
+        typeof payload.deviceHash === "string" ? payload.deviceHash : null,
+    };
   } catch {
     // Expired, forged, another key's, or not a JWT at all.
-    return false;
+    return null;
   }
 }
 
-export { isTwoFactorChallengeFor, issueTwoFactorChallenge };
+/** Whether `challenge` proves the password step of THIS user, still valid. */
+function isTwoFactorChallengeFor(
+  challenge: string | undefined,
+  user: ChallengedUser,
+): boolean {
+  return twoFactorChallengeFor(challenge, user) !== null;
+}
+
+export {
+  isTwoFactorChallengeFor,
+  issueTwoFactorChallenge,
+  twoFactorChallengeFor,
+};

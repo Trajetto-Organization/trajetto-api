@@ -13,6 +13,7 @@ import { permissionDenied } from "@/shared/errors/access-errors";
 import { announceDriverLoginChange } from "../../services/driver-login-catalog";
 import type { IDriverRepository } from "@/modules/driver/repositories/IDriver-repository";
 import type { IDriverEnrollmentRepository } from "../../repositories/IDriver-enrollment-repository";
+import type { IDriverTrustedDeviceRepository } from "../../repositories/IDriver-trusted-device-repository";
 import { totalOpenRoutes } from "@/modules/driver/driver-rules";
 import { DriverHasOpenRoutesError } from "@/modules/driver/usecases/errors/driver-has-open-routes-error";
 import { assertTenantAccessToRecord } from "@/modules/middlewares/tenant-authorization";
@@ -43,6 +44,8 @@ class UserRevokeAccessUseCase {
     private driver: IDriverRepository,
     @inject("DriverEnrollmentRepository")
     private driverEnrollment: IDriverEnrollmentRepository,
+    @inject("DriverTrustedDeviceRepository")
+    private trustedDevices: IDriverTrustedDeviceRepository,
   ) {}
 
   async execute({ userId, id }: UserRevokeAccessProps): Promise<void> {
@@ -123,9 +126,12 @@ class UserRevokeAccessUseCase {
     // 02/11/2026, D3/D5). Revoked, it could not be consumed anyway; but a
     // restore within its ten minutes brought it back, and a screenshot that
     // went to the wrong person is a common reason to revoke in the first
-    // place. Restoring issues nothing: the manager shows a new code.
+    // place. Restoring issues nothing: the manager shows a new code. The
+    // phones the login trusted go with it (wave 2): restored, the driver
+    // enters by a new QR code before CPF and password work again.
     if (!wasRevoked && findRevokedUser.driverId) {
       await this.driverEnrollment.revokeForUser(userId);
+      await this.trustedDevices.revokeAllForUser(userId);
     }
 
     sendSecurityEventToUser(userId, {

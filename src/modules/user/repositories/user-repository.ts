@@ -6,6 +6,7 @@ import { Prisma } from "@prisma/client";
 import {
   DRIVER_LOGINS_BY_CPF_LIMIT,
   IUserRepository,
+  KeptSessionEndedError,
 } from "./IUser-repository";
 
 import {
@@ -26,6 +27,8 @@ import {
   ListMasterUsersProps,
   SearchUserWithCursorProps,
   CursorPaginatedUser,
+  UpdateUserPasswordKeepingSession,
+  PasswordKeptSession,
 } from "../dtos/user-dto";
 
 import { buildSearchOr } from "@/shared/pagination/search-or";
@@ -68,6 +71,7 @@ class UserRepository implements IUserRepository {
     businessId,
     driverId,
     email_verified,
+    must_change_password,
   }: CreateUserProps): Promise<User> {
     // Anything cached for this request describes the row before this
     // write. Kept, it would be read back by the next lookup in the
@@ -84,6 +88,7 @@ class UserRepository implements IUserRepository {
         profileAccessId: profileAccessId || null,
         driverId: driverId || null,
         email_verified: email_verified ?? null,
+        must_change_password: must_change_password ?? false,
       },
     });
 
@@ -568,10 +573,92 @@ class UserRepository implements IUserRepository {
     return this.prisma.user.count({ where: { profileAccessId } });
   }
 
+  async updateUserPasswordKeepingSession({
+    userId,
+    password,
+    keepFamilyId,
+    replacement,
+    effects,
+  }: UpdateUserPasswordKeepingSession): Promise<PasswordKeptSession> {
+    forgetRequestCache();
+
+    return this.prisma.$transaction(async (tx) => {
+      const now = new Date();
+
+      // The UPDATE locks the row, so two changes of one account serialize
+      // and the replacement below carries the version this one wrote.
+      const user = await tx.user.update({
+        where: { id: userId },
+        data: {
+          password,
+          session_version: { increment: 1 },
+          must_change_password: false,
+          failed_login_attempts: 0,
+          failed_login_at: null,
+          login_locked_until: null,
+        },
+      });
+
+      // The kept session's live tokens carry the old version and are deleted,
+      // not revoked: a renewal of this session that read the user before this
+      // commit and rotates after it must find no row ("unknown", a plain
+      // 401). A revoked row without `replaced_by_jti` reads as a spent token
+      // presented again, and the reuse alarm would end every session —
+      // the one just re-issued included. Its older, spent rows stay.
+      const { count: live } = await tx.refreshToken.deleteMany({
+        where: {
+          userId,
+          family_id: keepFamilyId,
+          revoked_at: null,
+          expires_in: { gt: now },
+        },
+      });
+
+      // None left: the session ended after the caller checked it, outside
+      // this transaction (and a bcrypt) — a logout, the manager's "Revogar
+      // este aparelho", "Aparelhos conectados", the reuse alarm or a reset.
+      // Most of those never touch the user row, so nothing above waited for
+      // them. Storing the replacement would bring the session back with the
+      // new version, undoing that end; the whole write rolls back instead.
+      if (live === 0) throw new KeptSessionEndedError();
+
+      const others = await tx.refreshToken.findMany({
+        where: { userId, family_id: { not: keepFamilyId } },
+        select: { family_id: true },
+        distinct: ["family_id"],
+      });
+
+      await tx.refreshToken.deleteMany({
+        where: { userId, family_id: { not: keepFamilyId } },
+      });
+      // A device without a session predates the column (A9) and cannot be
+      // this one's: it goes with the others.
+      await tx.pushDeviceToken.deleteMany({
+        where: {
+          userId,
+          OR: [
+            { session_family_id: null },
+            { session_family_id: { not: keepFamilyId } },
+          ],
+        },
+      });
+
+      await tx.refreshToken.create({ data: replacement(user) });
+
+      if (effects) await effects(tx, user);
+
+      return {
+        user,
+        endedFamilies: others.map((row) => row.family_id),
+      };
+    });
+  }
+
   async updateUserPassword({
     userId,
     password,
     markEmailVerifiedAt,
+    mustChangePassword = false,
   }: UpdateUserPassword): Promise<User | null> {
     // Anything cached for this request describes the row before this
     // write. Kept, it would be read back by the next lookup in the
@@ -583,6 +670,8 @@ class UserRepository implements IUserRepository {
       data: {
         password,
         ...(markEmailVerifiedAt && { email_verified: markEmailVerifiedAt }),
+        // Set by a password the manager chose, cleared by the person's own.
+        must_change_password: mustChangePassword,
         session_version: { increment: 1 },
         RefreshToken: { deleteMany: {} },
         // Every session ends, so every device they registered stops receiving.

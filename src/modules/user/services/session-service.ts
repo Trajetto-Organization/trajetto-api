@@ -115,6 +115,26 @@ function isSessionDevice(
   );
 }
 
+/**
+ * When a session family was born, in epoch seconds, read from its id — or
+ * null for an id that is not a UUIDv7.
+ *
+ * Every family id is drawn by issueSessionTokenPair with uuidV7 (since
+ * 10/08/2026, a92c1de), right before the login reads the clock for
+ * `familyStartedAt`, and a v7's first 48 bits are that draw's Unix time in
+ * milliseconds. Rounded down, it is never later than the signed claim, so a
+ * family re-issued from it (a password change that keeps the session) never
+ * outlives its cap. The rows cannot say it: the family's first row is
+ * purged once it lapses, long before a 30- or 180-day cap.
+ */
+function familyStartedAtOf(familyId: string): number | null {
+  const compact = familyId.replace(/-/g, "");
+
+  if (!/^[0-9a-f]{12}7[0-9a-f]{19}$/i.test(compact)) return null;
+
+  return Math.floor(parseInt(compact.slice(0, 12), 16) / 1000);
+}
+
 function hashRefreshToken(token: string): string {
   return crypto.createHash("sha256").update(token).digest("hex");
 }
@@ -239,10 +259,14 @@ export {
   HeaderSessionClient,
   SessionClient,
   SessionJwtPayload,
+  SessionTokenPair,
   createUserSession,
+  familyStartedAtOf,
+  hashDeviceId,
   hashRefreshToken,
   isSessionDevice,
   issueSessionTokenPair,
+  normalizeSessionDeviceId,
   parseSessionClient,
   sessionClientOfClaims,
 };

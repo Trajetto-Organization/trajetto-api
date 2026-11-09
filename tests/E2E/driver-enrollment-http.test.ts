@@ -6,6 +6,7 @@ import { decode } from "jsonwebtoken";
 
 import { createPrismaClient } from "@/shared/database/database-client";
 import { ENROLLMENT_MAX_ATTEMPTS } from "@/modules/user/services/driver-enrollment";
+import { hashDeviceId } from "@/modules/user/services/session-service";
 
 import {
   freshAddress,
@@ -456,7 +457,10 @@ describe("the driver's phones, as the manager sees them (D7)", () => {
       headers: { authorization: `Bearer ${session.access}` },
     });
 
-  it("lists each phone with its last activity, and not the e-mail sessions", async () => {
+  // Wave 2: the phone's id is what the CPF login checks the phone by, and
+  // this list is open to a profile that may only read users. Each phone is
+  // its hash; `deviceId` repeats it under the field's previous name.
+  it("lists each phone by its hash, never its id, with its last activity, and not the e-mail sessions", async () => {
     const { userId } = await driverLogin();
 
     await signedInOn(userId, PHONE);
@@ -468,12 +472,17 @@ describe("the driver's phones, as the manager sees them (D7)", () => {
     expect(response.statusCode).toBe(200);
 
     const { data } = response.json() as {
-      data: Array<{ deviceId: string; sessions: number }>;
+      data: Array<{ deviceHash: string; deviceId: string; sessions: number }>;
     };
 
-    expect(data.map((device) => device.deviceId).sort()).toEqual(
-      [OTHER_PHONE, PHONE].sort(),
+    expect(data.map((device) => device.deviceHash).sort()).toEqual(
+      [hashDeviceId(OTHER_PHONE), hashDeviceId(PHONE)].sort(),
     );
+    expect(data.every((device) => device.deviceId === device.deviceHash)).toBe(
+      true,
+    );
+    expect(response.body).not.toContain(PHONE);
+    expect(response.body).not.toContain(OTHER_PHONE);
     expect(data[0]).toMatchObject({
       sessions: 1,
       lastActivityAt: expect.any(String),
@@ -499,7 +508,10 @@ describe("the driver's phones, as the manager sees them (D7)", () => {
       },
     });
 
-    const response = await revokeDevice(userId, PHONE.toUpperCase());
+    const response = await revokeDevice(
+      userId,
+      hashDeviceId(PHONE).toUpperCase(),
+    );
 
     expect(response.statusCode).toBe(204);
     expect(
@@ -515,12 +527,21 @@ describe("the driver's phones, as the manager sees them (D7)", () => {
     );
 
     const { data } = (await devices(userId)).json() as {
-      data: Array<{ deviceId: string }>;
+      data: Array<{ deviceHash: string }>;
     };
-    expect(data.map((device) => device.deviceId)).toEqual([OTHER_PHONE]);
+    expect(data.map((device) => device.deviceHash)).toEqual([
+      hashDeviceId(OTHER_PHONE),
+    ]);
 
-    // Again: nothing left to end, the same answer.
+    // Again, by the phone's id (a page loaded before the list stopped
+    // giving it): nothing left to end, the same answer.
     expect((await revokeDevice(userId, PHONE)).statusCode).toBe(204);
+  });
+
+  it("refuses a phone that is neither a hash nor an id (400)", async () => {
+    const { userId } = await driverLogin();
+
+    expect((await revokeDevice(userId, "nao-e-aparelho")).statusCode).toBe(400);
   });
 
   it("answers another company's driver like a missing one (404), and ends nothing", async () => {

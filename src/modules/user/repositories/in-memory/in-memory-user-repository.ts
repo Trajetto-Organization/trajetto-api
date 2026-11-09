@@ -6,6 +6,7 @@ import { v7 as uuidV7 } from "uuid";
 import {
   DRIVER_LOGINS_BY_CPF_LIMIT,
   IUserRepository,
+  KeptSessionEndedError,
 } from "../IUser-repository";
 
 import {
@@ -31,6 +32,8 @@ import {
   User,
   SearchUserWithCursorProps,
   CursorPaginatedUser,
+  UpdateUserPasswordKeepingSession,
+  PasswordKeptSession,
 } from "../../dtos/user-dto";
 
 import {
@@ -51,6 +54,11 @@ type StoredUser = User & { created_at?: Date; updated_at?: Date };
 /** What the user row owns and Prisma deletes through its relations. */
 interface OwnedRow {
   userId: string;
+}
+
+/** A push device: owned by the user, registered by one session (A9). */
+interface PushDeviceSeed extends OwnedRow {
+  session_family_id?: string | null;
 }
 
 /** A profile as the listing needs it: its name, and whose it is. */
@@ -149,7 +157,7 @@ class InMemoryUserRepository implements IUserRepository {
   public user: StoredUser[] = [];
 
   /** Push devices each user registered (Prisma: PushDeviceToken). */
-  public pushDeviceTokens: OwnedRow[] = [];
+  public pushDeviceTokens: PushDeviceSeed[] = [];
 
   /** The in-app inbox (Prisma: Notification). */
   public notifications: OwnedRow[] = [];
@@ -206,6 +214,7 @@ class InMemoryUserRepository implements IUserRepository {
     whatsapp_notifications_enabled,
     whatsapp_phone,
     email_verified,
+    must_change_password,
   }: CreateUserProps): Promise<User> {
     // The table's unique indexes, as Postgres raises them: NULLs never
     // collide (a driver's login without an e-mail, D02).
@@ -232,6 +241,7 @@ class InMemoryUserRepository implements IUserRepository {
       access_revoked: false,
       session_version: 0,
       email_verified: email_verified ?? null,
+      must_change_password: must_change_password ?? false,
       avatar: null,
       whatsapp_notifications_enabled: whatsapp_notifications_enabled ?? false,
       email_notifications_enabled: true,
@@ -650,10 +660,92 @@ class InMemoryUserRepository implements IUserRepository {
     return logins;
   }
 
+  async updateUserPasswordKeepingSession({
+    userId,
+    password,
+    keepFamilyId,
+    replacement,
+    effects,
+  }: UpdateUserPasswordKeepingSession): Promise<PasswordKeptSession> {
+    const user = this.user.find((user) => user.id === userId);
+
+    // Prisma's update() raises P2025 for a missing row; it never answers null.
+    if (!user) throw recordNotFound();
+
+    const now = new Date();
+
+    // The kept session ended after the caller checked it: refused before
+    // anything changes, as the real transaction rolls back (see there).
+    if (
+      this.tokens &&
+      !this.tokens.refreshTokenItems.some(
+        (item) =>
+          item.userId === userId &&
+          item.family_id === keepFamilyId &&
+          !item.revoked_at &&
+          item.expires_in > now,
+      )
+    ) {
+      throw new KeptSessionEndedError();
+    }
+
+    user.password = password;
+    user.session_version = (user.session_version ?? 0) + 1;
+    user.must_change_password = false;
+    user.failed_login_attempts = 0;
+    user.failed_login_at = null;
+    user.login_locked_until = null;
+
+    const kept = (row: { session_family_id?: string | null }) =>
+      row.session_family_id === keepFamilyId;
+
+    this.pushDeviceTokens = this.pushDeviceTokens.filter(
+      (row) => row.userId !== userId || kept(row),
+    );
+
+    let endedFamilies: string[] = [];
+
+    if (this.tokens) {
+      const mine = this.tokens.refreshTokenItems.filter(
+        (item) => item.userId === userId,
+      );
+
+      endedFamilies = [
+        ...new Set(
+          mine
+            .filter((item) => item.family_id !== keepFamilyId)
+            .map((item) => item.family_id),
+        ),
+      ];
+
+      // The other families go whole; the kept one loses only its live rows
+      // (a late renewal of it must find nothing, see the real repository).
+      this.tokens.refreshTokenItems = this.tokens.refreshTokenItems.filter(
+        (item) =>
+          item.userId !== userId ||
+          (item.family_id === keepFamilyId &&
+            (Boolean(item.revoked_at) || item.expires_in <= now)),
+      );
+      this.tokens.pushDeviceTokens = this.tokens.pushDeviceTokens.filter(
+        (row) => row.userId !== userId || kept(row),
+      );
+
+      await this.tokens.createUserRefreshToken(replacement(user));
+    } else {
+      // Minted all the same, as the database would store it.
+      replacement(user);
+    }
+
+    if (effects) await effects({} as Prisma.TransactionClient, user);
+
+    return { user, endedFamilies };
+  }
+
   async updateUserPassword({
     userId,
     password,
     markEmailVerifiedAt,
+    mustChangePassword = false,
   }: UpdateUserPassword): Promise<User | null> {
     const user = this.user.find((user) => user.id === userId);
 
@@ -662,6 +754,7 @@ class InMemoryUserRepository implements IUserRepository {
 
     user.password = password;
     if (markEmailVerifiedAt) user.email_verified = markEmailVerifiedAt;
+    user.must_change_password = mustChangePassword;
     user.session_version = (user.session_version ?? 0) + 1;
     user.failed_login_attempts = 0;
     user.failed_login_at = null;

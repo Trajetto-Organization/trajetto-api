@@ -26,7 +26,13 @@ const decideOccurrenceAuthorizationSchema = z.object({
   ),
 });
 
-/** GET /delivery/occurrence-authorizations — the MASTER names the company. */
+/**
+ * GET /delivery/occurrence-authorizations — the MASTER names the company.
+ *
+ * `view` and `occurrenceId` are the app's (wave 4): a list it polls every
+ * 30 s without signing every photo of the queue, and the one request a push
+ * opens. Absent, the web's queue is exactly what it was.
+ */
 const listPendingAuthorizationsSchema = z.object({
   businessId: z
     .string()
@@ -34,6 +40,21 @@ const listPendingAuthorizationsSchema = z.object({
     .optional()
     .describe(
       "Só o MASTER envia: a empresa da fila. Os demais leem sempre a própria empresa.",
+    ),
+  view: z
+    .enum(["full", "summary"], {
+      errorMap: () => ({ message: "Escolha a visão full ou summary." }),
+    })
+    .default("full")
+    .describe(
+      "full (padrão, a fila da torre na web): cada pedido com as fotos assinadas, o formulário e as respostas. summary (o app): a linha da lista, sem URL assinada nem formulário, com `photos_count`, `has_receipt_photo` e `has_signature`; o detalhe pede `occurrenceId` na visão full.",
+    ),
+  occurrenceId: z
+    .string()
+    .uuid("Ocorrência inválida.")
+    .optional()
+    .describe(
+      "Só este pedido, se ainda aguarda (o detalhe aberto por um aviso). Já decidido, encerrado ou de outra empresa: `data` vazio e `total` 0, a mesma resposta de um ID que não existe.",
     ),
 });
 

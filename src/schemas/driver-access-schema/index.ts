@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import { normalizeCpf } from "@/modules/user/services/driver-cpf";
+import { hashDeviceId } from "@/modules/user/services/session-service";
 import { normalizeDeviceId } from "@/shared/delivery/proof-capture";
 
 /**
@@ -102,9 +103,41 @@ const driverLoginParamsSchema = z.object({
     .uuid("ID do usuário é inválido."),
 });
 
-/** DELETE /user/:userId/devices/:deviceId (D7). */
+/** SHA-256 in hex: how the manager's phone list names a phone (wave 2). */
+const DEVICE_HASH = /^[0-9a-f]{64}$/i;
+
+/**
+ * DELETE /user/:userId/devices/:deviceId (D7). The phone is the opaque
+ * `deviceHash` the list gives; its id (Android ID or the installation's
+ * UUID) is still taken, for a page the web loaded before the list stopped
+ * giving it. Either way the handler gets the hash.
+ */
 const driverDeviceParamsSchema = driverLoginParamsSchema.extend({
-  deviceId: sessionDeviceIdField,
+  deviceId: z
+    .string({ required_error: "O identificador do aparelho é obrigatório." })
+    .max(64, "Identificador do aparelho inválido.")
+    .transform((value, ctx) => {
+      const trimmed = value.trim();
+
+      if (DEVICE_HASH.test(trimmed)) return trimmed.toLowerCase();
+
+      const normalized = normalizeDeviceId(trimmed);
+
+      if (!normalized) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message:
+            "Identificador do aparelho inválido: envie o `deviceHash` da lista de aparelhos.",
+        });
+
+        return z.NEVER;
+      }
+
+      return hashDeviceId(normalized);
+    })
+    .describe(
+      "O aparelho, pelo `deviceHash` que GET /user/:userId/devices devolve (SHA-256 em hexadecimal, 64 caracteres). O Android ID ou o UUID da instalação ainda são aceitos.",
+    ),
 });
 
 /** POST /user/session/revoke (A3): the refresh token of the session to end. */

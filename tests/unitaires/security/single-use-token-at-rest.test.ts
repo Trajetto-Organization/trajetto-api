@@ -36,6 +36,7 @@ import { ResetUserPasswordUseCase } from "@/modules/user/usecases/reset-user-pas
 
 import { AuthenticateUserUseCase } from "@/modules/user/usecases/authenticate-user/authenticate-user-usecase";
 import { EmailVerificationUseCase } from "@/modules/user/usecases/e-mail-verification/e-mail-verification-usecase";
+import { InMemoryDriverTrustedDeviceRepository } from "@/modules/user/repositories/in-memory/in-memory-driver-trusted-device-repository";
 
 /**
  * Reset and e-mail verification links, and what the database keeps of them
@@ -193,6 +194,7 @@ describe("an e-mail verification link", () => {
       users,
       tokens,
       driverRepositoryStub as never,
+      new InMemoryDriverTrustedDeviceRepository(),
     ).execute({ email, password: "a-senha" });
 
     expect(mailedUrls).toHaveLength(1);

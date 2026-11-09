@@ -17,11 +17,28 @@ import {
   RotateUserRefreshTokenProps,
   RefreshRotation,
   UserDeviceSession,
+  UserOwnSession,
+  UserSessionFamily,
 } from "../../dtos/user-tokens-dto";
 import { groupDeviceSessions } from "../../services/device-sessions";
+import { hashDeviceId } from "../../services/session-service";
+import { groupOwnSessions, sessionFamilyOf } from "../../services/own-sessions";
+
+/** A push device as the session tables see it (Prisma: PushDeviceToken). */
+interface PushDeviceRow {
+  userId: string;
+  session_family_id: string | null;
+}
 
 class InMemoryUserTokensRepository implements IUsersTokensRepository {
   public refreshTokenItems: UserRefreshTokenProps[] = [];
+
+  /**
+   * The push devices the sessions registered, for the session reads that
+   * look at them (the own sessions' "app" kind and their revocation). Empty
+   * unless a test seeds it.
+   */
+  public pushDeviceTokens: PushDeviceRow[] = [];
   public forgotPasswordVerificationTokens: VerificationToken[] = [];
 
   public emailVerificationTokens: VerificationToken[] = [];
@@ -185,16 +202,39 @@ class InMemoryUserTokensRepository implements IUsersTokensRepository {
     );
   }
 
+  async findLoginsSignedInOnDevice(
+    userIds: string[],
+    deviceId: string,
+    now = new Date(),
+  ): Promise<string[]> {
+    return [
+      ...new Set(
+        this.refreshTokenItems
+          .filter(
+            (item) =>
+              userIds.includes(item.userId) &&
+              item.device_id === deviceId &&
+              !item.revoked_at &&
+              item.expires_in > now,
+          )
+          .map((item) => item.userId),
+      ),
+    ];
+  }
+
   /** No push devices in this fake: the real one is proven against Postgres. */
   async revokeUserDeviceSessions(
     userId: string,
-    deviceId: string,
+    deviceHash: string,
   ): Promise<string[]> {
     const families = [
       ...new Set(
         this.refreshTokenItems
           .filter(
-            (item) => item.userId === userId && item.device_id === deviceId,
+            (item) =>
+              item.userId === userId &&
+              Boolean(item.device_id) &&
+              hashDeviceId(item.device_id!) === deviceHash,
           )
           .map((item) => item.family_id),
       ),
@@ -205,6 +245,76 @@ class InMemoryUserTokensRepository implements IUsersTokensRepository {
     );
 
     return families;
+  }
+
+  async listUserSessions(
+    userId: string,
+    now = new Date(),
+  ): Promise<UserOwnSession[]> {
+    return groupOwnSessions(
+      this.refreshTokenItems
+        .filter(
+          (item) =>
+            item.userId === userId && !item.revoked_at && item.expires_in > now,
+        )
+        .map((item) => ({
+          family_id: item.family_id,
+          device_id: item.device_id ?? null,
+          created_at: item.created_at ?? new Date(0),
+          expires_in: item.expires_in,
+        })),
+      new Set(
+        this.pushDeviceTokens
+          .filter((row) => row.userId === userId && row.session_family_id)
+          .map((row) => row.session_family_id as string),
+      ),
+    );
+  }
+
+  async findSessionFamily(
+    userId: string,
+    familyId: string,
+    now = new Date(),
+  ): Promise<UserSessionFamily | null> {
+    return sessionFamilyOf(
+      familyId,
+      this.refreshTokenItems
+        .filter((item) => item.userId === userId && item.family_id === familyId)
+        .map((item) => ({
+          device_id: item.device_id ?? null,
+          created_at: item.created_at ?? new Date(0),
+          revoked_at: item.revoked_at ?? null,
+          expires_in: item.expires_in,
+        })),
+      now,
+    );
+  }
+
+  async revokeUserSession(
+    userId: string,
+    familyId: string,
+  ): Promise<{ ended: boolean; deviceId: string | null }> {
+    const now = new Date();
+    const rows = this.refreshTokenItems.filter(
+      (item) => item.userId === userId && item.family_id === familyId,
+    );
+
+    // Only a live session ends (see the real repository).
+    if (!rows.some((item) => !item.revoked_at && item.expires_in > now)) {
+      return { ended: false, deviceId: null };
+    }
+
+    this.refreshTokenItems = this.refreshTokenItems.filter(
+      (item) => !(item.userId === userId && item.family_id === familyId),
+    );
+    this.pushDeviceTokens = this.pushDeviceTokens.filter(
+      (row) => !(row.userId === userId && row.session_family_id === familyId),
+    );
+
+    return {
+      ended: true,
+      deviceId: rows.find((item) => item.device_id)?.device_id ?? null,
+    };
   }
 
   async deleteExpiredUserRefreshTokens(now = new Date()): Promise<number> {

@@ -26,6 +26,10 @@ interface ResetDriverPasswordProps {
  * who did it (never the password). Like any password change, every session
  * of the driver ends — devices and push included — so the phone in the
  * driver's pocket asks for the new one.
+ *
+ * The manager knows this password (wave 2): the driver must create their own
+ * at the next sign-in (`must_change_password`, enforced by the clients). The
+ * phones the driver trusts stay trusted — a password never touches that.
  */
 @injectable()
 class ResetDriverPasswordUseCase {
@@ -53,6 +57,7 @@ class ResetDriverPasswordUseCase {
       userId: target.id,
       password: hashedPassword,
       markEmailVerifiedAt: target.email_verified ? undefined : new Date(),
+      mustChangePassword: true,
     });
 
     sendSecurityEventToUser(target.id, { reason: "password_reset" });

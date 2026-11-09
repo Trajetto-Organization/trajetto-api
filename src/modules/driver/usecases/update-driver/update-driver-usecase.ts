@@ -7,6 +7,7 @@ import { IBranchRepository } from "@/modules/branch/repositories/IBranch-reposit
 import { IUserRepository } from "@/modules/user/repositories/IUser-repository";
 import { IUsersTokensRepository } from "@/modules/user/repositories/IUsers-tokens-repository";
 import type { IDriverEnrollmentRepository } from "@/modules/user/repositories/IDriver-enrollment-repository";
+import type { IDriverTrustedDeviceRepository } from "@/modules/user/repositories/IDriver-trusted-device-repository";
 
 import { AppError } from "@/shared/errors/AppError";
 
@@ -46,6 +47,8 @@ class UpdateDriverUseCase {
     private usersTokens: IUsersTokensRepository,
     @inject("DriverEnrollmentRepository")
     private driverEnrollment: IDriverEnrollmentRepository,
+    @inject("DriverTrustedDeviceRepository")
+    private trustedDevices: IDriverTrustedDeviceRepository,
   ) {}
 
   async execute(
@@ -153,6 +156,8 @@ class UpdateDriverUseCase {
      * the driver was reactivated. Every session, its devices and the QR code
      * now go — on every save that asks for INACTIVE, not only the switch, so
      * a retry after a failure here still cleans up (each step is idempotent).
+     * The phones it trusted go too (wave 2): reactivated, the driver enters
+     * by a new QR code before CPF and password work again.
      *
      * The session version is left alone on purpose: the app's next request
      * then hears 403 AUTH_DRIVER_INACTIVE from the session check — why it is
@@ -164,6 +169,7 @@ class UpdateDriverUseCase {
       if (driverUser) {
         await this.usersTokens.revokeAllUserRefreshTokens(driverUser.id);
         await this.driverEnrollment.revokeForUser(driverUser.id);
+        await this.trustedDevices.revokeAllForUser(driverUser.id);
 
         if (findDriverById.status !== "INACTIVE") {
           sendSecurityEventToUser(driverUser.id, {

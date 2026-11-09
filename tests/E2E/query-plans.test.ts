@@ -923,6 +923,55 @@ describe("what the tower reads for the day", () => {
     );
   });
 
+  // Wave 4, GET /route/live: the manager's phone polls it every 60 s while
+  // the screen is focused. It must reach the live routes through route
+  // (businessId, status, scheduled_date) — the running ones and today's
+  // released ones, never the company's sixty days of history — and count
+  // only those routes' stops, by route_stop (routeId, status), in the same
+  // statement. No delivery, no event, no position history.
+  it("lists the live routes from their own index ranges and counts only their stops", async () => {
+    const operation = await repository();
+    const day = await today();
+
+    const queries = await capturing(() =>
+      operation.listLiveRoutes(CARRIER, { date: day.date, take: 501 }),
+    );
+
+    expect(queries).toHaveLength(1);
+
+    const statement = queries[0];
+    expect(statement.query).toContain('"live"');
+
+    const plan = await explain(statement);
+
+    // Access path, not index names: the planner may reach the stops by
+    // (routeId, status) or by the (routeId, sequence) unique key, and either
+    // is a probe per live route. What it must never do is scan.
+    expect(scansSequentially(plan, "route")).toBe(false);
+    expect(scansSequentially(plan, "route_stop")).toBe(false);
+
+    const routes = rowsTouched(plan, "route");
+    const stops = rowsTouched(plan, "route_stop");
+
+    // Forty live routes today (twenty running, twenty released) of 2.400,
+    // and their eight hundred stops of 48.000.
+    expect(routes, `leu ${routes} rotas para listar as ao vivo`).toBeLessThan(
+      ROUTES_PER_DAY * 5,
+    );
+    expect(stops, `leu ${stops} paradas para contar as ao vivo`).toBeLessThan(
+      ROUTES_PER_DAY * STOPS_PER_ROUTE * 2,
+    );
+
+    for (const table of [
+      "delivery",
+      "delivery_event",
+      "driver_position",
+      "delivery_occurrence",
+    ]) {
+      expect(rowsTouched(plan, table), table).toBe(0);
+    }
+  });
+
   it("reads the day's route moves inside the lookback week", async () => {
     const operation = await repository();
     const day = await today();

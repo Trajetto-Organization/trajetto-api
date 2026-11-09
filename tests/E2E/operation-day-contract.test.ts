@@ -315,6 +315,24 @@ function scenario(): OperationRows {
         created_at: at("2026-09-17T15:00:00.000Z"),
       }),
     ],
+    // The live list's last points (wave 4): Ana's in this company, and
+    // Xavier's in the other one.
+    lastPositions: [
+      {
+        driverId: D1,
+        businessId: CARRIER,
+        latitude: -9.97,
+        longitude: -67.81,
+        recorded_at: at("2026-09-17T19:30:00.000Z"),
+      },
+      {
+        driverId: DX,
+        businessId: OTHER,
+        latitude: -23.55,
+        longitude: -46.63,
+        recorded_at: at("2026-09-17T19:40:00.000Z"),
+      },
+    ],
     occurrences: [
       {
         id: id("0b1"),
@@ -491,6 +509,10 @@ async function seedPostgres(rows: OperationRows): Promise<void> {
         reportedById: REPORTER,
       },
     });
+  }
+
+  for (const position of rows.lastPositions ?? []) {
+    await prisma.driverLastPosition.create({ data: { ...position } });
   }
 
   for (const event of rows.events) {
@@ -950,6 +972,113 @@ describe("the monitoring board by route", () => {
     const [fromDatabase, fromTwin] = await Promise.all([
       database.listMonitoringRoutes(CARRIER, { ...DAY, isToday: true }, page),
       twin.listMonitoringRoutes(CARRIER, { ...DAY, isToday: true }, page),
+    ]);
+
+    expect(fromDatabase).toEqual(fromTwin);
+  });
+});
+
+describe("the live routes (wave 4, GET /route/live)", () => {
+  it.each(both())(
+    "%s lists the running routes of any day, then the day's released ones",
+    async (_name, repository) => {
+      const routes = await repository.listLiveRoutes(CARRIER, {
+        date: DAY.date,
+        take: 10,
+      });
+
+      expect(
+        routes.map((route) => [route.code, route.status, route.driverName]),
+      ).toEqual([
+        [101, "IN_PROGRESS", "Ana"],
+        // Yesterday's, still on the street.
+        [102, "IN_PROGRESS", "Bruno"],
+        [106, "RELEASED", "Bruno"],
+      ]);
+
+      expect(routes[0]).toMatchObject({
+        id: R(1),
+        name: "Rota 1",
+        scheduled_date: "2026-09-17",
+        vehiclePlate: "ACR1B23",
+        stopsTotal: 5,
+        stopsResolved: 4,
+        lastPosition: {
+          latitude: -9.97,
+          longitude: -67.81,
+          recorded_at: at("2026-09-17T19:30:00.000Z"),
+        },
+      });
+      expect(routes[0].started_at?.toISOString()).toBe(
+        "2026-09-17T12:05:00.000Z",
+      );
+
+      expect(routes[1]).toMatchObject({
+        scheduled_date: "2026-09-16",
+        vehiclePlate: null,
+        stopsTotal: 3,
+        stopsResolved: 2,
+        lastPosition: null,
+      });
+      expect(routes[2]).toMatchObject({
+        started_at: null,
+        stopsTotal: 2,
+        stopsResolved: 0,
+      });
+    },
+  );
+
+  it.each(both())(
+    "%s pages by the key and the cap, inside the company",
+    async (_name, repository) => {
+      const first = await repository.listLiveRoutes(CARRIER, {
+        date: DAY.date,
+        take: 1,
+      });
+      const rest = await repository.listLiveRoutes(CARRIER, {
+        date: DAY.date,
+        take: 10,
+        after: { rank: 0, code: 101 },
+      });
+      const released = await repository.listLiveRoutes(CARRIER, {
+        date: DAY.date,
+        take: 10,
+        after: { rank: 0, code: 999 },
+      });
+
+      expect(first.map((route) => route.code)).toEqual([101]);
+      expect(rest.map((route) => route.code)).toEqual([102, 106]);
+      expect(released.map((route) => route.code)).toEqual([106]);
+
+      // The other company's running route and Xavier's point never show.
+      const other = await repository.listLiveRoutes(OTHER, {
+        date: DAY.date,
+        take: 10,
+      });
+
+      expect(other.map((route) => route.code)).toEqual([107]);
+      expect(other[0].lastPosition?.latitude).toBe(-23.55);
+    },
+  );
+
+  it.each(both())(
+    "%s leaves out the released routes of another day",
+    async (_name, repository) => {
+      const tomorrow = await repository.listLiveRoutes(CARRIER, {
+        date: "2026-09-18",
+        take: 10,
+      });
+
+      expect(tomorrow.map((route) => route.code)).toEqual([101, 102]);
+    },
+  );
+
+  it("gives the same answer from both", async () => {
+    const query = { date: DAY.date, take: 10 };
+
+    const [fromDatabase, fromTwin] = await Promise.all([
+      database.listLiveRoutes(CARRIER, query),
+      twin.listLiveRoutes(CARRIER, query),
     ]);
 
     expect(fromDatabase).toEqual(fromTwin);

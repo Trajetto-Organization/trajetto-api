@@ -204,6 +204,16 @@ describe("creating a driver's login with the password the manager set", () => {
     expect(tokens.forgotPasswordVerificationTokens).toHaveLength(0);
   });
 
+  // Wave 2: the manager knows it, so the driver creates their own at the
+  // first sign-in. A login created without one has nothing to replace.
+  it("asks the driver to create their own password at the first sign-in", async () => {
+    const created = await create().execute(driverUser() as never, ADMIN);
+
+    expect(
+      users.user.find((user) => user.id === created.id)?.must_change_password,
+    ).toBe(true);
+  });
+
   it("records who set it, and never the password itself", async () => {
     await create().execute(driverUser() as never, ADMIN);
     await settle();
@@ -227,6 +237,8 @@ describe("creating a driver's login with the password the manager set", () => {
 
     expect(created.email_verified).toBeNull();
     expect(mail.sent).toContain("user-created-successfully.hbs");
+    // The driver sets it through the link: nothing to replace.
+    expect(created.must_change_password).toBe(false);
   });
 
   it("refuses a password for anybody but a driver, even past the schema", async () => {
@@ -315,6 +327,20 @@ describe("the manager setting a driver's new password", () => {
       { userId: DRIVER_LOGIN, reason: "password_reset" },
     ]);
     expect(mail.sent).toEqual([]);
+  });
+
+  // Wave 2: the manager knows the new one too, so the driver creates their
+  // own at the next sign-in; the phones the driver trusts are not touched.
+  it("asks the driver to create their own at the next sign-in", async () => {
+    await reset().execute({
+      actorId: ADMIN,
+      userId: DRIVER_LOGIN,
+      password: NEW_PASSWORD,
+    });
+
+    expect(
+      users.user.find((user) => user.id === DRIVER_LOGIN)?.must_change_password,
+    ).toBe(true);
   });
 
   it("records who did it, and never the password", async () => {

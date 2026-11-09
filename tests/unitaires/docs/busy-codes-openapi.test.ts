@@ -44,6 +44,10 @@ const GATED_USE_CASES: Record<string, string> = {
   "business/usecases/request-business-deletion":
     "POST /business/request-business-deletion/{businessId}",
   "user/usecases/authenticate-user": "POST /user/session",
+  // Wave 2: the password created right after a QR code, and the two-factor
+  // switch that now asks for the current password.
+  "user/usecases/create-own-password": "POST /user/me/password",
+  "user/usecases/update-two-factor-authentication": "PATCH /user/twofactor",
   "user/usecases/create-master-user": "POST /user/create-master-user",
   "user/usecases/create-user": "POST /user/create-user",
   "user/usecases/reset-user-password": "POST /user/reset/password",

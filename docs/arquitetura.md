@@ -17,6 +17,8 @@
 - [Regras transversais](#regras-transversais)
 - [Papéis, permissões e módulos](#papéis-permissões-e-módulos)
 - [Acesso do motorista](#acesso-do-motorista)
+- [O que o app lê pelo aviso: OS, contas e Kanban](#o-que-o-app-lê-pelo-aviso-os-contas-e-kanban)
+- [Gestor e master no app: rotas ao vivo, autorizações e salas sob demanda](#gestor-e-master-no-app-rotas-ao-vivo-autorizações-e-salas-sob-demanda)
 - [Configurações da empresa](#configurações-da-empresa)
 - [Geocerca e coordenadas do endereço](#geocerca-e-coordenadas-do-endereço)
 - [Frota ligada à rota](#frota-ligada-à-rota)
@@ -325,9 +327,10 @@ a verdade está no banco, e as telas
 refazem a consulta ao reconectar. Sem Redis, o tempo real entre réplicas
 degrada e o resto da API continua.
 
-`operationsSubscribe` e `chatSubscribe` aceitam um _acknowledgement_
+`operationsSubscribe` e `chatSubscribe` (e, desde a onda 4,
+`operationsUnsubscribe` e `chatUnsubscribe`) aceitam um _acknowledgement_
 opcional: quando o cliente pede um, o servidor responde **vazio** depois de
-tratar o pedido, tenha entrado na sala ou recusado. Não diz o veredito (uma
+tratar o pedido, tenha entrado (ou saído) da sala ou recusado. Não diz o veredito (uma
 recusa continua silenciosa e não revela se a empresa existe); serve para quem
 precisa saber que o pedido já foi tratado, como os testes E2E, que esperam a
 sala em vez de dormir um tempo chutado. A web emite sem _acknowledgement_.
@@ -540,12 +543,12 @@ nas réplicas HTTP e uma Application `worker`), só por gatilho medido:
 
 ## Papéis, permissões e módulos
 
-| Papel                     | Quem é                          | O que pode                                                                                                         |
-| ------------------------- | ------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
-| `MASTER`                  | equipe Trajetto                 | todas as empresas, pelo `/admin` da web; cria empresas, usuários master, limites e módulos                         |
-| `BUSINESS_ADMIN`          | administrador da transportadora | tudo da própria empresa                                                                                            |
-| `BUSINESS_USER`           | funcionário                     | o que o perfil de acesso libera, chave a chave, em leitura ou escrita                                              |
-| `BUSINESS_USER` motorista | usuário vinculado a um `Driver` | só o que é dele: entregas, rotas, veículos que dirige, contas a pagar em que é responsável e as próprias conversas |
+| Papel                     | Quem é                          | O que pode                                                                                                                                                                                                                                          |
+| ------------------------- | ------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `MASTER`                  | equipe Trajetto                 | todas as empresas, pelo `/admin` da web; cria empresas, usuários master, limites e módulos                                                                                                                                                          |
+| `BUSINESS_ADMIN`          | administrador da transportadora | tudo da própria empresa                                                                                                                                                                                                                             |
+| `BUSINESS_USER`           | funcionário                     | o que o perfil de acesso libera, chave a chave, em leitura ou escrita                                                                                                                                                                               |
+| `BUSINESS_USER` motorista | usuário vinculado a um `Driver` | só o que é dele: entregas, rotas, veículos que dirige, ordens de serviço em que é responsável ou dos veículos que opera (sem valores), contas a pagar em que é responsável, o card do Kanban de que é responsável (leitura) e as próprias conversas |
 
 - Chaves de permissão em `src/config/permissions.ts` (ex. `vehicle_manage`,
   `delivery_manage`, `occurrence_manage`, `integration_manage`); middleware
@@ -600,20 +603,35 @@ nas réplicas HTTP e uma Application `worker`), só por gatilho medido:
 O motorista entra no app sem depender de e-mail (plano de 02/11/2026, itens
 D1 a D8; decisões D01 a D04). Usuário de escritório e MASTER continuam no
 fluxo de sempre: e-mail e senha, link de uso único para definir a senha
-(decisão 4.9) e segundo fator opcional.
+(decisão 4.9) e segundo fator opcional. A onda 2 (06/11/2026) prendeu o
+CPF aos aparelhos que o QR Code liberou e deu a cada pessoa a própria conta:
+senha, sessões e segundo fator (detalhes depois da tabela).
 
-| Como entra                    | Rota                                                                         | O que vale                                                                                                                                                                                                                                                                                       |
-| ----------------------------- | ---------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **QR Code** (principal)       | `POST /user/:userId/enrollment` (gestor) → `POST /user/session/enroll` (app) | uso único, 10 minutos; gerar outro anula o anterior; o banco guarda só o SHA-256 do token e do código de 8 caracteres (`driver_enrollment_token`); consumo atômico (dois aparelhos, uma sessão); recusa por motorista inativo conta tentativa, e 5 gastam o código                               |
-| **CPF e senha** (alternativa) | `POST /user/session` com `{ cpf, password }`                                 | o CPF é único só por empresa: a senha é conferida em cada login de motorista com aquele CPF (índice `driver_cpf_idx`); uma empresa entra direto, mais de uma devolve `businessSelection` com as empresas em que a senha conferiu, e o app repete com `businessId`; nada é listado antes da senha |
-| E-mail e senha                | `POST /user/session` com `{ email, password }`                               | o mesmo de sempre (o app N-1 e a web)                                                                                                                                                                                                                                                            |
+| Como entra                    | Rota                                                                         | O que vale                                                                                                                                                                                                                                                                                                                                                           |
+| ----------------------------- | ---------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **QR Code** (principal)       | `POST /user/:userId/enrollment` (gestor) → `POST /user/session/enroll` (app) | uso único, 10 minutos; gerar outro anula o anterior; o banco guarda só o SHA-256 do token e do código de 8 caracteres (`driver_enrollment_token`); consumo atômico (dois aparelhos, uma sessão); recusa por motorista inativo conta tentativa, e 5 gastam o código; o aparelho passa a valer para CPF e senha daquele login (onda 2)                                 |
+| **CPF e senha** (alternativa) | `POST /user/session` com `{ cpf, password, deviceId }`                       | só num aparelho que o QR Code liberou para aquele login (onda 2); o CPF é único só por empresa: a senha é conferida em cada login do CPF que conhece o aparelho (índice `driver_cpf_idx`); uma empresa entra direto, mais de uma devolve `businessSelection` com as empresas em que a senha conferiu, e o app repete com `businessId`; nada é listado antes da senha |
+| E-mail e senha                | `POST /user/session` com `{ email, password }`                               | o mesmo de sempre (o app N-1 e a web)                                                                                                                                                                                                                                                                                                                                |
 
 - **Senha definida pelo gestor (D2, decisão D04):** só no login de um
   motorista, em `POST /user/create-user` (`password`) e em
   `PATCH /user/:userId/driver-password`. Nenhum e-mail sai, o e-mail cadastrado
   fica confirmado e a atividade registra quem definiu; a senha nunca vai para
   log (o logger censura `password`, `qrToken`, `qrContent` e `accessCode`) nem
-  para a atividade. Para usuário de escritório o campo é recusado (400).
+  para a atividade. Para usuário de escritório o campo é recusado (400). O
+  gestor conhece essa senha, então ela marca `user.must_change_password`
+  (onda 2): o motorista cria a própria no próximo login. Quem cobra são os
+  clientes (a tela bloqueante do app, o redirecionamento da web): a API não
+  recusa nada por isso, para nunca devolver o outbox do app. O campo sai em
+  `GET /user/me` (`must_change_password`) e como `mustChangePassword` em
+  toda resposta que abre uma sessão (`POST /user/session`, o consumo do QR,
+  a verificação do 2FA, a troca e a criação de senha). Toda senha que a
+  própria pessoa define desmarca: `PATCH /user/password`,
+  `POST /user/me/password` e o link de redefinição por e-mail. A senha atual
+  de `PATCH /user/password` é conferida pela regra do login (7 a 100
+  caracteres, espaço permitido), não pela da senha nova (sem espaços): a
+  senha que o gestor define aceita espaço, e o motorista marcado por ela
+  precisa conseguir trocá-la.
 - **O link de definir senha confirma o e-mail (D1):** gastar o link de uso
   único grava `email_verified` quando ainda não havia.
 - **Sessão do aparelho (D4, decisão D03):** a sessão aberta pelo QR Code, ou
@@ -623,29 +641,150 @@ fluxo de sempre: e-mail e senha, link de uso único para definir a senha
   `device_id` para o próximo token, e uma renovação sem o mesmo `deviceId`
   recebe `401 AUTH_DEVICE_MISMATCH` sem gastar o token. Um cabeçalho nunca
   escolhe essa política.
+- **Aparelhos confiáveis (onda 2, decisão do dono):** o CPF é público e o
+  `deviceId` é o que o cliente disser, então CPF e senha só valem num
+  aparelho que entrou naquele login pelo QR Code do gestor. A confiança mora
+  em `driver_trusted_device` (um aparelho por login, pelo SHA-256 do
+  identificador normalizado, o mesmo `hashDeviceId` do refresh token preso
+  ao aparelho; o identificador nunca é gravado ali). O consumo do QR insere
+  (`source` `qr`); a migration confiou nos aparelhos em uso quando saiu
+  (`backfill`: as sessões presas ao aparelho ainda vivas e o aparelho do
+  último QR lido, menos esse quando o gestor desconectou algum aparelho do
+  login depois da leitura). O que a imagem anterior abriu durante o rollout
+  se resolve no próprio login por CPF, sem nada à mão: um login que não
+  confia no aparelho, mas tem uma sessão viva presa a ele (`refresh_token`
+  com aquele `device_id`, sem revogação nem vencimento), passa a confiar
+  (`backfill`, linha `info` `auth.device_trust_restored`), numa consulta
+  antes de qualquer bcrypt. Nunca pelo QR consumido: a desconexão da imagem
+  anterior deixava a linha apontando para o aparelho. Desta release em
+  diante toda sessão presa ao aparelho já nasce com a confiança, e toda
+  saída da confiança encerra antes essas sessões, então a regra só devolve
+  o que o backfill daria. Sai quando o gestor desconecta o aparelho, quando
+  a própria pessoa encerra em "Aparelhos conectados" a última sessão dela
+  naquele aparelho, quando o motorista é inativado ou tem o acesso revogado
+  (D5) e quando o login passa para outro motorista (`update-user`, na
+  transação da edição: os aparelhos e o QR eram do motorista anterior). Nas duas desconexões, o
+  QR consumido esquece o aparelho (`forgetDevice`), para nada mais apontar
+  para ele. E vence sozinha: um aparelho sem login por 210 dias (o teto de
+  180 da sessão presa ao aparelho mais os 30 de inatividade,
+  `services/trusted-devices.ts`) não conta mais no filtro, e o cron diário
+  `cleanup-expired-refresh-tokens` apaga a linha; sem isso, um aparelho
+  esquecido depois de um logout valia para sempre e nem aparecia na lista
+  do gestor, que mostra só sessões vivas. **Trocar a senha nunca mexe na
+  confiança**: ela só diz "este aparelho pode tentar uma senha".
+  O login por CPF (`executeByCpf`) filtra os logins do CPF pelos que confiam
+  no aparelho logo depois de buscá-los e **antes de qualquer bcrypt**. Sem
+  `deviceId`, com um CPF sem login ou num aparelho que nenhum login do CPF
+  conhece: `403 AUTH_DEVICE_NOT_TRUSTED`, uma resposta só ("Não foi possível
+  entrar com este CPF neste aparelho. Confira o CPF ou peça ao gestor o QR
+  Code de acesso."), sem comparar senha nem contar tentativa, com a linha
+  `auth.login_failed` de motivo `device_not_trusted` e o CPF só como
+  impressão com chave. Os builds do app em campo mostram a frase da API para
+  um código que não conhecem (`signInFailureMessage`), e o 403 não encerra
+  sessão nenhuma (o login não é autenticado). Um QR lido num aparelho novo
+  para o login avisa os administradores da empresa, menos quem gerou o QR
+  (`driver-access.new_device`, na transação da confiança; no sino e no push,
+  pelas preferências; sem e-mail), e registra a atividade.
 - **Bloqueio e limites:** o login por CPF usa o mesmo freio do e-mail
-  (`login-lockout-rules.ts`): uma senha errada conta contra **todos** os logins
-  do CPF e só quando não confere em nenhum; o limite por endereço da rota
-  continua (8 por minuto). CPF inexistente e senha errada recebem a mesma
-  resposta, depois do mesmo bcrypt. Toda recusa por CPF dura o mesmo que
+  (`login-lockout-rules.ts`), só nos logins que confiam no aparelho: uma
+  senha errada conta contra todos eles e só quando não confere em nenhum; o
+  limite por endereço da rota continua (8 por minuto). Um aparelho estranho
+  não chega à senha, então não bloqueia mais o motorista de ninguém. Toda
+  recusa depois do filtro dura o mesmo que
   `DRIVER_LOGINS_BY_CPF_LIMIT` comparações (`shared/security/refusal-pacing.ts`):
-  um bcrypt por login do CPF e, para as comparações que faltam, uma espera no
+  um bcrypt por login e, para as comparações que faltam, uma espera no
   ritmo medido na própria requisição. Assim o tempo não diz em quantas
-  transportadoras o CPF tem login, e a tentativa anônima não gasta mais CPU
+  transportadoras o CPF tem login, e a tentativa não gasta mais CPU
   (fazer os bcrypts que faltam encheria o portão de dois do `bcrypt-gate`).
-  O login aceito não espera.
+  O login aceito não espera e grava `last_login_at` do aparelho. Com o
+  segundo fator ligado (conta com e-mail), o desafio leva o hash do
+  aparelho: a verificação só vale com o mesmo `deviceId` e abre a sessão
+  presa a ele.
 - **Inativar o motorista (D5):** apaga os refresh tokens e os aparelhos de
-  push do login (`revokeAllUserRefreshTokens`) e o QR Code ainda não usado, sem
+  push do login (`revokeAllUserRefreshTokens`), o QR Code ainda não usado e os
+  aparelhos confiáveis (onda 2), sem
   mexer em `session_version`: a próxima requisição do app ouve
   `403 AUTH_DRIVER_INACTIVE` (o porquê), e não um 401 genérico (D6). Revogar o
-  acesso do login também apaga o QR Code ainda não usado (restaurar não o traz
-  de volta). O consumo do QR confere o hash do código lido: um "gerar outro"
+  acesso do login também apaga o QR Code ainda não usado e os aparelhos
+  confiáveis (restaurar não traz nenhum dos dois de volta). O consumo do QR confere o hash do código lido: um "gerar outro"
   entre a leitura e o consumo deixa o código antigo morto, e as recusas dele
   não contam contra o novo.
 - **Aparelhos (D7):** `GET /user/:userId/devices` lista os aparelhos com
   sessão presa a eles; `DELETE /user/:userId/devices/:deviceId` encerra as
   sessões daquele aparelho e os aparelhos de push delas (evento de segurança
-  `device_revoked`).
+  `device_revoked`) e tira a confiança do aparelho, mesmo sem sessão viva
+  nele (onda 2). A lista nomeia cada aparelho pelo `deviceHash` (o SHA-256
+  do identificador, o mesmo `hashDeviceId`), nunca pelo Android ID: desde a
+  onda 2 o identificador é o que o login por CPF confere, e a lista abre
+  para quem só tem `user_registration_manage:read`. `deviceId` repete o
+  mesmo valor, com o nome anterior do campo. O `DELETE` recebe esse hash (e
+  ainda aceita o identificador, que vira hash no schema); as sessões são
+  achadas comparando o hash de cada `device_id`, e o QR consumido esquece o
+  aparelho quando o hash do `device_id` dele confere.
+- **"Aparelhos conectados" (onda 2):** `GET /user/me/sessions` lista as
+  sessões vivas da própria pessoa (toda família de refresh token), da
+  atividade mais recente para a mais antiga, com `kind` (`aparelho` para a
+  sessão presa a um celular, `app` para o app por e-mail, `navegador` para
+  a web; a política não fica gravada na linha, então vem dos rastros: o
+  `device_id`, a duração do último token e o aparelho de push que só o app
+  registra), `current` e `device_label` ("Este aparelho" na desta
+  requisição). Nunca o identificador do aparelho. `DELETE
+/user/me/sessions/:id` encerra outra sessão (refresh tokens e push dela,
+  evento `logout` na sala dela), tira a confiança do aparelho quando ela era
+  presa a um e nenhuma outra sessão viva da pessoa continua nele (a desta
+  requisição incluída: encerrar a sessão antiga que um logout sem sinal
+  deixou no próprio celular não tira o CPF dele), recusa a desta requisição (`409 SESSION_IS_CURRENT`: a saída
+  dela é o logout) e responde 204 para uma sessão já encerrada ou de outra
+  pessoa, sem tocar em nada.
+- **Trocar a senha mantém esta sessão (onda 2, decisão do dono):**
+  `PATCH /user/password` ainda sobe `session_version` (o número que todo
+  token, renovação e socket confere), então toda outra sessão morre na
+  próxima requisição; esta é reemitida na mesma família e na mesma política
+  (presa ao mesmo aparelho, quando era; o nascimento da família vem do
+  UUIDv7 do seu id, `familyStartedAtOf`, e o teto não anda), tudo na
+  transação da senha (`updateUserPasswordKeepingSession`). O token vivo
+  desta sessão é apagado, não revogado: uma renovação dela que leu o usuário
+  antes do commit e gira depois não acha linha nenhuma (401 comum); uma
+  linha revogada sem `replaced_by_jti` seria lida como token gasto
+  reapresentado, e o alarme de reuso derrubaria todas as sessões, inclusive
+  a que a troca acabou de devolver. A resposta traz
+  `token` e `refresh_token`; o `password_changed` vai só para as salas
+  `session:<id>` das outras sessões, e os sockets desta adotam a versão nova
+  (`adoptSessionVersion`, entre réplicas pelo adapter) em vez de caírem na
+  varredura como `user_updated`. Os aparelhos de push das outras sessões (e
+  os sem sessão, de antes da coluna) saem; o bloqueio por senhas erradas e o
+  `must_change_password` são limpos. Cliente que ignora os tokens sai na
+  próxima requisição, como antes; com e-mail, o aviso "senha atualizada"
+  continua. A sessão é conferida viva antes, fora da transação (e de um
+  bcrypt); se ela terminou nesse meio-tempo (logout, "Revogar este
+  aparelho", "Aparelhos conectados", alarme de reuso, reset do gestor), a
+  transação não acha token vivo dela, desfaz tudo
+  (`KeptSessionEndedError`) e nada a traz de volta: a troca segue como para
+  uma sessão que já não vivia (todas as sessões terminam, sem tokens na
+  resposta), e a criação depois do QR recusa com
+  `403 PASSWORD_CREATE_NOT_ALLOWED`.
+- **Criar a senha depois do QR (onda 2):** "esqueci a senha" sem e-mail é um
+  QR Code novo do gestor; logo depois, `POST /user/me/password` (`{ password }`,
+  a mesma regra da troca) cria a senha sem a atual. Vale só na sessão que o
+  QR abriu: o QR foi consumido há até 15 minutos, no aparelho desta sessão, e
+  ela começou depois do consumo (o mais antigo entre o nascimento no UUIDv7
+  do id e a primeira linha guardada, com 30 s de folga entre o relógio da
+  API e o do banco). Fora disso, `403 PASSWORD_CREATE_NOT_ALLOWED`.
+  O efeito é o da troca (mantém esta sessão, encerra as outras, limpa o
+  bloqueio e o `must_change_password`); a atividade registra e os
+  administradores, menos quem gerou o QR, recebem
+  `driver-access.password_created` na transação da senha: um código ditado
+  por telefone a alguém que se passa pelo motorista termina aqui.
+- **Segundo fator explícito (onda 2):** `PATCH /user/twofactor` leva
+  `{ enabled, password }`: o mesmo estado de agora responde 200 sem mudar
+  nada (uma repetição depois de um timeout não desfaz), senha errada é
+  `400 PASSWORD_CURRENT_INCORRECT` (um 401 numa rota autenticada faria os
+  dois clientes renovarem a sessão e saírem) e ligar numa conta sem e-mail é
+  `409 TWO_FACTOR_REQUIRES_EMAIL`. Sem corpo, ainda inverte como antes, só
+  nesta release, para a web da release anterior (linha `warn`
+  `auth.twofactor_legacy_toggle`; a remoção está em
+  [`deploy.md`](./deploy.md#expansões-que-pedem-a-release-seguinte-plano-de-02112026)).
+  O app não oferece 2FA ao motorista.
 - **Logout sem rede (A3):** `POST /user/session/revoke` encerra uma sessão só
   com o refresh token (mesmo vencido) e apaga os aparelhos de push dela;
   idempotente (204).
@@ -653,6 +792,299 @@ fluxo de sempre: e-mail e senha, link de uso único para definir a senha
   `user_registration_manage`, valem só para login de motorista
   (`409 USER_NOT_DRIVER`) e respondem `404 USER_NOT_FOUND` para usuário de outra
   empresa, como para um inexistente.
+
+## O que o app lê pelo aviso: OS, contas e Kanban
+
+Onda 3 (06/11/2026, decisões do dono): o aviso abre no app o item exato, e
+o motorista passa a ver as próprias ordens de serviço, contas a pagar e o
+card do Kanban, tudo em leitura (editar continua na web, que não mudou).
+
+**O push diz qual item e de quem.** O push e a linha da caixa de avisos são
+entregas separadas do mesmo evento, então o push só sabia abrir a tela de
+avisos. O `data` de todo push que reaproveita o aviso do sino passou de
+`{ url: "/notifications", link, type, deliveryId }` para essas mesmas
+chaves mais `entityId` (o item, o mesmo da linha), `businessId` (a empresa
+do evento, a mesma da linha) e `userId` (quem recebeu); os pushes próprios
+(chat, rota, decisão da torre) mantêm o `data` da política e ganham
+`businessId` e `userId` ao lado, sem sobrescrever chave da política
+(`src/shared/notifications/push-data.ts`). Só ids: o `data` passa pela Expo
+e pelo FCM e chega à tela bloqueada. Aditivo: o build que lê só `url`
+continua abrindo os avisos. O `userId` e o `businessId` deixam o app
+recusar um aviso antigo de outro login que ficou na bandeja de um celular
+compartilhado.
+
+| Rota                                     | Quem lê                                                                                                                                                                                                     | Resposta                                                                                       |
+| ---------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
+| `GET /service-order/:serviceOrderId`     | admin da empresa; perfil com `service_order_manage:read`; MASTER com `?businessId=` (sem ele, `400 BUSINESS_NOT_IDENTIFIED`); motorista só na ordem em que é o responsável ou de um veículo que pode operar | `{ view: "driver" ou "full", serviceOrder }`                                                   |
+| `GET /service-order/mine?scope=`         | só login de motorista (`403 DRIVER_ONLY` para os demais)                                                                                                                                                    | NDJSON por cursor, mais novas primeiro, sempre a visão `driver`                                |
+| `GET /account-payable/:accountPayableId` | admin; perfil com `account_payable_manage:read`; MASTER com `?businessId=`; os demais (o motorista inclusive) só a conta em que são o responsável                                                           | `{ accountPayable }`, a linha das listagens com a situação pelo dia de negócio                 |
+| `GET /kanban/card/:cardId`               | o responsável pelo card (o motorista inclusive); quem tem leitura completa do Kanban (admin, MASTER, perfil com `kanban_manage:read`)                                                                       | `{ card }`: título, descrição, prioridade, prazo, concluído, coluna; o responsável só com nome |
+| `POST /notification/read-by-entity`      | a própria pessoa, nas próprias notificações; um `businessId` no corpo é `400 VALIDATION_ERROR`, a trava de tenant de toda edição (decisão 16.100)                                                           | `{ message, count }`                                                                           |
+
+- **Fora do alcance é 404, com o corpo de um id que não existe**
+  (`SERVICE_ORDER_NOT_FOUND`, `ACCOUNT_PAYABLE_NOT_FOUND`,
+  `KANBAN_CARD_NOT_FOUND`): outra empresa, outro motorista, outro
+  responsável. A OS é buscada já dentro da empresa
+  (`findServiceOrderDetail(id, businessId)`), nunca comparada depois. Quem
+  não é MASTER e nomeia outra empresa em `businessId` recebe
+  `403 TENANT_ACCESS_DENIED` do guard de tenant
+  (`resolveRequestedCompany`, em `tenant-authorization.ts`, repete a regra
+  no caso de uso).
+- **"Minhas OS" tem duas seções**, cada uma com o próprio cursor:
+  `assigned` são as ordens em que o usuário é o responsável (as que o aviso
+  anuncia; a OS de outro caminhão dava 403 no histórico do veículo) e
+  `vehicle` as dos veículos que ele pode operar, menos as que já estão em
+  `assigned`. "Pode operar" é a regra de `canDriverOperateVehicle`, como
+  lista (`findDriverOperableVehicleIds`): o responsável pelo veículo e o
+  substituto da rota liberada ou em andamento. Usa os índices que já
+  existiam (`responsibleUserId`, `vehicleId`); sem migration.
+- **O motorista nunca recebe dinheiro de uma OS.** A visão `driver`
+  (`service-order-views.ts`) é uma lista fechada de campos, montada campo a
+  campo: sem total, sem preço ou desconto de peça, sem fornecedor; as peças
+  só com nome e quantidade (o que foi feito no caminhão que ele dirige é
+  assunto dele, o preço não). Coluna nova na OS fica fora até alguém
+  decidir. O histórico do veículo (`search-service-order-by-vehicle`) ainda
+  traz os preços e o fornecedor ao motorista: o app novo deixa de usá-lo
+  para isso, e o corte nessa rota fica para quando nenhum build em campo
+  depender dela. A visão `full` (escritório e MASTER) traz o total, a soma
+  das peças, preço e desconto de cada peça, o fornecedor e a localização.
+- **Conta a pagar**: o motorista vê só a conta em que é responsável, como em
+  "minhas contas" (decisão 4.5); quem lê a empresa vê qualquer uma. Valores
+  saem como número.
+- **Kanban**: o card ainda avisa o responsável, inclusive o motorista, que
+  não tem o quadro em nenhum menu (D45). Ele abre esse card, e só ele, pelo
+  aviso. O modelo não tem checklist nem anexos no card; a resposta traz o
+  que existe.
+- **Marcar como lido pelo item**: o push não sabe o id da linha da caixa de
+  avisos, então o app, ao abrir o detalhe, manda `{ type, entityId }` e as
+  linhas não lidas da própria pessoa com esse tipo e esse item viram lidas.
+  Idempotente (`count: 0` na repetição), 30 por minuto. Cada linha que mudou
+  é anunciada por `notificationsRead` com o id dela, nunca com o `null` de
+  "todas lidas", que os clientes tratam como ler a caixa inteira.
+- **Defeito no checklist** (`vehicle-checklist-defect`) continua indo para o
+  responsável indicado no evento, motorista ou não, sem mudança: não há tela
+  dele no app nesta onda (o app oferece a web, se houver e-mail, ou nada).
+- **Módulo**: OS e contas exigem Frota (`403 MODULE_NOT_ENABLED`, inclusive
+  para o MASTER na empresa que ele nomeia); o Kanban não tem módulo.
+
+## Gestor e master no app: rotas ao vivo, autorizações e salas sob demanda
+
+Onda 4 (06/11/2026, decisões do dono): o administrador, o perfil com a chave
+de leitura e o MASTER (na empresa escolhida no app) acompanham as rotas e
+decidem as autorizações de ocorrência pelo celular. Do lado da API são
+quatro mudanças, todas aditivas: a web e os builds em campo não mudam.
+
+**`GET /route/live`: a lista da torre sem o custo da torre.** A torre faz
+cerca de oito leituras por atualização (funil, pontualidade, eventos,
+pausas). O celular do gestor precisa só da lista: as rotas da empresa em
+andamento (de qualquer dia; a esquecida aberta entra com `stale`, a regra
+D26) e as liberadas para hoje (dia da empresa, no fuso dela) ainda não
+iniciadas. Uma linha por rota:
+
+| Campo                                      | O que é                                                                                     |
+| ------------------------------------------ | ------------------------------------------------------------------------------------------- |
+| `id`, `code`, `name`, `status`             | a rota; `status` é `IN_PROGRESS` ou `RELEASED`                                              |
+| `scheduled_date`, `started_at`, `stale`    | o dia (AAAA-MM-DD), a saída e o selo de rota esquecida da torre                             |
+| `driverId`, `driver_name`, `vehicle_plate` | o motorista e a placa                                                                       |
+| `stops_total`, `stops_resolved`            | o "8 de 12": paradas sem as canceladas e, delas, as entregues ou com insucesso              |
+| `pending_authorizations`                   | pedidos vivos da rota, a mesma conta da fila de autorizações                                |
+| `position` (`lat`, `lng`, `recorded_at`)   | o último ponto do motorista, só se das últimas 12 h (a janela do mapa da torre); senão null |
+| `last_signal_at`                           | o último ponto, por mais antigo; null se o telefone nunca reportou                          |
+
+E `meta`: `day`, `timeZone`, `generatedAt` (o relógio do servidor, para o
+"há N min"), `silentAfterMs` (o "Sem sinal" da torre, 10 min,
+`POSITION_FRESH_MS`), `limit` (500), `truncated` e `nextCursor`. A ordem é
+em andamento primeiro, depois as liberadas, cada grupo pelo número (único
+por empresa: a chave do cursor é total, e uma página nunca repete nem pula
+rota). Teto de 500 linhas: havendo mais, `truncated: true` e o cursor
+(base64url opaco; inválido é `400 INVALID_CURSOR`) abre a próxima. As
+guardas são as da torre: módulo Entregas, `delivery_manage` de leitura,
+token de motorista recusado (403), MASTER com `?businessId=` (sem ele,
+`400 BUSINESS_NOT_IDENTIFIED`) e outra empresa em `businessId` é
+`403 TENANT_ACCESS_DENIED`. A mesma lista alimenta o mapa da onda 5, por
+isso a posição vem nela.
+
+**Custo medido em consultas, não em milissegundos.** Por chamada: o
+usuário (como em toda rota de gestor), o fuso da empresa (chave primária) e
+duas consultas de dados:
+
+1. `listLiveRoutes` (`operation-day-repository.ts`), **uma** instrução. A
+   CTE `live` lê as rotas por `route_businessId_status_scheduled_date_idx`
+   em duas faixas do índice, ambas só de rotas vivas
+   (`businessId, 'IN_PROGRESS'` e `businessId, 'RELEASED', hoje`): nunca o
+   histórico da empresa. Ordena esse punhado em memória e corta no teto + 1.
+   Só então, para as linhas da página: as contagens de paradas num
+   `LATERAL` por `route_stop (routeId, ...)` (uma sondagem por rota, sem ler
+   entrega), e o motorista, a placa e `driver_last_position` por chave
+   primária. O último ponto é casado pelo motorista **e** pela empresa: um
+   motorista que mudou de empresa leva a linha dele, e a antiga não a lê.
+2. `countPendingByRoute` (`occurrence-authorization-repository.ts`): a
+   leitura da própria fila (o índice parcial
+   `delivery_occurrence_pending_authorization_idx`, com a mesma regra de
+   pedido vivo), agrupada pela rota da parada aberta de cada pedido e
+   restrita às rotas da página. Lê os pedidos pendentes da empresa (um
+   punhado), não as paradas nem as entregas das rotas. Pulada quando a
+   página vem vazia.
+
+Sem migration: os índices já existiam. O plano, com 2.400 rotas e 48.000
+paradas por empresa (40 vivas hoje), está em `query-plans.test.ts` ("lists
+the live routes from their own index ranges"): nenhuma varredura
+sequencial em `route` nem em `route_stop`, menos de 200 rotas e de 1.600
+paradas lidas, e nada de `delivery`, `delivery_event`, `driver_position`
+ou `delivery_occurrence` nessa instrução. O app consulta a cada 60 s **só
+com a tela focada e o app em primeiro plano**: o custo cresce com os
+gestores olhando, não com a frota.
+
+**A fila de autorizações para o app.** `GET /delivery/occurrence-authorizations`
+(a mesma da web, que consulta a cada 30 s) ganhou dois parâmetros
+opcionais e diz a visão em `view`:
+
+- `view=summary`: a linha da lista, montada campo a campo
+  (`summaryOf`): o pedido, o tipo, a categoria, a descrição do motorista,
+  quem pediu, os horários, a entrega e `photos_count`, `has_receipt_photo`,
+  `has_signature`. Sem URL assinada, formulário, respostas nem coordenadas:
+  a consulta de 30 s do celular não assina todas as fotos da fila.
+- `occurrenceId`: só esse pedido, se ainda aguarda (o detalhe aberto pelo
+  aviso), na visão pedida (`full` por padrão, com as fotos assinadas como
+  na web). Decidido, encerrado ou de outra empresa: `data` vazio e
+  `total` 0, a resposta de um id inexistente.
+- Sem os dois, a resposta é a de antes, com `view: "full"` a mais. O
+  esquema de resposta é uma união por `view`, e o serializador lê o corpo
+  pelo ramo que ele nomeia: a lista do app nunca carrega uma URL assinada.
+- Aprovar e negar continuam em
+  `POST /delivery/occurrence-authorization/:occurrenceId/business/:businessId`.
+  A decisão já tomada por outra pessoa é `409 OCCURRENCE_ALREADY_DECIDED`
+  com `decision.authorizedBy.name` (o "Já decidido por <nome>"); um pedido
+  encerrado de outro jeito vem com `decision.status: "SUPERSEDED"` e
+  `authorizedBy` nulo.
+
+**O aviso de autorização marcado para o app.** O pedido
+(`delivery-occurrence.authorization_requested`) e a escalada
+(`delivery-occurrence.authorization_escalated`) continuam com
+`type: "delivery"` e a entrega em `entityId`: a web, os builds em campo e o
+`read-by-entity` leem assim. O push ganha `kind: "occurrence-authorization"`
+e `occurrenceId` (o que o endpoint de decisão pede; a empresa é o
+`businessId` do próprio push), pelo `pushData` do render (`RenderedInApp`),
+que entra antes das chaves do pipeline e nunca as substitui. A linha da
+caixa de avisos não tem coluna livre, então fica como era, e o app trata as
+linhas antigas como hoje. A caixa do MASTER continua sem esses avisos
+(`findDeliveryOperators` filtra pela empresa): para ele o valor está em
+navegar pela empresa escolhida.
+
+**Salas do app sob demanda.** O socket de todo administrador ou operador
+entrava sozinho, no connect, nas salas `operations:<empresa>` e
+`chat-staff:<empresa>`. Na web é a torre e o SAC. No app eram as posições,
+os eventos de rota, o chat, a digitação, a presença e os atendimentos da
+frota inteira chegando a um celular que descartava tudo (os ouvintes de
+Entregas só montam para o motorista). Agora o socket diz quem é
+(`src/shared/socket/socket-client.ts`): o cabeçalho
+`x-trajetto-client: mobile` (o mesmo de toda chamada HTTP do app, por
+`extraHeaders`) ou `client: "mobile"` no `auth` do handshake. O socket do
+app:
+
+- **não entra** em `operations:` nem em `chat-staff:` no connect (continua
+  em `user:`, `session:` e `business:`, que levam segurança, plano e
+  avisos);
+- entra com `operationsSubscribe { businessId }` quando a tela de operação
+  ganha foco, com as checagens de sempre: outra empresa recusada sem
+  consulta, e a condição de equipe de despacho relida do banco
+  (administrador ou `delivery_manage` de leitura; motorista nunca; MASTER
+  em qualquer empresa, a escolhida no app);
+- sai com `operationsUnsubscribe { businessId }` ao perder o foco ou ir
+  para o segundo plano, **inclusive da sala da própria empresa** (a trava
+  que impede isso vale só para a web). O mesmo vale para `chatUnsubscribe`.
+
+O subscribe espera a leitura do banco antes de entrar; o unsubscribe não
+espera nada. Sem cuidado, um unsubscribe que chega durante essa leitura não
+acha sala para sair, e o subscribe entra logo depois. É o que o app manda
+quando um push abre uma tela por cima da aba Operação (foco e, milissegundos
+depois, perda de foco), e o celular ficava recebendo a frota inteira numa
+tela que não desenha nada disso. Por isso cada subscribe pega um ticket
+antes de esperar e só entra se o ticket ainda for o último pedido do socket
+(`src/shared/socket/subscription-intent.ts`). Um unsubscribe da mesma
+empresa cancela o ticket, mesmo sem sala ainda. Um subscribe mais novo
+também cancela (o MASTER trocando de empresa): vale a última mensagem que o
+cliente mandou, em qualquer ordem que as leituras voltem. Perder a condição
+de equipe cancela todos. Um unsubscribe barrado pela trava da web não
+cancela nada. O ticket fica num `WeakMap` ao lado do socket, fora do
+`socket.data` que o `fetchSockets` serializa pelo Redis.
+
+As recusas continuam silenciosas (sem desconectar, sem dizer se a empresa
+existe). `operationsUnsubscribe` e `chatUnsubscribe` passaram a aceitar o
+mesmo _acknowledgement_ vazio dos subscribes. A web não muda: entra no
+connect e mantém a trava. O marcador só tira salas de quem o manda (quem
+mente que é o app ouve menos, nunca mais), por isso basta ele ser
+declarado. Builds do app anteriores à onda 4 não mandam o marcador e
+continuam entrando no connect, como hoje: descartam esses eventos, então
+o custo é só o que já existia, e some à medida que o app atualiza pela OTA.
+Prova: `tests/E2E/socket-mobile-rooms.test.ts`.
+
+**O mapa de fundo do app (onda 5): `GET /config/map`.** O mapa ao vivo do
+app desenha as posições de `GET /route/live` sobre os tiles do mesmo
+provedor da web. A web lê `MAP_TILE_URL` no próprio servidor
+(`trajetto-ui/src/features/control-tower/lib/map-tiles.ts`); o app sai por
+OTA como um pacote JavaScript, e uma URL de provedor embutida nele entrega
+a chave a quem abrir o APK e só muda com outro pacote. Por isso a API tem
+as mesmas quatro variáveis (`MAP_TILE_URL`, `MAP_TILE_ATTRIBUTION`,
+`MAP_TILE_URL_DARK`, `MAP_TILE_ATTRIBUTION_DARK`), que o dono define no
+Dokploy com os valores da web, e as entrega a quem tem sessão:
+
+```json
+{
+  "tiles": {
+    "url": "https://{s}.provedor/…/{z}/{x}/{y}.png?key=…",
+    "attribution": "© Provedor",
+    "dark": {
+      "url": "https://…/{z}/{x}/{y}.png?key=…",
+      "attribution": "© Provedor"
+    }
+  }
+}
+```
+
+As regras são as da web, portadas uma a uma (com duas diferenças, marcadas
+abaixo) em `src/shared/map/map-tiles.ts` (função pura, testada em
+`tests/unitaires/map/map-tiles.test.ts`):
+
+- **modelo**: https com `{z}`, `{x}` e `{y}` (`{s}`, `{r}` e outras vagas
+  minúsculas do Leaflet opcionais); http só com `APP_ENV` de
+  desenvolvimento. O env-schema usa a mesma função: modelo inválido derruba
+  o boot com o nome da variável, nunca o valor (a URL pode levar a chave),
+  e fora de desenvolvimento `tile.openstreetmap.org` é recusado, como no
+  mapa do comprovante;
+- **modelo que o app aceita** (diferença da web, mais estrita): a
+  página do mapa do app só deixa entrar imagens da origem dos tiles, e
+  recusa um modelo cujo host o CSP dela não consegue nomear como uma origem
+  só (`isTileTemplate` e `TEMPLATE_HEAD` de
+  `trajetto-mobile/features/live-map/map-config-rules.ts`). A API recusa o
+  mesmo, copiado como está: host curinga, `{s}` sozinho ou direto sobre o
+  domínio de topo, outra vaga no host, credenciais, IPv6, `_` ou ponto no
+  fim do host, espaço, aspas, `<`, `>`, `\`, crase ou `*` em qualquer
+  lugar, e mais de 1024 caracteres. Sem isso, a API subia e servia o
+  modelo, e o app mostrava "Mapa de fundo não configurado" com a variável
+  definida. A tabela de paridade de `map-tiles.test.ts` roda também contra
+  a função do app quando o checkout irmão existe;
+- **crédito**: texto simples no ambiente, devolvido escapado para HTML
+  (o Leaflet escreve o crédito como HTML; um valor de ambiente nunca vira
+  marcação). Sem crédito, "© provedor de mapas" (e o boot de staging e
+  produção avisa);
+- **sem provedor**: em desenvolvimento, o OpenStreetMap público; em
+  staging e produção, `tiles: null`, e o app desenha os marcadores sem
+  mapa de fundo e avisa, como o "sem mapa de fundo" da web. Outra
+  diferença da web: o crédito do OSM de desenvolvimento é texto, sem o
+  link, porque o WebView do app bloqueia a navegação e um crédito que
+  nunca é marcação deixa o app recusar qualquer tag;
+- **tema escuro**: `dark` só com `MAP_TILE_URL_DARK` válida e com mapa
+  claro; sem crédito próprio, repete o do claro. Sem `dark`, o app recolore
+  os tiles claros com o filtro CSS da web.
+
+Só a sessão é exigida (`ensureAuthenticated`, sem empresa, módulo nem
+permissão): é o provedor da plataforma, o mesmo que a web entrega a todo
+navegador, não dado de empresa; o motorista e o MASTER sem empresa leem a
+mesma resposta. `Cache-Control: private, max-age=300`: nenhum cache
+compartilhado guarda a chave, e o valor só muda com um deploy. As URLs
+entram na censura do logger. Prova HTTP:
+`tests/E2E/config-map-http.test.ts`.
 
 ## Configurações da empresa
 
@@ -1347,6 +1779,7 @@ D54).
 | Rotas        | quadro por rota                         | `GET /route/monitoring`                   | rotas do dia da empresa mais as em andamento de dias anteriores (com `stale`/`openSince`); paginado                                            |
 | Ocorrências  | cartões e lista                         | `GET /delivery/list-occurrences`          | todas as ocorrências da empresa (sem "hoje"); os cartões contam o conjunto filtrado inteiro, com os mesmos filtros da lista, nunca a página    |
 | Ocorrências  | fila de autorizações                    | `GET /delivery/occurrence-authorizations` | pedidos pendentes; o aviso aos administradores conta 10 min da chegada ao servidor                                                             |
+| App          | rotas ao vivo do gestor (onda 4)        | `GET /route/live`                         | rotas em andamento (de qualquer dia, com `stale`) e liberadas para hoje no fuso da empresa; 500 por página, com cursor                         |
 | Atendimentos | selo e balão                            | `GET /chat/tickets/summary`               | contagens por situação (abertos, sem atendente, meus, aguardando autorização, não lidos), sem janela de data                                   |
 | Atendimentos | lista                                   | `GET /chat/tickets`                       | os mesmos tickets, com os filtros da tela                                                                                                      |
 | Auditoria    | fila e taxa de concordância             | `GET /delivery/proof-audits`              | fila sem janela; `agreementRate` cobre os últimos 90 dias civis no fuso da empresa                                                             |
@@ -1445,7 +1878,7 @@ perdidos.
 | `reconcile-proof-analysis`           | a cada 10 min             | pede de novo a leitura de IA de um comprovante cujo pedido se perdeu                                                                   |
 | `reconcile-record-analysis`          | a cada 10 min (:05, :15…) | o mesmo para abastecimentos e checklists `pending` sem pedido e com foto legível, de 10 min a 2 dias, sem gastar quota com o histórico |
 | `check-push-receipts`                | a cada 15 min             | lê os recibos da Expo e desativa aparelhos mortos                                                                                      |
-| `cleanup-expired-refresh-tokens`     | 03:17                     | remove refresh tokens vencidos                                                                                                         |
+| `cleanup-expired-refresh-tokens`     | 03:17                     | remove refresh tokens vencidos, os push das sessões que sumiram e os aparelhos confiáveis sem login há 210 dias                        |
 | `cleanup-notification-pipeline`      | 03:30                     | limpa entregas de notificação antigas                                                                                                  |
 | `cleanup-ai-pipeline`                | 03:45                     | limpa pedidos de IA antigos                                                                                                            |
 | `cleanup-user-history`               | 04:00                     | limpa histórico antigo do usuário (a trilha de auditoria só com `ACTIVITY_RETENTION_DAYS`, nunca abaixo de 365)                        |
@@ -1493,7 +1926,13 @@ não persiste nada.
 só com WebSocket, salas por usuário,
 sessão, empresa (`business:<id>`) e operação (`operations:<id>`). A
 autorização é relida do banco a cada inscrição e revalidada periodicamente
-(`SOCKET_REVALIDATE_MS`, 3 min com jitter). A entrega é _at-most-once_: a
+(`SOCKET_REVALIDATE_MS`, 3 min com jitter). O socket da web da equipe de
+despacho entra nas salas de operação e do SAC da própria empresa no
+connect; o do app (cabeçalho `x-trajetto-client: mobile` ou
+`auth.client: "mobile"`) só entra com `operationsSubscribe` e sai com
+`operationsUnsubscribe`, a própria empresa inclusive (onda 4, ver
+[Gestor e master no app](#gestor-e-master-no-app-rotas-ao-vivo-autorizações-e-salas-sob-demanda)).
+A entrega é _at-most-once_: a
 verdade está no banco e as telas refazem a consulta ao reconectar. Mudanças de
 catálogo emitem `catalogChanged` `{ businessId, entity }` depois do commit, e
 a web invalida a lista daquela entidade. `SOCKET_ADAPTER_KEY` separa os canais
@@ -1794,7 +2233,9 @@ OpenStreetMap são recusados.
   acontece depois chega por `/webhooks/resend` (assinado com
   `RESEND_WEBHOOK_SECRET`) e fica em `notification_provider_receipt`.
 - **Push**: pela Expo, para o app Android; o cron `check-push-receipts`
-  desativa aparelhos mortos. Cada tópico diz por quanto tempo o push vale
+  desativa aparelhos mortos. O `data` leva o item, a empresa e quem recebeu
+  (`entityId`, `businessId`, `userId`; onda 3, em
+  [O que o app lê pelo aviso](#o-que-o-app-lê-pelo-aviso-os-contas-e-kanban)). Cada tópico diz por quanto tempo o push vale
   (`pushTtlSeconds` na política, `ttl` da Expo; D41): rota e decisão da torre
   12 h, chat e IA do canhoto 24 h, os demais o padrão do provedor. Com
   `EXPO_ACCESS_TOKEN`, o envio e os recibos levam `Authorization: Bearer`

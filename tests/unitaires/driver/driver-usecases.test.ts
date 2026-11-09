@@ -28,6 +28,7 @@ import { InMemoryDeliveryRepository } from "@/modules/delivery/repositories/in-m
 import { InMemoryUserRepository } from "@/modules/user/repositories/in-memory/in-memory-user-repository";
 import { InMemoryUserTokensRepository } from "@/modules/user/repositories/in-memory/in-memory-user-tokens-repository";
 import { InMemoryDriverEnrollmentRepository } from "@/modules/user/repositories/in-memory/in-memory-driver-enrollment-repository";
+import { InMemoryDriverTrustedDeviceRepository } from "@/modules/user/repositories/in-memory/in-memory-driver-trusted-device-repository";
 import { InMemoryBusinessRepository } from "@/modules/business/repositories/in-memory/in-memory-business-repository";
 import { InMemoryBranchRepository } from "@/modules/branch/repositories/in-memory/in-memory-branch-repository";
 
@@ -85,6 +86,7 @@ function driverData(
 function makeContext() {
   const tokens = new InMemoryUserTokensRepository();
   const enrollments = new InMemoryDriverEnrollmentRepository();
+  const trustedDevices = new InMemoryDriverTrustedDeviceRepository();
   const users = new InMemoryUserRepository({ tokens });
   const businesses = new InMemoryBusinessRepository();
   const branches = new InMemoryBranchRepository();
@@ -120,6 +122,7 @@ function makeContext() {
     users,
     tokens,
     enrollments,
+    trustedDevices,
     drivers,
     pauses,
     routes: routeRepository.routes,
@@ -138,6 +141,7 @@ function makeContext() {
       notificationStub,
       tokens,
       enrollments,
+      trustedDevices,
     ),
     remove: new DeleteDriverUseCase(
       users,
@@ -242,7 +246,9 @@ describe("deactivating a driver with work pending (decision 8.3)", () => {
   // bare "session ended". The push devices go with the sessions in the same
   // statement (revokeAllUserRefreshTokens); the token twin has no devices, so
   // that half is proven against Postgres (driver-inactivation-sessions-http).
-  it("ends the driver's sessions and access QR code", async () => {
+  // Wave 2: the phones the login trusted for CPF and password go too, so a
+  // reactivated driver enters by a new QR code first.
+  it("ends the driver's sessions, access QR code and trusted phones", async () => {
     const driver = await context.create.execute(driverData(A), ADMIN_A);
 
     context.users.user.push({
@@ -269,10 +275,16 @@ describe("deactivating a driver with work pending (decision 8.3)", () => {
       expiresAt: new Date(Date.now() + 60_000),
       createdById: ADMIN_A,
     });
+    await context.trustedDevices.trust({
+      userId: DRIVER_USER,
+      deviceHash: "a".repeat(64),
+      source: "qr",
+    });
 
     await context.update.execute({ status: "INACTIVE" }, driver.id, ADMIN_A, A);
 
     expect(context.tokens.refreshTokenItems).toHaveLength(0);
+    expect(context.trustedDevices.devices).toHaveLength(0);
     expect(
       await context.enrollments.findByToken("qr-ainda-na-tela"),
     ).toBeNull();

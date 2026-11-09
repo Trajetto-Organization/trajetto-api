@@ -133,6 +133,8 @@ const SHIPPER_COLUMN_DEFAULTS = {
 
 const USER_COLUMN_DEFAULTS = {
   ops_alert_sound_enabled: true,
+  // 20261106120000: nobody must change a password they set themselves.
+  must_change_password: false,
 } as const;
 
 const DELIVERY_PROOF_DOCUMENT_COLUMN_DEFAULTS = {

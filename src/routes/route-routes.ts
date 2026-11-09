@@ -26,6 +26,7 @@ import { ControlTowerController } from "@/modules/route/usecases/control-tower/c
 import { DriverTrailController } from "@/modules/route/usecases/driver-trail/driver-trail-controller";
 import { RouteMonitoringController } from "@/modules/route/usecases/route-monitoring/route-monitoring-controller";
 import { DriverMonitoringController } from "@/modules/route/usecases/driver-monitoring/driver-monitoring-controller";
+import { LiveRoutesController } from "@/modules/route/usecases/live-routes/live-routes-controller";
 
 import { MarkStopOnTheWayController } from "@/modules/route/usecases/mark-stop-on-the-way/mark-stop-on-the-way-controller";
 import {
@@ -80,6 +81,7 @@ const controlTowerController = new ControlTowerController();
 const driverTrailController = new DriverTrailController();
 const routeMonitoringController = new RouteMonitoringController();
 const driverMonitoringController = new DriverMonitoringController();
+const liveRoutesController = new LiveRoutesController();
 const markStopOnTheWayController = new MarkStopOnTheWayController();
 
 /**
@@ -772,6 +774,40 @@ async function routeRoutes(app: FastifyInstance) {
       },
     },
     controlTowerController.handle,
+  );
+
+  app.get(
+    "/live",
+    {
+      onRequest: [ensureAuthenticated],
+      // The tower's gates (wave 4): the same module, the same read key, the
+      // same refusal of a driver token. It is the tower's list without the
+      // tower's cost, for the manager's phone.
+      preHandler: [
+        deliveriesModule,
+        verifyPermission("delivery_manage", "read", { allowDriver: false }),
+      ],
+      schema: {
+        security: [{ bearerAuth: [] }],
+        tags: ["route"],
+        summary: "As rotas na rua agora, enxutas, para o app do gestor",
+        description:
+          'As rotas da empresa em andamento (de qualquer dia: a esquecida aberta entra, com `stale`) e as liberadas para hoje (dia da empresa, no fuso dela) ainda não iniciadas, uma linha por rota: número, situação, motorista, placa, paradas (`stops_total` sem as canceladas; `stops_resolved` entregues ou com insucesso), pedidos de autorização vivos da rota (`pending_authorizations`, a mesma conta da fila), o último ponto do motorista (`position`, só se das últimas 12 h, a janela do mapa da torre) e `last_signal_at` (o último ponto, por mais antigo). Sem funil, eventos nem pontualidade: são três leituras pequenas (o fuso da empresa, as rotas da página com as contagens e as posições numa consulta, e os pedidos pendentes da página), contra as cerca de oito da torre. Ordem: em andamento primeiro, depois as liberadas, cada grupo pelo número. No máximo 500 linhas; havendo mais, `meta.truncated` é true e `meta.nextCursor` abre a próxima página (cursor inválido: 400 INVALID_CURSOR). `meta.silentAfterMs` é o limite de "Sem sinal" da torre (10 min) e `meta.generatedAt` o relógio do servidor, para o "há N min". O MASTER envia `businessId` (sem ele, 400 BUSINESS_NOT_IDENTIFIED); os demais leem a própria empresa, e nomear outra é 403 TENANT_ACCESS_DENIED. Superfície do gestor, com as guardas da torre: `delivery_manage` de leitura e o módulo Entregas (403 PERMISSION_DENIED, MODULE_NOT_ENABLED); token de motorista recebe 403.',
+        querystring: controlTowerSchemas.liveRoutes,
+        response: {
+          200: controlTowerResponses.liveRoutes,
+          400: controlTowerResponses.error,
+          401: controlTowerResponses.error,
+          403: controlTowerResponses.error,
+          404: controlTowerResponses.notFound(
+            "USER_NOT_FOUND (o usuário da sessão não existe mais).",
+          ),
+          429: controlTowerResponses.error,
+          500: controlTowerResponses.internalServerError,
+        },
+      },
+    },
+    liveRoutesController.handle,
   );
 
   app.get(

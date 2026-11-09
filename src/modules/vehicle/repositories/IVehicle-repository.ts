@@ -123,6 +123,16 @@ interface IVehicleRepository {
   }) => Promise<boolean>;
 
   /**
+   * The ids of every vehicle of this company this driver may operate: the
+   * same rule as canDriverOperateVehicle, as a list (wave 3: the service
+   * orders "Do seu veículo"). Any status, like the single-vehicle check.
+   */
+  findDriverOperableVehicleIds: (props: {
+    driverId: string;
+    businessId: string;
+  }) => Promise<string[]>;
+
+  /**
    * Whether this driver may READ this vehicle (GET /vehicle/get-vehicle):
    * every vehicle they may operate, plus the one of their route that ended
    * within the arrival checklist window (canDriverReadVehicle). Never used

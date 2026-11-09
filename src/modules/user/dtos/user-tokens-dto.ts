@@ -41,13 +41,48 @@ interface UserRefreshTokenProps {
  * D7): the live sessions bound to it, grouped.
  */
 interface UserDeviceSession {
-  device_id: string;
+  /**
+   * The phone, opaque: the SHA-256 of its id (session-service hashDeviceId),
+   * never the id itself — since wave 2 the id is what the CPF login checks
+   * the phone by, and this list is open to read-only profiles.
+   */
+  device_hash: string;
   /** Live sessions (families) on this phone; usually one. */
   sessions: number;
   /** The latest renewal: the app renews while in use, every 15 minutes. */
   last_activity_at: Date;
   /** When the last of them lapses if the phone stays silent. */
   expires_at: Date;
+}
+
+/**
+ * One session (refresh-token family) as the person's own "Aparelhos
+ * conectados" lists it (wave 2): what kind of client holds it and when it was
+ * used, never the phone's id.
+ */
+interface UserOwnSession {
+  /** The family id: the session's opaque id. */
+  family_id: string;
+  /** "aparelho" (bound to a phone), "app" (the mobile app by e-mail) or "navegador". */
+  kind: "aparelho" | "app" | "navegador";
+  /** When the session began (its login). */
+  created_at: Date;
+  /** The latest renewal. */
+  last_activity_at: Date;
+  /** When it lapses if left unused. */
+  expires_at: Date;
+}
+
+/**
+ * The live session a request runs in, as a password change that keeps it
+ * re-issues it (wave 2). Internal: the phone's id never leaves the API.
+ */
+interface UserSessionFamily {
+  family_id: string;
+  /** The phone a `driver_device` session is bound to; null otherwise. */
+  device_id: string | null;
+  /** The family's first row still stored (its login, inside a session's first days). */
+  first_issued_at: Date;
 }
 
 interface VerificationToken {
@@ -143,4 +178,6 @@ export {
   RotateUserRefreshTokenProps,
   RefreshRotation,
   UserDeviceSession,
+  UserOwnSession,
+  UserSessionFamily,
 };

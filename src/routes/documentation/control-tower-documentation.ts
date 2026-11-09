@@ -5,6 +5,7 @@ import {
   driverMonitoringSchema,
   driverTrailParamSchema,
   driverTrailQuerySchema,
+  liveRoutesSchema,
   recordDriverPositionsSchema,
   routeMonitoringSchema,
 } from "@/schemas/driver-position-schema";
@@ -248,11 +249,62 @@ const driverDayRow = z.object({
     .describe("Insucessos no dia, pelo fato que causou a falha."),
 });
 
+/** One row of GET /route/live (wave 4): what the manager's phone lists. */
+const liveRoute = z.object({
+  id: z.string(),
+  code: z.number().describe("O número da rota na empresa."),
+  name: z.string().nullable(),
+  status: z
+    .enum(["IN_PROGRESS", "RELEASED"])
+    .describe(
+      "Em andamento (de qualquer dia) ou liberada para hoje e ainda não iniciada.",
+    ),
+  scheduled_date: z.string().describe("O dia da rota (AAAA-MM-DD)."),
+  started_at: isoDateTime.nullable(),
+  stale: z
+    .boolean()
+    .describe(
+      "Rota esquecida aberta (decisão D26): a mesma regra e o mesmo selo da torre.",
+    ),
+
+  driverId: z.string(),
+  driver_name: z.string().nullable(),
+  vehicle_plate: z.string().nullable(),
+
+  stops_total: z.number().describe("Paradas da rota, sem as canceladas."),
+  stops_resolved: z
+    .number()
+    .describe('Paradas entregues ou com insucesso: o "8" de "8 de 12".'),
+
+  pending_authorizations: z
+    .number()
+    .describe(
+      "Pedidos de autorização vivos desta rota (a mesma conta da fila de GET /delivery/occurrence-authorizations).",
+    ),
+
+  position: z
+    .object({
+      lat: z.number(),
+      lng: z.number(),
+      recorded_at: isoDateTime,
+    })
+    .nullable()
+    .describe(
+      "O último ponto do motorista, se gravado nas últimas 12 h (a janela do mapa da torre); null sem ponto nessa janela.",
+    ),
+  last_signal_at: isoDateTime
+    .nullable()
+    .describe(
+      "O último ponto do telefone, por mais antigo que seja; null = nunca reportou.",
+    ),
+});
+
 /**
  * Every refusal carries a machine-readable `code` alongside the message (and
  * the header `x-error-code`): PERMISSION_DENIED, MODULE_NOT_ENABLED,
  * TENANT_INACTIVE, DRIVER_CANNOT_VIEW_PANELS, BUSINESS_NOT_IDENTIFIED,
- * DRIVER_NOT_FOUND, INVALID_DAY, VALIDATION_ERROR, RATE_LIMITED.
+ * DRIVER_NOT_FOUND, INVALID_DAY, INVALID_CURSOR, VALIDATION_ERROR,
+ * RATE_LIMITED.
  */
 const towerError = z.object({
   code: z.string(),
@@ -267,6 +319,7 @@ const controlTowerSchemas = {
   driverTrailQuery: driverTrailQuerySchema,
   routeMonitoring: routeMonitoringSchema,
   driverMonitoring: driverMonitoringSchema,
+  liveRoutes: liveRoutesSchema,
 };
 
 const controlTowerResponses = {
@@ -396,6 +449,40 @@ const controlTowerResponses = {
         .describe(
           "Um motorista por linha, quem está na rua primeiro; empate em ordem alfabética.",
         ),
+    }),
+  }),
+
+  liveRoutes: z.object({
+    data: z
+      .array(liveRoute)
+      .describe(
+        "Em andamento primeiro, depois as liberadas; cada grupo pelo número da rota.",
+      ),
+    meta: z.object({
+      day: z
+        .string()
+        .describe(
+          "O dia da empresa (AAAA-MM-DD) das rotas liberadas listadas.",
+        ),
+      timeZone: z.string().describe("O fuso da empresa."),
+      generatedAt: isoDateTime.describe(
+        'O relógio do servidor na leitura: o "há N min" conta a partir dele.',
+      ),
+      silentAfterMs: z
+        .number()
+        .describe(
+          'Depois de quanto tempo sem ponto a rota em andamento está "Sem sinal" (o limite da torre, 10 min).',
+        ),
+      limit: z.number().describe("O teto de linhas por resposta (500)."),
+      truncated: z
+        .boolean()
+        .describe(
+          "Há mais rotas do que o teto: a próxima página começa em `nextCursor`.",
+        ),
+      nextCursor: z
+        .string()
+        .nullable()
+        .describe("O cursor da próxima página; null na última."),
     }),
   }),
 

@@ -36,6 +36,8 @@ import type { NotificationService } from "@/shared/services/notification-service
 
 import { InMemoryUserRepository } from "@/modules/user/repositories/in-memory/in-memory-user-repository";
 import { InMemoryUserTokensRepository } from "@/modules/user/repositories/in-memory/in-memory-user-tokens-repository";
+import { InMemoryDriverTrustedDeviceRepository } from "@/modules/user/repositories/in-memory/in-memory-driver-trusted-device-repository";
+import { hashDeviceId } from "@/modules/user/services/session-service";
 import { InMemoryBusinessRepository } from "@/modules/business/repositories/in-memory/in-memory-business-repository";
 import { InMemoryProfileAccessRepository } from "@/modules/profile-access/repositories/in-memory/in-memory-profile-access-repository";
 import { InMemoryDriverRepository } from "@/modules/driver/repositories/in-memory/in-memory-driver-repository";
@@ -201,7 +203,9 @@ describe("creating a driver's login without an e-mail", () => {
     expect(users.user.filter((user) => user.email === null)).toHaveLength(2);
   });
 
-  it("signs in by CPF with the password the manager set", async () => {
+  // On a phone a QR code already trusted for the login (wave 2), and asked
+  // to create the driver's own password: the manager knows this one.
+  it("signs in by CPF with the password the manager set, on a trusted phone", async () => {
     const created = await create().execute(
       {
         name: "Maria Prado",
@@ -228,12 +232,23 @@ describe("creating a driver's login without an e-mail", () => {
       corporate_reason: "Transportadora A",
     });
 
+    const trusted = new InMemoryDriverTrustedDeviceRepository();
+    const phone = "23be03c084165505";
+
+    await trusted.trust({
+      userId: created.id,
+      deviceHash: hashDeviceId(phone),
+      source: "qr",
+    });
+
     const session = await new AuthenticateUserUseCase(
       users,
       tokens,
       drivers,
-    ).executeByCpf({ cpf: CPF, password: PASSWORD }, "mobile");
+      trusted,
+    ).executeByCpf({ cpf: CPF, password: PASSWORD, deviceId: phone });
 
     expect(decode(session.token!)).toMatchObject({ sub: created.id });
+    expect(session.mustChangePassword).toBe(true);
   });
 });

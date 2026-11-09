@@ -8,6 +8,7 @@ import {
   seedCarrier,
   seedDriver,
   seedLogin,
+  seedTrustedDevice,
   type SeededSession,
 } from "./support/driver-access-seed";
 
@@ -93,14 +94,19 @@ describe("a driver's login without an e-mail", () => {
     const row = await prisma.user.findFirstOrThrow({ where: { driverId } });
     expect(row.email).toBeNull();
 
+    // On the phone a QR code trusted for this login (wave 2).
+    const phone = "23be03c084165505";
+    await seedTrustedDevice(prisma, row.id, phone);
+
     const session = await app.inject({
       method: "POST",
       url: "/user/session",
       remoteAddress: address(),
-      payload: { cpf, password: "Inicial-7781" },
+      payload: { cpf, password: "Inicial-7781", deviceId: phone },
     });
 
     expect(session.statusCode).toBe(200);
+    expect(session.json().mustChangePassword).toBe(true);
 
     const me = await app.inject({
       method: "GET",
@@ -111,6 +117,7 @@ describe("a driver's login without an e-mail", () => {
 
     expect(me.statusCode).toBe(200);
     expect(me.json().user.email).toBeNull();
+    expect(me.json().user.must_change_password).toBe(true);
   });
 
   it("can be one of many: the unique e-mail index lets NULLs coexist", async () => {

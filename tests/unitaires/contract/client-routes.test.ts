@@ -175,23 +175,71 @@ describe.skipIf(!existsSync(WEB))("what the web calls", () => {
   });
 });
 
+/**
+ * Most of the app's calls go through `apiClient.request(path, { method })`,
+ * and wave 5's base map names its path by a constant (`MAP_CONFIG_PATH`,
+ * GET /config/map). Reading only `apiClient.get("/…")` and its siblings with
+ * a literal path missed both: renaming /config would have left the live map
+ * without its base map and this file green.
+ */
+const APP_CALL =
+  /apiClient\.(?:get|post|put|patch|delete|postFormData|request)(?:<[^>(]*>)?\(\s*[`"](\/[^`"\s]*)[`"]/g;
+
+/** A call that passes its path as a constant: `apiClient.request(NAME, …)`. */
+const APP_CALL_BY_NAME =
+  /apiClient\.(?:get|post|put|patch|delete|postFormData|request)(?:<[^>(]*>)?\(\s*([A-Z][A-Z0-9_]*)\s*[,)]/g;
+
+/** `const NAME = "/path"`, wherever in the app the constant lives. */
+const PATH_CONSTANT = /\bconst\s+([A-Z][A-Z0-9_]*)\s*=\s*[`"](\/[^`"\s]*)[`"]/g;
+
+const appFiles = (): string[] =>
+  ["app", "features", "hooks", "providers", "store", "utils"].flatMap((dir) =>
+    sourceFiles(join(APP, dir)),
+  );
+
 describe.skipIf(!existsSync(APP))("what the app calls", () => {
   it("always has a route to land on", () => {
-    const files = [
-      "app",
-      "features",
-      "hooks",
-      "providers",
-      "store",
-      "utils",
-    ].flatMap((dir) => sourceFiles(join(APP, dir)));
+    const files = appFiles();
 
-    const misses = unmatched(
-      files,
-      /apiClient\.(?:get|post|put|patch|delete|postFormData)(?:<[^>(]*>)?\(\s*[`"](\/[^`"\s]*)[`"]/g,
-      routes,
+    const calls = files.flatMap((file) =>
+      [...readFileSync(file, "utf8").matchAll(APP_CALL)].map(([, path]) =>
+        shapeOf(path),
+      ),
     );
 
-    expect(misses).toEqual([]);
+    // A parser that silently found nothing would pass: the driver's
+    // positions go through `request`.
+    expect(calls).toContain("/route/positions");
+    expect(unmatched(files, APP_CALL, routes)).toEqual([]);
+  });
+
+  it("has a route for every path it names by a constant", () => {
+    const constants = new Map<string, string>();
+    const passed = new Set<string>();
+
+    for (const file of appFiles()) {
+      const source = readFileSync(file, "utf8");
+
+      for (const [, name, path] of source.matchAll(PATH_CONSTANT)) {
+        constants.set(name, shapeOf(path));
+      }
+
+      for (const [, name] of source.matchAll(APP_CALL_BY_NAME)) {
+        passed.add(name);
+      }
+    }
+
+    const called = [...passed].flatMap((name) => {
+      const shape = constants.get(name);
+
+      return shape ? [shape] : [];
+    });
+
+    expect(called).toContain("/config/map");
+    expect(
+      called.filter(
+        (shape) => !routes.some((route) => route.pattern.test(shape)),
+      ),
+    ).toEqual([]);
   });
 });

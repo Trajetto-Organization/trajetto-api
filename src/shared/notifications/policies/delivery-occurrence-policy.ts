@@ -82,6 +82,27 @@ function isDeliveryRequest(payload: { category?: string }): boolean {
   return payload.category === "DELIVERED";
 }
 
+/**
+ * What tells the app a notice is a request it can answer (wave 4).
+ *
+ * The notice's `type` stays the generic "delivery" and its `entityId` the
+ * delivery: the web, the builds already in the field and `read-by-entity`
+ * read them that way. The push adds what the decision endpoint needs, the
+ * occurrence id (`POST /delivery/occurrence-authorization/:occurrenceId/
+ * business/:businessId`; the company is the push's own `businessId`). The
+ * inbox row has no free-form column, so the row keeps today's behaviour.
+ */
+const OCCURRENCE_AUTHORIZATION_KIND = "occurrence-authorization";
+
+function authorizationPushData(payload: {
+  occurrenceId: string;
+}): Record<string, string> {
+  return {
+    kind: OCCURRENCE_AUTHORIZATION_KIND,
+    occurrenceId: payload.occurrenceId,
+  };
+}
+
 function renderDeliveryOccurrenceInApp(
   payload: DeliveryOccurrenceReportedPayload,
   ctx: RenderContext,
@@ -162,6 +183,7 @@ function renderAuthorizationRequestedInApp(
       (answers ? ` ${answers}` : ""),
     link: `${ctx.baseUrl}${TOWER_PATH}`,
     entityId: payload.deliveryId,
+    pushData: authorizationPushData(payload),
   };
 }
 
@@ -199,6 +221,8 @@ function renderAuthorizationEscalatedInApp(
       `${payload.recipientName}. Ninguém decidiu ainda.`,
     link: `${ctx.baseUrl}${TOWER_PATH}`,
     entityId: payload.deliveryId,
+    // The administrators are asked to decide the same request.
+    pushData: authorizationPushData(payload),
   };
 }
 
@@ -358,6 +382,7 @@ const deliveryOccurrenceAuthorizationDecidedPolicy: NotificationPolicyEntry<Deli
   };
 
 export {
+  OCCURRENCE_AUTHORIZATION_KIND,
   deliveryOccurrenceAuthorizationDecidedPolicy,
   deliveryOccurrenceAuthorizationEscalatedPolicy,
   deliveryOccurrenceAuthorizationRequestedPolicy,

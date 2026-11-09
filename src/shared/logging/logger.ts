@@ -17,6 +17,10 @@ const SECRET_ENV_KEYS = [
   "REVERSE_GEOCODER_KEY",
   // A tile URL can carry the provider's API key in its query string.
   "PROOF_MAP_TILE_URL",
+  // The app's base map (wave 5): signed-in clients receive these through
+  // GET /config/map, but a log line travels further than a session.
+  "MAP_TILE_URL",
+  "MAP_TILE_URL_DARK",
   // Connection strings carry the password.
   "DATABASE_URL",
   "REDIS_URL",

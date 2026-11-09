@@ -124,6 +124,9 @@ const CHECKS: Record<string, string> = {
   // Plan of 02/11/2026 (B3): the body may go NULL only on WhatsApp, which
   // goes out as a fixed template; the e-mail always has the company's text.
   delivery_message_template_email_body_chk: `CHECK (((channel <> 'EMAIL'::"NotificationChannel") OR (body IS NOT NULL)))`,
+  // Wave 2 (06/11/2026): a phone is trusted for CPF sign-in only by a QR it
+  // consumed or by the rollout backfill; nothing else may mint that trust.
+  driver_trusted_device_source_chk: `CHECK ((source = ANY (ARRAY['qr'::text, 'backfill'::text])))`,
 };
 
 type Client = Pick<Prisma.TransactionClient, "$queryRaw">;

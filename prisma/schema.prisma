@@ -326,6 +326,14 @@ model User {
   failed_login_at       DateTime?
   login_locked_until    DateTime?
 
+  /// Wave 2 (06/11/2026): the password was set by somebody else — the
+  /// manager's initial password for a driver's login, or the manager's reset
+  /// — so the person must create their own at the next sign-in. Only the
+  /// clients enforce it (the app's blocking screen, the web's redirect): the
+  /// API refuses nothing, so the app's offline outbox is never turned away.
+  /// Cleared by every password the person sets themselves.
+  must_change_password Boolean @default(false)
+
   TwoFactorConfirmation  TwoFactorConfirmation?
   KanbanCard             KanbanCard[]
   PendingDeletion        PendingDeletion[]
@@ -376,6 +384,8 @@ model User {
   businessSettingsUpdates      BusinessSettings[]
   driverEnrollmentTokens       DriverEnrollmentToken[] @relation("DriverEnrollmentTokenUser")
   issuedDriverEnrollmentTokens DriverEnrollmentToken[] @relation("DriverEnrollmentTokenIssuer")
+  // Wave 2: the phones where this login may sign in by CPF and password.
+  driverTrustedDevices         DriverTrustedDevice[]
 
   created_at DateTime @default(now())
   updated_at DateTime @updatedAt
@@ -506,6 +516,41 @@ model DriverEnrollmentToken {
   @@index([businessId])
   @@index([createdById])
   @@map("driver_enrollment_token")
+}
+
+/// A phone a driver's login trusts for the CPF and password sign-in (wave 2,
+/// 06/11/2026). The CPF is public, so CPF and password are accepted only on a
+/// phone that already entered this login by the manager's QR code: a new
+/// phone needs a QR. The enrollment token cannot be this record — it is one
+/// row per login, rewritten by every QR issued — so the trust lives here.
+///
+/// Added when a QR is consumed on the phone (`qr`), or by the migration for
+/// the phones drivers were already using (`backfill`). Removed when the
+/// manager or the driver disconnects the phone, and when the driver is made
+/// inactive or the access revoked (D5). A password change never touches it:
+/// trust only says "this phone may try a password".
+model DriverTrustedDevice {
+  id String @id @default(uuid(7))
+
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId String
+
+  /// SHA-256 (hex) of the normalized device id, like refresh_token.token_hash:
+  /// the Android ID itself is never stored here.
+  device_hash String
+
+  /// `qr` or `backfill` (a CHECK in the migration).
+  source String
+
+  created_at DateTime @default(now())
+
+  /// The last sign-in on this phone: the QR that trusted it, then every CPF
+  /// and password that matched on it.
+  last_login_at DateTime @default(now())
+
+  @@unique([userId, device_hash])
+  @@index([userId])
+  @@map("driver_trusted_device")
 }
 
 model ForgotPasswordVerificationToken {

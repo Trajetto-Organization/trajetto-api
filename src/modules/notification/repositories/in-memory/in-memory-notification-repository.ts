@@ -9,6 +9,7 @@ import type {
 import type {
   INotificationRepository,
   ListNotificationsParams,
+  NotificationEntityRef,
   UpsertPreferenceInput,
 } from "../INotification-repository";
 
@@ -100,6 +101,27 @@ class InMemoryNotificationRepository implements INotificationRepository {
     }
 
     return unread.length;
+  }
+
+  async markReadByEntity({
+    userId,
+    type,
+    entityId,
+  }: NotificationEntityRef): Promise<string[]> {
+    const unread = this.notifications.filter(
+      (row) =>
+        row.userId === userId &&
+        row.type === type &&
+        row.entityId === entityId &&
+        !row.read,
+    );
+
+    for (const row of unread) {
+      row.read = true;
+      row.updated_at = new Date();
+    }
+
+    return unread.map((row) => row.id);
   }
 
   async deleteNotification(notificationId: string): Promise<void> {

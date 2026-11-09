@@ -5,7 +5,7 @@ import path from "node:path";
  * The sections of the internal reference (/docs), in pt-BR (decision 11.4).
  *
  * Routes name their tag; the transform turns a camelCase name into kebab-case
- * (`fuelType` → `fuel-type`), so the 39 sections read one way however each
+ * (`fuelType` → `fuel-type`), so the 40 sections read one way however each
  * route file spells it. Every tag a route uses must be listed here — the
  * contract test refuses an operation in a section nobody described.
  */
@@ -162,6 +162,11 @@ const TAG_GROUPS: ReadonlyArray<{ name: string; tags: ApiTag[] }> = [
       {
         name: "diagnostics",
         description: "Diagnóstico enviado pelos clientes.",
+      },
+      {
+        name: "config",
+        description:
+          "Configurações da plataforma que os clientes leem da API (o mapa de fundo do app).",
       },
       { name: "health", description: "Saúde e prontidão do serviço." },
     ],

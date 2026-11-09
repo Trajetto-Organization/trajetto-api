@@ -53,6 +53,10 @@ import {
 } from "./policies/master-user-policies";
 import { webhookEndpointDisabledPolicy } from "./policies/webhook-endpoint-policies";
 import { proofAIFeedbackPolicy } from "./policies/proof-ai-feedback-policy";
+import {
+  driverAccessNewDevicePolicy,
+  driverAccessPasswordCreatedPolicy,
+} from "./policies/driver-access-policies";
 
 /**
  * Everything the system notifies, in one place.
@@ -115,6 +119,10 @@ const notificationPolicies: {
   "webhook-endpoint.disabled": webhookEndpointDisabledPolicy,
 
   "delivery-proof.ai-flagged": proofAIFeedbackPolicy,
+
+  // Wave 2: a driver's login on a new phone, a password created after a QR.
+  "driver-access.new_device": driverAccessNewDevicePolicy,
+  "driver-access.password_created": driverAccessPasswordCreatedPolicy,
 };
 
 function getNotificationPolicy(

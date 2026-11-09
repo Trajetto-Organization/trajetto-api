@@ -16,6 +16,8 @@ const mail = vi.hoisted(() => ({
 
 const realtime = vi.hoisted(() => ({
   securityEvents: [] as Array<{ userId: string; reason: string }>,
+  sessionEvents: [] as Array<{ sessionId: string; reason: string }>,
+  adopted: [] as Array<{ sessionId: string; version: number }>,
 }));
 
 vi.mock("@/shared/services/transactional-mail-service", () => ({
@@ -32,9 +34,26 @@ vi.mock("@/websocket", () => ({
   sendSecurityEventToUser: (userId: string, payload: { reason: string }) => {
     realtime.securityEvents.push({ userId, reason: payload.reason });
   },
+  sendSecurityEventToSession: (
+    sessionId: string,
+    payload: { reason: string },
+  ) => {
+    realtime.sessionEvents.push({ sessionId, reason: payload.reason });
+  },
+  adoptSessionVersion: (sessionId: string, version: number) => {
+    realtime.adopted.push({ sessionId, version });
+  },
 }));
 
+import { decode } from "jsonwebtoken";
+import { v7 as uuidV7 } from "uuid";
+
 import { compareSecret } from "@/shared/security/bcrypt-gate";
+import {
+  familyStartedAtOf,
+  hashDeviceId,
+  hashRefreshToken,
+} from "@/modules/user/services/session-service";
 import type { UploadService } from "@/shared/services/upload-service";
 import type { User } from "@/modules/user/dtos/user-dto";
 import type { Business } from "@/modules/business/dtos/business-dto";
@@ -86,9 +105,11 @@ beforeEach(async () => {
   mail.sent.length = 0;
   mail.fail = false;
   realtime.securityEvents.length = 0;
+  realtime.sessionEvents.length = 0;
+  realtime.adopted.length = 0;
 
-  users = new InMemoryUserRepository();
   tokens = new InMemoryUserTokensRepository();
+  users = new InMemoryUserRepository({ tokens });
   businesses = new InMemoryBusinessRepository();
   settings = new InMemoryBusinessSettingsRepository();
 
@@ -144,7 +165,202 @@ describe("renaming yourself", () => {
 });
 
 describe("changing your password", () => {
-  const change = () => new UpdateUserPasswordUseCase(users);
+  const change = () => new UpdateUserPasswordUseCase(users, tokens);
+
+  const HOUR = 60 * 60 * 1000;
+
+  /** A live session of PERSON, with a row issued `agoMs` ago. */
+  const session = async (
+    familyId: string,
+    options: {
+      deviceId?: string | null;
+      agoMs?: number;
+      revoked?: boolean;
+    } = {},
+  ) => {
+    const row = await tokens.createUserRefreshToken({
+      userId: PERSON,
+      token_hash: `hash-${familyId}-${Math.random()}`,
+      jti: uuidV7(),
+      family_id: familyId,
+      expires_in: new Date(Date.now() + 24 * HOUR),
+      device_id: options.deviceId ?? null,
+    });
+
+    row.created_at = new Date(Date.now() - (options.agoMs ?? 0));
+    if (options.revoked) row.revoked_at = new Date();
+
+    return row;
+  };
+
+  // Wave 2 (owner's decision): changing the password from the app keeps the
+  // current session and ends the others. The change still bumps the version
+  // every token is checked against, so this session is re-issued in the same
+  // family and the answer carries the new pair; only the OTHER sessions hear
+  // password_changed, and this one's sockets adopt the new version.
+  it("keeps the caller's session, ends the others, and returns its new pair", async () => {
+    const mine = uuidV7();
+    const other = uuidV7();
+
+    const old = await session(mine, { agoMs: HOUR });
+    await session(other);
+    users.pushDeviceTokens.push(
+      { userId: PERSON, session_family_id: mine },
+      { userId: PERSON, session_family_id: other },
+      // From before devices named their session (A9): never this one's.
+      { userId: PERSON, session_family_id: null },
+    );
+    Object.assign(users.user[0], {
+      failed_login_attempts: 4,
+      failed_login_at: new Date(),
+      must_change_password: true,
+    });
+
+    const result = await change().execute({
+      userId: PERSON,
+      currentPassword: "senha-atual-123",
+      newPassword: "senha-nova-456",
+      sessionId: mine,
+      client: "mobile",
+    });
+
+    expect(result).toMatchObject({
+      token: expect.any(String),
+      refresh_token: expect.any(String),
+      mustChangePassword: false,
+    });
+    expect(decode(result.token!)).toMatchObject({
+      sub: PERSON,
+      familyId: mine,
+      sessionVersion: 1,
+    });
+    expect(decode(result.refresh_token!)).toMatchObject({
+      familyId: mine,
+      sessionVersion: 1,
+      sessionClient: "mobile",
+      familyStartedAt: familyStartedAtOf(mine),
+    });
+
+    // The other session is gone; this one's live token is deleted (a renewal
+    // racing the change finds nothing, instead of reading as reuse) and the
+    // new one stored in the same family.
+    expect(tokens.refreshTokenItems.map((row) => row.family_id)).toEqual([
+      mine,
+    ]);
+    expect(tokens.refreshTokenItems).not.toContain(old);
+    expect(tokens.refreshTokenItems[0].token_hash).toBe(
+      hashRefreshToken(result.refresh_token!),
+    );
+    expect(users.pushDeviceTokens).toEqual([
+      { userId: PERSON, session_family_id: mine },
+    ]);
+
+    expect(realtime.sessionEvents).toEqual([
+      { sessionId: other, reason: "password_changed" },
+    ]);
+    expect(realtime.securityEvents).toEqual([]);
+    expect(realtime.adopted).toEqual([{ sessionId: mine, version: 1 }]);
+
+    expect(users.user[0]).toMatchObject({
+      session_version: 1,
+      must_change_password: false,
+      failed_login_attempts: 0,
+      failed_login_at: null,
+    });
+    await expect(
+      compareSecret("senha-nova-456", users.user[0].password),
+    ).resolves.toBe(true);
+    expect(mail.sent.map((sent) => sent.templateName)).toEqual([
+      "user-password-updated.hbs",
+    ]);
+  });
+
+  it("keeps a phone-bound session bound to the same phone, with its birth", async () => {
+    const PHONE = "23be03c084165505";
+    const mine = uuidV7();
+
+    await session(mine, { deviceId: PHONE, agoMs: 3 * HOUR });
+
+    // The header never turns a phone session into another policy.
+    const result = await change().execute({
+      userId: PERSON,
+      currentPassword: "senha-atual-123",
+      newPassword: "senha-nova-456",
+      sessionId: mine,
+      client: "web",
+    });
+
+    expect(decode(result.refresh_token!)).toMatchObject({
+      sessionClient: "driver_device",
+      deviceHash: hashDeviceId(PHONE),
+      familyStartedAt: familyStartedAtOf(mine),
+    });
+    expect(
+      tokens.refreshTokenItems.find((row) => !row.revoked_at)?.device_id,
+    ).toBe(PHONE);
+  });
+
+  it("ends every session, as before, when the caller's session is no longer live", async () => {
+    const mine = uuidV7();
+
+    await session(mine, { revoked: true });
+
+    const result = await change().execute({
+      userId: PERSON,
+      currentPassword: "senha-atual-123",
+      newPassword: "senha-nova-456",
+      sessionId: mine,
+    });
+
+    expect(result).toEqual({ mustChangePassword: false });
+    expect(tokens.refreshTokenItems).toEqual([]);
+    expect(realtime.securityEvents).toEqual([
+      { userId: PERSON, reason: "password_changed" },
+    ]);
+  });
+
+  // The check runs outside the password's write: a logout, the manager's
+  // "Revogar este aparelho" or "Aparelhos conectados" landing in between
+  // used to be undone — the write stored a new token in the ended session
+  // and answered it. Now it is a session no longer live, as above.
+  it("does not bring back a session that ends between its check and the write", async () => {
+    const mine = uuidV7();
+    const other = uuidV7();
+
+    await session(mine, { deviceId: "23be03c084165505" });
+    await session(other);
+
+    const check = tokens.findSessionFamily.bind(tokens);
+    vi.spyOn(tokens, "findSessionFamily").mockImplementationOnce(
+      async (...args) => {
+        const family = await check(...args);
+
+        await tokens.revokeUserRefreshTokenFamily(mine);
+
+        return family;
+      },
+    );
+
+    const result = await change().execute({
+      userId: PERSON,
+      currentPassword: "senha-atual-123",
+      newPassword: "senha-nova-456",
+      sessionId: mine,
+      client: "mobile",
+    });
+
+    expect(result).toEqual({ mustChangePassword: false });
+    expect(tokens.refreshTokenItems).toEqual([]);
+    expect(realtime.adopted).toEqual([]);
+    expect(realtime.securityEvents).toEqual([
+      { userId: PERSON, reason: "password_changed" },
+    ]);
+    // Written once, by the change that ends every session.
+    expect(users.user[0].session_version).toBe(1);
+    await expect(
+      compareSecret("senha-nova-456", users.user[0].password),
+    ).resolves.toBe(true);
+  });
 
   it("stores the new hash, ends the other sessions and mails the notice", async () => {
     await change().execute({
@@ -212,7 +428,7 @@ describe("changing your password", () => {
         currentPassword: "senha-atual-123",
         newPassword: "senha-nova-456",
       }),
-    ).resolves.toBeUndefined();
+    ).resolves.toEqual({ mustChangePassword: false });
 
     await expect(
       compareSecret("senha-nova-456", users.user[0].password),
@@ -223,12 +439,97 @@ describe("changing your password", () => {
 describe("turning two-factor authentication on and off", () => {
   const toggle = () => new UpdateTwoFactorAuthenticationUseCase(users);
 
-  it("flips the flag each time", async () => {
+  // Wave 2: explicit, so a retry after a timeout lands on the same state, and
+  // with the current password, so a session somebody else holds cannot turn
+  // the factor off.
+  it("sets the state asked for, with the current password", async () => {
+    await expect(
+      toggle().execute({
+        userId: PERSON,
+        change: { enabled: true, password: "senha-atual-123" },
+      }),
+    ).resolves.toEqual({ enabled: true, changed: true });
+    expect(users.user[0].two_factor_enabled).toBe(true);
+
+    await expect(
+      toggle().execute({
+        userId: PERSON,
+        change: { enabled: false, password: "senha-atual-123" },
+      }),
+    ).resolves.toEqual({ enabled: false, changed: true });
+    expect(users.user[0].two_factor_enabled).toBe(false);
+  });
+
+  it("answers the current state again as a no-op: a retry never undoes it", async () => {
+    users.user[0].two_factor_enabled = true;
+    const write = vi.spyOn(users, "updateTwoFactorAuthentication");
+
+    await expect(
+      toggle().execute({
+        userId: PERSON,
+        change: { enabled: true, password: "senha-atual-123" },
+      }),
+    ).resolves.toEqual({ enabled: true, changed: false });
+    expect(write).not.toHaveBeenCalled();
+    expect(users.user[0].two_factor_enabled).toBe(true);
+  });
+
+  it("refuses a wrong password like the password change does, and changes nothing", async () => {
+    await expect(
+      toggle().execute({
+        userId: PERSON,
+        change: { enabled: true, password: "errada" },
+      }),
+    ).rejects.toMatchObject({
+      statusCode: 400,
+      code: "PASSWORD_CURRENT_INCORRECT",
+    });
+    expect(users.user[0].two_factor_enabled).toBe(false);
+  });
+
+  it("refuses turning it on for an account without an e-mail (409)", async () => {
+    users.user[0].email = null;
+
+    await expect(
+      toggle().execute({
+        userId: PERSON,
+        change: { enabled: true, password: "senha-atual-123" },
+      }),
+    ).rejects.toMatchObject({
+      statusCode: 409,
+      code: "TWO_FACTOR_REQUIRES_EMAIL",
+      message:
+        "Para ligar a verificação em duas etapas, cadastre um e-mail na sua conta.",
+    });
+    expect(users.user[0].two_factor_enabled).toBe(false);
+  });
+
+  it("lets an account without an e-mail turn it off", async () => {
+    users.user[0].email = null;
+    users.user[0].two_factor_enabled = true;
+
+    await expect(
+      toggle().execute({
+        userId: PERSON,
+        change: { enabled: false, password: "senha-atual-123" },
+      }),
+    ).resolves.toEqual({ enabled: false, changed: true });
+  });
+
+  // One release of compatibility: the web image serving during the rollout
+  // sends no body. Same refusal without an e-mail.
+  it("keeps the old blind toggle when there is no body", async () => {
     await toggle().execute({ userId: PERSON });
     expect(users.user[0].two_factor_enabled).toBe(true);
 
     await toggle().execute({ userId: PERSON });
     expect(users.user[0].two_factor_enabled).toBe(false);
+
+    users.user[0].email = null;
+
+    await expect(toggle().execute({ userId: PERSON })).rejects.toMatchObject({
+      code: "TWO_FACTOR_REQUIRES_EMAIL",
+    });
   });
 
   it("refuses an unknown caller (404)", async () => {

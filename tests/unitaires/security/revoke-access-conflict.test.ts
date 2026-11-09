@@ -19,6 +19,7 @@ import { UserRevokeAccessUseCase } from "@/modules/user/usecases/user-revoke-acc
 import { InMemoryDriverRepository } from "@/modules/driver/repositories/in-memory/in-memory-driver-repository";
 import { InMemoryDriverEnrollmentRepository } from "@/modules/user/repositories/in-memory/in-memory-driver-enrollment-repository";
 import { ToggleConflictError } from "@/modules/business/usecases/errors/toggle-conflict-error";
+import { InMemoryDriverTrustedDeviceRepository } from "@/modules/user/repositories/in-memory/in-memory-driver-trusted-device-repository";
 
 /**
  * Revoking access, and the event that must not be sent.
@@ -115,6 +116,7 @@ describe("when another administrator flips first", () => {
       users,
       new InMemoryDriverRepository(),
       new InMemoryDriverEnrollmentRepository(),
+      new InMemoryDriverTrustedDeviceRepository(),
     );
 
     targetId = await seed(users);
@@ -150,6 +152,7 @@ describe("when the flip lands", () => {
       users,
       new InMemoryDriverRepository(),
       new InMemoryDriverEnrollmentRepository(),
+      new InMemoryDriverTrustedDeviceRepository(),
     );
 
     targetId = await seed(users);
@@ -198,6 +201,7 @@ describe("revoking a driver's login", () => {
       users,
       new InMemoryDriverRepository(),
       enrollment,
+      new InMemoryDriverTrustedDeviceRepository(),
     );
 
     await seed(users);
@@ -230,5 +234,47 @@ describe("revoking a driver's login", () => {
     );
     expect(await enrollment.findByToken("qr-token-on-screen")).toBeNull();
     expect(await enrollment.findByCode("ABCD2345")).toBeNull();
+  });
+
+  // Wave 2: the phones the login trusted for CPF and password go with the
+  // access, and a restore does not bring them back: the driver reads a new
+  // QR code first.
+  it("removes the phones the login trusted, for good", async () => {
+    const users = new InMemoryUserRepository();
+    const trusted = new InMemoryDriverTrustedDeviceRepository();
+    const revokeAccess = new UserRevokeAccessUseCase(
+      users,
+      new InMemoryDriverRepository(),
+      new InMemoryDriverEnrollmentRepository(),
+      trusted,
+    );
+
+    await seed(users);
+    const driverLogin = await users.createUser({
+      email: "motorista2@exemplo.com",
+      name: "Motorista",
+      role: "BUSINESS_USER",
+      password: "x",
+      businessId: CARRIER,
+      driverId: "driver-2",
+    });
+
+    await trusted.trust({
+      userId: driverLogin.id,
+      deviceHash: "b".repeat(64),
+      source: "qr",
+    });
+    await trusted.trust({
+      userId: ADMIN,
+      deviceHash: "c".repeat(64),
+      source: "qr",
+    });
+
+    await revokeAccess.execute({ id: ADMIN, userId: driverLogin.id });
+    await revokeAccess.execute({ id: ADMIN, userId: driverLogin.id });
+
+    expect(await trusted.listForUser(driverLogin.id)).toEqual([]);
+    // Nobody else's phones.
+    expect(await trusted.listForUser(ADMIN)).toHaveLength(1);
   });
 });

@@ -194,7 +194,6 @@ const NO_BODY = [
   "PATCH /notification/read-all",
   "PATCH /notification/{notificationId}/read",
   "PATCH /user/revoke-access/{userId}",
-  "PATCH /user/twofactor",
 ];
 
 /** Which seeded row a field or path parameter name points at. */
@@ -256,6 +255,10 @@ const NOT_A_REFERENCE = new Set([
   "client_submission_id",
   "end_submission_id",
   "device_id",
+  // POST /notification/read-by-entity: the item a notice is about. Only
+  // matched against the caller's own notification rows, never looked up, so
+  // nothing can point at it (the IDOR sweep proves it is not an oracle).
+  "entityId",
 ]);
 
 interface Variant {

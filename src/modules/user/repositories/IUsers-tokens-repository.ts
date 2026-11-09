@@ -8,7 +8,9 @@ import {
   TwoFactor,
   TwoFactorConfirmation,
   UserDeviceSession,
+  UserOwnSession,
   UserRefreshTokenProps,
+  UserSessionFamily,
   VerificationToken,
 } from "../dtos/user-tokens-dto";
 
@@ -48,14 +50,57 @@ interface IUsersTokensRepository {
   ) => Promise<UserDeviceSession[]>;
 
   /**
-   * Ends every session of the user bound to this phone — its refresh tokens
-   * and the push devices those sessions registered — in one transaction, and
-   * returns the sessions (family ids) it ended, for the socket.
+   * Which of these logins hold a live session bound to this phone: a row
+   * neither revoked nor expired whose `device_id` is the phone as stored
+   * (session-service normalizeSessionDeviceId). The CPF login asks it before
+   * any password is compared, to trust a phone the rollout left out
+   * (AuthenticateUserUseCase.executeByCpf). Order is not meaningful.
+   */
+  findLoginsSignedInOnDevice: (
+    userIds: string[],
+    deviceId: string,
+    now?: Date,
+  ) => Promise<string[]>;
+
+  /**
+   * Ends every session of the user bound to the phone with this hash
+   * (session-service hashDeviceId, what listUserDeviceSessions hands out) —
+   * its refresh tokens and the push devices those sessions registered — in
+   * one transaction, and returns the sessions (family ids) it ended, for the
+   * socket.
    */
   revokeUserDeviceSessions: (
     userId: string,
-    deviceId: string,
+    deviceHash: string,
   ) => Promise<string[]>;
+  /**
+   * The person's own sessions (wave 2, "Aparelhos conectados"): every live
+   * family of the user, web and app ones included, most recently used first.
+   * Never the phone's id.
+   */
+  listUserSessions: (userId: string, now?: Date) => Promise<UserOwnSession[]>;
+
+  /**
+   * The session a request runs in, when it is still live (a row neither
+   * revoked nor expired); null otherwise. Internal: carries the phone's id,
+   * for re-issuing a phone-bound session.
+   */
+  findSessionFamily: (
+    userId: string,
+    familyId: string,
+    now?: Date,
+  ) => Promise<UserSessionFamily | null>;
+
+  /**
+   * Ends one of the user's live sessions — its refresh tokens and the push
+   * devices it registered — in one transaction. Scoped by user: another
+   * person's session id, or a session already over, ends nothing. Returns
+   * whether something ended and, internally, the phone it was bound to.
+   */
+  revokeUserSession: (
+    userId: string,
+    familyId: string,
+  ) => Promise<{ ended: boolean; deviceId: string | null }>;
   deleteExpiredUserRefreshTokens: (now?: Date) => Promise<number>;
 
   /**

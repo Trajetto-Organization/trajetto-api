@@ -14,7 +14,7 @@ class EnrollDriverSessionController {
       request.body,
     );
 
-    const { token, refresh_token, role } = await container
+    const { token, refresh_token, role, mustChangePassword } = await container
       .resolve(EnrollDriverSessionUseCase)
       .execute({ qrToken, accessCode, deviceId });
 
@@ -25,6 +25,8 @@ class EnrollDriverSessionController {
       token,
       refresh_token,
       role,
+      // Additive (wave 2): older builds ignore it.
+      mustChangePassword,
     });
   }
 }

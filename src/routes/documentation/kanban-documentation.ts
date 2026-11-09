@@ -15,6 +15,7 @@ import { reorderKanbanCardsSchema } from "@/schemas/reorder-kanban-cards-schema"
 import { listKanbanQuerySchema } from "@/schemas/list-kanban-query-schema";
 
 import { updateDeleteBusinessSchema } from "@/schemas/update-delete-business-schema";
+import { optionalCompanyQuerySchema } from "@/schemas/selected-company-query-schema";
 
 import { errorResponse } from "./common-responses";
 
@@ -29,6 +30,7 @@ const kanbanSchemas = {
   reorderCards: reorderKanbanCardsSchema,
   listKanban: listKanbanQuerySchema,
   businessIdParam: updateDeleteBusinessSchema,
+  cardReadQuery: optionalCompanyQuerySchema,
 };
 
 /** An error answered by the global handler: a stable code and a sentence. */
@@ -147,6 +149,37 @@ const kanbanResponses = {
         "Cards da coluna. Com busca, a coluna encontrada pelo título mostra todos; as demais, só os cards que batem. Quem não tem leitura completa do Kanban vê só os próprios cards.",
       ),
   }),
+
+  /** GET /kanban/card/:cardId (wave 3): one card, read only. */
+  cardRead: z.object({
+    card: z.object({
+      id: z.string().describe("ID do card"),
+      title: z.string().describe("Título do card"),
+      description: z.string().describe("Descrição do card"),
+      priority: z.string().describe("Prioridade: low, medium, high ou urgent"),
+      dueDate: z.union([z.string(), z.date()]).describe("Prazo (ISO 8601)"),
+      completed: z.boolean().describe("Se o card está concluído"),
+      position: z.number().describe("Posição do card na coluna"),
+      columnId: z.string().describe("ID da coluna"),
+      column: z
+        .object({ id: z.string(), title: z.string(), color: z.string() })
+        .describe("A coluna em que o card está: a situação dele no quadro."),
+      businessId: z.string().describe("ID da empresa dona do quadro"),
+      assignedUserId: z.string().nullable().describe("ID do responsável"),
+      assignedUser: z
+        .object({ id: z.string(), name: z.string() })
+        .nullable()
+        .describe("O responsável pelo card (só o nome)"),
+      created_at: z.union([z.string(), z.date()]),
+      updated_at: z.union([z.string(), z.date()]),
+    }),
+  }),
+  cardReadErrors: refusal(`${VALIDATION}.`),
+  cardReadNotFound: coded(
+    "KANBAN_CARD_NOT_FOUND",
+    "Card do kanban não encontrado.",
+    "KANBAN_CARD_NOT_FOUND (o card não existe, é de outra empresa ou não está ao alcance de quem pede: sem leitura completa do Kanban, só o card de que é o responsável — sempre o mesmo corpo) ou USER_NOT_FOUND (o usuário da sessão não existe mais).",
+  ),
 
   // ===== 4xx / 5xx by route =====
   createColumnErrors: validationError,

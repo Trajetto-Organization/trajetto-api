@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  OCCURRENCE_AUTHORIZATION_KIND,
   deliveryOccurrenceAuthorizationDecidedPolicy,
   deliveryOccurrenceAuthorizationEscalatedPolicy,
   deliveryOccurrenceAuthorizationRequestedPolicy,
@@ -9,8 +10,10 @@ import {
   renderAuthorizationEscalatedWhatsApp,
   renderAuthorizationRequestedInApp,
   renderAuthorizationRequestedWhatsApp,
+  renderDeliveryOccurrenceInApp,
 } from "@/shared/notifications/policies/delivery-occurrence-policy";
 import { notificationPolicies } from "@/shared/notifications/notification-policy";
+import { inAppPushData } from "@/shared/notifications/push-data";
 
 import { InMemoryUserRepository } from "@/modules/user/repositories/in-memory/in-memory-user-repository";
 import { InMemoryDeliveryRepository } from "@/modules/delivery/repositories/in-memory/in-memory-delivery-repository";
@@ -119,6 +122,77 @@ describe("the request to the tower", () => {
   it("is mandatory: it blocks a driver at an address", () => {
     expect(deliveryOccurrenceAuthorizationRequestedPolicy.mandatory).toBe(true);
     expect(deliveryOccurrenceAuthorizationEscalatedPolicy.mandatory).toBe(true);
+  });
+});
+
+/**
+ * The marker that tells the app a notice is a request it can answer (wave 4).
+ * `type` and `entityId` keep what the web, the builds in the field and
+ * read-by-entity read; the push adds the occurrence the decision needs. The
+ * inbox row has no free-form column, so it stays as it was.
+ */
+describe("the app's marker on the request and the escalation", () => {
+  const owner = {
+    userId: "018f6000-0000-7000-8000-0000000000a9",
+    businessId: requested.businessId,
+  };
+
+  it("keeps the generic type and the delivery as the row's coordinates", () => {
+    for (const rendered of [
+      renderAuthorizationRequestedInApp(requested, ctx),
+      renderAuthorizationEscalatedInApp(
+        { ...requested, waitingMinutes: 11 },
+        ctx,
+      ),
+    ]) {
+      expect(rendered).toMatchObject({
+        type: "delivery",
+        entityId: requested.deliveryId,
+      });
+    }
+  });
+
+  it("puts the kind and the occurrence the decision endpoint needs in the push", () => {
+    expect(OCCURRENCE_AUTHORIZATION_KIND).toBe("occurrence-authorization");
+
+    for (const rendered of [
+      renderAuthorizationRequestedInApp(requested, ctx),
+      renderAuthorizationEscalatedInApp(
+        { ...requested, waitingMinutes: 11 },
+        ctx,
+      ),
+    ]) {
+      expect(inAppPushData(rendered, owner)).toEqual({
+        url: "/notifications",
+        link: "https://app.trajetto.com.br/dashboard/control-tower",
+        type: "delivery",
+        entityId: requested.deliveryId,
+        kind: "occurrence-authorization",
+        occurrenceId: requested.occurrenceId,
+        businessId: requested.businessId,
+        userId: owner.userId,
+      });
+    }
+  });
+
+  it("leaves the other occurrence notices without it", () => {
+    const rendered = renderDeliveryOccurrenceInApp(
+      {
+        deliveryId: requested.deliveryId,
+        businessId: requested.businessId,
+        recipientName: "Mercado Central",
+        occurrenceTypeName: "Cliente ausente",
+        blocksDelivery: true,
+        description: null,
+        photosCount: 0,
+        reporterName: "João Motorista",
+        deliveryStatusAfter: "Insucesso",
+      },
+      ctx,
+    );
+
+    expect(rendered.pushData).toBeUndefined();
+    expect(inAppPushData(rendered, owner)).not.toHaveProperty("kind");
   });
 });
 

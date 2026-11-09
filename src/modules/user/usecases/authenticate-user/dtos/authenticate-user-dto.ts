@@ -9,6 +9,12 @@ interface AuthenticateUserProps {
   role?: string;
 
   /**
+   * With a session (wave 2): the manager set this password, so the client
+   * asks for the person's own before anything else. Additive.
+   */
+  mustChangePassword?: boolean;
+
+  /**
    * The CPF login's company picker (D8): the CPF and password matched in
    * more than one company, so no session was opened. Only the companies
    * where the password matched, by id and name, nothing else.
@@ -25,7 +31,11 @@ interface CpfLoginProps {
   /** The company picked after a previous answer listed several. */
   businessId?: string;
 
-  /** The phone, which the session is then bound to (D4). */
+  /**
+   * The phone, which the session is then bound to (D4). Required in effect
+   * (wave 2): without it, or on a phone no login of the CPF trusts, the
+   * login is refused with AUTH_DEVICE_NOT_TRUSTED.
+   */
   deviceId?: string | null;
 }
 
@@ -36,6 +46,9 @@ interface TwoFactorProps {
   userId: string;
   name: string;
   sessionVersion?: number;
+
+  /** A CPF login's phone (wave 2): the challenge binds the code step to it. */
+  deviceHash?: string;
 }
 
 interface EmailVerificationProps {

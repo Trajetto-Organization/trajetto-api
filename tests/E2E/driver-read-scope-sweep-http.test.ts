@@ -50,12 +50,15 @@ let shipperId = "";
  */
 const DRIVER_OWN_READS: Record<string, string> = {
   "GET /user/me": "the session's own user",
+  "GET /user/me/sessions": "the caller's own sessions (wave 2)",
   "GET /notification/preferences": "the user's own preferences",
   "GET /notification/stream": "the user's own inbox",
   "GET /notification/unread-count": "the user's own inbox",
   "GET /whatsapp/settings": "the user's own opt-in",
   "GET /account-payable/search-account-payable-by-responsible-user":
     "payables whose responsible is the caller (decision 4.5)",
+  "GET /account-payable/{accountPayableId}":
+    "only a bill whose responsible is the caller (wave 3; another's is 404)",
   "GET /ai-analysis/progress/{recordType}/{recordId}":
     "progress counters of one record, driver-scoped: the driver's own records only (a colleague's is 404); the app polls its own submissions",
   "GET /chat/list-threads": "the driver's own conversation",
@@ -78,6 +81,8 @@ const DRIVER_OWN_READS: Record<string, string> = {
   "GET /delivery/proof-document/{deliveryId}/business/{businessId}":
     "only a delivery assigned to the driver",
   "GET /kanban/list/{businessId}": "the driver's own board",
+  "GET /kanban/card/{cardId}":
+    "only the card the driver is designated to (wave 3; another's is 404)",
   "GET /route/list-routes": "scoped to the driver's routes",
   "GET /route/get-route/{routeId}/business/{businessId}":
     "only the driver's route",
@@ -87,6 +92,10 @@ const DRIVER_OWN_READS: Record<string, string> = {
   "GET /fuel/get-previous-fuel/{vehicleId}": "only a vehicle the driver drives",
   "GET /service-order/search-service-order-by-vehicle/{vehicleId}":
     "only a vehicle the driver drives",
+  "GET /service-order/mine":
+    "the orders the driver is responsible for and his vehicles' (wave 3), without money",
+  "GET /service-order/{serviceOrderId}":
+    "only an order he is responsible for or of a vehicle he may operate (wave 3; another's is 404)",
   "GET /vehicle-checklist/list-vehicle-checklist":
     "scoped to the driver's checklists",
   "GET /vehicle/search-vehicle-business":
@@ -95,6 +104,8 @@ const DRIVER_OWN_READS: Record<string, string> = {
     "only a vehicle the driver drives",
   "GET /driver-pause/current/{businessId}":
     "the driver's own open pause and today's pauses",
+  "GET /config/map":
+    "the platform's base-map provider (wave 5), the same for every session: no company data",
 };
 
 /**

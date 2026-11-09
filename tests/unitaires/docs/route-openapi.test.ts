@@ -73,7 +73,7 @@ afterAll(async () => {
 });
 
 describe("the route module's published surface", () => {
-  it("publishes exactly the twenty-three endpoints the module implements", () => {
+  it("publishes exactly the twenty-four endpoints the module implements", () => {
     // Listed rather than counted: a route added without documentation, or one
     // documented and never registered, both show up here as a diff instead of
     // a number that happens to match.
@@ -119,6 +119,9 @@ describe("the route module's published surface", () => {
       // token is refused rather than shown the whole operation.
       "POST /route/positions",
       "GET /route/control-tower",
+      // The tower's list without the tower's cost, for the manager's
+      // phone (wave 4).
+      "GET /route/live",
       "GET /route/driver-trail/{driverId}",
       "GET /route/monitoring",
       "GET /route/monitoring/drivers",

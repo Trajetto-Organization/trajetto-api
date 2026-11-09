@@ -12,6 +12,7 @@ import {
   seedCarrier,
   seedDriver,
   seedLogin,
+  seedTrustedDevice,
   type SeededSession,
 } from "./support/driver-access-seed";
 
@@ -93,8 +94,10 @@ describe("inactivating a driver who is signed in on a phone", () => {
       password: PASSWORD,
     });
 
-    // The driver signs in on the phone, by CPF, and the phone registers for
-    // push under that session.
+    // The driver signs in on the phone a QR code trusted (wave 2), by CPF,
+    // and the phone registers for push under that session.
+    await seedTrustedDevice(prisma, userId, PHONE);
+
     const signedIn = await app.inject({
       method: "POST",
       url: "/user/session",
@@ -140,6 +143,10 @@ describe("inactivating a driver who is signed in on a phone", () => {
     expect(
       await prisma.driverEnrollmentToken.count({ where: { userId } }),
     ).toBe(0);
+    // Wave 2: the phones it trusted for CPF and password go too.
+    expect(await prisma.driverTrustedDevice.count({ where: { userId } })).toBe(
+      0,
+    );
 
     // D6: the app's launch check says why, so the app signs out with the
     // right message — not a bare "session ended".
@@ -178,7 +185,7 @@ describe("inactivating a driver who is signed in on a phone", () => {
     expect(enrolled.json().code).toBe("AUTH_ENROLLMENT_INVALID");
   });
 
-  it("keeps a reactivated driver signed out until a new login", async () => {
+  it("keeps a reactivated driver signed out until a new QR code", async () => {
     const cpf = nextCpf();
     const driverId = await seedDriver(prisma, CARRIER, { cpf });
     const userId = await seedLogin(prisma, {
@@ -187,6 +194,7 @@ describe("inactivating a driver who is signed in on a phone", () => {
       driverId,
       password: PASSWORD,
     });
+    await seedTrustedDevice(prisma, userId, PHONE);
     const session = await openSession(prisma, userId);
 
     expect((await inactivate(driverId)).statusCode).toBe(200);
@@ -211,13 +219,38 @@ describe("inactivating a driver who is signed in on a phone", () => {
     expect(launch.statusCode).toBe(401);
     expect(launch.json().code).toBe("AUTH_SESSION_INVALIDATED");
 
-    const again = await app.inject({
+    // The phone lost its trust with the inactivation (wave 2): CPF and
+    // password are refused there until the manager shows a new QR code.
+    const byCpf = () =>
+      app.inject({
+        method: "POST",
+        url: "/user/session",
+        remoteAddress: address(),
+        payload: { cpf, password: PASSWORD, deviceId: PHONE },
+      });
+
+    const refused = await byCpf();
+
+    expect(refused.statusCode).toBe(403);
+    expect(refused.json().code).toBe("AUTH_DEVICE_NOT_TRUSTED");
+
+    const qr = await app.inject({
       method: "POST",
-      url: "/user/session",
+      url: `/user/${userId}/enrollment`,
       remoteAddress: address(),
-      payload: { cpf, password: PASSWORD },
+      headers: { authorization: `Bearer ${manager.access}` },
     });
 
-    expect(again.statusCode).toBe(200);
+    expect(qr.statusCode).toBe(201);
+
+    const enrolled = await app.inject({
+      method: "POST",
+      url: "/user/session/enroll",
+      remoteAddress: address(),
+      payload: { qrToken: qr.json().qrToken, deviceId: PHONE },
+    });
+
+    expect(enrolled.statusCode).toBe(200);
+    expect((await byCpf()).statusCode).toBe(200);
   });
 });

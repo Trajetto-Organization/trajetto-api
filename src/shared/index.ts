@@ -32,6 +32,8 @@ import { IUsersTokensRepository } from "@/modules/user/repositories/IUsers-token
 import { UserTokensRepository } from "@/modules/user/repositories/user-tokens-repository";
 import { DriverEnrollmentRepository } from "@/modules/user/repositories/driver-enrollment-repository";
 import type { IDriverEnrollmentRepository } from "@/modules/user/repositories/IDriver-enrollment-repository";
+import { DriverTrustedDeviceRepository } from "@/modules/user/repositories/driver-trusted-device-repository";
+import type { IDriverTrustedDeviceRepository } from "@/modules/user/repositories/IDriver-trusted-device-repository";
 
 import { SupplierRepository } from "@/modules/supplier/repositories/supplier-repository";
 import { ISupplierRepository } from "@/modules/supplier/repositories/ISupplier-repository";
@@ -196,6 +198,11 @@ container.registerSingleton<IUsersTokensRepository>(
 container.registerSingleton<IDriverEnrollmentRepository>(
   "DriverEnrollmentRepository",
   DriverEnrollmentRepository,
+);
+// Wave 2 (06/11/2026): the phones where a driver may sign in by CPF.
+container.registerSingleton<IDriverTrustedDeviceRepository>(
+  "DriverTrustedDeviceRepository",
+  DriverTrustedDeviceRepository,
 );
 
 container.registerSingleton<IBusinessRepository>(

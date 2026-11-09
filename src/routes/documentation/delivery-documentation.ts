@@ -658,6 +658,108 @@ const deliverySchemas = {
   listPendingAuthorizations: listPendingAuthorizationsSchema,
 };
 
+/** One request of the tower's queue, as the web's queue shows it. */
+const pendingAuthorizationFull = z.object({
+  id: z.string(),
+  deliveryId: z.string(),
+  occurrenceTypeId: z.string(),
+  occurrenceType: z.object({
+    id: z.string(),
+    name: z.string(),
+    blocks_delivery: z.boolean(),
+  }),
+  description: z.string().nullable(),
+  latitude: z.number().nullable(),
+  longitude: z.number().nullable(),
+  photos: z.array(z.string()).describe("URLs assinadas de vida curta."),
+  category: z
+    .enum(["DELIVERED", "NOT_DELIVERED", "PAUSE"])
+    .describe(
+      "Categoria do tipo (decisão 14.3). DELIVERED: aprovar comprova a entrega com o canhoto e a assinatura abaixo.",
+    ),
+  receipt_photo_url: z
+    .string()
+    .nullable()
+    .describe("Foto do canhoto, URL assinada de vida curta; null sem canhoto."),
+  signature_url: z
+    .string()
+    .nullable()
+    .describe(
+      "Assinatura na tela, URL assinada de vida curta; null sem assinatura.",
+    ),
+  received_by: z
+    .string()
+    .nullable()
+    .describe(
+      "Quem recebeu, informado pelo motorista (só pedidos de entrega).",
+    ),
+  form_answers: occurrenceFormAnswersDoc,
+  form_version: z.number().nullable(),
+  form_fields: occurrenceFormFieldsDoc,
+  answers: z
+    .array(z.object({ label: z.string(), value: z.string() }))
+    .describe(
+      "As respostas já rotuladas e formatadas, na ordem do formulário.",
+    ),
+  reportedBy: person,
+  occurred_at: isoDateTime.nullable(),
+  created_at: isoDateTime,
+  escalated_at: isoDateTime
+    .nullable()
+    .describe("Quando o pedido sem resposta foi escalado aos administradores."),
+  escalates_at: isoDateTime.describe(
+    "Quando escala (10 min depois do pedido).",
+  ),
+  delivery: z.object({
+    id: z.string(),
+    code: z.string().nullable(),
+    invoice_number: z.string().nullable(),
+    recipient_name: z.string(),
+    street: z.string(),
+    address_number: z.string().nullable(),
+    neighborhood: z.string().nullable(),
+    city: z.string(),
+    uf: z.string(),
+    status: deliveryStatusEnum,
+    driver: person.nullable(),
+  }),
+});
+
+/**
+ * One request as the app's list shows it (wave 4): the full row minus the
+ * signed URLs, the place and the form, plus what waits in the detail.
+ */
+const pendingAuthorizationSummary = pendingAuthorizationFull
+  .pick({
+    id: true,
+    deliveryId: true,
+    occurrenceTypeId: true,
+    occurrenceType: true,
+    category: true,
+    description: true,
+    reportedBy: true,
+    occurred_at: true,
+    created_at: true,
+    escalated_at: true,
+    escalates_at: true,
+    delivery: true,
+  })
+  .extend({
+    photos_count: z
+      .number()
+      .describe("Quantas fotos o pedido tem (as URLs vêm na visão full)."),
+    has_receipt_photo: z
+      .boolean()
+      .describe("Pedido de entrega com foto do canhoto."),
+    has_signature: z.boolean().describe("Pedido de entrega com assinatura."),
+  });
+
+const pendingAuthorizationsTotal = z
+  .number()
+  .describe(
+    "Quantos aguardam ao todo (a lista traz no máximo 100); com `occurrenceId`, 1 ou 0.",
+  );
+
 const deliveryResponses = {
   deliveryCreated: z.object({
     message: z.string().default("Entrega criada com sucesso!"),
@@ -864,83 +966,27 @@ const deliveryResponses = {
     .describe(
       "Outra pessoa decidiu antes, ou a comprovação da entrega encerrou o pedido (SUPERSEDED): nada desta requisição foi gravado.",
     ),
-  pendingAuthorizations: z.object({
-    data: z.array(
-      z.object({
-        id: z.string(),
-        deliveryId: z.string(),
-        occurrenceTypeId: z.string(),
-        occurrenceType: z.object({
-          id: z.string(),
-          name: z.string(),
-          blocks_delivery: z.boolean(),
-        }),
-        description: z.string().nullable(),
-        latitude: z.number().nullable(),
-        longitude: z.number().nullable(),
-        photos: z.array(z.string()).describe("URLs assinadas de vida curta."),
-        category: z
-          .enum(["DELIVERED", "NOT_DELIVERED", "PAUSE"])
-          .describe(
-            "Categoria do tipo (decisão 14.3). DELIVERED: aprovar comprova a entrega com o canhoto e a assinatura abaixo.",
-          ),
-        receipt_photo_url: z
-          .string()
-          .nullable()
-          .describe(
-            "Foto do canhoto, URL assinada de vida curta; null sem canhoto.",
-          ),
-        signature_url: z
-          .string()
-          .nullable()
-          .describe(
-            "Assinatura na tela, URL assinada de vida curta; null sem assinatura.",
-          ),
-        received_by: z
-          .string()
-          .nullable()
-          .describe(
-            "Quem recebeu, informado pelo motorista (só pedidos de entrega).",
-          ),
-        form_answers: occurrenceFormAnswersDoc,
-        form_version: z.number().nullable(),
-        form_fields: occurrenceFormFieldsDoc,
-        answers: z
-          .array(z.object({ label: z.string(), value: z.string() }))
-          .describe(
-            "As respostas já rotuladas e formatadas, na ordem do formulário.",
-          ),
-        reportedBy: person,
-        occurred_at: isoDateTime.nullable(),
-        created_at: isoDateTime,
-        escalated_at: isoDateTime
-          .nullable()
-          .describe(
-            "Quando o pedido sem resposta foi escalado aos administradores.",
-          ),
-        escalates_at: isoDateTime.describe(
-          "Quando escala (10 min depois do pedido).",
-        ),
-        delivery: z.object({
-          id: z.string(),
-          code: z.string().nullable(),
-          invoice_number: z.string().nullable(),
-          recipient_name: z.string(),
-          street: z.string(),
-          address_number: z.string().nullable(),
-          neighborhood: z.string().nullable(),
-          city: z.string(),
-          uf: z.string(),
-          status: deliveryStatusEnum,
-          driver: person.nullable(),
-        }),
-      }),
-    ),
-    total: z
-      .number()
-      .describe("Quantos aguardam ao todo (a lista traz no máximo 100)."),
-    businessId: z.string(),
-  }),
+  /**
+   * The tower's queue, in the view the caller asked for (wave 4). `view`
+   * names the branch, and the serializer parses the body with it, so the
+   * app's polled list can never carry a signed URL.
+   */
+  pendingAuthorizations: z.discriminatedUnion("view", [
+    z.object({
+      view: z.literal("full").describe("A fila da torre (padrão; a web)."),
+      data: z.array(pendingAuthorizationFull),
+      total: pendingAuthorizationsTotal,
+      businessId: z.string(),
+    }),
+    z.object({
+      view: z
+        .literal("summary")
+        .describe("A lista do app: sem URL assinada nem formulário."),
+      data: z.array(pendingAuthorizationSummary),
+      total: pendingAuthorizationsTotal,
+      businessId: z.string(),
+    }),
+  ]),
   deliveriesImported: z.object({
     message: z.string(),
     data: z.object({

@@ -13,6 +13,7 @@ import { UpdateKanbanCardController } from "@/modules/kanban/usecases/update-car
 
 import { DeleteKanbanCardController } from "@/modules/kanban/usecases/delete-card/delete-card-controller";
 import { ReorderKanbanCardsController } from "@/modules/kanban/usecases/reorder-cards/reorder-cards-controller";
+import { GetKanbanCardController } from "@/modules/kanban/usecases/get-card/get-card-controller";
 
 import { ensureAuthenticated } from "@/modules/middlewares/ensure-authenticated";
 import { verifyPermission } from "@/modules/middlewares/verify-permission";
@@ -37,6 +38,7 @@ const updateKanbanCardController = new UpdateKanbanCardController();
 
 const deleteKanbanCardController = new DeleteKanbanCardController();
 const reorderKanbanCardsController = new ReorderKanbanCardsController();
+const getKanbanCardController = new GetKanbanCardController();
 
 /**
  * Said once for every Kanban write: a column or card of another company is
@@ -200,6 +202,34 @@ async function kanbanRoutes(app: FastifyInstance) {
       },
     },
     createKanbanCardController.handle,
+  );
+
+  app.get(
+    "/card/:cardId",
+    {
+      onRequest: [ensureAuthenticated],
+      // No key on the route: the card's responsible reads it without one (a
+      // driver included, who holds no Kanban key), and the use case asks
+      // kanban_manage:read for any other card.
+      schema: {
+        security: [{ bearerAuth: [] }],
+        tags: ["kanban"],
+        summary: "Um card do Kanban pelo ID (leitura)",
+        description:
+          "O que o aviso de card abre no app (onda 3), só leitura: título, descrição, prioridade, prazo, se está concluído e a coluna em que está. O responsável pelo card o lê, inclusive o motorista (que não tem o Kanban em nenhum menu, D45); quem tem leitura completa do Kanban (administrador, MASTER, perfil com kanban_manage) lê qualquer card da empresa. O card não tem checklist nem anexos. `businessId` é opcional: para o MASTER, restringe a leitura a essa empresa." +
+          NOT_FOUND_RULE +
+          " Fora do alcance de quem pede, também 404 KANBAN_CARD_NOT_FOUND.",
+        params: kanbanSchemas.updateDeleteCard,
+        querystring: kanbanSchemas.cardReadQuery,
+        response: {
+          200: kanbanResponses.cardRead,
+          400: kanbanResponses.cardReadErrors,
+          404: kanbanResponses.cardReadNotFound,
+          500: kanbanResponses.internalServerError,
+        },
+      },
+    },
+    getKanbanCardController.handle,
   );
 
   app.patch(

@@ -153,6 +153,20 @@ const DRIVER_OWN: Record<string, string> = {
   stopId: "journeyStopId",
 };
 
+/**
+ * `entityId` names a different kind of row on each notice type, so it is
+ * mapped per route instead of in ENTITY_BY_NAME: a new route with an
+ * `entityId` slot stays unknown until somebody says what it points at.
+ *
+ * POST /notification/read-by-entity only matches it against the caller's own
+ * notification rows and never looks the item up; probed with a service order
+ * (the notice type its variant sends), another company's order and an id
+ * that exists nowhere must both answer 200 `count: 0` with the same body.
+ */
+const ENTITY_ID_BY_ROUTE: Record<string, string> = {
+  "/notification/read-by-entity": "serviceOrderId",
+};
+
 /** `{id}` and `[].id` mean a different row on each route family. */
 function entityForGenericId(
   path: string,
@@ -166,6 +180,9 @@ function entityForGenericId(
   if (path.startsWith("/integrations/webhook-endpoint")) return "endpointId";
   if (path.startsWith("/integrations/webhook-delivery"))
     return "webhookDeliveryId";
+  // A session's family id: another company's must end nothing and answer
+  // the same 204 as one that never existed.
+  if (path.startsWith("/user/me/sessions")) return "sessionId";
   return undefined;
 }
 
@@ -295,6 +312,8 @@ const VARIANTS: Record<string, Variant[]> = {
   "PUT /integrations/webhook-endpoint/{id}/business/{businessId}": [
     { set: { topics: ["delivery.created"] } },
   ],
+  // A real notice type, so the probed item is read as what it is.
+  "POST /notification/read-by-entity": [{ set: { type: "service-order" } }],
 };
 
 /** Path parameters that are not ids at all. */
@@ -363,7 +382,9 @@ function build(
           : name === "start_submission_id" &&
               op.path.startsWith("/driver-pause/start")
             ? undefined
-            : ENTITY_BY_NAME[name];
+            : name === "entityId"
+              ? ENTITY_ID_BY_ROUTE[op.path]
+              : ENTITY_BY_NAME[name];
 
     if (!entity) {
       unknownSlots.push(`${location}`);
@@ -674,6 +695,14 @@ async function victimSnapshot(): Promise<Record<string, string>> {
     FROM "user" u WHERE u."businessId" = ${B.businessId}
   `;
   out.user = user?.digest ?? "";
+
+  // Sessions carry no businessId: ending another company's would go unseen.
+  const [sessions] = await prisma.$queryRaw<Array<{ digest: string | null }>>`
+    SELECT md5(string_agg(t::text, '|' ORDER BY t::text)) AS digest
+    FROM "refresh_token" t JOIN "user" u ON u.id = t."userId"
+    WHERE u."businessId" = ${B.businessId}
+  `;
+  out.refresh_token = sessions?.digest ?? "";
 
   return out;
 }

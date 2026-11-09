@@ -57,6 +57,8 @@ import { InMemoryUserTokensRepository } from "@/modules/user/repositories/in-mem
 import { InMemoryBusinessRepository } from "@/modules/business/repositories/in-memory/in-memory-business-repository";
 import { InMemoryProfileAccessRepository } from "@/modules/profile-access/repositories/in-memory/in-memory-profile-access-repository";
 import { InMemoryDriverRepository } from "@/modules/driver/repositories/in-memory/in-memory-driver-repository";
+import { InMemoryDriverTrustedDeviceRepository } from "@/modules/user/repositories/in-memory/in-memory-driver-trusted-device-repository";
+import { InMemoryDriverEnrollmentRepository } from "@/modules/user/repositories/in-memory/in-memory-driver-enrollment-repository";
 
 import { CreateUserUseCase } from "@/modules/user/usecases/create-user/create-user-usecase";
 import { UpdateUserUseCase } from "@/modules/user/usecases/update-user/update-user-usecase";
@@ -86,6 +88,8 @@ let tokens: InMemoryUserTokensRepository;
 let businesses: InMemoryBusinessRepository;
 let profiles: InMemoryProfileAccessRepository;
 let drivers: InMemoryDriverRepository;
+let trusted: InMemoryDriverTrustedDeviceRepository;
+let enrollment: InMemoryDriverEnrollmentRepository;
 
 const person = (overrides: Partial<User>) =>
   ({
@@ -110,6 +114,8 @@ beforeEach(() => {
   businesses = new InMemoryBusinessRepository();
   profiles = new InMemoryProfileAccessRepository();
   drivers = new InMemoryDriverRepository();
+  trusted = new InMemoryDriverTrustedDeviceRepository();
+  enrollment = new InMemoryDriverEnrollmentRepository();
 
   users.user.push(
     person({
@@ -187,7 +193,15 @@ const create = () =>
     drivers,
   );
 const update = () =>
-  new UpdateUserUseCase(users, profiles, notifications, drivers, tokens);
+  new UpdateUserUseCase(
+    users,
+    profiles,
+    notifications,
+    drivers,
+    tokens,
+    trusted,
+    enrollment,
+  );
 
 const newUser = (overrides: Record<string, unknown> = {}) => ({
   name: "Maria Prado",
@@ -395,6 +409,69 @@ describe("editing a company user", () => {
     expect(realtime.securityEvents).toEqual([
       { userId: CLERK, reason: "role_changed" },
     ]);
+  });
+
+  // Wave 2: trust is kept per login. Moved to another driver, the login must
+  // not let the previous driver's phone sign in by the new driver's CPF.
+  describe("a driver login moved to another driver", () => {
+    const LOGIN = "018f3300-0000-7000-8000-0000000000c1";
+    const NEXT_DRIVER = "018f3300-0000-7000-8000-0000000000d3";
+
+    beforeEach(async () => {
+      drivers.drivers.push({
+        id: NEXT_DRIVER,
+        name: "Ana",
+        businessId: CARRIER,
+        status: "ACTIVE",
+      } as Driver);
+      users.user.push(
+        person({
+          id: LOGIN,
+          name: "João",
+          email: null,
+          role: "BUSINESS_USER",
+          businessId: CARRIER,
+          driverId: DRIVER,
+        }),
+      );
+
+      await trusted.trust({
+        userId: LOGIN,
+        deviceHash: "a".repeat(64),
+        source: "qr",
+      });
+      await enrollment.issue({
+        userId: LOGIN,
+        businessId: CARRIER,
+        token: "qr-token-login",
+        code: null,
+        expiresAt: new Date(Date.now() + 10 * 60_000),
+        createdById: ADMIN,
+      });
+    });
+
+    it("drops the previous driver's trusted phones and QR code", async () => {
+      await update().execute(
+        { userId: LOGIN, userData: { driverId: NEXT_DRIVER } } as never,
+        ADMIN,
+      );
+
+      expect(users.user.find((u) => u.id === LOGIN)?.driverId).toBe(
+        NEXT_DRIVER,
+      );
+      expect(await trusted.listForUser(LOGIN)).toEqual([]);
+      expect(await enrollment.findByUserId(LOGIN)).toBeNull();
+    });
+
+    it("keeps them on an edit that leaves the driver alone", async () => {
+      await update().execute(
+        { userId: LOGIN, userData: { name: "João Souza" } } as never,
+        ADMIN,
+      );
+
+      expect(await trusted.listForUser(LOGIN)).toHaveLength(1);
+      expect(await enrollment.findByUserId(LOGIN)).not.toBeNull();
+    });
   });
 
   it("refuses editing yourself", async () => {

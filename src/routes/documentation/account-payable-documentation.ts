@@ -7,6 +7,8 @@ import { updateAccountPayableSchema } from "@/schemas/update-account-payable-sch
 
 import { updateDeleteBusinessSchema } from "@/schemas/update-delete-business-schema";
 import { cursorPaginationSchema } from "@/schemas/cursor-pagination-schema";
+import { updateDeleteAccountPayableSchema } from "@/schemas/update-delete-account-payable-schema";
+import { selectedCompanyQuerySchema } from "@/schemas/selected-company-query-schema";
 
 import {
   exportAccountPayableSchema,
@@ -40,6 +42,8 @@ const accountPayableSchemas = {
   businessIdParam: updateDeleteBusinessSchema,
   accountPayableBusinessParams: accountPayableBusinessParams,
   searchAccountPayableCursor: cursorPaginationSchema,
+  accountPayableIdParam: updateDeleteAccountPayableSchema,
+  selectedCompanyQuery: selectedCompanyQuerySchema,
 };
 
 const namedRef = (fields: z.ZodRawShape) =>
@@ -151,6 +155,15 @@ const accountPayableSearchMetaDoc = searchMetaDoc(
 const accountPayableResponses = {
   accountPayableRow,
   accountPayableSearchMeta: accountPayableSearchMetaDoc,
+
+  /** GET /account-payable/:accountPayableId (wave 3). */
+  accountPayableRead: z.object({ accountPayable: accountPayableRow }),
+  readErrors: codedError(
+    "VALIDATION_ERROR: o ID ou a empresa informada é inválido. BUSINESS_NOT_IDENTIFIED: o MASTER não informou `businessId`.",
+  ),
+  readNotFound: codedError(
+    "ACCOUNT_PAYABLE_NOT_FOUND: a conta não existe, é de outra empresa ou não está ao alcance de quem pede (sem leitura de contas a pagar, só as contas em que é o responsável) — sempre o mesmo corpo. TENANT_NOT_FOUND: a empresa informada pelo MASTER não existe. USER_NOT_FOUND: o usuário da sessão não existe mais.",
+  ),
 
   accountPayableCreated: z.object({
     message: z.string().default("Conta a pagar criada com sucesso!"),

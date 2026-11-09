@@ -979,6 +979,20 @@ pipeline avisa "deploy de trajetto-ai pulado" e segue).
    (`PROOF_MAP_*`, `REVERSE_GEOCODER_*`), `MIN_MOBILE_CONTRACT`,
    `MOBILE_STORE_URL`, `ACTIVITY_RETENTION_DAYS`.
 
+   Mapa de fundo do app (onda 5, `GET /config/map`): o dono define no
+   Dokploy `MAP_TILE_URL`, `MAP_TILE_ATTRIBUTION`, `MAP_TILE_URL_DARK` e
+   `MAP_TILE_ATTRIBUTION_DARK` com **os mesmos valores do web** do mesmo
+   ambiente (copie do _Environment_ da Application da web). Sem elas, o mapa
+   do app mostra os marcadores sem mapa de fundo e avisa; um modelo inválido
+   derruba o boot da réplica nova (o _Update Config_ do passo 8 volta para
+   a anterior). A
+   chave do MapTiler dentro da URL é restrita por _Allowed HTTP Origins_; o
+   app carrega a página do mapa sob a origem da web do build
+   (`EXPO_PUBLIC_WEB_APPLICATION_URL`), e os tiles levam o `Referer` dela:
+   confira no primeiro teste no aparelho se os tiles carregam no WebView do
+   app ([`infraestrutura.md` §11.2](./infraestrutura.md#112-credenciais-de-provedores),
+   "Chave do MapTiler").
+
    Cuidados:
 
    - Os parâmetros depois do `?` da `DATABASE_URL` são os mesmos do compose
@@ -2232,6 +2246,84 @@ imagem anterior não conhece a regra nem os três campos novos de
 réplica com ela responde `/current` sem esses campos e grava todo início,
 como antes.
 
+**Conta e acesso do motorista, onda 2 (06/11/2026).** Três migrations, pela
+mesma etapa da `trajetto-api-migrate` (nada à mão no deploy):
+
+1. `20261106120000_user_must_change_password` cria
+   `user.must_change_password` (`BOOLEAN NOT NULL DEFAULT false`), sozinha e
+   sob `lock_timeout=5s`: só catálogo, e o lock exclusivo em `user` (lida por
+   toda requisição) dura só essa mudança. Sem backfill: as senhas que os
+   gestores definiram antes não pedem troca.
+2. `20261106120100_driver_trusted_device` cria a tabela
+   `driver_trusted_device` (um aparelho por login, pelo SHA-256 do
+   identificador, nunca o identificador; `source` `qr` ou `backfill`). A
+   chave estrangeira toma um lock curto em `user`, solto ao fim desta
+   migration.
+3. `20261106120200_driver_trusted_device_backfill` confia, por login, nos
+   aparelhos que os motoristas já usam: os de sessão presa ao aparelho ainda
+   válida (`refresh_token` com `device_id`, sem revogação nem vencimento) e o
+   do último QR Code lido (`driver_enrollment_token` consumido), **menos**
+   esse último quando o gestor desconectou algum aparelho daquele login
+   depois da leitura (a atividade "Aparelho do motorista … desconectado pelo
+   gestor" não diz qual aparelho, então nenhum aparelho revogado volta a
+   valer; os que ainda têm sessão entram pela primeira fonte). Numa
+   transação à parte, lê essas duas tabelas e a `activity` (pelo índice
+   `("businessId", created_at)`) e grava só a nova: nenhum login nem
+   renovação espera por ela. Antes do deploy, se quiser o tamanho,
+   `SELECT count(*) FROM refresh_token WHERE device_id IS NOT NULL AND revoked_at IS NULL AND expires_in > now();`.
+
+**O que muda para quem está em campo.** Daqui em diante, CPF e senha só
+valem num aparelho em que aquele login já entrou pelo QR Code (o backfill
+cobre os aparelhos em uso hoje). Um motorista que entrava por CPF num
+aparelho sem sessão viva e sem QR lido recebe `403 AUTH_DEVICE_NOT_TRUSTED`
+("Não foi possível entrar com este CPF neste aparelho. Confira o CPF ou peça
+ao gestor o QR Code de acesso."): o gestor gera um QR Code na tela de
+usuários. O app em produção mostra essa frase da API (é o que ele faz com um
+código que não conhece). **A imagem anterior** não conhece a tabela nem a
+coluna: durante o rollout (ou depois de um rollback) a réplica antiga aceita
+CPF em qualquer aparelho, como antes, e um QR lido nela não confia no
+aparelho. **Nada a rodar à mão depois do rollout**: os aparelhos que a
+imagem anterior abriu no meio-tempo (por QR Code ou por CPF) se resolvem
+sozinhos no login por CPF. Quando nenhum login daquele CPF confia no
+aparelho, mas o próprio login tem uma sessão viva presa a ele
+(`refresh_token` com aquele `device_id`, sem revogação nem vencimento), a
+API passa a confiar no aparelho (`source` `backfill`, linha `info`
+`event: auth.device_trust_restored`) e segue o login; a consulta vem antes de
+qualquer bcrypt e, sem sessão viva, a recusa continua a mesma. O QR Code
+consumido nunca vale para isso: um QR lido antes desta release ainda aponta
+para o aparelho mesmo depois de o gestor desconectá-lo. Um aparelho que o
+gestor desconectou **numa réplica antiga durante o rollout** perdeu as
+sessões, mas não a confiança (a imagem anterior não conhece a tabela), e sem
+sessão ele não aparece mais na lista de aparelhos: se a atividade mostrar um "Aparelho do motorista …
+desconectado pelo gestor" nesse intervalo, revogue e restaure o acesso
+daquele motorista (tira a confiança de todos os aparelhos dele; ele entra de
+novo pelo QR Code) ou espere o prazo da confiança (210 dias sem login no
+aparelho).
+
+**A troca de senha que mantém a sessão** devolve `token` e `refresh_token`
+em `PATCH /user/password` (campos novos, opcionais para quem lê): a web e o
+app de antes ignoram e saem na próxima requisição, como sempre saíram.
+
+**A lista de aparelhos do gestor** (`GET /user/:userId/devices`) deixa de
+devolver o Android ID: cada aparelho vem por `deviceHash` (SHA-256 do
+identificador), e `deviceId` passa a levar esse mesmo hash. O `DELETE
+/user/:userId/devices/:deviceId` aceita o hash e ainda o identificador. A web
+da release anterior confere o identificador antes de mandar o `DELETE`
+(Android ID ou UUID): entre o deploy da API e o da web, o "Revogar este
+aparelho" dela recusa o hash na própria tela e o rótulo mostra o fim do hash.
+A web desta release lê o hash; a ordem de sempre (API → web) fecha a janela.
+
+**Contract pendente (release seguinte): o 2FA sem corpo.** `PATCH
+/user/twofactor` sem corpo ainda inverte o estado, sem senha, só para a web
+da release anterior que roda durante o rollout. Cada uso deixa a linha `warn`
+`event: auth.twofactor_legacy_toggle` ("Deprecated contract: two-factor
+toggled without a body"). Quando a web que manda `{ enabled, password }`
+estiver em produção e a linha ficar **14 dias** sem aparecer em todas as
+réplicas: tire o ramo sem corpo do controller e do use case
+(`update-two-factor-authentication`), passe o `body` da rota de
+`config.openapi` para `schema.body`, e apague os testes do modo antigo
+(`user-self-service-usecases.test.ts` e `driver-account-security-http.test.ts`).
+
 **Depois de cada release de produção**, atualize `LAST_MIGRATION_IN_PRODUCTION`
 em `tests/unitaires/lifecycle/migration-safety.test.ts` para a última
 migration que a release levou.
@@ -3276,21 +3368,22 @@ _classic_ `read:packages`, informado no provider Docker de cada Application.
 
 ### O que precisa casar entre os repositórios
 
-| Valor                             | API (Environment das Applications do projeto `trajetto-api`)                                                                                    | Web (Environment da Application)                                                         | App (ambiente EAS)                                                                                                                                                                                                     |
-| --------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| URL pública da API                | o host na aba _Domains_ da Application `trajetto-api` e `API_HTTP_REQUEST` (a URL; dela sai o logo dos e-mails)                                 | `HTTP_REQUEST` (chamadas do servidor da web) e `PUBLIC_API_URL` (chamadas do navegador)  | `EXPO_PUBLIC_API_URL`                                                                                                                                                                                                  |
-| Socket.IO                         | o mesmo host da API, com WebSocket liberado na borda                                                                                            | `PUBLIC_API_URL` (o socket roda na própria API; não há variável própria)                 | o socket usa `EXPO_PUBLIC_API_URL`                                                                                                                                                                                     |
-| Origem da web                     | `HTTP_REQUEST` = a origem da web do ambiente (única origem do CORS e do Socket.IO, base dos links)                                              | `METADATA_BASE`                                                                          | `EXPO_PUBLIC_WEB_APPLICATION_URL` (links de Privacidade e Termos)                                                                                                                                                      |
-| Limite de tentativas por IP       | `RATE_LIMIT_FORWARDER_SECRET`                                                                                                                   | `RATE_LIMIT_FORWARDER_SECRET`, **o mesmo valor**                                         | —                                                                                                                                                                                                                      |
-| Captcha (Turnstile)               | `TURNSTILE_SECRET_KEY` (o mesmo widget da web; definida, exige o token)                                                                         | `TURNSTILE_SITE_KEY` e `TURNSTILE_SECRET_KEY`                                            | —                                                                                                                                                                                                                      |
-| Fotos no R2                       | `R2_*` (um bucket por ambiente)                                                                                                                 | `CSP_STORAGE_ORIGINS` libera a origem do bucket; o CORS do bucket libera a origem da web | envia direto à URL pré-assinada que a API devolve (sem configuração)                                                                                                                                                   |
-| IA (leitura de fotos)             | `AI_LOCAL_TOKEN` na `trajetto-api` = `AI_TOKEN` na `trajetto-ai` (o mesmo valor, um por ambiente) e `AI_LOCAL_URL=http://<App Name da IA>:8080` | nenhuma variável: a IA chega pela API                                                    | nenhuma variável                                                                                                                                                                                                       |
-| Push (FCM)                        | nenhuma: a API chama a Expo Push API                                                                                                            | —                                                                                        | `GOOGLE_SERVICES_JSON` (arquivo secreto no EAS) e a chave FCM V1 em `eas credentials`                                                                                                                                  |
-| Rastreamento em segundo plano     | —                                                                                                                                               | `BACKGROUND_TRACKING`                                                                    | `EXPO_PUBLIC_BACKGROUND_TRACKING` (mesma regra: ausente é ligado, só `false` desliga)                                                                                                                                  |
-| Versão do app                     | `MIN_MOBILE_CONTRACT` e `MOBILE_STORE_URL`                                                                                                      | —                                                                                        | `CLIENT_CONTRACT` em `utils/client-version.ts`                                                                                                                                                                         |
-| QR Code de acesso do motorista    | `APP_ENV`, que vai dentro do QR Code: `trajetto-enroll:1:<APP_ENV>:<token>`                                                                     | nenhuma variável: o diálogo mostra o QR Code que a API gerou                             | `extra.appEnvironment` do build, tirado de `EAS_BUILD_PROFILE` ou `APP_ENV` (`preview` e `staging` viram `staging`), **igual ao `APP_ENV` da API**; diferente, o app recusa o QR Code e só o código de acesso funciona |
-| Gate de rotas da web              | `/docs/json` com `DOCS_USER` e `DOCS_PASSWORD`                                                                                                  | secrets `API_DOCS_URL`, `DOCS_USER`, `DOCS_PASSWORD` no environment `production`         | —                                                                                                                                                                                                                      |
-| Checkout entre repositórios no CI | `CLIENT_REPOS_READ_TOKEN` (lê a web e o app)                                                                                                    | `API_REPO_READ_TOKEN` (lê a API)                                                         | `API_REPO_READ_TOKEN` (lê a API)                                                                                                                                                                                       |
+| Valor                             | API (Environment das Applications do projeto `trajetto-api`)                                                                                                                                                                                                                                                                                                    | Web (Environment da Application)                                                                                          | App (ambiente EAS)                                                                                                                                                                                                        |
+| --------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| URL pública da API                | o host na aba _Domains_ da Application `trajetto-api` e `API_HTTP_REQUEST` (a URL; dela sai o logo dos e-mails)                                                                                                                                                                                                                                                 | `HTTP_REQUEST` (chamadas do servidor da web) e `PUBLIC_API_URL` (chamadas do navegador)                                   | `EXPO_PUBLIC_API_URL`                                                                                                                                                                                                     |
+| Socket.IO                         | o mesmo host da API, com WebSocket liberado na borda                                                                                                                                                                                                                                                                                                            | `PUBLIC_API_URL` (o socket roda na própria API; não há variável própria)                                                  | o socket usa `EXPO_PUBLIC_API_URL`                                                                                                                                                                                        |
+| Origem da web                     | `HTTP_REQUEST` = a origem da web do ambiente (única origem do CORS e do Socket.IO, base dos links)                                                                                                                                                                                                                                                              | `METADATA_BASE`                                                                                                           | `EXPO_PUBLIC_WEB_APPLICATION_URL` (links de Privacidade e Termos; é também a origem sob a qual a página do mapa ao vivo carrega, para os tiles levarem o `Referer` que a restrição de origem da chave do provedor aceita) |
+| Limite de tentativas por IP       | `RATE_LIMIT_FORWARDER_SECRET`                                                                                                                                                                                                                                                                                                                                   | `RATE_LIMIT_FORWARDER_SECRET`, **o mesmo valor**                                                                          | —                                                                                                                                                                                                                         |
+| Captcha (Turnstile)               | `TURNSTILE_SECRET_KEY` (o mesmo widget da web; definida, exige o token)                                                                                                                                                                                                                                                                                         | `TURNSTILE_SITE_KEY` e `TURNSTILE_SECRET_KEY`                                                                             | —                                                                                                                                                                                                                         |
+| Fotos no R2                       | `R2_*` (um bucket por ambiente)                                                                                                                                                                                                                                                                                                                                 | `CSP_STORAGE_ORIGINS` libera a origem do bucket; o CORS do bucket libera a origem da web                                  | envia direto à URL pré-assinada que a API devolve (sem configuração)                                                                                                                                                      |
+| Mapa de fundo (tiles)             | `MAP_TILE_URL`, `MAP_TILE_ATTRIBUTION`, `MAP_TILE_URL_DARK` e `MAP_TILE_ATTRIBUTION_DARK` na `trajetto-api` (opcionais), definidas pelo dono em staging e produção com **os mesmos valores** da web do ambiente: a API as entrega ao app em `GET /config/map`; um modelo que o app recusaria (host que o CSP dele não nomeia como uma origem só) derruba o boot | as mesmas quatro `MAP_TILE_*`; a chave do provedor na URL é restrita às origens da web (MapTiler, _Allowed HTTP Origins_) | nenhuma variável: lê o mapa de fundo de `GET /config/map` e carrega a página do mapa sob `EXPO_PUBLIC_WEB_APPLICATION_URL`; sem as `MAP_TILE_*` na API, o mapa ao vivo mostra "Mapa de fundo não configurado"             |
+| IA (leitura de fotos)             | `AI_LOCAL_TOKEN` na `trajetto-api` = `AI_TOKEN` na `trajetto-ai` (o mesmo valor, um por ambiente) e `AI_LOCAL_URL=http://<App Name da IA>:8080`                                                                                                                                                                                                                 | nenhuma variável: a IA chega pela API                                                                                     | nenhuma variável                                                                                                                                                                                                          |
+| Push (FCM)                        | nenhuma: a API chama a Expo Push API                                                                                                                                                                                                                                                                                                                            | —                                                                                                                         | `GOOGLE_SERVICES_JSON` (arquivo secreto no EAS) e a chave FCM V1 em `eas credentials`                                                                                                                                     |
+| Rastreamento em segundo plano     | —                                                                                                                                                                                                                                                                                                                                                               | `BACKGROUND_TRACKING`                                                                                                     | `EXPO_PUBLIC_BACKGROUND_TRACKING` (mesma regra: ausente é ligado, só `false` desliga)                                                                                                                                     |
+| Versão do app                     | `MIN_MOBILE_CONTRACT` e `MOBILE_STORE_URL`                                                                                                                                                                                                                                                                                                                      | —                                                                                                                         | `CLIENT_CONTRACT` em `utils/client-version.ts`                                                                                                                                                                            |
+| QR Code de acesso do motorista    | `APP_ENV`, que vai dentro do QR Code: `trajetto-enroll:1:<APP_ENV>:<token>`                                                                                                                                                                                                                                                                                     | nenhuma variável: o diálogo mostra o QR Code que a API gerou                                                              | `extra.appEnvironment` do build, tirado de `EAS_BUILD_PROFILE` ou `APP_ENV` (`preview` e `staging` viram `staging`), **igual ao `APP_ENV` da API**; diferente, o app recusa o QR Code e só o código de acesso funciona    |
+| Gate de rotas da web              | `/docs/json` com `DOCS_USER` e `DOCS_PASSWORD`                                                                                                                                                                                                                                                                                                                  | secrets `API_DOCS_URL`, `DOCS_USER`, `DOCS_PASSWORD` no environment `production`                                          | —                                                                                                                                                                                                                         |
+| Checkout entre repositórios no CI | `CLIENT_REPOS_READ_TOKEN` (lê a web e o app)                                                                                                                                                                                                                                                                                                                    | `API_REPO_READ_TOKEN` (lê a API)                                                                                          | `API_REPO_READ_TOKEN` (lê a API)                                                                                                                                                                                          |
 
 Segredos nunca são compartilhados entre staging e produção. Cada variável
 está detalhada no `docs/variaveis-de-ambiente.md` do repositório que a lê.
@@ -3370,3 +3463,22 @@ está detalhada no `docs/variaveis-de-ambiente.md` do repositório que a lê.
    precisa estar em produção; `MIN_MOBILE_CONTRACT` só sobe depois que a OTA
    (ou o binário) com o contrato novo estiver publicada e os contratos
    antigos sumirem dos logs da API.
+
+**O lote das ondas 2 a 5 (contrato 6 do app)**, nesta ordem:
+
+1. **API**, com as três migrations só de expansão
+   (`20261106120000_user_must_change_password`,
+   `20261106120100_driver_trusted_device` e
+   `20261106120200_driver_trusted_device_backfill`), que o pipeline roda
+   pela `trajetto-api-migrate` antes do deploy (nada à mão). Antes do
+   deploy, o dono define as quatro `MAP_TILE_*` no _Environment_ da
+   Application `trajetto-api`, em staging e em produção, com os valores da
+   web do mesmo ambiente. Já com esta API, o login por CPF passa a valer só
+   num aparelho confiável para aquele login, em todos os builds do app
+   (manual da API, seção 15, "Conta e acesso do motorista, onda 2").
+2. **Web:** depois da API, como sempre.
+3. **App:** por OTA, sem binário novo, com o contrato 6, e só com a API do
+   passo 1 em produção. Antes da OTA de produção, confira num aparelho com
+   o build de staging que os tiles do MapTiler aparecem no mapa ao vivo (a
+   página carrega sob a origem da web do build). `MIN_MOBILE_CONTRACT` fica
+   como está até o contrato 5 sumir dos logs da API.

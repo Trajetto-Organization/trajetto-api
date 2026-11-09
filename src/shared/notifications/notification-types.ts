@@ -697,6 +697,25 @@ interface WebhookEndpointDisabledPayload {
   disabledAt: string;
 }
 
+/**
+ * A driver's login reached by a phone it did not trust (wave 2): the QR code
+ * consumed on a new phone, or a password created right after one. Told to the
+ * company's admins — never to the manager who issued the QR, who knows — so a
+ * QR code read out over the phone to somebody posing as the driver does not
+ * go unnoticed. No phone id: the admins see who and when.
+ */
+interface DriverAccessPayload {
+  businessId: string;
+  driverUserId: string;
+  driverName: string;
+
+  /** The manager who issued the QR code; null once that user is removed. */
+  issuedById: string | null;
+
+  /** When it happened, ISO. */
+  at: string;
+}
+
 interface TopicPayloadMap {
   "fine.created": FineCreatedPayload;
   "vehicle-checklist.created": VehicleChecklistCreatedPayload;
@@ -742,6 +761,11 @@ interface TopicPayloadMap {
 
   // The driver hears that the receipt they sent looks wrong (decision 6.9).
   "delivery-proof.ai-flagged": DeliveryProofAIFlaggedPayload;
+
+  // Wave 2: a driver's login on a new phone, and a password created right
+  // after a QR code, to the company's admins.
+  "driver-access.new_device": DriverAccessPayload;
+  "driver-access.password_created": DriverAccessPayload;
 }
 
 type NotificationTopic = keyof TopicPayloadMap;
@@ -768,6 +792,16 @@ interface RenderedInApp {
   message: string;
   link: string;
   entityId: string;
+
+  /**
+   * Push only (wave 4): ids the phone needs beyond the row's coordinates to
+   * open the right screen, e.g. the tower's authorization request. The inbox
+   * row has no free-form column, so these never reach it; the push carries
+   * them beside `type`/`entityId`, which keep their meaning for old builds
+   * and for `read-by-entity`. Ids only (push-data.ts), and never a key the
+   * pipeline sets itself — those win.
+   */
+  pushData?: Record<string, string>;
 }
 
 interface RenderedActivity {
@@ -983,6 +1017,7 @@ interface NotificationPolicyEntry<TPayload> {
 
 export type {
   DeliveryCustomerPayload,
+  DriverAccessPayload,
   ExternalRecipient,
   RenderedExternalMessage,
   RouteReleasedPayload,

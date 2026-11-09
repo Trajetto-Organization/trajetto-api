@@ -515,6 +515,23 @@ class VehicleRepository implements IVehicleRepository {
     return found > 0;
   }
 
+  async findDriverOperableVehicleIds({
+    driverId,
+    businessId,
+  }: {
+    driverId: string;
+    businessId: string;
+  }): Promise<string[]> {
+    // driverOperableVehicleWhere, the where of the single-vehicle check: the
+    // list and the check can never disagree. A driver operates a handful.
+    const rows = await this.prisma.vehicle.findMany({
+      where: { businessId, ...driverOperableVehicleWhere(driverId) },
+      select: { id: true },
+    });
+
+    return rows.map((row) => row.id);
+  }
+
   async canDriverReadVehicle({
     vehicleId,
     driverId,

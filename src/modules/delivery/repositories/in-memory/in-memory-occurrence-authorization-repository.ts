@@ -108,6 +108,24 @@ class InMemoryOccurrenceAuthorizationRepository implements IOccurrenceAuthorizat
   }
 
   /**
+   * The delivery's open stop now (ATTEMPT_JOINS' `s`): the newest PENDING or
+   * ARRIVED stop on a route.
+   */
+  private openStopOf(deliveryId: string) {
+    return this.deliveries.routeStops
+      .filter(
+        (stop) =>
+          stop.deliveryId === deliveryId &&
+          stop.routeId &&
+          (stop.status === "PENDING" || stop.status === "ARRIVED"),
+      )
+      .sort(
+        (a, b) =>
+          (b.created_at?.getTime() ?? 0) - (a.created_at?.getTime() ?? 0),
+      )[0];
+  }
+
+  /**
    * ATTEMPT_JOINS + ATTEMPT_IS_LIVE of the Prisma repository. Null when the
    * inner joins drop the row (no delivery or reporter): then it is neither
    * live nor stale, as in SQL.
@@ -128,17 +146,7 @@ class InMemoryOccurrenceAuthorizationRepository implements IOccurrenceAuthorizat
       )
       .sort((a, b) => a.created_at.getTime() - b.created_at.getTime())[0];
 
-    const openStop = this.deliveries.routeStops
-      .filter(
-        (stop) =>
-          stop.deliveryId === delivery.id &&
-          stop.routeId &&
-          (stop.status === "PENDING" || stop.status === "ARRIVED"),
-      )
-      .sort(
-        (a, b) =>
-          (b.created_at?.getTime() ?? 0) - (a.created_at?.getTime() ?? 0),
-      )[0];
+    const openStop = this.openStopOf(delivery.id!);
 
     const statusChangedSince = this.deliveries.events.some(
       (event) =>
@@ -308,12 +316,14 @@ class InMemoryOccurrenceAuthorizationRepository implements IOccurrenceAuthorizat
   async listPending(
     businessId: string,
     limit: number,
+    filter: { occurrenceId?: string } = {},
   ): Promise<{ rows: PendingAuthorizationRow[]; total: number }> {
     const pending = this.deliveries.occurrences
       .filter(
         (occurrence) =>
           occurrence.authorization_status === "PENDING" &&
           this.businessOf(occurrence) === businessId &&
+          (!filter.occurrenceId || occurrence.id === filter.occurrenceId) &&
           this.isLive(occurrence),
       )
       .sort((a, b) => this.oldestFirst(a, b));
@@ -349,6 +359,30 @@ class InMemoryOccurrenceAuthorizationRepository implements IOccurrenceAuthorizat
     });
 
     return { rows, total: pending.length };
+  }
+
+  async countPendingByRoute(
+    businessId: string,
+    routeIds: string[],
+  ): Promise<Map<string, number>> {
+    const wanted = new Set(routeIds);
+    const counts = new Map<string, number>();
+
+    for (const occurrence of this.deliveries.occurrences) {
+      if (occurrence.authorization_status !== "PENDING") continue;
+      if (this.businessOf(occurrence) !== businessId) continue;
+      if (!this.isLive(occurrence)) continue;
+
+      // Live with no open stop is a request outside any route (a panel
+      // request on a delivery waiting in the queue): no row counts it.
+      const routeId = this.openStopOf(occurrence.deliveryId)?.routeId;
+
+      if (!routeId || !wanted.has(routeId)) continue;
+
+      counts.set(routeId, (counts.get(routeId) ?? 0) + 1);
+    }
+
+    return counts;
   }
 
   async claimDueEscalations(

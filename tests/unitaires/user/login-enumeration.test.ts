@@ -35,6 +35,7 @@ import { UserInvalidCredentialsError } from "@/modules/user/usecases/errors/user
 import { InMemoryUserRepository } from "@/modules/user/repositories/in-memory/in-memory-user-repository";
 import { InMemoryUserTokensRepository } from "@/modules/user/repositories/in-memory/in-memory-user-tokens-repository";
 import { InMemoryDriverRepository } from "@/modules/driver/repositories/in-memory/in-memory-driver-repository";
+import { InMemoryDriverTrustedDeviceRepository } from "@/modules/user/repositories/in-memory/in-memory-driver-trusted-device-repository";
 
 let users: InMemoryUserRepository;
 let useCase: AuthenticateUserUseCase;
@@ -61,6 +62,7 @@ beforeEach(async () => {
     users as never,
     new InMemoryUserTokensRepository() as never,
     new InMemoryDriverRepository() as never,
+    new InMemoryDriverTrustedDeviceRepository(),
   );
 });
 

@@ -17,6 +17,9 @@ import {
   CursorPaginatedServiceOrder,
   ServiceOrderListQuery,
   DeleteServiceOrderResult,
+  ServiceOrderDetail,
+  SearchDriverServiceOrdersProps,
+  CursorPaginatedServiceOrderDetail,
 } from "../../dtos/service-order-dto";
 
 import {
@@ -35,6 +38,9 @@ interface ServiceOrderPartSeed {
   unit_price: number;
   quantity: number;
   discount_percentage?: number | null;
+  /** The line's id and the catalogue part's name, as the detail reads them. */
+  id?: string;
+  partDescription?: string;
 }
 
 /**
@@ -594,6 +600,111 @@ class InMemoryServiceOrderRepository implements IServiceOrderRepository {
   ): Promise<number> {
     return this.serviceOrders.filter((order) => this.matches(order, query))
       .length;
+  }
+
+  /** The real select: columns, the names of the links, the parts in order. */
+  private detailOf(order: ServiceOrder): ServiceOrderDetail {
+    const vehicle = this.vehicles.get(order.vehicleId);
+    const responsible = this.userNames.get(order.responsibleUserId);
+    const branch = this.branchNames.get(order.branchId);
+    const supplier = order.supplierId
+      ? this.supplierNames.get(order.supplierId)
+      : undefined;
+
+    return {
+      id: order.id,
+      date: order.date,
+      completion_date: order.completion_date ?? null,
+      maintenance_type: order.maintenance_type,
+      total_amount: order.total_amount,
+      description: order.description ?? null,
+      current_mileage_at_service: order.current_mileage_at_service ?? null,
+      maintenance_interval_km_at_service:
+        order.maintenance_interval_km_at_service ?? null,
+      last_maintenance_mileage_at_service:
+        order.last_maintenance_mileage_at_service ?? null,
+      new_mileage_after_service: order.new_mileage_after_service ?? null,
+      latitude: order.latitude ?? null,
+      longitude: order.longitude ?? null,
+      created_from: order.created_from,
+      businessId: order.businessId,
+      vehicleId: order.vehicleId,
+      responsibleUserId: order.responsibleUserId,
+      branchId: order.branchId,
+      supplierId: order.supplierId ?? null,
+      created_at: order.created_at,
+      updated_at: order.updated_at,
+      // A name the test did not seed reads as the NULL of a missing join.
+      vehicle: vehicle ? { id: order.vehicleId, ...vehicle } : null,
+      responsibleUser:
+        responsible !== undefined
+          ? { id: order.responsibleUserId, name: responsible }
+          : null,
+      branch:
+        branch !== undefined
+          ? { id: order.branchId, corporate_reason: branch }
+          : null,
+      supplier:
+        order.supplierId && supplier !== undefined
+          ? { id: order.supplierId, name: supplier }
+          : null,
+      parts: this.parts
+        .filter((part) => part.serviceOrderId === order.id)
+        .map((part, index) => ({
+          id: part.id ?? `${order.id}-part-${index}`,
+          quantity: part.quantity,
+          unit_price: part.unit_price,
+          discount_percentage: part.discount_percentage ?? null,
+          part: { description: part.partDescription ?? "" },
+        })),
+    };
+  }
+
+  async findServiceOrderDetail(
+    serviceOrderId: string,
+    businessId: string,
+  ): Promise<ServiceOrderDetail | null> {
+    const order = this.serviceOrders.find(
+      (entry) => entry.id === serviceOrderId && entry.businessId === businessId,
+    );
+
+    return order ? this.detailOf(order) : null;
+  }
+
+  async searchServiceOrdersOfDriverWithCursor({
+    limit = 10,
+    cursor,
+    businessId,
+    userId,
+    scope,
+    vehicleIds,
+  }: SearchDriverServiceOrdersProps): Promise<CursorPaginatedServiceOrderDetail> {
+    const vehicles = new Set(vehicleIds);
+
+    let filtered = this.serviceOrders
+      .filter((order) => {
+        if (order.businessId !== businessId) return false;
+
+        return scope === "assigned"
+          ? order.responsibleUserId === userId
+          : vehicles.has(order.vehicleId) && order.responsibleUserId !== userId;
+      })
+      .sort(
+        (a, b) =>
+          new Date(b.created_at).getTime() - new Date(a.created_at).getTime() ||
+          (a.id < b.id ? 1 : a.id > b.id ? -1 : 0),
+      );
+
+    // Prisma's cursor: positioned on the cursor ROW, skip 1; an unknown
+    // cursor yields nothing.
+    filtered = afterCursor(filtered, this.serviceOrders, cursor, newestFirst);
+
+    const hasMore = filtered.length > limit;
+
+    const data = filtered.slice(0, limit).map((order) => this.detailOf(order));
+    const nextCursor = hasMore ? (data[data.length - 1]?.id ?? null) : null;
+
+    return { data, nextCursor, hasMore };
   }
 }
 

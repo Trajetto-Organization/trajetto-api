@@ -10,7 +10,8 @@ import { fixedId, prismaCodeOf, type Kind } from "../support";
  * QR code a manager shows and the short code read out instead. Only hashes
  * are stored; issuing again replaces the live code; consuming is single-use,
  * bounded by expiry and attempts, and records the phone; inactivating the
- * driver deletes it.
+ * driver deletes it; disconnecting the phone that spent it makes it forget
+ * that phone (wave 2).
  */
 
 const COMPANY = fixedId("0e11", 1);
@@ -263,6 +264,33 @@ function driverEnrollmentRepositoryContract(
       expect(await repo.findByToken("qr-token-0701")).toBeNull();
       expect(await repo.revokeForUser(driverUserIds[7])).toBe(0);
       expect(await repo.findByToken("qr-token-0102")).not.toBeNull();
+    });
+  });
+
+  describe("forgetDevice", () => {
+    it("forgets the phone that spent the code, only that phone and only this login's", async () => {
+      const { repo, driverUserIds, managerId } = harness();
+      const login = driverUserIds[9];
+      const row = await issue(repo, login, "qr-token-0901", null, managerId);
+
+      await repo.consume(row.id, {
+        tokenHash: row.token_hash,
+        deviceId: "android-9",
+        now: NOW,
+        maxAttempts: MAX_ATTEMPTS,
+      });
+
+      expect(await repo.forgetDevice(login, "android-other")).toBe(0);
+      expect(await repo.forgetDevice(driverUserIds[0], "android-9")).toBe(0);
+      expect(await repo.forgetDevice(login, "android-9")).toBe(1);
+
+      // The record of when and by whom it was issued stays.
+      expect(await repo.findByUserId(login)).toMatchObject({
+        consumed_at: NOW,
+        device_id: null,
+        createdById: managerId,
+      });
+      expect(await repo.forgetDevice(login, "android-9")).toBe(0);
     });
   });
 }

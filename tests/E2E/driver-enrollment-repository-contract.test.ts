@@ -15,7 +15,7 @@ import { createPrismaClient } from "@/shared/database/database-client";
 /** Plan of 02/11/2026 (D3): the QR access contract against Postgres and the twin. */
 const prisma = createPrismaClient();
 
-const DRIVERS = 9;
+const DRIVERS = 10;
 
 const driverUserIds: string[] = [];
 let managerId = "";

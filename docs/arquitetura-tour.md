@@ -970,7 +970,13 @@ leva os eventos entre réplicas pelo `@socket.io/redis-adapter`
 - **Salas.** Por usuário, sessão, empresa (`business:<id>`) e operação
   (`operations:<id>`). A autorização é relida do banco a cada inscrição e
   revalidada a cada 3 min, com jitter (`SOCKET_REVALIDATE_MS`). O handshake tem
-  rate limit próprio (`src/shared/socket/handshake-rate-limit.ts`).
+  rate limit próprio (`src/shared/socket/handshake-rate-limit.ts`). A web da
+  equipe de despacho entra na operação e no SAC da própria empresa no
+  connect; o app (`x-trajetto-client: mobile`) só entra com
+  `operationsSubscribe`, quando a tela de operação ganha foco, e sai com
+  `operationsUnsubscribe` (`src/shared/socket/socket-client.ts`, onda 4). Um
+  unsubscribe que chega enquanto o subscribe ainda lê o banco cancela a
+  entrada (`src/shared/socket/subscription-intent.ts`).
 - **No máximo uma vez.** Um evento pode se perder; a verdade está no banco, e
   as telas refazem a consulta ao reconectar (ADR 0007). `catalogChanged` faz a
   web invalidar a lista daquela entidade

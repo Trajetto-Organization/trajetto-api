@@ -651,6 +651,22 @@ class InMemoryVehicleRepository implements IVehicleRepository {
     return vehicle ? this.operableBy(vehicle, driverId) : false;
   }
 
+  async findDriverOperableVehicleIds({
+    driverId,
+    businessId,
+  }: {
+    driverId: string;
+    businessId: string;
+  }): Promise<string[]> {
+    return this.vehicles
+      .filter(
+        (vehicle) =>
+          vehicle.businessId === businessId &&
+          this.operableBy(vehicle, driverId),
+      )
+      .map((vehicle) => vehicle.id);
+  }
+
   async canDriverReadVehicle({
     vehicleId,
     driverId,

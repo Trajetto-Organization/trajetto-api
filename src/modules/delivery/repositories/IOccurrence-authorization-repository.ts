@@ -153,11 +153,29 @@ interface IOccurrenceAuthorizationRepository {
   /** PENDING and live: whether a notice about it is still worth sending. */
   isWaiting: (occurrenceId: string, businessId: string) => Promise<boolean>;
 
-  /** The company's live queue, oldest first (the one waiting longest on top). */
+  /**
+   * The company's live queue, oldest first (the one waiting longest on top).
+   * `occurrenceId` narrows it to that request (wave 4: the detail a push
+   * opens): one row while it waits, none once decided, superseded, over or
+   * another company's — the same answer as an id that does not exist.
+   */
   listPending: (
     businessId: string,
     limit: number,
+    filter?: { occurrenceId?: string },
   ) => Promise<{ rows: PendingAuthorizationRow[]; total: number }>;
+
+  /**
+   * How many live requests wait on each of these routes (wave 4: the badge
+   * of a row of GET /route/live). A request belongs to the route of its
+   * delivery's open stop — the one the liveness rule ties it to — so the
+   * counts add up to what the queue shows for those routes. Routes with
+   * none are absent from the map.
+   */
+  countPendingByRoute: (
+    businessId: string,
+    routeIds: string[],
+  ) => Promise<Map<string, number>>;
 
   /**
    * Closes as SUPERSEDED up to `limit` PENDING requests whose attempt is over,

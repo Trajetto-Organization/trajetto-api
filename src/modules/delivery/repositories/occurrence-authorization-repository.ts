@@ -207,13 +207,15 @@ class OccurrenceAuthorizationRepository implements IOccurrenceAuthorizationRepos
   async listPending(
     businessId: string,
     limit: number,
+    filter: { occurrenceId?: string } = {},
   ): Promise<{ rows: PendingAuthorizationRow[]; total: number }> {
     // The status spelled as a literal: the partial index
     // delivery_occurrence_pending_authorization_idx only serves a query whose
     // predicate says 'PENDING' in the text. The window count runs before the
     // LIMIT, so the total rides on the same scan. A request whose attempt is
     // over is not answerable, so it is not queued even before the sweep
-    // closes it.
+    // closes it. One request (the app's detail) is the same query narrowed
+    // by its primary key, inside the same company and liveness.
     const page = await this.prisma.$queryRaw<
       Array<{ id: string; total: number }>
     >`
@@ -223,6 +225,7 @@ class OccurrenceAuthorizationRepository implements IOccurrenceAuthorizationRepos
       WHERE o."businessId" = ${businessId}
         AND o."authorization_status" = 'PENDING'
         AND (${ATTEMPT_IS_LIVE}) IS TRUE
+        ${filter.occurrenceId ? Prisma.sql`AND o."id" = ${filter.occurrenceId}` : Prisma.empty}
       ORDER BY o."created_at" ASC, o."id" ASC
       LIMIT ${limit}
     `;
@@ -262,6 +265,32 @@ class OccurrenceAuthorizationRepository implements IOccurrenceAuthorizationRepos
       }),
       total: page[0].total,
     };
+  }
+
+  async countPendingByRoute(
+    businessId: string,
+    routeIds: string[],
+  ): Promise<Map<string, number>> {
+    if (routeIds.length === 0) return new Map();
+
+    // The queue's own read (the partial pending index, the same liveness),
+    // grouped by the route of the open stop the rule tied each request to.
+    // It reads the company's waiting requests — a handful — and never the
+    // routes' stops or deliveries beyond the ones those requests are about.
+    const rows = await this.prisma.$queryRaw<
+      Array<{ routeId: string; pending: number }>
+    >`
+      SELECT s."routeId" AS "routeId", count(*)::int AS "pending"
+      FROM "delivery_occurrence" o
+      ${ATTEMPT_JOINS}
+      WHERE o."businessId" = ${businessId}
+        AND o."authorization_status" = 'PENDING'
+        AND (${ATTEMPT_IS_LIVE}) IS TRUE
+        AND s."routeId" IN (${Prisma.join(routeIds)})
+      GROUP BY s."routeId"
+    `;
+
+    return new Map(rows.map((row) => [row.routeId, Number(row.pending)]));
   }
 
   async supersedeStale(

@@ -18,8 +18,12 @@ import {
   RotateUserRefreshTokenProps,
   RefreshRotation,
   UserDeviceSession,
+  UserOwnSession,
+  UserSessionFamily,
 } from "../dtos/user-tokens-dto";
 import { groupDeviceSessions } from "../services/device-sessions";
+import { hashDeviceId } from "../services/session-service";
+import { groupOwnSessions, sessionFamilyOf } from "../services/own-sessions";
 
 /**
  * The longest a session of any client may go unused before its refresh token
@@ -247,18 +251,46 @@ class UserTokensRepository implements IUsersTokensRepository {
     return groupDeviceSessions(live);
   }
 
+  async findLoginsSignedInOnDevice(
+    userIds: string[],
+    deviceId: string,
+    now = new Date(),
+  ): Promise<string[]> {
+    // Served by (userId, family_id): a CPF names a few logins, each with a
+    // handful of rows. Asked even with no login, like the trust it backs.
+    const rows = await this.prisma.refreshToken.findMany({
+      where: {
+        userId: { in: userIds },
+        device_id: deviceId,
+        revoked_at: null,
+        expires_in: { gt: now },
+      },
+      select: { userId: true },
+      distinct: ["userId"],
+    });
+
+    return rows.map((row) => row.userId);
+  }
+
   async revokeUserDeviceSessions(
     userId: string,
-    deviceId: string,
+    deviceHash: string,
   ): Promise<string[]> {
     return this.prisma.$transaction(async (transaction) => {
-      const families = await transaction.refreshToken.findMany({
-        where: { userId, device_id: deviceId },
-        select: { family_id: true },
-        distinct: ["family_id"],
+      // The column holds the id, the caller the hash: a user's phone rows
+      // are a handful, so they are hashed here (served by (userId, …)).
+      const bound = await transaction.refreshToken.findMany({
+        where: { userId, device_id: { not: null } },
+        select: { family_id: true, device_id: true },
       });
 
-      const familyIds = families.map((row) => row.family_id);
+      const familyIds = [
+        ...new Set(
+          bound
+            .filter((row) => hashDeviceId(row.device_id!) === deviceHash)
+            .map((row) => row.family_id),
+        ),
+      ];
 
       if (familyIds.length === 0) return [];
 
@@ -273,6 +305,97 @@ class UserTokensRepository implements IUsersTokensRepository {
       });
 
       return familyIds;
+    });
+  }
+
+  async listUserSessions(
+    userId: string,
+    now = new Date(),
+  ): Promise<UserOwnSession[]> {
+    // Served by (userId, family_id): a person has a handful of rows.
+    const live = await this.prisma.refreshToken.findMany({
+      where: { userId, revoked_at: null, expires_in: { gt: now } },
+      select: {
+        family_id: true,
+        device_id: true,
+        created_at: true,
+        expires_in: true,
+      },
+    });
+
+    if (live.length === 0) return [];
+
+    const pushed = await this.prisma.pushDeviceToken.findMany({
+      where: {
+        userId,
+        session_family_id: {
+          in: [...new Set(live.map((row) => row.family_id))],
+        },
+      },
+      select: { session_family_id: true },
+    });
+
+    return groupOwnSessions(
+      live,
+      new Set(
+        pushed
+          .map((row) => row.session_family_id)
+          .filter((id): id is string => id !== null),
+      ),
+    );
+  }
+
+  async findSessionFamily(
+    userId: string,
+    familyId: string,
+    now = new Date(),
+  ): Promise<UserSessionFamily | null> {
+    const rows = await this.prisma.refreshToken.findMany({
+      where: { userId, family_id: familyId },
+      select: {
+        device_id: true,
+        created_at: true,
+        revoked_at: true,
+        expires_in: true,
+      },
+    });
+
+    return sessionFamilyOf(familyId, rows, now);
+  }
+
+  async revokeUserSession(
+    userId: string,
+    familyId: string,
+  ): Promise<{ ended: boolean; deviceId: string | null }> {
+    return this.prisma.$transaction(async (transaction) => {
+      const now = new Date();
+      const rows = await transaction.refreshToken.findMany({
+        where: { userId, family_id: familyId },
+        select: { device_id: true, revoked_at: true, expires_in: true },
+      });
+
+      // Only a live session ends: one already over (its rows spent or
+      // lapsed, waiting for the purge) changes nothing — not even the trust
+      // of the phone it was on.
+      const live = rows.some(
+        (row) => row.revoked_at === null && row.expires_in > now,
+      );
+
+      if (!live) return { ended: false, deviceId: null };
+
+      // The whole family and its push devices, as the logout does; scoped by
+      // the user, so another person's session id ends nothing.
+      await transaction.refreshToken.deleteMany({
+        where: { userId, family_id: familyId },
+      });
+      await transaction.pushDeviceToken.deleteMany({
+        where: { userId, session_family_id: familyId },
+      });
+
+      return {
+        ended: true,
+        deviceId: rows.find((row) => row.device_id)?.device_id ?? null,
+      };
     });
   }
 

@@ -60,6 +60,7 @@ import {
   userResponses,
   userSchemas,
 } from "@/routes/documentation/user-documentation";
+import { InMemoryDriverTrustedDeviceRepository } from "@/modules/user/repositories/in-memory/in-memory-driver-trusted-device-repository";
 
 const VICTIM = "vitima@exemplo.com.br";
 const ATTACKER = "atacante@exemplo.com.br";
@@ -111,6 +112,7 @@ beforeEach(async () => {
     users as never,
     tokens as never,
     drivers as never,
+    new InMemoryDriverTrustedDeviceRepository(),
   );
   verification = new TwoFactorVerificationUseCase(
     users as never,

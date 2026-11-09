@@ -47,6 +47,27 @@ const controlTowerSchema = z.object({
     .describe("Só o MASTER envia; ausente, a empresa do usuário."),
 });
 
+/**
+ * GET /route/live (wave 4): the company as the tower receives it, and the
+ * cursor of the next page. No page size: the cap is the server's (500).
+ */
+const liveRoutesSchema = z.object({
+  businessId: z
+    .string()
+    .uuid("ID da empresa é inválido.")
+    .optional()
+    .describe("Só o MASTER envia; ausente, a empresa do usuário."),
+
+  cursor: z
+    .string()
+    .min(1, "Cursor inválido.")
+    .max(512, "Cursor inválido.")
+    .optional()
+    .describe(
+      "O `meta.nextCursor` da resposta anterior: a página seguinte começa depois da última rota vista (em andamento primeiro, depois liberadas, cada grupo por código), sem repetir nem pular.",
+    ),
+});
+
 const driverTrailParamSchema = z.object({
   driverId: z.string().uuid("ID do motorista é inválido."),
 });
@@ -141,6 +162,7 @@ export {
   driverMonitoringSchema,
   driverTrailParamSchema,
   driverTrailQuerySchema,
+  liveRoutesSchema,
   recordDriverPositionsSchema,
   routeMonitoringSchema,
 };

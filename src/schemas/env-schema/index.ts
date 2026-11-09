@@ -5,6 +5,7 @@ import {
   LOCAL_AI_DEFAULT_TIMEOUT_MS,
 } from "@/shared/ai/ai-provider-defaults";
 import { isValidCnpj } from "@/shared/delivery/cnpj";
+import { isPublicOsmTemplate, isTileTemplate } from "@/shared/map/map-tiles";
 
 /** 32 characters of `openssl rand -base64` are ~192 bits: out of offline reach. */
 const JWT_SECRET_MIN_LENGTH = 32;
@@ -254,6 +255,35 @@ const envSchema = z
     PROOF_MAP_TIMEOUT_MS: z.preprocess(
       (value) => (value === "" ? undefined : value),
       z.coerce.number().int().min(200).default(3000),
+    ),
+
+    /**
+     * The base map of the app's live map (wave 5), served by GET /config/map
+     * (src/shared/map/map-tiles.ts): the web's four variables, with the web's
+     * values. A Leaflet template, https with {z}, {x} and {y} ({s} optional;
+     * http only in development) on a host the app's CSP can name as one
+     * origin, and the provider's credit as plain text.
+     * The dark style is optional; its credit falls back to the light one.
+     * Unset: public OSM in development, no base map elsewhere. The URL may
+     * carry the provider's key, which every signed-in client receives (the
+     * web hands the same one to every browser): restrict it by origin at the
+     * provider, and keep it out of the logs.
+     */
+    MAP_TILE_URL: z.preprocess(
+      (value) => (value === "" ? undefined : value),
+      z.string().optional(),
+    ),
+    MAP_TILE_ATTRIBUTION: z.preprocess(
+      (value) => (value === "" ? undefined : value),
+      z.string().optional(),
+    ),
+    MAP_TILE_URL_DARK: z.preprocess(
+      (value) => (value === "" ? undefined : value),
+      z.string().optional(),
+    ),
+    MAP_TILE_ATTRIBUTION_DARK: z.preprocess(
+      (value) => (value === "" ? undefined : value),
+      z.string().optional(),
     ),
 
     /**
@@ -577,6 +607,37 @@ const envSchema = z
       });
     }
 
+    // The app's base map, checked like the web's boot check: a broken
+    // template fails the boot instead of quietly giving every manager a map
+    // with no background. "Broken" includes what the web takes and the app
+    // refuses (a wildcard or bare {s} host, credentials, quotes...): served,
+    // the app would just say no base map is configured. The message names
+    // the variable, never its value (it can carry the provider's key).
+    const mapAppEnv =
+      env.APP_ENV ??
+      (env.NODE_ENV === "production" ? "production" : "development");
+
+    for (const field of ["MAP_TILE_URL", "MAP_TILE_URL_DARK"] as const) {
+      const value = env[field]?.trim();
+
+      if (!value) continue;
+
+      if (!isTileTemplate(value, mapAppEnv)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: [field],
+          message: `${field} inválida: modelo https com {z}, {x} e {y} ({s} opcional; http só em desenvolvimento), num host só (sem curinga, credenciais, IPv6, _ ou ponto final; {s} só como primeiro nível, com dois níveis depois), sem espaços nem aspas e com até 1024 caracteres.`,
+        });
+      } else if (mapAppEnv !== "development" && isPublicOsmTemplate(value)) {
+        // The public OSM services forbid this use, as for the proof's map.
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: [field],
+          message: `${field} não pode usar tile.openstreetmap.org fora de desenvolvimento: a política de uso do OpenStreetMap proíbe este volume.`,
+        });
+      }
+    }
+
     // The signing keys of every session, checked where a real deployment
     // runs (staging or production; the load harness says APP_ENV=development).
     // Any string used to pass: a short or guessable JWT_SECRET lets anyone
@@ -688,6 +749,23 @@ const envSchema = z
         "[env] RATE_LIMIT_TRUSTED_PROXY=none em produção: o limite das rotas " +
           "anônimas vai medir o endereço do proxy, não o do cliente. Atrás da " +
           "Cloudflare, use `cloudflare`; com Traefik ou nginx como borda, `xff`.",
+      );
+    }
+
+    // Warnings, as the web's boot gives them: the map still works, but not
+    // the way whoever set the variable meant.
+    if (env.MAP_TILE_URL_DARK && !env.MAP_TILE_URL) {
+      if (mapAppEnv !== "development") {
+        console.warn(
+          "[env] MAP_TILE_URL_DARK ignorada sem MAP_TILE_URL: o tema escuro " +
+            "precisa do mapa claro como base.",
+        );
+      }
+    } else if (env.MAP_TILE_URL && !env.MAP_TILE_ATTRIBUTION) {
+      // The provider's terms (and OSM-derived data) require its own credit.
+      console.warn(
+        "[env] MAP_TILE_ATTRIBUTION ausente: o mapa do app mostra um crédito " +
+          "genérico, e o provedor de tiles exige o dele.",
       );
     }
 

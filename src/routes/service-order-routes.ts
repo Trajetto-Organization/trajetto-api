@@ -11,6 +11,9 @@ import { SearchServiceOrderByVehicleCursorController } from "@/modules/service-o
 
 import { ExportServiceOrderController } from "@/modules/service-order/usecases/export-service-order/export-service-order-controller";
 
+import { GetServiceOrderController } from "@/modules/service-order/usecases/get-service-order/get-service-order-controller";
+import { SearchMyServiceOrdersController } from "@/modules/service-order/usecases/search-my-service-orders/search-my-service-orders-controller";
+
 import { ensureAuthenticated } from "@/modules/middlewares/ensure-authenticated";
 import { requireModuleForPlugin } from "@/modules/middlewares/verify-module-enabled";
 import { verifyPermission } from "@/modules/middlewares/verify-permission";
@@ -42,14 +45,18 @@ const searchServiceOrderByVehicleCursorController =
 
 const exportServiceOrderController = new ExportServiceOrderController();
 
+const getServiceOrderController = new GetServiceOrderController();
+const searchMyServiceOrdersController = new SearchMyServiceOrdersController();
+
 const updateServiceOrderController = new UpdateServiceOrderController();
 const deleteServiceOrderController = new DeleteServiceOrderController();
 
 /**
  * Company-wide reads are not the driver's (decision 4.4): the driver sees the
  * orders of the vehicle they drive through search-service-order-by-vehicle,
- * which checks that link. The key alone (`service_order_manage:read`) would
- * let a driver token list every order of the company.
+ * which checks that link, and his own through /mine and /:serviceOrderId
+ * (wave 3), which check theirs. The key alone (`service_order_manage:read`)
+ * would let a driver token list every order of the company.
  */
 const managerRead = verifyPermission("service_order_manage", "read", {
   allowDriver: false,
@@ -100,7 +107,7 @@ async function serviceOrderRoutes(app: FastifyInstance) {
         tags: ["service-order"],
         summary: "Lista as ordens de serviço da empresa",
         description:
-          "Uma empresa por vez: o MASTER informa `businessId` (sem ele, 400 BUSINESS_NOT_IDENTIFIED); os demais usam a própria. Ordena no servidor (`sort`/`order`) e filtra por situação (`status`), tipo de manutenção (`maintenanceType`) e filial (`branchId`), cada filtro com um ou mais valores separados por vírgula, além da busca livre (ID, descrição, placa ou descrição do veículo, responsável, filial, fornecedor ou valor). A primeira linha (`meta`) traz o total do filtro e, em `searchMeta`, os cartões e as opções dos filtros com as contagens, calculados sobre a empresa inteira. Cada ordem traz `parts_total` (soma das peças) e `accounts_payable_count` (contas vinculadas). Token de motorista recebe 403: ele vê as ordens do veículo que dirige por search-service-order-by-vehicle.",
+          "Uma empresa por vez: o MASTER informa `businessId` (sem ele, 400 BUSINESS_NOT_IDENTIFIED); os demais usam a própria. Ordena no servidor (`sort`/`order`) e filtra por situação (`status`), tipo de manutenção (`maintenanceType`) e filial (`branchId`), cada filtro com um ou mais valores separados por vírgula, além da busca livre (ID, descrição, placa ou descrição do veículo, responsável, filial, fornecedor ou valor). A primeira linha (`meta`) traz o total do filtro e, em `searchMeta`, os cartões e as opções dos filtros com as contagens, calculados sobre a empresa inteira. Cada ordem traz `parts_total` (soma das peças) e `accounts_payable_count` (contas vinculadas). Token de motorista recebe 403: ele vê as ordens do veículo que dirige por search-service-order-by-vehicle e as suas por /service-order/mine.",
         querystring: serviceOrderSchemas.listServiceOrder,
         response: {
           200: ndjsonList(
@@ -196,6 +203,58 @@ async function serviceOrderRoutes(app: FastifyInstance) {
       },
     },
     searchServiceOrderByVehicleCursorController.handle,
+  );
+
+  // "/mine" is a static path: Fastify matches it before "/:serviceOrderId"
+  // below, whatever the order of registration.
+  app.get(
+    "/mine",
+    {
+      onRequest: [ensureAuthenticated],
+      preHandler: [verifyPermission("service_order_manage", "read")],
+      schema: {
+        security: [{ bearerAuth: [] }],
+        tags: ["service-order"],
+        summary: "Minhas ordens de serviço (app do motorista, cursor)",
+        description:
+          "As duas seções do app (onda 3), cada uma com o próprio cursor, mais novas primeiro: `scope=assigned` traz as ordens em que o usuário é o responsável (as que o aviso anuncia); `scope=vehicle`, as dos veículos que ele pode operar — o veículo em que é o responsável ou o da sua rota liberada ou em andamento —, menos as que já estão em `assigned`, para nenhuma ordem aparecer nas duas. Só login de motorista (403 DRIVER_ONLY para os demais); usuário e empresa vêm da sessão. Cada ordem vem SEM valores: sem total, sem preço ou desconto de peça, sem fornecedor; as peças só com nome e quantidade. NDJSON por cursor: a primeira linha traz `meta.searchMeta.{nextCursor, hasMore}`.",
+        querystring: serviceOrderSchemas.myServiceOrdersQuery,
+        response: {
+          200: ndjsonCursor(serviceOrderResponses.serviceOrderDriverView),
+          400: serviceOrderResponses.myServiceOrdersErrors,
+          403: serviceOrderResponses.myServiceOrdersForbidden,
+          404: serviceOrderResponses.sessionUserNotFound,
+          500: serviceOrderResponses.internalServerError,
+        },
+      },
+    },
+    searchMyServiceOrdersController.handle,
+  );
+
+  app.get(
+    "/:serviceOrderId",
+    {
+      onRequest: [ensureAuthenticated],
+      // The driver passes this key (the app's table): the use case then
+      // serves him only his orders and those of a vehicle he may operate.
+      preHandler: [verifyPermission("service_order_manage", "read")],
+      schema: {
+        security: [{ bearerAuth: [] }],
+        tags: ["service-order"],
+        summary: "Uma ordem de serviço pelo ID",
+        description:
+          "O que o aviso abre no app (onda 3), com a autorização das listagens: o administrador da empresa, o perfil com leitura de ordens de serviço, o MASTER na empresa escolhida (`businessId`, obrigatório para ele: sem ele, 400 BUSINESS_NOT_IDENTIFIED) e o login de motorista só numa ordem em que é o responsável ou de um veículo que ele pode operar (o responsável pelo veículo ou o da rota liberada ou em andamento). `view` diz o formato: `driver` traz a ordem SEM valores (sem total, preço ou desconto de peça, fornecedor; as peças só com nome e quantidade); `full` traz também o total, a soma das peças com preço e desconto, o fornecedor e a localização. Inexistente, de outra empresa ou fora do alcance do motorista: 404 SERVICE_ORDER_NOT_FOUND, sempre com o mesmo corpo.",
+        params: serviceOrderSchemas.serviceOrderIdParam,
+        querystring: serviceOrderSchemas.selectedCompanyQuery,
+        response: {
+          200: serviceOrderResponses.serviceOrderRead,
+          400: serviceOrderResponses.serviceOrderReadErrors,
+          404: serviceOrderResponses.serviceOrderReadNotFound,
+          500: serviceOrderResponses.internalServerError,
+        },
+      },
+    },
+    getServiceOrderController.handle,
   );
 
   app.patch(

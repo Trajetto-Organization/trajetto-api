@@ -21,6 +21,8 @@ import type {
   DeliveryStatusName,
   FeedEntry,
   IOperationDayRepository,
+  LiveRoute,
+  LiveRouteKey,
   MonitoringRoute,
   OperationDay,
   RouteStatusName,
@@ -109,6 +111,18 @@ interface OperationRows {
     accuracy_m?: number | null;
   }>;
 
+  /**
+   * driver_last_position (wave 4, the live list). Optional so the fixtures
+   * written before it still type-check.
+   */
+  lastPositions?: Array<{
+    driverId: string;
+    businessId: string;
+    latitude: number;
+    longitude: number;
+    recorded_at: Date;
+  }>;
+
   /** Optional so the fixtures written before pauses still type-check. */
   pauses?: Array<{
     driverId: string;
@@ -155,6 +169,7 @@ function emptyRows(): OperationRows {
     stops: [],
     deliveries: [],
     events: [],
+    lastPositions: [],
     pauses: [],
     occurrences: [],
   };
@@ -706,6 +721,74 @@ class InMemoryOperationDayRepository implements IOperationDayRepository {
       }));
 
     return { total: ordered.length, routes };
+  }
+
+  async listLiveRoutes(
+    businessId: string,
+    query: { date: string; take: number; after?: LiveRouteKey },
+  ): Promise<LiveRoute[]> {
+    const { date, take, after } = query;
+
+    const keyOf = (route: OperationRows["routes"][number]): LiveRouteKey => ({
+      rank: route.status === "IN_PROGRESS" ? 0 : 1,
+      code: route.code,
+    });
+
+    const compare = (a: LiveRouteKey, b: LiveRouteKey) =>
+      a.rank - b.rank || a.code - b.code;
+
+    return this.rows.routes
+      .filter(
+        (route) =>
+          route.businessId === businessId &&
+          (route.status === "IN_PROGRESS" ||
+            (route.status === "RELEASED" &&
+              dateOnlyKey(route.scheduled_date) === date)) &&
+          (!after || compare(keyOf(route), after) > 0),
+      )
+      .sort((a, b) => compare(keyOf(a), keyOf(b)))
+      .slice(0, take)
+      .map((route) => {
+        const stops = this.rows.stops.filter(
+          (stop) => stop.routeId === route.id,
+        );
+
+        // By the driver AND the company, as the SQL joins it.
+        const position = (this.rows.lastPositions ?? []).find(
+          (row) =>
+            row.driverId === route.driverId && row.businessId === businessId,
+        );
+
+        return {
+          id: route.id,
+          code: route.code,
+          name: route.name,
+          status: route.status as LiveRoute["status"],
+          scheduled_date: dateOnlyKey(route.scheduled_date),
+          started_at: route.started_at,
+          driverId: route.driverId,
+          driverName:
+            this.rows.drivers.find((driver) => driver.id === route.driverId)
+              ?.name ?? null,
+          vehiclePlate: route.vehicleId
+            ? (this.rows.vehicles.find(
+                (vehicle) => vehicle.id === route.vehicleId,
+              )?.license_plate ?? null)
+            : null,
+          stopsTotal: stops.filter((stop) => stop.status !== "CANCELLED")
+            .length,
+          stopsResolved: stops.filter(
+            (stop) => stop.status === "COMPLETED" || stop.status === "FAILED",
+          ).length,
+          lastPosition: position
+            ? {
+                latitude: position.latitude,
+                longitude: position.longitude,
+                recorded_at: position.recorded_at,
+              }
+            : null,
+        };
+      });
   }
 
   async listOpenPauses(

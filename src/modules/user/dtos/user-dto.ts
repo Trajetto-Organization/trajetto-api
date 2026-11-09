@@ -1,5 +1,9 @@
 import type { SortOrder } from "@/shared/pagination/list-query";
 
+import type { Prisma } from "@prisma/client";
+
+import type { CreateUserRefreshTokenProps } from "./user-tokens-dto";
+
 import type {
   MasterSortKey,
   UserGroupCount,
@@ -38,6 +42,12 @@ interface CreateUserProps {
    * manager typed counts as confirmed from the start.
    */
   email_verified?: Date | null;
+
+  /**
+   * The same initial password (wave 2): the driver creates their own at the
+   * first sign-in.
+   */
+  must_change_password?: boolean;
 }
 
 interface UpdateUserProps {
@@ -87,6 +97,12 @@ interface User {
   failed_login_attempts?: number;
   failed_login_at?: Date | null;
   login_locked_until?: Date | null;
+
+  /**
+   * The manager set the password (wave 2): the person creates their own at
+   * the next sign-in. The clients enforce it; the API refuses nothing.
+   */
+  must_change_password?: boolean;
   profileAccess?: {
     name: string;
     permissions: {
@@ -147,6 +163,44 @@ interface UpdateUserPassword {
    * out when the e-mail was already confirmed, so the first stamp stays.
    */
   markEmailVerifiedAt?: Date;
+
+  /**
+   * Whether the person must create their own password at the next sign-in
+   * (wave 2): true when the manager set this one, false (the default) when
+   * the person did.
+   */
+  mustChangePassword?: boolean;
+}
+
+/**
+ * The person sets their own password and keeps the session they did it from
+ * (wave 2): every other session ends, this one is re-issued.
+ */
+interface UpdateUserPasswordKeepingSession {
+  userId: string;
+  password: string;
+
+  /** The caller's session (refresh-token family). */
+  keepFamilyId: string;
+
+  /**
+   * The kept session's next refresh token, minted from the row as updated —
+   * its new session_version is only known inside the write.
+   */
+  replacement: (user: User) => CreateUserRefreshTokenProps;
+
+  /**
+   * Writes that commit with the password, in its transaction (the outbox
+   * event of a notice about it). The in-memory twin passes no client.
+   */
+  effects?: (tx: Prisma.TransactionClient, user: User) => Promise<void>;
+}
+
+interface PasswordKeptSession {
+  user: User;
+
+  /** The other sessions (families) that ended, for the socket. */
+  endedFamilies: string[];
 }
 
 interface UpdateTwoFactorAuthentication {
@@ -276,6 +330,8 @@ export {
   CreateUserProps,
   DriverLoginByCpf,
   UpdateUserPassword,
+  UpdateUserPasswordKeepingSession,
+  PasswordKeptSession,
   UpdateUserName,
   UpdateTwoFactorAuthentication,
   UpdateUserEmailVerification,

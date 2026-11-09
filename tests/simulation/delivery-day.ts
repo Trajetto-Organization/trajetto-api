@@ -457,6 +457,11 @@ async function setUpCompany(
 
       await phone.signIn({ kind: "qr", qrContent: enrollment.qrContent });
     } else {
+      // Wave 2: CPF and password only on a phone a QR code already entered
+      // the login on, so the phone reads one first, as in the field.
+      const enrollment = await dispatcher.issueEnrollment(userId);
+
+      await phone.signIn({ kind: "qr", qrContent: enrollment.qrContent });
       await phone.signIn({
         kind: "cpf",
         cpf,

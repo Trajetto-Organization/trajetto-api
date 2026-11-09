@@ -28,10 +28,13 @@ import { env } from "@/env";
 import { IDriverRepository } from "@/modules/driver/repositories/IDriver-repository";
 import { assertSessionEligible } from "../../services/session-eligibility";
 import {
-  HeaderSessionClient,
   SessionClient,
   createUserSession,
+  hashDeviceId,
+  normalizeSessionDeviceId,
 } from "../../services/session-service";
+import { IDriverTrustedDeviceRepository } from "../../repositories/IDriver-trusted-device-repository";
+import { UserDeviceNotTrustedError } from "../errors/user-device-not-trusted-error";
 import { isLoginLocked } from "@/shared/security/login-lockout-rules";
 import {
   refusalClock,
@@ -69,6 +72,8 @@ class AuthenticateUserUseCase {
     private usersTokens: IUsersTokensRepository,
     @inject("DriverRepository")
     private driver: IDriverRepository,
+    @inject("DriverTrustedDeviceRepository")
+    private trustedDevices: IDriverTrustedDeviceRepository,
   ) {}
 
   private async emailVerification({
@@ -139,6 +144,7 @@ class AuthenticateUserUseCase {
     email,
     name,
     sessionVersion,
+    deviceHash,
   }: TwoFactorProps) {
     const existingTwoFactorTokenByEmail =
       await this.usersTokens.findTwoFactorTokenByEmail(email);
@@ -204,12 +210,16 @@ class AuthenticateUserUseCase {
       twoFactorVerificationMessage:
         "Um código de verificação foi enviado para este e-mail!",
       isTwoFactorVerification: true,
-      // The proof that the password was right, for the code step (WEB-07).
-      twoFactorChallenge: issueTwoFactorChallenge({
-        id: userId,
-        email,
-        session_version: sessionVersion,
-      }),
+      // The proof that the password was right, for the code step (WEB-07);
+      // from a CPF login, with the phone the session will be bound to.
+      twoFactorChallenge: issueTwoFactorChallenge(
+        {
+          id: userId,
+          email,
+          session_version: sessionVersion,
+        },
+        deviceHash,
+      ),
     };
   }
 
@@ -289,7 +299,11 @@ class AuthenticateUserUseCase {
 
     const session = await createUserSession(findUser, this.usersTokens, client);
 
-    return { ...session, role: findUser.role };
+    return {
+      ...session,
+      role: findUser.role,
+      mustChangePassword: findUser.must_change_password ?? false,
+    };
   }
 
   /**
@@ -313,15 +327,40 @@ class AuthenticateUserUseCase {
    * password, and may have no mailbox); the second factor still applies to a
    * login that has an e-mail and turned it on.
    *
-   * Every refusal lasts as long as DRIVER_LOGINS_BY_CPF_LIMIT comparisons
-   * (shared/security/refusal-pacing): one bcrypt per login, then a sleep for
-   * the ones skipped, so the clock does not tell in how many companies the
-   * CPF signs in — and a guess costs no more CPU than before.
+   * The phone comes first (wave 2, 06/11/2026; owner's decision): the CPF is
+   * public, so CPF and password are tried only against the logins that trust
+   * this phone — the ones a QR code entered on it (driver_trusted_device).
+   * The filter runs right after the CPF lookup and before any bcrypt; none
+   * left (an unknown CPF, no `deviceId`, a phone no login trusts) is one
+   * refusal, 403 AUTH_DEVICE_NOT_TRUSTED, with no comparison and nothing
+   * counted towards the lock — so a stranger's phone can no longer lock a
+   * driver out by guessing. Every session it opens is the phone-bound one.
+   *
+   * One more way a login trusts the phone, read in the same place, before
+   * any bcrypt: a live session of that login bound to this very phone (a
+   * refresh_token row with its `device_id`, neither revoked nor expired).
+   * During the rollout the previous image opened such sessions, by QR code
+   * and by CPF, after the migration's backfill and without trusting the
+   * phone; the driver signing in again on it would hear "peça o QR Code".
+   * The phone is trusted then (source `backfill`), once, instead of a manual
+   * rerun of the backfill. From this release on every phone-bound session
+   * already comes with the trust, and every way the trust goes (the manager,
+   * "Aparelhos conectados", D5, the login moved to another driver) ends
+   * those sessions first, so this re-grants only what the backfill would
+   * have. Never from the consumed QR code: a phone the previous image
+   * disconnected kept that row.
+   *
+   * Every refusal after that lasts as long as DRIVER_LOGINS_BY_CPF_LIMIT
+   * comparisons (shared/security/refusal-pacing): one bcrypt per login, then
+   * a sleep for the ones skipped, so the clock does not tell in how many
+   * companies the CPF signs in — and a guess costs no more CPU than before.
    */
-  async executeByCpf(
-    { cpf, password, businessId, deviceId }: CpfLoginProps,
-    client: HeaderSessionClient = "web",
-  ): Promise<AuthenticateUserProps> {
+  async executeByCpf({
+    cpf,
+    password,
+    businessId,
+    deviceId,
+  }: CpfLoginProps): Promise<AuthenticateUserProps> {
     let compared = 0;
     let comparingMs = 0;
 
@@ -350,16 +389,50 @@ class AuthenticateUserUseCase {
       throw new UserInvalidCredentialsError(...args);
     };
 
-    const logins = await this.user.findDriverLoginsByCpf(cpf);
-
-    if (logins.length === 0) {
-      // The same bcrypt as one account's comparison, then the same refusal.
-      await compare(DUMMY_PASSWORD_HASH);
-
-      return refuse("unknown_cpf");
-    }
+    // No phone, nothing to trust: refused before anything is read.
+    if (!deviceId) throw new UserDeviceNotTrustedError(false);
 
     const now = new Date();
+    const deviceHash = hashDeviceId(deviceId);
+    const found = await this.user.findDriverLoginsByCpf(cpf);
+    const foundIds = found.map((login) => login.id);
+
+    // Asked even for an unknown CPF, so it costs the same round trips as a
+    // known one on a phone nobody trusts.
+    const trusting = new Set(
+      await this.trustedDevices.trustingLogins(foundIds, deviceHash, now),
+    );
+    const untrusted = foundIds.filter((id) => !trusting.has(id));
+
+    // A phone the rollout left out (see above): a live session of the login
+    // on it vouches for it. Asked for an unknown CPF too, for the same reason.
+    if (untrusted.length > 0 || foundIds.length === 0) {
+      const signedIn = await this.usersTokens.findLoginsSignedInOnDevice(
+        untrusted,
+        normalizeSessionDeviceId(deviceId),
+        now,
+      );
+
+      for (const userId of signedIn) {
+        await this.trustedDevices.trust({
+          userId,
+          deviceHash,
+          source: "backfill",
+          now,
+        });
+        trusting.add(userId);
+
+        log.info(
+          { event: "auth.device_trust_restored", userId },
+          "phone trusted from its live phone-bound session",
+        );
+      }
+    }
+
+    const logins = found.filter((login) => trusting.has(login.id));
+
+    if (logins.length === 0) throw new UserDeviceNotTrustedError(true);
+
     const matched: DriverLoginByCpf[] = [];
     const missed: DriverLoginByCpf[] = [];
 
@@ -431,27 +504,34 @@ class AuthenticateUserUseCase {
       throw new UserInvalidCredentialsError("account_locked", chosen.id);
     }
 
+    // The password matched on this phone.
+    await this.trustedDevices.recordLogin(chosen.id, deviceHash, now);
+
     if (chosen.two_factor_enabled && hasMailbox(chosen)) {
       return await this.twoFactor({
         email: chosen.email,
         name: chosen.name,
         userId: chosen.id,
         sessionVersion: chosen.session_version,
+        // The code step binds the session to this phone, and only this
+        // phone may finish it.
+        deviceHash,
       });
     }
 
-    // With the phone's id, the long phone-bound session (D4); without it,
-    // what the client header asks for, as by e-mail.
-    const session = deviceId
-      ? await createUserSession(
-          chosen,
-          this.usersTokens,
-          "driver_device",
-          deviceId,
-        )
-      : await createUserSession(chosen, this.usersTokens, client);
+    // The long phone-bound session (D4), on the phone that is trusted.
+    const session = await createUserSession(
+      chosen,
+      this.usersTokens,
+      "driver_device",
+      deviceId,
+    );
 
-    return { ...session, role: chosen.role };
+    return {
+      ...session,
+      role: chosen.role,
+      mustChangePassword: chosen.must_change_password ?? false,
+    };
   }
 }
 

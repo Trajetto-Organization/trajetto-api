@@ -24,6 +24,11 @@ import {
   operationsRoom,
   readOperationsBusinessId,
 } from "@/shared/socket/operations-access";
+import {
+  joinsOwnDispatchRoomsOnConnect,
+  mayLeaveOwnDispatchRooms,
+  socketClientOf,
+} from "@/shared/socket/socket-client";
 
 import {
   canSubscribeToChatBusiness,
@@ -34,6 +39,7 @@ import {
   readDriverUserIdPayload,
 } from "@/modules/chat/usecases/shared/chat-access-rules";
 import { takeHint, type HintBucket } from "@/shared/socket/hint-throttle";
+import { createSubscriptionIntents } from "@/shared/socket/subscription-intent";
 import {
   AI_ANALYSIS_CHANGED_EVENT,
   aiAnalysisHint,
@@ -212,6 +218,13 @@ function allowHint(socket: Socket): boolean {
 }
 
 /**
+ * The subscribe each socket is still waiting to join (see
+ * shared/socket/subscription-intent): an unsubscribe sent while the staff
+ * check reads the database cancels it instead of finding nothing to leave.
+ */
+const subscribeIntents = createSubscriptionIntents();
+
+/**
  * Whether this socket is dispatch staff right now, from the database.
  *
  * `null` means "join nothing": the read failed (closed on purpose — a room is
@@ -258,6 +271,10 @@ function leaveDeliveryRooms(socket: Socket): void {
 
   socket.data.chatBusinessId = null;
   socket.data.operationsBusinessId = null;
+
+  // A subscribe still waiting may hold a verdict read before the right was
+  // lost; it joins nothing when it comes back.
+  subscribeIntents.cancelAll(socket);
 }
 
 /**
@@ -704,6 +721,11 @@ async function initializeSocketIO(httpServer: Server): Promise<SocketIOServer> {
           Array<{ permissionKey: string; canRead: boolean }> | undefined,
       });
 
+      // The app or the web (wave 4): decides whether the dispatch rooms are
+      // joined at connect or only on a screen's subscribe (socket-client.ts).
+      // Read before the credential is stripped from the handshake below.
+      socket.data.client = socketClientOf(socket.handshake);
+
       // Read once, above, and never again. Kept on the handshake it rode
       // along in every `fetchSockets` answer this socket was part of — a
       // live access token published through Redis to every replica.
@@ -795,11 +817,18 @@ async function initializeSocketIO(httpServer: Server): Promise<SocketIOServer> {
       socket.join(MASTERS_ROOM);
     }
 
+    // The app's sockets skip both rooms below (wave 4): its screens subscribe
+    // when they need the operation and leave when they go, so a manager's
+    // phone in a pocket is not sent the whole fleet's positions and chat.
+    const joinsOwnDispatchRooms = joinsOwnDispatchRoomsOnConnect(
+      socket.data.client,
+    );
+
     // The SAC side of the driver chat listens as a team. Whoever has a
     // company of their own is put in its room right away — that room is
     // theirs for the whole connection. A MASTER has no company here and
     // subscribes explicitly.
-    if (socket.data.isDeliveryStaff && businessId) {
+    if (socket.data.isDeliveryStaff && businessId && joinsOwnDispatchRooms) {
       socket.join(chatStaffRoom(businessId));
       socket.data.chatBusinessId = businessId;
     }
@@ -807,7 +836,7 @@ async function initializeSocketIO(httpServer: Server): Promise<SocketIOServer> {
     // Where the trucks are, and what the routes are doing. Same rule as the
     // chat room, same reason: this is the manager's view of everybody, and a
     // driver holding `delivery_manage` for their own day must not receive it.
-    if (socket.data.isDeliveryStaff && businessId) {
+    if (socket.data.isDeliveryStaff && businessId && joinsOwnDispatchRooms) {
       socket.join(operationsRoom(businessId));
       socket.data.operationsBusinessId = businessId;
     }
@@ -877,9 +906,20 @@ async function initializeSocketIO(httpServer: Server): Promise<SocketIOServer> {
         // a subscribe is a message anyone connected can send in a loop.
         if (!allowedFor(true)) return;
 
+        // Taken before the wait, so an unsubscribe (or a newer subscribe)
+        // sent while the database answers can call this one off.
+        const ticket = subscribeIntents.begin(
+          socket,
+          "chat",
+          requestedBusinessId,
+        );
+
         const isStaff = await currentDeliveryStaff(socket);
 
         if (isStaff === null || !allowedFor(isStaff)) return;
+
+        // The screen that asked may have gone while the database answered.
+        if (!subscribeIntents.isCurrent(socket, "chat", ticket)) return;
 
         // Read after the wait: another subscribe may have moved the socket
         // while the database answered.
@@ -902,7 +942,9 @@ async function initializeSocketIO(httpServer: Server): Promise<SocketIOServer> {
     });
 
     /**
-     * A MASTER following a company's operation, or anyone reconnecting.
+     * A MASTER following a company's operation, anyone reconnecting, or the
+     * app's operations screen gaining focus (wave 4: the app's socket joins
+     * no dispatch room at connect).
      *
      * Same shape as `chatSubscribe`, for the same two reasons. A master has
      * no company of their own, so the server cannot guess which operation
@@ -936,9 +978,19 @@ async function initializeSocketIO(httpServer: Server): Promise<SocketIOServer> {
         // then ask the database whether this person is still dispatch.
         if (!allowedFor(true)) return;
 
+        // Same ticket as the chat's. The app focuses and leaves its tab within
+        // one staff check when a push opens a screen on top of it; without
+        // this the late join kept the fleet's feed on that phone.
+        const ticket = subscribeIntents.begin(
+          socket,
+          "operations",
+          requestedBusinessId,
+        );
+
         const isStaff = await currentDeliveryStaff(socket);
 
         if (isStaff === null || !allowedFor(isStaff)) return;
+        if (!subscribeIntents.isCurrent(socket, "operations", ticket)) return;
 
         const previous = socket.data.operationsBusinessId as string | undefined;
 
@@ -957,39 +1009,70 @@ async function initializeSocketIO(httpServer: Server): Promise<SocketIOServer> {
       }
     });
 
-    socket.on("operationsUnsubscribe", (payload?: unknown) => {
+    // The optional acknowledgement is the subscribe's: "handled", whichever
+    // way, so a caller (the E2E suite) can wait for the room to be left. The
+    // web emits without one.
+    socket.on("operationsUnsubscribe", (payload?: unknown, ack?: unknown) => {
       try {
         const requestedBusinessId = readOperationsBusinessId(payload);
 
         if (!requestedBusinessId) return;
-        if (socket.data.operationsBusinessId !== requestedBusinessId) return;
 
-        // The own-company room joined at connect stays: it is what keeps a
-        // user's own operation live from anywhere in the app.
-        if (requestedBusinessId === socket.data.businessId) return;
+        // On the web the own-company room joined at connect stays: it is what
+        // keeps a user's own operation live from anywhere in the panel. The
+        // app never got it at connect (wave 4), so its screen gives it back
+        // on blur and in the background.
+        if (
+          requestedBusinessId === socket.data.businessId &&
+          !mayLeaveOwnDispatchRooms(socket.data.client)
+        ) {
+          return;
+        }
+
+        // Before the room check: a subscribe still reading the database has
+        // not joined yet, and must not once it comes back.
+        subscribeIntents.cancel(socket, "operations", requestedBusinessId);
+
+        if (socket.data.operationsBusinessId !== requestedBusinessId) return;
 
         socket.leave(operationsRoom(requestedBusinessId));
         socket.data.operationsBusinessId = null;
       } catch {
         // Same as above.
+      } finally {
+        acknowledgeHandled(ack);
       }
     });
 
-    // Leaving the chat screen. The own-company room joined at connect stays:
-    // it is what feeds the tab badge from anywhere in the app, and dropping
-    // it here would regress the behaviour every non-master user has today.
-    socket.on("chatUnsubscribe", (payload?: unknown) => {
+    // Leaving the chat screen. On the web the own-company room joined at
+    // connect stays: it is what feeds the tab badge from anywhere in the
+    // panel, and dropping it here would regress the behaviour every
+    // non-master user has today. The app's socket never joined it at connect
+    // and may leave what it subscribed to (wave 4).
+    socket.on("chatUnsubscribe", (payload?: unknown, ack?: unknown) => {
       try {
         const requestedBusinessId = readBusinessIdPayload(payload);
 
         if (!requestedBusinessId) return;
+
+        if (
+          requestedBusinessId === socket.data.businessId &&
+          !mayLeaveOwnDispatchRooms(socket.data.client)
+        ) {
+          return;
+        }
+
+        // Same as the operations room: a subscribe still waiting is called off.
+        subscribeIntents.cancel(socket, "chat", requestedBusinessId);
+
         if (socket.data.chatBusinessId !== requestedBusinessId) return;
-        if (requestedBusinessId === socket.data.businessId) return;
 
         socket.leave(chatStaffRoom(requestedBusinessId));
         socket.data.chatBusinessId = null;
       } catch {
         // Same as above: leaving a room is never worth a dropped socket.
+      } finally {
+        acknowledgeHandled(ack);
       }
     });
 
@@ -1157,6 +1240,17 @@ async function initializeSocketIO(httpServer: Server): Promise<SocketIOServer> {
     applyWhatsAppTemplateLaneChange(change);
   });
 
+  // A session changed its own password on another replica: this one's
+  // sockets of that session keep going with the new version. Validated: what
+  // comes off the adapter is input like any other.
+  io.on(ADOPT_SESSION_VERSION_EVENT, (frame: unknown) => {
+    const { sessionId, version } = (frame ?? {}) as Record<string, unknown>;
+
+    if (typeof sessionId !== "string" || !Number.isInteger(version)) return;
+
+    adoptLocalSessionVersion(sessionId, version as number);
+  });
+
   revalidationStopped = false;
   scheduleRevalidation();
 
@@ -1265,6 +1359,45 @@ const sendSecurityEventToSession = (
       endSessionsIn(`session:${sessionId}`);
     }
   }
+};
+
+/** The server-side event a kept session's new version crosses replicas on. */
+const ADOPT_SESSION_VERSION_EVENT = "trajetto:adopt-session-version";
+
+/**
+ * A session that changed its own password keeps going (wave 2): the change
+ * bumped session_version and re-issued THIS session's tokens, and its open
+ * sockets carry the old version — the periodic sweep would end them as
+ * `user_updated`, which both clients read as "signed out". Each replica moves
+ * the version its own sockets of that session recorded; only forward, so a
+ * frame arriving late never lowers it. At-most-once like every adapter frame
+ * (ADR 0002): a replica that misses it ends that socket on the next sweep as
+ * `user_updated`, which a client still on the old socket reads as a sign-out
+ * — the web reconnects with a ticket of the new pair right after the change
+ * for that reason.
+ */
+function adoptLocalSessionVersion(sessionId: string, version: number): void {
+  for (const socket of localSocketsIn(`session:${sessionId}`)) {
+    if (Number(socket.data.sessionVersion) < version) {
+      socket.data.sessionVersion = version;
+    }
+  }
+}
+
+const adoptSessionVersion = (sessionId: string, version: number): void => {
+  if (!io) return;
+
+  try {
+    io.serverSideEmit(ADOPT_SESSION_VERSION_EVENT, { sessionId, version });
+  } catch (error) {
+    // No cluster to tell: this replica is the only one, and it runs below.
+    log.warn(
+      { err: error, sessionId },
+      "other replicas could not be told a session's new version",
+    );
+  }
+
+  adoptLocalSessionVersion(sessionId, version);
 };
 
 /** The server-side event each replica re-evaluates its own sockets on. */
@@ -1974,6 +2107,7 @@ export {
   sendAIVerificationEvent,
   sendSecurityEventToUser,
   sendSecurityEventToSession,
+  adoptSessionVersion,
   sendSecurityEventToBusiness,
   sendEntitlementsChangedEvent,
   sendCatalogChangedEvent,

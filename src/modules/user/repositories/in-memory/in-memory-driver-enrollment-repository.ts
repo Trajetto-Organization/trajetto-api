@@ -72,6 +72,12 @@ class InMemoryDriverEnrollmentRepository implements IDriverEnrollmentRepository 
     return row ? { ...row } : null;
   }
 
+  async findByUserId(userId: string): Promise<DriverEnrollmentToken | null> {
+    const row = this.tokens.find((entry) => entry.userId === userId);
+
+    return row ? { ...row } : null;
+  }
+
   async consume(
     id: string,
     {
@@ -115,6 +121,18 @@ class InMemoryDriverEnrollmentRepository implements IDriverEnrollmentRepository 
     this.tokens = this.tokens.filter((row) => row.userId !== userId);
 
     return before - this.tokens.length;
+  }
+
+  async forgetDevice(userId: string, deviceId: string): Promise<number> {
+    const row = this.tokens.find(
+      (entry) => entry.userId === userId && entry.device_id === deviceId,
+    );
+
+    if (!row) return 0;
+
+    row.device_id = null;
+
+    return 1;
   }
 }
 

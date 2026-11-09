@@ -19,6 +19,8 @@ import type {
   DeliveryStatusName,
   FeedEntry,
   IOperationDayRepository,
+  LiveRoute,
+  LiveRouteKey,
   MonitoringRoute,
   OperationDay,
   RouteStatusName,
@@ -751,6 +753,112 @@ class OperationDayRepository implements IOperationDayRepository {
       }));
 
     return { total: Number(ids[0].total), routes };
+  }
+
+  /**
+   * The live list (wave 4, GET /route/live), in one statement.
+   *
+   * The routes first, limited, then everything else joined to that page
+   * only: the CTE reads the company's running routes and today's released
+   * ones through route (businessId, status, scheduled_date) — two index
+   * ranges, both of live routes only, never the company's history — and
+   * sorts that handful in memory. Each page row then costs one probe of
+   * route_stop (routeId, status) for its counts, and a primary-key lookup
+   * each for the driver, the vehicle and driver_last_position. No delivery,
+   * no event, no position history (plan in query-plans.test.ts).
+   *
+   * The last point is joined by the driver AND the company: a driver moved
+   * to another company keeps a row the old one must not read.
+   */
+  async listLiveRoutes(
+    businessId: string,
+    query: { date: string; take: number; after?: LiveRouteKey },
+  ): Promise<LiveRoute[]> {
+    const { date, take, after } = query;
+
+    const rows = await this.prisma.$queryRaw<
+      Array<{
+        id: string;
+        code: number;
+        name: string | null;
+        status: "IN_PROGRESS" | "RELEASED";
+        scheduled_date: string;
+        started_at: Date | null;
+        driverId: string;
+        driverName: string | null;
+        vehiclePlate: string | null;
+        stopsTotal: number | null;
+        stopsResolved: number | null;
+        latitude: number | null;
+        longitude: number | null;
+        recordedAt: Date | null;
+      }>
+    >`
+      WITH "live" AS (
+        SELECT r."id", r."code", r."name", r."status"::text AS "status",
+               to_char(r."scheduled_date", 'YYYY-MM-DD') AS "scheduled_date",
+               r."started_at", r."driverId", r."vehicleId",
+               (CASE WHEN r."status" = 'IN_PROGRESS' THEN 0 ELSE 1 END) AS "rank"
+        FROM "route" r
+        WHERE r."businessId" = ${businessId}
+          AND (
+            r."status" = 'IN_PROGRESS'
+            OR (r."status" = 'RELEASED' AND r."scheduled_date" = ${date}::date)
+          )
+          ${
+            after
+              ? Prisma.sql`AND (
+                  (CASE WHEN r."status" = 'IN_PROGRESS' THEN 0 ELSE 1 END),
+                  r."code"
+                ) > (${after.rank}::int, ${after.code}::int)`
+              : Prisma.empty
+          }
+        ORDER BY "rank" ASC, r."code" ASC
+        LIMIT ${take}
+      )
+      SELECT l."id", l."code", l."name", l."status", l."scheduled_date",
+             l."started_at", l."driverId",
+             d."name" AS "driverName",
+             v."license_plate" AS "vehiclePlate",
+             st."total" AS "stopsTotal",
+             st."resolved" AS "stopsResolved",
+             p."latitude", p."longitude", p."recorded_at" AS "recordedAt"
+      FROM "live" l
+      LEFT JOIN "driver" d ON d."id" = l."driverId"
+      LEFT JOIN "vehicle" v ON v."id" = l."vehicleId"
+      LEFT JOIN LATERAL (
+        SELECT
+          (count(*) FILTER (WHERE rs."status" <> 'CANCELLED'))::int AS "total",
+          (count(*) FILTER (WHERE rs."status" IN ('COMPLETED', 'FAILED')))::int AS "resolved"
+        FROM "route_stop" rs
+        WHERE rs."routeId" = l."id"
+      ) st ON true
+      LEFT JOIN "driver_last_position" p
+        ON p."driverId" = l."driverId" AND p."businessId" = ${businessId}
+      ORDER BY l."rank" ASC, l."code" ASC
+    `;
+
+    return rows.map((row) => ({
+      id: row.id,
+      code: Number(row.code),
+      name: row.name,
+      status: row.status,
+      scheduled_date: row.scheduled_date,
+      started_at: row.started_at,
+      driverId: row.driverId,
+      driverName: row.driverName,
+      vehiclePlate: row.vehiclePlate,
+      stopsTotal: Number(row.stopsTotal ?? 0),
+      stopsResolved: Number(row.stopsResolved ?? 0),
+      lastPosition:
+        row.recordedAt && row.latitude !== null && row.longitude !== null
+          ? {
+              latitude: Number(row.latitude),
+              longitude: Number(row.longitude),
+              recorded_at: row.recordedAt,
+            }
+          : null,
+    }));
   }
 
   async listOpenPauses(

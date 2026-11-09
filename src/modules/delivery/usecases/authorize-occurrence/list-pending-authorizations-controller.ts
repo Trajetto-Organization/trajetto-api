@@ -7,11 +7,17 @@ import { listPendingAuthorizationsSchema } from "./occurrence-authorization-sche
 class ListPendingAuthorizationsController {
   async handle(request: FastifyRequest, reply: FastifyReply): Promise<void> {
     const { id } = request.user;
-    const { businessId } = listPendingAuthorizationsSchema.parse(request.query);
+    const { businessId, view, occurrenceId } =
+      listPendingAuthorizationsSchema.parse(request.query);
 
     const useCase = container.resolve(ListPendingAuthorizationsUseCase);
 
-    const result = await useCase.execute({ userId: id, businessId });
+    const result = await useCase.execute({
+      userId: id,
+      businessId,
+      view,
+      occurrenceId,
+    });
 
     return reply.status(200).send(result);
   }

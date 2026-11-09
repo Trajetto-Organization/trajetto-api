@@ -9,6 +9,7 @@ import { UserNotFoundPermissionOrProfileAccess } from "../errors/user-not-found-
 
 import { UserRevokedAccessError } from "../errors/user-revoked-access-error";
 import { UserDriverInactiveError } from "../errors/user-driver-inactive-error";
+import { UserDeviceNotTrustedError } from "../errors/user-device-not-trusted-error";
 
 import { parseSessionClient } from "../../services/session-service";
 
@@ -39,12 +40,16 @@ class AuthenticateUserController {
         token,
         refresh_token,
         role,
+        mustChangePassword,
       } =
         cpf !== undefined
-          ? await authenticateUserUseCase.executeByCpf(
-              { cpf, password, businessId, deviceId },
-              client,
-            )
+          ? // Always the phone-bound session: no header picks its policy.
+            await authenticateUserUseCase.executeByCpf({
+              cpf,
+              password,
+              businessId,
+              deviceId,
+            })
           : await authenticateUserUseCase.execute(
               { email: email as string, password },
               client,
@@ -82,8 +87,33 @@ class AuthenticateUserController {
         token,
         refresh_token,
         role,
+        // Additive (wave 2): older clients ignore it.
+        mustChangePassword: mustChangePassword ?? false,
       });
     } catch (error) {
+      if (error instanceof UserDeviceNotTrustedError) {
+        // The same trace as any failed login, the CPF only as a keyed
+        // fingerprint (LGPD). No user id: nothing was compared, and which
+        // logins the CPF has is exactly what this answer keeps to itself.
+        request.log.warn(
+          {
+            event: "auth.login_failed",
+            reason: "device_not_trusted",
+            userId: null,
+            account: accountFingerprint(cpf ?? ""),
+            identifier: "cpf",
+            withDevice: error.withDevice,
+            clientAddress: clientAddress(request),
+          },
+          "Login failed",
+        );
+
+        return reply.status(403).send({
+          code: error.code,
+          message: error.message,
+        });
+      }
+
       if (error instanceof UserInvalidCredentialsError) {
         // The only trace of a failed login (OBS-13). The e-mail goes in as
         // a keyed fingerprint, never in clear; the address is the client's

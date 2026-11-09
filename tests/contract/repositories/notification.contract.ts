@@ -105,6 +105,45 @@ function notificationRepositoryContract(
     );
   });
 
+  it("marks read the user's unread rows of one type and item, returning their ids (wave 3)", async () => {
+    const h = harness();
+
+    // The seed is "system" rows without an item; the probe adds its own.
+    const item = fixedId("0b1d", 1);
+    const mine = await h.repo.createNotification({
+      userId: F.userA,
+      type: "service-order",
+      title: "Nova Ordem de Serviço",
+      message: "Mensagem",
+      entityId: item,
+      businessId: F.A,
+    });
+    const theirs = await h.repo.createNotification({
+      userId: F.userB,
+      type: "service-order",
+      title: "Nova Ordem de Serviço",
+      message: "Mensagem",
+      entityId: item,
+      businessId: F.A,
+    });
+    const otherType = await h.repo.createNotification({
+      userId: F.userA,
+      type: "account-payable",
+      title: "Nova conta",
+      message: "Mensagem",
+      entityId: item,
+      businessId: F.A,
+    });
+
+    const ref = { userId: F.userA, type: "service-order", entityId: item };
+
+    expect(await h.repo.markReadByEntity(ref)).toEqual([mine.id]);
+    expect(await h.repo.markReadByEntity(ref)).toEqual([]);
+
+    expect((await h.repo.findNotificationById(theirs.id))?.read).toBe(false);
+    expect((await h.repo.findNotificationById(otherType.id))?.read).toBe(false);
+  });
+
   describe("preferences", () => {
     it("keep one row per category, updated in place", async () => {
       const { repo } = harness();

@@ -2,6 +2,7 @@ import { afterAll, describe, expect, it } from "vitest";
 
 import { Prisma } from "@prisma/client";
 
+import { createHash } from "node:crypto";
 import { readFileSync, readdirSync } from "node:fs";
 import { resolve } from "node:path";
 
@@ -15,6 +16,7 @@ import { DriverPauseRepository } from "@/modules/driver-pause/repositories/drive
 
 import { pauseTypeId } from "./support/pause-type-seed";
 import { createPrismaClient } from "@/shared/database/database-client";
+import { hashDeviceId } from "@/modules/user/services/session-service";
 import { uniqueTargetOf } from "@/shared/errors/prisma-error-meta";
 
 /**
@@ -3189,5 +3191,260 @@ describe("the refuelling's alerts (20261105130000)", () => {
         await tx.$executeRawUnsafe(statement);
       }
     });
+  });
+});
+
+describe("the trusted phones and the manager-set password (20261106120000..0200)", () => {
+  const FLAG = "20261106120000_user_must_change_password";
+  const TABLE = "20261106120100_driver_trusted_device";
+  const BACKFILL = "20261106120200_driver_trusted_device_backfill";
+
+  // The SHA-256 the API digests a device id with (session-service
+  // hashDeviceId), over the id as the API stores it (normalized).
+  const digest = (deviceId: string) =>
+    createHash("sha256").update(deviceId).digest("hex");
+
+  it("adds the flag alone, the table apart, and the backfill in its own transaction", () => {
+    // "user" is read by every request: its ACCESS EXCLUSIVE lock is held for
+    // the catalog change only. The foreign key's lock on "user" is released
+    // before the backfill reads anything.
+    expect(
+      migrationStatements(FLAG).map((statement) => statement.split(/\s/)[0]),
+    ).toEqual(["SET", "ALTER"]);
+    expect(
+      migrationStatements(BACKFILL).map(
+        (statement) => statement.split(/\s/)[0],
+      ),
+    ).toEqual(["SET", "INSERT"]);
+  });
+
+  it("user.must_change_password is NOT NULL, false by default", async () => {
+    // The previous image's INSERTs leave it out.
+    expect((await columnsOf("user")).get("must_change_password")).toMatchObject(
+      { is_nullable: "NO", column_default: "false" },
+    );
+  });
+
+  it("driver_trusted_device keeps one row per login and phone, by hash, with a closed source", async () => {
+    const columns = await columnsOf("driver_trusted_device");
+
+    expect([...columns.keys()].sort()).toEqual(
+      [
+        "created_at",
+        "device_hash",
+        "id",
+        "last_login_at",
+        "source",
+        "userId",
+      ].sort(),
+    );
+    expect(
+      await indexDefinition("driver_trusted_device_userId_device_hash_key"),
+    ).toMatch(/UNIQUE INDEX .* \("userId", device_hash\)/);
+    expect(await indexDefinition("driver_trusted_device_userId_idx")).toMatch(
+      /\("userId"\)/,
+    );
+
+    const refused = await rolledBack(async (tx) => {
+      const carrier = await seedBusiness(tx);
+      await seedUserRow(tx, carrier, `login-${carrier}`);
+
+      return tx
+        .$executeRawUnsafe(
+          `INSERT INTO "driver_trusted_device" ("id", "userId", "device_hash", "source")
+           VALUES ('t-1', $1, 'hash', 'outro')`,
+          `login-${carrier}`,
+        )
+        .then(() => null)
+        .catch((error: unknown) => String(error));
+    });
+
+    expect(refused).toMatch(/driver_trusted_device_source_chk/);
+  });
+
+  it("trusts the phones of live phone-bound sessions and of consumed QR codes, once each, and only them", async () => {
+    const backfill = statementStartingWith(BACKFILL, "INSERT");
+
+    const outcome = await rolledBack(async (tx) => {
+      const carrier = await seedBusiness(tx);
+      const k = (name: string) => `${name}-${carrier}`;
+
+      for (const name of ["ana", "bia", "caio"]) {
+        await seedDriverRow(tx, carrier, k(`driver-${name}`));
+        await seedUserRow(tx, carrier, k(name), k(`driver-${name}`));
+      }
+
+      const session = (
+        user: string,
+        deviceId: string | null,
+        state: "live" | "revoked" | "expired",
+        createdAt = "2026-11-05T10:00:00.000Z",
+      ) =>
+        tx.$executeRawUnsafe(
+          `INSERT INTO "refresh_token" ("id", "token_hash", "jti", "family_id", "expires_in",
+             "revoked_at", "userId", "device_id", "created_at")
+           VALUES (gen_random_uuid()::text, gen_random_uuid()::text, gen_random_uuid()::text,
+             gen_random_uuid()::text, $1::timestamp, $2::timestamp, $3, $4, $5::timestamp)`,
+          state === "expired"
+            ? "2020-01-01T00:00:00.000Z"
+            : "2099-01-01T00:00:00.000Z",
+          state === "revoked" ? "2026-11-05T11:00:00.000Z" : null,
+          k(user),
+          deviceId,
+          createdAt,
+        );
+
+      // Ana: a live phone session, the same phone again in a raced renewal,
+      // and the QR code she read on it — one phone, one row.
+      await session("ana", "23be03c084165505", "live");
+      await session(
+        "ana",
+        "23be03c084165505",
+        "live",
+        "2026-11-05T12:00:00.000Z",
+      );
+      await tx.$executeRawUnsafe(
+        `INSERT INTO "driver_enrollment_token" ("id", "userId", "businessId", "token_hash",
+           "expires_at", "consumed_at", "device_id")
+         VALUES (gen_random_uuid()::text, $1, $2, gen_random_uuid()::text,
+           '2026-11-04T10:10:00.000Z', '2026-11-04T10:01:00.000Z', '23be03c084165505')`,
+        k("ana"),
+        carrier,
+      );
+      // A web session (no phone): nothing to trust.
+      await session("ana", null, "live");
+
+      // Bia: only a consumed QR code, on another phone.
+      await tx.$executeRawUnsafe(
+        `INSERT INTO "driver_enrollment_token" ("id", "userId", "businessId", "token_hash",
+           "expires_at", "consumed_at", "device_id")
+         VALUES (gen_random_uuid()::text, $1, $2, gen_random_uuid()::text,
+           '2026-11-04T10:10:00.000Z', '2026-11-04T10:02:00.000Z', '9f1c03c084160000')`,
+        k("bia"),
+        carrier,
+      );
+
+      // Caio: a revoked and an expired phone session, and a QR code still on
+      // a screen (not consumed): none of them trusted.
+      await session("caio", "aaaaaaaaaaaaaaaa", "revoked");
+      await session("caio", "bbbbbbbbbbbbbbbb", "expired");
+      await tx.$executeRawUnsafe(
+        `INSERT INTO "driver_enrollment_token" ("id", "userId", "businessId", "token_hash",
+           "expires_at")
+         VALUES (gen_random_uuid()::text, $1, $2, gen_random_uuid()::text,
+           '2099-01-01T00:00:00.000Z')`,
+        k("caio"),
+        carrier,
+      );
+
+      const first = await tx.$executeRawUnsafe(backfill);
+      // Idempotent: a retried migration adds nothing.
+      const second = await tx.$executeRawUnsafe(backfill);
+
+      const rows = await tx.$queryRawUnsafe<
+        Array<{
+          userId: string;
+          device_hash: string;
+          source: string;
+          last_login_at: Date;
+        }>
+      >(
+        `SELECT "userId", "device_hash", "source", "last_login_at"
+           FROM "driver_trusted_device" WHERE "userId" = ANY($1::text[])
+          ORDER BY "userId"`,
+        [k("ana"), k("bia"), k("caio")],
+      );
+
+      return { first, second, rows, ana: k("ana"), bia: k("bia") };
+    });
+
+    expect(outcome.first).toBe(2);
+    expect(outcome.second).toBe(0);
+    expect(outcome.rows).toEqual([
+      {
+        userId: outcome.ana,
+        device_hash: digest("23be03c084165505"),
+        source: "backfill",
+        // The latest of the renewals and the QR.
+        last_login_at: new Date("2026-11-05T12:00:00.000Z"),
+      },
+      {
+        userId: outcome.bia,
+        device_hash: digest("9f1c03c084160000"),
+        source: "backfill",
+        last_login_at: new Date("2026-11-04T10:02:00.000Z"),
+      },
+    ]);
+    // The hash is the one a CPF login with that deviceId looks for.
+    expect(outcome.rows[0].device_hash).toBe(hashDeviceId("23be03c084165505"));
+  });
+
+  /**
+   * The previous image's "Revogar este aparelho" (D7) ended the phone's
+   * sessions and left the consumed QR code as it was, still naming that
+   * phone; its audit entry names no phone. A disconnection of the login
+   * after the code was read keeps the code's phone out — a revoked phone is
+   * never trusted again — while one before it (a new code read since) does
+   * not. The login's phones still in use come in by their sessions.
+   */
+  it("leaves out the QR code's phone once the manager disconnected a phone of that login after it", async () => {
+    const backfill = statementStartingWith(BACKFILL, "INSERT");
+
+    const outcome = await rolledBack(async (tx) => {
+      const carrier = await seedBusiness(tx);
+      const k = (name: string) => `${name}-${carrier}`;
+
+      for (const name of ["dani", "edu"]) {
+        await seedDriverRow(tx, carrier, k(`driver-${name}`));
+        await seedUserRow(tx, carrier, k(name), k(`driver-${name}`));
+      }
+
+      const consumedQr = (user: string, deviceId: string) =>
+        tx.$executeRawUnsafe(
+          `INSERT INTO "driver_enrollment_token" ("id", "userId", "businessId", "token_hash",
+             "expires_at", "consumed_at", "device_id")
+           VALUES (gen_random_uuid()::text, $1, $2, gen_random_uuid()::text,
+             '2026-11-04T10:10:00.000Z', '2026-11-04T10:01:00.000Z', $3)`,
+          k(user),
+          carrier,
+          deviceId,
+        );
+      const disconnected = (user: string, at: string) =>
+        tx.$executeRawUnsafe(
+          `INSERT INTO "activity" ("id", "type", "action", "entityId", "description", "status",
+             "businessId", "created_at", "updated_at")
+           VALUES (gen_random_uuid()::text, 'Usuário', 'update', $1,
+             'Aparelho do motorista Fulano desconectado pelo gestor', 'Atualizado',
+             $2, $3::timestamp, $3::timestamp)`,
+          k(user),
+          carrier,
+          at,
+        );
+
+      // Dani: the phone that read the code was disconnected afterwards.
+      await consumedQr("dani", "cccccccccccccccc");
+      await disconnected("dani", "2026-11-04T15:00:00.000Z");
+
+      // Edu: a phone disconnected before he read the code on a new one.
+      await consumedQr("edu", "dddddddddddddddd");
+      await disconnected("edu", "2026-11-03T09:00:00.000Z");
+
+      await tx.$executeRawUnsafe(backfill);
+
+      return {
+        rows: await tx.$queryRawUnsafe<
+          Array<{ userId: string; device_hash: string }>
+        >(
+          `SELECT "userId", "device_hash"
+             FROM "driver_trusted_device" WHERE "userId" = ANY($1::text[])`,
+          [k("dani"), k("edu")],
+        ),
+        edu: k("edu"),
+      };
+    });
+
+    expect(outcome.rows).toEqual([
+      { userId: outcome.edu, device_hash: digest("dddddddddddddddd") },
+    ]);
   });
 });

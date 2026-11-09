@@ -12,9 +12,14 @@ import { decode } from "jsonwebtoken";
  * The CPF is unique per company only, so one CPF may name logins in several
  * companies. The password is compared with each; the company is chosen only
  * among those where it matched, and the list is never shown before that —
- * otherwise a CPF alone would say where a person works. An unknown CPF and a
- * wrong password get the same refusal, at the same cost, and every login of
- * the CPF counts a wrong password towards its lock.
+ * otherwise a CPF alone would say where a person works.
+ *
+ * Wave 2 (06/11/2026; owner's decision): the CPF is public, so CPF and
+ * password are tried only on a phone a QR code already entered that login
+ * on. An unknown CPF, no `deviceId` and a phone nobody trusts get the same
+ * 403 AUTH_DEVICE_NOT_TRUSTED, before any bcrypt and without counting
+ * towards the lock; among the logins that trust the phone, a wrong password
+ * counts against each of them, as before.
  */
 vi.mock("@/shared/security/bcrypt-gate", async (importOriginal) => {
   const original =
@@ -35,11 +40,17 @@ import { compareSecret } from "@/shared/security/bcrypt-gate";
 
 import { AuthenticateUserUseCase } from "@/modules/user/usecases/authenticate-user/authenticate-user-usecase";
 import { UserInvalidCredentialsError } from "@/modules/user/usecases/errors/user-invalid-credentials-error";
+import { UserDeviceNotTrustedError } from "@/modules/user/usecases/errors/user-device-not-trusted-error";
 
 import { InMemoryUserRepository } from "@/modules/user/repositories/in-memory/in-memory-user-repository";
 import { InMemoryUserTokensRepository } from "@/modules/user/repositories/in-memory/in-memory-user-tokens-repository";
 import { InMemoryDriverRepository } from "@/modules/driver/repositories/in-memory/in-memory-driver-repository";
+import { InMemoryDriverTrustedDeviceRepository } from "@/modules/user/repositories/in-memory/in-memory-driver-trusted-device-repository";
+import { InMemoryDriverEnrollmentRepository } from "@/modules/user/repositories/in-memory/in-memory-driver-enrollment-repository";
 
+import { hashDeviceId } from "@/modules/user/services/session-service";
+import { TRUSTED_DEVICE_IDLE_MS } from "@/modules/user/services/trusted-devices";
+import auth from "@/config/auth";
 import { MAX_FAILED_LOGINS } from "@/shared/security/login-lockout-rules";
 import { refusalClock } from "@/shared/security/refusal-pacing";
 import { DRIVER_LOGINS_BY_CPF_LIMIT } from "@/modules/user/repositories/IUser-repository";
@@ -47,11 +58,14 @@ import { DRIVER_LOGINS_BY_CPF_LIMIT } from "@/modules/user/repositories/IUser-re
 const CPF = "52998224725";
 const OTHER_CPF = "11144477735";
 const PHONE = "23be03c084165505";
+const OTHER_PHONE = "9f1c03c084160000";
 
 const PASSWORD = "senha-do-motorista";
+const DAY = 24 * 60 * 60 * 1000;
 
 let users: InMemoryUserRepository;
 let tokens: InMemoryUserTokensRepository;
+let trusted: InMemoryDriverTrustedDeviceRepository;
 let useCase: AuthenticateUserUseCase;
 
 let next = 0;
@@ -64,6 +78,9 @@ async function seedLogin(options: {
   fantasyName?: string | null;
   verified?: boolean;
   twoFactor?: boolean;
+  mustChangePassword?: boolean;
+  /** The phones this login trusts; PHONE unless said otherwise. */
+  phones?: string[];
 }): Promise<string> {
   next += 1;
 
@@ -101,11 +118,37 @@ async function seedLogin(options: {
     two_factor_enabled: options.twoFactor ?? false,
     email_verified: options.verified === false ? null : new Date(),
     access_revoked: false,
+    must_change_password: options.mustChangePassword ?? false,
     created_at: new Date(Date.UTC(2026, 0, 1, 0, next)),
   } as never);
 
+  for (const phone of options.phones ?? [PHONE]) {
+    await trusted.trust({
+      userId,
+      deviceHash: hashDeviceId(phone),
+      source: "qr",
+      // A day ago: inside the trust's idle limit, and before the sign-in
+      // the tests stamp.
+      now: new Date(Date.now() - DAY),
+    });
+  }
+
   return userId;
 }
+
+/** The login the app sends: CPF, password and this phone. */
+const login = (props: {
+  cpf?: string;
+  password?: string;
+  businessId?: string;
+  deviceId?: string | null;
+}) =>
+  useCase.executeByCpf({
+    cpf: props.cpf ?? CPF,
+    password: props.password ?? PASSWORD,
+    businessId: props.businessId,
+    deviceId: props.deviceId === undefined ? PHONE : props.deviceId,
+  });
 
 beforeEach(() => {
   vi.mocked(compareSecret).mockClear();
@@ -113,102 +156,369 @@ beforeEach(() => {
 
   users = new InMemoryUserRepository();
   tokens = new InMemoryUserTokensRepository();
+  trusted = new InMemoryDriverTrustedDeviceRepository();
   useCase = new AuthenticateUserUseCase(
     users as never,
     tokens as never,
     new InMemoryDriverRepository() as never,
+    trusted,
   );
 });
 
 describe("a CPF registered in one company", () => {
-  it("signs in with the right password", async () => {
+  it("signs in with the right password on the phone it trusts, bound to that phone (D4)", async () => {
     const userId = await seedLogin({ businessId: "empresa-a" });
 
-    const result = await useCase.executeByCpf(
-      { cpf: CPF, password: PASSWORD },
-      "mobile",
-    );
+    const result = await login({});
 
     expect(result).toMatchObject({
       token: expect.any(String),
       refresh_token: expect.any(String),
       role: "BUSINESS_USER",
+      mustChangePassword: false,
     });
     expect(decode(result.token!)).toMatchObject({ sub: userId });
-    expect(result.businessSelection).toBeUndefined();
-  });
-
-  it("binds the session to the phone when the app says which (D4)", async () => {
-    await seedLogin({ businessId: "empresa-a" });
-
-    const result = await useCase.executeByCpf(
-      { cpf: CPF, password: PASSWORD, deviceId: PHONE },
-      "mobile",
-    );
-
     expect(decode(result.refresh_token!)).toMatchObject({
       sessionClient: "driver_device",
     });
     expect(tokens.refreshTokenItems[0].device_id).toBe(PHONE);
+    expect(result.businessSelection).toBeUndefined();
   });
 
-  it("keeps the client's own policy without a phone", async () => {
-    await seedLogin({ businessId: "empresa-a" });
+  it("says when the manager set the password, so the app asks for the driver's own", async () => {
+    await seedLogin({ businessId: "empresa-a", mustChangePassword: true });
 
-    const result = await useCase.executeByCpf(
-      { cpf: CPF, password: PASSWORD },
-      "mobile",
-    );
-
-    expect(decode(result.refresh_token!)).toMatchObject({
-      sessionClient: "mobile",
+    await expect(login({})).resolves.toMatchObject({
+      mustChangePassword: true,
     });
-    expect(tokens.refreshTokenItems[0].device_id).toBeNull();
+  });
+
+  it("stamps the phone's last sign-in", async () => {
+    const userId = await seedLogin({ businessId: "empresa-a" });
+    const before = (await trusted.listForUser(userId))[0].last_login_at;
+
+    await login({});
+
+    const after = (await trusted.listForUser(userId))[0].last_login_at;
+    expect(after.getTime()).toBeGreaterThan(before.getTime());
   });
 
   it("never sends an e-mail verification, even for an unverified login (D01)", async () => {
     await seedLogin({ businessId: "empresa-a", verified: false });
 
-    const result = await useCase.executeByCpf(
-      { cpf: CPF, password: PASSWORD },
-      "mobile",
-    );
+    const result = await login({});
 
     expect(result.token).toEqual(expect.any(String));
     expect(result.emailVerification).toBeUndefined();
     expect(mails).toEqual([]);
   });
 
-  it("still asks for the second factor a login with an e-mail turned on", async () => {
+  it("still asks for the second factor a login with an e-mail turned on, with the phone in the challenge", async () => {
     await seedLogin({ businessId: "empresa-a", twoFactor: true });
 
-    const result = await useCase.executeByCpf(
-      { cpf: CPF, password: PASSWORD },
-      "mobile",
-    );
+    const result = await login({});
 
     expect(result.isTwoFactorVerification).toBe(true);
     expect(result.token).toBeUndefined();
+    // The code step is finished by this phone only (wave 2).
+    expect(decode(result.twoFactorChallenge!)).toMatchObject({
+      deviceHash: hashDeviceId(PHONE),
+    });
   });
 
   it("tells an inactive driver why, once the password is right", async () => {
     await seedLogin({ businessId: "empresa-a", status: "INACTIVE" });
 
-    await expect(
-      useCase.executeByCpf({ cpf: CPF, password: PASSWORD }, "mobile"),
-    ).rejects.toMatchObject({ statusCode: 403, code: "AUTH_DRIVER_INACTIVE" });
+    await expect(login({})).rejects.toMatchObject({
+      statusCode: 403,
+      code: "AUTH_DRIVER_INACTIVE",
+    });
   });
 
   it("refuses another company's id with the same answer as a wrong password", async () => {
     await seedLogin({ businessId: "empresa-a" });
 
-    await expect(
-      useCase.executeByCpf(
-        { cpf: CPF, password: PASSWORD, businessId: "empresa-b" },
-        "mobile",
-      ),
-    ).rejects.toBeInstanceOf(UserInvalidCredentialsError);
+    await expect(login({ businessId: "empresa-b" })).rejects.toBeInstanceOf(
+      UserInvalidCredentialsError,
+    );
     expect(tokens.refreshTokenItems).toHaveLength(0);
+  });
+});
+
+describe("a phone nobody trusts (wave 2)", () => {
+  const refusal = {
+    statusCode: 403,
+    code: "AUTH_DEVICE_NOT_TRUSTED",
+    message:
+      "Não foi possível entrar com este CPF neste aparelho. Confira o CPF ou peça ao gestor o QR Code de acesso.",
+  };
+
+  it("refuses the right password on a phone the login does not trust, before any bcrypt", async () => {
+    await seedLogin({ businessId: "empresa-a" });
+
+    await expect(login({ deviceId: OTHER_PHONE })).rejects.toMatchObject(
+      refusal,
+    );
+
+    expect(compareSecret).not.toHaveBeenCalled();
+    expect(tokens.refreshTokenItems).toHaveLength(0);
+  });
+
+  it("refuses a login without a deviceId the same way, reading nothing", async () => {
+    await seedLogin({ businessId: "empresa-a" });
+    const lookup = vi.spyOn(users, "findDriverLoginsByCpf");
+
+    const error = await login({ deviceId: null }).catch((caught) => caught);
+
+    expect(error).toBeInstanceOf(UserDeviceNotTrustedError);
+    expect(error).toMatchObject({ ...refusal, withDevice: false });
+    expect(lookup).not.toHaveBeenCalled();
+    expect(compareSecret).not.toHaveBeenCalled();
+  });
+
+  it("answers an unknown CPF exactly like a known CPF on an untrusted phone", async () => {
+    await seedLogin({ businessId: "empresa-a" });
+
+    const unknown = await login({ cpf: OTHER_CPF }).catch((caught) => caught);
+    const untrusted = await login({ deviceId: OTHER_PHONE }).catch(
+      (caught) => caught,
+    );
+
+    expect(unknown).toMatchObject({ ...refusal, withDevice: true });
+    expect(untrusted).toMatchObject({ ...refusal, withDevice: true });
+    expect(compareSecret).not.toHaveBeenCalled();
+  });
+
+  it("counts nothing towards the lock: a stranger's phone cannot lock the driver out", async () => {
+    const userId = await seedLogin({ businessId: "empresa-a" });
+
+    for (let attempt = 0; attempt < MAX_FAILED_LOGINS + 2; attempt += 1) {
+      await expect(
+        login({ password: "senha-errada", deviceId: OTHER_PHONE }),
+      ).rejects.toBeInstanceOf(UserDeviceNotTrustedError);
+    }
+
+    const row = users.user.find((user) => user.id === userId)!;
+    expect(row.failed_login_attempts ?? 0).toBe(0);
+    expect(row.login_locked_until ?? null).toBeNull();
+
+    // The driver's own phone still signs in.
+    await expect(login({})).resolves.toMatchObject({
+      token: expect.any(String),
+    });
+  });
+
+  it("compares only the logins that trust the phone: the other company is not tried nor counted", async () => {
+    await seedLogin({ businessId: "empresa-a", phones: [OTHER_PHONE] });
+    const right = await seedLogin({ businessId: "empresa-b" });
+
+    const wrong = await login({ password: "senha-errada" }).catch(
+      (caught) => caught,
+    );
+
+    expect(wrong).toBeInstanceOf(UserInvalidCredentialsError);
+    expect(compareSecret).toHaveBeenCalledTimes(1);
+
+    const elsewhere = users.user.find(
+      (user) => user.businessId === "empresa-a",
+    )!;
+    expect(elsewhere.failed_login_attempts ?? 0).toBe(0);
+
+    const result = await login({});
+    expect(result.businessSelection).toBeUndefined();
+    expect(decode(result.token!)).toMatchObject({ sub: right });
+  });
+
+  // A phone left in a drawer after a logout is invisible to the manager's
+  // list (live sessions only): its trust lapses on its own, once it outlives
+  // the longest phone-bound session and its idle window with no sign-in.
+  it("stops trusting a phone with no sign-in for longer than the limit", async () => {
+    const userId = await seedLogin({ businessId: "empresa-a" });
+    const [phone] = trusted.devices.filter((row) => row.userId === userId);
+
+    phone.last_login_at = new Date(
+      Date.now() - TRUSTED_DEVICE_IDLE_MS + 60_000,
+    );
+
+    await expect(login({})).resolves.toMatchObject({
+      token: expect.any(String),
+    });
+
+    // Signed out: nothing is left on the phone but its trust (a live
+    // session there would vouch for it again, see the rollout's case).
+    await tokens.revokeAllUserRefreshTokens(userId);
+
+    phone.last_login_at = new Date(
+      Date.now() - TRUSTED_DEVICE_IDLE_MS - 60_000,
+    );
+    vi.mocked(compareSecret).mockClear();
+
+    await expect(login({})).rejects.toMatchObject(refusal);
+    expect(compareSecret).not.toHaveBeenCalled();
+  });
+
+  // A session renews without a new sign-in: at the 180-day cap the driver
+  // signs in again on a phone whose last sign-in was the login itself.
+  it("keeps the limit past the longest phone-bound session", () => {
+    const policy = auth.refresh_policies.driver_device;
+
+    expect(TRUSTED_DEVICE_IDLE_MS).toBeGreaterThan(policy.maxAgeSeconds * 1000);
+  });
+});
+
+/**
+ * The phones the rollout left out (wave 2). The migration trusted every
+ * phone with a live session, but the previous image kept opening sessions
+ * (by QR code and by CPF) after it, without trusting the phone. Instead of a
+ * manual rerun of the backfill, the CPF login trusts a phone the login holds
+ * a live session on — read before any bcrypt — and only that: a revoked or
+ * expired session, a session on another phone, or the consumed QR code (the
+ * previous image's disconnection left it naming the phone) vouch for
+ * nothing, and the refusal stays the uniform one.
+ */
+describe("a phone the previous image signed in during the rollout", () => {
+  const refusal = { statusCode: 403, code: "AUTH_DEVICE_NOT_TRUSTED" };
+
+  /** A session of the login bound to `deviceId`, as that image stored it. */
+  async function phoneSession(
+    userId: string,
+    options: { deviceId?: string; revoked?: boolean; expired?: boolean } = {},
+  ) {
+    const row = await tokens.createUserRefreshToken({
+      userId,
+      token_hash: `hash-${Math.random()}`,
+      jti: `jti-${Math.random()}`,
+      family_id: `family-${Math.random()}`,
+      expires_in: new Date(Date.now() + (options.expired ? -1 : 1) * DAY),
+      device_id: options.deviceId ?? PHONE,
+    });
+
+    if (options.revoked) row.revoked_at = new Date();
+
+    return row;
+  }
+
+  it("trusts the phone from a live session of that login on it, and signs in", async () => {
+    const userId = await seedLogin({ businessId: "empresa-a", phones: [] });
+    await phoneSession(userId);
+
+    const result = await login({});
+
+    expect(decode(result.token!)).toMatchObject({ sub: userId });
+    expect(trusted.devices).toEqual([
+      expect.objectContaining({
+        userId,
+        device_hash: hashDeviceId(PHONE),
+        source: "backfill",
+      }),
+    ]);
+  });
+
+  it("trusts it before any bcrypt: a wrong password is then the trusted phone's refusal, counted", async () => {
+    const userId = await seedLogin({ businessId: "empresa-a", phones: [] });
+    await phoneSession(userId);
+
+    await expect(login({ password: "senha-errada" })).rejects.toBeInstanceOf(
+      UserInvalidCredentialsError,
+    );
+
+    expect(compareSecret).toHaveBeenCalledTimes(1);
+    expect(trusted.devices).toHaveLength(1);
+    expect(
+      users.user.find((user) => user.id === userId)!.failed_login_attempts,
+    ).toBe(1);
+  });
+
+  it("trusts only the login that holds the session, not the CPF's other logins", async () => {
+    const holder = await seedLogin({ businessId: "empresa-a", phones: [] });
+    await seedLogin({ businessId: "empresa-b", phones: [] });
+    await phoneSession(holder);
+
+    const result = await login({});
+
+    expect(result.businessSelection).toBeUndefined();
+    expect(decode(result.token!)).toMatchObject({ sub: holder });
+    expect(trusted.devices.map((row) => row.userId)).toEqual([holder]);
+  });
+
+  it("does not trust it from a revoked session", async () => {
+    const userId = await seedLogin({ businessId: "empresa-a", phones: [] });
+    await phoneSession(userId, { revoked: true });
+
+    await expect(login({})).rejects.toMatchObject(refusal);
+
+    expect(compareSecret).not.toHaveBeenCalled();
+    expect(trusted.devices).toEqual([]);
+  });
+
+  it("does not trust it from an expired session", async () => {
+    const userId = await seedLogin({ businessId: "empresa-a", phones: [] });
+    await phoneSession(userId, { expired: true });
+
+    await expect(login({})).rejects.toMatchObject(refusal);
+
+    expect(compareSecret).not.toHaveBeenCalled();
+    expect(trusted.devices).toEqual([]);
+  });
+
+  it("does not trust it from a session on another phone", async () => {
+    const userId = await seedLogin({ businessId: "empresa-a", phones: [] });
+    await phoneSession(userId, { deviceId: OTHER_PHONE });
+
+    await expect(login({})).rejects.toMatchObject(refusal);
+
+    expect(compareSecret).not.toHaveBeenCalled();
+    expect(trusted.devices).toEqual([]);
+  });
+
+  // The previous image's "Revogar este aparelho" ended the sessions and left
+  // the consumed QR code naming the phone: that row is no proof of anything.
+  it("does not trust it from the consumed QR code", async () => {
+    const userId = await seedLogin({ businessId: "empresa-a", phones: [] });
+    const enrollment = new InMemoryDriverEnrollmentRepository();
+    const issued = await enrollment.issue({
+      userId,
+      businessId: "empresa-a",
+      token: "qr-token-lido",
+      code: null,
+      expiresAt: new Date(Date.now() + 10 * 60_000),
+      createdById: "gestor",
+    });
+    await enrollment.consume(issued.id, {
+      tokenHash: issued.token_hash,
+      deviceId: PHONE,
+      maxAttempts: 5,
+    });
+    const qrSession = await phoneSession(userId);
+    await tokens.revokeUserDeviceSessions(userId, hashDeviceId(PHONE));
+
+    expect(tokens.refreshTokenItems).not.toContain(qrSession);
+    expect((await enrollment.findByUserId(userId))?.device_id).toBe(PHONE);
+
+    await expect(login({})).rejects.toMatchObject(refusal);
+
+    expect(compareSecret).not.toHaveBeenCalled();
+    expect(trusted.devices).toEqual([]);
+  });
+
+  it("asks for an unknown CPF as for a known one on an untrusted phone: the same round trips", async () => {
+    await seedLogin({ businessId: "empresa-a", phones: [] });
+    const lookup = vi.spyOn(tokens, "findLoginsSignedInOnDevice");
+
+    await login({ cpf: OTHER_CPF }).catch(() => undefined);
+    await login({}).catch(() => undefined);
+
+    expect(lookup).toHaveBeenCalledTimes(2);
+    expect(lookup).toHaveBeenNthCalledWith(1, [], PHONE, expect.any(Date));
+  });
+
+  it("does not ask when every login of the CPF trusts the phone", async () => {
+    await seedLogin({ businessId: "empresa-a" });
+    const lookup = vi.spyOn(tokens, "findLoginsSignedInOnDevice");
+
+    await login({});
+
+    expect(lookup).not.toHaveBeenCalled();
   });
 });
 
@@ -217,10 +527,7 @@ describe("a CPF registered in two companies", () => {
     await seedLogin({ businessId: "empresa-a", fantasyName: "Rápido Azul" });
     await seedLogin({ businessId: "empresa-b", fantasyName: null });
 
-    const result = await useCase.executeByCpf(
-      { cpf: CPF, password: PASSWORD },
-      "mobile",
-    );
+    const result = await login({});
 
     expect(result).toEqual({
       businessSelection: [
@@ -236,15 +543,7 @@ describe("a CPF registered in two companies", () => {
     await seedLogin({ businessId: "empresa-a" });
     const chosen = await seedLogin({ businessId: "empresa-b" });
 
-    const result = await useCase.executeByCpf(
-      {
-        cpf: CPF,
-        password: PASSWORD,
-        businessId: "empresa-b",
-        deviceId: PHONE,
-      },
-      "mobile",
-    );
+    const result = await login({ businessId: "empresa-b" });
 
     expect(decode(result.token!)).toMatchObject({ sub: chosen });
   });
@@ -253,10 +552,7 @@ describe("a CPF registered in two companies", () => {
     await seedLogin({ businessId: "empresa-a", password: "outra-senha-1" });
     const right = await seedLogin({ businessId: "empresa-b" });
 
-    const result = await useCase.executeByCpf(
-      { cpf: CPF, password: PASSWORD },
-      "mobile",
-    );
+    const result = await login({});
 
     expect(decode(result.token!)).toMatchObject({ sub: right });
 
@@ -269,10 +565,7 @@ describe("a CPF registered in two companies", () => {
     await seedLogin({ businessId: "empresa-a", status: "INACTIVE" });
     const active = await seedLogin({ businessId: "empresa-b" });
 
-    const result = await useCase.executeByCpf(
-      { cpf: CPF, password: PASSWORD },
-      "mobile",
-    );
+    const result = await login({});
 
     expect(result.businessSelection).toBeUndefined();
     expect(decode(result.token!)).toMatchObject({ sub: active });
@@ -282,40 +575,15 @@ describe("a CPF registered in two companies", () => {
     await seedLogin({ businessId: "empresa-a", password: "outra-senha-1" });
     await seedLogin({ businessId: "empresa-b" });
 
-    await expect(
-      useCase.executeByCpf(
-        { cpf: CPF, password: PASSWORD, businessId: "empresa-a" },
-        "mobile",
-      ),
-    ).rejects.toBeInstanceOf(UserInvalidCredentialsError);
+    await expect(login({ businessId: "empresa-a" })).rejects.toBeInstanceOf(
+      UserInvalidCredentialsError,
+    );
   });
 });
 
-describe("a wrong guess", () => {
-  it("gets the same refusal for an unknown CPF and a wrong password, after a bcrypt each", async () => {
-    await seedLogin({ businessId: "empresa-a" });
-
-    const unknown = await useCase
-      .executeByCpf({ cpf: OTHER_CPF, password: PASSWORD }, "mobile")
-      .catch((error: unknown) => error);
-
-    expect(compareSecret).toHaveBeenCalledTimes(1);
-
-    const wrong = await useCase
-      .executeByCpf({ cpf: CPF, password: "senha-errada" }, "mobile")
-      .catch((error: unknown) => error);
-
-    expect(compareSecret).toHaveBeenCalledTimes(2);
-
-    expect(unknown).toBeInstanceOf(UserInvalidCredentialsError);
-    expect(wrong).toBeInstanceOf(UserInvalidCredentialsError);
-    expect((unknown as Error).message).toBe((wrong as Error).message);
-    expect((unknown as { code: string }).code).toBe(
-      (wrong as { code: string }).code,
-    );
-  });
-
-  it("takes as long for an unknown CPF as for a CPF with logins in three companies, with no bcrypt more", async () => {
+describe("a wrong guess on a trusted phone", () => {
+  it("takes as long for a CPF with one login as for one with logins in three companies, with no bcrypt more", async () => {
+    await seedLogin({ businessId: "empresa-a", cpf: OTHER_CPF });
     await seedLogin({ businessId: "empresa-a" });
     await seedLogin({ businessId: "empresa-b" });
     await seedLogin({ businessId: "empresa-c" });
@@ -340,31 +608,32 @@ describe("a wrong guess", () => {
     }
 
     try {
-      const unknownStart = clock;
-      const unknown = await useCase
-        .executeByCpf({ cpf: OTHER_CPF, password: "senha-errada" }, "mobile")
-        .catch((error: unknown) => error);
-      const unknownTook = clock - unknownStart;
+      const oneStart = clock;
+      const one = await login({
+        cpf: OTHER_CPF,
+        password: "senha-errada",
+      }).catch((error: unknown) => error);
+      const oneTook = clock - oneStart;
 
       expect(compareSecret).toHaveBeenCalledTimes(1);
 
-      const wrongStart = clock;
-      const wrong = await useCase
-        .executeByCpf({ cpf: CPF, password: "senha-errada" }, "mobile")
-        .catch((error: unknown) => error);
-      const wrongTook = clock - wrongStart;
+      const threeStart = clock;
+      const three = await login({ password: "senha-errada" }).catch(
+        (error: unknown) => error,
+      );
+      const threeTook = clock - threeStart;
 
       // One comparison per login, never one more: the rest is a wait.
       expect(compareSecret).toHaveBeenCalledTimes(4);
 
-      expect(unknown).toBeInstanceOf(UserInvalidCredentialsError);
-      expect(wrong).toBeInstanceOf(UserInvalidCredentialsError);
-      expect((unknown as { code: string }).code).toBe(
-        (wrong as { code: string }).code,
+      expect(one).toBeInstanceOf(UserInvalidCredentialsError);
+      expect(three).toBeInstanceOf(UserInvalidCredentialsError);
+      expect((one as { code: string }).code).toBe(
+        (three as { code: string }).code,
       );
 
-      expect(unknownTook).toBe(wrongTook);
-      expect(unknownTook).toBe(COMPARISON_MS * DRIVER_LOGINS_BY_CPF_LIMIT);
+      expect(oneTook).toBe(threeTook);
+      expect(oneTook).toBe(COMPARISON_MS * DRIVER_LOGINS_BY_CPF_LIMIT);
     } finally {
       now.mockRestore();
       sleep.mockRestore();
@@ -379,7 +648,7 @@ describe("a wrong guess", () => {
       .mockImplementation(async () => undefined);
 
     try {
-      await useCase.executeByCpf({ cpf: CPF, password: PASSWORD }, "mobile");
+      await login({});
 
       expect(sleep).not.toHaveBeenCalled();
     } finally {
@@ -387,25 +656,23 @@ describe("a wrong guess", () => {
     }
   });
 
-  it("counts against every login of the CPF, and locks them", async () => {
+  it("counts against every login of the CPF that trusts the phone, and locks them", async () => {
     await seedLogin({ businessId: "empresa-a" });
     await seedLogin({ businessId: "empresa-b" });
 
     for (let attempt = 0; attempt < MAX_FAILED_LOGINS; attempt += 1) {
-      await expect(
-        useCase.executeByCpf({ cpf: CPF, password: "senha-errada" }, "mobile"),
-      ).rejects.toBeInstanceOf(UserInvalidCredentialsError);
+      await expect(login({ password: "senha-errada" })).rejects.toBeInstanceOf(
+        UserInvalidCredentialsError,
+      );
     }
 
-    for (const login of users.user) {
-      expect(login.failed_login_attempts).toBe(MAX_FAILED_LOGINS);
-      expect(login.login_locked_until).toBeInstanceOf(Date);
+    for (const row of users.user) {
+      expect(row.failed_login_attempts).toBe(MAX_FAILED_LOGINS);
+      expect(row.login_locked_until).toBeInstanceOf(Date);
     }
 
     // Locked: the right password gets the same refusal, and opens nothing.
-    await expect(
-      useCase.executeByCpf({ cpf: CPF, password: PASSWORD }, "mobile"),
-    ).rejects.toBeInstanceOf(UserInvalidCredentialsError);
+    await expect(login({})).rejects.toBeInstanceOf(UserInvalidCredentialsError);
     expect(tokens.refreshTokenItems).toHaveLength(0);
   });
 
@@ -417,10 +684,7 @@ describe("a wrong guess", () => {
       (user) => user.businessId === "empresa-a",
     )!.login_locked_until = new Date(Date.now() + 60_000);
 
-    const result = await useCase.executeByCpf(
-      { cpf: CPF, password: PASSWORD },
-      "mobile",
-    );
+    const result = await login({});
 
     expect(decode(result.token!)).toMatchObject({ sub: open });
   });
@@ -428,13 +692,11 @@ describe("a wrong guess", () => {
   it("clears the count of the login it enters", async () => {
     const userId = await seedLogin({ businessId: "empresa-a" });
 
-    await useCase
-      .executeByCpf({ cpf: CPF, password: "senha-errada" }, "mobile")
-      .catch(() => undefined);
+    await login({ password: "senha-errada" }).catch(() => undefined);
 
     expect(users.user[0].failed_login_attempts).toBe(1);
 
-    await useCase.executeByCpf({ cpf: CPF, password: PASSWORD }, "mobile");
+    await login({});
 
     expect(
       users.user.find((user) => user.id === userId)!.failed_login_attempts,

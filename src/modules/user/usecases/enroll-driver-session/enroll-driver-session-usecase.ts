@@ -1,10 +1,14 @@
 import { inject, injectable } from "tsyringe";
 
+import database from "@/../infra/database";
 import { IDriverRepository } from "@/modules/driver/repositories/IDriver-repository";
 import { AppError } from "@/shared/errors/AppError";
+import { OutboxService } from "@/shared/notifications/outbox-service";
+import { NotificationService } from "@/shared/services/notification-service";
 
 import { DriverEnrollmentToken } from "../../dtos/driver-enrollment-dto";
 import { IDriverEnrollmentRepository } from "../../repositories/IDriver-enrollment-repository";
+import { IDriverTrustedDeviceRepository } from "../../repositories/IDriver-trusted-device-repository";
 import { IUserRepository } from "../../repositories/IUser-repository";
 import { IUsersTokensRepository } from "../../repositories/IUsers-tokens-repository";
 import {
@@ -12,7 +16,10 @@ import {
   normalizeAccessCode,
 } from "../../services/driver-enrollment";
 import { assertSessionEligible } from "../../services/session-eligibility";
-import { createUserSession } from "../../services/session-service";
+import {
+  createUserSession,
+  hashDeviceId,
+} from "../../services/session-service";
 
 interface EnrollDriverSessionProps {
   /** The QR code's opaque token, or… */
@@ -27,6 +34,9 @@ interface EnrolledDriverSession {
   token: string;
   refresh_token: string;
   role: string;
+
+  /** The manager set this login's password (wave 2): the app asks for one. */
+  mustChangePassword: boolean;
 }
 
 /**
@@ -54,6 +64,13 @@ function invalidEnrollment(): AppError {
  * the phone-bound one: 30 idle days, 180 in all, renewed only from this
  * phone. No e-mail verification and no second factor: the manager, signed
  * in, issued the code for this login and showed it in person.
+ *
+ * The phone becomes trusted for this login (wave 2, 06/11/2026): from then on
+ * it may also sign in by CPF and password. A phone the login did not trust
+ * before is told to the company's admins — all but the manager who issued
+ * the code — in the same transaction as the trust, and recorded in the
+ * login's activity: a code read out over the phone to somebody posing as the
+ * driver ends up on a phone nobody expected.
  */
 @injectable()
 class EnrollDriverSessionUseCase {
@@ -66,6 +83,12 @@ class EnrollDriverSessionUseCase {
     private driver: IDriverRepository,
     @inject("DriverEnrollmentRepository")
     private enrollment: IDriverEnrollmentRepository,
+    @inject("DriverTrustedDeviceRepository")
+    private trustedDevices: IDriverTrustedDeviceRepository,
+    @inject("OutboxService")
+    private outbox: OutboxService,
+    @inject("NotificationService")
+    private notificationService: NotificationService,
   ) {}
 
   private async find(
@@ -140,6 +163,51 @@ class EnrollDriverSessionUseCase {
     // replaced it in between.
     if (!consumed) throw invalidEnrollment();
 
+    // Trusted before the session exists: no session ever runs on a phone
+    // its login does not trust.
+    const newPhone = await database.$transaction(async (tx) => {
+      const { created } = await this.trustedDevices.trust(
+        {
+          userId: user.id,
+          deviceHash: hashDeviceId(deviceId),
+          source: "qr",
+          now,
+        },
+        tx,
+      );
+
+      if (created && user.businessId) {
+        await this.outbox.publish(tx, {
+          topic: "driver-access.new_device",
+          aggregateType: "user",
+          aggregateId: user.id,
+          businessId: user.businessId,
+          actorId: user.id,
+          payload: {
+            businessId: user.businessId,
+            driverUserId: user.id,
+            driverName: user.name,
+            issuedById: enrollment.createdById,
+            at: now.toISOString(),
+          },
+        });
+      }
+
+      return created;
+    });
+
+    if (newPhone) {
+      this.notificationService.createActivityIfEnabled({
+        type: "Usuário",
+        action: "update",
+        entityId: user.id,
+        description: `Motorista ${user.name} entrou em um aparelho novo pelo QR Code de acesso`,
+        status: "Atualizado",
+        performedBy: user.id,
+        businessId: user.businessId ?? null,
+      });
+    }
+
     const session = await createUserSession(
       user,
       this.usersTokens,
@@ -147,7 +215,11 @@ class EnrollDriverSessionUseCase {
       deviceId,
     );
 
-    return { ...session, role: user.role };
+    return {
+      ...session,
+      role: user.role,
+      mustChangePassword: user.must_change_password ?? false,
+    };
   }
 }
 

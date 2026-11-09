@@ -84,6 +84,12 @@ const MASTER_WITHOUT_COMPANY: Record<string, Probe> = {
     url: "/account-payable/search-account-payable-by-responsible-user",
     answer: "no-company-data",
   },
+  // Wave 3: a read by id names the company in `businessId`; without it the
+  // MASTER gets 400 BUSINESS_NOT_IDENTIFIED.
+  "GET /account-payable/{accountPayableId}": {
+    url: `/account-payable/${ANY}`,
+    answer: "refused",
+  },
   "GET /chat/attachment-url": {
     url: `/chat/attachment-url?messageId=${ANY}`,
     answer: "refused",
@@ -259,6 +265,8 @@ const MASTER_WITHOUT_COMPANY: Record<string, Probe> = {
     url: "/route/list-routes?page=1&pageSize=5",
     answer: "refused",
   },
+  // Wave 4: the tower's list for the manager's phone, with the tower's rule.
+  "GET /route/live": { url: "/route/live", answer: "refused" },
   "GET /route/monitoring": { url: "/route/monitoring", answer: "refused" },
   "GET /route/monitoring/drivers": {
     url: "/route/monitoring/drivers",
@@ -291,6 +299,16 @@ const MASTER_WITHOUT_COMPANY: Record<string, Probe> = {
   },
   "GET /service-order/search-service-order-by-vehicle/{vehicleId}": {
     url: `/service-order/search-service-order-by-vehicle/${ANY}`,
+    answer: "refused",
+  },
+  // Wave 3: "Minhas OS" is the driver's (403 DRIVER_ONLY); the read by id
+  // asks the MASTER for the company (400 BUSINESS_NOT_IDENTIFIED).
+  "GET /service-order/mine": {
+    url: "/service-order/mine?scope=assigned",
+    answer: "refused",
+  },
+  "GET /service-order/{serviceOrderId}": {
+    url: `/service-order/${ANY}`,
     answer: "refused",
   },
   "GET /shipper/list-shipper": {

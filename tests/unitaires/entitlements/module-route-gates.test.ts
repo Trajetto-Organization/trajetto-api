@@ -120,6 +120,25 @@ describe("the module switch, route by route (M9)", () => {
     ).toEqual([]);
   });
 
+  it("gates the app's reads by id (wave 3) with FLEET, the Kanban card like its board", () => {
+    // A company that switched FLEET off must not keep serving an order or a
+    // bill to the app through the new reads; the Kanban has no module.
+    const byId = new Map(published.map((route) => [route.id, route]));
+
+    for (const id of [
+      "GET /service-order/{serviceOrderId}",
+      "GET /service-order/mine",
+      "GET /account-payable/{accountPayableId}",
+    ]) {
+      expect(byId.get(id)?.operation["x-module"], id).toBe("FLEET");
+    }
+
+    expect(byId.has("GET /kanban/card/{cardId}")).toBe(true);
+    expect(
+      byId.get("GET /kanban/card/{cardId}")?.operation["x-module"],
+    ).toBeUndefined();
+  });
+
   it("says MODULE_NOT_ENABLED on every gated route's 403", () => {
     const gated = published.filter(
       (route) => route.operation["x-module"] !== undefined,

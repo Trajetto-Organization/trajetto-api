@@ -17,6 +17,8 @@ import {
   SearchUserWithCursorProps,
   CursorPaginatedUser,
   DriverLoginByCpf,
+  UpdateUserPasswordKeepingSession,
+  PasswordKeptSession,
 } from "../dtos/user-dto";
 
 /**
@@ -25,6 +27,20 @@ import {
  * few; each comparison is a bcrypt, so the count is bounded.
  */
 const DRIVER_LOGINS_BY_CPF_LIMIT = 10;
+
+/**
+ * updateUserPasswordKeepingSession found no live token of the kept session
+ * inside its transaction: the session ended after the caller checked it (a
+ * logout, the manager's "Revogar este aparelho", "Aparelhos conectados", the
+ * reuse alarm, a manager's reset). Nothing was written. Callers treat it as a
+ * session that was not live to begin with.
+ */
+class KeptSessionEndedError extends Error {
+  constructor() {
+    super("The session to keep ended before the password was written");
+    this.name = "KeptSessionEndedError";
+  }
+}
 
 interface IUserRepository {
   createUser: ({ email, password, name }: CreateUserProps) => Promise<User>;
@@ -79,6 +95,21 @@ interface IUserRepository {
     userId,
     password,
   }: UpdateUserPassword) => Promise<User | null>;
+
+  /**
+   * The person sets their own password from a session they keep (wave 2:
+   * PATCH /user/password, POST /user/me/password), in one transaction: the
+   * password, session_version + 1, the lockout cleared and
+   * `must_change_password` false; every OTHER session's refresh tokens and
+   * push devices gone (and push devices of no session); the kept session's
+   * live tokens deleted (a renewal racing the change must read "unknown",
+   * not reuse) and `replacement` — minted from the updated row, so it carries
+   * the new version — stored in their place. No live token of the kept
+   * session left by then: KeptSessionEndedError, and nothing is written.
+   */
+  updateUserPasswordKeepingSession: (
+    props: UpdateUserPasswordKeepingSession,
+  ) => Promise<PasswordKeptSession>;
 
   /**
    * Counts one wrong password, and locks the account when that reaches the
@@ -167,4 +198,4 @@ interface IUserRepository {
   ) => Promise<CursorPaginatedUser>;
 }
 
-export { DRIVER_LOGINS_BY_CPF_LIMIT, IUserRepository };
+export { DRIVER_LOGINS_BY_CPF_LIMIT, IUserRepository, KeptSessionEndedError };

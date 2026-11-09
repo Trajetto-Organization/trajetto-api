@@ -31,7 +31,12 @@ import { resendTwoFactorCodeSchema } from "@/schemas/resend-two-factor-code-sche
 import { updateDeleteUserSchema } from "@/schemas/update-delete-user-schema";
 
 import { updateUserSchema } from "@/schemas/update-user-schema";
-import { updateUserPasswordSchema } from "@/schemas/update-user-password-schema";
+import {
+  createOwnPasswordSchema,
+  updateUserPasswordSchema,
+} from "@/schemas/update-user-password-schema";
+import { updateTwoFactorSchema } from "@/schemas/update-two-factor-schema";
+import { ownSessionParamsSchema } from "@/schemas/own-session-schema";
 
 import { updateUserNameSchema } from "@/schemas/update-user-name-schema";
 
@@ -103,6 +108,11 @@ const userRow = z.object({
     .describe(
       "Até quando o login está bloqueado por senhas erradas; null quando livre.",
     ),
+  must_change_password: z
+    .boolean()
+    .describe(
+      "A senha foi definida pelo gestor: a pessoa cria a própria no próximo login.",
+    ),
   whatsapp_notifications_enabled: z.boolean(),
   whatsapp_phone: z.string().nullable(),
   email_notifications_enabled: z.boolean(),
@@ -149,6 +159,12 @@ const userSchemas = {
   updateDeleteUser: updateDeleteUserSchema,
   updateUser: updateUserSchema,
   updateUserPassword: updateUserPasswordSchema,
+  // Wave 2: the password created right after a QR code, the explicit
+  // two-factor switch (documentation only: parsed by hand) and the person's
+  // own sessions.
+  createOwnPassword: createOwnPasswordSchema,
+  updateTwoFactor: updateTwoFactorSchema,
+  ownSessionParams: ownSessionParamsSchema,
   updateUserName: updateUserNameSchema,
   listUsers: listUserSchema,
   listMasterUsers: listMasterUserSchema,
@@ -220,6 +236,61 @@ const userResponses = {
   ),
   passwordUpdated: z.object({
     message: z.string().default("Senha atualizada com sucesso"),
+    // Declared, or the response serializer strips them.
+    token: z
+      .string()
+      .optional()
+      .describe(
+        "O novo token de acesso desta sessão. Ausente só quando a sessão já tinha terminado: aí todas as sessões terminam, como antes.",
+      ),
+    refresh_token: z
+      .string()
+      .optional()
+      .describe(
+        "O novo refresh token desta sessão, na mesma família e com a mesma política (preso ao mesmo aparelho, quando era). Guarde-o no lugar do anterior: o anterior não renova mais.",
+      ),
+    mustChangePassword: z
+      .literal(false)
+      .describe("A senha agora é da própria pessoa."),
+  }),
+  ownPasswordCreated: z.object({
+    message: z.string().default("Senha criada com sucesso."),
+    token: z.string().describe("O novo token de acesso desta sessão."),
+    refresh_token: z
+      .string()
+      .describe(
+        "O novo refresh token desta sessão, preso ao mesmo aparelho. Guarde-o no lugar do anterior.",
+      ),
+    mustChangePassword: z.literal(false),
+  }),
+  ownSessions: z.object({
+    data: z.array(
+      z.object({
+        id: z
+          .string()
+          .describe(
+            "O id opaco da sessão: envie-o em DELETE /user/me/sessions/:id.",
+          ),
+        kind: z
+          .enum(["aparelho", "app", "navegador"])
+          .describe(
+            "aparelho: sessão presa a um celular (QR Code ou CPF e senha); app: o aplicativo aberto por e-mail; navegador: o painel web.",
+          ),
+        current: z.boolean().describe("A sessão desta requisição."),
+        created_at: z.string().describe("Quando a sessão começou (ISO 8601)."),
+        last_activity_at: z
+          .string()
+          .describe(
+            "A última renovação (ISO 8601): o app renova a cada 15 minutos enquanto está em uso.",
+          ),
+        device_label: z
+          .string()
+          .nullable()
+          .describe(
+            "Este aparelho, na sessão desta requisição; null nas outras. O identificador do aparelho nunca é devolvido.",
+          ),
+      }),
+    ),
   }),
   usernameUpdated: z.object({
     message: z.string().default("Nome de usuário atualizado com sucesso"),
@@ -228,6 +299,11 @@ const userResponses = {
     message: z
       .string()
       .default("Autenticação de dois fatores atualizada com sucesso!"),
+    twoFactorEnabled: z
+      .boolean()
+      .describe(
+        "O estado da conta depois do pedido (o mesmo de antes quando nada mudou).",
+      ),
   }),
   userAccessRevoked: z.object({
     message: z.string().default("Revogação de acesso atualizada com sucesso!"),
@@ -256,6 +332,11 @@ const userResponses = {
     token: z.string(),
     refresh_token: z.string(),
     role: z.nativeEnum(EnumUserRole),
+    mustChangePassword: z
+      .boolean()
+      .describe(
+        "A senha foi definida pelo gestor: peça a da própria pessoa antes de seguir.",
+      ),
   }),
   genericMessage: z.object({
     message: z.string(),
@@ -330,6 +411,11 @@ const userResponses = {
       token: z.string(),
       refresh_token: z.string(),
       role: z.nativeEnum(EnumUserRole),
+      mustChangePassword: z
+        .boolean()
+        .describe(
+          "A senha foi definida pelo gestor (senha inicial ou redefinição): peça a da própria pessoa antes de seguir. A API não recusa nada por isso.",
+        ),
     }),
     // Declared, or the response serializer strips the list.
     z
@@ -366,6 +452,11 @@ const userResponses = {
         "Preso ao aparelho: renove sempre com o mesmo `deviceId` em /user/refresh-token.",
       ),
     role: z.nativeEnum(EnumUserRole),
+    mustChangePassword: z
+      .boolean()
+      .describe(
+        "A senha foi definida pelo gestor: o app pede a senha do motorista antes de seguir.",
+      ),
   }),
   enrollSessionUnauthorized: codedRefusal(
     "QR Code ou código desconhecido, vencido, já usado ou gasto por tentativas recusadas: a mesma resposta para todos. Peça um novo ao gestor.",
@@ -425,9 +516,16 @@ const userResponses = {
   driverDevices: z.object({
     data: z.array(
       z.object({
+        deviceHash: z
+          .string()
+          .describe(
+            "O aparelho, opaco: SHA-256 (hexadecimal) do identificador, a chave de DELETE /user/:userId/devices/:deviceId. O Android ID nunca é devolvido: no login por CPF ele é o que confere o aparelho.",
+          ),
         deviceId: z
           .string()
-          .describe("O aparelho (Android ID ou UUID da instalação)."),
+          .describe(
+            "O mesmo valor de `deviceHash`, com o nome anterior do campo. Não é mais o Android ID.",
+          ),
         sessions: z
           .number()
           .int()
@@ -463,6 +561,8 @@ const userResponses = {
       "E-mail ou senha errados. Não é sessão expirada: não tente renovar o token.",
     ),
 
+  // AUTH_DEVICE_NOT_TRUSTED (wave 2) is one of these: the same object, with
+  // the sentence in `message`.
   authenticateUserForbiddenErrors: z
     .union([
       z.object({
@@ -611,7 +711,25 @@ const userResponses = {
     "PERMISSION_DENIED (revogar a si mesmo ou um nível de acesso acima do seu).",
   ),
 
-  twoFactorUpdateErrors: refusal("VALIDATION_ERROR: corpo inválido."),
+  twoFactorUpdateErrors: refusal(
+    "VALIDATION_ERROR (corpo inválido: `enabled` e `password` vão juntos) ou PASSWORD_CURRENT_INCORRECT (senha atual incorreta).",
+  ),
+  twoFactorUpdateConflict: codedRefusal(
+    "Ligar sem e-mail: o código vai por e-mail, então a conta sem e-mail não liga a verificação.",
+    ["TWO_FACTOR_REQUIRES_EMAIL"],
+  ),
+  createOwnPasswordErrors: refusal(
+    "VALIDATION_ERROR: senha fora da regra (7 a 100 caracteres, sem espaços) ou `businessId` no corpo.",
+  ),
+  createOwnPasswordForbidden: codedRefusal(
+    "Esta sessão não é a que o QR Code acabou de abrir neste aparelho (há até 15 minutos). Troque a senha com a senha atual (PATCH /user/password) ou peça um novo QR Code ao gestor.",
+    ["PASSWORD_CREATE_NOT_ALLOWED"],
+  ),
+  ownSessionErrors: refusal("VALIDATION_ERROR (id inválido)."),
+  ownSessionConflict: codedRefusal(
+    "A sessão desta requisição: para sair dela, use POST /user/logout.",
+    ["SESSION_IS_CURRENT"],
+  ),
   // Master user responses
   masterUserCreated: z.object({
     message: z.string().default("Usuário Master criado com sucesso!"),

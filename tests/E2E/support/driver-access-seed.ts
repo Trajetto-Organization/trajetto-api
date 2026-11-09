@@ -3,7 +3,10 @@ import { randomUUID } from "node:crypto";
 
 import { hash } from "bcrypt";
 
-import { issueSessionTokenPair } from "@/modules/user/services/session-service";
+import {
+  hashDeviceId,
+  issueSessionTokenPair,
+} from "@/modules/user/services/session-service";
 
 /**
  * Carriers, drivers and logins for the E2E files of the driver's ways in
@@ -133,6 +136,21 @@ async function openSession(
   };
 }
 
+/**
+ * The phone trusted for the login's CPF sign-in (wave 2), as a QR code read
+ * on it would have left it: by the device id's hash only.
+ */
+async function seedTrustedDevice(
+  prisma: PrismaClient,
+  userId: string,
+  deviceId: string,
+  source: "qr" | "backfill" = "qr",
+): Promise<void> {
+  await prisma.driverTrustedDevice.create({
+    data: { userId, device_hash: hashDeviceId(deviceId), source },
+  });
+}
+
 let next = 1;
 
 /**
@@ -151,5 +169,6 @@ export {
   seedCarrier,
   seedDriver,
   seedLogin,
+  seedTrustedDevice,
   type SeededSession,
 };

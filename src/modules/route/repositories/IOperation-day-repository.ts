@@ -145,6 +145,47 @@ interface MonitoringRoute extends TowerRoute {
   stops: MonitoringStop[];
 }
 
+/**
+ * One row of the live list (wave 4, GET /route/live): a route on the street
+ * or released for today, with what a manager's phone and the map need and
+ * nothing else — no stops, no deliveries, no funnel.
+ */
+interface LiveRoute {
+  id: string;
+  code: number;
+  name: string | null;
+  status: "IN_PROGRESS" | "RELEASED";
+
+  /** The civil day, "YYYY-MM-DD" (read as text: no zone can shift it). */
+  scheduled_date: string;
+  started_at: Date | null;
+
+  driverId: string;
+  driverName: string | null;
+  vehiclePlate: string | null;
+
+  /** Stops without the cancelled ones, and the delivered or failed among them. */
+  stopsTotal: number;
+  stopsResolved: number;
+
+  /** The driver's last point (driver_last_position), however old; null if never. */
+  lastPosition: {
+    latitude: number;
+    longitude: number;
+    recorded_at: Date;
+  } | null;
+}
+
+/**
+ * Where a page of the live list ends: running routes first (rank 0), then
+ * the released ones (rank 1), each by code — unique per company, so the key
+ * is total and a page never repeats or skips a row.
+ */
+interface LiveRouteKey {
+  rank: 0 | 1;
+  code: number;
+}
+
 interface IOperationDayRepository {
   /** The company's zone, or null when the company does not exist. */
   timeZoneOf: (businessId: string) => Promise<string | null>;
@@ -204,6 +245,19 @@ interface IOperationDayRepository {
   ) => Promise<{ total: number; routes: MonitoringRoute[] }>;
 
   /**
+   * The company's routes running now (any day: one left open included) and
+   * the ones released for `date` and not yet started, running first and then
+   * by code, after `after` when given, at most `take` — in one statement:
+   * the routes by (businessId, status, scheduled_date), each one's stop
+   * counts by route_stop (routeId, status), the driver, the plate and the
+   * driver's last point by primary key.
+   */
+  listLiveRoutes: (
+    businessId: string,
+    query: { date: string; take: number; after?: LiveRouteKey },
+  ) => Promise<LiveRoute[]>;
+
+  /**
    * The pauses still open for these drivers, only the company's: the tower
    * draws a paused truck as such instead of as a stopped one.
    */
@@ -219,6 +273,8 @@ export type {
   FeedEntry,
   FeedSource,
   IOperationDayRepository,
+  LiveRoute,
+  LiveRouteKey,
   MonitoringRoute,
   MonitoringStop,
   OperationDay,

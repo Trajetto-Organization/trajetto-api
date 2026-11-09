@@ -221,10 +221,11 @@ motivo errado. As ferramentas:
 - **Salas do Socket.IO** (`tests/E2E/support/socket-waits.ts`):
   `waitForRoom(io, socketId, sala, dentro)` lê o índice de salas do próprio
   servidor; `emitHandled(socket, evento, payload)` espera o
-  _acknowledgement_ vazio de `operationsSubscribe`/`chatSubscribe` (tratado,
-  sem dizer o veredito); `waitForDisconnect`; `waitUntil` para o resto. Numa
-  réplica de outro processo, `replica.waitForRoom(...)` pergunta à réplica
-  (`MEMBERS`, em `socket-replica.ts`).
+  _acknowledgement_ vazio de `operationsSubscribe`/`chatSubscribe` e dos
+  unsubscribes (tratado, sem dizer o veredito); `waitForDisconnect`;
+  `waitUntil` para o resto. Numa réplica de outro processo,
+  `replica.waitForRoom(...)` pergunta à réplica (`MEMBERS`, em
+  `socket-replica.ts`).
 - **Pipeline de notificações**: chamar `runOutboxCycle()`/`runDeliveryCycle()`
   com um ciclo já rodando entra nele e espera a passada extra (ver
   [`arquitetura.md`](./arquitetura.md), "Outbox, filas e efeitos externos").
@@ -554,4 +555,13 @@ uma garantia:
   (`ALERT`, raio de 500 m).
 - **Contrato de rotas**: `tests/unitaires/contract/client-routes.test.ts` lê
   as URLs que a web e o app constroem (`../trajetto-ui`, `../trajetto-mobile`)
-  e falha se alguma não existir na API.
+  e falha se alguma não existir na API. No app, lê as chamadas de
+  `apiClient` com o caminho escrito (`get`, `post`… e `request`, por onde
+  passa a maior parte) e as que passam uma constante `const NOME = "/caminho"`
+  (o `MAP_CONFIG_PATH` do `GET /config/map`, onda 5).
+- **Modelo de tiles do app**: `tests/unitaires/map/map-tiles.test.ts` tem
+  uma tabela de paridade com os modelos que o app aceita e recusa
+  (`isTileTemplate` de `trajetto-mobile/features/live-map/map-config-rules.ts`)
+  e, com `../trajetto-mobile` presente, roda a mesma tabela contra a função
+  do app: uma regra apertada só no app aparece aqui, e não como mapa sem
+  fundo em campo.

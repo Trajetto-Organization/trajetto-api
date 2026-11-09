@@ -1,3 +1,5 @@
+import type { Prisma } from "@prisma/client";
+
 import database from "@/../infra/database";
 import { hashSingleUseToken } from "@/shared/security/single-use-token";
 
@@ -55,6 +57,10 @@ class DriverEnrollmentRepository implements IDriverEnrollmentRepository {
     });
   }
 
+  async findByUserId(userId: string): Promise<DriverEnrollmentToken | null> {
+    return this.prisma.driverEnrollmentToken.findUnique({ where: { userId } });
+  }
+
   async consume(
     id: string,
     {
@@ -91,9 +97,21 @@ class DriverEnrollmentRepository implements IDriverEnrollmentRepository {
     return rows[0]?.attempts ?? 0;
   }
 
-  async revokeForUser(userId: string): Promise<number> {
-    const { count } = await this.prisma.driverEnrollmentToken.deleteMany({
-      where: { userId },
+  async revokeForUser(
+    userId: string,
+    tx?: Prisma.TransactionClient,
+  ): Promise<number> {
+    const { count } = await (
+      tx ?? this.prisma
+    ).driverEnrollmentToken.deleteMany({ where: { userId } });
+
+    return count;
+  }
+
+  async forgetDevice(userId: string, deviceId: string): Promise<number> {
+    const { count } = await this.prisma.driverEnrollmentToken.updateMany({
+      where: { userId, device_id: deviceId },
+      data: { device_id: null },
     });
 
     return count;

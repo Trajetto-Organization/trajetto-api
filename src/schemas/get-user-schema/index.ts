@@ -40,6 +40,17 @@ const getUserSchema = z.object({
       "Nulo só no login de um motorista sem e-mail (entra por QR Code ou CPF e senha).",
     ),
   two_factor_enabled: z.boolean().optional(),
+  /**
+   * Wave 2: the manager set the password; the client asks for the person's
+   * own before anything else. Optional so a response without it reads as
+   * false.
+   */
+  must_change_password: z
+    .boolean()
+    .optional()
+    .describe(
+      "A senha foi definida pelo gestor (senha inicial ou redefinição): o app e a web pedem a senha da própria pessoa antes de seguir. A API não recusa nada por isso.",
+    ),
   email_notifications_enabled: z.boolean().optional(),
   activity_notifications_enabled: z.boolean().optional(),
   access_revoked: z.boolean(),

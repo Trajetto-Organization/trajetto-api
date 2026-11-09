@@ -10,6 +10,7 @@ import {
 import {
   INotificationRepository,
   ListNotificationsParams,
+  NotificationEntityRef,
   UpsertPreferenceInput,
 } from "./INotification-repository";
 
@@ -23,6 +24,22 @@ class NotificationRepository implements INotificationRepository {
     });
 
     return result.count;
+  }
+
+  async markReadByEntity({
+    userId,
+    type,
+    entityId,
+  }: NotificationEntityRef): Promise<string[]> {
+    // The user leads the where (the (userId, read, created_at) index): only
+    // the caller's own rows can ever be touched.
+    const flipped = await this.prisma.notification.updateManyAndReturn({
+      where: { userId, type, entityId, read: false },
+      data: { read: true },
+      select: { id: true },
+    });
+
+    return flipped.map((row) => row.id);
   }
 
   async listPreferences(userId: string): Promise<NotificationPreference[]> {

@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import { updateNotificationPreferencesSchema } from "@/schemas/notification-preferences-schema";
+import { readNotificationsByEntitySchema } from "@/schemas/read-notifications-by-entity-schema";
 import { errorResponse } from "./common-responses";
 import { cursorMeta } from "./ndjson";
 
@@ -48,6 +49,7 @@ const notificationSchemas = {
     notificationId: z.string().uuid().describe("ID da notificação"),
   }),
   updatePreferences: updateNotificationPreferencesSchema,
+  readByEntity: readNotificationsByEntitySchema,
 };
 
 const notificationResponses = {
@@ -110,6 +112,15 @@ const allNotificationResponses = {
   allNotificationsMarkedAsRead: z.object({
     message: z.string().describe("Resumo da operação"),
     count: z.number().describe("Quantidade de notificações marcadas"),
+  }),
+  notificationsReadByEntity: z.object({
+    message: z.string().describe("Resumo da operação"),
+    count: z
+      .number()
+      .int()
+      .describe(
+        "Quantas notificações mudaram para lidas agora (0 quando não havia nenhuma: repetir é seguro).",
+      ),
   }),
   pushTokenChanged: z.object({
     message: z.string().describe("Resumo da operação"),

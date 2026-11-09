@@ -2,6 +2,8 @@ import { inject, injectable } from "tsyringe";
 
 import { IUserRepository } from "../../repositories/IUser-repository";
 import { IUsersTokensRepository } from "../../repositories/IUsers-tokens-repository";
+import { IDriverEnrollmentRepository } from "../../repositories/IDriver-enrollment-repository";
+import { IDriverTrustedDeviceRepository } from "../../repositories/IDriver-trusted-device-repository";
 
 import { IDriverRepository } from "@/modules/driver/repositories/IDriver-repository";
 
@@ -79,6 +81,10 @@ class UpdateUserUseCase {
     private driver: IDriverRepository,
     @inject("UsersTokensRepository")
     private usersTokens: IUsersTokensRepository,
+    @inject("DriverTrustedDeviceRepository")
+    private trustedDevices: IDriverTrustedDeviceRepository,
+    @inject("DriverEnrollmentRepository")
+    private driverEnrollment: IDriverEnrollmentRepository,
   ) {}
 
   // The same refusal as a missing permission (decision 4.1).
@@ -228,6 +234,15 @@ class UpdateUserUseCase {
 
         if (plan.endsSessions) {
           await this.user.endSessionsAndClearInbox(userId, tx);
+        }
+
+        // The phones and the QR code are the previous driver's (wave 2):
+        // trust is kept per login, so left in place, that driver's phone
+        // would sign in by CPF and password as the login's new driver, with
+        // no QR code. The new driver enters by a QR code of their own.
+        if (changes.driver) {
+          await this.trustedDevices.revokeAllForUser(userId, tx);
+          await this.driverEnrollment.revokeForUser(userId, tx);
         }
 
         const what = [

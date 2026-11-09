@@ -8,7 +8,11 @@ import { UserTokensRepository } from "@/modules/user/repositories/user-tokens-re
 import { InMemoryUserRepository } from "@/modules/user/repositories/in-memory/in-memory-user-repository";
 import { InMemoryUserTokensRepository } from "@/modules/user/repositories/in-memory/in-memory-user-tokens-repository";
 
-import type { IUserRepository } from "@/modules/user/repositories/IUser-repository";
+import {
+  KeptSessionEndedError,
+  type IUserRepository,
+} from "@/modules/user/repositories/IUser-repository";
+import { hashDeviceId } from "@/modules/user/services/session-service";
 import type { IUsersTokensRepository } from "@/modules/user/repositories/IUsers-tokens-repository";
 import type { UserRole } from "@/modules/user/dtos/user-dto";
 
@@ -797,30 +801,116 @@ describe.each(harnesses.map((harness) => [harness.name, harness] as const))(
 
       const listed = await harness.tokens.listUserDeviceSessions(userId);
 
-      expect(listed.map((device) => device.device_id).sort()).toEqual(
-        [other, phone].sort(),
+      // By the phone's hash only (wave 2): the id is the CPF login's check.
+      expect(listed.map((device) => device.device_hash).sort()).toEqual(
+        [hashDeviceId(other), hashDeviceId(phone)].sort(),
       );
+      expect(JSON.stringify(listed)).not.toContain(phone);
       expect(listed.every((device) => device.sessions === 1)).toBe(true);
 
       const ended = await harness.tokens.revokeUserDeviceSessions(
         userId,
-        phone,
+        hashDeviceId(phone),
       );
 
       expect(ended).toHaveLength(2);
       expect(ended).toContain(phoneFamily);
       expect(
         (await harness.tokens.listUserDeviceSessions(userId)).map(
-          (device) => device.device_id,
+          (device) => device.device_hash,
         ),
-      ).toEqual([other]);
+      ).toEqual([hashDeviceId(other)]);
       expect(
         await harness.tokens.hasActiveRefreshTokenFamily(userId, mailFamily),
       ).toBe(true);
 
       expect(
-        await harness.tokens.revokeUserDeviceSessions(userId, phone),
+        await harness.tokens.revokeUserDeviceSessions(
+          userId,
+          hashDeviceId(phone),
+        ),
       ).toEqual([]);
+
+      await harness.tokens.revokeAllUserRefreshTokens(userId);
+    });
+
+    // Wave 2: the CPF login trusts a phone the login holds a live session
+    // on (the phones the previous image signed in during the rollout).
+    it("says which logins hold a live session on a phone", async () => {
+      const driver = idOf(harness, "driver-1");
+      const other = idOf(harness, "tie-1");
+      const phone = `${RUN.replace(/\W/g, "0").padEnd(8, "0")}cccccccc`;
+      const elsewhere = `${RUN.replace(/\W/g, "0").padEnd(8, "0")}dddddddd`;
+      const at = (offsetMs: number) => new Date(Date.now() + offsetMs);
+
+      const row = (userId: string, deviceId: string, expiresIn: Date) =>
+        harness.tokens.createUserRefreshToken({
+          userId,
+          token_hash: randomUUID(),
+          jti: randomUUID(),
+          family_id: randomUUID(),
+          expires_in: expiresIn,
+          device_id: deviceId,
+        });
+
+      await row(driver, phone, at(60_000));
+      await row(driver, phone, at(60_000));
+      // Another login: live, but on another phone; then expired on this one.
+      await row(other, elsewhere, at(60_000));
+      await row(other, phone, at(-60_000));
+
+      expect(
+        await harness.tokens.findLoginsSignedInOnDevice([driver, other], phone),
+      ).toEqual([driver]);
+      expect(
+        await harness.tokens.findLoginsSignedInOnDevice([other], phone),
+      ).toEqual([]);
+      expect(
+        await harness.tokens.findLoginsSignedInOnDevice([], phone),
+      ).toEqual([]);
+
+      await harness.tokens.revokeAllUserRefreshTokens(driver);
+      await harness.tokens.revokeAllUserRefreshTokens(other);
+    });
+
+    // Wave 2: the password change that keeps the caller's session must not
+    // bring it back when it ended after the caller checked it.
+    it("refuses to keep a session that is no longer live, writing nothing", async () => {
+      const userId = idOf(harness, "tie-2");
+      const ended = randomUUID();
+
+      await harness.tokens.createUserRefreshToken({
+        userId,
+        token_hash: randomUUID(),
+        jti: randomUUID(),
+        family_id: ended,
+        expires_in: new Date(Date.now() - 60_000),
+      });
+
+      const versionBefore = (await harness.repo.findUserById(userId))
+        ?.session_version;
+
+      await expect(
+        harness.repo.updateUserPasswordKeepingSession({
+          userId,
+          password: "hash-que-nao-fica",
+          keepFamilyId: ended,
+          replacement: () => ({
+            userId,
+            token_hash: randomUUID(),
+            jti: randomUUID(),
+            family_id: ended,
+            expires_in: new Date(Date.now() + 60_000),
+          }),
+        }),
+      ).rejects.toBeInstanceOf(KeptSessionEndedError);
+
+      expect((await harness.repo.findUserById(userId))?.session_version).toBe(
+        versionBefore,
+      );
+      expect(
+        await harness.tokens.hasActiveRefreshTokenFamily(userId, ended),
+      ).toBe(false);
 
       await harness.tokens.revokeAllUserRefreshTokens(userId);
     });

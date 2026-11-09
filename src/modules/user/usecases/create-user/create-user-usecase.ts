@@ -319,6 +319,9 @@ class CreateUserUseCase {
         // stands as confirmed (D2): the driver signs in at once. Without an
         // address there is nothing to confirm.
         email_verified: managerSetPassword && mailbox ? new Date() : null,
+        // The manager knows it (wave 2): the driver creates their own at the
+        // first sign-in.
+        must_change_password: managerSetPassword,
       });
 
       // A driver now has an app login: the chat pickers' "com o app" split

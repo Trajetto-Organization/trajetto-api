@@ -1,4 +1,5 @@
 import type { UserDeviceSession } from "../dtos/user-tokens-dto";
+import { hashDeviceId } from "./session-service";
 
 interface LiveDeviceRow {
   device_id: string | null;
@@ -12,7 +13,11 @@ interface LiveDeviceRow {
  * 02/11/2026, D7): one entry per phone, counting its sessions (a family may
  * have two live rows for a moment, after a raced renewal), the latest renewal
  * as its last activity, and the latest expiry. Most recent first; the phone's
- * id breaks ties, so the order is the same in both repositories.
+ * hash breaks ties, so the order is the same in both repositories.
+ *
+ * The phone leaves as its hash, never its id (wave 2): the CPF login checks
+ * the phone by that id, and whoever reads the list — a profile that may only
+ * read users included — would hold every driver's second factor.
  */
 function groupDeviceSessions(rows: LiveDeviceRow[]): UserDeviceSession[] {
   const byDevice = new Map<
@@ -23,10 +28,11 @@ function groupDeviceSessions(rows: LiveDeviceRow[]): UserDeviceSession[] {
   for (const row of rows) {
     if (!row.device_id) continue;
 
-    const entry = byDevice.get(row.device_id);
+    const deviceHash = hashDeviceId(row.device_id);
+    const entry = byDevice.get(deviceHash);
 
     if (!entry) {
-      byDevice.set(row.device_id, {
+      byDevice.set(deviceHash, {
         families: new Set([row.family_id]),
         last: row.created_at,
         expires: row.expires_in,
@@ -41,8 +47,8 @@ function groupDeviceSessions(rows: LiveDeviceRow[]): UserDeviceSession[] {
   }
 
   return [...byDevice.entries()]
-    .map(([device_id, entry]) => ({
-      device_id,
+    .map(([device_hash, entry]) => ({
+      device_hash,
       sessions: entry.families.size,
       last_activity_at: entry.last,
       expires_at: entry.expires,
@@ -50,7 +56,7 @@ function groupDeviceSessions(rows: LiveDeviceRow[]): UserDeviceSession[] {
     .sort(
       (left, right) =>
         right.last_activity_at.getTime() - left.last_activity_at.getTime() ||
-        left.device_id.localeCompare(right.device_id),
+        left.device_hash.localeCompare(right.device_hash),
     );
 }
 

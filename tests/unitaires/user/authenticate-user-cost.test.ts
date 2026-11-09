@@ -53,6 +53,7 @@ import { UserInvalidTwoFactorCodeError } from "@/modules/user/usecases/errors/us
 import { InMemoryUserRepository } from "@/modules/user/repositories/in-memory/in-memory-user-repository";
 import { InMemoryUserTokensRepository } from "@/modules/user/repositories/in-memory/in-memory-user-tokens-repository";
 import { InMemoryDriverRepository } from "@/modules/driver/repositories/in-memory/in-memory-driver-repository";
+import { InMemoryDriverTrustedDeviceRepository } from "@/modules/user/repositories/in-memory/in-memory-driver-trusted-device-repository";
 
 const EMAIL = "gestora@exemplo.com.br";
 const PASSWORD = "senha-correta";
@@ -92,6 +93,7 @@ beforeEach(() => {
     users as never,
     tokens as never,
     drivers as never,
+    new InMemoryDriverTrustedDeviceRepository(),
   );
 });
 
