@@ -1,6 +1,7 @@
 import { AppError } from "@/shared/errors/AppError";
 
 import {
+  PAUSE_NOTE_MIN_LENGTH,
   pauseCooldownMessage,
   pauseCooldownView,
   type PauseCooldownView,
@@ -117,6 +118,23 @@ class PauseCooldownError extends AppError {
   }
 }
 
+/**
+ * Owner, 09/11/2026: a NEW pause of the generic "Outra pausa"
+ * (pauseTypeRequiresNote) without a reason of PAUSE_NOTE_MIN_LENGTH
+ * non-space characters, sent now by a build whose form asks for it
+ * (enforcesPauseNote). Nothing written. A 400 the app never meets in its
+ * queue: the queue's resends are recorded as before.
+ */
+class PauseNoteRequiredError extends AppError {
+  constructor() {
+    super(
+      `Para uma pausa por outro motivo, escreva o motivo na observação, com pelo menos ${PAUSE_NOTE_MIN_LENGTH} letras.`,
+      400,
+      "PAUSE_NOTE_REQUIRED",
+    );
+  }
+}
+
 /** The occurrence_type_id is not one of this company's types. */
 class PauseTypeNotFoundError extends AppError {
   constructor() {
@@ -146,6 +164,7 @@ export {
   PauseAlreadyEndedError,
   PauseAlreadyOpenError,
   PauseCooldownError,
+  PauseNoteRequiredError,
   PauseNotFoundError,
   PauseReportRangeError,
   PauseSubmissionReusedError,

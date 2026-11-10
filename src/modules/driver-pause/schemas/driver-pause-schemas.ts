@@ -6,7 +6,12 @@ import { facetField, idFacetField } from "@/shared/pagination/list-query";
 import { pageField, pageSizeField } from "@/shared/pagination/page-size";
 
 import { DRIVER_PAUSE_KINDS } from "../dtos/driver-pause-dto";
-import { PAUSE_NOTE_MAX, normalizePauseNote } from "../rules/pause-rules";
+import {
+  PAUSE_NOTE_MAX,
+  PAUSE_NOTE_MIN_LENGTH,
+  PAUSE_NOTE_RULE_CONTRACT,
+  normalizePauseNote,
+} from "../rules/pause-rules";
 import {
   PAUSE_FLAG_CODES,
   PAUSE_REPORT_MAX_DAYS,
@@ -69,7 +74,13 @@ const coordinate = (limit: number) =>
 const latitude = coordinate(90);
 const longitude = coordinate(180);
 
-/** Cleaned, not refused (see normalizePauseNote); only a real excess is a 400. */
+/**
+ * Cleaned, not refused (see normalizePauseNote); only a real excess is a 400.
+ * Optional here ON PURPOSE, for every type: the reason the generic pause
+ * asks for depends on the build and on the queue (enforcesPauseNote), which
+ * a schema cannot see, and a 400 here would fail every older build and the
+ * queue's resends of the same body forever. The start's use case judges it.
+ */
 const note = z
   .string()
   .max(1_000, `A observação deve ter no máximo ${PAUSE_NOTE_MAX} caracteres.`)
@@ -79,7 +90,7 @@ const note = z
     message: `A observação deve ter no máximo ${PAUSE_NOTE_MAX} caracteres.`,
   })
   .describe(
-    `Observação livre do motorista (até ${PAUSE_NOTE_MAX} caracteres). Espaços nas pontas e repetidos são limpos, e quebras de linha viram espaço; vazia vira nula.`,
+    `Observação livre do motorista (até ${PAUSE_NOTE_MAX} caracteres). Espaços nas pontas e repetidos são limpos, e quebras de linha viram espaço; vazia vira nula. No início do tipo padrão "Outra pausa" (\`requires_note\` em \`pause_types\`, inclusive pelo \`kind: OTHER\` sozinho), é o motivo: com menos de ${PAUSE_NOTE_MIN_LENGTH} letras (sem contar espaços), o app de \`contract\` ${PAUSE_NOTE_RULE_CONTRACT} ou maior num envio direto (sem X-Client-Queued-At) recebe 400 PAUSE_NOTE_REQUIRED; a fila offline, os apps anteriores e o \`start\` do fim gravam como antes.`,
   );
 
 const startPauseBody = z

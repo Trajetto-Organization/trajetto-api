@@ -135,6 +135,12 @@ interface PauseOccurrenceType {
   name: string;
   pause_kind: PauseKindKey;
   is_default: boolean;
+
+  /**
+   * Owner, 09/11/2026: starting it asks for a reason in the note
+   * (pauseTypeRequiresNote; today only the seeded "Outra pausa").
+   */
+  requires_note: boolean;
 }
 
 interface ListOccurrenceTypesProps {

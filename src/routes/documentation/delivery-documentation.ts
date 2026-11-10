@@ -86,7 +86,11 @@ const driverDeliveredTypeEntity = driverOccurrenceTypeEntity.extend({
     .describe('O tipo padrão "Entrega normal" (o primeiro da lista).'),
 });
 
-/** Decision 14.4 (contract 3): a pause type and its legal nature. */
+/**
+ * Decision 14.4 (contract 3): a pause type and its legal nature. Also the
+ * runtime schema of `pause_types`: a field missing here is stripped from the
+ * driver's day (owner, 09/11/2026: `requires_note`).
+ */
 const driverPauseTypeEntity = z.object({
   id: z.string(),
   name: z.string(),
@@ -96,6 +100,11 @@ const driverPauseTypeEntity = z.object({
       "A natureza legal (Lei 13.103), enviada como `kind` junto com `occurrence_type_id`.",
     ),
   is_default: z.boolean(),
+  requires_note: z
+    .boolean()
+    .describe(
+      'Exige a observação (o motivo) para iniciar; hoje só o tipo padrão "Outra pausa", mesmo renomeado. O app de `contract` 7 em diante pede o motivo antes de enviar; sem ele, o início enviado na hora recebe 400 PAUSE_NOTE_REQUIRED.',
+    ),
 });
 
 /** Plan of 02/11/2026 (C2): the plate on the route's card. */

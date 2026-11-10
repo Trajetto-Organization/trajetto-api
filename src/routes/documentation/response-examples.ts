@@ -468,13 +468,22 @@ const RESPONSE_EXAMPLES: ResponseExamples = {
           is_default: true,
         },
       ],
-      // Decision 14.4: the pause picker and whether it may open now.
+      // Decision 14.4: the pause picker and whether it may open now; the
+      // generic "Outra pausa" asks for its reason (owner, 09/11/2026).
       pause_types: [
         {
           id: "0192f7a0-1e2f-7a3b-8c4d-5e6f7a8b9c10",
           name: "Refeição",
           pause_kind: "MEAL",
           is_default: true,
+          requires_note: false,
+        },
+        {
+          id: "0192f7a0-1e2f-7a3b-8c4d-5e6f7a8b9c11",
+          name: "Outra pausa",
+          pause_kind: "OTHER",
+          is_default: true,
+          requires_note: true,
         },
       ],
       journey: {

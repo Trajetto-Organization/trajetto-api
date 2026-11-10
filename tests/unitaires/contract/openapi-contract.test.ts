@@ -714,6 +714,35 @@ describe("the writes the driver's app sends", () => {
     }
   });
 
+  it("documents the generic pause's reason: the start's 400 and requires_note in the driver's day", () => {
+    const START_PAUSE = "POST /driver-pause/start/{businessId}";
+
+    expect(
+      JSON.stringify(byId(START_PAUSE).operation.responses["400"]),
+    ).toContain("PAUSE_NOTE_REQUIRED");
+    expect(byId(START_PAUSE).operation.description).toContain(
+      "400 PAUSE_NOTE_REQUIRED",
+    );
+
+    // The end never asks for the reason, even when it creates the pause:
+    // its 400 must not promise a refusal it never sends.
+    expect(
+      JSON.stringify(
+        byId("POST /driver-pause/end/{businessId}").operation.responses["400"],
+      ),
+    ).not.toContain("PAUSE_NOTE_REQUIRED");
+
+    // The serializer keeps only what the schema lists: without it in the
+    // pause type's entity, the driver's day would strip the field.
+    expect(
+      JSON.stringify(
+        byId("GET /delivery/my-deliveries/{businessId}").operation.responses[
+          "200"
+        ],
+      ),
+    ).toContain('"requires_note"');
+  });
+
   // Wave 3.7: a driver's body branch is dropped before the branch gate, so
   // the gate's 403 is the manager's only — and the document says so.
   it("says the branch gate never refuses a driver's record, whose branch the server resolves", () => {

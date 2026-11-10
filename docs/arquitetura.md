@@ -2301,6 +2301,50 @@ outbox, cada um idempotente pela própria chave, e o relatório da Lei
   `tests/unitaires/driver-pause/pause-cooldown-usecases.test.ts`,
   `tests/E2E/driver-pause-cooldown-http.test.ts` e o contrato do repositório
   em `tests/E2E/driver-pause-repository-contract.test.ts`.
+- **Motivo na pausa por outro motivo (09/11/2026):** o escritório não sabia
+  por que o motorista parou numa "Outra pausa", e o dono pediu a observação
+  obrigatória nela. **Qual tipo:** só o padrão semeado "Outra pausa"
+  (`system_key` `pause_other`, `pauseTypeRequiresNote` em
+  `shared/delivery/default-occurrence-types.ts`), inclusive renomeado — a
+  categoria e a natureza de um tipo semeado são travadas, então ele continua
+  o genérico — e o corpo legado com `kind: OTHER` sozinho, que cai nele. Os
+  tipos que a empresa criou, de qualquer natureza ("Banheiro", natureza
+  Outra), não pedem: o nome já diz o motivo. **O motivo:**
+  `PAUSE_NOTE_MIN_LENGTH` (3) letras sem contar espaços, sobre a nota já
+  limpa (`pauseNoteTooShort`); o máximo continua 200. Contra erro de
+  digitação, não contra má-fé ("xxx" passa). O app tem a cópia com o mesmo
+  nome, presa à da API por
+  `tests/unitaires/contract/app-reading-windows.test.ts`. **A recusa**
+  (`400 PAUSE_NOTE_REQUIRED`, `PauseNoteRequiredError`, pelo handler global
+  com `code` e `x-error-code`): nada é gravado. **Só quando tudo vale**
+  (`enforcesPauseNote`, o mesmo desenho do intervalo): o app manda
+  `contract` 7 (`PAUSE_NOTE_RULE_CONTRACT`) ou mais e o envio é direto, sem
+  `X-Client-Queued-At`. A fila offline reenvia o corpo que o motorista tocou,
+  e depois de uma atualização o mesmo corpo sem nota: recusá-la seria um
+  cartão vermelho para sempre. Por isso a fila, a web e os builds sem o
+  cabeçalho ou de contrato anterior gravam como antes, com ou sem motivo —
+  a pausa sem observação já é o que o escritório vê, e o rastro é uma linha
+  de log `warn` ("Generic pause started without a reason by a queued resend
+  or a build without the rule: recorded", só ids, `clientContract` e
+  `queued`) escrita depois da gravação, nunca num reenvio —, e a regra fica
+  **fora do zod** de propósito (`driver-pause-schemas.ts`: o
+  schema não enxerga cabeçalho, e o 400 dele derrubaria a fila e os builds
+  antigos; `driver-pause-schemas.test.ts` trava isso). **Ordem no caso de
+  uso:** o reenvio da mesma chave (200, antes de tudo) → PAUSE_TOO_OLD → o
+  tipo → a jornada (PAUSE_REQUIRES_ROUTE) → o motivo → o intervalo → o
+  insert (PAUSE_ALREADY_OPEN). O fim, inclusive o que cria a pausa já
+  encerrada a partir de `start`, nunca pede motivo. **Leitura:** cada tipo de
+  `pause_types` do dia do motorista (`GET /delivery/my-deliveries`) diz
+  `requires_note`; o campo está em `driverPauseTypeEntity`, senão o
+  serializer o tiraria em silêncio. Se um dia a empresa puder marcar o
+  motivo por tipo, muda só a API e a web: o app lê o campo. Sem migration
+  (`PauseTypeInfo` passou a ler o `system_key`, que já existe). Prova:
+  `tests/unitaires/driver-pause/pause-note-rules.test.ts`,
+  `tests/unitaires/driver-pause/pause-note-usecases.test.ts`,
+  `tests/unitaires/occurrence-type/occurrence-type-category-usecases.test.ts`,
+  `tests/E2E/driver-pause-note-http.test.ts`,
+  `tests/E2E/occurrence-categories-http.test.ts` e o contrato do repositório
+  em `tests/E2E/driver-pause-repository-contract.test.ts`.
 
 ## Postgres é a fila
 

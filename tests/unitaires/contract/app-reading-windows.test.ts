@@ -7,7 +7,10 @@ import {
   RECENT_REFUEL_WINDOW_MINUTES,
   SAME_READING_WINDOW_MINUTES,
 } from "@/modules/fuel/usecases/fuel-rules";
-import { PAUSE_COOLDOWN_MINUTES } from "@/modules/driver-pause/rules/pause-rules";
+import {
+  PAUSE_COOLDOWN_MINUTES,
+  PAUSE_NOTE_MIN_LENGTH,
+} from "@/modules/driver-pause/rules/pause-rules";
 
 /**
  * The app's copies of the odometer and refuelling windows (05/11/2026).
@@ -25,8 +28,8 @@ const SAME_READING = resolve(APP, "features/vehicles/same-reading-rules.ts");
 const FUEL_RULES = resolve(APP, "features/fuel/fuel-rules.ts");
 const PAUSE_RULES = resolve(APP, "features/pauses/pause-rules.ts");
 
-/** The value of `const NAME = 30;` in a source file, or null. */
-function minutesIn(path: string, name: string): number | null {
+/** The value of `const NAME = N;` in a source file, or null. */
+function numberIn(path: string, name: string): number | null {
   const match = new RegExp(`const ${name}\\s*=\\s*(\\d+)\\s*;`).exec(
     readFileSync(path, "utf8"),
   );
@@ -38,13 +41,13 @@ describe.skipIf(!existsSync(SAME_READING) || !existsSync(FUEL_RULES))(
   "the app's reading windows",
   () => {
     it("lets the odometer stand still exactly as long as the API", () => {
-      expect(minutesIn(SAME_READING, "SAME_READING_WINDOW_MINUTES")).toBe(
+      expect(numberIn(SAME_READING, "SAME_READING_WINDOW_MINUTES")).toBe(
         SAME_READING_WINDOW_MINUTES,
       );
     });
 
     it("asks about a second refuelling over the API's window", () => {
-      expect(minutesIn(FUEL_RULES, "RECENT_REFUEL_WINDOW_MINUTES")).toBe(
+      expect(numberIn(FUEL_RULES, "RECENT_REFUEL_WINDOW_MINUTES")).toBe(
         RECENT_REFUEL_WINDOW_MINUTES,
       );
     });
@@ -58,8 +61,22 @@ describe.skipIf(!existsSync(SAME_READING) || !existsSync(FUEL_RULES))(
  */
 describe.skipIf(!existsSync(PAUSE_RULES))("the app's pause cooldown", () => {
   it("waits exactly as long as the API between two pauses", () => {
-    expect(minutesIn(PAUSE_RULES, "PAUSE_COOLDOWN_MINUTES")).toBe(
+    expect(numberIn(PAUSE_RULES, "PAUSE_COOLDOWN_MINUTES")).toBe(
       PAUSE_COOLDOWN_MINUTES,
+    );
+  });
+});
+
+/**
+ * The generic pause's reason (09/11/2026): the app asks for as many
+ * non-space characters as the API refuses below. A longer minimum in the
+ * app holds a reason the server would take; a shorter one lets the driver
+ * tap into a 400 PAUSE_NOTE_REQUIRED.
+ */
+describe.skipIf(!existsSync(PAUSE_RULES))("the app's pause reason", () => {
+  it("asks for exactly the API's minimum", () => {
+    expect(numberIn(PAUSE_RULES, "PAUSE_NOTE_MIN_LENGTH")).toBe(
+      PAUSE_NOTE_MIN_LENGTH,
     );
   });
 });

@@ -636,6 +636,18 @@ describe("the driver's day payload", () => {
     expect(body.pause_types.map((type: { name: string }) => type.name)).toEqual(
       ["Descanso", "Lanche", "Outra pausa", "Refeição"],
     );
+    // Owner, 09/11/2026: only the generic default asks for a reason.
+    expect(
+      body.pause_types.map((type: { name: string; requires_note: boolean }) => [
+        type.name,
+        type.requires_note,
+      ]),
+    ).toEqual([
+      ["Descanso", false],
+      ["Lanche", false],
+      ["Outra pausa", true],
+      ["Refeição", false],
+    ]);
     // The carrier's main driver has no route: no journey.
     // With the company's day it was judged in: the app trusts a cached
     // answer only while that day lasts (review r1).

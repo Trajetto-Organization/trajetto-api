@@ -475,6 +475,33 @@ describe.each(both())("the pause repository (%s)", (_name, repo) => {
     }
   });
 
+  it("reads a pause type with its seeded key, the one the generic pause's reason is decided by", async () => {
+    const other = await repo.findPauseType(
+      COMPANY,
+      typeId(COMPANY, "pause_other"),
+    );
+
+    expect(other).toEqual({
+      id: typeId(COMPANY, "pause_other"),
+      name: "Outra pausa",
+      category: "PAUSE",
+      pause_kind: "OTHER",
+      is_active: true,
+      system_key: "pause_other",
+    });
+    // The legacy `kind` alone lands on the same row.
+    expect(await repo.defaultPauseType(COMPANY, "OTHER")).toEqual(other);
+    expect(await repo.defaultPauseType(COMPANY, "MEAL")).toMatchObject({
+      id: typeId(COMPANY, "pause_meal"),
+      system_key: "pause_meal",
+    });
+
+    // Another company's type is not seen.
+    expect(
+      await repo.findPauseType(COMPANY, typeId(OTHER, "pause_other")),
+    ).toBeNull();
+  });
+
   it("closes an open pause once, and refuses an end key another pause holds", async () => {
     const open = await repo.createPause({
       kind: "MEAL",

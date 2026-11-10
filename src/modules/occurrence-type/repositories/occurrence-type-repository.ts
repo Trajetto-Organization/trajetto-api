@@ -29,6 +29,7 @@ import {
 import {
   DELIVERED_DEFAULT_TYPE_KEY,
   ensureDefaultOccurrenceTypes,
+  pauseTypeRequiresNote,
 } from "@/shared/delivery/default-occurrence-types";
 import { OccurrenceTypeLastOfCategoryError } from "../usecases/errors/occurrence-type-errors";
 
@@ -300,6 +301,7 @@ class OccurrenceTypeRepository implements IOccurrenceTypeRepository {
       name: row.name,
       pause_kind: row.pause_kind!,
       is_default: row.system_key !== null,
+      requires_note: pauseTypeRequiresNote(row),
     }));
   }
 

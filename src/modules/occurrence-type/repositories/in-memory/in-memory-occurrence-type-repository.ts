@@ -30,6 +30,7 @@ import {
 import {
   DEFAULT_OCCURRENCE_TYPES,
   DELIVERED_DEFAULT_TYPE_KEY,
+  pauseTypeRequiresNote,
 } from "@/shared/delivery/default-occurrence-types";
 import { OccurrenceTypeLastOfCategoryError } from "../../usecases/errors/occurrence-type-errors";
 import {
@@ -401,6 +402,9 @@ class InMemoryOccurrenceTypeRepository implements IOccurrenceTypeRepository {
         name: type.name,
         pause_kind: type.pause_kind!,
         is_default: type.system_key != null,
+        requires_note: pauseTypeRequiresNote({
+          system_key: type.system_key ?? null,
+        }),
       }));
   }
 

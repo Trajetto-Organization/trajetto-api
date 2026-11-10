@@ -459,4 +459,20 @@ describe("the driver's lists", () => {
       ["Refeição", "MEAL"],
     ]);
   });
+
+  it("says only the generic 'Outra pausa' asks for a reason, renamed too (owner, 09/11/2026)", async () => {
+    await create({ name: "Banheiro", category: "PAUSE", pause_kind: "OTHER" });
+    await update(byKey("pause_other")!.id!, { name: "Parada diversa" });
+
+    const pauses = await types.listActivePauseTypes(BUSINESS);
+
+    expect(
+      pauses.map((type) => [type.name, type.pause_kind, type.requires_note]),
+    ).toEqual([
+      ["Banheiro", "OTHER", false],
+      ["Descanso", "REST", false],
+      ["Parada diversa", "OTHER", true],
+      ["Refeição", "MEAL", false],
+    ]);
+  });
 });

@@ -43,7 +43,8 @@ const MAX_HEADER_LENGTH = 512;
 /**
  * The header as the document states it, on the routes whose answer depends
  * on the build (the checklist's arrival rule, the refuelling's second
- * within 30 minutes and the 5 minutes between pauses, all from contract 5).
+ * within 30 minutes and the 5 minutes between pauses, all from contract 5;
+ * the generic pause's reason, from contract 7).
  * Not a `schema.headers`: that would replace `request.headers` with the
  * parsed object. Documentation only, like Idempotency-Key and
  * X-Client-Sent-At.
@@ -64,7 +65,8 @@ const clientVersionHeaders = z.object({
  * phone's clock. Only its PRESENCE is read — it says the driver tapped this
  * earlier and nobody can be asked about it any more (the refuelling's
  * second-within-30-minutes question and the pause start's cooldown, both
- * from contract 5). The value is never trusted as a date: X-Client-Sent-At
+ * from contract 5, and the generic pause's reason, from contract 7). The
+ * value is never trusted as a date: X-Client-Sent-At
  * with `occurred_at` dates the fact.
  */
 const CLIENT_QUEUED_AT_HEADER = "x-client-queued-at";

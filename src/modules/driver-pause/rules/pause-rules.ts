@@ -6,6 +6,23 @@ import type { DriverPause, DriverPauseKind } from "../dtos/driver-pause-dto";
 const PAUSE_NOTE_MAX = 200;
 
 /**
+ * The shortest reason a pause that requires one takes (owner, 09/11/2026),
+ * in non-space characters of the cleaned note: the same 3 as the
+ * refuelling's "Outro motivo". Against a slip of the thumb, not bad faith:
+ * "WC" is refused, "pneu" taken. The app holds its own copy under the same name
+ * (trajetto-mobile, features/pauses/pause-rules.ts), pinned to this one by
+ * tests/unitaires/contract/app-reading-windows.test.ts.
+ */
+const PAUSE_NOTE_MIN_LENGTH = 3;
+
+/**
+ * The first app contract (`contract` in x-trajetto-client-version) whose
+ * form asks for the reason of the generic pause, and so the first the
+ * server refuses a start without it from.
+ */
+const PAUSE_NOTE_RULE_CONTRACT = 7;
+
+/**
  * A note as it is stored: one line, no spaces at the ends, no runs of spaces
  * (decision 5.3 text rules). Cleaned rather than refused: the note travels in
  * the offline outbox, where a 400 is a permanent failure over a stray space.
@@ -198,6 +215,41 @@ function enforcesPauseCooldown(request: {
 }
 
 /**
+ * Whether a cleaned note (normalizePauseNote) is too short to say why the
+ * pause was taken: fewer than PAUSE_NOTE_MIN_LENGTH non-space characters.
+ * No note at all is too short too.
+ */
+function pauseNoteTooShort(note: string | null): boolean {
+  return (note ?? "").replace(/\s/g, "").length < PAUSE_NOTE_MIN_LENGTH;
+}
+
+/**
+ * Whether a start of a type that requires a reason (pauseTypeRequiresNote)
+ * without one is refused (400 PAUSE_NOTE_REQUIRED) instead of recorded —
+ * the cooldown's shape (enforcesPauseCooldown):
+ *
+ * - from a build whose form asks for it (contract PAUSE_NOTE_RULE_CONTRACT
+ *   on): an older one — mobile `main` sends no header, nor does the web —
+ *   never asked, and its outbox would fail what it could not avoid;
+ * - sent now, not by the app's offline queue (X-Client-Queued-At): its body
+ *   is the one the driver tapped, and the queue resends the same body after
+ *   an update, so a refusal there would never end.
+ *
+ * Only the start of a NEW pause: a resend of a start that got in is
+ * answered before any rule, and ending a pause never asks for a reason.
+ */
+function enforcesPauseNote(request: {
+  clientContract: number | null | undefined;
+  queued: boolean;
+}): boolean {
+  return (
+    typeof request.clientContract === "number" &&
+    request.clientContract >= PAUSE_NOTE_RULE_CONTRACT &&
+    !request.queued
+  );
+}
+
+/**
  * "14:05", the wall clock of the company's zone (h23), of the instant
  * truncated to its minute, or rounded up to the next one (see
  * pauseCooldownMessage).
@@ -292,12 +344,16 @@ export {
   PAUSE_COOLDOWN_RULE_CONTRACT,
   PAUSE_COOLDOWN_TOLERANCE_MS,
   PAUSE_NOTE_MAX,
+  PAUSE_NOTE_MIN_LENGTH,
+  PAUSE_NOTE_RULE_CONTRACT,
   enforcesPauseCooldown,
+  enforcesPauseNote,
   normalizePauseNote,
   pauseCooldown,
   pauseCooldownMessage,
   pauseCooldownView,
   pauseEndedAt,
+  pauseNoteTooShort,
   pauseStartedAtFromEnd,
   toPauseView,
   wholeMinutes,

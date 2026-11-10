@@ -281,7 +281,11 @@ const driverPauseResponses = {
   pauseReport,
 
   startBadRequest: withCodes(
-    "VALIDATION_ERROR: corpo inválido (a lista em `issues`), inclusive sem `occurrence_type_id` nem `kind`. OCCURRENCE_TYPE_WRONG_CATEGORY: `occurrence_type_id` é de um tipo que não é de pausa.",
+    'VALIDATION_ERROR: corpo inválido (a lista em `issues`), inclusive sem `occurrence_type_id` nem `kind`. OCCURRENCE_TYPE_WRONG_CATEGORY: `occurrence_type_id` é de um tipo que não é de pausa. PAUSE_NOTE_REQUIRED: início novo do tipo padrão "Outra pausa" (`requires_note`) com `note` de menos de 3 letras, sem contar espaços, enviado agora (sem X-Client-Queued-At) por um app de `contract` 7 ou maior; nada foi gravado.',
+  ),
+  // The end never asks for the reason, so its 400 never lists it.
+  endBadRequest: withCodes(
+    "VALIDATION_ERROR: corpo inválido (a lista em `issues`), inclusive um `start` sem `occurrence_type_id` nem `kind`. OCCURRENCE_TYPE_WRONG_CATEGORY: `start.occurrence_type_id` é de um tipo que não é de pausa.",
   ),
   typeNotFound: withCodes(
     "OCCURRENCE_TYPE_NOT_FOUND: `occurrence_type_id` não é um tipo desta empresa (a mesma resposta para um de outra empresa).",

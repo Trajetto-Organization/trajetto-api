@@ -259,6 +259,7 @@ class InMemoryDriverPauseRepository implements IDriverPauseRepository {
       category: type.category,
       pause_kind: type.pause_kind,
       is_active: type.is_active !== false,
+      system_key: type.system_key ?? null,
     };
   }
 

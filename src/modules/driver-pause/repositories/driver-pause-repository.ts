@@ -31,6 +31,7 @@ const PAUSE_TYPE_SELECT = {
   category: true,
   pause_kind: true,
   is_active: true,
+  system_key: true,
 } as const;
 
 /** Route states in which a route has been on the street. */

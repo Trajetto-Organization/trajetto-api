@@ -2246,6 +2246,24 @@ imagem anterior não conhece a regra nem os três campos novos de
 réplica com ela responde `/current` sem esses campos e grava todo início,
 como antes.
 
+**Motivo na pausa por outro motivo (09/11/2026).** Sem migration nem
+variável: o tipo é lido pelo `system_key` que já existe. A API passa a dizer
+`requires_note` em cada tipo de `pause_types` do dia do motorista e responde
+`400 PAUSE_NOTE_REQUIRED` ao início do tipo padrão "Outra pausa" sem motivo
+(menos de 3 letras, sem contar espaços) só para o app de `contract` 7 em
+diante num envio direto (sem `X-Client-Queued-At`). A fila offline, o app em
+produção (sem o cabeçalho), os builds de contrato 5 e 6 e a web continuam
+gravando como antes, com ou sem motivo, e cada "Outra pausa" gravada assim
+sem motivo deixa a linha `warn` "Generic pause started without a reason by a
+queued resend or a build without the rule: recorded" (é por ela que se vê
+quando a OTA do contrato 7 chegou a todos); o fim nunca é recusado por isso.
+Ordem de subida livre (o recomendado: API, web e, por último, a OTA do app
+com o contrato 7). A imagem anterior não conhece a regra nem
+`requires_note`: durante o rollout (ou depois de um rollback), a réplica
+com ela grava todo início, e o app de contrato 7 deduz a exigência sozinho
+(o padrão de natureza Outra, ou o "Outra" da lista fixa) e pede o motivo do
+mesmo jeito.
+
 **Conta e acesso do motorista, onda 2 (06/11/2026).** Três migrations, pela
 mesma etapa da `trajetto-api-migrate` (nada à mão no deploy):
 

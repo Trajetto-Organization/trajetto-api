@@ -54,9 +54,10 @@ class StartDriverPauseController {
         longitude: body.longitude,
         note: body.note,
         // From contract 5 on, a new start inside the cooldown is refused
-        // instead of recorded — unless the app's offline queue sent it
-        // (X-Client-Queued-At): the tap happened earlier. The web and the
-        // build in drivers' hands send neither.
+        // instead of recorded, and from contract 7 on a generic "Outra
+        // pausa" without its reason — unless the app's offline queue sent
+        // it (X-Client-Queued-At): the tap happened earlier. The web and
+        // the build in drivers' hands send neither.
         client: parseClientVersion(request.headers[CLIENT_VERSION_HEADER]),
         queued: isQueuedResend(request.headers[CLIENT_QUEUED_AT_HEADER]),
       });

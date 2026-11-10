@@ -1,16 +1,23 @@
 import { inject, injectable } from "tsyringe";
 
+import { pauseTypeRequiresNote } from "@/shared/delivery/default-occurrence-types";
 import type { ClientVersion } from "@/shared/http/client-version";
 import { logger } from "@/shared/logging/logger";
 import { resolveTimeZone } from "@/shared/time/business-day";
 
 import type { IDriverPauseRepository } from "../../repositories/IDriver-pause-repository";
 import type { DriverPause, DriverPauseKind } from "../../dtos/driver-pause-dto";
-import { enforcesPauseCooldown, pauseCooldown } from "../../rules/pause-rules";
+import {
+  enforcesPauseCooldown,
+  enforcesPauseNote,
+  pauseCooldown,
+  pauseNoteTooShort,
+} from "../../rules/pause-rules";
 
 import {
   PauseAlreadyOpenError,
   PauseCooldownError,
+  PauseNoteRequiredError,
   PauseTooOldError,
   PauseTypeWrongCategoryError,
 } from "../errors/driver-pause-errors";
@@ -50,16 +57,22 @@ interface StartDriverPauseRequest {
 
   latitude?: number;
   longitude?: number;
+
+  /** Already cleaned by the body's schema (normalizePauseNote). */
   note?: string | null;
 
   /**
    * The app build that sent it (x-trajetto-client-version), null when the
    * request does not say: from contract 5 on, a start inside the cooldown
-   * is refused instead of recorded.
+   * is refused instead of recorded; from contract 7 on, so is a generic
+   * "Outra pausa" without its reason.
    */
   client?: ClientVersion | null;
 
-  /** Sent by the app's offline queue (X-Client-Queued-At): never refused for the cooldown. */
+  /**
+   * Sent by the app's offline queue (X-Client-Queued-At): never refused for
+   * the cooldown nor for a missing reason.
+   */
   queued?: boolean;
 
   /** The clock. Only tests pass it. */
@@ -97,6 +110,18 @@ interface StartDriverPauseResult {
  * itself (contract 5 on) sending now (no X-Client-Queued-At). Anything else
  * inside the cooldown is recorded, with a warn line. Checked last, right
  * before the insert, so every refusal above wins over it.
+ *
+ * Owner, 09/11/2026: a new start of the generic "Outra pausa"
+ * (pauseTypeRequiresNote, the legacy `kind: OTHER` included) whose note
+ * has fewer than PAUSE_NOTE_MIN_LENGTH non-space characters is refused
+ * with 400 PAUSE_NOTE_REQUIRED, nothing written — only from a build whose
+ * form asks for it (contract 7 on) sending now. The queue's starts and the
+ * older builds are recorded as before, reason or not; one without it leaves
+ * a warn line.
+ *
+ * The order: a resend of the same key (answered before anything) →
+ * PAUSE_TOO_OLD → the type → the journey (PAUSE_REQUIRES_ROUTE) → the
+ * reason → the cooldown → the insert (PAUSE_ALREADY_OPEN).
  */
 @injectable()
 class StartDriverPauseUseCase {
@@ -174,6 +199,19 @@ class StartDriverPauseUseCase {
       at,
     );
 
+    // Owner, 09/11/2026: the generic "Outra pausa" says why. Refused only
+    // when the driver can still be told (contract 7 on, sent at the tap);
+    // the queue's starts and older builds are recorded as before.
+    const withoutReason =
+      pauseTypeRequiresNote(type) && pauseNoteTooShort(note ?? null);
+
+    if (
+      withoutReason &&
+      enforcesPauseNote({ clientContract: client?.contract, queued })
+    ) {
+      throw new PauseNoteRequiredError();
+    }
+
     // Measured from the tap, like the journey: the previous pause is the
     // one that ended before this start was tapped, never one sent later.
     const previous = await this.pauses.findLastEndedPause({
@@ -228,6 +266,23 @@ class StartDriverPauseUseCase {
             queued,
           },
           "Pause started inside the cooldown by a queued resend or a build without the rule: recorded",
+        );
+      }
+
+      // The same for the generic pause without its reason (here the rule
+      // did not hold, or it would have been refused above): tells when the
+      // builds whose form does not ask, and the queue's starts, stop
+      // sending it.
+      if (withoutReason) {
+        log.warn(
+          {
+            pauseId: result.pause.id,
+            businessId,
+            driverId: driver,
+            clientContract: client?.contract ?? null,
+            queued,
+          },
+          "Generic pause started without a reason by a queued resend or a build without the rule: recorded",
         );
       }
 

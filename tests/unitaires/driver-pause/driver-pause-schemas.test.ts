@@ -80,6 +80,30 @@ describe("the start body", () => {
     ).toBe(false);
   });
 
+  it("takes the generic pause without a reason: the build and the queue decide, which a schema cannot see", () => {
+    // Owner, 09/11/2026: the reason is the start use case's rule
+    // (enforcesPauseNote). Here it would refuse every older build, and the
+    // queue's resends of the same body forever.
+    for (const note of [undefined, null, "", "ab"]) {
+      expect(
+        startPauseBody.safeParse({
+          kind: "OTHER",
+          start_submission_id: KEY,
+          note,
+        }).success,
+        String(note),
+      ).toBe(true);
+    }
+
+    expect(
+      endPauseBody.safeParse({
+        start_submission_id: KEY,
+        end_submission_id: "018f2000-0000-7000-8000-000000000002",
+        start: { kind: "OTHER" },
+      }).success,
+    ).toBe(true);
+  });
+
   it("names the pause kinds it knows and requires a real key", () => {
     const wrongKind = startPauseBody.safeParse({
       kind: "LUNCH",
