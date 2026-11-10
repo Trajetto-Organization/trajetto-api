@@ -2402,6 +2402,54 @@ anterior não lê. Sem variável nova.
   `CREATE INDEX CONCURRENTLY IF NOT EXISTS "route_businessId_scheduled_date_idx" ON "route"("businessId", "scheduled_date");`.
   A migration então não faz nada. Com o volume atual não é preciso.
 
+**CPF conferido no cadastro do motorista (10/11/2026).** Sem migration, sem
+variável nova e sem rota nova. `POST /driver/create-driver` e
+`PATCH /driver/update-driver` passam a recusar, com `400 VALIDATION_ERROR` e
+"O CPF informado não é válido.", o CPF cujos dígitos verificadores não
+conferem ou que repete um dígito só, a regra que o login já usava. Antes só o
+tamanho era conferido. O detalhe está em
+[arquitetura.md (Acesso do motorista)](./arquitetura.md#acesso-do-motorista).
+
+- **A ordem não importa.** A web anterior que mandar um CPF inválido recebe o
+  400 e mostra a mensagem num toast. A web nova recusa no próprio campo,
+  antes de enviar, e contra a API anterior manda os mesmos 11 dígitos de
+  sempre. O app não cria nem edita motorista.
+- **A edição confere o CPF sempre que ele vem**, e a web manda o formulário
+  inteiro. Um motorista gravado com CPF inválido só salva depois de corrigir
+  o CPF (decisão do dono), **e isso vale também para inativar**: a
+  inativação é essa mesma rota, e o Status fica no mesmo diálogo da web.
+  Esse motorista já não conseguia entrar no app pelo CPF, mas ainda entra
+  pelo QR Code e pelo e-mail. Para cortar o acesso dele sem mexer no
+  cadastro, um administrador usa **Revogar Acesso** na tela Cadastro de
+  usuário (`PATCH /user/revoke-access/:userId`): a próxima requisição do app
+  recebe `403 AUTH_ACCESS_REVOKED`, e o QR Code ainda não usado e os aparelhos
+  confiáveis caem junto (com rota aberta, a recusa é o mesmo
+  `409 DRIVER_HAS_OPEN_ROUTES` da inativação). Não invente um CPF só para
+  salvar: ele fica gravado como se fosse o da pessoa e pode ser o de outra.
+- **Antes de subir**, conte em staging e em produção os motoristas gravados
+  com CPF inválido, no psql do Database PostgreSQL do Dokploy (só leitura):
+  ```sql
+  SELECT "businessId", count(*) AS cpfs_invalidos
+  FROM (
+    SELECT "businessId",
+      CASE
+        WHEN cpf !~ '^[0-9]{11}$' THEN false
+        WHEN cpf = repeat(left(cpf, 1), 11) THEN false
+        ELSE (SELECT (sum(substr(cpf, i, 1)::int * (11 - i)) * 10 % 11) % 10
+                FROM generate_series(1, 9) AS i) = substr(cpf, 10, 1)::int
+         AND (SELECT (sum(substr(cpf, i, 1)::int * (12 - i)) * 10 % 11) % 10
+                FROM generate_series(1, 10) AS i) = substr(cpf, 11, 1)::int
+      END AS valido
+    FROM driver
+  ) d
+  WHERE NOT valido
+  GROUP BY "businessId"
+  ORDER BY cpfs_invalidos DESC;
+  ```
+  Se aparecer algum em produção, combine a correção com as empresas antes de
+  subir: esses motoristas já não entram no app pelo CPF e, depois da subida,
+  editar ou inativar o cadastro deles pede o CPF certo.
+
 **Contract pendente (release seguinte): o 2FA sem corpo.** `PATCH
 /user/twofactor` sem corpo ainda inverte o estado, sem senha, só para a web
 da release anterior que roda durante o rollout. Cada uso deixa a linha `warn`

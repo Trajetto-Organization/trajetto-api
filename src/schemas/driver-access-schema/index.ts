@@ -3,6 +3,7 @@ import { z } from "zod";
 import { normalizeCpf } from "@/modules/user/services/driver-cpf";
 import { hashDeviceId } from "@/modules/user/services/session-service";
 import { normalizeDeviceId } from "@/shared/delivery/proof-capture";
+import { CPF_MESSAGES } from "@/schemas/driver-cpf-field";
 
 /**
  * The fields of the driver's own ways in (plan of 02/11/2026, D3/D4/D8): the
@@ -39,17 +40,20 @@ const sessionDeviceIdField = z
     "O identificador do aparelho: Android ID (16 dígitos hexadecimais) ou o UUID da instalação. A sessão fica presa a ele.",
   );
 
-/** The CPF, masked or not; the 11 digits when its check digits match. */
+/**
+ * The CPF, masked or not; the 11 digits when its check digits match. The
+ * words are the driver record's (src/schemas/driver-cpf-field), one constant.
+ */
 const driverCpfField = z
-  .string({ required_error: "O CPF é obrigatório." })
-  .max(20, "O CPF informado não é válido.")
+  .string({ required_error: CPF_MESSAGES.required })
+  .max(20, CPF_MESSAGES.invalid)
   .transform((value, ctx) => {
     const normalized = normalizeCpf(value);
 
     if (!normalized) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
-        message: "O CPF informado não é válido.",
+        message: CPF_MESSAGES.invalid,
       });
 
       return z.NEVER;

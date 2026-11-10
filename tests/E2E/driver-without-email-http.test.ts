@@ -12,6 +12,8 @@ import {
   type SeededSession,
 } from "./support/driver-access-seed";
 
+import { validCpf } from "../support/valid-cpf";
+
 /**
  * A driver's login without an e-mail (plan of 02/11/2026, D2 second release;
  * decision D02), through the whole stack.
@@ -33,18 +35,7 @@ const address = () => freshAddress("10.88");
 let cpfSeed = 400_000_000;
 
 function nextCpf(): string {
-  const base = String((cpfSeed += 17)).padStart(9, "0");
-  const digit = (digits: string, length: number) => {
-    let sum = 0;
-    for (let index = 0; index < length; index += 1) {
-      sum += Number(digits[index]) * (length + 1 - index);
-    }
-    const rest = (sum * 10) % 11;
-    return rest === 10 ? 0 : rest;
-  };
-  const first = digit(base, 9);
-
-  return `${base}${first}${digit(`${base}${first}`, 10)}`;
+  return validCpf(String((cpfSeed += 17)).padStart(9, "0"));
 }
 
 const createUser = (payload: Record<string, unknown>) =>

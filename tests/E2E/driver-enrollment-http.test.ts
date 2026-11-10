@@ -17,6 +17,8 @@ import {
   type SeededSession,
 } from "./support/driver-access-seed";
 
+import { validCpf } from "../support/valid-cpf";
+
 /**
  * The driver's access QR code (plan of 02/11/2026, D3), the phone-bound
  * session it opens (D4) and the manager's list of phones (D7), through the
@@ -51,18 +53,7 @@ let cpfSeed = 100_000_000;
 
 /** A CPF with valid check digits, never anybody's: 9 digits from a counter. */
 function nextCpf(): string {
-  const base = String((cpfSeed += 7)).padStart(9, "0");
-  const digit = (digits: string, length: number) => {
-    let sum = 0;
-    for (let index = 0; index < length; index += 1) {
-      sum += Number(digits[index]) * (length + 1 - index);
-    }
-    const rest = (sum * 10) % 11;
-    return rest === 10 ? 0 : rest;
-  };
-  const first = digit(base, 9);
-
-  return `${base}${first}${digit(`${base}${first}`, 10)}`;
+  return validCpf(String((cpfSeed += 7)).padStart(9, "0"));
 }
 
 async function driverLogin(

@@ -13,6 +13,7 @@ import {
   cnhExpiresAtField,
   cnhNumberField,
 } from "@/schemas/driver-cnh-fields";
+import { driverRecordCpfField } from "@/schemas/driver-cpf-field";
 
 const updateDriverSchema = z.object({
   ...tenantLockedShape,
@@ -70,20 +71,9 @@ const updateDriverSchema = z.object({
   cnh: cnhNumberField.optional(),
   cnh_category: cnhCategoryField,
   cnh_expires_at: cnhExpiresAtField,
-  cpf: z.preprocess(
-    (val) => {
-      if (typeof val === "string") {
-        return val.replace(/\D/g, "");
-      }
-
-      return val;
-    },
-    z
-      .string()
-      .length(11, "O CPF deve ter exatamente 11 dígitos.")
-      .regex(/^\d{11}$/, "O CPF deve conter apenas números.")
-      .optional(),
-  ),
+  // Checked whenever it is sent, the stored one included (the web's edit
+  // sends the whole form): a record with a wrong CPF asks for it to be fixed.
+  cpf: driverRecordCpfField.optional(),
   rg: z
     .string()
     .min(1, "O número do RG é obrigatório.")

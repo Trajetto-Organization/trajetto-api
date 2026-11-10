@@ -16,6 +16,8 @@ import {
   type SeededSession,
 } from "./support/driver-access-seed";
 
+import { validCpf } from "../support/valid-cpf";
+
 /**
  * Inactivating a driver (plan of 02/11/2026, D5) and what the app sees on
  * its next launch (D6), through the whole stack.
@@ -41,18 +43,7 @@ const address = () => freshAddress("10.87");
 let cpfSeed = 300_000_000;
 
 function nextCpf(): string {
-  const base = String((cpfSeed += 13)).padStart(9, "0");
-  const digit = (digits: string, length: number) => {
-    let sum = 0;
-    for (let index = 0; index < length; index += 1) {
-      sum += Number(digits[index]) * (length + 1 - index);
-    }
-    const rest = (sum * 10) % 11;
-    return rest === 10 ? 0 : rest;
-  };
-  const first = digit(base, 9);
-
-  return `${base}${first}${digit(`${base}${first}`, 10)}`;
+  return validCpf(String((cpfSeed += 13)).padStart(9, "0"));
 }
 
 const inactivate = (driverId: string) =>

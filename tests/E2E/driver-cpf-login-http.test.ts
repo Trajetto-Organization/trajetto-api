@@ -18,6 +18,8 @@ import {
   type SeededSession,
 } from "./support/driver-access-seed";
 
+import { validCpf } from "../support/valid-cpf";
+
 /**
  * The driver's login by CPF and password (plan of 02/11/2026, D8), and the
  * initial password the manager sets for it (D2), through the whole stack.
@@ -54,18 +56,7 @@ let cpfSeed = 200_000_000;
 
 /** A CPF with valid check digits, never anybody's. */
 function nextCpf(): string {
-  const base = String((cpfSeed += 11)).padStart(9, "0");
-  const digit = (digits: string, length: number) => {
-    let sum = 0;
-    for (let index = 0; index < length; index += 1) {
-      sum += Number(digits[index]) * (length + 1 - index);
-    }
-    const rest = (sum * 10) % 11;
-    return rest === 10 ? 0 : rest;
-  };
-  const first = digit(base, 9);
-
-  return `${base}${first}${digit(`${base}${first}`, 10)}`;
+  return validCpf(String((cpfSeed += 11)).padStart(9, "0"));
 }
 
 const masked = (cpf: string) =>

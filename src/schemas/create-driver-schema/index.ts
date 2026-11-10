@@ -12,6 +12,7 @@ import {
   cnhExpiresAtField,
   cnhNumberField,
 } from "@/schemas/driver-cnh-fields";
+import { driverRecordCpfField } from "@/schemas/driver-cpf-field";
 
 const createDriverSchema = z.object({
   name: z
@@ -68,19 +69,8 @@ const createDriverSchema = z.object({
   cnh: cnhNumberField,
   cnh_category: cnhCategoryField,
   cnh_expires_at: cnhExpiresAtField,
-  cpf: z.preprocess(
-    (val) => {
-      if (typeof val === "string") {
-        return val.replace(/\D/g, "");
-      }
-
-      return val;
-    },
-    z
-      .string()
-      .length(11, "O CPF deve ter exatamente 11 dígitos.")
-      .regex(/^\d{11}$/, "O CPF deve conter apenas números."),
-  ),
+  // The login's rule, check digits included (src/schemas/driver-cpf-field).
+  cpf: driverRecordCpfField,
   rg: z
     .string()
     .min(1, "O número do RG é obrigatório.")

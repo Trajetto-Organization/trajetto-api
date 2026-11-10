@@ -700,6 +700,31 @@ senha, sessões e segundo fator (detalhes depois da tabela).
   segundo fator ligado (conta com e-mail), o desafio leva o hash do
   aparelho: a verificação só vale com o mesmo `deviceId` e abre a sessão
   presa a ele.
+- **O cadastro confere o CPF pela regra do login (10/11/2026):**
+  `create-driver` e `update-driver` passam o CPF pelo `driverRecordCpfField`
+  (`src/schemas/driver-cpf-field`), que usa o mesmo `normalizeCpf`
+  (`modules/user/services/driver-cpf.ts`): com ou sem máscara, 11 dígitos,
+  sem um dígito só repetido e com os dois dígitos verificadores; grava só os
+  dígitos. Antes só o tamanho era conferido, e um CPF digitado errado era
+  salvo sem aviso. Esse motorista nunca entrava pelo CPF, porque o login
+  recusa o CPF antes de procurar o cadastro. Na edição, o CPF é conferido
+  sempre que vem no corpo, o já gravado inclusive (a web manda o formulário
+  inteiro): um cadastro antigo com CPF inválido só salva depois de corrigido
+  (decisão do dono), e inativar também, porque a inativação é esta mesma
+  rota. O corte de acesso que não passa pelo cadastro é o
+  `PATCH /user/revoke-access/:userId` (Revogar Acesso), que derruba as
+  sessões na próxima requisição e anula o QR Code pendente e os aparelhos
+  confiáveis. As mensagens ("O CPF é obrigatório.", "O CPF deve ter
+  exatamente 11 dígitos.", "O CPF informado não é válido.") são as da web,
+  que confere a mesma regra antes de enviar; o
+  `cpf-field-api-parity.test.ts` da web roda estes dois schemas contra o
+  campo dela. O campo do login (`driverCpfField`, em
+  `src/schemas/driver-access-schema`) diz "obrigatório" e "não é válido"
+  com as mesmas constantes (`CPF_MESSAGES`). Os E2E que geram CPF em série
+  usam o gerador único `tests/support/valid-cpf.ts`: o `driver-write-http`
+  manda o CPF à rota, e os de login, QR Code, conta, inativação e motorista
+  sem e-mail gravam no banco o motorista que entra por CPF. As varreduras e
+  os outros E2E que mandam um só CPF à rota usam um CPF válido fixo.
 - **Inativar o motorista (D5):** apaga os refresh tokens e os aparelhos de
   push do login (`revokeAllUserRefreshTokens`), o QR Code ainda não usado e os
   aparelhos confiáveis (onda 2), sem

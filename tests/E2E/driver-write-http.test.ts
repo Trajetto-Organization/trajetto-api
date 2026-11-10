@@ -8,12 +8,15 @@ import auth from "@/config/auth";
 import { pauseTypeId } from "./support/pause-type-seed";
 import { createPrismaClient } from "@/shared/database/database-client";
 
+import { validCpf } from "../support/valid-cpf";
+
 /**
  * Registering, editing and deleting drivers over real HTTP and Postgres:
- * the licence fields (decision 8.5), CPF and CNH unique per company with a
- * 409 that speaks of nobody else (decision 8.1), deactivation refused while
- * routes still need the driver (decision 8.3), and a delete that no longer
- * ends in a 500 on the pause table's RESTRICT key.
+ * the licence fields (decision 8.5), the CPF's check digits, CPF and CNH
+ * unique per company with a 409 that speaks of nobody else (decision 8.1),
+ * deactivation refused while routes still need the driver (decision 8.3),
+ * and a delete that no longer ends in a 500 on the pause table's RESTRICT
+ * key.
  */
 const prisma = createPrismaClient();
 
@@ -104,7 +107,8 @@ function body(overrides: Record<string, unknown> = {}) {
     name: "Joana Motorista",
     birth_date: "1990-05-10T03:00:00.000Z",
     cnh: `7${String(docSeq).padStart(10, "0")}`,
-    cpf: `8${String(docSeq).padStart(10, "0")}`,
+    // The schema checks the check digits: the counter is only the base.
+    cpf: validCpf(`8${String(docSeq).padStart(8, "0")}`),
     rg: "123456789",
     cep: "01001-000",
     city: "São Paulo",
@@ -333,6 +337,57 @@ describe("the birth date, a civil day (decision 1.3)", () => {
     expect(tooYoung.body).toContain("pelo menos 18 anos");
     expect(garbage.statusCode).toBe(400);
     expect(garbage.body).toContain("Data de nascimento inválida");
+  });
+});
+
+describe("the CPF's check digits", () => {
+  // Only the length was checked: a mistyped CPF was stored without a word,
+  // and that driver could never sign in by CPF (the login refuses it).
+  const INVALID = "O CPF informado não é válido.";
+
+  it("refuses a wrong check digit and a repeated digit on create, storing nothing", async () => {
+    for (const cpf of ["529.982.247-24", "111.111.111-11", "00000000000"]) {
+      const response = await create(CARRIER, body({ cpf }));
+
+      expect(response.statusCode, cpf).toBe(400);
+      expect(response.json()).toMatchObject({
+        code: "VALIDATION_ERROR",
+        message: INVALID,
+      });
+      expect(
+        await prisma.driver.count({
+          where: { businessId: CARRIER, cpf: cpf.replace(/\D/g, "") },
+        }),
+      ).toBe(0);
+    }
+  });
+
+  it("stores a valid masked CPF as its 11 digits", async () => {
+    const payload = body({ cpf: "390.533.447-05" });
+
+    expect((await create(CARRIER, payload)).statusCode).toBe(201);
+    expect(
+      await prisma.driver.count({
+        where: { businessId: CARRIER, cpf: "39053344705" },
+      }),
+    ).toBe(1);
+  });
+
+  it("refuses an invalid CPF on edit, the stored one untouched", async () => {
+    const payload = body();
+    await create(CARRIER, payload);
+    const id = await createdId(CARRIER, payload);
+
+    const response = await update(id, CARRIER, {
+      birth_date: payload.birth_date,
+      cpf: "529.982.247-24",
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json().message).toBe(INVALID);
+    expect((await prisma.driver.findUniqueOrThrow({ where: { id } })).cpf).toBe(
+      payload.cpf,
+    );
   });
 });
 

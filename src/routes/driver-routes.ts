@@ -48,7 +48,7 @@ async function driverRoutes(app: FastifyInstance) {
         tags: ["driver"],
         summary: "Cadastra um motorista",
         description:
-          "Cadastra um motorista na empresa do caminho: dados pessoais, endereço, CNH (número, categoria e validade — as duas últimas opcionais, a validade como data civil AAAA-MM-DD) e, opcionalmente, a filial. CPF e CNH são únicos POR EMPRESA (decisão 8.1): o mesmo motorista autônomo pode trabalhar para duas transportadoras, e o 409 nunca revela cadastro de outra. Avisa as telas abertas da empresa (`catalogChanged`, entidade `driver`).",
+          'Cadastra um motorista na empresa do caminho: dados pessoais, endereço, CNH (número, categoria e validade — as duas últimas opcionais, a validade como data civil AAAA-MM-DD) e, opcionalmente, a filial. O CPF, com ou sem máscara, tem os dígitos verificadores conferidos pela regra do login: errado ou com um dígito só repetido, 400 VALIDATION_ERROR com "O CPF informado não é válido.". CPF e CNH são únicos POR EMPRESA (decisão 8.1): o mesmo motorista autônomo pode trabalhar para duas transportadoras, e o 409 nunca revela cadastro de outra. Avisa as telas abertas da empresa (`catalogChanged`, entidade `driver`).',
         params: driverSchemas.businessIdParam,
         body: driverSchemas.createDriver,
         response: {
@@ -155,7 +155,7 @@ async function driverRoutes(app: FastifyInstance) {
         tags: ["driver"],
         summary: "Edita um motorista",
         description:
-          "Edita os dados do motorista da empresa do caminho. Inativar um motorista com rota planejada, liberada ou em andamento é recusado com 409 DRIVER_HAS_OPEN_ROUTES e a contagem (decisão 8.3): a rota em andamento precisa terminar ou ser cancelada, e as outras, ir para outro motorista ou ser canceladas. Inativar encerra todas as sessões do login do motorista (e apaga os aparelhos de push delas) e anula o QR Code de acesso ainda não usado; a próxima requisição do app recebe 403 AUTH_DRIVER_INACTIVE. Motorista de outra empresa responde 404, como um inexistente. Avisa as telas abertas da empresa (`catalogChanged`, entidade `driver`).",
+          "Edita os dados do motorista da empresa do caminho. O CPF enviado passa pela mesma regra do cadastro, mesmo igual ao gravado: um cadastro antigo com CPF inválido só salva com o CPF corrigido, inativar inclusive, quando o CPF vai no corpo (para cortar o acesso sem o cadastro: PATCH /user/revoke-access/:userId). Inativar um motorista com rota planejada, liberada ou em andamento é recusado com 409 DRIVER_HAS_OPEN_ROUTES e a contagem (decisão 8.3): a rota em andamento precisa terminar ou ser cancelada, e as outras, ir para outro motorista ou ser canceladas. Inativar encerra todas as sessões do login do motorista (e apaga os aparelhos de push delas) e anula o QR Code de acesso ainda não usado; a próxima requisição do app recebe 403 AUTH_DRIVER_INACTIVE. Motorista de outra empresa responde 404, como um inexistente. Avisa as telas abertas da empresa (`catalogChanged`, entidade `driver`).",
         params: driverSchemas.driverBusinessParams,
         body: driverSchemas.updateDriver,
         response: {

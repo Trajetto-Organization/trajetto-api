@@ -5,8 +5,11 @@
  * numeric keyboard and a copy from a document give it, and refuses anything
  * whose check digits do not match before a single row is read: a typo is the
  * driver's mistake to fix on the screen, not a guess to count against the
- * account. Drivers are stored with the 11 digits only (create-driver-schema),
- * so the normalized value is what the lookup compares.
+ * account. Drivers are stored with the 11 digits only, under this same rule
+ * (src/schemas/driver-cpf-field, on create and update), so the normalized
+ * value is what the lookup compares. The web's src/lib/cpf.ts and the app's
+ * features/auth/cpf-rules.ts mirror it; their tests import this file, so a
+ * move here is a move there.
  */
 
 const CPF_LENGTH = 11;

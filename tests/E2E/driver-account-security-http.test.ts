@@ -25,6 +25,8 @@ import {
   type SeededSession,
 } from "./support/driver-access-seed";
 
+import { validCpf } from "../support/valid-cpf";
+
 /**
  * Wave 2 (06/11/2026), the driver's account and access, through the whole
  * stack against Postgres: the phones a QR code trusts for CPF and password,
@@ -59,18 +61,7 @@ let cpfSeed = 500_000_000;
 
 /** A CPF with valid check digits, never anybody's. */
 function nextCpf(): string {
-  const base = String((cpfSeed += 19)).padStart(9, "0");
-  const digit = (digits: string, length: number) => {
-    let sum = 0;
-    for (let index = 0; index < length; index += 1) {
-      sum += Number(digits[index]) * (length + 1 - index);
-    }
-    const rest = (sum * 10) % 11;
-    return rest === 10 ? 0 : rest;
-  };
-  const first = digit(base, 9);
-
-  return `${base}${first}${digit(`${base}${first}`, 10)}`;
+  return validCpf(String((cpfSeed += 19)).padStart(9, "0"));
 }
 
 async function driverLogin(
