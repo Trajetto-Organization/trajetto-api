@@ -21,8 +21,10 @@ import { createPrismaClient } from "@/shared/database/database-client";
  * every edit the API publishes instead of the ones somebody remembered.
  *
  * "Edit" is every authenticated PUT, PATCH and POST of the OpenAPI document
- * except the POSTs listed as creates (NOT_AN_EDIT_POSTS): a new POST is an
- * edit until somebody classifies it. For each edit, against Postgres:
+ * except the POSTs listed as creates (NOT_AN_EDIT_POSTS) and the public
+ * API's writes (KEYED_WRITES, sent with an API key instead, below): a new
+ * POST is an edit until somebody classifies it. For each edit, against
+ * Postgres:
  *
  *   1. a `businessId` in the body is refused with 400 VALIDATION_ERROR and
  *      the tenant-move sentence, for the company administrator and for the
@@ -37,7 +39,8 @@ import { createPrismaClient } from "@/shared/database/database-client";
  *      company's branch") left no trace.
  *
  * A new PUT, PATCH or POST is swept with no change here (a create fails the
- * businessId check until it is listed); a reference field whose name this
+ * businessId check until it is listed, and a keyed write fails the walk's
+ * own test until it is in KEYED_WRITES); a reference field whose name this
  * file does not know fails the coverage test, naming it.
  */
 const prisma = createPrismaClient();
@@ -99,7 +102,6 @@ const NOT_AN_EDIT_POSTS = new Set([
   "POST /fuel-type/create-fuel-type/{businessId}",
   "POST /fuel/create-fuel/{businessId}",
   "POST /import/import-spreadsheet/{businessId}",
-  "POST /integration/v1/deliveries",
   "POST /integrations/api-key/{businessId}",
   "POST /integrations/webhook-endpoint/{businessId}",
   "POST /kanban/card/create",
@@ -171,6 +173,35 @@ const PLATFORM_EDITS = new Set([
   "POST /health/dead-letter/replay",
   "POST /health/dead-letter/events/replay",
 ]);
+
+/**
+ * The public API's writes, reached with an API key and never with a
+ * session: the session tokens of the walk below would only meet 401 there.
+ * Listed by hand, like the creates, so the sweep stays closed: a keyed write
+ * that is not here fails "the edits the sweep walks". Each one is sent with
+ * the seed's own key and a body naming another company, which its closed
+ * body must refuse (the company is the key's); its own suite proves the rest
+ * of its boundary, and the IDOR sweep probes its ids with the key.
+ *
+ *   POST /integration/v1/deliveries              integration-create-delivery
+ *   POST /integration/v1/deliveries/{id}/cancel  integration-cancel-delivery
+ */
+const KEYED_WRITES = new Set([
+  "POST /integration/v1/deliveries",
+  "POST /integration/v1/deliveries/{id}/cancel",
+]);
+
+/** The public API's refusal of a field its closed body does not have. */
+const UNKNOWN_BUSINESS_ID = "campo não reconhecido: businessId";
+
+function isKeyed(op: Operation): boolean {
+  return (op.security ?? []).some(
+    (requirement) =>
+      typeof requirement === "object" &&
+      requirement !== null &&
+      "apiKey" in requirement,
+  );
+}
 
 /** Edits with no body at all: nothing in them can name a company. */
 const NO_BODY = [
@@ -732,7 +763,9 @@ beforeAll(async () => {
 
   edits = operations.filter(
     (op) =>
-      op.security?.length && !NOT_AN_EDIT_POSTS.has(`${op.method} ${op.path}`),
+      op.security?.length &&
+      !KEYED_WRITES.has(`${op.method} ${op.path}`) &&
+      !NOT_AN_EDIT_POSTS.has(`${op.method} ${op.path}`),
   );
 }, APP_BOOT_TIMEOUT_MS);
 
@@ -754,9 +787,15 @@ describe("the edits the sweep walks", () => {
       ...BODY_SCOPE,
       ...DRIVER_EDITS,
       ...PLATFORM_EDITS,
+      ...KEYED_WRITES,
     ];
     for (const post of listed)
       expect(published.has(post), `${post} sumiu do documento`).toBe(true);
+
+    // Every keyed write is listed, so none leaves the sweep in silence.
+    expect(operations.filter(isKeyed).map(id).sort()).toEqual(
+      [...KEYED_WRITES].sort(),
+    );
 
     // A POST that names an existing record in its path changes that record:
     // only a create under a parent (a part of an order, a message of a
@@ -893,6 +932,50 @@ describe("a businessId in an edit body", () => {
       orderBy: { id: "asc" },
     });
     expect(after).toEqual(before);
+  });
+});
+
+describe("a businessId in the body of a public API write", () => {
+  it("is refused as a field the body does not have, with the company's own key", async () => {
+    const findings: string[] = [];
+    const before = await prisma.delivery.findUniqueOrThrow({
+      where: { id: A.deliveryId },
+      select: { status: true, businessId: true, updated_at: true },
+    });
+
+    for (const op of operations.filter((op) => KEYED_WRITES.has(id(op)))) {
+      // The one path parameter of a keyed write is a delivery's id.
+      const url = op.path.replace("{id}", A.deliveryId);
+      const answer = await send(
+        op,
+        url,
+        { businessId: B.businessId },
+        A.apiKeyToken,
+      );
+
+      const refused =
+        answer.status === 400 &&
+        answer.code === "VALIDATION_ERROR" &&
+        [answer.message, ...answer.issues]
+          .join(" ")
+          .includes(UNKNOWN_BUSINESS_ID);
+
+      if (!refused) {
+        findings.push(
+          `${id(op)}: ${answer.status} ${answer.code} ${answer.message}`,
+        );
+      }
+    }
+
+    expect(findings).toEqual([]);
+
+    // Refused whole: the delivery in the path did not move, nor change.
+    expect(
+      await prisma.delivery.findUniqueOrThrow({
+        where: { id: A.deliveryId },
+        select: { status: true, businessId: true, updated_at: true },
+      }),
+    ).toEqual(before);
   });
 });
 

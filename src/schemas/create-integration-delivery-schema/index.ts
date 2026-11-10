@@ -144,6 +144,11 @@ const TYPE_NAMES: Record<string, string> = {
   date: "data",
 };
 
+/** "campo não reconhecido: x." — shared with the public cancel's body. */
+function unrecognizedFieldsMessage(keys: string[]): string {
+  return `${keys.length === 1 ? "campo não reconhecido" : "campos não reconhecidos"}: ${keys.join(", ")}. Confira os nomes na documentação.`;
+}
+
 /**
  * Portuguese for the sentences zod would otherwise write in English.
  *
@@ -168,9 +173,7 @@ const integrationErrorMap: z.ZodErrorMap = (issue, ctx) => {
   }
 
   if (issue.code === z.ZodIssueCode.unrecognized_keys) {
-    return {
-      message: `${issue.keys.length === 1 ? "campo não reconhecido" : "campos não reconhecidos"}: ${issue.keys.join(", ")}. Confira os nomes na documentação.`,
-    };
+    return { message: unrecognizedFieldsMessage(issue.keys) };
   }
 
   return { message: ctx.defaultError };
@@ -208,6 +211,8 @@ function parseIntegrationDeliveryBody(
 export {
   createIntegrationDeliverySchema,
   integrationErrorMap,
+  issuePath,
   parseIntegrationDeliveryBody,
+  unrecognizedFieldsMessage,
 };
 export type { CreateIntegrationDeliveryBody };

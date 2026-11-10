@@ -30,8 +30,18 @@ const CREATE_DELIVERY_REQUEST_BODY = {
   items: [{ description: "Caixa de óleo 900 ml", quantity: 12, unit: "CX" }],
 };
 
-const PUBLIC_REQUEST_EXAMPLES: Readonly<Record<string, unknown>> = {
-  createDelivery: CREATE_DELIVERY_REQUEST_BODY,
+/** The cancel's reason (L9): what an ERP whose order was called off says. */
+const CANCEL_DELIVERY_REQUEST_BODY = {
+  reason: "Pedido cancelado pelo cliente no ERP.",
 };
 
-export { CREATE_DELIVERY_REQUEST_BODY, PUBLIC_REQUEST_EXAMPLES };
+const PUBLIC_REQUEST_EXAMPLES: Readonly<Record<string, unknown>> = {
+  createDelivery: CREATE_DELIVERY_REQUEST_BODY,
+  cancelDelivery: CANCEL_DELIVERY_REQUEST_BODY,
+};
+
+export {
+  CANCEL_DELIVERY_REQUEST_BODY,
+  CREATE_DELIVERY_REQUEST_BODY,
+  PUBLIC_REQUEST_EXAMPLES,
+};

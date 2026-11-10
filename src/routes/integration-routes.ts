@@ -2,6 +2,7 @@ import { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 
 import { IntegrationReadController } from "@/modules/integration/usecases/integration-read/integration-read-controller";
 import { CreateIntegrationDeliveryController } from "@/modules/integration/usecases/create-delivery/create-integration-delivery-controller";
+import { CancelIntegrationDeliveryController } from "@/modules/integration/usecases/cancel-delivery/cancel-integration-delivery-controller";
 
 import {
   ensureApiKey,
@@ -22,7 +23,9 @@ import {
 } from "./documentation/integration-documentation";
 
 import {
+  CANCEL_DELIVERY_REQUEST_EXAMPLE,
   CREATE_DELIVERY_REQUEST_EXAMPLE,
+  integrationCancelResponses,
   integrationWriteResponses,
   integrationWriteSchemas,
 } from "./documentation/integration-write-documentation";
@@ -43,6 +46,7 @@ import { apiUsageRecorder } from "@/shared/integration/api-usage-recorder";
 
 const readController = new IntegrationReadController();
 const createDeliveryController = new CreateIntegrationDeliveryController();
+const cancelDeliveryController = new CancelIntegrationDeliveryController();
 
 const COMPANY_REFUSAL_HIDDEN_HEADERS = [
   "x-ratelimit-limit",
@@ -383,6 +387,60 @@ async function integrationRoutes(app: FastifyInstance) {
       },
     },
     createDeliveryController.handle,
+  );
+
+  /**
+   * The cancel (L9, D49): an ERP whose order was called off stops the
+   * delivery itself.
+   *
+   * Its own scope, not `deliveries:write`: every write key issued before it
+   * was granted to create documents, and none of them gains the power to
+   * call deliveries off unless somebody issues a key with it. The same gates
+   * as the create, the scope checked before the body is read, and the body
+   * parsed in the controller so every refusal names its field. No
+   * Idempotency-Key: a delivery already cancelled is the replay.
+   */
+  app.post(
+    "/deliveries/:id/cancel",
+    {
+      onRequest: [ensureApiKey, perKeyCeiling, limitBusinessApiRate],
+      preHandler: [verifyApiScope("deliveries:cancel")],
+      config: {
+        rateLimit: false,
+        // Documentation only; see integration-write-documentation.
+        openapi: { body: integrationWriteSchemas.cancelDelivery },
+      },
+      schema: {
+        security: [{ apiKey: [] }],
+        tags: ["integration"],
+        operationId: "cancelDelivery",
+        // The hook above enforces it; this only publishes it.
+        "x-scopes": ["deliveries:cancel"],
+        summary: "Cancelar uma entrega",
+        description: [
+          "Escopo exigido: `deliveries:cancel` (que não dá criação nem leitura; `deliveries:write` não basta). Qualquer entrega da sua empresa, criada pela API, pelo painel, por XML ou por planilha; uma de outra empresa responde o mesmo 404 de uma que não existe.",
+          "",
+          "Cancela entregas **Pendentes** (sem rota, ou numa rota que ainda não saiu) e com **Insucesso**. Entregue e Em rota respondem 409 DELIVERY_NOT_CANCELLABLE com o `delivery_status`: uma carga que já saiu com o motorista é cancelada pela transportadora, no painel.",
+          "",
+          "`reason` é obrigatório: é o motivo que fica no histórico da entrega, com a sua chave como autora, e o que o motorista lê no aviso. O cancelamento é o mesmo do painel: a parada sai da rota que ainda não saiu (o motorista de uma rota liberada é avisado), a mudança entra em `/integration/v1/events` como `delivery.cancelled` (com o motivo em `data.note`) e os assinantes de `delivery.cancelled` recebem o webhook — inclusive o seu próprio sistema, se assinar.",
+          "",
+          "Sem `Idempotency-Key`: repetir é seguro. Uma entrega já cancelada (por esta chamada, por outra chave ou pelo painel) responde 200 com o cabeçalho `idempotent-replayed: true`, sem gravar nem anunciar de novo; duas chamadas ao mesmo tempo cancelam uma vez só. As chamadas contam no mesmo limite por minuto da chave e da empresa que as demais.",
+          "",
+          CANCEL_DELIVERY_REQUEST_EXAMPLE,
+        ].join("\n"),
+        params: integrationSchemas.idParam,
+        response: {
+          200: integrationCancelResponses.cancelled,
+          400: integrationCancelResponses.badRequest,
+          404: integrationCancelResponses.notFound,
+          409: integrationCancelResponses.conflict,
+          429: integrationCancelResponses.tooManyRequests,
+          500: integrationCancelResponses.internalError,
+          503: integrationCancelResponses.unavailable,
+        },
+      },
+    },
+    cancelDeliveryController.handle,
   );
 }
 

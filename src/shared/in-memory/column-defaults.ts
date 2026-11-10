@@ -68,6 +68,8 @@ const DELIVERY_COLUMN_DEFAULTS = {
 
 const DELIVERY_EVENT_COLUMN_DEFAULTS = {
   occurrenceId: null,
+  // L9: the API key behind an INTEGRATION event.
+  apiKeyId: null,
   // Decision 14.8: the proof document's phone, stamp and address.
   device_id: null,
   photo_taken_at: null,

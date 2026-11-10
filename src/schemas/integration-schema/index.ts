@@ -192,7 +192,7 @@ const createApiKeySchema = z.object({
       },
     )
     .describe(
-      `Leitura e escrita são separadas de propósito: deliveries:write cria entregas e não dá leitura. ${reservedScopesPhrase()} e não ${ONE_RESERVED ? "pode ser emitido" : "podem ser emitidos"} até existir um endpoint que ${ONE_RESERVED ? "o" : "os"} exija.`,
+      `Leitura e escrita são separadas de propósito: deliveries:write cria entregas e não dá leitura, e deliveries:cancel cancela sem criar nem ler. ${reservedScopesPhrase()} e não ${ONE_RESERVED ? "pode ser emitido" : "podem ser emitidos"} até existir um endpoint que ${ONE_RESERVED ? "o" : "os"} exija.`,
     ),
 
   // Messages in Portuguese: a decimal used to come back as zod's English

@@ -636,18 +636,20 @@ describe("the public integration API, as published", () => {
    */
   const integration = () => operationsUnder("/integration/v1/");
 
-  it("publishes the surface a v1 promises: the reads and the one write", () => {
+  it("publishes the surface a v1 promises: the reads and the two writes", () => {
     expect(
       integration().map(([path, method]) => `${method.toUpperCase()} ${path}`),
     ).toEqual([
       "GET /integration/v1/catalogue",
       "GET /integration/v1/deliveries",
-      // Decision 5.10: an ERP pushes documents; nothing else is written.
+      // Decision 5.10: an ERP pushes documents.
       "POST /integration/v1/deliveries",
       "GET /integration/v1/deliveries/{id}",
       "GET /integration/v1/routes",
       "GET /integration/v1/routes/{id}",
       "GET /integration/v1/events",
+      // L9 (D49): the ERP calls off a delivery it pushed, or any other.
+      "POST /integration/v1/deliveries/{id}/cancel",
     ]);
   });
 

@@ -617,10 +617,17 @@ interface DeliveryStatusOverriddenPayload {
   fromLabel: string;
   toLabel: string;
 
-  /** From the company's catalogue — always present on an override. */
+  /**
+   * Always present on an override: the name from the company's catalogue,
+   * or, for a cancel through the public API (L9), the integration's own
+   * words. Same field and shape for both, so an older worker renders either.
+   */
   reason: string;
 
-  /** What the operator typed at the moment of the change, when they typed. */
+  /**
+   * What the operator typed at the moment of the change, when they typed.
+   * Null from the API: its words are already the reason.
+   */
   note: string | null;
 
   /**

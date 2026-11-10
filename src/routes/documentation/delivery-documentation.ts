@@ -494,12 +494,23 @@ const deliveryEventEntity = z.object({
     .nullable()
     .describe("A ocorrência que o evento registra, quando houver."),
   reportedById: z.string().nullable(),
+  apiKeyId: z
+    .string()
+    .nullable()
+    .describe(
+      "A chave de API que agiu, quando o ator é INTEGRATION (cancelamento pela API).",
+    ),
   occurred_at: isoDateTime.nullable(),
   created_at: isoDateTime,
   reportedBy: person.nullable(),
   reason: person
     .nullable()
     .describe("O motivo do catálogo, na mudança manual."),
+  apiKey: person
+    .nullable()
+    .describe(
+      "A chave de API (id e nome) quando o ator é INTEGRATION; nula nos demais.",
+    ),
   ...geofenceRecordShape,
 });
 

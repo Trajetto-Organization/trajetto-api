@@ -88,6 +88,24 @@ interface PublicRoute {
   created_at: string;
 }
 
+/**
+ * What POST /integration/v1/deliveries/:id/cancel answers (L9): the three
+ * identifiers and the new status, and nothing else. A cancel-only key does
+ * not carry `deliveries:read`, and answering with the whole delivery would
+ * hand it the recipient and the address it was never granted (hasScope: no
+ * scope implies another).
+ */
+interface PublicDeliveryCancellation {
+  id: string;
+  code: string | null;
+  invoice_key: string | null;
+
+  status: string;
+  status_label: string;
+
+  updated_at: string;
+}
+
 interface PublicEvent {
   id: string;
   topic: string;
@@ -184,6 +202,26 @@ function toPublicDelivery(delivery: {
   };
 }
 
+/**
+ * The published delivery narrowed to the cancellation's answer: picked field
+ * by field, so a field added to PublicDelivery never reaches a cancel-only
+ * key by itself.
+ */
+function toPublicDeliveryCancellation(
+  delivery: PublicDelivery,
+): PublicDeliveryCancellation {
+  return {
+    id: delivery.id,
+    code: delivery.code,
+    invoice_key: delivery.invoice_key,
+
+    status: delivery.status,
+    status_label: delivery.status_label,
+
+    updated_at: delivery.updated_at,
+  };
+}
+
 function toPublicRoute(route: {
   id: string;
   code: number;
@@ -239,5 +277,10 @@ function toPublicRoute(route: {
   };
 }
 
-export { toIso, toPublicDelivery, toPublicRoute };
-export type { PublicDelivery, PublicEvent, PublicRoute };
+export { toIso, toPublicDelivery, toPublicDeliveryCancellation, toPublicRoute };
+export type {
+  PublicDelivery,
+  PublicDeliveryCancellation,
+  PublicEvent,
+  PublicRoute,
+};

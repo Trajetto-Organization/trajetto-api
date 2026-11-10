@@ -29,9 +29,29 @@ function hasSpaceAtLineEdges(value: string): boolean {
 }
 
 /**
+ * The first multiline rule the value breaks, as the sentence to show: no
+ * blank text at all, the inline rules above, and no whitespace (break
+ * included) at either end of the whole value. Null when it breaks none.
+ */
+function multilineTextIssue(label: string, value: string): string | null {
+  if (value.trim().length === 0) {
+    return `${label} não pode conter apenas espaços.`;
+  }
+
+  if (hasInlineConsecutiveSpaces(value)) {
+    return `${label} não deve conter espaços consecutivos.`;
+  }
+
+  if (value !== value.trim() || hasSpaceAtLineEdges(value)) {
+    return `${label} não pode começar ou terminar com espaço em branco.`;
+  }
+
+  return null;
+}
+
+/**
  * An optional multiline text field: empty reads as absent, and the value is
- * checked with the multiline rules above plus no blank text at all and no
- * whitespace (break included) at either end of the whole value.
+ * checked with the multiline rules above.
  */
 function optionalMultilineText(label: string, max: number) {
   return z.preprocess(
@@ -40,29 +60,10 @@ function optionalMultilineText(label: string, max: number) {
       .string()
       .max(max, `${label} deve ter no máximo ${max} caracteres.`)
       .superRefine((value, ctx) => {
-        if (value.trim().length === 0) {
-          ctx.addIssue({
-            code: z.ZodIssueCode.custom,
-            message: `${label} não pode conter apenas espaços.`,
-          });
+        const issue = multilineTextIssue(label, value);
 
-          return;
-        }
-
-        if (hasInlineConsecutiveSpaces(value)) {
-          ctx.addIssue({
-            code: z.ZodIssueCode.custom,
-            message: `${label} não deve conter espaços consecutivos.`,
-          });
-
-          return;
-        }
-
-        if (value !== value.trim() || hasSpaceAtLineEdges(value)) {
-          ctx.addIssue({
-            code: z.ZodIssueCode.custom,
-            message: `${label} não pode começar ou terminar com espaço em branco.`,
-          });
+        if (issue) {
+          ctx.addIssue({ code: z.ZodIssueCode.custom, message: issue });
         }
       })
       .nullable()
@@ -70,8 +71,34 @@ function optionalMultilineText(label: string, max: number) {
   );
 }
 
+/**
+ * The same rules on a field that must be there (the integration's cancel
+ * reason, L9). `required` is said when it is missing or is not a text; the
+ * bounds are zod checks, so the published JSON Schema carries them.
+ */
+function requiredMultilineText(
+  label: string,
+  bounds: { min: number; max: number; required: string },
+) {
+  return z
+    .string({ message: bounds.required })
+    .min(bounds.min, `${label} deve ter no mínimo ${bounds.min} caracteres.`)
+    .max(bounds.max, `${label} deve ter no máximo ${bounds.max} caracteres.`)
+    .superRefine((value, ctx) => {
+      // Too short already said why; a blank under the minimum is that.
+      if (value.length < bounds.min) return;
+
+      const issue = multilineTextIssue(label, value);
+
+      if (issue) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, message: issue });
+      }
+    });
+}
+
 export {
   hasInlineConsecutiveSpaces,
   hasSpaceAtLineEdges,
   optionalMultilineText,
+  requiredMultilineText,
 };

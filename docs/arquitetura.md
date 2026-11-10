@@ -448,7 +448,12 @@ Passo a passo para uma feature de ponta a ponta:
    de tenant roda em `preHandler` porque só ali o corpo já foi lido. Declare o
    `schema` completo (`tags`, `summary`, `description` em pt-BR, `params`,
    `body`, `response` com 400/401/403/404/409/429 conforme o caso): o OpenAPI é
-   a documentação.
+   a documentação. As recusas dos hooks (sessão, chave, papel, módulo,
+   limitador, banco fora) o `openapi-transform.ts` acrescenta sozinho; num
+   status que a rota também descreve, o texto do hook vem depois do dela,
+   salvo quando ela já explica cada código dele no formato
+   `CÓDIGO: o que significa`. Aí vale só o texto da rota, para o mesmo código
+   não sair explicado duas vezes (`mergeResponse`).
 6. **Registro** do repositório no container (`src/shared/index.ts`) e da rota
    em `src/routes/routes.ts` se for um arquivo novo.
 7. **Tempo real**: depois do commit, emita o evento (ex.
@@ -2686,6 +2691,44 @@ OpenStreetMap são recusados.
   `occurrence_type_businessId_code_key`), sai como `occurrence_code` no
   webhook `occurrence.reported` e no `data` do mesmo evento em
   `/integration/v1/events`.
+- **Cancelamento pela API** (L9, D49): `POST /integration/v1/deliveries/:id/cancel`,
+  com o escopo próprio `deliveries:cancel` (`deliveries:write` não cancela:
+  nenhuma chave já emitida ganha o poder em silêncio, e chave não se edita) e
+  o corpo `{ reason }` obrigatório (3 a 500 caracteres, as regras de texto
+  multilinha da anotação do painel; `.strict()`). Qualquer entrega da
+  empresa da chave, de qualquer origem; outra empresa é o mesmo 404
+  `NOT_FOUND` de um id inexistente. Pendente e Insucesso cancelam; Entregue
+  e Em rota respondem 409 `DELIVERY_NOT_CANCELLABLE` com `delivery_status`
+  (uma carga no caminhão fica com a transportadora, no painel; a regra é a
+  tabela `INTEGRATION_CANCEL_VERDICTS` em
+  `src/shared/integration/cancel-delivery-rules.ts`, de onde sai também o
+  enum publicado de `delivery_status` (`NOT_CANCELLABLE_STATUSES`), e
+  liberar Em rota é passar IN_TRANSIT para CANCEL). Já cancelada (pela mesma chave, por outra
+  ou pelo painel) é 200 com `idempotent-replayed: true`, sem gravar nem
+  anunciar, e por isso não há `Idempotency-Key`: duas chamadas iguais ao
+  mesmo tempo dão uma gravação, porque a perdedora encontra a linha mudada
+  (`DeliveryStatusConflictError`), relê e responde a repetição; se ela foi
+  para outro status cancelável, 409 `DELIVERY_STATUS_CONFLICT`. A resposta é
+  só `{ id, code, invoice_key, status, status_label, updated_at }`: o escopo
+  não dá leitura. O cancelamento em si é o do painel, sem cópia:
+  `applyDeliveryStatusChange`
+  (`src/modules/delivery/usecases/update-delivery-status/apply-delivery-status-change.ts`)
+  é o escritor único da mudança de status à mão, usado pelo
+  `UpdateDeliveryStatusUseCase` (ator USER, motivo do catálogo) e pelo
+  `CancelIntegrationDeliveryUseCase` (ator INTEGRATION, motivo em texto):
+  mesma ordem de locks (rota antes da entrega), a parada sai do plano que
+  não saiu (`plan_version` +1, `route.stops_changed` e o push
+  `route.plan_changed` ao motorista de rota liberada), o aviso
+  `delivery.status_overridden` na outbox e o webhook `delivery.cancelled` no
+  mesmo commit, com o payload de sempre. Uma rota liberada que fica vazia
+  não é cancelada sozinha. No histórico, o evento STATUS_CHANGE tem ator
+  INTEGRATION, `reportedById` e `reasonId` nulos, o texto em `note` (em
+  `/integration/v1/events`, `data.note` do `delivery.cancelled`) e
+  `delivery_event.apiKeyId`, de onde a linha do tempo tira o nome da chave
+  como autor; no aviso ao motorista o texto é o `reason` e a `note` vai
+  nula, para não sair repetido. A atividade diz "... → Cancelada pela
+  integração «nome» | ID: <entrega>", com `performedBy` nulo. Comprovante
+  que chega depois do cancelamento vira evidência, como no painel.
 - **Autenticação da chave** (L5): uma consulta por chamada; a busca da
   credencial traz junto a linha DELIVERIES de `BusinessEntitlement`.
 - **WhatsApp (Meta Cloud API)**: cada mensagem tem o seu modelo de

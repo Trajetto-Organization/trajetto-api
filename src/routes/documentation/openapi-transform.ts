@@ -224,9 +224,25 @@ function mergedCodes(
 }
 
 /**
+ * Whether the route's text already explains each code the hook adds, in the
+ * document's `CODE: what it means` form. The hook's sentence then says the
+ * same thing a second time, in other words: on every keyed route the
+ * database outage read twice, and on the cancel the second version gave the
+ * Idempotency-Key advice of a route that takes none.
+ */
+function explainsEveryCode(own: string, hookCodes: string[] | null): boolean {
+  return (
+    !!hookCodes?.length &&
+    hookCodes.every((code) => new RegExp(`(^|[^A-Z0-9_])${code}:`).test(own))
+  );
+}
+
+/**
  * Adds a response the route does not document, or completes the description
  * of one it does. The route's own schema always wins: it is what the
- * serializer validates.
+ * serializer validates. So does its text, when it explains every code the
+ * hook's would (explainsEveryCode); prose that only mentions a code
+ * ("RATE_LIMITED também quando...") still gets the hook's after it.
  */
 function mergeResponse(
   responses: Record<string, JsonSchema>,
@@ -242,6 +258,9 @@ function mergeResponse(
 
   const own = descriptionOf(existing);
   const extra = descriptionOf(generated);
+  const ownSaysIt =
+    own.includes(extra) ||
+    explainsEveryCode(own, codesOf(codeDescriptionOf(generated) ?? ""));
 
   // The codes the hooks produce join the ones the route lists, so the
   // rebuilt schema (canonicalizeErrorResponses) names both.
@@ -267,7 +286,7 @@ function mergeResponse(
         }
       : {}),
     [RESPONSE_DESCRIPTION]:
-      own && !own.includes(extra) ? `${own} ${extra}` : own || extra,
+      own && !ownSaysIt ? `${own} ${extra}` : own || extra,
     headers: {
       ...(generated.headers as JsonSchema | undefined),
       ...(existing.headers as JsonSchema | undefined),
@@ -956,7 +975,7 @@ function openapiTransform(input: TransformInput): {
       responses,
       "503",
       errorBody(
-        `SERVICE_UNAVAILABLE: o banco de dados está indisponível por instantes. Transitório: espere o \`retry-after\` (${DATABASE_RETRY_AFTER_SECONDS} s) e repita. Numa escrita, repita com o mesmo \`Idempotency-Key\`: um 503 não garante que nada foi gravado. O corpo traz \`requestId\`.`,
+        `SERVICE_UNAVAILABLE: o banco de dados está indisponível por instantes. Transitório: espere o \`retry-after\` (${DATABASE_RETRY_AFTER_SECONDS} s) e repita. Um 503 não garante que nada foi gravado: numa escrita que pede \`Idempotency-Key\`, repita com o mesmo valor. O corpo traz \`requestId\`.`,
         ["SERVICE_UNAVAILABLE"],
         { "retry-after": RETRY_AFTER_HEADER },
       ),

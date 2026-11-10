@@ -3582,3 +3582,44 @@ describe("the service order's automatic card without its amount (20261109120000)
     );
   });
 });
+
+describe("the API key on a delivery's trail (20261110120000)", () => {
+  const MIGRATION = "20261110120000_delivery_event_api_key";
+
+  it("adds the column, then its partial index, then the foreign key, under lock_timeout", () => {
+    const statements = migrationStatements(MIGRATION);
+
+    expect(statements.map((statement) => statement.split(/\s/)[0])).toEqual([
+      "SET",
+      "ALTER",
+      "CREATE",
+      "ALTER",
+    ]);
+
+    // One hot table. Every existing row is null, so the key is added NOT
+    // VALID: validating it would read the whole table under SHARE ROW
+    // EXCLUSIVE, the index notwithstanding (a column with no statistics).
+    expect(statements[3]).toMatch(/\bNOT VALID;?$/);
+  });
+
+  it("delivery_event.apiKeyId is nullable, with no default", async () => {
+    // The previous image's INSERTs leave it out; its SELECTs never name it.
+    expect((await columnsOf("delivery_event")).get("apiKeyId")).toMatchObject({
+      is_nullable: "YES",
+      column_default: null,
+    });
+  });
+
+  it("lets the key go, never the event, when a key is removed", async () => {
+    const [foreignKey] = await prisma.$queryRaw<Array<{ definition: string }>>`
+      SELECT pg_get_constraintdef(oid) AS definition
+        FROM pg_constraint
+       WHERE conname = 'delivery_event_apiKeyId_fkey'
+    `;
+
+    expect(foreignKey?.definition).toMatch(
+      /^FOREIGN KEY \("apiKeyId"\) REFERENCES (public\.)?api_key\(id\)/,
+    );
+    expect(foreignKey?.definition).toContain("ON DELETE SET NULL");
+  });
+});

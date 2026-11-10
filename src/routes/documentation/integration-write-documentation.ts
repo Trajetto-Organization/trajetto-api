@@ -1,14 +1,22 @@
 import { z } from "zod";
 
 import { createIntegrationDeliverySchema } from "@/schemas/create-integration-delivery-schema";
+import { cancelIntegrationDeliverySchema } from "@/schemas/cancel-integration-delivery-schema";
 import { INTEGRATION_IDEMPOTENCY_KEY_PATTERN } from "@/modules/integration/usecases/create-delivery/integration-idempotency-key";
+import { NOT_CANCELLABLE_STATUSES } from "@/shared/integration/cancel-delivery-rules";
+import { DATABASE_RETRY_AFTER_SECONDS } from "@/shared/errors/database-unavailable";
 
 import { integrationResponses } from "./integration-documentation";
 import {
   publicBusinessRateLimitResponse,
+  publicInternalErrorResponse,
+  publicNotFoundResponse,
   publicServiceUnavailableResponse,
 } from "./public-docs-responses";
-import { CREATE_DELIVERY_REQUEST_BODY } from "./public-docs-examples";
+import {
+  CANCEL_DELIVERY_REQUEST_BODY,
+  CREATE_DELIVERY_REQUEST_BODY,
+} from "./public-docs-examples";
 
 /**
  * The public create (decision 5.10), as the reference publishes it.
@@ -119,9 +127,62 @@ const integrationWriteResponses = {
   unavailable: publicServiceUnavailableResponse,
 };
 
+/**
+ * The public cancel (L9, D49). No Idempotency-Key: the delivery's own state
+ * makes a repeat harmless, so the 500 and the 503 say "repeat" without one.
+ */
+const integrationCancelResponses = {
+  cancelled: integrationResponses.deliveryCancellation.describe(
+    "A entrega está cancelada. Cancelada agora por esta chamada, o cabeçalho `idempotent-replayed` vem `false`: o histórico ganhou a mudança com o seu motivo, a parada saiu da rota que ainda não tinha saído e os assinantes de `delivery.cancelled` recebem o webhook. Já estava cancelada (uma repetição, outra chave ou o painel), vem `true`: nada foi gravado nem anunciado de novo. Só os identificadores e o status voltam: este escopo não dá leitura da entrega.",
+  ),
+
+  badRequest: codedError(
+    "VALIDATION_ERROR: faltou o `reason`, ele não segue as regras (de 3 a 500 caracteres, sem espaço nas pontas nem espaços seguidos), o corpo tem um campo que não existe, ou o `id` não é um UUID. Cada item de `issues` sobre o corpo começa pelo campo (`reason: …`, `corpo: campo não reconhecido: …`); um `id` que não é UUID vem como `Identificador inválido.`. MALFORMED_REQUEST: o corpo não é JSON válido. Nada foi gravado: corrija antes de repetir.",
+    "Em VALIDATION_ERROR é a frase em português do primeiro campo recusado; a lista completa, uma frase por problema, está em `issues`. Em MALFORMED_REQUEST é a frase do servidor HTTP, em inglês (por exemplo, `Body is not valid JSON but content-type is set to 'application/json'`).",
+  ),
+
+  notFound: publicNotFoundResponse.describe(
+    "NOT_FOUND: nenhuma entrega com este `id` na sua empresa. Uma entrega de outra empresa recebe exatamente a mesma resposta, e nada é gravado nela.",
+  ),
+
+  conflict: z
+    .object({
+      code: z
+        .string()
+        .describe("DELIVERY_NOT_CANCELLABLE ou DELIVERY_STATUS_CONFLICT."),
+      message: z.string().describe("Frase em português."),
+      // From the verdict table, so the closed schema never lists a status
+      // the API stopped refusing, or misses one it started to.
+      delivery_status: z
+        .enum(NOT_CANCELLABLE_STATUSES)
+        .optional()
+        .describe(
+          "Só em DELIVERY_NOT_CANCELLABLE: o status que impede o cancelamento.",
+        ),
+    })
+    .describe(
+      "DELIVERY_NOT_CANCELLABLE: a entrega já foi concluída (`delivery_status` DELIVERED) ou já saiu com o motorista (IN_TRANSIT). Uma carga em rota é cancelada pela transportadora, no painel; repetir não muda a resposta. DELIVERY_STATUS_CONFLICT: o status da entrega mudou durante o pedido e nada foi gravado; repita, e a resposta considera o status novo.",
+    ),
+
+  internalError: publicInternalErrorResponse.describe(
+    "INTERNAL_ERROR: falha nossa. Repetir é seguro: se o cancelamento chegou a ser gravado, a repetição responde 200 com `idempotent-replayed: true`, sem cancelar nem anunciar de novo.",
+  ),
+
+  // Shared with the reads: the company ceiling's 429 (merged by the
+  // transform with the per-key one).
+  tooManyRequests: publicBusinessRateLimitResponse,
+
+  // The route's own words stand alone: the transform does not add the keyed
+  // routes' generic 503, which speaks of the Idempotency-Key (mergeResponse).
+  unavailable: publicServiceUnavailableResponse.describe(
+    `SERVICE_UNAVAILABLE: o banco de dados está indisponível por instantes. Transitório: espere o \`retry-after\` (${DATABASE_RETRY_AFTER_SECONDS} s) e repita. Um 503 não garante que nada foi gravado, e repetir é seguro do mesmo jeito: uma entrega já cancelada responde 200 com \`idempotent-replayed: true\`. O corpo traz \`requestId\`.`,
+  ),
+};
+
 const integrationWriteSchemas = {
   createDelivery: createIntegrationDeliverySchema,
   idempotencyHeaders: integrationIdempotencyHeaders,
+  cancelDelivery: cancelIntegrationDeliverySchema,
 };
 
 /**
@@ -144,8 +205,20 @@ const CREATE_DELIVERY_REQUEST_EXAMPLE = [
   "```",
 ].join("\n");
 
+/** The cancel's call, with the published example body (same rule as above). */
+const CANCEL_DELIVERY_REQUEST_EXAMPLE = [
+  "```bash",
+  "curl -X POST https://<api>/integration/v1/deliveries/<id>/cancel \\",
+  '  -H "Authorization: Bearer tjk_live_<prefixo>.<segredo>" \\',
+  '  -H "Content-Type: application/json" \\',
+  "  -d '" + JSON.stringify(CANCEL_DELIVERY_REQUEST_BODY) + "'",
+  "```",
+].join("\n");
+
 export {
+  CANCEL_DELIVERY_REQUEST_EXAMPLE,
   CREATE_DELIVERY_REQUEST_EXAMPLE,
+  integrationCancelResponses,
   integrationIdempotencyHeaders,
   integrationWriteResponses,
   integrationWriteSchemas,

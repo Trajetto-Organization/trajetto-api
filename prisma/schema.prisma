@@ -2794,8 +2794,9 @@ model ApiKey {
   business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
   businessId String
 
-  usage      ApiKeyUsageDaily[]
-  deliveries Delivery[]
+  usage          ApiKeyUsageDaily[]
+  deliveries     Delivery[]
+  deliveryEvents DeliveryEvent[]
 
   created_at DateTime @default(now())
   updated_at DateTime @updatedAt
@@ -3674,6 +3675,15 @@ model DeliveryEvent {
   reportedBy   User?   @relation(fields: [reportedById], references: [id], onDelete: Restrict)
   reportedById String?
 
+  /// The API key behind an INTEGRATION event (plan of 02/11/2026, L9; D49):
+  /// the cancel through POST /integration/v1/deliveries/:id/cancel, so the
+  /// trail names which integration acted instead of a bare "integração".
+  /// Null for every other actor. SET NULL like Delivery.apiKeyId: keys are
+  /// revoked, not deleted. Indexed partially in raw SQL
+  /// (delivery_event_apiKeyId_partial_idx): almost every event is null here.
+  apiKey   ApiKey? @relation(fields: [apiKeyId], references: [id], onDelete: SetNull)
+  apiKeyId String?
+
   /// When it happened on the phone (arrival, proof), when the app says so.
   /// See DeliveryOccurrence.occurred_at: null means created_at, and
   /// created_at stays the cursor of every incremental read — backdating it
@@ -3704,7 +3714,9 @@ model DeliveryEvent {
   // ("reasonId") WHERE "reasonId" IS NOT NULL, raw SQL in
   // migrations/20260924090300_foreign_key_indexes. occurrenceId likewise:
   // delivery_event_occurrenceId_partial_idx, in
-  // migrations/20260928120200_final_phase_schema.
+  // migrations/20260928120200_final_phase_schema. apiKeyId likewise:
+  // delivery_event_apiKeyId_partial_idx, in
+  // migrations/20261110120000_delivery_event_api_key.
   @@map("delivery_event")
 }
 

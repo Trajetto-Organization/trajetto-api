@@ -2468,6 +2468,47 @@ tamanho era conferido. O detalhe está em
   subir: esses motoristas já não entram no app pelo CPF e, depois da subida,
   editar ou inativar o cadastro deles pede o CPF certo.
 
+**Cancelamento de entrega pela API (L9, 10/11/2026).** Rota nova
+`POST /integration/v1/deliveries/:id/cancel` e escopo novo
+`deliveries:cancel`. A regra está em
+[arquitetura.md (Integrações externas)](./arquitetura.md#integrações-externas).
+Uma migration, pela mesma etapa da `trajetto-api-migrate` (nada à mão no
+deploy), e nenhuma variável nova:
+`20261110120000_delivery_event_api_key` cria `delivery_event."apiKeyId"`
+(nula, sem default, catálogo apenas), o índice parcial
+`delivery_event_apiKeyId_partial_idx` e a chave estrangeira para `api_key`
+(`ON DELETE SET NULL`), sob `lock_timeout=5s`. A imagem anterior não
+seleciona nem grava a coluna. A chave estrangeira entra `NOT VALID`: toda
+linha que já existe tem a coluna nula, então não há o que conferir, e
+validá-la leria a tabela inteira segurando `SHARE ROW EXCLUSIVE` (chegada,
+comprovante e mudança de status de todas as empresas esperariam; o índice
+parcial não ajuda, porque a coluna recém-criada não tem estatística). As
+linhas gravadas daqui em diante são conferidas como em qualquer chave
+estrangeira. Validar depois é opcional e não muda o que ela garante:
+`ALTER TABLE "delivery_event" VALIDATE CONSTRAINT "delivery_event_apiKeyId_fkey";`
+lê a tabela sem bloquear escrita (`SHARE UPDATE EXCLUSIVE`).
+
+- **Ordem: API antes da web.** A web nova oferece "Entregas — cancelamento"
+  ao emitir uma chave, e a API anterior recusaria esse escopo com 400
+  "Escopo desconhecido". Confira a liveness da API com o commit novo antes de
+  liberar a web. O app não muda e não precisa de OTA.
+- **A web anterior contra esta API** não oferece o escopo novo e mostra os
+  escopos de uma chave como texto, então `deliveries:cancel` aparece sem
+  quebrar nada. A linha do tempo dela já desenha o ator INTEGRATION.
+- **Durante o rollout**, uma réplica anterior responde 404 ao caminho novo.
+  Isso não atinge ninguém, porque só a web nova emite chave com o escopo. O
+  aviso `delivery.status_overridden` e o webhook `delivery.cancelled` não
+  mudam de formato, e os workers anteriores os processam como sempre.
+- **As chaves existentes não ganham o escopo.** Quem for cancelar pela API
+  cria uma chave nova com "Entregas — cancelamento" marcado (chave não se
+  edita) e troca a antiga.
+- **Banco com volume:** antes de promover, crie a coluna e o índice à mão,
+  nesta ordem:
+  `ALTER TABLE "delivery_event" ADD COLUMN IF NOT EXISTS "apiKeyId" TEXT;` e
+  `CREATE INDEX CONCURRENTLY IF NOT EXISTS "delivery_event_apiKeyId_partial_idx" ON "delivery_event" ("apiKeyId") WHERE "apiKeyId" IS NOT NULL;`.
+  Confira `indisvalid`. A migration então só cria a chave estrangeira, sem
+  ler a tabela. Com o volume atual não é preciso.
+
 **Regras entre motorista, veículo e rota (10/11/2026).** Sem migration, sem
 variável nova e sem rota nova. A regra está em
 [arquitetura.md (Motorista, veículo e rota: o que é aviso e o que é recusa)](./arquitetura.md#motorista-veículo-e-rota-o-que-é-aviso-e-o-que-é-recusa).

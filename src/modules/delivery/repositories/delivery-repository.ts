@@ -605,12 +605,23 @@ class DeliveryRepository implements IDeliveryRepository {
       ),
     ]);
 
-    const [reasons, occurrenceTypes] = await Promise.all([
+    const [reasons, apiKeys, occurrenceTypes] = await Promise.all([
       rowsByKey(
         events.map((event) => event.reasonId),
         (ids) =>
           this.prisma.statusChangeReason.findMany({
             where: { id: { in: ids } },
+            select: { id: true, name: true },
+          }),
+      ),
+      // The key behind an INTEGRATION event (L9), named on the trail. Its
+      // company is the delivery's; said again, so the name of another
+      // company's key can never be read through here.
+      rowsByKey(
+        events.map((event) => event.apiKeyId),
+        (ids) =>
+          this.prisma.apiKey.findMany({
+            where: { id: { in: ids }, businessId: row.businessId },
             select: { id: true, name: true },
           }),
       ),
@@ -641,6 +652,7 @@ class DeliveryRepository implements IDeliveryRepository {
         ...event,
         reportedBy: relatedTo(people, event.reportedById),
         reason: relatedTo(reasons, event.reasonId),
+        apiKey: relatedTo(apiKeys, event.apiKeyId),
       })),
       occurrences: occurrences.map((occurrence) => ({
         ...occurrence,
@@ -1503,6 +1515,8 @@ class DeliveryRepository implements IDeliveryRepository {
         // timeline existed; the column's own default says the same, and both
         // saying it is what keeps an older caller honest.
         actor: eventData.actor ?? "USER",
+        // The key behind an INTEGRATION event (L9); null for a person.
+        apiKeyId: eventData.apiKeyId ?? null,
         device: eventData.device ?? null,
 
         latitude: eventData.latitude ?? null,

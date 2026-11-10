@@ -95,6 +95,9 @@ const INDEXES: Record<string, string> = {
   chat_message_route_idx: `CREATE INDEX chat_message_route_idx ON public.chat_message USING btree ("routeId", created_at) WHERE ("routeId" IS NOT NULL)`,
   delivery_apiKeyId_partial_idx: `CREATE INDEX "delivery_apiKeyId_partial_idx" ON public.delivery USING btree ("apiKeyId") WHERE ("apiKeyId" IS NOT NULL)`,
   delivery_event_occurrenceId_partial_idx: `CREATE INDEX "delivery_event_occurrenceId_partial_idx" ON public.delivery_event USING btree ("occurrenceId") WHERE ("occurrenceId" IS NOT NULL)`,
+  // The API key behind an INTEGRATION event (L9): the trail's name and the
+  // SET NULL from api_key.
+  delivery_event_apiKeyId_partial_idx: `CREATE INDEX "delivery_event_apiKeyId_partial_idx" ON public.delivery_event USING btree ("apiKeyId") WHERE ("apiKeyId" IS NOT NULL)`,
   delivery_occurrence_authorizedById_partial_idx: `CREATE INDEX "delivery_occurrence_authorizedById_partial_idx" ON public.delivery_occurrence USING btree ("authorizedById") WHERE ("authorizedById" IS NOT NULL)`,
   delivery_event_reasonId_partial_idx: `CREATE INDEX "delivery_event_reasonId_partial_idx" ON public.delivery_event USING btree ("reasonId") WHERE ("reasonId" IS NOT NULL)`,
   // A delivery's and a route's tickets, and the SET NULL paths of the

@@ -520,10 +520,13 @@ async function seedSweepCarrier(
       name: `${tag} chave`,
       prefix: key.prefix,
       token_hash: key.tokenHash,
+      // Every grantable scope, so each keyed route reaches its id lookup
+      // (L9: the cancel too) instead of stopping at MISSING_API_SCOPE.
       scopes: [
         "routes:read",
         "deliveries:read",
         "deliveries:write",
+        "deliveries:cancel",
         "events:read",
       ],
       businessId,

@@ -88,6 +88,23 @@ const publicDelivery = z.object({
   updated_at: isoDateTime,
 });
 
+/**
+ * What a cancel answers (L9): the three identifiers and the new status, not
+ * the delivery — a cancel-only key was not granted the read.
+ */
+const publicDeliveryCancellation = z.object({
+  id: z.string(),
+  code: z.string().nullable(),
+  invoice_key: z.string().nullable(),
+
+  status: z.string().describe("Sempre CANCELLED: a entrega está cancelada."),
+  status_label: z.string().describe("Sempre `Cancelada`."),
+
+  updated_at: isoDateTime.describe(
+    "Quando a entrega mudou pela última vez. Num cancelamento feito agora, é o instante dele; numa repetição, o do cancelamento que já existia.",
+  ),
+});
+
 const publicRoute = z.object({
   id: z.string(),
   code: z.number(),
@@ -171,6 +188,7 @@ const integrationSchemas = {
 const integrationResponses = {
   deliveryPage: cursorPage(publicDelivery),
   delivery: publicDelivery,
+  deliveryCancellation: publicDeliveryCancellation,
 
   routePage: cursorPage(publicRoute),
   route: publicRoute,

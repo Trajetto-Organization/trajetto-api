@@ -352,6 +352,12 @@ interface CreateDeliveryEventProps {
 
   actor?: DeliveryEventActor;
 
+  /**
+   * INTEGRATION only: the API key that acted (L9), so the trail names it
+   * instead of a bare "integração". Null for every other actor.
+   */
+  apiKeyId?: string | null;
+
   /** DRIVER_APP only: which phone sent it. */
   device?: string | null;
 

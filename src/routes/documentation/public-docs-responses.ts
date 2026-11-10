@@ -96,7 +96,7 @@ const publicServiceUnavailableResponse = z
       .describe("O mesmo valor do cabeçalho `x-request-id`."),
   })
   .describe(
-    `SERVICE_UNAVAILABLE: o banco de dados está indisponível por instantes. Transitório: espere o \`retry-after\` (${DATABASE_RETRY_AFTER_SECONDS} s) e repita. Numa escrita, repita com o mesmo \`Idempotency-Key\`: um 503 não garante que nada foi gravado.`,
+    `SERVICE_UNAVAILABLE: o banco de dados está indisponível por instantes. Transitório: espere o \`retry-after\` (${DATABASE_RETRY_AFTER_SECONDS} s) e repita. Um 503 não garante que nada foi gravado: numa escrita que pede \`Idempotency-Key\`, repita com o mesmo valor. O corpo traz \`requestId\`.`,
   );
 
 export {

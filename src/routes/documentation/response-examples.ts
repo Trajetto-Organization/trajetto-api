@@ -1,5 +1,6 @@
 import type {
   PublicDelivery,
+  PublicDeliveryCancellation,
   PublicEvent,
   PublicRoute,
 } from "@/shared/integration/public-shapes";
@@ -94,6 +95,18 @@ const createdPublicDelivery: PublicDelivery = {
 
   created_at: "2026-09-23T18:42:10.000Z",
   updated_at: "2026-09-23T18:42:10.000Z",
+};
+
+/** What POST /integration/v1/deliveries/:id/cancel answers (L9). */
+const cancelledPublicDelivery: PublicDeliveryCancellation = {
+  id: DELIVERY_ID,
+  code: "PED-10452",
+  invoice_key: INVOICE_KEY,
+
+  status: "CANCELLED",
+  status_label: "Cancelada",
+
+  updated_at: "2026-09-23T19:05:41.000Z",
 };
 
 const publicRoute: PublicRoute = {
@@ -347,10 +360,13 @@ const deliveryDetail = {
       routeId: ROUTE_ID,
       occurrenceId: null,
       reportedById: DRIVER_USER_ID,
+      // L9: the API key behind an INTEGRATION event; null for the driver.
+      apiKeyId: null,
       occurred_at: "2026-09-24T08:15:02.000Z",
       created_at: "2026-09-24T08:15:32.000Z",
       reportedBy: driverPerson,
       reason: null,
+      apiKey: null,
       // Plan of 02/11/2026 (E4): where the arrival was, against the radius.
       distance_m: 38.4,
       accuracy_m: 12,
@@ -416,6 +432,9 @@ const RESPONSE_EXAMPLES: ResponseExamples = {
   "POST /integration/v1/deliveries": {
     201: createdPublicDelivery,
     200: createdPublicDelivery,
+  },
+  "POST /integration/v1/deliveries/:id/cancel": {
+    200: cancelledPublicDelivery,
   },
   "GET /integration/v1/routes": {
     200: { data: [publicRoute], next_cursor: null },

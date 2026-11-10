@@ -91,6 +91,9 @@ interface EventSource {
   reason?: { name: string } | null;
   reportedBy?: { name: string } | null;
 
+  /** INTEGRATION (L9): the API key that acted, named in place of a person. */
+  apiKey?: { name: string } | null;
+
   /** OCCURRENCE (TWR-6): the occurrence row this event records. */
   occurrenceId?: string | null;
 }
@@ -202,10 +205,11 @@ function fromEvent(event: EventSource): TimelineEntry {
     detail: event.note ?? null,
 
     // An event written before the actor column existed reads as USER, which is
-    // what every source was at the time.
+    // what every source was at the time. An integration has no person behind
+    // it: the key's name ("ERP Protheus") is who acted (L9).
     author: authorOf(
       event.actor ?? "USER",
-      event.reportedBy?.name,
+      event.reportedBy?.name ?? event.apiKey?.name,
       event.device,
     ),
 

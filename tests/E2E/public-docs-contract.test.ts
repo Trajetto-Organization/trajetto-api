@@ -464,6 +464,63 @@ describe("the published request example", () => {
     expect(replayed.headers["idempotent-replayed"]).toBe("true");
     expect(replayed.json().id).toBe(created.json().id);
   });
+
+  it("cancels a pending delivery (200) and answers the repeat as a replay (L9)", async () => {
+    const operation =
+      document.paths["/integration/v1/deliveries/{id}/cancel"].post;
+    const example = operation.requestBody.content["application/json"].example;
+    const published = operation.responses["200"].content["application/json"];
+
+    expect(example, "o documento publica um exemplo de corpo").toBeDefined();
+
+    const shipper = await prisma.shipper.create({
+      data: { name: "Embarcador do cancelamento", businessId: CARRIER },
+    });
+    const delivery = await prisma.delivery.create({
+      data: {
+        recipient_name: "Mercado Bom Preço Ltda",
+        street: "Rua das Flores",
+        city: "Campinas",
+        uf: "SP",
+        businessId: CARRIER,
+        shipperId: shipper.id,
+      },
+    });
+
+    // A key holding only the cancel scope, as the reference says it needs.
+    const send = () =>
+      app.inject({
+        method: "POST",
+        url: `/integration/v1/deliveries/${delivery.id}/cancel`,
+        headers: {
+          authorization: `Bearer ${keys.get("only:deliveries:cancel")}`,
+          "content-type": "application/json",
+        },
+        payload: JSON.stringify(example),
+      });
+
+    const cancelled = await send();
+
+    expect(cancelled.statusCode, cancelled.body).toBe(200);
+    expect(cancelled.headers["idempotent-replayed"]).toBe("false");
+    expect(violations(cancelled.json(), published.schema)).toEqual([]);
+
+    // The published example has exactly the keys the API sends.
+    expect(Object.keys(cancelled.json()).sort()).toEqual(
+      Object.keys(published.example).sort(),
+    );
+    expect(cancelled.json()).toMatchObject({
+      id: delivery.id,
+      status: "CANCELLED",
+      status_label: "Cancelada",
+    });
+
+    const replayed = await send();
+
+    expect(replayed.statusCode, replayed.body).toBe(200);
+    expect(replayed.headers["idempotent-replayed"]).toBe("true");
+    expect(replayed.json().id).toBe(delivery.id);
+  });
 });
 
 /**

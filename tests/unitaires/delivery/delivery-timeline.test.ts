@@ -252,6 +252,38 @@ describe("what the driver did", () => {
       device: null,
     });
   });
+
+  it("names the API key that cancelled it, with its words as the detail (L9)", () => {
+    // The public cancel has no catalogue reason: the title says the move
+    // alone, the integrator's text is the detail, and the key is the author.
+    const [entry] = buildDeliveryTimeline(
+      sources({
+        events: [
+          {
+            id: "e1",
+            type: "STATUS_CHANGE",
+            created_at: AT("2026-09-15T10:00:00Z"),
+            actor: "INTEGRATION",
+            status_from: "PENDING",
+            status_to: "CANCELLED",
+            reason: null,
+            reportedBy: null,
+            apiKey: { name: "ERP Protheus" },
+            note: "Pedido cancelado pelo cliente no ERP.",
+          },
+        ],
+      }),
+    );
+
+    expect(entry.title).toBe("Status alterado de Pendente para Cancelada");
+    expect(entry.detail).toBe("Pedido cancelado pelo cliente no ERP.");
+    expect(entry.reason).toBeNull();
+    expect(entry.author).toEqual({
+      kind: "INTEGRATION",
+      name: "ERP Protheus",
+      device: null,
+    });
+  });
 });
 
 describe("occurrences and messages, as the trail shows them", () => {

@@ -385,9 +385,9 @@ async function healthRoutes(app: FastifyInstance) {
           403: errorResponse.describe(
             "AUTH_ROLE_FORBIDDEN: só o MASTER lê a infraestrutura.",
           ),
-          429: errorResponse.describe(
-            "RATE_LIMITED: muitas leituras seguidas.",
-          ),
+          // Context only: the transform adds the limiter's explanation of
+          // RATE_LIMITED (the wait, the limit) after it.
+          429: errorResponse.describe("Muitas leituras seguidas."),
         },
       },
     },

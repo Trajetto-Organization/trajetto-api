@@ -148,6 +148,9 @@ class InMemoryDeliveryRepository implements IDeliveryRepository {
   /** status_change_reason.name by id: the trail's reason. */
   public reasonNames = new Map<string, string>();
 
+  /** api_key.name by id: the key an INTEGRATION event names (L9). */
+  public apiKeyNames = new Map<string, string>();
+
   /** chat_message rows that name a delivery as their context. */
   public chatMessages: Array<{
     deliveryId: string;
@@ -618,6 +621,12 @@ class InMemoryDeliveryRepository implements IDeliveryRepository {
             ? {
                 id: event.reasonId,
                 name: this.reasonNames.get(event.reasonId) ?? "",
+              }
+            : null,
+          apiKey: event.apiKeyId
+            ? {
+                id: event.apiKeyId,
+                name: this.apiKeyNames.get(event.apiKeyId) ?? "",
               }
             : null,
         })),

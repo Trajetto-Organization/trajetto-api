@@ -79,11 +79,18 @@ function apiKeySecretMatches(secret: string, storedHash: string): boolean {
  * Read and write are separate per resource, deliberately: an ERP that pulls
  * routes every minute has no business creating deliveries, and the day that
  * ERP is compromised the blast radius is whatever somebody chose here.
+ *
+ * Cancelling is its own scope too (L9, D49), not part of `deliveries:write`:
+ * every write key issued before it existed was granted to create documents,
+ * and folding the cancel into it would have handed each of them the power to
+ * call deliveries off without anybody choosing it. Keys cannot be edited, so
+ * nobody holds it until somebody issues a key with it.
  */
 const API_SCOPES = [
   "routes:read",
   "deliveries:read",
   "deliveries:write",
+  "deliveries:cancel",
   "events:read",
   "webhooks:manage",
 ] as const;
@@ -112,7 +119,9 @@ const SCOPE_DESCRIPTIONS: Record<ApiScope, string> = {
   "routes:read": "Ler rotas e suas paradas.",
   "deliveries:read": "Ler entregas e o histórico delas.",
   "deliveries:write":
-    "Criar entregas (POST /integration/v1/deliveries), com Idempotency-Key obrigatória. Não inclui a leitura: para consultar, conceda também deliveries:read.",
+    "Criar entregas (POST /integration/v1/deliveries), com Idempotency-Key obrigatória. Não inclui a leitura nem o cancelamento: para consultar, conceda também deliveries:read.",
+  "deliveries:cancel":
+    "Cancelar entregas pendentes ou com insucesso (POST /integration/v1/deliveries/{id}/cancel), com motivo. Não inclui criar nem ler.",
   "events:read": "Ler o feed de eventos da operação.",
   "webhooks:manage":
     "Reservado para gerir webhooks por chave: nenhum endpoint da v1 exige este escopo ainda. Hoje os webhooks são geridos pelo painel.",
