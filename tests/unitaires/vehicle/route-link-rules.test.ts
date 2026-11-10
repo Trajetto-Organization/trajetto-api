@@ -1,9 +1,12 @@
 import { describe, expect, it } from "vitest";
 
+import { VehicleChecklistArrivalBeforeRouteEndError } from "@/modules/vehicle-checklist/usecases/errors/vehicle-checklist-arrival-before-route-end-error";
 import { VehicleChecklistArrivalRouteOpenError } from "@/modules/vehicle-checklist/usecases/errors/vehicle-checklist-arrival-route-open-error";
 import type { RouteStatus, RouteStopStatus } from "@/shared/route/route-rules";
 import {
+  ARRIVAL_CHECKLIST_CLOCK_SLACK_MS,
   ARRIVAL_CHECKLIST_RULE_CONTRACT,
+  arrivalBeforeRouteEndRefusal,
   arrivalChecklistRefusal,
   checklistPhaseRefusal,
   enforcesArrivalChecklistRule,
@@ -459,6 +462,150 @@ describe("arrivalChecklistRefusal", () => {
     expect(arrivalChecklistRefusal("STANDALONE", open)).toBeNull();
     expect(arrivalChecklistRefusal(undefined, open)).toBeNull();
     expect(arrivalChecklistRefusal(null, open)).toBeNull();
+  });
+});
+
+describe("arrivalBeforeRouteEndRefusal", () => {
+  // Every stop final is not enough: the arrival must be dated after the
+  // route's last delivery or failed attempt. A checklist saved offline before
+  // the dispatcher added a stop, taken once the driver delivered it, would
+  // record the vehicle from before that stop as the route's arrival.
+  const MADE_AT = new Date("2026-11-09T17:00:00.000Z");
+  const minutes = (delta: number) =>
+    new Date(MADE_AT.getTime() + delta * 60 * 1000);
+
+  const route = (
+    stops: Array<{ status: RouteStopStatus; completed_at?: Date | null }>,
+  ) => ({
+    status: "IN_PROGRESS" as RouteStatus,
+    started_at: minutes(-180),
+    stops,
+  });
+
+  const MESSAGE =
+    "Este checklist de chegada foi feito antes da última entrega da rota. Faça um novo checklist de chegada, com a quilometragem e o estado do veículo de agora.";
+
+  it("refuses an arrival dated before a stop delivered later, for good", () => {
+    // The stop the dispatcher added at 17:05, delivered at 18:30.
+    const refusal = arrivalBeforeRouteEndRefusal(
+      "ROUTE_END",
+      route([
+        { status: "COMPLETED", completed_at: minutes(-30) },
+        { status: "COMPLETED", completed_at: minutes(90) },
+      ]),
+      MADE_AT,
+    );
+
+    expect(refusal).toBeInstanceOf(VehicleChecklistArrivalBeforeRouteEndError);
+    expect(refusal).toMatchObject({
+      statusCode: 409,
+      code: "CHECKLIST_ARRIVAL_BEFORE_ROUTE_END",
+      laterStops: 1,
+      message: MESSAGE,
+    });
+  });
+
+  it("counts a failed attempt after it too: the driver drove there", () => {
+    expect(
+      arrivalBeforeRouteEndRefusal(
+        "ROUTE_END",
+        route([
+          { status: "FAILED", completed_at: minutes(40) },
+          { status: "COMPLETED", completed_at: minutes(60) },
+        ]),
+        MADE_AT,
+      ),
+    ).toMatchObject({ laterStops: 2 });
+  });
+
+  it("accepts an arrival made after every delivery, whatever their order", () => {
+    expect(
+      arrivalBeforeRouteEndRefusal(
+        "ROUTE_END",
+        route([
+          { status: "COMPLETED", completed_at: minutes(-5) },
+          { status: "FAILED", completed_at: minutes(-120) },
+          { status: "COMPLETED", completed_at: minutes(-60) },
+        ]),
+        MADE_AT,
+      ),
+    ).toBeNull();
+  });
+
+  it("leaves the clocks their slack: each instant carries its own request's delay", () => {
+    expect(ARRIVAL_CHECKLIST_CLOCK_SLACK_MS).toBe(5 * 60 * 1000);
+
+    const at = (completed_at: Date) =>
+      arrivalBeforeRouteEndRefusal(
+        "ROUTE_END",
+        route([{ status: "COMPLETED", completed_at }]),
+        MADE_AT,
+      );
+
+    expect(at(minutes(5))).toBeNull();
+    expect(at(new Date(minutes(5).getTime() + 1))).toMatchObject({
+      laterStops: 1,
+    });
+  });
+
+  it("ignores a stop cancelled after it: nobody drove to it", () => {
+    // A cancelled stop carries no completed_at; one with a stray value
+    // still counts as called off, not worked.
+    expect(
+      arrivalBeforeRouteEndRefusal(
+        "ROUTE_END",
+        route([
+          { status: "COMPLETED", completed_at: minutes(-10) },
+          { status: "CANCELLED", completed_at: null },
+          { status: "CANCELLED", completed_at: minutes(60) },
+        ]),
+        MADE_AT,
+      ),
+    ).toBeNull();
+  });
+
+  it("ignores a resolved stop without its instant (rows from before MOB-08)", () => {
+    expect(
+      arrivalBeforeRouteEndRefusal(
+        "ROUTE_END",
+        route([
+          { status: "COMPLETED" },
+          { status: "FAILED", completed_at: null },
+        ]),
+        MADE_AT,
+      ),
+    ).toBeNull();
+  });
+
+  it("reads instants sent as text, as the route's row may carry them", () => {
+    expect(
+      arrivalBeforeRouteEndRefusal(
+        "ROUTE_END",
+        {
+          status: "COMPLETED" as RouteStatus,
+          started_at: minutes(-180).toISOString(),
+          stops: [
+            { status: "COMPLETED", completed_at: minutes(30).toISOString() },
+          ],
+        },
+        MADE_AT,
+      ),
+    ).toMatchObject({ laterStops: 1 });
+  });
+
+  it("never asks the departure or a standalone checklist, nor an unreadable date", () => {
+    const later = route([{ status: "COMPLETED", completed_at: minutes(60) }]);
+
+    expect(arrivalBeforeRouteEndRefusal("ROUTE_START", later, MADE_AT)).toBe(
+      null,
+    );
+    expect(arrivalBeforeRouteEndRefusal("STANDALONE", later, MADE_AT)).toBe(
+      null,
+    );
+    expect(arrivalBeforeRouteEndRefusal(undefined, later, MADE_AT)).toBe(null);
+    expect(
+      arrivalBeforeRouteEndRefusal("ROUTE_END", later, new Date("x")),
+    ).toBeNull();
   });
 });
 

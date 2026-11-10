@@ -19,6 +19,7 @@ import { VehicleChecklistBusinessNotFoundError } from "./vehicle-checklist-busin
 import { VehicleChecklistDriverCannotUpdateChecklistError } from "./vehicle-checklist-driver-cannot-update-checklist-error";
 import { VehicleChecklistDriverCannotDeleteChecklistError } from "./vehicle-checklist-driver-cannot-delete-checklist-error";
 import { VehicleChecklistArrivalRouteOpenError } from "./vehicle-checklist-arrival-route-open-error";
+import { VehicleChecklistArrivalBeforeRouteEndError } from "./vehicle-checklist-arrival-before-route-end-error";
 
 type ErrorClass = abstract new (...args: never[]) => Error;
 
@@ -82,6 +83,13 @@ const CHECKLIST_HTTP_ERRORS: ReadonlyArray<ChecklistHttpError> = [
   // a permission refusal, so the permission code (decision 4.1).
   [VehicleChecklistDriverCannotUpdateChecklistError, 403, "PERMISSION_DENIED"],
   [VehicleChecklistDriverCannotDeleteChecklistError, 403, "PERMISSION_DENIED"],
+  // A driver's arrival dated before a stop resolved later: final, the app
+  // asks for a new one (shared/vehicle/route-link.ts).
+  [
+    VehicleChecklistArrivalBeforeRouteEndError,
+    409,
+    "CHECKLIST_ARRIVAL_BEFORE_ROUTE_END",
+  ],
 ];
 
 /**

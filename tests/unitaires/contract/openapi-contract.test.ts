@@ -580,6 +580,8 @@ describe("the writes the driver's app sends", () => {
 
     expect(arrivalConflict).toContain("CHECKLIST_ARRIVAL_ROUTE_OPEN");
     expect(arrivalConflict).toContain('"open_stops"');
+    // The arrival dated before the route's last delivery: final, same 409.
+    expect(arrivalConflict).toContain("CHECKLIST_ARRIVAL_BEFORE_ROUTE_END");
     expect(
       byId(CREATE_CHECKLIST).operation.parameters?.some(
         (parameter) =>

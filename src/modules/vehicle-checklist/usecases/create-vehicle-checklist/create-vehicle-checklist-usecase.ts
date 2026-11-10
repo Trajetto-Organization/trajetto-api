@@ -54,6 +54,7 @@ import { acceptDevicePrecheck } from "@/shared/ai-precheck/device-precheck";
 import type { IRouteRepository } from "@/modules/route/repositories/IRoute-repository";
 import type { ClientVersion } from "@/shared/http/client-version";
 import {
+  arrivalBeforeRouteEndRefusal,
   arrivalChecklistRefusal,
   checklistPhaseRefusal,
   enforcesArrivalChecklistRule,
@@ -284,12 +285,39 @@ class CreateVehicleChecklistUseCase {
       callerIsDriver && linkedRoute
         ? arrivalChecklistRefusal(checklistData.phase, linkedRoute)
         : null;
+    const enforcesArrivalRule = enforcesArrivalChecklistRule(client?.contract);
 
-    if (arrivalRefusal && enforcesArrivalChecklistRule(client?.contract)) {
+    if (arrivalRefusal && enforcesArrivalRule) {
       throw arrivalRefusal;
     }
 
     const arrivalOpenStops = arrivalRefusal?.openStops;
+
+    // The date the row will carry: a bare day starts in the company's zone,
+    // and none sent is the database's now().
+    const checklistDate = withChecklistDate(
+      { checklist_date: checklistData.checklist_date },
+      timeZoneOfBusiness(findBusiness),
+    ).checklist_date;
+    const recordDate = checklistDate ? new Date(checklistDate) : new Date();
+
+    // Every stop final is not enough: the arrival must also be dated after
+    // the route's last delivery or failed attempt. One saved offline before
+    // the dispatcher added a stop waits in the queue while that stop is
+    // open, and the driver then drives to it; a draft held while the route
+    // reopened keeps its date. Refused for good, for the same builds as
+    // above — the app's route step asks for a new one; an older build's is
+    // recorded as before (shared/vehicle/route-link.ts).
+    const lateArrival =
+      callerIsDriver && linkedRoute && !arrivalRefusal && enforcesArrivalRule
+        ? arrivalBeforeRouteEndRefusal(
+            checklistData.phase,
+            linkedRoute,
+            recordDate,
+          )
+        : null;
+
+    if (lateArrival) throw lateArrival;
 
     // A driver inspects only a vehicle they may operate: the responsible
     // one, or the one of their released or running route (FLEET-ASSIGN-1,
@@ -299,17 +327,11 @@ class CreateVehicleChecklistUseCase {
     // still does its arrival checklist. Only for a checklist dated while the
     // route had the truck (routeProvesCustody): an old, cancelled or never
     // released route opens nothing.
-    // The date the row will carry: a bare day starts in the company's zone,
-    // and none sent is the database's now().
-    const checklistDate = withChecklistDate(
-      { checklist_date: checklistData.checklist_date },
-      timeZoneOfBusiness(findBusiness),
-    ).checklist_date;
     const routeProof =
       linkedRoute !== null &&
       routeProvesCustody(
         linkedRoute,
-        checklistDate ? new Date(checklistDate) : new Date(),
+        recordDate,
         timeZoneOfBusiness(findBusiness),
       );
 

@@ -20,6 +20,7 @@ import { VehicleChecklistBusinessNotFoundError } from "@/modules/vehicle-checkli
 import { VehicleMileageInvalidError } from "@/modules/vehicle/usecases/errors/vehicle-mileage-invalid-error";
 import { VehicleMileageOutOfOrderError } from "@/modules/vehicle/usecases/errors/vehicle-mileage-out-of-order-error";
 import { VehicleChecklistArrivalRouteOpenError } from "@/modules/vehicle-checklist/usecases/errors/vehicle-checklist-arrival-route-open-error";
+import { VehicleChecklistArrivalBeforeRouteEndError } from "@/modules/vehicle-checklist/usecases/errors/vehicle-checklist-arrival-before-route-end-error";
 
 /**
  * Another company's id answers exactly like an id that exists nowhere
@@ -169,5 +170,23 @@ describe("the checklist routes' answers", () => {
     ).toBe(
       "O checklist de chegada só pode ser feito depois que todas as entregas da rota forem resolvidas (falta 1).",
     );
+  });
+
+  it("refuses an arrival checklist dated before the route's last delivery with 409, for good", () => {
+    // No count in the body: the app fails it and asks for a new one.
+    expect(
+      answer(
+        replyChecklistError,
+        new VehicleChecklistArrivalBeforeRouteEndError(2),
+      ),
+    ).toEqual({
+      status: 409,
+      header: "CHECKLIST_ARRIVAL_BEFORE_ROUTE_END",
+      body: {
+        code: "CHECKLIST_ARRIVAL_BEFORE_ROUTE_END",
+        message:
+          "Este checklist de chegada foi feito antes da última entrega da rota. Faça um novo checklist de chegada, com a quilometragem e o estado do veículo de agora.",
+      },
+    });
   });
 });

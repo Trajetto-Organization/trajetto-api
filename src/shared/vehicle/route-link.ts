@@ -1,4 +1,5 @@
 import { RouteNotFoundError } from "@/modules/route/usecases/errors/route-errors";
+import { VehicleChecklistArrivalBeforeRouteEndError } from "@/modules/vehicle-checklist/usecases/errors/vehicle-checklist-arrival-before-route-end-error";
 import { VehicleChecklistArrivalRouteOpenError } from "@/modules/vehicle-checklist/usecases/errors/vehicle-checklist-arrival-route-open-error";
 import { AppError } from "@/shared/errors/AppError";
 import {
@@ -25,7 +26,8 @@ import {
  * "Iniciar rota" back until the checklist exists (decision D08). A route of
  * another company reads exactly like one that does not exist. The arrival
  * checklist is the one moment that asks more, and only of a driver's build
- * that holds it the same way (arrivalChecklistRefusal).
+ * that holds it the same way (arrivalChecklistRefusal,
+ * arrivalBeforeRouteEndRefusal).
  *
  * Whether that link also proves a DRIVER had the vehicle is another question
  * (routeProvesCustody): there the status and the record's date count.
@@ -178,7 +180,11 @@ function checklistPhaseRefusal(
 interface ArrivalRoute {
   status: RouteStatus;
   started_at?: Date | string | null;
-  stops: ReadonlyArray<{ status: RouteStopStatus }>;
+  stops: ReadonlyArray<{
+    status: RouteStopStatus;
+    /** When a delivered or failed stop was resolved, by the fact (MOB-08). */
+    completed_at?: Date | string | null;
+  }>;
 }
 
 /**
@@ -223,11 +229,69 @@ function arrivalChecklistRefusal(
 }
 
 /**
+ * How much later than an arrival checklist a stop may be resolved and still
+ * count as resolved before it. Both instants are taps moved onto the
+ * server's clock by their own request's send stamp (K6, MOB-08), so each
+ * carries that request's delay — a proof sent on a slow signal reads a
+ * little late. The same five minutes the driver's position allows a phone's
+ * clock (driver-position-rules).
+ */
+const ARRIVAL_CHECKLIST_CLOCK_SLACK_MS = 5 * 60 * 1000;
+
+/**
+ * Why an arrival checklist (ROUTE_END) that arrivalChecklistRefusal lets
+ * through is still not the route's arrival, or null when it is — and always
+ * null for any other moment.
+ *
+ * Every stop being final when the checklist reaches the server is not
+ * enough: the checklist must have been made after the route's work ended.
+ * One the phone saved offline before the dispatcher added a stop (K12), or
+ * before it learnt of one, waits in the queue while that stop is open
+ * (CHECKLIST_ARRIVAL_ROUTE_OPEN), and the driver then drives to it; a draft
+ * held while the route reopened keeps its date. Taken once the stop is
+ * resolved, it would record the vehicle — km, condition — from before the
+ * last delivery as the route's arrival.
+ *
+ * So a stop COMPLETED or FAILED (the driver worked it: completed_at, the
+ * fact's own instant) later than the checklist's date, past the clock slack,
+ * refuses it for good. A stop CANCELLED after it does not: nobody drove to
+ * it, and the checklist still shows the vehicle as the route left it.
+ */
+function arrivalBeforeRouteEndRefusal(
+  phase: ChecklistPhaseValue | null | undefined,
+  route: ArrivalRoute,
+  checklistDate: Date,
+): VehicleChecklistArrivalBeforeRouteEndError | null {
+  if (phase !== "ROUTE_END" || Number.isNaN(checklistDate.getTime())) {
+    return null;
+  }
+
+  const latest = checklistDate.getTime() + ARRIVAL_CHECKLIST_CLOCK_SLACK_MS;
+
+  const laterStops = route.stops.filter((stop) => {
+    if (stop.status !== "COMPLETED" && stop.status !== "FAILED") return false;
+
+    const resolvedAt = toDate(stop.completed_at);
+
+    return resolvedAt !== null && resolvedAt.getTime() > latest;
+  }).length;
+
+  return laterStops > 0
+    ? new VehicleChecklistArrivalBeforeRouteEndError(laterStops)
+    : null;
+}
+
+/**
  * Whether an early arrival checklist is refused for the build that sent it:
  * only from ARRIVAL_CHECKLIST_RULE_CONTRACT on. An older build (or one that
  * sends no x-trajetto-client-version, like the app in drivers' hands today)
  * lets the driver make it whenever, and its outbox would fail a refusal it
- * never offered to avoid: that one is recorded, and flagged in the trail.
+ * never offered to avoid: that one is recorded, and flagged in the trail
+ * when a stop was still open. One dated before a stop resolved later
+ * (arrivalBeforeRouteEndRefusal) is recorded as before, unflagged: mobile
+ * `main` stamps its checklist with the phone's own clock, which nothing
+ * corrects (K6 came later), and the comparison with the stops' instants
+ * would accuse a phone set a few minutes behind.
  */
 function enforcesArrivalChecklistRule(
   clientContract: number | null | undefined,
@@ -239,7 +303,9 @@ function enforcesArrivalChecklistRule(
 }
 
 export {
+  ARRIVAL_CHECKLIST_CLOCK_SLACK_MS,
   ARRIVAL_CHECKLIST_RULE_CONTRACT,
+  arrivalBeforeRouteEndRefusal,
   arrivalChecklistRefusal,
   checklistPhaseRefusal,
   enforcesArrivalChecklistRule,

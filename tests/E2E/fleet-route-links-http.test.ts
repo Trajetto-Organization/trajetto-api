@@ -28,8 +28,10 @@ import {
  *   missing one (404 DELIVERY_ROUTE_NOT_FOUND, never the router's ROUTE_NOT_FOUND).
  *   The link never asks the route's status. A driver's arrival checklist
  *   does, from an app build of contract 5 on: it waits for the route to have
- *   left and every stop to be resolved (409 CHECKLIST_ARRIVAL_ROUTE_OPEN);
- *   an older build's is recorded and flagged in the trail.
+ *   left and every stop to be resolved (409 CHECKLIST_ARRIVAL_ROUTE_OPEN),
+ *   and it must be dated after the route's last delivery (409
+ *   CHECKLIST_ARRIVAL_BEFORE_ROUTE_END, final); an older build's is recorded,
+ *   flagged in the trail when a stop was still open.
  * - A checklist or a refuelling the app queued offline carries the tap
  *   (occurred_at) and the send stamp (X-Client-Sent-At): the stored date is
  *   the tap on the server's clock, whatever the phone's clock said.
@@ -1093,6 +1095,104 @@ describe("the arrival checklist waits for the route to be resolved (05/11/2026)"
     );
 
     expect(response.statusCode, response.body).toBe(201);
+  });
+
+  it("refuses for good an arrival queued before the route's last delivery, and takes a new one (09/11/2026)", async () => {
+    // Offline, the driver resolved the stops and made the arrival at T; the
+    // dispatcher added a stop, which the driver delivered later. Every stop
+    // is final now, but the queued checklist reports the truck from before
+    // that delivery.
+    const route = await runningRoute(["COMPLETED", "COMPLETED"]);
+    const madeAt = new Date(Date.now() - 90 * 60 * 1000);
+
+    await prisma.routeStop.update({
+      where: { id: route.stopIds[0] },
+      data: { completed_at: new Date(madeAt.getTime() - 30 * 60 * 1000) },
+    });
+    await prisma.routeStop.update({
+      where: { id: route.stopIds[1] },
+      data: { completed_at: new Date() },
+    });
+
+    const key = randomUUID();
+    const queued = await arrival(
+      carrier.driverToken,
+      route,
+      {
+        "x-trajetto-client-version": CONTRACT_5,
+        "x-client-sent-at": new Date().toISOString(),
+      },
+      { client_submission_id: key, occurred_at: madeAt.toISOString() },
+    );
+
+    expect(queued.statusCode, queued.body).toBe(409);
+    expect(queued.headers["x-error-code"]).toBe(
+      "CHECKLIST_ARRIVAL_BEFORE_ROUTE_END",
+    );
+    expect(queued.json()).toEqual({
+      code: "CHECKLIST_ARRIVAL_BEFORE_ROUTE_END",
+      message:
+        "Este checklist de chegada foi feito antes da última entrega da rota. Faça um novo checklist de chegada, com a quilometragem e o estado do veículo de agora.",
+    });
+    expect(
+      await prisma.vehicleChecklist.count({
+        where: { client_submission_id: key },
+      }),
+    ).toBe(0);
+
+    // The new one, made now, after the last delivery.
+    const redone = await arrival(carrier.driverToken, route, {
+      "x-trajetto-client-version": CONTRACT_5,
+    });
+
+    expect(redone.statusCode, redone.body).toBe(201);
+  });
+
+  it("does not count a stop cancelled after the arrival, and leaves an older build's as it was", async () => {
+    const madeAt = new Date(Date.now() - 90 * 60 * 1000);
+
+    // Called off after the checklist: nobody drove to it.
+    const cancelled = await runningRoute(["COMPLETED", "CANCELLED"]);
+
+    await prisma.routeStop.update({
+      where: { id: cancelled.stopIds[0] },
+      data: { completed_at: new Date(madeAt.getTime() - 30 * 60 * 1000) },
+    });
+
+    const taken = await arrival(
+      carrier.driverToken,
+      cancelled,
+      { "x-trajetto-client-version": CONTRACT_5 },
+      { checklist_date: madeAt.toISOString() },
+    );
+
+    expect(taken.statusCode, taken.body).toBe(201);
+
+    // Delivered after it, from a build without the rule: recorded unflagged.
+    const delivered = await runningRoute(["COMPLETED"]);
+
+    await prisma.routeStop.update({
+      where: { id: delivered.stopIds[0] },
+      data: { completed_at: new Date() },
+    });
+
+    const older = await arrival(
+      carrier.driverToken,
+      delivered,
+      { "x-trajetto-client-version": CONTRACT_4 },
+      { checklist_date: madeAt.toISOString() },
+    );
+
+    expect(older.statusCode, older.body).toBe(201);
+
+    const created = await prisma.domainOutboxEvent.findFirstOrThrow({
+      where: {
+        topic: "vehicle-checklist.created",
+        aggregateId: older.json().id,
+      },
+    });
+
+    expect(created.payload).not.toHaveProperty("arrivalOpenStops");
   });
 
   it("answers a resend of a recorded arrival with it, even after a stop was added", async () => {

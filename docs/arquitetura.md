@@ -1517,6 +1517,34 @@ Checklist e abastecimento como parte da rota e da gestão da frota (plano de
   de um checklist já gravado é respondido com ele antes de qualquer regra (a
   busca do reenvio continua primeiro), e a recusa de data no futuro continua
   antes do reenvio, como era. A regra de saída (`ROUTE_START`) não muda.
+- **Checklist de chegada datado depois da última entrega (09/11/2026):** ter
+  todas as paradas finais quando o checklist chega ao servidor não basta; ele
+  precisa ter sido feito depois do fim do trabalho da rota. O caso: sem sinal,
+  o motorista resolve as paradas e faz a chegada, que fica na fila do
+  aparelho; o despachante inclui uma parada (K12, ou ela já existia e o
+  aparelho não sabia); a chegada recebe `CHECKLIST_ARRIVAL_ROUTE_OPEN`, espera
+  e, depois que o motorista entrega a parada nova, seria gravada com a data e
+  o conteúdo (km, estado do veículo) de antes dela. O rascunho que ficou retido
+  enquanto a rota reabria guarda a data antiga do mesmo jeito. Regra pura
+  `arrivalBeforeRouteEndRefusal` (`shared/vehicle/route-link.ts`): uma parada
+  `COMPLETED` ou `FAILED` cujo `completed_at` (o momento do fato, MOB-08) passa
+  da data do checklist (o toque corrigido pelo relógio do aparelho, K6) mais
+  `ARRIVAL_CHECKLIST_CLOCK_SLACK_MS` (5 minutos, porque cada instante carrega o
+  atraso da própria requisição) recusa o checklist com
+  `409 CHECKLIST_ARRIVAL_BEFORE_ROUTE_END` ("Este checklist de chegada foi
+  feito antes da última entrega da rota. Faça um novo checklist de chegada,
+  com a quilometragem e o estado do veículo de agora."). Uma parada cancelada
+  depois não conta: ninguém foi até ela, e o checklist mostra o veículo como a
+  rota o deixou. Vem logo depois da recusa de paradas em aberto, para o mesmo
+  público (motorista com `contract` 5 ou mais) e antes do bloco que grava, então
+  as fotos já enviadas não são apagadas. Ao contrário da outra, é
+  **definitiva**: o outbox do app a lê como recusa, a etapa Chegada da rota
+  fica "não enviado" com "Fazer checklist de chegada" e, quando o checklist
+  novo chega ao servidor, a fila do app descarta o recusado. O build de antes
+  (`contract` < 5 ou sem o cabeçalho) segue como era, sem marcação: o `main`
+  carimba o checklist com o relógio do aparelho, sem correção, e a comparação
+  acusaria um aparelho com a hora alguns minutos atrasada. O reenvio de um
+  checklist já gravado continua respondido com ele antes de qualquer regra.
 - **Abastecimento da rota (C5/F3):** `POST /fuel/create-fuel/:businessId`
   aceita `routeId`, com a mesma regra de vínculo (inclusive a atribuição do
   veículo); a regra da chegada é só do checklist.

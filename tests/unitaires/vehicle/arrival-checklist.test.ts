@@ -7,6 +7,7 @@ import { InMemoryBranchRepository } from "@/modules/branch/repositories/in-memor
 import type { Branch } from "@/modules/branch/dtos/branch-dto";
 import { CreateVehicleChecklistController } from "@/modules/vehicle-checklist/usecases/create-vehicle-checklist/create-vehicle-checklist-controller";
 import { CreateVehicleChecklistUseCase } from "@/modules/vehicle-checklist/usecases/create-vehicle-checklist/create-vehicle-checklist-usecase";
+import { VehicleChecklistArrivalBeforeRouteEndError } from "@/modules/vehicle-checklist/usecases/errors/vehicle-checklist-arrival-before-route-end-error";
 import { VehicleChecklistArrivalRouteOpenError } from "@/modules/vehicle-checklist/usecases/errors/vehicle-checklist-arrival-route-open-error";
 import { VehicleMileageInvalidError } from "@/modules/vehicle/usecases/errors/vehicle-mileage-invalid-error";
 import { renderVehicleChecklistCreatedActivity } from "@/shared/notifications/policies/vehicle-checklist-created-policy";
@@ -104,7 +105,11 @@ const business = {
 };
 
 /** A route of this driver with this truck, running since an hour ago. */
-function runningRoute(stops: RouteStopStatus[]) {
+function runningRoute(
+  stops: RouteStopStatus[],
+  // When each delivered or failed stop was resolved; none by default.
+  completedAt: Array<Date | null> = [],
+) {
   return {
     id: ROUTE,
     code: 12,
@@ -120,6 +125,7 @@ function runningRoute(stops: RouteStopStatus[]) {
       id: `stop-${index}`,
       sequence: (index + 1) * 10,
       status,
+      completed_at: completedAt[index] ?? null,
     })),
   };
 }
@@ -366,6 +372,152 @@ describe("a driver's arrival checklist on a resolved route", () => {
     await useCase.execute(input as never, DRIVER_USER, [], contract(5));
 
     expect(write).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("a driver's arrival checklist dated before the route's last delivery", () => {
+  // Every stop is final when it reaches the server, but one was delivered
+  // (or failed) after the checklist's own moment: saved offline before the
+  // dispatcher added that stop, or a draft from before it. The late route's
+  // last stop was resolved just now; `earlier` dates the checklist 90
+  // minutes ago, the input's own date is a minute ago.
+  const minutesAgo = (minutes: number) =>
+    new Date(Date.now() - minutes * 60 * 1000);
+
+  const lateRoute = () =>
+    runningRoute(["COMPLETED", "COMPLETED"], [minutesAgo(120), minutesAgo(0)]);
+
+  const earlier = (input: Record<string, unknown>) => ({
+    ...input,
+    checklist_date: minutesAgo(90).toISOString(),
+  });
+
+  it("is refused for good for a build of contract 5 on, nothing written", async () => {
+    for (const build of [5, 6]) {
+      const { useCase, write, outbox, input } = checklistUseCase(
+        driverUser,
+        lateRoute(),
+      );
+
+      const refusal = await useCase
+        .execute(earlier(input) as never, DRIVER_USER, [], contract(build))
+        .catch((error: unknown) => error);
+
+      expect(refusal, String(build)).toBeInstanceOf(
+        VehicleChecklistArrivalBeforeRouteEndError,
+      );
+      expect(refusal).toMatchObject({
+        statusCode: 409,
+        code: "CHECKLIST_ARRIVAL_BEFORE_ROUTE_END",
+        laterStops: 1,
+        message:
+          "Este checklist de chegada foi feito antes da última entrega da rota. Faça um novo checklist de chegada, com a quilometragem e o estado do veículo de agora.",
+      });
+      expect(write).not.toHaveBeenCalled();
+      expect(outbox.publish).not.toHaveBeenCalled();
+    }
+  });
+
+  it("is taken once made after that delivery", async () => {
+    const { useCase, write, input, created } = checklistUseCase(
+      driverUser,
+      runningRoute(["COMPLETED", "FAILED"], [minutesAgo(120), minutesAgo(30)]),
+    );
+
+    // The input's own date: a minute ago.
+    await useCase.execute(input as never, DRIVER_USER, [], contract(5));
+
+    expect(write).toHaveBeenCalledTimes(1);
+    expect(created()).not.toHaveProperty("arrivalOpenStops");
+  });
+
+  it("is taken a minute before a stop resolved just now: the clocks' slack", async () => {
+    const { useCase, write, input } = checklistUseCase(driverUser, lateRoute());
+
+    await useCase.execute(input as never, DRIVER_USER, [], contract(5));
+
+    expect(write).toHaveBeenCalledTimes(1);
+  });
+
+  it("waits for an open stop first: that refusal is the queue's 'not yet'", async () => {
+    const { useCase, input } = checklistUseCase(
+      driverUser,
+      runningRoute(["COMPLETED", "PENDING"], [minutesAgo(0)]),
+    );
+
+    await expect(
+      useCase.execute(earlier(input) as never, DRIVER_USER, [], contract(5)),
+    ).rejects.toBeInstanceOf(VehicleChecklistArrivalRouteOpenError);
+  });
+
+  it("does not count a stop cancelled after it", async () => {
+    const { useCase, write, input } = checklistUseCase(
+      driverUser,
+      runningRoute(["COMPLETED", "CANCELLED"], [minutesAgo(120)]),
+    );
+
+    await useCase.execute(
+      earlier(input) as never,
+      DRIVER_USER,
+      [],
+      contract(5),
+    );
+
+    expect(write).toHaveBeenCalledTimes(1);
+  });
+
+  it("is recorded as before, unflagged, for an older build or one that sends no header", async () => {
+    for (const client of [contract(4), undefined, null]) {
+      const { useCase, write, input, created } = checklistUseCase(
+        driverUser,
+        lateRoute(),
+      );
+
+      await useCase.execute(earlier(input) as never, DRIVER_USER, [], client);
+
+      expect(write, String(client?.contract)).toHaveBeenCalledTimes(1);
+      expect(created()).not.toHaveProperty("arrivalOpenStops");
+    }
+  });
+
+  it("never asks the office, nor the departure", async () => {
+    for (const caller of [manager, adminDriver]) {
+      const { useCase, write, input } = checklistUseCase(caller, lateRoute());
+
+      await useCase.execute(
+        earlier(input) as never,
+        caller.id,
+        [],
+        contract(5),
+      );
+
+      expect(write, caller.role).toHaveBeenCalledTimes(1);
+    }
+
+    const { useCase, write, input } = checklistUseCase(driverUser, lateRoute());
+
+    await useCase.execute(
+      { ...earlier(input), phase: "ROUTE_START" } as never,
+      DRIVER_USER,
+      [],
+      contract(5),
+    );
+
+    expect(write).toHaveBeenCalledTimes(1);
+  });
+
+  it("answers a resend of the one already recorded with it, before the rule", async () => {
+    const recorded = { id: "c0", driverId: DRIVER, routeId: ROUTE };
+    const { useCase, write, input } = checklistUseCase(
+      driverUser,
+      lateRoute(),
+      recorded,
+    );
+
+    await expect(
+      useCase.execute(earlier(input) as never, DRIVER_USER, [], contract(5)),
+    ).resolves.toBe(recorded);
+    expect(write).not.toHaveBeenCalled();
   });
 });
 

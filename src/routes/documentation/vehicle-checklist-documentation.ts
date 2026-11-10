@@ -281,7 +281,7 @@ const vehicleChecklistResponses = {
       code: z
         .string()
         .describe(
-          "SUBMISSION_OWNER_MISMATCH, BRANCH_REQUIRED, BRANCH_INACTIVE ou CHECKLIST_ARRIVAL_ROUTE_OPEN",
+          "SUBMISSION_OWNER_MISMATCH, BRANCH_REQUIRED, BRANCH_INACTIVE, CHECKLIST_ARRIVAL_ROUTE_OPEN ou CHECKLIST_ARRIVAL_BEFORE_ROUTE_END",
         ),
       message: z.string(),
       // Sent by replyChecklistError with the arrival refusal only.
@@ -297,7 +297,8 @@ const vehicleChecklistResponses = {
       "SUBMISSION_OWNER_MISMATCH: a chave de idempotência já foi usada por outro motorista desta empresa — gere uma chave nova e reenvie; repetir a mesma nunca passa. " +
         "BRANCH_REQUIRED: não há filial ATIVA para registrar o checklist do motorista: nem a do veículo, nem a dele, nem uma única filial ativa da empresa (as desativadas são puladas). Com `routeId`, quem opera as entregas é avisado uma vez por rota e momento, saída ou chegada (`route.record_branch_missing`, na caixa de entrada e na atividade da rota); reenvie depois que o gestor corrigir a filial: os reenvios não repetem o aviso. " +
         "BRANCH_INACTIVE: a filial que o servidor preenche quando o gestor a deixa em branco (a do veículo, ou a do motorista informado) está desativada; uma filial desativada enviada no corpo pelo gestor é recusada antes, com 403. O checklist do motorista nunca vai para uma filial desativada: a filial que o app dele envia no corpo é ignorada. " +
-        "CHECKLIST_ARRIVAL_ROUTE_OPEN: o checklist de chegada (`phase` ROUTE_END) do motorista chegou antes de a rota estar resolvida — ela ainda não começou ou tem parada em aberto (pendente ou no local); `open_stops` diz quantas. Só para o app que envia `contract` 5 ou maior em `x-trajetto-client-version`: o de versão anterior, ou sem o cabeçalho, tem o checklist gravado e marcado na atividade, e o do escritório nunca passa por essa regra. Nada foi gravado; reenvie depois que todas as paradas forem resolvidas. O reenvio de um checklist já gravado é respondido com ele antes dessa regra.",
+        "CHECKLIST_ARRIVAL_ROUTE_OPEN: o checklist de chegada (`phase` ROUTE_END) do motorista chegou antes de a rota estar resolvida — ela ainda não começou ou tem parada em aberto (pendente ou no local); `open_stops` diz quantas. Só para o app que envia `contract` 5 ou maior em `x-trajetto-client-version`: o de versão anterior, ou sem o cabeçalho, tem o checklist gravado e marcado na atividade, e o do escritório nunca passa por essa regra. Nada foi gravado; reenvie depois que todas as paradas forem resolvidas. O reenvio de um checklist já gravado é respondido com ele antes dessa regra. " +
+        "CHECKLIST_ARRIVAL_BEFORE_ROUTE_END: com todas as paradas resolvidas, o checklist de chegada do motorista é datado de antes da última entrega da rota — uma parada foi concluída ou teve insucesso depois da data dele (`completed_at`, o momento do fato), além de 5 minutos de folga para os relógios; uma parada cancelada depois não conta. Acontece com o checklist salvo sem sinal antes de o despachante incluir uma parada, ou com o rascunho de antes dela. Mesmo público da recusa anterior (`contract` 5 ou maior; o de versão anterior tem o checklist gravado como antes). Definitivo: nada foi gravado e o mesmo checklist recebe sempre a mesma resposta; faça um novo checklist de chegada, que, feito agora, passa.",
     ),
   driverInactive: z
     .object({
