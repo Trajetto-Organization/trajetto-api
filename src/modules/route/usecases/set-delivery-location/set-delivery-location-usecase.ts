@@ -6,6 +6,8 @@ import { IUserRepository } from "@/modules/user/repositories/IUser-repository";
 import { assertRouteDispatcher } from "../shared/assert-route-dispatcher";
 import { announcePlanChange } from "../shared/route-plan-change";
 
+import { sendRouteEventToDriver } from "@/websocket";
+
 import { AppError } from "@/shared/errors/AppError";
 // The box lives with the create's coordinates (plan of 02/11/2026, E1): a
 // pin and a point given at the create are refused by the same rule.
@@ -42,6 +44,16 @@ type SetDeliveryLocationResult = NonNullable<PinnedLocation["delivery"]> & {
  * A plan, not evidence: the proof GPS lives on the delivery events and is
  * never touched here. A DELIVERED or CANCELLED delivery is a closed record
  * and keeps the point it had.
+ *
+ * With the route running too (D23): a point that was missing or wrong is
+ * often found with the truck at the customer's door, and the driver's
+ * geofence and navigation read the point. Their phone is told quietly to
+ * read the day again (the routeEvent `route-stop.located`, as when the
+ * geocoder finds a point): no plan version, no "rota alterada", no push —
+ * no stop moved — so it changes nothing for a company whose geofence is
+ * off. It is the way out when the point is wrong, never when the GPS read
+ * wrong: moving a right point to where a bad fix put the driver stores a
+ * wrong address and hides the "Fora do raio" the proof would carry.
  */
 @injectable()
 class SetDeliveryLocationUseCase {
@@ -96,6 +108,20 @@ class SetDeliveryLocationUseCase {
         planVersion: pinned.route.planVersion,
         status: pinned.route.status,
         driverId: pinned.route.driverId,
+      });
+    }
+
+    // A running route's plan stays as it was, and only its driver hears of
+    // the point. Every app build rereads the day on any routeEvent, silently.
+    if (pinned.runningRoute) {
+      const driverUser = await this.user.findUserByDriverId(
+        pinned.runningRoute.driverId,
+      );
+
+      sendRouteEventToDriver(driverUser?.id ?? null, {
+        type: "route-stop.located",
+        routeId: pinned.runningRoute.routeId,
+        deliveryId,
       });
     }
 

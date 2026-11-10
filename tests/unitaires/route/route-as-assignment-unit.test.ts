@@ -895,6 +895,119 @@ describe("pinning a delivery on the map (D7)", () => {
     });
   });
 
+  it("tells a running route's driver quietly, without moving its plan (D23)", async () => {
+    const delivery = await seedDelivery();
+    const route = await plannedRoute([delivery]);
+
+    // Released, the pin is a plan change as it always was: a version and
+    // route.stops_changed in both rooms.
+    await context.release.execute({
+      userId: DISPATCHER,
+      businessId: A,
+      routeId: route.id,
+    });
+    emitted.length = 0;
+
+    await context.setLocation.execute({
+      userId: DISPATCHER,
+      businessId: A,
+      deliveryId: delivery,
+      point: { latitude: -23.56, longitude: -46.64 },
+    });
+
+    expect(versionOf(route.id)).toBe(1);
+    expect(emitted.map((entry) => [entry.room, entry.event.type])).toEqual([
+      ["business", "route.stops_changed"],
+      ["driver", "route.stops_changed"],
+    ]);
+
+    context.routeRepository.routes.find(
+      (entry) => entry.id === route.id,
+    )!.status = "IN_PROGRESS";
+    emitted.length = 0;
+
+    const pinned = await context.setLocation.execute({
+      userId: DISPATCHER,
+      businessId: A,
+      deliveryId: delivery,
+      point: { latitude: -23.55, longitude: -46.63 },
+    });
+
+    // Running, answered as before D23: no plan moved, so nothing for the
+    // page to adopt.
+    expect(pinned).toMatchObject({
+      geo_source: "MANUAL",
+      routeId: null,
+      planVersion: null,
+    });
+    expect(versionOf(route.id)).toBe(1);
+
+    // Only the driver's own room, with the event the geocoder's point uses:
+    // every app build rereads the day on it with no toast and no chime. No
+    // route.stops_changed — the "rota alterada" and its push — for a pin
+    // that moved no stop, whatever the company's geofence (the E2E holds
+    // the push's absence).
+    expect(emitted).toEqual([
+      {
+        room: "driver",
+        id: DRIVER_USER,
+        event: {
+          type: "route-stop.located",
+          routeId: route.id,
+          deliveryId: delivery,
+        },
+      },
+    ]);
+
+    // Clearing the point is the same news for the phone.
+    emitted.length = 0;
+
+    await context.setLocation.execute({
+      userId: DISPATCHER,
+      businessId: A,
+      deliveryId: delivery,
+      point: null,
+    });
+
+    expect(versionOf(route.id)).toBe(1);
+    expect(emitted.map((entry) => [entry.room, entry.event.type])).toEqual([
+      ["driver", "route-stop.located"],
+    ]);
+  });
+
+  it("moves no version and tells nobody when no planned, released or running route holds the stop", async () => {
+    const loose = await seedDelivery();
+
+    const unrouted = await context.setLocation.execute({
+      userId: DISPATCHER,
+      businessId: A,
+      deliveryId: loose,
+      point: { latitude: -23.55, longitude: -46.63 },
+    });
+
+    expect(unrouted).toMatchObject({ routeId: null, planVersion: null });
+
+    // A route that ended keeps its plan as it ran.
+    const delivery = await seedDelivery();
+    const route = await plannedRoute([delivery]);
+
+    context.routeRepository.routes.find(
+      (entry) => entry.id === route.id,
+    )!.status = "COMPLETED";
+    emitted.length = 0;
+
+    const ended = await context.setLocation.execute({
+      userId: DISPATCHER,
+      businessId: A,
+      deliveryId: delivery,
+      point: { latitude: -23.55, longitude: -46.63 },
+    });
+
+    expect(ended).toMatchObject({ routeId: null, planVersion: null });
+    expect(versionOf(route.id)).toBe(0);
+    expect(emitted).toEqual([]);
+  });
+
   it("answers another company's delivery as not found, and a closed one as locked", async () => {
     const delivery = await seedDelivery();
 

@@ -118,6 +118,12 @@ const APPENDABLE_STATUSES: RouteStatus[] = [
   "IN_PROGRESS",
 ];
 
+/**
+ * The routes "Fixar no mapa" reaches: a running route too, whose version
+ * stays (D23).
+ */
+const PINNABLE_STATUSES: RouteStatus[] = APPENDABLE_STATUSES;
+
 /** How many routes or vehicles a preview lists, as the real query takes. */
 const PREVIEW_LIMIT = 5;
 
@@ -1745,7 +1751,7 @@ class InMemoryRouteRepository implements IRouteRepository {
     if (!delivery) return null;
 
     if (delivery.status === "DELIVERED" || delivery.status === "CANCELLED") {
-      return { locked: true, delivery: null, route: null };
+      return { locked: true, delivery: null, route: null, runningRoute: null };
     }
 
     delivery.latitude = point?.latitude ?? null;
@@ -1757,9 +1763,14 @@ class InMemoryRouteRepository implements IRouteRepository {
       (entry) => entry.deliveryId === deliveryId && isStopOpen(entry.status),
     );
 
-    const route = stop ? this.editableRoute(stop.routeId, businessId) : null;
+    const route = stop
+      ? this.editableRoute(stop.routeId, businessId, PINNABLE_STATUSES)
+      : null;
 
-    if (route) route.plan_version += 1;
+    // A running route keeps its version, as the Prisma write does (D23).
+    const bumped = route !== null && EDITABLE_STATUSES.includes(route.status);
+
+    if (bumped) route.plan_version += 1;
 
     return {
       locked: false,
@@ -1770,7 +1781,11 @@ class InMemoryRouteRepository implements IRouteRepository {
         geo_source: delivery.geo_source,
         geo_updated_at: delivery.geo_updated_at,
       },
-      route: route ? { routeId: route.id, ...this.planResult(route) } : null,
+      route: bumped ? { routeId: route.id, ...this.planResult(route) } : null,
+      runningRoute:
+        route?.status === "IN_PROGRESS"
+          ? { routeId: route.id, driverId: route.driverId }
+          : null,
     };
   }
 

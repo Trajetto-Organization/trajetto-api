@@ -251,6 +251,17 @@ const APPENDABLE_STATUSES: RouteStatus[] = [
 ];
 
 /**
+ * The routes "Fixar no mapa" reaches (D23): a running route too. The point
+ * is what the driver's geofence and navigation read, and a route on the
+ * street is when a dispatcher finds out an address had no point, or a wrong
+ * one. Only a planned or released plan moves a version (EDITABLE_STATUSES):
+ * on a running route a pin moves no stop and changes no order, so its
+ * driver is told quietly to read the day again, with no "rota alterada"
+ * (set-delivery-location-usecase).
+ */
+const PINNABLE_STATUSES: RouteStatus[] = APPENDABLE_STATUSES;
+
+/**
  * "The" running route of a driver, when there could be two: the oldest day,
  * then the oldest row. A total order, so every read that asks agrees.
  */
@@ -1633,7 +1644,10 @@ class RouteRepository implements IRouteRepository {
     tx: Prisma.TransactionClient,
     routeId: string,
     businessId: string,
-    /** What the write accepts; addStops widens it (APPENDABLE_STATUSES). */
+    /**
+     * What the write accepts; addStops and the pin widen it
+     * (APPENDABLE_STATUSES, PINNABLE_STATUSES).
+     */
     statuses: RouteStatus[] = EDITABLE_STATUSES,
   ): Promise<LockedRoute | null> {
     const rows = await tx.$queryRaw<
@@ -2085,13 +2099,18 @@ class RouteRepository implements IRouteRepository {
         where: {
           deliveryId,
           status: { in: OPEN_STOP_STATUSES },
-          route: { businessId, status: { in: EDITABLE_STATUSES } },
+          route: { businessId, status: { in: PINNABLE_STATUSES } },
         },
         select: { routeId: true },
       });
 
       const route = holder
-        ? await this.lockEditableRoute(tx, holder.routeId, businessId)
+        ? await this.lockEditableRoute(
+            tx,
+            holder.routeId,
+            businessId,
+            PINNABLE_STATUSES,
+          )
         : null;
 
       const delivery = await tx.delivery.findFirst({
@@ -2102,7 +2121,12 @@ class RouteRepository implements IRouteRepository {
       if (!delivery) return null;
 
       if (delivery.status === "DELIVERED" || delivery.status === "CANCELLED") {
-        return { locked: true, delivery: null, route: null };
+        return {
+          locked: true,
+          delivery: null,
+          route: null,
+          runningRoute: null,
+        };
       }
 
       const updated = await tx.delivery.update({
@@ -2130,9 +2154,12 @@ class RouteRepository implements IRouteRepository {
       });
 
       // The point is part of the plan the driver follows on a released
-      // route, so the plan moves a version (decision 14.7, §4.11).
+      // route, so the plan moves a version (decision 14.7, §4.11). A running
+      // route keeps its version (D23): the pin moves no stop.
       const planVersion =
-        route && holder ? await this.bumpPlanVersion(tx, holder.routeId) : null;
+        route && holder && EDITABLE_STATUSES.includes(route.status)
+          ? await this.bumpPlanVersion(tx, holder.routeId)
+          : null;
 
       return {
         locked: false,
@@ -2146,6 +2173,10 @@ class RouteRepository implements IRouteRepository {
                 driverId: route.driverId,
                 planVersion,
               }
+            : null,
+        runningRoute:
+          route && holder && route.status === "IN_PROGRESS"
+            ? { routeId: holder.routeId, driverId: route.driverId }
             : null,
       };
     });

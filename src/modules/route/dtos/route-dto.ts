@@ -462,8 +462,14 @@ interface PinnedLocation {
     geo_updated_at: Date | null;
   } | null;
 
-  /** The editable route holding it, when its plan moved a version. */
+  /** The planned or released route holding it, when its plan moved a version. */
   route: (PlanWriteResult & { routeId: string }) | null;
+
+  /**
+   * The running route holding it (D23): its plan keeps its version — a pin
+   * moves no stop — and its driver is told to read the day again.
+   */
+  runningRoute: { routeId: string; driverId: string } | null;
 }
 
 /** The route a delivery's open stop is on. */

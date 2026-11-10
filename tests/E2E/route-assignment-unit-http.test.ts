@@ -1018,6 +1018,64 @@ describe("pinning a delivery on the map (D7)", () => {
 
     expect([row.latitude, row.longitude]).toEqual([-23.55, -46.63]);
   });
+
+  it("pins on a running route without moving its plan or pushing its driver (D23)", async () => {
+    const [delivery] = await seedDeliveries(1);
+    const route = await createRoute([delivery]);
+
+    // One route on the street per truck and per driver (partial unique
+    // indexes): an earlier case left one running.
+    await prisma.route.updateMany({
+      where: { businessId: CARRIER_A, status: "IN_PROGRESS" },
+      data: { status: "CANCELLED" },
+    });
+
+    await prisma.route.update({
+      where: { id: route.id },
+      data: { status: "IN_PROGRESS", started_at: new Date() },
+    });
+    await prisma.delivery.update({
+      where: { id: delivery },
+      data: { status: "IN_TRANSIT" },
+    });
+
+    const before = (
+      await prisma.route.findUniqueOrThrow({ where: { id: route.id } })
+    ).plan_version;
+
+    const pinned = await call(
+      "PATCH",
+      `/route/set-delivery-location/${delivery}/business/${CARRIER_A}`,
+      dispatcherA,
+      { latitude: -23.56, longitude: -46.64 },
+    );
+
+    expect(pinned.statusCode, pinned.body).toBe(200);
+    // The point is stored; no plan moved, so the answer names none.
+    expect(pinned.json().data).toMatchObject({
+      latitude: -23.56,
+      longitude: -46.64,
+      geo_source: "MANUAL",
+      routeId: null,
+      planVersion: null,
+    });
+
+    const after = await prisma.route.findUniqueOrThrow({
+      where: { id: route.id },
+    });
+
+    expect(after.plan_version).toBe(before);
+    expect(after.status).toBe("IN_PROGRESS");
+    expect(await openStops(route.id)).toHaveLength(1);
+
+    // No "rota alterada" push for a pin that moved no stop: the driver's
+    // phone hears only the quiet routeEvent (route-stop.located).
+    expect(
+      await prisma.domainOutboxEvent.count({
+        where: { topic: "route.plan_changed", aggregateId: route.id },
+      }),
+    ).toBe(0);
+  });
 });
 
 describe("the route's map layers and the tower feed", () => {

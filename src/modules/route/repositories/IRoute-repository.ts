@@ -382,7 +382,9 @@ interface IRouteRepository {
   /**
    * Pins (or clears, with null) the delivery's address point (D7). Null when
    * the delivery is not the company's; `locked` when it is DELIVERED or
-   * CANCELLED. Bumps the plan of the editable route holding it.
+   * CANCELLED. Bumps the plan of the route holding it while that route is
+   * planned or released; a running one keeps its version and is answered as
+   * `runningRoute`, for its driver to be told (D23).
    */
   pinDeliveryLocation: (
     deliveryId: string,

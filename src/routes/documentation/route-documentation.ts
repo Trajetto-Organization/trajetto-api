@@ -618,7 +618,7 @@ const routeResponses = {
         .string()
         .nullable()
         .describe(
-          "A rota PLANNED/RELEASED que tem a entrega como parada; nulo quando nenhuma.",
+          "A rota PLANNED/RELEASED que tem a entrega como parada aberta, cujo plano subiu de versão; nulo quando nenhuma. Também nulo numa rota IN_PROGRESS: a versão dela não sobe, e o app do motorista só é avisado em silêncio (route-stop.located) para ler o ponto novo.",
         ),
       planVersion: z
         .number()

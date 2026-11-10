@@ -1446,6 +1446,28 @@ recente entre chegada, comprovante e ocorrência (`deliveryId`, `type`,
 sinalizada, não é ponto do mapa e por isso não vem em `visitedPoints`;
 antes ela aparecia na torre e na linha do tempo, mas não no card da parada.
 
+**As saídas no `BLOCK` (09/11/2026).** A recusa só alcança a chegada e o
+comprovante feitos agora, e o motorista nunca fica sem caminho:
+
+- a ocorrência nunca é recusada (D13) e sai sinalizada;
+- **ponto errado** (o geocodificador parou no meio da rua, o cliente mudou
+  de endereço): a base corrige no "Fixar no mapa" e o app passa a medir pelo
+  ponto novo na hora (D23);
+- **GPS errado com o ponto certo** (centro da cidade, galpão, subsolo): a
+  base não deve mover o ponto para onde o GPS errou. Isso grava um endereço
+  errado, que vale para a navegação, o mapa e os relatórios, e tira o "Fora
+  do raio" do comprovante. Apagar o ponto também esconde o selo, porque a
+  parada sem ponto não é avaliada. A saída é a base confirmar a entrega pelo
+  painel (`PATCH /delivery/update-delivery-status`, Entregue, com motivo do
+  catálogo e observação). A linha do tempo guarda quem fez, quando e por
+  quê, mas a foto e a assinatura do motorista não entram.
+
+Não existe liberação por entrega, que guardaria a prova do motorista com o
+selo "Fora do raio" e o nome de quem liberou. Ela pede coluna nova, rota
+nova, botão na web e o app novo (o app antigo recusa no toque, sem ir ao
+servidor), e muda o que o dono definiu para o `BLOCK`. Fica como decisão do
+dono.
+
 ## Frota ligada à rota
 
 Checklist e abastecimento como parte da rota e da gestão da frota (plano de
