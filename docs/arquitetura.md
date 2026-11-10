@@ -751,9 +751,21 @@ senha, sessões e segundo fator (detalhes depois da tabela).
   `token` e `refresh_token`; o `password_changed` vai só para as salas
   `session:<id>` das outras sessões, e os sockets desta adotam a versão nova
   (`adoptSessionVersion`, entre réplicas pelo adapter) em vez de caírem na
-  varredura como `user_updated`. Os aparelhos de push das outras sessões (e
-  os sem sessão, de antes da coluna) saem; o bloqueio por senhas erradas e o
-  `must_change_password` são limpos. Cliente que ignora os tokens sai na
+  varredura como `user_updated`. Uma leitura da varredura (ou da releitura
+  logo depois do join) que estava em andamento no commit julga o socket pela
+  versão com que começou, enquanto a linha lida disser essa versão, e não
+  derruba a sessão mantida. Um socket desta sessão que estava no meio do
+  handshake no commit ainda não está em `session:<id>` e perde a adoção:
+  entra com a versão antiga, e a releitura logo depois do join o encerra com
+  `user_updated`. Na web, isso desloga o navegador (`user_updated` vira
+  `session_expired`): a releitura leva milissegundos e costuma chegar antes do
+  `renewSocketSession` da aba que trocou a senha, que antes trocava esse
+  socket muito antes da varredura. No app, a carência de
+  `securityActionFromOwnPasswordChange` reconecta com o token novo. A regra da
+  versão ficou como está (decisão do dono); a linha `sockets ended right after
+their handshake` mostra se isso acontece. Os aparelhos de push das outras
+  sessões (e os sem sessão, de antes da coluna) saem; o bloqueio por senhas
+  erradas e o `must_change_password` são limpos. Cliente que ignora os tokens sai na
   próxima requisição, como antes; com e-mail, o aviso "senha atualizada"
   continua. A sessão é conferida viva antes, fora da transação (e de um
   bcrypt); se ela terminou nesse meio-tempo (logout, "Revogar este
@@ -2244,10 +2256,11 @@ não persiste nada.
 **Tempo real** ([ADR 0007](./adr/0007-tempo-real-at-most-once.md)): Socket.IO
 só com WebSocket, salas por usuário,
 sessão, empresa (`business:<id>`) e operação (`operations:<id>`). A
-autorização é relida do banco a cada inscrição e revalidada periodicamente
-(`SOCKET_REVALIDATE_MS`, 3 min com jitter). O socket da web da equipe de
-despacho entra nas salas de operação e do SAC da própria empresa no
-connect; o do app (cabeçalho `x-trajetto-client: mobile` ou
+autorização é relida do banco a cada inscrição; a sessão é relida no banco
+logo depois de o socket entrar nas salas (fecha a janela entre o handshake e
+o join) e revalidada a cada `SOCKET_REVALIDATE_MS` (3 min com jitter). O
+socket da web da equipe de despacho entra nas salas de operação e do SAC da
+própria empresa no connect; o do app (cabeçalho `x-trajetto-client: mobile` ou
 `auth.client: "mobile"`) só entra com `operationsSubscribe` e sai com
 `operationsUnsubscribe`, a própria empresa inclusive (onda 4, ver
 [Gestor e master no app](#gestor-e-master-no-app-rotas-ao-vivo-autorizações-e-salas-sob-demanda)).
@@ -2256,6 +2269,37 @@ verdade está no banco e as telas refazem a consulta ao reconectar. Mudanças de
 catálogo emitem `catalogChanged` `{ businessId, entity }` depois do commit, e
 a web invalida a lista daquela entidade. `SOCKET_ADAPTER_KEY` separa os canais
 de dois ambientes que dividam um Redis (Pub/Sub ignora o número do banco).
+
+A releitura logo depois do join fecha uma janela do handshake. Ele lê a
+sessão no `io.use`, em várias idas ao banco, e o socket só entra nas salas
+depois do `next()`. Uma revogação gravada e avisada nesse meio-tempo (mudança
+de permissão, empresa desativada, motorista inativado, senha trocada, logout)
+não achava o socket em sala nenhuma: o aviso se perdia, e ele conectava com
+os direitos de antes (na web, as salas de operação e do SAC inclusive) até a
+varredura, até 225 s depois. A releitura
+(`src/shared/socket/admission-recheck.ts`) começa depois do último join e usa
+a regra e o veredito da varredura: a sessão encerrada recebe o
+`securityAction` de sempre e cai; quem só perdeu `delivery_manage` sai das
+salas de despacho, continua conectado e recebe o `permissions_changed` que
+tinha se perdido (a web relê o `/user/me`, o app também, e nenhum dos dois sai
+da sessão). Esse aviso sai uma vez só, quando o handshake deu o direito e
+nada o tirou depois. A releitura nunca devolve o direito: uma remoção avisada
+enquanto ela lia já tirou o socket das salas, e um veredito lido antes desse
+commit não religa o `isDeliveryStaff`, que sozinho libera para os motoristas
+os avisos de "digitando" e "gravando" do SAC (`keepAdmitted`). Cada réplica
+junta as conexões novas numa leitura em lote, com no máximo uma em andamento;
+se o banco falhar, ninguém é derrubado e o caso fica para a varredura (no
+máximo uma linha de log por minuto, com quantos sockets ficaram para a
+varredura). A linha `sockets ended right after their handshake` conta quantas
+vezes a corrida acontece. Isso só fecha a janela porque todo aviso de
+revogação sai **depois do commit**: o que foi gravado antes da releitura ela
+enxerga, e o que foi gravado depois é avisado com o socket já nas salas. Um
+aviso emitido de dentro da transação reabre a janela. A releitura e a
+varredura leem o primário: apontá-las para uma réplica de leitura do Postgres
+reabre a janela sem nenhum teste acusar, porque os E2E usam um banco só.
+Provas: `tests/unitaires/socket/socket-admission-race.test.ts` e o describe
+`"a revocation between the handshake's reads and its joins"` de
+`tests/E2E/socket-revocation.test.ts`.
 
 **Escala horizontal** ([ADR 0008](./adr/0008-escala-horizontal.md)): N
 réplicas idênticas atrás do Traefik, sem

@@ -17,9 +17,11 @@ import { mayReadDeliveries } from "./operations-access";
  * position, every route event and every chat message of the company, for as
  * long as the tab stayed open. HTTP had refused them on the very next request.
  *
- * This is the rule both late checks share: the subscription handlers, which
- * ask it before joining a room, and the per-replica sweep, which asks it for
- * every local socket on a timer.
+ * This is the rule every late check shares: the subscription handlers, which
+ * ask it before joining a room; the admission recheck, which asks it again
+ * right after a new socket joined its rooms (admission-recheck.ts: the
+ * handshake read the session before those joins); and the per-replica sweep,
+ * which asks it for every local socket on a timer.
  */
 
 /** What the handshake established about one connection. */
@@ -251,6 +253,33 @@ function subjectOf(data: Record<string, unknown>): SocketSubject {
   };
 }
 
+/**
+ * The subject a socket is judged as once its rows are in.
+ *
+ * A session that changed its own password keeps going: its sockets adopt the
+ * new version (websocket.ts `adoptLocalSessionVersion`) whenever that frame
+ * lands, while these rows were being read included. A row read before that
+ * commit still says the version the socket had when the read began, and
+ * judging it against the adopted one ended a live session as `user_updated`.
+ * So the version the read started from stands while the row says exactly
+ * that; any other row is judged against the socket's version now. Neither
+ * accepts a version this socket never held, and the version only moves
+ * forward, for a session the change kept.
+ */
+function subjectAfterLoad(
+  loaded: SocketSubject,
+  current: SocketSubject,
+  rows: SubjectRows,
+): SocketSubject {
+  const user = rows.users.get(current.userId);
+
+  if (user && (user.session_version ?? 0) === loaded.sessionVersion) {
+    return { ...current, sessionVersion: loaded.sessionVersion };
+  }
+
+  return current;
+}
+
 interface SweptSocket {
   connected: boolean;
   data: Record<string, unknown>;
@@ -292,24 +321,30 @@ async function sweepConnections<S extends SweptSocket>(
     return { checked: 0, ended: 0, skipped: false };
   }
 
+  // What each socket was when the read began (see subjectAfterLoad).
+  const subjects = authenticated.map((socket) => subjectOf(socket.data));
+
   let rows: SubjectRows;
 
   try {
-    rows = await load(authenticated.map((socket) => subjectOf(socket.data)));
+    rows = await load(subjects);
   } catch {
     return { checked: 0, ended: 0, skipped: true };
   }
 
   let ended = 0;
 
-  for (const socket of authenticated) {
+  for (const [index, socket] of authenticated.entries()) {
     // Gone while the rows were loading: nothing left to protect.
     if (!socket.connected) continue;
 
     let verdict: SocketVerdict;
 
     try {
-      verdict = await judgeFromRows(subjectOf(socket.data), rows);
+      verdict = await judgeFromRows(
+        subjectAfterLoad(subjects[index], subjectOf(socket.data), rows),
+        rows,
+      );
     } catch {
       continue;
     }

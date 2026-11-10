@@ -968,8 +968,10 @@ leva os eventos entre réplicas pelo `@socket.io/redis-adapter`
 - **App.** Conecta na mesma URL da API com o próprio token
   (`trajetto-mobile/providers/socket-provider.tsx`).
 - **Salas.** Por usuário, sessão, empresa (`business:<id>`) e operação
-  (`operations:<id>`). A autorização é relida do banco a cada inscrição e
-  revalidada a cada 3 min, com jitter (`SOCKET_REVALIDATE_MS`). O handshake tem
+  (`operations:<id>`). A autorização é relida do banco a cada inscrição; a
+  sessão é relida no banco logo depois de o socket entrar nas salas (fecha a
+  janela entre o handshake e o join, `src/shared/socket/admission-recheck.ts`)
+  e revalidada a cada 3 min, com jitter (`SOCKET_REVALIDATE_MS`). O handshake tem
   rate limit próprio (`src/shared/socket/handshake-rate-limit.ts`). A web da
   equipe de despacho entra na operação e no SAC da própria empresa no
   connect; o app (`x-trajetto-client: mobile`) só entra com

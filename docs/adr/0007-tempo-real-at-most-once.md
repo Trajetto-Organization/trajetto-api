@@ -25,8 +25,19 @@
 ## Como o código cumpre
 
 - Salas por usuário, sessão, empresa (`business:<id>`) e operação
-  (`operations:<id>`). A autorização é relida do banco a cada inscrição e
-  revalidada a cada `SOCKET_REVALIDATE_MS` (3 min, com jitter).
+  (`operations:<id>`). A autorização é relida do banco a cada inscrição; a
+  sessão é relida no banco logo depois de o socket entrar nas salas (fecha a
+  janela entre o handshake e o join,
+  `src/shared/socket/admission-recheck.ts`) e revalidada a cada
+  `SOCKET_REVALIDATE_MS` (3 min, com jitter).
+- Emitir depois do commit também sustenta essa releitura. O handshake lê a
+  sessão antes de o socket entrar em qualquer sala, e um aviso de revogação
+  emitido nesse meio-tempo não acha ninguém. A releitura depois do join
+  enxerga o que foi gravado antes dela; o que foi gravado depois só é avisado
+  depois do commit, com o socket já nas salas. Um aviso emitido de dentro da
+  transação reabre essa janela. A releitura (e a varredura) leem o primário;
+  apontá-las para uma réplica de leitura do Postgres reabre a janela, e
+  nenhum teste acusa, porque os E2E usam um banco só.
 - O app conecta com o token; a web, com um ticket de uso único de 30 s
   (`POST /user/socket-ticket`, `src/shared/socket/socket-ticket.ts`), para o
   token nunca chegar ao JavaScript da página.
@@ -42,3 +53,7 @@
   [Fluxos em detalhe](../arquitetura.md#fluxos-em-detalhe).
 - [`deploy.md` → 19. Réplicas, workers e tempo real](../deploy.md#19-réplicas-workers-e-tempo-real).
 - Prova entre réplicas: `tests/E2E/multi-replica-events.test.ts`.
+- Prova da janela entre o handshake e o join:
+  `tests/E2E/socket-revocation.test.ts`, describe
+  `"a revocation between the handshake's reads and its joins"`, e
+  `tests/unitaires/socket/socket-admission-race.test.ts`.

@@ -13,7 +13,11 @@ import {
   startReplica,
   type Replica,
 } from "./support/replica-process";
-import { emitHandled, waitForDisconnect } from "./support/socket-waits";
+import {
+  emitHandled,
+  waitForDisconnect,
+  waitUntil,
+} from "./support/socket-waits";
 import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
@@ -33,6 +37,9 @@ import { createPrismaClient } from "@/shared/database/database-client";
  *    — straight in the database, no event — against the periodic sweep.
  *  - A revocation issued on a replica whose Redis is down, for a socket on
  *    that same replica.
+ *  - A revocation committed and announced while a handshake is still reading
+ *    the database: the frame finds no room, because the socket joins its
+ *    rooms only after the handshake ends.
  */
 const prisma = createPrismaClient();
 
@@ -45,6 +52,10 @@ const VERSION_BUMPED = "018fde00-0000-7000-8000-0000000000a4";
 const PERMISSION_LOST = "018fde00-0000-7000-8000-0000000000a5";
 const UNTOUCHED = "018fde00-0000-7000-8000-0000000000a6";
 const ON_DEAD_REDIS = "018fde00-0000-7000-8000-0000000000a7";
+const WITNESS = "018fde00-0000-7000-8000-0000000000a8";
+const MID_HANDSHAKE_BUMPED = "018fde00-0000-7000-8000-0000000000a9";
+const MID_HANDSHAKE_LOST = "018fde00-0000-7000-8000-0000000000aa";
+const MID_HANDSHAKE_UNTOUCHED = "018fde00-0000-7000-8000-0000000000ab";
 
 const USERS = [
   RESUBSCRIBER,
@@ -54,6 +65,10 @@ const USERS = [
   PERMISSION_LOST,
   UNTOUCHED,
   ON_DEAD_REDIS,
+  WITNESS,
+  MID_HANDSHAKE_BUMPED,
+  MID_HANDSHAKE_LOST,
+  MID_HANDSHAKE_UNTOUCHED,
 ];
 
 /** The sweeping replica's interval; the others effectively never sweep. */
@@ -105,6 +120,98 @@ function connectTo(port: number, token: string): Promise<TestSocket> {
       fail(error);
     });
   });
+}
+
+/**
+ * A socket left to finish its handshake on its own, its listeners on before
+ * it does: for a handshake the test holds in the middle. `heard` keeps every
+ * `securityAction` from the first frame on.
+ */
+function openSocket(
+  port: number,
+  token: string,
+): { socket: TestSocket; connected: Promise<void>; heard: unknown[] } {
+  const socket = connect(`http://127.0.0.1:${port}`, {
+    auth: { token },
+    transports: ["websocket"],
+    reconnection: false,
+  });
+
+  sockets.push(socket);
+
+  const heard: unknown[] = [];
+  socket.on("securityAction", (payload: unknown) => heard.push(payload));
+
+  const connected = new Promise<void>((done, fail) => {
+    socket.once("connect", () => done());
+    socket.once("connect_error", (error) => fail(error));
+  });
+
+  // Awaited after the hold; a refusal fails the test there, not as an
+  // unhandled rejection while the lock is still taken.
+  connected.catch(() => undefined);
+
+  return { socket, connected, heard };
+}
+
+/**
+ * Holds every read of refresh_token until `during` returns. A handshake's
+ * last read is its family's, so it waits there with the user already read
+ * and the socket in no room yet. Well inside the server's connectTimeout
+ * (10 s), which counts the handshake too.
+ */
+async function holdingTheFamilyReads(
+  during: () => Promise<void>,
+): Promise<void> {
+  let locked!: () => void;
+  let release!: () => void;
+
+  const lockTaken = new Promise<void>((done) => (locked = done));
+  const released = new Promise<void>((done) => (release = done));
+
+  const lock = prisma.$transaction(
+    async (tx) => {
+      await tx.$executeRawUnsafe(
+        `LOCK TABLE "refresh_token" IN ACCESS EXCLUSIVE MODE`,
+      );
+      locked();
+
+      await released;
+    },
+    { maxWait: 10_000, timeout: 20_000 },
+  );
+
+  // A lock that failed says so, instead of leaving the test waiting.
+  await Promise.race([lockTaken, lock]);
+
+  try {
+    await during();
+  } finally {
+    release();
+    await lock;
+  }
+}
+
+/**
+ * Until `count` handshakes wait on that lock at their family read: the
+ * `findFirst` of hasActiveRefreshTokenFamily, the one read of refresh_token
+ * with a LIMIT. The sweep and the recheck after the join read it with a
+ * `findMany` — and the sweeping replica's sweep is held by the lock too.
+ */
+function handshakesAtTheFamilyRead(count: number): Promise<void> {
+  return waitUntil(
+    async () => {
+      const [{ waiting }] = await prisma.$queryRaw<Array<{ waiting: number }>>`
+        SELECT count(*)::int AS "waiting" FROM pg_stat_activity
+        WHERE "datname" = current_database() AND "wait_event_type" = 'Lock'
+          AND "query" LIKE '%refresh_token%' AND "query" LIKE '%LIMIT%'
+      `;
+
+      return waiting >= count;
+    },
+    `${count} handshake(s) esperando na leitura da família`,
+    8_000,
+  );
 }
 
 /** Generous: a negative assertion is made out of this timeout. */
@@ -477,4 +584,118 @@ describe("a revocation while Redis is down", () => {
       false,
     );
   }, 60_000);
+});
+
+describe("a revocation between the handshake's reads and its joins", () => {
+  it("is caught right after the join, on a replica that never sweeps", async () => {
+    // Replica 2's own socket in the operation, connected before the hold.
+    const witness = await connectTo(
+      two.port,
+      (await sessionFor(WITNESS, "BUSINESS_USER", CARRIER)).token,
+    );
+    await two.waitForRoom(witness.id, operationsRoom(CARRIER), true);
+
+    // Before the lock: a session is a refresh_token row.
+    const bumpedSession = await sessionFor(
+      MID_HANDSHAKE_BUMPED,
+      "BUSINESS_USER",
+      CARRIER,
+    );
+    const lostSession = await sessionFor(
+      MID_HANDSHAKE_LOST,
+      "BUSINESS_USER",
+      CARRIER,
+    );
+    const untouchedSession = await sessionFor(
+      MID_HANDSHAKE_UNTOUCHED,
+      "BUSINESS_USER",
+      CARRIER,
+    );
+
+    let bumped!: ReturnType<typeof openSocket>;
+    let lost!: ReturnType<typeof openSocket>;
+    let untouched!: ReturnType<typeof openSocket>;
+
+    await holdingTheFamilyReads(async () => {
+      bumped = openSocket(two.port, bumpedSession.token);
+      lost = openSocket(two.port, lostSession.token);
+      untouched = openSocket(two.port, untouchedSession.token);
+
+      // Each has read its user (version 0, delivery_manage) and waits.
+      await handshakesAtTheFamilyRead(3);
+
+      // Committed, then announced from replica 1, the way an admin's edits
+      // land: a session version bumped...
+      await prisma.user.update({
+        where: { id: MID_HANDSHAKE_BUMPED },
+        data: { session_version: { increment: 1 } },
+      });
+      await one.run({
+        kind: "securityToUser",
+        businessId: CARRIER,
+        payload: { userId: MID_HANDSHAKE_BUMPED, reason: "password_changed" },
+      });
+
+      // ...and a permission removed.
+      await revokeProfile(profiles[MID_HANDSHAKE_LOST]);
+      await one.run({
+        kind: "securityToBusiness",
+        businessId: CARRIER,
+        payload: { reason: "permissions_changed" },
+      });
+
+      // Replica 2's Redis subscription delivers in publish order: once its
+      // witness hears a position published after both, both were handled
+      // there — with the held sockets in no room to hear them.
+      const witnessed = waitFor(witness, "driverPosition", 8_000);
+      await one.run({
+        kind: "driverPosition",
+        businessId: CARRIER,
+        payload: position(),
+      });
+      expect(
+        await witnessed,
+        "os avisos não passaram pela réplica 2 antes do join",
+      ).not.toBeNull();
+    });
+
+    await Promise.all([bumped.connected, lost.connected, untouched.connected]);
+
+    // Before: connected with version 0 and in the company's dispatch rooms,
+    // until a sweep this replica runs every ten minutes.
+    await waitUntil(
+      () => bumped.heard.length > 0,
+      "a sessão encerrada ouvir o motivo",
+    );
+    expect(bumped.heard).toEqual([{ reason: "user_updated" }]);
+
+    await waitForDisconnect(bumped.socket).catch(() => undefined);
+    expect(bumped.socket.connected, "a sessão encerrada continuou").toBe(false);
+
+    // The permission loss is authorization: out of the room, still connected.
+    await two.waitForRoom(lost.socket.id, operationsRoom(CARRIER), false);
+
+    const lostHears = waitFor(lost.socket, "driverPosition");
+    const untouchedHears = waitFor(untouched.socket, "driverPosition");
+
+    await one.run({
+      kind: "driverPosition",
+      businessId: CARRIER,
+      payload: position(),
+    });
+
+    expect(await lostHears, "ouviu a frota sem a permissão").toBeNull();
+    expect(lost.socket.connected).toBe(true);
+
+    // Replica 1's permissions_changed found this socket in no room; the
+    // recheck says it again, once, so the screen re-reads its permissions
+    // instead of keeping the old menus over a feed gone quiet. Sent before
+    // the socket left the rooms, so in by the end of the wait above.
+    expect(lost.heard).toEqual([{ reason: "permissions_changed" }]);
+
+    // A healthy session is never a casualty of the recheck.
+    expect(await untouchedHears).not.toBeNull();
+    expect(untouched.heard).toEqual([]);
+    expect(untouched.socket.connected).toBe(true);
+  }, 90_000);
 });

@@ -277,6 +277,53 @@ describe("sweepConnections", () => {
     expect(result).toEqual({ checked: 3, ended: 1, skipped: false });
   });
 
+  describe("a session that changes its own password while its rows are read", () => {
+    // Every case: the socket read from version 3, and the change keeps this
+    // session (adoptLocalSessionVersion moves its sockets to 4).
+    async function sweepWhile(
+      rowVersion: number,
+      adopt: boolean,
+    ): Promise<Array<[string, string]>> {
+      const socket = socketFor("user-1", "family-1");
+      const ended: Array<[string, string]> = [];
+
+      await sweepConnections(
+        [socket],
+        async () => {
+          if (adopt) socket.data.sessionVersion = 4;
+
+          return rows(
+            [userRow({ session_version: rowVersion })],
+            ["user-1:family-1"],
+          );
+        },
+        {
+          end: (swept, reason) =>
+            ended.push([String(swept.data.userId), reason]),
+          keep: () => undefined,
+        },
+      );
+
+      return ended;
+    }
+
+    it("keeps it when the row was read before the commit and the socket adopted after", async () => {
+      expect(await sweepWhile(3, true)).toEqual([]);
+    });
+
+    it("keeps it when the row was read after the commit and the socket adopted too", async () => {
+      expect(await sweepWhile(4, true)).toEqual([]);
+    });
+
+    it("still ends a socket of another session, which never adopts", async () => {
+      expect(await sweepWhile(4, false)).toEqual([["user-1", "user_updated"]]);
+    });
+
+    it("never accepts a version the socket did not hold", async () => {
+      expect(await sweepWhile(5, true)).toEqual([["user-1", "user_updated"]]);
+    });
+  });
+
   it("does not query at all with no authenticated socket", async () => {
     let loads = 0;
 

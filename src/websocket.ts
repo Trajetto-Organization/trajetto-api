@@ -74,10 +74,17 @@ import {
   loadSubjectRows,
   subjectOf,
   sweepConnections,
+  type SocketSubject,
   type SocketVerdict,
+  type SweepResult,
 } from "@/shared/socket/socket-revalidation";
+import {
+  createAdmissionRecheck,
+  keepAdmitted,
+} from "@/shared/socket/admission-recheck";
 import { withoutRequestContext } from "@/shared/http/request-context";
 import { logger } from "@/shared/logging/logger";
+import { createOutageReport } from "@/shared/logging/outage-report";
 import {
   applyWhatsAppTemplateLaneChange,
   type TemplateLaneChange,
@@ -102,32 +109,32 @@ const SOCKET_MAX_MESSAGE_BYTES = 16 * 1024;
 const SOCKET_CONNECT_TIMEOUT_MS = 10_000;
 
 /**
- * One line per outage, not one per dropped frame: while Redis is down every
- * position and every notification nudge fails to publish, and logging each of
- * them would bury the log. The connection log already says when Redis went
- * away and came back; this counts what was dropped in between.
+ * At most one line a minute while something this file depends on is away
+ * (shared/logging/outage-report.ts): Redis for the adapter's frames just
+ * below, Postgres for the admission recheck further down.
  */
-let droppedFramesSinceLastReport = 0;
-let lastDropReportAt = 0;
+const OUTAGE_REPORT_INTERVAL_MS = 60_000;
 
-const DROP_REPORT_INTERVAL_MS = 60_000;
+/**
+ * Not one line per dropped frame: while Redis is down every position and
+ * every notification nudge fails to publish, and logging each of them would
+ * bury the log. The connection log already says when Redis went away and
+ * came back; this counts what was dropped in between.
+ */
+const droppedFrames = createOutageReport<unknown>({
+  intervalMs: OUTAGE_REPORT_INTERVAL_MS,
+  report: (dropped, error) =>
+    log.error(
+      {
+        dropped,
+        error: error instanceof Error ? error.message : String(error),
+      },
+      "realtime events did not cross replicas (Redis unavailable)",
+    ),
+});
 
 function reportAdapterPublishFailure(error: unknown): void {
-  droppedFramesSinceLastReport += 1;
-
-  const now = Date.now();
-  if (now - lastDropReportAt < DROP_REPORT_INTERVAL_MS) return;
-
-  log.error(
-    {
-      dropped: droppedFramesSinceLastReport,
-      error: error instanceof Error ? error.message : String(error),
-    },
-    "realtime events did not cross replicas (Redis unavailable)",
-  );
-
-  droppedFramesSinceLastReport = 0;
-  lastDropReportAt = now;
+  droppedFrames.failed(1, error);
 }
 
 // Socket.IO instance
@@ -344,6 +351,60 @@ function localSocketsIn(room: string): Socket[] {
     .filter((socket): socket is Socket => Boolean(socket));
 }
 
+/**
+ * The rows the sweep and the admission recheck judge, read outside any
+ * request's memory of users. From the primary: a read replica could still
+ * lack a revocation committed before the read, and the recheck would let in
+ * the very socket it exists to catch.
+ */
+const loadSessionRows = (subjects: SocketSubject[]) =>
+  withoutRequestContext(() => loadSubjectRows(database, subjects));
+
+/**
+ * Sockets whose recheck was left to the sweep because Postgres could not be
+ * read. While it is away the handshakes fail before any socket gets this
+ * far, so what lands here is the edge of an outage; a line per pass would
+ * still bury the log on a replica taking a reconnect storm.
+ */
+const postponedAdmissions = createOutageReport({
+  intervalMs: OUTAGE_REPORT_INTERVAL_MS,
+  report: (postponed) =>
+    log.error(
+      { postponed },
+      "admission recheck postponed to the sweep: the database could not be read",
+    ),
+});
+
+function reportAdmissionRecheck(result: SweepResult, admitted: number): void {
+  if (result.ended > 0) {
+    // How often the race really happens: the reason this check exists.
+    log.info(
+      { ended: result.ended, checked: result.checked },
+      "sockets ended right after their handshake: revoked while it ran",
+    );
+  }
+
+  if (result.skipped) postponedAdmissions.failed(admitted);
+}
+
+/**
+ * The session read again right after a new socket joined its rooms
+ * (shared/socket/admission-recheck.ts). The handshake reads it before the
+ * joins, and a revocation announced in between reached no room the socket
+ * was in: it connected with the rights it had before, until the sweep.
+ */
+const admission = createAdmissionRecheck<Socket>({
+  load: loadSessionRows,
+  actions: {
+    end: endLocalSocket,
+    keep: keepAdmitted(leaveDeliveryRooms, (socket, reason) =>
+      socket.emit("securityAction", { reason }),
+    ),
+  },
+  report: reportAdmissionRecheck,
+  fail: (error) => log.error({ err: error }, "admission recheck failed"),
+});
+
 let revalidationTimer: NodeJS.Timeout | null = null;
 let revalidationStopped = true;
 
@@ -363,15 +424,10 @@ async function revalidateLocalSockets(): Promise<void> {
 
   const sockets = [...io.of("/").sockets.values()];
 
-  const result = await sweepConnections(
-    sockets,
-    (subjects) =>
-      withoutRequestContext(() => loadSubjectRows(database, subjects)),
-    {
-      end: endLocalSocket,
-      keep: applyDeliveryStaff,
-    },
-  );
+  const result = await sweepConnections(sockets, loadSessionRows, {
+    end: endLocalSocket,
+    keep: applyDeliveryStaff,
+  });
 
   if (result.skipped) {
     log.error("session revalidation postponed: the database could not be read");
@@ -694,8 +750,9 @@ async function initializeSocketIO(httpServer: Server): Promise<SocketIOServer> {
       socket.data.businessId = user.businessId;
       socket.data.sessionId = payload.familyId;
 
-      // What the periodic sweep compares the row against: an edit that bumps
-      // the version has ended this session, whether or not its frame arrived.
+      // What the admission recheck and the periodic sweep compare the row
+      // against: an edit that bumps the version has ended this session,
+      // whether or not its frame arrived.
       socket.data.sessionVersion = payload.sessionVersion;
 
       socket.data.userName = user.name;
@@ -847,6 +904,12 @@ async function initializeSocketIO(httpServer: Server): Promise<SocketIOServer> {
     if (socket.data.driverId && businessId) {
       socket.join(chatDriverRoom(businessId, userId));
     }
+
+    // The handshake read the session before these joins, and a revocation
+    // announced in between reached no room this socket was in. Read it again
+    // now that it is in every room it will hear from. Last of the joins: one
+    // added below this line would be a room joined after the read.
+    admission.admit(socket);
 
     // A driver coming online is chat presence the SAC cares about. Announce
     // only the offline→online transition: fetchSockets goes through the
@@ -2134,7 +2197,7 @@ function realtimeMetrics(): {
     local_connections: io?.engine.clientsCount ?? 0,
     adapter: !io ? "off" : adapterPubClient ? "redis" : "local",
     adapter_status: adapterPubClient?.status ?? null,
-    dropped_frames_unreported: droppedFramesSinceLastReport,
+    dropped_frames_unreported: droppedFrames.unreported(),
   };
 }
 
