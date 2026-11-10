@@ -38,8 +38,10 @@ type SetDeliveryLocationResult = NonNullable<PinnedLocation["delivery"]> & {
 };
 
 /**
- * "Fixar no mapa": the dispatcher says where the address is (D7). The
- * product has no geocoder yet, so this is how a stop gets onto the map.
+ * "Fixar no mapa": the dispatcher says where the address is (D7), with a
+ * click on the map or a place found by the address search
+ * (GET /address-search/:businessId), confirmed on the page before it is
+ * written here. The geocoder's point, when it found one, gives way to it.
  *
  * A plan, not evidence: the proof GPS lives on the delivery events and is
  * never touched here. A DELIVERED or CANCELLED delivery is a closed record

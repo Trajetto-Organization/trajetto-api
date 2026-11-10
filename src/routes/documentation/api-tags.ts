@@ -75,6 +75,11 @@ const TAG_GROUPS: ReadonlyArray<{ name: string; tags: ApiTag[] }> = [
           "Rotas: montagem, atribuição ao motorista, paradas e acompanhamento.",
       },
       {
+        name: "address-search",
+        description:
+          'Busca de endereço do "Fixar no mapa": sugestões do provedor de geocodificação, com cache e limite por empresa.',
+      },
+      {
         name: "driver-pause",
         description: "Pausas do motorista durante a rota.",
       },

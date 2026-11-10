@@ -93,6 +93,7 @@ import {
   configureGeocodingHold,
   createRedisGeocodingHold,
 } from "@/shared/delivery/geocoding/geocoding-hold";
+import { configureAddressSearch } from "@/modules/address-search/usecases/search-address/search-address-runtime";
 
 import { enforceRequestedTenant } from "./modules/middlewares/tenant-authorization";
 import { UPLOAD_TYPES, uploadConfig } from "./config/upload";
@@ -273,6 +274,11 @@ configureMailCooldown(createRedisMailCooldown(rateLimitRedis));
 // budget spent), for the route read's "Localizando endereço…", on the same
 // fail-fast connection (shared/delivery/geocoding/geocoding-hold.ts).
 configureGeocodingHold(createRedisGeocodingHold(rateLimitRedis));
+
+// The panel's address search: its cache, its day's counts and the
+// provider's gate, on the same fail-fast connection — a search is a
+// request a person waits on (address-search/search-address-runtime.ts).
+configureAddressSearch(rateLimitRedis);
 
 /**
  * The limiter goes FIRST in each route's onRequest, not last.

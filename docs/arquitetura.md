@@ -21,6 +21,7 @@
 - [Gestor e master no app: rotas ao vivo, autorizações e salas sob demanda](#gestor-e-master-no-app-rotas-ao-vivo-autorizações-e-salas-sob-demanda)
 - [Configurações da empresa](#configurações-da-empresa)
 - [Geocerca e coordenadas do endereço](#geocerca-e-coordenadas-do-endereço)
+- [Busca de endereço (Fixar no mapa)](#busca-de-endereço-fixar-no-mapa)
 - [Frota ligada à rota](#frota-ligada-à-rota)
 - [Motorista, veículo e rota: o que é aviso e o que é recusa](#motorista-veículo-e-rota-o-que-é-aviso-e-o-que-é-recusa)
 - [Entregas na rota: casos de borda](#entregas-na-rota-casos-de-borda)
@@ -1512,6 +1513,187 @@ nova, botão na web e o app novo (o app antigo recusa no toque, sem ir ao
 servidor), e muda o que o dono definiu para o `BLOCK`. Fica como decisão do
 dono.
 
+## Busca de endereço (Fixar no mapa)
+
+A busca da barra do "Fixar no mapa", na página da rota (plano pin-search,
+decisões do dono de 10/11/2026): `GET /address-search/:businessId` devolve
+sugestões para o que o despachante está digitando. Só sugere: o ponto é
+gravado depois, pelo mesmo `PATCH /route/set-delivery-location`, quando ele
+confirma o pino na web. Não há migration nem mudança no app.
+
+**Por que no servidor.** A busca da OS chama o Nominatim público do
+navegador. A política dele proíbe busca enquanto se digita e soma o limite de
+1 por segundo de todos os usuários do produto. Aqui o provedor é o mesmo
+LocationIQ da localização automática das entregas, com a chave só no
+servidor, e as buscas de todas as empresas passam por um cache, um orçamento
+e a vaga do provedor, não por cada aba. A web fala só com a própria origem (o
+relay), então a CSP dela não muda.
+
+**Quem pode.** Sessão, módulo DELIVERIES e `delivery_manage:write`, as mesmas
+exigências de quem grava o ponto. Motorista nunca (`allowDriver: false`): o
+app não busca, e um token de motorista não pode gastar o dia da empresa. A
+empresa é a do caminho, conferida pelo guard global; o cache e a contagem são
+dela. Até 30 buscas por minuto por usuário (o limitador por rota, chaveado
+pelo usuário do token).
+
+**O provedor** (`src/shared/services/address-search/address-search-provider.ts`).
+`ADDRESS_SEARCH_PROTOCOL=locationiq-autocomplete` chama o `/autocomplete` em
+`ADDRESS_SEARCH_URL` (`https://api.locationiq.com/v1`, que não é o host
+regional da `REVERSE_GEOCODER_URL`). Vão só os parâmetros que o autocomplete
+documenta: `q`, `countrycodes=br`, `limit=10`, `accept-language=native` (o
+`pt` não está na lista dele) e, com a área das paradas, `viewbox` com
+`bounded=0`. Um parâmetro desconhecido que voltasse 400 contaria como recusa.
+`nominatim-search` é o `/search` de um Nominatim nosso ou do desenvolvimento,
+com a mesma montagem do geocodificador (`searchRequestUrl`). As respostas são
+lidas como as da localização automática (`refusalOf`): 404 com o `error` do
+provedor é "nada encontrado"; 429 é a cota do dia ou um pico. A recusa se
+divide em duas, porque o texto é de uma pessoa: 401, 403 e o 404 sem o `error`
+falam da conta ou da URL (`REFUSED`, a busca pausa); qualquer outro 4xx (um
+400, um 414) fala do texto enviado (`REJECTED`) e só aquela busca falha, com
+`503 ADDRESS_SEARCH_UNAVAILABLE` e `retry-after: 5`, sem pausa nem cache.
+Antes, um texto longo colado por qualquer usuário de qualquer empresa
+desligava a busca de todas por 15 min. Corpo cortado pelo prazo (no máximo
+2,5 s) ou pela desistência da pessoa nunca conta como recusa. A chave é a
+`ADDRESS_SEARCH_KEY` ou, vazia, a `REVERSE_GEOCODER_KEY` (a mesma conta).
+
+**O texto e a ordem** (`address-search-ranking.ts`, puro). Com `city` e `uf`
+(a cidade da entrega), o texto enviado vira `"{q}, {cidade}, {estado}"`, a
+menos que a cidade já esteja nele: uma "Rua São José" se repete de cidade em
+cidade, e o `viewbox` só aproxima. O texto enviado nunca passa dos 200
+caracteres do LocationIQ (`ADDRESS_SEARCH_MAX_QUERY`): o schema confere só o
+`q`, então, quando o sufixo não cabe, sai primeiro o estado e depois a cidade,
+e a ordenação continua pondo a cidade da entrega na frente. A `city` aceita até
+100 caracteres (`ADDRESS_SEARCH_MAX_CITY`), o mesmo teto da entrega, e a `uf`
+uma das 27; a web só manda a dica nessas condições. Ficam só resultados no
+Brasil (dentro da caixa do "Fixar no mapa"), cada lugar uma vez (mesmo título
+na mesma cidade, ou a menos de 30 m). O título é o nome do lugar,
+`"rua, número"`, a rua, o bairro ou a cidade; o subtítulo traz o resto, com o
+CEP como `00000-000`. A
+precisão é a do geocodificador (`precisionOf`) mais `PLACE`, um lugar com
+nome (hospital, loja, escola) cujo ponto é o próprio lugar. Bairro e cidade
+trazem a `bbox` e nunca viram ponto na web: centro de bairro não é porta de
+cliente. A pontuação põe a cidade da entrega primeiro (+4), depois a UF (+1),
+o número digitado (+2) e um nome digitado na rua ou no lugar (+1), com bairro
+(−1) e cidade (−2) depois das ruas. O desempate é a distância ao centro das
+paradas e, por fim, a ordem do provedor. `weak` diz que nenhum resultado tem
+um nome digitado ("Curitba" respondeu uma rua em Boa Vista): a web então não
+pré-seleciona nada, e o Enter não escolhe um lugar a 3.000 km.
+
+**A ordem de cada busca**
+(`src/modules/address-search/usecases/search-address/search-address-usecase.ts`),
+cada passo mais barato que o seguinte:
+
+1. o cache da empresa: um acerto não gasta nada, mesmo com a busca desligada
+   ou pausada;
+2. ligada: sem `ADDRESS_SEARCH_URL` ou com `ADDRESS_SEARCH_DAILY_BUDGET=0`,
+   `503 ADDRESS_SEARCH_UNAVAILABLE`;
+3. uma leitura só no Redis (`MGET`), que falha **fechado**: a pausa da conta,
+   a pausa da busca e as contagens do dia da plataforma e da empresa;
+4. a vaga do provedor (`geocoding-gate.ts`), a mesma da localização
+   automática: três tentativas a 500 ms, que sempre alcançam o segundo
+   seguinte; sem vaga, `503 ADDRESS_SEARCH_BUSY` com `retry-after: 1`;
+5. a chamada, contada nos dois dias quando sai;
+6. a ordenação e o cache.
+
+A pessoa que digitou de novo cancela o fetch do navegador. O socket da
+resposta fecha antes dela, o controller aborta a busca e ela para ali: sem
+vaga, sem chamada, sem gasto. O ouvinte do `close` só entra com o handler,
+depois dos guards; uma requisição largada enquanto eles rodavam já tinha
+fechado o socket, e o controller responde 499 logo no começo, sem buscar. Uma
+vaga tomada na mesma ida ao Redis em que a pessoa desistiu é largada sem uso:
+é um segundo da vaga dividida, e a chamada gastaria o dia da empresa numa
+resposta que ninguém lê. Se a chamada já tinha saído, ela é contada (o
+provedor contou) e nada vai para o cache. A resposta, que ninguém lê, sai com
+o status 499.
+
+**A cota dividida.** O plano grátis do LocationIQ dá 5.000 chamadas por dia,
+2 por segundo e 60 por minuto, para a conta inteira:
+
+- por dia: o job (`DELIVERY_GEOCODING_DAILY_BUDGET`, 2.000), a busca
+  (`ADDRESS_SEARCH_DAILY_BUDGET`, 1.000, separado do job) e a reversa do
+  comprovante, que não tem orçamento. Cada empresa tem ainda o seu teto
+  (`ADDRESS_SEARCH_BUSINESS_DAILY_LIMIT`, 150), para uma transportadora não
+  gastar o dia de todas. Estourado, `429 ADDRESS_SEARCH_DAILY_LIMIT` com
+  `retry-after` até a meia-noite UTC;
+- por segundo: job e busca somam no máximo 1, na mesma chave
+  `geocoding:deliveries:rate:{segundo}`, que não foi renomeada para réplicas
+  antigas e novas contarem juntas no rolling deploy. A outra vaga fica para a
+  reversa do comprovante;
+- por minuto: em quaisquer 60 s, não no minuto do relógio. O registro é um
+  _sorted set_ (`geocoding:provider:minute`), com um membro por chamada e o
+  horário dela como nota: o script tira o que tem 60 s ou mais, conta, e só
+  então concede. As chamadas com vaga param em 50
+  (`GEOCODING_CALLS_PER_MINUTE`), deixando 10 para a reversa do comprovante. O
+  job e a busca logo depois do commit param em 40
+  (`GEOCODING_BACKGROUND_CALLS_PER_MINUTE`), e os últimos 10 dos 60 s são da
+  busca, que tem uma pessoa esperando. Um lote do job pede no máximo 40 (20
+  entregas, duas consultas cada), então ele quase nunca esbarra nisso. Segundo
+  e minuto são tomados num script só (`TAKE_SLOT`): uma chamada recusada pelo
+  minuto não gasta a vaga do segundo, e as tentativas recusadas do job não
+  entram no registro. Sem o minuto modelado, a 61ª chamada levava um 429, a
+  pausa de pico e tudo parava por um minuto. Em janelas fixas por minuto,
+  50 chamadas no fim de um minuto e 50 no começo do seguinte davam 60 em menos
+  de 60 s, a uma por segundo, e a folga do comprovante sumia onde quer que o
+  minuto do provedor comece.
+
+**As pausas.** Só a cota do dia (`QUOTA`, até a meia-noite UTC) e o pico
+(`BURST`, 60 s) valem para a conta inteira. A busca grava as duas na pausa
+compartilhada `geocoding:deliveries:paused`, e o job para junto. Uma recusa do
+`/autocomplete` (token sem o produto, URL errada) pausa **só a busca** por
+15 min, em `geocoding:search:paused`: a localização das entregas chama outro
+endpoint e continua funcionando. Da mesma forma, a recusa do `/search` do job
+não pausa a busca. A cota e o pico que a busca recebe vão também para a chave
+própria dela, com o motivo: a compartilhada nunca troca uma pausa mais longa
+por uma mais curta, e atrás do `REFUSED` de 15 min do job (que a busca
+ignora) o pico se perdia e a busca seguia chamando durante ele. Durante uma
+pausa, a busca responde `503 ADDRESS_SEARCH_UNAVAILABLE` (recusa ou cota) ou
+`ADDRESS_SEARCH_BUSY` (só pico), com o `retry-after` até o fim da mais longa,
+sem chamar o provedor. Como a cota do dia é a mesma conta, a página da rota
+também para de dizer "Localizando…" (`geocoding-hold.ts`).
+
+**O cache** (`address-search-limits.ts`). Por empresa:
+`geocoding:search:cache:{businessId}:{HMAC}`. Uma empresa não descobre, pelo
+tempo de resposta, o que outra buscou. A chave é um HMAC (chave derivada da
+`JWT_SECRET`, rótulo próprio) da versão, do protocolo, do texto dobrado, da
+cidade, da UF, da área com duas casas e do limite. O texto digitado nunca
+aparece em claro: ele pode ser o endereço de um destinatário. O valor, a
+resposta ordenada, fica cifrado (AES-256-GCM, `secret-box.ts`, com outra chave
+derivada da `JWT_SECRET`): numa busca por número, o título da sugestão ("Rua
+Epitácio Pessoa, 120") é o endereço digitado, quase igual, e um dump do Redis
+não pode entregar por empresa o que ela buscou. Valor em claro, adulterado ou
+cifrado com outra `JWT_SECRET` (troca do segredo) conta como cache vazio. A
+resposta fica `ADDRESS_SEARCH_CACHE_SECONDS` (padrão 48 h, o máximo que o
+plano grátis permite guardar), e "nada encontrado" fica 10 min. Erro ao ler
+conta como cache vazio; erro ao gravar é ignorado. As chaves de contagem são
+`geocoding:search:{AAAA-MM-DD}` e `geocoding:search:{dia}:{businessId}`.
+
+**O log.** Uma linha por busca (`component: "address-search"`) com
+`businessId`, `outcome` (`OK`, `BUSY`, `ABORTED`, `DAILY_LIMIT_BUSINESS`,
+`DAILY_LIMIT_PLATFORM`, `UNAVAILABLE_DISABLED`, `UNAVAILABLE_PAUSED`,
+`UNAVAILABLE_PROVIDER`, `UNAVAILABLE_LIMITS_UNREADABLE`), `status` do
+provedor, `ms` e `cached`. Nunca o texto digitado nem a URL, que leva a chave.
+A recusa sai em `error` ("address search provider refused the request"), o
+texto rejeitado ("address search provider rejected the text; nothing
+paused") e o 429 em `warn`, o resto em `info`. `ADDRESS_SEARCH_KEY` está na
+lista de segredos censurados do logger.
+
+**O Redis** é a conexão do caminho da requisição, a do rate limit (falha
+rápido, 250 ms por comando), ligada em `http.ts` por
+`configureAddressSearch`, como a `geocoding-hold`. Sem Redis, a busca
+responde 503 e não chama o provedor. O clique no mapa continua gravando.
+
+Testes: `tests/unitaires/address-search/` (provedor, ordenação, caso de uso,
+controller, variáveis e query), `tests/unitaires/delivery/geocoding-gate.test.ts`
+(o minuto e o rolling deploy), `tests/E2E/address-search-http.test.ts` (HTTP,
+Redis e um provedor local) e `tests/E2E/geocoding-gate-redis.test.ts` (os
+scripts `TAKE_SLOT` e `EXTEND_PAUSE` e o cache cifrado no Redis de verdade).
+
+**Segundo passo (depois de medir o consumo).** A OS, a multa e o abastecimento
+passam a usar este endpoint, e o endereço reverso do clique e do GPS ganha um
+`GET /address-search/:businessId/reverse` com o mesmo portão e o mesmo
+orçamento. Aí o módulo e a permissão do endpoint mudam, e o Nominatim sai da
+CSP e das páginas de privacidade e de cookies da web.
+
 ## Frota ligada à rota
 
 Checklist e abastecimento como parte da rota e da gestão da frota (plano de
@@ -2456,7 +2638,7 @@ primeiro job que apaga dados.
 
 ## Redis e tempo real
 
-**Redis** ([ADR 0002](./adr/0002-redis-descartavel.md)) tem cinco usos, e
+**Redis** ([ADR 0002](./adr/0002-redis-descartavel.md)) tem seis usos, e
 nenhum é fonte de verdade:
 
 - contadores de rate limit (HTTP, handshake do socket e falhas de chave da
@@ -2481,6 +2663,12 @@ nenhum é fonte de verdade:
   dashboard é lido a cada visita); leitura e escrita com prazo de 200 ms e
   falha aberta: sem Redis, cada réplica calcula a sua. Uma leitura por vez em
   cada réplica (single-flight).
+- o geocodificador e a busca de endereço (`geocoding:*`): o orçamento do dia,
+  a pausa e a vaga por segundo e por minuto do provedor, a contagem do dia da
+  busca por empresa e o cache das respostas da busca, **por empresa**, com
+  a chave em HMAC e o valor cifrado (ver
+  [Busca de endereço](#busca-de-endereço-fixar-no-mapa)). Ao contrário dos
+  outros usos, falha **fechado**: sem Redis, nada é perguntado ao provedor.
 
 Não há sessão, lock nem fila no Redis, e cache só o descrito acima. Se ele
 cair, o tempo real entre réplicas degrada e o resto funciona. Em produção ele

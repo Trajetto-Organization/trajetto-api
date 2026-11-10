@@ -1,3 +1,4 @@
+import { foldText } from "@/shared/utils/fold-text";
 import { calculateDistance } from "@/shared/utils/geolocation";
 
 import {
@@ -108,20 +109,6 @@ type GeocodeQuery = "FREE_TEXT" | "STRUCTURED";
 
 function text(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value.trim() : null;
-}
-
-/**
- * "Rua Epitácio Pessoa" → "rua epitacio pessoa": no accents, no case, no
- * punctuation, single spaces — how a street or a district typed in the form
- * is compared with the name OpenStreetMap gives it.
- */
-function foldText(value: string | null | undefined): string {
-  return (value ?? "")
-    .normalize("NFD")
-    .replace(/[̀-ͯ]/g, "")
-    .toLocaleLowerCase("pt-BR")
-    .replace(/[^a-z0-9]+/g, " ")
-    .trim();
 }
 
 /**
@@ -488,17 +475,25 @@ async function geocodeAddress(
   }
 }
 
+// jsonBody, errorText, refusalOf and searchRequestUrl are the panel's
+// address search's too (shared/services/address-search/): the same
+// provider, read the same way. foldText lives in shared/utils/fold-text.ts,
+// re-exported for the geocoder's own callers.
 export {
   HOMONYM_DISTANCE_M,
   addressQuery,
+  errorText,
   foldText,
   formatCep,
   geocodeAddress,
   hasFallbackQuery,
   houseNumber,
+  jsonBody,
   parseNominatimSearch,
   parseStructuredSearch,
   precisionOf,
+  refusalOf,
+  searchRequestUrl,
   searchUrl,
   structuredSearchUrl,
 };

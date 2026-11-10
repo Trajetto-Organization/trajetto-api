@@ -211,6 +211,11 @@ describe("every ServiceBusyError code", () => {
         "EXPORT_BUSY",
         "IMPORT_BUSY",
         "SOCKET_TICKET_UNAVAILABLE",
+        // The address search (plan pin-search): the provider's slot, the
+        // search off or paused, and the day's searches spent.
+        "ADDRESS_SEARCH_BUSY",
+        "ADDRESS_SEARCH_UNAVAILABLE",
+        "ADDRESS_SEARCH_DAILY_LIMIT",
       ]),
     );
 

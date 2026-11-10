@@ -2509,6 +2509,50 @@ lê a tabela sem bloquear escrita (`SHARE UPDATE EXCLUSIVE`).
   Confira `indisvalid`. A migration então só cria a chave estrangeira, sem
   ler a tabela. Com o volume atual não é preciso.
 
+**Busca de endereço do "Fixar no mapa" (10/11/2026).** Rota nova
+`GET /address-search/:businessId`, sem migration. A regra está em
+[arquitetura.md (Busca de endereço)](./arquitetura.md#busca-de-endereço-fixar-no-mapa).
+
+- **Ordem: API antes da web, na staging e na produção.** A web nova chama
+  `relayUrl("/address-search/…")`, e o `scripts/check-api-routes.mjs` da web
+  recusa a promoção enquanto a API do ambiente não serve a rota (o contrato
+  `tests/unitaires/contract/client-routes.test.ts` diz o mesmo). Confira a
+  liveness da API com o commit novo antes de liberar a web. O app não muda e
+  não precisa de OTA.
+- **Variáveis, no _Environment_ da Application `trajetto-api`** (staging
+  primeiro, depois produção): `ADDRESS_SEARCH_URL=https://api.locationiq.com/v1`
+  e `ADDRESS_SEARCH_PROTOCOL=locationiq-autocomplete`. A chave é a mesma
+  `REVERSE_GEOCODER_KEY`, a menos que se defina `ADDRESS_SEARCH_KEY`.
+  `ADDRESS_SEARCH_DAILY_BUDGET` (1000) e `ADDRESS_SEARCH_BUSINESS_DAILY_LIMIT`
+  (150) só se quiser outros valores. Antes, em my.locationiq.com, confira que
+  o token libera o Autocomplete. Sem as variáveis, a rota responde
+  `503 ADDRESS_SEARCH_UNAVAILABLE`, a web mostra a busca indisponível e o
+  clique no mapa continua fixando. Nada quebra antes de configurar.
+- **A web anterior contra esta API** não chama a rota. **A web nova contra a
+  API anterior** (se a ordem falhar) recebe 404 pelo relay e trata como busca
+  indisponível. O clique no mapa, o pino de rascunho e o "Confirmar local"
+  funcionam por inteiro, porque o `PATCH /route/set-delivery-location` não
+  mudou.
+- **Rolling deploy.** A vaga por segundo continua na chave
+  `geocoding:deliveries:rate:{segundo}`, então réplicas antigas e novas contam
+  juntas. O registro dos últimos 60 s (`geocoding:provider:minute`, um
+  _sorted set_) só é contado pelas réplicas novas. Durante o rollout, o job de
+  uma réplica antiga não entra nele.
+- **Depois de subir**, nos logs da API: uma linha `address search` por busca
+  (`component: "address-search"`, com `outcome`, `status`, `ms` e `cached`,
+  nunca o texto). `address search provider refused the request` (`error`)
+  quer dizer chave ou URL errada: a busca pausa sozinha por 15 min e a
+  localização das entregas continua.
+  `address search provider rejected the text; nothing paused` (`warn`) é um
+  400 do provedor para um texto: só aquela busca falhou; em série, confira se
+  o provedor mudou os parâmetros do `/autocomplete`. `UNAVAILABLE_PAUSED` em
+  série é a cota do dia do provedor.
+  `DAILY_LIMIT_PLATFORM` com frequência é a hora de trocar de plano
+  ([infraestrutura.md §14.3](./infraestrutura.md#143-servidor-e-dokploy)).
+- **O cache fica cifrado** com uma chave derivada da `JWT_SECRET`. Para a
+  busca, uma troca da `JWT_SECRET` só esvazia o cache: as respostas antigas
+  não abrem e contam como cache vazio. Nada a fazer.
+
 **Regras entre motorista, veículo e rota (10/11/2026).** Sem migration, sem
 variável nova e sem rota nova. A regra está em
 [arquitetura.md (Motorista, veículo e rota: o que é aviso e o que é recusa)](./arquitetura.md#motorista-veículo-e-rota-o-que-é-aviso-e-o-que-é-recusa).

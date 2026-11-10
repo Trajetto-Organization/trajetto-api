@@ -15,6 +15,7 @@ const SECRET_ENV_KEYS = [
   "PROOF_SIGNING_PFX_BASE64",
   "PROOF_SIGNING_PFX_PASSWORD",
   "REVERSE_GEOCODER_KEY",
+  "ADDRESS_SEARCH_KEY",
   // A tile URL can carry the provider's API key in its query string.
   "PROOF_MAP_TILE_URL",
   // The app's base map (wave 5): signed-in clients receive these through

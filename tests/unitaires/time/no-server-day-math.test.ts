@@ -79,6 +79,13 @@ const ALLOWED: Entry[] = [
       "The geocoding budget is the provider's daily quota (LocationIQ resets it at UTC midnight), shared by every company: a platform day, not a company's.",
   },
   {
+    file: "src/shared/services/address-search/address-search-limits.ts",
+    pattern: "utc-day-key",
+    count: 1,
+    reason:
+      "The address search's day is the provider's quota day too (UTC midnight); a company's ceiling is its share of that same day, not a day of its own.",
+  },
+  {
     file: "src/jobs/cron/driver-position-partitions-job.ts",
     pattern: "utc-midnight",
     count: 1,

@@ -329,6 +329,70 @@ const envSchema = z
       z.coerce.number().int().min(0).max(1_000_000).default(2000),
     ),
 
+    /**
+     * The panel's address search ("Fixar no mapa" on the route page): GET
+     * /address-search/:businessId asks the provider for suggestions while
+     * the dispatcher types (search-address-usecase.ts). A base URL of its
+     * own, because LocationIQ serves its autocomplete on
+     * https://api.locationiq.com/v1, not on the regional host of
+     * REVERSE_GEOCODER_URL. Unset, the search is off: the endpoint answers
+     * 503 and the map click still pins.
+     *
+     * - PROTOCOL: `locationiq-autocomplete` (staging and production) or
+     *   `nominatim-search` (a Nominatim of our own, or development).
+     * - KEY: a SECRET; unset, the reverse geocoder's (the same account and
+     *   the same quota).
+     * - DAILY_BUDGET: searches per UTC day for the whole platform, apart
+     *   from the job's budget; 0 switches the search off.
+     * - BUSINESS_DAILY_LIMIT: searches per UTC day for one company, so a
+     *   carrier cannot spend everybody's day.
+     * - CACHE_SECONDS: how long an answer is kept per company; LocationIQ's
+     *   free tier allows 48 h at most. 0 keeps nothing.
+     *
+     * The free tier's 5,000 a day are shared: the job (2,000), the search
+     * (1,000) and the proof's reverse lookup, which has no budget.
+     */
+    ADDRESS_SEARCH_URL: z.preprocess(
+      (value) => (value === "" ? undefined : value),
+      z
+        .string()
+        .url({ message: "ADDRESS_SEARCH_URL deve ser uma URL." })
+        .optional(),
+    ),
+    ADDRESS_SEARCH_PROTOCOL: z.preprocess(
+      (value) => (value === "" ? undefined : value),
+      z
+        .enum(["locationiq-autocomplete", "nominatim-search"], {
+          message:
+            "ADDRESS_SEARCH_PROTOCOL aceita locationiq-autocomplete ou nominatim-search.",
+        })
+        .default("nominatim-search"),
+    ),
+    ADDRESS_SEARCH_KEY: z.preprocess(
+      (value) => (value === "" ? undefined : value),
+      z.string().optional(),
+    ),
+    ADDRESS_SEARCH_DAILY_BUDGET: z.preprocess(
+      (value) => (value === "" ? undefined : value),
+      z.coerce.number().int().min(0).max(1_000_000).default(1000),
+    ),
+    ADDRESS_SEARCH_BUSINESS_DAILY_LIMIT: z.preprocess(
+      (value) => (value === "" ? undefined : value),
+      z.coerce.number().int().min(1).max(1_000_000).default(150),
+    ),
+    ADDRESS_SEARCH_CACHE_SECONDS: z.preprocess(
+      (value) => (value === "" ? undefined : value),
+      z.coerce
+        .number()
+        .int()
+        .min(0)
+        .max(172_800, {
+          message:
+            "ADDRESS_SEARCH_CACHE_SECONDS vai até 172800 (48 h), o máximo que o plano grátis do LocationIQ permite guardar.",
+        })
+        .default(172_800),
+    ),
+
     // AI readings: the local OCR service trajetto-ai (ADR 0010, 05/10/2026).
     //
     // `local` reads with the service at AI_LOCAL_URL; without the URL or the
@@ -691,6 +755,8 @@ const envSchema = z
     for (const [field, host] of [
       ["PROOF_MAP_TILE_URL", "tile.openstreetmap.org"],
       ["REVERSE_GEOCODER_URL", "nominatim.openstreetmap.org"],
+      // Searching as you type is the one use its policy names as forbidden.
+      ["ADDRESS_SEARCH_URL", "nominatim.openstreetmap.org"],
     ] as const) {
       const value = env[field];
 

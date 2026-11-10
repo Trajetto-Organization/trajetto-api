@@ -1,0 +1,97 @@
+import type { Redis } from "ioredis";
+
+import { env } from "@/env";
+import { logger } from "@/shared/logging/logger";
+import {
+  GEOCODING_CALLS_PER_MINUTE,
+  createRedisGeocodingGate,
+  type GeocodingGate,
+} from "@/shared/delivery/geocoding/geocoding-gate";
+import {
+  createRedisAddressSearchStore,
+  unreadableAddressSearchStore,
+  type AddressSearchStore,
+} from "@/shared/services/address-search/address-search-limits";
+import { searchPlaces } from "@/shared/services/address-search/address-search-provider";
+import { proofLocationConfigFromEnv } from "@/shared/services/proof-location/proof-location-service";
+
+import {
+  SearchAddressUseCase,
+  type AddressSearchSettings,
+} from "./search-address-usecase";
+
+/**
+ * The address search as the process runs it: the settings from
+ * ADDRESS_SEARCH_* (read on every search, so a test can change them), the
+ * provider over fetch, and the cache, the counts and the provider's gate on
+ * the request path's fail-fast Redis connection — the rate-limit one, wired
+ * in http.ts like the geocoding hold. A search waits on Redis for 250 ms at
+ * most, and an unreadable Redis answers 503 instead of calling.
+ */
+const log = logger.child({ component: "address-search" });
+
+/** The provider is a person's wait: never longer than this. */
+const SEARCH_TIMEOUT_CEILING_MS = 2_500;
+
+/** Unwired (unit tests, scripts): nothing can be counted, nothing is asked. */
+const closedGate: Pick<GeocodingGate, "pause" | "takeSlot"> = {
+  pause: async () => undefined,
+  takeSlot: async () => false,
+};
+
+let store: AddressSearchStore = unreadableAddressSearchStore;
+let gate: Pick<GeocodingGate, "pause" | "takeSlot"> = closedGate;
+
+function configureAddressSearch(redis: Redis): void {
+  // Debug, not warn: during an outage every search would write a line, and
+  // the connection log already says Redis is gone.
+  const onError = (err: unknown) =>
+    log.debug({ err }, "address search limits unreadable");
+
+  store = createRedisAddressSearchStore(redis, onError);
+  // The search's ceiling in the minute: the background paths stop ten
+  // calls sooner on the same count.
+  gate = createRedisGeocodingGate(redis, {
+    perMinute: GEOCODING_CALLS_PER_MINUTE,
+    onError,
+  });
+}
+
+function addressSearchSettingsFromEnv(): AddressSearchSettings {
+  const geocoder = proofLocationConfigFromEnv().geocoder;
+
+  return {
+    provider: env.ADDRESS_SEARCH_URL
+      ? {
+          url: env.ADDRESS_SEARCH_URL,
+          protocol: env.ADDRESS_SEARCH_PROTOCOL,
+          // The same account as the deliveries' lookups unless a token of
+          // its own is set.
+          key: env.ADDRESS_SEARCH_KEY ?? env.REVERSE_GEOCODER_KEY,
+          keyParam: geocoder.keyParam,
+          userAgent: geocoder.userAgent,
+          timeoutMs: Math.min(geocoder.timeoutMs, SEARCH_TIMEOUT_CEILING_MS),
+        }
+      : null,
+    dailyBudget: env.ADDRESS_SEARCH_DAILY_BUDGET,
+    businessDailyLimit: env.ADDRESS_SEARCH_BUSINESS_DAILY_LIMIT,
+    cacheSeconds: env.ADDRESS_SEARCH_CACHE_SECONDS,
+  };
+}
+
+function searchAddressUseCase(): SearchAddressUseCase {
+  return new SearchAddressUseCase({
+    settings: addressSearchSettingsFromEnv,
+    store,
+    gate,
+    provider: searchPlaces,
+    log,
+  });
+}
+
+export {
+  SEARCH_TIMEOUT_CEILING_MS,
+  addressSearchSettingsFromEnv,
+  configureAddressSearch,
+  searchAddressUseCase,
+};
