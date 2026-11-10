@@ -89,6 +89,10 @@ import {
   configureMailCooldown,
   createRedisMailCooldown,
 } from "@/shared/security/mail-cooldown";
+import {
+  configureGeocodingHold,
+  createRedisGeocodingHold,
+} from "@/shared/delivery/geocoding/geocoding-hold";
 
 import { enforceRequestedTenant } from "./modules/middlewares/tenant-authorization";
 import { UPLOAD_TYPES, uploadConfig } from "./config/upload";
@@ -264,6 +268,11 @@ configureIntegrationRateGuard(createIntegrationRateGuard(rateLimitRedis));
 // The per-recipient cooldown of the anonymous e-mails ("esqueci minha
 // senha"), on the same fail-fast connection (shared/security/mail-cooldown.ts).
 configureMailCooldown(createRedisMailCooldown(rateLimitRedis));
+
+// Whether the address lookups are held (a refusal, the day's quota, the
+// budget spent), for the route read's "Localizando endereço…", on the same
+// fail-fast connection (shared/delivery/geocoding/geocoding-hold.ts).
+configureGeocodingHold(createRedisGeocodingHold(rateLimitRedis));
 
 /**
  * The limiter goes FIRST in each route's onRequest, not last.

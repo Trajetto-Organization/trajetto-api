@@ -98,11 +98,14 @@ function redisClientOptions(role: RedisRole): RedisOptions {
       };
 
     case "geocoding-budget":
-      // The geocoding job's daily budget (plan of 02/11/2026, E1; shared/
-      // delivery/geocoding/geocoding-budget.ts): opened per run by a cron
-      // job, never in a request's path. The offline queue lets the first
-      // command wait for the fresh connection; the budget fails CLOSED on
-      // any error, so a slow Redis only puts the run off.
+      // The geocoding's daily budget, pause and per-second slot (plan of
+      // 02/11/2026, E1; shared/delivery/geocoding/geocoding-runtime.ts): one
+      // connection per process, opened on the first lookup — the minute's
+      // job or the lookup after a commit — and never in a request's path
+      // (the lookup runs after the answer). The offline queue lets the
+      // first command wait for the fresh connection; the budget and the
+      // gate fail CLOSED on any error, so a slow Redis only puts the
+      // lookups off.
       return {
         connectionName: "trajetto-geocoding-budget",
         maxRetriesPerRequest: 1,

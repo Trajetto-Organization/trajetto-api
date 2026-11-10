@@ -1,6 +1,7 @@
 import type { RouteStatus, RouteStopStatus } from "@/shared/route/route-rules";
 import type { SortOrder } from "@/shared/pagination/list-query";
 import type { GeofenceOutcome } from "@/shared/delivery/geofence/geofence-rules";
+import type { AddressLookupState } from "@/shared/delivery/geocoding/address-lookup-state";
 
 import type {
   RouteListFilters,
@@ -179,6 +180,25 @@ interface RouteStopWithDelivery extends RouteStop {
     latitude?: number | null;
     longitude?: number | null;
     geo_source?: "MANUAL" | "GEOCODER" | null;
+
+    /** How precisely the geocoder placed the address (E1); null otherwise. */
+    geo_precision?: "ADDRESS" | "STREET" | "NEIGHBORHOOD" | "CITY" | null;
+
+    /**
+     * The geocoder's bookkeeping (E1) and the row's last write, read for
+     * `address_lookup` and never answered: get-route drops all four.
+     */
+    geocode_status?: "RESOLVED" | "COARSE" | "NOT_FOUND" | "FAILED" | null;
+    geocode_attempts?: number;
+    geocode_attempted_at?: Date | null;
+    updated_at?: Date;
+
+    /**
+     * Whether the address of a stop without a point is still being looked
+     * up or was not found (owner's report of 09/11/2026), derived by
+     * get-route (shared/delivery/geocoding/address-lookup-state.ts).
+     */
+    address_lookup?: AddressLookupState | null;
   };
 }
 

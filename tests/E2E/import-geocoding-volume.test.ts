@@ -18,6 +18,7 @@ import {
   createRedisGeocodingBudget,
 } from "@/shared/delivery/geocoding/geocoding-budget";
 import { DeliveryGeocodingRepository } from "@/shared/delivery/geocoding/geocoding-repository";
+import type { GeocodingGate } from "@/shared/delivery/geocoding/geocoding-gate";
 import { geocodeAddress } from "@/shared/services/proof-location/address-geocoder";
 import { createPrismaClient } from "@/shared/database/database-client";
 
@@ -33,9 +34,11 @@ import { createPrismaClient } from "@/shared/database/database-client";
  *
  * - the import of 1.000 rows finishes with 1.000 deliveries, none with a
  *   point, none tried yet, and the provider was never even called;
- * - one run of the job claims at most its batch (20), never the backlog;
- * - DELIVERY_GEOCODING_DAILY_BUDGET is the ceiling across runs: with 25 left,
- *   the second run asks 5 and the third asks nothing.
+ * - one run of the job claims at most its batch (20), never the backlog,
+ *   and a provider that does not answer stops it after three failures in a
+ *   row: the other seventeen go back unasked, with no attempt spent;
+ * - DELIVERY_GEOCODING_DAILY_BUDGET is the ceiling across runs: run after
+ *   run asks three more until the day's 25 are spent, and then nothing.
  */
 const prisma = createPrismaClient();
 
@@ -124,23 +127,40 @@ function csv(rows: number): string {
   ).toString("base64");
 }
 
+/**
+ * The gate open: the per-second slot and the pause are global Redis keys,
+ * and this file is about the batch and the budget, not about sharing the
+ * second with the E2E files running beside it.
+ */
+const OPEN_GATE: GeocodingGate = {
+  paused: async () => false,
+  pause: async () => undefined,
+  takeSlot: async () => true,
+};
+
 /** One run of the job, against the silent provider and the shared budget. */
 function geocodingRun() {
-  return new DeliveryGeocodingService(
-    new DeliveryGeocodingRepository(),
-    (address) =>
-      geocodeAddress(address, {
-        url: providerUrl,
-        key: undefined,
-        keyParam: "key",
-        userAgent: "trajetto-test",
-        // The provider never answers: each lookup ends at its timeout.
-        timeoutMs: 150,
-      }),
-    createRedisGeocodingBudget(redis, DAILY_BUDGET),
+  return new DeliveryGeocodingService({
+    repository: new DeliveryGeocodingRepository(),
+    geocode: (address, query) =>
+      geocodeAddress(
+        address,
+        {
+          url: providerUrl,
+          key: undefined,
+          keyParam: "key",
+          userAgent: "trajetto-test",
+          // The provider never answers: each lookup ends at its timeout.
+          timeoutMs: 150,
+        },
+        undefined,
+        query,
+      ),
+    budget: createRedisGeocodingBudget(redis, DAILY_BUDGET),
+    gate: OPEN_GATE,
     // The production batch; no spacing, the provider is local.
-    { ...GEOCODING_RUN_DEFAULTS, spacingMs: 0 },
-  ).runOnce(RUN_AT);
+    options: { ...GEOCODING_RUN_DEFAULTS, spacingMs: 0, slotWaitMs: 0 },
+  }).runOnce(RUN_AT);
 }
 
 beforeAll(async () => {
@@ -254,26 +274,31 @@ describe("a spreadsheet of 1.000 rows", () => {
 
   it("is drained by the job in batches, within the day's budget", async () => {
     const first = await geocodingRun();
+    const streak = GEOCODING_RUN_DEFAULTS.failureStreak;
 
-    // The batch, never the backlog; the silent provider failed them all.
+    // The batch, never the backlog. The silent provider failed three in a
+    // row, which stopped the run: the rest of the batch went back unasked.
     expect(first).toMatchObject({
       claimed: GEOCODING_RUN_DEFAULTS.batchSize,
-      failed: GEOCODING_RUN_DEFAULTS.batchSize,
+      failed: streak,
+      released: GEOCODING_RUN_DEFAULTS.batchSize - streak,
+      stoppedBy: "FAILURES",
     });
-    expect(Number(await redis.get(budgetKey(RUN_AT)))).toBe(
-      GEOCODING_RUN_DEFAULTS.batchSize,
-    );
+    expect(Number(await redis.get(budgetKey(RUN_AT)))).toBe(streak);
 
-    // Five left in the day: the second run asks five, the third nothing.
-    const second = await geocodingRun();
+    // Run after run, three more each, until the day's budget is spent.
+    const runs = [first];
 
-    expect(second).toMatchObject({
-      claimed: DAILY_BUDGET - GEOCODING_RUN_DEFAULTS.batchSize,
+    while (runs.length <= 12 && runs[runs.length - 1].skipped !== "BUDGET") {
+      runs.push(await geocodingRun());
+    }
+
+    expect(runs[runs.length - 1]).toMatchObject({
+      claimed: 0,
+      skipped: "BUDGET",
     });
-
-    const third = await geocodingRun();
-
-    expect(third).toMatchObject({ claimed: 0, skipped: "BUDGET" });
+    expect(Number(await redis.get(budgetKey(RUN_AT)))).toBe(DAILY_BUDGET);
+    expect(runs.reduce((sum, run) => sum + run.failed, 0)).toBe(DAILY_BUDGET);
 
     const tried = await prisma.delivery.count({
       where: { businessId: CARRIER, geocode_attempts: { gt: 0 } },

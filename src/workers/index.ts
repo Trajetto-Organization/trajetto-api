@@ -4,6 +4,7 @@ import { NotificationPipelineService } from "../shared/notifications/notificatio
 import { AIAnalysisPipelineService } from "../shared/ai/ai-analysis-pipeline-service";
 import { WebhookDispatchService } from "../shared/integration/webhook-dispatch-service";
 import { apiUsageRecorder } from "../shared/integration/api-usage-recorder";
+import { shutdownDeliveryGeocoding } from "../shared/delivery/geocoding/geocode-soon";
 
 import { registerCronJobs } from "../jobs/cron";
 import { env } from "../env";
@@ -92,6 +93,11 @@ export async function shutdownWorkers(): Promise<void> {
       // be the one somebody asks about right after a deploy.
       apiUsageRecorder.shutdown(),
     ]);
+
+    // After the cron: its geocoding run shares this Redis connection. On
+    // every replica, like the recorder — the lookup after a commit runs
+    // wherever the request was served.
+    await shutdownDeliveryGeocoding();
 
     log.info("workers stopped");
   } catch (error) {

@@ -1670,9 +1670,20 @@ interface RouteRealtimeEvent {
     | "route-stop.on_the_way"
 
     // The plan changed: stops added, removed, moved or reordered, a stop
-    // pinned on the map, crew or window edited (decision 14.7). A hint, like
-    // the rest: every listener refetches the route.
-    | "route.stops_changed";
+    // of a planned or released route pinned on the map, crew or window
+    // edited (decision 14.7). A hint, like the rest: every listener
+    // refetches the route.
+    | "route.stops_changed"
+
+    // The address point of a stop of the driver's route changed: the
+    // geocoder found it (plan of 02/11/2026, E1), or the dispatcher pinned
+    // or cleared it on the running route (D23, set-delivery-location). The
+    // driver's room only, so the app reads the new point for its geofence
+    // and navigation. Not a plan change — no plan_version, no toast, no
+    // push — and every app build refetches on any routeEvent type silently.
+    // The operations room hears the geocoder's as `routeStopsLocated`
+    // instead (sendRouteStopsLocatedToBusiness).
+    | "route-stop.located";
 
   routeId: string;
 
@@ -1744,6 +1755,36 @@ const sendDeliveryStatusToBusiness = (
       type: "delivery.status_changed",
       ...event,
     } satisfies DeliveryStatusRealtimeEvent);
+  }
+};
+
+/**
+ * Stops of a route whose address lookup just ended (plan of 02/11/2026, E1;
+ * owner's report of 09/11/2026): the geocoder found the point, or gave up
+ * ("não localizado"). The route page open on it refetches and draws the
+ * pin without a reload.
+ *
+ * Its own event name and not a `routeEvent`, for the reason the driver's
+ * position has one: every board, the tower, the Entregas tabs and the
+ * occurrence queue refetch on any routeEvent, and none of them draws an
+ * address point — a minute's batch of twenty answers would refetch every
+ * open screen of the company for nothing. Only the route detail listens.
+ *
+ * A hint, like the rest: the page refetches the route. Sent by whichever
+ * replica settled the lookup (the job or the lookup after a commit), after
+ * the write.
+ */
+interface RouteStopsLocatedEvent {
+  routeId: string;
+  deliveryIds: string[];
+}
+
+const sendRouteStopsLocatedToBusiness = (
+  businessId: string,
+  event: RouteStopsLocatedEvent,
+) => {
+  if (io) {
+    io.to(operationsRoom(businessId)).emit("routeStopsLocated", event);
   }
 };
 
@@ -2072,6 +2113,7 @@ export type {
   OccurrenceAuthorizationRealtimeEvent,
   OccurrenceDecisionDriverEvent,
   RouteRealtimeEvent,
+  RouteStopsLocatedEvent,
   SupportTicketRealtimeEvent,
   SupportTicketRealtimeType,
 };
@@ -2119,6 +2161,7 @@ export {
   refreshDeliveryRooms,
   broadcastWhatsAppTemplateLaneChange,
   sendRouteEventToBusiness,
+  sendRouteStopsLocatedToBusiness,
   sendDeliveryEventToDriver,
   sendDriverPositionToBusiness,
   sendRouteEventToDriver,

@@ -1159,30 +1159,162 @@ geocerca das ações no cliente (plano de 02/11/2026, itens E1, E2 e E4;
 decisões D12 a D15 e as do dono de 03/11/2026).
 
 **De onde vem o ponto (E1).** O dispatcher fixa no mapa ou informa na
-criação (`geo_source: MANUAL`, exato) ou o job `geocode-deliveries` acha pelo
-endereço (`GEOCODER`).
-O job roda a cada minuto, fora de qualquer requisição (a criação, o XML, a
-planilha e a API pública não esperam o provedor): pega as
-entregas `PENDING`/`IN_TRANSIT` sem ponto e ainda não resolvidas, das mais
-novas para as mais velhas, num `UPDATE` sobre um `SELECT … FOR UPDATE SKIP
-LOCKED` (índice parcial `delivery_geocode_pending_idx`), e consulta o `/search`
-do mesmo provedor Nominatim-compatível da geocodificação reversa
-(`REVERSE_GEOCODER_*`, `shared/services/proof-location/address-geocoder.ts`).
-Cada execução pega no máximo o lote (20) e nunca passa de
-`DELIVERY_GEOCODING_DAILY_BUDGET` no dia, somando as réplicas (contador no
-Redis). `tests/E2E/import-geocoding-volume.test.ts` prova isso com uma planilha
-de 1.000 linhas e um provedor que aceita a conexão e nunca responde: o import
-termina sem chamar o provedor, as 1.000 entregas ficam na fila sem ponto, e o
-job drena em lotes até o orçamento.
+criação (`geo_source: MANUAL`, exato) ou o geocodificador acha pelo endereço
+(`GEOCODER`). A fila é a própria tabela: as entregas `PENDING`/`IN_TRANSIT`
+sem ponto e ainda não resolvidas. Uma entrega numa rota planejada ou liberada
+continua `PENDING`, e numa rota em andamento fica `IN_TRANSIT`, então entra
+na fila como qualquer outra. A reserva é um `UPDATE` sobre um `SELECT … FOR
+UPDATE SKIP LOCKED` (índice parcial `delivery_geocode_pending_idx`), que
+consulta o `/search` do mesmo provedor Nominatim-compatível da geocodificação
+reversa (`REVERSE_GEOCODER_*`,
+`shared/services/proof-location/address-geocoder.ts`). Dois caminhos usam a
+mesma reserva, o mesmo orçamento e o mesmo portão
+(`shared/delivery/geocoding/`):
 
-| Resposta do provedor                         | O que grava                                                                   |
-| -------------------------------------------- | ----------------------------------------------------------------------------- |
-| número da casa (`ADDRESS`) ou rua (`STREET`) | ponto, `geo_source = GEOCODER`, `geo_precision`, `geocode_status = RESOLVED`  |
-| só bairro ou cidade                          | `geo_precision`, `geocode_status = COARSE`, **sem ponto** (não avaliável)     |
-| nada                                         | `geocode_status = NOT_FOUND`                                                  |
-| erro, 429, 5xx, tempo esgotado               | `geocode_status = FAILED`; tenta de novo depois de 15 min × tentativas, até 5 |
+- **Logo depois do commit** (`geocode-soon.ts`, relato do dono de
+  09/11/2026: entrega criada com endereço completo e posta numa rota aparecia
+  "Sem localização"). A criação pelo painel sem ponto, a criação pela API
+  pública sem ponto, a edição que muda o endereço e as entregas que uma rota
+  recebe (criação da rota, designação em lote e "Adicionar paradas") pedem o
+  ponto em segundo plano, por `claimByIds` (só aqueles ids, só daquela
+  empresa). A resposta da requisição nunca espera o provedor, e nada disso
+  derruba a requisição. É uma execução por vez por processo, numa fila de no
+  máximo 100 ids (o resto fica para o job, com uma linha de log
+  `address lookup queue full`). Resposta que não é sobre o
+  endereço (queda, recusa, 429) devolve a reserva sem gastar tentativa. A
+  planilha e o XML ficam só no job, para que mil linhas não passem na frente
+  de todo mundo.
+- **O job `geocode-deliveries`**, a cada minuto, é a garantia, com no máximo
+  o lote (20) por execução. Primeiro as entregas que são parada aberta de
+  rota não encerrada (`claimOpenStops`: a mesma reserva com um `EXISTS` em
+  `route_stop` pelo índice `route_stop_active_delivery_idx`), depois as mais
+  novas. Assim uma parada que a busca logo depois do commit não cobriu (fila
+  cheia, pausa, orçamento, vaga ocupada) não espera atrás de uma planilha de
+  mil linhas importada depois.
+
+`DELIVERY_GEOCODING_DAILY_BUDGET` é o teto do dia, somando as réplicas e os
+dois caminhos (contador no Redis). `tests/E2E/import-geocoding-volume.test.ts`
+prova isso com uma planilha de 1.000 linhas e um provedor que aceita a
+conexão e nunca responde: o import termina sem chamar o provedor, as 1.000
+entregas ficam na fila sem ponto, e o job drena em lotes até o orçamento.
+
+**A consulta.** O CEP vai como `00000-000`: toda porta grava os 8 dígitos, e
+o OpenStreetMap escreve com hífen. "S/N", "SN", "sem número" e "0" saem da
+busca. Se o endereço completo voltar sem nada, ou só com bairro ou cidade, e
+tinha número, bairro ou CEP, ele é perguntado de novo como busca estruturada
+só com rua, cidade e UF (`structuredSearchUrl`). A melhor resposta vence, e
+cada chamada gasta uma unidade do orçamento. O CEP no OpenStreetMap
+brasileiro é esparso: no exemplo do dono (Rua Epitácio Pessoa, Petrópolis -
+RJ, CEP 25610-000), o CEP sozinho não acha nada, e a rua é achada com ou sem
+o CEP.
+
+**A segunda busca só vale se não contradiz a entrega**
+(`fallback-agreement.ts`, revisão de 09/11/2026). Ela deixa de fora
+justamente o que separa duas ruas de mesmo nome (bairro, CEP e número), e um
+ponto no bairro errado é pior que nenhum: a geocerca mede dele e, em
+`BLOCK`, recusa o motorista na porta certa. A busca estruturada pede 5
+resultados (a mesma chamada, o mesmo custo), porque ela também devolve
+outras ruas da cidade: para a Rua Epitácio Pessoa, em Petrópolis, vieram
+ainda a Rua Amazonas e a Rua Piauí. O ponto dela só fica quando:
+
+- a rua é a pedida (sem acento, caixa, tipo de logradouro e títulos
+  abreviados como "Dr." e "Pres.");
+- nenhum outro resultado traz a mesma rua a mais de 1 km (`repeated`);
+- o bairro do mapa, quando ele traz um, é o da entrega;
+- o CEP do mapa, quando ele traz um, tem os mesmos 5 primeiros dígitos. Um
+  CEP terminado em `-000` (geral da cidade ou do distrito) não é comparado;
+- se a busca completa chegou a um bairro, a rua fica a até 3 km dele.
+
+Fora disso fica a resposta da busca completa: sem ponto, como antes da
+segunda busca ("Endereço não localizado — fixe no mapa"). Resposta sem ponto
+(bairro, cidade) nunca é pior que nenhuma e não é conferida. A busca em texto
+livre, a primeira, segue como antes.
+
+| Resposta do provedor                                                             | O que acontece                                                                                                                               |
+| -------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| número da casa (`ADDRESS`) ou rua (`STREET`)                                     | ponto, `geo_source = GEOCODER`, `geo_precision`, `geocode_status = RESOLVED`                                                                 |
+| só bairro ou cidade                                                              | `geo_precision`, `geocode_status = COARSE`, **sem ponto** (não avaliável)                                                                    |
+| nada (`[]`, ou o 404 do LocationIQ com o JSON `error`)                           | `geocode_status = NOT_FOUND`                                                                                                                 |
+| recusa: 400, 401, 403, outro 4xx, 404 sem o JSON do provedor, 200 que não é JSON | **nada gravado**: a reserva volta como estava, o geocodificador pausa 15 min em todas as réplicas e o log diz `error` (chave ou URL erradas) |
+| 429 (`Rate Limited Day`)                                                         | nada gravado; pausa até a meia-noite UTC (a cota do dia)                                                                                     |
+| 429 (segundo ou minuto)                                                          | nada gravado; pausa 1 min                                                                                                                    |
+| 5xx, 408, rede, tempo esgotado                                                   | `geocode_status = FAILED`; de novo depois de 15, 30, 60, 120, 240 e 360 min (teto de 6 h), até 8 tentativas (cerca de 20 h)                  |
+| três `FAILED` seguidos numa execução                                             | a execução para e devolve as outras reservas sem gastar tentativa (o provedor está fora)                                                     |
+
+Antes, todo 404 virava `NOT_FOUND` e 401/403/429 viravam `FAILED` da entrega.
+Uma `REVERSE_GEOCODER_URL` com um segmento errado, uma chave inválida ou uma
+cota estourada marcavam todas as entregas abertas como "não encontrado" ou
+esgotavam as 5 tentativas em 2 h 30, para sempre. A pausa e a vaga por
+segundo (no máximo 1 chamada por segundo, somando réplicas e caminhos;
+`geocoding-gate.ts`) ficam no Redis e falham **fechado**, como o orçamento.
+O LocationIQ grátis aceita 2 por segundo por chave, e a outra fica para a
+geocodificação reversa do comprovante, que usa a mesma chave e não passa
+pelo portão: um 429 nela deixaria o PDF sem o endereço do GPS por um dia. A
+chave da pausa guarda o motivo junto do prazo (`REFUSED`, `QUOTA` ou
+`BURST`), para a leitura da rota.
 
 - Nunca sobrescreve `MANUAL`: a escrita exige `geo_source IS NULL`.
+- **A tela sabe na hora.** A escrita do geocodificador não sobe
+  `plan_version`: um ponto achado não é edição do plano, e não deve mostrar
+  "alterada por outra pessoa" nem avisar o motorista de plano novo. Para cada
+  rota não encerrada que tem como parada aberta uma entrega cuja busca
+  terminou (ponto achado, `NOT_FOUND`, `COARSE` ou a 8ª falha), sai
+  `routeStopsLocated` `{ routeId, deliveryIds }` na sala de operações da
+  empresa da rota (`geocoding-announcer.ts`). O nome é próprio, e não um
+  `routeEvent`, porque quadros, torre, abas de Entregas e fila de ocorrências
+  recarregam a cada `routeEvent` e nenhum deles desenha o ponto. Só o detalhe
+  da rota escuta. Com ponto achado numa rota `RELEASED` ou `IN_PROGRESS`, o
+  motorista recebe o `routeEvent` `route-stop.located` na sala dele. Todo
+  build do app relê o dia em qualquer `routeEvent`, sem toast, e a geocerca
+  passa a medir pelo ponto novo.
+- **A leitura da rota.** `GET /route/get-route` devolve, na entrega de cada
+  parada, `geo_precision` e `address_lookup`
+  (`shared/delivery/geocoding/address-lookup-state.ts`). `SEARCHING` só
+  enquanto uma busca está em andamento ou é iminente: o endereço foi gravado
+  (criação ou edição, `updated_at`) ou reservado (`geocode_attempted_at`)
+  há menos de 10 min, sem resposta ainda, e as buscas não estão suspensas.
+  `NOT_LOCATED` quer dizer que a busca terminou sem ponto (`NOT_FOUND`,
+  `COARSE` ou as 8 tentativas gastas, com ou sem status gravado). O valor é
+  `null` (a tela diz "Sem localização") com ponto, com o geocodificador
+  desligado, na entrega encerrada, depois de apagado à mão um ponto que o
+  geocodificador tinha achado, depois de uma falha do provedor (a próxima
+  tentativa espera de 15 min a 6 h), quando nada pediu o endereço nos últimos
+  10 min e com as buscas suspensas. Antes, `SEARCHING` não tinha prazo: com a
+  chave errada, a cota estourada ou a fila sem chegar à entrega, o ícone
+  girava para sempre, e o despachante esperava em vez de fixar no mapa
+  (revisão de 09/11/2026). Um ponto achado depois ainda chega à tela
+  (`routeStopsLocated`).
+- **Buscas suspensas** (`geocoding-hold.ts`): a chave da pausa com
+  `REFUSED` (chave ou URL erradas, renovada a cada 15 min) ou `QUOTA` (cota
+  do dia do provedor, até a meia-noite UTC), ou o orçamento do dia gasto. A
+  pausa de um minuto (`BURST`) não suspende. É um `MGET` na conexão de
+  limites (`rate-limit`, que falha rápido), ligada em `http.ts`, e só quando
+  alguma parada da rota leria `SEARCHING`. Sem resposta do Redis, nada fica
+  suspenso, e o prazo de 10 min ainda encerra o ícone.
+- `geo_precision` só onde a resposta do geocodificador ainda vale: no ponto
+  que ele achou (`GEOCODER`, como a geocerca lê em `addressPrecisionOf`) e
+  no bairro ou cidade a que ele só chegou (`COARSE`, sem ponto). Um pino
+  `MANUAL` é exato e responde `null`, mesmo fixado sobre um ponto achado
+  pelo endereço (o "Fixar no mapa" não apaga a coluna). `geocode_status`,
+  `geocode_attempts`, `geocode_attempted_at` e `updated_at` são lidos para
+  isso e nunca respondidos. Os payloads montados a partir das paradas
+  (webhooks, aviso ao cliente) escolhem os campos pelo nome.
+- **"Fixar no mapa" com a rota em andamento (D23).**
+  `PATCH /route/set-delivery-location` numa entrega que é parada aberta de
+  uma rota `IN_PROGRESS` grava o ponto e avisa só o motorista, com o
+  `routeEvent` silencioso `route-stop.located` (o mesmo do ponto achado pelo
+  geocodificador). Todo build do app relê o dia em qualquer `routeEvent`,
+  sem toast e sem som, e a navegação e a geocerca passam a usar o ponto
+  novo na hora, em vez de na próxima sincronização. A `plan_version` não
+  sobe, porque o pino não muda parada nem ordem, e não há
+  `route.stops_changed` nem push: nada muda para a empresa com a geocerca
+  desligada, e dez pinos numa rota na rua não viram dez avisos "Rota
+  alterada" para o motorista dirigindo. A resposta continua com `routeId` e
+  `planVersion` nulos, como antes. Em `PLANNED` e `RELEASED` o pino segue
+  sendo mudança de plano (versão e `route.stops_changed`; na liberada,
+  também o push). A rota em andamento é travada antes da entrega, como toda
+  escrita de rota (`PINNABLE_STATUSES` no repositório). Rota concluída ou
+  cancelada não é avisada.
 - **Ponto informado na criação.** O formulário do painel
   (`POST /delivery/create-delivery`), a planilha (colunas opcionais
   Latitude e Longitude, com vírgula ou ponto) e a API pública
@@ -1198,17 +1330,72 @@ job drena em lotes até o orçamento.
   pública, o ponto faz parte do corpo comparado na repetição com a mesma
   `Idempotency-Key`, mas só um ponto `MANUAL`: o que o job achou depois não
   conta.
-- Editar o endereço limpa o ponto e os quatro campos do job
-  (`CLEARED_ADDRESS_POINT`), então o endereço novo é geocodificado de novo, e
-  uma resposta do endereço antigo ainda a caminho não grava nada (a escrita
-  confere `geocode_attempted_at`, que é o lease da reserva).
+- Editar o endereço limpa o ponto (também um `MANUAL`, decisão 14.7: um pino
+  do endereço antigo está tão errado quanto um calculado) e os quatro campos
+  do job (`CLEARED_ADDRESS_POINT`). O endereço novo é pedido logo depois do
+  commit e entra de novo na fila. Uma resposta do endereço antigo ainda a
+  caminho não grava nada, e uma devolução dessa reserva também não: as duas
+  conferem `geocode_attempted_at`, que é o lease da reserva. Reenviar o mesmo
+  endereço (o CEP com hífen inclusive) não muda nada.
 - Orçamento: `DELIVERY_GEOCODING_DAILY_BUDGET` consultas por dia (UTC),
-  somando as réplicas, num contador de janela fixa no Redis
-  (`shared/delivery/geocoding/geocoding-budget.ts`). Ao contrário dos limites
-  de requisição, falha **fechado**: sem Redis o job espera o próximo minuto.
-  Até 20 consultas por execução, uma a cada 600 ms.
-- Não mexe em `updated_at` (não é edição do cliente). Aceitar latitude e
-  longitude enviadas na criação (formulário, planilha, API) ainda não existe.
+  somando as réplicas e os dois caminhos, num contador de janela fixa no
+  Redis (`shared/delivery/geocoding/geocoding-budget.ts`). Ao contrário dos
+  limites de requisição, falha **fechado**: sem Redis o geocodificador espera
+  o próximo minuto. São até 20 entregas por execução, uma chamada por
+  segundo no máximo, no total. O Redis é uma conexão por
+  processo, aberta na primeira busca e fechada no desligamento
+  (`geocoding-runtime.ts`).
+- Não mexe em `updated_at` (não é edição do cliente).
+- **O log.** Sem `REVERSE_GEOCODER_URL` ou com orçamento 0, o job diz uma vez
+  por processo, em `info`, `geocode-deliveries off` com o motivo. Toda
+  execução que reservou algo escreve `delivery addresses geocoded` (contagens
+  por resultado, devolvidas e `providerStatuses`). A que parou antes escreve
+  `geocoding provider refused the request` (`error`, com o código HTTP:
+  401/403 é a chave, 404 é a URL), `rate-limited` ou `failing` (`warn`).
+- **Reenfileirar os veredictos da consulta anterior.** `NOT_FOUND`, `COARSE`
+  e a 8ª falha são finais até o endereço mudar. Os que a versão anterior
+  gravou vieram de outra consulta (CEP sem hífen, `s/n` na busca, sem a
+  segunda busca, todo 404 como "não encontrado" e 401/403/429 como falha da
+  entrega), e a consulta nova acharia vários deles: no exemplo do dono, o
+  OpenStreetMap devolve a Rua Epitácio Pessoa no nível da rua. Com o provedor
+  configurado certo e esta versão servindo, rode **uma vez**, fora do horário
+  de pico, em lotes, até o `UPDATE` afetar 0 linhas. `<subida>` é o instante
+  (UTC) em que a imagem nova assumiu: limita os lotes ao que a versão
+  anterior gravou, sem reabrir os veredictos da consulta nova.
+  ```sql
+  SET lock_timeout = '5s';
+
+  -- Quantas são (uma vez, antes):
+  SELECT count(*) FROM "delivery"
+   WHERE "status" IN ('PENDING', 'IN_TRANSIT')
+     AND "latitude" IS NULL AND "geo_source" IS NULL
+     AND "geocode_status" IN ('NOT_FOUND', 'COARSE', 'FAILED')
+     AND "geocode_attempted_at" < '<subida>';
+
+  -- Um lote; repita até "UPDATE 0".
+  WITH batch AS (
+    SELECT "id" FROM "delivery"
+     WHERE "status" IN ('PENDING', 'IN_TRANSIT')
+       AND "latitude" IS NULL AND "geo_source" IS NULL
+       AND "geocode_status" IN ('NOT_FOUND', 'COARSE', 'FAILED')
+       AND "geocode_attempted_at" < '<subida>'
+     ORDER BY "id"
+     LIMIT 1000
+     FOR UPDATE SKIP LOCKED
+  )
+  UPDATE "delivery" AS d
+     SET "geocode_status" = NULL, "geo_precision" = NULL,
+         "geocode_attempted_at" = NULL, "geocode_attempts" = 0
+    FROM batch
+   WHERE d."id" = batch."id";
+  ```
+  Cada lote é uma transação curta (o `psql` confirma cada comando): uma linha
+  que o motorista ou o painel está gravando é pulada (`SKIP LOCKED`) e entra
+  num lote seguinte, e nenhuma escrita espera mais que um lote. `updated_at`
+  não muda. O orçamento do dia continua valendo, e o job drena 20 por minuto,
+  as paradas abertas primeiro. Não há nova tentativa automática de
+  `NOT_FOUND`: a resposta raramente muda, e repetir exigiria trocar o
+  predicado do índice parcial.
 
 **A regra (E2), igual no servidor e no app.**
 `shared/delivery/geofence/geofence-rules.ts`, com os casos em
@@ -1949,25 +2136,25 @@ Registrados em `src/jobs/cron/index.ts`. Horário em UTC (o contêiner não tem
 execução por horário com várias réplicas, e um catch-up refaz jobs diários
 perdidos.
 
-| Job                                  | Quando (UTC)              | O que faz                                                                                                                              |
-| ------------------------------------ | ------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
-| `ops-heartbeat`                      | a cada minuto             | avalia as regras de operação e avisa o monitor externo (`HEALTHCHECK_PING_URL`)                                                        |
-| `escalate-occurrence-authorizations` | a cada minuto             | pedido de autorização sem resposta da torre em 10 min vai aos administradores, uma vez                                                 |
-| `repair-unticketed-messages`         | a cada minuto             | arquiva em ticket a mensagem gravada sem ticket por uma imagem antiga                                                                  |
-| `geocode-deliveries`                 | a cada minuto             | geocodifica o endereço das entregas abertas sem ponto (as mais novas primeiro), dentro de `DELIVERY_GEOCODING_DAILY_BUDGET` por dia    |
-| `close-abandoned-imports`            | a cada 5 min              | fecha importação que ficou `IN_PROGRESS` num processo que morreu                                                                       |
-| `alert-routes-left-open`             | de hora em hora (:07)     | avisa os administradores, uma vez, da rota esquecida em andamento (desde antes de hoje no fuso da empresa ou há mais de 16 h)          |
-| `reconcile-proof-analysis`           | a cada 10 min             | pede de novo a leitura de IA de um comprovante cujo pedido se perdeu                                                                   |
-| `reconcile-record-analysis`          | a cada 10 min (:05, :15…) | o mesmo para abastecimentos e checklists `pending` sem pedido e com foto legível, de 10 min a 2 dias, sem gastar quota com o histórico |
-| `check-push-receipts`                | a cada 15 min             | lê os recibos da Expo e desativa aparelhos mortos                                                                                      |
-| `cleanup-expired-refresh-tokens`     | 03:17                     | remove refresh tokens vencidos, os push das sessões que sumiram e os aparelhos confiáveis sem login há 210 dias                        |
-| `cleanup-notification-pipeline`      | 03:30                     | limpa entregas de notificação antigas                                                                                                  |
-| `cleanup-ai-pipeline`                | 03:45                     | limpa pedidos de IA antigos                                                                                                            |
-| `cleanup-user-history`               | 04:00                     | limpa histórico antigo do usuário (a trilha de auditoria só com `ACTIVITY_RETENTION_DAYS`, nunca abaixo de 365)                        |
-| `driver-position-partitions`         | 04:10                     | cria e remove partições diárias de `driver_position` (90 dias)                                                                         |
-| `cleanup-webhook-deliveries`         | 04:20                     | remove entregas de webhook resolvidas fora da janela de reenvio                                                                        |
-| `cleanup-api-usage`                  | 04:35                     | remove contadores diários de uso da API pública com mais de 400 dias                                                                   |
-| `cleanup-orphan-uploads`             | 04:50                     | conta (ou remove, com `UPLOAD_ORPHAN_GC=delete`) objetos do bucket sem linha                                                           |
+| Job                                  | Quando (UTC)              | O que faz                                                                                                                                                                                                                            |
+| ------------------------------------ | ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `ops-heartbeat`                      | a cada minuto             | avalia as regras de operação e avisa o monitor externo (`HEALTHCHECK_PING_URL`)                                                                                                                                                      |
+| `escalate-occurrence-authorizations` | a cada minuto             | pedido de autorização sem resposta da torre em 10 min vai aos administradores, uma vez                                                                                                                                               |
+| `repair-unticketed-messages`         | a cada minuto             | arquiva em ticket a mensagem gravada sem ticket por uma imagem antiga                                                                                                                                                                |
+| `geocode-deliveries`                 | a cada minuto             | geocodifica o endereço das entregas abertas sem ponto (as mais novas primeiro), dentro de `DELIVERY_GEOCODING_DAILY_BUDGET` por dia; a criação, a edição do endereço e a rota também pedem logo depois do commit (`geocode-soon.ts`) |
+| `close-abandoned-imports`            | a cada 5 min              | fecha importação que ficou `IN_PROGRESS` num processo que morreu                                                                                                                                                                     |
+| `alert-routes-left-open`             | de hora em hora (:07)     | avisa os administradores, uma vez, da rota esquecida em andamento (desde antes de hoje no fuso da empresa ou há mais de 16 h)                                                                                                        |
+| `reconcile-proof-analysis`           | a cada 10 min             | pede de novo a leitura de IA de um comprovante cujo pedido se perdeu                                                                                                                                                                 |
+| `reconcile-record-analysis`          | a cada 10 min (:05, :15…) | o mesmo para abastecimentos e checklists `pending` sem pedido e com foto legível, de 10 min a 2 dias, sem gastar quota com o histórico                                                                                               |
+| `check-push-receipts`                | a cada 15 min             | lê os recibos da Expo e desativa aparelhos mortos                                                                                                                                                                                    |
+| `cleanup-expired-refresh-tokens`     | 03:17                     | remove refresh tokens vencidos, os push das sessões que sumiram e os aparelhos confiáveis sem login há 210 dias                                                                                                                      |
+| `cleanup-notification-pipeline`      | 03:30                     | limpa entregas de notificação antigas                                                                                                                                                                                                |
+| `cleanup-ai-pipeline`                | 03:45                     | limpa pedidos de IA antigos                                                                                                                                                                                                          |
+| `cleanup-user-history`               | 04:00                     | limpa histórico antigo do usuário (a trilha de auditoria só com `ACTIVITY_RETENTION_DAYS`, nunca abaixo de 365)                                                                                                                      |
+| `driver-position-partitions`         | 04:10                     | cria e remove partições diárias de `driver_position` (90 dias)                                                                                                                                                                       |
+| `cleanup-webhook-deliveries`         | 04:20                     | remove entregas de webhook resolvidas fora da janela de reenvio                                                                                                                                                                      |
+| `cleanup-api-usage`                  | 04:35                     | remove contadores diários de uso da API pública com mais de 400 dias                                                                                                                                                                 |
+| `cleanup-orphan-uploads`             | 04:50                     | conta (ou remove, com `UPLOAD_ORPHAN_GC=delete`) objetos do bucket sem linha                                                                                                                                                         |
 
 O backup diário do Dokploy (03:00 UTC, aba _Backups_ do Database) roda antes do
 primeiro job que apaga dados.

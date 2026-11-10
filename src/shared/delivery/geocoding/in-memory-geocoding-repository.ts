@@ -1,10 +1,13 @@
-import {
-  GEOCODING_BACKOFF_MINUTES,
-  GEOCODING_MAX_ATTEMPTS,
-  type GeocodingClaim,
-  type GeocodingSettlement,
-  type IDeliveryGeocodingRepository,
+import type {
+  GeocodingClaim,
+  GeocodingSettlement,
+  IDeliveryGeocodingRepository,
+  OpenStopRoute,
 } from "./geocoding-repository";
+import {
+  GEOCODING_MAX_ATTEMPTS,
+  geocodingBackoffMinutes,
+} from "./geocoding-rules";
 
 /** The delivery columns the geocoding queue reads and writes. */
 interface GeocodingRow {
@@ -30,13 +33,51 @@ interface GeocodingRow {
 
 /**
  * The twin of DeliveryGeocodingRepository: the same queue, claim order,
- * back-off and settle guards over rows the tests seed. One process, so the
- * SKIP LOCKED half has nothing to model; the lease does.
+ * back-off, settle and release guards over rows the tests seed. One
+ * process, so the SKIP LOCKED half has nothing to model; the lease does.
+ * The routes holding the deliveries are seeded apart (`stopRoutes`): this
+ * twin knows no route table.
  */
 class InMemoryDeliveryGeocodingRepository implements IDeliveryGeocodingRepository {
   public deliveries: GeocodingRow[] = [];
 
+  /** The open stops of unfinished routes, as openStopRoutes answers them. */
+  public stopRoutes: OpenStopRoute[] = [];
+
   async claim(limit: number, now: Date): Promise<GeocodingClaim[]> {
+    return this.claimWhere(() => true, limit, now);
+  }
+
+  async claimOpenStops(limit: number, now: Date): Promise<GeocodingClaim[]> {
+    if (limit <= 0) return [];
+
+    return this.claimWhere(
+      (row) => this.stopRoutes.some((stop) => stop.deliveryId === row.id),
+      limit,
+      now,
+    );
+  }
+
+  async claimByIds(
+    ids: readonly string[],
+    businessId: string,
+    limit: number,
+    now: Date,
+  ): Promise<GeocodingClaim[]> {
+    if (ids.length === 0 || limit <= 0) return [];
+
+    return this.claimWhere(
+      (row) => ids.includes(row.id) && row.businessId === businessId,
+      limit,
+      now,
+    );
+  }
+
+  private claimWhere(
+    scope: (row: GeocodingRow) => boolean,
+    limit: number,
+    now: Date,
+  ): GeocodingClaim[] {
     const claimable = (row: GeocodingRow) =>
       row.latitude === null &&
       row.geo_source === null &&
@@ -46,7 +87,8 @@ class InMemoryDeliveryGeocodingRepository implements IDeliveryGeocodingRepositor
       (row.geocode_attempted_at === null ||
         row.geocode_attempted_at.getTime() <
           now.getTime() -
-            GEOCODING_BACKOFF_MINUTES * row.geocode_attempts * 60_000);
+            geocodingBackoffMinutes(row.geocode_attempts) * 60_000) &&
+      scope(row);
 
     const picked = this.deliveries
       .filter(claimable)
@@ -58,6 +100,10 @@ class InMemoryDeliveryGeocodingRepository implements IDeliveryGeocodingRepositor
       .slice(0, limit);
 
     return picked.map((row) => {
+      const previousAttemptedAt = row.geocode_attempted_at
+        ? new Date(row.geocode_attempted_at.getTime())
+        : null;
+
       row.geocode_attempted_at = new Date(now.getTime());
       row.geocode_attempts += 1;
 
@@ -72,8 +118,18 @@ class InMemoryDeliveryGeocodingRepository implements IDeliveryGeocodingRepositor
         cep: row.cep,
         claimedAt: new Date(now.getTime()),
         attempts: row.geocode_attempts,
+        previousAttemptedAt,
       };
     });
+  }
+
+  /** The row the claim still holds, or undefined. */
+  private held(claim: GeocodingClaim): GeocodingRow | undefined {
+    return this.deliveries.find(
+      (entry) =>
+        entry.id === claim.id &&
+        entry.geocode_attempted_at?.getTime() === claim.claimedAt.getTime(),
+    );
   }
 
   async settle(
@@ -81,15 +137,9 @@ class InMemoryDeliveryGeocodingRepository implements IDeliveryGeocodingRepositor
     settlement: GeocodingSettlement,
     now: Date,
   ): Promise<boolean> {
-    const row = this.deliveries.find(
-      (entry) =>
-        entry.id === claim.id &&
-        entry.geocode_attempted_at?.getTime() === claim.claimedAt.getTime() &&
-        entry.latitude === null &&
-        entry.geo_source === null,
-    );
+    const row = this.held(claim);
 
-    if (!row) return false;
+    if (!row || row.latitude !== null || row.geo_source !== null) return false;
 
     switch (settlement.kind) {
       case "RESOLVED":
@@ -115,6 +165,27 @@ class InMemoryDeliveryGeocodingRepository implements IDeliveryGeocodingRepositor
     }
 
     return true;
+  }
+
+  async release(claim: GeocodingClaim): Promise<boolean> {
+    const row = this.held(claim);
+
+    if (!row) return false;
+
+    row.geocode_attempted_at = claim.previousAttemptedAt
+      ? new Date(claim.previousAttemptedAt.getTime())
+      : null;
+    row.geocode_attempts = Math.max(row.geocode_attempts - 1, 0);
+
+    return true;
+  }
+
+  async openStopRoutes(
+    deliveryIds: readonly string[],
+  ): Promise<OpenStopRoute[]> {
+    return this.stopRoutes
+      .filter((stop) => deliveryIds.includes(stop.deliveryId))
+      .map((stop) => ({ ...stop }));
   }
 }
 

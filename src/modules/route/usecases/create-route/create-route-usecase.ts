@@ -26,6 +26,10 @@ import { assertDriverStillActive } from "../shared/driver-still-active";
 
 import { businessToday } from "@/shared/time/business-day";
 import { isUniqueViolation } from "@/shared/http/idempotency-key";
+import {
+  geocodeSoon,
+  unlocatedDeliveryIds,
+} from "@/shared/delivery/geocoding/geocode-soon";
 
 import {
   DeliveryAlreadyOnRouteError,
@@ -393,12 +397,23 @@ class CreateRouteUseCase {
     return route;
   }
 
-  /** The activity line, after the commit — never about a write that rolled back. */
+  /**
+   * After the commit — never about a write that rolled back: the activity
+   * line, and the address lookup of the stops still without a point, so the
+   * route page has their pins now rather than at the next minute's job (E1;
+   * never awaited). Both the Rotas screen and the batch assignment pass
+   * here.
+   */
   recordCreated(
     created: RouteWithStops,
     { userId, businessId }: CreateRouteRequest,
     { driverName, vehicleLabel, uniqueIds }: ValidatedRoute,
   ): void {
+    geocodeSoon(
+      businessId,
+      unlocatedDeliveryIds(created.stops.map((stop) => stop.delivery)),
+    );
+
     this.notificationService.createActivityIfEnabled({
       type: "Rota",
       action: "create",

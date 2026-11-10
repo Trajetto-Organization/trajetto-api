@@ -143,6 +143,19 @@ const routeInclude = {
           latitude: true,
           longitude: true,
           geo_source: true,
+
+          // The geocoder's level and bookkeeping (plan of 02/11/2026, E1),
+          // for the stop without a point: get-route turns the bookkeeping
+          // and the row's last write into `address_lookup` (looking it up /
+          // not located) and answers none of the four. Every payload built
+          // from these stops picks its fields by name (deliveryEventPayload,
+          // toPublicRoute, the customer notice), and every response schema
+          // strips the rest.
+          geo_precision: true,
+          geocode_status: true,
+          geocode_attempts: true,
+          geocode_attempted_at: true,
+          updated_at: true,
         },
       },
     },

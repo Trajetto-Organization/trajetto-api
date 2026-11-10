@@ -3,6 +3,17 @@ import { Prisma } from "@prisma/client";
 import database from "@/../infra/database";
 
 import type { AddressPrecision } from "@/shared/services/proof-location/address-geocoder";
+import {
+  OPEN_STOP_STATUSES,
+  type RouteStatus,
+} from "@/shared/route/route-rules";
+
+import {
+  GEOCODING_BACKOFF_CAP_MINUTES,
+  GEOCODING_BACKOFF_MINUTES,
+  GEOCODING_MAX_ATTEMPTS,
+  geocodingBackoffMinutes,
+} from "./geocoding-rules";
 
 /**
  * The geocoding job's queue over the delivery table itself (plan of
@@ -10,14 +21,18 @@ import type { AddressPrecision } from "@/shared/services/proof-location/address-
  * point and not settled by the geocoder are the queue — nothing is enqueued
  * by the create, the imports, the public API or the edit, which therefore
  * stay exactly as they were, and an address edit re-queues itself by
- * clearing the bookkeeping (CLEARED_ADDRESS_POINT).
+ * clearing the bookkeeping (CLEARED_ADDRESS_POINT). A delivery on a planned
+ * or released route is still PENDING, and one on a running route is
+ * IN_TRANSIT: a routed delivery is in the queue like any other.
  *
  * Multi-replica safe twice over: the cron's lease runs one replica per
  * minute, and the claim is one UPDATE over a FOR UPDATE SKIP LOCKED pick, so
- * even two runs at once take disjoint rows. The claim stamps
- * geocode_attempted_at, which is also its lease (a replica that dies frees
- * its rows after the back-off) and the token a settle must still find: an
- * address edited meanwhile cleared it, and the stale answer is dropped.
+ * even two runs at once take disjoint rows — the cron's and the lookup a
+ * request starts after its commit (claimByIds, geocode-soon.ts) included.
+ * The claim stamps geocode_attempted_at, which is also its lease (a replica
+ * that dies frees its rows after the back-off) and the token a settle must
+ * still find: an address edited meanwhile cleared it, and the stale answer
+ * is dropped.
  */
 
 /** A claimed delivery: its address, and the claim's token. */
@@ -33,6 +48,12 @@ interface GeocodingClaim {
   /** The geocode_attempted_at this claim wrote. */
   claimedAt: Date;
   attempts: number;
+  /**
+   * The geocode_attempted_at before this claim: what a release puts back,
+   * so a claim the provider never answered about costs the delivery no
+   * attempt and no back-off.
+   */
+  previousAttemptedAt: Date | null;
 }
 
 /** What a settle writes, by outcome. */
@@ -50,9 +71,41 @@ type GeocodingSettlement =
   | { kind: "NOT_FOUND" }
   | { kind: "FAILED" };
 
+/**
+ * The unfinished route a delivery is an open stop of, for telling the
+ * screens that its point arrived. The company comes from the route row.
+ */
+interface OpenStopRoute {
+  deliveryId: string;
+  routeId: string;
+  businessId: string;
+  routeStatus: RouteStatus;
+  /** The driver's user, when the route is theirs (RELEASED, IN_PROGRESS). */
+  driverUserId: string | null;
+}
+
 interface IDeliveryGeocodingRepository {
   /** Up to `limit` claimable deliveries, newest first, stamped `now`. */
   claim(limit: number, now: Date): Promise<GeocodingClaim[]>;
+
+  /**
+   * The same claim, over the deliveries that are an open stop of an
+   * unfinished route only: what a driver will visit, and a route page
+   * shows. The job asks it first, so a routed address never waits behind
+   * a newer spreadsheet.
+   */
+  claimOpenStops(limit: number, now: Date): Promise<GeocodingClaim[]>;
+
+  /**
+   * The same claim, over these deliveries of this company only: what a
+   * create, an address edit or a routing asks right after its commit.
+   */
+  claimByIds(
+    ids: readonly string[],
+    businessId: string,
+    limit: number,
+    now: Date,
+  ): Promise<GeocodingClaim[]>;
 
   /**
    * Writes the outcome when the claim still holds and the delivery still
@@ -63,34 +116,88 @@ interface IDeliveryGeocodingRepository {
     settlement: GeocodingSettlement,
     now: Date,
   ): Promise<boolean>;
+
+  /**
+   * Gives a claim back unasked — the provider refused or limited the run,
+   * or the budget ran out — as it was before it: attempts and
+   * geocode_attempted_at restored, so the next run takes it at once. A
+   * no-op when the claim no longer holds (an address edit cleared it).
+   */
+  release(claim: GeocodingClaim): Promise<boolean>;
+
+  /** The unfinished routes holding these deliveries as open stops. */
+  openStopRoutes(deliveryIds: readonly string[]): Promise<OpenStopRoute[]>;
 }
 
-/**
- * Claims stop after this many: an address the provider failed on five times
- * is left for a person (the route map's "Fixar no mapa").
- */
-const GEOCODING_MAX_ATTEMPTS = 5;
-
-/**
- * The back-off, per attempt already made: 15 min after the first, 30 after
- * the second… Also the lease of a claim whose replica died.
- */
-const GEOCODING_BACKOFF_MINUTES = 15;
+/** The routes whose open stops the screens draw: not finished yet. */
+const UNFINISHED_ROUTE_STATUSES: RouteStatus[] = [
+  "PLANNED",
+  "RELEASED",
+  "IN_PROGRESS",
+];
 
 class DeliveryGeocodingRepository implements IDeliveryGeocodingRepository {
   constructor(private readonly prisma = database) {}
 
   async claim(limit: number, now: Date): Promise<GeocodingClaim[]> {
-    // The status literals and the geocode_status literal are spelled out so
-    // the planner can prove delivery_geocode_pending_idx in a generic plan.
-    // RETURNING keeps no order, so the claimed rows are sorted again outside.
+    return this.claimWhere(Prisma.empty, limit, now);
+  }
+
+  async claimOpenStops(limit: number, now: Date): Promise<GeocodingClaim[]> {
+    if (limit <= 0) return [];
+
+    // A probe per candidate, newest first, of route_stop_active_delivery_idx
+    // (its predicate spelled out: one open stop per delivery) and of the
+    // route's primary key. The candidates are the claim's own, over its
+    // partial index; the run asks only while the day's budget lasts.
+    return this.claimWhere(
+      Prisma.sql`AND EXISTS (
+          SELECT 1
+          FROM "route_stop" AS s
+          JOIN "route" AS r ON r."id" = s."routeId"
+          WHERE s."deliveryId" = "delivery"."id"
+            AND s."status" IN ('PENDING', 'ARRIVED')
+            AND r."status" IN ('PLANNED', 'RELEASED', 'IN_PROGRESS')
+        )`,
+      limit,
+      now,
+    );
+  }
+
+  async claimByIds(
+    ids: readonly string[],
+    businessId: string,
+    limit: number,
+    now: Date,
+  ): Promise<GeocodingClaim[]> {
+    if (ids.length === 0 || limit <= 0) return [];
+
+    // The company as well as the ids: a caller's list never reaches another
+    // tenant's row, whatever it carries.
+    return this.claimWhere(
+      Prisma.sql`AND "id" = ANY(${[...ids]}::text[])
+        AND "businessId" = ${businessId}`,
+      limit,
+      now,
+    );
+  }
+
+  /**
+   * The claim, with an optional extra filter. The status literals and the
+   * geocode_status literal are spelled out so the planner can prove
+   * delivery_geocode_pending_idx in a generic plan; the attempts and the
+   * back-off are filters over it. RETURNING keeps no order, so the claimed
+   * rows are sorted again outside.
+   */
+  private async claimWhere(
+    scope: Prisma.Sql,
+    limit: number,
+    now: Date,
+  ): Promise<GeocodingClaim[]> {
     return this.prisma.$queryRaw<GeocodingClaim[]>`
-      WITH claimed AS (
-      UPDATE "delivery" AS d
-      SET "geocode_attempted_at" = ${now},
-          "geocode_attempts" = d."geocode_attempts" + 1
-      WHERE d."id" IN (
-        SELECT "id" FROM "delivery"
+      WITH picked AS (
+        SELECT "id", "geocode_attempted_at" AS "previousAttemptedAt"
+        FROM "delivery"
         WHERE "latitude" IS NULL
           AND "geo_source" IS NULL
           AND ("geocode_status" IS NULL OR "geocode_status" = 'FAILED')
@@ -99,19 +206,31 @@ class DeliveryGeocodingRepository implements IDeliveryGeocodingRepository {
           AND (
             "geocode_attempted_at" IS NULL
             OR "geocode_attempted_at" <
-              ${now}::timestamp - make_interval(mins => ${GEOCODING_BACKOFF_MINUTES}::int * "geocode_attempts")
+              ${now}::timestamp - make_interval(mins => LEAST(
+                ${GEOCODING_BACKOFF_MINUTES}::int
+                  * power(2, GREATEST("geocode_attempts" - 1, 0))::int,
+                ${GEOCODING_BACKOFF_CAP_MINUTES}::int
+              ))
           )
+          ${scope}
         ORDER BY "created_at" DESC, "id" DESC
         LIMIT ${limit}
         FOR UPDATE SKIP LOCKED
-      )
-      RETURNING d."id", d."businessId", d."street", d."address_number",
-        d."neighborhood", d."city", d."uf", d."cep", d."created_at",
-        d."geocode_attempted_at" AS "claimedAt",
-        d."geocode_attempts" AS "attempts"
+      ),
+      claimed AS (
+        UPDATE "delivery" AS d
+        SET "geocode_attempted_at" = ${now},
+            "geocode_attempts" = d."geocode_attempts" + 1
+        FROM picked
+        WHERE d."id" = picked."id"
+        RETURNING d."id", d."businessId", d."street", d."address_number",
+          d."neighborhood", d."city", d."uf", d."cep", d."created_at",
+          d."geocode_attempted_at" AS "claimedAt",
+          d."geocode_attempts" AS "attempts",
+          picked."previousAttemptedAt"
       )
       SELECT "id", "businessId", "street", "address_number", "neighborhood",
-        "city", "uf", "cep", "claimedAt", "attempts"
+        "city", "uf", "cep", "claimedAt", "attempts", "previousAttemptedAt"
       FROM claimed
       ORDER BY "created_at" DESC, "id" DESC
     `;
@@ -156,15 +275,94 @@ class DeliveryGeocodingRepository implements IDeliveryGeocodingRepository {
 
     return written === 1;
   }
+
+  async release(claim: GeocodingClaim): Promise<boolean> {
+    // The status stays: a delivery that had failed before is still FAILED,
+    // with the attempts it really made. updated_at stays, as in the settle.
+    const written = await this.prisma.$executeRaw`
+      UPDATE "delivery"
+      SET "geocode_attempted_at" = ${claim.previousAttemptedAt},
+          "geocode_attempts" = GREATEST("geocode_attempts" - 1, 0)
+      WHERE "id" = ${claim.id}
+        AND "geocode_attempted_at" = ${claim.claimedAt}
+    `;
+
+    return written === 1;
+  }
+
+  async openStopRoutes(
+    deliveryIds: readonly string[],
+  ): Promise<OpenStopRoute[]> {
+    if (deliveryIds.length === 0) return [];
+
+    // Bounded by one run's settles (at most a batch) over the stop's
+    // deliveryId index.
+    const stops = await this.prisma.routeStop.findMany({
+      where: {
+        deliveryId: { in: [...deliveryIds] },
+        status: { in: OPEN_STOP_STATUSES },
+        route: { status: { in: UNFINISHED_ROUTE_STATUSES } },
+      },
+      select: {
+        deliveryId: true,
+        route: {
+          select: { id: true, businessId: true, status: true, driverId: true },
+        },
+      },
+    });
+
+    // The driver's user only for a route that is theirs already — asked per
+    // stop below too: one driver can hold a released route and a planned one.
+    const theirs = (status: string) =>
+      status === "RELEASED" || status === "IN_PROGRESS";
+
+    const driverIds = [
+      ...new Set(
+        stops
+          .filter((stop) => theirs(stop.route.status))
+          .map((stop) => stop.route.driverId),
+      ),
+    ];
+
+    const users =
+      driverIds.length > 0
+        ? await this.prisma.user.findMany({
+            where: { driverId: { in: driverIds } },
+            select: { id: true, driverId: true },
+          })
+        : [];
+
+    const userOf = new Map<string, string>();
+
+    for (const user of users) {
+      if (user.driverId && !userOf.has(user.driverId)) {
+        userOf.set(user.driverId, user.id);
+      }
+    }
+
+    return stops.map((stop) => ({
+      deliveryId: stop.deliveryId,
+      routeId: stop.route.id,
+      businessId: stop.route.businessId,
+      routeStatus: stop.route.status as RouteStatus,
+      driverUserId: theirs(stop.route.status)
+        ? (userOf.get(stop.route.driverId) ?? null)
+        : null,
+    }));
+  }
 }
 
 export {
   DeliveryGeocodingRepository,
+  GEOCODING_BACKOFF_CAP_MINUTES,
   GEOCODING_BACKOFF_MINUTES,
   GEOCODING_MAX_ATTEMPTS,
+  UNFINISHED_ROUTE_STATUSES,
+  geocodingBackoffMinutes,
 };
 export type {
   GeocodingClaim,
   GeocodingSettlement,
   IDeliveryGeocodingRepository,
+  OpenStopRoute,
 };

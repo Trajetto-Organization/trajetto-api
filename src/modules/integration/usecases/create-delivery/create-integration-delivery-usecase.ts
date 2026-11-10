@@ -22,6 +22,10 @@ import type { PublicDelivery } from "@/shared/integration/public-shapes";
 
 import { isUniqueViolation } from "@/shared/http/idempotency-key";
 import { violatesUniqueOn } from "@/shared/delivery/unique-violation";
+import {
+  geocodeSoon,
+  unlocatedDeliveryIds,
+} from "@/shared/delivery/geocoding/geocode-soon";
 
 import type { CreateIntegrationDeliveryBody } from "@/schemas/create-integration-delivery-schema";
 
@@ -139,7 +143,7 @@ class CreateIntegrationDeliveryUseCase {
       apiKeyId,
     };
 
-    let created: { id: string; recipient_name: string };
+    let created: { id: string; recipient_name: string; unlocated: string[] };
 
     try {
       // The row and the event that announces it commit together, as on the
@@ -155,7 +159,11 @@ class CreateIntegrationDeliveryUseCase {
           tx,
         );
 
-        return { id: row.id!, recipient_name: row.recipient_name };
+        return {
+          id: row.id!,
+          recipient_name: row.recipient_name,
+          unlocated: unlocatedDeliveryIds([row]),
+        };
       });
     } catch (error) {
       if (!isUniqueViolation(error)) throw error;
@@ -193,6 +201,11 @@ class CreateIntegrationDeliveryUseCase {
       performedBy: null,
       businessId,
     });
+
+    // The address point now rather than at the next minute's job, as the
+    // panel's create does (E1): after the commit, never awaited. A point the
+    // integrator sent needs none.
+    geocodeSoon(businessId, created.unlocated);
 
     return {
       replayed: false,

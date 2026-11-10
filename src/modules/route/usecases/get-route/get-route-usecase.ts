@@ -17,6 +17,9 @@ import {
 } from "@/modules/delivery/usecases/list-my-deliveries/list-my-deliveries-usecase";
 
 import { routeProgress } from "@/shared/route/route-rules";
+import { addressLookupState } from "@/shared/delivery/geocoding/address-lookup-state";
+import { deliveryGeocodingEnabled } from "@/shared/delivery/geocoding/geocoding-enabled";
+import { geocodingHeld } from "@/shared/delivery/geocoding/geocoding-hold";
 import {
   loadBusinessTimeZone,
   type BusinessLookup,
@@ -79,6 +82,69 @@ interface GetRouteResult {
    */
   checklists: MyDeliveriesRoute["checklists"] | null;
   fuels: RouteFuelSummary[] | null;
+}
+
+/**
+ * The stops with `address_lookup` in place of the geocoder's bookkeeping
+ * (owner's report of 09/11/2026): the page tells "Localizando endereço…"
+ * from "Endereço não localizado" for a stop without a point, and neither
+ * when the server looks nothing up. The status, the attempts, the claim's
+ * instant and the row's last write stay inside: they are the job's, not a
+ * contract.
+ *
+ * Whether the lookups are held (geocoding-hold.ts) is asked only when a
+ * stop would otherwise read SEARCHING — one Redis read, on few routes.
+ *
+ * `geo_precision` is the geocoder's level, so only where its answer still
+ * stands: on the point it found, as the geofence reads it
+ * (addressPrecisionOf), and on the district or city it only reached
+ * (COARSE, no point). "Fixar no mapa" over a found point keeps the column,
+ * and a MANUAL pin is exact; clearing a found point leaves it behind too.
+ */
+async function withAddressLookup(
+  route: RouteWithStops,
+  now: Date,
+): Promise<RouteWithStops> {
+  const enabled = deliveryGeocodingEnabled();
+
+  const lookupOf = (
+    delivery: RouteWithStops["stops"][number]["delivery"],
+    held: boolean,
+  ) => addressLookupState(delivery, { enabled, now, held });
+
+  const held =
+    enabled &&
+    route.stops.some((stop) => lookupOf(stop.delivery, false) === "SEARCHING")
+      ? await geocodingHeld(now)
+      : false;
+
+  return {
+    ...route,
+    stops: route.stops.map((stop) => {
+      const {
+        geocode_status,
+        geocode_attempts: _attempts,
+        geocode_attempted_at: _claimedAt,
+        updated_at: _written,
+        ...delivery
+      } = stop.delivery;
+
+      const geocoderLevel =
+        delivery.geo_source === "GEOCODER" ||
+        (delivery.geo_source == null && geocode_status === "COARSE");
+
+      return {
+        ...stop,
+        delivery: {
+          ...delivery,
+          geo_precision: geocoderLevel
+            ? (delivery.geo_precision ?? null)
+            : null,
+          address_lookup: lookupOf(stop.delivery, held),
+        },
+      };
+    }),
+  };
 }
 
 /**
@@ -157,15 +223,17 @@ class GetRouteUseCase {
 
     // The read is already scoped by company, so a route of another carrier
     // comes back null rather than coming back and being rejected.
-    const findRoute = await this.route.findRouteById(routeId, businessId);
+    const found = await this.route.findRouteById(routeId, businessId);
 
-    if (!findRoute) throw new RouteNotFoundError();
+    if (!found) throw new RouteNotFoundError();
 
     // A driver opens their own routes and nobody else's. Same 404: the driver
     // of the next truck must not be able to read today's plan by guessing.
-    if (findUser.driverId && findRoute.driverId !== findUser.driverId) {
+    if (findUser.driverId && found.driverId !== findUser.driverId) {
       throw new RouteNotFoundError();
     }
+
+    const findRoute = await withAddressLookup(found, new Date());
 
     const progress = routeProgress(findRoute.stops.map((stop) => stop.status));
     const timeZone = await loadBusinessTimeZone(this.business, businessId);

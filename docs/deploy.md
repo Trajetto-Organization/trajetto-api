@@ -2346,6 +2346,42 @@ dele. A imagem anterior ainda escreve a linha nos cards das ordens criadas
 durante o rollout (ou depois de um rollback). O `UPDATE` é idempotente: rode-o
 de novo à mão no banco depois que esta release estiver servindo.
 
+**Ponto do endereço sem esperar o job (09/11/2026).** Sem migration, sem
+variável nova e sem rota nova. A criação, a edição do endereço e a rota pedem
+o ponto logo depois do commit, e a página da rota passa a se atualizar
+sozinha (`routeStopsLocated`). Uma recusa do provedor ou um 429 pausa o
+geocodificador em vez de marcar as entregas. O detalhe está em
+[arquitetura.md (Geocerca e coordenadas do endereço)](./arquitetura.md#geocerca-e-coordenadas-do-endereço).
+A ordem entre API, web e app não importa. A web anterior ignora
+`address_lookup` e o evento novo. A web nova contra a API anterior mostra
+"Sem localização", como hoje. O app não muda: ele relê o dia em qualquer
+`routeEvent`, inclusive no `route-stop.located` novo.
+
+- **Durante o rollout**, a réplica com a imagem anterior grava pelas regras
+  antigas (todo 404 como `NOT_FOUND`, até 5 tentativas). Isso é inofensivo: a
+  imagem nova assume na reserva seguinte.
+- **O teto de tentativas sobe de 5 para 8.** As entregas abertas que tinham
+  falhado 5 vezes voltam para a fila uma vez, dentro do orçamento do dia.
+- **O geocodificador faz no máximo 1 chamada por segundo**, somando réplicas
+  e caminhos (a versão anterior fazia uma a cada 600 ms, numa réplica só). A
+  outra das 2 por segundo do LocationIQ grátis fica para a geocodificação
+  reversa do comprovante, que usa a mesma chave. O job continua com até 20
+  entregas por minuto, as paradas abertas de rota primeiro.
+- **"Localizando endereço…" tem prazo**: só até 10 min depois de o endereço
+  ser gravado ou reservado, e nunca com o provedor recusando a chave, com a
+  cota do dia do provedor ou com o orçamento do dia gastos. Fora disso a
+  parada diz "Sem localização", como antes.
+- **Depois de subir**, procure nos logs da `trajetto-api`
+  `geocode-deliveries off` (o motivo vem junto) ou
+  `delivery addresses geocoded`. Um `geocoding provider refused the request`
+  traz o código HTTP: 401/403 é a chave, 404 é a `REVERSE_GEOCODER_URL`.
+- **Com o provedor certo e esta versão servindo, reenfileire uma vez** os
+  `NOT_FOUND`, `COARSE` e `FAILED` que a versão anterior gravou, com os lotes
+  da mesma seção da arquitetura (`lock_timeout`, 1.000 por lote,
+  `SKIP LOCKED`, até `UPDATE 0`, fora do pico). Vale mesmo que a
+  configuração estivesse certa: aqueles veredictos vieram da consulta
+  anterior (CEP sem hífen, sem a segunda busca), e a nova acha vários deles.
+
 **Período das rotas (09/11/2026).** A lista de rotas
 (`GET /route/list-routes`) e o quadro da Torre (`GET /route/monitoring`)
 aceitam `period`, `from` e `to`, pelo dia da rota no fuso da empresa. A

@@ -30,6 +30,7 @@ import {
   CLEARED_ADDRESS_POINT,
   addressChanged,
 } from "@/shared/delivery/address-point";
+import { geocodeSoon } from "@/shared/delivery/geocoding/geocode-soon";
 import {
   deliveryEditChanges,
   deliveryEditNote,
@@ -148,7 +149,8 @@ class UpdateDeliveryUseCase {
       // the driver proves the delivery.
       // The map point belongs to the address (design §4.11): a new address
       // with the old pin would put the stop where the delivery is not.
-      const data = addressChanged(findDelivery, deliveryData)
+      const relocated = addressChanged(findDelivery, deliveryData);
+      const data = relocated
         ? { ...deliveryData, ...CLEARED_ADDRESS_POINT }
         : deliveryData;
 
@@ -192,6 +194,10 @@ class UpdateDeliveryUseCase {
       // After the commit: the screens refetch the plan, and the driver of a
       // released route is pushed (announcePlanChange).
       await announceDroppedPlans(this.user, businessId, bumps);
+
+      // The new address's point now, not at the next minute's job (E1):
+      // the cleared bookkeeping re-queued it. Never awaited.
+      if (relocated) geocodeSoon(businessId, [deliveryId]);
 
       return updated;
     } catch (error) {

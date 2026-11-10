@@ -32,6 +32,10 @@ import {
 } from "@/shared/delivery/caller-not-found";
 import { isUniqueViolation } from "@/shared/http/idempotency-key";
 import { violatesUniqueOn } from "@/shared/delivery/unique-violation";
+import {
+  geocodeSoon,
+  unlocatedDeliveryIds,
+} from "@/shared/delivery/geocoding/geocode-soon";
 
 @injectable()
 class CreateDeliveryUseCase {
@@ -144,6 +148,14 @@ class CreateDeliveryUseCase {
         performedBy: userId,
         businessId: deliveryData.businessId,
       });
+
+      // The address point now rather than at the next minute's job, so a
+      // delivery routed right away has it on the route page (E1). After
+      // the commit, never awaited; a point given on the form needs none.
+      geocodeSoon(
+        deliveryData.businessId,
+        unlocatedDeliveryIds([deliveryCreated]),
+      );
 
       return deliveryCreated;
     } catch (error) {

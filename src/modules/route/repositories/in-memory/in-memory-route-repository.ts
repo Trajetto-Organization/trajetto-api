@@ -205,6 +205,13 @@ interface DeliveryMirror {
   longitude?: number | null;
   geo_source?: "MANUAL" | "GEOCODER" | null;
   geo_updated_at?: Date | null;
+
+  /** The geocoder's level and bookkeeping (E1), as routeInclude reads them. */
+  geo_precision?: "ADDRESS" | "STREET" | "NEIGHBORHOOD" | "CITY" | null;
+  geocode_status?: "RESOLVED" | "COARSE" | "NOT_FOUND" | "FAILED" | null;
+  geocode_attempts?: number;
+  geocode_attempted_at?: Date | null;
+  updated_at?: Date | string;
 }
 
 /** A delivery_event row this repository writes or reads. */
@@ -514,6 +521,12 @@ class InMemoryRouteRepository implements IRouteRepository {
             latitude: delivery?.latitude ?? null,
             longitude: delivery?.longitude ?? null,
             geo_source: delivery?.geo_source ?? null,
+
+            geo_precision: delivery?.geo_precision ?? null,
+            geocode_status: delivery?.geocode_status ?? null,
+            geocode_attempts: delivery?.geocode_attempts ?? 0,
+            geocode_attempted_at: delivery?.geocode_attempted_at ?? null,
+            updated_at: delivery?.updated_at ?? delivery?.created_at,
           },
         } as RouteStopWithDelivery;
       }),

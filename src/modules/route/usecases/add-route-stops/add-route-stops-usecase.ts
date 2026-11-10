@@ -17,6 +17,10 @@ import { deliveryAssignedPayload } from "@/shared/integration/announce";
 
 import { assertDeliveriesRoutable } from "../shared/routable-deliveries";
 import {
+  geocodeSoon,
+  unlocatedDeliveryIds,
+} from "@/shared/delivery/geocoding/geocode-soon";
+import {
   alreadyOnRouteMessage,
   announcePlanChange,
   planWriteFailure,
@@ -269,6 +273,11 @@ class AddRouteStopsUseCase {
         status: added.status,
         driverId: added.driverId,
       });
+
+      // The new stops' address points now rather than at the next minute's
+      // job (E1), which still takes the open stops first when this one
+      // could not ask. Never awaited.
+      geocodeSoon(businessId, unlocatedDeliveryIds(deliveries));
 
       this.notificationService.createActivityIfEnabled({
         type: "Rota",

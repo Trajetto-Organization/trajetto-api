@@ -93,6 +93,20 @@ const routeStopEntity = z.object({
       .describe(
         "MANUAL: fixado no mapa pelo despachante ou informado na criação (formulário, planilha ou API pública); GEOCODER: resolvido pelo endereço.",
       ),
+    geo_precision: z
+      .enum(["ADDRESS", "STREET", "NEIGHBORHOOD", "CITY"])
+      .nullable()
+      .optional()
+      .describe(
+        "Até onde o geocodificador chegou (plano de 02/11/2026, E1): ADDRESS (o número) ou STREET (a rua) têm ponto; NEIGHBORHOOD ou CITY ficam sem ponto (não avaliável). Nulo num ponto MANUAL (mesmo fixado sobre um ponto achado pelo endereço), enquanto o endereço não foi procurado e depois de apagado à mão um ponto que o geocodificador tinha achado.",
+      ),
+    address_lookup: z
+      .enum(["SEARCHING", "NOT_LOCATED"])
+      .nullable()
+      .optional()
+      .describe(
+        'Só na consulta da rota (get-route), para a parada sem ponto: SEARCHING enquanto uma busca está em andamento ou é iminente — o endereço foi gravado (criado ou editado) ou reservado pelo geocodificador há menos de 10 min, ainda sem resposta, e as buscas não estão suspensas ("Localizando endereço…"); NOT_LOCATED quando a busca terminou sem ponto (endereço não encontrado, só bairro ou cidade, ou todas as tentativas gastas; "Endereço não localizado — fixe no mapa"). Nulo quando a parada tem ponto, quando o servidor não procura endereços (sem REVERSE_GEOCODER_URL ou orçamento 0), na entrega encerrada, depois de apagado à mão um ponto que o geocodificador tinha achado, com as buscas suspensas (provedor recusando a chave ou a URL, cota do dia do provedor ou orçamento do dia gastos), depois de uma falha do provedor que espera a próxima tentativa, e quando nada pediu o endereço nos últimos 10 min. Um ponto achado depois ainda chega à tela (evento routeStopsLocated). O "Fixar no mapa" vale em todos os casos. Ausente em API anterior.',
+      ),
   }),
 });
 

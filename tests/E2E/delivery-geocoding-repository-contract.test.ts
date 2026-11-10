@@ -17,7 +17,7 @@ import {
   type GeocodingState,
 } from "../contract/repositories/delivery-geocoding.contract";
 import { KINDS, clone, type Kind } from "../contract/support";
-import { seedBusiness, seedShipper } from "../contract/seed";
+import { seedBusiness, seedDriver, seedShipper } from "../contract/seed";
 
 /**
  * Plan of 02/11/2026 (E1): the geocoding job's queue against Postgres and
@@ -38,6 +38,10 @@ const ADDRESS = {
 
 const MANUAL_PIN = { latitude: -22.9, longitude: -43.2, geo_source: "MANUAL" };
 
+/** The driver of the routes the open-stop claim reads (company A). */
+let driverId = "";
+let routeCode = 0;
+
 function stateOf(row: Record<string, unknown> | undefined): GeocodingState {
   return {
     latitude: (row?.latitude as number | null) ?? null,
@@ -54,6 +58,12 @@ const harnesses: Record<Kind, () => GeocodingHarness> = {
     kind: "prisma",
     repo: new DeliveryGeocodingRepository(prisma),
     async reset() {
+      await prisma.routeStop.deleteMany({
+        where: { route: { businessId: { in: [F.A, F.B] } } },
+      });
+      await prisma.route.deleteMany({
+        where: { businessId: { in: [F.A, F.B] } },
+      });
       await prisma.delivery.deleteMany({
         where: { businessId: { in: [F.A, F.B] } },
       });
@@ -82,11 +92,28 @@ const harnesses: Record<Kind, () => GeocodingHarness> = {
         data: { street: "Rua Nova", ...CLEARED_ADDRESS_POINT },
       });
     },
+    async route(id) {
+      routeCode += 1;
+
+      await prisma.route.create({
+        data: {
+          code: routeCode,
+          businessId: F.A,
+          driverId,
+          vehicleId: null,
+          status: "RELEASED",
+          released_at: GEOCODING_NOW,
+          scheduled_date: new Date("2026-11-09T00:00:00.000Z"),
+          stops: { create: [{ deliveryId: id, sequence: 10 }] },
+        },
+      });
+    },
   }),
   "in-memory": () => ({
     kind: "in-memory",
     repo: memory,
     async reset() {
+      memory.stopRoutes = [];
       memory.deliveries = clone(GEOCODING_SEED).map(
         (row) =>
           ({
@@ -117,6 +144,15 @@ const harnesses: Record<Kind, () => GeocodingHarness> = {
         },
       );
     },
+    async route(id) {
+      memory.stopRoutes.push({
+        deliveryId: id,
+        routeId: `route-${id}`,
+        businessId: F.A,
+        routeStatus: "RELEASED",
+        driverUserId: null,
+      });
+    },
   }),
 };
 
@@ -125,6 +161,8 @@ beforeAll(async () => {
   await seedBusiness(prisma, F.B, 2);
   await seedShipper(prisma, F.A, "Embarcador A", F.shipperA);
   await seedShipper(prisma, F.B, "Embarcador B", F.shipperB);
+
+  driverId = (await seedDriver(prisma, F.A, 1)).id;
 });
 
 afterAll(async () => {
