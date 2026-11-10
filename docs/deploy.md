@@ -2346,6 +2346,26 @@ dele. A imagem anterior ainda escreve a linha nos cards das ordens criadas
 durante o rollout (ou depois de um rollback). O `UPDATE` é idempotente: rode-o
 de novo à mão no banco depois que esta release estiver servindo.
 
+**Período das rotas (09/11/2026).** A lista de rotas
+(`GET /route/list-routes`) e o quadro da Torre (`GET /route/monitoring`)
+aceitam `period`, `from` e `to`, pelo dia da rota no fuso da empresa. A
+regra está em
+[arquitetura.md (Rotas esquecidas, a lista e a torre)](./arquitetura.md#rotas-esquecidas-a-lista-e-a-torre).
+A migration `20261109150000_route_business_scheduled_date_idx` só cria um
+índice (`CREATE INDEX IF NOT EXISTS` sob `lock_timeout=5s`), que a imagem
+anterior não lê. Sem variável nova.
+
+- **Ordem: API antes da web**, a de sempre. A API anterior descarta os
+  parâmetros que não conhece, sem 400. Diante dela, a web nova esconde o
+  filtro, e a lista e o quadro ficam como hoje.
+- **A web anterior contra esta API** não manda período e recebe o mesmo de
+  antes: todas as datas na lista e o dia no quadro. `searchMeta.period` e
+  `data.period` chegam `null`, e ela os ignora.
+- **O app não muda.** Ele não lê nenhum dos dois endpoints.
+- **Banco com volume:** antes de promover, crie o índice à mão com
+  `CREATE INDEX CONCURRENTLY IF NOT EXISTS "route_businessId_scheduled_date_idx" ON "route"("businessId", "scheduled_date");`.
+  A migration então não faz nada. Com o volume atual não é preciso.
+
 **Contract pendente (release seguinte): o 2FA sem corpo.** `PATCH
 /user/twofactor` sem corpo ainda inverte o estado, sem senha, só para a web
 da release anterior que roda durante o rollout. Cada uso deixa a linha `warn`

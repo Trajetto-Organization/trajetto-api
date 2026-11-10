@@ -1,4 +1,5 @@
 import type { GeofenceOutcome } from "@/shared/delivery/geofence/geofence-rules";
+import type { RoutePeriodDays } from "@/shared/route/route-period";
 
 /**
  * The operation of one company's day, read in one place (decision 7.1).
@@ -235,12 +236,14 @@ interface IOperationDayRepository {
   ) => Promise<Array<{ id: string; name: string; cnh: string }>>;
 
   /**
-   * Routes of the day (and running ones, today), not cancelled, with every
-   * stop: running first, then released, planned and finished.
+   * Routes of the days (and running ones, when the days reach today), not
+   * cancelled, with every stop: running first, then released, planned and
+   * finished — over several days, the latest day first inside each group.
+   * One day (routeDaysOfOperationDay) is the tower's board of that day.
    */
   listMonitoringRoutes: (
     businessId: string,
-    day: OperationDay,
+    days: RoutePeriodDays,
     page: { skip: number; take: number },
   ) => Promise<{ total: number; routes: MonitoringRoute[] }>;
 

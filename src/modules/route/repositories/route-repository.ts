@@ -24,11 +24,16 @@ import { assignStopGroupKeys } from "@/shared/delivery/stop-group";
 import { isModuleEnabled } from "@/shared/entitlements/entitlement-rules";
 
 import {
+  ROUTE_PERIOD_SORT,
   ROUTE_SORT,
   catalogFacetOptions,
+  exactRouteSearch,
+  routeListPeriodSpan,
+  routeListUnfinishedWhere,
   routeListWhere,
   stopCountsOf,
   summarizeRouteList,
+  type RouteListFilters,
 } from "../usecases/list-routes/route-list";
 
 import {
@@ -69,8 +74,8 @@ import type {
   CloseWithPendingProps,
   CreateRouteProps,
   LeftOpenRoute,
+  ListRoutesPage,
   ListRoutesProps,
-  ListRoutesResult,
   LockedRoute,
   LostStop,
   OpenStopRoute,
@@ -1097,8 +1102,54 @@ class RouteRepository implements IRouteRepository {
     pageSize,
     sort,
     order,
-    ...filters
-  }: ListRoutesProps): Promise<ListRoutesResult> {
+    ...asked
+  }: ListRoutesProps): Promise<ListRoutesPage> {
+    // A search that names one route exactly (its whole id or its number)
+    // finds it on any day, as in Entregas: one probe of the primary key or
+    // of (businessId, code), in the caller's scope, before anything else.
+    const exact = asked.period ? exactRouteSearch(asked.search) : null;
+
+    const named =
+      exact &&
+      (await this.prisma.route.findFirst({
+        where: {
+          businessId: asked.businessId,
+          ...(asked.scopeDriverId && { driverId: asked.scopeDriverId }),
+          ...exact,
+        },
+        select: { id: true },
+      }));
+
+    const asFiltered: RouteListFilters = named
+      ? { ...asked, period: undefined }
+      : asked;
+
+    // How far the period's forgotten routes reach, by the status index, so
+    // every read below stays inside those days (routeListUnfinishedWhere).
+    // A route that changes status between the two reads shows on the next
+    // refresh, as with any other write.
+    const unfinished = routeListUnfinishedWhere(asFiltered);
+
+    const reach =
+      unfinished &&
+      (await this.prisma.route.aggregate({
+        where: unfinished,
+        _min: { scheduled_date: true },
+        _max: { scheduled_date: true },
+      }));
+
+    const filters: RouteListFilters =
+      asFiltered.period && reach
+        ? {
+            ...asFiltered,
+            periodSpan: routeListPeriodSpan(
+              asFiltered.period,
+              reach._min.scheduled_date,
+              reach._max.scheduled_date,
+            ),
+          }
+        : asFiltered;
+
     // The page and the status counts side by side (the two connections a
     // screen may hold). The counts replace a count(*): the pager total and
     // the cards both come out of them, without skip/take — they describe the
@@ -1106,7 +1157,13 @@ class RouteRepository implements IRouteRepository {
     const [rows, byStatus] = await Promise.all([
       this.prisma.route.findMany({
         where: routeListWhere(filters),
-        orderBy: resolveOrderBy(ROUTE_SORT, { sort, order }),
+        // With a period, by the route's day unless asked otherwise: the
+        // range then leads route (businessId, scheduled_date), and a past
+        // range costs its own rows, not the routes created after it.
+        orderBy: resolveOrderBy(
+          filters.period ? ROUTE_PERIOD_SORT : ROUTE_SORT,
+          { sort, order },
+        ),
         skip: (page - 1) * pageSize,
         take: pageSize,
       }),
@@ -1195,6 +1252,7 @@ class RouteRepository implements IRouteRepository {
       data: data as unknown as RouteListRow[],
       total,
       meta: searchMeta,
+      periodApplied: Boolean(filters.period),
     };
   }
 

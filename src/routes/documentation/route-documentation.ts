@@ -361,6 +361,26 @@ const routeResponses = {
             .describe(
               "Fuso da empresa (IANA, ex.: America/Sao_Paulo), para mostrar Previsto, Saída e Conclusão no relógio da empresa, como o detalhe da rota (meta.timeZone do get-route).",
             ),
+          period: z
+            .object({
+              from: z
+                .string()
+                .describe(
+                  "Primeiro dia do período (AAAA-MM-DD), no fuso da empresa.",
+                ),
+              to: z
+                .string()
+                .describe("Último dia do período (AAAA-MM-DD), incluído."),
+              applied: z
+                .boolean()
+                .describe(
+                  "false quando a busca era exatamente o número ou o ID inteiro de uma rota: o período foi ignorado e as linhas podem ser de outros dias.",
+                ),
+            })
+            .nullable()
+            .describe(
+              "Os dias que a página e as contagens cobrem, pelo dia da rota (quando o período inclui hoje, com as rotas ainda em andamento e as de dias anteriores que não saíram); null sem `period` (todas as datas).",
+            ),
         },
         ["status", "driverId", "vehicleId"],
       ),

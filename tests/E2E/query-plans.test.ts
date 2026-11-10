@@ -2,8 +2,16 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { randomUUID } from "node:crypto";
 
-import { DEFAULT_BUSINESS_TIMEZONE } from "@/shared/time/business-day";
+import {
+  DEFAULT_BUSINESS_TIMEZONE,
+  shiftDateKey,
+} from "@/shared/time/business-day";
 import { createPrismaClient } from "@/shared/database/database-client";
+import {
+  routeDaysOfOperationDay,
+  type RouteListPeriodDays,
+  type RoutePeriodDays,
+} from "@/shared/route/route-period";
 
 /**
  * What Postgres actually does with the queries the product runs most.
@@ -901,12 +909,29 @@ describe("what the tower reads for the day", () => {
     );
   });
 
+  /** A period of the routes (plan of 09/11/2026), N days back from today. */
+  const routeDays = async (
+    fromDaysAgo: number,
+    toDaysAgo: number,
+  ): Promise<RoutePeriodDays> => {
+    const { date } = await today();
+
+    return {
+      from: shiftDateKey(date, -fromDaysAgo),
+      to: shiftDateKey(date, -toDaysAgo),
+      includesRunning: toDaysAgo === 0,
+    };
+  };
+
   it("pages the board by route from the day's routes", async () => {
     const operation = await repository();
     const day = await today();
 
     const queries = await capturing(() =>
-      operation.listMonitoringRoutes(CARRIER, day, { skip: 0, take: 20 }),
+      operation.listMonitoringRoutes(CARRIER, routeDaysOfOperationDay(day), {
+        skip: 0,
+        take: 20,
+      }),
     );
 
     const page = queries.find((entry) => entry.query.includes("OVER ()"));
@@ -920,6 +945,32 @@ describe("what the tower reads for the day", () => {
 
     expect(routes, `leu ${routes} rotas para mostrar 20`).toBeLessThan(
       ROUTES_PER_DAY * 5,
+    );
+  });
+
+  // The board's period (plan of 09/11/2026): a week of routes and the
+  // running ones are a range of route (businessId, scheduled_date) and one
+  // of (businessId, status, ...) — never the company's sixty days.
+  it("pages the board over a week from the week's routes only", async () => {
+    const operation = await repository();
+    const week = await routeDays(6, 0);
+
+    const queries = await capturing(() =>
+      operation.listMonitoringRoutes(CARRIER, week, { skip: 0, take: 20 }),
+    );
+
+    const page = queries.find((entry) => entry.query.includes("OVER ()"));
+    expect(page).toBeDefined();
+
+    const plan = await explain(page!);
+
+    expect(scansSequentially(plan, "route")).toBe(false);
+
+    const routes = rowsTouched(plan, "route");
+
+    // 280 routes in the week, of 2.400.
+    expect(routes, `leu ${routes} rotas para uma semana`).toBeLessThan(
+      ROUTES_PER_DAY * 7 * 2,
     );
   });
 
@@ -1055,6 +1106,139 @@ describe("what the tower reads for the day", () => {
     expect(
       queries.some((entry) => /FROM "public"\."delivery"/.test(entry.query)),
     ).toBe(false);
+  });
+
+  // Plan of 09/11/2026: Rotas opens on Hoje. Its page, its cards and its
+  // filter counts read the day's routes, the running ones and the earlier
+  // days' routes that never left, never the company's history.
+  /**
+   * A real history's spread of created_at, as the K14 case writes it, so the
+   * period's cases mean the same when they run alone.
+   */
+  const spreadRouteCreation = async () => {
+    await prisma.$executeRawUnsafe(
+      `UPDATE route SET created_at = now() - (code || ' minutes')::interval
+       WHERE "businessId" IN ($1, $2)`,
+      CARRIER,
+      OTHER,
+    );
+    await prisma.$executeRawUnsafe('ANALYZE "route"');
+  };
+
+  /** The list's period: the tower's, with the overdue routes when it reaches today. */
+  const listDays = async (
+    fromDaysAgo: number,
+    toDaysAgo: number,
+  ): Promise<RouteListPeriodDays> => {
+    const days = await routeDays(fromDaysAgo, toDaysAgo);
+
+    return { ...days, includesOverdue: days.includesRunning };
+  };
+
+  it("lists and counts the routes of Hoje from the day's routes", async () => {
+    await spreadRouteCreation();
+
+    const { RouteRepository } =
+      await import("@/modules/route/repositories/route-repository");
+    const routes = new RouteRepository(capture as never);
+    const period = await listDays(0, 0);
+
+    const queries = await capturing(() =>
+      routes.listRoutes({ businessId: CARRIER, page: 1, pageSize: 10, period }),
+    );
+
+    const reads = queries.filter(
+      (entry) =>
+        /FROM "public"\."route"/.test(entry.query) &&
+        (/GROUP BY/.test(entry.query) ||
+          /LIMIT/.test(entry.query) ||
+          /MIN\(/.test(entry.query)),
+    );
+
+    // How far the forgotten routes reach, the page and the three counts
+    // (status, driver, vehicle). Without the reach, the page went down
+    // route (businessId, scheduled_date) past today's forty, through every
+    // earlier day, looking for a running route that was not there.
+    expect(
+      reads.length,
+      queries.map((entry) => entry.query).join("\n"),
+    ).toBeGreaterThanOrEqual(5);
+
+    for (const statement of reads) {
+      const plan = await explain(statement);
+
+      expect(scansSequentially(plan, "route")).toBe(false);
+
+      const read = rowsTouched(plan, "route");
+
+      // Forty routes today (twenty of them running), of 2.400.
+      expect(read, `leu ${read} rotas para o dia`).toBeLessThan(
+        ROUTES_PER_DAY * 5,
+      );
+    }
+
+    expect(
+      queries.some((entry) => /FROM "public"\."delivery"/.test(entry.query)),
+    ).toBe(false);
+  });
+
+  // A custom week at the far end of the sixty days: the page and the counts
+  // read that week's routes by the route (businessId, scheduled_date) range.
+  // In newest-created order the page walked route (businessId, created_at
+  // DESC) from today to reach its tenth row of the week — every route
+  // created since, priced as if the week were spread over the history; by
+  // the route's day (the order with a period) it is a range of the week.
+  it("pages and counts a past custom week from that week's routes", async () => {
+    await spreadRouteCreation();
+
+    const { RouteRepository } =
+      await import("@/modules/route/repositories/route-repository");
+    const routes = new RouteRepository(capture as never);
+    const period = await listDays(59, 53);
+
+    const queries = await capturing(() =>
+      routes.listRoutes({ businessId: CARRIER, page: 1, pageSize: 10, period }),
+    );
+
+    const counts = queries.filter(
+      (entry) =>
+        /FROM "public"\."route"/.test(entry.query) &&
+        /GROUP BY/.test(entry.query),
+    );
+
+    expect(counts.length).toBe(3);
+
+    for (const statement of counts) {
+      const plan = await explain(statement);
+
+      expect(scansSequentially(plan, "route")).toBe(false);
+
+      const read = rowsTouched(plan, "route");
+
+      // 280 routes in that week, of 2.400.
+      expect(read, `leu ${read} rotas para contar a semana`).toBeLessThan(
+        ROUTES_PER_DAY * 7 * 2,
+      );
+    }
+
+    const page = queries.find(
+      (entry) =>
+        /FROM "public"\."route"/.test(entry.query) &&
+        /ORDER BY/.test(entry.query) &&
+        /LIMIT/.test(entry.query),
+    );
+    expect(page).toBeDefined();
+
+    const pagePlan = await explain(page!);
+
+    expect(scansSequentially(pagePlan, "route")).toBe(false);
+
+    const read = rowsTouched(pagePlan, "route");
+
+    // 280 routes in that week, of 2.400; the walk from today read 2.120.
+    expect(read, `leu ${read} rotas para a página`).toBeLessThan(
+      ROUTES_PER_DAY * 7 * 2,
+    );
   });
 
   // Plan of 02/11/2026, H3: the deliveries list's "Em Rota" share on routes

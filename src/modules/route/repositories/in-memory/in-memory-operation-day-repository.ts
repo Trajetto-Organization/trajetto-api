@@ -15,6 +15,10 @@ import {
   type RouteMoveKind,
 } from "@/shared/route/operation-day-rules";
 import type { GeofenceOutcome } from "@/shared/delivery/geofence/geofence-rules";
+import {
+  isRouteInPeriod,
+  type RoutePeriodDays,
+} from "@/shared/route/route-period";
 
 import type {
   DayDeliveryCount,
@@ -677,17 +681,26 @@ class InMemoryOperationDayRepository implements IOperationDayRepository {
 
   async listMonitoringRoutes(
     businessId: string,
-    day: OperationDay,
+    days: RoutePeriodDays,
     page: { skip: number; take: number },
   ): Promise<{ total: number; routes: MonitoringRoute[] }> {
-    const ids = this.dayRouteIds(businessId, day);
+    // Several days: the latest first inside each group, as the SQL orders.
+    const byDay = days.from !== days.to;
 
     const ordered = this.rows.routes
-      .filter((route) => ids.has(route.id))
+      .filter(
+        (route) =>
+          route.businessId === businessId &&
+          route.status !== "CANCELLED" &&
+          isRouteInPeriod(route, days),
+      )
       .sort(
         (a, b) =>
           (MONITORING_ORDER[a.status] ?? 3) -
             (MONITORING_ORDER[b.status] ?? 3) ||
+          (byDay
+            ? b.scheduled_date.getTime() - a.scheduled_date.getTime()
+            : 0) ||
           // NULLS LAST, as in the SQL.
           (a.planned_departure_at?.getTime() ?? Infinity) -
             (b.planned_departure_at?.getTime() ?? Infinity) ||

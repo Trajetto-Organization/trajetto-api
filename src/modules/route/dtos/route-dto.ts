@@ -250,6 +250,16 @@ interface ListRoutesResult {
   meta: RouteListSearchMeta;
 }
 
+/** The repository's answer: the result, and whether the period held. */
+interface ListRoutesPage extends ListRoutesResult {
+  /**
+   * False when the search named one route exactly (exactRouteSearch) and the
+   * period was dropped for it; true when a period shaped the page; false
+   * without one. The use case reports it as `meta.period.applied`.
+   */
+  periodApplied: boolean;
+}
+
 interface AssignmentPreviewProps {
   businessId: string;
   driverId: string;
@@ -514,6 +524,7 @@ export type {
   CloseWithPendingProps,
   CreateRouteProps,
   LeftOpenRoute,
+  ListRoutesPage,
   ListRoutesProps,
   ListRoutesResult,
   Route,

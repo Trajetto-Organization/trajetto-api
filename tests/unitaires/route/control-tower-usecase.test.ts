@@ -11,6 +11,7 @@ import {
   InMemoryOperationDayRepository,
   type OperationRows,
 } from "@/modules/route/repositories/in-memory/in-memory-operation-day-repository";
+import { routeMonitoringSchema } from "@/schemas/driver-position-schema";
 
 /**
  * The tower's day is the COMPANY's day, whatever the server's clock says.
@@ -924,6 +925,131 @@ describe("the monitoring board by route (DLVP-MON-1)", () => {
 
     expect(result.routes).toEqual([]);
     expect(result.meta.total).toBe(3);
+  });
+
+  /**
+   * The board's period (plan of 09/11/2026): Hoje is the board as it was;
+   * 7 / 14 / 30 dias and a custom range read the routes of those days by
+   * their day, with the running ones when the days reach today, the latest
+   * day first inside each group.
+   */
+  describe("by period", () => {
+    beforeEach(() => {
+      operation.rows.routes.push(
+        route({
+          id: "r6",
+          driverId: "d1",
+          status: "COMPLETED",
+          scheduled_date: day("2026-09-12"),
+        }),
+        route({
+          id: "r7",
+          driverId: "d2",
+          status: "COMPLETED",
+          scheduled_date: day("2026-09-01"),
+        }),
+      );
+    });
+
+    const read = (
+      query: Pick<
+        Parameters<RouteMonitoringUseCase["execute"]>[0],
+        "period" | "from" | "to"
+      >,
+    ) =>
+      board().execute({
+        userId: MANAGER.id,
+        page: 1,
+        pageSize: 20,
+        now: NOW,
+        ...query,
+      });
+
+    const ids = (result: { routes: Array<{ id: string }> }) =>
+      result.routes.map((entry) => entry.id);
+
+    it("answers without a period exactly what it answered before", async () => {
+      const result = await read({});
+
+      expect(ids(result)).toEqual(["r2", "r3", "r1"]);
+      expect(result.day).toBe("2026-09-17");
+      expect(result.period).toBeNull();
+    });
+
+    it("reads Hoje as the board without a period", async () => {
+      const result = await read({ period: "today" });
+
+      expect(ids(result)).toEqual(["r2", "r3", "r1"]);
+      expect(result.day).toBe("2026-09-17");
+      expect(result.period).toEqual({ from: "2026-09-17", to: "2026-09-17" });
+    });
+
+    it("reads the last seven days, the latest day first in each group", async () => {
+      const result = await read({ period: "7d" });
+
+      expect(ids(result)).toEqual(["r2", "r3", "r1", "r6"]);
+      expect(result.meta.total).toBe(4);
+      expect(result.period).toEqual({ from: "2026-09-11", to: "2026-09-17" });
+
+      const month = await read({ period: "30d" });
+
+      expect(ids(month)).toEqual(["r2", "r3", "r1", "r6", "r7"]);
+    });
+
+    it("reads a past range without the routes running today", async () => {
+      const result = await read({
+        period: "custom",
+        from: "2026-09-10",
+        to: "2026-09-16",
+      });
+
+      // r3 is of the 16th: it stays, running or not. r2 is today's.
+      expect(ids(result)).toEqual(["r3", "r6"]);
+    });
+
+    it("reads a future day, its hours against the company's today", async () => {
+      const result = await read({
+        period: "custom",
+        from: "2026-09-18",
+        to: "2026-09-18",
+      });
+
+      expect(ids(result)).toEqual(["r5"]);
+      expect(result.day).toBe("2026-09-17");
+      expect(result.period).toEqual({ from: "2026-09-18", to: "2026-09-18" });
+    });
+
+    it("never shows another company's routes", async () => {
+      const result = await board().execute({
+        userId: ACRE_MANAGER.id,
+        period: "30d",
+        page: 1,
+        pageSize: 20,
+        now: NOW,
+      });
+
+      expect(result.routes).toEqual([]);
+      expect(result.meta.total).toBe(0);
+    });
+
+    it("refuses day with period, and a range Entregas refuses", () => {
+      const refusals = (query: Record<string, string>) => {
+        const parsed = routeMonitoringSchema.safeParse(query);
+
+        return parsed.success
+          ? []
+          : parsed.error.issues.map((issue) => issue.message);
+      };
+
+      expect(refusals({ day: "2026-09-17", period: "today" })).toEqual([
+        "Envie day ou period, não os dois.",
+      ]);
+      expect(
+        refusals({ period: "custom", from: "2026-01-01", to: "2026-06-30" }),
+      ).toEqual(["O período personalizado pode ter no máximo 92 dias."]);
+      expect(refusals({ period: "7d" })).toEqual([]);
+      expect(refusals({ day: "2026-09-17" })).toEqual([]);
+    });
   });
 });
 

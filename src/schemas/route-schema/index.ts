@@ -24,6 +24,11 @@ import {
 } from "@/shared/route/route-plan-rules";
 import { dateOnlyFromKey, dateOnlyKey } from "@/shared/time/business-day";
 import {
+  MAX_CUSTOM_PERIOD_DAYS,
+  listPeriodFields,
+  refineListPeriod,
+} from "@/shared/time/list-period";
+import {
   hasConsecutiveSpaces,
   hasSpaceAtEdges,
   isEmptyOrWhitespace,
@@ -294,30 +299,50 @@ const updateRouteSchema = z
     "Envie ao menos um campo para alterar.",
   );
 
-const listRoutesSchema = listPagesSchema.extend({
-  businessId: z
-    .string()
-    .uuid("ID da empresa é inválido.")
-    .optional()
-    .describe(
-      "Só o MASTER envia: escolhe a empresa. Ausente, a empresa do usuário autenticado é usada.",
+/**
+ * The period of the routes (plan of 09/11/2026), by the route's day: the
+ * list's and the Torre's board's querystring say it the same way.
+ */
+const ROUTE_PERIOD_DESCRIPTION = `Período pelo dia da rota (scheduled_date), em dias civis no fuso da empresa: today (hoje), 7d, 14d ou 30d (os últimos N dias, hoje incluído) ou custom (com from e to, até ${MAX_CUSTOM_PERIOD_DAYS} dias, inclusive dias futuros). Quando o período inclui hoje, entram também as rotas ainda em andamento de dias anteriores (rotas esquecidas). Ausente, todas as datas.`;
+
+/** The list's order: newest created first, or by the route's day with a period. */
+const routeSortFields = sortFields(ROUTE_SORT_KEYS, ROUTE_SORT_FALLBACK);
+
+const listRoutesSchema = listPagesSchema
+  .extend({
+    businessId: z
+      .string()
+      .uuid("ID da empresa é inválido.")
+      .optional()
+      .describe(
+        "Só o MASTER envia: escolhe a empresa. Ausente, a empresa do usuário autenticado é usada.",
+      ),
+    ...routeSortFields,
+    sort: routeSortFields.sort.describe(
+      `Coluna da ordenação: ${ROUTE_SORT_KEYS.join(", ")}. Ausente, created_at desc; com um período, scheduled_date desc (o dia da rota, a coluna que o período lê) e, no mesmo dia, created_at desc.`,
     ),
-  ...sortFields(ROUTE_SORT_KEYS, ROUTE_SORT_FALLBACK),
-  status: facetField(ROUTE_LIST_STATUSES, "Status da rota."),
-  driverId: idFacetField(
-    "Motoristas. Ignorado para usuários motoristas: eles veem sempre e apenas as próprias rotas.",
-  ),
-  vehicleId: idFacetField("Veículos."),
-  scheduled_date: routeDayField("A data da rota é inválida.")
-    .optional()
-    .describe("Filtra pelo dia, AAAA-MM-DD."),
-  search: z
-    .string()
-    .optional()
-    .describe(
-      "Nome da rota, destino, nome do motorista, código (“12”, “Rota 12”, “#12”) ou ID da rota (inteiro ou só o final que a tabela mostra, com pelo menos 8 caracteres hexadecimais). Números longos, como uma chave de NF-e, não são lidos como código.",
+    status: facetField(ROUTE_LIST_STATUSES, "Status da rota."),
+    driverId: idFacetField(
+      "Motoristas. Ignorado para usuários motoristas: eles veem sempre e apenas as próprias rotas.",
     ),
-});
+    vehicleId: idFacetField("Veículos."),
+    scheduled_date: routeDayField("A data da rota é inválida.")
+      .optional()
+      .describe(
+        "Filtra pelo dia, AAAA-MM-DD. Com um período, vale junto com ele.",
+      ),
+    ...listPeriodFields(
+      `${ROUTE_PERIOD_DESCRIPTION} Na lista, com hoje no período, entram ainda as rotas de dias anteriores que não saíram (PLANNED ou RELEASED). Uma busca que é exatamente o número ou o ID inteiro de uma rota ignora o período (searchMeta.period.applied = false).`,
+    ),
+    search: z
+      .string()
+      .optional()
+      .describe(
+        "Nome da rota, destino, nome do motorista, código (“12”, “Rota 12”, “#12”) ou ID da rota (inteiro ou só o final que a tabela mostra, com pelo menos 8 caracteres hexadecimais). Números longos, como uma chave de NF-e, não são lidos como código.",
+      ),
+  })
+  // No export advice past the cap: the routes have no export.
+  .superRefine(refineListPeriod());
 
 /** The pair the assignment dialog is about to choose (FLEET-ASSIGN-2). */
 const assignmentPreviewSchema = z.object({
@@ -629,6 +654,7 @@ const closeRouteWithPendingSchema = z.object({
 });
 
 export {
+  ROUTE_PERIOD_DESCRIPTION,
   closeRouteWithPendingSchema,
   deliveryIdParamSchema,
   listUnroutedDeliveriesSchema,

@@ -2210,6 +2210,11 @@ model Route {
   @@unique([businessId, client_submission_id])
   // Serves the panel: routes of a company by status and day.
   @@index([businessId, status, scheduled_date])
+  // The period of the routes list and of the tower's board (plan of
+  // 09/11/2026): a range of days with no status fixed. The index above leads
+  // with the status, and Postgres 16 has no skip scan, so a range there read
+  // every route of the company to keep a week of them.
+  @@index([businessId, scheduled_date])
   // The routes list newest first (plan of 02/11/2026, K14): without it every
   // page read and sorted all of the company's routes.
   @@index([businessId, created_at(sort: Desc)])

@@ -340,6 +340,36 @@ describe("the shapes it publishes", () => {
     expect(schema).toContain("ARRIVED");
     expect(schema).toContain("progress");
   });
+
+  it("publishes the period of the routes list and of the tower's board", () => {
+    // Plan of 09/11/2026. The board's answer is serialized through its zod
+    // schema, which strips an undeclared key: without `period` declared, a
+    // new screen would read the new API as an old one.
+    for (const path of ["/route/list-routes", "/route/monitoring"]) {
+      const operation = operationFor(path) as OpenApiOperation & {
+        parameters?: Array<{ name: string; in: string }>;
+      };
+
+      const query = (operation.parameters ?? [])
+        .filter((parameter) => parameter.in === "query")
+        .map((parameter) => parameter.name);
+
+      expect(query, path).toEqual(
+        expect.arrayContaining(["period", "from", "to"]),
+      );
+    }
+
+    expect(
+      JSON.stringify(operationFor("/route/monitoring").responses["200"]),
+    ).toContain('"period"');
+
+    const listing = JSON.stringify(
+      operationFor("/route/list-routes").responses["200"],
+    );
+
+    expect(listing).toContain('"period"');
+    expect(listing).toContain('"applied"');
+  });
 });
 
 describe("the status-override catalogue's published surface", () => {

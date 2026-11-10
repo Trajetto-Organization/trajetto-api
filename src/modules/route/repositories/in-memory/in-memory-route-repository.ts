@@ -13,6 +13,7 @@ import {
 } from "@/shared/route/route-rules";
 import { resolveTimeZone } from "@/shared/time/business-day";
 import { routeClosedWithPendingNote } from "@/shared/route/route-left-open";
+import { isRouteInPeriod } from "@/shared/route/route-period";
 import {
   ROUTE_COLUMN_DEFAULTS,
   ROUTE_STOP_COLUMN_DEFAULTS,
@@ -27,12 +28,15 @@ import {
 
 import {
   ROUTE_LIST_STATUSES,
+  ROUTE_PERIOD_SORT_FALLBACK,
   ROUTE_SORT_FALLBACK,
   catalogFacetOptions,
+  exactRouteSearch,
   stopCountsOf,
   summarizeRouteList,
   type GroupCount,
   type RouteFacet,
+  type RouteListFilters,
   type RouteSortKey,
 } from "../../usecases/list-routes/route-list";
 
@@ -70,8 +74,8 @@ import type {
   CloseWithPendingProps,
   CreateRouteProps,
   LeftOpenRoute,
+  ListRoutesPage,
   ListRoutesProps,
-  ListRoutesResult,
   LostStop,
   OpenStopRoute,
   PinnedLocation,
@@ -1132,8 +1136,25 @@ class InMemoryRouteRepository implements IRouteRepository {
     pageSize,
     sort,
     order,
-    ...filters
-  }: ListRoutesProps): Promise<ListRoutesResult> {
+    ...asked
+  }: ListRoutesProps): Promise<ListRoutesPage> {
+    // The exact search that drops the period, as the Prisma lookup makes it:
+    // the route of that id or number, in the company and the driver's scope.
+    const exact = asked.period ? exactRouteSearch(asked.search) : null;
+
+    const named =
+      exact !== null &&
+      this.routes.some(
+        (route) =>
+          route.businessId === asked.businessId &&
+          (!asked.scopeDriverId || route.driverId === asked.scopeDriverId) &&
+          ("id" in exact ? route.id === exact.id : route.code === exact.code),
+      );
+
+    const filters: RouteListFilters = named
+      ? { ...asked, period: undefined }
+      : asked;
+
     // The Prisma query's filters (routeListWhere). On a `date` column an
     // instant matches its whole UTC day, so days are compared, not instants.
     const day = filters.scheduled_date
@@ -1158,6 +1179,11 @@ class InMemoryRouteRepository implements IRouteRepository {
       route.businessId === filters.businessId &&
       (!filters.scopeDriverId || route.driverId === filters.scopeDriverId) &&
       (day === null || asDateColumn(route.scheduled_date).getTime() === day) &&
+      (!filters.period ||
+        isRouteInPeriod(
+          { ...route, scheduled_date: asDateColumn(route.scheduled_date) },
+          filters.period,
+        )) &&
       (except === "status" ||
         !filters.statuses?.length ||
         filters.statuses.includes(route.status)) &&
@@ -1172,8 +1198,12 @@ class InMemoryRouteRepository implements IRouteRepository {
 
     // resolveOrderBy's choice, compared the way Postgres orders: NULL
     // placement per key, then created_at desc, id desc as the tiebreaker.
-    const key = sort ?? ROUTE_SORT_FALLBACK.sort;
-    const direction = order ?? (sort ? "asc" : ROUTE_SORT_FALLBACK.order);
+    // With a period, the route's day is the fallback, as the Prisma query's.
+    const fallback = filters.period
+      ? ROUTE_PERIOD_SORT_FALLBACK
+      : ROUTE_SORT_FALLBACK;
+    const key = sort ?? fallback.sort;
+    const direction = order ?? (sort ? "asc" : fallback.order);
 
     const valueOf: Record<RouteSortKey, (route: Route) => OrderValue> = {
       created_at: (route) => route.created_at,
@@ -1183,7 +1213,8 @@ class InMemoryRouteRepository implements IRouteRepository {
       driverName: (route) => this.driverName(route.businessId, route.driverId),
       vehiclePlate: (route) =>
         this.vehiclePlate(route.businessId, route.vehicleId),
-      scheduled_date: (route) => route.scheduled_date,
+      // A `date` column: two routes of one day tie, as in Postgres.
+      scheduled_date: (route) => asDateColumn(route.scheduled_date),
       destination: (route) => route.destination,
       started_at: (route) => route.started_at,
       completed_at: (route) => route.completed_at,
@@ -1276,6 +1307,7 @@ class InMemoryRouteRepository implements IRouteRepository {
         .map((route) => this.listRow(route)),
       total,
       meta: searchMeta,
+      periodApplied: Boolean(filters.period),
     };
   }
 

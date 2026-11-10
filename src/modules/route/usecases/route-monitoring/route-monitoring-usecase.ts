@@ -16,13 +16,26 @@ import {
 } from "@/shared/route/control-tower-rules";
 import { operationDay } from "@/shared/route/operation-day-rules";
 import { isRouteLeftOpen } from "@/shared/route/route-left-open";
-import { dateOnlyKey, resolveTimeZone } from "@/shared/time/business-day";
+import {
+  routeDaysOfOperationDay,
+  routePeriodDays,
+  type RoutePeriodDays,
+} from "@/shared/route/route-period";
+import {
+  businessDateKey,
+  dateOnlyKey,
+  resolveTimeZone,
+} from "@/shared/time/business-day";
+import type { ListPeriodInput } from "@/shared/time/list-period";
 
-interface RouteMonitoringRequest {
+interface RouteMonitoringRequest extends ListPeriodInput {
   userId: string;
   businessId?: string;
 
-  /** "YYYY-MM-DD" in the company's zone. Defaults to the company's today. */
+  /**
+   * "YYYY-MM-DD" in the company's zone. Defaults to the company's today.
+   * The board's first question, kept for its callers; never with a period.
+   */
   day?: string;
 
   page: number;
@@ -75,7 +88,15 @@ interface MonitoredRoute {
 }
 
 interface RouteMonitoring {
+  /**
+   * The day the board reads its hours against: the one asked with `day`,
+   * else the company's today — with a period too, so a time on another
+   * day prints its date.
+   */
   day: string;
+
+  /** The period's days, when one was asked; null for a single day. */
+  period: { from: string; to: string } | null;
 
   /** The company's zone: the board shows every hour in it, like the tower. */
   timeZone: string;
@@ -90,6 +111,10 @@ const iso = (value: Date | null): string | null => value?.toISOString() ?? null;
  * The monitoring board by route (decision 6.6, DLVP-MON-1): every route of
  * the company's day — and every route still running, today — with its
  * completion and one entry per stop, in the route's order.
+ *
+ * Or of a period (plan of 09/11/2026): the routes of those days, and the
+ * running ones when it reaches today (shared/route/route-period, the list's
+ * rule). `today` is exactly the board without a period.
  *
  * Manager surface, like the tower: a driver token is refused rather than
  * shown everybody's day.
@@ -107,6 +132,9 @@ class RouteMonitoringUseCase {
     userId,
     businessId,
     day,
+    period,
+    from,
+    to,
     page,
     pageSize,
     now = new Date(),
@@ -121,22 +149,17 @@ class RouteMonitoringUseCase {
       await this.operation.timeZoneOf(resolvedBusinessId),
     );
 
-    let window;
-
-    try {
-      window = operationDay(timeZone, now, day);
-    } catch {
-      throw new AppError("Data inválida.", 400, "INVALID_DAY");
-    }
+    const board = this.boardDays(timeZone, now, { day, period, from, to });
 
     const { total, routes } = await this.operation.listMonitoringRoutes(
       resolvedBusinessId,
-      window,
+      board.days,
       { skip: (page - 1) * pageSize, take: pageSize },
     );
 
     return {
-      day: window.date,
+      day: board.day,
+      period: board.period,
       timeZone,
       meta: { total, page, pageSize },
       routes: routes.map((route) => {
@@ -178,6 +201,41 @@ class RouteMonitoringUseCase {
           openSince: stale ? iso(route.started_at) : null,
         };
       }),
+    };
+  }
+
+  /** The days the board covers, and the day and period it answers with. */
+  private boardDays(
+    timeZone: string,
+    now: Date,
+    asked: ListPeriodInput & { day?: string },
+  ): {
+    days: RoutePeriodDays;
+    day: string;
+    period: RouteMonitoring["period"];
+  } {
+    const days = routePeriodDays(asked, timeZone, now);
+
+    if (days) {
+      return {
+        days,
+        day: businessDateKey(now, timeZone),
+        period: { from: days.from, to: days.to },
+      };
+    }
+
+    let window;
+
+    try {
+      window = operationDay(timeZone, now, asked.day);
+    } catch {
+      throw new AppError("Data inválida.", 400, "INVALID_DAY");
+    }
+
+    return {
+      days: routeDaysOfOperationDay(window),
+      day: window.date,
+      period: null,
     };
   }
 }

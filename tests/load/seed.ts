@@ -9,6 +9,7 @@ import auth from "../../src/config/auth";
 import { ensureDefaultOccurrenceTypes } from "../../src/shared/delivery/default-occurrence-types";
 import { generateApiKey } from "../../src/shared/integration/api-key-rules";
 import {
+  DEFAULT_BUSINESS_TIMEZONE,
   businessDateKey,
   dateOnlyFromKey,
 } from "../../src/shared/time/business-day";
@@ -310,7 +311,12 @@ async function seedTenant(index: number, primary: boolean) {
         code: index * 1000 + n,
         name: `Rota ${index}-${n}`,
         status: "IN_PROGRESS",
-        scheduled_date: new Date(),
+        // The company's day (its zone is the schema's default), not the UTC
+        // date: from 21h in São Paulo that is already tomorrow, and the routes
+        // period orders by the route's day, so tomorrow's would head "Hoje".
+        scheduled_date: dateOnlyFromKey(
+          businessDateKey(new Date(), DEFAULT_BUSINESS_TIMEZONE),
+        ),
         planned_departure_at: new Date(Date.now() - 2 * 60 * 60 * 1000),
         started_at: new Date(Date.now() - 100 * 60 * 1000),
         businessId,

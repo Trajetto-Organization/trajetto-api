@@ -1733,6 +1733,78 @@ D54).
   traz `searchMeta.timeZone` (o fuso da empresa), para Previsto, Saída e
   Conclusão no relógio da empresa, como o detalhe da rota (`meta.timeZone`
   do `get-route`).
+- **Período das rotas (09/11/2026):** a lista de rotas e o quadro da Torre
+  aceitam o período de Entregas: `period` = `today`, `7d`, `14d`, `30d`
+  ou `custom` com `from`/`to` (até 92 dias). Os presets, o teto e os
+  textos do 400 vêm de `shared/time/list-period.ts`, o mesmo módulo de
+  Entregas, sem o conselho de exportar (rotas não têm exportação).
+  - **Qual data conta:** o dia da rota (`scheduled_date`, a coluna Data da
+    lista), no fuso da empresa, e não a criação. É o dia que a Torre já lia.
+    Pela criação, a rota de terça montada na segunda sairia do Hoje de terça.
+  - **A regra** (`shared/route/route-period.ts`, `routePeriodDays` e
+    `isRouteInPeriod`): entram as rotas cujo dia está no período e, quando
+    o período inclui o hoje da empresa, também toda rota `IN_PROGRESS` de
+    outro dia. É a regra do dia da Torre
+    (`scheduled_date = dia OR (hoje AND IN_PROGRESS)`), estendida de um dia
+    para N. Assim a rota esquecida aberta (D26) nunca some da lista nem do
+    quadro, com o selo "Aberta desde". Um período só de dias passados ou
+    futuros não traz as rotas em andamento de hoje.
+  - **Rota que não saiu (só na lista):** com o hoje da empresa no período,
+    a lista (`routeListPeriodDays`, `includesOverdue`) traz também toda rota
+    de dia anterior ao período ainda `PLANNED` ou `RELEASED`. As entregas
+    dela esperam por ela, e antes do período a lista mostrava todas as
+    datas, então essa rota aparecia. No Hoje ela sumiria sem aviso. Na
+    tabela ela leva o selo "Não saiu em dd/mm". Cancelada ou concluída não
+    entra. O quadro da Torre não a traz e abre como sempre abriu. O custo é
+    um braço do `OR` em `route (businessId, status, scheduled_date)`,
+    proporcional a quantas rotas estão nesse estado; cancelar ou remarcar a
+    rota a tira do Hoje.
+  - **Lista:** o período vale para a página, o paginador, os cartões e as
+    opções dos filtros (não é faceta: `routeListWhere` o mantém em toda
+    variante). Com período e sem `sort`, a página vai pelo dia da rota, o
+    mais recente primeiro, e no mesmo dia pela criação
+    (`ROUTE_PERIOD_SORT`). No Hoje isso só põe depois das de hoje as rotas
+    de outros dias que o período mantém. Sem período continua a criação
+    mais recente primeiro. `searchMeta.period` traz `{from, to, applied}`,
+    ou `null` sem período. Uma busca que é exatamente o número ("12",
+    "Rota 12", "#12") ou o ID inteiro de uma rota da empresa, no escopo de
+    quem pede (`exactRouteSearch`, uma leitura pela chave primária ou por
+    `(businessId, code)`), ignora o período, como em Entregas, com
+    `applied: false`. Sem `period`, todas as datas: os outros chamadores
+    (escolher rota aberta, reentrega, contextos do chat, teste de carga)
+    continuam iguais.
+  - **Quadro da Torre:** `period=today` é o mesmo quadro de sem período. Com
+    vários dias, a ordem por grupo de status continua, e dentro de cada grupo
+    vem primeiro o dia mais recente. `data.day` passa a ser o hoje da
+    empresa, então uma hora de outro dia sai com a data. `data.period` vem
+    `{from, to}`, ou `null` sem período. O `day` antigo continua aceito;
+    `day` com `period` dá 400.
+  - **Índice:** `route (businessId, scheduled_date)`, migration
+    `20261109150000_route_business_scheduled_date_idx`, só de expansão. O
+    índice `(businessId, status, scheduled_date)` começa pelo status, e o
+    Postgres 16 não tem skip scan: um intervalo de dias sem status fixo lia
+    todas as rotas da empresa. Os planos estão em `query-plans.test.ts`.
+    A página vai pelo dia com período porque, pela criação, o Postgres
+    percorria `(businessId, created_at DESC)` a partir de hoje e filtrava o
+    intervalo. O planejador estima esse caminho como se as rotas do
+    período estivessem espalhadas pelo índice, mas a criação anda com o dia
+    e elas ficam todas no fim dele: um Personalizado de março do ano
+    passado lia toda rota criada desde então. Uma ordem pedida pela
+    criação ou pelo número (`sort=created_at` ou `code`, colunas com índice
+    próprio que andam com o dia) ainda pode percorrer esse índice até o
+    período. É uma escolha de quem ordena, e o custo fica limitado às rotas
+    entre o período e a ponta do índice.
+  - **A leitura fica presa aos dias do período:** a rota em andamento ou
+    que não saiu pode ser de qualquer dia. Por isso, sem limite, a página
+    do Hoje, depois das rotas de hoje, descia o índice do dia da rota pelo
+    histórico inteiro da empresa à procura de uma delas, só para fechar a
+    ordenação (o `query-plans` pegou: 2.400 rotas lidas para mostrar 10).
+    Antes da lista, uma consulta pelo índice de
+    status (`routeListUnfinishedWhere`, `MIN`/`MAX` de `scheduled_date`)
+    diz até onde essas rotas vão. Toda leitura da lista ganha
+    `scheduled_date` entre esse dia e o fim do período (`periodSpan`). Não
+    muda o que a lista mostra, só onde a leitura para. Sem rota esquecida,
+    a faixa é a do próprio período.
 - **Fuso nas abas Ocorrências, Auditoria e Atendimentos (H6, D22):** as três
   listas da torre trazem o fuso da empresa ao lado das linhas, para a web
   mostrar a mesma hora que o detalhe da rota e o Painel (S16, S20):
@@ -1782,17 +1854,17 @@ D54).
   (`DRIVER_CANNOT_VIEW_PANELS`) continua atrás, como segunda trava.
 - **A fonte de cada número da torre (H6):**
 
-| Aba          | Número                                  | Endpoint                                  | Escopo e janela                                                                                                                                |
-| ------------ | --------------------------------------- | ----------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
-| Painel       | funil, progresso, pontualidade, eventos | `GET /route/control-tower`                | dia da empresa no fuso dela (`operationDay`); funil = documentos ativos no dia, incluindo os herdados de rotas esquecidas (`inherited`)        |
-| Painel       | veículos no mapa / rotas em andamento   | `GET /route/control-tower`                | mapa: pontos das últimas 12 h; `activeRoutes`: toda rota `IN_PROGRESS`, com `stale` — por isso "1 em andamento · 0 no mapa" se explica sozinho |
-| Rotas        | quadro por rota                         | `GET /route/monitoring`                   | rotas do dia da empresa mais as em andamento de dias anteriores (com `stale`/`openSince`); paginado                                            |
-| Ocorrências  | cartões e lista                         | `GET /delivery/list-occurrences`          | todas as ocorrências da empresa (sem "hoje"); os cartões contam o conjunto filtrado inteiro, com os mesmos filtros da lista, nunca a página    |
-| Ocorrências  | fila de autorizações                    | `GET /delivery/occurrence-authorizations` | pedidos pendentes; o aviso aos administradores conta 10 min da chegada ao servidor                                                             |
-| App          | rotas ao vivo do gestor (onda 4)        | `GET /route/live`                         | rotas em andamento (de qualquer dia, com `stale`) e liberadas para hoje no fuso da empresa; 500 por página, com cursor                         |
-| Atendimentos | selo e balão                            | `GET /chat/tickets/summary`               | contagens por situação (abertos, sem atendente, meus, aguardando autorização, não lidos), sem janela de data                                   |
-| Atendimentos | lista                                   | `GET /chat/tickets`                       | os mesmos tickets, com os filtros da tela                                                                                                      |
-| Auditoria    | fila e taxa de concordância             | `GET /delivery/proof-audits`              | fila sem janela; `agreementRate` cobre os últimos 90 dias civis no fuso da empresa                                                             |
+| Aba          | Número                                  | Endpoint                                  | Escopo e janela                                                                                                                                       |
+| ------------ | --------------------------------------- | ----------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Painel       | funil, progresso, pontualidade, eventos | `GET /route/control-tower`                | dia da empresa no fuso dela (`operationDay`); funil = documentos ativos no dia, incluindo os herdados de rotas esquecidas (`inherited`)               |
+| Painel       | veículos no mapa / rotas em andamento   | `GET /route/control-tower`                | mapa: pontos das últimas 12 h; `activeRoutes`: toda rota `IN_PROGRESS`, com `stale` — por isso "1 em andamento · 0 no mapa" se explica sozinho        |
+| Rotas        | quadro por rota                         | `GET /route/monitoring`                   | rotas do dia da empresa mais as em andamento de dias anteriores (com `stale`/`openSince`); paginado; com `period`, os dias escolhidos (`data.period`) |
+| Ocorrências  | cartões e lista                         | `GET /delivery/list-occurrences`          | todas as ocorrências da empresa (sem "hoje"); os cartões contam o conjunto filtrado inteiro, com os mesmos filtros da lista, nunca a página           |
+| Ocorrências  | fila de autorizações                    | `GET /delivery/occurrence-authorizations` | pedidos pendentes; o aviso aos administradores conta 10 min da chegada ao servidor                                                                    |
+| App          | rotas ao vivo do gestor (onda 4)        | `GET /route/live`                         | rotas em andamento (de qualquer dia, com `stale`) e liberadas para hoje no fuso da empresa; 500 por página, com cursor                                |
+| Atendimentos | selo e balão                            | `GET /chat/tickets/summary`               | contagens por situação (abertos, sem atendente, meus, aguardando autorização, não lidos), sem janela de data                                          |
+| Atendimentos | lista                                   | `GET /chat/tickets`                       | os mesmos tickets, com os filtros da tela                                                                                                             |
+| Auditoria    | fila e taxa de concordância             | `GET /delivery/proof-audits`              | fila sem janela; `agreementRate` cobre os últimos 90 dias civis no fuso da empresa                                                                    |
 
 ## Pausas do motorista
 

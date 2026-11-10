@@ -2818,6 +2818,12 @@ describe("plan of 02/11/2026: new columns and tables", () => {
       await indexDefinition("route_stop_routeId_stop_group_key_idx"),
     ).toMatch(/\("routeId", stop_group_key\)/);
   });
+
+  it("reads a company's routes by a range of days through an index (period of 09/11/2026)", async () => {
+    expect(
+      await indexDefinition("route_businessId_scheduled_date_idx"),
+    ).toMatch(/ON public\.route USING btree \("businessId", scheduled_date\)/);
+  });
 });
 
 describe("plan of 02/11/2026: the nullable expansions (D2, B3)", () => {

@@ -24,6 +24,9 @@ class ListRoutesController {
       driverId,
       vehicleId,
       scheduled_date,
+      period,
+      from,
+      to,
       search,
     } = request.query as z.infer<typeof listRoutesSchema>;
 
@@ -52,6 +55,9 @@ class ListRoutesController {
       driverIds: driverId,
       vehicleIds: vehicleId,
       scheduled_date,
+      period,
+      from,
+      to,
       search: decodedSearch,
     });
 

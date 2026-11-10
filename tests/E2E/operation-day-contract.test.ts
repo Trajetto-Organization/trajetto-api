@@ -13,6 +13,10 @@ import type {
   OperationDay,
 } from "@/modules/route/repositories/IOperation-day-repository";
 import { operationDay } from "@/shared/route/operation-day-rules";
+import {
+  routeDaysOfOperationDay,
+  type RoutePeriodDays,
+} from "@/shared/route/route-period";
 import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
@@ -931,12 +935,15 @@ describe("the feed of the day", () => {
 });
 
 describe("the monitoring board by route", () => {
+  // The board of the day: the day's routes and the ones still running.
+  const TODAY = routeDaysOfOperationDay({ ...DAY, isToday: true });
+
   it.each(both())(
     "%s orders running, released, then finished",
     async (_name, repository) => {
       const { total, routes } = await repository.listMonitoringRoutes(
         CARRIER,
-        { ...DAY, isToday: true },
+        TODAY,
         { skip: 0, take: 20 },
       );
 
@@ -957,7 +964,7 @@ describe("the monitoring board by route", () => {
     async (_name, repository) => {
       const { total, routes } = await repository.listMonitoringRoutes(
         CARRIER,
-        { ...DAY, isToday: true },
+        TODAY,
         { skip: 40, take: 20 },
       );
 
@@ -970,11 +977,72 @@ describe("the monitoring board by route", () => {
     const page = { skip: 1, take: 2 };
 
     const [fromDatabase, fromTwin] = await Promise.all([
-      database.listMonitoringRoutes(CARRIER, { ...DAY, isToday: true }, page),
-      twin.listMonitoringRoutes(CARRIER, { ...DAY, isToday: true }, page),
+      database.listMonitoringRoutes(CARRIER, TODAY, page),
+      twin.listMonitoringRoutes(CARRIER, TODAY, page),
     ]);
 
     expect(fromDatabase).toEqual(fromTwin);
+  });
+
+  /**
+   * The board's period (plan of 09/11/2026): the routes of several days,
+   * and the running ones when the days reach today — the latest day first
+   * inside each group, the rest as on one day.
+   */
+  const PERIOD: RoutePeriodDays = {
+    from: "2026-09-16",
+    to: "2026-09-18",
+    includesRunning: true,
+  };
+
+  it.each(both())(
+    "%s reads a period of days, the latest day first in each group",
+    async (_name, repository) => {
+      const { total, routes } = await repository.listMonitoringRoutes(
+        CARRIER,
+        PERIOD,
+        { skip: 0, take: 20 },
+      );
+
+      // Running (17th, then the 16th), released, tomorrow's two planned by
+      // code, then the completed one; never the cancelled route nor the
+      // other company's running one.
+      expect(routes.map((route) => route.code)).toEqual([
+        101, 102, 106, 105, 108, 103,
+      ]);
+      expect(total).toBe(6);
+    },
+  );
+
+  it.each(both())(
+    "%s reads a day of the past without the routes running today",
+    async (_name, repository) => {
+      const { total, routes } = await repository.listMonitoringRoutes(
+        CARRIER,
+        { from: "2026-09-15", to: "2026-09-16", includesRunning: false },
+        { skip: 0, take: 20 },
+      );
+
+      // The 16th's route is still running, and it is of the 16th: it stays.
+      // The 17th's running one is not.
+      expect(routes.map((route) => route.code)).toEqual([102]);
+      expect(total).toBe(1);
+    },
+  );
+
+  it("gives the same answer from both over a period, past the first page too", async () => {
+    for (const page of [
+      { skip: 0, take: 4 },
+      { skip: 4, take: 4 },
+      { skip: 40, take: 4 },
+    ]) {
+      const [fromDatabase, fromTwin] = await Promise.all([
+        database.listMonitoringRoutes(CARRIER, PERIOD, page),
+        twin.listMonitoringRoutes(CARRIER, PERIOD, page),
+      ]);
+
+      expect(fromDatabase).toEqual(fromTwin);
+    }
   });
 });
 

@@ -6,6 +6,7 @@ import { relatedTo, rowsByKey } from "@/shared/database/related-rows";
 
 import { dateOnlyFromKey, dateOnlyKey } from "@/shared/time/business-day";
 import { openStopsOnRoutesLeftOpen } from "@/shared/route/routes-left-open-query";
+import type { RoutePeriodDays } from "@/shared/route/route-period";
 import {
   ROUTE_LOOKBACK_DAYS,
   factInstant,
@@ -665,11 +666,14 @@ class OperationDayRepository implements IOperationDayRepository {
 
   async listMonitoringRoutes(
     businessId: string,
-    day: OperationDay,
+    days: RoutePeriodDays,
     page: { skip: number; take: number },
   ): Promise<{ total: number; routes: MonitoringRoute[] }> {
     // The page of ids first, in the order a dispatcher reads the board:
-    // what is on the street, then what is about to leave, then the rest.
+    // what is on the street, then what is about to leave, then the rest —
+    // over several days, the latest day first inside each group. The days
+    // are a range of route (businessId, scheduled_date); the running ones,
+    // when the days reach today, a range of (businessId, status, ...).
     const ids = await this.prisma.$queryRaw<
       Array<{ id: string; total: number }>
     >`
@@ -678,8 +682,12 @@ class OperationDayRepository implements IOperationDayRepository {
       WHERE r."businessId" = ${businessId}
         AND r."status" <> 'CANCELLED'
         AND (
-          r."scheduled_date" = ${day.date}::date
-          OR (${day.isToday}::boolean AND r."status" = 'IN_PROGRESS')
+          r."scheduled_date" BETWEEN ${days.from}::date AND ${days.to}::date
+          ${
+            days.includesRunning
+              ? Prisma.sql`OR r."status" = 'IN_PROGRESS'`
+              : Prisma.empty
+          }
         )
       ORDER BY
         CASE r."status"
@@ -688,6 +696,11 @@ class OperationDayRepository implements IOperationDayRepository {
           WHEN 'PLANNED' THEN 2
           ELSE 3
         END,
+        ${
+          days.from !== days.to
+            ? Prisma.sql`r."scheduled_date" DESC,`
+            : Prisma.empty
+        }
         r."planned_departure_at" ASC NULLS LAST,
         r."code" ASC
       LIMIT ${page.take} OFFSET ${page.skip}
@@ -702,8 +715,15 @@ class OperationDayRepository implements IOperationDayRepository {
                 businessId,
                 status: { not: "CANCELLED" },
                 OR: [
-                  { scheduled_date: dateOnlyFromKey(day.date) },
-                  ...(day.isToday ? [{ status: "IN_PROGRESS" as const }] : []),
+                  {
+                    scheduled_date: {
+                      gte: dateOnlyFromKey(days.from),
+                      lte: dateOnlyFromKey(days.to),
+                    },
+                  },
+                  ...(days.includesRunning
+                    ? [{ status: "IN_PROGRESS" as const }]
+                    : []),
                 ],
               },
             })

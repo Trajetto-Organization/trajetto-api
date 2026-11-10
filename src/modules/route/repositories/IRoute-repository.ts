@@ -7,8 +7,8 @@ import type {
   CloseWithPendingProps,
   CreateRouteProps,
   LeftOpenRoute,
+  ListRoutesPage,
   ListRoutesProps,
-  ListRoutesResult,
   LostStop,
   OpenStopRoute,
   PinnedLocation,
@@ -267,7 +267,7 @@ interface IRouteRepository {
     props: AssignmentPreviewProps,
   ) => Promise<AssignmentPreview>;
 
-  listRoutes: (props: ListRoutesProps) => Promise<ListRoutesResult>;
+  listRoutes: (props: ListRoutesProps) => Promise<ListRoutesPage>;
 
   /**
    * Moves a route, but only from `transition.expectedStatus` and only within

@@ -423,7 +423,28 @@ const controlTowerResponses = {
 
   routeMonitoring: z.object({
     data: z.object({
-      day: z.string(),
+      day: z
+        .string()
+        .describe(
+          "O dia pedido em `day` ou, sem ele, o dia de hoje da empresa (AAAA-MM-DD), também com `period`: uma hora de outro dia vem com a data.",
+        ),
+      // Declared, or the response serializer strips it and a new screen
+      // reads an old API's answer (plan of 09/11/2026).
+      period: z
+        .object({
+          from: z
+            .string()
+            .describe(
+              "Primeiro dia do período (AAAA-MM-DD), no fuso da empresa.",
+            ),
+          to: z
+            .string()
+            .describe("Último dia do período (AAAA-MM-DD), incluído."),
+        })
+        .nullable()
+        .describe(
+          "Os dias do quadro quando `period` foi enviado (com as rotas ainda em andamento se incluir hoje); null para um dia só (`day`, ou nada).",
+        ),
       timeZone: z
         .string()
         .describe("O fuso da empresa: as horas do quadro são mostradas nele."),
