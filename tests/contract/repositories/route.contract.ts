@@ -341,6 +341,46 @@ function routeRepositoryContract(harness: () => RouteHarness): void {
       expect(byDriver.total).toBe(1);
     });
   });
+
+  // Last: it puts a route on the street, which the reads above do not expect.
+  describe("findRunningRouteOfVehicle", () => {
+    it("names the route the truck is out with, never the one asking nor another company's", async () => {
+      const h = harness();
+
+      // r1 has the truck, but only planned.
+      expect(
+        await h.repo.findRunningRouteOfVehicle(F.vehicleA, A, MISSING),
+      ).toBeNull();
+
+      const out = await h.repo.createRoute({
+        businessId: A,
+        driverId: F.driverA2,
+        vehicleId: F.vehicleA,
+        scheduled_date: new Date("2026-09-12T00:00:00.000Z"),
+        deliveryIds: [],
+      });
+
+      await h.repo.transitionRoute(out.id, A, {
+        expectedStatus: "PLANNED",
+        status: "RELEASED",
+      });
+      await h.repo.transitionRoute(out.id, A, {
+        expectedStatus: "RELEASED",
+        status: "IN_PROGRESS",
+        started_at: new Date(),
+      });
+
+      expect(
+        await h.repo.findRunningRouteOfVehicle(F.vehicleA, A, h.route("r1")),
+      ).toEqual({ code: out.code, driverId: F.driverA2 });
+      expect(
+        await h.repo.findRunningRouteOfVehicle(F.vehicleA, A, out.id),
+      ).toBeNull();
+      expect(
+        await h.repo.findRunningRouteOfVehicle(F.vehicleA, B, h.route("r1")),
+      ).toBeNull();
+    });
+  });
 }
 
 export { ROUTE_FIXTURE, routeRepositoryContract, seedRoutes };

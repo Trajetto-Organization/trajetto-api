@@ -9,6 +9,8 @@ import { UpdateDeliveryStatusUseCase } from "@/modules/delivery/usecases/update-
 import { AppError } from "@/shared/errors/AppError";
 import { createPrismaClient } from "@/shared/database/database-client";
 
+import { someoneWaitsOnALock } from "./support/lock-wait";
+
 /**
  * A delivery resolved on a running route at the instant the route is
  * cancelled.
@@ -103,26 +105,6 @@ async function runningRouteWithOneDelivery(): Promise<{
   });
 
   return { routeId: route.id, deliveryId: delivery.id };
-}
-
-/** Until another backend of this database is waiting on a row lock. */
-async function someoneWaitsOnALock(timeoutMs = 8_000): Promise<void> {
-  const until = Date.now() + timeoutMs;
-
-  while (Date.now() < until) {
-    const [row] = await prisma.$queryRaw<Array<{ waiting: number }>>`
-      SELECT count(*)::int AS "waiting"
-      FROM pg_stat_activity
-      WHERE "datname" = current_database()
-        AND "wait_event_type" = 'Lock'
-    `;
-
-    if (row.waiting > 0) return;
-
-    await new Promise((resolve) => setTimeout(resolve, 25));
-  }
-
-  throw new Error("nobody ever waited on the route lock");
 }
 
 beforeAll(async () => {
@@ -223,7 +205,7 @@ describe("a delivery resolved while its route is being cancelled", () => {
 
         // The other side is now inside its transaction and blocked on
         // something this one holds.
-        await someoneWaitsOnALock();
+        await someoneWaitsOnALock(prisma, { what: "route lock" });
 
         // ...and the rest of the real cancellation: stops, then deliveries.
         return repository.transitionRoute(

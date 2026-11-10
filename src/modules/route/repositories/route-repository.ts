@@ -898,6 +898,23 @@ class RouteRepository implements IRouteRepository {
     return tx ? run(tx) : this.prisma.$transaction(run);
   }
 
+  async findRunningRouteOfVehicle(
+    vehicleId: string,
+    businessId: string,
+    excludeRouteId: string,
+  ): Promise<{ code: number; driverId: string } | null> {
+    // At most one row by route_active_vehicle_idx, so no order is needed.
+    return this.prisma.route.findFirst({
+      where: {
+        businessId,
+        vehicleId,
+        status: "IN_PROGRESS",
+        id: { not: excludeRouteId },
+      },
+      select: { code: true, driverId: true },
+    });
+  }
+
   async assignmentPreview({
     businessId,
     driverId,

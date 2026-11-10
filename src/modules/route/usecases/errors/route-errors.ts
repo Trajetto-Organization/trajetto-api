@@ -1,4 +1,7 @@
 import { AppError } from "@/shared/errors/AppError";
+import { vehicleUnavailableReason } from "@/shared/route/route-rules";
+
+import type { OutOfOperationStatus } from "@/shared/vehicle/vehicle-rules";
 
 /**
  * A delivery route that does not exist, or belongs to another company or
@@ -45,18 +48,29 @@ class RouteStatusConflictError extends Error {
 }
 
 /**
- * Raised by the partial unique index `route_active_vehicle_idx`.
+ * Raised by the partial unique index `route_active_vehicle_idx`, and by the
+ * departure's own read before it (findRunningRouteOfVehicle).
  *
  * Planning two routes for the same vehicle is allowed on purpose — a
  * dispatcher lays out the whole week. What cannot happen is the second
  * departure: the truck is on one road.
+ *
+ * Worded for the driver, who is the one reading it: the app cannot choose
+ * another vehicle ("escolha outro veículo" told them to do the impossible).
+ * With the plate and the running route's number when the caller knows them;
+ * never the other driver's name, which the driver's app does not show.
  */
 class RouteVehicleBusyError extends Error {
-  constructor() {
+  constructor(plate?: string | null, runningCode?: number | null) {
     super(
-      "Este veículo já está em outra rota em andamento. Encerre a rota atual " +
-        "ou escolha outro veículo.",
+      plate && runningCode
+        ? `O veículo ${plate} ainda está na Rota ${runningCode}, em andamento. ` +
+            "Esta rota só pode sair quando aquela terminar. Se precisar de " +
+            "outro veículo, fale com o despachante."
+        : "O veículo desta rota ainda está em outra rota em andamento. " +
+            "Aguarde ela terminar ou fale com o despachante.",
     );
+    this.name = "RouteVehicleBusyError";
   }
 }
 
@@ -126,11 +140,18 @@ class RouteDriverInactiveError extends Error {
   }
 }
 
+/**
+ * A vehicle out of operation (INACTIVE or BLOCKED) chosen for a route. With
+ * the plate and the state, the sentence names them (vehicleUnavailableReason,
+ * the one the release and the departure use as well).
+ */
 class RouteVehicleUnavailableError extends Error {
-  constructor() {
+  constructor(plate?: string | null, status?: OutOfOperationStatus | null) {
     super(
-      "O veículo selecionado está inativo ou bloqueado e não pode receber " +
-        "uma rota.",
+      plate && status
+        ? vehicleUnavailableReason(plate, status, "assign")
+        : "O veículo selecionado está inativo ou bloqueado e não pode receber " +
+            "uma rota.",
     );
   }
 }

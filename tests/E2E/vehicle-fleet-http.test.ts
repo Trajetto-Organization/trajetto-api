@@ -775,6 +775,56 @@ describe("PATCH /vehicle/update-vehicle", () => {
     expect(inactivate.json().message).toContain("1 rota planejada");
   });
 
+  it("unblocks a truck on the road back to Em rota, and each answer says what it means for the route (decision 8.3)", async () => {
+    const truck = vehicleIds[11];
+
+    await prisma.route.create({
+      data: {
+        code: 3,
+        status: "IN_PROGRESS",
+        scheduled_date: new Date("2026-09-28"),
+        started_at: new Date(),
+        businessId: CARRIER,
+        driverId: BRUNO,
+        vehicleId: truck,
+      },
+    });
+    await prisma.vehicle.update({
+      where: { id: truck },
+      data: { status: "IN_ROUTE" },
+    });
+
+    const blocked = await patch(truck, { status: "BLOCKED" });
+    expect(blocked.statusCode, blocked.body).toBe(200);
+    expect(blocked.json().message).toBe(
+      "Veículo bloqueado durante a rota em andamento. Se ele não puder " +
+        "seguir, encerre a rota com pendências e monte outra com outro veículo.",
+    );
+
+    // The sentence for a truck already blocked: "só é possível bloqueá-lo"
+    // was said to it before.
+    const inactivate = await patch(truck, { status: "INACTIVE" });
+    expect(inactivate.statusCode).toBe(409);
+    expect(inactivate.json()).toMatchObject({
+      code: "VEHICLE_IN_ACTIVE_ROUTE",
+      message: expect.stringContaining(
+        "ser desbloqueado (volta para “Em rota”)",
+      ),
+    });
+
+    // Red before: 409 until the route ended, with the truck unable to be
+    // refuelled while blocked.
+    const unblocked = await patch(truck, { status: "ACTIVE" });
+    expect(unblocked.statusCode, unblocked.body).toBe(200);
+    expect(unblocked.json().message).toBe(
+      "Veículo desbloqueado. Como ele está numa rota em andamento, o status " +
+        "voltou para “Em rota”.",
+    );
+    expect(
+      (await prisma.vehicle.findUniqueOrThrow({ where: { id: truck } })).status,
+    ).toBe("IN_ROUTE");
+  });
+
   it("answers a vehicle of another company as not found", async () => {
     const response = await patch(FOREIGN_VEHICLE, {
       description: "Sequestrado",

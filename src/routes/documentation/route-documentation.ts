@@ -702,7 +702,7 @@ const routeResponses = {
     code: z
       .string()
       .describe(
-        "ROUTE_STATUS_CONFLICT, ROUTE_VEHICLE_BUSY, DELIVERY_ALREADY_ON_ROUTE, ROUTE_REORDER_MISMATCH ou ROUTE_PLAN_STALE (a versão do plano mudou desde a leitura) significam a mesma ação do usuário: atualizar a tela. ROUTE_DRIVER_BUSY (saída) diz que o motorista já está com outra rota em andamento; DELIVERY_ON_STARTED_ROUTE, que a entrega está numa rota que já saiu. ROUTE_CODE_TAKEN (criação simultânea na mesma empresa, raro): basta reenviar. ROUTE_BRANCH_REQUIRED (liberar, ou trocar o veículo ou o motorista de uma rota liberada, com o checklist da rota exigido e sem filial ativa para registrá-lo): mostre a mensagem, que diz qual veículo ou motorista completar, ou qual filial está inativa. Nada foi gravado.",
+        "ROUTE_STATUS_CONFLICT, DELIVERY_ALREADY_ON_ROUTE, ROUTE_REORDER_MISMATCH ou ROUTE_PLAN_STALE (a versão do plano mudou desde a leitura) significam a mesma ação do usuário: atualizar a tela. ROUTE_DRIVER_BUSY (saída) diz que o motorista já está com outra rota em andamento; ROUTE_VEHICLE_BUSY (saída), que o veículo ainda está em outra rota em andamento (a mensagem nomeia a placa e a rota); DELIVERY_ON_STARTED_ROUTE, que a entrega está numa rota que já saiu. ROUTE_CODE_TAKEN (criação simultânea na mesma empresa, raro): basta reenviar. ROUTE_BRANCH_REQUIRED (liberar, ou trocar o veículo ou o motorista de uma rota liberada, com o checklist da rota exigido e sem filial ativa para registrá-lo): mostre a mensagem, que diz qual veículo ou motorista completar, ou qual filial está inativa. Nada foi gravado.",
       ),
     message: z.string(),
   }),

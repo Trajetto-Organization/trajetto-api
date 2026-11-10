@@ -454,6 +454,57 @@ describe("taking an upload back", () => {
     ).not.toBeNull();
   });
 
+  it("takes back the route it built and its deliveries, though each got its Adicionada à Rota line", async () => {
+    // The upload writes a ROUTE_ADDED per stop. The undo counted every event
+    // as the driver's work, so an untouched upload with a route kept all of
+    // it: the route "tem paradas de entregas que não puderam ser removidas",
+    // each delivery "já tem registros do motorista".
+    const created = await uploaded([
+      row("Com rota 1", "PED-075", "Zona Norte"),
+      row("Com rota 2", "PED-076", "Zona Norte"),
+    ]);
+
+    const deliveryIds = (
+      await prisma.delivery.findMany({
+        where: { importId: created.data.id },
+        select: { id: true },
+      })
+    ).map((delivery) => delivery.id);
+
+    const routeIds = created.data.report.routes.map(
+      (route: { id: string }) => route.id,
+    );
+
+    expect(routeIds).toHaveLength(1);
+    expect(deliveryIds).toHaveLength(2);
+    expect(
+      await prisma.deliveryEvent.count({
+        where: { deliveryId: { in: deliveryIds }, type: "ROUTE_ADDED" },
+      }),
+    ).toBe(2);
+
+    const response = await app.inject({
+      method: "POST",
+      url: `/import/reverse-import/${created.data.id}/business/${CARRIER}`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json().data).toMatchObject({
+      removedRoutes: 1,
+      removedDeliveries: 2,
+      keptRoutes: [],
+      keptDeliveries: [],
+    });
+
+    expect(await prisma.route.count({ where: { id: { in: routeIds } } })).toBe(
+      0,
+    );
+    expect(
+      await prisma.delivery.count({ where: { id: { in: deliveryIds } } }),
+    ).toBe(0);
+  });
+
   it("answers 409 on the second attempt instead of reporting zero", async () => {
     const created = await uploaded([row("Duas vezes", "PED-080")]);
 

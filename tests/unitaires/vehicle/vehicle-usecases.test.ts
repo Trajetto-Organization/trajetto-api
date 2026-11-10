@@ -378,6 +378,154 @@ describe("editing a vehicle", () => {
     expect(context.vehicles.vehicles[0].status).toBe("BLOCKED");
   });
 
+  describe("a truck blocked while its route is on the road", () => {
+    beforeEach(() => {
+      seedVehicle(context, { status: "BLOCKED" });
+      context.routes.push({
+        vehicleId: TRUCK,
+        driverId: ANA,
+        status: "IN_PROGRESS",
+        businessId: BUSINESS,
+      });
+    });
+
+    it("is unblocked back to Em rota, and the answer says why", async () => {
+      // Red before: 409 VEHICLE_IN_ACTIVE_ROUTE until the route ended, with
+      // the driver unable to refuel a blocked truck (a breakdown fixed on
+      // the road, the wrong plate blocked).
+      const { vehicle, notice } = await context.update.execute(
+        { status: "ACTIVE" },
+        TRUCK,
+        BUSINESS,
+        ADMIN,
+      );
+
+      expect(vehicle.status).toBe("IN_ROUTE");
+      expect(context.vehicles.vehicles[0].status).toBe("IN_ROUTE");
+      expect(notice).toBe(
+        "Veículo desbloqueado. Como ele está numa rota em andamento, o " +
+          "status voltou para “Em rota”.",
+      );
+    });
+
+    it("goes back to Ativo when the route ended between the count and the write", async () => {
+      // The write derives the status again (under the route's lock in
+      // Postgres): an "Em rota" with no route out would never be corrected.
+      const count = context.vehicles.countOpenRoutesForVehicle.bind(
+        context.vehicles,
+      );
+
+      vi.spyOn(
+        context.vehicles,
+        "countOpenRoutesForVehicle",
+      ).mockImplementationOnce(async (vehicleId, businessId) => {
+        const counts = await count(vehicleId, businessId);
+
+        context.routes[0].status = "COMPLETED";
+
+        return counts;
+      });
+
+      const { vehicle, notice } = await context.update.execute(
+        { status: "ACTIVE" },
+        TRUCK,
+        BUSINESS,
+        ADMIN,
+      );
+
+      expect(vehicle.status).toBe("ACTIVE");
+      expect(notice).toBeNull();
+    });
+
+    it("still passes the contracted-fleet write, which never refuses a truck holding its slot", async () => {
+      // M8: the row is read as it is under the company's lock. Blocked and
+      // on the road both hold a slot, so a fleet above a lowered limit is
+      // not refused for taking the block back.
+      context = makeContext({ vehicleLimit: 1 });
+      seedVehicle(context, {
+        id: VAN,
+        license_plate: "BBB2B22",
+        renavam: "00000000002",
+      });
+      seedVehicle(context, { status: "BLOCKED" });
+      context.routes.push({
+        vehicleId: TRUCK,
+        driverId: ANA,
+        status: "IN_PROGRESS",
+        businessId: BUSINESS,
+      });
+
+      const locked = vi.spyOn(context.vehicles, "updateVehicleWithinLimit");
+
+      const { vehicle } = await context.update.execute(
+        { status: "ACTIVE" },
+        TRUCK,
+        BUSINESS,
+        ADMIN,
+      );
+
+      expect(locked).toHaveBeenCalledWith(
+        expect.objectContaining({
+          statusFromRunningRoute: { businessId: BUSINESS },
+        }),
+        { max: 1 },
+      );
+      expect(vehicle.status).toBe("IN_ROUTE");
+    });
+
+    it("cannot be inactivated, and is told what it can do instead", async () => {
+      await expect(
+        context.update.execute({ status: "INACTIVE" }, TRUCK, BUSINESS, ADMIN),
+      ).rejects.toMatchObject({
+        statusCode: 409,
+        code: "VEHICLE_IN_ACTIVE_ROUTE",
+        message: expect.stringContaining(
+          "ele pode continuar bloqueado ou ser desbloqueado (volta para “Em rota”)",
+        ),
+      });
+
+      expect(context.vehicles.vehicles[0].status).toBe("BLOCKED");
+    });
+  });
+
+  it("says which routes are ahead of a truck being blocked", async () => {
+    // Red before: blocking with a released route passed in silence, and the
+    // release or the yard found out instead.
+    seedVehicle(context);
+    context.routes.push({
+      vehicleId: TRUCK,
+      driverId: ANA,
+      status: "RELEASED",
+      businessId: BUSINESS,
+    });
+
+    const { notice } = await context.update.execute(
+      { status: "BLOCKED" },
+      TRUCK,
+      BUSINESS,
+      ADMIN,
+    );
+
+    expect(notice).toBe(
+      "Veículo bloqueado. Ele está em 1 rota liberada: troque o veículo " +
+        "dessa rota antes da saída.",
+    );
+  });
+
+  it("adds nothing to an unblocking with no route on the road", async () => {
+    seedVehicle(context, { status: "BLOCKED" });
+
+    const { vehicle, notice } = await context.update.execute(
+      { status: "ACTIVE" },
+      TRUCK,
+      BUSINESS,
+      ADMIN,
+    );
+
+    expect(vehicle.status).toBe("ACTIVE");
+    expect(notice).toBeNull();
+  });
+
   it("refuses to inactivate with a planned route, saying how many (decision 8.3)", async () => {
     seedVehicle(context);
     context.routes.push({

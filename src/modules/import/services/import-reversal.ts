@@ -86,8 +86,24 @@ const KEEP_REASON = {
 } as const;
 
 /**
+ * The delivery events that do NOT count as the delivery being worked.
+ *
+ * ROUTE_ADDED only: the line a delivery gets when it joins a plan, which the
+ * upload itself now writes for every route it builds. Counted as work, it
+ * kept every routed delivery of an untouched upload ("Já tem registros do
+ * motorista.") and its route with it. On its own it is never work: a
+ * delivery still on a route that stays is kept by its open stop
+ * (deliveryOnKeptRoute), and leaving a route either lands it on another one
+ * in the same commit (the reassignment) or writes a ROUTE_REMOVED — taken
+ * off, moved, the route cancelled or closed with pending stops after it
+ * went out on the street — which still counts.
+ */
+const PLAN_ONLY_EVENT_TYPES = ["ROUTE_ADDED"] as const;
+
+/**
  * Whether a delivery was worked, which keeps it: anything that happened to it
  * means somebody acted on it, and an undo button must not erase that.
+ * `events` counts the events outside PLAN_ONLY_EVENT_TYPES.
  */
 function deliveryKeepReason(delivery: {
   status: string;
@@ -266,6 +282,7 @@ function removedDeliveryOf(row: {
 export {
   KEEP_REASON,
   NOTHING_REVERSED,
+  PLAN_ONLY_EVENT_TYPES,
   REVERSAL_BATCH_SIZE,
   REVERSAL_INLINE_LIMIT,
   REVERSAL_STALE_AFTER_MS,

@@ -239,6 +239,26 @@ interface IRouteRepository {
   ) => Promise<void>;
 
   /**
+   * The route this vehicle of this company is on the street with, other
+   * than `excludeRouteId` — the one row route_active_vehicle_idx allows — or
+   * null.
+   *
+   * Read by the departure before its transaction, so the refusal can name
+   * the plate and the running route instead of the index's bare violation;
+   * and again after the index refused a departure that raced past that
+   * read. The index stays the guarantee: this is only the sentence.
+   *
+   * With the running route's driver: when it is the driver asking (the
+   * second trip of the day on the same truck), the one who is busy is the
+   * driver, and the departure answers ROUTE_DRIVER_BUSY, not the truck's.
+   */
+  findRunningRouteOfVehicle: (
+    vehicleId: string,
+    businessId: string,
+    excludeRouteId: string,
+  ) => Promise<{ code: number; driverId: string } | null>;
+
+  /**
    * The driver's status, read with FOR SHARE inside the caller's route
    * write, or null when the row is not the company's.
    *

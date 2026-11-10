@@ -18,11 +18,11 @@ import { deliveryAssignedPayload } from "@/shared/integration/announce";
 
 import { AppError } from "@/shared/errors/AppError";
 import { logger } from "@/shared/logging/logger";
-import { isVehicleOutOfOperation } from "@/shared/vehicle/vehicle-rules";
 
 import { assertDeliveriesRoutable } from "../shared/routable-deliveries";
 import { assertRoutePlan } from "../shared/route-plan";
 import { assertDriverStillActive } from "../shared/driver-still-active";
+import { assertCrewFit } from "../shared/route-crew";
 
 import { businessToday } from "@/shared/time/business-day";
 import { isUniqueViolation } from "@/shared/http/idempotency-key";
@@ -36,7 +36,6 @@ import {
   DeliveryNoLongerRoutableError,
   RouteCodeTakenError,
   RouteDriverInactiveError,
-  RouteVehicleUnavailableError,
 } from "../errors/route-errors";
 
 import type { Prisma } from "@prisma/client";
@@ -229,13 +228,8 @@ class CreateRouteUseCase {
       throw new AppError("Motorista não encontrado.", 404, "DRIVER_NOT_FOUND");
     }
 
-    if (findDriver.status !== "ACTIVE") {
-      throw new AppError(
-        new RouteDriverInactiveError().message,
-        400,
-        "ROUTE_DRIVER_INACTIVE",
-      );
-    }
+    // 400 ROUTE_DRIVER_INACTIVE (route-crew: the rule the import shares).
+    assertCrewFit({ driver: findDriver });
 
     let vehicleLabel: string | null = null;
 
@@ -246,16 +240,10 @@ class CreateRouteUseCase {
         throw new AppError("Veículo não encontrado.", 404, "VEHICLE_NOT_FOUND");
       }
 
-      // IN_ROUTE stays selectable here: tomorrow's route is planned while
-      // today's is still on the street. What is refused is the DEPARTURE of a
-      // second route on the same vehicle, enforced in the database.
-      if (isVehicleOutOfOperation(findVehicle.status)) {
-        throw new AppError(
-          new RouteVehicleUnavailableError().message,
-          400,
-          "ROUTE_VEHICLE_UNAVAILABLE",
-        );
-      }
+      // 400 ROUTE_VEHICLE_UNAVAILABLE, naming the plate. IN_ROUTE stays
+      // selectable: tomorrow's route is planned while today's is still on
+      // the street, and only the second DEPARTURE is refused (database).
+      assertCrewFit({ vehicle: findVehicle });
 
       vehicleLabel = findVehicle.license_plate;
     }

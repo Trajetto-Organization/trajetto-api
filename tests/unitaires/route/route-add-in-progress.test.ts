@@ -161,6 +161,7 @@ function makeContext() {
       routes,
       users,
       drivers,
+      vehicles,
       notifications,
       outbox,
       webhooks,

@@ -9,6 +9,9 @@ const VEHICLE_STATUSES = ["ACTIVE", "INACTIVE", "BLOCKED", "IN_ROUTE"] as const;
 
 type VehicleStatus = (typeof VEHICLE_STATUSES)[number];
 
+/** The two states that keep a vehicle off every route (isVehicleOutOfOperation). */
+type OutOfOperationStatus = Extract<VehicleStatus, "INACTIVE" | "BLOCKED">;
+
 /**
  * Turns a grouped count into the full tally.
  *
@@ -52,7 +55,9 @@ function totalFromStatusCounts(counts: VehicleStatusCounts): number {
  * IN_ROUTE is deliberately NOT unavailable: tomorrow's load is dispatched
  * while today's route is still on the street.
  */
-function isVehicleOutOfOperation(status: VehicleStatus): boolean {
+function isVehicleOutOfOperation(
+  status: VehicleStatus,
+): status is OutOfOperationStatus {
   return status === "INACTIVE" || status === "BLOCKED";
 }
 
@@ -62,4 +67,4 @@ export {
   totalFromStatusCounts,
   isVehicleOutOfOperation,
 };
-export type { VehicleStatus };
+export type { OutOfOperationStatus, VehicleStatus };

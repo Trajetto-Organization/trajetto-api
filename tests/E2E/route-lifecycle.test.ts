@@ -1,9 +1,14 @@
 import { beforeAll, afterAll, describe, expect, it } from "vitest";
 
+import type { Prisma } from "@prisma/client";
+
 import { RouteRepository } from "@/modules/route/repositories/route-repository";
 import { DeliveryRepository } from "@/modules/delivery/repositories/delivery-repository";
+import { VehicleRepository } from "@/modules/vehicle/repositories/vehicle-repository";
 import { DeliveryAlreadyOnRouteError } from "@/modules/route/usecases/errors/route-errors";
 import { createPrismaClient } from "@/shared/database/database-client";
+
+import { someoneWaitsOnALock } from "./support/lock-wait";
 
 /**
  * The route's writes, against a real Postgres.
@@ -21,6 +26,7 @@ import { createPrismaClient } from "@/shared/database/database-client";
 const prisma = createPrismaClient();
 const repository = new RouteRepository(prisma);
 const deliveries = new DeliveryRepository(prisma);
+const vehicles = new VehicleRepository(prisma);
 
 const CARRIER = "biz-lifecycle";
 const DRIVER = "drv-lifecycle";
@@ -755,6 +761,168 @@ describe("“Em rota” written by the route and nothing else", () => {
     });
 
     expect(await statusOf(vehicle)).toBe("BLOCKED");
+  });
+
+  /**
+   * Taking the block back while the route is still out (decision 8.3): the
+   * status is the route's, derived in the write under the running route's
+   * lock. The two orders against the route closing at the same instant are
+   * driven by hand below — the pause between the two transactions is the
+   * whole race.
+   */
+  describe("unblocking a truck while its route is on the road", () => {
+    const unblock = (vehicleId: string, tx?: Prisma.TransactionClient) =>
+      vehicles.updateVehicle(
+        {
+          vehicleData: { status: "ACTIVE" },
+          vehicleId,
+          statusFromRunningRoute: { businessId: CARRIER },
+        },
+        tx,
+      );
+
+    async function blockedOnTheRoad(): Promise<{
+      vehicle: string;
+      routeId: string;
+    }> {
+      const vehicle = await seedVehicle();
+      const routeId = await runningRoute([await seedDelivery()], vehicle);
+
+      await prisma.vehicle.update({
+        where: { id: vehicle },
+        data: { status: "BLOCKED" },
+      });
+
+      return { vehicle, routeId };
+    }
+
+    const cancelling = (routeId: string, tx?: Prisma.TransactionClient) =>
+      repository.transitionRoute(
+        routeId,
+        CARRIER,
+        {
+          expectedStatus: "IN_PROGRESS",
+          status: "CANCELLED",
+          cancellation_reason: "Pane",
+        },
+        tx,
+      );
+
+    it("goes back to Em rota, and the route closing frees it", async () => {
+      const { vehicle, routeId } = await blockedOnTheRoad();
+
+      expect((await unblock(vehicle)).status).toBe("IN_ROUTE");
+
+      await cancelling(routeId);
+
+      expect(await statusOf(vehicle)).toBe("ACTIVE");
+    });
+
+    it("does the same through the contracted-fleet write", async () => {
+      const { vehicle } = await blockedOnTheRoad();
+
+      const { vehicle: written } = await vehicles.updateVehicleWithinLimit(
+        {
+          vehicleData: { status: "IN_ROUTE" },
+          vehicleId: vehicle,
+          businessId: CARRIER,
+          statusFromRunningRoute: { businessId: CARRIER },
+        },
+        { max: 0 },
+      );
+
+      expect(written?.status).toBe("IN_ROUTE");
+    });
+
+    it("writes Ativo once the route has ended", async () => {
+      const { vehicle, routeId } = await blockedOnTheRoad();
+
+      // The block survived the route (above); taking it back now is Ativo.
+      await cancelling(routeId);
+
+      expect((await unblock(vehicle)).status).toBe("ACTIVE");
+    });
+
+    it("never reads another company's running route", async () => {
+      const { vehicle } = await blockedOnTheRoad();
+
+      const written = await vehicles.updateVehicle({
+        vehicleData: { status: "ACTIVE" },
+        vehicleId: vehicle,
+        statusFromRunningRoute: { businessId: "biz-other" },
+      });
+
+      expect(written.status).toBe("ACTIVE");
+    });
+
+    it("waits for a route closing at that instant, then writes Ativo", async () => {
+      const { vehicle, routeId } = await blockedOnTheRoad();
+
+      let holding: () => void = () => undefined;
+      const closingHoldsTheRoute = new Promise<void>((resolve) => {
+        holding = resolve;
+      });
+
+      const closing = prisma.$transaction(
+        async (tx) => {
+          // The closing's write on the route row (and its vehicle sync,
+          // which leaves the BLOCKED truck alone)...
+          await cancelling(routeId, tx);
+
+          holding();
+
+          // ...held open until the unblocking waits on that row.
+          await someoneWaitsOnALock(prisma, { what: "route row" });
+        },
+        { maxWait: 10_000, timeout: 20_000 },
+      );
+
+      await closingHoldsTheRoute;
+
+      const unblocked = unblock(vehicle);
+
+      await closing;
+
+      // Re-read as committed, the route is no longer on the road: Ativo,
+      // never an "Em rota" nothing would ever correct.
+      expect((await unblocked).status).toBe("ACTIVE");
+      expect(await statusOf(vehicle)).toBe("ACTIVE");
+    }, 60_000);
+
+    it("holds a route closing at that instant until it commits, and the closing frees the truck", async () => {
+      const { vehicle, routeId } = await blockedOnTheRoad();
+
+      let holding: () => void = () => undefined;
+      const unblockingHoldsTheRoute = new Promise<void>((resolve) => {
+        holding = resolve;
+      });
+
+      const unblocking = prisma.$transaction(
+        async (tx) => {
+          // FOR SHARE on the running route, then IN_ROUTE written...
+          const written = await unblock(vehicle, tx);
+
+          holding();
+
+          // ...held open until the closing waits on that share lock.
+          await someoneWaitsOnALock(prisma, { what: "route row" });
+
+          return written;
+        },
+        { maxWait: 10_000, timeout: 20_000 },
+      );
+
+      await unblockingHoldsTheRoute;
+
+      const closing = cancelling(routeId);
+
+      expect((await unblocking).status).toBe("IN_ROUTE");
+
+      await closing;
+
+      // The closing ran after the commit, saw "Em rota" and gave it back.
+      expect(await statusOf(vehicle)).toBe("ACTIVE");
+    }, 60_000);
   });
 });
 

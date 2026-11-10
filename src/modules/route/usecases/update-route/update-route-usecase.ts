@@ -15,11 +15,11 @@ import { AppError } from "@/shared/errors/AppError";
 import { WebhookFanOutService } from "@/shared/integration/webhook-fan-out-service";
 import { deliveryAssignedPayload } from "@/shared/integration/announce";
 
-import { isVehicleOutOfOperation } from "@/shared/vehicle/vehicle-rules";
 import { ROUTE_STATUS_LABELS, isStopOpen } from "@/shared/route/route-rules";
 
 import { assertRoutePlan } from "../shared/route-plan";
 import { assertDriverStillActive } from "../shared/driver-still-active";
+import { assertCrewFit } from "../shared/route-crew";
 import { RouteBranchGuard } from "../shared/route-branch-guard";
 import {
   announcePlanChange,
@@ -30,7 +30,6 @@ import {
   RouteDriverInactiveError,
   RouteNotFoundError,
   RouteStatusConflictError,
-  RouteVehicleUnavailableError,
 } from "../errors/route-errors";
 
 import type { Route } from "../../dtos/route-dto";
@@ -131,13 +130,8 @@ class UpdateRouteUseCase {
         );
       }
 
-      if (findDriver.status !== "ACTIVE") {
-        throw new AppError(
-          new RouteDriverInactiveError().message,
-          400,
-          "ROUTE_DRIVER_INACTIVE",
-        );
-      }
+      // The same rule as the create (route-crew).
+      assertCrewFit({ driver: findDriver });
     }
 
     if (vehicleId) {
@@ -147,13 +141,7 @@ class UpdateRouteUseCase {
         throw new AppError("Veículo não encontrado.", 404, "VEHICLE_NOT_FOUND");
       }
 
-      if (isVehicleOutOfOperation(findVehicle.status)) {
-        throw new AppError(
-          new RouteVehicleUnavailableError().message,
-          400,
-          "ROUTE_VEHICLE_UNAVAILABLE",
-        );
-      }
+      assertCrewFit({ vehicle: findVehicle });
     }
 
     // Decision D10 (plan of 02/11/2026): a released route keeps a vehicle.

@@ -22,6 +22,7 @@
 - [Configurações da empresa](#configurações-da-empresa)
 - [Geocerca e coordenadas do endereço](#geocerca-e-coordenadas-do-endereço)
 - [Frota ligada à rota](#frota-ligada-à-rota)
+- [Motorista, veículo e rota: o que é aviso e o que é recusa](#motorista-veículo-e-rota-o-que-é-aviso-e-o-que-é-recusa)
 - [Entregas na rota: casos de borda](#entregas-na-rota-casos-de-borda)
 - [Rotas esquecidas, a lista e a torre](#rotas-esquecidas-a-lista-e-a-torre)
 - [Pausas do motorista](#pausas-do-motorista)
@@ -1889,6 +1890,107 @@ Checklist e abastecimento como parte da rota e da gestão da frota (plano de
   `/dashboard/service-order?new=1&vehicleId=…&checklistId=…&description=…`,
   com o veículo e os defeitos já escritos; nada bloqueia o veículo sozinho.
 
+## Motorista, veículo e rota: o que é aviso e o que é recusa
+
+As regras entre motorista, veículo e rota (decisões do dono de 10/11/2026,
+sobre FLEET-ASSIGN-1 a 5 e as decisões 8.2 e 8.3). O desenho: planejar é
+livre e avisa; liberar confere o que impediria a saída; a saída é onde o banco
+recusa.
+
+- **Planejar (criar, editar, atribuir em lote):** motorista ou veículo de
+  outra empresa responde como inexistente (404). Motorista inativo:
+  `400 ROUTE_DRIVER_INACTIVE`; veículo bloqueado ou inativo:
+  `400 ROUTE_VEHICLE_UNAVAILABLE`, com a placa ("O veículo ABC1D23 está
+  bloqueado e não pode receber uma rota."). Na planilha a mesma regra não
+  recusa nada: vira nota por linha (item **Planilha**, abaixo). Uma regra só,
+  `crewIssues` (`modules/route/usecases/shared/route-crew.ts`), para a tela
+  de Rotas, a atribuição em lote (que passa pela criação) e a planilha. Todo o
+  resto é aviso, nunca recusa (`GET /route/assignment-preview`,
+  `assignment-warnings.ts`):
+  o veículo cujo responsável é outro motorista (o substituto da decisão 8.2:
+  permitido, sem mexer em `Vehicle.driverId`, que é a custódia — a rota é o
+  uso do dia), o veículo ou o motorista numa rota em andamento ou em outra
+  rota do mesmo dia, a CNH vencida ou de categoria incompatível (continua só
+  aviso), a OS aberta e o checklist reprovado. Um veículo em rota (`IN_ROUTE`)
+  continua selecionável: o mesmo caminhão faz duas viagens no dia, e a semana
+  é planejada com ele na rua.
+- **Planilha:** a importação passa pela mesma regra. Motorista da CNH inativo
+  não gera rota; as entregas ficam, com a nota "Entrega importada, mas a rota
+  não foi criada: o motorista com CNH … está inativo." em cada linha, como o
+  motorista não encontrado. Veículo bloqueado ou inativo dá a rota sem
+  veículo, com "Rota criada sem veículo: o veículo … está bloqueado." (ou
+  "inativo"), como a placa não encontrada. O status do motorista é relido sob
+  trava na transação da rota (`assertDriverStillActive`; uma inativação no
+  mesmo instante cai na mesma nota), e as paradas ganham a linha "Adicionada à
+  Rota N (parada i)." no histórico, como na criação manual.
+- **Liberar:** além de paradas, veículo definido, motorista ativo e a filial
+  do checklist, recusa o veículo bloqueado ou inativo (por exemplo, bloqueado
+  depois do planejamento) com `400 ROUTE_VEHICLE_UNAVAILABLE`: "O veículo …
+  está bloqueado e não pode sair em rota. Troque o veículo da rota antes de
+  liberá-la." Sem trava: a saída confere de novo, então um bloqueio no
+  milissegundo seguinte ainda é pego lá. Devolver ao planejamento nunca é
+  recusado por isso. Veículo ou motorista numa rota em andamento não recusa a
+  liberação (a rota de amanhã é liberada com a de hoje na rua); o painel pede
+  confirmação ("Liberar mesmo assim") quando a rota é de hoje ou de um dia
+  passado (trajetto-ui, `docs/arquitetura.md`).
+- **Sair:** a cada saída, o veículo é conferido: de outra empresa, 404; fora de
+  operação, `400 ROUTE_VEHICLE_UNAVAILABLE` ("… Fale com o despachante.", para
+  o motorista). Veículo em outra rota em andamento: `409 ROUTE_VEHICLE_BUSY`,
+  lido antes da transação (`findRunningRouteOfVehicle`) para a frase nomear a
+  placa e a rota: "O veículo ABC1D23 ainda está na Rota 12, em andamento. Esta
+  rota só pode sair quando aquela terminar. Se precisar de outro veículo, fale
+  com o despachante." Sem o nome do outro motorista: o app do motorista não
+  mostra colegas. A garantia continua sendo o índice parcial
+  `route_active_vehicle_idx`; a saída que passa pela leitura e esbarra no
+  índice relê fora da transação abortada e responde a mesma frase. Motorista
+  com outra rota em andamento: `409 ROUTE_DRIVER_BUSY`, conferido sob trava
+  por motorista na transação da saída (FLEET-ASSIGN-3); o índice equivalente
+  no banco (`route_active_driver_idx`) é uma migration à parte, ainda não
+  aplicada. Quando a rota em andamento com o caminhão é do próprio motorista
+  (a 2ª viagem do dia no mesmo caminhão, com a 1ª ainda aberta), quem está
+  ocupado é ele: a resposta continua `409 ROUTE_DRIVER_BUSY`, "Você já está
+  com a Rota N em andamento…", a frase do aviso do app, e nunca a do veículo,
+  que o mandaria procurar outro caminhão (`findRunningRouteOfVehicle` traz o
+  motorista da rota; a releitura depois do índice decide igual). As respostas
+  ao reenvio idempotente do app vêm antes dessas leituras, então o outbox não
+  muda. Cada caso responde o código que respondia antes desta mudança; o que
+  muda é o texto do `ROUTE_VEHICLE_BUSY`, e o app mostra o texto como recebe.
+- **Status do veículo na rua (decisão 8.3):** `IN_ROUTE` é da rota. Com rota
+  em andamento, bloquear é permitido (roubo, acidente, pane); "Ativo" num
+  veículo bloqueado desbloqueia e grava `IN_ROUTE` ("Em rota"), nunca
+  `ACTIVE` — antes era recusado até a rota acabar, e um veículo bloqueado não
+  recebe abastecimento. Inativar e qualquer outra mudança continuam recusados
+  (`409 VEHICLE_IN_ACTIVE_ROUTE`), com a frase conforme o status atual (o
+  veículo já bloqueado ouvia "só é possível bloqueá-lo"). A escrita do
+  desbloqueio relê a rota em andamento com `FOR SHARE` na mesma transação
+  (`statusFromRunningRoute` em `updateVehicle` e `updateVehicleWithinLimit`),
+  antes de travar o veículo, na ordem em que o fim da rota trava (a rota,
+  depois o veículo): uma rota terminando no mesmo instante é esperada e então
+  vista encerrada (grava `ACTIVE`); uma rota ainda em andamento só termina
+  depois do commit, e o acerto de status do fim dela devolve o caminhão para
+  `ACTIVE`. As duas ordens estão provadas em `tests/E2E/route-lifecycle.test.ts`.
+  O desbloqueio continua passando pela escrita da frota contratada (M8), que
+  não recusa quem já ocupa vaga. O `message` do 200 diz o efeito nas rotas:
+  "Veículo desbloqueado. Como ele está numa rota em andamento, o status voltou
+  para “Em rota”."; ao bloquear com rotas planejadas ou liberadas, "Veículo
+  bloqueado. Ele está em 1 rota liberada: troque o veículo dessa rota antes da
+  saída."; com rota em andamento, o que fazer se ele não puder seguir (encerrar
+  com pendências e montar outra rota). Sem efeito nas rotas, "Veículo
+  atualizado com sucesso!". Regras puras em
+  `shared/vehicle/vehicle-status-change.ts` (`decideVehicleStatusChange`,
+  `statusChangeNotice`).
+- **Fica para depois:** trocar o veículo de uma rota já em andamento
+  (transbordo) — hoje o caminho é bloquear, encerrar com pendências e montar
+  outra rota com outro veículo — e o selo "veículo bloqueado" no cartão da
+  Torre.
+- **Compatibilidade:** rolling deploy nos dois sentidos, sem cabeçalho de
+  contrato novo. API nova com web antiga: a recusa nova da liberação chega ao
+  toast com a mensagem da API, e o desbloqueio na rua, antes 409, vira 200 com
+  a mensagem. Web nova com API antiga: a confirmação usa o
+  `assignment-preview`, que já existe, e o desbloqueio na rua segue recusado.
+  App (todas as versões): nenhum código novo; `409 ROUTE_VEHICLE_BUSY` e
+  `400 ROUTE_VEHICLE_UNAVAILABLE` só mudam de texto.
+
 ## Entregas na rota: casos de borda
 
 O que a rota e as entregas fazem quando o plano muda com o motorista na rua
@@ -2399,7 +2501,16 @@ por `UPDATE` condicional e conferido no começo de cada lote, com o batimento em
 pedido continua de onde ela parou. Com até 500 entregas a desfazer, o estorno
 roda no pedido e responde `200` com o resultado; acima disso vai para a mesma
 fila das importações e responde `202`, e o cliente acompanha `reversal` no
-detalhe da importação (`RUNNING`, `INTERRUPTED`, `DONE`).
+detalhe da importação (`RUNNING`, `INTERRUPTED`, `DONE`). Uma entrega que já
+saiu de "Pendente", tem ocorrência ou tem evento fica (o motivo vai no
+resultado), mas o evento `ROUTE_ADDED` não conta como trabalho
+(`PLAN_ONLY_EVENT_TYPES`): a planilha grava a linha "Adicionada à Rota N" em
+cada parada da rota que cria, e contá-la mantinha a rota e as entregas de uma
+importação intocada. Uma entrega ainda numa rota que fica é mantida pela
+parada aberta ("Está numa rota que não pode ser desfeita."), e sair de uma
+rota (retirada, movida, rota cancelada ou encerrada com pendências) grava um
+`ROUTE_REMOVED`, que continua contando. O mesmo filtro vale na decisão das
+rotas, na contagem do lote e na conferência do `DELETE`.
 
 **Exportações** (CSV e Excel, `src/shared/services/export/`) passam por
 `ExportPipeline`, que reserva uma vaga antes do primeiro byte: uma exportação

@@ -173,6 +173,7 @@ class InMemoryVehicleRepository implements IVehicleRepository {
       vehicleData,
       vehicleId,
       businessId,
+      statusFromRunningRoute,
     }: UpdateVehicle & { businessId: string },
     limit: { max: number },
   ): Promise<{ vehicle: Vehicle | null; activeCount: number }> {
@@ -196,9 +197,28 @@ class InMemoryVehicleRepository implements IVehicleRepository {
     }
 
     return {
-      vehicle: await this.updateVehicle({ vehicleData, vehicleId }),
+      vehicle: await this.updateVehicle({
+        vehicleData,
+        vehicleId,
+        statusFromRunningRoute,
+      }),
       activeCount,
     };
+  }
+
+  /** routeDerivedStatus, over the route twin: nothing to lock in memory. */
+  private routeDerivedStatus(
+    vehicleId: string,
+    businessId: string,
+  ): "IN_ROUTE" | "ACTIVE" {
+    const running = this.routeSource().some(
+      (route) =>
+        route.vehicleId === vehicleId &&
+        route.businessId === businessId &&
+        route.status === "IN_PROGRESS",
+    );
+
+    return running ? "IN_ROUTE" : "ACTIVE";
   }
 
   /** The same conditions as vehicleListWhere, over the array. */
@@ -343,6 +363,7 @@ class InMemoryVehicleRepository implements IVehicleRepository {
   async updateVehicle({
     vehicleData,
     vehicleId,
+    statusFromRunningRoute,
   }: UpdateVehicle): Promise<Vehicle> {
     const index = this.vehicles.findIndex(
       (vehicle) => vehicle.id === vehicleId,
@@ -352,8 +373,19 @@ class InMemoryVehicleRepository implements IVehicleRepository {
       throw recordNotFound("update");
     }
 
+    // The status is the route's, read with the write (see the real one).
+    const data = statusFromRunningRoute
+      ? {
+          ...vehicleData,
+          status: this.routeDerivedStatus(
+            vehicleId,
+            statusFromRunningRoute.businessId,
+          ),
+        }
+      : vehicleData;
+
     const filteredData = Object.fromEntries(
-      Object.entries(vehicleData).filter(([, value]) => value !== undefined),
+      Object.entries(data).filter(([, value]) => value !== undefined),
     );
 
     // Handle date conversions if needed

@@ -110,6 +110,13 @@ interface VehicleHarness {
   kind: Kind;
   repo: IVehicleRepository;
   id(key: string): string;
+
+  /**
+   * Puts a route of company A on the street with this vehicle (an
+   * IN_PROGRESS row the route repository would have written); the function
+   * it returns ends that route.
+   */
+  routeOnTheRoad(vehicleId: string): Promise<() => Promise<void>>;
 }
 
 async function seedVehicles(
@@ -373,6 +380,54 @@ function vehicleRepositoryContract(harness: () => VehicleHarness): void {
       // v2 is BLOCKED (outside the `where`): Prisma still positions on it,
       // and skip: 1 drops the first row after it (v1).
       expect((await page(h.id("v2"))).data).toEqual([]);
+    });
+  });
+
+  // Last: it adds a vehicle and a route the reads above do not expect.
+  describe("the status a truck taken out of BLOCKED gets (decision 8.3)", () => {
+    it("is IN_ROUTE while a route of the company runs with it, ACTIVE once none does", async () => {
+      const h = harness();
+      const truck = await h.repo.createVehicle(base(9, { status: "BLOCKED" }));
+
+      const unblock = () =>
+        h.repo.updateVehicle({
+          vehicleData: { status: "ACTIVE", description: "Desbloqueado" },
+          vehicleId: truck.id,
+          statusFromRunningRoute: { businessId: A },
+        });
+
+      const endRoute = await h.routeOnTheRoad(truck.id);
+
+      const onTheRoad = await unblock();
+      expect(onTheRoad.status).toBe("IN_ROUTE");
+      expect(onTheRoad.description).toBe("Desbloqueado");
+
+      // Another company's scope never sees A's route.
+      expect(
+        (
+          await h.repo.updateVehicle({
+            vehicleData: { status: "ACTIVE" },
+            vehicleId: truck.id,
+            statusFromRunningRoute: { businessId: B },
+          })
+        ).status,
+      ).toBe("ACTIVE");
+
+      await endRoute();
+
+      expect((await unblock()).status).toBe("ACTIVE");
+
+      const { vehicle } = await h.repo.updateVehicleWithinLimit(
+        {
+          vehicleData: { status: "IN_ROUTE" },
+          vehicleId: truck.id,
+          businessId: A,
+          statusFromRunningRoute: { businessId: A },
+        },
+        { max: 0 },
+      );
+
+      expect(vehicle?.status).toBe("ACTIVE");
     });
   });
 }

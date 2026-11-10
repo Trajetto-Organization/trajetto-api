@@ -45,7 +45,13 @@ import database from "@/../infra/database";
 import { businessToday, resolveTimeZone } from "@/shared/time/business-day";
 import { Prisma } from "@prisma/client";
 import { WebhookFanOutService } from "@/shared/integration/webhook-fan-out-service";
-import { RouteCodeTakenError } from "@/modules/route/usecases/errors/route-errors";
+import {
+  RouteCodeTakenError,
+  RouteDriverInactiveError,
+} from "@/modules/route/usecases/errors/route-errors";
+import { crewIssues } from "@/modules/route/usecases/shared/route-crew";
+import { OUT_OF_OPERATION_LABELS } from "@/shared/route/route-rules";
+import { assertDriverStillActive } from "@/modules/route/usecases/shared/driver-still-active";
 import { ShipperInactiveError } from "@/modules/shipper/usecases/errors/shipper-errors";
 import { logger } from "@/shared/logging/logger";
 import {
@@ -639,6 +645,7 @@ class ImportDeliverySpreadsheetUseCase {
     progress.line = null;
 
     const routes = await this.buildRoutes(
+      userId,
       businessId,
       record.id,
       parsed.rows,
@@ -818,8 +825,14 @@ class ImportDeliverySpreadsheetUseCase {
    * deliveries: they were imported and they are fine, they simply have no
    * route. The report says so on every line of the group, which is what lets
    * the dispatcher fix the CNH and build the route in the panel.
+   *
+   * The crew passes the rule the Rotas screen applies (route-crew): an
+   * inactive driver gets no route, a vehicle out of operation stays off it.
+   * Both used to go through — a planned route for an inactive driver on a
+   * blocked truck — because this path built its routes on its own.
    */
   private async buildRoutes(
+    userId: string,
     businessId: string,
     importId: string,
     parsedRows: ParsedRow[],
@@ -873,6 +886,15 @@ class ImportDeliverySpreadsheetUseCase {
         continue;
       }
 
+      const driverInactive = `Entrega importada, mas a rota não foi criada: o motorista com CNH ${route.driverCnh} está inativo.`;
+
+      // As the driver not found: the deliveries stay, without a route.
+      if (crewIssues({ driver: findDriver }).length > 0) {
+        for (const row of group) note(row.line, driverInactive);
+
+        continue;
+      }
+
       let vehicleId: string | null = null;
 
       if (route.vehiclePlate) {
@@ -882,6 +904,10 @@ class ImportDeliverySpreadsheetUseCase {
           businessId,
         );
 
+        const [unavailable] = findVehicle
+          ? crewIssues({ vehicle: findVehicle })
+          : [];
+
         if (!findVehicle) {
           for (const row of group) {
             note(
@@ -889,10 +915,24 @@ class ImportDeliverySpreadsheetUseCase {
               `Rota criada sem veículo: placa ${route.vehiclePlate} não encontrada.`,
             );
           }
+        } else if (unavailable?.code === "ROUTE_VEHICLE_UNAVAILABLE") {
+          // As the plate not found: the route is built without the truck,
+          // for the dispatcher to give it another one before the release.
+          for (const row of group) {
+            note(
+              row.line,
+              `Rota criada sem veículo: o veículo ${unavailable.plate} está ` +
+                `${OUT_OF_OPERATION_LABELS[unavailable.status]}.`,
+            );
+          }
         } else {
           vehicleId = findVehicle.id!;
         }
       }
+
+      const deliveryIds = group.map((row) =>
+        createdDeliveryIdByLine.get(row.line)!,
+      );
 
       /**
        * The route and a `delivery.assigned` per stop, in one commit — the same
@@ -902,6 +942,18 @@ class ImportDeliverySpreadsheetUseCase {
        */
       const build = () =>
         database.$transaction(async (tx) => {
+          // The check above read the status before this transaction; a
+          // deactivation committing since is seen here, under the driver
+          // row's lock, as the Rotas screen's create does.
+          await assertDriverStillActive(this.route, tx, {
+            driverId: findDriver.id!,
+            businessId,
+            refusal: {
+              message: new RouteDriverInactiveError().message,
+              code: "ROUTE_DRIVER_INACTIVE",
+            },
+          });
+
           const built = await this.route.createRoute(
             {
               businessId,
@@ -911,11 +963,26 @@ class ImportDeliverySpreadsheetUseCase {
               name: route.name,
               scheduled_date:
                 route.date ?? first.scheduled_date ?? businessToday(timeZone),
-              deliveryIds: group.map((row) =>
-                createdDeliveryIdByLine.get(row.line)!,
-              ),
+              deliveryIds,
             },
             tx,
+          );
+
+          // The timeline line each delivery gets when it joins a plan, as
+          // the Rotas screen writes it: a document's planning history does
+          // not depend on which path built its route.
+          await this.route.recordPlanEvents(
+            tx,
+            deliveryIds.map((deliveryId, index) => ({
+              deliveryId,
+              note: `Adicionada à Rota ${built.code} (parada ${index + 1}).`,
+            })),
+            {
+              type: "ROUTE_ADDED",
+              routeId: built.id,
+              businessId,
+              actorId: userId,
+            },
           );
 
           for (const stop of built.stops) {
@@ -948,8 +1015,17 @@ class ImportDeliverySpreadsheetUseCase {
           stops: createdRoute.stops.length,
         });
       } catch (error) {
+        // Deactivated between the check and the write: said as such.
+        const inactive =
+          error instanceof AppError && error.code === "ROUTE_DRIVER_INACTIVE";
+
         for (const row of group) {
-          note(row.line, "Entrega importada, mas a rota não pôde ser criada.");
+          note(
+            row.line,
+            inactive
+              ? driverInactive
+              : "Entrega importada, mas a rota não pôde ser criada.",
+          );
         }
       }
     }

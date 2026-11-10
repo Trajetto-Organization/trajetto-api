@@ -144,6 +144,7 @@ function makeContext() {
       routeRepository,
       userRepository,
       driverRepository,
+      vehicleRepository,
       notificationService,
       outboxStub,
       webhookStub.asService(),
@@ -419,6 +420,95 @@ describe("releasing a route", () => {
     ).rejects.toMatchObject({ code: "ROUTE_NOT_RELEASABLE" });
   });
 
+  it("refuses a route whose vehicle was blocked after planning", async () => {
+    // Red before: the release only asked whether a vehicle was set, and the
+    // driver found out at the yard, when "Iniciar rota" was refused.
+    const delivery = await seedDelivery(context);
+    const route = await createRoute(context, [delivery]);
+
+    context.vehicleRepository.vehicles[0].status = "BLOCKED";
+    published.length = 0;
+
+    await expect(
+      context.release.execute({
+        userId: DISPATCHER,
+        businessId: BUSINESS,
+        routeId: route.id,
+      }),
+    ).rejects.toMatchObject({
+      statusCode: 400,
+      code: "ROUTE_VEHICLE_UNAVAILABLE",
+      message:
+        "O veículo ABC1D23 está bloqueado e não pode sair em rota. " +
+        "Troque o veículo da rota antes de liberá-la.",
+    });
+
+    // Nothing handed over: no write, no push to the driver, no event.
+    expect(context.routeRepository.routes[0].status).toBe("PLANNED");
+    expect(published.map((event) => event.topic)).not.toContain(
+      "route.released",
+    );
+    expect(webhookStub.topics()).not.toContain("route.released");
+  });
+
+  it("names an inactive vehicle as inactive", async () => {
+    const delivery = await seedDelivery(context);
+    const route = await createRoute(context, [delivery]);
+
+    context.vehicleRepository.vehicles[0].status = "INACTIVE";
+
+    await expect(
+      context.release.execute({
+        userId: DISPATCHER,
+        businessId: BUSINESS,
+        routeId: route.id,
+      }),
+    ).rejects.toMatchObject({
+      code: "ROUTE_VEHICLE_UNAVAILABLE",
+      message: expect.stringContaining("O veículo ABC1D23 está inativo"),
+    });
+  });
+
+  it("still releases a route whose vehicle is out on another route", async () => {
+    // Tomorrow's route is handed over while today's is on the street; the
+    // departure is what waits for the truck (and the web asks first).
+    const delivery = await seedDelivery(context);
+    const route = await createRoute(context, [delivery]);
+
+    context.vehicleRepository.vehicles[0].status = "IN_ROUTE";
+
+    const { route: released } = await context.release.execute({
+      userId: DISPATCHER,
+      businessId: BUSINESS,
+      routeId: route.id,
+    });
+
+    expect(released.status).toBe("RELEASED");
+  });
+
+  it("still pulls a route back to planning with its vehicle blocked", async () => {
+    // The way out of the refusal above: back to planning, swap the truck.
+    const delivery = await seedDelivery(context);
+    const route = await createRoute(context, [delivery]);
+
+    await context.release.execute({
+      userId: DISPATCHER,
+      businessId: BUSINESS,
+      routeId: route.id,
+    });
+
+    context.vehicleRepository.vehicles[0].status = "BLOCKED";
+
+    const { route: planned } = await context.release.execute({
+      userId: DISPATCHER,
+      businessId: BUSINESS,
+      routeId: route.id,
+      released: false,
+    });
+
+    expect(planned.status).toBe("PLANNED");
+  });
+
   it("answers 404 — not 403 — for a route of another company", async () => {
     // Deliberately indistinguishable from a route that does not exist. A
     // separate "exists but is not yours" refusal is an oracle: it tells whoever
@@ -663,6 +753,180 @@ describe("the departure", () => {
         routeId: second.id,
       }),
     ).rejects.toMatchObject({ statusCode: 409, code: "ROUTE_VEHICLE_BUSY" });
+  });
+
+  describe("telling the driver which truck is still out", () => {
+    async function secondRouteOnTheBusyTruck(): Promise<string> {
+      const first = await releasedRoute();
+
+      await context.start.execute({
+        userId: DRIVER_USER,
+        businessId: BUSINESS,
+        routeId: first,
+      });
+
+      const second = await context.create.execute({
+        userId: DISPATCHER,
+        businessId: BUSINESS,
+        driverId: OTHER_DRIVER,
+        vehicleId: VEHICLE,
+        scheduled_date: TOMORROW,
+        deliveryIds: [await seedDelivery(context)],
+      });
+
+      await context.release.execute({
+        userId: DISPATCHER,
+        businessId: BUSINESS,
+        routeId: second.id,
+      });
+
+      context.userRepository.user.push({
+        id: "second-driver-user",
+        role: "BUSINESS_USER",
+        businessId: BUSINESS,
+        driverId: OTHER_DRIVER,
+      } as User);
+
+      return second.id;
+    }
+
+    const RUNNING_ROUTE_SENTENCE =
+      "O veículo ABC1D23 ainda está na Rota 1, em andamento. Esta rota só " +
+      "pode sair quando aquela terminar. Se precisar de outro veículo, fale " +
+      "com o despachante.";
+
+    it("names the plate and the running route when the truck is out", async () => {
+      // Red before: "Encerre a rota atual ou escolha outro veículo", read by
+      // a driver whose app can do neither. Never the other driver's name.
+      const second = await secondRouteOnTheBusyTruck();
+
+      await expect(
+        context.start.execute({
+          userId: "second-driver-user",
+          businessId: BUSINESS,
+          routeId: second,
+        }),
+      ).rejects.toMatchObject({
+        statusCode: 409,
+        code: "ROUTE_VEHICLE_BUSY",
+        message: RUNNING_ROUTE_SENTENCE,
+      });
+
+      expect(
+        context.routeRepository.routes.find((route) => route.id === second)
+          ?.status,
+      ).toBe("RELEASED");
+    });
+
+    it("says the same when only the index caught a departure that raced past the read", async () => {
+      const second = await secondRouteOnTheBusyTruck();
+
+      // The first read misses the running route (it committed a moment
+      // later); the index refuses the write, and the re-read names it.
+      vi.spyOn(
+        context.routeRepository,
+        "findRunningRouteOfVehicle",
+      ).mockResolvedValueOnce(null);
+
+      await expect(
+        context.start.execute({
+          userId: "second-driver-user",
+          businessId: BUSINESS,
+          routeId: second,
+        }),
+      ).rejects.toMatchObject({
+        statusCode: 409,
+        code: "ROUTE_VEHICLE_BUSY",
+        message: RUNNING_ROUTE_SENTENCE,
+      });
+    });
+
+    /** The day's second trip: the same driver, on the same truck. */
+    async function secondTripOnTheSameTruck(): Promise<string> {
+      const first = await releasedRoute();
+
+      await context.start.execute({
+        userId: DRIVER_USER,
+        businessId: BUSINESS,
+        routeId: first,
+      });
+
+      return releasedRoute();
+    }
+
+    const DRIVER_BUSY_SENTENCE =
+      "Você já está com a Rota 1 em andamento. Conclua essa rota (ou peça ao " +
+      "despachante para cancelá-la) antes de iniciar outra.";
+
+    it("tells the driver that THEY are busy when the running route on the truck is their own", async () => {
+      // The truck's sentence ("se precisar de outro veículo") would send the
+      // driver after another truck, which would not help: they are the one
+      // still out, and the app's busy notice says the same as this.
+      const second = await secondTripOnTheSameTruck();
+
+      await expect(
+        context.start.execute({
+          userId: DRIVER_USER,
+          businessId: BUSINESS,
+          routeId: second,
+        }),
+      ).rejects.toMatchObject({
+        statusCode: 409,
+        code: "ROUTE_DRIVER_BUSY",
+        message: DRIVER_BUSY_SENTENCE,
+      });
+
+      expect(
+        context.routeRepository.routes.find((route) => route.id === second)
+          ?.status,
+      ).toBe("RELEASED");
+    });
+
+    it("says the same when only the index caught it, after the re-read", async () => {
+      const second = await secondTripOnTheSameTruck();
+
+      // Both reads before the write missed the running route; the index
+      // refuses the write, and the re-read finds it is the driver's own.
+      vi.spyOn(
+        context.routeRepository,
+        "findRunningRouteOfVehicle",
+      ).mockResolvedValueOnce(null);
+      vi.spyOn(
+        context.routeRepository,
+        "assertDriverFreeToDepart",
+      ).mockResolvedValueOnce(undefined);
+
+      await expect(
+        context.start.execute({
+          userId: DRIVER_USER,
+          businessId: BUSINESS,
+          routeId: second,
+        }),
+      ).rejects.toMatchObject({
+        statusCode: 409,
+        code: "ROUTE_DRIVER_BUSY",
+        message: DRIVER_BUSY_SENTENCE,
+      });
+    });
+  });
+
+  it("tells the driver a blocked truck cannot leave, and to call the dispatcher", async () => {
+    const routeId = await releasedRoute();
+
+    context.vehicleRepository.vehicles[0].status = "BLOCKED";
+
+    await expect(
+      context.start.execute({
+        userId: DRIVER_USER,
+        businessId: BUSINESS,
+        routeId,
+      }),
+    ).rejects.toMatchObject({
+      statusCode: 400,
+      code: "ROUTE_VEHICLE_UNAVAILABLE",
+      message:
+        "O veículo ABC1D23 está bloqueado e não pode sair em rota. Fale com o despachante.",
+    });
   });
 
   it("still allows PLANNING a second route on the same vehicle", async () => {

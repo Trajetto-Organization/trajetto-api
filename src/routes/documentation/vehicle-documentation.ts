@@ -268,7 +268,7 @@ const vehicleResponses = {
     "VEHICLE_PLATE_TAKEN ou VEHICLE_RENAVAM_TAKEN (já existe nesta empresa) e VEHICLE_LIMIT_REACHED (frota contratada cheia).",
   ),
   updateConflict: errorResponse.describe(
-    "VEHICLE_PLATE_TAKEN, VEHICLE_RENAVAM_TAKEN, VEHICLE_LIMIT_REACHED (reativação além do contrato), VEHICLE_IN_ACTIVE_ROUTE (com rota em andamento só é possível bloquear) ou VEHICLE_HAS_OPEN_ROUTES (inativar com rotas planejadas, liberadas ou em andamento; a mensagem traz as contagens).",
+    "VEHICLE_PLATE_TAKEN, VEHICLE_RENAVAM_TAKEN, VEHICLE_LIMIT_REACHED (reativação além do contrato), VEHICLE_IN_ACTIVE_ROUTE (com rota em andamento só é possível bloquear ou desbloquear, que volta para IN_ROUTE) ou VEHICLE_HAS_OPEN_ROUTES (inativar com rotas planejadas, liberadas ou em andamento; a mensagem traz as contagens).",
   ),
   deleteConflict: errorResponse.describe(
     "VEHICLE_IN_USE: multas, abastecimentos, OS, checklists, contas a pagar, entregas ou rotas ainda apontam para o veículo; a mensagem traz a contagem e o que fazer.",

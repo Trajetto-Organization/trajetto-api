@@ -20,7 +20,11 @@ import {
 import { WebhookFanOutService } from "@/shared/integration/webhook-fan-out-service";
 import { routeEventPayload } from "@/shared/integration/announce";
 
-import { canTransitionRoute, isStopOpen } from "@/shared/route/route-rules";
+import {
+  canTransitionRoute,
+  isStopOpen,
+  vehicleUnavailableReason,
+} from "@/shared/route/route-rules";
 import { isVehicleOutOfOperation } from "@/shared/vehicle/vehicle-rules";
 
 import {
@@ -28,7 +32,6 @@ import {
   RouteNotFoundError,
   RouteStatusConflictError,
   RouteVehicleBusyError,
-  RouteVehicleUnavailableError,
 } from "../errors/route-errors";
 
 import type { Route } from "../../dtos/route-dto";
@@ -185,11 +188,48 @@ class StartRouteUseCase {
       throw new AppError("Veículo não encontrado.", 404, "VEHICLE_NOT_FOUND");
     }
 
+    // Worded for the driver, who reads it in the app and cannot pick
+    // another truck there.
     if (isVehicleOutOfOperation(findVehicle.status)) {
       throw new AppError(
-        new RouteVehicleUnavailableError().message,
+        vehicleUnavailableReason(
+          findVehicle.license_plate,
+          findVehicle.status,
+          "depart",
+        ),
         400,
         "ROUTE_VEHICLE_UNAVAILABLE",
+      );
+    }
+
+    // The truck still out with another route: refused here, before the
+    // transaction, so the sentence can say which plate and which route
+    // (the index below only knows a constraint was hit). The index stays
+    // the guarantee against a departure racing past this read. The resend
+    // answers above come first, so the offline queue sees no change.
+    //
+    // Not when the running route is this driver's own (the second trip of
+    // the day on the same truck): the one who is busy is the driver, and
+    // "se precisar de outro veículo" would send them after a truck that
+    // would not help. The transaction's per-driver check answers that one,
+    // ROUTE_DRIVER_BUSY under its lock, as it did before this read existed.
+    const runningWithVehicle = await this.route.findRunningRouteOfVehicle(
+      departingVehicleId,
+      businessId,
+      routeId,
+    );
+
+    if (
+      runningWithVehicle &&
+      runningWithVehicle.driverId !== findRoute.driverId
+    ) {
+      throw new AppError(
+        new RouteVehicleBusyError(
+          findVehicle.license_plate,
+          runningWithVehicle.code,
+        ).message,
+        409,
+        "ROUTE_VEHICLE_BUSY",
       );
     }
 
@@ -332,9 +372,32 @@ class StartRouteUseCase {
       return started;
     } catch (error) {
       // The truck is on one road. Raised by the partial unique index, so it
-      // holds even against a request this process never validated.
+      // holds even against a request this process never validated — here, a
+      // departure that raced past the read above. Read again outside the
+      // aborted transaction for the same sentence; the bare one if the other
+      // route already ended in between, or if the read fails (the refusal
+      // stands either way).
       if (error instanceof RouteVehicleBusyError) {
-        throw new AppError(error.message, 409, "ROUTE_VEHICLE_BUSY");
+        const running = await this.route
+          .findRunningRouteOfVehicle(departingVehicleId, businessId, routeId)
+          .catch(() => null);
+
+        // The driver's own route on the truck: the driver's refusal, for
+        // the reason of the read before the transaction.
+        if (running && running.driverId === findRoute.driverId) {
+          throw new AppError(
+            new RouteDriverBusyError(running.code).message,
+            409,
+            "ROUTE_DRIVER_BUSY",
+          );
+        }
+
+        throw new AppError(
+          new RouteVehicleBusyError(findVehicle.license_plate, running?.code)
+            .message,
+          409,
+          "ROUTE_VEHICLE_BUSY",
+        );
       }
 
       // The driver is already out with another route. A real refusal, not a

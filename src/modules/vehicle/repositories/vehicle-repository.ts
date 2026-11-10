@@ -80,6 +80,35 @@ function withBranchName<
   };
 }
 
+/**
+ * The status of a truck taken out of BLOCKED while its route may still be on
+ * the road (decision 8.3): IN_ROUTE while a route of this company runs with
+ * it, ACTIVE once none does.
+ *
+ * FOR SHARE on that route row, inside the caller's transaction. A route
+ * closing at this instant holds its row (the UPDATE of its status), so this
+ * waits, re-reads the row as committed — no longer IN_PROGRESS — and answers
+ * ACTIVE; the closing's own vehicle sync had nothing to do (the truck was
+ * still BLOCKED). A route still running cannot close until this commits, and
+ * its sync then moves the IN_ROUTE written here back to ACTIVE. Both orders
+ * end right; neither leaves an "Em rota" with no route out.
+ */
+async function routeDerivedStatus(
+  tx: Prisma.TransactionClient,
+  vehicleId: string,
+  businessId: string,
+): Promise<"IN_ROUTE" | "ACTIVE"> {
+  const running = await tx.$queryRaw<Array<{ id: string }>>`
+    SELECT "id" FROM "route"
+     WHERE "vehicleId" = ${vehicleId}
+       AND "businessId" = ${businessId}
+       AND "status" = 'IN_PROGRESS'
+     LIMIT 1
+       FOR SHARE`;
+
+  return running.length > 0 ? "IN_ROUTE" : "ACTIVE";
+}
+
 class VehicleRepository implements IVehicleRepository {
   constructor(private prisma = database) {}
 
@@ -172,11 +201,34 @@ class VehicleRepository implements IVehicleRepository {
   }
 
   async updateVehicle(
-    { vehicleData, vehicleId }: UpdateVehicle,
+    { vehicleData, vehicleId, statusFromRunningRoute }: UpdateVehicle,
     tx?: Prisma.TransactionClient,
   ): Promise<Vehicle> {
+    // The derived status and the write commit together, or the lock that
+    // makes the read honest is gone before the write lands.
+    if (statusFromRunningRoute && !tx) {
+      return this.prisma.$transaction((client) =>
+        this.updateVehicle(
+          { vehicleData, vehicleId, statusFromRunningRoute },
+          client,
+        ),
+      );
+    }
+
+    const data =
+      statusFromRunningRoute && tx
+        ? {
+            ...vehicleData,
+            status: await routeDerivedStatus(
+              tx,
+              vehicleId,
+              statusFromRunningRoute.businessId,
+            ),
+          }
+        : vehicleData;
+
     const filteredData = Object.fromEntries(
-      Object.entries(vehicleData).filter(([_, value]) => value !== undefined),
+      Object.entries(data).filter(([_, value]) => value !== undefined),
     );
 
     const updateVehicle = await (tx ?? this.prisma).vehicle.update({
@@ -206,6 +258,7 @@ class VehicleRepository implements IVehicleRepository {
       vehicleData,
       vehicleId,
       businessId,
+      statusFromRunningRoute,
     }: UpdateVehicle & { businessId: string },
     limit: { max: number },
   ): Promise<{ vehicle: Vehicle | null; activeCount: number }> {
@@ -215,6 +268,20 @@ class VehicleRepository implements IVehicleRepository {
         WHERE "id" = ${businessId}
         FOR NO KEY UPDATE
       `;
+
+      // Before the vehicle's own lock below, in the order a route ending
+      // takes them (the route row, then the vehicle): the other order could
+      // deadlock against that ending.
+      const data = statusFromRunningRoute
+        ? {
+            ...vehicleData,
+            status: await routeDerivedStatus(
+              tx,
+              vehicleId,
+              statusFromRunningRoute.businessId,
+            ),
+          }
+        : vehicleData;
 
       // Locked as well: an inactivation (which takes no company lock) either
       // lands before this read or waits for this write.
@@ -240,7 +307,10 @@ class VehicleRepository implements IVehicleRepository {
         return { vehicle: null, activeCount };
       }
 
-      const vehicle = await this.updateVehicle({ vehicleData, vehicleId }, tx);
+      const vehicle = await this.updateVehicle(
+        { vehicleData: data, vehicleId },
+        tx,
+      );
 
       return { vehicle, activeCount };
     });

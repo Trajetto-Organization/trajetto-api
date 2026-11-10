@@ -6,6 +6,7 @@ import { ReleaseRouteUseCase } from "@/modules/route/usecases/release-route/rele
 import { InMemoryRouteRepository } from "@/modules/route/repositories/in-memory/in-memory-route-repository";
 import { InMemoryUserRepository } from "@/modules/user/repositories/in-memory/in-memory-user-repository";
 import { InMemoryDriverRepository } from "@/modules/driver/repositories/in-memory/in-memory-driver-repository";
+import { InMemoryVehicleRepository } from "@/modules/vehicle/repositories/in-memory/in-memory-vehicle-repository";
 import { InMemoryWebhookFanOutService } from "@/shared/integration/in-memory/in-memory-webhook-fan-out-service";
 
 import type { NotificationService } from "@/shared/services/notification-service";
@@ -34,6 +35,7 @@ async function main(): Promise<void> {
     routes,
     new InMemoryUserRepository(),
     new InMemoryDriverRepository(),
+    new InMemoryVehicleRepository(),
     {
       createActivityIfEnabled: async () => undefined,
     } as unknown as NotificationService,

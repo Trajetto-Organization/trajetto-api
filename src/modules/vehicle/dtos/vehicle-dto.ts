@@ -98,6 +98,15 @@ interface UpdateVehicleProps {
 interface UpdateVehicle {
   vehicleData: UpdateVehicleProps;
   vehicleId: string;
+
+  /**
+   * Unblocking a truck whose route is still on the road (decision 8.3): the
+   * status is the route's, read in the write's own transaction under the
+   * running route's lock — IN_ROUTE while it runs, ACTIVE once it ended —
+   * instead of `vehicleData.status`, which the caller decided on an older
+   * read. The company scopes that read.
+   */
+  statusFromRunningRoute?: { businessId: string };
 }
 
 /**

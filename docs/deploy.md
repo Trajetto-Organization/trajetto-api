@@ -2450,6 +2450,39 @@ tamanho era conferido. O detalhe está em
   subir: esses motoristas já não entram no app pelo CPF e, depois da subida,
   editar ou inativar o cadastro deles pede o CPF certo.
 
+**Regras entre motorista, veículo e rota (10/11/2026).** Sem migration, sem
+variável nova e sem rota nova. A regra está em
+[arquitetura.md (Motorista, veículo e rota: o que é aviso e o que é recusa)](./arquitetura.md#motorista-veículo-e-rota-o-que-é-aviso-e-o-que-é-recusa).
+
+- **A ordem não importa**; pelo padrão, API e depois a web. A web anterior
+  mostra no toast a recusa nova da liberação e a mensagem do desbloqueio. A
+  web nova contra a API anterior pede a confirmação pela
+  `GET /route/assignment-preview`, que já existe, e o desbloqueio na rua
+  continua recusado. O app não muda e não precisa de OTA:
+  `409 ROUTE_VEHICLE_BUSY` e `400 ROUTE_VEHICLE_UNAVAILABLE` só mudam de
+  texto, e o reenvio da saída responde como antes.
+- **O que a operação nota:** liberar uma rota com o veículo bloqueado ou
+  inativo passa a ser recusado no escritório (`400 ROUTE_VEHICLE_UNAVAILABLE`,
+  com a placa), e não só no pátio. A planilha deixa de criar rota para o
+  motorista inativo (as entregas entram, com nota por linha) e cria a rota
+  sem veículo quando o veículo está bloqueado ou inativo. Desbloquear um
+  veículo com a rota na rua, antes `409 VEHICLE_IN_ACTIVE_ROUTE`, responde 200
+  e grava "Em rota". Na web, liberar a rota de hoje com o caminhão ou o
+  motorista em outra rota em andamento pede "Liberar mesmo assim".
+- **Durante o rollout**, a réplica anterior ainda cria a rota da planilha para
+  o motorista inativo e recusa o desbloqueio na rua. O estorno feito por ela
+  de uma planilha que esta versão importou mantém a rota e as entregas
+  roteadas (ela conta a linha nova "Adicionada à Rota N" como trabalho do
+  motorista). Para um estorno que importa, espere o rollout terminar.
+- **Fica para a release do índice `route_active_driver_idx`** (uma rota em
+  andamento por motorista, no banco). Antes dela, rode no staging e na
+  produção, no psql do Database PostgreSQL do Dokploy (só leitura):
+  ```sql
+  SELECT "driverId", count(*) FROM route WHERE status = 'IN_PROGRESS' GROUP BY 1 HAVING count(*) > 1;
+  ```
+  Se aparecer alguma linha, encerre com pendências ou cancele as rotas
+  sobrando desse motorista; senão a migration falha e não sobe.
+
 **Contract pendente (release seguinte): o 2FA sem corpo.** `PATCH
 /user/twofactor` sem corpo ainda inverte o estado, sem senha, só para a web
 da release anterior que roda durante o rollout. Cada uso deixa a linha `warn`

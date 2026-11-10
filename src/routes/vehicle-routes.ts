@@ -188,7 +188,7 @@ async function vehicleRoutes(app: FastifyInstance) {
         tags: ["vehicle"],
         summary: "Atualiza um veículo",
         description:
-          "Atualiza só os campos enviados (as mesmas regras do cadastro). A quilometragem atual só é corrigida pelo MASTER. Status: IN_ROUTE é da rota; com rota em andamento só é possível bloquear; inativar com rota planejada, liberada ou em andamento é recusado com as contagens; reativar respeita a frota contratada.",
+          'Atualiza só os campos enviados (as mesmas regras do cadastro). A quilometragem atual só é corrigida pelo MASTER. Status: IN_ROUTE é da rota; com rota em andamento só é possível bloquear o veículo ou desbloqueá-lo — ACTIVE num veículo bloqueado com rota em andamento grava IN_ROUTE (o status é da rota, relido sob trava da rota na mesma transação: se ela terminou nesse meio-tempo, grava ACTIVE) —, e qualquer outra mudança é recusada com 409 VEHICLE_IN_ACTIVE_ROUTE; inativar com rota planejada, liberada ou em andamento é recusado com as contagens; reativar respeita a frota contratada. A `message` de 200 explica o efeito nas rotas quando há: "Veículo desbloqueado. Como ele está numa rota em andamento, o status voltou para “Em rota”."; ao bloquear com rotas planejadas ou liberadas, "Veículo bloqueado. Ele está em <N rotas>: troque o veículo dessa(s) rota(s) antes da saída."; com rota em andamento, o que fazer se ele não puder seguir. Sem efeito nas rotas, "Veículo atualizado com sucesso!".',
         params: vehicleSchemas.vehicleBusinessParams,
         body: vehicleSchemas.updateVehicle,
         response: {

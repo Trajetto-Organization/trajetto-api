@@ -24,6 +24,7 @@ import { OPEN_STOP_STATUSES } from "@/shared/route/route-rules";
 import { ImportReversalLeaseLostError } from "../usecases/errors/import-errors";
 import {
   KEEP_REASON,
+  PLAN_ONLY_EVENT_TYPES,
   REVERSAL_BATCH_SIZE,
   REVERSAL_TRANSACTION_OPTIONS,
   deliveryKeepReason,
@@ -129,6 +130,16 @@ const IMPORT_SUMMARY_COLUMNS = {
   created_at: true,
   updated_at: true,
 } satisfies Prisma.ImportSelect;
+
+/**
+ * A delivery event that means somebody worked the delivery: every type but
+ * the plan's own ROUTE_ADDED, which the upload writes for the routes it
+ * builds (PLAN_ONLY_EVENT_TYPES). The same filter in the route decision, the
+ * batch's count and the delete's re-check, so the three cannot disagree.
+ */
+const WORKED_EVENT = {
+  type: { notIn: [...PLAN_ONLY_EVENT_TYPES] },
+} satisfies Prisma.DeliveryEventWhereInput;
 
 class ImportRepository implements IImportRepository {
   constructor(private prisma = database) {}
@@ -562,7 +573,7 @@ class ImportRepository implements IImportRepository {
                           { importId: { not: importId } },
                           { businessId: { not: businessId } },
                           { status: { not: "PENDING" } },
-                          { events: { some: {} } },
+                          { events: { some: WORKED_EVENT } },
                           { occurrences: { some: {} } },
                         ],
                       },
@@ -657,7 +668,12 @@ class ImportRepository implements IImportRepository {
         invoice_number: true,
         city: true,
         uf: true,
-        _count: { select: { events: true, occurrences: true } },
+        _count: {
+          select: {
+            events: { where: WORKED_EVENT },
+            occurrences: true,
+          },
+        },
         // The open stops left. The upload's routes that go are already gone
         // (reverseRoutes), so an open stop here is on a route that stays — a
         // route built by hand in the panel, or one of the upload's that was
@@ -712,7 +728,7 @@ class ImportRepository implements IImportRepository {
               id: { in: deletableIds },
               businessId,
               status: "PENDING",
-              events: { none: {} },
+              events: { none: WORKED_EVENT },
               occurrences: { none: {} },
               stops: { none: { status: { in: OPEN_STOP_STATUSES } } },
             },

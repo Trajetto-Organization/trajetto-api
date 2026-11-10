@@ -53,6 +53,8 @@ interface ReversibleDelivery {
   invoice_number?: string | null;
   city?: string;
   uf?: string;
+
+  /** The worked events: outside PLAN_ONLY_EVENT_TYPES, as the real count. */
   eventCount?: number;
   occurrenceCount?: number;
 }

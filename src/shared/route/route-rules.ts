@@ -1,4 +1,5 @@
 import type { DeliveryStatus } from "@/shared/delivery/delivery-rules";
+import type { OutOfOperationStatus } from "@/shared/vehicle/vehicle-rules";
 
 /**
  * Route state machine, kept pure so it can be unit-tested.
@@ -154,6 +155,50 @@ function canReleaseRoute(candidate: ReleaseCandidate): TransitionVerdict {
   }
 
   return allow();
+}
+
+/**
+ * The state of a vehicle out of operation, in the sentences that name it:
+ * the refusals below and the spreadsheet's per-row note.
+ */
+const OUT_OF_OPERATION_LABELS: Record<OutOfOperationStatus, string> = {
+  BLOCKED: "bloqueado",
+  INACTIVE: "inativo",
+};
+
+/**
+ * Who reads the refusal, and so what it tells them to do: the dispatcher
+ * planning (`assign`) or releasing (`release`) the route, or the driver at
+ * the truck (`depart`), who cannot pick another vehicle in the app.
+ */
+type VehicleUnavailableAct = "assign" | "release" | "depart";
+
+/**
+ * The one sentence for a vehicle out of operation, for every route write
+ * that refuses one (create, edit, release, departure): the plate and the
+ * state, so the reader knows which truck and why. It used to say "inativo
+ * ou bloqueado" without the plate, and the release did not ask at all.
+ */
+function vehicleUnavailableReason(
+  plate: string,
+  status: OutOfOperationStatus,
+  act: VehicleUnavailableAct,
+): string {
+  const state = `O veículo ${plate} está ${OUT_OF_OPERATION_LABELS[status]}`;
+
+  switch (act) {
+    case "assign":
+      return `${state} e não pode receber uma rota.`;
+
+    case "release":
+      return (
+        `${state} e não pode sair em rota. ` +
+        "Troque o veículo da rota antes de liberá-la."
+      );
+
+    case "depart":
+      return `${state} e não pode sair em rota. Fale com o despachante.`;
+  }
 }
 
 /**
@@ -443,6 +488,7 @@ function routeCompletedAt({
 
 export {
   OPEN_STOP_STATUSES,
+  OUT_OF_OPERATION_LABELS,
   ROUTE_ALL_STOPS_CANCELLED_REASON,
   ROUTE_STATUS_LABELS,
   ROUTE_STOP_STATUS_LABELS,
@@ -465,6 +511,7 @@ export {
   routeCompletedAt,
   routeProgress,
   stopOutcomeForDelivery,
+  vehicleUnavailableReason,
 };
 
 export type {
@@ -474,4 +521,5 @@ export type {
   RouteStatus,
   RouteStopStatus,
   TransitionVerdict,
+  VehicleUnavailableAct,
 };

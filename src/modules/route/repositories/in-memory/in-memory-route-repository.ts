@@ -977,6 +977,22 @@ class InMemoryRouteRepository implements IRouteRepository {
     if (running) throw new RouteDriverBusyError(running.code);
   }
 
+  async findRunningRouteOfVehicle(
+    vehicleId: string,
+    businessId: string,
+    excludeRouteId: string,
+  ): Promise<{ code: number; driverId: string } | null> {
+    const running = this.routes.find(
+      (entry) =>
+        entry.businessId === businessId &&
+        entry.vehicleId === vehicleId &&
+        entry.status === "IN_PROGRESS" &&
+        entry.id !== excludeRouteId,
+    );
+
+    return running ? { code: running.code, driverId: running.driverId } : null;
+  }
+
   async assignmentPreview({
     businessId,
     driverId,

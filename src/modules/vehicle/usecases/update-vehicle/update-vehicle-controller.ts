@@ -21,16 +21,19 @@ class UpdateVehicleController {
     const updateVehicleUseCase = container.resolve(UpdateVehicleUseCase);
 
     try {
-      await updateVehicleUseCase.execute(
+      const { notice } = await updateVehicleUseCase.execute(
         vehicleData,
         vehicleId,
         businessId,
         id,
       );
 
+      // The web shows this message as it comes: the notice says what the
+      // change means for the vehicle's routes (blocked with one released,
+      // unblocked back to "Em rota").
       return reply
         .status(200)
-        .send({ message: "Veículo atualizado com sucesso!" });
+        .send({ message: notice ?? "Veículo atualizado com sucesso!" });
     } catch (error) {
       // Status rules, duplicates and the contracted limit are AppErrors and
       // reach the global handler with their own code.
