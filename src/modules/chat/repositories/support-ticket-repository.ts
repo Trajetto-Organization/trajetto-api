@@ -1,7 +1,10 @@
 import { Prisma } from "@prisma/client";
 
 import database from "@/../infra/database";
-import { escapeLikePattern } from "@/shared/utils/like-pattern";
+import {
+  escapeLikePattern,
+  insensitiveEquals,
+} from "@/shared/utils/like-pattern";
 import {
   DELIVERY_SEARCH_TEXT,
   SEARCH_FIELD_SEPARATOR,
@@ -45,7 +48,7 @@ const rowInclude = {
     },
   },
   delivery: { select: { id: true, recipient_name: true, status: true } },
-  route: { select: { id: true, code: true, name: true } },
+  route: { select: { id: true, code: true, name: true, status: true } },
   occurrence: {
     select: {
       id: true,
@@ -86,7 +89,14 @@ function toRow(payload: RowPayload): SupportTicketRow {
           status: delivery.status,
         }
       : null,
-    route: route ? { id: route.id, code: route.code, name: route.name } : null,
+    route: route
+      ? {
+          id: route.id,
+          code: route.code,
+          name: route.name,
+          status: route.status,
+        }
+      : null,
     occurrence: occurrence
       ? {
           id: occurrence.id,
@@ -253,6 +263,27 @@ class SupportTicketRepository implements ISupportTicketRepository {
         { created_at: "desc" },
         { id: "desc" },
       ],
+    })) as SupportTicket | null;
+  }
+
+  async findEmptyOpenDriverTicket(
+    businessId: string,
+    driverId: string,
+    subject: string,
+  ): Promise<SupportTicket | null> {
+    // A driver holds a handful of open tickets: the driverId index narrows
+    // it, the rest is a filter over those rows.
+    return (await this.prisma.supportTicket.findFirst({
+      where: {
+        businessId,
+        driverId,
+        kind: "DRIVER",
+        status: "OPEN",
+        last_message_at: null,
+        // Escaped: the value is an ILIKE pattern underneath (like-pattern.ts).
+        subject: insensitiveEquals(subject),
+      },
+      orderBy: [{ created_at: "desc" }, { id: "desc" }],
     })) as SupportTicket | null;
   }
 

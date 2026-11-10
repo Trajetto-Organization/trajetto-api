@@ -304,6 +304,46 @@ describe("the chat as documented", () => {
     expect(forDriver).not.toHaveProperty("assignee");
   });
 
+  it("describes a route's ticket with the route's status, and one whose route was removed", () => {
+    const ofRoute = presentTicket({
+      ...ticketRow,
+      kind: "ROUTE",
+      deliveryId: null,
+      occurrenceId: null,
+      routeId: "r1",
+      delivery: null,
+      occurrence: null,
+      route: { id: "r1", code: 3, name: "Zona Sul", status: "CANCELLED" },
+    });
+
+    expect(
+      strictIssues(supportTicketDocumented.summary, wire(ofRoute)),
+    ).toEqual([]);
+    expect(driverTicketView(ofRoute).route).toEqual({
+      id: "r1",
+      code: 3,
+      name: "Zona Sul",
+      status: "CANCELLED",
+    });
+
+    // ON DELETE SET NULL: the route is gone, the subject keeps its name.
+    const removed = presentTicket({
+      ...ticketRow,
+      kind: "ROUTE",
+      deliveryId: null,
+      occurrenceId: null,
+      routeId: null,
+      delivery: null,
+      occurrence: null,
+      route: null,
+      subject: "Rota 3 · Zona Sul",
+    });
+
+    expect(
+      strictIssues(supportTicketDocumented.summary, wire(removed)),
+    ).toEqual([]);
+  });
+
   it("keeps the runtime schemas pass-through, so no field is stripped", () => {
     // The whole reason the typed shapes are documentation only.
     const parsed = chatResponses.searchResult.parse({

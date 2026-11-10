@@ -29,6 +29,7 @@ import {
   createDriverTicket,
   driverSubject,
   resolveDeliveryTicket,
+  resolveDriverSubjectTicket,
   resolveRouteTicket,
   type OpenedBy,
 } from "../../shared/ticket-factory";
@@ -89,8 +90,9 @@ interface OpenSupportTicketResponse {
  * Opens a ticket (design §4.5): the tower's "+ Novo atendimento" or "Abrir
  * atendimento", the driver's "Novo assunto". About a delivery or a route it
  * is a get-or-create — one open ticket per delivery and per route, settled
- * by the partial unique indexes between replicas. The Idempotency-Key makes
- * a retried create answer the same ticket.
+ * by the partial unique indexes between replicas. The driver's own subject
+ * reuses his open one of the same title while it is still empty. The
+ * Idempotency-Key makes a retried create answer the same ticket.
  */
 @injectable()
 class OpenSupportTicketUseCase {
@@ -284,11 +286,29 @@ class OpenSupportTicketUseCase {
           () => new ChatRouteNotFoundError(),
         );
       } else if (byDriver) {
-        // "Novo assunto" during a route is about that route (design §3.2).
-        const running = (
-          await this.chat.findRunningRoutes(scope.businessId, [driverId])
-        ).get(driverId);
+        // "Novo assunto" with a title (the app since 11/2026) is the subject
+        // the driver named, route or not. Without one (an older app), during
+        // a route it is about that route (design §3.2), else a general one
+        // in his name.
+        const named = request.subject?.trim() ? request.subject : null;
 
+        const running = named
+          ? undefined
+          : (
+              await this.chat.findRunningRoutes(scope.businessId, [driverId])
+            ).get(driverId);
+
+        const general = {
+          businessId: scope.businessId,
+          driverId,
+          subject: named ?? driverSubject(findDriver.name),
+          opened,
+          clientSubmissionId: request.idempotencyKey,
+        };
+
+        // With a first message the ticket is never empty, and a retry must
+        // find it by its key: reusing another ticket would leave the key
+        // unanswered and the retry would open a second one.
         resolution = running
           ? held(
               await resolveRouteTicket(deps, {
@@ -300,16 +320,12 @@ class OpenSupportTicketUseCase {
               }),
               () => new ChatRouteNotFoundError(),
             )
-          : {
-              ticket: await createDriverTicket(deps, {
-                businessId: scope.businessId,
-                driverId,
-                subject: request.subject ?? driverSubject(findDriver.name),
-                opened,
-                clientSubmissionId: request.idempotencyKey,
-              }),
-              created: true,
-            };
+          : request.message
+            ? {
+                ticket: await createDriverTicket(deps, general),
+                created: true,
+              }
+            : await resolveDriverSubjectTicket(deps, general);
       } else {
         if (!request.subject?.trim())
           throw new SupportTicketSubjectRequiredError();

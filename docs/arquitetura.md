@@ -25,6 +25,7 @@
 - [Motorista, veículo e rota: o que é aviso e o que é recusa](#motorista-veículo-e-rota-o-que-é-aviso-e-o-que-é-recusa)
 - [Entregas na rota: casos de borda](#entregas-na-rota-casos-de-borda)
 - [Rotas esquecidas, a lista e a torre](#rotas-esquecidas-a-lista-e-a-torre)
+- [Atendimentos do chat](#atendimentos-do-chat)
 - [Pausas do motorista](#pausas-do-motorista)
 - [Postgres é a fila](#postgres-é-a-fila)
 - [Crons](#crons)
@@ -2246,6 +2247,62 @@ D54).
 | Atendimentos | selo e balão                            | `GET /chat/tickets/summary`               | contagens por situação (abertos, sem atendente, meus, aguardando autorização, não lidos), sem janela de data                                          |
 | Atendimentos | lista                                   | `GET /chat/tickets`                       | os mesmos tickets, com os filtros da tela                                                                                                             |
 | Auditoria    | fila e taxa de concordância             | `GET /delivery/proof-audits`              | fila sem janela; `agreementRate` cobre os últimos 90 dias civis no fuso da empresa                                                                    |
+
+## Atendimentos do chat
+
+A conversa com cada motorista é uma só (`ChatThread`); cada assunto dentro
+dela é um atendimento (`SupportTicket`, decisão 14.5): de uma ocorrência
+(`OCCURRENCE`, aberto pelo relato), de uma entrega (`DELIVERY`), de uma rota
+(`ROUTE`), geral (`DRIVER`) ou a conversa de antes dos tickets (`LEGACY`).
+Toda mensagem fora de aviso em massa cai num atendimento; o app e a web
+desenham a conversa separada por assunto. Abrem atendimento: a torre ("Novo
+atendimento", com motorista e assunto, entrega ou rota; "Abrir atendimento"
+no detalhe da entrega e da rota), o motorista ("Novo assunto") e a própria
+API, quando uma mensagem chega sem assunto (`routeLegacy` em
+`send-chat-message-usecase.ts`: resposta à torre dos últimos 30 min, a
+entrega, a rota em andamento, o geral aberto mais recente ou um geral novo).
+Entrega e rota são get-or-create (um aberto por entrega e por rota, pelos
+índices parciais); `POST /chat/tickets` exige `Idempotency-Key`.
+
+- **"Novo assunto" do motorista (10/11/2026):** o dono via "#5 · Conversa
+  com Gabriel..." a cada toque, sem dizer do que era, e um toque a mais
+  abria outro igual, vazio, tocando a torre. O app agora pede o assunto (ou
+  a rota em andamento, que manda `routeId`) e manda `subject`. **Com
+  `subject`** o atendimento é geral com esse assunto, mesmo durante uma rota
+  (antes a rota em andamento engolia o assunto). **Sem `subject`** (apps
+  antigos) nada muda: durante a rota, o atendimento dela; fora, um geral
+  "Conversa com {nome}". **Sem `message`**, um geral do motorista ainda
+  aberto, sem nenhuma mensagem e com o mesmo assunto (maiúsculas ignoradas)
+  é devolvido no lugar de um novo: 200 `created: false`, sem número novo e
+  sem tocar a torre de novo (`resolveDriverSubjectTicket` em
+  `usecases/shared/ticket-factory.ts`, `findEmptyOpenDriverTicket` no
+  repositório, pelo índice de `driverId`). O assunto é comparado ao pé da
+  letra, por `insensitiveEquals`: sem o escape, "Pagamento%" ou
+  "Pagamento_e despesas" devolviam o "Pagamento e despesas" vazio (revisão,
+  10/11/2026; E2E em `support-ticket-http.test.ts`). Com mensagem não
+  reaproveita: o retry precisa achar o atendimento pela própria chave. Não é
+  trava: dois toques com chaves diferentes ao mesmo tempo podem abrir dois; a
+  chave é o que faz um toque abrir um. Vários assuntos gerais abertos
+  continuam valendo, cada um com o seu nome; quem encerra é a torre.
+- **Rota cancelada, concluída ou excluída:** o atendimento da rota continua
+  aberto quando ela termina ou é cancelada, porque a conversa pode seguir
+  ("por que cancelaram?"); a torre encerra quando acabar. `route.status` vai
+  no atendimento (lista, detalhe, eventos e na visão do motorista) para a
+  web e o app dizerem "rota cancelada". Uma rota só some do banco ao desfazer
+  uma importação, e só se ainda estiver planejada (o motorista nunca a viu):
+  `SupportTicket.routeId` e `ChatMessage.routeId` são `ON DELETE SET NULL`,
+  o atendimento e o histórico ficam, e o assunto guarda o nome ("Rota 3 ·
+  Zona Sul"). Um atendimento `ROUTE` com `route: null` é exatamente esse
+  caso; o mesmo vale para `DELIVERY`/`OCCURRENCE` com `delivery: null`. A API
+  não encerra sozinha: o registro existe para sobreviver ao que foi apagado,
+  e encerrar dentro do desfazer em lotes da importação mexeria num caminho
+  sensível por um caso raro. A web e o app avisam, e a torre encerra.
+- **Compatibilidade:** o app novo com a API antiga recebe, durante uma rota,
+  o atendimento dela no lugar do assunto digitado (o aviso diz qual foi);
+  `route.status` é campo novo, que os clientes antigos ignoram. Testes:
+  `tests/unitaires/chat/tickets/support-ticket-usecases.test.ts`,
+  `tests/unitaires/contract/chat-documented-shapes.test.ts` e o bloco "the
+  driver's Novo assunto" de `tests/E2E/support-ticket-http.test.ts`.
 
 ## Pausas do motorista
 

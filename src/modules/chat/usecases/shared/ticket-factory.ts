@@ -292,9 +292,41 @@ async function createDriverTicket(
   return ticket;
 }
 
+/**
+ * The driver's "Novo assunto" about a subject of his own: his open general
+ * ticket with the same subject that has no message yet, else a new one. A
+ * second tap with the same title, or an older app sending none (every one
+ * "Conversa com {nome}"), no longer piles up empty tickets that ring the
+ * tower. Once a message is in it, the same title is a new subject. Only for
+ * a request without a first message (the caller decides). Not a lock: two
+ * different keys racing may both create; the Idempotency-Key is what makes
+ * one tap one ticket.
+ */
+async function resolveDriverSubjectTicket(
+  deps: TicketFactoryDeps,
+  input: {
+    businessId: string;
+    driverId: string;
+    subject: string;
+    opened: OpenedBy;
+    clientSubmissionId?: string | null;
+  },
+): Promise<TicketResolution> {
+  const empty = await deps.tickets.findEmptyOpenDriverTicket(
+    input.businessId,
+    input.driverId,
+    truncateSubject(input.subject),
+  );
+
+  if (empty) return { ticket: empty, created: false };
+
+  return { ticket: await createDriverTicket(deps, input), created: true };
+}
+
 export {
   resolveDeliveryTicket,
   resolveRouteTicket,
+  resolveDriverSubjectTicket,
   createDriverTicket,
   deliverySubject,
   routeSubject,

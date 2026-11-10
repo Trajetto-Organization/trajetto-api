@@ -1298,3 +1298,163 @@ describe("Abrir atendimento and the legacy routing", () => {
     expect(asOther.body.code).toBe("SUPPORT_TICKET_NOT_FOUND");
   });
 });
+
+describe("the driver's Novo assunto (10/11/2026)", () => {
+  // A driver of this block only: a route in progress would change where the
+  // other blocks' untitled messages land.
+  const NAMING_DRIVER = "018feb00-0000-7000-8000-0000000000d4";
+
+  let naming: { id: string; token: string };
+  let routeId = "";
+
+  beforeAll(async () => {
+    await seedDriver(NAMING_DRIVER, "Nina Motorista", CARRIER);
+
+    naming = await seedUser("Nina Motorista", "BUSINESS_USER", CARRIER, {
+      driverId: NAMING_DRIVER,
+    });
+
+    routeId = (
+      await prisma.route.create({
+        data: {
+          code: 3,
+          name: "Zona Sul",
+          scheduled_date: new Date("2026-11-10T00:00:00Z"),
+          status: "IN_PROGRESS",
+          started_at: new Date(),
+          businessId: CARRIER,
+          driverId: NAMING_DRIVER,
+        },
+      })
+    ).id;
+  });
+
+  it("opens the subject the driver named during a route, and the route's without a title", async () => {
+    const named = await openTicket({ subject: "Pneu furado" }, naming.token);
+
+    expect(named.status, JSON.stringify(named.body)).toBe(201);
+    expect(named.body.data).toMatchObject({
+      kind: "DRIVER",
+      subject: "Pneu furado",
+      route: null,
+    });
+
+    // An older app sends no title: during the route it is the route's.
+    const untitled = await openTicket({}, naming.token);
+
+    expect(untitled.status, JSON.stringify(untitled.body)).toBe(201);
+    expect(untitled.body.data).toMatchObject({
+      kind: "ROUTE",
+      subject: "Rota 3 · Zona Sul",
+      route: { id: routeId, code: 3, status: "IN_PROGRESS" },
+    });
+  });
+
+  it("answers the still-empty subject of the same title instead of a second ticket", async () => {
+    const first = await openTicket({ subject: "Pagamento" }, naming.token);
+    const again = await openTicket({ subject: "PAGAMENTO" }, naming.token);
+
+    expect(first.status, JSON.stringify(first.body)).toBe(201);
+    expect(again.status, JSON.stringify(again.body)).toBe(200);
+    expect(again.body).toMatchObject({
+      created: false,
+      data: { id: first.body.data.id },
+    });
+
+    // Once it has a message, the same title is a new subject.
+    const sent = await call(
+      "POST",
+      `/chat/tickets/${first.body.data.id}/messages`,
+      naming.token,
+      {
+        kind: "TEXT",
+        body: "O vale não caiu",
+        clientSubmissionId: randomUUID(),
+      },
+    );
+
+    expect(sent.status, JSON.stringify(sent.body)).toBe(201);
+
+    const later = await openTicket({ subject: "Pagamento" }, naming.token);
+
+    expect(later.status, JSON.stringify(later.body)).toBe(201);
+    expect(later.body.data.id).not.toBe(first.body.data.id);
+
+    expect(
+      await prisma.supportTicket.count({
+        where: {
+          driverId: NAMING_DRIVER,
+          subject: { equals: "Pagamento", mode: "insensitive" },
+        },
+      }),
+    ).toBe(2);
+  });
+
+  it("reads the title literally: % and _ are characters, not wildcards", async () => {
+    // `mode: "insensitive"` is ILIKE underneath (like-pattern.ts): unescaped,
+    // these titles found the empty "Pagamento e despesas" and answered it.
+    const ready = await openTicket(
+      { subject: "Pagamento e despesas" },
+      naming.token,
+    );
+
+    expect(ready.status, JSON.stringify(ready.body)).toBe(201);
+
+    for (const subject of ["Pagamento%", "Pagamento_e despesas"]) {
+      const other = await openTicket({ subject }, naming.token);
+
+      expect(other.status, `${subject}: ${JSON.stringify(other.body)}`).toBe(
+        201,
+      );
+      expect(other.body.data).toMatchObject({ subject });
+      expect(other.body.data.id).not.toBe(ready.body.data.id);
+    }
+
+    // Case is still ignored.
+    const same = await openTicket(
+      { subject: "PAGAMENTO E DESPESAS" },
+      naming.token,
+    );
+
+    expect(same.status, JSON.stringify(same.body)).toBe(200);
+    expect(same.body.data.id).toBe(ready.body.data.id);
+  });
+
+  it("tells the route's status on its ticket, and keeps the ticket when the route is removed", async () => {
+    const opened = await openTicket({ routeId }, naming.token);
+
+    expect(opened.body.data.route).toMatchObject({ status: "IN_PROGRESS" });
+
+    await prisma.route.update({
+      where: { id: routeId },
+      data: { status: "CANCELLED", cancellation_reason: "Teste" },
+    });
+
+    const cancelled = await call(
+      "GET",
+      `/chat/tickets/${opened.body.data.id}`,
+      users.admin.token,
+    );
+
+    expect(cancelled.status, JSON.stringify(cancelled.body)).toBe(200);
+    expect(cancelled.body.data.route).toMatchObject({ status: "CANCELLED" });
+
+    // An import reversal deletes a route (ON DELETE SET NULL): the subject
+    // and its history stay, and the ticket says it has no route any more.
+    await prisma.route.delete({ where: { id: routeId } });
+
+    const removed = await call(
+      "GET",
+      `/chat/tickets/${opened.body.data.id}`,
+      users.admin.token,
+    );
+
+    expect(removed.status, JSON.stringify(removed.body)).toBe(200);
+    expect(removed.body.data).toMatchObject({
+      kind: "ROUTE",
+      status: "OPEN",
+      subject: "Rota 3 · Zona Sul",
+      route: null,
+    });
+  });
+});

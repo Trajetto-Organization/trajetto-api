@@ -74,7 +74,17 @@ interface SupportTicketRow extends SupportTicket {
   /** The driver's app account; null when he has none. */
   driverUserId: string | null;
   delivery: { id: string; recipient_name: string; status: string } | null;
-  route: { id: string; code: number; name: string | null } | null;
+  /**
+   * `status` says when the route behind a ROUTE ticket was cancelled or has
+   * ended. Null with a `routeId` gone: the route was removed (an import
+   * reversal) and the FK set it null; the subject keeps its name.
+   */
+  route: {
+    id: string;
+    code: number;
+    name: string | null;
+    status: string;
+  } | null;
   occurrence: {
     id: string;
     typeName: string;

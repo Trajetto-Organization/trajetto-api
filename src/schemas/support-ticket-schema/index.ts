@@ -174,7 +174,9 @@ const openSupportTicketSchema = z.object({
       `O assunto deve ter no máximo ${SUPPORT_TICKET_SUBJECT_MAX} caracteres.`,
     )
     .optional()
-    .describe("Obrigatório para um atendimento geral aberto pela central."),
+    .describe(
+      'Obrigatório para um atendimento geral aberto pela central. Do motorista: o assunto que ele deu ao "Novo assunto" (atendimento geral, mesmo durante uma rota).',
+    ),
   message: ticketMessageBodySchema
     .optional()
     .describe("A primeira mensagem, gravada junto com o atendimento."),

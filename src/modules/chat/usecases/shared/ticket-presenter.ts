@@ -31,7 +31,13 @@ interface TicketSummary {
   threadId: string;
   driver: { id: string; name: string };
   delivery: { id: string; recipient_name: string; status: string } | null;
-  route: { id: string; code: number; name: string | null } | null;
+  /** Null on a ROUTE ticket: its route was removed (SupportTicketRow). */
+  route: {
+    id: string;
+    code: number;
+    name: string | null;
+    status: string;
+  } | null;
   occurrence: {
     id: string;
     typeName: string;
