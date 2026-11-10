@@ -807,3 +807,74 @@ describe("the address point columns", () => {
     });
   });
 });
+
+/**
+ * The "E-mail" column (recipient-email.ts): one or more addresses separated
+ * by ";" or ",", each checked like the manual create's field. A bad one never
+ * costs the delivery — it is left out of the customer notices, and the row
+ * quotes it.
+ */
+describe("the e-mail column", () => {
+  it("keeps the valid addresses, and the row says which part was left out", async () => {
+    const text = [
+      ["Destinatário", "CEP", "Cidade", "UF", "Logradouro", "E-mail"],
+      [
+        "Padaria Central",
+        "01001000",
+        "São Paulo",
+        "SP",
+        "Sé",
+        "compras@padaria.com.br; nao-e-email; financeiro@padaria.com.br",
+      ],
+      ["Mercado Novo", "01001000", "São Paulo", "SP", "Sé", "mercado@"],
+      ["Farmácia", "01001000", "São Paulo", "SP", "Sé", "farmacia@exemplo.com"],
+    ]
+      .map((row) => row.map((cell) => `"${cell}"`).join(";"))
+      .join("\n");
+
+    const record = await context.importSpreadsheet.execute({
+      userId: DISPATCHER,
+      businessId: BUSINESS,
+      filename: "com-emails.csv",
+      content: Buffer.from(text, "utf8").toString("base64"),
+      shipperId: SHIPPER,
+    });
+
+    expect(record.imported).toBe(3);
+
+    const byName = Object.fromEntries(
+      context.deliveryRepository.deliveries.map((row) => [
+        row.recipient_name,
+        row.recipient_email,
+      ]),
+    );
+
+    expect(byName).toEqual({
+      "Padaria Central": "compras@padaria.com.br;financeiro@padaria.com.br",
+      "Mercado Novo": null,
+      Farmácia: "farmacia@exemplo.com",
+    });
+
+    expect(
+      record.report.rows.map(({ line, outcome, message }) => ({
+        line,
+        outcome,
+        message,
+      })),
+    ).toEqual([
+      {
+        line: 2,
+        outcome: "imported",
+        message:
+          'O e-mail "nao-e-email" do destinatário não é válido e não será usado nos avisos ao cliente.',
+      },
+      {
+        line: 3,
+        outcome: "imported",
+        message:
+          'O e-mail "mercado@" do destinatário não é válido e não será usado nos avisos ao cliente.',
+      },
+      { line: 4, outcome: "imported", message: null },
+    ]);
+  });
+});

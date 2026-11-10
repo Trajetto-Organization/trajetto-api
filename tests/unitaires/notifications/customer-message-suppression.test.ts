@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { InMemoryExternalRecipientRepository } from "@/modules/delivery/repositories/in-memory/in-memory-external-recipient-repository";
 import {
+  messageOptOutOf,
   normalizeSuppressionEmail,
   suppressionAddresses,
 } from "@/shared/notifications/customer-message-suppression";
@@ -95,6 +96,125 @@ describe("the addresses a suppression is kept under", () => {
   it("keeps nothing for a contact without digits or text", () => {
     expect(suppressionAddresses({ telephone: "  ", email: "   " })).toEqual([]);
     expect(suppressionAddresses({ telephone: null, email: null })).toEqual([]);
+  });
+
+  it("keeps an e-mail list under each address and under the whole field", () => {
+    // The whole field is the key the first release of D38 wrote and looks
+    // up; each address is what the send writes to (recipient-email.ts).
+    expect(
+      suppressionAddresses({
+        telephone: null,
+        email: "Compras@Mercado.com.br; financeiro@mercado.com.br;lixo",
+      }),
+    ).toEqual([
+      {
+        channel: "EMAIL",
+        address: "compras@mercado.com.br; financeiro@mercado.com.br;lixo",
+      },
+      { channel: "EMAIL", address: "compras@mercado.com.br" },
+      { channel: "EMAIL", address: "financeiro@mercado.com.br" },
+    ]);
+  });
+});
+
+describe("an opt-out from an e-mail list (the NF-e's and the spreadsheet's)", () => {
+  const LIST = "compras@mercado.com.br; financeiro@mercado.com.br";
+
+  async function optedOutFrom(email: string) {
+    const recipients = new InMemoryExternalRecipientRepository();
+    const recipient = await recipients.ensureForDelivery({
+      deliveryId: "delivery-a",
+      businessId: CARRIER,
+      name: "Mercado",
+      email,
+      telephone: null,
+    });
+
+    await recipients.optOut(recipient.access_token);
+
+    return recipients;
+  }
+
+  const emailOf = async (
+    recipients: InMemoryExternalRecipientRepository,
+    email: string,
+  ) => recipients.suppressedChannels(CARRIER, { telephone: null, email });
+
+  it("stops the same list as the import now stores it, each address alone, and a list sharing one", async () => {
+    // Before this release an import stored the field as written ("a; b");
+    // now as "a;b". The click was on a delivery written before.
+    const recipients = await optedOutFrom(LIST);
+
+    for (const email of [
+      "compras@mercado.com.br;financeiro@mercado.com.br",
+      "financeiro@mercado.com.br",
+      // The e-mail goes to both, so it is not sent to either.
+      "Financeiro@Mercado.com.br;outro@mercado.com.br",
+    ]) {
+      expect(await emailOf(recipients, email), email).toEqual(
+        new Set(["EMAIL"]),
+      );
+    }
+
+    expect(await emailOf(recipients, "outro@mercado.com.br")).toEqual(
+      new Set(),
+    );
+
+    expect(recipients.suppressions.map((row) => row.address)).toEqual([
+      LIST,
+      "compras@mercado.com.br",
+      "financeiro@mercado.com.br",
+    ]);
+  });
+
+  it("stops a delivery written before this release, still on its way, from a click on a new one", async () => {
+    const recipients = await optedOutFrom(
+      "compras@mercado.com.br;financeiro@mercado.com.br",
+    );
+
+    // The old delivery's recipient row holds the field as it was typed.
+    expect(await emailOf(recipients, ` ${LIST} ;`)).toEqual(new Set(["EMAIL"]));
+  });
+
+  it("keeps matching a row the first release wrote, under the whole field", async () => {
+    const recipients = new InMemoryExternalRecipientRepository();
+
+    recipients.suppressions.push({
+      businessId: CARRIER,
+      channel: "EMAIL",
+      address: "compras@mercado.com.br;financeiro@mercado.com.br",
+      source_delivery_id: "delivery-old",
+      created_at: new Date("2026-11-04T12:00:00.000Z"),
+    });
+
+    expect(
+      await emailOf(
+        recipients,
+        "compras@mercado.com.br;financeiro@mercado.com.br",
+      ),
+    ).toEqual(new Set(["EMAIL"]));
+  });
+
+  it("answers the detail with the earliest of the opt-outs its list matches", () => {
+    const earlier = new Date("2026-11-04T12:00:00.000Z");
+    const later = new Date("2026-11-06T12:00:00.000Z");
+
+    expect(
+      messageOptOutOf(
+        { telephone: null, email: "compras@mercado.com.br;b@y.com.br" },
+        [
+          { channel: "EMAIL", address: "b@y.com.br", created_at: later },
+          {
+            channel: "EMAIL",
+            address: "compras@mercado.com.br",
+            created_at: earlier,
+          },
+          // Another address of the company: not this contact's.
+          { channel: "EMAIL", address: "z@z.com.br", created_at: new Date(0) },
+        ],
+        null,
+      ),
+    ).toEqual({ whatsapp: null, email: earlier });
   });
 });
 

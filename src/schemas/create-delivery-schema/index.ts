@@ -12,6 +12,7 @@ import {
   addressLongitudeField,
   refineAddressPointPair,
 } from "@/shared/delivery/address-coordinates";
+import { recipientEmailField } from "@/shared/delivery/recipient-email";
 
 const requiredTextField = (label: string, min: number, max: number) =>
   z
@@ -151,14 +152,11 @@ const createDeliverySchema = z.object({
     /^(\d{11}|\d{14})$/,
     "O documento deve ser um CPF (11 dígitos) ou CNPJ (14 dígitos).",
   ),
+  // One address, by the rule the NF-e and spreadsheet imports apply to each
+  // entry of theirs (recipient-email.ts).
   recipient_email: z.preprocess(
     (val) => (val === "" ? null : val),
-    z
-      .string()
-      .email("O e-mail do destinatário não é válido.")
-      .max(100, "O e-mail deve ter no máximo 100 caracteres.")
-      .nullable()
-      .optional(),
+    recipientEmailField.nullable().optional(),
   ),
   recipient_telephone: optionalDigits(
     "O telefone do destinatário",

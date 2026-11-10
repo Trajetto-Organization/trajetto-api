@@ -17,6 +17,7 @@ import { workerHeartbeat } from "@/shared/health/worker-heartbeat";
 import { IMailProvider } from "@/shared/providers/mail-provider/IMail-provider";
 import { MailDeliveryError } from "@/shared/providers/mail-provider/errors/mail-delivery-error";
 import { InvalidMessageTemplateError } from "@/shared/delivery/message-template";
+import { readRecipientEmails } from "@/shared/delivery/recipient-email";
 import type { IExternalRecipientRepository } from "@/modules/delivery/repositories/IExternal-recipient-repository";
 import { SUPPRESSED_ADDRESS_REASON } from "./customer-message-suppression";
 
@@ -713,11 +714,21 @@ class NotificationPipelineService {
         external,
       );
 
+      // Only the valid addresses are written to (recipient-email.ts): a value
+      // stored before the imports checked it may hold none.
+      const hasEmail = readRecipientEmails(external.email).addresses.length > 0;
+
       if (!external.email) {
         suppressed.push({
           externalRecipientId: external.id,
           channel: NotificationChannel.EMAIL,
           reason: "no_contact",
+        });
+      } else if (!hasEmail) {
+        suppressed.push({
+          externalRecipientId: external.id,
+          channel: NotificationChannel.EMAIL,
+          reason: "invalid_address",
         });
       } else if (blocked.has("EMAIL")) {
         suppressed.push({
@@ -745,7 +756,7 @@ class NotificationPipelineService {
       // no push: there is no app and no inbox. No preferences either — an
       // outsider never had a row to express one, and the way they say stop is
       // the opt-out link in the message itself.
-      if (external.email && !blocked.has("EMAIL")) {
+      if (hasEmail && !blocked.has("EMAIL")) {
         rows.push({
           outboxEventId: event.id,
           externalRecipientId: external.id,
@@ -1878,6 +1889,16 @@ class NotificationPipelineService {
       );
     }
 
+    // The valid addresses only, never the stored text: what reaches the
+    // transport's address parser is a list this API checked.
+    const addresses = readRecipientEmails(external.email).addresses;
+
+    if (addresses.length === 0) {
+      throw new NonRetryableDeliveryError(
+        "External recipient has no valid e-mail address",
+      );
+    }
+
     const mailProvider = container.resolve<IMailProvider>("MailProvider");
 
     const templatePath = resolve(
@@ -1892,7 +1913,8 @@ class NotificationPipelineService {
     const [firstName] = external.name?.split(" ") ?? ["Cliente"];
 
     return this.sendMailClassified(mailProvider, {
-      to: external.email,
+      // Each one passed the e-mail check, so none holds a comma to split on.
+      to: addresses.join(", "),
       subject: rendered.subject,
       path: templatePath,
       referenceId: delivery.id,

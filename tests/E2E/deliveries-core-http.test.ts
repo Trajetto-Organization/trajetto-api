@@ -109,7 +109,10 @@ function nfe(
   accessKey: string,
   issuerCnpj: string,
   issuerName: string,
+  recipientEmail?: string,
 ): string {
+  const email = recipientEmail ? `<email>${recipientEmail}</email>` : "";
+
   return `<?xml version="1.0" encoding="UTF-8"?>
 <nfeProc xmlns="http://www.portalfiscal.inf.br/nfe" versao="4.00">
   <NFe>
@@ -118,7 +121,7 @@ function nfe(
       <emit><CNPJ>${issuerCnpj}</CNPJ><xNome>${issuerName}</xNome></emit>
       <dest>
         <CNPJ>98765432000188</CNPJ>
-        <xNome>Mercado ${accessKey.slice(-4)}</xNome>
+        <xNome>Mercado ${accessKey.slice(-4)}</xNome>${email}
         <enderDest>
           <xLgr>Rua das Palmeiras</xLgr><nro>450</nro><xBairro>Centro</xBairro>
           <xMun>Campinas</xMun><UF>SP</UF><CEP>13010000</CEP>
@@ -788,6 +791,165 @@ describe("an XML upload in Importações (decision 5.6)", () => {
         )
         .sort(),
     ).toEqual(created.map((row) => row.id).sort());
+  });
+});
+
+describe("the recipient's e-mail from an NF-e", () => {
+  // dest/email went into the column unchecked and reached nodemailer's
+  // address parser on every customer notice. Now each ";" or "," entry is
+  // checked like the manual create's field; the valid ones stay, and the
+  // note quotes what was left out for the dispatcher to fix.
+  it("keeps the valid addresses of the list, and notes the one left out", async () => {
+    const response = await call(
+      "POST",
+      `/delivery/import-xml/${CARRIER}`,
+      tokens.admin,
+      {
+        shipperId: SHIPPER,
+        files: [
+          {
+            filename: "nota-emails.xml",
+            content: nfe(
+              KEY(70),
+              "11222333000181",
+              "Indústria Doce",
+              "compras@mercado.com.br; nao-e-email ;Financeiro@Mercado.com.br;COMPRAS@mercado.com.br",
+            ),
+          },
+        ],
+      },
+    );
+
+    expect(response.statusCode).toBe(200);
+
+    const summary = JSON.parse(response.body).data;
+    const note =
+      'O e-mail "nao-e-email" do destinatário não é válido e não será usado nos avisos ao cliente.';
+
+    expect(summary.imported).toBe(1);
+    expect(summary.results[0].message).toBe(note);
+
+    const stored = await prisma.delivery.findFirstOrThrow({
+      where: { businessId: CARRIER, invoice_key: KEY(70) },
+      select: { recipient_email: true },
+    });
+
+    expect(stored.recipient_email).toBe(
+      "compras@mercado.com.br;Financeiro@Mercado.com.br",
+    );
+
+    // The Importações report, read hours later, says it too.
+    const record = await prisma.import.findUniqueOrThrow({
+      where: { id: summary.importId },
+      select: { report: true },
+    });
+
+    expect(
+      (record.report as { rows: Array<{ message: string | null }> }).rows[0]
+        .message,
+    ).toBe(`nota-emails.xml: ${note}`);
+  });
+
+  it("stores no e-mail when none of it is an address", async () => {
+    const response = await call(
+      "POST",
+      `/delivery/import-xml/${CARRIER}`,
+      tokens.admin,
+      {
+        shipperId: SHIPPER,
+        files: [
+          {
+            filename: "nota-sem-email.xml",
+            content: nfe(
+              KEY(71),
+              "11222333000181",
+              "Indústria Doce",
+              "a,".repeat(5_000),
+            ),
+          },
+        ],
+      },
+    );
+
+    expect(response.statusCode).toBe(200);
+    expect(JSON.parse(response.body).data.results[0]).toMatchObject({
+      outcome: "imported",
+      message:
+        'O e-mail "a" do destinatário não é válido e não será usado nos avisos ao cliente. O campo de e-mail do destinatário tem itens demais: só os 20 primeiros foram lidos.',
+    });
+
+    const stored = await prisma.delivery.findFirstOrThrow({
+      where: { businessId: CARRIER, invoice_key: KEY(71) },
+      select: { recipient_email: true },
+    });
+
+    expect(stored.recipient_email).toBeNull();
+  });
+
+  it("takes the stored list back on an edit, and refuses an entry that is not an address", async () => {
+    // The panel sends the whole form: a one-address field refused an edit
+    // of the notes alone, over an e-mail the import had stored.
+    const response = await call(
+      "POST",
+      `/delivery/import-xml/${CARRIER}`,
+      tokens.admin,
+      {
+        shipperId: SHIPPER,
+        files: [
+          {
+            filename: "nota-lista.xml",
+            content: nfe(
+              KEY(72),
+              "11222333000181",
+              "Indústria Doce",
+              "compras@mercado.com.br,financeiro@mercado.com.br",
+            ),
+          },
+        ],
+      },
+    );
+
+    expect(response.statusCode).toBe(200);
+
+    const delivery = await prisma.delivery.findFirstOrThrow({
+      where: { businessId: CARRIER, invoice_key: KEY(72) },
+      select: { id: true, recipient_email: true },
+    });
+
+    // A list pasted from a mail client: kept, joined by ";".
+    expect(delivery.recipient_email).toBe(
+      "compras@mercado.com.br;financeiro@mercado.com.br",
+    );
+
+    const edit = (recipient_email: string) =>
+      call(
+        "PATCH",
+        `/delivery/update-delivery/${delivery.id}/business/${CARRIER}`,
+        tokens.admin,
+        { recipient_email, notes: "Portão lateral" },
+      );
+
+    const kept = await edit(delivery.recipient_email!);
+
+    expect(kept.statusCode).toBe(200);
+
+    const refused = await edit("compras@mercado.com.br;financeiro@mercado");
+
+    expect(refused.statusCode).toBe(400);
+    expect(JSON.parse(refused.body)).toMatchObject({
+      code: "VALIDATION_ERROR",
+      message: "O e-mail do destinatário não é válido.",
+    });
+
+    expect(
+      await prisma.delivery.findUniqueOrThrow({
+        where: { id: delivery.id },
+        select: { recipient_email: true, notes: true },
+      }),
+    ).toEqual({
+      recipient_email: "compras@mercado.com.br;financeiro@mercado.com.br",
+      notes: "Portão lateral",
+    });
   });
 });
 

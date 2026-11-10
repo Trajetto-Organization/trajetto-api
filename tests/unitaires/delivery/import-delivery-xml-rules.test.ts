@@ -43,7 +43,13 @@ const ISSUER_CNPJ = "12345678000199";
 const KEY_ONE = "35240612345678000199550010000012341000012345";
 const KEY_TWO = "35240612345678000199550010000012351000012346";
 
-function nfe(accessKey: string, issuerCnpj = ISSUER_CNPJ): string {
+function nfe(
+  accessKey: string,
+  issuerCnpj = ISSUER_CNPJ,
+  recipientEmail?: string,
+): string {
+  const email = recipientEmail ? `<email>${recipientEmail}</email>` : "";
+
   return `<?xml version="1.0" encoding="UTF-8"?>
 <nfeProc xmlns="http://www.portalfiscal.inf.br/nfe" versao="4.00">
   <NFe>
@@ -55,7 +61,7 @@ function nfe(accessKey: string, issuerCnpj = ISSUER_CNPJ): string {
       </emit>
       <dest>
         <CNPJ>98765432000188</CNPJ>
-        <xNome>Mercado Central</xNome>
+        <xNome>Mercado Central</xNome>${email}
         <enderDest>
           <xLgr>Rua das Palmeiras</xLgr>
           <nro>450</nro>
@@ -307,5 +313,70 @@ describe("a shipper created from a note", () => {
       name: "Industria Alimentos LTDA",
       corporate_reason: "Industria Alimentos LTDA",
     });
+  });
+});
+
+/**
+ * dest/email went into the column unchecked, and reached nodemailer's
+ * address parser on every customer notice. An NF-e carries several in one
+ * field, separated by ";": each one is checked like the manual create's,
+ * the valid ones stay, and the file's line says what was left out.
+ */
+describe("the recipient's e-mail from the note", () => {
+  function importingWith(email: string) {
+    return importXml.execute({
+      userId: DISPATCHER,
+      businessId: BUSINESS,
+      files: [
+        { filename: "nota.xml", content: nfe(KEY_ONE, ISSUER_CNPJ, email) },
+      ],
+    });
+  }
+
+  it("keeps a clean list as it is, with no note", async () => {
+    const summary = await importingWith(
+      "compras@mercado.com.br;financeiro@mercado.com.br",
+    );
+
+    expect(deliveries.deliveries[0].recipient_email).toBe(
+      "compras@mercado.com.br;financeiro@mercado.com.br",
+    );
+    expect(summary.results[0]).toMatchObject({
+      outcome: "imported",
+      message: null,
+    });
+    expect(imports.imports[0].report.rows[0].message).toBeNull();
+  });
+
+  it("leaves out what is not an address, and says so in the report", async () => {
+    const summary = await importingWith(
+      "compras@mercado.com.br; mercado.com.br",
+    );
+
+    const note =
+      'O e-mail "mercado.com.br" do destinatário não é válido e não será usado nos avisos ao cliente.';
+
+    expect(deliveries.deliveries[0].recipient_email).toBe(
+      "compras@mercado.com.br",
+    );
+    expect(summary.results[0]).toMatchObject({
+      outcome: "imported",
+      message: note,
+    });
+    expect(imports.imports[0].report.rows[0]).toMatchObject({
+      outcome: "imported",
+      message: `nota.xml: ${note}`,
+    });
+  });
+
+  it("creates the delivery without an e-mail when none of it is one", async () => {
+    // The shape that stalled the parser for seconds per send.
+    const summary = await importingWith("a,".repeat(40_000));
+
+    expect(deliveries.deliveries).toHaveLength(1);
+    expect(deliveries.deliveries[0].recipient_email).toBeNull();
+    expect(summary.results[0].message).toBe(
+      'O e-mail "a" do destinatário não é válido e não será usado nos avisos ao cliente. O campo de e-mail do destinatário tem itens demais: só os 20 primeiros foram lidos.',
+    );
   });
 });

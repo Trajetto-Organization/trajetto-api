@@ -15,6 +15,11 @@ import {
 } from "@/modules/shipper/usecases/errors/shipper-errors";
 
 import { parseNFeXml, NFeParseError } from "@/shared/delivery/nfe-parser";
+import {
+  readRecipientEmails,
+  recipientEmailNotice,
+  storedRecipientEmail,
+} from "@/shared/delivery/recipient-email";
 import { AppError } from "@/shared/errors/AppError";
 import { assertDispatcher } from "@/shared/delivery/dispatcher-guard";
 import { assertTenantAccess } from "@/modules/middlewares/tenant-authorization";
@@ -96,8 +101,10 @@ function reportOf(results: ImportResultItem[]): ImportReport {
     outcome: result.outcome,
     recipient_name: result.recipient_name,
     reference: result.invoice_key ?? result.filename,
+    // An imported file has a message only when its note left something out
+    // (the recipient's e-mail).
     message:
-      result.outcome === "imported"
+      result.outcome === "imported" && !result.message
         ? null
         : `${result.filename}: ${result.message ?? ""}`.trim(),
   }));
@@ -367,6 +374,10 @@ class ImportDeliveryXmlUseCase {
       };
     }
 
+    // dest/email as a list, each entry checked like the manual create's
+    // (recipient-email.ts): what is not an address never reaches a send.
+    const recipientEmails = readRecipientEmails(parsed.recipient_email);
+
     try {
       // The row and its `delivery.created` in one commit, per file — so one
       // bad file still never sinks the batch. The import is the main way
@@ -382,7 +393,7 @@ class ImportDeliveryXmlUseCase {
             invoice_number: parsed.invoice_number,
             recipient_name: parsed.recipient_name,
             recipient_document: parsed.recipient_document,
-            recipient_email: parsed.recipient_email,
+            recipient_email: storedRecipientEmail(recipientEmails),
             recipient_telephone: parsed.recipient_telephone,
             cep: parsed.cep,
             city: parsed.city,
@@ -416,7 +427,9 @@ class ImportDeliveryXmlUseCase {
         outcome: "imported",
         invoice_key: parsed.invoice_key,
         recipient_name: parsed.recipient_name,
-        message: null,
+        // Imported all the same; the note says which e-mail was left out of
+        // the customer notices.
+        message: recipientEmailNotice(recipientEmails),
       };
     } catch (error) {
       // P2002 = the unique (businessId, invoice_key) fired: another replica

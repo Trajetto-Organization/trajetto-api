@@ -32,7 +32,12 @@ const importRowResult = z.object({
   outcome: z.enum(["imported", "duplicated", "invalid"]),
   recipient_name: z.string().nullable(),
   reference: z.string().nullable(),
-  message: z.string().nullable(),
+  message: z
+    .string()
+    .nullable()
+    .describe(
+      "Por que a linha foi recusada, ou de qual entrega é duplicata. Numa linha importada, o que ficou de fora: o e-mail do destinatário que não é válido (os dois primeiros entre aspas), a rota que não foi montada.",
+    ),
 });
 
 const importReport = z.object({

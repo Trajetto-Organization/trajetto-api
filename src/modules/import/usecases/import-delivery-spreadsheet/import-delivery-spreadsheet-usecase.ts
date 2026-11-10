@@ -615,7 +615,9 @@ class ImportDeliverySpreadsheetUseCase {
           outcome: "imported",
           recipient_name: row.recipient_name,
           reference: row.invoice_key ?? row.code,
-          message: null,
+          // Imported all the same; the note says which e-mail was left out
+          // of the customer notices (recipient-email.ts).
+          message: row.recipient_email_notice,
         });
       } catch (error) {
         // For a row with an access key, the unique index on (businessId,

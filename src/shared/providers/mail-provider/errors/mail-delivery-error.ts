@@ -61,10 +61,18 @@ const RETRYABLE_TRANSPORT_CODES = new Set([
  * wrong. Retrying replays the exact same rejection.
  */
 const NON_RETRYABLE_TRANSPORT_CODES = new Set([
-  "EAUTH",
+  "EAUTH", // a wrong key (535) and a missing one ('Missing credentials for "PLAIN"')
+  // nodemailer 8+ (was NoAuth): raised only by verify() with no auth object
+  // under forceAuth, which our transports never set. Kept as a defence.
+  "ENOAUTH",
   "EENVELOPE",
   "EMESSAGE",
   "ETLS",
+  // nodemailer 10: content named a file or a URL with disableFileAccess /
+  // disableUrlAccess set, or the transport is misconfigured. A retry replays it.
+  "EFILEACCESS",
+  "EURLACCESS",
+  "ECONFIG",
 ]);
 
 interface NodemailerLikeError {

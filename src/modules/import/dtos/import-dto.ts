@@ -24,7 +24,11 @@ interface ImportRowResult {
   recipient_name: string | null;
   reference: string | null;
 
-  /** Why it was refused, or which delivery it duplicated. */
+  /**
+   * Why it was refused, or which delivery it duplicated. On an imported row,
+   * what it went in without: the recipient's e-mail that is not an address
+   * (quoted, recipient-email.ts), the route it could not join.
+   */
   message: string | null;
 }
 

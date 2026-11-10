@@ -236,7 +236,12 @@ const deliveryRowEntity = z.object({
   invoice_number: z.string().nullable(),
   recipient_name: z.string(),
   recipient_document: z.string().nullable(),
-  recipient_email: z.string().nullable(),
+  recipient_email: z
+    .string()
+    .nullable()
+    .describe(
+      'E-mail do destinatário. Vindo da NF-e ou da planilha desde 10/11/2026, até 5 endereços válidos, separados por ";"; antes disso, o campo como estava no arquivo (o aviso ao cliente só escreve para os endereços válidos dele).',
+    ),
   recipient_telephone: z.string().nullable(),
   cep: z.string().nullable(),
   city: z.string(),
@@ -1030,7 +1035,9 @@ const deliveryResponses = {
           message: z
             .string()
             .nullable()
-            .describe("Motivo acionável quando o arquivo não virou entrega."),
+            .describe(
+              "Motivo acionável quando o arquivo não virou entrega. Num arquivo importado, os e-mails do destinatário que ficaram de fora dos avisos ao cliente (os dois primeiros entre aspas), ou nulo.",
+            ),
         }),
       ),
     }),

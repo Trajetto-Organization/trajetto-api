@@ -1,3 +1,4 @@
+import { readRecipientEmails } from "@/shared/delivery/recipient-email";
 import { normalizePhoneNumber } from "@/shared/providers/whatsapp-provider/phone-number";
 
 /**
@@ -59,8 +60,17 @@ function normalizeSuppressionPhone(phone: string): string {
 
 /**
  * The addresses a contact is suppressed and looked up under: the phone as
- * one line (normalizeSuppressionPhone) and the normalized e-mail. A field
- * without a usable value adds nothing.
+ * one line (normalizeSuppressionPhone), and for the e-mail every address the
+ * send writes to (readRecipientEmails), each normalized, plus the whole
+ * field normalized. A field without a usable value adds nothing.
+ *
+ * Per address because the NF-e and the spreadsheet store a list
+ * ("a@x.com.br;b@y.com.br", recipient-email.ts) and the same person comes
+ * back in another one: an opt-out from "a; b" stops a delivery to "b", and
+ * one to "a;c" (the e-mail goes to both, so it is not sent). The whole field
+ * is the key the first release of D38 wrote and still looks up: rows written
+ * before, or by a replica of it during a rollout, keep matching
+ * (20261110130000 also wrote their per-address keys).
  */
 function suppressionAddresses(contact: CustomerContact): SuppressionAddress[] {
   const addresses: SuppressionAddress[] = [];
@@ -73,9 +83,18 @@ function suppressionAddresses(contact: CustomerContact): SuppressionAddress[] {
 
   const email = contact.email ? normalizeSuppressionEmail(contact.email) : "";
 
-  if (email) addresses.push({ channel: "EMAIL", address: email });
+  if (email) {
+    addresses.push({ channel: "EMAIL", address: email });
 
-  return addresses;
+    for (const entry of readRecipientEmails(contact.email).addresses) {
+      addresses.push({
+        channel: "EMAIL",
+        address: normalizeSuppressionEmail(entry),
+      });
+    }
+  }
+
+  return uniqueSuppressionAddresses(addresses);
 }
 
 /** The same addresses once each: a contact read from two rows. */
@@ -115,9 +134,10 @@ interface MessageOptOut {
 /**
  * The opt-out state the delivery's detail shows (contract C2 of 03/11/2026):
  * per channel, when the company's suppression of the contact's address was
- * written; null while it receives (or has no address on that channel). A
- * recipient row opted out before the suppressions existed still stops its
- * own delivery's messages (the send checks opted_out_at too), so its date
+ * written — the earliest, when the e-mail's list matches more than one —;
+ * null while it receives (or has no address on that channel). A recipient
+ * row opted out before the suppressions existed still stops its own
+ * delivery's messages (the send checks opted_out_at too), so its date
  * answers for a channel with no suppression row.
  */
 function messageOptOutOf(
@@ -132,15 +152,21 @@ function messageOptOutOf(
   const addresses = suppressionAddresses(contact);
 
   const since = (channel: CustomerMessageChannel): Date | null => {
-    const own = addresses.find((entry) => entry.channel === channel);
+    const own = addresses.filter((entry) => entry.channel === channel);
 
-    if (!own) return null;
+    if (own.length === 0) return null;
 
-    const row = suppressions.find(
-      (entry) => entry.channel === channel && entry.address === own.address,
-    );
+    const times = suppressions
+      .filter(
+        (row) =>
+          row.channel === channel &&
+          own.some((entry) => entry.address === row.address),
+      )
+      .map((row) => new Date(row.created_at).getTime());
 
-    return row?.created_at ?? recipientOptedOutAt ?? null;
+    return times.length > 0
+      ? new Date(Math.min(...times))
+      : (recipientOptedOutAt ?? null);
   };
 
   return { whatsapp: since("WHATSAPP"), email: since("EMAIL") };

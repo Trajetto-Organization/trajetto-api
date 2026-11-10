@@ -2526,7 +2526,8 @@ model CustomerMessageSuppression {
   /// WHATSAPP: the phone as one line, E.164 without the "+"
   /// (normalizeSuppressionPhone: the digits the WhatsApp sender puts in
   /// `to`, a dialling prefix dropped, the ninth digit of an old 8-digit
-  /// mobile added). EMAIL: trimmed and lower-cased.
+  /// mobile added). EMAIL: trimmed and lower-cased, the whole field and,
+  /// for a list ("a;b", recipient-email.ts), each address of it too.
   address String
 
   /// The delivery whose link was clicked. No foreign key on purpose: the row

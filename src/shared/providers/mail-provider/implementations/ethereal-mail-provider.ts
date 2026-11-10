@@ -41,6 +41,10 @@ class EtherealMailProvider implements IMailProvider {
           connectionTimeout: SMTP_TIMEOUT_MS,
           greetingTimeout: SMTP_TIMEOUT_MS,
           socketTimeout: SMTP_TIMEOUT_MS,
+          // As in production (resendTransportOptions): no message content
+          // is ever read from a file or a URL.
+          disableFileAccess: true,
+          disableUrlAccess: true,
         });
 
         this.client = transporter;

@@ -10,6 +10,11 @@ import {
   ADDRESS_POINT_MESSAGES,
   addressPointProblem,
 } from "./address-coordinates";
+import {
+  readRecipientEmails,
+  recipientEmailNotice,
+  storedRecipientEmail,
+} from "./recipient-email";
 
 /**
  * Turning a spreadsheet into deliveries, decided here and nowhere else.
@@ -35,7 +40,14 @@ interface ParsedRow {
   recipient_name: string;
   recipient_document: string | null;
   recipient_telephone: string | null;
+
+  /**
+   * The valid addresses of the "E-mail" cell (";" or ","), stored joined by
+   * ";" (recipient-email.ts). An invalid one never fails the row: the
+   * delivery goes in without it, and the note quotes it.
+   */
   recipient_email: string | null;
+  recipient_email_notice: string | null;
 
   cep: string;
   city: string;
@@ -432,6 +444,8 @@ function parseDeliverySpreadsheet(matrix: unknown[][]): ParseResult {
       return;
     }
 
+    const recipientEmails = readRecipientEmails(read("recipient_email"));
+
     rows.push({
       line,
       kind: kind as DeliveryKind,
@@ -439,7 +453,8 @@ function parseDeliverySpreadsheet(matrix: unknown[][]): ParseResult {
       recipient_name,
       recipient_document: documentDigits || null,
       recipient_telephone: digitsOnly(read("recipient_telephone")) || null,
-      recipient_email: read("recipient_email") || null,
+      recipient_email: storedRecipientEmail(recipientEmails),
+      recipient_email_notice: recipientEmailNotice(recipientEmails),
 
       cep,
       city,

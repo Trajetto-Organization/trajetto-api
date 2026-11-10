@@ -65,6 +65,7 @@ const TEMPLATE_COLUMNS: TemplateColumn[] = [
     key: "recipient_email",
     header: "E-mail",
     aliases: ["email", "email do destinatario"],
+    help: 'Um ou mais (até 5), separados por ";" ou ",". O e-mail que não for válido fica de fora dos avisos ao cliente; a entrega entra do mesmo jeito.',
   },
 
   {

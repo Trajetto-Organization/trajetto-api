@@ -2782,6 +2782,56 @@ erro enquanto as entregas continuavam sendo criadas. A listagem
 (`list-imports`) traz só os contadores; o relatório linha a linha vem do
 detalhe (ou de `includeReport=true`).
 
+**E-mail do destinatário na planilha e na NF-e** (10/11/2026,
+`src/shared/delivery/recipient-email.ts`). A coluna "E-mail" e o `dest/email`
+da nota entravam sem conferência no `recipient_email` (TEXT). Daí iam, a cada
+aviso ao cliente, para o leitor de endereços do nodemailer, dentro do processo
+da API. Agora:
+
+- **O campo é uma lista** separada por `;`, como as notas trazem
+  ("compras@cliente.com.br;financeiro@cliente.com.br"), ou por `,`, como um
+  programa de e-mail cola (o nodemailer 6 também mandava para os dois).
+  Nenhum endereço válido tem `;` ou `,`, então separar nunca corta um.
+- **Cada item passa pela regra do cadastro manual**: o mesmo
+  `recipientEmailField` (`.email()` e até 100 caracteres) que o
+  `createDeliverySchema` usa. O formato "Nome <a@b.com>" não passa, como no
+  cadastro.
+- **O que fica**: os válidos, como foram escritos, sem repetição (a caixa não
+  conta) e no máximo 5, gravados juntos com `;`. O que não é endereço fica de
+  fora. Só os primeiros 20 itens são lidos (o espaço vazio entre separadores
+  não conta como item), e cada busca começa onde a anterior parou: o trabalho
+  fica linear e limitado, qualquer que seja o tamanho do campo.
+- **A entrega entra do mesmo jeito.** A linha do relatório diz o que ficou de
+  fora em `message`, mesmo com `outcome: "imported"`, citando entre aspas os
+  dois primeiros itens recusados (até 40 caracteres cada, numa linha só): 'O
+  e-mail "mercado@" do destinatário não é válido e não será usado nos avisos
+  ao cliente.', 'Os e-mails "a@", "b@" e outros 2 do destinatário não são
+  válidos...', "Só os 5 primeiros e-mails válidos..." (só com mais de 5
+  endereços válidos distintos) ou "O campo de e-mail do destinatário tem itens
+  demais: só os 20 primeiros foram lidos.". Sem nenhum válido,
+  `recipient_email` fica nulo.
+- **O envio relê o valor gravado** com a mesma função
+  (`notification-pipeline-service.ts`). Uma linha gravada antes da regra
+  chega ao transporte só com os endereços válidos, juntados por vírgula num
+  `to` só. Sem nenhum, não nasce linha de e-mail (motivo `invalid_address` no
+  log de canais suprimidos, em `debug`), e uma mensagem já na fila termina
+  `FAILED` sem nova tentativa.
+- **O cadastro e a edição.** `POST /delivery/create-delivery/:businessId` e
+  a integração continuam aceitando um endereço só.
+  `PATCH /delivery/update-delivery/:deliveryId/business/:businessId` aceita
+  também a lista (`recipientEmailListField`: até 5, separados por `;` ou `,`,
+  cada um pela mesma regra, gravada como veio), porque a web manda o
+  formulário inteiro: com um endereço só, a edição de qualquer campo de uma
+  entrega importada com lista era recusada por um e-mail que ninguém mexeu.
+  Um item inválido recusa o pedido com a frase do cadastro (quem edita pode
+  corrigir). O formulário da web ainda confere um endereço só: aceitar a
+  lista lá é um item da web, que sobe depois desta API.
+- **A supressão (D38) guarda a lista por endereço**: o descadastro grava a
+  chave do campo inteiro (a da primeira versão) e uma por endereço válido, e
+  a busca confere todas (ver "Descadastro por telefone e e-mail na
+  transportadora" em
+  [Integrações externas](#integrações-externas)).
+
 **Estorno de importação** (`POST /import/reverse-import/:importId/business/:businessId`)
 roda em lotes de 500 entregas, cada lote numa transação
 (`src/modules/import/services/import-reversal.ts`): numa transação só, desfazer
@@ -3022,7 +3072,14 @@ OpenStreetMap são recusados.
   remetente nunca acrescenta o nono dígito), então "(11) 9123-4567" num
   cadastro antigo e "011 99123-4567" na NF-e seguinte são o mesmo telefone;
   `EMAIL` com o
-  endereço sem espaços e em minúsculas, mais a entrega de onde veio o clique
+  e-mail aparado e em minúsculas, o campo inteiro e, numa lista da NF-e ou da
+  planilha, também cada endereço válido dela (`suppressionAddresses`, com a
+  leitura de `recipient-email.ts`): o descadastro de "a; b" para a entrega a
+  "a;b", a "b" e a "b;c" (o e-mail vai para todos da lista, então não sai),
+  e o campo inteiro continua casando com as linhas da primeira versão; a
+  migration `20261110130000_customer_message_suppression_email_entries`
+  gravou a chave por endereço das linhas já existentes. Grava também a
+  entrega de onde veio o clique
   (`source_delivery_id`, sem chave estrangeira). O porquê: quem recebe muitas
   entregas da mesma transportadora continuava recebendo as mensagens da
   próxima. A gravação é `INSERT ... ON CONFLICT DO NOTHING` na chave única
@@ -3050,9 +3107,11 @@ OpenStreetMap são recusados.
   `DELIVERY_NOT_FOUND`): numa transação, apaga as supressões da empresa para
   o telefone e o e-mail normalizados do destinatário (os atuais da entrega e
   os que o `external_recipient` guardou, que podem ser de antes de uma
-  correção), limpa `opted_out_at` de todo `external_recipient` da empresa com
-  o mesmo contato normalizado (a leitura é das linhas descadastradas da
-  própria empresa, pelo índice `(businessId, created_at)`; descadastro é
+  correção; numa lista de e-mails, o campo inteiro e cada endereço dela, que
+  é o que volta a deixar a lista receber), limpa `opted_out_at` de todo
+  `external_recipient` da empresa com algum desses endereços (a leitura é
+  das linhas descadastradas da própria empresa, pelo índice
+  `(businessId, created_at)`; descadastro é
   raro e o botão também) e grava a atividade "Mensagens ao cliente
   reativadas" com quem fez. As próximas mensagens de qualquer entrega dessa
   pessoa voltam a sair (as duas conferências do envio leem exatamente essas
@@ -3062,7 +3121,34 @@ OpenStreetMap são recusados.
   `{ message, data: { messageOptOut: { whatsapp: null, email: null } } }`.
 - **E-mail (Resend)**: `DELIVERED` quer dizer aceito pelo provedor; o que
   acontece depois chega por `/webhooks/resend` (assinado com
-  `RESEND_WEBHOOK_SECRET`) e fica em `notification_provider_receipt`.
+  `RESEND_WEBHOOK_SECRET`) e fica em `notification_provider_receipt`. O envio
+  é SMTP em `smtp.resend.com:587` pelo nodemailer 10.3.1, que traz os
+  próprios tipos (sem `@types/nodemailer`). As opções ficam em
+  `resendTransportOptions()` e a mensagem em `buildResendMessage()`, em
+  `resend-mail-provider.ts`:
+  - `requireTLS`: sem STARTTLS, a conexão não autentica nem envia.
+  - Pool de 3 conexões, com 10 s para o aperto de mão inteiro. Desde a 10.1,
+    o DNS, o TCP, a saudação e o STARTTLS contam juntos no
+    `connectionTimeout`.
+  - `disableFileAccess` e `disableUrlAccess`: nenhuma mensagem tem anexo, e
+    nenhum campo de conteúdo lê arquivo do disco nem busca URL.
+  - Sem `RESEND_SECRET_KEY`, o envio falha com `EAUTH` 'Missing credentials
+    for "PLAIN"' (antes de mandar o AUTH), e a chave errada com `EAUTH` e a
+    resposta 535: nenhum dos dois é reprocessado. O `ENOAUTH` (o `NoAuth` até
+    a 7) só sai do `verify()` sem `auth` e com `forceAuth`, que os nossos
+    transportes não usam; fica na lista dos não reprocessados por defesa.
+  - `EFILEACCESS`, `EURLACCESS` (as recusas das duas travas acima) e
+    `ECONFIG` também terminam sem nova tentativa: cada tentativa repete a
+    mesma recusa.
+  - No aviso ao cliente, o `to` só leva os endereços que passaram pela regra
+    do cadastro manual ([Arquivos](#arquivos), "E-mail do destinatário na
+    planilha e na NF-e").
+  - Piso de versão em `tests/unitaires/security/dependency-security-floor.test.ts`:
+    10.1.4 ou mais, e nunca 10.0.0 a 10.0.11, que ignoravam o `requireTLS`.
+    `tests/unitaires/mail/resend-transport.test.ts` confere, contra um
+    servidor SMTP local sem STARTTLS, que o AUTH não sai, e lê no bruto o
+    `Message-ID` determinístico, o `Resend-Idempotency-Key` e o
+    `X-Entity-Ref-ID`.
 - **Push**: pela Expo, para o app Android; o cron `check-push-receipts`
   desativa aparelhos mortos. O `data` leva o item, a empresa e quem recebeu
   (`entityId`, `businessId`, `userId`; onda 3, em

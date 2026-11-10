@@ -3623,3 +3623,132 @@ describe("the API key on a delivery's trail (20261110120000)", () => {
     expect(foreignKey?.definition).toContain("ON DELETE SET NULL");
   });
 });
+
+describe("the e-mail opt-outs per address (20261110130000)", () => {
+  const MIGRATION = "20261110130000_customer_message_suppression_email_entries";
+
+  it("is one INSERT under a lock timeout", () => {
+    expect(
+      migrationStatements(MIGRATION).map(
+        (statement) => statement.split(/\s/)[0],
+      ),
+    ).toEqual(["SET", "INSERT"]);
+  });
+
+  it("keeps each address of a list's opt-out once, with the first opt-out's date, and nothing else", async () => {
+    const backfill = statementStartingWith(MIGRATION, "INSERT");
+
+    const outcome = await rolledBack(async (tx) => {
+      const carrier = await seedBusiness(tx);
+      const other = await seedBusiness(tx);
+
+      const row = (
+        businessId: string,
+        channel: "EMAIL" | "WHATSAPP",
+        address: string,
+        at: string,
+      ) =>
+        tx.$executeRawUnsafe(
+          `INSERT INTO "customer_message_suppression"
+             ("id", "businessId", "channel", "address", "source_delivery_id", "created_at")
+           VALUES (gen_random_uuid()::text, $1, $2::"CustomerMessageChannel", $3, 'clicked', $4::timestamp)`,
+          businessId,
+          channel,
+          address,
+          at,
+        );
+
+      // What the previous image wrote: the whole field, trimmed and
+      // lower-cased, spaces, blanks and mistakes included.
+      await row(
+        carrier,
+        "EMAIL",
+        "compras@mercado.com.br; financeiro@mercado.com.br",
+        "2026-11-04 10:00:00",
+      );
+      await row(
+        carrier,
+        "EMAIL",
+        "financeiro@mercado.com.br;lixo;\tvendas@mercado.com.br ;",
+        "2026-11-05 10:00:00",
+      );
+      // A list pasted from a mail client.
+      await row(
+        carrier,
+        "EMAIL",
+        "ana@loja.com.br, bia@loja.com.br",
+        "2026-11-05 11:00:00",
+      );
+      // One address: already its own key.
+      await row(
+        carrier,
+        "EMAIL",
+        "joana@padaria.com.br",
+        "2026-11-05 12:00:00",
+      );
+      // The phone is one line already.
+      await row(carrier, "WHATSAPP", "5511991234567", "2026-11-05 13:00:00");
+      // Another company keeps its own rows.
+      await row(
+        other,
+        "EMAIL",
+        "compras@mercado.com.br;x@y.com.br",
+        "2026-11-06 10:00:00",
+      );
+
+      const first = await tx.$executeRawUnsafe(backfill);
+      // Idempotent: a second run (docs/deploy.md) adds nothing.
+      const second = await tx.$executeRawUnsafe(backfill);
+
+      const rows = await tx.$queryRawUnsafe<
+        Array<{ company: string; address: string; at: string; source: string }>
+      >(
+        `SELECT CASE WHEN "businessId" = $1 THEN 'carrier' ELSE 'other' END AS "company",
+                "address",
+                to_char("created_at", 'YYYY-MM-DD HH24:MI') AS "at",
+                "source_delivery_id" AS "source"
+           FROM "customer_message_suppression"
+          WHERE "businessId" IN ($1, $2) AND "channel" = 'EMAIL'
+          ORDER BY 1, "address" COLLATE "C"`,
+        carrier,
+        other,
+      );
+
+      return { first, second, rows };
+    });
+
+    expect(outcome.first).toBe(7);
+    expect(outcome.second).toBe(0);
+
+    expect(outcome.rows).toEqual(
+      [
+        ["carrier", "ana@loja.com.br", "2026-11-05 11:00"],
+        ["carrier", "ana@loja.com.br, bia@loja.com.br", "2026-11-05 11:00"],
+        ["carrier", "bia@loja.com.br", "2026-11-05 11:00"],
+        ["carrier", "compras@mercado.com.br", "2026-11-04 10:00"],
+        [
+          "carrier",
+          "compras@mercado.com.br; financeiro@mercado.com.br",
+          "2026-11-04 10:00",
+        ],
+        // In two lists: the earlier opt-out's date.
+        ["carrier", "financeiro@mercado.com.br", "2026-11-04 10:00"],
+        [
+          "carrier",
+          "financeiro@mercado.com.br;lixo;\tvendas@mercado.com.br ;",
+          "2026-11-05 10:00",
+        ],
+        ["carrier", "joana@padaria.com.br", "2026-11-05 12:00"],
+        ["carrier", "vendas@mercado.com.br", "2026-11-05 10:00"],
+        ["other", "compras@mercado.com.br", "2026-11-06 10:00"],
+        ["other", "compras@mercado.com.br;x@y.com.br", "2026-11-06 10:00"],
+        ["other", "x@y.com.br", "2026-11-06 10:00"],
+      ].map(([company, address, at]) => ({
+        company,
+        address,
+        at,
+        source: "clicked",
+      })),
+    );
+  });
+});

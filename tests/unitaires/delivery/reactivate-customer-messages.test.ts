@@ -242,4 +242,46 @@ describe("reactivating the customer's messages from a delivery", () => {
     });
     expect(recipients.suppressions).toHaveLength(2);
   });
+
+  it("from a delivery with an e-mail list, lifts each address of it", async () => {
+    // An NF-e stores "a;b" (recipient-email.ts); the person had opted out
+    // from a delivery to one of them.
+    const { recipients, useCase } = world();
+    const single = { telephone: "(31) 96666-3003", email: "Ana@Loja.com.br" };
+    const listed = {
+      telephone: "(31) 96666-3003",
+      email: "ana@loja.com.br;compras@loja.com.br",
+    };
+
+    for (const [id, contact] of [
+      [CLICKED, single],
+      [NEXT, listed],
+    ] as const) {
+      recipients.deliveryStates.set(id, {
+        status: "IN_TRANSIT",
+        name: "Ana",
+        ...contact,
+      });
+    }
+
+    await optOut(recipients, CLICKED, CARRIER, single);
+
+    expect(await recipients.messageOptOutState(CARRIER, NEXT)).toMatchObject({
+      email: expect.any(Date),
+    });
+
+    await useCase.execute({
+      userId: DISPATCHER,
+      businessId: CARRIER,
+      deliveryId: NEXT,
+    });
+
+    expect(await recipients.suppressedChannels(CARRIER, single)).toEqual(
+      new Set(),
+    );
+    expect(
+      recipients.recipients.find((row) => row.deliveryId === CLICKED)
+        ?.opted_out_at,
+    ).toBeNull();
+  });
 });

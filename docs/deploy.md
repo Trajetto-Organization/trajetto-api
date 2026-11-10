@@ -2553,6 +2553,72 @@ lê a tabela sem bloquear escrita (`SHARE UPDATE EXCLUSIVE`).
   busca, uma troca da `JWT_SECRET` só esvazia o cache: as respostas antigas
   não abrem e contam como cache vazio. Nada a fazer.
 
+**nodemailer 10.3.1 e o e-mail do destinatário das importações
+(10/11/2026).** Sem variável nova e sem rota nova. A imagem da API muda
+(nodemailer 6.9.16 → 10.3.1, sem `@types/nodemailer`) e há uma migration,
+pela mesma etapa da `trajetto-api-migrate` (nada à mão no deploy):
+`20261110130000_customer_message_suppression_email_entries`. A regra está em
+[arquitetura.md (Integrações externas)](./arquitetura.md#integrações-externas)
+e em [arquitetura.md (Arquivos)](./arquitetura.md#arquivos).
+
+- **A ordem não importa.** A web e o app não mudam. A web anterior já mostra
+  o `message` de uma linha importada (é o mesmo campo das notas de rota). A
+  edição da entrega passa a aceitar a lista de e-mails que a importação
+  gravou; a web que aceitar a lista no formulário (item da web, ainda não
+  feito) sobe depois desta API, porque a anterior responderia 400.
+- **A migration** só insere linhas em `customer_message_suppression`: para
+  cada descadastro de e-mail com `;` ou `,` (gravado pela primeira versão da
+  D38 com o campo inteiro), uma linha por endereço, aparado e em minúsculas,
+  com a data e a entrega do descadastro. Sem ela, quem se descadastrou de
+  "a; b" voltaria a receber na próxima NF-e, que grava "a;b". É um `INSERT`
+  sob `lock_timeout=5s`, numa tabela pequena, que não trava leitura nem
+  descadastro. As linhas do campo inteiro ficam: a imagem anterior ainda as
+  procura.
+- **Rolling deploy.** Réplicas antigas e novas mandam o mesmo `Message-ID` e
+  o mesmo `Resend-Idempotency-Key`, os dois tirados do id da notificação: a
+  Resend continua deduplicando com réplicas misturadas. Durante o rollout (ou
+  depois de um rollback), a réplica antiga ainda grava o e-mail da NF-e e da
+  planilha sem conferência (a nova relê o valor na hora do envio e só escreve
+  para os endereços válidos) e grava o descadastro só com o campo inteiro. O
+  `INSERT` da migration é idempotente: rode-o de novo à mão no banco depois
+  que esta release estiver servindo, para os descadastros desse intervalo.
+- **Antes de promover, meça** em produção, no psql do Database PostgreSQL do
+  Dokploy (só leitura), as entregas em aberto cujo e-mail tem lista ou nome:
+  ```sql
+  SELECT "businessId",
+         count(*) FILTER (WHERE recipient_email LIKE '%<%') AS com_nome,
+         count(*) FILTER (WHERE recipient_email ~ '[;,]') AS com_lista
+  FROM delivery
+  WHERE status IN ('PENDING', 'IN_TRANSIT', 'FAILED')
+    AND recipient_email ~ '[<;,]'
+  GROUP BY "businessId"
+  ORDER BY count(*) DESC;
+  ```
+  As listas separadas por `;` ou `,` continuam recebendo, só nos endereços
+  válidos. O formato "Nome <a@b.com>", que o nodemailer 6 entregava, não
+  passa pela regra do cadastro: depois da subida, essas entregas deixam de
+  mandar o aviso por e-mail, e o único rastro é o motivo `invalid_address` no
+  log `debug` "notification channels suppressed" (ou a mensagem `FAILED`
+  "no valid e-mail address", se já estava na fila). Se `com_nome` não for
+  desprezível, combine com as empresas a correção do e-mail na edição da
+  entrega antes de subir.
+- **Depois de subir no staging**, antes de promover, faça o teste de e-mail
+  real pela Resend:
+  1. Dispare um "esqueci minha senha" e confira no painel da Resend que
+     chegou. Só a chegada: o e-mail transacional não tem linha de
+     notificação, e o `Message-ID` dele é um UUID novo a cada envio.
+  2. Dispare um aviso ao cliente por e-mail (uma entrega com e-mail e o
+     "saiu para entrega" ligado). No painel da Resend, confira que chegou e
+     que o `Message-ID` é o determinístico,
+     `<id-da-notificação@domínio-do-remetente>` (o `id` da linha de
+     `notification_delivery`), e que o webhook de entrega casou com essa
+     notificação (uma linha em `notification_provider_receipt`).
+  3. Nos logs da `trajetto-api`, `e-mail send failed` com `code: "ETLS"` é
+     o STARTTLS recusado (o envio para, sem mandar a chave); `code: "EAUTH"`
+     com "Missing credentials" é a `RESEND_SECRET_KEY` vazia, e `EAUTH` com
+     a resposta 535 é a chave errada. Nenhum deles é reprocessado. O
+     `ENOAUTH` não aparece com este transporte (fica na lista por defesa).
+
 **Regras entre motorista, veículo e rota (10/11/2026).** Sem migration, sem
 variável nova e sem rota nova. A regra está em
 [arquitetura.md (Motorista, veículo e rota: o que é aviso e o que é recusa)](./arquitetura.md#motorista-veículo-e-rota-o-que-é-aviso-e-o-que-é-recusa).
@@ -3760,3 +3826,34 @@ está detalhada no `docs/variaveis-de-ambiente.md` do repositório que a lê.
    o build de staging que os tiles do MapTiler aparecem no mapa ao vivo (a
    página carrega sob a origem da web do build). `MIN_MOBILE_CONTRACT` fica
    como está até o contrato 5 sumir dos logs da API.
+
+**O lote de 09 e 10/11/2026 (contrato 7 do app)**, nesta ordem:
+
+1. **API**, com a migration só de expansão
+   `20261110120000_delivery_event_api_key` e a de dados
+   `20261110130000_customer_message_suppression_email_entries`, que o
+   pipeline roda pela `trajetto-api-migrate` antes do deploy. Antes do
+   deploy, o dono define `ADDRESS_SEARCH_URL` e `ADDRESS_SEARCH_PROTOCOL` no
+   _Environment_ da Application `trajetto-api`, em staging e em produção
+   (sem elas, a busca do "Fixar no mapa" responde 503 e nada quebra), e
+   roda em produção as duas contagens só de leitura: motoristas com CPF
+   inválido e entregas em aberto com lista ou nome no e-mail. No staging,
+   antes de promover, faz o teste de e-mail real pela Resend (nodemailer
+   10). Depois do rollout, roda de novo à mão o `INSERT` da migration de
+   dados. Tudo no manual da API, seção 15 ("CPF conferido no cadastro do
+   motorista", "Busca de endereço do 'Fixar no mapa'" e "nodemailer 10.3.1
+   e o e-mail do destinatário das importações"). No push para a `staging`,
+   a API também vai antes: o CI da web roda o `cpf-field-api-parity`
+   contra a `staging` da API.
+2. **Web:** só com a API do passo 1 em produção. A web nova chama
+   `GET /address-search/:businessId` e `POST /user/session/revoke` (na API
+   desde 04/11/2026, ainda fora da `v1.3.0`) e oferece o escopo
+   `deliveries:cancel`, que a API anterior recusa com 400. O gate de rotas
+   do promote só cobra as rotas com `API_DOCS_URL` (e `DOCS_USER` e
+   `DOCS_PASSWORD`) no _environment_ de produção da web; sem ela, confira
+   as duas no `/docs/json` da API de produção antes de promover (manual da
+   web, seção 13).
+3. **App:** por último, por OTA, sem binário novo, com o contrato 7 (o
+   motivo na pausa por outro motivo e o "Novo assunto" do chat) e a troca
+   de tema mais leve. Nada é recusado por contrato: o app 7 funciona sobre
+   a API anterior. `MIN_MOBILE_CONTRACT` não muda.

@@ -1,4 +1,7 @@
+import { z } from "zod";
+
 import { createDeliverySchema } from "@/schemas/create-delivery-schema";
+import { recipientEmailListField } from "@/shared/delivery/recipient-email";
 import { tenantLockedShape } from "@/shared/validation/tenant-locked-field";
 
 /**
@@ -18,10 +21,25 @@ import { tenantLockedShape } from "@/shared/validation/tenant-locked-field";
  * edited here: moving it is the route map's "Fixar no mapa", which also
  * moves the plan version of the route holding the stop. An address edit
  * clears it (CLEARED_ADDRESS_POINT).
+ *
+ * The recipient's e-mail takes back the list an NF-e or a spreadsheet
+ * stored ("a@x.com.br;b@y.com.br", recipient-email.ts): the panel sends the
+ * whole form, so a one-address field here refused an edit of the address
+ * alone over an e-mail nobody had touched. The create keeps one address.
  */
 const updateDeliverySchema = createDeliverySchema
   .omit({ latitude: true, longitude: true })
   .partial()
-  .extend(tenantLockedShape);
+  .extend({
+    recipient_email: z
+      .preprocess(
+        (val) => (val === "" ? null : val),
+        recipientEmailListField.nullable().optional(),
+      )
+      .describe(
+        'E-mail do destinatário: um, ou até 5 separados por ";" ou "," (a lista que a NF-e ou a planilha gravou). Cada um passa pela regra do cadastro. Vazio ou nulo apaga.',
+      ),
+    ...tenantLockedShape,
+  });
 
 export { updateDeliverySchema };

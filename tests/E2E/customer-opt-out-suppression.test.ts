@@ -621,3 +621,120 @@ describe("the repository and its twin", () => {
     expect(outcomes[1]).toEqual(outcomes[0]);
   });
 });
+
+describe("an e-mail list, as the NF-e and the spreadsheet store it", () => {
+  it("is kept under each address: the same list stored another way, one of them alone, or a list sharing one", async () => {
+    // The click is on a delivery imported before the lists were checked:
+    // its field is as the NF-e wrote it. The next NF-e stores "a;b".
+    const written = {
+      telephone: "(61) 94444-6006",
+      email: "Compras@Mercado.com.br; financeiro@mercado.com.br",
+    };
+
+    const clicked = await seedDelivery(CARRIER, written);
+
+    expect(
+      (await optOut(await trackingToken(clicked, CARRIER, written))).statusCode,
+    ).toBe(200);
+
+    expect(
+      (
+        await prisma.customerMessageSuppression.findMany({
+          where: { businessId: CARRIER, source_delivery_id: clicked },
+          select: { channel: true, address: true },
+        })
+      )
+        .map((row) => `${row.channel}:${row.address}`)
+        .sort(),
+    ).toEqual([
+      "EMAIL:compras@mercado.com.br",
+      "EMAIL:compras@mercado.com.br; financeiro@mercado.com.br",
+      "EMAIL:financeiro@mercado.com.br",
+      "WHATSAPP:5561944446006",
+    ]);
+
+    const events: Record<string, string> = {};
+
+    for (const email of [
+      "compras@mercado.com.br;financeiro@mercado.com.br",
+      "financeiro@mercado.com.br",
+      // The e-mail goes to both, so it is not sent to either.
+      "outro@mercado.com.br;Compras@mercado.com.br",
+      // Nobody on this list opted out.
+      "outro@mercado.com.br",
+    ]) {
+      const next = await seedDelivery(CARRIER, {
+        telephone: "(61) 93333-7007",
+        email,
+      });
+
+      events[email] = await dispatch(next, CARRIER);
+    }
+
+    await drain();
+
+    for (const [email, eventId] of Object.entries(events)) {
+      expect(
+        (await customerRowsOf(eventId)).map((row) => row.channel),
+        email,
+      ).toEqual(
+        email === "outro@mercado.com.br" ? ["EMAIL", "WHATSAPP"] : ["WHATSAPP"],
+      );
+    }
+
+    expect(mail.sent.map((sent) => sent.to)).toEqual(["outro@mercado.com.br"]);
+  });
+
+  it("stops a delivery still on its way under the field as it was typed, from a click on a list the import stored", async () => {
+    const stored = {
+      telephone: "(62) 92222-8008",
+      email: "ana@loja.com.br;compras@loja.com.br",
+    };
+
+    const clicked = await seedDelivery(CARRIER, stored);
+
+    expect(
+      (await optOut(await trackingToken(clicked, CARRIER, stored))).statusCode,
+    ).toBe(200);
+
+    // Imported before this release, with the spacing the NF-e had.
+    const older = await seedDelivery(CARRIER, {
+      telephone: "(62) 91111-9009",
+      email: " ana@loja.com.br ; compras@loja.com.br;",
+    });
+    const eventId = await dispatch(older, CARRIER);
+
+    await drain();
+
+    expect(mail.sent).toEqual([]);
+    expect((await customerRowsOf(eventId)).map((row) => row.channel)).toEqual([
+      "WHATSAPP",
+    ]);
+  });
+
+  it("keeps a row the first release wrote under the whole field", async () => {
+    const field = "rui@oficina.com.br;caixa@oficina.com.br";
+
+    await prisma.customerMessageSuppression.create({
+      data: {
+        businessId: CARRIER,
+        channel: "EMAIL",
+        address: field,
+        source_delivery_id: null,
+      },
+    });
+
+    const next = await seedDelivery(CARRIER, {
+      telephone: "(63) 90000-1010",
+      email: field,
+    });
+    const eventId = await dispatch(next, CARRIER);
+
+    await drain();
+
+    expect(mail.sent).toEqual([]);
+    expect((await customerRowsOf(eventId)).map((row) => row.channel)).toEqual([
+      "WHATSAPP",
+    ]);
+  });
+});
