@@ -20,6 +20,23 @@ let app: Awaited<typeof import("@/http")>["app"];
 beforeAll(async () => {
   ({ app } = await import("@/http"));
   await app.ready();
+
+  // The probes' verdict once their clients are open, not that first opening.
+  // Both clients open on first use: the first query pays the pool's first
+  // connection and Prisma's first query, the first getClient() the Redis
+  // connection. Paid inside the first probe, on its 500 ms clock, they read
+  // as an outage: 0.46 s for Redis and over 0.5 s for the database (a 503),
+  // measured on a loaded 2-vCPU machine with both test processes busy. A
+  // freshly booted replica's first /health pays them too: none opens the
+  // cache client before listening, and only a workers replica touches the
+  // database before then, with a webhook drain it does not await (the
+  // workers are armed, not drained: shared/lifecycle/startup.ts). Here both
+  // are paid before the first request instead.
+  const database = (await import("@/../infra/database")).default;
+  const { RedisConnection } = await import("@/../infra/cache/redis-connection");
+
+  await database.$queryRaw`SELECT 1`;
+  await (await RedisConnection.getInstance().getClient()).ping();
 }, 90_000);
 
 afterAll(async () => {

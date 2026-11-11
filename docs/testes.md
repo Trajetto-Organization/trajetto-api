@@ -356,6 +356,18 @@ motivo errado. As ferramentas:
   tempo (as sondas em paralelo de `health/provider-readiness.test.ts` seguram a
   resposta até a última começar; `delivery/proof-pdf-isolation.test.ts` espia
   o pdfkit e o zlib desta thread em vez de medir o travamento do event loop).
+- **Prazo do produto** (cada sonda do `/health` tem 500 ms): o primeiro uso de
+  um cliente paga a abertura dele (a primeira conexão do pool e a primeira
+  query do Prisma, a conexão do Redis). Nenhuma réplica abre o Redis do cache
+  antes do `listen`, e o banco só é tocado antes dele numa réplica com
+  workers, pela primeira varredura do despacho de webhooks, sem esperar por
+  ela: o primeiro `/health` de uma réplica recém-subida paga essas aberturas.
+  Um teste que julga a resposta da sonda, e não essa partida a frio, paga a
+  abertura antes da primeira chamada medida, como o `beforeAll` de
+  `health-under-failure.test.ts` e o de `database-reconnect.test.ts`: dentro
+  da sonda, com os dois processos de teste ocupados, elas levaram 0,46 s
+  (Redis) e mais de 0,5 s (banco), e o `/health` respondeu 503 com o banco de
+  pé.
 
 Uma janela negativa ("não pode chegar em N s") só vale depois de confirmado o
 estado que torna a resposta certa (o socket na sala, o pedido tratado).
