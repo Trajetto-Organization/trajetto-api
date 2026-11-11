@@ -597,11 +597,11 @@ uma garantia:
 | audit, gitleaks, pytest da IA | —                                                  | sim (o audit bloqueia só quando a branch muda dependência) | sim (bloqueia quando muda dependência desde o último build servido) |
 | push só de documentação       | —                                                  | gitleaks e `Docs` (unitários sem cobertura)                | gitleaks e `Docs`, sem build nem deploy                             |
 | contrato com a IA real        | opt-in                                             | só _Run workflow_                                          | não                                                                 |
+| carga, mutação                | sob demanda                                        | não                                                        | não                                                                 |
+| simulação do dia de entregas  | sob demanda                                        | não                                                        | não                                                                 |
 
 O PR `staging → main` (`pr.yml`) não roda nada disso de novo: confere o
 `staged-<7>`, o `Gate` do staging e que a `main` só traz documentação.
-| carga, mutação | sob demanda | não | não |
-| simulação do dia de entregas | sob demanda | não | não |
 
 ## Regras para escrever testes
 
