@@ -17,7 +17,7 @@ nesses arquivos.
 | ADR                                                | Decisão                                                                  | Status                         |
 | -------------------------------------------------- | ------------------------------------------------------------------------ | ------------------------------ |
 | [0001](./0001-filas-e-mensageria.md)               | O Postgres é a fila; nenhum broker, só por gatilho medido                | aceito (revisto em 28/10/2026) |
-| [0002](./0002-redis-descartavel.md)                | Redis descartável: só chaves que podem sumir, com falha aberta           | aceito                         |
+| [0002](./0002-redis-descartavel.md)                | Redis descartável: só chaves que podem sumir, nunca fonte de verdade     | aceito (adendo de 10/11/2026)  |
 | [0003](./0003-outbox-transacional.md)              | Outbox transacional: o evento nasce na transação do dado                 | aceito                         |
 | [0004](./0004-workers-no-mesmo-processo.md)        | Workers no mesmo processo da API, separáveis por flag com a mesma imagem | aceito                         |
 | [0005](./0005-retentativa-backoff-dead-letter.md)  | Retentativa com backoff, dead letter e reenvio por id                    | aceito                         |

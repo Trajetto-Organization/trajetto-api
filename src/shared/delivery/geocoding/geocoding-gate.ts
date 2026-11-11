@@ -2,6 +2,8 @@ import { randomUUID } from "node:crypto";
 
 import type { Redis } from "ioredis";
 
+import { GEOCODING_KEYS, type GeocodingKeys } from "./geocoding-keys";
+
 /**
  * When the geocoder may call the provider at all, across every replica and
  * every path — the minute's job, the lookup a request starts after its
@@ -81,12 +83,7 @@ const GEOCODING_CALLS_PER_MINUTE = 50;
  */
 const GEOCODING_BACKGROUND_CALLS_PER_MINUTE = 40;
 
-/** The minute's log: one member per call, scored by its time. */
-const MINUTE_LOG_KEY = "geocoding:provider:minute";
-
 const MINUTE_MS = 60_000;
-
-const PAUSE_KEY = "geocoding:deliveries:paused";
 
 /** "REFUSED 2026-11-09T15:15:00.000Z": the reason, then the deadline. */
 function pauseValue(reason: GeocodingPauseReason, until: Date): string {
@@ -111,15 +108,6 @@ function pauseDeadlineOf(value: string | null | undefined): Date | null {
 
 /** Two seconds, so a window's key outlives its second. */
 const SLOT_WINDOW_SECONDS = 2;
-
-/**
- * The second's window. Named after the deliveries, as it was before the
- * search shared it: during a rolling deploy the old replicas and the new
- * count in the same key, so the job and the search never pass the rate.
- */
-function slotKey(epochSecond: number): string {
-  return `geocoding:deliveries:rate:${epochSecond}`;
-}
 
 /**
  * A slot in the second AND the last 60 s, or in neither, in one script: a
@@ -180,17 +168,20 @@ function createRedisGeocodingGate(
     perMinute = GEOCODING_BACKGROUND_CALLS_PER_MINUTE,
     clock = () => Date.now(),
     onError = () => undefined,
+    keys = GEOCODING_KEYS,
   }: {
     perSecond?: number;
     perMinute?: number;
     clock?: () => number;
     onError?: (err: unknown) => void;
+    /** Production's unless a test runs the gate on keys of its own. */
+    keys?: GeocodingKeys;
   } = {},
 ): GeocodingGate {
   return {
     async paused() {
       try {
-        return (await redis.get(PAUSE_KEY)) !== null;
+        return (await redis.get(keys.pause)) !== null;
       } catch (err) {
         onError(err);
 
@@ -207,7 +198,7 @@ function createRedisGeocodingGate(
         await redis.eval(
           EXTEND_PAUSE,
           1,
-          PAUSE_KEY,
+          keys.pause,
           pauseValue(reason, until),
           ms,
         );
@@ -222,8 +213,8 @@ function createRedisGeocodingGate(
         const granted = await redis.eval(
           TAKE_SLOT,
           2,
-          slotKey(Math.floor(now / 1000)),
-          MINUTE_LOG_KEY,
+          keys.second(Math.floor(now / 1000)),
+          keys.minute,
           perSecond,
           perMinute,
           SLOT_WINDOW_SECONDS,
@@ -248,14 +239,11 @@ export {
   GEOCODING_BACKGROUND_CALLS_PER_MINUTE,
   GEOCODING_CALLS_PER_MINUTE,
   GEOCODING_CALLS_PER_SECOND,
-  MINUTE_LOG_KEY,
   MINUTE_MS,
-  PAUSE_KEY,
   TAKE_SLOT,
   createRedisGeocodingGate,
   pauseDeadlineOf,
   pauseReasonOf,
   pauseValue,
-  slotKey,
 };
 export type { GeocodingGate, GeocodingPauseReason };

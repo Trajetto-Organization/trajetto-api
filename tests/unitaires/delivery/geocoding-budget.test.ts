@@ -1,9 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import {
-  budgetKey,
-  createRedisGeocodingBudget,
-} from "@/shared/delivery/geocoding/geocoding-budget";
+import { createRedisGeocodingBudget } from "@/shared/delivery/geocoding/geocoding-budget";
+import { GEOCODING_KEYS } from "@/shared/delivery/geocoding/geocoding-keys";
 
 /**
  * The geocoding job's daily budget (plan of 02/11/2026, E1): one counter
@@ -45,8 +43,8 @@ describe("the geocoding budget", () => {
     await budget.spend(NOW);
 
     expect(await budget.remaining(NOW)).toBe(1);
-    expect(counts.get(budgetKey(NOW))).toBe(2);
-    expect(budgetKey(NOW)).toBe("geocoding:deliveries:2026-11-03");
+    expect(counts.get(GEOCODING_KEYS.budget(NOW))).toBe(2);
+    expect(GEOCODING_KEYS.budget(NOW)).toBe("geocoding:deliveries:2026-11-03");
   });
 
   it("starts again on the next UTC day", async () => {

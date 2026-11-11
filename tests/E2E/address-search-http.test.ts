@@ -4,10 +4,17 @@ import http from "node:http";
 import type { AddressInfo } from "node:net";
 import { randomUUID } from "node:crypto";
 
+import type Redis from "ioredis";
+
 import { env } from "@/env";
+import { configureAddressSearch } from "@/modules/address-search/usecases/search-address/search-address-runtime";
 import { createPrismaClient } from "@/shared/database/database-client";
 
 import { seedFleetDriver } from "./support/fleet-driver-seed";
+import {
+  geocodingTestKeys,
+  readyRequestPathRedis,
+} from "./support/geocoding-test-keys";
 
 /**
  * GET /address-search/:businessId over real HTTP, Redis included (plan
@@ -28,12 +35,21 @@ import { seedFleetDriver } from "./support/fleet-driver-seed";
  * - with the search off, 503 with retry-after, and the provider unasked;
  * - one user gets 30 searches a minute.
  *
- * Fresh company ids per run: the cache and the day's counts live in Redis,
- * which outlives a run's database.
+ * The real gate — a call a second, 50 in any 60 s — on keys of this run's
+ * own (support/geocoding-test-keys.ts). Redis outlives a run and can serve
+ * two at once: on production's keys, another run's call in the same second,
+ * or a pause or a day's count one left, would answer a search here 503 or
+ * 429. The cache, the pauses and the day's counts are this run's alone too,
+ * and the ADDRESS_SEARCH_* this file depends on are set here, whatever the
+ * runner's env says.
  */
 const prisma = createPrismaClient();
 
 let app: Awaited<typeof import("@/http")>["app"];
+let redis: Redis;
+
+const GEOCODING = geocodingTestKeys();
+const KEYS = GEOCODING.keys;
 
 const COMPANY = randomUUID();
 const OTHER = randomUUID();
@@ -59,6 +75,18 @@ const saved = {
   key: env.ADDRESS_SEARCH_KEY,
   budget: env.ADDRESS_SEARCH_DAILY_BUDGET,
   businessLimit: env.ADDRESS_SEARCH_BUSINESS_DAILY_LIMIT,
+  cacheSeconds: env.ADDRESS_SEARCH_CACHE_SECONDS,
+};
+
+/**
+ * The defaults, well above the calls this file makes: a runner's 0 (the
+ * search off, 503 DISABLED), a small ceiling (429) or no cache would fail
+ * the file for its env, not for the search.
+ */
+const SETTINGS = {
+  budget: 1_000,
+  businessLimit: 150,
+  cacheSeconds: 172_800,
 };
 
 let providerUrl = "";
@@ -135,8 +163,9 @@ beforeAll(async () => {
   env.ADDRESS_SEARCH_URL = providerUrl;
   env.ADDRESS_SEARCH_PROTOCOL = "locationiq-autocomplete";
   env.ADDRESS_SEARCH_KEY = "e2e-search-key";
-  // The platform's day is shared by every run on this Redis.
-  env.ADDRESS_SEARCH_DAILY_BUDGET = 1_000_000;
+  env.ADDRESS_SEARCH_DAILY_BUDGET = SETTINGS.budget;
+  env.ADDRESS_SEARCH_BUSINESS_DAILY_LIMIT = SETTINGS.businessLimit;
+  env.ADDRESS_SEARCH_CACHE_SECONDS = SETTINGS.cacheSeconds;
 
   const company = await seedFleetDriver(prisma, {
     businessId: COMPANY,
@@ -168,6 +197,11 @@ beforeAll(async () => {
 
   ({ app } = await import("@/http"));
   await app.ready();
+
+  // After http.ts wired the search on production's keys: the same kind of
+  // connection, this run's keys.
+  redis = await readyRequestPathRedis();
+  configureAddressSearch(redis, KEYS);
 }, 120_000);
 
 afterAll(async () => {
@@ -176,9 +210,13 @@ afterAll(async () => {
   env.ADDRESS_SEARCH_KEY = saved.key;
   env.ADDRESS_SEARCH_DAILY_BUDGET = saved.budget;
   env.ADDRESS_SEARCH_BUSINESS_DAILY_LIMIT = saved.businessLimit;
+  env.ADDRESS_SEARCH_CACHE_SECONDS = saved.cacheSeconds;
 
   await new Promise<void>((resolve) => provider.server.close(() => resolve()));
   await app?.close();
+
+  await GEOCODING.clear(redis);
+  redis?.disconnect();
   await prisma.$disconnect();
 }, 60_000);
 
@@ -293,6 +331,8 @@ describe("the suggestions", () => {
     expect(asked.searchParams.get("key")).toBe("e2e-search-key");
     // The key never goes back to the browser.
     expect(response.body).not.toContain("e2e-search-key");
+    // The call took this run's slot, the first of its minute.
+    expect(await redis.zcard(KEYS.minute)).toBe(1);
   });
 
   it("answer the same search again from the company's cache, unasked", async () => {
@@ -393,7 +433,7 @@ describe("the limits", () => {
       expect(cached.statusCode).toBe(200);
       expect(cached.json().data.cached).toBe(true);
     } finally {
-      env.ADDRESS_SEARCH_BUSINESS_DAILY_LIMIT = saved.businessLimit;
+      env.ADDRESS_SEARCH_BUSINESS_DAILY_LIMIT = SETTINGS.businessLimit;
     }
 
     const elsewhere = await search(

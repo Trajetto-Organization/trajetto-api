@@ -3,8 +3,8 @@ import type { Redis } from "ioredis";
 import { env } from "@/env";
 import { logger } from "@/shared/logging/logger";
 
-import { budgetKey } from "./geocoding-budget";
-import { PAUSE_KEY, pauseReasonOf } from "./geocoding-gate";
+import { pauseReasonOf } from "./geocoding-gate";
+import { GEOCODING_KEYS, type GeocodingKeys } from "./geocoding-keys";
 
 const log = logger.child({ component: "geocoding-hold" });
 
@@ -32,11 +32,12 @@ interface GeocodingHold {
 function createRedisGeocodingHold(
   redis: Pick<Redis, "mget">,
   dailyLimit: () => number = () => env.DELIVERY_GEOCODING_DAILY_BUDGET,
+  keys: GeocodingKeys = GEOCODING_KEYS,
 ): GeocodingHold {
   return {
     async held(now) {
       try {
-        const [pause, used] = await redis.mget(PAUSE_KEY, budgetKey(now));
+        const [pause, used] = await redis.mget(keys.pause, keys.budget(now));
         const reason = pauseReasonOf(pause);
 
         if (reason === "REFUSED" || reason === "QUOTA") return true;

@@ -2,21 +2,25 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { randomUUID } from "node:crypto";
 
-import Redis from "ioredis";
+import type Redis from "ioredis";
 
 import { env } from "@/env";
-import { redisClientOptions } from "@/config/redis-client-options";
 import { createPrismaClient } from "@/shared/database/database-client";
 import { DeliveryGeocodingRepository } from "@/shared/delivery/geocoding/geocoding-repository";
+import { pauseValue } from "@/shared/delivery/geocoding/geocoding-gate";
 import {
-  PAUSE_KEY,
-  pauseValue,
-} from "@/shared/delivery/geocoding/geocoding-gate";
+  configureGeocodingHold,
+  createRedisGeocodingHold,
+} from "@/shared/delivery/geocoding/geocoding-hold";
 
 import {
   seedFleetDriver,
   type FleetDriverSeed,
 } from "./support/fleet-driver-seed";
+import {
+  geocodingTestKeys,
+  readyRequestPathRedis,
+} from "./support/geocoding-test-keys";
 
 /**
  * Owner's report of 09/11/2026: a delivery created with its full address
@@ -42,11 +46,20 @@ import {
  *
  * Every claim here is claimByIds over this file's own deliveries: the E2E
  * files share a database, and the job's claim takes every company's rows.
+ * The hold reads keys of this run's own (support/geocoding-test-keys.ts):
+ * the pause this file writes and the day's budget are the platform's in
+ * production, and Redis outlives a run and can serve two at once. On
+ * production's keys this file's pause would hold another run's route reads,
+ * and a pause or a spent day another left would hold these.
  */
 const prisma = createPrismaClient();
 const queue = new DeliveryGeocodingRepository(prisma);
 
+const GEOCODING = geocodingTestKeys();
+const KEYS = GEOCODING.keys;
+
 let app: Awaited<typeof import("@/http")>["app"];
+let redis: Redis;
 let carrier: FleetDriverSeed;
 let shipperId = "";
 let otherShipperId = "";
@@ -180,10 +193,24 @@ beforeAll(async () => {
 
   ({ app } = await import("@/http"));
   await app.ready();
+
+  // After http.ts wired the hold on production's keys: the same kind of
+  // connection, this run's keys.
+  redis = await readyRequestPathRedis();
+  configureGeocodingHold(
+    createRedisGeocodingHold(
+      redis,
+      () => env.DELIVERY_GEOCODING_DAILY_BUDGET,
+      KEYS,
+    ),
+  );
 }, 120_000);
 
 afterAll(async () => {
   await app?.close();
+
+  await GEOCODING.clear(redis);
+  redis?.disconnect();
   await prisma.$disconnect();
 }, 60_000);
 
@@ -398,23 +425,17 @@ describe("get-route's address_lookup", () => {
     const fresh = await delivery();
     const routeId = await route("PLANNED", [{ deliveryId: fresh }]);
 
-    const redis = new Redis(
-      process.env.REDIS_URL!,
-      redisClientOptions("geocoding-budget"),
-    );
-
     try {
       expect(
         (await readRoute(routeId)).json().data.stops[0].delivery,
       ).toMatchObject({ address_lookup: "SEARCHING" });
 
-      // The pause a refusal writes; a few seconds only, as Redis is shared
-      // by the E2E files running beside this one.
+      // The pause a refusal writes (15 min in production).
       await redis.set(
-        PAUSE_KEY,
-        pauseValue("REFUSED", new Date(Date.now() + 5_000)),
+        KEYS.pause,
+        pauseValue("REFUSED", new Date(Date.now() + 900_000)),
         "PX",
-        5_000,
+        900_000,
       );
 
       const response = await readRoute(routeId);
@@ -422,8 +443,7 @@ describe("get-route's address_lookup", () => {
       expect(response.statusCode, response.body).toBe(200);
       expect(response.json().data.stops[0].delivery.address_lookup).toBeNull();
     } finally {
-      await redis.del(PAUSE_KEY);
-      await redis.quit();
+      await redis.del(KEYS.pause);
     }
   });
 

@@ -8,6 +8,10 @@ import {
   type GeocodingGate,
 } from "@/shared/delivery/geocoding/geocoding-gate";
 import {
+  GEOCODING_KEYS,
+  type GeocodingKeys,
+} from "@/shared/delivery/geocoding/geocoding-keys";
+import {
   createRedisAddressSearchStore,
   unreadableAddressSearchStore,
   type AddressSearchStore,
@@ -42,18 +46,27 @@ const closedGate: Pick<GeocodingGate, "pause" | "takeSlot"> = {
 let store: AddressSearchStore = unreadableAddressSearchStore;
 let gate: Pick<GeocodingGate, "pause" | "takeSlot"> = closedGate;
 
-function configureAddressSearch(redis: Redis): void {
+/**
+ * Wires the search on `redis`. The keys are production's, shared with the
+ * deliveries' lookups of every replica; only an E2E file passes keys of its
+ * own, so another run on the same Redis never shares its slots or pauses.
+ */
+function configureAddressSearch(
+  redis: Redis,
+  keys: GeocodingKeys = GEOCODING_KEYS,
+): void {
   // Debug, not warn: during an outage every search would write a line, and
   // the connection log already says Redis is gone.
   const onError = (err: unknown) =>
     log.debug({ err }, "address search limits unreadable");
 
-  store = createRedisAddressSearchStore(redis, onError);
+  store = createRedisAddressSearchStore(redis, onError, keys);
   // The search's ceiling in the minute: the background paths stop ten
   // calls sooner on the same count.
   gate = createRedisGeocodingGate(redis, {
     perMinute: GEOCODING_CALLS_PER_MINUTE,
     onError,
+    keys,
   });
 }
 

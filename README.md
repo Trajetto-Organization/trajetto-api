@@ -134,9 +134,11 @@ Para avançar por ele em ordem, um assunto por vez, use o
 - **Postgres é a fila**: outbox transacional e filas em tabelas com
   `FOR UPDATE SKIP LOCKED` e lease; não há broker.
 - **Redis é descartável**: rate limit, o pub/sub do Socket.IO entre réplicas,
-  os tickets de socket de 30 s, o intervalo de 60 s do "esqueci minha senha" e
-  fotos curtas (5–60 s) das leituras da plataforma que só o MASTER vê. Nenhum
-  dado de empresa fica em cache, e sem Redis a API segue funcionando.
+  os tickets de socket de 30 s, o intervalo de 60 s do "esqueci minha senha",
+  fotos curtas (5–60 s) das leituras da plataforma que só o MASTER vê e as
+  chaves do geocodificador (`geocoding:*`). O único dado de empresa em cache é
+  o da busca de endereço, por empresa, com chave HMAC e valor cifrado, e sem
+  Redis a API segue funcionando (a busca responde 503).
 - **IA local**: o serviço `trajetto-ai` (RapidOCR em CPU) só transcreve; a API
   decide. Nenhum provedor externo.
 - **Arquivos** nunca passam pela API: o cliente envia ao R2 por URL
@@ -154,7 +156,7 @@ Versões fixadas no `package.json` (sem `^`) e no `yarn.lock`.
 | Fastify + `fastify-type-provider-zod`                            | 5.12.7 / 4.0.2                                       | HTTP rápido com schema por rota; o mesmo schema valida a entrada e gera o OpenAPI (`@fastify/swagger` 9.9.2)              |
 | Prisma (`prisma`, `@prisma/client`, `@prisma/adapter-pg` + `pg`) | 7.10.1 (`pg` 8.23.1)                                 | acesso tipado ao Postgres pelo driver `pg` e migrations SQL versionadas (expandir/contrair)                               |
 | PostgreSQL                                                       | 16                                                   | dados de todas as empresas **e** as filas (outbox, notificações, webhooks, IA) e os leases dos crons                      |
-| Redis via `ioredis`                                              | 7 / 5.10.1                                           | rate limit, pub/sub do Socket.IO, tickets de socket, intervalo do "esqueci minha senha", fotos do MASTER; descartável     |
+| Redis via `ioredis`                                              | 7 / 5.10.1                                           | rate limit, pub/sub e tickets do Socket.IO, "esqueci minha senha", fotos do MASTER, geocodificador e busca; descartável   |
 | Socket.IO + `@socket.io/redis-adapter`                           | 4.8.4 / 8.3.0                                        | tempo real para a web e o app, entre réplicas                                                                             |
 | tsyringe                                                         | 4.10.0                                               | injeção de dependência: o usecase recebe o repositório pela interface, e o teste troca pelo gêmeo in-memory               |
 | zod                                                              | 3.25.1                                               | validação de entrada (`src/schemas/`) e do ambiente no boot (`src/schemas/env-schema/`)                                   |
@@ -415,11 +417,14 @@ Cada uma aparece em `GET /health/providers` (só MASTER) sem enviar nada.
   foi gravado.
 - **Idempotência**: escritas do app e da API pública aceitam
   `Idempotency-Key` ou `client_submission_id`.
-- **Cache**: nenhum dado de empresa fica em cache na API nem no Redis. A
-  única exceção são as fotos de 5–60 s das leituras da plataforma que só o
-  MASTER vê (`src/shared/cache/snapshot-cache.ts`,
-  [ADR 0002](./docs/adr/0002-redis-descartavel.md)). As listagens do painel
-  são NDJSON com offset e uma linha final `meta`; os seletores usam cursor.
+- **Cache**: nenhum dado de empresa fica em cache na memória da API. Há dois
+  caches ([ADR 0002](./docs/adr/0002-redis-descartavel.md)): as fotos de
+  5–60 s das leituras da plataforma que só o MASTER vê
+  (`src/shared/cache/snapshot-cache.ts`) e, só no Redis, as respostas da busca
+  de endereço (`src/shared/services/address-search/address-search-limits.ts`,
+  adendo de 10/11/2026), por empresa, com chave HMAC, valor cifrado e até
+  48 h. As listagens do painel são NDJSON com offset e uma linha final `meta`;
+  os seletores usam cursor.
 - **Uploads**: o cliente pede `POST /uploads/presign/:businessId` (ou
   `/uploads/avatar/presign`), envia o arquivo por PUT direto ao R2 e manda só a
   chave; a API confere dono, tamanho e existência. Em desenvolvimento,
@@ -697,7 +702,8 @@ versão do cliente, sem segredo e sem URL assinada.
   é a fila; broker só por gatilho medido em `/health/metrics`.
 - **Redis descartável** ([ADR 0002](./docs/adr/0002-redis-descartavel.md)):
   sem sessão, lock nem fila nele; cache só das fotos curtas de plataforma do
-  MASTER.
+  MASTER e das respostas da busca de endereço (por empresa, chave HMAC, valor
+  cifrado, falha fechada).
 - **Workers no mesmo processo**
   ([ADR 0004](./docs/adr/0004-workers-no-mesmo-processo.md)), separáveis com a
   mesma imagem (`WORKERS_ENABLED=false`) só por gatilho medido.

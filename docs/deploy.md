@@ -789,10 +789,12 @@ a credencial: o deployment da Application termina em `error` com
    Password `openssl rand -hex 32` (guarde); Docker Image `redis:7-alpine`.
 3. **Create** e **Deploy**. _External Port_ vazio.
 4. **Sem persistência e com teto de memória** (era o comando do compose): o
-   Redis só guarda chaves curtas que expiram sozinhas (contadores do rate
-   limit, tickets de socket, o intervalo do "esqueci minha senha" e fotos de
-   5–60 s das leituras do MASTER) e o pub/sub do Socket.IO
-   ([ADR 0002](./adr/0002-redis-descartavel.md)); um snapshot só traria de volta chaves que deviam ter expirado, e o
+   Redis só guarda chaves que expiram sozinhas (contadores do rate limit,
+   tickets de socket, o intervalo do "esqueci minha senha", fotos de 5–60 s
+   das leituras do MASTER e as chaves do geocodificador, `geocoding:*`, entre
+   elas o cache cifrado, por empresa, de até 48 h da busca de endereço) e o
+   pub/sub do Socket.IO ([ADR 0002](./adr/0002-redis-descartavel.md) e o
+   adendo de 10/11/2026); um snapshot só traria de volta chaves que deviam ter expirado, e o
    padrão `noeviction` de um Redis cheio desliga todo limitador de uma vez. Em
    _Advanced_, no campo de comando personalizado (_Command_ ou _Run Command_,
    conforme a versão), ponha **numa linha só**:
@@ -1623,9 +1625,10 @@ lacuna (os defaults funcionam; só não estão dimensionados). Confira depois:
 Redis>:6379`.
 - **Nada durável**: o comando personalizado da [seção 7.5](#75-redis-database)
   desliga RDB/AOF e põe o teto de 256 MB com `allkeys-lru`. Só guarda
-  chaves curtas que expiram sozinhas e o pub/sub do Socket.IO
-  ([ADR 0002](./adr/0002-redis-descartavel.md)); não precisa de backup nem de
-  restore.
+  chaves que expiram sozinhas, entre elas as do geocodificador (`geocoding:*`,
+  com o cache cifrado de até 48 h da busca de endereço), e o pub/sub do
+  Socket.IO ([ADR 0002](./adr/0002-redis-descartavel.md)); não precisa de
+  backup nem de restore.
 - **Trocar a senha**: nova senha no Database (e no comando, se personalizado)
   e no `REDIS_URL` da API; **Deploy** do Redis e logo em seguida da API.
   Entre os dois, a API segue em modo degradado (rate limit local, tempo real
@@ -3143,7 +3146,8 @@ réplica documentado como tal:
 
 | O quê                                                                                                                   | Onde                                                                                                                   | Por que é seguro com N réplicas                                                                                                                            |
 | ----------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| rate limit, ticket do socket, limite de handshakes, orçamento de geocodificação, cota de e-mail                         | Redis (janela fixa, falha aberta)                                                                                      | compartilhado entre as réplicas                                                                                                                            |
+| rate limit, ticket do socket, limite de handshakes, cota de e-mail                                                      | Redis (janela fixa, falha aberta; o ticket, de uso único, falha fechado)                                               | compartilhado entre as réplicas                                                                                                                            |
+| orçamento, pausa e vaga do geocodificador; contagens, pausa e cache da busca de endereço                                | Redis (`geocoding:*`, falha fechada)                                                                                   | compartilhado entre as réplicas, sob o mesmo prefixo (`geocoding-keys.ts`); o cache da busca é por empresa, com chave HMAC e valor cifrado                 |
 | filas (outbox, IA, webhooks, geocodificação, importação), crons, aviso de rota esquecida                                | Postgres (`SKIP LOCKED`, lease do cron, carimbo `left_open_alerted_at`, chave única do outbox)                         | cada linha é reivindicada por uma réplica só; provado em `cron-scheduler-lock`, `delivery-geocoding-repository-contract` e `route-close-with-pending-http` |
 | snapshots de plataforma (prontidão dos provedores, painel do MASTER)                                                    | memória da réplica + Redis (`snapshot-cache.ts`)                                                                       | sem empresa na chave; alguns segundos de defasagem                                                                                                         |
 | exportações simultâneas, escrita de `last_used_at` da chave de API, contagem de uso da API, pausa de modelo do WhatsApp | memória da réplica (`export-slots.ts`, `last-used-throttle.ts`, `api-usage-recorder.ts`, `meta-cloud-api-provider.ts`) | limites e buffers por réplica, documentados no próprio arquivo: N réplicas = N vezes o teto; o uso da API soma com `increment`                             |

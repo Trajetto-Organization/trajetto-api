@@ -13,14 +13,13 @@ import {
   DeliveryGeocodingService,
   GEOCODING_RUN_DEFAULTS,
 } from "@/shared/delivery/geocoding/delivery-geocoding-service";
-import {
-  budgetKey,
-  createRedisGeocodingBudget,
-} from "@/shared/delivery/geocoding/geocoding-budget";
+import { createRedisGeocodingBudget } from "@/shared/delivery/geocoding/geocoding-budget";
 import { DeliveryGeocodingRepository } from "@/shared/delivery/geocoding/geocoding-repository";
 import type { GeocodingGate } from "@/shared/delivery/geocoding/geocoding-gate";
 import { geocodeAddress } from "@/shared/services/proof-location/address-geocoder";
 import { createPrismaClient } from "@/shared/database/database-client";
+
+import { geocodingTestKeys } from "./support/geocoding-test-keys";
 
 /**
  * A spreadsheet of 1.000 rows and the geocoder (plan of 02/11/2026, E1:
@@ -39,6 +38,11 @@ import { createPrismaClient } from "@/shared/database/database-client";
  *   row: the other seventeen go back unasked, with no attempt spent;
  * - DELIVERY_GEOCODING_DAILY_BUDGET is the ceiling across runs: run after
  *   run asks three more until the day's 25 are spent, and then nothing.
+ *
+ * The budget counts on keys of this run's own
+ * (support/geocoding-test-keys.ts), never production's: Redis outlives a
+ * run and can serve two at once, and another run of this file counting in
+ * the same day would break the exact counts asserted here.
  */
 const prisma = createPrismaClient();
 
@@ -51,9 +55,11 @@ const SHIPPER = "018fdcc0-0000-7000-8000-0000000000f1";
 const ROWS = 1_000;
 const DAILY_BUDGET = 25;
 
+const GEOCODING = geocodingTestKeys();
+
 /**
- * The job's runs share one clock, far from today: the budget key is per UTC
- * day, and this file must not spend (or read) the day of any other test.
+ * The job's runs share one clock: the budget is per UTC day, and they must
+ * all count in the same one.
  */
 const RUN_AT = new Date("2099-03-14T12:00:00.000Z");
 
@@ -128,9 +134,9 @@ function csv(rows: number): string {
 }
 
 /**
- * The gate open: the per-second slot and the pause are global Redis keys,
- * and this file is about the batch and the budget, not about sharing the
- * second with the E2E files running beside it.
+ * The gate open: this file is about the batch and the budget. The real one
+ * grants a call a second, and with no wait between tries a run would stop
+ * at the first slot refused (NO_SLOT), not at the failures.
  */
 const OPEN_GATE: GeocodingGate = {
   paused: async () => false,
@@ -156,7 +162,12 @@ function geocodingRun() {
         undefined,
         query,
       ),
-    budget: createRedisGeocodingBudget(redis, DAILY_BUDGET),
+    budget: createRedisGeocodingBudget(
+      redis,
+      DAILY_BUDGET,
+      undefined,
+      GEOCODING.keys,
+    ),
     gate: OPEN_GATE,
     // The production batch; no spacing, the provider is local.
     options: { ...GEOCODING_RUN_DEFAULTS, spacingMs: 0, slotWaitMs: 0 },
@@ -181,7 +192,6 @@ beforeAll(async () => {
     process.env.REDIS_URL!,
     redisClientOptions("geocoding-budget"),
   );
-  await redis.del(budgetKey(RUN_AT));
 
   await prisma.business.create({
     data: {
@@ -215,7 +225,7 @@ beforeAll(async () => {
 }, 120_000);
 
 afterAll(async () => {
-  await redis?.del(budgetKey(RUN_AT)).catch(() => undefined);
+  await GEOCODING.clear(redis);
   redis?.disconnect();
 
   for (const socket of silent.sockets) socket.destroy();
@@ -284,7 +294,7 @@ describe("a spreadsheet of 1.000 rows", () => {
       released: GEOCODING_RUN_DEFAULTS.batchSize - streak,
       stoppedBy: "FAILURES",
     });
-    expect(Number(await redis.get(budgetKey(RUN_AT)))).toBe(streak);
+    expect(Number(await redis.get(GEOCODING.keys.budget(RUN_AT)))).toBe(streak);
 
     // Run after run, three more each, until the day's budget is spent.
     const runs = [first];
@@ -297,7 +307,9 @@ describe("a spreadsheet of 1.000 rows", () => {
       claimed: 0,
       skipped: "BUDGET",
     });
-    expect(Number(await redis.get(budgetKey(RUN_AT)))).toBe(DAILY_BUDGET);
+    expect(Number(await redis.get(GEOCODING.keys.budget(RUN_AT)))).toBe(
+      DAILY_BUDGET,
+    );
     expect(runs.reduce((sum, run) => sum + run.failed, 0)).toBe(DAILY_BUDGET);
 
     const tried = await prisma.delivery.count({

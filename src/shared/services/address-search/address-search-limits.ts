@@ -5,12 +5,15 @@ import type { Redis } from "ioredis";
 import auth from "@/config/auth";
 import {
   EXTEND_PAUSE,
-  PAUSE_KEY,
   pauseDeadlineOf,
   pauseReasonOf,
   pauseValue,
   type GeocodingPauseReason,
 } from "@/shared/delivery/geocoding/geocoding-gate";
+import {
+  GEOCODING_KEYS,
+  type GeocodingKeys,
+} from "@/shared/delivery/geocoding/geocoding-keys";
 import { countInFixedWindow } from "@/shared/services/fixed-window-counter";
 import {
   isSealed,
@@ -42,7 +45,7 @@ import type { RankedSearch } from "./address-search-ranking";
  *   15-min REFUSED, which the search ignores, a burst would be lost and the
  *   search would go on asking through it.
  *
- * The keys sit beside the geocoder's (`geocoding:`), on the request path's
+ * The keys are the geocoder's (geocoding-keys.ts), on the request path's
  * fail-fast connection (http.ts).
  */
 interface SearchPause {
@@ -89,26 +92,8 @@ interface AddressSearchStore {
   ): Promise<void>;
 }
 
-const SEARCH_PAUSE_KEY = "geocoding:search:paused";
-
 /** A day and two hours, so the key of a day outlives the day itself. */
 const DAY_WINDOW_SECONDS = 26 * 60 * 60;
-
-function day(now: Date): string {
-  return now.toISOString().slice(0, 10);
-}
-
-function platformDayKey(now: Date): string {
-  return `geocoding:search:${day(now)}`;
-}
-
-function businessDayKey(now: Date, businessId: string): string {
-  return `geocoding:search:${day(now)}:${businessId}`;
-}
-
-function cacheKey(businessId: string, digest: string): string {
-  return `geocoding:search:cache:${businessId}:${digest}`;
-}
 
 const hmacKey = Buffer.from(
   hkdfSync(
@@ -187,11 +172,14 @@ function searchPauseOf(
 function createRedisAddressSearchStore(
   redis: Pick<Redis, "eval" | "get" | "mget" | "set">,
   onError: (err: unknown) => void = () => undefined,
+  keys: GeocodingKeys = GEOCODING_KEYS,
 ): AddressSearchStore {
   return {
     async cached(businessId, digest) {
       try {
-        return parseCached(await redis.get(cacheKey(businessId, digest)));
+        return parseCached(
+          await redis.get(keys.searchCache(businessId, digest)),
+        );
       } catch (err) {
         onError(err);
 
@@ -204,7 +192,7 @@ function createRedisAddressSearchStore(
 
       try {
         await redis.set(
-          cacheKey(businessId, digest),
+          keys.searchCache(businessId, digest),
           sealCached(answer),
           "EX",
           seconds,
@@ -217,10 +205,10 @@ function createRedisAddressSearchStore(
     async standing(businessId, now) {
       try {
         const [shared, own, platform, business] = await redis.mget(
-          PAUSE_KEY,
-          SEARCH_PAUSE_KEY,
-          platformDayKey(now),
-          businessDayKey(now, businessId),
+          keys.pause,
+          keys.searchPause,
+          keys.searchDay(now),
+          keys.searchBusinessDay(now, businessId),
         );
 
         // A refusal of the deliveries' lookups is theirs: their endpoint,
@@ -246,10 +234,10 @@ function createRedisAddressSearchStore(
     async spend(businessId, now) {
       try {
         await Promise.all([
-          countInFixedWindow(redis, platformDayKey(now), DAY_WINDOW_SECONDS),
+          countInFixedWindow(redis, keys.searchDay(now), DAY_WINDOW_SECONDS),
           countInFixedWindow(
             redis,
-            businessDayKey(now, businessId),
+            keys.searchBusinessDay(now, businessId),
             DAY_WINDOW_SECONDS,
           ),
         ]);
@@ -268,7 +256,7 @@ function createRedisAddressSearchStore(
         await redis.eval(
           EXTEND_PAUSE,
           1,
-          SEARCH_PAUSE_KEY,
+          keys.searchPause,
           pauseValue(reason, until),
           ms,
         );
@@ -290,12 +278,8 @@ const unreadableAddressSearchStore: AddressSearchStore = {
 
 export {
   DAY_WINDOW_SECONDS,
-  SEARCH_PAUSE_KEY,
-  businessDayKey,
-  cacheKey,
   createRedisAddressSearchStore,
   parseCached,
-  platformDayKey,
   sealCached,
   searchDigest,
   unreadableAddressSearchStore,

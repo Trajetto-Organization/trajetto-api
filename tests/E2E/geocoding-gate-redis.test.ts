@@ -5,59 +5,50 @@ import { randomUUID } from "node:crypto";
 
 import { redisClientOptions } from "@/config/redis-client-options";
 import {
-  EXTEND_PAUSE,
   MINUTE_MS,
-  TAKE_SLOT,
+  createRedisGeocodingGate,
+  pauseReasonOf,
 } from "@/shared/delivery/geocoding/geocoding-gate";
-import {
-  cacheKey,
-  createRedisAddressSearchStore,
-} from "@/shared/services/address-search/address-search-limits";
+import { createRedisAddressSearchStore } from "@/shared/services/address-search/address-search-limits";
+
+import { geocodingTestKeys } from "./support/geocoding-test-keys";
 
 /**
  * The provider's gate and the address search's cache as Redis runs them
  * (plan pin-search). The unit tests (geocoding-gate.test.ts,
  * search-address-usecase.test.ts) run doubles of these scripts; here the
- * scripts themselves run, so a Lua that does not do what the double does
- * fails.
+ * gate and the store themselves run, scripts and arguments included, so a
+ * Lua that does not do what the double does fails.
  *
  * - TAKE_SLOT: one call a second, a ceiling over any 60 s (the sliding
  *   log), both or neither, and a refused try that touches nothing;
  * - EXTEND_PAUSE: a longer pause is never cut short;
  * - the cache's value is sealed in Redis and opens only as it was written.
  *
- * Keys of their own (the script takes them as KEYS), never the ones the
- * app uses: the other files of this run search through the real gate.
+ * On keys of this run's own (support/geocoding-test-keys.ts), never
+ * production's: the search's E2E runs the gate too, and Redis can serve
+ * another run at the same time.
  */
 let redis: Redis;
 
-const run = randomUUID();
-const keys = {
-  second: (epochSecond: number) => `test:gate:${run}:second:${epochSecond}`,
-  minute: `test:gate:${run}:minute`,
-  pause: `test:gate:${run}:paused`,
-};
+const GEOCODING = geocodingTestKeys();
+const keys = GEOCODING.keys;
 
 /** Far from today, so no window of the app's could ever be these. */
 const T0 = Date.UTC(2099, 2, 14, 12, 0, 0);
 
-/** TAKE_SLOT as createRedisGeocodingGate calls it (same ARGV order). */
-async function take(now: number, perMinute: number): Promise<boolean> {
-  const granted = await redis.eval(
-    TAKE_SLOT,
-    2,
-    keys.second(Math.floor(now / 1000)),
-    keys.minute,
-    1,
+/** The gate at `now`, with this ceiling in any 60 s. */
+function gateAt(now: number, perMinute: number, perSecond = 1) {
+  return createRedisGeocodingGate(redis, {
+    keys,
     perMinute,
-    2,
-    now,
-    MINUTE_MS,
-    `${now}:${randomUUID()}`,
-  );
-
-  return Number(granted) === 1;
+    perSecond,
+    clock: () => now,
+  });
 }
+
+const take = (now: number, perMinute: number) =>
+  gateAt(now, perMinute).takeSlot();
 
 beforeAll(async () => {
   redis = new Redis(
@@ -67,10 +58,7 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  const left = await redis.keys(`test:gate:${run}:*`).catch(() => []);
-
-  if (left.length > 0) await redis.del(...left).catch(() => undefined);
-
+  await GEOCODING.clear(redis);
   redis?.disconnect();
 });
 
@@ -115,22 +103,11 @@ describe("TAKE_SLOT in Redis", () => {
   it("counts two calls of the same millisecond as two", async () => {
     await redis.del(keys.minute);
 
-    const now = T0 + 300_000;
+    // Two a second, so the second call of the instant is granted too.
+    const gate = gateAt(T0 + 300_000, 50, 2);
 
-    expect(await take(now, 50)).toBe(true);
-    // Another second's window, the same instant in the log.
-    await redis.eval(
-      TAKE_SLOT,
-      2,
-      keys.second(Math.floor(now / 1000) + 7),
-      keys.minute,
-      1,
-      50,
-      2,
-      now,
-      MINUTE_MS,
-      `${now}:${randomUUID()}`,
-    );
+    expect(await gate.takeSlot()).toBe(true);
+    expect(await gate.takeSlot()).toBe(true);
 
     expect(await redis.zcard(keys.minute)).toBe(2);
   });
@@ -138,14 +115,21 @@ describe("TAKE_SLOT in Redis", () => {
 
 describe("EXTEND_PAUSE in Redis", () => {
   it("writes a longer pause and never cuts one short", async () => {
-    await redis.eval(EXTEND_PAUSE, 1, keys.pause, "QUOTA x", 600_000);
-    await redis.eval(EXTEND_PAUSE, 1, keys.pause, "BURST y", 60_000);
+    const now = new Date();
+    const after = (ms: number) => new Date(now.getTime() + ms);
+    const gate = createRedisGeocodingGate(redis, { keys });
 
-    expect(await redis.get(keys.pause)).toBe("QUOTA x");
+    expect(await gate.paused(now)).toBe(false);
 
-    await redis.eval(EXTEND_PAUSE, 1, keys.pause, "REFUSED z", 900_000);
+    await gate.pause(after(600_000), now, "QUOTA");
+    await gate.pause(after(60_000), now, "BURST");
 
-    expect(await redis.get(keys.pause)).toBe("REFUSED z");
+    expect(pauseReasonOf(await redis.get(keys.pause))).toBe("QUOTA");
+    expect(await gate.paused(now)).toBe(true);
+
+    await gate.pause(after(900_000), now, "REFUSED");
+
+    expect(pauseReasonOf(await redis.get(keys.pause))).toBe("REFUSED");
     expect(await redis.pttl(keys.pause)).toBeGreaterThan(600_000);
   });
 });
@@ -171,28 +155,25 @@ describe("the address search's cache in Redis", () => {
     weak: false,
   };
 
-  afterAll(async () => {
-    await redis.del(cacheKey(business, digest)).catch(() => undefined);
-  });
-
   it("keeps the suggestions sealed, and opens only what it wrote", async () => {
-    const store = createRedisAddressSearchStore(redis);
+    const store = createRedisAddressSearchStore(redis, undefined, keys);
+    const key = keys.searchCache(business, digest);
 
     await store.remember(business, digest, answer, 60);
 
-    const stored = (await redis.get(cacheKey(business, digest))) ?? "";
+    const stored = (await redis.get(key)) ?? "";
 
     expect(stored).toMatch(/^enc:v1:/);
     expect(stored).not.toMatch(/epit|pessoa|petr|25610/i);
-    expect(await redis.ttl(cacheKey(business, digest))).toBeGreaterThan(0);
+    expect(await redis.ttl(key)).toBeGreaterThan(0);
 
     expect(await store.cached(business, digest)).toEqual(answer);
 
     // A value in clear, or one tampered with, is a miss.
-    await redis.set(cacheKey(business, digest), JSON.stringify(answer));
+    await redis.set(key, JSON.stringify(answer));
     expect(await store.cached(business, digest)).toBeNull();
 
-    await redis.set(cacheKey(business, digest), `${stored.slice(0, -4)}AAAA`);
+    await redis.set(key, `${stored.slice(0, -4)}AAAA`);
     expect(await store.cached(business, digest)).toBeNull();
   });
 });

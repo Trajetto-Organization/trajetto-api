@@ -1,11 +1,8 @@
 import { describe, expect, it } from "vitest";
 
-import { budgetKey } from "@/shared/delivery/geocoding/geocoding-budget";
-import {
-  PAUSE_KEY,
-  pauseValue,
-} from "@/shared/delivery/geocoding/geocoding-gate";
+import { pauseValue } from "@/shared/delivery/geocoding/geocoding-gate";
 import { createRedisGeocodingHold } from "@/shared/delivery/geocoding/geocoding-hold";
+import { GEOCODING_KEYS } from "@/shared/delivery/geocoding/geocoding-keys";
 
 /**
  * Whether the address lookups are held for more than a moment (review of
@@ -37,7 +34,9 @@ function redisWith(values: Record<string, string>, failing = false) {
 describe("the geocoding hold", () => {
   it("holds while the provider refuses the requests or its day's quota is spent", async () => {
     for (const reason of ["REFUSED", "QUOTA"] as const) {
-      const { redis } = redisWith({ [PAUSE_KEY]: pauseValue(reason, LATER) });
+      const { redis } = redisWith({
+        [GEOCODING_KEYS.pause]: pauseValue(reason, LATER),
+      });
 
       expect(
         await createRedisGeocodingHold(redis as never, () => 2_000).held(NOW),
@@ -46,7 +45,9 @@ describe("the geocoding hold", () => {
   });
 
   it("does not hold for a burst's minute: the next run asks again", async () => {
-    const { redis } = redisWith({ [PAUSE_KEY]: pauseValue("BURST", LATER) });
+    const { redis } = redisWith({
+      [GEOCODING_KEYS.pause]: pauseValue("BURST", LATER),
+    });
 
     expect(
       await createRedisGeocodingHold(redis as never, () => 2_000).held(NOW),
@@ -54,7 +55,9 @@ describe("the geocoding hold", () => {
   });
 
   it("holds once today's budget is spent, reading today's key and the pause in one call", async () => {
-    const { redis, asked } = redisWith({ [budgetKey(NOW)]: "2000" });
+    const { redis, asked } = redisWith({
+      [GEOCODING_KEYS.budget(NOW)]: "2000",
+    });
 
     expect(
       await createRedisGeocodingHold(redis as never, () => 2_000).held(NOW),
@@ -62,7 +65,10 @@ describe("the geocoding hold", () => {
     expect(
       await createRedisGeocodingHold(redis as never, () => 2_001).held(NOW),
     ).toBe(false);
-    expect(asked[0]).toEqual([PAUSE_KEY, budgetKey(NOW)]);
+    expect(asked[0]).toEqual([
+      GEOCODING_KEYS.pause,
+      GEOCODING_KEYS.budget(NOW),
+    ]);
   });
 
   it("holds nothing when Redis does not answer", async () => {

@@ -5,16 +5,14 @@ import {
   GEOCODING_BACKGROUND_CALLS_PER_MINUTE,
   GEOCODING_CALLS_PER_MINUTE,
   GEOCODING_CALLS_PER_SECOND,
-  MINUTE_LOG_KEY,
   MINUTE_MS,
-  PAUSE_KEY,
   TAKE_SLOT,
   createRedisGeocodingGate,
   pauseDeadlineOf,
   pauseReasonOf,
   pauseValue,
-  slotKey,
 } from "@/shared/delivery/geocoding/geocoding-gate";
+import { GEOCODING_KEYS } from "@/shared/delivery/geocoding/geocoding-keys";
 
 /**
  * When the geocoder may call the provider (owner's report of 09/11/2026):
@@ -104,7 +102,7 @@ describe("the geocoding pause", () => {
     await gate.pause(new Date("2026-11-10T00:00:00.000Z"), NOW, "QUOTA");
 
     expect(await gate.paused(NOW)).toBe(true);
-    expect(values.get(PAUSE_KEY)).toEqual({
+    expect(values.get(GEOCODING_KEYS.pause)).toEqual({
       value: "QUOTA 2026-11-10T00:00:00.000Z",
       ttlMs: 9 * 60 * 60 * 1000,
     });
@@ -113,7 +111,7 @@ describe("the geocoding pause", () => {
     // with its reason.
     await gate.pause(new Date(NOW.getTime() + 60_000), NOW, "BURST");
 
-    expect(values.get(PAUSE_KEY)).toEqual({
+    expect(values.get(GEOCODING_KEYS.pause)).toEqual({
       value: "QUOTA 2026-11-10T00:00:00.000Z",
       ttlMs: 9 * 60 * 60 * 1000,
     });
@@ -178,7 +176,7 @@ describe("the per-second slot", () => {
     clock += 1_000;
 
     expect(await soon.takeSlot()).toBe(true);
-    expect(slotKey(Math.floor(clock / 1000))).toBe(
+    expect(GEOCODING_KEYS.second(Math.floor(clock / 1000))).toBe(
       `geocoding:deliveries:rate:${Math.floor(clock / 1000)}`,
     );
   });
@@ -197,10 +195,10 @@ describe("the per-second slot", () => {
     });
 
     // A replica before the minute's window INCRs and compares after.
-    counts.set(slotKey(Math.floor(clock / 1000)), 2);
+    counts.set(GEOCODING_KEYS.second(Math.floor(clock / 1000)), 2);
 
     expect(await gate.takeSlot()).toBe(false);
-    expect(counts.get(slotKey(Math.floor(clock / 1000)))).toBe(2);
+    expect(counts.get(GEOCODING_KEYS.second(Math.floor(clock / 1000)))).toBe(2);
   });
 });
 
@@ -239,7 +237,7 @@ describe("the per-minute slot", () => {
     }
 
     expect(jobCalls).toBe(40);
-    expect(logs.get(MINUTE_LOG_KEY)).toHaveLength(40);
+    expect(logs.get(GEOCODING_KEYS.minute)).toHaveLength(40);
 
     // The tail of the 60 s is the search's.
     let searchCalls = 0;
@@ -252,7 +250,7 @@ describe("the per-minute slot", () => {
 
     expect(searchCalls).toBe(10);
     expect(jobCalls).toBe(40);
-    expect(logs.get(MINUTE_LOG_KEY)).toHaveLength(50);
+    expect(logs.get(GEOCODING_KEYS.minute)).toHaveLength(50);
 
     // The clock's next minute opens nothing: 49 calls of the last 60 s are
     // still in the log at 1:00, and the job waits for its first ten to be
@@ -303,7 +301,7 @@ describe("the per-minute slot", () => {
     });
 
     logs.set(
-      MINUTE_LOG_KEY,
+      GEOCODING_KEYS.minute,
       Array.from(
         { length: GEOCODING_BACKGROUND_CALLS_PER_MINUTE },
         (_, index) => clock - 20_000 + index,
@@ -311,12 +309,14 @@ describe("the per-minute slot", () => {
     );
 
     expect(await job.takeSlot()).toBe(false);
-    expect(counts.get(slotKey(Math.floor(clock / 1000)))).toBeUndefined();
-    expect(logs.get(MINUTE_LOG_KEY)).toHaveLength(40);
+    expect(
+      counts.get(GEOCODING_KEYS.second(Math.floor(clock / 1000))),
+    ).toBeUndefined();
+    expect(logs.get(GEOCODING_KEYS.minute)).toHaveLength(40);
 
     // The same second is still free for the search.
     expect(await search.takeSlot()).toBe(true);
-    expect(logs.get(MINUTE_LOG_KEY)).toHaveLength(41);
+    expect(logs.get(GEOCODING_KEYS.minute)).toHaveLength(41);
   });
 
   it("asks Redis with the call's time and a member of its own", async () => {
@@ -338,8 +338,8 @@ describe("the per-minute slot", () => {
     expect(asked[0].slice(0, 9)).toEqual([
       TAKE_SLOT,
       2,
-      slotKey(START / 1000),
-      MINUTE_LOG_KEY,
+      GEOCODING_KEYS.second(START / 1000),
+      GEOCODING_KEYS.minute,
       GEOCODING_CALLS_PER_SECOND,
       GEOCODING_BACKGROUND_CALLS_PER_MINUTE,
       2,

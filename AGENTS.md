@@ -274,10 +274,15 @@ checksum). Detalhes: `docs/arquitetura.md` ("Migrations: expandir e contrair").
 - Não coloque segredo em código, teste, fixture, log ou documentação (só nomes
   e como gerar).
 - Não introduza broker, cache no Redis nem provedor externo de IA: são
-  decisões registradas (ADRs 0001, 0002, 0010). A única exceção ao cache é
-  `src/shared/cache/snapshot-cache.ts`: fotos curtas (5–60 s), que falham
-  aberto, de leituras **da plataforma** que só o MASTER vê; nunca dado de
-  empresa.
+  decisões registradas (ADRs 0001, 0002, 0010). As exceções ao cache são
+  duas: `src/shared/cache/snapshot-cache.ts`, fotos curtas (5–60 s), que
+  falham aberto, de leituras **da plataforma** que só o MASTER vê, nunca dado
+  de empresa; e o cache da busca de endereço
+  (`src/shared/services/address-search/address-search-limits.ts`, adendo de
+  10/11/2026 do ADR 0002), por empresa, com chave HMAC, valor cifrado, até
+  48 h e falha fechada. As chaves do geocodificador saem de
+  `src/shared/delivery/geocoding/geocoding-keys.ts`, sob um prefixo só,
+  compartilhado por todas as réplicas.
 - Não exija Turnstile na API (quebraria o login do app); não ponha `TZ` no
   contêiner.
 - Não crie Compose nem template no Dokploy para staging ou produção (decisão

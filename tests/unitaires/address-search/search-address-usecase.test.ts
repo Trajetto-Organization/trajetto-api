@@ -8,18 +8,13 @@ import {
 import {
   EXTEND_PAUSE,
   GEOCODING_CALLS_PER_MINUTE,
-  PAUSE_KEY,
   TAKE_SLOT,
   createRedisGeocodingGate,
   pauseReasonOf,
   pauseValue,
 } from "@/shared/delivery/geocoding/geocoding-gate";
-import {
-  SEARCH_PAUSE_KEY,
-  businessDayKey,
-  createRedisAddressSearchStore,
-  platformDayKey,
-} from "@/shared/services/address-search/address-search-limits";
+import { GEOCODING_KEYS } from "@/shared/delivery/geocoding/geocoding-keys";
+import { createRedisAddressSearchStore } from "@/shared/services/address-search/address-search-limits";
 import type {
   ProviderAnswer,
   ProviderSearch,
@@ -230,8 +225,10 @@ describe("the company's cache", () => {
       results: [{ title: "Rua Epitácio Pessoa", precision: "STREET" }],
     });
     expect(calls).toHaveLength(1);
-    expect(values.get(businessDayKey(NOW, A))?.value).toBe("1");
-    expect(values.get(platformDayKey(NOW))?.value).toBe("1");
+    expect(values.get(GEOCODING_KEYS.searchBusinessDay(NOW, A))?.value).toBe(
+      "1",
+    );
+    expect(values.get(GEOCODING_KEYS.searchDay(NOW))?.value).toBe("1");
   });
 
   it("never serves company A's answer to company B", async () => {
@@ -341,7 +338,10 @@ describe("the day's counts", () => {
   it("answers DAILY_LIMIT for the platform once its budget is spent", async () => {
     const redis = fakeRedis();
 
-    redis.values.set(platformDayKey(NOW), { value: "1000", ttl: null });
+    redis.values.set(GEOCODING_KEYS.searchDay(NOW), {
+      value: "1000",
+      ttl: null,
+    });
 
     const { useCase, calls } = harness({ redis });
 
@@ -391,7 +391,7 @@ describe("the pauses", () => {
     const redis = fakeRedis();
     const midnight = new Date("2026-11-11T00:00:00.000Z");
 
-    redis.values.set(PAUSE_KEY, {
+    redis.values.set(GEOCODING_KEYS.pause, {
       value: pauseValue("QUOTA", midnight),
       ttl: 9 * 3600_000,
     });
@@ -409,7 +409,7 @@ describe("the pauses", () => {
   it("answers BUSY during the account's burst pause", async () => {
     const redis = fakeRedis();
 
-    redis.values.set(PAUSE_KEY, {
+    redis.values.set(GEOCODING_KEYS.pause, {
       value: pauseValue("BURST", new Date(NOW.getTime() + 42_000)),
       ttl: 42_000,
     });
@@ -426,7 +426,7 @@ describe("the pauses", () => {
   it("searches on while the deliveries' lookups are paused by a refusal of their own endpoint", async () => {
     const redis = fakeRedis();
 
-    redis.values.set(PAUSE_KEY, {
+    redis.values.set(GEOCODING_KEYS.pause, {
       value: pauseValue("REFUSED", new Date(NOW.getTime() + 900_000)),
       ttl: 900_000,
     });
@@ -450,12 +450,12 @@ describe("the pauses", () => {
       retryAfterSeconds: 900,
     });
 
-    expect(redis.values.get(SEARCH_PAUSE_KEY)).toEqual({
+    expect(redis.values.get(GEOCODING_KEYS.searchPause)).toEqual({
       value: "REFUSED 2026-11-10T15:15:00.000Z",
       ttl: 900_000,
     });
     // The minute's job reads this key: it must stay empty.
-    expect(redis.values.get(PAUSE_KEY)).toBeUndefined();
+    expect(redis.values.get(GEOCODING_KEYS.pause)).toBeUndefined();
 
     const deliveries = createRedisGeocodingGate(redis.redis as never);
 
@@ -486,7 +486,9 @@ describe("the pauses", () => {
       kind: "UNAVAILABLE",
       reason: "PAUSED",
     });
-    expect(pauseReasonOf(quota.values.get(PAUSE_KEY)?.value)).toBe("QUOTA");
+    expect(pauseReasonOf(quota.values.get(GEOCODING_KEYS.pause)?.value)).toBe(
+      "QUOTA",
+    );
     expect(
       await createRedisGeocodingGate(quota.redis as never).paused(NOW),
     ).toBe(true);
@@ -501,18 +503,18 @@ describe("the pauses", () => {
       kind: "BUSY",
       retryAfterSeconds: 60,
     });
-    expect(burst.values.get(PAUSE_KEY)).toEqual({
+    expect(burst.values.get(GEOCODING_KEYS.pause)).toEqual({
       value: pauseValue("BURST", new Date(NOW.getTime() + 60_000)),
       ttl: 60_000,
     });
     // The search's own copy, read the same way.
-    expect(burst.values.get(SEARCH_PAUSE_KEY)).toEqual({
+    expect(burst.values.get(GEOCODING_KEYS.searchPause)).toEqual({
       value: pauseValue("BURST", new Date(NOW.getTime() + 60_000)),
       ttl: 60_000,
     });
-    expect(pauseReasonOf(quota.values.get(SEARCH_PAUSE_KEY)?.value)).toBe(
-      "QUOTA",
-    );
+    expect(
+      pauseReasonOf(quota.values.get(GEOCODING_KEYS.searchPause)?.value),
+    ).toBe("QUOTA");
     expect(short.lines[0].level).toBe("warn");
   });
 
@@ -520,7 +522,7 @@ describe("the pauses", () => {
     const redis = fakeRedis();
     const refused = pauseValue("REFUSED", new Date(NOW.getTime() + 900_000));
 
-    redis.values.set(PAUSE_KEY, { value: refused, ttl: 900_000 });
+    redis.values.set(GEOCODING_KEYS.pause, { value: refused, ttl: 900_000 });
 
     const { useCase, calls } = harness({
       redis,
@@ -529,7 +531,7 @@ describe("the pauses", () => {
 
     expect(await useCase.execute(request())).toMatchObject({ kind: "BUSY" });
     // The shared key keeps its longer pause, and the burst is not lost.
-    expect(redis.values.get(PAUSE_KEY)?.value).toBe(refused);
+    expect(redis.values.get(GEOCODING_KEYS.pause)?.value).toBe(refused);
 
     expect(await useCase.execute(request({ query: "Outra rua" }))).toEqual({
       kind: "BUSY",
@@ -541,11 +543,11 @@ describe("the pauses", () => {
   it("answers the longer pause when a refusal and a burst both run", async () => {
     const redis = fakeRedis();
 
-    redis.values.set(PAUSE_KEY, {
+    redis.values.set(GEOCODING_KEYS.pause, {
       value: pauseValue("BURST", new Date(NOW.getTime() + 30_000)),
       ttl: 30_000,
     });
-    redis.values.set(SEARCH_PAUSE_KEY, {
+    redis.values.set(GEOCODING_KEYS.searchPause, {
       value: pauseValue("REFUSED", new Date(NOW.getTime() + 600_000)),
       ttl: 600_000,
     });
@@ -572,8 +574,8 @@ describe("the pauses", () => {
       reason: "PROVIDER",
       retryAfterSeconds: 5,
     });
-    expect(values.get(SEARCH_PAUSE_KEY)).toBeUndefined();
-    expect(values.get(PAUSE_KEY)).toBeUndefined();
+    expect(values.get(GEOCODING_KEYS.searchPause)).toBeUndefined();
+    expect(values.get(GEOCODING_KEYS.pause)).toBeUndefined();
     expect([...values.keys()].some((key) => key.includes(":cache:"))).toBe(
       false,
     );
@@ -629,7 +631,7 @@ describe("the provider's slot", () => {
     });
     expect(calls).toHaveLength(0);
     // Not spent: nothing went out.
-    expect(values.get(platformDayKey(NOW))).toBeUndefined();
+    expect(values.get(GEOCODING_KEYS.searchDay(NOW))).toBeUndefined();
   });
 
   it("takes the next second's slot when it comes", async () => {
@@ -660,7 +662,7 @@ describe("the provider's slot", () => {
       kind: "ABORTED",
     });
     expect(calls).toHaveLength(0);
-    expect(values.get(platformDayKey(NOW))).toBeUndefined();
+    expect(values.get(GEOCODING_KEYS.searchDay(NOW))).toBeUndefined();
   });
 
   it("drops the call in flight when the person types again, without a pause or a cache", async () => {
@@ -677,11 +679,11 @@ describe("the provider's slot", () => {
       kind: "ABORTED",
     });
     // The call went out: counted, as the provider counts it.
-    expect(values.get(platformDayKey(NOW))?.value).toBe("1");
+    expect(values.get(GEOCODING_KEYS.searchDay(NOW))?.value).toBe("1");
     expect([...values.keys()].some((key) => key.includes(":cache:"))).toBe(
       false,
     );
-    expect(values.get(SEARCH_PAUSE_KEY)).toBeUndefined();
+    expect(values.get(GEOCODING_KEYS.searchPause)).toBeUndefined();
   });
 });
 

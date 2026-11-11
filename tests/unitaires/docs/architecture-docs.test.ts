@@ -688,6 +688,79 @@ describe("claims the docs make about the code", () => {
     }
   });
 
+  it("do not say no company's data is cached while the address search keeps its answers per company", () => {
+    expect(
+      existsSync(
+        join(
+          ROOT,
+          "src/shared/services/address-search/address-search-limits.ts",
+        ),
+      ),
+    ).toBe(true);
+
+    // The claims ADR 0002's addendum of 10/11/2026 made stale.
+    for (const name of [
+      "README.md",
+      MAP_DOC,
+      "docs/adr/0002-redis-descartavel.md",
+      "CLAUDE.md",
+      "AGENTS.md",
+    ]) {
+      const text = read(join(ROOT, name));
+
+      expect(text, name).not.toMatch(
+        /Nenhum\s+dado\s+de\s+empresa\s+em\s+cache/i,
+      );
+      expect(text, name).not.toMatch(
+        /Nenhum\s+dado\s+de\s+empresa\s+fica\s+em\s+cache,\s+e\s+sem\s+Redis/i,
+      );
+      expect(text, name).not.toMatch(
+        /nenhum\s+dado\s+de\s+empresa\s+fica\s+em\s+cache\s+na\s+API\s+nem\s+no\s+Redis/i,
+      );
+      expect(text, name).not.toMatch(
+        /^Nenhum\s+dado\s+de\s+empresa\s+nem\s+de\s+pessoa\s+entra\s+em\s+cache/im,
+      );
+      expect(text, name).not.toMatch(/única\s+exceção\s+ao\s+cache/i);
+    }
+  });
+
+  it("name the geocoder wherever they list what Redis keeps, and fail-closed where the code does", () => {
+    const deploy = read(join(ROOT, "docs/deploy.md"));
+    const adr = read(join(ROOT, "docs/adr/0002-redis-descartavel.md"));
+
+    // The closed lists: the Database's persistence (deploy.md §7.5 and §10),
+    // the README's stack and the component map every tour step copies.
+    const lists = [
+      [
+        "deploy.md §7.5",
+        deploy.match(
+          /\*\*Sem persistência e com teto de memória\*\*[\s\S]*?um snapshot/,
+        ),
+      ],
+      ["deploy.md §10", deploy.match(/\*\*Nada durável\*\*[\s\S]*?backup/)],
+      ["README.md stack", readme.match(/^\| Redis via `ioredis`.*$/m)],
+      [`${MAP_DOC} map`, architecture.match(/rd\[\("Redis 7<br\/>[^"]*"\)\]/)],
+    ] as const;
+
+    for (const [where, found] of lists) {
+      expect(found?.[0], where).toMatch(/geocod/);
+    }
+
+    // The socket ticket fails closed like the geocoder
+    // (redis-client-options.ts, "socket-ticket"), and its claims carry a
+    // businessId: the search's cache is the only company data CACHED there.
+    for (const [name, text] of [
+      [MAP_DOC, architecture],
+      ["docs/adr/0002-redis-descartavel.md", adr],
+    ] as const) {
+      expect(text, name).not.toMatch(/ao\s+contrário\s+dos\s+outros\s+usos/i);
+      expect(text, name).not.toMatch(/três\s+primeiros\s+deles\s+também/i);
+      expect(text, name).not.toMatch(
+        /único\s+dado\s+de\s+empresa\s+no\s+Redis/i,
+      );
+    }
+  });
+
   it("count the Redis uses right and describe the legacy broker as main had it", () => {
     expect(architecture).not.toMatch(/tem três usos/);
     expect(architecture).not.toMatch(/servia só o e-mail/);

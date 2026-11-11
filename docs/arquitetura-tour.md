@@ -65,7 +65,7 @@ flowchart LR
     api["trajetto-api ×2<br/>Fastify + Socket.IO<br/>workers + crons"]
     ai["trajetto-ai<br/>OCR em CPU, sem domínio"]
     pg[("PostgreSQL 16<br/>dados, outbox, filas, leases")]
-    rd[("Redis 7<br/>rate limit, adapter do Socket.IO,<br/>tickets, cooldown, fotos do MASTER")]
+    rd[("Redis 7<br/>rate limit, adapter do Socket.IO,<br/>tickets, cooldown, fotos do MASTER,<br/>geocodificador e busca de endereço")]
   end
 
   r2[("Cloudflare R2<br/>fotos, PDFs, backups")]
@@ -221,7 +221,7 @@ flowchart LR
     api["trajetto-api ×2<br/>Fastify + Socket.IO<br/>workers + crons"]
     ai["trajetto-ai<br/>OCR em CPU, sem domínio"]
     pg[("PostgreSQL 16<br/>dados, outbox, filas, leases")]
-    rd[("Redis 7<br/>rate limit, adapter do Socket.IO,<br/>tickets, cooldown, fotos do MASTER")]
+    rd[("Redis 7<br/>rate limit, adapter do Socket.IO,<br/>tickets, cooldown, fotos do MASTER,<br/>geocodificador e busca de endereço")]
   end
 
   r2[("Cloudflare R2<br/>fotos, PDFs, backups")]
@@ -358,7 +358,7 @@ flowchart LR
     api["trajetto-api ×2<br/>Fastify + Socket.IO<br/>workers + crons"]
     ai["trajetto-ai<br/>OCR em CPU, sem domínio"]
     pg[("PostgreSQL 16<br/>dados, outbox, filas, leases")]
-    rd[("Redis 7<br/>rate limit, adapter do Socket.IO,<br/>tickets, cooldown, fotos do MASTER")]
+    rd[("Redis 7<br/>rate limit, adapter do Socket.IO,<br/>tickets, cooldown, fotos do MASTER,<br/>geocodificador e busca de endereço")]
   end
 
   r2[("Cloudflare R2<br/>fotos, PDFs, backups")]
@@ -487,7 +487,7 @@ flowchart LR
     api["trajetto-api ×2<br/>Fastify + Socket.IO<br/>workers + crons"]
     ai["trajetto-ai<br/>OCR em CPU, sem domínio"]
     pg[("PostgreSQL 16<br/>dados, outbox, filas, leases")]
-    rd[("Redis 7<br/>rate limit, adapter do Socket.IO,<br/>tickets, cooldown, fotos do MASTER")]
+    rd[("Redis 7<br/>rate limit, adapter do Socket.IO,<br/>tickets, cooldown, fotos do MASTER,<br/>geocodificador e busca de endereço")]
   end
 
   r2[("Cloudflare R2<br/>fotos, PDFs, backups")]
@@ -618,7 +618,7 @@ flowchart LR
     api["trajetto-api ×2<br/>Fastify + Socket.IO<br/>workers + crons"]
     ai["trajetto-ai<br/>OCR em CPU, sem domínio"]
     pg[("PostgreSQL 16<br/>dados, outbox, filas, leases")]
-    rd[("Redis 7<br/>rate limit, adapter do Socket.IO,<br/>tickets, cooldown, fotos do MASTER")]
+    rd[("Redis 7<br/>rate limit, adapter do Socket.IO,<br/>tickets, cooldown, fotos do MASTER,<br/>geocodificador e busca de endereço")]
   end
 
   r2[("Cloudflare R2<br/>fotos, PDFs, backups")]
@@ -747,7 +747,7 @@ flowchart LR
     api["trajetto-api ×2<br/>Fastify + Socket.IO<br/>workers + crons"]
     ai["trajetto-ai<br/>OCR em CPU, sem domínio"]
     pg[("PostgreSQL 16<br/>dados, outbox, filas, leases")]
-    rd[("Redis 7<br/>rate limit, adapter do Socket.IO,<br/>tickets, cooldown, fotos do MASTER")]
+    rd[("Redis 7<br/>rate limit, adapter do Socket.IO,<br/>tickets, cooldown, fotos do MASTER,<br/>geocodificador e busca de endereço")]
   end
 
   r2[("Cloudflare R2<br/>fotos, PDFs, backups")]
@@ -881,7 +881,7 @@ flowchart LR
     api["trajetto-api ×2<br/>Fastify + Socket.IO<br/>workers + crons"]
     ai["trajetto-ai<br/>OCR em CPU, sem domínio"]
     pg[("PostgreSQL 16<br/>dados, outbox, filas, leases")]
-    rd[("Redis 7<br/>rate limit, adapter do Socket.IO,<br/>tickets, cooldown, fotos do MASTER")]
+    rd[("Redis 7<br/>rate limit, adapter do Socket.IO,<br/>tickets, cooldown, fotos do MASTER,<br/>geocodificador e busca de endereço")]
   end
 
   r2[("Cloudflare R2<br/>fotos, PDFs, backups")]
@@ -1016,7 +1016,7 @@ flowchart LR
     api["trajetto-api ×2<br/>Fastify + Socket.IO<br/>workers + crons"]
     ai["trajetto-ai<br/>OCR em CPU, sem domínio"]
     pg[("PostgreSQL 16<br/>dados, outbox, filas, leases")]
-    rd[("Redis 7<br/>rate limit, adapter do Socket.IO,<br/>tickets, cooldown, fotos do MASTER")]
+    rd[("Redis 7<br/>rate limit, adapter do Socket.IO,<br/>tickets, cooldown, fotos do MASTER,<br/>geocodificador e busca de endereço")]
   end
 
   r2[("Cloudflare R2<br/>fotos, PDFs, backups")]
@@ -1145,7 +1145,7 @@ flowchart LR
     api["trajetto-api ×2<br/>Fastify + Socket.IO<br/>workers + crons"]
     ai["trajetto-ai<br/>OCR em CPU, sem domínio"]
     pg[("PostgreSQL 16<br/>dados, outbox, filas, leases")]
-    rd[("Redis 7<br/>rate limit, adapter do Socket.IO,<br/>tickets, cooldown, fotos do MASTER")]
+    rd[("Redis 7<br/>rate limit, adapter do Socket.IO,<br/>tickets, cooldown, fotos do MASTER,<br/>geocodificador e busca de endereço")]
   end
 
   r2[("Cloudflare R2<br/>fotos, PDFs, backups")]
@@ -1279,7 +1279,7 @@ flowchart LR
     api["trajetto-api ×2<br/>Fastify + Socket.IO<br/>workers + crons"]
     ai["trajetto-ai<br/>OCR em CPU, sem domínio"]
     pg[("PostgreSQL 16<br/>dados, outbox, filas, leases")]
-    rd[("Redis 7<br/>rate limit, adapter do Socket.IO,<br/>tickets, cooldown, fotos do MASTER")]
+    rd[("Redis 7<br/>rate limit, adapter do Socket.IO,<br/>tickets, cooldown, fotos do MASTER,<br/>geocodificador e busca de endereço")]
   end
 
   r2[("Cloudflare R2<br/>fotos, PDFs, backups")]
@@ -1409,7 +1409,7 @@ flowchart LR
     api["trajetto-api ×2<br/>Fastify + Socket.IO<br/>workers + crons"]
     ai["trajetto-ai<br/>OCR em CPU, sem domínio"]
     pg[("PostgreSQL 16<br/>dados, outbox, filas, leases")]
-    rd[("Redis 7<br/>rate limit, adapter do Socket.IO,<br/>tickets, cooldown, fotos do MASTER")]
+    rd[("Redis 7<br/>rate limit, adapter do Socket.IO,<br/>tickets, cooldown, fotos do MASTER,<br/>geocodificador e busca de endereço")]
   end
 
   r2[("Cloudflare R2<br/>fotos, PDFs, backups")]

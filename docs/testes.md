@@ -212,6 +212,42 @@ Turnstile da API fica desligado sem `TURNSTILE_SECRET_KEY`, o WhatsApp sem
 `META_WHATSAPP_*`, e o push só sai para tokens que o teste cadastra (com o
 cliente da Expo trocado por um falso).
 
+### O Redis é de todos os arquivos
+
+Cada arquivo tem o seu banco, mas o Redis é um só: os arquivos da fase
+`shared` rodam em paralelo sobre ele, o que gravam sobrevive à execução, e o
+mesmo Redis pode servir duas execuções ao mesmo tempo (duas locais, réplicas
+em paralelo). Uma chave por empresa ou por usuário (ids novos por execução)
+já fica isolada. O que é da plataforma, não: a vaga por segundo e por minuto
+do provedor de endereços, as pausas da conta e as contagens do dia são uma
+chave só em produção, de propósito, porque todas as réplicas contam juntas.
+Nessas chaves, a chamada de outra execução no mesmo segundo responde a busca
+com `503 ADDRESS_SEARCH_BUSY`, e uma pausa ou uma contagem do dia que outra
+deixou (a pausa `QUOTA` vale até a meia-noite UTC) muda a resposta da busca
+(503 ou 429), o `address_lookup` da rota e o orçamento do job. Com
+`REVERSE_GEOCODER_URL` no `.env` local, as escritas de entrega dos outros
+arquivos também tomam a vaga, na busca logo depois do commit.
+
+Por isso, um arquivo que usa as chaves do geocodificador usa as da própria
+execução, de `geocodingTestKeys()` (`tests/E2E/support/geocoding-test-keys.ts`),
+e as apaga no fim com `clear`:
+
+- **roda o portão**: `address-search-http`, pela busca
+  (`configureAddressSearch(redis, keys)` depois do `import("@/http")`, numa
+  conexão de `readyRequestPathRedis()`, do mesmo tipo da `http.ts`), e
+  `geocoding-gate-redis`, direto em `createRedisGeocodingGate` e
+  `createRedisAddressSearchStore`;
+- **grava a pausa e lê a pausa e o orçamento do dia**:
+  `delivery-geocoding-routes-http`, pela `geocoding-hold`
+  (`createRedisGeocodingHold(redis, teto, keys)`, entregue a
+  `configureGeocodingHold` depois do `import("@/http")`);
+- **gasta o orçamento do job**: `import-geocoding-volume`
+  (`createRedisGeocodingBudget(redis, teto, undefined, keys)`).
+
+Num E2E, nunca grave nem apague uma chave de produção.
+`delivery/geocoding-keys.test.ts` prova que a produção continua nas chaves
+compartilhadas.
+
 ### Esperar por estado, nunca por tempo
 
 Um `setTimeout` fixo esperando o servidor "terminar" é chute: numa máquina
