@@ -3,7 +3,7 @@ import { z } from "zod";
 /**
  * The commit this process was built from.
  *
- * The Dockerfile turns the `GIT_SHA` build arg (deploy.yml passes the commit
+ * The Dockerfile turns the `GIT_SHA` build arg (staging.yml passes the commit
  * of the push) into `APP_COMMIT_SHA`, and GET /health/liveness answers it.
  * That is how the pipeline proves, from outside and without SSH, that the
  * build it just deployed is the one serving

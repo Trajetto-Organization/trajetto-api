@@ -5,10 +5,10 @@
 # on main, every ecosystem below runs at once (seen on 29/10/2026).
 #
 # Why monthly, few PRs and no automatic rebase: every push to a
-# dependabot/* branch runs ci.yml (unit suite, gitleaks, AI pytest: about 14
+# dependabot/* branch runs ci.yml (unit suite, gitleaks, AI pytest: about 11
 # billed minutes on the 2-vCPU runner), every automatic rebase is another
-# push, and every merge into staging runs the whole pipeline (its test job
-# alone took 59 min on 04/11/2026). The bill grows with the number of PRs
+# push, and every merge into staging runs the whole pipeline (about 60 billed
+# minutes since 10/11/2026, 75 before). The bill grows with the number of PRs
 # and rebases, not with how old a version is, so:
 # - one run a month, on the 1st, at 06:00 in São Paulo;
 # - npm opens three PRs at most per run (prisma, minor-and-patch, majors),
@@ -32,8 +32,8 @@
 # Security updates: Dependabot raises them only against the default branch
 # and applies none of the options below to them (docs.github.com,
 # "target-branch"). A PR into main has no staging build to promote, and here
-# it would still run deploy.yml's PR validation (test job plus the
-# staging-image wait, about two runner hours). So "Dependabot security
+# its Staging evidence (pr.yml) would wait for a staging build that never
+# comes (up to 45 billed minutes). So "Dependabot security
 # updates" stays OFF in the repository settings and "Dependabot alerts"
 # stays ON: an alert is fixed on a work branch from staging, like any other
 # change, and the audit gate (audit-gate.sh) blocks a CRITICAL advisory in a

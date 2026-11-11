@@ -7,7 +7,7 @@ import { describe, expect, it } from "vitest";
 /**
  * One lockfile: yarn.lock.
  *
- * The Dockerfile, ci.yml and deploy.yml install with
+ * The Dockerfile and the CI's setup action install with
  * `yarn install --frozen-lockfile`, so yarn.lock is the tree that ships. A
  * package-lock.json sat next to it, left by an `npm install`, resolving an
  * older tree (socket.io 4.8.1, undici 6.28.0: versions with advisories that
@@ -70,11 +70,8 @@ describe("the lockfile", () => {
   });
 
   it("is the one every install in the pipeline reads", () => {
-    for (const path of [
-      "Dockerfile",
-      ".github/workflows/ci.yml",
-      ".github/workflows/deploy.yml",
-    ]) {
+    // Every job installs through the setup action (ci-stability.test.ts).
+    for (const path of ["Dockerfile", ".github/actions/setup/action.yml"]) {
       const text = readFileSync(resolve(ROOT, path), "utf8");
 
       expect(text, path).toMatch(/yarn install --frozen-lockfile/);

@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import { execSync } from "node:child_process";
 
 import { Environment } from "vitest";
 import pg from "pg";
@@ -10,6 +9,7 @@ import {
   loadTestEnv,
   testDatabaseUrl,
 } from "./database-url";
+import { ensureTemplate, quoteIdent } from "./template";
 
 // dotenv + dotenv-expand, as src/env does: `.env` writes DATABASE_URL with
 // `${VAR}` placeholders.
@@ -34,8 +34,9 @@ loadTestEnv();
  * CASCADE`, the other obvious fix, would have dropped the trigram index out
  * from under any test file running in parallel.
  *
- * The cost is one CREATE DATABASE per file. `migrate deploy` was already being
- * paid for, and it dominates.
+ * Each file's database is a clone of a template migrated once per server
+ * (template.ts): one CREATE DATABASE … TEMPLATE per file, about 0.12 s,
+ * where a `migrate deploy` of its own cost 4 to 7 s.
  *
  * The two administrative statements go through a plain pg Client: this
  * package is copied into node_modules, so it cannot reach the app's client
@@ -154,11 +155,14 @@ export default <Environment>{
     // Quoted everywhere it appears: a UUID starts with a digit often enough,
     // and an unquoted identifier that does is a syntax error.
     const database = `trajetto_test_${randomUUID().replace(/-/g, "")}`;
+    const template = await ensureTemplate(baseUrl);
 
-    await onAdminConnection(baseUrl, `CREATE DATABASE "${database}"`);
+    await onAdminConnection(
+      baseUrl,
+      `CREATE DATABASE ${quoteIdent(database)} TEMPLATE ${quoteIdent(template)}`,
+    );
 
     process.env.DATABASE_URL = connectionFor(baseUrl, database);
-    execSync("yarn prisma migrate deploy", { stdio: "pipe" });
 
     return {
       async teardown() {

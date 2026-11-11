@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
-# Which staging build covers a commit: the PR check (`staging-image`) and the
-# promote (`promote-production`) of deploy.yml ask the same question here.
+# Which staging build covers a commit: the `Staging evidence` of the PR into
+# main (pr.yml) and of the promote (production.yml) ask it here.
 #
 #   staged-build.sh <commit>
 #

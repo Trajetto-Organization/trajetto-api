@@ -50,28 +50,33 @@
 ## 1. Visão geral
 
 ```
-branch de trabalho ──push──▶ ci.yml (lint, typecheck, unitários + cobertura, audit, gitleaks, IA)
+branch de trabalho ──push──▶ ci.yml: Changes ─▶ Secret scan + Validate (validate.yml, sem E2E; E2E só no Run workflow)
         │
-        └─ merge/push ─▶ staging ──▶ deploy.yml
-                                     ├─ validação completa (+ E2E com Postgres e Redis)
-                                     ├─ build ÚNICO das 3 imagens ─▶ GHCR  sha-<7>  (imutável)
+        └─ merge/push ─▶ staging ──▶ staging.yml
+                                     ├─ Changes: só documentação? (então só Secret scan e Docs, sem build)
+                                     ├─ Secret scan + Validate (validate.yml), em paralelo:
+                                     │    Validate (audit, lint, tsc, unitários + piso) · E2E (1/3) · E2E (2/3) · E2E (3/3) · AI OCR
+                                     ├─ Gate (tudo acima verde; é o check que o PR e a promoção conferem)
+                                     ├─ Build: as 3 imagens UMA vez ─▶ GHCR  sha-<7>  (imutável)
                                      │  (API, migração e IA; a migração e a IA são reaproveitadas, sem rebuild, se o que rodam não mudou)
-                                     ├─ migrations, só se o banco não aplicou essa imagem: Application trajetto-api-migrate (Dokploy)
-                                     ├─ por serviço: tag `staging` movida por digest ─▶ Dokploy staging
-                                     │  trajetto-ai (só se o digest mudou) → trajetto-api
-                                     ├─ a API pública responde este commit? (/health/liveness)
-                                     └─ marcador staged-<7> (o que o PR e a promoção exigem)
+                                     ├─ Image scan (Trivy, por digest)
+                                     └─ Deploy (environment staging, ação .github/actions/deploy):
+                                          migrations, só se o banco não aplicou essa imagem (Application trajetto-api-migrate)
+                                          ─▶ trajetto-ai (só se o digest mudou) ─▶ trajetto-api, cada tag `staging` movida por digest
+                                          ─▶ a API pública responde este commit (/health/liveness)
+                                          ─▶ marcador staged-<7> (o que o PR e a promoção exigem)
 
-PR staging → main ──▶ deploy.yml: a mesma validação + "o staging rodou o head do PR?" (staged-<7>)
+PR staging → main ──▶ pr.yml: Secret scan + Staging evidence (staged-<7>, Gate verde, a main só traz documentação)
+                      Não valida de novo: o staging já validou o commit que o merge promove.
 
-merge em main ──▶ deploy.yml: PROMOÇÃO (sem build)       [aprovação do environment production]
-                  ├─ resolve o build do commit mergeado (2º pai do merge commit)
-                  ├─ migrations, se preciso (trajetto-api-migrate, imagem de migração do build) ─▶ tag `stable` movida por digest
-                  ├─ Dokploy produção: trajetto-ai → trajetto-api ─▶ convergência
-                  └─ release (tag semver, CHANGELOG, GitHub Release)
+merge em main ──▶ production.yml: PROMOÇÃO (sem build)
+                  ├─ Staging evidence: o build do commit mergeado (2º pai do merge commit), staged-<7>, Gate, digests
+                  ├─ Deploy [aprovação do environment production] (a mesma ação do staging, com `stable`):
+                  │    migrations, se preciso ─▶ trajetto-ai ─▶ trajetto-api ─▶ convergência (Swarm por SSH)
+                  └─ Release (tag semver, CHANGELOG, GitHub Release)
 
-Run workflow na main ──▶ a mesma promoção com uma tag antiga: o botão de ROLLBACK
-Run workflow na staging ──▶ o caminho de staging de novo (force_ai_build: reconstrói e reimplanta a IA)
+Run workflow do Production na main ──▶ a mesma promoção com uma tag antiga: o botão de ROLLBACK
+Run workflow do Staging ──▶ o caminho de staging de novo (force_ai_build: testa, reconstrói e reimplanta a IA)
 ```
 
 Princípios que não mudam:
@@ -127,16 +132,16 @@ Princípios que não mudam:
 
 - **Tags**:
 
-  | Tag                                                             | Quem cria/move                                                                     | Muda?                                                                                                                  |
-  | --------------------------------------------------------------- | ---------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
-  | `sha-<7 primeiros do commit>`                                   | o build de cada push em `staging`                                                  | **nunca** (imutável)                                                                                                   |
-  | `staging`                                                       | o job `deploy-staging`, por digest                                                 | a cada push em `staging`                                                                                               |
-  | `staged-<7>`                                                    | o job `deploy-staging`, **por último**: depois do scan, do deploy e da conferência | nunca; sem ele o PR e a promoção recusam o commit (salvo um commit só de documentação, que usa o de um ancestral)      |
-  | `src-<hash git de infra/ai-ocr>` (só `trajetto-ai`)             | o build da IA                                                                      | nunca; é por ela que um push acha a imagem da IA de mesmo código e a reaproveita                                       |
-  | `src-<hash de migrate-source.sh>` (só `trajetto-api-migrate`)   | o build da imagem de migração                                                      | nunca; é por ela que um push sem mudança nas migrations, nos seeds e no que eles rodam reaproveita a imagem            |
-  | `staging-applied`, `stable-applied` (só `trajetto-api-migrate`) | `deploy-staging` e `promote-production`, **depois** de a etapa de release terminar | a cada etapa que roda; dizem qual imagem de migração o banco do ambiente já aplicou, e a etapa é pulada se for a mesma |
-  | `stable`                                                        | o job `promote-production`, por digest                                             | a cada promoção ou rollback                                                                                            |
-  | `main-<sha>`                                                    | builds antigos, de antes da branch `staging`                                       | nunca; aceitos só como alvo de rollback                                                                                |
+  | Tag                                                             | Quem cria/move                                                                                  | Muda?                                                                                                                  |
+  | --------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+  | `sha-<7 primeiros do commit>`                                   | o build de cada push em `staging`                                                               | **nunca** (imutável)                                                                                                   |
+  | `staging`                                                       | o Deploy do `staging.yml` (job `deploy-staging`), por digest                                    | a cada push em `staging`                                                                                               |
+  | `staged-<7>`                                                    | o Deploy do `staging.yml`, **por último**: depois do scan, do deploy e da conferência           | nunca; sem ele o PR e a promoção recusam o commit (salvo um commit só de documentação, que usa o de um ancestral)      |
+  | `src-<hash git de infra/ai-ocr>` (só `trajetto-ai`)             | o build da IA                                                                                   | nunca; é por ela que um push acha a imagem da IA de mesmo código e a reaproveita                                       |
+  | `src-<hash de migrate-source.sh>` (só `trajetto-api-migrate`)   | o build da imagem de migração                                                                   | nunca; é por ela que um push sem mudança nas migrations, nos seeds e no que eles rodam reaproveita a imagem            |
+  | `staging-applied`, `stable-applied` (só `trajetto-api-migrate`) | o Deploy de cada ambiente (`.github/actions/deploy`), **depois** de a etapa de release terminar | a cada etapa que roda; dizem qual imagem de migração o banco do ambiente já aplicou, e a etapa é pulada se for a mesma |
+  | `stable`                                                        | o Deploy do `production.yml` (job `promote-production`), por digest                             | a cada promoção ou rollback                                                                                            |
+  | `main-<sha>`                                                    | builds antigos, de antes da branch `staging`                                                    | nunca; aceitos só como alvo de rollback                                                                                |
 
   Não existem `latest`, `main` nem `pr-*`. As Applications de produção rodam
   `stable`; as de staging, `staging` (a `trajetto-api-migrate` também). O pipeline **nunca** muda a imagem
@@ -173,39 +178,55 @@ Princípios que não mudam:
 
 O fluxo normal:
 
-1. Trabalhe numa branch e faça push: o `ci.yml` roda.
-2. Leve para `staging` (PR para `staging` ou merge/push). O `deploy.yml` roda
-   a validação completa, constrói as imagens e faz o deploy do staging.
+1. Trabalhe numa branch e faça push: o `ci.yml` roda (a validação sem o E2E;
+   o E2E inteiro só por _Run workflow_ com **e2e** marcado).
+2. Leve para `staging` (PR para `staging` ou merge/push). O `staging.yml`
+   roda a validação completa (com o E2E em 3 jobs paralelos), constrói as
+   imagens e faz o deploy do staging. Um push só de documentação roda o
+   secret scan e o job `Docs`, e não constrói nada.
 3. Confira o staging ([seção 16](#16-promover-para-produção), "O que conferir
    no staging").
-4. Abra o PR `staging → main`. O PR roda a mesma validação e confirma que o
-   staging **rodou** o commit do head: o marcador `staged-<7>` das duas
-   imagens, no mesmo digest de `sha-<7>` (espera até 45 min, porque o PR
-   costuma abrir enquanto o staging ainda constrói e implanta o mesmo
-   commit). Um commit cujo scan, deploy de staging ou conferência falhou tem
-   a imagem, mas não o marcador, e o check falha. Um head que só muda
-   documentação desde um commit que o staging rodou passa com o marcador
-   desse commit ([seção 16](#16-promover-para-produção), "Commits só de
-   documentação").
+4. Abra o PR `staging → main`. O PR **não valida de novo** (o staging já
+   validou o commit que o merge promove; o merge ref que um PR testaria nem é
+   o que vai para a produção). O check _Staging evidence_ confirma três
+   coisas: a `main` só traz documentação que o head não tem; o staging
+   **rodou** o commit do head (o marcador `staged-<7>` das duas imagens, no
+   mesmo digest de `sha-<7>`; espera até 45 min, porque o PR costuma abrir
+   enquanto o staging ainda constrói e implanta o mesmo commit); e o `Gate`
+   do run de staging desse build está verde. Um commit cujo scan, deploy de
+   staging ou conferência falhou tem a imagem, mas não o marcador, e o check
+   falha. Um head que só muda documentação desde um commit que o staging
+   rodou passa com o marcador (e o `Gate`) desse commit
+   ([seção 16](#16-promover-para-produção), "Commits só de documentação").
 5. **Merge com "Create a merge commit".** Nunca _Squash and merge_ nem
    _Rebase and merge_: os dois criam um commit que o staging nunca construiu,
    e a promoção falha de propósito ("não passou pelo pipeline de staging"). O
    merge commit também preserva os SHAs que a baseline do gitleaks usa. Para
    não errar, deixe só essa opção ligada ([seção 13](#13-configurar-o-github),
    "Proteção das branches").
-6. O push em `main` dispara a promoção; com revisores obrigatórios no
-   environment `production`, o job espera a aprovação.
+6. O push em `main` dispara a promoção (`production.yml`): o _Staging
+   evidence_ confere tudo antes, e o job _Deploy_, com revisores
+   obrigatórios no environment `production`, espera a aprovação.
+
+**Mudança que atravessa repositórios** (uma rota nova que a web chama, um
+evento de socket que o app ouve): uma branch com **o mesmo nome** em cada
+repositório. O contrato de rotas da API (a ação `.github/actions/siblings`,
+passo _Pick the sibling branches_, no `Validate` e no `Docs` do
+`validate.yml`) testa a branch contra a web e o app de mesmo nome, e as
+sondas da web e do app fazem o mesmo com a API; sem branch de mesmo nome, a
+sonda usa a `staging` do irmão. A regra é a mesma nos três `docs/deploy.md`.
 
 **Hotfix**: a mesma estrada, mais curta — branch `fix/...` → `staging`
 (espera o verde) → PR `staging → main`. Não existe caminho que pule o
 staging, porque a produção só roda imagens construídas lá.
 
 **Depois de cada release**: o `semantic-release` faz um commit
-`chore(release): x.y.z [skip ci]` com o `CHANGELOG.md` em `main`. Traga `main`
-de volta para `staging` de vez em quando (`git merge origin/main` em
-`staging`) para as duas não divergirem; esse merge vira um build de staging
-como qualquer outro. Como ele só traz o `CHANGELOG.md` (o único arquivo que
-o `@semantic-release/git` commita), pode ir com `[skip ci]` na mensagem
+`chore(release): x.y.z` (com a marcação de pular CI do próprio
+`@semantic-release/git`) com o `CHANGELOG.md` em `main`. Traga `main` de
+volta para `staging` de vez em quando (`git merge origin/main` em
+`staging`) para as duas não divergirem. Como esse merge só traz o
+`CHANGELOG.md`, o `staging.yml` o classifica como documentação: roda o
+secret scan e o `Docs`, sem build e sem deploy
 ([seção 16](#16-promover-para-produção), "Commits só de documentação").
 
 O Dependabot abre os PRs dele contra `staging` (`target-branch: staging` em
@@ -213,63 +234,289 @@ O Dependabot abre os PRs dele contra `staging` (`target-branch: staging` em
 
 ## 3. Os workflows em detalhe
 
-### `.github/workflows/ci.yml` — portão das branches de trabalho
+### O mapa
 
-Roda em todo push de branch que **não** seja `main`, `master` nem `staging`
-(e por _Run workflow_). Um push novo na mesma branch cancela o run anterior.
+Desde 10/11/2026 o CI/CD da API está em um arquivo por gatilho, com a mesma
+forma e os mesmos nomes nos três repositórios. A validação está num
+workflow reutilizável só (`validate.yml`), que o `ci.yml` e o `staging.yml`
+chamam; o setup e o deploy são ações compostas.
 
-| Job            | O que faz                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
-| -------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `validate`     | serviço `redis:7-alpine` por digest (um teste unitário do adapter do Socket.IO precisa dele); checkout com histórico completo; os repositórios irmãos (`Trajetto-Organization/trajetto-ui` e `Trajetto-Organization/trajetto-mobile`, na mesma branch quando ela existe lá) para o contrato de rotas, se o secret `CLIENT_REPOS_READ_TOKEN` existir — só "a branch não existe" (código 2 do `git ls-remote`) cai na branch padrão, com aviso; erro de rede repete 3 vezes e falha; Node `22.21.1`; cache dos engines do Prisma; auditoria de dependências (`audit-gate.sh`: bloqueia só um push que muda dependência); Prettier; `prisma generate`; `tsc`; unitários com piso de cobertura; publica `coverage-<sha>` |
-| `secrets`      | gitleaks em todo o histórico, imagem fixada por digest                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
-| `ai-ocr`       | o stage `test` de `infra/ai-ocr` pelo Buildx, com cache do GitHub (escopo `ai-test`): o pytest roda dentro da imagem, e um código que já passou leva segundos                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| `ai-local-e2e` | só em _Run workflow_: o contrato da API contra o contêiner real de IA (`tests/ai-local`)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| Arquivo                    | Gatilho                                                                                          | Jobs (o nome do check)                                                                                                                                                       |
+| -------------------------- | ------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ci.yml`                   | push em branch de trabalho (todas menos `main`, `master` e `staging`); _Run workflow_ (`e2e`)    | `Changes` → `Secret scan` + `Validate` (o `validate.yml`, sem E2E; no _Run workflow_, com o E2E se pedido e o `AI local contract (manual)`)                                  |
+| `staging.yml`              | push em `staging`; _Run workflow_ **na `staging`** (`force_ai_build`; em outra branch nada roda) | `Changes` → `Secret scan` + `Validate` (o `validate.yml`, com E2E) → `Gate` → `Build` → `Image scan` → `Deploy`                                                              |
+| `validate.yml`             | `workflow_call` (do `ci.yml` e do `staging.yml`)                                                 | `Validate`, `E2E (1/3)`, `E2E (2/3)`, `E2E (3/3)`, `AI OCR`; num push só de documentação, só `Docs`; no _Run workflow_ do `ci.yml`, também `AI local contract (manual)`      |
+| `pr.yml`                   | pull request para `main`                                                                         | `Secret scan`, `Staging evidence`                                                                                                                                            |
+| `production.yml`           | push em `main`; _Run workflow_ (o rollback: `image_tag`, `force_ai_build`)                       | `Staging evidence` → `Deploy` (a aprovação do environment `production`) → `Release` (só no push)                                                                             |
+| `cloudflare-ranges.yml`    | toda segunda, 06:00 de São Paulo; _Run workflow_                                                 | `Cloudflare ranges` ([seção 6.1](#61-firewall-da-vps-contabo))                                                                                                               |
+| `.github/actions/setup`    | ação composta                                                                                    | Node `22.21.1` com o cache do yarn, o cache dos engines do Prisma, `yarn install --frozen-lockfile`, o schema engine (no E2E) e o `prisma generate`                          |
+| `.github/actions/deploy`   | ação composta, chamada pelo `Deploy` do `staging.yml` e do `production.yml`                      | o deploy de um ambiente, igual nos dois (abaixo)                                                                                                                             |
+| `.github/actions/siblings` | ação composta, chamada pelo `Validate` e pelo `Docs`                                             | a web e o app ao lado da API (`../trajetto-ui`, `../trajetto-mobile`), na branch de mesmo nome ou na `staging` deles: o contrato de rotas e os links da documentação os leem |
 
-Sem E2E, sem imagem, sem deploy: a pergunta é só "esse código pode ir para o
-staging?".
+Na tela do GitHub, um job de workflow reutilizável aparece com o nome do job
+que o chamou na frente: `Validate / Validate`, `Validate / E2E (1/3)`,
+`Validate / AI OCR`, `Validate / Docs`. Os nomes são afirmações curtas, em
+inglês, iguais nos três repositórios quando é a mesma coisa, e nunca
+perguntas (o `ci-stability.test.ts` recusa `?` em nome de job ou de passo).
 
-### `.github/workflows/deploy.yml` — Pipeline (staging → produção)
+### `ci.yml` — branch de trabalho
 
-| Gatilho                                                 | Jobs que rodam                                                    |
-| ------------------------------------------------------- | ----------------------------------------------------------------- |
-| push em `staging`                                       | `test`, `ai-ocr`, `secrets` → `build-and-push` → `deploy-staging` |
-| pull request para `main`                                | `test`, `ai-ocr`, `secrets`, `staging-image`                      |
-| push em `main` (o merge)                                | `promote-production` → `release`                                  |
-| _Run workflow_ na `main` (`image_tag`)                  | `promote-production` (o rollback)                                 |
-| _Run workflow_ na `staging` (`force_ai_build` opcional) | os mesmos do push em `staging`                                    |
+Um push novo na mesma branch cancela o run anterior, e pode: o run novo
+valida tudo o que a branch muda desde que saiu da `staging`, um push de
+documentação por cima de um de código inclusive. Sem imagem e sem deploy: a
+pergunta é só "esse código pode ir para o staging?".
 
-| Job                  | Detalhes                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| -------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `test`               | serviços `postgres:16-alpine` e `redis:7-alpine` fixados por digest; checkout completo (o teste de rotas aposentadas compara com `origin/main`, e a auditoria com a base do push ou do PR); Node `22.21.1`; cache dos engines do Prisma pela versão deles e `yarn install --frozen-lockfile` com cache; confere que o schema engine do Prisma ficou instalado (baixa de novo, até 3 vezes, se o `postinstall` falhou calado); auditoria de dependências (`audit-gate.sh`); `lint:check`; `prisma:generate`; `typecheck`; `test:coverage` (o piso de cobertura); publica `coverage-<sha>`; `test:e2e` (um banco por arquivo; em duas fases, os arquivos que sobem réplicas por último, um por vez).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
-| `ai-ocr`             | o pytest do serviço de IA dentro da imagem (stage `test`, Buildx com cache do GitHub no escopo `ai-test`; o build só fala com o Docker Hub e o PyPI, porque os pesos do OCR estão versionados em `infra/ai-ocr/models`).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| `secrets`            | o mesmo gitleaks do `ci.yml` (mesma imagem, flags, `.gitleaksignore`). Nenhuma imagem é construída antes dele passar.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
-| `build-and-push`     | só no `staging` (push ou _Run workflow_), depois dos três acima. Buildx com cache do GitHub (um escopo por imagem); publica `sha-<7>` das três imagens (API, migração e IA) com SBOM e proveniência (`provenance: mode=max`; o único build arg é o commit, `GIT_SHA`, que vai para a imagem e sai na liveness). A IA só é reconstruída se o código dela mudou: toda imagem da IA leva também a tag `src-<hash git de infra/ai-ocr>`, e um push que encontra essa tag reaproveita a imagem (mesmo digest) e só acrescenta o `sha-<7>` dele, sem rebuild; `force_ai_build` reconstrói mesmo assim. A imagem de migração segue a mesma regra, com a tag `src-<hash>` de `.github/scripts/migrate-source.sh` (as migrations, o schema, os seeds e o que eles importam, o entrypoint, o `Dockerfile` e as dependências). Varre as três por digest com Trivy (CRITICAL corrigível; só relata até `IMAGE_SCAN_ENFORCE=true`, e só um achado reprova: o banco de vulnerabilidades é baixado uma vez por run, com cache diário, e falha no download ou erro do Trivy viram aviso). Exporta os três digests.                                                                                                                                                                                                                                                                                                                                              |
-| `deploy-staging`     | environment `staging`; um por vez (`concurrency: deploy-staging`, nunca cancelado no meio). Confere se o run ainda é o head de `staging` (runs terminam fora de ordem; o mais velho não volta a tag, a menos que o head só acrescente documentação, como um `[skip ci]` de doc: `docs-only.sh`); anota para onde as tags `staging` apontam; as migrations, antes de qualquer tag da API ou da IA andar e só se o banco de staging ainda não aplicou a imagem de migração deste commit (o digest comparado com `trajetto-api-migrate:staging-applied`): move `trajetto-api-migrate:staging`, pede o deploy da Application `trajetto-api-migrate` e espera o Swarm dizer que a etapa terminou ou falhou (`.github/scripts/dokploy-release.mjs`; [seção 15](#15-migrations)), e só então move `staging-applied`; por serviço, na ordem **`trajetto-ai` → `trajetto-api`**, move a tag `staging` para o digest deste run e logo depois pede o deploy da Application (`.github/scripts/dokploy-deploy.mjs`, se os quatro secrets obrigatórios do Dokploy existirem). A IA só é movida e reimplantada se o digest dela mudou (ou com `force_ai_build`). Depois espera a API pública responder este commit em `/health/liveness` (`wait-for-version.mjs`; `ROLLOUT_VERIFY=ssh` troca pela conferência no Swarm), escreve o marcador `staged-<7>` das duas imagens e, se um deploy do Dokploy falhou, devolve a tag daquele serviço ao digest anterior. |
-| `staging-image`      | só no PR (nome do check: _The PR head was built on staging_): espera (até 45 min) o marcador `staged-<head do PR>` das duas imagens, no mesmo digest de `sha-<head do PR>`, ou que o head só mude documentação desde um commit que o staging rodou (`.github/scripts/staged-build.sh`). Sem isso o merge promoveria um build que o staging não rodou.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
-| `promote-production` | environment `production` (revisores obrigatórios = aprovação); um por vez (`concurrency: promote-production`); só a partir de `main`. Resolve o build (2º pai do merge commit; fast-forward = o próprio commit; _Run workflow_ = a tag digitada), valida o formato (`sha-<hex>` ou `main-<hex>`), confere num merge que o staging rodou o build — o marcador `staged-<7>` no mesmo digest, esperando até 20 min um deploy de staging ainda em andamento, ou o build do commit mais próximo que o staging rodou, quando o merge só muda documentação desde ele (o rollback por _Run workflow_ é isento) —, confere que a imagem existe no GHCR, compara com o que o staging roda (só informa), roda as migrations com a imagem de migração do build pela Application `trajetto-api-migrate` de produção, como no staging, só se o digest dela não é o de `stable-applied` (se o deploy de produção está configurado; um build anterior à imagem de migração pula a etapa com aviso, e um posterior sem ela reprova antes de mover `stable`), move `stable` das duas imagens por digest (a IA só se o build tiver essa imagem), pede o deploy das Applications de produção na mesma ordem (se configurado) e espera a convergência da API (SSH por padrão; `ROLLOUT_VERIFY=http` usa a liveness pública).                                                                                                                                         |
-| `release`            | depois da promoção, só no push em `main`: `semantic-release` cria a tag, o `CHANGELOG.md` (commit com `[skip ci]`) e o GitHub Release.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| Job                          | O que faz                                                                                                                                                                                                                                                                                                                                                           |
+| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Changes`                    | `.github/scripts/changes.sh branch`: a branch **inteira** (do ponto em que saiu da `staging` ao commit, `docs-only.sh`) só muda documentação? Não o push sozinho: como um push novo cancela o run anterior, um push de documentação por cima de um de código ainda valida o código. _Run workflow_ roda tudo. A base do audit é o mesmo ponto (o que a branch muda) |
+| `Secret scan`                | gitleaks em todo o histórico, imagem fixada por digest                                                                                                                                                                                                                                                                                                              |
+| `Validate`                   | o `validate.yml` com `e2e` só no _Run workflow_ com **e2e** marcado (os 3 jobs de E2E, uns 30 min cobrados); num push só de documentação, só o `Docs`                                                                                                                                                                                                               |
+| `AI local contract (manual)` | job do `validate.yml` (`ai_local`), ligado só no _Run workflow_ do `ci.yml`: o contrato da API contra o contêiner real de IA (`tests/ai-local`), com o mesmo `env` de teste dos outros jobs                                                                                                                                                                         |
 
-Antes do push, o `build-and-push` carrega as imagens da API e de migração no
-runner e roda um smoke test contra um Postgres e um Redis descartáveis, numa
-rede interna sem saída para a internet (a CLI do Prisma não pode baixar
-engine): confere que a imagem da API não traz o CLI, migrations nem seeds e
-traz `build/schema-version.json`; sobe a API no banco vazio e exige que ela
+### `validate.yml` — a validação, num lugar só
+
+Todos os jobs correm em paralelo; o `Gate` do `staging.yml` espera todos.
+
+| Job                                   | O que faz                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| ------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Validate`                            | serviço `redis:7-alpine` por digest (um teste unitário do adapter do Socket.IO precisa dele); checkout com histórico completo (o teste de rotas aposentadas compara com `origin/main`); os repositórios irmãos pela ação `.github/actions/siblings` (`trajetto-ui` e `trajetto-mobile`, na branch de mesmo nome quando ela existe lá, senão na `staging` deles) para o contrato de rotas, se o secret `CLIENT_REPOS_READ_TOKEN` existir — só "a branch não existe" (código 2 do `git ls-remote`) cai na `staging`, com aviso; erro de rede repete 3 vezes e falha. No push em `staging` o contrato roda contra a `staging` da web e do app (antes ele era pulado ali). Depois a ação `setup`; auditoria de dependências (`audit-gate.sh`, com a base que o `Changes` escolheu); Prettier; `tsc` (heap fixo de 4 GB); unitários com o piso de cobertura (`yarn test:coverage`, 2 processos); publica `coverage-<sha>` |
+| `E2E (1/3)`, `E2E (2/3)`, `E2E (3/3)` | serviços `postgres:16-alpine` (com `max_connections=200`, por `ALTER SYSTEM` e restart) e `redis:7-alpine`, um par por job; a ação `setup` conferindo o schema engine; `yarn test:e2e` com `E2E_SHARD=<i>/3` (`infra/scripts/run-e2e.mjs`): os jobs 1 e 2 dividem a fase `shared` com o `--shard` do próprio vitest (1/2 e 2/2), e o job 3 roda a fase de réplicas inteira, um arquivo por vez. Cada job migra o banco molde uma vez e clona um banco por arquivo ([`testes.md`](./testes.md#e2e-testse2e)), com 2 processos. O resumo do job traz arquivos, testes e duração de cada fase. Um job vermelho não para os outros (`fail-fast: false`). O `e2e-shards.test.ts` confere que a matriz roda cada arquivo exatamente uma vez                                                                                                                                                                                |
+| `AI OCR`                              | o pytest do serviço de IA dentro da imagem (stage `test`, Buildx com cache do GitHub no escopo `ai-test`; o build só fala com o Docker Hub e o PyPI). Pulado quando o GHCR já tem `trajetto-ai:src-<hash git de infra/ai-ocr>`: essa imagem só foi construída depois de o mesmo pytest passar nos mesmos arquivos. O GHCR sem resposta não é "não tem": o job avisa e testa — inclusive quando é o login que falha (`ghcr.sh login`, que repete; o `docker/login-action` derrubava o job antes da alternativa). `force_ai_build` testa sempre                                                                                                                                                                                                                                                                                                                                                                        |
+| `Docs`                                | só num push de documentação: os irmãos (a mesma ação do `Validate`), o Prettier (`yarn lint:check`, que lê `*.md` e `docs/`) e os unitários sem cobertura (`yarn test`), porque há testes que leem a documentação (`tests/unitaires/docs`, os guias de agente, as seções deste guia) e os links dela para os irmãos. Um vermelho cai no commit que o causou, não no próximo push de código                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| `AI local contract (manual)`          | só com `ai_local` (o _Run workflow_ do `ci.yml`): `tests/ai-local` contra o contêiner real de IA, timeout de 45 min                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+
+### `staging.yml` — push em `staging`
+
+| Job           | O que faz                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Changes`     | `.github/scripts/changes.sh staging`: o push (`before` → commit) só muda documentação? Sem `before` (_Run workflow_) é código e roda tudo. A base do audit é o **último build que a staging serviu** (o ancestral mais próximo, pelo primeiro pai, com `staged-<7>` no digest de `sha-<7>`), e não o push anterior: um push cujo run foi cancelado ou falhou entra no intervalo do seguinte, e uma mudança de dependência dele passa pelo audit que bloqueia. Sem ancestral servido em 50 commits, a base fica vazia e o audit bloqueia; o GHCR sem resposta (inclusive no login, que repete e não derruba o job) volta ao push anterior, com aviso                                                                                                                                                                                                     |
+| `Secret scan` | o mesmo gitleaks do `ci.yml` (mesma imagem, flags, `.gitleaksignore`)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| `Validate`    | o `validate.yml` com o E2E inteiro (todo push de código). Concorrência própria, `cancel-in-progress: true`: um push novo **de código** cancela a validação do run anterior (grupo `staging-validate`), que nunca faria deploy (só a cabeça da branch implanta). Um push de documentação valida num grupo só do próprio run (`staging-docs-<run>`) e não cancela nada: ele não constrói, e quem implanta é o run de código embaixo dele (a conferência da cabeça deixa)                                                                                                                                                                                                                                                                                                                                                                                  |
+| `Gate`        | junta tudo o que bloqueia o deploy: `Changes`, `Secret scan` e `Validate` (que só é verde com o `Validate`, os 3 E2E e o `AI OCR` verdes, ou com o `Docs` num push de documentação). É o check que o _Staging evidence_ confere no commit promovido (e só o deste workflow, na branch `staging`, vale). Uma validação cancelada por um push novo **pula** o `Gate` (o run fica cancelado, cinza, sem build)                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| `Build`       | só depois do `Gate` e do `Secret scan` (nenhuma imagem sai do runner antes deles: INFRA-21 e o piso de cobertura), e nunca num push de documentação. Buildx com cache do GitHub (um escopo por imagem); publica `sha-<7>` das três imagens (API, migração e IA) com SBOM e proveniência (`provenance: mode=max`; o único build arg é o commit, `GIT_SHA`, que vai para a imagem e sai na liveness). A IA só é reconstruída se o código dela mudou: toda imagem da IA leva também a tag `src-<hash git de infra/ai-ocr>`, e um push que encontra essa tag reaproveita a imagem (mesmo digest) e só acrescenta o `sha-<7>` dele; `force_ai_build` reconstrói mesmo assim. A imagem de migração segue a mesma regra, com a tag `src-<hash>` de `.github/scripts/migrate-source.sh`. Smoke test das imagens antes do push (abaixo). Exporta os três digests |
+| `Image scan`  | o Trivy nas três imagens, pelos digests que o `Build` publicou (CRITICAL corrigível; só relata até `IMAGE_SCAN_ENFORCE=true`, e só um achado reprova: o banco de vulnerabilidades é baixado uma vez por run, com cache diário, e falha no download ou erro do Trivy viram aviso). Um achado com a variável ligada para o `Deploy`: o build nunca ganha `staged-<7>`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| `Deploy`      | job `deploy-staging`, environment `staging`, um por vez (`concurrency: deploy-staging`, nunca cancelado no meio): a ação `.github/actions/deploy` com a tag `staging`, os digests do `Build`, a conferência pela liveness pública como padrão, só da cabeça da branch, as duas tags devolvidas depois de um deploy do Dokploy que falhou, e o `staged-<7>` no fim                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+
+**Só na branch `staging`.** O _Run workflow_ aceita qualquer branch, e o
+formulário vem com a `main` (a branch padrão) marcada. Deixado ali, ou numa
+branch de trabalho, ele construiria aquele ref, rodaria a migração dele no
+banco de staging e gravaria `staged-<7>` e um `Gate` verde num commit que a
+staging nunca teve, que o _Staging evidence_ de um PR dessa branch aceitaria.
+Por isso todo job confere `github.ref == 'refs/heads/staging'` (ou precisa
+de um que confere): fora da `staging`, o run sai inteiro pulado, como o
+botão do `production.yml` fora da `main`. O `check-gate.sh` também só aceita
+o `Gate` de um run do `staging.yml` na branch `staging`
+(`ci-stability.test.ts`, "the staging road"; `check-gate.test.ts`).
+
+Antes do push, o `Build` carrega as imagens da API e de migração no runner e
+roda um smoke test contra um Postgres e um Redis descartáveis, numa rede
+interna sem saída para a internet (a CLI do Prisma não pode baixar engine):
+confere que a imagem da API não traz o CLI, migrations nem seeds e traz
+`build/schema-version.json`; sobe a API no banco vazio e exige que ela
 **recuse** (a trava de schema); roda a imagem de migração como a Application
 dela a roda (comando `release`, só com o Environment daquela Application:
 `DATABASE_URL`, `ALLOW_EMPTY_DATABASE_BOOTSTRAP` e as duas `MASTER_USER_*`),
-que aplica todas as migrations e os seeds e precisa ficar saudável (o
-próprio `HEALTHCHECK`); e sobe a API de novo, que precisa passar no
-próprio HEALTHCHECK, responder este commit em `/health/liveness` e 200 em
+que aplica todas as migrations e os seeds e precisa ficar saudável (o próprio
+`HEALTHCHECK`); e sobe a API de novo, que precisa passar no próprio
+HEALTHCHECK, responder este commit em `/health/liveness` e 200 em
 `/health/readiness`. Se falhar, nada vai para o GHCR. Os pushes seguintes
 publicam os mesmos builds, do cache do builder. Uma imagem de migração
 reaproveitada é baixada do GHCR por digest e é ela que roda no smoke test: é
-a que o deploy vai rodar.
+a que o deploy vai rodar. A imagem da IA passa pelo mesmo: sobe sem rede,
+com a raiz só de leitura, e precisa ficar saudável e responder este commit.
 
-Permissões: o workflow inteiro tem `contents: read`; só `build-and-push`,
-`deploy-staging` e `promote-production` pedem `packages: write`;
-`staging-image` pede `packages: read`; `release` pede `contents`, `issues` e
-`pull-requests: write`. Todas as actions são fixadas por SHA de commit, com a
-versão em comentário (o teste `supply-chain.test.ts` recusa uma tag solta).
+### `pr.yml` — pull request para `main`
+
+O PR não valida de novo: o staging já validou, no commit que o merge
+promove, e o merge ref que um PR testaria nem é o que vai para a produção (a
+promoção envia o build da cabeça). Um push novo no PR cancela o run anterior.
+
+| Job                | O que faz                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| ------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Secret scan`      | o mesmo gitleaks, no histórico que a `main` receberia                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| `Staging evidence` | (1) a `main` só traz documentação que a cabeça do PR não tem (`docs-only.sh` do ponto em comum até a `main`): código ali chegaria à produção no merge sem build de staging; (2) espera (até 45 min) o marcador `staged-<head do PR>` das duas imagens, no mesmo digest de `sha-<head do PR>`, ou que o head só mude documentação desde um commit que o staging rodou (`.github/scripts/staged-build.sh`); (3) o `Gate` do run de staging desse build está verde (`.github/scripts/check-gate.sh`, pela API do GitHub: só o `Gate` de um run do `staging.yml` na branch `staging` conta, lido pela suíte do check, por isso `actions: read`; builds de antes de 10/11/2026 têm, no lugar, o job antigo _Lint, type-check, unit (coverage floor) and E2E_ do `deploy.yml`, que valia o mesmo); (4) num head só de documentação, também o `Gate` do run do próprio head (o `Docs` dele), esperando até 20 min um run ainda no `Docs`. Timeout de 75 min |
+
+`Secret scan` e `Staging evidence` são os checks exigidos na `main`
+([seção 13](#13-configurar-o-github), "Proteção das branches").
+
+### `production.yml` — promoção e rollback
+
+| Job                | O que faz                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Staging evidence` | sem environment, **antes** da aprovação; só a partir de `main`. Resolve o build (2º pai do merge commit; fast-forward = o próprio commit; _Run workflow_ = a tag digitada, que é obrigatória), valida o formato (`sha-<hex>` ou `main-<hex>`), confere num merge que o staging rodou o build — o marcador `staged-<7>` no mesmo digest, esperando até 20 min um deploy de staging ainda em andamento, ou o build do commit mais próximo que o staging rodou, quando o merge só muda documentação desde ele — e que o `Gate` dele está verde, e, nesse caso de documentação, também o `Gate` do commit mergeado (o rollback é isento dos três), confere que a imagem existe no GHCR, compara com o que o staging roda (só informa) e lê os três digests a promover. A imagem de migração: um build anterior a ela (`main-<sha>`, ou um rollback para uma árvore sem `infra/scripts/schema-guard.ts`) segue sem ela, marcado; um posterior sem ela reprova aqui, antes de qualquer coisa andar |
+| `Deploy`           | job `promote-production`, environment `production` (revisores obrigatórios = aprovação); um por vez (`concurrency: promote-production`, nunca cancelado no meio). A ação `.github/actions/deploy` com a tag `stable`, os digests do _Staging evidence_, a conferência pelo Swarm por SSH como padrão (`ROLLOUT_VERIFY=http` usa a liveness pública), só a tag da IA devolvida depois de um deploy que falhou (uma promoção que falhou se corrige promovendo de novo) e sem marcador                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| `Release`          | depois do deploy, só no push em `main`: `semantic-release` cria a tag, o `CHANGELOG.md` e o GitHub Release. O commit do CHANGELOG leva a marcação de pular CI do `@semantic-release/git` e não dispara outra promoção                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+
+### `.github/actions/deploy` — o deploy de um ambiente
+
+O mesmo código para o staging e a produção, chamado pelo job que carrega o
+environment: uma aprovação só, e os secrets e as variáveis continuam no
+environment, com os mesmos nomes de sempre. Uma ação composta não lê
+`secrets` nem `vars` sozinha: o job entrega cada um como entrada
+(`dokploy-url: ${{ secrets.DOKPLOY_URL }}` etc.), e nos passos eles chegam ao
+script por `env`, nunca colados no `run:`. Os passos, em ordem:
+
+1. **Check run is branch head** (só no staging): runs terminam fora de ordem,
+   e o mais velho não volta a tag, a menos que a cabeça nova só acrescente
+   documentação (`docs-only.sh`: um push de documentação não faz deploy, e o
+   build deste run é o conteúdo dela). Só um sha válido decide; a leitura
+   repete 3 vezes. Todo passo seguinte depende da resposta.
+2. **Read what the environment runs now**: para onde as tags `staging` (ou
+   `stable`) da API e da IA apontam; a IA só é reimplantada se o digest
+   mudou ou com `force_ai_build`, e nunca se o build não tem imagem de IA.
+3. **Check deploy settings**: os quatro secrets obrigatórios do Dokploy;
+   nenhum = pula o deploy com aviso (as tags andam); alguns = falha.
+4. **Decide migrations**: compara a imagem de migração do build com
+   `trajetto-api-migrate:<tag>-applied`; um build anterior à imagem de
+   migração pula a etapa.
+5. **Move the release image tag to this build**, **Run the database
+   migrations (Dokploy)** (`dokploy-release.mjs`, espera o Swarm dizer que a
+   etapa terminou ou falhou) e **Record the migrations as applied**, só
+   quando é preciso, e antes de qualquer tag da API ou da IA andar.
+6. **Move the AI tag to this build** e **Deploy the AI service (Dokploy)**
+   (a IA vai antes, porque a API a chama; só se o digest mudou).
+7. **Move the API tag to this build** e **Deploy the API (Dokploy)**. Na
+   produção, `stable` da API passou a andar só depois do deploy da IA, como
+   no staging.
+8. **Pick the rollout check** e a conferência: **Wait for the API to serve
+   this build** (`http`, a liveness pública), **Wait for the rollout to
+   converge** (`ssh`, o Swarm) ou **Report the rollout as unverified**
+   (`off`). Valor vazio ou desconhecido de `ROLLOUT_VERIFY` = o padrão do
+   ambiente (staging `http`, produção `ssh`), com aviso no desconhecido:
+   exatamente uma conferência roda, salvo `off`.
+9. **Mark this build as staged** (só no staging, por último).
+10. **Put the tags back after a failed deploy**: depois de um deploy do
+    Dokploy que falhou, a tag daquele serviço volta ao digest anterior (no
+    staging as duas; na produção só a da IA).
+
+### Concorrência e cancelamento
+
+| Grupo                | Onde                                                | Cancela o run anterior?                                             |
+| -------------------- | --------------------------------------------------- | ------------------------------------------------------------------- |
+| `ci-<ref>`           | `ci.yml` inteiro                                    | sim (a branch de trabalho)                                          |
+| `pr-<número>`        | `pr.yml` inteiro                                    | sim                                                                 |
+| `staging-validate`   | job `Validate` do staging, num push de código       | sim: só a validação; o `Build` e o `Deploy` que começaram terminam  |
+| `staging-docs-<run>` | job `Validate` do staging, num push de documentação | não: um grupo por run, que não cancela o run de código embaixo dele |
+| `deploy-staging`     | job `Deploy` do staging                             | **nunca**: um por vez                                               |
+| `promote-production` | job `Deploy` da produção                            | **nunca**: um por vez                                               |
+
+Rodar de novo, à mão, um run antigo de código da staging enquanto um mais
+novo valida cancela a validação do mais novo (o grupo é o mesmo).
+
+### Permissões
+
+Todo workflow tem `contents: read` no topo. `packages: read` no `Changes` do
+staging, nos dois jobs que chamam o `validate.yml` (o `Validate` do
+`ci.yml` e o do `staging.yml`, para o `AI OCR`), no `AI OCR`, no `Image
+scan` e nos _Staging evidence_; `checks: read` e `actions: read` nos
+_Staging evidence_ (o `check-gate.sh` lê os checks do commit e o workflow e
+a branch do run de cada `Gate`); `packages: write` só no `Build` e nos dois
+`Deploy`; `release` pede `contents`, `issues` e `pull-requests: write`. Só os dois `Deploy` têm
+environment. Todas as actions de fora são fixadas por SHA de commit, com a
+versão em comentário (o `supply-chain.test.ts` recusa uma tag solta); as
+ações e o workflow reutilizável deste repositório vêm do mesmo commit.
+
+### Tempos e minutos
+
+Medido numa réplica Linux (`node:22.21.1`, 2 núcleos com `--cpuset-cpus`,
+como o runner de 2 vCPU de repositório privado), em 10/11/2026, com os
+mesmos Postgres e Redis dos serviços:
+
+| Medida                                            | Antes (CI de 04/11/2026, 2 vCPU)          | Agora (réplica, 10/11/2026)                                                                                                                   |
+| ------------------------------------------------- | ----------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| E2E inteiro (`yarn test:e2e`), um job só          | ~47 min (1 processo, migrate por arquivo) | **24,4 min** (1.462 s, molde e 2 processos): fase `shared` 1.178 s (347 arquivos), fase de réplicas 281 s (10 arquivos)                       |
+| custo de cada arquivo E2E antes do primeiro teste | 4,66 s                                    | 0,35 s (122 s de _environment_ do Vitest em 347 arquivos)                                                                                     |
+| `E2E (1/3)`: metade da fase `shared`              | —                                         | ~9,3 min (174 arquivos, 47 % do tempo somado dos arquivos)                                                                                    |
+| `E2E (2/3)`: a outra metade                       | —                                         | ~10,4 min (173 arquivos, 53 %)                                                                                                                |
+| `E2E (3/3)`: a fase de réplicas inteira           | —                                         | 4,7 min (281 s)                                                                                                                               |
+| unitários com o piso de cobertura                 | ~10 min (1 processo)                      | 7 min (421 s, 631 arquivos, 2 processos, com o host carregado por outros contêineres; cobertura 79,4 / 85,79 / 69,46 / 79,4 %, acima do piso) |
+
+Os tempos dos jobs 1 e 2 saem do E2E inteiro (a parte de cada um na soma
+dos tempos dos arquivos, pela divisão exata do `--shard` do Vitest); cada
+job também rodou sozinho na réplica, com o próprio Postgres, para conferir
+que passa: `E2E (1/3)` com 173 arquivos verdes em 647 s, `E2E (2/3)` com 173
+em 670 s e `E2E (3/3)` com 10 em 335 s, os três com o host carregado por
+outros contêineres (por isso acima da estimativa). Numa primeira rodada do
+`E2E (1/3)`, com o host ainda mais carregado (cada arquivo 2 a 4 vezes mais
+lento), dois testes com orçamento de tempo estouraram:
+`assignment-atomicity` (o limite padrão de 5 s por teste) e
+`webhook-held-release` (um `statement_timeout` fixo de 600 ms num lote de
+2.000 linhas, ~80 ms normalmente). Os dois mediam a máquina, não o código, e
+foram corrigidos na causa: o `assignment-atomicity` tem 30 s por teste (uma
+trava contra travamento, como os outros E2E que fazem várias chamadas HTTP),
+e o `webhook-held-release` mede no próprio teste quanto a liberação de um
+lote leva naquela hora e põe o limite em 5 vezes isso, nunca abaixo de
+600 ms (ainda reprova uma liberação numa instrução só sobre as 40.000
+linhas, 20 lotes). Depois disso, na réplica de 2 núcleos sem outros
+contêineres, o `E2E (1/3)` passou duas vezes seguidas (173 arquivos verdes e
+1 pulado, em 514 s e 604 s), e os dois arquivos passaram 4 rodadas seguidas
+com 4 processos gastando CPU nos mesmos 2 núcleos. Os unitários com
+cobertura, na mesma imagem, em 2 núcleos: 396 s, 7.594 testes, cobertura
+79,41 / 85,94 / 69,38 / 79,41 %. Num runner do GitHub, some uns 2 min de cada job
+(checkout, Node, `yarn install` do cache, serviços, `prisma generate`).
+
+Estimativa por run (relógio / minutos cobrados, cada job arredondado para
+cima), no ritmo de novembro de 2026:
+
+| Run                                  | Antes (`deploy.yml` único)                  | Agora                                                                                                                                                    |
+| ------------------------------------ | ------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| push de código na `staging`          | ~72 / ~75 (o job `test` sozinho, ~60)       | ~25 / ~60 (o caminho crítico: `Changes` → `E2E (2/3)` ~12,5 → `Gate` → `Build` ~6,5 → `Image scan` ~1,5 → `Deploy` ~4)                                   |
+| push só de documentação na `staging` | ~72 / ~75 (ou 0 com a marcação de pular CI) | ~9 / ~11 (`Changes`, `Secret scan`, `Docs` com o Prettier e os irmãos, `Gate`)                                                                           |
+| PR `staging → main`                  | ~62 / ~66, mais a espera do `staging-image` | ~1 / ~2 (mais a espera, se o staging ainda roda o mesmo commit)                                                                                          |
+| merge em `main` (promoção)           | ~8 / ~10, mais a aprovação                  | ~9 / ~11, mais a aprovação (o _Staging evidence_ é um job à parte)                                                                                       |
+| push numa branch de trabalho         | ~10 / ~13                                   | ~9 / ~11 (`Changes` ~1, `Secret scan` ~1, `Validate` ~8 com os unitários em 2 processos, `AI OCR` ~1; sem E2E). Numa branch só de documentação, ~9 / ~10 |
+
+Cobrados num push de código na `staging`: `Validate` ~11, os três E2E
+~12 + ~13 + ~7, `Build` ~7, `Image scan` ~2, `Deploy` ~4, e `Changes`,
+`Secret scan`, `AI OCR` e `Gate` ~1 cada. Os jobs em paralelo custam uns 10
+min a mais por push do que um job só de validação com o molde (uns 36 min:
+o push inteiro em uns 47 de relógio e 50 cobrados), para caber nos ~25 min. Um lint vermelho não para mais o E2E
+(rodam juntos): custa o run inteiro em vez de ~6 min, raro se o lint roda
+antes do push.
+
+No mês, no ritmo de novembro de 2026 (uns 22 pushes de código e 5 de
+documentação na `staging`, 5 runs de PR, 3 promoções, 7 pushes de branch e
+13 do Dependabot): de uns **2.450 min** para uns **1.700 min** só da API.
+Ainda acima da cota grátis de 2.000 min somando a web e o app.
+
+### Ações do dono
+
+- **Rulesets**: no primeiro PR para `main` depois da virada, troque os
+  checks exigidos da `main` para `Secret scan` e `Staging evidence`
+  ([seção 13](#13-configurar-o-github), "Proteção das branches"). Os quatro
+  nomes antigos não são mais publicados.
+- **Orçamento do Actions**: cadastre uma forma de pagamento com um budget
+  limitado (US$ 10–15 por mês, uns 1.700–2.500 min a US$ 0,006) e alertas em
+  75, 90 e 100 %, com bloqueio no limite: é o único aviso antes de a cota
+  acabar ([`infraestrutura.md`, seção 7.2](./infraestrutura.md#72-visibilidade-e-a-cota-do-actions)).
+  Sem cota, os runs ficam **failed** sem job vermelho (a tabela abaixo).
+- **Limpeza do `candidate-*`**: as imagens `candidate-<7>` são da web (o
+  pacote `trajetto-ui` no GHCR, que as suítes de navegador testam antes das
+  tags definitivas); a API não as publica. A retenção delas está em
+  `trajetto-ui/docs/deploy.md`.
+- **Primeiro push depois da virada**: acompanhe o tempo de cada job e mande
+  um segundo push de código em menos de 10 min, para ver a validação do run
+  antigo cancelada (cinza, sem build nem deploy); depois, um push só de
+  documentação por cima de um de código, para ver que ele não cancela nada e
+  que o run de código implanta. Os nomes vindos do reutilizável, o check do
+  push valendo no PR, os secrets de environment na ação composta, o grupo de
+  concorrência que lê o `needs` e a leitura do workflow de cada `Gate`
+  (`actions: read`) só se confirmam num run de verdade.
+- **Na máquina**: depois de puxar esta mudança, `yarn install --force` (o
+  ambiente do E2E é uma dependência `file:`; [`testes.md`](./testes.md#o-banco-molde)).
+- **Ordem do push da virada**: a API sobe para a `staging` antes da web (ou
+  no mesmo minuto, a API primeiro). Neste lote o comentário do
+  `.github/scripts/dokploy-deploy.mjs` mudou nos dois repositórios, e o
+  `dokploy-deploy.test.ts` da web exige a cópia dela idêntica à da API que o
+  CI da web baixa (a branch de mesmo nome ou a `staging` da API): com a web
+  na frente, o run dela compara a cópia nova com a API antiga e fica
+  vermelho, e toda branch da web fica vermelha até a API subir.
+- **Comentários que ainda citam o `deploy.yml`**: os do `Dockerfile` e do
+  `infra/ai-ocr/Dockerfile` ficaram de propósito. Mudar só o comentário troca
+  a chave da imagem de migração (`migrate-source.sh` lê o `Dockerfile`) e a
+  árvore da IA (`src-<hash de infra/ai-ocr>`), o que força rebuild e
+  redeploy das duas. Corrija-os (para `staging.yml` e a ação de deploy) na
+  próxima mudança de verdade de cada arquivo.
 
 ### Um vermelho é sempre do código
 
@@ -279,27 +526,31 @@ errado — nunca a rede, um registry, uma tag que andou ou um passo que travou.
 "Rodar de novo" não é correção. O que garante isso aqui (e os testes que
 guardam cada item, em `tests/unitaires/lifecycle`):
 
-| Causa de vermelho (ou verde) falso                                                                                      | O que o pipeline faz agora                                                                                                                                                                                                                                                                                                                                                     | Teste                                                    |
-| ----------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------- |
-| Um aviso CRITICAL publicado hoje reprovava o push de qualquer commit, até de documentação                               | `.github/scripts/audit-gate.sh`: o `audit-ci` bloqueia só o push ou PR que muda `package.json`, `yarn.lock` ou `package-lock.json` (em qualquer pasta) ou o `audit-ci.jsonc`, ou que não tem base para comparar (branch nova, _Run workflow_, base fora do checkout). Nos outros, roda e relata: `::warning::` e o relatório no resumo do job. O vigia contínuo é o Dependabot | `audit-gate.test.ts`                                     |
-| Uma consulta ao GHCR com erro passageiro virava "a tag não existe" (`2>/dev/null \|\| true`)                            | `.github/scripts/ghcr.sh`: só o "not found" do GHCR é resposta vazia; qualquer outro erro repete (5 tentativas, pausa de 5 s dobrando, `::warning::` com a contagem) e depois falha dizendo que o GHCR está fora. Mover uma tag também repete (é idempotente)                                                                                                                  | `ghcr-script.test.ts`, `staging-deploy-workflow.test.ts` |
-| O download do banco do Trivy (com limite de taxa) duas vezes por run, escondido junto com os achados                    | um download por run, com retentativa, num diretório que o cache do Actions guarda por dia; o scan usa `--skip-db-update`. Falha no download usa a cópia do cache; sem cópia, o scan não roda e o resumo diz isso. Só um achado reprova, e só com `IMAGE_SCAN_ENFORCE=true`                                                                                                     | `ci-stability.test.ts`                                   |
-| Os pesos PP-OCRv5 da IA baixados de `www.modelscope.cn` em todo build sem cache (um pedido, sem retentativa)            | versionados em `infra/ai-ocr/models` (4,8 e 7,9 MB) e conferidos pelo `models.sha256` num `RUN --network=none`; o job `ai-ocr` usa o Buildx com o cache do GitHub                                                                                                                                                                                                              | `image-layers.test.ts`, `ci-stability.test.ts`           |
-| O `postinstall` do `@prisma/engines` baixa o schema engine de `binaries.prisma.sh` e falha calado                       | cache de `~/.cache/prisma` pela versão dos engines; o job `test` confere o engine antes do E2E e baixa de novo (até 3 vezes); o `Dockerfile` faz o mesmo no `yarn install` da imagem de migração (a única que leva o CLI) e para o build com a causa                                                                                                                           | `ci-stability.test.ts`, `image-layers.test.ts`           |
-| Um erro de rede no `git ls-remote` dos irmãos caía calado na branch padrão                                              | só o código 2 ("a branch não existe") cai na padrão, com `::notice::`; outro código repete 3 vezes (10 s, 20 s) e falha                                                                                                                                                                                                                                                        | `compose-ci-siblings.test.ts`                            |
-| `git ls-remote \| cut` sem `pipefail`: uma falha virava "este run não é o head" e o deploy de staging era pulado, verde | `defaults.run.shell: bash` (`-eo pipefail`) nos três workflows; a leitura do head repete 3 vezes e só um sha válido decide; a leitura dos pais do merge (`gh api`) também repete                                                                                                                                                                                               | `ci-stability.test.ts`, `promote-workflow.test.ts`       |
-| Um erro passageiro da borda zerava a janela de 90 s da conferência pela liveness                                        | só uma resposta de outro commit zera; sondagem sem resposta não zera, e cada sequência delas vira `::warning::` com a contagem ([seção 14](#14-conferir-a-convergência))                                                                                                                                                                                                       | `wait-for-version.test.ts`                               |
-| As retentativas do deploy no Dokploy só apareciam no log                                                                | cada retentativa (pedido, consulta, deploy) é `::warning::` com a contagem, e o resumo do job lista cada tentativa que falhou com o motivo do Dokploy                                                                                                                                                                                                                          | `dokploy-deploy.test.ts`                                 |
-| Uma exportação de cache que falhava (429 ou 5xx do serviço de cache) derrubava o build já publicado                     | todo `cache-to: type=gha` com `ignore-error=true`                                                                                                                                                                                                                                                                                                                              | `ci-stability.test.ts`                                   |
-| Um passo travado segurava o runner até 6 h                                                                              | `timeout-minutes` em todo job, com folga sobre o pior medido: `test` 90, `ai-ocr` 30, `secrets` 10, `build-and-push` 45, `deploy-staging` 120, `staging-image` 60, `release` 20, `promote-production` 120; no `ci.yml`, `validate` 30, `ai-ocr` 30, `secrets` 10, `ai-local-e2e` 45                                                                                            | `ci-stability.test.ts`                                   |
-| Um commit `[skip ci]` só de documentação na ponta da `staging` travava a promoção                                       | a regra de documentação abaixo ([seção 16](#16-promover-para-produção)); e o run do commit de código logo abaixo de uma ponta só de documentação implanta mesmo assim (`docs-only.sh`, testado no `ci-stability.test.ts`)                                                                                                                                                      | `staged-build.test.ts`, `promote-workflow.test.ts`       |
+| Causa de vermelho (ou verde) falso                                                                                            | O que o pipeline faz agora                                                                                                                                                                                                                                                                                                                                                                                                                                                        | Teste                                                                   |
+| ----------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------- |
+| Um aviso CRITICAL publicado hoje reprovava o push de qualquer commit, até de documentação                                     | `.github/scripts/audit-gate.sh`: o `audit-ci` bloqueia só o run cujo intervalo (desde a base que o `Changes` escolheu: no staging, o último build servido) muda `package.json`, `yarn.lock` ou `package-lock.json` (em qualquer pasta) ou o `audit-ci.jsonc`, ou que não tem base para comparar (nenhum build servido nos 50 commits anteriores, base fora do checkout). Nos outros, roda e relata: `::warning::` e o relatório no resumo do job. O vigia contínuo é o Dependabot | `audit-gate.test.ts`                                                    |
+| Uma consulta ao GHCR com erro passageiro virava "a tag não existe" (`2>/dev/null \|\| true`)                                  | `.github/scripts/ghcr.sh`: só o "not found" do GHCR é resposta vazia; qualquer outro erro repete (5 tentativas, pausa de 5 s dobrando, `::warning::` com a contagem) e depois falha dizendo que o GHCR está fora. Mover uma tag também repete (é idempotente)                                                                                                                                                                                                                     | `ghcr-script.test.ts`, `staging-deploy-workflow.test.ts`                |
+| O login no GHCR (`docker/login-action`) falhava antes da alternativa "o GHCR não respondeu" dos jobs que podem seguir sem ele | no `AI OCR` e no `Changes` do staging, o login é o `ghcr.sh login` (5 tentativas, aviso no fim): sem login, o `AI OCR` testa e a base do audit volta ao push anterior, com aviso. Os jobs que precisam do GHCR (`Build`, `Image scan`, `Deploy`, _Staging evidence_) continuam falhando nele                                                                                                                                                                                      | `ci-stability.test.ts`, `ghcr-script.test.ts`, `changes-script.test.ts` |
+| O download do banco do Trivy (com limite de taxa) duas vezes por run, escondido junto com os achados                          | um download por run, com retentativa, num diretório que o cache do Actions guarda por dia; o scan usa `--skip-db-update`. Falha no download usa a cópia do cache; sem cópia, o scan não roda e o resumo diz isso. Só um achado reprova, e só com `IMAGE_SCAN_ENFORCE=true`                                                                                                                                                                                                        | `ci-stability.test.ts`                                                  |
+| Os pesos PP-OCRv5 da IA baixados de `www.modelscope.cn` em todo build sem cache (um pedido, sem retentativa)                  | versionados em `infra/ai-ocr/models` (4,8 e 7,9 MB) e conferidos pelo `models.sha256` num `RUN --network=none`; o job `AI OCR` usa o Buildx com o cache do GitHub                                                                                                                                                                                                                                                                                                                 | `image-layers.test.ts`, `ci-stability.test.ts`                          |
+| O `postinstall` do `@prisma/engines` baixa o schema engine de `binaries.prisma.sh` e falha calado                             | cache de `~/.cache/prisma` pela versão dos engines; a ação `setup` confere o engine nos jobs de E2E e baixa de novo (até 3 vezes); o `Dockerfile` faz o mesmo no `yarn install` da imagem de migração (a única que leva o CLI) e para o build com a causa                                                                                                                                                                                                                         | `ci-stability.test.ts`, `image-layers.test.ts`                          |
+| Um erro de rede no `git ls-remote` dos irmãos caía calado na branch padrão                                                    | só o código 2 ("a branch não existe") cai na padrão, com `::notice::`; outro código repete 3 vezes (10 s, 20 s) e falha                                                                                                                                                                                                                                                                                                                                                           | `compose-ci-siblings.test.ts`                                           |
+| `git ls-remote \| cut` sem `pipefail`: uma falha virava "este run não é o head" e o deploy de staging era pulado, verde       | `defaults.run.shell: bash` (`-eo pipefail`) em todo workflow, e `shell: bash` em todo passo das ações compostas; a leitura do head repete 3 vezes e só um sha válido decide; a leitura dos pais do merge (`gh api`) também repete                                                                                                                                                                                                                                                 | `ci-stability.test.ts`, `promote-workflow.test.ts`                      |
+| Um erro passageiro da borda zerava a janela de 90 s da conferência pela liveness                                              | só uma resposta de outro commit zera; sondagem sem resposta não zera, e cada sequência delas vira `::warning::` com a contagem ([seção 14](#14-conferir-a-convergência))                                                                                                                                                                                                                                                                                                          | `wait-for-version.test.ts`                                              |
+| As retentativas do deploy no Dokploy só apareciam no log                                                                      | cada retentativa (pedido, consulta, deploy) é `::warning::` com a contagem, e o resumo do job lista cada tentativa que falhou com o motivo do Dokploy                                                                                                                                                                                                                                                                                                                             | `dokploy-deploy.test.ts`                                                |
+| Uma exportação de cache que falhava (429 ou 5xx do serviço de cache) derrubava o build já publicado                           | todo `cache-to: type=gha` com `ignore-error=true`                                                                                                                                                                                                                                                                                                                                                                                                                                 | `ci-stability.test.ts`                                                  |
+| Um passo travado segurava o runner até 6 h                                                                                    | `timeout-minutes` em todo job, com folga sobre o pior medido: `Validate` 30, cada `E2E` 30, `AI OCR` 30, `Docs` 20, `Changes` 5 (10 no staging), `Secret scan` 10, `Gate` 5, `Build` 45, `Image scan` 20, os dois `Deploy` 120, _Staging evidence_ 75 no PR e 50 na promoção, `Release` 20, `AI local contract` 45. Um job que chama o `validate.yml` não aceita timeout: os jobs dele têm o seu                                                                                  | `ci-stability.test.ts`                                                  |
+| Um commit `[skip ci]` só de documentação na ponta da `staging` travava a promoção                                             | a regra de documentação abaixo ([seção 16](#16-promover-para-produção)); e o run do commit de código logo abaixo de uma ponta só de documentação implanta mesmo assim (`docs-only.sh`, testado no `ci-stability.test.ts`)                                                                                                                                                                                                                                                         | `staged-build.test.ts`, `promote-workflow.test.ts`                      |
+| Uma mudança de dependência cujo run foi cancelado por um push mais novo ficava fora do audit que bloqueia                     | a base do audit no staging é o último build servido (`staged-<7>`), não o push anterior; o push cancelado continua no intervalo até um build ser servido (`changes.sh`)                                                                                                                                                                                                                                                                                                           | `changes-script.test.ts`, `audit-gate.test.ts`                          |
+| Um run **failed** sem nenhum job vermelho, com jobs que nem aparecem                                                          | não é do código: o job não começou. A causa está em _Summary → Annotations_ do run ("The job was not started because recent account payments have failed or your spending limit needs to be increased": a cota do Actions acabou, ou o limite de gasto). Quando houver minutos, _Re-run failed jobs_ refaz só o que não rodou. Ver as ações do dono abaixo ([Tempos e minutos](#tempos-e-minutos))                                                                                | —                                                                       |
 
-Uma borda do `audit-gate.sh`: a base do push é o `before`. Uma mudança de
-dependência que chegue à `staging` sem run próprio (num `[skip ci]`, o que a
-regra de documentação proíbe, ou num run pendente que o GitHub trocou pelo do
-push seguinte) não entra no diff do push seguinte, e ali o achado só avisa. A
-produção continua protegida: o PR `staging → main` compara com a `main`, vê a
-mudança e bloqueia.
+A base do audit (decisão D1 de 10/11/2026): no staging, o último build que a
+staging **serviu** (`staged-<7>`), e não o push anterior. Antes, uma mudança
+de dependência cujo run foi cancelado pelo push seguinte (ou que falhou) não
+entrava no diff do push seguinte, e ali um achado só avisava. Agora ela
+continua no intervalo até um build ser servido, e o audit bloqueia de
+verdade (`changes.sh`, testado no `changes-script.test.ts`). Numa branch de
+trabalho, a base é o ponto em que ela saiu da `staging`: o que a branch muda.
 
 O que continua dependendo de fora, de propósito: o npm (instalação e o
 endpoint de auditoria; o `audit-gate.sh` repete 3 vezes um audit que não
@@ -311,12 +562,12 @@ de rede do `setupTests.ts`, [`testes.md`](./testes.md#nenhuma-rede-de-fora)).
 
 O mesmo commit testa e publica sempre nas mesmas versões:
 
-- **Node**: `node-version: "22.21.1"` em todo `actions/setup-node` dos três
-  workflows, a mesma versão da base do `Dockerfile` (`node:22.21.1-alpine`).
-  Antes era `"22"`, que andava com o _toolcache_ do runner. Quando o
-  Dependabot sobe a base do `Dockerfile`, suba o `node-version` dos
-  workflows no mesmo PR: o `ci-stability.test.ts` falha enquanto os dois
-  não batem.
+- **Node**: `node-version: "22.21.1"` em todo `actions/setup-node` (nas
+  ações `setup` e `deploy` e no `cloudflare-ranges.yml`), a mesma versão da
+  base do `Dockerfile` (`node:22.21.1-alpine`). Antes era `"22"`, que andava
+  com o _toolcache_ do runner. Quando o Dependabot sobe a base do
+  `Dockerfile`, suba o `node-version` no mesmo PR: o `ci-stability.test.ts`
+  falha enquanto não batem.
 - **Runner**: `runs-on: ubuntu-24.04` em todo job dos três repositórios,
   nunca `ubuntu-latest`. O `ubuntu-latest` passou a migrar para o 26.04 em
   19/10/2026, sem commit nosso, e o Playwright 1.56 recusou o 26.04 nas
@@ -386,7 +637,8 @@ Os passos são sequenciais, e a tag `staging` de cada serviço só se move logo
 antes do deploy dele: **um deploy da IA que falha para o job antes de tocar
 na API** (a API antiga continua no ar, e a tag `staging` da API continua no
 build que o staging roda). Um deploy do Dokploy que falha devolve a tag
-`staging` daquele serviço ao digest anterior (último passo do job). O que o
+`staging` daquele serviço ao digest anterior (último passo da ação de
+deploy). O que o
 script pega e um webhook não pegaria: imagem que o Dokploy não consegue
 puxar (credencial do GHCR errada, tag inexistente), chave ou id errados. Por
 isso a API usa a chave de API e o id de cada Application, e não o webhook de
@@ -397,16 +649,16 @@ usa o mesmo script, numa cópia que um teste dela compara com esta
 **A IA só é reimplantada quando muda.** A imagem `trajetto-ai` era
 reconstruída a cada push e ganhava um digest novo toda vez (labels), e o
 passo de deploy dela não tinha condição: todo push da API reiniciava a IA e
-mandava ~200 MB pela rota instável da VPS. Agora o `build-and-push` acha a
+mandava ~200 MB pela rota instável da VPS. Agora o `Build` acha a
 imagem pelo hash git de `infra/ai-ocr` (tag `src-<hash>`) e a reaproveita
-quando o código da IA não mudou, e o `deploy-staging` pula o deploy da IA
+quando o código da IA não mudou, e o `Deploy` pula o deploy da IA
 quando o digest é o mesmo que a tag `staging` já aponta; a promoção faz o
-mesmo com a tag `stable`. Um deploy da IA que falha devolve a tag do
+mesmo com a tag `stable` (a mesma ação de deploy). Um deploy da IA que falha devolve a tag do
 ambiente ao digest anterior, para a comparação seguinte não pular um deploy
 que não aconteceu. Para forçar (correção que chegou à imagem base sem mudar
-o digest, IA fora do lugar): _Actions_ → _Pipeline (staging → produção)_ →
-_Run workflow_ com **force_ai_build** marcado — na branch `staging`
-reconstrói e reimplanta a IA de staging; na `main`, junto com o
+o digest, IA fora do lugar): _Actions_ → _Staging_ → _Run workflow_ com
+**force_ai_build** marcado testa, reconstrói e reimplanta a IA de staging;
+_Actions_ → _Production_ → _Run workflow_ (na `main`), junto com o
 `image_tag`, reimplanta a IA de produção.
 
 ## 4. A topologia no servidor
@@ -1399,8 +1651,8 @@ em produção.
 **Produção**, depois de o staging estar verde:
 
 1. **Crie a tag `stable` antes de montar as Applications de produção**: no
-   GitHub, _Actions → Pipeline (staging → produção) → Run workflow_ (branch
-   `main`), `image_tag = sha-<7>` de um build verde de staging, e aprove o
+   GitHub, _Actions → Production → Run workflow_ (branch `main`),
+   `image_tag = sha-<7>` de um build verde de staging, e aprove o
    environment `production`. Como o environment `production` ainda não tem os
    secrets do Dokploy, o job move `stable` da API e da IA e pula o deploy
    com um aviso. Assim as Applications de produção já nascem em `:stable`. A
@@ -1439,8 +1691,9 @@ decide o que a foto diz é a API (ADR 0010; ver
 
 **Como é criado**: uma Application própria do Dokploy, sem domínio
 ([seção 7.6](#76-trajetto-ai-application)). A imagem `trajetto-ai` é
-construída no job `build-and-push` (do stage `runtime`, depois de o pytest
-passar no stage `test`) e promovida junto com a API (`staging` e `stable`).
+construída no job `Build` do `staging.yml` (do stage `runtime`, depois de o
+pytest passar no stage `test`, no job `AI OCR`) e promovida junto com a API
+(`staging` e `stable`).
 Antes do push, essa mesma imagem sobe no runner sem rede, com a raiz só
 leitura e um token descartável: precisa passar no próprio HEALTHCHECK (os
 dois perfis carregados e a leitura do `warmup.jpg`) e informar o commit em
@@ -1729,7 +1982,7 @@ autenticação por minuto antes de 429 `RATE_LIMITED`.
 | Onde                                                                           | Sonda                                                        | Para quê                                                                                                                                                                                                                                                         |
 | ------------------------------------------------------------------------------ | ------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Swarm (_Health Check_ da Application `trajetto-api` e `HEALTHCHECK` da imagem) | `wget http://127.0.0.1:3333/health/liveness` a cada 30 s     | **liveness**: o processo está vivo. Não toca dependência nenhuma: no Swarm, falhar aqui **destrói** a réplica; apontar para a readiness já fez um soluço do Postgres derrubar as duas réplicas. Uma réplica nova só entra no balanceamento depois de passar aqui |
-| Pipeline (`deploy-staging`; na promoção com `ROLLOUT_VERIFY=http`)             | `GET <API_PUBLIC_URL>/health/liveness` a cada 5 s, até 600 s | a mesma liveness responde `version` e `commit` (o commit do build); o deploy só fica verde depois de a API pública responder o commit novo por 90 s seguidos ([seção 14](#14-conferir-a-convergência))                                                           |
+| Pipeline (o `Deploy` do staging; na promoção com `ROLLOUT_VERIFY=http`)        | `GET <API_PUBLIC_URL>/health/liveness` a cada 5 s, até 600 s | a mesma liveness responde `version` e `commit` (o commit do build); o deploy só fica verde depois de a API pública responder o commit novo por 90 s seguidos ([seção 14](#14-conferir-a-convergência))                                                           |
 | `/health/readiness`                                                            | consultada pelo monitor externo e pelo desligamento          | **readiness**: pode receber tráfego. Banco fora → 503. Vira 503 durante o desligamento ordenado (12 s antes de fechar). O Traefik não a consulta mais (lacuna da [seção 5](#5-applications-em-vez-de-compose-o-que-mudou-e-o-que-ficou-de-fora))                 |
 | Swarm (`trajetto-ai`)                                                          | `GET http://127.0.0.1:8080/health`                           | 200 só depois de carregar os dois perfis e ler a foto de aquecimento; responde também `version` e `commit`                                                                                                                                                       |
 | Databases (Postgres e Redis)                                                   | o que o Dokploy configura                                    | conferência manual: `pg_isready`; `redis-cli -a … ping`                                                                                                                                                                                                          |
@@ -1795,7 +2048,7 @@ _Settings → Secrets and variables → Actions_, abas _Secrets_ e _Variables_
 | -------- | ------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | variable | `ROLLOUT_VERIFY`          | como o run prova o rollout da API: `http` (padrão no staging) = a liveness pública responde o commit novo por 90 s; `ssh` (padrão na produção) = o Swarm, por SSH; `off` = nenhuma (só em emergência; fica registrado no resumo). Valor vazio ou desconhecido = o padrão do ambiente. Pode ser definida só num environment para valer só nele. Em uso em 29/10/2026: `http` nos dois ambientes (o SSH não está configurado) |
 | variable | `IMAGE_SCAN_ENFORCE`      | `true` faz um CRITICAL corrigível no Trivy falhar o build                                                                                                                                                                                                                                                                                                                                                                   |
-| secret   | `CLIENT_REPOS_READ_TOKEN` | token só leitura de `Trajetto-Organization/trajetto-ui` e `Trajetto-Organization/trajetto-mobile` (fine-grained, _Contents: Read-only_), para o contrato de rotas do `ci.yml`                                                                                                                                                                                                                                               |
+| secret   | `CLIENT_REPOS_READ_TOKEN` | token só leitura de `Trajetto-Organization/trajetto-ui` e `Trajetto-Organization/trajetto-mobile` (fine-grained, _Contents: Read-only_), para o contrato de rotas do `validate.yml` (nas branches e na `staging`)                                                                                                                                                                                                           |
 
 **Apague se existirem** (não são mais lidos por nada):
 `DOKPLOY_COMPOSE_ID` (dos dois environments: era o id do app Compose), as
@@ -1807,9 +2060,17 @@ a ser criada) e os secrets `PORTAINER_WEBHOOK_URL` e
 
 ### Proteção das branches
 
-- `main`: exigir PR, exigir os checks _Lint, type-check, unit (coverage floor)
+- `main` (o Ruleset da branch, em _Settings → Rules → Rulesets_): exigir PR
+  e exigir os checks **`Secret scan`** e **`Staging evidence`**, os dois do
+  `pr.yml` (o _Staging evidence_ já prova o `staged-<7>` e o `Gate` da
+  validação do staging, então a validação não precisa ser exigida de novo, e
+  um head só de documentação não fica preso esperando um check que não
+  roda). Os quatro nomes antigos (_Lint, type-check, unit (coverage floor)
   and E2E_, _AI OCR service (image + pytest)_, _Secret scan (gitleaks)_ e
-  _The PR head was built on staging_; permitir só **merge commit**: em
+  _The PR head was built on staging_) deixaram de existir em 10/11/2026:
+  **troque o Ruleset no primeiro PR para `main` depois da virada**, senão o
+  PR fica esperando checks que ninguém mais publica. Permitir só **merge
+  commit**: em
   _Settings → General → Pull Requests_, deixe marcado só _Allow merge
   commits_ e desmarque _Allow squash merging_ e _Allow rebase merging_. Se a
   proteção impedir o push do `semantic-release` (o commit do CHANGELOG),
@@ -1934,10 +2195,10 @@ Quem migra é a **imagem de migração** (`trajetto-api-migrate`, estágio
 `trajetto-api-migrate` de cada ambiente, **antes do rollout** e **só quando o
 banco ainda não aplicou aquela imagem**:
 
-| Quando                                     | Quem chama                                                                                                                         | O que acontece numa migration que falha                                                                         |
-| ------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
-| deploy de staging                          | `deploy-staging`, passo _Run the database migrations on staging (Dokploy)_, com a imagem de migração **deste commit**              | o passo falha; nenhuma tag da API ou da IA anda, elas não são reimplantadas e o staging segue no build que roda |
-| promoção (merge em `main`, _Run workflow_) | `promote-production`, passo _Run the database migrations on production (Dokploy)_, com a imagem de migração **do build promovido** | o passo falha; `stable` não anda, nada é reimplantado e as réplicas de produção nem percebem                    |
+| Quando                                     | Quem chama                                                                                                                            | O que acontece numa migration que falha                                                                         |
+| ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| deploy de staging                          | `Deploy` do `staging.yml`, passo _Run the database migrations (Dokploy)_ da ação de deploy, com a imagem de migração **deste commit** | o passo falha; nenhuma tag da API ou da IA anda, elas não são reimplantadas e o staging segue no build que roda |
+| promoção (merge em `main`, _Run workflow_) | `Deploy` do `production.yml`, o mesmo passo, com a imagem de migração **do build promovido** (lida pelo _Staging evidence_)           | o passo falha; `stable` não anda, nada é reimplantado e as réplicas de produção nem percebem                    |
 
 **Só quando precisa.** A imagem de migração é reconstruída apenas quando
 muda o que ela roda, como a da IA: `.github/scripts/migrate-source.sh` faz um
@@ -2879,23 +3140,25 @@ UPDATE "_prisma_migrations" SET checksum = '<sha256 do arquivo>'
 
 ### A promoção
 
-1. Abra o PR `staging → main`; espere os checks (inclusive _The PR head was
-   built on staging_).
+1. Abra o PR `staging → main`; espere os checks (_Secret scan_ e _Staging
+   evidence_).
 2. Merge com **Create a merge commit**.
-3. _Actions_ → o run do push em `main` → job _Promote to production_ →
-   _Review deployments_ → aprovar o environment `production`.
-4. O job resolve o commit (o head do PR), exige o marcador
+3. O run do push em `main` (_Production_) começa pelo _Staging evidence_,
+   sem aprovação: resolve o commit (o head do PR), exige o marcador
    `staged-<7>` das duas imagens no mesmo digest (o staging rodou este
    build; espera até 20 min se o deploy de staging dele ainda estiver em
    andamento, em vez de falhar pedindo um _re-run_), ou usa o build do commit
    mais próximo que o staging rodou, se o merge só muda documentação desde
-   ele (abaixo), compara com o staging, roda as migrations se a produção
-   ainda não aplicou a imagem de migração do build (Application
-   `trajetto-api-migrate`; [seção 15](#15-migrations)), move `stable`
-   das duas imagens, pede o deploy
-   das Applications de produção (IA → API; a IA só se o digest dela mudou) e
-   espera a convergência. Verde = o Swarm roda o digest promovido em todas as
-   réplicas da API. O digest fica no resumo do run.
+   ele (abaixo), confere o `Gate` desse build, compara com o staging e lê os
+   digests a promover. Se algo disso falhar, ninguém chega a ser chamado para
+   aprovar.
+4. _Actions_ → o run → job _Deploy_ → _Review deployments_ → aprovar o
+   environment `production`. A ação de deploy roda as migrations se a
+   produção ainda não aplicou a imagem de migração do build (Application
+   `trajetto-api-migrate`; [seção 15](#15-migrations)), move `stable` e pede
+   o deploy de cada Application de produção (IA → API; a IA só se o digest
+   dela mudou), e espera a convergência. Verde = o Swarm roda o digest
+   promovido em todas as réplicas da API. Os digests ficam no resumo do run.
 5. Depois, o job _Release_ cria a versão.
 
 Conferir à mão:
@@ -2916,10 +3179,24 @@ qualquer coisa em `docs/` — não muda nenhuma imagem (o `.dockerignore` deixa
 os dois de fora, em qualquer profundidade: `**/*.md`; a IA copia só arquivos
 nomeados). Por isso, desde 30/10/2026, ele vai para a produção com o
 build do commit mais próximo que o staging rodou, e **`[skip ci]` só para
-documentação passou a ser seguro**: suba o doc sozinho com `[skip ci]` na
-mensagem (nenhum workflow roda, nenhum minuto de runner), e o check do PR
-`staging → main` e a promoção aceitam o build do commit anterior (com os
-dois cuidados do próprio GitHub listados no fim desta seção).
+documentação passou a ser seguro**: o check do PR `staging → main` e a
+promoção aceitam o build do commit anterior (com os dois cuidados do próprio
+GitHub listados no fim desta seção).
+
+Desde 10/11/2026 a marcação quase não economiza mais: um push só de
+documentação (o `Changes` decide, pela mesma regra) roda só o _Secret scan_
+e o `Docs` — os unitários sem cobertura, porque há testes que leem a
+documentação, mais o Prettier; uns 11 min cobrados — e nenhum build nem
+deploy. Ela continua permitida só em commit de documentação (decisão D11), e
+nunca na ponta de um PR para `main`. Um push de documentação não cancela a
+validação do push de código embaixo dele, que segue até o deploy.
+
+Quando a cabeça do PR (ou o commit mergeado, na promoção) só muda
+documentação desde o build promovido, o _Staging evidence_ confere também o
+`Gate` do run da própria cabeça: o `Docs` dela é a validação daquela
+documentação. Sem isso, um guia que quebrasse os testes de documentação
+chegaria à `main` sem nada que bloqueasse (o PR antigo, que validava tudo
+de novo, barrava).
 
 O que é documentação está num lugar só, `.github/scripts/docs-only.sh`, e é
 a mesma regra da web (`docs-only.mjs`) e do app. A regra de promoção, a
@@ -2938,8 +3215,8 @@ testada em `staged-build.test.ts`):
    `wait-for-version.mjs` espera o commit desse build na liveness.
 
 O doc com `[skip ci]` pode subir a qualquer hora, inclusive enquanto o
-pipeline do commit de código anterior ainda roda (cerca de 1 hora). O
-`deploy-staging` daquele run vê na `staging` uma cabeça mais nova, mas, como
+pipeline do commit de código anterior ainda roda (uns 25 min). O
+`Deploy` daquele run vê na `staging` uma cabeça mais nova, mas, como
 ela só acrescenta documentação ao commit dele (`docs-only.sh`), implanta e
 grava o `staged-<7>` mesmo assim. Antes, ele saía verde sem implantar, o
 commit de documentação não tinha run, e a promoção travava até o próximo
@@ -2950,28 +3227,22 @@ Dois cuidados do próprio GitHub, que nenhuma regra daqui contorna:
 
 - **A ponta do PR `staging → main` com `[skip ci]`**: o GitHub também não
   roda os workflows de `pull_request` quando o commit da ponta do PR tem
-  `[skip ci]` na mensagem, e os quatro checks exigidos em `main`
+  `[skip ci]` na mensagem, e os dois checks exigidos em `main`
   ([seção 13](#13-configurar-o-github), "Proteção das branches") ficam
-  pendentes. Para destravar, rode _Run workflow_ do _Pipeline (staging →
-  produção)_ na branch `staging`: a validação, o build e o deploy de staging
-  daquele commit rodam, e os checks saem no mesmo commit e aparecem no PR
-  (o _The PR head was built on staging_ aparece como pulado, o que o GitHub
-  conta como aprovado). Um commit vazio sem `[skip ci]`
-  (`git commit --allow-empty`) também destrava. Os dois custam um pipeline
-  inteiro: o `[skip ci]` economiza de verdade quando o commit de
-  documentação não vai ser a ponta de um PR para `main` aberto ou
-  atualizado logo depois.
+  pendentes. Para destravar, um commit vazio sem a marcação
+  (`git commit --allow-empty`) na `staging`: o `pr.yml` roda de novo no PR,
+  e o `staging.yml` o classifica como documentação (só o `Docs`, sem build).
 - **O título do PR**: num PR de um commit só, o GitHub preenche o título com
   a mensagem desse commit, e o título vai para o corpo do merge commit. Com
-  `[skip ci]` ali, o push em `main` não roda o `deploy.yml` e nada é
+  `[skip ci]` ali, o push em `main` não roda o `production.yml` e nada é
   promovido. Tire o `[skip ci]` do título antes do merge.
 
 Cuidado: a regra vale só para `*.md` e `docs/`. Um commit que mexe num
 teste, num workflow, num script ou no `.dockerignore` precisa do pipeline
-de staging, mesmo que pareça inofensivo. E os testes que leem a
-documentação (`tests/unitaires/docs`, os guias de agente) só rodam no
-próximo push que roda o pipeline: se eles falharem ali, a correção é no
-doc.
+de staging, mesmo que pareça inofensivo. Os testes que leem a documentação
+(`tests/unitaires/docs`, os guias de agente) rodam no `Docs` do próprio push
+(com a marcação de pular CI, só no próximo push que roda): se eles falharem,
+a correção é no doc.
 
 ## 17. Rollback
 
@@ -2983,11 +3254,13 @@ deles.
 
 ### Caminho normal: promover o build bom
 
-1. Achar a tag boa: o resumo de uma promoção anterior registra
-   `trajetto-api:stable → sha-<7> (sha256:...)`; ou o job _Build and push
-   the images (once)_ do push em `staging` que gerou o build.
-2. _Actions_ → _Pipeline (staging → produção)_ → _Run workflow_ (branch
-   `main`) → `image_tag = sha-<7>` (builds antigos: `main-<sha>`).
+1. Achar a tag boa: o resumo de uma promoção anterior registra o
+   `sha-<7>` promovido e os digests (_Staging evidence_) e
+   `trajetto-api:stable → sha256:...` (_Deploy_); ou o job _Build_ do push
+   em `staging` que gerou o build.
+2. _Actions_ → _Production_ → _Run workflow_ (branch `main`) →
+   `image_tag = sha-<7>` (builds antigos: `main-<sha>`). O campo é
+   obrigatório.
 3. Aprovar o environment `production`.
 4. O job move `stable` de volta para aquele build e pede o deploy das
    Applications. O run só fica verde depois do passo _Wait for the rollout to
@@ -3341,10 +3614,10 @@ sem reiniciar os workers. Separar é isolamento, não correção de falha.
    DATABASE_URL=postgresql://...?schema=public&connection_limit=4&pool_timeout=10&connect_timeout=5&socket_timeout=60&max_idle_connection_lifetime=300&options=...
    ```
    Sem domínio, 1 réplica, o mesmo _Swarm Settings_ e _Resources_ da API.
-   **Atenção**: o `deploy.yml` só faz o deploy de `trajetto-ai` e
-   `trajetto-api`. Um worker exige um passo a mais no
-   workflow (outro `DOKPLOY_*_APPLICATION_ID`), senão ele fica na versão
-   antiga a cada promoção.
+   **Atenção**: a ação de deploy (`.github/actions/deploy`) só faz o deploy
+   de `trajetto-ai` e `trajetto-api`. Um worker exige um passo a mais nela
+   (outro `DOKPLOY_*_APPLICATION_ID`, entregue pelos dois jobs `Deploy`),
+   senão ele fica na versão antiga a cada promoção.
 3. Suba o worker primeiro e confirme nos logs `workers started` e, em
    `/health/metrics`, os batimentos dos workers vindos dele.
 4. Só então `WORKERS_ENABLED=false` na API. Cada réplica loga
@@ -3517,16 +3790,16 @@ ninguém.
 
 ## 21. Cadeia de suprimentos e segredos
 
-| Controle                                                             | Onde                                                                                                                  | Quando falha                                                                                                                                                                                                                                        |
-| -------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Dependabot (npm, actions, imagens base, pip da IA, compose de carga) | `.github/dependabot.yml`, PRs contra `staging`                                                                        | não falha: abre PRs no dia 1º de cada mês, só de versões publicadas há 7 dias (30 para major), com as majors num PR só, que é lista de tarefas; majors de Node, do Prisma, do `pg` e do `dotenv-expand` e o motor de OCR ficam de fora de propósito |
-| Actions fixadas por commit                                           | todo `uses:` dos workflows, com `# vX.Y.Z`                                                                            | `supply-chain.test.ts` recusa um `uses:` por tag                                                                                                                                                                                                    |
-| Imagens base por digest                                              | `Dockerfile`, `infra/ai-ocr/Dockerfile`; nos workflows, os serviços, o smoke test, o BuildKit, gitleaks e Trivy       | `supply-chain.test.ts` e `ci-stability.test.ts`                                                                                                                                                                                                     |
-| Serviço de IA                                                        | rodas Python com `--require-hashes`, modelos versionados em `infra/ai-ocr/models` e conferidos contra `models.sha256` | o build falha num hash diferente; o pytest roda dentro da imagem                                                                                                                                                                                    |
-| Gate de audit                                                        | `.github/scripts/audit-gate.sh` (o `audit-ci` fixado) no `ci.yml` e no `deploy.yml`, config em `audit-ci.jsonc`       | advisory CRITICAL numa dependência de produção sem entrada na allowlist, num push ou PR que muda dependência (ou o `audit-ci.jsonc`); nos outros, só relata                                                                                         |
-| SBOM e proveniência                                                  | `build-push-action` (`sbom: true`, `provenance: mode=max`)                                                            | não falha: anexa as atestações à imagem no GHCR                                                                                                                                                                                                     |
-| Scan da imagem (Trivy)                                               | depois do push, por digest, com o banco de vulnerabilidades baixado uma vez e guardado no cache do Actions            | só um achado, e só com `IMAGE_SCAN_ENFORCE=true`; falha no download ou erro do Trivy viram aviso                                                                                                                                                    |
-| Varredura de segredos (gitleaks)                                     | job `secrets` do `ci.yml` e do `deploy.yml`                                                                           | um segredo novo em qualquer commit do histórico                                                                                                                                                                                                     |
+| Controle                                                             | Onde                                                                                                                                         | Quando falha                                                                                                                                                                                                                                        |
+| -------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Dependabot (npm, actions, imagens base, pip da IA, compose de carga) | `.github/dependabot.yml`, PRs contra `staging`                                                                                               | não falha: abre PRs no dia 1º de cada mês, só de versões publicadas há 7 dias (30 para major), com as majors num PR só, que é lista de tarefas; majors de Node, do Prisma, do `pg` e do `dotenv-expand` e o motor de OCR ficam de fora de propósito |
+| Actions fixadas por commit                                           | todo `uses:` dos workflows, com `# vX.Y.Z`                                                                                                   | `supply-chain.test.ts` recusa um `uses:` por tag                                                                                                                                                                                                    |
+| Imagens base por digest                                              | `Dockerfile`, `infra/ai-ocr/Dockerfile`; nos workflows, os serviços, o smoke test, o BuildKit, gitleaks e Trivy                              | `supply-chain.test.ts` e `ci-stability.test.ts`                                                                                                                                                                                                     |
+| Serviço de IA                                                        | rodas Python com `--require-hashes`, modelos versionados em `infra/ai-ocr/models` e conferidos contra `models.sha256`                        | o build falha num hash diferente; o pytest roda dentro da imagem                                                                                                                                                                                    |
+| Gate de audit                                                        | `.github/scripts/audit-gate.sh` (o `audit-ci` fixado) no job `Validate` do `validate.yml` (branches e `staging`), config em `audit-ci.jsonc` | advisory CRITICAL numa dependência de produção sem entrada na allowlist, num run cujo intervalo muda dependência (ou o `audit-ci.jsonc`) desde o último build servido pela staging; nos outros, só relata                                           |
+| SBOM e proveniência                                                  | `build-push-action` (`sbom: true`, `provenance: mode=max`)                                                                                   | não falha: anexa as atestações à imagem no GHCR                                                                                                                                                                                                     |
+| Scan da imagem (Trivy)                                               | depois do push, por digest, com o banco de vulnerabilidades baixado uma vez e guardado no cache do Actions                                   | só um achado, e só com `IMAGE_SCAN_ENFORCE=true`; falha no download ou erro do Trivy viram aviso                                                                                                                                                    |
+| Varredura de segredos (gitleaks)                                     | job `Secret scan` do `ci.yml`, do `staging.yml` e do `pr.yml`                                                                                | um segredo novo em qualquer commit do histórico                                                                                                                                                                                                     |
 
 As imagens do Postgres e do Redis não passam pelo Dependabot (são campos do
 Dokploy, não arquivos do repositório): atualize o digest do Postgres à mão,
@@ -3860,7 +4133,7 @@ Na ordem:
 | Secrets de deploy no GitHub | environments `staging` e `production`: `DOKPLOY_URL`, `DOKPLOY_API_KEY`, `DOKPLOY_API_APPLICATION_ID`, `DOKPLOY_MIGRATE_APPLICATION_ID` (obrigatórios) e `DOKPLOY_AI_APPLICATION_ID` (opcional); variáveis `API_PUBLIC_URL` (a conferência pela liveness) e `SWARM_API_SERVICE` (a conferência por SSH)                                                                                                                                                                  | environments `staging` e `production`: `DOKPLOY_URL`, `DOKPLOY_API_KEY` e `DOKPLOY_UI_APPLICATION_ID`                                                                                                           | `EXPO_TOKEN` (repositório) e `EXPO_UPDATE_PRIVATE_KEY` (environments `staging` e `production`)                  |
 | Sem os secrets              | move as tags e pula o deploy com `::notice::`                                                                                                                                                                                                                                                                                                                                                                                                                            | move as tags e pula o deploy com aviso                                                                                                                                                                          | termina verde com aviso, sem publicar                                                                           |
 | De staging para produção    | promove por digest a imagem `sha-<7 do commit>` (tag `staging` → `stable`), sem rebuild, e exige o marcador `staged-<7 do commit>` no mesmo digest                                                                                                                                                                                                                                                                                                                       | igual à API, e exige o marcador `staged-<7 do commit>` no mesmo digest                                                                                                                                          | promove o **commit** verde em staging (a URL da API é embutida no build, então o artefato não pode ser o mesmo) |
-| Rollback                    | _Run workflow_ do `deploy.yml` com `image_tag=sha-<7>`                                                                                                                                                                                                                                                                                                                                                                                                                   | _Run workflow_ do `deploy.yml` com `image_tag=sha-<7>`                                                                                                                                                          | `ota-rollback.yml` (republica um grupo de OTA)                                                                  |
+| Rollback                    | _Run workflow_ do `production.yml` com `image_tag=sha-<7>`                                                                                                                                                                                                                                                                                                                                                                                                               | _Run workflow_ do `deploy.yml` com `image_tag=sha-<7>`                                                                                                                                                          | `ota-rollback.yml` (republica um grupo de OTA)                                                                  |
 
 Regras comuns aos três: a branch `staging` recebe o trabalho (push direto do
 dono ou merge de PR) e todo push nela roda a validação completa e publica o
@@ -3950,7 +4223,7 @@ está detalhada no `docs/variaveis-de-ambiente.md` do repositório que a lê.
    `EXPO_PUBLIC_WEB_APPLICATION_URL` = web de staging; `EXPO_TOKEN` no
    GitHub; um push em `staging` gera o APK de staging.
 7. **Produção, na mesma ordem:** a tag `stable` da API criada antes (_Run
-   workflow_ do `deploy.yml` da API com `image_tag=sha-<7>`, enquanto o
+   workflow_ do `production.yml` da API com `image_tag=sha-<7>`, enquanto o
    environment `production` ainda não tem os secrets do Dokploy); as mesmas
    peças (Databases com o backup, IA, migrations e API, esta sem Deploy) no
    projeto `trajetto-api` do environment `production`, já em `:stable`; os

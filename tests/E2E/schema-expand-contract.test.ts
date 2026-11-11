@@ -30,7 +30,8 @@ import { uniqueTargetOf } from "@/shared/errors/prisma-error-meta";
  * columns the PREVIOUS image still selects (expand/contract).
  *
  * Like schema-indexes.test.ts, it asserts what the migration FILES produce: the
- * environment builds a fresh database per file with `migrate deploy`.
+ * environment clones each file's database from a template that `migrate
+ * deploy` built from them (template.ts).
  */
 const prisma = createPrismaClient();
 

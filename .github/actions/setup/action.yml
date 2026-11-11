@@ -1,0 +1,82 @@
+name: Set up the API toolchain
+description: >-
+  Node 22.21.1 with the yarn cache, the Prisma engines cached by their
+  version, the frozen install and, unless told otherwise, the Prisma client.
+  The one place every job that runs the API's code sets it up.
+
+# Composite: every `run:` names `shell: bash`, which GitHub runs as
+# `bash --noprofile --norc -eo pipefail`, as the workflows' defaults do.
+inputs:
+  generate:
+    description: "Gera o client do Prisma depois da instalação (true|false)"
+    default: "true"
+  schema-engine:
+    description: "Confere que o schema engine do Prisma veio na instalação; o E2E migra com ele (true|false)"
+    default: "false"
+
+runs:
+  using: composite
+  steps:
+    # The exact version of the Dockerfile base (node:22.21.1-alpine), in
+    # every job of every workflow: "22" floated with the runner's toolcache,
+    # so the same commit could test on one Node and ship on another
+    # (tests/unitaires/lifecycle/ci-stability.test.ts holds them together; a
+    # Dependabot bump of the base moves these by hand).
+    - name: Set up Node.js
+      uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+      with:
+        node-version: "22.21.1"
+        cache: "yarn"
+
+    # The Prisma CLI's schema engine (`prisma migrate deploy`, which the E2E
+    # template runs) is downloaded by @prisma/engines' postinstall from
+    # binaries.prisma.sh into ~/.cache/prisma, then copied to node_modules.
+    # The postinstall fails SILENTLY (failSilent): a download that dies
+    # leaves no engine and resurfaces later as a migrate that downloads on
+    # demand. Cached by the engines' version (the commit hash in yarn.lock),
+    # so a cache hit installs offline.
+    - name: Read the Prisma engines version
+      id: prisma-engines
+      shell: bash
+      run: |
+        version=$(awk '/^"?@prisma\/engines-version@/ { getline; gsub(/[" \r]/, "", $2); print $2; exit }' yarn.lock)
+        if [ -z "$version" ]; then
+          echo "::error::Não achei a versão de @prisma/engines-version no yarn.lock."
+          exit 1
+        fi
+        echo "version=${version}" >> "$GITHUB_OUTPUT"
+
+    - name: Cache the Prisma engines
+      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+      with:
+        path: ~/.cache/prisma
+        key: prisma-engines-${{ runner.os }}-${{ steps.prisma-engines.outputs.version }}
+
+    - name: Install dependencies
+      shell: bash
+      run: yarn install --frozen-lockfile
+
+    # Checked here, with its cause, instead of a migrate failing later.
+    # The download already retries inside Prisma; this runs it again only
+    # when the postinstall left nothing behind.
+    - name: Check the Prisma schema engine
+      if: inputs.schema-engine == 'true'
+      shell: bash
+      run: |
+        engine() { compgen -G 'node_modules/@prisma/engines/schema-engine-*' > /dev/null; }
+        for attempt in 1 2 3; do
+          engine && exit 0
+          echo "::warning::O schema engine do Prisma não ficou em node_modules/@prisma/engines (download do postinstall; tentativa ${attempt} de 3). Baixando de novo."
+          sleep $((attempt * 10))
+          node node_modules/@prisma/engines/scripts/postinstall.js
+        done
+        engine && exit 0
+        echo "::error::O schema engine do Prisma não foi baixado de binaries.prisma.sh depois de 3 tentativas: o E2E não migra sem ele. É o download, não o código."
+        exit 1
+
+    # Without the generated client, tsc cannot find the @prisma/client types
+    # and the tests cannot load the enums.
+    - name: Generate the Prisma client
+      if: inputs.generate == 'true'
+      shell: bash
+      run: yarn prisma:generate

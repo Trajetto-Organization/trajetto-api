@@ -1,10 +1,12 @@
-import { readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
 /**
- * The workflows read as text, the way the other lifecycle tests read them
- * (no YAML dependency): jobs are the two-space keys under `jobs:`, steps the
- * `- name:` items at six spaces, and a step's script its `run:` value.
+ * The workflows and the composite actions read as text, the way the other
+ * lifecycle tests read them (no YAML dependency): jobs are the two-space
+ * keys under `jobs:`, a job's steps the `- name:` items at six spaces, an
+ * action's steps the `- name:` items at four spaces under `runs:`, and a
+ * step's script its `run:` value.
  */
 
 export interface Step {
@@ -18,6 +20,8 @@ export interface Job {
   name: string;
   text: string;
   steps: Step[];
+  /** The `uses:` of a job that calls a reusable workflow, or undefined. */
+  uses?: string;
 }
 
 export interface Workflow {
@@ -26,16 +30,28 @@ export interface Workflow {
   jobs: Job[];
 }
 
+/** A composite action: `.github/actions/<name>/action.yml`. */
+export interface Action {
+  name: string;
+  file: string;
+  text: string;
+  steps: Step[];
+}
+
 const ROOT = process.cwd();
 
 export const WORKFLOW_DIR = resolve(ROOT, ".github", "workflows");
+export const ACTION_DIR = resolve(ROOT, ".github", "actions");
+
+const readText = (path: string) =>
+  readFileSync(path, "utf8").replace(/\r\n/g, "\n");
 
 export function readWorkflow(file: string): Workflow {
-  const text = readFileSync(resolve(WORKFLOW_DIR, file), "utf8").replace(
-    /\r\n/g,
-    "\n",
-  );
+  return workflowOf(file, readText(resolve(WORKFLOW_DIR, file)));
+}
 
+/** A workflow from its text: a version of a file that is not on disk. */
+export function workflowOf(file: string, text: string): Workflow {
   return { file, text, jobs: jobsOf(text) };
 }
 
@@ -45,6 +61,57 @@ export function allWorkflows(): Workflow[] {
     .sort()
     .map(readWorkflow);
 }
+
+export function readAction(name: string): Action {
+  const file = `.github/actions/${name}/action.yml`;
+
+  return actionOf(name, file, readText(resolve(ROOT, file)));
+}
+
+/** A composite action from its text: a sibling's, or a version not on disk. */
+export function actionOf(name: string, file: string, text: string): Action {
+  const at = text.indexOf("\n  steps:\n");
+
+  return {
+    name,
+    file,
+    text,
+    steps: at < 0 ? [] : stepsOf(text.slice(at), 4),
+  };
+}
+
+export function allActions(): Action[] {
+  if (!existsSync(ACTION_DIR)) return [];
+
+  return readdirSync(ACTION_DIR, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => entry.name)
+    .filter((name) => existsSync(resolve(ACTION_DIR, name, "action.yml")))
+    .sort()
+    .map(readAction);
+}
+
+/** The job `name` of a workflow; throws when it does not exist. */
+export function jobOf(workflow: Workflow, name: string): Job {
+  const found = workflow.jobs.find((each) => each.name === name);
+
+  if (!found) throw new Error(`${workflow.file}: no job ${name}`);
+
+  return found;
+}
+
+/** The step `name` of a job or an action; throws when it does not exist. */
+export function stepOf(owner: Job | Action, name: string): Step {
+  const found = owner.steps.find((each) => each.name === name);
+
+  if (!found) throw new Error(`${owner.name}: no step ${name}`);
+
+  return found;
+}
+
+/** The steps' names, in order. */
+export const stepNames = (owner: Job | Action) =>
+  owner.steps.map((each) => each.name);
 
 function jobsOf(workflow: string): Job[] {
   const lines = workflow.split("\n");
@@ -77,18 +144,22 @@ function jobsOf(workflow: string): Job[] {
 
 function finish({ name, lines }: { name: string; lines: string[] }): Job {
   const text = lines.join("\n");
+  const uses = /^ {4}uses: (\S+)\s*$/m.exec(text)?.[1];
 
-  return { name, text, steps: stepsOf(text) };
+  return { name, text, steps: stepsOf(text, 6), uses };
 }
 
-function stepsOf(job: string): Step[] {
-  return job
-    .split(/\n {6}- name: /)
+function stepsOf(text: string, indent: number): Step[] {
+  return text
+    .split(new RegExp(`\\n {${indent}}- name: `))
     .slice(1)
     .map((chunk) => {
-      const name = chunk.split("\n")[0].trim();
+      // A step ends where the next key of its parent begins.
+      const end = chunk.search(new RegExp(`\\n {0,${indent - 2}}\\S`));
+      const body = end < 0 ? chunk : chunk.slice(0, end);
+      const name = body.split("\n")[0].trim();
 
-      return { name, text: chunk, run: runOf(chunk) };
+      return { name, text: body, run: runOf(body) };
     });
 }
 
@@ -119,4 +190,9 @@ export function timeoutOf(job: Job): number | undefined {
   const match = /^ {4}timeout-minutes: (\d+)\s*$/m.exec(job.text);
 
   return match ? Number(match[1]) : undefined;
+}
+
+/** A step's `if:` expression, or "" when it has none. */
+export function conditionOf(step: Step): string {
+  return /\n\s+if: (.+)\n/.exec(`${step.text}\n`)?.[1]?.trim() ?? "";
 }

@@ -64,8 +64,12 @@ tests/E2E/                    E2E contra Postgres e Redis reais
 tests/contract/               suítes de contrato de repositório (Prisma × in-memory)
 tests/ai-local/               contrato opt-in com o contêiner de IA real
 tests/load/                   harness de carga (k6 + Traefik) e seed das suítes de navegador da web/app
-.github/workflows/ci.yml      portão das branches de trabalho
-.github/workflows/deploy.yml  pipeline: staging (validação + build + deploy) → PR → main (promoção) → release
+.github/workflows/ci.yml      branches de trabalho: Changes, Secret scan, Validate (sem E2E)
+.github/workflows/validate.yml  a validação inteira (reutilizável): Validate, E2E (1/3..3/3), AI OCR, Docs
+.github/workflows/staging.yml  push em staging: Changes → Secret scan + Validate → Gate → Build → Image scan → Deploy
+.github/workflows/pr.yml      PR para main: Secret scan e Staging evidence (não valida de novo)
+.github/workflows/production.yml  main: Staging evidence → Deploy (aprovação) → Release; Run workflow = rollback
+.github/actions/setup, deploy  ações compostas: o setup do Node/yarn/Prisma e o deploy de um ambiente
 .github/scripts/dokploy-deploy.mjs  deploy de uma Application do Dokploy pela API (application.deploy) e acompanhamento
 compose.development.yaml      Postgres, Redis e (perfil ai) o serviço de IA para desenvolvimento (só dev)
 ```
@@ -202,21 +206,29 @@ checksum). Detalhes: `docs/arquitetura.md` ("Migrations: expandir e contrair").
 
 - Branches: trabalho → `staging` → PR `staging → main` → merge **com merge
   commit** (nunca squash/rebase).
-- `ci.yml` valida as branches de trabalho. `deploy.yml`: push em `staging`
-  roda a validação completa (audit, lint, typecheck, unitários com piso, E2E,
-  pytest da IA, gitleaks), constrói **uma vez** as imagens `trajetto-api`,
+- `ci.yml` valida as branches de trabalho (sem E2E). `staging.yml`: push em
+  `staging` roda a validação completa do `validate.yml` (audit, lint,
+  typecheck, unitários com piso, E2E em 3 jobs com banco molde, pytest da
+  IA) e o gitleaks, junta tudo no `Gate`; um push só de documentação roda só
+  o gitleaks e o `Docs` (Prettier e unitários), sem cancelar a validação do
+  push de código embaixo dele. Só na branch `staging`: o _Run workflow_ em
+  outra branch não roda nada. Depois do `Gate`, constrói **uma vez** as imagens `trajetto-api`,
   `trajetto-api-migrate` e `trajetto-ai` (`sha-<sha>`, SBOM, proveniência,
   Trivy; a de migração e a da IA são reaproveitadas por `src-<hash>` quando o
   que rodam não mudou), roda as migrations pela Application
   `trajetto-api-migrate` do Dokploy (só se o banco ainda não aplicou aquela
   imagem; `dokploy-release.mjs` espera a etapa terminar), move `staging` por
-  digest e faz o deploy do staging no Dokploy; PR para
-  `main` revalida e exige que o staging tenha rodado o head (ou que o head só
-  mude documentação desde um commit que rodou: `[skip ci]` só para
-  documentação é seguro); o merge em `main`
-  **promove** o mesmo digest para `stable` (as migrations antes, do mesmo jeito,
-  environment `production` com aprovação, conferência da convergência) e roda
-  o `semantic-release`. _Run workflow_ com `image_tag=sha-<sha>` = rollback.
+  digest e faz o deploy do staging no Dokploy (a ação composta
+  `.github/actions/deploy`, a mesma da produção); o PR para `main`
+  (`pr.yml`) não revalida: o _Staging evidence_ exige que o staging tenha
+  rodado o head (ou que o head só mude documentação desde um commit que
+  rodou), que o `Gate` dele esteja verde e que a `main` só traga
+  documentação; o merge em `main` (`production.yml`) **promove** o mesmo
+  digest para `stable` (as migrations antes, do mesmo jeito, environment
+  `production` com aprovação, conferência da convergência) e roda o
+  `semantic-release`. _Run workflow_ do `production.yml` com
+  `image_tag=sha-<sha>` = rollback. Os checks exigidos na `main`:
+  `Secret scan` e `Staging evidence`.
 - Sem os secrets do Dokploy, os jobs movem as tags e pulam o deploy com
   aviso.
 - Staging e produção rodam no Dokploy (Docker Swarm), sem Compose nem

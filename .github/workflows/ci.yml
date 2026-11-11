@@ -1,259 +1,79 @@
-name: CI (branches)
+name: CI
 
-# Fast branch gate. Runs on every work branch — anything but staging and
-# main — so that a problem surfaces before the code reaches staging, not in
-# the middle of the heavy pipeline.
+# Every push to a work branch — anything but staging and main — so that a
+# problem surfaces before the code reaches staging (docs/deploy.md). The
+# same validation as staging (validate.yml), without the E2E suite, which
+# runs here only on Run workflow (e2e): every push to staging runs it whole
+# before anything is built. Run workflow also runs the AI local contract.
+# No image, release or deploy here.
 #
-# Intentionally excluded: E2E tests (they need postgres/redis running),
-# image building, release, and deployment. All of that is deploy.yml's job:
-# every push to `staging` runs the full validation, builds the images once
-# and deploys staging; a pull request into `main` runs the same validation;
-# the merge into `main` promotes the image staging validated
-# (docs/deploy.md). Here, there is only one question: is this code healthy
-# enough to go to staging?
+# A change that spans the repositories goes on a branch of the SAME name in
+# each one: the route contract (.github/actions/siblings, "Pick the sibling
+# branches") tests this branch against the web and the app of that name.
 on:
   push:
     branches-ignore: [main, master, staging]
   workflow_dispatch:
+    inputs:
+      e2e:
+        description: "Roda também o E2E inteiro (3 jobs em paralelo)"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
 
-# A newer push to the same branch makes the older run pointless.
+# A newer push to the same branch makes the older run pointless: the newer
+# one validates everything the branch changes (changes.sh decides on the
+# whole branch, not on the push), so nothing the older one would have
+# checked goes unchecked, a push of documentation on top included.
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
-# `bash -eo pipefail` for every `run:`, as in deploy.yml (GitHub's default
-# for a step with no `shell:` is `bash -e`, without pipefail).
+# `bash -eo pipefail` for every `run:` (GitHub's default for a step with no
+# `shell:` is `bash -e`, without pipefail).
 defaults:
   run:
     shell: bash
 
-env:
-  NODE_ENV: test
-  DATABASE_URL: postgresql://postgres:postgres@localhost:5432/test_db
-  REDIS_URL: redis://localhost:6379
-  HTTP_REQUEST: http://localhost:3000
-  API_HTTP_REQUEST: http://localhost:3333
-  JWT_SECRET: test-jwt-secret-key-for-github-actions-only
-  JWT_SECRET_REFRESH_TOKEN: test-jwt-refresh-secret-key-for-github-actions-only
-  META_WHATSAPP_TEMPLATE_NAME: trajetto_notification
-  META_WHATSAPP_API_VERSION: v23.0
-  UPLOAD_STORAGE_TYPE: local
-  UPLOAD_LOCAL_PATH: ./tmp
-  MASTER_USER_EMAIL: test-master@example.com
-  MASTER_USER_INITIAL_PASSWORD: test-master-password-ci-only
-
 jobs:
-  validate:
-    name: Lint, type-check and unit tests
+  # A branch that changes only documentation since it left staging
+  # (changes.sh, the docs-only.sh rule) runs the secret scan and `Docs`;
+  # anything else, the whole validation, on every push. The audit's base is
+  # where the branch left staging too: what the branch changes.
+  changes:
+    name: Changes
     runs-on: ubuntu-24.04
-    # Measured 6-10 min on the 2-vCPU runner.
-    timeout-minutes: 30
-
-    # One unit file needs a real Redis: tests/unitaires/socket/
-    # adapter-channel-isolation.test.ts proves that two Socket.IO adapters on
-    # one Redis are kept apart by the channel prefix, not by the database
-    # number. Nothing else in the unit suite touches it (no Postgres here).
-    # Pinned by the same digest as deploy.yml (and the other repositories).
-    services:
-      redis:
-        image: redis:7-alpine@sha256:8da19c7399dca900c6822a1cf30f9d2285585e2c4b457ff4095b0f4500054d3f # redis:7-alpine (7.4.12)
-        options: >-
-          --health-cmd "redis-cli ping"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-        ports:
-          - 6379:6379
+    timeout-minutes: 5
+    outputs:
+      docs: ${{ steps.changes.outputs.docs }}
+      audit_base: ${{ steps.changes.outputs.audit_base }}
 
     steps:
-      # Full history: tests/unitaires/contract/retired-routes.test.ts compares
-      # the routes against origin/main at the fork point, and skips itself
-      # when there is no origin/main to read — which a shallow clone never has.
+      # The history the comparison reads (commits and trees) and the
+      # scripts; origin/staging comes with it.
       - name: Checkout repository
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 0
+          sparse-checkout: .github/scripts
 
-      # tests/unitaires/contract/client-routes.test.ts reads every URL the web
-      # and the app build from ../trajetto-ui and ../trajetto-mobile, and skips
-      # itself without them. Checked out only when the read-only token exists
-      # (CLIENT_REPOS_READ_TOKEN), and moved out of the workspace at once so
-      # prettier and tsc never see them. The token stays out of the job env and
-      # out of .git/config: nothing installed later can read it.
-      - name: Is the client checkout configured?
-        id: clients
+      - name: Classify the push
+        id: changes
         env:
-          TOKEN: ${{ secrets.CLIENT_REPOS_READ_TOKEN }}
-        run: |
-          if [ -n "$TOKEN" ]; then
-            echo "enabled=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "::warning::CLIENT_REPOS_READ_TOKEN ausente: o contrato de rotas com a web e o app foi pulado."
-          fi
-
-      # The same branch in the sibling repository first: a change that spans
-      # the repositories (routes, socket events) is tested against its own
-      # counterpart. Falls back to the sibling's staging when there is no
-      # branch of that name: work branches come from staging and go back to
-      # it, while main can be behind it (a change on staging not promoted yet
-      # would fail every work branch without a defect of its own).
-      #
-      # Only "no such branch" falls back: `git ls-remote --exit-code` answers
-      # 2 for it, on purpose, with a notice. Any other code (128: network,
-      # credentials) used to fall back too, silently, and tested this branch
-      # against the default one; now it is tried 3 times with growing pauses
-      # and then fails, saying the probe could not reach GitHub.
-      - name: Pick the sibling branches
-        id: refs
-        if: steps.clients.outputs.enabled == 'true'
-        env:
-          TOKEN: ${{ secrets.CLIENT_REPOS_READ_TOKEN }}
-          BRANCH: ${{ github.head_ref || github.ref_name }}
-        run: |
-          # The empty extraheader first: this repository's own checkout persisted
-          # one, and two Authorization headers get a 400 (read as "no branch").
-          auth="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$TOKEN" | base64 -w0)"
-          for pair in web:trajetto-ui app:trajetto-mobile; do
-            key=${pair%%:*}
-            repo=${pair#*:}
-            for attempt in 1 2 3; do
-              code=0
-              git -c "http.https://github.com/.extraheader=" -c "http.https://github.com/.extraheader=$auth" ls-remote --exit-code --heads \
-                "https://github.com/Trajetto-Organization/${repo}.git" "refs/heads/${BRANCH}" > /dev/null || code=$?
-              case "$code" in
-                0)
-                  echo "${key}=${BRANCH}" >> "$GITHUB_OUTPUT"
-                  echo "${repo}: branch ${BRANCH}"
-                  break
-                  ;;
-                2)
-                  echo "${key}=staging" >> "$GITHUB_OUTPUT"
-                  echo "::notice::${repo} não tem a branch ${BRANCH}: o contrato de rotas usa a staging de ${repo}, de onde saem as branches de trabalho."
-                  break
-                  ;;
-              esac
-              if [ "$attempt" -eq 3 ]; then
-                echo "::error::Não deu para consultar as branches de ${repo} no GitHub depois de 3 tentativas (git ls-remote, código ${code}: rede ou credencial). O contrato de rotas não foi testado contra a staging por engano."
-                exit 1
-              fi
-              echo "::warning::A consulta das branches de ${repo} falhou (git ls-remote, código ${code}; tentativa ${attempt} de 3). De novo em $((attempt * 10))s."
-              sleep $((attempt * 10))
-            done
-          done
-
-      - name: Check out the web next to this repository
-        if: steps.clients.outputs.enabled == 'true'
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-        with:
-          repository: Trajetto-Organization/trajetto-ui
-          ref: ${{ steps.refs.outputs.web }}
-          token: ${{ secrets.CLIENT_REPOS_READ_TOKEN }}
-          path: .siblings/trajetto-ui
-          persist-credentials: false
-
-      - name: Check out the app next to this repository
-        if: steps.clients.outputs.enabled == 'true'
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-        with:
-          repository: Trajetto-Organization/trajetto-mobile
-          ref: ${{ steps.refs.outputs.app }}
-          token: ${{ secrets.CLIENT_REPOS_READ_TOKEN }}
-          path: .siblings/trajetto-mobile
-          persist-credentials: false
-
-      - name: Move the clients beside the API
-        if: steps.clients.outputs.enabled == 'true'
-        run: |
-          mv .siblings/trajetto-ui ../trajetto-ui
-          mv .siblings/trajetto-mobile ../trajetto-mobile
-          rmdir .siblings
-
-      - name: Setup Node.js
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
-        with:
-          # The Dockerfile base's exact version, as in deploy.yml.
-          node-version: "22.21.1"
-          cache: "yarn"
-
-      # The postinstall of @prisma/engines downloads the schema engine from
-      # binaries.prisma.sh on every install; cached by its version, as in
-      # deploy.yml. Nothing here needs it (no migration), so no check.
-      - name: Prisma engines version
-        id: prisma-engines
-        run: |
-          version=$(awk '/^"?@prisma\/engines-version@/ { getline; gsub(/[" \r]/, "", $2); print $2; exit }' yarn.lock)
-          if [ -z "$version" ]; then
-            echo "::error::Não achei a versão de @prisma/engines-version no yarn.lock."
-            exit 1
-          fi
-          echo "version=${version}" >> "$GITHUB_OUTPUT"
-
-      - name: Cache the Prisma engines
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
-        with:
-          path: ~/.cache/prisma
-          key: prisma-engines-${{ runner.os }}-${{ steps.prisma-engines.outputs.version }}
-
-      - name: Install dependencies
-        run: yarn install --frozen-lockfile
-
-      # A CRITICAL advisory in a production dependency fails the branch
-      # (INFRA-16) when this push changes the dependencies or audit-ci.jsonc;
-      # otherwise it is reported without blocking (audit-gate.sh). A new
-      # branch's first push has no base to compare, and blocks. The reasoned,
-      # dated exceptions live in audit-ci.jsonc.
-      - name: Audit production dependencies
-        env:
-          AUDIT_BASE: ${{ github.event.before }}
-        run: bash .github/scripts/audit-gate.sh
-
-      # First check of all, because it is the cheapest one. There is no point
-      # spending minutes on tsc and vitest if the code is not even formatted.
-      - name: Lint
-        run: yarn lint:check
-
-      # Without the generated client, tsc cannot find the @prisma/client types
-      # and the job fails with hundreds of bogus type errors.
-      - name: Generate Prisma client
-        run: yarn prisma:generate
-
-      # tsc holds about 2.3 GB live for this project, and Node's default
-      # heap on a 7-8 GB runner (a private repository's) is about 2 GB: the
-      # check died there with "JavaScript heap out of memory", measured in a
-      # 7 GB Linux container on 30/10/2026. A fixed 4 GB no longer depends on
-      # the runner's size.
-      - name: Type-check
-        env:
-          NODE_OPTIONS: --max-old-space-size=4096
-        run: yarn typecheck
-
-      - name: Create tmp directory
-        run: mkdir -p src/tmp
-
-      # With coverage, measured, published AND gated: test:coverage carries
-      # the floor (package.json; decision 13.1, docs/testes.md "Cobertura").
-      - name: Run unit tests (with coverage floor)
-        run: yarn test:coverage --reporter=basic --coverage.reporter=text-summary --coverage.reporter=json-summary --coverage.reporter=html
-
-      - name: Publish the coverage report
-        if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: coverage-${{ github.sha }}
-          path: coverage
-          retention-days: 14
+          BEFORE: ${{ github.event.before }}
+        run: bash .github/scripts/changes.sh branch
 
   # Secrets in the history (INFRA-21). Every commit, not only the diff: a key
   # that reached any branch is already out. The CLI runs from its image,
   # pinned by digest (gitleaks-action needs a paid license on organization
   # repositories). What the history already had when this was switched on is
   # in .gitleaksignore, by fingerprint; a new finding fails the job, and
-  # `--redact` keeps the secret itself out of the log.
+  # `--redact` keeps the secret itself out of the log. The same command in
+  # every workflow that scans.
   secrets:
-    name: Secret scan (gitleaks)
+    name: Secret scan
     runs-on: ubuntu-24.04
     # Measured under 30 s.
     timeout-minutes: 10
@@ -272,62 +92,17 @@ jobs:
             zricethezav/gitleaks:v8.30.1@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f \
             -c "git config --global --add safe.directory /repo && gitleaks git /repo --redact --no-banner --exit-code 1"
 
-  # The trajetto-ai service (infra/ai-ocr, ADR 0010): its pytest suite runs
-  # INSIDE the image it ships in — the `test` stage builds the same base
-  # (hashed wheels, the versioned models checked by SHA-256, offline) and
-  # runs as the runtime user. The same build and cache scope as deploy.yml's
-  # ai-ocr job (a branch reads its own cache and the default branch's).
-  ai-ocr:
-    name: AI OCR service (image + pytest)
-    runs-on: ubuntu-24.04
-    # Measured ~1 min; a build with no cache downloads the wheels again.
-    timeout-minutes: 30
+  validate:
+    name: Validate
+    needs: changes
+    uses: ./.github/workflows/validate.yml
     permissions:
       contents: read
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
-        with:
-          driver-opts: image=moby/buildkit:v0.33.1@sha256:cec9f139f45e93c5c69c60f8b07cfad9f43f4ef6b6a6cd917527fea5ff2e3dea
-
-      - name: Build the image and run its tests
-        uses: docker/build-push-action@ca052bb54ab0790a636c9b5f226502c73d547a25 # v5.4.0
-        with:
-          context: ./infra/ai-ocr
-          target: test
-          push: false
-          cache-from: type=gha,scope=ai-test
-          cache-to: type=gha,mode=max,scope=ai-test,ignore-error=true
-
-  # Opt-in: the API's reader and rules against the real container (needs
-  # Docker and ~1 GiB, so only on a manual run). tests/ai-local.
-  ai-local-e2e:
-    name: AI local contract (manual)
-    if: github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-24.04
-    # Builds the AI image (no cache) and reads the fixtures through it.
-    timeout-minutes: 45
-    permissions:
-      contents: read
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-
-      - name: Setup Node.js
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
-        with:
-          node-version: "22.21.1"
-          cache: "yarn"
-
-      - name: Install dependencies
-        run: yarn install --frozen-lockfile
-
-      - name: Run the contract against the container
-        env:
-          AI_LOCAL_E2E: "1"
-        run: npx vitest run tests/ai-local
+      packages: read
+    with:
+      docs: ${{ needs.changes.outputs.docs == 'true' }}
+      e2e: ${{ github.event_name == 'workflow_dispatch' && inputs.e2e == true }}
+      audit_base: ${{ needs.changes.outputs.audit_base }}
+      ai_local: ${{ github.event_name == 'workflow_dispatch' }}
+    secrets:
+      CLIENT_REPOS_READ_TOKEN: ${{ secrets.CLIENT_REPOS_READ_TOKEN }}

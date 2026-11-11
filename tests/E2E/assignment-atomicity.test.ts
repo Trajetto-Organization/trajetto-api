@@ -246,6 +246,11 @@ afterAll(async () => {
   await prisma.$disconnect();
 });
 
+// Each test below gets 30 s, a hang guard and not a measure of speed: it
+// makes two to five requests, each an assignment's whole transaction through
+// the app. Vitest's 5 s default ran out on a 2-vCPU replica, two E2E
+// processes and Postgres sharing it, with nothing wrong in the assignment.
+
 describe("a refused reassignment", () => {
   it("leaves the previous route exactly as it was", async () => {
     const delivery = await seedDelivery("NF-ATOM-1");
@@ -285,7 +290,7 @@ describe("a refused reassignment", () => {
 
     expect(row.driverId).toBe(JOAO);
     expect(row.vehicleId).toBe(TRUCK_1);
-  });
+  }, 30_000);
 });
 
 describe("a resend of an assignment that already happened", () => {
@@ -311,7 +316,7 @@ describe("a resend of an assignment that already happened", () => {
     });
 
     expect(releases, "motorista avisado duas vezes").toBe(1);
-  });
+  }, 30_000);
 });
 
 describe("the route a reassignment empties", () => {
@@ -355,5 +360,5 @@ describe("the route a reassignment empties", () => {
     });
 
     expect(truck.status, "caminhão na rua marcado como livre").toBe("IN_ROUTE");
-  });
+  }, 30_000);
 });

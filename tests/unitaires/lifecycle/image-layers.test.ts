@@ -19,7 +19,8 @@ import { hasShell, sandbox, type Sandbox } from "./support/shell-harness";
  * RUN after it: the commit each image now carries must not rebuild a layer.
  *
  * Text-based, like the other Dockerfile checks: the build itself runs in CI
- * (`docker build --target test infra/ai-ocr`, build-and-push).
+ * (`--target test` of infra/ai-ocr in the AI OCR job, the runtime stage in
+ * the Build job).
  */
 const ROOT = process.cwd();
 const read = (path: string) =>
@@ -347,7 +348,7 @@ describe("the API image's build stage", () => {
  * - The runner copies the most stable first: a source-only commit re-ships
  *   build/ alone (~1 MB compressed), never node_modules.
  *
- * Both images run before the push (deploy.yml, "Smoke test the API image"):
+ * Both images run before the push (staging.yml, "Smoke test the API image"):
  * the API refusing the empty database, the release image migrating it from
  * scratch with the seeds, and the API's boot on top.
  */

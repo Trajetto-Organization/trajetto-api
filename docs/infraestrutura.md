@@ -134,10 +134,10 @@ Expo, Resend, R2) atualiza este arquivo no mesmo dia, com:
 2. uma linha com a data na [seção 12](#12-histórico-de-mudanças);
 3. o token novo, ou o apagado, na [seção 11](#11-inventário-de-tokens-e-credenciais).
 
-"No mesmo dia" vale para o texto, não para o push. O `deploy.yml` da API não
-ignora mudanças em `docs/`: um commit só de documentação sem `[skip ci]` roda
-o pipeline inteiro (cerca de 1 hora de runner, da cota da
-[seção 7.2](#72-visibilidade-e-a-cota-do-actions)) e reimplanta o staging.
+"No mesmo dia" vale para o texto, não para o push. Desde 10/11/2026 um push
+só de documentação na API roda só o secret scan e o `Docs` (o Prettier e os
+unitários sem cobertura, uns 11 min da cota da
+[seção 7.2](#72-visibilidade-e-a-cota-do-actions)), sem build nem deploy.
 Para subir só o doc, ponha `[skip ci]` na mensagem do commit: o GitHub não
 roda workflow nenhum para ele, e desde 30/10/2026 isso é seguro nos três
 repositórios. Um commit que só muda `*.md` ou `docs/` vai para a produção com
@@ -207,8 +207,8 @@ firewall; [seção 4.3](#43-firewall)). Desenho detalhado:
 ### 2.2 O caminho de um deploy
 
 ```
-push em staging ──▶ GitHub Actions (deploy.yml)
-                     ├─ validação completa
+push em staging ──▶ GitHub Actions (staging.yml)
+                     ├─ validação completa (o E2E em 3 jobs paralelos) e o Gate
                      ├─ build ÚNICO ──▶ GHCR: sha-<7> (imutável) + tag staging
                      ├─ API do Dokploy (https://dokploy.intrajetto.com, pela Cloudflare)
                      │    se as migrations mudaram: deploy da trajetto-api-migrate
@@ -217,9 +217,9 @@ push em staging ──▶ GitHub Actions (deploy.yml)
                      │    (com o token read:packages, seção 5.7)
                      └─ conferência: /health/liveness (API) ou /build-id.json (web)
 
-PR staging → main ──▶ a mesma validação + "o staging rodou este commit?"
+PR staging → main ──▶ pr.yml: "o staging rodou este commit?" (staged-<7> e o Gate), sem validar de novo
 
-merge em main ──▶ aprovação no environment production
+merge em main ──▶ production.yml: Staging evidence ─▶ aprovação no environment production
                   ├─ migrations, se mudaram (trajetto-api-migrate de produção)
                   ├─ tag stable movida para o MESMO digest (sem rebuild)
                   ├─ API do Dokploy: deploy das Applications de produção
@@ -1565,14 +1565,27 @@ dá 2.000 minutos de runner Linux por mês para repositórios privados (os
 "US$ 12 incluídos", a US$ 0,006 por minuto). Há quatro _budgets_ em US$ 0 com
 _Usage blocked_ (entre eles Actions, Packages e Codespaces), e o armazenamento de
 Actions e Packages incluído é de 0,5 GB (0 GB usado em 29/10). A cota renova no
-dia 1º de cada mês. Cada push custa por volta de 1 hora de runner por
-repositório: os 2.000 minutos dão cerca de 33 horas, uns 30 pushes por mês
-somando os três repositórios. Onde ver: organização → _Settings → Billing and
-licensing_ → _Usage_ (os minutos gastos) e _Budgets and alerts_ (os
-budgets).
+dia 1º de cada mês. Até 09/11/2026 cada push de código custava por volta de
+1 hora de runner por repositório (na API, uns 75 min cobrados); os 2.000
+minutos davam uns 30 pushes por mês somando os três. Desde 10/11/2026 a API
+gasta uns 60 min cobrados num push de código na `staging` (uns 25 de
+relógio), uns 10 num push só de documentação e uns 2 num PR para `main`
+([`deploy.md` → Tempos e minutos](./deploy.md#tempos-e-minutos)): no ritmo
+de novembro, uns 1.700 min por mês só da API, ainda acima do que sobra da
+cota com a web e o app. Onde ver: organização → _Settings → Billing and
+licensing_ → _Usage_ (os minutos gastos, por repositório) e _Budgets and
+alerts_ (os budgets).
 
 Quando a cota acaba, os runs não começam, com a mensagem "recent account
-payments have failed or your spending limit needs to be increased".
+payments have failed or your spending limit needs to be increased". No run,
+isso aparece como **failed sem nenhum job vermelho**, com os jobs seguintes
+que nem aparecem; a mensagem está em _Summary → Annotations_. De dentro do
+Actions não há como avisar antes (sem cota, nem um job de alerta começa): o
+único aviso é o e-mail dos budgets. Por isso a recomendação de cadastrar
+uma forma de pagamento com um budget limitado (US$ 10–15 por mês, uns
+1.700–2.500 minutos) e alertas em 75, 90 e 100 %, com bloqueio no limite.
+Quando houver minutos de novo, _Re-run failed jobs_ refaz só os jobs que
+não rodaram.
 
 **O que aconteceu entre 26 e 29/10/2026**: a cota acabou. Em 29/10, para
 continuar subindo o staging e a produção, o dono deixou os repositórios
@@ -1650,7 +1663,7 @@ o environment (nível do environment).
 | `API_PUBLIC_URL`                 | variable, `staging` e `production` | a conferência do rollout pela `/health/liveness` pública                                                                      | `https://api-staging.intrajetto.com` / `https://api.intrajetto.com` |
 | `ROLLOUT_VERIFY`                 | variable                           | como o pipeline prova o rollout; em uso: `http`                                                                               | —                                                                   |
 | `IMAGE_SCAN_ENFORCE`             | variable, repositório              | `true`: um CRITICAL corrigível no Trivy falha o build (só um achado: falha no download do banco ou erro do Trivy viram aviso) | —                                                                   |
-| `CLIENT_REPOS_READ_TOKEN`        | secret, repositório                | o contrato de rotas do `ci.yml` lê a web e o app                                                                              | GitHub, token fine-grained (seção 11.1)                             |
+| `CLIENT_REPOS_READ_TOKEN`        | secret, repositório                | o contrato de rotas do `validate.yml` lê a web e o app                                                                        | GitHub, token fine-grained (seção 11.1)                             |
 
 `SWARM_API_SERVICE`, `DEPLOY_SSH_HOST`, `DEPLOY_SSH_USER`,
 `DEPLOY_SSH_KNOWN_HOSTS` e `DEPLOY_VERIFY_SSH_KEY` só são usados com
@@ -1770,8 +1783,8 @@ nos outros, só relata
 ([`deploy.md` → 21](./deploy.md#21-cadeia-de-suprimentos-e-segredos)). Os
 _security updates_ ficam desligados porque o GitHub só os abre contra a
 `main`, sem aplicar o `target-branch`: ali um PR não tem build de staging
-para promover e, na API, ainda rodaria a validação de PR do `deploy.yml`
-(cerca de duas horas de runner). Um alerta é corrigido numa branch de
+para promover e, na API, o _Staging evidence_ do `pr.yml` esperaria um
+build de staging que não vem (até 45 min de runner). Um alerta é corrigido numa branch de
 trabalho a partir da `staging`, como qualquer mudança. O
 Dependabot também não move o que está fixado dentro dos workflows: o
 `node-version` (a mesma versão da base do `Dockerfile`) e os digests do

@@ -21,9 +21,20 @@ function read(path: string): string {
   return readFileSync(resolve(ROOT, path), "utf8");
 }
 
-const workflows = readdirSync(resolve(ROOT, ".github/workflows"))
-  .filter((name) => /\.ya?ml$/.test(name))
-  .map((name) => ({ name, text: read(`.github/workflows/${name}`) }));
+/** The workflows and the composite actions: every file that `uses:` one. */
+const workflows = [
+  ...readdirSync(resolve(ROOT, ".github/workflows"))
+    .filter((name) => /\.ya?ml$/.test(name))
+    .map((name) => ({ name, text: read(`.github/workflows/${name}`) })),
+  ...readdirSync(resolve(ROOT, ".github/actions"))
+    .filter((name) =>
+      existsSync(resolve(ROOT, `.github/actions/${name}/action.yml`)),
+    )
+    .map((name) => ({
+      name: `actions/${name}`,
+      text: read(`.github/actions/${name}/action.yml`),
+    })),
+];
 
 describe("Dependabot", () => {
   it("updates npm, the actions and the Docker base images", () => {
@@ -66,28 +77,42 @@ describe("Dependabot", () => {
 
 describe("the workflows", () => {
   it("pin every action to a full commit SHA, with the version it was", () => {
-    const loose = workflows.flatMap(({ name, text }) =>
+    const uses = workflows.flatMap(({ name, text }) =>
       text
         .split(/\r?\n/)
         .filter((line) => /^\s*(?:-\s*)?uses:/.test(line))
-        .filter(
-          (line) =>
-            !/uses:\s*[\w.-]+\/[\w./-]+@[0-9a-f]{40}\s+#\s*v?\d+\.\d+\.\d+\s*$/.test(
-              line,
-            ),
-        )
-        .map((line) => `${name}: ${line.trim()}`),
+        .map((line) => ({ name, line: line.trim() })),
     );
+    // This repository's own reusable workflow and actions are read from
+    // the same commit as the workflow that calls them: nothing to pin.
+    const local =
+      /uses:\s*\.\/\.github\/(workflows\/[\w-]+\.yml|actions\/[\w-]+)\s*$/;
+    const loose = uses
+      .filter(({ line }) => !local.test(line))
+      .filter(
+        ({ line }) =>
+          !/uses:\s*[\w.-]+\/[\w./-]+@[0-9a-f]{40}\s+#\s*v?\d+\.\d+\.\d+\s*$/.test(
+            line,
+          ),
+      )
+      .map(({ name, line }) => `${name}: ${line}`);
 
+    expect(uses.filter(({ line }) => local.test(line)).length).toBeGreaterThan(
+      0,
+    );
     expect(loose).toEqual([]);
   });
 
   it("fail on a critical advisory in a production dependency, in the branch CI and before a deploy", () => {
     // Through the gate, which blocks a change to the dependencies and
-    // reports the rest (audit-gate.test.ts).
-    for (const name of ["ci.yml", "deploy.yml"]) {
+    // reports the rest (audit-gate.test.ts), in the validation that both
+    // ci.yml and staging.yml call.
+    expect(read(".github/workflows/validate.yml")).toContain(
+      "run: bash .github/scripts/audit-gate.sh",
+    );
+    for (const name of ["ci.yml", "staging.yml"]) {
       expect(read(`.github/workflows/${name}`), name).toContain(
-        "run: bash .github/scripts/audit-gate.sh",
+        "uses: ./.github/workflows/validate.yml",
       );
     }
 
@@ -108,7 +133,15 @@ describe("the workflows", () => {
   });
 
   it("publish the images with an SBOM and provenance", () => {
-    const deploy = read(".github/workflows/deploy.yml");
+    const deploy = [
+      "staging.yml",
+      "validate.yml",
+      "ci.yml",
+      "pr.yml",
+      "production.yml",
+    ]
+      .map((name) => read(`.github/workflows/${name}`))
+      .join("\n");
     const builds = deploy
       .split("uses: docker/build-push-action@")
       .slice(1)
@@ -136,14 +169,15 @@ describe("the workflows", () => {
     }
   });
 
-  it("scan the pushed image by digest with Trivy pinned by digest", () => {
-    const deploy = read(".github/workflows/deploy.yml");
+  it("scan the pushed image by digest with Trivy pinned by digest, before the deploy", () => {
+    const staging = read(".github/workflows/staging.yml");
 
-    expect(deploy).toMatch(/aquasec\/trivy:[\d.]+@sha256:[0-9a-f]{64}/);
-    expect(deploy).toMatch(
-      /trajetto-api@\$\{\{ steps\.build\.outputs\.digest \}\}/,
+    expect(staging).toMatch(/aquasec\/trivy:[\d.]+@sha256:[0-9a-f]{64}/);
+    expect(staging).toMatch(
+      /trajetto-api@\$\{\{ needs\.build\.outputs\.api_digest \}\}/,
     );
-    expect(deploy).toMatch(/--severity CRITICAL --ignore-unfixed/);
+    expect(staging).toMatch(/--severity CRITICAL --ignore-unfixed/);
+    expect(staging).toContain("needs: [build, image-scan]");
   });
 });
 

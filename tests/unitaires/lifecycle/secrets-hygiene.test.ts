@@ -212,41 +212,54 @@ function gitleaksCommand(job: string): string {
 /**
  * main never ran the scan (INFRA-21): ci.yml only triggers on the other
  * branches, so a direct push or a merge that brought a key in built and
- * published an image anyway. deploy.yml runs the same scan — same image,
- * same flags, same .gitleaksignore — and no image is built before it passes.
+ * published an image anyway. Every workflow that scans — the branch CI,
+ * staging and the pull request into main — runs the same scan (same image,
+ * same flags, same .gitleaksignore), and no image is built before it passes.
  */
 describe("the deploy pipeline", () => {
-  const ci = jobsOf(
-    readFileSync(resolve(ROOT, ".github/workflows/ci.yml"), "utf8"),
-  );
-  const deploy = jobsOf(
-    readFileSync(resolve(ROOT, ".github/workflows/deploy.yml"), "utf8"),
-  );
+  const read = (file: string) =>
+    jobsOf(readFileSync(resolve(ROOT, `.github/workflows/${file}`), "utf8"));
+  const ci = read("ci.yml");
 
-  it("scans the whole history exactly as the branch CI does", () => {
-    const scan = deploy.get("secrets") ?? "";
+  it.each(["staging.yml", "pr.yml"])(
+    "%s scans the whole history exactly as the branch CI does",
+    (file) => {
+      const scan = read(file).get("secrets") ?? "";
 
-    expect(scan, "secrets job in deploy.yml").toMatch(/fetch-depth: 0/);
-    expect(gitleaksCommand(scan)).not.toBe("");
-    expect(gitleaksCommand(scan)).toBe(
-      gitleaksCommand(ci.get("secrets") ?? ""),
-    );
-  });
+      expect(scan, `secrets job in ${file}`).toMatch(/fetch-depth: 0/);
+      expect(scan).toMatch(/\n {4}name: Secret scan\r?\n/);
+      expect(gitleaksCommand(scan)).not.toBe("");
+      expect(gitleaksCommand(scan)).toBe(
+        gitleaksCommand(ci.get("secrets") ?? ""),
+      );
+    },
+  );
 
   it("builds no image before the scan passes", () => {
-    // An image that leaves the runner: a build that pushes. The ai-ocr job
+    // An image that leaves the runner: a build that pushes. The AI OCR job
     // builds only its `test` stage (pytest inside the image) and outputs
     // nothing, in parallel with the scan, as `docker build --target test`
     // did before it moved to Buildx for the cache.
-    const builds = [...deploy].filter(
+    const jobs = [
+      "ci.yml",
+      "staging.yml",
+      "pr.yml",
+      "production.yml",
+      "validate.yml",
+    ]
+      .map(read)
+      .flatMap((map) => [...map]);
+    const builds = jobs.filter(
       ([, job]) =>
         /uses: docker\/build-push-action@/.test(job) &&
         /\n\s+push: true\r?\n/.test(job),
     );
 
-    expect(builds.length).toBeGreaterThan(0);
+    expect(builds.map(([name]) => name)).toEqual(["build"]);
 
-    for (const [name, job] of builds)
+    for (const [name, job] of builds) {
       expect(needsOf(job), name).toContain("secrets");
+      expect(needsOf(job), name).toContain("gate");
+    }
   });
 });

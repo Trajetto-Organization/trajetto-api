@@ -16,27 +16,62 @@
  * fails. For a single file, `npx vitest run tests/E2E/<file>.test.ts` is still
  * the way (no phase, every file included).
  *
- * tests/unitaires/quality/e2e-replica-isolation.test.ts checks `e2ePhases`.
+ * E2E_SHARD=<i>/<n> runs one of the CI's n parallel jobs (validate.yml):
+ * jobs 1 to n−1 split the shared phase with vitest's own `--shard`, and job
+ * n runs the replica phase whole. Its files run one at a time and start
+ * processes vitest does not count, so they get a job of their own instead of
+ * a slice beside the others; the shared slices take the rest of the time.
+ * n = 1, or no E2E_SHARD, is the whole suite, as above.
+ *
+ * tests/unitaires/quality/e2e-replica-isolation.test.ts checks `e2ePhases`,
+ * and e2e-shards.test.ts the slices the CI's matrix makes.
  */
 import { spawnSync } from "node:child_process";
 import { createRequire } from "node:module";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-/** What each phase runs: vitest's arguments and the phase it is. */
-function e2ePhases(forwarded) {
-  const filtered = forwarded.some((argument) => !argument.startsWith("-"));
+/** `<i>/<n>` → { index, count }; undefined when there is no shard. */
+function parseShard(shard) {
+  if (shard === undefined || shard === "") return undefined;
 
-  return ["shared", "replicas"].map((phase) => ({
-    phase,
-    args: [
-      "run",
-      "--dir",
-      "./tests/E2E",
-      ...(filtered ? ["--passWithNoTests"] : []),
-      ...forwarded,
-    ],
-  }));
+  const match = /^(\d+)\/(\d+)$/.exec(shard);
+  const index = match ? Number(match[1]) : 0;
+  const count = match ? Number(match[2]) : 0;
+
+  if (!match || count < 1 || index < 1 || index > count) {
+    throw new Error(
+      `E2E_SHARD precisa ser <i>/<n>, com 1 ≤ i ≤ n (recebido: '${shard}').`,
+    );
+  }
+
+  return { index, count };
+}
+
+/** What each phase runs: vitest's arguments and the phase it is. */
+function e2ePhases(forwarded, shard = process.env.E2E_SHARD) {
+  const filtered = forwarded.some((argument) => !argument.startsWith("-"));
+  const base = [
+    "run",
+    "--dir",
+    "./tests/E2E",
+    ...(filtered ? ["--passWithNoTests"] : []),
+    ...forwarded,
+  ];
+  const split = parseShard(shard);
+
+  if (!split || split.count === 1) {
+    return ["shared", "replicas"].map((phase) => ({ phase, args: base }));
+  }
+
+  if (split.index === split.count) return [{ phase: "replicas", args: base }];
+
+  return [
+    {
+      phase: "shared",
+      args: [...base, `--shard=${split.index}/${split.count - 1}`],
+    },
+  ];
 }
 
 function main() {
@@ -75,4 +110,4 @@ const same = (a, b) =>
 
 if (same(self, invoked)) main();
 
-export { e2ePhases };
+export { e2ePhases, parseShard };

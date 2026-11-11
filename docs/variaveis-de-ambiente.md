@@ -436,7 +436,7 @@ Os mesmos nomes, com os applicationIds das Applications de produção (a
 | ------------------------- | ---------- | ------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
 | `ROLLOUT_VERIFY`          | variable   | `off` (só emergência; pode ficar só num environment)                                              | desliga a conferência do rollout                                                               |
 | `IMAGE_SCAN_ENFORCE`      | variable   | `true`                                                                                            | um achado do Trivy passa a falhar o build (falha no download do banco ou erro do Trivy, nunca) |
-| `CLIENT_REPOS_READ_TOKEN` | secret     | token só leitura de `Trajetto-Organization/trajetto-ui` e `Trajetto-Organization/trajetto-mobile` | contrato de rotas no `ci.yml`                                                                  |
+| `CLIENT_REPOS_READ_TOKEN` | secret     | token só leitura de `Trajetto-Organization/trajetto-ui` e `Trajetto-Organization/trajetto-mobile` | contrato de rotas no `validate.yml` (branches e staging)                                       |
 | `GITHUB_TOKEN`            | automático | —                                                                                                 | GHCR (push/retag), `gh api`, semantic-release                                                  |
 
 Opcionais do `.github/scripts/dokploy-deploy.mjs` (não definidas hoje; o

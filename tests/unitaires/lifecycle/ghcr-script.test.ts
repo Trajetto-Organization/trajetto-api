@@ -1,4 +1,4 @@
-import { writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
@@ -11,7 +11,7 @@ import {
 } from "./support/shell-harness";
 
 /**
- * .github/scripts/ghcr.sh: how deploy.yml reads and moves tags in GHCR.
+ * .github/scripts/ghcr.sh: how the CI reads and moves tags in GHCR.
  *
  * Every query was `docker buildx imagetools inspect … 2>/dev/null || true`:
  * a 5xx, a timeout or a missing login read as "this tag does not exist". The
@@ -237,6 +237,63 @@ describe.skipIf(!hasShell("bash"))("ghcr.sh", { timeout: 30_000 }, () => {
     });
   });
 
+  // For the jobs that can go on without GHCR (the AI pytest, the audit base
+  // of staging's Changes): docker/login-action failed them before their
+  // fallback ran.
+  describe("login", () => {
+    const TOKEN = "ghs_token-never-on-the-command-line";
+    const login = () => {
+      const result = run("bash", SCRIPT, ["login"], {
+        bin: box.bin,
+        env: { GHCR_USER: "trajetto-bot", GHCR_TOKEN: TOKEN },
+      });
+
+      return { ...result, calls: box.calls("docker") };
+    };
+
+    it("logs in once, with the token through stdin", () => {
+      // What docker read on stdin.
+      box.stub("docker", `cat > "${box.root}/stdin"\necho "Login Succeeded"`);
+
+      const result = login();
+
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.calls).toEqual([
+        "docker login ghcr.io --username trajetto-bot --password-stdin",
+      ]);
+      expect(readFileSync(`${box.root}/stdin`, "utf8")).toBe(TOKEN);
+      expect(result.stdout + result.stderr).not.toContain(TOKEN);
+    });
+
+    it("tries a failed login again, and ends with a warning, never an error, when it keeps failing", () => {
+      docker([
+        [1, "", "Error response from daemon: Get https://ghcr.io/v2/: 503"],
+        [0, "Login Succeeded", ""],
+      ]);
+
+      const flaky = login();
+
+      expect(flaky.status, flaky.stderr).toBe(0);
+      expect(flaky.calls).toHaveLength(2);
+      expect(flaky.stderr).toMatch(
+        /::warning::GHCR: falha ao entrar no ghcr\.io \(tentativa 1 de 5\)/,
+      );
+
+      docker([
+        [1, "", "Error response from daemon: Get https://ghcr.io/v2/: 503"],
+      ]);
+
+      const down = login();
+
+      expect(down.status).toBe(1);
+      expect(down.stderr).toMatch(
+        /::warning::GHCR indisponível: não deu para entrar no ghcr\.io depois de 5 tentativas/,
+      );
+      expect(down.stderr).not.toContain("::error::");
+      expect(down.stdout + down.stderr).not.toContain(TOKEN);
+    });
+  });
+
   it("refuses a call it does not know", () => {
     docker([[0, DIGEST, ""]]);
 
@@ -244,6 +301,7 @@ describe.skipIf(!hasShell("bash"))("ghcr.sh", { timeout: 30_000 }, () => {
       [],
       ["digest"],
       ["tag", TARGET_ONLY],
+      ["login", REF],
       ["inspect", REF],
     ]) {
       const result = ghcr(...args);

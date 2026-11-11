@@ -1,0 +1,578 @@
+name: Deploy the API
+description: >-
+  The deploy of one environment, the same for staging and production: the
+  migrations through the Dokploy Application trajetto-api-migrate when the
+  database has not applied this release image, then the AI, then the API,
+  each tag moved by digest right before its own deploy, then the proof that
+  the environment serves this build. Called by the job that carries the
+  environment (staging.yml, production.yml), so there is one approval and
+  the secrets stay in the environment: they come in as inputs, because a
+  composite action cannot read `secrets` or `vars` itself.
+
+# The job checks the repository out first (.github/scripts, read from the
+# workspace). Every `run:` names `shell: bash` (bash -eo pipefail), and every
+# value reaches a script through `env`, never as `${{ }}` inside `run:`.
+#
+# What is per environment comes in as inputs:
+#
+#   staging    tag `staging`, the digests the Build job just pushed, only
+#              from the branch head, both tags put back after a failed
+#              Dokploy deploy, the public liveness as the default check,
+#              and `staged-<7>` written last;
+#   production tag `stable`, the digests `Staging evidence` read before the
+#              approval, only the AI's tag put back (a failed promote is
+#              fixed by promoting again), the Swarm check over SSH as the
+#              default, no marker.
+#
+# Before Dokploy exists (none of its secrets), the tags still move, so the
+# build the environment would run is always visible in GHCR, and the deploy
+# is skipped with a notice; some of them is a mistake, and fails.
+inputs:
+  environment:
+    description: "staging | production"
+    required: true
+  tag:
+    description: "A tag do ambiente: staging | stable"
+    required: true
+  api-digest:
+    description: "Digest da imagem trajetto-api a implantar"
+    required: true
+  migrate-digest:
+    description: "Digest da imagem trajetto-api-migrate do build; vazio só com migrate-presplit"
+    default: ""
+  migrate-presplit:
+    description: "true: build anterior à imagem de migração (a etapa de release não roda)"
+    default: "false"
+  ai-digest:
+    description: "Digest da imagem trajetto-ai do build; vazio = build anterior ao serviço de IA (a IA fica onde está)"
+    default: ""
+  force-ai:
+    description: "true: reimplanta a IA mesmo com o mesmo digest"
+    default: "false"
+  expected-commit:
+    description: "O commit (ou prefixo) que a liveness pública tem de responder"
+    required: true
+  verify-default:
+    description: "A conferência quando ROLLOUT_VERIFY está vazia: http | ssh"
+    required: true
+  rollout-verify:
+    description: "vars.ROLLOUT_VERIFY do environment: vazio, http, ssh ou off"
+    default: ""
+  api-public-url:
+    description: "vars.API_PUBLIC_URL do environment"
+    default: ""
+  swarm-api-service:
+    description: "vars.SWARM_API_SERVICE do environment"
+    default: ""
+  require-branch-head:
+    description: "true: só o run da cabeça da branch implanta (staging)"
+    default: "false"
+  restore-api-tag:
+    description: "true: a tag da API volta junto com a da IA depois de um deploy do Dokploy que falhou"
+    default: "false"
+  mark-staged:
+    description: "true: grava staged-<7> no fim (staging)"
+    default: "false"
+  dokploy-url:
+    description: "secrets.DOKPLOY_URL"
+    default: ""
+  dokploy-api-key:
+    description: "secrets.DOKPLOY_API_KEY"
+    default: ""
+  dokploy-api-application-id:
+    description: "secrets.DOKPLOY_API_APPLICATION_ID"
+    default: ""
+  dokploy-migrate-application-id:
+    description: "secrets.DOKPLOY_MIGRATE_APPLICATION_ID"
+    default: ""
+  dokploy-ai-application-id:
+    description: "secrets.DOKPLOY_AI_APPLICATION_ID"
+    default: ""
+  deploy-ssh-host:
+    description: "secrets.DEPLOY_SSH_HOST"
+    default: ""
+  deploy-ssh-user:
+    description: "secrets.DEPLOY_SSH_USER"
+    default: ""
+  deploy-verify-ssh-key:
+    description: "secrets.DEPLOY_VERIFY_SSH_KEY"
+    default: ""
+  deploy-ssh-known-hosts:
+    description: "secrets.DEPLOY_SSH_KNOWN_HOSTS"
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    # The scripts below run on the same Node as every other job, not on
+    # the runner's default, which moves with the runner image.
+    - name: Set up Node.js
+      uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+      with:
+        node-version: "22.21.1"
+
+    # Runs finish out of order: an older push whose build was slower would
+    # move `staging` BACK after a newer run moved it forward. Only the run
+    # of the branch's current head deploys; an older one stops here, green,
+    # and leaves staging to the newer run.
+    #
+    # Except when the newer head only adds documentation on top of this
+    # commit (docs-only.sh: `*.md` and docs/, which no image carries): such
+    # a push runs no build and no deploy, so nobody else would deploy, and
+    # its build would be this one's content. This run deploys and marks its
+    # own build, and the PR check and the promote of the newer commit find
+    # it (staged-build.sh) — the same rule as trajetto-ui.
+    #
+    # Only a valid sha decides. A failed or empty read (without pipefail it
+    # read as "not the head" and skipped the deploy, green) is tried again,
+    # then fails saying GitHub did not answer; so is the fetch of the newer
+    # head's history. Production deploys what was approved: no head check.
+    - name: Check run is branch head
+      id: head
+      shell: bash
+      env:
+        REQUIRED: ${{ inputs.require-branch-head }}
+      run: |
+        if [ "$REQUIRED" != "true" ]; then
+          echo "current=true" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+        head=""
+        for attempt in 1 2 3; do
+          if head=$(git ls-remote origin "$GITHUB_REF" | cut -f1) && [[ "$head" =~ ^[0-9a-f]{40}$ ]]; then
+            break
+          fi
+          if [ "$attempt" -eq 3 ]; then
+            echo "::error::Não deu para ler a cabeça de ${GITHUB_REF} no GitHub depois de 3 tentativas (resposta: '${head}'). Nada foi movido nem implantado; não é um problema do código."
+            exit 1
+          fi
+          echo "::warning::A leitura da cabeça de ${GITHUB_REF} falhou (tentativa ${attempt} de 3; resposta: '${head}'). De novo em $((attempt * 10))s."
+          sleep $((attempt * 10))
+        done
+        if [ "$head" = "$GITHUB_SHA" ]; then
+          echo "current=true" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+        # The newer head and its history down to this commit (blobless, as
+        # the checkout: commits and trees are all the comparison reads).
+        for attempt in 1 2 3; do
+          if git fetch --no-tags --depth=100 origin "$head"; then
+            break
+          fi
+          if [ "$attempt" -eq 3 ]; then
+            echo "::error::Não deu para buscar ${head} no GitHub depois de 3 tentativas (git fetch). Nada foi movido nem implantado; não é um problema do código."
+            exit 1
+          fi
+          echo "::warning::A busca de ${head} falhou (git fetch, tentativa ${attempt} de 3). De novo em $((attempt * 10))s."
+          sleep $((attempt * 10))
+        done
+        ancestor=0
+        git merge-base --is-ancestor "$GITHUB_SHA" "$head" || ancestor=$?
+        docs=1
+        if [ "$ancestor" -eq 0 ]; then
+          docs=0
+          bash .github/scripts/docs-only.sh "$GITHUB_SHA" "$head" > /dev/null || docs=$?
+        elif [ "$ancestor" -ne 1 ]; then
+          echo "::error::git merge-base não comparou ${GITHUB_SHA} com ${head} (código ${ancestor})."
+          exit 1
+        fi
+        case "$docs" in
+          0)
+            echo "current=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::staging já está em ${head}, que só acrescenta documentação a este build: este run faz o deploy e grava staged-${GITHUB_SHA::7}."
+            ;;
+          1)
+            echo "current=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::staging já está em ${head}: este run (${GITHUB_SHA}) não mexe em staging; o run do commit mais novo faz o deploy."
+            ;;
+          *) exit 1 ;;
+        esac
+
+    - name: Log in to GitHub Container Registry
+      if: steps.head.outputs.current == 'true'
+      uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+      with:
+        registry: ghcr.io
+        username: ${{ github.actor }}
+        password: ${{ github.token }}
+
+    # What the environment's tag names before this run moves anything: the
+    # AI's skip compares against it, and a failed deploy puts it back. A
+    # tag that does not exist yet is empty; GHCR not answering fails here,
+    # before anything moved (it used to read as "no tag", redeploy the AI
+    # for nothing and lose the digest to put back).
+    #
+    # The AI is redeployed only when its digest changed (an image reused by
+    # its source is already running: a redeploy would only restart it), or
+    # with force_ai_build; a build older than the AI service has no AI image,
+    # and the AI stays where it is.
+    - name: Read what the environment runs now
+      id: current
+      if: steps.head.outputs.current == 'true'
+      shell: bash
+      env:
+        TAG: ${{ inputs.tag }}
+        AI_DIGEST: ${{ inputs.ai-digest }}
+        FORCE: ${{ inputs.force-ai }}
+      run: |
+        api=$(bash .github/scripts/ghcr.sh digest "ghcr.io/trajetto-organization/trajetto-api:${TAG}")
+        ai=$(bash .github/scripts/ghcr.sh digest "ghcr.io/trajetto-organization/trajetto-ai:${TAG}")
+        echo "api=${api}" >> "$GITHUB_OUTPUT"
+        echo "ai=${ai}" >> "$GITHUB_OUTPUT"
+        if [ -z "$AI_DIGEST" ]; then
+          echo "ai_deploy=false" >> "$GITHUB_OUTPUT"
+          echo "::warning::Este build não tem imagem trajetto-ai (anterior ao serviço de IA local); trajetto-ai:${TAG} não muda."
+        elif [ "$FORCE" != "true" ] && [ -n "$ai" ] && [ "$ai" = "$AI_DIGEST" ]; then
+          echo "ai_deploy=false" >> "$GITHUB_OUTPUT"
+          echo "::notice::trajetto-ai: ${TAG} já aponta para ${AI_DIGEST} (infra/ai-ocr sem mudança); a IA não é reimplantada. Para forçar: Run workflow com force_ai_build."
+          echo "trajetto-ai: sem mudança (${AI_DIGEST}); deploy da IA pulado." >> "$GITHUB_STEP_SUMMARY"
+        else
+          echo "ai_deploy=true" >> "$GITHUB_OUTPUT"
+        fi
+
+    # All four secrets: deploy. None: Dokploy does not exist yet — a
+    # notice, and the run stays green. Some: a configuration mistake, which
+    # fails instead of looking like "not set up yet".
+    - name: Check deploy settings
+      id: dokploy
+      if: steps.head.outputs.current == 'true'
+      shell: bash
+      env:
+        ENVIRONMENT: ${{ inputs.environment }}
+        TAG: ${{ inputs.tag }}
+        DOKPLOY_URL: ${{ inputs.dokploy-url }}
+        DOKPLOY_API_KEY: ${{ inputs.dokploy-api-key }}
+        DOKPLOY_API_APPLICATION_ID: ${{ inputs.dokploy-api-application-id }}
+        DOKPLOY_MIGRATE_APPLICATION_ID: ${{ inputs.dokploy-migrate-application-id }}
+      run: |
+        case "$ENVIRONMENT" in
+          production) where="produção" ;;
+          *) where="$ENVIRONMENT" ;;
+        esac
+        missing=""
+        [ -n "$DOKPLOY_URL" ] || missing="$missing DOKPLOY_URL"
+        [ -n "$DOKPLOY_API_KEY" ] || missing="$missing DOKPLOY_API_KEY"
+        [ -n "$DOKPLOY_API_APPLICATION_ID" ] || missing="$missing DOKPLOY_API_APPLICATION_ID"
+        [ -n "$DOKPLOY_MIGRATE_APPLICATION_ID" ] || missing="$missing DOKPLOY_MIGRATE_APPLICATION_ID"
+        if [ -z "$missing" ]; then
+          echo "enabled=true" >> "$GITHUB_OUTPUT"
+        elif [ "$missing" = " DOKPLOY_URL DOKPLOY_API_KEY DOKPLOY_API_APPLICATION_ID DOKPLOY_MIGRATE_APPLICATION_ID" ]; then
+          echo "enabled=false" >> "$GITHUB_OUTPUT"
+          echo "::notice::Deploy de ${where} pulado: o environment ${ENVIRONMENT} ainda não tem DOKPLOY_URL, DOKPLOY_API_KEY, DOKPLOY_API_APPLICATION_ID e DOKPLOY_MIGRATE_APPLICATION_ID (docs/deploy.md). A tag ${TAG} já aponta para este build."
+          echo "Deploy de ${where} **pulado**: Dokploy ainda não configurado. A tag \`${TAG}\` já aponta para este build." >> "$GITHUB_STEP_SUMMARY"
+        else
+          echo "::error::Configuração parcial do Dokploy no environment ${ENVIRONMENT}: faltam${missing} (docs/deploy.md; DOKPLOY_MIGRATE_APPLICATION_ID é o id da Application trajetto-api-migrate, seção Migrations)."
+          exit 1
+        fi
+
+    # The release step runs only when the database has not applied this
+    # release image yet. `trajetto-api-migrate:<tag>-applied` names the last
+    # one that FINISHED here: it moves only after the step succeeded
+    # (below), so a failed or interrupted step runs again on the next run.
+    # The same digest means the same migrations and seeds already ran — a
+    # push that touched none of them (migrate-source.sh) reuses the image,
+    # and nothing runs again. A build that provably predates the release
+    # image (Staging evidence decided it: a `main-<sha>`, or a rollback to a
+    # tree without infra/scripts/schema-guard.ts) skips it: production has
+    # applied every migration such a build knows. Any other build without a
+    # release image never gets here (Staging evidence fails it). GHCR not
+    # answering fails here (ghcr.sh), before anything moved.
+    - name: Decide migrations
+      id: migrations
+      if: steps.head.outputs.current == 'true' && steps.dokploy.outputs.enabled == 'true'
+      shell: bash
+      env:
+        ENVIRONMENT: ${{ inputs.environment }}
+        TAG: ${{ inputs.tag }}
+        MIGRATE_DIGEST: ${{ inputs.migrate-digest }}
+        PRESPLIT: ${{ inputs.migrate-presplit }}
+      run: |
+        case "$ENVIRONMENT" in
+          production) where="produção" ;;
+          *) where="$ENVIRONMENT" ;;
+        esac
+        if [ "$PRESPLIT" = "true" ]; then
+          echo "run=false" >> "$GITHUB_OUTPUT"
+          echo "::notice::O build é anterior à imagem de migração (trajetto-api-migrate): o banco de ${where} já aplicou todas as migrations dele, e a etapa de release não roda."
+          echo "Migrations: etapa pulada; o build é anterior à imagem de migração." >> "$GITHUB_STEP_SUMMARY"
+          exit 0
+        fi
+        if [ -z "$MIGRATE_DIGEST" ]; then
+          echo "::error::Falta o digest da imagem trajetto-api-migrate deste build: nada foi movido nem implantado."
+          exit 1
+        fi
+        applied=$(bash .github/scripts/ghcr.sh digest "ghcr.io/trajetto-organization/trajetto-api-migrate:${TAG}-applied")
+        if [ -n "$applied" ] && [ "$applied" = "$MIGRATE_DIGEST" ]; then
+          echo "run=false" >> "$GITHUB_OUTPUT"
+          echo "::notice::Migrations: o banco de ${where} já aplicou trajetto-api-migrate@${MIGRATE_DIGEST} (migrations e seeds sem mudança); a etapa de release não roda."
+          echo "Migrations: sem mudança; o banco de ${where} já aplicou ${MIGRATE_DIGEST}." >> "$GITHUB_STEP_SUMMARY"
+        else
+          echo "run=true" >> "$GITHUB_OUTPUT"
+        fi
+
+    # The release Application runs `:<tag>`: the tag moves to this build's
+    # release image, by digest, right before its deploy.
+    - name: Move the release image tag to this build
+      if: steps.head.outputs.current == 'true' && steps.migrations.outputs.run == 'true'
+      shell: bash
+      env:
+        TAG: ${{ inputs.tag }}
+        MIGRATE_DIGEST: ${{ inputs.migrate-digest }}
+      run: |
+        bash .github/scripts/ghcr.sh tag \
+          "ghcr.io/trajetto-organization/trajetto-api-migrate:${TAG}" \
+          "ghcr.io/trajetto-organization/trajetto-api-migrate@${MIGRATE_DIGEST}"
+        echo "trajetto-api-migrate:${TAG} → ${MIGRATE_DIGEST}" >> "$GITHUB_STEP_SUMMARY"
+
+    # The release step, ONCE, before the API or the AI moves: Dokploy
+    # redeploys the Application trajetto-api-migrate, and the run waits
+    # until Swarm reports the step finished or failed (dokploy-release.mjs).
+    # A failing migration fails HERE: no tag of the API or the AI moves,
+    # they are not redeployed, and the environment keeps the build it runs.
+    # The API image cannot migrate (it carries no Prisma CLI) and refuses to
+    # boot on a database without its migrations. The database URL lives in
+    # the Application's Environment in Dokploy, never in CI. Setup:
+    # docs/deploy.md ("Migrations").
+    - name: Run the database migrations (Dokploy)
+      if: steps.head.outputs.current == 'true' && steps.migrations.outputs.run == 'true'
+      shell: bash
+      env:
+        DOKPLOY_URL: ${{ inputs.dokploy-url }}
+        DOKPLOY_API_KEY: ${{ inputs.dokploy-api-key }}
+        DOKPLOY_APPLICATION_ID: ${{ inputs.dokploy-migrate-application-id }}
+        DOKPLOY_APP_LABEL: trajetto-api-migrate
+        RELEASE_IMAGE: ghcr.io/trajetto-organization/trajetto-api-migrate:${{ inputs.tag }}
+      run: node .github/scripts/dokploy-release.mjs
+
+    # Only now, after the step finished: the next run compares with this.
+    - name: Record the migrations as applied
+      if: steps.head.outputs.current == 'true' && steps.migrations.outputs.run == 'true'
+      shell: bash
+      env:
+        TAG: ${{ inputs.tag }}
+        MIGRATE_DIGEST: ${{ inputs.migrate-digest }}
+      run: |
+        bash .github/scripts/ghcr.sh tag \
+          "ghcr.io/trajetto-organization/trajetto-api-migrate:${TAG}-applied" \
+          "ghcr.io/trajetto-organization/trajetto-api-migrate@${MIGRATE_DIGEST}"
+        echo "trajetto-api-migrate:${TAG}-applied → ${MIGRATE_DIGEST}" >> "$GITHUB_STEP_SUMMARY"
+
+    # By digest, never by a tag that could have moved since the build. Only
+    # when the AI changed: otherwise the tag already names this digest. Each
+    # tag moves right before its own deploy, never both up front: a failed
+    # AI deploy used to leave the API's tag on a build the environment never
+    # ran.
+    - name: Move the AI tag to this build
+      id: move-ai
+      if: steps.head.outputs.current == 'true' && steps.current.outputs.ai_deploy == 'true'
+      shell: bash
+      env:
+        TAG: ${{ inputs.tag }}
+        AI_DIGEST: ${{ inputs.ai-digest }}
+      run: |
+        bash .github/scripts/ghcr.sh tag \
+          "ghcr.io/trajetto-organization/trajetto-ai:${TAG}" \
+          "ghcr.io/trajetto-organization/trajetto-ai@${AI_DIGEST}"
+        echo "trajetto-ai:${TAG} → ${AI_DIGEST}" >> "$GITHUB_STEP_SUMMARY"
+
+    # One Dokploy Application per service, each on its environment tag. The
+    # AI goes first (the API calls it), and only when its digest changed.
+    # `done` in Dokploy = the Swarm manager ACCEPTED the new spec; the
+    # API's rollout is checked after. The AI id is optional: not created yet
+    # = a notice. Database backups are Dokploy's own (docs/deploy.md,
+    # "Backup e restauração"), not a service this deploy ships.
+    - name: Deploy the AI service (Dokploy)
+      id: deploy-ai
+      if: steps.head.outputs.current == 'true' && steps.dokploy.outputs.enabled == 'true' && steps.current.outputs.ai_deploy == 'true'
+      shell: bash
+      env:
+        DOKPLOY_URL: ${{ inputs.dokploy-url }}
+        DOKPLOY_API_KEY: ${{ inputs.dokploy-api-key }}
+        DOKPLOY_APPLICATION_ID: ${{ inputs.dokploy-ai-application-id }}
+        DOKPLOY_APP_LABEL: trajetto-ai
+        DOKPLOY_OPTIONAL: "true"
+      run: node .github/scripts/dokploy-deploy.mjs
+
+    # The API's tag, once the AI it calls is in place. Unconditional: the
+    # API Application runs the environment's tag, so THIS is what ships.
+    - name: Move the API tag to this build
+      id: move-api
+      if: steps.head.outputs.current == 'true'
+      shell: bash
+      env:
+        TAG: ${{ inputs.tag }}
+        API_DIGEST: ${{ inputs.api-digest }}
+      run: |
+        bash .github/scripts/ghcr.sh tag \
+          "ghcr.io/trajetto-organization/trajetto-api:${TAG}" \
+          "ghcr.io/trajetto-organization/trajetto-api@${API_DIGEST}"
+        echo "trajetto-api:${TAG} → ${API_DIGEST}" >> "$GITHUB_STEP_SUMMARY"
+
+    - name: Deploy the API (Dokploy)
+      id: deploy-api
+      if: steps.head.outputs.current == 'true' && steps.dokploy.outputs.enabled == 'true'
+      shell: bash
+      env:
+        DOKPLOY_URL: ${{ inputs.dokploy-url }}
+        DOKPLOY_API_KEY: ${{ inputs.dokploy-api-key }}
+        DOKPLOY_APPLICATION_ID: ${{ inputs.dokploy-api-application-id }}
+        DOKPLOY_APP_LABEL: trajetto-api
+      run: node .github/scripts/dokploy-deploy.mjs
+
+    # Which proof of the rollout runs: the environment's ROLLOUT_VERIFY, or
+    # its default when the variable is empty (staging: the public liveness;
+    # production: the Swarm tasks over SSH). Exactly one check runs — an
+    # unknown value falls back to the default, with a warning, never to
+    # none — and only `off` skips them, logged.
+    - name: Pick the rollout check
+      id: verify
+      if: steps.head.outputs.current == 'true' && steps.dokploy.outputs.enabled == 'true'
+      shell: bash
+      env:
+        ROLLOUT_VERIFY: ${{ inputs.rollout-verify }}
+        DEFAULT: ${{ inputs.verify-default }}
+      run: |
+        case "$DEFAULT" in
+          http | ssh) ;;
+          *)
+            echo "::error::verify-default precisa ser http ou ssh (recebido: '${DEFAULT}')."
+            exit 1
+            ;;
+        esac
+        case "$ROLLOUT_VERIFY" in
+          http | ssh | off) mode=$ROLLOUT_VERIFY ;;
+          "") mode=$DEFAULT ;;
+          *)
+            mode=$DEFAULT
+            echo "::warning::ROLLOUT_VERIFY='${ROLLOUT_VERIFY}' não é http, ssh nem off: vale a conferência padrão deste ambiente (${DEFAULT})."
+            ;;
+        esac
+        echo "mode=${mode}" >> "$GITHUB_OUTPUT"
+
+    # The no-SSH proof: the public API's /health/liveness answers the commit
+    # its image was built from, and wait-for-version.mjs polls it through
+    # the edge until this commit has answered for 90 s — longer than Swarm's
+    # rollback monitor, and long enough for an old replica still in the
+    # rotation to show up. No SSH key on the host. A rollback to a build
+    # older than the commit in the liveness never answers one: use the SSH
+    # check for it.
+    - name: Wait for the API to serve this build
+      id: verify-http
+      if: steps.head.outputs.current == 'true' && steps.verify.outputs.mode == 'http'
+      shell: bash
+      env:
+        ENVIRONMENT: ${{ inputs.environment }}
+        API_URL: ${{ inputs.api-public-url }}
+        EXPECTED_SHA: ${{ inputs.expected-commit }}
+      run: |
+        if [ -z "$API_URL" ]; then
+          echo "::error::Falta a variável API_PUBLIC_URL no environment ${ENVIRONMENT} (a origem pública da API, ex. https://api-staging.intrajetto.com): sem ela o run não prova que o ambiente serve este build (docs/deploy.md, \"Conferir a convergência\"). Para pular de propósito: ROLLOUT_VERIFY=off."
+          exit 1
+        fi
+        node .github/scripts/wait-for-version.mjs
+
+    # The proof the Swarm shipped. Swarm rolls a failing image back on its
+    # own (failure_action: rollback) and the old build keeps serving — a
+    # green run with nothing deployed. This waits on the manager, through
+    # an SSH key restricted to infra/scripts/verify-rollout.sh (read-only),
+    # until the API service runs this digest on every replica with the
+    # update completed, and fails on a rollback or at the timeout.
+    - name: Wait for the rollout to converge
+      id: verify-ssh
+      if: steps.head.outputs.current == 'true' && steps.verify.outputs.mode == 'ssh'
+      shell: bash
+      env:
+        DIGEST: ${{ inputs.api-digest }}
+        SERVICE: ${{ inputs.swarm-api-service }}
+        SSH_HOST: ${{ inputs.deploy-ssh-host }}
+        SSH_USER: ${{ inputs.deploy-ssh-user }}
+        SSH_KEY: ${{ inputs.deploy-verify-ssh-key }}
+        SSH_KNOWN_HOSTS: ${{ inputs.deploy-ssh-known-hosts }}
+      run: |
+        missing=""
+        [ -n "$DIGEST" ] || missing="$missing DIGEST"
+        [ -n "$SERVICE" ] || missing="$missing vars.SWARM_API_SERVICE"
+        [ -n "$SSH_HOST" ] || missing="$missing secrets.DEPLOY_SSH_HOST"
+        [ -n "$SSH_USER" ] || missing="$missing secrets.DEPLOY_SSH_USER"
+        [ -n "$SSH_KEY" ] || missing="$missing secrets.DEPLOY_VERIFY_SSH_KEY"
+        [ -n "$SSH_KNOWN_HOSTS" ] || missing="$missing secrets.DEPLOY_SSH_KNOWN_HOSTS"
+        if [ -n "$missing" ]; then
+          echo "::error::Faltam${missing}: sem eles o run não prova que o Swarm terminou o rollout (docs/deploy.md, \"Conferir a convergência\"). Sem SSH, use ROLLOUT_VERIFY=http (a conferência pela liveness pública); para pular de propósito: ROLLOUT_VERIFY=off."
+          exit 1
+        fi
+        install -m 700 -d ~/.ssh
+        printf '%s\n' "$SSH_KEY" > ~/.ssh/verify_key
+        chmod 600 ~/.ssh/verify_key
+        printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+        ssh -i ~/.ssh/verify_key -o BatchMode=yes -o StrictHostKeyChecking=yes \
+          -o ServerAliveInterval=30 -o ServerAliveCountMax=6 \
+          "$SSH_USER@$SSH_HOST" "$SERVICE ghcr.io/trajetto-organization/trajetto-api@${DIGEST}"
+        echo "trajetto-api: ${SERVICE} convergiu para ${DIGEST}." >> "$GITHUB_STEP_SUMMARY"
+
+    - name: Report the rollout as unverified
+      if: steps.head.outputs.current == 'true' && steps.verify.outputs.mode == 'off'
+      shell: bash
+      env:
+        ENVIRONMENT: ${{ inputs.environment }}
+      run: |
+        case "$ENVIRONMENT" in
+          production) where="produção" ;;
+          *) where="$ENVIRONMENT" ;;
+        esac
+        echo "::warning::ROLLOUT_VERIFY=off: o run não confere se o Swarm terminou o rollout ou o reverteu. Confira 'docker service ps --no-trunc <appName da Application da API>' no host."
+        echo "Rollout de ${where} NÃO verificado (ROLLOUT_VERIFY=off)." >> "$GITHUB_STEP_SUMMARY"
+
+    # The marker the PR check and the promote require, as in trajetto-ui:
+    # written last, so only a build that passed the scan (Image scan),
+    # became staging's tags, was deployed by Dokploy and — when the check
+    # runs — was served by the staging API gets it. A build whose scan,
+    # deploy or check failed, or whose run was superseded, has `sha-<sha>`
+    # in GHCR but no `staged-<sha>`. Both images, on the digests deployed.
+    # Not gated on Dokploy being configured: before it exists the tags are
+    # all there is, as in the web. No status function: it runs only when
+    # every step before it passed.
+    - name: Mark this build as staged
+      if: steps.head.outputs.current == 'true' && inputs.mark-staged == 'true'
+      shell: bash
+      env:
+        API_DIGEST: ${{ inputs.api-digest }}
+        AI_DIGEST: ${{ inputs.ai-digest }}
+      run: |
+        bash .github/scripts/ghcr.sh tag \
+          "ghcr.io/trajetto-organization/trajetto-api:staged-${GITHUB_SHA::7}" \
+          "ghcr.io/trajetto-organization/trajetto-api@${API_DIGEST}"
+        bash .github/scripts/ghcr.sh tag \
+          "ghcr.io/trajetto-organization/trajetto-ai:staged-${GITHUB_SHA::7}" \
+          "ghcr.io/trajetto-organization/trajetto-ai@${AI_DIGEST}"
+        echo "staged-${GITHUB_SHA::7}: trajetto-api → ${API_DIGEST}, trajetto-ai → ${AI_DIGEST}" >> "$GITHUB_STEP_SUMMARY"
+
+    # A Dokploy deploy that failed left Swarm on the old spec, so its tag
+    # goes back to what the environment still runs: the next run's AI skip
+    # compares against it, and a manual Deploy in the panel must not pull a
+    # build that never came up. Only a failed Dokploy step, never a failed
+    # check: a check that timed out may sit on a build that did converge.
+    # The API's tag only where restore-api-tag says so (staging): in
+    # production a failed promote is fixed by promoting again (or rolling
+    # back), which moves `stable` on purpose.
+    - name: Put the tags back after a failed deploy
+      if: steps.head.outputs.current == 'true' && steps.dokploy.outputs.enabled == 'true' && failure()
+      shell: bash
+      env:
+        TAG: ${{ inputs.tag }}
+        RESTORE_API: ${{ inputs.restore-api-tag }}
+        PREVIOUS_API: ${{ steps.current.outputs.api }}
+        PREVIOUS_AI: ${{ steps.current.outputs.ai }}
+        API_DEPLOY: ${{ steps.deploy-api.outcome }}
+        AI_DEPLOY: ${{ steps.deploy-ai.outcome }}
+      run: |
+        restore() {
+          if [ -z "$2" ]; then
+            echo "::warning::$1:${TAG} não existia antes deste run; fica onde está."
+            return
+          fi
+          bash .github/scripts/ghcr.sh tag \
+            "ghcr.io/trajetto-organization/$1:${TAG}" "ghcr.io/trajetto-organization/$1@$2"
+          echo "$1:${TAG} voltou para $2 (o deploy falhou; o ambiente segue no build anterior)." >> "$GITHUB_STEP_SUMMARY"
+        }
+        if [ "$AI_DEPLOY" = "failure" ]; then restore trajetto-ai "$PREVIOUS_AI"; fi
+        if [ "$API_DEPLOY" = "failure" ] && [ "$RESTORE_API" = "true" ]; then restore trajetto-api "$PREVIOUS_API"; fi

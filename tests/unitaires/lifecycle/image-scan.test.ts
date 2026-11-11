@@ -4,7 +4,7 @@ import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
 /**
- * What the image scan (Trivy, deploy.yml) is allowed to find.
+ * What the image scan (Trivy, staging.yml) is allowed to find.
  *
  * Enforced (IMAGE_SCAN_ENFORCE=true) on 27/10/2026, the first run failed on
  * `tar` (CVE-2026-59873, CRITICAL) in two places: the npm the Node image

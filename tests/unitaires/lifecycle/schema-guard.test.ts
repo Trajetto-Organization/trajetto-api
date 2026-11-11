@@ -17,7 +17,7 @@ import { sandbox, type Sandbox } from "./support/shell-harness";
  * rollout); this is what keeps a replica from serving a schema older than
  * its build. The wiring into wait-for-postgres, on a real Postgres, is in
  * tests/E2E/schema-guard.test.ts; the image's own refusal, in the smoke test
- * of deploy.yml.
+ * of staging.yml (the Build job).
  */
 const ROOT = process.cwd();
 
@@ -78,7 +78,7 @@ describe("schemaRefusal", () => {
     );
     const refusal = missingMigrationRefusal(missing);
 
-    // The smoke test of deploy.yml greps this phrase.
+    // The smoke test of staging.yml greps this phrase.
     expect(refusal).toContain(`O banco não tem a migration ${missing[0]} `);
     expect(refusal).toContain(
       `(nem outras 5: ${missing[1]}, ${missing[2]}, ${missing[3]}, …)`,
@@ -204,9 +204,9 @@ describe("where the build records it, and where the boot reads it", () => {
     ]);
   });
 
-  it("the smoke test of deploy.yml looks for the refusal's own words", () => {
+  it("the smoke test of staging.yml looks for the refusal's own words", () => {
     const workflow = readFileSync(
-      resolve(ROOT, ".github/workflows/deploy.yml"),
+      resolve(ROOT, ".github/workflows/staging.yml"),
       "utf8",
     );
 

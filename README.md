@@ -577,18 +577,22 @@ requisição e de resposta, incluindo 400/401/403/404/409/429.
 ## Build, imagem e deploy
 
 ```
-branch de trabalho ─push─▶ ci.yml (lint, typecheck, unitários + cobertura, audit, gitleaks, IA)
-staging ─push─▶ deploy.yml: validação completa (+ E2E) ─▶ build ÚNICO das 3 imagens (GHCR sha-<sha>:
-                            API, migração e IA; migração e IA reaproveitadas se o que rodam não mudou)
-                            ─▶ migrations, se o banco não aplicou essa imagem (Application trajetto-api-migrate)
-                            ─▶ tag `staging` por digest ─▶ Dokploy staging (IA, se mudou → API)
-                            ─▶ a liveness pública responde o commit novo ─▶ marcador staged-<sha>
-PR staging → main ─▶ a mesma validação + "o staging rodou o head do PR?" (staged-<sha>;
-                     um head só de documentação usa o de um ancestral que rodou)
-merge em main ─▶ promoção (sem build): migrations (se preciso) ─▶ tag `stable` por digest ─▶ Dokploy produção (IA → API)
-                 ─▶ convergência ─▶ release        [aprovação do environment production]
-Run workflow na main ─▶ a mesma promoção com uma tag antiga (rollback)
-Run workflow na staging ─▶ o caminho de staging de novo (force_ai_build reconstrói a IA)
+branch de trabalho ─push─▶ ci.yml: Changes ─▶ Secret scan + Validate (validate.yml, sem E2E)
+staging ─push─▶ staging.yml: Changes ─▶ Secret scan + Validate (lint, tsc, unitários + piso, E2E em 3 jobs, IA)
+                            ─▶ Gate ─▶ Build: as 3 imagens UMA vez (GHCR sha-<sha>: API, migração e IA;
+                               migração e IA reaproveitadas se o que rodam não mudou) ─▶ Image scan
+                            ─▶ Deploy: migrations, se o banco não aplicou essa imagem (Application trajetto-api-migrate)
+                               ─▶ tag `staging` por digest ─▶ Dokploy staging (IA, se mudou → API)
+                               ─▶ a liveness pública responde o commit novo ─▶ marcador staged-<sha>
+                 (push só de documentação: Secret scan e Docs, sem build e sem cancelar o run de código)
+PR staging → main ─▶ pr.yml: Secret scan + Staging evidence (staged-<sha>, Gate verde, a main só traz
+                     documentação; um head só de documentação usa o de um ancestral que rodou,
+                     e o Gate do próprio head também precisa estar verde)
+merge em main ─▶ production.yml: Staging evidence ─▶ Deploy [aprovação do environment production]:
+                 migrations (se preciso) ─▶ Dokploy produção (IA → API), `stable` por digest ─▶ convergência ─▶ Release
+Run workflow do Production na main ─▶ a mesma promoção com uma tag antiga (rollback)
+Run workflow do Staging na staging ─▶ o caminho de staging de novo (force_ai_build testa e reconstrói a IA;
+                                     em outra branch, inclusive a main que o formulário traz, nada roda)
 ```
 
 - **Imagens**: `Dockerfile` (multi-stage sobre `node:22.21.1-alpine`, fixada

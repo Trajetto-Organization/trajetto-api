@@ -16,9 +16,10 @@
 ## Uma imagem, dois ambientes
 
 Staging e produção rodam a **mesma imagem** de cada serviço, promovida por
-digest (decisão 12.2): o `deploy.yml` da API publica só `sha-<sha>` a cada
-push na branch `staging`, move a tag `staging` para o digest recém-construído
-e, na promoção (o merge em `main`), move `stable` para o mesmo digest. A web também: a URL da API, a do socket, a chave do Turnstile, os
+digest (decisão 12.2): o `staging.yml` da API publica só `sha-<sha>` (job
+`Build`) a cada push na branch `staging`, a ação `.github/actions/deploy` move
+a tag `staging` para o digest recém-construído e, na promoção (o merge em
+`main`, pelo `production.yml`), move `stable` para o mesmo digest. A web também: a URL da API, a do socket, a chave do Turnstile, os
 tiles do mapa e o `APP_ENV` são lidos em runtime do Environment do
 Application, não embutidos no build. Diante deste Traefik, o que diferencia
 staging de produção é o domínio configurado em cada Application (o Dokploy dá

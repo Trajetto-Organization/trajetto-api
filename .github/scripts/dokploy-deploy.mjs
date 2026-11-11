@@ -9,13 +9,13 @@
  * compares them). Database backups are Dokploy's own Database backups, not an
  * Application deployed here. Dokploy runs each one as a Swarm service behind
  * its Traefik, which is why the stack is not a Compose app (docs/deploy.md).
- * deploy.yml calls this script once per Application.
+ * The deploy action (.github/actions/deploy) calls it once per Application.
  *
  * What `done` means: Dokploy pulled the Application's tag again and updated
  * the Swarm service, and the manager ACCEPTED the new spec. The rollout
  * itself happens after that, and an image that fails its healthcheck is
  * rolled back by Swarm with the old one still serving. A green run of this
- * script is therefore NOT a converged service: deploy.yml follows the API
+ * script is therefore NOT a converged service: the deploy follows the API
  * deploy with a convergence check (by default, wait-for-version.mjs polling
  * the public /health/liveness for the new commit; or
  * infra/scripts/verify-rollout.sh over SSH).

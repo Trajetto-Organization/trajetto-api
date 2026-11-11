@@ -1,0 +1,200 @@
+name: Pull request
+
+# A pull request into main (docs/deploy.md). It does not validate the code
+# again: staging already did, on the commit the merge promotes, and the
+# merge ref it would test is not what ships (the promote sends the head's
+# build). What it proves instead, in `Staging evidence`:
+#
+#   - main adds only documentation the head does not have: otherwise the
+#     merge would carry code no staging run ever built;
+#   - staging DEPLOYED the head (`staged-<sha>` on the digests of
+#     `sha-<sha>`), or the head only changes documentation since a commit
+#     staging deployed (.github/scripts/staged-build.sh, the same rule as the
+#     promote);
+#   - the `Gate` of that build's staging run is green (check-gate.sh), and,
+#     when the head only adds documentation to that build, the `Gate` of the
+#     head's own run too: it validated that documentation (`Docs`).
+#
+# `Secret scan` and `Staging evidence` are the checks the main ruleset
+# requires. A head with the skip-CI marker runs neither, so it cannot be
+# merged: the marker belongs on a documentation commit in the middle of
+# staging, never at the tip of a pull request.
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+# A newer push to the pull request makes the older run pointless.
+concurrency:
+  group: pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+# `bash -eo pipefail` for every `run:`.
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  # The same scan as every other workflow (INFRA-21), on the merge ref: the
+  # history main would receive.
+  secrets:
+    name: Secret scan
+    runs-on: ubuntu-24.04
+    # Measured under 30 s.
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout repository (full history)
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+
+      - name: Scan every commit for secrets
+        run: |
+          docker run --rm -v "$PWD:/repo" --entrypoint sh \
+            zricethezav/gitleaks:v8.30.1@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f \
+            -c "git config --global --add safe.directory /repo && gitleaks git /repo --redact --no-banner --exit-code 1"
+
+  # The merge promotes the build staging DEPLOYED for the PR head; without it
+  # the promote fails AFTER the merge. This says so on the PR instead, while
+  # it can still be fixed. The image alone (`sha-<sha>`) is not enough: it is
+  # in GHCR as soon as the build pushed it, also when the scan, the staging
+  # deploy or its check failed afterwards. It waits up to 45 min, because
+  # the PR usually opens while staging is still building and deploying that
+  # same commit.
+  evidence:
+    name: Staging evidence
+    runs-on: ubuntu-24.04
+    # Waits up to 45 min by design (90 rounds of 30 s) for the marker, and up
+    # to 20 more (40 rounds) for the Gate of a documentation head.
+    timeout-minutes: 75
+    # `actions: read`: check-gate.sh reads which workflow and branch ran
+    # each Gate.
+    permissions:
+      contents: read
+      packages: read
+      checks: read
+      actions: read
+
+    steps:
+      # The scripts, and the history the documentation rules compare
+      # (blobless: commits and trees only); origin/main comes with it.
+      - name: Checkout the PR head (history and scripts)
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          sparse-checkout: .github/scripts
+
+      # What main has that the head does not, since they parted: only
+      # documentation may be there (a fix to a guide made straight on main).
+      # Code there would reach production in the merge without any staging
+      # run having built it.
+      - name: Check main adds only documentation
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          if ! fork=$(git merge-base HEAD "$BASE_SHA"); then
+            echo "::error::git não achou o ponto em comum entre a cabeça do PR e a main (${BASE_SHA::7})."
+            exit 1
+          fi
+          status=0
+          others=$(bash .github/scripts/docs-only.sh "$fork" "$BASE_SHA") || status=$?
+          case "$status" in
+            0)
+              echo "A main só traz documentação que a cabeça do PR não tem (desde ${fork::7})." >> "$GITHUB_STEP_SUMMARY"
+              ;;
+            1)
+              echo "::error::A main tem código que a cabeça do PR não tem (desde ${fork::7}): $(printf '%s' "$others" | sed -n '1,10p' | paste -sd ',' - | sed 's/,/, /g'). O merge levaria esse código à produção sem nenhum build de staging. Traga a main para a staging, espere o pipeline de staging ficar verde e rode este check de novo."
+              exit 1
+              ;;
+            *) exit 1 ;;
+          esac
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # staged-build.sh: 0 = covered (the head's own marker, or the
+      # documentation rule); 3 or 4 = not yet, keep waiting (4 is a marker on
+      # an older build of the same commit, which a rebuild's deploy
+      # rewrites); anything else = GHCR or git failed, and so does this. Its
+      # answer (`commit`) is the build the merge promotes.
+      - name: Wait for the staging deploy of the PR head
+        id: staged
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          short="${HEAD_SHA::7}"
+          why=""
+          for attempt in $(seq 1 90); do
+            code=0
+            why=$(bash .github/scripts/staged-build.sh "$HEAD_SHA" 2>&1 > /dev/null) || code=$?
+            case "$code" in
+              0)
+                printf '%s\n' "$why"
+                echo "O merge promove exatamente um build que o staging rodou (resumo deste job)." >> "$GITHUB_STEP_SUMMARY"
+                exit 0
+                ;;
+              3 | 4)
+                # A GHCR retry (ghcr.sh) stays visible while this waits.
+                grep '^::warning::' <<< "$why" || true
+                ;;
+              *)
+                printf '%s\n' "$why"
+                exit "$code"
+                ;;
+            esac
+            echo "tentativa ${attempt}/90: ainda sem staged-${short} ($(printf '%s' "$why" | tail -n 1))"
+            sleep 30
+          done
+          echo "::error::O commit ${HEAD_SHA} não tem o marcador staged-${short}: o staging não construiu, não implantou ou não conferiu esse build (ou o run de staging dele ainda não terminou, ou foi superado por um commit mais novo), e ele muda mais que documentação desde o último commit que o staging rodou. Envie-o para a branch staging, espere o pipeline de staging ficar verde e rode este check de novo. O merge em main só promove o que o staging rodou (docs/deploy.md). Último motivo: $(printf '%s' "$why" | tail -n 1)"
+          exit 1
+
+      # The marker says staging deployed the build; this says the validation
+      # that let it through was green (check-gate.sh: 0 green, 3 not, 4 no
+      # finished Gate, 1 the GitHub API did not answer).
+      - name: Check the staging gate of this build
+        env:
+          GH_TOKEN: ${{ github.token }}
+          COMMIT: ${{ steps.staged.outputs.commit }}
+        run: |
+          code=0
+          bash .github/scripts/check-gate.sh "$COMMIT" || code=$?
+          case "$code" in
+            0) ;;
+            3 | 4)
+              echo "::error::O Gate da staging de ${COMMIT::7} não está verde: o merge não promove um build cuja validação não passou. Rode o pipeline de staging desse commit de novo."
+              exit 1
+              ;;
+            *) exit "$code" ;;
+          esac
+
+      # A head that only adds documentation ships the older build above, but
+      # its own staging run validated that documentation (`Docs`: Prettier
+      # and the tests that read the guides). Its Gate must be green too, or a
+      # guide that breaks them would reach main unchecked. It waits, up to
+      # 20 min, for a run still in `Docs`. The head always has a run: a head
+      # with the skip-CI marker runs no pull request check at all.
+      - name: Check the staging gate of the PR head
+        if: steps.staged.outputs.commit != github.event.pull_request.head.sha
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          GATE_WAIT_ROUNDS: "40"
+        run: |
+          code=0
+          bash .github/scripts/check-gate.sh "$HEAD_SHA" || code=$?
+          case "$code" in
+            0) ;;
+            3 | 4)
+              echo "::error::O Gate da staging da cabeça do PR (${HEAD_SHA::7}, que só muda documentação desde o build promovido) não está verde: o Docs dela não passou. Corrija a documentação na staging e rode este check de novo."
+              exit 1
+              ;;
+            *) exit "$code" ;;
+          esac

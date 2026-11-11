@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
 #
 # Does going from one commit to another change only documentation? The one
-# place that answers it for deploy.yml: staged-build.sh (the PR check and the
-# promote) and the staging deploy's branch-head check ask it here.
+# place that answers it for the CI: staged-build.sh (the PR check and the
+# promote), changes.sh (a push of documentation only) and the deploy's
+# branch-head check (.github/actions/deploy) ask it here.
 #
 #   docs-only.sh <from> <to>
 #
 # Documentation is any `*.md` file, anywhere, and anything under `docs/`
-# (the web's docs-only.mjs and the app's deploy.yml use the same rule). No
+# (the web's docs-only.mjs and the app's CI use the same rule). No
 # image carries those: the API's .dockerignore leaves them out, and the AI's
 # Dockerfile copies named files only. So two commits that differ only in
 # them build the same image content.

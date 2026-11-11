@@ -2,7 +2,7 @@
 /**
  * Runs the release step — `prisma migrate deploy` plus the idempotent seeds —
  * on the Dokploy Application trajetto-api-migrate, and waits until it
- * FINISHED: applied, or failed. deploy.yml runs it before the API rolls out,
+ * FINISHED: applied, or failed. The deploy action runs it before the API rolls out,
  * on staging and on the promote, only when the database has not applied
  * this release image yet.
  *

@@ -2,7 +2,7 @@
 #
 # Waits until a Swarm service RUNS the image a deploy shipped, and fails when
 # Swarm rolled the update back instead. Runs on a Swarm manager (the Dokploy
-# host), right after the Dokploy step of deploy.yml. Read-only: it only
+# host), right after the Dokploy step of the deploy action. Read-only: it only
 # inspects.
 #
 # Why: Dokploy's deployment of an Application is `done` as soon as the

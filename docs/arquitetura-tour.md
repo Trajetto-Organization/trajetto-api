@@ -1356,10 +1356,12 @@ flowchart LR
 Uma imagem por serviço, construída uma vez e promovida por digest. Staging e
 produção mudam só o Environment de cada Application do Dokploy.
 
-1. **Branch de trabalho**: `.github/workflows/ci.yml` (Prettier, typecheck,
-   unitários com cobertura, audit, gitleaks).
-2. **Push em `staging`**: `.github/workflows/deploy.yml` roda a validação
-   completa com E2E e constrói as imagens uma vez, em
+1. **Branch de trabalho**: `.github/workflows/ci.yml`, que chama a validação
+   do `validate.yml` (Prettier, typecheck, unitários com cobertura, audit) e
+   o gitleaks, sem E2E.
+2. **Push em `staging`**: `.github/workflows/staging.yml` roda a validação
+   completa com o E2E em 3 jobs paralelos, junta tudo no `Gate` e só então
+   constrói as imagens uma vez, em
    `ghcr.io/trajetto-organization/*:sha-<sha>`, com SBOM, proveniência e Trivy.
    A imagem da IA só é reconstruída quando `infra/ai-ocr` muda e, desde
    28/10/2026, passa por um smoke sem rede antes do push; a web faz o mesmo no
@@ -1369,10 +1371,13 @@ produção mudam só o Environment de cada Application do Dokploy.
    (`.github/scripts/dokploy-deploy.mjs`), na ordem IA → API. Ele espera a
    liveness pública responder o commit novo
    (`.github/scripts/wait-for-version.mjs`) e grava o marcador `staged-<sha>`.
-4. **Produção**: PR de `staging` para `main` com merge commit; a promoção não
-   reconstrói nada. Roda as migrations como job, move a tag `stable` para o
-   mesmo digest e faz o deploy, com aprovação do environment `production`.
-5. **Rollback**: Actions → Deploy → Run workflow na `main` com
+4. **Produção**: PR de `staging` para `main` com merge commit (o `pr.yml`
+   não valida de novo: confere o `staged-<sha>` e o `Gate`); a promoção
+   (`production.yml`) não reconstrói nada. Roda as migrations pela
+   Application, move a tag `stable` para o mesmo digest e faz o deploy, com
+   aprovação do environment `production`, pela mesma ação de deploy do
+   staging.
+5. **Rollback**: Actions → Production → Run workflow na `main` com
    `image_tag=sha-<commit bom>`. O banco não volta junto; por isso toda
    migration é expandir/contrair.
 

@@ -4,77 +4,113 @@ import { resolve } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { hasShell, run, sandbox, type Sandbox } from "./support/shell-harness";
+import { runBlock } from "./support/run-block";
+import { hasShell, sandbox, type Sandbox } from "./support/shell-harness";
 import {
+  allActions,
   allWorkflows,
+  conditionOf,
+  jobOf,
+  readAction,
   readWorkflow,
+  stepNames,
+  stepOf,
   timeoutOf,
-  type Job,
-  type Step,
 } from "./support/workflow-text";
 
 /**
  * A red pipeline means the code is wrong — never the network, a registry, a
  * moving tag or a step that hung (CI audit of 30/10/2026: runs that failed,
- * or passed, for reasons outside the code). What every workflow holds to,
- * so none of those comes back:
+ * or passed, for reasons outside the code). What every workflow and every
+ * composite action holds to, so none of those comes back:
  *
  * - every job has its own timeout (a hung step held the runner up to 6 h of
- *   a 2,000-minute month);
+ *   a 2,000-minute month); a job that calls a reusable workflow cannot have
+ *   one, and the jobs it calls do;
  * - every `run:` is `bash -eo pipefail` (GitHub's default for a step with no
  *   `shell:` has no pipefail: `git ls-remote | cut` failing handed an empty
  *   sha on, and the staging deploy was skipped, green);
  * - Node is the Dockerfile base's exact version, and every image a job pulls
  *   is pinned by digest, the same digest everywhere;
  * - the GitHub cache is an optimisation that never fails a build;
- * - GHCR is read only through ghcr.sh, which tells "not found" from "did
- *   not answer";
+ * - GHCR is read only through ghcr.sh, which tells "not found" from "did not
+ *   answer";
  * - the Prisma engines and Trivy's database are cached, and their download
- *   failing says so instead of failing (or passing) something else.
+ *   failing says so instead of failing (or passing) something else;
+ * - a newer push cancels only a validation, never a build, a deploy or a
+ *   release, and a push of documentation on staging cancels nothing;
+ * - staging's road starts only on the staging branch;
+ * - GHCR down fails only the jobs that cannot do without it;
+ * - names are short statements, never questions (`?`), in every job and
+ *   step.
  *
  * The `run:` blocks that decide are executed here, with the external
  * commands stubbed.
  */
 const ROOT = process.cwd();
 const workflows = allWorkflows();
-const deploy = readWorkflow("deploy.yml");
+const actions = allActions();
 const ci = readWorkflow("ci.yml");
+const validate = readWorkflow("validate.yml");
+const staging = readWorkflow("staging.yml");
+const pr = readWorkflow("pr.yml");
+const production = readWorkflow("production.yml");
+const setup = readAction("setup");
+const deploy = readAction("deploy");
+const siblings = readAction("siblings");
 
-const job = (workflow: typeof deploy, name: string): Job => {
-  const found = workflow.jobs.find((each) => each.name === name);
-
-  expect(found, `${workflow.file} → ${name}`).toBeDefined();
-
-  return found!;
-};
-
-const step = (owner: Job, name: string): Step => {
-  const found = owner.steps.find((each) => each.name === name);
-
-  expect(found, `${owner.name} → ${name}`).toBeDefined();
-
-  return found!;
-};
+/** Every step of every job and of every action, with where it lives. */
+const everyStep = [
+  ...workflows.flatMap((workflow) =>
+    workflow.jobs.flatMap((job) =>
+      job.steps.map((step) => ({
+        where: `${workflow.file} → ${job.name}`,
+        step,
+      })),
+    ),
+  ),
+  ...actions.flatMap((action) =>
+    action.steps.map((step) => ({ where: action.file, step })),
+  ),
+];
 
 /** The Node version of the Dockerfile base: node:<x.y.z>-alpine… */
 const dockerNode = /^FROM node:(\d+\.\d+\.\d+)-alpine/m.exec(
   readFileSync(resolve(ROOT, "Dockerfile"), "utf8"),
 )?.[1];
 
-describe("every job of every workflow", () => {
-  it("has workflows to check", () => {
-    expect(workflows.map((each) => each.file)).toEqual(
-      expect.arrayContaining(["ci.yml", "cloudflare-ranges.yml", "deploy.yml"]),
-    );
+describe("the workflows and actions", () => {
+  it("has the files of the road to production to check", () => {
+    expect(workflows.map((each) => each.file)).toEqual([
+      "ci.yml",
+      "cloudflare-ranges.yml",
+      "pr.yml",
+      "production.yml",
+      "staging.yml",
+      "validate.yml",
+    ]);
+    expect(actions.map((each) => each.name)).toEqual([
+      "deploy",
+      "setup",
+      "siblings",
+    ]);
   });
 
   it.each(workflows.map((each) => [each.file, each] as const))(
-    "%s: every job has its own timeout, with headroom and below GitHub's 6 h",
+    "%s: every job that runs steps has its own timeout, with headroom and below GitHub's 6 h",
     (_, workflow) => {
       expect(workflow.jobs.length).toBeGreaterThan(0);
 
       for (const each of workflow.jobs) {
         const minutes = timeoutOf(each);
+
+        // A job that calls a reusable workflow takes no timeout; the
+        // workflow's own jobs carry theirs (checked in that file).
+        if (each.uses) {
+          expect(minutes, `${workflow.file} → ${each.name}`).toBeUndefined();
+          expect(each.uses).toMatch(/^\.\/\.github\/workflows\/[\w-]+\.yml$/);
+          continue;
+        }
 
         expect(minutes, `${workflow.file} → ${each.name}`).toBeDefined();
         expect(minutes!, each.name).toBeGreaterThanOrEqual(5);
@@ -95,18 +131,91 @@ describe("every job of every workflow", () => {
     },
   );
 
+  it.each(actions.map((each) => [each.file, each] as const))(
+    "%s: names `shell: bash` in every run step (a composite action has no defaults)",
+    (_, action) => {
+      expect(action.text).toContain("\n  using: composite\n");
+
+      const runs = action.steps.filter((step) => step.run);
+
+      expect(runs.length).toBeGreaterThan(0);
+      for (const step of runs) {
+        expect(step.text, `${action.file} → ${step.name}`).toMatch(
+          /\n {6}shell: bash\n/,
+        );
+      }
+    },
+  );
+
   it("keeps the timeouts that cover the measured worst case", () => {
-    // The E2E phases (shared, then the replica files one at a time) on the
-    // 2-vCPU runner took up to 47 min; the staging deploy covers six
-    // Dokploy attempts per service; the PR check waits up to 45 min.
-    expect(timeoutOf(job(deploy, "test"))).toBeGreaterThanOrEqual(90);
-    expect(timeoutOf(job(deploy, "deploy-staging"))).toBeGreaterThanOrEqual(
+    // The slowest E2E job measured on a 2-vCPU replica, about twice over;
+    // the deploys cover six Dokploy attempts per service; the PR check
+    // waits up to 45 min.
+    expect(timeoutOf(jobOf(validate, "e2e"))).toBeGreaterThanOrEqual(25);
+    expect(timeoutOf(jobOf(validate, "checks"))).toBeGreaterThanOrEqual(20);
+    expect(timeoutOf(jobOf(staging, "deploy-staging"))).toBeGreaterThanOrEqual(
       120,
     );
-    expect(timeoutOf(job(deploy, "promote-production"))).toBeGreaterThanOrEqual(
-      120,
+    expect(
+      timeoutOf(jobOf(production, "promote-production")),
+    ).toBeGreaterThanOrEqual(120);
+    expect(timeoutOf(jobOf(pr, "evidence"))).toBeGreaterThan(45);
+  });
+});
+
+describe("the names", () => {
+  // "Is this run still the branch head?" and the like were questions the
+  // log answered with a green tick or a red cross: a name is a short
+  // statement of what the job or step does, the same across the three
+  // repositories when it is the same thing (docs/deploy.md).
+  it("never ask: no job or step name has a question mark", () => {
+    const names = [
+      ...workflows.flatMap((workflow) =>
+        [...workflow.text.matchAll(/^ +(?:- )?name: (.+)$/gm)].map(
+          ([, name]) => `${workflow.file}: ${name}`,
+        ),
+      ),
+      ...actions.flatMap((action) =>
+        [...action.text.matchAll(/^ +(?:- )?name: (.+)$/gm)].map(
+          ([, name]) => `${action.file}: ${name}`,
+        ),
+      ),
+      ...workflows.map((workflow) => {
+        const top = /^name: (.+)$/m.exec(workflow.text)?.[1] ?? "";
+
+        return `${workflow.file}: ${top}`;
+      }),
+    ];
+
+    expect(names.length).toBeGreaterThan(100);
+    expect(names.filter((name) => name.includes("?"))).toEqual([]);
+  });
+
+  it("are the shared ones on the checks of the road to production", () => {
+    const named = (workflow: typeof ci, job: string) =>
+      /^ {4}name: (.+)$/m.exec(jobOf(workflow, job).text)?.[1];
+
+    expect(named(ci, "changes")).toBe("Changes");
+    expect(named(ci, "secrets")).toBe("Secret scan");
+    expect(named(ci, "validate")).toBe("Validate");
+    expect(named(validate, "checks")).toBe("Validate");
+    expect(named(validate, "e2e")).toBe(
+      "E2E (${{ matrix.shard }}/${{ strategy.job-total }})",
     );
-    expect(timeoutOf(job(deploy, "staging-image"))).toBeGreaterThan(45);
+    expect(named(validate, "ai-ocr")).toBe("AI OCR");
+    expect(named(validate, "docs")).toBe("Docs");
+    expect(named(staging, "changes")).toBe("Changes");
+    expect(named(staging, "secrets")).toBe("Secret scan");
+    expect(named(staging, "gate")).toBe("Gate");
+    expect(named(staging, "build")).toBe("Build");
+    expect(named(staging, "image-scan")).toBe("Image scan");
+    expect(named(staging, "deploy-staging")).toBe("Deploy");
+    // The two checks the main ruleset requires.
+    expect(named(pr, "secrets")).toBe("Secret scan");
+    expect(named(pr, "evidence")).toBe("Staging evidence");
+    expect(named(production, "evidence")).toBe("Staging evidence");
+    expect(named(production, "promote-production")).toBe("Deploy");
+    expect(named(production, "release")).toBe("Release");
   });
 });
 
@@ -122,30 +231,33 @@ describe.skipIf(!hasShell("bash"))("every run: block", () => {
   it("is valid bash", () => {
     const broken: string[] = [];
 
-    for (const workflow of workflows) {
-      for (const each of workflow.jobs) {
-        for (const item of each.steps) {
-          if (!item.run) continue;
+    for (const { where, step } of everyStep) {
+      if (!step.run) continue;
 
-          // Expressions are filled in by GitHub before bash sees the script.
-          const script = box.file(
-            "syntax.sh",
-            item.run.replace(/\$\{\{[^}]*\}\}/g, "x"),
-          );
-          const result = spawnSync("bash", ["-n", script], {
-            encoding: "utf8",
-          });
+      // Expressions are filled in by GitHub before bash sees the script.
+      const script = box.file(
+        "syntax.sh",
+        step.run.replace(/\$\{\{[^}]*\}\}/g, "x"),
+      );
+      const result = spawnSync("bash", ["-n", script], { encoding: "utf8" });
 
-          if (result.status !== 0) {
-            broken.push(
-              `${workflow.file} → ${each.name} → ${item.name}: ${result.stderr}`,
-            );
-          }
-        }
+      if (result.status !== 0) {
+        broken.push(`${where} → ${step.name}: ${result.stderr}`);
       }
     }
 
+    expect(everyStep.filter(({ step }) => step.run).length).toBeGreaterThan(40);
     expect(broken).toEqual([]);
+  });
+
+  it("never has an expression of the composite actions' inputs inside the script", () => {
+    // Inputs reach a script through `env`; `${{ inputs.x }}` inside `run:`
+    // is pasted into the shell as code.
+    for (const action of actions) {
+      for (const step of action.steps) {
+        expect(step.run, `${action.file} → ${step.name}`).not.toContain("${{");
+      }
+    }
   });
 });
 
@@ -155,9 +267,9 @@ describe("pinned versions", () => {
   });
 
   it("sets up exactly that Node in every job that runs node, yarn or npx", () => {
-    const values = workflows.flatMap((workflow) =>
-      [...workflow.text.matchAll(/node-version:\s*(\S+)/g)].map(
-        ([, value]) => `${workflow.file}: ${value}`,
+    const values = [...workflows, ...actions].flatMap((each) =>
+      [...each.text.matchAll(/node-version:\s*(\S+)/g)].map(
+        ([, value]) => `${each.file}: ${value}`,
       ),
     );
 
@@ -165,6 +277,10 @@ describe("pinned versions", () => {
     for (const value of values) {
       expect(value).toMatch(new RegExp(`: "${dockerNode}"$`));
     }
+
+    // The two actions set Node up first.
+    expect(setup.steps[0].text).toContain("uses: actions/setup-node@");
+    expect(deploy.steps[0].text).toContain("uses: actions/setup-node@");
 
     for (const workflow of workflows) {
       for (const each of workflow.jobs) {
@@ -175,8 +291,11 @@ describe("pinned versions", () => {
         if (!usesNode) continue;
 
         expect(
-          each.steps.some((item) =>
-            item.text.includes("uses: actions/setup-node@"),
+          each.steps.some(
+            (item) =>
+              item.text.includes("uses: actions/setup-node@") ||
+              item.text.includes("uses: ./.github/actions/setup\n") ||
+              /uses: \.\/\.github\/actions\/setup$/m.test(item.text),
           ),
           `${workflow.file} → ${each.name}`,
         ).toBe(true);
@@ -185,42 +304,33 @@ describe("pinned versions", () => {
   });
 
   it("pins every image a job pulls by digest, the same digest everywhere", () => {
-    const refs = workflows.flatMap((workflow) =>
+    const refs = [...workflows, ...actions].flatMap((each) =>
       [
         // services.*.image
-        ...[...workflow.text.matchAll(/^\s+image:\s*(\S+)/gm)].map(
-          ([, ref]) => ({ key: "image", ref }),
-        ),
+        ...[...each.text.matchAll(/^\s+image:\s*(\S+)/gm)].map(([, ref]) => ({
+          key: "image",
+          ref,
+        })),
         // POSTGRES_IMAGE, TRIVY_IMAGE…
-        ...[...workflow.text.matchAll(/^\s+([A-Z_]+_IMAGE):\s*(\S+)/gm)].map(
+        ...[...each.text.matchAll(/^\s+([A-Z_]+_IMAGE):\s*(\S+)/gm)].map(
           ([, key, ref]) => ({ key, ref }),
         ),
         // Buildx's BuildKit
-        ...[...workflow.text.matchAll(/driver-opts:\s*image=(\S+)/g)].map(
+        ...[...each.text.matchAll(/driver-opts:\s*image=(\S+)/g)].map(
           ([, ref]) => ({ key: "driver-opts", ref }),
         ),
         // `docker run` straight from a registry (gitleaks)
-        ...[
-          ...workflow.text.matchAll(/^\s+(zricethezav\/\S+|aquasec\/\S+)/gm),
-        ].map(([, ref]) => ({ key: "docker run", ref })),
+        ...[...each.text.matchAll(/^\s+(zricethezav\/\S+|aquasec\/\S+)/gm)].map(
+          ([, ref]) => ({ key: "docker run", ref }),
+        ),
       ]
-        .map(({ key, ref }) => ({ file: workflow.file, key, ref }))
+        .map(({ key, ref }) => ({ file: each.file, key, ref }))
         // Our own images go by the digest the job just read (an expression),
         // or are the ones this job just built into the runner's Docker for
-        // the smoke test (`trajetto-…:smoke`), which no registry has. One
-        // more, by name only: RELEASE_IMAGE, the environment tag the release
-        // Application runs, which no job pulls (dokploy-release.mjs only
-        // checks the Application is set to it).
+        // the smoke test (`trajetto-…:smoke`), which no registry has.
         .filter(
-          ({ key, ref }) =>
-            !ref.includes("${{") &&
-            !/^trajetto-[\w-]+:smoke$/.test(ref) &&
-            !(
-              key === "RELEASE_IMAGE" &&
-              /^ghcr\.io\/trajetto-organization\/trajetto-api-migrate:(staging|stable)$/.test(
-                ref,
-              )
-            ),
+          ({ ref }) =>
+            !ref.includes("${{") && !/^trajetto-[\w-]+:smoke$/.test(ref),
         ),
     );
 
@@ -249,22 +359,19 @@ describe("pinned versions", () => {
         "postgres:16-alpine",
         "redis:7-alpine",
         "moby/buildkit:v0.33.1",
+        "aquasec/trivy:0.74.0",
+        "zricethezav/gitleaks:v8.30.1",
       ]),
     );
   });
 
   it("pins BuildKit wherever Buildx is set up", () => {
-    for (const workflow of workflows) {
-      for (const each of workflow.jobs) {
-        for (const item of each.steps) {
-          if (!item.text.includes("uses: docker/setup-buildx-action@"))
-            continue;
+    for (const { where, step } of everyStep) {
+      if (!step.text.includes("uses: docker/setup-buildx-action@")) continue;
 
-          expect(item.text, `${workflow.file} → ${each.name}`).toMatch(
-            /driver-opts: image=moby\/buildkit:v[\d.]+@sha256:[0-9a-f]{64}/,
-          );
-        }
-      }
+      expect(step.text, where).toMatch(
+        /driver-opts: image=moby\/buildkit:v[\d.]+@sha256:[0-9a-f]{64}/,
+      );
     }
   });
 });
@@ -274,14 +381,15 @@ describe("the runner", () => {
   // ours; Playwright 1.56 refused it in the web's suites. Every job runs on
   // the same pinned image, bumped by hand in the three repositories.
   it("is a pinned Ubuntu in every job, never ubuntu-latest", () => {
-    for (const { file, text } of workflows) {
-      const runners = [...text.matchAll(/\n\s+runs-on: (\S+)/g)].map(
-        (match) => match[1],
-      );
+    for (const { file, jobs } of workflows) {
+      for (const job of jobs) {
+        if (job.uses) continue;
 
-      expect(runners.length, file).toBeGreaterThan(0);
-      for (const runner of runners) {
-        expect(runner, file).toMatch(/^ubuntu-\d{2}\.\d{2}$/);
+        const runner = /\n {4}runs-on: (\S+)/.exec(job.text)?.[1];
+
+        expect(runner, `${file} → ${job.name}`).toMatch(
+          /^ubuntu-\d{2}\.\d{2}$/,
+        );
       }
     }
   });
@@ -291,20 +399,14 @@ describe("the type-check", () => {
   // tsc holds about 2.3 GB live here; Node's default heap on a 7-8 GB
   // runner (a private repository's) is about 2 GB, and the check died with
   // "JavaScript heap out of memory" in a 7 GB Linux container (30/10/2026).
-  it("gets a fixed heap with room over what tsc uses, in every workflow that runs it", () => {
-    for (const file of ["ci.yml", "deploy.yml"]) {
-      const { text } = readWorkflow(file);
-      const at = text.indexOf("- name: Type-check");
+  it("gets a fixed heap with room over what tsc uses", () => {
+    const step = stepOf(jobOf(validate, "checks"), "Type-check");
+    const heap = Number(
+      /NODE_OPTIONS: --max-old-space-size=(\d+)/.exec(step.text)?.[1],
+    );
 
-      expect(at, `${file}: passo Type-check`).toBeGreaterThan(-1);
-
-      const step = text.slice(at, text.indexOf("- name:", at + 1));
-      const heap = Number(
-        /NODE_OPTIONS: --max-old-space-size=(\d+)/.exec(step)?.[1],
-      );
-
-      expect(heap, `${file}: heap do tsc`).toBeGreaterThanOrEqual(4096);
-    }
+    expect(heap).toBeGreaterThanOrEqual(4096);
+    expect(step.run).toContain("yarn typecheck");
   });
 });
 
@@ -324,95 +426,347 @@ describe("caches", () => {
   });
 
   it("cache the AI's test build, and the push reads that cache too", () => {
-    for (const workflow of [deploy, ci]) {
-      const build = step(
-        job(workflow, "ai-ocr"),
-        "Build the image and run its tests",
-      ).text;
+    const build = stepOf(
+      jobOf(validate, "ai-ocr"),
+      "Build the image and run its tests",
+    ).text;
 
-      expect(build).toContain("uses: docker/build-push-action@");
-      expect(build).toContain("target: test");
-      expect(build).toContain("cache-from: type=gha,scope=ai-test");
-      expect(build).toContain(
-        "cache-to: type=gha,mode=max,scope=ai-test,ignore-error=true",
-      );
-    }
+    expect(build).toContain("uses: docker/build-push-action@");
+    expect(build).toContain("target: test");
+    expect(build).toContain("cache-from: type=gha,scope=ai-test");
+    expect(build).toContain(
+      "cache-to: type=gha,mode=max,scope=ai-test,ignore-error=true",
+    );
 
-    const push = step(
-      job(deploy, "build-and-push"),
+    const push = stepOf(
+      jobOf(staging, "build"),
       "Build and push the AI image",
     ).text;
 
     expect(push).toContain("type=gha,scope=ai-test");
   });
 
-  it("cache the Prisma engines by their version, before the install", () => {
-    for (const [workflow, name] of [
-      [deploy, "test"],
-      [ci, "validate"],
-    ] as const) {
-      const owner = job(workflow, name);
-      const names = owner.steps.map((item) => item.name);
-      const cache = step(owner, "Cache the Prisma engines").text;
+  it("cache the Prisma engines by their version, before the install, in the one setup", () => {
+    const names = stepNames(setup);
+    const cache = stepOf(setup, "Cache the Prisma engines").text;
 
-      expect(names.indexOf("Prisma engines version")).toBeLessThan(
-        names.indexOf("Cache the Prisma engines"),
-      );
-      expect(names.indexOf("Cache the Prisma engines")).toBeLessThan(
-        names.indexOf("Install dependencies"),
-      );
-      expect(cache).toContain("path: ~/.cache/prisma");
-      expect(cache).toContain(
-        "key: prisma-engines-${{ runner.os }}-${{ steps.prisma-engines.outputs.version }}",
-      );
-    }
-
-    // The E2E migrates: the engine is checked before it.
-    const names = job(deploy, "test").steps.map((item) => item.name);
-
-    expect(names.indexOf("Install dependencies")).toBeLessThan(
-      names.indexOf("Make sure the Prisma schema engine is installed"),
+    expect(names.indexOf("Read the Prisma engines version")).toBeLessThan(
+      names.indexOf("Cache the Prisma engines"),
     );
-    expect(
-      names.indexOf("Make sure the Prisma schema engine is installed"),
-    ).toBeLessThan(names.indexOf("Run E2E tests"));
+    expect(names.indexOf("Cache the Prisma engines")).toBeLessThan(
+      names.indexOf("Install dependencies"),
+    );
+    expect(names.indexOf("Install dependencies")).toBeLessThan(
+      names.indexOf("Check the Prisma schema engine"),
+    );
+    expect(cache).toContain("path: ~/.cache/prisma");
+    expect(cache).toContain(
+      "key: prisma-engines-${{ runner.os }}-${{ steps.prisma-engines.outputs.version }}",
+    );
+    expect(conditionOf(stepOf(setup, "Check the Prisma schema engine"))).toBe(
+      "inputs.schema-engine == 'true'",
+    );
+
+    // The E2E migrates: its setup checks the engine, before the suite runs.
+    const e2e = jobOf(validate, "e2e");
+    const at = stepNames(e2e);
+
+    expect(stepOf(e2e, "Set up the API toolchain").text).toMatch(
+      /uses: \.\/\.github\/actions\/setup\n\s+with:\n\s+schema-engine: "true"/,
+    );
+    expect(at.indexOf("Set up the API toolchain")).toBeLessThan(
+      at.indexOf("Run E2E tests"),
+    );
+  });
+
+  it("install only through the setup action (the frozen lockfile, the same caches)", () => {
+    for (const workflow of workflows) {
+      for (const job of workflow.jobs) {
+        for (const step of job.steps) {
+          expect(
+            step.run,
+            `${workflow.file} → ${job.name} → ${step.name}`,
+          ).not.toMatch(/yarn install/);
+        }
+      }
+    }
   });
 });
 
 describe("GHCR", () => {
   it("is read and written only through ghcr.sh: no swallowed errors", () => {
-    for (const workflow of workflows) {
-      for (const each of workflow.jobs) {
-        for (const item of each.steps) {
-          expect(item.run, `${each.name} → ${item.name}`).not.toMatch(
-            /docker buildx imagetools/,
-          );
-          expect(item.run, `${each.name} → ${item.name}`).not.toMatch(
-            /2>\s*\/dev\/null\s*\|\|\s*true/,
-          );
-        }
-      }
+    for (const { where, step } of everyStep) {
+      expect(step.run, `${where} → ${step.name}`).not.toMatch(
+        /docker buildx imagetools/,
+      );
+      expect(step.run, `${where} → ${step.name}`).not.toMatch(
+        /2>\s*\/dev\/null\s*\|\|\s*true/,
+      );
     }
 
+    expect(staging.text).toContain("bash .github/scripts/ghcr.sh digest");
+    expect(staging.text).toContain("bash .github/scripts/ghcr.sh tag");
     expect(deploy.text).toContain("bash .github/scripts/ghcr.sh digest");
     expect(deploy.text).toContain("bash .github/scripts/ghcr.sh tag");
   });
 
-  it("is reachable by every job that calls the script: it checks the scripts out", () => {
-    for (const each of deploy.jobs) {
-      const calls = each.steps.some((item) =>
-        /bash \.github\/scripts\//.test(item.run),
-      );
+  it("is reachable by every job that calls a script or a local action: it checks the repository out first", () => {
+    for (const workflow of workflows) {
+      for (const each of workflow.jobs) {
+        const at = each.steps.findIndex(
+          (item) =>
+            /bash \.github\/scripts\//.test(item.run) ||
+            /uses: \.\/\.github\/actions\//.test(item.text),
+        );
 
-      if (!calls) continue;
+        if (at < 0) continue;
 
-      expect(
-        each.steps.some((item) =>
-          item.text.includes("uses: actions/checkout@"),
-        ),
-        each.name,
-      ).toBe(true);
+        expect(
+          each.steps
+            .slice(0, at)
+            .some((item) => item.text.includes("uses: actions/checkout@")),
+          `${workflow.file} → ${each.name}`,
+        ).toBe(true);
+      }
     }
+  });
+
+  it("the deploy jobs check out the action and the scripts it runs", () => {
+    for (const [workflow, job] of [
+      [staging, "deploy-staging"],
+      [production, "promote-production"],
+    ] as const) {
+      const checkout = jobOf(workflow, job).steps[0].text;
+
+      expect(checkout, job).toContain("uses: actions/checkout@");
+      expect(checkout, job).toMatch(
+        /sparse-checkout: \|\n\s+\.github\/actions\n\s+\.github\/scripts\n/,
+      );
+    }
+  });
+});
+
+describe("cancelling", () => {
+  /** Every concurrency block: where, its group and cancel-in-progress. */
+  const blocks = workflows.flatMap((workflow) =>
+    [
+      ...workflow.text.matchAll(
+        /\n( *)concurrency:\n\s+group: (.+)\n\s+cancel-in-progress: (.+)\n/g,
+      ),
+    ].map(([, indent, group, cancel]) => ({
+      file: workflow.file,
+      level: indent.length === 0 ? "workflow" : "job",
+      group: group.trim(),
+      cancel: cancel.trim(),
+    })),
+  );
+
+  /** The group of staging's validation, as the expression picks it. */
+  const STAGING_GROUP =
+    "${{ needs.changes.outputs.docs == 'true' && format('staging-docs-{0}', github.run_id) || 'staging-validate' }}";
+
+  const stagingGroup = (docs: boolean, runId: string) => {
+    const [, docsFormat, codeGroup] =
+      /^\$\{\{ needs\.changes\.outputs\.docs == 'true' && format\('([^']+)', github\.run_id\) \|\| '([^']+)' \}\}$/.exec(
+        STAGING_GROUP,
+      ) ?? [];
+
+    return docs ? docsFormat.replace("{0}", runId) : codeGroup;
+  };
+
+  it("cancels only a superseded validation: a work branch, a pull request, staging's validation", () => {
+    expect(
+      blocks
+        .filter((block) => block.cancel === "true")
+        .map((block) => block.group),
+    ).toEqual([
+      "ci-${{ github.ref }}",
+      "pr-${{ github.event.pull_request.number }}",
+      STAGING_GROUP,
+    ]);
+
+    // staging's is on the job that calls validate.yml, never on the run:
+    // the build and the deploy of a run that got that far always finish.
+    expect(jobOf(staging, "validate").text).toContain(
+      `\n    concurrency:\n      group: ${STAGING_GROUP}\n      cancel-in-progress: true\n`,
+    );
+    expect(staging.text).not.toMatch(/\nconcurrency:/);
+    expect(production.text).not.toMatch(/\nconcurrency:/);
+  });
+
+  // A documentation push builds nothing, so the code run under it is the
+  // one that deploys (the branch-head check lets it). In the code runs'
+  // group it cancelled that validation, and staging stayed on an older
+  // build with nothing red.
+  it("lets a push of code cancel staging's validation, and a push of documentation cancel none", () => {
+    expect(stagingGroup(false, "101")).toBe("staging-validate");
+    expect(stagingGroup(false, "102")).toBe("staging-validate");
+    expect(stagingGroup(true, "101")).not.toBe("staging-validate");
+    expect(stagingGroup(true, "101")).not.toBe(stagingGroup(true, "102"));
+  });
+
+  it("runs one deploy per environment at a time, never cut midway", () => {
+    expect(blocks.filter((block) => block.cancel === "false")).toEqual([
+      {
+        file: "production.yml",
+        level: "job",
+        group: "promote-production",
+        cancel: "false",
+      },
+      {
+        file: "staging.yml",
+        level: "job",
+        group: "deploy-staging",
+        cancel: "false",
+      },
+    ]);
+  });
+
+  it("skips the Gate, instead of failing it, when a newer push cancelled the validation", () => {
+    expect(jobOf(staging, "gate").text).toContain(
+      "\n    if: ${{ github.ref == 'refs/heads/staging' && !cancelled() && needs.validate.result != 'cancelled' }}\n",
+    );
+  });
+});
+
+describe("the staging road", () => {
+  const ON_STAGING = "github.ref == 'refs/heads/staging'";
+
+  /** A job's own `if:` (not one of its steps'), or "". */
+  const jobIf = (job: (typeof staging.jobs)[number]) =>
+    /^ {4}if: (.+)$/m.exec(job.text)?.[1] ?? "";
+
+  // Run workflow takes any branch, and the form picks main (the default
+  // branch): left there, or on a work branch, the road built that ref, ran
+  // its migrations on staging's database and wrote `staged-<7>` and a
+  // green Gate on a commit staging never had — the evidence a pull request
+  // of that branch into main would accept.
+  it("starts only on the staging branch: every job checks the ref or needs one that does", () => {
+    const guarded = new Set<string>();
+
+    for (const each of staging.jobs) {
+      const condition = jobIf(each);
+      const needs = (/^ {4}needs: (.+)$/m.exec(each.text)?.[1] ?? "")
+        .replace(/[[\]]/g, "")
+        .split(",")
+        .map((name) => name.trim())
+        .filter(Boolean);
+
+      if (condition.includes(ON_STAGING)) {
+        guarded.add(each.name);
+      } else {
+        // Skipped with what it needs (no `always()`/`!cancelled()`).
+        expect(condition, each.name).not.toMatch(/always\(\)|cancelled\(\)/);
+        expect(
+          needs.some((name) => guarded.has(name)),
+          `${each.name} precisa de um job que confere a branch`,
+        ).toBe(true);
+        guarded.add(each.name);
+      }
+    }
+
+    // Where it publishes and deploys, it says so itself.
+    for (const name of [
+      "changes",
+      "secrets",
+      "gate",
+      "build",
+      "deploy-staging",
+    ]) {
+      expect(jobIf(jobOf(staging, name)), name).toContain(ON_STAGING);
+    }
+    expect(guarded.size).toBe(staging.jobs.length);
+  });
+});
+
+describe("what a push builds", () => {
+  it("documentation only: the secret scan and Docs, no image", () => {
+    for (const workflow of [ci, staging]) {
+      const changes = jobOf(workflow, "changes");
+      const classify = stepOf(changes, "Classify the push");
+
+      expect(classify.run).toMatch(
+        /^bash \.github\/scripts\/changes\.sh (branch|staging)$/,
+      );
+      expect(classify.text).toContain("BEFORE: ${{ github.event.before }}");
+      expect(jobOf(workflow, "validate").text).toContain(
+        "docs: ${{ needs.changes.outputs.docs == 'true' }}",
+      );
+    }
+
+    expect(jobOf(staging, "build").text).toContain(
+      "if: github.ref == 'refs/heads/staging' && needs.changes.outputs.docs != 'true'",
+    );
+    expect(jobOf(validate, "docs").text).toContain("if: ${{ inputs.docs }}");
+    expect(stepOf(jobOf(validate, "docs"), "Run the unit tests").run).toBe(
+      "yarn test --reporter=basic",
+    );
+
+    for (const job of ["checks", "e2e", "ai-ocr"]) {
+      expect(jobOf(validate, job).text, job).toMatch(
+        /\n {4}if: \$\{\{ !inputs\.docs( && inputs\.e2e)? \}\}\n/,
+      );
+    }
+  });
+
+  // `lint:check` is `prettier --check .`, which reads *.md and docs/ too: a
+  // documentation push that skipped it turned the NEXT push of code red,
+  // on a file that push never touched. And the documentation tests resolve
+  // the links and ADRs a guide cites in the siblings, skipping themselves
+  // without them.
+  it("documentation only: Prettier and the siblings too, as in Validate", () => {
+    for (const job of ["checks", "docs"]) {
+      const each = jobOf(validate, job);
+      const names = stepNames(each);
+
+      expect(stepOf(each, "Lint").run, job).toBe("yarn lint:check");
+      expect(
+        stepOf(each, "Check out the web and the app beside the API").text,
+        job,
+      ).toContain(
+        "uses: ./.github/actions/siblings\n        with:\n          token: ${{ secrets.CLIENT_REPOS_READ_TOKEN }}\n",
+      );
+      // Out of the workspace before the install, Prettier and tsc.
+      expect(
+        names.indexOf("Check out the web and the app beside the API"),
+        job,
+      ).toBeLessThan(names.indexOf("Set up the API toolchain"));
+    }
+
+    expect(stepNames(siblings)).toEqual([
+      "Check the client checkout token",
+      "Pick the sibling branches",
+      "Check out the web next to this repository",
+      "Check out the app next to this repository",
+      "Move the clients beside the API",
+    ]);
+  });
+
+  it("runs the whole E2E suite on every push of code to staging, and on a work branch only on request", () => {
+    expect(jobOf(staging, "validate").text).toContain("e2e: true");
+    expect(jobOf(ci, "validate").text).toContain(
+      "e2e: ${{ github.event_name == 'workflow_dispatch' && inputs.e2e == true }}",
+    );
+  });
+
+  it("runs on every push, documentation included (the Docs job), with no paths filter", () => {
+    for (const workflow of workflows) {
+      expect(workflow.text, workflow.file).not.toMatch(/paths(-ignore)?:/);
+    }
+  });
+
+  // The manual AI contract reads the same test environment as every other
+  // job: one `env` block, in validate.yml, not a copy in ci.yml.
+  it("runs the AI local contract only on ci.yml's Run workflow, under validate.yml's environment", () => {
+    expect(jobOf(validate, "ai-local-e2e").text).toContain(
+      "if: ${{ !inputs.docs && inputs.ai_local }}",
+    );
+    expect(jobOf(ci, "validate").text).toContain(
+      "ai_local: ${{ github.event_name == 'workflow_dispatch' }}",
+    );
+    expect(jobOf(staging, "validate").text).not.toContain("ai_local");
+    expect(ci.text).not.toMatch(/^env:/m);
+    expect(validate.text).toMatch(/^env:\n {2}NODE_ENV: test\n/m);
   });
 });
 
@@ -447,54 +801,82 @@ describe.skipIf(!hasShell("bash"))("the blocks that decide, run", () => {
     );
   }
 
-  function exec(
+  const exec = (
     script: string,
     env: Record<string, string> = {},
     cwd?: string,
-  ) {
-    const output = `${box.root}/output`;
-    const summary = `${box.root}/summary`;
+  ) => runBlock(box, script, env, cwd);
 
-    writeFileSync(output, "");
-    writeFileSync(summary, "");
+  describe("the Gate", () => {
+    const GATE = stepOf(
+      jobOf(staging, "gate"),
+      "Check the validation results",
+    ).run;
+    const green = {
+      CHANGES: "success",
+      SECRETS: "success",
+      VALIDATE: "success",
+    };
 
-    // As GitHub runs a `run:` block with `shell: bash`.
-    const file = box.file("block.sh", `set -eo pipefail\n${script}`);
-    const result = run("bash", file, [], {
-      bin: box.bin,
-      cwd,
-      env: {
-        GITHUB_OUTPUT: output,
-        GITHUB_STEP_SUMMARY: summary,
-        ...env,
-      },
+    it("passes only when the classification, the scan and the whole validation passed", () => {
+      const result = exec(GATE, green);
+
+      expect(result.status, result.log).toBe(0);
+      expect(result.summary).toContain("Gate:");
     });
 
-    return {
-      ...result,
-      log: result.stdout + result.stderr,
-      outputs: readFileSync(output, "utf8"),
-      summary: readFileSync(summary, "utf8"),
-    };
-  }
+    it.each([
+      ["SECRETS", "failure", "Secret scan (failure)"],
+      ["VALIDATE", "failure", "Validate (failure)"],
+      ["VALIDATE", "skipped", "Validate (skipped)"],
+      ["CHANGES", "failure", "Changes (failure)"],
+    ])("fails when %s is %s", (key, value, said) => {
+      const result = exec(GATE, { ...green, [key]: value });
+
+      expect(result.status).toBe(1);
+      expect(result.log).toContain(`::error::O Gate não passa: ${said}`);
+    });
+
+    it("needs exactly those, and the Build needs it and the scan", () => {
+      expect(jobOf(staging, "gate").text).toContain(
+        "needs: [changes, secrets, validate]",
+      );
+      expect(jobOf(staging, "build").text).toContain(
+        "needs: [changes, gate, secrets]",
+      );
+      expect(jobOf(staging, "image-scan").text).toContain("needs: build");
+      expect(jobOf(staging, "deploy-staging").text).toContain(
+        "needs: [build, image-scan]",
+      );
+    });
+  });
 
   describe("the branch-head check of the staging deploy", () => {
-    const HEAD = step(
-      job(deploy, "deploy-staging"),
-      "Is this run still the branch head?",
-    ).run;
+    const HEAD = stepOf(deploy, "Check run is branch head").run;
     const SHA = "abcdef0123456789abcdef0123456789abcdef01";
+    const env = {
+      GITHUB_REF: "refs/heads/staging",
+      GITHUB_SHA: SHA,
+      REQUIRED: "true",
+    };
+
+    it("is skipped where it is not required: production deploys what was approved", () => {
+      box.stub("git", "exit 99");
+
+      const result = exec(HEAD, { ...env, REQUIRED: "false" });
+
+      expect(result.status, result.log).toBe(0);
+      expect(result.output).toBe("current=true\n");
+      expect(box.calls("git")).toEqual([]);
+    });
 
     it("deploys when the read sha is this run's", () => {
       box.stub("git", `printf '%s\\trefs/heads/staging\\n' "${SHA}"`);
 
-      const result = exec(HEAD, {
-        GITHUB_REF: "refs/heads/staging",
-        GITHUB_SHA: SHA,
-      });
+      const result = exec(HEAD, env);
 
       expect(result.status, result.log).toBe(0);
-      expect(result.outputs).toBe("current=true\n");
+      expect(result.output).toBe("current=true\n");
     });
 
     it("tries a failed or empty read again, and only a valid sha decides", () => {
@@ -509,13 +891,10 @@ describe.skipIf(!hasShell("bash"))("the blocks that decide, run", () => {
         ].join("\n"),
       );
 
-      const result = exec(HEAD, {
-        GITHUB_REF: "refs/heads/staging",
-        GITHUB_SHA: SHA,
-      });
+      const result = exec(HEAD, env);
 
       expect(result.status, result.log).toBe(0);
-      expect(result.outputs).toBe("current=true\n");
+      expect(result.output).toBe("current=true\n");
       expect(result.log.match(/::warning::A leitura da cabeça/g)).toHaveLength(
         2,
       );
@@ -524,13 +903,10 @@ describe.skipIf(!hasShell("bash"))("the blocks that decide, run", () => {
     it("fails, instead of skipping the deploy green, when GitHub never answers", () => {
       box.stub("git", "exit 128");
 
-      const result = exec(HEAD, {
-        GITHUB_REF: "refs/heads/staging",
-        GITHUB_SHA: SHA,
-      });
+      const result = exec(HEAD, env);
 
       expect(result.status).toBe(1);
-      expect(result.outputs).toBe("");
+      expect(result.output).toBe("");
       expect(result.log).toMatch(/::error::Não deu para ler a cabeça/);
       expect(box.calls("git")).toHaveLength(3);
     });
@@ -569,8 +945,8 @@ describe.skipIf(!hasShell("bash"))("the blocks that decide, run", () => {
       );
     }
 
-    const runHead = () =>
-      exec(HEAD, { GITHUB_REF: "refs/heads/staging", GITHUB_SHA: SHA });
+    // docs-only.sh is read from the workspace, as in the job.
+    const runHead = () => exec(HEAD, env, ROOT);
 
     it("leaves staging to a newer run that changes code, green", () => {
       newerHead(["docs/deploy.md", "src/server.ts"]);
@@ -578,19 +954,19 @@ describe.skipIf(!hasShell("bash"))("the blocks that decide, run", () => {
       const result = runHead();
 
       expect(result.status, result.log).toBe(0);
-      expect(result.outputs).toBe("current=false\n");
+      expect(result.output).toBe("current=false\n");
       expect(result.log).toMatch(
         /::notice::staging já está em f{40}: este run/,
       );
     });
 
-    it("deploys anyway when the newer head only adds documentation (a [skip ci] commit runs no pipeline)", () => {
+    it("deploys anyway when the newer head only adds documentation (a documentation push builds nothing)", () => {
       newerHead(["docs/deploy.md", "README.md", "infra/traefik/README.md"]);
 
       const result = runHead();
 
       expect(result.status, result.log).toBe(0);
-      expect(result.outputs).toBe("current=true\n");
+      expect(result.output).toBe("current=true\n");
       expect(result.log).toMatch(/só acrescenta documentação a este build/);
       expect(
         box.calls("git").some((call) => call.includes("diff --no-renames")),
@@ -603,7 +979,7 @@ describe.skipIf(!hasShell("bash"))("the blocks that decide, run", () => {
       const result = runHead();
 
       expect(result.status, result.log).toBe(0);
-      expect(result.outputs).toBe("current=false\n");
+      expect(result.output).toBe("current=false\n");
       // Not a descendant: nothing to compare.
       expect(box.calls("git").some((call) => call.includes("diff"))).toBe(
         false,
@@ -616,7 +992,7 @@ describe.skipIf(!hasShell("bash"))("the blocks that decide, run", () => {
       const result = runHead();
 
       expect(result.status, result.log).toBe(0);
-      expect(result.outputs).toBe("current=true\n");
+      expect(result.output).toBe("current=true\n");
       expect(
         result.log.match(/::warning::A busca de f{40} falhou/g),
       ).toHaveLength(1);
@@ -628,7 +1004,7 @@ describe.skipIf(!hasShell("bash"))("the blocks that decide, run", () => {
       const result = runHead();
 
       expect(result.status).toBe(1);
-      expect(result.outputs).toBe("");
+      expect(result.output).toBe("");
       expect(result.log).toMatch(/::error::Não deu para buscar f{40}/);
       expect(
         box.calls("git").filter((call) => call.startsWith("git fetch")),
@@ -641,16 +1017,32 @@ describe.skipIf(!hasShell("bash"))("the blocks that decide, run", () => {
       const result = runHead();
 
       expect(result.status).toBe(1);
-      expect(result.outputs).toBe("");
+      expect(result.output).toBe("");
       expect(result.log).toMatch(/::error::git merge-base não comparou/);
+    });
+
+    it("comes first, and every later step of the deploy waits on its answer", () => {
+      const names = stepNames(deploy);
+      const head = names.indexOf("Check run is branch head");
+
+      expect(head).toBe(1);
+      for (const step of deploy.steps.slice(head + 1)) {
+        expect(conditionOf(step), step.name).toMatch(
+          /^steps\.head\.outputs\.current == 'true'( &&|$)/,
+        );
+      }
+      expect(jobOf(staging, "deploy-staging").text).toContain(
+        'require-branch-head: "true"',
+      );
+      expect(jobOf(production, "promote-production").text).toContain(
+        'require-branch-head: "false"',
+      );
     });
   });
 
   describe("the Prisma engines", () => {
     it("are keyed by the engines version yarn.lock resolves", () => {
-      const result = exec(
-        step(job(deploy, "test"), "Prisma engines version").run,
-      );
+      const result = exec(stepOf(setup, "Read the Prisma engines version").run);
       const lock = readFileSync(resolve(ROOT, "yarn.lock"), "utf8").replace(
         /\r\n/g,
         "\n",
@@ -662,13 +1054,10 @@ describe.skipIf(!hasShell("bash"))("the blocks that decide, run", () => {
 
       expect(result.status, result.log).toBe(0);
       expect(version).toBeTruthy();
-      expect(result.outputs).toBe(`version=${version}\n`);
+      expect(result.output).toBe(`version=${version}\n`);
     });
 
-    const CHECK = step(
-      job(deploy, "test"),
-      "Make sure the Prisma schema engine is installed",
-    ).run;
+    const CHECK = stepOf(setup, "Check the Prisma schema engine").run;
 
     function tree(engine: boolean, postinstallDownloads: boolean) {
       if (engine) {
@@ -720,9 +1109,117 @@ describe.skipIf(!hasShell("bash"))("the blocks that decide, run", () => {
     });
   });
 
+  describe("the AI pytest, skipped for a source that already passed it", () => {
+    const LOOKUP = stepOf(
+      jobOf(validate, "ai-ocr"),
+      "Look up the AI image for this source",
+    ).run;
+    const TREE = "1234567890abcdef1234567890abcdef12345678";
+
+    beforeEach(() => {
+      box.stub("git", `printf '%s\\n' "${TREE}"`);
+      box.file(".github/scripts/ghcr.sh", 'exec sh "$STUB_GHCR" "$@"\n');
+    });
+
+    const lookup = (ghcr: string, force = "false", loggedIn = "true") => {
+      const stub = box.file("ghcr-stub.sh", ghcr);
+
+      return exec(
+        LOOKUP,
+        { FORCE: force, LOGGED_IN: loggedIn, STUB_GHCR: stub },
+        box.root,
+      );
+    };
+
+    it("ends the job when an image of the same infra/ai-ocr exists", () => {
+      const result = lookup(`printf 'sha256:${"a".repeat(64)}\\n'`);
+
+      expect(result.status, result.log).toBe(0);
+      expect(result.output).toBe("test=false\n");
+      expect(result.summary).toContain("já passou no pytest");
+    });
+
+    it("tests when there is none, when GHCR does not answer, or when forced", () => {
+      expect(lookup("exit 0").output).toBe("test=true\n");
+
+      const down = lookup("exit 1");
+
+      expect(down.status, down.log).toBe(0);
+      expect(down.output).toBe("test=true\n");
+      expect(down.log).toMatch(/::warning::O GHCR não respondeu/);
+
+      expect(
+        lookup(`printf 'sha256:${"a".repeat(64)}\\n'`, "true").output,
+      ).toBe("test=true\n");
+    });
+
+    // The login used to be docker/login-action: GHCR down failed the job
+    // there, and the fallback above never ran — on a work branch, whose
+    // AI job used not to talk to GHCR at all.
+    it("tests, without asking GHCR, when the login to it failed", () => {
+      const result = lookup(
+        `printf 'sha256:${"a".repeat(64)}\\n'`,
+        "false",
+        "false",
+      );
+
+      expect(result.status, result.log).toBe(0);
+      expect(result.output).toBe("test=true\n");
+      expect(result.log).toMatch(/::warning::Sem login no GHCR/);
+    });
+
+    it("logs in through ghcr.sh, which retries, and never fails the job on it", () => {
+      for (const [workflow, job, key] of [
+        [validate, "ai-ocr", "ok"],
+        [staging, "changes", "login"],
+      ] as const) {
+        const login = stepOf(
+          jobOf(workflow, job),
+          "Log in to GitHub Container Registry",
+        );
+
+        expect(login.text, job).not.toContain("docker/login-action");
+        expect(login.text, job).toContain("id: ghcr");
+        expect(login.run, job).toMatch(
+          /^if bash \.github\/scripts\/ghcr\.sh login; then\n/,
+        );
+
+        const up = box.file("ghcr-up.sh", "exit 0\n");
+        const gone = box.file("ghcr-down.sh", "exit 1\n");
+        const ok = exec(login.run, { STUB_GHCR: up }, box.root);
+        const down = exec(login.run, { STUB_GHCR: gone }, box.root);
+
+        expect(ok.status, ok.log).toBe(0);
+        expect(down.status, down.log).toBe(0);
+        expect(ok.outputs[key], job).toBe(key === "ok" ? "true" : "ok");
+        expect(down.outputs[key], job).toBe(key === "ok" ? "false" : "failed");
+      }
+      expect(
+        stepOf(jobOf(staging, "changes"), "Classify the push").text,
+      ).toContain("GHCR_LOGIN: ${{ steps.ghcr.outputs.login }}");
+    });
+
+    it("builds and tests only on that answer", () => {
+      const job = jobOf(validate, "ai-ocr");
+
+      for (const name of [
+        "Set up Docker Buildx",
+        "Build the image and run its tests",
+      ]) {
+        expect(conditionOf(stepOf(job, name)), name).toBe(
+          "steps.ai-source.outputs.test == 'true'",
+        );
+      }
+      expect(job.text).toContain("packages: read");
+      expect(jobOf(staging, "validate").text).toContain(
+        "force_ai: ${{ inputs.force_ai_build == true }}",
+      );
+    });
+  });
+
   describe("Trivy's vulnerability database", () => {
-    const DOWNLOAD = step(
-      job(deploy, "build-and-push"),
+    const DOWNLOAD = stepOf(
+      jobOf(staging, "image-scan"),
       "Download the vulnerability database",
     ).run;
 
@@ -735,7 +1232,7 @@ describe.skipIf(!hasShell("bash"))("the blocks that decide, run", () => {
       });
 
       expect(result.status, result.log).toBe(0);
-      expect(result.outputs).toBe("db=fresh\n");
+      expect(result.output).toBe("db=fresh\n");
 
       const [call] = box.calls("docker");
 
@@ -761,7 +1258,7 @@ describe.skipIf(!hasShell("bash"))("the blocks that decide, run", () => {
       });
 
       expect(result.status, result.log).toBe(0);
-      expect(result.outputs).toBe("db=cached\n");
+      expect(result.output).toBe("db=cached\n");
       expect(box.calls("docker")).toHaveLength(3);
       expect(result.log).toMatch(
         /::warning::Trivy: falha no download do banco.*2026-10-29/,
@@ -778,14 +1275,14 @@ describe.skipIf(!hasShell("bash"))("the blocks that decide, run", () => {
       });
 
       expect(result.status, result.log).toBe(0);
-      expect(result.outputs).toBe("db=missing\n");
+      expect(result.output).toBe("db=missing\n");
       expect(result.summary).toContain("o scan não rodou");
     });
   });
 
   describe("the image scan", () => {
-    const SCAN = step(
-      job(deploy, "build-and-push"),
+    const SCAN = stepOf(
+      jobOf(staging, "image-scan"),
       "Scan the images for fixable critical vulnerabilities",
     );
 
@@ -799,13 +1296,16 @@ describe.skipIf(!hasShell("bash"))("the blocks that decide, run", () => {
       DB: db,
     });
 
-    it("has no continue-on-error left to hide a broken scan", () => {
+    it("has no continue-on-error left to hide a broken scan, and reads the images the Build pushed", () => {
       expect(SCAN.text).not.toContain("continue-on-error");
       expect(SCAN.text).toContain(
         "ENFORCE: ${{ vars.IMAGE_SCAN_ENFORCE == 'true' }}",
       );
       expect(SCAN.run).toContain("--skip-db-update");
       expect(SCAN.run).toContain("--exit-code 3");
+      for (const output of ["api_digest", "migrate_digest", "ai_digest"]) {
+        expect(SCAN.text).toContain(`@\${{ needs.build.outputs.${output} }}`);
+      }
     });
 
     it("passes clean images and writes each verdict in the summary", () => {

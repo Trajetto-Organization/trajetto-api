@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
+import { runBlock } from "./support/run-block";
 import {
   hasShell,
   repoFile,
@@ -9,6 +10,17 @@ import {
   sandbox,
   type Sandbox,
 } from "./support/shell-harness";
+import {
+  allActions,
+  allWorkflows,
+  conditionOf,
+  jobOf,
+  readAction,
+  readWorkflow,
+  stepNames,
+  stepOf,
+  type Job,
+} from "./support/workflow-text";
 
 /**
  * Migrations as ONE release step, before the rollout — not at the boot of
@@ -18,197 +30,127 @@ import {
  * with `finished_at` NULL in `_prisma_migrations`, and from then on every
  * `migrate deploy` of every image version — the old one included — refused to
  * run (P3009). The next restart of any replica was an outage until someone
- * resolved it by hand. Now the staging deploy and the promote run the step
- * on the Dokploy Application trajetto-api-migrate (the release image, on the
- * environment's tag) and wait for its outcome (dokploy-release.mjs, tested
+ * resolved it by hand. Now the deploy of each environment
+ * (.github/actions/deploy, for staging and production) runs the step on the
+ * Dokploy Application trajetto-api-migrate (the release image, on the
+ * environment's tag) and waits for its outcome (dokploy-release.mjs, tested
  * in dokploy-release.test.ts): a failing migration fails one step, no tag of
  * the API or the AI moves and the running replicas never notice. The API
  * image cannot migrate at all: it carries no Prisma CLI.
  *
  * And only when needed: the step runs when the environment's database has
- * not applied this release image yet (`<env>-applied`, moved only after a
+ * not applied this release image yet (`<tag>-applied`, moved only after a
  * step that finished). A push that changes no migration reuses the release
  * image (migrate-source.sh) and runs nothing.
  */
 const bash = hasShell("bash");
 
-const workflow = readFileSync(
-  repoFile(".github/workflows/deploy.yml"),
-  "utf8",
-).replace(/\r\n/g, "\n");
+const deploy = readAction("deploy");
+const staging = readWorkflow("staging.yml");
+const production = readWorkflow("production.yml");
+const evidence = jobOf(production, "evidence");
 
-function stepsOf(name: string) {
-  const start = workflow.indexOf(`\n  ${name}:`);
-  const end = workflow.indexOf("\n  # ──", start + 1);
-  const job = workflow.slice(start, end === -1 ? undefined : end);
-  const steps = job.split(/\n {6}- name: /).slice(1);
-  const index = (step: string) =>
-    steps.findIndex((each) => each.startsWith(step));
-  const text = (step: string) => {
-    const at = index(step);
-
-    expect(at, step).toBeGreaterThan(-1);
-
-    return steps[at];
-  };
-
-  return { steps, index, text };
-}
-
-/** A step's `run: |` block, dedented. */
-function runBlock(stepText: string): string {
-  const lines = stepText.split("\n");
-  const at = lines.findIndex((line) => /^\s+run: \|$/.test(line));
-  const indent = lines[at].search(/\S/) + 2;
-  const body: string[] = [];
-
-  for (const line of lines.slice(at + 1)) {
-    if (line.trim() !== "" && line.search(/\S/) < indent) break;
-    body.push(line.slice(indent));
-  }
-
-  return body.join("\n");
-}
-
-const DECIDE = "Do the migrations need to run?";
-
-const JOBS = [
-  {
-    job: "deploy-staging",
-    configured: "Is the staging deploy configured?",
-    move: "Move the release image's staging tag to this build",
-    release: "Run the database migrations on staging (Dokploy)",
-    record: "Record the migrations as applied on staging",
-    tag: "staging",
-    later: [
-      "Move the AI's staging tag to this build",
-      "Deploy the AI service to staging (Dokploy)",
-      "Move staging to this build",
-      "Deploy to staging (Dokploy)",
-    ],
-  },
-  {
-    job: "promote-production",
-    configured: "Is the production deploy configured?",
-    move: "Move the release image's stable tag to this build",
-    release: "Run the database migrations on production (Dokploy)",
-    record: "Record the migrations as applied on production",
-    tag: "stable",
-    later: [
-      "Promote image to stable",
-      "Promote the AI image to stable",
-      "Deploy the AI service to production (Dokploy)",
-      "Deploy to production (Dokploy)",
-    ],
-  },
+const DECIDE = "Decide migrations";
+const SETTINGS = "Check deploy settings";
+const MOVE = "Move the release image tag to this build";
+const RELEASE = "Run the database migrations (Dokploy)";
+const RECORD = "Record the migrations as applied";
+const LATER = [
+  "Move the AI tag to this build",
+  "Deploy the AI service (Dokploy)",
+  "Move the API tag to this build",
+  "Deploy the API (Dokploy)",
 ];
 
-describe("the deploy workflows", () => {
-  it.each(JOBS)(
-    "$job decides, moves the tag, migrates and records it, in that order, before any service moves",
-    ({ job, configured, move, release, record, later }) => {
-      const { index } = stepsOf(job);
-      const order = [configured, DECIDE, move, release, record].map(index);
+/** The `with:` value a deploy job hands the action. */
+const input = (job: Job, key: string) =>
+  new RegExp(`\\n {10}${key}: (.+)\\n`).exec(`${job.text}\n`)?.[1];
 
-      for (const at of order) expect(at).toBeGreaterThan(-1);
-      expect([...order].sort((a, b) => a - b)).toEqual(order);
-
-      for (const step of later) {
-        expect(index(step), step).toBeGreaterThan(order[order.length - 1]);
-      }
-    },
-  );
-
-  it.each(JOBS)(
-    "$job runs the step through the release Application on `:$tag`, never with a database credential",
-    ({ job, release, tag }) => {
-      const step = stepsOf(job).text(release);
-
-      expect(step).toContain(
-        "DOKPLOY_APPLICATION_ID: ${{ secrets.DOKPLOY_MIGRATE_APPLICATION_ID }}",
-      );
-      expect(step).toContain(
-        `RELEASE_IMAGE: ghcr.io/trajetto-organization/trajetto-api-migrate:${tag}\n`,
-      );
-      expect(step).toContain("run: node .github/scripts/dokploy-release.mjs");
-      expect(step).not.toMatch(/DATABASE_URL|SSH_/);
-    },
-  );
-
-  it.each(JOBS)(
-    "$job moves `:$tag` before the deploy and `:$tag-applied` only after it, both by digest",
-    ({ job, move, record, tag }) => {
-      const { text } = stepsOf(job);
-
-      expect(runBlock(text(move))).toMatch(
-        new RegExp(
-          `ghcr\\.sh tag \\\\\\n\\s+ghcr\\.io/trajetto-organization/trajetto-api-migrate:${tag} \\\\\\n\\s+"ghcr\\.io/trajetto-organization/trajetto-api-migrate@\\$\\{MIGRATE_DIGEST\\}"`,
-        ),
-      );
-      expect(runBlock(text(record))).toMatch(
-        new RegExp(
-          `ghcr\\.sh tag \\\\\\n\\s+ghcr\\.io/trajetto-organization/trajetto-api-migrate:${tag}-applied \\\\\\n\\s+"ghcr\\.io/trajetto-organization/trajetto-api-migrate@\\$\\{MIGRATE_DIGEST\\}"`,
-        ),
-      );
-    },
-  );
-
-  it.each(JOBS)(
-    "$job: the decision only when Dokploy deploys, the rest only when it said to run, with no raw input in a script",
-    ({ job, move, release, record }) => {
-      const { text } = stepsOf(job);
-
-      expect(text(DECIDE)).toContain("steps.dokploy.outputs.enabled == 'true'");
-      expect(text(DECIDE)).toContain("        id: migrations\n");
-
-      for (const step of [move, release, record]) {
-        expect(text(step), step).toContain(
-          "steps.migrations.outputs.run == 'true'",
-        );
-      }
-
-      for (const step of [DECIDE, move, record]) {
-        expect(runBlock(text(step)), step).not.toContain("${{");
-      }
-    },
-  );
-
-  it("staging compares the release image this run built with what its database applied", () => {
-    const step = stepsOf("deploy-staging").text(DECIDE);
-
-    expect(step).toContain(
-      "MIGRATE_DIGEST: ${{ needs.build-and-push.outputs.migrate_digest }}",
-    );
-    expect(runBlock(step)).toContain(
-      "ghcr.sh digest ghcr.io/trajetto-organization/trajetto-api-migrate:staging-applied",
-    );
-  });
-
-  it("the promote reads the release image of the build it promotes", () => {
-    const { text } = stepsOf("promote-production");
-
-    // The build the staging check settled on (promote-workflow.test.ts).
-    expect(text(DECIDE)).toContain(
-      "IMAGE_TAG: ${{ steps.staged.outputs.tag }}",
-    );
-    expect(runBlock(text(DECIDE))).toContain(
-      'ghcr.sh digest "ghcr.io/trajetto-organization/trajetto-api-migrate:${IMAGE_TAG}"',
+describe("the deploy action", () => {
+  it("decides, moves the tag, migrates and records it, in that order, before any service moves", () => {
+    const names = stepNames(deploy);
+    const order = [SETTINGS, DECIDE, MOVE, RELEASE, RECORD].map((name) =>
+      names.indexOf(name),
     );
 
-    for (const step of [
-      "Move the release image's stable tag to this build",
-      "Record the migrations as applied on production",
-    ]) {
-      expect(text(step), step).toContain(
-        "MIGRATE_DIGEST: ${{ steps.migrations.outputs.digest }}",
+    for (const at of order) expect(at).toBeGreaterThan(-1);
+    expect([...order].sort((a, b) => a - b)).toEqual(order);
+
+    for (const step of LATER) {
+      expect(names.indexOf(step), step).toBeGreaterThan(
+        order[order.length - 1],
       );
     }
   });
 
+  it("runs the step through the release Application on the environment's tag, never with a database credential", () => {
+    const step = stepOf(deploy, RELEASE).text;
+
+    expect(step).toContain(
+      "DOKPLOY_APPLICATION_ID: ${{ inputs.dokploy-migrate-application-id }}",
+    );
+    expect(step).toContain(
+      "RELEASE_IMAGE: ghcr.io/trajetto-organization/trajetto-api-migrate:${{ inputs.tag }}\n",
+    );
+    expect(step).toContain("run: node .github/scripts/dokploy-release.mjs");
+    expect(step).not.toMatch(/DATABASE_URL|SSH_/);
+    expect(input(jobOf(staging, "deploy-staging"), "tag")).toBe("staging");
+    expect(input(jobOf(production, "promote-production"), "tag")).toBe(
+      "stable",
+    );
+  });
+
+  it("moves `:<tag>` before the deploy and `:<tag>-applied` only after it, both by digest", () => {
+    expect(stepOf(deploy, MOVE).run).toMatch(
+      /ghcr\.sh tag \\\n\s+"ghcr\.io\/trajetto-organization\/trajetto-api-migrate:\$\{TAG\}" \\\n\s+"ghcr\.io\/trajetto-organization\/trajetto-api-migrate@\$\{MIGRATE_DIGEST\}"/,
+    );
+    expect(stepOf(deploy, RECORD).run).toMatch(
+      /ghcr\.sh tag \\\n\s+"ghcr\.io\/trajetto-organization\/trajetto-api-migrate:\$\{TAG\}-applied" \\\n\s+"ghcr\.io\/trajetto-organization\/trajetto-api-migrate@\$\{MIGRATE_DIGEST\}"/,
+    );
+  });
+
+  it("decides only when Dokploy deploys, runs the rest only when it said to, with no raw input in a script", () => {
+    expect(conditionOf(stepOf(deploy, DECIDE))).toContain(
+      "steps.dokploy.outputs.enabled == 'true'",
+    );
+    expect(stepOf(deploy, DECIDE).text).toContain("      id: migrations\n");
+
+    for (const name of [MOVE, RELEASE, RECORD]) {
+      expect(conditionOf(stepOf(deploy, name)), name).toContain(
+        "steps.migrations.outputs.run == 'true'",
+      );
+    }
+
+    for (const name of [DECIDE, MOVE, RECORD]) {
+      expect(stepOf(deploy, name).run, name).not.toContain("${{");
+    }
+  });
+
+  it("gets the release image of the build it deploys: staging's from the Build, production's from the evidence", () => {
+    expect(input(jobOf(staging, "deploy-staging"), "migrate-digest")).toBe(
+      "${{ needs.build.outputs.migrate_digest }}",
+    );
+    expect(
+      input(jobOf(production, "promote-production"), "migrate-digest"),
+    ).toBe("${{ needs.evidence.outputs.migrate_digest }}");
+    expect(
+      input(jobOf(production, "promote-production"), "migrate-presplit"),
+    ).toBe("${{ needs.evidence.outputs.migrate_presplit }}");
+    expect(input(jobOf(staging, "deploy-staging"), "migrate-presplit")).toBe(
+      undefined,
+    );
+  });
+
   it("requires the release Application wherever Dokploy deploys", () => {
-    for (const { job, configured } of JOBS) {
-      expect(stepsOf(job).text(configured), job).toContain(
-        "DOKPLOY_MIGRATE_APPLICATION_ID: ${{ secrets.DOKPLOY_MIGRATE_APPLICATION_ID }}",
+    expect(stepOf(deploy, SETTINGS).text).toContain(
+      "DOKPLOY_MIGRATE_APPLICATION_ID: ${{ inputs.dokploy-migrate-application-id }}",
+    );
+    for (const job of [
+      jobOf(staging, "deploy-staging"),
+      jobOf(production, "promote-production"),
+    ]) {
+      expect(input(job, "dokploy-migrate-application-id"), job.name).toBe(
+        "${{ secrets.DOKPLOY_MIGRATE_APPLICATION_ID }}",
       );
     }
   });
@@ -216,19 +158,20 @@ describe("the deploy workflows", () => {
   it("has no switch left to keep migrating on boot, and no SSH path to the database", () => {
     // The API image cannot migrate; a variable that pretended otherwise
     // would only mislead. The release step no longer goes over SSH.
-    for (const file of [
-      ".github/workflows/deploy.yml",
-      "Dockerfile",
-      "infra/scripts/docker-entrypoint.sh",
-    ]) {
-      const text = readFileSync(repoFile(file), "utf8");
+    const texts = [
+      ...allWorkflows().map((each) => [each.file, each.text] as const),
+      ...allActions().map((each) => [each.file, each.text] as const),
+      ...["Dockerfile", "infra/scripts/docker-entrypoint.sh"].map(
+        (file) => [file, readFileSync(repoFile(file), "utf8")] as const,
+      ),
+    ];
 
+    for (const [file, text] of texts) {
       expect(text, file).not.toContain("MIGRATIONS_VIA_JOB");
       expect(text, file).not.toContain("RUN_MIGRATIONS_ON_BOOT");
       expect(text, file).not.toContain("release-migrations.sh");
+      expect(text, file).not.toContain("secrets.DEPLOY_SSH_KEY }}");
     }
-
-    expect(workflow).not.toContain("secrets.DEPLOY_SSH_KEY }}");
   });
 });
 
@@ -240,11 +183,8 @@ beforeEach(() => {
 
 afterEach(() => box.dispose());
 
-/**
- * Runs a decision step with ghcr.sh stubbed under .github/scripts: a ref
- * ending in `-applied` answers STUB_APPLIED, any other STUB_DIGEST.
- */
-function decide(job: string, env: Record<string, string>) {
+/** ghcr.sh stubbed under .github/scripts: `-applied` answers STUB_APPLIED, any other STUB_DIGEST. */
+function stubGhcr() {
   box.file(
     ".github/scripts/ghcr.sh",
     [
@@ -254,71 +194,112 @@ function decide(job: string, env: Record<string, string>) {
       "esac",
     ].join("\n"),
   );
-
-  const output = `${box.root}/output`;
-  const summary = `${box.root}/summary`;
-  const script = box.file(
-    "step.sh",
-    `set -eo pipefail\n${runBlock(stepsOf(job).text(DECIDE))}`,
-  );
-  const result = run("bash", script, [], {
-    cwd: box.root,
-    env: { GITHUB_OUTPUT: output, GITHUB_STEP_SUMMARY: summary, ...env },
-  });
-  const outputs = Object.fromEntries(
-    readFileSync(output, { encoding: "utf8", flag: "a+" })
-      .trim()
-      .split("\n")
-      .filter(Boolean)
-      .map((line) => line.split("=") as [string, string]),
-  );
-
-  return { ...result, log: result.stdout + result.stderr, outputs };
 }
 
 const DIGEST = `sha256:${"a".repeat(64)}`;
 const OLDER = `sha256:${"b".repeat(64)}`;
 
-describe.skipIf(!bash)("the staging decision, run", () => {
+describe.skipIf(!bash)("the decision, run", () => {
+  const decide = (env: Record<string, string>) => {
+    stubGhcr();
+
+    return runBlock(
+      box,
+      stepOf(deploy, DECIDE).run,
+      { ENVIRONMENT: "staging", TAG: "staging", PRESPLIT: "false", ...env },
+      box.root,
+    );
+  };
+
   it("runs the step for a release image the database has not applied", () => {
-    const result = decide("deploy-staging", {
-      MIGRATE_DIGEST: DIGEST,
-      STUB_APPLIED: OLDER,
-    });
+    const result = decide({ MIGRATE_DIGEST: DIGEST, STUB_APPLIED: OLDER });
 
     expect(result.status, result.log).toBe(0);
     expect(result.outputs).toEqual({ run: "true" });
   });
 
   it("runs it on a database that never applied one (the first deploy)", () => {
-    const result = decide("deploy-staging", { MIGRATE_DIGEST: DIGEST });
+    const result = decide({ MIGRATE_DIGEST: DIGEST });
 
     expect(result.status, result.log).toBe(0);
     expect(result.outputs).toEqual({ run: "true" });
   });
 
   it("skips it, saying so, when the database applied this very image", () => {
-    const result = decide("deploy-staging", {
+    const staging = decide({ MIGRATE_DIGEST: DIGEST, STUB_APPLIED: DIGEST });
+
+    expect(staging.status, staging.log).toBe(0);
+    expect(staging.outputs).toEqual({ run: "false" });
+    expect(staging.log).toContain(
+      "::notice::Migrations: o banco de staging já aplicou",
+    );
+
+    const production = decide({
+      ENVIRONMENT: "production",
+      TAG: "stable",
       MIGRATE_DIGEST: DIGEST,
+      STUB_APPLIED: DIGEST,
+    });
+
+    expect(production.outputs).toEqual({ run: "false" });
+    expect(production.log).toContain("o banco de produção já aplicou");
+  });
+
+  it("compares with the environment's own `-applied` tag", () => {
+    box.file(
+      ".github/scripts/ghcr.sh",
+      `printf '%s\\n' "$2" >> "${box.root}/read"; printf '%s' "${OLDER}"`,
+    );
+
+    const result = runBlock(
+      box,
+      stepOf(deploy, DECIDE).run,
+      {
+        ENVIRONMENT: "production",
+        TAG: "stable",
+        PRESPLIT: "false",
+        MIGRATE_DIGEST: DIGEST,
+      },
+      box.root,
+    );
+
+    expect(result.status, result.log).toBe(0);
+    expect(readFileSync(`${box.root}/read`, "utf8")).toBe(
+      "ghcr.io/trajetto-organization/trajetto-api-migrate:stable-applied\n",
+    );
+  });
+
+  it("skips it for a build that predates the release image, without asking GHCR", () => {
+    const result = decide({
+      ENVIRONMENT: "production",
+      TAG: "stable",
+      PRESPLIT: "true",
+      MIGRATE_DIGEST: "",
       STUB_APPLIED: DIGEST,
     });
 
     expect(result.status, result.log).toBe(0);
     expect(result.outputs).toEqual({ run: "false" });
-    expect(result.log).toContain(
-      "::notice::Migrations: o banco de staging já aplicou",
-    );
+    expect(result.log).toContain("anterior à imagem de migração");
+  });
+
+  it("fails, before anything moves, without a release image it was not told to skip", () => {
+    const result = decide({ MIGRATE_DIGEST: "" });
+
+    expect(result.status).toBe(1);
+    expect(result.outputs).toEqual({});
+    expect(result.log).toContain("::error::Falta o digest da imagem");
   });
 });
 
 /**
- * The promote's decision, run: git real, in a repository with one commit
- * from before the release image (no infra/scripts/schema-guard.ts) and one
- * from after it. A build with no release image is skipped only when it
- * provably predates it; any other lost its push, and the step fails before
- * `stable` moves.
+ * The promote's reading of the release image, run: git real, in a
+ * repository with one commit from before the release image (no
+ * infra/scripts/schema-guard.ts) and one from after it. A build with no
+ * release image is let through only when it provably predates it; any other
+ * lost its push, and the evidence fails before the approval.
  */
-describe.skipIf(!bash)("the promote's decision, run", () => {
+describe.skipIf(!bash)("the promote's release image, read", () => {
   let before = "";
   let after = "";
 
@@ -344,51 +325,55 @@ describe.skipIf(!bash)("the promote's decision, run", () => {
     after = g("rev-parse", "HEAD");
   });
 
-  const promote = (
+  /** ghcr.sh: trajetto-api answers API, trajetto-api-migrate MIGRATE, trajetto-ai AI. */
+  const read = (
     tag: string,
     event: string,
-    stubs: { digest?: string; applied?: string } = {},
-  ) =>
-    decide("promote-production", {
-      IMAGE_TAG: tag,
-      EVENT: event,
-      STUB_DIGEST: stubs.digest ?? "",
-      STUB_APPLIED: stubs.applied ?? "",
-    });
+    stubs: { migrate?: string; ai?: string } = {},
+  ) => {
+    box.file(
+      ".github/scripts/ghcr.sh",
+      [
+        'case "$2" in',
+        '  *trajetto-api-migrate:*) printf "%s" "${STUB_MIGRATE:-}" ;;',
+        '  *trajetto-api:*) printf "%s" "${STUB_API:-}" ;;',
+        '  *trajetto-ai:*) printf "%s" "${STUB_AI:-}" ;;',
+        "esac",
+      ].join("\n"),
+    );
 
-  it("runs the step with the release image of the build, by digest, when production has not applied it", () => {
-    const result = promote(`sha-${after.slice(0, 7)}`, "push", {
-      digest: DIGEST,
-      applied: OLDER,
-    });
+    return runBlock(
+      box,
+      stepOf(evidence, "Read the digests to promote").run,
+      {
+        IMAGE_TAG: tag,
+        EVENT: event,
+        STUB_API: `sha256:${"1".repeat(64)}`,
+        STUB_MIGRATE: stubs.migrate ?? "",
+        STUB_AI: stubs.ai ?? "",
+      },
+      box.root,
+    );
+  };
 
-    expect(result.status, result.log).toBe(0);
-    expect(result.outputs).toEqual({ digest: DIGEST, run: "true" });
-  });
-
-  it("skips it when production applied that very image", () => {
-    const result = promote(`sha-${after.slice(0, 7)}`, "push", {
-      digest: DIGEST,
-      applied: DIGEST,
-    });
-
-    expect(result.status, result.log).toBe(0);
-    expect(result.outputs).toEqual({ digest: DIGEST, run: "false" });
-    expect(result.log).toContain("o banco de produção já aplicou");
-  });
-
-  it("runs it for a rollback to an older release image too", () => {
-    const result = promote(`sha-${after.slice(0, 7)}`, "workflow_dispatch", {
-      digest: OLDER,
-      applied: DIGEST,
+  it("reads the digests of the build, the commit the public check waits for included", () => {
+    const result = read(`sha-${after.slice(0, 7)}`, "push", {
+      migrate: DIGEST,
+      ai: OLDER,
     });
 
     expect(result.status, result.log).toBe(0);
-    expect(result.outputs.run).toBe("true");
+    expect(result.outputs).toEqual({
+      api: `sha256:${"1".repeat(64)}`,
+      migrate: DIGEST,
+      presplit: "false",
+      ai: OLDER,
+      expected: after.slice(0, 7),
+    });
   });
 
   it("fails a merge whose build has no release image: its push failed", () => {
-    const result = promote(`sha-${after.slice(0, 7)}`, "push");
+    const result = read(`sha-${after.slice(0, 7)}`, "push");
 
     expect(result.status).toBe(1);
     expect(result.log).toContain("o push dela falhou");
@@ -396,30 +381,41 @@ describe.skipIf(!bash)("the promote's decision, run", () => {
   });
 
   it("fails a rollback to a build from after the release image that has none", () => {
-    const result = promote(`sha-${after.slice(0, 7)}`, "workflow_dispatch");
+    const result = read(`sha-${after.slice(0, 7)}`, "workflow_dispatch");
 
     expect(result.status).toBe(1);
     expect(result.outputs).toEqual({});
   });
 
-  it("skips, with a notice, a rollback to a build from before the release image", () => {
-    const result = promote(`sha-${before.slice(0, 7)}`, "workflow_dispatch");
+  it("lets a rollback to a build from before the release image through, flagged, with a notice", () => {
+    const result = read(`sha-${before.slice(0, 7)}`, "workflow_dispatch");
 
     expect(result.status, result.log).toBe(0);
     expect(result.log).toContain("anterior à imagem de migração");
-    expect(result.outputs).toEqual({ run: "false" });
+    expect(result.outputs.presplit).toBe("true");
+    expect(result.outputs.migrate).toBe("");
   });
 
-  it("skips the main-<sha> builds, all from before the staging branch", () => {
-    const result = promote("main-0a1b2c3", "workflow_dispatch");
+  it("lets the main-<sha> builds through, all from before the staging branch", () => {
+    const result = read("main-0a1b2c3", "workflow_dispatch");
 
     expect(result.status, result.log).toBe(0);
-    expect(result.outputs).toEqual({ run: "false" });
+    expect(result.outputs.presplit).toBe("true");
+    expect(result.outputs.expected).toBe("0a1b2c3");
   });
 
   it("fails closed on a commit it cannot find", () => {
-    const result = promote("sha-ffffff0", "workflow_dispatch");
+    const result = read("sha-ffffff0", "workflow_dispatch");
 
     expect(result.status).toBe(1);
+  });
+
+  it("leaves the AI where it is for a build older than the service", () => {
+    const result = read(`sha-${after.slice(0, 7)}`, "push", {
+      migrate: DIGEST,
+    });
+
+    expect(result.status, result.log).toBe(0);
+    expect(result.outputs.ai).toBe("");
   });
 });

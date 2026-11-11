@@ -3,16 +3,28 @@ import { resolve } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { hasShell, run, sandbox, type Sandbox } from "./support/shell-harness";
+import { runBlock } from "./support/run-block";
+import { hasShell, sandbox, type Sandbox } from "./support/shell-harness";
+import {
+  conditionOf,
+  jobOf,
+  readAction,
+  readWorkflow,
+  stepNames,
+  stepOf,
+  timeoutOf,
+  type Job,
+} from "./support/workflow-text";
 
 /**
  * The road to production: build once on staging, promote by digest.
  *
- * Every push to `staging` validates and builds the two images ONCE, as the
- * immutable `sha-<sha>`; the merge into `main` promotes the exact build
- * staging ran for the merged commit, never a rebuild; the manual button is
- * the rollback path, so it must ship exactly the build it is given — and
- * nothing else.
+ * Every push to `staging` validates and builds the images ONCE, as the
+ * immutable `sha-<sha>` (staging.yml); the merge into `main` promotes the
+ * exact build staging ran for the merged commit, never a rebuild
+ * (production.yml); the manual button is the rollback path, so it must ship
+ * exactly the build it is given — and nothing else. The pull request into
+ * main (pr.yml) proves, before the merge, that there is such a build.
  *
  * History: `image_tag` defaulted to `latest`, which is whatever was built
  * last: a promote "of the validated build" shipped any merge that landed
@@ -24,102 +36,79 @@ import { hasShell, run, sandbox, type Sandbox } from "./support/shell-harness";
 const read = (...parts: string[]) =>
   readFileSync(resolve(process.cwd(), ...parts), "utf8").replace(/\r\n/g, "\n");
 
-const workflow = read(".github", "workflows", "deploy.yml");
+const staging = readWorkflow("staging.yml");
+const production = readWorkflow("production.yml");
+const pr = readWorkflow("pr.yml");
+const validate = readWorkflow("validate.yml");
+const deploy = readAction("deploy");
 
-const dispatch = workflow.slice(
-  workflow.indexOf("  workflow_dispatch:"),
-  workflow.indexOf("\nenv:"),
-);
+const evidence = jobOf(production, "evidence");
+const promote = jobOf(production, "promote-production");
+const deployStaging = jobOf(staging, "deploy-staging");
 
-const job = workflow.slice(workflow.indexOf("\n  promote-production:"));
-const steps = job.split(/\n      - name: /).slice(1);
-const index = (name: string) =>
-  steps.findIndex((step) => step.startsWith(name));
-const step = (name: string) => steps[index(name)] ?? "";
+const index = (name: string) => stepNames(evidence).indexOf(name);
+const at = (name: string) => stepNames(deploy).indexOf(name);
 
-const jobOf = (name: string) => {
-  const start = workflow.indexOf(`\n  ${name}:`);
-  const rest = workflow.slice(start + 1);
-  const next = rest.slice(1).search(/\n {2}[\w-]+:\n/);
+/** The `with:` value a deploy job hands the action. */
+const input = (job: Job, key: string) =>
+  new RegExp(`\\n {10}${key}: (.+)\\n`).exec(`${job.text}\n`)?.[1];
 
-  return start < 0 ? "" : next < 0 ? rest : rest.slice(0, next + 1);
-};
+/** The workflow's `on:` block. */
+const triggers = (text: string) =>
+  text.slice(text.indexOf("\non:"), text.indexOf("\npermissions:"));
 
-/** The `run: |` block of the step called `name` inside `text`, dedented. */
-function runBlock(text: string, name: string): string {
-  const lines = text.split("\n");
-  const at = lines.findIndex((line) => line.trim() === `- name: ${name}`);
-
-  if (at < 0) return "";
-
-  let line = at + 1;
-
-  while (line < lines.length && !/^\s+run: \|$/.test(lines[line])) line += 1;
-
-  const indent = lines[line].search(/\S/) + 2;
-  const body: string[] = [];
-
-  for (let each = line + 1; each < lines.length; each += 1) {
-    if (lines[each].trim() !== "" && lines[each].search(/\S/) < indent) break;
-
-    body.push(lines[each].slice(indent));
-  }
-
-  return body.join("\n");
-}
-
-describe("the workflow's triggers", () => {
-  it("runs on pushes to staging and main, on pull requests into main and by hand", () => {
-    const on = workflow.slice(
-      workflow.indexOf("\non:"),
-      workflow.indexOf("\npermissions:"),
-    );
-
-    expect(on).toMatch(/push:\n {4}branches: \[staging, main\]/);
-    expect(on).toMatch(/pull_request:\n {4}branches: \[main\]/);
-    expect(on).toContain("workflow_dispatch:");
+describe("the workflows' triggers", () => {
+  it("staging runs on its pushes and by hand, production on main's and by hand, the PR check on pull requests into main", () => {
+    expect(triggers(staging.text)).toMatch(/push:\n {4}branches: \[staging\]/);
+    expect(triggers(staging.text)).toContain("workflow_dispatch:");
+    expect(triggers(production.text)).toMatch(/push:\n {4}branches: \[main\]/);
+    expect(triggers(production.text)).toContain("workflow_dispatch:");
+    expect(triggers(pr.text)).toMatch(/pull_request:\n {4}branches: \[main\]/);
+    expect(triggers(pr.text)).not.toMatch(/push:|workflow_dispatch:/);
   });
 
   it("asks for nothing beyond reading the repository unless a job needs it", () => {
-    expect(workflow).toMatch(/\npermissions:\n {2}contents: read\n/);
-
-    for (const name of ["test", "ai-ocr", "secrets"]) {
-      expect(jobOf(name), name).not.toContain("packages: write");
+    for (const workflow of [staging, production, pr, validate]) {
+      expect(workflow.text, workflow.file).toMatch(
+        /\npermissions:\n {2}contents: read\n/,
+      );
     }
+
+    for (const job of validate.jobs) {
+      expect(job.text, job.name).not.toContain("packages: write");
+    }
+    for (const name of ["changes", "secrets", "gate", "image-scan"]) {
+      expect(jobOf(staging, name).text, name).not.toContain("packages: write");
+    }
+    expect(evidence.text).not.toContain("packages: write");
+    expect(jobOf(pr, "evidence").text).not.toContain("packages: write");
   });
 });
 
 describe("the build (once, on staging)", () => {
-  it("runs only on staging (a push, or Run workflow there), after the whole validation", () => {
-    const build = jobOf("build-and-push");
+  // Run workflow takes any branch: on main the same button is the promote,
+  // never a build, and on a work branch nothing at all.
+  it("runs only on staging, after the Gate and the secret scan", () => {
+    const build = jobOf(staging, "build");
 
-    // Run workflow on staging is the staging road again (force_ai_build);
-    // on main the same button is the promote, never a build.
-    expect(build).toContain(
-      "if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/staging'",
+    expect(build.text).toContain("needs: [changes, gate, secrets]");
+    expect(build.text).toContain(
+      "\n    if: github.ref == 'refs/heads/staging' && needs.changes.outputs.docs != 'true'\n",
     );
-    expect(build).toContain("needs: [test, ai-ocr, secrets]");
-    expect(jobOf("promote-production")).toContain(
-      "if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')",
+    expect(jobOf(staging, "deploy-staging").text).toContain(
+      "\n    if: github.ref == 'refs/heads/staging'\n",
     );
+    expect(evidence.text).toContain("if: github.ref == 'refs/heads/main'");
   });
 
-  it("validates pull requests into main exactly as a push to staging", () => {
-    for (const name of ["test", "ai-ocr", "secrets"]) {
-      expect(jobOf(name), name).toContain(
-        "if: github.event_name == 'pull_request' || github.ref == 'refs/heads/staging'",
-      );
+  it("never happens in the promote or the pull request: production gets the bytes staging ran", () => {
+    for (const text of [production.text, pr.text, deploy.text]) {
+      expect(text).not.toMatch(/docker\/build-push-action|docker build\s/);
     }
   });
 
-  it("never happens in the promote: production gets the bytes staging ran", () => {
-    expect(jobOf("promote-production")).not.toMatch(
-      /docker\/build-push-action|docker build\s/,
-    );
-  });
-
   it("publishes only the immutable sha-<sha>: the mutable tags are moved by digest", () => {
-    const build = jobOf("build-and-push");
+    const build = jobOf(staging, "build").text;
     const metadata = [...build.matchAll(/tags: \|\n((?: {12}.+\n)+)/g)].map(
       (m) => m[1].trim(),
     );
@@ -141,24 +130,27 @@ describe("the build (once, on staging)", () => {
 });
 
 describe("the tag given to the promote", () => {
-  it("has no default: whoever presses the button names the build", () => {
-    expect(dispatch).toContain("image_tag:");
+  const dispatch = production.text.slice(
+    production.text.indexOf("  workflow_dispatch:"),
+    production.text.indexOf("\npermissions:"),
+  );
+
+  it("is required and has no default: whoever presses the button names the build", () => {
+    expect(dispatch).toMatch(
+      /image_tag:\n\s+description: .+\n\s+required: true\n/,
+    );
     expect(dispatch).not.toMatch(/default:/);
   });
 
-  it("is resolved, then validated first, before anything is migrated, retagged or deployed", () => {
-    const resolveStep = index("Resolve the build to promote");
-    const validate = index("Validate the tag to promote");
-
-    expect(resolveStep, "passo de resolução").toBe(0);
-    expect(validate, "passo de validação").toBe(1);
-    expect(validate).toBeLessThan(index("Do the migrations need to run?"));
-    expect(validate).toBeLessThan(index("Promote image to stable"));
-    expect(validate).toBeLessThan(index("Deploy to production (Dokploy)"));
+  it("is resolved, then validated first, before anything is read, migrated, retagged or deployed", () => {
+    expect(index("Resolve the build to promote"), "passo de resolução").toBe(0);
+    expect(index("Validate the tag to promote"), "passo de validação").toBe(1);
+    // The deploy is another job, after this one and its approval.
+    expect(promote.text).toContain("needs: evidence");
   });
 
   it("accepts only an immutable build", () => {
-    const pattern = step("Validate the tag to promote").match(
+    const pattern = stepOf(evidence, "Validate the tag to promote").run.match(
       /grep -Eq '([^']+)'/,
     )?.[1];
 
@@ -187,37 +179,40 @@ describe("the tag given to the promote", () => {
   });
 
   it("never reaches a shell as raw workflow syntax", () => {
-    for (const each of steps) {
-      const run = each.slice(
-        each.indexOf("run:") >= 0 ? each.indexOf("run:") : each.length,
-      );
-
-      expect(run, each.split("\n")[0]).not.toContain("${{ inputs.image_tag }}");
-      expect(run, each.split("\n")[0]).not.toContain(
-        "${{ steps.target.outputs.tag }}",
-      );
-      expect(run, each.split("\n")[0]).not.toContain(
-        "${{ steps.staged.outputs.tag }}",
-      );
+    for (const each of evidence.steps) {
+      expect(each.run, each.name).not.toContain("${{");
+    }
+    for (const each of deploy.steps) {
+      expect(each.run, each.name).not.toContain("${{");
     }
   });
 
-  it("is what `stable` moves to, and the digest is recorded", () => {
-    const promote = step("Promote image to stable");
+  it("is what `stable` moves to: the digest read from it before the approval", () => {
+    const digests = stepOf(evidence, "Read the digests to promote");
 
     // The build the staging check settled on (the commit's own, or the
     // documentation rule's), never the raw candidate.
-    expect(promote).toContain("IMAGE_TAG: ${{ steps.staged.outputs.tag }}");
-    expect(promote).toMatch(/trajetto-api:\$\{IMAGE_TAG\}/);
-    expect(promote).toContain("GITHUB_STEP_SUMMARY");
+    expect(digests.text).toContain(
+      "IMAGE_TAG: ${{ steps.staged.outputs.tag }}",
+    );
+    expect(digests.run).toContain(
+      'api=$(bash .github/scripts/ghcr.sh digest "ghcr.io/trajetto-organization/trajetto-api:${IMAGE_TAG}")',
+    );
+    expect(evidence.text).toContain(
+      "api_digest: ${{ steps.digests.outputs.api }}",
+    );
+    expect(input(promote, "api-digest")).toBe(
+      "${{ needs.evidence.outputs.api_digest }}",
+    );
+    expect(input(promote, "tag")).toBe("stable");
   });
 
-  it("fails clearly when the build does not exist, before anything moves", () => {
+  it("fails clearly when the build does not exist, before anything is read", () => {
     const check = index("Check the build exists in GHCR");
 
     expect(check).toBeGreaterThan(index("Validate the tag to promote"));
-    expect(check).toBeLessThan(index("Do the migrations need to run?"));
-    expect(step("Check the build exists in GHCR")).toMatch(
+    expect(check).toBeLessThan(index("Read the digests to promote"));
+    expect(stepOf(evidence, "Check the build exists in GHCR").run).toMatch(
       /::error::.*não existe/,
     );
   });
@@ -246,29 +241,16 @@ describe.skipIf(!hasShell("bash"))(
       box.stub("gh", gh);
       box.stub("sleep", "exit 0");
 
-      const script = box.file(
-        "resolve.sh",
-        runBlock(job, "Resolve the build to promote"),
-      );
-      const output = `${box.root}/output`;
-      const summary = `${box.root}/summary`;
-
-      writeFileSync(output, "");
-      writeFileSync(summary, "");
-
-      const result = run("bash", script, [], {
-        bin: box.bin,
-        env: {
+      return runBlock(
+        box,
+        stepOf(evidence, "Resolve the build to promote").run,
+        {
           GITHUB_SHA: MERGE,
-          GITHUB_OUTPUT: output,
-          GITHUB_STEP_SUMMARY: summary,
           REPO: "Trajetto-Organization/trajetto-api",
           INPUT_TAG: "",
           ...env,
         },
-      });
-
-      return { ...result, outputs: readFileSync(output, "utf8") };
+      );
     }
 
     it("takes the merge commit's second parent: the PR head staging built", () => {
@@ -276,7 +258,7 @@ describe.skipIf(!hasShell("bash"))(
 
       expect(result.status, result.stderr).toBe(0);
       // The full sha too: the staging check walks its history.
-      expect(result.outputs).toBe(`tag=sha-abcdef0\ncommit=${HEAD}\n`);
+      expect(result.output).toBe(`tag=sha-abcdef0\ncommit=${HEAD}\n`);
       expect(box.calls("gh")[0]).toContain(
         `repos/Trajetto-Organization/trajetto-api/commits/${MERGE}`,
       );
@@ -286,7 +268,7 @@ describe.skipIf(!hasShell("bash"))(
       const result = resolveTag({ EVENT: "push" }, FIRST);
 
       expect(result.status, result.stderr).toBe(0);
-      expect(result.outputs).toBe(`tag=sha-fffffff\ncommit=${MERGE}\n`);
+      expect(result.output).toBe(`tag=sha-fffffff\ncommit=${MERGE}\n`);
     });
 
     it("asks GitHub again when its API fails, and fails clearly when it never answers", () => {
@@ -305,7 +287,7 @@ describe.skipIf(!hasShell("bash"))(
       );
 
       expect(flaky.status, flaky.stderr).toBe(0);
-      expect(flaky.outputs).toBe(`tag=sha-abcdef0\ncommit=${HEAD}\n`);
+      expect(flaky.output).toBe(`tag=sha-abcdef0\ncommit=${HEAD}\n`);
       expect(flaky.stdout).toMatch(
         /::warning::A API do GitHub falhou .*tentativa 1 de 3/,
       );
@@ -313,14 +295,14 @@ describe.skipIf(!hasShell("bash"))(
       const down = resolveTag({ EVENT: "push" }, "", "exit 1");
 
       expect(down.status).toBe(1);
-      expect(down.outputs).toBe("");
+      expect(down.output).toBe("");
       expect(down.stdout).toMatch(/::error::A API do GitHub não respondeu/);
     });
 
     it("hands the typed tag over, and nothing that could forge another output", () => {
       expect(
         resolveTag({ EVENT: "workflow_dispatch", INPUT_TAG: "sha-0a1b2c3" })
-          .outputs,
+          .output,
       ).toBe("tag=sha-0a1b2c3\n");
       expect(box.calls("gh")).toEqual([]);
 
@@ -330,7 +312,7 @@ describe.skipIf(!hasShell("bash"))(
         "",
       ]) {
         expect(
-          resolveTag({ EVENT: "workflow_dispatch", INPUT_TAG: typed }).outputs,
+          resolveTag({ EVENT: "workflow_dispatch", INPUT_TAG: typed }).output,
           typed,
         ).toBe("tag=invalid\n");
       }
@@ -339,88 +321,124 @@ describe.skipIf(!hasShell("bash"))(
 );
 
 describe("the deploy target (DEPLOY-1)", () => {
-  it("is Dokploy, through the shared script, never the Portainer webhook", () => {
-    expect(workflow).not.toMatch(/PORTAINER/);
+  it("is Dokploy, through the shared scripts in the shared action, never the Portainer webhook", () => {
+    for (const text of [staging.text, production.text, deploy.text]) {
+      expect(text).not.toMatch(/PORTAINER/);
+    }
 
-    for (const job of ["deploy-staging", "promote-production"]) {
-      const text = jobOf(job);
+    expect(stepOf(deploy, "Deploy the API (Dokploy)").run).toBe(
+      "node .github/scripts/dokploy-deploy.mjs",
+    );
 
-      expect(text, job).toContain(
-        "run: node .github/scripts/dokploy-deploy.mjs",
+    for (const job of [deployStaging, promote]) {
+      // The action and its scripts are in the repository: the job checks
+      // them out, then hands the environment's secrets over by name.
+      expect(job.text, job.name).toMatch(
+        /sparse-checkout: \|\n\s+\.github\/actions\n\s+\.github\/scripts\n/,
       );
-      // The script is in the repository, so the job checks it out.
-      expect(text, job).toContain("sparse-checkout: .github/scripts");
-      expect(text, job).toContain(
-        "DOKPLOY_API_KEY: ${{ secrets.DOKPLOY_API_KEY }}",
+      expect(job.text, job.name).toContain("uses: ./.github/actions/deploy\n");
+      expect(input(job, "dokploy-api-key"), job.name).toBe(
+        "${{ secrets.DOKPLOY_API_KEY }}",
       );
     }
+  });
+
+  it("hands the action exactly the secrets and variables of the environment, by their names", () => {
+    const names = {
+      "dokploy-url": "${{ secrets.DOKPLOY_URL }}",
+      "dokploy-api-key": "${{ secrets.DOKPLOY_API_KEY }}",
+      "dokploy-api-application-id": "${{ secrets.DOKPLOY_API_APPLICATION_ID }}",
+      "dokploy-migrate-application-id":
+        "${{ secrets.DOKPLOY_MIGRATE_APPLICATION_ID }}",
+      "dokploy-ai-application-id": "${{ secrets.DOKPLOY_AI_APPLICATION_ID }}",
+      "deploy-ssh-host": "${{ secrets.DEPLOY_SSH_HOST }}",
+      "deploy-ssh-user": "${{ secrets.DEPLOY_SSH_USER }}",
+      "deploy-verify-ssh-key": "${{ secrets.DEPLOY_VERIFY_SSH_KEY }}",
+      "deploy-ssh-known-hosts": "${{ secrets.DEPLOY_SSH_KNOWN_HOSTS }}",
+      "rollout-verify": "${{ vars.ROLLOUT_VERIFY }}",
+      "api-public-url": "${{ vars.API_PUBLIC_URL }}",
+      "swarm-api-service": "${{ vars.SWARM_API_SERVICE }}",
+    };
+
+    for (const job of [deployStaging, promote]) {
+      for (const [key, value] of Object.entries(names)) {
+        expect(input(job, key), `${job.name} → ${key}`).toBe(value);
+      }
+    }
+
+    // A composite action cannot read either context itself.
+    expect(deploy.text).not.toMatch(/\$\{\{ (secrets|vars)\./);
   });
 
   it("deploys one Dokploy Application per service: AI, then API", () => {
-    expect(workflow).not.toMatch(/compose.deploy|DOKPLOY_COMPOSE_ID/);
-    // Backups are Dokploy's Database backups: no backup service ships here.
-    expect(workflow).not.toMatch(
-      /trajetto-backup|DOKPLOY_BACKUP_APPLICATION_ID/,
+    for (const text of [staging.text, production.text, deploy.text]) {
+      expect(text).not.toMatch(/compose.deploy|DOKPLOY_COMPOSE_ID/);
+      // Backups are Dokploy's Database backups: no backup service ships here.
+      expect(text).not.toMatch(/trajetto-backup|DOKPLOY_BACKUP_APPLICATION_ID/);
+    }
+
+    const ai = stepOf(deploy, "Deploy the AI service (Dokploy)").text;
+    const api = stepOf(deploy, "Deploy the API (Dokploy)").text;
+
+    expect(at("Deploy the AI service (Dokploy)")).toBeLessThan(
+      at("Deploy the API (Dokploy)"),
     );
+    expect(ai).toContain(
+      "DOKPLOY_APPLICATION_ID: ${{ inputs.dokploy-ai-application-id }}",
+    );
+    expect(api).toContain(
+      "DOKPLOY_APPLICATION_ID: ${{ inputs.dokploy-api-application-id }}",
+    );
+    // The AI may not exist yet; the API may not be skipped.
+    expect(ai).toContain('DOKPLOY_OPTIONAL: "true"');
+    expect(api).toContain("DOKPLOY_APP_LABEL: trajetto-api");
+    expect(api).not.toContain("DOKPLOY_OPTIONAL");
+  });
 
-    for (const [job, where] of [
-      ["deploy-staging", "staging"],
-      ["promote-production", "production"],
-    ] as const) {
-      const text = jobOf(job);
-      const ai = text.indexOf(
-        `- name: Deploy the AI service to ${where} (Dokploy)`,
-      );
-      const api = text.indexOf(`- name: Deploy to ${where} (Dokploy)`);
-      const apiStep = text.slice(api, text.indexOf("- name:", api + 1));
-
-      expect(ai, job).toBeGreaterThan(-1);
-      expect(ai, job).toBeLessThan(api);
-      expect(text, job).toContain(
-        "DOKPLOY_APPLICATION_ID: ${{ secrets.DOKPLOY_AI_APPLICATION_ID }}",
-      );
-      expect(text, job).toContain(
-        "DOKPLOY_APPLICATION_ID: ${{ secrets.DOKPLOY_API_APPLICATION_ID }}",
-      );
-      // The AI may not exist yet; the API may not be skipped.
-      expect(text.slice(ai, api), job).toContain('DOKPLOY_OPTIONAL: "true"');
-      expect(apiStep, job).toContain("DOKPLOY_APP_LABEL: trajetto-api");
-      expect(apiStep, job).not.toContain("DOKPLOY_OPTIONAL");
+  it("protects production with its own environment, and staging with its", () => {
+    expect(promote.text).toContain("environment: production");
+    expect(deployStaging.text).toContain("environment: staging");
+    // Only those two jobs carry an environment: no secret of one reaches
+    // any other job.
+    for (const workflow of [staging, production, pr, validate]) {
+      for (const job of workflow.jobs) {
+        if (job === promote || job === deployStaging) continue;
+        expect(job.text, `${workflow.file} → ${job.name}`).not.toMatch(
+          /\n {4}environment:/,
+        );
+      }
     }
   });
 
-  it("protects production with its own environment", () => {
-    expect(jobOf("promote-production")).toContain("environment: production");
-    expect(jobOf("deploy-staging")).toContain("environment: staging");
-  });
-
-  it("deploys production only after `stable` has moved", () => {
-    expect(index("Promote image to stable")).toBeLessThan(
-      index("Deploy to production (Dokploy)"),
+  it("deploys each service only after its tag moved, the API's last", () => {
+    expect(at("Move the AI tag to this build")).toBeLessThan(
+      at("Deploy the AI service (Dokploy)"),
     );
-    // The AI service moves in the same job, before the deploy reads `stable`.
-    expect(index("Promote the AI image to stable")).toBeGreaterThan(-1);
-    expect(index("Promote the AI image to stable")).toBeLessThan(
-      index("Deploy to production (Dokploy)"),
+    expect(at("Deploy the AI service (Dokploy)")).toBeLessThan(
+      at("Move the API tag to this build"),
+    );
+    expect(at("Move the API tag to this build")).toBeLessThan(
+      at("Deploy the API (Dokploy)"),
     );
   });
 
   it("moves staging to this run's digests, never to a tag", () => {
-    const staging = jobOf("deploy-staging");
-
-    expect(staging).toContain(
+    expect(input(deployStaging, "api-digest")).toBe(
+      "${{ needs.build.outputs.api_digest }}",
+    );
+    expect(input(deployStaging, "tag")).toBe("staging");
+    expect(stepOf(deploy, "Move the API tag to this build").run).toContain(
       '"ghcr.io/trajetto-organization/trajetto-api@${API_DIGEST}"',
     );
-    expect(staging).toContain(
+    expect(stepOf(deploy, "Move the AI tag to this build").run).toContain(
       '"ghcr.io/trajetto-organization/trajetto-ai@${AI_DIGEST}"',
-    );
-    expect(staging.indexOf("Move staging to this build")).toBeLessThan(
-      staging.indexOf("Deploy to staging (Dokploy)"),
     );
   });
 
   it("releases only after production was promoted", () => {
-    expect(jobOf("release")).toContain("needs: promote-production");
+    expect(jobOf(production, "release").text).toContain(
+      "needs: promote-production",
+    );
   });
 });
 
@@ -440,61 +458,34 @@ describe.skipIf(!hasShell("bash"))("before Dokploy exists", () => {
     DOKPLOY_MIGRATE_APPLICATION_ID: "def456",
   };
 
-  function configured(
-    jobName: string,
-    stepName: string,
-    env: Record<string, string>,
-  ) {
-    const script = box.file(
-      "configured.sh",
-      runBlock(jobOf(jobName), stepName),
-    );
-    const output = `${box.root}/output`;
-
-    writeFileSync(output, "");
-
-    const result = run("bash", script, [], {
-      env: {
-        DOKPLOY_URL: "",
-        DOKPLOY_API_KEY: "",
-        DOKPLOY_API_APPLICATION_ID: "",
-        DOKPLOY_MIGRATE_APPLICATION_ID: "",
-        GITHUB_OUTPUT: output,
-        GITHUB_STEP_SUMMARY: `${box.root}/summary`,
-        ...env,
-      },
+  const configured = (environment: string, env: Record<string, string>) =>
+    runBlock(box, stepOf(deploy, "Check deploy settings").run, {
+      ENVIRONMENT: environment,
+      TAG: environment === "production" ? "stable" : "staging",
+      DOKPLOY_URL: "",
+      DOKPLOY_API_KEY: "",
+      DOKPLOY_API_APPLICATION_ID: "",
+      DOKPLOY_MIGRATE_APPLICATION_ID: "",
+      ...env,
     });
 
-    return { ...result, outputs: readFileSync(output, "utf8") };
-  }
-
-  it.each([
-    [
-      "deploy-staging",
-      "Is the staging deploy configured?",
-      "Deploy to staging (Dokploy)",
-    ],
-    [
-      "promote-production",
-      "Is the production deploy configured?",
-      "Deploy to production (Dokploy)",
-    ],
-  ])(
+  it.each(["staging", "production"])(
     "%s skips the deploy with a notice, deploys when configured, fails when half-configured",
-    (jobName, stepName, deploy) => {
-      const none = configured(jobName, stepName, {});
+    (environment) => {
+      const none = configured(environment, {});
 
       expect(none.status, none.stderr).toBe(0);
-      expect(none.outputs).toBe("enabled=false\n");
+      expect(none.output).toBe("enabled=false\n");
       expect(none.stdout).toContain("::notice::");
+      expect(none.stdout).toContain(`environment ${environment}`);
 
-      const all = configured(jobName, stepName, SECRETS);
+      const all = configured(environment, SECRETS);
 
       expect(all.status).toBe(0);
-      expect(all.outputs).toBe("enabled=true\n");
-      expect(all.stdout + all.stderr).not.toContain("key-never-printed");
+      expect(all.output).toBe("enabled=true\n");
+      expect(all.log).not.toContain("key-never-printed");
 
-      const half = configured(jobName, stepName, {
+      const half = configured(environment, {
         DOKPLOY_URL: SECRETS.DOKPLOY_URL,
       });
 
@@ -502,61 +493,151 @@ describe.skipIf(!hasShell("bash"))("before Dokploy exists", () => {
       expect(half.stdout).toMatch(
         /::error::.*DOKPLOY_API_KEY DOKPLOY_API_APPLICATION_ID DOKPLOY_MIGRATE_APPLICATION_ID/,
       );
-
-      // The deploy and its checks follow the answer. The staged marker does
-      // not: before Dokploy exists the tags are all there is (as in the
-      // web), and it still runs only after every step before it passed.
-      const text = jobOf(jobName);
-      const after = text.slice(text.indexOf(`- name: ${deploy}`));
-
-      for (const chunk of after.split(/\n {6}- name: /)) {
-        if (chunk.startsWith("Mark this build as staged")) continue;
-
-        expect(chunk, chunk.split("\n")[0]).toMatch(
-          /if: .*steps\.dokploy\.outputs\.enabled == 'true'/,
-        );
-      }
     },
   );
+
+  it("follows the answer in the deploy and its checks; the staged marker does not", () => {
+    // Before Dokploy exists the tags are all there is (as in the web), and
+    // the marker still runs only after every step before it passed.
+    const after = deploy.steps.slice(at("Deploy the API (Dokploy)"));
+
+    expect(after.length).toBeGreaterThan(4);
+    for (const step of after) {
+      if (step.name === "Mark this build as staged") {
+        expect(conditionOf(step)).not.toContain("dokploy");
+        continue;
+      }
+
+      // The rollout checks follow the pick, which only runs when enabled.
+      expect(conditionOf(step), step.name).toMatch(
+        /steps\.dokploy\.outputs\.enabled == 'true'|steps\.verify\.outputs\.mode == '/,
+      );
+    }
+    expect(conditionOf(stepOf(deploy, "Pick the rollout check"))).toContain(
+      "steps.dokploy.outputs.enabled == 'true'",
+    );
+  });
 });
 
 describe("the pull request into main", () => {
-  it("waits for staging to have DEPLOYED its head, so the merge promotes a build staging ran", () => {
-    const check = jobOf("staging-image");
+  const check = jobOf(pr, "evidence");
 
-    expect(check).toContain("if: github.event_name == 'pull_request'");
-    expect(check).toContain(
+  it("waits for staging to have DEPLOYED its head, so the merge promotes a build staging ran", () => {
+    const wait = stepOf(check, "Wait for the staging deploy of the PR head");
+
+    expect(wait.text).toContain(
       "HEAD_SHA: ${{ github.event.pull_request.head.sha }}",
     );
     // `sha-<sha>` exists as soon as the build pushed it, also when the scan
     // or the staging deploy failed afterwards: the marker is the proof, on
     // the same digest — the question staged-build.sh answers, for the PR
     // check and the promote alike (staged-build.test.ts).
-    expect(check).toContain('bash .github/scripts/staged-build.sh "$HEAD_SHA"');
-    expect(check).toContain("for attempt in $(seq 1 90); do");
-    expect(check).toContain("packages: read");
-    expect(check).not.toContain("packages: write");
+    expect(wait.run).toContain(
+      'bash .github/scripts/staged-build.sh "$HEAD_SHA"',
+    );
+    expect(wait.run).toContain("for attempt in $(seq 1 90); do");
+    expect(check.text).toContain("packages: read");
+    expect(check.text).not.toContain("packages: write");
     // The documentation rule compares the head with older commits: the PR
     // head itself, with its history.
-    expect(check).toContain("ref: ${{ github.event.pull_request.head.sha }}");
-    expect(check).toContain("fetch-depth: 0");
-    // Branch protection requires the check by this name.
-    expect(check).toContain("name: The PR head was built on staging");
+    expect(check.text).toContain(
+      "ref: ${{ github.event.pull_request.head.sha }}",
+    );
+    expect(check.text).toContain("fetch-depth: 0");
+    // The ruleset requires the check by this name.
+    expect(check.text).toContain("name: Staging evidence");
+  });
+
+  it("does not validate again: no lint, test or build, only the evidence and the scan", () => {
+    expect(pr.jobs.map((job) => job.name)).toEqual(["secrets", "evidence"]);
+    expect(pr.text).not.toMatch(/validate\.yml|yarn |npx /);
+  });
+
+  it("checks the Gate of the build the merge promotes, after the marker settled which one", () => {
+    const names = stepNames(check);
+    const gate = stepOf(check, "Check the staging gate of this build");
+
+    expect(names.indexOf("Wait for the staging deploy of the PR head")).toBe(
+      names.indexOf("Check the staging gate of this build") - 1,
+    );
+    expect(
+      stepOf(check, "Wait for the staging deploy of the PR head").text,
+    ).toContain("id: staged");
+    expect(gate.text).toContain("COMMIT: ${{ steps.staged.outputs.commit }}");
+    expect(gate.run).toContain('bash .github/scripts/check-gate.sh "$COMMIT"');
+    expect(check.text).toContain("checks: read");
+    // check-gate.sh reads which workflow and branch ran the Gate.
+    expect(check.text).toContain("actions: read");
+  });
+
+  // A head that only adds documentation ships an older build, whose Gate
+  // says nothing about that documentation: the head's own run (`Docs`) does.
+  // Without this, a guide that broke the documentation tests reached main
+  // with nothing blocking it, where the old PR validation stopped it.
+  it("checks the Gate of a documentation head too, waiting for its run", () => {
+    const names = stepNames(check);
+    const head = stepOf(check, "Check the staging gate of the PR head");
+
+    expect(names.indexOf("Check the staging gate of the PR head")).toBe(
+      names.indexOf("Check the staging gate of this build") + 1,
+    );
+    expect(conditionOf(head)).toBe(
+      "steps.staged.outputs.commit != github.event.pull_request.head.sha",
+    );
+    expect(head.text).toContain(
+      "HEAD_SHA: ${{ github.event.pull_request.head.sha }}",
+    );
+    expect(head.text).toMatch(/GATE_WAIT_ROUNDS: "\d+"/);
+    expect(head.run).toContain(
+      'bash .github/scripts/check-gate.sh "$HEAD_SHA"',
+    );
+    // The wait fits in the job, after the marker's.
+    const rounds = Number(/GATE_WAIT_ROUNDS: "(\d+)"/.exec(head.text)?.[1]);
+
+    expect(timeoutOf(check)).toBeGreaterThan(45 + (rounds * 30) / 60);
+  });
+
+  it("reads any Gate that is not green, or not there, as a refusal", () => {
+    for (const [owner, name] of [
+      [check, "Check the staging gate of this build"],
+      [check, "Check the staging gate of the PR head"],
+      [evidence, "Check the staging gate of this build"],
+      [evidence, "Check the staging gate of the merged head"],
+    ] as const) {
+      expect(stepOf(owner, name).run, name).toMatch(/\n {2}3 \| 4\)\n/);
+    }
+  });
+
+  it("refuses a main that has code the head does not, before waiting on anything", () => {
+    const names = stepNames(check);
+    const main = stepOf(check, "Check main adds only documentation");
+
+    expect(names.indexOf("Check main adds only documentation")).toBeLessThan(
+      names.indexOf("Wait for the staging deploy of the PR head"),
+    );
+    expect(main.text).toContain(
+      "BASE_SHA: ${{ github.event.pull_request.base.sha }}",
+    );
+    expect(main.run).toContain(
+      'bash .github/scripts/docs-only.sh "$fork" "$BASE_SHA"',
+    );
   });
 });
 
 describe("a commit that only changes documentation (D11)", () => {
   it("is promoted with the build of the nearest commit staging ran, by the same rule as the PR check", () => {
-    const check = step("Check that staging ran this build");
+    const check = stepOf(evidence, "Check that staging ran this build");
 
-    expect(check).toContain("id: staged");
-    expect(check).toContain("CANDIDATE: ${{ steps.target.outputs.commit }}");
-    expect(check).toContain(
+    expect(check.text).toContain("id: staged");
+    expect(check.text).toContain(
+      "CANDIDATE: ${{ steps.target.outputs.commit }}",
+    );
+    expect(check.run).toContain(
       'bash .github/scripts/staged-build.sh "$CANDIDATE"',
     );
     // The history it walks.
-    expect(jobOf("promote-production")).toMatch(
-      /- name: Checkout the deploy script\n\s+uses: [^\n]+\n\s+with:\n\s+fetch-depth: 0\n/,
+    expect(stepOf(evidence, "Checkout the deploy scripts").text).toMatch(
+      /with:\n\s+fetch-depth: 0\n/,
     );
   });
 
@@ -565,10 +646,10 @@ describe("a commit that only changes documentation (D11)", () => {
 
     expect(staged).toBeGreaterThan(index("Validate the tag to promote"));
     expect(staged).toBeLessThan(index("Check the build exists in GHCR"));
-    expect(staged).toBeLessThan(index("Do the migrations need to run?"));
+    expect(staged).toBeLessThan(index("Read the digests to promote"));
 
-    for (const each of steps.slice(staged + 1)) {
-      expect(each, each.split("\n")[0]).not.toContain(
+    for (const each of evidence.steps.slice(staged + 1)) {
+      expect(each.text, each.name).not.toContain(
         "${{ steps.target.outputs.tag }}",
       );
     }
@@ -576,15 +657,37 @@ describe("a commit that only changes documentation (D11)", () => {
     for (const name of [
       "Check the build exists in GHCR",
       "Compare with what staging runs",
-      "Do the migrations need to run?",
-      "Promote image to stable",
-      "Promote the AI image to stable",
-      "Wait for the API to serve the promoted build",
+      "Read the digests to promote",
     ]) {
-      expect(step(name), name).toContain(
+      expect(stepOf(evidence, name).text, name).toContain(
         "IMAGE_TAG: ${{ steps.staged.outputs.tag }}",
       );
     }
+    expect(evidence.text).toContain("tag: ${{ steps.staged.outputs.tag }}");
+  });
+
+  it("checks the Gate only on a merge: a rollback is exempt, as from the marker", () => {
+    expect(
+      conditionOf(stepOf(evidence, "Check the staging gate of this build")),
+    ).toBe("github.event_name == 'push'");
+  });
+
+  it("checks the Gate of the merged head too, when it only adds documentation to the build", () => {
+    const head = stepOf(evidence, "Check the staging gate of the merged head");
+
+    expect(conditionOf(head)).toBe(
+      "github.event_name == 'push' && steps.staged.outputs.commit != steps.target.outputs.commit",
+    );
+    expect(head.text).toContain(
+      "CANDIDATE: ${{ steps.target.outputs.commit }}",
+    );
+    expect(head.run).toContain(
+      'bash .github/scripts/check-gate.sh "$CANDIDATE"',
+    );
+    expect(index("Check the staging gate of the merged head")).toBe(
+      index("Check the staging gate of this build") + 1,
+    );
+    expect(evidence.text).toContain("actions: read");
   });
 
   it("is documented as the one safe use of [skip ci]", () => {
@@ -602,15 +705,15 @@ describe("the production Applications", () => {
    * every promote moves `stable`. A switch on that step once left the typed
    * `image_tag` unused: a green run that redeployed the bad build.
    */
-  it("always moves `stable` to the build being promoted, under no condition", () => {
-    const promote = step("Promote image to stable");
+  it("always moves the environment's tag to the build being promoted, under no other condition", () => {
+    const move = stepOf(deploy, "Move the API tag to this build");
 
-    expect(promote).not.toMatch(/\n\s+if:/);
-    expect(promote).toContain('trajetto-api:${IMAGE_TAG}"');
+    expect(conditionOf(move)).toBe("steps.head.outputs.current == 'true'");
+    expect(input(promote, "require-branch-head")).toBe('"false"');
     // Through ghcr.sh, which retries a GHCR hiccup instead of failing the
     // promote on it (ghcr-script.test.ts).
-    expect(promote).toMatch(
-      /bash \.github\/scripts\/ghcr\.sh tag \\\n\s+ghcr\.io\/trajetto-organization\/trajetto-api:stable \\\n/,
+    expect(move.run).toMatch(
+      /bash \.github\/scripts\/ghcr\.sh tag \\\n\s+"ghcr\.io\/trajetto-organization\/trajetto-api:\$\{TAG\}" \\\n/,
     );
   });
 });

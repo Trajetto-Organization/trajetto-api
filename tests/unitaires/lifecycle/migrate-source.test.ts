@@ -14,7 +14,7 @@ import {
 /**
  * The source key of the release image (.github/scripts/migrate-source.sh).
  *
- * build-and-push reuses the release image tagged `src-<key>` instead of
+ * the Build job reuses the release image tagged `src-<key>` instead of
  * building it again, and the deploys run the release step only when that
  * image is not the one their database applied. So the key must change
  * whenever anything the release step runs or reads changes — a migration,

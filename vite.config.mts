@@ -1,3 +1,5 @@
+import { availableParallelism } from "node:os";
+
 import {
   configDefaults,
   coverageConfigDefaults,
@@ -39,6 +41,23 @@ const DOT_TEST_GLOB = "**/*.{test,spec}?(-d).?(c|m)[jt]s?(x)";
  */
 const E2E_PHASE = process.env.E2E_PHASE;
 
+/**
+ * How many test files run at once. Vitest's own default is one less than
+ * the CPUs: ONE process on the 2-vCPU runner of a private repository, the
+ * whole suite in a queue while the CPU sat idle (0.57 core on average,
+ * measured, most files waiting on Postgres). Two processes on two CPUs:
+ * the unit suite 560 → 360 s, and an E2E sample of 30 files 151 → 103 s
+ * (three processes: 127 s). From four CPUs up, Vitest's default stays.
+ * VITEST_MAX_FORKS and VITEST_MIN_FORKS still override it, and the replica
+ * phase still runs one file at a time (`fileParallelism: false`).
+ *
+ * Only the ceiling: the floor stays at one process, which Vitest raises to
+ * the ceiling as files queue. A floor of FORKS made VITEST_MAX_FORKS=1 alone
+ * a crash (Tinypool: "options.minThreads and options.maxThreads must not
+ * conflict"), as Vitest's own floor of CPUs − 1 does on a bigger machine.
+ */
+const FORKS = Math.max(2, availableParallelism() - 1);
+
 export default defineConfig({
   plugins: [tsconfigPaths()],
   test: {
@@ -72,6 +91,7 @@ export default defineConfig({
     // corruption of node.exe (0xc0000374). With forks: 0 in 8, in the same
     // time. Forks is Vitest 2's default for the same reason.
     pool: "forks",
+    poolOptions: { forks: { maxForks: FORKS, minForks: 1 } },
     setupFiles: ["./setupTests.ts"], // add reflect metadata for all tests
   },
 });
