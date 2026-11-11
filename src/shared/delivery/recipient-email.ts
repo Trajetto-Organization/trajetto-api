@@ -3,13 +3,13 @@ import { z } from "zod";
 /**
  * The recipient's e-mail, whichever door the delivery came in by.
  *
- * The panel's create and the integration API take one address, checked by
- * the create's schema (recipientEmailField). The NF-e import and the
- * spreadsheet took whatever the field said into a TEXT column, unchecked,
- * and the notification pipeline handed it to nodemailer's address parser,
- * inside the API process, on every customer notice: a crafted list stalled
- * it for seconds per send (GHSA-2x7j-588g-ccc2), and a malformed one could be
- * read as a mailbox at another domain. An NF-e also carries more than one
+ * The integration API takes one address (recipientEmailField). The NF-e
+ * import and the spreadsheet took whatever the field said into a TEXT
+ * column, unchecked, and the notification pipeline handed it to
+ * nodemailer's address parser, inside the API process, on every customer
+ * notice: a crafted list stalled it for seconds per send
+ * (GHSA-2x7j-588g-ccc2), and a malformed one could be read as a mailbox at
+ * another domain. An NF-e also carries more than one
  * address in that one field, separated by ";" — what ERPs write
  * ("compras@cliente.com.br;financeiro@cliente.com.br") — and a list pasted
  * from a mail client comes separated by ",", which nodemailer used to send
@@ -20,8 +20,9 @@ import { z } from "zod";
  * MAX_RECIPIENT_EMAILS) and stored joined by ";", the rest left out and
  * quoted on the import row. The send reads the stored value the same way,
  * so a row written before this rule reaches the transport only with its
- * valid addresses; the panel's edit takes the list back
- * (recipientEmailListField).
+ * valid addresses. The panel's create and edit take the same list
+ * (panelRecipientEmailField) and store it the same way, so the form shows
+ * back what an import stored and saves it untouched.
  */
 const RECIPIENT_EMAIL_MAX_LENGTH = 100;
 
@@ -42,7 +43,7 @@ const MAX_ENTRIES_READ = MAX_RECIPIENT_EMAILS * 4;
 const QUOTED_ENTRIES = 2;
 const QUOTED_ENTRY_LENGTH = 40;
 
-/** The longest list the panel's edit takes: five addresses and "; ". */
+/** The longest list the panel takes: five addresses and "; ". */
 const RECIPIENT_EMAIL_LIST_MAX_LENGTH =
   MAX_RECIPIENT_EMAILS * (RECIPIENT_EMAIL_MAX_LENGTH + 2);
 
@@ -256,23 +257,39 @@ function recipientEmailNotice(emails: RecipientEmails): string | null {
 }
 
 /**
- * The panel's edit: one address typed, or the list an import stored, each
- * entry by recipientEmailField and at most MAX_RECIPIENT_EMAILS of them.
- * Refused whole, with the entry's own sentence, when one is not an address:
- * unlike an imported file, the person can fix what is in front of them.
- * Kept as typed (the send reads it with readRecipientEmails).
+ * Any value as the imports store it and the send reads it: the valid
+ * addresses joined by ";", or null. Two values that give the same are the
+ * same recipients.
+ */
+function canonicalRecipientEmail(
+  raw: string | null | undefined,
+): string | null {
+  return storedRecipientEmail(readRecipientEmails(raw));
+}
+
+/**
+ * The panel's create and edit: one address typed, or a list (the one an
+ * import stored, or typed), each entry by recipientEmailField and at most
+ * MAX_RECIPIENT_EMAILS of them. Refused whole, with the entry's own
+ * sentence, when one is not an address: unlike an imported file, the person
+ * can fix what is in front of them. Stored as the imports store it (joined
+ * by ";", once each), so every door writes the same shape. The web mirrors
+ * it (trajetto-ui src/schemas/recipient-email-field, compared by
+ * recipient-email-api-parity.test.ts there).
  */
 const recipientEmailListField = z
   .string()
-  .max(RECIPIENT_EMAIL_LIST_MAX_LENGTH, {
-    message: RECIPIENT_EMAIL_MESSAGES.listTooLong,
-  })
   .superRefine((value, ctx) => {
     const refuse = (message: string) =>
       ctx.addIssue({ code: z.ZodIssueCode.custom, message });
 
-    // Said by max() above: the entries of an oversized value are not read.
-    if (value.length > RECIPIENT_EMAIL_LIST_MAX_LENGTH) return;
+    // Measured here in UTF-16 units, not by max(): zod 4 counts code points,
+    // so emoji (never in an address) passed it and skipped the entries below,
+    // stored as "" or without the entry that was not an address. The entries
+    // of an oversized value are not read.
+    if (value.length > RECIPIENT_EMAIL_LIST_MAX_LENGTH) {
+      return refuse(RECIPIENT_EMAIL_MESSAGES.listTooLong);
+    }
 
     const { entries, truncated } = splitRecipientEmails(
       value,
@@ -292,7 +309,25 @@ const recipientEmailListField = z
         );
       }
     }
-  });
+  })
+  // Runs only on a value the checks above passed: at least one entry, every
+  // one an address, so the join is never empty.
+  .transform((value) =>
+    readRecipientEmails(value).addresses.join(RECIPIENT_EMAIL_SEPARATOR),
+  );
+
+/**
+ * The field on the panel's create and edit bodies: blank clears it, like
+ * the form's other optional fields.
+ */
+const panelRecipientEmailField = z
+  .preprocess(
+    (val) => (val === "" ? null : val),
+    recipientEmailListField.nullable().optional(),
+  )
+  .describe(
+    `E-mail do destinatário: um, ou até ${MAX_RECIPIENT_EMAILS} separados por ";" ou "," (como a importação da NF-e e da planilha lê). Cada um passa pela regra do cadastro de um endereço; grava os endereços juntos por ";", sem repetição, como as importações gravam. Vazio ou nulo: sem e-mail (na edição, apaga o atual).`,
+  );
 
 export {
   MAX_ENTRIES_READ,
@@ -300,6 +335,8 @@ export {
   RECIPIENT_EMAIL_MAX_LENGTH,
   RECIPIENT_EMAIL_MESSAGES,
   RECIPIENT_EMAIL_SEPARATOR,
+  canonicalRecipientEmail,
+  panelRecipientEmailField,
   readRecipientEmails,
   recipientEmailField,
   recipientEmailListField,

@@ -2556,19 +2556,24 @@ lê a tabela sem bloquear escrita (`SHARE UPDATE EXCLUSIVE`).
   busca, uma troca da `JWT_SECRET` só esvazia o cache: as respostas antigas
   não abrem e contam como cache vazio. Nada a fazer.
 
-**nodemailer 10.3.1 e o e-mail do destinatário das importações
-(10/11/2026).** Sem variável nova e sem rota nova. A imagem da API muda
+**nodemailer 10.3.1 e o e-mail do destinatário das importações e do
+painel (10/11/2026).** Sem variável nova e sem rota nova. A imagem da API muda
 (nodemailer 6.9.16 → 10.3.1, sem `@types/nodemailer`) e há uma migration,
 pela mesma etapa da `trajetto-api-migrate` (nada à mão no deploy):
 `20261110130000_customer_message_suppression_email_entries`. A regra está em
 [arquitetura.md (Integrações externas)](./arquitetura.md#integrações-externas)
 e em [arquitetura.md (Arquivos)](./arquitetura.md#arquivos).
 
-- **A ordem não importa.** A web e o app não mudam. A web anterior já mostra
-  o `message` de uma linha importada (é o mesmo campo das notas de rota). A
-  edição da entrega passa a aceitar a lista de e-mails que a importação
-  gravou; a web que aceitar a lista no formulário (item da web, ainda não
-  feito) sobe depois desta API, porque a anterior responderia 400.
+- **API antes da web**, na staging e na produção. O cadastro e a edição da
+  entrega pelo painel passam a aceitar a lista de e-mails que a importação
+  grava (até 5, separados por `;` ou `,`, gravada com `;`), e a web desta
+  release passa a mandá-la do formulário. Contra a API anterior, um cadastro
+  ou uma edição com lista volta 400 "O e-mail do destinatário não é
+  válido." (sem gravar nada); com um endereço só, tudo segue como antes. A
+  web anterior manda um endereço só, que esta API aceita, e já mostra o
+  `message` de uma linha importada (é o mesmo campo das notas de rota). O
+  app não muda. A integração continua com um endereço só: o contrato público
+  não mudou.
 - **A migration** só insere linhas em `customer_message_suppression`: para
   cada descadastro de e-mail com `;` ou `,` (gravado pela primeira versão da
   D38 com o campo inteiro), uma linha por endereço, aparado e em minúsculas,
@@ -2641,10 +2646,12 @@ A regra está em
   (`toEqual`); e o CI da web roda contra a `staging` da API o
   `occurrence-form-rules` (cópia linha a linha de
   `src/modules/occurrence-type/form/occurrence-form-rules.ts`, agora na
-  sintaxe do zod 4), que só passa com a API já em zod 4 e a web também. Com a
-  API antes, o `Validate` dela fica vermelho (o documento novo tem 8
-  `pattern` que a cópia da `staging` da web não tem) e não há deploy; com a
-  web em zod 4 antes, o CI da web fica vermelho.
+  sintaxe do zod 4), que só passa com a API já em zod 4 e a web também, e o
+  `recipient-email-api-parity`, que só passa com a API que já aceita a lista
+  de e-mails do painel (deste mesmo lote, em zod 3 ou em zod 4). Com a API
+  antes, o `Validate` dela fica vermelho (o documento novo tem 8 `pattern`
+  que a cópia da `staging` da web não tem) e não há deploy; com a web em zod
+  4 antes, o CI da web fica vermelho.
   1. **Web, só a cópia do documento:** um commit com o `public-openapi.json`
      regenerado (que leva também a rota de cancelamento do L9, que mudou o
      mesmo arquivo), sozinho no topo do push, sem a migração da web para o
@@ -4011,14 +4018,17 @@ está detalhada no `docs/variaveis-de-ambiente.md` do repositório que a lê.
    Depois do rollout, roda de novo à mão o `INSERT` da migration de dados.
    Tudo no manual da API, seção 15 ("CPF conferido no cadastro do
    motorista", "Busca de endereço do 'Fixar no mapa'", "nodemailer 10.3.1 e
-   o e-mail do destinatário das importações" e "@fastify/static
+   o e-mail do destinatário das importações e do painel" e "@fastify/static
    10.1.8 e @fastify/swagger-ui 6.1.3"). No push para a
    `staging`, a API também vai antes: o CI da web roda o
-   `cpf-field-api-parity` contra a `staging` da API.
+   `cpf-field-api-parity` e o `recipient-email-api-parity` contra a
+   `staging` da API.
 2. **Web:** só com a API do passo 1 em produção. A web nova chama
    `GET /address-search/:businessId` e `POST /user/session/revoke` (na API
-   desde 04/11/2026, ainda fora da `v1.3.0`) e oferece o escopo
-   `deliveries:cancel`, que a API anterior recusa com 400. O gate de rotas
+   desde 04/11/2026, ainda fora da `v1.3.0`), oferece o escopo
+   `deliveries:cancel`, que a API anterior recusa com 400, e manda a lista
+   de e-mails do destinatário no cadastro e na edição da entrega, que a API
+   anterior recusa com 400. O gate de rotas
    do promote só cobra as rotas com `API_DOCS_URL` (e `DOCS_USER` e
    `DOCS_PASSWORD`) no _environment_ de produção da web; sem ela, confira
    as duas no `/docs/json` da API de produção antes de promover (manual da

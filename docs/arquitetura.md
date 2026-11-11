@@ -2287,7 +2287,10 @@ D32).
 /delivery/update-delivery` trava a rota (`lockRouteOfOpenStop`), sobe o
   `plan_version` e grava o apontamento "Dados alterados no painel: …" na
   mesma transação, e depois avisa as telas e, com a rota liberada, o motorista
-  (push de plano alterado). Reenviar os mesmos valores não muda nada.
+  (push de plano alterado). Reenviar os mesmos valores não muda nada. O
+  e-mail do destinatário se compara pelos endereços: uma lista reenviada no
+  formato gravado ("a, b" que volta como "a;b") não é mudança (ver
+  [Arquivos](#arquivos), "E-mail do destinatário: importações e painel").
 - **Adicionar à rota em andamento e "Reentregar" (K12, D30):**
   `POST /route/add-stops` aceita rota `IN_PROGRESS` (`APPENDABLE_STATUSES`;
   remover, reordenar e editar seguem só com rota planejada ou liberada). A
@@ -2880,7 +2883,7 @@ erro enquanto as entregas continuavam sendo criadas. A listagem
 (`list-imports`) traz só os contadores; o relatório linha a linha vem do
 detalhe (ou de `includeReport=true`).
 
-**E-mail do destinatário na planilha e na NF-e** (10/11/2026,
+**E-mail do destinatário: importações e painel** (10/11/2026,
 `src/shared/delivery/recipient-email.ts`). A coluna "E-mail" e o `dest/email`
 da nota entravam sem conferência no `recipient_email` (TEXT). Daí iam, a cada
 aviso ao cliente, para o leitor de endereços do nodemailer, dentro do processo
@@ -2914,16 +2917,32 @@ da API. Agora:
   `to` só. Sem nenhum, não nasce linha de e-mail (motivo `invalid_address` no
   log de canais suprimidos, em `debug`), e uma mensagem já na fila termina
   `FAILED` sem nova tentativa.
-- **O cadastro e a edição.** `POST /delivery/create-delivery/:businessId` e
-  a integração continuam aceitando um endereço só.
-  `PATCH /delivery/update-delivery/:deliveryId/business/:businessId` aceita
-  também a lista (`recipientEmailListField`: até 5, separados por `;` ou `,`,
-  cada um pela mesma regra, gravada como veio), porque a web manda o
-  formulário inteiro: com um endereço só, a edição de qualquer campo de uma
-  entrega importada com lista era recusada por um e-mail que ninguém mexeu.
-  Um item inválido recusa o pedido com a frase do cadastro (quem edita pode
-  corrigir). O formulário da web ainda confere um endereço só: aceitar a
-  lista lá é um item da web, que sobe depois desta API.
+- **O cadastro e a edição pelo painel.**
+  `POST /delivery/create-delivery/:businessId` e
+  `PATCH /delivery/update-delivery/:deliveryId/business/:businessId` aceitam
+  a mesma lista (`panelRecipientEmailField`, sobre o
+  `recipientEmailListField`): um endereço ou até 5, separados por `;` ou `,`,
+  cada um pela regra do cadastro de um endereço. Gravam como a importação
+  grava: os endereços juntos por `;`, sem repetição (a caixa não conta), na
+  ordem digitada. Assim o formulário da web mostra de volta o que a
+  importação gravou e salva sem ninguém mexer no e-mail; antes, com um
+  endereço só, a edição de qualquer campo de uma entrega importada com lista
+  era recusada. Diferente da importação, um item inválido recusa o pedido
+  inteiro, com a frase do cadastro ("O e-mail do destinatário não é
+  válido."), porque quem digita pode corrigir. Mais de 5 itens: "Informe no
+  máximo 5 e-mails do destinatário.". O campo inteiro vai até 510 unidades
+  UTF-16, contadas pelo próprio campo, como na web, e não pelo `.max()` do
+  zod 4, que conta caracteres: um valor de emoji passava por ele e gravava
+  `""`. Na edição, o e-mail se compara pelos endereços
+  (`canonicalRecipientEmail`): uma lista antiga "a, b" que volta do
+  formulário como "a;b" não conta como mudança na linha do tempo nem sobe a
+  versão do plano da rota. A web confere com a mesma regra e as mesmas frases
+  (`src/schemas/recipient-email-field` do trajetto-ui, com o teste de
+  paridade que roda os dois schemas na mesma entrada).
+- **A integração continua com um endereço só.** O corpo de
+  `POST /integration/v1/deliveries` deriva do objeto `createDeliverySchema`,
+  que mantém o `recipientEmailField`; a lista fica no corpo do painel
+  (`createDeliveryBodySchema`) e na edição. O contrato público não mudou.
 - **A supressão (D38) guarda a lista por endereço**: o descadastro grava a
   chave do campo inteiro (a da primeira versão) e uma por endereço válido, e
   a busca confere todas (ver "Descadastro por telefone e e-mail na
@@ -3036,7 +3055,9 @@ OpenStreetMap são recusados.
 
 - **API pública** `/integration/v1/*`, autenticada por chave de API com
   escopos (ex. `deliveries:write`). `POST /integration/v1/deliveries` exige
-  `Idempotency-Key` e aplica as mesmas regras do cadastro manual. Documentação
+  `Idempotency-Key` e aplica as mesmas regras do cadastro manual, menos o
+  e-mail do destinatário, que aqui é um endereço só (o painel aceita a lista
+  que a importação grava). Documentação
   para clientes em `/integration/docs` (Scalar, só o que uma chave alcança) e
   no portal `/docs` da web. A referência interna completa fica em `/docs`
   (aberta fora de produção; em produção, só com `DOCS_USER`/`DOCS_PASSWORD`).
@@ -3251,8 +3272,8 @@ OpenStreetMap são recusados.
     `ECONFIG` também terminam sem nova tentativa: cada tentativa repete a
     mesma recusa.
   - No aviso ao cliente, o `to` só leva os endereços que passaram pela regra
-    do cadastro manual ([Arquivos](#arquivos), "E-mail do destinatário na
-    planilha e na NF-e").
+    do cadastro manual ([Arquivos](#arquivos), "E-mail do destinatário:
+    importações e painel").
   - Piso de versão em `tests/unitaires/security/dependency-security-floor.test.ts`:
     10.1.4 ou mais, e nunca 10.0.0 a 10.0.11, que ignoravam o `requireTLS`.
     `tests/unitaires/mail/resend-transport.test.ts` confere, contra um

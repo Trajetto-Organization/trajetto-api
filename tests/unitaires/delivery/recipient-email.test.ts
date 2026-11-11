@@ -1,10 +1,14 @@
 import { describe, expect, it } from "vitest";
 
-import { createDeliverySchema } from "@/schemas/create-delivery-schema";
+import {
+  createDeliveryBodySchema,
+  createDeliverySchema,
+} from "@/schemas/create-delivery-schema";
 import { updateDeliverySchema } from "@/schemas/update-delivery-schema";
 import {
   MAX_ENTRIES_READ,
   MAX_RECIPIENT_EMAILS,
+  canonicalRecipientEmail,
   readRecipientEmails,
   recipientEmailNotice,
   storedRecipientEmail,
@@ -207,60 +211,132 @@ describe("each entry is checked like the manual create", () => {
   });
 });
 
-describe("the panel's edit of the field", () => {
-  const edit = updateDeliverySchema.shape.recipient_email;
-  const messageOf = (value: string) => {
-    const parsed = edit.safeParse(value);
+describe("the panel's create and edit of the field", () => {
+  // The same field on both bodies: the web's one form sends the whole value.
+  const doors = [
+    // zod 4 keeps the refinement on the object: no wrapper to unwrap.
+    ["create", createDeliveryBodySchema.shape.recipient_email],
+    ["edit", updateDeliverySchema.shape.recipient_email],
+  ] as const;
+
+  const messageOf = (field: (typeof doors)[number][1], value: string) => {
+    const parsed = field.safeParse(value);
 
     return parsed.success ? null : parsed.error.issues[0]?.message;
   };
 
-  it("takes back the list an import stored, or one address", () => {
-    for (const value of [
-      "compras@mercado.com.br;financeiro@mercado.com.br",
-      "compras@mercado.com.br, financeiro@mercado.com.br",
-      "compras@mercado.com.br",
-    ]) {
-      expect(edit.safeParse(value), value).toMatchObject({
-        success: true,
-        data: value,
-      });
-    }
+  it.each(doors)(
+    "%s: takes one address, or the list an import stored, as stored",
+    (_door, field) => {
+      for (const value of [
+        "compras@mercado.com.br;financeiro@mercado.com.br",
+        "compras@mercado.com.br",
+      ]) {
+        expect(field.safeParse(value), value).toMatchObject({
+          success: true,
+          data: value,
+        });
+      }
 
-    // Cleared, as before.
-    expect(edit.parse("")).toBeNull();
+      // Cleared, as before.
+      expect(field.parse("")).toBeNull();
+      expect(field.parse(null)).toBeNull();
+    },
+  );
+
+  it.each(doors)(
+    "%s: stores a typed list as the imports do: joined by ';', once each",
+    (_door, field) => {
+      expect(
+        field.parse(" compras@mercado.com.br, financeiro@mercado.com.br ; "),
+      ).toBe("compras@mercado.com.br;financeiro@mercado.com.br");
+      expect(field.parse("Compras@Mercado.com.br;compras@mercado.com.br")).toBe(
+        "Compras@Mercado.com.br",
+      );
+    },
+  );
+
+  it.each(doors)(
+    "%s: refuses the whole value, with the one-address sentence, when an entry is not an address",
+    (_door, field) => {
+      expect(
+        messageOf(field, "compras@mercado.com.br;financeiro@mercado"),
+      ).toBe("O e-mail do destinatário não é válido.");
+      expect(
+        messageOf(field, `compras@mercado.com.br;${"a".repeat(95)}@x.com`),
+      ).toBe("O e-mail deve ter no máximo 100 caracteres.");
+      expect(messageOf(field, " ; ")).toBe(
+        "O e-mail do destinatário não é válido.",
+      );
+      // The display name a mail client pastes is not an address here either.
+      expect(messageOf(field, "Compras <compras@mercado.com.br>")).toBe(
+        "O e-mail do destinatário não é válido.",
+      );
+    },
+  );
+
+  it.each(doors)(
+    `%s: refuses more than ${MAX_RECIPIENT_EMAILS} addresses`,
+    (_door, field) => {
+      const many = Array.from(
+        { length: MAX_RECIPIENT_EMAILS + 1 },
+        (_, index) => `pessoa${index}@mercado.com.br`,
+      ).join(";");
+
+      expect(messageOf(field, many)).toBe(
+        `Informe no máximo ${MAX_RECIPIENT_EMAILS} e-mails do destinatário.`,
+      );
+      expect(messageOf(field, "a".repeat(100_000))).toBe(
+        `Informe no máximo ${MAX_RECIPIENT_EMAILS} e-mails do destinatário, de até 100 caracteres cada.`,
+      );
+    },
+  );
+
+  it.each(doors)(
+    "%s: measures the value in UTF-16 units, so emoji never slip past the entries",
+    (_door, field) => {
+      // zod 4's max() counts code points: 260 emoji are 520 units. They
+      // passed it and were stored as "", or let an entry that is not an
+      // address go silently.
+      const emoji = "\u{1F600}";
+
+      for (const value of [
+        emoji.repeat(260),
+        `compras@mercado.com.br;${emoji.repeat(300)}`,
+      ]) {
+        expect(messageOf(field, value)).toBe(
+          `Informe no máximo ${MAX_RECIPIENT_EMAILS} e-mails do destinatário, de até 100 caracteres cada.`,
+        );
+      }
+    },
+  );
+
+  it("parses what it stored back to the same value (the route validates, the controller parses again)", () => {
+    const [, field] = doors[0];
+    const stored = field.parse("a@mercado.com.br, b@mercado.com.br");
+
+    expect(field.parse(stored)).toBe(stored);
   });
 
-  it("refuses the whole value, with the create's own sentence, when an entry is not an address", () => {
-    expect(messageOf("compras@mercado.com.br;financeiro@mercado")).toBe(
-      "O e-mail do destinatário não é válido.",
-    );
-    expect(messageOf(`compras@mercado.com.br;${"a".repeat(95)}@x.com`)).toBe(
-      "O e-mail deve ter no máximo 100 caracteres.",
-    );
-    expect(messageOf(" ; ")).toBe("O e-mail do destinatário não é válido.");
-  });
-
-  it(`refuses more than ${MAX_RECIPIENT_EMAILS} addresses`, () => {
-    const many = Array.from(
-      { length: MAX_RECIPIENT_EMAILS + 1 },
-      (_, index) => `pessoa${index}@mercado.com.br`,
-    ).join(";");
-
-    expect(messageOf(many)).toBe(
-      `Informe no máximo ${MAX_RECIPIENT_EMAILS} e-mails do destinatário.`,
-    );
-    expect(messageOf("a".repeat(100_000))).toBe(
-      `Informe no máximo ${MAX_RECIPIENT_EMAILS} e-mails do destinatário, de até 100 caracteres cada.`,
-    );
-  });
-
-  it("leaves the create at one address", () => {
+  it("leaves the integration API at one address: its body derives from the field object", () => {
     expect(
       createDeliverySchema.shape.recipient_email.safeParse(
         "compras@mercado.com.br;financeiro@mercado.com.br",
       ).success,
     ).toBe(false);
+  });
+});
+
+describe("two values compared as recipients", () => {
+  it("are the same when the send would write to the same addresses", () => {
+    expect(canonicalRecipientEmail("a@mercado.com.br, b@mercado.com.br")).toBe(
+      canonicalRecipientEmail("a@mercado.com.br;b@mercado.com.br"),
+    );
+    expect(canonicalRecipientEmail("a@mercado.com.br;lixo")).toBe(
+      "a@mercado.com.br",
+    );
+    expect(canonicalRecipientEmail("lixo")).toBeNull();
+    expect(canonicalRecipientEmail(null)).toBeNull();
   });
 });
 

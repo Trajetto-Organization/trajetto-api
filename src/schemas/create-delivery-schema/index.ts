@@ -12,7 +12,10 @@ import {
   addressLongitudeField,
   refineAddressPointPair,
 } from "@/shared/delivery/address-coordinates";
-import { recipientEmailField } from "@/shared/delivery/recipient-email";
+import {
+  panelRecipientEmailField,
+  recipientEmailField,
+} from "@/shared/delivery/recipient-email";
 
 const requiredTextField = (label: string, min: number, max: number) =>
   z
@@ -159,7 +162,9 @@ const createDeliverySchema = z.object({
     "O documento deve ser um CPF (11 dígitos) ou CNPJ (14 dígitos).",
   ),
   // One address, by the rule the NF-e and spreadsheet imports apply to each
-  // entry of theirs (recipient-email.ts).
+  // entry of theirs (recipient-email.ts). The integration API derives its
+  // body from this object and keeps it; the panel's create body below and
+  // the edit take the list (panelRecipientEmailField).
   recipient_email: z.preprocess(
     (val) => (val === "" ? null : val),
     recipientEmailField.nullable().optional(),
@@ -215,13 +220,15 @@ const createDeliverySchema = z.object({
 
 /**
  * The panel's create body: the fields above plus the rules across them
- * (the address point is both coordinates or neither). The route validates
+ * (the address point is both coordinates or neither), and the recipient's
+ * e-mail as a list, the shape an NF-e or a spreadsheet stores, so the one
+ * form takes the same value on create and on edit. The route validates
  * with it and the controller parses with it; derivations use the field
  * object, createDeliverySchema.
  */
-const createDeliveryBodySchema = createDeliverySchema.superRefine(
-  refineAddressPointPair,
-);
+const createDeliveryBodySchema = createDeliverySchema
+  .extend({ recipient_email: panelRecipientEmailField })
+  .superRefine(refineAddressPointPair);
 
 export {
   createDeliveryBodySchema,

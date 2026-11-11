@@ -1,4 +1,5 @@
 import { dateOnlyKey } from "@/shared/time/business-day";
+import { canonicalRecipientEmail } from "@/shared/delivery/recipient-email";
 
 import type {
   Delivery,
@@ -76,6 +77,17 @@ function sameItems(
 }
 
 /**
+ * A field's value as compared. The e-mail compares as the send reads it
+ * (recipient-email.ts): a list stored before the panel joined it by ";"
+ * ("a, b"), sent back from the form as "a;b", is the same recipients.
+ */
+function comparable(key: keyof UpdateDeliveryProps, value: unknown): string {
+  if (key !== "recipient_email") return text(value);
+
+  return canonicalRecipientEmail(text(value)) ?? "";
+}
+
+/**
  * The labels of what `patch` changes in `current`; [] when it changes
  * nothing. Text compares trimmed (the address case-insensitively, as
  * addressChanged does); a date compares by its civil day.
@@ -89,7 +101,8 @@ function deliveryEditChanges(
 
   const differs = (key: keyof UpdateDeliveryProps) =>
     patch[key] !== undefined &&
-    text(patch[key]) !== text(current[key as keyof Delivery]);
+    comparable(key, patch[key]) !==
+      comparable(key, current[key as keyof Delivery]);
 
   if (
     ADDRESS_KEYS.some(

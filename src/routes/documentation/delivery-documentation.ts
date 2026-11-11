@@ -238,7 +238,7 @@ const deliveryRowEntity = z.object({
     .string()
     .nullable()
     .describe(
-      'E-mail do destinatário. Vindo da NF-e ou da planilha desde 10/11/2026, até 5 endereços válidos, separados por ";"; antes disso, o campo como estava no arquivo (o aviso ao cliente só escreve para os endereços válidos dele).',
+      'E-mail do destinatário. Vindo da NF-e, da planilha ou do painel desde 10/11/2026, até 5 endereços válidos, separados por ";"; antes disso, o campo como estava no arquivo ou como foi digitado (o aviso ao cliente só escreve para os endereços válidos dele). A integração grava um endereço só.',
     ),
   recipient_telephone: z.string().nullable(),
   cep: z.string().nullable(),

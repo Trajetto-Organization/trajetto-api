@@ -14,8 +14,8 @@ import { validationError } from "@/shared/validation/validation-error";
  *
  * The manual create's fields, with the manual create's rules — the SAME zod
  * definitions, not copies — so a delivery that the panel refuses the API
- * refuses too, with the same sentence. Only two things differ, and both are
- * about who is on the other side:
+ * refuses too, with the same sentence. Only three things differ, the first
+ * two about who is on the other side:
  *
  *   - the shipper can be named by CNPJ. An ERP knows its shippers by the NF-e
  *     issuer's CNPJ; our shipper id is something no public endpoint hands out.
@@ -23,6 +23,10 @@ import { validationError } from "@/shared/validation/validation-error";
  *     item. A person cannot misspell a form field; an integration can, and
  *     `adress_number` silently ignored is an address nobody notices is
  *     missing until the driver is lost.
+ *   - the recipient's e-mail is one address (recipientEmailField, from the
+ *     createDeliverySchema object). The panel's body takes the list an
+ *     import stored (panelRecipientEmailField, on createDeliveryBodySchema)
+ *     so the form can save it back; the public contract stays as published.
  */
 const manualFields = createDeliverySchema.omit({
   shipperId: true,

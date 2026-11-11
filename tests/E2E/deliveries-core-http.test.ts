@@ -950,6 +950,69 @@ describe("the recipient's e-mail from an NF-e", () => {
       recipient_email: "compras@mercado.com.br;financeiro@mercado.com.br",
       notes: "Portão lateral",
     });
+
+    // A list typed on the form is stored as the import stores one.
+    const typed = await edit(
+      " Fiscal@Mercado.com.br, compras@mercado.com.br ; fiscal@mercado.com.br",
+    );
+
+    expect(typed.statusCode).toBe(200);
+    expect(
+      await prisma.delivery.findUniqueOrThrow({
+        where: { id: delivery.id },
+        select: { recipient_email: true },
+      }),
+    ).toEqual({
+      recipient_email: "Fiscal@Mercado.com.br;compras@mercado.com.br",
+    });
+  });
+
+  it("takes the same list on the panel's create, stored the same way", async () => {
+    const created = await call(
+      "POST",
+      `/delivery/create-delivery/${CARRIER}`,
+      tokens.admin,
+      {
+        shipperId: SHIPPER,
+        recipient_name: "Cliente com lista",
+        recipient_email: "compras@mercado.com.br, financeiro@mercado.com.br",
+        cep: "01001000",
+        city: "São Paulo",
+        uf: "SP",
+        street: "Praça da Sé",
+      },
+    );
+
+    expect(created.statusCode).toBe(201);
+    expect(
+      await prisma.delivery.findUniqueOrThrow({
+        where: { id: JSON.parse(created.body).data.id },
+        select: { recipient_email: true },
+      }),
+    ).toEqual({
+      recipient_email: "compras@mercado.com.br;financeiro@mercado.com.br",
+    });
+
+    const refused = await call(
+      "POST",
+      `/delivery/create-delivery/${CARRIER}`,
+      tokens.admin,
+      {
+        shipperId: SHIPPER,
+        recipient_name: "Cliente com lista inválida",
+        recipient_email: "compras@mercado.com.br;financeiro@",
+        cep: "01001000",
+        city: "São Paulo",
+        uf: "SP",
+        street: "Praça da Sé",
+      },
+    );
+
+    expect(refused.statusCode).toBe(400);
+    expect(JSON.parse(refused.body)).toMatchObject({
+      code: "VALIDATION_ERROR",
+      message: "O e-mail do destinatário não é válido.",
+    });
   });
 });
 

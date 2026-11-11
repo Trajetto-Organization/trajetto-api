@@ -237,4 +237,47 @@ describe("the changes an edit names", () => {
       "Dados alterados no painel: endereço, data prevista e observações.",
     );
   });
+
+  it("compares the e-mail as the recipients it names", () => {
+    // A list stored before the panel joined it by ";" comes back from the
+    // form as the panel stores it: the same people, not a change.
+    const listed = {
+      ...current,
+      recipient_email: "compras@mercado.com.br, financeiro@mercado.com.br",
+    } as Delivery;
+
+    expect(
+      deliveryEditChanges(listed, [], {
+        recipient_email: "compras@mercado.com.br;financeiro@mercado.com.br",
+      }),
+    ).toEqual([]);
+    expect(
+      deliveryEditChanges(listed, [], {
+        recipient_email: "compras@mercado.com.br",
+      }),
+    ).toEqual(["e-mail"]);
+  });
+});
+
+describe("the recipient's e-mail list on the edit", () => {
+  it("stores the list as the imports do, and a resend of an old one is no change", async () => {
+    const deliveryId = await seed();
+    onRoute(deliveryId);
+
+    // Written before the panel normalised it: the form shows it back as is.
+    const row = deliveries.deliveries.find(({ id }) => id === deliveryId)!;
+
+    row.recipient_email = "compras@mercado.com.br, financeiro@mercado.com.br";
+
+    const updated = await edit(deliveryId, {
+      recipient_name: "Mercado Central",
+      recipient_email: "compras@mercado.com.br, financeiro@mercado.com.br",
+    });
+
+    expect(updated.recipient_email).toBe(
+      "compras@mercado.com.br;financeiro@mercado.com.br",
+    );
+    expect(routes.routes[0].plan_version).toBe(3);
+    expect(notes(deliveryId)).toEqual([]);
+  });
 });
