@@ -1,4 +1,4 @@
-name: Set up the API toolchain
+name: Set up dependencies
 description: >-
   Node 22.21.1 with the yarn cache, the Prisma engines cached by their
   version, the frozen install and, unless told otherwise, the Prisma client.

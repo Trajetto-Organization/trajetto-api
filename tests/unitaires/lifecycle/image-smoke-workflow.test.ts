@@ -288,7 +288,7 @@ const RELEASE_SOURCE = "Look up the release image for this source";
 const RELEASE_SMOKE_BUILD = "Build the release image for the smoke test";
 const RELEASE_SMOKE_PULL = "Pull the reused release image for the smoke test";
 const API_SMOKE = "Smoke test the API image";
-const API_PUSH = "Build and push Docker image";
+const API_PUSH = "Build and push the API image";
 const RELEASE_PUSH = "Build and push the release image";
 const RELEASE_TAG = "Tag the reused release image for this commit";
 

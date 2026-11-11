@@ -46,12 +46,12 @@ jobs:
     timeout-minutes: 10
 
     steps:
-      - name: Checkout repository (full history)
+      - name: Check out the full history
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 0
 
-      - name: Scan every commit for secrets
+      - name: Scan the history for secrets
         run: |
           docker run --rm -v "$PWD:/repo" --entrypoint sh \
             zricethezav/gitleaks:v8.30.1@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f \
@@ -81,7 +81,7 @@ jobs:
     steps:
       # The scripts, and the history the documentation rules compare
       # (blobless: commits and trees only); origin/main comes with it.
-      - name: Checkout the PR head (history and scripts)
+      - name: Check out the PR head (history and scripts)
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           ref: ${{ github.event.pull_request.head.sha }}
@@ -125,7 +125,7 @@ jobs:
       # an older build of the same commit, which a rebuild's deploy
       # rewrites); anything else = GHCR or git failed, and so does this. Its
       # answer (`commit`) is the build the merge promotes.
-      - name: Wait for the staging deploy of the PR head
+      - name: Wait for the staging build of the head
         id: staged
         env:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}

@@ -136,7 +136,7 @@ Expo, Resend, R2) atualiza este arquivo no mesmo dia, com:
 
 "No mesmo dia" vale para o texto, não para o push. Desde 10/11/2026 um push
 só de documentação na API roda só o secret scan e o `Docs` (o Prettier e os
-unitários sem cobertura, uns 11 min da cota da
+unitários sem cobertura, uns 12 min da cota da
 [seção 7.2](#72-visibilidade-e-a-cota-do-actions)), sem build nem deploy.
 Para subir só o doc, ponha `[skip ci]` na mensagem do commit: o GitHub não
 roda workflow nenhum para ele, e desde 30/10/2026 isso é seguro nos três
@@ -1568,10 +1568,10 @@ Actions e Packages incluído é de 0,5 GB (0 GB usado em 29/10). A cota renova n
 dia 1º de cada mês. Até 09/11/2026 cada push de código custava por volta de
 1 hora de runner por repositório (na API, uns 75 min cobrados); os 2.000
 minutos davam uns 30 pushes por mês somando os três. Desde 10/11/2026 a API
-gasta uns 60 min cobrados num push de código na `staging` (uns 25 de
-relógio), uns 10 num push só de documentação e uns 2 num PR para `main`
+gasta uns 61 min cobrados num push de código na `staging` (uns 25 de
+relógio), uns 12 num push só de documentação e uns 2 num PR para `main`
 ([`deploy.md` → Tempos e minutos](./deploy.md#tempos-e-minutos)): no ritmo
-de novembro, uns 1.700 min por mês só da API, ainda acima do que sobra da
+de novembro, uns 1.750 min por mês só da API, ainda acima do que sobra da
 cota com a web e o app. Onde ver: organização → _Settings → Billing and
 licensing_ → _Usage_ (os minutos gastos, por repositório) e _Budgets and
 alerts_ (os budgets).
@@ -1892,7 +1892,7 @@ um token pessoal.
   `EXPO_UPDATE_PRIVATE_KEY`. Pode exigir plano pago e muda o runtime de forma
   permanente
   ([`trajetto-mobile/docs/deploy.md` → OTA assinada](https://github.com/Trajetto-Organization/trajetto-mobile/blob/staging/docs/deploy.md#ota-assinada-code-signing)).
-- **Build manual** (_Actions → Release (EAS) → Run workflow_): oferece
+- **Build manual** (_Actions → Native build → Run workflow_, o `native-build.yml`): oferece
   `development`, `staging` e `production` desde o commit `213d6b0` (29/10).
   O `preview` saiu da lista porque é só a base do `staging`.
 - **Rollback de OTA**: `ota-rollback.yml`, que republica um grupo anterior.

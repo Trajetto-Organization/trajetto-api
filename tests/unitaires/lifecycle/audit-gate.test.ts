@@ -274,7 +274,7 @@ describe.skipIf(!hasShell("bash"))(
 describe("the workflows run the gate", () => {
   it("in the validation, comparing with the base the caller's Changes picked", () => {
     const workflow = readWorkflow("validate.yml");
-    const job = workflow.jobs.find((each) => each.name === "checks")!;
+    const job = workflow.jobs.find((each) => each.name === "validate")!;
     const step = job.steps.find(
       (each) => each.name === "Audit production dependencies",
     )!;

@@ -65,11 +65,11 @@ tests/contract/               suítes de contrato de repositório (Prisma × in-
 tests/ai-local/               contrato opt-in com o contêiner de IA real
 tests/load/                   harness de carga (k6 + Traefik) e seed das suítes de navegador da web/app
 .github/workflows/ci.yml      branches de trabalho: Changes, Secret scan, Validate (sem E2E)
-.github/workflows/validate.yml  a validação inteira (reutilizável): Validate, E2E (1/3..3/3), AI OCR, Docs
+.github/workflows/validate.yml  a validação inteira (reutilizável): Validate, E2E (1/3..3/3), AI OCR, Docs; Result, o veredito que o Gate lê
 .github/workflows/staging.yml  push em staging: Changes → Secret scan + Validate → Gate → Build → Image scan → Deploy
 .github/workflows/pr.yml      PR para main: Secret scan e Staging evidence (não valida de novo)
 .github/workflows/production.yml  main: Staging evidence → Deploy (aprovação) → Release; Run workflow = rollback
-.github/actions/setup, deploy  ações compostas: o setup do Node/yarn/Prisma e o deploy de um ambiente
+.github/actions/setup, deploy, siblings  ações compostas: o setup do Node/yarn/Prisma, o deploy de um ambiente e o checkout da web e do app ao lado (Pick the sibling branches)
 .github/scripts/dokploy-deploy.mjs  deploy de uma Application do Dokploy pela API (application.deploy) e acompanhamento
 compose.development.yaml      Postgres, Redis e (perfil ai) o serviço de IA para desenvolvimento (só dev)
 ```

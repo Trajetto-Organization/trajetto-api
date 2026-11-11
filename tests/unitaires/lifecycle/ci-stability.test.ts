@@ -16,6 +16,7 @@ import {
   stepNames,
   stepOf,
   timeoutOf,
+  workflowOf,
 } from "./support/workflow-text";
 
 /**
@@ -40,6 +41,8 @@ import {
  * - a newer push cancels only a validation, never a build, a deploy or a
  *   release, and a push of documentation on staging cancels nothing;
  * - staging's road starts only on the staging branch;
+ * - a job past one that runs over a skip (the Gate, validate.yml) states
+ *   its own status check: the implicit success() would skip it;
  * - GHCR down fails only the jobs that cannot do without it;
  * - names are short statements, never questions (`?`), in every job and
  *   step.
@@ -152,7 +155,7 @@ describe("the workflows and actions", () => {
     // the deploys cover six Dokploy attempts per service; the PR check
     // waits up to 45 min.
     expect(timeoutOf(jobOf(validate, "e2e"))).toBeGreaterThanOrEqual(25);
-    expect(timeoutOf(jobOf(validate, "checks"))).toBeGreaterThanOrEqual(20);
+    expect(timeoutOf(jobOf(validate, "validate"))).toBeGreaterThanOrEqual(20);
     expect(timeoutOf(jobOf(staging, "deploy-staging"))).toBeGreaterThanOrEqual(
       120,
     );
@@ -198,7 +201,7 @@ describe("the names", () => {
     expect(named(ci, "changes")).toBe("Changes");
     expect(named(ci, "secrets")).toBe("Secret scan");
     expect(named(ci, "validate")).toBe("Validate");
-    expect(named(validate, "checks")).toBe("Validate");
+    expect(named(validate, "validate")).toBe("Validate");
     expect(named(validate, "e2e")).toBe(
       "E2E (${{ matrix.shard }}/${{ strategy.job-total }})",
     );
@@ -400,7 +403,7 @@ describe("the type-check", () => {
   // runner (a private repository's) is about 2 GB, and the check died with
   // "JavaScript heap out of memory" in a 7 GB Linux container (30/10/2026).
   it("gets a fixed heap with room over what tsc uses", () => {
-    const step = stepOf(jobOf(validate, "checks"), "Type-check");
+    const step = stepOf(jobOf(validate, "validate"), "Type-check");
     const heap = Number(
       /NODE_OPTIONS: --max-old-space-size=(\d+)/.exec(step.text)?.[1],
     );
@@ -471,10 +474,10 @@ describe("caches", () => {
     const e2e = jobOf(validate, "e2e");
     const at = stepNames(e2e);
 
-    expect(stepOf(e2e, "Set up the API toolchain").text).toMatch(
+    expect(stepOf(e2e, "Set up dependencies").text).toMatch(
       /uses: \.\/\.github\/actions\/setup\n\s+with:\n\s+schema-engine: "true"/,
     );
-    expect(at.indexOf("Set up the API toolchain")).toBeLessThan(
+    expect(at.indexOf("Set up dependencies")).toBeLessThan(
       at.indexOf("Run E2E tests"),
     );
   });
@@ -624,7 +627,7 @@ describe("cancelling", () => {
 
   it("skips the Gate, instead of failing it, when a newer push cancelled the validation", () => {
     expect(jobOf(staging, "gate").text).toContain(
-      "\n    if: ${{ github.ref == 'refs/heads/staging' && !cancelled() && needs.validate.result != 'cancelled' }}\n",
+      "\n    if: ${{ github.ref == 'refs/heads/staging' && !cancelled() && !contains(needs.*.result, 'cancelled') }}\n",
     );
   });
 });
@@ -671,6 +674,7 @@ describe("the staging road", () => {
       "secrets",
       "gate",
       "build",
+      "image-scan",
       "deploy-staging",
     ]) {
       expect(jobIf(jobOf(staging, name)), name).toContain(ON_STAGING);
@@ -679,11 +683,126 @@ describe("the staging road", () => {
   });
 });
 
+/**
+ * GitHub adds an implicit success() to a job's `if` without a status
+ * function, and that success() sees every job upstream, not only `needs`: a
+ * job skipped anywhere above skips this one, even past a job that ran
+ * because of always() or !cancelled() (actions/runner#2205). The jobs inside
+ * a reusable workflow count too, and validate.yml always skips some (Docs on
+ * a push of code, the manual AI contract on staging). staging.yml's Build,
+ * Image scan and Deploy, after a green Gate, were skipped that way on every
+ * push. So a job past one that runs over a skip says `!cancelled()` itself,
+ * and, since that alone would run it after a red Gate or a failed Build,
+ * names the result (or an output) of every job it needs — the same rule
+ * trajetto-ui and trajetto-mobile test.
+ */
+describe("a job downstream of one that runs past a skip", () => {
+  const STATUS = /\b(?:always|cancelled|failure)\(\)/;
+  const ownIf = (text: string) => /^ {4}if: (.+)$/m.exec(text)?.[1] ?? "";
+  const needsOf = (text: string) =>
+    (/^ {4}needs: (.+)$/m.exec(text)?.[1] ?? "")
+      .replace(/[[\]]/g, "")
+      .split(",")
+      .map((name) => name.trim())
+      .filter(Boolean);
+  // Job keys are [\w-]+: nothing in them to escape.
+  const cites = (job: string, need: string) =>
+    new RegExp(`needs\\.${need}\\.(?:result|outputs)\\b`).test(job);
+
+  /** The jobs past such a job, with what each one leaves unsaid. */
+  function unstated(text: string): string[] {
+    const jobs = new Map(
+      workflowOf("", text).jobs.map((job) => [job.name, job.text] as const),
+    );
+    const ancestors = (key: string, seen = new Set<string>()) => {
+      for (const parent of needsOf(jobs.get(key) ?? "")) {
+        if (seen.has(parent)) continue;
+        seen.add(parent);
+        ancestors(parent, seen);
+      }
+
+      return seen;
+    };
+    // A job that may finish with something upstream of it, or inside it,
+    // skipped: a status function in its own `if`, or a call of a reusable
+    // workflow.
+    const passesSkips = (key: string) => {
+      const job = jobs.get(key) ?? "";
+
+      return (
+        STATUS.test(ownIf(job)) ||
+        /\n {4}uses: \.\/\.github\/workflows\//.test(job)
+      );
+    };
+
+    return [...jobs].flatMap(([key, job]) => {
+      const past = [...ancestors(key)].filter(passesSkips);
+
+      if (past.length === 0) return [];
+
+      const missing = [
+        ...(/!cancelled\(\)/.test(ownIf(job)) ? [] : ["!cancelled()"]),
+        ...needsOf(job)
+          .filter((need) => !cites(job, need))
+          .map((need) => `needs.${need}`),
+      ];
+
+      return missing.length > 0
+        ? [`${key} (after ${past.join(", ")}: ${missing.join(", ")})`]
+        : [];
+    });
+  }
+
+  it.each(workflows.map((workflow) => [workflow.file, workflow] as const))(
+    "%s states it in every such job",
+    (_, workflow) => {
+      expect(unstated(workflow.text)).toEqual([]);
+    },
+  );
+
+  it("catches staging.yml as it was", () => {
+    const before = staging.text
+      .replace(
+        /\n {4}if: \$\{\{ !cancelled\(\) && github\.ref == 'refs\/heads\/staging' && needs\.gate\.result == 'success'[^\n]*\n/,
+        "\n    if: github.ref == 'refs/heads/staging' && needs.changes.outputs.docs != 'true'\n",
+      )
+      .replace(
+        /\n {4}if: \$\{\{ !cancelled\(\) && github\.ref == 'refs\/heads\/staging' && needs\.build\.result == 'success' \}\}\n/,
+        "\n",
+      )
+      .replace(
+        /\n {4}if: \$\{\{ !cancelled\(\) && github\.ref == 'refs\/heads\/staging' && needs\.build\.result == 'success' && needs\.image-scan\.result == 'success' \}\}\n/,
+        "\n    if: github.ref == 'refs/heads/staging'\n",
+      );
+
+    expect(before).not.toBe(staging.text);
+    expect(unstated(before)).toEqual([
+      "build (after gate, validate: !cancelled(), needs.gate, needs.secrets)",
+      "image-scan (after gate, validate: !cancelled())",
+      "deploy-staging (after gate, validate: !cancelled(), needs.image-scan)",
+    ]);
+  });
+
+  // !cancelled() alone runs the job after a red Gate: the Build of a commit
+  // that failed its validation would publish an image.
+  it("catches a job that says only !cancelled()", () => {
+    const loose = staging.text.replace(
+      / && needs\.gate\.result == 'success' && needs\.secrets\.result == 'success'/,
+      "",
+    );
+
+    expect(loose).not.toBe(staging.text);
+    expect(unstated(loose)).toEqual([
+      "build (after gate, validate: needs.gate, needs.secrets)",
+    ]);
+  });
+});
+
 describe("what a push builds", () => {
   it("documentation only: the secret scan and Docs, no image", () => {
     for (const workflow of [ci, staging]) {
       const changes = jobOf(workflow, "changes");
-      const classify = stepOf(changes, "Classify the push");
+      const classify = stepOf(changes, "Classify changes");
 
       expect(classify.run).toMatch(
         /^bash \.github\/scripts\/changes\.sh (branch|staging)$/,
@@ -695,14 +814,14 @@ describe("what a push builds", () => {
     }
 
     expect(jobOf(staging, "build").text).toContain(
-      "if: github.ref == 'refs/heads/staging' && needs.changes.outputs.docs != 'true'",
+      "if: ${{ !cancelled() && github.ref == 'refs/heads/staging' && needs.gate.result == 'success' && needs.secrets.result == 'success' && needs.changes.outputs.docs != 'true' }}",
     );
     expect(jobOf(validate, "docs").text).toContain("if: ${{ inputs.docs }}");
-    expect(stepOf(jobOf(validate, "docs"), "Run the unit tests").run).toBe(
+    expect(stepOf(jobOf(validate, "docs"), "Unit tests").run).toBe(
       "yarn test --reporter=basic",
     );
 
-    for (const job of ["checks", "e2e", "ai-ocr"]) {
+    for (const job of ["validate", "e2e", "ai-ocr"]) {
       expect(jobOf(validate, job).text, job).toMatch(
         /\n {4}if: \$\{\{ !inputs\.docs( && inputs\.e2e)? \}\}\n/,
       );
@@ -715,30 +834,31 @@ describe("what a push builds", () => {
   // the links and ADRs a guide cites in the siblings, skipping themselves
   // without them.
   it("documentation only: Prettier and the siblings too, as in Validate", () => {
-    for (const job of ["checks", "docs"]) {
+    for (const job of ["validate", "docs"]) {
       const each = jobOf(validate, job);
       const names = stepNames(each);
 
-      expect(stepOf(each, "Lint").run, job).toBe("yarn lint:check");
+      expect(stepOf(each, "Check formatting").run, job).toBe("yarn lint:check");
       expect(
-        stepOf(each, "Check out the web and the app beside the API").text,
+        stepOf(each, "Check out the web and the app next to this repository")
+          .text,
         job,
       ).toContain(
         "uses: ./.github/actions/siblings\n        with:\n          token: ${{ secrets.CLIENT_REPOS_READ_TOKEN }}\n",
       );
       // Out of the workspace before the install, Prettier and tsc.
       expect(
-        names.indexOf("Check out the web and the app beside the API"),
+        names.indexOf("Check out the web and the app next to this repository"),
         job,
-      ).toBeLessThan(names.indexOf("Set up the API toolchain"));
+      ).toBeLessThan(names.indexOf("Set up dependencies"));
     }
 
     expect(stepNames(siblings)).toEqual([
-      "Check the client checkout token",
+      "Check the sibling token",
       "Pick the sibling branches",
       "Check out the web next to this repository",
       "Check out the app next to this repository",
-      "Move the clients beside the API",
+      "Move the web and the app beside this repository",
     ]);
   });
 
@@ -808,14 +928,11 @@ describe.skipIf(!hasShell("bash"))("the blocks that decide, run", () => {
   ) => runBlock(box, script, env, cwd);
 
   describe("the Gate", () => {
-    const GATE = stepOf(
-      jobOf(staging, "gate"),
-      "Check the validation results",
-    ).run;
+    const GATE = stepOf(jobOf(staging, "gate"), "Check results").run;
     const green = {
       CHANGES: "success",
       SECRETS: "success",
-      VALIDATE: "success",
+      VALIDATE: "true",
     };
 
     it("passes only when the classification, the scan and the whole validation passed", () => {
@@ -827,14 +944,45 @@ describe.skipIf(!hasShell("bash"))("the blocks that decide, run", () => {
 
     it.each([
       ["SECRETS", "failure", "Secret scan (failure)"],
-      ["VALIDATE", "failure", "Validate (failure)"],
-      ["VALIDATE", "skipped", "Validate (skipped)"],
+      ["VALIDATE", "", "Validate (Validate / Result)"],
+      ["VALIDATE", "false", "Validate (Validate / Result)"],
       ["CHANGES", "failure", "Changes (failure)"],
-    ])("fails when %s is %s", (key, value, said) => {
+    ])("fails when %s is %o", (key, value, said) => {
       const result = exec(GATE, { ...green, [key]: value });
 
       expect(result.status).toBe(1);
       expect(result.log).toContain(`::error::O Gate não passa: ${said}`);
+    });
+
+    // The validation's verdict is validate.yml's own (its Result job), never
+    // needs.validate.result: a job skipped inside the reusable workflow
+    // leaks into the caller's result, and what it makes of it is not a
+    // contract (validate.yml's header). A `success` there cannot pass a
+    // Gate, and a `skipped` there cannot fail one.
+    it("reads the validation's verdict from validate.yml's output, never from the caller's result", () => {
+      const env = stepOf(jobOf(staging, "gate"), "Check results").text;
+
+      expect(env).toContain("VALIDATE: ${{ needs.validate.outputs.passed }}");
+      expect(validate.text).toContain("\n    outputs:\n      passed:\n");
+      expect(validate.text).toContain(
+        "        value: ${{ jobs.result.outputs.passed }}\n",
+      );
+
+      for (const workflow of workflows) {
+        const callers = workflow.jobs
+          .filter((job) => job.uses === "./.github/workflows/validate.yml")
+          .map((job) => job.name);
+        const code = workflow.text
+          .split("\n")
+          .filter((line) => !line.trim().startsWith("#"))
+          .join("\n");
+
+        for (const caller of callers) {
+          expect(code, `${workflow.file}: ${caller}`).not.toContain(
+            `needs.${caller}.result`,
+          );
+        }
+      }
     });
 
     it("needs exactly those, and the Build needs it and the scan", () => {
@@ -848,6 +996,108 @@ describe.skipIf(!hasShell("bash"))("the blocks that decide, run", () => {
       expect(jobOf(staging, "deploy-staging").text).toContain(
         "needs: [build, image-scan]",
       );
+    });
+  });
+
+  describe("the verdict of validate.yml (Result)", () => {
+    const result = jobOf(validate, "result");
+    const CHECK = stepOf(result, "Check results").run;
+    // A push of code on staging: everything but Docs and the manual contract.
+    const code = {
+      DOCS: "false",
+      WANT_E2E: "true",
+      WANT_AI_LOCAL: "false",
+      VALIDATE: "success",
+      E2E: "success",
+      AI_OCR: "success",
+      DOCS_JOB: "skipped",
+      AI_LOCAL: "skipped",
+    };
+    const docs = {
+      ...code,
+      DOCS: "true",
+      VALIDATE: "skipped",
+      E2E: "skipped",
+      AI_OCR: "skipped",
+      DOCS_JOB: "success",
+    };
+
+    // A job added to validate.yml and left out of `needs` would never be
+    // judged: its red would not stop the Gate.
+    it("judges every other job of the file, and runs past their skips", () => {
+      const others = validate.jobs
+        .map((job) => job.name)
+        .filter((name) => name !== "result");
+
+      expect(result.text).toContain(`\n    needs: [${others.join(", ")}]\n`);
+      expect(result.text).toContain("\n    if: ${{ !cancelled() }}\n");
+      expect(result.text).toContain(
+        "\n    outputs:\n      passed: ${{ steps.check.outputs.passed }}\n",
+      );
+      for (const name of others) {
+        expect(stepOf(result, "Check results").text, name).toContain(
+          `\${{ needs.${name}.result }}`,
+        );
+      }
+    });
+
+    it.each([
+      ["a push of code on staging", code],
+      [
+        "a work branch, without the E2E",
+        { ...code, WANT_E2E: "false", E2E: "skipped" },
+      ],
+      [
+        "Run workflow with the AI contract",
+        { ...code, WANT_AI_LOCAL: "true", AI_LOCAL: "success" },
+      ],
+      ["a push of documentation", docs],
+    ])("passes %s", (_, env) => {
+      const run = exec(CHECK, env);
+
+      expect(run.status, run.log).toBe(0);
+      expect(run.output).toBe("passed=true\n");
+    });
+
+    it.each([
+      ["an E2E job failed", { ...code, E2E: "failure" }, "E2E (failure)"],
+      [
+        "the E2E did not run on staging",
+        { ...code, E2E: "skipped" },
+        "E2E (skipped)",
+      ],
+      [
+        "Validate was skipped on code",
+        { ...code, VALIDATE: "skipped" },
+        "Validate (skipped)",
+      ],
+      ["AI OCR failed", { ...code, AI_OCR: "failure" }, "AI OCR (failure)"],
+      ["Docs ran on code", { ...code, DOCS_JOB: "success" }, "Docs (success)"],
+      [
+        "the AI contract was asked for and skipped",
+        { ...code, WANT_AI_LOCAL: "true" },
+        "AI local contract (skipped)",
+      ],
+      ["Docs failed", { ...docs, DOCS_JOB: "failure" }, "Docs (failure)"],
+      [
+        "Validate ran on documentation",
+        { ...docs, VALIDATE: "success" },
+        "Validate (success)",
+      ],
+      [
+        "no result at all",
+        { ...code, VALIDATE: "" },
+        "Validate (sem resultado)",
+      ],
+    ])("fails when %s, naming it", (_, env, said) => {
+      const run = exec(CHECK, env);
+
+      expect(run.status).toBe(1);
+      expect(run.log).toContain(
+        "::error title=Result::A validação não passou:",
+      );
+      expect(run.log).toContain(said);
+      expect(run.output).toBe("");
     });
   });
 
@@ -1195,7 +1445,7 @@ describe.skipIf(!hasShell("bash"))("the blocks that decide, run", () => {
         expect(down.outputs[key], job).toBe(key === "ok" ? "false" : "failed");
       }
       expect(
-        stepOf(jobOf(staging, "changes"), "Classify the push").text,
+        stepOf(jobOf(staging, "changes"), "Classify changes").text,
       ).toContain("GHCR_LOGIN: ${{ steps.ghcr.outputs.login }}");
     });
 
@@ -1281,10 +1531,7 @@ describe.skipIf(!hasShell("bash"))("the blocks that decide, run", () => {
   });
 
   describe("the image scan", () => {
-    const SCAN = stepOf(
-      jobOf(staging, "image-scan"),
-      "Scan the images for fixable critical vulnerabilities",
-    );
+    const SCAN = stepOf(jobOf(staging, "image-scan"), "Scan the images");
 
     const env = (enforce: boolean, db = "fresh") => ({
       HOME: box.root,

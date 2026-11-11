@@ -53,13 +53,13 @@ jobs:
     steps:
       # The history the comparison reads (commits and trees) and the
       # scripts; origin/staging comes with it.
-      - name: Checkout repository
+      - name: Check out the full history
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 0
           sparse-checkout: .github/scripts
 
-      - name: Classify the push
+      - name: Classify changes
         id: changes
         env:
           BEFORE: ${{ github.event.before }}
@@ -81,12 +81,12 @@ jobs:
       contents: read
 
     steps:
-      - name: Checkout repository (full history)
+      - name: Check out the full history
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 0
 
-      - name: Scan every commit for secrets
+      - name: Scan the history for secrets
         run: |
           docker run --rm -v "$PWD:/repo" --entrypoint sh \
             zricethezav/gitleaks:v8.30.1@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f \

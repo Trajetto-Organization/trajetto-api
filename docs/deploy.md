@@ -214,7 +214,8 @@ repositório. O contrato de rotas da API (a ação `.github/actions/siblings`,
 passo _Pick the sibling branches_, no `Validate` e no `Docs` do
 `validate.yml`) testa a branch contra a web e o app de mesmo nome, e as
 sondas da web e do app fazem o mesmo com a API; sem branch de mesmo nome, a
-sonda usa a `staging` do irmão. A regra é a mesma nos três `docs/deploy.md`.
+sonda usa a `staging` do irmão. A regra, com o mesmo texto nos três manuais,
+está na [seção 26, "O CI dos três"](#o-ci-dos-três-desde-10112026).
 
 **Hotfix**: a mesma estrada, mais curta — branch `fix/...` → `staging`
 (espera o verde) → PR `staging → main`. Não existe caminho que pule o
@@ -241,21 +242,21 @@ forma e os mesmos nomes nos três repositórios. A validação está num
 workflow reutilizável só (`validate.yml`), que o `ci.yml` e o `staging.yml`
 chamam; o setup e o deploy são ações compostas.
 
-| Arquivo                    | Gatilho                                                                                          | Jobs (o nome do check)                                                                                                                                                       |
-| -------------------------- | ------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `ci.yml`                   | push em branch de trabalho (todas menos `main`, `master` e `staging`); _Run workflow_ (`e2e`)    | `Changes` → `Secret scan` + `Validate` (o `validate.yml`, sem E2E; no _Run workflow_, com o E2E se pedido e o `AI local contract (manual)`)                                  |
-| `staging.yml`              | push em `staging`; _Run workflow_ **na `staging`** (`force_ai_build`; em outra branch nada roda) | `Changes` → `Secret scan` + `Validate` (o `validate.yml`, com E2E) → `Gate` → `Build` → `Image scan` → `Deploy`                                                              |
-| `validate.yml`             | `workflow_call` (do `ci.yml` e do `staging.yml`)                                                 | `Validate`, `E2E (1/3)`, `E2E (2/3)`, `E2E (3/3)`, `AI OCR`; num push só de documentação, só `Docs`; no _Run workflow_ do `ci.yml`, também `AI local contract (manual)`      |
-| `pr.yml`                   | pull request para `main`                                                                         | `Secret scan`, `Staging evidence`                                                                                                                                            |
-| `production.yml`           | push em `main`; _Run workflow_ (o rollback: `image_tag`, `force_ai_build`)                       | `Staging evidence` → `Deploy` (a aprovação do environment `production`) → `Release` (só no push)                                                                             |
-| `cloudflare-ranges.yml`    | toda segunda, 06:00 de São Paulo; _Run workflow_                                                 | `Cloudflare ranges` ([seção 6.1](#61-firewall-da-vps-contabo))                                                                                                               |
-| `.github/actions/setup`    | ação composta                                                                                    | Node `22.21.1` com o cache do yarn, o cache dos engines do Prisma, `yarn install --frozen-lockfile`, o schema engine (no E2E) e o `prisma generate`                          |
-| `.github/actions/deploy`   | ação composta, chamada pelo `Deploy` do `staging.yml` e do `production.yml`                      | o deploy de um ambiente, igual nos dois (abaixo)                                                                                                                             |
-| `.github/actions/siblings` | ação composta, chamada pelo `Validate` e pelo `Docs`                                             | a web e o app ao lado da API (`../trajetto-ui`, `../trajetto-mobile`), na branch de mesmo nome ou na `staging` deles: o contrato de rotas e os links da documentação os leem |
+| Arquivo                    | Gatilho                                                                                          | Jobs (o nome do check)                                                                                                                                                                                                     |
+| -------------------------- | ------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ci.yml`                   | push em branch de trabalho (todas menos `main`, `master` e `staging`); _Run workflow_ (`e2e`)    | `Changes` → `Secret scan` + `Validate` (o `validate.yml`, sem E2E; no _Run workflow_, com o E2E se pedido e o `AI local contract (manual)`)                                                                                |
+| `staging.yml`              | push em `staging`; _Run workflow_ **na `staging`** (`force_ai_build`; em outra branch nada roda) | `Changes` → `Secret scan` + `Validate` (o `validate.yml`, com E2E) → `Gate` → `Build` → `Image scan` → `Deploy`                                                                                                            |
+| `validate.yml`             | `workflow_call` (do `ci.yml` e do `staging.yml`)                                                 | `Validate`, `E2E (1/3)`, `E2E (2/3)`, `E2E (3/3)`, `AI OCR`; num push só de documentação, só `Docs`; no _Run workflow_ do `ci.yml`, também `AI local contract (manual)`; depois de todos, `Result` (o veredito da chamada) |
+| `pr.yml`                   | pull request para `main`                                                                         | `Secret scan`, `Staging evidence`                                                                                                                                                                                          |
+| `production.yml`           | push em `main`; _Run workflow_ (o rollback: `image_tag`, `force_ai_build`)                       | `Staging evidence` → `Deploy` (a aprovação do environment `production`) → `Release` (só no push)                                                                                                                           |
+| `cloudflare-ranges.yml`    | toda segunda, 06:00 de São Paulo; _Run workflow_                                                 | `Cloudflare ranges` ([seção 6.1](#61-firewall-da-vps-contabo))                                                                                                                                                             |
+| `.github/actions/setup`    | ação composta                                                                                    | Node `22.21.1` com o cache do yarn, o cache dos engines do Prisma, `yarn install --frozen-lockfile`, o schema engine (no E2E) e o `prisma generate`                                                                        |
+| `.github/actions/deploy`   | ação composta, chamada pelo `Deploy` do `staging.yml` e do `production.yml`                      | o deploy de um ambiente, igual nos dois (abaixo)                                                                                                                                                                           |
+| `.github/actions/siblings` | ação composta, chamada pelo `Validate` e pelo `Docs`                                             | a web e o app ao lado da API (`../trajetto-ui`, `../trajetto-mobile`), na branch de mesmo nome ou na `staging` deles: o contrato de rotas e os links da documentação os leem                                               |
 
 Na tela do GitHub, um job de workflow reutilizável aparece com o nome do job
 que o chamou na frente: `Validate / Validate`, `Validate / E2E (1/3)`,
-`Validate / AI OCR`, `Validate / Docs`. Os nomes são afirmações curtas, em
+`Validate / AI OCR`, `Validate / Docs`, `Validate / Result`. Os nomes são afirmações curtas, em
 inglês, iguais nos três repositórios quando é a mesma coisa, e nunca
 perguntas (o `ci-stability.test.ts` recusa `?` em nome de job ou de passo).
 
@@ -275,7 +276,8 @@ pergunta é só "esse código pode ir para o staging?".
 
 ### `validate.yml` — a validação, num lugar só
 
-Todos os jobs correm em paralelo; o `Gate` do `staging.yml` espera todos.
+Todos os jobs correm em paralelo, e o `Result`, depois deles, dá o veredito
+da chamada: a saída `passed`, que o `Gate` do `staging.yml` lê.
 
 | Job                                   | O que faz                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
 | ------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -284,6 +286,7 @@ Todos os jobs correm em paralelo; o `Gate` do `staging.yml` espera todos.
 | `AI OCR`                              | o pytest do serviço de IA dentro da imagem (stage `test`, Buildx com cache do GitHub no escopo `ai-test`; o build só fala com o Docker Hub e o PyPI). Pulado quando o GHCR já tem `trajetto-ai:src-<hash git de infra/ai-ocr>`: essa imagem só foi construída depois de o mesmo pytest passar nos mesmos arquivos. O GHCR sem resposta não é "não tem": o job avisa e testa — inclusive quando é o login que falha (`ghcr.sh login`, que repete; o `docker/login-action` derrubava o job antes da alternativa). `force_ai_build` testa sempre                                                                                                                                                                                                                                                                                                                                                                        |
 | `Docs`                                | só num push de documentação: os irmãos (a mesma ação do `Validate`), o Prettier (`yarn lint:check`, que lê `*.md` e `docs/`) e os unitários sem cobertura (`yarn test`), porque há testes que leem a documentação (`tests/unitaires/docs`, os guias de agente, as seções deste guia) e os links dela para os irmãos. Um vermelho cai no commit que o causou, não no próximo push de código                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
 | `AI local contract (manual)`          | só com `ai_local` (o _Run workflow_ do `ci.yml`): `tests/ai-local` contra o contêiner real de IA, timeout de 45 min                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| `Result`                              | depois de todos (`!cancelled()`): confere o resultado de cada job desta chamada contra o que ela pediu (verde se pedido, pulado se não: o `Docs` num push de código, o E2E sem `e2e`, o contrato manual sem `ai_local`) e só então grava `passed=true`, a saída do `validate.yml`. Um job a mais aqui entra no `needs` dele (`ci-stability.test.ts`). Ver "O veredito do `validate.yml`" no `staging.yml`, abaixo                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 
 ### `staging.yml` — push em `staging`
 
@@ -292,7 +295,7 @@ Todos os jobs correm em paralelo; o `Gate` do `staging.yml` espera todos.
 | `Changes`     | `.github/scripts/changes.sh staging`: o push (`before` → commit) só muda documentação? Sem `before` (_Run workflow_) é código e roda tudo. A base do audit é o **último build que a staging serviu** (o ancestral mais próximo, pelo primeiro pai, com `staged-<7>` no digest de `sha-<7>`), e não o push anterior: um push cujo run foi cancelado ou falhou entra no intervalo do seguinte, e uma mudança de dependência dele passa pelo audit que bloqueia. Sem ancestral servido em 50 commits, a base fica vazia e o audit bloqueia; o GHCR sem resposta (inclusive no login, que repete e não derruba o job) volta ao push anterior, com aviso                                                                                                                                                                                                     |
 | `Secret scan` | o mesmo gitleaks do `ci.yml` (mesma imagem, flags, `.gitleaksignore`)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
 | `Validate`    | o `validate.yml` com o E2E inteiro (todo push de código). Concorrência própria, `cancel-in-progress: true`: um push novo **de código** cancela a validação do run anterior (grupo `staging-validate`), que nunca faria deploy (só a cabeça da branch implanta). Um push de documentação valida num grupo só do próprio run (`staging-docs-<run>`) e não cancela nada: ele não constrói, e quem implanta é o run de código embaixo dele (a conferência da cabeça deixa)                                                                                                                                                                                                                                                                                                                                                                                  |
-| `Gate`        | junta tudo o que bloqueia o deploy: `Changes`, `Secret scan` e `Validate` (que só é verde com o `Validate`, os 3 E2E e o `AI OCR` verdes, ou com o `Docs` num push de documentação). É o check que o _Staging evidence_ confere no commit promovido (e só o deste workflow, na branch `staging`, vale). Uma validação cancelada por um push novo **pula** o `Gate` (o run fica cancelado, cinza, sem build)                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| `Gate`        | junta tudo o que bloqueia o deploy: `Changes`, `Secret scan` e o veredito do `validate.yml` (a saída `passed` do `Result`, que só existe com o `Validate`, os 3 E2E e o `AI OCR` verdes, ou com o `Docs` num push de documentação; nunca o `needs.validate.result`, abaixo). É o check que o _Staging evidence_ confere no commit promovido (e só o deste workflow, na branch `staging`, vale). Uma validação cancelada por um push novo **pula** o `Gate` (o run fica cancelado, cinza, sem build)                                                                                                                                                                                                                                                                                                                                                     |
 | `Build`       | só depois do `Gate` e do `Secret scan` (nenhuma imagem sai do runner antes deles: INFRA-21 e o piso de cobertura), e nunca num push de documentação. Buildx com cache do GitHub (um escopo por imagem); publica `sha-<7>` das três imagens (API, migração e IA) com SBOM e proveniência (`provenance: mode=max`; o único build arg é o commit, `GIT_SHA`, que vai para a imagem e sai na liveness). A IA só é reconstruída se o código dela mudou: toda imagem da IA leva também a tag `src-<hash git de infra/ai-ocr>`, e um push que encontra essa tag reaproveita a imagem (mesmo digest) e só acrescenta o `sha-<7>` dele; `force_ai_build` reconstrói mesmo assim. A imagem de migração segue a mesma regra, com a tag `src-<hash>` de `.github/scripts/migrate-source.sh`. Smoke test das imagens antes do push (abaixo). Exporta os três digests |
 | `Image scan`  | o Trivy nas três imagens, pelos digests que o `Build` publicou (CRITICAL corrigível; só relata até `IMAGE_SCAN_ENFORCE=true`, e só um achado reprova: o banco de vulnerabilidades é baixado uma vez por run, com cache diário, e falha no download ou erro do Trivy viram aviso). Um achado com a variável ligada para o `Deploy`: o build nunca ganha `staged-<7>`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | `Deploy`      | job `deploy-staging`, environment `staging`, um por vez (`concurrency: deploy-staging`, nunca cancelado no meio): a ação `.github/actions/deploy` com a tag `staging`, os digests do `Build`, a conferência pela liveness pública como padrão, só da cabeça da branch, as duas tags devolvidas depois de um deploy do Dokploy que falhou, e o `staged-<7>` no fim                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
@@ -307,6 +310,38 @@ de um que confere): fora da `staging`, o run sai inteiro pulado, como o
 botão do `production.yml` fora da `main`. O `check-gate.sh` também só aceita
 o `Gate` de um run do `staging.yml` na branch `staging`
 (`ci-stability.test.ts`, "the staging road"; `check-gate.test.ts`).
+
+**Função de status explícita.** O `Build`, o `Image scan` e o `Deploy` dizem
+na própria condição `!cancelled()` e o resultado de que precisam
+(`needs.gate.result == 'success'` e assim por diante). Sem uma função de
+status, o GitHub acrescenta um `success()` que enxerga todo job acima, os de
+dentro do `validate.yml` inclusive, e um job pulado em qualquer ponto (o
+`Docs` num push de código, o `AI local contract (manual)` na staging)
+pularia o build mesmo com o `Gate` verde
+([actions/runner#2205](https://github.com/actions/runner/issues/2205)). O
+`ci-stability.test.ts` ("a job downstream of one that runs past a skip")
+recusa, depois de um job que roda apesar de um pulado, um job sem
+`!cancelled()` e um que não cite o resultado (ou uma saída) de cada job do
+`needs`: só o `!cancelled()` rodaria o build depois de um `Gate` vermelho.
+É a mesma regra dos testes da web e do app.
+
+**O veredito do `validate.yml`.** O `Gate` lê `needs.validate.outputs.passed`,
+e nunca `needs.validate.result`. Algum job do `validate.yml` é sempre
+pulado (o `Docs` num push de código; o `Validate`, os E2E e o `AI OCR` num
+push de documentação), um job pulado dentro de um workflow reutilizável
+vaza para quem o chama
+([community/discussions/189172](https://github.com/orgs/community/discussions/189172)),
+e o valor que isso deixa em `needs.validate.result` não é contrato: se fosse
+`skipped`, o `Gate` ficaria vermelho em todo push e nada seria implantado.
+Lá dentro, o resultado de cada job é confiável, e o job `Result` do
+`validate.yml` o confere (abaixo de todos, com `!cancelled()`) e só então
+grava `passed=true`. O E2E em matriz impede o jeito do app, em que cada job
+grava a própria saída: a saída de um job em matriz é a do último shard que
+escreve. Uma validação cancelada por um push novo cancela o `Result` junto,
+e o `Gate` fica pulado (`!contains(needs.*.result, 'cancelled')`). O
+`ci-stability.test.ts` executa o passo do `Result` em cada combinação, exige
+que o `needs` dele tenha todo job do arquivo e recusa, nos workflows que
+chamam o `validate.yml`, qualquer leitura do resultado do job que o chama.
 
 Antes do push, o `Build` carrega as imagens da API e de migração no runner e
 roda um smoke test contra um Postgres e um Redis descartáveis, numa rede
@@ -401,7 +436,19 @@ script por `env`, nunca colados no `run:`. Os passos, em ordem:
 | `promote-production` | job `Deploy` da produção                            | **nunca**: um por vez                                               |
 
 Rodar de novo, à mão, um run antigo de código da staging enquanto um mais
-novo valida cancela a validação do mais novo (o grupo é o mesmo).
+novo valida cancela a validação do mais novo (o grupo é o mesmo). O mesmo
+acontece, raramente, sem ninguém tocar em nada: o GitHub resolve o grupo
+pela ordem de chegada do job, não pela dos commits, e se dois pushes de
+código chegam em segundos e o `Changes` do mais velho atrasa (fila de
+runner, a leitura do GHCR repetindo), o `Validate` dele entra no grupo
+depois e cancela o do mais novo. O run do topo fica cancelado, sem `Gate`
+nem `staged-<7>`, e o mais velho para no `Check run is branch head` sem
+implantar: nada chega ao staging sem validação, mas o PR para `main` espera.
+**Reexecute sempre o run mais novo, nunca um antigo** (um run cancelado não
+é vermelho, e reexecutá-lo não é o re-run de instabilidade que a regra do
+pipeline proíbe). A web fecha essa corrida com o `Check run is current` no
+fim do `Changes`, do `Build` e do `Gate`; na API e no app, onde o `Changes`
+leva segundos, ela fica com esta regra.
 
 ### Permissões
 
@@ -458,17 +505,19 @@ cobertura, na mesma imagem, em 2 núcleos: 396 s, 7.594 testes, cobertura
 Estimativa por run (relógio / minutos cobrados, cada job arredondado para
 cima), no ritmo de novembro de 2026:
 
-| Run                                  | Antes (`deploy.yml` único)                  | Agora                                                                                                                                                    |
-| ------------------------------------ | ------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| push de código na `staging`          | ~72 / ~75 (o job `test` sozinho, ~60)       | ~25 / ~60 (o caminho crítico: `Changes` → `E2E (2/3)` ~12,5 → `Gate` → `Build` ~6,5 → `Image scan` ~1,5 → `Deploy` ~4)                                   |
-| push só de documentação na `staging` | ~72 / ~75 (ou 0 com a marcação de pular CI) | ~9 / ~11 (`Changes`, `Secret scan`, `Docs` com o Prettier e os irmãos, `Gate`)                                                                           |
-| PR `staging → main`                  | ~62 / ~66, mais a espera do `staging-image` | ~1 / ~2 (mais a espera, se o staging ainda roda o mesmo commit)                                                                                          |
-| merge em `main` (promoção)           | ~8 / ~10, mais a aprovação                  | ~9 / ~11, mais a aprovação (o _Staging evidence_ é um job à parte)                                                                                       |
-| push numa branch de trabalho         | ~10 / ~13                                   | ~9 / ~11 (`Changes` ~1, `Secret scan` ~1, `Validate` ~8 com os unitários em 2 processos, `AI OCR` ~1; sem E2E). Numa branch só de documentação, ~9 / ~10 |
+| Run                                  | Antes (`deploy.yml` único)                  | Agora                                                                                                                                                                 |
+| ------------------------------------ | ------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| push de código na `staging`          | ~72 / ~75 (o job `test` sozinho, ~60)       | ~25 / ~61 (o caminho crítico: `Changes` → `E2E (2/3)` ~12,5 → `Result` → `Gate` → `Build` ~6,5 → `Image scan` ~1,5 → `Deploy` ~4)                                     |
+| push só de documentação na `staging` | ~72 / ~75 (ou 0 com a marcação de pular CI) | ~9 / ~12 (`Changes`, `Secret scan`, `Docs` com o Prettier e os irmãos, `Result`, `Gate`)                                                                              |
+| PR `staging → main`                  | ~62 / ~66, mais a espera do `staging-image` | ~1 / ~2 (mais a espera, se o staging ainda roda o mesmo commit)                                                                                                       |
+| merge em `main` (promoção)           | ~8 / ~10, mais a aprovação                  | ~9 / ~11, mais a aprovação (o _Staging evidence_ é um job à parte)                                                                                                    |
+| push numa branch de trabalho         | ~10 / ~13                                   | ~9 / ~12 (`Changes` ~1, `Secret scan` ~1, `Validate` ~8 com os unitários em 2 processos, `AI OCR` ~1, `Result` ~1; sem E2E). Numa branch só de documentação, ~9 / ~11 |
 
 Cobrados num push de código na `staging`: `Validate` ~11, os três E2E
 ~12 + ~13 + ~7, `Build` ~7, `Image scan` ~2, `Deploy` ~4, e `Changes`,
-`Secret scan`, `AI OCR` e `Gate` ~1 cada. Os jobs em paralelo custam uns 10
+`Secret scan`, `AI OCR`, `Result` e `Gate` ~1 cada. O `Result` é o minuto
+que custa o `Gate` não depender do resultado de quem chama o
+`validate.yml` ("O veredito do `validate.yml`", acima). Os jobs em paralelo custam uns 11
 min a mais por push do que um job só de validação com o molde (uns 36 min:
 o push inteiro em uns 47 de relógio e 50 cobrados), para caber nos ~25 min. Um lint vermelho não para mais o E2E
 (rodam juntos): custa o run inteiro em vez de ~6 min, raro se o lint roda
@@ -476,41 +525,29 @@ antes do push.
 
 No mês, no ritmo de novembro de 2026 (uns 22 pushes de código e 5 de
 documentação na `staging`, 5 runs de PR, 3 promoções, 7 pushes de branch e
-13 do Dependabot): de uns **2.450 min** para uns **1.700 min** só da API.
-Ainda acima da cota grátis de 2.000 min somando a web e o app.
+13 do Dependabot): de uns **2.450 min** para uns **1.750 min** só da API.
+Somando a web e o app, a organização fica acima da cota grátis de 2.000 min:
+a conta dos três, com o mesmo texto nos três manuais, está na
+[seção 26, "O CI dos três"](#o-ci-dos-três-desde-10112026).
 
 ### Ações do dono
 
-- **Rulesets**: no primeiro PR para `main` depois da virada, troque os
-  checks exigidos da `main` para `Secret scan` e `Staging evidence`
-  ([seção 13](#13-configurar-o-github), "Proteção das branches"). Os quatro
-  nomes antigos não são mais publicados.
-- **Orçamento do Actions**: cadastre uma forma de pagamento com um budget
-  limitado (US$ 10–15 por mês, uns 1.700–2.500 min a US$ 0,006) e alertas em
-  75, 90 e 100 %, com bloqueio no limite: é o único aviso antes de a cota
-  acabar ([`infraestrutura.md`, seção 7.2](./infraestrutura.md#72-visibilidade-e-a-cota-do-actions)).
-  Sem cota, os runs ficam **failed** sem job vermelho (a tabela abaixo).
-- **Limpeza do `candidate-*`**: as imagens `candidate-<7>` são da web (o
-  pacote `trajetto-ui` no GHCR, que as suítes de navegador testam antes das
-  tags definitivas); a API não as publica. A retenção delas está em
-  `trajetto-ui/docs/deploy.md`.
-- **Primeiro push depois da virada**: acompanhe o tempo de cada job e mande
-  um segundo push de código em menos de 10 min, para ver a validação do run
-  antigo cancelada (cinza, sem build nem deploy); depois, um push só de
-  documentação por cima de um de código, para ver que ele não cancela nada e
-  que o run de código implanta. Os nomes vindos do reutilizável, o check do
-  push valendo no PR, os secrets de environment na ação composta, o grupo de
-  concorrência que lê o `needs` e a leitura do workflow de cada `Gate`
-  (`actions: read`) só se confirmam num run de verdade.
+As ações comuns aos três repositórios (os Rulesets, o orçamento, a limpeza
+do GHCR, os runs antigos, os nomes novos dos runs, a ordem do primeiro push
+com o CI novo e o que acompanhar nele) estão na
+[seção 26, "O CI dos três"](#o-ci-dos-três-desde-10112026), com o mesmo
+texto nos três manuais; o orçamento tem o detalhe em
+[`infraestrutura.md`, seção 7.2](./infraestrutura.md#72-visibilidade-e-a-cota-do-actions).
+Aqui, só o que é da API:
+
+- **No primeiro run da API, além da lista comum**: os secrets de
+  environment chegando à ação composta de deploy, o grupo de concorrência
+  do `Validate`, que lê o `needs` (`staging-validate` num push de código,
+  um grupo do próprio run num de documentação), e a leitura do workflow de
+  cada `Gate` pelo `check-gate.sh` (`actions: read`): só um run de verdade
+  confirma.
 - **Na máquina**: depois de puxar esta mudança, `yarn install --force` (o
   ambiente do E2E é uma dependência `file:`; [`testes.md`](./testes.md#o-banco-molde)).
-- **Ordem do push da virada**: a API sobe para a `staging` antes da web (ou
-  no mesmo minuto, a API primeiro). Neste lote o comentário do
-  `.github/scripts/dokploy-deploy.mjs` mudou nos dois repositórios, e o
-  `dokploy-deploy.test.ts` da web exige a cópia dela idêntica à da API que o
-  CI da web baixa (a branch de mesmo nome ou a `staging` da API): com a web
-  na frente, o run dela compara a cópia nova com a API antiga e fica
-  vermelho, e toda branch da web fica vermelha até a API subir.
 - **Comentários que ainda citam o `deploy.yml`**: os do `Dockerfile` e do
   `infra/ai-ocr/Dockerfile` ficaram de propósito. Mudar só o comentário troca
   a chave da imagem de migração (`migrate-source.sh` lê o `Dockerfile`) e a
@@ -526,23 +563,24 @@ errado — nunca a rede, um registry, uma tag que andou ou um passo que travou.
 "Rodar de novo" não é correção. O que garante isso aqui (e os testes que
 guardam cada item, em `tests/unitaires/lifecycle`):
 
-| Causa de vermelho (ou verde) falso                                                                                            | O que o pipeline faz agora                                                                                                                                                                                                                                                                                                                                                                                                                                                        | Teste                                                                   |
-| ----------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------- |
-| Um aviso CRITICAL publicado hoje reprovava o push de qualquer commit, até de documentação                                     | `.github/scripts/audit-gate.sh`: o `audit-ci` bloqueia só o run cujo intervalo (desde a base que o `Changes` escolheu: no staging, o último build servido) muda `package.json`, `yarn.lock` ou `package-lock.json` (em qualquer pasta) ou o `audit-ci.jsonc`, ou que não tem base para comparar (nenhum build servido nos 50 commits anteriores, base fora do checkout). Nos outros, roda e relata: `::warning::` e o relatório no resumo do job. O vigia contínuo é o Dependabot | `audit-gate.test.ts`                                                    |
-| Uma consulta ao GHCR com erro passageiro virava "a tag não existe" (`2>/dev/null \|\| true`)                                  | `.github/scripts/ghcr.sh`: só o "not found" do GHCR é resposta vazia; qualquer outro erro repete (5 tentativas, pausa de 5 s dobrando, `::warning::` com a contagem) e depois falha dizendo que o GHCR está fora. Mover uma tag também repete (é idempotente)                                                                                                                                                                                                                     | `ghcr-script.test.ts`, `staging-deploy-workflow.test.ts`                |
-| O login no GHCR (`docker/login-action`) falhava antes da alternativa "o GHCR não respondeu" dos jobs que podem seguir sem ele | no `AI OCR` e no `Changes` do staging, o login é o `ghcr.sh login` (5 tentativas, aviso no fim): sem login, o `AI OCR` testa e a base do audit volta ao push anterior, com aviso. Os jobs que precisam do GHCR (`Build`, `Image scan`, `Deploy`, _Staging evidence_) continuam falhando nele                                                                                                                                                                                      | `ci-stability.test.ts`, `ghcr-script.test.ts`, `changes-script.test.ts` |
-| O download do banco do Trivy (com limite de taxa) duas vezes por run, escondido junto com os achados                          | um download por run, com retentativa, num diretório que o cache do Actions guarda por dia; o scan usa `--skip-db-update`. Falha no download usa a cópia do cache; sem cópia, o scan não roda e o resumo diz isso. Só um achado reprova, e só com `IMAGE_SCAN_ENFORCE=true`                                                                                                                                                                                                        | `ci-stability.test.ts`                                                  |
-| Os pesos PP-OCRv5 da IA baixados de `www.modelscope.cn` em todo build sem cache (um pedido, sem retentativa)                  | versionados em `infra/ai-ocr/models` (4,8 e 7,9 MB) e conferidos pelo `models.sha256` num `RUN --network=none`; o job `AI OCR` usa o Buildx com o cache do GitHub                                                                                                                                                                                                                                                                                                                 | `image-layers.test.ts`, `ci-stability.test.ts`                          |
-| O `postinstall` do `@prisma/engines` baixa o schema engine de `binaries.prisma.sh` e falha calado                             | cache de `~/.cache/prisma` pela versão dos engines; a ação `setup` confere o engine nos jobs de E2E e baixa de novo (até 3 vezes); o `Dockerfile` faz o mesmo no `yarn install` da imagem de migração (a única que leva o CLI) e para o build com a causa                                                                                                                                                                                                                         | `ci-stability.test.ts`, `image-layers.test.ts`                          |
-| Um erro de rede no `git ls-remote` dos irmãos caía calado na branch padrão                                                    | só o código 2 ("a branch não existe") cai na padrão, com `::notice::`; outro código repete 3 vezes (10 s, 20 s) e falha                                                                                                                                                                                                                                                                                                                                                           | `compose-ci-siblings.test.ts`                                           |
-| `git ls-remote \| cut` sem `pipefail`: uma falha virava "este run não é o head" e o deploy de staging era pulado, verde       | `defaults.run.shell: bash` (`-eo pipefail`) em todo workflow, e `shell: bash` em todo passo das ações compostas; a leitura do head repete 3 vezes e só um sha válido decide; a leitura dos pais do merge (`gh api`) também repete                                                                                                                                                                                                                                                 | `ci-stability.test.ts`, `promote-workflow.test.ts`                      |
-| Um erro passageiro da borda zerava a janela de 90 s da conferência pela liveness                                              | só uma resposta de outro commit zera; sondagem sem resposta não zera, e cada sequência delas vira `::warning::` com a contagem ([seção 14](#14-conferir-a-convergência))                                                                                                                                                                                                                                                                                                          | `wait-for-version.test.ts`                                              |
-| As retentativas do deploy no Dokploy só apareciam no log                                                                      | cada retentativa (pedido, consulta, deploy) é `::warning::` com a contagem, e o resumo do job lista cada tentativa que falhou com o motivo do Dokploy                                                                                                                                                                                                                                                                                                                             | `dokploy-deploy.test.ts`                                                |
-| Uma exportação de cache que falhava (429 ou 5xx do serviço de cache) derrubava o build já publicado                           | todo `cache-to: type=gha` com `ignore-error=true`                                                                                                                                                                                                                                                                                                                                                                                                                                 | `ci-stability.test.ts`                                                  |
-| Um passo travado segurava o runner até 6 h                                                                                    | `timeout-minutes` em todo job, com folga sobre o pior medido: `Validate` 30, cada `E2E` 30, `AI OCR` 30, `Docs` 20, `Changes` 5 (10 no staging), `Secret scan` 10, `Gate` 5, `Build` 45, `Image scan` 20, os dois `Deploy` 120, _Staging evidence_ 75 no PR e 50 na promoção, `Release` 20, `AI local contract` 45. Um job que chama o `validate.yml` não aceita timeout: os jobs dele têm o seu                                                                                  | `ci-stability.test.ts`                                                  |
-| Um commit `[skip ci]` só de documentação na ponta da `staging` travava a promoção                                             | a regra de documentação abaixo ([seção 16](#16-promover-para-produção)); e o run do commit de código logo abaixo de uma ponta só de documentação implanta mesmo assim (`docs-only.sh`, testado no `ci-stability.test.ts`)                                                                                                                                                                                                                                                         | `staged-build.test.ts`, `promote-workflow.test.ts`                      |
-| Uma mudança de dependência cujo run foi cancelado por um push mais novo ficava fora do audit que bloqueia                     | a base do audit no staging é o último build servido (`staged-<7>`), não o push anterior; o push cancelado continua no intervalo até um build ser servido (`changes.sh`)                                                                                                                                                                                                                                                                                                           | `changes-script.test.ts`, `audit-gate.test.ts`                          |
-| Um run **failed** sem nenhum job vermelho, com jobs que nem aparecem                                                          | não é do código: o job não começou. A causa está em _Summary → Annotations_ do run ("The job was not started because recent account payments have failed or your spending limit needs to be increased": a cota do Actions acabou, ou o limite de gasto). Quando houver minutos, _Re-run failed jobs_ refaz só o que não rodou. Ver as ações do dono abaixo ([Tempos e minutos](#tempos-e-minutos))                                                                                | —                                                                       |
+| Causa de vermelho (ou verde) falso                                                                                                                      | O que o pipeline faz agora                                                                                                                                                                                                                                                                                                                                                                                                                                                        | Teste                                                                   |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------- |
+| Um aviso CRITICAL publicado hoje reprovava o push de qualquer commit, até de documentação                                                               | `.github/scripts/audit-gate.sh`: o `audit-ci` bloqueia só o run cujo intervalo (desde a base que o `Changes` escolheu: no staging, o último build servido) muda `package.json`, `yarn.lock` ou `package-lock.json` (em qualquer pasta) ou o `audit-ci.jsonc`, ou que não tem base para comparar (nenhum build servido nos 50 commits anteriores, base fora do checkout). Nos outros, roda e relata: `::warning::` e o relatório no resumo do job. O vigia contínuo é o Dependabot | `audit-gate.test.ts`                                                    |
+| Uma consulta ao GHCR com erro passageiro virava "a tag não existe" (`2>/dev/null \|\| true`)                                                            | `.github/scripts/ghcr.sh`: só o "not found" do GHCR é resposta vazia; qualquer outro erro repete (5 tentativas, pausa de 5 s dobrando, `::warning::` com a contagem) e depois falha dizendo que o GHCR está fora. Mover uma tag também repete (é idempotente)                                                                                                                                                                                                                     | `ghcr-script.test.ts`, `staging-deploy-workflow.test.ts`                |
+| O login no GHCR (`docker/login-action`) falhava antes da alternativa "o GHCR não respondeu" dos jobs que podem seguir sem ele                           | no `AI OCR` e no `Changes` do staging, o login é o `ghcr.sh login` (5 tentativas, aviso no fim): sem login, o `AI OCR` testa e a base do audit volta ao push anterior, com aviso. Os jobs que precisam do GHCR (`Build`, `Image scan`, `Deploy`, _Staging evidence_) continuam falhando nele                                                                                                                                                                                      | `ci-stability.test.ts`, `ghcr-script.test.ts`, `changes-script.test.ts` |
+| O download do banco do Trivy (com limite de taxa) duas vezes por run, escondido junto com os achados                                                    | um download por run, com retentativa, num diretório que o cache do Actions guarda por dia; o scan usa `--skip-db-update`. Falha no download usa a cópia do cache; sem cópia, o scan não roda e o resumo diz isso. Só um achado reprova, e só com `IMAGE_SCAN_ENFORCE=true`                                                                                                                                                                                                        | `ci-stability.test.ts`                                                  |
+| Os pesos PP-OCRv5 da IA baixados de `www.modelscope.cn` em todo build sem cache (um pedido, sem retentativa)                                            | versionados em `infra/ai-ocr/models` (4,8 e 7,9 MB) e conferidos pelo `models.sha256` num `RUN --network=none`; o job `AI OCR` usa o Buildx com o cache do GitHub                                                                                                                                                                                                                                                                                                                 | `image-layers.test.ts`, `ci-stability.test.ts`                          |
+| O `postinstall` do `@prisma/engines` baixa o schema engine de `binaries.prisma.sh` e falha calado                                                       | cache de `~/.cache/prisma` pela versão dos engines; a ação `setup` confere o engine nos jobs de E2E e baixa de novo (até 3 vezes); o `Dockerfile` faz o mesmo no `yarn install` da imagem de migração (a única que leva o CLI) e para o build com a causa                                                                                                                                                                                                                         | `ci-stability.test.ts`, `image-layers.test.ts`                          |
+| Um erro de rede no `git ls-remote` dos irmãos caía calado na branch padrão                                                                              | só o código 2 ("a branch não existe") cai na padrão, com `::notice::`; outro código repete 3 vezes (10 s, 20 s) e falha                                                                                                                                                                                                                                                                                                                                                           | `compose-ci-siblings.test.ts`                                           |
+| `git ls-remote \| cut` sem `pipefail`: uma falha virava "este run não é o head" e o deploy de staging era pulado, verde                                 | `defaults.run.shell: bash` (`-eo pipefail`) em todo workflow, e `shell: bash` em todo passo das ações compostas; a leitura do head repete 3 vezes e só um sha válido decide; a leitura dos pais do merge (`gh api`) também repete                                                                                                                                                                                                                                                 | `ci-stability.test.ts`, `promote-workflow.test.ts`                      |
+| Um job pulado dentro do `validate.yml` (o `Docs` num push de código) pulava, pelo `success()` implícito, o `Build` e o deploy depois de um `Gate` verde | o `Build`, o `Image scan` e o `Deploy` do `staging.yml` declaram `!cancelled()` e o resultado de que precisam ([actions/runner#2205](https://github.com/actions/runner/issues/2205)), como na web e no app                                                                                                                                                                                                                                                                        | `ci-stability.test.ts`                                                  |
+| Um erro passageiro da borda zerava a janela de 90 s da conferência pela liveness                                                                        | só uma resposta de outro commit zera; sondagem sem resposta não zera, e cada sequência delas vira `::warning::` com a contagem ([seção 14](#14-conferir-a-convergência))                                                                                                                                                                                                                                                                                                          | `wait-for-version.test.ts`                                              |
+| As retentativas do deploy no Dokploy só apareciam no log                                                                                                | cada retentativa (pedido, consulta, deploy) é `::warning::` com a contagem, e o resumo do job lista cada tentativa que falhou com o motivo do Dokploy                                                                                                                                                                                                                                                                                                                             | `dokploy-deploy.test.ts`                                                |
+| Uma exportação de cache que falhava (429 ou 5xx do serviço de cache) derrubava o build já publicado                                                     | todo `cache-to: type=gha` com `ignore-error=true`                                                                                                                                                                                                                                                                                                                                                                                                                                 | `ci-stability.test.ts`                                                  |
+| Um passo travado segurava o runner até 6 h                                                                                                              | `timeout-minutes` em todo job, com folga sobre o pior medido: `Validate` 30, cada `E2E` 30, `AI OCR` 30, `Docs` 20, `Changes` 5 (10 no staging), `Secret scan` 10, `Gate` 5, `Build` 45, `Image scan` 20, os dois `Deploy` 120, _Staging evidence_ 75 no PR e 50 na promoção, `Release` 20, `AI local contract` 45. Um job que chama o `validate.yml` não aceita timeout: os jobs dele têm o seu                                                                                  | `ci-stability.test.ts`                                                  |
+| Um commit `[skip ci]` só de documentação na ponta da `staging` travava a promoção                                                                       | a regra de documentação abaixo ([seção 16](#16-promover-para-produção)); e o run do commit de código logo abaixo de uma ponta só de documentação implanta mesmo assim (`docs-only.sh`, testado no `ci-stability.test.ts`)                                                                                                                                                                                                                                                         | `staged-build.test.ts`, `promote-workflow.test.ts`                      |
+| Uma mudança de dependência cujo run foi cancelado por um push mais novo ficava fora do audit que bloqueia                                               | a base do audit no staging é o último build servido (`staged-<7>`), não o push anterior; o push cancelado continua no intervalo até um build ser servido (`changes.sh`)                                                                                                                                                                                                                                                                                                           | `changes-script.test.ts`, `audit-gate.test.ts`                          |
+| Um run **failed** sem nenhum job vermelho, com jobs que nem aparecem                                                                                    | não é do código: o job não começou. A causa está em _Summary → Annotations_ do run ("The job was not started because recent account payments have failed or your spending limit needs to be increased": a cota do Actions acabou, ou o limite de gasto). Quando houver minutos, _Re-run failed jobs_ refaz só o que não rodou. Ver as ações do dono abaixo ([Tempos e minutos](#tempos-e-minutos))                                                                                | —                                                                       |
 
 A base do audit (decisão D1 de 10/11/2026): no staging, o último build que a
 staging **serviu** (`staged-<7>`), e não o push anterior. Antes, uma mudança
@@ -2922,6 +2960,14 @@ A regra está em
      igual ao documento ao vivo.
   3. **Web e app em zod 4** (o resto dos commits): os testes de paridade
      encontram a `staging` da API em zod 4.
+
+  Com o CI novo no mesmo lote, o CI da web e o do app também ficam
+  vermelhos contra a `staging` anterior da API por outros testes (o
+  `dokploy-deploy.test.ts` e o `shared-deploy-section.test.ts`), e o da API
+  contra a `staging` anterior do app: vale a ordem da
+  [seção 26, "O CI dos três"](#o-ci-dos-três-desde-10112026) ("Ordem do
+  primeiro push com o CI novo"), em que estes três passos cabem.
+
 - **O que a API passa a recusar** (nenhum cliente nosso manda isso hoje):
   - um id que não é UUID da RFC 9562 (versão 1 a 8, variante 8/9/a/b; nil e
     max seguem aceitos). Os ids do Trajetto são v7 e v4, e o app e a web
@@ -3186,7 +3232,7 @@ GitHub listados no fim desta seção).
 Desde 10/11/2026 a marcação quase não economiza mais: um push só de
 documentação (o `Changes` decide, pela mesma regra) roda só o _Secret scan_
 e o `Docs` — os unitários sem cobertura, porque há testes que leem a
-documentação, mais o Prettier; uns 11 min cobrados — e nenhum build nem
+documentação, mais o Prettier; uns 12 min cobrados — e nenhum build nem
 deploy. Ela continua permitida só em commit de documentação (decisão D11), e
 nunca na ponta de um PR para `main`. Um push de documentação não cancela a
 validação do push de código embaixo dele, que segue até o deploy.
@@ -4129,11 +4175,11 @@ Na ordem:
 | Artefato                    | imagens `trajetto-api`, `trajetto-api-migrate` e `trajetto-ai` em `ghcr.io/trajetto-organization/`                                                                                                                                                                                                                                                                                                                                                                       | imagem `ghcr.io/trajetto-organization/trajetto-ui`                                                                                                                                                              | APK/AAB (EAS Build) e OTA (EAS Update)                                                                          |
 | Onde roda                   | Dokploy, projeto `trajetto-api` de cada environment (`staging` e `production`): as Applications `trajetto-api` (2 réplicas, com domínio), `trajetto-api-migrate` (as migrations, antes do deploy que as muda) e `trajetto-ai` (sem domínio), puxando as imagens do GHCR, e os Databases PostgreSQL (com o backup diário do próprio Dokploy para o Cloudflare R2) e Redis                                                                                                 | Dokploy, projeto `trajetto-ui` de cada environment: a Application `trajetto-ui`, puxando a imagem do GHCR                                                                                                       | no celular do motorista (APK interno em staging, Play Store em produção)                                        |
 | Nome no Dokploy / EAS       | App Names `trajetto-api-staging` e `trajetto-api-production` (e `trajetto-api-migrate-*`, `trajetto-ai-*`, `trajetto-postgres-*`, `trajetto-redis-*`)                                                                                                                                                                                                                                                                                                                    | Application `trajetto-ui` no projeto `trajetto-ui` de cada environment (App Names `trajetto-ui-staging` e `trajetto-ui-production`)                                                                             | perfis, ambientes e canais `staging` e `production`                                                             |
-| Como o pipeline publica     | API do Dokploy (`.github/scripts/dokploy-deploy.mjs`): quando as migrations mudaram, primeiro a `trajetto-api-migrate`, esperando a etapa terminar (`dokploy-release.mjs`); depois `application.deploy` de cada Application, na ordem IA → API, a IA só quando o digest muda, acompanhando cada deployment até o fim e disparando de novo, até 6 vezes e com espera crescente, o que termina em erro; depois espera a `/health/liveness` pública responder o commit novo | API do Dokploy com o **mesmo** `.github/scripts/dokploy-deploy.mjs` (cópia comparada por teste): `application.deploy` da Application `trajetto-ui`, acompanhando o deployment, depois espera o `/build-id.json` | `eas update` e `eas build`                                                                                      |
+| Como o pipeline publica     | API do Dokploy (`.github/scripts/dokploy-deploy.mjs`): quando as migrations mudaram, primeiro a `trajetto-api-migrate`, esperando a etapa terminar (`dokploy-release.mjs`); depois `application.deploy` de cada Application, na ordem IA → API, a IA só quando o digest muda, acompanhando cada deployment até o fim e disparando de novo, até 6 vezes e com espera crescente, o que termina em erro; depois espera a `/health/liveness` pública responder o commit novo | API do Dokploy com o **mesmo** `.github/scripts/dokploy-deploy.mjs` (cópia comparada por teste): `application.deploy` da Application `trajetto-ui`, acompanhando o deployment, depois espera o `/build-id.json` | `eas update` (OTA) e, quando o canal não tem binário para o runtime do commit (fingerprint), `eas build`        |
 | Secrets de deploy no GitHub | environments `staging` e `production`: `DOKPLOY_URL`, `DOKPLOY_API_KEY`, `DOKPLOY_API_APPLICATION_ID`, `DOKPLOY_MIGRATE_APPLICATION_ID` (obrigatórios) e `DOKPLOY_AI_APPLICATION_ID` (opcional); variáveis `API_PUBLIC_URL` (a conferência pela liveness) e `SWARM_API_SERVICE` (a conferência por SSH)                                                                                                                                                                  | environments `staging` e `production`: `DOKPLOY_URL`, `DOKPLOY_API_KEY` e `DOKPLOY_UI_APPLICATION_ID`                                                                                                           | `EXPO_TOKEN` (repositório) e `EXPO_UPDATE_PRIVATE_KEY` (environments `staging` e `production`)                  |
 | Sem os secrets              | move as tags e pula o deploy com `::notice::`                                                                                                                                                                                                                                                                                                                                                                                                                            | move as tags e pula o deploy com aviso                                                                                                                                                                          | termina verde com aviso, sem publicar                                                                           |
 | De staging para produção    | promove por digest a imagem `sha-<7 do commit>` (tag `staging` → `stable`), sem rebuild, e exige o marcador `staged-<7 do commit>` no mesmo digest                                                                                                                                                                                                                                                                                                                       | igual à API, e exige o marcador `staged-<7 do commit>` no mesmo digest                                                                                                                                          | promove o **commit** verde em staging (a URL da API é embutida no build, então o artefato não pode ser o mesmo) |
-| Rollback                    | _Run workflow_ do `production.yml` com `image_tag=sha-<7>`                                                                                                                                                                                                                                                                                                                                                                                                               | _Run workflow_ do `deploy.yml` com `image_tag=sha-<7>`                                                                                                                                                          | `ota-rollback.yml` (republica um grupo de OTA)                                                                  |
+| Rollback                    | _Run workflow_ do `production.yml` com `image_tag=sha-<7>`                                                                                                                                                                                                                                                                                                                                                                                                               | _Run workflow_ do `production.yml` com `image_tag=sha-<7>`                                                                                                                                                      | `ota-rollback.yml` (republica um grupo de OTA)                                                                  |
 
 Regras comuns aos três: a branch `staging` recebe o trabalho (push direto do
 dono ou merge de PR) e todo push nela roda a validação completa e publica o
@@ -4173,6 +4219,240 @@ _classic_ `read:packages`, informado no provider Docker de cada Application.
 
 Segredos nunca são compartilhados entre staging e produção. Cada variável
 está detalhada no `docs/variaveis-de-ambiente.md` do repositório que a lê.
+
+### O CI dos três (desde 10/11/2026)
+
+Os três repositórios têm a mesma forma: um workflow por gatilho, a validação
+num workflow reutilizável só (`validate.yml`) e o deploy numa ação composta,
+com os mesmos nomes de arquivo, de job e de passo quando é a mesma coisa. Os
+nomes são curtos, em inglês e nunca uma pergunta: um teste em cada
+repositório recusa `?` em nome de job ou de passo. O detalhe de cada job fica
+no manual do repositório.
+
+| Arquivo          | Gatilho                                                      | API                                                                                                                      | Web                                                                                                                                     | App                                                                                               |
+| ---------------- | ------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| `ci.yml`         | push em branch de trabalho; _Run workflow_                   | `Changes`, `Secret scan`, `Validate`                                                                                     | `Changes`, `Secret scan`, `Validate` (no _Run workflow_ com `image_tag`, também `Browser suites`)                                       | `Changes`, `Secret scan`, `Validate`                                                              |
+| `validate.yml`   | chamado pelos outros (`workflow_call`)                       | `Validate`, `E2E (1/3)`, `E2E (2/3)`, `E2E (3/3)`, `AI OCR`; num push de documentação, `Docs`; depois de todos, `Result` | `Validate`, `Browser suites (1/2)`, `Browser suites (2/2)`; num push de documentação, `Docs`; depois de todos, `Result`                 | `Validate`; num push de documentação, `Docs`                                                      |
+| `staging.yml`    | push em `staging`                                            | `Changes`, `Secret scan`, `Validate` → `Gate` → `Build` → `Image scan` → `Deploy`                                        | `Changes`, `Secret scan` → `Build` (`candidate-<7>`) → `Image scan`, `Browser suites`; `Validate` desde o `Changes` → `Gate` → `Deploy` | `Changes`, `Secret scan`, `Validate` → `Gate` → `Publish` (OTA; o binário pelo fingerprint)       |
+| `pr.yml`         | PR para `main` (no app, também para `staging`)               | `Secret scan`, `Staging evidence`                                                                                        | `Secret scan`, `Staging evidence`                                                                                                       | `Secret scan`, `Staging evidence` (para `staging`: `Changes`, `Secret scan`, `Validate`)          |
+| `production.yml` | push em `main`; na API e na web, _Run workflow_ é o rollback | `Staging evidence` → `Deploy` (aprovação) → `Release`                                                                    | `Staging evidence` → `Deploy` (aprovação) → `Release`                                                                                   | `Changes`, `Secret scan`, `Staging evidence`, `Dependency audit` → `Gate` → `Publish` (aprovação) |
+| ações compostas  | —                                                            | `.github/actions/setup`, `deploy` e `siblings`                                                                           | `.github/actions/setup`, `secret-scan` e `deploy`                                                                                       | `.github/actions/setup`, `secret-scan` e `publish`                                                |
+
+Além desses, a API tem o `cloudflare-ranges.yml` (semanal) e o app, o
+`native-build.yml` (build manual) e o `ota-rollback.yml`. Na tela do GitHub,
+um job do `validate.yml` aparece com o nome de quem o chamou na frente:
+`Validate / Validate`, `Validate / E2E (1/3)`, `Browser suites / Browser
+suites (1/2)`, `Validate / Docs`, `Validate / Result`.
+
+Regras comuns:
+
+- **Push só de documentação** (todo arquivo em `*.md` ou `docs/**`): roda o
+  `Secret scan` e o `Docs` (os unitários sem cobertura, porque há testes que
+  leem a documentação). Nada de build, deploy ou OTA, e um vermelho cai no
+  commit que o causou. A marcação de pular CI continua permitida só em
+  commit de documentação, e nunca na ponta do PR para `main`.
+- **Cancelamento**: um push novo na `staging` cancela só a **validação** do
+  run anterior; build, deploy e publicação nunca são cancelados, e só o run
+  da cabeça da branch implanta (`Check run is branch head`). Na `main`, nada
+  é cancelado.
+- **Base do audit**: o último build que a `staging` serviu (`staged-<7>` na
+  API e na web; no app, o último run verde da `staging`), não o push
+  anterior. O audit só bloqueia quando muda `package.json`, o lockfile ou o
+  `audit-ci.jsonc`, e repete 3 vezes uma falha de rede.
+- **`Gate`**: junta tudo o que bloqueia o deploy num check só, e é ele que
+  o `Staging evidence` confere no commit promovido. Todo job depois do
+  `Gate` (ou de um job que chama o `validate.yml`) declara a própria função
+  de status: `!cancelled()` e o resultado, ou uma saída, de cada job de que
+  precisa. Sem ela, o `success()` implícito do GitHub vê os jobs pulados
+  dentro do `validate.yml` e pula o deploy mesmo com o `Gate` verde
+  ([actions/runner#2205](https://github.com/actions/runner/issues/2205));
+  só com o `!cancelled()`, o job rodaria depois de um `Gate` vermelho. Um
+  teste em cada repositório recusa as duas coisas.
+- **O veredito do `validate.yml`**: o `Gate` lê a saída do `validate.yml`,
+  nunca o `needs.<job que o chama>.result`. Em toda chamada algum job lá
+  dentro é pulado (o `Docs` num push de código, as suítes sem imagem), um
+  job pulado dentro de um workflow reutilizável vaza para quem o chama
+  ([community/discussions/189172](https://github.com/orgs/community/discussions/189172)),
+  e o valor que isso deixa no resultado do chamador não é contrato: se
+  fosse `skipped`, o `Gate` ficaria vermelho em todo push. Dentro do
+  `validate.yml` o resultado de cada job é confiável. Na API e na web, o
+  job `Result`, depois de todos, confere cada um contra o que a chamada
+  pediu (verde se pedido, pulado se não) e publica `passed`; com o E2E e as
+  suítes em matriz, a saída de um job não serviria (fica a do último shard
+  que escreve). No app, sem matriz, o último passo de cada job grava a
+  saída dele (`validate-passed`, `docs-passed`). A única leitura do
+  resultado de quem chama é a da web, para conferir que as suítes que o
+  `Changes` deixou de fora nem começaram (pulada pelo próprio `if`, sem
+  nada dentro que vaze). Um teste em cada repositório recusa outra.
+
+**Mudança que atravessa repositórios: branches com o mesmo nome.** Uma
+mudança que mexe em mais de um repositório (uma rota nova que a web chama, um
+evento de socket que o app ouve, uma regra compartilhada) vai numa branch
+com **o mesmo nome** em cada um (por exemplo `feat/entregas-x` na API, na web
+e no app). O passo `Pick the sibling branches` (id `refs`, o mesmo texto nos
+três) procura no irmão a branch de mesmo nome e faz o checkout dela; só a
+resposta "essa branch não existe" (código 2 do `git ls-remote`) cai na
+`staging` do irmão, com aviso, e um erro de rede ou de credencial repete (3
+vezes na API e no app, 4 na web) e depois falha, nunca cai na `staging` por
+engano. Na API, o passo está na ação `.github/actions/siblings`, chamada pelo
+`Validate` e pelo `Docs` do `validate.yml`, e lê a web e o app; na web, nos
+jobs `Validate` e `Browser suites` do `validate.yml`; no app, no `Validate`
+do `validate.yml`; os dois leem a API. Por isso o `ci.yml` existe nos três:
+o push na branch de trabalho testa cada lado contra a sua contraparte, e na
+`staging` a sonda acha a `staging` do irmão. O `compose-ci-siblings.test.ts`
+da API executa todas as sondas dos três repositórios, exige que todo
+checkout de irmão use a resposta dela e que todo checkout de outro
+repositório escreva por extenso a organização e o nome (sem expressão,
+em qualquer caixa). Suba primeiro o lado que o outro consome (em geral a
+API) e mantenha os nomes iguais até o merge. Na `staging`, quando os dois
+lados dependem um do outro, vale a ordem do primeiro push, abaixo.
+
+**Esta seção é uma só.** O `shared-deploy-section.test.ts` da web e o do
+app comparam a cópia deles com a da API ao lado (a branch de mesmo nome ou
+a `staging` dela), byte a byte, e também os nomes dos cinco workflows e dos
+jobs que os dois têm em comum, como o `dokploy-deploy.test.ts` da web
+compara o script de deploy. A cópia da API é a referência: mude primeiro a
+dela e depois a da web e a do app, e suba nessa ordem, como em todo
+release.
+
+**Checks exigidos nos Rulesets.** Na `main` dos três, exija só
+**`Secret scan`** e **`Staging evidence`**, os dois do `pr.yml`: o _Staging
+evidence_ já prova que o staging rodou o commit e que o `Gate` dele está
+verde, então a validação não é exigida de novo. Troque o Ruleset no primeiro
+PR `staging → main` de cada repositório depois da virada; antes disso, não
+tire os nomes antigos, ou o PR fica sem check nenhum. Os nomes antigos
+deixaram de existir:
+
+| Repositório       | Checks antigos a tirar da `main`                                                                                                                                                                                                                                                                                                                                                                                 |
+| ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `trajetto-api`    | `Lint, type-check, unit (coverage floor) and E2E`, `AI OCR service (image + pytest)`, `Secret scan (gitleaks)` e `The PR head was built on staging`                                                                                                                                                                                                                                                              |
+| `trajetto-ui`     | `Validate (audit, lint, types, unit and rule tests)`, `Secret scan (gitleaks)` e `UI, a11y and responsive against a running stack`                                                                                                                                                                                                                                                                               |
+| `trajetto-mobile` | nenhum, pelo guia do desenvolvedor (a `main` do app não exigia check: um commit marcado para pular CI na ponta prendia o PR); se algum destes estiver lá, tire: `Lint, type-check, unit tests and Expo doctor`, `Secret scan (gitleaks)`, `Checks / ...`, `What this push ships`, `Was this commit green on staging?`, `Staging (OTA and internal APK)`, `Production (OTA and store build)` e `Manual EAS build` |
+
+Na `staging`, PR não é exigido (o dono faz push direto). Quem quiser exigir
+PR ali marca `Validate / Validate`, `Validate / Docs` e `Secret scan` (no
+app, no lugar dos antigos `Lint, type-check, unit tests and Expo doctor` e
+`Secret scan (gitleaks)`).
+
+**Minutos do Actions, os três somados.** A cota do plano Free da
+organização é de 2.000 min por mês, dividida pelos três repositórios, e cada
+job é cobrado arredondado para cima, em minutos. Um push de código na
+`staging` custa uns 61 min na API, 54 na web e 14 no app: uns 129 min quando
+a mesma mudança vai aos três (antes da troca, 75 + 51 + 13 = 139). Um push só
+de documentação custa 12 + 15 + 8 = 35 min, e um release (o PR `staging →
+main` e o merge) 13 + 8 + 10 = 31 min. O `Result` da API e o da web somam 1
+min por chamada do `validate.yml` (2 num push de código da web, que o chama
+duas vezes): é o preço de o `Gate` não depender do resultado de quem chama.
+No ritmo de novembro de 2026, o mês fica em uns 1.750 min na API, 1.350 na
+web e 335 no app: uns 3.400 min, contra uns 4.500 antes da troca, ainda
+acima da cota. Por isso o orçamento com teto (abaixo) não é opcional: sem
+minutos, nenhum job começa, nem um de aviso, e o run só diz _failed_.
+
+**Ações do dono na virada**, nos três:
+
+1. **Rulesets**: a troca acima, no primeiro PR para `main` de cada
+   repositório.
+2. **Orçamento do Actions** (organização → _Settings → Billing and
+   licensing_): uma forma de pagamento com orçamento limitado (US$ 10–15 por
+   mês) e alertas em 75, 90 e 100 %, com bloqueio no limite. Run _failed_
+   sem nenhum job vermelho é a cota: veja _Summary → Annotations_.
+3. **Limpeza do GHCR**: `candidate-*` e `suites-*` são só da web (o pacote
+   `trajetto-ui`); a API não publica `candidate-*`, e o app não publica
+   imagem. A retenção está no manual da web, seção 17.
+4. **Runs antigos**: antes do push de cada repositório, nenhum run do
+   workflow antigo rodando ou esperando aprovação (o `deploy.yml` da API e da
+   web, o "Release (EAS)" do app); não faça merge em `main` com um deles em
+   andamento. No app, despache antes do merge na `main` qualquer release que
+   dependa de commits antigos da `staging`: o `Staging evidence` só
+   reconhece runs do `staging.yml`.
+5. **Nomes dos runs** (os e-mails do GitHub, os filtros e o vigia): o
+   `validate.yml` não vira run próprio, os jobs dele aparecem dentro do run
+   de quem o chama.
+
+   | Repositório       | Antes                                                                                                              | Depois                                                                                                                           |
+   | ----------------- | ------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------- |
+   | `trajetto-api`    | `CI (branches)`; `Pipeline (staging → produção)` (push em `staging` e em `main`, e o PR para `main`)               | `CI`; `Staging`, `Pull request` e `Production`                                                                                   |
+   | `trajetto-ui`     | `CI` (também no PR para `main`); `Browser suites` (o PR para `main`); `Deploy` (push em `staging` e em `main`)     | `CI` (só branch de trabalho); `Pull request`; `Staging` (as suítes de navegador viram jobs dele) e `Production`                  |
+   | `trajetto-mobile` | `CI` (também nos PRs para `staging` e `main`); `Release (EAS)` (push em `staging` e em `main`, e o _Run workflow_) | `CI` (só branch de trabalho); `Pull request`; `Staging`, `Production` e `Native build` (o build manual); `OTA rollback` não muda |
+
+6. **Na máquina**: depois de puxar a API, `yarn install --force` antes do
+   E2E local (o ambiente do E2E é uma dependência `file:`).
+
+**Ordem do primeiro push com o CI novo: web e app, API, web e app de
+novo**, um passo de cada vez, acompanhando o run de cada um antes do
+seguinte. Desde a troca, o CI de cada repositório lê o irmão também no push
+em `staging` (o `Validate` faz o checkout da `staging` dele; antes, isso era
+pulado ali), e neste lote os dois lados mudaram arquivos que o outro lê:
+
+- **A web e o app leem a `staging` da API**: o `dokploy-deploy.test.ts` da
+  web exige a cópia do `.github/scripts/dokploy-deploy.mjs` igual à da API;
+  os testes de paridade (`cpf-field-api-parity`, `recipient-email-api-parity`
+  e os outros) comparam com o código dela; e o
+  `shared-deploy-section.test.ts` dos dois compara esta seção com a da API.
+- **A API lê a `staging` da web e a do app**: o
+  `public-docs-guide-samples.test.ts` exige no guia de erros da web
+  (`src/content/docs/erros.mdx`) todo código que o documento público
+  publica, como os `DELIVERY_NOT_CANCELLABLE` e `DELIVERY_STATUS_CONFLICT`
+  do cancelamento de entrega, e a cópia do documento na web
+  (`tests/unitaires/fixtures/public-openapi.json`) igual ao documento ao
+  vivo; e o `app-reading-windows.test.ts` exige no app os números da API,
+  como o mínimo do motivo da pausa (`PAUSE_NOTE_MIN_LENGTH`, de
+  `features/pauses/pause-rules.ts`), que o app da `staging` ainda não tem.
+
+Numa réplica Linux de 11/11/2026, a API deste lote contra a `staging` antiga
+da web e do app ficou vermelha nesses dois arquivos; a web e o app
+contra a `staging` antiga da API ficam vermelhos nos deles. Nenhuma ordem
+fica verde de primeira. A que mantém o deploy da API antes do da web, e o
+do app por último:
+
+1. **Web e app**: o push dos dois. O run de cada um fica vermelho só nos
+   testes que leem a `staging` da API, e um run vermelho não implanta nada
+   no staging nem publica OTA.
+2. **API**, logo depois: o `Validate` dela lê a `staging` nova da web e do
+   app e passa. Espere o `Deploy` dela.
+3. **Web de novo**: reexecute o run mais novo da `staging` da web
+   (_Re-run all jobs_). Ele lê a API nova e implanta. Espere o `Deploy`.
+4. **App de novo**: reexecute o run mais novo da `staging` do app. Ele
+   publica a OTA.
+
+Os passos 3 e 4 não são teste instável rodado de novo: o vermelho do passo 1
+é o irmão ainda na versão anterior, e o mesmo run fica verde, e sempre, com
+o irmão já na `staging`. Os três passos do zod 4 (manual da API, seção 15,
+"zod 4.6.7 e fastify-type-provider-zod 7.0.0") cabem nesta ordem: a cópia
+do documento e o zod 4 da web e do app vão no passo 1, e a API em zod 4 no
+passo 2. Fora de um lote assim, vale a regra das branches de
+mesmo nome (acima): suba primeiro o lado que o outro consome. O
+`compose-ci-siblings.test.ts` da API lê as sondas da web e do app no formato
+antigo e no novo, e o `compose-rollout-verify.test.ts` lê o deploy da web
+nos dois formatos: nenhum dos dois prende a ordem.
+
+O que acompanhar no primeiro run de cada um (o que só um run de verdade
+confirma):
+
+- os nomes dos checks como os Rulesets vão vê-los, inclusive os que vêm do
+  reutilizável (`Validate / Validate`, `Validate / E2E (1/3)`, `Browser
+suites / Browser suites (1/2)`), e o `Gate` com esse nome exato (o
+  _Staging evidence_ da API e da web o procura por ele);
+- que o job depois do `Gate` **rodou**, e não ficou _Skipped_: o `Build` na
+  API e na web, o `Publish` no app;
+- que o `Gate` leu o veredito pela saída do `validate.yml`: na API e na
+  web, o `Validate / Result` verde (e o `Browser suites / Result`, na web)
+  com o `Docs` pulado e o `Gate` verde; no app, o `Gate` verde lendo
+  `validate-passed`. Um `Gate` vermelho dizendo `Validate (Validate /
+Result)` com o `Result` verde seria a saída que não chegou ao chamador:
+  um defeito do workflow, não do código;
+- o tempo de cada job, contra a tabela de minutos do manual de cada um;
+- as tags e a publicação: na API, `sha-<7>` das três imagens e `staged-<7>` da API e da IA;
+  na web, `candidate-<7>`, `sha-<7>`, `suites-<7>` e `staged-<7>` no mesmo
+  digest, com os dois shards das suítes; no app, a OTA no canal `staging` e
+  o passo `Check native binary` dizendo que o binário do runtime existe
+  (nenhum build enfileirado);
+- um segundo push de código em menos de 10 min: a validação do run anterior
+  fica cancelada (cinza) e nada é implantado por ele; depois, um push só de
+  documentação sobre um build já servido, que roda só o `Secret scan` e o
+  `Docs`;
+- no primeiro PR para `main`: os dois checks novos chegando, e a troca do
+  Ruleset.
 
 ### Ordem do primeiro deploy
 
@@ -4293,9 +4573,12 @@ está detalhada no `docs/variaveis-de-ambiente.md` do repositório que a lê.
    motorista", "Busca de endereço do 'Fixar no mapa'", "nodemailer 10.3.1 e
    o e-mail do destinatário das importações e do painel" e "@fastify/static
    10.1.8 e @fastify/swagger-ui 6.1.3"). No push para a
-   `staging`, a API também vai antes: o CI da web roda o
-   `cpf-field-api-parity` e o `recipient-email-api-parity` contra a
-   `staging` da API.
+   `staging`, este lote segue a "Ordem do primeiro push com o CI novo"
+   (acima): a web e o app vão antes e ficam vermelhos só nos testes que
+   leem a `staging` da API (o CI da web roda o `cpf-field-api-parity` e o
+   `recipient-email-api-parity` contra ela), a API sobe depois, lendo a
+   web e o app novos, e os runs mais novos da web e do app são
+   reexecutados.
 2. **Web:** só com a API do passo 1 em produção. A web nova chama
    `GET /address-search/:businessId` e `POST /user/session/revoke` (na API
    desde 04/11/2026, ainda fora da `v1.3.0`), oferece o escopo

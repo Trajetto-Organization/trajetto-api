@@ -98,7 +98,7 @@ jobs:
 
     steps:
       # The history the comparison walks (commits and trees) and the scripts.
-      - name: Checkout repository
+      - name: Check out the full history
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 0
@@ -119,7 +119,7 @@ jobs:
             echo "login=failed" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Classify the push
+      - name: Classify changes
         id: changes
         env:
           BEFORE: ${{ github.event.before }}
@@ -139,12 +139,12 @@ jobs:
     timeout-minutes: 10
 
     steps:
-      - name: Checkout repository (full history)
+      - name: Check out the full history
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 0
 
-      - name: Scan every commit for secrets
+      - name: Scan the history for secrets
         run: |
           docker run --rm -v "$PWD:/repo" --entrypoint sh \
             zricethezav/gitleaks:v8.30.1@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f \
@@ -183,24 +183,31 @@ jobs:
   # A validation cancelled by a newer push skips it: the run is cancelled,
   # grey, and builds nothing. Off the staging branch nothing ran, and it
   # stays skipped too (`!cancelled()` would run it, red, on the skips).
+  #
+  # The validation is judged by validate.yml's own verdict (its `passed`
+  # output, from the Result job), not by needs.validate.result: some job
+  # inside it is always skipped, and how that leaks into the caller's result
+  # is not a contract (validate.yml's header).
   gate:
     name: Gate
     needs: [changes, secrets, validate]
-    if: ${{ github.ref == 'refs/heads/staging' && !cancelled() && needs.validate.result != 'cancelled' }}
+    if: ${{ github.ref == 'refs/heads/staging' && !cancelled() && !contains(needs.*.result, 'cancelled') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
 
     steps:
-      - name: Check the validation results
+      - name: Check results
         env:
           CHANGES: ${{ needs.changes.result }}
           SECRETS: ${{ needs.secrets.result }}
-          VALIDATE: ${{ needs.validate.result }}
+          VALIDATE: ${{ needs.validate.outputs.passed }}
         run: |
           failed=""
-          for each in "Changes=${CHANGES}" "Secret scan=${SECRETS}" "Validate=${VALIDATE}"; do
+          for each in "Changes=${CHANGES}" "Secret scan=${SECRETS}"; do
             [ "${each#*=}" = "success" ] || failed="${failed} ${each%%=*} (${each#*=})"
           done
+          # Validate / Result says which job of the validation did not pass.
+          [ "$VALIDATE" = "true" ] || failed="${failed} Validate (Validate / Result)"
           if [ -n "$failed" ]; then
             echo "::error::O Gate não passa:${failed}. Nenhuma imagem é construída."
             exit 1
@@ -212,10 +219,16 @@ jobs:
   # floor). A documentation push builds nothing. The merge into main
   # promotes the digests built HERE: rebuilding later could publish bytes
   # different from the ones staging ran.
+  #
+  # An explicit status check, here and in every job after it: under the
+  # implicit success(), a job skipped anywhere upstream skips this one too,
+  # even past a green Gate (actions/runner#2205), and validate.yml always
+  # skips some of its jobs (Docs on a push of code, the manual AI contract
+  # on staging). The Gate already judged every result.
   build:
     name: Build
     needs: [changes, gate, secrets]
-    if: github.ref == 'refs/heads/staging' && needs.changes.outputs.docs != 'true'
+    if: ${{ !cancelled() && github.ref == 'refs/heads/staging' && needs.gate.result == 'success' && needs.secrets.result == 'success' && needs.changes.outputs.docs != 'true' }}
     runs-on: ubuntu-24.04
     # Measured 2-9 min; a build with every cache gone and both smoke tests
     # fit well inside this.
@@ -233,7 +246,7 @@ jobs:
       ai_digest: ${{ steps.build-ai.outputs.digest || steps.ai-source.outputs.digest }}
 
     steps:
-      - name: Checkout repository
+      - name: Check out the repository
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       # The same pinned BuildKit as the ai-ocr job.
@@ -512,7 +525,7 @@ jobs:
 
           echo "trajetto-api: smoke test OK (a API recusa o banco sem as migrations dela; a imagem de migração, só com o Environment da Application dela, aplica tudo do zero e os seeds e fica saudável; a API sobe saudável e pronta, sem rede externa, commit ${GITHUB_SHA::7})" >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Build and push Docker image
+      - name: Build and push the API image
         id: build
         uses: docker/build-push-action@ca052bb54ab0790a636c9b5f226502c73d547a25 # v5.4.0
         with:
@@ -750,6 +763,7 @@ jobs:
   image-scan:
     name: Image scan
     needs: build
+    if: ${{ !cancelled() && github.ref == 'refs/heads/staging' && needs.build.result == 'success' }}
     runs-on: ubuntu-24.04
     # Measured ~1-2 min with the database cached; a cold download and three
     # retries per image fit inside this.
@@ -778,7 +792,7 @@ jobs:
       # cache keeps per day; the scans read it with --skip-db-update. A failed
       # download falls back to the cached copy, and the summary tells a
       # failed download, a Trivy error and a finding apart.
-      - name: Date of the vulnerability database
+      - name: Pick the database date
         id: trivy-db-day
         run: echo "day=$(date -u +%Y-%m-%d)" >> "$GITHUB_OUTPUT"
 
@@ -823,7 +837,7 @@ jobs:
             echo "Trivy: **falha no download do banco, sem cópia no cache: o scan não rodou** (não é achado)." >> "$GITHUB_STEP_SUMMARY"
           fi
 
-      - name: Scan the images for fixable critical vulnerabilities
+      - name: Scan the images
         env:
           TRIVY_USERNAME: ${{ github.actor }}
           TRIVY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
@@ -916,7 +930,7 @@ jobs:
   deploy-staging:
     name: Deploy
     needs: [build, image-scan]
-    if: github.ref == 'refs/heads/staging'
+    if: ${{ !cancelled() && github.ref == 'refs/heads/staging' && needs.build.result == 'success' && needs.image-scan.result == 'success' }}
     runs-on: ubuntu-24.04
     environment: staging
     # Measured 1-11 min. A deploy whose pulls keep failing tries six times
@@ -938,7 +952,7 @@ jobs:
     steps:
       # The deploy action and the scripts it runs; the git remote is what the
       # branch-head check reads.
-      - name: Checkout the deploy scripts
+      - name: Check out the deploy scripts
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           sparse-checkout: |

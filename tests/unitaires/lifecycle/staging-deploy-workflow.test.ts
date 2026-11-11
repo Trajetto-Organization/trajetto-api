@@ -199,7 +199,7 @@ describe.skipIf(!hasShell("bash"))(
         expect(stepOf(build, "Build and push the AI image").text).toContain(
           "GIT_SHA=${{ github.sha }}",
         );
-        expect(stepOf(build, "Build and push Docker image").text).toContain(
+        expect(stepOf(build, "Build and push the API image").text).toContain(
           "GIT_SHA=${{ github.sha }}",
         );
       });
@@ -495,7 +495,7 @@ describe.skipIf(!hasShell("bash"))(
       });
 
       const evidence = jobOf(pr, "evidence");
-      const WAIT = "Wait for the staging deploy of the PR head";
+      const WAIT = "Wait for the staging build of the head";
 
       it("lets the pull request pass once both images are staged on their sha-<sha> digests", () => {
         const result = step(

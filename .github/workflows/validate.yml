@@ -13,9 +13,20 @@ name: Validate
 #                      an image of the same infra/ai-ocr already passed it)
 #   docs ─▶ Docs      (Prettier and the unit tests without coverage: some of
 #                      them read the documentation, and the siblings)
+#        ─▶ Result    (after all of them: the verdict of this call)
 #
-# Every job is in parallel: the caller's `Gate` waits for all of them. The
-# manual run of ci.yml adds the AI local contract (`ai_local`).
+# Every job is in parallel, then Result judges them. The manual run of
+# ci.yml adds the AI local contract (`ai_local`).
+#
+# What a caller acts on is the `passed` output below, never
+# `needs.<caller>.result`: some job here is always skipped (Docs on a push
+# of code; Validate, the E2E and AI OCR on a push of documentation), a job
+# skipped inside a reusable workflow leaks into the caller
+# (actions/runner#2205; github.com/orgs/community/discussions/189172), and
+# what that makes of the caller's result is not a contract. Inside this file
+# each job's result is plain, so Result reads them here, as trajetto-mobile's
+# validate.yml has each job record that it got to its end; the E2E matrix
+# rules that out here (a matrix job's output is whichever leg wrote last).
 on:
   workflow_call:
     inputs:
@@ -42,6 +53,10 @@ on:
     secrets:
       CLIENT_REPOS_READ_TOKEN:
         required: false
+    outputs:
+      passed:
+        description: "true quando todo job que esta chamada pediu terminou verde (o job Result); vazio nos outros casos"
+        value: ${{ jobs.result.outputs.passed }}
 
 permissions:
   contents: read
@@ -70,7 +85,7 @@ env:
   MASTER_USER_INITIAL_PASSWORD: test-master-password-ci-only
 
 jobs:
-  checks:
+  validate:
     name: Validate
     if: ${{ !inputs.docs }}
     runs-on: ubuntu-24.04
@@ -103,7 +118,7 @@ jobs:
       # question before production: does this build drop a route the
       # production build still serves? A shallow clone skips that test. The
       # dependency audit compares with an older commit too.
-      - name: Checkout repository
+      - name: Check out the full history
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 0
@@ -111,12 +126,12 @@ jobs:
       # The web and the app beside the API, on the branch of the same name
       # or their staging: the route contract and the documentation's links
       # read them (.github/actions/siblings, the same in `Docs`).
-      - name: Check out the web and the app beside the API
+      - name: Check out the web and the app next to this repository
         uses: ./.github/actions/siblings
         with:
           token: ${{ secrets.CLIENT_REPOS_READ_TOKEN }}
 
-      - name: Set up the API toolchain
+      - name: Set up dependencies
         uses: ./.github/actions/setup
 
       # A CRITICAL advisory in a production dependency stops the pipeline
@@ -134,7 +149,7 @@ jobs:
         run: bash .github/scripts/audit-gate.sh
 
       # The cheapest check: the formatting.
-      - name: Lint
+      - name: Check formatting
         run: yarn lint:check
 
       # tsc holds about 2.3 GB live for this project, and Node's default
@@ -153,10 +168,10 @@ jobs:
       # With coverage, measured, published AND gated: test:coverage carries
       # the floor (package.json; decision 13.1, docs/testes.md "Cobertura"),
       # and a build under it never becomes an image (the Gate).
-      - name: Run unit tests (with coverage floor)
+      - name: Unit tests
         run: yarn test:coverage --reporter=basic --coverage.reporter=text-summary --coverage.reporter=json-summary --coverage.reporter=html
 
-      - name: Publish the coverage report
+      - name: Upload coverage
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
@@ -212,11 +227,11 @@ jobs:
           - 6379:6379
 
     steps:
-      - name: Checkout repository
+      - name: Check out the repository
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       # The template migrates: the schema engine is checked before it.
-      - name: Set up the API toolchain
+      - name: Set up dependencies
         uses: ./.github/actions/setup
         with:
           schema-engine: "true"
@@ -290,7 +305,7 @@ jobs:
       packages: read
 
     steps:
-      - name: Checkout repository
+      - name: Check out the repository
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       # GHCR is only this lookup's, which can do without it: a login that
@@ -387,30 +402,30 @@ jobs:
 
     steps:
       # Full history, as in Validate: retired-routes compares with origin/main.
-      - name: Checkout repository
+      - name: Check out the full history
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 0
 
       # The same siblings as Validate: architecture-docs.test.ts resolves the
       # links and ADRs a guide cites in them, and skips itself without them.
-      - name: Check out the web and the app beside the API
+      - name: Check out the web and the app next to this repository
         uses: ./.github/actions/siblings
         with:
           token: ${{ secrets.CLIENT_REPOS_READ_TOKEN }}
 
-      - name: Set up the API toolchain
+      - name: Set up dependencies
         uses: ./.github/actions/setup
 
       # The formatting of the documentation too: a guide off Prettier's
       # format would otherwise turn the next push of code red.
-      - name: Lint
+      - name: Check formatting
         run: yarn lint:check
 
       - name: Create tmp directory
         run: mkdir -p src/tmp
 
-      - name: Run the unit tests
+      - name: Unit tests
         run: yarn test --reporter=basic
 
   # Opt-in: the API's reader and rules against the real container (needs
@@ -424,13 +439,68 @@ jobs:
     timeout-minutes: 45
 
     steps:
-      - name: Checkout repository
+      - name: Check out the repository
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
-      - name: Set up the API toolchain
+      - name: Set up dependencies
         uses: ./.github/actions/setup
 
       - name: Run the contract against the container
         env:
           AI_LOCAL_E2E: "1"
         run: npx vitest run tests/ai-local
+
+  # The verdict of this call, the `passed` output the caller's Gate reads
+  # (the header). Every job above, each held to what the inputs asked of
+  # it: green when it was asked for, skipped when it was not, so a job that
+  # ran where it should not, or never ran where it should, is a red here
+  # too. A job added above is added to `needs` (ci-stability.test.ts). A
+  # validation cancelled by a newer push cancels this one with it.
+  result:
+    name: Result
+    needs: [validate, e2e, ai-ocr, docs, ai-local-e2e]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      passed: ${{ steps.check.outputs.passed }}
+
+    steps:
+      - name: Check results
+        id: check
+        env:
+          DOCS: ${{ inputs.docs }}
+          WANT_E2E: ${{ inputs.e2e }}
+          WANT_AI_LOCAL: ${{ inputs.ai_local }}
+          VALIDATE: ${{ needs.validate.result }}
+          E2E: ${{ needs.e2e.result }}
+          AI_OCR: ${{ needs.ai-ocr.result }}
+          DOCS_JOB: ${{ needs.docs.result }}
+          AI_LOCAL: ${{ needs.ai-local-e2e.result }}
+        run: |
+          failed=""
+          expect() {
+            [ "$2" = "$3" ] || failed="${failed} $1 (${2:-sem resultado})"
+          }
+          # success when the inputs asked for the job, skipped otherwise.
+          asked() {
+            if [ "$1" = "true" ]; then echo success; else echo skipped; fi
+          }
+          if [ "$DOCS" = "true" ]; then
+            expect Docs "$DOCS_JOB" success
+            expect Validate "$VALIDATE" skipped
+            expect E2E "$E2E" skipped
+            expect "AI OCR" "$AI_OCR" skipped
+            expect "AI local contract" "$AI_LOCAL" skipped
+          else
+            expect Validate "$VALIDATE" success
+            expect E2E "$E2E" "$(asked "$WANT_E2E")"
+            expect "AI OCR" "$AI_OCR" success
+            expect "AI local contract" "$AI_LOCAL" "$(asked "$WANT_AI_LOCAL")"
+            expect Docs "$DOCS_JOB" skipped
+          fi
+          if [ -n "$failed" ]; then
+            echo "::error title=Result::A validação não passou:${failed}."
+            exit 1
+          fi
+          echo "passed=true" >> "$GITHUB_OUTPUT"

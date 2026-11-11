@@ -93,10 +93,10 @@ describe("the build (once, on staging)", () => {
 
     expect(build.text).toContain("needs: [changes, gate, secrets]");
     expect(build.text).toContain(
-      "\n    if: github.ref == 'refs/heads/staging' && needs.changes.outputs.docs != 'true'\n",
+      "\n    if: ${{ !cancelled() && github.ref == 'refs/heads/staging' && needs.gate.result == 'success' && needs.secrets.result == 'success' && needs.changes.outputs.docs != 'true' }}\n",
     );
     expect(jobOf(staging, "deploy-staging").text).toContain(
-      "\n    if: github.ref == 'refs/heads/staging'\n",
+      "\n    if: ${{ !cancelled() && github.ref == 'refs/heads/staging' && needs.build.result == 'success' && needs.image-scan.result == 'success' }}\n",
     );
     expect(evidence.text).toContain("if: github.ref == 'refs/heads/main'");
   });
@@ -523,7 +523,7 @@ describe("the pull request into main", () => {
   const check = jobOf(pr, "evidence");
 
   it("waits for staging to have DEPLOYED its head, so the merge promotes a build staging ran", () => {
-    const wait = stepOf(check, "Wait for the staging deploy of the PR head");
+    const wait = stepOf(check, "Wait for the staging build of the head");
 
     expect(wait.text).toContain(
       "HEAD_SHA: ${{ github.event.pull_request.head.sha }}",
@@ -557,11 +557,11 @@ describe("the pull request into main", () => {
     const names = stepNames(check);
     const gate = stepOf(check, "Check the staging gate of this build");
 
-    expect(names.indexOf("Wait for the staging deploy of the PR head")).toBe(
+    expect(names.indexOf("Wait for the staging build of the head")).toBe(
       names.indexOf("Check the staging gate of this build") - 1,
     );
     expect(
-      stepOf(check, "Wait for the staging deploy of the PR head").text,
+      stepOf(check, "Wait for the staging build of the head").text,
     ).toContain("id: staged");
     expect(gate.text).toContain("COMMIT: ${{ steps.staged.outputs.commit }}");
     expect(gate.run).toContain('bash .github/scripts/check-gate.sh "$COMMIT"');
@@ -613,7 +613,7 @@ describe("the pull request into main", () => {
     const main = stepOf(check, "Check main adds only documentation");
 
     expect(names.indexOf("Check main adds only documentation")).toBeLessThan(
-      names.indexOf("Wait for the staging deploy of the PR head"),
+      names.indexOf("Wait for the staging build of the head"),
     );
     expect(main.text).toContain(
       "BASE_SHA: ${{ github.event.pull_request.base.sha }}",
@@ -636,7 +636,7 @@ describe("a commit that only changes documentation (D11)", () => {
       'bash .github/scripts/staged-build.sh "$CANDIDATE"',
     );
     // The history it walks.
-    expect(stepOf(evidence, "Checkout the deploy scripts").text).toMatch(
+    expect(stepOf(evidence, "Check out the scripts").text).toMatch(
       /with:\n\s+fetch-depth: 0\n/,
     );
   });

@@ -1,4 +1,4 @@
-name: Check out the web and the app beside the API
+name: Check out the web and the app next to this repository
 description: >-
   The two client repositories next to this one (../trajetto-ui and
   ../trajetto-mobile), on the branch of the same name when the sibling has
@@ -23,7 +23,7 @@ inputs:
 runs:
   using: composite
   steps:
-    - name: Check the client checkout token
+    - name: Check the sibling token
       id: clients
       env:
         TOKEN: ${{ inputs.token }}
@@ -109,7 +109,7 @@ runs:
         path: .siblings/trajetto-mobile
         persist-credentials: false
 
-    - name: Move the clients beside the API
+    - name: Move the web and the app beside this repository
       if: steps.clients.outputs.enabled == 'true'
       shell: bash
       run: |

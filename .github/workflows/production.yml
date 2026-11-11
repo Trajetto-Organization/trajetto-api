@@ -134,7 +134,7 @@ jobs:
       # Full history (blobless, scripts only): the documentation rule below
       # compares the merged commit with the commits staging ran, and the
       # migration rule reads old trees.
-      - name: Checkout the deploy scripts
+      - name: Check out the scripts
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 0
@@ -363,7 +363,7 @@ jobs:
       packages: write
 
     steps:
-      - name: Checkout the deploy scripts
+      - name: Check out the deploy scripts
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           sparse-checkout: |
@@ -419,7 +419,7 @@ jobs:
       pull-requests: write # comment on the PRs included in this version
 
     steps:
-      - name: Checkout repository
+      - name: Check out the full history
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           # semantic-release needs the full history: it finds the last tag and reads
@@ -428,7 +428,7 @@ jobs:
           # analyse and no release is ever created.
           fetch-depth: 0
 
-      - name: Set up the API toolchain
+      - name: Set up dependencies
         uses: ./.github/actions/setup
         with:
           generate: "false"

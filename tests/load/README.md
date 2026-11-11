@@ -127,8 +127,9 @@ todos só para o banco descartável de teste:
 
 A senha das contas é `WEB_E2E_PASSWORD`; sem ela, o padrão documentado de
 teste `Navegador@E2E2026`. Ela nunca é gravada em disco. Ordem: `seed.ts`,
-`mint-master.ts`, `mint-browser-users.ts` (a CI noturna,
-`trajetto-ui/.github/workflows/browser-suites.yml`, roda os três nessa ordem).
+`mint-master.ts`, `mint-browser-users.ts` (as suítes de navegador da web, no
+passo `Prepare the API` dos jobs `Browser suites (1/2)` e `(2/2)` do
+`trajetto-ui/.github/workflows/validate.yml`, rodam os três nessa ordem).
 Com `NODE_ENV=test` (como as suítes de navegador sobem a API), o 2FA e a
 criação de usuário guardam o e-mail numa caixa em memória do processo: nenhum
 servidor de e-mail é chamado e o executor não precisa de rede de saída para
