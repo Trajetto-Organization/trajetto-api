@@ -4037,3 +4037,20 @@ está detalhada no `docs/variaveis-de-ambiente.md` do repositório que a lê.
    motivo na pausa por outro motivo e o "Novo assunto" do chat) e a troca
    de tema mais leve. Nada é recusado por contrato: o app 7 funciona sobre
    a API anterior. `MIN_MOBILE_CONTRACT` não muda.
+   O **zod 4 do app** (zod 3.25.76 → 4.6.7) vai nessa mesma OTA, sem
+   binário novo (manual do app, "Canais, branches e runtime") e sem mexer
+   no `CLIENT_CONTRACT`, e em produção não depende do zod da API (manual
+   da API, seção 15, "zod 4.6.7 e fastify-type-provider-zod 7.0.0"): o
+   zod 4 mede um texto em caracteres, com o emoji contando 1, e o zod 3 em
+   unidades UTF-16, com o emoji contando 2, e os textos livres que o app
+   põe na fila ("Quem recebeu", a descrição da ocorrência e as observações
+   do checklist e do abastecimento) conferem o teto em unidades, que
+   nenhuma das duas recusa pelo tamanho. Um rollback da API para o zod 3
+   não pede o da OTA. No push para a `staging` deste lote, o app em zod 4
+   vai no passo 1 da "Ordem do primeiro push com o CI novo" (acima), com a
+   web em zod 4, e fica vermelho nos testes que leem a `staging` da API,
+   entre eles o `occurrence-form-rules.test.ts`, que compara a cópia do
+   app, linha a linha, com o arquivo da `staging` da API; a API em zod 4
+   sobe no passo 2, e o run do app reexecutado no passo 4 publica a OTA.
+   Fora de um lote assim, o app em zod 4 sobe depois da API em zod 4 (o
+   passo 3 da ordem do manual da API).
