@@ -246,6 +246,13 @@ vazia; sem filtro, uma fase sem arquivo falha. Para um arquivo só, continue com
 como antes). `quality/e2e-replica-isolation.test.ts` falha se um arquivo que
 sobe réplicas ficar fora da lista ou se a lista citar um que não sobe mais.
 
+A fase de réplicas é a que mais pede memória: `resilience-replica-drain.test.ts`
+sobe 10 réplicas ao mesmo tempo. Numa réplica Linux do CI (11/11/2026) o job
+chegou a 2,8 GB contando o cache de páginas, contra 1,3 GB na fase `shared`;
+com o contêiner limitado a 1,3 GB, o OOM killer matou uma réplica e o teste
+falhou com "a réplica não subiu (morta por SIGKILL)". O runner do GitHub tem
+7 GB; num Docker com limite de memória, dê ao menos 3 GB a esse job.
+
 ### Nenhuma rede de fora
 
 Decisão D7 da auditoria do CI (30/10/2026): um pipeline só pode falhar por

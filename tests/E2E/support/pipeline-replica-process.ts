@@ -81,8 +81,15 @@ async function startPipelineReplica(
   let log = "";
   let ready = false;
 
+  // How it ended, for the failure message: a replica the OOM killer took
+  // (a SIGKILL) prints nothing, and an empty log alone read as a hang.
+  let ending = "";
+
   const exited = new Promise<number | null>((done) =>
-    child.once("exit", (code) => done(code)),
+    child.once("exit", (code, signal) => {
+      ending = signal ? `morta por ${signal}` : `saiu com código ${code}`;
+      done(code);
+    }),
   );
 
   child.stdout.on("data", (chunk) => {
@@ -106,7 +113,9 @@ async function startPipelineReplica(
   while (!ready) {
     if (gone || Date.now() > deadline) {
       child.kill("SIGKILL");
-      throw new Error(`a réplica não subiu: ${log.slice(-2_000)}`);
+      throw new Error(
+        `a réplica não subiu (${gone ? ending : "180 s sem READY"}): ${log.slice(-2_000)}`,
+      );
     }
 
     await new Promise((done) => setTimeout(done, 100));
