@@ -2767,8 +2767,14 @@ uma URL pré-assinada (`/uploads`), envia o arquivo direto ao bucket e manda só
 a chave para a API, que confere dono, tamanho e existência. A leitura também é
 por URL assinada de curta duração (`UPLOAD_SIGNED_URL_TTL_SECONDS`). Em
 desenvolvimento, `UPLOAD_STORAGE_TYPE=local` grava em `./tmp`; produção recusa
-`local`. Um coletor noturno conta (ou apaga) objetos de 30 a 33 dias que
-nenhuma linha referencia; na dúvida, guarda
+`local`. Fora de produção, a API serve essa pasta em `/tmp/*`
+(`@fastify/static`), legível por página de outra origem:
+`Cross-Origin-Resource-Policy: cross-origin` e `Access-Control-Allow-Origin: *`.
+Para uma origem aceita pelo CORS, fica a resposta dele (a própria origem, com
+credenciais, que o navegador recusa ao lado do `*`). No `@fastify/static` 10,
+o `setHeaders` roda depois dos cabeçalhos da resposta, por isso só põe o `*`
+quando o CORS não respondeu. Um coletor noturno conta (ou apaga) objetos de 30
+a 33 dias que nenhuma linha referencia; na dúvida, guarda
 ([ADR 0006](./adr/0006-idempotencia-de-efeitos-externos.md)).
 
 O cliente S3 da API (`createR2Client` em
@@ -2973,6 +2979,18 @@ OpenStreetMap são recusados.
   para clientes em `/integration/docs` (Scalar, só o que uma chave alcança) e
   no portal `/docs` da web. A referência interna completa fica em `/docs`
   (aberta fora de produção; em produção, só com `DOCS_USER`/`DOCS_PASSWORD`).
+  - A tela é o `@fastify/swagger-ui` 6, que serve os arquivos do
+    `swagger-ui-dist` em `/docs/static/*` pelo `@fastify/static` 10 (a
+    versão exata fica no `package.json`).
+    Esses arquivos são públicos também em produção: a senha guarda a página,
+    o `/docs/json`, o `/docs/yaml` e o `swagger-initializer.js`, e nenhuma
+    trava nossa fica na frente do static.
+  - A página só carrega script e CSS de `/docs/static/`, sem script inline,
+    e por isso abre sob a CSP padrão do helmet (`script-src 'self'`).
+    `tests/unitaires/http/static-assets.test.ts` confere a página e cada
+    arquivo que ela pede. O `dependency-security-floor` segura o
+    `@fastify/static` em 10.1.4 ou mais, também na cópia que o swagger-ui
+    carrega.
 - **Buscadores no host da API**: só o console de produção é indexável
   (`APP_ENV=production`; fora dele, `noindex`). O host responde o próprio
   `/robots.txt`, que libera `/integration/docs` (e o `openapi.json` que o

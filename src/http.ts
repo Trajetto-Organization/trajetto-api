@@ -174,9 +174,16 @@ if (env.NODE_ENV !== "production") {
     root: path.join(__dirname, "..", "tmp"),
     prefix: "/tmp/",
     decorateReply: false,
-    setHeaders: (res) => {
-      res.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
-      res.setHeader("Access-Control-Allow-Origin", "*");
+    // Since @fastify/static 10 this gets the reply, after its own headers.
+    // Up to 9 it got the raw response, which lost to them on writeHead: the
+    // CORS plugin's answer to an allowed origin (with credentials, which a
+    // browser refuses next to "*") must still win over the wildcard.
+    setHeaders: (reply) => {
+      reply.header("Cross-Origin-Resource-Policy", "cross-origin");
+
+      if (!reply.hasHeader("Access-Control-Allow-Origin")) {
+        reply.header("Access-Control-Allow-Origin", "*");
+      }
     },
   });
 }

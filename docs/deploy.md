@@ -2622,6 +2622,51 @@ e em [arquitetura.md (Arquivos)](./arquitetura.md#arquivos).
      a resposta 535 é a chave errada. Nenhum deles é reprocessado. O
      `ENOAUTH` não aparece com este transporte (fica na lista por defesa).
 
+**@fastify/static 10.1.8 e @fastify/swagger-ui 6.1.3 (10/11/2026).** Sem
+migration, sem variável nova e sem rota nova. A imagem da API muda
+(`@fastify/static` 8.3.0 → 10.1.8 e `@fastify/swagger-ui` 5.2.2 → 6.1.3, com
+o `swagger-ui-dist` 5.34). Fecha os quatro alertas do `@fastify/static` que o
+`yarn audit` mostrava (o alto GHSA-83w8-p2f5-377r e os moderados
+GHSA-8pvw-jcv7-9cmj, GHSA-x428-ghpx-8j92 e GHSA-pr96-94w5-mx2h) e os dois que
+só o repositório do pacote publica (o alto GHSA-423g-23ch-w7c6 e o moderado
+GHSA-r799-r9gc-m956). Nenhum é alcançável: em produção ele só serve os
+arquivos públicos da tela do `/docs`, sem trava nossa na frente e sem
+listagem de pasta. A regra está em
+[arquitetura.md (Integrações externas)](./arquitetura.md#integrações-externas).
+
+- **A ordem não importa:** só a API muda, e réplicas antigas e novas convivem
+  no rollout. O `/tmp/*` só existe fora de produção.
+- **Ficam dois moderados**, que vêm pelo `@fastify/static` 10.1.8:
+  GHSA-3g3m-2fjr-6pw4 (`glob` 13) e GHSA-g3hv-75wg-m249 (`minimatch` 10).
+  Também não são alcançáveis: o static só chama o `glob` com
+  `wildcard: false`, que nenhum dos dois registros usa. Saem com o
+  `@fastify/static` 10.1.10 (`glob` 14), que cumpre a carência de 7 dias em
+  11/11/2026 às 17:11 UTC. A carência vale também para cada pacote novo que
+  a troca traz ao `yarn.lock`, e o `yarn install` pega o mais novo de cada
+  intervalo: no registro de 10/11, o `glob` 14.0.4 (06/11), o `minimatch`
+  11.0.7 (10/11 às 23:03 UTC) e o `@isaacs/nonrecursive-glob-match` 1.1.0
+  (05/11). Na troca:
+  1. Troque o `10.1.8` do `package.json` por `10.1.10` e apague do
+     `yarn.lock` a entrada `"@fastify/static@10.1.8", "@fastify/static@^10.1.0"`
+     antes do `yarn install`: sem isso, o `^10.1.0` do swagger-ui fica na
+     10.1.8, numa cópia aninhada, e o `dependency-security-floor` falha.
+  2. Depois do `yarn install`, confira com `npm view <pacote> time` cada
+     versão nova no `git diff yarn.lock`. A que ainda não tem 7 dias é
+     reescrita à mão com a mais nova do intervalo que já tem, como a do
+     `@fastify/static` de hoje: `version`, `resolved` e `integrity` saem de
+     `npm view <pacote>@<versão> dist`, e as dependências dela entram na
+     mesma conferência. De 11/11 em diante, servem o `glob` 14.0.3 (28/10),
+     o `minimatch` 11.0.4 (02/11, pelo `^11.0.2` do glob 14.0.3) e o
+     `@isaacs/nonrecursive-glob-match` 1.0.3 (28/10), já com as correções
+     (`glob` 14.0.2 e `minimatch` 11.0.1); o `path-scurry` 3.0.0 (27/10)
+     entra como o yarn resolver.
+  3. `yarn install --frozen-lockfile` passa, um `yarn install` sem a flag
+     não muda o `yarn.lock` e o `yarn audit --groups dependencies` não
+     mostra mais o `glob` nem o `minimatch`.
+- **Antes de promover**, no staging: abra o `/docs` com o `DOCS_USER` e o
+  `DOCS_PASSWORD` e confira que a tela carrega com o CSS, o logo na barra do
+  topo e a lista de rotas, sem erro de CSP no console do navegador.
+
 **Regras entre motorista, veículo e rota (10/11/2026).** Sem migration, sem
 variável nova e sem rota nova. A regra está em
 [arquitetura.md (Motorista, veículo e rota: o que é aviso e o que é recusa)](./arquitetura.md#motorista-veículo-e-rota-o-que-é-aviso-e-o-que-é-recusa).
@@ -3842,13 +3887,16 @@ está detalhada no `docs/variaveis-de-ambiente.md` do repositório que a lê.
    (sem elas, a busca do "Fixar no mapa" responde 503 e nada quebra), e
    roda em produção as duas contagens só de leitura: motoristas com CPF
    inválido e entregas em aberto com lista ou nome no e-mail. No staging,
-   antes de promover, faz o teste de e-mail real pela Resend (nodemailer
-   10). Depois do rollout, roda de novo à mão o `INSERT` da migration de
-   dados. Tudo no manual da API, seção 15 ("CPF conferido no cadastro do
-   motorista", "Busca de endereço do 'Fixar no mapa'" e "nodemailer 10.3.1
-   e o e-mail do destinatário das importações"). No push para a `staging`,
-   a API também vai antes: o CI da web roda o `cpf-field-api-parity`
-   contra a `staging` da API.
+   antes de promover, faz o teste de e-mail real pela Resend
+   (nodemailer 10) e abre o `/docs` interno com o `DOCS_USER` e o
+   `DOCS_PASSWORD` (CSS, logo, lista de rotas, sem erro de CSP no console).
+   Depois do rollout, roda de novo à mão o `INSERT` da migration de dados.
+   Tudo no manual da API, seção 15 ("CPF conferido no cadastro do
+   motorista", "Busca de endereço do 'Fixar no mapa'", "nodemailer 10.3.1 e
+   o e-mail do destinatário das importações" e "@fastify/static
+   10.1.8 e @fastify/swagger-ui 6.1.3"). No push para a
+   `staging`, a API também vai antes: o CI da web roda o
+   `cpf-field-api-parity` contra a `staging` da API.
 2. **Web:** só com a API do passo 1 em produção. A web nova chama
    `GET /address-search/:businessId` e `POST /user/session/revoke` (na API
    desde 04/11/2026, ainda fora da `v1.3.0`) e oferece o escopo

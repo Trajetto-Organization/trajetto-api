@@ -9,8 +9,8 @@ import { describe, expect, it } from "vitest";
  *
  * Dependabot raises an advisory; nothing stops a later lockfile from walking
  * back past the fix (a revert, a resolution, a copy of an old yarn.lock).
- * This does. Each floor names the advisories it closes and why they reach
- * this API.
+ * This does. Each floor names the advisories it closes and how they reach
+ * this API, or would.
  */
 function installed(name: string): string {
   return JSON.parse(
@@ -19,6 +19,25 @@ function installed(name: string): string {
       "utf8",
     ),
   ).version;
+}
+
+/**
+ * The copy `parent` loads: its own nested one when yarn could not hoist it,
+ * else the top-level one.
+ */
+function installedUnder(parent: string, name: string): string {
+  const nested = resolve(
+    process.cwd(),
+    "node_modules",
+    parent,
+    "node_modules",
+    name,
+    "package.json",
+  );
+
+  return existsSync(nested)
+    ? JSON.parse(readFileSync(nested, "utf8")).version
+    : installed(name);
 }
 
 function manifest(): {
@@ -86,5 +105,37 @@ describe("nodemailer", () => {
         resolve(process.cwd(), "node_modules", "@types", "nodemailer"),
       ),
     ).toBe(false);
+  });
+});
+
+describe("@fastify/static", () => {
+  // Not reachable today: in production it only serves swagger-ui's public
+  // files under /docs/static/*, and no guard of ours sits in front of them
+  // (the Basic-auth hook is on the UI's routes, not on the static ones).
+  // Below 10.1.4, a guard put there later would be bypassed:
+  // GHSA-83w8-p2f5-377r (path traversal, <= 10.1.0), GHSA-8pvw-jcv7-9cmj
+  // (non-canonical path, <= 10.1.1), GHSA-423g-23ch-w7c6 (non-canonical path
+  // segments, < 10.1.3), GHSA-x428-ghpx-8j92 (encoded separator, <= 9.1.0)
+  // and GHSA-r799-r9gc-m956 (case-insensitive file systems, fixed in
+  // 10.1.4). And a registration that turned directory listing on (none does)
+  // would expose GHSA-pr96-94w5-mx2h (path traversal in the listing,
+  // <= 9.1.0).
+  it("is at least 10.1.4, in the copy swagger-ui loads too", () => {
+    const version = installed("@fastify/static");
+
+    expect(atLeast(version, "10.1.4"), `@fastify/static@${version}`).toBe(true);
+
+    // swagger-ui asks for ^10.1.0, which yarn keeps at whatever the lockfile
+    // first resolved: bumping only the direct pin leaves the UI's assets on
+    // an older copy, nested under it.
+    expect(installedUnder("@fastify/swagger-ui", "@fastify/static")).toBe(
+      version,
+    );
+  });
+
+  it("is what package.json pins", () => {
+    const { dependencies } = manifest();
+
+    expect(dependencies["@fastify/static"]).toBe(installed("@fastify/static"));
   });
 });
