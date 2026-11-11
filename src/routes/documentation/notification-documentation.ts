@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { responseDateTime } from "./response-date";
 
 import { updateNotificationPreferencesSchema } from "@/schemas/notification-preferences-schema";
 import { readNotificationsByEntitySchema } from "@/schemas/read-notifications-by-entity-schema";
@@ -73,8 +74,8 @@ const notificationResponses = {
     businessId: z.string().nullable(),
     userId: z.string(),
     deliveryId: z.string().nullable(),
-    created_at: z.union([z.string(), z.date()]),
-    updated_at: z.union([z.string(), z.date()]),
+    created_at: responseDateTime(),
+    updated_at: responseDateTime(),
   }),
   notificationMarkedAsRead: z.object({
     message: z.string().default("Notificação marcada como lida!"),

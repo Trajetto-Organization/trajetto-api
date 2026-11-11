@@ -8,6 +8,7 @@ import { occurredAtField } from "@/shared/delivery/occurred-at";
 import { optionalCoordinate } from "@/shared/delivery/optional-coordinate";
 import { devicePrecheckField } from "@/shared/ai-precheck/device-precheck";
 import { geofenceBodyFields } from "@/shared/delivery/geofence/geofence-check";
+import { fieldError } from "@/shared/validation/field-error";
 
 /**
  * Proof of delivery from the driver app. The photo and signature are
@@ -18,15 +19,17 @@ import { geofenceBodyFields } from "@/shared/delivery/geofence/geofence-check";
 const deliveryProofSchema = z.object({
   ...tenantLockedShape,
   client_submission_id: z
-    .string({
-      required_error: "A chave de idempotência do envio é obrigatória.",
-    })
+    .string(
+      fieldError({
+        required: "A chave de idempotência do envio é obrigatória.",
+      }),
+    )
     .uuid("A chave de idempotência do envio é inválida.")
     .describe(
       "Chave de idempotência do envio (UUID), gerada uma vez pelo app e repetida em cada retentativa: reenviar a mesma chave não comprova a entrega duas vezes.",
     ),
   photo: z
-    .string({ required_error: "A foto do canhoto é obrigatória." })
+    .string(fieldError({ required: "A foto do canhoto é obrigatória." }))
     .min(1, "A foto do canhoto é obrigatória.")
     .max(512),
   signature: z.string().min(1).max(512).optional(),

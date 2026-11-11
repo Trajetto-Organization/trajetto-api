@@ -13,6 +13,7 @@ import {
   maxModelYear,
   vehicleYearOf,
 } from "@/shared/vehicle/vehicle-years";
+import { fieldError } from "@/shared/validation/field-error";
 
 /**
  * The vehicle's fields, written ONCE for create and update (FLEET-VEH-2).
@@ -72,7 +73,7 @@ const PLATE_PATTERN = /^[A-Z]{3}\d[A-Z0-9]\d{2}$/;
 const licensePlate = z.preprocess(
   (value) => (typeof value === "string" ? value.trim().toUpperCase() : value),
   z
-    .string({ required_error: "A placa é obrigatória." })
+    .string(fieldError({ required: "A placa é obrigatória." }))
     .min(7, "A placa deve ter 7 caracteres.")
     .max(7, "A placa deve ter 7 caracteres.")
     .regex(PLATE_PATTERN, "A placa deve estar no formato ABC1234 ou ABC1D23."),
@@ -81,22 +82,17 @@ const licensePlate = z.preprocess(
 const manufacturingYear = dateString(
   "O ano de fabricação é obrigatório.",
   "Ano de fabricação inválido.",
-).refine(
-  (value) => vehicleYearOf(value) <= maxManufacturingYear(),
-  () => ({
-    message: `O ano de fabricação não pode ser posterior a ${maxManufacturingYear()}.`,
-  }),
-);
+).refine((value) => vehicleYearOf(value) <= maxManufacturingYear(), {
+  error: () =>
+    `O ano de fabricação não pode ser posterior a ${maxManufacturingYear()}.`,
+});
 
 const modelYear = dateString(
   "O ano do modelo é obrigatório.",
   "Ano do modelo inválido.",
-).refine(
-  (value) => vehicleYearOf(value) <= maxModelYear(),
-  () => ({
-    message: `O ano do modelo não pode ser posterior a ${maxModelYear()}.`,
-  }),
-);
+).refine((value) => vehicleYearOf(value) <= maxModelYear(), {
+  error: () => `O ano do modelo não pode ser posterior a ${maxModelYear()}.`,
+});
 
 const optionalUuid = (message: string) =>
   z.preprocess(
@@ -132,9 +128,7 @@ const vehicleFieldsSchema = z.object({
     "Data de aquisição inválida.",
   ),
   fleet_type: z.enum(["OWNED", "THIRD_PARTY"], {
-    errorMap: () => ({
-      message: "Tipo de frota inválido. Deve ser OWNED ou THIRD_PARTY.",
-    }),
+    error: "Tipo de frota inválido. Deve ser OWNED ou THIRD_PARTY.",
   }),
   // Free text with no ceiling used to reach the column as-is.
   fleet_id: z.preprocess(
@@ -163,7 +157,9 @@ const vehicleFieldsSchema = z.object({
       .nullable(),
   ),
   current_mileage: z
-    .number({ invalid_type_error: "A quilometragem atual deve ser um número." })
+    .number(
+      fieldError({ invalid: "A quilometragem atual deve ser um número." }),
+    )
     .min(0.1, "A quilometragem atual deve ser maior que zero.")
     .max(9999999, "A quilometragem atual não pode exceder 9.999.999 km."),
   last_maintenance_mileage: z.preprocess(
@@ -210,13 +206,13 @@ const vehicleFieldsSchema = z.object({
   // IN_ROUTE is deliberately absent: it is a fact about a route, written by
   // the route when it departs and cleared when it ends.
   status: z.enum(["ACTIVE", "INACTIVE", "BLOCKED"], {
-    errorMap: () => ({
-      message: "Status inválido. Deve ser ACTIVE, INACTIVE ou BLOCKED.",
-    }),
+    error: "Status inválido. Deve ser ACTIVE, INACTIVE ou BLOCKED.",
   }),
   vehicleTypeId: optionalUuid("ID do tipo de veículo é inválido."),
   fuelTypeId: z
-    .string({ required_error: "ID do tipo de combustível é obrigatório!" })
+    .string(
+      fieldError({ required: "ID do tipo de combustível é obrigatório!" }),
+    )
     .uuid("ID do tipo de combustível é inválido."),
   driverId: optionalUuid("ID do motorista é inválido."),
   branchId: optionalUuid("ID da filial é inválido."),

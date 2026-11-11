@@ -12,7 +12,7 @@ import { inheritedOpenStopsDoc } from "@/routes/documentation/inherited-open-sto
 const deliveryListSearchMetaDoc = searchMetaDoc(
   {
     statusCounts: z
-      .record(z.number().int())
+      .record(z.string(), z.number().int())
       .describe(
         "Entregas por status com a busca e os demais filtros, sem o de status (os cartões).",
       ),

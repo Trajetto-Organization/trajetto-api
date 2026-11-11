@@ -16,6 +16,7 @@ import {
   PAUSE_FLAG_CODES,
   PAUSE_REPORT_MAX_DAYS,
 } from "../rules/pause-report-rules";
+import { fieldError } from "@/shared/validation/field-error";
 
 /**
  * The pause routes' inputs. Mirrored by the app (docs/contratos-app/pauses.md),
@@ -25,16 +26,14 @@ import {
 
 const businessParam = z.object({
   businessId: z
-    .string({ required_error: "ID da empresa é obrigatório!" })
+    .string(fieldError({ required: "ID da empresa é obrigatório!" }))
     .uuid("ID da empresa é inválido.")
     .describe("ID da empresa; fora do MASTER, só a do próprio usuário."),
 });
 
 const kind = z
   .enum(DRIVER_PAUSE_KINDS, {
-    errorMap: () => ({
-      message: "Tipo de pausa inválido. Use MEAL, REST ou OTHER.",
-    }),
+    error: "Tipo de pausa inválido. Use MEAL, REST ou OTHER.",
   })
   .describe("MEAL (refeição), REST (descanso) ou OTHER (outra).");
 
@@ -58,7 +57,9 @@ const typeOrKindMessage = {
 
 const submissionKey = (what: string) =>
   z
-    .string({ required_error: `A chave do envio (${what}) é obrigatória.` })
+    .string(
+      fieldError({ required: `A chave do envio (${what}) é obrigatória.` }),
+    )
     .uuid(`A chave do envio (${what}) é inválida.`);
 
 /**

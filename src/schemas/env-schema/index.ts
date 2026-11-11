@@ -404,10 +404,8 @@ const envSchema = z
       (value) => (value === "" ? undefined : value),
       z
         .enum(["local", "none"], {
-          errorMap: () => ({
-            message:
-              "AI_PROVIDER aceita local ou none: o provedor anthropic foi removido (ADR 0010). Use local com AI_LOCAL_URL e AI_LOCAL_TOKEN.",
-          }),
+          error:
+            "AI_PROVIDER aceita local ou none: o provedor anthropic foi removido (ADR 0010). Use local com AI_LOCAL_URL e AI_LOCAL_TOKEN.",
         })
         .default("local"),
     ),

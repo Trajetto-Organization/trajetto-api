@@ -1,8 +1,7 @@
 import fastify from "fastify";
-import {
-  serializerCompiler,
-  validatorCompiler,
-} from "fastify-type-provider-zod";
+import { validatorCompiler } from "fastify-type-provider-zod";
+
+import { parsingSerializerCompiler } from "@/shared/http/response-serializer";
 
 import { describe, expect, it, vi } from "vitest";
 
@@ -45,7 +44,7 @@ describe("GET /health with the dependencies down", () => {
   it("answers 503 without any internal error text", async () => {
     const app = fastify();
     app.setValidatorCompiler(validatorCompiler);
-    app.setSerializerCompiler(serializerCompiler);
+    app.setSerializerCompiler(parsingSerializerCompiler);
     app.register(healthRoutes);
 
     const response = await app.inject({ method: "GET", url: "/health" });

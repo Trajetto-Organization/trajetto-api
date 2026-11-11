@@ -7,6 +7,7 @@ import {
 } from "@/shared/time/business-day";
 
 import { birthDateIssue, birthDateKeyOf } from "@/modules/driver/driver-rules";
+import { fieldError } from "@/shared/validation/field-error";
 
 /**
  * A driver's birth date, shared by create and update and mirrored by the web
@@ -18,7 +19,7 @@ import { birthDateIssue, birthDateKeyOf } from "@/modules/driver/driver-rules";
  * counted on civil days, never on the server's calendar.
  */
 const birthDateField = z
-  .string({ required_error: "A data de nascimento é obrigatória." })
+  .string(fieldError({ required: "A data de nascimento é obrigatória." }))
   .min(1, "A data de nascimento é obrigatória.")
   .superRefine((value, ctx) => {
     // The company's zone is not known here; zones in Brazil differ by at

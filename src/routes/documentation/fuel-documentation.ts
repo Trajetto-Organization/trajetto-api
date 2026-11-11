@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { responseDateTime } from "./response-date";
 
 import { createFuelSchema } from "@/schemas/create-fuel-schema";
 import { updateFuelSchema } from "@/schemas/update-fuel-schema";
@@ -11,6 +12,7 @@ import { presignedPhotoSchema } from "@/schemas/presigned-photos-schema";
 import { FUEL_ALERTS } from "@/modules/fuel/usecases/list-fuel/fuel-list";
 import { idempotencyHeaders } from "./idempotency-documentation";
 import { errorResponse, internalErrorResponse } from "./common-responses";
+import { fieldError } from "@/shared/validation/field-error";
 
 const fuelSchemas = {
   // What the app really POSTs: the form fields the controller validates with
@@ -39,16 +41,18 @@ const fuelSchemas = {
   }),
   getPreviousFuelQuery: z.object({
     date: z
-      .string({
-        required_error: "A data do abastecimento atual é obrigatória!",
-      })
+      .string(
+        fieldError({
+          required: "A data do abastecimento atual é obrigatória!",
+        }),
+      )
       // An unparseable date reached Prisma as Invalid Date: a 500.
       .refine((value) => !Number.isNaN(Date.parse(value)), {
         message: "A data do abastecimento atual é inválida.",
       })
       .describe("Data do abastecimento atual; volta o último anterior a ela."),
     businessId: z
-      .string({ required_error: "O ID da empresa é obrigatório!" })
+      .string(fieldError({ required: "O ID da empresa é obrigatório!" }))
       .uuid("O ID da empresa deve ser um UUID válido!")
       .describe("A empresa do veículo."),
   }),
@@ -96,9 +100,9 @@ const fuelRow = z.object({
       "Situação da análise da foto: pending, analyzing, verified, mismatch, fraud, unreadable, error ou skipped.",
     ),
   notes: z.string().nullable().describe("Observações."),
-  refueling_date: z
-    .union([z.string(), z.date()])
-    .describe("Data e hora do abastecimento (ISO 8601)."),
+  refueling_date: responseDateTime().describe(
+    "Data e hora do abastecimento (ISO 8601).",
+  ),
   created_from: z
     .string()
     .describe("Origem do registro: MOBILE_APP ou WEB_DASHBOARD."),
@@ -114,8 +118,7 @@ const fuelRow = z.object({
     .describe(
       "O motivo que o motorista informou ao confirmar o segundo abastecimento em menos de 30 minutos; null quando não confirmou (escritório, fila offline, app antigo) ou sem RECENT_REFUEL.",
     ),
-  recent_refuel_previous_at: z
-    .union([z.string(), z.date()])
+  recent_refuel_previous_at: responseDateTime()
     .nullable()
     .describe(
       "A data e hora (ISO 8601) do outro abastecimento que gerou RECENT_REFUEL; null sem o alerta. Fica como estava mesmo se aquele abastecimento for excluído depois.",
@@ -169,10 +172,8 @@ const fuelRow = z.object({
     .optional(),
   latitude: z.number().nullable().optional().describe("Latitude do posto."),
   longitude: z.number().nullable().optional().describe("Longitude do posto."),
-  created_at: z.union([z.string(), z.date()]).describe("Criação do registro."),
-  updated_at: z
-    .union([z.string(), z.date()])
-    .describe("Última alteração do registro."),
+  created_at: responseDateTime().describe("Criação do registro."),
+  updated_at: responseDateTime().describe("Última alteração do registro."),
 });
 
 const fuelResponses = {
@@ -191,9 +192,9 @@ const fuelResponses = {
   previousFuelReading: z
     .object({
       vehicleId: z.string().describe("Veículo."),
-      refueling_date: z
-        .union([z.string(), z.date()])
-        .describe("Data e hora do abastecimento anterior."),
+      refueling_date: responseDateTime().describe(
+        "Data e hora do abastecimento anterior.",
+      ),
       current_mileage: z
         .number()
         .describe("Quilometragem no abastecimento anterior."),

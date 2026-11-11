@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { responseDateTime } from "./response-date";
 
 import { createServiceOrderSchema } from "@/schemas/create-service-order-schema";
 
@@ -54,8 +55,6 @@ const serviceOrderBusinessParams = z.object({
   serviceOrderId: z.string().uuid("O ID da ordem de serviço é obrigatório!"),
 });
 
-const isoDateTime = z.union([z.string(), z.date()]);
-
 /**
  * The order as a driver reads it (wave 3): an allowlist without money — no
  * total, no part price or discount, no supplier (service-order-views.ts).
@@ -66,8 +65,8 @@ const serviceOrderDriverView = z.object({
   status: z
     .enum(["open", "completed"])
     .describe("completed quando a ordem tem data de conclusão."),
-  date: isoDateTime,
-  completion_date: isoDateTime.nullable(),
+  date: responseDateTime(),
+  completion_date: responseDateTime().nullable(),
   maintenance_type: z.enum(["INTERNAL", "EXTERNAL"]),
   description: z.string().nullable(),
   current_mileage_at_service: z
@@ -100,8 +99,8 @@ const serviceOrderDriverView = z.object({
       }),
     )
     .describe("As peças lançadas, só nome e quantidade."),
-  created_at: isoDateTime,
-  updated_at: isoDateTime,
+  created_at: responseDateTime(),
+  updated_at: responseDateTime(),
 });
 
 /** The office's view: the driver's plus the money and the workshop. */
@@ -197,8 +196,8 @@ const serviceOrderResponses = {
     data: z.array(
       z.object({
         id: z.string(),
-        date: z.union([z.string(), z.date()]),
-        completion_date: z.union([z.string(), z.date()]).nullable(),
+        date: responseDateTime(),
+        completion_date: responseDateTime().nullable(),
         maintenance_type: z.enum(["INTERNAL", "EXTERNAL"]),
         total_amount: z.number(),
         description: z
@@ -220,10 +219,10 @@ const serviceOrderResponses = {
         longitude_original: z.number().nullable(),
         location_source: z.string().nullable(),
         location_edited_by: z.string().nullable(),
-        location_edited_at: z.union([z.string(), z.date()]).nullable(),
+        location_edited_at: responseDateTime().nullable(),
         created_from: z.enum(["MOBILE_APP", "WEB_DASHBOARD"]),
-        created_at: z.union([z.string(), z.date()]),
-        updated_at: z.union([z.string(), z.date()]),
+        created_at: responseDateTime(),
+        updated_at: responseDateTime(),
         business: z
           .object({
             corporate_reason: z.string(),

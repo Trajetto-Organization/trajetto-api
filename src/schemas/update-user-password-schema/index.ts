@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { passwordField } from "@/schemas/authenticate-user-schema";
+import { storedPasswordField } from "@/schemas/authenticate-user-schema";
 import { tenantLockedShape } from "@/shared/validation/tenant-locked-field";
 
 /**
@@ -22,7 +22,7 @@ const ownPasswordField = z
  */
 const updateUserPasswordSchema = z.object({
   ...tenantLockedShape,
-  currentPassword: passwordField,
+  currentPassword: storedPasswordField,
   newPassword: ownPasswordField,
 });
 

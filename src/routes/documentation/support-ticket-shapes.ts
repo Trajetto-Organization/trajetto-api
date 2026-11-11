@@ -1,10 +1,10 @@
 import { z } from "zod";
+import { responseDateTime } from "./response-date";
 
 /**
  * The support ticket wire shapes (decision 14.5), shared by the chat and the
  * ticket documentation without importing each other.
  */
-const isoDateTime = z.union([z.string(), z.date()]);
 const person = z.object({ id: z.string(), name: z.string() });
 
 const ticketKind = z.enum([
@@ -126,7 +126,6 @@ const driverTicketViewShape = ticketSummary
   });
 
 export {
-  isoDateTime,
   person,
   ticketKind,
   ticketOutcome,

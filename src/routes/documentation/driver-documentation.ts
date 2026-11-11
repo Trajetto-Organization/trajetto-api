@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { responseDateTime } from "./response-date";
 import { createDriverSchema } from "@/schemas/create-driver-schema";
 
 import { updateDeleteBusinessSchema } from "@/schemas/update-delete-business-schema";
@@ -30,14 +31,12 @@ const driverSchemas = {
   searchDriverCursor: cursorPaginationByBusinessSchema,
 };
 
-const isoDate = z.union([z.string(), z.date()]);
-
 const cnhFields = {
   cnh_category: z
     .enum(CNH_CATEGORIES)
     .nullable()
     .describe("Categoria da CNH; null quando não informada."),
-  cnh_expires_at: isoDate
+  cnh_expires_at: responseDateTime()
     .nullable()
     .describe(
       "Validade da CNH: data civil, sempre AAAA-MM-DDT00:00:00.000Z (leia o dia UTC); null quando não informada.",
@@ -48,7 +47,7 @@ const cnhFields = {
 const driverListItem = z.object({
   id: z.string(),
   name: z.string(),
-  birth_date: isoDate.describe(
+  birth_date: responseDateTime().describe(
     "Data de nascimento: data civil, AAAA-MM-DDT00:00:00.000Z (leia o dia UTC). Registros antigos guardam a meia-noite local, que é o mesmo dia UTC no Brasil.",
   ),
   cnh: z.string(),
@@ -72,8 +71,8 @@ const driverListItem = z.object({
   businessId: z.string(),
   branchId: z.string().nullable(),
   branch: z.object({ corporate_reason: z.string() }).nullable(),
-  created_at: isoDate,
-  updated_at: isoDate,
+  created_at: responseDateTime(),
+  updated_at: responseDateTime(),
 });
 
 /** The list's `meta.searchMeta`, as summarizeDriverList builds it. */
@@ -117,7 +116,7 @@ const driverPickerItem = z.object({
     .describe("Só para quem lê o cadastro de motoristas."),
   branchId: z.string().nullable().optional(),
   businessId: z.string().optional(),
-  created_at: isoDate.optional(),
+  created_at: responseDateTime().optional(),
 });
 
 const message = (text: string) =>

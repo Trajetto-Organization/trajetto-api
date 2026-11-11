@@ -1,8 +1,9 @@
 import { z } from "zod";
+import { fieldError } from "@/shared/validation/field-error";
 
 const updateDeleteVehicleSchema = z.object({
   vehicleId: z
-    .string({ required_error: "ID do veículo é obrigatório!" })
+    .string(fieldError({ required: "ID do veículo é obrigatório!" }))
     .uuid("ID do veículo é inválido."),
 });
 

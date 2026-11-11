@@ -1,12 +1,13 @@
 import { z } from "zod";
 import { tenantLockedShape } from "@/shared/validation/tenant-locked-field";
+import { fieldError } from "@/shared/validation/field-error";
 
 const updateWhatsAppSettingsSchema = z
   .object({
     ...tenantLockedShape,
-    whatsapp_notifications_enabled: z.boolean({
-      required_error: "Estado de notificação WhatsApp é obrigatório",
-    }),
+    whatsapp_notifications_enabled: z.boolean(
+      fieldError({ required: "Estado de notificação WhatsApp é obrigatório" }),
+    ),
     whatsapp_phone: z
       .string()
       .optional()

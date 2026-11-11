@@ -1,7 +1,7 @@
 import "fastify";
 
 import type { BusinessModule } from "@prisma/client";
-import type { ZodTypeAny } from "zod";
+import type { ZodType } from "zod";
 
 import { UserRole } from "@/modules/user/dtos/user-dto";
 import { PermissionKey } from "@/config/permissions";
@@ -28,8 +28,8 @@ declare module "fastify" {
    */
   interface FastifyContextConfig {
     openapi?: {
-      body?: ZodTypeAny;
-      headers?: ZodTypeAny;
+      body?: ZodType;
+      headers?: ZodType;
       module?: BusinessModule;
     };
   }

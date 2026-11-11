@@ -2,7 +2,7 @@ import { randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 
-import { ZodEffects, type ZodTypeAny } from "zod";
+import { ZodPipe, type core } from "zod";
 
 import { envSchema } from "@/schemas/env-schema";
 
@@ -39,9 +39,10 @@ function exampleKeys(text: string): string[] {
 
 /** Every key the API's env schema reads. */
 function schemaKeys(): string[] {
-  let schema: ZodTypeAny = envSchema;
+  let schema: core.$ZodType = envSchema;
 
-  while (schema instanceof ZodEffects) schema = schema.innerType();
+  // zod 4: the refinements live on the object; each transform is a pipe.
+  while (schema instanceof ZodPipe) schema = schema.in;
 
   const shape = (schema as unknown as { shape?: Record<string, unknown> })
     .shape;

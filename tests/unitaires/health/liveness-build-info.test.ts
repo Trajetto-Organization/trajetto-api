@@ -1,8 +1,7 @@
 import fastify from "fastify";
-import {
-  serializerCompiler,
-  validatorCompiler,
-} from "fastify-type-provider-zod";
+import { validatorCompiler } from "fastify-type-provider-zod";
+
+import { parsingSerializerCompiler } from "@/shared/http/response-serializer";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -44,7 +43,7 @@ async function liveness() {
   const app = fastify();
 
   app.setValidatorCompiler(validatorCompiler);
-  app.setSerializerCompiler(serializerCompiler);
+  app.setSerializerCompiler(parsingSerializerCompiler);
   app.register(healthRoutes);
 
   const response = await app.inject({

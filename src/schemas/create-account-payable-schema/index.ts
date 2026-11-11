@@ -9,6 +9,7 @@ import {
 } from "@/shared/utils/zod-schema-helpers";
 import { optionalMultilineText } from "@/shared/delivery/text-rules";
 import { dateOnlyFromKey } from "@/shared/time/business-day";
+import { fieldError } from "@/shared/validation/field-error";
 
 /**
  * The bill's fields, as the form sends them. Mirrored by the web's
@@ -78,7 +79,7 @@ const optionalId = (message: string) =>
 const accountPayableFields = {
   category: z
     .nativeEnum(AccountPayableCategory, {
-      errorMap: () => ({ message: "Categoria da conta inválida." }),
+      error: "Categoria da conta inválida.",
     })
     .describe(
       "Categoria/tipo da conta (FUEL, MAINTENANCE, INSURANCE, TAXES_FEES, FINES, TOLLS, RENTAL, PAYROLL, OTHER). Com OTHER, category_description é obrigatória.",
@@ -92,23 +93,25 @@ const accountPayableFields = {
     billDate("Data de pagamento").optional().nullable(),
   ),
   amount: z
-    .number({ invalid_type_error: "O valor deve ser numérico." })
+    .number(fieldError({ invalid: "O valor deve ser numérico." }))
     .positive("O valor deve ser um valor positivo.")
     .min(1, "O valor deve ser no mínimo R$ 1,00")
     .max(9999999.99, "O valor não pode exceder R$ 9.999.999,99."),
   amount_paid: z
-    .number({ invalid_type_error: "O valor pago deve ser numérico." })
+    .number(fieldError({ invalid: "O valor pago deve ser numérico." }))
     .nonnegative("O valor pago deve ser um valor não negativo.")
     .min(1, "O valor pago deve ser no mínimo R$ 1,00")
     .max(9999999.99, "O valor pago não pode exceder R$ 9.999.999,99.")
     .optional()
     .nullable(),
   branchId: z
-    .string({ required_error: "ID da filial é obrigatória!" })
+    .string(fieldError({ required: "ID da filial é obrigatória!" }))
     .uuid("ID da filial é inválido."),
   serviceOrderId: optionalId("ID da ordem de serviço é inválido."),
   registrationUserId: z
-    .string({ required_error: "ID do usuário responsável é obrigatório!" })
+    .string(
+      fieldError({ required: "ID do usuário responsável é obrigatório!" }),
+    )
     .uuid("ID do usuário responsável é inválido.")
     .describe(
       "O responsável pela conta, avisado da criação; pode ser um motorista, que vê as suas.",

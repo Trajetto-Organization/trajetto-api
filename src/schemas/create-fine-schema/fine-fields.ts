@@ -7,6 +7,7 @@ import {
   hasSpaceAtEdges,
   isValidDateString,
 } from "@/shared/utils/zod-schema-helpers";
+import { fieldError } from "@/shared/validation/field-error";
 
 /**
  * The fields the fine create and edit share, written once.
@@ -46,7 +47,7 @@ const DATE_DESCRIPTION =
 
 function dateField(label: string) {
   return z
-    .string({ required_error: `A ${label} é obrigatória.` })
+    .string(fieldError({ required: `A ${label} é obrigatória.` }))
     .min(1, `A ${label} é obrigatória.`)
     .refine(isFineDate, `A ${label} é inválida.`)
     .describe(
@@ -88,10 +89,12 @@ const amountField = z.preprocess(
     return val;
   },
   z
-    .number({
-      required_error: "O valor da multa é obrigatório.",
-      invalid_type_error: "O valor da multa deve ser um número válido.",
-    })
+    .number(
+      fieldError({
+        required: "O valor da multa é obrigatório.",
+        invalid: "O valor da multa deve ser um número válido.",
+      }),
+    )
     .positive("O valor da multa deve ser maior que zero.")
     .max(999999.99, "O valor da multa não pode exceder R$ 999.999,99."),
 );
@@ -108,10 +111,12 @@ const pointsField = z.preprocess(
     return val;
   },
   z
-    .number({
-      required_error: "A pontuação é obrigatória.",
-      invalid_type_error: "A pontuação deve ser um número válido.",
-    })
+    .number(
+      fieldError({
+        required: "A pontuação é obrigatória.",
+        invalid: "A pontuação deve ser um número válido.",
+      }),
+    )
     .int("A pontuação deve ser um número inteiro.")
     // Zero is real: some infractions put no points on the licence.
     .min(0, "A pontuação não pode ser negativa.")
@@ -170,7 +175,7 @@ function coordinateField(min: number, max: number, label: string) {
       return val;
     },
     z
-      .number({ invalid_type_error: `A ${label} deve ser um número válido.` })
+      .number(fieldError({ invalid: `A ${label} deve ser um número válido.` }))
       .min(min, `A ${label} deve estar entre ${min} e ${max}.`)
       .max(max, `A ${label} deve estar entre ${min} e ${max}.`)
       .nullable()

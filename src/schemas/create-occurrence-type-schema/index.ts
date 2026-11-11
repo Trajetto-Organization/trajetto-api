@@ -9,6 +9,7 @@ import {
   OCCURRENCE_CATEGORIES,
   PAUSE_KINDS,
 } from "@/modules/occurrence-type/rules/occurrence-category-rules";
+import { fieldError } from "@/shared/validation/field-error";
 
 const occurrenceTypeNameSchema = z
   .string()
@@ -83,7 +84,7 @@ const OCCURRENCE_TYPE_CODE_MAX_LENGTH = 40;
 const occurrenceTypeCodeSchema = z.preprocess(
   (val) => (val === "" ? null : val),
   z
-    .string({ invalid_type_error: "O código do tipo deve ser um texto." })
+    .string(fieldError({ invalid: "O código do tipo deve ser um texto." }))
     .max(
       OCCURRENCE_TYPE_CODE_MAX_LENGTH,
       `O código do tipo deve ter no máximo ${OCCURRENCE_TYPE_CODE_MAX_LENGTH} caracteres.`,
@@ -120,9 +121,7 @@ const occurrenceTypeFormFieldsSchema = occurrenceFormFieldsSchema
 
 const occurrenceCategorySchema = z
   .enum(OCCURRENCE_CATEGORIES, {
-    errorMap: () => ({
-      message: "Categoria inválida. Use DELIVERED, NOT_DELIVERED ou PAUSE.",
-    }),
+    error: "Categoria inválida. Use DELIVERED, NOT_DELIVERED ou PAUSE.",
   })
   .describe(
     "Categoria (decisão 14.3): DELIVERED (entrega: registrar comprova a entrega), NOT_DELIVERED (não entrega: os tipos de problema) ou PAUSE (pausa da jornada, decisão 14.4). Não muda depois que o tipo foi usado, nem nos tipos padrão.",
@@ -130,9 +129,7 @@ const occurrenceCategorySchema = z
 
 const pauseKindSchema = z
   .enum(PAUSE_KINDS, {
-    errorMap: () => ({
-      message: "Natureza legal inválida. Use MEAL, REST ou OTHER.",
-    }),
+    error: "Natureza legal inválida. Use MEAL, REST ou OTHER.",
   })
   .nullable()
   .describe(

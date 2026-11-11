@@ -86,7 +86,7 @@ async function refusal(promise: Promise<unknown>): Promise<string> {
   } catch (error) {
     if (error instanceof AppError) return `${error.statusCode} ${error.code}`;
     if (error instanceof ZodError)
-      return `400 VALIDATION_ERROR: ${error.errors.map((e) => e.message).join(" | ")}`;
+      return `400 VALIDATION_ERROR: ${error.issues.map((e) => e.message).join(" | ")}`;
     throw error;
   }
 

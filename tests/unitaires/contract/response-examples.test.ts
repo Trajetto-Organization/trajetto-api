@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { APP_BOOT_TIMEOUT_MS } from "../../support/app-boot";
-import type { ZodTypeAny } from "zod";
+import type { ZodType } from "zod";
 
 import { documentedDocFor } from "@/routes/documentation/doc-only-responses";
 
@@ -50,12 +50,9 @@ afterAll(async () => {
 
 function successOf(route: IntrospectedRoute): {
   status: string;
-  runtime: ZodTypeAny;
+  runtime: ZodType;
 } {
-  const responses = (route.schema?.response ?? {}) as Record<
-    string,
-    ZodTypeAny
-  >;
+  const responses = (route.schema?.response ?? {}) as Record<string, ZodType>;
   const status = Object.keys(responses).find((code) => /^2\d\d$/.test(code));
 
   if (!status) throw new Error(`${route.id}: sem resposta 2xx declarada`);

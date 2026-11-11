@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { ZodTypeAny } from "zod";
+import type { ZodType } from "zod";
 
 import { isValidCpf, normalizeCpf } from "@/modules/user/services/driver-cpf";
 import { createDriverSchema } from "@/schemas/create-driver-schema";
@@ -51,7 +51,7 @@ function cpfSamples(count: number): { valid: string[]; nearMisses: string[] } {
   return { valid, nearMisses };
 }
 
-const messagesOf = (field: ZodTypeAny, value: unknown): string[] => {
+const messagesOf = (field: ZodType, value: unknown): string[] => {
   const result = field.safeParse(value);
 
   return result.success

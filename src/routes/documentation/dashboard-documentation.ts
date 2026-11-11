@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { responseDateTime } from "./response-date";
 
 import { errorResponse, internalErrorResponse } from "./common-responses";
 import { trendsPeriodSchema } from "@/schemas/trends-period-schema";
@@ -200,12 +201,12 @@ const dashboardResponses = {
           })
           .nullish()
           .describe("Empresa da atividade"),
-        created_at: z
-          .union([z.string(), z.date()])
-          .describe("Quando a atividade foi registrada"),
-        updated_at: z
-          .union([z.string(), z.date()])
-          .describe("Última atualização da atividade"),
+        created_at: responseDateTime().describe(
+          "Quando a atividade foi registrada",
+        ),
+        updated_at: responseDateTime().describe(
+          "Última atualização da atividade",
+        ),
       }),
     ),
     vehiclesByType: z.array(

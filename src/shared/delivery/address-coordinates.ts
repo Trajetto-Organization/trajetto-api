@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { fieldError } from "@/shared/validation/field-error";
 
 /**
  * The address point a delivery can be CREATED with (plan of 02/11/2026, E1).
@@ -69,12 +70,14 @@ const coordinateField = (
   z.preprocess(
     blankToNull,
     z
-      .number({
-        invalid_type_error:
-          label === "latitude"
-            ? ADDRESS_POINT_MESSAGES.latitudeNotNumber
-            : ADDRESS_POINT_MESSAGES.longitudeNotNumber,
-      })
+      .number(
+        fieldError({
+          invalid:
+            label === "latitude"
+              ? ADDRESS_POINT_MESSAGES.latitudeNotNumber
+              : ADDRESS_POINT_MESSAGES.longitudeNotNumber,
+        }),
+      )
       .min(
         min,
         label === "latitude"

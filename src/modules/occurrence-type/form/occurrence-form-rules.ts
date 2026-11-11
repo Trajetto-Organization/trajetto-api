@@ -74,8 +74,15 @@ const hasSpaceAtLineEdges = (value: string): boolean =>
 
 /** The label/option/help rule: no blank text, no edge or double spaces. */
 function singleLineText(label: string, max: number) {
+  // zod 4 has one `error` for the type itself: only the wrong type gets this
+  // sentence; a missing value keeps the default one.
   return z
-    .string({ invalid_type_error: `${label} deve ser um texto.` })
+    .string({
+      error: (issue) =>
+        issue.code === "invalid_type" && issue.input !== undefined
+          ? `${label} deve ser um texto.`
+          : undefined,
+    })
     .min(1, `${label} é obrigatório.`)
     .max(max, `${label} deve ter no máximo ${max} caracteres.`)
     .superRefine((value, ctx) => {
@@ -107,47 +114,58 @@ function singleLineText(label: string, max: number) {
 }
 
 const occurrenceFormFieldSchema = z
-  .object({
-    key: z
-      .string({ required_error: "A chave do campo é obrigatória." })
-      .regex(
-        FIELD_KEY_PATTERN,
-        "A chave do campo deve começar com letra minúscula e ter só letras minúsculas, números e _ (até 40).",
-      ),
-    label: singleLineText("O rótulo do campo", MAX_LABEL_LENGTH),
-    type: z.enum(OCCURRENCE_FORM_FIELD_TYPES, {
-      errorMap: () => ({
-        message: "Tipo de campo inválido: use texto, número, sim/não, lista ou data.",
+  .object(
+    {
+      key: z
+        .string({
+          error: (issue) =>
+            issue.input === undefined ? "A chave do campo é obrigatória." : undefined,
+        })
+        .regex(
+          FIELD_KEY_PATTERN,
+          "A chave do campo deve começar com letra minúscula e ter só letras minúsculas, números e _ (até 40).",
+        ),
+      label: singleLineText("O rótulo do campo", MAX_LABEL_LENGTH),
+      type: z.enum(OCCURRENCE_FORM_FIELD_TYPES, {
+        error: "Tipo de campo inválido: use texto, número, sim/não, lista ou data.",
       }),
-    }),
-    required: z.boolean().default(false),
-    help: z.preprocess(
-      (value) => (value === "" || value === null ? undefined : value),
-      singleLineText("A orientação do campo", MAX_HELP_LENGTH).optional(),
-    ),
-    options: z
-      .array(singleLineText("A opção", MAX_OPTION_LENGTH))
-      .min(MIN_OPTIONS, `A lista precisa de pelo menos ${MIN_OPTIONS} opções.`)
-      .max(MAX_OPTIONS, `A lista aceita no máximo ${MAX_OPTIONS} opções.`)
-      .optional(),
-    max_length: z
-      .number()
-      .int("O limite de caracteres deve ser um número inteiro.")
-      .min(1, "O limite de caracteres deve ser pelo menos 1.")
-      .max(
-        MAX_TEXT_MAX_LENGTH,
-        `O limite de caracteres deve ser no máximo ${MAX_TEXT_MAX_LENGTH}.`,
-      )
-      .optional(),
-    multiline: z.boolean().optional(),
-    min: z.number().finite().optional(),
-    max: z.number().finite().optional(),
-    integer: z.boolean().optional(),
-  })
+      required: z.boolean().default(false),
+      help: z.preprocess(
+        (value) => (value === "" || value === null ? undefined : value),
+        singleLineText("A orientação do campo", MAX_HELP_LENGTH).optional(),
+      ),
+      options: z
+        .array(singleLineText("A opção", MAX_OPTION_LENGTH))
+        .min(MIN_OPTIONS, `A lista precisa de pelo menos ${MIN_OPTIONS} opções.`)
+        .max(MAX_OPTIONS, `A lista aceita no máximo ${MAX_OPTIONS} opções.`)
+        .optional(),
+      max_length: z
+        .number()
+        .int("O limite de caracteres deve ser um número inteiro.")
+        .min(1, "O limite de caracteres deve ser pelo menos 1.")
+        .max(
+          MAX_TEXT_MAX_LENGTH,
+          `O limite de caracteres deve ser no máximo ${MAX_TEXT_MAX_LENGTH}.`,
+        )
+        .optional(),
+      multiline: z.boolean().optional(),
+      min: z.number().finite().optional(),
+      max: z.number().finite().optional(),
+      integer: z.boolean().optional(),
+    },
+    // zod 4's `.strict()` takes no sentence: the object's own error says it,
+    // for the unknown keys only.
+    {
+      error: (issue) =>
+        issue.code === "unrecognized_keys"
+          ? "O campo tem uma propriedade desconhecida."
+          : undefined,
+    },
+  )
   // A property that does not belong to the field's type is refused rather
   // than stored: a select with a max_length would read as a promise the
   // validation never keeps.
-  .strict("O campo tem uma propriedade desconhecida.")
+  .strict()
   .superRefine((field, ctx) => {
     const misplaced = (property: string, allowedFor: string) =>
       ctx.addIssue({

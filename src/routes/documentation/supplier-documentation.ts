@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { responseDateTime } from "./response-date";
 
 import { createSupplierSchema } from "@/schemas/create-supplier-schema";
 import { updateSupplierSchema } from "@/schemas/update-supplier-schema";
@@ -47,8 +48,8 @@ const supplierRow = z.object({
   telephone: z.string().nullable(),
   email: z.string().nullable(),
   businessId: z.string(),
-  created_at: z.union([z.string(), z.date()]),
-  updated_at: z.union([z.string(), z.date()]),
+  created_at: responseDateTime(),
+  updated_at: responseDateTime(),
 });
 
 /** The list's `meta.searchMeta`, as summarizeSupplierList builds it. */

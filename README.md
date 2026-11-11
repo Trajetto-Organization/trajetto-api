@@ -8,7 +8,7 @@
   <img alt="PostgreSQL 16" src="https://img.shields.io/badge/PostgreSQL-16-4169E1?style=for-the-badge&logo=postgresql&logoColor=white" />
   <img alt="Redis 7" src="https://img.shields.io/badge/Redis-7-FF4438?style=for-the-badge&logo=redis&logoColor=white" />
   <img alt="Socket.IO 4.8" src="https://img.shields.io/badge/Socket.IO-4.8-010101?style=for-the-badge&logo=socketdotio&logoColor=white" />
-  <img alt="Zod 3.25" src="https://img.shields.io/badge/Zod-3.25-3E67B1?style=for-the-badge&logo=zod&logoColor=white" />
+  <img alt="Zod 4.6" src="https://img.shields.io/badge/Zod-4.6-3E67B1?style=for-the-badge&logo=zod&logoColor=white" />
   <img alt="Vitest 1.6" src="https://img.shields.io/badge/Vitest-1.6-6E9F18?style=for-the-badge&logo=vitest&logoColor=white" />
   <img alt="Python 3.12" src="https://img.shields.io/badge/Python-3.12-3776AB?style=for-the-badge&logo=python&logoColor=white" />
   <img alt="ONNX Runtime 1.30" src="https://img.shields.io/badge/ONNX_Runtime-1.30-005CED?style=for-the-badge&logo=onnx&logoColor=white" />
@@ -153,13 +153,13 @@ Versões fixadas no `package.json` (sem `^`) e no `yarn.lock`.
 | ---------------------------------------------------------------- | ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
 | Node.js                                                          | 22 (imagem `node:22.21.1-alpine`, fixada por digest) | runtime da API, dos workers e dos crons                                                                                   |
 | TypeScript                                                       | 5.7.2 (`strict`)                                     | tipos de ponta a ponta, do schema zod ao repositório                                                                      |
-| Fastify + `fastify-type-provider-zod`                            | 5.12.7 / 4.0.2                                       | HTTP rápido com schema por rota; o mesmo schema valida a entrada e gera o OpenAPI (`@fastify/swagger` 9.9.2)              |
+| Fastify + `fastify-type-provider-zod`                            | 5.12.7 / 7.0.0                                       | HTTP rápido com schema por rota; o mesmo schema valida a entrada e gera o OpenAPI (`@fastify/swagger` 9.9.2)              |
 | Prisma (`prisma`, `@prisma/client`, `@prisma/adapter-pg` + `pg`) | 7.10.1 (`pg` 8.23.1)                                 | acesso tipado ao Postgres pelo driver `pg` e migrations SQL versionadas (expandir/contrair)                               |
 | PostgreSQL                                                       | 16                                                   | dados de todas as empresas **e** as filas (outbox, notificações, webhooks, IA) e os leases dos crons                      |
 | Redis via `ioredis`                                              | 7 / 5.10.1                                           | rate limit, pub/sub e tickets do Socket.IO, "esqueci minha senha", fotos do MASTER, geocodificador e busca; descartável   |
 | Socket.IO + `@socket.io/redis-adapter`                           | 4.8.4 / 8.3.0                                        | tempo real para a web e o app, entre réplicas                                                                             |
 | tsyringe                                                         | 4.10.0                                               | injeção de dependência: o usecase recebe o repositório pela interface, e o teste troca pelo gêmeo in-memory               |
-| zod                                                              | 3.25.1                                               | validação de entrada (`src/schemas/`) e do ambiente no boot (`src/schemas/env-schema/`)                                   |
+| zod                                                              | 4.6.7                                                | validação de entrada (`src/schemas/`) e do ambiente no boot (`src/schemas/env-schema/`)                                   |
 | pino                                                             | 9.14.0                                               | log JSON, uma linha por requisição, com censura de segredos                                                               |
 | `@aws-sdk/client-s3` + `s3-request-presigner`                    | 3.1161.0                                             | Cloudflare R2 (API S3): URLs pré-assinadas de PUT e GET e conferência com `HeadObject`                                    |
 | nodemailer + handlebars                                          | 10.3.1 / 4.7.10                                      | e-mail pelo SMTP da Resend (em desenvolvimento, conta de teste Ethereal) e os templates                                   |
@@ -405,8 +405,11 @@ Cada uma aparece em `GET /health/providers` (só MASTER) sem enviar nada.
   semântica, rota com guards e schema OpenAPI completo, registro em
   `src/shared/index.ts` e `src/routes/routes.ts`. Passo a passo em
   [`docs/arquitetura.md`](./docs/arquitetura.md#anatomia-de-um-módulo-e-como-criar-uma-feature).
-- **Validação**: zod na entrada (mensagens em pt-BR); o mesmo schema vira o
-  OpenAPI. A web e o app espelham esses schemas.
+- **Validação**: zod 4 na entrada (mensagens em pt-BR; `fieldError` para
+  "obrigatório" e "tipo errado"); toda lista com `.max()` antes de qualquer
+  refinamento; o mesmo schema vira o OpenAPI. A web e o app espelham esses
+  schemas. Regras em
+  [`docs/arquitetura.md`](./docs/arquitetura.md#regras-transversais).
 - **Erros**: `AppError` e as classes de `usecases/errors/`, sempre com `code`
   estável e mensagem em pt-BR. Unicidade é 409 com `code` e a mensagem "nesta
   empresa" (trate o P2002 do índice). Banco indisponível vira 503 com

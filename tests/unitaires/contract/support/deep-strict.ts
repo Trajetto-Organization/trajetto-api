@@ -9,12 +9,12 @@ import { z } from "zod";
  * the document lists everything that goes out. Both directions matter for a
  * body the serializer passes through untouched.
  */
-function deepStrict(schema: z.ZodTypeAny): z.ZodTypeAny {
+function deepStrict(schema: z.core.$ZodType): z.ZodType {
   if (schema instanceof z.ZodObject) {
     return z
       .object(
         Object.fromEntries(
-          Object.entries(schema.shape as z.ZodRawShape).map(([key, value]) => [
+          Object.entries(schema.shape).map(([key, value]) => [
             key,
             deepStrict(value),
           ]),
@@ -30,16 +30,17 @@ function deepStrict(schema: z.ZodTypeAny): z.ZodTypeAny {
   if (schema instanceof z.ZodArray) return z.array(deepStrict(schema.element));
 
   if (schema instanceof z.ZodUnion) {
-    const options = (schema.options as z.ZodTypeAny[]).map(deepStrict);
+    const options = (schema.options as z.core.$ZodType[]).map(deepStrict);
 
-    return z.union(options as [z.ZodTypeAny, z.ZodTypeAny, ...z.ZodTypeAny[]]);
+    return z.union(options as [z.ZodType, z.ZodType, ...z.ZodType[]]);
   }
 
-  return schema;
+  // Every schema here is built with zod's classic API.
+  return schema as z.ZodType;
 }
 
 /** Every issue as `path: message`, so a failure names the field. */
-function strictIssues(schema: z.ZodTypeAny, value: unknown): string[] {
+function strictIssues(schema: z.core.$ZodType, value: unknown): string[] {
   const result = deepStrict(schema).safeParse(value);
 
   return result.success

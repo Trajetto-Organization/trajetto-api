@@ -1,6 +1,7 @@
-import { ZodError } from "zod";
+import type { ZodError } from "zod";
 
 import { AppError } from "@/shared/errors/AppError";
+import { validationError } from "@/shared/validation/validation-error";
 import type { CategoryIssue } from "../../rules/occurrence-category-rules";
 
 /**
@@ -115,7 +116,7 @@ class OccurrenceTypeDefaultError extends AppError {
  * one sentence per issue, through the global handler (a ZodError).
  */
 function categoryValidationError(issues: CategoryIssue[]): ZodError {
-  return new ZodError(
+  return validationError(
     issues.map((issue) => ({
       code: "custom" as const,
       path: [issue.field],

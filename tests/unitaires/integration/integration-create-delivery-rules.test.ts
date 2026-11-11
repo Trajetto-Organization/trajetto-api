@@ -489,4 +489,45 @@ describe("a refused body", () => {
       "corpo: envie um objeto JSON com os campos da entrega.",
     ]);
   });
+
+  // The published sentences of a wrong type, from the first release. zod 3
+  // let this parse's map speak before a field's own type sentence ("A
+  // latitude deve ser um número."); zod 4 asks the field first.
+  it("says a wrong type as published, over the field's own sentence", () => {
+    expect(issuesOf({ ...body, shipper_id: 123 })).toEqual([
+      "shipper_id: esperado texto, recebido número.",
+    ]);
+    expect(issuesOf({ ...body, latitude: "x", longitude: -46.6 })).toEqual([
+      "latitude: esperado número, recebido texto.",
+    ]);
+    expect(issuesOf({ ...body, scheduled_date: true })).toEqual([
+      "scheduled_date: esperado texto, recebido verdadeiro ou falso.",
+    ]);
+    expect(issuesOf({ ...body, kind: 5 })).toEqual([
+      "kind: esperado 'DELIVERY' | 'SERVICE_ORDER', recebido número.",
+    ]);
+    // A text off the list keeps the field's own sentence, as in zod 3.
+    expect(issuesOf({ ...body, kind: "PICKUP" })).toEqual([
+      "kind: Tipo inválido. Use DELIVERY (entrega) ou SERVICE_ORDER (ordem de serviço).",
+    ]);
+    // 1e999 in the JSON is Infinity, which zod 4 refuses as a wrong type.
+    expect(
+      issuesOf({
+        ...body,
+        items: [{ description: "Farinha", quantity: JSON.parse("1e999") }],
+      }),
+    ).toEqual(["items.0.quantity: esperado número finito, recebido Infinity."]);
+  });
+
+  it("keeps the value sent out of the error it throws (the handler logs it)", () => {
+    try {
+      parseIntegrationDeliveryBody({ ...body, shipper_id: 123 });
+    } catch (error) {
+      expect((error as ZodError).issues[0]).not.toHaveProperty("input");
+
+      return;
+    }
+
+    throw new Error("o corpo deveria ter sido recusado");
+  });
 });

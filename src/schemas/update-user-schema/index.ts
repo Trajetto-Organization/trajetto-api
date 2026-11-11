@@ -7,13 +7,12 @@ import {
 } from "@/shared/utils/zod-schema-helpers";
 import { UserBusinessRole } from "@/modules/user/dtos/user-dto";
 import { tenantLockedShape } from "@/shared/validation/tenant-locked-field";
+import { fieldError } from "@/shared/validation/field-error";
 
 const roleEnum = z.nativeEnum(UserBusinessRole, {
-  errorMap: (issue, ctx) => {
+  error: () => {
     const validValues = Object.values(UserBusinessRole).join(", ");
-    return {
-      message: `Nível de acesso do usuário inválido. Valores válidos: ${validValues}`,
-    };
+    return `Nível de acesso do usuário inválido. Valores válidos: ${validValues}`;
   },
 });
 
@@ -88,7 +87,7 @@ const updateUserSchema = z
     // Decision 4.9: an administrator never types another person's password,
     // and no password is mailed. The MASTER asks for a single-use link.
     sendPasswordSetupLink: z
-      .boolean({ invalid_type_error: "Envio do link de senha inválido." })
+      .boolean(fieldError({ invalid: "Envio do link de senha inválido." }))
       .optional()
       .describe(
         "Só MASTER: envia ao usuário um link de uso único (24 h) para definir uma nova senha. A senha atual continua valendo até ele usar o link.",

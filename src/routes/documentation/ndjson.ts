@@ -1,4 +1,4 @@
-import { z, type ZodTypeAny } from "zod";
+import { z } from "zod";
 
 /**
  * Listings that answer NDJSON, and how the document says so.
@@ -18,8 +18,8 @@ import { z, type ZodTypeAny } from "zod";
  * `application/x-ndjson`. Documentation only; the wire is unchanged.
  */
 interface NdjsonDoc {
-  item: ZodTypeAny;
-  meta: ZodTypeAny;
+  item: z.ZodType;
+  meta: z.ZodType;
   cursor: boolean;
 }
 
@@ -40,13 +40,13 @@ const offsetMeta = z.object({
     .optional()
     .describe("O tamanho de página aplicado."),
   searchMeta: z
-    .record(z.unknown())
+    .record(z.string(), z.unknown())
     .optional()
     .describe("Extras que algumas listagens anexam (contadores, filtros)."),
 });
 
 /** An offset listing whose `searchMeta` has a known shape. */
-function offsetMetaWith(searchMeta: ZodTypeAny) {
+function offsetMetaWith(searchMeta: z.ZodType) {
   return offsetMeta.extend({ searchMeta });
 }
 
@@ -78,7 +78,7 @@ const zeroTotal = z
  */
 function cursorMeta(
   extra: z.ZodRawShape = {},
-  total: ZodTypeAny | null = zeroTotal,
+  total: z.ZodType | null = zeroTotal,
 ) {
   const searchMeta = cursorPage.extend(extra);
 
@@ -86,10 +86,10 @@ function cursorMeta(
 }
 
 function register(
-  item: ZodTypeAny,
-  meta: ZodTypeAny,
+  item: z.ZodType,
+  meta: z.ZodType,
   cursor: boolean,
-): ZodTypeAny {
+): z.ZodType {
   const runtime = z.any();
 
   NDJSON_DOCS.set(runtime, { item, meta, cursor });
@@ -98,18 +98,15 @@ function register(
 }
 
 /** An offset listing whose items are `item`. */
-function ndjsonList(
-  item: ZodTypeAny,
-  meta: ZodTypeAny = offsetMeta,
-): ZodTypeAny {
+function ndjsonList(item: z.ZodType, meta: z.ZodType = offsetMeta): z.ZodType {
   return register(item, meta, false);
 }
 
 /** A cursor listing: `meta.searchMeta.{nextCursor, hasMore}`. */
 function ndjsonCursor(
-  item: ZodTypeAny,
-  meta: ZodTypeAny = cursorMeta(),
-): ZodTypeAny {
+  item: z.ZodType,
+  meta: z.ZodType = cursorMeta(),
+): z.ZodType {
   return register(item, meta, true);
 }
 
@@ -121,14 +118,14 @@ function ndjsonCursor(
  * they are. Throws at boot on anything else, so a wrong call cannot quietly
  * publish an empty item.
  */
-function itemOf(list: z.AnyZodObject): z.AnyZodObject {
+function itemOf(list: z.ZodObject): z.ZodObject {
   const data = list.shape.data;
 
   if (!(data instanceof z.ZodArray) || !(data.element instanceof z.ZodObject)) {
     throw new Error("itemOf espera um schema { data: z.array(z.object(...)) }");
   }
 
-  return data.element as z.AnyZodObject;
+  return data.element;
 }
 
 function ndjsonDocFor(schema: unknown): NdjsonDoc | undefined {

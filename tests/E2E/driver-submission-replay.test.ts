@@ -3,10 +3,10 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 
 import { container } from "tsyringe";
-import { z } from "zod";
 
 import { createFuelSchema } from "@/schemas/create-fuel-schema";
 import { createVehicleChecklistSchema } from "@/schemas/create-vehicle-checklist-schema";
+import { validationError } from "@/shared/validation/validation-error";
 
 import type { UploadService } from "@/shared/services/upload-service";
 
@@ -160,9 +160,10 @@ async function vehicleMileage(): Promise<number> {
 
 /** What a stricter N+1 schema does to a body the N app froze in its queue. */
 function stricterNextVersion() {
-  return new z.ZodError([
+  // As `.parse()` throws it: zod 4's `new ZodError()` is not an Error.
+  return validationError([
     {
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       path: ["odometer_unit"],
       message: "O campo odometer_unit é obrigatório.",
     },

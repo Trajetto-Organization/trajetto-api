@@ -1,6 +1,6 @@
 import { inject, injectable } from "tsyringe";
 import { Prisma } from "@prisma/client";
-import { ZodError } from "zod";
+import type { ZodError } from "zod";
 
 import { IUserRepository } from "@/modules/user/repositories/IUser-repository";
 import { IOccurrenceTypeRepository } from "@/modules/occurrence-type/repositories/IOccurrence-type-repository";
@@ -13,6 +13,7 @@ import { NotificationService } from "@/shared/services/notification-service";
 
 import { UploadService } from "@/shared/services/upload-service";
 import { OutboxService } from "@/shared/notifications/outbox-service";
+import { validationError } from "@/shared/validation/validation-error";
 
 import database from "@/../infra/database";
 
@@ -199,7 +200,7 @@ interface ReportOccurrenceResult {
 
 /** A delivered report without its key: the proof's idempotency anchor. */
 function deliveredKeyRequired(): ZodError {
-  return new ZodError([
+  return validationError([
     {
       code: "custom",
       path: ["client_submission_id"],

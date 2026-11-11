@@ -9,6 +9,7 @@ import {
   type GeofenceMode,
 } from "@/shared/business/business-settings";
 import { tenantLockedShape } from "@/shared/validation/tenant-locked-field";
+import { fieldError } from "@/shared/validation/field-error";
 
 /**
  * The company's own settings (plan of 02/11/2026, M1): the request body of
@@ -31,7 +32,7 @@ const geofenceModeSchema = z
   );
 
 const geofenceRadiusSchema = z
-  .number({ invalid_type_error: "O raio deve ser um número." })
+  .number(fieldError({ invalid: "O raio deve ser um número." }))
   .int("O raio deve ser um número inteiro de metros.")
   .min(
     GEOFENCE_RADIUS_MIN_M,

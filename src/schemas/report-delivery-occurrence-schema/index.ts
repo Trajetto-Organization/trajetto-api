@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { boundedRecord } from "@/shared/validation/bounded-record";
 import { tenantLockedShape } from "@/shared/validation/tenant-locked-field";
 import { occurredAtField } from "@/shared/delivery/occurred-at";
 import { optionalCoordinate } from "@/shared/delivery/optional-coordinate";
@@ -75,15 +76,16 @@ const reportDeliveryOccurrenceSchema = z.object({
       "Identificador do celular (Android ID de 16 dígitos hexadecimais, ou um UUID guardado no aparelho). Outro formato: ignorado, nunca recusado.",
     ),
   // Decision 6.2. The shape only (key → primitive, bounded); the answers are
-  // checked against the type's current form in the use case.
-  form_answers: z
-    .record(
+  // checked against the type's current form in the use case. The count
+  // first: a driver's session could otherwise send 1 MiB of refused entries.
+  form_answers: boundedRecord(
+    50,
+    "Respostas demais para um formulário de ocorrência.",
+    z.record(
       z.string().max(40),
       z.union([z.string().max(1000), z.number(), z.boolean(), z.null()]),
-    )
-    .refine((answers) => Object.keys(answers).length <= 50, {
-      message: "Respostas demais para um formulário de ocorrência.",
-    })
+    ),
+  )
     .nullable()
     .optional()
     .describe(

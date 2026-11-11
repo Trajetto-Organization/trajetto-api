@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { fieldError } from "@/shared/validation/field-error";
 
 const CHAT_MESSAGE_MAX_LENGTH = 2000;
 
@@ -62,9 +63,7 @@ const sendChatMessageSchema = z
       ),
 
     audience: z
-      .enum(CHAT_AUDIENCES, {
-        errorMap: () => ({ message: "Público do aviso inválido." }),
-      })
+      .enum(CHAT_AUDIENCES, { error: "Público do aviso inválido." })
       .optional()
       .describe(
         `ALL_ACTIVE_WITH_APP: todos os motoristas ativos com conta no aplicativo, resolvidos no servidor (até ${CHAT_BROADCAST_MAX_AUDIENCE}). Exige o header Idempotency-Key.`,
@@ -79,7 +78,7 @@ const sendChatMessageSchema = z
       ),
 
     kind: z.enum(["TEXT", "IMAGE", "AUDIO"], {
-      errorMap: () => ({ message: "Tipo de mensagem inválido." }),
+      error: "Tipo de mensagem inválido.",
     }),
 
     body: z
@@ -99,7 +98,7 @@ const sendChatMessageSchema = z
       .describe("Chave devolvida pelo upload presigned (chatAttachments)."),
 
     durationMs: z
-      .number({ invalid_type_error: "Duração do áudio inválida." })
+      .number(fieldError({ invalid: "Duração do áudio inválida." }))
       .int()
       .positive()
       .max(CHAT_AUDIO_MAX_DURATION_MS, "O áudio pode ter no máximo 2 minutos.")

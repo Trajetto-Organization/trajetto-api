@@ -176,7 +176,10 @@ const providerReadiness = z.object({
   message: z.string().describe("O que está errado e o que fazer, em pt-BR."),
   warnings: z.array(z.string()),
   details: z
-    .record(z.union([z.string(), z.number(), z.boolean(), z.null()]))
+    .record(
+      z.string(),
+      z.union([z.string(), z.number(), z.boolean(), z.null()]),
+    )
     .describe(
       "Estado sem segredo: domínio do remetente, status de cada template (template:<nome>), validade do certificado…",
     ),

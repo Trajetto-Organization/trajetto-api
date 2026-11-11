@@ -2622,6 +2622,124 @@ e em [arquitetura.md (Arquivos)](./arquitetura.md#arquivos).
      a resposta 535 é a chave errada. Nenhum deles é reprocessado. O
      `ENOAUTH` não aparece com este transporte (fica na lista por defesa).
 
+**zod 4.6.7 e fastify-type-provider-zod 7.0.0 (10/11/2026).** Sem
+migration, sem variável nova e sem rota nova. A imagem da API muda (zod
+3.25.1 → 4.6.7, o type provider 4.0.2 → 7.0.0 e sai o `zod-to-json-schema`).
+Fecha o alerta alto GHSA-mrhx-c7xc-m3w5: um pedido autenticado de ~7 MB no
+`POST /delivery/import-xml` estourava o heap de 768 MB e derrubava a réplica.
+A regra está em
+[arquitetura.md (Regras transversais)](./arquitetura.md#regras-transversais).
+
+- **A ordem não importa em produção:** a API sobe sozinha, a web e o app não
+  dependem dela para isto. O corpo da recusa é o mesmo,
+  `{ code: "VALIDATION_ERROR", message, issues: string[] }`, com as mesmas
+  frases em pt-BR. Réplicas antigas e novas convivem no rollout.
+- **No push para a `staging`, em três passos**, porque os dois CIs se leem:
+  o `Validate` da API faz checkout da `staging` da web e o
+  `public-docs-guide-samples` compara o `/integration/docs/openapi.json` ao
+  vivo com `trajetto-ui/tests/unitaires/fixtures/public-openapi.json`
+  (`toEqual`); e o CI da web roda contra a `staging` da API o
+  `occurrence-form-rules` (cópia linha a linha de
+  `src/modules/occurrence-type/form/occurrence-form-rules.ts`, agora na
+  sintaxe do zod 4), que só passa com a API já em zod 4 e a web também. Com a
+  API antes, o `Validate` dela fica vermelho (o documento novo tem 8
+  `pattern` que a cópia da `staging` da web não tem) e não há deploy; com a
+  web em zod 4 antes, o CI da web fica vermelho.
+  1. **Web, só a cópia do documento:** um commit com o `public-openapi.json`
+     regenerado (que leva também a rota de cancelamento do L9, que mudou o
+     mesmo arquivo), sozinho no topo do push, sem a migração da web para o
+     zod 4. O CI da web lê a cópia para montar o portal, mas não a compara
+     com a API: passa.
+  2. **API em zod 4:** o `Validate` encontra na `staging` da web a cópia
+     igual ao documento ao vivo.
+  3. **Web e app em zod 4** (o resto dos commits): os testes de paridade
+     encontram a `staging` da API em zod 4.
+- **O que a API passa a recusar** (nenhum cliente nosso manda isso hoje):
+  - um id que não é UUID da RFC 9562 (versão 1 a 8, variante 8/9/a/b; nil e
+    max seguem aceitos). Os ids do Trajetto são v7 e v4, e o app e a web
+    geram v4;
+  - um número infinito (`1e999` numa query) — antes virava `Infinity`;
+  - listas acima do teto, todas novas e acima do uso real: permissões em
+    lote (uma por recurso), reordenação do Kanban (500 colunas, 10.000
+    cards), escopos de uma chave de API (6) e tópicos de um webhook (o
+    catálogo inteiro, cada um uma vez);
+  - um texto curto com emoji: o zod 4 mede um texto em caracteres (code
+    points), e o zod 3 em unidades UTF-16, em que um emoji conta 2. O
+    `.min()` fica mais estrito e o `.max()` mais folgado, só para emoji e
+    outros caracteres fora do BMP; para as colunas `VARCHAR`, que também
+    contam caracteres, é neutro. O login e a senha atual da troca de senha
+    mantêm o piso em unidades (`storedPasswordField`): uma senha como
+    `abc😀😀`, criada antes, continua entrando.
+- **O que muda de texto:** um valor fora do enum, num campo que tem frase
+  própria, sai com ela (antes, a genérica "tem um valor não aceito"). Um
+  número infinito sai como tipo errado (a frase de tipo do campo ou "deve ser
+  um número finito"; na API pública, "esperado número finito, recebido
+  Infinity."), e não mais pela faixa do campo.
+- **O que fica igual de propósito, com código para isso:**
+  - no `POST /integration/v1/deliveries`, um tipo errado e um campo faltando
+    saem com as frases publicadas ("shipper_id: esperado texto, recebido
+    número.", "kind: esperado 'DELIVERY' | 'SERVICE_ORDER', recebido
+    número.", "campo obrigatório."). O zod 4 dá a vez à frase própria do
+    campo, e o parse refaz a frase a partir do valor enviado. Conferido com
+    um probe de 373 corpos rodado no zod 3 e no zod 4: só mudam o UUID
+    estrito, o infinito e a lista de 201 itens, que vira uma recusa só;
+  - uma lista mandada no lugar de um texto (ou um texto no lugar de uma
+    lista) sai só com a frase do tipo: o zod 4 ainda mede o tamanho de
+    qualquer valor que tenha `length`, e o `issues` ganhava "deve ter no
+    mínimo 2 caracteres" junto; o handler corta o que vem depois de um tipo
+    errado no mesmo campo, como o zod 3 parava;
+  - a chave recusada de um `z.record` (`form_answers`) sai em pt-BR, no
+    caminho da chave, e não como o "Invalid key in record" do zod 4;
+  - a edição de permissão (`PATCH /permission/update-permission/:permissionId`)
+    sem `canWrite` continua mantendo a escrita gravada: o `default(false)`,
+    que o zod 3 nunca aplicava (o `.optional()` de fora respondia antes), saiu,
+    porque o zod 4 passaria a aplicá-lo e revogaria a escrita.
+- **O que muda de comportamento, de propósito:** a edição do card do Kanban
+  (`PATCH /kanban/card/update/:cardId`) sem `completed` deixa o card como
+  está (o zod 3 gravava `false`; a web atual manda o campo sempre). A URL do
+  webhook é gravada sem espaço nas pontas. Mais de 50 respostas no
+  `form_answers` de uma ocorrência, ou mais de 20 cabeçalhos num webhook,
+  viram uma recusa só, contada antes de ler cada entrada (já eram recusados,
+  mas com uma frase por entrada inválida: um motorista mandava 1 MiB de
+  entradas recusadas, 110 mil issues e 175 MB de heap por pedido).
+- **A resposta de sucesso continua analisada pelo schema** (default
+  preenchido, campo desconhecido fora): o serializer do type provider 7
+  codifica em vez de analisar e daria 500 em resposta com default; a API usa
+  o seu (`src/shared/http/response-serializer.ts`).
+- **Diff do OpenAPI**, gerado antes e depois, campo a campo:
+  - `/integration/docs/openapi.json` (o público): **8 diferenças**, todas um
+    `pattern` novo que descreve o que a API já validava — o UUID do `{id}`
+    em `GET /integration/v1/deliveries/{id}`, `GET /integration/v1/routes/{id}`
+    e `POST /integration/v1/deliveries/{id}/cancel`, o `shipper_id` e o
+    `recipient_email` do corpo de `POST /integration/v1/deliveries` e o
+    `updated_since` (data-hora ISO com `Z`) das três listas. O resto é
+    idêntico, inclusive `limit` (padrão 50) e as datas `string (date-time)`.
+    A cópia do portal (`trajetto-ui/tests/unitaires/fixtures/public-openapi.json`)
+    foi regenerada, e o portal renderiza o documento novo.
+  - `/docs/json` (o interno): **1.650 diferenças**, todas de forma, nenhuma de
+    significado: `pattern` em UUID, data e e-mail (520); o intervalo do
+    inteiro seguro (±9007199254740991) em cada `.int()` (412 máximos e 394
+    mínimos, quase todos em respostas); `additionalProperties: false` saiu de
+    133 corpos de requisição que nunca recusaram campo desconhecido (a API o
+    descarta; os `.strict()` seguem com `false`); 123 listas `required` de
+    resposta passam a nomear o campo com default (`message`, `success`), que o
+    serializer preenche; os corpos de abastecimento e checklist viraram um
+    objeto só, com os mesmos campos e os mesmos obrigatórios (antes `allOf`);
+    7 recusas mostram o `default` do `message` da rota no lugar da descrição
+    genérica, como outras 16 já mostravam; o mínimo de `amount` (contas) e de
+    `maintenance_interval_km_at_service` (OS) agora é o real (`≥ 1` e
+    `≥ 0,1`; antes `> 1` e `> 0`); união com `null` vira `nullable: true`;
+    duas uniões discriminadas saem como `oneOf`; as contagens por status da
+    lista de rotas listam os cinco status como obrigatórios; a tupla `bbox`
+    da busca de endereço sai como `items` com `anyOf` (o 3.0 não tem tupla);
+    `includeUnscheduled` sai só como booleano (na query string, `true` e
+    `false` são o mesmo texto); `canWrite` perde o `default: false` que nunca
+    valia, `supplierId` ganha o `default: null` que a API já aplicava, e 6
+    listas ganham `maxItems`.
+- **Antes de promover**, no staging: abra o portal `/docs` da web de staging
+  com a API nova e o `/docs` interno da API; mande um cadastro inválido pelo
+  painel e pelo app e confira a frase em pt-BR.
+
 **@fastify/static 10.1.8 e @fastify/swagger-ui 6.1.3 (10/11/2026).** Sem
 migration, sem variável nova e sem rota nova. A imagem da API muda
 (`@fastify/static` 8.3.0 → 10.1.8 e `@fastify/swagger-ui` 5.2.2 → 6.1.3, com

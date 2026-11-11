@@ -2,7 +2,7 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { ZodObject, ZodUnion, type ZodTypeAny } from "zod";
+import { ZodObject, ZodUnion, type ZodType } from "zod";
 
 import { APP_BOOT_TIMEOUT_MS } from "../../support/app-boot";
 
@@ -283,9 +283,9 @@ function describedCodes(route: IntrospectedRoute, status: string): string {
 }
 
 /** The objects a declared zod response is made of (a union's options). */
-function objectsOf(schema: ZodTypeAny): ZodTypeAny[] {
+function objectsOf(schema: ZodType): ZodType[] {
   if (schema instanceof ZodUnion) {
-    return (schema.options as ZodTypeAny[]).flatMap(objectsOf);
+    return (schema.options as ZodType[]).flatMap(objectsOf);
   }
 
   return [schema];
@@ -365,7 +365,7 @@ describe("refusals published by the I–Z modules", () => {
       return Object.entries(responses)
         .filter(([status]) => Number(status) >= 400 && Number(status) < 500)
         .filter(([, schema]) =>
-          objectsOf(schema as ZodTypeAny).some(
+          objectsOf(schema as ZodType).some(
             (option) =>
               option instanceof ZodObject && !("code" in option.shape),
           ),

@@ -1,8 +1,9 @@
 import { z } from "zod";
+import { fieldError } from "@/shared/validation/field-error";
 
 const updateDeleteFineSchema = z.object({
   fineId: z
-    .string({ required_error: "ID da multa é obrigatório!" })
+    .string(fieldError({ required: "ID da multa é obrigatório!" }))
     .uuid("ID da multa é inválido."),
 });
 

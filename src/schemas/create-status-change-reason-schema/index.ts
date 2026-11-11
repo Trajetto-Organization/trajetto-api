@@ -5,9 +5,10 @@ import {
   hasSpaceAtEdges,
   isEmptyOrWhitespace,
 } from "@/shared/utils/zod-schema-helpers";
+import { fieldError } from "@/shared/validation/field-error";
 
 const nameField = z
-  .string({ required_error: "O nome do motivo é obrigatório." })
+  .string(fieldError({ required: "O nome do motivo é obrigatório." }))
   .min(2, "O nome do motivo deve ter no mínimo 2 caracteres.")
   .max(80, "O nome do motivo deve ter no máximo 80 caracteres.")
   .superRefine((value, ctx) => {

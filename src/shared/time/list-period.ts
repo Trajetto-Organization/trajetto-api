@@ -7,6 +7,7 @@ import {
   dateOnlyFromKey,
   shiftDateKey,
 } from "@/shared/time/business-day";
+import { fieldError } from "@/shared/validation/field-error";
 
 /**
  * The period of a listing (meeting of 14/10/2026 for Entregas; Rotas and the
@@ -90,9 +91,9 @@ function isDateKey(value: string | undefined): value is string {
 /** A civil day on the querystring, kept as its "YYYY-MM-DD" key. */
 function periodDateField(label: string) {
   return z
-    .string({
-      invalid_type_error: `${label} deve estar no formato AAAA-MM-DD.`,
-    })
+    .string(
+      fieldError({ invalid: `${label} deve estar no formato AAAA-MM-DD.` }),
+    )
     .superRefine((value, ctx) => {
       if (!DATE_KEY.test(value)) {
         ctx.addIssue({
@@ -122,9 +123,7 @@ function listPeriodFields(description: string) {
   return {
     period: z
       .enum(LIST_PERIODS, {
-        errorMap: () => ({
-          message: `Período inválido. Use: ${LIST_PERIODS.join(", ")}.`,
-        }),
+        error: `Período inválido. Use: ${LIST_PERIODS.join(", ")}.`,
       })
       .optional()
       .describe(description),

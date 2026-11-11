@@ -255,14 +255,10 @@ const createDriverSchema = z.object({
       .optional(),
   ),
   status: z.enum(["ACTIVE", "INACTIVE"], {
-    errorMap: () => ({
-      message: "O status deve ser 'ACTIVE' ou 'INACTIVE'",
-    }),
+    error: "O status deve ser 'ACTIVE' ou 'INACTIVE'",
   }),
   contract_type: z.enum(["OWNED", "THIRD_PARTY"], {
-    errorMap: () => ({
-      message: "O tipo de contrato deve ser 'OWNED' ou 'THIRD_PARTY'",
-    }),
+    error: "O tipo de contrato deve ser 'OWNED' ou 'THIRD_PARTY'",
   }),
   branchId: z.preprocess(
     emptyStringToNull,

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { responseDateTime } from "./response-date";
 
 import { createVehicleSchema } from "@/schemas/create-vehicle-schema";
 
@@ -33,8 +34,6 @@ const vehicleSchemas = {
   searchVehicleCursor: cursorPaginationByBusinessSchema,
 };
 
-const dateLike = z.union([z.string(), z.date()]);
-
 const statusEnum = z
   .enum(["ACTIVE", "INACTIVE", "BLOCKED", "IN_ROUTE"])
   .describe(
@@ -48,19 +47,21 @@ const vehicleListItem = z.object({
   license_plate: z.string().describe("Sempre em maiúsculas."),
   brand: z.string(),
   model: z.string(),
-  acquisition_date: dateLike,
+  acquisition_date: responseDateTime(),
   fleet_type: z.enum(["OWNED", "THIRD_PARTY"]),
   fleet_id: z.string().nullable(),
-  last_maintenance_date: dateLike.nullable(),
+  last_maintenance_date: responseDateTime().nullable(),
   current_mileage: z.number(),
   last_maintenance_mileage: z.number().nullable(),
   maintenance_interval_km: z.number(),
   maintenance_interval_months: z.number().int(),
   renavam: z.string(),
-  manufacturing_year: dateLike.describe(
+  manufacturing_year: responseDateTime().describe(
     "1º de janeiro do ano (UTC); só o ano conta.",
   ),
-  model_year: dateLike.describe("1º de janeiro do ano (UTC); só o ano conta."),
+  model_year: responseDateTime().describe(
+    "1º de janeiro do ano (UTC); só o ano conta.",
+  ),
   km_per_liter: z.number().describe("Até duas casas decimais."),
   number_of_axles: z.number().int(),
   status: statusEnum,
@@ -76,8 +77,8 @@ const vehicleListItem = z.object({
       "O usuário responsável pela frota deste veículo (plano de 02/11/2026, F1); null = os administradores.",
     ),
   businessId: z.string(),
-  created_at: dateLike,
-  updated_at: dateLike,
+  created_at: responseDateTime(),
+  updated_at: responseDateTime(),
   vehicleType: z.object({ description: z.string() }).nullable(),
   fuelType: z.object({ description: z.string() }).nullable(),
   driver: z.object({ name: z.string(), cnh: z.string() }).nullable(),
@@ -169,7 +170,7 @@ const vehicleResponses = {
     license_plate: z.string().describe("Placa, em maiúsculas"),
     brand: z.string().describe("Marca"),
     model: z.string().describe("Modelo"),
-    acquisition_date: dateLike.describe("Data de aquisição"),
+    acquisition_date: responseDateTime().describe("Data de aquisição"),
     fleet_type: z
       .enum(["OWNED", "THIRD_PARTY"])
       .describe("Frota própria ou terceirizada"),
@@ -178,7 +179,7 @@ const vehicleResponses = {
       .nullable()
       .optional()
       .describe("Identificador na frota"),
-    last_maintenance_date: dateLike
+    last_maintenance_date: responseDateTime()
       .nullable()
       .optional()
       .describe("Data da última manutenção"),
@@ -193,10 +194,12 @@ const vehicleResponses = {
       .number()
       .describe("Intervalo de revisão em meses"),
     renavam: z.string().describe("RENAVAM"),
-    manufacturing_year: dateLike.describe(
+    manufacturing_year: responseDateTime().describe(
       "Ano de fabricação (1º de janeiro, UTC)",
     ),
-    model_year: dateLike.describe("Ano do modelo (1º de janeiro, UTC)"),
+    model_year: responseDateTime().describe(
+      "Ano do modelo (1º de janeiro, UTC)",
+    ),
     km_per_liter: z
       .number()
       .describe("Consumo em km/l, até duas casas decimais"),
@@ -241,12 +244,12 @@ const vehicleResponses = {
       .nullable()
       .optional()
       .describe("Quilometragem do último abastecimento"),
-    last_fuel_date: dateLike
+    last_fuel_date: responseDateTime()
       .nullable()
       .optional()
       .describe("Data do último abastecimento"),
-    created_at: dateLike.describe("Criado em"),
-    updated_at: dateLike.describe("Atualizado em"),
+    created_at: responseDateTime().describe("Criado em"),
+    updated_at: responseDateTime().describe("Atualizado em"),
   }),
 
   // Every refusal leaves in the handler's shape (`code` + `message`); the

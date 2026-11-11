@@ -27,7 +27,7 @@ import {
  * the repository twins use (booleans, dates, strings sharing a prefix).
  */
 
-const issues = (schema: z.ZodTypeAny, value: unknown) => {
+const issues = (schema: z.ZodType, value: unknown) => {
   const result = schema.safeParse(value);
   return result.success
     ? []

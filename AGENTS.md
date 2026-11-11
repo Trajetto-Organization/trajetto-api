@@ -32,7 +32,7 @@ Idioma do produto: pt-BR.
 ## Stack
 
 Node.js 22 · TypeScript 5.7 (`strict`) · Fastify 5 · Prisma 7.10 (`@prisma/adapter-pg`) · PostgreSQL 16
-· Redis 7 (ioredis) · Socket.IO 4 · tsyringe (DI) · zod 3 · pino · Vitest 1.6
+· Redis 7 (ioredis) · Socket.IO 4 · tsyringe (DI) · zod 4 · pino · Vitest 1.6
 · Stryker 8.7 · tsup · Yarn 1 (`yarn.lock`; nunca npm) · Docker (imagem
 `node:22.21.1-alpine`) · Python 3.12 no serviço de IA.
 

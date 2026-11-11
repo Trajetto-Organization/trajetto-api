@@ -5,6 +5,7 @@ import {
   hasSpaceAtEdges,
 } from "@/shared/utils/zod-schema-helpers";
 import { optionalMultilineText } from "@/shared/delivery/text-rules";
+import { fieldError } from "@/shared/validation/field-error";
 
 const RECEIVED_BY_MIN = 2;
 const RECEIVED_BY_MAX = 150;
@@ -15,10 +16,8 @@ const updateDeliveryStatusSchema = z
     status: z.enum(
       ["PENDING", "IN_TRANSIT", "DELIVERED", "FAILED", "CANCELLED"],
       {
-        errorMap: () => ({
-          message:
-            "Status inválido. Deve ser PENDING, IN_TRANSIT, DELIVERED, FAILED ou CANCELLED.",
-        }),
+        error:
+          "Status inválido. Deve ser PENDING, IN_TRANSIT, DELIVERED, FAILED ou CANCELLED.",
       },
     ),
     received_by: z.preprocess(
@@ -73,7 +72,9 @@ const updateDeliveryStatusSchema = z
      * the only thing support has to answer "por que essa está assim?".
      */
     reasonId: z
-      .string({ required_error: "Informe o motivo da mudança de status." })
+      .string(
+        fieldError({ required: "Informe o motivo da mudança de status." }),
+      )
       .uuid("O motivo deve ter um identificador válido.")
       .describe("Do catálogo da empresa, e apenas motivos ativos."),
 

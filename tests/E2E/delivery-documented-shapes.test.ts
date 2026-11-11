@@ -38,7 +38,7 @@ const OCCURRENCE_TYPE = "018f3000-0000-7000-8000-0000000005d6";
 
 let deliveryId = "";
 
-function documented(runtime: z.ZodTypeAny): z.ZodTypeAny {
+function documented(runtime: z.ZodType): z.ZodType {
   const doc = documentedDocFor(runtime);
 
   if (!doc) throw new Error("schema sem documentação registrada");

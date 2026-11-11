@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import { dateOnlyFromKey, dateOnlyKey } from "@/shared/time/business-day";
+import { fieldError } from "@/shared/validation/field-error";
 
 /**
  * A civil date on the wire: "YYYY-MM-DD", stored as UTC midnight (decision 1.3).
@@ -25,9 +26,9 @@ function dateOnlyField(label: string) {
           ? dateOnlyKey(val)
           : val,
     z
-      .string({
-        invalid_type_error: `${label} deve estar no formato AAAA-MM-DD.`,
-      })
+      .string(
+        fieldError({ invalid: `${label} deve estar no formato AAAA-MM-DD.` }),
+      )
       .transform((value, ctx) => {
         if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) {
           ctx.addIssue({

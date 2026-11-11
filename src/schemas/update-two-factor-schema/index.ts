@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import { tenantLockedShape } from "@/shared/validation/tenant-locked-field";
+import { fieldError } from "@/shared/validation/field-error";
 
 /**
  * PATCH /user/twofactor (wave 2): the state wanted, and the current password.
@@ -14,15 +15,17 @@ import { tenantLockedShape } from "@/shared/validation/tenant-locked-field";
 const updateTwoFactorSchema = z.object({
   ...tenantLockedShape,
   enabled: z
-    .boolean({
-      required_error: "Informe se a verificação fica ligada ou desligada.",
-      invalid_type_error: "Informe se a verificação fica ligada ou desligada.",
-    })
+    .boolean(
+      fieldError({
+        required: "Informe se a verificação fica ligada ou desligada.",
+        invalid: "Informe se a verificação fica ligada ou desligada.",
+      }),
+    )
     .describe(
       "true liga, false desliga. O estado atual responde 200 sem mudar nada.",
     ),
   password: z
-    .string({ required_error: "Informe a senha atual." })
+    .string(fieldError({ required: "Informe a senha atual." }))
     .min(1, "Informe a senha atual.")
     .max(100, "A senha deve ter no máximo 100 caracteres.")
     .describe("A senha atual da conta."),

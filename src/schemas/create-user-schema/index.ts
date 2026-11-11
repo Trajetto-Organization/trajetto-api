@@ -7,6 +7,7 @@ import {
 } from "@/shared/utils/zod-schema-helpers";
 import { UserBusinessRole } from "@/modules/user/dtos/user-dto";
 import { passwordField } from "@/schemas/authenticate-user-schema";
+import { fieldError } from "@/shared/validation/field-error";
 
 const DRIVER_ONLY_PASSWORD_MESSAGE =
   "A senha inicial só pode ser definida no login de um motorista.";
@@ -24,11 +25,9 @@ function isDriverLogin(data: {
 }
 
 const roleEnum = z.nativeEnum(UserBusinessRole, {
-  errorMap: (issue, ctx) => {
+  error: () => {
     const validValues = Object.values(UserBusinessRole).join(", ");
-    return {
-      message: `Nível de acesso do usuário inválido. Valores válidos: ${validValues}`,
-    };
+    return `Nível de acesso do usuário inválido. Valores válidos: ${validValues}`;
   },
 });
 
@@ -110,7 +109,7 @@ const createUserSchema = z
       ),
     role: roleEnum,
     businessId: z
-      .string({ required_error: "ID da empresa é obrigatório!" })
+      .string(fieldError({ required: "ID da empresa é obrigatório!" }))
       .uuid("ID da empresa é inválido."),
     // The admin form always submits this field; for a BUSINESS_ADMIN it comes
     // as "" — which a bare .uuid() rejects before the role check can accept

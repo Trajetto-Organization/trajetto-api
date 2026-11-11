@@ -11,9 +11,7 @@ const myServiceOrdersQuerySchema = cursorPaginationSchema
   .extend({
     scope: z
       .enum(["assigned", "vehicle"], {
-        errorMap: () => ({
-          message: "Informe a seção: assigned ou vehicle.",
-        }),
+        error: "Informe a seção: assigned ou vehicle.",
       })
       .describe(
         "assigned: as ordens em que você é o responsável. vehicle: as ordens dos veículos que você pode operar, menos as que já são suas.",

@@ -19,9 +19,7 @@ const updateFuelTypeSchema = z.object({
     emptyStringToNull,
     z
       .enum(allowedFuelTypes, {
-        errorMap: () => ({
-          message: "Combustível inválido. Selecione uma opção válida.",
-        }),
+        error: "Combustível inválido. Selecione uma opção válida.",
       })
       .optional()
       .nullable(),

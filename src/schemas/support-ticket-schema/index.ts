@@ -5,6 +5,7 @@ import {
   CHAT_AUDIO_MAX_DURATION_MS,
   CHAT_MESSAGE_MAX_LENGTH,
 } from "@/schemas/send-chat-message-schema";
+import { fieldError } from "@/shared/validation/field-error";
 
 /**
  * Support tickets (decision 14.5, design §4). Mirrored in the web
@@ -39,22 +40,20 @@ const listSupportTicketsSchema = z.object({
   businessId: businessIdField,
   status: z
     .enum(["OPEN", "CLOSED", "ALL"], {
-      errorMap: () => ({ message: "Status de atendimento inválido." }),
+      error: "Status de atendimento inválido.",
     })
     .default("OPEN")
     .describe("Padrão OPEN."),
   scope: z
     .enum(["ALL", "MINE", "UNASSIGNED", "PENDING_AUTHORIZATION"], {
-      errorMap: () => ({ message: "Filtro de atendimento inválido." }),
+      error: "Filtro de atendimento inválido.",
     })
     .default("ALL")
     .describe(
       "MINE: atribuídos a mim. UNASSIGNED: abertos sem atendente. PENDING_AUTHORIZATION: ocorrência aguardando autorização. Ignorado para o motorista.",
     ),
   kind: z
-    .enum(SUPPORT_TICKET_KINDS, {
-      errorMap: () => ({ message: "Tipo de atendimento inválido." }),
-    })
+    .enum(SUPPORT_TICKET_KINDS, { error: "Tipo de atendimento inválido." })
     .optional()
     .describe(
       "OCCURRENCE, DELIVERY, ROUTE, DRIVER (geral) ou LEGACY (conversa anterior).",
@@ -97,7 +96,7 @@ const ticketsSummarySchema = z.object({ businessId: businessIdField });
 const ticketMessageBodySchema = z
   .object({
     kind: z.enum(["TEXT", "IMAGE", "AUDIO"], {
-      errorMap: () => ({ message: "Tipo de mensagem inválido." }),
+      error: "Tipo de mensagem inválido.",
     }),
     body: z
       .string()
@@ -109,7 +108,7 @@ const ticketMessageBodySchema = z
       .optional(),
     attachmentKey: z.string().max(512).optional(),
     durationMs: z
-      .number({ invalid_type_error: "Duração do áudio inválida." })
+      .number(fieldError({ invalid: "Duração do áudio inválida." }))
       .int()
       .positive()
       .max(CHAT_AUDIO_MAX_DURATION_MS, "O áudio pode ter no máximo 2 minutos.")
@@ -185,7 +184,7 @@ const openSupportTicketSchema = z.object({
 const closeSupportTicketSchema = z.object({
   ...tenantLockedShape,
   outcome: z.enum(["RESOLVED", "APPROVED", "DENIED"], {
-    errorMap: () => ({ message: "Desfecho inválido." }),
+    error: "Desfecho inválido.",
   }),
   note: z
     .string()

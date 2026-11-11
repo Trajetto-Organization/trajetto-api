@@ -14,6 +14,7 @@ import {
   hasSpaceAtEdges,
   isEmptyOrWhitespace,
 } from "@/shared/utils/zod-schema-helpers";
+import { fieldError } from "@/shared/validation/field-error";
 
 const createFuelSchema = z
   .object({
@@ -36,11 +37,12 @@ const createFuelSchema = z
         return val;
       },
       z
-        .number({
-          required_error: "A quilometragem atual do veículo é obrigatória.",
-          invalid_type_error:
-            "A quilometragem atual deve ser um número válido.",
-        })
+        .number(
+          fieldError({
+            required: "A quilometragem atual do veículo é obrigatória.",
+            invalid: "A quilometragem atual deve ser um número válido.",
+          }),
+        )
         .nonnegative("A quilometragem atual deve ser um valor não negativo.")
         .min(0.1, "A quilometragem atual deve ser maior que zero.")
         .max(9999999, "A quilometragem atual não pode exceder 9.999.999 km."),
@@ -55,11 +57,12 @@ const createFuelSchema = z
         return val;
       },
       z
-        .number({
-          required_error: "A quantidade de litros é obrigatória.",
-          invalid_type_error:
-            "A quantidade de litros deve ser um número válido.",
-        })
+        .number(
+          fieldError({
+            required: "A quantidade de litros é obrigatória.",
+            invalid: "A quantidade de litros deve ser um número válido.",
+          }),
+        )
         .positive("A quantidade de litros deve ser um valor positivo.")
         .min(0.001, "A quantidade de litros deve ser maior que zero.")
         .max(
@@ -77,10 +80,12 @@ const createFuelSchema = z
         return val;
       },
       z
-        .number({
-          required_error: "O preço por litro é obrigatório.",
-          invalid_type_error: "O preço por litro deve ser um número válido.",
-        })
+        .number(
+          fieldError({
+            required: "O preço por litro é obrigatório.",
+            invalid: "O preço por litro deve ser um número válido.",
+          }),
+        )
         .positive("O preço por litro deve ser um valor positivo.")
         .min(0.01, "O preço por litro deve ser no mínimo R$ 0,01")
         // Sanity cap (decision 15.9): no fuel costs more than R$ 50/L; a typed
@@ -142,11 +147,13 @@ const createFuelSchema = z
         // server's end of day let tomorrow through from 21:00 in São Paulo.
       }),
     vehicleId: z
-      .string({ required_error: "ID do veículo é obrigatório!" })
+      .string(fieldError({ required: "ID do veículo é obrigatório!" }))
       .uuid("ID do veículo é inválido."),
     driverId: z.string().uuid("ID do motorista é inválido.").optional(),
     fuelTypeId: z
-      .string({ required_error: "ID do tipo de combustível é obrigatório!" })
+      .string(
+        fieldError({ required: "ID do tipo de combustível é obrigatório!" }),
+      )
       .uuid("ID do tipo de combustível é inválido."),
     branchId: z.string().uuid("ID da filial é inválido.").optional(),
 
@@ -162,9 +169,9 @@ const createFuelSchema = z
         return val;
       },
       z
-        .number({
-          invalid_type_error: "A latitude deve ser um número válido.",
-        })
+        .number(
+          fieldError({ invalid: "A latitude deve ser um número válido." }),
+        )
         .min(-90, "A latitude deve estar entre -90 e 90.")
         .max(90, "A latitude deve estar entre -90 e 90.")
         .optional()
@@ -182,9 +189,9 @@ const createFuelSchema = z
         return val;
       },
       z
-        .number({
-          invalid_type_error: "A longitude deve ser um número válido.",
-        })
+        .number(
+          fieldError({ invalid: "A longitude deve ser um número válido." }),
+        )
         .min(-180, "A longitude deve estar entre -180 e 180.")
         .max(180, "A longitude deve estar entre -180 e 180.")
         .optional()
@@ -220,9 +227,7 @@ const createFuelSchema = z
     // (shared/vehicle/record-origin.ts), and the app's rules follow it.
     created_from: z
       .nativeEnum(RecordOrigin, {
-        errorMap: () => ({
-          message: "Origem inválida. Deve ser MOBILE_APP ou WEB_DASHBOARD.",
-        }),
+        error: "Origem inválida. Deve ser MOBILE_APP ou WEB_DASHBOARD.",
       })
       .describe(
         "Origem do cadastro: MOBILE_APP ou WEB_DASHBOARD. Para o motorista, o servidor grava sempre MOBILE_APP, seja qual for o valor enviado, e exige o que o app sempre manda: a localização GPS e a chave de idempotência.",
@@ -249,15 +254,15 @@ const createFuelSchema = z
     // vehicle less than 30 minutes ago" (fuel-rules.ts). Not columns: the
     // use case keeps the reason only when the alert holds.
     confirm_recent: z
-      .boolean({
-        invalid_type_error: "A confirmação deve ser verdadeiro ou falso.",
-      })
+      .boolean(
+        fieldError({ invalid: "A confirmação deve ser verdadeiro ou falso." }),
+      )
       .optional()
       .describe(
         "O motorista confirmou um segundo abastecimento do veículo em menos de 30 minutos. Vale com `recent_reason` de 3 caracteres ou mais; sem os dois, o app de `contract` 5 ou maior recebe 409 FUEL_RECENT_REFUEL.",
       ),
     recent_reason: z
-      .string({ invalid_type_error: "O motivo deve ser um texto." })
+      .string(fieldError({ invalid: "O motivo deve ser um texto." }))
       .trim()
       .max(
         RECENT_REASON_MAX_LENGTH,

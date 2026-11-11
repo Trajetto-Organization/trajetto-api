@@ -33,9 +33,7 @@ function sortFields<const K extends Keys>(
   return {
     sort: z
       .enum(keys as unknown as [K[number], ...K[number][]], {
-        errorMap: () => ({
-          message: `Ordenação inválida. Use uma destas colunas: ${allowed}.`,
-        }),
+        error: `Ordenação inválida. Use uma destas colunas: ${allowed}.`,
       })
       .optional()
       .describe(
@@ -43,9 +41,7 @@ function sortFields<const K extends Keys>(
       ),
     order: z
       .enum(SORT_ORDERS, {
-        errorMap: () => ({
-          message: "A direção da ordenação deve ser asc ou desc.",
-        }),
+        error: "A direção da ordenação deve ser asc ou desc.",
       })
       .optional()
       .describe(

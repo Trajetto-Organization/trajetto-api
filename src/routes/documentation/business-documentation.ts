@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { responseDateTime } from "./response-date";
 import { tenantLockedShape } from "@/shared/validation/tenant-locked-field";
 
 import { errorResponse, internalErrorResponse } from "./common-responses";
@@ -86,8 +87,7 @@ const businessSettingsView = businessSettingsValuesSchema.extend({
       geofence_radius_max_m: z.number().int(),
     })
     .describe("Os limites do raio, para o formulário."),
-  updated_at: z
-    .union([z.string(), z.date()])
+  updated_at: responseDateTime()
     .nullable()
     .describe(
       "Quando foram salvas pela última vez; nulo enquanto a empresa usa o padrão.",
@@ -146,8 +146,8 @@ const businessResponses = {
     vehicle_count: z
       .number()
       .describe("Veículos ativos (ocupando vaga do plano)."),
-    created_at: z.union([z.string(), z.date()]),
-    updated_at: z.union([z.string(), z.date()]),
+    created_at: responseDateTime(),
+    updated_at: responseDateTime(),
   }),
   /** The list's `meta.searchMeta`, as summarizeBusinessList builds it. */
   businessListSearchMeta: searchMetaDoc(

@@ -125,7 +125,7 @@ const ticketRow: SupportTicketRow = {
 /** What JSON.stringify makes of it — the wire, not the object. */
 const wire = <T>(value: T): unknown => JSON.parse(JSON.stringify(value));
 
-function documented(runtime: z.ZodTypeAny): z.ZodTypeAny {
+function documented(runtime: z.ZodType): z.ZodType {
   const doc = documentedDocFor(runtime);
 
   if (!doc) throw new Error("schema sem documentação registrada");

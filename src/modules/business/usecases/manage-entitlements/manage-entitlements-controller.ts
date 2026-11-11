@@ -14,15 +14,11 @@ import { updateDeleteBusinessSchema } from "@/schemas/update-delete-business-sch
 
 const moduleImpactParamsSchema = z.object({
   businessId: z.string().min(1, "O identificador da empresa é obrigatório."),
-  module: z.nativeEnum(BusinessModule, {
-    errorMap: () => ({ message: "Módulo inválido." }),
-  }),
+  module: z.nativeEnum(BusinessModule, { error: "Módulo inválido." }),
 });
 
 const updateEntitlementSchema = z.object({
-  module: z.nativeEnum(BusinessModule, {
-    errorMap: () => ({ message: "Módulo inválido." }),
-  }),
+  module: z.nativeEnum(BusinessModule, { error: "Módulo inválido." }),
   enabled: z.boolean(),
 });
 

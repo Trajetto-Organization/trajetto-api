@@ -62,9 +62,7 @@ const updateKanbanCardSchema = z.object({
     .optional(),
   priority: z
     .enum(["low", "medium", "high", "urgent"], {
-      errorMap: () => ({
-        message: "Prioridade inválida. Use: baixa, média, alta ou urgente.",
-      }),
+      error: "Prioridade inválida. Use: baixa, média, alta ou urgente.",
     })
     .optional(),
   dueDate: z
@@ -85,6 +83,9 @@ const updateKanbanCardSchema = z.object({
     emptyStringToNull,
     z.string().uuid("ID do usuário é inválido.").nullable().optional(),
   ),
+  // Absent keeps the stored value: zod 4 leaves a missing key out when the
+  // result is optional, where zod 3 ran stringToBoolean(undefined) and wrote
+  // false (docs/deploy.md, zod 4). The web sends the field on every save.
   completed: z.preprocess(stringToBoolean, z.boolean().optional()),
 });
 

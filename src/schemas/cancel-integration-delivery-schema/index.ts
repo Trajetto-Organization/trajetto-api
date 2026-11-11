@@ -1,10 +1,11 @@
-import { z, ZodError } from "zod";
+import { z } from "zod";
 
 import { requiredMultilineText } from "@/shared/delivery/text-rules";
 import {
   CANCEL_REASON_MAX,
   CANCEL_REASON_MIN,
 } from "@/shared/integration/cancel-delivery-rules";
+import { validationError } from "@/shared/validation/validation-error";
 
 import {
   issuePath,
@@ -54,7 +55,7 @@ function parseCancelIntegrationDeliveryBody(
 
   if (parsed.success) return parsed.data;
 
-  throw new ZodError(
+  throw validationError(
     parsed.error.issues.map((issue) => ({
       ...issue,
       message: `${issuePath(issue.path)}: ${

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { responseDateTime } from "./response-date";
 
 import {
   createApiKeySchema,
@@ -23,8 +24,6 @@ import {
   RESERVED_API_SCOPES,
   SCOPE_DESCRIPTIONS,
 } from "@/shared/integration/api-key-rules";
-
-const isoDateTime = z.union([z.string(), z.date()]);
 
 const publicAddress = z.object({
   street: z.string(),
@@ -67,12 +66,12 @@ const publicDelivery = z.object({
 
   // A civil date stored as UTC midnight (decision 1.3). An integrator that
   // converts it to local time reads the day before in Brazil.
-  scheduled_date: isoDateTime
+  scheduled_date: responseDateTime()
     .nullable()
     .describe(
       "Data prevista, SEM hora: vem como meia-noite UTC do dia (`2026-09-17T00:00:00.000Z` é o dia 17). Leia a parte da data (os 10 primeiros caracteres) ou converta em UTC; convertida para o fuso do Brasil ela vira o dia anterior.",
     ),
-  delivered_at: isoDateTime.nullable(),
+  delivered_at: responseDateTime().nullable(),
   received_by: z.string().nullable(),
 
   proof_url: z
@@ -84,8 +83,8 @@ const publicDelivery = z.object({
 
   route: z.object({ id: z.string(), code: z.number() }).nullable(),
 
-  created_at: isoDateTime,
-  updated_at: isoDateTime,
+  created_at: responseDateTime(),
+  updated_at: responseDateTime(),
 });
 
 /**
@@ -100,7 +99,7 @@ const publicDeliveryCancellation = z.object({
   status: z.string().describe("Sempre CANCELLED: a entrega está cancelada."),
   status_label: z.string().describe("Sempre `Cancelada`."),
 
-  updated_at: isoDateTime.describe(
+  updated_at: responseDateTime().describe(
     "Quando a entrega mudou pela última vez. Num cancelamento feito agora, é o instante dele; numa repetição, o do cancelamento que já existia.",
   ),
 });
@@ -112,25 +111,25 @@ const publicRoute = z.object({
 
   status: z.string(),
 
-  scheduled_date: isoDateTime.describe(
+  scheduled_date: responseDateTime().describe(
     "Dia da rota, SEM hora: vem como meia-noite UTC do dia (`2026-09-17T00:00:00.000Z` é o dia 17). Leia a parte da data ou converta em UTC; convertida para o fuso do Brasil ela vira o dia anterior.",
   ),
   destination: z
     .string()
     .nullable()
     .describe("Destino da rota, texto livre, quando foi informado."),
-  planned_departure_at: isoDateTime
+  planned_departure_at: responseDateTime()
     .nullable()
     .describe(
       "Saída prevista (instante em UTC). Nulo quando não foi planejada.",
     ),
-  planned_arrival_at: isoDateTime
+  planned_arrival_at: responseDateTime()
     .nullable()
     .describe(
       "Retorno previsto (instante em UTC). Nulo quando não foi planejado.",
     ),
-  started_at: isoDateTime.nullable(),
-  completed_at: isoDateTime.nullable(),
+  started_at: responseDateTime().nullable(),
+  completed_at: responseDateTime().nullable(),
 
   driver: z.object({ id: z.string(), name: z.string() }).nullable(),
   vehicle: z.object({ id: z.string(), license_plate: z.string() }).nullable(),
@@ -147,10 +146,10 @@ const publicRoute = z.object({
     }),
   ),
 
-  created_at: isoDateTime,
+  created_at: responseDateTime(),
 });
 
-const cursorPage = <T extends z.ZodTypeAny>(item: T) =>
+const cursorPage = <T extends z.ZodType>(item: T) =>
   z.object({
     data: z.array(item),
     next_cursor: z
@@ -199,7 +198,7 @@ const integrationResponses = {
       topic: z.string(),
       // The fact's time since MOB-08, no longer the write's: an integrator
       // who treats it as monotonic drops exactly the offline proofs.
-      occurred_at: isoDateTime.describe(
+      occurred_at: responseDateTime().describe(
         "Quando o fato aconteceu. Para o que o aplicativo do motorista enviou depois, sem sinal, é a hora registrada no aparelho (corrigida pelo relógio do servidor) e pode ser ANTERIOR a eventos já devolvidos em consultas anteriores. `updated_since` filtra pela hora em que o evento chegou ao Trajetto, não por este campo: não descarte um evento por ter `occurred_at` menor que o último visto.",
       ),
       delivery: z.object({
@@ -300,9 +299,9 @@ const integrationResponses = {
         prefix: z.string(),
         scopes: z.array(z.string()),
         rate_limit_per_minute: z.number(),
-        last_used_at: isoDateTime.nullable(),
-        revoked_at: isoDateTime.nullable(),
-        created_at: isoDateTime,
+        last_used_at: responseDateTime().nullable(),
+        revoked_at: responseDateTime().nullable(),
+        created_at: responseDateTime(),
       }),
     ),
   }),
@@ -342,9 +341,9 @@ const integrationResponses = {
         url: z.string(),
         topics: z.array(z.string()),
         is_active: z.boolean(),
-        disabled_at: isoDateTime.nullable(),
+        disabled_at: responseDateTime().nullable(),
         consecutive_failures: z.number(),
-        created_at: isoDateTime,
+        created_at: responseDateTime(),
       }),
     ),
   }),
@@ -392,14 +391,14 @@ const integrationResponses = {
     response_body: z.string().nullable(),
     latency_ms: z.number().nullable(),
     lastError: z.string().nullable(),
-    deliveredAt: isoDateTime.nullable(),
-    availableAt: isoDateTime.describe("Quando tentamos de novo."),
-    leaseExpiresAt: isoDateTime
+    deliveredAt: responseDateTime().nullable(),
+    availableAt: responseDateTime().describe("Quando tentamos de novo."),
+    leaseExpiresAt: responseDateTime()
       .nullable()
       .describe(
         "Só numa entrega em envio (PROCESSING): até quando a tentativa atual vale. Já vencido, a tentativa morreu com o processo e o despachante vai retomá-la.",
       ),
-    created_at: isoDateTime,
+    created_at: responseDateTime(),
     endpoint: z.object({ id: z.string(), name: z.string(), url: z.string() }),
   }),
 

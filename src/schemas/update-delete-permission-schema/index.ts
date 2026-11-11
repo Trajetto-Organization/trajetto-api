@@ -1,8 +1,9 @@
 import { z } from "zod";
+import { fieldError } from "@/shared/validation/field-error";
 
 const updateDeletePermissionSchema = z.object({
   permissionId: z
-    .string({ required_error: "ID da permissão é obrigatório!" })
+    .string(fieldError({ required: "ID da permissão é obrigatório!" }))
     .uuid("ID da permissão é inválido."),
 });
 

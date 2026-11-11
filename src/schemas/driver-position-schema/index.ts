@@ -4,6 +4,7 @@ import { MAX_PINGS_PER_BATCH } from "@/shared/route/driver-position-rules";
 import { listPeriodFields, refineListPeriod } from "@/shared/time/list-period";
 
 import { ROUTE_PERIOD_DESCRIPTION } from "@/schemas/route-schema";
+import { fieldError } from "@/shared/validation/field-error";
 
 /**
  * What the app flushes.
@@ -28,7 +29,9 @@ const pingSchema = z.object({
   battery: z.number().nullable().optional(),
 
   recorded_at: z
-    .string({ required_error: "Cada ponto precisa da hora em que foi medido." })
+    .string(
+      fieldError({ required: "Cada ponto precisa da hora em que foi medido." }),
+    )
     .datetime({ message: "A hora do ponto deve ser uma data ISO 8601." }),
 });
 
@@ -122,7 +125,7 @@ const routeMonitoringSchema = z
       ),
 
     page: z.coerce
-      .number({ invalid_type_error: "A página deve ser um número." })
+      .number(fieldError({ invalid: "A página deve ser um número." }))
       .int("A página deve ser um número inteiro.")
       .min(1, "A página começa em 1.")
       .max(10_000, "Página fora do intervalo.")
@@ -130,7 +133,9 @@ const routeMonitoringSchema = z
       .describe("A página, a partir de 1."),
 
     pageSize: z.coerce
-      .number({ invalid_type_error: "O tamanho da página deve ser um número." })
+      .number(
+        fieldError({ invalid: "O tamanho da página deve ser um número." }),
+      )
       .int("O tamanho da página deve ser um número inteiro.")
       .min(1, "O tamanho da página deve ser ao menos 1.")
       .max(

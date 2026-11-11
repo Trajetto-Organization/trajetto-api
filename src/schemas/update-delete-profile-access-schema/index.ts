@@ -1,8 +1,9 @@
 import { z } from "zod";
+import { fieldError } from "@/shared/validation/field-error";
 
 const updateDeleteProfileAccessSchema = z.object({
   profileAccessId: z
-    .string({ required_error: "ID do perfil de acesso é obrigatório!" })
+    .string(fieldError({ required: "ID do perfil de acesso é obrigatório!" }))
     .uuid("ID do perfil de acesso é inválido."),
 });
 

@@ -144,7 +144,7 @@ describe("the refusals of the public API (DOCS-04)", () => {
     // Red before: every keyed route's 503 read the outage twice, the
     // route's paragraph and then the transform's, and the cancel's second
     // one gave the Idempotency-Key advice of a route that takes none.
-    const keyedRoute = (responses: Record<number, z.ZodTypeAny>) => {
+    const keyedRoute = (responses: Record<number, z.ZodType>) => {
       const { response } = (
         openapiTransform({
           url: "/integration/v1/probe",

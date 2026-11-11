@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { boundedRecord } from "@/shared/validation/bounded-record";
 import { tenantLockedShape } from "@/shared/validation/tenant-locked-field";
 
 import { pageField, pageSizeField } from "@/shared/pagination/page-size";
@@ -6,6 +7,7 @@ import { pageField, pageSizeField } from "@/shared/pagination/page-size";
 import { DeliveryStatus, RouteStatus } from "@prisma/client";
 
 import {
+  ALL_TOPICS,
   TOPIC_WILDCARDS,
   isKnownSubscription,
 } from "@/shared/integration/webhook-catalogue";
@@ -30,6 +32,7 @@ import {
   hasConsecutiveSpaces,
   hasSpaceAtEdges,
 } from "@/shared/utils/zod-schema-helpers";
+import { fieldError } from "@/shared/validation/field-error";
 
 /**
  * A name a person types and another person reads back in a list: the same
@@ -39,10 +42,12 @@ import {
  */
 function integrationName(subject: "da chave" | "do endpoint") {
   return z
-    .string({
-      required_error: `O nome ${subject} é obrigatório.`,
-      invalid_type_error: `O nome ${subject} deve ser um texto.`,
-    })
+    .string(
+      fieldError({
+        required: `O nome ${subject} é obrigatório.`,
+        invalid: `O nome ${subject} deve ser um texto.`,
+      }),
+    )
     .min(2, `O nome ${subject} deve ter no mínimo 2 caracteres.`)
     .max(80, `O nome ${subject} deve ter no máximo 80 caracteres.`)
     .refine(
@@ -83,8 +88,10 @@ const integrationListSchema = z.object({
       return value !== undefined && Number.isFinite(parsed) && parsed >= 1
         ? Math.min(parsed, LIST_LIMIT_MAX)
         : LIST_LIMIT_DEFAULT;
-    }, z.number().int().min(1).max(LIST_LIMIT_MAX))
-    .default(LIST_LIMIT_DEFAULT)
+      // The default on the inner schema, where zod 4 publishes it (one on the
+      // preprocess itself is left out of the document); the preprocess already
+      // turns an absent limit into it.
+    }, z.number().int().min(1).max(LIST_LIMIT_MAX).default(LIST_LIMIT_DEFAULT))
     .describe(
       "Itens por página, de 1 a 200. O padrão é 50. Um valor fora da faixa é ajustado (acima de 200 vira 200; zero, negativo ou não numérico vira 50), nunca recusado.",
     ),
@@ -125,9 +132,7 @@ function statusFilter<T extends Record<string, string>>(values: T) {
         return normalized === "" ? undefined : normalized;
       },
       z
-        .nativeEnum(values, {
-          errorMap: () => ({ message: `status deve ser um de: ${accepted}.` }),
-        })
+        .nativeEnum(values, { error: `status deve ser um de: ${accepted}.` })
         .optional(),
     )
     .optional()
@@ -175,13 +180,17 @@ const createApiKeySchema = z.object({
   scopes: z
     .array(
       z.enum(API_SCOPES, {
-        errorMap: () => ({
-          message: `Escopo desconhecido. Os escopos são: ${API_SCOPES.join(", ")}.`,
-        }),
+        error: `Escopo desconhecido. Os escopos são: ${API_SCOPES.join(", ")}.`,
       }),
-      { required_error: "Escolha ao menos um escopo." },
+      fieldError({ required: "Escolha ao menos um escopo." }),
     )
     .min(1, "Escolha ao menos um escopo.")
+    // Each scope once at most: the cap comes before the refinement, so a
+    // longer list is refused before any element is read.
+    .max(
+      API_SCOPES.length,
+      `Escolha no máximo ${API_SCOPES.length} escopos, cada um uma vez.`,
+    )
     // A reserved scope guards no route yet. Issued today it would grant
     // access, silently, on the day a route starts requiring it — to a key
     // whose owner, when it was issued, was granting nothing.
@@ -198,10 +207,12 @@ const createApiKeySchema = z.object({
   // Messages in Portuguese: a decimal used to come back as zod's English
   // "Expected integer, received float" under a Portuguese form (DLVB-20).
   rate_limit_per_minute: z
-    .number({
-      invalid_type_error:
-        "O limite por minuto deve ser um número inteiro de requisições.",
-    })
+    .number(
+      fieldError({
+        invalid:
+          "O limite por minuto deve ser um número inteiro de requisições.",
+      }),
+    )
     .int("O limite por minuto deve ser um número inteiro, sem casas decimais.")
     .min(10, "O limite mínimo é de 10 requisições por minuto.")
     .max(
@@ -215,12 +226,15 @@ const createApiKeySchema = z.object({
     ),
 });
 
+/** The whole catalogue, every topic and every wildcard. */
+const MAX_WEBHOOK_SUBSCRIPTIONS = ALL_TOPICS.length + TOPIC_WILDCARDS.length;
+
 const saveWebhookEndpointSchema = z.object({
   ...tenantLockedShape,
   name: integrationName("do endpoint"),
 
   url: z
-    .string({ required_error: "A URL é obrigatória." })
+    .string(fieldError({ required: "A URL é obrigatória." }))
     // Bounded: the URL is stored, listed and shown on every row of the
     // monitor, and no receiver needs a path longer than a browser accepts.
     .max(
@@ -248,8 +262,15 @@ const saveWebhookEndpointSchema = z.object({
     ),
 
   topics: z
-    .array(z.string(), { required_error: "Escolha ao menos um tópico." })
+    .array(z.string(), fieldError({ required: "Escolha ao menos um tópico." }))
     .min(1, "Escolha ao menos um tópico.")
+    // Every topic and wildcard of the catalogue, once each: the cap comes
+    // before the refinement, so a longer list is refused before any element
+    // is read.
+    .max(
+      MAX_WEBHOOK_SUBSCRIPTIONS,
+      `Escolha no máximo ${MAX_WEBHOOK_SUBSCRIPTIONS} tópicos, cada um uma vez.`,
+    )
     // A wildcard is a topic PREFIX (`delivery.*`), matched as the dispatcher
     // matches it; a family name (`document.*`) or an invented prefix matched
     // nothing and left the endpoint mute without a word (decision 5.9).
@@ -271,8 +292,12 @@ const saveWebhookEndpointSchema = z.object({
       `Nomes do catálogo ou curingas de um nível (${TOPIC_WILDCARDS.join(", ")}). "Todos os eventos" de Documentos são os três curingas delivery.*, occurrence.* e proof.*.`,
     ),
 
-  headers: z
-    .record(z.string())
+  // The count first: each refused entry would be an issue of its own.
+  headers: boundedRecord(
+    20,
+    "No máximo 20 cabeçalhos.",
+    z.record(z.string(), z.string()),
+  )
     // Omitted on an edit keeps what is stored (the web form has no headers
     // field); `null` clears them.
     .nullable()
@@ -287,10 +312,6 @@ const saveWebhookEndpointSchema = z.object({
     .refine(
       (value) => !value || invalidHeaderEntries(value).length === 0,
       `Nome ou valor de cabeçalho inválido: nomes só com letras, números e - _ . (até ${HEADER_NAME_MAX_LENGTH}); valores sem quebra de linha e com até ${HEADER_VALUE_MAX_LENGTH} caracteres.`,
-    )
-    .refine(
-      (value) => !value || Object.keys(value).length <= 20,
-      "No máximo 20 cabeçalhos.",
     )
     .describe(
       "Autenticação que o gateway do receptor exige. Os cabeçalhos que NÓS escrevemos são reservados: a assinatura é a garantia que a documentação promete, e um cliente que a substituísse transformaria um receptor compartilhado em alvo de replay. Numa edição, omitir mantém os atuais e `null` apaga.",
@@ -329,10 +350,8 @@ const listWebhookDeliveriesSchema = z.object({
 
   status: z
     .enum(["PENDING", "PROCESSING", "DELIVERED", "FAILED", "QUEUED"], {
-      errorMap: () => ({
-        message:
-          "status deve ser um de: PENDING, PROCESSING, DELIVERED, FAILED, QUEUED.",
-      }),
+      error:
+        "status deve ser um de: PENDING, PROCESSING, DELIVERED, FAILED, QUEUED.",
     })
     .optional()
     .describe(
@@ -341,9 +360,7 @@ const listWebhookDeliveriesSchema = z.object({
 
   window: z
     .enum(MONITOR_WINDOWS, {
-      errorMap: () => ({
-        message: `window deve ser um de: ${MONITOR_WINDOWS.join(", ")}.`,
-      }),
+      error: `window deve ser um de: ${MONITOR_WINDOWS.join(", ")}.`,
     })
     .optional()
     .default("24h")

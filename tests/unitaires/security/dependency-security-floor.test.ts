@@ -1,5 +1,5 @@
-import { existsSync, readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { join, resolve } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
@@ -47,6 +47,16 @@ function manifest(): {
   return JSON.parse(
     readFileSync(resolve(process.cwd(), "package.json"), "utf8"),
   );
+}
+
+function sourceFiles(dir: string): string[] {
+  return readdirSync(dir).flatMap((name) => {
+    const path = join(dir, name);
+
+    if (statSync(path).isDirectory()) return sourceFiles(path);
+
+    return path.endsWith(".ts") ? [path] : [];
+  });
 }
 
 function parts(version: string): number[] {
@@ -105,6 +115,49 @@ describe("nodemailer", () => {
         resolve(process.cwd(), "node_modules", "@types", "nodemailer"),
       ),
     ).toBe(false);
+  });
+});
+
+describe("zod", () => {
+  // Every authenticated body reaches zod before any handler, and zod 3 kept
+  // parsing, and reporting, each element of a list after its .max() failed:
+  // GHSA-mrhx-c7xc-m3w5 (unbounded memory on oversized arrays, < 4.6.6). One
+  // ~7 MB import-xml took the replica's 768 MB heap down
+  // (tests/unitaires/http/oversized-array.test.ts).
+  it("is at least 4.6.6", () => {
+    const version = installed("zod");
+
+    expect(atLeast(version, "4.6.6"), `zod@${version}`).toBe(true);
+  });
+
+  it("is what package.json pins, with a type provider made for zod 4", () => {
+    const { dependencies } = manifest();
+
+    expect(dependencies.zod).toBe(installed("zod"));
+
+    // The type provider runs the route validation: a 4.x of it still
+    // validates with zod 3's API (and documents through zod-to-json-schema,
+    // which is zod 3 only).
+    const provider = installed("fastify-type-provider-zod");
+
+    expect(dependencies["fastify-type-provider-zod"]).toBe(provider);
+    expect(
+      atLeast(provider, "7.0.0"),
+      `fastify-type-provider-zod@${provider}`,
+    ).toBe(true);
+  });
+
+  // zod/v3 inside zod 4 is the old code, unchanged (issue #6653): importing
+  // it would silence the advisory and keep the bug.
+  it("is never imported through its zod 3 subpath", () => {
+    const offenders = sourceFiles(resolve(process.cwd(), "src")).filter(
+      (file) =>
+        /from\s+["']zod\/v3["']|require\(\s*["']zod\/v3["']\s*\)/.test(
+          readFileSync(file, "utf8"),
+        ),
+    );
+
+    expect(offenders).toEqual([]);
   });
 });
 

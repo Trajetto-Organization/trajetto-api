@@ -170,7 +170,7 @@ describe("the read-by-entity body", () => {
       });
 
       expect(parsed.success).toBe(false);
-      expect(parsed.error?.errors.map(({ message }) => message)).toEqual([
+      expect(parsed.error?.issues.map(({ message }) => message)).toEqual([
         TENANT_MOVE_REFUSED,
       ]);
     },

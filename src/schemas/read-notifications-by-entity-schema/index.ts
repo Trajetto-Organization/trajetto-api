@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { tenantLockedShape } from "@/shared/validation/tenant-locked-field";
+import { fieldError } from "@/shared/validation/field-error";
 
 /**
  * Marks the caller's notices about one item as read (wave 3): the push never
@@ -13,7 +14,7 @@ import { tenantLockedShape } from "@/shared/validation/tenant-locked-field";
 const readNotificationsByEntitySchema = z.object({
   ...tenantLockedShape,
   type: z
-    .string({ required_error: "O tipo do aviso é obrigatório." })
+    .string(fieldError({ required: "O tipo do aviso é obrigatório." }))
     .trim()
     .min(1, "O tipo do aviso é obrigatório.")
     .max(64, "O tipo do aviso deve ter no máximo 64 caracteres.")
@@ -21,7 +22,7 @@ const readNotificationsByEntitySchema = z.object({
       "O `type` do aviso, como a caixa de avisos e o push o trazem (ex. service-order, account-payable, kanban-card).",
     ),
   entityId: z
-    .string({ required_error: "O ID do item é obrigatório." })
+    .string(fieldError({ required: "O ID do item é obrigatório." }))
     .uuid("O ID do item é inválido.")
     .describe("O `entityId` do aviso: o item aberto."),
 });

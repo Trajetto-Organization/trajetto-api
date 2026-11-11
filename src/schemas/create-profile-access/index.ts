@@ -3,6 +3,7 @@ import {
   hasConsecutiveSpaces,
   hasSpaceAtEdges,
 } from "@/shared/utils/zod-schema-helpers";
+import { fieldError } from "@/shared/validation/field-error";
 
 const createProfileAccessSchema = z.object({
   name: z
@@ -59,7 +60,7 @@ const createProfileAccessSchema = z.object({
       }
     }),
   businessId: z
-    .string({ required_error: "ID da empresa é obrigatório!" })
+    .string(fieldError({ required: "ID da empresa é obrigatório!" }))
     .uuid("ID da empresa é inválido."),
 });
 

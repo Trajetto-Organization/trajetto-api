@@ -440,8 +440,9 @@ Passo a passo para uma feature de ponta a ponta:
    in-memory, com a mesma semântica (filtros, ordem, nulos, unicidade,
    empresa). Se o modelo tem teste de contrato (`tests/contract/repositories`),
    acrescente o caso lá: ele roda contra os dois.
-3. **Schema de entrada** em `src/schemas/<nome>-schema/` (zod; mensagens em
-   pt-BR).
+3. **Schema de entrada** em `src/schemas/<nome>-schema/` (zod 4; mensagens em
+   pt-BR; toda lista com `.max()`, ver
+   [Regras transversais](#regras-transversais)).
 4. **Usecase** `@injectable()` com as regras de negócio; **controller** que só
    faz parse e chama o usecase; **erros** com `code`.
 5. **Rota** em `src/routes/<área>-routes.ts`: `onRequest: [ensureAuthenticated]`;
@@ -538,6 +539,66 @@ nas réplicas HTTP e uma Application `worker`), só por gatilho medido:
   negada é `403 PERMISSION_DENIED`, módulo não contratado é
   `MODULE_NOT_ENABLED`, empresa inativa é `TENANT_INACTIVE`. Banco
   indisponível vira 503 com `Retry-After`.
+- **Validação (zod 4).** zod 4.6.7 com `fastify-type-provider-zod` 7.0.0.
+  A recusa é `400 VALIDATION_ERROR` com `{ code, message, issues }`: `issues`
+  traz uma frase em pt-BR por problema e `message` é a primeira. As frases
+  padrão ficam em `src/shared/validation/zod-pt-br.ts`
+  (`z.config({ customError })`, instalado quando `http.ts` é importado); a
+  frase própria de um campo vence. Depois de um tipo errado, o mesmo campo
+  não ganha outra frase (`validationIssueSentences`): o zod 4 ainda mede o
+  tamanho de uma lista mandada no lugar de um texto, e o zod 3 parava no tipo.
+  - "Obrigatório" e "tipo errado" de um campo usam
+    `fieldError({ required, invalid })` (o zod 4 tirou `required_error` e
+    `invalid_type_error`); `invalid` também responde por um valor fora do
+    enum. Um `{ error: "…" }` fixo vale para tudo o que o próprio schema
+    recusa e para as checagens dele que não têm frase.
+  - Toda lista de entrada tem `.max()` antes de qualquer `.refine()`,
+    `.superRefine()` ou `.transform()`: assim o zod 4 recusa a lista longa
+    com uma issue só, sem ler os itens. O zod 3 lia todos, e um import-xml de
+    ~7 MB derrubava a réplica (GHSA-mrhx-c7xc-m3w5).
+    `tests/unitaires/docs/request-array-bounds.test.ts` cobra `maxItems` de
+    todo array do corpo, da query e do caminho, no documento, e a ordem nos
+    schemas que as rotas usam, pela regra do próprio zod (`util.sizeCaps`,
+    que para na primeira checagem que não é de tamanho). O
+    `dependency-security-floor` segura o zod em 4.6.6 ou mais, sem o atalho
+    `zod/v3` (o código antigo, com o mesmo defeito).
+  - Um `z.record` de entrada conta as entradas antes de ler cada uma:
+    `boundedRecord(max, frase, z.record(...))`
+    (`src/shared/validation/bounded-record.ts`), um preprocess na frente,
+    porque o zod 4 não para o record no teto e um `.refine()` de contagem só
+    roda depois de ler tudo. O mesmo `request-array-bounds` manda 1.000
+    entradas inválidas a cada record das rotas e exige uma issue só.
+  - `.default()` não passa pelo schema e precisa ser do tipo de saída. Um
+    `.optional()` (ou `.partial()`) por cima dele **aplica** o default quando
+    o campo falta: num corpo de edição isso sobrescreve o que está gravado,
+    então edição não leva default. Um `z.preprocess` com resultado opcional
+    não grava nada quando a chave falta (o zod 3 gravava o que a função
+    fazia de `undefined`). `tests/unitaires/docs/request-absent-fields.test.ts`
+    percorre os schemas das rotas e recusa os dois casos, pelos indicadores
+    do próprio zod (`optin` e `optout`); a única exceção aceita, comentada,
+    é o `completed` do card do Kanban.
+  - O zod 4 mede um texto em caracteres (code points), e o zod 3 em unidades
+    UTF-16: um emoji conta 1, e não 2. O login e a senha atual de uma troca
+    usam `storedPasswordField`, com o piso em unidades, para que uma senha
+    criada antes continue entrando; quem define senha nova usa
+    `passwordField`.
+  - `.uuid()` segue a RFC 9562 (versão 1 a 8; nil e max aceitos): os ids do
+    Trajetto (v7 e v4) passam. Número infinito é recusado.
+  - A resposta de sucesso é **analisada** pelo schema da rota
+    (`src/shared/http/response-serializer.ts`), não codificada como faz o
+    serializer do pacote: o default é preenchido, o campo desconhecido sai e
+    transform e preprocess rodam, como no zod 3. Um 4xx sai como foi montado
+    (`error-body.ts`).
+  - Um `ZodError` montado à mão sai de `validationError(...)`
+    (`validation-error.ts`): o `new ZodError()` do zod 4 não é um `Error`.
+  - Data em resposta: `responseDateTime()`
+    (`src/routes/documentation/response-date.ts`), o texto ISO ou a `Date`
+    que o handler tem, publicada como `string (date-time)`.
+  - No `POST /integration/v1/deliveries`, um tipo errado e um campo faltando
+    saem com as frases publicadas ("esperado texto, recebido número.",
+    "campo obrigatório."), por cima da frase própria do campo, como no zod 3.
+    O zod 4 pergunta ao campo primeiro, então o parse refaz a frase a partir
+    do valor enviado e tira o valor da issue antes de lançar.
 - **Idempotência.** Escritas do aplicativo e da API pública aceitam
   `Idempotency-Key` ou `client_submission_id`: reenviar não duplica, e o
   reenvio de um registro que já existe é respondido com ele.

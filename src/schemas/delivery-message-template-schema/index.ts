@@ -89,14 +89,11 @@ const saveDeliveryMessageTemplateSchema = z
   .object({
     ...tenantLockedShape,
     topic: z.enum(["DISPATCHED", "ON_THE_WAY", "DELIVERED", "FAILED"], {
-      errorMap: () => ({
-        message:
-          "O momento deve ser DISPATCHED, ON_THE_WAY, DELIVERED ou FAILED.",
-      }),
+      error: "O momento deve ser DISPATCHED, ON_THE_WAY, DELIVERED ou FAILED.",
     }),
 
     channel: z.enum(["EMAIL", "WHATSAPP"], {
-      errorMap: () => ({ message: "O canal deve ser EMAIL ou WHATSAPP." }),
+      error: "O canal deve ser EMAIL ou WHATSAPP.",
     }),
 
     subject: z.preprocess(

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { responseDateTime } from "./response-date";
 
 import { createProfileAccessSchema } from "@/schemas/create-profile-access";
 
@@ -10,7 +11,6 @@ import { cursorPaginationByBusinessSchema } from "@/schemas/cursor-pagination-sc
 
 import { errorResponse } from "./common-responses";
 
-const isoDateTime = z.union([z.string(), z.date()]);
 const codedError = z.object({ code: z.string().optional() });
 
 /**
@@ -42,8 +42,8 @@ const profileAccessRow = z.object({
   id: z.string(),
   name: z.string(),
   businessId: z.string(),
-  created_at: isoDateTime,
-  updated_at: isoDateTime,
+  created_at: responseDateTime(),
+  updated_at: responseDateTime(),
 });
 
 const profileAccessResponses = {

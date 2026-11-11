@@ -33,6 +33,7 @@ import {
   hasSpaceAtEdges,
   isEmptyOrWhitespace,
 } from "@/shared/utils/zod-schema-helpers";
+import { fieldError } from "@/shared/validation/field-error";
 
 /**
  * Every schema of the route module, in one place.
@@ -59,13 +60,13 @@ const routeStopStatusEnum = z.enum([
 
 const routeIdParamSchema = z.object({
   routeId: z
-    .string({ required_error: "ID da rota é obrigatório!" })
+    .string(fieldError({ required: "ID da rota é obrigatório!" }))
     .uuid("ID da rota é inválido."),
 });
 
 const routeStopIdParamSchema = z.object({
   stopId: z
-    .string({ required_error: "ID da parada é obrigatório!" })
+    .string(fieldError({ required: "ID da parada é obrigatório!" }))
     .uuid("ID da parada é inválido."),
 });
 
@@ -79,7 +80,7 @@ const optionalRouteText = (label: string, max: number) =>
   z.preprocess(
     (value) => (value === "" ? null : value),
     z
-      .string({ invalid_type_error: `${label} deve ser um texto.` })
+      .string(fieldError({ invalid: `${label} deve ser um texto.` }))
       .max(max, `${label} deve ter no máximo ${max} caracteres.`)
       .superRefine((value, ctx) => {
         if (isEmptyOrWhitespace(value)) {
@@ -148,7 +149,7 @@ const routeDayField = (required: string) =>
   z.preprocess(
     (value) => (value instanceof Date ? dateOnlyKey(value) : value),
     z
-      .string({ required_error: required, invalid_type_error: required })
+      .string(fieldError({ required: required, invalid: required }))
       // One refusal per value: a wrong shape is not ALSO an invalid day.
       .superRefine((value, ctx) => {
         if (!DATE_KEY.test(value)) {
@@ -181,7 +182,7 @@ const plannedInstantField = (label: string) =>
     (value) =>
       value === "" ? null : value instanceof Date ? value.toISOString() : value,
     z
-      .string({ invalid_type_error: `${label} deve ser uma data e hora.` })
+      .string(fieldError({ invalid: `${label} deve ser uma data e hora.` }))
       .datetime({
         offset: true,
         message: `${label} deve ter data, hora e fuso (ex.: 2026-09-17T08:00:00-03:00).`,
@@ -230,7 +231,7 @@ const routePlanFields = {
  * 409 ROUTE_PLAN_STALE.
  */
 const expectedPlanVersionField = z
-  .number({ invalid_type_error: "A versão da rota deve ser um número." })
+  .number(fieldError({ invalid: "A versão da rota deve ser um número." }))
   .int("A versão da rota deve ser um número inteiro.")
   .min(0, "A versão da rota não pode ser negativa.")
   .optional()
@@ -241,7 +242,7 @@ const expectedPlanVersionField = z
 const createRouteSchema = z
   .object({
     driverId: z
-      .string({ required_error: "O motorista é obrigatório." })
+      .string(fieldError({ required: "O motorista é obrigatório." }))
       .uuid("O motorista deve ter um identificador válido.")
       .describe("Motorista ativo da mesma empresa."),
     vehicleId: z
@@ -347,7 +348,7 @@ const listRoutesSchema = listPagesSchema
 /** The pair the assignment dialog is about to choose (FLEET-ASSIGN-2). */
 const assignmentPreviewSchema = z.object({
   driverId: z
-    .string({ required_error: "O motorista é obrigatório." })
+    .string(fieldError({ required: "O motorista é obrigatório." }))
     .uuid("O motorista deve ter um identificador válido.")
     .describe("Motorista da mesma empresa."),
   vehicleId: z
@@ -388,9 +389,12 @@ const assignmentPreviewSchema = z.object({
 const addRouteStopsSchema = z.object({
   ...tenantLockedShape,
   deliveryIds: z
-    .array(z.string().uuid("Cada entrega deve ter um identificador válido."), {
-      required_error: "Selecione ao menos uma entrega para adicionar.",
-    })
+    .array(
+      z.string().uuid("Cada entrega deve ter um identificador válido."),
+      fieldError({
+        required: "Selecione ao menos uma entrega para adicionar.",
+      }),
+    )
     .min(1, "Selecione ao menos uma entrega para adicionar.")
     .max(100, "Adicione no máximo 100 paradas por vez.")
     .describe(
@@ -400,7 +404,7 @@ const addRouteStopsSchema = z.object({
   redelivery: z
     .object({
       reasonId: z
-        .string({ required_error: "Informe o motivo da nova tentativa." })
+        .string(fieldError({ required: "Informe o motivo da nova tentativa." }))
         .uuid("O motivo deve ter um identificador válido."),
       // The same note a status change by hand takes.
       note: optionalMultilineText("A anotação", 500),
@@ -416,9 +420,10 @@ const addRouteStopsSchema = z.object({
 const removeRouteStopsSchema = z.object({
   ...tenantLockedShape,
   stopIds: z
-    .array(z.string().uuid("Cada parada deve ter um identificador válido."), {
-      required_error: "Selecione ao menos uma parada para remover.",
-    })
+    .array(
+      z.string().uuid("Cada parada deve ter um identificador válido."),
+      fieldError({ required: "Selecione ao menos uma parada para remover." }),
+    )
     .min(1, "Selecione ao menos uma parada para remover.")
     .max(200, "Remova no máximo 200 paradas por vez.")
     .describe("Paradas PENDING desta rota."),
@@ -432,9 +437,10 @@ const removeRouteStopsSchema = z.object({
 const moveRouteStopsSchema = z.object({
   ...tenantLockedShape,
   deliveryIds: z
-    .array(z.string().uuid("Cada entrega deve ter um identificador válido."), {
-      required_error: "Selecione ao menos uma entrega para mover.",
-    })
+    .array(
+      z.string().uuid("Cada entrega deve ter um identificador válido."),
+      fieldError({ required: "Selecione ao menos uma entrega para mover." }),
+    )
     .min(1, "Selecione ao menos uma entrega para mover.")
     .max(100, "Mova no máximo 100 entregas por vez.")
     .describe(
@@ -448,12 +454,12 @@ const setDeliveryLocationSchema = z
   .object({
     ...tenantLockedShape,
     latitude: z
-      .number({ invalid_type_error: "A latitude deve ser um número." })
+      .number(fieldError({ invalid: "A latitude deve ser um número." }))
       .min(-90, "Latitude inválida.")
       .max(90, "Latitude inválida.")
       .optional(),
     longitude: z
-      .number({ invalid_type_error: "A longitude deve ser um número." })
+      .number(fieldError({ invalid: "A longitude deve ser um número." }))
       .min(-180, "Longitude inválida.")
       .max(180, "Longitude inválida.")
       .optional(),
@@ -488,16 +494,12 @@ const setDeliveryLocationSchema = z
 
 const deliveryIdParamSchema = z.object({
   deliveryId: z
-    .string({ required_error: "ID da entrega é obrigatório!" })
+    .string(fieldError({ required: "ID da entrega é obrigatório!" }))
     .uuid("ID da entrega é inválido."),
 });
 
 /** A comma list or the repeated form, trimmed, empty dropped. */
-const listParam = <T extends z.ZodTypeAny>(
-  item: T,
-  max: number,
-  label: string,
-) =>
+const listParam = <T extends z.ZodType>(item: T, max: number, label: string) =>
   z.preprocess(
     (raw) =>
       raw === undefined || raw === ""
@@ -588,9 +590,10 @@ const openStopsQuerySchema = z.object({
 const reorderRouteStopsSchema = z.object({
   ...tenantLockedShape,
   orderedStopIds: z
-    .array(z.string().uuid("Cada parada deve ter um identificador válido."), {
-      required_error: "Envie a ordem completa das paradas.",
-    })
+    .array(
+      z.string().uuid("Cada parada deve ter um identificador válido."),
+      fieldError({ required: "Envie a ordem completa das paradas." }),
+    )
     .min(1, "Envie a ordem completa das paradas.")
     .max(200, "Uma rota tem no máximo 200 paradas.")
     .describe(
@@ -626,7 +629,9 @@ const startRouteSchema = z.object({
 const cancelRouteSchema = z.object({
   ...tenantLockedShape,
   reason: z
-    .string({ required_error: "Informe o motivo do cancelamento da rota." })
+    .string(
+      fieldError({ required: "Informe o motivo do cancelamento da rota." }),
+    )
     .trim()
     .min(3, "O motivo deve ter no mínimo 3 caracteres.")
     .max(255, "O motivo deve ter no máximo 255 caracteres.")
@@ -642,9 +647,11 @@ const cancelRouteSchema = z.object({
 const closeRouteWithPendingSchema = z.object({
   ...tenantLockedShape,
   reason: z
-    .string({
-      required_error: "Informe o motivo para encerrar a rota com pendências.",
-    })
+    .string(
+      fieldError({
+        required: "Informe o motivo para encerrar a rota com pendências.",
+      }),
+    )
     .trim()
     .min(3, "O motivo deve ter no mínimo 3 caracteres.")
     .max(255, "O motivo deve ter no máximo 255 caracteres.")

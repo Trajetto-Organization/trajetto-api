@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { responseDateTime } from "./response-date";
 
 import { createKanbanColumnSchema } from "@/schemas/create-kanban-column-schema";
 import { updateKanbanColumnSchema } from "@/schemas/update-kanban-column-schema";
@@ -157,7 +158,7 @@ const kanbanResponses = {
       title: z.string().describe("Título do card"),
       description: z.string().describe("Descrição do card"),
       priority: z.string().describe("Prioridade: low, medium, high ou urgent"),
-      dueDate: z.union([z.string(), z.date()]).describe("Prazo (ISO 8601)"),
+      dueDate: responseDateTime().describe("Prazo (ISO 8601)"),
       completed: z.boolean().describe("Se o card está concluído"),
       position: z.number().describe("Posição do card na coluna"),
       columnId: z.string().describe("ID da coluna"),
@@ -170,8 +171,8 @@ const kanbanResponses = {
         .object({ id: z.string(), name: z.string() })
         .nullable()
         .describe("O responsável pelo card (só o nome)"),
-      created_at: z.union([z.string(), z.date()]),
-      updated_at: z.union([z.string(), z.date()]),
+      created_at: responseDateTime(),
+      updated_at: responseDateTime(),
     }),
   }),
   cardReadErrors: refusal(`${VALIDATION}.`),

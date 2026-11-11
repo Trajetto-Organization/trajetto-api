@@ -1,6 +1,7 @@
 import type { RecordOrigin } from "@prisma/client";
 
-import { ZodError } from "zod";
+import type { ZodError } from "zod";
+import { validationError } from "@/shared/validation/validation-error";
 
 /**
  * Where a refuelling or a checklist was made, as `created_from` stores it:
@@ -57,7 +58,7 @@ function appSubmissionKeyRefusal(
 ): ZodError | null {
   if (origin !== "MOBILE_APP" || clientSubmissionId) return null;
 
-  return new ZodError([
+  return validationError([
     {
       code: "custom",
       path: ["client_submission_id"],

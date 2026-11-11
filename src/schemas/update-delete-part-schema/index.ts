@@ -1,8 +1,9 @@
 import { z } from "zod";
+import { fieldError } from "@/shared/validation/field-error";
 
 const updateDeletePartSchema = z.object({
   partId: z
-    .string({ required_error: "ID da peça é obrigatório!" })
+    .string(fieldError({ required: "ID da peça é obrigatório!" }))
     .uuid("ID da peça é inválido."),
 });
 

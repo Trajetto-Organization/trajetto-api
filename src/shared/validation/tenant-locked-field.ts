@@ -18,8 +18,10 @@ import { z } from "zod";
 const TENANT_MOVE_REFUSED =
   "A empresa de um registro não muda pela edição. O registro pertence à empresa em que foi criado; para usá-lo em outra empresa, cadastre-o lá.";
 
+// `never`, not `undefined`: the same refusal of any value, and the one zod 4
+// can write in the document (`not: {}`); it has no JSON Schema for undefined.
 const tenantLockedField = z
-  .undefined({ errorMap: () => ({ message: TENANT_MOVE_REFUSED }) })
+  .never({ error: TENANT_MOVE_REFUSED })
   .optional()
   .describe(
     "Não aceito: a empresa de um registro não muda pela edição (decisão 16.100). Enviado, com qualquer valor, responde 400 VALIDATION_ERROR.",

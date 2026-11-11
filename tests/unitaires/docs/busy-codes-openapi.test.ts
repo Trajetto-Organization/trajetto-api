@@ -253,7 +253,7 @@ describe("merged code lists", () => {
     }
   });
 
-  function transformed(responses: Record<string, z.ZodTypeAny>): Json {
+  function transformed(responses: Record<string, z.ZodType>): Json {
     const { schema } = openapiTransform({
       url: "/probe/:businessId",
       schema: {

@@ -5,13 +5,12 @@ import {
   hasConsecutiveSpaces,
   hasSpaceAtEdges,
 } from "@/shared/utils/zod-schema-helpers";
+import { fieldError } from "@/shared/validation/field-error";
 
 const permissionKeyEnum = z.nativeEnum(EnumPermissionKey, {
-  errorMap: (issue, ctx) => {
+  error: () => {
     const validValues = Object.values(EnumPermissionKey).join(", ");
-    return {
-      message: `A permissão informada não é válida. Valores válidos: ${validValues}`,
-    };
+    return `A permissão informada não é válida. Valores válidos: ${validValues}`;
   },
 });
 
@@ -72,10 +71,10 @@ const createPermissionSchema = z
     canRead: z.boolean(),
     canWrite: z.boolean().default(false),
     businessId: z
-      .string({ required_error: "ID da empresa é obrigatório!" })
+      .string(fieldError({ required: "ID da empresa é obrigatório!" }))
       .uuid("ID da empresa é inválido."),
     profileAccessId: z
-      .string({ required_error: "ID do Perfil de acesso é obrigatório!" })
+      .string(fieldError({ required: "ID do Perfil de acesso é obrigatório!" }))
       .uuid("ID do Perfil de acesso é inválido."),
     permissionKey: permissionKeyEnum,
   })

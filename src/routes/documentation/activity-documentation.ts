@@ -1,6 +1,7 @@
 import { listActivitiesSchema } from "@/schemas/list-activities-schema";
 
 import { z } from "zod";
+import { responseDateTime } from "./response-date";
 
 import { errorResponse, internalErrorResponse } from "./common-responses";
 import { activitySummarySchema } from "@/schemas/activity-summary-schema";
@@ -69,8 +70,8 @@ const activityRow = z.object({
     .nullable()
     .optional(),
   business: z.object({ corporate_reason: z.string() }).nullable().optional(),
-  created_at: z.union([z.string(), z.date()]),
-  updated_at: z.union([z.string(), z.date()]),
+  created_at: responseDateTime(),
+  updated_at: responseDateTime(),
 });
 
 /** An error body with the `code` a client branches on (decision 11.3). */

@@ -1,6 +1,6 @@
 import type { FastifySchema, RouteOptions } from "fastify";
 import { jsonSchemaTransform } from "fastify-type-provider-zod";
-import { z, type ZodTypeAny } from "zod";
+import { z } from "zod";
 
 import { ensureApiKey } from "@/modules/middlewares/ensure-api-key";
 import { ensureAuthenticated } from "@/modules/middlewares/ensure-authenticated";
@@ -46,10 +46,33 @@ import {
  */
 type JsonSchema = Record<string, unknown>;
 
+/**
+ * The document being built, as @fastify/swagger hands it to a transform:
+ * fastify-type-provider-zod reads its `openapi` to pick the JSON Schema
+ * dialect (3.0's `nullable: true`, 3.1's type lists).
+ */
+interface OpenapiObject {
+  openapi?: string;
+}
+
+/**
+ * What @fastify/swagger writes when http.ts names no version. Only a test
+ * that calls the transform by hand leaves `openapiObject` out.
+ */
+const DEFAULT_OPENAPI_OBJECT: OpenapiObject = { openapi: "3.0.3" };
+
 interface TransformInput {
   schema: FastifySchema;
   url: string;
   route: RouteOptions;
+  openapiObject?: OpenapiObject;
+}
+
+/** The route and document every conversion of one route is made against. */
+interface TransformContext {
+  url: string;
+  route: RouteOptions;
+  openapiObject: OpenapiObject;
 }
 
 /** What a guard factory attaches to the hook it returns. */
@@ -346,10 +369,13 @@ function guardsOf(route: RouteOptions): GuardDoc[] {
 }
 
 /** A zod schema as the JSON Schema the rest of the document is made of. */
-function toJsonSchema(schema: ZodTypeAny, url: string): JsonSchema {
+function toJsonSchema(
+  schema: z.ZodType,
+  context: TransformContext,
+): JsonSchema {
   const converted = jsonSchemaTransform({
+    ...context,
     schema: { response: { 200: schema } } as FastifySchema,
-    url,
   }) as { schema: { response: Record<string, JsonSchema> } };
 
   return converted.schema.response["200"];
@@ -402,10 +428,10 @@ function openEnded(schema: unknown): void {
   }
 }
 
-function ndjsonResponse(doc: NdjsonDoc, url: string): JsonSchema {
+function ndjsonResponse(doc: NdjsonDoc, context: TransformContext): JsonSchema {
   const item = toJsonSchema(
     doc.item.describe("Cada linha seguinte: um item."),
-    url,
+    context,
   );
 
   openEnded(item);
@@ -430,7 +456,7 @@ function ndjsonResponse(doc: NdjsonDoc, url: string): JsonSchema {
               z
                 .object({ meta: doc.meta })
                 .describe("Primeira linha: os metadados da página."),
-              url,
+              context,
             ),
             item,
           ],
@@ -687,10 +713,15 @@ function openapiTransform(input: TransformInput): {
   url: string;
 } {
   const { route, url } = input;
+  const context: TransformContext = {
+    url,
+    route,
+    openapiObject: input.openapiObject ?? DEFAULT_OPENAPI_OBJECT,
+  };
 
   const result = jsonSchemaTransform({
+    ...context,
     schema: withDocumentedInputs(input.schema, route),
-    url,
   }) as {
     schema: JsonSchema & {
       hide?: boolean;
@@ -725,9 +756,9 @@ function openapiTransform(input: TransformInput): {
     const file = fileDocFor(runtime);
     const documented = documentedDocFor(runtime);
 
-    if (ndjson) responses[status] = ndjsonResponse(ndjson, url);
+    if (ndjson) responses[status] = ndjsonResponse(ndjson, context);
     else if (file) responses[status] = fileResponse(file);
-    else if (documented) responses[status] = toJsonSchema(documented, url);
+    else if (documented) responses[status] = toJsonSchema(documented, context);
   }
 
   // Example success bodies (response-examples.ts). A one-element JSON Schema

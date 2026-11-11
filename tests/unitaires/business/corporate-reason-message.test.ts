@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { ZodTypeAny } from "zod";
+import type { ZodType } from "zod";
 
 import { createBranchSchema } from "@/schemas/create-branch-schema";
 import { createBusinessSchema } from "@/schemas/create-business-schema";
@@ -15,7 +15,7 @@ import { updateBusinessSchema } from "@/schemas/update-business-schema";
 const SENTENCE =
   "A razão social deve conter apenas letras (inclusive acentos), números, espaços e traços, sem outros caracteres.";
 
-function corporateReasonIssues(schema: ZodTypeAny): string[] {
+function corporateReasonIssues(schema: ZodType): string[] {
   const parsed = schema.safeParse({ corporate_reason: "Transportes & Filhos" });
 
   return parsed.success

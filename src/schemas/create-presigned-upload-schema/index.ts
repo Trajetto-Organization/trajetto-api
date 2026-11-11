@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import { UPLOAD_TYPES } from "@/config/upload";
+import { fieldError } from "@/shared/validation/field-error";
 
 // Derived from the one list in config/upload.ts: an unknown value is
 // rejected by the schema instead of reaching the service, and a new upload
@@ -22,7 +23,7 @@ const presignedUploadFileSchema = z.object({
   // send — R2 rejects the PUT otherwise. The upper bound here is a cheap first
   // filter; the authoritative limit per upload type lives in the service.
   size: z
-    .number({ required_error: "O tamanho do arquivo é obrigatório!" })
+    .number(fieldError({ required: "O tamanho do arquivo é obrigatório!" }))
     .int("O tamanho deve ser um número inteiro de bytes.")
     .positive("O tamanho deve ser maior que zero.")
     .max(50 * 1024 * 1024, "Arquivo muito grande."),

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { responseDateTime } from "./response-date";
 
 import { internalErrorResponse } from "./common-responses";
 
@@ -52,13 +53,11 @@ const namedRef = (fields: z.ZodRawShape) =>
 /** A bill as every read returns it: its columns, the names, the situation. */
 const accountPayableRow = z.object({
   id: z.string(),
-  issue_date: z.union([z.string(), z.date()]),
-  due_date: z
-    .union([z.string(), z.date()])
-    .describe(
-      "Instante em que começa o dia do vencimento, no fuso da empresa.",
-    ),
-  payment_date: z.union([z.string(), z.date()]).nullable(),
+  issue_date: responseDateTime(),
+  due_date: responseDateTime().describe(
+    "Instante em que começa o dia do vencimento, no fuso da empresa.",
+  ),
+  payment_date: responseDateTime().nullable(),
   amount: z.number(),
   amount_paid: z.number().nullable(),
   category: z
@@ -84,8 +83,8 @@ const accountPayableRow = z.object({
     .string()
     .nullable()
     .describe("Quem registrou; nulo em contas antigas."),
-  created_at: z.union([z.string(), z.date()]),
-  updated_at: z.union([z.string(), z.date()]),
+  created_at: responseDateTime(),
+  updated_at: responseDateTime(),
   branch: namedRef({
     id: z.string(),
     corporate_reason: z.string(),
@@ -93,7 +92,7 @@ const accountPayableRow = z.object({
   }),
   serviceOrder: namedRef({
     id: z.string(),
-    date: z.union([z.string(), z.date()]),
+    date: responseDateTime(),
     maintenance_type: z.string(),
     vehicle: z.object({
       license_plate: z.string(),

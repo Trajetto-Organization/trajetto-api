@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { TENANT_MOVE_REFUSED } from "@/shared/validation/tenant-locked-field";
-import type { ZodTypeAny } from "zod";
+import type { ZodType } from "zod";
 
 import { createUserSchema } from "@/schemas/create-user-schema";
 import { updateUserSchema } from "@/schemas/update-user-schema";
@@ -17,7 +17,7 @@ import { createPartSchema } from "@/schemas/create-part-schema";
 const UUID = "018f0000-0000-7000-8000-000000000001";
 const OTHER_UUID = "018f0000-0000-7000-8000-000000000002";
 
-function messages(schema: ZodTypeAny, body: unknown): string[] {
+function messages(schema: ZodType, body: unknown): string[] {
   const result = schema.safeParse(body);
 
   return result.success

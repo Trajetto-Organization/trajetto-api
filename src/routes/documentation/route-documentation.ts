@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { responseDateTime } from "./response-date";
 
 import {
   deliveryIdParamSchema,
@@ -28,6 +29,17 @@ import { searchMetaDoc } from "@/shared/pagination/list-meta";
 import { FUEL_ALERTS } from "@/modules/fuel/usecases/list-fuel/fuel-list";
 
 /**
+ * A count per status, every status always there (zeros included). Spelled
+ * out as an object: zod 4 writes a record keyed by an enum without its keys
+ * in an OpenAPI 3.0 document.
+ */
+function countsPer(statuses: { options: readonly string[] }) {
+  return z.object(
+    Object.fromEntries(statuses.options.map((status) => [status, z.number()])),
+  );
+}
+
+/**
  * What the API actually answers, not what would look tidy.
  *
  * Every status listed on a route below is one the code can really produce:
@@ -52,19 +64,17 @@ import { FUEL_ALERTS } from "@/modules/fuel/usecases/list-fuel/fuel-list";
  * `JSON.stringify` turns a Date into an ISO-8601 string. Same shape the
  * account-payable and driver documents already use.
  */
-const isoDateTime = z.union([z.string(), z.date()]);
-
 const routeStopEntity = z.object({
   id: z.string(),
   sequence: z.number().describe("Ordem manual, espaçada de dez."),
   status: routeStopStatusEnum,
-  on_the_way_at: isoDateTime
+  on_the_way_at: responseDateTime()
     .nullable()
     .describe(
       'Última vez que o motorista avisou estar a caminho desta parada (decisão 6.4); nulo se nunca avisou. Só a marcação mais recente da rota, com a parada ainda PENDING, vale como "a caminho".',
     ),
-  arrived_at: isoDateTime.nullable(),
-  completed_at: isoDateTime.nullable(),
+  arrived_at: responseDateTime().nullable(),
+  completed_at: responseDateTime().nullable(),
   deliveryId: z.string(),
   delivery: z.object({
     id: z.string(),
@@ -115,17 +125,17 @@ const routeEntity = z.object({
   code: z.number().describe("Número sequencial por empresa."),
   name: z.string().nullable(),
   status: routeStatusEnum,
-  scheduled_date: isoDateTime.describe(
+  scheduled_date: responseDateTime().describe(
     "Data civil (sem hora): meia-noite UTC do dia. Leia o dia em UTC.",
   ),
   destination: z
     .string()
     .nullable()
     .describe("Para onde a rota vai, em texto livre."),
-  planned_departure_at: isoDateTime.nullable(),
-  planned_arrival_at: isoDateTime.nullable(),
-  started_at: isoDateTime.nullable(),
-  completed_at: isoDateTime.nullable(),
+  planned_departure_at: responseDateTime().nullable(),
+  planned_arrival_at: responseDateTime().nullable(),
+  started_at: responseDateTime().nullable(),
+  completed_at: responseDateTime().nullable(),
   cancellation_reason: z.string().nullable(),
   closure_reason: z
     .string()
@@ -144,13 +154,13 @@ const routeEntity = z.object({
     .describe(
       "Versão do plano (decisão 14.7): sobe a cada parada adicionada, removida ou reordenada, ponto fixado e edição de motorista, veículo ou janela. Envie de volta como `expectedPlanVersion` para não sobrescrever a mudança de um colega.",
     ),
-  released_at: isoDateTime
+  released_at: responseDateTime()
     .nullable()
     .describe(
       "Quando a rota foi liberada ao motorista; nulo enquanto rascunho.",
     ),
-  created_at: isoDateTime,
-  updated_at: isoDateTime,
+  created_at: responseDateTime(),
+  updated_at: responseDateTime(),
 });
 
 const driverPositionEntity = z
@@ -174,7 +184,7 @@ const visitedPointEntity = z.object({
   type: z.enum(["ARRIVAL", "PROOF"]),
   latitude: z.number(),
   longitude: z.number(),
-  recordedAt: isoDateTime,
+  recordedAt: responseDateTime(),
   // Plan of 02/11/2026 (E5): the stop card's "Fora do raio" flag, with the
   // names the delivery detail uses.
   geofence_outcome: z
@@ -216,7 +226,7 @@ const stopGeofenceEntity = z.object({
     .describe(
       "Precisão da posição em metros; null quando o aparelho não a mandou.",
     ),
-  recordedAt: isoDateTime.describe(
+  recordedAt: responseDateTime().describe(
     "Quando aconteceu (relógio do aparelho corrigido).",
   ),
 });
@@ -224,7 +234,7 @@ const stopGeofenceEntity = z.object({
 /** A route checklist as the detail lists it (F3; the driver payload's shape). */
 const routeChecklistEntity = z.object({
   id: z.string(),
-  checklist_date: isoDateTime,
+  checklist_date: responseDateTime(),
   overall_condition: z
     .string()
     .describe("approved, approved_with_restrictions ou rejected."),
@@ -233,7 +243,7 @@ const routeChecklistEntity = z.object({
 /** A refuelling made on the route (F3), amounts as numbers. */
 const routeFuelEntity = z.object({
   id: z.string(),
-  refueling_date: isoDateTime,
+  refueling_date: responseDateTime(),
   liters_amount: z.number(),
   price_per_liter: z.number(),
   total_amount: z.number(),
@@ -255,7 +265,7 @@ const routeFuelEntity = z.object({
     .describe(
       "O motivo que o motorista informou ao confirmar; null sem confirmação ou sem o alerta.",
     ),
-  recent_refuel_previous_at: isoDateTime
+  recent_refuel_previous_at: responseDateTime()
     .nullable()
     .describe(
       "A data do outro abastecimento (RECENT_REFUEL); null sem o alerta.",
@@ -273,7 +283,7 @@ const unroutedDeliveryRow = z.object({
   neighborhood: z.string().nullable(),
   city: z.string(),
   uf: z.string(),
-  scheduled_date: isoDateTime
+  scheduled_date: responseDateTime()
     .nullable()
     .describe("Data civil (meia-noite UTC do dia), ou nula."),
   latitude: z.number().nullable(),
@@ -365,11 +375,9 @@ const routeResponses = {
       pageSize: z.number(),
       searchMeta: searchMetaDoc(
         {
-          statusCounts: z
-            .record(routeStatusEnum, z.number())
-            .describe(
-              "Rotas por status com a busca e os demais filtros, sem o de status (os cartões). Nunca da página; os cinco status vêm sempre, inclusive zerados.",
-            ),
+          statusCounts: countsPer(routeStatusEnum).describe(
+            "Rotas por status com a busca e os demais filtros, sem o de status (os cartões). Nunca da página; os cinco status vêm sempre, inclusive zerados.",
+          ),
           timeZone: z
             .string()
             .describe(
@@ -407,11 +415,9 @@ const routeResponses = {
    * blockers from `stopCounts`.
    */
   routeListRow: routeEntity.omit({ stops: true }).extend({
-    stopCounts: z
-      .record(routeStopStatusEnum, z.number())
-      .describe(
-        "Paradas da rota por status (PENDING, ARRIVED, COMPLETED, FAILED, CANCELLED; os cinco sempre, inclusive zerados). É daqui que a lista tira o progresso e os bloqueios; as paradas com as entregas ficam no detalhe (get-route).",
-      ),
+    stopCounts: countsPer(routeStopStatusEnum).describe(
+      "Paradas da rota por status (PENDING, ARRIVED, COMPLETED, FAILED, CANCELLED; os cinco sempre, inclusive zerados). É daqui que a lista tira o progresso e os bloqueios; as paradas com as entregas ficam no detalhe (get-route).",
+    ),
     stops: z
       .array(z.object({ id: z.string(), status: routeStopStatusEnum }))
       .describe(
@@ -479,7 +485,10 @@ const routeResponses = {
   }),
   routeStarted: z.object({
     message: z.string().default("Rota iniciada!"),
-    data: z.object({ id: z.string(), started_at: isoDateTime.nullable() }),
+    data: z.object({
+      id: z.string(),
+      started_at: responseDateTime().nullable(),
+    }),
   }),
   routeCancelled: z.object({ message: z.string().default("Rota cancelada.") }),
   routeClosedWithPending: z.object({
@@ -487,7 +496,7 @@ const routeResponses = {
     data: z.object({
       id: z.string(),
       status: routeStatusEnum,
-      completed_at: isoDateTime.nullable(),
+      completed_at: responseDateTime().nullable(),
       closure_reason: z.string().nullable(),
       cancelledStops: z
         .number()
@@ -613,7 +622,7 @@ const routeResponses = {
       latitude: z.number().nullable(),
       longitude: z.number().nullable(),
       geo_source: z.enum(["MANUAL", "GEOCODER"]).nullable(),
-      geo_updated_at: isoDateTime.nullable(),
+      geo_updated_at: responseDateTime().nullable(),
       routeId: z
         .string()
         .nullable()

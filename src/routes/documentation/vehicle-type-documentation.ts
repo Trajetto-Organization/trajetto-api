@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { responseDateTime } from "./response-date";
 
 import { createVehicleTypeSchema } from "@/schemas/create-vehicle-type-schema";
 import { listVehicleTypeSchema } from "@/schemas/list-vehicle-type-schema";
@@ -23,8 +24,6 @@ const vehicleTypeSchemas = {
   searchVehicleTypeCursor: cursorPaginationByBusinessSchema,
 };
 
-const dateLike = z.union([z.string(), z.date()]);
-
 const cnhCategory = z
   .enum(["A", "B", "C", "D", "E", "AB", "AC", "AD", "AE"])
   .nullable()
@@ -41,8 +40,8 @@ const vehicleTypeItem = z.object({
     .describe("Eixos padrão; o veículo pode sobrescrever."),
   required_cnh_category: cnhCategory,
   businessId: z.string(),
-  created_at: dateLike,
-  updated_at: dateLike,
+  created_at: responseDateTime(),
+  updated_at: responseDateTime(),
 });
 
 const message = (text: string) =>

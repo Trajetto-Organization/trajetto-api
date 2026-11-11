@@ -1,8 +1,7 @@
 import fastify from "fastify";
-import {
-  serializerCompiler,
-  validatorCompiler,
-} from "fastify-type-provider-zod";
+import { validatorCompiler } from "fastify-type-provider-zod";
+
+import { parsingSerializerCompiler } from "@/shared/http/response-serializer";
 import { hash } from "bcrypt";
 import { verify } from "jsonwebtoken";
 import { container } from "tsyringe";
@@ -221,7 +220,7 @@ describe("over HTTP", () => {
   ) {
     const app = fastify();
     app.setValidatorCompiler(validatorCompiler);
-    app.setSerializerCompiler(serializerCompiler);
+    app.setSerializerCompiler(parsingSerializerCompiler);
     app.post(
       route,
       {

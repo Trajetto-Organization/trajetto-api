@@ -7,6 +7,7 @@ import {
   routeDayField,
   routeDestinationField,
 } from "@/schemas/route-schema";
+import { fieldError } from "@/shared/validation/field-error";
 
 /**
  * Batch assignment, which creates and releases a route for the selection.
@@ -33,19 +34,19 @@ const assignDeliveriesSchema = z
     deliveryIds: z
       .array(
         z.string().uuid("Cada entrega deve ter um identificador válido."),
-        {
-          required_error: "Selecione ao menos uma entrega para atribuir.",
-        },
+        fieldError({
+          required: "Selecione ao menos uma entrega para atribuir.",
+        }),
       )
       .min(1, "Selecione ao menos uma entrega para atribuir.")
       .max(100, "Atribua no máximo 100 entregas por vez.")
       .describe("Entregas pendentes selecionadas na tabela."),
     driverId: z
-      .string({ required_error: "O motorista é obrigatório." })
+      .string(fieldError({ required: "O motorista é obrigatório." }))
       .uuid("O motorista deve ter um identificador válido.")
       .describe("Motorista ativo da mesma empresa."),
     vehicleId: z
-      .string({ required_error: "O veículo é obrigatório." })
+      .string(fieldError({ required: "O veículo é obrigatório." }))
       .uuid("O veículo deve ter um identificador válido.")
       .describe(
         "Veículo em operação da mesma empresa. A rota é liberada com ele.",

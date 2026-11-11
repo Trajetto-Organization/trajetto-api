@@ -1,5 +1,5 @@
 import type { FastifyRequest } from "fastify";
-import { ZodError } from "zod";
+import { validationError } from "@/shared/validation/validation-error";
 
 /**
  * Text PostgreSQL cannot store, refused at the door.
@@ -102,7 +102,7 @@ async function rejectUnstorableText(request: FastifyRequest): Promise<void> {
     const path = findUnstorableText(value);
 
     if (path) {
-      throw new ZodError([
+      throw validationError([
         { code: "custom", path: [source, ...path], message: MESSAGE },
       ]);
     }

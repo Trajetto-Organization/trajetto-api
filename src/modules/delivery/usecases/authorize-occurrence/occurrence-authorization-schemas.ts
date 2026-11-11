@@ -13,9 +13,7 @@ const decideOccurrenceAuthorizationSchema = z.object({
   ...tenantLockedShape,
   decision: z
     .enum(["APPROVED", "DENIED"], {
-      errorMap: () => ({
-        message: "Decida entre APPROVED (autorizar) e DENIED (negar).",
-      }),
+      error: "Decida entre APPROVED (autorizar) e DENIED (negar).",
     })
     .describe(
       "APPROVED aplica o efeito do tipo agora; DENIED não aplica nada.",
@@ -42,9 +40,7 @@ const listPendingAuthorizationsSchema = z.object({
       "Só o MASTER envia: a empresa da fila. Os demais leem sempre a própria empresa.",
     ),
   view: z
-    .enum(["full", "summary"], {
-      errorMap: () => ({ message: "Escolha a visão full ou summary." }),
-    })
+    .enum(["full", "summary"], { error: "Escolha a visão full ou summary." })
     .default("full")
     .describe(
       "full (padrão, a fila da torre na web): cada pedido com as fotos assinadas, o formulário e as respostas. summary (o app): a linha da lista, sem URL assinada nem formulário, com `photos_count`, `has_receipt_photo` e `has_signature`; o detalhe pede `occurrenceId` na visão full.",

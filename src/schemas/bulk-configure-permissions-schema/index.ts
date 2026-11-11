@@ -1,19 +1,23 @@
 import { z } from "zod";
 import { EnumPermissionKey } from "@/config/permissions";
+import { fieldError } from "@/shared/validation/field-error";
+
+/** One row per resource: there are no more rows than resources. */
+const MAX_PERMISSION_ROWS = Object.values(EnumPermissionKey).length;
 
 const bulkConfigurePermissionsSchema = z.object({
   businessId: z
-    .string({ required_error: "ID da empresa é obrigatória!" })
+    .string(fieldError({ required: "ID da empresa é obrigatória!" }))
     .uuid("ID da empresa é inválida."),
   profileAccessId: z
-    .string({ required_error: "ID do perfil de acesso é obrigatório!" })
+    .string(fieldError({ required: "ID do perfil de acesso é obrigatório!" }))
     .uuid("ID do Perfil de acesso é inválido."),
   permissions: z
     .array(
       z
         .object({
           permissionKey: z.nativeEnum(EnumPermissionKey, {
-            errorMap: () => ({ message: "Chave de permissão inválida." }),
+            error: "Chave de permissão inválida.",
           }),
           canRead: z.boolean(),
           canWrite: z.boolean().default(false),
@@ -27,6 +31,9 @@ const bulkConfigurePermissionsSchema = z.object({
           path: ["canRead"],
         }),
     )
+    // Before the refinement below: a longer list is refused before any row
+    // is read.
+    .max(MAX_PERMISSION_ROWS, "Há permissões demais nesta lista.")
     // One row per resource: a repeated key hit the table's unique index
     // inside createMany and came back as a 500.
     .superRefine((items, ctx) => {

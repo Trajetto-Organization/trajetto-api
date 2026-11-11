@@ -4,6 +4,7 @@ import { normalizeCpf } from "@/modules/user/services/driver-cpf";
 import { hashDeviceId } from "@/modules/user/services/session-service";
 import { normalizeDeviceId } from "@/shared/delivery/proof-capture";
 import { CPF_MESSAGES } from "@/schemas/driver-cpf-field";
+import { fieldError } from "@/shared/validation/field-error";
 
 /**
  * The fields of the driver's own ways in (plan of 02/11/2026, D3/D4/D8): the
@@ -19,7 +20,9 @@ import { CPF_MESSAGES } from "@/schemas/driver-cpf-field";
  * refused rather than dropped.
  */
 const sessionDeviceIdField = z
-  .string({ required_error: "O identificador do aparelho é obrigatório." })
+  .string(
+    fieldError({ required: "O identificador do aparelho é obrigatório." }),
+  )
   .max(64, "Identificador do aparelho inválido.")
   .transform((value, ctx) => {
     const normalized = normalizeDeviceId(value);
@@ -45,7 +48,7 @@ const sessionDeviceIdField = z
  * words are the driver record's (src/schemas/driver-cpf-field), one constant.
  */
 const driverCpfField = z
-  .string({ required_error: CPF_MESSAGES.required })
+  .string(fieldError({ required: CPF_MESSAGES.required }))
   .max(20, CPF_MESSAGES.invalid)
   .transform((value, ctx) => {
     const normalized = normalizeCpf(value);
@@ -103,7 +106,7 @@ const enrollSessionSchema = z
 /** The driver's login a manager acts on (D2, D3, D7). */
 const driverLoginParamsSchema = z.object({
   userId: z
-    .string({ required_error: "ID do usuário é obrigatório!" })
+    .string(fieldError({ required: "ID do usuário é obrigatório!" }))
     .uuid("ID do usuário é inválido."),
 });
 
@@ -118,7 +121,9 @@ const DEVICE_HASH = /^[0-9a-f]{64}$/i;
  */
 const driverDeviceParamsSchema = driverLoginParamsSchema.extend({
   deviceId: z
-    .string({ required_error: "O identificador do aparelho é obrigatório." })
+    .string(
+      fieldError({ required: "O identificador do aparelho é obrigatório." }),
+    )
     .max(64, "Identificador do aparelho inválido.")
     .transform((value, ctx) => {
       const trimmed = value.trim();
@@ -147,7 +152,7 @@ const driverDeviceParamsSchema = driverLoginParamsSchema.extend({
 /** POST /user/session/revoke (A3): the refresh token of the session to end. */
 const revokeSessionSchema = z.object({
   token: z
-    .string({ required_error: "O token é obrigatório!" })
+    .string(fieldError({ required: "O token é obrigatório!" }))
     .min(1, "O token é obrigatório!")
     .max(4096, "Token de atualização inválido.")
     .describe("O refresh token da sessão a encerrar (mesmo vencido)."),

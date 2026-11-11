@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { responseDateTime } from "./response-date";
 
 import { errorResponse, internalErrorResponse } from "./common-responses";
 
@@ -122,10 +123,9 @@ const routeVehicleEntity = z
 const routeChecklistEntity = z
   .object({
     id: z.string(),
-    // isoDateTime is declared further down this file.
-    checklist_date: z
-      .union([z.string(), z.date()])
-      .describe("Quando o checklist foi feito."),
+    checklist_date: responseDateTime().describe(
+      "Quando o checklist foi feito.",
+    ),
     overall_condition: z
       .string()
       .describe("approved, approved_with_restrictions ou rejected."),
@@ -152,8 +152,7 @@ const myDeliveriesRouteEntity = z.object({
     .describe(
       "Plano de 02/11/2026 (C4): o status do checklist de saída e de chegada, derivado dos checklists feitos para a rota. Só diz o que foi feito; o que é exigido está em `settings.checklist_requirement`.",
     ),
-  completed_at: z
-    .union([z.string(), z.date()])
+  completed_at: responseDateTime()
     .nullable()
     .optional()
     .describe(
@@ -224,7 +223,6 @@ const deliveryListEntity = z.object({
  * serializer untouched. Dates are ISO strings on the wire; Prisma Decimals
  * (quantities, values) are serialized as strings.
  */
-const isoDateTime = z.union([z.string(), z.date()]);
 const decimal = z
   .union([z.string(), z.number()])
   .describe("Decimal do banco; chega como string no JSON.");
@@ -263,7 +261,7 @@ const deliveryRowEntity = z.object({
     .describe(
       "MANUAL: fixado no mapa pelo despachante ou informado na criação (formulário, planilha ou API pública). GEOCODER: achado pelo endereço (plano de 02/11/2026, E1). Some quando o endereço muda.",
     ),
-  geo_updated_at: isoDateTime.nullable(),
+  geo_updated_at: responseDateTime().nullable(),
   // Plan of 02/11/2026 (E1): the geocoder's level and its bookkeeping.
   // Optional: a body written by the previous API does not have them.
   geo_precision: z
@@ -280,7 +278,7 @@ const deliveryRowEntity = z.object({
     .describe(
       "A geocodificação do endereço: nula = ainda não tentada; RESOLVED (ponto gravado), COARSE (só bairro ou cidade, sem ponto), NOT_FOUND ou FAILED (tentada de novo depois).",
     ),
-  geocode_attempted_at: isoDateTime
+  geocode_attempted_at: responseDateTime()
     .nullable()
     .optional()
     .describe("A última tentativa de geocodificação."),
@@ -295,8 +293,8 @@ const deliveryRowEntity = z.object({
     .describe(
       "Tipo: DELIVERY (entrega), SERVICE_ORDER (ordem de serviço, ex.: recolher cestos retornáveis) ou PICKUP (coleta, criada só pela planilha).",
     ),
-  scheduled_date: isoDateTime.nullable(),
-  delivered_at: isoDateTime.nullable(),
+  scheduled_date: responseDateTime().nullable(),
+  delivered_at: responseDateTime().nullable(),
   received_by: z.string().nullable(),
   notes: z.string().nullable(),
   client_submission_id: z.string().nullable(),
@@ -309,8 +307,8 @@ const deliveryRowEntity = z.object({
   shipperId: z.string(),
   vehicleId: z.string().nullable(),
   driverId: z.string().nullable(),
-  created_at: isoDateTime,
-  updated_at: isoDateTime,
+  created_at: responseDateTime(),
+  updated_at: responseDateTime(),
 });
 
 const deliveryItemEntity = z.object({
@@ -320,8 +318,8 @@ const deliveryItemEntity = z.object({
   unit: z.string().nullable(),
   unit_value: decimal.nullable(),
   deliveryId: z.string(),
-  created_at: isoDateTime,
-  updated_at: isoDateTime,
+  created_at: responseDateTime(),
+  updated_at: responseDateTime(),
 });
 
 const person = z.object({ id: z.string(), name: z.string() });
@@ -341,12 +339,12 @@ const myDeliveryEntity = deliveryRowEntity.extend({
           "FAILED",
           "CANCELLED",
         ]),
-        arrived_at: isoDateTime
+        arrived_at: responseDateTime()
           .nullable()
           .describe(
             "Quando o motorista registrou a chegada nesta parada; nulo antes disso.",
           ),
-        on_the_way_at: isoDateTime
+        on_the_way_at: responseDateTime()
           .nullable()
           .describe(
             "Última vez que o motorista avisou estar a caminho desta parada (decisão 6.4); nulo se nunca avisou.",
@@ -366,17 +364,17 @@ const myDeliveryEntity = deliveryRowEntity.extend({
             .string()
             .nullable()
             .describe("Destino da rota, texto livre, quando foi informado."),
-          planned_departure_at: isoDateTime
+          planned_departure_at: responseDateTime()
             .nullable()
             .describe(
               "Saída prevista (instante em UTC); nula quando não foi planejada.",
             ),
-          planned_arrival_at: isoDateTime
+          planned_arrival_at: responseDateTime()
             .nullable()
             .describe(
               "Retorno previsto (instante em UTC); nulo quando não foi planejado.",
             ),
-          scheduled_date: isoDateTime
+          scheduled_date: responseDateTime()
             .nullable()
             .optional()
             .describe(
@@ -405,8 +403,8 @@ const myDeliveryEntity = deliveryRowEntity.extend({
         .string()
         .nullable()
         .describe("O motivo da torre, sempre presente numa negativa."),
-      decidedAt: isoDateTime.nullable(),
-      requestedAt: isoDateTime,
+      decidedAt: responseDateTime().nullable(),
+      requestedAt: responseDateTime(),
     })
     .nullable()
     .describe(
@@ -462,7 +460,7 @@ const deliveryEventEntity = z.object({
     .describe(
       "Identificador do celular que registrou o comprovante (decisão 14.8); só DRIVER_APP.",
     ),
-  photo_taken_at: isoDateTime
+  photo_taken_at: responseDateTime()
     .nullable()
     .describe(
       "Quando a foto do canhoto foi tirada, pelo relógio corrigido do celular; nulo = occurred_at.",
@@ -485,7 +483,7 @@ const deliveryEventEntity = z.object({
     .describe(
       "UNAVAILABLE: a consulta falhou ou não há provedor; o PDF imprime o endereço da entrega, rotulado.",
     ),
-  gps_geocoded_at: isoDateTime.nullable(),
+  gps_geocoded_at: responseDateTime().nullable(),
   note: z.string().nullable(),
   status_from: deliveryStatusEnum.nullable(),
   status_to: deliveryStatusEnum.nullable(),
@@ -505,8 +503,8 @@ const deliveryEventEntity = z.object({
     .describe(
       "A chave de API que agiu, quando o ator é INTEGRATION (cancelamento pela API).",
     ),
-  occurred_at: isoDateTime.nullable(),
-  created_at: isoDateTime,
+  occurred_at: responseDateTime().nullable(),
+  created_at: responseDateTime(),
   reportedBy: person.nullable(),
   reason: person
     .nullable()
@@ -530,15 +528,15 @@ const deliveryOccurrenceEntity = z.object({
   businessId: z.string(),
   occurrenceTypeId: z.string(),
   reportedById: z.string(),
-  occurred_at: isoDateTime.nullable(),
-  created_at: isoDateTime,
-  updated_at: isoDateTime,
+  occurred_at: responseDateTime().nullable(),
+  created_at: responseDateTime(),
+  updated_at: responseDateTime(),
   // Occurrence form (decision 6.2) and tower authorization (6.3).
   form_answers: occurrenceFormAnswersDoc,
   form_version: z.number().nullable(),
   authorization_status: authorizationStatusEnum,
   authorizedById: z.string().nullable(),
-  authorized_at: isoDateTime.nullable(),
+  authorized_at: responseDateTime().nullable(),
   authorization_note: z.string().nullable(),
   // Decision 14.3: a DELIVERED occurrence carries the proof's facts too; the
   // signed URLs of the receipt and the signature are on its PROOF event.
@@ -554,7 +552,7 @@ const deliveryOccurrenceEntity = z.object({
     .nullable()
     .describe("Chave da assinatura na tela, quando houve."),
   received_by: z.string().nullable().describe("Quem recebeu (só em entrega)."),
-  escalated_at: isoDateTime.nullable(),
+  escalated_at: responseDateTime().nullable(),
   occurrenceType: z.object({
     id: z.string(),
     name: z.string(),
@@ -585,7 +583,7 @@ const timelineEntryEntity = z.object({
     "ROUTE_ADDED",
     "ROUTE_REMOVED",
   ]),
-  at: isoDateTime,
+  at: responseDateTime(),
   title: z.string(),
   detail: z.string().nullable(),
   author: z.object({
@@ -649,7 +647,7 @@ const deliveryDetailEntity = deliveryRowEntity.extend({
         id: z.string(),
         kind: z.enum(["TEXT", "IMAGE", "AUDIO"]),
         body: z.string().nullable(),
-        created_at: isoDateTime,
+        created_at: responseDateTime(),
         sender: person,
       }),
     )
@@ -727,12 +725,12 @@ const pendingAuthorizationFull = z.object({
       "As respostas já rotuladas e formatadas, na ordem do formulário.",
     ),
   reportedBy: person,
-  occurred_at: isoDateTime.nullable(),
-  created_at: isoDateTime,
-  escalated_at: isoDateTime
+  occurred_at: responseDateTime().nullable(),
+  created_at: responseDateTime(),
+  escalated_at: responseDateTime()
     .nullable()
     .describe("Quando o pedido sem resposta foi escalado aos administradores."),
-  escalates_at: isoDateTime.describe(
+  escalates_at: responseDateTime().describe(
     "Quando escala (10 min depois do pedido).",
   ),
   delivery: z.object({
@@ -919,7 +917,7 @@ const deliveryResponses = {
         ),
       message: z.string(),
       field_errors: z
-        .record(z.string())
+        .record(z.string(), z.string())
         .optional()
         .describe("Por `key` do campo, o primeiro problema encontrado."),
       issues: z.array(z.string()).optional(),
@@ -944,7 +942,7 @@ const deliveryResponses = {
           "OCCURRENCE_FORM_OUTDATED, DELIVERY_STATUS_CONFLICT ou SUBMISSION_ID_REUSED",
         ),
       message: z.string(),
-      field_errors: z.record(z.string()).optional(),
+      field_errors: z.record(z.string(), z.string()).optional(),
       form_fields: occurrenceFormFieldsDoc.optional(),
       form_version: z.number().optional(),
     })
@@ -957,7 +955,7 @@ const deliveryResponses = {
       id: z.string(),
       deliveryId: z.string(),
       authorization_status: z.enum(["APPROVED", "DENIED"]),
-      authorized_at: isoDateTime,
+      authorized_at: responseDateTime(),
       authorizedBy: person,
       authorization_note: z.string().nullable(),
       deliveryStatus: deliveryStatusEnum.describe(
@@ -982,7 +980,7 @@ const deliveryResponses = {
         .object({
           status: z.enum(["APPROVED", "DENIED", "SUPERSEDED"]),
           authorizedBy: person.nullable(),
-          authorized_at: isoDateTime.nullable(),
+          authorized_at: responseDateTime().nullable(),
           note: z.string().nullable(),
         })
         .optional()
@@ -1052,10 +1050,11 @@ const deliveryResponses = {
   // Same rule as myDeliveries: passed through at runtime, typed in the
   // document, held to the real payload by the E2E drift test.
   // `meta` is declared on the runtime schema too: the serializer drops a
-  // key it does not list.
+  // key it does not list. The pass-through is `.optional()`, as zod 3 read a
+  // bare `z.unknown()`: zod 4 refuses the absent key.
   deliveryDetail: documentedAs(
     z.object({
-      data: z.unknown(),
+      data: z.unknown().optional(),
       meta: z.object({ timeZone: z.string() }),
     }),
     z.object({
@@ -1087,13 +1086,16 @@ const deliveryResponses = {
     businessId: z.string(),
     occurrenceTypeId: z.string(),
     reportedById: z.string(),
-    occurred_at: z.union([z.string(), z.date()]).nullable(),
-    created_at: z.union([z.string(), z.date()]),
-    updated_at: z.union([z.string(), z.date()]),
+    occurred_at: responseDateTime().nullable(),
+    created_at: responseDateTime(),
+    updated_at: responseDateTime(),
     // The feed reads the whole row: the form answers (6.2) and the tower's
     // authorization (6.3) come along.
     form_answers: z
-      .record(z.union([z.string(), z.number(), z.boolean(), z.null()]))
+      .record(
+        z.string(),
+        z.union([z.string(), z.number(), z.boolean(), z.null()]),
+      )
       .nullable()
       .describe(
         "Respostas do formulário do tipo de ocorrência, por chave do campo.",
@@ -1107,9 +1109,9 @@ const deliveryResponses = {
       "SUPERSEDED",
     ]),
     authorizedById: z.string().nullable(),
-    authorized_at: z.union([z.string(), z.date()]).nullable(),
+    authorized_at: responseDateTime().nullable(),
     authorization_note: z.string().nullable(),
-    escalated_at: z.union([z.string(), z.date()]).nullable(),
+    escalated_at: responseDateTime().nullable(),
     occurrenceType: z.object({
       id: z.string(),
       name: z.string(),

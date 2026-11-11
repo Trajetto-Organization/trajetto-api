@@ -55,7 +55,11 @@ const createPartSchema = z.object({
       if (val === "" || val === undefined) return null;
       return val;
     },
-    z.union([z.string().uuid("ID do fornecedor é inválido."), z.null()]),
+    // The default only tells the document what the preprocess already does
+    // (absent is null): zod 4 reads the required list from this schema.
+    z
+      .union([z.string().uuid("ID do fornecedor é inválido."), z.null()])
+      .default(null),
   ),
 });
 

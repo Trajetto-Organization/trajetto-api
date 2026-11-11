@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { responseDateTime } from "./response-date";
 
 import {
   listDeliveryMessageTemplateSchema,
@@ -13,8 +14,6 @@ import {
 } from "@/schemas/proof-document-schema";
 
 import { codedRefusal, errorResponse } from "./common-responses";
-
-const isoDateTime = z.union([z.string(), z.date()]);
 
 const signatureStatus = z
   .enum(["SIGNED", "UNSIGNED"])
@@ -71,7 +70,7 @@ const proofDocumentResponses = {
           "Sobe a cada regeração. O token continua o mesmo, então um QR impresso antes ainda chega à página — a versão é o que diz que aquela cópia não é a atual.",
         ),
 
-      generated_at: isoDateTime,
+      generated_at: responseDateTime(),
       size_bytes: z.number(),
 
       layout_version: z
@@ -93,8 +92,8 @@ const proofDocumentResponses = {
           .string()
           .nullable()
           .describe("CNPJ do certificado (CN depois de ':'), 14 dígitos."),
-        cert_not_after: isoDateTime.nullable(),
-        signed_at: isoDateTime.nullable(),
+        cert_not_after: responseDateTime().nullable(),
+        signed_at: responseDateTime().nullable(),
         icp_brasil: icpBrasilChain,
         unsigned_reason: z
           .enum([
@@ -140,10 +139,10 @@ const proofDocumentResponses = {
         uf: z.string(),
         invoiceNumber: z.string().nullable(),
         carrierName: z.string(),
-        deliveredAt: isoDateTime.nullable(),
+        deliveredAt: responseDateTime().nullable(),
         receivedBy: z.string().nullable(),
         sha256: z.string(),
-        generatedAt: isoDateTime,
+        generatedAt: responseDateTime(),
         version: z.number(),
         timeZone: z
           .string()
@@ -155,8 +154,8 @@ const proofDocumentResponses = {
             status: signatureStatus,
             profile: signatureProfile,
             signerName: z.string().nullable(),
-            certNotAfter: isoDateTime.nullable(),
-            signedAt: isoDateTime.nullable(),
+            certNotAfter: responseDateTime().nullable(),
+            signedAt: responseDateTime().nullable(),
             icpBrasil: icpBrasilChain,
           })
           .describe(
@@ -181,8 +180,8 @@ const proofDocumentResponses = {
       invoiceNumber: z.string().nullable(),
       code: z.string().nullable(),
 
-      scheduledDate: isoDateTime.nullable(),
-      deliveredAt: isoDateTime.nullable(),
+      scheduledDate: responseDateTime().nullable(),
+      deliveredAt: responseDateTime().nullable(),
       receivedBy: z.string().nullable(),
 
       carrierName: z.string(),
@@ -194,7 +193,7 @@ const proofDocumentResponses = {
 
       events: z.array(
         z.object({
-          at: isoDateTime,
+          at: responseDateTime(),
           title: z.string(),
           detail: z.string().nullable(),
         }),
@@ -214,7 +213,7 @@ const proofDocumentResponses = {
             code: z.string().nullable(),
             status: z.string(),
             statusLabel: z.string(),
-            deliveredAt: isoDateTime.nullable(),
+            deliveredAt: responseDateTime().nullable(),
           }),
         )
         .describe(

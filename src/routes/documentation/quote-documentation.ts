@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { responseDateTime } from "./response-date";
 
 import { searchMetaDoc } from "@/shared/pagination/list-meta";
 
@@ -56,13 +57,12 @@ const quoteResponses = {
     status: z
       .enum(["PENDING", "CONTACTED", "CLOSED", "CONVERTED"])
       .describe("Estágio do orçamento."),
-    contacted_at: z
-      .union([z.string(), z.date()])
+    contacted_at: responseDateTime()
       .nullable()
       .describe("Quando passou a Contatado ou Fechado."),
     notes: z.string().nullable().describe("Anotações internas."),
-    created_at: z.union([z.string(), z.date()]).describe("Recebido em."),
-    updated_at: z.union([z.string(), z.date()]).describe("Última alteração."),
+    created_at: responseDateTime().describe("Recebido em."),
+    updated_at: responseDateTime().describe("Última alteração."),
   }),
   /** The list's `meta.searchMeta`, as summarizeQuoteList builds it. */
   quoteListSearchMeta: searchMetaDoc(

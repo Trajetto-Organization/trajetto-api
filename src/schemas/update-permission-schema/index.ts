@@ -7,13 +7,12 @@ import {
   hasConsecutiveSpaces,
   hasSpaceAtEdges,
 } from "@/shared/utils/zod-schema-helpers";
+import { fieldError } from "@/shared/validation/field-error";
 
 const permissionKeyEnum = z.nativeEnum(EnumPermissionKey, {
-  errorMap: (issue, ctx) => {
+  error: () => {
     const validValues = Object.values(EnumPermissionKey).join(", ");
-    return {
-      message: `A permissão informada não é válida. Valores válidos: ${validValues}`,
-    };
+    return `A permissão informada não é válida. Valores válidos: ${validValues}`;
   },
 });
 
@@ -78,12 +77,15 @@ const updatePermissionSchema = z
         .nullable(),
     ),
     canRead: z.boolean().optional().nullable(),
-    canWrite: z.boolean().default(false).optional().nullable(),
+    // No default: zod 3 never applied the one this had (the optional around
+    // it answered first), and zod 4 would, turning an edit that leaves
+    // canWrite out into a revoke.
+    canWrite: z.boolean().optional().nullable(),
     // The permission's company is the one it was created in; the use case
     // reads it from the row (decision 16.100).
     ...tenantLockedShape,
     profileAccessId: z
-      .string({ required_error: "ID do perfil de acesso é obrigatório!" })
+      .string(fieldError({ required: "ID do perfil de acesso é obrigatório!" }))
       .uuid("ID do perfil de acesso é inválido."),
     permissionKey: permissionKeyEnum.optional(),
   })

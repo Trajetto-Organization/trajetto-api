@@ -5,16 +5,18 @@ import { envSchema } from "./index";
 type RawEnv = Record<string, string | undefined>;
 
 /**
- * The object schema under the refinements and the transform. Unwrapped in a
- * loop so adding another `.superRefine()`/`.transform()` to the schema does not
- * silently turn every field into "unknown" here.
+ * The object schema under the transform. zod 4 keeps a `.superRefine()` on
+ * the object itself and puts each `.transform()` in a pipe after it, so the
+ * object is the innermost pipe's input. Unwrapped in a loop so adding another
+ * transform to the schema does not silently turn every field into "unknown"
+ * here.
  */
-function envShape(): Record<string, z.ZodTypeAny> {
-  let schema: z.ZodTypeAny = envSchema;
+function envShape(): Record<string, z.ZodType> {
+  let schema: z.core.$ZodType = envSchema;
 
-  while (schema instanceof z.ZodEffects) schema = schema.innerType();
+  while (schema instanceof z.ZodPipe) schema = schema.in;
 
-  return (schema as z.AnyZodObject).shape;
+  return (schema as z.ZodObject<Record<string, z.ZodType>>).shape;
 }
 
 /**

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { responseDateTime } from "./response-date";
 
 import {
   importSpreadsheetSchema,
@@ -20,8 +21,6 @@ import { codedRefusal } from "./common-responses";
  * handler passes, so a plain `z.string()` here would reject the endpoint's own
  * real payload with a 500.
  */
-const isoDateTime = z.union([z.string(), z.date()]);
-
 /** What happened to one line of the file, as the operator reads it. */
 const importRowResult = z.object({
   line: z
@@ -111,7 +110,7 @@ const importEntity = z.object({
 
   report: importReport,
 
-  reversed_at: isoDateTime.nullable(),
+  reversed_at: responseDateTime().nullable(),
 
   // Only on the detail (GET /import/get-import): the listing leaves it out.
   reversal: reversalView.nullable().optional(),
@@ -119,7 +118,7 @@ const importEntity = z.object({
   businessId: z.string(),
   performedById: z.string(),
 
-  created_at: isoDateTime,
+  created_at: responseDateTime(),
 });
 
 const importSchemas = {

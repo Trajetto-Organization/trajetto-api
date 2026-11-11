@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { responseDateTime } from "./response-date";
 
 import { createPartSchema } from "@/schemas/create-part-schema";
 import { listPartSchema } from "@/schemas/list-part-schema";
@@ -63,8 +64,8 @@ const partResponses = {
         unit_price: z.union([z.string(), z.number()]),
         businessId: z.string().optional(),
         supplierId: z.string().nullable().optional(),
-        created_at: z.union([z.string(), z.date()]),
-        updated_at: z.union([z.string(), z.date()]),
+        created_at: responseDateTime(),
+        updated_at: responseDateTime(),
         supplier: z
           .object({
             name: z.string(),

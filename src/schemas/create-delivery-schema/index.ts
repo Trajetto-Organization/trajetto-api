@@ -86,6 +86,14 @@ const optionalDigits = (label: string, pattern: RegExp, message: string) =>
 /** The smallest quantity numeric(10, 3), rounding half up, keeps above 0. */
 const MIN_STORED_QUANTITY = 0.0005;
 
+/**
+ * How many items a delivery takes, and the sentence past it: the panel's list
+ * and the integration's strict one (create-integration-delivery-schema) refuse
+ * alike.
+ */
+const MAX_DELIVERY_ITEMS = 200;
+const TOO_MANY_DELIVERY_ITEMS = `Uma entrega não pode ter mais de ${MAX_DELIVERY_ITEMS} itens.`;
+
 const deliveryItemSchema = z.object({
   description: requiredTextField("A descrição do item", 2, 200),
   quantity: z.coerce
@@ -118,10 +126,8 @@ const createDeliverySchema = z.object({
   // (the column default). On the edit, absent keeps the current type.
   kind: z
     .enum(WRITABLE_DELIVERY_KINDS, {
-      errorMap: () => ({
-        message:
-          "Tipo inválido. Use DELIVERY (entrega) ou SERVICE_ORDER (ordem de serviço).",
-      }),
+      error:
+        "Tipo inválido. Use DELIVERY (entrega) ou SERVICE_ORDER (ordem de serviço).",
     })
     .optional()
     .describe(
@@ -203,7 +209,7 @@ const createDeliverySchema = z.object({
   // here only exists for the scalar fields the edit form can blank out.
   items: z
     .array(deliveryItemSchema)
-    .max(200, "Uma entrega não pode ter mais de 200 itens.")
+    .max(MAX_DELIVERY_ITEMS, TOO_MANY_DELIVERY_ITEMS)
     .optional(),
 });
 
@@ -217,4 +223,10 @@ const createDeliveryBodySchema = createDeliverySchema.superRefine(
   refineAddressPointPair,
 );
 
-export { createDeliveryBodySchema, createDeliverySchema, deliveryItemSchema };
+export {
+  createDeliveryBodySchema,
+  createDeliverySchema,
+  deliveryItemSchema,
+  MAX_DELIVERY_ITEMS,
+  TOO_MANY_DELIVERY_ITEMS,
+};

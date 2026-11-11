@@ -1,7 +1,10 @@
 import "reflect-metadata";
 import "./shared";
 // Installs zod's pt-BR default sentences before any schema is parsed.
-import { validationErrorMessage } from "./shared/validation/zod-pt-br";
+import {
+  validationErrorMessage,
+  validationIssueSentences,
+} from "./shared/validation/zod-pt-br";
 
 import fastify, {
   type FastifyBaseLogger,
@@ -45,7 +48,6 @@ import {
 
 import {
   hasZodFastifySchemaValidationErrors,
-  serializerCompiler,
   validatorCompiler,
   ZodTypeProvider,
 } from "fastify-type-provider-zod";
@@ -64,6 +66,7 @@ import {
   completeErrorBody,
   errorAwareSerializerCompiler,
 } from "./shared/errors/error-body";
+import { parsingSerializerCompiler } from "./shared/http/response-serializer";
 import {
   DATABASE_RETRY_AFTER_SECONDS,
   isDatabaseUnavailable,
@@ -132,8 +135,11 @@ app.register(helmet, {
 });
 
 app.setValidatorCompiler(validatorCompiler);
-// A 4xx body is sent as built and always carries a code (error-body.ts).
-app.setSerializerCompiler(errorAwareSerializerCompiler(serializerCompiler));
+// A 4xx body is sent as built and always carries a code (error-body.ts); a
+// success body is parsed by its schema, not encoded (response-serializer.ts).
+app.setSerializerCompiler(
+  errorAwareSerializerCompiler(parsingSerializerCompiler),
+);
 app.addHook("preSerialization", completeErrorBody);
 
 // Enable gzip/deflate/brotli compression for all responses
@@ -775,10 +781,20 @@ app.setErrorHandler((thrown, request, reply) => {
   }
 
   if (error instanceof ZodError || hasZodFastifySchemaValidationErrors(error)) {
-    const issues =
+    const issues = validationIssueSentences(
       error instanceof ZodError
-        ? error.errors.map(({ message }) => message)
-        : error.validation.map(({ message }) => message);
+        ? error.issues.map(({ code, path, message }) => ({
+            code,
+            path: path.map(String).join("/"),
+            message,
+          }))
+        : error.validation.map(({ keyword, instancePath, message }) => ({
+            code: keyword,
+            path: instancePath.replace(/^\//, ""),
+            // Typed optional by Fastify; zod always writes one.
+            message: message ?? "",
+          })),
+    );
 
     return sendError(reply, 400, {
       code: "VALIDATION_ERROR",

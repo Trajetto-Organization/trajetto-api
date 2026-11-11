@@ -12,6 +12,7 @@ import {
   paymentDateField,
   pointsField,
 } from "./fine-fields";
+import { fieldError } from "@/shared/validation/field-error";
 
 const createFineSchema = z
   .object({
@@ -24,16 +25,18 @@ const createFineSchema = z
     location: locationField,
     observation: observationField,
     branchId: z
-      .string({ required_error: "ID da filial é obrigatório!" })
+      .string(fieldError({ required: "ID da filial é obrigatório!" }))
       .uuid("ID da filial é inválido."),
     driverId: z
-      .string({ required_error: "ID do motorista é obrigatório!" })
+      .string(fieldError({ required: "ID do motorista é obrigatório!" }))
       .uuid("ID do motorista é inválido."),
     vehicleId: z
-      .string({ required_error: "ID do veículo é obrigatório!" })
+      .string(fieldError({ required: "ID do veículo é obrigatório!" }))
       .uuid("ID do veículo é inválido."),
     trafficViolationCodeId: z
-      .string({ required_error: "ID do código de infração é obrigatório!" })
+      .string(
+        fieldError({ required: "ID do código de infração é obrigatório!" }),
+      )
       .uuid("ID do código de infração é inválido."),
 
     // 📍 GEOLOCATION: Final location (edited or original)
@@ -50,9 +53,7 @@ const createFineSchema = z
 
     // 🆕 RECORD ORIGIN: Track where the record was created
     created_from: z.nativeEnum(RecordOrigin, {
-      errorMap: () => ({
-        message: "Origem inválida. Deve ser MOBILE_APP ou WEB_DASHBOARD.",
-      }),
+      error: "Origem inválida. Deve ser MOBILE_APP ou WEB_DASHBOARD.",
     }),
   })
   // 🆕 VALIDATION: Distance check for GPS_MANUAL (manual adjustment)

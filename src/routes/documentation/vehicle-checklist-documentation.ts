@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { responseDate } from "./response-date";
 
 import {
   exportVehicleChecklistSchema,
@@ -97,7 +98,7 @@ const vehicleChecklistResponses = {
         id: z.string().describe("Vehicle checklist record ID"),
         current_mileage: z.number().describe("Current vehicle mileage"),
         checklist_date: z
-          .union([z.date(), z.string()])
+          .union([responseDate(), z.string()])
           .describe("Date of checklist inspection (RAW: Date or ISO string)"),
         tires_condition: z
           .enum(["good", "fair", "poor"])
@@ -230,10 +231,10 @@ const vehicleChecklistResponses = {
           })
           .describe("Driver nested object"),
         created_at: z
-          .union([z.date(), z.string()])
+          .union([responseDate(), z.string()])
           .describe("Creation date (RAW: Date or ISO string)"),
         updated_at: z
-          .union([z.date(), z.string()])
+          .union([responseDate(), z.string()])
           .describe("Last update date (RAW: Date or ISO string)"),
       }),
     ),

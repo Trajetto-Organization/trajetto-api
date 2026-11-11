@@ -150,7 +150,7 @@ const answerSchemas = {
     confianca: unitScore,
     observacao: freeText,
   }),
-} satisfies Record<AnswerKind, z.ZodTypeAny>;
+} satisfies Record<AnswerKind, z.ZodType>;
 
 /**
  * Keys a READER declares about itself, never asked of a model: whether it

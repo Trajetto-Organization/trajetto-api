@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { responseDateTime } from "./response-date";
 
 import { createFuelTypeSchema } from "@/schemas/create-fuel-type-schema";
 
@@ -51,8 +52,8 @@ const fuelTypeResponses = {
         id: z.string(),
         description: z.string(),
         businessId: z.string(),
-        created_at: z.union([z.string(), z.date()]),
-        updated_at: z.union([z.string(), z.date()]),
+        created_at: responseDateTime(),
+        updated_at: responseDateTime(),
         business: z
           .object({
             corporate_reason: z.string(),

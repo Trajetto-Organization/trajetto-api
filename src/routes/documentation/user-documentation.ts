@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { responseDateTime } from "./response-date";
 
 import { codedRefusal, errorResponse } from "./common-responses";
 
@@ -61,8 +62,6 @@ const codedError = z.object({ code: z.string().optional() });
 const refusal = (description: string) =>
   errorResponse.extend({ code: z.string() }).describe(description);
 
-const isoDateTime = z.union([z.string(), z.date()]);
-
 /**
  * A user as the listings stream it: the whole row except the password hash.
  *
@@ -81,7 +80,7 @@ const userRow = z.object({
     .describe(
       "Nulo só no login de um motorista sem e-mail (entra por QR Code ou CPF e senha).",
     ),
-  email_verified: isoDateTime
+  email_verified: responseDateTime()
     .nullable()
     .describe("Quando o e-mail foi confirmado."),
   avatar: z.string().nullable(),
@@ -102,8 +101,8 @@ const userRow = z.object({
     .number()
     .int()
     .describe("Senhas erradas na janela atual."),
-  failed_login_at: isoDateTime.nullable(),
-  login_locked_until: isoDateTime
+  failed_login_at: responseDateTime().nullable(),
+  login_locked_until: responseDateTime()
     .nullable()
     .describe(
       "Até quando o login está bloqueado por senhas erradas; null quando livre.",
@@ -120,9 +119,9 @@ const userRow = z.object({
   ops_alert_sound_enabled: z
     .boolean()
     .describe("Se o balão de alertas da operação toca som para este usuário."),
-  last_seen_at: isoDateTime.nullable(),
-  created_at: isoDateTime,
-  updated_at: isoDateTime,
+  last_seen_at: responseDateTime().nullable(),
+  created_at: responseDateTime(),
+  updated_at: responseDateTime(),
 });
 
 /** GET /user/list-user adds the names the table shows next to each user. */

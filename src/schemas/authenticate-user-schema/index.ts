@@ -12,17 +12,37 @@ const emailField = z
   .max(100, "O e-mail deve ter no máximo 100 caracteres.");
 
 /**
- * The password rule of every login and of every password a person sets for
- * another (the driver's initial password, D2): one definition.
+ * The rule of every password a person sets for another (the driver's
+ * initial password, D2): one definition.
  */
 const passwordField = z
   .string()
   .min(7, "A senha deve ter pelo menos 7 caracteres.")
   .max(100, "A senha deve ter no máximo 100 caracteres.");
 
+/**
+ * A password already set, as a login proves it (and a change of password,
+ * the current one): every password `passwordField` ever took.
+ *
+ * zod 4 counts a text's characters (code points); zod 3 counted UTF-16
+ * units, where an emoji is 2. "abc😀😀" was 7 and is 5 now, so the floor
+ * stays in units: a password set before zod 4 still signs in instead of
+ * being refused as short before the hash is ever compared. The ceiling is
+ * zod 4's, which takes every password either version set. The document
+ * keeps the floor it always published.
+ */
+const storedPasswordField = z
+  .string()
+  .max(100, "A senha deve ter no máximo 100 caracteres.")
+  .refine(
+    (value) => value.length >= 7,
+    "A senha deve ter pelo menos 7 caracteres.",
+  )
+  .meta({ minLength: 7 });
+
 const authenticateUserSchema = z.object({
   email: emailField,
-  password: passwordField,
+  password: storedPasswordField,
 });
 
 /**
@@ -40,7 +60,7 @@ const sessionLoginSchema = z
   .object({
     email: emailField.optional(),
     cpf: driverCpfField.optional(),
-    password: passwordField,
+    password: storedPasswordField,
     businessId: z
       .string()
       .uuid("ID da empresa é inválido.")
@@ -87,4 +107,9 @@ const sessionLoginSchema = z
     }
   });
 
-export { authenticateUserSchema, passwordField, sessionLoginSchema };
+export {
+  authenticateUserSchema,
+  passwordField,
+  sessionLoginSchema,
+  storedPasswordField,
+};
