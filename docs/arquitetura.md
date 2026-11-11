@@ -788,15 +788,26 @@ senha, sessões e segundo fator (detalhes depois da tabela).
   logo depois do join) que estava em andamento no commit julga o socket pela
   versão com que começou, enquanto a linha lida disser essa versão, e não
   derruba a sessão mantida. Um socket desta sessão que estava no meio do
-  handshake no commit ainda não está em `session:<id>` e perde a adoção:
-  entra com a versão antiga, e a releitura logo depois do join o encerra com
-  `user_updated`. Na web, isso desloga o navegador (`user_updated` vira
-  `session_expired`): a releitura leva milissegundos e costuma chegar antes do
-  `renewSocketSession` da aba que trocou a senha, que antes trocava esse
-  socket muito antes da varredura. No app, a carência de
-  `securityActionFromOwnPasswordChange` reconecta com o token novo. A regra da
-  versão ficou como está (decisão do dono); a linha `sockets ended right after
-their handshake` mostra se isso acontece. Os aparelhos de push das outras
+  handshake no commit ainda não está em `session:<id>` e perde a adoção: entra
+  com a versão antiga, e a releitura logo depois do join o encerra com
+  `user_updated` em milissegundos, em geral antes de a resposta chegar ao
+  cliente. Os dois clientes tratam esse aviso com uma carência, e a API não muda
+  por isso. Na web, a aba que trocou a senha guarda o `user_updated` do envio do
+  formulário até a resposta (`trajetto-ui/src/lib/own-password-change.ts`, com
+  teto de 30 s): se a resposta mantém a sessão, o socket reconecta com um ticket
+  da sessão nova; com qualquer outra resposta, a aba desloga como antes. No app,
+  a carência de `securityActionFromOwnPasswordChange`
+  (`trajetto-mobile/utils/socket-auth-rules.ts`) reconecta com o token novo. A
+  carência só vale para `user_updated`; os outros motivos (`logout`,
+  `access_revoked`, `password_changed`, `password_reset`, `role_changed`,
+  empresa, filial ou motorista desativados) seguem na hora o caminho de cada
+  cliente, com ou sem troca em andamento, e a reconexão passa de novo pelo
+  handshake, que recusa uma sessão encerrada de verdade. Fica de fora, como já
+  era antes da releitura, outra aba do mesmo navegador no meio do handshake no
+  commit: ela cai com `user_updated`, e o `force_logout` dela apaga os cookies
+  que as abas dividem. A regra da versão ficou como está (decisão do dono); a
+  linha `sockets ended right after their handshake` mostra se isso acontece. Os
+  aparelhos de push das outras
   sessões (e os sem sessão, de antes da coluna) saem; o bloqueio por senhas
   erradas e o `must_change_password` são limpos. Cliente que ignora os tokens sai na
   próxima requisição, como antes; com e-mail, o aviso "senha atualizada"
