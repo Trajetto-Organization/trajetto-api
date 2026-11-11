@@ -564,4 +564,8 @@ uma garantia:
   (`isTileTemplate` de `trajetto-mobile/features/live-map/map-config-rules.ts`)
   e, com `../trajetto-mobile` presente, roda a mesma tabela contra a função
   do app: uma regra apertada só no app aparece aqui, e não como mapa sem
-  fundo em campo.
+  fundo em campo. A função vem de uma cópia do arquivo fora do app: o
+  checkout do app no CI não tem `node_modules`, e o `tsconfig.json` dele
+  estende o `expo/tsconfig.base`, que está neles. Por isso o arquivo do app
+  não pode importar nada em tempo de execução (só tipos), e o mesmo teste
+  confere isso.

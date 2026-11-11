@@ -1,7 +1,22 @@
-import { existsSync } from "node:fs";
-import { resolve } from "node:path";
+import {
+  copyFileSync,
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterAll,
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 
 import { envSchema } from "@/schemas/env-schema";
 import { definedEnv } from "@/schemas/env-schema/defined-env";
@@ -392,8 +407,33 @@ const APP_MAP_CONFIG_RULES = resolve(
 describe.skipIf(!existsSync(APP_MAP_CONFIG_RULES))(
   "the parity table against trajetto-mobile",
   () => {
+    // CI checks the app out with no node_modules, and transforming the file
+    // where it lies reads the app's tsconfig.json, whose `extends`
+    // (expo/tsconfig.base) is in them: the import failed on every push to
+    // staging, a red that was the checkout's, not the code's. A copy outside
+    // any project is transformed on its own; the one import the file has is
+    // a type, erased with it, and a runtime import added there fails here,
+    // loudly.
+    let dir: string | undefined;
+
+    afterAll(() => {
+      if (dir) rmSync(dir, { recursive: true, force: true });
+    });
+
+    it("imports nothing at runtime, so the copy runs as the app's own file", () => {
+      expect(readFileSync(APP_MAP_CONFIG_RULES, "utf8")).not.toMatch(
+        /^import (?!type )/m,
+      );
+    });
+
     it("matches the app's isTileTemplate row by row", async () => {
-      const app = (await import(/* @vite-ignore */ APP_MAP_CONFIG_RULES)) as {
+      dir = mkdtempSync(join(tmpdir(), "trajetto-mobile-map-rules-"));
+
+      const copy = join(dir, "map-config-rules.ts");
+
+      copyFileSync(APP_MAP_CONFIG_RULES, copy);
+
+      const app = (await import(/* @vite-ignore */ copy)) as {
         isTileTemplate: (
           value: unknown,
           rules: { allowHttp: boolean },
