@@ -50,7 +50,7 @@
     "@aws-sdk/client-s3": "3.1161.0",
     "@aws-sdk/s3-request-presigner": "3.1161.0",
     "@fastify/compress": "8.1.0",
-    "@fastify/cors": "10.0.2",
+    "@fastify/cors": "11.4.1",
     "@fastify/helmet": "13.2.0",
     "@fastify/rate-limit": "10.2.2",
     "@fastify/static": "10.1.8",
