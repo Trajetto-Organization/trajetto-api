@@ -101,8 +101,10 @@ interface StartDriverPauseResult {
  *
  * Decision 14.4: the pause is recorded under a PAUSE occurrence type (the
  * chosen one, or the default of `kind`'s nature for the installed app), and
- * only inside a journey — a route of the driver released or in progress that
- * day at the tap — or 409 PAUSE_REQUIRES_ROUTE with nothing written.
+ * only inside a journey — since 12/11/2026, a route of the driver's already
+ * started and not finished at the tap — or 409 PAUSE_REQUIRES_ROUTE with
+ * nothing written. For every caller, with no contract gate: the owner asked
+ * the server to refuse a pause before the route starts.
  *
  * Owner, 05/11/2026: a new start tapped less than PAUSE_COOLDOWN_MINUTES
  * after the driver's previous pause ended is refused with 409
@@ -191,7 +193,7 @@ class StartDriverPauseUseCase {
 
     // The journey at the moment of the tap, not at arrival: a pause replayed
     // hours later belongs to the route it was taken in, and one tapped with
-    // no route released or running is refused.
+    // no route started (a route only released included) is refused.
     const routeId = await journeyRouteOrRefuse(
       this.pauses,
       businessId,

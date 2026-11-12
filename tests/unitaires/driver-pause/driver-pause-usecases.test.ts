@@ -646,7 +646,39 @@ describe("pauses as PAUSE occurrence types inside a journey (decision 14.4)", ()
     return type;
   };
 
-  it("refuses a start with no route released or running, writing nothing", async () => {
+  // Decision 14.4, revised 12/11/2026: only a route already started counts.
+  const releasedToday = (
+    overrides: Partial<(typeof repo.routes)[number]> = {},
+  ) => {
+    const route: (typeof repo.routes)[number] = {
+      id: "released-today",
+      businessId: COMPANY,
+      driverId: CAIO,
+      status: "RELEASED",
+      released_at: minutesBefore(120),
+      started_at: null,
+      completed_at: null,
+      updated_at: minutesBefore(120),
+      scheduled_date: "2026-09-29",
+      ...overrides,
+    };
+
+    repo.routes.push(route);
+
+    return route;
+  };
+
+  const startCaio = (n: number, startedAt: Date) =>
+    start.execute({
+      businessId: COMPANY,
+      driverId: CAIO,
+      kind: "REST",
+      startSubmissionId: key(n),
+      startedAt,
+      now: NOW,
+    });
+
+  it("refuses a start with no route started, writing nothing", async () => {
     expect(
       await codeOf(
         start.execute({
@@ -662,56 +694,110 @@ describe("pauses as PAUSE occurrence types inside a journey (decision 14.4)", ()
     expect(repo.pauses).toHaveLength(0);
   });
 
-  it("starts on a route released today but not yet started, and pins it", async () => {
-    repo.routes.push({
-      id: "released-today",
-      businessId: COMPANY,
-      driverId: CAIO,
-      status: "RELEASED",
-      released_at: minutesBefore(120),
-      started_at: null,
-      completed_at: null,
-      updated_at: minutesBefore(120),
-      scheduled_date: "2026-09-29",
+  it("refuses a route released today but not yet started, writing nothing (the owner's case)", async () => {
+    releasedToday();
+
+    const refused = await startCaio(1, minutesBefore(5)).catch(
+      (error: unknown) => error,
+    );
+
+    expect(refused).toBeInstanceOf(AppError);
+    expect(refused).toMatchObject({
+      statusCode: 409,
+      code: "PAUSE_REQUIRES_ROUTE",
+      message:
+        "Pausas só podem ser iniciadas com uma rota em andamento. Inicie a rota antes de pausar.",
+    });
+    expect(repo.pauses).toHaveLength(0);
+  });
+
+  it("starts once the route is started, and pins it", async () => {
+    releasedToday({
+      status: "IN_PROGRESS",
+      started_at: minutesBefore(10),
+      updated_at: minutesBefore(10),
     });
 
-    const { pause } = await start.execute({
-      businessId: COMPANY,
-      driverId: CAIO,
-      kind: "REST",
-      startSubmissionId: key(1),
-      startedAt: minutesBefore(5),
-      now: NOW,
+    const { pause, replayed } = await startCaio(1, minutesBefore(5));
+
+    expect(replayed).toBe(false);
+    expect(pause.routeId).toBe("released-today");
+  });
+
+  it("takes a tap up to 2 minutes before the route's start (clock slack), not more", async () => {
+    releasedToday({
+      status: "IN_PROGRESS",
+      started_at: minutesBefore(10),
+      updated_at: minutesBefore(10),
     });
+
+    expect(await codeOf(startCaio(1, minutesBefore(13)))).toBe(
+      "409 PAUSE_REQUIRES_ROUTE",
+    );
+
+    const { pause } = await startCaio(2, minutesBefore(11));
 
     expect(pause.routeId).toBe("released-today");
   });
 
   it("refuses a route released today for tomorrow", async () => {
-    repo.routes.push({
-      id: "tomorrow",
-      businessId: COMPANY,
-      driverId: CAIO,
-      status: "RELEASED",
-      released_at: minutesBefore(120),
-      started_at: null,
-      completed_at: null,
-      updated_at: minutesBefore(120),
-      scheduled_date: "2026-09-30",
-    });
+    releasedToday({ id: "tomorrow", scheduled_date: "2026-09-30" });
+
+    expect(await codeOf(startCaio(1, minutesBefore(5)))).toBe(
+      "409 PAUSE_REQUIRES_ROUTE",
+    );
+  });
+
+  it("refuses an end that would create the pause from a tap on a route only released", async () => {
+    releasedToday();
 
     expect(
       await codeOf(
-        start.execute({
+        end.execute({
           businessId: COMPANY,
           driverId: CAIO,
-          kind: "REST",
           startSubmissionId: key(1),
-          startedAt: minutesBefore(5),
+          endSubmissionId: key(101),
+          endedAt: minutesBefore(1),
+          start: { kind: "MEAL", startedAt: minutesBefore(40) },
           now: NOW,
         }),
       ),
     ).toBe("409 PAUSE_REQUIRES_ROUTE");
+    expect(repo.pauses).toHaveLength(0);
+  });
+
+  it("still closes, and still answers the resend of, a pause opened on a route only released before the rule changed", async () => {
+    const route = releasedToday();
+
+    // Recorded by the rule before this revision, which took a released route.
+    const opened = await repo.createPause({
+      kind: "MEAL",
+      started_at: minutesBefore(40),
+      start_submission_id: key(1),
+      driverId: CAIO,
+      businessId: COMPANY,
+      routeId: route.id,
+    });
+
+    if (opened.status !== "created") throw new Error("seed failed");
+
+    const again = await startCaio(1, minutesBefore(40));
+
+    expect(again).toMatchObject({ pause: opened.pause, replayed: true });
+
+    const closed = await end.execute({
+      businessId: COMPANY,
+      driverId: CAIO,
+      startSubmissionId: key(1),
+      endSubmissionId: key(101),
+      endedAt: minutesBefore(1),
+      now: NOW,
+    });
+
+    expect(closed.replayed).toBe(false);
+    expect(closed.pause.ended_at).toEqual(minutesBefore(1));
+    expect(closed.pause.routeId).toBe(route.id);
   });
 
   it("refuses an end that would create the pause outside a journey, but always closes one that exists", async () => {
@@ -853,5 +939,23 @@ describe("pauses as PAUSE occurrence types inside a journey (decision 14.4)", ()
     expect(ana.typeNames.get(ana.open!.occurrenceTypeId)).toBe("Refeição");
     expect(caio.pauseAllowed).toBe(false);
     expect(caio.journeyRouteId).toBeNull();
+
+    // A route only released does not open the pause either (12/11/2026);
+    // its departure does.
+    const route = releasedToday();
+
+    expect(
+      await current.execute({ businessId: COMPANY, driverId: CAIO, now: NOW }),
+    ).toMatchObject({ pauseAllowed: false, journeyRouteId: null });
+
+    Object.assign(route, {
+      status: "IN_PROGRESS",
+      started_at: minutesBefore(1),
+      updated_at: minutesBefore(1),
+    });
+
+    expect(
+      await current.execute({ businessId: COMPANY, driverId: CAIO, now: NOW }),
+    ).toMatchObject({ pauseAllowed: true, journeyRouteId: route.id });
   });
 });

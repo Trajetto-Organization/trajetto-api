@@ -3,11 +3,13 @@ import type { PrismaClient, RouteStatus } from "@prisma/client";
 import { businessDateKey, dateOnlyFromKey } from "@/shared/time/business-day";
 
 /**
- * A route that makes a journey for the driver (decision 14.4): pauses only
- * start while the driver has a route RELEASED or IN_PROGRESS that day. For
- * tests about something else that start pauses through the real routes.
- * Defaults to a route on the street for 40 days: older than any pause
- * report range (31 days plus 2), so it never shows up in a report test.
+ * A route that makes a journey for the driver (decision 14.4, revised
+ * 12/11/2026): pauses only start while the driver has a route STARTED
+ * (IN_PROGRESS, started_at) and not finished. For tests about something else
+ * that start pauses through the real routes. Defaults to a route on the
+ * street for 40 days: older than any pause report range (31 days plus 2), so
+ * it never shows up in a report test. `status: "RELEASED"` seeds a route
+ * handed over but not started, which is no journey.
  */
 async function seedJourneyRoute(
   prisma: PrismaClient,

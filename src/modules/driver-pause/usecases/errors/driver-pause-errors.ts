@@ -84,14 +84,17 @@ class PauseReportRangeError extends AppError {
 }
 
 /**
- * Decision 14.4: a pause only exists inside a journey — a route of the
- * driver RELEASED or IN_PROGRESS that day, judged at the tap. Nothing is
- * written. Ending a pause that exists is never refused for this.
+ * Decision 14.4, revised 12/11/2026: a pause only starts inside a journey —
+ * a route of the driver's already STARTED (IN_PROGRESS) and not finished,
+ * judged at the tap; a route only released is none. Nothing is written.
+ * Ending a pause that exists is never refused for this. The same 409 code
+ * as before: every app since contract 3 drops it from its queue as settled,
+ * where a new code would be a red card on the installed builds.
  */
 class PauseRequiresRouteError extends AppError {
   constructor() {
     super(
-      "Pausas só podem ser iniciadas durante uma rota liberada ou em andamento.",
+      "Pausas só podem ser iniciadas com uma rota em andamento. Inicie a rota antes de pausar.",
       409,
       "PAUSE_REQUIRES_ROUTE",
     );

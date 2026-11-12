@@ -1,0 +1,201 @@
+{
+  "$comment": "Shared cases of the pause journey (decision 14.4, revised 12/11/2026: a pause starts only with a route of the driver's STARTED and not finished). src/modules/driver-pause/rules/pause-journey-rules.ts in the API runs journeyRouteAt(routes, now) over each case; the driver's app (trajetto-mobile, features/pauses/pause-rules.ts pauseGate) runs its copy of this file with each route as a stop of the day and no departure checklist owed. Every case is judged NOW, as GET /driver-pause/current and the journey of GET /delivery/my-deliveries are: started_at is never after now, and a route that finished did so before now, so the route's status alone decides on the phone. route_id is the API's pick (the latest started, then the greater id); the app checks only pause_allowed. The edges of a tap judged in the past (finished after the tap, the 2-minute clock slack) stay in the API's own tests. Change a case only together with both copies.",
+  "now": "2026-11-12T15:00:00.000Z",
+  "cases": [
+    {
+      "name": "no route at all",
+      "routes": [],
+      "expected": { "pause_allowed": false, "route_id": null }
+    },
+    {
+      "name": "a route released for today, not started yet (the owner's case, 12/11/2026)",
+      "routes": [
+        {
+          "id": "r1",
+          "status": "RELEASED",
+          "started_at": null,
+          "completed_at": null,
+          "updated_at": "2026-11-12T11:00:00.000Z"
+        }
+      ],
+      "expected": { "pause_allowed": false, "route_id": null }
+    },
+    {
+      "name": "a planned route the driver does not see yet",
+      "routes": [
+        {
+          "id": "r1",
+          "status": "PLANNED",
+          "started_at": null,
+          "completed_at": null,
+          "updated_at": "2026-11-12T10:00:00.000Z"
+        }
+      ],
+      "expected": { "pause_allowed": false, "route_id": null }
+    },
+    {
+      "name": "a route in progress since this morning",
+      "routes": [
+        {
+          "id": "r1",
+          "status": "IN_PROGRESS",
+          "started_at": "2026-11-12T11:30:00.000Z",
+          "completed_at": null,
+          "updated_at": "2026-11-12T11:30:00.000Z"
+        }
+      ],
+      "expected": { "pause_allowed": true, "route_id": "r1" }
+    },
+    {
+      "name": "a route started at this very instant",
+      "routes": [
+        {
+          "id": "r1",
+          "status": "IN_PROGRESS",
+          "started_at": "2026-11-12T15:00:00.000Z",
+          "completed_at": null,
+          "updated_at": "2026-11-12T15:00:00.000Z"
+        }
+      ],
+      "expected": { "pause_allowed": true, "route_id": "r1" }
+    },
+    {
+      "name": "a night route started yesterday, still in progress after midnight",
+      "routes": [
+        {
+          "id": "r1",
+          "status": "IN_PROGRESS",
+          "started_at": "2026-11-12T01:00:00.000Z",
+          "completed_at": null,
+          "updated_at": "2026-11-12T01:00:00.000Z"
+        }
+      ],
+      "expected": { "pause_allowed": true, "route_id": "r1" }
+    },
+    {
+      "name": "a route left open for days (ROUTE_LEFT_OPEN): still started",
+      "routes": [
+        {
+          "id": "r1",
+          "status": "IN_PROGRESS",
+          "started_at": "2026-11-09T11:00:00.000Z",
+          "completed_at": null,
+          "updated_at": "2026-11-09T11:00:00.000Z"
+        }
+      ],
+      "expected": { "pause_allowed": true, "route_id": "r1" }
+    },
+    {
+      "name": "a route completed earlier today",
+      "routes": [
+        {
+          "id": "r1",
+          "status": "COMPLETED",
+          "started_at": "2026-11-12T10:00:00.000Z",
+          "completed_at": "2026-11-12T14:00:00.000Z",
+          "updated_at": "2026-11-12T14:00:00.000Z"
+        }
+      ],
+      "expected": { "pause_allowed": false, "route_id": null }
+    },
+    {
+      "name": "a route completed before completed_at existed (its end is updated_at)",
+      "routes": [
+        {
+          "id": "r1",
+          "status": "COMPLETED",
+          "started_at": "2026-11-12T10:00:00.000Z",
+          "completed_at": null,
+          "updated_at": "2026-11-12T14:30:00.000Z"
+        }
+      ],
+      "expected": { "pause_allowed": false, "route_id": null }
+    },
+    {
+      "name": "a route cancelled on the street earlier today",
+      "routes": [
+        {
+          "id": "r1",
+          "status": "CANCELLED",
+          "started_at": "2026-11-12T10:00:00.000Z",
+          "completed_at": null,
+          "updated_at": "2026-11-12T13:00:00.000Z"
+        }
+      ],
+      "expected": { "pause_allowed": false, "route_id": null }
+    },
+    {
+      "name": "a route released and cancelled before it left",
+      "routes": [
+        {
+          "id": "r1",
+          "status": "CANCELLED",
+          "started_at": null,
+          "completed_at": null,
+          "updated_at": "2026-11-12T14:00:00.000Z"
+        }
+      ],
+      "expected": { "pause_allowed": false, "route_id": null }
+    },
+    {
+      "name": "between two routes of the day: the first completed, the second released and not started",
+      "routes": [
+        {
+          "id": "r1",
+          "status": "COMPLETED",
+          "started_at": "2026-11-12T10:00:00.000Z",
+          "completed_at": "2026-11-12T14:00:00.000Z",
+          "updated_at": "2026-11-12T14:00:00.000Z"
+        },
+        {
+          "id": "r2",
+          "status": "RELEASED",
+          "started_at": null,
+          "completed_at": null,
+          "updated_at": "2026-11-12T09:00:00.000Z"
+        }
+      ],
+      "expected": { "pause_allowed": false, "route_id": null }
+    },
+    {
+      "name": "one route in progress and tomorrow's already released: the one in progress",
+      "routes": [
+        {
+          "id": "r1",
+          "status": "RELEASED",
+          "started_at": null,
+          "completed_at": null,
+          "updated_at": "2026-11-12T14:00:00.000Z"
+        },
+        {
+          "id": "r2",
+          "status": "IN_PROGRESS",
+          "started_at": "2026-11-12T12:00:00.000Z",
+          "completed_at": null,
+          "updated_at": "2026-11-12T12:00:00.000Z"
+        }
+      ],
+      "expected": { "pause_allowed": true, "route_id": "r2" }
+    },
+    {
+      "name": "the second route of the day started after the first one completed",
+      "routes": [
+        {
+          "id": "r1",
+          "status": "COMPLETED",
+          "started_at": "2026-11-12T10:00:00.000Z",
+          "completed_at": "2026-11-12T13:00:00.000Z",
+          "updated_at": "2026-11-12T13:00:00.000Z"
+        },
+        {
+          "id": "r2",
+          "status": "IN_PROGRESS",
+          "started_at": "2026-11-12T14:00:00.000Z",
+          "completed_at": null,
+          "updated_at": "2026-11-12T14:00:00.000Z"
+        }
+      ],
+      "expected": { "pause_allowed": true, "route_id": "r2" }
+    }
+  ]
+}

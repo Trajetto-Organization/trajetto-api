@@ -33,9 +33,13 @@ interface RouteMirror {
   started_at: Date | null;
   completed_at: Date | null;
   updated_at: Date;
-  /** Decision 14.4; absent = null (a route released before the column). */
+  /**
+   * Mirrored for fixtures that describe a released route; since decision
+   * 14.4 was revised (12/11/2026) the journey, started routes only, reads
+   * neither this nor scheduled_date.
+   */
   released_at?: Date | null;
-  /** "YYYY-MM-DD"; absent = a day no business day matches. */
+  /** "YYYY-MM-DD". */
   scheduled_date?: string;
 }
 
@@ -202,54 +206,16 @@ class InMemoryDriverPauseRepository implements IDriverPauseRepository {
     return latest ? { ...latest } : null;
   }
 
-  async findRouteRunningAt(
-    businessId: string,
-    driverId: string,
-    at: Date,
-  ): Promise<string | null> {
-    const time = at.getTime();
-
-    const running = this.routes
-      .filter(
-        (route) =>
-          route.businessId === businessId &&
-          route.driverId === driverId &&
-          route.started_at !== null &&
-          route.started_at.getTime() <= time &&
-          (route.status === "IN_PROGRESS" ||
-            (route.status === "COMPLETED" &&
-              route.completed_at !== null &&
-              route.completed_at.getTime() >= time) ||
-            (route.status === "CANCELLED" &&
-              route.updated_at.getTime() >= time)),
-      )
-      .sort(
-        (a, b) =>
-          compareForOrder(a.started_at, b.started_at, "desc") ||
-          compareForOrder(a.id, b.id, "desc"),
-      );
-
-    return running[0]?.id ?? null;
-  }
-
   async findJourneyRouteAt(
     businessId: string,
     driverId: string,
     at: Date,
-    dayKey: string,
   ): Promise<string | null> {
-    const routes = this.routes
-      .filter(
-        (route) =>
-          route.businessId === businessId && route.driverId === driverId,
-      )
-      .map((route) => ({
-        ...route,
-        released_at: route.released_at ?? null,
-        scheduled_date: route.scheduled_date ?? "",
-      }));
+    const routes = this.routes.filter(
+      (route) => route.businessId === businessId && route.driverId === driverId,
+    );
 
-    return journeyRouteAt(routes, at, dayKey)?.id ?? null;
+    return journeyRouteAt(routes, at)?.id ?? null;
   }
 
   private infoOf(type: PauseTypeMirror): PauseTypeInfo {

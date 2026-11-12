@@ -35,9 +35,9 @@ interface CurrentDriverPause {
   today: DriverPause[];
 
   /**
-   * Decision 14.4: whether a pause may start now (a route released or in
-   * progress today). The app hides the action otherwise; an open pause can
-   * always be ended.
+   * Decision 14.4: whether a pause may start now — a route of the driver's
+   * started and not finished (revised 12/11/2026; a route only released is
+   * none). An open pause can always be ended.
    */
   pauseAllowed: boolean;
 
@@ -92,7 +92,6 @@ class CurrentDriverPauseUseCase {
       businessId,
       driver,
       now,
-      day,
     );
 
     const lastEnded = await this.pauses.findLastEndedPause({

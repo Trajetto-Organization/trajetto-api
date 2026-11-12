@@ -705,3 +705,11 @@ O PR `staging → main` (`pr.yml`) não roda nada disso de novo: confere o
   estende o `expo/tsconfig.base`, que está neles. Por isso o arquivo do app
   não pode importar nada em tempo de execução (só tipos), e o mesmo teste
   confere isso.
+- **Jornada da pausa**: `tests/unitaires/driver-pause/fixtures/pause-journey-cases.json`
+  são os casos de "pausa liberada agora" (decisão 14.4, revista em
+  12/11/2026: só com a rota iniciada) que `pause-journey-rules.test.ts` roda
+  aqui. O app guarda uma cópia (`trajetto-mobile/tests/fixtures/`) e o
+  `pause-journey-parity.test.ts` dele confere que ela é igual a esta (pulado
+  sem a API ao lado) e roda o portão do botão "Pausa" sobre cada caso. Mude
+  um caso só junto com a cópia, e a API sobe antes: o CI do app lê a
+  `staging` da API.

@@ -170,7 +170,7 @@ const driverJourneyEntity = z
     pause_allowed: z
       .boolean()
       .describe(
-        'Rota liberada ou em andamento do dia agora: o app só oferece "Iniciar pausa" então.',
+        "Rota iniciada (em andamento) agora (decisão 14.4, revista em 12/11/2026: rota só liberada não conta). A API recusa o início da pausa sem ela.",
       ),
     route_id: z.string().nullable().describe("A rota da jornada agora."),
     day: z

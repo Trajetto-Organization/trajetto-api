@@ -160,6 +160,7 @@ beforeAll(async () => {
   tokens.driver = carrier.driverToken;
   tokens.otherAdmin = other.managerToken;
   ids.driver = carrier.driverId;
+  ids.vehicle = carrier.vehicleId;
 
   // What the migration and create-business seed for every company.
   await ensureDefaultOccurrenceTypes(prisma, CARRIER);
@@ -685,7 +686,7 @@ describe("a pause only inside a journey", () => {
   const startPath = `/driver-pause/start/${CARRIER}`;
   const endPath = `/driver-pause/end/${CARRIER}`;
 
-  it("refuses a start without a route released or running today, writing nothing", async () => {
+  it("refuses a start without a route started, writing nothing", async () => {
     const idle = await newDriver(CARRIER, "Sem Rota");
 
     const response = await call("POST", startPath, idle.token, {
@@ -695,7 +696,7 @@ describe("a pause only inside a journey", () => {
 
     expect(refusal(response)).toBe("409 PAUSE_REQUIRES_ROUTE");
     expect(response.json().message).toBe(
-      "Pausas só podem ser iniciadas durante uma rota liberada ou em andamento.",
+      "Pausas só podem ser iniciadas com uma rota em andamento. Inicie a rota antes de pausar.",
     );
     expect(
       await prisma.driverPause.count({ where: { driverId: idle.id } }),
@@ -722,36 +723,42 @@ describe("a pause only inside a journey", () => {
     expect(refusal(end)).toBe("409 PAUSE_REQUIRES_ROUTE");
   });
 
-  it("refuses a route released today for tomorrow, and takes one released for today", async () => {
-    const planner = await newDriver(CARRIER, "Rota de Amanhã");
+  it("refuses a route released for today until it starts, then pins the pause to it", async () => {
+    // The owner's case (12/11/2026): the route handed over, the departure
+    // checklist not done and "Iniciar rota" not tapped.
+    const planner = await newDriver(CARRIER, "Rota Liberada");
     const today = businessDateKey(new Date(), ZONE);
 
-    const tomorrowRoute = await seedJourneyRoute(prisma, CARRIER, planner.id, {
+    const routeId = await seedJourneyRoute(prisma, CARRIER, planner.id, {
       status: "RELEASED",
       releasedAt: new Date(Date.now() - 60 * 60_000),
-      scheduledDate: shiftDateKey(today, 1),
+      scheduledDate: today,
     });
 
-    // The app's offline rule needs the route's day in the cached payload:
-    // a RELEASED route counts only on its day (review r1).
+    // A real departure needs a vehicle and an open stop.
+    await prisma.route.update({
+      where: { id: routeId },
+      data: { vehicleId: ids.vehicle },
+    });
+
     const shipper = await prisma.shipper.create({
-      data: { name: "Embarcador amanhã", businessId: CARRIER },
+      data: { name: "Embarcador da rota liberada", businessId: CARRIER },
     });
     const delivery = await prisma.delivery.create({
       data: {
-        recipient_name: "Cliente de amanhã",
+        recipient_name: "Cliente da rota liberada",
         city: "São Paulo",
         uf: "SP",
         street: "Rua",
         businessId: CARRIER,
         shipperId: shipper.id,
         driverId: planner.id,
-        status: "IN_TRANSIT",
+        status: "PENDING",
       },
     });
 
     await prisma.routeStop.create({
-      data: { routeId: tomorrowRoute, deliveryId: delivery.id, sequence: 10 },
+      data: { routeId, deliveryId: delivery.id, sequence: 10 },
     });
 
     const day = await call(
@@ -763,30 +770,38 @@ describe("a pause only inside a journey", () => {
       (entry) => entry.id === delivery.id,
     );
 
-    expect(card?.stops[0].route).toMatchObject({
-      status: "RELEASED",
-      scheduled_date: `${shiftDateKey(today, 1)}T00:00:00.000Z`,
-    });
-    expect(day.json().journey).toMatchObject({
+    expect(card?.stops[0].route).toMatchObject({ status: "RELEASED" });
+    expect(day.json().journey).toEqual({
       pause_allowed: false,
+      route_id: null,
       day: today,
       time_zone: ZONE,
     });
-
     expect(
-      refusal(
-        await call("POST", startPath, planner.token, {
-          kind: "REST",
-          start_submission_id: randomUUID(),
-        }),
-      ),
-    ).toBe("409 PAUSE_REQUIRES_ROUTE");
+      (
+        await call("GET", `/driver-pause/current/${CARRIER}`, planner.token)
+      ).json(),
+    ).toMatchObject({ pause_allowed: false, journey_route_id: null });
 
-    const routeId = await seedJourneyRoute(prisma, CARRIER, planner.id, {
-      status: "RELEASED",
-      releasedAt: new Date(Date.now() - 60 * 60_000),
-      scheduledDate: today,
+    const refused = await call("POST", startPath, planner.token, {
+      kind: "REST",
+      start_submission_id: randomUUID(),
     });
+
+    expect(refusal(refused)).toBe("409 PAUSE_REQUIRES_ROUTE");
+    expect(
+      await prisma.driverPause.count({ where: { driverId: planner.id } }),
+    ).toBe(0);
+
+    // "Iniciar rota", through the real departure.
+    const departed = await call(
+      "POST",
+      `/route/start-route/${routeId}/business/${CARRIER}`,
+      planner.token,
+      {},
+    );
+
+    expect(departed.statusCode, departed.body).toBe(200);
 
     const started = await call("POST", startPath, planner.token, {
       kind: "REST",
@@ -796,16 +811,35 @@ describe("a pause only inside a journey", () => {
     expect(started.statusCode, started.body).toBe(201);
     expect(started.json().pause.routeId).toBe(routeId);
 
-    const current = await call(
-      "GET",
-      `/driver-pause/current/${CARRIER}`,
-      planner.token,
-    );
+    expect(
+      (
+        await call("GET", `/driver-pause/current/${CARRIER}`, planner.token)
+      ).json(),
+    ).toMatchObject({ pause_allowed: true, journey_route_id: routeId });
+    expect(
+      (
+        await call("GET", `/delivery/my-deliveries/${CARRIER}`, planner.token)
+      ).json().journey,
+    ).toMatchObject({ pause_allowed: true, route_id: routeId });
+  });
 
-    expect(current.json()).toMatchObject({
-      pause_allowed: true,
-      journey_route_id: routeId,
+  it("still refuses a route released today for tomorrow", async () => {
+    const tomorrowDriver = await newDriver(CARRIER, "Rota de Amanhã");
+
+    await seedJourneyRoute(prisma, CARRIER, tomorrowDriver.id, {
+      status: "RELEASED",
+      releasedAt: new Date(Date.now() - 60 * 60_000),
+      scheduledDate: shiftDateKey(businessDateKey(new Date(), ZONE), 1),
     });
+
+    expect(
+      refusal(
+        await call("POST", startPath, tomorrowDriver.token, {
+          kind: "REST",
+          start_submission_id: randomUUID(),
+        }),
+      ),
+    ).toBe("409 PAUSE_REQUIRES_ROUTE");
   });
 
   it("never refuses ending a pause that exists, even after its route is cancelled", async () => {

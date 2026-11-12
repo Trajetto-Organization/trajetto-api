@@ -2584,6 +2584,95 @@ O motorista registra as próprias pausas pelo app (`/driver-pause`, decisão
 outbox, cada um idempotente pela própria chave, e o relatório da Lei
 13.103/2015 só sinaliza, nunca bloqueia.
 
+- **Só com a rota iniciada (decisão 14.4, revista em 12/11/2026):** o dono
+  viu o motorista pausar com a rota só liberada, antes do checklist de saída
+  e de "Iniciar rota", e pediu que a pausa só comece com a rota de fato
+  iniciada. **A regra** (`modules/driver-pause/rules/pause-journey-rules.ts`,
+  `isJourneyRouteAt` e `journeyRouteAt`): uma rota do próprio motorista com
+  `started_at` até o toque e ainda não encerrada nele — em andamento,
+  concluída com `completed_at` (ou `updated_at`, sem ele) no toque ou depois,
+  ou cancelada com `updated_at` no toque ou depois. `started_at` só é gravado
+  pela saída (RELEASED → IN_PROGRESS) e nunca é zerado, então "iniciada" é o
+  mesmo que `started_at` preenchido. Julgada no toque corrigido
+  (`resolveOccurredAt`), não na chegada, como antes: a pausa tocada durante a
+  rota e entregue depois que ela terminou continua valendo. Havendo mais de
+  uma, a pausa fica presa à de início mais recente (depois, ao maior id).
+  **O que saiu:** a rota RELEASED, a cláusula do dia (`scheduled_date`) e os
+  substitutos de `released_at`. A rota iniciada vale em qualquer dia: a
+  noturna depois da meia-noite e a esquecida aberta, que o relatório já marca
+  ROUTE_LEFT_OPEN (bloqueá-la quebraria a noturna, que também começou antes
+  de hoje). Mudam duas respostas: a pausa entre duas rotas do dia (a primeira
+  concluída, a segunda liberada e não iniciada) passa a ser recusada, e a
+  rota liberada e cancelada antes de sair deixa de contar. **Folga de
+  relógio** (`PAUSE_ROUTE_START_SLACK_MS`, 2 minutos): a saída e a pausa são
+  corrigidas cada uma pelo próprio `X-Client-Sent-At`, e a saída cai para a
+  hora de chegada quando o toque é anterior à criação da rota; sem a folga,
+  a pausa tocada segundos depois de "Iniciar rota" podia ficar datada antes
+  de `started_at` e ser recusada. Não é regra de negócio: o app não oferece a
+  pausa antes da saída. Nas leituras (`at` = agora) ela não muda nada, porque
+  `started_at` nunca fica no futuro. **O checklist de saída** não é conferido
+  na pausa (D08, `shared/vehicle/route-link.ts`: o checklist com fotos feito
+  sem sinal pode chegar depois da saída, e conferi-lo recusaria a pausa
+  legítima enquanto ele está na fila). Quem o garante é o app, que só deixa
+  tocar em "Iniciar rota" depois dele quando a empresa o exige; a rota
+  iniciada é a prova transitiva. **A recusa:** a mesma
+  `409 PAUSE_REQUIRES_ROUTE` (`PauseRequiresRouteError`), com a frase "Pausas
+  só podem ser iniciadas com uma rota em andamento. Inicie a rota antes de
+  pausar.". Código novo não: todo app desde o contrato 3 (o de produção
+  incluso) tira esse código da fila sem cartão vermelho, com aviso, e o envio
+  direto mostra a frase da API e desfaz o registro local; um código novo
+  viraria falha visível nos aparelhos instalados. **Sem portão de
+  contrato:** vale para todo chamador, a fila offline e quem chama a API com
+  o token do motorista inclusive. Um portão deixaria a falha aberta em todo
+  celular sem atualização. A pausa já na fila de um build antigo, tocada com
+  a rota só liberada, é recusada e descartada com o aviso: é exatamente a
+  pausa que a regra proíbe. **Apps instalados sem a atualização** (o de
+  produção, contrato 3, e o contrato 7 sem a OTA) decidem o botão pelo
+  `journey.pause_allowed` de hoje, que vence o estado local deles. Com a
+  rota só liberada ele passa a vir `false` e fica no cache: depois de um
+  "Iniciar rota" feito sem sinal, o botão "Pausa" fica escondido até a saída
+  chegar e o app reler my-deliveries. Antes, o `true` da rota liberada
+  continuava valendo e a pausa podia ser registrada sem sinal. Online, sem
+  saída na fila, o botão desses apps some com a rota só liberada; onde ainda
+  aparece (dia em cache de antes), o toque recebe o 409. A janela fecha com
+  a atualização do app (a OTA logo depois da API; o de produção, com a
+  versão que levar a trava). Manter `pause_allowed` verdadeiro para a rota
+  liberada de hoje, só como dica aos apps antigos (o novo o ignora e a API
+  recusaria o início do mesmo jeito), é a alternativa, que fica para o dono
+  decidir. **Nunca bloqueia o fim:** encerrar uma pausa que existe nunca
+  passa pela jornada, inclusive a aberta numa rota só liberada antes da
+  mudança, e o reenvio de uma chave que já entrou continua
+  respondido antes de tudo (200 `replayed`). Só o fim que cria a pausa (chega
+  antes do início, pela fila) julga a jornada no toque do início, porque ali
+  ele é um início. **Sem transação nem trava, de propósito:** para um toque
+  fixo, o veredito só passa de "não" para "sim" (`started_at` é escrito uma
+  vez, e o fim da rota carimba `completed_at`/`updated_at` depois do toque).
+  A única corrida, uma saída ainda não confirmada quando a pausa lê, erra
+  para a recusa, e o app a evita pondo o início da pausa na fila atrás das
+  saídas do motorista ainda a caminho nela (a pausa não diz a rota, então
+  espera todas; a saída recusada antes do toque não conta), e o fim só
+  enquanto o próprio início ainda está na fila: o fim de uma pausa que
+  existe nunca espera saída nenhuma. Tomar a trava da saída
+  (`route-driver-departure:<driverId>`, `route-repository.ts`) custaria uma
+  transação por pausa contra uma corrida que só produz recusa. **Ordem no
+  caso de uso**, sem mudança: o reenvio → PAUSE_TOO_OLD → o tipo → a jornada
+  → o motivo → o intervalo → o insert. **Leitura:** o `pause_allowed` de
+  `GET /driver-pause/current` e o `journey` de `GET /delivery/my-deliveries`
+  passam pela mesma `findJourneyRouteAt` e ficam `false` com a rota só
+  liberada, sem campo novo; o `day` e o `time_zone` continuam só datando a
+  resposta. **Repositório:** o pré-filtro do Prisma (`started_at` preenchido
+  e até o toque mais a folga, e a rota não encerrada no toque) traz os
+  candidatos, e a regra pura decide, a mesma do gêmeo em memória;
+  `findRouteRunningAt`, que ninguém chamava, saiu. **Paridade com o app:** os
+  casos de `tests/unitaires/driver-pause/fixtures/pause-journey-cases.json`,
+  julgados agora (só o status decide no aparelho), rodam aqui e na cópia do
+  app contra o portão do botão "Pausa". Prova:
+  `tests/unitaires/driver-pause/pause-journey-rules.test.ts`,
+  `tests/unitaires/driver-pause/pause-rules-edges.test.ts`,
+  `tests/unitaires/driver-pause/driver-pause-usecases.test.ts`,
+  `tests/E2E/occurrence-categories-http.test.ts` (a rota liberada recusada
+  até a saída de verdade) e o contrato do repositório em
+  `tests/E2E/driver-pause-repository-contract.test.ts`.
 - **Intervalo entre pausas (05/11/2026):** o dono viu o motorista ligar e
   desligar a pausa sem parar e pediu um bloqueio. A lei não deixa bloquear
   descanso: o fim de uma pausa **nunca** é recusado, o descanso de 30 minutos
