@@ -1564,12 +1564,18 @@ chave da pausa guarda o motivo junto do prazo (`REFUSED`, `QUOTA` ou
   - Toda leitura filtra `businessId`: a chave nunca cruza empresas. As
     linhas de antes ficam com a chave nula até o backfill do dono
     (`infra/scripts/backfill-delivery-address-key.ts`, sobre
-    `shared/delivery/address-key-backfill.ts`, D-25): grava a chave de toda
-    entrega que ainda não tem, em lotes de 1.000 por id, cada lote numa
-    transação com `lock_timeout = '5s'`, e roda uma vez a mesma propagação
+    `shared/delivery/address-key-backfill.ts`, D-25): recalcula a chave de
+    toda entrega, em lotes de 1.000 por id, cada lote numa transação com
+    `lock_timeout = '5s'`, e grava onde a guardada difere: preenche a que
+    falta e corrige a velha, que a imagem anterior deixa ao editar o
+    endereço sem mexer na chave (uma réplica antiga no rollout, ou toda
+    edição depois de um rollback para antes desta imagem; por isso o
+    backfill roda de novo quando a imagem nova volta). O `UPDATE` confere
+    o endereço (um `md5` das colunas) e a chave que o lote leu: a edição
+    feita no meio do lote vence. Depois roda uma vez a mesma propagação
     para os pontos já gravados, o que localiza as entregas de hoje (a da
     Rua Doutor Lipold inclusive). Idempotente: rodar de novo termina o que
-    faltou e não refaz nada.
+    faltou e não grava nada.
 - Orçamento: `DELIVERY_GEOCODING_DAILY_BUDGET` consultas por dia (UTC),
   somando as réplicas e os dois caminhos, num contador de janela fixa no
   Redis (`shared/delivery/geocoding/geocoding-budget.ts`). Ao contrário dos

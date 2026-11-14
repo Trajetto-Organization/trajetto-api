@@ -3144,7 +3144,9 @@ mão, pelo roteiro no comentário da migration, e ela não faz nada.
 
 - **A ordem é a de sempre: API, depois a web.** A imagem anterior não lê nem
   grava a coluna. Durante o rollout, a entrega criada por uma réplica
-  anterior fica sem chave e não empresta nem recebe ponto até o backfill. A
+  anterior fica sem chave e não empresta nem recebe ponto até o backfill, e
+  a que ela edita fica com a chave do endereço antigo até o backfill, que
+  recalcula a chave de todas. A
   web e o app não mudam: o ponto copiado chega como `GEOCODER` ("Pelo
   endereço"), que os dois já mostram e que a geocerca do app já lê como
   exato no número ou na rua. Sem OTA.
@@ -3163,11 +3165,19 @@ mão, pelo roteiro no comentário da migration, e ela não faz nada.
   que a API com esta migration estiver no ar, primeiro no staging e depois na
   produção, fora do pico, abra o terminal do contêiner da Application
   `trajetto-api` no Dokploy e rode `node build/backfill-delivery-address-key.js`
-  (no desenvolvimento, `yarn deliveries:address-key`). Ele grava a chave em
-  lotes de 1.000, cada um com `lock_timeout = '5s'`, e dá uma vez o ponto de
-  cada porta às entregas abertas dela ainda sem ponto. A última linha diz
-  quantas chaves e quantas entregas. Se um lote estourar o `lock_timeout`, é
-  só rodar de novo: ele é idempotente e termina o resto.
+  (no desenvolvimento, `yarn deliveries:address-key`). Ele lê todas as
+  entregas em lotes de 1.000, cada um com `lock_timeout = '5s'`, grava a
+  chave onde ela falta ou está velha e dá uma vez o ponto de cada porta às
+  entregas abertas dela ainda sem ponto. A última linha diz quantas chaves e
+  quantas entregas. Se um lote estourar o `lock_timeout`, é só rodar de
+  novo: ele é idempotente e termina o resto.
+- **Rollback para antes desta imagem: rode o backfill de novo** quando a
+  imagem nova voltar a servir. A imagem anterior edita o endereço sem mexer
+  na chave: a entrega editada fica com a chave do endereço antigo e o ponto
+  do novo, e a próxima criada no endereço antigo copiaria esse ponto (a
+  parada e a geocerca na porta errada). O backfill recalcula a chave de toda
+  entrega e corrige as que mudaram; a que ele não corrigir porque foi
+  editada no meio do lote fica para a próxima rodada.
 
 **Contract pendente (release seguinte): o 2FA sem corpo.** `PATCH
 /user/twofactor` sem corpo ainda inverte o estado, sem senha, só para a web

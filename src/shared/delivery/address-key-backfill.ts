@@ -1,4 +1,4 @@
-import type { Prisma, PrismaClient } from "@prisma/client";
+import { Prisma, type PrismaClient } from "@prisma/client";
 
 import { deliveryAddressKey } from "./address-key";
 import { pickReusablePoint } from "./geocoding/address-point-reuse";
@@ -12,28 +12,41 @@ import {
  * report of 14/11/2026; decision D-25), run by the owner once the API with
  * migration 20261114120000 serves (infra/scripts/backfill-delivery-address-key.ts):
  *
- * 1. the key of every delivery still without one, in batches by id (the
- *    primary key's order), each batch one UPDATE in its own transaction
- *    under lock_timeout — a row a create or an edit keys meanwhile is left
- *    alone (the UPDATE writes only a NULL key). The key is computed here,
- *    by the same function the create writes it with: the canonical street
- *    lives in TypeScript, not in SQL;
+ * 1. the key of every delivery, recomputed, in batches by id (the primary
+ *    key's order), each batch one UPDATE in its own transaction under
+ *    lock_timeout, written only where the stored key differs. That fills
+ *    the rows still without one and corrects a stale one: the image before
+ *    this one edits an address without touching the key — an old replica
+ *    during the rollout, every edit after a rollback past this image — so
+ *    a delivery kept its old door's key while it got its new door's point,
+ *    and later creates at the old door copied that point. The key is
+ *    computed here, by the same function the create writes it with: the
+ *    canonical street lives in TypeScript, not in SQL;
  * 2. the propagation, once: every open delivery without a point whose door
  *    has a point another delivery may give (a pin first, then the newest)
  *    takes it, by the same guarded write as the pin's
  *    (address-point-propagation.ts). This is what locates today's
  *    "Rua Doutor Lipold".
  *
- * Idempotent: a keyed row is skipped, and a door is written only where no
- * point is; a second run finds nothing to do. Never across companies: the
- * door is the company and the key.
+ * A row edited between the batch's read and its write is left alone: the
+ * UPDATE also asks for the address and the key the batch read (the
+ * address as a digest, ADDRESS_DIGEST), so the edit's own key wins — and a
+ * row an older image edited meanwhile waits for the next run instead of
+ * taking the key of its previous address.
+ *
+ * Idempotent: a row whose key is right is not written, and a door is
+ * written only where no point is; a second run reads every row and writes
+ * nothing. Never across companies: the door is the company and the key.
  */
 const BACKFILL_BATCH_SIZE = 1_000;
 
 interface BackfillProgress {
-  /** Rows without a key read so far. */
+  /** Rows read so far: every delivery, once. */
   scanned: number;
-  /** Keys written so far (a row without a street or a city gets none). */
+  /**
+   * Keys written so far: the ones that were missing and the stale ones
+   * (a row without a street or a city gets none).
+   */
   keyed: number;
 }
 
@@ -52,31 +65,42 @@ interface BackfillOptions {
 
 type Client = Pick<PrismaClient, "$queryRaw" | "$transaction">;
 
-interface UnkeyedRow {
+interface KeyedRow {
   id: string;
   street: string | null;
   address_number: string | null;
   neighborhood: string | null;
   city: string | null;
   uf: string | null;
+  address_key: string | null;
+  /** ADDRESS_DIGEST, as read. */
+  digest: string;
 }
 
-/** Step 1: the key of every delivery without one. */
+/**
+ * The address a key is computed from, as one value the write can compare:
+ * %L quotes a text and spells NULL bare, so a NULL and an empty street are
+ * two digests, and the arrays the UPDATE takes carry no NULL.
+ */
+const ADDRESS_DIGEST = Prisma.sql`md5(format('%L|%L|%L|%L|%L',
+  d."street", d."address_number", d."neighborhood", d."city", d."uf"))`;
+
+/** Step 1: the key of every delivery, written where it is missing or stale. */
 async function backfillAddressKeys(
   client: Client,
   { batchSize = BACKFILL_BATCH_SIZE, onBatch }: BackfillOptions = {},
 ): Promise<BackfillProgress> {
   const progress: BackfillProgress = { scanned: 0, keyed: 0 };
-  // Keyset by id: each row is read once, and a row that gets no key (no
-  // street or no city) is never read again.
+  // Keyset by id: each row is read once.
   let after = "";
 
   for (;;) {
-    const rows = await client.$queryRaw<UnkeyedRow[]>`
-      SELECT "id", "street", "address_number", "neighborhood", "city", "uf"
-      FROM "delivery"
-      WHERE "address_key" IS NULL AND "id" > ${after}
-      ORDER BY "id"
+    const rows = await client.$queryRaw<KeyedRow[]>`
+      SELECT d."id", d."street", d."address_number", d."neighborhood",
+        d."city", d."uf", d."address_key", ${ADDRESS_DIGEST} AS "digest"
+      FROM "delivery" AS d
+      WHERE d."id" > ${after}
+      ORDER BY d."id"
       LIMIT ${batchSize}
     `;
 
@@ -85,13 +109,23 @@ async function backfillAddressKeys(
     after = rows[rows.length - 1].id;
     progress.scanned += rows.length;
 
-    const keyed = rows.flatMap((row) => {
+    // '' stands for "no key" in the arrays: a key is 64 hex characters.
+    const changed = rows.flatMap((row) => {
       const key = deliveryAddressKey(row);
 
-      return key ? [{ id: row.id, key }] : [];
+      return key === row.address_key
+        ? []
+        : [
+            {
+              id: row.id,
+              key: key ?? "",
+              was: row.address_key ?? "",
+              digest: row.digest,
+            },
+          ];
     });
 
-    if (keyed.length > 0) {
+    if (changed.length > 0) {
       progress.keyed += await client.$transaction(
         async (tx: Prisma.TransactionClient) => {
           // delivery is hot: a batch waits for a lock 5 s at most and fails
@@ -100,12 +134,16 @@ async function backfillAddressKeys(
 
           return tx.$executeRaw`
             UPDATE "delivery" AS d
-            SET "address_key" = v."key"
+            SET "address_key" = NULLIF(v."key", '')
             FROM unnest(
-              ${keyed.map((entry) => entry.id)}::text[],
-              ${keyed.map((entry) => entry.key)}::text[]
-            ) AS v("id", "key")
-            WHERE d."id" = v."id" AND d."address_key" IS NULL
+              ${changed.map((entry) => entry.id)}::text[],
+              ${changed.map((entry) => entry.key)}::text[],
+              ${changed.map((entry) => entry.was)}::text[],
+              ${changed.map((entry) => entry.digest)}::text[]
+            ) AS v("id", "key", "was", "digest")
+            WHERE d."id" = v."id"
+              AND d."address_key" IS NOT DISTINCT FROM NULLIF(v."was", '')
+              AND ${ADDRESS_DIGEST} = v."digest"
           `;
         },
       );

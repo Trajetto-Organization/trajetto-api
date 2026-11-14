@@ -13,20 +13,25 @@ import { backfillDeliveryAddressKeys } from "@/shared/delivery/address-key-backf
  *   production container:  node build/backfill-delivery-address-key.js
  *   development:           yarn deliveries:address-key
  *
- * Batches of 1,000 rows, each under lock_timeout = 5s. Idempotent — a keyed
- * row and a located delivery are left alone — so a re-run (after a lock
+ * And again after a rollback past that image, once it serves again: the
+ * older image edits addresses without the key, and every key it left stale
+ * is recomputed here (the run reads every delivery and writes the keys
+ * that differ).
+ *
+ * Batches of 1,000 rows, each under lock_timeout = 5s. Idempotent — a right
+ * key and a located delivery are left alone — so a re-run (after a lock
  * timeout, say) is always safe and finishes the rest.
  */
 async function main(): Promise<void> {
   const report = await backfillDeliveryAddressKeys(database, {
     onBatch: ({ scanned, keyed }) =>
       console.log(
-        `[backfill-delivery-address-key] ${scanned} entrega(s) lida(s), ${keyed} chave(s) gravada(s).`,
+        `[backfill-delivery-address-key] ${scanned} entrega(s) lida(s), ${keyed} chave(s) gravada(s) ou corrigida(s).`,
       ),
   });
 
   console.log(
-    `[backfill-delivery-address-key] Pronto: ${report.keyed} chave(s) gravada(s) em ${report.scanned} entrega(s); ${report.propagated} entrega(s) aberta(s) receberam o ponto de ${report.doors} endereço(s).`,
+    `[backfill-delivery-address-key] Pronto: ${report.keyed} chave(s) gravada(s) ou corrigida(s) em ${report.scanned} entrega(s); ${report.propagated} entrega(s) aberta(s) receberam o ponto de ${report.doors} endereço(s).`,
   );
 }
 
