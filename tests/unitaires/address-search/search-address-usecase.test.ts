@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 
 import {
   SearchAddressUseCase,
+  addressSearchOffReason,
+  searchRefusalHint,
   type AddressSearchSettings,
   type SearchAddressRequest,
 } from "@/modules/address-search/usecases/search-address/search-address-usecase";
@@ -14,7 +16,10 @@ import {
   pauseValue,
 } from "@/shared/delivery/geocoding/geocoding-gate";
 import { GEOCODING_KEYS } from "@/shared/delivery/geocoding/geocoding-keys";
-import { createRedisAddressSearchStore } from "@/shared/services/address-search/address-search-limits";
+import {
+  createRedisAddressSearchStore,
+  searchPauseOf,
+} from "@/shared/services/address-search/address-search-limits";
 import type {
   ProviderAnswer,
   ProviderSearch,
@@ -352,16 +357,75 @@ describe("the day's counts", () => {
     expect(calls).toHaveLength(0);
   });
 
-  it("is off without a provider or with a budget of 0", async () => {
-    for (const settings of [{ provider: null }, { dailyBudget: 0 }]) {
-      const { useCase, calls } = harness({ settings });
+  it("is off without a provider or with a budget of 0, and says which", async () => {
+    for (const [settings, why] of [
+      [{ provider: null }, "ADDRESS_SEARCH_URL is not set"],
+      [{ dailyBudget: 0 }, "ADDRESS_SEARCH_DAILY_BUDGET is 0"],
+    ] as const) {
+      const { useCase, calls, lines } = harness({ settings });
 
-      expect(await useCase.execute(request())).toMatchObject({
+      expect(await useCase.execute(request())).toEqual({
         kind: "UNAVAILABLE",
         reason: "DISABLED",
+        retryAfterSeconds: 3600,
+        diagnostic: why,
       });
       expect(calls).toHaveLength(0);
+      expect(lines[0].details).toMatchObject({
+        outcome: "UNAVAILABLE_DISABLED",
+        reason: why,
+      });
+      expect(addressSearchOffReason({ ...SETTINGS, ...settings })).toBe(why);
     }
+
+    expect(addressSearchOffReason(SETTINGS)).toBeNull();
+  });
+
+  it("warns that it is off once per process, then logs each search at info", async () => {
+    // The runtime's notice, shared by every request's use case.
+    const notice = { said: null as string | null };
+    const lines: Array<{ level: string; reason: unknown }> = [];
+    const record = (level: string) => (details: Record<string, unknown>) =>
+      lines.push({ level, reason: details.reason });
+    const off = () =>
+      new SearchAddressUseCase({
+        settings: () => ({ ...SETTINGS, provider: null }),
+        store: createRedisAddressSearchStore(fakeRedis().redis as never),
+        gate: { pause: async () => undefined, takeSlot: async () => false },
+        provider: async () => FOUND,
+        log: {
+          info: record("info"),
+          warn: record("warn"),
+          error: record("error"),
+        },
+        offNotice: notice,
+        clock: () => NOW,
+      });
+
+    await off().execute(request());
+    await off().execute(request());
+    await off().execute(request({ businessId: B }));
+
+    expect(lines).toEqual([
+      { level: "warn", reason: "ADDRESS_SEARCH_URL is not set" },
+      { level: "info", reason: "ADDRESS_SEARCH_URL is not set" },
+      { level: "info", reason: "ADDRESS_SEARCH_URL is not set" },
+    ]);
+  });
+
+  it("still serves the company's cache with the budget at 0", async () => {
+    const redis = fakeRedis();
+    const on = harness({ redis });
+
+    await on.useCase.execute(request());
+
+    const off = harness({ redis, settings: { dailyBudget: 0 } });
+
+    expect(await off.useCase.execute(request())).toMatchObject({
+      kind: "OK",
+      cached: true,
+    });
+    expect(off.calls).toHaveLength(0);
   });
 
   it("fails CLOSED when Redis does not answer", async () => {
@@ -402,6 +466,9 @@ describe("the pauses", () => {
       kind: "UNAVAILABLE",
       reason: "PAUSED",
       retryAfterSeconds: 9 * 3600,
+      // A value written before the status was kept: read without one.
+      diagnostic:
+        "address search paused by QUOTA until 2026-11-11T00:00:00.000Z",
     });
     expect(calls).toHaveLength(0);
   });
@@ -448,10 +515,12 @@ describe("the pauses", () => {
       kind: "UNAVAILABLE",
       reason: "PROVIDER",
       retryAfterSeconds: 900,
+      diagnostic: searchRefusalHint(401),
     });
 
+    // The status as a third token: the replicas before it read two.
     expect(redis.values.get(GEOCODING_KEYS.searchPause)).toEqual({
-      value: "REFUSED 2026-11-10T15:15:00.000Z",
+      value: "REFUSED 2026-11-10T15:15:00.000Z 401",
       ttl: 900_000,
     });
     // The minute's job reads this key: it must stay empty.
@@ -472,6 +541,16 @@ describe("the pauses", () => {
       businessId: A,
       outcome: "UNAVAILABLE_PROVIDER",
       status: 401,
+      reason: searchRefusalHint(401),
+    });
+    // The pause that answers the next search says what caused it.
+    expect(lines[1].details).toMatchObject({
+      outcome: "UNAVAILABLE_PAUSED",
+      reason: {
+        pauseReason: "REFUSED",
+        until: "2026-11-10T15:15:00.000Z",
+        refusedStatus: 401,
+      },
     });
   });
 
@@ -504,18 +583,27 @@ describe("the pauses", () => {
       retryAfterSeconds: 60,
     });
     expect(burst.values.get(GEOCODING_KEYS.pause)).toEqual({
-      value: pauseValue("BURST", new Date(NOW.getTime() + 60_000)),
+      value: pauseValue("BURST", new Date(NOW.getTime() + 60_000), 429),
       ttl: 60_000,
     });
     // The search's own copy, read the same way.
     expect(burst.values.get(GEOCODING_KEYS.searchPause)).toEqual({
-      value: pauseValue("BURST", new Date(NOW.getTime() + 60_000)),
+      value: pauseValue("BURST", new Date(NOW.getTime() + 60_000), 429),
       ttl: 60_000,
     });
     expect(
       pauseReasonOf(quota.values.get(GEOCODING_KEYS.searchPause)?.value),
     ).toBe("QUOTA");
     expect(short.lines[0].level).toBe("warn");
+    expect(day.lines[0].details).toMatchObject({
+      outcome: "UNAVAILABLE_PAUSED",
+      status: 429,
+      reason: {
+        pauseReason: "QUOTA",
+        until: "2026-11-11T00:00:00.000Z",
+        refusedStatus: null,
+      },
+    });
   });
 
   it("holds itself through a burst while the deliveries' own refusal holds the shared pause", async () => {
@@ -548,7 +636,7 @@ describe("the pauses", () => {
       ttl: 30_000,
     });
     redis.values.set(GEOCODING_KEYS.searchPause, {
-      value: pauseValue("REFUSED", new Date(NOW.getTime() + 600_000)),
+      value: pauseValue("REFUSED", new Date(NOW.getTime() + 600_000), 403),
       ttl: 600_000,
     });
 
@@ -558,6 +646,7 @@ describe("the pauses", () => {
       kind: "UNAVAILABLE",
       reason: "PAUSED",
       retryAfterSeconds: 600,
+      diagnostic: `address search paused by REFUSED (HTTP 403) until 2026-11-10T15:10:00.000Z; ${searchRefusalHint(403)}`,
     });
     expect(calls).toHaveLength(0);
   });
@@ -709,5 +798,64 @@ describe("the log line", () => {
     expect(written).not.toMatch(/Epit[aá]cio|Joaquim|Ferreira|Petr[oó]polis/);
     expect(written).not.toContain("pk.secret-key");
     expect(written).not.toContain("locationiq.com");
+  });
+});
+
+describe("why a refusal stopped the search", () => {
+  // Owner's report of 14/11/2026: the log said only that the provider
+  // refused, and the status alone does not say which variable to fix.
+  it("names what to check for each status the provider refuses with", async () => {
+    const hints: Record<number, RegExp> = {
+      401: /ADDRESS_SEARCH_KEY.*REVERSE_GEOCODER_KEY/,
+      403: /Autocomplete/,
+      404: /ADDRESS_SEARCH_URL.*ADDRESS_SEARCH_PROTOCOL/,
+      200: /not a list.*ADDRESS_SEARCH_PROTOCOL/,
+    };
+
+    for (const [status, hint] of Object.entries(hints)) {
+      const redis = fakeRedis();
+      const { useCase, lines } = harness({
+        redis,
+        answers: [{ kind: "REFUSED", status: Number(status) }],
+      });
+
+      await useCase.execute(request());
+
+      expect(lines[0].level).toBe("error");
+      expect(lines[0].details.reason).toMatch(hint);
+      expect(lines[0].details.reason).toBe(searchRefusalHint(Number(status)));
+      expect(
+        searchPauseOf(redis.values.get(GEOCODING_KEYS.searchPause)?.value, NOW),
+      ).toMatchObject({ reason: "REFUSED", status: Number(status) });
+
+      // Variables named, never their values.
+      const written = JSON.stringify(lines);
+
+      expect(written).not.toContain("pk.secret-key");
+      expect(written).not.toContain("locationiq.com");
+    }
+
+    expect(searchRefusalHint(418)).toMatch(/^HTTP 418: refused/);
+  });
+
+  it("reads a pause key with the status, without it, and an old replica's", () => {
+    const until = new Date(NOW.getTime() + 900_000);
+
+    expect(searchPauseOf(pauseValue("REFUSED", until, 403), NOW)).toEqual({
+      reason: "REFUSED",
+      until,
+      status: 403,
+    });
+    expect(searchPauseOf(pauseValue("QUOTA", until), NOW)).toEqual({
+      reason: "QUOTA",
+      until,
+      status: null,
+    });
+    expect(searchPauseOf("REFUSED 2026-11-10T15:15:00.000Z", NOW)).toEqual({
+      reason: "REFUSED",
+      until,
+      status: null,
+    });
+    expect(searchPauseOf(null, NOW)).toBeNull();
   });
 });

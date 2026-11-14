@@ -445,7 +445,7 @@ describe("the limits", () => {
     expect(elsewhere.statusCode).toBe(200);
   });
 
-  it("answer 503 with the search off, and ask nothing", async () => {
+  it("answer 503 ADDRESS_SEARCH_DISABLED with the search off, and ask nothing", async () => {
     env.ADDRESS_SEARCH_URL = undefined;
 
     try {
@@ -456,9 +456,16 @@ describe("the limits", () => {
         tokens.manager,
       );
 
+      // Off by configuration (14/11/2026): a code of its own, so the web
+      // goes straight to the map click; why stays in the log.
       expect(response.statusCode).toBe(503);
-      expect(response.json().code).toBe("ADDRESS_SEARCH_UNAVAILABLE");
-      expect(response.headers["retry-after"]).toBeDefined();
+      expect(response.json()).toEqual({
+        code: "ADDRESS_SEARCH_DISABLED",
+        message:
+          "A busca de endereço não está disponível. Clique no mapa onde fica o endereço.",
+      });
+      expect(response.headers["retry-after"]).toBe("3600");
+      expect(response.body).not.toContain("ADDRESS_SEARCH_URL");
       expect(provider.requests).toHaveLength(before);
     } finally {
       env.ADDRESS_SEARCH_URL = providerUrl;

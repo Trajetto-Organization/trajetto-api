@@ -32,8 +32,17 @@ interface GeocodingGate {
   /** Whether lookups are paused; true when Redis does not answer. */
   paused(now: Date): Promise<boolean>;
 
-  /** Pauses every replica until `until`; never shortens a longer pause. */
-  pause(until: Date, now: Date, reason: GeocodingPauseReason): Promise<void>;
+  /**
+   * Pauses every replica until `until`; never shortens a longer pause.
+   * `status` is the provider's HTTP answer that caused it, kept for the log
+   * and the health page.
+   */
+  pause(
+    until: Date,
+    now: Date,
+    reason: GeocodingPauseReason,
+    status?: number | null,
+  ): Promise<void>;
 
   /**
    * One call's slot in the current second and minute; false when either is
@@ -85,9 +94,21 @@ const GEOCODING_BACKGROUND_CALLS_PER_MINUTE = 40;
 
 const MINUTE_MS = 60_000;
 
-/** "REFUSED 2026-11-09T15:15:00.000Z": the reason, then the deadline. */
-function pauseValue(reason: GeocodingPauseReason, until: Date): string {
-  return `${reason} ${until.toISOString()}`;
+/**
+ * "REFUSED 2026-11-09T15:15:00.000Z 401": the reason, the deadline and,
+ * when known, the provider's HTTP status that caused it. The status is a
+ * third token so the replicas before it, which read only the first two
+ * (`split(" ", 2)`), read a new value the same way; a value they wrote has
+ * no status, and reads as such.
+ */
+function pauseValue(
+  reason: GeocodingPauseReason,
+  until: Date,
+  status?: number | null,
+): string {
+  const base = `${reason} ${until.toISOString()}`;
+
+  return status ? `${base} ${status}` : base;
 }
 
 /** The reason a pause key holds; null for no key or a value of no reason. */
@@ -104,6 +125,17 @@ function pauseDeadlineOf(value: string | null | undefined): Date | null {
   const deadline = new Date(value?.split(" ", 2)[1] ?? "");
 
   return Number.isNaN(deadline.getTime()) ? null : deadline;
+}
+
+/** The HTTP status a pause key holds; null for none or an older value. */
+function pauseStatusOf(value: string | null | undefined): number | null {
+  const token = value?.split(" ", 3)[2] ?? "";
+
+  if (!/^\d{3}$/.test(token)) return null;
+
+  const status = Number(token);
+
+  return status >= 100 && status <= 599 ? status : null;
 }
 
 /** Two seconds, so a window's key outlives its second. */
@@ -189,7 +221,7 @@ function createRedisGeocodingGate(
       }
     },
 
-    async pause(until, now, reason) {
+    async pause(until, now, reason, status) {
       const ms = Math.ceil(until.getTime() - now.getTime());
 
       if (ms <= 0) return;
@@ -199,7 +231,7 @@ function createRedisGeocodingGate(
           EXTEND_PAUSE,
           1,
           keys.pause,
-          pauseValue(reason, until),
+          pauseValue(reason, until, status),
           ms,
         );
       } catch (err) {
@@ -244,6 +276,7 @@ export {
   createRedisGeocodingGate,
   pauseDeadlineOf,
   pauseReasonOf,
+  pauseStatusOf,
   pauseValue,
 };
 export type { GeocodingGate, GeocodingPauseReason };

@@ -61,8 +61,16 @@ beforeAll(async () => {
     );
   });
 
+  // With the diagnostic the log reads (ADDRESS_SEARCH_DISABLED): never
+  // in the body.
   app.get(`${PROBE}/busy`, { schema: hidden }, async () => {
-    throw new ServiceBusyError("Ocupado.", "SERVICE_BUSY", 3);
+    throw new ServiceBusyError(
+      "Ocupado.",
+      "SERVICE_BUSY",
+      3,
+      503,
+      "ADDRESS_SEARCH_URL is not set",
+    );
   });
 
   // A controller that still answers by itself, through a route whose
@@ -265,6 +273,11 @@ describe("the published error schemas (strict)", () => {
     }
     expect(bodies.databaseDown.headers["retry-after"]).toBeDefined();
     expect(bodies.busy.headers["retry-after"]).toBeDefined();
+    // The diagnostic is for the log: the body is the code and the message.
+    expect(bodies.busy.body).toEqual({
+      code: "SERVICE_BUSY",
+      message: "Ocupado.",
+    });
   });
 
   /** The bodies a route can answer with on `status`, from the real ones. */

@@ -212,8 +212,10 @@ describe("every ServiceBusyError code", () => {
         "IMPORT_BUSY",
         "SOCKET_TICKET_UNAVAILABLE",
         // The address search (plan pin-search): the provider's slot, the
-        // search off or paused, and the day's searches spent.
+        // search paused, the day's searches spent and, since 14/11/2026,
+        // the search off by configuration (a code of its own).
         "ADDRESS_SEARCH_BUSY",
+        "ADDRESS_SEARCH_DISABLED",
         "ADDRESS_SEARCH_UNAVAILABLE",
         "ADDRESS_SEARCH_DAILY_LIMIT",
       ]),

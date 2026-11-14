@@ -7,6 +7,7 @@ import {
   EXTEND_PAUSE,
   pauseDeadlineOf,
   pauseReasonOf,
+  pauseStatusOf,
   pauseValue,
   type GeocodingPauseReason,
 } from "@/shared/delivery/geocoding/geocoding-gate";
@@ -52,6 +53,11 @@ interface SearchPause {
   reason: GeocodingPauseReason;
   /** Null when the value has no readable deadline. */
   until: Date | null;
+  /**
+   * The provider's HTTP status that caused it (401, 403, 429…), for the log;
+   * null when the value has none (written before it was kept).
+   */
+  status: number | null;
 }
 
 interface SearchStanding {
@@ -84,11 +90,15 @@ interface AddressSearchStore {
   /** One call made: the platform's and the company's day. */
   spend(businessId: string, now: Date): Promise<void>;
 
-  /** Pauses the search alone until `until`; never shortens a longer one. */
+  /**
+   * Pauses the search alone until `until`; never shortens a longer one.
+   * `status` is the provider's answer that caused it.
+   */
   pauseSearch(
     reason: GeocodingPauseReason,
     until: Date,
     now: Date,
+    status?: number | null,
   ): Promise<void>;
 }
 
@@ -156,7 +166,10 @@ function parseCached(raw: string | null): CachedSearch | null {
   }
 }
 
-/** A pause key's reason and deadline; REFUSED for a value of no reason. */
+/**
+ * A pause key's reason, deadline and status; REFUSED for a value of no
+ * reason.
+ */
 function searchPauseOf(
   value: string | null | undefined,
   now: Date,
@@ -166,6 +179,7 @@ function searchPauseOf(
   return {
     reason: pauseReasonOf(value) ?? "REFUSED",
     until: pauseDeadlineOf(value) ?? now,
+    status: pauseStatusOf(value),
   };
 }
 
@@ -218,7 +232,11 @@ function createRedisAddressSearchStore(
         return {
           accountPause:
             reason === "QUOTA" || reason === "BURST"
-              ? { reason, until: pauseDeadlineOf(shared) }
+              ? {
+                  reason,
+                  until: pauseDeadlineOf(shared),
+                  status: pauseStatusOf(shared),
+                }
               : null,
           searchPause: searchPauseOf(own, now),
           platformUsed: count(platform),
@@ -247,7 +265,7 @@ function createRedisAddressSearchStore(
       }
     },
 
-    async pauseSearch(reason, until, now) {
+    async pauseSearch(reason, until, now, status) {
       const ms = Math.ceil(until.getTime() - now.getTime());
 
       if (ms <= 0) return;
@@ -257,7 +275,7 @@ function createRedisAddressSearchStore(
           EXTEND_PAUSE,
           1,
           keys.searchPause,
-          pauseValue(reason, until),
+          pauseValue(reason, until, status),
           ms,
         );
       } catch (err) {
@@ -282,6 +300,7 @@ export {
   parseCached,
   sealCached,
   searchDigest,
+  searchPauseOf,
   unreadableAddressSearchStore,
 };
 export type { AddressSearchStore, CachedSearch, SearchPause, SearchStanding };

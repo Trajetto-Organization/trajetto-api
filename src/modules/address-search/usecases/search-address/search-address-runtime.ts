@@ -21,18 +21,24 @@ import { proofLocationConfigFromEnv } from "@/shared/services/proof-location/pro
 
 import {
   SearchAddressUseCase,
+  type AddressSearchOffNotice,
   type AddressSearchSettings,
 } from "./search-address-usecase";
 
 /**
  * The address search as the process runs it: the settings from
- * ADDRESS_SEARCH_* (read on every search, so a test can change them), the
- * provider over fetch, and the cache, the counts and the provider's gate on
- * the request path's fail-fast Redis connection — the rate-limit one, wired
- * in http.ts like the geocoding hold. A search waits on Redis for 250 ms at
- * most, and an unreadable Redis answers 503 instead of calling.
+ * ADDRESS_SEARCH_* (read on every search, so a test can change them; the
+ * env itself is read once, at boot, so a change in the Dokploy Environment
+ * needs a redeploy), the provider over fetch, and the cache, the counts and
+ * the provider's gate on the request path's fail-fast Redis connection —
+ * the rate-limit one, wired in http.ts like the geocoding hold. A search
+ * waits on Redis for 250 ms at most, and an unreadable Redis answers 503
+ * instead of calling.
  */
 const log = logger.child({ component: "address-search" });
+
+/** The process's: the search off is a warn once, then info per search. */
+const offNotice: AddressSearchOffNotice = { said: null };
 
 /** The provider is a person's wait: never longer than this. */
 const SEARCH_TIMEOUT_CEILING_MS = 2_500;
@@ -99,6 +105,7 @@ function searchAddressUseCase(): SearchAddressUseCase {
     gate,
     provider: searchPlaces,
     log,
+    offNotice,
   });
 }
 

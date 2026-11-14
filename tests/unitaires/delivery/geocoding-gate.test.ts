@@ -10,6 +10,7 @@ import {
   createRedisGeocodingGate,
   pauseDeadlineOf,
   pauseReasonOf,
+  pauseStatusOf,
   pauseValue,
 } from "@/shared/delivery/geocoding/geocoding-gate";
 import { GEOCODING_KEYS } from "@/shared/delivery/geocoding/geocoding-keys";
@@ -133,6 +134,44 @@ describe("the geocoding pause", () => {
     expect(pauseDeadlineOf(pauseValue("QUOTA", until))).toEqual(until);
     expect(pauseDeadlineOf("QUOTA")).toBeNull();
     expect(pauseDeadlineOf(null)).toBeNull();
+  });
+
+  it("keeps the provider's status as a third token the replicas before it ignore", async () => {
+    // Owner's report of 14/11/2026: a pause in Redis said why it ran, but
+    // not which answer of the provider caused it.
+    const until = new Date(NOW.getTime() + 15 * 60_000);
+    const value = pauseValue("REFUSED", until, 401);
+
+    expect(value).toBe("REFUSED 2026-11-09T15:15:00.000Z 401");
+    expect(pauseStatusOf(value)).toBe(401);
+    expect(pauseReasonOf(value)).toBe("REFUSED");
+    expect(pauseDeadlineOf(value)).toEqual(until);
+
+    // How a replica before the status reads it: the first two tokens.
+    const [reason, deadline] = value.split(" ", 2);
+
+    expect([reason, new Date(deadline)]).toEqual(["REFUSED", until]);
+
+    // Without a status, and a value an old replica wrote.
+    expect(pauseValue("QUOTA", until)).toBe("QUOTA 2026-11-09T15:15:00.000Z");
+    expect(pauseValue("QUOTA", until, null)).toBe(
+      "QUOTA 2026-11-09T15:15:00.000Z",
+    );
+    expect(pauseStatusOf("QUOTA 2026-11-09T15:15:00.000Z")).toBeNull();
+    expect(pauseStatusOf("REFUSED 2026-11-09T15:15:00.000Z abc")).toBeNull();
+    expect(pauseStatusOf(null)).toBeNull();
+
+    // The gate writes it.
+    const { redis, values } = fakeRedis();
+
+    await createRedisGeocodingGate(redis as never).pause(
+      new Date(NOW.getTime() + 60_000),
+      NOW,
+      "BURST",
+      429,
+    );
+
+    expect(pauseStatusOf(values.get(GEOCODING_KEYS.pause)?.value)).toBe(429);
   });
 
   it("ignores a deadline already past", async () => {

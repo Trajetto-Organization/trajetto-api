@@ -1658,7 +1658,11 @@ cada passo mais barato que o seguinte:
 1. o cache da empresa: um acerto não gasta nada, mesmo com a busca desligada
    ou pausada;
 2. ligada: sem `ADDRESS_SEARCH_URL` ou com `ADDRESS_SEARCH_DAILY_BUDGET=0`,
-   `503 ADDRESS_SEARCH_UNAVAILABLE`;
+   `503 ADDRESS_SEARCH_DISABLED` com `retry-after: 3600` e a frase "A busca de
+   endereço não está disponível. Clique no mapa onde fica o endereço." Desde
+   14/11/2026 é um código próprio: a busca desligada não volta sozinha, e a
+   web vai direto ao clique em vez de dizer "por enquanto" (a web anterior
+   trata qualquer 503 desconhecido como indisponível);
 3. uma leitura só no Redis (`MGET`), que falha **fechado**: a pausa da conta,
    a pausa da busca e as contagens do dia da plataforma e da empresa;
 4. a vaga do provedor (`geocoding-gate.ts`), a mesma da localização
@@ -1721,7 +1725,11 @@ ignora) o pico se perdia e a busca seguia chamando durante ele. Durante uma
 pausa, a busca responde `503 ADDRESS_SEARCH_UNAVAILABLE` (recusa ou cota) ou
 `ADDRESS_SEARCH_BUSY` (só pico), com o `retry-after` até o fim da mais longa,
 sem chamar o provedor. Como a cota do dia é a mesma conta, a página da rota
-também para de dizer "Localizando…" (`geocoding-hold.ts`).
+também para de dizer "Localizando…" (`geocoding-hold.ts`). O valor da pausa é
+`"{motivo} {prazo ISO} {HTTP}"`, por exemplo `REFUSED 2026-11-14T15:15:00.000Z
+403`: o HTTP que a causou é um terceiro token opcional (`pauseValue`,
+`pauseStatusOf`), que as réplicas anteriores, que leem só os dois primeiros,
+ignoram; um valor gravado por elas é lido sem o HTTP.
 
 **O cache** (`address-search-limits.ts`). Por empresa:
 `geocoding:search:cache:{businessId}:{HMAC}`. Uma empresa não descobre, pelo
@@ -1744,10 +1752,33 @@ conta como cache vazio; erro ao gravar é ignorado. As chaves de contagem são
 `DAILY_LIMIT_PLATFORM`, `UNAVAILABLE_DISABLED`, `UNAVAILABLE_PAUSED`,
 `UNAVAILABLE_PROVIDER`, `UNAVAILABLE_LIMITS_UNREADABLE`), `status` do
 provedor, `ms` e `cached`. Nunca o texto digitado nem a URL, que leva a chave.
-A recusa sai em `error` ("address search provider refused the request"), o
-texto rejeitado ("address search provider rejected the text; nothing
-paused") e o 429 em `warn`, o resto em `info`. `ADDRESS_SEARCH_KEY` está na
-lista de segredos censurados do logger.
+Quando a busca não responde, a linha diz também o porquê (`reason`, desde
+14/11/2026; antes, uma staging sem `ADDRESS_SEARCH_URL` só dizia
+`UNAVAILABLE_DISABLED`, igual a uma chave recusada para quem lia):
+
+- desligada: a variável (`ADDRESS_SEARCH_URL is not set` ou
+  `ADDRESS_SEARCH_DAILY_BUDGET is 0`, de `addressSearchOffReason`, irmã da
+  `deliveryGeocodingOffReason` do job). A primeira busca do processo que a
+  encontra desligada sai em `warn` ("address search off: …"), as seguintes em
+  `info`, para não haver um `warn` por tecla;
+- pausada: `{pauseReason, until, refusedStatus}`, o motivo, o prazo e o HTTP
+  da recusa que a causou;
+- recusada: o HTTP com o que ele quer dizer (`searchRefusalHint`): 401, a
+  chave (`ADDRESS_SEARCH_KEY`, ou a `REVERSE_GEOCODER_KEY` quando ela está
+  vazia); 403, o token sem o Autocomplete liberado ou com restrição de
+  Referrer ou IP; 404 ou um 200 que não é lista, a `ADDRESS_SEARCH_URL` que
+  não é a raiz da API ou o `ADDRESS_SEARCH_PROTOCOL` trocado. Só nomes de
+  variáveis, nunca os valores.
+
+O mesmo motivo vai, numa frase, no `diagnostic` do `ServiceBusyError`, que o
+serializador de erro do pino escreve na linha "Request rejected" do
+`http.ts` e que nunca entra no corpo (o `sendError` só escreve o `code` e a
+`message`). A recusa sai em `error` ("address search provider refused the
+request"), o texto rejeitado ("address search provider rejected the text;
+nothing paused") e o 429 em `warn`, o resto em `info`. `ADDRESS_SEARCH_KEY`
+está na lista de segredos censurados do logger. As variáveis são lidas uma
+vez, no boot: mudar o _Environment_ no Dokploy sem um novo deploy não muda
+nada.
 
 **O Redis** é a conexão do caminho da requisição, a do rate limit (falha
 rápido, 250 ms por comando), ligada em `http.ts` por

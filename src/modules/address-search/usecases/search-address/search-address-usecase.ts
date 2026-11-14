@@ -55,7 +55,12 @@ import type { Viewbox } from "../../schemas/address-search-schemas";
  *
  * The log line has the company, the outcome, the provider's status, the
  * time and whether it came from the cache — never what was typed (it can
- * be a recipient's address) and never the URL (it carries the key).
+ * be a recipient's address) and never the URL (it carries the key). When
+ * the search cannot answer, it also says why (`reason`): the variable that
+ * turned it off, the pause that holds it (its reason, deadline and the
+ * provider's status), or what a refusal's status means. Until 14/11/2026 a
+ * staging without ADDRESS_SEARCH_URL logged only UNAVAILABLE_DISABLED, and
+ * nobody could tell it from a refused key.
  */
 interface AddressSearchSettings {
   provider: AddressSearchProviderConfig | null;
@@ -95,6 +100,11 @@ type SearchAddressResult =
       /** PROVIDER: refused (paused), rejected the text, or failed. */
       reason: "DISABLED" | "PAUSED" | "PROVIDER" | "LIMITS_UNREADABLE";
       retryAfterSeconds: number;
+      /**
+       * Why, for the log only (ServiceBusyError's diagnostic): off, paused
+       * or refused. Never what was typed, the URL or the key.
+       */
+      diagnostic?: string;
     }
   | { kind: "BUSY"; retryAfterSeconds: number }
   | { kind: "ABORTED" };
@@ -103,6 +113,16 @@ interface SearchLog {
   info(details: Record<string, unknown>, message: string): void;
   warn(details: Record<string, unknown>, message: string): void;
   error(details: Record<string, unknown>, message: string): void;
+}
+
+/**
+ * Whether this process already said the search is off, and why: the first
+ * search that finds it off logs at warn, the rest at info, like the job's
+ * offLogged (geocode-deliveries-job.ts). A staging without the variable
+ * shows why at a level anybody sees, without a warn per keystroke.
+ */
+interface AddressSearchOffNotice {
+  said: string | null;
 }
 
 interface SearchAddressDeps {
@@ -115,6 +135,8 @@ interface SearchAddressDeps {
     signal: AbortSignal,
   ) => Promise<ProviderAnswer>;
   log: SearchLog;
+  /** The process's (search-address-runtime.ts); this use case's by default. */
+  offNotice?: AddressSearchOffNotice;
   clock?: () => Date;
   options?: Partial<SearchAddressOptions>;
 }
@@ -145,6 +167,8 @@ interface Settled {
   rejected?: boolean;
   /** The provider answered 429. */
   limited?: boolean;
+  /** The log line's `reason`: why the search could not answer. */
+  cause?: string | Record<string, unknown>;
 }
 
 /** Nothing found is kept for less: the map may have the street tomorrow. */
@@ -171,6 +195,72 @@ function latest(holds: ReadonlyArray<SearchPause>): Date | null {
   );
 }
 
+/**
+ * Why the search is off, for the log; null when it is on. The sibling of
+ * deliveryGeocodingOffReason (geocoding-enabled.ts): the provider exists
+ * only with ADDRESS_SEARCH_URL (search-address-runtime.ts).
+ */
+function addressSearchOffReason(
+  settings: Pick<AddressSearchSettings, "provider" | "dailyBudget">,
+): string | null {
+  if (!settings.provider) return "ADDRESS_SEARCH_URL is not set";
+
+  if (settings.dailyBudget <= 0) return "ADDRESS_SEARCH_DAILY_BUDGET is 0";
+
+  return null;
+}
+
+/**
+ * What a refusal's HTTP status means to whoever configures the search
+ * (address-search-provider.ts: a 401, a 403, a 404 without the provider's
+ * error, or a 200 that is not a list). Names the variables, never their
+ * values.
+ */
+function searchRefusalHint(status: number | null): string {
+  switch (status) {
+    case 401:
+      return "HTTP 401: the provider refused the key; check ADDRESS_SEARCH_KEY (REVERSE_GEOCODER_KEY is used when it is empty)";
+    case 403:
+      return "HTTP 403: the key is not allowed this endpoint; on LocationIQ, enable Autocomplete on the token and remove any referrer or IP restriction";
+    case 404:
+      return "HTTP 404: ADDRESS_SEARCH_URL is not the API's root (the /v1, without the endpoint), or ADDRESS_SEARCH_PROTOCOL does not match the provider";
+    case 200:
+      return "HTTP 200 that is not a list: ADDRESS_SEARCH_URL answers a page, not the provider's API; check it and ADDRESS_SEARCH_PROTOCOL";
+    default:
+      return `HTTP ${status ?? "?"}: refused; check ADDRESS_SEARCH_URL, ADDRESS_SEARCH_PROTOCOL and the key`;
+  }
+}
+
+/** The pause that answers, as the log line's `reason`. */
+function pauseCause(hold: SearchPause): Record<string, unknown> {
+  return {
+    pauseReason: hold.reason,
+    until: hold.until?.toISOString() ?? null,
+    refusedStatus: hold.reason === "REFUSED" ? hold.status : null,
+  };
+}
+
+/** The same in one sentence, for the error's diagnostic. */
+function pauseDiagnostic(hold: SearchPause): string {
+  const status = hold.status ? ` (HTTP ${hold.status})` : "";
+  const until = hold.until?.toISOString() ?? "an unknown deadline";
+  const hint =
+    hold.reason === "REFUSED" && hold.status
+      ? `; ${searchRefusalHint(hold.status)}`
+      : "";
+
+  return `address search paused by ${hold.reason}${status} until ${until}${hint}`;
+}
+
+/** The pause furthest away: the one the answer waits out. */
+function longest(holds: ReadonlyArray<SearchPause>): SearchPause {
+  return holds.reduce((furthest, hold) =>
+    hold.until && (!furthest.until || hold.until > furthest.until)
+      ? hold
+      : furthest,
+  );
+}
+
 /** Waits `ms`, or less when the person gives up. */
 function pause(ms: number, signal: AbortSignal): Promise<void> {
   return new Promise((resolve) => {
@@ -194,18 +284,18 @@ function pause(ms: number, signal: AbortSignal): Promise<void> {
 class SearchAddressUseCase {
   private readonly options: SearchAddressOptions;
   private readonly clock: () => Date;
+  private readonly offNotice: AddressSearchOffNotice;
 
   constructor(private readonly deps: SearchAddressDeps) {
     this.options = { ...SEARCH_ADDRESS_DEFAULTS, ...deps.options };
     this.clock = deps.clock ?? (() => new Date());
+    this.offNotice = deps.offNotice ?? { said: null };
   }
 
   async execute(request: SearchAddressRequest): Promise<SearchAddressResult> {
     const started = this.clock();
-    const { result, status, refused, rejected, limited } = await this.search(
-      request,
-      started,
-    );
+    const { result, status, refused, rejected, limited, cause } =
+      await this.search(request, started);
 
     const line = {
       businessId: request.businessId,
@@ -218,9 +308,21 @@ class SearchAddressUseCase {
       status: status ?? null,
       ms: this.clock().getTime() - started.getTime(),
       cached: result.kind === "OK" ? result.cached : false,
+      ...(cause !== undefined && { reason: cause }),
     };
 
-    if (refused) {
+    const off =
+      result.kind === "UNAVAILABLE" && result.reason === "DISABLED"
+        ? (result.diagnostic ?? null)
+        : null;
+
+    if (off && this.offNotice.said !== off) {
+      this.offNotice.said = off;
+      this.deps.log.warn(
+        line,
+        "address search off: every search answers ADDRESS_SEARCH_DISABLED until the variable is set and the API redeployed; the map click still pins",
+      );
+    } else if (refused) {
       this.deps.log.error(
         line,
         "address search provider refused the request: check ADDRESS_SEARCH_URL, ADDRESS_SEARCH_PROTOCOL and the key; search paused for 15 min",
@@ -266,15 +368,25 @@ class SearchAddressUseCase {
       }
     }
 
-    if (!settings.provider || settings.dailyBudget <= 0) {
+    const off = addressSearchOffReason(settings);
+
+    // Off whenever there is no provider: the second test is the compiler's.
+    if (off !== null || !settings.provider) {
+      const why = off ?? "ADDRESS_SEARCH_URL is not set";
+
       return {
         result: {
           kind: "UNAVAILABLE",
           reason: "DISABLED",
           retryAfterSeconds: 3600,
+          diagnostic: why,
         },
+        cause: why,
       };
     }
+
+    // On (again, when a test switched it): the next time off is news.
+    this.offNotice.said = null;
 
     const standing = await this.deps.store.standing(request.businessId, now);
 
@@ -296,12 +408,16 @@ class SearchAddressUseCase {
     const long = held.filter((hold) => hold.reason !== "BURST");
 
     if (long.length > 0) {
+      const hold = longest(long);
+
       return {
         result: {
           kind: "UNAVAILABLE",
           reason: "PAUSED",
-          retryAfterSeconds: secondsUntil(latest(long), now, 900),
+          retryAfterSeconds: secondsUntil(hold.until, now, 900),
+          diagnostic: pauseDiagnostic(hold),
         },
+        cause: pauseCause(hold),
       };
     }
 
@@ -397,11 +513,14 @@ class SearchAddressUseCase {
         };
       }
 
-      case "REFUSED":
+      case "REFUSED": {
+        const hint = searchRefusalHint(answer.status);
+
         await this.deps.store.pauseSearch(
           "REFUSED",
           new Date(now.getTime() + REFUSED_PAUSE_MS),
           now,
+          answer.status,
         );
 
         return {
@@ -409,10 +528,13 @@ class SearchAddressUseCase {
             kind: "UNAVAILABLE",
             reason: "PROVIDER",
             retryAfterSeconds: REFUSED_PAUSE_MS / 1000,
+            diagnostic: hint,
           },
           status: answer.status,
           refused: true,
+          cause: hint,
         };
+      }
 
       case "REJECTED":
         // This text, not the account: nothing paused, nothing cached.
@@ -439,19 +561,23 @@ class SearchAddressUseCase {
               ] as const);
 
         await Promise.all([
-          this.deps.gate.pause(until, now, reason),
-          this.deps.store.pauseSearch(reason, until, now),
+          this.deps.gate.pause(until, now, reason, answer.status),
+          this.deps.store.pauseSearch(reason, until, now, answer.status),
         ]);
 
         if (reason === "QUOTA") {
+          const hold: SearchPause = { reason, until, status: answer.status };
+
           return {
             result: {
               kind: "UNAVAILABLE",
               reason: "PAUSED",
               retryAfterSeconds: secondsUntil(until, now, 3600),
+              diagnostic: pauseDiagnostic(hold),
             },
             status: answer.status,
             limited: true,
+            cause: pauseCause(hold),
           };
         }
 
@@ -505,8 +631,11 @@ export {
   NOT_FOUND_CACHE_SECONDS,
   SEARCH_ADDRESS_DEFAULTS,
   SearchAddressUseCase,
+  addressSearchOffReason,
+  searchRefusalHint,
 };
 export type {
+  AddressSearchOffNotice,
   AddressSearchSettings,
   SearchAddressDeps,
   SearchAddressRequest,

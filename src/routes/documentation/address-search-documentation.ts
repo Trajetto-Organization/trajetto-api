@@ -82,8 +82,12 @@ const addressSearchResponses = {
     ["ADDRESS_SEARCH_DAILY_LIMIT"],
   ),
   unavailable: codedRefusal(
-    "ADDRESS_SEARCH_BUSY: a vaga do provedor está ocupada agora (a localização automática das entregas e as outras buscas dividem a mesma) ou ele pediu um intervalo; espere o `retry-after` e repita. ADDRESS_SEARCH_UNAVAILABLE: a busca está desligada (sem `ADDRESS_SEARCH_URL` ou com orçamento 0), pausada (o provedor recusou a chave ou a URL, ou a cota do dia do provedor acabou) ou o provedor falhou; o `retry-after` diz quando tentar de novo. Nos dois casos o clique no mapa continua funcionando.",
-    ["ADDRESS_SEARCH_BUSY", "ADDRESS_SEARCH_UNAVAILABLE"],
+    "ADDRESS_SEARCH_BUSY: a vaga do provedor está ocupada agora (a localização automática das entregas e as outras buscas dividem a mesma) ou ele pediu um intervalo; espere o `retry-after` e repita. ADDRESS_SEARCH_DISABLED: a busca está desligada na configuração da plataforma (sem `ADDRESS_SEARCH_URL` ou com `ADDRESS_SEARCH_DAILY_BUDGET=0`); não adianta repetir (`retry-after: 3600`), a tela vai direto ao clique no mapa. ADDRESS_SEARCH_UNAVAILABLE: a busca está pausada (o provedor recusou a chave ou a URL, ou a cota do dia do provedor acabou) ou o provedor falhou; o `retry-after` diz quando tentar de novo. Em todos os casos o clique no mapa continua funcionando, e o motivo fica só no log da API.",
+    [
+      "ADDRESS_SEARCH_BUSY",
+      "ADDRESS_SEARCH_DISABLED",
+      "ADDRESS_SEARCH_UNAVAILABLE",
+    ],
   ),
   validation: errorResponse,
   internalServerError: internalErrorResponse,

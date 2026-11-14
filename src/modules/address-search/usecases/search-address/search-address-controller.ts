@@ -82,10 +82,25 @@ class SearchAddressController {
         );
 
       case "UNAVAILABLE":
+        // Off by configuration is no wait: a code of its own, so the web
+        // goes straight to the map click instead of "por enquanto". A web
+        // before it reads any unknown 503 as unavailable.
+        if (result.reason === "DISABLED") {
+          throw new ServiceBusyError(
+            "A busca de endereço não está disponível. Clique no mapa onde fica o endereço.",
+            "ADDRESS_SEARCH_DISABLED",
+            result.retryAfterSeconds,
+            503,
+            result.diagnostic,
+          );
+        }
+
         throw new ServiceBusyError(
           "A busca de endereço está indisponível agora. Clique no mapa onde fica o endereço.",
           "ADDRESS_SEARCH_UNAVAILABLE",
           result.retryAfterSeconds,
+          503,
+          result.diagnostic,
         );
 
       case "ABORTED":
