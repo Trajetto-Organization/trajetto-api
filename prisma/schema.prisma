@@ -3367,8 +3367,10 @@ model Delivery {
   //     AND geo_source IS NULL AND (geocode_status IS NULL OR
   //     geocode_status = 'FAILED') AND status IN ('PENDING', 'IN_TRANSIT')
   // And the point reuse at one door (14/11/2026; migration
-  // 20261114120000), only the rows with a key:
-  //   delivery_address_key_idx ("businessId", "address_key")
+  // 20261114120000), only the rows with a key, the newest point of each
+  // source first:
+  //   delivery_address_key_idx ("businessId", "address_key", "geo_source",
+  //     "geo_updated_at" DESC NULLS LAST, "id" DESC)
   //     WHERE address_key IS NOT NULL
   @@map("delivery")
 }

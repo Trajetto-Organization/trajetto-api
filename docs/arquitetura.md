@@ -1501,8 +1501,15 @@ chave da pausa guarda o motivo junto do prazo (`REFUSED`, `QUOTA` ou
     12A), o bairro, a cidade e a UF. O CEP fica fora, porque costuma vir
     geral ou errado. Sem rua ou sem cidade, a chave é nula. Coluna
     `address_key` (migration `20261114120000_delivery_address_key`, só
-    expansão) com o índice parcial `delivery_address_key_idx`
-    (`"businessId", "address_key"`, só as linhas com chave).
+    expansão) com o índice parcial `delivery_address_key_idx`, só as
+    linhas com chave, nas colunas
+    `"businessId", "address_key", "geo_source", "geo_updated_at" DESC NULLS LAST, "id" DESC`.
+    Depois da porta vêm a origem e o mais recente primeiro, na ordem das
+    sondas: o pino mais recente e o ponto mais recente do geocodificador
+    leem uma entrada cada, por mais entregas que a porta acumule (um centro
+    de distribuição, uma loja atendida todo dia, as encerradas inclusive),
+    e o `UPDATE` da propagação lê só as linhas da porta sem origem
+    (`geo_source IS NULL` é condição do índice).
   - A regra (`shared/delivery/geocoding/address-point-reuse.ts`, D-21): o
     ponto `MANUAL` vence o do geocodificador, que só vale no número ou na
     rua (`ADDRESS`, `STREET`); na mesma origem, o mais recente; nunca

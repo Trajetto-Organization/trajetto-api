@@ -352,6 +352,61 @@ describe("the point of another delivery at the same door", () => {
     expect(again.statusCode, again.body).toBe(200);
     expect(again.json().id).toBe(first.json().id);
   });
+
+  it("is read one index entry per source, however busy the door", async () => {
+    // The create's two probes (findReusablePoint), the job's
+    // (readDoorCandidates) and the propagation's UPDATE (writePointToDoor),
+    // in the shape they run. With sequential and bitmap scans off, only an
+    // index scan is left: delivery_address_key_idx must be the one, and no
+    // Sort may follow it — a sort would mean the probe reads and orders
+    // every point the door ever had instead of stopping at the first.
+    const door = `"businessId" = '${CARRIER}'
+      AND "address_key" = '${deliveryAddressKey(LIPOLD)}'
+      AND "id" <> ''`;
+    const newest = `ORDER BY "geo_updated_at" DESC NULLS LAST, "id" DESC LIMIT 1`;
+
+    const plans = await prisma.$transaction(async (tx) => {
+      await tx.$executeRawUnsafe("SET LOCAL enable_seqscan = off");
+      await tx.$executeRawUnsafe("SET LOCAL enable_bitmapscan = off");
+
+      const explain = async (sql: string) =>
+        (
+          await tx.$queryRawUnsafe<Array<{ "QUERY PLAN": string }>>(
+            `EXPLAIN ${sql}`,
+          )
+        )
+          .map((row) => row["QUERY PLAN"])
+          .join("\n");
+
+      return {
+        manual: await explain(
+          `SELECT "latitude" FROM "delivery" WHERE ${door}
+            AND "latitude" IS NOT NULL AND "longitude" IS NOT NULL
+            AND "geo_source" = 'MANUAL' ${newest}`,
+        ),
+        geocoded: await explain(
+          `SELECT "latitude" FROM "delivery" WHERE ${door}
+            AND "latitude" IS NOT NULL AND "longitude" IS NOT NULL
+            AND "geo_source" = 'GEOCODER'
+            AND "geo_precision" IN ('ADDRESS', 'STREET') ${newest}`,
+        ),
+        write: await explain(
+          `UPDATE "delivery" SET "geocode_status" = 'RESOLVED'
+            WHERE ${door} AND "status" IN ('PENDING', 'IN_TRANSIT')
+              AND "latitude" IS NULL AND "geo_source" IS NULL`,
+        ),
+      };
+    });
+
+    for (const probe of [plans.manual, plans.geocoded]) {
+      expect(probe).toContain("delivery_address_key_idx");
+      expect(probe).not.toMatch(/\bSort\b/);
+    }
+
+    // The propagation reads the door's rows without a source, not all.
+    expect(plans.write).toContain("delivery_address_key_idx");
+    expect(plans.write).toMatch(/Index Cond: .*geo_source IS NULL/);
+  });
 });
 
 describe("the public create", () => {

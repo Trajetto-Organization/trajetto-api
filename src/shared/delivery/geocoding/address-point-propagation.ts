@@ -1,4 +1,4 @@
-import type { Prisma } from "@prisma/client";
+import { Prisma } from "@prisma/client";
 
 import type { PointCandidate, ReusedAddressPoint } from "./address-point-reuse";
 
@@ -55,31 +55,44 @@ function takesDoorPoint(row: DoorCandidate, door: AddressDoor): boolean {
 
 /**
  * The newest point of each source at the door (a pin, the geocoder's at the
- * number or on the street), for pickReusablePoint to decide between: one
- * probe of delivery_address_key_idx, whose predicate the key's equality
- * proves. Shared by the geocoder's claim (reusablePoint) and the owner's
- * backfill.
+ * number or on the street), for pickReusablePoint to decide between. Shared
+ * by the geocoder's claim (reusablePoint) and the owner's backfill.
+ *
+ * Two probes, each one LIMIT 1 down delivery_address_key_idx: its columns
+ * after the door are geo_source and the newest first, the order below, so
+ * each reads the first entry and stops. A DISTINCT ON over the door read
+ * and sorted every point the door ever had, closed deliveries included —
+ * work that grew with every delivery to a busy door. The key's equality
+ * proves the index's predicate.
  */
 async function readDoorCandidates(
   client: Pick<Prisma.TransactionClient, "$queryRaw">,
   door: AddressDoor,
 ): Promise<PointCandidate[]> {
-  return client.$queryRaw<PointCandidate[]>`
-    SELECT DISTINCT ON ("geo_source")
-      "latitude", "longitude", "geo_source", "geo_precision",
-      "geo_updated_at"
-    FROM "delivery"
-    WHERE "businessId" = ${door.businessId}
+  const atTheDoor = Prisma.sql`
+    "businessId" = ${door.businessId}
       AND "address_key" = ${door.addressKey}
       AND "id" <> ${door.exceptId ?? ""}
       AND "latitude" IS NOT NULL
-      AND "longitude" IS NOT NULL
-      AND (
-        "geo_source" = 'MANUAL'
-        OR ("geo_source" = 'GEOCODER'
-          AND "geo_precision" IN ('ADDRESS', 'STREET'))
-      )
-    ORDER BY "geo_source", "geo_updated_at" DESC NULLS LAST, "id" DESC
+      AND "longitude" IS NOT NULL`;
+
+  return client.$queryRaw<PointCandidate[]>`
+    (SELECT "latitude", "longitude", "geo_source", "geo_precision",
+        "geo_updated_at"
+      FROM "delivery"
+      WHERE ${atTheDoor}
+        AND "geo_source" = 'MANUAL'
+      ORDER BY "geo_updated_at" DESC NULLS LAST, "id" DESC
+      LIMIT 1)
+    UNION ALL
+    (SELECT "latitude", "longitude", "geo_source", "geo_precision",
+        "geo_updated_at"
+      FROM "delivery"
+      WHERE ${atTheDoor}
+        AND "geo_source" = 'GEOCODER'
+        AND "geo_precision" IN ('ADDRESS', 'STREET')
+      ORDER BY "geo_updated_at" DESC NULLS LAST, "id" DESC
+      LIMIT 1)
   `;
 }
 
@@ -89,10 +102,12 @@ async function writePointToDoor(
   door: AddressDoor,
   point: ReusedAddressPoint,
 ): Promise<string[]> {
-  // The key's equality proves delivery_address_key_idx's predicate; the
-  // status literals and the two NULLs are the guards, re-checked on each
-  // row the UPDATE locks, so a pin or a geocoder's settle that got there
-  // first wins.
+  // The key's equality proves delivery_address_key_idx's predicate, and
+  // geo_source IS NULL is one of its conditions: the UPDATE reads the
+  // door's rows without a source, not every row of the door. The status
+  // literals and the two NULLs are the guards, re-checked on each row the
+  // UPDATE locks, so a pin or a geocoder's settle that got there first
+  // wins.
   const rows = await client.$queryRaw<Array<{ id: string }>>`
     UPDATE "delivery"
     SET "latitude" = ${point.latitude},

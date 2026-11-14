@@ -314,7 +314,9 @@ class DeliveryRepository implements IDeliveryRepository {
     // The company's rows at this door with a point: two index probes on
     // delivery_address_key_idx, the newest of each source, and the rule
     // decides between them (the twin runs the same rule over all of them).
-    // One after the other: a transaction's connection runs one at a time.
+    // The index's columns after the door are geo_source and this order, so
+    // each probe reads one entry however busy the door. One after the
+    // other: a transaction's connection runs one at a time.
     const atTheDoor = {
       businessId,
       address_key: addressKey,
