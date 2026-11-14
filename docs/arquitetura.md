@@ -1545,6 +1545,14 @@ chave da pausa guarda o motivo junto do prazo (`REFUSED`, `QUOTA` ou
     `delivery addresses geocoded` conta `reused`. Endereço repetido deixa de
     gastar a cota do LocationIQ. A reserva continua limitada ao orçamento
     que resta: com o dia gasto, nada é reservado, nem para reaproveitar.
+    Com o provedor em pausa (a recusa, `REFUSED`, ou a cota do dia do
+    provedor, `QUOTA`), é igual: o job e o `geocodeSoon` voltam antes de
+    reservar. Nessas horas, a entrega que já está na fila numa porta com
+    ponto espera a pausa acabar (ou o dia seguinte, com o orçamento gasto);
+    só o pino de uma entrega da porta a alcança antes, pela propagação.
+    Reservar só para reaproveitar, com a pausa, faria o job pegar e devolver
+    as mesmas entregas a cada minuto. A criação e a edição do endereço não
+    dependem disso: leem a irmã na própria transação.
   - **O pino vale para as outras entregas da porta (D-24).** Depois do
     commit do "Fixar no mapa", as outras entregas abertas (`PENDING`,
     `IN_TRANSIT`) da mesma empresa e da mesma chave, ainda sem ponto e sem

@@ -303,6 +303,10 @@ class DeliveryGeocodingService {
   async runOnce(now: Date = new Date()): Promise<GeocodingRunResult> {
     const result = emptyResult();
 
+    // A paused run claims nothing, not even for a reuse, which needs no
+    // provider: a reuse-only claim would take and give back the same head
+    // of the queue every minute. A queued delivery at a located door waits
+    // for the pause, or for a pin at its door (docs/arquitetura.md).
     if (await this.gate.paused(now)) return this.held(result, "PAUSED", now);
 
     // Claim only what the budget can still pay for: a claim stamps the
