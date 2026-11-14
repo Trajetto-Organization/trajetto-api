@@ -36,6 +36,24 @@ function addressChanged(current: AddressFields, next: AddressFields): boolean {
 }
 
 /**
+ * The address after an edit: what the edit sends, and the stored value for
+ * a field it leaves out — the address the new address key is computed from
+ * (address-key.ts), so the edit can take the point another delivery of the
+ * company already has there.
+ */
+function editedAddress(
+  current: AddressFields,
+  next: AddressFields,
+): AddressFields {
+  return Object.fromEntries(
+    ADDRESS_FIELDS.map((field) => [
+      field,
+      next[field] !== undefined ? next[field] : (current[field] ?? null),
+    ]),
+  ) as AddressFields;
+}
+
+/**
  * The columns an address change clears: the point, and the geocoder's
  * bookkeeping with it (plan of 02/11/2026, E1), so the new address is
  * geocoded again — and a lookup of the old one still in flight finds its
@@ -52,4 +70,5 @@ const CLEARED_ADDRESS_POINT = {
   geocode_attempts: 0,
 } as const;
 
-export { ADDRESS_FIELDS, CLEARED_ADDRESS_POINT, addressChanged };
+export { ADDRESS_FIELDS, CLEARED_ADDRESS_POINT, addressChanged, editedAddress };
+export type { AddressFields };

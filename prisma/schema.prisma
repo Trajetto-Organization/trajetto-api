@@ -3226,6 +3226,13 @@ model Delivery {
   geocode_status       DeliveryGeocodeStatus?
   geocode_attempted_at DateTime?
   geocode_attempts     Int                    @default(0)
+  /// Which deliveries of the company stand at the same door (14/11/2026;
+  /// src/shared/delivery/address-key.ts): the SHA-256 of the canonical
+  /// street, number, district, city and UF, never the CEP. A delivery
+  /// without a point takes the one another delivery of the company has at
+  /// the same key. Null for a row written before it (the owner's backfill
+  /// fills them) or without a street or a city.
+  address_key          String?
 
   status         DeliveryStatus @default(PENDING)
   // A civil date, no time window (decision 1.5); see Route.scheduled_date.
@@ -3359,6 +3366,10 @@ model Delivery {
   //   delivery_geocode_pending_idx ("created_at") WHERE latitude IS NULL
   //     AND geo_source IS NULL AND (geocode_status IS NULL OR
   //     geocode_status = 'FAILED') AND status IN ('PENDING', 'IN_TRANSIT')
+  // And the point reuse at one door (14/11/2026; migration
+  // 20261114120000), only the rows with a key:
+  //   delivery_address_key_idx ("businessId", "address_key")
+  //     WHERE address_key IS NOT NULL
   @@map("delivery")
 }
 

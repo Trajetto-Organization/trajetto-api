@@ -2,6 +2,7 @@ import { Prisma } from "@prisma/client";
 
 import { DeliveryStatus } from "@/shared/delivery/delivery-rules";
 import type { OperationDay } from "@/modules/route/repositories/IOperation-day-repository";
+import type { ReusedAddressPoint } from "@/shared/delivery/geocoding/address-point-reuse";
 import {
   Delivery,
   DeliveryItemInput,
@@ -51,10 +52,29 @@ interface OperationBacklog {
 }
 
 interface IDeliveryRepository {
+  /**
+   * The row with its address key (address-key.ts) and its point: the one
+   * given (MANUAL) or, without one, the point another delivery of the
+   * company has at the same address (address-point-reuse.ts), read in the
+   * same transaction. The one door of the panel, the NF-e XML, the
+   * spreadsheet and the public API.
+   */
   createDelivery: (
     deliveryData: CreateDeliveryProps,
     tx?: Prisma.TransactionClient,
   ) => Promise<Delivery>;
+  /**
+   * The point another delivery of the company has at this address key, as
+   * the columns a delivery takes it with (pickReusablePoint: MANUAL first,
+   * then the most recent; never another company's); null when none
+   * qualifies. `excludeDeliveryId`: the delivery being edited.
+   */
+  findReusablePoint: (
+    businessId: string,
+    addressKey: string,
+    excludeDeliveryId?: string | null,
+    tx?: Prisma.TransactionClient,
+  ) => Promise<ReusedAddressPoint | null>;
   /** The delivery a submission with this key already created, in this company. */
   findDeliveryBySubmissionId: (
     businessId: string,

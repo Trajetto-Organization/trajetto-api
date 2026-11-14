@@ -1454,6 +1454,45 @@ chave da pausa guarda o motivo junto do prazo (`REFUSED`, `QUOTA` ou
   caminho não grava nada, e uma devolução dessa reserva também não: as duas
   conferem `geocode_attempted_at`, que é o lease da reserva. Reenviar o mesmo
   endereço (o CEP com hífen inclusive) não muda nada.
+- **O ponto de outra entrega na mesma porta (14/11/2026).** Relato do dono:
+  uma entrega na "Rua Doutor Lipold · Carangola · Petrópolis/RJ" ficava
+  "Sem localização" enquanto outra da mesma empresa, no mesmo endereço, tinha
+  ponto. Cada entrega só ganhava ponto pelo corpo, pela própria consulta ou
+  pelo próprio pino.
+  - A chave do endereço (`shared/delivery/address-key.ts`, decisão D-22) é o
+    SHA-256 de `v1|rua|número|bairro|cidade|UF`: a rua canônica (acentos e
+    maiúsculas fora, "R." vira "rua", "Av." vira "avenida", "Dr." vira
+    "doutor", conectivos fora; uma Rua e uma Avenida de mesmo nome são duas
+    ruas), o número compacto (`s/n`, `0` e vazio são "sem número"; 12 não é
+    12A), o bairro, a cidade e a UF. O CEP fica fora, porque costuma vir
+    geral ou errado. Sem rua ou sem cidade, a chave é nula. Coluna
+    `address_key` (migration `20261114120000_delivery_address_key`, só
+    expansão) com o índice parcial `delivery_address_key_idx`
+    (`"businessId", "address_key"`, só as linhas com chave).
+  - A regra (`shared/delivery/geocoding/address-point-reuse.ts`, D-21): o
+    ponto `MANUAL` vence o do geocodificador, que só vale no número ou na
+    rua (`ADDRESS`, `STREET`); na mesma origem, o mais recente; nunca
+    `NOT_FOUND` nem `COARSE`. O ponto copiado é sempre `GEOCODER`,
+    `RESOLVED`, com a precisão da origem (`ADDRESS` quando ela é `MANUAL`) e
+    `geo_updated_at` de agora (D-23): a repetição da API pública só compara
+    ponto `MANUAL` (`replay-fingerprint.ts`), e uma cópia `MANUAL` faria o
+    reenvio legítimo do ERP virar 409 `IDEMPOTENCY_KEY_REUSED`. A geocerca da
+    API e do app lê `GEOCODER` no número ou na rua como exato, e a web
+    mostra "Pelo endereço".
+  - Na criação (`DeliveryRepository.createDelivery`, a porta única do
+    painel, do XML, da planilha e da API pública), a chave é gravada e, sem
+    ponto no corpo, a irmã da mesma empresa é lida na mesma transação
+    (`findReusablePoint`: duas sondas no índice, a `MANUAL` e a `GEOCODER`
+    mais recentes, e a regra decide; o gêmeo roda a mesma regra sobre todas).
+    Funciona com o geocodificador desligado, e a resposta da criação já sai
+    com o ponto. O `geocodeSoon` não pede nada para ela, porque
+    `unlocatedDeliveryIds` já deixa de fora quem tem ponto.
+  - Na edição do endereço, a chave nova vai junto com o
+    `CLEARED_ADDRESS_POINT`, e o ponto de outra entrega no endereço novo
+    (fora a própria), quando existe, entra no lugar do antigo. O
+    `geocodeSoon` só é pedido sem ele.
+  - Toda leitura filtra `businessId`: a chave nunca cruza empresas. As
+    linhas de antes ficam com a chave nula até o backfill do dono.
 - Orçamento: `DELIVERY_GEOCODING_DAILY_BUDGET` consultas por dia (UTC),
   somando as réplicas e os dois caminhos, num contador de janela fixa no
   Redis (`shared/delivery/geocoding/geocoding-budget.ts`). Ao contrário dos

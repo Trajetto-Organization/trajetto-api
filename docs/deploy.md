@@ -3132,6 +3132,30 @@ variável nova e sem rota nova. A regra está em
   Se aparecer alguma linha, encerre com pendências ou cancele as rotas
   sobrando desse motorista; senão a migration falha e não sobe.
 
+**O ponto de outra entrega na mesma porta (14/11/2026).** Sem variável nova
+e sem rota nova. A regra está em
+[arquitetura.md (Geocerca e coordenadas do endereço)](./arquitetura.md#geocerca-e-coordenadas-do-endereço).
+A migration `20261114120000_delivery_address_key` é só de expansão: a coluna
+`delivery.address_key` (TEXT, nula, sem default, só no catálogo) e o índice
+parcial `delivery_address_key_idx`, sob `lock_timeout=5s`. O índice é criado
+sem `CONCURRENTLY` e lê a tabela inteira uma vez sob o lock `SHARE` (as
+escritas em `delivery` esperam): numa base com volume, construa-o antes à
+mão, pelo roteiro no comentário da migration, e ela não faz nada.
+
+- **A ordem é a de sempre: API, depois a web.** A imagem anterior não lê nem
+  grava a coluna. Durante o rollout, a entrega criada por uma réplica
+  anterior fica sem chave e não empresta nem recebe ponto até o backfill. A
+  web e o app não mudam: o ponto copiado chega como `GEOCODER` ("Pelo
+  endereço"), que os dois já mostram e que a geocerca do app já lê como
+  exato no número ou na rua. Sem OTA.
+- **O que a operação nota:** a entrega criada sem ponto num endereço que a
+  empresa já localizou (pino, coordenada na criação ou o geocodificador no
+  número ou na rua) já nasce com o ponto, mesmo com o geocodificador
+  desligado, e não gasta consulta do LocationIQ. Editar o endereço para uma
+  porta já localizada faz o mesmo. Nunca entre empresas.
+- **As entregas de antes** ficam com a chave nula até o backfill único, que
+  vem com a propagação do pino.
+
 **Contract pendente (release seguinte): o 2FA sem corpo.** `PATCH
 /user/twofactor` sem corpo ainda inverte o estado, sem senha, só para a web
 da release anterior que roda durante o rollout. Cada uso deixa a linha `warn`

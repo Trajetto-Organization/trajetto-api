@@ -55,10 +55,15 @@ const harnesses: Record<Kind, DeliveryHarness> = {
 async function seedPostgres(): Promise<void> {
   await seedBusiness(prisma, F.A, 1);
   await seedBusiness(prisma, F.B, 2);
+  // The point reuse's companies (14/11/2026), apart from the listing's.
+  await seedBusiness(prisma, F.C, 3);
+  await seedBusiness(prisma, F.D, 4);
 
   await seedShipper(prisma, F.A, "Alfa Embarcador", F.shipperA);
   await seedShipper(prisma, F.A, "Alfa Filial", F.shipperA2);
   await seedShipper(prisma, F.B, "Bravo Embarcador", F.shipperB);
+  await seedShipper(prisma, F.C, "Charlie Embarcador", F.shipperC);
+  await seedShipper(prisma, F.D, "Delta Embarcador", F.shipperD);
 
   await seedDriver(prisma, F.A, 1, {
     id: F.driverA,
@@ -97,6 +102,8 @@ function seedTwin(): void {
   memory.shipperNames.set(F.shipperA, "Alfa Embarcador");
   memory.shipperNames.set(F.shipperA2, "Alfa Filial");
   memory.shipperNames.set(F.shipperB, "Bravo Embarcador");
+  memory.shipperNames.set(F.shipperC, "Charlie Embarcador");
+  memory.shipperNames.set(F.shipperD, "Delta Embarcador");
   memory.driverDirectory.set(F.driverA, {
     name: F.driverName,
     cnh: F.driverCnh,

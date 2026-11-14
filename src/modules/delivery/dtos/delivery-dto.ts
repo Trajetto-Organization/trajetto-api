@@ -67,6 +67,12 @@ interface Delivery {
   geo_source?: "MANUAL" | "GEOCODER" | null;
   geo_updated_at?: Date | null;
   geo_precision?: "ADDRESS" | "STREET" | "NEIGHBORHOOD" | "CITY" | null;
+  /**
+   * Which deliveries of the company stand at the same door (address-key.ts):
+   * a hash, for the point reuse only. Null for a row written before it, or
+   * without a street or a city. Never in an answer.
+   */
+  address_key?: string | null;
   created_at?: Date | string;
   updated_at?: Date | string;
 }
@@ -150,15 +156,18 @@ interface UpdateDeliveryProps {
 
   // Never from the request: the use case clears the address point when the
   // address changes (decision 14.7, design §4.11) — and the geocoder's
-  // bookkeeping with it (plan of 02/11/2026, E1).
-  latitude?: null;
-  longitude?: null;
-  geo_source?: null;
-  geo_updated_at?: null;
-  geo_precision?: null;
-  geocode_status?: null;
+  // bookkeeping with it (plan of 02/11/2026, E1) — or writes the point
+  // another delivery of the company has at the new address
+  // (address-point-reuse.ts, always GEOCODER), with the new address key.
+  latitude?: number | null;
+  longitude?: number | null;
+  geo_source?: "GEOCODER" | null;
+  geo_updated_at?: Date | null;
+  geo_precision?: "ADDRESS" | "STREET" | null;
+  geocode_status?: "RESOLVED" | null;
   geocode_attempted_at?: null;
   geocode_attempts?: 0;
+  address_key?: string | null;
 }
 
 interface ListDeliveriesProps extends DeliveryListFilters {

@@ -13,6 +13,7 @@ import {
   type StoredDelivery,
 } from "@/modules/integration/usecases/create-delivery/replay-fingerprint";
 import { readIntegrationIdempotencyKey } from "@/modules/integration/usecases/create-delivery/integration-idempotency-key";
+import { pickReusablePoint } from "@/shared/delivery/geocoding/address-point-reuse";
 
 /**
  * The pure rules of POST /integration/v1/deliveries (decision 5.10): what
@@ -188,6 +189,32 @@ describe("a retry of a body with an address point", () => {
         geo_source: "GEOCODER",
       }),
     ).toBe(true);
+  });
+
+  it("still matches a body without one whose create took another delivery's pin at the same door", () => {
+    // 14/11/2026 (decision D-23): the create copies the point another
+    // delivery of the company has at the address, always as GEOCODER. A
+    // MANUAL copy would make the ERP's resend of the same order a 409.
+    const taken = pickReusablePoint(
+      [
+        {
+          ...point,
+          geo_source: "MANUAL",
+          geo_precision: null,
+          geo_updated_at: new Date("2026-11-10T10:00:00.000Z"),
+        },
+      ],
+      new Date("2026-11-14T15:00:00.000Z"),
+    );
+
+    expect(isSameSubmission(draftOf(body), { ...stored, ...taken })).toBe(true);
+    expect(
+      isSameSubmission(draftOf(body), {
+        ...stored,
+        ...taken,
+        geo_source: "MANUAL",
+      }),
+    ).toBe(false);
   });
 });
 

@@ -264,7 +264,11 @@ describe("the columns the create writes", () => {
     };
 
     const pinned = await repository.createDelivery({ ...base, ...SE });
-    const plain = await repository.createDelivery(base);
+    // Another door: at the same one it would take the pin (below).
+    const plain = await repository.createDelivery({
+      ...base,
+      street: "Rua das Coletas",
+    });
 
     expect(pinned).toMatchObject({
       ...SE,
@@ -279,6 +283,80 @@ describe("the columns the create writes", () => {
       geo_source: null,
       geo_updated_at: null,
     });
+  });
+});
+
+describe("the point of another delivery at the same door", () => {
+  // Owner's report of 14/11/2026: a delivery at an address the company had
+  // already located read "Sem localização". The create, the one door of
+  // the panel, the XML, the spreadsheet and the public API, takes the
+  // point another delivery of the company has at the same address.
+  const LIPOLD = {
+    recipient_name: "Destinatário",
+    street: "Rua Doutor Lipold",
+    address_number: "10",
+    neighborhood: "Carangola",
+    city: "Petrópolis",
+    uf: "RJ",
+    businessId: "b1",
+    shipperId: "s1",
+  };
+  const PIN = { latitude: -22.4561, longitude: -43.1702 };
+
+  it("is taken without coordinates, written as GEOCODER at the number", async () => {
+    const repository = new InMemoryDeliveryRepository();
+
+    const first = await repository.createDelivery({ ...LIPOLD, ...PIN });
+    const second = await repository.createDelivery({
+      ...LIPOLD,
+      street: "R. Dr. Lipold",
+      cep: "25715000",
+    });
+
+    expect(first.address_key).toMatch(/^[0-9a-f]{64}$/);
+    expect(second).toMatchObject({
+      ...PIN,
+      geo_source: "GEOCODER",
+      geo_precision: "ADDRESS",
+      geocode_status: "RESOLVED",
+      address_key: first.address_key,
+    });
+    expect(second.geo_updated_at).toBeInstanceOf(Date);
+  });
+
+  it("is never another company's", async () => {
+    const repository = new InMemoryDeliveryRepository();
+
+    await repository.createDelivery({ ...LIPOLD, ...PIN });
+    const elsewhere = await repository.createDelivery({
+      ...LIPOLD,
+      businessId: "b2",
+    });
+
+    expect(elsewhere).toMatchObject({ latitude: null, geo_source: null });
+  });
+
+  it("never replaces the point the body brings, which stays MANUAL", async () => {
+    const repository = new InMemoryDeliveryRepository();
+    const own = { latitude: -22.4565, longitude: -43.1705 };
+
+    await repository.createDelivery({ ...LIPOLD, ...PIN });
+    const given = await repository.createDelivery({ ...LIPOLD, ...own });
+
+    expect(given).toMatchObject({ ...own, geo_source: "MANUAL" });
+  });
+
+  it("is not taken at a neighbour's number, nor without a street", async () => {
+    const repository = new InMemoryDeliveryRepository();
+
+    await repository.createDelivery({ ...LIPOLD, ...PIN });
+
+    expect(
+      await repository.createDelivery({ ...LIPOLD, address_number: "12" }),
+    ).toMatchObject({ latitude: null });
+    expect(
+      await repository.createDelivery({ ...LIPOLD, street: "" }),
+    ).toMatchObject({ latitude: null, address_key: null });
   });
 });
 

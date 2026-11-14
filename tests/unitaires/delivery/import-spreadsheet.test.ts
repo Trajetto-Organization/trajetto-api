@@ -773,7 +773,10 @@ describe("the address point columns", () => {
         "-23,5505",
         "-46,6333",
       ],
-      ["Mercado Novo", "01001000", "São Paulo", "SP", "Sé", "", ""],
+      ["Mercado Novo", "01001000", "São Paulo", "SP", "Direita", "", ""],
+      // The same door as the first row (14/11/2026): it takes that point,
+      // as GEOCODER (address-point-reuse.ts), and the geocoder skips it.
+      ["Açougue da Sé", "01001000", "São Paulo", "SP", "Sé", "", ""],
     ]
       .map((row) => row.map((cell) => `"${cell}"`).join(";"))
       .join("\n");
@@ -786,7 +789,7 @@ describe("the address point columns", () => {
       shipperId: SHIPPER,
     });
 
-    expect(record.imported).toBe(2);
+    expect(record.imported).toBe(3);
 
     const byName = Object.fromEntries(
       context.deliveryRepository.deliveries.map((row) => [
@@ -804,6 +807,12 @@ describe("the address point columns", () => {
       latitude: null,
       longitude: null,
       geo_source: null,
+    });
+    expect(byName["Açougue da Sé"]).toMatchObject({
+      latitude: -23.5505,
+      longitude: -46.6333,
+      geo_source: "GEOCODER",
+      geo_precision: "ADDRESS",
     });
   });
 });

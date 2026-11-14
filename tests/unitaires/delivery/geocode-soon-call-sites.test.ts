@@ -191,6 +191,32 @@ describe("the panel's create", () => {
 
     expect(asked).toEqual([]);
   });
+
+  it("asks nothing for a delivery created at a door another delivery of the company located", async () => {
+    // 14/11/2026: the create takes the point the company already has at
+    // the address (address-point-reuse.ts), and the provider is not asked.
+    const { create, seed } = context();
+
+    await seed({ latitude: -22.5084, longitude: -43.1735 });
+
+    const created = await create.execute(
+      {
+        businessId: BUSINESS,
+        shipperId: SHIPPER,
+        recipient_name: "Outro destinatário",
+        ...ADDRESS,
+        street: "R. Epitácio Pessoa",
+      } as CreateDeliveryProps,
+      DISPATCHER,
+    );
+
+    expect(created).toMatchObject({
+      latitude: -22.5084,
+      longitude: -43.1735,
+      geo_source: "GEOCODER",
+    });
+    expect(asked).toEqual([]);
+  });
 });
 
 describe("the edit", () => {
@@ -225,6 +251,54 @@ describe("the edit", () => {
 
     expect(asked).toEqual([]);
   });
+
+  it("takes the point another delivery has at the new address, and asks nothing", async () => {
+    const { update, seed, deliveries } = context();
+
+    await seed({
+      street: "Rua do Imperador",
+      latitude: -22.5051,
+      longitude: -43.1786,
+    });
+    const deliveryId = await seed();
+
+    await update.execute({
+      userId: DISPATCHER,
+      businessId: BUSINESS,
+      deliveryId,
+      deliveryData: updateDeliverySchema.parse({ street: "Rua do Imperador" }),
+    });
+
+    expect(
+      deliveries.deliveries.find((row) => row.id === deliveryId),
+    ).toMatchObject({
+      street: "Rua do Imperador",
+      latitude: -22.5051,
+      longitude: -43.1786,
+      geo_source: "GEOCODER",
+      geo_precision: "ADDRESS",
+      geocode_status: "RESOLVED",
+    });
+    expect(asked).toEqual([]);
+  });
+
+  it("clears the old pin and asks when nobody located the new address", async () => {
+    const { update, seed, deliveries } = context();
+    const deliveryId = await seed({ latitude: -22.5084, longitude: -43.1735 });
+
+    await update.execute({
+      userId: DISPATCHER,
+      businessId: BUSINESS,
+      deliveryId,
+      deliveryData: updateDeliverySchema.parse({ street: "Rua do Imperador" }),
+    });
+
+    const row = deliveries.deliveries.find((entry) => entry.id === deliveryId);
+
+    expect(row).toMatchObject({ latitude: null, geo_source: null });
+    expect(row?.address_key).toMatch(/^[0-9a-f]{64}$/);
+    expect(asked).toEqual([[BUSINESS, [deliveryId]]]);
+  });
 });
 
 describe("the routing", () => {
@@ -254,7 +328,8 @@ describe("the routing", () => {
       deliveryIds: [first],
     });
 
-    const added = await seed();
+    // Another door: at the first's it would take its point and ask nothing.
+    const added = await seed({ street: "Rua do Imperador" });
 
     await addStops.execute({
       userId: DISPATCHER,

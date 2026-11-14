@@ -62,7 +62,10 @@ const STREET_KINDS = new Set([
   "servidao",
 ]);
 
-/** The titles a dispatcher shortens and OpenStreetMap spells out. */
+/**
+ * The titles a dispatcher shortens and OpenStreetMap spells out; the
+ * address key spells them out the same way (address-key.ts).
+ */
 const TITLES: Record<string, string> = {
   dr: "doutor",
   dra: "doutora",
@@ -191,6 +194,8 @@ function fallbackAgrees(
 
 export {
   DISTRICT_RADIUS_M,
+  LINKING_WORDS,
+  TITLES,
   districtAgrees,
   fallbackAgrees,
   postcodeAgrees,

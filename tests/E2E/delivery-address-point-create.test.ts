@@ -8,6 +8,7 @@ import auth from "@/config/auth";
 import { createPrismaClient } from "@/shared/database/database-client";
 import { generateApiKey } from "@/shared/integration/api-key-rules";
 import { DeliveryGeocodingRepository } from "@/shared/delivery/geocoding/geocoding-repository";
+import { deliveryAddressKey } from "@/shared/delivery/address-key";
 
 /**
  * Plan of 02/11/2026, E1: the coordinates a company already has, accepted on
@@ -20,7 +21,10 @@ import { DeliveryGeocodingRepository } from "@/shared/delivery/geocoding/geocodi
  * never takes such a row (it would be the geocoder overwriting a point a
  * person gave); half a pair is refused with nothing written; and the public
  * create's replay compares the point it wrote, but not one the geocoder
- * found afterwards.
+ * found afterwards. And, since 14/11/2026, that a delivery created without
+ * a point at a door the company already located takes that point, as
+ * GEOCODER ("Pelo endereço"), with the geocoder off — never another
+ * company's — and that the ERP's resend of it is still a replay.
  */
 const prisma = createPrismaClient();
 
@@ -28,6 +32,20 @@ let app: Awaited<typeof import("@/http")>["app"];
 
 const CARRIER = "018fe100-0000-7000-8000-00000000000a";
 const SHIPPER = "018fe100-0000-7000-8000-0000000000f1";
+/** Another carrier with a point at the owner's address. */
+const OTHER = "018fe100-0000-7000-8000-00000000000b";
+const OTHER_SHIPPER = "018fe100-0000-7000-8000-0000000000f2";
+
+/** The owner's report of 14/11/2026, as typed. */
+const LIPOLD = {
+  street: "Rua Doutor Lipold",
+  address_number: "10",
+  neighborhood: "Carangola",
+  city: "Petrópolis",
+  uf: "RJ",
+  cep: "25715000",
+};
+const LIPOLD_PIN = { latitude: -22.4561, longitude: -43.1702 };
 
 const SE = { latitude: -23.5505, longitude: -46.6333 };
 
@@ -58,6 +76,26 @@ beforeAll(async () => {
 
   await prisma.shipper.create({
     data: { id: SHIPPER, name: "Embarcador", businessId: CARRIER },
+  });
+
+  await prisma.business.create({
+    data: {
+      id: OTHER,
+      corporate_reason: "Outra Transportadora",
+      cep: "01001000",
+      city: "São Paulo",
+      uf: "SP",
+      street: "Rua",
+      address_number: "2",
+      cnpj: String(63000000000000 + Math.floor(Math.random() * 9000000)),
+      cnae: "4930202",
+      responsible_name: "Responsável",
+      telephone: "11999999998",
+      email: `${OTHER}@exemplo.com.br`,
+    },
+  });
+  await prisma.shipper.create({
+    data: { id: OTHER_SHIPPER, name: "Embarcador", businessId: OTHER },
   });
 
   const userId = randomUUID();
@@ -216,7 +254,11 @@ describe("the geocoder's queue", () => {
       recipient_name: "Fila com Ponto",
       ...SE,
     });
-    const plain = await panelCreate({ recipient_name: "Fila sem Ponto" });
+    // Another door: at the pinned one's it would take that point.
+    const plain = await panelCreate({
+      recipient_name: "Fila sem Ponto",
+      street: "Rua Direita",
+    });
 
     expect(pinned.statusCode).toBe(201);
     expect(plain.statusCode).toBe(201);
@@ -233,6 +275,82 @@ describe("the geocoder's queue", () => {
       ...SE,
       geo_source: "MANUAL",
     });
+  });
+});
+
+describe("the point of another delivery at the same door", () => {
+  it("is taken by a create without coordinates, as GEOCODER at the number, and the queue skips it", async () => {
+    // Another company's point at the very same address: never taken.
+    await prisma.delivery.create({
+      data: {
+        ...LIPOLD,
+        recipient_name: "Cliente da outra",
+        businessId: OTHER,
+        shipperId: OTHER_SHIPPER,
+        address_key: deliveryAddressKey(LIPOLD),
+        latitude: -22.9,
+        longitude: -43.9,
+        geo_source: "MANUAL",
+        geo_updated_at: new Date(),
+      },
+    });
+
+    const alone = await panelCreate({
+      ...LIPOLD,
+      recipient_name: "Primeira no Lipold",
+    });
+
+    expect(alone.statusCode, alone.body).toBe(201);
+    expect(await pointOf(alone.json().data.id)).toMatchObject({
+      latitude: null,
+      geo_source: null,
+    });
+
+    // The dispatcher pins it on the map's click...
+    await prisma.delivery.update({
+      where: { id: alone.json().data.id },
+      data: { ...LIPOLD_PIN, geo_source: "MANUAL", geo_updated_at: new Date() },
+    });
+
+    // ...and the next one at that door, however it is spelled, has it.
+    const second = await panelCreate({
+      ...LIPOLD,
+      street: "R. Dr. Lipold",
+      cep: "25715-000",
+      recipient_name: "Segunda no Lipold",
+    });
+
+    expect(second.statusCode, second.body).toBe(201);
+    expect(await pointOf(second.json().data.id)).toMatchObject({
+      ...LIPOLD_PIN,
+      geo_source: "GEOCODER",
+      geo_precision: "ADDRESS",
+      geocode_status: "RESOLVED",
+    });
+
+    const claimed = (
+      await new DeliveryGeocodingRepository().claim(1_000, new Date())
+    ).map((claim) => claim.id);
+
+    expect(claimed).not.toContain(second.json().data.id);
+  });
+
+  it("is taken by the public create too, and the ERP's resend is still a replay", async () => {
+    const key = `pedido-${randomUUID()}`;
+    const body = { ...LIPOLD, recipient_name: "Pedido no Lipold" };
+
+    const first = await publicCreate(body, key);
+
+    expect(first.statusCode, first.body).toBe(201);
+    expect(await pointOf(first.json().id)).toMatchObject({
+      ...LIPOLD_PIN,
+      geo_source: "GEOCODER",
+    });
+
+    const again = await publicCreate(body, key);
+
+    expect(again.statusCode, again.body).toBe(200);
+    expect(again.json().id).toBe(first.json().id);
   });
 });
 

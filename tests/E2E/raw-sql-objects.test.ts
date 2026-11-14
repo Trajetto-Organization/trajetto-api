@@ -41,6 +41,9 @@ const INDEXES: Record<string, string> = {
   // The geocoding job's claim (plan of 02/11/2026, E1): the open deliveries
   // still without a point and not settled by the geocoder, newest first.
   delivery_geocode_pending_idx: `CREATE INDEX delivery_geocode_pending_idx ON public.delivery USING btree (created_at) WHERE ((latitude IS NULL) AND (geo_source IS NULL) AND ((geocode_status IS NULL) OR (geocode_status = 'FAILED'::"DeliveryGeocodeStatus")) AND (status = ANY (ARRAY['PENDING'::"DeliveryStatus", 'IN_TRANSIT'::"DeliveryStatus"])))`,
+  // The point reuse at one door (14/11/2026): the company's rows with an
+  // address key, and only those.
+  delivery_address_key_idx: `CREATE INDEX delivery_address_key_idx ON public.delivery USING btree ("businessId", address_key) WHERE (address_key IS NOT NULL)`,
   // The abandoned-import sweep: only the uploads running right now (IDEMP-10).
   import_in_progress_heartbeat_idx: `CREATE INDEX import_in_progress_heartbeat_idx ON public.import USING btree (updated_at) WHERE (status = 'IN_PROGRESS'::"ImportStatus")`,
   // The tower's authorization queue and the 10-minute escalation sweep:

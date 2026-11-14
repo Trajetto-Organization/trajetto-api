@@ -6,6 +6,7 @@ import type {
   CreateOccurrenceProps,
 } from "@/modules/delivery/dtos/delivery-dto";
 import { DeliveryStatusConflictError } from "@/modules/delivery/usecases/errors/delivery-errors";
+import { deliveryAddressKey } from "@/shared/delivery/address-key";
 
 import { expectPrismaCode, fixedId, minute, type Kind } from "../support";
 
@@ -20,13 +21,20 @@ import { expectPrismaCode, fixedId, minute, type Kind } from "../support";
 
 const A = fixedId("0d0a", 1);
 const B = fixedId("0d0a", 2);
+/** The point reuse's two companies, apart from the listing's seed. */
+const C = fixedId("0d0a", 3);
+const D = fixedId("0d0a", 4);
 
 const FIXTURE = {
   A,
   B,
+  C,
+  D,
   shipperA: fixedId("0d5a", 1),
   shipperA2: fixedId("0d5a", 2),
   shipperB: fixedId("0d5b", 1),
+  shipperC: fixedId("0d5c", 1),
+  shipperD: fixedId("0d5d", 1),
   driverA: fixedId("0dd0", 1),
   vehicleA: fixedId("0dfe", 1),
   userA: fixedId("0dee", 1),
@@ -109,6 +117,9 @@ const SEED: Array<{ key: string; minute: number; data: CreateDeliveryProps }> =
       data: base({
         recipient_name: "Zebra Atacado",
         invoice_number: "",
+        // A door of its own: at the others' they would take its point
+        // (address-point-reuse.ts, 14/11/2026).
+        address_number: "500",
         // Plan of 02/11/2026, E1: a point given at the create.
         latitude: -23.5505,
         longitude: -46.6333,
@@ -267,6 +278,108 @@ function deliveryRepositoryContract(harness: () => DeliveryHarness): void {
         repo.createDelivery(base({ client_submission_id: "sub-d2" })),
         "P2002",
       );
+    });
+
+    it("takes the point another delivery of the company has at the same door, as GEOCODER, never another company's", async () => {
+      // Owner's report of 14/11/2026: the second delivery at an address the
+      // company had located read "Sem localização".
+      const { repo } = harness();
+      const lipold = {
+        recipient_name: "Destinatário",
+        street: "Rua Doutor Lipold",
+        address_number: "10",
+        neighborhood: "Carangola",
+        city: "Petrópolis",
+        uf: "RJ",
+        businessId: C,
+        shipperId: FIXTURE.shipperC,
+      };
+
+      const pinned = await repo.createDelivery({
+        ...lipold,
+        latitude: -22.4561,
+        longitude: -43.1702,
+      });
+      const second = await repo.createDelivery({
+        ...lipold,
+        street: "R. Dr. Lipold",
+        cep: "25715000",
+      });
+      const elsewhere = await repo.createDelivery({
+        ...lipold,
+        businessId: D,
+        shipperId: FIXTURE.shipperD,
+      });
+
+      expect(pinned).toMatchObject({
+        geo_source: "MANUAL",
+        address_key: deliveryAddressKey(lipold),
+      });
+      expect(await repo.findDeliveryById(second.id!)).toMatchObject({
+        latitude: -22.4561,
+        longitude: -43.1702,
+        geo_source: "GEOCODER",
+        geo_precision: "ADDRESS",
+        geocode_status: "RESOLVED",
+        address_key: deliveryAddressKey(lipold),
+      });
+      expect(await repo.findDeliveryById(elsewhere.id!)).toMatchObject({
+        latitude: null,
+        geo_source: null,
+        address_key: deliveryAddressKey(lipold),
+      });
+    });
+
+    it("picks a pin over a newer point of the geocoder, leaves out the delivery being edited and never crosses companies", async () => {
+      const { repo } = harness();
+      const teresa = {
+        recipient_name: "Destinatário",
+        street: "Rua Teresa",
+        address_number: "200",
+        neighborhood: "Alto da Serra",
+        city: "Petrópolis",
+        uf: "RJ",
+        businessId: C,
+        shipperId: FIXTURE.shipperC,
+      };
+      const key = deliveryAddressKey(teresa)!;
+
+      expect(await repo.findReusablePoint(C, key)).toBeNull();
+
+      const found = await repo.createDelivery(teresa);
+
+      await repo.updateDelivery(found.id!, {
+        latitude: -22.5201,
+        longitude: -43.1801,
+        geo_source: "GEOCODER",
+        geo_precision: "STREET",
+        geocode_status: "RESOLVED",
+        geo_updated_at: new Date("2030-01-01T00:00:00.000Z"),
+      });
+
+      expect(await repo.findReusablePoint(C, key)).toMatchObject({
+        latitude: -22.5201,
+        geo_source: "GEOCODER",
+        geo_precision: "STREET",
+        geocode_status: "RESOLVED",
+      });
+
+      const pinned = await repo.createDelivery({
+        ...teresa,
+        latitude: -22.5205,
+        longitude: -43.1805,
+      });
+
+      expect(await repo.findReusablePoint(C, key)).toMatchObject({
+        latitude: -22.5205,
+        longitude: -43.1805,
+        geo_source: "GEOCODER",
+        geo_precision: "ADDRESS",
+      });
+      expect(await repo.findReusablePoint(C, key, pinned.id)).toMatchObject({
+        latitude: -22.5201,
+      });
+      expect(await repo.findReusablePoint(D, key)).toBeNull();
     });
 
     it("finds by submission key and by NF-e key inside the company only", async () => {

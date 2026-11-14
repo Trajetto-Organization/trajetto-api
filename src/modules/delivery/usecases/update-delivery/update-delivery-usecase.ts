@@ -29,7 +29,9 @@ import { isDeliveryEditable } from "@/shared/delivery/delivery-rules";
 import {
   CLEARED_ADDRESS_POINT,
   addressChanged,
+  editedAddress,
 } from "@/shared/delivery/address-point";
+import { deliveryAddressKey } from "@/shared/delivery/address-key";
 import { geocodeSoon } from "@/shared/delivery/geocoding/geocode-soon";
 import {
   deliveryEditChanges,
@@ -148,10 +150,29 @@ class UpdateDeliveryUseCase {
       // between them (import source, shipper), and that is the window in which
       // the driver proves the delivery.
       // The map point belongs to the address (design §4.11): a new address
-      // with the old pin would put the stop where the delivery is not.
+      // with the old pin would put the stop where the delivery is not. The
+      // new address's key goes with the cleared point, and the point another
+      // delivery of the company has at the new door, when one has it, takes
+      // the old one's place (address-point-reuse.ts) — read before the
+      // write, so the lookup after the commit is asked only without one.
       const relocated = addressChanged(findDelivery, deliveryData);
-      const data = relocated
-        ? { ...deliveryData, ...CLEARED_ADDRESS_POINT }
+      const addressKey = relocated
+        ? deliveryAddressKey(editedAddress(findDelivery, deliveryData))
+        : null;
+      const reused = addressKey
+        ? await this.delivery.findReusablePoint(
+            businessId,
+            addressKey,
+            deliveryId,
+          )
+        : null;
+      const data: UpdateDeliveryProps = relocated
+        ? {
+            ...deliveryData,
+            ...CLEARED_ADDRESS_POINT,
+            address_key: addressKey,
+            ...reused,
+          }
         : deliveryData;
 
       // A delivery on a route is on the driver's phone (K9). The route row
@@ -196,8 +217,9 @@ class UpdateDeliveryUseCase {
       await announceDroppedPlans(this.user, businessId, bumps);
 
       // The new address's point now, not at the next minute's job (E1):
-      // the cleared bookkeeping re-queued it. Never awaited.
-      if (relocated) geocodeSoon(businessId, [deliveryId]);
+      // the cleared bookkeeping re-queued it. Never awaited; not at all
+      // when another delivery's point was taken.
+      if (relocated && !reused) geocodeSoon(businessId, [deliveryId]);
 
       return updated;
     } catch (error) {

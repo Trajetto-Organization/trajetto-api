@@ -21,6 +21,12 @@ import {
 import { asDateColumn } from "@/shared/in-memory/date-column";
 import { factInstant } from "@/shared/route/operation-day-rules";
 import { manualAddressPoint } from "@/shared/delivery/address-coordinates";
+import { deliveryAddressKey } from "@/shared/delivery/address-key";
+import {
+  pickReusablePoint,
+  type PointCandidate,
+  type ReusedAddressPoint,
+} from "@/shared/delivery/geocoding/address-point-reuse";
 import type { OperationDay } from "@/modules/route/repositories/IOperation-day-repository";
 
 import {
@@ -226,16 +232,25 @@ class InMemoryDeliveryRepository implements IDeliveryRepository {
 
   async createDelivery(deliveryData: CreateDeliveryProps): Promise<Delivery> {
     const { items, latitude, longitude, ...given } = deliveryData;
+    const addressKey = deliveryAddressKey(given);
+    const point = manualAddressPoint(latitude, longitude, new Date());
 
     // As the Prisma create: an empty code, key or number is NULL, so two
     // deliveries without an NF-e key never collide on the unique index; a
-    // whole pair is the address point, MANUAL (plan E1), half of one none.
+    // whole pair is the address point, MANUAL (plan E1), half of one none;
+    // without one, the point of another delivery of the company at the
+    // same door (address-point-reuse.ts).
     const delivery = {
       ...given,
       code: given.code || null,
       invoice_key: given.invoice_key || null,
       invoice_number: given.invoice_number || null,
-      ...manualAddressPoint(latitude, longitude, new Date()),
+      address_key: addressKey,
+      ...("geo_source" in point
+        ? point
+        : addressKey
+          ? await this.findReusablePoint(given.businessId, addressKey)
+          : null),
     };
 
     // The unique (businessId, invoice_key) index: a second row with the same
@@ -288,6 +303,32 @@ class InMemoryDeliveryRepository implements IDeliveryRepository {
     }
 
     return newDelivery;
+  }
+
+  async findReusablePoint(
+    businessId: string,
+    addressKey: string,
+    excludeDeliveryId?: string | null,
+  ): Promise<ReusedAddressPoint | null> {
+    // The same rule over every row at the door; the newest id first, as
+    // the repository breaks a tie of two points of one instant.
+    const candidates = this.deliveries
+      .filter(
+        (row) =>
+          row.businessId === businessId &&
+          row.address_key === addressKey &&
+          row.id !== excludeDeliveryId,
+      )
+      .sort((a, b) => String(b.id).localeCompare(String(a.id)))
+      .map((row): PointCandidate => ({
+        latitude: row.latitude ?? null,
+        longitude: row.longitude ?? null,
+        geo_source: row.geo_source ?? null,
+        geo_precision: row.geo_precision ?? null,
+        geo_updated_at: row.geo_updated_at ?? null,
+      }));
+
+    return pickReusablePoint(candidates, new Date());
   }
 
   /** (businessId:key) → id, the unique index of the real table. */

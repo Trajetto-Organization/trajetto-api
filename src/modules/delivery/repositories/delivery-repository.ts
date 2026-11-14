@@ -45,6 +45,11 @@ import { deliveryExportRow, occurrenceExportRow } from "./export-rows";
 import { narrowDeliverySearch, resolveDeliveryPeriod } from "./delivery-search";
 import { narrowOccurrenceSearch } from "./occurrence-search";
 import { manualAddressPoint } from "@/shared/delivery/address-coordinates";
+import { deliveryAddressKey } from "@/shared/delivery/address-key";
+import {
+  pickReusablePoint,
+  type ReusedAddressPoint,
+} from "@/shared/delivery/geocoding/address-point-reuse";
 
 import {
   OCCURRENCE_SORT,
@@ -245,16 +250,36 @@ class DeliveryRepository implements IDeliveryRepository {
     tx?: Prisma.TransactionClient,
   ): Promise<Delivery> {
     const { items, latitude, longitude, ...delivery } = deliveryData;
+    const client = tx ?? this.prisma;
+    const now = new Date();
+    const addressKey = deliveryAddressKey(delivery);
 
-    const deliveryCreated = await (tx ?? this.prisma).delivery.create({
+    // A whole pair is the address point, MANUAL (plan E1). Without one, the
+    // point another delivery of the company has at the same door, read in
+    // the same transaction (14/11/2026): it needs no lookup, works with the
+    // geocoder off, and the create's answer already has it. Anything else
+    // writes no point and the geocoder's queue picks the row up.
+    const given = manualAddressPoint(latitude, longitude, now);
+    const point =
+      "geo_source" in given
+        ? given
+        : addressKey
+          ? await this.findReusablePoint(
+              delivery.businessId,
+              addressKey,
+              null,
+              client,
+            )
+          : null;
+
+    const deliveryCreated = await client.delivery.create({
       data: {
         ...delivery,
         code: delivery.code || null,
         invoice_key: delivery.invoice_key || null,
         invoice_number: delivery.invoice_number || null,
-        // A whole pair is the address point, MANUAL (plan E1); anything else
-        // writes no point and the geocoder's queue picks the row up.
-        ...manualAddressPoint(latitude, longitude, new Date()),
+        address_key: addressKey,
+        ...point,
         ...(items &&
           items.length > 0 && {
             items: {
@@ -270,6 +295,56 @@ class DeliveryRepository implements IDeliveryRepository {
     });
 
     return deliveryCreated as Delivery;
+  }
+
+  async findReusablePoint(
+    businessId: string,
+    addressKey: string,
+    excludeDeliveryId?: string | null,
+    tx?: Prisma.TransactionClient,
+  ): Promise<ReusedAddressPoint | null> {
+    const client = tx ?? this.prisma;
+    const select = {
+      latitude: true,
+      longitude: true,
+      geo_source: true,
+      geo_precision: true,
+      geo_updated_at: true,
+    } as const;
+    // The company's rows at this door with a point: two index probes on
+    // delivery_address_key_idx, the newest of each source, and the rule
+    // decides between them (the twin runs the same rule over all of them).
+    // One after the other: a transaction's connection runs one at a time.
+    const atTheDoor = {
+      businessId,
+      address_key: addressKey,
+      latitude: { not: null },
+      longitude: { not: null },
+      ...(excludeDeliveryId && { id: { not: excludeDeliveryId } }),
+    } satisfies Prisma.DeliveryWhereInput;
+    const newest = {
+      geo_updated_at: { sort: "desc", nulls: "last" },
+    } satisfies Prisma.DeliveryOrderByWithRelationInput;
+
+    const manual = await client.delivery.findFirst({
+      where: { ...atTheDoor, geo_source: "MANUAL" },
+      orderBy: [newest, { id: "desc" }],
+      select,
+    });
+    const geocoded = await client.delivery.findFirst({
+      where: {
+        ...atTheDoor,
+        geo_source: "GEOCODER",
+        geo_precision: { in: ["ADDRESS", "STREET"] },
+      },
+      orderBy: [newest, { id: "desc" }],
+      select,
+    });
+
+    return pickReusablePoint(
+      [manual, geocoded].filter((row) => row !== null),
+      new Date(),
+    );
   }
 
   async findDeliveryBySubmissionId(

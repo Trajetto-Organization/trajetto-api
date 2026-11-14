@@ -523,6 +523,8 @@ const PLAN_2026_11_NULLABLE_COLUMNS: Array<[string, string]> = [
   // K2/L8: the requirements' clock and the ERP code
   ["occurrence_type", "code"],
   ["occurrence_type", "requirements_changed_at"],
+  // 14/11/2026: which deliveries of a company stand at the same door
+  ["delivery", "address_key"],
 ];
 
 describe("final phase: new columns", () => {
