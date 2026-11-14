@@ -191,8 +191,9 @@ async function serviceOrderRoutes(app: FastifyInstance) {
           "NDJSON com cursor, mais novas primeiro. O motorista consulta o veículo que pode operar: aquele em que é o responsável ou o da sua rota liberada ou em andamento; outro veículo da empresa recebe 403 VEHICLE_NOT_ASSIGNED_TO_DRIVER. " +
           "Veículo inexistente ou de outra empresa recebe 404 VEHICLE_NOT_FOUND (a resposta não confirma que ele existe). " +
           "Cada ordem vem na visão de quem lê, a mesma de GET /service-order/{serviceOrderId}: o login de motorista recebe a ordem SEM valores (sem total, sem preço ou desconto de peça, sem fornecedor; as peças só com nome e quantidade), que é o item documentado; os demais recebem também o total, a soma das peças (`parts_total`), o preço e o desconto de cada peça, o fornecedor e a localização. " +
+          "`search` (até 100 caracteres) filtra no servidor pelo ID, pela descrição, pelo nome do responsável e pela razão social da filial, para qualquer leitor. Nunca compara fornecedor, total, preço ou desconto de peça: buscar um valor não pode revelar ao motorista uma ordem pelo que a visão dele esconde. " +
           "A primeira linha é {meta: {total: 0, searchMeta: {nextCursor, hasMore}}}; as seguintes, uma ordem por linha. " +
-          "Passe nextCursor como `cursor` para a próxima página.",
+          "Passe nextCursor como `cursor` para a próxima página, com o mesmo `search`.",
         params: serviceOrderSchemas.searchServiceOrderByVehicleParams,
         querystring: serviceOrderSchemas.searchServiceOrderByVehicleCursor,
         response: {

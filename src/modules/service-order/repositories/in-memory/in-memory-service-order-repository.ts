@@ -571,12 +571,27 @@ class InMemoryServiceOrderRepository implements IServiceOrderRepository {
     cursor,
     vehicleId,
     businessId,
+    search,
   }: SearchServiceOrderByVehicleWithCursorProps): Promise<CursorPaginatedServiceOrderDetail> {
+    const term = search?.trim().toLowerCase();
+
     let filtered = this.serviceOrders
-      .filter(
-        (order) =>
-          order.vehicleId === vehicleId && order.businessId === businessId,
-      )
+      .filter((order) => {
+        if (order.vehicleId !== vehicleId || order.businessId !== businessId) {
+          return false;
+        }
+
+        if (!term) return true;
+
+        // The real where's fields, the driver's view's only: never the
+        // supplier, the total or a part's price.
+        return [
+          order.id,
+          order.description ?? "",
+          this.userNames.get(order.responsibleUserId) ?? "",
+          this.branchNames.get(order.branchId) ?? "",
+        ].some((text) => text.toLowerCase().includes(term));
+      })
       .sort(
         (a, b) =>
           new Date(b.created_at).getTime() - new Date(a.created_at).getTime() ||

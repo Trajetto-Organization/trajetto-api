@@ -968,7 +968,13 @@ compartilhado.
   `full`. Ele mandava a linha crua, com o preço de cada peça e o
   fornecedor; nenhum build do app chamou essa rota. A visão `full`
   (escritório e MASTER) traz o total, a soma das peças, preço e desconto de
-  cada peça, o fornecedor e a localização. O card que a OS cria no Kanban
+  cada peça, o fornecedor e a localização. Desde 14/11/2026 o histórico
+  aceita `search` (até 100 caracteres), que filtra no servidor: a web
+  comparava só as páginas já carregadas. O termo compara o id, a
+  descrição, o nome do responsável e a razão social da filial, os campos
+  da visão `driver`, para qualquer leitor; nunca o fornecedor, o total, o
+  preço ou o desconto, senão buscar "1850" mostraria ao motorista qual
+  ordem custou isso. O card que a OS cria no Kanban
   para o responsável (`serviceOrderCardDescription`, em
   `kanban-service.ts`) também saiu sem o valor, desde 09/11/2026: o
   motorista lê a descrição inteira em `GET /kanban/card/:cardId` e no

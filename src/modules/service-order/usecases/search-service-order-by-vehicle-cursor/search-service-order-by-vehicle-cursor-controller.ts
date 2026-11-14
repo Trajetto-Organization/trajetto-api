@@ -16,7 +16,9 @@ class SearchServiceOrderByVehicleCursorController {
       const { id } = request.user;
 
       const { vehicleId } = updateDeleteVehicleSchema.parse(request.params);
-      const { limit, cursor } = cursorPaginationSchema.parse(request.query);
+      const { limit, cursor, search } = cursorPaginationSchema.parse(
+        request.query,
+      );
 
       const searchServiceOrderByVehicleCursorUseCase = container.resolve(
         SearchServiceOrderByVehicleCursorUseCase,
@@ -27,6 +29,7 @@ class SearchServiceOrderByVehicleCursorController {
         vehicleId,
         limit,
         cursor,
+        search,
       });
 
       /**

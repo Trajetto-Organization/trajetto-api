@@ -28,6 +28,8 @@ interface SearchServiceOrderByVehicleCursorRequest {
   vehicleId: string;
   limit?: number;
   cursor?: string;
+  /** Free text, already trimmed and bounded by the route (100 chars). */
+  search?: string;
 }
 
 /** One reader, one view: `view` says which one every line of the page is. */
@@ -55,6 +57,11 @@ type SearchServiceOrderByVehicleCursorResponse =
  * no supplier — and everyone else the full one. It carried the raw row to
  * the driver, part prices and the workshop included, and it streams as
  * NDJSON, so no response schema filtered anything on the way out.
+ *
+ * `search` (14/11/2026) filters on the server, so the web stops matching
+ * only the pages it already loaded. It compares the driver's view's fields
+ * alone, for every reader: a term matched against the supplier or the
+ * total would tell a driver what the rows hide ("1850" brings the order).
  */
 @injectable()
 class SearchServiceOrderByVehicleCursorUseCase {
@@ -74,6 +81,7 @@ class SearchServiceOrderByVehicleCursorUseCase {
     vehicleId,
     limit = 10,
     cursor,
+    search,
   }: SearchServiceOrderByVehicleCursorRequest): Promise<SearchServiceOrderByVehicleCursorResponse> {
     const findUser = await this.user.findUserById(userId);
 
@@ -124,6 +132,7 @@ class SearchServiceOrderByVehicleCursorUseCase {
         cursor,
         vehicleId,
         businessId: findUser.businessId as string,
+        search,
       });
     } catch (error) {
       throw new AppError(

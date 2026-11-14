@@ -65,7 +65,8 @@ interface IServiceOrderRepository {
   /**
    * One vehicle's orders as the detail reads them, newest first by cursor,
    * inside one company. The use case cuts each one for its reader: a driver
-   * never gets the money (service-order-views.ts).
+   * never gets the money (service-order-views.ts), and `search` compares
+   * only fields of the driver's view, so it cannot find an order by it.
    */
   searchServiceOrderByVehicleWithCursor: (
     props: SearchServiceOrderByVehicleWithCursorProps,

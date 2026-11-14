@@ -132,10 +132,11 @@ async function order(
   return created.id;
 }
 
-const history = (vehicleId: string, token: string) =>
+const history = (vehicleId: string, token: string, search?: string) =>
   readNdjson<Record<string, unknown> & { description: string }>(
     app,
-    `/service-order/search-service-order-by-vehicle/${vehicleId}?limit=50`,
+    `/service-order/search-service-order-by-vehicle/${vehicleId}?limit=50` +
+      (search === undefined ? "" : `&search=${encodeURIComponent(search)}`),
     token,
   );
 
@@ -445,6 +446,80 @@ describe("GET /service-order/search-service-order-by-vehicle — the driver's ve
 
     expect(result.status, result.body).toBe(403);
     expect(JSON.parse(result.body).code).toBe("PERMISSION_DENIED");
+    expect(result.body).not.toContain("Embreagem do colega");
+  });
+});
+
+/**
+ * The history's `search` (14/11/2026), through the route: the web matched
+ * the term against the pages it had loaded. The term compares only the
+ * driver's view's fields; a match on the supplier or the total would tell
+ * a driver which order the hidden value belongs to. The terms below carry
+ * a character no generated id has, so a random uuid never matches them.
+ */
+describe("GET /service-order/search-service-order-by-vehicle — search", () => {
+  it("never finds a driver's order by the supplier or the total", async () => {
+    for (const term of [SUPPLIER_NAME, "Preço Alto", "300,00", "300.00"]) {
+      const result = await history(vehicles.own, tokens.responsible, term);
+
+      expect(result.status, result.body).toBe(200);
+      expect(result.rows, term).toEqual([]);
+    }
+  });
+
+  it("finds a driver's order by its description, responsible or branch", async () => {
+    const description = await history(
+      vehicles.own,
+      tokens.responsible,
+      "PNEUS",
+    );
+
+    expect(description.status, description.body).toBe(200);
+    expect(description.rows.map((row) => row.description)).toEqual([
+      "Pneus do próprio",
+    ]);
+
+    for (const term of ["Gestora", "Filial Pátio"]) {
+      const result = await history(vehicles.own, tokens.responsible, term);
+
+      expect(result.status, result.body).toBe(200);
+      expect(result.rows.map((row) => row.description).sort(), term).toEqual([
+        "Pneus do próprio",
+        "Revisão do próprio",
+      ]);
+
+      for (const key of MONEY_KEYS) {
+        expect(result.body, key).not.toContain(key);
+      }
+    }
+  });
+
+  it("does not let the office find by money either: one rule for the route", async () => {
+    const result = await history(vehicles.own, tokens.admin, SUPPLIER_NAME);
+
+    expect(result.status, result.body).toBe(200);
+    expect(result.rows).toEqual([]);
+  });
+
+  it("refuses a term over 100 characters with 400 VALIDATION_ERROR", async () => {
+    const result = await history(
+      vehicles.own,
+      tokens.responsible,
+      "x".repeat(101),
+    );
+
+    expect(result.status, result.body).toBe(400);
+    expect(JSON.parse(result.body).code).toBe("VALIDATION_ERROR");
+  });
+
+  it("still refuses a colleague's vehicle before any search", async () => {
+    const result = await history(
+      vehicles.colleague,
+      tokens.substitute,
+      "Embreagem",
+    );
+
+    expect(result.status, result.body).toBe(403);
     expect(result.body).not.toContain("Embreagem do colega");
   });
 });

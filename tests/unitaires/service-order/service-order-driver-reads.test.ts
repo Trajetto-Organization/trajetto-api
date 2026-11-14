@@ -19,6 +19,7 @@ import {
   toServiceOrderDriverView,
   toServiceOrderFullView,
 } from "@/modules/service-order/usecases/service-order-views";
+import { serviceOrderSchemas } from "@/routes/documentation/service-order-documentation";
 
 /**
  * The driver's reads of service orders (wave 3, owner's decision), on the
@@ -732,6 +733,133 @@ describe("GET /service-order/search-service-order-by-vehicle — the web's drive
     await expect(
       byVehicle().execute({ userId: login, vehicleId: PICKUP }),
     ).rejects.toBeInstanceOf(VehicleNotAssignedToDriverError);
+  });
+});
+
+/**
+ * The history's `search` (14/11/2026): the web matched the typed term
+ * against the pages it had loaded, so an older order was "not found". On
+ * the server, the term compares only the driver's view's fields: had it
+ * compared the supplier or the total, a driver typing "1850" or the
+ * workshop's name would learn which order the hidden value belongs to.
+ */
+describe("GET /service-order/search-service-order-by-vehicle — search", () => {
+  const search = (userId: string, term?: string, vehicleId = TRUCK) =>
+    byVehicle().execute({ userId, vehicleId, search: term });
+
+  const ids = (page: { data: Array<{ id: string }> }) =>
+    page.data.map((row) => row.id);
+
+  it("never finds a driver's order by the supplier, the total or a part's price", async () => {
+    for (const term of [
+      "Oficina Central",
+      "oficina",
+      "1850",
+      "1850.00",
+      "85.5",
+    ]) {
+      const page = await search(DRIVER_USER, term);
+
+      expect(ids(page), term).toEqual([]);
+    }
+  });
+
+  it("finds a driver's order by its description, responsible, branch or id", async () => {
+    expect(ids(await search(DRIVER_USER, "ordem 1"))).toEqual([ORDER.truck]);
+    // Ordem 2's responsible is the driver himself; Ordem 1's is the admin.
+    expect(ids(await search(DRIVER_USER, "gestora"))).toEqual([ORDER.truck]);
+    expect(ids(await search(DRIVER_USER, "Motorista"))).toEqual([
+      ORDER.truckMine,
+    ]);
+    expect(ids(await search(DRIVER_USER, "filial centro"))).toEqual([
+      ORDER.truckMine,
+      ORDER.truck,
+    ]);
+    expect(ids(await search(DRIVER_USER, ORDER.truckMine.slice(-6)))).toEqual([
+      ORDER.truckMine,
+    ]);
+  });
+
+  it("does not let the office find by money either: one rule for the route", async () => {
+    expect(ids(await search(ADMIN, "Oficina Central"))).toEqual([]);
+    expect(ids(await search(ADMIN, "1850"))).toEqual([]);
+    expect(ids(await search(ADMIN, "ordem 1"))).toEqual([ORDER.truck]);
+  });
+
+  it("answers as today without a term, or with a blank one", async () => {
+    const all = [ORDER.truckMine, ORDER.truck];
+
+    expect(ids(await search(DRIVER_USER))).toEqual(all);
+    expect(ids(await search(DRIVER_USER, "   "))).toEqual(all);
+  });
+
+  it("stays inside the vehicle and the company", async () => {
+    // "Ordem 3" is the driver's own order, on a truck he may not operate.
+    expect(ids(await search(ADMIN, "ordem 3"))).toEqual([]);
+    expect(ids(await search(ADMIN, "ordem 3", PICKUP))).toEqual([
+      ORDER.pickupMine,
+    ]);
+  });
+
+  it("is bounded by the route like every cursor search: trimmed, 100 characters at most", () => {
+    // The route's validator strips an undeclared key, and its 400 comes
+    // before the controller: the bound has to be in the route's schema.
+    const query = serviceOrderSchemas.searchServiceOrderByVehicleCursor;
+
+    expect(query.parse({ search: "  pneu  " }).search).toBe("pneu");
+    expect(query.safeParse({ search: "x".repeat(100) }).success).toBe(true);
+    expect(query.safeParse({ search: "x".repeat(101) }).success).toBe(false);
+  });
+
+  it("pages a search by the cursor, newest first, without repeating a row", async () => {
+    for (let day = 10; day < 15; day += 1) {
+      orders.serviceOrders.push({
+        ...order(
+          `018f3300-0000-7000-8000-0000000001${day}`,
+          day,
+          CARRIER,
+          TRUCK,
+          ADMIN,
+        ),
+        description: `Troca de pneu ${day}`,
+      });
+    }
+
+    const first = await byVehicle().execute({
+      userId: DRIVER_USER,
+      vehicleId: TRUCK,
+      search: "pneu",
+      limit: 2,
+    });
+    const second = await byVehicle().execute({
+      userId: DRIVER_USER,
+      vehicleId: TRUCK,
+      search: "pneu",
+      limit: 2,
+      cursor: first.nextCursor ?? undefined,
+    });
+    const third = await byVehicle().execute({
+      userId: DRIVER_USER,
+      vehicleId: TRUCK,
+      search: "pneu",
+      limit: 2,
+      cursor: second.nextCursor ?? undefined,
+    });
+
+    expect(first.hasMore).toBe(true);
+    expect(second.hasMore).toBe(true);
+    expect(third.hasMore).toBe(false);
+    expect(
+      [first, second, third].flatMap((page) =>
+        page.data.map((row) => row.description),
+      ),
+    ).toEqual([
+      "Troca de pneu 14",
+      "Troca de pneu 13",
+      "Troca de pneu 12",
+      "Troca de pneu 11",
+      "Troca de pneu 10",
+    ]);
   });
 });
 

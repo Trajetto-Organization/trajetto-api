@@ -193,6 +193,14 @@ interface SearchServiceOrderByVehicleWithCursorProps {
   cursor?: string;
   vehicleId: string;
   businessId: string;
+  /**
+   * The typed term: id, description, responsible's name or the branch's
+   * corporate reason — what the driver's view shows, for every reader.
+   * Never the supplier, the total or a part's price or discount: the rows
+   * a term like "1850" brought back would tell a driver which order costs
+   * what his view hides.
+   */
+  search?: string;
 }
 
 /**

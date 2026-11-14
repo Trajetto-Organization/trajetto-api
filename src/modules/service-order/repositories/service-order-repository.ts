@@ -436,9 +436,32 @@ class ServiceOrderRepository implements IServiceOrderRepository {
     cursor,
     vehicleId,
     businessId,
+    search,
   }: SearchServiceOrderByVehicleWithCursorProps): Promise<CursorPaginatedServiceOrderDetail> {
+    const term = search?.trim();
+
     const items = await this.prisma.serviceOrder.findMany({
-      where: { vehicleId, businessId },
+      where: {
+        vehicleId,
+        businessId,
+        // Only what the driver's view shows: no supplier, total or part
+        // price, or a driver could find an order by a value it hides.
+        ...(term &&
+          buildSearchOr<Prisma.ServiceOrderWhereInput>([
+            { id: { contains: term, mode: "insensitive" } },
+            { description: { contains: term, mode: "insensitive" } },
+            {
+              responsibleUser: {
+                name: { contains: term, mode: "insensitive" },
+              },
+            },
+            {
+              branch: {
+                corporate_reason: { contains: term, mode: "insensitive" },
+              },
+            },
+          ])),
+      },
       take: limit + 1,
       ...(cursor && { cursor: { id: cursor }, skip: 1 }),
       orderBy: [{ created_at: "desc" }, { id: "desc" }],

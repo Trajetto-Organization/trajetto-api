@@ -150,6 +150,16 @@ const serviceOrderSchemas = {
       .describe(
         "ID da última ordem de serviço da página anterior para paginação",
       ),
+    // The cursor schema's bound, here too: the route's validator strips
+    // what this object does not declare, so a missing key never arrived.
+    search: z
+      .string()
+      .trim()
+      .max(100, "A busca deve ter no máximo 100 caracteres.")
+      .optional()
+      .describe(
+        "Texto livre, até 100 caracteres: ID, descrição, nome do responsável ou razão social da filial. Nunca fornecedor, total, preço ou desconto.",
+      ),
   }),
 };
 
