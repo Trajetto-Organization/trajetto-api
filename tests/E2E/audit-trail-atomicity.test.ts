@@ -17,8 +17,6 @@ import { UserRepository } from "@/modules/user/repositories/user-repository";
 import { BusinessRepository } from "@/modules/business/repositories/business-repository";
 import { ProfileAccessRepository } from "@/modules/profile-access/repositories/profile-access-repository";
 import { PermissionRepository } from "@/modules/permission/repositories/permission-repository";
-import { ServiceOrderRepository } from "@/modules/service-order/repositories/service-order-repository";
-import { AccountPayableRepository } from "@/modules/account-payable/repositories/account-payable-repository";
 
 import { DeleteProfileAccessUseCase } from "@/modules/profile-access/usecases/delete-profile-access/delete-profile-access-usecase";
 import { BulkConfigurePermissionsUseCase } from "@/modules/permission/usecases/bulk-configure-permissions/bulk-configure-permissions-usecase";
@@ -309,8 +307,6 @@ describe("removing a MASTER", () => {
     await expect(
       new DeleteMasterUserUseCase(
         new UserRepository(),
-        new ServiceOrderRepository(),
-        new AccountPayableRepository(),
         notifications(),
       ).execute({ masterUserId: OTHER_MASTER, performedById: MASTER }),
     ).rejects.toBeDefined();

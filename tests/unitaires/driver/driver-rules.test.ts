@@ -176,6 +176,32 @@ describe("openRoutesRefusal for the other acts that take a driver off the road (
         "Antes de desativá-la, designe outro motorista ou cancele as rotas que ainda não saíram.",
     );
   });
+
+  // Batch of 14/11/2026: deleting the login, or taking it off the driver,
+  // left a route waiting for someone who could no longer sign in.
+  it("speaks of the user when the driver's login is deleted", () => {
+    expect(
+      openRoutesRefusal(
+        { PLANNED: 0, RELEASED: 1, IN_PROGRESS: 0 },
+        "DELETE_LOGIN",
+      ),
+    ).toBe(
+      "Não é possível excluir este usuário: o motorista vinculado tem 1 rota planejada ou liberada. " +
+        "Antes de excluí-lo, designe outro motorista ou cancele a rota que ainda não saiu.",
+    );
+  });
+
+  it("speaks of the link when the login leaves its driver", () => {
+    expect(
+      openRoutesRefusal(
+        { PLANNED: 1, RELEASED: 0, IN_PROGRESS: 1 },
+        "MOVE_LOGIN",
+      ),
+    ).toBe(
+      "Não é possível desvincular este login do motorista: o motorista vinculado tem 1 rota em andamento e 1 rota planejada ou liberada. " +
+        "Antes de desvinculá-lo, conclua ou cancele a rota em andamento e designe outro motorista ou cancele a rota que ainda não saiu.",
+    );
+  });
 });
 
 describe("birthDateKeyOf", () => {

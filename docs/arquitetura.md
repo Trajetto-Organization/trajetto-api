@@ -24,6 +24,7 @@
 - [Busca de endereço (Fixar no mapa)](#busca-de-endereço-fixar-no-mapa)
 - [Frota ligada à rota](#frota-ligada-à-rota)
 - [Motorista, veículo e rota: o que é aviso e o que é recusa](#motorista-veículo-e-rota-o-que-é-aviso-e-o-que-é-recusa)
+- [Excluir x inativar/revogar](#excluir-x-inativarrevogar)
 - [Entregas na rota: casos de borda](#entregas-na-rota-casos-de-borda)
 - [Rotas esquecidas, a lista e a torre](#rotas-esquecidas-a-lista-e-a-torre)
 - [Atendimentos do chat](#atendimentos-do-chat)
@@ -2385,6 +2386,49 @@ recusa.
   App (todas as versões): nenhum código novo; `409 ROUTE_VEHICLE_BUSY` e
   `400 ROUTE_VEHICLE_UNAVAILABLE` só mudam de texto.
 
+## Excluir x inativar/revogar
+
+Uma regra só (lote de 14/11/2026): excluir é para o cadastro feito por
+engano. Quem já trabalhou fica, com o histórico: o motorista é inativado e o
+login tem o acesso revogado. Cada recusa diz o que segura o cadastro e aponta
+o caminho que resolve.
+
+- **Excluir um login** (`DELETE /user/delete-user/:userId` e
+  `/user/delete-master-user/:masterUserId`):
+  - Login de motorista cuja rota está planejada, liberada ou em andamento:
+    `409 DRIVER_HAS_OPEN_ROUTES`, com as contagens (`openRoutesRefusal`, ato
+    `DELETE_LOGIN`), a mesma regra da revogação. Iniciar a rota não grava
+    nenhuma linha com o login, então nenhuma FK segurava a exclusão, e a rota
+    ficava esperando alguém que não consegue mais entrar.
+  - Histórico: `countUserHistory`, um SELECT com um sub-select por FK
+    RESTRICT para `user` (OS sob a responsabilidade dele, contas a pagar que
+    ele registrou, eventos de entrega, ocorrências, revisões de comprovante,
+    mensagens do chat e importações), e a regra pura `userHistoryRefusal`
+    (`modules/user/user-history-rules.ts`): `USER_HAS_SERVICE_ORDERS`,
+    `USER_HAS_ACCOUNT_PAYABLES` e `USER_HAS_RECORDS`, nesta ordem, com as
+    contagens ("12 evento(s) de entrega e 3 mensagem(ns) no chat") e o
+    caminho "Revogar acesso". Concluir a OS ou quitar a conta não destrava
+    nada (a OS concluída continua com o responsável): as opções são só
+    transferir a responsabilidade ou revogar o acesso.
+  - Abastecimentos, checklists, multas e rotas são do `Driver`, não do
+    login: o login de motorista que só tem isso é excluído, e o motorista
+    fica com tudo.
+  - Corrida: uma linha gravada entre a contagem e o DELETE bate na FK
+    (P2003); a use case conta de novo e responde o mesmo 409 (ou a frase
+    genérica, para uma FK que a contagem não conhece).
+- **Trocar o motorista de um login** (`PATCH /user/update-user/:userId`):
+  tirar o login do motorista atual, para outro motorista ou para nenhum,
+  enquanto esse motorista tem rota aberta: `409 DRIVER_HAS_OPEN_ROUTES` (ato
+  `MOVE_LOGIN`). Passar para outro motorista um login que já tem histórico:
+  `409 USER_DRIVER_LOCKED`, "crie outro login para o novo motorista"
+  (decisão D-37): eventos, ocorrências e mensagens apontam para o `User`, e o
+  trabalho dos dois ficaria misturado. Sem histórico, a troca continua como
+  antes. As duas checagens vêm antes da transação que anula o QR Code e os
+  aparelhos do motorista anterior: a recusa não muda nada.
+- **Compatibilidade:** os códigos que a web e o app leem continuam os mesmos;
+  `USER_DRIVER_LOCKED` é novo e chega ao toast da web antiga com a mensagem
+  da API.
+
 ## Entregas na rota: casos de borda
 
 O que a rota e as entregas fazem quando o plano muda com o motorista na rua
@@ -2420,7 +2464,9 @@ D32).
 - **Revogar acesso ou desativar filial com rota aberta (K10, D31):** recusado
   com `409 DRIVER_HAS_OPEN_ROUTES`, as contagens e os passos da inativação do
   motorista (`openRoutesRefusal` com o ato). Restaurar o acesso e reativar a
-  filial nunca são recusados.
+  filial nunca são recusados. Excluir o login do motorista e tirá-lo do
+  motorista seguem a mesma regra (ver
+  [Excluir x inativar/revogar](#excluir-x-inativarrevogar)).
 - **Exigência ligada com relato na fila (K2, D29):**
   `OccurrenceType.requirements_changed_at` é gravado quando uma exigência de
   anexo (foto, canhoto, assinatura) muda. O relato do motorista tocado offline

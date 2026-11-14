@@ -17,7 +17,9 @@ import type { IUsersTokensRepository } from "@/modules/user/repositories/IUsers-
 import type { UserRole } from "@/modules/user/dtos/user-dto";
 
 import { summarizeUserList } from "@/modules/user/usecases/list-users/user-list";
+import { NO_USER_HISTORY } from "@/modules/user/user-history-rules";
 import { createPrismaClient } from "@/shared/database/database-client";
+import { isForeignKeyViolation } from "@/shared/errors/prisma-error-meta";
 
 /**
  * One suite, two implementations (decision 13.2, TEST-PAR-3): the Prisma
@@ -80,6 +82,25 @@ interface Harness {
     status: "PENDING" | "PROCESSING" | "DELIVERED",
   ) => Promise<void>;
   deliveryStatuses: (userId: string) => Promise<string[]>;
+  /** A row that names the user on a RESTRICT key (countUserHistory). */
+  addHistory: (
+    userId: string,
+    kind: "imports" | "chatMessages",
+  ) => Promise<void>;
+  clearHistory: (userId: string) => Promise<void>;
+}
+
+/** The chat thread the Prisma history rows hang on (one per driver). */
+let chatThreadId: string | null = null;
+
+async function chatThread(): Promise<string> {
+  chatThreadId ??= (
+    await prisma.chatThread.create({
+      data: { businessId: A, driverId: DRIVER },
+    })
+  ).id;
+
+  return chatThreadId;
 }
 
 const prismaTokens = new UserTokensRepository();
@@ -145,6 +166,33 @@ const harnesses: Harness[] = [
       )
         .map((row) => row.status)
         .sort(),
+    addHistory: async (userId, kind) => {
+      if (kind === "imports") {
+        await prisma.import.create({
+          data: {
+            source: "SPREADSHEET",
+            filename: "entregas.xlsx",
+            report: [],
+            businessId: A,
+            performedById: userId,
+          },
+        });
+        return;
+      }
+
+      await prisma.chatMessage.create({
+        data: {
+          kind: "TEXT",
+          body: "Mensagem",
+          threadId: await chatThread(),
+          senderId: userId,
+        },
+      });
+    },
+    clearHistory: async (userId) => {
+      await prisma.import.deleteMany({ where: { performedById: userId } });
+      await prisma.chatMessage.deleteMany({ where: { senderId: userId } });
+    },
   },
   {
     name: "in-memory",
@@ -175,6 +223,14 @@ const harnesses: Harness[] = [
         .filter((row) => row.userId === userId)
         .map((row) => row.status)
         .sort(),
+    addHistory: async (userId, kind) => {
+      memory.authoredRows.push({ userId, kind });
+    },
+    clearHistory: async (userId) => {
+      memory.authoredRows = memory.authoredRows.filter(
+        (row) => row.userId !== userId,
+      );
+    },
   },
 ];
 
@@ -942,6 +998,39 @@ describe.each(harnesses.map((harness) => [harness.name, harness] as const))(
         expect(await harness.refreshCount(userId)).toBe(0);
         expect(await harness.pushCount(userId)).toBe(0);
       }
+    });
+
+    // Batch of 14/11/2026: the delete guard counts every RESTRICT key in one
+    // statement. The twin used to delete a user whatever pointed at them, so
+    // no unit test reached the refusal.
+    it("counts the rows that name a user on a RESTRICT key, and the delete fails while they exist", async () => {
+      const author = idOf(harness, "fin-1");
+      const other = idOf(harness, "ops-1");
+
+      await harness.addHistory(author, "imports");
+      await harness.addHistory(author, "chatMessages");
+      await harness.addHistory(author, "chatMessages");
+      await harness.addHistory(other, "imports");
+
+      try {
+        expect(await harness.repo.countUserHistory(author)).toEqual({
+          ...NO_USER_HISTORY,
+          imports: 1,
+          chatMessages: 2,
+        });
+
+        await expect(harness.repo.deleteUser(author)).rejects.toSatisfy(
+          isForeignKeyViolation,
+        );
+        expect(await harness.repo.findUserById(author)).not.toBeNull();
+      } finally {
+        await harness.clearHistory(author);
+        await harness.clearHistory(other);
+      }
+
+      expect(await harness.repo.countUserHistory(author)).toEqual(
+        NO_USER_HISTORY,
+      );
     });
 
     it("never offers a revoked person as a recipient", async () => {

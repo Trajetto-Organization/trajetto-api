@@ -45,6 +45,8 @@ import {
   lockUntil,
 } from "@/shared/security/login-lockout-rules";
 
+import { NO_USER_HISTORY, type UserHistoryCounts } from "../user-history-rules";
+
 /**
  * The user listings stream NDJSON, and a stream never passes through the
  * response serializer: whatever these queries return is exactly what leaves.
@@ -571,6 +573,25 @@ class UserRepository implements IUserRepository {
 
   async countUsersWithProfile(profileAccessId: string): Promise<number> {
     return this.prisma.user.count({ where: { profileAccessId } });
+  }
+
+  async countUserHistory(userId: string): Promise<UserHistoryCounts> {
+    // One statement, seven scalar sub-selects (as countBranchDependencies):
+    // one connection and one round trip, each an index probe on the user
+    // column. Replaces two findMany that loaded every service order and
+    // payable of the person just to read the length.
+    const [row] = await this.prisma.$queryRaw<UserHistoryCounts[]>`
+      SELECT
+        (SELECT count(*) FROM "service_order"        WHERE "responsibleUserId"  = ${userId})::int AS "serviceOrders",
+        (SELECT count(*) FROM "account_payable"      WHERE "registrationUserId" = ${userId})::int AS "accountPayables",
+        (SELECT count(*) FROM "delivery_event"       WHERE "reportedById"       = ${userId})::int AS "deliveryEvents",
+        (SELECT count(*) FROM "delivery_occurrence"  WHERE "reportedById"       = ${userId})::int AS "occurrences",
+        (SELECT count(*) FROM "delivery_proof_audit" WHERE "reviewedById"       = ${userId})::int AS "proofReviews",
+        (SELECT count(*) FROM "chat_message"         WHERE "senderId"           = ${userId})::int AS "chatMessages",
+        (SELECT count(*) FROM "import"               WHERE "performedById"      = ${userId})::int AS "imports"
+    `;
+
+    return row ?? { ...NO_USER_HISTORY };
   }
 
   async updateUserPasswordKeepingSession({

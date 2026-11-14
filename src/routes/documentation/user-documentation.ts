@@ -657,7 +657,7 @@ const userResponses = {
   ),
 
   updateUserConflictErrors: refusal(
-    "USER_ALREADY_EXISTS (e-mail em uso) ou DRIVER_ALREADY_LINKED (motorista já tem login).",
+    "USER_ALREADY_EXISTS (e-mail em uso) ou DRIVER_ALREADY_LINKED (motorista já tem login). Ao tirar o login do motorista atual (para outro motorista ou para nenhum): DRIVER_HAS_OPEN_ROUTES, quando esse motorista tem rota planejada, liberada ou em andamento (a mensagem traz as contagens e o que fazer com cada rota). Ao passar o login para OUTRO motorista: USER_DRIVER_LOCKED, quando o login já tem registros na operação (eventos de entrega, ocorrências, mensagens…, com a contagem na mensagem) — crie outro login para o novo motorista. Nos dois casos nada é gravado: o QR Code e os aparelhos continuam como estavam.",
   ),
 
   updatePasswordErrors: refusal(
@@ -677,7 +677,7 @@ const userResponses = {
   ),
 
   deleteUserConflictErrors: refusal(
-    "O usuário ainda é responsável por ordens de serviço (USER_HAS_SERVICE_ORDERS) ou por contas a pagar (USER_HAS_ACCOUNT_PAYABLES), com a quantidade na mensagem, ou é autor de registros que a plataforma preserva, como eventos de entrega, decisões da torre, importações ou mensagens (USER_HAS_RECORDS). Revogue o acesso em vez de excluir.",
+    "Excluir é só para o login criado por engano; quem já trabalhou tem o acesso revogado. DRIVER_HAS_OPEN_ROUTES: o usuário é o login de um motorista com rota planejada, liberada ou em andamento (a mesma regra da revogação, com as contagens). USER_HAS_SERVICE_ORDERS ou USER_HAS_ACCOUNT_PAYABLES: o usuário ainda é responsável por ordens de serviço ou por contas a pagar, com a quantidade na mensagem (concluir a OS ou quitar a conta não muda isso: transfira a responsabilidade ou revogue o acesso). USER_HAS_RECORDS: o usuário é autor de registros que a plataforma preserva (eventos de entrega, decisões da torre, ocorrências, revisões de comprovante, mensagens do chat, importações), com a contagem de cada tipo na mensagem; revogue o acesso em vez de excluir.",
   ),
 
   listUsersErrors: z
@@ -767,7 +767,7 @@ const userResponses = {
     "PERMISSION_DENIED (excluir a si mesmo, ou quem pede não é MASTER).",
   ),
   deleteMasterUserConflictErrors: refusal(
-    "LAST_MASTER_USER (deve restar pelo menos um), USER_HAS_SERVICE_ORDERS ou USER_HAS_ACCOUNT_PAYABLES.",
+    "LAST_MASTER_USER (deve restar pelo menos um), USER_HAS_SERVICE_ORDERS, USER_HAS_ACCOUNT_PAYABLES ou USER_HAS_RECORDS (registros que a plataforma preserva, com a contagem na mensagem), como na exclusão de um usuário da empresa.",
   ),
   tokenUserNotFound: refusal(
     "USER_NOT_FOUND: o token é válido, mas a conta dele não existe mais.",

@@ -40,16 +40,12 @@ import { Prisma } from "@prisma/client";
 
 import type { User } from "@/modules/user/dtos/user-dto";
 import type { Business } from "@/modules/business/dtos/business-dto";
-import type { ServiceOrder } from "@/modules/service-order/dtos/service-order-dto";
-import type { AccountPayable } from "@/modules/account-payable/dtos/account-payable-dto";
 import type { NotificationService } from "@/shared/services/notification-service";
 import type { OutboxService } from "@/shared/notifications/outbox-service";
 
 import { InMemoryUserRepository } from "@/modules/user/repositories/in-memory/in-memory-user-repository";
 import { InMemoryUserTokensRepository } from "@/modules/user/repositories/in-memory/in-memory-user-tokens-repository";
 import { InMemoryBusinessRepository } from "@/modules/business/repositories/in-memory/in-memory-business-repository";
-import { InMemoryServiceOrderRepository } from "@/modules/service-order/repositories/in-memory/in-memory-service-order-repository";
-import { InMemoryAccountPayableRepository } from "@/modules/account-payable/repositories/in-memory/in-memory-account-payable-repository";
 
 import { CreateMasterUserUseCase } from "@/modules/user/usecases/create-master-user/create-master-user-usecase";
 import { UpdateMasterUserUseCase } from "@/modules/user/usecases/update-master-user/update-master-user-usecase";
@@ -71,8 +67,6 @@ const UNKNOWN = "018f3400-0000-7000-8000-0000000000ff";
 let users: InMemoryUserRepository;
 let tokens: InMemoryUserTokensRepository;
 let businesses: InMemoryBusinessRepository;
-let orders: InMemoryServiceOrderRepository;
-let payables: InMemoryAccountPayableRepository;
 let published: Array<{ topic: string; aggregateId: string }>;
 let outbox: OutboxService;
 
@@ -103,8 +97,6 @@ beforeEach(() => {
   users = new InMemoryUserRepository();
   tokens = new InMemoryUserTokensRepository();
   businesses = new InMemoryBusinessRepository();
-  orders = new InMemoryServiceOrderRepository();
-  payables = new InMemoryAccountPayableRepository();
 
   published = [];
   outbox = {
@@ -312,8 +304,7 @@ describe("editing a MASTER", () => {
 });
 
 describe("removing a MASTER", () => {
-  const remove = () =>
-    new DeleteMasterUserUseCase(users, orders, payables, notifications);
+  const remove = () => new DeleteMasterUserUseCase(users, notifications);
 
   it("removes another MASTER, logs it and closes their sockets", async () => {
     const deleted = await remove().execute({
@@ -347,10 +338,7 @@ describe("removing a MASTER", () => {
   });
 
   it("refuses a MASTER with service orders or payables in their name (409)", async () => {
-    orders.serviceOrders.push({
-      id: "so-1",
-      responsibleUserId: MASTER_TWO,
-    } as ServiceOrder);
+    users.authoredRows.push({ userId: MASTER_TWO, kind: "serviceOrders" });
 
     await expect(
       remove().execute({ masterUserId: MASTER_TWO, performedById: MASTER }),
@@ -359,11 +347,7 @@ describe("removing a MASTER", () => {
       code: "USER_HAS_SERVICE_ORDERS",
     });
 
-    orders.serviceOrders.length = 0;
-    payables.accountPayables.push({
-      id: "ap-1",
-      registrationUserId: MASTER_TWO,
-    } as AccountPayable);
+    users.authoredRows = [{ userId: MASTER_TWO, kind: "accountPayables" }];
 
     await expect(
       remove().execute({ masterUserId: MASTER_TWO, performedById: MASTER }),

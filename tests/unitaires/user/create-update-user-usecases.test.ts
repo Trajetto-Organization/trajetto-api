@@ -472,6 +472,67 @@ describe("editing a company user", () => {
       expect(await trusted.listForUser(LOGIN)).toHaveLength(1);
       expect(await enrollment.findByUserId(LOGIN)).not.toBeNull();
     });
+
+    // Batch of 14/11/2026: the route waited for a login that was no longer
+    // its driver's. The refusal comes before the phones and the QR code go.
+    it.each([
+      ["to another driver", { driverId: NEXT_DRIVER }],
+      ["to a staff profile", { profileAccessId: PROFILE }],
+    ])(
+      "refuses taking it off a driver with an open route %s, changing nothing",
+      async (_case, userData) => {
+        drivers.routes.push({ driverId: DRIVER, status: "IN_PROGRESS" });
+
+        await expect(
+          update().execute({ userId: LOGIN, userData } as never, ADMIN),
+        ).rejects.toMatchObject({
+          statusCode: 409,
+          code: "DRIVER_HAS_OPEN_ROUTES",
+          message: expect.stringContaining(
+            "Não é possível desvincular este login do motorista",
+          ),
+        });
+
+        expect(users.user.find((u) => u.id === LOGIN)?.driverId).toBe(DRIVER);
+        expect(await trusted.listForUser(LOGIN)).toHaveLength(1);
+        expect(await enrollment.findByUserId(LOGIN)).not.toBeNull();
+        expect(realtime.securityEvents).toEqual([]);
+      },
+    );
+
+    // Decision D-37: what the login did points at the login, so handed to
+    // another driver it would mix two people's work.
+    it("refuses handing a login with history to another driver (409 USER_DRIVER_LOCKED)", async () => {
+      users.authoredRows.push({ userId: LOGIN, kind: "deliveryEvents" });
+
+      await expect(
+        update().execute(
+          { userId: LOGIN, userData: { driverId: NEXT_DRIVER } } as never,
+          ADMIN,
+        ),
+      ).rejects.toMatchObject({
+        statusCode: 409,
+        code: "USER_DRIVER_LOCKED",
+        message: expect.stringContaining("1 evento(s) de entrega"),
+      });
+
+      expect(users.user.find((u) => u.id === LOGIN)?.driverId).toBe(DRIVER);
+      expect(await trusted.listForUser(LOGIN)).toHaveLength(1);
+    });
+
+    it("still unlinks a login with history from its driver when no other takes it", async () => {
+      users.authoredRows.push({ userId: LOGIN, kind: "deliveryEvents" });
+
+      await update().execute(
+        { userId: LOGIN, userData: { profileAccessId: PROFILE } } as never,
+        ADMIN,
+      );
+
+      expect(users.user.find((u) => u.id === LOGIN)).toMatchObject({
+        driverId: null,
+        profileAccessId: PROFILE,
+      });
+    });
   });
 
   it("refuses editing yourself", async () => {

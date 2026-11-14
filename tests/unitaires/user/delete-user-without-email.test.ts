@@ -1,8 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { InMemoryUserRepository } from "@/modules/user/repositories/in-memory/in-memory-user-repository";
-import { InMemoryServiceOrderRepository } from "@/modules/service-order/repositories/in-memory/in-memory-service-order-repository";
-import { InMemoryAccountPayableRepository } from "@/modules/account-payable/repositories/in-memory/in-memory-account-payable-repository";
+import { InMemoryDriverRepository } from "@/modules/driver/repositories/in-memory/in-memory-driver-repository";
 import { DeleteUserUseCase } from "@/modules/user/usecases/delete-user/delete-user-usecase";
 
 import type { NotificationService } from "@/shared/services/notification-service";
@@ -58,8 +57,7 @@ function deleteWith(descriptions: string[]) {
 
   return new DeleteUserUseCase(
     users,
-    new InMemoryServiceOrderRepository(),
-    new InMemoryAccountPayableRepository(),
+    new InMemoryDriverRepository(),
     notifications,
   );
 }

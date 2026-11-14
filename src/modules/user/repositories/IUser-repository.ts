@@ -21,6 +21,8 @@ import {
   PasswordKeptSession,
 } from "../dtos/user-dto";
 
+import type { UserHistoryCounts } from "../user-history-rules";
+
 /**
  * How many accounts one CPF login compares the password against. The CPF is
  * unique per company only, so an independent driver may have a login in a
@@ -91,6 +93,13 @@ interface IUserRepository {
 
   /** How many users an access profile is linked to (the delete guard). */
   countUsersWithProfile: (profileAccessId: string) => Promise<number>;
+
+  /**
+   * Every row that names the login on a RESTRICT key (user-history-rules), in
+   * one round trip: the delete guard, the recount after a P2003, and the
+   * check before a driver's login moves to another driver.
+   */
+  countUserHistory: (userId: string) => Promise<UserHistoryCounts>;
   updateUserPassword: ({
     userId,
     password,

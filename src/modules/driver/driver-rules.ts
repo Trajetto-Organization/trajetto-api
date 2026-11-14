@@ -40,10 +40,17 @@ const plural = (count: number, one: string, many: string) =>
  * route still needs them: deactivating the driver (decision 8.3), revoking
  * their login and deactivating their branch (K10, decision D31) — the session
  * check refuses all three alike, so a route left open never closes and the
- * phone's outbox stalls on "auth".
+ * phone's outbox stalls on "auth". Deleting the login and unlinking it from
+ * the driver (to another driver or to none) leave the route with nobody who
+ * can sign in for it the same way (batch of 14/11/2026): starting a route
+ * writes no row that names the login, so no foreign key held them back.
  */
 type DriverLockout =
-  "DEACTIVATE_DRIVER" | "REVOKE_ACCESS" | "DEACTIVATE_BRANCH";
+  | "DEACTIVATE_DRIVER"
+  | "REVOKE_ACCESS"
+  | "DEACTIVATE_BRANCH"
+  | "DELETE_LOGIN"
+  | "MOVE_LOGIN";
 
 /** How each act opens and closes the sentence; the counts and steps are shared. */
 const LOCKOUT_WORDING: Record<
@@ -64,6 +71,16 @@ const LOCKOUT_WORDING: Record<
     refusal: "Não é possível desativar esta filial",
     holder: "os motoristas dela têm",
     before: "Antes de desativá-la",
+  },
+  DELETE_LOGIN: {
+    refusal: "Não é possível excluir este usuário",
+    holder: "o motorista vinculado tem",
+    before: "Antes de excluí-lo",
+  },
+  MOVE_LOGIN: {
+    refusal: "Não é possível desvincular este login do motorista",
+    holder: "o motorista vinculado tem",
+    before: "Antes de desvinculá-lo",
   },
 };
 

@@ -49,6 +49,11 @@ import { compareForOrder } from "@/shared/pagination/in-memory-order";
 
 import type { InMemoryUserTokensRepository } from "./in-memory-user-tokens-repository";
 
+import {
+  NO_USER_HISTORY,
+  type UserHistoryCounts,
+} from "../../user-history-rules";
+
 type StoredUser = User & { created_at?: Date; updated_at?: Date };
 
 /** What the user row owns and Prisma deletes through its relations. */
@@ -96,6 +101,16 @@ interface DriverSeed {
 
   /** The 11 digits the CPF login looks the driver up by (D8). */
   cpf?: string;
+}
+
+/**
+ * A row that names the user on a RESTRICT key (a service order they answer
+ * for, a delivery event they reported…): what countUserHistory counts and
+ * what makes the delete fail with P2003, as in Postgres.
+ */
+interface AuthoredRowSeed {
+  userId: string;
+  kind: keyof UserHistoryCounts;
 }
 
 /** A notification delivery addressed to a user (Prisma: NotificationDelivery). */
@@ -179,6 +194,9 @@ class InMemoryUserRepository implements IUserRepository {
 
   /** The notification ledger rows addressed to each user. */
   public notificationDeliveries: DeliverySeed[] = [];
+
+  /** The rows that keep each user from being deleted (RESTRICT keys). */
+  public authoredRows: AuthoredRowSeed[] = [];
 
   private readonly tokens?: InMemoryUserTokensRepository;
 
@@ -528,6 +546,15 @@ class InMemoryUserRepository implements IUserRepository {
       throw recordNotFound();
     }
 
+    // The RESTRICT keys: a row that names the user refuses the delete. The
+    // twin used to delete anyway, so no unit test reached the P2003 path.
+    if (this.authoredRows.some((row) => row.userId === userId)) {
+      throw new Prisma.PrismaClientKnownRequestError(
+        "Foreign key constraint violated on the constraint: `user_id_fkey`",
+        { code: "P2003", clientVersion: "in-memory" },
+      );
+    }
+
     const deletedUser = this.user.splice(index, 1)[0];
 
     // ON DELETE CASCADE of what the row owns.
@@ -844,6 +871,15 @@ class InMemoryUserRepository implements IUserRepository {
   async countUsersWithProfile(profileAccessId: string): Promise<number> {
     return this.user.filter((user) => user.profileAccessId === profileAccessId)
       .length;
+  }
+  async countUserHistory(userId: string): Promise<UserHistoryCounts> {
+    const counts: UserHistoryCounts = { ...NO_USER_HISTORY };
+
+    for (const row of this.authoredRows) {
+      if (row.userId === userId) counts[row.kind] += 1;
+    }
+
+    return counts;
   }
 
   /**

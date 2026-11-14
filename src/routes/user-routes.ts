@@ -615,7 +615,7 @@ async function userRoutes(app: FastifyInstance) {
         tags: ["user"],
         summary: "Exclui um usuário",
         description:
-          "Exclui a conta de um usuário da empresa. Recusa (409) quem é responsável por ordens de serviço ou contas a pagar, ou é autor de registros que a plataforma preserva (USER_HAS_RECORDS: eventos de entrega, decisões da torre, importações, mensagens), apontando para revogar o acesso; recusa (403 PERMISSION_DENIED) um nível de acesso acima do de quem pede e um usuário Master (que sai por /user/delete-master-user, a rota que garante que sempre reste um). Encerra as sessões e, se for o login de um motorista, avisa as abas abertas (catalogChanged driver).",
+          "Exclui a conta de um usuário da empresa. Excluir é só para o login criado por engano: recusa (409) o login de um motorista com rota planejada, liberada ou em andamento (DRIVER_HAS_OPEN_ROUTES, a regra da revogação), quem é responsável por ordens de serviço ou contas a pagar e quem é autor de registros que a plataforma preserva (USER_HAS_RECORDS: eventos de entrega, decisões da torre, ocorrências, revisões de comprovante, mensagens do chat, importações, com a contagem de cada um), apontando para revogar o acesso; abastecimentos, checklists, multas e rotas são do motorista e não seguram o login. Recusa (403 PERMISSION_DENIED) um nível de acesso acima do de quem pede e um usuário Master (que sai por /user/delete-master-user, a rota que garante que sempre reste um). Encerra as sessões e, se for o login de um motorista, avisa as abas abertas (catalogChanged driver).",
         params: userSchemas.updateDeleteUser,
         response: {
           200: userResponses.userDeleted,
@@ -640,7 +640,7 @@ async function userRoutes(app: FastifyInstance) {
         tags: ["user"],
         summary: "Atualiza um usuário",
         description:
-          "Compara os valores enviados com os atuais e grava só o que mudou. Mudar o nível de acesso ou o motorista vinculado encerra as sessões do usuário e apaga as notificações dele (as atividades ficam). Mudar o motorista vinculado também anula o QR Code de acesso e os aparelhos em que o login entrava por CPF e senha: eram do motorista anterior, e o novo entra pelo QR Code dele. A empresa não muda pela edição, nem pelo MASTER (decisão 16.100): um `businessId` no corpo responde 400 VALIDATION_ERROR. Mudar só o nome, o e-mail ou o perfil não desloga ninguém. O MASTER pode pedir `sendPasswordSetupLink`: o usuário recebe um link de uso único para definir uma nova senha; se o link não puder ser gerado, nada é alterado (503 PASSWORD_LINK_UNAVAILABLE). Usuários Master são alterados em /user/update-master-user.",
+          "Compara os valores enviados com os atuais e grava só o que mudou. Mudar o nível de acesso ou o motorista vinculado encerra as sessões do usuário e apaga as notificações dele (as atividades ficam). Mudar o motorista vinculado também anula o QR Code de acesso e os aparelhos em que o login entrava por CPF e senha: eram do motorista anterior, e o novo entra pelo QR Code dele. Tirar o login do motorista atual é recusado (409 DRIVER_HAS_OPEN_ROUTES) enquanto esse motorista tem rota planejada, liberada ou em andamento, e passar para outro motorista um login que já tem registros na operação é recusado (409 USER_DRIVER_LOCKED: crie outro login); nos dois casos nada muda. A empresa não muda pela edição, nem pelo MASTER (decisão 16.100): um `businessId` no corpo responde 400 VALIDATION_ERROR. Mudar só o nome, o e-mail ou o perfil não desloga ninguém. O MASTER pode pedir `sendPasswordSetupLink`: o usuário recebe um link de uso único para definir uma nova senha; se o link não puder ser gerado, nada é alterado (503 PASSWORD_LINK_UNAVAILABLE). Usuários Master são alterados em /user/update-master-user.",
         params: userSchemas.updateDeleteUser,
         body: userSchemas.updateUser,
         response: {
@@ -1001,7 +1001,7 @@ async function userRoutes(app: FastifyInstance) {
         tags: ["user"],
         summary: "Exclui um usuário master",
         description:
-          "Remove a conta de outro master. Ninguém exclui a si mesmo, e o último master nunca é removido (a contagem e a exclusão acontecem juntas, então dois pedidos simultâneos não zeram os masters). Recusa (409) quem ainda é responsável por ordens de serviço ou contas a pagar.",
+          "Remove a conta de outro master. Ninguém exclui a si mesmo, e o último master nunca é removido (a contagem e a exclusão acontecem juntas, então dois pedidos simultâneos não zeram os masters). Recusa (409) quem ainda é responsável por ordens de serviço ou contas a pagar, ou é autor de registros que a plataforma preserva (USER_HAS_RECORDS, com a contagem).",
         params: userSchemas.updateMasterUserParams,
         response: {
           200: userResponses.masterUserDeleted,

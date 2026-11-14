@@ -17,6 +17,11 @@ import { UserAssignmentRequiredError } from "../errors/user-assignment-required-
 
 import { DriverNotFoundError } from "@/modules/driver/usecases/errors/driver-not-found-error";
 import { DriverNotBelongBusinessError } from "@/modules/driver/usecases/errors/driver-not-belong-business-error";
+import { DriverHasOpenRoutesError } from "@/modules/driver/usecases/errors/driver-has-open-routes-error";
+import { totalOpenRoutes } from "@/modules/driver/driver-rules";
+
+import { UserDriverLockedError } from "../errors/user-driver-locked-error";
+import { describeUserHistory } from "../../user-history-rules";
 
 import { NotificationService } from "@/shared/services/notification-service";
 
@@ -190,6 +195,31 @@ class UpdateUserUseCase {
 
       if (linkedUser && linkedUser.id !== userId) {
         throw new UserDriverAlreadyLinkedToUserError();
+      }
+    }
+
+    // The login leaves its current driver (for another driver or for none).
+    // Both are checked here, before the transaction below revokes the
+    // previous driver's phones and QR code: a refusal must change nothing.
+    if (changes.driver && target.driverId) {
+      // A route that still needs the driver would wait for a login that is
+      // no longer theirs, as with a revoked one (K10).
+      const openRoutes = await this.driver.countOpenRoutes(target.driverId);
+
+      if (totalOpenRoutes(openRoutes) > 0) {
+        throw new DriverHasOpenRoutesError(openRoutes, "MOVE_LOGIN");
+      }
+
+      // Decision D-37: what the login did points at the login, not at the
+      // Driver, so handed to another driver it would mix two people's work.
+      // Without history the move goes on as before; unlinking it from the
+      // driver with no other one in its place is outside D-37 and goes on.
+      if (next.driverId) {
+        const history = describeUserHistory(
+          await this.user.countUserHistory(userId),
+        );
+
+        if (history) throw new UserDriverLockedError(history);
       }
     }
 
