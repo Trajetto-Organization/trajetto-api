@@ -18,9 +18,11 @@ import { LINKING_WORDS, TITLES } from "./geocoding/fallback-agreement";
  * - the street, canonical: accents and case folded, the kind spelled out
  *   ("R." is "rua", "Av." is "avenida") and kept — a Rua and an Avenida of
  *   one name are two streets — the titles a dispatcher shortens spelled out
- *   ("Dr." is "doutor", the fallback's list) and the linking words dropped;
- * - the house number, compact ("12 A" is "12a"; "12" is not "12A"), with
- *   "s/n", "0" and none all meaning no number (houseNumber);
+ *   ("Dr." is "doutor", the fallback's list) and the linking words between
+ *   two words dropped, never a single letter ("Rua E" is a street);
+ * - the house number, compact ("12 A" is "12a"; "12" is not "12A"; "12/14"
+ *   is not "1214"), with "s/n", "0" and none all meaning no number
+ *   (houseNumber);
  * - the district, the city and the UF: a street of one name in another
  *   district is another street;
  * - never the CEP: it often comes as the city's general one, or wrong.
@@ -69,7 +71,25 @@ const STREET_KIND: Record<string, string> = {
   servidao: "servidao",
 };
 
-/** "R. Dr. João da Silva" → "rua doutor joao silva". */
+/**
+ * Whether a word of the name is a linking word the key leaves out: only
+ * one that links — another word follows it — and never a single letter.
+ * Streets named by a letter are common in planned neighbourhoods, and "e"
+ * is also a letter: dropping it made "Rua E" the bare "rua", the key of
+ * "Rua", "Rua Da" and "Rua Do" too, so two doors could share a point.
+ * Keeping a linking word costs at most a lookup ("Rua João e Maria" is
+ * not "Rua João Maria"); dropping one that was a name gives a stop
+ * another door's point.
+ */
+function isDroppedLinkingWord(
+  word: string,
+  index: number,
+  words: readonly string[],
+): boolean {
+  return word.length > 1 && index < words.length - 1 && LINKING_WORDS.has(word);
+}
+
+/** "R. Dr. João da Silva" → "rua doutor joao silva"; "Rua E" → "rua e". */
 function canonicalStreet(name: string | null | undefined): string {
   const words = foldText(name).split(" ").filter(Boolean);
 
@@ -77,23 +97,29 @@ function canonicalStreet(name: string | null | undefined): string {
 
   // A lone word is a name ("Avenida" in a typo'd row), never a kind.
   const kind = words.length > 1 ? STREET_KIND[words[0]] : undefined;
-  const rest = kind ? words.slice(1) : words;
+  const rest = (kind ? words.slice(1) : words).map(
+    (word) => TITLES[word] ?? word,
+  );
 
   return [
     ...(kind ? [kind] : []),
-    ...rest
-      .map((word) => TITLES[word] ?? word)
-      .filter((word) => !LINKING_WORDS.has(word)),
+    ...rest.filter((word, index) => !isDroppedLinkingWord(word, index, rest)),
   ].join(" ");
 }
 
-/** "12 A", "12-a" → "12a"; "s/n", "0", "" → "". */
+/**
+ * "12 A", "12-a" → "12a"; "1.214" → "1214"; "12/14" → "12-14"; "s/n", "0",
+ * "" → "". Two runs of digits keep a mark between them: "12/14" (two doors
+ * in one entry) is not door 1214. A dot before three digits is the
+ * thousands' one and goes.
+ */
 function canonicalNumber(value: string | null | undefined): string {
   const number = houseNumber(value);
 
   if (!number) return "";
 
-  return foldText(number)
+  return foldText(number.replace(/(\d)\.(?=\d{3}(?!\d))/g, "$1"))
+    .replace(/(\d) (?=\d)/g, "$1-")
     .replace(/ /g, "")
     .replace(/^0+(?=\d)/, "");
 }

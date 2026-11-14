@@ -1496,10 +1496,12 @@ chave da pausa guarda o motivo junto do prazo (`REFUSED`, `QUOTA` ou
   - A chave do endereço (`shared/delivery/address-key.ts`, decisão D-22) é o
     SHA-256 de `v1|rua|número|bairro|cidade|UF`: a rua canônica (acentos e
     maiúsculas fora, "R." vira "rua", "Av." vira "avenida", "Dr." vira
-    "doutor", conectivos fora; uma Rua e uma Avenida de mesmo nome são duas
-    ruas), o número compacto (`s/n`, `0` e vazio são "sem número"; 12 não é
-    12A), o bairro, a cidade e a UF. O CEP fica fora, porque costuma vir
-    geral ou errado. Sem rua ou sem cidade, a chave é nula. Coluna
+    "doutor", o conectivo entre duas palavras fora, nunca uma letra só nem
+    a última palavra: "Rua E" é uma rua, não a "Rua" sem nome; uma Rua e
+    uma Avenida de mesmo nome são duas ruas), o número compacto (`s/n`, `0`
+    e vazio são "sem número"; 12 não é 12A, e 12/14 não é 1214), o bairro,
+    a cidade e a UF. O CEP fica fora, porque costuma vir geral ou errado.
+    Sem rua ou sem cidade, a chave é nula. Coluna
     `address_key` (migration `20261114120000_delivery_address_key`, só
     expansão) com o índice parcial `delivery_address_key_idx`, só as
     linhas com chave, nas colunas

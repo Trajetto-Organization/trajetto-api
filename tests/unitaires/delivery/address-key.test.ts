@@ -73,6 +73,8 @@ describe("the same door", () => {
     expect(canonicalNumber("12 A")).toBe("12a");
     expect(canonicalNumber("12-a")).toBe("12a");
     expect(canonicalNumber("0012")).toBe("12");
+    // The thousands' dot is one number.
+    expect(canonicalNumber("1.214")).toBe(canonicalNumber("1214"));
   });
 
   it("ignores the CEP, which often comes general or wrong", () => {
@@ -95,6 +97,33 @@ describe("another door", () => {
     expect(key({ address_number: "10" })).not.toBe(
       key({ address_number: "11" }),
     );
+    // Two doors in one entry are not the door of the digits run together.
+    expect(canonicalNumber("12/14")).toBe("12-14");
+    expect(key({ address_number: "12/14" })).not.toBe(
+      key({ address_number: "1214" }),
+    );
+  });
+
+  // Review of the batch of 14/11/2026: "e" is a linking word and a letter.
+  // Dropping it made "Rua E" the bare "rua" — the key of "Rua", "Rua Da"
+  // and "Rua Do" — and streets named by a letter are common in planned
+  // neighbourhoods: two doors would share a point.
+  it("is a street named by a letter, never the bare kind", () => {
+    expect(canonicalStreet("Rua E")).toBe("rua e");
+    expect(key({ street: "Rua E" })).not.toBe(key({ street: "Rua" }));
+    expect(key({ street: "Rua E" })).not.toBe(key({ street: "Rua D" }));
+    expect(key({ street: "Rua E" })).not.toBe(key({ street: "Rua Da" }));
+    expect(key({ street: "Avenida E" })).not.toBe(
+      key({ street: "Avenida Do" }),
+    );
+    expect(key({ street: "Travessa E" })).not.toBe(key({ street: "Travessa" }));
+    expect(key({ street: "Quadra E" })).not.toBe(key({ street: "Quadra" }));
+    expect(key({ street: "Rua E-10" })).not.toBe(key({ street: "Rua 10" }));
+  });
+
+  it("keeps a linking word that ends the name: it links nothing", () => {
+    expect(canonicalStreet("Rua Da")).toBe("rua da");
+    expect(key({ street: "Rua Da" })).not.toBe(key({ street: "Rua" }));
   });
 
   it("is the same street in another district, city or UF", () => {
