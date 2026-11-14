@@ -1756,9 +1756,22 @@ function searchRefusal(status: number | null): string {
   }
 }
 
+/**
+ * When something comes back, in words: "às 21:00 (horário de Brasília)".
+ * A return is a moment, not a span: "volta até 21:00" reads wrong in pt-BR.
+ * Null without a deadline.
+ */
+function backAtText(pause: PauseRead, now: Date): string | null {
+  return pause.until
+    ? `às ${brasiliaTime(pause.until, now)} (horário de Brasília)`
+    : null;
+}
+
 /** The provider's quota of the day: back at midnight UTC. */
 function quotaText(pause: PauseRead, now: Date): string {
-  return `A cota do dia do LocationIQ acabou: volta ${untilText(pause, now)}, à meia-noite UTC.`;
+  const backAt = backAtText(pause, now);
+
+  return `A cota do dia do LocationIQ acabou: volta ${backAt ? `${backAt}, ` : ""}à meia-noite UTC.`;
 }
 
 const STATE_UNREAD =

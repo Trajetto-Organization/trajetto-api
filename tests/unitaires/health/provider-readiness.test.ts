@@ -364,13 +364,21 @@ describe("the deliveries' lookups and the address search (LocationIQ)", () => {
       );
 
       expect(quota.status).toBe("warning");
+      // A return is a moment: "volta às 21:00", never "volta até 21:00".
       expect(quota.warnings).toEqual([
-        "A cota do dia do LocationIQ acabou: volta até 21:00 (horário de Brasília), à meia-noite UTC.",
+        "A cota do dia do LocationIQ acabou: volta às 21:00 (horário de Brasília), à meia-noite UTC.",
       ]);
       expect(quota.details).toMatchObject({
         paused_reason: "QUOTA",
         refused_status: null,
       });
+
+      // A value without a deadline still says when.
+      const undated = await checkGeocoding(withState({ pause: "QUOTA" }));
+
+      expect(undated.warnings).toEqual([
+        "A cota do dia do LocationIQ acabou: volta à meia-noite UTC.",
+      ]);
 
       const spent = await checkGeocoding(withState({ lookupsToday: 2_000 }));
 
