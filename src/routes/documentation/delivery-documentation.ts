@@ -287,6 +287,15 @@ const deliveryRowEntity = z.object({
     .int()
     .optional()
     .describe("Quantas vezes o endereço foi consultado no geocodificador."),
+  // Batch of 14/11/2026 (API-04): the door the point reuse matches on.
+  // Optional, as above: a body written by the previous API does not have it.
+  address_key: z
+    .string()
+    .nullable()
+    .optional()
+    .describe(
+      "A porta da entrega: um hash da rua, do número, do bairro, da cidade e da UF (o CEP fica fora), igual nas entregas da empresa no mesmo endereço, que reaproveitam o ponto umas das outras. Uso interno, nenhuma tela lê. Nula sem rua ou sem cidade, ou numa entrega anterior à coluna que o preenchimento único ainda não alcançou.",
+    ),
   status: deliveryStatusEnum,
   kind: z
     .enum(DELIVERY_KINDS)

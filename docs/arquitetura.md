@@ -1511,7 +1511,9 @@ chave da pausa guarda o motivo junto do prazo (`REFUSED`, `QUOTA` ou
     leem uma entrada cada, por mais entregas que a porta acumule (um centro
     de distribuição, uma loja atendida todo dia, as encerradas inclusive),
     e o `UPDATE` da propagação lê só as linhas da porta sem origem
-    (`geo_source IS NULL` é condição do índice).
+    (`geo_source IS NULL` é condição do índice). A chave sai junto com a
+    linha inteira (o dia do motorista, o detalhe e o NDJSON da listagem do
+    painel), declarada como opcional no `/docs`; nenhuma tela a lê.
   - A regra (`shared/delivery/geocoding/address-point-reuse.ts`, D-21): o
     ponto `MANUAL` vence o do geocodificador, que só vale no número ou na
     rua (`ADDRESS`, `STREET`); na mesma origem, o mais recente; nunca
