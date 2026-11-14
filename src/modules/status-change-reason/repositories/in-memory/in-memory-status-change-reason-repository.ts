@@ -168,9 +168,12 @@ class InMemoryStatusChangeReasonRepository implements IStatusChangeReasonReposit
     businessId: string,
     name: string,
   ): Promise<StatusChangeReason | null> {
+    // As the real one: the name whatever its case (insensitiveEquals).
     return (
       this.statusChangeReasons.find(
-        (reason) => reason.businessId === businessId && reason.name === name,
+        (reason) =>
+          reason.businessId === businessId &&
+          reason.name.toLowerCase() === name.toLowerCase(),
       ) ?? null
     );
   }

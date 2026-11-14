@@ -9,6 +9,7 @@ import {
 
 import database from "@/../infra/database";
 import { resolveOrderBy } from "@/shared/pagination/list-query";
+import { insensitiveEquals } from "@/shared/utils/like-pattern";
 
 import {
   STATUS_REASON_SORT,
@@ -92,8 +93,12 @@ class StatusChangeReasonRepository implements IStatusChangeReasonRepository {
     businessId: string,
     name: string,
   ): Promise<StatusChangeReason | null> {
-    return this.prisma.statusChangeReason.findUnique({
-      where: { businessId_name: { businessId, name } },
+    // Whatever its case, as the occurrence type's name (batch of
+    // 14/11/2026): the exact unique key let "Cliente ausente" and "cliente
+    // ausente" sit side by side in the same picker. Escaped: the value is an
+    // ILIKE pattern underneath (like-pattern.ts).
+    return this.prisma.statusChangeReason.findFirst({
+      where: { businessId, name: insensitiveEquals(name) },
     });
   }
 

@@ -16,6 +16,9 @@ import { CreateStatusChangeReasonUseCase } from "@/modules/status-change-reason/
 import { UpdateStatusChangeReasonUseCase } from "@/modules/status-change-reason/usecases/update-status-change-reason/update-status-change-reason-usecase";
 import { DeleteStatusChangeReasonUseCase } from "@/modules/status-change-reason/usecases/delete-status-change-reason/delete-status-change-reason-usecase";
 
+import { createStatusChangeReasonSchema } from "@/schemas/create-status-change-reason-schema";
+import { updateStatusChangeReasonSchema } from "@/schemas/update-status-change-reason-schema";
+
 /**
  * Two catalogues of the operation (TEST-UC-1): shippers and status change
  * reasons. Both belong to the dispatcher (never the driver), are per company
@@ -352,6 +355,51 @@ describe("status change reasons", () => {
     });
   });
 
+  // Batch of 14/11/2026: the lookup was exact, so "Cliente reagendou" and
+  // "cliente reagendou" sat side by side in the same picker.
+  it("refuses the same name in another case, on create and on rename (409)", async () => {
+    await create().execute(reasonOf() as never, DISPATCHER);
+    const other = await create().execute(
+      reasonOf({ name: "Endereço errado" }) as never,
+      DISPATCHER,
+    );
+
+    await expect(
+      create().execute(
+        reasonOf({ name: "CLIENTE REAGENDOU" }) as never,
+        DISPATCHER,
+      ),
+    ).rejects.toMatchObject({
+      statusCode: 409,
+      code: "STATUS_CHANGE_REASON_NAME_TAKEN",
+    });
+
+    await expect(
+      update().execute(
+        { name: "cliente reagendou" } as never,
+        other.id as string,
+        CARRIER,
+        DISPATCHER,
+      ),
+    ).rejects.toMatchObject({
+      statusCode: 409,
+      code: "STATUS_CHANGE_REASON_NAME_TAKEN",
+    });
+  });
+
+  it("lets a rename change only the case of its own name", async () => {
+    const created = await create().execute(reasonOf() as never, DISPATCHER);
+
+    await expect(
+      update().execute(
+        { name: "Cliente Reagendou" } as never,
+        created.id as string,
+        CARRIER,
+        DISPATCHER,
+      ),
+    ).resolves.toMatchObject({ name: "Cliente Reagendou" });
+  });
+
   it("refuses a driver (403) and an unknown company (404)", async () => {
     await expect(
       create().execute(reasonOf() as never, DRIVER_USER),
@@ -488,5 +536,31 @@ describe("status change reasons", () => {
     ).rejects.toMatchObject({
       statusCode: 403,
     });
+  });
+});
+
+describe("the reason's name in the body", () => {
+  // Batch of 14/11/2026: the spaces around it are trimmed, not refused, so
+  // " cliente ausente" reaches the lookup as the same name and answers 409.
+  it("is trimmed on create and on edit", () => {
+    expect(
+      createStatusChangeReasonSchema.parse({ name: "  Cliente ausente " }).name,
+    ).toBe("Cliente ausente");
+    expect(
+      updateStatusChangeReasonSchema.parse({ name: " Cliente ausente" }).name,
+    ).toBe("Cliente ausente");
+  });
+
+  it("still refuses a name of spaces only, saying so, and doubled spaces", () => {
+    const blank = createStatusChangeReasonSchema.safeParse({ name: "    " });
+
+    expect(blank.success).toBe(false);
+    expect(blank.error?.issues[0].message).toBe(
+      "O nome do motivo não pode conter apenas espaços.",
+    );
+    expect(
+      createStatusChangeReasonSchema.safeParse({ name: "Cliente  ausente" })
+        .success,
+    ).toBe(false);
   });
 });

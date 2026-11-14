@@ -559,6 +559,39 @@ describe("a conflict is a 409 with a code (decision 11.3)", () => {
     },
   );
 
+  // Batch of 14/11/2026: the reason's lookup was exact and the schema
+  // refused the edge spaces, so "cliente confirmou" was a second reason next
+  // to "Cliente confirmou". The name is trimmed and compared whatever its
+  // case, on create and on rename.
+  it("refuses a reason named like another in another case or with spaces around", async () => {
+    const created = await call(
+      "POST",
+      `/status-change-reason/create-status-change-reason/${CARRIER}`,
+      tokens.admin,
+      { name: " cliente confirmou" },
+    );
+
+    expect(created.statusCode, created.body).toBe(409);
+    expect(body(created).code).toBe("STATUS_CHANGE_REASON_NAME_TAKEN");
+
+    const renamed = await call(
+      "PATCH",
+      `/status-change-reason/update-status-change-reason/${SECOND_REASON}/business/${CARRIER}`,
+      tokens.admin,
+      { name: "CLIENTE CONFIRMOU " },
+    );
+
+    expect(renamed.statusCode, renamed.body).toBe(409);
+    expect(body(renamed).code).toBe("STATUS_CHANGE_REASON_NAME_TAKEN");
+    expect(
+      (
+        await prisma.statusChangeReason.findUniqueOrThrow({
+          where: { id: SECOND_REASON },
+        })
+      ).name,
+    ).toBe("Cliente pediu");
+  });
+
   it("answers a name taken between the check and the write with the same 409", async () => {
     // The pre-check is blinded to open the window a twin request would hit;
     // the unique index that closes it is the real one.

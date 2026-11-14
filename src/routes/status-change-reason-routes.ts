@@ -52,7 +52,7 @@ async function statusChangeReasonRoutes(app: FastifyInstance) {
         tags: ["status-change-reason"],
         summary: "Cria um motivo de mudança de status",
         description:
-          "As palavras que a empresa usa para explicar por que o status de uma entrega foi mudado à mão. Curto de propósito: aparece num seletor e numa linha do histórico; o detalhe vai na anotação digitada na hora. Nome único na empresa (409 STATUS_CHANGE_REASON_NAME_TAKEN). Emite `catalogChanged` (status_reason).",
+          "As palavras que a empresa usa para explicar por que o status de uma entrega foi mudado à mão. Curto de propósito: aparece num seletor e numa linha do histórico; o detalhe vai na anotação digitada na hora. Nome único na empresa, sem diferenciar maiúsculas; os espaços em volta são removidos (409 STATUS_CHANGE_REASON_NAME_TAKEN). Emite `catalogChanged` (status_reason).",
         params: statusChangeReasonSchemas.businessIdParam,
         body: statusChangeReasonSchemas.createStatusChangeReason,
         response: {
@@ -114,7 +114,7 @@ async function statusChangeReasonRoutes(app: FastifyInstance) {
         tags: ["status-change-reason"],
         summary: "Edita ou desativa um motivo",
         description:
-          "`is_active: false` desativa o motivo: ele continua explicando os eventos que já o citam e deixa de ser oferecido para novas mudanças. Excluir um motivo já usado é recusado. Motivo inexistente ou de outra empresa → 404 STATUS_CHANGE_REASON_NOT_FOUND (a mesma resposta nos dois casos); nome de outro motivo da empresa → 409 STATUS_CHANGE_REASON_NAME_TAKEN. Emite `catalogChanged` (status_reason).",
+          "`is_active: false` desativa o motivo: ele continua explicando os eventos que já o citam e deixa de ser oferecido para novas mudanças. Excluir um motivo já usado é recusado. Motivo inexistente ou de outra empresa → 404 STATUS_CHANGE_REASON_NOT_FOUND (a mesma resposta nos dois casos); nome de outro motivo da empresa, sem diferenciar maiúsculas → 409 STATUS_CHANGE_REASON_NAME_TAKEN (mudar só as maiúsculas do próprio nome é aceito). Emite `catalogChanged` (status_reason).",
         params: statusChangeReasonSchemas.reasonBusinessParams,
         body: statusChangeReasonSchemas.updateStatusChangeReason,
         response: {
