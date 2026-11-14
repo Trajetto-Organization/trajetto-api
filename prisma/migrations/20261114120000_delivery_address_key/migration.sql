@@ -12,9 +12,9 @@
 -- Expand-safe: one nullable column with no default — catalog-only on
 -- Postgres 11+ — that the serving image never reads or writes; its rows
 -- keep NULL until the new image writes the key on each create and address
--- edit, and the owner's backfill (scripts/backfill-delivery-address-key.ts)
--- fills the rows already there. delivery is hot: one table in this file,
--- under lock_timeout.
+-- edit, and the owner's backfill
+-- (infra/scripts/backfill-delivery-address-key.ts) fills the rows already
+-- there. delivery is hot: one table in this file, under lock_timeout.
 --
 -- The index serves the reuse at one door, (businessId, address_key), and
 -- only the rows with a key; raw SQL because Prisma cannot declare a partial
