@@ -70,7 +70,10 @@ interface Delivery {
   /**
    * Which deliveries of the company stand at the same door (address-key.ts):
    * a hash, for the point reuse only. Null for a row written before it, or
-   * without a street or a city. Never in an answer.
+   * without a street or a city. No documented answer carries it and no
+   * screen reads it, but the panel's NDJSON list streams whole rows (no
+   * response schema to drop it), so it shows there: the SHA-256 of the
+   * company's own address, nothing the row does not already say.
    */
   address_key?: string | null;
   created_at?: Date | string;
