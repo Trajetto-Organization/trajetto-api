@@ -6,8 +6,10 @@ import {
   PROBE_RETRY_DELAY_MS,
   READINESS_CACHE_MS,
   READINESS_TRANSIENT_CACHE_MS,
+  checkAddressSearch,
   checkAiOcr,
   checkEmail,
+  checkGeocoding,
   checkHeartbeat,
   checkProofCertificate,
   checkProviders,
@@ -16,10 +18,12 @@ import {
   checkWhatsApp,
   readinessCache,
   readinessTtl,
+  type GeocodingStateLike,
   type ProviderReadinessReport,
   type ReadinessDeps,
   type ReadinessEnv,
 } from "@/shared/health/provider-readiness";
+import { pauseValue } from "@/shared/delivery/geocoding/geocoding-gate";
 import { CUSTOMER_WHATSAPP_TEMPLATES } from "@/shared/delivery/customer-whatsapp-templates";
 import {
   INTERNAL_WHATSAPP_TEMPLATES,
@@ -43,6 +47,8 @@ const SECRETS = {
   AI_LOCAL_TOKEN: "SECRET_ai_token_0123456789abcdef0123",
   HEALTHCHECK_PING_URL: "https://hc-ping.com/SECRET-uuid",
   EXPO_ACCESS_TOKEN: "SECRET_expo_access_token",
+  REVERSE_GEOCODER_KEY: "pk.SECRET_locationiq_reverse",
+  ADDRESS_SEARCH_KEY: "pk.SECRET_locationiq_search",
 };
 
 function fullEnv(overrides: Partial<ReadinessEnv> = {}): ReadinessEnv {
@@ -59,10 +65,24 @@ function fullEnv(overrides: Partial<ReadinessEnv> = {}): ReadinessEnv {
     R2_BUCKET_NAME: "trajetto-uploads",
     AI_PROVIDER: "local",
     AI_LOCAL_URL: "http://trajetto-ai:8080",
+    REVERSE_GEOCODER_URL: "https://us1.locationiq.com/v1",
+    DELIVERY_GEOCODING_DAILY_BUDGET: 2_000,
+    ADDRESS_SEARCH_URL: "https://api.locationiq.com/v1",
+    ADDRESS_SEARCH_PROTOCOL: "locationiq-autocomplete",
+    ADDRESS_SEARCH_DAILY_BUDGET: 1_000,
+    ADDRESS_SEARCH_BUSINESS_DAILY_LIMIT: 150,
     ...SECRETS,
     ...overrides,
   };
 }
+
+/** The geocoder's Redis on a quiet day: nothing paused, a little used. */
+const QUIET_DAY: GeocodingStateLike = {
+  pause: null,
+  searchPause: null,
+  lookupsToday: 12,
+  searchesToday: 3,
+};
 
 type Route = (url: string, init?: RequestInit) => Response | Promise<Response>;
 
@@ -159,6 +179,7 @@ function deps(
       days_left: 237,
     }),
     heartbeat: () => null,
+    geocodingState: async () => QUIET_DAY,
     now: () => new Date("2026-10-07T12:00:00.000Z"),
     timeoutMs: 200,
     retryDelayMs: 5,
@@ -203,6 +224,8 @@ describe("a fully configured production", () => {
       ["push", "ok"],
       ["storage", "ok"],
       ["ai_ocr", "ok"],
+      ["geocoding", "ok"],
+      ["address_search", "ok"],
       ["proof_certificate", "ok"],
       ["heartbeat", "ok"],
     ]);
@@ -213,6 +236,307 @@ describe("a fully configured production", () => {
       expect(body).not.toContain(secret);
     expect(body).not.toContain("hc-ping.com");
     expect(body).not.toContain("trajetto-ai:8080");
+    expect(body).not.toContain("locationiq.com");
+  });
+});
+
+describe("the deliveries' lookups and the address search (LocationIQ)", () => {
+  // Owner's report of 14/11/2026: the search answered "indisponível" and a
+  // delivery had no point, and the Sistema screen said nothing about
+  // either. Not probed — a call spends a credit, and a refusal already
+  // pauses every replica with its status — so the entries read the
+  // variables and that state.
+  const NOW = new Date("2026-10-07T12:00:00.000Z");
+  const IN_15_MIN = new Date(NOW.getTime() + 15 * 60_000);
+  const MIDNIGHT = new Date("2026-10-08T00:00:00.000Z");
+
+  const withState = (
+    state: Partial<GeocodingStateLike> | null,
+    env: Partial<ReadinessEnv> = {},
+  ) =>
+    deps(
+      {},
+      {
+        env: fullEnv(env),
+        geocodingState: async () => (state ? { ...QUIET_DAY, ...state } : null),
+      },
+    );
+
+  describe("the deliveries' lookups", () => {
+    it("says how many lookups today when nothing holds them", async () => {
+      const result = await checkGeocoding(withState({}));
+
+      expect(result).toMatchObject({
+        key: "geocoding",
+        label: "Localização das entregas (LocationIQ)",
+        status: "ok",
+        message: "Hoje: 12 de 2000 consultas.",
+        details: {
+          key_source: "REVERSE_GEOCODER_KEY",
+          today_used: 12,
+          daily_budget: 2_000,
+          paused_reason: null,
+          paused_until: null,
+          refused_status: null,
+        },
+      });
+    });
+
+    it("names what is missing: the URL, or LocationIQ's key", async () => {
+      expect(
+        await checkGeocoding(
+          withState({}, { REVERSE_GEOCODER_URL: undefined }),
+        ),
+      ).toMatchObject({
+        status: "not_configured",
+        configured: false,
+        missing_env: ["REVERSE_GEOCODER_URL"],
+      });
+      expect(
+        await checkGeocoding(
+          withState({}, { REVERSE_GEOCODER_KEY: undefined }),
+        ),
+      ).toMatchObject({
+        status: "not_configured",
+        missing_env: ["REVERSE_GEOCODER_KEY"],
+      });
+
+      // A Nominatim of our own needs no key.
+      expect(
+        await checkGeocoding(
+          withState(
+            {},
+            {
+              REVERSE_GEOCODER_URL: "http://nominatim.internal:8080",
+              REVERSE_GEOCODER_KEY: undefined,
+            },
+          ),
+        ),
+      ).toMatchObject({ status: "ok", details: { key_source: null } });
+    });
+
+    it("is disabled with a budget of 0", async () => {
+      expect(
+        await checkGeocoding(
+          withState({}, { DELIVERY_GEOCODING_DAILY_BUDGET: 0 }),
+        ),
+      ).toMatchObject({ status: "disabled", configured: true });
+    });
+
+    it("is an error while the provider's refusal holds the lookups, saying what the status means and until when", async () => {
+      const expected: Record<number, RegExp> = {
+        401: /recusou a chave \(HTTP 401\): confira REVERSE_GEOCODER_KEY/,
+        403: /HTTP 403\): o token não tem o Search liberado/,
+        404: /REVERSE_GEOCODER_URL deve ser a raiz da API/,
+      };
+
+      for (const [status, message] of Object.entries(expected)) {
+        const result = await checkGeocoding(
+          withState({
+            pause: pauseValue("REFUSED", IN_15_MIN, Number(status)),
+          }),
+        );
+
+        expect(result.status).toBe("error");
+        expect(result.message).toMatch(message);
+        expect(result.message).toContain("até 09:15 (horário de Brasília)");
+        expect(result.details).toMatchObject({
+          paused_reason: "REFUSED",
+          paused_until: IN_15_MIN.toISOString(),
+          refused_status: Number(status),
+        });
+      }
+
+      // A value an older replica wrote: no status, still an error.
+      const old = await checkGeocoding(
+        withState({ pause: `REFUSED ${IN_15_MIN.toISOString()}` }),
+      );
+
+      expect(old).toMatchObject({
+        status: "error",
+        details: { refused_status: null },
+      });
+    });
+
+    it("warns for the provider's quota of the day and for today's budget spent", async () => {
+      const quota = await checkGeocoding(
+        withState({ pause: pauseValue("QUOTA", MIDNIGHT, 429) }),
+      );
+
+      expect(quota.status).toBe("warning");
+      expect(quota.warnings).toEqual([
+        "A cota do dia do LocationIQ acabou: volta até 21:00 (horário de Brasília), à meia-noite UTC.",
+      ]);
+      expect(quota.details).toMatchObject({
+        paused_reason: "QUOTA",
+        refused_status: null,
+      });
+
+      const spent = await checkGeocoding(withState({ lookupsToday: 2_000 }));
+
+      expect(spent.status).toBe("warning");
+      expect(spent.warnings[0]).toMatch(
+        /orçamento do dia acabou \(2000 de 2000 consultas/,
+      );
+    });
+
+    it("is not held by a burst's minute", async () => {
+      expect(
+        await checkGeocoding(
+          withState({
+            pause: pauseValue("BURST", new Date(NOW.getTime() + 60_000), 429),
+          }),
+        ),
+      ).toMatchObject({ status: "ok", details: { paused_reason: "BURST" } });
+    });
+
+    it("says the state was not read when Redis does not answer, never an error", async () => {
+      expect(await checkGeocoding(withState(null))).toMatchObject({
+        status: "ok",
+        transient: true,
+        message: "Configurado. Estado do dia não lido: o Redis não respondeu.",
+        details: { today_used: null },
+      });
+    });
+  });
+
+  describe("the address search", () => {
+    it("says how many searches today when nothing holds it", async () => {
+      expect(await checkAddressSearch(withState({}))).toMatchObject({
+        key: "address_search",
+        label: 'Busca do "Fixar no mapa"',
+        status: "ok",
+        message: "Hoje: 3 de 1000 buscas (até 150 por empresa).",
+        details: {
+          protocol: "locationiq-autocomplete",
+          key_source: "ADDRESS_SEARCH_KEY",
+          today_used: 3,
+          daily_budget: 1_000,
+          business_daily_limit: 150,
+        },
+      });
+    });
+
+    it("names what is missing: the URL, or any key", async () => {
+      expect(
+        await checkAddressSearch(
+          withState({}, { ADDRESS_SEARCH_URL: undefined }),
+        ),
+      ).toMatchObject({
+        status: "not_configured",
+        missing_env: ["ADDRESS_SEARCH_URL"],
+      });
+      expect(
+        await checkAddressSearch(
+          withState(
+            {},
+            { ADDRESS_SEARCH_KEY: undefined, REVERSE_GEOCODER_KEY: undefined },
+          ),
+        ),
+      ).toMatchObject({
+        status: "not_configured",
+        missing_env: ["ADDRESS_SEARCH_KEY"],
+      });
+
+      // Without a key of its own, the deliveries' one (decision D-27).
+      expect(
+        await checkAddressSearch(
+          withState({}, { ADDRESS_SEARCH_KEY: undefined }),
+        ),
+      ).toMatchObject({
+        status: "ok",
+        details: { key_source: "REVERSE_GEOCODER_KEY" },
+      });
+    });
+
+    it("is disabled with a budget of 0", async () => {
+      expect(
+        await checkAddressSearch(
+          withState({}, { ADDRESS_SEARCH_DAILY_BUDGET: 0 }),
+        ),
+      ).toMatchObject({ status: "disabled" });
+    });
+
+    it("warns when LocationIQ is asked with the nominatim-search protocol", async () => {
+      const result = await checkAddressSearch(
+        withState({}, { ADDRESS_SEARCH_PROTOCOL: "nominatim-search" }),
+      );
+
+      expect(result.status).toBe("warning");
+      expect(result.warnings).toEqual([
+        "ADDRESS_SEARCH_PROTOCOL está em nominatim-search com o LocationIQ: defina locationiq-autocomplete, ou a busca chama o /search em vez do /autocomplete.",
+      ]);
+    });
+
+    it("is an error while its own refusal holds it (403: a token without the Autocomplete)", async () => {
+      const result = await checkAddressSearch(
+        withState({
+          searchPause: pauseValue("REFUSED", IN_15_MIN, 403),
+        }),
+      );
+
+      expect(result.status).toBe("error");
+      expect(result.message).toMatch(/não tem o Autocomplete liberado/);
+      expect(result.message).toContain("a localização das entregas continua");
+      expect(result.details).toMatchObject({
+        paused_reason: "REFUSED",
+        refused_status: 403,
+      });
+    });
+
+    it("searches on while a refusal holds only the deliveries' lookups", async () => {
+      expect(
+        await checkAddressSearch(
+          withState({ pause: pauseValue("REFUSED", IN_15_MIN, 401) }),
+        ),
+      ).toMatchObject({ status: "ok", details: { paused_reason: null } });
+    });
+
+    it("warns for the account's quota and for the day's searches spent", async () => {
+      const quota = await checkAddressSearch(
+        withState({ pause: pauseValue("QUOTA", MIDNIGHT, 429) }),
+      );
+
+      expect(quota.status).toBe("warning");
+      expect(quota.details).toMatchObject({ paused_reason: "QUOTA" });
+
+      const spent = await checkAddressSearch(
+        withState({ searchesToday: 1_000 }),
+      );
+
+      expect(spent.status).toBe("warning");
+      expect(spent.warnings[0]).toMatch(/As buscas do dia acabaram/);
+    });
+
+    it("says the state was not read when Redis does not answer", async () => {
+      expect(await checkAddressSearch(withState(null))).toMatchObject({
+        status: "ok",
+        transient: true,
+      });
+    });
+  });
+
+  it("never carries a key nor a configured URL, in any state", async () => {
+    const states: Array<Partial<GeocodingStateLike> | null> = [
+      {},
+      null,
+      { pause: pauseValue("REFUSED", IN_15_MIN, 401) },
+      { searchPause: pauseValue("REFUSED", IN_15_MIN, 403) },
+      { pause: pauseValue("QUOTA", MIDNIGHT, 429) },
+      { lookupsToday: 5_000, searchesToday: 5_000 },
+    ];
+
+    for (const state of states) {
+      const body = JSON.stringify([
+        await checkGeocoding(withState(state)),
+        await checkAddressSearch(withState(state)),
+      ]);
+
+      for (const secret of Object.values(SECRETS)) {
+        expect(body).not.toContain(secret);
+      }
+      expect(body).not.toContain("us1.locationiq.com");
+    }
   });
 });
 

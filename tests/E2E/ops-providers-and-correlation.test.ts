@@ -270,6 +270,9 @@ describe("the providers' readiness, for the MASTER", () => {
       "push",
       "storage",
       "ai_ocr",
+      // LocationIQ's two (14/11/2026), from the geocoder's Redis state.
+      "geocoding",
+      "address_search",
       "proof_certificate",
       "heartbeat",
     ]);
@@ -304,6 +307,8 @@ describe("the providers' readiness, for the MASTER", () => {
       "META_WHATSAPP_ACCESS_TOKEN",
       "R2_SECRET_ACCESS_KEY",
       "HEALTHCHECK_PING_URL",
+      "REVERSE_GEOCODER_KEY",
+      "ADDRESS_SEARCH_KEY",
     ]) {
       const value = process.env[key];
       if (value && value.length >= 8) expect(text).not.toContain(value);

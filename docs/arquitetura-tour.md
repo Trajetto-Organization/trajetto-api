@@ -1502,7 +1502,8 @@ Cada réplica responde por si; o MASTER vê o conjunto na aba Sistema do
 - `GET /health/metrics` (MASTER): filas e atraso do outbox, workers e crons,
   pool, conexões, sockets, Redis e certificado, numa foto de 10 s por réplica.
 - `GET /health/providers` (MASTER): Resend, Meta, Expo, R2, `trajetto-ai`,
-  certificado e heartbeat, sem enviar nada. Cada um é `ok`, `warning`, `error`,
+  LocationIQ (a localização das entregas e a busca do "Fixar no mapa", pelo
+  estado no Redis, sem sonda), certificado e heartbeat, sem enviar nada. Cada um é `ok`, `warning`, `error`,
   `not_configured` ou `disabled`; desde 28/10/2026, `transient`, `attempts` e
   `failure_kind` dizem se o veredito depende de uma falha passageira (3,5 s por
   tentativa, no máximo duas dentro de 5 s;

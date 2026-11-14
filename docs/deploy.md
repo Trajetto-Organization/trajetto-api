@@ -3815,6 +3815,36 @@ veio da foto); `refresh=true` sonda de novo no máximo a cada 5 s. Na web, a
 aba Sistema mostra "Instável" para um `warning` transitório e, depois de um
 resultado transitório, relê sozinha uma única vez.
 
+Desde 14/11/2026, duas entradas do LocationIQ, **sem sonda**: cada chamada ao
+provedor gasta um crédito do dia, e uma recusa já pausa todas as réplicas com
+o HTTP no Redis, então a pausa faz o papel da sonda (e não há consulta de
+saldo, decisão D-28). As duas leem as variáveis e um `MGET` das chaves do
+geocodificador (a pausa da conta, a da busca e as contagens do dia), com
+prazo de 1 s e falha aberta: sem Redis, a mensagem é "Estado do dia não
+lido", `transient`, nunca `error`.
+
+- `geocoding`, "Localização das entregas (LocationIQ)": `not_configured`
+  sem `REVERSE_GEOCODER_URL`, ou sem `REVERSE_GEOCODER_KEY` com o host do
+  LocationIQ; `disabled` com `DELIVERY_GEOCODING_DAILY_BUDGET=0`; `error`
+  enquanto uma recusa segura as consultas, com o que o HTTP quer dizer (401
+  a chave, 403 o token sem o Search ou com restrição, 404 a URL que não é a
+  raiz da API) e até quando (horário de Brasília); `warning` com a cota do
+  dia do provedor ou o orçamento do dia gasto; `ok` com "Hoje: N de M
+  consultas". O pico de um minuto não conta.
+- `address_search`, "Busca do 'Fixar no mapa'": `not_configured` sem
+  `ADDRESS_SEARCH_URL`, ou sem chave nenhuma (`ADDRESS_SEARCH_KEY` e
+  `REVERSE_GEOCODER_KEY` vazias) no LocationIQ; `disabled` com
+  `ADDRESS_SEARCH_DAILY_BUDGET=0`; `warning` com o host do LocationIQ e
+  `ADDRESS_SEARCH_PROTOCOL=nominatim-search` (o padrão, que chama o
+  `/search` em vez do `/autocomplete`); `error` enquanto a recusa da própria
+  busca a segura (403: o token sem o Autocomplete); `warning` com a cota do
+  dia ou as buscas do dia gastas. A recusa da localização das entregas não
+  segura a busca.
+
+Os `details` não levam segredo: `protocol`, `key_source` (o nome da
+variável da chave, nunca o valor), `today_used`, `daily_budget`,
+`business_daily_limit`, `paused_reason`, `paused_until` e `refused_status`.
+
 Cada tentativa que falha vira uma linha `warn` com
 `component=provider-readiness` e `msg="provider probe attempt failed"`, com
 `provider`, `attempt`, `kind`, `code` (EAI_AGAIN, ECONNRESET,

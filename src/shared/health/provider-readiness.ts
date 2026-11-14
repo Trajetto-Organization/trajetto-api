@@ -19,6 +19,17 @@ import {
   type WhatsAppTemplateDefinition,
 } from "@/shared/notifications/whatsapp-templates";
 import {
+  pauseDeadlineOf,
+  pauseReasonOf,
+  pauseStatusOf,
+  type GeocodingPauseReason,
+} from "@/shared/delivery/geocoding/geocoding-gate";
+import { GEOCODING_KEYS } from "@/shared/delivery/geocoding/geocoding-keys";
+import {
+  DEFAULT_BUSINESS_TIMEZONE,
+  wallClock,
+} from "@/shared/time/business-day";
+import {
   lastHeartbeatOutcome,
   type HeartbeatOutcome,
 } from "./heartbeat-client";
@@ -47,6 +58,8 @@ type ProviderKey =
   | "push"
   | "storage"
   | "ai_ocr"
+  | "geocoding"
+  | "address_search"
   | "proof_certificate"
   | "heartbeat";
 
@@ -124,6 +137,26 @@ interface ReadinessEnv {
   AI_LOCAL_TOKEN?: string;
   HEALTHCHECK_PING_URL?: string;
   HEALTHCHECK_FAIL_URL?: string;
+  REVERSE_GEOCODER_URL?: string;
+  REVERSE_GEOCODER_KEY?: string;
+  DELIVERY_GEOCODING_DAILY_BUDGET: number;
+  ADDRESS_SEARCH_URL?: string;
+  ADDRESS_SEARCH_KEY?: string;
+  ADDRESS_SEARCH_PROTOCOL: "locationiq-autocomplete" | "nominatim-search";
+  ADDRESS_SEARCH_DAILY_BUDGET: number;
+  ADDRESS_SEARCH_BUSINESS_DAILY_LIMIT: number;
+}
+
+/**
+ * The geocoder's state in Redis (geocoding-keys.ts), as read: the
+ * account's pause and the search's own (raw values, "REFUSED <deadline>
+ * 403"), and today's lookups and searches.
+ */
+interface GeocodingStateLike {
+  pause: string | null;
+  searchPause: string | null;
+  lookupsToday: number;
+  searchesToday: number;
 }
 
 interface ProofHealthLike {
@@ -147,6 +180,12 @@ interface ReadinessDeps {
   headBucket: (signal: AbortSignal) => Promise<void>;
   proofHealth: () => ProofHealthLike;
   heartbeat: () => HeartbeatOutcome | null;
+
+  /**
+   * The geocoder's pauses and today's counts, in one MGET; null when Redis
+   * does not answer — the state is then "not read", never an error.
+   */
+  geocodingState: (now: Date) => Promise<GeocodingStateLike | null>;
   now?: () => Date;
 
   /** Deadline of each attempt (PROBE_ATTEMPT_TIMEOUT_MS). */
@@ -1617,6 +1656,312 @@ async function checkAiOcr(deps: ReadinessDeps): Promise<ProviderReadiness> {
 }
 
 // ---------------------------------------------------------------------------
+// Geocoding: the deliveries' points and the "Fixar no mapa" search
+// ---------------------------------------------------------------------------
+
+/*
+ * Not probed: every call to the provider spends a credit of the day, and a
+ * refusal already pauses every replica with its HTTP status in Redis
+ * (geocoding-gate.ts) — the pause is the probe. These two entries read the
+ * variables and that state (owner's report of 14/11/2026: the search was
+ * off and the deliveries had no point, and nothing on the Sistema screen
+ * said why). No balance probe (decision D-28).
+ */
+
+/** "15:15" today, "21:00 de 15/11" another day: Brasília's wall clock. */
+function brasiliaTime(until: Date, now: Date): string {
+  const at = wallClock(until, DEFAULT_BUSINESS_TIMEZONE);
+  const today = wallClock(now, DEFAULT_BUSINESS_TIMEZONE);
+  const pad = (value: number) => String(value).padStart(2, "0");
+  const time = `${pad(at.hour)}:${pad(at.minute)}`;
+
+  return at.day === today.day && at.month === today.month
+    ? time
+    : `${time} de ${pad(at.day)}/${pad(at.month)}`;
+}
+
+/** The host of a URL; null for one that does not parse. */
+function hostOf(url: string | undefined): string | null {
+  try {
+    return url ? new URL(url).hostname : null;
+  } catch {
+    return null;
+  }
+}
+
+function isLocationIq(url: string | undefined): boolean {
+  return /(^|\.)locationiq\.com$/i.test(hostOf(url) ?? "");
+}
+
+interface PauseRead {
+  reason: GeocodingPauseReason;
+  until: Date | null;
+  status: number | null;
+}
+
+/** A pause key, read; null for none. */
+function pauseOf(value: string | null): PauseRead | null {
+  const reason = pauseReasonOf(value);
+
+  return reason
+    ? {
+        reason,
+        until: pauseDeadlineOf(value),
+        status: pauseStatusOf(value),
+      }
+    : null;
+}
+
+function pauseDetails(pause: PauseRead | null): Record<string, DetailValue> {
+  return {
+    paused_reason: pause?.reason ?? null,
+    paused_until: pause?.until?.toISOString() ?? null,
+    refused_status: pause?.reason === "REFUSED" ? pause.status : null,
+  };
+}
+
+/** Until when, in words: "até 15:15 (horário de Brasília)". */
+function untilText(pause: PauseRead, now: Date): string {
+  return pause.until
+    ? `até ${brasiliaTime(pause.until, now)} (horário de Brasília)`
+    : "por alguns minutos";
+}
+
+/** What a refusal of the deliveries' lookups means, by its status. */
+function lookupRefusal(status: number | null): string {
+  switch (status) {
+    case 401:
+      return "O LocationIQ recusou a chave (HTTP 401): confira REVERSE_GEOCODER_KEY.";
+    case 403:
+      return "O LocationIQ recusou o acesso (HTTP 403): o token não tem o Search liberado ou tem restrição de Referrer ou de IP.";
+    case 404:
+      return "O provedor respondeu 404: REVERSE_GEOCODER_URL deve ser a raiz da API (a /v1, sem /search).";
+    default:
+      return `O provedor recusou as consultas${status ? ` (HTTP ${status})` : ""}: confira REVERSE_GEOCODER_URL e REVERSE_GEOCODER_KEY.`;
+  }
+}
+
+/** What a refusal of the search means, by its status. */
+function searchRefusal(status: number | null): string {
+  switch (status) {
+    case 401:
+      return "O LocationIQ recusou a chave da busca (HTTP 401): confira ADDRESS_SEARCH_KEY (vazia, vale a REVERSE_GEOCODER_KEY).";
+    case 403:
+      return "O LocationIQ recusou a busca (HTTP 403): o token não tem o Autocomplete liberado ou tem restrição de Referrer ou de IP.";
+    case 404:
+    case 200:
+      return `A busca não achou a API do provedor (HTTP ${status}): ADDRESS_SEARCH_URL deve ser a raiz da API (https://api.locationiq.com/v1) e ADDRESS_SEARCH_PROTOCOL, locationiq-autocomplete.`;
+    default:
+      return `O provedor recusou a busca${status ? ` (HTTP ${status})` : ""}: confira ADDRESS_SEARCH_URL, ADDRESS_SEARCH_PROTOCOL e a chave.`;
+  }
+}
+
+/** The provider's quota of the day: back at midnight UTC. */
+function quotaText(pause: PauseRead, now: Date): string {
+  return `A cota do dia do LocationIQ acabou: volta ${untilText(pause, now)}, à meia-noite UTC.`;
+}
+
+const STATE_UNREAD =
+  "Configurado. Estado do dia não lido: o Redis não respondeu.";
+
+async function checkGeocoding(deps: ReadinessDeps): Promise<ProviderReadiness> {
+  const { env } = deps;
+  const label = "Localização das entregas (LocationIQ)";
+  const budget = env.DELIVERY_GEOCODING_DAILY_BUDGET;
+
+  if (!env.REVERSE_GEOCODER_URL) {
+    return base("geocoding", label, {
+      status: "not_configured",
+      configured: false,
+      missing_env: ["REVERSE_GEOCODER_URL"],
+      message:
+        "Sem REVERSE_GEOCODER_URL as entregas não são localizadas: só têm o ponto informado na criação ou fixado no mapa.",
+    });
+  }
+
+  if (isLocationIq(env.REVERSE_GEOCODER_URL) && !env.REVERSE_GEOCODER_KEY) {
+    return base("geocoding", label, {
+      status: "not_configured",
+      configured: false,
+      missing_env: ["REVERSE_GEOCODER_KEY"],
+      message:
+        "O LocationIQ exige a chave: sem REVERSE_GEOCODER_KEY toda consulta é recusada (HTTP 401).",
+    });
+  }
+
+  const keyed = {
+    key_source: env.REVERSE_GEOCODER_KEY ? "REVERSE_GEOCODER_KEY" : null,
+    daily_budget: budget,
+  };
+
+  if (budget <= 0) {
+    return base("geocoding", label, {
+      status: "disabled",
+      message:
+        "DELIVERY_GEOCODING_DAILY_BUDGET=0: a localização automática das entregas está desligada.",
+      details: keyed,
+    });
+  }
+
+  const now = (deps.now ?? (() => new Date()))();
+  const state = await deps.geocodingState(now);
+
+  if (!state) {
+    return base("geocoding", label, {
+      message: STATE_UNREAD,
+      transient: true,
+      details: { ...keyed, today_used: null, ...pauseDetails(null) },
+    });
+  }
+
+  const pause = pauseOf(state.pause);
+  const details = {
+    ...keyed,
+    today_used: state.lookupsToday,
+    ...pauseDetails(pause),
+  };
+
+  if (pause?.reason === "REFUSED") {
+    return base("geocoding", label, {
+      status: "error",
+      message: `${lookupRefusal(pause.status)} As consultas estão pausadas ${untilText(pause, now)}; se a recusa continuar, a pausa se renova.`,
+      details,
+    });
+  }
+
+  const warnings: string[] = [];
+
+  if (pause?.reason === "QUOTA") warnings.push(quotaText(pause, now));
+
+  if (state.lookupsToday >= budget) {
+    warnings.push(
+      `O orçamento do dia acabou (${state.lookupsToday} de ${budget} consultas, DELIVERY_GEOCODING_DAILY_BUDGET): as consultas voltam à meia-noite UTC.`,
+    );
+  }
+
+  return settle(
+    base("geocoding", label, {
+      message: `Hoje: ${state.lookupsToday} de ${budget} consultas.`,
+      warnings,
+      details,
+    }),
+  );
+}
+
+async function checkAddressSearch(
+  deps: ReadinessDeps,
+): Promise<ProviderReadiness> {
+  const { env } = deps;
+  const label = 'Busca do "Fixar no mapa"';
+  const budget = env.ADDRESS_SEARCH_DAILY_BUDGET;
+  const protocol = env.ADDRESS_SEARCH_PROTOCOL;
+
+  if (!env.ADDRESS_SEARCH_URL) {
+    return base("address_search", label, {
+      status: "not_configured",
+      configured: false,
+      missing_env: ["ADDRESS_SEARCH_URL"],
+      message:
+        "Sem ADDRESS_SEARCH_URL a busca de endereço fica desligada e a tela da rota pede o clique no mapa. No LocationIQ: ADDRESS_SEARCH_URL=https://api.locationiq.com/v1 e ADDRESS_SEARCH_PROTOCOL=locationiq-autocomplete.",
+      details: { protocol },
+    });
+  }
+
+  const keySource = env.ADDRESS_SEARCH_KEY
+    ? "ADDRESS_SEARCH_KEY"
+    : env.REVERSE_GEOCODER_KEY
+      ? "REVERSE_GEOCODER_KEY"
+      : null;
+  const locationIq = isLocationIq(env.ADDRESS_SEARCH_URL);
+
+  if (!keySource && (locationIq || protocol === "locationiq-autocomplete")) {
+    return base("address_search", label, {
+      status: "not_configured",
+      configured: false,
+      missing_env: ["ADDRESS_SEARCH_KEY"],
+      message:
+        "Sem chave a busca é recusada (HTTP 401): defina ADDRESS_SEARCH_KEY ou a REVERSE_GEOCODER_KEY, que ela usa quando vazia.",
+      details: { protocol, key_source: null },
+    });
+  }
+
+  const keyed = {
+    protocol,
+    key_source: keySource,
+    daily_budget: budget,
+    business_daily_limit: env.ADDRESS_SEARCH_BUSINESS_DAILY_LIMIT,
+  };
+
+  if (budget <= 0) {
+    return base("address_search", label, {
+      status: "disabled",
+      message:
+        "ADDRESS_SEARCH_DAILY_BUDGET=0: a busca de endereço está desligada e a tela da rota pede o clique no mapa.",
+      details: keyed,
+    });
+  }
+
+  // The likeliest slip: the URL set and the protocol left at its default,
+  // which asks LocationIQ's /search instead of its /autocomplete.
+  const warnings: string[] =
+    locationIq && protocol === "nominatim-search"
+      ? [
+          "ADDRESS_SEARCH_PROTOCOL está em nominatim-search com o LocationIQ: defina locationiq-autocomplete, ou a busca chama o /search em vez do /autocomplete.",
+        ]
+      : [];
+
+  const now = (deps.now ?? (() => new Date()))();
+  const state = await deps.geocodingState(now);
+
+  if (!state) {
+    return settle(
+      base("address_search", label, {
+        message: STATE_UNREAD,
+        warnings,
+        transient: true,
+        details: { ...keyed, today_used: null, ...pauseDetails(null) },
+      }),
+    );
+  }
+
+  // The search's own pause first: a refusal of its endpoint is its alone;
+  // the account's quota holds it too.
+  const own = pauseOf(state.searchPause);
+  const shared = pauseOf(state.pause);
+  const quota = [own, shared].find((pause) => pause?.reason === "QUOTA");
+  const details = {
+    ...keyed,
+    today_used: state.searchesToday,
+    ...pauseDetails(own ?? quota ?? null),
+  };
+
+  if (own?.reason === "REFUSED") {
+    return base("address_search", label, {
+      status: "error",
+      message: `${searchRefusal(own.status)} A busca está pausada ${untilText(own, now)}; a localização das entregas continua.`,
+      warnings,
+      details,
+    });
+  }
+
+  if (quota) warnings.push(quotaText(quota, now));
+
+  if (state.searchesToday >= budget) {
+    warnings.push(
+      `As buscas do dia acabaram (${state.searchesToday} de ${budget}, ADDRESS_SEARCH_DAILY_BUDGET): voltam à meia-noite UTC.`,
+    );
+  }
+
+  return settle(
+    base("address_search", label, {
+      message: `Hoje: ${state.searchesToday} de ${budget} buscas (até ${env.ADDRESS_SEARCH_BUSINESS_DAILY_LIMIT} por empresa).`,
+      warnings,
+      details,
+    }),
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Proof certificate (ICP-Brasil A1)
 // ---------------------------------------------------------------------------
 
@@ -1750,6 +2095,8 @@ async function checkProviders(
     checkPush(deps),
     checkStorage(deps),
     checkAiOcr(deps),
+    checkGeocoding(deps),
+    checkAddressSearch(deps),
     Promise.resolve(checkProofCertificate(deps)),
     Promise.resolve(checkHeartbeat(deps)),
   ]);
@@ -1789,7 +2136,62 @@ function productionDeps(): ReadinessDeps {
     proofHealth: () =>
       container.resolve<ProofSigningService>("ProofSigningService").health(),
     heartbeat: lastHeartbeatOutcome,
+    geocodingState: readGeocodingState,
   };
+}
+
+/** The Redis read of the two geocoding entries never holds the screen. */
+const GEOCODING_STATE_DEADLINE_MS = 1_000;
+
+/**
+ * One MGET of the production keys on the cache connection, fail-open:
+ * slower than GEOCODING_STATE_DEADLINE_MS or failing, null ("not read").
+ */
+async function readGeocodingState(
+  now: Date,
+): Promise<GeocodingStateLike | null> {
+  let timer: NodeJS.Timeout | undefined;
+
+  const count = (value: string | null | undefined) => {
+    const used = Number(value ?? 0);
+
+    return Number.isFinite(used) ? used : 0;
+  };
+
+  try {
+    const [pause, searchPause, lookups, searches] = await Promise.race([
+      RedisConnection.getInstance()
+        .getClient()
+        .then((redis) =>
+          redis.mget(
+            GEOCODING_KEYS.pause,
+            GEOCODING_KEYS.searchPause,
+            GEOCODING_KEYS.budget(now),
+            GEOCODING_KEYS.searchDay(now),
+          ),
+        ),
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(
+          () => reject(new Error("geocoding state timed out")),
+          GEOCODING_STATE_DEADLINE_MS,
+        );
+        timer.unref?.();
+      }),
+    ]);
+
+    return {
+      pause: pause ?? null,
+      searchPause: searchPause ?? null,
+      lookupsToday: count(lookups),
+      searchesToday: count(searches),
+    };
+  } catch (err) {
+    log.info({ err }, "geocoding state unreadable for the readiness report");
+
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /**
@@ -1868,8 +2270,10 @@ export {
   READINESS_TRANSIENT_CACHE_MS,
   readinessCache,
   readinessTtl,
+  checkAddressSearch,
   checkAiOcr,
   checkEmail,
+  checkGeocoding,
   checkHeartbeat,
   checkProofCertificate,
   checkProviders,
@@ -1880,6 +2284,7 @@ export {
   resetProviderReadinessCache,
 };
 export type {
+  GeocodingStateLike,
   ProbeFailureKind,
   ProbeLog,
   ProviderKey,

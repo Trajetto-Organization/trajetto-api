@@ -358,7 +358,9 @@ async function healthRoutes(app: FastifyInstance) {
    * Provider readiness (contract §32/§33): which providers this deployment
    * has configured and whether they answer — Resend and its domain, Meta and
    * each template's approval, Expo, R2, the OCR service and its token, the
-   * proof certificate and the heartbeat. Read-only probes, side by side: an
+   * proof certificate and the heartbeat; LocationIQ's two (the deliveries'
+   * lookups and the address search) from their state in Redis, unprobed,
+   * since every call spends a credit. Read-only probes, side by side: an
    * attempt of 3.5 s and, after a failure that may clear by itself, one more
    * inside 5 s per provider. Cached 30 s (5 s when some provider is
    * transient) and shared by the replicas (Redis, fail-open) so a refreshing
@@ -377,7 +379,7 @@ async function healthRoutes(app: FastifyInstance) {
         tags: ["health"],
         summary: "Prontidão dos provedores externos",
         description:
-          "Diz, sem expor segredos, quais provedores estão configurados e respondendo: e-mail (Resend, com o domínio do remetente), WhatsApp (Meta, com o status de cada template), push (Expo → FCM), armazenamento (R2), leitura de fotos (trajetto-ai, com o token), certificado ICP do comprovante e heartbeat do alerta externo. Lista os nomes das variáveis que faltam. As sondas são só de leitura e rodam em paralelo: cada tentativa tem até 3,5 s e, depois de uma falha que pode passar sozinha (tempo esgotado, rede, HTTP 5xx, resposta incompleta), há no máximo mais uma, dentro de 5 s por provedor; `attempts`, `transient` e `failure_kind` dizem como o veredito foi obtido. Uma recusa definitiva (chave, bucket, domínio) nunca é repetida nem atenuada. O relatório fica em cache por 30 s (5 s quando algum provedor está transitório), compartilhado entre as réplicas (`cached` diz se a resposta veio do cache); `refresh=true` sonda de novo, no máximo uma vez a cada 5 s. Só MASTER.",
+          'Diz, sem expor segredos, quais provedores estão configurados e respondendo: e-mail (Resend, com o domínio do remetente), WhatsApp (Meta, com o status de cada template), push (Expo → FCM), armazenamento (R2), leitura de fotos (trajetto-ai, com o token), localização das entregas e busca do "Fixar no mapa" (LocationIQ: sem sonda, porque cada chamada gasta um crédito do dia; o estado vem do Redis, com a pausa que uma recusa ou a cota do dia gravou, o HTTP dela e o uso do dia, e o Redis fora vira "estado não lido", nunca erro), certificado ICP do comprovante e heartbeat do alerta externo. Lista os nomes das variáveis que faltam. As sondas são só de leitura e rodam em paralelo: cada tentativa tem até 3,5 s e, depois de uma falha que pode passar sozinha (tempo esgotado, rede, HTTP 5xx, resposta incompleta), há no máximo mais uma, dentro de 5 s por provedor; `attempts`, `transient` e `failure_kind` dizem como o veredito foi obtido. Uma recusa definitiva (chave, bucket, domínio) nunca é repetida nem atenuada. O relatório fica em cache por 30 s (5 s quando algum provedor está transitório), compartilhado entre as réplicas (`cached` diz se a resposta veio do cache); `refresh=true` sonda de novo, no máximo uma vez a cada 5 s. Só MASTER.',
         querystring: healthSchemas.providersQuery,
         response: {
           200: healthResponses.providerReadiness,

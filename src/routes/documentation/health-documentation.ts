@@ -155,6 +155,8 @@ const providerReadiness = z.object({
     "push",
     "storage",
     "ai_ocr",
+    "geocoding",
+    "address_search",
     "proof_certificate",
     "heartbeat",
   ]),
@@ -181,7 +183,7 @@ const providerReadiness = z.object({
       z.union([z.string(), z.number(), z.boolean(), z.null()]),
     )
     .describe(
-      "Estado sem segredo: domínio do remetente, status de cada template (template:<nome>), validade do certificado…",
+      "Estado sem segredo: domínio do remetente, status de cada template (template:<nome>), validade do certificado, e no LocationIQ protocol, key_source (o nome da variável da chave), today_used, daily_budget, business_daily_limit, paused_reason, paused_until e refused_status…",
     ),
   attempts: z
     .number()
