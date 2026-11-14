@@ -11,6 +11,13 @@ import { AppError } from "@/shared/errors/AppError";
  * counted — an untrusted phone can no longer lock a driver out by guessing.
  * A 403 with the API's own sentence, which the app builds in the field
  * already show for a code they do not know (signInFailureMessage).
+ *
+ * The sentence names the two usual causes, a first sign-in on that phone
+ * and a phone the company disconnected (14/11/2026): "não foi possível
+ * entrar" left the driver retyping the password, which is never compared
+ * here. The app keeps a copy for an answer that comes without a sentence
+ * (login-refusal-rules.ts); the two are the same word for word, so old and
+ * new builds read alike. It still says nothing about whether the CPF exists.
  */
 class UserDeviceNotTrustedError extends AppError {
   /** Whether the request named a phone at all, for the log line only. */
@@ -18,7 +25,7 @@ class UserDeviceNotTrustedError extends AppError {
 
   constructor(withDevice: boolean) {
     super(
-      "Não foi possível entrar com este CPF neste aparelho. Confira o CPF ou peça ao gestor o QR Code de acesso.",
+      "Este aparelho não está liberado para entrar com este CPF. Isso acontece no primeiro acesso em um celular ou quando a empresa desconecta o aparelho. Confira o CPF ou peça ao gestor um QR Code de acesso.",
       403,
       "AUTH_DEVICE_NOT_TRUSTED",
     );

@@ -745,16 +745,20 @@ senha, sessões e segundo fator (detalhes depois da tabela).
   O login por CPF (`executeByCpf`) filtra os logins do CPF pelos que confiam
   no aparelho logo depois de buscá-los e **antes de qualquer bcrypt**. Sem
   `deviceId`, com um CPF sem login ou num aparelho que nenhum login do CPF
-  conhece: `403 AUTH_DEVICE_NOT_TRUSTED`, uma resposta só ("Não foi possível
-  entrar com este CPF neste aparelho. Confira o CPF ou peça ao gestor o QR
-  Code de acesso."), sem comparar senha nem contar tentativa, com a linha
-  `auth.login_failed` de motivo `device_not_trusted` e o CPF só como
-  impressão com chave. Os builds do app em campo mostram a frase da API para
-  um código que não conhecem (`signInFailureMessage`), e o 403 não encerra
-  sessão nenhuma (o login não é autenticado). Um QR lido num aparelho novo
-  para o login avisa os administradores da empresa, menos quem gerou o QR
-  (`driver-access.new_device`, na transação da confiança; no sino e no push,
-  pelas preferências; sem e-mail), e registra a atividade.
+  conhece: `403 AUTH_DEVICE_NOT_TRUSTED`, uma resposta só ("Este aparelho
+  não está liberado para entrar com este CPF. Isso acontece no primeiro
+  acesso em um celular ou quando a empresa desconecta o aparelho. Confira o
+  CPF ou peça ao gestor um QR Code de acesso.", desde 14/11/2026 a mesma
+  frase do app; a anterior, "Não foi possível entrar...", deixava o
+  motorista redigitando a senha), sem comparar senha nem contar tentativa,
+  com a linha `auth.login_failed` de motivo `device_not_trusted` e o CPF só
+  como impressão com chave. Os builds do app em campo mostram a frase da API
+  para um código que não conhecem (`signInFailureMessage`), e o 403 não
+  encerra sessão nenhuma (o login não é autenticado). Um QR lido num
+  aparelho novo para o login avisa os administradores da empresa, menos
+  quem gerou o QR (`driver-access.new_device`, na transação da confiança;
+  no sino e no push, pelas preferências; sem e-mail), e registra a
+  atividade.
 - **Bloqueio e limites:** o login por CPF usa o mesmo freio do e-mail
   (`login-lockout-rules.ts`), só nos logins que confiam no aparelho: uma
   senha errada conta contra todos eles e só quando não confere em nenhum; o

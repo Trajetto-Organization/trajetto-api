@@ -250,7 +250,7 @@ describe("a phone nobody trusts (wave 2)", () => {
     statusCode: 403,
     code: "AUTH_DEVICE_NOT_TRUSTED",
     message:
-      "Não foi possível entrar com este CPF neste aparelho. Confira o CPF ou peça ao gestor o QR Code de acesso.",
+      "Este aparelho não está liberado para entrar com este CPF. Isso acontece no primeiro acesso em um celular ou quando a empresa desconecta o aparelho. Confira o CPF ou peça ao gestor um QR Code de acesso.",
   };
 
   it("refuses the right password on a phone the login does not trust, before any bcrypt", async () => {

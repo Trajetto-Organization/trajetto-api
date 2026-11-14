@@ -175,7 +175,7 @@ describe("a CPF on a phone nobody trusts", () => {
     expect(response.json()).toEqual({
       code: "AUTH_DEVICE_NOT_TRUSTED",
       message:
-        "Não foi possível entrar com este CPF neste aparelho. Confira o CPF ou peça ao gestor o QR Code de acesso.",
+        "Este aparelho não está liberado para entrar com este CPF. Isso acontece no primeiro acesso em um celular ou quando a empresa desconecta o aparelho. Confira o CPF ou peça ao gestor um QR Code de acesso.",
     });
 
     const [failure] = failures();
