@@ -9,11 +9,19 @@ import { geocodeAddress } from "@/shared/services/proof-location/address-geocode
 
 import { announceSettledLookups } from "./geocoding-announcer";
 import { createRedisGeocodingBudget } from "./geocoding-budget";
-import { createRedisGeocodingGate } from "./geocoding-gate";
+import {
+  createRedisGeocodingGate,
+  pauseDeadlineOf,
+  pauseReasonOf,
+  pauseStatusOf,
+} from "./geocoding-gate";
+import { GEOCODING_KEYS } from "./geocoding-keys";
 import { DeliveryGeocodingRepository } from "./geocoding-repository";
 import {
   DeliveryGeocodingService,
+  nextUtcMidnight,
   type GeocodingRunResult,
+  type ReadHold,
 } from "./delivery-geocoding-service";
 
 /**
@@ -35,6 +43,37 @@ function geocodingRedis(): Redis {
   attachRedisConnectionLog(redis, "geocoding-budget");
 
   return redis;
+}
+
+/**
+ * The account's pause and today's count in one MGET, only for a run that
+ * asked nothing: the log's transition line says why. Unreadable, null —
+ * the line waits for a run that can tell.
+ */
+function redisReadHold(client: Pick<Redis, "mget">): ReadHold {
+  return async (now) => {
+    try {
+      const [pause, used] = await client.mget(
+        GEOCODING_KEYS.pause,
+        GEOCODING_KEYS.budget(now),
+      );
+      const reason = pauseReasonOf(pause);
+      const count = Number(used ?? 0);
+
+      return {
+        pause: reason
+          ? {
+              reason,
+              until: pauseDeadlineOf(pause),
+              status: pauseStatusOf(pause),
+            }
+          : null,
+        used: Number.isFinite(count) ? count : null,
+      };
+    } catch {
+      return null;
+    }
+  };
 }
 
 function deliveryGeocodingService(): DeliveryGeocodingService {
@@ -63,27 +102,137 @@ function deliveryGeocodingService(): DeliveryGeocodingService {
         ),
     }),
     announce: (settled) => announceSettledLookups(repository, settled),
+    readHold: redisReadHold(client),
   });
 }
 
+interface RunLog {
+  info(details: Record<string, unknown>, message: string): void;
+  warn(details: Record<string, unknown>, message: string): void;
+  error(details: Record<string, unknown>, message: string): void;
+}
+
+/** A state the lookups are held in, and the line that says so. */
+interface HeldState {
+  key: string;
+  details: Record<string, unknown>;
+  message: string;
+}
+
 /**
- * One line per run that did something, and the reason when it stopped
- * short. The HTTP statuses are the diagnosis: 401/403 a key, 404 a URL,
- * 429 the quota, null a provider that did not answer.
+ * What holds the lookups after this run: a state; null when they run (or
+ * have nothing to do); undefined when the run says nothing new — a burst's
+ * minute, a pause that could not be read, a budget spent mid-run (the next
+ * run, held, tells).
  */
-function logGeocodingRun(
+function heldStateOf(
+  result: GeocodingRunResult,
+  dailyBudget: number,
+  now: Date,
+): HeldState | null | undefined {
+  const pause = result.hold?.pause ?? null;
+
+  if (pause && (result.skipped === "PAUSED" || result.stoppedBy)) {
+    const until = pause.until?.toISOString() ?? null;
+    const status = pause.status ?? "?";
+
+    if (pause.reason === "REFUSED") {
+      return {
+        key: `REFUSED ${status}`,
+        details: {
+          pauseReason: pause.reason,
+          until,
+          refusedStatus: pause.status,
+        },
+        message: `geocoding held: provider refused (HTTP ${status}) until ${until}; check REVERSE_GEOCODER_URL and REVERSE_GEOCODER_KEY`,
+      };
+    }
+
+    if (pause.reason === "QUOTA") {
+      return {
+        key: "QUOTA",
+        details: { pauseReason: pause.reason, until },
+        message: `geocoding held: provider daily quota until ${until}`,
+      };
+    }
+
+    // A burst holds for a minute: the next run asks again.
+    return undefined;
+  }
+
+  if (result.skipped === "PAUSED") return undefined;
+
+  if (result.skipped === "BUDGET") {
+    const used = result.hold?.used ?? dailyBudget;
+
+    return {
+      key: "BUDGET",
+      details: {
+        todayUsed: used,
+        dailyBudget,
+        until: nextUtcMidnight(now).toISOString(),
+      },
+      message: `geocoding held: budget spent for today (${used}/${dailyBudget}); see DELIVERY_GEOCODING_DAILY_BUDGET`,
+    };
+  }
+
+  if (result.stoppedBy === "BUDGET") return undefined;
+
+  return null;
+}
+
+/**
+ * The lines of the runs: one per run that did something, the reason when
+ * it stopped short, and one per change of what holds the lookups.
+ *
+ * The HTTP statuses are the diagnosis: 401/403 a key, 404 a URL, 429 the
+ * quota, null a provider that did not answer.
+ *
+ * A held run used to log at debug, which LOG_LEVEL=info (staging and
+ * production) never shows: a staging whose lookups the provider refused
+ * said nothing between two refusals 15 min apart, and a spent budget said
+ * nothing at all (owner's report of 14/11/2026). Now each change of state —
+ * refused (with the HTTP and the deadline), the provider's daily quota,
+ * today's budget spent (N/M), running again — is one info line per
+ * process, the last state kept in memory: a minute held like the one
+ * before says nothing.
+ */
+function createGeocodingRunLog(
+  runLog: RunLog,
+  dailyBudget: () => number,
+  clock: () => Date = () => new Date(),
+): (source: "job" | "soon", result: GeocodingRunResult) => void {
+  let current: string | null = null;
+
+  return (source, result) => {
+    const state = heldStateOf(result, dailyBudget(), clock());
+    const key = state?.key ?? null;
+
+    if (state !== undefined && key !== current) {
+      const previous = current;
+
+      current = key;
+
+      if (state) {
+        runLog.info({ source, ...state.details }, state.message);
+      } else {
+        runLog.info(
+          { source, previous },
+          "geocoding running again: lookups no longer held",
+        );
+      }
+    }
+
+    summarize(runLog, source, result);
+  };
+}
+
+function summarize(
+  runLog: RunLog,
   source: "job" | "soon",
   result: GeocodingRunResult,
 ): void {
-  if (result.claimed === 0) {
-    if (result.skipped === "BUDGET") {
-      log.debug({ source }, "geocoding budget spent for today");
-    } else if (result.skipped === "PAUSED") {
-      log.debug({ source }, "geocoding paused by the provider's last answer");
-    }
-
-    return;
-  }
+  if (result.claimed === 0) return;
 
   const summary = {
     source,
@@ -98,18 +247,24 @@ function logGeocodingRun(
   };
 
   if (result.stoppedBy === "REFUSED") {
-    log.error(
+    runLog.error(
       summary,
       "geocoding provider refused the request: check REVERSE_GEOCODER_URL and REVERSE_GEOCODER_KEY; lookups paused for 15 min",
     );
   } else if (result.stoppedBy === "RATE_LIMITED") {
-    log.warn(summary, "geocoding provider rate-limited the lookups");
+    runLog.warn(summary, "geocoding provider rate-limited the lookups");
   } else if (result.stoppedBy === "FAILURES") {
-    log.warn(summary, "geocoding provider failing: run stopped early");
+    runLog.warn(summary, "geocoding provider failing: run stopped early");
   } else {
-    log.info(summary, "delivery addresses geocoded");
+    runLog.info(summary, "delivery addresses geocoded");
   }
 }
+
+/** The process's: the job and the lookups after a commit share it. */
+const logGeocodingRun = createGeocodingRunLog(
+  log,
+  () => env.DELIVERY_GEOCODING_DAILY_BUDGET,
+);
 
 /** Closes the process's connection; the next use opens another. */
 async function closeGeocodingRedis(): Promise<void> {
@@ -126,7 +281,9 @@ async function closeGeocodingRedis(): Promise<void> {
 
 export {
   closeGeocodingRedis,
+  createGeocodingRunLog,
   deliveryGeocodingService,
   geocodingRedis,
   logGeocodingRun,
+  redisReadHold,
 };

@@ -1469,6 +1469,19 @@ chave da pausa guarda o motivo junto do prazo (`REFUSED`, `QUOTA` ou
   por resultado, devolvidas e `providerStatuses`). A que parou antes escreve
   `geocoding provider refused the request` (`error`, com o código HTTP:
   401/403 é a chave, 404 é a URL), `rate-limited` ou `failing` (`warn`).
+  Cada mudança do que segura as consultas sai uma vez por processo, em
+  `info` (`createGeocodingRunLog`, com o estado anterior em memória), numa
+  linha que começa por `geocoding held:` e diz o motivo: o provedor recusou
+  (`provider refused (HTTP 401) until …`), a cota do dia do provedor
+  (`provider daily quota until …`) ou o orçamento do dia gasto
+  (`budget spent for today (N/M)`). Na volta, `geocoding running again`. O
+  pico de um minuto não conta, e um minuto segurado como o anterior não
+  escreve nada. A pausa que outra réplica ou a busca gravou é lida do Redis
+  (um `MGET` da pausa e da contagem do dia, só na execução que não perguntou
+  nada), e o valor da pausa guarda o HTTP que a causou (`pauseValue`,
+  terceiro token). Até 14/11/2026 esses estados saíam em `debug`, que o
+  `LOG_LEVEL=info` da staging e da produção não mostra: uma entrega "Sem
+  localização" não tinha explicação no log.
 - **Reenfileirar os veredictos da consulta anterior.** `NOT_FOUND`, `COARSE`
   e a 8ª falha são finais até o endereço mudar. Os que a versão anterior
   gravou vieram de outra consulta (CEP sem hífen, `s/n` na busca, sem a

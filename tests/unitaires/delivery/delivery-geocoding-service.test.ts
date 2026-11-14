@@ -6,6 +6,7 @@ import {
   SHORT_RATE_PAUSE_MS,
   nextUtcMidnight,
   type GeocodingRunOptions,
+  type ReadHold,
   type SettledLookup,
 } from "@/shared/delivery/geocoding/delivery-geocoding-service";
 import { InMemoryDeliveryGeocodingRepository } from "@/shared/delivery/geocoding/in-memory-geocoding-repository";
@@ -92,15 +93,17 @@ function gateOf({
 }: { paused?: boolean; slots?: number } = {}) {
   const pauses: Date[] = [];
   const reasons: string[] = [];
+  const statuses: Array<number | null | undefined> = [];
   let taken = 0;
 
   const gate: GeocodingGate = {
     async paused() {
       return paused;
     },
-    async pause(until, _now, reason) {
+    async pause(until, _now, reason, status) {
       pauses.push(until);
       reasons.push(reason);
+      statuses.push(status);
     },
     async takeSlot() {
       taken += 1;
@@ -109,7 +112,7 @@ function gateOf({
     },
   };
 
-  return { gate, pauses, reasons, taken: () => taken };
+  return { gate, pauses, reasons, statuses, taken: () => taken };
 }
 
 interface Harness {
@@ -125,11 +128,13 @@ function harness(
     rows = [],
     budget = budgetOf(1_000).budget,
     gate = gateOf().gate,
+    readHold,
     options = {},
   }: {
     rows?: ReturnType<typeof delivery>[];
     budget?: GeocodingBudget;
     gate?: GeocodingGate;
+    readHold?: ReadHold;
     options?: Partial<GeocodingRunOptions>;
   } = {},
 ): Harness {
@@ -151,6 +156,7 @@ function harness(
     announce: async (settled) => {
       announced.push(settled);
     },
+    readHold,
     options: {
       batchSize: 10,
       spacingMs: 0,
@@ -616,7 +622,7 @@ describe("the fallback: street, city and UF alone", () => {
 
 describe("what is about the provider, not the address", () => {
   it("pauses every replica for a refusal and gives every claim back unasked", async () => {
-    const { gate, pauses, reasons } = gateOf();
+    const { gate, pauses, reasons, statuses } = gateOf();
     const h = harness(() => ({ kind: "REFUSED", status: 401 }), {
       rows: [
         delivery("d1"),
@@ -641,6 +647,17 @@ describe("what is about the provider, not the address", () => {
     expect(h.asked).toHaveLength(1);
     expect(pauses).toEqual([new Date(NOW.getTime() + REFUSED_PAUSE_MS)]);
     expect(reasons).toEqual(["REFUSED"]);
+    // The provider's answer goes with the pause (owner's report of
+    // 14/11/2026): the log and the health page say which one.
+    expect(statuses).toEqual([401]);
+    expect(result.hold).toEqual({
+      pause: {
+        reason: "REFUSED",
+        until: new Date(NOW.getTime() + REFUSED_PAUSE_MS),
+        status: 401,
+      },
+      used: null,
+    });
 
     // As before the claim: not tried yet, and still FAILED twice.
     expect(row(h, "d1")).toMatchObject({
@@ -680,6 +697,61 @@ describe("what is about the provider, not the address", () => {
     // a burst's minute does not.
     expect(day.reasons).toEqual(["QUOTA"]);
     expect(burst.reasons).toEqual(["BURST"]);
+    expect(day.statuses).toEqual([429]);
+    expect(burst.statuses).toEqual([429]);
+  });
+
+  it("reads what held a run that asked nothing, and only then", async () => {
+    const reads: Date[] = [];
+    const hold = {
+      pause: {
+        reason: "REFUSED" as const,
+        until: new Date(NOW.getTime() + REFUSED_PAUSE_MS),
+        status: 403,
+      },
+      used: 12,
+    };
+    const readHold: ReadHold = async (now) => {
+      reads.push(now);
+
+      return hold;
+    };
+
+    const paused = harness(() => FOUND_AT_DOOR, {
+      rows: [delivery("d1")],
+      gate: gateOf({ paused: true }).gate,
+      readHold,
+    });
+
+    expect(await paused.run.runOnce(NOW)).toMatchObject({
+      skipped: "PAUSED",
+      hold,
+    });
+    expect(await paused.run.runFor(BUSINESS, ["d1"], NOW)).toMatchObject({
+      skipped: "PAUSED",
+      hold,
+    });
+
+    const spent = harness(() => FOUND_AT_DOOR, {
+      rows: [delivery("d1")],
+      budget: budgetOf(0).budget,
+      readHold,
+    });
+
+    expect(await spent.run.runOnce(NOW)).toMatchObject({
+      skipped: "BUDGET",
+      hold,
+    });
+    expect(reads).toHaveLength(3);
+
+    // A run that asks reads nothing more.
+    const asking = harness(() => FOUND_AT_DOOR, {
+      rows: [delivery("d1")],
+      readHold,
+    });
+
+    expect((await asking.run.runOnce(NOW)).hold).toBeUndefined();
+    expect(reads).toHaveLength(3);
   });
 
   it("stops after three failures in a row and gives the rest back", async () => {

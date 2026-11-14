@@ -75,6 +75,26 @@ interface SettledLookup {
   kind: GeocodingSettlement["kind"];
 }
 
+/** The account's pause as its key holds it (geocoding-gate.ts). */
+interface GeocodingPauseState {
+  reason: GeocodingPauseReason;
+  /** Null when the value has no readable deadline. */
+  until: Date | null;
+  /** The provider's HTTP status that caused it; null when not kept. */
+  status: number | null;
+}
+
+/**
+ * What holds the lookups, for the log's transition line
+ * (geocoding-runtime.ts): the account's pause — the one this run set, or
+ * the one that kept it from asking — and today's count.
+ */
+interface GeocodingHoldState {
+  pause: GeocodingPauseState | null;
+  /** Lookups counted today across every replica; null when not read. */
+  used: number | null;
+}
+
 interface GeocodingRunResult {
   claimed: number;
   resolved: number;
@@ -86,6 +106,11 @@ interface GeocodingRunResult {
   /** Why the run asked nothing, when it did not. */
   skipped?: "BUDGET" | "PAUSED";
   stoppedBy?: GeocodingStop;
+  /**
+   * The pause this run set, or what kept it from asking (a pause, the
+   * day's count), when known: the log says it once per change, at info.
+   */
+  hold?: GeocodingHoldState | null;
   /**
    * The HTTP status of every answer that was not about the address (null:
    * no answer at all), for the job's log — the run's whole diagnosis.
@@ -102,12 +127,20 @@ type Geocode = (
 /** Told after a run about the lookups it ended (geocoding-announcer.ts). */
 type AnnounceSettled = (settled: SettledLookup[]) => Promise<void>;
 
+/**
+ * The account's pause and today's count, read only when a run asks
+ * nothing — the gate and the budget decide, this only says why, for the
+ * log. Null when unreadable.
+ */
+type ReadHold = (now: Date) => Promise<GeocodingHoldState | null>;
+
 interface DeliveryGeocodingDeps {
   repository: IDeliveryGeocodingRepository;
   geocode: Geocode;
   budget: GeocodingBudget;
   gate: GeocodingGate;
   announce?: AnnounceSettled;
+  readHold?: ReadHold;
   options?: Partial<GeocodingRunOptions>;
 }
 
@@ -237,6 +270,7 @@ class DeliveryGeocodingService {
   private readonly budget: GeocodingBudget;
   private readonly gate: GeocodingGate;
   private readonly announce: AnnounceSettled | undefined;
+  private readonly readHold: ReadHold | undefined;
   private readonly options: GeocodingRunOptions;
 
   constructor(deps: DeliveryGeocodingDeps) {
@@ -245,6 +279,7 @@ class DeliveryGeocodingService {
     this.budget = deps.budget;
     this.gate = deps.gate;
     this.announce = deps.announce;
+    this.readHold = deps.readHold;
     this.options = { ...GEOCODING_RUN_DEFAULTS, ...deps.options };
   }
 
@@ -257,7 +292,7 @@ class DeliveryGeocodingService {
   async runOnce(now: Date = new Date()): Promise<GeocodingRunResult> {
     const result = emptyResult();
 
-    if (await this.gate.paused(now)) return { ...result, skipped: "PAUSED" };
+    if (await this.gate.paused(now)) return this.held(result, "PAUSED", now);
 
     // Claim only what the budget can still pay for: a claim stamps the
     // attempt, and a claimed row never asked would wait out a back-off for
@@ -267,7 +302,7 @@ class DeliveryGeocodingService {
       await this.budget.remaining(now),
     );
 
-    if (room <= 0) return { ...result, skipped: "BUDGET" };
+    if (room <= 0) return this.held(result, "BUDGET", now);
 
     // The second claim cannot take the first's rows again: they are leased.
     const routed = await this.repository.claimOpenStops(room, now);
@@ -302,11 +337,11 @@ class DeliveryGeocodingService {
 
     if (ids.length === 0) return result;
 
-    if (await this.gate.paused(now)) return { ...result, skipped: "PAUSED" };
+    if (await this.gate.paused(now)) return this.held(result, "PAUSED", now);
 
     const room = Math.min(ids.length, await this.budget.remaining(now));
 
-    if (room <= 0) return { ...result, skipped: "BUDGET" };
+    if (room <= 0) return this.held(result, "BUDGET", now);
 
     const claims = await this.repository.claimByIds(ids, businessId, room, now);
 
@@ -315,6 +350,19 @@ class DeliveryGeocodingService {
     await this.work(claims, now, "SOON", result);
 
     return result;
+  }
+
+  /** A run that asked nothing, with what held it when that can be read. */
+  private async held(
+    result: GeocodingRunResult,
+    skipped: "BUDGET" | "PAUSED",
+    now: Date,
+  ): Promise<GeocodingRunResult> {
+    return {
+      ...result,
+      skipped,
+      ...(this.readHold && { hold: await this.readHold(now) }),
+    };
   }
 
   private async work(
@@ -339,14 +387,19 @@ class DeliveryGeocodingService {
         }
 
         if (outcome.kind === "REFUSED" || outcome.kind === "RATE_LIMITED") {
+          const until = pauseUntil(outcome, now);
+          const reason = pauseReason(outcome);
+
           result.providerStatuses.push(outcome.status);
           result.stoppedBy = outcome.kind;
+          result.hold = {
+            pause: { reason, until, status: outcome.status },
+            used: null,
+          };
 
-          await this.gate.pause(
-            pauseUntil(outcome, now),
-            now,
-            pauseReason(outcome),
-          );
+          // The status goes with the pause, so the log and the health page
+          // say which answer of the provider holds every replica.
+          await this.gate.pause(until, now, reason, outcome.status);
           await this.releaseFrom(claims, index, result);
 
           return;
@@ -516,8 +569,11 @@ export type {
   AnnounceSettled,
   DeliveryGeocodingDeps,
   Geocode,
+  GeocodingHoldState,
+  GeocodingPauseState,
   GeocodingRunOptions,
   GeocodingRunResult,
   GeocodingStop,
+  ReadHold,
   SettledLookup,
 };
