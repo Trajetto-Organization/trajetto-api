@@ -1,5 +1,6 @@
 import { inject, injectable } from "tsyringe";
 import { AppError } from "@/shared/errors/AppError";
+import { conflictFromPrisma } from "@/shared/errors/prisma-conflict";
 
 import { IProfileAccessRepository } from "../../repositories/IProfile-access-repository";
 import { IBusinessRepository } from "@/modules/business/repositories/IBusiness-repository";
@@ -90,9 +91,16 @@ class CreateProfileAccessUseCase {
         return created;
       });
     } catch (error) {
-      throw new AppError(
-        "Houve um erro ao tentar criar o perfil de acesso! Por favor, tente novamente.",
-        500,
+      // Two profiles with the same name at once: the loser meets
+      // (name, businessId) and hears the lookup's 409.
+      throw (
+        (await conflictFromPrisma(error, {
+          unique: { name: () => new ProfileAccessAlreadyExistsError() },
+        })) ??
+        new AppError(
+          "Houve um erro ao tentar criar o perfil de acesso! Por favor, tente novamente.",
+          500,
+        )
       );
     }
 

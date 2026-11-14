@@ -5,6 +5,7 @@ import { IBusinessRepository } from "@/modules/business/repositories/IBusiness-r
 
 import { IUserRepository } from "@/modules/user/repositories/IUser-repository";
 import { AppError } from "@/shared/errors/AppError";
+import { conflictFromPrisma } from "@/shared/errors/prisma-conflict";
 
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
 import { FuelTypeAlreadyExistsError } from "../errors/fuel-type-already-exists-error";
@@ -80,9 +81,18 @@ class CreateFuelTypeUseCase {
 
       return fuelTypeCreated;
     } catch (error) {
-      throw new AppError(
-        "Houve um erro ao tentar criar o tipo de combustível! Por favor, tente novamente.",
-        500,
+      // Mapped ahead of the per-company description index (FLEET-DUP-1), as
+      // part, supplier and vehicle type already are: until it exists two
+      // requests with the same name both succeed; with it, the loser hears
+      // the lookup's 409 instead of a 500.
+      throw (
+        (await conflictFromPrisma(error, {
+          unique: { description: () => new FuelTypeAlreadyExistsError() },
+        })) ??
+        new AppError(
+          "Houve um erro ao tentar criar o tipo de combustível! Por favor, tente novamente.",
+          500,
+        )
       );
     }
   }

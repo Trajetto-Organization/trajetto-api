@@ -31,6 +31,7 @@ import { ResourceNotFoundError } from "../errors/resource-not-found-error";
 import { UpdateUser, User, UserRole } from "../../dtos/user-dto";
 import { AppError } from "@/shared/errors/AppError";
 import { permissionDenied } from "@/shared/errors/access-errors";
+import { conflictFromPrisma } from "@/shared/errors/prisma-conflict";
 
 import { UserCannotBeUpdatedByHimselfError } from "../errors/user-cannot-be-updated-by-himself-error";
 import { UserProfileNotMatchBusinessError } from "../errors/user-profile-not-match-business-error";
@@ -298,6 +299,17 @@ class UpdateUserUseCase {
         return row;
       });
     } catch (error) {
+      // An e-mail or a driver taken in between the lookups and the write: the
+      // same 409 as the lookups, never a 500.
+      const conflict = await conflictFromPrisma(error, {
+        unique: {
+          email: () => new UserAlreadyExistsError(),
+          driverId: () => new UserDriverAlreadyLinkedToUserError(),
+        },
+      });
+
+      if (conflict) throw conflict;
+
       log.error({ err: error, userId }, "user update could not be committed");
 
       throw new AppError(

@@ -441,14 +441,12 @@ describe("the global error handler", () => {
 
   for (const kind of [
     "bug",
-    "unique",
     "not-found",
     "plain-error",
     "raw-sql-error",
     "raw-statement-timeout",
     "raw-undecodable-column",
     "v7-commit-write-conflict",
-    "v7-commit-unique",
   ]) {
     it(`still answers 500 without Retry-After for ${kind}`, async () => {
       const response = await call(kind);
@@ -458,6 +456,32 @@ describe("the global error handler", () => {
       expect(response.headers["retry-after"]).toBeUndefined();
     });
   }
+
+  // Batch of 14/11/2026: a unique violation nobody mapped is an answer
+  // about the data — the loser of a race — not an outage and not a bug. It
+  // used to leave as the English "Internal server error".
+  for (const kind of ["unique", "v7-unique", "v7-commit-unique"]) {
+    it(`answers 409 UNIQUE_CONFLICT, without Retry-After, for ${kind}`, async () => {
+      const response = await call(kind);
+
+      expect(response.statusCode).toBe(409);
+      expect(response.headers["x-error-code"]).toBe("UNIQUE_CONFLICT");
+      expect(response.json().code).toBe("UNIQUE_CONFLICT");
+      expect(response.json().message).toMatch(
+        /^Já existe um registro com este valor nesta empresa/,
+      );
+      expect(response.headers["retry-after"]).toBeUndefined();
+      expect(response.body).not.toMatch(/P2002|prisma|_key/i);
+    });
+  }
+
+  it("names the field of the index, never the other row", async () => {
+    const response = await call("v7-unique");
+
+    expect(response.json().message).toBe(
+      "Já existe um registro com este valor nesta empresa (CPF).",
+    );
+  });
 });
 
 /**

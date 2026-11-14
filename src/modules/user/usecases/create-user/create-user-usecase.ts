@@ -25,6 +25,7 @@ import { UserProfileAccessNotFoundError } from "../errors/user-profile-access-no
 
 import { AppError } from "@/shared/errors/AppError";
 import { permissionDenied } from "@/shared/errors/access-errors";
+import { conflictFromPrisma } from "@/shared/errors/prisma-conflict";
 import { CreateUserProps, User, UserRole } from "../../dtos/user-dto";
 
 import { ResourceNotFoundError } from "../errors/resource-not-found-error";
@@ -338,9 +339,20 @@ class CreateUserUseCase {
 
       return userCreated;
     } catch (error) {
-      throw new AppError(
-        "Houve um erro ao tentar criar o usuário! Por favor, tente novamente.",
-        500,
+      // Two requests with the same e-mail, or for the same driver, both
+      // passed the lookups above: the loser meets the index and hears the
+      // same 409 the lookup would have given, never a 500.
+      throw (
+        (await conflictFromPrisma(error, {
+          unique: {
+            email: () => new UserAlreadyExistsError(),
+            driverId: () => new UserDriverAlreadyLinkedToUserError(),
+          },
+        })) ??
+        new AppError(
+          "Houve um erro ao tentar criar o usuário! Por favor, tente novamente.",
+          500,
+        )
       );
     }
   }

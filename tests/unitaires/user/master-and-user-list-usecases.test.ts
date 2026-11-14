@@ -186,6 +186,16 @@ describe("creating a MASTER", () => {
     ).rejects.toMatchObject({ statusCode: 409, code: "USER_ALREADY_EXISTS" });
   });
 
+  // Batch of 14/11/2026: the race past the lookup answered 500.
+  it("answers an e-mail taken in between the lookup and the insert with the same 409", async () => {
+    users.findUserByEmail = async () => null;
+
+    await expect(
+      create().execute({ name: "X", email: "carla@a.com.br" }, MASTER),
+    ).rejects.toMatchObject({ statusCode: 409, code: "USER_ALREADY_EXISTS" });
+    expect(published).toEqual([]);
+  });
+
   it("refuses an unknown caller (404)", async () => {
     await expect(
       create().execute({ name: "X", email: "x@trajetto.com.br" }, UNKNOWN),
@@ -271,6 +281,18 @@ describe("editing a MASTER", () => {
   });
 
   it("refuses an e-mail taken by another account (409)", async () => {
+    await expect(
+      update().execute({
+        masterUserId: MASTER_TWO,
+        data: { email: "carla@a.com.br" },
+        performedById: MASTER,
+      }),
+    ).rejects.toMatchObject({ statusCode: 409, code: "USER_ALREADY_EXISTS" });
+  });
+
+  it("answers an e-mail taken in between the lookup and the write with the same 409", async () => {
+    users.findUserByEmail = async () => null;
+
     await expect(
       update().execute({
         masterUserId: MASTER_TWO,

@@ -341,6 +341,37 @@ describe("creating a company user", () => {
     ).rejects.toMatchObject({ statusCode: 409, code: "USER_ALREADY_EXISTS" });
   });
 
+  // Batch of 14/11/2026: two requests that both passed the lookups met the
+  // unique index, and the loser read "Houve um erro… tente novamente" (500).
+  it("answers the race for an e-mail or a driver with the lookup's 409, never a 500", async () => {
+    users.findUserByEmail = async () => null;
+    users.findUserByDriverId = async () => null;
+
+    await expect(
+      create().execute(newUser({ email: "carlos@a.com.br" }) as never, ADMIN),
+    ).rejects.toMatchObject({ statusCode: 409, code: "USER_ALREADY_EXISTS" });
+
+    await create().execute(
+      newUser({
+        email: "joao@a.com.br",
+        profileAccessId: undefined,
+        driverId: DRIVER,
+      }) as never,
+      ADMIN,
+    );
+
+    await expect(
+      create().execute(
+        newUser({
+          email: "joao2@a.com.br",
+          profileAccessId: undefined,
+          driverId: DRIVER,
+        }) as never,
+        ADMIN,
+      ),
+    ).rejects.toMatchObject({ statusCode: 409, code: "DRIVER_ALREADY_LINKED" });
+  });
+
   it("refuses an unknown caller (404) and an unknown company for the MASTER (404)", async () => {
     await expect(
       create().execute(
@@ -610,6 +641,21 @@ describe("editing a company user", () => {
         ADMIN,
       ),
     ).rejects.toMatchObject({ statusCode: 409, code: "USER_ALREADY_EXISTS" });
+  });
+
+  it("answers an e-mail taken in between the lookup and the write with the same 409", async () => {
+    users.findUserByEmail = async () => null;
+
+    await expect(
+      update().execute(
+        { userId: CLERK, userData: { email: "admin2@a.com.br" } } as never,
+        ADMIN,
+      ),
+    ).rejects.toMatchObject({ statusCode: 409, code: "USER_ALREADY_EXISTS" });
+
+    expect(users.user.find((u) => u.id === CLERK)?.email).toBe(
+      "carlos@a.com.br",
+    );
   });
 
   it("lets only the MASTER send a password setup link", async () => {

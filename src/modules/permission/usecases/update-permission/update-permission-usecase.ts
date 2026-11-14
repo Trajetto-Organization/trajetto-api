@@ -24,6 +24,7 @@ import { PermissionNotFoundError } from "../errors/permission-not-found-error";
 import { NotificationService } from "@/shared/services/notification-service";
 
 import { AppError } from "@/shared/errors/AppError";
+import { conflictFromPrisma } from "@/shared/errors/prisma-conflict";
 import { PermissionAlreadyExistsError } from "../errors/permission-already-exists-error";
 
 import { PermissionCannotBeUpdatedByHimselfError } from "../errors/permission-cannot-be-updated-by-himself-error";
@@ -180,9 +181,16 @@ class UpdatePermissionUseCase {
 
       return permissionUpdated;
     } catch (error) {
-      throw new AppError(
-        "Houve um erro ao tentar atualizar a permissão! Por favor, tente novamente.",
-        500,
+      // Edited into a grant another request created in between: the
+      // lookup's 409.
+      throw (
+        (await conflictFromPrisma(error, {
+          unique: { action: () => new PermissionAlreadyExistsError() },
+        })) ??
+        new AppError(
+          "Houve um erro ao tentar atualizar a permissão! Por favor, tente novamente.",
+          500,
+        )
       );
     }
   }

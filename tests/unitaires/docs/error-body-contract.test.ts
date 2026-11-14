@@ -53,6 +53,16 @@ beforeAll(async () => {
     throw new Error("boom");
   });
 
+  // A unique violation no use case mapped: the handler's 409 floor (batch
+  // of 14/11/2026), which used to be the 500.
+  app.get(`${PROBE}/unique-conflict`, { schema: hidden }, async () => {
+    throw new Prisma.PrismaClientKnownRequestError("Unique constraint", {
+      code: "P2002",
+      clientVersion: "test",
+      meta: { target: ["businessId", "license_plate"] },
+    });
+  });
+
   app.get(`${PROBE}/database-down`, { schema: hidden }, async () => {
     throw new Prisma.PrismaClientInitializationError(
       "Can't reach database server at `localhost:5432`",
@@ -246,6 +256,10 @@ describe("the published error schemas (strict)", () => {
       url: `${PROBE}/inline-without-code`,
     });
     await capture("internal", { method: "GET", url: `${PROBE}/crash` });
+    await capture("uniqueConflict", {
+      method: "GET",
+      url: `${PROBE}/unique-conflict`,
+    });
     await capture("databaseDown", {
       method: "GET",
       url: `${PROBE}/database-down`,
@@ -263,6 +277,14 @@ describe("the published error schemas (strict)", () => {
     expect(bodies.appError.status).toBe(409);
     expect(bodies.inline.status).toBe(404);
     expect(bodies.internal.status).toBe(500);
+    expect(bodies.uniqueConflict.status).toBe(409);
+    expect(bodies.uniqueConflict.body).toEqual({
+      code: "UNIQUE_CONFLICT",
+      message: "Já existe um registro com este valor nesta empresa (placa).",
+    });
+    expect(bodies.uniqueConflict.headers["x-error-code"]).toBe(
+      "UNIQUE_CONFLICT",
+    );
     expect(bodies.databaseDown.status).toBe(503);
     expect(bodies.busy.status).toBe(503);
     expect(bodies.invalidKey.status).toBe(401);
@@ -310,6 +332,7 @@ describe("the published error schemas (strict)", () => {
         as4xx(bodies.appError),
         as4xx(bodies.inline),
         bodies.invalidKey.body,
+        ...(status === 409 ? [bodies.uniqueConflict.body] : []),
       ];
     }
 

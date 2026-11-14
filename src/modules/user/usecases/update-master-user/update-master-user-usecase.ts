@@ -10,6 +10,7 @@ import { UpdateMasterUserProps, User } from "../../dtos/user-dto";
 import database from "@/../infra/database";
 
 import { AppError } from "@/shared/errors/AppError";
+import { conflictFromPrisma } from "@/shared/errors/prisma-conflict";
 import { ResourceNotFoundError } from "../errors/resource-not-found-error";
 
 import { UserCannotBeUpdatedByHimselfError } from "../errors/user-cannot-be-updated-by-himself-error";
@@ -323,9 +324,15 @@ class UpdateMasterUserUseCase {
 
       return updatedMaster;
     } catch (error) {
-      throw new AppError(
-        "Houve um erro ao tentar atualizar o usuário Master! Por favor, tente novamente.",
-        500,
+      // The new e-mail taken between the lookup and the write: the same 409.
+      throw (
+        (await conflictFromPrisma(error, {
+          unique: { email: () => new UserAlreadyExistsError() },
+        })) ??
+        new AppError(
+          "Houve um erro ao tentar atualizar o usuário Master! Por favor, tente novamente.",
+          500,
+        )
       );
     }
   }

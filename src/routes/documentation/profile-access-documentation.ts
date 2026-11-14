@@ -91,9 +91,7 @@ const profileAccessResponses = {
     .object({
       message: z
         .string()
-        .default(
-          "Este perfil não está disponível para cadastro. Já existe um perfil com este nome.",
-        ),
+        .default("Já existe um perfil de acesso com este nome nesta empresa."),
     })
     .and(codedError)
     .describe("PROFILE_ACCESS_ALREADY_EXISTS (nome repetido na empresa)."),

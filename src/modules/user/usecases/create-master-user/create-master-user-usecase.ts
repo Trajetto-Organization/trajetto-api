@@ -12,6 +12,7 @@ import { OutboxService } from "@/shared/notifications/outbox-service";
 import database from "@/../infra/database";
 
 import { AppError } from "@/shared/errors/AppError";
+import { conflictFromPrisma } from "@/shared/errors/prisma-conflict";
 import { User } from "../../dtos/user-dto";
 
 import { ResourceNotFoundError } from "../errors/resource-not-found-error";
@@ -171,9 +172,15 @@ class CreateMasterUserUseCase {
 
       return masterCreated;
     } catch (error) {
-      throw new AppError(
-        "Houve um erro ao tentar criar o usuário Master! Por favor, tente novamente.",
-        500,
+      // The e-mail taken between the lookup and the insert: the same 409.
+      throw (
+        (await conflictFromPrisma(error, {
+          unique: { email: () => new UserAlreadyExistsError() },
+        })) ??
+        new AppError(
+          "Houve um erro ao tentar criar o usuário Master! Por favor, tente novamente.",
+          500,
+        )
       );
     }
   }

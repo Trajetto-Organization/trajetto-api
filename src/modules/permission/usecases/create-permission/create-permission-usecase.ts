@@ -20,6 +20,7 @@ import { NotificationService } from "@/shared/services/notification-service";
 import { PermissionBusinessError } from "../errors/permission-business-error";
 import { assertNotOwnProfile } from "../errors/permission-own-profile-error";
 import { AppError } from "@/shared/errors/AppError";
+import { conflictFromPrisma } from "@/shared/errors/prisma-conflict";
 
 import { sendSecurityEventToBusiness } from "@/websocket";
 
@@ -137,9 +138,16 @@ class CreatePermissionUseCase {
 
       return permissionCreated;
     } catch (error) {
-      throw new AppError(
-        "Houve um erro ao tentar criar a permissão! Por favor, tente novamente.",
-        500,
+      // The same grant twice at once: the loser meets (action,
+      // profileAccessId, businessId) and hears the lookup's 409.
+      throw (
+        (await conflictFromPrisma(error, {
+          unique: { action: () => new PermissionAlreadyExistsError() },
+        })) ??
+        new AppError(
+          "Houve um erro ao tentar criar a permissão! Por favor, tente novamente.",
+          500,
+        )
       );
     }
   }

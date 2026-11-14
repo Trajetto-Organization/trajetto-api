@@ -63,6 +63,10 @@ import {
 import { AppError } from "./shared/errors/AppError";
 import { ServiceBusyError } from "./shared/errors/service-busy-error";
 import {
+  prismaConflictFloor,
+  uniqueTargetText,
+} from "./shared/errors/prisma-conflict";
+import {
   completeErrorBody,
   errorAwareSerializerCompiler,
 } from "./shared/errors/error-body";
@@ -717,6 +721,22 @@ app.setErrorHandler((thrown, request, reply) => {
     !isBodyTooLarge &&
     isDatabaseUnavailable(error);
 
+  /**
+   * A unique index or a foreign key the use case did not map (batch of
+   * 14/11/2026). Both are answers about the data — the loser of a race for
+   * the same e-mail, a delete that met a reference committed after the
+   * count — and used to leave as the English "Internal server error". The
+   * floor is a 409 that names the field and never the other row
+   * (prisma-conflict.ts); the use cases that know better map their own.
+   */
+  const databaseConflict =
+    !isAppError && !isValidationError && !isBodyTooLarge && !isDatabaseDown
+      ? prismaConflictFloor(
+          error,
+          request.method === "DELETE" ? "delete" : "write",
+        )
+      : null;
+
   const statusCode = isBodyTooLarge
     ? 413
     : isValidationError
@@ -725,9 +745,11 @@ app.setErrorHandler((thrown, request, reply) => {
         ? error.statusCode
         : isDatabaseDown
           ? 503
-          : isClientError
-            ? (error.statusCode as number)
-            : 500;
+          : databaseConflict
+            ? databaseConflict.statusCode
+            : isClientError
+              ? (error.statusCode as number)
+              : 500;
 
   // This custom handler REPLACES the one Fastify installs by default, and the
   // default is what logs errors out of the box. Without an explicit log here
@@ -758,7 +780,18 @@ app.setErrorHandler((thrown, request, reply) => {
   const isSessionCheckOutage =
     isAppError && error.code === "AUTH_SESSION_UNAVAILABLE";
 
-  if (isDatabaseDown || isSessionCheckOutage) {
+  if (databaseConflict) {
+    // Warn, not error: the request lost a race, the code did not break. The
+    // index names which check the use case is missing.
+    request.log.warn(
+      {
+        ...logContext,
+        code: databaseConflict.code,
+        index: uniqueTargetText(error) || undefined,
+      },
+      "Unmapped database conflict answered as 409",
+    );
+  } else if (isDatabaseDown || isSessionCheckOutage) {
     // Still error level — it is ours — but a message of its own, so an alert
     // on bugs does not page for an outage the readiness probe already sees.
     request.log.error(
@@ -837,6 +870,14 @@ app.setErrorHandler((thrown, request, reply) => {
         code: error.code,
         message: error.message,
       },
+    );
+  }
+
+  if (databaseConflict) {
+    return sendError(
+      reply.header("x-error-code", databaseConflict.code),
+      databaseConflict.statusCode,
+      { code: databaseConflict.code, message: databaseConflict.message },
     );
   }
 

@@ -5,6 +5,7 @@ import { IBusinessRepository } from "@/modules/business/repositories/IBusiness-r
 
 import { IUserRepository } from "@/modules/user/repositories/IUser-repository";
 import { AppError } from "@/shared/errors/AppError";
+import { conflictFromPrisma } from "@/shared/errors/prisma-conflict";
 
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
 import { BusinessNotFoundError } from "@/modules/business/usecases/errors/business-not-found-error";
@@ -100,9 +101,15 @@ class UpdateFuelTypeUseCase {
 
       return fuelTypeUpdated;
     } catch (error) {
-      throw new AppError(
-        "Houve um erro ao tentar atualizar o tipo de combustível! Por favor, tente novamente.",
-        500,
+      // Mapped ahead of the description index (FLEET-DUP-1), as on create.
+      throw (
+        (await conflictFromPrisma(error, {
+          unique: { description: () => new FuelTypeAlreadyExistsError() },
+        })) ??
+        new AppError(
+          "Houve um erro ao tentar atualizar o tipo de combustível! Por favor, tente novamente.",
+          500,
+        )
       );
     }
   }

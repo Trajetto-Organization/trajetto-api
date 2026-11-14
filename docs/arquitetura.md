@@ -3968,7 +3968,23 @@ Regras de implementação que vieram dessa análise:
   corrida que passa pela checagem bate no P2002 e vira o mesmo 409 com `code`,
   nunca 500. Nenhuma mensagem confirma existência em outra empresa ("nesta
   empresa", nunca "em todo o sistema"; teste
-  `tests/unitaires/security/uniqueness-messages.test.ts`).
+  `tests/unitaires/security/uniqueness-messages.test.ts`). O catch da use
+  case mapeia o índice com `conflictFromPrisma`
+  (`src/shared/errors/prisma-conflict.ts`): um trecho do nome do índice →
+  o erro do domínio (`email` → `USER_ALREADY_EXISTS`, `driverId` →
+  `DRIVER_ALREADY_LINKED`, `name` do perfil, `action` da permissão,
+  `description` do tipo de combustível). Na exclusão, o P2003 de uma
+  referência gravada entre a contagem e o DELETE conta de novo e responde o
+  mesmo 409 da contagem (veículo, tipo de combustível, usuário).
+- Piso no handler global (`src/http.ts`, lote de 14/11/2026): um P2002 (ou 23505) que nenhuma use case mapeou responde `409 UNIQUE_CONFLICT`, "Já
+  existe um registro com este valor nesta empresa." com o rótulo do campo
+  pela tabela pura `UNIQUE_FIELD_LABELS` (placa, CPF, CNPJ, e-mail, nome,
+  código, descrição…), nunca a linha do outro registro; um P2003 (ou 23503)
+  responde `409 RECORD_IN_USE` (no DELETE, "em uso por outros cadastros";
+  nas outras escritas, "um cadastro ligado a este registro não existe
+  mais"). Os dois escrevem um warn "Unmapped database conflict answered as
+  409" com o nome do índice: é a use case que falta mapear. Antes, os dois
+  saíam como o 500 em inglês ("Internal server error").
 - Buscas sem diferenciar maiúsculas usam `insensitiveEquals`
   (`src/shared/utils/like-pattern.ts`), que escapa `%` e `_`: o Prisma compila
   `{ equals, mode: "insensitive" }` para `ILIKE` sem escapar, e a CNH `"1%"`
