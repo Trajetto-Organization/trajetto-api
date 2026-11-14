@@ -8,6 +8,11 @@ import {
   GEOCODING_MAX_ATTEMPTS,
   geocodingBackoffMinutes,
 } from "./geocoding-rules";
+import { deliveryAddressKey } from "../address-key";
+import {
+  pickReusablePoint,
+  type ReusedAddressPoint,
+} from "./address-point-reuse";
 
 /** The delivery columns the geocoding queue reads and writes. */
 interface GeocodingRow {
@@ -29,6 +34,8 @@ interface GeocodingRow {
   geocode_attempted_at: Date | null;
   geocode_attempts: number;
   created_at: Date;
+  /** Which deliveries of the company stand at the same door (address-key.ts). */
+  address_key?: string | null;
 }
 
 /**
@@ -129,6 +136,35 @@ class InMemoryDeliveryGeocodingRepository implements IDeliveryGeocodingRepositor
       (entry) =>
         entry.id === claim.id &&
         entry.geocode_attempted_at?.getTime() === claim.claimedAt.getTime(),
+    );
+  }
+
+  async reusablePoint(
+    claim: GeocodingClaim,
+    now: Date,
+  ): Promise<ReusedAddressPoint | null> {
+    const key = deliveryAddressKey(claim);
+
+    if (!key) return null;
+
+    // Every row at the door, the newest id first, as the SQL breaks a tie.
+    return pickReusablePoint(
+      this.deliveries
+        .filter(
+          (row) =>
+            row.businessId === claim.businessId &&
+            row.address_key === key &&
+            row.id !== claim.id,
+        )
+        .sort((a, b) => (a.id < b.id ? 1 : a.id > b.id ? -1 : 0))
+        .map((row) => ({
+          latitude: row.latitude,
+          longitude: row.longitude,
+          geo_source: row.geo_source as "MANUAL" | "GEOCODER" | null,
+          geo_precision: row.geo_precision,
+          geo_updated_at: row.geo_updated_at,
+        })),
+      now,
     );
   }
 

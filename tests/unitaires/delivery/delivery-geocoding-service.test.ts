@@ -15,6 +15,7 @@ import {
   geocodingBackoffMinutes,
 } from "@/shared/delivery/geocoding/geocoding-rules";
 import type { GeocodingBudget } from "@/shared/delivery/geocoding/geocoding-budget";
+import { deliveryAddressKey } from "@/shared/delivery/address-key";
 import type { GeocodingGate } from "@/shared/delivery/geocoding/geocoding-gate";
 import type {
   GeocodableAddress,
@@ -823,6 +824,119 @@ describe("what is about the provider, not the address", () => {
     // One slot for the first call, three tries for the second.
     expect(taken()).toBe(4);
     expect(row(h, "second").geocode_attempts).toBe(0);
+  });
+});
+
+describe("the point of another delivery at the same door", () => {
+  // Owner's report of 14/11/2026: a delivery at an address the company had
+  // already located waited on its own lookup — and spent one of the
+  // provider's day — when another delivery there already had the point.
+  const PIN = { latitude: -23.5501, longitude: -46.6339 };
+  const DOOR = deliveryAddressKey(delivery("door"));
+
+  function sibling(overrides: Record<string, unknown> = {}) {
+    return delivery("sibling", {
+      ...PIN,
+      geo_source: "MANUAL",
+      geo_updated_at: new Date("2026-11-02T10:00:00.000Z"),
+      address_key: DOOR,
+      ...overrides,
+    });
+  }
+
+  it("settles the claim with it: no budget, no slot, no call, and the screens hear", async () => {
+    const budget = budgetOf(1_000);
+    const gate = gateOf();
+    const h = harness(() => FOUND_AT_DOOR, {
+      rows: [delivery("d1"), sibling()],
+      budget: budget.budget,
+      gate: gate.gate,
+    });
+
+    const result = await h.run.runOnce(NOW);
+
+    expect(result).toMatchObject({
+      claimed: 1,
+      reused: 1,
+      resolved: 0,
+      released: 0,
+    });
+    expect(h.asked).toEqual([]);
+    expect(budget.spent).toEqual([]);
+    expect(gate.taken()).toBe(0);
+    expect(row(h, "d1")).toMatchObject({
+      ...PIN,
+      geo_source: "GEOCODER",
+      geo_precision: "ADDRESS",
+      geocode_status: "RESOLVED",
+    });
+    expect(h.announced).toEqual([
+      [{ id: "d1", businessId: BUSINESS, kind: "RESOLVED" }],
+    ]);
+  });
+
+  it("does the same right after a commit", async () => {
+    const budget = budgetOf(1_000);
+    const h = harness(() => FOUND_AT_DOOR, {
+      rows: [delivery("d1"), sibling()],
+      budget: budget.budget,
+    });
+
+    expect(await h.run.runFor(BUSINESS, ["d1"], NOW)).toMatchObject({
+      claimed: 1,
+      reused: 1,
+    });
+    expect(h.asked).toEqual([]);
+    expect(budget.spent).toEqual([]);
+    expect(row(h, "d1").geo_source).toBe("GEOCODER");
+  });
+
+  it("asks as before without one: another company's, another door, a district only", async () => {
+    const h = harness(() => FOUND_AT_DOOR, {
+      rows: [
+        delivery("d1"),
+        sibling({ id: "theirs", businessId: OTHER }),
+        sibling({ id: "next-door", address_key: "another-key" }),
+        sibling({
+          id: "district",
+          latitude: null,
+          longitude: null,
+          geo_source: null,
+          geo_precision: "NEIGHBORHOOD",
+          geocode_status: "COARSE",
+        }),
+      ],
+    });
+
+    const result = await h.run.runFor(BUSINESS, ["d1"], NOW);
+
+    expect(result).toMatchObject({ reused: 0, resolved: 1 });
+    expect(h.asked.map((call) => call.id)).toEqual(["d1"]);
+    expect(row(h, "d1")).toMatchObject({
+      latitude: FOUND_AT_DOOR.latitude,
+      geo_source: "GEOCODER",
+    });
+  });
+
+  it("takes the pin over a newer point the geocoder found", async () => {
+    const h = harness(() => FOUND_AT_DOOR, {
+      rows: [
+        delivery("d1"),
+        sibling(),
+        sibling({
+          id: "found",
+          latitude: -23.6,
+          longitude: -46.7,
+          geo_source: "GEOCODER",
+          geo_precision: "STREET",
+          geo_updated_at: new Date("2026-11-03T14:00:00.000Z"),
+        }),
+      ],
+    });
+
+    await h.run.runFor(BUSINESS, ["d1"], NOW);
+
+    expect(row(h, "d1")).toMatchObject({ ...PIN, geo_precision: "ADDRESS" });
   });
 });
 

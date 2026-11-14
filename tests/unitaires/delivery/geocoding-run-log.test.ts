@@ -33,6 +33,7 @@ function empty(
     coarse: 0,
     notFound: 0,
     failed: 0,
+    reused: 0,
     released: 0,
     providerStatuses: [],
     settled: [],

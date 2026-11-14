@@ -80,6 +80,9 @@ const harnesses: Record<Kind, () => GeocodingHarness> = {
         (await prisma.delivery.findUnique({ where: { id } })) as never,
       );
     },
+    async place(id, columns) {
+      await prisma.delivery.update({ where: { id }, data: columns });
+    },
     async pin(id) {
       await prisma.delivery.update({
         where: { id },
@@ -128,6 +131,12 @@ const harnesses: Record<Kind, () => GeocodingHarness> = {
     },
     async read(id) {
       return stateOf(memory.deliveries.find((row) => row.id === id) as never);
+    },
+    async place(id, columns) {
+      Object.assign(
+        memory.deliveries.find((row) => row.id === id)!,
+        columns,
+      );
     },
     async pin(id) {
       Object.assign(

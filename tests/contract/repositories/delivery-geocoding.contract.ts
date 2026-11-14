@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 
 import type { IDeliveryGeocodingRepository } from "@/shared/delivery/geocoding/geocoding-repository";
 import { GEOCODING_MAX_ATTEMPTS } from "@/shared/delivery/geocoding/geocoding-rules";
+import { deliveryAddressKey } from "@/shared/delivery/address-key";
 
 import { fixedId, minute, type Kind } from "../support";
 
@@ -190,9 +191,21 @@ interface GeocodingState {
   geocode_attempts: number;
 }
 
+/** Columns a case sets on a seeded delivery: a sibling at the same door. */
+interface PlacedColumns {
+  address_key: string | null;
+  latitude: number | null;
+  longitude: number | null;
+  geo_source: "MANUAL" | "GEOCODER" | null;
+  geo_precision: "ADDRESS" | "STREET" | "NEIGHBORHOOD" | "CITY" | null;
+  geo_updated_at: Date | null;
+}
+
 interface GeocodingHarness {
   kind: Kind;
   repo: IDeliveryGeocodingRepository;
+  /** Sets these columns of one delivery, as stored. */
+  place(id: string, columns: Partial<PlacedColumns>): Promise<void>;
   /** Replaces the deliveries of both companies with the seed. */
   reset(): Promise<void>;
   read(id: string): Promise<GeocodingState>;
@@ -430,6 +443,67 @@ function deliveryGeocodingContract(harness: () => GeocodingHarness): void {
       });
     });
   });
+
+  describe("reusablePoint", () => {
+    // Owner's report of 14/11/2026: a delivery at an address the company
+    // had already located waited on its own lookup.
+    it("finds the point of another delivery of the company at the claim's door, a pin before the geocoder's", async () => {
+      const h = harness();
+      const [claim] = await h.repo.claim(1, NOW);
+      const door = deliveryAddressKey(claim);
+
+      expect(claim.id).toBe(F.open);
+      expect(await h.repo.reusablePoint(claim, NOW)).toBeNull();
+
+      await h.place(F.resolved, {
+        address_key: door,
+        geo_precision: "STREET",
+        geo_updated_at: minute(999),
+      });
+
+      expect(await h.repo.reusablePoint(claim, NOW)).toEqual({
+        latitude: -23.5,
+        longitude: -46.6,
+        geo_source: "GEOCODER",
+        geo_precision: "STREET",
+        geocode_status: "RESOLVED",
+        geo_updated_at: NOW,
+      });
+
+      await h.place(F.manual, {
+        address_key: door,
+        latitude: -22.9,
+        longitude: -43.2,
+        geo_updated_at: minute(1),
+      });
+
+      expect(await h.repo.reusablePoint(claim, NOW)).toMatchObject({
+        latitude: -22.9,
+        longitude: -43.2,
+        geo_source: "GEOCODER",
+        geo_precision: "ADDRESS",
+      });
+    });
+
+    it("never takes another company's point, nor a district's", async () => {
+      const h = harness();
+      const [claim] = await h.repo.claim(1, NOW);
+      const door = deliveryAddressKey(claim);
+
+      await h.place(F.otherCompany, {
+        address_key: door,
+        latitude: -22.9,
+        longitude: -43.2,
+        geo_source: "MANUAL",
+      });
+      await h.place(F.coarse, {
+        address_key: door,
+        geo_precision: "NEIGHBORHOOD",
+      });
+
+      expect(await h.repo.reusablePoint(claim, NOW)).toBeNull();
+    });
+  });
 }
 
 // The run's instant, for the harnesses.
@@ -441,4 +515,4 @@ export {
   GEOCODING_SEED,
   deliveryGeocodingContract,
 };
-export type { GeocodingHarness, GeocodingSeed, GeocodingState };
+export type { GeocodingHarness, GeocodingSeed, GeocodingState, PlacedColumns };

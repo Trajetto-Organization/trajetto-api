@@ -1491,6 +1491,17 @@ chave da pausa guarda o motivo junto do prazo (`REFUSED`, `QUOTA` ou
     `CLEARED_ADDRESS_POINT`, e o ponto de outra entrega no endereço novo
     (fora a própria), quando existe, entra no lugar do antigo. O
     `geocodeSoon` só é pedido sem ele.
+  - No job e logo depois do commit, antes de perguntar ao provedor, cada
+    reserva procura o ponto de outra entrega da empresa na mesma porta
+    (`reusablePoint`, com a chave calculada do endereço da reserva: também
+    vale para uma entrega de antes, ainda sem a coluna). Achando, grava pelo
+    mesmo `settle` de uma resposta (a reserva ainda vigente, a entrega ainda
+    sem ponto: um pino feito no meio do caminho vence), sem gastar
+    orçamento nem vaga e sem chamar o provedor, e o `routeStopsLocated`
+    avisa a tela e o motorista como num ponto achado. A linha
+    `delivery addresses geocoded` conta `reused`. Endereço repetido deixa de
+    gastar a cota do LocationIQ. A reserva continua limitada ao orçamento
+    que resta: com o dia gasto, nada é reservado, nem para reaproveitar.
   - Toda leitura filtra `businessId`: a chave nunca cruza empresas. As
     linhas de antes ficam com a chave nula até o backfill do dono.
 - Orçamento: `DELIVERY_GEOCODING_DAILY_BUDGET` consultas por dia (UTC),
@@ -1505,7 +1516,8 @@ chave da pausa guarda o motivo junto do prazo (`REFUSED`, `QUOTA` ou
 - **O log.** Sem `REVERSE_GEOCODER_URL` ou com orçamento 0, o job diz uma vez
   por processo, em `info`, `geocode-deliveries off` com o motivo. Toda
   execução que reservou algo escreve `delivery addresses geocoded` (contagens
-  por resultado, devolvidas e `providerStatuses`). A que parou antes escreve
+  por resultado, os pontos reaproveitados de outra entrega na mesma porta,
+  `reused`, as devolvidas e `providerStatuses`). A que parou antes escreve
   `geocoding provider refused the request` (`error`, com o código HTTP:
   401/403 é a chave, 404 é a URL), `rate-limited` ou `failing` (`warn`).
   Cada mudança do que segura as consultas sai uma vez por processo, em

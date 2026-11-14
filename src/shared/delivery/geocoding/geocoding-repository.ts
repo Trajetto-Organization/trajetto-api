@@ -7,6 +7,13 @@ import {
   OPEN_STOP_STATUSES,
   type RouteStatus,
 } from "@/shared/route/route-rules";
+import { deliveryAddressKey } from "@/shared/delivery/address-key";
+
+import {
+  pickReusablePoint,
+  type PointCandidate,
+  type ReusedAddressPoint,
+} from "./address-point-reuse";
 
 import {
   GEOCODING_BACKOFF_CAP_MINUTES,
@@ -106,6 +113,17 @@ interface IDeliveryGeocodingRepository {
     limit: number,
     now: Date,
   ): Promise<GeocodingClaim[]>;
+
+  /**
+   * The point another delivery of the claim's company already has at the
+   * claim's address (address-key.ts), as the columns to settle it with
+   * (address-point-reuse.ts: a pin first, then the newest); null when none
+   * qualifies. Never another company's, never the claim's own row.
+   */
+  reusablePoint(
+    claim: GeocodingClaim,
+    now: Date,
+  ): Promise<ReusedAddressPoint | null>;
 
   /**
    * Writes the outcome when the claim still holds and the delivery still
@@ -234,6 +252,38 @@ class DeliveryGeocodingRepository implements IDeliveryGeocodingRepository {
       FROM claimed
       ORDER BY "created_at" DESC, "id" DESC
     `;
+  }
+
+  async reusablePoint(
+    claim: GeocodingClaim,
+    now: Date,
+  ): Promise<ReusedAddressPoint | null> {
+    const key = deliveryAddressKey(claim);
+
+    if (!key) return null;
+
+    // The newest of each source at this door, on delivery_address_key_idx
+    // (the key's equality proves its predicate); the rule decides between
+    // the two, as the twin decides over every row.
+    const candidates = await this.prisma.$queryRaw<PointCandidate[]>`
+      SELECT DISTINCT ON ("geo_source")
+        "latitude", "longitude", "geo_source", "geo_precision",
+        "geo_updated_at"
+      FROM "delivery"
+      WHERE "businessId" = ${claim.businessId}
+        AND "address_key" = ${key}
+        AND "id" <> ${claim.id}
+        AND "latitude" IS NOT NULL
+        AND "longitude" IS NOT NULL
+        AND (
+          "geo_source" = 'MANUAL'
+          OR ("geo_source" = 'GEOCODER'
+            AND "geo_precision" IN ('ADDRESS', 'STREET'))
+        )
+      ORDER BY "geo_source", "geo_updated_at" DESC NULLS LAST, "id" DESC
+    `;
+
+    return pickReusablePoint(candidates, now);
   }
 
   async settle(

@@ -241,6 +241,7 @@ function summarize(
     coarse: result.coarse,
     notFound: result.notFound,
     failed: result.failed,
+    reused: result.reused,
     released: result.released,
     stoppedBy: result.stoppedBy ?? null,
     providerStatuses: result.providerStatuses,

@@ -40,6 +40,12 @@ import { GEOCODING_MAX_ATTEMPTS } from "./geocoding-rules";
  * unasked (release); three failures in a row stop the run the same way —
  * the provider is down, and asking the rest would burn their attempts.
  *
+ * A delivery at a door another delivery of the company already located
+ * (address-key.ts) takes that point before anything is asked (owner's
+ * report of 14/11/2026): settled as GEOCODER with the same guards as an
+ * answer, without the budget, the slot or a call — a repeated address no
+ * longer spends the provider's day (address-point-reuse.ts).
+ *
  * Two entry points. runOnce is the minute's job: the open stops of
  * unfinished routes first (claimOpenStops), then the newest. runFor
  * is the lookup a create, an address edit or a routing starts after its
@@ -101,6 +107,11 @@ interface GeocodingRunResult {
   coarse: number;
   notFound: number;
   failed: number;
+  /**
+   * Settled with the point another delivery of the company has at the
+   * same door: nothing asked, nothing spent.
+   */
+  reused: number;
   /** Claims given back unasked, for the next run. */
   released: number;
   /** Why the run asked nothing, when it did not. */
@@ -376,6 +387,8 @@ class DeliveryGeocodingService {
 
     try {
       for (const [index, claim] of claims.entries()) {
+        if (await this.reuse(claim, now, result)) continue;
+
         const outcome = await this.lookUp(claim, now, run);
 
         // No budget or no slot left: nothing more is asked in this run.
@@ -452,6 +465,47 @@ class DeliveryGeocodingService {
         await this.announce(result.settled);
       }
     }
+  }
+
+  /**
+   * Settles the claim with the point another delivery of the company has
+   * at the same door, when one has it: no budget, no slot, no call. The
+   * settle's guards hold (the claim still current, no point yet), and a
+   * written one is announced like a found one. A reuse says nothing about
+   * the provider: the failure streak stays as it was. True when the claim
+   * is done with.
+   */
+  private async reuse(
+    claim: GeocodingClaim,
+    now: Date,
+    result: GeocodingRunResult,
+  ): Promise<boolean> {
+    const point = await this.repository.reusablePoint(claim, now);
+
+    if (!point) return false;
+
+    const written = await this.repository.settle(
+      claim,
+      {
+        kind: "RESOLVED",
+        latitude: point.latitude,
+        longitude: point.longitude,
+        precision: point.geo_precision,
+      },
+      now,
+    );
+
+    result.reused += 1;
+
+    if (written) {
+      result.settled.push({
+        id: claim.id,
+        businessId: claim.businessId,
+        kind: "RESOLVED",
+      });
+    }
+
+    return true;
   }
 
   /**
@@ -539,6 +593,7 @@ function emptyResult(): GeocodingRunResult {
     coarse: 0,
     notFound: 0,
     failed: 0,
+    reused: 0,
     released: 0,
     providerStatuses: [],
     settled: [],
