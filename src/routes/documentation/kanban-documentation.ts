@@ -187,6 +187,11 @@ const kanbanResponses = {
   createColumnNotFound: boardNotFound,
   updateColumnErrors: validationError,
   deleteColumnErrors: validationError,
+  columnHasCards: coded(
+    "KANBAN_COLUMN_HAS_CARDS",
+    "A coluna tem 2 cartão(ões). Mova ou exclua os cartões antes de excluir a coluna.",
+    "KANBAN_COLUMN_HAS_CARDS: a coluna ainda tem cards, com a contagem na mensagem; nada foi excluído.",
+  ),
   /** 404 of a column write: the column, the session user or the company. */
   columnWriteNotFound: refusal(
     `KANBAN_COLUMN_NOT_FOUND (inexistente ou de outra empresa — a mesma resposta), ${SESSION_USER} ou ${BUSINESS}.`,

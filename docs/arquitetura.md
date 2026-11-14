@@ -2439,9 +2439,17 @@ o caminho que resolve.
   motorista e levava as mensagens e os atendimentos sem aviso. A recontagem
   sob a trava da linha do motorista (`deleteDriver`) usa a mesma função e
   conta a conversa também.
+- **Excluir uma coluna do Kanban** (`DELETE /kanban/column/delete/...`,
+  decisão D-38): coluna com cards responde `409 KANBAN_COLUMN_HAS_CARDS`,
+  "A coluna tem N cartão(ões). Mova ou exclua os cartões antes de excluir a
+  coluna." A FK `kanban_card.columnId` é CASCADE e levava os cards junto.
+  A contagem roda na transação da exclusão, depois da trava do quadro e da
+  trava da linha da coluna (a mesma que toda escrita de card pega): um card
+  criado ou movido para ela no meio é contado ou espera e encontra a coluna
+  excluída. Coluna vazia continua saindo, com as posições renumeradas.
 - **Compatibilidade:** os códigos que a web e o app leem continuam os mesmos;
-  `USER_DRIVER_LOCKED` é novo e chega ao toast da web antiga com a mensagem
-  da API.
+  `USER_DRIVER_LOCKED` e `KANBAN_COLUMN_HAS_CARDS` são novos e chegam ao
+  toast da web antiga com a mensagem da API.
 
 ## Entregas na rota: casos de borda
 

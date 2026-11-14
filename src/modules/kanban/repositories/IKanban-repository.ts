@@ -20,6 +20,12 @@ interface IKanbanRepository {
     columnData,
     columnId,
   }: UpdateKanbanColumn) => Promise<KanbanColumn>;
+  /**
+   * Deletes an empty column and closes the gap in the positions. A column
+   * with cards is refused (KanbanColumnHasCardsError, decision D-38), counted
+   * under the column's row lock; a column gone meanwhile is
+   * KanbanColumnNotFoundError.
+   */
   deleteColumn: (columnId: string) => Promise<KanbanColumn>;
   findColumnById: (columnId: string) => Promise<KanbanColumn | null>;
   findColumnsByBusinessId: (

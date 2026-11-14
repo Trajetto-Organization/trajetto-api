@@ -21,6 +21,7 @@ import { container } from "tsyringe";
 
 import { buildSearchOr } from "@/shared/pagination/search-or";
 import { KanbanColumnNotFoundError } from "../usecases/errors/kanban-column-not-found-error";
+import { KanbanColumnHasCardsError } from "../usecases/errors/kanban-column-has-cards-error";
 import { KanbanCardNotFoundError } from "../usecases/errors/kanban-card-not-found-error";
 import { KanbanBoardChangedError } from "../usecases/errors/kanban-board-changed-error";
 import { KanbanOneOrMoreColumnNotBelongBusinessError } from "../usecases/errors/kanban-one-or-more-column-not-belong-business-error";
@@ -194,11 +195,16 @@ class KanbanRepository implements IKanbanRepository {
   }
 
   /**
-   * Deletes the column (its cards go with it, ON DELETE CASCADE) and closes
-   * the gap in the positions, in ONE transaction under the board lock. The
-   * reorder used to run after the delete had committed: a failure between
-   * the two left a hole, and a column created in between got a position the
-   * reorder then duplicated.
+   * Deletes an empty column and closes the gap in the positions, in ONE
+   * transaction under the board lock. The reorder used to run after the
+   * delete had committed: a failure between the two left a hole, and a
+   * column created in between got a position the reorder then duplicated.
+   *
+   * A column with cards is refused (decision D-38): the foreign key is ON
+   * DELETE CASCADE, and the cards went with it without a word. The count
+   * runs under the column's own row lock, the one every card write takes
+   * (lockColumn): a card created or moved here either committed before it
+   * and is counted, or waits and then finds the column gone.
    */
   async deleteColumn(columnId: string): Promise<KanbanColumn> {
     return this.prisma.$transaction(async (tx) => {
@@ -210,6 +216,15 @@ class KanbanRepository implements IKanbanRepository {
       if (!target) throw new KanbanColumnNotFoundError();
 
       await this.lockBoard(tx, target.businessId);
+
+      // A concurrent delete of the same column won the lock: a 404.
+      if (!(await this.lockColumn(tx, columnId))) {
+        throw new KanbanColumnNotFoundError();
+      }
+
+      const cardsCount = await tx.kanbanCard.count({ where: { columnId } });
+
+      if (cardsCount > 0) throw new KanbanColumnHasCardsError(cardsCount);
 
       // A concurrent delete of the same column won the lock: a 404, not a 500.
       const column = await tx.kanbanColumn

@@ -114,9 +114,9 @@ async function kanbanRoutes(app: FastifyInstance) {
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["kanban"],
-        summary: "Exclui uma coluna e os cards dela",
+        summary: "Exclui uma coluna vazia",
         description:
-          "Exclui a coluna com todos os seus cards e fecha o buraco nas posições das demais, na mesma transação. Se a coluna for excluída por outra pessoa no meio, a resposta é 404." +
+          "Exclui a coluna e fecha o buraco nas posições das demais, na mesma transação. Coluna com cards é recusada (409 KANBAN_COLUMN_HAS_CARDS, com a contagem): mova ou exclua os cards antes; até 14/11/2026 eles eram apagados junto, sem aviso. Se a coluna for excluída por outra pessoa no meio, a resposta é 404." +
           NOT_FOUND_RULE,
         params: kanbanSchemas.updateDeleteColumn,
         response: {
@@ -124,6 +124,7 @@ async function kanbanRoutes(app: FastifyInstance) {
           400: kanbanResponses.deleteColumnErrors,
           403: kanbanResponses.forbidden,
           404: kanbanResponses.columnWriteNotFound,
+          409: kanbanResponses.columnHasCards,
           500: kanbanResponses.internalServerError,
         },
       },

@@ -196,9 +196,10 @@ describe("board positions under concurrency", () => {
       orderBy: { position: "asc" },
     });
 
-    // The first column holds the eight cards: they go with it (cascade).
+    // The first column holds the eight cards (refused since 14/11/2026, see
+    // below): two empty ones go.
     await Promise.all([
-      repository.deleteColumn(columns[0].id),
+      repository.deleteColumn(columns[1].id),
       repository.deleteColumn(columns[3].id),
       repository.createColumn({
         title: "Nova 1",
@@ -216,7 +217,70 @@ describe("board positions under concurrency", () => {
     expect(await positionsOf(CARRIER)).toEqual(range(8));
     expect(
       await prisma.kanbanCard.count({ where: { columnId: columns[0].id } }),
-    ).toBe(0);
+    ).toBe(8);
+  });
+
+  // Decision D-38 (14/11/2026): kanban_card.columnId is ON DELETE CASCADE,
+  // and the cards went with the column without a word.
+  it("refuses deleting a column with cards over HTTP, keeping them, and renumbers after an empty one", async () => {
+    const full = await repository.createColumn({
+      title: "Com cartões",
+      color: "#000000",
+      businessId: OTHER,
+    });
+    const empty = await repository.createColumn({
+      title: "Vazia",
+      color: "#000000",
+      businessId: OTHER,
+    });
+    const after = await repository.createColumn({
+      title: "Depois",
+      color: "#000000",
+      businessId: OTHER,
+    });
+
+    for (const title of ["um", "dois"]) {
+      await repository.createCard({
+        title,
+        description: "Descrição",
+        priority: "low",
+        dueDate: new Date("2026-10-01T12:00:00.000Z"),
+        columnId: full.id,
+      });
+    }
+
+    const refused = await app.inject({
+      method: "DELETE",
+      url: `/kanban/column/delete/${full.id}/business/${OTHER}`,
+      headers: { authorization: `Bearer ${tokens.otherAdmin}` },
+    });
+
+    expect(refused.statusCode, refused.body).toBe(409);
+    expect(refused.json()).toEqual({
+      code: "KANBAN_COLUMN_HAS_CARDS",
+      message:
+        "A coluna tem 2 cartão(ões). Mova ou exclua os cartões antes de excluir a coluna.",
+    });
+    expect(
+      await prisma.kanbanCard.count({ where: { columnId: full.id } }),
+    ).toBe(2);
+
+    const deleted = await app.inject({
+      method: "DELETE",
+      url: `/kanban/column/delete/${empty.id}/business/${OTHER}`,
+      headers: { authorization: `Bearer ${tokens.otherAdmin}` },
+    });
+
+    expect(deleted.statusCode, deleted.body).toBe(200);
+
+    const positions = await prisma.kanbanColumn.findMany({
+      where: { id: { in: [full.id, after.id] } },
+      select: { id: true, position: true },
+    });
+
+    expect(positions.find((column) => column.id === after.id)!.position).toBe(
+      positions.find((column) => column.id === full.id)!.position + 1,
+    );
   });
 
   it("closes the gap of a deleted card in its column", async () => {
