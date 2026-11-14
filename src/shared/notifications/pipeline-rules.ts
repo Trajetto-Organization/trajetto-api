@@ -198,6 +198,12 @@ interface CategoryPreference {
  * behavior until they actually touch the new screen. A row, once saved,
  * overrides the globals for its category — except that WhatsApp still
  * requires a configured phone, which no preference can conjure.
+ *
+ * WhatsApp also requires the general card (14/11/2026, decision D-53): the
+ * card is the master key, a row only narrows it. A saved row used to
+ * override the card, so turning it off left every category saved with
+ * WhatsApp on still sending — to a number that stays stored after the
+ * card goes off, and may by then be someone else's.
  */
 function resolveRecipientChannelFlags(
   recipient: RecipientLegacyToggles,
@@ -210,9 +216,9 @@ function resolveRecipientChannelFlags(
     emailNotificationsEnabled: preference
       ? preference.email
       : (recipient.email_notifications_enabled ?? true),
-    whatsappNotificationsEnabled: preference
-      ? preference.whatsapp
-      : (recipient.whatsapp_notifications_enabled ?? false),
+    whatsappNotificationsEnabled:
+      (recipient.whatsapp_notifications_enabled ?? false) &&
+      (preference ? preference.whatsapp : true),
     hasWhatsAppPhone: Boolean(recipient.whatsapp_phone),
     // null or "" = a driver without a mailbox. Absent = the caller did not
     // load the column, which until D2 could only hold an address: mailable.

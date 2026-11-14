@@ -182,7 +182,7 @@ beforeEach(async () => {
   await prisma.domainOutboxEvent.deleteMany({});
   await prisma.user.update({
     where: { id: RECIPIENT },
-    data: { access_revoked: false },
+    data: { access_revoked: false, whatsapp_notifications_enabled: true },
   });
 
   vi.restoreAllMocks();
@@ -565,6 +565,63 @@ describe("a recipient whose access was revoked", () => {
     expect(external.every((row) => row.status === "FAILED")).toBe(true);
     expect(mail.sent).toHaveLength(0);
     expect(whatsapp.sent).toHaveLength(0);
+  });
+});
+
+/**
+ * The general WhatsApp card is the master key (decision D-53, 14/11/2026).
+ * A row queued while the card was on used to go out after the person turned
+ * it off: the send checked only that a number was stored, and the number
+ * stays stored after the card goes off — it may be someone else's by then.
+ */
+describe("a recipient who turned WhatsApp off after the row was queued", () => {
+  it("is not messaged, and the row fails for good with the reason", async () => {
+    // "Fanned out, switched off, THEN delivered": hold every wake and let a
+    // cycle already in flight finish, so only this test claims the rows.
+    vi.spyOn(pipeline, "wake").mockImplementation(() => undefined);
+
+    await vi.waitFor(
+      () =>
+        expect((pipeline as unknown as { isBusy(): boolean }).isBusy()).toBe(
+          false,
+        ),
+      { timeout: 15_000, interval: 50 },
+    );
+
+    const eventId = await publish();
+
+    // Fanned out with the card on: the WhatsApp row is queued.
+    await pipeline.runOutboxCycle();
+
+    expect(
+      (await deliveriesOf(eventId)).find((row) => row.channel === "WHATSAPP")
+        ?.status,
+    ).toBe("PENDING");
+
+    await prisma.user.update({
+      where: { id: RECIPIENT },
+      data: { whatsapp_notifications_enabled: false },
+    });
+
+    await pipeline.runDeliveryCycle("internal");
+    await pipeline.runDeliveryCycle("external");
+
+    const rows = await deliveriesOf(eventId);
+    const byChannel = new Map(rows.map((row) => [row.channel, row]));
+    const whatsAppRow = byChannel.get("WHATSAPP")!;
+
+    // Failed on its first attempt and not rescheduled: non-retryable.
+    expect(whatsAppRow).toMatchObject({ status: "FAILED", attempts: 1 });
+    expect(whatsAppRow.lastError).toContain("Recipient turned WhatsApp off");
+    expect(
+      whatsapp.sent.filter((message) =>
+        JSON.stringify(message).includes(whatsAppRow.id),
+      ),
+    ).toEqual([]);
+
+    // Only WhatsApp: the bell and the e-mail of the same event went out.
+    expect(byChannel.get("IN_APP")?.status).toBe("DELIVERED");
+    expect(byChannel.get("EMAIL")?.status).toBe("DELIVERED");
   });
 });
 

@@ -1668,6 +1668,13 @@ class NotificationPipelineService {
       );
     }
 
+    // The card is the master key (pipeline-rules.ts): a row queued before
+    // the person switched it off is not sent either. The number stays
+    // stored after that, so the phone check above lets it through.
+    if (!user.whatsapp_notifications_enabled) {
+      throw new NonRetryableDeliveryError("Recipient turned WhatsApp off");
+    }
+
     const rendered = policy.renderWhatsApp(payload, {
       id: user.id,
       role: user.role,

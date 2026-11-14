@@ -668,7 +668,13 @@ nas réplicas HTTP e uma Application `worker`), só por gatilho medido:
   o e-mail e o WhatsApp passam a seguir a linha "Conta", que antes não
   existia para o administrador e não governava esses avisos para o MASTER.
   O `PUT /notification/preferences` ignora em silêncio a linha de fora do
-  papel (D-54), para um app antigo nunca falhar ao salvar.
+  papel (D-54), para um app antigo nunca falhar ao salvar. O cartão
+  WhatsApp (`whatsapp_notifications_enabled`) é a chave-mestra desde
+  14/11/2026 (D-53): desligado, nenhum WhatsApp sai, nem pela linha salva
+  com WhatsApp ligado (`resolveRecipientChannelFlags`) nem pela entrega
+  enfileirada antes (falha não-retentável "Recipient turned WhatsApp
+  off"). O número fica guardado depois de desligar e pode ser de outra
+  pessoa; antes, a linha salva valia mais que o cartão.
   `tests/unitaires/notifications/preference-catalog.test.ts` trava as duas
   regras: nenhum aviso com canal em `SYSTEM`, e a categoria de todo aviso
   que uma preferência governa no catálogo de cada papel que o recebe.

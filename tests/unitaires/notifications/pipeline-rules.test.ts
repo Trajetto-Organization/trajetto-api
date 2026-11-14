@@ -378,6 +378,62 @@ describe("preference layering", () => {
     );
   });
 
+  /**
+   * The general WhatsApp card is the master key (decision D-53): a row only
+   * narrows it. A row saved with WhatsApp on overrode the card, so turning
+   * the card off kept those categories sending — to a number that stays
+   * stored after the card goes off and may belong to someone else by then.
+   */
+  it("sends no WhatsApp from a saved row to someone who switched the card off", () => {
+    const flags = resolveRecipientChannelFlags(
+      { ...legacyAllOn, whatsapp_notifications_enabled: false },
+      { inApp: true, email: true, whatsapp: true },
+    );
+
+    expect(flags.whatsappNotificationsEnabled).toBe(false);
+    expect(flags.hasWhatsAppPhone).toBe(true);
+    expect(channelsForRecipient(flags, fullContent)).not.toContain(
+      NotificationChannel.WHATSAPP,
+    );
+    // Only WhatsApp: the row still decides the bell and the e-mail.
+    expect(channelsForRecipient(flags, fullContent)).toEqual(
+      expect.arrayContaining([
+        NotificationChannel.IN_APP,
+        NotificationChannel.EMAIL,
+      ]),
+    );
+  });
+
+  it("sends no WhatsApp with the card on and the row off, and sends with both on", () => {
+    expect(
+      resolveRecipientChannelFlags(legacyAllOn, {
+        inApp: true,
+        email: true,
+        whatsapp: false,
+      }).whatsappNotificationsEnabled,
+    ).toBe(false);
+
+    const both = resolveRecipientChannelFlags(legacyAllOn, {
+      inApp: true,
+      email: true,
+      whatsapp: true,
+    });
+
+    expect(both.whatsappNotificationsEnabled).toBe(true);
+    expect(channelsForRecipient(both, fullContent)).toContain(
+      NotificationChannel.WHATSAPP,
+    );
+  });
+
+  it("reads a card never switched on as off, row or no row", () => {
+    expect(
+      resolveRecipientChannelFlags(
+        { whatsapp_phone: "24999999999" },
+        { inApp: true, email: true, whatsapp: true },
+      ).whatsappNotificationsEnabled,
+    ).toBe(false);
+  });
+
   it("keeps WhatsApp blocked without a phone even when the row wants it", () => {
     const flags = resolveRecipientChannelFlags(
       { ...legacyAllOn, whatsapp_phone: null },
