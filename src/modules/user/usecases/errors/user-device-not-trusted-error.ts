@@ -15,9 +15,12 @@ import { AppError } from "@/shared/errors/AppError";
  * The sentence names the two usual causes, a first sign-in on that phone
  * and a phone the company disconnected (14/11/2026): "não foi possível
  * entrar" left the driver retyping the password, which is never compared
- * here. The app keeps a copy for an answer that comes without a sentence
- * (login-refusal-rules.ts); the two are the same word for word, so old and
- * new builds read alike. It still says nothing about whether the CPF exists.
+ * here. The app keeps the same sentence in
+ * trajetto-mobile/features/access/access-messages.ts
+ * (DEVICE_NOT_TRUSTED_MESSAGE, which login-refusal-rules.ts shows over the
+ * API's since 14/11/2026); the two are the same word for word, so builds
+ * from before, which show this one, read alike. It still says nothing
+ * about whether the CPF exists.
  */
 class UserDeviceNotTrustedError extends AppError {
   /** Whether the request named a phone at all, for the log line only. */
