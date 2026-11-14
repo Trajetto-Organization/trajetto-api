@@ -173,6 +173,13 @@ const masterUserAccountUpdatedPolicy: NotificationPolicyEntry<MasterUserAccountU
     // "Someone changed your account" is a security notice, not noise.
     mandatory: true,
 
+    // The use case already mails this master directly, with the fuller
+    // template (old and new name or e-mail; update-master-user-usecase.ts),
+    // and a link-only change mails the link itself. This e-mail landed in
+    // the same inbox as a second copy of the event (14/11/2026, decision
+    // D-52). The bell, the phone and the WhatsApp stay.
+    suppressEmail: true,
+
     async resolveRecipients(payload, deps) {
       return resolveSingleUser(payload.masterUserId, deps);
     },
