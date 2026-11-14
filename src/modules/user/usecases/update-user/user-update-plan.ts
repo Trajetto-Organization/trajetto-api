@@ -4,12 +4,15 @@ import type { UserRole } from "../../dtos/user-dto";
  * What an edit of a user actually changes, decided by comparing VALUES with
  * the stored row — never by which fields the request happened to carry.
  *
- * The web sends the whole form (company, e-mail, name, role…) on every save,
- * and the use case used to treat the mere presence of a field as a security
- * change: renaming somebody logged them out of the web and the app
- * (USR-EDIT-1). Decision 4.6: a change of role or driver link ends the
+ * The web sends the whole form (e-mail, name, role, both links, the type) on
+ * every save, and the use case used to treat the mere presence of a field
+ * as a security change: renaming somebody logged them out of the web and the
+ * app (USR-EDIT-1). Decision 4.6: a change of role or driver link ends the
  * person's sessions and clears their inbox; anything else does not. The
- * company is not an input at all: no edit moves a person (decision 16.100).
+ * company is not an input at all: no edit moves a person (decision 16.100),
+ * the route refuses a `businessId` in the body, and the web stopped sending
+ * one on an edit (batch of 14/11/2026: until then, every save of the user
+ * dialog answered 400).
  *
  * Pure: the use case validates the references it names (profile, driver)
  * and runs the writes.

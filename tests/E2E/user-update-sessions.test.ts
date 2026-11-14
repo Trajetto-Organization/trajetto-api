@@ -1007,3 +1007,109 @@ describe("a password reset by the MASTER (SEC-MAIL-1, decision 4.9)", () => {
     ).toBe(0);
   });
 });
+
+/**
+ * The body the web's user dialog sends on an edit since WEB-01 (batch of
+ * 14/11/2026): the whole form — e-mail, name, role, both links (the unused
+ * one as ""), the type and the link checkbox — and never the company. The
+ * dialog used to send `businessId` too, and every save of the owner's,
+ * a rename included, answered 400 ("A empresa de um registro não muda pela
+ * edição"): the API's rule (decision 16.100) is right, and this matrix is
+ * what the corrected web relies on. Sessions end only when the role or the
+ * driver link changes (decision 4.6).
+ */
+describe("the corrected web's edit body, without the company", () => {
+  type Link = "admin" | "driver" | "staff";
+
+  /** What the dialog's submit puts in the body for the chosen type. */
+  function webBody(
+    target: Seeded,
+    link: Link,
+    ids: { driverId?: string; profileAccessId?: string },
+    sendPasswordSetupLink = false,
+  ): Record<string, unknown> {
+    return {
+      email: target.email,
+      name: "Pessoa Cadastrada",
+      sendPasswordSetupLink,
+      role: link === "admin" ? "BUSINESS_ADMIN" : "BUSINESS_USER",
+      profileAccessId: link === "staff" ? ids.profileAccessId : "",
+      driverId: link === "driver" ? ids.driverId : "",
+      userType: link === "driver" ? "driver" : "employee",
+    };
+  }
+
+  async function seeded(link: Link, ids: { driverId: string }) {
+    return seedUser({
+      role: link === "admin" ? "BUSINESS_ADMIN" : "BUSINESS_USER",
+      businessId: A,
+      profileAccessId: link === "staff" ? profileA1 : null,
+      driverId: link === "driver" ? ids.driverId : null,
+    });
+  }
+
+  it.each([
+    ["driver", "admin", true],
+    ["admin", "driver", true],
+    ["staff", "driver", true],
+    ["driver", "staff", true],
+    ["staff", "staff", false],
+  ] as Array<[Link, Link, boolean]>)(
+    "%s → %s answers 200 (sessions end: %s)",
+    async (from, to, endsSessions) => {
+      const before = await seedDriver(A, "Motorista de Antes");
+      const next = await seedDriver(A, "Motorista Novo");
+      const target = await seeded(from, { driverId: before });
+
+      const response = await patch(
+        admin,
+        target.id,
+        webBody(target, to, {
+          driverId: from === "driver" ? next : before,
+          profileAccessId: from === "staff" ? profileA1 : profileA2,
+        }),
+      );
+
+      expect(response.statusCode, response.body).toBe(200);
+
+      const after = await prisma.user.findUniqueOrThrow({
+        where: { id: target.id },
+      });
+
+      expect(after.businessId).toBe(A);
+      expect(after.role).toBe(
+        to === "admin" ? "BUSINESS_ADMIN" : "BUSINESS_USER",
+      );
+      expect(after.driverId).toBe(
+        to === "driver" ? (from === "driver" ? next : before) : null,
+      );
+      expect(after.session_version).toBe(endsSessions ? 1 : 0);
+      expect(events.user).toEqual(
+        endsSessions ? [{ userId: target.id, reason: "role_changed" }] : [],
+      );
+    },
+  );
+
+  it("the MASTER's link checkbox, with the rest unchanged, answers 200 and logs nobody out", async () => {
+    const target = await seedUser({
+      role: "BUSINESS_USER",
+      businessId: A,
+      profileAccessId: profileA1,
+    });
+
+    const response = await patch(
+      master,
+      target.id,
+      webBody(target, "staff", { profileAccessId: profileA1 }, true),
+    );
+
+    expect(response.statusCode, response.body).toBe(200);
+    expect(
+      await mailsTo(target.email, "password-reset-by-admin.hbs"),
+    ).toHaveLength(1);
+    expect(
+      (await prisma.user.findUniqueOrThrow({ where: { id: target.id } }))
+        .session_version,
+    ).toBe(0);
+  });
+});
