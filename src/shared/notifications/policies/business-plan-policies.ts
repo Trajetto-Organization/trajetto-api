@@ -36,6 +36,12 @@ import { User } from "@/modules/user/dtos/user-dto";
  *
  * The actor is deliberately not notified: they confirmed a dialog two seconds
  * ago. Their record is the activity entry, which is searchable and permanent.
+ *
+ * Category ACCOUNT, the "Conta" row both audiences have (14/11/2026, decision
+ * D-47). It was SYSTEM, a row no role is shown, so the e-mail always went
+ * out with no switch to stop it and the WhatsApp followed only the general
+ * card. `mandatory` keeps the bell and the phone; e-mail and WhatsApp follow
+ * the person's choice in "Conta", no migration needed.
  */
 
 /**
@@ -112,7 +118,7 @@ function isMaster(recipient: RecipientRenderContext): boolean {
 
 const businessModuleChangedPolicy: NotificationPolicyEntry<BusinessModuleChangedPayload> =
   {
-    category: NotificationCategory.SYSTEM,
+    category: NotificationCategory.ACCOUNT,
 
     // Losing a whole module is not the kind of thing a preference should be
     // able to silence — for the admin it explains a menu that vanished, for
@@ -209,7 +215,7 @@ const businessModuleChangedPolicy: NotificationPolicyEntry<BusinessModuleChanged
 
 const businessLimitChangedPolicy: NotificationPolicyEntry<BusinessLimitChangedPayload> =
   {
-    category: NotificationCategory.SYSTEM,
+    category: NotificationCategory.ACCOUNT,
     mandatory: true,
 
     async resolveRecipients(payload, deps) {

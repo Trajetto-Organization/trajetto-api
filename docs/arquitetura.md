@@ -655,6 +655,23 @@ nas réplicas HTTP e uma Application `worker`), só por gatilho medido:
 - Trocar o papel ou a empresa de um usuário encerra as sessões dele
   (`session_version` + refresh tokens revogados) e apaga as notificações
   pessoais; as atividades (auditoria) ficam.
+- **Preferências de notificação por papel** (`preferenceCategoriesFor`, em
+  `get-notification-preferences-usecase.ts`): cada papel vê e grava só as
+  linhas do que pode receber. O MASTER, só `ACCOUNT` (as contas master e o
+  plano das empresas); o administrador, `FINES`, `MAINTENANCE`, `FINANCE`,
+  `TASKS` e, desde 14/11/2026, `ACCOUNT` (o plano da empresa, o webhook
+  desligado, o aparelho novo e a senha criada do motorista); o funcionário
+  e o motorista, `MAINTENANCE`, `FINANCE` e `TASKS`. `SYSTEM` não aparece
+  para ninguém e só leva a trilha de atividade: os avisos de plano e de
+  webhook desligado saíram dela para `ACCOUNT` (decisão D-47), sem
+  migration. O sino e o push deles continuam obrigatórios (`mandatory`);
+  o e-mail e o WhatsApp passam a seguir a linha "Conta", que antes não
+  existia para o administrador e não governava esses avisos para o MASTER.
+  O `PUT /notification/preferences` ignora em silêncio a linha de fora do
+  papel (D-54), para um app antigo nunca falhar ao salvar.
+  `tests/unitaires/notifications/preference-catalog.test.ts` trava as duas
+  regras: nenhum aviso com canal em `SYSTEM`, e a categoria de todo aviso
+  que uma preferência governa no catálogo de cada papel que o recebe.
 
 | Área         | Módulos (`src/modules/`)                                                                                                                                                      | Prefixo HTTP                                                                                                        |
 | ------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |

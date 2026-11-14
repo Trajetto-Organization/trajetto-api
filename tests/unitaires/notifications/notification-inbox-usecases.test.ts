@@ -253,15 +253,20 @@ describe("notification preferences", () => {
     expect(master.map((row) => row.category)).toEqual([
       NotificationCategory.ACCOUNT,
     ]);
+    // ACCOUNT since 14/11/2026: the company's plan, a webhook switched off
+    // and a driver's new phone reach the admin, and had no row to follow.
     expect(admin.map((row) => row.category)).toEqual([
       NotificationCategory.FINES,
       NotificationCategory.MAINTENANCE,
       NotificationCategory.FINANCE,
       NotificationCategory.TASKS,
+      NotificationCategory.ACCOUNT,
     ]);
-    expect(user.map((row) => row.category)).not.toContain(
-      NotificationCategory.FINES,
-    );
+    expect(user.map((row) => row.category)).toEqual([
+      NotificationCategory.MAINTENANCE,
+      NotificationCategory.FINANCE,
+      NotificationCategory.TASKS,
+    ]);
     expect(
       [...master, ...admin, ...user].map((row) => row.category),
     ).not.toContain(NotificationCategory.SYSTEM);
@@ -351,6 +356,65 @@ describe("notification preferences", () => {
       inApp: false,
       email: false,
       whatsapp: false,
+    });
+  });
+
+  it("drops in silence the rows outside the caller's catalog, and saves the rest", async () => {
+    const context = makeContext();
+
+    // A MASTER writing FINES and an office user writing ACCOUNT: rows that
+    // would govern nothing they receive. An old client never fails on it.
+    await context.updatePreferences.execute(MASTER, [
+      {
+        category: NotificationCategory.FINES,
+        inApp: false,
+        email: false,
+        whatsapp: false,
+      },
+      {
+        category: NotificationCategory.ACCOUNT,
+        inApp: true,
+        email: false,
+        whatsapp: false,
+      },
+    ]);
+    await context.updatePreferences.execute(ME, [
+      {
+        category: NotificationCategory.ACCOUNT,
+        inApp: false,
+        email: false,
+        whatsapp: false,
+      },
+    ]);
+    await context.updatePreferences.execute(ADMIN, [
+      {
+        category: NotificationCategory.ACCOUNT,
+        inApp: true,
+        email: false,
+        whatsapp: true,
+      },
+    ]);
+
+    const rows = context.notifications.preferences.map((row) => [
+      row.userId,
+      row.category,
+    ]);
+
+    expect(rows).toEqual([
+      [MASTER, NotificationCategory.ACCOUNT],
+      [ADMIN, NotificationCategory.ACCOUNT],
+    ]);
+
+    const admin = await context.getPreferences.execute(ADMIN);
+
+    expect(
+      admin.find((row) => row.category === NotificationCategory.ACCOUNT),
+    ).toEqual({
+      category: NotificationCategory.ACCOUNT,
+      inApp: true,
+      email: false,
+      whatsapp: true,
+      isDefault: false,
     });
   });
 

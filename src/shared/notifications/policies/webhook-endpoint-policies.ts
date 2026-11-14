@@ -19,7 +19,10 @@ import { REPLAY_WINDOW_DAYS } from "@/shared/integration/webhook-dispatch-rules"
  */
 const webhookEndpointDisabledPolicy: NotificationPolicyEntry<WebhookEndpointDisabledPayload> =
   {
-    category: NotificationCategory.SYSTEM,
+    // The admin's "Conta" row (14/11/2026, decision D-47): as SYSTEM, a row
+    // no role is shown, its e-mail had no switch at all. The bell and the
+    // phone stay mandatory below; the e-mail follows that row.
+    category: NotificationCategory.ACCOUNT,
 
     // An integration that stopped is not noise a preference should silence:
     // the data it carries is how the customer's own systems stay correct.

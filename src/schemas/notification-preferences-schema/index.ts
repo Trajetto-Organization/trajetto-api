@@ -2,7 +2,11 @@ import { z } from "zod";
 import { tenantLockedShape } from "@/shared/validation/tenant-locked-field";
 
 // SYSTEM is deliberately not accepted: it has no user-facing deliveries, so
-// letting a client write rows for it would only create dead data.
+// letting a client write rows for it would only create dead data. That holds
+// again since 14/11/2026, when the plan and webhook notices (mandatory, with
+// e-mail and WhatsApp) moved from SYSTEM to ACCOUNT; preference-catalog.test.ts
+// keeps any channel out of SYSTEM. Which of these five a person may save is
+// the role's catalog, applied by the use case (rows outside it are dropped).
 const userFacingCategorySchema = z.enum([
   "FINES",
   "MAINTENANCE",

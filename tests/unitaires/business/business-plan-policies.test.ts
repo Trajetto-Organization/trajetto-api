@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { NotificationCategory } from "@prisma/client";
 
 import {
   businessLimitChangedPolicy,
@@ -84,6 +85,16 @@ describe("business plan notification policies", () => {
   it("is mandatory, so a preference cannot silence a plan change", () => {
     expect(businessModuleChangedPolicy.mandatory).toBe(true);
     expect(businessLimitChangedPolicy.mandatory).toBe(true);
+  });
+
+  it('follows the "Conta" row for e-mail and WhatsApp, a row both audiences have', () => {
+    // SYSTEM is a row no role is shown: the e-mail went out with no switch.
+    expect(businessModuleChangedPolicy.category).toBe(
+      NotificationCategory.ACCOUNT,
+    );
+    expect(businessLimitChangedPolicy.category).toBe(
+      NotificationCategory.ACCOUNT,
+    );
   });
 
   it("tells the master who did it and the admin what changed for them", () => {
