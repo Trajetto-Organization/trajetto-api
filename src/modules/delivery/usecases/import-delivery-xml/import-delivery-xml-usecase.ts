@@ -35,6 +35,7 @@ import type {
 } from "@/modules/import/dtos/import-dto";
 import database from "@/../infra/database";
 import type { Shipper } from "@/modules/shipper/dtos/shipper-dto";
+import { issuerShipperName } from "@/shared/delivery/issuer-shipper-name";
 import { IImportRepository } from "@/modules/import/repositories/IImport-repository";
 import { WebhookFanOutService } from "@/shared/integration/webhook-fan-out-service";
 import { deliveryEventPayload } from "@/shared/integration/announce";
@@ -117,6 +118,15 @@ function reportOf(results: ImportResultItem[]): ImportReport {
     rows,
     routes: [],
   };
+}
+
+/** The issuer's name belongs to another CNPJ and cannot be told apart. */
+function issuerNameTaken(issuerName: string): AppError {
+  return new AppError(
+    `Já existe um embarcador chamado ${issuerName} com outro CNPJ. Selecione o embarcador manualmente ao importar.`,
+    400,
+    "NFE_ISSUER_NAME_TAKEN",
+  );
 }
 
 /**
@@ -471,7 +481,9 @@ class ImportDeliveryXmlUseCase {
    * CNPJ (the stable identity, unique per company); by name only when the
    * registered shipper has no CNPJ — a matriz and a filial share the
    * corporate name and must not be merged. Created when the carrier has
-   * never received cargo from it before. A deactivated match refuses the
+   * never received cargo from it before — when the name already belongs to
+   * another CNPJ (the matriz, for a filial's note), as "Name (0002-90)"
+   * (issuerShipperName, decision D-36). A deactivated match refuses the
    * note: creating another would clash with its name and bypass the decision
    * to deactivate it.
    */
@@ -505,15 +517,21 @@ class ImportDeliveryXmlUseCase {
       );
     }
 
+    const name = await this.nameForNewIssuer(
+      businessId,
+      issuerName,
+      issuerCnpj,
+    );
+
     try {
       const created = await this.shipper.createShipper({
         businessId,
-        name: issuerName,
+        name,
         corporate_reason: issuerLegalName,
         cnpj: issuerCnpj,
       });
 
-      createdShippers.push(issuerName);
+      createdShippers.push(name);
       return created.id as string;
     } catch (error) {
       if (
@@ -534,13 +552,39 @@ class ImportDeliveryXmlUseCase {
 
       if (winner) return this.usable(winner);
 
-      // The name is taken by a shipper with ANOTHER CNPJ.
-      throw new AppError(
-        `Já existe um embarcador chamado ${issuerName} com outro CNPJ. Selecione o embarcador manualmente ao importar.`,
-        400,
-        "NFE_ISSUER_NAME_TAKEN",
-      );
+      // The name was taken in between by a shipper with ANOTHER CNPJ.
+      throw issuerNameTaken(issuerName);
     }
+  }
+
+  /**
+   * The issuer's name, or — when a shipper with another CNPJ already has it
+   * (findIssuerShipper found no match, so any holder of the name is another
+   * identity) — the name with the CNPJ's branch suffix. Read without
+   * minding case, as the name lookups are: the unique index alone would let
+   * "MAGAZINE X" in next to "Magazine X". When there is no CNPJ to tell
+   * them apart, or the suffixed name is taken too, the note is refused as
+   * before.
+   */
+  private async nameForNewIssuer(
+    businessId: string,
+    issuerName: string,
+    issuerCnpj: string | null,
+  ): Promise<string> {
+    const holder = await this.shipper.findShipperByName(businessId, issuerName);
+
+    if (!holder) return issuerName;
+
+    const branchName = issuerShipperName(issuerName, issuerCnpj);
+
+    if (
+      !branchName ||
+      (await this.shipper.findShipperByName(businessId, branchName))
+    ) {
+      throw issuerNameTaken(issuerName);
+    }
+
+    return branchName;
   }
 
   private async findIssuerShipper(

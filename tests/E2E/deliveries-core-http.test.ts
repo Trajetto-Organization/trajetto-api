@@ -794,6 +794,58 @@ describe("an XML upload in Importações (decision 5.6)", () => {
   });
 });
 
+/**
+ * Decision D-36 (14/11/2026): the matriz and the filial share the corporate
+ * name and have different CNPJs. The import never merges two CNPJs, and the
+ * shipper's name is unique per company, so the filial's first note was
+ * refused with NFE_ISSUER_NAME_TAKEN. It now gets a shipper of its own,
+ * named with the CNPJ's branch suffix.
+ */
+describe("a matriz and a filial with the same name in one upload", () => {
+  it("creates two shippers and links each note to its own", async () => {
+    const response = await call(
+      "POST",
+      `/delivery/import-xml/${CARRIER}`,
+      tokens.admin,
+      {
+        files: [
+          {
+            filename: "matriz.xml",
+            content: nfe(KEY(80), "33444555000181", "Magazine Horizonte"),
+          },
+          {
+            filename: "filial.xml",
+            content: nfe(KEY(81), "33444555000262", "Magazine Horizonte"),
+          },
+        ],
+      },
+    );
+
+    expect(response.statusCode, response.body).toBe(200);
+
+    const summary = JSON.parse(response.body).data;
+
+    expect(summary.imported).toBe(2);
+    expect(summary.created_shippers).toEqual([
+      "Magazine Horizonte",
+      "Magazine Horizonte (0002-62)",
+    ]);
+
+    const filial = await prisma.shipper.findFirstOrThrow({
+      where: { businessId: CARRIER, cnpj: "33444555000262" },
+    });
+
+    expect(filial.name).toBe("Magazine Horizonte (0002-62)");
+    expect(
+      (
+        await prisma.delivery.findFirstOrThrow({
+          where: { businessId: CARRIER, invoice_key: KEY(81) },
+        })
+      ).shipperId,
+    ).toBe(filial.id);
+  });
+});
+
 describe("the recipient's e-mail from an NF-e", () => {
   // dest/email went into the column unchecked and reached nodemailer's
   // address parser on every customer notice. Now each ";" or "," entry is

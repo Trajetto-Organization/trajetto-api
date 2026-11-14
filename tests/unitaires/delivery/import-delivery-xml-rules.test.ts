@@ -217,7 +217,10 @@ describe("a deactivated shipper takes no new notes", () => {
 });
 
 describe("matching the issuer", () => {
-  it("does not merge a filial into a shipper of the same name with another CNPJ", async () => {
+  // Decision D-36 (14/11/2026): the filial's note was refused with
+  // NFE_ISSUER_NAME_TAKEN. It gets a shipper of its own, the name kept
+  // unique by the CNPJ's branch suffix.
+  it("gives a filial its own shipper, named with the CNPJ's branch suffix", async () => {
     shippers.shippers.push({
       id: "018f0000-0000-7000-8000-0000000009f3",
       name: "Industria Alimentos LTDA",
@@ -228,7 +231,57 @@ describe("matching the issuer", () => {
 
     const summary = await importing([KEY_ONE]);
 
-    // The name is taken by another fiscal identity: the operator chooses.
+    expect(summary.imported).toBe(1);
+    expect(summary.created_shippers).toEqual([
+      "Industria Alimentos LTDA (0001-99)",
+    ]);
+
+    const filial = shippers.shippers.find(
+      (shipper) => shipper.cnpj === ISSUER_CNPJ,
+    );
+
+    expect(filial?.name).toBe("Industria Alimentos LTDA (0001-99)");
+    // Never merged into the matriz.
+    expect(deliveries.deliveries[0].shipperId).toBe(filial?.id);
+  });
+
+  it("matches the name in any case before naming the filial", async () => {
+    shippers.shippers.push({
+      id: "018f0000-0000-7000-8000-0000000009f7",
+      name: "INDUSTRIA ALIMENTOS LTDA",
+      cnpj: "11222333000181",
+      businessId: BUSINESS,
+      is_active: true,
+    } as Shipper);
+
+    const summary = await importing([KEY_ONE]);
+
+    expect(summary.created_shippers).toEqual([
+      "Industria Alimentos LTDA (0001-99)",
+    ]);
+  });
+
+  it("still refuses the note when the suffixed name is taken too", async () => {
+    shippers.shippers.push(
+      {
+        id: "018f0000-0000-7000-8000-0000000009f3",
+        name: "Industria Alimentos LTDA",
+        cnpj: "11222333000181",
+        businessId: BUSINESS,
+        is_active: true,
+      } as Shipper,
+      {
+        id: "018f0000-0000-7000-8000-0000000009f8",
+        name: "Industria Alimentos LTDA (0001-99)",
+        cnpj: "44555666000177",
+        businessId: BUSINESS,
+        is_active: true,
+      } as Shipper,
+    );
+
+    const summary = await importing([KEY_ONE]);
+
+    // Neither name tells it apart: the operator chooses.
     expect(summary.invalid).toBe(1);
     expect(summary.results[0].message).toContain("outro CNPJ");
     expect(deliveries.deliveries).toEqual([]);
