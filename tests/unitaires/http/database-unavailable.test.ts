@@ -468,7 +468,7 @@ describe("the global error handler", () => {
       expect(response.headers["x-error-code"]).toBe("UNIQUE_CONFLICT");
       expect(response.json().code).toBe("UNIQUE_CONFLICT");
       expect(response.json().message).toMatch(
-        /^Já existe um registro com este valor nesta empresa/,
+        /^Já existe um registro com este valor/,
       );
       expect(response.headers["retry-after"]).toBeUndefined();
       expect(response.body).not.toMatch(/P2002|prisma|_key/i);

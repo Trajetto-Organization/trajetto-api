@@ -4044,7 +4044,12 @@ Regras de implementação que vieram dessa análise:
 - Piso no handler global (`src/http.ts`, lote de 14/11/2026): um P2002 (ou 23505) que nenhuma use case mapeou responde `409 UNIQUE_CONFLICT`, "Já
   existe um registro com este valor nesta empresa." com o rótulo do campo
   pela tabela pura `UNIQUE_FIELD_LABELS` (placa, CPF, CNPJ, e-mail, nome,
-  código, descrição…), nunca a linha do outro registro; um P2003 (ou 23503)
+  código, descrição…), quando conhecido, nunca a linha do outro registro.
+  O "nesta empresa" só sai quando a chave é da empresa (as colunas ou o
+  nome do índice levam `businessId`): numa chave global, como o e-mail do
+  usuário ou o CNPJ da filial, o outro registro pode ser de qualquer
+  empresa, e a frase fica "Já existe um registro com este valor (e-mail).",
+  sem dizer onde. Um P2003 (ou 23503)
   responde `409 RECORD_IN_USE` (no DELETE, "em uso por outros cadastros";
   nas outras escritas, "um cadastro ligado a este registro não existe
   mais"). Os dois escrevem um warn "Unmapped database conflict answered as

@@ -127,7 +127,7 @@ describe("prismaConflictFloor", () => {
     });
   });
 
-  it("says the sentence without a label for a key it cannot name", () => {
+  it("says the sentence without a label, and without a place, for a key it cannot read", () => {
     expect(
       prismaConflictFloor(
         new Prisma.PrismaClientKnownRequestError("dup", {
@@ -135,7 +135,22 @@ describe("prismaConflictFloor", () => {
           clientVersion: "test",
         }),
       )?.message,
-    ).toBe("Já existe um registro com este valor nesta empresa.");
+    ).toBe("Já existe um registro com este valor.");
+  });
+
+  // Review of the batch of 14/11/2026: the sentence said "nesta empresa"
+  // for every key, the user's e-mail and the branch CNPJ included, which
+  // are unique across companies: the other row may be in any of them.
+  it("says 'nesta empresa' only for a key of the company", () => {
+    expect(prismaConflictFloor(prisma7Unique("user_email_key"))?.message).toBe(
+      "Já existe um registro com este valor (e-mail).",
+    );
+    expect(prismaConflictFloor(prisma7Unique("branch_cnpj_key"))?.message).toBe(
+      "Já existe um registro com este valor (CNPJ).",
+    );
+    expect(
+      prismaConflictFloor(prisma7Unique("driver_businessId_cpf_key"))?.message,
+    ).toBe("Já existe um registro com este valor nesta empresa (CPF).");
   });
 
   it("reads a raw 23505 too (a $queryRaw, or a deferred check at COMMIT)", () => {

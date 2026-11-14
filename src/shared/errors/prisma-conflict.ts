@@ -74,12 +74,26 @@ function uniqueFieldLabel(error: unknown): string | null {
 }
 
 /**
+ * Whether the unique key is the company's: its columns or its index name
+ * carry businessId (`vehicle_businessId_license_plate_key`). A key that
+ * cannot be read counts as global, so "nesta empresa" is never said
+ * without the key showing it.
+ */
+function isCompanyKey(error: unknown): boolean {
+  return uniqueTargetText(error).includes("businessId");
+}
+
+/**
  * The floor for a conflict nobody mapped: the global handler answers it, and
  * so does conflictFromPrisma when a use case's map has no entry for it.
  *
  * - unique: 409 UNIQUE_CONFLICT, naming the field ("placa") and never the
  *   row it collided with — that row may be another company's (a global key
- *   like the branch CNPJ), and the message must not confirm it exists;
+ *   like the branch CNPJ), and the message must not confirm it exists. It
+ *   says "nesta empresa" only for a key of the company (isCompanyKey): a
+ *   global key — the user's e-mail, the branch CNPJ — collides with any
+ *   company's row, and "nesta empresa" would be false there; without it,
+ *   the sentence still says nothing of where the other row is;
  * - foreign key: 409 RECORD_IN_USE. On a delete, the row is still in use; on
  *   any other write, what it points to is gone (deleted in between).
  *
@@ -91,11 +105,10 @@ function prismaConflictFloor(
 ): AppError | null {
   if (isUniqueConflict(error)) {
     const label = uniqueFieldLabel(error);
+    const where = isCompanyKey(error) ? " nesta empresa" : "";
 
     return new AppError(
-      label
-        ? `Já existe um registro com este valor nesta empresa (${label}).`
-        : "Já existe um registro com este valor nesta empresa.",
+      `Já existe um registro com este valor${where}${label ? ` (${label})` : ""}.`,
       409,
       "UNIQUE_CONFLICT",
     );
