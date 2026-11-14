@@ -80,6 +80,16 @@ interface IDriverRepository {
 
   /** Pauses on the driver's record (DriverPause, RESTRICT on delete). */
   countDriverPauses: (driverId: string) => Promise<number>;
+
+  /**
+   * The driver's conversation with the office: the messages of their chat
+   * thread (whoever sent them) and the support tickets opened on it. The
+   * thread is CASCADE on the driver, so a delete erased both without a word
+   * (decision D-39); they count as history now.
+   */
+  countDriverConversation: (
+    driverId: string,
+  ) => Promise<{ chatMessages: number; supportTickets: number }>;
 }
 
 export { IDriverRepository };

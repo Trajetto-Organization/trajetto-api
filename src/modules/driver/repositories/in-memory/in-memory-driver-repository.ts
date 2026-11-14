@@ -59,6 +59,15 @@ interface PauseMirror {
   driverId: string;
 }
 
+/**
+ * A row of the driver's conversation: a message of their chat thread or a
+ * support ticket opened on it (in Postgres, reached through the thread).
+ */
+interface ConversationMirror {
+  driverId: string;
+  kind: "chatMessages" | "supportTickets";
+}
+
 function uniqueViolation(
   field: "cpf" | "cnh",
 ): Prisma.PrismaClientKnownRequestError {
@@ -84,6 +93,9 @@ class InMemoryDriverRepository implements IDriverRepository {
 
   /** Branch owner by id, so the facet labels stay inside the company like the real lookup. */
   public branchBusiness = new Map<string, string>();
+
+  /** The conversation rows the delete guard counts (decision D-39). */
+  public conversation: ConversationMirror[] = [];
 
   constructor(
     public routes: RouteMirror[] = [],
@@ -349,11 +361,12 @@ class InMemoryDriverRepository implements IDriverRepository {
     }
 
     // The real delete counts the history again under the driver row's lock;
-    // this twin re-counts what it mirrors (routes and pauses).
+    // this twin re-counts what it mirrors (routes, pauses, conversation).
     const refusal = driverHistoryRefusal({
       ...NO_DRIVER_HISTORY,
       routes: this.routes.filter((route) => route.driverId === driverId).length,
       pauses: this.pauses.filter((pause) => pause.driverId === driverId).length,
+      ...(await this.countDriverConversation(driverId)),
     });
 
     if (refusal) throw refusal;
@@ -539,6 +552,17 @@ class InMemoryDriverRepository implements IDriverRepository {
 
   async countDriverPauses(driverId: string): Promise<number> {
     return this.pauses.filter((pause) => pause.driverId === driverId).length;
+  }
+
+  async countDriverConversation(
+    driverId: string,
+  ): Promise<{ chatMessages: number; supportTickets: number }> {
+    const own = this.conversation.filter((row) => row.driverId === driverId);
+
+    return {
+      chatMessages: own.filter((row) => row.kind === "chatMessages").length,
+      supportTickets: own.filter((row) => row.kind === "supportTickets").length,
+    };
   }
 }
 

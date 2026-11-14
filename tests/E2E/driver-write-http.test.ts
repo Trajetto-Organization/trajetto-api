@@ -534,6 +534,94 @@ describe("deleting a driver", () => {
     expect((await remove(id, CARRIER)).statusCode).toBe(200);
     expect(await prisma.driver.findUnique({ where: { id } })).toBeNull();
   });
+
+  /** A staff or app login, written straight to the table. */
+  async function loginRow(driverId?: string): Promise<string> {
+    const id = randomUUID();
+
+    await prisma.user.create({
+      data: {
+        id,
+        name: `Login ${id.slice(0, 4)}`,
+        email: `${id}@exemplo.com.br`,
+        password: "not-used-here",
+        role: driverId ? "BUSINESS_USER" : "BUSINESS_ADMIN",
+        businessId: CARRIER,
+        driverId: driverId ?? null,
+      },
+    });
+
+    return id;
+  }
+
+  // Batch of 14/11/2026: with the login checked first, the operator was sent
+  // to remove the login, which refused with "revoke"; only the third try
+  // said "deactivate", which also locks the login out.
+  it("with a login and a route answers DRIVER_HAS_OPERATION first, pointing at deactivation", async () => {
+    const payload = body();
+    await create(CARRIER, payload);
+    const id = await createdId(CARRIER, payload);
+
+    await loginRow(id);
+    await seedRoute(id, "COMPLETED");
+
+    const response = await remove(id, CARRIER);
+
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toMatchObject({ code: "DRIVER_HAS_OPERATION" });
+    expect(response.json().message).toContain("1 rota(s)");
+    expect(response.json().message).toContain(
+      "o login dele deixa de entrar no app",
+    );
+  });
+
+  it("with only a login answers DRIVER_HAS_USER, naming the Usuários screen", async () => {
+    const payload = body();
+    await create(CARRIER, payload);
+    const id = await createdId(CARRIER, payload);
+
+    await loginRow(id);
+
+    const response = await remove(id, CARRIER);
+
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toMatchObject({
+      code: "DRIVER_HAS_USER",
+      message:
+        "Este motorista tem um login do app. Exclua esse login na tela Usuários antes de excluir o motorista.",
+    });
+  });
+
+  // Decision D-39: the chat thread is CASCADE, so deleting a driver without
+  // a login erased the conversation and its tickets without a word.
+  it("without a login but with a conversation is refused, and the messages stay", async () => {
+    const payload = body();
+    await create(CARRIER, payload);
+    const id = await createdId(CARRIER, payload);
+
+    const sender = await loginRow();
+    const thread = await prisma.chatThread.create({
+      data: { businessId: CARRIER, driverId: id },
+    });
+
+    await prisma.chatMessage.create({
+      data: {
+        kind: "TEXT",
+        body: "Chegou bem?",
+        threadId: thread.id,
+        senderId: sender,
+      },
+    });
+
+    const response = await remove(id, CARRIER);
+
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toMatchObject({ code: "DRIVER_HAS_OPERATION" });
+    expect(response.json().message).toContain("1 mensagem(ns) no chat");
+    expect(
+      await prisma.chatMessage.count({ where: { threadId: thread.id } }),
+    ).toBe(1);
+  });
 });
 
 /**

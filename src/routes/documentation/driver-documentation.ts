@@ -155,7 +155,7 @@ const driverResponses = {
     "DRIVER_CPF_ALREADY_EXISTS ou DRIVER_CNH_ALREADY_EXISTS: o CPF ou a CNH já é de outro motorista DESTA empresa (são únicos por empresa; a mensagem nunca fala de outra). Na edição, também DRIVER_HAS_OPEN_ROUTES: inativar um motorista com rota planejada, liberada ou em andamento é recusado, com a contagem na mensagem.",
   ),
   deleteConflicts: errorResponse.describe(
-    "O motorista tem histórico: DRIVER_HAS_USER, DRIVER_HAS_FINES, DRIVER_HAS_FUELS, DRIVER_HAS_CHECKLISTS, DRIVER_HAS_OPERATION (entregas ou rotas) ou DRIVER_HAS_PAUSES. Inative-o em vez de excluir.",
+    "O motorista tem histórico, e a resposta é o primeiro motivo encontrado, com a quantidade: DRIVER_HAS_FINES, DRIVER_HAS_FUELS, DRIVER_HAS_CHECKLISTS, DRIVER_HAS_OPERATION (entregas, rotas, mensagens do chat ou atendimentos) ou DRIVER_HAS_PAUSES; inative-o em vez de excluir (o login dele também deixa de entrar no app). Por último, DRIVER_HAS_USER: o motorista sem histórico ainda tem um login do app, que se exclui na tela Usuários antes.",
   ),
   exportErrors: errorResponse.describe(
     "NOTHING_TO_EXPORT (nenhum motorista na busca e nos filtros), BUSINESS_NOT_IDENTIFIED (MASTER sem `businessId`) ou VALIDATION_ERROR.",

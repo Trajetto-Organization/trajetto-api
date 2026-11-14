@@ -709,6 +709,55 @@ describe("the delete re-checks the history itself", () => {
     },
   );
 
+  // Decision D-39: the chat thread is CASCADE on the driver, so the delete
+  // erased the conversation without a word. It counts as history now, on
+  // the use case's count and on the recount under the lock.
+  it.each(both)(
+    "counts the conversation and refuses a driver who only talked (%s)",
+    async (label, repo) => {
+      const driverId = label === "prisma" ? accentedIds[4] : accentedIds[5];
+
+      if (label === "prisma") {
+        const sender = await prisma.user.create({
+          data: {
+            name: "Despachante",
+            email: `${randomUUID()}@exemplo.com.br`,
+            password: "not-used-here",
+            role: "BUSINESS_ADMIN",
+            businessId: C,
+          },
+        });
+        const thread = await prisma.chatThread.create({
+          data: { businessId: C, driverId },
+        });
+
+        await prisma.chatMessage.createMany({
+          data: [1, 2].map(() => ({
+            kind: "TEXT" as const,
+            body: "Pode seguir.",
+            threadId: thread.id,
+            senderId: sender.id,
+          })),
+        });
+      } else {
+        memoryRepo.conversation.push(
+          { driverId, kind: "chatMessages" },
+          { driverId, kind: "chatMessages" },
+        );
+      }
+
+      expect(await repo.countDriverConversation(driverId)).toEqual({
+        chatMessages: 2,
+        supportTickets: 0,
+      });
+      await expect(repo.deleteDriver(driverId)).rejects.toMatchObject({
+        code: "DRIVER_HAS_OPERATION",
+        statusCode: 409,
+      });
+      expect(await repo.findDriverById(driverId)).not.toBeNull();
+    },
+  );
+
   it.each(both)(
     "deletes a driver without history (%s)",
     async (label, repo) => {

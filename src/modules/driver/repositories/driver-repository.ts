@@ -73,7 +73,8 @@ async function openRoutesOf(
 
 /**
  * Every row that still points at the driver, in one round trip. Each table
- * has an index leading with driverId.
+ * has an index leading with driverId (the chat messages through the thread's
+ * own driverId index, then the messages' threadId one).
  */
 async function driverHistoryOf(
   client: Client,
@@ -87,7 +88,11 @@ async function driverHistoryOf(
       (SELECT count(*) FROM "vehicle_checklist" WHERE "driverId" = ${driverId})::int AS "checklists",
       (SELECT count(*) FROM "delivery"          WHERE "driverId" = ${driverId})::int AS "deliveries",
       (SELECT count(*) FROM "route"             WHERE "driverId" = ${driverId})::int AS "routes",
-      (SELECT count(*) FROM "driver_pause"      WHERE "driverId" = ${driverId})::int AS "pauses"
+      (SELECT count(*) FROM "driver_pause"      WHERE "driverId" = ${driverId})::int AS "pauses",
+      (SELECT count(*) FROM "chat_message" m
+         JOIN "chat_thread" t ON t."id" = m."threadId"
+        WHERE t."driverId" = ${driverId})::int AS "chatMessages",
+      (SELECT count(*) FROM "support_ticket"    WHERE "driverId" = ${driverId})::int AS "supportTickets"
   `;
 
   return row ?? { ...NO_DRIVER_HISTORY };
@@ -205,7 +210,10 @@ class DriverRepository implements IDriverRepository {
      * NULL without a word. Any row that points at the driver takes the
      * driver row's KEY SHARE lock through its foreign key, so it either
      * committed before this lock (and is counted here) or waits for the
-     * delete and then fails on its own key.
+     * delete and then fails on its own key. A message added to a thread
+     * that already exists points at the thread, not at the driver: one that
+     * lands between this count and the DELETE still goes with the thread:
+     * a window of milliseconds, where every message used to go unannounced.
      */
     return this.prisma.$transaction(async (tx) => {
       const [locked] = await tx.$queryRaw<Array<{ id: string }>>`
@@ -436,6 +444,17 @@ class DriverRepository implements IDriverRepository {
 
   async countDriverPauses(driverId: string): Promise<number> {
     return this.prisma.driverPause.count({ where: { driverId } });
+  }
+
+  async countDriverConversation(
+    driverId: string,
+  ): Promise<{ chatMessages: number; supportTickets: number }> {
+    const { chatMessages, supportTickets } = await driverHistoryOf(
+      this.prisma,
+      driverId,
+    );
+
+    return { chatMessages, supportTickets };
   }
 }
 

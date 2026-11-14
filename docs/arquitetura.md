@@ -2425,6 +2425,20 @@ o caminho que resolve.
   trabalho dos dois ficaria misturado. Sem histórico, a troca continua como
   antes. As duas checagens vêm antes da transação que anula o QR Code e os
   aparelhos do motorista anterior: a recusa não muda nada.
+- **Excluir um motorista** (`DELETE /driver/delete-driver/...`): a regra pura
+  `driverHistoryRefusal` responde o primeiro motivo, com a quantidade, e o
+  trabalho vem antes do login: multas, abastecimentos, checklists,
+  operação (`DRIVER_HAS_OPERATION`: entregas, rotas e, pela decisão D-39, as
+  mensagens do chat e os atendimentos) e pausas. Com histórico, a resposta é
+  inativar, que também impede o login dele de entrar no app. Antes, o login
+  vinha primeiro: a pessoa ouvia "desvincule o usuário", o login recusava
+  com `USER_HAS_RECORDS` ("revogue") e só a terceira tentativa dizia
+  "inative". `DRIVER_HAS_USER` ficou para o motorista sem histórico com um
+  login do app: "Exclua esse login na tela Usuários antes de excluir o
+  motorista." A conversa contava como nada: a `chat_thread` é CASCADE no
+  motorista e levava as mensagens e os atendimentos sem aviso. A recontagem
+  sob a trava da linha do motorista (`deleteDriver`) usa a mesma função e
+  conta a conversa também.
 - **Compatibilidade:** os códigos que a web e o app leem continuam os mesmos;
   `USER_DRIVER_LOCKED` é novo e chega ao toast da web antiga com a mensagem
   da API.

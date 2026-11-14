@@ -275,24 +275,61 @@ describe("driverHistoryRefusal", () => {
     expect(refusal?.message).toContain("2 registro(s) de abastecimento");
   });
 
-  it("puts an app account before everything, and deliveries and routes together", () => {
+  // Batch of 14/11/2026: the app account used to come first, so a driver who
+  // had worked heard "remove the login", the login then refused with
+  // USER_HAS_RECORDS ("revoke"), and only the third try said "deactivate" —
+  // which also locks the login out. The work answers first now.
+  it("puts the work before the app account, and deliveries and routes together", () => {
     expect(
       driverHistoryRefusal({ ...NO_DRIVER_HISTORY, users: 1, fines: 3 })?.code,
-    ).toBe("DRIVER_HAS_USER");
+    ).toBe("DRIVER_HAS_FINES");
 
     const operation = driverHistoryRefusal({
       ...NO_DRIVER_HISTORY,
-      deliveries: 4,
-      routes: 1,
+      users: 1,
+      routes: 2,
     });
 
     expect(operation?.code).toBe("DRIVER_HAS_OPERATION");
-    expect(operation?.message).toContain("4 entrega(s) e 1 rota(s)");
+    expect(operation?.message).toContain("2 rota(s)");
+    expect(operation?.message).toContain("o login dele deixa de entrar no app");
+
+    expect(
+      driverHistoryRefusal({ ...NO_DRIVER_HISTORY, deliveries: 4, routes: 1 })
+        ?.message,
+    ).toContain("4 entrega(s) e 1 rota(s)");
   });
 
-  it("refuses pauses last, as the legal record of the workday", () => {
+  it("answers the app account only when it is all there is, and says where it lives", () => {
+    const login = driverHistoryRefusal({ ...NO_DRIVER_HISTORY, users: 1 });
+
+    expect(login?.code).toBe("DRIVER_HAS_USER");
+    expect(login?.message).toBe(
+      "Este motorista tem um login do app. Exclua esse login na tela Usuários antes de excluir o motorista.",
+    );
+  });
+
+  // Decision D-39: the chat thread is CASCADE, so the conversation went with
+  // the driver without a word.
+  it("counts the conversation as operation history", () => {
+    const refusal = driverHistoryRefusal({
+      ...NO_DRIVER_HISTORY,
+      chatMessages: 12,
+      supportTickets: 1,
+    });
+
+    expect(refusal?.code).toBe("DRIVER_HAS_OPERATION");
+    expect(refusal?.message).toContain(
+      "12 mensagem(ns) no chat e 1 atendimento(s)",
+    );
+  });
+
+  it("refuses pauses after the rest of the work, before the app account", () => {
     expect(
       driverHistoryRefusal({ ...NO_DRIVER_HISTORY, pauses: 1 })?.code,
+    ).toBe("DRIVER_HAS_PAUSES");
+    expect(
+      driverHistoryRefusal({ ...NO_DRIVER_HISTORY, pauses: 1, users: 1 })?.code,
     ).toBe("DRIVER_HAS_PAUSES");
   });
 });

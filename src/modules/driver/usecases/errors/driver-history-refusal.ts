@@ -9,9 +9,12 @@ import { DriverHasAssociatedPausesError } from "./driver-has-associated-pauses-e
 
 /**
  * Rows that still point at a driver and keep them from being deleted: an app
- * account, fines, fuelings, checklists, deliveries, routes and pauses. Each
- * is either a RESTRICT key (the delete would fail) or an optional one the
- * delete would silently set to NULL (whose work it was is lost).
+ * account, fines, fuelings, checklists, deliveries, routes, pauses and the
+ * conversation (chat messages and support tickets). Each is either a
+ * RESTRICT key (the delete would fail), an optional one the delete would
+ * silently set to NULL (whose work it was is lost) or, for the conversation,
+ * a CASCADE through the chat thread that erased it without a word (decision
+ * D-39, 14/11/2026).
  */
 interface DriverHistoryCounts {
   users: number;
@@ -21,6 +24,10 @@ interface DriverHistoryCounts {
   deliveries: number;
   routes: number;
   pauses: number;
+  /** Messages in the driver's chat thread, whoever sent them. */
+  chatMessages: number;
+  /** Support tickets opened on the driver's thread. */
+  supportTickets: number;
 }
 
 const NO_DRIVER_HISTORY: DriverHistoryCounts = {
@@ -31,17 +38,23 @@ const NO_DRIVER_HISTORY: DriverHistoryCounts = {
   deliveries: 0,
   routes: 0,
   pauses: 0,
+  chatMessages: 0,
+  supportTickets: 0,
 };
 
 /**
- * The refusal for the first kind of history found, in the order the delete
- * dialog lists them, or null when the driver has none. The use case asks it
- * before deleting, and the repository asks it again under the driver row's
- * lock, so both answers are the same 409.
+ * The refusal for the first kind of history found, or null when the driver
+ * has none. The use case asks it before deleting, and the repository asks it
+ * again under the driver row's lock, so both answers are the same 409.
+ *
+ * The work comes first and the app account last (batch of 14/11/2026). With
+ * the account first, a driver who had worked heard "remove the login", then
+ * the login refused with USER_HAS_RECORDS ("revoke"), and only the third try
+ * said the right thing: deactivate — which also locks the login out. The
+ * account alone is the one case where deleting is right: a driver registered
+ * by mistake whose login never did anything.
  */
 function driverHistoryRefusal(counts: DriverHistoryCounts): AppError | null {
-  if (counts.users > 0) return new DriverHasAssociatedUserError();
-
   if (counts.fines > 0) return new DriverHasAssociatedFinesError(counts.fines);
 
   if (counts.fuels > 0) return new DriverHasAssociatedFuelError(counts.fuels);
@@ -50,15 +63,24 @@ function driverHistoryRefusal(counts: DriverHistoryCounts): AppError | null {
     return new DriverHasAssociatedChecklistsError(counts.checklists);
   }
 
-  if (counts.deliveries > 0 || counts.routes > 0) {
+  if (
+    counts.deliveries > 0 ||
+    counts.routes > 0 ||
+    counts.chatMessages > 0 ||
+    counts.supportTickets > 0
+  ) {
     return new DriverHasAssociatedOperationError(
       counts.deliveries,
       counts.routes,
+      counts.chatMessages,
+      counts.supportTickets,
     );
   }
 
   if (counts.pauses > 0)
     return new DriverHasAssociatedPausesError(counts.pauses);
+
+  if (counts.users > 0) return new DriverHasAssociatedUserError();
 
   return null;
 }
