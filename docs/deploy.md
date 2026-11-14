@@ -3168,7 +3168,8 @@ mão, pelo roteiro no comentário da migration, e ela não faz nada.
   (no desenvolvimento, `yarn deliveries:address-key`). Ele lê todas as
   entregas em lotes de 1.000, cada um com `lock_timeout = '5s'`, grava a
   chave onde ela falta ou está velha e dá uma vez o ponto de cada porta às
-  entregas abertas dela ainda sem ponto. A última linha diz quantas chaves e
+  entregas abertas dela ainda sem ponto, cada porta numa transação com o
+  mesmo `lock_timeout`. A última linha diz quantas chaves e
   quantas entregas. Se um lote estourar o `lock_timeout`, é só rodar de
   novo: ele é idempotente e termina o resto.
 - **Rollback para antes desta imagem: rode o backfill de novo** quando a

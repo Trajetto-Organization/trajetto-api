@@ -18,9 +18,10 @@ import { backfillDeliveryAddressKeys } from "@/shared/delivery/address-key-backf
  * is recomputed here (the run reads every delivery and writes the keys
  * that differ).
  *
- * Batches of 1,000 rows, each under lock_timeout = 5s. Idempotent — a right
- * key and a located delivery are left alone — so a re-run (after a lock
- * timeout, say) is always safe and finishes the rest.
+ * Batches of 1,000 rows, and then one write per door, each in its own
+ * transaction under lock_timeout = 5s. Idempotent — a right key and a
+ * located delivery are left alone — so a re-run (after a lock timeout,
+ * say) is always safe and finishes the rest.
  */
 async function main(): Promise<void> {
   const report = await backfillDeliveryAddressKeys(database, {

@@ -25,7 +25,8 @@ import {
  * 2. the propagation, once: every open delivery without a point whose door
  *    has a point another delivery may give (a pin first, then the newest)
  *    takes it, by the same guarded write as the pin's
- *    (address-point-propagation.ts). This is what locates today's
+ *    (address-point-propagation.ts), each door's write in its own
+ *    transaction under lock_timeout too. This is what locates today's
  *    "Rua Doutor Lipold".
  *
  * A row edited between the batch's read and its write is left alone: the
@@ -203,7 +204,16 @@ async function propagateStoredPoints(
 
       if (!point) continue;
 
-      const written = await writePointToDoor(client, door, point);
+      // Each door's write under the same 5 s bound as step 1's batches: a
+      // bare autocommit UPDATE would wait without limit behind a long
+      // transaction holding one of the door's rows.
+      const written = await client.$transaction(
+        async (tx: Prisma.TransactionClient) => {
+          await tx.$executeRaw`SET LOCAL lock_timeout = '5s'`;
+
+          return writePointToDoor(tx, door, point);
+        },
+      );
 
       if (written.length > 0) {
         report.doors += 1;

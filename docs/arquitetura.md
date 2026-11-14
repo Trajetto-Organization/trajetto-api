@@ -1573,7 +1573,8 @@ chave da pausa guarda o motivo junto do prazo (`REFUSED`, `QUOTA` ou
     backfill roda de novo quando a imagem nova volta). O `UPDATE` confere
     o endereço (um `md5` das colunas) e a chave que o lote leu: a edição
     feita no meio do lote vence. Depois roda uma vez a mesma propagação
-    para os pontos já gravados, o que localiza as entregas de hoje (a da
+    para os pontos já gravados, cada porta numa transação com o mesmo
+    `lock_timeout`, o que localiza as entregas de hoje (a da
     Rua Doutor Lipold inclusive). Idempotente: rodar de novo termina o que
     faltou e não grava nada.
 - Orçamento: `DELIVERY_GEOCODING_DAILY_BUDGET` consultas por dia (UTC),
