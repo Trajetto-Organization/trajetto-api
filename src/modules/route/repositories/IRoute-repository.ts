@@ -413,6 +413,18 @@ interface IRouteRepository {
   ) => Promise<PinnedLocation | null>;
 
   /**
+   * After a pin's commit (14/11/2026, decision D-24): the company's other
+   * open deliveries (PENDING, IN_TRANSIT) at the pinned delivery's address
+   * key, still without a point and a source, take the pin as GEOCODER
+   * (address-point-propagation.ts). Never over a point, never another
+   * company's, never the pinned delivery itself. The ids written.
+   */
+  propagateAddressPoint: (
+    deliveryId: string,
+    businessId: string,
+  ) => Promise<string[]>;
+
+  /**
    * Which route holds each of these deliveries right now (an open stop),
    * through the route's tenant. Deliveries on no route are absent.
    */

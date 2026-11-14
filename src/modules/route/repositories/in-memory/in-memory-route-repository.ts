@@ -19,6 +19,9 @@ import {
   ROUTE_STOP_COLUMN_DEFAULTS,
 } from "@/shared/in-memory/column-defaults";
 import { asDateColumn } from "@/shared/in-memory/date-column";
+import { deliveryAddressKey } from "@/shared/delivery/address-key";
+import { pickReusablePoint } from "@/shared/delivery/geocoding/address-point-reuse";
+import { takesDoorPoint } from "@/shared/delivery/geocoding/address-point-propagation";
 import { matchesIdSearch } from "@/shared/pagination/id-search";
 import {
   compareForOrder,
@@ -205,6 +208,11 @@ interface DeliveryMirror {
   street?: string;
   shipperId?: string;
   created_at?: Date | string;
+
+  /** The rest of the address and its key, for the pin's propagation. */
+  address_number?: string | null;
+  neighborhood?: string | null;
+  address_key?: string | null;
 
   /** The address point (D7). */
   latitude?: number | null;
@@ -1803,6 +1811,42 @@ class InMemoryRouteRepository implements IRouteRepository {
           ? { routeId: route.id, driverId: route.driverId }
           : null,
     };
+  }
+
+  async propagateAddressPoint(
+    deliveryId: string,
+    businessId: string,
+  ): Promise<string[]> {
+    const pinned = this.deliveries.find(
+      (entry) => entry.id === deliveryId && entry.businessId === businessId,
+    );
+
+    if (!pinned) return [];
+
+    const addressKey = pinned.address_key ?? deliveryAddressKey(pinned);
+    const point = pickReusablePoint(
+      [
+        {
+          latitude: pinned.latitude ?? null,
+          longitude: pinned.longitude ?? null,
+          geo_source: pinned.geo_source ?? null,
+          geo_precision: pinned.geo_precision ?? null,
+          geo_updated_at: pinned.geo_updated_at ?? null,
+        },
+      ],
+      new Date(),
+    );
+
+    if (!addressKey || !point) return [];
+
+    const door = { businessId, addressKey, exceptId: deliveryId };
+    const taken = this.deliveries.filter((entry) =>
+      takesDoorPoint(entry, door),
+    );
+
+    for (const entry of taken) Object.assign(entry, point);
+
+    return taken.map((entry) => entry.id!);
   }
 
   async findOpenStopRoutes(

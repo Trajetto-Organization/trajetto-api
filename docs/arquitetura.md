@@ -1502,8 +1502,31 @@ chave da pausa guarda o motivo junto do prazo (`REFUSED`, `QUOTA` ou
     `delivery addresses geocoded` conta `reused`. Endereço repetido deixa de
     gastar a cota do LocationIQ. A reserva continua limitada ao orçamento
     que resta: com o dia gasto, nada é reservado, nem para reaproveitar.
+  - **O pino vale para as outras entregas da porta (D-24).** Depois do
+    commit do "Fixar no mapa", as outras entregas abertas (`PENDING`,
+    `IN_TRANSIT`) da mesma empresa e da mesma chave, ainda sem ponto e sem
+    origem, em qualquer `geocode_status` (um `NOT_FOUND` ou um `COARSE`
+    inclusive), recebem o pino como `GEOCODER`, pelo mesmo `UPDATE` com
+    guardas (`writePointToDoor`,
+    `shared/delivery/geocoding/address-point-propagation.ts`): nunca sobre
+    um ponto, nunca na entrega fixada, nunca numa entrega encerrada, sem
+    mexer em `updated_at` (não é edição do cliente, e o `updated_since` da
+    API pública não a lista). Depois vem o `announceSettledLookups`, sem
+    `plan_version`, como um ponto achado pelo geocodificador: a página da
+    rota de cada uma relê, e o motorista de rota liberada ou em andamento
+    recebe `route-stop.located`. A resposta traz `propagated: n`. Uma falha
+    aqui só registra `warn` ("pin not propagated…"): o pino já está
+    gravado, e o job reaproveita o ponto na próxima reserva delas. Apagar o
+    pino não desfaz as cópias.
   - Toda leitura filtra `businessId`: a chave nunca cruza empresas. As
-    linhas de antes ficam com a chave nula até o backfill do dono.
+    linhas de antes ficam com a chave nula até o backfill do dono
+    (`infra/scripts/backfill-delivery-address-key.ts`, sobre
+    `shared/delivery/address-key-backfill.ts`, D-25): grava a chave de toda
+    entrega que ainda não tem, em lotes de 1.000 por id, cada lote numa
+    transação com `lock_timeout = '5s'`, e roda uma vez a mesma propagação
+    para os pontos já gravados, o que localiza as entregas de hoje (a da
+    Rua Doutor Lipold inclusive). Idempotente: rodar de novo termina o que
+    faltou e não refaz nada.
 - Orçamento: `DELIVERY_GEOCODING_DAILY_BUDGET` consultas por dia (UTC),
   somando as réplicas e os dois caminhos, num contador de janela fixa no
   Redis (`shared/delivery/geocoding/geocoding-budget.ts`). Ao contrário dos

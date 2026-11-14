@@ -11,9 +11,9 @@ import { deliveryAddressKey } from "@/shared/delivery/address-key";
 
 import {
   pickReusablePoint,
-  type PointCandidate,
   type ReusedAddressPoint,
 } from "./address-point-reuse";
+import { readDoorCandidates } from "./address-point-propagation";
 
 import {
   GEOCODING_BACKOFF_CAP_MINUTES,
@@ -262,26 +262,13 @@ class DeliveryGeocodingRepository implements IDeliveryGeocodingRepository {
 
     if (!key) return null;
 
-    // The newest of each source at this door, on delivery_address_key_idx
-    // (the key's equality proves its predicate); the rule decides between
+    // The newest of each source at this door; the rule decides between
     // the two, as the twin decides over every row.
-    const candidates = await this.prisma.$queryRaw<PointCandidate[]>`
-      SELECT DISTINCT ON ("geo_source")
-        "latitude", "longitude", "geo_source", "geo_precision",
-        "geo_updated_at"
-      FROM "delivery"
-      WHERE "businessId" = ${claim.businessId}
-        AND "address_key" = ${key}
-        AND "id" <> ${claim.id}
-        AND "latitude" IS NOT NULL
-        AND "longitude" IS NOT NULL
-        AND (
-          "geo_source" = 'MANUAL'
-          OR ("geo_source" = 'GEOCODER'
-            AND "geo_precision" IN ('ADDRESS', 'STREET'))
-        )
-      ORDER BY "geo_source", "geo_updated_at" DESC NULLS LAST, "id" DESC
-    `;
+    const candidates = await readDoorCandidates(this.prisma, {
+      businessId: claim.businessId,
+      addressKey: key,
+      exceptId: claim.id,
+    });
 
     return pickReusablePoint(candidates, now);
   }

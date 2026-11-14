@@ -7,6 +7,8 @@ import {
   DeliveryNoLongerRoutableError,
 } from "@/modules/route/usecases/errors/route-errors";
 
+import { deliveryAddressKey } from "@/shared/delivery/address-key";
+
 import { expectPrismaCode, fixedId, type Kind } from "../support";
 
 /**
@@ -49,11 +51,42 @@ const F = ROUTE_FIXTURE;
 const D = F.deliveries;
 const MISSING = fixedId("0ede", 99);
 
+/** A delivery as stored, for the pin's propagation (14/11/2026). */
+interface DoorRow {
+  id: string;
+  businessId: string;
+  status: "PENDING" | "IN_TRANSIT" | "DELIVERED";
+  street: string;
+  address_number: string | null;
+  neighborhood: string | null;
+  city: string;
+  uf: string;
+  address_key: string | null;
+  latitude: number | null;
+  longitude: number | null;
+  geo_source: "MANUAL" | "GEOCODER" | null;
+  geo_precision: "ADDRESS" | "STREET" | null;
+  geo_updated_at: Date | null;
+  geocode_status: "RESOLVED" | "NOT_FOUND" | null;
+}
+
+/** The point columns of a delivery, read back the same way on both sides. */
+interface DoorPoint {
+  latitude: number | null;
+  longitude: number | null;
+  geo_source: string | null;
+  geo_precision: string | null;
+  geocode_status: string | null;
+}
+
 interface RouteHarness {
   kind: Kind;
   repo: IRouteRepository;
   /** The route ids created by seedRoutes, by key. */
   route(key: string): string;
+  /** Writes a delivery row as stored. */
+  seedDelivery(row: DoorRow): Promise<void>;
+  readPoint(id: string): Promise<DoorPoint>;
 }
 
 /** The plan every case reads, created through the repository. */
@@ -343,6 +376,113 @@ function routeRepositoryContract(harness: () => RouteHarness): void {
   });
 
   // Last: it puts a route on the street, which the reads above do not expect.
+  describe("propagateAddressPoint", () => {
+    // Owner's report of 14/11/2026 (decision D-24): the pin of one delivery
+    // reaches the company's other open deliveries at the same door still
+    // without a point — and nothing else.
+    const door = {
+      street: "Rua Doutor Lipold",
+      address_number: "10",
+      neighborhood: "Carangola",
+      city: "Petrópolis",
+      uf: "RJ",
+    };
+    const key = deliveryAddressKey(door);
+    const row = (id: string, extra: Partial<DoorRow> = {}): DoorRow => ({
+      id,
+      businessId: A,
+      status: "PENDING",
+      ...door,
+      address_key: key,
+      latitude: null,
+      longitude: null,
+      geo_source: null,
+      geo_precision: null,
+      geo_updated_at: null,
+      geocode_status: null,
+      ...extra,
+    });
+    const L = {
+      pinned: fixedId("0edf", 1),
+      sibling: fixedId("0edf", 2),
+      inTransit: fixedId("0edf", 3),
+      closed: fixedId("0edf", 4),
+      neighbour: fixedId("0edf", 5),
+      located: fixedId("0edf", 6),
+      theirs: fixedId("0edf", 7),
+      bare: fixedId("0edf", 8),
+    };
+
+    it("gives the pin, as GEOCODER, to the open deliveries at the door still without a point, once", async () => {
+      const h = harness();
+
+      for (const seeded of [
+        row(L.pinned, {
+          latitude: -22.4561,
+          longitude: -43.1702,
+          geo_source: "MANUAL",
+          geo_updated_at: new Date("2026-11-14T10:00:00.000Z"),
+        }),
+        row(L.sibling, { geocode_status: "NOT_FOUND" }),
+        row(L.inTransit, { status: "IN_TRANSIT" }),
+        row(L.closed, { status: "DELIVERED" }),
+        row(L.neighbour, {
+          address_number: "12",
+          address_key: deliveryAddressKey({ ...door, address_number: "12" }),
+        }),
+        row(L.located, {
+          latitude: -22.1,
+          longitude: -43.1,
+          geo_source: "GEOCODER",
+          geo_precision: "STREET",
+          geocode_status: "RESOLVED",
+        }),
+        row(L.theirs, { businessId: B }),
+      ]) {
+        await h.seedDelivery(seeded);
+      }
+
+      expect((await h.repo.propagateAddressPoint(L.pinned, A)).sort()).toEqual(
+        [L.sibling, L.inTransit].sort(),
+      );
+
+      for (const taken of [L.sibling, L.inTransit]) {
+        expect(await h.readPoint(taken)).toEqual({
+          latitude: -22.4561,
+          longitude: -43.1702,
+          geo_source: "GEOCODER",
+          geo_precision: "ADDRESS",
+          geocode_status: "RESOLVED",
+        });
+      }
+      for (const untouched of [L.closed, L.neighbour, L.theirs]) {
+        expect(await h.readPoint(untouched)).toMatchObject({
+          latitude: null,
+          geo_source: null,
+        });
+      }
+      expect(await h.readPoint(L.located)).toMatchObject({
+        latitude: -22.1,
+        geo_source: "GEOCODER",
+        geo_precision: "STREET",
+      });
+
+      // Nothing left without a point at the door, and never from another
+      // company's path.
+      expect(await h.repo.propagateAddressPoint(L.pinned, A)).toEqual([]);
+      expect(await h.repo.propagateAddressPoint(L.pinned, B)).toEqual([]);
+    });
+
+    it("gives nothing from a delivery without a point", async () => {
+      const h = harness();
+
+      await h.seedDelivery(row(L.bare, { address_key: null }));
+
+      expect(await h.repo.propagateAddressPoint(L.bare, A)).toEqual([]);
+      expect(await h.repo.propagateAddressPoint(MISSING, A)).toEqual([]);
+    });
+  });
+
   describe("findRunningRouteOfVehicle", () => {
     it("names the route the truck is out with, never the one asking nor another company's", async () => {
       const h = harness();
@@ -384,4 +524,4 @@ function routeRepositoryContract(harness: () => RouteHarness): void {
 }
 
 export { ROUTE_FIXTURE, routeRepositoryContract, seedRoutes };
-export type { RouteHarness };
+export type { DoorPoint, DoorRow, RouteHarness };

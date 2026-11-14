@@ -3153,8 +3153,21 @@ mão, pelo roteiro no comentário da migration, e ela não faz nada.
   número ou na rua) já nasce com o ponto, mesmo com o geocodificador
   desligado, e não gasta consulta do LocationIQ. Editar o endereço para uma
   porta já localizada faz o mesmo. Nunca entre empresas.
-- **As entregas de antes** ficam com a chave nula até o backfill único, que
-  vem com a propagação do pino.
+- **O pino vale para a porta toda.** O "Fixar no mapa" de uma entrega dá o
+  mesmo ponto às outras entregas abertas da empresa no mesmo endereço ainda
+  sem ponto (`propagated` na resposta; a web nova diz no toast quantas, a
+  anterior ignora o campo). Sem versão de plano nova para elas: a página da
+  rota relê pelo `routeStopsLocated`, e o app relê o dia pelo
+  `route-stop.located`, que todo build já trata.
+- **As entregas de antes** ficam com a chave nula até o backfill único. Depois
+  que a API com esta migration estiver no ar, primeiro no staging e depois na
+  produção, fora do pico, abra o terminal do contêiner da Application
+  `trajetto-api` no Dokploy e rode `node build/backfill-delivery-address-key.js`
+  (no desenvolvimento, `yarn deliveries:address-key`). Ele grava a chave em
+  lotes de 1.000, cada um com `lock_timeout = '5s'`, e dá uma vez o ponto de
+  cada porta às entregas abertas dela ainda sem ponto. A última linha diz
+  quantas chaves e quantas entregas. Se um lote estourar o `lock_timeout`, é
+  só rodar de novo: ele é idempotente e termina o resto.
 
 **Contract pendente (release seguinte): o 2FA sem corpo.** `PATCH
 /user/twofactor` sem corpo ainda inverte o estado, sem senha, só para a web

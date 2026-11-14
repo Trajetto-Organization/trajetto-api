@@ -55,6 +55,14 @@ const memory = new InMemoryRouteRepository(
 
 const routes: Partial<Record<Kind, Map<string, string>>> = {};
 
+const pointOf = (row: Record<string, unknown> | null | undefined) => ({
+  latitude: (row?.latitude as number | null) ?? null,
+  longitude: (row?.longitude as number | null) ?? null,
+  geo_source: (row?.geo_source as string | null) ?? null,
+  geo_precision: (row?.geo_precision as string | null) ?? null,
+  geocode_status: (row?.geocode_status as string | null) ?? null,
+});
+
 const harnessOf = (kind: Kind): RouteHarness => ({
   kind,
   repo: kind === "prisma" ? prismaRepo : memory,
@@ -62,6 +70,26 @@ const harnessOf = (kind: Kind): RouteHarness => ({
     const id = routes[kind]?.get(key);
     if (!id) throw new Error(`no route ${key}`);
     return id;
+  },
+  async seedDelivery(row) {
+    if (kind === "prisma") {
+      await prisma.delivery.create({
+        data: {
+          ...row,
+          recipient_name: `Cliente ${row.id}`,
+          shipperId: row.businessId === F.B ? SHIPPER_B : SHIPPER_A,
+        },
+      });
+    } else {
+      memory.deliveries.push({ ...row });
+    }
+  },
+  async readPoint(id) {
+    return pointOf(
+      kind === "prisma"
+        ? ((await prisma.delivery.findUnique({ where: { id } })) as never)
+        : (memory.deliveries.find((row) => row.id === id) as never),
+    );
   },
 });
 

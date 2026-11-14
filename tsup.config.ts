@@ -15,6 +15,11 @@ export default defineConfig({
     // Run once in the production container after WEBHOOK_SECRETS_KEY is
     // set: seals the webhook credentials written before it.
     "seal-webhook-secrets": "./infra/scripts/seal-webhook-secrets.ts",
+    // Run once in the production container after the address key's
+    // migration (14/11/2026): keys the deliveries written before it and
+    // gives each door's point to its open deliveries still without one.
+    "backfill-delivery-address-key":
+      "./infra/scripts/backfill-delivery-address-key.ts",
     // The receipt renderer's worker thread. proof-pdf-renderer.ts loads it
     // from next to server.js (build/proof-pdf-worker.js) by this name.
     "proof-pdf-worker": "./src/shared/services/proof-pdf-worker.ts",

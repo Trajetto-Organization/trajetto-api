@@ -31,6 +31,7 @@
     "seed": "tsx infra/scripts/seed.ts",
     "seed:infringement": "tsx infra/scripts/import-violation-codes.ts",
     "webhooks:seal": "tsx infra/scripts/seal-webhook-secrets.ts",
+    "deliveries:address-key": "tsx infra/scripts/backfill-delivery-address-key.ts",
     "docs:whatsapp": "tsx scripts/generate-whatsapp-docs.ts",
     "ci": "yarn install --frozen-lockfile",
     "test": "vitest run --dir tests/unitaires",

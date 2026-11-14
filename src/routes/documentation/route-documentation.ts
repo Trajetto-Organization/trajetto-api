@@ -635,6 +635,12 @@ const routeResponses = {
         .describe(
           "A nova versão do plano dessa rota (o ponto faz parte do plano); nulo sem rota.",
         ),
+      propagated: z
+        .number()
+        .int()
+        .describe(
+          'Quantas outras entregas abertas (PENDING ou IN_TRANSIT) da mesma empresa, no mesmo endereço e ainda sem ponto, receberam este ponto agora, gravado como `GEOCODER` ("Pelo endereço"). 0 ao apagar o ponto, que não desfaz as cópias.',
+        ),
     }),
   }),
   unroutedDeliveries: z.object({

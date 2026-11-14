@@ -12,7 +12,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
  * tests/E2E/route-assignment-unit-http.test.ts.
  */
 const emitted: Array<{
-  room: "business" | "driver";
+  room: "business" | "driver" | "located";
   id: string | null;
   event: any;
 }> = [];
@@ -23,6 +23,10 @@ vi.mock("@/websocket", () => ({
   },
   sendRouteEventToDriver: (id: string | null, event: unknown) => {
     emitted.push({ room: "driver", id, event });
+  },
+  // The geocoder's hint to the operations room (geocoding-announcer.ts).
+  sendRouteStopsLocatedToBusiness: (id: string, event: unknown) => {
+    emitted.push({ room: "located", id, event });
   },
 }));
 
@@ -210,6 +214,37 @@ function makeContext() {
     setLocation: new SetDeliveryLocationUseCase(
       routeRepository,
       userRepository,
+      {
+        // The geocoder's open-stop read, over this context's routes: the
+        // unfinished routes holding the deliveries, with their driver.
+        openStopRoutes: async (deliveryIds) =>
+          routeRepository.stops
+            .filter(
+              (stop) =>
+                deliveryIds.includes(stop.deliveryId) &&
+                (stop.status === "PENDING" || stop.status === "ARRIVED"),
+            )
+            .flatMap((stop) => {
+              const route = routeRepository.routes.find(
+                (entry) =>
+                  entry.id === stop.routeId &&
+                  ["PLANNED", "RELEASED", "IN_PROGRESS"].includes(entry.status),
+              );
+
+              return route
+                ? [
+                    {
+                      deliveryId: stop.deliveryId,
+                      routeId: route.id,
+                      businessId: route.businessId,
+                      routeStatus: route.status,
+                      driverUserId:
+                        route.driverId === DRIVER ? DRIVER_USER : null,
+                    },
+                  ]
+                : [];
+            }),
+      },
     ),
     unrouted: new ListUnroutedDeliveriesUseCase(
       routeRepository,
@@ -1007,6 +1042,84 @@ describe("pinning a delivery on the map (D7)", () => {
     expect(ended).toMatchObject({ routeId: null, planVersion: null });
     expect(versionOf(route.id)).toBe(0);
     expect(emitted).toEqual([]);
+  });
+
+  it("gives the pin to the other open deliveries at the same door still without a point, and tells their route", async () => {
+    // Owner's report of 14/11/2026 (decision D-24): the dispatcher pins one
+    // delivery, and the others at the same address stop reading "Sem
+    // localização".
+    const LIPOLD = {
+      street: "Rua Doutor Lipold",
+      address_number: "10",
+      neighborhood: "Carangola",
+      city: "Petrópolis",
+      uf: "RJ",
+    };
+    const pinnedId = await seedDelivery(LIPOLD);
+    const sibling = await seedDelivery({ ...LIPOLD, street: "R. Dr. Lipold" });
+    const elsewhere = await seedDelivery({ ...LIPOLD, businessId: B });
+    const neighbour = await seedDelivery({ ...LIPOLD, address_number: "12" });
+    const closed = await seedDelivery(LIPOLD);
+    // Seeded last: an earlier one at this door would take its point.
+    const located = await seedDelivery({
+      ...LIPOLD,
+      latitude: -22.4,
+      longitude: -43.1,
+    });
+    const row = (id: string) =>
+      context.deliveryRepository.deliveries.find((entry) => entry.id === id)!;
+
+    row(closed).status = "DELIVERED";
+
+    const route = await plannedRoute([sibling]);
+
+    emitted.length = 0;
+
+    const pinned = await context.setLocation.execute({
+      userId: DISPATCHER,
+      businessId: A,
+      deliveryId: pinnedId,
+      point: { latitude: -22.4561, longitude: -43.1702 },
+    });
+
+    expect(pinned).toMatchObject({ geo_source: "MANUAL", propagated: 1 });
+    expect(row(sibling)).toMatchObject({
+      latitude: -22.4561,
+      longitude: -43.1702,
+      geo_source: "GEOCODER",
+      geo_precision: "ADDRESS",
+      geocode_status: "RESOLVED",
+    });
+    for (const untouched of [elsewhere, neighbour, closed]) {
+      expect(row(untouched)).toMatchObject({
+        latitude: null,
+        geo_source: null,
+      });
+    }
+    expect(row(located)).toMatchObject({
+      latitude: -22.4,
+      geo_source: "MANUAL",
+    });
+
+    // The sibling's planned route hears it like a point the geocoder found:
+    // no plan version of its own.
+    expect(emitted).toContainEqual({
+      room: "located",
+      id: A,
+      event: { routeId: route.id, deliveryIds: [sibling] },
+    });
+    expect(versionOf(route.id)).toBe(0);
+
+    // Clearing the pin leaves the copies as they are, and propagates nothing.
+    const cleared = await context.setLocation.execute({
+      userId: DISPATCHER,
+      businessId: A,
+      deliveryId: pinnedId,
+      point: null,
+    });
+
+    expect(cleared).toMatchObject({ latitude: null, propagated: 0 });
+    expect(row(sibling)).toMatchObject({ geo_source: "GEOCODER" });
   });
 
   it("answers another company's delivery as not found, and a closed one as locked", async () => {

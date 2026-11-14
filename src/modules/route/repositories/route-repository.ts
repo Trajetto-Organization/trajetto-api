@@ -21,6 +21,9 @@ import {
 import { resolveTimeZone } from "@/shared/time/business-day";
 import { routeClosedWithPendingNote } from "@/shared/route/route-left-open";
 import { assignStopGroupKeys } from "@/shared/delivery/stop-group";
+import { deliveryAddressKey } from "@/shared/delivery/address-key";
+import { pickReusablePoint } from "@/shared/delivery/geocoding/address-point-reuse";
+import { writePointToDoor } from "@/shared/delivery/geocoding/address-point-propagation";
 import { isModuleEnabled } from "@/shared/entitlements/entitlement-rules";
 
 import {
@@ -2197,6 +2200,43 @@ class RouteRepository implements IRouteRepository {
             : null,
       };
     });
+  }
+
+  async propagateAddressPoint(
+    deliveryId: string,
+    businessId: string,
+  ): Promise<string[]> {
+    const pinned = await this.prisma.delivery.findFirst({
+      where: { id: deliveryId, businessId },
+      select: {
+        street: true,
+        address_number: true,
+        neighborhood: true,
+        city: true,
+        uf: true,
+        address_key: true,
+        latitude: true,
+        longitude: true,
+        geo_source: true,
+        geo_precision: true,
+        geo_updated_at: true,
+      },
+    });
+
+    // A row from before the key still gives its point: the key comes from
+    // its address, the same function the create writes it with.
+    const addressKey = pinned
+      ? (pinned.address_key ?? deliveryAddressKey(pinned))
+      : null;
+    const point = pinned ? pickReusablePoint([pinned], new Date()) : null;
+
+    if (!addressKey || !point) return [];
+
+    return writePointToDoor(
+      this.prisma,
+      { businessId, addressKey, exceptId: deliveryId },
+      point,
+    );
   }
 
   async findOpenStopRoutes(

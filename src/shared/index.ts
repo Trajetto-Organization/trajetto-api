@@ -83,6 +83,10 @@ import { DriverPositionRepository } from "@/modules/route/repositories/driver-po
 import { OperationDayRepository } from "@/modules/route/repositories/operation-day-repository";
 import type { IOperationDayRepository } from "@/modules/route/repositories/IOperation-day-repository";
 import { IDeliveryRepository } from "@/modules/delivery/repositories/IDelivery-repository";
+import {
+  DeliveryGeocodingRepository,
+  type IDeliveryGeocodingRepository,
+} from "@/shared/delivery/geocoding/geocoding-repository";
 
 import { ChatRepository } from "@/modules/chat/repositories/chat-repository";
 import { IChatRepository } from "@/modules/chat/repositories/IChat-repository";
@@ -344,6 +348,13 @@ container.registerSingleton<IDeliveryRepository>(
 container.registerSingleton<IRouteRepository>(
   "RouteRepository",
   RouteRepository,
+);
+
+// The geocoder's queue: the pin's propagation reads its open stops to tell
+// the route pages and the drivers (14/11/2026).
+container.registerSingleton<IDeliveryGeocodingRepository>(
+  "DeliveryGeocodingRepository",
+  DeliveryGeocodingRepository,
 );
 
 // Separate from the route repository on purpose: a write-heavy stream

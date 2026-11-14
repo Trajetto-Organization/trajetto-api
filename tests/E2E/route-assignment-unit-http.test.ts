@@ -10,6 +10,7 @@ import { OperationDayRepository } from "@/modules/route/repositories/operation-d
 import { PLANNING_TIMELINE_EVENTS_ENABLED } from "@/modules/route/usecases/shared/route-plan-rules";
 import { operationDay } from "@/shared/route/operation-day-rules";
 import { createPrismaClient } from "@/shared/database/database-client";
+import { deliveryAddressKey } from "@/shared/delivery/address-key";
 
 /**
  * The route as the unit of assignment (decision 14.7) over real HTTP and a
@@ -1075,6 +1076,106 @@ describe("pinning a delivery on the map (D7)", () => {
         where: { topic: "route.plan_changed", aggregateId: route.id },
       }),
     ).toBe(0);
+  });
+
+  it("gives the pin to the company's other open deliveries at the same door still without a point (D-24)", async () => {
+    // Owner's report of 14/11/2026: the second delivery at the address
+    // read "Sem localização" after the first was pinned.
+    const door = {
+      street: "Rua Doutor Lipold",
+      address_number: "10",
+      neighborhood: "Carangola",
+      city: "Petrópolis",
+      uf: "RJ",
+    };
+    const key = deliveryAddressKey(door);
+    const seed = async (
+      name: string,
+      extra: Record<string, unknown> = {},
+    ): Promise<string> => {
+      const id = randomUUID();
+
+      await prisma.delivery.create({
+        data: {
+          id,
+          ...door,
+          recipient_name: name,
+          businessId: CARRIER_A,
+          shipperId: SHIPPER_A,
+          address_key: key,
+          ...extra,
+        },
+      });
+
+      return id;
+    };
+
+    const pinnedId = await seed("Primeira no Lipold");
+    const sibling = await seed("Segunda no Lipold", {
+      geocode_status: "NOT_FOUND",
+      geocode_attempts: 1,
+    });
+    const closed = await seed("Entregue no Lipold", { status: "DELIVERED" });
+    const located = await seed("Já localizada", {
+      latitude: -22.1,
+      longitude: -43.1,
+      geo_source: "MANUAL",
+      geo_updated_at: new Date(),
+    });
+    const theirs = await seed("Da outra empresa", {
+      businessId: CARRIER_B,
+      shipperId: SHIPPER_B,
+    });
+    const before = await prisma.delivery.findUniqueOrThrow({
+      where: { id: sibling },
+    });
+
+    const pinned = await call(
+      "PATCH",
+      `/route/set-delivery-location/${pinnedId}/business/${CARRIER_A}`,
+      dispatcherA,
+      { latitude: -22.4561, longitude: -43.1702 },
+    );
+
+    expect(pinned.statusCode, pinned.body).toBe(200);
+    expect(pinned.json().data).toMatchObject({
+      geo_source: "MANUAL",
+      propagated: 1,
+    });
+
+    const row = (id: string) =>
+      prisma.delivery.findUniqueOrThrow({ where: { id } });
+
+    expect(await row(sibling)).toMatchObject({
+      latitude: -22.4561,
+      longitude: -43.1702,
+      geo_source: "GEOCODER",
+      geo_precision: "ADDRESS",
+      geocode_status: "RESOLVED",
+      // Not the customer's edit: the public API's updated_since skips it.
+      updated_at: before.updated_at,
+    });
+    expect(await row(closed)).toMatchObject({ latitude: null });
+    expect(await row(located)).toMatchObject({
+      latitude: -22.1,
+      geo_source: "MANUAL",
+    });
+    expect(await row(theirs)).toMatchObject({
+      latitude: null,
+      geo_source: null,
+    });
+
+    // Clearing the pin leaves the copy, and gives nothing.
+    const cleared = await call(
+      "PATCH",
+      `/route/set-delivery-location/${pinnedId}/business/${CARRIER_A}`,
+      dispatcherA,
+      { clear: true },
+    );
+
+    expect(cleared.statusCode, cleared.body).toBe(200);
+    expect(cleared.json().data).toMatchObject({ propagated: 0 });
+    expect(await row(sibling)).toMatchObject({ geo_source: "GEOCODER" });
   });
 });
 
