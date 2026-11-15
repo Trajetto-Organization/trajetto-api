@@ -1492,8 +1492,9 @@ Cada réplica responde por si; o MASTER vê o conjunto na aba Sistema do
 `/admin`.
 
 - `GET /health/liveness`: o processo responde (`alive`), com `version` e
-  `commit` do build. Não toca dependência nenhuma: é a sonda do Swarm, e uma
-  dependência fora nunca deve reiniciar o contêiner.
+  `commit` do build e o `environment` (o `APP_ENV`), que a web confere no
+  boot. Não toca dependência nenhuma: é a sonda do Swarm, e uma dependência
+  fora nunca deve reiniciar o contêiner.
 - `GET /health/readiness`: `ready`, `not ready` (banco inacessível, 503) ou
   `draining` (desligando, 503). Usa uma conexão própria; o Redis fica de fora
   de propósito.

@@ -10,6 +10,7 @@ import {
   healthSchemas,
 } from "./documentation/health-documentation";
 
+import { env } from "@/env";
 import { ensureAuthenticated } from "@/modules/middlewares/ensure-authenticated";
 import { verifyUserRole } from "@/modules/middlewares/verify-user-role";
 import { isDraining } from "@/shared/lifecycle/draining";
@@ -229,7 +230,7 @@ async function healthRoutes(app: FastifyInstance) {
         tags: ["health"],
         summary: "Sonda de vida (liveness) da aplicação",
         description:
-          "Diz apenas se o processo está de pé e consegue responder. De propósito não verifica nenhuma dependência externa: uma dependência com falha nunca deve reiniciar o container. Informa também o commit do build que responde (`version`, `commit`), que o pipeline lê para confirmar o deploy.",
+          "Diz apenas se o processo está de pé e consegue responder. De propósito não verifica nenhuma dependência externa: uma dependência com falha nunca deve reiniciar o container. Informa também o commit do build que responde (`version`, `commit`), que o pipeline lê para confirmar o deploy, e o ambiente (`environment`), que a web confere no boot para não falar com a API de outro ambiente.",
         response: {
           // The commit is a constant read at import (build-info.ts): the
           // probe still touches nothing. The pipeline polls it after a
@@ -239,7 +240,14 @@ async function healthRoutes(app: FastifyInstance) {
       },
     },
     async (_request, reply) => {
-      return reply.status(200).send({ status: "alive", ...buildInfo });
+      // APP_ENV was parsed at boot: still nothing touched. Staging and
+      // production share dokploy-network, and the web may call this API by
+      // its App Name there; the web compares this with its own APP_ENV at
+      // boot and refuses to start on a mismatch, instead of sending one
+      // environment's credentials to the other (trajetto-ui env-check.ts).
+      return reply
+        .status(200)
+        .send({ status: "alive", ...buildInfo, environment: env.APP_ENV });
     },
   );
 

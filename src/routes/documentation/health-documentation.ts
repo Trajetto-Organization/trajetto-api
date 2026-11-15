@@ -401,6 +401,12 @@ const healthResponses = {
   }),
   livenessCheck: z.object({
     status: z.literal("alive").describe("Application liveness status"),
+    // Not a secret: the public hostname already says which one it is.
+    environment: z
+      .enum(["development", "staging", "production"])
+      .describe(
+        "O ambiente desta API (`APP_ENV`): `staging` ou `production` nas Applications do Dokploy, `development` fora delas. A web confere no boot que é o mesmo dela.",
+      ),
   }),
   readinessCheck: z.object({
     status: z
