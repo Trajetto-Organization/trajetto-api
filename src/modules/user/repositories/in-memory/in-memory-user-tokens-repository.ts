@@ -2,7 +2,10 @@ import { v7 as uuidV7 } from "uuid";
 import { hashSingleUseToken } from "@/shared/security/single-use-token";
 import {
   IUsersTokensRepository,
+  MAX_EXPIRED_REFRESH_TOKENS_PER_RUN,
   REFRESH_GRACE_MAX_SIBLINGS,
+  type RefreshTokenPurgeLimits,
+  type RefreshTokenPurgeResult,
 } from "../IUsers-tokens-repository";
 
 import {
@@ -317,13 +320,31 @@ class InMemoryUserTokensRepository implements IUsersTokensRepository {
     };
   }
 
-  async deleteExpiredUserRefreshTokens(now = new Date()): Promise<number> {
-    const previousCount = this.refreshTokenItems.length;
+  /**
+   * The Prisma one's semantics without its batches: oldest expired first, at
+   * most `maxRows`, nothing once the deadline passed, and `stoppedEarly`
+   * whenever an expired row is left.
+   */
+  async deleteExpiredUserRefreshTokens(
+    now = new Date(),
+    {
+      maxRows = MAX_EXPIRED_REFRESH_TOKENS_PER_RUN,
+      deadline = Number.POSITIVE_INFINITY,
+    }: RefreshTokenPurgeLimits = {},
+  ): Promise<RefreshTokenPurgeResult> {
+    const expired = this.refreshTokenItems
+      .filter((item) => item.expires_in < now)
+      .sort((a, b) => a.expires_in.getTime() - b.expires_in.getTime());
+
+    const take =
+      Date.now() >= deadline ? 0 : Math.min(maxRows, expired.length);
+    const gone = new Set(expired.slice(0, take));
+
     this.refreshTokenItems = this.refreshTokenItems.filter(
-      (item) => item.expires_in >= now,
+      (item) => !gone.has(item),
     );
 
-    return previousCount - this.refreshTokenItems.length;
+    return { deleted: take, stoppedEarly: expired.length > take };
   }
 
   /** No push devices in this fake: the real one is proven against Postgres. */

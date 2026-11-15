@@ -101,7 +101,17 @@ interface IUsersTokensRepository {
     userId: string,
     familyId: string,
   ) => Promise<{ ended: boolean; deviceId: string | null }>;
-  deleteExpiredUserRefreshTokens: (now?: Date) => Promise<number>;
+  /**
+   * Removes the refresh tokens past their expires_in, oldest first and in
+   * batches (F1-18), until none is left, `maxRows` or the `deadline`; never
+   * a live one. `stoppedEarly` says expired rows are still there, which
+   * makes the nightly run partial. A single delete of a day of sessions at
+   * the target volume (~1–1.5 M rows) would run into the statement_timeout.
+   */
+  deleteExpiredUserRefreshTokens: (
+    now?: Date,
+    limits?: RefreshTokenPurgeLimits,
+  ) => Promise<RefreshTokenPurgeResult>;
 
   /**
    * Unregisters the push devices whose session has no refresh token left —
@@ -198,4 +208,30 @@ interface IUsersTokensRepository {
  */
 const REFRESH_GRACE_MAX_SIBLINGS = 3;
 
-export { IUsersTokensRepository, REFRESH_GRACE_MAX_SIBLINGS };
+interface RefreshTokenPurgeLimits {
+  /** Ceiling on rows removed in one call. */
+  maxRows?: number;
+
+  /** Epoch millis after which no new batch starts. */
+  deadline?: number;
+}
+
+interface RefreshTokenPurgeResult {
+  deleted: number;
+
+  /** Expired rows are still there: the ceiling or the deadline stopped it. */
+  stoppedEarly: boolean;
+}
+
+/**
+ * Protection, not the plan: a night at the target volume is ~1–1.5 M
+ * expired rows, and the run's budget is the bound that bites first.
+ */
+const MAX_EXPIRED_REFRESH_TOKENS_PER_RUN = 10_000_000;
+
+export {
+  IUsersTokensRepository,
+  MAX_EXPIRED_REFRESH_TOKENS_PER_RUN,
+  REFRESH_GRACE_MAX_SIBLINGS,
+};
+export type { RefreshTokenPurgeLimits, RefreshTokenPurgeResult };

@@ -1,9 +1,15 @@
+import { Prisma } from "@prisma/client";
+
 import database from "@/../infra/database";
 import authConfig from "@/config/auth";
+import { deleteInBatches } from "@/shared/database/batch-delete";
 import { hashSingleUseToken } from "@/shared/security/single-use-token";
 import {
   IUsersTokensRepository,
+  MAX_EXPIRED_REFRESH_TOKENS_PER_RUN,
   REFRESH_GRACE_MAX_SIBLINGS,
+  type RefreshTokenPurgeLimits,
+  type RefreshTokenPurgeResult,
 } from "./IUsers-tokens-repository";
 
 import {
@@ -399,12 +405,24 @@ class UserTokensRepository implements IUsersTokensRepository {
     });
   }
 
-  async deleteExpiredUserRefreshTokens(now = new Date()): Promise<number> {
-    const result = await this.prisma.refreshToken.deleteMany({
-      where: { expires_in: { lt: now } },
+  async deleteExpiredUserRefreshTokens(
+    now = new Date(),
+    {
+      maxRows = MAX_EXPIRED_REFRESH_TOKENS_PER_RUN,
+      deadline = Number.POSITIVE_INFINITY,
+    }: RefreshTokenPurgeLimits = {},
+  ): Promise<RefreshTokenPurgeResult> {
+    // Oldest first over refresh_token (expires_in): each batch stops at its
+    // limit, and every row it meets is expired. A live token is never
+    // matched, whatever the ceiling.
+    return deleteInBatches({
+      table: Prisma.sql`"refresh_token"`,
+      where: Prisma.sql`"expires_in" < ${now}`,
+      orderBy: Prisma.sql`"expires_in"`,
+      maxRows,
+      deadline,
+      client: this.prisma,
     });
-
-    return result.count;
   }
 
   async deleteOrphanPushTokens(now = new Date()): Promise<number> {

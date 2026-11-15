@@ -3915,8 +3915,8 @@ ORDER BY 1;
 
 ### Expurgos parciais
 
-Os expurgos noturnos (`cleanup-*`, 03:17–04:50 UTC) apagam em lotes e
-param no orçamento da execução (`CRON_PURGE_RUN_BUDGET_MS`, 5 min) ou no
+Os expurgos noturnos (`cleanup-*`, 03:17–04:50 UTC, os `refresh_token`
+vencidos inclusive) apagam em lotes e param no orçamento da execução (`CRON_PURGE_RUN_BUDGET_MS`, 5 min) ou no
 teto de linhas de cada tabela. Se ainda houver linha vencida quando param
 (uma sonda confere, para um teto batido junto com a última linha não contar),
 a execução termina **FAILED com `last_error` começando por `[partial]`**,
