@@ -65,6 +65,19 @@ import {
  * makes the event fail visibly in the pipeline (never silently), so adding a
  * feature's notification is: define the payload type, write the policy file,
  * register it here.
+ *
+ * Nobody is notified of what they just did (14/11/2026): the user whose
+ * action published an event (the outbox row's `actorId`, which every publish
+ * caused by a person carries) is left out of its recipients on every channel,
+ * whatever the policy resolved. The exceptions say why in `notifiesActor`,
+ * and are only these:
+ * - "security": master-user.created and master-user.updated (the record of a
+ *   privileged account the reader created or changed, decision D-49) and
+ *   master-user.account-updated (about the reader's own account);
+ * - "verdict": delivery-proof.ai-flagged (the AI's reading of the receipt the
+ *   driver sent, for that driver).
+ * tests/unitaires/notifications/actor-notice.test.ts holds the list and the
+ * actor on every publish.
  */
 const notificationPolicies: {
   [T in NotificationTopic]: NotificationPolicyEntry<TopicPayloadMap[T]>;

@@ -916,7 +916,7 @@ class ReportDeliveryOccurrenceUseCase {
       // The panel and the control tower are watching this stop.
       announceStopSettled(businessId, settled);
 
-      await announceDroppedPlans(this.user, businessId, droppedPlans);
+      await announceDroppedPlans(this.user, businessId, droppedPlans, userId);
 
       // The tickets whose request this proof superseded (design §5.2).
       for (const ticketId of supersededTickets) {

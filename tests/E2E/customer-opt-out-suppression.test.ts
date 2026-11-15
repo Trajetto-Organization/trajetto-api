@@ -499,7 +499,9 @@ describe("an internal notification to the same phone and e-mail", () => {
         aggregateType: "account_payable",
         aggregateId: randomUUID(),
         businessId: CARRIER,
-        actorId: staff.id,
+        // Nobody's action: the bill's responsible is told of a bill
+        // somebody else registered (actor-notice.test.ts).
+        actorId: null,
         payload: {
           accountPayableId: randomUUID(),
           businessId: CARRIER,

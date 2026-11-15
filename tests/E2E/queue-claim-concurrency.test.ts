@@ -357,7 +357,9 @@ async function publishEvents(
         aggregateType: "account-payable",
         aggregateId: randomUUID(),
         businessId: CARRIER,
-        actorId: RECIPIENT,
+        // Nobody's action: the bill's responsible is told of a bill
+        // somebody else registered (actor-notice.test.ts).
+        actorId: null,
         status,
         payload: {
           accountPayableId: randomUUID(),

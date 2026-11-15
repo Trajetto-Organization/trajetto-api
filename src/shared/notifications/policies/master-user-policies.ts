@@ -35,6 +35,10 @@ const masterUserCreatedPolicy: NotificationPolicyEntry<MasterUserCreatedPayload>
   {
     category: NotificationCategory.ACCOUNT,
 
+    // The record of a privileged account the reader opened: the one notice
+    // that is about what they just did on purpose (decision D-49).
+    notifiesActor: "security",
+
     async resolveRecipients(payload, deps) {
       return resolveSingleUser(payload.actorUserId, deps);
     },
@@ -134,6 +138,10 @@ const masterUserUpdatedPolicy: NotificationPolicyEntry<MasterUserUpdatedPayload>
   {
     category: NotificationCategory.ACCOUNT,
 
+    // Same as the creation's: the record of a privileged account the reader
+    // changed (D-49).
+    notifiesActor: "security",
+
     async resolveRecipients(payload, deps) {
       return resolveSingleUser(payload.actorUserId, deps);
     },
@@ -172,6 +180,10 @@ const masterUserAccountUpdatedPolicy: NotificationPolicyEntry<MasterUserAccountU
 
     // "Someone changed your account" is a security notice, not noise.
     mandatory: true,
+
+    // About the reader's own account, so it would reach them even if they
+    // were the one who changed it (the use case refuses a self-update today).
+    notifiesActor: "security",
 
     // The use case already mails this master directly, with the fuller
     // template (old and new name or e-mail; update-master-user-usecase.ts),

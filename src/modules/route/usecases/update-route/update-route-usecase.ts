@@ -265,6 +265,7 @@ class UpdateRouteUseCase {
         planVersion: updated.plan_version,
         status: updated.status,
         driverId: updated.driverId,
+        actorId: userId,
       });
 
       this.notificationService.createActivityIfEnabled({

@@ -93,6 +93,7 @@ class RemoveRouteStopsUseCase {
         planVersion: result.planVersion,
         status: result.status,
         driverId: result.driverId,
+        actorId: userId,
       });
 
       const count = result.removed.length;

@@ -148,6 +148,7 @@ class SetDeliveryLocationUseCase {
         planVersion: pinned.route.planVersion,
         status: pinned.route.status,
         driverId: pinned.route.driverId,
+        actorId: userId,
       });
     }
 

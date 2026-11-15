@@ -15,7 +15,10 @@ import {
  * routine (the record status tells it), and an infrastructure error is an
  * operator concern, not an audit alert. Recipients are the business admins —
  * they audit the fleet; alerting the submitter would tip off exactly the
- * person a fraud check is about.
+ * person a fraud check is about. An admin who asked for the reading is the
+ * event's actor and is left out with the rule of every topic (no
+ * `notifiesActor`): they followed the reading live, on the `aiVerification`
+ * socket event the web toasts.
  */
 
 const STATUS_HEADLINES: Record<string, string> = {

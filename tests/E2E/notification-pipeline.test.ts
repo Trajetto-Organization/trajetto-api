@@ -32,6 +32,8 @@ let pipeline: import("@/shared/notifications/notification-pipeline-service").Not
 
 const BUSINESS = "018fc000-0000-7000-8000-0000000004b1";
 const RECIPIENT = "018fc000-0000-7000-8000-0000000004c1";
+/** Who registered the bill: never told of their own act (actor-notice.test.ts). */
+const ACTOR = "018fc000-0000-7000-8000-0000000004c2";
 const MASTER = "018fc000-0000-7000-8000-0000000004c9";
 
 let masterToken = "";
@@ -51,7 +53,14 @@ const whatsapp = {
   }),
 };
 
-async function publish(topic = "account-payable.created"): Promise<string> {
+/**
+ * A bill registered by ACTOR for RECIPIENT. `actorId` RECIPIENT is the bill
+ * one registers for oneself, which tells nobody.
+ */
+async function publish(
+  topic = "account-payable.created",
+  actorId: string = ACTOR,
+): Promise<string> {
   const event = await prisma.domainOutboxEvent.create({
     data: {
       eventKey: `${topic}:${randomUUID()}`,
@@ -59,7 +68,7 @@ async function publish(topic = "account-payable.created"): Promise<string> {
       aggregateType: "account-payable",
       aggregateId: randomUUID(),
       businessId: BUSINESS,
-      actorId: RECIPIENT,
+      actorId,
       payload: {
         accountPayableId: randomUUID(),
         businessId: BUSINESS,
@@ -108,6 +117,17 @@ beforeAll(async () => {
       businessId: BUSINESS,
       whatsapp_phone: "5511999990000",
       whatsapp_notifications_enabled: true,
+    },
+  });
+
+  await prisma.user.create({
+    data: {
+      id: ACTOR,
+      name: "Pessoa do Escritório",
+      email: `escritorio-${randomUUID()}@exemplo.com.br`,
+      password: "nao-usado",
+      role: "BUSINESS_USER",
+      businessId: BUSINESS,
     },
   });
 
@@ -191,10 +211,15 @@ beforeEach(async () => {
 afterAll(async () => {
   await prisma.notificationDelivery.deleteMany({});
   await prisma.domainOutboxEvent.deleteMany({});
-  await prisma.notification.deleteMany({ where: { userId: RECIPIENT } });
+  await prisma.notification.deleteMany({
+    where: { userId: { in: [RECIPIENT, ACTOR, MASTER] } },
+  });
   await prisma.activity.deleteMany({ where: { businessId: BUSINESS } });
+  await prisma.activity.deleteMany({ where: { performedBy: MASTER } });
   await prisma.refreshToken.deleteMany({ where: { userId: MASTER } });
-  await prisma.user.deleteMany({ where: { id: { in: [RECIPIENT, MASTER] } } });
+  await prisma.user.deleteMany({
+    where: { id: { in: [RECIPIENT, ACTOR, MASTER] } },
+  });
   await prisma.business.deleteMany({ where: { id: BUSINESS } });
 
   await app?.close();
@@ -229,6 +254,77 @@ describe("an event, end to end", () => {
     // The delivery id travels as the provider's idempotency key.
     const emailRow = rows.find((row) => row.channel === "EMAIL")!;
     expect(mail.sent[0].referenceId).toBe(emailRow.id);
+
+    // The bell and the trail are each one person's: the bill's responsible
+    // is told, the one who registered it has the activity.
+    expect(
+      rows.map((row) => `${row.channel}:${row.userId === ACTOR}`).sort(),
+    ).toEqual([
+      "ACTIVITY:true",
+      "EMAIL:false",
+      "IN_APP:false",
+      "WHATSAPP:false",
+    ]);
+  });
+});
+
+/**
+ * Nobody is notified of what they just did (14/11/2026): a bill one
+ * registers for oneself rang one's own bell (and its realtime toast right
+ * after the form's "success"), e-mail and WhatsApp. The trail entry stays.
+ */
+describe("the event's own actor", () => {
+  it("is told nothing, on any channel, and keeps the activity", async () => {
+    const bells = () =>
+      prisma.notification.count({ where: { userId: RECIPIENT } });
+    const bellsBefore = await bells();
+
+    const eventId = await publish("account-payable.created", RECIPIENT);
+
+    await drain();
+
+    const rows = await deliveriesOf(eventId);
+
+    expect(rows.map((row) => `${row.channel}:${row.status}`)).toEqual([
+      "ACTIVITY:DELIVERED",
+    ]);
+    expect(rows[0].userId).toBe(RECIPIENT);
+
+    expect(mail.sent).toHaveLength(0);
+    expect(whatsapp.sent).toHaveLength(0);
+    expect(await bells()).toBe(bellsBefore);
+  });
+
+  it("still gets the record of a MASTER account they created (D-49)", async () => {
+    const created = randomUUID();
+
+    const event = await prisma.domainOutboxEvent.create({
+      data: {
+        eventKey: `master-user.created:${created}`,
+        topic: "master-user.created",
+        aggregateType: "master-user",
+        aggregateId: created,
+        actorId: MASTER,
+        payload: {
+          masterUserId: created,
+          masterName: "Pessoa Master Nova",
+          masterEmail: "master.nova@exemplo.com.br",
+          actorUserId: MASTER,
+        },
+      },
+    });
+
+    await drain();
+
+    const rows = await deliveriesOf(event.id);
+
+    expect(rows.map((row) => `${row.channel}:${row.status}`).sort()).toEqual([
+      "ACTIVITY:DELIVERED",
+      "EMAIL:DELIVERED",
+      "IN_APP:DELIVERED",
+    ]);
+    expect(rows.every((row) => row.userId === MASTER)).toBe(true);
+    expect(mail.sent).toHaveLength(1);
   });
 });
 
@@ -945,7 +1041,8 @@ describe("a tower request decided while its messages wait (decision 6.3)", () =>
         aggregateType: "delivery",
         aggregateId: randomUUID(),
         businessId: BUSINESS,
-        actorId: RECIPIENT,
+        // The driver who reported it, not the operator told.
+        actorId: ACTOR,
         payload: {
           occurrenceId,
           deliveryId: randomUUID(),

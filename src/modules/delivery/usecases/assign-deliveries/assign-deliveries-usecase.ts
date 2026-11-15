@@ -328,6 +328,7 @@ class AssignDeliveriesUseCase {
               planVersion: source.planVersion,
               status: source.status,
               driverId: source.driverId,
+              actorId: userId,
             }),
           );
         }

@@ -100,6 +100,7 @@ class ReorderRouteStopsUseCase {
         planVersion: result.planVersion,
         status: result.status,
         driverId: result.driverId,
+        actorId: userId,
       });
 
       this.notificationService.createActivityIfEnabled({

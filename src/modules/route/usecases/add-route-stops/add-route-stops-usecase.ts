@@ -272,6 +272,7 @@ class AddRouteStopsUseCase {
         planVersion: added.planVersion,
         status: added.status,
         driverId: added.driverId,
+        actorId: userId,
       });
 
       // The new stops' address points now rather than at the next minute's

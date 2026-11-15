@@ -466,7 +466,9 @@ describe("what the pipeline hands the providers", () => {
         aggregateType: "account-payable",
         aggregateId: randomUUID(),
         businessId: BUSINESS,
-        actorId: USER,
+        // Nobody's action: the bill's responsible is told of a bill
+        // somebody else registered (actor-notice.test.ts).
+        actorId: null,
         payload: {
           accountPayableId: randomUUID(),
           businessId: BUSINESS,
@@ -518,7 +520,9 @@ describe("what the pipeline hands the providers", () => {
         aggregateType: "account-payable",
         aggregateId: randomUUID(),
         businessId: BUSINESS,
-        actorId: USER,
+        // Nobody's action: the bill's responsible is told of a bill
+        // somebody else registered (actor-notice.test.ts).
+        actorId: null,
         payload: {
           accountPayableId: randomUUID(),
           businessId: BUSINESS,

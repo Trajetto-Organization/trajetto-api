@@ -214,7 +214,7 @@ class UpdateDeliveryUseCase {
 
       // After the commit: the screens refetch the plan, and the driver of a
       // released route is pushed (announcePlanChange).
-      await announceDroppedPlans(this.user, businessId, bumps);
+      await announceDroppedPlans(this.user, businessId, bumps, userId);
 
       // The new address's point now, not at the next minute's job (E1):
       // the cleared bookkeeping re-queued it. Never awaited; not at all

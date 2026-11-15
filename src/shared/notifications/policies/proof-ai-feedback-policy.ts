@@ -86,6 +86,10 @@ const proofAIFeedbackPolicy: NotificationPolicyEntry<DeliveryProofAIFlaggedPaylo
     mandatory: true,
     suppressEmail: true,
 
+    // The event's actor is the driver who sent the receipt (the reading's
+    // requester), and the notice is the AI's verdict on it, for them.
+    notifiesActor: "verdict",
+
     async resolveRecipients(payload, deps) {
       const driver = await deps.userRepository.findUserById(
         payload.driverUserId,

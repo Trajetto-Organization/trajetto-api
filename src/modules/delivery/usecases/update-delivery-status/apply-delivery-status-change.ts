@@ -310,7 +310,7 @@ async function applyDeliveryStatusChange(
   // The panel and the control tower are watching this stop.
   announceStopSettled(businessId, settled);
 
-  await announceDroppedPlans(deps.users, businessId, droppedPlans);
+  await announceDroppedPlans(deps.users, businessId, droppedPlans, userId);
 
   // No stop settled (no route, or a route that has not left): nothing
   // above told the tower and the boards, which kept the old status until

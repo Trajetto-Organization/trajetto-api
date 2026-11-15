@@ -250,6 +250,7 @@ class MoveRouteStopsUseCase {
         planVersion: outcome.added.planVersion,
         status: outcome.added.status,
         driverId: outcome.added.driverId,
+        actorId: userId,
       });
 
       for (const source of outcome.sources) {
@@ -263,6 +264,7 @@ class MoveRouteStopsUseCase {
           planVersion: source.planVersion,
           status: source.status,
           driverId: source.driverId,
+          actorId: userId,
         });
       }
 

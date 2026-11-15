@@ -57,7 +57,9 @@ async function emailRow(): Promise<string> {
       aggregateType: "account-payable",
       aggregateId: randomUUID(),
       businessId: BUSINESS,
-      actorId: RECIPIENT,
+      // Nobody's action: the bill's responsible is told of a bill
+      // somebody else registered (actor-notice.test.ts).
+      actorId: null,
       payload: {
         accountPayableId: randomUUID(),
         businessId: BUSINESS,

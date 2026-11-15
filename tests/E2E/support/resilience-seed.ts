@@ -103,7 +103,7 @@ async function seedResilienceTenant(
   return { businessId, adminId, driverUserId, adminToken };
 }
 
-/** An account payable assigned to the admin: bell, activity, e-mail, WhatsApp. */
+/** An account payable assigned to the admin: bell, e-mail, WhatsApp. */
 async function publishAccountPayables(
   prisma: PrismaClient,
   seed: ResilienceSeed,
@@ -120,7 +120,9 @@ async function publishAccountPayables(
         aggregateType: "account-payable",
         aggregateId: accountPayableId,
         businessId: seed.businessId,
-        actorId: seed.adminId,
+        // Nobody's action: the bill's responsible is told of a bill
+        // somebody else registered (actor-notice.test.ts).
+        actorId: null,
         payload: {
           accountPayableId,
           businessId: seed.businessId,

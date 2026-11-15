@@ -36,6 +36,13 @@ async function announcePlanChange(
     planVersion: number;
     status: RouteStatus;
     driverId: string;
+
+    /**
+     * Who changed the plan; null for an integration's key or a worker. The
+     * push leaves them out (a driver whose own report took a stop off is not
+     * told about it), like every notice of what one just did.
+     */
+    actorId: string | null;
   },
 ): Promise<void> {
   const event = {
@@ -74,6 +81,7 @@ async function publishPlanChanged(
     routeId: string;
     routeCode: number;
     planVersion: number;
+    actorId: string | null;
   },
   driverUserId: string | null,
 ): Promise<void> {
@@ -85,6 +93,7 @@ async function publishPlanChanged(
       aggregateType: "route",
       aggregateId: change.routeId,
       businessId: change.businessId,
+      actorId: change.actorId,
       eventKey: `route:${change.routeId}:plan:${change.planVersion}`,
       payload: {
         routeId: change.routeId,
@@ -113,6 +122,7 @@ async function announceDroppedPlans(
   users: IUserRepository,
   businessId: string,
   bumps: PlanBump[],
+  actorId: string | null,
 ): Promise<void> {
   for (const bump of bumps) {
     await announcePlanChange(users, {
@@ -122,6 +132,7 @@ async function announceDroppedPlans(
       planVersion: bump.planVersion,
       status: bump.status,
       driverId: bump.driverId,
+      actorId,
     });
   }
 }

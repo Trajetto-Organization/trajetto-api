@@ -898,6 +898,26 @@ interface PolicyDeps {
 }
 
 /**
+ * Why a topic's notice still reaches the user whose action published it: the
+ * exceptions to "nobody is notified of what they just did"
+ * (`NotificationPolicyEntry.notifiesActor`, 14/11/2026).
+ */
+type ActorNotice =
+  /**
+   * A security notice: about the actor's own account, or the record of a
+   * privileged account they created or changed (a MASTER; decision D-49
+   * keeps those confirmations). A security trail is not noise, even when
+   * the reader did it.
+   */
+  | "security"
+  /**
+   * Not the actor's doing: the AI's reading of what they sent, told to
+   * them. The event names them because they asked for the reading, not
+   * because they caused what it found.
+   */
+  | "verdict";
+
+/**
  * What the system does when a topic fires: who hears about it and what each
  * channel says. Adding a notification to the product = adding an entry to
  * the policy registry — use cases only publish events.
@@ -906,7 +926,29 @@ interface PolicyDeps {
  * without a database or a running pipeline.
  */
 interface NotificationPolicyEntry<TPayload> {
+  /**
+   * Everybody the notice is for. The pipeline then leaves out the user whose
+   * action published the event (the outbox row's `actorId`) unless the topic
+   * says otherwise in `notifiesActor`, so a policy does not need to filter
+   * the actor out itself.
+   */
   resolveRecipients(payload: TPayload, deps: PolicyDeps): Promise<User[]>;
+
+  /**
+   * Whether the user whose action published the event hears about it too.
+   * Absent, which is the rule, means no, on every channel: nobody is
+   * notified of what they just did (14/11/2026). The screen that did it
+   * already said so, and the bell row's realtime toast arrived right after
+   * the form's own, a second "success" for one save (an admin's fine, an
+   * order or a card assigned to oneself).
+   *
+   * Set only on the exceptions, with the reason (`ActorNotice`), and listed
+   * in tests/unitaires/notifications/actor-notice.test.ts. The rule is
+   * applied in one place (`recipientsBesidesActor`, pipeline-rules.ts); the
+   * actor's activity trail entry and the realtime "something changed"
+   * signals the screens refetch on are not notices and stay as they are.
+   */
+  notifiesActor?: ActorNotice;
 
   /**
    * People with no account who must hear about this. Optional, and absent on
@@ -1023,6 +1065,7 @@ interface NotificationPolicyEntry<TPayload> {
 }
 
 export type {
+  ActorNotice,
   DeliveryCustomerPayload,
   DriverAccessPayload,
   ExternalRecipient,

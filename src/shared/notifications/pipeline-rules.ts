@@ -1,5 +1,7 @@
 ﻿import { NotificationChannel } from "@prisma/client";
 
+import type { ActorNotice } from "./notification-types";
+
 /**
  * The pipeline's decision rules, kept pure so they can be unit-tested.
  * Timings and gating live here; I/O lives in the pipeline service.
@@ -300,6 +302,27 @@ function channelsForRecipient(
 }
 
 /**
+ * Nobody is notified of what they just did (14/11/2026): the recipients a
+ * policy resolved, without the user whose action published the event, on
+ * every channel — unless the topic is one of the declared exceptions
+ * (`notifiesActor`: a security notice, or the AI's verdict on what the actor
+ * sent). An event with no actor (a sweep, a worker, an integration's key)
+ * keeps its recipients as they are.
+ *
+ * The one place the rule lives: a policy resolves who the notice is for,
+ * and this decides that the person who caused it is not among them.
+ */
+function recipientsBesidesActor<T extends { id: string }>(
+  recipients: T[],
+  actorId: string | null | undefined,
+  notifiesActor: ActorNotice | undefined,
+): T[] {
+  if (!actorId || notifiesActor) return recipients;
+
+  return recipients.filter((recipient) => recipient.id !== actorId);
+}
+
+/**
  * Spreads a retry over a window instead of firing the whole failed batch at
  * the same instant. A provider that just rate-limited us would otherwise get
  * the identical burst back 30s later, fail again, and keep the pattern —
@@ -332,6 +355,7 @@ export {
   nextRetryDelayMs,
   withRetryJitter,
   channelsForRecipient,
+  recipientsBesidesActor,
   resolveRecipientChannelFlags,
 };
 

@@ -52,7 +52,9 @@ async function seedDelivery(
       aggregateType: "account-payable",
       aggregateId: randomUUID(),
       businessId: BUSINESS,
-      actorId: USER,
+      // Nobody's action: the bill's responsible is told of a bill
+      // somebody else registered (actor-notice.test.ts).
+      actorId: null,
       status: "PUBLISHED",
       payload: {
         accountPayableId: randomUUID(),

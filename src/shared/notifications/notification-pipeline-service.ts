@@ -59,6 +59,7 @@ import {
   channelsForRecipient,
   honourRetryAfter,
   nextRetryDelayMs,
+  recipientsBesidesActor,
   resolveRecipientChannelFlags,
   withRetryJitter,
   type DeliveryLane,
@@ -604,7 +605,17 @@ class NotificationPipelineService {
       ),
     };
 
-    const recipients = await policy.resolveRecipients(payload, policyDeps);
+    const resolved = await policy.resolveRecipients(payload, policyDeps);
+
+    // Nobody is notified of what they just did, on any channel; the topics
+    // that still tell them say why in `notifiesActor` (pipeline-rules.ts).
+    const recipients = recipientsBesidesActor(
+      resolved,
+      event.actorId,
+      policy.notifiesActor,
+    );
+
+    const actorLeftOut = recipients.length < resolved.length;
 
     // People with no account. Absent on every internal topic, which is why
     // the hook is optional and nothing else in this method changed.
@@ -805,13 +816,15 @@ class NotificationPipelineService {
     ]);
 
     // Debug, not info: a web-only user has no push device on every event.
-    // LOG_LEVEL=debug answers "why did she never get it?" (OBS-08).
-    if (suppressed.length > 0) {
+    // LOG_LEVEL=debug answers "why did she never get it?" (OBS-08), and
+    // `actorLeftOut` "why did I not get my own?".
+    if (suppressed.length > 0 || actorLeftOut) {
       log.debug(
         {
           outboxEventId: event.id,
           topic: event.topic,
           businessId: event.businessId,
+          ...(actorLeftOut && { actorLeftOut: event.actorId }),
           suppressed: suppressed.slice(0, SUPPRESSED_LOG_LIMIT),
           suppressedTotal: suppressed.length,
         },

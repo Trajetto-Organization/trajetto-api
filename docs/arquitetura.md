@@ -678,6 +678,30 @@ nas réplicas HTTP e uma Application `worker`), só por gatilho medido:
   `tests/unitaires/notifications/preference-catalog.test.ts` trava as duas
   regras: nenhum aviso com canal em `SYSTEM`, e a categoria de todo aviso
   que uma preferência governa no catálogo de cada papel que o recebe.
+- **Ninguém é avisado do que acabou de fazer** (14/11/2026). Quem causou o
+  evento (o `actorId` da linha do outbox, que toda publicação feita por uma
+  pessoa leva) fica fora dos destinatários em todos os canais: sino, toast
+  em tempo real, push, e-mail e WhatsApp. A regra fica num lugar só
+  (`recipientsBesidesActor`, em `pipeline-rules.ts`), aplicada pelo pipeline
+  ao que a política resolveu. Antes, o administrador que lançava uma multa
+  estava entre os administradores avisados, e o toast do sino chegava logo
+  depois do "sucesso" do formulário. O mesmo valia para a OS, a conta ou o
+  cartão atribuídos a si mesmo, para o push do plano da rota que o próprio
+  motorista mudou com uma ocorrência (`route.plan_changed` passou a levar o
+  ator) e para o aviso de divergência da IA ao administrador que pediu a
+  leitura, que já a acompanha ao vivo pelo `aiVerification`. As exceções
+  dizem o motivo em `notifiesActor`: `security` em `master-user.created` e
+  `master-user.updated` (a confirmação da conta Master que a pessoa criou ou
+  editou, decisão D-49) e em `master-user.account-updated` (a própria
+  conta); `verdict` em `delivery-proof.ai-flagged` (a leitura da IA do
+  canhoto que o motorista mandou). Os avisos de plano já deixavam o Master
+  que fez a mudança de fora. A trilha de atividade do ator e os sinais de
+  tempo real que fazem as telas recarregarem (`routeEvent`,
+  `catalogChanged`…) não são avisos e não mudam.
+  `tests/unitaires/notifications/actor-notice.test.ts` trava a lista de
+  exceções e o `actorId` em toda publicação; só as varreduras (pedido da
+  torre escalado, rota esquecida) e o disjuntor de webhook publicam sem
+  ator.
 
 | Área         | Módulos (`src/modules/`)                                                                                                                                                      | Prefixo HTTP                                                                                                        |
 | ------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
