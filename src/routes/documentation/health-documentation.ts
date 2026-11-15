@@ -169,6 +169,148 @@ const httpGroupWindow = z.object({
   }),
 });
 
+/**
+ * The database's own numbers (database-metrics.ts, plano-escala F1-06).
+ * Every one optional — the previous replica of a rolling deploy does not
+ * send them — and nullable: a part that failed leaves its fields null and
+ * names itself in `collection_errors`.
+ */
+const nullableNumber = () => z.number().nullable();
+
+const databaseMetricsShape = {
+  xid_age: nullableNumber()
+    .optional()
+    .describe(
+      "Idade do xid mais antigo sem congelar entre os bancos do cluster (o wraparound é do cluster). O Postgres para de aceitar escrita perto de 2^31.",
+    ),
+  xid_age_database: nullableNumber()
+    .optional()
+    .describe("A mesma idade, só deste banco."),
+  mxid_age: nullableNumber()
+    .optional()
+    .describe("Idade do multixact mais antigo do cluster."),
+  cache_hit_ratio: nullableNumber()
+    .optional()
+    .describe(
+      "Blocos achados no shared_buffers sobre os lidos, desde o último reset das estatísticas (0 a 1); null antes da primeira leitura.",
+    ),
+  blocks_hit: nullableNumber()
+    .optional()
+    .describe("Contador acumulado de blocos achados na memória."),
+  blocks_read: nullableNumber()
+    .optional()
+    .describe("Contador acumulado de blocos lidos do disco."),
+  oldest_write_xact_seconds: nullableNumber()
+    .optional()
+    .describe(
+      "Há quanto tempo está aberta a transação de ESCRITA mais antiga do cluster (uma sessão com xid); segura o vacuum de todas as tabelas. null sem nenhuma.",
+    ),
+  oldest_snapshot_seconds: nullableNumber()
+    .optional()
+    .describe(
+      "Há quanto tempo está aberta a transação mais antiga que segura um snapshot (backend_xmin), escrita ou leitura.",
+    ),
+  oldest_snapshot_xmin_age: nullableNumber()
+    .optional()
+    .describe("Idade, em transações, do xmin mais antigo das sessões."),
+  stats_cluster_wide: z
+    .boolean()
+    .nullable()
+    .optional()
+    .describe(
+      "Se as duas idades acima enxergam as sessões de todos os usuários (superusuário ou pg_read_all_stats); false = só as do próprio usuário da API.",
+    ),
+  archiver: z
+    .object({
+      archived_count: nullableNumber(),
+      failed_count: nullableNumber(),
+      last_archived_at: z.string().nullable(),
+      last_archived_age_seconds: nullableNumber().describe(
+        "Há quantos segundos o último WAL foi arquivado; null sem nenhum.",
+      ),
+      last_failed_at: z.string().nullable(),
+    })
+    .nullable()
+    .optional()
+    .describe(
+      "pg_stat_archiver: o arquivamento contínuo do WAL (PITR). Com archive_mode=off, tudo fica zerado ou null.",
+    ),
+  hot_tables: z
+    .array(
+      z.object({
+        table: z.string(),
+        partitions: z
+          .number()
+          .describe("Partições somadas; 1 numa tabela sem partição."),
+        n_live_tup: z.number(),
+        n_dead_tup: z.number(),
+        dead_tuple_percent: z.number(),
+        last_autovacuum: z.string().nullable(),
+      }),
+    )
+    .nullable()
+    .optional()
+    .describe(
+      "As tabelas quentes do plano de escala, cada uma pela raiz da partição, com as estimativas do pg_stat_user_tables (nunca uma contagem).",
+    ),
+  parameters: z
+    .record(z.string(), z.string().nullable())
+    .nullable()
+    .optional()
+    .describe(
+      "Parâmetros do servidor sem segredo (shared_buffers, max_wal_size, archive_mode, autovacuum_freeze_max_age…), como o SHOW os mostra. Nunca archive_command.",
+    ),
+  pg_stat_statements: z
+    .enum(["ready", "not_loaded", "missing"])
+    .nullable()
+    .optional()
+    .describe(
+      "ready = a view responde; not_loaded = a extensão existe sem a biblioteca no shared_preload_libraries (a produção até a imagem nova do Postgres, sem alerta); missing = sem a extensão.",
+    ),
+  pg_wal: z
+    .object({
+      readable: z
+        .boolean()
+        .nullable()
+        .describe(
+          "Se o usuário da API pode listar o pg_wal (superusuário ou pg_monitor); null quando a primeira leitura falhou.",
+        ),
+      files: nullableNumber(),
+      bytes: nullableNumber(),
+    })
+    .optional()
+    .describe(
+      "O que o pg_wal ocupa. Um arquivamento parado enche este diretório até o banco parar.",
+    ),
+  sizes: z
+    .object({
+      database_bytes: nullableNumber(),
+      tables: z.array(z.object({ table: z.string(), total_bytes: z.number() })),
+      measured_at: z
+        .string()
+        .describe("Quando foi medido: a cópia vale 5 min em cada réplica."),
+    })
+    .nullable()
+    .optional()
+    .describe(
+      "Tamanho do banco e das tabelas quentes (com índices e TOAST, partições somadas).",
+    ),
+  collection_errors: z
+    .array(
+      z.object({
+        part: z.enum(["core", "pg_wal", "sizes"]),
+        code: z
+          .string()
+          .nullable()
+          .describe("O SQLSTATE da recusa; null para outra falha."),
+      }),
+    )
+    .optional()
+    .describe(
+      "As partes desta leitura do banco que falharam; os campos delas ficam null e as outras respondem.",
+    ),
+};
+
 const readinessStatus = z.enum([
   "ok",
   "warning",
@@ -278,6 +420,7 @@ const healthResponses = {
         .number()
         .describe("Postgres max_connections — the hard ceiling for replicas."),
       connection_usage_percent: z.number(),
+      ...databaseMetricsShape,
     }),
     outbox: z.object({
       pending: z

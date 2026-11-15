@@ -27,6 +27,7 @@ import { readPrismaPool } from "@/shared/health/pool-metrics";
 import { runtimeMetrics } from "@/shared/health/runtime-metrics";
 import { providerMetrics } from "@/shared/health/provider-metrics";
 import { readRedisMetrics } from "@/shared/health/redis-metrics";
+import { collectDatabaseMetrics } from "@/shared/health/database-metrics";
 import { httpMetrics } from "@/shared/health/http-metrics";
 import { SnapshotCache } from "@/shared/cache/snapshot-cache";
 import { realtimeMetrics } from "@/websocket";
@@ -48,8 +49,10 @@ import type { ProofSigningService } from "@/shared/services/proof-signing/proof-
  * (operationalSnapshotSql: every former statement is a subquery of it, with
  * its own plan), the cron state one more, the workers and the partitions one
  * each — still one after the other, so the endpoint never takes more than one
- * slot of the pool it reports on, the property it was built around. Redis is
- * read alongside them: it is not the pool.
+ * slot of the pool it reports on, the property it was built around. The
+ * database's own numbers (F1-06, database-metrics.ts) come after them, up to
+ * three more statements in the same order. Redis is read alongside them: it
+ * is not the pool.
  *
  * The snapshot is per replica, like the runtime numbers in it, and lives ten
  * seconds: the Sistema screen, a second tab and an alert monitor polling it
@@ -131,6 +134,12 @@ async function collectOperationalMetrics() {
   );
   const driverPosition = await readPartitionRunway();
 
+  // The database's own numbers (plano-escala F1-06): one more statement,
+  // pg_wal when this user may list it, and the sizes from a five-minute
+  // copy. After the others, one at a time; it never throws, a part that
+  // fails is a collection error.
+  const databaseMetrics = await collectDatabaseMetrics();
+
   const windowCounts = new Map<string, number>();
   for (const row of snapshot.window_rows) {
     windowCounts.set(`${row.channel}:${row.status}`, row.n);
@@ -205,6 +214,7 @@ async function collectOperationalMetrics() {
         activeConnections,
         maxConnections,
       ),
+      ...databaseMetrics,
     },
     outbox: {
       pending: snapshot.outbox_pending,

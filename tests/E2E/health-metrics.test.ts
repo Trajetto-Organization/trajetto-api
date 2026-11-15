@@ -1,6 +1,8 @@
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { randomUUID } from "node:crypto";
+
+import pg from "pg";
 
 import { sign } from "jsonwebtoken";
 import auth from "@/config/auth";
@@ -407,6 +409,117 @@ describe("the queue tables", () => {
       ).toBe(expected);
     }
   });
+});
+
+/** A plain session on this file's database, apart from the API's pool. */
+async function secondConnection(): Promise<pg.Client> {
+  const url = new URL(process.env.DATABASE_URL as string);
+
+  url.searchParams.delete("schema");
+
+  const client = new pg.Client({
+    connectionString: url.toString(),
+    connectionTimeoutMillis: 10_000,
+  });
+
+  await client.connect();
+
+  return client;
+}
+
+/**
+ * The database's own numbers (plano-escala F1-06), from the real views.
+ *
+ * The plan's alerts read them: an archiver that stopped, an xid running out,
+ * a write left open that holds back vacuum everywhere, a pg_wal filling the
+ * disk. A field the serializer drops, or an age measured from the wrong
+ * column, is an alert that never fires. The test server is a superuser on a
+ * Postgres that preloads pg_stat_statements, as the CI's is.
+ */
+describe("the database's own numbers", () => {
+  it("come back from the real views", async () => {
+    const { database } = (await metrics(masterToken)).json();
+
+    expect(database.collection_errors).toEqual([]);
+    expect(database.xid_age_database).toBeGreaterThan(0);
+    // Wraparound is the cluster's: the oldest database counts.
+    expect(database.xid_age).toBeGreaterThanOrEqual(database.xid_age_database);
+    expect(database.cache_hit_ratio).toBeGreaterThan(0);
+    expect(database.cache_hit_ratio).toBeLessThanOrEqual(1);
+    expect(database.stats_cluster_wide).toBe(true);
+    expect(database.pg_stat_statements).toBe("ready");
+    expect(database.parameters.max_connections).toBe(
+      String(database.max_connections),
+    );
+    expect(database.parameters).not.toHaveProperty("archive_command");
+
+    // The test server does not archive: zero, never an error.
+    expect(database.parameters.archive_mode).toBe("off");
+    expect(database.archiver).toMatchObject({
+      failed_count: 0,
+      last_archived_at: null,
+    });
+
+    expect(database.pg_wal.readable).toBe(true);
+    expect(database.pg_wal.files).toBeGreaterThan(0);
+    expect(database.pg_wal.bytes).toBeGreaterThan(0);
+
+    expect(database.sizes.database_bytes).toBeGreaterThan(0);
+    expect(database.sizes.tables).toContainEqual({
+      table: "driver_position",
+      total_bytes: expect.any(Number),
+    });
+  });
+
+  it("report a partitioned table once, by its root", async () => {
+    const { database } = (await metrics(masterToken)).json();
+    const tables = database.hot_tables.map(
+      (entry: { table: string }) => entry.table,
+    );
+
+    const trail = database.hot_tables.find(
+      (entry: { table: string }) => entry.table === "driver_position",
+    );
+
+    const roots = tables.filter((name: string) => name === "driver_position");
+    const leaks = tables.filter((n: string) => /^driver_position_/.test(n));
+
+    // The migration creates several daily partitions ahead.
+    expect(trail.partitions).toBeGreaterThan(1);
+    expect(roots).toEqual(["driver_position"]);
+    expect(leaks).toEqual([]);
+    expect(tables).toContain("notification_delivery");
+  });
+
+  it("see a write and a snapshot left open on other connections", async () => {
+    const writer = await secondConnection();
+    const reader = await secondConnection();
+
+    try {
+      // An xid assigned is a write as far as vacuum is concerned.
+      await writer.query("BEGIN");
+      await writer.query("SELECT pg_current_xact_id()");
+
+      // A repeatable-read snapshot held, writing nothing.
+      await reader.query("BEGIN ISOLATION LEVEL REPEATABLE READ");
+      await reader.query("SELECT 1");
+
+      await vi.waitFor(
+        async () => {
+          const { database } = (await metrics(masterToken)).json();
+
+          expect(database.oldest_write_xact_seconds).toBeGreaterThanOrEqual(3);
+          expect(database.oldest_snapshot_seconds).toBeGreaterThanOrEqual(3);
+        },
+        { timeout: 30_000, interval: 500 },
+      );
+    } finally {
+      await writer.query("ROLLBACK").catch(() => undefined);
+      await reader.query("ROLLBACK").catch(() => undefined);
+      await writer.end();
+      await reader.end();
+    }
+  }, 60_000);
 });
 
 /**

@@ -321,13 +321,19 @@ async function healthRoutes(app: FastifyInstance) {
    *   replica, a job that stopped succeeding (OBS-10, INV-07).
    * - runtime: the event loop, the threadpool and the Prisma pool of the
    *   replica that answered — what saturates first (GAP3-10, OBS-11).
+   * - the database itself (plano-escala F1-06): xid age, hit ratio, the
+   *   oldest write and the oldest snapshot of the cluster, the archiver,
+   *   pg_wal, the hot tables, the sizes, the parameters and
+   *   pg_stat_statements — what the plan's alerts and capacity readings use.
    *
    * Every query is served by an index, with statuses as SQL literals so a
    * partial index is usable under a generic plan (OBS-09; the plan test is
    * tests/E2E/health-metrics-plans.test.ts). The queue numbers are one
-   * statement and the whole read four, run one after the other so the
-   * endpoint never takes more than one slot of the pool it reports on, and
-   * served from a 10-second snapshot per replica (operational-metrics.ts).
+   * statement and the whole read four, plus the database's own three
+   * (database-metrics.ts: catalog views, no table is scanned), run one after
+   * the other so the endpoint never takes more than one slot of the pool it
+   * reports on, and served from a 10-second snapshot per replica
+   * (operational-metrics.ts).
    *
    * MASTER-only: it exposes infrastructure posture, not tenant data.
    */
@@ -341,15 +347,16 @@ async function healthRoutes(app: FastifyInstance) {
         tags: ["health"],
         summary: "Métricas operacionais (filas e uso de conexões)",
         description:
-          "Uso de conexões do Postgres em relação a max_connections, profundidade e atraso do outbox, fila do pipeline de IA, fila e resultado das notificações por canal, mensagens de WhatsApp que a Meta recusou ou recebeu mais de uma vez (pelos callbacks de status), fila de webhooks, inchaço das tabelas de fila, workers de cada réplica, crons, folga das partições de driver_position, runtime (com a CPU por requisição) e pool do Prisma da réplica que respondeu, o Redis (latência, memória, operações por segundo, CPU, pub/sub, saída, buffers dos clientes, política e despejos; nunca endereço nem chave), contratos legados do app ainda em uso, requisições HTTP da réplica (classes de status, latência por grupo de rota e o contrato do app nas posições dos últimos 10 minutos), concordância da pré-checagem do aparelho com a leitura do servidor e estado do certificado de assinatura do comprovante. Orienta decisões de capacidade (PgBouncer, réplicas, broker dedicado) e o disparo de vacuum. A leitura vale por 10 s em cada réplica (`timestamp` diz quando foi feita): pedidos nesse intervalo recebem a mesma.",
+          "Uso de conexões do Postgres em relação a max_connections; o próprio banco (idade do xid do cluster, acerto do cache, a transação de escrita e o snapshot mais antigos do cluster, arquivamento do WAL, tamanho do pg_wal quando o usuário pode ler, tabelas quentes pela raiz da partição, tamanhos medidos a cada 5 min, parâmetros sem segredo e o estado do pg_stat_statements; uma parte que falha fica null e aparece em `collection_errors`); profundidade e atraso do outbox, fila do pipeline de IA, fila e resultado das notificações por canal, mensagens de WhatsApp que a Meta recusou ou recebeu mais de uma vez (pelos callbacks de status), fila de webhooks, inchaço das tabelas de fila, workers de cada réplica, crons, folga das partições de driver_position, runtime (com a CPU por requisição) e pool do Prisma da réplica que respondeu, o Redis (latência, memória, operações por segundo, CPU, pub/sub, saída, buffers dos clientes, política e despejos; nunca endereço nem chave), contratos legados do app ainda em uso, requisições HTTP da réplica (classes de status, latência por grupo de rota e o contrato do app nas posições dos últimos 10 minutos), concordância da pré-checagem do aparelho com a leitura do servidor e estado do certificado de assinatura do comprovante. Orienta decisões de capacidade (PgBouncer, réplicas, broker dedicado) e o disparo de vacuum. A leitura vale por 10 s em cada réplica (`timestamp` diz quando foi feita): pedidos nesse intervalo recebem a mesma.",
         response: {
           200: healthResponses.operationalMetrics,
         },
       },
     },
     async (_request, reply) => {
-      // Four statements, one after the other, served from a 10 s snapshot
-      // with one read in flight at a time (operational-metrics.ts).
+      // Four statements and the database's own three, one after the other,
+      // served from a 10 s snapshot with one read in flight at a time
+      // (operational-metrics.ts, database-metrics.ts).
       return reply.status(200).send(await readOperationalMetrics());
     },
   );

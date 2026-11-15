@@ -2026,8 +2026,14 @@ autenticação por minuto antes de 429 `RATE_LIMITED`.
 | Databases (Postgres e Redis)                                                   | o que o Dokploy configura                                    | conferência manual: `pg_isready`; `redis-cli -a … ping`                                                                                                                                                                                                          |
 | Monitor externo                                                                | `/health/readiness` da API e `/api/health` da web, 1/min     | uptime ([seção 20](#20-alertas-e-monitoramento))                                                                                                                                                                                                                 |
 
-Outras rotas: `/health/metrics` (filas, workers, crons, pool, certificado) e
-`/health/providers` (prontidão dos provedores), ambas só MASTER.
+Outras rotas: `/health/metrics` (filas, workers, crons, pool, certificado e
+os números do próprio banco: xid, cache, escrita e snapshot mais antigos,
+arquivamento, `pg_wal`, tabelas quentes, tamanhos e `pg_stat_statements`) e
+`/health/providers` (prontidão dos provedores), ambas só MASTER. O tamanho do
+`pg_wal` só aparece quando o usuário do banco é superusuário ou tem
+`pg_monitor`; as idades das sessões dos outros usuários, com superusuário ou
+`pg_read_all_stats` (depois do corte dos roles, na onda 6 do plano de escala,
+essa leitura passa ao role de manutenção).
 
 ## 13. Configurar o GitHub
 

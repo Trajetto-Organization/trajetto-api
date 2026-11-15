@@ -377,10 +377,200 @@ function operationalSnapshotSql(since: Date): Prisma.Sql {
   `;
 }
 
+/**
+ * The tables whose growth and churn the scale plan watches (plano-escala,
+ * "Tabelas quentes por tempo" and the mutable state beside them): the GPS
+ * trail, the delivery history, the audit trail, the bell, the sessions, the
+ * queues, the deliveries themselves and the series. A partitioned one is
+ * reported once, by its root, with its partitions summed: the trail is ~90
+ * daily partitions, and a row per partition would bury the number.
+ */
+const HOT_TABLES = [
+  "driver_position",
+  "delivery_event",
+  "activity",
+  "notification",
+  "refresh_token",
+  "domain_outbox_event",
+  "notification_delivery",
+  "notification_provider_receipt",
+  "webhook_delivery",
+  "ai_analysis_request",
+  "delivery",
+  "route",
+  "route_stop",
+  "delivery_occurrence",
+  "ops_sample",
+] as const;
+
+/**
+ * The parameters the capacity reading compares against (shared_buffers
+ * derived from the memory limit, the WAL ceiling, the archiver, the freeze
+ * age the xid alert is read against). Only settings that hold no secret:
+ * never archive_command or a connection string, which can carry one.
+ */
+const DATABASE_PARAMETERS = [
+  "server_version_num",
+  "max_connections",
+  "shared_buffers",
+  "effective_cache_size",
+  "work_mem",
+  "maintenance_work_mem",
+  "max_wal_size",
+  "wal_level",
+  "archive_mode",
+  "archive_timeout",
+  "autovacuum_freeze_max_age",
+  "statement_timeout",
+  "idle_in_transaction_session_timeout",
+  "shared_preload_libraries",
+  "compute_query_id",
+] as const;
+
+/**
+ * The first of the three database reads of /health/metrics (plano-escala
+ * F1-06): ONE statement, every part a subquery joined on `true`, so a view
+ * with no row (a stats reset, a database without its pg_stat_database row)
+ * leaves its columns null instead of emptying the answer.
+ *
+ *  - xid: the oldest unfrozen xid of the CLUSTER (wraparound is per cluster:
+ *    template0 and any other database count) and of this database;
+ *  - hit ratio: pg_stat_database since its last reset; the counters go out
+ *    too, so a series can take the difference between two minutes;
+ *  - the oldest WRITE transaction of the cluster (a backend that holds an
+ *    xid, so it has written or is about to) and the oldest snapshot (any
+ *    backend_xmin): both hold back vacuum, and the feed of the plan waits on
+ *    the second. This statement's own backend is left out. Without
+ *    superuser or pg_read_all_stats, other roles' sessions read null here;
+ *    `stats_cluster_wide` says which;
+ *  - pg_stat_archiver, readable by anyone;
+ *  - the hot tables by partition root, from the statistics collector's
+ *    estimates (pg_stat_user_tables), never a count;
+ *  - the safe parameters and what pg_stat_statements needs: whether the
+ *    extension exists and whether the library is preloaded. A preloaded
+ *    library is proof it loaded, because the server does not start when it
+ *    cannot; the view itself is not read here;
+ *  - whether this user may list pg_wal (the second read).
+ *
+ * clock_timestamp(), not now(): a transaction that began after this one did
+ * would otherwise read a negative age.
+ */
+function databaseCoreSql(): Prisma.Sql {
+  const parameters = Prisma.join(
+    DATABASE_PARAMETERS.map(
+      (name) => Prisma.sql`${name}::text, current_setting(${name}, true)`,
+    ),
+  );
+
+  return Prisma.sql`
+    SELECT
+      (SELECT max(age(datfrozenxid)) FROM pg_database)::float8 AS xid_age,
+      (SELECT age(datfrozenxid) FROM pg_database
+        WHERE datname = current_database())::float8 AS xid_age_database,
+      (SELECT max(mxid_age(datminmxid)) FROM pg_database)::float8 AS mxid_age,
+      db.blks_hit::float8 AS blocks_hit,
+      db.blks_read::float8 AS blocks_read,
+      activity.oldest_write_xact_seconds,
+      activity.oldest_snapshot_seconds,
+      activity.oldest_snapshot_xmin_age,
+      archiver.archived_count::float8 AS archived_count,
+      archiver.failed_count::float8 AS archive_failed_count,
+      archiver.last_archived_time AS last_archived_at,
+      EXTRACT(EPOCH FROM (clock_timestamp() - archiver.last_archived_time))::float8
+        AS last_archived_age_seconds,
+      archiver.last_failed_time AS last_archive_failed_at,
+      (SELECT coalesce(json_agg(t ORDER BY t.table_name), '[]'::json) FROM (
+        SELECT
+          coalesce(root.relname, c.relname)::text AS table_name,
+          count(*)::int AS partitions,
+          coalesce(sum(s.n_live_tup), 0)::float8 AS n_live_tup,
+          coalesce(sum(s.n_dead_tup), 0)::float8 AS n_dead_tup,
+          max(s.last_autovacuum) AS last_autovacuum
+        FROM pg_stat_user_tables s
+        JOIN pg_class c ON c.oid = s.relid AND c.relkind = 'r'
+        LEFT JOIN pg_class root ON root.oid = pg_partition_root(c.oid)
+        WHERE s.schemaname = current_schema()
+          AND coalesce(root.relname, c.relname) = ANY(${[...HOT_TABLES]}::text[])
+        GROUP BY 1
+      ) t) AS hot_tables,
+      json_build_object(${parameters}) AS parameters,
+      EXISTS (
+        SELECT 1 FROM pg_extension WHERE extname = 'pg_stat_statements'
+      ) AS pgss_installed,
+      (
+        coalesce((SELECT rolsuper FROM pg_roles WHERE rolname = current_user), false)
+        OR pg_has_role(current_user, 'pg_read_all_stats', 'USAGE')
+      ) AS stats_cluster_wide,
+      has_function_privilege('pg_ls_waldir()', 'EXECUTE') AS wal_readable
+    FROM (SELECT 1) one
+    LEFT JOIN (
+      SELECT blks_hit, blks_read FROM pg_stat_database
+      WHERE datname = current_database()
+    ) db ON true
+    LEFT JOIN (
+      SELECT
+        EXTRACT(EPOCH FROM max(clock_timestamp() - xact_start)
+          FILTER (WHERE backend_xid IS NOT NULL))::float8
+          AS oldest_write_xact_seconds,
+        EXTRACT(EPOCH FROM max(clock_timestamp() - xact_start)
+          FILTER (WHERE backend_xmin IS NOT NULL))::float8
+          AS oldest_snapshot_seconds,
+        max(age(backend_xmin))::float8 AS oldest_snapshot_xmin_age
+      FROM pg_stat_activity
+      WHERE pid <> pg_backend_pid()
+    ) activity ON true
+    LEFT JOIN pg_stat_archiver archiver ON true
+  `;
+}
+
+/**
+ * The second read: what pg_wal holds, files and bytes. Its own statement,
+ * run only when the first said this user may (superuser or pg_monitor):
+ * otherwise pg_ls_waldir() refuses, and a refusal would fail a statement
+ * that carries nothing else. A full pg_wal is how an archiver that stopped
+ * becomes a database that stops.
+ */
+function databaseWalSql(): Prisma.Sql {
+  return Prisma.sql`
+    SELECT count(*)::int AS files, coalesce(sum(size), 0)::float8 AS bytes
+    FROM pg_ls_waldir()
+  `;
+}
+
+/**
+ * The third read, cached for five minutes by its caller: the database's size
+ * and each hot table's (with its indexes and TOAST, partitions summed under
+ * the root). pg_database_size walks the data directory, so it is not read on
+ * every 10-second snapshot; sizes move by the day, not by the minute.
+ */
+function databaseSizesSql(): Prisma.Sql {
+  return Prisma.sql`
+    SELECT
+      pg_database_size(current_database())::float8 AS database_bytes,
+      (SELECT coalesce(json_agg(t ORDER BY t.table_name), '[]'::json) FROM (
+        SELECT
+          coalesce(root.relname, c.relname)::text AS table_name,
+          sum(pg_total_relation_size(c.oid))::float8 AS total_bytes
+        FROM pg_class c
+        JOIN pg_namespace n ON n.oid = c.relnamespace
+        LEFT JOIN pg_class root ON root.oid = pg_partition_root(c.oid)
+        WHERE c.relkind = 'r'
+          AND n.nspname = current_schema()
+          AND coalesce(root.relname, c.relname) = ANY(${[...HOT_TABLES]}::text[])
+        GROUP BY 1
+      ) t) AS tables
+  `;
+}
+
 export {
+  DATABASE_PARAMETERS,
+  HOT_TABLES,
   QUEUE_TABLES,
   aiFailedSinceSql,
   aiQueueSql,
+  databaseCoreSql,
+  databaseSizesSql,
+  databaseWalSql,
   operationalSnapshotSql,
   outboxFailedSql,
   outboxPendingSql,

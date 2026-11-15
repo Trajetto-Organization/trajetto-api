@@ -61,6 +61,36 @@ function pgStatStatementsStateOf(answer: {
   return undefined;
 }
 
+/**
+ * Whether a shared_preload_libraries value names pg_stat_statements. The
+ * list is comma separated, each entry maybe quoted and maybe a path
+ * (`$libdir/pg_stat_statements`), with or without the `.so`.
+ */
+function preloadsPgStatStatements(value: string | null | undefined): boolean {
+  return (value ?? "")
+    .split(",")
+    .map((entry) => entry.trim().replace(/^"|"$/g, ""))
+    .map((entry) => entry.split("/").pop()?.replace(/\.so$/, "") ?? "")
+    .includes("pg_stat_statements");
+}
+
+/**
+ * The state from the catalog alone, for a read that cannot afford a second
+ * statement that may throw (the database metrics, F1-06): installed and
+ * preloaded is ready, because a server whose preloaded library cannot load
+ * does not start.
+ */
+function pgStatStatementsStateFromCatalog(answer: {
+  installed: boolean;
+  sharedPreloadLibraries: string | null | undefined;
+}): PgStatStatementsState {
+  if (!answer.installed) return "missing";
+
+  return preloadsPgStatStatements(answer.sharedPreloadLibraries)
+    ? "ready"
+    : "not_loaded";
+}
+
 const quoteIdent = (name: string) => `"${name.replace(/"/g, '""')}"`;
 
 type Client = Pick<Prisma.TransactionClient, "$queryRaw">;
@@ -103,5 +133,10 @@ async function readPgStatStatementsState(
   return state;
 }
 
-export { pgStatStatementsStateOf, readPgStatStatementsState };
+export {
+  pgStatStatementsStateFromCatalog,
+  pgStatStatementsStateOf,
+  preloadsPgStatStatements,
+  readPgStatStatementsState,
+};
 export type { PgStatStatementsState };
