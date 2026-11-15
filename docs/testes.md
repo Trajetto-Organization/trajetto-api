@@ -154,7 +154,7 @@ valor fora do padrão (100), senão um painel com 100 fixo passaria. O
 migration, mas a view só responde com a biblioteca carregada no boot do
 servidor, e `pg-stat-statements-state.test.ts` exige o estado `ready` (sem
 o `-c`, ele fica `not_loaded`, como a produção até a imagem nova do
-Postgres). No CI (os jobs de E2E do `validate.yml`) o contêiner de serviço
+Postgres); `pgss-snapshot.test.ts` lê a view de verdade. No CI (os jobs de E2E do `validate.yml`) o contêiner de serviço
 não aceita comando, e um passo aplica os mesmos valores com `ALTER SYSTEM`
 e reinicia o contêiner. O `socket.io-client` dos testes de socket é devDependency da API
 (mesma versão da web): basta o `yarn install` daqui.

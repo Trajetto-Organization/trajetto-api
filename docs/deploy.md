@@ -3935,6 +3935,40 @@ GROUP BY 1
 ORDER BY 1;
 ```
 
+### Custo das consultas (`pgss_snapshot`)
+
+De hora em hora (:13), a réplica que vence a eleição do cron
+`snapshot-query-stats` lê o `pg_stat_statements` deste banco e grava em
+`pgss_snapshot` o que cada uma das `PGSS_SNAPSHOT_TOP` (200) consultas mais
+caras da hora custou, por role (`userid`): chamadas, tempo de execução e de
+planejamento, linhas, blocos e WAL. A view é acumulada, então cada linha é a
+diferença contra a leitura anterior (guardada em `pgss_baseline`; o que a
+última leitura viu da extensão fica em `pgss_state`). A coluna `basis` diz
+como a diferença foi tirada: `previous` (contra a hora anterior), `new` (a
+consulta entrou na view na hora), `recreated` (voltou depois de um despejo:
+um contador abaixo da leitura anterior) ou `reset` (a primeira execução, ou
+as estatísticas foram zeradas: o `period_start` é o `stats_reset`). O
+`max_exec_time_ms` é o máximo acumulado da entrada, como o PG16 guarda. Um
+despejo (`dealloc` subindo) vira o aviso `pg_stat_statements evicted
+entries since the last snapshot`: as consultas que voltaram contam menos na
+hora, e o caminho é um `pg_stat_statements.max` maior. Enquanto o servidor
+não pré-carrega a biblioteca (a produção até a imagem nova do Postgres), o
+cron não faz nada e avisa `query stats snapshot skipped`, sem falhar. O
+texto das consultas pode ter literais: fica só no banco, e a leitura é pelo
+`psql`.
+
+```sql
+-- as 10 consultas que mais custaram nas últimas 24 h, por role
+SELECT userid, queryid, sum(calls) AS chamadas,
+       round(sum(total_exec_time_ms)::numeric, 1) AS exec_ms,
+       max(max_exec_time_ms) AS maximo_ms, min(left(query, 80)) AS consulta
+FROM pgss_snapshot
+WHERE taken_at > now() - interval '24 hours'
+GROUP BY 1, 2
+ORDER BY exec_ms DESC
+LIMIT 10;
+```
+
 ### Expurgos parciais
 
 Os expurgos noturnos (`cleanup-*`, 03:17–04:50 UTC, os `refresh_token`

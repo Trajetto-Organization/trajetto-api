@@ -540,6 +540,15 @@ const envSchema = z
       z.coerce.number().positive().max(1_024).default(12),
     ),
 
+    // How many statements the hourly pg_stat_statements snapshot keeps
+    // (plano-escala F1-12): the most expensive of the hour by execution
+    // time. 200 covers the whole application's statements many times over
+    // and keeps the table at about 4.800 rows a day.
+    PGSS_SNAPSHOT_TOP: z.preprocess(
+      (value) => (value === "" ? undefined : value),
+      z.coerce.number().int().min(1).max(5_000).default(200),
+    ),
+
     // Which node, slot and service this task is (plano-escala F4-50): the
     // container's hostname is a container id that changes every deploy and
     // names no machine, and with a second node "the slow replica" has to.

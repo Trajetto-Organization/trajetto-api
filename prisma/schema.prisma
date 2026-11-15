@@ -1606,6 +1606,83 @@ model OpsSample {
   @@map("ops_sample")
 }
 
+/// The hourly cost of the top statements (plano-escala F1-12): the
+/// difference of pg_stat_statements' cumulative counters between two hourly
+/// readings, for the 200 most expensive statements of the hour, by role.
+/// The query text may carry literals: read by psql, no route serves it.
+/// Written by src/jobs/cron/snapshot-query-stats-job.ts.
+model PgssSnapshot {
+  /// uuid v7: time-ordered, so new rows land at the end of the index.
+  id String @id @default(uuid(7))
+
+  /// The hourly run that wrote the row, and where its period starts: the
+  /// previous run, or the statistics' reset.
+  taken_at     DateTime
+  period_start DateTime
+
+  /// "previous" (against the baseline), "new" (entered the view in the
+  /// period), "recreated" (came back after an eviction) or "reset".
+  basis String
+
+  /// The role's oid and pg_stat_statements' own keys.
+  userid   BigInt
+  toplevel Boolean
+  queryid  BigInt
+  query    String?
+
+  /// The period's growth of each counter; max_exec_time_ms is cumulative
+  /// since the entry began (PG16 keeps one maximum per entry).
+  calls               BigInt
+  total_exec_time_ms  Float
+  total_plan_time_ms  Float
+  max_exec_time_ms    Float
+  rows                BigInt
+  shared_blks_hit     BigInt
+  shared_blks_read    BigInt
+  shared_blks_dirtied BigInt
+  shared_blks_written BigInt
+  temp_blks_written   BigInt
+  wal_bytes           BigInt
+
+  @@index([taken_at])
+  @@index([queryid, taken_at])
+  @@map("pgss_snapshot")
+}
+
+/// Every statement's cumulative counters at the last hourly reading: what
+/// the next one subtracts. Replaced whole by each run.
+model PgssBaseline {
+  userid              BigInt
+  toplevel            Boolean
+  queryid             BigInt
+  calls               BigInt
+  total_exec_time_ms  Float
+  total_plan_time_ms  Float
+  rows                BigInt
+  shared_blks_hit     BigInt
+  shared_blks_read    BigInt
+  shared_blks_dirtied BigInt
+  shared_blks_written BigInt
+  temp_blks_written   BigInt
+  wal_bytes           BigInt
+
+  @@id([userid, toplevel, queryid])
+  @@map("pgss_baseline")
+}
+
+/// What the last hourly reading saw of pg_stat_statements itself: one row
+/// (CHECK id = 1). A stats_reset that moved is a reset; a dealloc that grew
+/// is evictions.
+model PgssState {
+  id          Int       @id @default(1)
+  taken_at    DateTime
+  stats_reset DateTime?
+  dealloc     BigInt
+  statements  Int
+
+  @@map("pgss_state")
+}
+
 enum AIAnalysisType {
   FUEL_ODOMETER
   CHECKLIST

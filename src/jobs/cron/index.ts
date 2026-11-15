@@ -18,6 +18,7 @@ import { escalateOccurrenceAuthorizationsJob } from "./escalate-occurrence-autho
 import { repairUnticketedMessagesJob } from "./repair-unticketed-messages-job";
 import { geocodeDeliveriesJob } from "./geocode-deliveries-job";
 import { alertRoutesLeftOpenJob } from "./alert-routes-left-open-job";
+import { snapshotQueryStatsJob } from "./snapshot-query-stats-job";
 
 /**
  * It records all the application's cron jobs.
@@ -84,6 +85,11 @@ function registerCronJobs(): void {
   // Hourly (:07): a route left "Em andamento" since an earlier day or for
   // more than 16 h goes to the admins, once (plan of 02/11/2026, K11, D26).
   scheduler.registerJob(alertRoutesLeftOpenJob);
+
+  // Hourly (:13): the hour's cost of the top statements, from
+  // pg_stat_statements into pgss_snapshot (plano-escala F1-12). A no-op
+  // with a warning until the server preloads the library.
+  scheduler.registerJob(snapshotQueryStatsJob);
 }
 
 export { registerCronJobs };
