@@ -64,8 +64,10 @@ const DELIVERY_COLUMN_DEFAULTS = {
   geocode_status: null,
   geocode_attempted_at: null,
   geocode_attempts: 0,
-  // 14/11/2026: which deliveries of the company stand at the same door.
+  // 14/11/2026: which deliveries of the company stand at the same door, and
+  // which one a copied point came from.
   address_key: null,
+  geo_copied_from: null,
 } as const;
 
 const DELIVERY_EVENT_COLUMN_DEFAULTS = {

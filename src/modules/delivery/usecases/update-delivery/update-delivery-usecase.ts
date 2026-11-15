@@ -218,8 +218,11 @@ class UpdateDeliveryUseCase {
 
       // The new address's point now, not at the next minute's job (E1):
       // the cleared bookkeeping re-queued it. Never awaited; not at all
-      // when another delivery's point was taken.
-      if (relocated && !reused) geocodeSoon(businessId, [deliveryId]);
+      // when another delivery's point was taken — read from the row
+      // written, as the write drops a copy whose root no longer held it.
+      if (relocated && (updated.latitude ?? null) === null) {
+        geocodeSoon(businessId, [deliveryId]);
+      }
 
       return updated;
     } catch (error) {

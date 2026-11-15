@@ -13,7 +13,7 @@ import {
   pickReusablePoint,
   type ReusedAddressPoint,
 } from "./address-point-reuse";
-import { readDoorCandidates } from "./address-point-propagation";
+import { lenderHolds, readDoorCandidates } from "./address-point-propagation";
 
 import {
   GEOCODING_BACKOFF_CAP_MINUTES,
@@ -70,6 +70,11 @@ type GeocodingSettlement =
       latitude: number;
       longitude: number;
       precision: Extract<AddressPrecision, "ADDRESS" | "STREET">;
+      /**
+       * The root delivery the point was copied from (reusablePoint); absent
+       * for the provider's own answer, a point of the delivery's own.
+       */
+      copiedFrom?: string | null;
     }
   | {
       kind: "COARSE";
@@ -127,7 +132,8 @@ interface IDeliveryGeocodingRepository {
 
   /**
    * Writes the outcome when the claim still holds and the delivery still
-   * has no point (a dispatcher's pin wins, always). True when written.
+   * has no point (a dispatcher's pin wins, always) — and, for a copied
+   * point, while its root still holds it (lenderHolds). True when written.
    */
   settle(
     claim: GeocodingClaim,
@@ -270,7 +276,7 @@ class DeliveryGeocodingRepository implements IDeliveryGeocodingRepository {
       exceptId: claim.id,
     });
 
-    return pickReusablePoint(candidates, now);
+    return pickReusablePoint(candidates, now, claim.id);
   }
 
   async settle(
@@ -278,6 +284,11 @@ class DeliveryGeocodingRepository implements IDeliveryGeocodingRepository {
     settlement: GeocodingSettlement,
     now: Date,
   ): Promise<boolean> {
+    // The link to a copied point's root goes with every outcome: the
+    // provider's answer is the delivery's own (null), and a link an older
+    // image left on a row without a point goes with it.
+    const copiedFrom =
+      settlement.kind === "RESOLVED" ? (settlement.copiedFrom ?? null) : null;
     const set = (() => {
       switch (settlement.kind) {
         case "RESOLVED":
@@ -287,17 +298,35 @@ class DeliveryGeocodingRepository implements IDeliveryGeocodingRepository {
             "geo_source" = 'GEOCODER',
             "geo_updated_at" = ${now},
             "geo_precision" = ${settlement.precision}::"DeliveryGeoPrecision",
-            "geocode_status" = 'RESOLVED'`;
+            "geocode_status" = 'RESOLVED',
+            "geo_copied_from" = ${copiedFrom}`;
         case "COARSE":
           return Prisma.sql`
             "geo_precision" = ${settlement.precision}::"DeliveryGeoPrecision",
-            "geocode_status" = 'COARSE'`;
+            "geocode_status" = 'COARSE',
+            "geo_copied_from" = NULL`;
         case "NOT_FOUND":
-          return Prisma.sql`"geocode_status" = 'NOT_FOUND'`;
+          return Prisma.sql`"geocode_status" = 'NOT_FOUND',
+            "geo_copied_from" = NULL`;
         case "FAILED":
-          return Prisma.sql`"geocode_status" = 'FAILED'`;
+          return Prisma.sql`"geocode_status" = 'FAILED',
+            "geo_copied_from" = NULL`;
       }
     })();
+    // A copy is written only while its root still holds the point, the
+    // root locked FOR SHARE by the same statement (lenderHolds).
+    const guard =
+      settlement.kind === "RESOLVED" && copiedFrom
+        ? lenderHolds(claim.businessId, {
+            latitude: settlement.latitude,
+            longitude: settlement.longitude,
+            geo_source: "GEOCODER",
+            geo_precision: settlement.precision,
+            geocode_status: "RESOLVED",
+            geo_updated_at: now,
+            geo_copied_from: copiedFrom,
+          })
+        : Prisma.sql`TRUE`;
 
     // Not a business edit: updated_at stays, so nothing that watches it
     // (the public API's updated_since) sees a change the customer did not
@@ -308,6 +337,7 @@ class DeliveryGeocodingRepository implements IDeliveryGeocodingRepository {
         AND "geocode_attempted_at" = ${claim.claimedAt}
         AND "latitude" IS NULL
         AND "geo_source" IS NULL
+        AND ${guard}
     `;
 
     return written === 1;

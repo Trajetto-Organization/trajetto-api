@@ -45,6 +45,9 @@ const INDEXES: Record<string, string> = {
   // address key, and only those; the newest point of each source first, so
   // each probe reads one entry.
   delivery_address_key_idx: `CREATE INDEX delivery_address_key_idx ON public.delivery USING btree ("businessId", address_key, geo_source, geo_updated_at DESC NULLS LAST, id DESC) WHERE (address_key IS NOT NULL)`,
+  // The pin's follow-up (pre-push review of 14/11/2026): the company's open
+  // copies of one source, and only those.
+  delivery_geo_copied_from_idx: `CREATE INDEX delivery_geo_copied_from_idx ON public.delivery USING btree ("businessId", geo_copied_from) WHERE ((geo_copied_from IS NOT NULL) AND (status = ANY (ARRAY['PENDING'::"DeliveryStatus", 'IN_TRANSIT'::"DeliveryStatus"])))`,
   // The abandoned-import sweep: only the uploads running right now (IDEMP-10).
   import_in_progress_heartbeat_idx: `CREATE INDEX import_in_progress_heartbeat_idx ON public.import USING btree (updated_at) WHERE (status = 'IN_PROGRESS'::"ImportStatus")`,
   // The tower's authorization queue and the 10-minute escalation sweep:

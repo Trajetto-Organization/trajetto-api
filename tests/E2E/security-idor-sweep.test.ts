@@ -12,6 +12,7 @@ import {
   type CarrierIds,
 } from "./support/idor-sweep-seed";
 import { createPrismaClient } from "@/shared/database/database-client";
+import { deliveryAddressKey } from "@/shared/delivery/address-key";
 
 /**
  * The IDOR sweep, built from the OpenAPI document instead of by hand.
@@ -707,6 +708,66 @@ async function victimSnapshot(): Promise<Record<string, string>> {
   return out;
 }
 
+/**
+ * One door shared by both companies (the same street, number, district,
+ * city and UF: the same address key), for the writes a pin makes on rows
+ * other than the one in its path: the propagation to the deliveries
+ * without a point and the follow-up of the copies (pre-push review of the
+ * batch of 14/11/2026). The other company's rows there include a copy that
+ * names this company's source — a link no write makes, the worst case a
+ * missing `businessId` would reach. Seeded before the snapshot.
+ */
+const SHARED_DOOR = {
+  street: "Rua da Varredura",
+  address_number: "77",
+  neighborhood: "Centro",
+  city: "São Paulo",
+  uf: "SP",
+};
+const FIRST_PIN = { latitude: -23.5401, longitude: -46.6301 };
+const door: Record<string, string> = {};
+
+async function seedSharedDoor(): Promise<void> {
+  const key = deliveryAddressKey(SHARED_DOOR);
+  const row = async (
+    name: string,
+    carrier: CarrierIds,
+    extra: Record<string, unknown> = {},
+  ) => {
+    const created = await prisma.delivery.create({
+      data: {
+        ...SHARED_DOOR,
+        recipient_name: `porta ${name}`,
+        businessId: carrier.businessId,
+        shipperId: carrier.shipperId,
+        status: "PENDING",
+        address_key: key,
+        ...extra,
+      },
+    });
+
+    door[name] = created.id;
+  };
+  const copyOf = (source: string) => ({
+    ...FIRST_PIN,
+    geo_source: "GEOCODER",
+    geo_precision: "ADDRESS",
+    geocode_status: "RESOLVED",
+    geo_updated_at: new Date(),
+    geo_copied_from: source,
+  });
+
+  await row("source", A, {
+    ...FIRST_PIN,
+    geo_source: "MANUAL",
+    geo_updated_at: new Date(),
+  });
+  await row("copy", A, copyOf(door.source));
+  await row("bare", A);
+  await row("theirsBare", B);
+  await row("theirsCopy", B, copyOf(door.source));
+}
+
 const findings: string[] = [];
 const unknown = new Set<string>();
 const unreached: string[] = [];
@@ -766,6 +827,8 @@ beforeAll(async () => {
     (left, right) =>
       Number(left.method === "DELETE") - Number(right.method === "DELETE"),
   );
+
+  await seedSharedDoor();
 
   before = await victimSnapshot();
 }, APP_BOOT_TIMEOUT_MS);
@@ -878,6 +941,59 @@ describe("IDOR sweep over the whole OpenAPI document", () => {
   it("knows every id slot the document declares", () => {
     // A slot name nobody mapped is a route this sweep silently skips.
     expect([...unknown].sort()).toEqual([]);
+  });
+
+  it("pins a door of its own company without reaching the other company's deliveries at the same address", async () => {
+    const pin = async (body: Record<string, unknown>) => {
+      await resetLimiter();
+
+      return app.inject({
+        method: "PATCH",
+        url: `/route/set-delivery-location/${door.source}/business/${A.businessId}`,
+        headers: {
+          authorization: `Bearer ${tokens.admin}`,
+          "content-type": "application/json",
+        },
+        payload: JSON.stringify(body),
+      });
+    };
+    const point = async (id: string) =>
+      prisma.delivery.findUniqueOrThrow({
+        where: { id },
+        select: { latitude: true, geo_source: true, geo_copied_from: true },
+      });
+    const theirs = async () => [
+      await point(door.theirsBare),
+      await point(door.theirsCopy),
+    ];
+    const theirsBefore = await theirs();
+
+    // A corrected pin: this company's copy moves and its delivery without a
+    // point takes it; the other company's two rows never hear of it.
+    const corrected = await pin({ latitude: -23.5412, longitude: -46.6288 });
+
+    expect(corrected.statusCode, corrected.body).toBe(200);
+    expect(corrected.json().data).toMatchObject({ propagated: 2 });
+    expect(await point(door.copy)).toMatchObject({
+      latitude: -23.5412,
+      geo_copied_from: door.source,
+    });
+    expect(await point(door.bare)).toMatchObject({
+      latitude: -23.5412,
+      geo_copied_from: door.source,
+    });
+    expect(await theirs()).toEqual(theirsBefore);
+
+    // A cleared pin clears this company's copies, and only those.
+    const cleared = await pin({ clear: true });
+
+    expect(cleared.statusCode, cleared.body).toBe(200);
+    expect(cleared.json().data).toMatchObject({ propagated: 2 });
+    expect(await point(door.copy)).toMatchObject({
+      latitude: null,
+      geo_copied_from: null,
+    });
+    expect(await theirs()).toEqual(theirsBefore);
   });
 
   it("did not change a single row of the other company", async () => {

@@ -57,7 +57,10 @@ function editedAddress(
  * The columns an address change clears: the point, and the geocoder's
  * bookkeeping with it (plan of 02/11/2026, E1), so the new address is
  * geocoded again — and a lookup of the old one still in flight finds its
- * claim gone and writes nothing.
+ * claim gone and writes nothing. The link to the delivery a copied point
+ * came from goes too (geo_copied_from): the copy was of the old door. The
+ * same columns a fresh delivery without a point has, which is also what a
+ * copy becomes when its source's pin is cleared (followSource).
  */
 const CLEARED_ADDRESS_POINT = {
   latitude: null,
@@ -68,6 +71,7 @@ const CLEARED_ADDRESS_POINT = {
   geocode_status: null,
   geocode_attempted_at: null,
   geocode_attempts: 0,
+  geo_copied_from: null,
 } as const;
 
 export { ADDRESS_FIELDS, CLEARED_ADDRESS_POINT, addressChanged, editedAddress };

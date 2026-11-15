@@ -11,6 +11,8 @@ import { PLANNING_TIMELINE_EVENTS_ENABLED } from "@/modules/route/usecases/share
 import { operationDay } from "@/shared/route/operation-day-rules";
 import { createPrismaClient } from "@/shared/database/database-client";
 import { deliveryAddressKey } from "@/shared/delivery/address-key";
+import { DeliveryGeocodingRepository } from "@/shared/delivery/geocoding/geocoding-repository";
+import { env } from "@/env";
 
 /**
  * The route as the unit of assignment (decision 14.7) over real HTTP and a
@@ -1152,6 +1154,8 @@ describe("pinning a delivery on the map (D7)", () => {
       geo_source: "GEOCODER",
       geo_precision: "ADDRESS",
       geocode_status: "RESOLVED",
+      // Its root: the pin's later changes reach it.
+      geo_copied_from: pinnedId,
       // Not the customer's edit: the public API's updated_since skips it.
       updated_at: before.updated_at,
     });
@@ -1165,17 +1169,85 @@ describe("pinning a delivery on the map (D7)", () => {
       geo_source: null,
     });
 
-    // Clearing the pin leaves the copy, and gives nothing.
-    const cleared = await call(
+    // Pre-push review of the batch of 14/11/2026: the copy follows its
+    // source. A corrected pin moves it, in the pin's own commit...
+    const corrected = await call(
       "PATCH",
       `/route/set-delivery-location/${pinnedId}/business/${CARRIER_A}`,
       dispatcherA,
-      { clear: true },
+      { latitude: -22.4572, longitude: -43.1688 },
     );
 
+    expect(corrected.statusCode, corrected.body).toBe(200);
+    expect(corrected.json().data).toMatchObject({ propagated: 1 });
+    expect(await row(sibling)).toMatchObject({
+      latitude: -22.4572,
+      longitude: -43.1688,
+      geo_source: "GEOCODER",
+      geo_copied_from: pinnedId,
+      updated_at: before.updated_at,
+    });
+    expect(await row(located)).toMatchObject({
+      latitude: -22.1,
+      geo_source: "MANUAL",
+    });
+    expect(await row(theirs)).toMatchObject({ latitude: null });
+
+    // ...and a cleared one clears it: a fresh delivery without a point, in
+    // the geocoder's queue again. With the lookup off, so the claim below
+    // is this test's and not the one asked right after the commit.
+    const savedProvider = env.REVERSE_GEOCODER_URL;
+
+    env.REVERSE_GEOCODER_URL = undefined;
+
+    let cleared;
+
+    try {
+      cleared = await call(
+        "PATCH",
+        `/route/set-delivery-location/${pinnedId}/business/${CARRIER_A}`,
+        dispatcherA,
+        { clear: true },
+      );
+    } finally {
+      env.REVERSE_GEOCODER_URL = savedProvider;
+    }
+
     expect(cleared.statusCode, cleared.body).toBe(200);
-    expect(cleared.json().data).toMatchObject({ propagated: 0 });
-    expect(await row(sibling)).toMatchObject({ geo_source: "GEOCODER" });
+    expect(cleared.json().data).toMatchObject({ propagated: 1 });
+    expect(await row(sibling)).toMatchObject({
+      latitude: null,
+      longitude: null,
+      geo_source: null,
+      geo_precision: null,
+      geocode_status: null,
+      geocode_attempted_at: null,
+      geocode_attempts: 0,
+      geo_copied_from: null,
+      updated_at: before.updated_at,
+    });
+    expect(
+      (
+        await new DeliveryGeocodingRepository().claimByIds(
+          [sibling],
+          CARRIER_A,
+          10,
+          new Date(),
+        )
+      ).map((claim) => claim.id),
+    ).toEqual([sibling]);
+    expect(await row(located)).toMatchObject({ geo_source: "MANUAL" });
+    expect(await row(theirs)).toMatchObject({ latitude: null });
+
+    // Another company's dispatcher reaches nothing of it.
+    const foreign = await call(
+      "PATCH",
+      `/route/set-delivery-location/${pinnedId}/business/${CARRIER_B}`,
+      dispatcherB,
+      { latitude: -22.4561, longitude: -43.1702 },
+    );
+
+    expect(foreign.statusCode).toBe(404);
   });
 });
 

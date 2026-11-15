@@ -296,6 +296,15 @@ const deliveryRowEntity = z.object({
     .describe(
       "A porta da entrega: um hash da rua, do número, do bairro, da cidade e da UF (o CEP fica fora), igual nas entregas da empresa no mesmo endereço, que reaproveitam o ponto umas das outras. Uso interno, nenhuma tela lê. Nula sem rua, sem número (s/n conta como sem número: o endereço nomeia uma rua, não uma porta) ou sem cidade, ou numa entrega anterior à coluna que o preenchimento único ainda não alcançou.",
     ),
+  // Pre-push review of the batch of 14/11/2026: where a copied point came
+  // from. Optional, as above: a body written by the previous API lacks it.
+  geo_copied_from: z
+    .string()
+    .nullable()
+    .optional()
+    .describe(
+      "De qual entrega da mesma empresa veio o ponto copiado pelo endereço: o id da entrega de origem (a primeira, nunca uma cópia de cópia). Quando o pino da origem é corrigido, a cópia aberta muda junto; quando é apagado, ela volta para a localização automática. Nula num ponto da própria entrega (pino, coordenada da criação ou resposta do geocodificador) e depois de editar o endereço. Uso interno, nenhuma tela lê.",
+    ),
   status: deliveryStatusEnum,
   kind: z
     .enum(DELIVERY_KINDS)

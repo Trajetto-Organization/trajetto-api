@@ -13,6 +13,10 @@ import {
   pickReusablePoint,
   type ReusedAddressPoint,
 } from "./address-point-reuse";
+import {
+  twinDoorCandidates,
+  twinLenderHolds,
+} from "./address-point-propagation";
 
 /** The delivery columns the geocoding queue reads and writes. */
 interface GeocodingRow {
@@ -36,6 +40,8 @@ interface GeocodingRow {
   created_at: Date;
   /** Which deliveries of the company stand at the same door (address-key.ts). */
   address_key?: string | null;
+  /** The root a copied point came from (address-point-reuse.ts). */
+  geo_copied_from?: string | null;
 }
 
 /**
@@ -147,24 +153,16 @@ class InMemoryDeliveryGeocodingRepository implements IDeliveryGeocodingRepositor
 
     if (!key) return null;
 
-    // Every row at the door, the newest id first, as the SQL breaks a tie.
+    // Every row at the door that may still lend, the newest id first, as
+    // the SQL breaks a tie.
     return pickReusablePoint(
-      this.deliveries
-        .filter(
-          (row) =>
-            row.businessId === claim.businessId &&
-            row.address_key === key &&
-            row.id !== claim.id,
-        )
-        .sort((a, b) => (a.id < b.id ? 1 : a.id > b.id ? -1 : 0))
-        .map((row) => ({
-          latitude: row.latitude,
-          longitude: row.longitude,
-          geo_source: row.geo_source as "MANUAL" | "GEOCODER" | null,
-          geo_precision: row.geo_precision,
-          geo_updated_at: row.geo_updated_at,
-        })),
+      twinDoorCandidates(this.deliveries, {
+        businessId: claim.businessId,
+        addressKey: key,
+        exceptId: claim.id,
+      }),
       now,
+      claim.id,
     );
   }
 
@@ -177,6 +175,25 @@ class InMemoryDeliveryGeocodingRepository implements IDeliveryGeocodingRepositor
 
     if (!row || row.latitude !== null || row.geo_source !== null) return false;
 
+    const copiedFrom =
+      settlement.kind === "RESOLVED" ? (settlement.copiedFrom ?? null) : null;
+
+    // A copy only while its root still holds the point (lenderHolds).
+    if (
+      settlement.kind === "RESOLVED" &&
+      !twinLenderHolds(this.deliveries, claim.businessId, {
+        latitude: settlement.latitude,
+        longitude: settlement.longitude,
+        geo_source: "GEOCODER",
+        geo_precision: settlement.precision,
+        geocode_status: "RESOLVED",
+        geo_updated_at: now,
+        geo_copied_from: copiedFrom,
+      })
+    ) {
+      return false;
+    }
+
     switch (settlement.kind) {
       case "RESOLVED":
         Object.assign(row, {
@@ -186,17 +203,20 @@ class InMemoryDeliveryGeocodingRepository implements IDeliveryGeocodingRepositor
           geo_updated_at: new Date(now.getTime()),
           geo_precision: settlement.precision,
           geocode_status: "RESOLVED",
+          geo_copied_from: copiedFrom,
         });
         break;
       case "COARSE":
         Object.assign(row, {
           geo_precision: settlement.precision,
           geocode_status: "COARSE",
+          geo_copied_from: null,
         });
         break;
       case "NOT_FOUND":
       case "FAILED":
         row.geocode_status = settlement.kind;
+        row.geo_copied_from = null;
         break;
     }
 

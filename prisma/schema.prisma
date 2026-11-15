@@ -3234,6 +3234,15 @@ model Delivery {
   /// fills them) or without a street, a house number ("s/n" is none: the
   /// address names a street, not a door) or a city.
   address_key          String?
+  /// The ROOT delivery a copied point came from (pre-push review of the
+  /// batch of 14/11/2026; migration 20261114130000): set with every point
+  /// taken from another delivery at the same address key, null on a point
+  /// of the delivery's own (a pin, a geocoder's answer, one given at the
+  /// create) and after an address edit. A pin on the root moves the open
+  /// copies still holding its previous point, and clearing it clears them
+  /// (address-point-propagation.ts). Deliberately no foreign key (the
+  /// migration says why).
+  geo_copied_from      String?
 
   status         DeliveryStatus @default(PENDING)
   // A civil date, no time window (decision 1.5); see Route.scheduled_date.
@@ -3373,6 +3382,11 @@ model Delivery {
   //   delivery_address_key_idx ("businessId", "address_key", "geo_source",
   //     "geo_updated_at" DESC NULLS LAST, "id" DESC)
   //     WHERE address_key IS NOT NULL
+  // And the copies a pin moves with it (migration 20261114130000), only the
+  // open ones:
+  //   delivery_geo_copied_from_idx ("businessId", "geo_copied_from")
+  //     WHERE geo_copied_from IS NOT NULL
+  //       AND status IN ('PENDING', 'IN_TRANSIT')
   @@map("delivery")
 }
 

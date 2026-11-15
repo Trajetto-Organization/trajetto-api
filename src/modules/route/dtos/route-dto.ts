@@ -470,6 +470,13 @@ interface PinnedLocation {
    * moves no stop — and its driver is told to read the day again.
    */
   runningRoute: { routeId: string; driverId: string } | null;
+
+  /**
+   * The company's open copies of this delivery's previous point that
+   * followed the pin in its commit (followSource): moved to the new point,
+   * or cleared with it. Empty when locked.
+   */
+  followed: string[];
 }
 
 /** The route a delivery's open stop is on. */

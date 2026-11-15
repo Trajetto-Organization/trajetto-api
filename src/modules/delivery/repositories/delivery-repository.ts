@@ -50,6 +50,11 @@ import {
   pickReusablePoint,
   type ReusedAddressPoint,
 } from "@/shared/delivery/geocoding/address-point-reuse";
+import {
+  lockLender,
+  readDoorCandidates,
+} from "@/shared/delivery/geocoding/address-point-propagation";
+import { CLEARED_ADDRESS_POINT } from "@/shared/delivery/address-point";
 
 import {
   OCCURRENCE_SORT,
@@ -250,7 +255,6 @@ class DeliveryRepository implements IDeliveryRepository {
     tx?: Prisma.TransactionClient,
   ): Promise<Delivery> {
     const { items, latitude, longitude, ...delivery } = deliveryData;
-    const client = tx ?? this.prisma;
     const now = new Date();
     const addressKey = deliveryAddressKey(delivery);
 
@@ -260,39 +264,59 @@ class DeliveryRepository implements IDeliveryRepository {
     // geocoder off, and the create's answer already has it. Anything else
     // writes no point and the geocoder's queue picks the row up.
     const given = manualAddressPoint(latitude, longitude, now);
-    const point =
-      "geo_source" in given
-        ? given
-        : addressKey
-          ? await this.findReusablePoint(
+
+    const run = async (client: Prisma.TransactionClient) => {
+      const found =
+        "geo_source" in given || !addressKey
+          ? null
+          : await this.findReusablePoint(
               delivery.businessId,
               addressKey,
               null,
               client,
-            )
-          : null;
+            );
+      // The copy only while its root still holds the point, locked until
+      // this commit (lockLender): a pin moving or clearing the root at the
+      // same instant then finds this row and takes it along, instead of
+      // leaving it with a point the root no longer has. Without it, the
+      // row joins the queue, and the lookup right after the commit reads
+      // the door again.
+      const point =
+        "geo_source" in given
+          ? given
+          : found && (await lockLender(client, delivery.businessId, found))
+            ? found
+            : null;
 
-    const deliveryCreated = await client.delivery.create({
-      data: {
-        ...delivery,
-        code: delivery.code || null,
-        invoice_key: delivery.invoice_key || null,
-        invoice_number: delivery.invoice_number || null,
-        address_key: addressKey,
-        ...point,
-        ...(items &&
-          items.length > 0 && {
-            items: {
-              create: items.map((item) => ({
-                description: item.description,
-                quantity: item.quantity ?? 1,
-                unit: item.unit || null,
-                unit_value: item.unit_value ?? null,
-              })),
-            },
-          }),
-      },
-    });
+      return client.delivery.create({
+        data: {
+          ...delivery,
+          code: delivery.code || null,
+          invoice_key: delivery.invoice_key || null,
+          invoice_number: delivery.invoice_number || null,
+          address_key: addressKey,
+          ...point,
+          ...(items &&
+            items.length > 0 && {
+              items: {
+                create: items.map((item) => ({
+                  description: item.description,
+                  quantity: item.quantity ?? 1,
+                  unit: item.unit || null,
+                  unit_value: item.unit_value ?? null,
+                })),
+              },
+            }),
+        },
+      });
+    };
+
+    // Every caller in the code brings its transaction (the row and its
+    // delivery.created commit together); one without gets its own, so the
+    // root's lock lasts until the insert commits.
+    const deliveryCreated = tx
+      ? await run(tx)
+      : await this.prisma.$transaction(run);
 
     return deliveryCreated as Delivery;
   }
@@ -303,50 +327,18 @@ class DeliveryRepository implements IDeliveryRepository {
     excludeDeliveryId?: string | null,
     tx?: Prisma.TransactionClient,
   ): Promise<ReusedAddressPoint | null> {
-    const client = tx ?? this.prisma;
-    const select = {
-      latitude: true,
-      longitude: true,
-      geo_source: true,
-      geo_precision: true,
-      geo_updated_at: true,
-    } as const;
-    // The company's rows at this door with a point: two index probes on
-    // delivery_address_key_idx, the newest of each source, and the rule
-    // decides between them (the twin runs the same rule over all of them).
-    // The index's columns after the door are geo_source and this order, so
-    // each probe reads one entry however busy the door. One after the
-    // other: a transaction's connection runs one at a time.
-    const atTheDoor = {
+    // The company's rows at this door with a point they may lend: the
+    // job's two index probes on delivery_address_key_idx, the newest of
+    // each source with the root it lends as (readDoorCandidates), and the
+    // rule decides between them (the twin runs the same rule over all of
+    // them). One statement, so it runs inside the caller's transaction.
+    const candidates = await readDoorCandidates(tx ?? this.prisma, {
       businessId,
-      address_key: addressKey,
-      latitude: { not: null },
-      longitude: { not: null },
-      ...(excludeDeliveryId && { id: { not: excludeDeliveryId } }),
-    } satisfies Prisma.DeliveryWhereInput;
-    const newest = {
-      geo_updated_at: { sort: "desc", nulls: "last" },
-    } satisfies Prisma.DeliveryOrderByWithRelationInput;
-
-    const manual = await client.delivery.findFirst({
-      where: { ...atTheDoor, geo_source: "MANUAL" },
-      orderBy: [newest, { id: "desc" }],
-      select,
-    });
-    const geocoded = await client.delivery.findFirst({
-      where: {
-        ...atTheDoor,
-        geo_source: "GEOCODER",
-        geo_precision: { in: ["ADDRESS", "STREET"] },
-      },
-      orderBy: [newest, { id: "desc" }],
-      select,
+      addressKey,
+      exceptId: excludeDeliveryId ?? null,
     });
 
-    return pickReusablePoint(
-      [manual, geocoded].filter((row) => row !== null),
-      new Date(),
-    );
+    return pickReusablePoint(candidates, new Date(), excludeDeliveryId ?? null);
   }
 
   async findDeliveryBySubmissionId(
@@ -783,12 +775,19 @@ class DeliveryRepository implements IDeliveryRepository {
     // address but lost the items (or the reverse) is an edit nobody asked for.
     // A caller with its own transaction (K9) owns that commit.
     const run = async (tx: Prisma.TransactionClient): Promise<Delivery> => {
+      // An address edit that takes another delivery's point (the use case
+      // read it before this transaction) writes it only while its root
+      // still holds it, locked until this commit, as the create does
+      // (lockLender); otherwise the edit leaves the new address without a
+      // point, for the lookup after the commit.
+      const data = await this.withHeldCopy(tx, deliveryId, filteredData);
+
       const { count } = await tx.delivery.updateMany({
         where: {
           id: deliveryId,
           ...(expectedStatus && { status: expectedStatus }),
         },
-        data: filteredData,
+        data,
       });
 
       if (count === 0) {
@@ -823,6 +822,39 @@ class DeliveryRepository implements IDeliveryRepository {
     };
 
     return outerTx ? run(outerTx) : this.prisma.$transaction(run);
+  }
+
+  /**
+   * The edit's columns, with a copied point dropped (CLEARED_ADDRESS_POINT
+   * in its place) when its root no longer holds it. The company is the
+   * edited row's own, read here: the link never crosses companies.
+   */
+  private async withHeldCopy(
+    tx: Prisma.TransactionClient,
+    deliveryId: string,
+    data: Record<string, unknown>,
+  ): Promise<Record<string, unknown>> {
+    const root = data.geo_copied_from;
+
+    if (typeof root !== "string") return data;
+
+    const row = await tx.delivery.findUnique({
+      where: { id: deliveryId },
+      select: { businessId: true },
+    });
+    const held =
+      row !== null &&
+      (await lockLender(tx, row.businessId, {
+        latitude: data.latitude as number,
+        longitude: data.longitude as number,
+        geo_source: "GEOCODER",
+        geo_precision: data.geo_precision as "ADDRESS" | "STREET",
+        geocode_status: "RESOLVED",
+        geo_updated_at: data.geo_updated_at as Date,
+        geo_copied_from: root,
+      }));
+
+    return held ? data : { ...data, ...CLEARED_ADDRESS_POINT };
   }
 
   async findDeliveryItems(deliveryId: string): Promise<DeliveryItemInput[]> {

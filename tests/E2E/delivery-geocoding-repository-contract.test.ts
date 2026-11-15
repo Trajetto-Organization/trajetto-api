@@ -50,6 +50,7 @@ function stateOf(row: Record<string, unknown> | undefined): GeocodingState {
     geo_precision: (row?.geo_precision as string | null) ?? null,
     geocode_status: (row?.geocode_status as string | null) ?? null,
     geocode_attempts: (row?.geocode_attempts as number) ?? 0,
+    geo_copied_from: (row?.geo_copied_from as string | null) ?? null,
   };
 }
 

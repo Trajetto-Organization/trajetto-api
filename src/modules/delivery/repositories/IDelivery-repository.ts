@@ -66,8 +66,10 @@ interface IDeliveryRepository {
   /**
    * The point another delivery of the company has at this address key, as
    * the columns a delivery takes it with (pickReusablePoint: MANUAL first,
-   * then the most recent; never another company's); null when none
-   * qualifies. `excludeDeliveryId`: the delivery being edited.
+   * then the most recent; never another company's), with the root it came
+   * from (geo_copied_from; a copy whose root dropped the point lends
+   * nothing); null when none qualifies. `excludeDeliveryId`: the delivery
+   * being edited, never recorded as its own root.
    */
   findReusablePoint: (
     businessId: string,

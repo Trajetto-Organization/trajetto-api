@@ -68,6 +68,9 @@ interface DoorRow {
   geo_precision: "ADDRESS" | "STREET" | null;
   geo_updated_at: Date | null;
   geocode_status: "RESOLVED" | "NOT_FOUND" | null;
+  /** The root a copied point came from (address-point-reuse.ts). */
+  geo_copied_from?: string | null;
+  geocode_attempts?: number;
 }
 
 /** The point columns of a delivery, read back the same way on both sides. */
@@ -77,6 +80,8 @@ interface DoorPoint {
   geo_source: string | null;
   geo_precision: string | null;
   geocode_status: string | null;
+  geo_copied_from: string | null;
+  geocode_attempts: number;
 }
 
 interface RouteHarness {
@@ -449,12 +454,14 @@ function routeRepositoryContract(harness: () => RouteHarness): void {
       );
 
       for (const taken of [L.sibling, L.inTransit]) {
-        expect(await h.readPoint(taken)).toEqual({
+        expect(await h.readPoint(taken)).toMatchObject({
           latitude: -22.4561,
           longitude: -43.1702,
           geo_source: "GEOCODER",
           geo_precision: "ADDRESS",
           geocode_status: "RESOLVED",
+          // Its root: a later pin there moves it too.
+          geo_copied_from: L.pinned,
         });
       }
       for (const untouched of [L.closed, L.neighbour, L.theirs]) {
@@ -512,6 +519,161 @@ function routeRepositoryContract(harness: () => RouteHarness): void {
       expect(await h.readPoint(L.roadFarm)).toMatchObject({
         latitude: null,
         geo_source: null,
+      });
+    });
+  });
+
+  describe("pinDeliveryLocation: the copies follow their source", () => {
+    // Pre-push review of the batch of 14/11/2026: a corrected or cleared
+    // pin left every copy the source had handed out wrong for good. The
+    // pin's own commit moves (or clears) the company's open copies still
+    // GEOCODER, still holding exactly the source's previous point and still
+    // at its door — and nothing else.
+    const door = {
+      street: "Rua Teresa",
+      address_number: "200",
+      neighborhood: "Alto da Serra",
+      city: "Petrópolis",
+      uf: "RJ",
+    };
+    const key = deliveryAddressKey(door);
+    const FIRST = { latitude: -22.5201, longitude: -43.1801 };
+    const CORRECTED = { latitude: -22.5212, longitude: -43.1793 };
+    const T = {
+      source: fixedId("0ee0", 1),
+      copy: fixedId("0ee0", 2),
+      inTransit: fixedId("0ee0", 3),
+      closed: fixedId("0ee0", 4),
+      repinned: fixedId("0ee0", 5),
+      readdressed: fixedId("0ee0", 6),
+      relocated: fixedId("0ee0", 7),
+      unlinked: fixedId("0ee0", 8),
+      theirs: fixedId("0ee0", 9),
+    };
+    const copyOf = (id: string, extra: Partial<DoorRow> = {}): DoorRow => ({
+      id,
+      businessId: A,
+      status: "PENDING",
+      ...door,
+      address_key: key,
+      ...FIRST,
+      geo_source: "GEOCODER",
+      geo_precision: "ADDRESS",
+      geo_updated_at: new Date("2026-11-14T10:00:00.000Z"),
+      geocode_status: "RESOLVED",
+      geo_copied_from: T.source,
+      geocode_attempts: 0,
+      ...extra,
+    });
+    const untouched = [
+      T.closed,
+      T.repinned,
+      T.readdressed,
+      T.relocated,
+      T.unlinked,
+      T.theirs,
+    ];
+
+    it("moves only the open, unchanged copies of the same company with a corrected pin, and clears them with a cleared one", async () => {
+      const h = harness();
+
+      for (const seeded of [
+        copyOf(T.source, {
+          geo_source: "MANUAL",
+          geo_precision: null,
+          geo_copied_from: null,
+        }),
+        copyOf(T.copy),
+        copyOf(T.inTransit, { status: "IN_TRANSIT" }),
+        // The record it closed with.
+        copyOf(T.closed, { status: "DELIVERED" }),
+        // A person pinned it since: its own point, even with a link an
+        // older image left behind.
+        copyOf(T.repinned, { geo_source: "MANUAL", geo_precision: null }),
+        // Its address moved to another door.
+        copyOf(T.readdressed, {
+          address_number: "202",
+          address_key: deliveryAddressKey({ ...door, address_number: "202" }),
+        }),
+        // Located again since by an older image, which left the link.
+        copyOf(T.relocated, { latitude: -22.6, longitude: -43.2 }),
+        // The same point, found on its own: not a copy.
+        copyOf(T.unlinked, { geo_copied_from: null }),
+        // Another company's, at the same door, even linked to this source.
+        copyOf(T.theirs, { businessId: B }),
+      ]) {
+        await h.seedDelivery(seeded);
+      }
+
+      const before = new Map(
+        await Promise.all(
+          untouched.map(async (id) => [id, await h.readPoint(id)] as const),
+        ),
+      );
+
+      const corrected = await h.repo.pinDeliveryLocation(
+        T.source,
+        A,
+        CORRECTED,
+      );
+
+      expect(corrected?.followed.sort()).toEqual([T.copy, T.inTransit].sort());
+      for (const moved of [T.copy, T.inTransit]) {
+        expect(await h.readPoint(moved), moved).toEqual({
+          ...CORRECTED,
+          geo_source: "GEOCODER",
+          geo_precision: "ADDRESS",
+          geocode_status: "RESOLVED",
+          geo_copied_from: T.source,
+          geocode_attempts: 0,
+        });
+      }
+      for (const id of untouched) {
+        expect(await h.readPoint(id), id).toEqual(before.get(id));
+      }
+
+      // The same point again: nothing follows.
+      expect(
+        (await h.repo.pinDeliveryLocation(T.source, A, CORRECTED))?.followed,
+      ).toEqual([]);
+      // Another company's path reaches nothing.
+      expect(await h.repo.pinDeliveryLocation(T.source, B, FIRST)).toBeNull();
+
+      const cleared = await h.repo.pinDeliveryLocation(T.source, A, null);
+
+      expect(cleared?.followed.sort()).toEqual([T.copy, T.inTransit].sort());
+      for (const gone of [T.copy, T.inTransit]) {
+        // A fresh delivery without a point: the geocoder's queue again.
+        expect(await h.readPoint(gone), gone).toEqual({
+          latitude: null,
+          longitude: null,
+          geo_source: null,
+          geo_precision: null,
+          geocode_status: null,
+          geo_copied_from: null,
+          geocode_attempts: 0,
+        });
+      }
+      for (const id of untouched) {
+        expect(await h.readPoint(id), id).toEqual(before.get(id));
+      }
+
+      // A source without a point has nothing that follows it.
+      expect(
+        (await h.repo.pinDeliveryLocation(T.source, A, FIRST))?.followed,
+      ).toEqual([]);
+    });
+
+    it("makes the pinned delivery its own root", async () => {
+      const h = harness();
+
+      // T.repinned still names T.source (the older image's leftover).
+      await h.repo.pinDeliveryLocation(T.repinned, A, CORRECTED);
+
+      expect(await h.readPoint(T.repinned)).toMatchObject({
+        ...CORRECTED,
+        geo_source: "MANUAL",
+        geo_copied_from: null,
       });
     });
   });

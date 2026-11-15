@@ -36,6 +36,18 @@ vi.mock("@/../infra/database", () => ({
   },
 }));
 
+// The lookups asked right after a write (geocode-soon.ts), by company.
+const askedSoon = vi.hoisted(() => [] as Array<[string, string[]]>);
+
+vi.mock("@/shared/delivery/geocoding/geocode-soon", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("@/shared/delivery/geocoding/geocode-soon")
+  >()),
+  geocodeSoon: (businessId: string, ids: readonly string[]) => {
+    if (ids.length > 0) askedSoon.push([businessId, [...ids]]);
+  },
+}));
+
 import { CreateRouteUseCase } from "@/modules/route/usecases/create-route/create-route-usecase";
 import { ReleaseRouteUseCase } from "@/modules/route/usecases/release-route/release-route-usecase";
 import { CancelRouteUseCase } from "@/modules/route/usecases/cancel-route/cancel-route-usecase";
@@ -52,6 +64,8 @@ import { ListOpenStopsUseCase } from "@/modules/route/usecases/open-stops/open-s
 import { GetRouteUseCase } from "@/modules/route/usecases/get-route/get-route-usecase";
 import { DriverTrailUseCase } from "@/modules/route/usecases/driver-trail/driver-trail-usecase";
 import { routeDriverPosition } from "@/modules/route/usecases/get-route/route-driver-position";
+import { CLEARED_ADDRESS_POINT } from "@/shared/delivery/address-point";
+import { deliveryAddressKey } from "@/shared/delivery/address-key";
 
 import { InMemoryRouteRepository } from "@/modules/route/repositories/in-memory/in-memory-route-repository";
 import { InMemoryDriverPositionRepository } from "@/modules/route/repositories/in-memory/in-memory-driver-position-repository";
@@ -275,6 +289,7 @@ let context: Context;
 beforeEach(() => {
   context = makeContext();
   emitted.length = 0;
+  askedSoon.length = 0;
 });
 
 async function seedDelivery(
@@ -1110,16 +1125,188 @@ describe("pinning a delivery on the map (D7)", () => {
     });
     expect(versionOf(route.id)).toBe(0);
 
-    // Clearing the pin leaves the copies as they are, and propagates nothing.
-    const cleared = await context.setLocation.execute({
-      userId: DISPATCHER,
-      businessId: A,
-      deliveryId: pinnedId,
-      point: null,
+    // The copy says where it came from, so the pin's later changes reach it.
+    expect(row(sibling).geo_copied_from).toBe(pinnedId);
+  });
+
+  describe("the copies of a pin follow it", () => {
+    // Pre-push review of the batch of 14/11/2026: a dispatcher who
+    // corrected or cleared the pin of the source left every copy it had
+    // handed out wrong for good — a copy has a point, so the geocoder never
+    // asked about it again, and the propagation only writes rows without one.
+    const LIPOLD = {
+      street: "Rua Doutor Lipold",
+      address_number: "10",
+      neighborhood: "Carangola",
+      city: "Petrópolis",
+      uf: "RJ",
+    };
+    const FIRST = { latitude: -22.4561, longitude: -43.1702 };
+    const CORRECTED = { latitude: -22.4572, longitude: -43.1688 };
+    const row = (id: string) =>
+      context.deliveryRepository.deliveries.find((entry) => entry.id === id)!;
+    const pin = (
+      deliveryId: string,
+      point: { latitude: number; longitude: number } | null,
+      businessId = A,
+      userId = DISPATCHER,
+    ) => context.setLocation.execute({ userId, businessId, deliveryId, point });
+
+    /** The source pinned, then the copies the creates took from it. */
+    async function door() {
+      const source = await seedDelivery(LIPOLD);
+
+      await pin(source, FIRST);
+
+      const routed = await seedDelivery({ ...LIPOLD, street: "R. Dr. Lipold" });
+      const loose = await seedDelivery(LIPOLD);
+      const closed = await seedDelivery(LIPOLD);
+      const repinned = await seedDelivery(LIPOLD);
+      const theirs = await seedDelivery({ ...LIPOLD, businessId: B });
+
+      row(closed).status = "DELIVERED";
+      await pin(repinned, { latitude: -22.4, longitude: -43.1 });
+
+      const route = await plannedRoute([routed]);
+
+      emitted.length = 0;
+
+      return { source, routed, loose, closed, repinned, theirs, route };
+    }
+
+    it("moves the open copies of the previous pin to a corrected one, and only those", async () => {
+      const d = await door();
+
+      expect(row(d.routed)).toMatchObject({
+        ...FIRST,
+        geo_source: "GEOCODER",
+        geo_copied_from: d.source,
+      });
+      expect(row(d.theirs)).toMatchObject({ latitude: null });
+
+      const corrected = await pin(d.source, CORRECTED);
+
+      expect(corrected).toMatchObject({
+        ...CORRECTED,
+        geo_source: "MANUAL",
+        propagated: 2,
+      });
+
+      for (const moved of [d.routed, d.loose]) {
+        expect(row(moved), moved).toMatchObject({
+          ...CORRECTED,
+          geo_source: "GEOCODER",
+          geo_precision: "ADDRESS",
+          geocode_status: "RESOLVED",
+          geo_copied_from: d.source,
+        });
+      }
+      // The closed one keeps the record it closed with; the one a person
+      // pinned since is its own; another company's is never reached.
+      expect(row(d.closed)).toMatchObject({ ...FIRST, geo_source: "GEOCODER" });
+      expect(row(d.repinned)).toMatchObject({
+        latitude: -22.4,
+        geo_source: "MANUAL",
+        geo_copied_from: null,
+      });
+      expect(row(d.theirs)).toMatchObject({ latitude: null, geo_source: null });
+
+      // The copy's route hears it like a point found: no plan version.
+      expect(emitted).toContainEqual({
+        room: "located",
+        id: A,
+        event: { routeId: d.route.id, deliveryIds: [d.routed] },
+      });
+      expect(versionOf(d.route.id)).toBe(0);
+      expect(askedSoon).toEqual([]);
+
+      // The same pin again moves nothing.
+      expect(await pin(d.source, CORRECTED)).toMatchObject({ propagated: 0 });
     });
 
-    expect(cleared).toMatchObject({ latitude: null, propagated: 0 });
-    expect(row(sibling)).toMatchObject({ geo_source: "GEOCODER" });
+    it("clears the open copies with a cleared pin, back to the queue as fresh deliveries", async () => {
+      const d = await door();
+      expect(row(d.loose)).toMatchObject({ geocode_status: "RESOLVED" });
+
+      const cleared = await pin(d.source, null);
+
+      expect(cleared).toMatchObject({ latitude: null, propagated: 2 });
+
+      for (const gone of [d.routed, d.loose]) {
+        // What a delivery created without a point has: the geocoder's queue
+        // takes it, and the job may reuse another point of the door.
+        expect(row(gone), gone).toMatchObject({
+          latitude: null,
+          longitude: null,
+          geo_source: null,
+          geo_updated_at: null,
+          geo_precision: null,
+          geocode_status: null,
+          geocode_attempted_at: null,
+          geocode_attempts: 0,
+          geo_copied_from: null,
+        });
+      }
+      expect(row(d.closed)).toMatchObject({ ...FIRST, geo_source: "GEOCODER" });
+      expect(row(d.repinned)).toMatchObject({ geo_source: "MANUAL" });
+
+      // Asked about right after, as after a create without a point.
+      expect(askedSoon).toEqual([
+        [A, expect.arrayContaining([d.routed, d.loose])],
+      ]);
+      expect(askedSoon[0][1]).toHaveLength(2);
+      expect(emitted).toContainEqual({
+        room: "located",
+        id: A,
+        event: { routeId: d.route.id, deliveryIds: [d.routed] },
+      });
+
+      // The next delivery at the door takes the other pin there...
+      const next = await seedDelivery(LIPOLD);
+
+      expect(row(next)).toMatchObject({
+        latitude: -22.4,
+        geo_copied_from: d.repinned,
+      });
+
+      // ...and once that one is cleared too (its copy with it), only the
+      // closed copy holds a point at the door: the one just taken away,
+      // which it must not hand back.
+      expect(await pin(d.repinned, null)).toMatchObject({ propagated: 1 });
+      expect(row(next)).toMatchObject({ latitude: null, geo_source: null });
+
+      const last = await seedDelivery(LIPOLD);
+
+      expect(row(last)).toMatchObject({ latitude: null, geo_source: null });
+    });
+
+    it("leaves a copy whose address changed, and the copies of a delivery a person pinned, alone", async () => {
+      const d = await door();
+
+      // The address of a copy edited away and back: its link is gone with
+      // the edit (CLEARED_ADDRESS_POINT), and it took the door's point anew.
+      await context.deliveryRepository.updateDelivery(d.loose, {
+        address_number: "12",
+        ...CLEARED_ADDRESS_POINT,
+        address_key: deliveryAddressKey({ ...LIPOLD, address_number: "12" }),
+      });
+
+      const corrected = await pin(d.source, CORRECTED);
+
+      expect(corrected).toMatchObject({ propagated: 1 });
+      expect(row(d.loose)).toMatchObject({
+        latitude: null,
+        geo_copied_from: null,
+      });
+
+      // Another company's dispatcher reaches nothing of this one.
+      await expect(pin(d.source, FIRST, B, DISPATCHER_B)).rejects.toMatchObject(
+        {
+          statusCode: 404,
+        },
+      );
+      expect(row(d.routed)).toMatchObject(CORRECTED);
+    });
   });
 
   it("answers another company's delivery as not found, and a closed one as locked", async () => {

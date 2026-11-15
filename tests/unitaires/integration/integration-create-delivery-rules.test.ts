@@ -202,6 +202,7 @@ describe("a retry of a body with an address point", () => {
           geo_source: "MANUAL",
           geo_precision: null,
           geo_updated_at: new Date("2026-11-10T10:00:00.000Z"),
+          root: "018f0000-0000-7000-8000-00000000d00a",
         },
       ],
       new Date("2026-11-14T15:00:00.000Z"),

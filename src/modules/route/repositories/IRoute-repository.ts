@@ -404,7 +404,10 @@ interface IRouteRepository {
    * the delivery is not the company's; `locked` when it is DELIVERED or
    * CANCELLED. Bumps the plan of the route holding it while that route is
    * planned or released; a running one keeps its version and is answered as
-   * `runningRoute`, for its driver to be told (D23).
+   * `runningRoute`, for its driver to be told (D23). In the same commit, the
+   * company's open copies of the delivery's previous point follow it
+   * (followSource: moved, or cleared with a null), answered as `followed`;
+   * the pin itself clears the delivery's own link (geo_copied_from).
    */
   pinDeliveryLocation: (
     deliveryId: string,
@@ -416,7 +419,8 @@ interface IRouteRepository {
    * After a pin's commit (14/11/2026, decision D-24): the company's other
    * open deliveries (PENDING, IN_TRANSIT) at the pinned delivery's address
    * key, still without a point and a source, take the pin as GEOCODER
-   * (address-point-propagation.ts). Never over a point, never another
+   * (address-point-propagation.ts), linked to the pinned delivery as their
+   * root, while it still holds that pin. Never over a point, never another
    * company's, never the pinned delivery itself. The ids written.
    */
   propagateAddressPoint: (

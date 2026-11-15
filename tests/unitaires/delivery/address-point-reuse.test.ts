@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 
 import {
   isReusablePoint,
+  lendingRoot,
   pickReusablePoint,
+  type LenderRow,
   type PointCandidate,
 } from "@/shared/delivery/geocoding/address-point-reuse";
 
@@ -15,6 +17,7 @@ import {
  * public API's replay.
  */
 const NOW = new Date("2026-11-14T15:00:00.000Z");
+const ROOT = "018f0000-0000-7000-8000-0000000000a1";
 
 function candidate(overrides: Partial<PointCandidate> = {}): PointCandidate {
   return {
@@ -23,6 +26,7 @@ function candidate(overrides: Partial<PointCandidate> = {}): PointCandidate {
     geo_source: "GEOCODER",
     geo_precision: "ADDRESS",
     geo_updated_at: new Date("2026-11-10T10:00:00.000Z"),
+    root: ROOT,
     ...overrides,
   };
 }
@@ -74,10 +78,93 @@ describe("the point taken", () => {
       geo_precision: "ADDRESS",
       geocode_status: "RESOLVED",
       geo_updated_at: NOW,
+      geo_copied_from: ROOT,
     });
     expect(
       pickReusablePoint([candidate({ geo_precision: "STREET" })], NOW),
     ).toMatchObject({ geo_source: "GEOCODER", geo_precision: "STREET" });
+  });
+});
+
+describe("where the copy says it came from", () => {
+  // Pre-push review of the batch of 14/11/2026: a copy with nothing tying
+  // it to its source stayed wrong for good once the source's pin was
+  // corrected or cleared. It names the root, so the root's pin reaches it.
+  it("is the root the candidate lends as", () => {
+    expect(
+      pickReusablePoint([candidate({ root: "the-root" })], NOW)
+        ?.geo_copied_from,
+    ).toBe("the-root");
+  });
+
+  it("is nothing when that root is the delivery taking it back", () => {
+    // An address edited back to the door whose point it had lent: its own
+    // point again, as its own.
+    expect(
+      pickReusablePoint([candidate()], NOW, ROOT)?.geo_copied_from,
+    ).toBeNull();
+    expect(
+      pickReusablePoint([candidate()], NOW, "another")?.geo_copied_from,
+    ).toBe(ROOT);
+  });
+});
+
+describe("the root a delivery lends its point as", () => {
+  const KEY = "door";
+  const row = (overrides: Partial<LenderRow> = {}): LenderRow => ({
+    id: "copy",
+    businessId: "A",
+    address_key: KEY,
+    latitude: -22.5,
+    longitude: -43.1,
+    geo_source: "GEOCODER",
+    geo_copied_from: "root",
+    ...overrides,
+  });
+  const rootRow = (overrides: Partial<LenderRow> = {}) =>
+    row({
+      id: "root",
+      geo_source: "MANUAL",
+      geo_copied_from: null,
+      ...overrides,
+    });
+  const lookup =
+    (...rows: LenderRow[]) =>
+    (id: string) =>
+      rows.find((entry) => entry.id === id);
+
+  it("is its own for a pin or a point of its own", () => {
+    expect(lendingRoot(rootRow(), lookup())).toBe("root");
+    expect(lendingRoot(row({ geo_copied_from: null }), lookup(rootRow()))).toBe(
+      "copy",
+    );
+    // A pin is its own root even with a link an older image left behind.
+    expect(lendingRoot(row({ geo_source: "MANUAL" }), lookup(rootRow()))).toBe(
+      "copy",
+    );
+  });
+
+  it("is the copy's root while the root, at the same door, holds the same point", () => {
+    expect(lendingRoot(row(), lookup(rootRow()))).toBe("root");
+  });
+
+  it("is none once the root dropped the point at that door — cleared or moved", () => {
+    // A closed copy the follow-up left as it was must not hand the point a
+    // person just took away to the next delivery at the door.
+    expect(
+      lendingRoot(row(), lookup(rootRow({ latitude: null, longitude: null }))),
+    ).toBeNull();
+    expect(lendingRoot(row(), lookup(rootRow({ latitude: -22.6 })))).toBeNull();
+  });
+
+  it("is its own when the root is gone, of another company or at another door", () => {
+    expect(lendingRoot(row(), lookup())).toBe("copy");
+    expect(lendingRoot(row(), lookup(rootRow({ businessId: "B" })))).toBe(
+      "copy",
+    );
+    expect(
+      lendingRoot(row(), lookup(rootRow({ address_key: "elsewhere" }))),
+    ).toBe("copy");
   });
 });
 

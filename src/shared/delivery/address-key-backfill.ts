@@ -21,12 +21,16 @@ import {
  *    a delivery kept its old door's key while it got its new door's point,
  *    and later creates at the old door copied that point. The key is
  *    computed here, by the same function the create writes it with: the
- *    canonical street lives in TypeScript, not in SQL;
+ *    canonical street lives in TypeScript, not in SQL. A row whose key
+ *    changes loses its link to the delivery its point was copied from
+ *    (geo_copied_from), as an address edit does: that copy was of the
+ *    other door, and no pin there may move this row any more;
  * 2. the propagation, once: every open delivery without a point whose door
  *    has a point another delivery may give (a pin first, then the newest)
  *    takes it, by the same guarded write as the pin's
- *    (address-point-propagation.ts), each door's write in its own
- *    transaction under lock_timeout too. This is what locates today's
+ *    (address-point-propagation.ts), linked to the point's root so a later
+ *    pin there moves it too, each door's write in its own transaction
+ *    under lock_timeout too. This is what locates today's
  *    "Rua Doutor Lipold".
  *
  * A row edited between the batch's read and its write is left alone: the
@@ -136,7 +140,8 @@ async function backfillAddressKeys(
 
           return tx.$executeRaw`
             UPDATE "delivery" AS d
-            SET "address_key" = NULLIF(v."key", '')
+            SET "address_key" = NULLIF(v."key", ''),
+                "geo_copied_from" = NULL
             FROM unnest(
               ${changed.map((entry) => entry.id)}::text[],
               ${changed.map((entry) => entry.key)}::text[],

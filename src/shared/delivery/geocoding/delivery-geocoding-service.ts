@@ -474,10 +474,13 @@ class DeliveryGeocodingService {
   /**
    * Settles the claim with the point another delivery of the company has
    * at the same door, when one has it: no budget, no slot, no call. The
-   * settle's guards hold (the claim still current, no point yet), and a
-   * written one is announced like a found one. A reuse says nothing about
-   * the provider: the failure streak stays as it was. True when the claim
-   * is done with.
+   * settle's guards hold (the claim still current, no point yet, and the
+   * point's root still holding it), the copy names that root, and a
+   * written one is announced like a found one. One not written gives the
+   * claim back: a pin got there first, or the root's point moved or went
+   * in the meantime, and the next run reads the door again. A reuse says
+   * nothing about the provider: the failure streak stays as it was. True
+   * when the claim is done with.
    */
   private async reuse(
     claim: GeocodingClaim,
@@ -495,19 +498,23 @@ class DeliveryGeocodingService {
         latitude: point.latitude,
         longitude: point.longitude,
         precision: point.geo_precision,
+        copiedFrom: point.geo_copied_from,
       },
       now,
     );
 
-    result.reused += 1;
+    if (!written) {
+      if (await this.repository.release(claim)) result.released += 1;
 
-    if (written) {
-      result.settled.push({
-        id: claim.id,
-        businessId: claim.businessId,
-        kind: "RESOLVED",
-      });
+      return true;
     }
+
+    result.reused += 1;
+    result.settled.push({
+      id: claim.id,
+      businessId: claim.businessId,
+      kind: "RESOLVED",
+    });
 
     return true;
   }

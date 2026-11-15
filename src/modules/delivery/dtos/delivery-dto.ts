@@ -77,6 +77,14 @@ interface Delivery {
    * company's own address, nothing the row does not already say.
    */
   address_key?: string | null;
+  /**
+   * The root delivery a copied point came from (address-point-reuse.ts;
+   * migration 20261114130000): null on a point of the delivery's own. No
+   * screen reads it; it rides along with the whole row like address_key,
+   * so deliveryRowEntity documents it — the id of another delivery of the
+   * same company, nothing more.
+   */
+  geo_copied_from?: string | null;
   created_at?: Date | string;
   updated_at?: Date | string;
 }
@@ -162,7 +170,8 @@ interface UpdateDeliveryProps {
   // address changes (decision 14.7, design §4.11) — and the geocoder's
   // bookkeeping with it (plan of 02/11/2026, E1) — or writes the point
   // another delivery of the company has at the new address
-  // (address-point-reuse.ts, always GEOCODER), with the new address key.
+  // (address-point-reuse.ts, always GEOCODER), with the new address key
+  // and the root it came from (geo_copied_from).
   latitude?: number | null;
   longitude?: number | null;
   geo_source?: "GEOCODER" | null;
@@ -172,6 +181,7 @@ interface UpdateDeliveryProps {
   geocode_attempted_at?: null;
   geocode_attempts?: 0;
   address_key?: string | null;
+  geo_copied_from?: string | null;
 }
 
 interface ListDeliveriesProps extends DeliveryListFilters {

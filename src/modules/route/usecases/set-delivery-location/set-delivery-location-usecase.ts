@@ -10,7 +10,11 @@ import { sendRouteEventToDriver } from "@/websocket";
 
 import { AppError } from "@/shared/errors/AppError";
 import { logger } from "@/shared/logging/logger";
-import { announceSettledLookups } from "@/shared/delivery/geocoding/geocoding-announcer";
+import {
+  announceSettledLookups,
+  type StopPointChange,
+} from "@/shared/delivery/geocoding/geocoding-announcer";
+import { geocodeSoon } from "@/shared/delivery/geocoding/geocode-soon";
 import type { IDeliveryGeocodingRepository } from "@/shared/delivery/geocoding/geocoding-repository";
 // The box lives with the create's coordinates (plan of 02/11/2026, E1): a
 // pin and a point given at the create are refused by the same rule.
@@ -39,8 +43,10 @@ type SetDeliveryLocationResult = NonNullable<PinnedLocation["delivery"]> & {
   routeId: string | null;
   planVersion: number | null;
   /**
-   * How many other open deliveries of the company at the same address took
-   * the pin (D-24); 0 when clearing it.
+   * How many other open deliveries of the company at the same address the
+   * pin reached (D-24): the ones without a point that took it, and the
+   * copies of this delivery's previous point that moved with it; when
+   * clearing, the copies cleared with it.
    */
   propagated: number;
 };
@@ -72,9 +78,20 @@ const log = logger.child({ component: "route", action: "pin" });
  * 14/11/2026, decision D-24): the second delivery at a door the dispatcher
  * just located must not read "Sem localização". They are told like a point
  * the geocoder found — the route pages refetch, the driver of a released or
- * running route rereads the day — with no plan version. The answer says how
- * many (`propagated`). Never over a point, and clearing the pin leaves
- * theirs as they are.
+ * running route rereads the day — with no plan version. Never over a point
+ * of their own.
+ *
+ * And the copies this delivery already handed out follow it (pre-push
+ * review of the batch of 14/11/2026: a corrected or cleared pin left them
+ * wrong for good). In the pin's commit, the company's open copies still
+ * GEOCODER, still holding exactly its previous point and still at its door
+ * take the new one — or, when the pin is cleared, lose theirs and go back
+ * to the geocoding queue as fresh deliveries without a point, asked about
+ * right after (geocodeSoon), so the job may take another point of the door
+ * or ask the provider. A copy a person pinned since, one whose address
+ * changed, a closed one and another company's never move. They are told
+ * the same way (a cleared one as CLEARED, never as a point found). The
+ * answer says how many the pin reached (`propagated`).
  */
 @injectable()
 class SetDeliveryLocationUseCase {
@@ -148,40 +165,47 @@ class SetDeliveryLocationUseCase {
       });
     }
 
-    const propagated = point
-      ? await this.propagate(deliveryId, businessId)
-      : [];
+    const { followed } = pinned;
+
+    // The cleared copies are fresh deliveries without a point again: their
+    // lookup now, as after a create (never awaited).
+    if (!point && followed.length > 0) geocodeSoon(businessId, followed);
+
+    const given = point ? await this.propagate(deliveryId, businessId) : [];
+
+    await announceSettledLookups(this.geocoding, [
+      ...followed.map((id): StopPointChange => ({
+        id,
+        businessId,
+        kind: point ? "RESOLVED" : "CLEARED",
+      })),
+      ...given.map((id): StopPointChange => ({
+        id,
+        businessId,
+        kind: "RESOLVED",
+      })),
+    ]);
 
     return {
       ...pinned.delivery,
       routeId: pinned.route?.routeId ?? null,
       planVersion: pinned.route?.planVersion ?? null,
-      propagated: propagated.length,
+      propagated: followed.length + given.length,
     };
   }
 
   /**
-   * The pin, given to the other open deliveries at the same door, and the
-   * screens told. The pin itself is committed: a failure here costs only
-   * the copies (the job reuses the point on its next claim of them), never
-   * the answer.
+   * The pin, given to the other open deliveries at the same door still
+   * without a point. The pin itself is committed (its copies' follow-up
+   * with it): a failure here costs only these copies (the job reuses the
+   * point on its next claim of them), never the answer.
    */
   private async propagate(
     deliveryId: string,
     businessId: string,
   ): Promise<string[]> {
     try {
-      const ids = await this.route.propagateAddressPoint(
-        deliveryId,
-        businessId,
-      );
-
-      await announceSettledLookups(
-        this.geocoding,
-        ids.map((id) => ({ id, businessId, kind: "RESOLVED" as const })),
-      );
-
-      return ids;
+      return await this.route.propagateAddressPoint(deliveryId, businessId);
     } catch (err) {
       log.warn(
         { err, businessId, deliveryId },

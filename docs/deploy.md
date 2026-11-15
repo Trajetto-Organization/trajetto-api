@@ -3142,11 +3142,22 @@ sem `CONCURRENTLY` e lê a tabela inteira uma vez sob o lock `SHARE` (as
 escritas em `delivery` esperam): numa base com volume, construa-o antes à
 mão, pelo roteiro no comentário da migration, e ela não faz nada.
 
+A migration `20261114130000_delivery_geo_copied_from` vem junto e também é
+só de expansão: a coluna `delivery.geo_copied_from` (TEXT, nula, sem default,
+só no catálogo, sem chave estrangeira) e o índice parcial
+`delivery_geo_copied_from_idx`, sob `lock_timeout=5s`. Ele também é criado
+sem `CONCURRENTLY` e lê a tabela inteira uma vez sob o lock `SHARE`: são dois
+índices desse tipo em `delivery` neste deploy, e numa base com volume os dois
+seguem o mesmo roteiro do comentário de cada migration.
+
 - **A ordem é a de sempre: API, depois a web.** A imagem anterior não lê nem
-  grava a coluna. Durante o rollout, a entrega criada por uma réplica
+  grava as duas colunas. Durante o rollout, a entrega criada por uma réplica
   anterior fica sem chave e não empresta nem recebe ponto até o backfill, e
   a que ela edita fica com a chave do endereço antigo até o backfill, que
-  recalcula a chave de todas. A
+  recalcula a chave de todas. O pino ou a edição feitos por uma réplica
+  anterior não apagam `geo_copied_from`; isso não move nada errado, porque o
+  acompanhamento só muda a cópia `GEOCODER` que ainda tem exatamente o ponto
+  anterior da origem, e o backfill apaga a raiz de toda chave que corrige. A
   web e o app não mudam: o ponto copiado chega como `GEOCODER` ("Pelo
   endereço"), que os dois já mostram e que a geocerca do app já lê como
   exato no número ou na rua. Sem OTA.
@@ -3164,6 +3175,14 @@ mão, pelo roteiro no comentário da migration, e ela não faz nada.
   anterior ignora o campo). Sem versão de plano nova para elas: a página da
   rota relê pelo `routeStopsLocated`, e o app relê o dia pelo
   `route-stop.located`, que todo build já trata.
+- **Corrigir o pino corrige as cópias.** Se o despachante mudar o pino da
+  entrega de origem, as cópias abertas dela que ainda estão no mesmo
+  endereço e com o ponto antigo mudam junto, e `propagated` conta também
+  essas. Apagar o pino (`{ clear: true }`, só pela API) apaga o ponto delas
+  e elas voltam para a localização automática. Uma cópia fixada à mão
+  depois, uma com o endereço mudado e uma encerrada ficam como estão. Para
+  testar no staging: fixe uma entrega, crie outra no mesmo endereço (ela
+  nasce com o ponto), mude o pino da primeira e veja a segunda mudar junto.
 - **As entregas de antes** ficam com a chave nula até o backfill único. Depois
   que a API com esta migration estiver no ar, primeiro no staging e depois na
   produção, fora do pico, abra o terminal do contêiner da Application

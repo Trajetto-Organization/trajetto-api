@@ -189,6 +189,8 @@ interface GeocodingState {
   geo_precision: string | null;
   geocode_status: string | null;
   geocode_attempts: number;
+  /** The root a copied point came from. */
+  geo_copied_from: string | null;
 }
 
 /** Columns a case sets on a seeded delivery: a sibling at the same door. */
@@ -199,6 +201,8 @@ interface PlacedColumns {
   geo_source: "MANUAL" | "GEOCODER" | null;
   geo_precision: "ADDRESS" | "STREET" | "NEIGHBORHOOD" | "CITY" | null;
   geo_updated_at: Date | null;
+  geo_copied_from: string | null;
+  status: "PENDING" | "IN_TRANSIT" | "DELIVERED" | "CANCELLED";
 }
 
 interface GeocodingHarness {
@@ -385,7 +389,50 @@ function deliveryGeocodingContract(harness: () => GeocodingHarness): void {
         geo_precision: "STREET",
         geocode_status: "RESOLVED",
         geocode_attempts: 1,
+        // The provider's answer is the delivery's own point.
+        geo_copied_from: null,
       });
+    });
+
+    it("writes a copy with its root only while that root still holds the point", async () => {
+      // Pre-push review of the batch of 14/11/2026: a copy written as its
+      // root's pin moved or went would be left where no follow-up reaches.
+      const h = harness();
+      const claims = await h.repo.claim(3, NOW);
+      const claimOf = (id: string) => claims.find((claim) => claim.id === id)!;
+      const [first, second, theirs] = [
+        claimOf(F.open),
+        claimOf(F.inTransit),
+        claimOf(F.otherCompany),
+      ];
+      const copy = (latitude: number) =>
+        ({
+          kind: "RESOLVED",
+          latitude,
+          longitude: -46.6,
+          precision: "ADDRESS",
+          copiedFrom: F.manual,
+        }) as const;
+
+      // F.manual holds (-23.5, -46.6).
+      expect(await h.repo.settle(first, copy(-23.5), NOW)).toBe(true);
+      expect(await h.read(first.id)).toMatchObject({
+        latitude: -23.5,
+        geo_source: "GEOCODER",
+        geo_copied_from: F.manual,
+      });
+
+      // The root holds another point now: nothing written.
+      expect(await h.repo.settle(second, copy(-23.4), NOW)).toBe(false);
+      expect(await h.read(second.id)).toMatchObject({
+        latitude: null,
+        geo_source: null,
+        geo_copied_from: null,
+      });
+
+      // Never a root of another company, whatever it holds.
+      expect(await h.repo.settle(theirs, copy(-23.5), NOW)).toBe(false);
+      expect(await h.read(theirs.id)).toMatchObject({ latitude: null });
     });
 
     it("keeps no point for a district or a city", async () => {
@@ -468,6 +515,7 @@ function deliveryGeocodingContract(harness: () => GeocodingHarness): void {
         geo_precision: "STREET",
         geocode_status: "RESOLVED",
         geo_updated_at: NOW,
+        geo_copied_from: F.resolved,
       });
 
       await h.place(F.manual, {
@@ -482,6 +530,80 @@ function deliveryGeocodingContract(harness: () => GeocodingHarness): void {
         longitude: -43.2,
         geo_source: "GEOCODER",
         geo_precision: "ADDRESS",
+        geo_copied_from: F.manual,
+      });
+    });
+
+    it("lends a copy as its root, and nothing once that root dropped the point at the door", async () => {
+      // Pre-push review of the batch of 14/11/2026: a closed copy keeps
+      // the point its source's cleared pin took away, and must not hand it
+      // to the next delivery at the door.
+      const h = harness();
+      const [claim] = await h.repo.claim(1, NOW);
+      const door = deliveryAddressKey(claim);
+
+      // F.manual is the pin; F.resolved, closed, took it as a copy.
+      await h.place(F.manual, {
+        address_key: door,
+        latitude: -22.9,
+        longitude: -43.2,
+        geo_updated_at: minute(1),
+      });
+      await h.place(F.resolved, {
+        address_key: door,
+        status: "DELIVERED",
+        latitude: -22.9,
+        longitude: -43.2,
+        geo_precision: "ADDRESS",
+        geo_updated_at: minute(2),
+        geo_copied_from: F.manual,
+      });
+
+      // The pin cleared: its closed copy lends nothing.
+      await h.place(F.manual, {
+        latitude: null,
+        longitude: null,
+        geo_source: null,
+      });
+
+      expect(await h.repo.reusablePoint(claim, NOW)).toBeNull();
+
+      // The pin moved: still nothing from the copy of the old one.
+      await h.place(F.manual, {
+        latitude: -22.8,
+        longitude: -43.3,
+        geo_source: "MANUAL",
+      });
+
+      expect(await h.repo.reusablePoint(claim, NOW)).toMatchObject({
+        latitude: -22.8,
+        geo_copied_from: F.manual,
+      });
+
+      // The pinned delivery moved to another address: it no longer speaks
+      // for this door, and the copy lends as its own root.
+      await h.place(F.manual, { address_key: "another door" });
+
+      expect(await h.repo.reusablePoint(claim, NOW)).toMatchObject({
+        latitude: -22.9,
+        geo_copied_from: F.resolved,
+      });
+
+      // A link to another company's row never makes it the root, whatever
+      // that row holds, and its point is never lent across.
+      await h.place(F.resolved, { geo_copied_from: F.otherCompany });
+      await h.place(F.otherCompany, {
+        address_key: door,
+        latitude: -1,
+        longitude: -1,
+        geo_source: "MANUAL",
+      });
+
+      expect(await h.repo.reusablePoint(claim, NOW)).toMatchObject({
+        latitude: -22.9,
+        geo_source: "GEOCODER",
+        geo_precision: "ADDRESS",
+        geo_copied_from: F.resolved,
       });
     });
 

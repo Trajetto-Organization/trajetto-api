@@ -7,6 +7,7 @@ import type {
 } from "@/modules/delivery/dtos/delivery-dto";
 import { DeliveryStatusConflictError } from "@/modules/delivery/usecases/errors/delivery-errors";
 import { deliveryAddressKey } from "@/shared/delivery/address-key";
+import { CLEARED_ADDRESS_POINT } from "@/shared/delivery/address-point";
 
 import { expectPrismaCode, fixedId, minute, type Kind } from "../support";
 
@@ -322,7 +323,10 @@ function deliveryRepositoryContract(harness: () => DeliveryHarness): void {
         geo_precision: "ADDRESS",
         geocode_status: "RESOLVED",
         address_key: deliveryAddressKey(lipold),
+        // Where it came from: the pin's later changes reach it.
+        geo_copied_from: pinned.id,
       });
+      expect(pinned).toMatchObject({ geo_copied_from: null });
       expect(await repo.findDeliveryById(elsewhere.id!)).toMatchObject({
         latitude: null,
         geo_source: null,
@@ -380,6 +384,94 @@ function deliveryRepositoryContract(harness: () => DeliveryHarness): void {
         latitude: -22.5201,
       });
       expect(await repo.findReusablePoint(D, key)).toBeNull();
+    });
+
+    it("names the root of a copy of a copy, takes its own point back as its own, and lends nothing its root dropped", async () => {
+      // Pre-push review of the batch of 14/11/2026: a copy tied to nothing
+      // stayed wrong for good once its source's pin moved or went.
+      const { repo } = harness();
+      const senna = {
+        recipient_name: "Destinatário",
+        street: "Avenida Ayrton Senna",
+        address_number: "300",
+        neighborhood: "Quitandinha",
+        city: "Petrópolis",
+        uf: "RJ",
+        businessId: C,
+        shipperId: FIXTURE.shipperC,
+      };
+      const key = deliveryAddressKey(senna)!;
+      const found = {
+        latitude: -22.5301,
+        longitude: -43.2101,
+        geo_source: "GEOCODER" as const,
+        geo_precision: "STREET" as const,
+        geocode_status: "RESOLVED" as const,
+      };
+
+      // The geocoder's own answer, older than the copies made from it.
+      const root = await repo.createDelivery(senna);
+
+      await repo.updateDelivery(root.id!, {
+        ...found,
+        geo_updated_at: new Date("2020-01-01T00:00:00.000Z"),
+      });
+
+      const copy = await repo.createDelivery(senna);
+      // The newest point of the door is the copy's: still named by its root.
+      const copyOfCopy = await repo.createDelivery(senna);
+
+      for (const taken of [copy, copyOfCopy]) {
+        expect(await repo.findDeliveryById(taken.id!)).toMatchObject({
+          latitude: -22.5301,
+          geo_source: "GEOCODER",
+          geo_copied_from: root.id,
+        });
+      }
+
+      // The root's address edited back to this door takes its own point.
+      expect(await repo.findReusablePoint(C, key, root.id)).toMatchObject({
+        latitude: -22.5301,
+        geo_copied_from: null,
+      });
+
+      // The root's point gone: its copies lend nothing, and a write of one
+      // of them as a copy is refused at the write.
+      await repo.updateDelivery(root.id!, {
+        latitude: null,
+        longitude: null,
+        geo_source: null,
+      });
+
+      expect(await repo.findReusablePoint(C, key)).toBeNull();
+      expect(await repo.findReusablePoint(D, key)).toBeNull();
+
+      const stale = await repo.createDelivery({
+        ...senna,
+        address_number: "302",
+      });
+      const asCopy = {
+        ...CLEARED_ADDRESS_POINT,
+        ...found,
+        geo_precision: "ADDRESS" as const,
+        geo_updated_at: new Date(),
+        geo_copied_from: root.id!,
+      };
+
+      expect(await repo.updateDelivery(stale.id!, asCopy)).toMatchObject({
+        latitude: null,
+        geo_source: null,
+        geo_copied_from: null,
+      });
+
+      // Back again: the write takes it, with its root.
+      await repo.updateDelivery(root.id!, found);
+
+      expect(await repo.updateDelivery(stale.id!, asCopy)).toMatchObject({
+        latitude: -22.5301,
+        geo_source: "GEOCODER",
+        geo_copied_from: root.id,
+      });
     });
 
     it("finds by submission key and by NF-e key inside the company only", async () => {

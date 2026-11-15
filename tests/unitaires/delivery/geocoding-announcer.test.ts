@@ -98,6 +98,28 @@ describe("stopsLocatedAnnouncements", () => {
     expect(drivers).toEqual([{ driverUserId: "u1", routeId: "released" }]);
   });
 
+  // Pre-push review of the batch of 14/11/2026: a copied point cleared
+  // with its source's pin is no point found, but the driver's phone still
+  // holds it, and its geofence would keep measuring from it.
+  it("tells the driver about a copied point cleared too, never as a point found", () => {
+    const { business, drivers } = stopsLocatedAnnouncements(
+      [{ id: "d1", businessId: A, kind: "CLEARED" }],
+      [
+        stop({
+          deliveryId: "d1",
+          routeId: "running",
+          routeStatus: "IN_PROGRESS",
+          driverUserId: "u1",
+        }),
+      ],
+    );
+
+    expect(business).toEqual([
+      { businessId: A, routeId: "running", deliveryIds: ["d1"] },
+    ]);
+    expect(drivers).toEqual([{ driverUserId: "u1", routeId: "running" }]);
+  });
+
   it("never announces a delivery on a route of another company", () => {
     const { business } = stopsLocatedAnnouncements(
       [{ id: "d1", businessId: A, kind: "RESOLVED" }],

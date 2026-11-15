@@ -23,7 +23,11 @@ import { routeClosedWithPendingNote } from "@/shared/route/route-left-open";
 import { assignStopGroupKeys } from "@/shared/delivery/stop-group";
 import { deliveryAddressKey } from "@/shared/delivery/address-key";
 import { pickReusablePoint } from "@/shared/delivery/geocoding/address-point-reuse";
-import { writePointToDoor } from "@/shared/delivery/geocoding/address-point-propagation";
+import {
+  followSource,
+  sourcePinOf,
+  writePointToDoor,
+} from "@/shared/delivery/geocoding/address-point-propagation";
 import { isModuleEnabled } from "@/shared/entitlements/entitlement-rules";
 
 import {
@@ -2133,10 +2137,25 @@ class RouteRepository implements IRouteRepository {
           )
         : null;
 
-      const delivery = await tx.delivery.findFirst({
-        where: { id: deliveryId, businessId },
-        select: { status: true },
-      });
+      // Locked before it is read (FOR NO KEY UPDATE, the lock the UPDATE
+      // below takes anyway): the point it holds now is what its copies
+      // hold, and a second pin of the same delivery waits here and then
+      // reads this one's point — never two pins moving the copies from the
+      // same old point to two new ones. A copy written at the same instant
+      // locks this row FOR SHARE first (lockLender): it waits, or is seen.
+      const [delivery] = await tx.$queryRaw<
+        Array<{
+          status: string;
+          address_key: string | null;
+          latitude: number | null;
+          longitude: number | null;
+        }>
+      >`
+        SELECT "status", "address_key", "latitude", "longitude"
+        FROM "delivery"
+        WHERE "id" = ${deliveryId} AND "businessId" = ${businessId}
+        FOR NO KEY UPDATE
+      `;
 
       if (!delivery) return null;
 
@@ -2146,9 +2165,14 @@ class RouteRepository implements IRouteRepository {
           delivery: null,
           route: null,
           runningRoute: null,
+          followed: [],
         };
       }
 
+      const now = new Date();
+
+      // A pin is the delivery's own point: it is its own root from now on
+      // (geo_copied_from cleared), whether it had a copy or none.
       const updated = await tx.delivery.update({
         where: { id: deliveryId },
         data: point
@@ -2156,13 +2180,15 @@ class RouteRepository implements IRouteRepository {
               latitude: point.latitude,
               longitude: point.longitude,
               geo_source: "MANUAL",
-              geo_updated_at: new Date(),
+              geo_updated_at: now,
+              geo_copied_from: null,
             }
           : {
               latitude: null,
               longitude: null,
               geo_source: null,
-              geo_updated_at: new Date(),
+              geo_updated_at: now,
+              geo_copied_from: null,
             },
         select: {
           id: true,
@@ -2172,6 +2198,15 @@ class RouteRepository implements IRouteRepository {
           geo_updated_at: true,
         },
       });
+
+      // The copies this delivery handed out follow it, in this commit: a
+      // corrected pin moves them, a cleared one clears them (followSource).
+      const pin = sourcePinOf(
+        { id: deliveryId, businessId, ...delivery },
+        point,
+        now,
+      );
+      const followed = pin ? await followSource(tx, pin) : [];
 
       // The point is part of the plan the driver follows on a released
       // route, so the plan moves a version (decision 14.7, §4.11). A running
@@ -2198,6 +2233,7 @@ class RouteRepository implements IRouteRepository {
           route && holder && route.status === "IN_PROGRESS"
             ? { routeId: holder.routeId, driverId: route.driverId }
             : null,
+        followed,
       };
     });
   }
@@ -2228,7 +2264,9 @@ class RouteRepository implements IRouteRepository {
     const addressKey = pinned
       ? (pinned.address_key ?? deliveryAddressKey(pinned))
       : null;
-    const point = pinned ? pickReusablePoint([pinned], new Date()) : null;
+    const point = pinned
+      ? pickReusablePoint([{ ...pinned, root: deliveryId }], new Date())
+      : null;
 
     if (!addressKey || !point) return [];
 

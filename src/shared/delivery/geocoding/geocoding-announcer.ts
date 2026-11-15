@@ -11,6 +11,17 @@ import type {
 } from "./geocoding-repository";
 
 /**
+ * A stop whose point the screens must reread: a lookup the geocoder ended
+ * (SettledLookup), or a copied point cleared with its source's pin
+ * (CLEARED) — never announced as RESOLVED, as it is no point found.
+ */
+interface StopPointChange {
+  id: string;
+  businessId: string;
+  kind: SettledLookup["kind"] | "CLEARED";
+}
+
+/**
  * Who hears that a run ended the lookup of some addresses (owner's report
  * of 09/11/2026: the route page said "Sem localização" until a reload, even
  * after the point had been found). The settle writes quietly — no
@@ -20,8 +31,10 @@ import type {
  * - the operations room of the route's company, once per route, as
  *   `routeStopsLocated` with the deliveries: the route page refetches;
  * - the driver of a released or running route, as the routeEvent
- *   `route-stop.located`, only when a point was found: the app refetches
- *   the day silently and its geofence measures from the new point.
+ *   `route-stop.located`, only when the stop's point changed — one found
+ *   (RESOLVED), or a copied one taken away with its source's pin
+ *   (CLEARED, followSource): the app refetches the day silently, and its
+ *   geofence measures from the new point, or stops measuring from the old.
  *
  * Only the unfinished routes holding the deliveries as open stops, and
  * only a stop of the same company as the delivery the claim carried — the
@@ -38,13 +51,13 @@ interface StopsLocatedAnnouncements {
 }
 
 function stopsLocatedAnnouncements(
-  settled: readonly SettledLookup[],
+  settled: readonly StopPointChange[],
   stops: readonly OpenStopRoute[],
 ): StopsLocatedAnnouncements {
   const byId = new Map(settled.map((lookup) => [lookup.id, lookup]));
   const routes = new Map<
     string,
-    { stop: OpenStopRoute; deliveryIds: string[]; resolved: boolean }
+    { stop: OpenStopRoute; deliveryIds: string[]; moved: boolean }
   >();
 
   for (const stop of stops) {
@@ -55,14 +68,14 @@ function stopsLocatedAnnouncements(
     const entry = routes.get(stop.routeId) ?? {
       stop,
       deliveryIds: [],
-      resolved: false,
+      moved: false,
     };
 
     if (!entry.deliveryIds.includes(stop.deliveryId)) {
       entry.deliveryIds.push(stop.deliveryId);
     }
 
-    entry.resolved ||= lookup.kind === "RESOLVED";
+    entry.moved ||= lookup.kind === "RESOLVED" || lookup.kind === "CLEARED";
     routes.set(stop.routeId, entry);
   }
 
@@ -71,7 +84,7 @@ function stopsLocatedAnnouncements(
     drivers: [],
   };
 
-  for (const [routeId, { stop, deliveryIds, resolved }] of routes) {
+  for (const [routeId, { stop, deliveryIds, moved }] of routes) {
     announcements.business.push({
       businessId: stop.businessId,
       routeId,
@@ -81,7 +94,7 @@ function stopsLocatedAnnouncements(
     const theirs =
       stop.routeStatus === "RELEASED" || stop.routeStatus === "IN_PROGRESS";
 
-    if (resolved && theirs && stop.driverUserId) {
+    if (moved && theirs && stop.driverUserId) {
       announcements.drivers.push({
         driverUserId: stop.driverUserId,
         routeId,
@@ -100,7 +113,7 @@ const log = logger.child({ component: "geocoding" });
  */
 async function announceSettledLookups(
   repository: Pick<IDeliveryGeocodingRepository, "openStopRoutes">,
-  settled: readonly SettledLookup[],
+  settled: readonly StopPointChange[],
 ): Promise<void> {
   if (settled.length === 0) return;
 
@@ -126,4 +139,4 @@ async function announceSettledLookups(
 }
 
 export { announceSettledLookups, stopsLocatedAnnouncements };
-export type { StopsLocatedAnnouncements };
+export type { StopPointChange, StopsLocatedAnnouncements };

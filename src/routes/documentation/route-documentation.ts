@@ -639,7 +639,7 @@ const routeResponses = {
         .number()
         .int()
         .describe(
-          'Quantas outras entregas abertas (PENDING ou IN_TRANSIT) da mesma empresa, no mesmo endereço e ainda sem ponto, receberam este ponto agora, gravado como `GEOCODER` ("Pelo endereço"). 0 ao apagar o ponto, que não desfaz as cópias.',
+          'Quantas outras entregas abertas (PENDING ou IN_TRANSIT) da mesma empresa, no mesmo endereço, o pino alcançou agora, gravado nelas como `GEOCODER` ("Pelo endereço"): as que ainda não tinham ponto e as cópias do ponto anterior desta entrega, que mudam junto com ele. Ao apagar o ponto, quantas cópias dele foram apagadas junto e voltaram para a localização automática. Uma cópia fixada à mão depois, com o endereço mudado ou já encerrada não conta nem muda.',
         ),
     }),
   }),

@@ -67,6 +67,7 @@ function delivery(id: string, overrides: Record<string, unknown> = {}) {
     geocode_status: null,
     geocode_attempted_at: null,
     geocode_attempts: 0,
+    geo_copied_from: null,
     created_at: new Date("2026-11-03T14:00:00.000Z"),
     ...overrides,
   };
@@ -871,10 +872,47 @@ describe("the point of another delivery at the same door", () => {
       geo_source: "GEOCODER",
       geo_precision: "ADDRESS",
       geocode_status: "RESOLVED",
+      // Its root: the pin's later changes reach it.
+      geo_copied_from: "sibling",
     });
     expect(h.announced).toEqual([
       [{ id: "d1", businessId: BUSINESS, kind: "RESOLVED" }],
     ]);
+  });
+
+  // Pre-push review of the batch of 14/11/2026: a copy written after its
+  // root's pin moved or went is left where no follow-up reaches it.
+  it("gives the claim back when the root dropped the point before the write", async () => {
+    const h = harness(() => FOUND_AT_DOOR, {
+      rows: [delivery("d1"), sibling()],
+    });
+    const read = h.repository.reusablePoint.bind(h.repository);
+
+    h.repository.reusablePoint = async (claim, now) => {
+      const point = await read(claim, now);
+
+      // The dispatcher clears the pin between the read and the write.
+      Object.assign(row(h, "sibling"), {
+        latitude: null,
+        longitude: null,
+        geo_source: null,
+      });
+
+      return point;
+    };
+
+    const result = await h.run.runOnce(NOW);
+
+    expect(result).toMatchObject({ claimed: 1, reused: 0, released: 1 });
+    expect(row(h, "d1")).toMatchObject({
+      latitude: null,
+      geo_source: null,
+      geo_copied_from: null,
+      geocode_attempts: 0,
+      geocode_attempted_at: null,
+    });
+    expect(h.asked).toEqual([]);
+    expect(h.announced).toEqual([]);
   });
 
   it("does the same right after a commit", async () => {

@@ -195,6 +195,7 @@ const pointOf = (id: string) =>
       geo_updated_at: true,
       geo_precision: true,
       geocode_status: true,
+      geo_copied_from: true,
     },
   });
 
@@ -326,6 +327,8 @@ describe("the point of another delivery at the same door", () => {
       geo_source: "GEOCODER",
       geo_precision: "ADDRESS",
       geocode_status: "RESOLVED",
+      // The pin's later changes reach it (followSource).
+      geo_copied_from: alone.json().data.id,
     });
 
     const claimed = (
@@ -354,16 +357,18 @@ describe("the point of another delivery at the same door", () => {
   });
 
   it("is read one index entry per source, however busy the door", async () => {
-    // The create's two probes (findReusablePoint), the job's
-    // (readDoorCandidates) and the propagation's UPDATE (writePointToDoor),
-    // in the shape they run. With sequential and bitmap scans off, only an
-    // index scan is left: delivery_address_key_idx must be the one, and no
-    // Sort may follow it — a sort would mean the probe reads and orders
-    // every point the door ever had instead of stopping at the first.
-    const door = `"businessId" = '${CARRIER}'
-      AND "address_key" = '${deliveryAddressKey(LIPOLD)}'
-      AND "id" <> ''`;
-    const newest = `ORDER BY "geo_updated_at" DESC NULLS LAST, "id" DESC LIMIT 1`;
+    // The two probes the create and the job share (readDoorCandidates),
+    // the propagation's UPDATE (writePointToDoor) and the pin's follow-up
+    // (followSource), in the shape they run. With sequential and bitmap
+    // scans off, only an index scan is left: delivery_address_key_idx must
+    // be the probes' one, and no Sort may follow it — a sort would mean the
+    // probe reads and orders every point the door ever had instead of
+    // stopping at the first. The GEOCODER probe's join to the copy's root
+    // is a primary-key probe per entry, keeping the index's order.
+    const door = `d."businessId" = '${CARRIER}'
+      AND d."address_key" = '${deliveryAddressKey(LIPOLD)}'
+      AND d."id" <> ''`;
+    const newest = `ORDER BY d."geo_updated_at" DESC NULLS LAST, d."id" DESC LIMIT 1`;
 
     const plans = await prisma.$transaction(async (tx) => {
       await tx.$executeRawUnsafe("SET LOCAL enable_seqscan = off");
@@ -380,20 +385,41 @@ describe("the point of another delivery at the same door", () => {
 
       return {
         manual: await explain(
-          `SELECT "latitude" FROM "delivery" WHERE ${door}
-            AND "latitude" IS NOT NULL AND "longitude" IS NOT NULL
-            AND "geo_source" = 'MANUAL' ${newest}`,
+          `SELECT d."latitude", d."id" FROM "delivery" AS d WHERE ${door}
+            AND d."latitude" IS NOT NULL AND d."longitude" IS NOT NULL
+            AND d."geo_source" = 'MANUAL' ${newest}`,
         ),
         geocoded: await explain(
-          `SELECT "latitude" FROM "delivery" WHERE ${door}
-            AND "latitude" IS NOT NULL AND "longitude" IS NOT NULL
-            AND "geo_source" = 'GEOCODER'
-            AND "geo_precision" IN ('ADDRESS', 'STREET') ${newest}`,
+          `SELECT d."latitude",
+              CASE WHEN r."businessId" = d."businessId"
+                AND r."address_key" = d."address_key"
+                THEN r."id" ELSE d."id" END
+            FROM "delivery" AS d
+            LEFT JOIN "delivery" AS r ON r."id" = d."geo_copied_from"
+            WHERE ${door}
+              AND d."latitude" IS NOT NULL AND d."longitude" IS NOT NULL
+              AND d."geo_source" = 'GEOCODER'
+              AND d."geo_precision" IN ('ADDRESS', 'STREET')
+              AND (r."id" IS NULL
+                OR r."businessId" <> d."businessId"
+                OR r."address_key" IS DISTINCT FROM d."address_key"
+                OR (r."latitude" = d."latitude" AND r."longitude" = d."longitude"))
+            ${newest}`,
         ),
         write: await explain(
+          `UPDATE "delivery" AS d SET "geocode_status" = 'RESOLVED'
+            WHERE ${door} AND d."status" IN ('PENDING', 'IN_TRANSIT')
+              AND d."latitude" IS NULL AND d."geo_source" IS NULL`,
+        ),
+        follow: await explain(
           `UPDATE "delivery" SET "geocode_status" = 'RESOLVED'
-            WHERE ${door} AND "status" IN ('PENDING', 'IN_TRANSIT')
-              AND "latitude" IS NULL AND "geo_source" IS NULL`,
+            WHERE "businessId" = '${CARRIER}'
+              AND "geo_copied_from" = '${randomUUID()}'
+              AND "status" IN ('PENDING', 'IN_TRANSIT')
+              AND "id" <> ''
+              AND "geo_source" = 'GEOCODER'
+              AND "latitude" = -22.4 AND "longitude" = -43.1
+              AND "address_key" IS NOT DISTINCT FROM '${deliveryAddressKey(LIPOLD)}'`,
         ),
       };
     });
@@ -402,10 +428,14 @@ describe("the point of another delivery at the same door", () => {
       expect(probe).toContain("delivery_address_key_idx");
       expect(probe).not.toMatch(/\bSort\b/);
     }
+    expect(plans.geocoded).toContain("delivery_pkey");
 
     // The propagation reads the door's rows without a source, not all.
     expect(plans.write).toContain("delivery_address_key_idx");
     expect(plans.write).toMatch(/Index Cond: .*geo_source IS NULL/);
+
+    // The follow-up reads the source's open copies, not the door.
+    expect(plans.follow).toContain("delivery_geo_copied_from_idx");
   });
 });
 

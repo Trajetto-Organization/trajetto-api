@@ -83,6 +83,18 @@ beforeAll(async () => {
   await seed("stale", {
     address_key: deliveryAddressKey({ ...LIPOLD, address_number: "12" }),
   });
+  // The same, located again by the old replica on its own after the move,
+  // still linked to the neighbour's door where it had copied a point: the
+  // key's correction drops the link, and the point stays its own.
+  await seed("stale located", {
+    address_key: deliveryAddressKey({ ...LIPOLD, address_number: "12" }),
+    latitude: -22.4555,
+    longitude: -43.1699,
+    geo_source: "GEOCODER",
+    geo_precision: "ADDRESS",
+    geocode_status: "RESOLVED",
+    geo_copied_from: randomUUID(),
+  });
 }, 60_000);
 
 afterAll(async () => {
@@ -99,12 +111,12 @@ describe("the address key's backfill", () => {
     });
 
     expect(report).toEqual({
-      scanned: 7,
-      keyed: 6,
+      scanned: 8,
+      keyed: 7,
       doors: 1,
       propagated: 2,
     });
-    expect(batches).toEqual([2, 4, 6, 7]);
+    expect(batches).toEqual([2, 4, 6, 8]);
 
     const row = (name: string) =>
       prisma.delivery.findUniqueOrThrow({ where: { id: ids[name] } });
@@ -127,8 +139,20 @@ describe("the address key's backfill", () => {
       geo_source: "GEOCODER",
       geo_precision: "ADDRESS",
       geocode_status: "RESOLVED",
+      // Its root, so a later pin there moves it too.
+      geo_copied_from: ids.pinned,
     });
-    expect(await row("pinned")).toMatchObject({ geo_source: "MANUAL" });
+    expect((await row("stale")).geo_copied_from).toBe(ids.pinned);
+    expect(await row("pinned")).toMatchObject({
+      geo_source: "MANUAL",
+      geo_copied_from: null,
+    });
+    expect(await row("stale located")).toMatchObject({
+      address_key: deliveryAddressKey(LIPOLD),
+      latitude: -22.4555,
+      geo_source: "GEOCODER",
+      geo_copied_from: null,
+    });
 
     for (const name of ["delivered", "neighbour", "elsewhere"]) {
       expect(await row(name), name).toMatchObject({
@@ -140,7 +164,7 @@ describe("the address key's backfill", () => {
 
   it("finds nothing to do the second time", async () => {
     expect(await backfillDeliveryAddressKeys(prisma)).toEqual({
-      scanned: 7,
+      scanned: 8,
       keyed: 0,
       doors: 0,
       propagated: 0,

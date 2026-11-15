@@ -61,6 +61,8 @@ const pointOf = (row: Record<string, unknown> | null | undefined) => ({
   geo_source: (row?.geo_source as string | null) ?? null,
   geo_precision: (row?.geo_precision as string | null) ?? null,
   geocode_status: (row?.geocode_status as string | null) ?? null,
+  geo_copied_from: (row?.geo_copied_from as string | null) ?? null,
+  geocode_attempts: (row?.geocode_attempts as number | undefined) ?? 0,
 });
 
 const harnessOf = (kind: Kind): RouteHarness => ({

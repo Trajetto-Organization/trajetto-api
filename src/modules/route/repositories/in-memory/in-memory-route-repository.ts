@@ -21,7 +21,13 @@ import {
 import { asDateColumn } from "@/shared/in-memory/date-column";
 import { deliveryAddressKey } from "@/shared/delivery/address-key";
 import { pickReusablePoint } from "@/shared/delivery/geocoding/address-point-reuse";
-import { takesDoorPoint } from "@/shared/delivery/geocoding/address-point-propagation";
+import {
+  followerColumns,
+  followsSource,
+  sourcePinOf,
+  takesDoorPoint,
+  twinLenderHolds,
+} from "@/shared/delivery/geocoding/address-point-propagation";
 import { matchesIdSearch } from "@/shared/pagination/id-search";
 import {
   compareForOrder,
@@ -213,6 +219,8 @@ interface DeliveryMirror {
   address_number?: string | null;
   neighborhood?: string | null;
   address_key?: string | null;
+  /** The root a copied point came from, for the pin's follow-up. */
+  geo_copied_from?: string | null;
 
   /** The address point (D7). */
   latitude?: number | null;
@@ -1775,13 +1783,41 @@ class InMemoryRouteRepository implements IRouteRepository {
     if (!delivery) return null;
 
     if (delivery.status === "DELIVERED" || delivery.status === "CANCELLED") {
-      return { locked: true, delivery: null, route: null, runningRoute: null };
+      return {
+        locked: true,
+        delivery: null,
+        route: null,
+        runningRoute: null,
+        followed: [],
+      };
     }
+
+    const now = new Date();
+    // As the Prisma write: the point before the pin decides which copies
+    // follow it (followSource's twin).
+    const pin = sourcePinOf(
+      {
+        id: deliveryId,
+        businessId,
+        address_key: delivery.address_key ?? null,
+        latitude: delivery.latitude ?? null,
+        longitude: delivery.longitude ?? null,
+      },
+      point,
+      now,
+    );
 
     delivery.latitude = point?.latitude ?? null;
     delivery.longitude = point?.longitude ?? null;
     delivery.geo_source = point ? "MANUAL" : null;
-    delivery.geo_updated_at = new Date();
+    delivery.geo_updated_at = now;
+    delivery.geo_copied_from = null;
+
+    const followers = pin
+      ? this.deliveries.filter((entry) => followsSource(entry, pin))
+      : [];
+
+    for (const entry of followers) Object.assign(entry, followerColumns(pin!));
 
     const stop = this.stops.find(
       (entry) => entry.deliveryId === deliveryId && isStopOpen(entry.status),
@@ -1810,6 +1846,7 @@ class InMemoryRouteRepository implements IRouteRepository {
         route?.status === "IN_PROGRESS"
           ? { routeId: route.id, driverId: route.driverId }
           : null,
+      followed: followers.map((entry) => entry.id!),
     };
   }
 
@@ -1832,12 +1869,19 @@ class InMemoryRouteRepository implements IRouteRepository {
           geo_source: pinned.geo_source ?? null,
           geo_precision: pinned.geo_precision ?? null,
           geo_updated_at: pinned.geo_updated_at ?? null,
+          root: deliveryId,
         },
       ],
       new Date(),
     );
 
-    if (!addressKey || !point) return [];
+    if (
+      !addressKey ||
+      !point ||
+      !twinLenderHolds(this.deliveries, businessId, point)
+    ) {
+      return [];
+    }
 
     const door = { businessId, addressKey, exceptId: deliveryId };
     const taken = this.deliveries.filter((entry) =>

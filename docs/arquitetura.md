@@ -1532,6 +1532,42 @@ chave da pausa guarda o motivo junto do prazo (`REFUSED`, `QUOTA` ou
     reenvio legítimo do ERP virar 409 `IDEMPOTENCY_KEY_REUSED`. A geocerca da
     API e do app lê `GEOCODER` no número ou na rua como exato, e a web
     mostra "Pelo endereço".
+  - **A cópia sabe de onde veio (revisão antes do push do lote de
+    14/11/2026).** Sem isso, corrigir ou apagar o pino da origem deixava
+    errada para sempre cada cópia que ela já tinha dado: a cópia tem ponto,
+    então o geocodificador nunca mais pergunta por ela, e a propagação só
+    grava em quem não tem ponto. A coluna `geo_copied_from` (migration
+    `20261114130000_delivery_geo_copied_from`, só expansão, sem chave
+    estrangeira: a migration diz por quê) guarda a entrega RAIZ do ponto, a
+    própria candidata ou, quando ela já é uma cópia, a raiz dela, nunca uma
+    corrente. Toda escrita de ponto copiado grava a raiz (a criação e a
+    edição, o reaproveitamento do job, a propagação do pino e o backfill do
+    dono), e toda escrita de ponto próprio ou de endereço a apaga: o pino
+    (a entrega fixada vira a própria raiz), a resposta do provedor, o ponto
+    dado na criação, a planilha e a API, a edição do endereço
+    (`CLEARED_ADDRESS_POINT`) e a chave corrigida pelo backfill. Na edição
+    que volta o endereço para a porta cujo ponto a entrega tinha
+    emprestado, ela pega o próprio ponto de volta como dela (sem raiz).
+  - Quem empresta: o pino é a própria raiz; uma cópia empresta como a raiz
+    dela enquanto essa raiz, na mesma porta, ainda tem o mesmo ponto
+    (`lendingRoot`, a mesma regra no SQL de `readDoorCandidates`, com um
+    `LEFT JOIN` pela chave primária). Quando a raiz perdeu o ponto ali (o
+    pino foi apagado ou mudou), a cópia não empresta mais: a cópia encerrada
+    que o acompanhamento deixa como estava daria à próxima entrega da porta
+    o ponto que uma pessoa acabou de tirar. Se a raiz sumiu (uma importação
+    desfeita) ou mudou de endereço, ela não fala mais por aquela porta, e a
+    cópia empresta como a própria raiz. No caso comum a cópia mais nova
+    ainda vale e a sonda para na primeira entrada; ela só anda mais depois
+    de um ponto tirado, até um ponto achado ali depois ficar mais novo.
+  - Toda escrita de cópia só vale enquanto a raiz ainda tem o ponto, lido
+    com `FOR SHARE` (`lenderHolds` no `UPDATE` da propagação e do `settle`;
+    `lockLender` antes do `INSERT` da criação e do `UPDATE` da edição, na
+    mesma transação). O pino trava a raiz com `FOR NO KEY UPDATE`, que
+    espera esse lock: ou o pino espera e o acompanhamento dele acha a cópia
+    nova, ou o pino vai primeiro e a cópia não é gravada (a criação e a
+    edição ficam sem ponto e pedem a localização logo depois; o job devolve
+    a reserva e relê a porta na rodada seguinte). Nunca sobra uma cópia de
+    um ponto que a raiz já não tem.
   - Na criação (`DeliveryRepository.createDelivery`, a porta única do
     painel, do XML, da planilha e da API pública), a chave é gravada e, sem
     ponto no corpo, a irmã da mesma empresa é lida na mesma transação
@@ -1575,10 +1611,37 @@ chave da pausa guarda o motivo junto do prazo (`REFUSED`, `QUOTA` ou
     API pública não a lista). Depois vem o `announceSettledLookups`, sem
     `plan_version`, como um ponto achado pelo geocodificador: a página da
     rota de cada uma relê, e o motorista de rota liberada ou em andamento
-    recebe `route-stop.located`. A resposta traz `propagated: n`. Uma falha
-    aqui só registra `warn` ("pin not propagated…"): o pino já está
-    gravado, e o job reaproveita o ponto na próxima reserva delas. Apagar o
-    pino não desfaz as cópias.
+    recebe `route-stop.located`. Uma falha aqui só registra `warn` ("pin
+    not propagated…"): o pino já está gravado, e o job reaproveita o ponto
+    na próxima reserva delas.
+  - **As cópias acompanham o pino.** Na mesma transação do "Fixar no
+    mapa", com a entrega travada (`FOR NO KEY UPDATE`) e o ponto anterior
+    dela lido antes da gravação, o `followSource`
+    (`shared/delivery/geocoding/address-point-propagation.ts`) muda as
+    cópias dela que ainda estão abertas (`PENDING`, `IN_TRANSIT`), ainda
+    são `GEOCODER`, ainda têm exatamente o ponto anterior e ainda estão na
+    `address_key` atual dela, sempre filtrando `businessId`: o pino
+    corrigido vai para elas (`ADDRESS`, `RESOLVED`, a raiz continua a
+    mesma); o pino apagado apaga o ponto delas e as devolve à fila como
+    uma entrega nova sem ponto (`CLEARED_ADDRESS_POINT`: sem origem, sem
+    precisão, sem status, zero tentativas, sem raiz), com o `geocodeSoon`
+    logo depois do commit, e o job pode pegar outro ponto da porta ou
+    perguntar ao provedor. Uma cópia fixada à mão depois (`MANUAL`), uma
+    com o endereço mudado, uma encerrada e qualquer entrega de outra
+    empresa não mudam; um link que a imagem anterior deixou numa entrega
+    que ela localizou de novo tem outro ponto e também não muda. Gravar o
+    mesmo ponto de novo não mexe em nada. O `UPDATE` lê o índice parcial
+    `delivery_geo_copied_from_idx` (`"businessId", "geo_copied_from"`, só
+    as abertas com raiz): as cópias abertas daquela origem, não a porta.
+    `updated_at` fica como estava. Elas são avisadas como as da
+    propagação: `routeStopsLocated` para a página da rota e
+    `route-stop.located` para o motorista de rota liberada ou em
+    andamento, tanto a cópia que mudou (`RESOLVED`) quanto a apagada
+    (`CLEARED`, nunca anunciada como ponto achado: o app relê o dia e para
+    de medir a geocerca do ponto antigo). A resposta traz `propagated: n`,
+    as cópias que mudaram ou foram apagadas mais as que receberam o ponto
+    sem ter nenhum; o toast da web continua certo ("também receberam o
+    ponto").
   - Toda leitura filtra `businessId`: a chave nunca cruza empresas. As
     linhas de antes ficam com a chave nula até o backfill do dono
     (`infra/scripts/backfill-delivery-address-key.ts`, sobre
@@ -1593,8 +1656,9 @@ chave da pausa guarda o motivo junto do prazo (`REFUSED`, `QUOTA` ou
     feita no meio do lote vence. Depois roda uma vez a mesma propagação
     para os pontos já gravados, cada porta numa transação com o mesmo
     `lock_timeout`, o que localiza as entregas de hoje (a da
-    Rua Doutor Lipold inclusive). Idempotente: rodar de novo termina o que
-    faltou e não grava nada.
+    Rua Doutor Lipold inclusive), com a raiz de cada ponto. A chave
+    corrigida no primeiro passo apaga a raiz, como a edição do endereço.
+    Idempotente: rodar de novo termina o que faltou e não grava nada.
 - Orçamento: `DELIVERY_GEOCODING_DAILY_BUDGET` consultas por dia (UTC),
   somando as réplicas e os dois caminhos, num contador de janela fixa no
   Redis (`shared/delivery/geocoding/geocoding-budget.ts`). Ao contrário dos

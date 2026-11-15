@@ -24,9 +24,13 @@ import { manualAddressPoint } from "@/shared/delivery/address-coordinates";
 import { deliveryAddressKey } from "@/shared/delivery/address-key";
 import {
   pickReusablePoint,
-  type PointCandidate,
   type ReusedAddressPoint,
 } from "@/shared/delivery/geocoding/address-point-reuse";
+import {
+  twinDoorCandidates,
+  twinLenderHolds,
+} from "@/shared/delivery/geocoding/address-point-propagation";
+import { CLEARED_ADDRESS_POINT } from "@/shared/delivery/address-point";
 import type { OperationDay } from "@/modules/route/repositories/IOperation-day-repository";
 
 import {
@@ -239,7 +243,12 @@ class InMemoryDeliveryRepository implements IDeliveryRepository {
     // deliveries without an NF-e key never collide on the unique index; a
     // whole pair is the address point, MANUAL (plan E1), half of one none;
     // without one, the point of another delivery of the company at the
-    // same door (address-point-reuse.ts).
+    // same door (address-point-reuse.ts), while its root still holds it
+    // (the repository's lockLender).
+    const found =
+      "geo_source" in point || !addressKey
+        ? null
+        : await this.findReusablePoint(given.businessId, addressKey);
     const delivery = {
       ...given,
       code: given.code || null,
@@ -248,8 +257,8 @@ class InMemoryDeliveryRepository implements IDeliveryRepository {
       address_key: addressKey,
       ...("geo_source" in point
         ? point
-        : addressKey
-          ? await this.findReusablePoint(given.businessId, addressKey)
+        : found && twinLenderHolds(this.deliveries, given.businessId, found)
+          ? found
           : null),
     };
 
@@ -310,25 +319,15 @@ class InMemoryDeliveryRepository implements IDeliveryRepository {
     addressKey: string,
     excludeDeliveryId?: string | null,
   ): Promise<ReusedAddressPoint | null> {
-    // The same rule over every row at the door; the newest id first, as
-    // the repository breaks a tie of two points of one instant.
-    const candidates = this.deliveries
-      .filter(
-        (row) =>
-          row.businessId === businessId &&
-          row.address_key === addressKey &&
-          row.id !== excludeDeliveryId,
-      )
-      .sort((a, b) => String(b.id).localeCompare(String(a.id)))
-      .map((row): PointCandidate => ({
-        latitude: row.latitude ?? null,
-        longitude: row.longitude ?? null,
-        geo_source: row.geo_source ?? null,
-        geo_precision: row.geo_precision ?? null,
-        geo_updated_at: row.geo_updated_at ?? null,
-      }));
+    // The same rule over every row at the door that may still lend, with
+    // the root it lends as (twinDoorCandidates, the SQL's twin).
+    const candidates = twinDoorCandidates(this.deliveries, {
+      businessId,
+      addressKey,
+      exceptId: excludeDeliveryId ?? null,
+    });
 
-    return pickReusablePoint(candidates, new Date());
+    return pickReusablePoint(candidates, new Date(), excludeDeliveryId ?? null);
   }
 
   /** (businessId:key) → id, the unique index of the real table. */
@@ -779,9 +778,25 @@ class InMemoryDeliveryRepository implements IDeliveryRepository {
       throw uniqueViolation(["businessId", "invoice_key"]);
     }
 
+    // A copied point only while its root still holds it, as the
+    // repository's lockLender: otherwise the edit leaves no point.
+    const root = filteredData.geo_copied_from;
+    const held =
+      typeof root !== "string" ||
+      twinLenderHolds(this.deliveries, this.deliveries[index].businessId, {
+        latitude: filteredData.latitude as number,
+        longitude: filteredData.longitude as number,
+        geo_source: "GEOCODER",
+        geo_precision: filteredData.geo_precision as "ADDRESS" | "STREET",
+        geocode_status: "RESOLVED",
+        geo_updated_at: filteredData.geo_updated_at as Date,
+        geo_copied_from: root,
+      });
+
     this.deliveries[index] = {
       ...this.deliveries[index],
       ...filteredData,
+      ...(!held && CLEARED_ADDRESS_POINT),
       updated_at: new Date(),
     };
 
