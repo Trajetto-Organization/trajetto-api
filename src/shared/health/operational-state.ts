@@ -86,7 +86,9 @@ interface CronJobMetrics {
 
   /**
    * The first partial run since the last success: how long the job has
-   * done nothing but partials. Null when the latest run is not partial.
+   * done nothing but partials. Null when the latest run is not partial, and
+   * when a run that really failed came after the last success: then the
+   * job is not "only slow", and the alert judges it by its last success.
    */
   partial_since: string | null;
 }
@@ -101,6 +103,13 @@ const CRON_ERROR_MAX_LENGTH = 500;
  * The success query reads (status, jobName, finishedAt) index-only; the
  * latest-row query walks the (jobName, scheduledFor) unique index. The table
  * holds 30 days of a few firings a day.
+ *
+ * The partial streak takes every FAILED run since the last success and
+ * keeps the job only when all of them were partial (HAVING bool_and; a
+ * NULL lastError counts as a real failure). It used to keep only the
+ * partials and date them from the last success, so a statement timeout on
+ * two nights and one partial on the third read as a fresh streak: the
+ * alert gave the job 26 h more of grace while it had not succeeded in 72.
  */
 async function readCronJobs(
   registered: ReadonlyArray<{ name: string; schedule: string }>,
@@ -151,12 +160,14 @@ async function readCronJobs(
         SELECT e."jobName", min(e."scheduledFor") AT TIME ZONE 'UTC' AS since
         FROM "scheduled_job_execution" e
         WHERE e."status" = 'FAILED'
-          AND starts_with(e."lastError", ${PARTIAL_RUN_MARKER})
           AND e."scheduledFor" > coalesce((
             SELECT max(s."scheduledFor") FROM "scheduled_job_execution" s
             WHERE s."jobName" = e."jobName" AND s."status" = 'SUCCEEDED'
           ), '-infinity'::timestamp)
         GROUP BY e."jobName"
+        HAVING bool_and(
+          coalesce(starts_with(e."lastError", ${PARTIAL_RUN_MARKER}), false)
+        )
       ) p) AS partial
   `;
 

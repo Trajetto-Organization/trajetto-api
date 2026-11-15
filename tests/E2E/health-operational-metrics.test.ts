@@ -550,6 +550,77 @@ describe("a stuck worker or cron job shows up (OBS-10)", () => {
     expect(purge).toMatchObject({ last_status: "RUNNING", stale_running: 1 });
     expect(purge?.last_succeeded_at).toBeNull();
   });
+
+  /**
+   * A partial run (F1-17) gets 26 h of grace from the first partial, because
+   * nothing but partials means the purge is working, only slower than what
+   * comes in. Dated from the last success across runs that really failed,
+   * one partial after two days of a statement timeout read as a fresh
+   * streak, and silenced a job overdue for days for another 26 h.
+   */
+  it("dates the partials only while nothing but partials came after the last success", async () => {
+    const minute = new Date();
+    minute.setSeconds(0, 0);
+
+    const at = (hoursAgo: number) =>
+      new Date(minute.getTime() - hoursAgo * 60 * MINUTE_MS);
+    const partial = "[partial] parou no orçamento ou no teto com sobra em: x";
+
+    const run = (
+      jobName: string,
+      hoursAgo: number,
+      status: "SUCCEEDED" | "FAILED",
+      lastError: string | null = null,
+    ) =>
+      prisma.scheduledJobExecution.create({
+        data: {
+          jobName,
+          scheduledFor: at(hoursAgo),
+          status,
+          finishedAt: new Date(at(hoursAgo).getTime() + 2_000),
+          leaseExpiresAt: new Date(at(hoursAgo).getTime() + 10 * MINUTE_MS),
+          lastError,
+        },
+      });
+
+    // Two real failures between the success and the partial.
+    await run("cleanup-webhook-deliveries", 72, "SUCCEEDED");
+    await run(
+      "cleanup-webhook-deliveries",
+      48,
+      "FAILED",
+      "canceling statement due to statement timeout",
+    );
+    await run(
+      "cleanup-webhook-deliveries",
+      24,
+      "FAILED",
+      "canceling statement due to statement timeout",
+    );
+    await run("cleanup-webhook-deliveries", 2, "FAILED", partial);
+
+    // Nothing but partials since the success.
+    await run("cleanup-api-usage", 26, "SUCCEEDED");
+    await run("cleanup-api-usage", 6, "FAILED", partial);
+    await run("cleanup-api-usage", 2, "FAILED", partial);
+
+    const cron = (await metrics(masterToken)).json().cron_jobs as Array<{
+      job: string;
+      last_partial?: boolean;
+      partial_since?: string | null;
+    }>;
+
+    const slow = cron.find((entry) => entry.job === "cleanup-api-usage");
+    const failing = cron.find(
+      (entry) => entry.job === "cleanup-webhook-deliveries",
+    );
+
+    expect(slow).toMatchObject({
+      last_partial: true,
+      partial_since: at(6).toISOString(),
+    });
+    expect(failing).toMatchObject({ last_partial: true, partial_since: null });
+  });
 });
 
 describe("the driver_position partition runway (INV-07)", () => {

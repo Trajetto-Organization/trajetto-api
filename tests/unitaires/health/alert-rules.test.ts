@@ -313,6 +313,45 @@ describe("the machinery behind the queues", () => {
     expect(reasons[0]).toMatch(/só execuções parciais há mais de 26h/);
   });
 
+  /**
+   * The grace is for a purge that does nothing but partials. When a run that
+   * really failed came after the last success, the reader leaves
+   * partialSince null: one partial after two days of a statement timeout
+   * used to silence a job already overdue, for another 26 h.
+   */
+  it("still pages an overdue job when a real failure came before the partial", () => {
+    const partialAfterFailures = (lastSucceededAt: Date | null) =>
+      evaluateAlerts({
+        ...healthy(),
+        cronJobs: [
+          {
+            job: "cleanup-notification-pipeline",
+            lastStatus: "FAILED",
+            lastSucceededAt,
+            staleRunning: 0,
+            lastPartial: true,
+            partialSince: null,
+          },
+        ],
+      });
+
+    const overdue = partialAfterFailures(new Date(NOW.getTime() - 72 * HOUR));
+
+    expect(overdue).toHaveLength(1);
+    expect(overdue[0]).toMatch(
+      /sem execução bem-sucedida há mais de 26h \(último status: FAILED\)/,
+    );
+
+    expect(partialAfterFailures(null)).toEqual([
+      expect.stringMatching(/nenhuma execução bem-sucedida registrada/),
+    ]);
+
+    // A success inside the 26 h is not overdue, partial or not.
+    expect(partialAfterFailures(new Date(NOW.getTime() - 20 * HOUR))).toEqual(
+      [],
+    );
+  });
+
   it("pages when the driver_position partitions are running out", () => {
     const reasons = evaluateAlerts({
       ...healthy(),

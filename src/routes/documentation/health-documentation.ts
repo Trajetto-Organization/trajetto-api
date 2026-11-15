@@ -585,7 +585,7 @@ const healthResponses = {
             .nullable()
             .optional()
             .describe(
-              "A primeira execução parcial desde o último sucesso; null quando a última não é parcial. Com 26 h só de parciais, o alerta dispara.",
+              "A primeira execução parcial desde o último sucesso, quando tudo o que rodou desde então foi parcial; null quando a última não é parcial ou quando uma falha de verdade veio depois do último sucesso (aí o job é julgado pelo último sucesso, como qualquer falha). Com 26 h só de parciais, o alerta dispara.",
             ),
         }),
       )

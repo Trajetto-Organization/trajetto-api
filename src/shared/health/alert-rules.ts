@@ -26,8 +26,9 @@ interface CronJobState {
 
   /**
    * The latest run stopped with work left (FAILED "[partial]", F1-17), and
-   * since when the job has done nothing but partials. Absent on a snapshot
-   * that did not read them, which judges the job as before.
+   * since when the job has done nothing but partials — null when a run that
+   * really failed came after the last success (readCronJobs). Absent on a
+   * snapshot that did not read them, which judges the job as before.
    */
   lastPartial?: boolean;
   partialSince?: Date | null;
@@ -580,13 +581,16 @@ function cronAlerts(
     // it again in the partial window, and the next night after that. The
     // first one is not an alert; 26 h of nothing but partials is, because
     // then the purge is losing to the inflow.
-    if (job.lastPartial) {
-      const partialAge =
-        job.partialSince === null || job.partialSince === undefined
-          ? null
-          : snapshot.now.getTime() - job.partialSince.getTime();
+    //
+    // The grace needs the streak's start. Without it (partialSince null: a
+    // run that really failed came after the last success) the job is judged
+    // like any failure, by its last success below. Skipping it here let one
+    // partial after two nights of a statement timeout silence an overdue
+    // job for another 26 h.
+    if (job.lastPartial && job.partialSince) {
+      const partialAge = snapshot.now.getTime() - job.partialSince.getTime();
 
-      if (partialAge !== null && partialAge > thresholds.cronStaleMs) {
+      if (partialAge > thresholds.cronStaleMs) {
         alerts.push({
           code: "cron-partial-stuck",
           message: `Cron ${job.job}: só execuções parciais há mais de ${staleHours}h (o expurgo não dá conta do que entra)`,

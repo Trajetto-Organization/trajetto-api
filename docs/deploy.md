@@ -4015,7 +4015,12 @@ seguinte. Uma falha que não é parcial segue a regra de antes (sem sucesso em
 `cron_jobs[].last_partial` e `partial_since` mostram o estado; o alerta só
 vem com 26 h só de parciais: aí o expurgo perde para o que entra, e o
 caminho é olhar o volume da tabela e o tempo de cada lote antes de subir
-o orçamento (que já está no máximo) ou o teto. A imagem anterior, durante um
+o orçamento (que já está no máximo) ou o teto. A folga vale só enquanto
+tudo o que rodou desde o último sucesso foi parcial: se uma falha de
+verdade (um _statement timeout_, um lease vencido) veio no meio,
+`partial_since` vem `null` e o job é julgado pelo último sucesso, como
+qualquer falha; senão uma parcial depois de duas noites de erro calaria por
+mais 26 h um job parado havia três dias. A imagem anterior, durante um
 rolling deploy, lê a linha como um FAILED comum.
 
 ### Falhas que só o cliente vê
