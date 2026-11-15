@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import { recipientsBesidesActor } from "@/shared/notifications/pipeline-rules";
 import {
   aiVerificationIssuePolicy,
   renderAIVerificationIssueInApp,
@@ -35,6 +36,36 @@ describe("ai-verification.issue policy", () => {
     });
 
     expect(seen).toEqual(["biz-1"]);
+  });
+
+  /**
+   * The admin who registered the record from the panel asked for the
+   * reading, so they are the event's actor. The reading runs in the
+   * background (the queue, its retries, the reconcile job hours later), and
+   * the live `aiVerification` frame is a toast on a tab that is still open,
+   * stored nowhere. Left out like the actor of every other topic, a company
+   * with a single admin was told about a suspected fraud by nobody: no bell,
+   * push, e-mail or WhatsApp.
+   */
+  it("still alerts the admin who asked for the reading, the company's only one", async () => {
+    const admin = { id: "admin-1" };
+
+    const resolved = await aiVerificationIssuePolicy.resolveRecipients(
+      basePayload,
+      {
+        userRepository: {
+          findBusinessAdminsByBusinessId: async () => [admin],
+        } as never,
+      },
+    );
+
+    expect(
+      recipientsBesidesActor(
+        resolved,
+        admin.id,
+        aiVerificationIssuePolicy.notifiesActor,
+      ),
+    ).toEqual([admin]);
   });
 
   it("renders a fraud headline with the vehicle and links to the record", () => {

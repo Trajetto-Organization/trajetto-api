@@ -326,6 +326,54 @@ describe("the event's own actor", () => {
     expect(rows.every((row) => row.userId === MASTER)).toBe(true);
     expect(mail.sent).toHaveLength(1);
   });
+
+  /**
+   * RECIPIENT is the company's only admin and registered the fuelling, so
+   * they asked for the reading and are the event's actor. The reading ends
+   * in the background, often with the tab closed, and the live
+   * `aiVerification` frame is stored nowhere: left out, a suspected fraud
+   * was told to nobody.
+   */
+  it("still gets the AI's alert on the reading they asked for, as the only admin", async () => {
+    const bells = () =>
+      prisma.notification.count({
+        where: { userId: RECIPIENT, type: "ai-verification" },
+      });
+    const bellsBefore = await bells();
+    const fuelId = randomUUID();
+
+    const event = await prisma.domainOutboxEvent.create({
+      data: {
+        eventKey: `ai-verification.issue:${randomUUID()}`,
+        topic: "ai-verification.issue",
+        aggregateType: "fuel",
+        aggregateId: fuelId,
+        businessId: BUSINESS,
+        actorId: RECIPIENT,
+        payload: {
+          recordType: "fuel",
+          recordId: fuelId,
+          businessId: BUSINESS,
+          vehiclePlate: "ABC1D23",
+          vehicleDescription: null,
+          overallStatus: "fraud",
+          details: null,
+        },
+      },
+    });
+
+    await drain();
+
+    const rows = await deliveriesOf(event.id);
+
+    expect(
+      rows
+        .filter((row) => row.userId === RECIPIENT)
+        .map((row) => `${row.channel}:${row.status}`),
+    ).toEqual(expect.arrayContaining(["EMAIL:DELIVERED", "IN_APP:DELIVERED"]));
+    expect(mail.sent).toHaveLength(1);
+    expect(await bells()).toBe(bellsBefore + 1);
+  });
 });
 
 /**

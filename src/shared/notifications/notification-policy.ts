@@ -75,7 +75,9 @@ import {
  *   privileged account the reader created or changed, decision D-49) and
  *   master-user.account-updated (about the reader's own account);
  * - "verdict": delivery-proof.ai-flagged (the AI's reading of the receipt the
- *   driver sent, for that driver).
+ *   driver sent, for that driver) and ai-verification.issue (the AI's alert
+ *   on a fuelling or checklist, for the admin who registered it: the reading
+ *   ends in the background, and the company may have no other admin).
  * tests/unitaires/notifications/actor-notice.test.ts holds the list and the
  * actor on every publish.
  */

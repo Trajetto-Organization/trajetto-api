@@ -45,6 +45,11 @@ const NOTIFIES_ACTOR: Partial<Record<NotificationTopic, ActorNotice>> = {
   // The AI's reading of the receipt the driver sent, for that driver: the
   // event's actor is them, as the reading's requester.
   "delivery-proof.ai-flagged": "verdict",
+  // The AI's alert on a fuelling or checklist, for the admin who registered
+  // it (the reading's requester): the reading runs in the background, the
+  // live `aiVerification` frame is a toast on a tab that may be closed, and
+  // in a company with one admin nobody else would ever be told.
+  "ai-verification.issue": "verdict",
 };
 
 const ACTOR = { id: "actor", name: "Quem fez" };

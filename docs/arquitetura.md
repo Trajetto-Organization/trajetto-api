@@ -686,15 +686,23 @@ nas réplicas HTTP e uma Application `worker`), só por gatilho medido:
   ao que a política resolveu. Antes, o administrador que lançava uma multa
   estava entre os administradores avisados, e o toast do sino chegava logo
   depois do "sucesso" do formulário. O mesmo valia para a OS, a conta ou o
-  cartão atribuídos a si mesmo, para o push do plano da rota que o próprio
+  cartão atribuídos a si mesmo e para o push do plano da rota que o próprio
   motorista mudou com uma ocorrência (`route.plan_changed` passou a levar o
-  ator) e para o aviso de divergência da IA ao administrador que pediu a
-  leitura, que já a acompanha ao vivo pelo `aiVerification`. As exceções
-  dizem o motivo em `notifiesActor`: `security` em `master-user.created` e
-  `master-user.updated` (a confirmação da conta Master que a pessoa criou ou
-  editou, decisão D-49) e em `master-user.account-updated` (a própria
-  conta); `verdict` em `delivery-proof.ai-flagged` (a leitura da IA do
-  canhoto que o motorista mandou). Os avisos de plano já deixavam o Master
+  ator). As exceções dizem o motivo em `notifiesActor`: `security` em
+  `master-user.created` e `master-user.updated` (a confirmação da conta
+  Master que a pessoa criou ou editou, decisão D-49) e em
+  `master-user.account-updated` (a própria conta); `verdict` em
+  `delivery-proof.ai-flagged` (a leitura da IA do canhoto que o motorista
+  mandou) e em `ai-verification.issue` (o alerta de divergência ou de
+  suspeita de fraude da IA ao administrador que lançou o abastecimento ou
+  o checklist, no painel ou no app, e por isso pediu a leitura). Esse
+  alerta chegou a ficar de fora, com o argumento de que o administrador já
+  acompanhava a leitura pelo `aiVerification`; mas esse evento é só um
+  toast numa aba aberta, que nada guarda, e a leitura termina em segundo
+  plano (a fila, as novas tentativas, o job de reconciliação horas
+  depois). Numa empresa com um administrador só, ninguém ficava sabendo da
+  suspeita de fraude. O motorista que mandou o registro continua fora: a
+  regra só tira o ator, nunca põe. Os avisos de plano já deixavam o Master
   que fez a mudança de fora. A trilha de atividade do ator e os sinais de
   tempo real que fazem as telas recarregarem (`routeEvent`,
   `catalogChanged`…) não são avisos e não mudam.
