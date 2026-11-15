@@ -2,8 +2,10 @@ import { isCredentialFailure } from "@/shared/notifications/delivery-diagnostics
 
 /**
  * When the operation must be woken up (OBS-03). Pure: the ops heartbeat job
- * gathers an OperationalSnapshot, these rules turn it into reasons, and an
- * empty list is the only "all is well".
+ * gathers an OperationalSnapshot, these rules turn it into alerts, each with
+ * a stable code and a pt-BR message that ends with the path of its runbook
+ * (docs/runbooks/<code>.md, plano-escala F1-20), and an empty list is the
+ * only "all is well".
  *
  * Every lag here is ELIGIBLE lag — how long something already due has waited
  * to be taken — never age from creation. A delivery legitimately waits up to
@@ -220,18 +222,89 @@ function alertThresholdsFromEnv(values: {
   };
 }
 
+/**
+ * Every alert's stable code (plano-escala F1-20): the name of its runbook,
+ * docs/runbooks/<code>.md, and what a reader of the log or of the check
+ * greps for. A code is never renamed (an operator's notes and the
+ * runbook's links point to it); a new rule brings its code AND its
+ * runbook, and tests/unitaires/lifecycle/runbooks.test.ts refuses one
+ * without the other.
+ */
+const ALERT_KINDS = [
+  "outbox-lag",
+  "delivery-lag",
+  "webhook-lag",
+  "ai-lag",
+  "channel-credential",
+  "channel-failure-burst",
+  "ai-provider-paused",
+  "ai-credential",
+  "cron-lease-expired",
+  "cron-partial-stuck",
+  "cron-overdue",
+  "partition-runway-low",
+  "worker-stuck",
+  "connection-usage-high",
+  "redis-down",
+  "pitr-archive-off",
+  "wal-archive-stalled",
+  "xid-age-high",
+  "long-write-xact",
+  "pg-wal-high",
+  "redis-evictions",
+  "redis-memory-policy",
+  "proof-signing",
+  "collection-incomplete",
+] as const;
+
+type AlertKind = (typeof ALERT_KINDS)[number];
+
+/**
+ * Runbooks of incidents no rule names yet (F1-20): a provider down, a
+ * reconnect storm, a migration stuck on a lock, a full disk, a PITR
+ * restore and the restore drill. They live beside the alerts' runbooks.
+ */
+const OPERATION_RUNBOOKS = [
+  "provider-down",
+  "reconnect-storm",
+  "migration-lock",
+  "disk-full",
+  "pitr-restore",
+  "restore-drill",
+] as const;
+
+/** One reason to wake the operation: its code and its pt-BR message. */
+interface Alert {
+  code: AlertKind;
+  message: string;
+}
+
+/** Where the code's runbook is, from the repository's root. */
+function runbookPath(code: AlertKind): string {
+  return `docs/runbooks/${code}.md`;
+}
+
+/** The reason as the check and the log show it: the message, then the link. */
+function formatAlert(alert: Alert): string {
+  return `${alert.message} (runbook: ${runbookPath(alert.code)})`;
+}
+
 function seconds(value: number): string {
   return `${Math.round(value)}s`;
 }
 
-function lagReason(
+function lagAlert(
+  code: AlertKind,
   what: string,
   lag: number | null,
   limit: number,
-): string | null {
-  return lag !== null && lag > limit
-    ? `${what}: item devido há ${seconds(lag)} sem ser processado (limite ${seconds(limit)})`
-    : null;
+): Alert | null {
+  if (lag === null || lag <= limit) return null;
+
+  return {
+    code,
+    message: `${what}: item devido há ${seconds(lag)} sem ser processado (limite ${seconds(limit)})`,
+  };
 }
 
 /** Enough of the provider's text to act on, not a wall of it. */
@@ -297,12 +370,12 @@ function gib(bytes: number): string {
  * on is PITR_EXPECTED's question. pg_wal is judged either way: it fills the
  * disk whatever the cause.
  */
-function databaseReasons(
+function databaseAlerts(
   database: ClusterDatabaseState,
   thresholds: AlertThresholds,
   expectations: AlertExpectations,
-): Array<string | null> {
-  const reasons: Array<string | null> = [];
+): Alert[] {
+  const alerts: Alert[] = [];
   const archiving = archives(database.archiveMode);
 
   if (
@@ -310,9 +383,10 @@ function databaseReasons(
     database.archiveMode !== null &&
     !archiving
   ) {
-    reasons.push(
-      `PITR esperado (PITR_EXPECTED=true), mas archive_mode está "${database.archiveMode}": o WAL não sai do servidor e não há restauração até o minuto`,
-    );
+    alerts.push({
+      code: "pitr-archive-off",
+      message: `PITR esperado (PITR_EXPECTED=true), mas archive_mode está "${database.archiveMode}": o WAL não sai do servidor e não há restauração até o minuto`,
+    });
   }
 
   if (archiving) {
@@ -326,59 +400,65 @@ function databaseReasons(
       lastFailed !== null &&
       (lastArchived === null || lastFailed.getTime() > lastArchived.getTime())
     ) {
-      reasons.push(
-        `Arquivamento do WAL falhando: a última tentativa falhou em ${lastFailed.toISOString()} (${database.archiveFailedCount ?? "?"} falha(s) desde o último reset); o pg_wal cresce até o arquivamento voltar`,
-      );
+      alerts.push({
+        code: "wal-archive-stalled",
+        message: `Arquivamento do WAL falhando: a última tentativa falhou em ${lastFailed.toISOString()} (${database.archiveFailedCount ?? "?"} falha(s) desde o último reset); o pg_wal cresce até o arquivamento voltar`,
+      });
     } else if (
       database.lastArchivedAgeSec !== null &&
       database.lastArchivedAgeSec > thresholds.archiveLagSec
     ) {
-      reasons.push(
-        `Arquivamento do WAL parado: o último segmento foi arquivado há ${seconds(database.lastArchivedAgeSec)} (limite ${seconds(thresholds.archiveLagSec)}); o pg_wal cresce até o arquivamento voltar`,
-      );
+      alerts.push({
+        code: "wal-archive-stalled",
+        message: `Arquivamento do WAL parado: o último segmento foi arquivado há ${seconds(database.lastArchivedAgeSec)} (limite ${seconds(thresholds.archiveLagSec)}); o pg_wal cresce até o arquivamento voltar`,
+      });
     }
   }
 
   if (database.xidAge !== null && database.xidAge > thresholds.xidAge) {
-    reasons.push(
-      `Postgres: idade do xid em ${Math.round(database.xidAge)} (limite ${thresholds.xidAge}); o congelamento do vacuum está atrasado`,
-    );
+    alerts.push({
+      code: "xid-age-high",
+      message: `Postgres: idade do xid em ${Math.round(database.xidAge)} (limite ${thresholds.xidAge}); o congelamento do vacuum está atrasado`,
+    });
   }
 
   if (
     database.oldestWriteXactSec !== null &&
     database.oldestWriteXactSec > thresholds.longWriteXactSec
   ) {
-    reasons.push(
-      `Postgres: transação de escrita aberta há ${seconds(database.oldestWriteXactSec)} (limite ${seconds(thresholds.longWriteXactSec)}); segura o vacuum e o feed da integração`,
-    );
+    alerts.push({
+      code: "long-write-xact",
+      message: `Postgres: transação de escrita aberta há ${seconds(database.oldestWriteXactSec)} (limite ${seconds(thresholds.longWriteXactSec)}); segura o vacuum e o feed da integração`,
+    });
   }
 
   if (
     database.pgWalBytes !== null &&
     database.pgWalBytes > thresholds.pgWalBytes
   ) {
-    reasons.push(
-      `Postgres: pg_wal com ${gib(database.pgWalBytes)} (limite ${gib(thresholds.pgWalBytes)}); o disco compartilhado enche se continuar`,
-    );
+    alerts.push({
+      code: "pg-wal-high",
+      message: `Postgres: pg_wal com ${gib(database.pgWalBytes)} (limite ${gib(thresholds.pgWalBytes)}); o disco compartilhado enche se continuar`,
+    });
   }
 
-  return reasons;
+  return alerts;
 }
 
 /**
  * Redis' memory rules (F1-11). With Redis down they say nothing: the
  * "Redis sem resposta" rule speaks, and its numbers are not there.
  */
-function redisReasons(redis: ClusterRedisState): Array<string | null> {
+function redisAlerts(redis: ClusterRedisState): Alert[] {
   if (!redis.up) return [];
 
-  const reasons: Array<string | null> = [];
+  const alerts: Alert[] = [];
 
   if (redis.evictedKeys && redis.evictedKeys.delta > 0) {
-    reasons.push(
-      `Redis despejou ${redis.evictedKeys.delta} chave(s) em ${Math.round(redis.evictedKeys.windowSec / 60)} min: memória no teto; contadores do rate limit e estado do Socket.IO foram descartados`,
-    );
+    alerts.push({
+      code: "redis-evictions",
+      message: `Redis despejou ${redis.evictedKeys.delta} chave(s) em ${Math.round(redis.evictedKeys.windowSec / 60)} min: memória no teto; contadores do rate limit e estado do Socket.IO foram descartados`,
+    });
   }
 
   const noCeiling = redis.maxmemoryMb === null;
@@ -390,86 +470,29 @@ function redisReasons(redis: ClusterRedisState): Array<string | null> {
     if (noCeiling) what.push("sem teto de memória (maxmemory 0)");
     if (noEviction) what.push("com maxmemory-policy noeviction");
 
-    reasons.push(
-      `Redis ${what.join(" e ")}: cheio, recusa escritas e desliga o rate limit de uma vez (o esperado é --maxmemory 256mb --maxmemory-policy allkeys-lru)`,
-    );
+    alerts.push({
+      code: "redis-memory-policy",
+      message: `Redis ${what.join(" e ")}: cheio, recusa escritas e desliga o rate limit de uma vez (o esperado é --maxmemory 256mb --maxmemory-policy allkeys-lru)`,
+    });
   }
 
-  return reasons;
+  return alerts;
 }
 
-function evaluateAlerts(
+/** The cron rules: a dead run, partials that never end, no success. */
+function cronAlerts(
   snapshot: OperationalSnapshot,
-  thresholds: AlertThresholds = DEFAULT_ALERT_THRESHOLDS,
-  expectations: AlertExpectations = { pitrExpected: false },
-): string[] {
-  const reasons: Array<string | null> = [];
-
-  reasons.push(
-    lagReason(
-      "Outbox (expansão de eventos)",
-      snapshot.outboxEligibleLagSec,
-      thresholds.outboxLagSec,
-    ),
-    lagReason(
-      "Entregas internas (in-app, push, atividade)",
-      snapshot.deliveryEligibleLagSec.internal,
-      thresholds.deliveryInternalLagSec,
-    ),
-    lagReason(
-      "Entregas externas (e-mail, WhatsApp)",
-      snapshot.deliveryEligibleLagSec.external,
-      thresholds.deliveryExternalLagSec,
-    ),
-    lagReason(
-      "Webhooks de integração",
-      snapshot.webhookDueLagSec,
-      thresholds.webhookLagSec,
-    ),
-    lagReason("Análises de IA", snapshot.aiEligibleLagSec, thresholds.aiLagSec),
-  );
-
-  // Credentials first, and on the FIRST occurrence: every later send of the
-  // channel fails the same way until somebody changes the secret.
-  const byChannel = new Map<string, Array<string | null>>();
-
-  for (const failure of snapshot.deliveryFailures) {
-    const list = byChannel.get(failure.channel) ?? [];
-    list.push(failure.lastError);
-    byChannel.set(failure.channel, list);
-  }
-
-  for (const [channel, errors] of byChannel) {
-    const credential = errors.find((error) => isCredentialFailure(error));
-
-    if (credential) {
-      reasons.push(
-        `Canal ${channel}: falha de credencial ou configuração do provedor — ${excerpt(credential)}`,
-      );
-    } else if (errors.length >= thresholds.terminalFailuresPerChannel) {
-      reasons.push(
-        `Canal ${channel}: ${errors.length} entregas falharam de vez na janela — a mais recente: ${excerpt(errors[0])}`,
-      );
-    }
-  }
-
-  if ((snapshot.aiProviderPausedRequests ?? 0) > 0) {
-    reasons.push(
-      `Análises de IA pausadas: ${snapshot.aiProviderPausedRequests} aguardando porque o provedor recusou o serviço (limite de gasto ou de uso da conta)`,
-    );
-  }
-
-  if (snapshot.aiCredentialFailures > 0) {
-    reasons.push(
-      `Análises de IA: ${snapshot.aiCredentialFailures} recusada(s) pelo provedor por credencial (401/403)`,
-    );
-  }
+  thresholds: AlertThresholds,
+): Alert[] {
+  const alerts: Alert[] = [];
+  const staleHours = Math.round(thresholds.cronStaleMs / 3_600_000);
 
   for (const job of snapshot.cronJobs) {
     if (job.staleRunning > 0) {
-      reasons.push(
-        `Cron ${job.job}: execução interrompida (lease vencido) — a réplica caiu no meio do job`,
-      );
+      alerts.push({
+        code: "cron-lease-expired",
+        message: `Cron ${job.job}: execução interrompida (lease vencido) — a réplica caiu no meio do job`,
+      });
       continue;
     }
 
@@ -484,11 +507,10 @@ function evaluateAlerts(
           : snapshot.now.getTime() - job.partialSince.getTime();
 
       if (partialAge !== null && partialAge > thresholds.cronStaleMs) {
-        reasons.push(
-          `Cron ${job.job}: só execuções parciais há mais de ${Math.round(
-            thresholds.cronStaleMs / 3_600_000,
-          )}h (o expurgo não dá conta do que entra)`,
-        );
+        alerts.push({
+          code: "cron-partial-stuck",
+          message: `Cron ${job.job}: só execuções parciais há mais de ${staleHours}h (o expurgo não dá conta do que entra)`,
+        });
       }
 
       continue;
@@ -507,62 +529,181 @@ function evaluateAlerts(
     // Worded apart: a job whose only run failed a minute ago has not been
     // failing "for 26 h", and the operator should not go looking for that.
     if (neverSucceeded) {
-      reasons.push(
-        `Cron ${job.job}: nenhuma execução bem-sucedida registrada (último status: FAILED)`,
-      );
+      alerts.push({
+        code: "cron-overdue",
+        message: `Cron ${job.job}: nenhuma execução bem-sucedida registrada (último status: FAILED)`,
+      });
     } else if (overdue) {
-      reasons.push(
-        `Cron ${job.job}: sem execução bem-sucedida há mais de ${Math.round(
-          thresholds.cronStaleMs / 3_600_000,
-        )}h (último status: ${job.lastStatus ?? "nenhum"})`,
-      );
+      alerts.push({
+        code: "cron-overdue",
+        message: `Cron ${job.job}: sem execução bem-sucedida há mais de ${staleHours}h (último status: ${job.lastStatus ?? "nenhum"})`,
+      });
     }
   }
 
+  return alerts;
+}
+
+/** Every reason to wake the operation, with its code (F1-20). */
+function collectAlerts(
+  snapshot: OperationalSnapshot,
+  thresholds: AlertThresholds = DEFAULT_ALERT_THRESHOLDS,
+  expectations: AlertExpectations = { pitrExpected: false },
+): Alert[] {
+  const alerts: Array<Alert | null> = [];
+
+  alerts.push(
+    lagAlert(
+      "outbox-lag",
+      "Outbox (expansão de eventos)",
+      snapshot.outboxEligibleLagSec,
+      thresholds.outboxLagSec,
+    ),
+    lagAlert(
+      "delivery-lag",
+      "Entregas internas (in-app, push, atividade)",
+      snapshot.deliveryEligibleLagSec.internal,
+      thresholds.deliveryInternalLagSec,
+    ),
+    lagAlert(
+      "delivery-lag",
+      "Entregas externas (e-mail, WhatsApp)",
+      snapshot.deliveryEligibleLagSec.external,
+      thresholds.deliveryExternalLagSec,
+    ),
+    lagAlert(
+      "webhook-lag",
+      "Webhooks de integração",
+      snapshot.webhookDueLagSec,
+      thresholds.webhookLagSec,
+    ),
+    lagAlert(
+      "ai-lag",
+      "Análises de IA",
+      snapshot.aiEligibleLagSec,
+      thresholds.aiLagSec,
+    ),
+  );
+
+  // Credentials first, and on the FIRST occurrence: every later send of the
+  // channel fails the same way until somebody changes the secret.
+  const byChannel = new Map<string, Array<string | null>>();
+
+  for (const failure of snapshot.deliveryFailures) {
+    const list = byChannel.get(failure.channel) ?? [];
+    list.push(failure.lastError);
+    byChannel.set(failure.channel, list);
+  }
+
+  for (const [channel, errors] of byChannel) {
+    const credential = errors.find((error) => isCredentialFailure(error));
+
+    if (credential) {
+      alerts.push({
+        code: "channel-credential",
+        message: `Canal ${channel}: falha de credencial ou configuração do provedor — ${excerpt(credential)}`,
+      });
+    } else if (errors.length >= thresholds.terminalFailuresPerChannel) {
+      alerts.push({
+        code: "channel-failure-burst",
+        message: `Canal ${channel}: ${errors.length} entregas falharam de vez na janela — a mais recente: ${excerpt(errors[0])}`,
+      });
+    }
+  }
+
+  if ((snapshot.aiProviderPausedRequests ?? 0) > 0) {
+    alerts.push({
+      code: "ai-provider-paused",
+      message: `Análises de IA pausadas: ${snapshot.aiProviderPausedRequests} aguardando porque o provedor recusou o serviço (limite de gasto ou de uso da conta)`,
+    });
+  }
+
+  if (snapshot.aiCredentialFailures > 0) {
+    alerts.push({
+      code: "ai-credential",
+      message: `Análises de IA: ${snapshot.aiCredentialFailures} recusada(s) pelo provedor por credencial (401/403)`,
+    });
+  }
+
+  alerts.push(...cronAlerts(snapshot, thresholds));
+
   if (!snapshot.partitionRunwayOk) {
-    reasons.push(
-      `driver_position: restam ${snapshot.partitionRunwayDays ?? 0} dia(s) de partições — sem elas o INSERT de posição é recusado`,
-    );
+    alerts.push({
+      code: "partition-runway-low",
+      message: `driver_position: restam ${snapshot.partitionRunwayDays ?? 0} dia(s) de partições — sem elas o INSERT de posição é recusado`,
+    });
   }
 
   for (const worker of snapshot.stuckWorkers) {
-    reasons.push(
-      `Worker ${worker.worker} travado na réplica ${worker.replica} (sem sinal de progresso)`,
-    );
+    alerts.push({
+      code: "worker-stuck",
+      message: `Worker ${worker.worker} travado na réplica ${worker.replica} (sem sinal de progresso)`,
+    });
   }
 
   if (snapshot.connectionUsagePercent >= thresholds.connectionUsagePercent) {
-    reasons.push(
-      `Postgres: ${snapshot.connectionUsagePercent}% de max_connections em uso (limite ${thresholds.connectionUsagePercent}%)`,
-    );
+    alerts.push({
+      code: "connection-usage-high",
+      message: `Postgres: ${snapshot.connectionUsagePercent}% de max_connections em uso (limite ${thresholds.connectionUsagePercent}%)`,
+    });
   }
 
   if (!snapshot.redisOk) {
-    reasons.push(
-      "Redis sem resposta: rate limit em modo local e Socket.IO sem adapter entre réplicas",
-    );
+    alerts.push({
+      code: "redis-down",
+      message:
+        "Redis sem resposta: rate limit em modo local e Socket.IO sem adapter entre réplicas",
+    });
   }
 
   if (snapshot.database) {
-    reasons.push(
-      ...databaseReasons(snapshot.database, thresholds, expectations),
-    );
+    alerts.push(...databaseAlerts(snapshot.database, thresholds, expectations));
   }
 
-  if (snapshot.redis) reasons.push(...redisReasons(snapshot.redis));
+  if (snapshot.redis) alerts.push(...redisAlerts(snapshot.redis));
 
-  reasons.push(proofSigningReason(snapshot, thresholds));
+  const proofSigning = proofSigningReason(snapshot, thresholds);
+
+  if (proofSigning) {
+    alerts.push({ code: "proof-signing", message: proofSigning });
+  }
 
   for (const error of snapshot.collectionErrors) {
-    reasons.push(`Verificação incompleta: ${excerpt(error)}`);
+    alerts.push({
+      code: "collection-incomplete",
+      message: `Verificação incompleta: ${excerpt(error)}`,
+    });
   }
 
-  return reasons.filter((reason): reason is string => reason !== null);
+  return alerts.filter((alert): alert is Alert => alert !== null);
 }
 
-export { DEFAULT_ALERT_THRESHOLDS, alertThresholdsFromEnv, evaluateAlerts };
+/**
+ * The reasons the ops heartbeat sends and logs: each alert's pt-BR message,
+ * ending with the path of its runbook. Empty is the only "all is well".
+ */
+function evaluateAlerts(
+  snapshot: OperationalSnapshot,
+  thresholds: AlertThresholds = DEFAULT_ALERT_THRESHOLDS,
+  expectations: AlertExpectations = { pitrExpected: false },
+): string[] {
+  return collectAlerts(snapshot, thresholds, expectations).map(formatAlert);
+}
+
+export {
+  ALERT_KINDS,
+  DEFAULT_ALERT_THRESHOLDS,
+  OPERATION_RUNBOOKS,
+  alertThresholdsFromEnv,
+  collectAlerts,
+  evaluateAlerts,
+  formatAlert,
+  runbookPath,
+};
 export type {
+  Alert,
   AlertExpectations,
+  AlertKind,
   AlertThresholds,
   ClusterDatabaseState,
   ClusterRedisState,

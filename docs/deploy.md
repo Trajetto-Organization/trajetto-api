@@ -3816,6 +3816,13 @@ números da linha `cluster` do minuto, lidos antes do ping (com
 `OPS_SAMPLE_ENABLED=false` elas continuam valendo, menos a do despejo, que
 precisa das linhas para comparar).
 
+Cada motivo tem um código estável e termina com o caminho do runbook dele,
+`(runbook: docs/runbooks/<código>.md)`: o que o alerta significa, a primeira
+ação, como confirmar e quando escalar ([índice dos runbooks](./runbooks/README.md)).
+Os códigos ficam em `ALERT_KINDS` (`alert-rules.ts`), e um código novo sem
+runbook reprova o `runbooks.test.ts`. A tabela "Primeira ação por motivo",
+mais abaixo, é o resumo.
+
 ### Ligar (uma vez)
 
 1. Um check de heartbeat num serviço **externo** (healthchecks.io, Better

@@ -4258,7 +4258,8 @@ Regras de implementação que vieram dessa análise:
 A aba _Sistema_ do `/admin` na web mostra esses números. O heartbeat de
 operações (cron `ops-heartbeat`) empurra o estado para um monitor externo a
 cada minuto; regras, limiares e o que fazer em cada alerta estão em
-[`deploy.md`](./deploy.md#20-alertas-e-monitoramento).
+[`deploy.md`](./deploy.md#20-alertas-e-monitoramento), e o passo a passo de
+cada código de alerta, em [`runbooks/`](./runbooks/README.md).
 
 **`pg_stat_statements`** (o custo de cada consulta, base das medições do
 plano de escala): a extensão vem da migration `20261115120000_pg_stat_statements`,
