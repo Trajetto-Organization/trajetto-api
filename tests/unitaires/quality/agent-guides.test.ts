@@ -21,8 +21,11 @@ import { describe, expect, it } from "vitest";
  * not a topic either: it is generated from the WhatsApp template registries
  * by `yarn docs:whatsapp` — the exact copy the owner pastes into Meta —,
  * whatsapp-templates-doc.test.ts fails when it drifts from them, and
- * whatsapp-templates.test.ts holds the registry to Meta's rules. The ADRs live in docs/adr/, one file
- * per decision.
+ * whatsapp-templates.test.ts holds the registry to Meta's rules. slo.md
+ * (15/11/2026, scale plan item X-45) is not a topic either: the proposed
+ * SLOs, where each one is measured and the rule of the alerts, which the
+ * owner approves; architecture-docs.test.ts holds every SLO to a source.
+ * The ADRs live in docs/adr/, one file per decision.
  */
 const ROOT = resolve(__dirname, "..", "..", "..");
 const read = (path: string) =>
@@ -33,6 +36,7 @@ const DOCS = [
   "docs/arquitetura-tour.md",
   "docs/deploy.md",
   "docs/infraestrutura.md",
+  "docs/slo.md",
   "docs/testes.md",
   "docs/variaveis-de-ambiente.md",
   "docs/whatsapp-modelos.md",

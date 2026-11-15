@@ -753,6 +753,157 @@ describe("every document the code cites has its file", () => {
   });
 });
 
+/**
+ * The rows of the first table under a heading (`##` or `###`), before the
+ * next heading, cells trimmed.
+ */
+function sectionTable(text: string, heading: string): string[][] {
+  const section =
+    text
+      .split(/^(?=#{2,3} )/m)
+      .find((part) => part.replace(/^#+ /, "").startsWith(heading)) ?? "";
+  const lines = section.split("\n");
+  const start = lines.findIndex((line) => line.startsWith("|"));
+
+  if (start < 0) return [];
+
+  const rows: string[][] = [];
+
+  for (const line of lines.slice(start)) {
+    if (!line.startsWith("|")) break;
+
+    const cells = line
+      .slice(1, line.endsWith("|") ? -1 : undefined)
+      .split("|")
+      .map((cell) => cell.trim());
+
+    // The header's separator row.
+    if (cells.every((cell) => /^:?-+:?$/.test(cell))) continue;
+
+    rows.push(cells);
+  }
+
+  return rows;
+}
+
+describe("the proposed SLOs (docs/slo.md)", () => {
+  /**
+   * The scale plan (section 6.3) proposes eleven SLOs and the rule of the
+   * alerts, and the owner approves docs/slo.md. An SLO without a source is a
+   * number nobody can check, and one whose source is a histogram border
+   * that does not exist reads the wrong bucket: the SQL in the doc indexes
+   * the ops_sample buckets by position, so a change of the buckets (a new
+   * ops_sample version) has to change the doc with it.
+   */
+  const SLO_DOC = "docs/slo.md";
+  const path = join(ROOT, SLO_DOC);
+  const text = existsSync(path) ? read(path) : "";
+
+  const INDICATORS = [
+    "Disponibilidade da API em 30 dias",
+    "Leituras do painel",
+    "POST `/route/positions`",
+    "Envios do motorista",
+    "Outbox elegível",
+    "Sino e push depois do fato",
+    "E-mail e WhatsApp",
+    "Webhook para endpoint saudável",
+    "Sockets de volta depois de um deploy",
+    "Feed de integração",
+    "RPO e RTO",
+  ];
+
+  const groupsSource = read(join(ROOT, "src/shared/health/route-groups.ts"));
+  const routeGroups = new Set(
+    [
+      ...(
+        groupsSource.match(/const ROUTE_GROUPS = \[([\s\S]*?)\]/)?.[1] ?? ""
+      ).matchAll(/"([a-z_]+)"/g),
+    ].map((match) => match[1]),
+  );
+  const bucketsSource = read(join(ROOT, "src/shared/health/http-metrics.ts"));
+  const buckets = (
+    bucketsSource.match(/const HTTP_LATENCY_BUCKETS_MS = \[([^\]]*)\]/)?.[1] ??
+    ""
+  )
+    .split(",")
+    .map((value) => Number(value.trim().replace(/_/g, "")))
+    .filter((value) => Number.isFinite(value) && value > 0);
+
+  it("exists, says it is a proposal and has the owner's approval line", () => {
+    expect(existsSync(path), SLO_DOC).toBe(true);
+    expect(text).toMatch(/PROPOSTO/);
+    expect(text).toMatch(/^\*\*Aprovação do dono:\*\*/m);
+  });
+
+  it("lists every SLO of the plan, each with a target and a source", () => {
+    const rows = sectionTable(text, "Os SLOs");
+    const [header, ...body] = rows;
+
+    expect(header?.slice(0, 4)).toEqual([
+      "Indicador",
+      "Alvo",
+      "Fonte",
+      "Medível hoje",
+    ]);
+    expect(body.map((row) => row[0])).toEqual(INDICATORS);
+
+    for (const [indicator, target, source, today] of body) {
+      expect(target, indicator).toMatch(/\d/);
+      expect(source, indicator).toMatch(/\w{3,}/);
+      expect(source, indicator).not.toMatch(/^[—-]$/);
+      // "não" names what brings the source, or says no item does yet.
+      expect(today, indicator).toMatch(/^(sim|não)\b/);
+      if (today.startsWith("não")) {
+        expect(today, indicator).toMatch(/[A-Z]+\d*-\d+|sem item/);
+      }
+    }
+  });
+
+  it("judges each latency SLO by a histogram border that exists, at its index", () => {
+    expect(buckets.length).toBeGreaterThan(5);
+    expect(routeGroups.has("positions")).toBe(true);
+
+    const rows = sectionTable(text, "Latência por grupo de rota").slice(1);
+
+    expect(rows.length).toBeGreaterThanOrEqual(4);
+
+    for (const [slo, groups, border] of rows) {
+      const cited = [...groups.matchAll(/`([a-z_]+)`/g)].map((m) => m[1]);
+      const ms = Number(border.match(/^(\d+) ms/)?.[1]);
+      const index = Number(border.match(/índice (\d+)/)?.[1]);
+
+      expect(cited.length, slo).toBeGreaterThan(0);
+      for (const group of cited) expect(routeGroups, slo).toContain(group);
+
+      // The count at index i is "≤ buckets[i]": above the border starts at
+      // the next index.
+      expect(buckets, slo).toContain(ms);
+      expect(index, slo).toBe(buckets.indexOf(ms) + 1);
+    }
+  });
+
+  it("states the rule of the alerts: fixed thresholds, then a two-window burn rate", () => {
+    expect(text).toMatch(/30 dias de `ops_sample`/);
+    expect(text).toMatch(/1 h e 5 min[^\n]*14,4×/);
+    expect(text).toMatch(/6 h e 30 min[^\n]*6×/);
+  });
+
+  it("cites only code and docs that exist", () => {
+    const missing: string[] = [];
+
+    for (const match of text.matchAll(
+      /`((?:src|docs|tests|prisma|infra)\/[^`\s]*)`/g,
+    )) {
+      const cited = match[1].replace(/[:#].*$/, "");
+
+      if (!existsSync(join(ROOT, cited))) missing.push(match[1]);
+    }
+
+    expect(missing).toEqual([]);
+  });
+});
+
 describe("claims the docs make about the code", () => {
   const readme = read(join(ROOT, "README.md"));
   const architecture = read(join(ROOT, MAP_DOC));

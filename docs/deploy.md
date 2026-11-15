@@ -3775,6 +3775,10 @@ trajetto-api-production`) recria as réplicas (start-first) e zera os pools.
 
 O sinal é **empurrado** para fora, não lido por um robô em `/health/metrics`.
 
+Os SLOs propostos, a fonte de cada um e a regra dos alertas (limiares fixos
+até haver 30 dias de `ops_sample`, depois burn rate em duas janelas) estão em
+[slo.md](./slo.md).
+
 ### Dead man's switch (`ops-heartbeat`, a cada minuto)
 
 Uma réplica por minuto lê o estado da operação, aplica as regras de
