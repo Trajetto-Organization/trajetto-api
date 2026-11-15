@@ -222,7 +222,9 @@ verificados no import do módulo e no boot.
   - o teto de reclaim evita que uma linha que derruba o worker derrube
     todas as réplicas;
   - no shutdown, os pipelines esperam até 10 s, dentro do teto de 35 s
-    (stop grace de 40 s no Dokploy).
+    (stop grace de 40 s no Dokploy, com `STOP_GRACE_PERIOD_MS=40000`); com
+    um grace menor, o plano de desligamento encurta essa espera
+    (`src/shared/lifecycle/shutdown-plan.ts`).
 
 ### 6. Como evitamos duplicação em redelivery, crash, restart e várias réplicas
 
@@ -420,7 +422,9 @@ As lacunas eram pequenas e reais, e nenhuma pedia broker:
 
    Tudo isso cabe no teto de 35 s: importações até 22 s (15 + 5 + 2), e
    depois os workers, com até 10 s (12 s no despachante de webhooks: o
-   timeout de 10 s da chamada mais 2 s). A varredura continua como piso para
+   timeout de 10 s da chamada mais 2 s). São os prazos com o grace de 40 s;
+   todos saem de `STOP_GRACE_PERIOD_MS` (`src/shared/lifecycle/shutdown-plan.ts`),
+   e sem a variável cabem nos 10 s do Docker. A varredura continua como piso para
    SIGKILL, OOM e perda de nó, e escreve o mesmo tipo de relatório (o
    fechamento foi unificado em `import-repository.ts`).
 

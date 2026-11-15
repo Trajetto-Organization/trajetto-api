@@ -94,8 +94,10 @@ const ORPHANED_RUN_ERROR =
  * How long shutdown() waits for a run in flight to finish and record itself
  * (OBS-10). Without it the process exited under the run, whose row stayed
  * RUNNING until the sweep wrote it off as FAILED — a clean deploy reported as
- * a crashed job. Bounded well under server.ts's 35 s watchdog; a purge cut
- * off here is resumed by the catch-up sweep.
+ * a crashed job. The shutdown plan's workers deadline can shorten it
+ * (shared/lifecycle/shutdown-plan.ts: 12 s with the 40 s grace, 3 s with
+ * Docker's default 10 s); a purge cut off here is resumed by the catch-up
+ * sweep.
  */
 const SHUTDOWN_WAIT_MS = 10 * 1000;
 
@@ -540,7 +542,7 @@ class CronSchedulerService {
     log.info({ jobs: this.jobDefinitions.length }, "cron scheduler started");
   }
 
-  public async shutdown(): Promise<void> {
+  public async shutdown(options: { deadlineMs?: number } = {}): Promise<void> {
     this.stopping = true;
 
     for (const [, task] of this.tasks) {
@@ -561,7 +563,10 @@ class CronSchedulerService {
       await Promise.race([
         Promise.allSettled([...this.inFlight]),
         new Promise<void>((resolve) => {
-          timer = setTimeout(resolve, SHUTDOWN_WAIT_MS);
+          timer = setTimeout(
+            resolve,
+            Math.min(SHUTDOWN_WAIT_MS, options.deadlineMs ?? Infinity),
+          );
           timer.unref();
         }),
       ]);

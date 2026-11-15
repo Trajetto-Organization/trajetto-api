@@ -41,8 +41,10 @@ HTTP) está na mesma seção. Testes: `tests/unitaires/lifecycle/workers-role-fl
 ## Consequências registradas
 
 - O desligamento ordenado (`src/shared/lifecycle/shutdown.ts`) para os
-  workers depois do HTTP e da fila de importações, com teto de 35 s, abaixo
-  do _Stop Grace Period_ de 40 s da Application.
+  workers depois do HTTP e da fila de importações, com teto derivado do
+  _Stop Grace Period_ do serviço (`STOP_GRACE_PERIOD_MS`,
+  `src/shared/lifecycle/shutdown-plan.ts`): 35 s com os 40 s da Application,
+  menos de 9 s sem a variável (os 10 s do Docker).
 - O pool de conexões é dividido entre HTTP e workers da mesma réplica; o
   orçamento de conexões está em
   [`arquitetura.md` → Conexão com o Postgres](../arquitetura.md#conexão-com-o-postgres).

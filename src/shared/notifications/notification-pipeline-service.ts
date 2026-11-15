@@ -82,6 +82,13 @@ const SWEEP_INTERVAL_MS = env.PIPELINE_SWEEP_INTERVAL_MS;
 
 const OUTBOX_BATCH_SIZE = 10;
 
+/**
+ * How long shutdown() waits, at most, for the batch in flight. The shutdown
+ * plan's workers deadline can only shorten it (shared/lifecycle/
+ * shutdown-plan.ts).
+ */
+const PIPELINE_SHUTDOWN_WAIT_MS = 10_000;
+
 /** Entries of the "channels suppressed" debug line; the total is logged too. */
 const SUPPRESSED_LOG_LIMIT = 50;
 
@@ -362,7 +369,12 @@ class NotificationPipelineService {
     });
   }
 
-  public async shutdown(): Promise<void> {
+  /**
+   * `deadlineMs` is the shutdown plan's (shared/lifecycle/shutdown-plan.ts):
+   * it can only shorten the pipeline's own 10 s, so a short stop grace is
+   * not outlived here.
+   */
+  public async shutdown(options: { deadlineMs?: number } = {}): Promise<void> {
     this.stopping = true;
 
     if (this.outboxTimer) clearInterval(this.outboxTimer);
@@ -373,7 +385,9 @@ class NotificationPipelineService {
 
     // Let the batch in flight finish; the loops take no new one. Leases cover
     // anything cut off by the deadline.
-    const deadline = Date.now() + 10_000;
+    const deadline =
+      Date.now() +
+      Math.min(PIPELINE_SHUTDOWN_WAIT_MS, options.deadlineMs ?? Infinity);
 
     while (
       (this.isBusy() || this.pendingRecords.size > 0) &&

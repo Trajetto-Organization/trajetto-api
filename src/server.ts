@@ -17,9 +17,13 @@ import {
   shutdownWorkers,
 } from "./workers";
 
-import { importQueue } from "./modules/import/services/import-queue";
+import {
+  drainOptionsFrom,
+  importQueue,
+} from "./modules/import/services/import-queue";
 import { markDraining } from "./shared/lifecycle/draining";
 import { runShutdown } from "./shared/lifecycle/shutdown";
+import { shutdownPlanFor } from "./shared/lifecycle/shutdown-plan";
 import { runStartup } from "./shared/lifecycle/startup";
 import {
   runtimeMetrics,
@@ -64,31 +68,26 @@ let stopRuntimeMetrics: (() => void) | null = null;
 let shuttingDown = false;
 
 /**
- * Hard ceiling for the whole sequence — stays under the 40s stop grace
- * period of the API Application's Swarm settings in Dokploy (docs/deploy.md),
- * which is what SIGKILLs a process that overstays.
+ * Every deadline of the sequence, derived from the stop grace period the
+ * Swarm gives this task, which SIGKILLs a process that overstays
+ * (STOP_GRACE_PERIOD_MS; shared/lifecycle/shutdown-plan.ts has the
+ * fractions and the proof that they fit). Without the variable, Docker's
+ * own 10 s is assumed and the whole sequence ends in under 9 s. With the
+ * 40 s grace set on the API Application and the variable at 40000: a 35 s
+ * watchdog, a 12 s drain, 15 s (then 5 + 2) for the running upload and 12 s
+ * for the workers, the figures these steps were tuned against.
+ *
+ * The drain is how long the replica keeps answering after readiness flips
+ * to 503. Nothing polls readiness on the way out: Dokploy's Traefik talks to
+ * the service's virtual address and has no health check (docs/deploy.md,
+ * section 5). The Swarm takes the task out of that address about 2 s before
+ * the SIGTERM, so new connections already go to another replica; the drain
+ * is for the keep-alive connections Traefik still holds with this one and
+ * the requests in flight on them. Zero outside production (with the
+ * upload's grace), where nothing routes to the process and a developer's
+ * Ctrl+C should be instant.
  */
-const SHUTDOWN_TIMEOUT_MS = 35_000;
-
-/**
- * How long a draining replica keeps serving after readiness flips to 503.
- * Longer than Traefik's 10s health-check interval, so the balancer has seen
- * the 503 before the listener closes. Zero outside production, where nothing
- * polls readiness and a developer's Ctrl+C should be instant.
- */
-const DRAIN_MS = env.NODE_ENV === "production" ? 12_000 : 0;
-
-/**
- * How long the running spreadsheet upload may keep going after SIGTERM
- * before the import queue asks it to stop at its next row (then up to
- * IMPORT_STOP_GRACE_MS, 5 s, to close its record, and
- * IMPORT_HANDBACK_WRITE_MS, 2 s, for the hand-back writes). Counted from
- * SIGTERM and overlapping the drain, so the whole import step ends by 22 s,
- * leaving the workers their deadline (10 s; 12 s for the webhook
- * dispatcher) inside the 35 s ceiling. Zero outside production, like
- * DRAIN_MS.
- */
-const IMPORT_DRAIN_GRACE_MS = env.NODE_ENV === "production" ? 15_000 : 0;
+const shutdownPlan = shutdownPlanFor(env);
 
 async function gracefulShutdown() {
   if (shuttingDown) return;
@@ -97,35 +96,39 @@ async function gracefulShutdown() {
   stopRuntimeMetrics?.();
   stopRuntimeMetrics = null;
 
-  log.info("shutting down");
+  const startedAt = Date.now();
+
+  // The plan on the line, so a deploy's log says which grace it assumed.
+  log.info({ shutdownPlan }, "shutting down");
 
   // If any step hangs (an SMTP socket, a stuck Postgres claim), the process
   // still goes away on its own instead of waiting for SIGKILL.
   const watchdog = setTimeout(() => {
     log.error(
-      { timeoutMs: SHUTDOWN_TIMEOUT_MS },
+      { timeoutMs: shutdownPlan.timeoutMs },
       "shutdown exceeded its time limit; forcing exit",
     );
     process.exit(1);
-  }, SHUTDOWN_TIMEOUT_MS);
+  }, shutdownPlan.timeoutMs);
 
   watchdog.unref();
 
   try {
     await runShutdown({
       markDraining,
-      drainMs: DRAIN_MS,
-      drainImports: () => importQueue.drain({ graceMs: IMPORT_DRAIN_GRACE_MS }),
+      drainMs: shutdownPlan.drainMs,
+      drainImports: () => importQueue.drain(drainOptionsFrom(shutdownPlan)),
       closeRealtime: closeRealtimeConnections,
       closeHttp: () => app.close(),
-      stopWorkers: shutdownWorkers,
+      stopWorkers: () =>
+        shutdownWorkers({ deadlineMs: shutdownPlan.workersMs }),
       // Closes the Redis pub/sub clients from the Socket.IO adapter
       closeRedis: shutdownSocketIO,
     });
 
     clearTimeout(watchdog);
 
-    log.info("shutdown complete");
+    log.info({ durationMs: Date.now() - startedAt }, "shutdown complete");
     process.exit(0);
   } catch (error) {
     clearTimeout(watchdog);

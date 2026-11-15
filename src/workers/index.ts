@@ -73,9 +73,14 @@ export function drainWorkerBacklog(): void {
 }
 
 /**
- * Terminates all workers
+ * Terminates all workers. `deadlineMs` is the shutdown plan's workers
+ * deadline (shared/lifecycle/shutdown-plan.ts), handed to each of them: it
+ * can only shorten their own waits, so they are done before the watchdog
+ * whatever the stop grace. Without it (a test), each keeps its own.
  */
-export async function shutdownWorkers(): Promise<void> {
+export async function shutdownWorkers(
+  options: { deadlineMs?: number } = {},
+): Promise<void> {
   // The rows age out of /health/metrics on their own once this replica stops
   // writing them; nothing to flush on the way out.
   stopHeartbeatFlush?.();
@@ -84,10 +89,10 @@ export async function shutdownWorkers(): Promise<void> {
   try {
     // Shutdown services in parallel for better performance
     await Promise.all([
-      NotificationPipelineService.getInstance().shutdown(),
-      AIAnalysisPipelineService.getInstance().shutdown(),
-      WebhookDispatchService.getInstance().shutdown(),
-      CronSchedulerService.getInstance().shutdown(),
+      NotificationPipelineService.getInstance().shutdown(options),
+      AIAnalysisPipelineService.getInstance().shutdown(options),
+      WebhookDispatchService.getInstance().shutdown(options),
+      CronSchedulerService.getInstance().shutdown(options),
 
       // Writes what it is holding on the way out — the batch most likely to
       // be the one somebody asks about right after a deploy.

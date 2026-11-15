@@ -95,6 +95,13 @@ const log = logger.child({ component: "ai-pipeline" });
 const SWEEP_INTERVAL_MS = env.PIPELINE_SWEEP_INTERVAL_MS;
 
 /**
+ * How long shutdown() waits, at most, for the reads in flight. The shutdown
+ * plan's workers deadline can only shorten it (shared/lifecycle/
+ * shutdown-plan.ts).
+ */
+const AI_PIPELINE_SHUTDOWN_WAIT_MS = 10_000;
+
+/**
  * A replica dying mid-request only delays the retry by this window —
  * consumed units keep their results and are not re-billed. Renewed before
  * every provider call, so it covers one unit however long the checklist.
@@ -303,14 +310,20 @@ class AIAnalysisPipelineService {
     });
   }
 
-  public async shutdown(): Promise<void> {
+  /**
+   * `deadlineMs` is the shutdown plan's (shared/lifecycle/shutdown-plan.ts):
+   * it can only shorten the pipeline's own 10 s.
+   */
+  public async shutdown(options: { deadlineMs?: number } = {}): Promise<void> {
     if (this.sweepTimer) clearInterval(this.sweepTimer);
     this.sweepTimer = null;
 
     this.stopping = true;
 
     // Let in-flight requests finish; the lease covers anything interrupted.
-    const deadline = Date.now() + 10_000;
+    const deadline =
+      Date.now() +
+      Math.min(AI_PIPELINE_SHUTDOWN_WAIT_MS, options.deadlineMs ?? Infinity);
 
     while (this.running && Date.now() < deadline) {
       await new Promise((resolve) => setTimeout(resolve, 50));

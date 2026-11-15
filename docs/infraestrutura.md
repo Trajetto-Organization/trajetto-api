@@ -1011,8 +1011,10 @@ por tudo, IA sem `read_only`, Databases sem _placement_ e o _Stop Grace Period_
 que depende da versão. Detalhe e contornos em
 [`deploy.md` → 5](./deploy.md#5-applications-em-vez-de-compose-o-que-mudou-e-o-que-ficou-de-fora).
 **A confirmar com o dono:** se o campo _Stop Grace Period_ existe no Dokploy
-v0.30.10 instalado (sem ele, o desligamento ordenado da API, de até 35 s, é
-cortado em 10 s).
+v0.30.10 instalado. Sem ele, o serviço fica com os 10 s do Docker, e o
+desligamento ordenado da API cabe neles enquanto `STOP_GRACE_PERIOD_MS` não
+estiver definida (desde 15/11/2026); `40000` só depois de o `inspect`
+mostrar os 40 s.
 
 ---
 
@@ -2554,8 +2556,8 @@ derruba o sistema, depois o que abre uma brecha, depois o resto.
       for a intenção (o orçamento de memória e o rolling update dependem
       disso). [Seção 2.3](#23-staging-e-produção).
 - [ ] **_Stop Grace Period_** existe no Dokploy v0.30.10 (sem ele, o
-      desligamento da API é cortado em 10 s).
-      [Seção 5.11](#511-lacunas-conhecidas).
+      serviço fica com 10 s, e `STOP_GRACE_PERIOD_MS` não pode passar de
+      `10000`). [Seção 5.11](#511-lacunas-conhecidas).
 - [ ] **`HTTP_REQUEST` da web** nos dois ambientes é a URL pública da API, e
       **`NODE_ENV`** não está no _Environment_ de nenhuma Application.
       [Seção 5.6](#56-variáveis-por-application).

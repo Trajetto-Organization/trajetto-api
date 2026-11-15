@@ -514,11 +514,15 @@ só, e um lote que falha falha a etapa. O `HEALTHCHECK` da imagem só passa
 depois disso, e é por ele que o pipeline sabe que a etapa terminou.
 
 O desligamento é ordenado (`src/shared/lifecycle/shutdown.ts`): a readiness
-passa a 503, a réplica espera 12 s para sair do balanceamento do serviço,
-fecha o tempo real e o HTTP, espera a fila de importações drenar, e então
-fecha os workers e o Redis, com teto de 35 s (abaixo dos 40 s do _Stop Grace
-Period_ da Application no Dokploy). O dreno das importações começa no
-primeiro instante do SIGTERM (ver [Arquivos](#arquivos)).
+passa a 503, a réplica continua atendendo durante o dreno as conexões que o
+Traefik já tem com ela, fecha o tempo real e o HTTP, espera a fila de
+importações drenar, e então fecha os workers e o Redis. Os prazos saem do
+_Stop Grace Period_ que o Swarm dá ao serviço (`STOP_GRACE_PERIOD_MS`,
+`src/shared/lifecycle/shutdown-plan.ts`): sem a variável, valem os 10 s do
+Docker e tudo termina em menos de 9 s; com `40000`, teto de 35 s e dreno de
+12 s ([`deploy.md`](./deploy.md#19-réplicas-workers-e-tempo-real),
+"Desligamento ordenado"). O dreno das importações começa no primeiro
+instante do SIGTERM (ver [Arquivos](#arquivos)).
 
 Separar workers do HTTP é possível com a mesma imagem (`WORKERS_ENABLED=false`
 nas réplicas HTTP e uma Application `worker`), só por gatilho medido:

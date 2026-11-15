@@ -13,6 +13,13 @@ import {
   MAX_PURGE_RUN_BUDGET_MS,
   parseUtcWindow,
 } from "@/shared/services/cron-limits";
+import {
+  DEFAULT_STOP_GRACE_PERIOD_MS,
+  MAX_STOP_GRACE_PERIOD_MS,
+  MIN_STOP_GRACE_PERIOD_MS,
+  planShutdown,
+  shutdownPlanProblems,
+} from "@/shared/lifecycle/shutdown-plan";
 
 /** 32 characters of `openssl rand -base64` are ~192 bits: out of offline reach. */
 const JWT_SECRET_MIN_LENGTH = 32;
@@ -25,16 +32,13 @@ const SWARM_LABEL = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
  * still a template, and absent (never a boot failure) when not a plain name.
  */
 function swarmLabel() {
-  return z.preprocess(
-    (value) => {
-      if (typeof value !== "string") return value;
+  return z.preprocess((value) => {
+    if (typeof value !== "string") return value;
 
-      const trimmed = value.trim();
+    const trimmed = value.trim();
 
-      return trimmed === "" || trimmed.includes("{{") ? undefined : trimmed;
-    },
-    z.string().regex(SWARM_LABEL).optional().catch(undefined),
-  );
+    return trimmed === "" || trimmed.includes("{{") ? undefined : trimmed;
+  }, z.string().regex(SWARM_LABEL).optional().catch(undefined));
 }
 
 const envSchema = z
@@ -497,6 +501,51 @@ const envSchema = z
       z.coerce.number().int().min(500).default(30_000),
     ),
 
+    // The graceful shutdown (plano-escala F1-14). STOP_GRACE_PERIOD_MS is the
+    // Stop Grace Period the Swarm really gives this service, in ms: every
+    // deadline of the sequence is derived from it (shared/lifecycle/
+    // shutdown-plan.ts). Absent, Docker's own 10 s is assumed and the
+    // sequence ends in under 9 s; set it to the service's value only once
+    // `docker service inspect` shows it (verify-rollout fails the deploy when
+    // the variable passes the service's grace). 40000 gives the 35 s
+    // watchdog, the 12 s drain and the 15 s import grace the Application was
+    // sized for.
+    STOP_GRACE_PERIOD_MS: z.preprocess(
+      (value) => (value === "" ? undefined : value),
+      z.coerce
+        .number()
+        .int()
+        .min(MIN_STOP_GRACE_PERIOD_MS)
+        .max(MAX_STOP_GRACE_PERIOD_MS)
+        .default(DEFAULT_STOP_GRACE_PERIOD_MS),
+    ),
+
+    // Optional overrides of the derived figures, for an incident or a
+    // measurement (a replica with no sockets can drain for less). Checked
+    // with the rest of the plan below: one that would not end before the
+    // SIGKILL fails the boot. Empty counts as absent.
+    SHUTDOWN_TIMEOUT_MS: z.preprocess(
+      (value) => (value === "" ? undefined : value),
+      z.coerce
+        .number()
+        .int()
+        .min(1_000)
+        .max(MAX_STOP_GRACE_PERIOD_MS)
+        .optional(),
+    ),
+    SHUTDOWN_DRAIN_MS: z.preprocess(
+      (value) => (value === "" ? undefined : value),
+      z.coerce.number().int().min(0).max(MAX_STOP_GRACE_PERIOD_MS).optional(),
+    ),
+    IMPORT_DRAIN_GRACE_MS: z.preprocess(
+      (value) => (value === "" ? undefined : value),
+      z.coerce.number().int().min(0).max(MAX_STOP_GRACE_PERIOD_MS).optional(),
+    ),
+    SHUTDOWN_WORKERS_MS: z.preprocess(
+      (value) => (value === "" ? undefined : value),
+      z.coerce.number().int().min(0).max(MAX_STOP_GRACE_PERIOD_MS).optional(),
+    ),
+
     // The scale plan's per-minute series (plano-escala F1-08): each process
     // writes one ops_sample row a minute, 0–15 s after the minute ends, and
     // a failed write never stops the process (fail-open). On by default:
@@ -815,6 +864,26 @@ const envSchema = z
         code: z.ZodIssueCode.custom,
         path: ["APP_ENV"],
         message: `APP_ENV=${env.APP_ENV} exige NODE_ENV=production: staging roda a mesma imagem e as mesmas travas da produção.`,
+      });
+    }
+
+    // The shutdown's deadlines must end before the Swarm's SIGKILL (F1-14).
+    // Derived alone they always do; an override that breaks it fails the
+    // boot here, where the deploy's convergence check sees it, instead of
+    // cutting the next deploy's in-flight work. Checked as production runs
+    // it, in every environment: the same variables reach both.
+    for (const message of shutdownPlanProblems(
+      planShutdown(env.STOP_GRACE_PERIOD_MS, {
+        timeoutMs: env.SHUTDOWN_TIMEOUT_MS,
+        drainMs: env.SHUTDOWN_DRAIN_MS,
+        importGraceMs: env.IMPORT_DRAIN_GRACE_MS,
+        workersMs: env.SHUTDOWN_WORKERS_MS,
+      }),
+    )) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["STOP_GRACE_PERIOD_MS"],
+        message,
       });
     }
 

@@ -646,7 +646,13 @@ class WebhookDispatchService {
     log.info("webhook dispatch worker started");
   }
 
-  async shutdown(): Promise<void> {
+  /**
+   * `deadlineMs` is the shutdown plan's (shared/lifecycle/shutdown-plan.ts):
+   * it can only shorten the dispatcher's own wait below. Under a short stop
+   * grace a send cut off here goes out again when its lease expires: the
+   * receivers deduplicate by the event id, as the documentation asks.
+   */
+  async shutdown(options: { deadlineMs?: number } = {}): Promise<void> {
     this.stopping = true;
 
     if (this.timer) clearInterval(this.timer);
@@ -659,7 +665,9 @@ class WebhookDispatchService {
     // that had not started are handed back instead of sent (see `release`),
     // so one call timeout bounds the wait; the deadline is the backstop, and
     // fits ADR 0004's watchdog with the workers stopping in parallel.
-    const deadline = Date.now() + WEBHOOK_TIMEOUT_MS + 2_000;
+    const deadline =
+      Date.now() +
+      Math.min(WEBHOOK_TIMEOUT_MS + 2_000, options.deadlineMs ?? Infinity);
 
     while (
       (this.running || this.pendingRecords.size > 0) &&

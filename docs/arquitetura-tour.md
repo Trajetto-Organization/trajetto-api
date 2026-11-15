@@ -1241,7 +1241,10 @@ esperavam ("não iniciada: envie de novo", sem nenhuma entrega), dá até 15 s �
 que está rodando e depois a para entre duas linhas, com o relatório até ali. Se
 ela não parar em 5 s, a própria fila a fecha, e espera no máximo 2 s por essas
 gravações. Tudo antes dos workers, dentro do teto de 35 s
-(`src/shared/lifecycle/shutdown.ts`). Quando é certo que nenhuma entrega foi
+(`src/shared/lifecycle/shutdown.ts`). Esses são os prazos com
+`STOP_GRACE_PERIOD_MS=40000`; sem a variável, saem da mesma fórmula sobre os
+10 s do Docker (3,75 + 1,25 + 0,5 s, teto de 8,75 s;
+`src/shared/lifecycle/shutdown-plan.ts`). Quando é certo que nenhuma entrega foi
 criada, o relatório diz "nenhuma entrega foi criada. Envie o arquivo de novo."
 em vez de mandar estornar (detalhes no ADR 0001). Uma réplica que morre sem SIGTERM deixa a importação sem batimento, e
 o cron `close-abandoned-imports` (a cada 5 min) a fecha com o que ela fez.

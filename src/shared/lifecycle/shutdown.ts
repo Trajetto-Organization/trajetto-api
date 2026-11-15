@@ -7,8 +7,11 @@
  * 1. DRAIN FIRST. Readiness answered 200 until the very end, so the load
  *    balancer kept routing new requests to a replica that was about to close
  *    its listener. Readiness now answers 503 from the first instant, and the
- *    replica keeps serving for one health-check interval while Traefik takes
- *    it out of rotation.
+ *    replica keeps serving for the plan's drain (shutdown-plan.ts). Traefik
+ *    has no health check on the service (docs/deploy.md, section 5): the
+ *    Swarm takes the task out of the virtual address before the SIGTERM, and
+ *    the drain is for the requests on the keep-alive connections Traefik
+ *    still holds with it.
  * 2. REALTIME BEFORE HTTP. An upgraded websocket keeps the HTTP server open,
  *    and nothing closed them: `app.close()` waited forever with a single
  *    driver connected — which in production is always — until the watchdog
@@ -31,7 +34,10 @@ interface ShutdownSteps {
   /** Readiness starts answering 503. */
   markDraining: () => void;
 
-  /** How long to keep serving after readiness flips; 0 outside production. */
+  /**
+   * How long to keep serving after readiness flips (the shutdown plan's
+   * drain); 0 outside production.
+   */
   drainMs: number;
 
   /**
