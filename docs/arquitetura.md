@@ -3864,6 +3864,22 @@ com padrão `America/Sao_Paulo`, uma sessão crua abre em São Paulo e não vê 
 linha vencida da outbox; o pool da aplicação e o da readiness abrem em UTC e
 veem).
 
+**Nada pode depender da sessão** (item F4-30 do plano de escala): a partir
+da onda 17 as Applications chegam ao Postgres pelo PgBouncer em modo
+transaction, em que cada transação pode cair numa conexão de servidor
+diferente, e o que um statement deixa na sessão fica lá para o próximo
+cliente. Por isso o código de `src/` e `infra/` não usa `LISTEN`/`UNLISTEN`,
+advisory lock de sessão (`pg_advisory_lock`; o `pg_advisory_xact_lock` pode),
+`SET` sem `LOCAL` (o `SET LOCAL`, o `SET TRANSACTION` e o `SET CONSTRAINTS`
+podem) nem `set_config(…, false)`, `PREPARE`, cursor `WITH HOLD`,
+`CREATE TEMP TABLE` ou `DISCARD`. A guarda é
+`tests/unitaires/database/pgbouncer-compat.test.ts`: ela lê as strings de
+SQL pelo parser do TypeScript (e as dos scripts de shell e os `.sql`) e
+ancora a regra do `SET` no início do statement, para não pegar o
+`UPDATE … SET` nem o `ON CONFLICT … DO UPDATE SET`. A única exceção será a
+conexão DDL dedicada das partições (onda 6), que entra na lista da própria
+guarda.
+
 **Erros do banco viram 503 por tipo, não por texto**: o adapter mapeia quatro
 erros de socket (`ECONNREFUSED`, `ENOTFOUND`, `ECONNRESET`, `ETIMEDOUT`) e o
 SQLSTATE para códigos do Prisma, mas repassa cru o que é do próprio `pg` —
