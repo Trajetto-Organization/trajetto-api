@@ -25,6 +25,7 @@ import { deliveryAddressKey } from "@/shared/delivery/address-key";
 import { pickReusablePoint } from "@/shared/delivery/geocoding/address-point-reuse";
 import {
   followSource,
+  lockSourceAndCopies,
   sourcePinOf,
   writePointToDoor,
 } from "@/shared/delivery/geocoding/address-point-propagation";
@@ -2142,15 +2143,15 @@ class RouteRepository implements IRouteRepository {
    * The pin's transaction, run again from the top when Postgres aborts it
    * as a deadlock victim (40P01) or a serialization failure
    * (isSerializationFailure), up to PIN_ATTEMPTS. The pin locks the route,
-   * then the delivery, then the copies of its previous point (followSource,
-   * in id order); a bulk writer that already holds one of those copies and
-   * then reaches for the delivery — a route write's updateMany over its
-   * deliveries, a delete, an import undo — closes a cycle no order on this
-   * side can rule out, since the copies are only known once the delivery is
-   * locked and read. Postgres rolls the victim back whole, and every attempt
-   * reads the delivery's previous point again under its own lock, so a
-   * retry moves the copies the point they hold at that moment
-   * (tests/E2E/route-pin-deadlock.test.ts).
+   * then the delivery and its copies together in id order
+   * (lockSourceAndCopies), the order of a route write's updateMany by id
+   * IN (...), so the two queue. A writer that takes the same rows in
+   * separate statements against id order can still close a cycle with it;
+   * when Postgres picks the pin as the victim, the retry runs it again (the
+   * other side answers its own error). Postgres rolls the victim back
+   * whole, and every attempt reads the delivery's previous point again
+   * under its own lock, so a retry moves the copies the point they hold at
+   * that moment (tests/E2E/route-pin-deadlock.test.ts).
    */
   async pinDeliveryLocation(
     deliveryId: string,
@@ -2180,25 +2181,15 @@ class RouteRepository implements IRouteRepository {
           )
         : null;
 
-      // Locked before it is read (FOR NO KEY UPDATE, the lock the UPDATE
-      // below takes anyway): the point it holds now is what its copies
-      // hold, and a second pin of the same delivery waits here and then
-      // reads this one's point — never two pins moving the copies from the
-      // same old point to two new ones. A copy written at the same instant
-      // locks this row FOR SHARE first (lockLender): it waits, or is seen.
-      const [delivery] = await tx.$queryRaw<
-        Array<{
-          status: string;
-          address_key: string | null;
-          latitude: number | null;
-          longitude: number | null;
-        }>
-      >`
-        SELECT "status", "address_key", "latitude", "longitude"
-        FROM "delivery"
-        WHERE "id" = ${deliveryId} AND "businessId" = ${businessId}
-        FOR NO KEY UPDATE
-      `;
+      // Locked before it is read, with the copies it handed out, in id
+      // order (lockSourceAndCopies: a route write's order, so the two
+      // queue instead of crossing). The point it holds now is what its
+      // copies hold, and a second pin of the same delivery waits here and
+      // then reads this one's point — never two pins moving the copies
+      // from the same old point to two new ones. A copy written at the
+      // same instant locks this row FOR SHARE first (lockLender): it
+      // waits, or is seen.
+      const delivery = await lockSourceAndCopies(tx, businessId, deliveryId);
 
       if (!delivery) return null;
 

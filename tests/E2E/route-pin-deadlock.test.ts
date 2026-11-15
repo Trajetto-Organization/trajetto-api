@@ -21,24 +21,35 @@ vi.mock("@/shared/logging/logger", async (importOriginal) =>
 
 /**
  * "Fixar no mapa" at the instant a route write takes the same deliveries
- * answers 200, not the 500 of a deadlock.
+ * answers 200, and so does the route write: neither gets the 500 of a
+ * deadlock.
  *
- * The pin locks the delivery and then the copies of its previous point
- * (followSource, pre-push review of the batch of 14/11/2026). A route write
- * that adds the two deliveries of that door to a route locks the copy, then
- * the delivery. When the two overlap, each holds what the other needs next:
- * Postgres breaks the cycle after deadlock_timeout by rolling one of them
- * back with 40P01. No lock order on the pin's side rules this out — it only
- * knows the copies once the delivery is locked and read — so the pin runs
- * its transaction again (RouteRepository.pinDeliveryLocation), re-reading
- * the delivery's previous point under its own lock.
+ * The pin writes the delivery and the copies of its point (followSource,
+ * pre-push review of the batch of 14/11/2026). A route write that adds the
+ * deliveries of that door to a route locks them in one updateMany over id
+ * IN (...), which probes the primary key in id order. A pin that locked
+ * the source first and its copies after crossed it whenever a copy sorts
+ * before its source: the route write held the copy and waited on the
+ * source, the pin held the source and waited on the copy, and Postgres
+ * rolled one of them back with 40P01 — the route write, whose wait starts
+ * first, so the dispatcher adding the stops got the 500 and the pin's
+ * retry never ran. The copies are known without the source's point (they
+ * name the source in geo_copied_from), so the pin now locks the source and
+ * its copies together, in id order, before it reads anything: the route
+ * write's order, and the two queue instead of crossing.
  *
- * The route write is the real addStops, driven by hand in two steps — the
- * copy, then (once the pin is provably waiting on it) the delivery — in one
- * transaction, because that gap is the whole race. Its session waits 30 s
- * before looking for a deadlock, so the pin's (1 s, the default) is the one
- * that finds the cycle: the pin is the victim every time, and the route
- * write commits.
+ * A writer that takes the two in separate statements against id order can
+ * still close the cycle; when the pin is the victim there, it runs its
+ * transaction again (RouteRepository.pinDeliveryLocation).
+ *
+ * The route writes are the real addStops. In the first case it runs in one
+ * call: a third session holds the source until the pin and the route write
+ * are both provably queued, so the interleaving is the race's, not luck.
+ * Its session looks for a deadlock after 100 ms instead of 1 s: it is the
+ * side whose wait starts first, the one that finds a cycle when there is
+ * one, only sooner. In the second it is driven by hand in two steps, the
+ * source and then the copy, and waits 30 s before looking, so the pin (1 s,
+ * the default) is the victim every time.
  */
 const prisma = createPrismaClient();
 const repository = new RouteRepository(prisma);
@@ -50,10 +61,16 @@ const DRIVER = "018fea10-0000-7000-8000-0000000000d1";
 const TRUCK = "018fea10-0000-7000-8000-0000000000e1";
 const SHIPPER = "018fea10-0000-7000-8000-0000000000f1";
 
-// The copy sorts before its source, as a route write's updateMany by id
-// IN (...) would meet them.
-const COPY = "018fea10-0000-7000-8000-000000000c01";
-const SOURCE = "018fea10-0000-7000-8000-000000000c02";
+// Each copy sorts before its source, as a route write's updateMany by id
+// IN (...) meets them.
+const ONE_CALL = {
+  copy: "018fea10-0000-7000-8000-000000000c11",
+  source: "018fea10-0000-7000-8000-000000000c12",
+};
+const TWO_STEPS = {
+  copy: "018fea10-0000-7000-8000-000000000c21",
+  source: "018fea10-0000-7000-8000-000000000c22",
+};
 
 const DOOR = {
   street: "Rua Doutor Lipold",
@@ -183,66 +200,223 @@ afterAll(async () => {
   await prisma.$disconnect();
 });
 
-describe("a pin at the instant a route write takes the same deliveries", () => {
-  it("is the deadlock's victim, runs again and answers 200", async () => {
-    const key = deliveryAddressKey(DOOR);
-    const atTheDoor = {
-      ...DOOR,
-      address_key: key,
+const RETRY_LINE =
+  "pin transaction aborted by a concurrent write; running it again";
+
+/**
+ * The source with its own pin, and the copy it handed out. The copy is the
+ * older delivery, located later from the source's pin (the review's case),
+ * so it comes first by id, by creation, by updated_at (the geocoder's write
+ * leaves it) and in the heap: whichever path the route write's updateMany
+ * takes — on this file's handful of rows the planner picks an index on the
+ * company, not the primary key it walks on a table of real size — it meets
+ * the copy first, as production's does.
+ */
+async function seedDoor({ copy, source }: { copy: string; source: string }) {
+  const atTheDoor = {
+    ...DOOR,
+    address_key: deliveryAddressKey(DOOR),
+    businessId: CARRIER,
+    shipperId: SHIPPER,
+  };
+  const created = new Date(Date.now() - 60 * 60 * 1000);
+
+  await prisma.delivery.create({
+    data: {
+      id: copy,
+      ...atTheDoor,
+      recipient_name: "Primeira no Lipold",
+      ...OLD_POINT,
+      geo_source: "GEOCODER",
+      geo_precision: "ADDRESS",
+      geocode_status: "RESOLVED",
+      geo_updated_at: new Date(),
+      geo_copied_from: source,
+      created_at: created,
+      updated_at: created,
+    },
+  });
+  await prisma.delivery.create({
+    data: {
+      id: source,
+      ...atTheDoor,
+      recipient_name: "Segunda no Lipold",
+      ...OLD_POINT,
+      geo_source: "MANUAL",
+      geo_updated_at: new Date(),
+    },
+  });
+}
+
+/** A planned route elsewhere, which the door's deliveries are added to. */
+async function plannedRoute() {
+  const filler = await prisma.delivery.create({
+    data: {
+      recipient_name: "Outra porta",
+      city: "São Paulo",
+      uf: "SP",
+      street: "Rua das Entregas",
+      address_number: "5",
       businessId: CARRIER,
       shipperId: SHIPPER,
-    };
+    },
+  });
+  const route = await repository.createRoute({
+    businessId: CARRIER,
+    driverId: DRIVER,
+    vehicleId: TRUCK,
+    scheduled_date: new Date(),
+    deliveryIds: [filler.id],
+  });
 
-    // The source with its own pin, and the copy it handed out.
-    await prisma.delivery.create({
-      data: {
-        id: SOURCE,
-        ...atTheDoor,
-        recipient_name: "Primeira no Lipold",
-        ...OLD_POINT,
-        geo_source: "MANUAL",
-        geo_updated_at: new Date(),
-      },
-    });
-    await prisma.delivery.create({
-      data: {
-        id: COPY,
-        ...atTheDoor,
-        recipient_name: "Segunda no Lipold",
-        ...OLD_POINT,
-        geo_source: "GEOCODER",
-        geo_precision: "ADDRESS",
-        geocode_status: "RESOLVED",
-        geo_updated_at: new Date(),
-        geo_copied_from: SOURCE,
-      },
-    });
+  return { routeId: route.id, fillerId: filler.id };
+}
 
-    // A planned route elsewhere, which the two deliveries are being added to.
-    const filler = await prisma.delivery.create({
-      data: {
-        recipient_name: "Outra porta",
-        city: "São Paulo",
-        uf: "SP",
-        street: "Rua das Entregas",
-        address_number: "5",
-        businessId: CARRIER,
-        shipperId: SHIPPER,
-      },
-    });
-    const route = await repository.createRoute({
-      businessId: CARRIER,
-      driverId: DRIVER,
-      vehicleId: TRUCK,
-      scheduled_date: new Date(),
-      deliveryIds: [filler.id],
-    });
+function pinOnTheMap(source: string) {
+  return app.inject({
+    method: "PATCH",
+    url: `/route/set-delivery-location/${source}/business/${CARRIER}`,
+    headers: { authorization: `Bearer ${dispatcher}` },
+    payload: NEW_POINT,
+  });
+}
+
+/** The pin's retries of this delivery, as its warn lines tell them. */
+function retriesOf(source: string) {
+  return logged("warn").filter(
+    (line) => line.msg === RETRY_LINE && line.deliveryId === source,
+  );
+}
+
+/**
+ * Both writes landed: the copy followed the pin, and both deliveries are
+ * on the route.
+ */
+async function expectBothLanded(
+  { copy, source }: { copy: string; source: string },
+  { routeId, fillerId }: { routeId: string; fillerId: string },
+) {
+  expect(
+    await prisma.delivery.findUniqueOrThrow({ where: { id: copy } }),
+  ).toMatchObject({
+    ...NEW_POINT,
+    geo_source: "GEOCODER",
+    geo_copied_from: source,
+    driverId: DRIVER,
+  });
+  expect(
+    await prisma.delivery.findUniqueOrThrow({ where: { id: source } }),
+  ).toMatchObject({
+    ...NEW_POINT,
+    geo_source: "MANUAL",
+    geo_copied_from: null,
+    driverId: DRIVER,
+  });
+  expect(
+    (
+      await prisma.routeStop.findMany({
+        where: { routeId, status: "PENDING" },
+        select: { deliveryId: true },
+      })
+    )
+      .map((stop) => stop.deliveryId)
+      .sort(),
+  ).toEqual([fillerId, copy, source].sort());
+}
+
+describe("a pin at the instant a route write takes the same deliveries", () => {
+  it("queues with a route write that adds the copy and its source in one call", async () => {
+    await seedDoor(ONE_CALL);
+    const route = await plannedRoute();
 
     clearLogged();
 
-    let copyTaken: () => void = () => undefined;
-    const routeWriteHoldsTheCopy = new Promise<void>((resolve) => {
-      copyTaken = resolve;
+    // A third session holds the source, so the pin parks on its first lock
+    // and the route write is provably queued before either goes on.
+    let sourceHeld: () => void = () => undefined;
+    let release: () => void = () => undefined;
+    const holdsTheSource = new Promise<void>((resolve) => {
+      sourceHeld = resolve;
+    });
+    const released = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const gate = prisma.$transaction(
+      async (tx) => {
+        await tx.$queryRaw`
+          SELECT 1 FROM "delivery" WHERE "id" = ${ONE_CALL.source}
+          FOR NO KEY UPDATE
+        `;
+
+        sourceHeld();
+
+        await released;
+      },
+      { maxWait: 10_000, timeout: 40_000 },
+    );
+
+    await holdsTheSource;
+
+    const pinned = pinOnTheMap(ONE_CALL.source);
+
+    await someoneWaitsOnALock(prisma, {
+      what: "pin's lock",
+      query: "FOR NO KEY UPDATE",
+    });
+
+    const routeWrite = prisma.$transaction(
+      async (tx) => {
+        // The side that looks for the deadlock first (see the top).
+        await tx.$executeRawUnsafe("SET LOCAL deadlock_timeout = '100ms'");
+
+        return repository.addStops(
+          route.routeId,
+          CARRIER,
+          [ONE_CALL.copy, ONE_CALL.source],
+          tx,
+        );
+      },
+      { maxWait: 10_000, timeout: 40_000 },
+    );
+
+    await someoneWaitsOnALock(prisma, {
+      what: "route write's deliveries",
+      query: 'UPDATE "public"."delivery"',
+    });
+
+    release();
+    await gate;
+
+    const [written] = await Promise.allSettled([routeWrite]);
+    const response = await pinned;
+
+    expect(
+      written.status,
+      written.status === "rejected" ? String(written.reason) : "",
+    ).toBe("fulfilled");
+
+    expect(response.statusCode, response.body).toBe(200);
+    expect(response.json().data).toMatchObject({
+      ...NEW_POINT,
+      geo_source: "MANUAL",
+      propagated: 1,
+    });
+
+    // No cycle, so no victim: the pin never ran twice.
+    expect(retriesOf(ONE_CALL.source)).toEqual([]);
+
+    await expectBothLanded(ONE_CALL, route);
+  }, 60_000);
+
+  it("is the victim of a writer that takes the source and then the copy, and runs again", async () => {
+    await seedDoor(TWO_STEPS);
+    const route = await plannedRoute();
+
+    clearLogged();
+
+    let sourceTaken: () => void = () => undefined;
+    const routeWriteHoldsTheSource = new Promise<void>((resolve) => {
+      sourceTaken = resolve;
     });
 
     const routeWrite = prisma.$transaction(
@@ -250,30 +424,35 @@ describe("a pin at the instant a route write takes the same deliveries", () => {
         // This side never looks for the deadlock first (see the top).
         await tx.$executeRawUnsafe("SET LOCAL deadlock_timeout = '30s'");
 
-        await repository.addStops(route.id, CARRIER, [COPY], tx);
+        await repository.addStops(
+          route.routeId,
+          CARRIER,
+          [TWO_STEPS.source],
+          tx,
+        );
 
-        copyTaken();
+        sourceTaken();
 
-        // The pin holds the source and waits on the copy this one holds...
+        // The pin holds the copy and waits on the source this one holds...
         await someoneWaitsOnALock(prisma, {
-          what: "pin's copies",
-          query: "AS follower",
+          what: "pin's lock",
+          query: "FOR NO KEY UPDATE",
         });
 
-        // ...and the rest of the write reaches for the source.
-        return repository.addStops(route.id, CARRIER, [SOURCE], tx);
+        // ...and the rest of the write reaches for the copy.
+        return repository.addStops(
+          route.routeId,
+          CARRIER,
+          [TWO_STEPS.copy],
+          tx,
+        );
       },
       { maxWait: 10_000, timeout: 40_000 },
     );
 
-    await routeWriteHoldsTheCopy;
+    await routeWriteHoldsTheSource;
 
-    const pinned = await app.inject({
-      method: "PATCH",
-      url: `/route/set-delivery-location/${SOURCE}/business/${CARRIER}`,
-      headers: { authorization: `Bearer ${dispatcher}` },
-      payload: NEW_POINT,
-    });
+    const response = await pinOnTheMap(TWO_STEPS.source);
 
     const [written] = await Promise.allSettled([routeWrite]);
 
@@ -282,50 +461,18 @@ describe("a pin at the instant a route write takes the same deliveries", () => {
       written.status === "rejected" ? String(written.reason) : "",
     ).toBe("fulfilled");
 
-    expect(pinned.statusCode, pinned.body).toBe(200);
-    expect(pinned.json().data).toMatchObject({
+    expect(response.statusCode, response.body).toBe(200);
+    expect(response.json().data).toMatchObject({
       ...NEW_POINT,
       geo_source: "MANUAL",
       propagated: 1,
     });
 
     // It was the victim, once, and ran again.
-    expect(
-      logged("warn").filter(
-        (line) =>
-          line.msg ===
-            "pin transaction aborted by a concurrent write; running it again" &&
-          line.deliveryId === SOURCE,
-      ),
-    ).toEqual([expect.objectContaining({ attempt: 1, sqlState: "40P01" })]);
+    expect(retriesOf(TWO_STEPS.source)).toEqual([
+      expect.objectContaining({ attempt: 1, sqlState: "40P01" }),
+    ]);
 
-    // Both writes landed: the copy followed the pin from the point the
-    // second attempt read, and both deliveries are on the route.
-    expect(
-      await prisma.delivery.findUniqueOrThrow({ where: { id: COPY } }),
-    ).toMatchObject({
-      ...NEW_POINT,
-      geo_source: "GEOCODER",
-      geo_copied_from: SOURCE,
-      driverId: DRIVER,
-    });
-    expect(
-      await prisma.delivery.findUniqueOrThrow({ where: { id: SOURCE } }),
-    ).toMatchObject({
-      ...NEW_POINT,
-      geo_source: "MANUAL",
-      geo_copied_from: null,
-      driverId: DRIVER,
-    });
-    expect(
-      (
-        await prisma.routeStop.findMany({
-          where: { routeId: route.id, status: "PENDING" },
-          select: { deliveryId: true },
-        })
-      )
-        .map((stop) => stop.deliveryId)
-        .sort(),
-    ).toEqual([filler.id, COPY, SOURCE].sort());
+    await expectBothLanded(TWO_STEPS, route);
   }, 60_000);
 });

@@ -434,19 +434,19 @@ async function followSource(
         "geo_copied_from" = NULL`;
 
   // Locked in id order by the sub-select (LockRows runs over its Sort),
-  // then written. A bare UPDATE locks the copies in whatever order its scan
-  // meets them, and two writers that take the same rows in different orders
-  // deadlock; in id order, the pin queues behind a writer that also locks
-  // deliveries by id (an updateMany by id IN (...) probing the primary key)
-  // instead of crossing it. The order is `"id" || ''`, the same strings in
-  // the same collation, on purpose: a bare ORDER BY "id" is an order that
+  // then written. The pin already holds these rows (lockSourceAndCopies,
+  // with the source, before it read the source's point), so this lock
+  // waits on none of them; it still runs in id order for a copy written
+  // between that lock and this statement, which no snapshot of the first
+  // one saw. A bare UPDATE locks in whatever order its scan meets the rows,
+  // and two writers that take the same rows in different orders deadlock.
+  // The order is `"id" || ''`, the same strings in the same collation, on
+  // purpose: a bare ORDER BY "id" is an order that
   // delivery_businessId_id_idx gives for free, and the planner took it,
   // walking the company's deliveries with the guards as a filter, instead
   // of the handful of copies down delivery_geo_copied_from_idx and a sort.
   // The guards are checked again on each row the sub-select locks, so a
-  // copy changed meanwhile is dropped, as the bare UPDATE dropped it. The
-  // cycle through the source itself, locked before its copies are known,
-  // is the pin's retry (RouteRepository.pinDeliveryLocation).
+  // copy changed meanwhile is dropped, as the bare UPDATE dropped it.
   const rows = await client.$queryRaw<Array<{ id: string }>>`
     UPDATE "delivery" AS d
     SET ${set}
@@ -470,6 +470,77 @@ async function followSource(
   return rows.map((row) => row.id);
 }
 
+/** The source's columns a pin decides on, read under the pin's lock. */
+interface LockedSource {
+  status: string;
+  address_key: string | null;
+  latitude: number | null;
+  longitude: number | null;
+}
+
+/**
+ * The pin's lock, taken before anything is read (pre-push review of
+ * 15/11/2026): the source and the copies followSource may write — the
+ * company's open GEOCODER deliveries naming it in geo_copied_from, known
+ * without the source's point — together, in id order. A route write locks
+ * its deliveries in one updateMany over id IN (...), which probes the
+ * primary key in id order; a pin that locked the source first and its
+ * copies after crossed it whenever a copy sorts before its source, and
+ * Postgres rolled the route write back with 40P01 (its wait starts first),
+ * a 500 to the dispatcher adding the stops. In the route write's order the
+ * two queue instead. A row without a point (a link an older image left)
+ * stays out on purpose: that is the row writePointToDoor and the
+ * geocoder's settle write a copy to, locking the source FOR SHARE first
+ * and the row after, and in id order the pin would cross them instead.
+ *
+ * The ids come from one sub-select, evaluated once, and the rows are read
+ * and locked by the primary key alone: the company is the sub-select's
+ * condition (a delivery's businessId never changes), so the outer read has
+ * no index but delivery_pkey to take, and its order is the id order the
+ * ORDER BY asks for. With an equality on the company anywhere the source
+ * is read, the planner could walk the company's deliveries by one of its
+ * indexes instead (it does, on a table without statistics); the source's
+ * company is compared with IS NOT DISTINCT FROM for that, as followSource
+ * compares the door. The copies' read is followSource's, down
+ * delivery_geo_copied_from_idx. The rows come back as they are now: a pin
+ * that waited reads the point the writer before it left. The source's
+ * row, or null when the delivery is not the company's.
+ */
+async function lockSourceAndCopies(
+  client: Pick<Prisma.TransactionClient, "$queryRaw">,
+  businessId: string,
+  sourceId: string,
+): Promise<LockedSource | null> {
+  const rows = await client.$queryRaw<Array<LockedSource & { id: string }>>`
+    SELECT d."id", d."status", d."address_key", d."latitude", d."longitude"
+    FROM "delivery" AS d
+    WHERE d."id" = ANY (ARRAY(
+      SELECT s."id" FROM "delivery" AS s
+      WHERE s."id" = ${sourceId}
+        AND s."businessId" IS NOT DISTINCT FROM ${businessId}
+      UNION ALL
+      SELECT c."id" FROM "delivery" AS c
+      WHERE c."businessId" = ${businessId}
+        AND c."geo_copied_from" = ${sourceId}
+        AND c."status" IN ('PENDING', 'IN_TRANSIT')
+        AND c."id" <> ${sourceId}
+        AND c."geo_source" = 'GEOCODER'
+    ))
+    ORDER BY d."id"
+    FOR NO KEY UPDATE
+  `;
+  const source = rows.find((row) => row.id === sourceId);
+
+  return source
+    ? {
+        status: source.status,
+        address_key: source.address_key,
+        latitude: source.latitude,
+        longitude: source.longitude,
+      }
+    : null;
+}
+
 export {
   OPEN_STATUSES,
   followSource,
@@ -477,6 +548,7 @@ export {
   followsSource,
   lenderHolds,
   lockLender,
+  lockSourceAndCopies,
   readDoorCandidates,
   sourcePinOf,
   takesDoorPoint,
@@ -484,4 +556,4 @@ export {
   twinLenderHolds,
   writePointToDoor,
 };
-export type { AddressDoor, DoorCandidate, SourcePin };
+export type { AddressDoor, DoorCandidate, LockedSource, SourcePin };

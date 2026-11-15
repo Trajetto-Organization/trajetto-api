@@ -15,21 +15,22 @@ import {
  * The pin's transaction runs again when Postgres aborts it as a deadlock
  * victim (40P01), instead of answering the dispatcher with a 500.
  *
- * "Fixar no mapa" locks the route holding the delivery, then the delivery,
- * then the copies of its previous point (followSource). A bulk writer that
- * already holds one of those copies and then reaches for the delivery — a
- * route write's updateMany over its deliveries, a delete or an import undo —
- * closes a cycle no lock order on the pin's side can rule out: the pin must
- * lock the source before it knows which copies follow it. Postgres breaks the
- * cycle by rolling one of the two back whole, so the pin runs again from the
- * top, under the budget of the serializable loops of the fuel and checklist
- * repositories (three attempts), after a short pause at random. The real
- * deadlock is provoked against Postgres in tests/E2E/route-pin-deadlock.test.ts.
+ * "Fixar no mapa" locks the route holding the delivery, then the delivery
+ * and the copies of its point together, in id order (lockSourceAndCopies):
+ * the order of a route write's updateMany by id IN (...), so the two queue
+ * (tests/E2E/route-pin-deadlock.test.ts). A writer that takes the same rows
+ * in separate statements against id order can still close a cycle with it,
+ * and Postgres breaks the cycle by rolling one of the two back whole; when
+ * that is the pin, it runs again from the top, under the budget of the
+ * serializable loops of the fuel and checklist repositories (three
+ * attempts), after a short pause at random. Both deadlocks are provoked
+ * against Postgres in the E2E.
  *
  * The repository gets a client whose `$transaction` runs the real work over
- * a scripted transaction: each attempt answers the delivery's row (the point
- * it holds before the pin) and the copies' UPDATE, or throws there or at
- * COMMIT the error Prisma 7 + adapter-pg raises for a deadlock.
+ * a scripted transaction: each attempt answers the lock of the delivery and
+ * its copies (the point the delivery holds before the pin) and the copies'
+ * UPDATE, or throws there or at COMMIT the error Prisma 7 + adapter-pg
+ * raises for a deadlock.
  */
 vi.mock("@/../infra/database", () => ({ default: {} }));
 
@@ -47,7 +48,7 @@ interface SourceRow {
 }
 
 interface AttemptScript {
-  /** The delivery's row as the pin's FOR NO KEY UPDATE reads it. */
+  /** The delivery's row as the pin's lock reads it. */
   source: SourceRow;
   /** Thrown by the copies' UPDATE, the statement a deadlock aborts. */
   atFollowers?: unknown;
@@ -122,10 +123,14 @@ function scriptedClient(scripts: AttemptScript[]) {
           return [{ id: COPY }];
         }
 
-        if (query.sql.includes('SELECT "status"')) {
+        if (query.sql.includes("ANY (ARRAY(")) {
           attempt.sourceReads += 1;
 
-          return [script.source];
+          // The delivery and its copy, as the lock returns them.
+          return [
+            { id: COPY, ...atTheDoor(-22.1, -43.1) },
+            { id: DELIVERY, ...script.source },
+          ];
         }
 
         throw new Error(`unexpected statement: ${query.sql}`);

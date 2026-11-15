@@ -358,17 +358,19 @@ describe("the point of another delivery at the same door", () => {
 
   it("is read one index entry per source, however busy the door", async () => {
     // The two probes the create and the job share (readDoorCandidates),
-    // the propagation's UPDATE (writePointToDoor) and the pin's follow-up
-    // (followSource), in the shape they run. With sequential and bitmap
-    // scans off, only an index scan is left: delivery_address_key_idx must
-    // be the probes' one, and no Sort may follow it — a sort would mean the
-    // probe reads and orders every point the door ever had instead of
-    // stopping at the first. The GEOCODER probe's join to the copy's root
-    // is a primary-key probe per entry, keeping the index's order.
+    // the propagation's UPDATE (writePointToDoor), the pin's lock
+    // (lockSourceAndCopies) and its follow-up (followSource), in the shape
+    // they run. With sequential and bitmap scans off, only an index scan
+    // is left: delivery_address_key_idx must be the probes' one, and no
+    // Sort may follow it — a sort would mean the probe reads and orders
+    // every point the door ever had instead of stopping at the first. The
+    // GEOCODER probe's join to the copy's root is a primary-key probe per
+    // entry, keeping the index's order.
     const door = `d."businessId" = '${CARRIER}'
       AND d."address_key" = '${deliveryAddressKey(LIPOLD)}'
       AND d."id" <> ''`;
     const newest = `ORDER BY d."geo_updated_at" DESC NULLS LAST, d."id" DESC LIMIT 1`;
+    const source = randomUUID();
 
     const plans = await prisma.$transaction(async (tx) => {
       await tx.$executeRawUnsafe("SET LOCAL enable_seqscan = off");
@@ -427,6 +429,23 @@ describe("the point of another delivery at the same door", () => {
             ) AS follower
             WHERE d."id" = follower."id"`,
         ),
+        lock: await explain(
+          `SELECT d."id", d."status", d."latitude" FROM "delivery" AS d
+            WHERE d."id" = ANY (ARRAY(
+              SELECT s."id" FROM "delivery" AS s
+              WHERE s."id" = '${source}'
+                AND s."businessId" IS NOT DISTINCT FROM '${CARRIER}'
+              UNION ALL
+              SELECT c."id" FROM "delivery" AS c
+              WHERE c."businessId" = '${CARRIER}'
+                AND c."geo_copied_from" = '${source}'
+                AND c."status" IN ('PENDING', 'IN_TRANSIT')
+                AND c."id" <> '${source}'
+                AND c."geo_source" = 'GEOCODER'
+            ))
+            ORDER BY d."id"
+            FOR NO KEY UPDATE`,
+        ),
       };
     });
 
@@ -449,6 +468,18 @@ describe("the point of another delivery at the same door", () => {
     );
     expect(plans.follow).not.toContain("delivery_businessId_id_idx");
     expect(plans.follow).toContain("delivery_pkey");
+
+    // The pin's lock (lockSourceAndCopies) finds the source by its primary
+    // key and its copies down delivery_geo_copied_from_idx, then locks them
+    // all by the primary key alone, in id order (LockRows over it): never
+    // an index of the company read with the ids as a filter.
+    expect(plans.lock).toMatch(
+      /LockRows[\s\S]*InitPlan[\s\S]*delivery_pkey[\s\S]*delivery_geo_copied_from_idx[\s\S]*delivery_pkey/,
+    );
+    expect(plans.lock).toMatch(/Index Cond: \(id = ANY/);
+    expect(plans.lock).not.toMatch(
+      /Index Cond: \("businessId" = '[^']*'::text\)$/m,
+    );
   });
 });
 
