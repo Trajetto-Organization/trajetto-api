@@ -3199,7 +3199,12 @@ usava RabbitMQ para e-mail, WhatsApp e verificação por IA; a revisão de
 Registrados em `src/jobs/cron/index.ts`. Horário em UTC (o contêiner não tem
 `TZ`). Um lease no Postgres (linha única `(jobName, scheduledFor)`) garante uma
 execução por horário com várias réplicas, e um catch-up refaz jobs diários
-perdidos.
+perdidos. Um expurgo que para no orçamento com sobra termina FAILED com
+`[partial]` (`src/shared/errors/partial-run-error.ts`), e o catch-up o repete
+só na janela das parciais, depois dos backups
+(`src/shared/services/cron-catch-up-decision.ts`; operação em
+[`deploy.md`](./deploy.md#expurgos-parciais)). O handler recebe o minuto que
+venceu a eleição (`run.scheduledFor`).
 
 | Job                                  | Quando (UTC)              | O que faz                                                                                                                                                                                                                            |
 | ------------------------------------ | ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |

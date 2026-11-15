@@ -1,6 +1,10 @@
 import database from "@/../infra/database";
 
 import {
+  PARTIAL_RUN_MARKER,
+  isPartialRunMessage,
+} from "@/shared/errors/partial-run-error";
+import {
   parsePartitionBound,
   type PartitionRange,
 } from "@/shared/route/driver-position-rules";
@@ -73,6 +77,18 @@ interface CronJobMetrics {
 
   /** RUNNING rows whose lease ran out: a run whose replica died mid-way. */
   stale_running: number;
+
+  /**
+   * The latest run stopped with work left (FAILED "[partial]", F1-17): the
+   * catch-up sweep retries it inside the partial window.
+   */
+  last_partial: boolean;
+
+  /**
+   * The first partial run since the last success: how long the job has
+   * done nothing but partials. Null when the latest run is not partial.
+   */
+  partial_since: string | null;
 }
 
 /** Enough of the error to recognise it on a screen. */
@@ -106,6 +122,7 @@ async function readCronJobs(
       }>;
       succeeded: Array<{ jobName: string; last: string | null }>;
       stale: Array<{ jobName: string; n: number }>;
+      partial: Array<{ jobName: string; since: string | null }>;
     }>
   >`
     SELECT
@@ -129,7 +146,18 @@ async function readCronJobs(
         FROM "scheduled_job_execution"
         WHERE "status" = 'RUNNING' AND "leaseExpiresAt" < now()
         GROUP BY "jobName"
-      ) r) AS stale
+      ) r) AS stale,
+      (SELECT coalesce(json_agg(p), '[]'::json) FROM (
+        SELECT e."jobName", min(e."scheduledFor") AT TIME ZONE 'UTC' AS since
+        FROM "scheduled_job_execution" e
+        WHERE e."status" = 'FAILED'
+          AND starts_with(e."lastError", ${PARTIAL_RUN_MARKER})
+          AND e."scheduledFor" > coalesce((
+            SELECT max(s."scheduledFor") FROM "scheduled_job_execution" s
+            WHERE s."jobName" = e."jobName" AND s."status" = 'SUCCEEDED'
+          ), '-infinity'::timestamp)
+        GROUP BY e."jobName"
+      ) p) AS partial
   `;
 
   const iso = (value: string | null | undefined) =>
@@ -138,6 +166,7 @@ async function readCronJobs(
   const latest = row?.latest ?? [];
   const succeeded = row?.succeeded ?? [];
   const stale = row?.stale ?? [];
+  const partial = row?.partial ?? [];
 
   const schedules = new Map(registered.map((job) => [job.name, job.schedule]));
   const latestBy = new Map(latest.map((row) => [row.jobName, row]));
@@ -145,11 +174,17 @@ async function readCronJobs(
     succeeded.map((entry) => [entry.jobName, iso(entry.last)]),
   );
   const staleBy = new Map(stale.map((row) => [row.jobName, row.n]));
+  const partialBy = new Map(
+    partial.map((entry) => [entry.jobName, iso(entry.since)]),
+  );
 
   const names = [...new Set([...schedules.keys(), ...latestBy.keys()])].sort();
 
   return names.map((job) => {
     const row = latestBy.get(job);
+    const lastPartial =
+      row?.status === "FAILED" && isPartialRunMessage(row.lastError);
+    const partialSince = lastPartial ? partialBy.get(job) : undefined;
 
     return {
       job,
@@ -161,6 +196,8 @@ async function readCronJobs(
       attempts: row?.attempts ?? null,
       last_error: row?.lastError?.slice(0, CRON_ERROR_MAX_LENGTH) ?? null,
       stale_running: staleBy.get(job) ?? 0,
+      last_partial: lastPartial,
+      partial_since: partialSince ?? null,
     };
   });
 }

@@ -1,6 +1,7 @@
 import { Prisma } from "@prisma/client";
 
 import database from "@/../infra/database";
+import { env } from "@/env";
 
 /**
  * Rows removed per statement.
@@ -15,15 +16,20 @@ import database from "@/../infra/database";
 const DELETE_BATCH_SIZE = 5_000;
 
 /**
- * Wall-clock ceiling for one purge run.
+ * When one purge run stops, whatever is left: now plus
+ * CRON_PURGE_RUN_BUDGET_MS (5 minutes by default, and never more).
  *
  * CronSchedulerService leases an execution for 10 minutes
  * (EXECUTION_LEASE_MS), and its catch-up sweep treats a run past the lease as
  * dead: it marks it FAILED and may run the job again. Stopping at half the
- * lease keeps a slow purge from ever running alongside its own re-run;
- * whatever is left is picked up by the next night's run.
+ * lease keeps a slow purge from ever running alongside its own re-run. What
+ * is left makes the run partial (PartialRunError): the catch-up sweep takes
+ * it again inside the partial window, or the next night does. Read when the
+ * run starts, so a test can lower it.
  */
-const PURGE_RUN_BUDGET_MS = 5 * 60 * 1000;
+function purgeDeadline(now: number = Date.now()): number {
+  return now + env.CRON_PURGE_RUN_BUDGET_MS;
+}
 
 interface BatchDeleteParams {
   /** Quoted table name, e.g. Prisma.sql`"domain_outbox_event"`. */
@@ -58,10 +64,26 @@ interface BatchDeleteResult {
   deleted: number;
 
   /**
-   * True when the loop stopped on `maxRows` or on the deadline rather than
-   * because nothing was left — i.e. there is still a backlog to purge.
+   * True when the loop stopped on `maxRows` or on the deadline AND a row
+   * still matches — i.e. there is still a backlog to purge. A run that hit
+   * its ceiling or its deadline right as the last row went is not partial:
+   * a probe asks before saying so.
    */
   stoppedEarly: boolean;
+}
+
+/**
+ * Whether any row still matches: one row of the same predicate, before a
+ * run calls itself partial. Without it, a table holding exactly `maxRows`
+ * due rows, or a deadline passing right after the last batch, would page
+ * and re-run a purge with nothing left to do.
+ */
+async function anyLeft(table: Prisma.Sql, where: Prisma.Sql): Promise<boolean> {
+  const [row] = await database.$queryRaw<Array<{ left: boolean }>>`
+    SELECT EXISTS (SELECT 1 FROM ${table} WHERE ${where}) AS "left"
+  `;
+
+  return Boolean(row?.left);
 }
 
 /**
@@ -89,7 +111,7 @@ async function deleteInBatches({
 
   while (deleted < maxRows) {
     if (Date.now() >= deadline) {
-      return { deleted, stoppedEarly: true };
+      return { deleted, stoppedEarly: await anyLeft(table, where) };
     }
 
     const limit = Math.min(DELETE_BATCH_SIZE, maxRows - deleted);
@@ -115,7 +137,7 @@ async function deleteInBatches({
     }
   }
 
-  return { deleted, stoppedEarly: true };
+  return { deleted, stoppedEarly: await anyLeft(table, where) };
 }
 
-export { deleteInBatches, DELETE_BATCH_SIZE, PURGE_RUN_BUDGET_MS };
+export { anyLeft, deleteInBatches, DELETE_BATCH_SIZE, purgeDeadline };

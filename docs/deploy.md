@@ -3785,22 +3785,22 @@ fora, processo morto, scheduler parado → **nenhum ping** (o silêncio é o
 alerta). Sem `HEALTHCHECK_PING_URL` os motivos só vão para o log
 (`operational check failed`).
 
-| Regra                                       | Dispara quando                                                                                                             |
-| ------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
-| Outbox                                      | evento **devido** esperando > 5 min                                                                                        |
-| Entregas internas (in-app, push, atividade) | entrega devida esperando > 5 min                                                                                           |
-| Entregas externas (e-mail, WhatsApp)        | entrega devida esperando > 15 min                                                                                          |
-| Webhooks                                    | linha devida esperando > 30 min                                                                                            |
-| IA                                          | análise devida esperando > 15 min                                                                                          |
-| Credencial                                  | primeira entrega FAILED nos últimos 10 min com erro de credencial (WhatsApp 401/403/190, SMTP EAUTH/535/530, push 401/403) |
-| Rajada                                      | 50 entregas FAILED do mesmo canal em 10 min                                                                                |
-| IA credencial                               | análise FAILED/PARTIAL com `authentication_error`/401/403                                                                  |
-| Cron                                        | job sem sucesso há 26 h, que rodou e nunca teve sucesso, ou com lease vencido                                              |
-| Partições                                   | `driver_position` com menos de 3 dias de partições à frente                                                                |
-| Worker travado                              | heartbeat sem progresso há 10 min numa réplica viva                                                                        |
-| Postgres                                    | conexões ≥ 80 % de `max_connections`                                                                                       |
-| Redis                                       | sem resposta ao PING em 2 s                                                                                                |
-| Certificado do comprovante                  | vence em 30 dias (aviso) / 7 dias (crítico), vencido ou inválido                                                           |
+| Regra                                       | Dispara quando                                                                                                                                             |
+| ------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Outbox                                      | evento **devido** esperando > 5 min                                                                                                                        |
+| Entregas internas (in-app, push, atividade) | entrega devida esperando > 5 min                                                                                                                           |
+| Entregas externas (e-mail, WhatsApp)        | entrega devida esperando > 15 min                                                                                                                          |
+| Webhooks                                    | linha devida esperando > 30 min                                                                                                                            |
+| IA                                          | análise devida esperando > 15 min                                                                                                                          |
+| Credencial                                  | primeira entrega FAILED nos últimos 10 min com erro de credencial (WhatsApp 401/403/190, SMTP EAUTH/535/530, push 401/403)                                 |
+| Rajada                                      | 50 entregas FAILED do mesmo canal em 10 min                                                                                                                |
+| IA credencial                               | análise FAILED/PARTIAL com `authentication_error`/401/403                                                                                                  |
+| Cron                                        | job sem sucesso há 26 h, que rodou e nunca teve sucesso, ou com lease vencido; um expurgo parcial só depois de 26 h só de parciais (a primeira não alerta) |
+| Partições                                   | `driver_position` com menos de 3 dias de partições à frente                                                                                                |
+| Worker travado                              | heartbeat sem progresso há 10 min numa réplica viva                                                                                                        |
+| Postgres                                    | conexões ≥ 80 % de `max_connections`                                                                                                                       |
+| Redis                                       | sem resposta ao PING em 2 s                                                                                                                                |
+| Certificado do comprovante                  | vence em 30 dias (aviso) / 7 dias (crítico), vencido ou inválido                                                                                           |
 
 Limiares em `DEFAULT_ALERT_THRESHOLDS` (`alert-rules.ts`).
 
@@ -3827,19 +3827,19 @@ Limiares em `DEFAULT_ALERT_THRESHOLDS` (`alert-rules.ts`).
 
 ### Primeira ação por motivo
 
-| Motivo começa com                                     | Primeiro passo                                                                                                                                                                      |
-| ----------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `Canal WHATSAPP: falha de credencial`                 | token da Meta vencido/revogado: gerar token de sistema novo no Business Manager e atualizar `META_WHATSAPP_ACCESS_TOKEN`; as falhas estão em `/health/dead-letter?channel=WHATSAPP` |
-| `Canal EMAIL: falha de credencial`                    | chave do Resend revogada ou domínio desverificado                                                                                                                                   |
-| `Canal PUSH: falha de credencial`                     | a credencial FCM V1 do projeto no EAS (`eas credentials`), ou o _Enhanced Security for Push Notifications_ ligado no projeto Expo: a API não envia token de acesso da Expo          |
-| `Canal X: N entregas falharam de vez`                 | abrir o dead letter do canal e ler o prefixo `[... code=...]` mais comum                                                                                                            |
-| `Outbox` / `Entregas` / `Webhooks` / `Análises de IA` | `workers` em `/health/metrics` e o log da réplica; reiniciar a task travada                                                                                                         |
-| `Cron X`                                              | `cron_jobs` em `/health/metrics` traz `last_error`; o catch-up refaz jobs diários a cada hora                                                                                       |
-| `driver_position`                                     | rodar o job de partições (idempotente) e ver por que falhou                                                                                                                         |
-| `Postgres`                                            | `runtime.prisma_pool` em `/health/metrics`; réplicas × `connection_limit`                                                                                                           |
-| `Redis`                                               | a API segue (fail-open), mas o rate limit fica local e o Socket.IO não cruza réplicas                                                                                               |
-| `Certificado ICP do comprovante vence em`             | renovar o A1 antes da data e trocar `PROOF_SIGNING_PFX_*`; `proof_signing` em `/health/metrics` mostra `not_after` e `days_left`                                                    |
-| `Certificado ICP ... vencido` / `inválido`            | os comprovantes saem sem assinatura (e dizem isso); `PFX_UNREADABLE` = senha errada ou arquivo corrompido, `PFX_FILE_UNREADABLE` = o arquivo não montou                             |
+| Motivo começa com                                     | Primeiro passo                                                                                                                                                                                                    |
+| ----------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Canal WHATSAPP: falha de credencial`                 | token da Meta vencido/revogado: gerar token de sistema novo no Business Manager e atualizar `META_WHATSAPP_ACCESS_TOKEN`; as falhas estão em `/health/dead-letter?channel=WHATSAPP`                               |
+| `Canal EMAIL: falha de credencial`                    | chave do Resend revogada ou domínio desverificado                                                                                                                                                                 |
+| `Canal PUSH: falha de credencial`                     | a credencial FCM V1 do projeto no EAS (`eas credentials`), ou o _Enhanced Security for Push Notifications_ ligado no projeto Expo: a API não envia token de acesso da Expo                                        |
+| `Canal X: N entregas falharam de vez`                 | abrir o dead letter do canal e ler o prefixo `[... code=...]` mais comum                                                                                                                                          |
+| `Outbox` / `Entregas` / `Webhooks` / `Análises de IA` | `workers` em `/health/metrics` e o log da réplica; reiniciar a task travada                                                                                                                                       |
+| `Cron X`                                              | `cron_jobs` em `/health/metrics` traz `last_error`; o catch-up refaz jobs diários a cada hora. `Cron X: só execuções parciais` = o expurgo não dá conta do que entra: ver [Expurgos parciais](#expurgos-parciais) |
+| `driver_position`                                     | rodar o job de partições (idempotente) e ver por que falhou                                                                                                                                                       |
+| `Postgres`                                            | `runtime.prisma_pool` em `/health/metrics`; réplicas × `connection_limit`                                                                                                                                         |
+| `Redis`                                               | a API segue (fail-open), mas o rate limit fica local e o Socket.IO não cruza réplicas                                                                                                                             |
+| `Certificado ICP do comprovante vence em`             | renovar o A1 antes da data e trocar `PROOF_SIGNING_PFX_*`; `proof_signing` em `/health/metrics` mostra `not_after` e `days_left`                                                                                  |
+| `Certificado ICP ... vencido` / `inválido`            | os comprovantes saem sem assinatura (e dizem isso); `PFX_UNREADABLE` = senha errada ou arquivo corrompido, `PFX_FILE_UNREADABLE` = o arquivo não montou                                                           |
 
 Para trocar uma variável: _Environment_ da Application → **Save** →
 **Deploy** (salvar sozinho não reinicia o contêiner).
@@ -3912,6 +3912,30 @@ WHERE ts > now() - interval '24 hours' AND role <> 'cluster'
 GROUP BY 1
 ORDER BY 1;
 ```
+
+### Expurgos parciais
+
+Os expurgos noturnos (`cleanup-*`, 03:17–04:50 UTC) apagam em lotes e
+param no orçamento da execução (`CRON_PURGE_RUN_BUDGET_MS`, 5 min) ou no
+teto de linhas de cada tabela. Se ainda houver linha vencida quando param
+(uma sonda confere, para um teto batido junto com a última linha não contar),
+a execução termina **FAILED com `last_error` começando por `[partial]`**,
+com o nome do que sobrou, e não mais SUCCEEDED; o log diz `cron job partial:
+stopped with work left` (aviso, não erro). Os passos seguintes do job rodam
+mesmo assim, e os expurgos pequenos vão primeiro, para o grande não gastar o
+orçamento deles.
+
+O catch-up de hora em hora (:07) repete uma execução parcial **só dentro de
+`CRON_PARTIAL_RETRY_WINDOW_UTC`** (06:00–09:00 UTC, depois dos backups das
+05:00 e antes da manhã) e no máximo `CRON_PARTIAL_RETRIES_PER_DAY` vezes no
+dia (3: às 06:07, 07:07 e 08:07); fora dela, a sobra espera a noite
+seguinte. Uma falha que não é parcial segue a regra de antes (sem sucesso em
+26 h, roda na próxima varredura, a qualquer hora). Em `/health/metrics`,
+`cron_jobs[].last_partial` e `partial_since` mostram o estado; o alerta só
+vem com 26 h só de parciais: aí o expurgo perde para o que entra, e o
+caminho é olhar o volume da tabela e o tempo de cada lote antes de subir
+o orçamento (que já está no máximo) ou o teto. A imagem anterior, durante um
+rolling deploy, lê a linha como um FAILED comum.
 
 ### Falhas que só o cliente vê
 

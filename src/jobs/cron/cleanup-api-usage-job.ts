@@ -2,8 +2,9 @@ import { Prisma } from "@prisma/client";
 
 import { CronJobDefinition } from "@/shared/services/cron-scheduler-service";
 import { logger } from "@/shared/logging/logger";
+import { throwIfPartial } from "@/shared/errors/partial-run-error";
 
-import { deleteInBatches, PURGE_RUN_BUDGET_MS } from "./batch-delete";
+import { deleteInBatches, purgeDeadline } from "./batch-delete";
 
 const log = logger.child({ component: "cron", job: "cleanup-api-usage" });
 
@@ -49,7 +50,7 @@ const cleanupApiUsageJob: CronJobDefinition = {
   schedule: "35 4 * * *",
 
   async handler() {
-    const deadline = Date.now() + PURGE_RUN_BUDGET_MS;
+    const deadline = purgeDeadline();
 
     // The last 400 civil days (UTC, like `day`), today included.
     const cutoff = new Date(
@@ -69,11 +70,8 @@ const cleanupApiUsageJob: CronJobDefinition = {
       "old API usage counts purged",
     );
 
-    if (result.stoppedEarly) {
-      log.warn(
-        "API usage purge stopped at the run's cap or deadline; the rest waits for the next window",
-      );
-    }
+    // Rows still due: FAILED "[partial]", for the catch-up's partial window.
+    throwIfPartial({ api_key_usage_daily: result });
   },
 };
 

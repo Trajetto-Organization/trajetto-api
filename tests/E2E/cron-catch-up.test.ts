@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 
 import type { CronJobDefinition } from "@/shared/services/cron-scheduler-service";
 import { createPrismaClient } from "@/shared/database/database-client";
+import { PartialRunError } from "@/shared/errors/partial-run-error";
 
 /**
  * A nightly job whose firing was lost comes back the same day (GAP6-9).
@@ -200,5 +201,114 @@ describe("a job that is not daily", () => {
     await schedulerWith(job).catchUp();
 
     expect(runs.count).toBe(0);
+  });
+});
+
+/**
+ * A purge that stops with rows still due (plano-escala F1-17).
+ *
+ * It used to end SUCCEEDED: nothing ran it again before the next night, and
+ * the backlog grew in silence. It now ends FAILED "[partial]", and the
+ * sweep takes it again only inside the partial window (06:00–09:00 UTC by
+ * default, after the 05:00 backups and before the morning), at most three
+ * times a day — never through business hours. The sweep's clock is
+ * injected: a day in the future, so no other row of the job is near it.
+ */
+describe("a purge that stops partial", () => {
+  const DAY = "2027-03-10";
+  const at = (time: string) => new Date(`${DAY}T${time}:00.000Z`);
+
+  type MutableEnv = { CRON_PURGE_RUN_BUDGET_MS: number };
+  let mutableEnv: MutableEnv;
+  let budget: number;
+  let purge: CronJobDefinition;
+
+  beforeAll(async () => {
+    const { env } = await import("@/env");
+    ({ cleanupNotificationPipelineJob: purge } =
+      await import("@/jobs/cron/cleanup-notification-pipeline-job"));
+
+    mutableEnv = env as unknown as MutableEnv;
+    budget = mutableEnv.CRON_PURGE_RUN_BUDGET_MS;
+
+    // A budget gone before the big purge starts: the small ones take more
+    // than a millisecond between them.
+    mutableEnv.CRON_PURGE_RUN_BUDGET_MS = 1;
+
+    // Published events past their 30 days: due, and left by every run here.
+    const processedAt = new Date(Date.now() - 40 * 24 * HOUR_MS);
+
+    await prisma.domainOutboxEvent.createMany({
+      data: Array.from({ length: 3 }, () => ({
+        eventKey: `partial-purge-${randomUUID()}`,
+        topic: "cron.partial",
+        aggregateType: "cron",
+        aggregateId: randomUUID(),
+        payload: {},
+        status: "PUBLISHED" as const,
+        processedAt,
+      })),
+    });
+  });
+
+  afterAll(async () => {
+    mutableEnv.CRON_PURGE_RUN_BUDGET_MS = budget;
+
+    await prisma.domainOutboxEvent.deleteMany({
+      where: { topic: "cron.partial" },
+    });
+  });
+
+  it("ends partial when its budget runs out with rows still due", async () => {
+    const outcome = await purge.handler().then(
+      () => null,
+      (error: unknown) => error,
+    );
+
+    expect(outcome).toBeInstanceOf(PartialRunError);
+    expect((outcome as Error).message).toMatch(
+      /^\[partial\] .*domain_outbox_event \(PUBLISHED\)/,
+    );
+
+    // The small purges ran and had nothing left: they are not named.
+    expect((outcome as PartialRunError).pending).toEqual([
+      "domain_outbox_event (PUBLISHED)",
+    ]);
+  });
+
+  it("is taken again at 06:07, 07:07 and 08:07, never at 04:07 nor 14:07", async () => {
+    // Last night's run, partial.
+    await prisma.scheduledJobExecution.create({
+      data: {
+        jobName: purge.name,
+        scheduledFor: at("03:30"),
+        status: "FAILED",
+        finishedAt: at("03:35"),
+        leaseExpiresAt: at("03:40"),
+        lastError: "[partial] parou no orçamento ou no teto com sobra em: x",
+      },
+    });
+
+    const scheduler = schedulerWith(purge);
+
+    for (const time of ["04:07", "06:07", "07:07", "08:07", "08:37", "14:07"]) {
+      await scheduler.catchUp(at(time));
+    }
+
+    const rows = await prisma.scheduledJobExecution.findMany({
+      where: { jobName: purge.name, scheduledFor: { gte: at("00:00") } },
+      orderBy: { scheduledFor: "asc" },
+    });
+
+    const hhmm = (row: { scheduledFor: Date }) =>
+      row.scheduledFor.toISOString().slice(11, 16);
+
+    expect(rows.map(hhmm)).toEqual(["03:30", "06:00", "07:00", "08:00"]);
+
+    // Each retry still had rows due: partial again, FAILED, never SUCCEEDED.
+    for (const row of rows) {
+      expect(row.status).toBe("FAILED");
+      expect(row.lastError).toMatch(/^\[partial\]/);
+    }
   });
 });

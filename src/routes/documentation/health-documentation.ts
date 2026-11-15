@@ -568,6 +568,19 @@ const healthResponses = {
             .describe(
               "RUNNING runs whose lease ran out — the replica died mid-run. The hourly catch-up sweep marks them FAILED.",
             ),
+          last_partial: z
+            .boolean()
+            .optional()
+            .describe(
+              "A última execução parou com trabalho por fazer (FAILED com last_error começando por `[partial]`): o catch-up a repete só na janela das parciais (CRON_PARTIAL_RETRY_WINDOW_UTC), até CRON_PARTIAL_RETRIES_PER_DAY vezes por dia.",
+            ),
+          partial_since: z
+            .string()
+            .nullable()
+            .optional()
+            .describe(
+              "A primeira execução parcial desde o último sucesso; null quando a última não é parcial. Com 26 h só de parciais, o alerta dispara.",
+            ),
         }),
       )
       .describe("Every scheduled job and how its runs went."),

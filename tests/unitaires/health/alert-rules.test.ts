@@ -250,6 +250,68 @@ describe("the machinery behind the queues", () => {
     ).toHaveLength(1);
   });
 
+  /**
+   * A partial purge (F1-17) did work and left some: the catch-up sweep
+   * retries it in the morning window, and the next night after that. The
+   * first partial is not a page, even when the last success is older than
+   * 26 h (a quiet night, then a big one); 26 h of nothing but partials is,
+   * because then the purge is losing to the inflow.
+   */
+  it("does not page on the first partial run, even after an old success", () => {
+    expect(
+      evaluateAlerts({
+        ...healthy(),
+        cronJobs: [
+          {
+            job: "cleanup-notification-pipeline",
+            lastStatus: "FAILED",
+            lastSucceededAt: new Date(NOW.getTime() - 30 * HOUR),
+            staleRunning: 0,
+            lastPartial: true,
+            partialSince: new Date(NOW.getTime() - 3 * HOUR),
+          },
+        ],
+      }),
+    ).toEqual([]);
+  });
+
+  it("does not page on a new job whose only runs were partial", () => {
+    expect(
+      evaluateAlerts({
+        ...healthy(),
+        cronJobs: [
+          {
+            job: "cleanup-expired-refresh-tokens",
+            lastStatus: "FAILED",
+            lastSucceededAt: null,
+            staleRunning: 0,
+            lastPartial: true,
+            partialSince: new Date(NOW.getTime() - 25 * HOUR),
+          },
+        ],
+      }),
+    ).toEqual([]);
+  });
+
+  it("pages after 26 hours of nothing but partial runs", () => {
+    const reasons = evaluateAlerts({
+      ...healthy(),
+      cronJobs: [
+        {
+          job: "cleanup-notification-pipeline",
+          lastStatus: "FAILED",
+          lastSucceededAt: new Date(NOW.getTime() - 50 * HOUR),
+          staleRunning: 0,
+          lastPartial: true,
+          partialSince: new Date(NOW.getTime() - 26 * HOUR - 60_000),
+        },
+      ],
+    });
+
+    expect(reasons).toHaveLength(1);
+    expect(reasons[0]).toMatch(/só execuções parciais há mais de 26h/);
+  });
+
   it("pages when the driver_position partitions are running out", () => {
     const reasons = evaluateAlerts({
       ...healthy(),

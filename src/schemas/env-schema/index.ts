@@ -6,6 +6,13 @@ import {
 } from "@/shared/ai/ai-provider-defaults";
 import { isValidCnpj } from "@/shared/delivery/cnpj";
 import { isPublicOsmTemplate, isTileTemplate } from "@/shared/map/map-tiles";
+import {
+  DEFAULT_PARTIAL_RETRIES_PER_DAY,
+  DEFAULT_PARTIAL_RETRY_WINDOW_UTC,
+  DEFAULT_PURGE_RUN_BUDGET_MS,
+  MAX_PURGE_RUN_BUDGET_MS,
+  parseUtcWindow,
+} from "@/shared/services/cron-limits";
 
 /** 32 characters of `openssl rand -base64` are ~192 bits: out of offline reach. */
 const JWT_SECRET_MIN_LENGTH = 32;
@@ -519,6 +526,46 @@ const envSchema = z
     SWARM_NODE_HOSTNAME: swarmLabel(),
     SWARM_TASK_SLOT: swarmLabel(),
     SWARM_SERVICE_NAME: swarmLabel(),
+
+    // The nightly purges and the partial runs (plano-escala F1-17). A purge
+    // stops at its run's budget and, with rows still due, ends FAILED with
+    // "[partial]" instead of SUCCEEDED; the catch-up sweep runs it again only
+    // inside the partial window and at most so many times that day. The
+    // budget can only be lowered: above half the run's 10-minute lease, a
+    // live purge would be taken for a dead one and run beside its own re-run,
+    // so the boot refuses it. The window is UTC, after the 05:00 backups and
+    // before the morning; 0 retries leaves the rest for the next night.
+    CRON_PURGE_RUN_BUDGET_MS: z.preprocess(
+      (value) => (value === "" ? undefined : value),
+      z.coerce
+        .number()
+        .int()
+        .min(1)
+        .max(
+          MAX_PURGE_RUN_BUDGET_MS,
+          `CRON_PURGE_RUN_BUDGET_MS vai até ${MAX_PURGE_RUN_BUDGET_MS} (metade do lease de 10 min do cron): acima disso, o catch-up tomaria um expurgo vivo por morto.`,
+        )
+        .default(DEFAULT_PURGE_RUN_BUDGET_MS),
+    ),
+    CRON_PARTIAL_RETRY_WINDOW_UTC: z.preprocess(
+      (value) => (value === "" ? undefined : value),
+      z
+        .string()
+        .refine(
+          (value) => parseUtcWindow(value) !== null,
+          "CRON_PARTIAL_RETRY_WINDOW_UTC é HH:MM-HH:MM em UTC, com o início antes do fim no mesmo dia (ex. 06:00-09:00).",
+        )
+        .default(DEFAULT_PARTIAL_RETRY_WINDOW_UTC),
+    ),
+    CRON_PARTIAL_RETRIES_PER_DAY: z.preprocess(
+      (value) => (value === "" ? undefined : value),
+      z.coerce
+        .number()
+        .int()
+        .min(0)
+        .max(24)
+        .default(DEFAULT_PARTIAL_RETRIES_PER_DAY),
+    ),
 
     /**
      * The internal reference at /docs.

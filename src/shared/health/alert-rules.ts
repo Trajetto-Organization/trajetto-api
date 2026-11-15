@@ -21,6 +21,14 @@ interface CronJobState {
 
   /** RUNNING rows whose lease ran out: a run whose replica died mid-way. */
   staleRunning: number;
+
+  /**
+   * The latest run stopped with work left (FAILED "[partial]", F1-17), and
+   * since when the job has done nothing but partials. Absent on a snapshot
+   * that did not read them, which judges the job as before.
+   */
+  lastPartial?: boolean;
+  partialSince?: Date | null;
 }
 
 interface OperationalSnapshot {
@@ -246,6 +254,27 @@ function evaluateAlerts(
       reasons.push(
         `Cron ${job.job}: execução interrompida (lease vencido) — a réplica caiu no meio do job`,
       );
+      continue;
+    }
+
+    // A partial run did work and left some (F1-17): the catch-up sweep takes
+    // it again in the partial window, and the next night after that. The
+    // first one is not an alert; 26 h of nothing but partials is, because
+    // then the purge is losing to the inflow.
+    if (job.lastPartial) {
+      const partialAge =
+        job.partialSince === null || job.partialSince === undefined
+          ? null
+          : snapshot.now.getTime() - job.partialSince.getTime();
+
+      if (partialAge !== null && partialAge > thresholds.cronStaleMs) {
+        reasons.push(
+          `Cron ${job.job}: só execuções parciais há mais de ${Math.round(
+            thresholds.cronStaleMs / 3_600_000,
+          )}h (o expurgo não dá conta do que entra)`,
+        );
+      }
+
       continue;
     }
 

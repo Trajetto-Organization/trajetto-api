@@ -1,13 +1,15 @@
 import { Prisma } from "@prisma/client";
 
 import database from "@/../infra/database";
+import { throwIfPartial } from "@/shared/errors/partial-run-error";
 import { CronJobDefinition } from "@/shared/services/cron-scheduler-service";
 import { logger } from "@/shared/logging/logger";
 
 import {
+  anyLeft,
   DELETE_BATCH_SIZE,
   deleteInBatches,
-  PURGE_RUN_BUDGET_MS,
+  purgeDeadline,
 } from "./batch-delete";
 import { OPS_HEARTBEAT_JOB } from "./ops-heartbeat-job";
 
@@ -50,8 +52,8 @@ const HEARTBEAT_EXECUTION_RETENTION_DAYS = 2;
  * a "~400k events/day" figure that was off by a factor of three to four — sat
  * BELOW the inflow: the table would have grown every night. 5M is about three
  * days of inflow, so a skipped night is caught up by the next run. In
- * practice the run's deadline (PURGE_RUN_BUDGET_MS) is the bound that bites
- * first; a run stopped by either one says so in the log.
+ * practice the run's deadline (CRON_PURGE_RUN_BUDGET_MS) is the bound that
+ * bites first; a run stopped by either one with events still due is partial.
  */
 const MAX_PUBLISHED_PER_RUN = 5_000_000;
 
@@ -162,10 +164,17 @@ function publishedPurgeBatchSql(
   `;
 }
 
+/** What the PUBLISHED purge matches, for the probe before a partial. */
+function duePublishedSql(publishedBefore: Date): Prisma.Sql {
+  return Prisma.sql`"status" = 'PUBLISHED' AND "processedAt" < ${publishedBefore}`;
+}
+
 /**
  * Deletes due PUBLISHED events in batches, archiving their failed deliveries
  * on the way, until none is left, the cap is reached or the deadline passes.
  * Each batch is its own statement, so no transaction outlives a batch.
+ * Stopped by the cap or the deadline, it asks whether an event is still due
+ * before calling the run partial (as deleteInBatches does).
  */
 async function purgePublishedEvents(
   publishedBefore: Date,
@@ -174,9 +183,12 @@ async function purgePublishedEvents(
   let deleted = 0;
   let archived = 0;
 
+  const table = Prisma.sql`"domain_outbox_event"`;
+  const due = duePublishedSql(publishedBefore);
+
   while (deleted < MAX_PUBLISHED_PER_RUN) {
     if (Date.now() >= deadline) {
-      return { deleted, archived, stoppedEarly: true };
+      return { deleted, archived, stoppedEarly: await anyLeft(table, due) };
     }
 
     const limit = Math.min(DELETE_BATCH_SIZE, MAX_PUBLISHED_PER_RUN - deleted);
@@ -195,7 +207,7 @@ async function purgePublishedEvents(
     }
   }
 
-  return { deleted, archived, stoppedEarly: true };
+  return { deleted, archived, stoppedEarly: await anyLeft(table, due) };
 }
 
 /**
@@ -225,7 +237,7 @@ const cleanupNotificationPipelineJob: CronJobDefinition = {
   schedule: "30 3 * * *",
 
   async handler() {
-    const deadline = Date.now() + PURGE_RUN_BUDGET_MS;
+    const deadline = purgeDeadline();
 
     const publishedBefore = new Date(
       Date.now() - PUBLISHED_RETENTION_DAYS * DAY_MS,
@@ -236,10 +248,42 @@ const cleanupNotificationPipelineJob: CronJobDefinition = {
       Date.now() - JOB_EXECUTION_RETENTION_DAYS * DAY_MS,
     );
 
-    // Each batch copies the failed deliveries of the events it deletes, in
-    // the same statement: the cascade from a purged event takes its
-    // deliveries (publishedPurgeBatchSql).
-    const published = await purgePublishedEvents(publishedBefore, deadline);
+    // The small purges first, the big one last (F1-17): they share one
+    // budget, and the PUBLISHED purge alone can spend all of it. Each one
+    // that stops with rows left makes the run partial, at the end.
+    const executions = await deleteInBatches({
+      table: Prisma.sql`"scheduled_job_execution"`,
+      where: Prisma.sql`"created_at" < ${executionsBefore}`,
+      maxRows: MAX_JOB_EXECUTIONS_PER_RUN,
+      deadline,
+    });
+
+    // A range of the (jobName, scheduledFor) unique index.
+    const heartbeatExecutions = await deleteInBatches({
+      table: Prisma.sql`"scheduled_job_execution"`,
+      where: Prisma.sql`"jobName" = ${OPS_HEARTBEAT_JOB} AND "scheduledFor" < ${new Date(
+        Date.now() - HEARTBEAT_EXECUTION_RETENTION_DAYS * DAY_MS,
+      )}`,
+      maxRows: MAX_JOB_EXECUTIONS_PER_RUN,
+      deadline,
+    });
+
+    const goneReplicas = await database.workerHeartbeat.deleteMany({
+      where: {
+        updated_at: {
+          lt: new Date(Date.now() - HEARTBEAT_RETENTION_DAYS * DAY_MS),
+        },
+      },
+    });
+
+    const untiedReceipts = await deleteInBatches({
+      table: Prisma.sql`"notification_provider_receipt"`,
+      where: Prisma.sql`"deliveryId" IS NULL AND "created_at" < ${new Date(
+        Date.now() - UNTIED_RECEIPT_RETENTION_DAYS * DAY_MS,
+      )}`,
+      maxRows: MAX_UNTIED_RECEIPTS_PER_RUN,
+      deadline,
+    });
 
     // The archive's own retention, counted from the failure. failedAt is
     // indexed, so the scan starts at the oldest rows and stops at the batch.
@@ -258,39 +302,10 @@ const cleanupNotificationPipelineJob: CronJobDefinition = {
       deadline,
     });
 
-    const executions = await deleteInBatches({
-      table: Prisma.sql`"scheduled_job_execution"`,
-      where: Prisma.sql`"created_at" < ${executionsBefore}`,
-      maxRows: MAX_JOB_EXECUTIONS_PER_RUN,
-      deadline,
-    });
-
-    // A range of the (jobName, scheduledFor) unique index.
-    const heartbeatExecutions = await deleteInBatches({
-      table: Prisma.sql`"scheduled_job_execution"`,
-      where: Prisma.sql`"jobName" = ${OPS_HEARTBEAT_JOB} AND "scheduledFor" < ${new Date(
-        Date.now() - HEARTBEAT_EXECUTION_RETENTION_DAYS * DAY_MS,
-      )}`,
-      maxRows: MAX_JOB_EXECUTIONS_PER_RUN,
-      deadline,
-    });
-
-    const untiedReceipts = await deleteInBatches({
-      table: Prisma.sql`"notification_provider_receipt"`,
-      where: Prisma.sql`"deliveryId" IS NULL AND "created_at" < ${new Date(
-        Date.now() - UNTIED_RECEIPT_RETENTION_DAYS * DAY_MS,
-      )}`,
-      maxRows: MAX_UNTIED_RECEIPTS_PER_RUN,
-      deadline,
-    });
-
-    const goneReplicas = await database.workerHeartbeat.deleteMany({
-      where: {
-        updated_at: {
-          lt: new Date(Date.now() - HEARTBEAT_RETENTION_DAYS * DAY_MS),
-        },
-      },
-    });
+    // Each batch copies the failed deliveries of the events it deletes, in
+    // the same statement: the cascade from a purged event takes its
+    // deliveries (publishedPurgeBatchSql).
+    const published = await purgePublishedEvents(publishedBefore, deadline);
 
     if (goneReplicas.count > 0) {
       log.info(
@@ -317,11 +332,16 @@ const cleanupNotificationPipelineJob: CronJobDefinition = {
       "notification pipeline purged",
     );
 
-    if (published.stoppedEarly || failed.stoppedEarly) {
-      log.warn(
-        "notification pipeline purge stopped at the run's cap or deadline; the rest waits for the next window",
-      );
-    }
+    // Every purge above ran; one that stopped with rows left makes the run
+    // FAILED "[partial]", for the catch-up sweep's partial window.
+    throwIfPartial({
+      "scheduled_job_execution (30 dias)": executions,
+      "scheduled_job_execution (ops-heartbeat)": heartbeatExecutions,
+      notification_provider_receipt: untiedReceipts,
+      notification_dead_letter: archiveExpired,
+      "domain_outbox_event (FAILED)": failed,
+      "domain_outbox_event (PUBLISHED)": published,
+    });
   },
 };
 

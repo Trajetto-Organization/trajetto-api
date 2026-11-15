@@ -232,6 +232,8 @@ async function collectOperationalSnapshot(
             ? new Date(job.last_succeeded_at)
             : null,
           staleRunning: job.stale_running,
+          lastPartial: job.last_partial,
+          partialSince: job.partial_since ? new Date(job.partial_since) : null,
         })),
     [],
   );

@@ -2,7 +2,25 @@ import cron, { ScheduledTask } from "node-cron";
 import { Prisma } from "@prisma/client";
 
 import database from "@/../infra/database";
+import { env } from "@/env";
+import {
+  isPartialRunError,
+  isPartialRunMessage,
+} from "@/shared/errors/partial-run-error";
 import { logger } from "@/shared/logging/logger";
+import {
+  catchUpDecision,
+  partialWindowOn,
+  type CatchUpFacts,
+  type PartialRetryPolicy,
+} from "@/shared/services/cron-catch-up-decision";
+import {
+  DEFAULT_PARTIAL_RETRIES_PER_DAY,
+  DEFAULT_PARTIAL_RETRY_WINDOW_UTC,
+  EXECUTION_LEASE_MS,
+  parseUtcWindow,
+  type UtcWindow,
+} from "@/shared/services/cron-limits";
 
 /** The shared logger (OBS-14): one structured line per run, with the job. */
 const log = logger.child({ component: "cron" });
@@ -41,15 +59,6 @@ interface CronJobDefinition {
 }
 
 /**
- * Ceiling on a single run. An expired lease means the replica stopped or lost
- * the database mid-run: the catch-up sweep marks that row FAILED and, if the
- * job has no success in its window, runs it again. Every purge stops at half
- * of this (PURGE_RUN_BUDGET_MS), so a live run is never mistaken for a dead
- * one.
- */
-const EXECUTION_LEASE_MS = 10 * 60 * 1000;
-
-/**
  * One missed nightly firing plus slack: a job whose last success is older
  * than this has missed at least one night and is run by the sweep.
  */
@@ -86,6 +95,23 @@ const ORPHANED_RUN_ERROR =
  * off here is resumed by the catch-up sweep.
  */
 const SHUTDOWN_WAIT_MS = 10 * 1000;
+
+/**
+ * The partial runs' retry policy (F1-17), from the environment. The schema
+ * already refused a window it cannot read; the default stands in for a test
+ * that replaced the env.
+ */
+function partialRetryPolicy(): PartialRetryPolicy {
+  const window =
+    parseUtcWindow(env.CRON_PARTIAL_RETRY_WINDOW_UTC ?? "") ??
+    (parseUtcWindow(DEFAULT_PARTIAL_RETRY_WINDOW_UTC) as UtcWindow);
+
+  return {
+    window,
+    retriesPerDay:
+      env.CRON_PARTIAL_RETRIES_PER_DAY ?? DEFAULT_PARTIAL_RETRIES_PER_DAY,
+  };
+}
 
 /** "M H * * *" with fixed minute and hour: fires once a day. */
 function isDailySchedule(schedule: string): boolean {
@@ -234,14 +260,27 @@ class CronSchedulerService {
         error instanceof Error ? error.message : String(error),
       );
 
-      log.error(
-        {
-          job: definition.name,
-          durationMs: Date.now() - startedAt,
-          err: error,
-        },
-        "cron job failed",
-      );
+      if (isPartialRunError(error)) {
+        // Work done and work left, not a breakage: FAILED "[partial]" so the
+        // catch-up sweep takes it again inside the partial window (F1-17).
+        log.warn(
+          {
+            job: definition.name,
+            durationMs: Date.now() - startedAt,
+            pending: error.pending,
+          },
+          "cron job partial: stopped with work left",
+        );
+      } else {
+        log.error(
+          {
+            job: definition.name,
+            durationMs: Date.now() - startedAt,
+            err: error,
+          },
+          "cron job failed",
+        );
+      }
     } finally {
       this.inFlight.delete(run);
       settle();
@@ -313,14 +352,19 @@ class CronSchedulerService {
    *
    * 1. RUNNING rows whose lease expired are marked FAILED (the lease bounds a
    *    live run, so only a dead one is past it);
-   * 2. every job with a catch-up window and no SUCCEEDED run inside it, and
-   *    no live RUNNING row, is run now, under a slot truncated to the HOUR.
-   *    The same unique-insert election applies, so replicas sweeping in the
-   *    same hour run it once, and a job that keeps failing is retried at most
-   *    once an hour.
+   * 2. every job with a catch-up window is decided by catchUpDecision: with
+   *    no SUCCEEDED run inside the window (and no live RUNNING row) it runs
+   *    now; when its LAST run was partial (FAILED "[partial]", F1-17) it runs
+   *    only inside CRON_PARTIAL_RETRY_WINDOW_UTC and at most
+   *    CRON_PARTIAL_RETRIES_PER_DAY times that day, never through business
+   *    hours. Each run goes under a slot truncated to the HOUR. The same
+   *    unique-insert election applies, so replicas sweeping in the same hour
+   *    run it once, and a job that keeps failing is retried at most once an
+   *    hour.
    *
-   * Accepted trade-off: a missed nightly purge may run during the day. Each
-   * run is bounded by its own budget (PURGE_RUN_BUDGET_MS, batch caps).
+   * Accepted trade-off: a missed nightly purge may run during the day (a
+   * partial one never does). Each run is bounded by its own budget
+   * (CRON_PURGE_RUN_BUDGET_MS, batch caps).
    */
   public async catchUp(now = new Date()): Promise<void> {
     if (this.stopping) return;
@@ -341,6 +385,8 @@ class CronSchedulerService {
     const hourSlot = new Date(now);
     hourSlot.setMinutes(0, 0, 0);
 
+    const policy = partialRetryPolicy();
+
     for (const definition of this.jobDefinitions) {
       // Checked before each job: the previous one may have run for minutes.
       if (this.stopping) return;
@@ -350,26 +396,30 @@ class CronSchedulerService {
       if (window === null) continue;
 
       try {
-        const covered = await database.scheduledJobExecution.findFirst({
-          where: {
-            jobName: definition.name,
-            OR: [
-              {
-                status: "SUCCEEDED",
-                scheduledFor: { gte: new Date(now.getTime() - window) },
-              },
-              // Past step 1, a RUNNING row still holds a live lease.
-              { status: "RUNNING" },
-            ],
-          },
-          select: { id: true },
-        });
+        const facts = await this.catchUpFacts(
+          definition.name,
+          now,
+          window,
+          policy,
+        );
+        const decision = catchUpDecision(facts, policy);
 
-        if (covered) continue;
+        if (!decision.run) {
+          if (decision.reason !== "covered") {
+            log.debug(
+              { job: definition.name, reason: decision.reason },
+              "cron catch-up skipped",
+            );
+          }
+
+          continue;
+        }
 
         log.warn(
-          { job: definition.name, windowMs: window },
-          "cron job has no successful run in its window; catching up",
+          { job: definition.name, windowMs: window, reason: decision.reason },
+          decision.reason === "partial"
+            ? "cron job stopped partial; catching up inside the partial window"
+            : "cron job has no successful run in its window; catching up",
         );
 
         await this.runExclusively(definition, new Date(hourSlot));
@@ -378,6 +428,57 @@ class CronSchedulerService {
         log.error({ job: definition.name, err: error }, "cron catch-up failed");
       }
     }
+  }
+
+  /** What catchUpDecision needs about one job: four small indexed reads. */
+  private async catchUpFacts(
+    jobName: string,
+    now: Date,
+    windowMs: number,
+    policy: PartialRetryPolicy,
+  ): Promise<CatchUpFacts> {
+    const lastRun = await database.scheduledJobExecution.findFirst({
+      where: { jobName },
+      orderBy: { scheduledFor: "desc" },
+      select: { status: true, lastError: true },
+    });
+
+    // Past step 1, a RUNNING row still holds a live lease.
+    const running = await database.scheduledJobExecution.findFirst({
+      where: { jobName, status: "RUNNING" },
+      select: { id: true },
+    });
+
+    const succeeded = await database.scheduledJobExecution.findFirst({
+      where: {
+        jobName,
+        status: "SUCCEEDED",
+        scheduledFor: { gte: new Date(now.getTime() - windowMs) },
+      },
+      select: { id: true },
+    });
+
+    // The nightly runs fire before the window (D28 of the scale plan): what
+    // is inside today's window is a retry of the sweep. Counted only when it
+    // matters, after a partial.
+    const today = partialWindowOn(now, policy.window);
+    const partialRetriesToday =
+      lastRun?.status === "FAILED" && isPartialRunMessage(lastRun.lastError)
+        ? await database.scheduledJobExecution.count({
+            where: {
+              jobName,
+              scheduledFor: { gte: today.start, lt: today.end },
+            },
+          })
+        : 0;
+
+    return {
+      now,
+      lastRun,
+      running: running !== null,
+      succeededInWindow: succeeded !== null,
+      partialRetriesToday,
+    };
   }
 
   public async initialize(): Promise<void> {

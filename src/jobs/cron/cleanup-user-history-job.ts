@@ -2,8 +2,9 @@ import { Prisma } from "@prisma/client";
 
 import { CronJobDefinition } from "@/shared/services/cron-scheduler-service";
 import { logger } from "@/shared/logging/logger";
+import { throwIfPartial } from "@/shared/errors/partial-run-error";
 
-import { deleteInBatches, PURGE_RUN_BUDGET_MS } from "./batch-delete";
+import { deleteInBatches, purgeDeadline } from "./batch-delete";
 
 const log = logger.child({ component: "cron", job: "cleanup-user-history" });
 
@@ -140,6 +141,37 @@ function resolveActivityRetentionDays(): number | null {
 }
 
 /**
+ * The opt-in purge of the audit trail (ACTIVITY_RETENTION_DAYS); off, it
+ * reads nothing and leaves nothing due.
+ */
+async function purgeActivities(
+  deadline: number,
+): Promise<{ stoppedEarly: boolean }> {
+  const activityRetentionDays = resolveActivityRetentionDays();
+
+  if (activityRetentionDays === null) return { stoppedEarly: false };
+
+  const activitiesBefore = new Date(
+    Date.now() - activityRetentionDays * DAY_MS,
+  );
+
+  const activities = await deleteInBatches({
+    table: Prisma.sql`"activity"`,
+    where: Prisma.sql`"created_at" < ${activitiesBefore}`,
+    orderBy: Prisma.sql`"created_at"`,
+    maxRows: MAX_ACTIVITIES_PER_RUN,
+    deadline,
+  });
+
+  log.info(
+    { deleted: activities.deleted, retentionDays: activityRetentionDays },
+    "opt-in activity trail purge done",
+  );
+
+  return activities;
+}
+
+/**
  * Retention for the two user-facing history tables, which until now grew
  * without any bound at all.
  *
@@ -159,7 +191,7 @@ const cleanupUserHistoryJob: CronJobDefinition = {
   schedule: "0 4 * * *",
 
   async handler() {
-    const deadline = Date.now() + PURGE_RUN_BUDGET_MS;
+    const deadline = purgeDeadline();
 
     const readBefore = new Date(
       Date.now() - READ_NOTIFICATION_RETENTION_DAYS * DAY_MS,
@@ -196,34 +228,11 @@ const cleanupUserHistoryJob: CronJobDefinition = {
 
     log.info({ deleted: notifications.deleted }, "old notifications purged");
 
-    if (notifications.stoppedEarly) {
-      log.warn(
-        "notification purge stopped at the run's cap or deadline; the rest waits for the next window",
-      );
-    }
+    const activities = await purgeActivities(deadline);
 
-    const activityRetentionDays = resolveActivityRetentionDays();
-
-    if (activityRetentionDays === null) {
-      return;
-    }
-
-    const activitiesBefore = new Date(
-      Date.now() - activityRetentionDays * DAY_MS,
-    );
-
-    const activities = await deleteInBatches({
-      table: Prisma.sql`"activity"`,
-      where: Prisma.sql`"created_at" < ${activitiesBefore}`,
-      orderBy: Prisma.sql`"created_at"`,
-      maxRows: MAX_ACTIVITIES_PER_RUN,
-      deadline,
-    });
-
-    log.info(
-      { deleted: activities.deleted, retentionDays: activityRetentionDays },
-      "opt-in activity trail purge done",
-    );
+    // Both purges ran; rows still due in either make the run FAILED
+    // "[partial]", for the catch-up's partial window.
+    throwIfPartial({ notification: notifications, activity: activities });
   },
 };
 
