@@ -121,7 +121,8 @@ const SERIALIZATION_SQLSTATES = new Set(["40001", "40P01"]);
 /**
  * Whether Postgres aborted a transaction only because a concurrent one got
  * there first, so the same transaction run again from the top may succeed.
- * The serializable retry loops (fuel and checklist repositories) ask this.
+ * The serializable retry loops (fuel and checklist repositories) ask this,
+ * and so does the map pin's deadlock retry (route repository).
  *
  * Under Prisma 7 the refusal has three shapes, and checking for P2034 alone
  * caught one of them:

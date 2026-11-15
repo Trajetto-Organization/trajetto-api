@@ -7,14 +7,17 @@ import type { PrismaClient } from "@prisma/client";
  *
  * Polls pg_stat_activity every 25 ms; throws after `timeoutMs`, naming
  * `what`, so a test whose writers never collided fails instead of passing
- * on a race that did not happen.
+ * on a race that did not happen. With `query`, only a backend whose
+ * statement contains that text counts: the one waiting where the test
+ * means, not one parked somewhere else first.
  */
 async function someoneWaitsOnALock(
   prisma: Pick<PrismaClient, "$queryRaw">,
   {
     timeoutMs = 8_000,
     what = "lock",
-  }: { timeoutMs?: number; what?: string } = {},
+    query,
+  }: { timeoutMs?: number; what?: string; query?: string } = {},
 ): Promise<void> {
   const until = Date.now() + timeoutMs;
 
@@ -24,6 +27,8 @@ async function someoneWaitsOnALock(
       FROM pg_stat_activity
       WHERE "datname" = current_database()
         AND "wait_event_type" = 'Lock'
+        AND (${query ?? null}::text IS NULL
+          OR strpos("query", ${query ?? null}::text) > 0)
     `;
 
     if (row.waiting > 0) return;

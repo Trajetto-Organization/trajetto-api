@@ -106,7 +106,34 @@ import type {
 } from "../dtos/route-dto";
 
 import type { RouteStatus } from "@/shared/route/route-rules";
-import { uniqueTargetOf } from "@/shared/errors/prisma-error-meta";
+import {
+  isSerializationFailure,
+  sqlStateOf,
+  uniqueTargetOf,
+} from "@/shared/errors/prisma-error-meta";
+import { logger } from "@/shared/logging/logger";
+
+const log = logger.child({ component: "route", action: "pin" });
+
+/**
+ * How many times a pin's transaction runs before a deadlock reaches the
+ * dispatcher: the budget of the serializable loops of the fuel and
+ * checklist repositories (three attempts), so a deadlock that keeps coming
+ * back still ends.
+ */
+const PIN_ATTEMPTS = 3;
+
+/**
+ * The pause before a pin runs again, 10 to 49 ms at random. Postgres only
+ * picks a victim after deadlock_timeout (1 s), so the winner already holds
+ * every lock it needs and the retry simply queues behind it; the spread
+ * keeps two pins that lost the same cycle from coming back in lockstep.
+ */
+function pinRetryPause(): Promise<void> {
+  const pauseMs = 10 + Math.floor(Math.random() * 40);
+
+  return new Promise((resolve) => setTimeout(resolve, pauseMs));
+}
 
 /**
  * Everything a panel or the app needs about a route, in one read. Stops come
@@ -2111,12 +2138,28 @@ class RouteRepository implements IRouteRepository {
     });
   }
 
+  /**
+   * The pin's transaction, run again from the top when Postgres aborts it
+   * as a deadlock victim (40P01) or a serialization failure
+   * (isSerializationFailure), up to PIN_ATTEMPTS. The pin locks the route,
+   * then the delivery, then the copies of its previous point (followSource,
+   * in id order); a bulk writer that already holds one of those copies and
+   * then reaches for the delivery — a route write's updateMany over its
+   * deliveries, a delete, an import undo — closes a cycle no order on this
+   * side can rule out, since the copies are only known once the delivery is
+   * locked and read. Postgres rolls the victim back whole, and every attempt
+   * reads the delivery's previous point again under its own lock, so a
+   * retry moves the copies the point they hold at that moment
+   * (tests/E2E/route-pin-deadlock.test.ts).
+   */
   async pinDeliveryLocation(
     deliveryId: string,
     businessId: string,
     point: { latitude: number; longitude: number } | null,
   ): Promise<PinnedLocation | null> {
-    return this.prisma.$transaction(async (tx) => {
+    const run = async (
+      tx: Prisma.TransactionClient,
+    ): Promise<PinnedLocation | null> => {
       // The route first, then the delivery: the order every route write
       // takes (route → stops → deliveries). Opposite orders deadlocked.
       const holder = await tx.routeStop.findFirst({
@@ -2235,7 +2278,24 @@ class RouteRepository implements IRouteRepository {
             : null,
         followed,
       };
-    });
+    };
+
+    for (let attempt = 1; ; attempt += 1) {
+      try {
+        return await this.prisma.$transaction(run);
+      } catch (error) {
+        if (!isSerializationFailure(error) || attempt >= PIN_ATTEMPTS) {
+          throw error;
+        }
+
+        log.warn(
+          { deliveryId, businessId, attempt, sqlState: sqlStateOf(error) },
+          "pin transaction aborted by a concurrent write; running it again",
+        );
+
+        await pinRetryPause();
+      }
+    }
   }
 
   async propagateAddressPoint(

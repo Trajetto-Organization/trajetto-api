@@ -1674,6 +1674,37 @@ chave da pausa guarda o motivo junto do prazo (`REFUSED`, `QUOTA` ou
     as cópias que mudaram ou foram apagadas mais as que receberam o ponto
     sem ter nenhum; o toast da web continua certo ("também receberam o
     ponto").
+  - **O pino roda de novo quando perde um deadlock.** O pino trava a
+    rota, depois a entrega, depois as cópias. Uma escrita em lote que já
+    segura uma cópia e depois pede a entrega (o `updateMany` por
+    `id IN (...)` das escritas da rota, a exclusão, o desfazer da
+    importação) fecha um ciclo que nenhuma ordem do lado do pino evita,
+    porque as cópias só são conhecidas com a entrega travada e lida. O
+    Postgres desfaz uma das duas com 40P01, e o despachante recebia 500.
+    Agora a transação do pino (`RouteRepository.pinDeliveryLocation`)
+    roda de novo do começo quando `isSerializationFailure` reconhece o
+    erro, até três tentativas (o orçamento dos laços do abastecimento e
+    do checklist), com uma pausa aleatória de 10 a 49 ms entre elas e uma
+    linha `warn` ("pin transaction aborted by a concurrent write…") a
+    cada nova tentativa. O Postgres desfaz a tentativa perdida inteira, e
+    cada tentativa relê o ponto anterior da entrega sob o próprio lock:
+    as cópias mudam a partir do ponto que a entrega tem naquele momento.
+    O `followSource` trava as cópias em ordem de id antes de gravar (um
+    sub-select com `ORDER BY "id" || ''` e `FOR NO KEY UPDATE`, as guardas
+    conferidas de novo em cada linha travada), e não cruza com quem também
+    trava entregas por id; o ciclo pela própria entrega fica com a nova
+    tentativa. A ordem é `"id" || ''`, e não `"id"`, de propósito: o
+    `ORDER BY "id"` puro sai de graça do `delivery_businessId_id_idx`, e o
+    planejador o escolheu, percorrendo as entregas da empresa com as
+    guardas como filtro em vez das poucas cópias do
+    `delivery_geo_copied_from_idx` mais uma ordenação
+    (`tests/E2E/delivery-address-point-create.test.ts` confere o plano).
+    Coberto por `tests/E2E/route-pin-deadlock.test.ts` (um deadlock de
+    verdade entre o pino e o `addStops`: o pino é a vítima, roda de novo e
+    responde 200, e a escrita da rota grava) e por
+    `tests/unitaires/route/route-pin-deadlock-retry.test.ts` (o 40P01 em
+    cada ponto da transação, o limite de tentativas, o erro que não se
+    repete e a pausa).
   - Toda leitura filtra `businessId`: a chave nunca cruza empresas. As
     linhas de antes ficam com a chave nula até o backfill do dono
     (`infra/scripts/backfill-delivery-address-key.ts`, sobre
@@ -3854,7 +3885,11 @@ desfaz a transação inteira da vítima, então rodá-la de novo é seguro (o
 orçamento de três tentativas impede laço; deadlock recorrente se corrige na
 ordem dos locks). Nunca teste `code === "P2034"` direto. Coberto por
 `tests/E2E/serializable-commit-retry.test.ts`, que segura a corrida aberta e
-prova que a primeira tentativa falhou no COMMIT e a segunda gravou.
+prova que a primeira tentativa falhou no COMMIT e a segunda gravou. O "Fixar
+no mapa" (`RouteRepository.pinDeliveryLocation`, em READ COMMITTED) usa a
+mesma pergunta e o mesmo orçamento para o deadlock que a ordem dos locks não
+evita, com uma pausa aleatória curta entre as tentativas
+(`tests/E2E/route-pin-deadlock.test.ts`).
 
 **Parâmetros de SQL cru vão sem tipo**: o Prisma 6 mandava cada parâmetro de
 `$queryRaw`/`$executeRaw` já tipado; o `pg` manda sem tipo e o Postgres deduz

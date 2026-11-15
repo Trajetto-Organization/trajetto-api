@@ -403,11 +403,12 @@ function followsSource(row: DoorCandidate, pin: SourcePin): boolean {
  * provider. A moved copy keeps its link: the source is still its root.
  * updated_at stays, as with every write of a copy. Read down
  * delivery_geo_copied_from_idx (the status literals prove its predicate):
- * the source's open copies, not the door. The door is compared with IS NOT
- * DISTINCT FROM on purpose (the key is never null here): an equality would
- * offer the planner delivery_address_key_idx too, and at a busy door — a
- * distribution centre, every closed copy GEOCODER — that index reads the
- * whole door to find the handful of open copies. The ids written.
+ * the source's open copies, not the door, locked in id order and written.
+ * The door is compared with IS NOT DISTINCT FROM on purpose (the key is
+ * never null here): an equality would offer the planner
+ * delivery_address_key_idx too, and at a busy door — a distribution
+ * centre, every closed copy GEOCODER — that index reads the whole door to
+ * find the handful of open copies. The ids written.
  */
 async function followSource(
   client: Pick<Prisma.TransactionClient, "$queryRaw">,
@@ -432,18 +433,38 @@ async function followSource(
         "geocode_attempts" = 0,
         "geo_copied_from" = NULL`;
 
+  // Locked in id order by the sub-select (LockRows runs over its Sort),
+  // then written. A bare UPDATE locks the copies in whatever order its scan
+  // meets them, and two writers that take the same rows in different orders
+  // deadlock; in id order, the pin queues behind a writer that also locks
+  // deliveries by id (an updateMany by id IN (...) probing the primary key)
+  // instead of crossing it. The order is `"id" || ''`, the same strings in
+  // the same collation, on purpose: a bare ORDER BY "id" is an order that
+  // delivery_businessId_id_idx gives for free, and the planner took it,
+  // walking the company's deliveries with the guards as a filter, instead
+  // of the handful of copies down delivery_geo_copied_from_idx and a sort.
+  // The guards are checked again on each row the sub-select locks, so a
+  // copy changed meanwhile is dropped, as the bare UPDATE dropped it. The
+  // cycle through the source itself, locked before its copies are known,
+  // is the pin's retry (RouteRepository.pinDeliveryLocation).
   const rows = await client.$queryRaw<Array<{ id: string }>>`
-    UPDATE "delivery"
+    UPDATE "delivery" AS d
     SET ${set}
-    WHERE "businessId" = ${pin.businessId}
-      AND "geo_copied_from" = ${pin.sourceId}
-      AND "status" IN ('PENDING', 'IN_TRANSIT')
-      AND "id" <> ${pin.sourceId}
-      AND "geo_source" = 'GEOCODER'
-      AND "latitude" = ${pin.previous.latitude}
-      AND "longitude" = ${pin.previous.longitude}
-      AND "address_key" IS NOT DISTINCT FROM ${pin.addressKey}
-    RETURNING "id"
+    FROM (
+      SELECT "id" FROM "delivery"
+      WHERE "businessId" = ${pin.businessId}
+        AND "geo_copied_from" = ${pin.sourceId}
+        AND "status" IN ('PENDING', 'IN_TRANSIT')
+        AND "id" <> ${pin.sourceId}
+        AND "geo_source" = 'GEOCODER'
+        AND "latitude" = ${pin.previous.latitude}
+        AND "longitude" = ${pin.previous.longitude}
+        AND "address_key" IS NOT DISTINCT FROM ${pin.addressKey}
+      ORDER BY "id" || ''
+      FOR NO KEY UPDATE
+    ) AS follower
+    WHERE d."id" = follower."id"
+    RETURNING d."id"
   `;
 
   return rows.map((row) => row.id);

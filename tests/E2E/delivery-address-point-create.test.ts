@@ -412,14 +412,20 @@ describe("the point of another delivery at the same door", () => {
               AND d."latitude" IS NULL AND d."geo_source" IS NULL`,
         ),
         follow: await explain(
-          `UPDATE "delivery" SET "geocode_status" = 'RESOLVED'
-            WHERE "businessId" = '${CARRIER}'
-              AND "geo_copied_from" = '${randomUUID()}'
-              AND "status" IN ('PENDING', 'IN_TRANSIT')
-              AND "id" <> ''
-              AND "geo_source" = 'GEOCODER'
-              AND "latitude" = -22.4 AND "longitude" = -43.1
-              AND "address_key" IS NOT DISTINCT FROM '${deliveryAddressKey(LIPOLD)}'`,
+          `UPDATE "delivery" AS d SET "geocode_status" = 'RESOLVED'
+            FROM (
+              SELECT "id" FROM "delivery"
+              WHERE "businessId" = '${CARRIER}'
+                AND "geo_copied_from" = '${randomUUID()}'
+                AND "status" IN ('PENDING', 'IN_TRANSIT')
+                AND "id" <> ''
+                AND "geo_source" = 'GEOCODER'
+                AND "latitude" = -22.4 AND "longitude" = -43.1
+                AND "address_key" IS NOT DISTINCT FROM '${deliveryAddressKey(LIPOLD)}'
+              ORDER BY "id" || ''
+              FOR NO KEY UPDATE
+            ) AS follower
+            WHERE d."id" = follower."id"`,
         ),
       };
     });
@@ -434,8 +440,15 @@ describe("the point of another delivery at the same door", () => {
     expect(plans.write).toContain("delivery_address_key_idx");
     expect(plans.write).toMatch(/Index Cond: .*geo_source IS NULL/);
 
-    // The follow-up reads the source's open copies, not the door.
-    expect(plans.follow).toContain("delivery_geo_copied_from_idx");
+    // The follow-up reads the source's open copies, not the door nor the
+    // company (a bare ORDER BY "id" took delivery_businessId_id_idx, whose
+    // order is the id's), locks them in id order (LockRows over the Sort)
+    // and writes each one by its primary key.
+    expect(plans.follow).toMatch(
+      /LockRows[\s\S]*Sort[\s\S]*delivery_geo_copied_from_idx/,
+    );
+    expect(plans.follow).not.toContain("delivery_businessId_id_idx");
+    expect(plans.follow).toContain("delivery_pkey");
   });
 });
 
