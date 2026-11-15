@@ -1403,7 +1403,7 @@ trajetto-api-production` no host depois de cada deploy (o deploy seguinte
 
    ```bash
    docker service inspect trajetto-api-production \
-     --format '{{.Spec.TaskTemplate.ContainerSpec.StopGracePeriod}}'
+     --format '{{json .Spec.TaskTemplate.ContainerSpec.StopGracePeriod}}'
    # 40000000000
    ```
 
@@ -2190,11 +2190,20 @@ promovido. São dois jeitos, escolhidos pela variável `ROLLOUT_VERIFY`
 - Entrada: `<SWARM_API_SERVICE> ghcr.io/trajetto-organization/trajetto-api@sha256:<digest>`
   — o App Name da API e o digest que este run publicou.
 - Lê: o `UpdateStatus` do serviço, as tasks e o digest da imagem do
-  contêiner de cada task.
-- Passa quando: o update terminou (`completed`) e toda task em execução roda
-  o digest esperado, na quantidade de réplicas.
+  contêiner de cada task. Na API, depois de convergir, também o _Stop Grace
+  Period_ da spec (ausente = os 10 s do Docker) e só a variável
+  `STOP_GRACE_PERIOD_MS` do _Environment_ (ausente = 10000): o filtro roda
+  dentro do template do `docker`, e nenhum outro valor do _Environment_
+  chega ao script.
+- Passa quando: o update terminou (`completed`), toda task em execução roda
+  o digest esperado, na quantidade de réplicas, e (na API) o grace cobre a
+  variável. A linha `grace: … cobre STOP_GRACE_PERIOD_MS=…` vai no log.
 - Falha quando: `rollback_*`/`paused`, uma task com outra imagem, 600 s sem
-  convergir (`ROLLOUT_TIMEOUT_SECONDS`).
+  convergir (`ROLLOUT_TIMEOUT_SECONDS`) ou, na API, `STOP_GRACE_PERIOD_MS`
+  acima do grace do serviço (contado em segundos inteiros, como o daemon
+  faz). Nesse caso a imagem nova já está no ar, mas cada deploy seguinte
+  mataria o desligamento ordenado no meio: suba o _Stop Grace Period_
+  ([seção 7.7](#77-trajetto-api-application), passo 8) ou baixe a variável.
 
 Como o Dokploy atualiza o serviço com a **tag** (`…:staging`/`…:stable`) e
 não grava o digest na spec, o script não compara a spec: ele lê o digest da
@@ -2202,7 +2211,9 @@ imagem do contêiner de cada task em execução. Limite: só enxerga contêinere
 do próprio nó (o manager). Com a VPS única, são todas as tasks; com mais nós
 no Swarm, o script precisa ser revisto.
 
-Instalação, uma vez, no host do Dokploy:
+Instalação, uma vez, no host do Dokploy, e de novo sempre que o script
+mudar no repositório (o host roda a cópia instalada; a de 15/11/2026 passou
+a conferir o grace):
 
 ```sh
 sudo install -m 755 infra/scripts/verify-rollout.sh /usr/local/bin/trajetto-verify-rollout
@@ -2225,6 +2236,7 @@ trajetto-verify-rollout trajetto-api-production ghcr.io/trajetto-organization/tr
 # conferência manual equivalente:
 docker service ps trajetto-api-production --filter desired-state=running --no-trunc --format '{{.Image}} {{.CurrentState}}'
 docker service inspect trajetto-api-production --format '{{.UpdateStatus.State}}'   # completed
+docker service inspect trajetto-api-production --format '{{json .Spec.TaskTemplate.ContainerSpec.StopGracePeriod}}'   # 40000000000 (null = 10 s)
 ```
 
 Desligar (só numa emergência, e fica registrado no resumo do run): variável

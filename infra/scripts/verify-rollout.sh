@@ -30,6 +30,13 @@
 #   - every task meant to run is Running that digest, as many as the replicas
 #     asked for, and no task of another image is left.
 #
+# Then, for the API only, the stop grace (plano-escala F1-16): the API
+# derives every deadline of its graceful shutdown from STOP_GRACE_PERIOD_MS
+# (src/shared/lifecycle/shutdown-plan.ts). Set above the Stop Grace Period
+# the service really has, every deploy SIGKILLs the old replicas halfway
+# through their shutdown, and the rollout converges all the same. So the
+# check fails, saying what to change, when the variable passes the grace.
+#
 # Usage, on the manager (the service is the Application's appName in Dokploy,
 # the repository variable SWARM_API_SERVICE):
 #   verify-rollout.sh trajetto-api-x1y2z3 ghcr.io/trajetto-organization/trajetto-api@sha256:<digest>
@@ -134,6 +141,65 @@ task_digest() {
   fi
 }
 
+# Whether the service's Stop Grace Period covers the API's
+# STOP_GRACE_PERIOD_MS. Both come from the spec: the grace (absent: Docker's
+# 10 s) and that one variable (absent or empty: the API's own 10 000),
+# filtered inside docker's template, so no other value of the Environment
+# (secrets among them) ever reaches this script. The daemon hands the
+# container the grace in whole seconds, so it is counted that way. A
+# repeated variable counts its last entry, as the container's environment
+# does. Fails the run on a mismatch; returns 1 when the spec could not be
+# read, and the caller polls again.
+stop_grace_covers() {
+  case "$REPO" in
+    */trajetto-api) ;;
+    *) return 0 ;;
+  esac
+
+  grace_info="$(docker service inspect "$SERVICE" --format '{{json .Spec.TaskTemplate.ContainerSpec.StopGracePeriod}}|{{range .Spec.TaskTemplate.ContainerSpec.Env}}{{if eq (index (split . "=") 0) "STOP_GRACE_PERIOD_MS"}}{{println .}}{{end}}{{end}}' 2> /dev/null)" || return 1
+
+  case "$grace_info" in
+    *'|'*) ;;
+    *) return 1 ;;
+  esac
+
+  grace_ns="${grace_info%%|*}"
+  declared="$(printf '%s\n' "${grace_info#*|}" | tail -n 1)"
+  declared="${declared#STOP_GRACE_PERIOD_MS=}"
+
+  case "$grace_ns" in
+    "" | null)
+      grace_ms=10000
+      grace_from="o padrão do Docker"
+      ;;
+    *[!0-9]*) return 1 ;;
+    *)
+      grace_ms=$((grace_ns / 1000000000 * 1000))
+      grace_from="o Stop Grace Period do serviço"
+      ;;
+  esac
+
+  case "$declared" in
+    "")
+      declared_ms=10000
+      declared_desc="STOP_GRACE_PERIOD_MS ausente (a API assume 10000)"
+      ;;
+    *[!0-9]* | ??????????*)
+      fail "STOP_GRACE_PERIOD_MS no Environment de ${SERVICE} não é um número inteiro de milissegundos (de 7000 a 300000): a API não sobe assim."
+      ;;
+    *)
+      declared_ms="$declared"
+      declared_desc="STOP_GRACE_PERIOD_MS=${declared}"
+      ;;
+  esac
+
+  if [ "$declared_ms" -gt "$grace_ms" ]; then
+    fail "${declared_desc} passa de ${grace_ms} ms, ${grace_from}: o Swarm mata o desligamento ordenado de ${SERVICE} no meio, em todo deploy. Ponha o Stop Grace Period do serviço em pelo menos ${declared_ms} ms (Advanced → Swarm Settings, conferido no docker service inspect) ou baixe a variável no Environment (docs/deploy.md, seção 7.7)."
+  fi
+
+  echo "[verify-rollout] grace: ${grace_ms} ms (${grace_from}) cobre STOP_GRACE_PERIOD_MS=${declared_ms}"
+}
+
 DEADLINE=$(($(date -u +%s) + TIMEOUT))
 LAST=""
 
@@ -197,14 +263,25 @@ EOF
       ;;
   esac
 
+  GRACE_UNREAD=""
+
   if [ -n "$SPEC" ] && { [ -z "$PINNED" ] || [ "$PINNED" = "$DIGEST" ]; } \
     && { [ -z "$STATE" ] || [ "$STATE" = completed ] || [ "$STATE" = rollback_completed ]; } \
     && [ "$READY" -gt 0 ] && [ "$READY" -eq "$TOTAL" ] && [ "$READY" -ge "${WANT:-1}" ]; then
-    echo "[verify-rollout] ok: ${SERVICE} roda ${DIGEST} em ${READY} réplica(s) (update: ${STATE:-nenhum})"
-    exit 0
+    # Converged: the grace is judged on the spec the service settled on.
+    if stop_grace_covers; then
+      echo "[verify-rollout] ok: ${SERVICE} roda ${DIGEST} em ${READY} réplica(s) (update: ${STATE:-nenhum})"
+      exit 0
+    fi
+
+    GRACE_UNREAD=1
   fi
 
   NOW="spec=${PINNED:-${SPEC##*:}} update=${STATE:-nenhum} prontas=${READY}/${WANT:-?} tasks=${TOTAL}"
+
+  if [ -n "$GRACE_UNREAD" ]; then
+    NOW="${NOW} grace=ilegível"
+  fi
 
   if [ "$UNKNOWN" -gt 0 ]; then
     NOW="${NOW} sem-digest-neste-nó=${UNKNOWN}"

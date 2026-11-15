@@ -89,7 +89,9 @@ function tagTask(
  * the rollout on their Nth call (the last step repeats): the script calls
  * each once per poll. A task's container is `c-<task>`, its image `i-<task>`,
  * and that image's RepoDigests are the file `image.<task>` (absent: the
- * container is not on this node).
+ * container is not on this node). The read of the stop grace and of
+ * STOP_GRACE_PERIOD_MS answers the file `grace` (absent: no grace set and no
+ * variable, `null|`).
  */
 const DOCKER = `
 step() {
@@ -101,6 +103,8 @@ last() { for arg in "$@"; do :; done; printf '%s' "$arg"; }
 case "$1 $2" in
   "service inspect")
     case "$*" in
+      *StopGracePeriod*)
+        if [ -f "$STUB_DIR/grace" ]; then cat "$STUB_DIR/grace"; else echo "null|"; fi ;;
       *--format*) step inspect ;;
       *) [ -f "$STUB_DIR/missing" ] && exit 1; echo "[]" ;;
     esac ;;
@@ -168,13 +172,15 @@ describe.skipIf(!sh)("the API rollout check (verify-rollout.sh)", () => {
   }
 
   // One per poll: the spec, its update state and replicas in one inspect.
+  // The stop grace is read apart, once the rollout converged.
   const inspections = () =>
     box
       .calls("docker")
       .filter(
         (call) =>
           call.startsWith("docker service inspect") &&
-          call.includes("--format"),
+          call.includes("--format") &&
+          !call.includes("StopGracePeriod"),
       ).length;
 
   it("waits through the update and succeeds once every replica runs the digest", () => {
@@ -355,6 +361,107 @@ describe.skipIf(!sh)("the API rollout check (verify-rollout.sh)", () => {
       expect(result.status).not.toBe(0);
       expect(result.stderr).toContain("não é o deste deploy");
       expect(inspections()).toBe(1);
+    });
+  });
+
+  /**
+   * The API derives every shutdown deadline from STOP_GRACE_PERIOD_MS
+   * (plano-escala F1-14). Set above the Stop Grace Period the service really
+   * has, every deploy SIGKILLs the old replicas halfway through their
+   * shutdown, and nothing says so: the rollout converges all the same. So
+   * the check reads both from the spec once the rollout converged
+   * (plano-escala F1-16): the grace, absent meaning Docker's 10 s, and the
+   * variable, absent meaning the API's own 10 000.
+   */
+  describe("the stop grace against STOP_GRACE_PERIOD_MS", () => {
+    const converged: Step[] = [
+      { inspect: `${spec(NEW)}|completed|2`, tasks: [task(NEW), task(NEW)] },
+    ];
+
+    it("passes with neither set: Docker's 10 s and the API's 10 s default", () => {
+      const result = rollout(converged);
+
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout).toContain(
+        "grace: 10000 ms (o padrão do Docker) cobre STOP_GRACE_PERIOD_MS=10000",
+      );
+    });
+
+    it("passes when the service's grace covers the variable", () => {
+      writeFileSync(
+        `${box.root}/grace`,
+        "40000000000|STOP_GRACE_PERIOD_MS=40000\n",
+      );
+
+      const result = rollout(converged);
+
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout).toContain(
+        "grace: 40000 ms (o Stop Grace Period do serviço) cobre STOP_GRACE_PERIOD_MS=40000",
+      );
+    });
+
+    it("fails, saying what to change, when the variable passes Docker's default grace", () => {
+      // The variable typed before the service got its 40 s.
+      writeFileSync(`${box.root}/grace`, "null|STOP_GRACE_PERIOD_MS=40000\n");
+
+      const result = rollout(converged);
+
+      expect(result.status).not.toBe(0);
+      expect(result.stdout).not.toContain("ok:");
+      expect(result.stderr).toContain(
+        `STOP_GRACE_PERIOD_MS=40000 passa de 10000 ms, o padrão do Docker`,
+      );
+      expect(result.stderr).toContain("Stop Grace Period");
+    });
+
+    it("counts the grace in whole seconds, as the daemon does", () => {
+      // 40.5 s reaches the container as a 40 s stop timeout.
+      writeFileSync(
+        `${box.root}/grace`,
+        "40500000000|STOP_GRACE_PERIOD_MS=40500\n",
+      );
+
+      const result = rollout(converged);
+
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain("passa de 40000 ms");
+    });
+
+    it("reads the last of a repeated variable, as the container does", () => {
+      writeFileSync(
+        `${box.root}/grace`,
+        "40000000000|STOP_GRACE_PERIOD_MS=90000\nSTOP_GRACE_PERIOD_MS=40000\n",
+      );
+
+      expect(rollout(converged).status).toBe(0);
+    });
+
+    it("fails on a variable that is not a whole number, without printing it", () => {
+      writeFileSync(
+        `${box.root}/grace`,
+        "40000000000|STOP_GRACE_PERIOD_MS=40s\n",
+      );
+
+      const result = rollout(converged);
+
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain("não é um número inteiro");
+      expect(result.stderr).not.toContain("40s");
+    });
+
+    it("asks docker for that one variable, never the whole Environment", () => {
+      rollout(converged);
+
+      const read = box
+        .calls("docker")
+        .find((call) => call.includes("StopGracePeriod"));
+
+      expect(read).toBeDefined();
+      expect(read).toContain('"STOP_GRACE_PERIOD_MS"');
+      expect(read).not.toMatch(
+        /\{\{json \.Spec\.TaskTemplate\.ContainerSpec\.Env\}\}/,
+      );
     });
   });
 

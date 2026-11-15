@@ -421,7 +421,8 @@ migrations não têm script no host: rodam pela Application
 | `POSTGRES_SERVICE`        | `backup-postgres.sh` | —      | `trajetto-postgres-production` | acha o contêiner do Database pelo App Name (ou `POSTGRES_CONTAINER`) |
 
 O serviço que o `verify-rollout.sh` confere vem do CI (variável
-`SWARM_API_SERVICE`, seção 16).
+`SWARM_API_SERVICE`, seção 16). Na API, ele também confere que o _Stop Grace Period_ do
+serviço cobre a `STOP_GRACE_PERIOD_MS` do _Environment_ dela (seção 1).
 
 ## 16. GitHub Actions
 
