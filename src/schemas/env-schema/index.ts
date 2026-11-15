@@ -15,6 +15,11 @@ import {
 } from "@/shared/services/cron-limits";
 import { HTTP_MAX_REQUESTS_PER_SOCKET_DEFAULT } from "@/config/http-server";
 import {
+  POSITIONS_FLUSH_AFTER_DEFAULT_MS,
+  POSITIONS_FLUSH_AFTER_MAX_MS,
+  POSITIONS_FLUSH_AFTER_MIN_MS,
+} from "@/shared/health/pressure-level";
+import {
   DEFAULT_STOP_GRACE_PERIOD_MS,
   MAX_STOP_GRACE_PERIOD_MS,
   MIN_STOP_GRACE_PERIOD_MS,
@@ -792,6 +797,23 @@ const envSchema = z
      * this is the longest a revoked session keeps receiving data.
      */
     SOCKET_REVALIDATE_MS: z.coerce.number().int().min(1_000).default(180_000),
+
+    /**
+     * The `nextFlushAfterMs` POST /route/positions answers when the replica
+     * is not pressed (plano-escala F2-26): twice it with the event loop over
+     * 70%, the app's 5-minute ceiling over 90% or while shedding
+     * (shared/health/pressure-level.ts). 60 s is the app's own interval, so
+     * the default changes nothing for a quiet fleet. Empty counts as absent.
+     */
+    POSITIONS_FLUSH_AFTER_MS: z.preprocess(
+      (value) => (value === "" ? undefined : value),
+      z.coerce
+        .number()
+        .int()
+        .min(POSITIONS_FLUSH_AFTER_MIN_MS)
+        .max(POSITIONS_FLUSH_AFTER_MAX_MS)
+        .default(POSITIONS_FLUSH_AFTER_DEFAULT_MS),
+    ),
 
     /**
      * Lowest driver-app `contract` still served (the app's CLIENT_CONTRACT,

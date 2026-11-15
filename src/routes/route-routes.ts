@@ -703,10 +703,12 @@ async function routeRoutes(app: FastifyInstance) {
       /**
        * The busiest route in the product, by an order of magnitude.
        *
-       * A phone takes a point every 15 s and flushes every 2 minutes or 20
+       * A phone takes a point every 15 s and flushes every 60 s or 20
        * points — about 2,400 points per driver in a ten-hour day; at 20k
-       * drivers, ~167 requests and ~1,300 points a second — and a whole fleet
-       * does it at once. The ceiling is per user (the rate limiter keys on the
+       * drivers, ~333 requests and ~1,333 points a second — and a whole
+       * fleet does it at once. Each answer says when to flush next
+       * (`nextFlushAfterMs`, plano-escala F2-26), longer when this replica
+       * is pressed, so the fleet slows down instead of piling retries on it. The ceiling is per user (the rate limiter keys on the
        * session), so one phone in a loop cannot spend the budget of the fleet
        * — and 120 a minute is far above the normal one request or so, which
        * leaves room for a device draining its outbox after a dead zone
@@ -724,7 +726,7 @@ async function routeRoutes(app: FastifyInstance) {
         tags: ["route"],
         summary: "O aplicativo do motorista informa onde está",
         description:
-          "O motorista vem da SESSÃO e nunca do corpo: um driverId enviado aqui deixaria qualquer telefone escrever a trilha de qualquer pessoa, e a trilha é com o que uma disputa se resolve. Só grava enquanto uma rota do motorista está IN_PROGRESS — fora disso responde `tracking: false` e o app PARA, porque continuar é gastar a bateria de alguém num mapa que ninguém está olhando. Pontos imprecisos demais, com coordenada impossível ou com relógio adiantado são descartados silenciosamente e contados em `rejected`: o app é offline-first e reenvia, então recusar o lote faria o telefone repetir o mesmo ponto ruim para sempre. Um acúmulo de região sem sinal é aceito inteiro até o teto do lote; só o ÚLTIMO ponto vai para o websocket (evento `driverPosition` na sala de operações da empresa), senão cada painel aberto redesenharia o mesmo ponto duzentas vezes.",
+          "O motorista vem da SESSÃO e nunca do corpo: um driverId enviado aqui deixaria qualquer telefone escrever a trilha de qualquer pessoa, e a trilha é com o que uma disputa se resolve. Só grava enquanto uma rota do motorista está IN_PROGRESS — fora disso responde `tracking: false` e o app PARA, porque continuar é gastar a bateria de alguém num mapa que ninguém está olhando. Pontos imprecisos demais, com coordenada impossível ou com relógio adiantado são descartados silenciosamente e contados em `rejected`: o app é offline-first e reenvia, então recusar o lote faria o telefone repetir o mesmo ponto ruim para sempre. Um acúmulo de região sem sinal é aceito inteiro até o teto do lote; só o ÚLTIMO ponto vai para o websocket (evento `driverPosition` na sala de operações da empresa), senão cada painel aberto redesenharia o mesmo ponto duzentas vezes. O app envia a cada 60 s ou 20 pontos; a resposta diz em `nextFlushAfterMs` quanto esperar antes do próximo envio, mais quando a réplica que respondeu está ocupada (120 s) ou no limite (300 s).",
         body: controlTowerSchemas.recordPositions,
         response: {
           200: controlTowerResponses.positionsRecorded,

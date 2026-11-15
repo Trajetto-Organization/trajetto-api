@@ -9,7 +9,7 @@ import { createPrismaClient } from "@/shared/database/database-client";
  * What one flush of the driver's phone costs the database.
  *
  * POST /route/positions is the hottest route in the product: every driver on
- * the road flushes every two minutes (or every twenty points). Measured
+ * the road flushes every 60 s (or every twenty points). Measured
  * before this test, one flush of a driver with a 40-stop route ran sixteen
  * statements, and only two of them were the writes it exists for:
  *
@@ -158,5 +158,35 @@ describe("one flush of positions from the driver's phone", () => {
     );
 
     expect(work.length, trace).toBeLessThanOrEqual(9);
+  });
+
+  // The answer says when to flush next (plano-escala F2-26), read from the
+  // replica's event loop in memory: the same flush, the same nine
+  // statements, and the hint inside the app's 15 s – 5 min range — 60 s on
+  // a replica that is not pressed.
+  it("says when to flush next without a statement more", async () => {
+    statements.length = 0;
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/route/positions",
+      headers: { authorization: `Bearer ${driverToken}` },
+      payload: { pings: pings(20) },
+    });
+
+    expect(response.statusCode, response.body).toBe(200);
+
+    const { nextFlushAfterMs } = response.json().data;
+
+    expect(Number.isInteger(nextFlushAfterMs), response.body).toBe(true);
+    expect(nextFlushAfterMs).toBeGreaterThanOrEqual(60_000);
+    expect(nextFlushAfterMs).toBeLessThanOrEqual(300_000);
+    expect([60_000, 120_000, 300_000]).toContain(nextFlushAfterMs);
+
+    const work = statements.filter(
+      (sql) => !/^\s*(BEGIN|COMMIT|ROLLBACK)\b/i.test(sql),
+    );
+
+    expect(work.length, statements.join("\n")).toBeLessThanOrEqual(9);
   });
 });

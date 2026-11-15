@@ -9,6 +9,10 @@ import {
   recordDriverPositionsSchema,
   routeMonitoringSchema,
 } from "@/schemas/driver-position-schema";
+import {
+  POSITIONS_FLUSH_AFTER_MAX_MS,
+  POSITIONS_FLUSH_AFTER_MIN_MS,
+} from "@/shared/health/pressure-level";
 
 /**
  * The operation's live surfaces: the phone's positions, the control tower,
@@ -333,6 +337,18 @@ const controlTowerResponses = {
         .boolean()
         .describe(
           "Falso quando nenhuma rota do motorista está em andamento. O app PARA de rastrear ao ver isto — continuar seria gastar a bateria de alguém num mapa que ninguém está olhando.",
+        ),
+
+      // Optional in the schema: the previous replica of a rolling deploy
+      // does not send it, and the app treats its absence as 60 s.
+      nextFlushAfterMs: z
+        .number()
+        .int()
+        .min(POSITIONS_FLUSH_AFTER_MIN_MS)
+        .max(POSITIONS_FLUSH_AFTER_MAX_MS)
+        .optional()
+        .describe(
+          "Quanto o app deve esperar, em milissegundos, antes do próximo envio de posições, pela carga da réplica que respondeu: 60000 normalmente (POSITIONS_FLUSH_AFTER_MS), 120000 com a réplica ocupada, 300000 com ela no limite. O app espera o maior entre este valor e o próprio intervalo, até 5 minutos, e guarda os pontos no aparelho enquanto isso. Ausente numa versão anterior da API: vale o intervalo do app.",
         ),
     }),
   }),

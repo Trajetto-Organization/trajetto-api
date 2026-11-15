@@ -4356,6 +4356,20 @@ parecer atualizada. Os números vão para o
 `/health/metrics` (`http`) e, a cada minuto, para a seção `http` do
 `ops_sample`.
 
+**Dica de envio das posições** (`src/shared/health/pressure-level.ts`,
+F2-26): o app do motorista envia as posições a cada 60 s ou 20 pontos, e
+toda resposta do `POST /route/positions` diz em `data.nextFlushAfterMs`
+quanto ele deve esperar antes do próximo envio, pela utilização do laço de
+eventos (ELU) da réplica que respondeu, na última janela de 5 s: abaixo de
+70%, `POSITIONS_FLUSH_AFTER_MS` (60 s); de 70% a 90%, o dobro (120 s); a
+partir de 90%, ou com descarte de carga ativo (o descarte chega na onda 9 e
+se registra por `registerSheddingProbe`), 300 s, o teto do app. A leitura é
+um contador em memória: nenhuma consulta, nenhum Redis, nenhum timer, e o
+orçamento de statements do envio não muda (o E2E
+`driver-positions-statement-budget` confere). O campo é opcional no schema:
+a réplica anterior de um rolling deploy não o manda, e o app trata a
+ausência como o intervalo dele.
+
 **Régua de rampa** (`src/shared/health/volume-gauge.ts`, U-12): cada
 processo conta as entregas que criou, **depois** do commit da transação que
 gravou a linha (criação no painel, pela integração, planilha e XML; o

@@ -374,6 +374,11 @@ describe("the day is trackable, which is the point", () => {
 
     expect(beforeDeparture.statusCode).toBe(200);
     expect(beforeDeparture.json().data.tracking).toBe(false);
+    // The flush hint rides on every answer, the one that stops the app
+    // included (plano-escala F2-26).
+    expect(beforeDeparture.json().data.nextFlushAfterMs).toBeGreaterThanOrEqual(
+      60_000,
+    );
 
     const started = await app.inject({
       method: "POST",
