@@ -29,6 +29,14 @@ import { providerMetrics } from "@/shared/health/provider-metrics";
 import { readRedisMetrics } from "@/shared/health/redis-metrics";
 import { collectDatabaseMetrics } from "@/shared/health/database-metrics";
 import { httpMetrics } from "@/shared/health/http-metrics";
+import { alertThresholdsFromEnv } from "@/shared/health/alert-rules";
+import {
+  readLatestTotals,
+  volumeGauge,
+  type VolumeTotals,
+} from "@/shared/health/volume-gauge";
+import { env } from "@/env";
+import { logger } from "@/shared/logging/logger";
 import { SnapshotCache } from "@/shared/cache/snapshot-cache";
 import { realtimeMetrics } from "@/websocket";
 import { gateStats } from "@/shared/security/bcrypt-gate";
@@ -51,14 +59,32 @@ import type { ProofSigningService } from "@/shared/services/proof-signing/proof-
  * each — still one after the other, so the endpoint never takes more than one
  * slot of the pool it reports on, the property it was built around. The
  * database's own numbers (F1-06, database-metrics.ts) come after them, up to
- * three more statements in the same order. Redis is read alongside them: it
- * is not the pool.
+ * three more statements in the same order, and the ramp's gauge last (F1-22:
+ * one read of the newest quarter-hour cluster row, over 20 minutes of the
+ * ts index). Redis is read alongside them: it is not the pool.
  *
  * The snapshot is per replica, like the runtime numbers in it, and lives ten
  * seconds: the Sistema screen, a second tab and an alert monitor polling it
  * are one read per interval, and concurrent readers share the one in flight.
  * A failed read is not cached — the next one tries again.
  */
+
+const log = logger.child({ component: "operational-metrics" });
+
+/**
+ * The ramp's newest sums, fail-open: a refused read leaves the gauge
+ * unknown (and a warning), never the whole endpoint failing during the
+ * incident it is opened for.
+ */
+async function readVolumeTotals(): Promise<VolumeTotals | null> {
+  try {
+    return await readLatestTotals(new Date());
+  } catch (error) {
+    log.warn({ err: error }, "volume gauge read failed");
+
+    return null;
+  }
+}
 
 /** Window the per-channel notification counters cover. */
 const NOTIFICATION_METRICS_WINDOW_HOURS = 24;
@@ -139,6 +165,12 @@ async function collectOperationalMetrics() {
   // copy. After the others, one at a time; it never throws, a part that
   // fails is a collection error.
   const databaseMetrics = await collectDatabaseMetrics();
+
+  // The ramp against the approved gate, the alert's own numbers (U-12).
+  const volume = volumeGauge(
+    await readVolumeTotals(),
+    alertThresholdsFromEnv(env),
+  );
 
   const windowCounts = new Map<string, number>();
   for (const row of snapshot.window_rows) {
@@ -265,6 +297,9 @@ async function collectOperationalMetrics() {
     // positions' contracts (plano-escala F1-09) — per replica, like
     // `runtime`; the ops_sample rows carry every replica's.
     http: httpMetrics.snapshot(),
+    // The newest quarter-hour sums of the cluster rows against the approved
+    // gate (plano-escala F1-22): what the volume-near-gate alert judges.
+    volume,
   };
 }
 

@@ -582,3 +582,94 @@ describe("the meeting-wave numbers", () => {
     });
   });
 });
+
+describe("the ramp's gauge", () => {
+  /**
+   * The Sistema tab shows the ramp next to the alert (plano-escala F1-22):
+   * the newest quarter-hour sums of the cluster rows, as the heartbeat's
+   * alert reads them (up to 20 minutes old), against the approved gate.
+   * Without a recent sum the numbers are unknown, not zero.
+   */
+  it("says unknown, with the gate, before any quarter-hour sum", async () => {
+    const response = await metrics(masterToken);
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json().volume).toEqual({
+      approved_gate_monthly: 10_000,
+      gate_ratio: 0.7,
+      daily_soft_cap: null,
+      last_24h: null,
+      last_7d: null,
+      projected_monthly: null,
+      gate_percent: null,
+      since: null,
+      measured_at: null,
+    });
+  });
+
+  it("reads the newest quarter-hour sums of the cluster rows", async () => {
+    const now = Date.now();
+    const at = (minutesAgo: number) => new Date(now - minutesAgo * 60_000);
+
+    await prisma.opsSample.createMany({
+      data: [
+        // Older than 20 minutes: the alert would not judge it either.
+        {
+          ts: at(25),
+          role: "cluster",
+          replica: "seed",
+          metrics: {
+            v: 1,
+            deliveries: { created: 1, last_24h: 1, last_7d: 1, since: null },
+          },
+        },
+        {
+          ts: at(4),
+          role: "cluster",
+          replica: "seed",
+          metrics: {
+            v: 1,
+            deliveries: {
+              created: 3,
+              last_24h: 400,
+              last_7d: 1_400,
+              since: at(6 * 24 * 60).toISOString(),
+            },
+          },
+        },
+        // Newer, but a minute row without the sums: it carries no totals.
+        {
+          ts: at(2),
+          role: "cluster",
+          replica: "seed",
+          metrics: { v: 1, deliveries: { created: 2 } },
+        },
+        // A process row with numbers in the same keys never counts.
+        {
+          ts: at(1),
+          role: "all",
+          replica: "api-1",
+          metrics: {
+            v: 1,
+            deliveries: { created: 9, last_24h: 9, last_7d: 9 },
+          },
+        },
+      ],
+    });
+
+    const volume = (await metrics(masterToken)).json().volume;
+
+    // 1 400 a week is 6 000 a month: 60% of the 10 000 gate.
+    expect(volume).toEqual({
+      approved_gate_monthly: 10_000,
+      gate_ratio: 0.7,
+      daily_soft_cap: null,
+      last_24h: 400,
+      last_7d: 1_400,
+      projected_monthly: 6_000,
+      gate_percent: 60,
+      since: at(6 * 24 * 60).toISOString(),
+      measured_at: at(4).toISOString(),
+    });
+  });
+});

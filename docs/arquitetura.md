@@ -4343,7 +4343,11 @@ processos desde a linha `cluster` anterior e, nos quartos de hora, as somas
 de 24 h e de 7 dias. O alerta `volume-near-gate` compara os 7 dias,
 projetados para o mês, com 70% de `APPROVED_GATE_MONTHLY_DELIVERIES`, o
 portão com relatório aprovado em `docs/desempenho`, e as 24 h com o
-`PLATFORM_DAILY_DELIVERY_SOFT_CAP`. Nada recusa entrega: só avisa.
+`PLATFORM_DAILY_DELIVERY_SOFT_CAP`. Nada recusa entrega: só avisa. O
+`/health/metrics` traz os mesmos números em `volume` (as somas do quarto de
+hora mais novo, até 20 minutos, a projeção e a porcentagem do portão, como o
+alerta os calcula), e a aba _Sistema_ da web os mostra; sem soma recente,
+ficam `null` (desconhecido, não zero).
 
 ## Decisões (ADRs)
 

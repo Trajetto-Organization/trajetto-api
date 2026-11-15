@@ -13,6 +13,7 @@ import {
   carriesVolumeTotals,
   countDeliveriesCreated,
   rotateDeliveriesCreated,
+  volumeGauge,
   volumeSection,
 } from "@/shared/health/volume-gauge";
 
@@ -202,6 +203,77 @@ describe("the cluster row's section", () => {
   });
 });
 
+describe("the gauge on /health/metrics", () => {
+  /**
+   * The Sistema tab shows the ramp next to the alert (F1-22): the numbers
+   * must be the alert's own, projected the same way (× 30/7) against the
+   * same gate and ratio, or the screen says "dentro do portão" while the
+   * heartbeat pages.
+   */
+  const thresholds = alertThresholdsFromEnv({
+    LONG_WRITE_XACT_ALERT_SECONDS: 120,
+    PG_WAL_ALERT_GIB: 12,
+    APPROVED_GATE_MONTHLY_DELIVERIES: 300,
+  });
+
+  it("projects the 7 days to a month against the approved gate", () => {
+    const totals = {
+      last24h: 16,
+      last7d: 56,
+      since: new Date("2026-11-09T12:00:00Z"),
+      at: new Date("2026-11-15T12:00:00Z"),
+    };
+
+    expect(volumeGauge(totals, thresholds)).toEqual({
+      approved_gate_monthly: 300,
+      gate_ratio: 0.7,
+      daily_soft_cap: null,
+      last_24h: 16,
+      last_7d: 56,
+      projected_monthly: 240,
+      gate_percent: 80,
+      since: "2026-11-09T12:00:00.000Z",
+      measured_at: "2026-11-15T12:00:00.000Z",
+    });
+
+    // The alert pages on the same numbers.
+    const alerts = collectAlerts(
+      { ...snapshot(), volume: { last24h: 16, last7d: 56 } },
+      thresholds,
+    );
+
+    expect(alerts.map((alert) => alert.code)).toContain("volume-near-gate");
+  });
+
+  it("names the soft cap only when one is set", () => {
+    const capped = alertThresholdsFromEnv({
+      LONG_WRITE_XACT_ALERT_SECONDS: 120,
+      PG_WAL_ALERT_GIB: 12,
+      PLATFORM_DAILY_DELIVERY_SOFT_CAP: 500,
+    });
+
+    expect(volumeGauge(null, capped)).toMatchObject({
+      approved_gate_monthly:
+        DEFAULT_ALERT_THRESHOLDS.approvedGateMonthlyDeliveries,
+      daily_soft_cap: 500,
+    });
+  });
+
+  it("says unknown, never zero, without a recent quarter-hour sum", () => {
+    expect(volumeGauge(null, thresholds)).toEqual({
+      approved_gate_monthly: 300,
+      gate_ratio: 0.7,
+      daily_soft_cap: null,
+      last_24h: null,
+      last_7d: null,
+      projected_monthly: null,
+      gate_percent: null,
+      since: null,
+      measured_at: null,
+    });
+  });
+});
+
 describe("the ramp's alert", () => {
   // The plan's acceptance reads "80 deliveries against a gate of 100
   // pages, 60 does not": a monthly volume at 80% and 60% of the gate. The
@@ -229,9 +301,7 @@ describe("the ramp's alert", () => {
   });
 
   it("uses today's step, 10 000 a month, without the variable", () => {
-    expect(DEFAULT_ALERT_THRESHOLDS.approvedGateMonthlyDeliveries).toBe(
-      10_000,
-    );
+    expect(DEFAULT_ALERT_THRESHOLDS.approvedGateMonthlyDeliveries).toBe(10_000);
 
     // 1 633 a week is 6 999 a month; 1 634 is 7 003.
     expect(volumeCodes({ last24h: 0, last7d: 1_633 }, BASE_ENV)).toEqual([]);

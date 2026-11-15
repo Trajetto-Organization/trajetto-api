@@ -942,6 +942,59 @@ const healthResponses = {
       .describe(
         "Requisições HTTP desta réplica: classes de status, latência por grupo de rota e contratos do app nas posições. Por réplica, como `runtime`; as linhas de ops_sample trazem todas.",
       ),
+    // plano-escala F1-22. Optional: an API that predates it, still answering
+    // during a rolling deploy, sends none.
+    volume: z
+      .object({
+        approved_gate_monthly: z
+          .number()
+          .describe(
+            "APPROVED_GATE_MONTHLY_DELIVERIES: as entregas por mês que o relatório de portão aprovado mais novo provou que o hardware aguenta.",
+          ),
+        gate_ratio: z
+          .number()
+          .describe(
+            "A parte do portão em que o alerta volume-near-gate dispara (0,7).",
+          ),
+        daily_soft_cap: z
+          .number()
+          .nullable()
+          .describe("PLATFORM_DAILY_DELIVERY_SOFT_CAP; null sem teto diário."),
+        last_24h: z
+          .number()
+          .nullable()
+          .describe(
+            "Entregas criadas nas últimas 24 h, pela soma do quarto de hora mais novo; null sem soma nos últimos 20 min (desconhecido, não zero).",
+          ),
+        last_7d: z
+          .number()
+          .nullable()
+          .describe("Entregas criadas nos últimos 7 dias, pela mesma soma."),
+        projected_monthly: z
+          .number()
+          .nullable()
+          .describe("Os 7 dias projetados para o mês (× 30/7), arredondados."),
+        gate_percent: z
+          .number()
+          .nullable()
+          .describe(
+            "A projeção em porcentagem do portão, arredondada como na mensagem do alerta.",
+          ),
+        since: z
+          .string()
+          .nullable()
+          .describe(
+            "O minuto mais antigo contado nos 7 dias: uma série mais nova que uma semana subestima a projeção.",
+          ),
+        measured_at: z
+          .string()
+          .nullable()
+          .describe("O quarto de hora em que as somas foram feitas."),
+      })
+      .optional()
+      .describe(
+        "A régua de rampa: as entregas criadas contra o portão aprovado, os mesmos números que o alerta volume-near-gate julga. Contagens e o portão, nunca uma empresa. Só avisa: nada recusa entrega.",
+      ),
   }),
   providerReadiness: z.object({
     checked_at: z.string().describe("Quando as sondas rodaram (ISO 8601)."),

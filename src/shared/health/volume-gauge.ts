@@ -1,5 +1,7 @@
 import database from "@/../infra/database";
 
+import type { AlertThresholds } from "@/shared/health/alert-rules";
+
 /**
  * The ramp's gauge (plano-escala U-12): how many deliveries the platform
  * creates, against the monthly volume a load report approved.
@@ -240,13 +242,66 @@ function volumeSection(
   };
 }
 
+/**
+ * The ramp as /health/metrics shows it (plano-escala F1-22): the newest
+ * quarter-hour's sums, read like the alert reads them (up to 20 minutes
+ * old), projected the alert's way (× 30/7) against the same gate and
+ * ratio, so the Sistema tab and the heartbeat never disagree. Unknown is
+ * null, never zero: no recent sum (OPS_SAMPLE_ENABLED=false, a series
+ * younger than a quarter-hour, a heartbeat that stopped) is not "nothing
+ * created". Counts and the gate only, never a business.
+ */
+interface VolumeGauge {
+  approved_gate_monthly: number;
+  gate_ratio: number;
+  daily_soft_cap: number | null;
+  last_24h: number | null;
+  last_7d: number | null;
+  projected_monthly: number | null;
+  gate_percent: number | null;
+  since: string | null;
+  measured_at: string | null;
+}
+
+type VolumeGaugeThresholds = Pick<
+  AlertThresholds,
+  "approvedGateMonthlyDeliveries" | "volumeGateRatio" | "dailyDeliverySoftCap"
+>;
+
+function volumeGauge(
+  totals: VolumeTotals | null,
+  thresholds: VolumeGaugeThresholds,
+): VolumeGauge {
+  const gate = thresholds.approvedGateMonthlyDeliveries;
+  const projected = totals ? (totals.last7d * 30) / 7 : null;
+
+  return {
+    approved_gate_monthly: gate,
+    gate_ratio: thresholds.volumeGateRatio,
+    // Infinity is "no cap" to the alert; JSON has no Infinity.
+    daily_soft_cap: Number.isFinite(thresholds.dailyDeliverySoftCap)
+      ? thresholds.dailyDeliverySoftCap
+      : null,
+    last_24h: totals?.last24h ?? null,
+    last_7d: totals?.last7d ?? null,
+    projected_monthly: projected === null ? null : Math.round(projected),
+    // Rounded like the alert's message, so the two read the same number.
+    gate_percent:
+      projected === null ? null : Math.round((projected / gate) * 100),
+    since: totals?.since?.toISOString() ?? null,
+    measured_at: totals?.at.toISOString() ?? null,
+  };
+}
+
 export {
   VOLUME_SECTION,
   VOLUME_TOTALS_EVERY_MINUTES,
   carriesVolumeTotals,
   countDeliveriesCreated,
+  readLatestTotals,
   readVolume,
   rotateDeliveriesCreated,
+  volumeGauge,
   volumeSection,
 };
-export type { VolumeReading, VolumeTotals };
+export type { VolumeGauge, VolumeReading, VolumeTotals };
