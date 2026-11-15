@@ -30,7 +30,9 @@ import {
  *    by the minute, whatever the sample does: that is the adoption the
  *    positions' load shedding waits for (F2-25: "≥ 90% of the POSTs of the
  *    last 10 minutes from contract ≥ 8"). At most sixteen values ("unknown"
- *    is the request without the header), then "other".
+ *    is the request without the header), then "other". Only a driver's
+ *    session and the version gate's 426 count there (see
+ *    `countsAsFleetContract`): the header is anyone's to set.
  */
 
 /**
@@ -302,10 +304,43 @@ function createHttpMetrics({
 const httpMetrics = createHttpMetrics();
 
 /**
+ * Whether this POST /route/positions speaks for a phone of the fleet, so its
+ * `contract=` goes into the adoption window.
+ *
+ * The header is the client's word, and anyone can send any number: counted
+ * on every response, an anonymous loop of 401s naming contract=99 read as a
+ * fleet that had already moved on, and F2-25 would have started shedding
+ * the positions of the old builds still in half the trucks (or junk values
+ * would have filled the sixteen slots and pushed the real ones to "other").
+ * So two answers count, and nothing else:
+ *
+ *  - a driver's session that passed `ensureAuthenticated` (`request.user`
+ *    with a driverId, the use case's own NOT_A_DRIVER rule), whatever came
+ *    after it: a 400 or a 503 is still that phone calling;
+ *  - the version gate's 426, which answers before the session on purpose.
+ *    Its contract is below MIN_MOBILE_CONTRACT by construction, so a forged
+ *    one can only LOWER the adoption — the shedding waits longer, as today —
+ *    and only ever names values below the minimum.
+ *
+ * Left out: the 401s, the limiter's 429 (it keys on the token's signature,
+ * before the lookup) and any other refusal before the session, and a
+ * session that is not a driver's (403 NOT_A_DRIVER). They still count as
+ * traffic in the group's classes, just not as adoption.
+ */
+function countsAsFleetContract(
+  request: FastifyRequest,
+  reply: FastifyReply,
+): boolean {
+  if (reply.statusCode === 426) return true;
+
+  return Boolean(request.user?.driverId);
+}
+
+/**
  * The `onResponse` hook's body: the route's group by its registered pattern,
- * the status and Fastify's own elapsed time; on POST /route/positions, the
- * contract the app named. Never throws: a metric must not fail a response
- * that already went out.
+ * the status and Fastify's own elapsed time; on POST /route/positions from
+ * the fleet (`countsAsFleetContract`), the contract the app named. Never
+ * throws: a metric must not fail a response that already went out.
  */
 function recordHttpResponse(
   request: FastifyRequest,
@@ -323,7 +358,11 @@ function recordHttpResponse(
       url !== undefined && url.startsWith("/health"),
     );
 
-    if (group === "positions" && request.method === "POST") {
+    if (
+      group === "positions" &&
+      request.method === "POST" &&
+      countsAsFleetContract(request, reply)
+    ) {
       metrics.recordPositionsContract(
         parseClientVersion(request.headers[CLIENT_VERSION_HEADER])?.contract,
       );

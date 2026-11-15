@@ -199,26 +199,42 @@ describe("recordHttpResponse", () => {
     method: string,
     url: string | undefined,
     headers: Record<string, string> = {},
+    user?: { id: string; driverId?: string | null },
   ) {
-    return { method, routeOptions: { url }, headers } as never;
+    return { method, routeOptions: { url }, headers, user } as never;
   }
 
   const reply = (statusCode: number, elapsedTime = 12) =>
     ({ statusCode, elapsedTime }) as never;
 
+  const driver = { id: "user-1", driverId: "driver-1" };
+
   it("counts by the route's group, and the contract on the positions POST", () => {
     const metrics = createHttpMetrics({ now: clock().now });
 
     recordHttpResponse(
-      request("POST", "/route/positions", {
-        "x-trajetto-client-version":
-          "platform=android; version=1.4.0; contract=7",
-      }),
+      request(
+        "POST",
+        "/route/positions",
+        {
+          "x-trajetto-client-version":
+            "platform=android; version=1.4.0; contract=7",
+        },
+        driver,
+      ),
       reply(200),
       metrics,
     );
     recordHttpResponse(
-      request("POST", "/route/positions"),
+      request("POST", "/route/positions", {}, driver),
+      reply(200),
+      metrics,
+    );
+    // The version gate answers before the session, and still counts.
+    recordHttpResponse(
+      request("POST", "/route/positions", {
+        "x-trajetto-client-version": "platform=android; contract=2",
+      }),
       reply(426),
       metrics,
     );
@@ -230,11 +246,64 @@ describe("recordHttpResponse", () => {
 
     const window = metrics.snapshot();
 
-    expect(window.groups.positions.requests).toBe(2);
+    expect(window.groups.positions.requests).toBe(3);
     expect(window.groups.tower.requests).toBe(1);
     expect(window.positions_contracts.by_contract).toEqual({
+      "2": 1,
       "7": 1,
       unknown: 1,
+    });
+  });
+
+  // The header is the client's word, and anyone can send any number. The
+  // window is what F2-25 reads before shedding the old builds' positions:
+  // counted on a refusal before the session, an anonymous loop naming
+  // contract=99 would read as a fleet that already moved on.
+  it("leaves out the contract of a refusal before the session, and of a session that is not a driver's", () => {
+    const metrics = createHttpMetrics({ now: clock().now });
+    const forged = {
+      "x-trajetto-client-version": "platform=android; contract=99",
+    };
+
+    for (const status of [401, 429, 503]) {
+      recordHttpResponse(
+        request("POST", "/route/positions", forged),
+        reply(status),
+        metrics,
+      );
+    }
+    recordHttpResponse(
+      request("POST", "/route/positions", forged, {
+        id: "manager-1",
+        driverId: null,
+      }),
+      reply(403),
+      metrics,
+    );
+
+    const window = metrics.snapshot();
+
+    expect(window.groups.positions.requests).toBe(4);
+    expect(window.positions_contracts.total).toBe(0);
+    expect(window.positions_contracts.by_contract).toEqual({});
+  });
+
+  it("counts a driver's session whatever the answer after it", () => {
+    const metrics = createHttpMetrics({ now: clock().now });
+    const header = {
+      "x-trajetto-client-version": "platform=android; contract=8",
+    };
+
+    for (const status of [200, 400, 429, 503]) {
+      recordHttpResponse(
+        request("POST", "/route/positions", header, driver),
+        reply(status),
+        metrics,
+      );
+    }
+
+    expect(metrics.snapshot().positions_contracts.by_contract).toEqual({
+      "8": 4,
     });
   });
 

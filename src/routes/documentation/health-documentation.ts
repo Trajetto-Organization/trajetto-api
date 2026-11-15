@@ -931,7 +931,7 @@ const healthResponses = {
             by_contract: z
               .record(z.string(), z.number())
               .describe(
-                "POST /route/positions por `contract=` do cabeçalho x-trajetto-client-version; `unknown` sem ele, `other` depois de 16 valores.",
+                "POST /route/positions por `contract=` do cabeçalho x-trajetto-client-version; `unknown` sem ele, `other` depois de 16 valores. Só contam a sessão de motorista e o 426 do portão de versão: o 401, o 429 do limitador e o usuário que não é motorista ficam de fora, porque o cabeçalho é de quem chama.",
               ),
           })
           .describe(

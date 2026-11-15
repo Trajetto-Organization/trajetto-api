@@ -4330,7 +4330,14 @@ doze grupos fixos, com a lista explícita de rotas em
 `src/shared/health/route-groups.ts`; nunca um rótulo feito de dado. Nos
 `POST /route/positions` ele conta também o `contract=` do app, numa janela
 móvel de 10 minutos por réplica (até 16 valores, depois `other`): é a adoção
-que o descarte de posições vai esperar. Os números vão para o
+que o descarte de posições vai esperar. Como o cabeçalho é a palavra do
+cliente, e qualquer um manda qualquer número, só entram na janela a sessão de
+motorista que passou pelo `ensureAuthenticated` (qualquer que seja a resposta
+depois dela) e o 426 do portão de versão, cujo contrato está sempre abaixo do
+mínimo e por isso só pode baixar a adoção. O 401, o 429 do limitador e o
+usuário que não é motorista (403 `NOT_A_DRIVER`) contam como tráfego, nunca
+como adoção: sem isso, um laço anônimo de 401 com `contract=99` faria a frota
+parecer atualizada. Os números vão para o
 `/health/metrics` (`http`) e, a cada minuto, para a seção `http` do
 `ops_sample`.
 

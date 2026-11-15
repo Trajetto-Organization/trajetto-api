@@ -3888,7 +3888,8 @@ minuto dividida pelas requisições fora de `/health`, `null` sem requisição;
 do bcrypt (`src/shared/health/ops-sample.ts`), mais a seção `http`: as
 respostas do minuto por classe de status e o histograma de latência de cada
 grupo de rota, só dos grupos com requisição, e os `contract=` do app nos
-`POST /route/positions` dos últimos 10 minutos
+`POST /route/positions` dos últimos 10 minutos, só das sessões de motorista
+e do 426 do portão de versão, nunca de um 401
 (`src/shared/health/http-metrics.ts`), e a seção `deliveries`: as entregas
 que o processo criou no minuto (`created`), contadas depois de cada commit
 (criação no painel, pela integração, planilha e XML;
