@@ -137,6 +137,9 @@ const CHECKS: Record<string, string> = {
   // Wave 2 (06/11/2026): a phone is trusted for CPF sign-in only by a QR it
   // consumed or by the rollout backfill; nothing else may mint that trust.
   driver_trusted_device_source_chk: `CHECK ((source = ANY (ARRAY['qr'::text, 'backfill'::text])))`,
+  // Scale plan F1-12: pgss_state holds the state of the last query-stats
+  // snapshot, one row only; the hourly job upserts it and never logs there.
+  pgss_state_single_row: `CHECK ((id = 1))`,
 };
 
 type Client = Pick<Prisma.TransactionClient, "$queryRaw">;
