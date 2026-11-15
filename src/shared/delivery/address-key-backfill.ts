@@ -46,7 +46,8 @@ interface BackfillProgress {
   scanned: number;
   /**
    * Keys written so far: the ones that were missing and the stale ones
-   * (a row without a street or a city gets none).
+   * (a row without a street, a house number or a city gets none; one an
+   * earlier build keyed without a number has its key cleared).
    */
   keyed: number;
 }

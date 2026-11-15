@@ -3154,7 +3154,10 @@ mão, pelo roteiro no comentário da migration, e ela não faz nada.
   empresa já localizou (pino, coordenada na criação ou o geocodificador no
   número ou na rua) já nasce com o ponto, mesmo com o geocodificador
   desligado, e não gasta consulta do LocationIQ. Editar o endereço para uma
-  porta já localizada faz o mesmo. Nunca entre empresas.
+  porta já localizada faz o mesmo. Nunca entre empresas, e nunca num
+  endereço sem número (`s/n`, `0` ou vazio): sem número o endereço nomeia
+  uma rua, não uma porta, e a entrega é consultada e fixada sozinha, como
+  antes.
 - **O pino vale para a porta toda.** O "Fixar no mapa" de uma entrega dá o
   mesmo ponto às outras entregas abertas da empresa no mesmo endereço ainda
   sem ponto (`propagated` na resposta; a web nova diz no toast quantas, a

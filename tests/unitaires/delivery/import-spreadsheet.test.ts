@@ -763,20 +763,31 @@ describe("an upload started in the background", () => {
 describe("the address point columns", () => {
   it("store the sheet's point as MANUAL, and leave a row without one to the geocoder", async () => {
     const text = [
-      ["Destinatário", "CEP", "Cidade", "UF", "Logradouro", "Lat", "Long"],
+      [
+        "Destinatário",
+        "CEP",
+        "Cidade",
+        "UF",
+        "Logradouro",
+        "Número",
+        "Lat",
+        "Long",
+      ],
       [
         "Padaria Central",
         "01001000",
         "São Paulo",
         "SP",
         "Sé",
+        "100",
         "-23,5505",
         "-46,6333",
       ],
-      ["Mercado Novo", "01001000", "São Paulo", "SP", "Direita", "", ""],
+      ["Mercado Novo", "01001000", "São Paulo", "SP", "Direita", "100", "", ""],
       // The same door as the first row (14/11/2026): it takes that point,
       // as GEOCODER (address-point-reuse.ts), and the geocoder skips it.
-      ["Açougue da Sé", "01001000", "São Paulo", "SP", "Sé", "", ""],
+      // The number makes it a door: "Sé" with none names the street.
+      ["Açougue da Sé", "01001000", "São Paulo", "SP", "Sé", "100", "", ""],
     ]
       .map((row) => row.map((cell) => `"${cell}"`).join(";"))
       .join("\n");

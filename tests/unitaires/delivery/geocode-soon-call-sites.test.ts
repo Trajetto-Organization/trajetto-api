@@ -69,6 +69,9 @@ const ADDRESS = {
   city: "Petrópolis",
   uf: "RJ",
   street: "Rua Epitácio Pessoa",
+  // A door: without a number the address names a street, and no delivery
+  // takes another's point (address-key.ts).
+  address_number: "100",
 };
 
 function context() {

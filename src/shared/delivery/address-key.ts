@@ -30,7 +30,19 @@ import { LINKING_WORDS, TITLES } from "./geocoding/fallback-agreement";
  * Stored as the SHA-256 of `v1|street|number|district|city|UF`: a fixed size
  * for the index, and no second copy of the address in clear. A change of
  * the rule is a new version, never a silent misread of the old keys.
- * Null without a street or a city: nothing to tell two doors apart by.
+ *
+ * Null without a street, a house number or a city: nothing to tell two
+ * doors apart by. Without a number (pre-push review of the batch of
+ * 14/11/2026) the street, the district and the city name a street, not a
+ * door: every farm on a rural road, every shop on a small town's street
+ * with no numbers, every house of a condominium — the km, the lot or the
+ * house written in the complement, often under the town's one CEP — would
+ * share one key. A dispatcher's pin on one of them, copied as ADDRESS
+ * (address-point-reuse.ts), would then send the driver of another to it,
+ * and a BLOCK geofence would refuse the proof at the right door. Without a
+ * key such a delivery is asked about on its own and pinned on its own, as
+ * before the key: a key too strict costs a lookup, one too loose a stop at
+ * the wrong door.
  */
 interface KeyedAddress {
   street?: string | null;
@@ -127,21 +139,25 @@ function canonicalNumber(value: string | null | undefined): string {
 /** What the key is a hash of; null when it cannot tell doors apart. */
 function addressKeyMaterial(address: KeyedAddress): string | null {
   const street = canonicalStreet(address.street);
+  const number = canonicalNumber(address.address_number);
   const city = foldText(address.city);
 
-  if (!street || !city) return null;
+  if (!street || !number || !city) return null;
 
   return [
     ADDRESS_KEY_VERSION,
     street,
-    canonicalNumber(address.address_number),
+    number,
     foldText(address.neighborhood),
     city,
     (address.uf ?? "").trim().toUpperCase(),
   ].join("|");
 }
 
-/** The delivery's address key (SHA-256 hex); null without street or city. */
+/**
+ * The delivery's address key (SHA-256 hex); null without a street, a house
+ * number or a city.
+ */
 function deliveryAddressKey(address: KeyedAddress): string | null {
   const material = addressKeyMaterial(address);
 

@@ -1501,7 +1501,15 @@ chave da pausa guarda o motivo junto do prazo (`REFUSED`, `QUOTA` ou
     uma Avenida de mesmo nome são duas ruas), o número compacto (`s/n`, `0`
     e vazio são "sem número"; 12 não é 12A, e 12/14 não é 1214), o bairro,
     a cidade e a UF. O CEP fica fora, porque costuma vir geral ou errado.
-    Sem rua ou sem cidade, a chave é nula. Coluna
+    Sem rua, sem número ou sem cidade, a chave é nula. Sem número (revisão
+    antes do push do lote de 14/11/2026), o endereço nomeia uma rua, não
+    uma porta: as fazendas de uma estrada, as lojas sem número de uma rua
+    de cidade pequena e as casas de um condomínio (o km, o lote ou a casa
+    no complemento, muitas vezes com o CEP único da cidade) teriam a mesma
+    chave, e o pino de uma iria às outras como ponto exato, levando o
+    motorista à porta errada e fazendo a geocerca em BLOCK recusar o
+    comprovante na porta certa. Uma entrega sem número é consultada e
+    fixada sozinha, como antes da chave. Coluna
     `address_key` (migration `20261114120000_delivery_address_key`, só
     expansão) com o índice parcial `delivery_address_key_idx`, só as
     linhas com chave, nas colunas

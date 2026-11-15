@@ -358,6 +358,34 @@ describe("the point of another delivery at the same door", () => {
       await repository.createDelivery({ ...LIPOLD, street: "" }),
     ).toMatchObject({ latitude: null, address_key: null });
   });
+
+  // Pre-push review of the batch of 14/11/2026: two "s/n" properties on one
+  // road are two doors. Farm B took farm A's pin, 6 km away, as an exact
+  // point: the driver navigated to A and a BLOCK geofence refused B's proof.
+  it("is never taken without a house number, and none is given from one", async () => {
+    const repository = new InMemoryDeliveryRepository();
+    const road = {
+      ...LIPOLD,
+      street: "Estrada do Cafezal",
+      address_number: "s/n",
+      neighborhood: "Zona Rural",
+    };
+
+    const farmA = await repository.createDelivery({ ...road, ...PIN });
+    const farmB = await repository.createDelivery({
+      ...road,
+      address_number: "S/N",
+      complement: "Km 7",
+      cep: "25745000",
+    });
+
+    expect(farmA).toMatchObject({ geo_source: "MANUAL", address_key: null });
+    expect(farmB).toMatchObject({
+      latitude: null,
+      geo_source: null,
+      address_key: null,
+    });
+  });
 });
 
 describe("the box", () => {

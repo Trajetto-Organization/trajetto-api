@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 import { describe, expect, it } from "vitest";
 
 import {
@@ -905,6 +907,31 @@ describe("the point of another delivery at the same door", () => {
           geo_precision: "NEIGHBORHOOD",
           geocode_status: "COARSE",
         }),
+      ],
+    });
+
+    const result = await h.run.runFor(BUSINESS, ["d1"], NOW);
+
+    expect(result).toMatchObject({ reused: 0, resolved: 1 });
+    expect(h.asked.map((call) => call.id)).toEqual(["d1"]);
+    expect(row(h, "d1")).toMatchObject({
+      latitude: FOUND_AT_DOOR.latitude,
+      geo_source: "GEOCODER",
+    });
+  });
+
+  // Pre-push review of the batch of 14/11/2026: without a house number the
+  // address names a street, not a door, so an "s/n" farm of a road is asked
+  // about on its own, never handed another farm's pin — not even by a row
+  // still holding the key the rule before that review gave the road.
+  it("asks as before for an address without a house number", async () => {
+    const roadKey = createHash("sha256")
+      .update("v1|praca se||se|sao paulo|SP")
+      .digest("hex");
+    const h = harness(() => FOUND_AT_DOOR, {
+      rows: [
+        delivery("d1", { address_number: "s/n" }),
+        sibling({ address_number: "S/N", address_key: roadKey }),
       ],
     });
 

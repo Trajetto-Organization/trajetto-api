@@ -3231,7 +3231,8 @@ model Delivery {
   /// street, number, district, city and UF, never the CEP. A delivery
   /// without a point takes the one another delivery of the company has at
   /// the same key. Null for a row written before it (the owner's backfill
-  /// fills them) or without a street or a city.
+  /// fills them) or without a street, a house number ("s/n" is none: the
+  /// address names a street, not a door) or a city.
   address_key          String?
 
   status         DeliveryStatus @default(PENDING)

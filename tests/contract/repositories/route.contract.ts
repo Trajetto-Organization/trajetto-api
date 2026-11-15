@@ -411,6 +411,8 @@ function routeRepositoryContract(harness: () => RouteHarness): void {
       located: fixedId("0edf", 6),
       theirs: fixedId("0edf", 7),
       bare: fixedId("0edf", 8),
+      roadPin: fixedId("0edf", 9),
+      roadFarm: fixedId("0edf", 10),
     };
 
     it("gives the pin, as GEOCODER, to the open deliveries at the door still without a point, once", async () => {
@@ -480,6 +482,37 @@ function routeRepositoryContract(harness: () => RouteHarness): void {
 
       expect(await h.repo.propagateAddressPoint(L.bare, A)).toEqual([]);
       expect(await h.repo.propagateAddressPoint(MISSING, A)).toEqual([]);
+    });
+
+    // Pre-push review of the batch of 14/11/2026: without a house number the
+    // address names a street, not a door. A pin on one "s/n" farm must not
+    // reach the other "s/n" farms of the road, the NOT_FOUND ones included.
+    it("gives nothing from a pin at an address without a house number", async () => {
+      const h = harness();
+      // The key the create writes for both: none.
+      const road = {
+        address_number: "s/n",
+        address_key: deliveryAddressKey({ ...door, address_number: "s/n" }),
+      };
+
+      await h.seedDelivery(
+        row(L.roadPin, {
+          ...road,
+          latitude: -22.4561,
+          longitude: -43.1702,
+          geo_source: "MANUAL",
+          geo_updated_at: new Date("2026-11-14T10:00:00.000Z"),
+        }),
+      );
+      await h.seedDelivery(
+        row(L.roadFarm, { ...road, geocode_status: "NOT_FOUND" }),
+      );
+
+      expect(await h.repo.propagateAddressPoint(L.roadPin, A)).toEqual([]);
+      expect(await h.readPoint(L.roadFarm)).toMatchObject({
+        latitude: null,
+        geo_source: null,
+      });
     });
   });
 

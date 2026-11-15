@@ -294,7 +294,7 @@ const deliveryRowEntity = z.object({
     .nullable()
     .optional()
     .describe(
-      "A porta da entrega: um hash da rua, do número, do bairro, da cidade e da UF (o CEP fica fora), igual nas entregas da empresa no mesmo endereço, que reaproveitam o ponto umas das outras. Uso interno, nenhuma tela lê. Nula sem rua ou sem cidade, ou numa entrega anterior à coluna que o preenchimento único ainda não alcançou.",
+      "A porta da entrega: um hash da rua, do número, do bairro, da cidade e da UF (o CEP fica fora), igual nas entregas da empresa no mesmo endereço, que reaproveitam o ponto umas das outras. Uso interno, nenhuma tela lê. Nula sem rua, sem número (s/n conta como sem número: o endereço nomeia uma rua, não uma porta) ou sem cidade, ou numa entrega anterior à coluna que o preenchimento único ainda não alcançou.",
     ),
   status: deliveryStatusEnum,
   kind: z

@@ -58,9 +58,8 @@ describe("the same door", () => {
   });
 
   it("reads 's/n', '0' and no number as the same: no number", () => {
-    const none = key({ address_number: "" });
-
     for (const address_number of [
+      "",
       "s/n",
       "S/N",
       "SN",
@@ -68,7 +67,7 @@ describe("the same door", () => {
       null,
       "sem número",
     ]) {
-      expect(key({ address_number }), String(address_number)).toBe(none);
+      expect(canonicalNumber(address_number), String(address_number)).toBe("");
     }
     expect(canonicalNumber("12 A")).toBe("12a");
     expect(canonicalNumber("12-a")).toBe("12a");
@@ -142,6 +141,25 @@ describe("no key", () => {
     expect(key({ street: " . " })).toBeNull();
     expect(key({ city: "" })).toBeNull();
     expect(addressKeyMaterial({ street: null, city: "Petrópolis" })).toBeNull();
+  });
+
+  // Pre-push review of the batch of 14/11/2026: without a number the
+  // street, the district and the city name a street, not a door. Farm A at
+  // "Estrada do Cafezal, s/n" took the pin of farm B, 6 km down the same
+  // road ("Km 7" in the complement, another CEP), as an exact point.
+  it("without a house number: 's/n', '0' or none is a street, not a door", () => {
+    for (const address_number of ["", "s/n", "S/N", "0", null, "sem número"]) {
+      expect(key({ address_number }), String(address_number)).toBeNull();
+    }
+    expect(
+      deliveryAddressKey({
+        street: "Estrada do Cafezal",
+        address_number: "s/n",
+        neighborhood: "Zona Rural",
+        city: "Petrópolis",
+        uf: "RJ",
+      }),
+    ).toBeNull();
   });
 
   it("hashes a versioned material, never the address in clear", () => {
