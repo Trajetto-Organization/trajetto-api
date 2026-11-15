@@ -343,6 +343,22 @@ describe("the operational metrics", () => {
     expect(typeof body.realtime.local_connections).toBe("number");
     expect(body.redis.status).toBe("up");
     expect(body.redis.latency_ms).not.toBeNull();
+
+    // The scale plan's Redis measures (F1-07) reach the response through
+    // its schema, from the real server's INFO.
+    expect(body.redis).toMatchObject({
+      ops_per_sec: expect.any(Number),
+      used_cpu_sys_seconds: expect.any(Number),
+      used_cpu_user_seconds: expect.any(Number),
+      pubsub_channels: expect.any(Number),
+      pubsub_patterns: expect.any(Number),
+      total_net_output_bytes: expect.any(Number),
+      output_kbps: expect.any(Number),
+      mem_clients_normal_bytes: expect.any(Number),
+      client_recent_max_output_buffer_bytes: expect.any(Number),
+      maxmemory_policy: expect.any(String),
+      evicted_clients: expect.any(Number),
+    });
   });
 });
 

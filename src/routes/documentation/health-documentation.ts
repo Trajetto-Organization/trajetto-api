@@ -596,9 +596,80 @@ const healthResponses = {
             "Keys thrown away under memory pressure (rate-limit counters, socket state).",
           ),
         uptime_seconds: z.number().nullable(),
+        // The scale plan's measures (F1-07). Optional: an API that predates
+        // them, still answering during a rolling deploy, sends none.
+        ops_per_sec: z
+          .number()
+          .nullable()
+          .optional()
+          .describe(
+            "Operações por segundo (instantaneous_ops_per_sec, a média móvel do próprio Redis).",
+          ),
+        used_cpu_sys_seconds: z
+          .number()
+          .nullable()
+          .optional()
+          .describe(
+            "Segundos de CPU de sistema desde que o servidor subiu; a taxa é a diferença entre duas leituras.",
+          ),
+        used_cpu_user_seconds: z
+          .number()
+          .nullable()
+          .optional()
+          .describe(
+            "Segundos de CPU de usuário desde que o servidor subiu; a taxa é a diferença entre duas leituras.",
+          ),
+        pubsub_channels: z
+          .number()
+          .nullable()
+          .optional()
+          .describe("Canais com assinante (os do adapter do Socket.IO)."),
+        pubsub_patterns: z
+          .number()
+          .nullable()
+          .optional()
+          .describe("Assinaturas por padrão (uma por assinante do adapter)."),
+        total_net_output_bytes: z
+          .number()
+          .nullable()
+          .optional()
+          .describe("Bytes enviados desde que o servidor subiu."),
+        output_kbps: z
+          .number()
+          .nullable()
+          .optional()
+          .describe(
+            "Quanto o Redis envia agora, em kbps (instantaneous_output_kbps).",
+          ),
+        mem_clients_normal_bytes: z
+          .number()
+          .nullable()
+          .optional()
+          .describe("Memória dos buffers dos clientes normais, em bytes."),
+        client_recent_max_output_buffer_bytes: z
+          .number()
+          .nullable()
+          .optional()
+          .describe(
+            "O maior buffer de saída de um cliente nos últimos segundos, em bytes: um assinante lento aparece aqui primeiro.",
+          ),
+        maxmemory_policy: z
+          .string()
+          .nullable()
+          .optional()
+          .describe(
+            "O que o Redis cheio faz: noeviction recusa escritas, allkeys-lru descarta chaves.",
+          ),
+        evicted_clients: z
+          .number()
+          .nullable()
+          .optional()
+          .describe(
+            "Clientes fechados pela memória dos buffers (Redis 7 em diante).",
+          ),
       })
       .describe(
-        "Redis as the API sees it: PING latency and INFO numbers. Never the address.",
+        "Redis as the API sees it: PING latency and INFO numbers. Never the address nor a key; with Redis down, every number is null.",
       ),
   }),
   providerReadiness: z.object({
