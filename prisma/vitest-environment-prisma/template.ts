@@ -17,10 +17,10 @@ import { adminConnection, connectionFor } from "./database-url";
  * server and key, into a database marked as a template, and each file's
  * database is `CREATE DATABASE … TEMPLATE` of it: a copy of the catalog and
  * the data, about 0.12 s. A clone is exactly what the migrate produced —
- * pg_trgm (the only extension, installed by a migration) and the rows the
- * migrations insert included — and no migration touches anything outside its
- * database (no role, no ALTER DATABASE, no ALTER SYSTEM), so nothing is lost
- * in the copy.
+ * the extensions the migrations install (pg_trgm, pg_stat_statements) and
+ * the rows they insert included — and no migration touches anything outside
+ * its database (no role, no ALTER DATABASE, no ALTER SYSTEM), so nothing is
+ * lost in the copy.
  *
  * The name carries the key of what `migrate deploy` reads: a new migration,
  * a schema or config change, or another CLI version is another template, and

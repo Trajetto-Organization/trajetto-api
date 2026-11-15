@@ -247,16 +247,27 @@ jobs:
       # `-c max_connections=...`), so the setting goes in with ALTER SYSTEM
       # and a restart of that container. 200 also leaves headroom for the
       # E2E files running in parallel, each with its own pool.
-      - name: Take the test Postgres off the default max_connections
+      #
+      # The same restart preloads pg_stat_statements, with the query id on,
+      # as the new Postgres image will (plano-escala F1-05):
+      # tests/E2E/pg-stat-statements-state.test.ts requires the state
+      # "ready" on the migrated database.
+      - name: Configure the test Postgres (max_connections, pg_stat_statements)
         env:
           POSTGRES_CONTAINER: ${{ job.services.postgres.id }}
         run: |
-          docker exec "$POSTGRES_CONTAINER" psql -U postgres -c "ALTER SYSTEM SET max_connections = 200"
+          docker exec "$POSTGRES_CONTAINER" psql -U postgres \
+            -c "ALTER SYSTEM SET max_connections = 200" \
+            -c "ALTER SYSTEM SET shared_preload_libraries = 'pg_stat_statements'" \
+            -c "ALTER SYSTEM SET compute_query_id = 'on'"
           docker restart "$POSTGRES_CONTAINER"
           timeout 60 bash -c 'until pg_isready -h localhost -p 5432 -U postgres; do sleep 1; done'
           configured="$(docker exec "$POSTGRES_CONTAINER" psql -U postgres -tAc "SHOW max_connections")"
           echo "max_connections=$configured"
           test "$configured" = 200
+          preload="$(docker exec "$POSTGRES_CONTAINER" psql -U postgres -tAc "SHOW shared_preload_libraries")"
+          echo "shared_preload_libraries=$preload"
+          test "$preload" = pg_stat_statements
 
       - name: Create tmp directory
         run: mkdir -p src/tmp

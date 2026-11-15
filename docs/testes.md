@@ -140,7 +140,7 @@ desenvolvimento:
 # Postgres e Redis descartáveis (portas próprias para não colidir com o dev)
 docker run -d --name trajetto-test-pg -p 127.0.0.1:54321:5432 \
   -e POSTGRES_USER=postgres -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=trajetto postgres:16-alpine \
-  -c max_connections=200
+  -c max_connections=200 -c shared_preload_libraries=pg_stat_statements -c compute_query_id=on
 docker run -d --name trajetto-test-redis -p 127.0.0.1:63790:6379 redis:7-alpine
 
 DATABASE_URL="postgresql://postgres:postgres@localhost:54321/trajetto?schema=public" \
@@ -149,10 +149,14 @@ REDIS_URL="redis://localhost:63790" \
 ```
 
 O `max_connections=200` não é enfeite: `health-metrics.test.ts` exige um
-valor fora do padrão (100), senão um painel com 100 fixo passaria. No CI
-(os jobs de E2E do `validate.yml`) o contêiner de serviço não aceita
-comando, e um passo aplica o mesmo valor com `ALTER SYSTEM` e reinicia o
-contêiner. O `socket.io-client` dos testes de socket é devDependency da API
+valor fora do padrão (100), senão um painel com 100 fixo passaria. O
+`pg_stat_statements` pré-carregado também não: a extensão vem de uma
+migration, mas a view só responde com a biblioteca carregada no boot do
+servidor, e `pg-stat-statements-state.test.ts` exige o estado `ready` (sem
+o `-c`, ele fica `not_loaded`, como a produção até a imagem nova do
+Postgres). No CI (os jobs de E2E do `validate.yml`) o contêiner de serviço
+não aceita comando, e um passo aplica os mesmos valores com `ALTER SYSTEM`
+e reinicia o contêiner. O `socket.io-client` dos testes de socket é devDependency da API
 (mesma versão da web): basta o `yarn install` daqui.
 
 ### O banco molde

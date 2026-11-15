@@ -4250,6 +4250,17 @@ operações (cron `ops-heartbeat`) empurra o estado para um monitor externo a
 cada minuto; regras, limiares e o que fazer em cada alerta estão em
 [`deploy.md`](./deploy.md#20-alertas-e-monitoramento).
 
+**`pg_stat_statements`** (o custo de cada consulta, base das medições do
+plano de escala): a extensão vem da migration `20261115120000_pg_stat_statements`,
+que desiste em silêncio quando o usuário não é superusuário. A view só
+responde com a biblioteca no `shared_preload_libraries` do servidor, então
+`src/shared/health/pg-stat-statements-state.ts` diz em qual de três estados o
+banco está: `missing` (sem a extensão), `not_loaded` (extensão sem a
+biblioteca; a produção fica assim até a imagem nova do Postgres, sem alerta)
+e `ready`. Quem lê a view consulta o estado antes. O texto das consultas pode
+ter literais (CPF, e-mail), por isso não há rota HTTP para ele: a leitura é
+pelo `psql`.
+
 ## Decisões (ADRs)
 
 Os ADRs ficam em [`docs/adr/`](./adr/README.md), um arquivo por decisão, com

@@ -42,13 +42,13 @@ describe("the database of an E2E file", () => {
     expect(rows.filter((row) => !row.finished)).toEqual([]);
   });
 
-  it("has the extension a migration installs", async () => {
+  it("has the extensions the migrations install", async () => {
     const rows = await prisma.$queryRaw<Array<{ extname: string }>>`
       SELECT extname FROM pg_extension ORDER BY extname
     `;
 
     expect(rows.map((row) => row.extname)).toEqual(
-      expect.arrayContaining(["pg_trgm", "plpgsql"]),
+      expect.arrayContaining(["pg_stat_statements", "pg_trgm", "plpgsql"]),
     );
   });
 
