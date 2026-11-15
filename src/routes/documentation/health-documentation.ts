@@ -427,6 +427,34 @@ const healthResponses = {
         .describe("Postgres max_connections — the hard ceiling for replicas."),
       connection_usage_percent: z.number(),
       ...databaseMetricsShape,
+      alert_limits: z
+        .object({
+          xid_age: z
+            .number()
+            .describe("xid-age-high: idade do xid acima disto."),
+          archive_lag_seconds: z
+            .number()
+            .describe(
+              "wal-archive-stalled: com o arquivamento ligado, o último segmento arquivado há mais que isto.",
+            ),
+          long_write_xact_seconds: z
+            .number()
+            .describe(
+              "long-write-xact: escrita aberta há mais que isto (LONG_WRITE_XACT_ALERT_SECONDS).",
+            ),
+          pg_wal_bytes: z
+            .number()
+            .describe("pg-wal-high: pg_wal acima disto (PG_WAL_ALERT_GIB)."),
+          pitr_expected: z
+            .boolean()
+            .describe(
+              "pitr-archive-off: com true, archive_mode desligado alerta (PITR_EXPECTED).",
+            ),
+        })
+        .optional()
+        .describe(
+          "Os limites com que o alerta da operação julga os números do banco, como este ambiente os definiu: a tela Sistema fica vermelha onde o alerta dispara. Opcional: a réplica anterior de um rolling deploy não manda.",
+        ),
     }),
     outbox: z.object({
       pending: z

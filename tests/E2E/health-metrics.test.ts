@@ -471,6 +471,26 @@ describe("the database's own numbers", () => {
     });
   });
 
+  /**
+   * The limits the ops heartbeat pages at, as this environment set them.
+   * Two are tuned by env (LONG_WRITE_XACT_ALERT_SECONDS drops to 60 in wave
+   * 14; PG_WAL_ALERT_GIB is 8 on the single VPS), and the web's Sistema
+   * tab had them hardcoded: a 90 s write paged while its card stayed green.
+   * The tab reads them from here, and needs them through the serializer.
+   */
+  it("send the limits the alert judges them by", async () => {
+    const { env } = await import("@/env");
+    const { database } = (await metrics(masterToken)).json();
+
+    expect(database.alert_limits).toEqual({
+      xid_age: 1_000_000_000,
+      archive_lag_seconds: 300,
+      long_write_xact_seconds: env.LONG_WRITE_XACT_ALERT_SECONDS,
+      pg_wal_bytes: env.PG_WAL_ALERT_GIB * 1024 ** 3,
+      pitr_expected: env.PITR_EXPECTED,
+    });
+  });
+
   it("report a partitioned table once, by its root", async () => {
     const { database } = (await metrics(masterToken)).json();
     const tables = database.hot_tables.map(

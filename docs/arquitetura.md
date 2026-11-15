@@ -4313,7 +4313,14 @@ dados (é a cópia que o item F1-06 do plano de escala pede: números da
 plataforma que só o MASTER lê, em memória, nunca no Redis). Tudo é nullable:
 uma parte que falha fica null e vira uma linha de `collection_errors` com o
 SQLSTATE, e as outras respondem. As idades das sessões só enxergam o cluster
-inteiro com superusuário ou `pg_read_all_stats` (`stats_cluster_wide`).
+inteiro com superusuário ou `pg_read_all_stats` (`stats_cluster_wide`). O
+mesmo bloco leva `alert_limits`: os limites com que o alerta da operação
+julga esses números neste ambiente (o xid, o atraso do arquivamento,
+`LONG_WRITE_XACT_ALERT_SECONDS`, `PG_WAL_ALERT_GIB` em bytes e
+`PITR_EXPECTED`), lidos da mesma `alertThresholdsFromEnv` do heartbeat. A
+tela Sistema da web pinta de vermelho onde o alerta dispara a partir deles;
+com uma cópia fixa lá, uma escrita de 90 s chamava com o limite em 60 e o
+cartão seguia verde.
 
 **Séries de operação** (`ops_sample`): cada processo grava uma linha por
 minuto com os números da linha de log `runtime metrics`, por um timer local

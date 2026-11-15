@@ -166,11 +166,12 @@ async function collectOperationalMetrics() {
   // fails is a collection error.
   const databaseMetrics = await collectDatabaseMetrics();
 
+  // The limits the ops heartbeat judges with, as this environment set them
+  // (ops-heartbeat-job.ts reads the same function).
+  const thresholds = alertThresholdsFromEnv(env);
+
   // The ramp against the approved gate, the alert's own numbers (U-12).
-  const volume = volumeGauge(
-    await readVolumeTotals(),
-    alertThresholdsFromEnv(env),
-  );
+  const volume = volumeGauge(await readVolumeTotals(), thresholds);
 
   const windowCounts = new Map<string, number>();
   for (const row of snapshot.window_rows) {
@@ -247,6 +248,16 @@ async function collectOperationalMetrics() {
         maxConnections,
       ),
       ...databaseMetrics,
+      // The database alerts' own limits (F1-11), for the web's Sistema tab:
+      // two are tuned by env, and a hardcoded copy there kept a card green
+      // while the heartbeat paged (a 90 s write with the limit at 60).
+      alert_limits: {
+        xid_age: thresholds.xidAge,
+        archive_lag_seconds: thresholds.archiveLagSec,
+        long_write_xact_seconds: thresholds.longWriteXactSec,
+        pg_wal_bytes: thresholds.pgWalBytes,
+        pitr_expected: env.PITR_EXPECTED,
+      },
     },
     outbox: {
       pending: snapshot.outbox_pending,
