@@ -139,6 +139,36 @@ const providerChannelMetrics = z.object({
     ),
 });
 
+/** Status classes of http-metrics.ts; 429 and 503 also inside 4xx and 5xx. */
+const httpClassCounts = z.object({
+  "2xx": z.number(),
+  "3xx": z.number(),
+  "4xx": z.number(),
+  "5xx": z.number(),
+  "429": z
+    .number()
+    .describe("Das 4xx: as recusas do limitador de requisições."),
+  "503": z
+    .number()
+    .describe("Das 5xx: o banco ou uma dependência recusando (Retry-After)."),
+});
+
+/** One route group on /health/metrics (http-metrics.ts, route-groups.ts). */
+const httpGroupWindow = z.object({
+  requests: z.number(),
+  classes: httpClassCounts,
+  latency_ms: z.object({
+    counts: z
+      .array(z.number())
+      .describe(
+        "Uma contagem por balde de `latency_buckets_ms` e, por último, as acima do maior. Não cumulativas.",
+      ),
+    sum: z
+      .number()
+      .describe("Soma das durações, em ms: a média é sum/requests."),
+  }),
+});
+
 const readinessStatus = z.enum([
   "ok",
   "warning",
@@ -670,6 +700,56 @@ const healthResponses = {
       })
       .describe(
         "Redis as the API sees it: PING latency and INFO numbers. Never the address nor a key; with Redis down, every number is null.",
+      ),
+    // plano-escala F1-09. Optional: an API that predates it, still answering
+    // during a rolling deploy, sends none.
+    http: z
+      .object({
+        window_seconds: z
+          .number()
+          .describe(
+            "Segundos que a janela cobre: até um minuto, quando a linha de ops_sample a zera.",
+          ),
+        requests: z.number(),
+        classes: httpClassCounts,
+        latency_buckets_ms: z
+          .array(z.number())
+          .describe("Limites superiores dos baldes de latência, em ms."),
+        groups: z
+          .object({
+            positions: httpGroupWindow,
+            tower: httpGroupWindow,
+            lists: httpGroupWindow,
+            details: httpGroupWindow,
+            driver_writes: httpGroupWindow,
+            panel_writes: httpGroupWindow,
+            auth: httpGroupWindow,
+            integration: httpGroupWindow,
+            notifications: httpGroupWindow,
+            files: httpGroupWindow,
+            chat: httpGroupWindow,
+            other: httpGroupWindow,
+          })
+          .describe(
+            "Os doze grupos fixos de rota (src/shared/health/route-groups.ts), todos presentes, zerados quando sem requisição.",
+          ),
+        positions_contracts: z
+          .object({
+            window_minutes: z.number(),
+            total: z.number(),
+            by_contract: z
+              .record(z.string(), z.number())
+              .describe(
+                "POST /route/positions por `contract=` do cabeçalho x-trajetto-client-version; `unknown` sem ele, `other` depois de 16 valores.",
+              ),
+          })
+          .describe(
+            "A adoção do contrato do app nas posições, nos últimos 10 minutos desta réplica.",
+          ),
+      })
+      .optional()
+      .describe(
+        "Requisições HTTP desta réplica: classes de status, latência por grupo de rota e contratos do app nas posições. Por réplica, como `runtime`; as linhas de ops_sample trazem todas.",
       ),
   }),
   providerReadiness: z.object({

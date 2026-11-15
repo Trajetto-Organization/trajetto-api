@@ -114,6 +114,7 @@ import {
   clientUpgradeGate,
   clientVersionForLog,
 } from "./shared/http/client-version";
+import { recordHttpResponse } from "./shared/health/http-metrics";
 
 const app = fastify({
   // The process's one logger (LOG_LEVEL, same format as the workers'). The
@@ -583,6 +584,15 @@ app.addHook(
   "onRequest",
   clientUpgradeGate(env.MIN_MOBILE_CONTRACT, env.MOBILE_STORE_URL),
 );
+
+// Every finished response, refusals and 404s included: the status class, the
+// latency per route group and, on POST /route/positions, the app contract
+// (plano-escala F1-09). Constant time, best effort, and never a label built
+// from data (shared/health/http-metrics.ts).
+app.addHook("onResponse", (request, reply, done) => {
+  recordHttpResponse(request, reply);
+  done();
+});
 
 // Registered before the routes so it applies to every one of them. This runs
 // after body parsing, which `onRequest` (where `ensureAuthenticated` lives)

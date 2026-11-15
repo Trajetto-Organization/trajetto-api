@@ -3845,7 +3845,11 @@ minuto** na tabela `ops_sample`, de 0 a 15 s depois do fim do minuto (um
 timer local com sorteio, nunca um cron, para que toda réplica grave), com os
 mesmos números da linha de log `runtime metrics`: laço de eventos, threadpool,
 memória, pool do Prisma, provedores chamados no minuto, sockets e o portão
-do bcrypt (`src/shared/health/ops-sample.ts`). As colunas dizem de quem é a
+do bcrypt (`src/shared/health/ops-sample.ts`), mais a seção `http`: as
+respostas do minuto por classe de status e o histograma de latência de cada
+grupo de rota, só dos grupos com requisição, e os `contract=` do app nos
+`POST /route/positions` dos últimos 10 minutos
+(`src/shared/health/http-metrics.ts`). As colunas dizem de quem é a
 linha: `role` (`all` com `WORKERS_ENABLED=true`, `http` com `false`),
 `replica` (o hostname do contêiner) e `commit`. Só números de
 infraestrutura: nunca empresa, IP nem id de pessoa. São cerca de 1.440
@@ -3862,6 +3866,15 @@ SELECT replica, ts,
 FROM ops_sample
 WHERE ts > now() - interval '1 hour'
 ORDER BY replica, ts;
+
+-- respostas 5xx por minuto, somando as réplicas, nas últimas 24 h
+SELECT date_trunc('minute', ts) AS minuto,
+       sum((metrics->'http'->'classes'->>'5xx')::int) AS erros_5xx,
+       sum((metrics->'http'->>'requests')::int) AS requisicoes
+FROM ops_sample
+WHERE ts > now() - interval '24 hours' AND role <> 'cluster'
+GROUP BY 1
+ORDER BY 1;
 ```
 
 ### Falhas que só o cliente vê

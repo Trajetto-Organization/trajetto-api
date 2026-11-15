@@ -359,6 +359,14 @@ describe("the operational metrics", () => {
       maxmemory_policy: expect.any(String),
       evicted_clients: expect.any(Number),
     });
+
+    // The replica's HTTP counters (F1-09), through the schema: the
+    // /health/providers reads of the tests above are already in them.
+    expect(Object.keys(body.http.groups)).toHaveLength(12);
+    expect(body.http.requests).toBeGreaterThan(0);
+    expect(body.http.groups.other.requests).toBeGreaterThan(0);
+    expect(body.http.latency_buckets_ms).toHaveLength(9);
+    expect(body.http.positions_contracts.window_minutes).toBe(10);
   });
 });
 

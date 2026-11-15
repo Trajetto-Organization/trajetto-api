@@ -31,6 +31,7 @@ import {
   opsSampleIdentity,
   registerSampleSection,
 } from "./shared/health/ops-sample";
+import { httpMetrics } from "./shared/health/http-metrics";
 import { gateStats } from "./shared/security/bcrypt-gate";
 import { logger } from "./shared/logging/logger";
 // Side effect: registers "ProofSigningService" (@registry).
@@ -193,6 +194,11 @@ async function bootstrap() {
         return { local_connections, adapter, dropped_frames_unreported };
       });
       registerSampleSection("bcrypt", gateStats);
+
+      // The minute's HTTP counters and histogram per route group, and the
+      // positions' contracts of the last ten minutes (F1-09). Reading
+      // rotates the counters, so the row holds the minute.
+      registerSampleSection("http", () => httpMetrics.rotate());
 
       const stopMetrics = startRuntimeMetrics(
         app.log,

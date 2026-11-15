@@ -27,6 +27,7 @@ import { readPrismaPool } from "@/shared/health/pool-metrics";
 import { runtimeMetrics } from "@/shared/health/runtime-metrics";
 import { providerMetrics } from "@/shared/health/provider-metrics";
 import { readRedisMetrics } from "@/shared/health/redis-metrics";
+import { httpMetrics } from "@/shared/health/http-metrics";
 import { SnapshotCache } from "@/shared/cache/snapshot-cache";
 import { realtimeMetrics } from "@/websocket";
 import { gateStats } from "@/shared/security/bcrypt-gate";
@@ -250,6 +251,10 @@ async function collectOperationalMetrics() {
     providers: providerMetrics.snapshot(),
     realtime: realtimeMetrics(),
     redis: await redis,
+    // This replica's HTTP counters, histogram per route group and the
+    // positions' contracts (plano-escala F1-09) — per replica, like
+    // `runtime`; the ops_sample rows carry every replica's.
+    http: httpMetrics.snapshot(),
   };
 }
 

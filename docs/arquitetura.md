@@ -459,7 +459,10 @@ Passo a passo para uma feature de ponta a ponta:
    `CÓDIGO: o que significa`. Aí vale só o texto da rota, para o mesmo código
    não sair explicado duas vezes (`mergeResponse`).
 6. **Registro** do repositório no container (`src/shared/index.ts`) e da rota
-   em `src/routes/routes.ts` se for um arquivo novo.
+   em `src/routes/routes.ts` se for um arquivo novo. Toda rota nova entra
+   também num dos doze grupos de `src/shared/health/route-groups.ts` (o grupo
+   em que o tráfego dela conta nas métricas HTTP); o
+   `health/route-groups.test.ts` falha com a rota que ficou de fora.
 7. **Tempo real**: depois do commit, emita o evento (ex.
    `sendCatalogChangedEvent`) — nunca dentro da transação.
 8. **Testes** primeiro (vermelho → verde): unitário do usecase com os gêmeos
@@ -4267,6 +4270,18 @@ com sorteio de 0 a 15 s, e segue servindo quando a gravação falha; outros
 módulos acrescentam números com `registerSampleSection`
 (`src/shared/health/ops-sample.ts`). Como ler e como desligar:
 [`deploy.md`](./deploy.md#séries-de-operação-ops_sample).
+
+**Métricas HTTP** (`src/shared/health/http-metrics.ts`): o hook
+`onResponse` de `src/http.ts` conta toda resposta, recusas e 404 inclusive,
+por classe de status (2xx a 5xx, mais 429 e 503 à parte) e num histograma
+fixo de latência (25 ms a 10 s) por grupo de rota, em tempo constante. São
+doze grupos fixos, com a lista explícita de rotas em
+`src/shared/health/route-groups.ts`; nunca um rótulo feito de dado. Nos
+`POST /route/positions` ele conta também o `contract=` do app, numa janela
+móvel de 10 minutos por réplica (até 16 valores, depois `other`): é a adoção
+que o descarte de posições vai esperar. Os números vão para o
+`/health/metrics` (`http`) e, a cada minuto, para a seção `http` do
+`ops_sample`.
 
 ## Decisões (ADRs)
 
