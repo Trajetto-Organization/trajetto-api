@@ -19,6 +19,7 @@ import { repairUnticketedMessagesJob } from "./repair-unticketed-messages-job";
 import { geocodeDeliveriesJob } from "./geocode-deliveries-job";
 import { alertRoutesLeftOpenJob } from "./alert-routes-left-open-job";
 import { snapshotQueryStatsJob } from "./snapshot-query-stats-job";
+import { purgeOpsSeriesJob } from "./purge-ops-series-job";
 
 /**
  * It records all the application's cron jobs.
@@ -90,6 +91,10 @@ function registerCronJobs(): void {
   // pg_stat_statements into pgss_snapshot (plano-escala F1-12). A no-op
   // with a warning until the server preloads the library.
   scheduler.registerJob(snapshotQueryStatsJob);
+
+  // Nightly (04:40): the series past their retention (30 days), ops_sample
+  // and pgss_snapshot, in batches and partial when rows are left (F1-13).
+  scheduler.registerJob(purgeOpsSeriesJob);
 }
 
 export { registerCronJobs };

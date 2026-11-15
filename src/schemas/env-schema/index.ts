@@ -549,6 +549,20 @@ const envSchema = z
       z.coerce.number().int().min(1).max(5_000).default(200),
     ),
 
+    // How many days the scale plan's series are kept (plano-escala F1-13):
+    // the nightly purge-ops-series job removes older rows of ops_sample and
+    // pgss_snapshot in batches. 30 covers the 30 days the burn-rate alerts
+    // and the capacity triggers look back on; under 14 is refused, because
+    // no trigger is judged on fewer than 14 days of series.
+    OPS_SAMPLE_RETENTION_DAYS: z.preprocess(
+      (value) => (value === "" ? undefined : value),
+      z.coerce.number().int().min(14).max(3_650).default(30),
+    ),
+    PGSS_SNAPSHOT_RETENTION_DAYS: z.preprocess(
+      (value) => (value === "" ? undefined : value),
+      z.coerce.number().int().min(14).max(3_650).default(30),
+    ),
+
     // Which node, slot and service this task is (plano-escala F4-50): the
     // container's hostname is a container id that changes every deploy and
     // names no machine, and with a second node "the slow replica" has to.

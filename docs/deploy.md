@@ -3886,7 +3886,9 @@ linha: `role` (`all` com `WORKERS_ENABLED=true`, `http` com `false`),
 `metrics.swarm` (`node`, `task_slot`, `service`) e as linhas de log levam
 `swarm_node`, `swarm_task_slot` e `swarm_service`; sem elas, nada muda. Só
 números de infraestrutura: nunca empresa, IP nem id de pessoa. São cerca de 1.440
-linhas por processo por dia. Uma gravação que falha vira um aviso
+linhas por processo por dia, guardadas por `OPS_SAMPLE_RETENTION_DAYS` (30)
+dias: o cron `purge-ops-series` (04:40 UTC) apaga as mais velhas em lotes,
+com a execução parcial dos [expurgos](#expurgos-parciais). Uma gravação que falha vira um aviso
 (`ops sample write failed`) e o processo segue servindo; `OPS_SAMPLE_ENABLED=false`
 desliga a gravação sem tirar a linha de log. Não há rota: a leitura é pelo
 `psql`.
@@ -3955,7 +3957,8 @@ hora, e o caminho é um `pg_stat_statements.max` maior. Enquanto o servidor
 não pré-carrega a biblioteca (a produção até a imagem nova do Postgres), o
 cron não faz nada e avisa `query stats snapshot skipped`, sem falhar. O
 texto das consultas pode ter literais: fica só no banco, e a leitura é pelo
-`psql`.
+`psql`. As linhas ficam `PGSS_SNAPSHOT_RETENTION_DAYS` (30) dias: o mesmo
+`purge-ops-series` das 04:40 UTC as apaga, antes das do `ops_sample`.
 
 ```sql
 -- as 10 consultas que mais custaram nas últimas 24 h, por role
@@ -3971,8 +3974,8 @@ LIMIT 10;
 
 ### Expurgos parciais
 
-Os expurgos noturnos (`cleanup-*`, 03:17–04:50 UTC, os `refresh_token`
-vencidos inclusive) apagam em lotes e param no orçamento da execução (`CRON_PURGE_RUN_BUDGET_MS`, 5 min) ou no
+Os expurgos noturnos (`cleanup-*` e `purge-ops-series`, 03:17–04:50 UTC,
+os `refresh_token` vencidos inclusive) apagam em lotes e param no orçamento da execução (`CRON_PURGE_RUN_BUDGET_MS`, 5 min) ou no
 teto de linhas de cada tabela. Se ainda houver linha vencida quando param
 (uma sonda confere, para um teto batido junto com a última linha não contar),
 a execução termina **FAILED com `last_error` começando por `[partial]`**,
