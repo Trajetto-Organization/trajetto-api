@@ -470,6 +470,18 @@ const envSchema = z
       z.coerce.number().int().min(500).default(30_000),
     ),
 
+    // The scale plan's per-minute series (plano-escala F1-08): each process
+    // writes one ops_sample row a minute, 0–15 s after the minute ends, and
+    // a failed write never stops the process (fail-open). On by default:
+    // the 14 days of series start with the deploy. `false` is the rollback,
+    // and stops only the write — the minute log line stays.
+    OPS_SAMPLE_ENABLED: z
+      .preprocess(
+        (value) => (value === "" ? undefined : value),
+        z.enum(["true", "false"]).default("true"),
+      )
+      .transform((value) => value === "true"),
+
     /**
      * The internal reference at /docs.
      *

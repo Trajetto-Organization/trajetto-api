@@ -8,6 +8,7 @@ import { env } from "./env";
 import {
   closeRealtimeConnections,
   initializeSocketIO,
+  realtimeMetrics,
   shutdownSocketIO,
 } from "./websocket";
 import {
@@ -25,6 +26,12 @@ import {
   startRuntimeMetrics,
 } from "./shared/health/runtime-metrics";
 import { readPrismaPool } from "./shared/health/pool-metrics";
+import {
+  createOpsSampler,
+  opsSampleIdentity,
+  registerSampleSection,
+} from "./shared/health/ops-sample";
+import { gateStats } from "./shared/security/bcrypt-gate";
 import { logger } from "./shared/logging/logger";
 // Side effect: registers "ProofSigningService" (@registry).
 import "./shared/services/proof-signing/proof-signing-service";
@@ -168,10 +175,37 @@ async function bootstrap() {
       // Event-loop lag and utilisation, the threadpool canary and memory,
       // read by /health/metrics and logged once a minute per replica — with
       // the replica's Prisma pool, which the endpoint shows for one replica
-      // only.
-      stopRuntimeMetrics = startRuntimeMetrics(app.log, runtimeMetrics, () =>
-        readPrismaPool(databasePool, process.env.DATABASE_URL),
+      // only. The same window becomes this process's ops_sample row
+      // (plano-escala F1-08), 0–15 s after it ends, unless
+      // OPS_SAMPLE_ENABLED=false.
+      const sampler = createOpsSampler({
+        enabled: env.OPS_SAMPLE_ENABLED,
+        identity: opsSampleIdentity(env.WORKERS_ENABLED),
+        log,
+      });
+
+      // The sockets and the password gate of this process, as on
+      // /health/metrics: counts only, nobody's id.
+      registerSampleSection("realtime", () => {
+        const { local_connections, adapter, dropped_frames_unreported } =
+          realtimeMetrics();
+
+        return { local_connections, adapter, dropped_frames_unreported };
+      });
+      registerSampleSection("bcrypt", gateStats);
+
+      const stopMetrics = startRuntimeMetrics(
+        app.log,
+        runtimeMetrics,
+        () => readPrismaPool(databasePool, process.env.DATABASE_URL),
+        undefined,
+        { onWindow: (window) => sampler.record(window) },
       );
+
+      stopRuntimeMetrics = () => {
+        stopMetrics();
+        sampler.stop();
+      };
     },
 
     // Installs the Redis adapter before the first socket can connect. It no

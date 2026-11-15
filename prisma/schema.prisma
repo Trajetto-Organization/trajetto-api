@@ -1576,6 +1576,36 @@ model WorkerHeartbeat {
   @@map("worker_heartbeat")
 }
 
+/// The scale plan's series (plano-escala F1, item F1-08): one row per
+/// process per minute, written by a local timer with jitter in every process
+/// (never a cron: the election would leave a single writer), so the triggers
+/// of ADR 0001 are read from 14 days of numbers instead of a guess. Infra
+/// numbers only — never a businessId, an IP or anybody's id. Read by psql;
+/// no route serves it.
+model OpsSample {
+  /// uuid v7: time-ordered, so new rows land at the end of the index.
+  id String @id @default(uuid(7))
+
+  /// The end of the minute the row covers.
+  ts DateTime
+
+  /// "all" (HTTP and the workers in one process), "http"
+  /// (WORKERS_ENABLED=false), or "cluster" for the elected heartbeat's row.
+  role String
+
+  /// The container's hostname: one per Swarm task.
+  replica String
+
+  /// The build's commit (APP_COMMIT_SHA); null in a local build.
+  commit String?
+
+  /// The numbers, versioned by their `v` field (1 today).
+  metrics Json
+
+  @@index([ts])
+  @@map("ops_sample")
+}
+
 enum AIAnalysisType {
   FUEL_ODOMETER
   CHECKLIST

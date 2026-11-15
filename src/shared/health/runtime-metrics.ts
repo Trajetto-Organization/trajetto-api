@@ -194,6 +194,22 @@ interface LineLogger {
   info(fields: Record<string, unknown>, message: string): void;
 }
 
+/** One finished window, as the per-minute sample (ops-sample.ts) takes it. */
+interface RuntimeWindow {
+  endedAt: Date;
+  runtime: RuntimeSnapshot & { prisma_pool?: unknown };
+  providers: ProviderMetricsSnapshot["channels"];
+}
+
+interface RuntimeMetricsOptions {
+  /**
+   * Called once per window, after the line, with the same numbers. It must
+   * not throw (the sampler never does), and if it does the line still went
+   * out and the next window still comes.
+   */
+  onWindow?: (window: RuntimeWindow) => void;
+}
+
 /**
  * Starts the collector and a log line per window with its numbers; returns
  * the function that stops both. Everything is unref'd: metrics never keep a
@@ -204,6 +220,10 @@ interface LineLogger {
  * shows one replica; this line is where every replica's pool — the ADR
  * 0001/0004 trigger — reaches the log collector. A pool that cannot be read
  * logs null, and the rest of the line still goes out.
+ *
+ * `options.onWindow` receives each window too, with the pool: it is how the
+ * per-minute ops_sample row (plano-escala F1-08) is fed from the same
+ * numbers as the line, in every process.
  */
 function startRuntimeMetrics(
   log: LineLogger,
@@ -211,10 +231,12 @@ function startRuntimeMetrics(
   readPool?: () => Promise<unknown>,
   readProviders: () => ProviderMetricsSnapshot = () =>
     providerMetrics.snapshot(),
+  options: RuntimeMetricsOptions = {},
 ): () => void {
   metrics.start();
 
   const timer = setInterval(() => {
+    const endedAt = new Date();
     const runtime = metrics.rotate();
 
     // Provider latency and error rate (contract §32) ride on the same line,
@@ -225,8 +247,20 @@ function startRuntimeMetrics(
     );
     const extra = providers.length > 0 ? { providers } : {};
 
+    const emit = (line: RuntimeWindow["runtime"]) => {
+      log.info({ runtime: line, ...extra }, "runtime metrics");
+
+      // A sampler bug must not cost the line, nor — from inside this timer —
+      // the process.
+      try {
+        options.onWindow?.({ endedAt, runtime: line, providers });
+      } catch {
+        // The line above already carries the same numbers.
+      }
+    };
+
     if (!readPool) {
-      log.info({ runtime, ...extra }, "runtime metrics");
+      emit(runtime);
       return;
     }
 
@@ -235,12 +269,7 @@ function startRuntimeMetrics(
     void Promise.resolve()
       .then(readPool)
       .catch(() => null)
-      .then((pool) => {
-        log.info(
-          { runtime: { ...runtime, prisma_pool: pool }, ...extra },
-          "runtime metrics",
-        );
-      });
+      .then((pool) => emit({ ...runtime, prisma_pool: pool }));
   }, metrics.windowMs);
 
   timer.unref();
@@ -252,4 +281,9 @@ function startRuntimeMetrics(
 }
 
 export { createRuntimeMetrics, runtimeMetrics, startRuntimeMetrics };
-export type { RuntimeMetrics, RuntimeSnapshot };
+export type {
+  RuntimeMetrics,
+  RuntimeMetricsOptions,
+  RuntimeSnapshot,
+  RuntimeWindow,
+};

@@ -3838,6 +3838,32 @@ Limiares em `DEFAULT_ALERT_THRESHOLDS` (`alert-rules.ts`).
 Para trocar uma variável: _Environment_ da Application → **Save** →
 **Deploy** (salvar sozinho não reinicia o contêiner).
 
+### Séries de operação (`ops_sample`)
+
+A régua do plano de escala: cada processo da API grava **uma linha por
+minuto** na tabela `ops_sample`, de 0 a 15 s depois do fim do minuto (um
+timer local com sorteio, nunca um cron, para que toda réplica grave), com os
+mesmos números da linha de log `runtime metrics`: laço de eventos, threadpool,
+memória, pool do Prisma, provedores chamados no minuto, sockets e o portão
+do bcrypt (`src/shared/health/ops-sample.ts`). As colunas dizem de quem é a
+linha: `role` (`all` com `WORKERS_ENABLED=true`, `http` com `false`),
+`replica` (o hostname do contêiner) e `commit`. Só números de
+infraestrutura: nunca empresa, IP nem id de pessoa. São cerca de 1.440
+linhas por processo por dia. Uma gravação que falha vira um aviso
+(`ops sample write failed`) e o processo segue servindo; `OPS_SAMPLE_ENABLED=false`
+desliga a gravação sem tirar a linha de log. Não há rota: a leitura é pelo
+`psql`.
+
+```sql
+-- utilização do laço e espera no pool por réplica, na última hora
+SELECT replica, ts,
+       (metrics->'event_loop'->>'utilization')::float8 AS elu,
+       (metrics->'prisma_pool'->>'waiting')::int AS pool_waiting
+FROM ops_sample
+WHERE ts > now() - interval '1 hour'
+ORDER BY replica, ts;
+```
+
 ### Falhas que só o cliente vê
 
 Ficam no log com formato fixo: `event: "client.diagnostics"` (app e navegador:

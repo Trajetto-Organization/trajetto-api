@@ -4261,6 +4261,13 @@ e `ready`. Quem lê a view consulta o estado antes. O texto das consultas pode
 ter literais (CPF, e-mail), por isso não há rota HTTP para ele: a leitura é
 pelo `psql`.
 
+**Séries de operação** (`ops_sample`): cada processo grava uma linha por
+minuto com os números da linha de log `runtime metrics`, por um timer local
+com sorteio de 0 a 15 s, e segue servindo quando a gravação falha; outros
+módulos acrescentam números com `registerSampleSection`
+(`src/shared/health/ops-sample.ts`). Como ler e como desligar:
+[`deploy.md`](./deploy.md#séries-de-operação-ops_sample).
+
 ## Decisões (ADRs)
 
 Os ADRs ficam em [`docs/adr/`](./adr/README.md), um arquivo por decisão, com
