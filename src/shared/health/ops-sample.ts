@@ -5,6 +5,7 @@ import type { Prisma } from "@prisma/client";
 import database from "@/../infra/database";
 import { buildInfo } from "@/shared/build-info";
 import type { RuntimeWindow } from "@/shared/health/runtime-metrics";
+import { swarmIdentity, type SwarmIdentity } from "@/shared/swarm-identity";
 
 /**
  * The scale plan's per-minute series (plano-escala F1, item F1-08): every
@@ -58,18 +59,32 @@ function opsSampleRole(workersEnabled: boolean): OpsSampleRole {
 interface OpsSampleIdentity {
   role: OpsSampleRole;
 
-  /** The container's hostname: one per Swarm task. */
+  /**
+   * The container's hostname, one per Swarm task, plus `/<slot>` when the
+   * Application sets SWARM_TASK_SLOT (F4-50): the slot stays unique when a
+   * hostname template makes the tasks share one, and ties a replica's series
+   * across deploys. "/" is not a hostname character, so it never blurs.
+   */
   replica: string;
 
   /** The build's commit; null in a local build. */
   commit: string | null;
+
+  /** The Swarm's node, slot and service; absent without the variables. */
+  swarm?: Readonly<SwarmIdentity>;
 }
 
-function opsSampleIdentity(workersEnabled: boolean): OpsSampleIdentity {
+function opsSampleIdentity(
+  workersEnabled: boolean,
+  swarm: Readonly<SwarmIdentity> = swarmIdentity,
+): OpsSampleIdentity {
+  const hostname = os.hostname();
+
   return {
     role: opsSampleRole(workersEnabled),
-    replica: os.hostname(),
+    replica: swarm.task_slot ? `${hostname}/${swarm.task_slot}` : hostname,
     commit: buildInfo.commit,
+    ...(Object.keys(swarm).length > 0 ? { swarm } : {}),
   };
 }
 
@@ -102,6 +117,7 @@ const RESERVED_SECTION_NAMES = new Set([
   "cpu",
   "prisma_pool",
   "providers",
+  "swarm",
 ]);
 
 /** A name, not data: lower snake case, short. */
@@ -171,6 +187,9 @@ function buildOpsSampleRow(
       v: OPS_SAMPLE_VERSION,
       ...runtime,
       providers: window.providers,
+      // Where the task ran (F4-50), only when the Application says: a row
+      // without the variables is the v=1 document it always was.
+      ...(identity.swarm ? { swarm: { ...identity.swarm } } : {}),
       ...sections,
     },
   };

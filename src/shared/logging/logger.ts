@@ -3,6 +3,7 @@ import { hostname } from "node:os";
 import pino, { type DestinationStream, type Logger } from "pino";
 
 import { env } from "@/env";
+import { swarmIdentity, swarmLogBindings } from "@/shared/swarm-identity";
 
 /**
  * Environment variables whose values must never reach a log line: every
@@ -87,8 +88,14 @@ function buildLogger(destination?: DestinationStream): Logger {
       // pino's own bindings plus the environment (ENV-1): staging and
       // production run the same image, and a line has to say which one wrote
       // it. Setting `base` replaces the defaults, so pid and hostname are
-      // spelled out.
-      base: { pid: process.pid, hostname: hostname(), app_env: env.APP_ENV },
+      // spelled out. The Swarm's node, slot and service (F4-50) join them
+      // only when the Application sets them: without, a line is what it was.
+      base: {
+        pid: process.pid,
+        hostname: hostname(),
+        app_env: env.APP_ENV,
+        ...swarmLogBindings(swarmIdentity),
+      },
 
       // No serializer writes headers today; this is the floor under the next
       // one that does. A bearer token or a session cookie in a log is a

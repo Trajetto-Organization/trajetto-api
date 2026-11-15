@@ -3853,8 +3853,14 @@ grupo de rota, só dos grupos com requisição, e os `contract=` do app nos
 `POST /route/positions` dos últimos 10 minutos
 (`src/shared/health/http-metrics.ts`). As colunas dizem de quem é a
 linha: `role` (`all` com `WORKERS_ENABLED=true`, `http` com `false`),
-`replica` (o hostname do contêiner) e `commit`. Só números de
-infraestrutura: nunca empresa, IP nem id de pessoa. São cerca de 1.440
+`replica` (o hostname do contêiner, mais `/<slot>` com `SWARM_TASK_SLOT`) e
+`commit`. Com as variáveis de identidade do Swarm no _Environment_ da
+`trajetto-api`, digitadas como os modelos do próprio Swarm
+(`SWARM_NODE_HOSTNAME={{.Node.Hostname}}`, `SWARM_TASK_SLOT={{.Task.Slot}}`,
+`SWARM_SERVICE_NAME={{.Service.Name}}`), a linha leva também
+`metrics.swarm` (`node`, `task_slot`, `service`) e as linhas de log levam
+`swarm_node`, `swarm_task_slot` e `swarm_service`; sem elas, nada muda. Só
+números de infraestrutura: nunca empresa, IP nem id de pessoa. São cerca de 1.440
 linhas por processo por dia. Uma gravação que falha vira um aviso
 (`ops sample write failed`) e o processo segue servindo; `OPS_SAMPLE_ENABLED=false`
 desliga a gravação sem tirar a linha de log. Não há rota: a leitura é pelo

@@ -10,6 +10,26 @@ import { isPublicOsmTemplate, isTileTemplate } from "@/shared/map/map-tiles";
 /** 32 characters of `openssl rand -base64` are ~192 bits: out of offline reach. */
 const JWT_SECRET_MIN_LENGTH = 32;
 
+/** A node hostname, a slot number or node id, a service name: no spaces. */
+const SWARM_LABEL = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
+
+/**
+ * One of the Swarm identity labels (F4-50): trimmed, absent when empty or
+ * still a template, and absent (never a boot failure) when not a plain name.
+ */
+function swarmLabel() {
+  return z.preprocess(
+    (value) => {
+      if (typeof value !== "string") return value;
+
+      const trimmed = value.trim();
+
+      return trimmed === "" || trimmed.includes("{{") ? undefined : trimmed;
+    },
+    z.string().regex(SWARM_LABEL).optional().catch(undefined),
+  );
+}
+
 const envSchema = z
   .object({
     NODE_ENV: z
@@ -481,6 +501,24 @@ const envSchema = z
         z.enum(["true", "false"]).default("true"),
       )
       .transform((value) => value === "true"),
+
+    // Which node, slot and service this task is (plano-escala F4-50): the
+    // container's hostname is a container id that changes every deploy and
+    // names no machine, and with a second node "the slow replica" has to.
+    // Typed once in the Application's Environment as the Swarm's own
+    // templates, which it renders per task:
+    //   SWARM_NODE_HOSTNAME={{.Node.Hostname}}
+    //   SWARM_TASK_SLOT={{.Task.Slot}}  (a global service: the node id)
+    //   SWARM_SERVICE_NAME={{.Service.Name}}
+    // They go into the log bindings and the ops_sample row. All optional:
+    // unset, nothing changes. A value still holding `{{` is a template
+    // nobody rendered (docker run, the dev compose) and counts as absent, as
+    // does an empty one; a value that is not a plain name is dropped instead
+    // of refusing the boot, because a label is never worth a process that
+    // will not start.
+    SWARM_NODE_HOSTNAME: swarmLabel(),
+    SWARM_TASK_SLOT: swarmLabel(),
+    SWARM_SERVICE_NAME: swarmLabel(),
 
     /**
      * The internal reference at /docs.
