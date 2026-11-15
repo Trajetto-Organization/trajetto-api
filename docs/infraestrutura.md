@@ -688,7 +688,9 @@ e, para a web,
 personalizado (`--requirepass` com `--save ""`, `--appendonly no`,
 `--maxmemory 256mb` e `--maxmemory-policy allkeys-lru`) e sem limite de
 memória (observado em 27/10). O de produção foi instruído com os dois.
-Decidir se o de staging é corrigido.
+Decidir se o de staging é corrigido. Desde o item F1-11 do plano de escala,
+o `ops-heartbeat` alerta sobre isso (`Redis sem teto de memória` ou
+`com maxmemory-policy noeviction`) em todo minuto em que o Redis responde.
 
 ### 5.3 Por que Application e nunca Compose
 

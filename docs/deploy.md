@@ -3801,8 +3801,20 @@ alerta). Sem `HEALTHCHECK_PING_URL` os motivos só vão para o log
 | Postgres                                    | conexões ≥ 80 % de `max_connections`                                                                                                                       |
 | Redis                                       | sem resposta ao PING em 2 s                                                                                                                                |
 | Certificado do comprovante                  | vence em 30 dias (aviso) / 7 dias (crítico), vencido ou inválido                                                                                           |
+| PITR esperado                               | `PITR_EXPECTED=true` e `archive_mode` diferente de `on` (sem a variável, nunca)                                                                            |
+| Arquivamento do WAL                         | com o arquivamento ligado: último segmento arquivado há mais de 300 s, ou a última tentativa falhou (falha mais nova que o último sucesso)                 |
+| xid                                         | `age(datfrozenxid)` do cluster acima de 1 bilhão                                                                                                           |
+| Escrita longa                               | transação de escrita aberta há mais de `LONG_WRITE_XACT_ALERT_SECONDS` (120 s), em qualquer banco do cluster                                               |
+| `pg_wal`                                    | acima de `PG_WAL_ALERT_GIB` (12 GiB; 8 na VPS única); só com superusuário ou `pg_monitor`                                                                  |
+| Despejo do Redis                            | `evicted_keys` cresceu desde a linha `cluster` do `ops_sample` de 15 a 20 min atrás (sem essa linha, não compara)                                          |
+| Teto do Redis                               | Redis respondendo sem `maxmemory` ou com `maxmemory-policy noeviction`                                                                                     |
+| Métricas do banco                           | a leitura principal (`core`) ou a do `pg_wal` falhou: as regras acima ficam cegas                                                                          |
 
-Limiares em `DEFAULT_ALERT_THRESHOLDS` (`alert-rules.ts`).
+Limiares em `DEFAULT_ALERT_THRESHOLDS` (`alert-rules.ts`); os de escrita
+longa e de `pg_wal` vêm das variáveis. As regras do banco e do Redis leem os
+números da linha `cluster` do minuto, lidos antes do ping (com
+`OPS_SAMPLE_ENABLED=false` elas continuam valendo, menos a do despejo, que
+precisa das linhas para comparar).
 
 ### Ligar (uma vez)
 
@@ -3827,19 +3839,26 @@ Limiares em `DEFAULT_ALERT_THRESHOLDS` (`alert-rules.ts`).
 
 ### Primeira ação por motivo
 
-| Motivo começa com                                     | Primeiro passo                                                                                                                                                                                                    |
-| ----------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `Canal WHATSAPP: falha de credencial`                 | token da Meta vencido/revogado: gerar token de sistema novo no Business Manager e atualizar `META_WHATSAPP_ACCESS_TOKEN`; as falhas estão em `/health/dead-letter?channel=WHATSAPP`                               |
-| `Canal EMAIL: falha de credencial`                    | chave do Resend revogada ou domínio desverificado                                                                                                                                                                 |
-| `Canal PUSH: falha de credencial`                     | a credencial FCM V1 do projeto no EAS (`eas credentials`), ou o _Enhanced Security for Push Notifications_ ligado no projeto Expo: a API não envia token de acesso da Expo                                        |
-| `Canal X: N entregas falharam de vez`                 | abrir o dead letter do canal e ler o prefixo `[... code=...]` mais comum                                                                                                                                          |
-| `Outbox` / `Entregas` / `Webhooks` / `Análises de IA` | `workers` em `/health/metrics` e o log da réplica; reiniciar a task travada                                                                                                                                       |
-| `Cron X`                                              | `cron_jobs` em `/health/metrics` traz `last_error`; o catch-up refaz jobs diários a cada hora. `Cron X: só execuções parciais` = o expurgo não dá conta do que entra: ver [Expurgos parciais](#expurgos-parciais) |
-| `driver_position`                                     | rodar o job de partições (idempotente) e ver por que falhou                                                                                                                                                       |
-| `Postgres`                                            | `runtime.prisma_pool` em `/health/metrics`; réplicas × `connection_limit`                                                                                                                                         |
-| `Redis`                                               | a API segue (fail-open), mas o rate limit fica local e o Socket.IO não cruza réplicas                                                                                                                             |
-| `Certificado ICP do comprovante vence em`             | renovar o A1 antes da data e trocar `PROOF_SIGNING_PFX_*`; `proof_signing` em `/health/metrics` mostra `not_after` e `days_left`                                                                                  |
-| `Certificado ICP ... vencido` / `inválido`            | os comprovantes saem sem assinatura (e dizem isso); `PFX_UNREADABLE` = senha errada ou arquivo corrompido, `PFX_FILE_UNREADABLE` = o arquivo não montou                                                           |
+| Motivo começa com                                     | Primeiro passo                                                                                                                                                                                                            |
+| ----------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Canal WHATSAPP: falha de credencial`                 | token da Meta vencido/revogado: gerar token de sistema novo no Business Manager e atualizar `META_WHATSAPP_ACCESS_TOKEN`; as falhas estão em `/health/dead-letter?channel=WHATSAPP`                                       |
+| `Canal EMAIL: falha de credencial`                    | chave do Resend revogada ou domínio desverificado                                                                                                                                                                         |
+| `Canal PUSH: falha de credencial`                     | a credencial FCM V1 do projeto no EAS (`eas credentials`), ou o _Enhanced Security for Push Notifications_ ligado no projeto Expo: a API não envia token de acesso da Expo                                                |
+| `Canal X: N entregas falharam de vez`                 | abrir o dead letter do canal e ler o prefixo `[... code=...]` mais comum                                                                                                                                                  |
+| `Outbox` / `Entregas` / `Webhooks` / `Análises de IA` | `workers` em `/health/metrics` e o log da réplica; reiniciar a task travada                                                                                                                                               |
+| `Cron X`                                              | `cron_jobs` em `/health/metrics` traz `last_error`; o catch-up refaz jobs diários a cada hora. `Cron X: só execuções parciais` = o expurgo não dá conta do que entra: ver [Expurgos parciais](#expurgos-parciais)         |
+| `driver_position`                                     | rodar o job de partições (idempotente) e ver por que falhou                                                                                                                                                               |
+| `Postgres`                                            | `runtime.prisma_pool` em `/health/metrics`; réplicas × `connection_limit`                                                                                                                                                 |
+| `Redis`                                               | a API segue (fail-open), mas o rate limit fica local e o Socket.IO não cruza réplicas                                                                                                                                     |
+| `Certificado ICP do comprovante vence em`             | renovar o A1 antes da data e trocar `PROOF_SIGNING_PFX_*`; `proof_signing` em `/health/metrics` mostra `not_after` e `days_left`                                                                                          |
+| `Certificado ICP ... vencido` / `inválido`            | os comprovantes saem sem assinatura (e dizem isso); `PFX_UNREADABLE` = senha errada ou arquivo corrompido, `PFX_FILE_UNREADABLE` = o arquivo não montou                                                                   |
+| `PITR esperado`                                       | o Database perdeu o `PITR_ARCHIVE=on` ou ganhou um _Command_/_Args_ que apaga o `CMD` da imagem; `SHOW archive_mode` no banco                                                                                             |
+| `Arquivamento do WAL`                                 | `SELECT * FROM pg_stat_archiver` e o log do Database (o `archive-push` diz por que falhou); R2 fora ou chave errada fazem o `pg_wal` crescer                                                                              |
+| `Postgres: idade do xid`                              | `SELECT datname, age(datfrozenxid) FROM pg_database ORDER BY 2 DESC` e o autovacuum da tabela mais velha                                                                                                                  |
+| `Postgres: transação de escrita aberta`               | `SELECT pid, now() - xact_start, state, left(query, 80) FROM pg_stat_activity WHERE backend_xid IS NOT NULL ORDER BY 2 DESC`; uma sessão esquecida no `psql` termina com `pg_terminate_backend(pid)`                      |
+| `Postgres: pg_wal com`                                | o arquivamento primeiro (se parado, o WAL não sai), depois um slot de replicação abandonado (`pg_replication_slots`)                                                                                                      |
+| `Redis despejou` / `Redis sem teto` / `noeviction`    | o comando personalizado do Database Redis ([seção 10](#10-postgres-e-redis)): `--maxmemory 256mb --maxmemory-policy allkeys-lru`; despejo com o teto certo = memória no limite, ver `used_memory_mb` em `/health/metrics` |
+| `Verificação incompleta: métricas do banco`           | o SQLSTATE diz quem recusou (`57014` = `statement_timeout`, `42501` = permissão)                                                                                                                                          |
 
 Para trocar uma variável: _Environment_ da Application → **Save** →
 **Deploy** (salvar sozinho não reinicia o contêiner).
@@ -3882,9 +3901,12 @@ mais antigos, `archive_mode` e o `pg_stat_archiver`, `pg_wal`, os contadores
 do cache, `pg_stat_statements`) e o Redis inteiro de `/health/metrics`; a
 cada 15 minutos (:00, :15, :30, :45), também os tamanhos e as tabelas
 quentes. É a linha-marcador do ensaio de PITR: uma restauração até T tem a
-linha `cluster` do minuto de T. Uma leitura ou gravação que falha vira o aviso
-`cluster ops sample write failed`, sem atrasar o ping; `OPS_SAMPLE_ENABLED=false`
-desliga as duas.
+linha `cluster` do minuto de T. Os números do banco e do Redis são lidos uma
+vez, antes do ping, porque as regras de alerta também os julgam; uma leitura
+que falha vira `null` (e, nas partes do banco que as regras leem, um motivo
+`Verificação incompleta`). Uma gravação que falha vira o aviso
+`cluster ops sample write failed`, sem atrasar o ping. `OPS_SAMPLE_ENABLED=false`
+desliga a gravação; as leituras continuam, para os alertas.
 
 ```sql
 -- utilização do laço e espera no pool por réplica, na última hora

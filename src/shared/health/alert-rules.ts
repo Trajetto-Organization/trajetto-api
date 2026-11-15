@@ -82,8 +82,63 @@ interface OperationalSnapshot {
     notAfter: Date | null;
   };
 
+  /**
+   * The database's own numbers the scale plan's alerts read (F1-11), from
+   * the heartbeat's cluster readings. Absent when the collector did not
+   * read them, which judges nothing of it.
+   */
+  database?: ClusterDatabaseState;
+
+  /** Redis' memory, ceiling and evictions (F1-11); absent likewise. */
+  redis?: ClusterRedisState;
+
   /** Parts of the snapshot that could not be read; each one is a reason. */
   collectionErrors: string[];
+}
+
+interface ClusterDatabaseState {
+  /** SHOW archive_mode: "on", "always" (a standby) or "off". */
+  archiveMode: string | null;
+
+  /** pg_stat_archiver: the last segment archived, and the last failure. */
+  lastArchivedAgeSec: number | null;
+  lastArchivedAt: Date | null;
+  lastArchiveFailedAt: Date | null;
+  archiveFailedCount: number | null;
+
+  /** The cluster's age(datfrozenxid), its largest database. */
+  xidAge: number | null;
+
+  /** The oldest transaction with an xid, anywhere in the cluster. */
+  oldestWriteXactSec: number | null;
+
+  /** pg_wal's size; null when this user may not list it. */
+  pgWalBytes: number | null;
+}
+
+interface ClusterRedisState {
+  up: boolean;
+
+  /** null with Redis up is "no ceiling" (maxmemory 0). */
+  maxmemoryMb: number | null;
+  maxmemoryPolicy: string | null;
+
+  /**
+   * Keys evicted since the 'cluster' row of about 15 minutes ago, and how
+   * long ago that was; null without such a row (the first minutes after a
+   * deploy, or the series switched off).
+   */
+  evictedKeys: { delta: number; windowSec: number } | null;
+}
+
+/** What the environment says should be there (F1-11). */
+interface AlertExpectations {
+  /**
+   * PITR_EXPECTED: WAL archiving is meant to be on. False until the
+   * pgBackRest setup of each environment is done (F1a staging, F1b
+   * production), so a database that never archived pages nobody.
+   */
+  pitrExpected: boolean;
 }
 
 const DEFAULT_ALERT_THRESHOLDS = {
@@ -118,9 +173,52 @@ const DEFAULT_ALERT_THRESHOLDS = {
 
   /** From here on, receipts are days away from going out unsigned. */
   proofSigningCriticalDays: 7,
+
+  /**
+   * archive_timeout is 60 s (plano-escala), so a segment leaves at least a
+   * minute apart while anything writes, and the ops_sample rows write every
+   * minute: five minutes without one is an archiver that stopped.
+   */
+  archiveLagSec: 300,
+
+  /**
+   * Wraparound is at 2^31 (~2.1 billion) and the anti-wraparound vacuum
+   * starts at 200 million: a billion is the freeze falling far behind, with
+   * time still to act.
+   */
+  xidAge: 1_000_000_000,
+
+  /**
+   * LONG_WRITE_XACT_ALERT_SECONDS (120 by default): an open write holds the
+   * vacuum's horizon and, with the integration feed (F2-05), the feed's.
+   * The import reversal runs a 60 s transaction inside HTTP today; the
+   * limit drops to 60 by env once that becomes a job (wave 14).
+   */
+  longWriteXactSec: 120,
+
+  /**
+   * PG_WAL_ALERT_GIB (12 by default, 8 on the single VPS): normal use is
+   * 1-2 GB, plus the archive queue when R2 is away, and pg_wal lives on the
+   * disk both productions share.
+   */
+  pgWalBytes: 12 * 1024 ** 3,
 } as const;
 
 type AlertThresholds = { [K in keyof typeof DEFAULT_ALERT_THRESHOLDS]: number };
+
+const GIB = 1024 ** 3;
+
+/** The thresholds the environment tunes (F1-11); the rest are the code's. */
+function alertThresholdsFromEnv(values: {
+  LONG_WRITE_XACT_ALERT_SECONDS: number;
+  PG_WAL_ALERT_GIB: number;
+}): AlertThresholds {
+  return {
+    ...DEFAULT_ALERT_THRESHOLDS,
+    longWriteXactSec: values.LONG_WRITE_XACT_ALERT_SECONDS,
+    pgWalBytes: values.PG_WAL_ALERT_GIB * GIB,
+  };
+}
 
 function seconds(value: number): string {
   return `${Math.round(value)}s`;
@@ -183,9 +281,127 @@ function proofSigningReason(
   return null;
 }
 
+/** "on" and "always" (a standby archiving what it replays) both archive. */
+function archives(mode: string | null): boolean {
+  return mode === "on" || mode === "always";
+}
+
+function gib(bytes: number): string {
+  return `${(Math.round((bytes / GIB) * 10) / 10).toLocaleString("pt-BR")} GiB`;
+}
+
+/**
+ * The database's own rules (F1-11). The archiver is judged only while it
+ * archives: with archive_mode off there is nothing to judge, and
+ * pg_stat_archiver keeps whatever an old setup left. Whether it SHOULD be
+ * on is PITR_EXPECTED's question. pg_wal is judged either way: it fills the
+ * disk whatever the cause.
+ */
+function databaseReasons(
+  database: ClusterDatabaseState,
+  thresholds: AlertThresholds,
+  expectations: AlertExpectations,
+): Array<string | null> {
+  const reasons: Array<string | null> = [];
+  const archiving = archives(database.archiveMode);
+
+  if (
+    expectations.pitrExpected &&
+    database.archiveMode !== null &&
+    !archiving
+  ) {
+    reasons.push(
+      `PITR esperado (PITR_EXPECTED=true), mas archive_mode está "${database.archiveMode}": o WAL não sai do servidor e não há restauração até o minuto`,
+    );
+  }
+
+  if (archiving) {
+    const lastFailed = database.lastArchiveFailedAt;
+    const lastArchived = database.lastArchivedAt;
+
+    // The latest attempt failed: a failure newer than the last success.
+    // failed_count alone is cumulative since the stats reset, and an
+    // archiver that recovered keeps it.
+    if (
+      lastFailed !== null &&
+      (lastArchived === null || lastFailed.getTime() > lastArchived.getTime())
+    ) {
+      reasons.push(
+        `Arquivamento do WAL falhando: a última tentativa falhou em ${lastFailed.toISOString()} (${database.archiveFailedCount ?? "?"} falha(s) desde o último reset); o pg_wal cresce até o arquivamento voltar`,
+      );
+    } else if (
+      database.lastArchivedAgeSec !== null &&
+      database.lastArchivedAgeSec > thresholds.archiveLagSec
+    ) {
+      reasons.push(
+        `Arquivamento do WAL parado: o último segmento foi arquivado há ${seconds(database.lastArchivedAgeSec)} (limite ${seconds(thresholds.archiveLagSec)}); o pg_wal cresce até o arquivamento voltar`,
+      );
+    }
+  }
+
+  if (database.xidAge !== null && database.xidAge > thresholds.xidAge) {
+    reasons.push(
+      `Postgres: idade do xid em ${Math.round(database.xidAge)} (limite ${thresholds.xidAge}); o congelamento do vacuum está atrasado`,
+    );
+  }
+
+  if (
+    database.oldestWriteXactSec !== null &&
+    database.oldestWriteXactSec > thresholds.longWriteXactSec
+  ) {
+    reasons.push(
+      `Postgres: transação de escrita aberta há ${seconds(database.oldestWriteXactSec)} (limite ${seconds(thresholds.longWriteXactSec)}); segura o vacuum e o feed da integração`,
+    );
+  }
+
+  if (
+    database.pgWalBytes !== null &&
+    database.pgWalBytes > thresholds.pgWalBytes
+  ) {
+    reasons.push(
+      `Postgres: pg_wal com ${gib(database.pgWalBytes)} (limite ${gib(thresholds.pgWalBytes)}); o disco compartilhado enche se continuar`,
+    );
+  }
+
+  return reasons;
+}
+
+/**
+ * Redis' memory rules (F1-11). With Redis down they say nothing: the
+ * "Redis sem resposta" rule speaks, and its numbers are not there.
+ */
+function redisReasons(redis: ClusterRedisState): Array<string | null> {
+  if (!redis.up) return [];
+
+  const reasons: Array<string | null> = [];
+
+  if (redis.evictedKeys && redis.evictedKeys.delta > 0) {
+    reasons.push(
+      `Redis despejou ${redis.evictedKeys.delta} chave(s) em ${Math.round(redis.evictedKeys.windowSec / 60)} min: memória no teto; contadores do rate limit e estado do Socket.IO foram descartados`,
+    );
+  }
+
+  const noCeiling = redis.maxmemoryMb === null;
+  const noEviction = redis.maxmemoryPolicy === "noeviction";
+
+  if (noCeiling || noEviction) {
+    const what: string[] = [];
+
+    if (noCeiling) what.push("sem teto de memória (maxmemory 0)");
+    if (noEviction) what.push("com maxmemory-policy noeviction");
+
+    reasons.push(
+      `Redis ${what.join(" e ")}: cheio, recusa escritas e desliga o rate limit de uma vez (o esperado é --maxmemory 256mb --maxmemory-policy allkeys-lru)`,
+    );
+  }
+
+  return reasons;
+}
+
 function evaluateAlerts(
   snapshot: OperationalSnapshot,
   thresholds: AlertThresholds = DEFAULT_ALERT_THRESHOLDS,
+  expectations: AlertExpectations = { pitrExpected: false },
 ): string[] {
   const reasons: Array<string | null> = [];
 
@@ -327,6 +543,14 @@ function evaluateAlerts(
     );
   }
 
+  if (snapshot.database) {
+    reasons.push(
+      ...databaseReasons(snapshot.database, thresholds, expectations),
+    );
+  }
+
+  if (snapshot.redis) reasons.push(...redisReasons(snapshot.redis));
+
   reasons.push(proofSigningReason(snapshot, thresholds));
 
   for (const error of snapshot.collectionErrors) {
@@ -336,5 +560,12 @@ function evaluateAlerts(
   return reasons.filter((reason): reason is string => reason !== null);
 }
 
-export { DEFAULT_ALERT_THRESHOLDS, evaluateAlerts };
-export type { AlertThresholds, CronJobState, OperationalSnapshot };
+export { DEFAULT_ALERT_THRESHOLDS, alertThresholdsFromEnv, evaluateAlerts };
+export type {
+  AlertExpectations,
+  AlertThresholds,
+  ClusterDatabaseState,
+  ClusterRedisState,
+  CronJobState,
+  OperationalSnapshot,
+};

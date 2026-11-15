@@ -6,7 +6,10 @@ import type { RedisMetrics } from "@/shared/health/redis-metrics";
 import {
   buildClusterSampleRow,
   carriesSizes,
+  evictionsSince,
+  readClusterReadings,
   recordClusterSample,
+  withClusterReadings,
 } from "@/shared/health/cluster-sample";
 import type { OpsSampleRow } from "@/shared/health/ops-sample";
 
@@ -23,7 +26,10 @@ import type { OpsSampleRow } from "@/shared/health/ops-sample";
  *  - the sizes and the hot tables ride only on quarter-hour rows;
  *  - a collection error keeps its part name, never the message;
  *  - a failed read or write never throws (the ping already went), and
- *    OPS_SAMPLE_ENABLED=false writes nothing and reads nothing.
+ *    OPS_SAMPLE_ENABLED=false writes nothing;
+ *  - the readings are taken before the ping, once, because the alerts
+ *    judge them too (F1-11): the database's numbers, Redis, and the keys
+ *    Redis evicted since the cluster row of ~15 minutes ago.
  *
  * One row a minute with two replicas is tests/E2E/ops-heartbeat.test.ts.
  */
@@ -188,48 +194,219 @@ describe("the cluster row", () => {
   });
 });
 
-describe("recording the cluster row", () => {
+describe("reading the cluster", () => {
   const SLOT = new Date("2026-11-15T12:15:00.000Z");
 
-  it("reads the database with the sizes on a quarter-hour and writes once", async () => {
-    const readDatabase = vi.fn(async () => database());
-    const write = vi.fn(async () => undefined);
+  it("reads the database with the sizes on a quarter-hour, then Redis and the baseline", async () => {
+    const order: string[] = [];
+    const readDatabase = vi.fn(async (_withSizes: boolean) => {
+      order.push("database");
+      return database();
+    });
 
-    await recordClusterSample(SLOT, snapshot(), {
-      enabled: true,
-      identity: IDENTITY,
+    const readings = await readClusterReadings(SLOT, {
       readDatabase,
-      readRedis: async () => REDIS,
-      write,
+      readRedis: async () => {
+        order.push("redis");
+        return { ...REDIS, evicted_keys: 7, uptime_seconds: 86_400 };
+      },
+      readBaseline: async (slot) => {
+        order.push("baseline");
+        expect(slot).toBe(SLOT);
+        return {
+          ts: new Date(SLOT.getTime() - 15 * 60_000),
+          evicted_keys: 5,
+          uptime_seconds: 85_500,
+        };
+      },
     });
 
     expect(readDatabase).toHaveBeenCalledWith(true);
-    expect(write).toHaveBeenCalledTimes(1);
-    expect((write.mock.calls[0] as unknown[])[0]).toMatchObject({
-      ts: SLOT,
-      role: "cluster",
+    // One after the other: the heartbeat never takes two slots of the pool.
+    expect(order).toEqual(["database", "redis", "baseline"]);
+    expect(readings.redisEvictions).toEqual({ delta: 2, windowSec: 900 });
+  });
+
+  it("skips the sizes off the quarter-hour", async () => {
+    const readDatabase = vi.fn(async (_withSizes: boolean) => database());
+
+    await readClusterReadings(new Date("2026-11-15T12:16:00.000Z"), {
+      readDatabase,
+      readRedis: async () => REDIS,
+      readBaseline: async () => null,
+    });
+
+    expect(readDatabase).toHaveBeenCalledWith(false);
+  });
+
+  it("never throws: a baseline that cannot be read compares nothing", async () => {
+    const readings = await readClusterReadings(SLOT, {
+      readDatabase: async () => database(),
+      readRedis: async () => REDIS,
+      readBaseline: async () => {
+        throw new Error("ECONNREFUSED");
+      },
+    });
+
+    expect(readings.redisEvictions).toBeNull();
+    expect(readings.redis).toBe(REDIS);
+  });
+});
+
+/**
+ * Redis' evicted_keys is a counter since the server started: the alert
+ * reads the keys evicted since the 'cluster' row of about 15 minutes ago.
+ * A Redis that restarted in between counts from zero again, so everything
+ * it holds happened inside the window.
+ */
+describe("the evictions since the baseline row", () => {
+  const SLOT = new Date("2026-11-15T12:15:00.000Z");
+  const baseline = (
+    evicted: number | null,
+    uptime: number | null = 90_000,
+  ) => ({
+    ts: new Date(SLOT.getTime() - 15 * 60_000),
+    evicted_keys: evicted,
+    uptime_seconds: uptime,
+  });
+  const redis = (evicted: number | null, uptime: number | null = 90_900) =>
+    ({
+      ...REDIS,
+      status: "up",
+      evicted_keys: evicted,
+      uptime_seconds: uptime,
+    }) as RedisMetrics;
+
+  it.each([
+    { now: 12, before: 10, delta: 2 },
+    { now: 10, before: 10, delta: 0 },
+    { now: 0, before: 0, delta: 0 },
+  ])(
+    "is the counter's growth: $before then $now is $delta",
+    ({ now, before, delta }) => {
+      expect(evictionsSince(redis(now), baseline(before), SLOT)).toEqual({
+        delta,
+        windowSec: 900,
+      });
+    },
+  );
+
+  it("counts everything since a restart inside the window", () => {
+    // Up for 5 minutes: the counter of the old server is gone.
+    expect(evictionsSince(redis(3, 300), baseline(40), SLOT)).toEqual({
+      delta: 3,
+      windowSec: 900,
+    });
+    // Uptime unread, but the counter went backwards: a restart too.
+    expect(evictionsSince(redis(3, null), baseline(40), SLOT)).toEqual({
+      delta: 3,
+      windowSec: 900,
     });
   });
 
-  it("never throws when a read or the write fails", async () => {
-    await expect(
-      recordClusterSample(SLOT, snapshot(), {
-        enabled: true,
-        identity: IDENTITY,
-        readDatabase: async () => {
-          throw new Error("ECONNREFUSED");
-        },
-        readRedis: async () => REDIS,
-        write: async () => undefined,
-      }),
-    ).resolves.toBeUndefined();
+  it("compares nothing without a row, a number, or Redis", () => {
+    expect(evictionsSince(redis(5), null, SLOT)).toBeNull();
+    expect(evictionsSince(redis(5), baseline(null), SLOT)).toBeNull();
+    expect(evictionsSince(redis(null), baseline(5), SLOT)).toBeNull();
+    expect(
+      evictionsSince({ ...redis(5), status: "down" }, baseline(1), SLOT),
+    ).toBeNull();
+  });
+});
 
+describe("the snapshot the alerts judge", () => {
+  it("carries the database and Redis numbers the rules read", () => {
+    const judged = withClusterReadings(snapshot(), {
+      database: {
+        ...database(),
+        archiver: {
+          archived_count: 10,
+          failed_count: 2,
+          last_archived_at: "2026-11-15T12:00:30.000Z",
+          last_archived_age_seconds: 33,
+          last_failed_at: "2026-11-15T11:00:00.000Z",
+        },
+      },
+      redis: {
+        ...REDIS,
+        maxmemory_mb: 256,
+        maxmemory_policy: "allkeys-lru",
+      },
+      redisEvictions: { delta: 0, windowSec: 900 },
+    });
+
+    expect(judged.database).toEqual({
+      archiveMode: "off",
+      lastArchivedAgeSec: 33,
+      lastArchivedAt: new Date("2026-11-15T12:00:30.000Z"),
+      lastArchiveFailedAt: new Date("2026-11-15T11:00:00.000Z"),
+      archiveFailedCount: 2,
+      xidAge: 1_000,
+      oldestWriteXactSec: 3.2,
+      pgWalBytes: 50_331_648,
+    });
+    expect(judged.redis).toEqual({
+      up: true,
+      maxmemoryMb: 256,
+      maxmemoryPolicy: "allkeys-lru",
+      evictedKeys: { delta: 0, windowSec: 900 },
+    });
+    // The snapshot's own parts are kept as they were.
+    expect(judged.collectionErrors).toEqual(snapshot().collectionErrors);
+  });
+
+  it("turns an unread database part into a reason, never an unread size", () => {
+    const judged = withClusterReadings(snapshot(), {
+      database: {
+        ...database(),
+        collection_errors: [
+          { part: "core", code: "57014" },
+          { part: "pg_wal", code: null },
+          { part: "sizes", code: "42501" },
+        ],
+      },
+      redis: REDIS,
+      redisEvictions: null,
+    });
+
+    expect(judged.collectionErrors).toEqual([
+      ...snapshot().collectionErrors,
+      "métricas do banco (core): SQLSTATE 57014",
+      "métricas do banco (pg_wal): sem resposta",
+    ]);
+  });
+});
+
+describe("recording the cluster row", () => {
+  const SLOT = new Date("2026-11-15T12:15:00.000Z");
+  const READINGS = () => ({
+    database: database(),
+    redis: REDIS,
+    redisEvictions: null,
+  });
+
+  it("writes the readings once, reading nothing again", async () => {
+    const write = vi.fn(async (_row: OpsSampleRow) => undefined);
+
+    await recordClusterSample(SLOT, snapshot(), READINGS(), {
+      enabled: true,
+      identity: IDENTITY,
+      write,
+    });
+
+    expect(write).toHaveBeenCalledTimes(1);
+    expect(write.mock.calls[0][0]).toMatchObject({
+      ts: SLOT,
+      role: "cluster",
+      metrics: { database: { sizes: database().sizes } },
+    });
+  });
+
+  it("never throws when the write fails", async () => {
     await expect(
-      recordClusterSample(SLOT, snapshot(), {
+      recordClusterSample(SLOT, snapshot(), READINGS(), {
         enabled: true,
         identity: IDENTITY,
-        readDatabase: async () => database(),
-        readRedis: async () => REDIS,
         write: async () => {
           throw new Error("ECONNREFUSED");
         },
@@ -237,21 +414,15 @@ describe("recording the cluster row", () => {
     ).resolves.toBeUndefined();
   });
 
-  it("reads and writes nothing when the series is switched off", async () => {
-    const readDatabase = vi.fn(async () => database());
-    const readRedis = vi.fn(async () => REDIS);
+  it("writes nothing when the series is switched off", async () => {
     const write = vi.fn(async () => undefined);
 
-    await recordClusterSample(SLOT, snapshot(), {
+    await recordClusterSample(SLOT, snapshot(), READINGS(), {
       enabled: false,
       identity: IDENTITY,
-      readDatabase,
-      readRedis,
       write,
     });
 
-    expect(readDatabase).not.toHaveBeenCalled();
-    expect(readRedis).not.toHaveBeenCalled();
     expect(write).not.toHaveBeenCalled();
   });
 });

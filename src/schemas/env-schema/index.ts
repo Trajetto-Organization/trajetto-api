@@ -509,6 +509,37 @@ const envSchema = z
       )
       .transform((value) => value === "true"),
 
+    // The ops heartbeat's database rules (plano-escala F1-11).
+    // PITR_EXPECTED says WAL archiving is meant to be on: with it true,
+    // archive_mode other than on pages. False by default, and switched on
+    // by hand once the environment's pgBackRest setup is done (F1a on
+    // staging, F1b on production), so a database that never archived pages
+    // nobody. An archiver that IS on is judged either way (stopped for
+    // 300 s, or its latest attempt failed).
+    PITR_EXPECTED: z
+      .preprocess(
+        (value) => (value === "" ? undefined : value),
+        z.enum(["true", "false"]).default("false"),
+      )
+      .transform((value) => value === "true"),
+
+    // A write transaction open this long pages: it holds the vacuum back
+    // and, with the integration feed, the feed. 120 s while the import
+    // reversal still runs its 60 s transaction inside HTTP; 60 once that
+    // becomes a job (wave 14).
+    LONG_WRITE_XACT_ALERT_SECONDS: z.preprocess(
+      (value) => (value === "" ? undefined : value),
+      z.coerce.number().int().min(10).max(3_600).default(120),
+    ),
+
+    // pg_wal past this many GiB pages: it lives on the disk both
+    // productions share, and an archive that cannot reach R2 grows it.
+    // Normal use is 1-2 GB; 12 by default, 8 on the single VPS.
+    PG_WAL_ALERT_GIB: z.preprocess(
+      (value) => (value === "" ? undefined : value),
+      z.coerce.number().positive().max(1_024).default(12),
+    ),
+
     // Which node, slot and service this task is (plano-escala F4-50): the
     // container's hostname is a container id that changes every deploy and
     // names no machine, and with a second node "the slow replica" has to.

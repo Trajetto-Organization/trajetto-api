@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   DEFAULT_ALERT_THRESHOLDS,
+  alertThresholdsFromEnv,
   evaluateAlerts,
   type OperationalSnapshot,
 } from "@/shared/health/alert-rules";
@@ -446,5 +447,294 @@ describe("the proof signing certificate", () => {
     expect(expired[0]).toMatch(/vencido/i);
     expect(invalid).toHaveLength(1);
     expect(invalid[0]).toContain("PFX_UNREADABLE");
+  });
+});
+
+/**
+ * The scale plan's database and Redis rules (plano-escala F1-11). The
+ * cluster's own numbers already reach the series every minute (F1-10); these
+ * rules make the ones that stop a database page before they do:
+ *
+ *  - PITR expected (PITR_EXPECTED=true) and archive_mode is not on: the WAL
+ *    is not leaving the machine and there is no restore to the minute;
+ *  - archiving on and the last segment archived more than 300 s ago
+ *    (archive_timeout is 60 s), or the latest attempt failed: pg_wal grows
+ *    on a disk two productions share;
+ *  - the cluster's xid age past a billion: the freeze is falling behind;
+ *  - a write transaction open longer than LONG_WRITE_XACT_ALERT_SECONDS: it
+ *    holds the vacuum back and, with the feed, the integration;
+ *  - pg_wal past PG_WAL_ALERT_GIB;
+ *  - Redis evicting keys in the last 15 minutes (the delta against the
+ *    'cluster' row), and Redis without a ceiling or with noeviction.
+ *
+ * Each is pinned one below, at and one past its threshold (a rule reads
+ * "more than"), and each fires only its own reason.
+ */
+describe("the database and Redis rules of the scale plan", () => {
+  const T = DEFAULT_ALERT_THRESHOLDS;
+  const GIB = 1024 ** 3;
+
+  type DatabaseState = NonNullable<OperationalSnapshot["database"]>;
+  type RedisState = NonNullable<OperationalSnapshot["redis"]>;
+
+  function cluster(
+    databaseOverrides: Partial<DatabaseState> = {},
+    redisOverrides: Partial<RedisState> = {},
+  ): OperationalSnapshot {
+    return {
+      ...healthy(),
+      database: {
+        archiveMode: "on",
+        lastArchivedAgeSec: 30,
+        lastArchivedAt: new Date(NOW.getTime() - 30_000),
+        lastArchiveFailedAt: null,
+        archiveFailedCount: 0,
+        xidAge: 200_000_000,
+        oldestWriteXactSec: 2,
+        pgWalBytes: GIB,
+        ...databaseOverrides,
+      },
+      redis: {
+        up: true,
+        maxmemoryMb: 256,
+        maxmemoryPolicy: "allkeys-lru",
+        evictedKeys: { delta: 0, windowSec: 900 },
+        ...redisOverrides,
+      },
+    };
+  }
+
+  it("raises nothing for a healthy cluster, PITR expected or not", () => {
+    expect(evaluateAlerts(cluster())).toEqual([]);
+    expect(evaluateAlerts(cluster(), T, { pitrExpected: true })).toEqual([]);
+  });
+
+  it("raises nothing when the collector did not read the cluster", () => {
+    // A snapshot without the blocks (a test, an older caller) judges as before.
+    expect(evaluateAlerts(healthy(), T, { pitrExpected: true })).toEqual([]);
+  });
+
+  it.each([
+    {
+      rule: "the archiver's lag",
+      field: "lastArchivedAgeSec" as const,
+      limit: T.archiveLagSec,
+      reason: /Arquivamento do WAL parado/,
+    },
+    {
+      rule: "the cluster's xid age",
+      field: "xidAge" as const,
+      limit: T.xidAge,
+      reason: /idade do xid/,
+    },
+    {
+      rule: "the oldest write transaction",
+      field: "oldestWriteXactSec" as const,
+      limit: T.longWriteXactSec,
+      reason: /escrita aberta há/,
+    },
+    {
+      rule: "pg_wal",
+      field: "pgWalBytes" as const,
+      limit: T.pgWalBytes,
+      reason: /pg_wal com/,
+    },
+  ])(
+    "pages on $rule one past the threshold, never at it or below",
+    ({ field, limit, reason }) => {
+      expect(evaluateAlerts(cluster({ [field]: limit - 1 }))).toEqual([]);
+      expect(evaluateAlerts(cluster({ [field]: limit }))).toEqual([]);
+
+      const reasons = evaluateAlerts(cluster({ [field]: limit + 1 }));
+
+      expect(reasons).toHaveLength(1);
+      expect(reasons[0]).toMatch(reason);
+    },
+  );
+
+  it("pages on one key evicted in the window, never on none", () => {
+    expect(
+      evaluateAlerts(
+        cluster({}, { evictedKeys: { delta: 0, windowSec: 900 } }),
+      ),
+    ).toEqual([]);
+
+    const reasons = evaluateAlerts(
+      cluster({}, { evictedKeys: { delta: 1, windowSec: 900 } }),
+    );
+
+    expect(reasons).toHaveLength(1);
+    expect(reasons[0]).toMatch(/Redis despejou 1 chave\(s\) em 15 min/);
+  });
+
+  it("stays silent on evictions while there is no row to compare with", () => {
+    // The first 15 minutes after a deploy, or OPS_SAMPLE_ENABLED=false.
+    expect(evaluateAlerts(cluster({}, { evictedKeys: null }))).toEqual([]);
+  });
+
+  it("pages on archive_mode off only when PITR is expected", () => {
+    const off = cluster({
+      archiveMode: "off",
+      lastArchivedAgeSec: null,
+      lastArchivedAt: null,
+    });
+
+    expect(evaluateAlerts(off)).toEqual([]);
+    expect(evaluateAlerts(off, T, { pitrExpected: false })).toEqual([]);
+
+    const reasons = evaluateAlerts(off, T, { pitrExpected: true });
+
+    expect(reasons).toHaveLength(1);
+    expect(reasons[0]).toMatch(/PITR_EXPECTED=true/);
+    expect(reasons[0]).toContain('"off"');
+  });
+
+  it("counts a standby's archive_mode always as archiving", () => {
+    expect(
+      evaluateAlerts(cluster({ archiveMode: "always" }), T, {
+        pitrExpected: true,
+      }),
+    ).toEqual([]);
+  });
+
+  it("pages when the latest archive attempt failed, not on an old failure", () => {
+    const reasons = evaluateAlerts(
+      cluster({
+        lastArchivedAt: new Date(NOW.getTime() - 60_000),
+        lastArchiveFailedAt: new Date(NOW.getTime() - 10_000),
+        archiveFailedCount: 4,
+      }),
+    );
+
+    expect(reasons).toHaveLength(1);
+    expect(reasons[0]).toMatch(/Arquivamento do WAL falhando/);
+    expect(reasons[0]).toContain("4");
+
+    // A failure followed by a success is an archiver that recovered.
+    expect(
+      evaluateAlerts(
+        cluster({
+          lastArchivedAt: new Date(NOW.getTime() - 10_000),
+          lastArchiveFailedAt: new Date(NOW.getTime() - 60_000),
+          archiveFailedCount: 4,
+        }),
+      ),
+    ).toEqual([]);
+
+    // Nothing archived yet and a failure: failing from the first segment.
+    expect(
+      evaluateAlerts(
+        cluster({
+          lastArchivedAgeSec: null,
+          lastArchivedAt: null,
+          lastArchiveFailedAt: new Date(NOW.getTime() - 10_000),
+          archiveFailedCount: 1,
+        }),
+      ),
+    ).toHaveLength(1);
+  });
+
+  it("leaves the archiver alone while archiving is off", () => {
+    // archive_mode off: pg_stat_archiver keeps whatever an old setup left,
+    // and nothing is being archived to judge.
+    expect(
+      evaluateAlerts(
+        cluster({
+          archiveMode: "off",
+          lastArchivedAgeSec: 86_400,
+          lastArchivedAt: new Date(NOW.getTime() - 86_400_000),
+          lastArchiveFailedAt: new Date(NOW.getTime() - 3_600_000),
+          archiveFailedCount: 9,
+        }),
+      ),
+    ).toEqual([]);
+  });
+
+  it("pages once on a Redis without a ceiling, with noeviction, or both", () => {
+    const noCeiling = evaluateAlerts(cluster({}, { maxmemoryMb: null }));
+    const noEviction = evaluateAlerts(
+      cluster({}, { maxmemoryPolicy: "noeviction" }),
+    );
+    const both = evaluateAlerts(
+      cluster({}, { maxmemoryMb: null, maxmemoryPolicy: "noeviction" }),
+    );
+
+    expect(noCeiling).toHaveLength(1);
+    expect(noCeiling[0]).toMatch(/sem teto de memória/);
+    expect(noEviction).toHaveLength(1);
+    expect(noEviction[0]).toMatch(/noeviction/);
+    expect(both).toHaveLength(1);
+    expect(both[0]).toMatch(/sem teto de memória/);
+    expect(both[0]).toMatch(/noeviction/);
+  });
+
+  it("leaves the Redis memory rule to the Redis rule when it is down", () => {
+    const reasons = evaluateAlerts({
+      ...cluster(
+        {},
+        {
+          up: false,
+          maxmemoryMb: null,
+          maxmemoryPolicy: null,
+          evictedKeys: null,
+        },
+      ),
+      redisOk: false,
+    });
+
+    expect(reasons).toHaveLength(1);
+    expect(reasons[0]).toMatch(/Redis sem resposta/);
+  });
+
+  it("raises only its own reason for each rule", () => {
+    const cases: Array<[OperationalSnapshot, boolean]> = [
+      [cluster({ archiveMode: "off", lastArchivedAgeSec: null }), true],
+      [cluster({ lastArchivedAgeSec: T.archiveLagSec + 60 }), false],
+      [
+        cluster({
+          lastArchiveFailedAt: new Date(NOW.getTime() - 1_000),
+          archiveFailedCount: 1,
+        }),
+        false,
+      ],
+      [cluster({ xidAge: T.xidAge * 1.5 }), false],
+      [cluster({ oldestWriteXactSec: T.longWriteXactSec * 2 }), false],
+      [cluster({ pgWalBytes: T.pgWalBytes * 2 }), false],
+      [cluster({}, { evictedKeys: { delta: 50, windowSec: 900 } }), false],
+      [cluster({}, { maxmemoryPolicy: "noeviction" }), false],
+    ];
+
+    const reasons = cases.map(([snapshot, pitrExpected]) =>
+      evaluateAlerts(snapshot, T, { pitrExpected }),
+    );
+
+    for (const list of reasons) expect(list).toHaveLength(1);
+
+    // Eight rules, eight different reasons.
+    expect(new Set(reasons.map((list) => list[0])).size).toBe(cases.length);
+  });
+});
+
+describe("the thresholds the environment sets", () => {
+  it("takes the long write and pg_wal limits from the variables", () => {
+    const thresholds = alertThresholdsFromEnv({
+      LONG_WRITE_XACT_ALERT_SECONDS: 60,
+      PG_WAL_ALERT_GIB: 8,
+    });
+
+    expect(thresholds.longWriteXactSec).toBe(60);
+    expect(thresholds.pgWalBytes).toBe(8 * 1024 ** 3);
+    // The rest stays the code's.
+    expect(thresholds.archiveLagSec).toBe(
+      DEFAULT_ALERT_THRESHOLDS.archiveLagSec,
+    );
+    expect(thresholds.outboxLagSec).toBe(DEFAULT_ALERT_THRESHOLDS.outboxLagSec);
+  });
+
+  it("keeps the plan's defaults: 300 s, a billion, 120 s and 12 GiB", () => {
+    expect(DEFAULT_ALERT_THRESHOLDS.archiveLagSec).toBe(300);
+    expect(DEFAULT_ALERT_THRESHOLDS.xidAge).toBe(1_000_000_000);
+    expect(DEFAULT_ALERT_THRESHOLDS.longWriteXactSec).toBe(120);
+    expect(DEFAULT_ALERT_THRESHOLDS.pgWalBytes).toBe(12 * 1024 ** 3);
   });
 });

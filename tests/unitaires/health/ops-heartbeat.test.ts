@@ -20,9 +20,67 @@ const envMock = vi.hoisted(() => ({
   LOG_LEVEL: "silent",
   HEALTHCHECK_PING_URL: undefined as string | undefined,
   HEALTHCHECK_FAIL_URL: undefined as string | undefined,
+  PITR_EXPECTED: false,
+  LONG_WRITE_XACT_ALERT_SECONDS: 120,
+  PG_WAL_ALERT_GIB: 12,
 }));
 
 vi.mock("@/env", () => ({ env: envMock }));
+
+/**
+ * The cluster's readings (the database's own numbers and Redis, F1-11) are
+ * read before the ping and judged with the snapshot; the row of the series
+ * is written after it from the same readings. Both stand in here: the
+ * reads are E2E's (tests/E2E/ops-heartbeat.test.ts).
+ */
+const cluster = vi.hoisted(() => ({
+  readings: null as unknown,
+  calls: [] as string[],
+}));
+
+vi.mock("@/shared/health/cluster-sample", async (importOriginal) => {
+  const original =
+    await importOriginal<typeof import("@/shared/health/cluster-sample")>();
+
+  return {
+    ...original,
+    readClusterReadings: async () => {
+      cluster.calls.push("read");
+      return cluster.readings;
+    },
+    recordClusterSample: async (
+      _slot: Date,
+      _snapshot: unknown,
+      readings: unknown,
+    ) => {
+      cluster.calls.push(readings === cluster.readings ? "write" : "other");
+    },
+  };
+});
+
+const GIB = 1024 ** 3;
+
+function healthyReadings(
+  overrides: { archiveMode?: string; walBytes?: number } = {},
+) {
+  return {
+    database: {
+      xid_age: 1_000,
+      oldest_write_xact_seconds: 0.5,
+      archiver: null,
+      parameters: { archive_mode: overrides.archiveMode ?? "off" },
+      pg_wal: { readable: true, files: 3, bytes: overrides.walBytes ?? GIB },
+      collection_errors: [],
+    },
+    redis: {
+      status: "up",
+      maxmemory_mb: 256,
+      maxmemory_policy: "allkeys-lru",
+      evicted_keys: 0,
+    },
+    redisEvictions: null,
+  };
+}
 
 const NOW = new Date("2026-09-24T12:00:00Z");
 
@@ -53,7 +111,12 @@ const fetchMock = vi.fn(
 beforeEach(() => {
   envMock.HEALTHCHECK_PING_URL = undefined;
   envMock.HEALTHCHECK_FAIL_URL = undefined;
+  envMock.PITR_EXPECTED = false;
+  envMock.LONG_WRITE_XACT_ALERT_SECONDS = 120;
+  envMock.PG_WAL_ALERT_GIB = 12;
   snapshot.current = healthySnapshot();
+  cluster.readings = healthyReadings();
+  cluster.calls = [];
 
   fetchMock.mockClear();
   vi.stubGlobal("fetch", fetchMock);
@@ -166,6 +229,46 @@ describe("the ops heartbeat job", () => {
 
     expect(msg.length).toBeGreaterThan(0);
     expect(msg.length).toBeLessThanOrEqual(500);
+  });
+
+  it("judges the cluster readings too, with the limits of the environment", async () => {
+    envMock.HEALTHCHECK_PING_URL = "https://hc-ping.com/abc-123";
+    envMock.PG_WAL_ALERT_GIB = 1;
+    cluster.readings = healthyReadings({ walBytes: 2 * GIB });
+
+    await runJob();
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("https://hc-ping.com/abc-123/fail");
+    expect(String(init.body)).toMatch(/pg_wal com 2 GiB \(limite 1 GiB\)/);
+  });
+
+  it("pages on archive_mode off only with PITR_EXPECTED=true", async () => {
+    envMock.HEALTHCHECK_PING_URL = "https://hc-ping.com/abc-123";
+
+    await runJob();
+    expect(fetchMock.mock.calls[0][0]).toBe("https://hc-ping.com/abc-123");
+
+    envMock.PITR_EXPECTED = true;
+    fetchMock.mockClear();
+
+    await runJob();
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("https://hc-ping.com/abc-123/fail");
+    expect(String(init.body)).toMatch(/PITR_EXPECTED=true/);
+  });
+
+  it("reads the cluster before the ping and writes its row after, from the same readings", async () => {
+    envMock.HEALTHCHECK_PING_URL = "https://hc-ping.com/abc-123";
+    fetchMock.mockImplementationOnce(async () => {
+      cluster.calls.push("ping");
+      return new Response("OK", { status: 200 });
+    });
+
+    await runJob();
+
+    expect(cluster.calls).toEqual(["read", "ping", "write"]);
   });
 
   it("never fails the run because the check itself is unreachable", async () => {
