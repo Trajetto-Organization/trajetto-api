@@ -87,6 +87,7 @@ import { clientRateLimitKey, rateLimitExceeded } from "@/config/rate-limit";
 import {
   HTTP_KEEP_ALIVE_TIMEOUT_MS,
   HTTP_REQUEST_TIMEOUT_MS,
+  closeConnectionWhileDraining,
 } from "@/config/http-server";
 import {
   configureIntegrationRateGuard,
@@ -132,6 +133,9 @@ const app = fastify({
   requestTimeout: HTTP_REQUEST_TIMEOUT_MS,
   // Above Traefik's 90 s idle, so the proxy closes first (config/http-server.ts).
   keepAliveTimeout: HTTP_KEEP_ALIVE_TIMEOUT_MS,
+  // A connection renewed every so many requests, so a scaled-up replica gets
+  // its share (config/http-server.ts). 0 is no cap.
+  maxRequestsPerSocket: env.HTTP_MAX_REQUESTS_PER_SOCKET,
 }).withTypeProvider<ZodTypeProvider>();
 
 const serverInstance = app.server;
@@ -593,6 +597,11 @@ app.addHook("onResponse", (request, reply, done) => {
   recordHttpResponse(request, reply);
   done();
 });
+
+// Once the replica drains, each response ends its keep-alive connection, so
+// Traefik moves to another replica before the listener closes
+// (config/http-server.ts, plano-escala F1-15).
+app.addHook("onSend", closeConnectionWhileDraining);
 
 // Registered before the routes so it applies to every one of them. This runs
 // after body parsing, which `onRequest` (where `ensureAuthenticated` lives)

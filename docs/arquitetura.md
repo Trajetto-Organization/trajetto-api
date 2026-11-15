@@ -521,8 +521,12 @@ _Stop Grace Period_ que o Swarm dá ao serviço (`STOP_GRACE_PERIOD_MS`,
 `src/shared/lifecycle/shutdown-plan.ts`): sem a variável, valem os 10 s do
 Docker e tudo termina em menos de 9 s; com `40000`, teto de 35 s e dreno de
 12 s ([`deploy.md`](./deploy.md#19-réplicas-workers-e-tempo-real),
-"Desligamento ordenado"). O dreno das importações começa no primeiro
-instante do SIGTERM (ver [Arquivos](#arquivos)).
+"Desligamento ordenado"). Durante o dreno, cada resposta sai com
+`Connection: close`, e o Traefik leva a conexão seguinte para outra
+réplica; fora dele, uma conexão é renovada a cada
+`HTTP_MAX_REQUESTS_PER_SOCKET` requisições (1.000), para uma réplica nova
+receber a parte dela (`src/config/http-server.ts`). O dreno das importações
+começa no primeiro instante do SIGTERM (ver [Arquivos](#arquivos)).
 
 Separar workers do HTTP é possível com a mesma imagem (`WORKERS_ENABLED=false`
 nas réplicas HTTP e uma Application `worker`), só por gatilho medido:

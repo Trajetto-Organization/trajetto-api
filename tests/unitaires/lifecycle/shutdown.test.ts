@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
-import type { AddressInfo } from "node:net";
+import { Agent, request as httpRequest } from "node:http";
+import type { AddressInfo, Socket } from "node:net";
 import { resolve } from "node:path";
 
 import fastify, { type FastifyInstance } from "fastify";
@@ -7,7 +8,10 @@ import { Server as SocketIOServer } from "socket.io";
 
 import { afterEach, describe, expect, it } from "vitest";
 
+import { markDraining } from "@/shared/lifecycle/draining";
 import { runShutdown } from "@/shared/lifecycle/shutdown";
+
+import { APP_BOOT_TIMEOUT_MS } from "../../support/app-boot";
 
 /**
  * The `ws` package socket.io itself depends on. Typed here by hand: the API
@@ -243,6 +247,101 @@ describe("closing the HTTP server with websockets open", () => {
 
     expect(Date.now() - started).toBeLessThan(1_500);
   });
+});
+
+/** One GET on the agent's connection: its Connection header and its socket. */
+function get(
+  port: number,
+  agent: Agent,
+): Promise<{ connection: string | undefined; socket: Socket }> {
+  return new Promise((resolveGet, reject) => {
+    const req = httpRequest(
+      { host: "127.0.0.1", port, path: "/health/liveness", agent },
+      (res) => {
+        res.resume();
+        res.once("end", () =>
+          resolveGet({
+            connection: res.headers.connection,
+            socket: req.socket as Socket,
+          }),
+        );
+      },
+    );
+
+    req.once("error", reject);
+    req.end();
+  });
+}
+
+/**
+ * The drain must empty the replica, not just wait (plano-escala F1-15).
+ *
+ * The Swarm takes a stopping task out of the service's address before the
+ * SIGTERM, so new connections go to another replica. The keep-alive ones
+ * Traefik already holds with this task do not move: they kept carrying
+ * requests through the whole drain, and the listener closed under them. Now
+ * every response sent while draining says `Connection: close`, and the
+ * replica ends that connection after it; Traefik opens the next one
+ * elsewhere. Idle connections are not closed in a loop: one closed while
+ * Traefik writes a POST on it is a 502, which Go never retries.
+ */
+describe("a draining replica, through the real server", () => {
+  it(
+    "answers with Connection: close and ends the connection, so the listener closes at once",
+    async () => {
+      const { app } = await import("@/http");
+      await app.listen({ host: "127.0.0.1", port: 0 });
+
+      const { port } = app.server.address() as AddressInfo;
+      const agent = new Agent({ keepAlive: true, maxSockets: 1 });
+
+      cleanup.push(() => agent.destroy());
+
+      // Before SIGTERM: a kept-alive connection, as Traefik holds them.
+      const before = await get(port, agent);
+      expect(before.connection).toBe("keep-alive");
+
+      let endDrain!: () => void;
+      const drainWindow = new Promise<void>((resolveDrain) => {
+        endDrain = resolveDrain;
+      });
+
+      const shutdown = runShutdown(
+        {
+          markDraining,
+          drainMs: 12_000,
+          drainImports: async () => undefined,
+          closeRealtime: () => undefined,
+          closeHttp: () => app.close(),
+          stopWorkers: async () => undefined,
+          closeRedis: async () => undefined,
+        },
+        () => drainWindow,
+      );
+
+      // During the drain, on the same connection.
+      const during = await get(port, agent);
+
+      expect(during.socket).toBe(before.socket);
+      expect(during.connection).toBe("close");
+
+      if (!during.socket.destroyed) {
+        await new Promise<void>((closed) =>
+          during.socket.once("close", () => closed()),
+        );
+      }
+
+      // Nothing kept alive is left: the listener closes without waiting
+      // for Traefik to give up on an idle connection.
+      endDrain();
+
+      const started = Date.now();
+      await shutdown;
+
+      expect(Date.now() - started).toBeLessThan(1_500);
+    },
+    APP_BOOT_TIMEOUT_MS,
+  );
 });
 
 describe("the container's long-lived process", () => {

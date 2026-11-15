@@ -3674,6 +3674,10 @@ graças a um lease no banco: N réplicas não duplicam nada.
   `trajetto-api` → **Save** → **Deploy** (ou `docker service scale
 trajetto-api-production=N`, que o próximo deploy desfaz) e refaça o
   orçamento de conexões (`réplicas × 11 + 2 + ferramentas < max_connections`).
+  O Swarm reparte conexões, não requisições: cada conexão keep-alive atende
+  até `HTTP_MAX_REQUESTS_PER_SOCKET` requisições (1.000 por padrão) e a
+  última resposta sai com `Connection: close`, para a réplica nova receber a
+  parte dela em poucos minutos (`0` desliga).
 - **Desligamento ordenado**: SIGTERM → readiness 503 → o dreno, em que a
   réplica ainda atende as conexões que o Traefik já tem com ela (o Swarm a
   tira do endereço virtual uns 2 s antes do SIGTERM, e as conexões novas já
@@ -3689,8 +3693,13 @@ trajetto-api-production=N`, que o próximo deploy desfaz) e refaça o
   | para ela parar / para gravar                    | g/8 / g/20               | 1,25 s / 0,5 s        | 5 s / 2 s   |
   | workers (`SHUTDOWN_WORKERS_MS`)                 | 0,3 g                    | 3 s                   | 12 s        |
 
-  Dreno e importação correm juntos desde o SIGTERM; os workers começam
-  depois dos dois e terminam em até 0,85 g, antes do teto. Cada prazo aceita
+  Durante o dreno, toda resposta sai com `Connection: close` e a réplica
+  encerra a conexão logo depois: o Traefik abre a próxima, que o Swarm já
+  manda para outra réplica. As conexões ociosas não são fechadas em laço
+  (uma fechada enquanto o Traefik escreve um POST nela vira 502, que o Go
+  não repete); ficam para o fechamento do HTTP no fim do dreno. Dreno e
+  importação correm juntos desde o SIGTERM; os workers começam depois dos
+  dois e terminam em até 0,85 g, antes do teto. Cada prazo aceita
   um valor à mão (as variáveis entre parênteses), e um que não cabe no grace
   derruba o boot com a mensagem. A linha `shutting down` do log traz o
   plano, e a `shutdown complete` traz `durationMs`. Desde o SIGTERM, a fila

@@ -13,6 +13,7 @@ import {
   MAX_PURGE_RUN_BUDGET_MS,
   parseUtcWindow,
 } from "@/shared/services/cron-limits";
+import { HTTP_MAX_REQUESTS_PER_SOCKET_DEFAULT } from "@/config/http-server";
 import {
   DEFAULT_STOP_GRACE_PERIOD_MS,
   MAX_STOP_GRACE_PERIOD_MS,
@@ -518,6 +519,21 @@ const envSchema = z
         .min(MIN_STOP_GRACE_PERIOD_MS)
         .max(MAX_STOP_GRACE_PERIOD_MS)
         .default(DEFAULT_STOP_GRACE_PERIOD_MS),
+    ),
+
+    // How many requests one keep-alive connection serves before its last
+    // response says `Connection: close` (plano-escala F1-15): the Swarm
+    // spreads connections, not requests, and without a cap a replica added
+    // by a scale-up kept almost no traffic (config/http-server.ts). 0 turns
+    // it off, the rollback. Empty counts as absent.
+    HTTP_MAX_REQUESTS_PER_SOCKET: z.preprocess(
+      (value) => (value === "" ? undefined : value),
+      z.coerce
+        .number()
+        .int()
+        .min(0)
+        .max(1_000_000)
+        .default(HTTP_MAX_REQUESTS_PER_SOCKET_DEFAULT),
     ),
 
     // Optional overrides of the derived figures, for an incident or a
