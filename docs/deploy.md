@@ -3872,6 +3872,20 @@ linhas por processo por dia. Uma gravação que falha vira um aviso
 desliga a gravação sem tirar a linha de log. Não há rota: a leitura é pelo
 `psql`.
 
+Além das linhas de cada processo, há **uma linha `cluster` por minuto**, de
+todo o ambiente: a réplica que vence a eleição do `ops-heartbeat` a grava
+depois do ping, com o `ts` do minuto eleito (duas réplicas no mesmo minuto
+deixam uma linha só). Ela leva a latência das filas (outbox, as duas faixas
+de entregas, webhooks, IA), os workers travados e a folga das partições, os
+números do próprio banco (uso de conexões, idade do xid, escrita e snapshot
+mais antigos, `archive_mode` e o `pg_stat_archiver`, `pg_wal`, os contadores
+do cache, `pg_stat_statements`) e o Redis inteiro de `/health/metrics`; a
+cada 15 minutos (:00, :15, :30, :45), também os tamanhos e as tabelas
+quentes. É a linha-marcador do ensaio de PITR: uma restauração até T tem a
+linha `cluster` do minuto de T. Uma leitura ou gravação que falha vira o aviso
+`cluster ops sample write failed`, sem atrasar o ping; `OPS_SAMPLE_ENABLED=false`
+desliga as duas.
+
 ```sql
 -- utilização do laço e espera no pool por réplica, na última hora
 SELECT replica, ts,
@@ -3880,6 +3894,14 @@ SELECT replica, ts,
 FROM ops_sample
 WHERE ts > now() - interval '1 hour'
 ORDER BY replica, ts;
+
+-- a escrita aberta mais antiga e o pg_wal, minuto a minuto, na última hora
+SELECT ts,
+       (metrics->'database'->>'oldest_write_xact_seconds')::float8 AS escrita_s,
+       (metrics->'database'->'pg_wal'->>'bytes')::float8 / 1048576 AS pg_wal_mb
+FROM ops_sample
+WHERE role = 'cluster' AND ts > now() - interval '1 hour'
+ORDER BY ts;
 
 -- respostas 5xx por minuto, somando as réplicas, nas últimas 24 h
 SELECT date_trunc('minute', ts) AS minuto,

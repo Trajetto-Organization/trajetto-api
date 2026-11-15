@@ -7,10 +7,22 @@ import { logger } from "@/shared/logging/logger";
 /** The shared logger (OBS-14): one structured line per run, with the job. */
 const log = logger.child({ component: "cron" });
 
+/** The firing a handler runs for: the slot every replica competed for. */
+interface CronRun {
+  /** The minute (or the catch-up's hour) this run won the election for. */
+  scheduledFor: Date;
+}
+
 interface CronJobDefinition {
   name: string;
   schedule: string;
-  handler: () => Promise<void>;
+
+  /**
+   * The job. The run is optional so a test can call a handler directly; the
+   * scheduler always passes it (the ops heartbeat stamps its cluster row
+   * with the elected minute, F1-10).
+   */
+  handler: (run?: CronRun) => Promise<void>;
   runOnInit?: boolean;
 
   /**
@@ -208,7 +220,7 @@ class CronSchedulerService {
     this.inFlight.add(run);
 
     try {
-      await definition.handler();
+      await definition.handler({ scheduledFor: new Date(scheduledFor) });
 
       await this.finishExecution(definition.name, scheduledFor, null);
       progress(
@@ -470,5 +482,6 @@ export {
   CRON_TIMEZONE,
   CronSchedulerService,
   CronJobDefinition,
+  CronRun,
   DAILY_CATCH_UP_MS,
 };
