@@ -367,6 +367,18 @@ describe("the operational metrics", () => {
     expect(body.http.groups.other.requests).toBeGreaterThan(0);
     expect(body.http.latency_buckets_ms).toHaveLength(9);
     expect(body.http.positions_contracts.window_minutes).toBe(10);
+
+    // CPU per request of this replica (F4-01): a number or null, never NaN.
+    expect(body.runtime.cpu).toMatchObject({
+      user_ms: expect.any(Number),
+      system_ms: expect.any(Number),
+      requests: expect.any(Number),
+      includes_workers: expect.any(Boolean),
+    });
+    expect(
+      body.runtime.cpu.ms_per_request === null ||
+        Number.isFinite(body.runtime.cpu.ms_per_request),
+    ).toBe(true);
   });
 });
 

@@ -489,6 +489,35 @@ const healthResponses = {
           rss_mb: z.number(),
           heap_used_mb: z.number(),
         }),
+        // plano-escala F4-01. Optional: an API that predates it, still
+        // answering during a rolling deploy, sends none.
+        cpu: z
+          .object({
+            user_ms: z
+              .number()
+              .describe("CPU de usuário do processo na janela, em ms."),
+            system_ms: z
+              .number()
+              .describe("CPU de sistema do processo na janela, em ms."),
+            requests: z
+              .number()
+              .describe("Requisições terminadas na janela, fora de /health."),
+            ms_per_request: z
+              .number()
+              .nullable()
+              .describe(
+                "CPU (usuário + sistema) por requisição, em ms; null sem requisição na janela. É o custo que a prova de capacidade divide pelo pico.",
+              ),
+            includes_workers: z
+              .boolean()
+              .describe(
+                "true quando os workers rodam neste processo (WORKERS_ENABLED): o trabalho das filas entra na conta.",
+              ),
+          })
+          .optional()
+          .describe(
+            "CPU por requisição desta réplica, na mesma janela do laço de eventos.",
+          ),
         prisma_pool: z
           .object({
             limit: z

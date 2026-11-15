@@ -3844,7 +3844,9 @@ A régua do plano de escala: cada processo da API grava **uma linha por
 minuto** na tabela `ops_sample`, de 0 a 15 s depois do fim do minuto (um
 timer local com sorteio, nunca um cron, para que toda réplica grave), com os
 mesmos números da linha de log `runtime metrics`: laço de eventos, threadpool,
-memória, pool do Prisma, provedores chamados no minuto, sockets e o portão
+memória, CPU por requisição (`cpu.ms_per_request`: a CPU do processo no
+minuto dividida pelas requisições fora de `/health`, `null` sem requisição;
+`cpu.includes_workers` diz se o trabalho das filas está junto), pool do Prisma, provedores chamados no minuto, sockets e o portão
 do bcrypt (`src/shared/health/ops-sample.ts`), mais a seção `http`: as
 respostas do minuto por classe de status e o histograma de latência de cada
 grupo de rota, só dos grupos com requisição, e os `contract=` do app nos

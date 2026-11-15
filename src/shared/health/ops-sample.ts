@@ -99,6 +99,7 @@ const RESERVED_SECTION_NAMES = new Set([
   "event_loop",
   "threadpool",
   "memory",
+  "cpu",
   "prisma_pool",
   "providers",
 ]);

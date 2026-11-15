@@ -51,6 +51,13 @@ function window(at = new Date("2026-11-15T12:01:00.000Z")): OpsSampleWindow {
       },
       threadpool: { size: 8, canary_last_ms: 0.4, canary_max_ms: 1.2 },
       memory: { rss_mb: 210.5, heap_used_mb: 120.1 },
+      cpu: {
+        user_ms: 900,
+        system_ms: 300,
+        requests: 60,
+        ms_per_request: 20,
+        includes_workers: true,
+      },
       prisma_pool: { limit: 10, open: 3, busy: 1, idle: 2, waiting: 0 },
     },
     providers: [
@@ -84,8 +91,10 @@ function keysOf(value: unknown): string[] {
   ]);
 }
 
+// `user_ms` is the CPU's user time, not a person: a user is `user`,
+// `users`, `userId` or `user_id`.
 const PERSON_OR_TENANT =
-  /business|tenant|user|driver|customer|person|email|phone|cpf|cnpj|\bip\b|address|token|session/i;
+  /business|tenant|\busers?\b|user_?id|driver|customer|person|email|phone|cpf|cnpj|\bip\b|address|token|session/i;
 
 describe("the ops_sample row", () => {
   it("is a versioned document with the process in the columns", () => {
@@ -105,6 +114,7 @@ describe("the ops_sample row", () => {
         event_loop: window().runtime.event_loop,
         threadpool: window().runtime.threadpool,
         memory: window().runtime.memory,
+        cpu: window().runtime.cpu,
         prisma_pool: window().runtime.prisma_pool,
         providers: window().providers,
         realtime: { local_connections: 4 },
@@ -128,6 +138,7 @@ describe("the ops_sample row", () => {
 
     expect(() => sections.register("v", () => 2)).toThrow();
     expect(() => sections.register("event_loop", () => 0)).toThrow();
+    expect(() => sections.register("cpu", () => 0)).toThrow();
     expect(() => sections.register("Has Spaces", () => 0)).toThrow();
   });
 

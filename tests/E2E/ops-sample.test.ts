@@ -37,6 +37,7 @@ interface Row {
   utilization: number;
   waiting: number | null;
   realtime: unknown;
+  includes_workers: boolean | null;
 }
 
 async function rowsOf(replica: string): Promise<Row[]> {
@@ -46,7 +47,8 @@ async function rowsOf(replica: string): Promise<Row[]> {
       (metrics->>'v')::int AS v,
       (metrics->'event_loop'->>'utilization')::float8 AS utilization,
       (metrics->'prisma_pool'->>'waiting')::int AS waiting,
-      metrics->'realtime' AS realtime
+      metrics->'realtime' AS realtime,
+      (metrics->'cpu'->>'includes_workers')::boolean AS includes_workers
     FROM ops_sample
     WHERE replica = ${replica}
     ORDER BY ts
@@ -73,6 +75,13 @@ describe("ops_sample", () => {
             },
             threadpool: { size: 8, canary_last_ms: 1, canary_max_ms: 2 },
             memory: { rss_mb: 200, heap_used_mb: 100 },
+            cpu: {
+              user_ms: 600,
+              system_ms: 200,
+              requests: 40,
+              ms_per_request: 20,
+              includes_workers: false,
+            },
             prisma_pool: { limit: 10, open: 2, busy: 1, idle: 1, waiting: 3 },
           },
           providers: [],
@@ -136,6 +145,10 @@ describe("ops_sample", () => {
     expect(warnings).toEqual([]);
     expect(rows.every((row) => row.role === "all" && row.v === 1)).toBe(true);
     expect(rows.every((row) => row.waiting === 0)).toBe(true);
+    // CPU per request (F4-01) rides in the same row.
+    expect(rows.every((row) => typeof row.includes_workers === "boolean")).toBe(
+      true,
+    );
     expect(rows[1].ts.getTime()).toBeGreaterThan(rows[0].ts.getTime());
   });
 });
