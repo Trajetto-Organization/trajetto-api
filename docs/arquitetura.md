@@ -3204,7 +3204,11 @@ perdidos. Um expurgo que para no orçamento com sobra termina FAILED com
 só na janela das parciais, depois dos backups
 (`src/shared/services/cron-catch-up-decision.ts`; operação em
 [`deploy.md`](./deploy.md#expurgos-parciais)). O handler recebe o minuto que
-venceu a eleição (`run.scheduledFor`).
+venceu a eleição (`run.scheduledFor`). O mapa de horários, com o que roda fora
+do código (o backup do Database, o PITR, o ensaio de restauração e as janelas
+de carga), está em [`operacao/jobs.md`](./operacao/jobs.md); o
+`cron-registry.test.ts` confere que as agendas daqui batem com ele e que duas
+entradas pesadas não se cruzam.
 
 | Job                                  | Quando (UTC)              | O que faz                                                                                                                                                                                                                                      |
 | ------------------------------------ | ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |

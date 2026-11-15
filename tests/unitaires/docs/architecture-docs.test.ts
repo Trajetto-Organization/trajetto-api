@@ -672,6 +672,87 @@ describe("every ADR the code and the docs cite has its file", () => {
   );
 });
 
+describe("every document the code cites has its file", () => {
+  /**
+   * The code names a document as the place a number or a decision comes
+   * from, and a reader follows it. Four comments sent readers to
+   * docs/desempenho/carga-2026-10.md and two to banco-2026-10.md, which were
+   * never in this repository (they lived in the workspace root's docs/,
+   * which is not versioned): what they measured now lives in
+   * docs/desempenho/README.md.
+   *
+   * The design documents below are the same kind of history, older and
+   * with no copy here; they stay named as the origin of a decision, and the
+   * list only shrinks. A new citation points at a versioned document.
+   */
+  const WORKSPACE_ONLY = new Set([
+    "docs/contratos-app/ai-feedback.md",
+    "docs/contratos-app/occurrences.md",
+    "docs/contratos-app/pauses.md",
+    "docs/desenho/categorias-de-ocorrencia-e-pausas.md",
+    "docs/desenho/comprovante-modelo-validado-e-icp.md",
+    "docs/desenho/esquema-reuniao.md",
+    "docs/desenho/tickets-de-atendimento.md",
+  ]);
+
+  const CITED =
+    /(?<![\w./-])((?:trajetto-(?:api|ui|mobile)\/)?docs\/[\w./-]+?\.md)\b/g;
+
+  /** Every docs/…md path cited under src/, with the first file citing it. */
+  function citedInSource(): Map<string, string> {
+    const found = new Map<string, string>();
+    const visit = (path: string) => {
+      if (statSync(path).isDirectory()) {
+        for (const name of readdirSync(path)) visit(join(path, name));
+        return;
+      }
+
+      if (!/\.(ts|js|mjs|sql|prisma)$/.test(path)) return;
+
+      for (const match of read(path).matchAll(CITED)) {
+        if (!found.has(match[1])) found.set(match[1], relative(ROOT, path));
+      }
+    };
+
+    visit(join(ROOT, "src"));
+
+    return found;
+  }
+
+  it("cites, under src/, only documents that exist", () => {
+    const missing: string[] = [];
+
+    for (const [cited, where] of citedInSource()) {
+      if (WORKSPACE_ONLY.has(cited)) continue;
+
+      const sibling = cited.match(/^(trajetto-(?:api|ui|mobile))\/(.+)$/);
+      const root = sibling ? repoRoot(sibling[1]) : ROOT;
+
+      if (!root) continue;
+
+      if (!existsSync(join(root, sibling ? sibling[2] : cited))) {
+        missing.push(`${cited} (${where})`);
+      }
+    }
+
+    expect(missing).toEqual([]);
+  });
+
+  it("reads the citations it is meant to check, and the list only shrinks", () => {
+    const cited = citedInSource();
+
+    expect(cited.has("docs/desempenho/README.md")).toBe(true);
+    expect(cited.has("docs/operacao/jobs.md")).toBe(true);
+
+    // A document of the list no longer cited, or brought into the
+    // repository, leaves the list.
+    for (const path of WORKSPACE_ONLY) {
+      expect(cited.has(path), path).toBe(true);
+      expect(existsSync(join(ROOT, path)), path).toBe(false);
+    }
+  });
+});
+
 describe("claims the docs make about the code", () => {
   const readme = read(join(ROOT, "README.md"));
   const architecture = read(join(ROOT, MAP_DOC));

@@ -11,9 +11,11 @@ import { surfaces } from "./api.js";
  * same second. So the mix is the point, and the weights come from what the
  * product actually does:
  *
- * - Position pings dominate. Twenty thousand drivers at one flush per thirty
- *   seconds is ~670 writes a second, which the capacity ruler already names as
- *   the heaviest single write on the platform.
+ * - Position pings dominate. The capacity ruler puts them at ~333 POST/s,
+ *   carrying ~1,333 points a second, at the 5M step (an estimate: the scale
+ *   plan sizes it with 30 deliveries per driver a day, decision D11) — still
+ *   the heaviest single write on the platform. It used to say ~670 writes a
+ *   second, from twenty thousand drivers flushing every thirty seconds.
  * - The driver's list is fetched on every app open and every pull-to-refresh.
  * - The dispatcher's board and the tower are opened by a handful of people per
  *   carrier and then left open, refreshing.

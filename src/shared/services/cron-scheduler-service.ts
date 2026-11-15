@@ -75,7 +75,10 @@ const DAILY_CATCH_UP_MS = 26 * 60 * 60 * 1000;
  */
 const CRON_TIMEZONE = "Etc/UTC";
 
-/** Hourly, at a minute no job fires on. */
+/**
+ * Hourly, at :07. Listed in docs/operacao/jobs.md with every other
+ * schedule; cron-registry.test.ts keeps the two equal.
+ */
 const CATCH_UP_SCHEDULE = "7 * * * *";
 
 /**
@@ -580,6 +583,7 @@ class CronSchedulerService {
 }
 
 export {
+  CATCH_UP_SCHEDULE,
   CRON_TIMEZONE,
   CronSchedulerService,
   CronJobDefinition,

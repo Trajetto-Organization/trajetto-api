@@ -492,15 +492,15 @@ class DeliveryRepository implements IDeliveryRepository {
    *
    * Each facet is counted without its own filter (deliveryListWhere's
    * `except`), so with any facet chosen the three `where`s differ and stay
-   * three grouped reads, one after the other. In the board's default view
-   * (the `where` is only the tenant and the period, see
-   * isTenantOnlyDeliveryList) the three are the SAME `where` — the
-   * company's whole history without a period — and reading it three times
-   * was the heaviest database work of the load test: 64 + 64 + 28 ms per page
-   * on a tenant with 300k deliveries, a third of the database CPU at 120
-   * req/s (docs/desempenho/carga-2026-10.md). There, one scan with GROUPING
-   * SETS answers all three, inside the period when there is one (the cards
-   * and the pager count what the table lists, never the whole history).
+   * three grouped reads, one after the other. In the board's default view (the
+   * `where` is only the tenant and the period, see isTenantOnlyDeliveryList)
+   * the three are the SAME `where` — the company's whole history without a
+   * period — and reading it three times was the heaviest database work of the
+   * load test: 64 + 64 + 28 ms per page on a tenant with 300k deliveries, a
+   * third of the database CPU at 120 req/s (the load of 07/10/2026,
+   * docs/desempenho/README.md). There, one scan with GROUPING SETS answers all
+   * three, inside the period when there is one (the cards and the pager count
+   * what the table lists, never the whole history).
    */
   private async countListFacets(
     filters: Awaited<ReturnType<typeof narrowDeliverySearch>>,

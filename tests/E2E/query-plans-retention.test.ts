@@ -5,7 +5,8 @@ import { randomUUID } from "node:crypto";
 import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
- * Retention of the API usage counts (db-perf 10/2026, docs/desempenho/banco-2026-10.md).
+ * Retention of the API usage counts (db-perf 10/2026,
+ * docs/desempenho/README.md).
  *
  * api_key_usage_daily grew by a row per key, day, route, method and status
  * class with nothing ever removing one, while the screen reads 90 days at

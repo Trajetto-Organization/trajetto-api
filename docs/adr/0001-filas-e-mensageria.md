@@ -36,8 +36,8 @@ algo não foi medido, o texto diz isso.
    (`src/shared/cache/snapshot-cache.ts`). Fila, lock e fonte de verdade ficam
    fora dele.
 3. **O tempo real não passa por fila nenhuma** (pergunta 4).
-4. **Broker só por gatilho medido** (seção _Quando reabrir_), e só depois da
-   escada de respostas mais baratas.
+4. **Broker só por gatilho medido** (seção _Quando reabrir_), depois da
+   escada de respostas mais baratas, e com um ADR novo.
 
 ## O que a `main` antiga fazia
 
@@ -334,10 +334,28 @@ anterior não bastar:
 2. **Separar os workers do HTTP** com a mesma imagem
    (`WORKERS_ENABLED=false` nas réplicas HTTP; `docs/deploy.md`, _Separar os
    workers do HTTP_), refazendo o orçamento de conexões.
-3. **`LISTEN/NOTIFY` do Postgres** para acordar as outras réplicas sem
-   esperar a varredura.
-4. **Só então um broker.** O candidato é o Redis Streams com relay do outbox,
-   porque o Redis já opera, e não o RabbitMQ. O outbox continua sendo a fonte.
+3. **Uma dica de despertar pelo pub/sub do Redis** para acordar os outros
+   processos sem esperar a varredura (plano de escala, F3-04): um canal por
+   fila, com debounce e só o nome da réplica no corpo. É uma dica
+   descartável, como o resto do Redis ([ADR 0002](./0002-redis-descartavel.md)):
+   perdida, custa só a varredura de 2 s, e a fila continua no Postgres.
+4. **Filas particionadas e tetos por fila no Postgres** (plano de escala,
+   ondas 10 e 13), antes de qualquer componente novo.
+
+**Correção de 15/11/2026.** Esta escada tinha mais dois degraus, e os dois
+saíram:
+
+- o `LISTEN/NOTIFY` do Postgres deu lugar à dica pelo pub/sub. O `LISTEN`
+  não passa pelo PgBouncer em modo transaction (onda 17) e pediria uma
+  conexão direta por processo, e o `NOTIFY` pega um lock global no commit.
+  A dica pelo Redis dá a mesma garantia sem conexão especial. O `NOTIFY`
+  fora da transação fica só como plano B, se a medição reprovar a dica;
+- o Redis Streams com relay do outbox saiu. Ele contradizia o
+  [ADR 0002](./0002-redis-descartavel.md): o Redis de hoje despeja chaves
+  (`allkeys-lru`) e não persiste, e uma fila ali seria uma segunda
+  dependência com estado, backup e alerta próprios, para a mesma escrita no
+  Postgres feita depois. Um broker não está na escada: reabrir isso pede um
+  ADR novo, com o gatilho medido e o motivo de o Postgres não bastar.
 
 ## O que esta rodada mudou (28/10/2026)
 

@@ -497,14 +497,15 @@ class SupportTicketRepository implements ISupportTicketRepository {
   }
 
   /**
-   * The search's joined arms resolved to ids first, each through an index
-   * (docs/desempenho/banco-2026-10.md §9, limit 3): the recipient through
-   * the deliveries' trigram index (rechecked on the column), the driver's
-   * name over the company's drivers. The inbox then ORs `deliveryId IN` and
-   * `driverId IN` (the ticket's own copy of its thread's driver) with the
-   * number and the subject, columns of the ticket itself, instead of joining
-   * two tables for every ticket the company ever had. Null keeps the joined
-   * search: a short term, or a recipient too common for a list of ids.
+   * The search's joined arms resolved to ids first, each through an index (the
+   * database pass of 07/10/2026, its §9 limit 3; docs/desempenho/README.md):
+   * the recipient through the deliveries' trigram index (rechecked on the
+   * column), the driver's name over the company's drivers. The inbox then ORs
+   * `deliveryId IN` and `driverId IN` (the ticket's own copy of its thread's
+   * driver) with the number and the subject, columns of the ticket itself,
+   * instead of joining two tables for every ticket the company ever had. Null
+   * keeps the joined search: a short term, or a recipient too common for a list
+   * of ids.
    */
   private async resolveSearchMatches(
     props: ListSupportTicketsProps,

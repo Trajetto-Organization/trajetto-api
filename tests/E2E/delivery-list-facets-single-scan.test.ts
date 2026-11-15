@@ -12,10 +12,10 @@ import { createPrismaClient } from "@/shared/database/database-client";
  * The listing counts deliveries per status, per shipper and per driver, each
  * without its own filter. With no facet and no search the three `where`s are
  * the same (the whole tenant), and the repository ran three grouped reads of
- * it: under the load harness, on a tenant with 300k deliveries, those were
- * 64 + 64 + 28 ms per page view and a third of the database CPU at 120 req/s
- * (docs/desempenho/carga-2026-10.md). One GROUPING SETS read answers all
- * three; with a facet chosen the reads differ and stay separate.
+ * it: under the load harness, on a tenant with 300k deliveries, those were 64 +
+ * 64 + 28 ms per page view and a third of the database CPU at 120 req/s (the
+ * load of 07/10/2026, docs/desempenho/README.md). One GROUPING SETS read
+ * answers all three; with a facet chosen the reads differ and stay separate.
  *
  * Counted on a logging client handed to the real repository, against the
  * real database; the expected numbers come from independent groupBys.

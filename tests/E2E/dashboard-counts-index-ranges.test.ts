@@ -15,12 +15,12 @@ import { createPrismaClient } from "@/shared/database/database-client";
  *
  * The overview counted every row of the window and labelled each one in SQL
  * (two AT TIME ZONE, a date_trunc and a to_char) before grouping. Under the
- * load harness, on a tenant with 300k deliveries, that statement averaged
- * 298 ms and was a quarter of the database CPU at 120 req/s
- * (docs/desempenho/carga-2026-10.md). The buckets now come from the app and
+ * load harness, on a tenant with 300k deliveries, that statement averaged 298
+ * ms and was a quarter of the database CPU at 120 req/s (the load of
+ * 07/10/2026, docs/desempenho/README.md). The buckets now come from the app and
  * the table is read once, each row filed by width_bucket over them. A range
- * count per bucket was the first take; it made a MASTER view (no tenant, and
- * no created_at-only index) scan each table once PER BUCKET, so the plan is
+ * count per bucket was the first take; it made a MASTER view (no tenant, and no
+ * created_at-only index) scan each table once PER BUCKET, so the plan is
  * checked below for both scopes.
  *
  * The answer must be the one the per-row label gave: the reference below is

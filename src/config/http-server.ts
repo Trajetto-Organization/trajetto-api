@@ -32,9 +32,9 @@ const HTTP_REQUEST_TIMEOUT_MS = 120_000;
  * that connection at the same moment is lost: Go retries a GET on a fresh
  * connection, but not a POST, so the client gets a 502. Under load it is worse:
  * a busy event loop runs the overdue keep-alive timer BEFORE reading the
- * request already waiting on the socket. Measured in the load harness: 16
- * POST /route/positions answered 502 in one stress run
- * (docs/desempenho/carga-2026-10.md). Above 90 s, Traefik always closes first.
+ * request already waiting on the socket. Measured in the load harness: 16 POST
+ * /route/positions answered 502 in one stress run (the load of 07/10/2026,
+ * docs/desempenho/README.md). Above 90 s, Traefik always closes first.
  */
 const HTTP_KEEP_ALIVE_TIMEOUT_MS = 95_000;
 

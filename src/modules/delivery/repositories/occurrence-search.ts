@@ -11,8 +11,8 @@ import {
 } from "./delivery-search";
 
 /**
- * The occurrence feed's search through the deliveries' trigram index
- * (docs/desempenho/banco-2026-10.md §9, limit 3).
+ * The occurrence feed's search through the deliveries' trigram index (the
+ * database pass of 07/10/2026, its §9 limit 3; docs/desempenho/README.md).
  *
  * The feed's search is an OR over the occurrence's id and deliveryId, the
  * delivery's recipient and the type's name, checked row by row for every

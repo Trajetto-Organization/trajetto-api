@@ -184,8 +184,9 @@ const surfaces = {
   /**
    * The heaviest write on the platform.
    *
-   * At the reference scale: twenty thousand drivers pinging every thirty
-   * seconds is ~670 inserts a second, and each request carries a small batch.
+   * At the 5M step the ruler is ~333 POST/s, each carrying a small batch:
+   * ~1,333 points a second (an estimate, the scale plan's decision D11; see
+   * lib/mix.js).
    */
   recordPositions(vu) {
     const now = Date.now();

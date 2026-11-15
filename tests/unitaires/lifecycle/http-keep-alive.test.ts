@@ -11,11 +11,11 @@ import { APP_BOOT_TIMEOUT_MS } from "../../support/app-boot";
  *
  * Traefik keeps idle upstream connections for 90 s (its serversTransport
  * default). Fastify's own keep-alive default is 72 s, so the replica closed
- * first, and a request Traefik wrote on that connection in the same instant
- * was lost. Go retries a lost GET but not a POST: the load harness measured
- * 16 POST /route/positions answered 502 in one stress run, with the event loop
- * busy enough to run the overdue keep-alive timer before reading the request
- * already waiting on the socket (docs/desempenho/carga-2026-10.md).
+ * first, and a request Traefik wrote on that connection in the same instant was
+ * lost. Go retries a lost GET but not a POST: the load harness measured 16 POST
+ * /route/positions answered 502 in one stress run, with the event loop busy
+ * enough to run the overdue keep-alive timer before reading the request already
+ * waiting on the socket (the load of 07/10/2026, docs/desempenho/README.md).
  */
 const TRAEFIK_DEFAULT_IDLE_MS = 90_000;
 

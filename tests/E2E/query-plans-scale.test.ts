@@ -13,7 +13,7 @@ import { SupportTicketRepository } from "@/modules/chat/repositories/support-tic
 import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
- * The plans the db-perf pass of 07/10/2026 fixed (docs/desempenho/banco-2026-10.md).
+ * The plans the db-perf pass of 07/10/2026 fixed (docs/desempenho/README.md).
  *
  * Each case runs the REAL repository method on a logging client, takes the
  * statement Prisma actually sent and asks Postgres what it does with it —
@@ -485,8 +485,9 @@ describe("the deliveries listing's filter counts", () => {
   }
 
   // The board's default view: the three facets share one `where`, so one
-  // GROUPING SETS read answers them (docs/desempenho/carga-2026-10.md), and it
-  // must still come from the covering index alone.
+  // GROUPING SETS read answers them (the load of 07/10/2026,
+  // docs/desempenho/README.md), and it must still come from the covering index
+  // alone.
   it("in the default view are one GROUPING SETS read, from an index alone", async () => {
     const repository = new DeliveryRepository(capture);
 

@@ -11,15 +11,15 @@ A produção é **Dokploy + Traefik** na frente de N réplicas da imagem da API
 (`trajetto-api/docs/deploy.md`). O harness de
 `compose.load.yaml` é essa forma numa máquina só:
 
-|                 | produção                                                        | harness                                                                       |
-| --------------- | --------------------------------------------------------------- | ----------------------------------------------------------------------------- |
-| borda           | Traefik v3 do Dokploy (provider swarm), TLS, `Host()`           | Traefik v3 fixado por digest (provider docker), HTTP na 8080, `PathPrefix(/)` |
-| réplicas        | imagem `trajetto-api`, `NODE_ENV=production`, 1024M, 2 réplicas | a mesma imagem, construída do `Dockerfile`, 1024M, `LOAD_REPLICAS` (padrão 2) |
-| readiness no LB | `/health/readiness`, 10 s, timeout 5 s                          | os mesmos rótulos (um teste mantém os dois iguais)                            |
-| `readTimeout`   | 120 s (`infra/traefik/traefik.reference.yaml`)                  | 120 s                                                                         |
-| banco / Redis   | Postgres 16, Redis 7 sem persistência                           | idem, descartáveis                                                            |
-| uploads         | R2                                                              | credenciais falsas (nenhuma cena envia arquivo)                               |
-| k6              | —                                                               | dentro da mesma rede do Docker                                                |
+|                 | produção                                                                                                                                                                                            | harness                                                                                                                   |
+| --------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| borda           | Traefik v3 do Dokploy (provider swarm), TLS, `Host()`                                                                                                                                               | Traefik v3 fixado por digest (provider docker), HTTP na 8080, `PathPrefix(/)`                                             |
+| réplicas        | imagem `trajetto-api`, `NODE_ENV=production`, 1024M, 2 réplicas                                                                                                                                     | a mesma imagem, construída do `Dockerfile`, 1024M, `LOAD_REPLICAS` (padrão 2)                                             |
+| readiness no LB | **nenhuma**: o Traefik do Dokploy fala com o endereço virtual do serviço do Swarm, e um health check ali tiraria as duas réplicas juntas; quem tira uma réplica é o healthcheck do Swarm (liveness) | `/health/readiness`, 10 s, timeout 5 s, por contêiner (provider docker, um servidor por réplica): uma diferença conhecida |
+| `readTimeout`   | 120 s (`infra/traefik/traefik.reference.yaml`)                                                                                                                                                      | 120 s                                                                                                                     |
+| banco / Redis   | Postgres 16, Redis 7 sem persistência                                                                                                                                                               | idem, descartáveis                                                                                                        |
+| uploads         | R2                                                                                                                                                                                                  | credenciais falsas (nenhuma cena envia arquivo)                                                                           |
+| k6              | —                                                                                                                                                                                                   | dentro da mesma rede do Docker                                                                                            |
 
 **A pasta `nginx` foi removida.** Ela era um harness local de round-robin que
 nenhum script subia, e nunca representou a produção; quem quiser o histórico
@@ -37,7 +37,9 @@ requisição, não para uma conexão já promovida a WebSocket.
 **Com a imagem real da API o harness rodou em 07/10/2026**: 1, 2 e 4 réplicas,
 smoke, carga, estresse até a saturação e o `multi-replica.sh`. Números,
 gargalos e as quatro correções que saíram de lá em
-`docs/desempenho/carga-2026-10.md` (raiz do workspace).
+[`docs/desempenho/README.md`](../../docs/desempenho/README.md) ("Carga de
+07/10/2026"; o relatório original ficou fora do repositório). Os relatórios
+de portão seguem o [`TEMPLATE.md`](../../docs/desempenho/TEMPLATE.md).
 
 ## Como rodar
 
@@ -171,7 +173,8 @@ mentir.
 
 > **Substituído em 07/10/2026.** Com histórico (empresa de 300 mil entregas) e
 > a imagem de produção, o joelho é **~110–120 req/s por réplica**; ver
-> `docs/desempenho/carga-2026-10.md`. A tabela abaixo é a medição de setembro,
+> [`docs/desempenho/README.md`](../../docs/desempenho/README.md). A tabela
+> abaixo é a medição de setembro,
 > sem histórico, mantida pelo registro.
 
 |                                      | antes      | depois          |
@@ -204,7 +207,8 @@ redis-adapter, filas no Postgres com SKIP LOCKED). A régua: **uma réplica por
 1. **A torre lia a última posição com `DISTINCT ON` sobre a trilha.** Com 261
    mil linhas de UM dia: Seq Scan na partição inteira mais sort em disco de
    14 MB, 408 ms no banco, para devolver 40 linhas. O custo crescia com o
-   número de PINGS, e a régua de capacidade põe pings em 670/s. Virou uma
+   número de PINGS, e a régua de capacidade de então punha pings em 670/s
+   (a de hoje: ~333 POST/s com ~1.333 pontos/s no 5M, estimada). Virou uma
    tabela `driver_last_position`, uma linha por motorista. 145× mais rápido.
 
 2. **`dashboard/overview` fazia 89 queries.** Nove entidades × oito meses, uma
@@ -465,6 +469,7 @@ uma) media a fronteira WSL2/Windows, não a aplicação: k6 (WSL2) → nginx (WS
 rede do Docker, e a comparação 1 × 2 réplicas é o passo 5 do
 `multi-replica.sh`. **Executada em 07/10/2026**: platô de ~140 req/s com 1
 réplica, ~205 com 2 e ~250–285 com 4, quando a CPU da máquina acaba
-(`docs/desempenho/carga-2026-10.md`, seção 7.3). Numa máquina só ela diz se a aplicação escala até a
+([`docs/desempenho/README.md`](../../docs/desempenho/README.md), "Carga de
+07/10/2026"). Numa máquina só ela diz se a aplicação escala até a
 CPU da máquina, não quantos hosts a produção precisa — isso continua em
 `docs/PENDENCIAS-DO-USUARIO.md`.
