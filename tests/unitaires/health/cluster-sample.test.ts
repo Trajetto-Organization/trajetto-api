@@ -176,6 +176,39 @@ describe("the cluster row", () => {
     expect(carriesSizes(at(14))).toBe(false);
   });
 
+  it("carries the deliveries the process rows counted, when read", () => {
+    const slot = new Date("2026-11-15T12:15:00.000Z");
+    const totals = { last24h: 30, last7d: 90, since: null, at: slot };
+
+    const built = buildClusterSampleRow({
+      slot,
+      identity: IDENTITY,
+      snapshot: snapshot(),
+      database: database(),
+      redis: REDIS,
+      volume: { created: 2, totals },
+    });
+
+    expect(built.metrics.deliveries).toEqual({
+      created: 2,
+      last_24h: 30,
+      last_7d: 90,
+      since: null,
+    });
+
+    // Unread is absent, never a zero a reader would sum.
+    expect(row(slot).metrics).not.toHaveProperty("deliveries");
+
+    const judged = withClusterReadings(snapshot(), {
+      database: database(),
+      redis: REDIS,
+      redisEvictions: null,
+      volume: { created: 2, totals },
+    });
+
+    expect(judged.volume).toEqual({ last24h: 30, last7d: 90 });
+  });
+
   it("names a collection error by its part, never by its message", () => {
     expect(row(new Date()).metrics.collection_errors).toEqual([
       "webhook_delivery",
@@ -219,12 +252,18 @@ describe("reading the cluster", () => {
           uptime_seconds: 85_500,
         };
       },
+      readVolume: async (slot) => {
+        order.push("volume");
+        expect(slot).toBe(SLOT);
+        return { created: 4, totals: null };
+      },
     });
 
     expect(readDatabase).toHaveBeenCalledWith(true);
     // One after the other: the heartbeat never takes two slots of the pool.
-    expect(order).toEqual(["database", "redis", "baseline"]);
+    expect(order).toEqual(["database", "redis", "baseline", "volume"]);
     expect(readings.redisEvictions).toEqual({ delta: 2, windowSec: 900 });
+    expect(readings.volume).toEqual({ created: 4, totals: null });
   });
 
   it("skips the sizes off the quarter-hour", async () => {
@@ -234,6 +273,7 @@ describe("reading the cluster", () => {
       readDatabase,
       readRedis: async () => REDIS,
       readBaseline: async () => null,
+      readVolume: async () => null,
     });
 
     expect(readDatabase).toHaveBeenCalledWith(false);
@@ -246,10 +286,30 @@ describe("reading the cluster", () => {
       readBaseline: async () => {
         throw new Error("ECONNREFUSED");
       },
+      readVolume: async () => null,
     });
 
     expect(readings.redisEvictions).toBeNull();
     expect(readings.redis).toBe(REDIS);
+  });
+
+  it("never throws: a volume that cannot be read judges nothing", async () => {
+    // A planning gauge (U-12), never a reason to page.
+    const readings = await readClusterReadings(SLOT, {
+      readDatabase: async () => database(),
+      readRedis: async () => REDIS,
+      readBaseline: async () => null,
+      readVolume: async () => {
+        throw new Error("ECONNREFUSED");
+      },
+    });
+
+    expect(readings.volume).toBeNull();
+
+    const judged = withClusterReadings(snapshot(), readings);
+
+    expect(judged).not.toHaveProperty("volume");
+    expect(judged.collectionErrors).toEqual(snapshot().collectionErrors);
   });
 });
 

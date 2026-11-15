@@ -23,6 +23,7 @@ import { WebhookFanOutService } from "@/shared/integration/webhook-fan-out-servi
 import { deliveryEventPayload } from "@/shared/integration/announce";
 import { assertDispatcher } from "@/shared/delivery/dispatcher-guard";
 import { assertTenantAccess } from "@/modules/middlewares/tenant-authorization";
+import { countDeliveriesCreated } from "@/shared/health/volume-gauge";
 
 import { Delivery, CreateDeliveryProps } from "../../dtos/delivery-dto";
 
@@ -138,6 +139,9 @@ class CreateDeliveryUseCase {
 
         return created;
       });
+
+      // After the commit: a create that rolled back is never counted.
+      countDeliveriesCreated();
 
       this.notificationService.createActivityIfEnabled({
         type: "Entrega",

@@ -19,6 +19,7 @@ import { WebhookFanOutService } from "@/shared/integration/webhook-fan-out-servi
 import { NotificationService } from "@/shared/services/notification-service";
 import { deliveryEventPayload } from "@/shared/integration/announce";
 import type { PublicDelivery } from "@/shared/integration/public-shapes";
+import { countDeliveriesCreated } from "@/shared/health/volume-gauge";
 
 import { isUniqueViolation } from "@/shared/http/idempotency-key";
 import { violatesUniqueOn } from "@/shared/delivery/unique-violation";
@@ -187,6 +188,10 @@ class CreateIntegrationDeliveryUseCase {
 
       throw error;
     }
+
+    // After the commit, and only for the row this request created: a twin's
+    // replay above returned before here.
+    countDeliveriesCreated();
 
     // The same entry the panel writes, with the key as the actor: no user
     // acted, so performedBy stays null and the description names the key.

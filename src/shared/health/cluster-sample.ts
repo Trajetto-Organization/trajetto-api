@@ -19,6 +19,12 @@ import {
   readRedisMetrics,
   type RedisMetrics,
 } from "@/shared/health/redis-metrics";
+import {
+  VOLUME_SECTION,
+  readVolume,
+  volumeSection,
+  type VolumeReading,
+} from "@/shared/health/volume-gauge";
 import { logger } from "@/shared/logging/logger";
 
 const log = logger.child({ component: "ops-heartbeat" });
@@ -40,8 +46,9 @@ const log = logger.child({ component: "ops-heartbeat" });
  *
  * Every 15 minutes (a quarter-hour slot) it also carries the sizes and the
  * hot tables' estimates, read fresh: they move by the day, and the
- * per-minute row stays small. The deliveries created counter of U-12 joins
- * this row when that item lands.
+ * per-minute row stays small. It also carries the deliveries the process
+ * rows counted since the previous cluster row (U-12, `deliveries`), and on
+ * the quarter-hours their 24 h and 7 day sums (volume-gauge.ts).
  *
  * The readings are taken once, BEFORE the ping, because the alerts judge
  * them too (F1-11: the archiver, the xid, the oldest write, pg_wal, Redis'
@@ -104,12 +111,14 @@ function buildClusterSampleRow({
   snapshot,
   database,
   redis,
+  volume = null,
 }: {
   slot: Date;
   identity: OpsSampleIdentity;
   snapshot: OperationalSnapshot;
   database: DatabaseMetrics;
   redis: RedisMetrics;
+  volume?: VolumeReading | null;
 }): OpsSampleRow {
   return {
     ts: slot,
@@ -134,6 +143,8 @@ function buildClusterSampleRow({
         carriesSizes(slot),
       ),
       redis,
+      // Absent when unread: a null would read as "zero created".
+      ...(volume ? { [VOLUME_SECTION]: volumeSection(volume, slot) } : {}),
       collection_errors: partNames(snapshot.collectionErrors),
     },
   };
@@ -165,6 +176,12 @@ interface ClusterReadings {
 
   /** Keys evicted since the baseline row; null without one. */
   redisEvictions: { delta: number; windowSec: number } | null;
+
+  /**
+   * The deliveries counted (U-12); null when unread or with the series
+   * switched off (no rows to sum). Absent on readings built before it.
+   */
+  volume?: VolumeReading | null;
 }
 
 /**
@@ -229,6 +246,7 @@ interface ClusterReadDeps {
   readDatabase: (withSizes: boolean) => Promise<DatabaseMetrics>;
   readRedis: () => Promise<RedisMetrics>;
   readBaseline: (slot: Date) => Promise<ClusterBaseline | null>;
+  readVolume: (slot: Date) => Promise<VolumeReading | null>;
 }
 
 function defaultReadDeps(): ClusterReadDeps {
@@ -238,6 +256,9 @@ function defaultReadDeps(): ClusterReadDeps {
     readRedis: () =>
       readRedisMetrics(() => RedisConnection.getInstance().getClient()),
     readBaseline: readEvictionBaseline,
+    // With the series off there are no rows to sum: unread, not zero.
+    readVolume: async (slot) =>
+      env.OPS_SAMPLE_ENABLED ? readVolume(slot) : null,
   };
 }
 
@@ -250,7 +271,7 @@ async function readClusterReadings(
   slot: Date,
   deps: Partial<ClusterReadDeps> = {},
 ): Promise<ClusterReadings> {
-  const { readDatabase, readRedis, readBaseline } = {
+  const { readDatabase, readRedis, readBaseline, readVolume } = {
     ...defaultReadDeps(),
     ...deps,
   };
@@ -271,10 +292,24 @@ async function readClusterReadings(
     );
   }
 
+  // A planning gauge, never a reason to page: a failed read is a warning
+  // and the volume rules judge nothing this minute.
+  let volume: VolumeReading | null = null;
+
+  try {
+    volume = await readVolume(slot);
+  } catch (error) {
+    log.warn(
+      { err: error, ts: slot.toISOString() },
+      "cluster volume read failed",
+    );
+  }
+
   return {
     database: databaseMetrics,
     redis,
     redisEvictions: evictionsSince(redis, baseline, slot),
+    volume,
   };
 }
 
@@ -334,6 +369,14 @@ function withClusterReadings(
       maxmemoryPolicy: redis.maxmemory_policy,
       evictedKeys: readings.redisEvictions,
     },
+    ...(readings.volume?.totals
+      ? {
+          volume: {
+            last24h: readings.volume.totals.last24h,
+            last7d: readings.volume.totals.last7d,
+          },
+        }
+      : {}),
     collectionErrors: [
       ...snapshot.collectionErrors,
       ...unreadParts(metrics.collection_errors),
@@ -377,6 +420,7 @@ async function recordClusterSample(
         snapshot,
         database: readings.database,
         redis: readings.redis,
+        volume: readings.volume,
       }),
     );
   } catch (error) {

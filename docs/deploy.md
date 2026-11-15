@@ -3785,30 +3785,31 @@ fora, processo morto, scheduler parado → **nenhum ping** (o silêncio é o
 alerta). Sem `HEALTHCHECK_PING_URL` os motivos só vão para o log
 (`operational check failed`).
 
-| Regra                                       | Dispara quando                                                                                                                                             |
-| ------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Outbox                                      | evento **devido** esperando > 5 min                                                                                                                        |
-| Entregas internas (in-app, push, atividade) | entrega devida esperando > 5 min                                                                                                                           |
-| Entregas externas (e-mail, WhatsApp)        | entrega devida esperando > 15 min                                                                                                                          |
-| Webhooks                                    | linha devida esperando > 30 min                                                                                                                            |
-| IA                                          | análise devida esperando > 15 min                                                                                                                          |
-| Credencial                                  | primeira entrega FAILED nos últimos 10 min com erro de credencial (WhatsApp 401/403/190, SMTP EAUTH/535/530, push 401/403)                                 |
-| Rajada                                      | 50 entregas FAILED do mesmo canal em 10 min                                                                                                                |
-| IA credencial                               | análise FAILED/PARTIAL com `authentication_error`/401/403                                                                                                  |
-| Cron                                        | job sem sucesso há 26 h, que rodou e nunca teve sucesso, ou com lease vencido; um expurgo parcial só depois de 26 h só de parciais (a primeira não alerta) |
-| Partições                                   | `driver_position` com menos de 3 dias de partições à frente                                                                                                |
-| Worker travado                              | heartbeat sem progresso há 10 min numa réplica viva                                                                                                        |
-| Postgres                                    | conexões ≥ 80 % de `max_connections`                                                                                                                       |
-| Redis                                       | sem resposta ao PING em 2 s                                                                                                                                |
-| Certificado do comprovante                  | vence em 30 dias (aviso) / 7 dias (crítico), vencido ou inválido                                                                                           |
-| PITR esperado                               | `PITR_EXPECTED=true` e `archive_mode` diferente de `on` (sem a variável, nunca)                                                                            |
-| Arquivamento do WAL                         | com o arquivamento ligado: último segmento arquivado há mais de 300 s, ou a última tentativa falhou (falha mais nova que o último sucesso)                 |
-| xid                                         | `age(datfrozenxid)` do cluster acima de 1 bilhão                                                                                                           |
-| Escrita longa                               | transação de escrita aberta há mais de `LONG_WRITE_XACT_ALERT_SECONDS` (120 s), em qualquer banco do cluster                                               |
-| `pg_wal`                                    | acima de `PG_WAL_ALERT_GIB` (12 GiB; 8 na VPS única); só com superusuário ou `pg_monitor`                                                                  |
-| Despejo do Redis                            | `evicted_keys` cresceu desde a linha `cluster` do `ops_sample` de 15 a 20 min atrás (sem essa linha, não compara)                                          |
-| Teto do Redis                               | Redis respondendo sem `maxmemory` ou com `maxmemory-policy noeviction`                                                                                     |
-| Métricas do banco                           | a leitura principal (`core`) ou a do `pg_wal` falhou: as regras acima ficam cegas                                                                          |
+| Regra                                       | Dispara quando                                                                                                                                                                                                                |
+| ------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Outbox                                      | evento **devido** esperando > 5 min                                                                                                                                                                                           |
+| Entregas internas (in-app, push, atividade) | entrega devida esperando > 5 min                                                                                                                                                                                              |
+| Entregas externas (e-mail, WhatsApp)        | entrega devida esperando > 15 min                                                                                                                                                                                             |
+| Webhooks                                    | linha devida esperando > 30 min                                                                                                                                                                                               |
+| IA                                          | análise devida esperando > 15 min                                                                                                                                                                                             |
+| Credencial                                  | primeira entrega FAILED nos últimos 10 min com erro de credencial (WhatsApp 401/403/190, SMTP EAUTH/535/530, push 401/403)                                                                                                    |
+| Rajada                                      | 50 entregas FAILED do mesmo canal em 10 min                                                                                                                                                                                   |
+| IA credencial                               | análise FAILED/PARTIAL com `authentication_error`/401/403                                                                                                                                                                     |
+| Cron                                        | job sem sucesso há 26 h, que rodou e nunca teve sucesso, ou com lease vencido; um expurgo parcial só depois de 26 h só de parciais (a primeira não alerta)                                                                    |
+| Partições                                   | `driver_position` com menos de 3 dias de partições à frente                                                                                                                                                                   |
+| Worker travado                              | heartbeat sem progresso há 10 min numa réplica viva                                                                                                                                                                           |
+| Postgres                                    | conexões ≥ 80 % de `max_connections`                                                                                                                                                                                          |
+| Redis                                       | sem resposta ao PING em 2 s                                                                                                                                                                                                   |
+| Certificado do comprovante                  | vence em 30 dias (aviso) / 7 dias (crítico), vencido ou inválido                                                                                                                                                              |
+| PITR esperado                               | `PITR_EXPECTED=true` e `archive_mode` diferente de `on` (sem a variável, nunca)                                                                                                                                               |
+| Arquivamento do WAL                         | com o arquivamento ligado: último segmento arquivado há mais de 300 s, ou a última tentativa falhou (falha mais nova que o último sucesso)                                                                                    |
+| xid                                         | `age(datfrozenxid)` do cluster acima de 1 bilhão                                                                                                                                                                              |
+| Escrita longa                               | transação de escrita aberta há mais de `LONG_WRITE_XACT_ALERT_SECONDS` (120 s), em qualquer banco do cluster                                                                                                                  |
+| `pg_wal`                                    | acima de `PG_WAL_ALERT_GIB` (12 GiB; 8 na VPS única); só com superusuário ou `pg_monitor`                                                                                                                                     |
+| Despejo do Redis                            | `evicted_keys` cresceu desde a linha `cluster` do `ops_sample` de 15 a 20 min atrás (sem essa linha, não compara)                                                                                                             |
+| Teto do Redis                               | Redis respondendo sem `maxmemory` ou com `maxmemory-policy noeviction`                                                                                                                                                        |
+| Métricas do banco                           | a leitura principal (`core`) ou a do `pg_wal` falhou: as regras acima ficam cegas                                                                                                                                             |
+| Volume de entregas                          | as entregas dos últimos 7 dias, projetadas para o mês (× 30/7), acima de 70% de `APPROVED_GATE_MONTHLY_DELIVERIES` (10 000); ou as das últimas 24 h acima de `PLATFORM_DAILY_DELIVERY_SOFT_CAP` (vazio = sem teto). Só alerta |
 
 Limiares em `DEFAULT_ALERT_THRESHOLDS` (`alert-rules.ts`); os de escrita
 longa e de `pg_wal` vêm das variáveis. As regras do banco e do Redis leem os
@@ -3866,6 +3867,7 @@ mais abaixo, é o resumo.
 | `Postgres: pg_wal com`                                | o arquivamento primeiro (se parado, o WAL não sai), depois um slot de replicação abandonado (`pg_replication_slots`)                                                                                                      |
 | `Redis despejou` / `Redis sem teto` / `noeviction`    | o comando personalizado do Database Redis ([seção 10](#10-postgres-e-redis)): `--maxmemory 256mb --maxmemory-policy allkeys-lru`; despejo com o teto certo = memória no limite, ver `used_memory_mb` em `/health/metrics` |
 | `Verificação incompleta: métricas do banco`           | o SQLSTATE diz quem recusou (`57014` = `statement_timeout`, `42501` = permissão)                                                                                                                                          |
+| `Volume de entregas`                                  | segurar a próxima coorte da rampa; subir `APPROVED_GATE_MONTHLY_DELIVERIES` só com um relatório de portão novo em `docs/desempenho` ([runbook](./runbooks/volume-near-gate.md))                                           |
 
 Para trocar uma variável: _Environment_ da Application → **Save** →
 **Deploy** (salvar sozinho não reinicia o contêiner).
@@ -3883,7 +3885,10 @@ do bcrypt (`src/shared/health/ops-sample.ts`), mais a seção `http`: as
 respostas do minuto por classe de status e o histograma de latência de cada
 grupo de rota, só dos grupos com requisição, e os `contract=` do app nos
 `POST /route/positions` dos últimos 10 minutos
-(`src/shared/health/http-metrics.ts`). As colunas dizem de quem é a
+(`src/shared/health/http-metrics.ts`), e a seção `deliveries`: as entregas
+que o processo criou no minuto (`created`), contadas depois de cada commit
+(criação no painel, pela integração, planilha e XML;
+`src/shared/health/volume-gauge.ts`). As colunas dizem de quem é a
 linha: `role` (`all` com `WORKERS_ENABLED=true`, `http` com `false`),
 `replica` (o hostname do contêiner, mais `/<slot>` com `SWARM_TASK_SLOT`) e
 `commit`. Com as variáveis de identidade do Swarm no _Environment_ da
@@ -3909,7 +3914,12 @@ números do próprio banco (uso de conexões, idade do xid, escrita e snapshot
 mais antigos, `archive_mode` e o `pg_stat_archiver`, `pg_wal`, os contadores
 do cache, `pg_stat_statements`) e o Redis inteiro de `/health/metrics`; a
 cada 15 minutos (:00, :15, :30, :45), também os tamanhos e as tabelas
-quentes. É a linha-marcador do ensaio de PITR: uma restauração até T tem a
+quentes. Ela soma, em `deliveries.created`, as entregas que as linhas dos
+processos contaram desde a linha `cluster` anterior (um minuto atrás delas,
+para a gravação de cada processo já ter chegado), e nos quartos de hora traz
+também as somas das últimas 24 h e dos últimos 7 dias (`last_24h`,
+`last_7d`, e `since`, o minuto mais antigo contado): é a régua de rampa do
+alerta de volume. É a linha-marcador do ensaio de PITR: uma restauração até T tem a
 linha `cluster` do minuto de T. Os números do banco e do Redis são lidos uma
 vez, antes do ping, porque as regras de alerta também os julgam; uma leitura
 que falha vira `null` (e, nas partes do banco que as regras leem, um motivo

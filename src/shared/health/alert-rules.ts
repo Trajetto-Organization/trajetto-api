@@ -94,6 +94,13 @@ interface OperationalSnapshot {
   /** Redis' memory, ceiling and evictions (F1-11); absent likewise. */
   redis?: ClusterRedisState;
 
+  /**
+   * Deliveries created in the last 24 h and 7 days (plano-escala U-12),
+   * from the cluster rows' counter; absent without a reading (no recent
+   * quarter-hour row, or the series switched off), which judges nothing.
+   */
+  volume?: VolumeState;
+
   /** Parts of the snapshot that could not be read; each one is a reason. */
   collectionErrors: string[];
 }
@@ -131,6 +138,11 @@ interface ClusterRedisState {
    * deploy, or the series switched off).
    */
   evictedKeys: { delta: number; windowSec: number } | null;
+}
+
+interface VolumeState {
+  last24h: number;
+  last7d: number;
 }
 
 /** What the environment says should be there (F1-11). */
@@ -204,21 +216,52 @@ const DEFAULT_ALERT_THRESHOLDS = {
    * disk both productions share.
    */
   pgWalBytes: 12 * 1024 ** 3,
+
+  /**
+   * APPROVED_GATE_MONTHLY_DELIVERIES (10 000 by default, today's step): the
+   * monthly volume the newest approved load report in docs/desempenho
+   * proved this hardware takes (plano-escala U-12). Raised only with a
+   * new report.
+   */
+  approvedGateMonthlyDeliveries: 10_000,
+
+  /**
+   * The share of the gate that pages: at 70% the next cohort of the ramp
+   * waits for the next step (V-07), with room left for the peak.
+   */
+  volumeGateRatio: 0.7,
+
+  /**
+   * PLATFORM_DAILY_DELIVERY_SOFT_CAP: deliveries in the last 24 h past it
+   * page. Unset is no cap (infinite). Only an alert: nothing is refused.
+   */
+  dailyDeliverySoftCap: Number.POSITIVE_INFINITY,
 } as const;
 
 type AlertThresholds = { [K in keyof typeof DEFAULT_ALERT_THRESHOLDS]: number };
 
 const GIB = 1024 ** 3;
 
-/** The thresholds the environment tunes (F1-11); the rest are the code's. */
+/**
+ * The thresholds the environment tunes (F1-11, U-12); the rest are the
+ * code's. The volume ones are optional here: absent is the default.
+ */
 function alertThresholdsFromEnv(values: {
   LONG_WRITE_XACT_ALERT_SECONDS: number;
   PG_WAL_ALERT_GIB: number;
+  APPROVED_GATE_MONTHLY_DELIVERIES?: number;
+  PLATFORM_DAILY_DELIVERY_SOFT_CAP?: number;
 }): AlertThresholds {
   return {
     ...DEFAULT_ALERT_THRESHOLDS,
     longWriteXactSec: values.LONG_WRITE_XACT_ALERT_SECONDS,
     pgWalBytes: values.PG_WAL_ALERT_GIB * GIB,
+    approvedGateMonthlyDeliveries:
+      values.APPROVED_GATE_MONTHLY_DELIVERIES ??
+      DEFAULT_ALERT_THRESHOLDS.approvedGateMonthlyDeliveries,
+    dailyDeliverySoftCap:
+      values.PLATFORM_DAILY_DELIVERY_SOFT_CAP ??
+      DEFAULT_ALERT_THRESHOLDS.dailyDeliverySoftCap,
   };
 }
 
@@ -254,6 +297,7 @@ const ALERT_KINDS = [
   "redis-evictions",
   "redis-memory-policy",
   "proof-signing",
+  "volume-near-gate",
   "collection-incomplete",
 ] as const;
 
@@ -479,6 +523,42 @@ function redisAlerts(redis: ClusterRedisState): Alert[] {
   return alerts;
 }
 
+/** A whole number in pt-BR, with the thousands' dot. */
+function count(value: number): string {
+  return Math.round(value).toLocaleString("pt-BR");
+}
+
+/**
+ * The ramp's rules (plano-escala U-12). The 7 days' deliveries, projected
+ * to a month (× 30/7), past 70% of the approved gate; and the last 24 h
+ * past the platform's soft cap, when one is set. Neither refuses anything:
+ * they say the ramp has to wait for the next step.
+ */
+function volumeAlerts(
+  volume: VolumeState,
+  thresholds: AlertThresholds,
+): Alert[] {
+  const alerts: Alert[] = [];
+  const gate = thresholds.approvedGateMonthlyDeliveries;
+  const projected = (volume.last7d * 30) / 7;
+
+  if (projected > gate * thresholds.volumeGateRatio) {
+    alerts.push({
+      code: "volume-near-gate",
+      message: `Volume de entregas perto do portão aprovado: ${count(volume.last7d)} nos últimos 7 dias, cerca de ${count(projected)} por mês (${Math.round((projected / gate) * 100)}% de ${count(gate)}, APPROVED_GATE_MONTHLY_DELIVERIES); a próxima coorte espera o degrau seguinte`,
+    });
+  }
+
+  if (volume.last24h > thresholds.dailyDeliverySoftCap) {
+    alerts.push({
+      code: "volume-near-gate",
+      message: `Volume de entregas acima do teto diário: ${count(volume.last24h)} nas últimas 24 h (PLATFORM_DAILY_DELIVERY_SOFT_CAP ${count(thresholds.dailyDeliverySoftCap)}); nada é recusado`,
+    });
+  }
+
+  return alerts;
+}
+
 /** The cron rules: a dead run, partials that never end, no success. */
 function cronAlerts(
   snapshot: OperationalSnapshot,
@@ -662,6 +742,10 @@ function collectAlerts(
 
   if (snapshot.redis) alerts.push(...redisAlerts(snapshot.redis));
 
+  if (snapshot.volume) {
+    alerts.push(...volumeAlerts(snapshot.volume, thresholds));
+  }
+
   const proofSigning = proofSigningReason(snapshot, thresholds);
 
   if (proofSigning) {
@@ -709,4 +793,5 @@ export type {
   ClusterRedisState,
   CronJobState,
   OperationalSnapshot,
+  VolumeState,
 };

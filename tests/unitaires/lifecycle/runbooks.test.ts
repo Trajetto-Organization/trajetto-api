@@ -151,6 +151,8 @@ function everyRuleBroken(): OperationalSnapshot[] {
         lastArchiveFailedAt: new Date(NOW.getTime() - 1_000),
         archiveFailedCount: 1,
       },
+      // The 7 days alone are the whole month's gate (U-12).
+      volume: { last24h: 0, last7d: T.approvedGateMonthlyDeliveries },
     },
   ];
 }

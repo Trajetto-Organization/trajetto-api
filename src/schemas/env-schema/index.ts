@@ -540,6 +540,24 @@ const envSchema = z
       z.coerce.number().positive().max(1_024).default(12),
     ),
 
+    // The ramp's gauge (plano-escala U-12): the monthly deliveries the
+    // newest approved load report in docs/desempenho proved this hardware
+    // takes. The ops heartbeat alerts (volume-near-gate) when the last 7
+    // days, projected to a month, pass 70% of it; nothing is refused.
+    // 10 000 is today's step, and it only moves with a new report.
+    APPROVED_GATE_MONTHLY_DELIVERIES: z.preprocess(
+      (value) => (value === "" ? undefined : value),
+      z.coerce.number().int().positive().default(10_000),
+    ),
+
+    // Deliveries in the last 24 h past this alert too (the same code):
+    // a soft cap on a day's peak while the ramp is young. Empty or absent
+    // is no cap. Only an alert: nothing is refused.
+    PLATFORM_DAILY_DELIVERY_SOFT_CAP: z.preprocess(
+      (value) => (value === "" ? undefined : value),
+      z.coerce.number().int().positive().optional(),
+    ),
+
     // How many statements the hourly pg_stat_statements snapshot keeps
     // (plano-escala F1-12): the most expensive of the hour by execution
     // time. 200 covers the whole application's statements many times over

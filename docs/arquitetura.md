@@ -4330,6 +4330,17 @@ que o descarte de posições vai esperar. Os números vão para o
 `/health/metrics` (`http`) e, a cada minuto, para a seção `http` do
 `ops_sample`.
 
+**Régua de rampa** (`src/shared/health/volume-gauge.ts`, U-12): cada
+processo conta as entregas que criou, **depois** do commit da transação que
+gravou a linha (criação no painel, pela integração, planilha e XML; o
+`volume-gauge.test.ts` confere os quatro caminhos), na seção `deliveries`
+do `ops_sample`. A linha `cluster` do `ops-heartbeat` soma as linhas dos
+processos desde a linha `cluster` anterior e, nos quartos de hora, as somas
+de 24 h e de 7 dias. O alerta `volume-near-gate` compara os 7 dias,
+projetados para o mês, com 70% de `APPROVED_GATE_MONTHLY_DELIVERIES`, o
+portão com relatório aprovado em `docs/desempenho`, e as 24 h com o
+`PLATFORM_DAILY_DELIVERY_SOFT_CAP`. Nada recusa entrega: só avisa.
+
 ## Decisões (ADRs)
 
 Os ADRs ficam em [`docs/adr/`](./adr/README.md), um arquivo por decisão, com

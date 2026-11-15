@@ -32,6 +32,10 @@ import {
   registerSampleSection,
 } from "./shared/health/ops-sample";
 import { httpMetrics } from "./shared/health/http-metrics";
+import {
+  VOLUME_SECTION,
+  rotateDeliveriesCreated,
+} from "./shared/health/volume-gauge";
 import { gateStats } from "./shared/security/bcrypt-gate";
 import { logger } from "./shared/logging/logger";
 // Side effect: registers "ProofSigningService" (@registry).
@@ -199,6 +203,11 @@ async function bootstrap() {
       // positions' contracts of the last ten minutes (F1-09). Reading
       // rotates the counters, so the row holds the minute.
       registerSampleSection("http", () => httpMetrics.rotate());
+
+      // The deliveries this process created in the minute, counted after
+      // each commit; the ops heartbeat sums them into the cluster row
+      // (plano-escala U-12). Reading resets the count.
+      registerSampleSection(VOLUME_SECTION, rotateDeliveriesCreated);
 
       const stopMetrics = startRuntimeMetrics(
         app.log,

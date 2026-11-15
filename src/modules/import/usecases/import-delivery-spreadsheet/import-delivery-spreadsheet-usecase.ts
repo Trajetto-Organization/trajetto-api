@@ -54,6 +54,7 @@ import { OUT_OF_OPERATION_LABELS } from "@/shared/route/route-rules";
 import { assertDriverStillActive } from "@/modules/route/usecases/shared/driver-still-active";
 import { ShipperInactiveError } from "@/modules/shipper/usecases/errors/shipper-errors";
 import { logger } from "@/shared/logging/logger";
+import { countDeliveriesCreated } from "@/shared/health/volume-gauge";
 import {
   deliveryAssignedPayload,
   deliveryEventPayload,
@@ -607,6 +608,9 @@ class ImportDeliverySpreadsheetUseCase {
 
           continue;
         }
+
+        // After the row's commit; a row another upload won is not ours.
+        countDeliveriesCreated();
 
         createdDeliveryIdByLine.set(row.line, created.id!);
 

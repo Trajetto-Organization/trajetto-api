@@ -39,6 +39,7 @@ import { issuerShipperName } from "@/shared/delivery/issuer-shipper-name";
 import { IImportRepository } from "@/modules/import/repositories/IImport-repository";
 import { WebhookFanOutService } from "@/shared/integration/webhook-fan-out-service";
 import { deliveryEventPayload } from "@/shared/integration/announce";
+import { countDeliveriesCreated } from "@/shared/health/volume-gauge";
 import { sendCatalogChangedEvent } from "@/websocket";
 import { logger } from "@/shared/logging/logger";
 
@@ -431,6 +432,9 @@ class ImportDeliveryXmlUseCase {
           tx,
         );
       });
+
+      // After the commit: a file whose transaction rolled back is not counted.
+      countDeliveriesCreated();
 
       return {
         filename: file.filename,
