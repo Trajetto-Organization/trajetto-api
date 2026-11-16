@@ -11,6 +11,7 @@ O Postgres não está conseguindo mandar os segmentos de WAL para o R2. Enquanto
 1. Veja o estado do arquivador, com a consulta abaixo.
 2. Leia a aba _Logs_ do Database: o `archive-push` do pgBackRest diz por que falhou (R2 fora, chave revogada, bucket errado).
 3. Acompanhe o `pg_wal` ([pg-wal-high](./pg-wal-high.md)): com a fila do pgBackRest cheia, ele descarta WAL para salvar o disco e a janela do PITR se perde até o próximo full.
+4. O backup agendado (`trajetto-backup diff`) avisa o descarte depois: o ping `/fail` com `archive-gap` lista os segmentos que faltam no repositório desde o backup anterior. O PITR não alcança aquele trecho; com o arquivamento de volta, rode um full no servidor para abrir uma janela limpa: `docker exec -u postgres $(docker ps -q -f label=com.docker.swarm.service.name=<App Name do Database>) trajetto-backup full`.
 
 ```sql
 SELECT archived_count, last_archived_time, failed_count,

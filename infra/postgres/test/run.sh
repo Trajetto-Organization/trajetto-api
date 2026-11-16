@@ -20,9 +20,15 @@
 #   - a PITR round trip on an encrypted posix repository: stanza-create with
 #     archiving off, then on, check, full backup, archive-get, and a restore
 #     to a time between two batches of rows that brings back the first only;
+#   - trajetto-backup and trajetto-restore-drill (F1-02) for real, pinging
+#     a local listener: a diff with no hole pings success; the drill
+#     restores the newest backup, starts it with archive_mode=off and reads
+#     _prisma_migrations, the counts and the ops_sample marker;
 #   - the archive queue cap: with the repository gone and a tiny cap,
 #     archive-push reports the segments archived and drops them, pg_wal stops
-#     growing, and the log says so.
+#     growing, and the log says so; with the repository back, the next diff
+#     finds that hole and pings /fail with 'archive-gap', and a full reports
+#     it and starts a clean window.
 set -Eeuo pipefail
 
 : "${PGBACKREST_VERSION:?PGBACKREST_VERSION ausente (ARG do Dockerfile)}"
@@ -302,6 +308,70 @@ rows=$(psql -X -h "$RSOCK" -p 5433 -U trajetto -d trajetto -Atqc "SELECT string_
 stop
 ok "PITR: stanza, check, full, archive-get e restore até ${target} só com o primeiro lote"
 
+# --- trajetto-backup and trajetto-restore-drill, for real ---------------------------
+
+# healthchecks.io's stand-in: every request, path and body, one per line.
+export PINGS_LOG="${WORK}/pings.log"
+: > "$PINGS_LOG"
+chmod 0666 "$PINGS_LOG"
+cat > "${WORK}/ping-handler.sh" << 'HANDLER'
+#!/bin/sh
+read -r _ path _
+length=0
+while IFS= read -r header; do
+  header=$(printf '%s' "$header" | tr -d '\r')
+  [ -n "$header" ] || break
+  case "$header" in
+    [Cc]ontent-[Ll]ength:*) length=$(echo "${header#*:}" | tr -d ' ') ;;
+  esac
+done
+body=""
+if [ "$length" -gt 0 ]; then body=$(head -c "$length"); fi
+printf '%s %s\n' "$path" "$body" >> "$PINGS_LOG"
+printf 'HTTP/1.0 200 OK\r\nContent-Length: 2\r\n\r\nOK'
+HANDLER
+chmod 0755 "${WORK}/ping-handler.sh"
+nc -lk -s 127.0.0.1 -p 18080 -e "${WORK}/ping-handler.sh" &
+LISTENER=$!
+trap 'kill "$LISTENER" 2> /dev/null || true' EXIT
+export PITR_BACKUP_DIFF_PING_URL=http://127.0.0.1:18080/backup-diff
+export PITR_BACKUP_FULL_PING_URL=http://127.0.0.1:18080/backup-full
+export PITR_DRILL_PING_URL=http://127.0.0.1:18080/drill
+pinged() { grep -c "^$1 " "$PINGS_LOG" || true; }
+
+start PITR_ARCHIVE=on
+# What the drill reads: the migrations' table and the heartbeat's marker,
+# as the API creates them.
+sql "CREATE TABLE _prisma_migrations (id varchar(36) PRIMARY KEY, migration_name varchar(255) NOT NULL, finished_at timestamptz, rolled_back_at timestamptz)"
+sql "INSERT INTO _prisma_migrations VALUES ('1', '20261115130000_ops_sample', now(), NULL)"
+sql "CREATE TABLE ops_sample (id text PRIMARY KEY, ts timestamp(3) NOT NULL, role text NOT NULL)"
+sql "INSERT INTO ops_sample VALUES ('m1', now() AT TIME ZONE 'UTC', 'cluster')"
+sql "CREATE TABLE business (id text PRIMARY KEY)"
+sql "INSERT INTO business VALUES ('b1'), ('b2')"
+LOG="${WORK}/backup-diff.log"
+trajetto-backup diff > "$LOG" 2>&1 || fail "trajetto-backup diff sem buraco não passou"
+grep -q '^{"result":"ok","type":"diff"' "$LOG" || fail "trajetto-backup diff sem o resumo"
+[ "$(pinged /backup-diff/start)" = 1 ] || fail "trajetto-backup não pingou /start"
+grep -q '^/backup-diff {"result":"ok","type":"diff"' "$PINGS_LOG" || fail "trajetto-backup não pingou o sucesso"
+if grep -q "$PGBACKREST_REPO1_CIPHER_PASS" "$LOG" "$PINGS_LOG"; then fail "a senha da cifra vazou"; fi
+stop
+ok "trajetto-backup diff: backup, check, arquivo contínuo, ping de sucesso, nenhum segredo"
+
+printf 'MemAvailable:    8388608 kB\n' > "${WORK}/meminfo"
+LOG="${WORK}/drill.log"
+env PGDATA="${WORK}/drill" TRAJETTO_MEMINFO="${WORK}/meminfo" \
+  trajetto-restore-drill --inside > "$LOG" 2>&1 || fail "trajetto-restore-drill --inside falhou"
+summary=$(grep '^{"result":"ok"' "$LOG") || fail "o ensaio não imprimiu o resumo"
+[[ "$summary" == *'"migrations":{"applied":1,"last":"20261115130000_ops_sample"}'* ]] || fail "o ensaio não leu _prisma_migrations: ${summary}"
+[[ "$summary" == *'"counts":{"business":2}'* ]] || fail "o ensaio não contou as tabelas: ${summary}"
+[[ "$summary" =~ \"loss_seconds\":[0-9]+, ]] || fail "o ensaio não mediu a perda: ${summary}"
+[[ "$summary" =~ \"rto_seconds\":[0-9]+, ]] || fail "o ensaio não mediu o RTO: ${summary}"
+grep -q '^/drill {"result":"ok"' "$PINGS_LOG" || fail "o ensaio não pingou o sucesso"
+if grep -q "$PGBACKREST_REPO1_CIPHER_PASS" "$LOG" "$PINGS_LOG"; then fail "a senha da cifra vazou no ensaio"; fi
+rm -rf "${WORK}/drill"
+ok "trajetto-restore-drill: restaura, sobe sem arquivar, lê migrations, contagens e o marcador, e pinga"
+echo "  ${summary}"
+
 # --- the archive queue cap -------------------------------------------------------
 
 # The repository disappears (R2 down, a revoked key): with a cap below one
@@ -328,5 +398,24 @@ done
 grep -q "dropped WAL file" "$LOG" || fail "o log não avisa o descarte"
 stop
 ok "fila do arquivamento: com o repositório fora, o WAL acima do teto é descartado com aviso"
+
+# The repository is back: the next diff must find the dropped segments.
+mv "${REPO}.gone" "$REPO"
+start PITR_ARCHIVE=on
+LOG="${WORK}/backup-gap.log"
+status=0
+trajetto-backup diff > "$LOG" 2>&1 || status=$?
+[ "$status" = 2 ] || fail "trajetto-backup diff com o buraco saiu com ${status}, esperado 2"
+grep -q 'archive-gap' "$LOG" || fail "trajetto-backup não disse archive-gap"
+grep -q '^/backup-diff/fail {"result":"fail","reason":"archive-gap"' "$PINGS_LOG" || fail "trajetto-backup não pingou /fail com archive-gap"
+# The full the ping asks for: green, and the window is clean from it on.
+LOG="${WORK}/backup-full.log"
+trajetto-backup full > "$LOG" 2>&1 || fail "o full depois do buraco não passou"
+grep -q '^/backup-full {"result":"ok","type":"full"' "$PINGS_LOG" || fail "o full não pingou o sucesso"
+LOG="${WORK}/backup-after.log"
+trajetto-backup diff > "$LOG" 2>&1 || fail "o diff depois do full não voltou a verde"
+if grep -q '"archive_gap"' "$LOG"; then fail "o diff depois do full ainda vê o buraco"; fi
+stop
+ok "o buraco do descarte: o diff pinga /fail archive-gap, e o full pedido abre uma janela limpa"
 
 echo "trajetto-postgres: todos os testes da imagem passaram."

@@ -79,6 +79,9 @@ COPY --link --from=pgbackrest /out/ /
 COPY --link postgres.params /etc/trajetto/postgres.params
 COPY --link pgbackrest.conf /etc/pgbackrest/pgbackrest.conf
 COPY --link --chmod=0755 trajetto-entrypoint.sh /usr/local/bin/trajetto-entrypoint.sh
+# The backup of the Schedule Jobs and the monthly drill (F1-02) ship with
+# the server they back up: the same pgBackRest, no other copy to drift.
+COPY --link --chmod=0755 bin/trajetto-backup bin/trajetto-restore-drill /usr/local/bin/
 
 # conf.d holds runtime.conf, which the entrypoint rewrites at every start;
 # the postgres user owns it so a container started as that user can too.
