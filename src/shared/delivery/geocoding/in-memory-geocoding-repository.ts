@@ -1,8 +1,10 @@
-import type {
-  GeocodingClaim,
-  GeocodingSettlement,
-  IDeliveryGeocodingRepository,
-  OpenStopRoute,
+import {
+  verdictOf,
+  type GeocodingClaim,
+  type GeocodingSettlement,
+  type IDeliveryGeocodingRepository,
+  type OpenStopRoute,
+  type ReusedVerdict,
 } from "./geocoding-repository";
 import {
   GEOCODING_MAX_ATTEMPTS,
@@ -166,6 +168,43 @@ class InMemoryDeliveryGeocodingRepository implements IDeliveryGeocodingRepositor
     );
   }
 
+  async reusableVerdict(
+    claim: GeocodingClaim,
+    since: Date,
+  ): Promise<ReusedVerdict | null> {
+    const key = deliveryAddressKey(claim);
+
+    if (!key) return null;
+
+    const [newest] = this.deliveries
+      .filter(
+        (row) =>
+          row.businessId === claim.businessId &&
+          row.address_key === key &&
+          row.geo_source === null &&
+          row.latitude === null &&
+          row.id !== claim.id &&
+          (row.geocode_status === "NOT_FOUND" ||
+            row.geocode_status === "COARSE") &&
+          row.geocode_attempted_at !== null &&
+          row.geocode_attempted_at.getTime() >= since.getTime(),
+      )
+      .sort(
+        (a, b) =>
+          b.geocode_attempted_at!.getTime() -
+            a.geocode_attempted_at!.getTime() ||
+          (a.id < b.id ? 1 : a.id > b.id ? -1 : 0),
+      );
+
+    return verdictOf(
+      newest && {
+        geocode_status: newest.geocode_status,
+        geo_precision: newest.geo_precision,
+        decidedAt: newest.geocode_attempted_at,
+      },
+    );
+  }
+
   async settle(
     claim: GeocodingClaim,
     settlement: GeocodingSettlement,
@@ -218,6 +257,14 @@ class InMemoryDeliveryGeocodingRepository implements IDeliveryGeocodingRepositor
         row.geocode_status = settlement.kind;
         row.geo_copied_from = null;
         break;
+    }
+
+    // A copied verdict keeps the date of the answer it copies.
+    if (
+      (settlement.kind === "NOT_FOUND" || settlement.kind === "COARSE") &&
+      settlement.decidedAt
+    ) {
+      row.geocode_attempted_at = new Date(settlement.decidedAt.getTime());
     }
 
     return true;

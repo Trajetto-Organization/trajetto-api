@@ -203,6 +203,8 @@ interface PlacedColumns {
   geo_updated_at: Date | null;
   geo_copied_from: string | null;
   status: "PENDING" | "IN_TRANSIT" | "DELIVERED" | "CANCELLED";
+  geocode_status: "RESOLVED" | "COARSE" | "NOT_FOUND" | "FAILED" | null;
+  geocode_attempted_at: Date | null;
 }
 
 interface GeocodingHarness {
@@ -213,6 +215,8 @@ interface GeocodingHarness {
   /** Replaces the deliveries of both companies with the seed. */
   reset(): Promise<void>;
   read(id: string): Promise<GeocodingState>;
+  /** The delivery's geocode_attempted_at as stored. */
+  attemptedAt(id: string): Promise<Date | null>;
   /** A dispatcher pinning the point by hand (route-repository's pin). */
   pin(id: string): Promise<void>;
   /** update-delivery's address change (CLEARED_ADDRESS_POINT). */
@@ -488,6 +492,101 @@ function deliveryGeocodingContract(harness: () => GeocodingHarness): void {
         geocode_status: null,
         geocode_attempts: 0,
       });
+    });
+  });
+
+  // Plano-escala F2-33: the provider's NOT_FOUND or COARSE about a door
+  // stands for the company's other deliveries there within a window.
+  describe("reusableVerdict", () => {
+    const SINCE = minute(0);
+
+    it("finds the newest verdict without a point of the company at the claim's door, with its date", async () => {
+      const h = harness();
+      const [claim] = await h.repo.claim(1, NOW);
+      const door = deliveryAddressKey(claim);
+
+      expect(claim.id).toBe(F.open);
+      expect(await h.repo.reusableVerdict(claim, SINCE)).toBeNull();
+
+      await h.place(F.notFound, {
+        address_key: door,
+        geocode_attempted_at: minute(900),
+      });
+
+      expect(await h.repo.reusableVerdict(claim, SINCE)).toEqual({
+        kind: "NOT_FOUND",
+        decidedAt: minute(900),
+      });
+
+      // A newer COARSE at the same door wins, with its level.
+      await h.place(F.coarse, {
+        address_key: door,
+        geo_precision: "NEIGHBORHOOD",
+        geocode_attempted_at: minute(950),
+      });
+
+      expect(await h.repo.reusableVerdict(claim, SINCE)).toEqual({
+        kind: "COARSE",
+        precision: "NEIGHBORHOOD",
+        decidedAt: minute(950),
+      });
+    });
+
+    it("never takes one older than the window, another company's, one with a point by now, or a failure", async () => {
+      const h = harness();
+      const [claim] = await h.repo.claim(1, NOW);
+      const door = deliveryAddressKey(claim);
+
+      // Before the window.
+      await h.place(F.notFound, {
+        address_key: door,
+        geocode_attempted_at: minute(-1),
+      });
+      // Another company's.
+      await h.place(F.otherCompany, {
+        address_key: door,
+        geocode_status: "NOT_FOUND",
+        geocode_attempted_at: minute(990),
+      });
+      // Pinned since its verdict.
+      await h.place(F.coarse, {
+        address_key: door,
+        geo_precision: "CITY",
+        latitude: -22.9,
+        longitude: -43.2,
+        geo_source: "MANUAL",
+        geocode_attempted_at: minute(990),
+      });
+      // A failure, which judged nothing.
+      await h.place(F.backingOff, { address_key: door });
+
+      expect(await h.repo.reusableVerdict(claim, SINCE)).toBeNull();
+    });
+
+    it("writes a copied verdict with the date of the answer it copies", async () => {
+      const h = harness();
+      const [claim] = await h.repo.claim(1, NOW);
+
+      expect(
+        await h.repo.settle(
+          claim,
+          { kind: "NOT_FOUND", decidedAt: minute(900) },
+          NOW,
+        ),
+      ).toBe(true);
+      expect(await h.read(F.open)).toMatchObject({
+        geocode_status: "NOT_FOUND",
+        latitude: null,
+        geo_source: null,
+      });
+      expect(await h.attemptedAt(F.open)).toEqual(minute(900));
+
+      // The provider's own answer keeps the claim's instant.
+      const [next] = await h.repo.claim(1, NOW);
+
+      await h.repo.settle(next, { kind: "NOT_FOUND" }, NOW);
+
+      expect(await h.attemptedAt(next.id)).toEqual(NOW);
     });
   });
 

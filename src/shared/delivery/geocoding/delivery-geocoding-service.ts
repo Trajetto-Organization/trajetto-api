@@ -18,6 +18,7 @@ import {
   GEOCODING_CALLS_PER_SECOND_DEFAULT,
   GEOCODING_MAX_ATTEMPTS,
   GEOCODING_RUN_BUDGET_DEFAULT_MS,
+  GEOCODING_VERDICT_REUSE_DAYS_DEFAULT,
 } from "./geocoding-rules";
 
 /**
@@ -51,6 +52,15 @@ import {
  * answer, without the budget, the slot or a call — a repeated address no
  * longer spends the provider's day (address-point-reuse.ts).
  *
+ * Nor does a door the provider could not place (plano-escala F2-33): a
+ * delivery at a door where the provider answered NOT_FOUND or COARSE for
+ * another delivery of the company within GEOCODING_VERDICT_REUSE_DAYS
+ * takes that verdict, with its date, so a bad address costs one lookup a
+ * window per company instead of one per delivery — a customer's
+ * spreadsheet repeats its doors. Never across companies; a pin at the
+ * door later still reaches it, as it reaches any delivery without a point
+ * (address-point-propagation.ts).
+ *
  * Two entry points. runOnce is the minute's job: the open stops of
  * unfinished routes first (claimOpenStops), then the newest, a batch at a
  * time, claiming again while each batch comes back full and the run's time
@@ -82,6 +92,12 @@ interface GeocodingRunOptions {
   slotWaitMs: number;
   /** How many times to try for a slot before giving the run back. */
   slotTries: number;
+  /**
+   * How many days a NOT_FOUND or COARSE answer about a door stands for the
+   * company's other deliveries there (GEOCODING_VERDICT_REUSE_DAYS); 0
+   * asks the provider for every delivery, as before.
+   */
+  verdictReuseDays: number;
 }
 
 /**
@@ -132,6 +148,12 @@ interface GeocodingRunResult {
    * same door: nothing asked, nothing spent.
    */
   reused: number;
+  /**
+   * Settled with the verdict without a point (NOT_FOUND, COARSE) the
+   * provider gave about the same door of the company within the window:
+   * nothing asked, nothing spent.
+   */
+  reusedVerdicts: number;
   /** Claims given back unasked, for the next run. */
   released: number;
   /** Why the run asked nothing, when it did not. */
@@ -200,7 +222,10 @@ const GEOCODING_RUN_DEFAULTS: GeocodingRunOptions = {
   failureStreak: 3,
   slotWaitMs: 400,
   slotTries: 3,
+  verdictReuseDays: GEOCODING_VERDICT_REUSE_DAYS_DEFAULT,
 };
+
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 /** A refusal is configuration: somebody has to fix it, so not every minute. */
 const REFUSED_PAUSE_MS = 15 * 60_000;
@@ -485,6 +510,8 @@ class DeliveryGeocodingService {
 
         if (await this.reuse(claim, now, result)) continue;
 
+        if (await this.reuseVerdict(claim, now, result)) continue;
+
         const outcome = await this.lookUp(claim, now, run);
 
         // No budget or no slot left: nothing more is asked in this run.
@@ -612,6 +639,57 @@ class DeliveryGeocodingService {
   }
 
   /**
+   * Settles the claim with the verdict without a point the provider gave
+   * about the same door of the company within the window, when there is
+   * one: no budget, no slot, no call. The copy keeps the verdict's date
+   * (decidedAt), so copying a copy never stretches the window, and it is
+   * announced like the provider's own: the stop reads "não localizado". One
+   * not written (an address edit or a pin got there first) gives the claim
+   * back. A reuse says nothing about the provider: the failure streak stays
+   * as it was. True when the claim is done with.
+   */
+  private async reuseVerdict(
+    claim: GeocodingClaim,
+    now: Date,
+    result: GeocodingRunResult,
+  ): Promise<boolean> {
+    const days = this.options.verdictReuseDays;
+
+    if (days <= 0) return false;
+
+    const verdict = await this.repository.reusableVerdict(
+      claim,
+      new Date(now.getTime() - days * DAY_MS),
+    );
+
+    if (!verdict) return false;
+
+    const settlement: GeocodingSettlement =
+      verdict.kind === "COARSE"
+        ? {
+            kind: "COARSE",
+            precision: verdict.precision,
+            decidedAt: verdict.decidedAt,
+          }
+        : { kind: "NOT_FOUND", decidedAt: verdict.decidedAt };
+
+    if (!(await this.repository.settle(claim, settlement, now))) {
+      if (await this.repository.release(claim)) result.released += 1;
+
+      return true;
+    }
+
+    result.reusedVerdicts += 1;
+    result.settled.push({
+      id: claim.id,
+      businessId: claim.businessId,
+      kind: settlement.kind,
+    });
+
+    return true;
+  }
+
+  /**
    * The free-text address, then — when that fell short of the street and
    * there was more to drop — street, city and UF alone. The better answer
    * wins, a point from the second only when it agrees with the delivery
@@ -705,6 +783,7 @@ function emptyResult(): GeocodingRunResult {
     notFound: 0,
     failed: 0,
     reused: 0,
+    reusedVerdicts: 0,
     released: 0,
     providerStatuses: [],
     settled: [],
@@ -725,6 +804,7 @@ function absorb(total: GeocodingRunResult, batch: GeocodingRunResult): void {
   total.notFound += batch.notFound;
   total.failed += batch.failed;
   total.reused += batch.reused;
+  total.reusedVerdicts += batch.reusedVerdicts;
   total.released += batch.released;
   total.providerStatuses.push(...batch.providerStatuses);
   total.settled.push(...batch.settled);

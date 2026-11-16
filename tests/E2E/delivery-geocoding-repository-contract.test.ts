@@ -81,6 +81,16 @@ const harnesses: Record<Kind, () => GeocodingHarness> = {
         (await prisma.delivery.findUnique({ where: { id } })) as never,
       );
     },
+    async attemptedAt(id) {
+      return (
+        (
+          await prisma.delivery.findUnique({
+            where: { id },
+            select: { geocode_attempted_at: true },
+          })
+        )?.geocode_attempted_at ?? null
+      );
+    },
     async place(id, columns) {
       await prisma.delivery.update({ where: { id }, data: columns });
     },
@@ -132,6 +142,12 @@ const harnesses: Record<Kind, () => GeocodingHarness> = {
     },
     async read(id) {
       return stateOf(memory.deliveries.find((row) => row.id === id) as never);
+    },
+    async attemptedAt(id) {
+      return (
+        memory.deliveries.find((row) => row.id === id)?.geocode_attempted_at ??
+        null
+      );
     },
     async place(id, columns) {
       Object.assign(
@@ -203,6 +219,30 @@ describe("delivery geocoding queue (prisma only)", () => {
       );
     } finally {
       await second.$disconnect();
+    }
+  });
+
+  it("reads a door's verdict through the address key's index (F2-33)", async () => {
+    await prisma.$executeRawUnsafe("SET enable_seqscan = off");
+
+    try {
+      const plan = await prisma.$queryRawUnsafe<
+        Array<{ "QUERY PLAN": string }>
+      >(
+        `EXPLAIN SELECT "geocode_status" FROM "delivery"
+          WHERE "businessId" = 'a' AND "address_key" = 'k'
+            AND "geo_source" IS NULL AND "latitude" IS NULL
+            AND "id" <> 'x'
+            AND "geocode_status" IN ('NOT_FOUND', 'COARSE')
+            AND "geocode_attempted_at" >= now() - interval '30 days'
+          ORDER BY "geocode_attempted_at" DESC, "id" DESC LIMIT 1`,
+      );
+
+      expect(plan.map((row) => row["QUERY PLAN"]).join("\n")).toContain(
+        "delivery_address_key_idx",
+      );
+    } finally {
+      await prisma.$executeRawUnsafe("SET enable_seqscan = on");
     }
   });
 

@@ -20,6 +20,7 @@ import {
 } from "@/shared/delivery/geocoding/geocoding-rules";
 import type { GeocodingBudget } from "@/shared/delivery/geocoding/geocoding-budget";
 import { deliveryAddressKey } from "@/shared/delivery/address-key";
+import { takesDoorPoint } from "@/shared/delivery/geocoding/address-point-propagation";
 import type { GeocodingGate } from "@/shared/delivery/geocoding/geocoding-gate";
 import type {
   GeocodableAddress,
@@ -1444,5 +1445,212 @@ describe("the minute's job claims again while the batch comes back full", () => 
       spacingMs: 1_000,
       runBudgetMs: 50_000,
     });
+  });
+});
+
+/**
+ * Plano-escala F2-33: a customer's spreadsheet repeats its doors, and a
+ * door the provider could not place cost a lookup for every delivery at
+ * it. The provider's NOT_FOUND or COARSE about a door now stands for the
+ * company's other deliveries there for GEOCODING_VERDICT_REUSE_DAYS (30):
+ * one lookup a window per company. Never across companies, and a pin at
+ * the door later still reaches them.
+ */
+describe("the verdict about the same door", () => {
+  // A door with a number: one without has no key to share (address-key.ts).
+  const DOOR = deliveryAddressKey(delivery("door"));
+  const DAY_MS = 24 * 60 * 60 * 1000;
+
+  /** A delivery of the company the provider judged at the door, `days` ago. */
+  function judged(
+    days: number,
+    overrides: Record<string, unknown> = {},
+  ): ReturnType<typeof delivery> {
+    return delivery("judged", {
+      address_key: DOOR,
+      geocode_status: "NOT_FOUND",
+      geocode_attempts: 1,
+      geocode_attempted_at: new Date(NOW.getTime() - days * DAY_MS),
+      created_at: new Date("2026-10-01T10:00:00.000Z"),
+      ...overrides,
+    });
+  }
+
+  const claimAtDoor = (id = "new", overrides: Record<string, unknown> = {}) =>
+    delivery(id, { address_key: DOOR, ...overrides });
+
+  it("settles NOT_FOUND without asking, keeps the verdict's date, and the screens hear", async () => {
+    const budget = budgetOf(1_000);
+    const h = harness(() => FOUND_AT_DOOR, {
+      rows: [judged(10), claimAtDoor()],
+      budget: budget.budget,
+    });
+
+    const result = await h.run.runOnce(NOW);
+
+    expect(result).toMatchObject({
+      claimed: 1,
+      reusedVerdicts: 1,
+      notFound: 0,
+      released: 0,
+    });
+    expect(h.asked).toEqual([]);
+    expect(budget.spent).toEqual([]);
+    expect(row(h, "new")).toMatchObject({
+      geocode_status: "NOT_FOUND",
+      latitude: null,
+      geo_source: null,
+      // The provider's answer's date, not the claim's: a copy of the copy
+      // never stretches the window.
+      geocode_attempted_at: new Date(NOW.getTime() - 10 * DAY_MS),
+    });
+    expect(h.announced).toEqual([
+      [{ id: "new", businessId: BUSINESS, kind: "NOT_FOUND" }],
+    ]);
+  });
+
+  it("copies a COARSE verdict with its level", async () => {
+    const h = harness(() => FOUND_AT_DOOR, {
+      rows: [
+        judged(1, { geocode_status: "COARSE", geo_precision: "CITY" }),
+        claimAtDoor(),
+      ],
+    });
+
+    await h.run.runOnce(NOW);
+
+    expect(h.asked).toEqual([]);
+    expect(row(h, "new")).toMatchObject({
+      geocode_status: "COARSE",
+      geo_precision: "CITY",
+      latitude: null,
+    });
+  });
+
+  it("asks the provider again once the verdict is older than the window, and a copy never renews it", async () => {
+    // The provider's answer is 31 days old; a delivery took it as a copy
+    // 5 days ago, keeping its date.
+    const h = harness(() => ({ kind: "NOT_FOUND" }), {
+      rows: [
+        judged(31),
+        claimAtDoor("copy", {
+          geocode_status: "NOT_FOUND",
+          geocode_attempts: 1,
+          geocode_attempted_at: new Date(NOW.getTime() - 31 * DAY_MS),
+        }),
+        claimAtDoor(),
+      ],
+    });
+
+    const result = await h.run.runOnce(NOW);
+
+    expect(result).toMatchObject({ reusedVerdicts: 0, notFound: 1 });
+    // Asked again: the full address, then street, city and UF alone.
+    expect(new Set(h.asked.map((call) => call.id))).toEqual(new Set(["new"]));
+    // The new answer opens a new window for the next one at the door.
+    expect(row(h, "new").geocode_attempted_at).toEqual(NOW);
+  });
+
+  it("asks as before with GEOCODING_VERDICT_REUSE_DAYS at 0", async () => {
+    const h = harness(() => ({ kind: "NOT_FOUND" }), {
+      rows: [judged(1), claimAtDoor()],
+      options: { verdictReuseDays: 0 },
+    });
+
+    expect(await h.run.runOnce(NOW)).toMatchObject({
+      reusedVerdicts: 0,
+      notFound: 1,
+    });
+    expect(new Set(h.asked.map((call) => call.id))).toEqual(new Set(["new"]));
+  });
+
+  it("never takes another company's verdict, another door's, nor a failure", async () => {
+    const h = harness(() => FOUND_AT_DOOR, {
+      rows: [
+        judged(1, { id: "theirs", businessId: OTHER }),
+        judged(1, { id: "next-door", address_key: "another-key" }),
+        judged(1, { id: "failed", geocode_status: "FAILED" }),
+        claimAtDoor(),
+      ],
+    });
+
+    await h.run.runOnce(NOW);
+
+    expect(h.asked.map((call) => call.id)).toContain("new");
+    expect(row(h, "new")).toMatchObject({
+      geocode_status: "RESOLVED",
+      geo_source: "GEOCODER",
+    });
+  });
+
+  it("takes a point at the door before a verdict, and a later pin still reaches the copy", async () => {
+    // A point at the door wins: the verdict is only for a door nobody
+    // placed.
+    const pinned = harness(() => FOUND_AT_DOOR, {
+      rows: [
+        judged(1),
+        delivery("pinned", {
+          address_key: DOOR,
+          latitude: -23.5501,
+          longitude: -46.6339,
+          geo_source: "MANUAL",
+          geo_updated_at: new Date("2026-11-02T10:00:00.000Z"),
+        }),
+        claimAtDoor(),
+      ],
+    });
+
+    expect(await pinned.run.runOnce(NOW)).toMatchObject({
+      reused: 1,
+      reusedVerdicts: 0,
+    });
+
+    // A copied verdict leaves the delivery without a point and without a
+    // source: the door's next pin writes to it (takesDoorPoint).
+    const copied = harness(() => FOUND_AT_DOOR, {
+      rows: [judged(1), claimAtDoor()],
+    });
+
+    await copied.run.runOnce(NOW);
+
+    expect(
+      takesDoorPoint(row(copied, "new"), {
+        businessId: BUSINESS,
+        addressKey: DOOR!,
+        exceptId: "judged",
+      }),
+    ).toBe(true);
+  });
+
+  it("does the same right after a commit", async () => {
+    const h = harness(() => FOUND_AT_DOOR, {
+      rows: [judged(1), claimAtDoor()],
+    });
+
+    expect(await h.run.runFor(BUSINESS, ["new"], NOW)).toMatchObject({
+      claimed: 1,
+      reusedVerdicts: 1,
+    });
+    expect(h.asked).toEqual([]);
+  });
+
+  it("gives the claim back when the verdict cannot be written", async () => {
+    const h = harness(() => FOUND_AT_DOOR, {
+      rows: [judged(1), claimAtDoor()],
+    });
+    const settle = h.repository.settle.bind(h.repository);
+
+    // A pin got there between the read and the write.
+    h.repository.settle = async (claim, settlement, now) => {
+      if (settlement.kind === "NOT_FOUND") return false;
+
+      return settle(claim, settlement, now);
+    };
+
+    expect(await h.run.runOnce(NOW)).toMatchObject({
+      reusedVerdicts: 0,
+      released: 1,
+    });
+    expect(row(h, "new").geocode_attempts).toBe(0);
   });
 });

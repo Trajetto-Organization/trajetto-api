@@ -79,9 +79,28 @@ type GeocodingSettlement =
   | {
       kind: "COARSE";
       precision: Extract<AddressPrecision, "NEIGHBORHOOD" | "CITY">;
+      /** A verdict taken from the door (reusableVerdict): its own date. */
+      decidedAt?: Date;
     }
-  | { kind: "NOT_FOUND" }
+  | {
+      kind: "NOT_FOUND";
+      /** A verdict taken from the door (reusableVerdict): its own date. */
+      decidedAt?: Date;
+    }
   | { kind: "FAILED" };
+
+/**
+ * What the provider last said about a door it could not place (plano-escala
+ * F2-33): nothing at all, or a district or a city only, and when it said
+ * so — the date the window counts from, which a copy keeps.
+ */
+type ReusedVerdict =
+  | { kind: "NOT_FOUND"; decidedAt: Date }
+  | {
+      kind: "COARSE";
+      precision: Extract<AddressPrecision, "NEIGHBORHOOD" | "CITY">;
+      decidedAt: Date;
+    };
 
 /**
  * The unfinished route a delivery is an open stop of, for telling the
@@ -131,6 +150,18 @@ interface IDeliveryGeocodingRepository {
   ): Promise<ReusedAddressPoint | null>;
 
   /**
+   * The newest verdict without a point (NOT_FOUND or COARSE) the provider
+   * gave since `since` about another delivery of the claim's company at
+   * the claim's door, with its date; null when none. Never another
+   * company's, never a delivery that has a point by now (a pin since is
+   * the point reuse's), never a failure.
+   */
+  reusableVerdict(
+    claim: GeocodingClaim,
+    since: Date,
+  ): Promise<ReusedVerdict | null>;
+
+  /**
    * Writes the outcome when the claim still holds and the delivery still
    * has no point (a dispatcher's pin wins, always) — and, for a copied
    * point, while its root still holds it (lenderHolds). True when written.
@@ -151,6 +182,46 @@ interface IDeliveryGeocodingRepository {
 
   /** The unfinished routes holding these deliveries as open stops. */
   openStopRoutes(deliveryIds: readonly string[]): Promise<OpenStopRoute[]>;
+}
+
+/**
+ * A copied verdict keeps the date of the answer it copies, in the column
+ * the window reads: a delivery that copies a copy never stretches the
+ * window, and the door is asked again once the provider's own answer is
+ * older than it. The claim's guard reads the column before the write.
+ */
+function decidedAtOf(settlement: GeocodingSettlement): Prisma.Sql {
+  return (settlement.kind === "NOT_FOUND" || settlement.kind === "COARSE") &&
+    settlement.decidedAt
+    ? Prisma.sql`, "geocode_attempted_at" = ${settlement.decidedAt}`
+    : Prisma.empty;
+}
+
+/** A row of the door as the verdict it is; null for anything else. */
+function verdictOf(
+  row:
+    | {
+        geocode_status: string | null;
+        geo_precision: string | null;
+        decidedAt: Date | null;
+      }
+    | undefined,
+): ReusedVerdict | null {
+  if (!row?.decidedAt) return null;
+
+  const decidedAt = new Date(row.decidedAt);
+
+  if (row.geocode_status === "NOT_FOUND")
+    return { kind: "NOT_FOUND", decidedAt };
+
+  if (
+    row.geocode_status === "COARSE" &&
+    (row.geo_precision === "NEIGHBORHOOD" || row.geo_precision === "CITY")
+  ) {
+    return { kind: "COARSE", precision: row.geo_precision, decidedAt };
+  }
+
+  return null;
 }
 
 /** The routes whose open stops the screens draw: not finished yet. */
@@ -279,6 +350,41 @@ class DeliveryGeocodingRepository implements IDeliveryGeocodingRepository {
     return pickReusablePoint(candidates, now, claim.id);
   }
 
+  async reusableVerdict(
+    claim: GeocodingClaim,
+    since: Date,
+  ): Promise<ReusedVerdict | null> {
+    const key = deliveryAddressKey(claim);
+
+    if (!key) return null;
+
+    // delivery_address_key_idx down to the door's rows without a source
+    // (geo_source IS NULL is an index condition, the key's equality proves
+    // the predicate): the not-located ones, a handful even at a busy door.
+    const [row] = await this.prisma.$queryRaw<
+      Array<{
+        geocode_status: "NOT_FOUND" | "COARSE";
+        geo_precision: string | null;
+        decidedAt: Date;
+      }>
+    >`
+      SELECT "geocode_status", "geo_precision",
+        "geocode_attempted_at" AS "decidedAt"
+      FROM "delivery"
+      WHERE "businessId" = ${claim.businessId}
+        AND "address_key" = ${key}
+        AND "geo_source" IS NULL
+        AND "latitude" IS NULL
+        AND "id" <> ${claim.id}
+        AND "geocode_status" IN ('NOT_FOUND', 'COARSE')
+        AND "geocode_attempted_at" >= ${since}
+      ORDER BY "geocode_attempted_at" DESC, "id" DESC
+      LIMIT 1
+    `;
+
+    return verdictOf(row);
+  }
+
   async settle(
     claim: GeocodingClaim,
     settlement: GeocodingSettlement,
@@ -304,10 +410,10 @@ class DeliveryGeocodingRepository implements IDeliveryGeocodingRepository {
           return Prisma.sql`
             "geo_precision" = ${settlement.precision}::"DeliveryGeoPrecision",
             "geocode_status" = 'COARSE',
-            "geo_copied_from" = NULL`;
+            "geo_copied_from" = NULL${decidedAtOf(settlement)}`;
         case "NOT_FOUND":
           return Prisma.sql`"geocode_status" = 'NOT_FOUND',
-            "geo_copied_from" = NULL`;
+            "geo_copied_from" = NULL${decidedAtOf(settlement)}`;
         case "FAILED":
           return Prisma.sql`"geocode_status" = 'FAILED',
             "geo_copied_from" = NULL`;
@@ -426,10 +532,12 @@ export {
   GEOCODING_MAX_ATTEMPTS,
   UNFINISHED_ROUTE_STATUSES,
   geocodingBackoffMinutes,
+  verdictOf,
 };
 export type {
   GeocodingClaim,
   GeocodingSettlement,
   IDeliveryGeocodingRepository,
   OpenStopRoute,
+  ReusedVerdict,
 };

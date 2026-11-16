@@ -1662,7 +1662,21 @@ chave da pausa guarda o motivo junto do prazo (`REFUSED`, `QUOTA` ou
     orçamento nem vaga e sem chamar o provedor, e o `routeStopsLocated`
     avisa a tela e o motorista como num ponto achado. A linha
     `delivery addresses geocoded` conta `reused`. Endereço repetido deixa de
-    gastar a cota do LocationIQ. A reserva continua limitada ao orçamento
+    gastar a cota do LocationIQ.
+  - Sem ponto na porta, a reserva procura depois o veredito sem ponto
+    (`NOT_FOUND` ou `COARSE`) que o provedor deu para outra entrega da
+    empresa na mesma porta há menos de `GEOCODING_VERDICT_REUSE_DAYS` (30;
+    plano de escala F2-33, `reusableVerdict`). Achando, grava o mesmo
+    veredito (com o nível, no `COARSE`) sem chamar o provedor, e o
+    `geocode_attempted_at` da cópia fica com a data da resposta copiada:
+    copiar uma cópia nunca estica a janela, e passada ela a próxima entrega
+    da porta pergunta de novo. Um endereço ruim custa uma consulta a cada 30
+    dias por empresa, não uma por entrega da planilha. Nunca entre empresas.
+    A cópia fica sem ponto e sem fonte, como a resposta do provedor: o pino
+    que alguém fizer depois na porta chega a ela pela propagação. A linha
+    `delivery addresses geocoded` conta `reusedVerdicts`; `0` desliga. A
+    leitura desce pelo `delivery_address_key_idx` até as linhas da porta sem
+    fonte (as não localizadas). A reserva continua limitada ao orçamento
     que resta: com o dia gasto, nada é reservado, nem para reaproveitar.
     Com o provedor em pausa (a recusa, `REFUSED`, ou a cota do dia do
     provedor, `QUOTA`), é igual: o job e o `geocodeSoon` voltam antes de
@@ -1880,7 +1894,9 @@ chave da pausa guarda o motivo junto do prazo (`REFUSED`, `QUOTA` ou
   não muda. O orçamento do dia continua valendo, e o job drena na taxa do
   env, um lote atrás do outro, as paradas abertas primeiro. Não há nova tentativa automática de
   `NOT_FOUND`: a resposta raramente muda, e repetir exigiria trocar o
-  predicado do índice parcial.
+  predicado do índice parcial. Uma entrega nova na mesma porta pergunta de
+  novo só quando o veredito da porta tem mais de
+  `GEOCODING_VERDICT_REUSE_DAYS` (o reuso do veredito, acima).
 
 **A regra (E2), igual no servidor e no app.**
 `shared/delivery/geofence/geofence-rules.ts`, com os casos em

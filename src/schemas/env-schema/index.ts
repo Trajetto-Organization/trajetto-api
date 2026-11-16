@@ -13,6 +13,7 @@ import {
   GEOCODING_PROOF_RESERVED_PER_SECOND_DEFAULT,
   GEOCODING_RUN_BUDGET_DEFAULT_MS,
   GEOCODING_RUN_BUDGET_MAX_MS,
+  GEOCODING_VERDICT_REUSE_DAYS_DEFAULT,
   PROOF_REVERSE_DAILY_BUDGET_DEFAULT,
   geocodingPlanProblems,
 } from "@/shared/delivery/geocoding/geocoding-rules";
@@ -437,6 +438,23 @@ const envSchema = z
         .min(1_000)
         .max(GEOCODING_RUN_BUDGET_MAX_MS)
         .default(GEOCODING_RUN_BUDGET_DEFAULT_MS),
+    ),
+
+    /**
+     * How many days the provider's NOT_FOUND or COARSE about a door stands
+     * for the company's other deliveries at it (plano-escala F2-33): a
+     * spreadsheet repeats its doors, and each bad one cost a lookup per
+     * delivery. Never across companies. 0 asks the provider for each one,
+     * as before.
+     */
+    GEOCODING_VERDICT_REUSE_DAYS: z.preprocess(
+      (value) => (value === "" ? undefined : value),
+      z.coerce
+        .number()
+        .int()
+        .min(0)
+        .max(365)
+        .default(GEOCODING_VERDICT_REUSE_DAYS_DEFAULT),
     ),
 
     /**

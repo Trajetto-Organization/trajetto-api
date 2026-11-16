@@ -75,6 +75,14 @@ const GEOCODING_RUN_BUDGET_MAX_MS = 55_000;
  * margin with the job's 2,000 and the search's 1,000.
  */
 const GEOCODING_PROOF_RESERVED_PER_SECOND_DEFAULT = 1;
+
+/**
+ * How long the provider's NOT_FOUND or COARSE about a door stands for the
+ * company's other deliveries there (GEOCODING_VERDICT_REUSE_DAYS,
+ * plano-escala F2-33): a month, so a bad address costs one lookup a month
+ * per company, and a map that learns the street is asked again.
+ */
+const GEOCODING_VERDICT_REUSE_DAYS_DEFAULT = 30;
 const PROOF_REVERSE_DAILY_BUDGET_DEFAULT = 1_500;
 
 /** What the geocoder may spend of the provider's plan, and the plan. */
@@ -145,6 +153,7 @@ export {
   GEOCODING_PROOF_RESERVED_PER_SECOND_DEFAULT,
   GEOCODING_RUN_BUDGET_DEFAULT_MS,
   GEOCODING_RUN_BUDGET_MAX_MS,
+  GEOCODING_VERDICT_REUSE_DAYS_DEFAULT,
   PROOF_REVERSE_DAILY_BUDGET_DEFAULT,
   geocodingBackoffMinutes,
   geocodingPlanProblems,

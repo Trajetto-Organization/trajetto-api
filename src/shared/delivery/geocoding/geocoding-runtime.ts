@@ -147,6 +147,7 @@ function deliveryGeocodingService(): DeliveryGeocodingService {
       batchSize: env.DELIVERY_GEOCODING_BATCH_SIZE,
       spacingMs: spacingFor(rates.perSecond),
       runBudgetMs: env.DELIVERY_GEOCODING_RUN_BUDGET_MS,
+      verdictReuseDays: env.GEOCODING_VERDICT_REUSE_DAYS,
     },
     stopping: isDraining,
   });
@@ -288,6 +289,7 @@ function summarize(
     notFound: result.notFound,
     failed: result.failed,
     reused: result.reused,
+    reusedVerdicts: result.reusedVerdicts,
     released: result.released,
     stoppedBy: result.stoppedBy ?? null,
     providerStatuses: result.providerStatuses,

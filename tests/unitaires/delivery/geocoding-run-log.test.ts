@@ -34,6 +34,7 @@ function empty(
     notFound: 0,
     failed: 0,
     reused: 0,
+    reusedVerdicts: 0,
     released: 0,
     providerStatuses: [],
     settled: [],

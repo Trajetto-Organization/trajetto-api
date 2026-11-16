@@ -195,3 +195,20 @@ describe("the geocoder's share of the provider's plan", () => {
     ]);
   });
 });
+
+/**
+ * Plano-escala F2-33: how long the provider's NOT_FOUND or COARSE about a
+ * door stands for the company's other deliveries there. A month by
+ * default; 0 asks the provider for each delivery, as before.
+ */
+describe("the verdict's window", () => {
+  it("defaults to 30 days, takes 0 to switch it off, and refuses more than a year", () => {
+    expect(parse({}).data?.GEOCODING_VERDICT_REUSE_DAYS).toBe(30);
+    expect(parse({ GEOCODING_VERDICT_REUSE_DAYS: "0" }).data).toMatchObject({
+      GEOCODING_VERDICT_REUSE_DAYS: 0,
+    });
+    expect(issues({ GEOCODING_VERDICT_REUSE_DAYS: "366" })).toEqual([
+      "GEOCODING_VERDICT_REUSE_DAYS",
+    ]);
+  });
+});
