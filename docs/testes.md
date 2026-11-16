@@ -450,7 +450,13 @@ Applications do Dokploy; ver [`deploy.md`](./deploy.md#5-applications-em-vez-de-
 (`LOAD_REPLICAS`), Postgres 16 e Redis 7 descartáveis e k6 na mesma rede.
 Cenas: `smoke.js` (sempre primeiro: prova que as outras medem algo real),
 `load.js`, `spike.js`, `stress.js`, `soak.js`; mais `multi-replica.sh`,
-`failure-injection.sh`, `socket-hold.mjs` e `socket-across-replicas.mjs`. O
+`failure-injection.sh`, `socket-hold.mjs` e `socket-across-replicas.mjs`.
+`swarm-rolling.sh` ensaia o deploy da API num Swarm descartável de um nó,
+com as flags do Dokploy (start-first, rollback, 40 s de grace, o healthcheck
+da imagem): um _Redeploy_ sob 50 req/s do `rolling.js` com zero 5xx e cada
+réplica antiga saindo com 0, e a escala de 3 para 6 com máximo/média ≤ 1,3;
+recusa um nó que já está num Swarm com serviços, e o
+`swarm-rolling-script.test.ts` confere as flags contra o guia. O
 `seed.ts` prepara o banco `load_test` (empresas, motoristas, histórico) e os
 `mint-*.ts` criam as contas das suítes de navegador da web e do app. Medido em
 07/10/2026 com a imagem de produção: o joelho é ~110–120 req/s por réplica com

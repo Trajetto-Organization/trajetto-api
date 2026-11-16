@@ -473,3 +473,59 @@ réplica, ~205 com 2 e ~250–285 com 4, quando a CPU da máquina acaba
 07/10/2026"). Numa máquina só ela diz se a aplicação escala até a
 CPU da máquina, não quantos hosts a produção precisa — isso continua em
 `docs/PENDENCIAS-DO-USUARIO.md`.
+
+## Rolling num Swarm descartável (`swarm-rolling.sh`, LOAD-06)
+
+O deploy da API é um rolling do Swarm: sobe a réplica nova, espera o
+healthcheck, tira a velha do endereço virtual e só então manda o SIGTERM
+(_start-first_). O risco é a velha fechar uma conexão keep-alive enquanto o
+Traefik escreve um POST nela: 502, que o Go não repete. O roteiro ensaia isso
+num Swarm de um nó, com as flags que o Dokploy dá à API
+([`docs/deploy.md`](../../docs/deploy.md) §7.7):
+
+```bash
+docker build --target migrate -t trajetto-api-migrate:rolling .
+docker build -t trajetto-api:rolling .
+ROLLING_IMAGE=trajetto-api:rolling ROLLING_MIGRATE_IMAGE=trajetto-api-migrate:rolling \
+  bash tests/load/swarm-rolling.sh
+```
+
+- **O que ele cria** (tudo com o prefixo `ROLLING_PREFIX`, removido no fim):
+  rede overlay _attachable_ (como a `dokploy-network`), Postgres 16 e Redis 7
+  como serviços em tmpfs, a etapa de release uma vez, o `seed.ts` pequeno
+  (porta `ROLLING_PG_PORT`, 54391), a API com 3 réplicas e o Traefik
+  apontando para `http://<prefixo>-api:3333`, o endereço virtual do serviço,
+  que é o que o Dokploy escreve para o domínio de uma Application. As flags da
+  API são as do guia: _Stop Grace Period_ 40 s, _Update_ e _Rollback Config_
+  `start-first`, uma por vez, 5 s entre elas, 30 s de monitor, rollback na
+  falha, reinício em qualquer saída; o healthcheck é o da imagem (o mesmo teste
+  que o guia cola). `swarm-rolling-script.test.ts` compara as flags com o JSON
+  do guia e com o `HEALTHCHECK` do `Dockerfile`.
+- **Onde ele recusa rodar**: num nó que já está num Swarm com serviços (é o
+  formato de um servidor do Dokploy, a produção inclusive) e num worker. Fora de
+  qualquer Swarm, faz `docker swarm init` só no loopback e sai do Swarm no fim
+  (removendo a `docker_gwbridge` que o init criou); num Swarm vazio, usa e
+  deixa como estava. Nunca puxa a imagem do GHCR: as imagens são locais
+  (`--no-resolve-image`).
+- **Pergunta 1, rolling**: `service update --force` (o _Redeploy_) sob
+  `ROLLING_RATE` (50 req/s) do `rolling.js`. Aprova com **zero** 5xx, zero
+  pedidos sem resposta e cada réplica substituída com saída 0 e a linha
+  `shutdown complete` no log (o desligamento coube no grace).
+- **Pergunta 2, escala**: de 3 para 6 réplicas sob a mesma carga; nos 300 s
+  depois de as novas ficarem saudáveis, a mais ocupada atende no máximo 1,3
+  vez a média (contagem das linhas `request completed` de cada réplica). As
+  réplicas recebem `HTTP_MAX_REQUESTS_PER_SOCKET=100`, não os 1.000 da
+  produção: a 50 req/s por um Traefik só, com ~1 pedido em voo, um socket de
+  1.000 leva 20 s de toda a carga, a janela tem uns 15 sockets e a razão mede
+  como eles caíram (1,48 medido com o limite funcionando). Com 100 são ~150
+  sockets e a razão mede o espalhamento. O número da produção é conferido no
+  ritmo da produção, no burn-in de um servidor novo (portão B do plano).
+- `ROLLING_STOP_GRACE=10s` ensaia o Dokploy sem o campo _Stop Grace Period_
+  (o padrão de 10 s do Docker); `ROLLING_STEPS=rolling` faz só a primeira
+  pergunta; `ROLLING_KEEP=1` deixa tudo de pé para olhar.
+
+`rolling.js` é autocontido (roda por stdin, `k6 run -`, num host sem o
+repositório) e lê os tokens de `ROLLING_CONTEXT_JSON`: o `seed.ts` aqui, a
+`staging-fixture.mjs` na staging. A mistura é a do motorista (posições,
+lista do dia) com 15% de leituras de gestor; o veredito é `rolling_5xx`
+`count==0`, nunca uma taxa.
