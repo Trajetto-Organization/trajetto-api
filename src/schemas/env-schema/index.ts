@@ -25,16 +25,13 @@ const SWARM_LABEL = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
  * still a template, and absent (never a boot failure) when not a plain name.
  */
 function swarmLabel() {
-  return z.preprocess(
-    (value) => {
-      if (typeof value !== "string") return value;
+  return z.preprocess((value) => {
+    if (typeof value !== "string") return value;
 
-      const trimmed = value.trim();
+    const trimmed = value.trim();
 
-      return trimmed === "" || trimmed.includes("{{") ? undefined : trimmed;
-    },
-    z.string().regex(SWARM_LABEL).optional().catch(undefined),
-  );
+    return trimmed === "" || trimmed.includes("{{") ? undefined : trimmed;
+  }, z.string().regex(SWARM_LABEL).optional().catch(undefined));
 }
 
 const envSchema = z

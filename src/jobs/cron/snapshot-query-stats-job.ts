@@ -103,10 +103,7 @@ const THIS_DATABASE = Prisma.sql`(
   SELECT oid FROM pg_database WHERE datname = current_database()
 )`;
 
-async function readInfo(
-  client: Client,
-  schema: Prisma.Sql,
-): Promise<PgssInfo> {
+async function readInfo(client: Client, schema: Prisma.Sql): Promise<PgssInfo> {
   // To the millisecond, as pgss_state keeps it: a microsecond the column
   // dropped would read as a reset every hour.
   const [info] = await client.$queryRaw<PgssInfo[]>`
