@@ -3767,6 +3767,60 @@ réplica documentado como tal:
 | exportações simultâneas, escrita de `last_used_at` da chave de API, contagem de uso da API, pausa de modelo do WhatsApp | memória da réplica (`export-slots.ts`, `last-used-throttle.ts`, `api-usage-recorder.ts`, `meta-cloud-api-provider.ts`) | limites e buffers por réplica, documentados no próprio arquivo: N réplicas = N vezes o teto; o uso da API soma com `increment`                             |
 | formatadores de data, modelos de e-mail compilados, chaves do JWT                                                       | memória da réplica                                                                                                     | derivados do código ou do segredo, iguais em toda réplica                                                                                                  |
 
+### Ensaio de carga na staging (burn-in)
+
+Curto e limitado, para provar na staging a fiação e o rolling sem 5xx
+(plano de escala LOAD-09), nunca capacidade: a staging divide a VPS com a
+produção. O roteiro é `tests/load/staging-burn-in.sh` (como ele recusa e
+aborta: [`tests/load/README.md`](../tests/load/README.md), "Burn-in na
+staging"); o mesmo rolling já foi ensaiado antes num Swarm local
+(`tests/load/swarm-rolling.sh`).
+
+**Uma vez, antes do primeiro ensaio (dono):**
+
+1. Na web de staging, como MASTER: crie a empresa com a razão social (ou o
+   nome fantasia) exatamente `Carga (staging)`, com o módulo Entregas, e
+   ponha o limite de veículos dela em pelo menos 12 (um por motorista da
+   fixture; `FIXTURE_DRIVERS`, padrão 12). Nas configurações da empresa, o
+   checklist da rota fica "Nenhum". A fixture recusa qualquer empresa com
+   outro nome.
+2. Crie o administrador dela com um e-mail seu, entre uma vez pela web,
+   confirme o e-mail, defina a senha e deixe o segundo fator desligado
+   nesta conta (a fixture entra por e-mail e senha e recusa uma conta que
+   peça código).
+
+**A cada ensaio:**
+
+1. Só de segunda a sábado, das 03:00 às 05:00 BRT (06:00–08:00 UTC, a
+   `load-window` de [`operacao/jobs.md`](./operacao/jobs.md)), nunca no dia 1
+   (ensaio de restauração). O roteiro recusa fora disso.
+2. No host da VPS (precisa de `docker`, `curl` e `vmstat`), com a pasta
+   `tests/load` deste repositório copiada para lá:
+
+   ```bash
+   export FIXTURE_ADMIN_EMAIL='<e-mail do administrador de Carga (staging)>'
+   read -rs FIXTURE_ADMIN_PASSWORD; export FIXTURE_ADMIN_PASSWORD
+   bash tests/load/staging-burn-in.sh            # 20 req/s por 10 min
+   ```
+
+   A senha vai ao contêiner da fixture pelo nome da variável, nunca na
+   linha de comando. Tetos: `BURN_IN_RATE` até 30, `BURN_IN_DURATION` até
+   `10m`, `BURN_IN_MAX_VUS` até 200.
+
+3. Com o k6 rodando, no Dokploy: staging → `trajetto-api` → **Deploy** (o
+   _Redeploy_). O veredito é **zero respostas 5xx** com a troca das
+   réplicas no meio da carga; confira também a linha `shutdown complete`
+   de cada réplica antiga em _Logs_.
+4. Saída 0: aprovado. 1: houve 5xx, sem resposta ou fora do esperado (o
+   resumo do k6 diz em qual superfície). 2: recusou começar (a mensagem diz
+   por quê). 3: uma sonda abortou tudo, a readiness da produção piorou
+   (p95 acima de 2× a base ou 3 falhas) ou o host ficou com iowait acima de
+   20% ou steal acima de 10%: não repita na mesma noite.
+
+Os contêineres saem com o roteiro (`--rm`); os dados da empresa de carga
+ficam e são reaproveitados na próxima vez (rotas do dia, veículos e
+motoristas pelo nome e pela placa).
+
 ### Separar os workers do HTTP (só por gatilho medido)
 
 Gatilhos (ADR 0001/0004): espera no pool visível em `/health/metrics`

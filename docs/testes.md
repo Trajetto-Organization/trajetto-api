@@ -456,7 +456,13 @@ com as flags do Dokploy (start-first, rollback, 40 s de grace, o healthcheck
 da imagem): um _Redeploy_ sob 50 req/s do `rolling.js` com zero 5xx e cada
 réplica antiga saindo com 0, e a escala de 3 para 6 com máximo/média ≤ 1,3;
 recusa um nó que já está num Swarm com serviços, e o
-`swarm-rolling-script.test.ts` confere as flags contra o guia. O
+`swarm-rolling-script.test.ts` confere as flags contra o guia.
+`staging-burn-in.sh` é o burn-in curto da staging, no host da VPS (até 30
+req/s, 10 min e 200 sockets, só na `load-window`, com a readiness da
+produção e o `vmstat` do host abortando tudo), e a `staging-fixture.mjs`
+prepara pela API os dados da empresa 'Carga (staging)';
+`staging-burn-in.test.ts` e `staging-fixture.test.ts` executam os dois com
+stubs ([`deploy.md`](./deploy.md#ensaio-de-carga-na-staging-burn-in)). O
 `seed.ts` prepara o banco `load_test` (empresas, motoristas, histórico) e os
 `mint-*.ts` criam as contas das suítes de navegador da web e do app. Medido em
 07/10/2026 com a imagem de produção: o joelho é ~110–120 req/s por réplica com

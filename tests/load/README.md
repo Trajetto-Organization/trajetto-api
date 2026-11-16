@@ -529,3 +529,34 @@ repositório) e lê os tokens de `ROLLING_CONTEXT_JSON`: o `seed.ts` aqui, a
 `staging-fixture.mjs` na staging. A mistura é a do motorista (posições,
 lista do dia) com 15% de leituras de gestor; o veredito é `rolling_5xx`
 `count==0`, nunca uma taxa.
+
+## Burn-in na staging (`staging-burn-in.sh`, LOAD-09)
+
+Curto, limitado e só de madrugada: a staging divide a VPS com a produção, e
+o que ele prova é a fiação e o rolling sem 5xx, nunca capacidade. Roda **no
+host da VPS**, com o passo a passo em
+[`docs/deploy.md`](../../docs/deploy.md#ensaio-de-carga-na-staging-burn-in) (a
+empresa 'Carga (staging)' e o administrador dela são do dono).
+
+- **Recusa antes de tudo**: o host da produção (`api.intrajetto.com`,
+  `www`) e qualquer host sem o rótulo `staging`; mais de 30 req/s, 10 minutos
+  ou 200 sockets; fora das 06:00–08:00 UTC (03:00–05:00 BRT, a `load-window`
+  de [`docs/operacao/jobs.md`](../../docs/operacao/jobs.md)), no dia 1 (o
+  ensaio de restauração) e no domingo (a janela do histórico).
+- **A fixture** (`staging-fixture.mjs`) roda num contêiner Node na
+  `dokploy-network`, contra o Traefik com o Host da staging: entra com o
+  administrador de 'Carga (staging)' e prepara pela API, de forma idempotente,
+  os motoristas e os logins deles, um veículo cada, a rota do dia com as
+  entregas, liberada e iniciada pela sessão do motorista (o QR Code, como no
+  app). Recusa a produção e qualquer empresa com outro nome **antes de
+  escrever**. Os tokens ficam na memória do script, nunca em disco.
+- **As sondas abortam tudo**: a `/health/readiness` da produção (uma ida ao
+  banco, pelo Traefik do próprio host) com p95 acima de 2× a base medida antes
+  da carga (e do piso de 50 ms) ou 3 falhas; o `vmstat` do host com iowait
+  acima de 20% ou steal acima de 10%. O k6 roda limitado
+  (`--cpus 0.5 --memory 256m`).
+- Saída: 0 aprovado (zero 5xx), 1 reprovado, 2 recusou começar, 3 abortado
+  por uma sonda.
+
+`staging-burn-in.test.ts` e `staging-fixture.test.ts` executam os dois com
+stubs (docker, curl, vmstat, date e um falso da API).
