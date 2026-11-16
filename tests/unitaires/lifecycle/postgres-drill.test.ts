@@ -26,6 +26,9 @@ import {
  */
 const bash = hasShell("bash");
 
+/** The last element (the lib here predates Array.prototype.at). */
+const last = <T>(items: T[]): T | undefined => items[items.length - 1];
+
 const SECRET_WRITE_KEY = "write-key-never-printed";
 const SECRET_WRITE_SECRET = "write-secret-never-printed";
 const SECRET_READ_KEY = "read-key-never-printed";
@@ -226,7 +229,7 @@ describe.skipIf(!bash)("trajetto-backup", () => {
     expect(result.stderr).toContain(`faltam 2 segmento(s) de WAL`);
     expect(result.stderr).toContain(seg(5));
     expect(result.stderr).toContain("trajetto-backup full");
-    const fail = box.calls("wget").at(-1) ?? "";
+    const fail = last(box.calls("wget")) ?? "";
     expect(fail).toContain(`${PING}/fail`);
     expect(fail).toContain('"reason":"archive-gap"');
   });
@@ -248,7 +251,7 @@ describe.skipIf(!bash)("trajetto-backup", () => {
     expect(result.status).toBe(0);
     expect(result.stderr).toContain("AVISO: archive-gap");
     expect(result.stdout).toContain('"archive_gap":"faltam 1 segmento(s)');
-    expect(box.calls("wget").at(-1)).toMatch(new RegExp(`${PING}-full$`));
+    expect(last(box.calls("wget"))).toMatch(new RegExp(`${PING}-full$`));
   });
 
   it("walks the archive across a 4 GiB boundary of segment names", () => {
@@ -310,7 +313,7 @@ describe.skipIf(!bash)("trajetto-backup", () => {
     expect(box.calls("pgbackrest").some((call) => call.includes("check"))).toBe(
       false,
     );
-    expect(box.calls("wget").at(-1)).toContain('"reason":"backup-failed"');
+    expect(last(box.calls("wget"))).toContain('"reason":"backup-failed"');
   });
 
   it("fails when the archive does not take a segment right after the backup", () => {
@@ -321,7 +324,7 @@ describe.skipIf(!bash)("trajetto-backup", () => {
     });
 
     expect(result.status).toBe(4);
-    expect(box.calls("wget").at(-1)).toContain('"reason":"check-failed"');
+    expect(last(box.calls("wget"))).toContain('"reason":"check-failed"');
   });
 
   it("never prints or sends a key, the passphrase or the ping URL, even when pgBackRest quotes one", () => {
@@ -335,7 +338,7 @@ describe.skipIf(!bash)("trajetto-backup", () => {
 
     expect(result.status).toBe(5);
     expect(result.stderr).toContain("<redacted>");
-    const sent = everything(result).replaceAll(PING, "");
+    const sent = everything(result).split(PING).join("");
     for (const secret of SECRETS) {
       if (secret !== PING) expect(sent).not.toContain(secret);
     }
@@ -490,7 +493,7 @@ exit 0`,
     // Docker read it at create; no copy of a key stays on the disk.
     expect(result.envfile).not.toBe("");
     expect(existsSync(result.envfile)).toBe(false);
-    expect(box.calls("docker").at(-1)).toBe("docker start --attach cid123");
+    expect(last(box.calls("docker"))).toBe("docker start --attach cid123");
   });
 
   it("drops only the I/O weight where the kernel refuses it, never the CPU and memory caps", () => {
@@ -518,7 +521,7 @@ exit 0`,
     expect(
       box.calls("docker").some((call) => call.startsWith("docker create")),
     ).toBe(false);
-    expect(box.calls("wget").at(-1)).toContain('"reason":"drill-config"');
+    expect(last(box.calls("wget"))).toContain('"reason":"drill-config"');
     for (const secret of SECRETS) {
       expect(`${result.stdout}${result.stderr}`).not.toContain(secret);
     }
@@ -570,7 +573,7 @@ exit 0`,
       box
         .calls("docker")
         .filter((call) => call.startsWith("docker create"))
-        .at(-1),
+        .pop(),
     ).not.toContain("--network");
   });
 
@@ -744,7 +747,7 @@ exit 0`,
       "postgres -c archive_mode=off -c listen_addresses= -c shared_buffers=128MB",
     );
     expect(argv).toContain(`-c hba_file=${box.root}/socket.hba`);
-    const summary = JSON.parse(result.stdout.trim().split("\n").at(-1) ?? "");
+    const summary = JSON.parse(last(result.stdout.trim().split("\n")) ?? "");
     expect(summary).toMatchObject({
       result: "ok",
       repo: 1,
@@ -759,7 +762,7 @@ exit 0`,
     expect(summary.rto_seconds).toBeGreaterThanOrEqual(0);
     const pings = box.calls("wget");
     expect(pings[0]).toContain(`${PING}/start`);
-    expect(pings.at(-1)).toMatch(/--post-data \{"result":"ok"/);
+    expect(last(pings)).toMatch(/--post-data \{"result":"ok"/);
   });
 
   it("aborts before writing anything when the backup would take over half the free disk, and pings drill-disk", () => {
@@ -771,8 +774,8 @@ exit 0`,
     expect(result.status).toBe(3);
     expect(restores()).toEqual([]);
     expect(result.stderr).toContain("FALHOU (drill-disk)");
-    expect(box.calls("wget").at(-1)).toContain(`${PING}/fail`);
-    expect(box.calls("wget").at(-1)).toContain('"reason":"drill-disk"');
+    expect(last(box.calls("wget"))).toContain(`${PING}/fail`);
+    expect(last(box.calls("wget"))).toContain('"reason":"drill-disk"');
   });
 
   it("takes the fraction from the environment, a Brazilian comma included", () => {
@@ -790,7 +793,7 @@ exit 0`,
 
     expect(result.status).toBe(3);
     expect(restores()).toEqual([]);
-    expect(box.calls("wget").at(-1)).toContain('"reason":"drill-ram"');
+    expect(last(box.calls("wget"))).toContain('"reason":"drill-ram"');
   });
 
   it("never restores over something", () => {
@@ -798,7 +801,7 @@ exit 0`,
 
     expect(result.status).toBe(1);
     expect(restores()).toEqual([]);
-    expect(box.calls("wget").at(-1)).toContain('"reason":"drill-dirty"');
+    expect(last(box.calls("wget"))).toContain('"reason":"drill-dirty"');
   });
 
   it("restores to an instant with --target, and measures the loss against it", () => {
@@ -808,7 +811,7 @@ exit 0`,
     expect(restores()[0]).toContain(
       "--archive-mode=off --type=time --target=2026-12-01 05:00:00+00 --target-action=promote restore",
     );
-    const summary = JSON.parse(result.stdout.trim().split("\n").at(-1) ?? "");
+    const summary = JSON.parse(last(result.stdout.trim().split("\n")) ?? "");
     expect(summary.target).toBe("2026-12-01 05:00:00+00");
     // target − marker = (NOW − 3600) − (NOW − 90)
     expect(summary.loss_seconds).toBe(-3510);
@@ -820,7 +823,7 @@ exit 0`,
     });
 
     expect(result.status).toBe(4);
-    expect(box.calls("wget").at(-1)).toContain('"reason":"drill-migrations"');
+    expect(last(box.calls("wget"))).toContain('"reason":"drill-migrations"');
   });
 
   it("says when the copy has no marker, instead of inventing a loss", () => {

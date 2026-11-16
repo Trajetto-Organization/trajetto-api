@@ -1536,7 +1536,9 @@ describe.skipIf(!hasShell("bash"))("the blocks that decide, run", () => {
     });
 
     it("runs only when asked, and builds, tests and proves only on the lookup's answer", () => {
-      expect(conditionOf(job)).toBe("${{ !inputs.docs && inputs.postgres }}");
+      expect(job.text).toContain(
+        "\n    if: ${{ !inputs.docs && inputs.postgres }}\n",
+      );
       expect(timeoutOf(job)).toBeGreaterThanOrEqual(15);
       expect(job.text).toContain("packages: read");
       for (const name of [
