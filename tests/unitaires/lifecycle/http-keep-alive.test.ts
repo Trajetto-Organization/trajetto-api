@@ -3,11 +3,57 @@ import { Agent, request as httpRequest } from "node:http";
 import type { AddressInfo, Socket } from "node:net";
 import { join, resolve } from "node:path";
 
-import { afterAll, afterEach, describe, expect, it } from "vitest";
+import type { RateLimitPluginOptions } from "@fastify/rate-limit";
+import type { FastifyPluginAsync } from "fastify";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 
 import { envSchema } from "@/schemas/env-schema";
 
 import { APP_BOOT_TIMEOUT_MS } from "../../support/app-boot";
+
+/**
+ * This file's app keeps its rate limiter to itself.
+ *
+ * The cap test below sends a thousand requests from 127.0.0.1 on one
+ * socket. Through the real limiter they were all charged to
+ * `fastify-rate-limit-ip:127.0.0.1`, in the Redis that every test process
+ * of the run shares: that key sat at 1 000 for a minute, and any other file
+ * that injected an anonymous request in that minute (inject also comes from
+ * 127.0.0.1) was answered 429. retired-routes.test.ts failed that way in
+ * the Unit tests step of the wave 2 replica.
+ *
+ * The limiter is not what this file tests. Here it keeps its counts in this
+ * process (no `redis`) and lets every request through, so the thousand
+ * requests are ordinary 200s and nothing lands in Redis; the rest is the
+ * app as it boots. The limiter's own behaviour is tested by
+ * tests/E2E/http-rate-limit.test.ts and its neighbours, each from addresses
+ * of its own.
+ */
+vi.mock("@fastify/rate-limit", async (importOriginal) => {
+  const { default: rateLimit } = await importOriginal<{
+    default: FastifyPluginAsync<RateLimitPluginOptions>;
+  }>();
+
+  const isolated: FastifyPluginAsync<RateLimitPluginOptions> = (
+    instance,
+    settings,
+  ) =>
+    rateLimit(instance, {
+      ...settings,
+      redis: undefined,
+      allowList: () => true,
+    });
+
+  // fastify-plugin's marks travel with it, skip-override above all: the
+  // limiter and app.rateLimit() belong to the root instance, as in http.ts.
+  for (const mark of Object.getOwnPropertySymbols(rateLimit)) {
+    Object.assign(isolated, {
+      [mark]: (rateLimit as unknown as Record<symbol, unknown>)[mark],
+    });
+  }
+
+  return { default: isolated };
+});
 
 /**
  * The replica must never be the side that closes an idle keep-alive
@@ -85,11 +131,15 @@ describe("keep-alive between Traefik and a replica", () => {
   );
 });
 
-/** One GET on the agent's connection: its Connection header and its socket. */
+/** One GET on the agent's connection: status, Connection header and socket. */
 function get(
   port: number,
   agent: Agent,
-): Promise<{ connection: string | undefined; socket: Socket }> {
+): Promise<{
+  status: number;
+  connection: string | undefined;
+  socket: Socket;
+}> {
   return new Promise((resolveGet, reject) => {
     const req = httpRequest(
       { host: "127.0.0.1", port, path: "/health/liveness", agent },
@@ -97,6 +147,7 @@ function get(
         res.resume();
         res.once("end", () =>
           resolveGet({
+            status: res.statusCode ?? 0,
             connection: res.headers.connection,
             socket: req.socket as Socket,
           }),
@@ -166,17 +217,24 @@ describe("requests per keep-alive connection", () => {
 
       cleanup.push(() => agent.destroy());
 
+      const statuses = new Set<number>();
       const headers: Array<string | undefined> = [];
       const sockets = new Set<Socket>();
       let last: Socket | null = null;
 
       for (let index = 0; index < 1_000; index += 1) {
-        const { connection, socket } = await get(port, agent);
+        const { status, connection, socket } = await get(port, agent);
 
+        statuses.add(status);
         headers.push(connection);
         sockets.add(socket);
         last = socket;
       }
+
+      // Every one answered by the route itself. A 429 here means these
+      // requests are charged again to a limiter key that other test files
+      // share (see the vi.mock at the top).
+      expect([...statuses]).toEqual([200]);
 
       // One connection carried all of them, kept alive until the last.
       expect(sockets.size).toBe(1);
@@ -195,6 +253,7 @@ describe("requests per keep-alive connection", () => {
       const next = await get(port, agent);
 
       expect(sockets.has(next.socket)).toBe(false);
+      expect(next.status).toBe(200);
       expect(next.connection).toBe("keep-alive");
     },
     APP_BOOT_TIMEOUT_MS,
