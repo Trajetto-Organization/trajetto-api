@@ -1007,9 +1007,11 @@ describe.skipIf(!hasShell("bash"))("the blocks that decide, run", () => {
       DOCS: "false",
       WANT_E2E: "true",
       WANT_AI_LOCAL: "false",
+      WANT_POSTGRES: "true",
       VALIDATE: "success",
       E2E: "success",
       AI_OCR: "success",
+      POSTGRES_JOB: "success",
       DOCS_JOB: "skipped",
       AI_LOCAL: "skipped",
     };
@@ -1019,6 +1021,7 @@ describe.skipIf(!hasShell("bash"))("the blocks that decide, run", () => {
       VALIDATE: "skipped",
       E2E: "skipped",
       AI_OCR: "skipped",
+      POSTGRES_JOB: "skipped",
       DOCS_JOB: "success",
     };
 
@@ -1051,6 +1054,10 @@ describe.skipIf(!hasShell("bash"))("the blocks that decide, run", () => {
         "Run workflow with the AI contract",
         { ...code, WANT_AI_LOCAL: "true", AI_LOCAL: "success" },
       ],
+      [
+        "a push that leaves infra/postgres alone (its image already published)",
+        { ...code, WANT_POSTGRES: "false", POSTGRES_JOB: "skipped" },
+      ],
       ["a push of documentation", docs],
     ])("passes %s", (_, env) => {
       const run = exec(CHECK, env);
@@ -1072,6 +1079,21 @@ describe.skipIf(!hasShell("bash"))("the blocks that decide, run", () => {
         "Validate (skipped)",
       ],
       ["AI OCR failed", { ...code, AI_OCR: "failure" }, "AI OCR (failure)"],
+      [
+        "the Postgres image failed its tests or its S3 proof",
+        { ...code, POSTGRES_JOB: "failure" },
+        "Postgres image (failure)",
+      ],
+      [
+        "the Postgres image was asked for and skipped",
+        { ...code, POSTGRES_JOB: "skipped" },
+        "Postgres image (skipped)",
+      ],
+      [
+        "the Postgres image ran on documentation",
+        { ...docs, POSTGRES_JOB: "success" },
+        "Postgres image (success)",
+      ],
       ["Docs ran on code", { ...code, DOCS_JOB: "success" }, "Docs (success)"],
       [
         "the AI contract was asked for and skipped",
@@ -1463,6 +1485,95 @@ describe.skipIf(!hasShell("bash"))("the blocks that decide, run", () => {
       expect(job.text).toContain("packages: read");
       expect(jobOf(staging, "validate").text).toContain(
         "force_ai: ${{ inputs.force_ai_build == true }}",
+      );
+    });
+  });
+
+  // The trajetto-postgres image (plano-escala F1-03): tested and proven on
+  // S3 only for an infra/postgres with no published image, and not even
+  // started otherwise (changes.sh), so CI stays within its minutes.
+  describe("the Postgres image, tested only for a new infra/postgres", () => {
+    const job = jobOf(validate, "postgres-image");
+    const LOOKUP = stepOf(
+      job,
+      "Look up the Postgres image for this source",
+    ).run;
+    const TREE = "fedcba0987654321fedcba0987654321fedcba09";
+
+    beforeEach(() => {
+      box.stub("git", `printf '%s\\n' "${TREE}"`);
+      box.file(".github/scripts/ghcr.sh", 'exec sh "$STUB_GHCR" "$@"\n');
+    });
+
+    const lookup = (ghcr: string, loggedIn = "true") =>
+      exec(
+        LOOKUP,
+        { LOGGED_IN: loggedIn, STUB_GHCR: box.file("ghcr-stub.sh", ghcr) },
+        box.root,
+      );
+
+    it("ends the job when an image of the same infra/postgres exists", () => {
+      const result = lookup(`printf 'sha256:${"b".repeat(64)}\\n'`);
+
+      expect(result.status, result.log).toBe(0);
+      expect(result.output).toBe("test=false\n");
+      expect(result.summary).toContain(`src-${TREE.slice(0, 12)}`);
+    });
+
+    it("tests when there is none, when GHCR does not answer, or without a login", () => {
+      expect(lookup("exit 0").output).toBe("test=true\n");
+
+      const down = lookup("exit 1");
+
+      expect(down.status, down.log).toBe(0);
+      expect(down.output).toBe("test=true\n");
+      expect(down.log).toMatch(/::warning::O GHCR não respondeu/);
+
+      const noLogin = lookup(`printf 'sha256:${"b".repeat(64)}\\n'`, "false");
+
+      expect(noLogin.output).toBe("test=true\n");
+      expect(noLogin.log).toMatch(/::warning::Sem login no GHCR/);
+    });
+
+    it("runs only when asked, and builds, tests and proves only on the lookup's answer", () => {
+      expect(conditionOf(job)).toBe("${{ !inputs.docs && inputs.postgres }}");
+      expect(timeoutOf(job)).toBeGreaterThanOrEqual(15);
+      expect(job.text).toContain("packages: read");
+      for (const name of [
+        "Set up Docker Buildx",
+        "Build the image and run its tests",
+        "Build the image for the S3 proof",
+        "Prove the image against S3 (MinIO)",
+      ]) {
+        expect(conditionOf(stepOf(job, name)), name).toBe(
+          "steps.postgres-source.outputs.test == 'true'",
+        );
+      }
+      const test = stepOf(job, "Build the image and run its tests").text;
+
+      expect(test).toContain("context: ./infra/postgres");
+      expect(test).toContain("target: test");
+      expect(test).toContain("cache-from: type=gha,scope=postgres-test");
+      expect(stepOf(job, "Prove the image against S3 (MinIO)").run).toContain(
+        "bash infra/postgres/test/s3-proof.sh trajetto-postgres:proof",
+      );
+      // The S3 server is pinned by digest like every image a job pulls.
+      expect(stepOf(job, "Prove the image against S3 (MinIO)").text).toMatch(
+        /MINIO_IMAGE: pgsty\/minio:[\w.-]+@sha256:[0-9a-f]{64}/,
+      );
+    });
+
+    it("takes changes.sh's answer in both workflows, running when it is missing", () => {
+      for (const workflow of [ci, staging]) {
+        expect(jobOf(workflow, "changes").text, workflow.file).toContain(
+          "postgres: ${{ steps.changes.outputs.postgres }}",
+        );
+        expect(jobOf(workflow, "validate").text, workflow.file).toContain(
+          "postgres: ${{ needs.changes.outputs.postgres != 'false' }}",
+        );
+      }
+      expect(validate.text).toMatch(
+        /\n {6}postgres:\n {8}description: .+\n {8}type: boolean\n {8}default: true\n/,
       );
     });
   });

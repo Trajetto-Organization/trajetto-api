@@ -34,6 +34,8 @@ import {
 const SCRIPT = repoFile(".github", "scripts", "changes.sh");
 const ZEROS = "0".repeat(40);
 const digest = (char: string) => `sha256:${char.repeat(64)}`;
+/** What a commit without infra/postgres says about the Postgres image. */
+const NO_POSTGRES = "postgres=false\npostgres_tree=\n";
 
 describe.skipIf(!hasShell("bash"))("changes.sh", { timeout: 30_000 }, () => {
   let box: Sandbox;
@@ -159,7 +161,9 @@ describe.skipIf(!hasShell("bash"))("changes.sh", { timeout: 30_000 }, () => {
       const result = changes("staging", "D", "C");
 
       expect(result.status, result.log).toBe(0);
-      expect(result.output).toBe(`docs=true\naudit_base=${commits.A}\n`);
+      expect(result.output).toBe(
+        `docs=true\naudit_base=${commits.A}\n${NO_POSTGRES}`,
+      );
       expect(result.summary).toMatch(/só documentação desde/);
     });
 
@@ -193,7 +197,9 @@ describe.skipIf(!hasShell("bash"))("changes.sh", { timeout: 30_000 }, () => {
 
       const result = changes("staging", "C", "B");
 
-      expect(result.output).toBe(`docs=false\naudit_base=${commits.A}\n`);
+      expect(result.output).toBe(
+        `docs=false\naudit_base=${commits.A}\n${NO_POSTGRES}`,
+      );
       expect(result.summary).toContain(`staged-${commits.A.slice(0, 7)}`);
     });
 
@@ -205,7 +211,7 @@ describe.skipIf(!hasShell("bash"))("changes.sh", { timeout: 30_000 }, () => {
       });
 
       expect(changes("staging", "D", "C").output).toBe(
-        `docs=true\naudit_base=${commits.A}\n`,
+        `docs=true\naudit_base=${commits.A}\n${NO_POSTGRES}`,
       );
     });
 
@@ -213,7 +219,7 @@ describe.skipIf(!hasShell("bash"))("changes.sh", { timeout: 30_000 }, () => {
       ghcr({ ...staged("A"), ...staged("C", "3") });
 
       expect(changes("staging", "C", "B").output).toBe(
-        `docs=false\naudit_base=${commits.C}\n`,
+        `docs=false\naudit_base=${commits.C}\n${NO_POSTGRES}`,
       );
     });
 
@@ -221,7 +227,7 @@ describe.skipIf(!hasShell("bash"))("changes.sh", { timeout: 30_000 }, () => {
       const result = changes("staging", "D", "C", { STAGED_DEPTH: "3" });
 
       expect(result.status, result.log).toBe(0);
-      expect(result.output).toBe("docs=true\naudit_base=\n");
+      expect(result.output).toBe(`docs=true\naudit_base=\n${NO_POSTGRES}`);
       expect(result.summary).toMatch(/o audit bloqueia/);
     });
 
@@ -231,7 +237,9 @@ describe.skipIf(!hasShell("bash"))("changes.sh", { timeout: 30_000 }, () => {
       const result = changes("staging", "D", "C");
 
       expect(result.status, result.log).toBe(0);
-      expect(result.output).toBe(`docs=true\naudit_base=${commits.C}\n`);
+      expect(result.output).toBe(
+        `docs=true\naudit_base=${commits.C}\n${NO_POSTGRES}`,
+      );
       expect(result.log).toMatch(/::warning::O GHCR não respondeu/);
     });
 
@@ -241,7 +249,9 @@ describe.skipIf(!hasShell("bash"))("changes.sh", { timeout: 30_000 }, () => {
       const result = changes("staging", "D", "C", { GHCR_LOGIN: "failed" });
 
       expect(result.status, result.log).toBe(0);
-      expect(result.output).toBe(`docs=true\naudit_base=${commits.C}\n`);
+      expect(result.output).toBe(
+        `docs=true\naudit_base=${commits.C}\n${NO_POSTGRES}`,
+      );
       expect(result.log).toMatch(/::warning::O GHCR não respondeu/);
       expect(box.calls("docker")).toEqual([]);
     });
@@ -260,7 +270,9 @@ describe.skipIf(!hasShell("bash"))("changes.sh", { timeout: 30_000 }, () => {
       const result = changes("branch", "D", "C");
 
       expect(result.status, result.log).toBe(0);
-      expect(result.output).toBe(`docs=false\naudit_base=${commits.B}\n`);
+      expect(result.output).toBe(
+        `docs=false\naudit_base=${commits.B}\n${NO_POSTGRES}`,
+      );
       expect(result.summary).toMatch(/muda código desde .*src\/c\.ts/);
       // No GHCR on a work branch.
       expect(box.calls("docker")).toEqual([]);
@@ -271,7 +283,7 @@ describe.skipIf(!hasShell("bash"))("changes.sh", { timeout: 30_000 }, () => {
 
       for (const before of ["C", ZEROS, "f".repeat(40)]) {
         expect(changes("branch", "D", before).output, before).toBe(
-          `docs=true\naudit_base=${commits.C}\n`,
+          `docs=true\naudit_base=${commits.C}\n${NO_POSTGRES}`,
         );
       }
     });
@@ -281,19 +293,21 @@ describe.skipIf(!hasShell("bash"))("changes.sh", { timeout: 30_000 }, () => {
 
       const result = changes("branch", "D", "");
 
-      expect(result.output).toBe(`docs=false\naudit_base=${commits.C}\n`);
+      expect(result.output).toBe(
+        `docs=false\naudit_base=${commits.C}\n${NO_POSTGRES}`,
+      );
       expect(result.summary).toMatch(/sem intervalo para comparar/);
     });
 
     it("compares a new branch with where it left staging", () => {
       expect(changes("branch", "D", ZEROS).output).toBe(
-        `docs=false\naudit_base=${commits.B}\n`,
+        `docs=false\naudit_base=${commits.B}\n${NO_POSTGRES}`,
       );
 
       git("update-ref", "refs/remotes/origin/staging", commits.C);
 
       expect(changes("branch", "D", ZEROS).output).toBe(
-        `docs=true\naudit_base=${commits.C}\n`,
+        `docs=true\naudit_base=${commits.C}\n${NO_POSTGRES}`,
       );
     });
 
@@ -303,7 +317,96 @@ describe.skipIf(!hasShell("bash"))("changes.sh", { timeout: 30_000 }, () => {
       const result = changes("branch", "D", ZEROS);
 
       expect(result.status, result.log).toBe(0);
-      expect(result.output).toBe("docs=false\naudit_base=\n");
+      expect(result.output).toBe(`docs=false\naudit_base=\n${NO_POSTGRES}`);
+    });
+  });
+
+  // The trajetto-postgres image (plano-escala F1-03) is built from
+  // infra/postgres alone: the Postgres image job runs only for a tree that
+  // has no published image yet, and costs no runner otherwise.
+  describe("the Postgres image", () => {
+    let tree: string;
+
+    beforeEach(() => {
+      // E: the image's files arrive. F: code elsewhere, the same image.
+      commit("E", { "infra/postgres/Dockerfile": "FROM postgres" });
+      tree = git("rev-parse", "HEAD:infra/postgres");
+      commit("F", { "src/f.ts": "f" });
+    });
+
+    const pg = (value: boolean) => `postgres=${value}\npostgres_tree=${tree}\n`;
+
+    it("on staging, tests a tree GHCR has no image for, and says so", () => {
+      ghcr(staged("A"));
+
+      const result = changes("staging", "F", "E");
+
+      expect(result.status, result.log).toBe(0);
+      expect(tree).toMatch(/^[0-9a-f]{40}$/);
+      expect(result.output).toBe(
+        `docs=false\naudit_base=${commits.A}\n${pg(true)}`,
+      );
+      expect(result.summary).toContain(
+        `infra/postgres sem imagem (src-${tree.slice(0, 12)})`,
+      );
+    });
+
+    it("on staging, skips a tree whose image was already published", () => {
+      ghcr({
+        ...staged("A"),
+        [`trajetto-postgres:src-${tree}`]: digest("7"),
+      });
+
+      const result = changes("staging", "F", "E");
+
+      expect(result.output).toBe(
+        `docs=false\naudit_base=${commits.A}\n${pg(false)}`,
+      );
+      expect(result.summary).toContain("o job Postgres image não roda");
+    });
+
+    it("on staging, runs the job when GHCR does not answer about it, with a warning", () => {
+      ghcr({ ...staged("A"), [`trajetto-postgres:src-${tree}`]: "error" });
+
+      const result = changes("staging", "F", "E");
+
+      expect(result.status, result.log).toBe(0);
+      expect(result.output).toContain(pg(true));
+      expect(result.log).toMatch(
+        /::warning::O GHCR não respondeu sobre trajetto-postgres/,
+      );
+    });
+
+    it("on staging, runs the job without asking GHCR when the login failed", () => {
+      ghcr({ ...staged("A"), [`trajetto-postgres:src-${tree}`]: digest("7") });
+
+      const result = changes("staging", "F", "E", { GHCR_LOGIN: "failed" });
+
+      expect(result.output).toContain(pg(true));
+      expect(box.calls("docker")).toEqual([]);
+    });
+
+    it("on a work branch, runs the job only when the branch changes infra/postgres", () => {
+      // Staging at D: the branch brings infra/postgres (E) and code (F).
+      git("update-ref", "refs/remotes/origin/staging", commits.D);
+
+      expect(changes("branch", "F", "E").output).toBe(
+        `docs=false\naudit_base=${commits.D}\n${pg(true)}`,
+      );
+
+      // Staging already has E: the branch only adds F.
+      git("update-ref", "refs/remotes/origin/staging", commits.E);
+
+      const same = changes("branch", "F", "E");
+
+      expect(same.output).toBe(
+        `docs=false\naudit_base=${commits.E}\n${pg(false)}`,
+      );
+      expect(same.summary).toContain("a branch não muda infra/postgres");
+      expect(box.calls("docker")).toEqual([]);
+
+      // Run workflow: everything, as asked.
+      expect(changes("branch", "F", "").output).toContain(pg(true));
     });
   });
 

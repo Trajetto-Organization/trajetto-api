@@ -42,7 +42,9 @@
 #
 # Options: --repo=2 (the second repository, F5-34), --target=<timestamp
 # with zone>, --volume=<docker volume> (host half: restore into it instead
-# of the container's own disk, from the prod-db-2 on).
+# of the container's own disk, from the prod-db-2 on), --network=<docker
+# network> (host half: when the repository is only reachable there, as in
+# the image's S3 proof; R2 needs none).
 #
 # Exit status: 0 ok; 1 usage or configuration; 3 not enough disk or RAM;
 # 4 the restore, the recovery or the checks failed.
@@ -54,9 +56,10 @@ FROM=""
 REPO=1
 TARGET=""
 VOLUME=""
+NETWORK=""
 
 usage() {
-  echo "uso: trajetto-restore-drill --from <contêiner do Database> [--repo=2] [--target=<instante>] [--volume=<volume>]" >&2
+  echo "uso: trajetto-restore-drill --from <contêiner do Database> [--repo=2] [--target=<instante>] [--volume=<volume>] [--network=<rede>]" >&2
   echo "     trajetto-restore-drill --inside [--repo=2] [--target=<instante>]" >&2
   exit 1
 }
@@ -77,6 +80,7 @@ while [ "$#" -gt 0 ]; do
     --repo=[12]) REPO=${1#--repo=} ;;
     --target=*) TARGET=${1#--target=} ;;
     --volume=*) VOLUME=${1#--volume=} ;;
+    --network=*) NETWORK=${1#--network=} ;;
     *) usage ;;
   esac
   shift
@@ -85,6 +89,10 @@ done
 if [ -n "$TARGET" ] \
   && ! [[ "$TARGET" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}[\ T][0-9]{2}:[0-9]{2}(:[0-9]{2}(\.[0-9]{1,6})?)?(Z|[+-][0-9]{2}(:?[0-9]{2})?)$ ]]; then
   echo "trajetto-restore-drill: --target precisa de data, hora e fuso (2026-12-01 05:00:00+00): '${TARGET}'" >&2
+  exit 1
+fi
+if [ -n "$NETWORK" ] && ! [[ "$NETWORK" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*$ ]]; then
+  echo "trajetto-restore-drill: --network precisa do nome de uma rede do Docker" >&2
   exit 1
 fi
 if [ -n "$VOLUME" ] && ! [[ "$VOLUME" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*$ ]]; then
@@ -248,8 +256,9 @@ if [ "$MODE" = host ]; then
 
   args=(--inside "--repo=${REPO}")
   [ -z "$TARGET" ] || args+=("--target=${TARGET}")
-  mount=()
-  [ -z "$VOLUME" ] || mount=(--mount "type=volume,src=${VOLUME},dst=/var/lib/postgresql/data")
+  placement=()
+  [ -z "$VOLUME" ] || placement=(--mount "type=volume,src=${VOLUME},dst=/var/lib/postgresql/data")
+  [ -z "$NETWORK" ] || placement+=(--network "$NETWORK")
 
   # The I/O weight needs io.weight in the kernel (cgroup v2 with BFQ); where
   # it is missing, runc refuses to START a container that asks for it, so a
@@ -262,7 +271,7 @@ if [ "$MODE" = host ]; then
 
   name="trajetto-restore-drill-$(date -u +%Y%m%d%H%M%S)"
   cid=$(docker create --rm --name "$name" --cpus 1 --memory 1g --memory-swap 1g \
-    "${io_weight[@]+"${io_weight[@]}"}" --env-file "$envfile" "${mount[@]+"${mount[@]}"}" \
+    "${io_weight[@]+"${io_weight[@]}"}" --env-file "$envfile" "${placement[@]+"${placement[@]}"}" \
     "$image" trajetto-restore-drill "${args[@]}" 2> "$LOG") \
     || fail 1 drill-config "docker create do contêiner do ensaio falhou"
   # Docker read the file at create: no copy of a key stays on the disk.

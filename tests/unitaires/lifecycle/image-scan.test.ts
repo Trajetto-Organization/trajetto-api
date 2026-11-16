@@ -141,3 +141,34 @@ describe("the image the scanner reads", () => {
     }
   });
 });
+
+describe("the Database's image (trajetto-postgres)", () => {
+  const staging = read(".github/workflows/staging.yml");
+
+  // Scanned when a run publishes it, next to the digest the owner swaps the
+  // Database to. Report-only, enforced or not: no job deploys it, so its
+  // base's finding must not hold the API's deploy; the owner reads it.
+  it("is scanned when built, and its finding is reported, never enforced", () => {
+    expect(staging).toContain(
+      "DATABASE_IMAGE: ${{ needs.build.outputs.postgres_built == 'true' && format('ghcr.io/trajetto-organization/trajetto-postgres@{0}', needs.build.outputs.postgres_digest) || '' }}",
+    );
+    expect(staging).toContain(
+      '[ -z "$DATABASE_IMAGE" ] || images+=("$DATABASE_IMAGE")',
+    );
+    expect(staging).toMatch(
+      /if \[ "\$image" = "\$DATABASE_IMAGE" \]; then\n\s+echo "::warning::Trivy: CRITICAL corrigível em \$\{name\}/,
+    );
+  });
+
+  it("is the official postgres base by digest, with no package manager added beyond the one library", () => {
+    const dockerfile = read("infra/postgres/Dockerfile");
+
+    expect(dockerfile).toMatch(
+      /^FROM postgres:16-alpine@sha256:[0-9a-f]{64} AS base$/m,
+    );
+    expect(dockerfile.match(/apk add --no-cache [^\n;]*/g)).toEqual([
+      "apk add --no-cache build-base meson samurai pkgconf python3 py3-yaml \\",
+      "apk add --no-cache libbz2",
+    ]);
+  });
+});

@@ -49,6 +49,7 @@ jobs:
     outputs:
       docs: ${{ steps.changes.outputs.docs }}
       audit_base: ${{ steps.changes.outputs.audit_base }}
+      postgres: ${{ steps.changes.outputs.postgres }}
 
     steps:
       # The history the comparison reads (commits and trees) and the
@@ -103,6 +104,7 @@ jobs:
       docs: ${{ needs.changes.outputs.docs == 'true' }}
       e2e: ${{ github.event_name == 'workflow_dispatch' && inputs.e2e == true }}
       audit_base: ${{ needs.changes.outputs.audit_base }}
+      postgres: ${{ needs.changes.outputs.postgres != 'false' }}
       ai_local: ${{ github.event_name == 'workflow_dispatch' }}
     secrets:
       CLIENT_REPOS_READ_TOKEN: ${{ secrets.CLIENT_REPOS_READ_TOKEN }}

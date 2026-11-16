@@ -11,6 +11,9 @@ name: Validate
 #                      Postgres and Redis; the last one is the replica phase)
 #        ─▶ AI OCR    (the trajetto-ai pytest inside its image, skipped when
 #                      an image of the same infra/ai-ocr already passed it)
+#        ─▶ Postgres image (the trajetto-postgres image's own tests and its
+#                      proof against an S3 server; only for an infra/postgres
+#                      that has no published image yet, changes.sh)
 #   docs ─▶ Docs      (Prettier and the unit tests without coverage: some of
 #                      them read the documentation, and the siblings)
 #        ─▶ Result    (after all of them: the verdict of this call)
@@ -42,6 +45,10 @@ on:
         description: "Roda o pytest da IA mesmo com imagem para a mesma fonte (force_ai_build)"
         type: boolean
         default: false
+      postgres:
+        description: "Roda o job Postgres image (o changes.sh diz false quando infra/postgres já tem imagem publicada)"
+        type: boolean
+        default: true
       audit_base:
         description: "O commit com que o audit de dependências compara (Changes)"
         type: string
@@ -385,6 +392,124 @@ jobs:
           cache-from: type=gha,scope=ai-test
           cache-to: type=gha,mode=max,scope=ai-test,ignore-error=true
 
+  # The trajetto-postgres image (infra/postgres, plano-escala F1-01/F1-03):
+  # the Database of staging and production, swapped by the owner by digest.
+  # Two proofs, both on the bytes the Build job will publish:
+  # - its `test` stage, offline: the wrapper's parameters read back with
+  #   SHOW, a PITR round trip and the archive queue cap on a posix
+  #   repository, the backup and drill scripts for real;
+  # - infra/postgres/test/s3-proof.sh: the image built here, by its local
+  #   digest, against MinIO pinned by digest, with TLS, path-style URLs and
+  #   the region `auto`, as R2 is spoken to: stanza-create, archive, check,
+  #   full and diff (trajetto-backup), archive-get, and the drill to an
+  #   instant with a read-only key.
+  #
+  # Like the AI: the whole build input is infra/postgres, git names it with
+  # one hash, and the Build of staging publishes `src-<hash>` only after this
+  # job passed. changes.sh does the lookup first, so a push that leaves
+  # infra/postgres alone does not even start this job (`postgres` false);
+  # the lookup below is the job's own second look, for a run that started
+  # anyway (GHCR silent in Changes, a work branch, Run workflow).
+  postgres-image:
+    name: Postgres image
+    if: ${{ !inputs.docs && inputs.postgres }}
+    runs-on: ubuntu-24.04
+    # Estimated 4-8 min: pgBackRest compiles in ~15 s, the test stage takes
+    # ~40 s and the S3 proof ~1 min on a 2-vCPU machine; a cold cache
+    # downloads the base and the build tools again.
+    timeout-minutes: 25
+    permissions:
+      contents: read
+      packages: read
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Log in to GitHub Container Registry
+        id: ghcr
+        env:
+          GHCR_USER: ${{ github.actor }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if bash .github/scripts/ghcr.sh login; then
+            echo "ok=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Look up the Postgres image for this source
+        id: postgres-source
+        env:
+          LOGGED_IN: ${{ steps.ghcr.outputs.ok }}
+        run: |
+          tree=$(git rev-parse HEAD:infra/postgres)
+          if [ "$LOGGED_IN" != "true" ]; then
+            echo "test=true" >> "$GITHUB_OUTPUT"
+            echo "::warning::Sem login no GHCR, não deu para procurar trajetto-postgres:src-${tree::12}: a imagem é testada."
+            exit 0
+          fi
+          status=0
+          digest=$(bash .github/scripts/ghcr.sh digest "ghcr.io/trajetto-organization/trajetto-postgres:src-${tree}") || status=$?
+          if [ "$status" -ne 0 ]; then
+            echo "test=true" >> "$GITHUB_OUTPUT"
+            echo "::warning::O GHCR não respondeu sobre trajetto-postgres:src-${tree::12}: a imagem é testada."
+          elif [ -n "$digest" ]; then
+            echo "test=false" >> "$GITHUB_OUTPUT"
+            echo "trajetto-postgres: infra/postgres igual ao de src-${tree::12} (${digest}), que já passou; nada a testar." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "test=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set up Docker Buildx
+        if: steps.postgres-source.outputs.test == 'true'
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
+        with:
+          driver-opts: image=moby/buildkit:v0.33.1@sha256:cec9f139f45e93c5c69c60f8b07cfad9f43f4ef6b6a6cd917527fea5ff2e3dea
+
+      # No output: the result stays in the builder. Offline after the
+      # download of pgBackRest's source (checked by SHA-256).
+      - name: Build the image and run its tests
+        if: steps.postgres-source.outputs.test == 'true'
+        uses: docker/build-push-action@ca052bb54ab0790a636c9b5f226502c73d547a25 # v5.4.0
+        with:
+          context: ./infra/postgres
+          target: test
+          push: false
+          cache-from: type=gha,scope=postgres-test
+          cache-to: type=gha,mode=max,scope=postgres-test,ignore-error=true
+
+      # The image itself (the last stage), into the runner's Docker for the
+      # S3 proof: every layer is the test build's, from the cache.
+      - name: Build the image for the S3 proof
+        if: steps.postgres-source.outputs.test == 'true'
+        uses: docker/build-push-action@ca052bb54ab0790a636c9b5f226502c73d547a25 # v5.4.0
+        with:
+          context: ./infra/postgres
+          push: false
+          load: true
+          tags: trajetto-postgres:proof
+          cache-from: type=gha,scope=postgres-test
+
+      - name: Prove the image against S3 (MinIO)
+        if: steps.postgres-source.outputs.test == 'true'
+        env:
+          # MinIO stopped publishing images upstream; this is MinIO built
+          # from source by the Pigsty project, pinned by digest. A throwaway
+          # server for this job only, on a network of its own.
+          MINIO_IMAGE: pgsty/minio:RELEASE.2026-08-04T00-00-00Z@sha256:b6bfe7239bfc83fb90d31612d9704d86039dd714f7904b3f1ad68f211e602372
+        run: |
+          log="${RUNNER_TEMP}/s3-proof.log"
+          status=0
+          bash infra/postgres/test/s3-proof.sh trajetto-postgres:proof 2>&1 | tee "$log" || status=$?
+          {
+            echo "trajetto-postgres: prova S3 (MinIO):"
+            echo '```'
+            grep -E '^(ok - |  \{|trajetto-postgres:)' "$log" || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit "$status"
+
   # A push that changes only documentation: no type-check, no E2E, no
   # image. Prettier still runs (`lint:check` covers *.md and docs/), and so
   # does the unit suite, without coverage, because some of its tests read
@@ -469,7 +594,7 @@ jobs:
   # validation cancelled by a newer push cancels this one with it.
   result:
     name: Result
-    needs: [validate, e2e, ai-ocr, docs, ai-local-e2e]
+    needs: [validate, e2e, ai-ocr, postgres-image, docs, ai-local-e2e]
     if: ${{ !cancelled() }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -483,9 +608,11 @@ jobs:
           DOCS: ${{ inputs.docs }}
           WANT_E2E: ${{ inputs.e2e }}
           WANT_AI_LOCAL: ${{ inputs.ai_local }}
+          WANT_POSTGRES: ${{ inputs.postgres }}
           VALIDATE: ${{ needs.validate.result }}
           E2E: ${{ needs.e2e.result }}
           AI_OCR: ${{ needs.ai-ocr.result }}
+          POSTGRES_JOB: ${{ needs.postgres-image.result }}
           DOCS_JOB: ${{ needs.docs.result }}
           AI_LOCAL: ${{ needs.ai-local-e2e.result }}
         run: |
@@ -502,11 +629,13 @@ jobs:
             expect Validate "$VALIDATE" skipped
             expect E2E "$E2E" skipped
             expect "AI OCR" "$AI_OCR" skipped
+            expect "Postgres image" "$POSTGRES_JOB" skipped
             expect "AI local contract" "$AI_LOCAL" skipped
           else
             expect Validate "$VALIDATE" success
             expect E2E "$E2E" "$(asked "$WANT_E2E")"
             expect "AI OCR" "$AI_OCR" success
+            expect "Postgres image" "$POSTGRES_JOB" "$(asked "$WANT_POSTGRES")"
             expect "AI local contract" "$AI_LOCAL" "$(asked "$WANT_AI_LOCAL")"
             expect Docs "$DOCS_JOB" skipped
           fi

@@ -205,6 +205,224 @@ describe.skipIf(!hasShell("bash"))(
       });
     });
 
+    // The Database's image (trajetto-postgres, plano-escala F1-03):
+    // published only for a new infra/postgres that the Postgres image job
+    // tested, never deployed, and never in the way of the API's road.
+    describe("the Database's image, published only for a new infra/postgres", () => {
+      const SOURCE = "Look up the Postgres image for this source";
+
+      it("publishes nothing when the same infra/postgres is already published", () => {
+        const result = step(
+          build,
+          SOURCE,
+          { [`trajetto-postgres:src-${TREE}`]: digest("c") },
+          { TESTED: "false" },
+        );
+
+        expect(result.status, result.stderr).toBe(0);
+        expect(result.outputs).toEqual({
+          tree: TREE,
+          build: "false",
+          digest: digest("c"),
+        });
+      });
+
+      it("publishes a new source the Postgres image job tested", () => {
+        const result = step(build, SOURCE, {}, { TESTED: "true" });
+
+        expect(result.status, result.stderr).toBe(0);
+        expect(result.outputs).toEqual({ tree: TREE, build: "true" });
+      });
+
+      it("never publishes a source the job did not test", () => {
+        const result = step(build, SOURCE, {}, { TESTED: "false" });
+
+        expect(result.status, result.stderr).toBe(0);
+        expect(result.outputs).toEqual({ tree: TREE, build: "false" });
+        expect(result.stdout).toMatch(/::warning::trajetto-postgres:src-/);
+      });
+
+      it("lets the API through, with a warning, when GHCR does not answer about it", () => {
+        const result = step(
+          build,
+          SOURCE,
+          { [`trajetto-postgres:src-${TREE}`]: "garbage" },
+          { TESTED: "true" },
+        );
+
+        expect(result.status, result.stderr).toBe(0);
+        expect(result.outputs).toEqual({ tree: TREE, build: "false" });
+        expect(result.stdout).toMatch(
+          /::warning::O GHCR não respondeu sobre trajetto-postgres/,
+        );
+      });
+
+      it("is smoke-tested, pushed with attestations and summarised only when built, and deployed nowhere", () => {
+        for (const name of [
+          "Extract metadata (postgres)",
+          "Build the Postgres image for the smoke test",
+          "Smoke test the Postgres image",
+          "Build and push the Postgres image",
+        ]) {
+          expect(conditionOf(stepOf(build, name)), name).toBe(
+            "steps.postgres-source.outputs.build == 'true'",
+          );
+        }
+        const push = stepOf(build, "Build and push the Postgres image").text;
+
+        expect(push).toContain("context: ./infra/postgres");
+        expect(push).toContain("sbom: true");
+        expect(push).toContain("provenance: mode=max");
+        expect(push).toContain("GIT_SHA=${{ github.sha }}");
+        expect(push).toContain("type=gha,scope=postgres-test");
+        expect(stepOf(build, SOURCE).text).toContain(
+          "TESTED: ${{ needs.changes.outputs.postgres }}",
+        );
+        expect(build.text).toContain(
+          "postgres_digest: ${{ steps.build-postgres.outputs.digest || steps.postgres-source.outputs.digest }}",
+        );
+        expect(stepOf(build, "Summary").run).toContain(
+          "Troca no Database: ação do dono",
+        );
+        for (const text of [
+          jobOf(staging, "deploy-staging").text,
+          deploy.text,
+        ]) {
+          expect(text).not.toContain("postgres_digest");
+          expect(text).not.toContain("trajetto-postgres");
+        }
+      });
+
+      describe("its scan", () => {
+        const SCAN = stepOf(
+          jobOf(staging, "image-scan"),
+          "Scan the images",
+        ).run;
+
+        /** Trivy finds a fixable CRITICAL in the images whose name matches. */
+        function scan(findingIn: string, env: Record<string, string>) {
+          box.stub(
+            "docker",
+            `case "$*" in *${findingIn}*) exit 3 ;; esac\nexit 0`,
+          );
+
+          return runBlock(
+            box,
+            SCAN,
+            {
+              DB: "fresh",
+              TRIVY_IMAGE: "aquasec/trivy:test",
+              API_IMAGE: `${REPO}/trajetto-api@${digest("1")}`,
+              MIGRATE_IMAGE: `${REPO}/trajetto-api-migrate@${digest("2")}`,
+              AI_IMAGE: `${REPO}/trajetto-ai@${digest("3")}`,
+              DATABASE_IMAGE: "",
+              ENFORCE: "true",
+              ...env,
+            },
+            process.cwd(),
+          );
+        }
+
+        it("reads the Database's image only when this run built it", () => {
+          expect(
+            stepOf(jobOf(staging, "image-scan"), "Scan the images").text,
+          ).toContain(
+            "DATABASE_IMAGE: ${{ needs.build.outputs.postgres_built == 'true' && format('ghcr.io/trajetto-organization/trajetto-postgres@{0}', needs.build.outputs.postgres_digest) || '' }}",
+          );
+
+          const result = scan("nothing-matches", {});
+
+          expect(result.status, result.stderr).toBe(0);
+          expect(
+            box
+              .calls("docker")
+              .filter((call) => call.includes("trajetto-postgres")),
+          ).toEqual([]);
+        });
+
+        it("only reports its finding, enforced or not: it must not hold the API's deploy", () => {
+          const result = scan("trajetto-postgres", {
+            DATABASE_IMAGE: `${REPO}/trajetto-postgres@${digest("4")}`,
+          });
+
+          expect(result.status, result.stderr).toBe(0);
+          expect(result.stdout).toMatch(
+            /::warning::Trivy: CRITICAL corrigível em trajetto-postgres/,
+          );
+          expect(result.summary).toContain("a troca do Database é do dono");
+        });
+
+        it("still fails, enforced, on a finding in an image that deploys", () => {
+          const result = scan("trajetto-api@", {
+            DATABASE_IMAGE: `${REPO}/trajetto-postgres@${digest("4")}`,
+          });
+
+          expect(result.status).toBe(1);
+          expect(result.stdout).toMatch(
+            /::error::Trivy: CRITICAL corrigível em trajetto-api/,
+          );
+        });
+      });
+
+      describe("its smoke test", () => {
+        const SMOKE = stepOf(build, "Smoke test the Postgres image").run;
+
+        function smoke(answers: Record<string, string>) {
+          box.stub(
+            "docker",
+            `
+case "$1" in
+  run) echo cid-postgres ;;
+  logs) printf 'ready to accept connections\\nready to accept connections\\n' ;;
+  exec)
+    case "$*" in
+      *pg_isready*) exit 0 ;;
+      *"SHOW shared_buffers"*) echo "${answers.shared_buffers ?? "108MB"}" ;;
+      *"SHOW archive_mode"*) echo "${answers.archive_mode ?? "off"}" ;;
+      *"SHOW trajetto.image_revision"*) echo "${answers.revision ?? SHA}" ;;
+    esac ;;
+esac
+exit 0`,
+          );
+
+          return runBlock(
+            box,
+            SMOKE,
+            { GITHUB_SHA: SHA, IMAGE: "trajetto-postgres:smoke" },
+            process.cwd(),
+          );
+        }
+
+        it("starts it as staging's Database, capped and offline, and reads back what it derived", () => {
+          const result = smoke({});
+
+          expect(result.status, result.stderr).toBe(0);
+          const run =
+            box.calls("docker").find((call) => call.startsWith("docker run")) ??
+            "";
+          expect(run).toContain("--network none --memory 603979776");
+          expect(run).toContain("POSTGRES_MEMORY_LIMIT_MB=576");
+          expect(result.summary).toContain("smoke test OK");
+        });
+
+        it.each([
+          [
+            "shared_buffers not derived from the cap",
+            { shared_buffers: "128MB" },
+          ],
+          ["archiving on without PITR_ARCHIVE", { archive_mode: "on" }],
+          ["another commit's image", { revision: "0".repeat(40) }],
+        ])("fails on %s, before anything is pushed", (_, answers) => {
+          const result = smoke(answers);
+
+          expect(result.status).toBe(1);
+          expect(result.stdout).toContain(
+            "::error::Smoke test da imagem trajetto-postgres",
+          );
+        });
+      });
+    });
+
     describe("the AI deploy, only when its digest changed", () => {
       const CURRENT = "Read what the environment runs now";
 

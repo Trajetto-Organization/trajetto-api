@@ -302,6 +302,7 @@ describe.skipIf(!bash)("the decision, run", () => {
 describe.skipIf(!bash)("the promote's release image, read", () => {
   let before = "";
   let after = "";
+  let git: (...args: string[]) => string = () => "";
 
   beforeEach(() => {
     // A throwaway repository: no global identity or signing needed.
@@ -313,6 +314,7 @@ describe.skipIf(!bash)("the promote's release image, read", () => {
       run("bash", `${box.root}/tests-git.sh`, args, {
         cwd: box.root,
       }).stdout.trim();
+    git = g;
 
     g("init", "-q");
     box.file("README", "x");
@@ -329,7 +331,7 @@ describe.skipIf(!bash)("the promote's release image, read", () => {
   const read = (
     tag: string,
     event: string,
-    stubs: { migrate?: string; ai?: string } = {},
+    stubs: { migrate?: string; ai?: string; postgres?: string } = {},
   ) => {
     box.file(
       ".github/scripts/ghcr.sh",
@@ -338,6 +340,7 @@ describe.skipIf(!bash)("the promote's release image, read", () => {
         '  *trajetto-api-migrate:*) printf "%s" "${STUB_MIGRATE:-}" ;;',
         '  *trajetto-api:*) printf "%s" "${STUB_API:-}" ;;',
         '  *trajetto-ai:*) printf "%s" "${STUB_AI:-}" ;;',
+        '  *trajetto-postgres:src-*) [ "${2##*:src-}" = "${STUB_POSTGRES_TREE:-none}" ] && printf "%s" "${STUB_POSTGRES:-}" ;;',
         "esac",
       ].join("\n"),
     );
@@ -351,6 +354,10 @@ describe.skipIf(!bash)("the promote's release image, read", () => {
         STUB_API: `sha256:${"1".repeat(64)}`,
         STUB_MIGRATE: stubs.migrate ?? "",
         STUB_AI: stubs.ai ?? "",
+        STUB_POSTGRES: stubs.postgres ?? "",
+        STUB_POSTGRES_TREE: stubs.postgres
+          ? git("rev-parse", `${tag.slice(4)}:infra/postgres`)
+          : "none",
       },
       box.root,
     );
@@ -368,8 +375,51 @@ describe.skipIf(!bash)("the promote's release image, read", () => {
       migrate: DIGEST,
       presplit: "false",
       ai: OLDER,
+      postgres: "",
       expected: after.slice(0, 7),
     });
+  });
+
+  // The Database's image of the promoted commit, by its infra/postgres:
+  // only what trajetto-postgres:stable moves to, as a reference.
+  it("reads the Database's image of the same infra/postgres, for the reference tag", () => {
+    box.file("infra/postgres/Dockerfile", "FROM postgres");
+    git("add", "infra/postgres/Dockerfile");
+    git("commit", "-q", "-m", "the database image");
+    const head = git("rev-parse", "HEAD");
+    const POSTGRES = `sha256:${"7".repeat(64)}`;
+
+    const result = read(`sha-${head.slice(0, 7)}`, "push", {
+      migrate: DIGEST,
+      postgres: POSTGRES,
+    });
+
+    expect(result.status, result.log).toBe(0);
+    expect(result.outputs.postgres).toBe(POSTGRES);
+    expect(result.summary).toContain(`trajetto-postgres@${POSTGRES}`);
+
+    // GHCR not answering about a reference never holds the promote.
+    box.file(
+      ".github/scripts/ghcr.sh",
+      'case "$2" in *trajetto-postgres:*) exit 1 ;; *trajetto-api-migrate:*) printf "%s" "$STUB_MIGRATE" ;; *trajetto-api:*) printf "%s" "$STUB_API" ;; esac\n',
+    );
+    const silent = runBlock(
+      box,
+      stepOf(evidence, "Read the digests to promote").run,
+      {
+        IMAGE_TAG: `sha-${head.slice(0, 7)}`,
+        EVENT: "push",
+        STUB_API: `sha256:${"1".repeat(64)}`,
+        STUB_MIGRATE: DIGEST,
+      },
+      box.root,
+    );
+
+    expect(silent.status, silent.log).toBe(0);
+    expect(silent.outputs.postgres).toBe("");
+    expect(silent.log).toContain(
+      "::warning::O GHCR não respondeu sobre trajetto-postgres",
+    );
   });
 
   it("fails a merge whose build has no release image: its push failed", () => {

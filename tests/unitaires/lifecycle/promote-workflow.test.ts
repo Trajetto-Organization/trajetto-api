@@ -119,13 +119,48 @@ describe("the build (once, on staging)", () => {
     // there is no backup image. The release image and the AI also carry
     // `src-<key>`: the hash of what each one is built from
     // (migrate-source.sh; the git hash of infra/ai-ocr), immutable too, and
-    // how a later push finds the image to reuse it.
+    // how a later push finds the image to reuse it. The Database's image
+    // (trajetto-postgres, plano-escala F1-03) too, built only for a new
+    // infra/postgres: its `src-<tree>` and the `sha-<7>` of the commit that
+    // built it, and no tag for the commits that reuse it (GHCR's storage
+    // is counted).
     expect(metadata).toEqual([
       "type=sha,prefix=sha-",
       "type=sha,prefix=sha-\n            type=raw,value=src-${{ steps.migrate-source.outputs.key }}",
       "type=sha,prefix=sha-\n            type=raw,value=src-${{ steps.ai-source.outputs.tree }}",
+      "type=sha,prefix=sha-\n            type=raw,value=src-${{ steps.postgres-source.outputs.tree }}",
     ]);
-    expect(build.match(/flavor: latest=false/g)).toHaveLength(3);
+    expect(build.match(/flavor: latest=false/g)).toHaveLength(4);
+    expect(build).not.toContain("Tag the reused Postgres image");
+  });
+
+  it("moves trajetto-postgres:stable only as a reference, after production's deploy, never failing it", () => {
+    const read = stepOf(evidence, "Read the digests to promote").run;
+    const move = stepOf(promote, "Move the Postgres reference tag");
+
+    expect(read).toContain(
+      '"ghcr.io/trajetto-organization/trajetto-postgres:src-${tree}"',
+    );
+    expect(evidence.text).toContain(
+      "postgres_digest: ${{ steps.digests.outputs.postgres }}",
+    );
+    expect(stepNames(promote)).toEqual([
+      "Check out the deploy scripts",
+      "Deploy to production",
+      "Move the Postgres reference tag",
+    ]);
+    expect(conditionOf(move)).toBe(
+      "needs.evidence.outputs.postgres_digest != ''",
+    );
+    expect(move.run).toContain(
+      "ghcr.io/trajetto-organization/trajetto-postgres:stable",
+    );
+    expect(move.run).toMatch(/else\n\s+echo "::warning::/);
+    // Nothing deploys the Database: no Application of it anywhere.
+    for (const text of [production.text, staging.text, deploy.text]) {
+      expect(text).not.toMatch(/DOKPLOY_(POSTGRES|DATABASE)/);
+    }
+    expect(deploy.text).not.toContain("trajetto-postgres");
   });
 });
 

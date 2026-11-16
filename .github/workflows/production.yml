@@ -73,6 +73,7 @@ jobs:
       migrate_digest: ${{ steps.digests.outputs.migrate }}
       migrate_presplit: ${{ steps.digests.outputs.presplit }}
       ai_digest: ${{ steps.digests.outputs.ai }}
+      postgres_digest: ${{ steps.digests.outputs.postgres }}
 
     steps:
       # Which build ships. On a merge commit, its second parent: the PR head,
@@ -293,6 +294,11 @@ jobs:
       # The AI: a build older than the service has no trajetto-ai image, and
       # the AI stays where it is. GHCR not answering is not "no image":
       # ghcr.sh fails the step.
+      #
+      # The Database's image of the same commit (its infra/postgres, by the
+      # `src-<tree>` staging published): only what `trajetto-postgres:stable`
+      # will point at, as a reference. Nothing deploys the Database; a commit
+      # older than the image, or a tree never published, has none.
       - name: Read the digests to promote
         id: digests
         env:
@@ -324,11 +330,21 @@ jobs:
             echo "::notice::${IMAGE_TAG} é anterior à imagem de migração (trajetto-api-migrate): a produção já aplicou todas as migrations desse build, e a etapa de release não roda."
           fi
           ai=$(bash .github/scripts/ghcr.sh digest "ghcr.io/trajetto-organization/trajetto-ai:${IMAGE_TAG}")
+          postgres=""
+          if commit=$(git rev-parse --verify --quiet "${IMAGE_TAG#*-}^{commit}") \
+            && tree=$(git rev-parse --verify --quiet "${commit}:infra/postgres"); then
+            # A reference only: GHCR not answering here never holds the promote.
+            postgres=$(bash .github/scripts/ghcr.sh digest "ghcr.io/trajetto-organization/trajetto-postgres:src-${tree}") || {
+              postgres=""
+              echo "::warning::O GHCR não respondeu sobre trajetto-postgres:src-${tree::12}: trajetto-postgres:stable fica onde está."
+            }
+          fi
           {
             echo "api=${api}"
             echo "migrate=${migrate}"
             echo "presplit=${presplit}"
             echo "ai=${ai}"
+            echo "postgres=${postgres}"
             echo "expected=${IMAGE_TAG#*-}"
           } >> "$GITHUB_OUTPUT"
           {
@@ -336,6 +352,7 @@ jobs:
             echo "trajetto-api@${api}"
             echo "trajetto-api-migrate@${migrate:-(anterior à imagem de migração)}"
             echo "trajetto-ai@${ai:-(anterior ao serviço de IA)}"
+            echo "trajetto-postgres@${postgres:-(nenhuma para este commit)} (só referência: a troca do Database é do dono)"
           } >> "$GITHUB_STEP_SUMMARY"
 
   # Required reviewers on this environment (Settings → Environments →
@@ -401,6 +418,24 @@ jobs:
           deploy-ssh-user: ${{ secrets.DEPLOY_SSH_USER }}
           deploy-verify-ssh-key: ${{ secrets.DEPLOY_VERIFY_SSH_KEY }}
           deploy-ssh-known-hosts: ${{ secrets.DEPLOY_SSH_KNOWN_HOSTS }}
+
+      # `stable` of the Database's image follows the promoted build, as a
+      # reference only: what production's Database should run with this
+      # API. Nothing is deployed; the owner swaps the Database by digest.
+      # After the deploy, and never failing it: GHCR not answering here
+      # leaves the old reference, with a warning.
+      - name: Move the Postgres reference tag
+        if: needs.evidence.outputs.postgres_digest != ''
+        env:
+          DIGEST: ${{ needs.evidence.outputs.postgres_digest }}
+        run: |
+          if bash .github/scripts/ghcr.sh tag \
+            ghcr.io/trajetto-organization/trajetto-postgres:stable \
+            "ghcr.io/trajetto-organization/trajetto-postgres@${DIGEST}"; then
+            echo "trajetto-postgres:stable → ${DIGEST} (só referência; a troca do Database é ação do dono)." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "::warning::O GHCR não moveu trajetto-postgres:stable para ${DIGEST}: a referência ficou na anterior. A produção não muda por isso."
+          fi
 
   # After the promote, never before: the release (tag, CHANGELOG, GitHub
   # Release) is the only irreversible step, and it announces a version that

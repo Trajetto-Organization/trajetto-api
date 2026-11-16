@@ -9,6 +9,10 @@ name: Staging
 #              release image (migrations) and the AI image are reused, not
 #              rebuilt, when their source is the same as in an image already
 #              built; each image runs (smoke test) before it is pushed
+#           ─▶ (only for a new infra/postgres) the Database's image,
+#              trajetto-postgres: `src-<tree>` and `sha-<7>`, scanned, its
+#              digest in the summary; never deployed here — the owner swaps
+#              the Database by that digest
 #           ─▶ Image scan (Trivy, by digest)
 #           ─▶ Deploy (the `staging` environment, .github/actions/deploy):
 #              the migrations through the Dokploy Application
@@ -95,6 +99,7 @@ jobs:
     outputs:
       docs: ${{ steps.changes.outputs.docs }}
       audit_base: ${{ steps.changes.outputs.audit_base }}
+      postgres: ${{ steps.changes.outputs.postgres }}
 
     steps:
       # The history the comparison walks (commits and trees) and the scripts.
@@ -173,6 +178,7 @@ jobs:
       e2e: true
       force_ai: ${{ inputs.force_ai_build == true }}
       audit_base: ${{ needs.changes.outputs.audit_base }}
+      postgres: ${{ needs.changes.outputs.postgres != 'false' }}
     secrets:
       CLIENT_REPOS_READ_TOKEN: ${{ secrets.CLIENT_REPOS_READ_TOKEN }}
 
@@ -244,6 +250,11 @@ jobs:
       api_digest: ${{ steps.build.outputs.digest }}
       migrate_digest: ${{ steps.build-migrate.outputs.digest || steps.migrate-source.outputs.digest }}
       ai_digest: ${{ steps.build-ai.outputs.digest || steps.ai-source.outputs.digest }}
+      # The Database's image is never deployed here: built (and scanned)
+      # only for a new infra/postgres, its digest is in the summary for the
+      # owner's swap.
+      postgres_digest: ${{ steps.build-postgres.outputs.digest || steps.postgres-source.outputs.digest }}
+      postgres_built: ${{ steps.build-postgres.outputs.digest != '' }}
 
     steps:
       - name: Check out the repository
@@ -745,17 +756,143 @@ jobs:
             "ghcr.io/trajetto-organization/trajetto-ai:sha-${GITHUB_SHA::7}" \
             "ghcr.io/trajetto-organization/trajetto-ai@${DIGEST}"
 
+      # The Database's image (infra/postgres, plano-escala F1-03), published
+      # only for a source GHCR has no image of yet, and only after the
+      # `Postgres image` job tested that very tree (changes.sh said so:
+      # `postgres` true). Tags, lean on purpose (GHCR's storage is counted):
+      # `src-<tree>`, the key, and `sha-<7>` of the commit that built it;
+      # a commit that leaves infra/postgres alone adds no tag at all. No step
+      # here or in the deploy touches the Database: the owner swaps its
+      # image by the digest of the summary (docs/runbooks, F1-O2/F1-O3a).
+      #
+      # GHCR not answering never stops the API's road for an image nobody
+      # deploys: the lookup says so, nothing is built, and the next push
+      # tries again.
+      - name: Look up the Postgres image for this source
+        id: postgres-source
+        env:
+          TESTED: ${{ needs.changes.outputs.postgres }}
+        run: |
+          tree=$(git rev-parse HEAD:infra/postgres)
+          echo "tree=${tree}" >> "$GITHUB_OUTPUT"
+          status=0
+          digest=$(bash .github/scripts/ghcr.sh digest "ghcr.io/trajetto-organization/trajetto-postgres:src-${tree}") || status=$?
+          if [ "$status" -ne 0 ]; then
+            echo "build=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::O GHCR não respondeu sobre trajetto-postgres:src-${tree::12}: a imagem do Postgres não foi publicada neste run; o próximo push tenta de novo. Nada é implantado no Database pela CI."
+          elif [ -n "$digest" ]; then
+            echo "build=false" >> "$GITHUB_OUTPUT"
+            echo "digest=${digest}" >> "$GITHUB_OUTPUT"
+            echo "trajetto-postgres: infra/postgres igual ao de src-${tree::12}; nada a publicar (${digest})." >> "$GITHUB_STEP_SUMMARY"
+          elif [ "$TESTED" = "false" ]; then
+            # The Changes job saw an image this lookup does not: never
+            # publish a tree the Postgres image job did not test.
+            echo "build=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::trajetto-postgres:src-${tree::12} sumiu do GHCR depois do Changes, e o job Postgres image não testou esta fonte: nada publicado. Rode o pipeline de novo."
+          else
+            echo "build=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Extract metadata (postgres)
+        id: meta-postgres
+        if: steps.postgres-source.outputs.build == 'true'
+        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5.10.0
+        with:
+          images: ghcr.io/trajetto-organization/trajetto-postgres
+          flavor: latest=false
+          tags: |
+            type=sha,prefix=sha-
+            type=raw,value=src-${{ steps.postgres-source.outputs.tree }}
+
+      # Into the runner's Docker for the smoke test, as the other images;
+      # the push below gets the same build back from the cache.
+      - name: Build the Postgres image for the smoke test
+        if: steps.postgres-source.outputs.build == 'true'
+        uses: docker/build-push-action@ca052bb54ab0790a636c9b5f226502c73d547a25 # v5.4.0
+        with:
+          context: ./infra/postgres
+          push: false
+          load: true
+          tags: trajetto-postgres:smoke
+          labels: ${{ steps.meta-postgres.outputs.labels }}
+          cache-from: |
+            type=gha,scope=postgres
+            type=gha,scope=postgres-test
+          build-args: |
+            GIT_SHA=${{ github.sha }}
+
+      # Started as the staging Database will be (its cap and
+      # POSTGRES_MEMORY_LIMIT_MB=576), with no network: the parameters it
+      # derives, archiving off without PITR_ARCHIVE, and this commit in
+      # trajetto.image_revision. Its own tests and the S3 proof already ran
+      # in the Postgres image job.
+      - name: Smoke test the Postgres image
+        if: steps.postgres-source.outputs.build == 'true'
+        env:
+          IMAGE: trajetto-postgres:smoke
+        run: |
+          password=$(openssl rand -hex 24)
+          cid=$(docker run -d --network none --memory 603979776 \
+            -e POSTGRES_USER=trajetto -e POSTGRES_DB=trajetto \
+            -e POSTGRES_PASSWORD="$password" -e POSTGRES_MEMORY_LIMIT_MB=576 "$IMAGE")
+          trap 'docker rm -f "$cid" > /dev/null 2>&1 || true' EXIT
+          fail() {
+            echo "::error::Smoke test da imagem trajetto-postgres: $1. Nada foi publicado; a API segue o caminho dela."
+            docker logs "$cid" 2>&1 | tail -n 60 || true
+            exit 1
+          }
+          ready=""
+          for _ in $(seq 1 90); do
+            if [ "$(docker logs "$cid" 2>&1 | grep -c 'ready to accept connections')" -ge 2 ] \
+              && docker exec "$cid" pg_isready -q -h /var/run/postgresql -U trajetto -d trajetto; then
+              ready=yes
+              break
+            fi
+            sleep 2
+          done
+          [ -n "$ready" ] || fail "o banco não ficou pronto"
+          show() { docker exec "$cid" psql -X -h /var/run/postgresql -U trajetto -d trajetto -Atqc "SHOW $1"; }
+          [ "$(show shared_buffers)" = 108MB ] || fail "shared_buffers $(show shared_buffers), esperado 108MB"
+          [ "$(show archive_mode)" = off ] || fail "archive_mode ligado sem PITR_ARCHIVE"
+          [ "$(show trajetto.image_revision)" = "$GITHUB_SHA" ] || fail "trajetto.image_revision não é ${GITHUB_SHA}"
+          echo "trajetto-postgres: smoke test OK (576 MiB → shared_buffers 108MB, archive_mode off, commit ${GITHUB_SHA::7})" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Build and push the Postgres image
+        id: build-postgres
+        if: steps.postgres-source.outputs.build == 'true'
+        uses: docker/build-push-action@ca052bb54ab0790a636c9b5f226502c73d547a25 # v5.4.0
+        with:
+          context: ./infra/postgres
+          push: true
+          tags: ${{ steps.meta-postgres.outputs.tags }}
+          labels: ${{ steps.meta-postgres.outputs.labels }}
+          cache-from: |
+            type=gha,scope=postgres
+            type=gha,scope=postgres-test
+          cache-to: type=gha,mode=max,scope=postgres,ignore-error=true
+          sbom: true
+          provenance: mode=max
+          build-args: |
+            GIT_SHA=${{ github.sha }}
+
       - name: Summary
         env:
           API_DIGEST: ${{ steps.build.outputs.digest }}
           MIGRATE_DIGEST: ${{ steps.build-migrate.outputs.digest || steps.migrate-source.outputs.digest }}
           AI_DIGEST: ${{ steps.build-ai.outputs.digest || steps.ai-source.outputs.digest }}
+          POSTGRES_BUILT: ${{ steps.build-postgres.outputs.digest }}
+          POSTGRES_DIGEST: ${{ steps.build-postgres.outputs.digest || steps.postgres-source.outputs.digest }}
         run: |
           {
             echo "Imagens deste commit (sha-${GITHUB_SHA::7}): trajetto-api, trajetto-api-migrate e trajetto-ai (as duas últimas construídas ou reaproveitadas)."
             echo "trajetto-api@${API_DIGEST}"
             echo "trajetto-api-migrate@${MIGRATE_DIGEST}"
             echo "trajetto-ai@${AI_DIGEST}"
+            if [ -n "$POSTGRES_BUILT" ]; then
+              echo "trajetto-postgres@${POSTGRES_DIGEST} (nova, publicada neste run). Troca no Database: ação do dono, pelo digest, com o Command e o Args vazios."
+            elif [ -n "$POSTGRES_DIGEST" ]; then
+              echo "trajetto-postgres@${POSTGRES_DIGEST} (a mesma infra/postgres de antes; nada a trocar)."
+            fi
           } >> "$GITHUB_STEP_SUMMARY"
 
   # The images the Build job just pushed, by digest, before staging runs
@@ -848,6 +985,11 @@ jobs:
           # commit ships is what gets scanned, so a reused image meets
           # today's vulnerability database too.
           AI_IMAGE: ghcr.io/trajetto-organization/trajetto-ai@${{ needs.build.outputs.ai_digest }}
+          # The Database's image, only when this run published it (a new
+          # infra/postgres). Report-only, enforced or not: no job deploys it,
+          # and its finding must not hold the API's deploy; the owner reads
+          # it next to the digest before swapping the Database.
+          DATABASE_IMAGE: ${{ needs.build.outputs.postgres_built == 'true' && format('ghcr.io/trajetto-organization/trajetto-postgres@{0}', needs.build.outputs.postgres_digest) || '' }}
           ENFORCE: ${{ vars.IMAGE_SCAN_ENFORCE == 'true' }}
           DB: ${{ steps.trivy-db.outputs.db }}
         run: |
@@ -862,7 +1004,9 @@ jobs:
           fi
           cache="$HOME/.cache/trivy"
           found=""
-          for image in "$API_IMAGE" "$MIGRATE_IMAGE" "$AI_IMAGE"; do
+          images=("$API_IMAGE" "$MIGRATE_IMAGE" "$AI_IMAGE")
+          [ -z "$DATABASE_IMAGE" ] || images+=("$DATABASE_IMAGE")
+          for image in "${images[@]}"; do
             name="${image%@*}"
             name="${name##*/}"
             status=error
@@ -895,8 +1039,13 @@ jobs:
                 echo "Trivy: ${name} sem CRITICAL corrigível." >> "$GITHUB_STEP_SUMMARY"
                 ;;
               findings)
-                found="${found} ${name}"
-                echo "Trivy: **${name} tem CRITICAL corrigível** (a tabela está no log deste passo; ${mode})." >> "$GITHUB_STEP_SUMMARY"
+                if [ "$image" = "$DATABASE_IMAGE" ]; then
+                  echo "::warning::Trivy: CRITICAL corrigível em ${name}. Só relata: nenhum job implanta essa imagem; veja antes de trocar o Database."
+                  echo "Trivy: **${name} tem CRITICAL corrigível** (a tabela está no log deste passo; só relata, a troca do Database é do dono)." >> "$GITHUB_STEP_SUMMARY"
+                else
+                  found="${found} ${name}"
+                  echo "Trivy: **${name} tem CRITICAL corrigível** (a tabela está no log deste passo; ${mode})." >> "$GITHUB_STEP_SUMMARY"
+                fi
                 ;;
               *)
                 echo "::warning::Trivy: não conseguiu varrer ${name} depois de 3 tentativas (último código ${code}): erro do Trivy ou do GHCR, não é achado."

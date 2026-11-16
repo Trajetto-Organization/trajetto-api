@@ -558,11 +558,67 @@ exit 0`,
     );
   });
 
-  it("refuses a target without a time zone", () => {
+  it("joins the repository's network when asked (the image's S3 proof); R2 needs none", () => {
+    host(["--from", "db-container", "--network=proof-net"]);
+
     expect(
-      host(["--from", "db-container", "--target=2026-12-01 05:00:00"]).status,
-    ).toBe(1);
+      box.calls("docker").find((call) => call.startsWith("docker create")),
+    ).toContain("--network proof-net");
+
+    host(["--from", "db-container"]);
+    expect(
+      box
+        .calls("docker")
+        .filter((call) => call.startsWith("docker create"))
+        .at(-1),
+    ).not.toContain("--network");
+  });
+
+  it("refuses a target without a time zone, or a network or volume that is not a name", () => {
+    for (const args of [
+      ["--target=2026-12-01 05:00:00"],
+      ["--network=net;rm"],
+      ["--volume=../x"],
+    ]) {
+      expect(host(["--from", "db-container", ...args]).status, args[0]).toBe(1);
+    }
     expect(box.calls("docker")).toEqual([]);
+  });
+});
+
+describe("the image's S3 proof (infra/postgres/test/s3-proof.sh)", () => {
+  const proof = readFileSync(
+    repoFile("infra/postgres/test/s3-proof.sh"),
+    "utf8",
+  ).replace(/\r\n/g, "\n");
+
+  it("talks to S3 as to R2: the region and the path style come from the image's own configuration", () => {
+    // Overriding them here would prove a configuration production never runs.
+    expect(proof).not.toMatch(
+      /PGBACKREST_REPO1_S3_REGION|PGBACKREST_REPO1_S3_URI_STYLE/,
+    );
+    expect(proof).toContain("--certs-dir /certs");
+  });
+
+  it("runs the drill as the Schedule Job does, with a key that can only read and list", () => {
+    expect(proof).toContain(
+      'docker exec "$DB" cat /usr/local/bin/trajetto-restore-drill \\\n  | bash -s -- --from "$DB"',
+    );
+    expect(proof).toContain('echo "PITR_DRILL_REPO1_S3_KEY=${READ_KEY}"');
+    const policy = /"Action": \[([^\]]+)\]/.exec(proof)?.[1] ?? "";
+    expect(policy).toContain("s3:GetObject");
+    expect(policy).toContain("s3:ListBucket");
+    expect(policy).not.toMatch(/Put|Delete|\*/);
+    expect(proof).toContain(
+      '[[ "$summary" == *\'"counts":{"business":2}\'* ]]',
+    );
+  });
+
+  it("leaves nothing behind: every container, the network and the volume under its prefix", () => {
+    expect(proof).toContain('docker ps -aq --filter "name=^${PREFIX}-"');
+    expect(proof).toContain('docker volume rm "$VOLUME"');
+    expect(proof).toContain('docker network rm "$NET"');
+    expect(proof).toMatch(/trap cleanup EXIT/);
   });
 });
 

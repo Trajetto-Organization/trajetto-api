@@ -35,6 +35,21 @@
 #     audit then blocks); GHCR not answering falls back to the push's
 #     `before`, with a warning.
 #
+#   postgres=true|false, postgres_tree=<hash>|
+#     whether the `Postgres image` job (validate.yml) has anything to do:
+#     the trajetto-postgres image is built from infra/postgres alone, and
+#     git names that directory's content with one hash. Every image the
+#     staging Build publishes is tagged `src-<that hash>`, only after this
+#     job passed on it; so:
+#     - staging: true unless GHCR already has `trajetto-postgres:src-<hash>`
+#       (the same files already passed and were published). GHCR not
+#       answering, or no login, is true: the job runs and asks again;
+#     - branch: true when the branch changes infra/postgres since it left
+#       staging (staging tests the rest), or with no range to compare;
+#     - false when the commit has no infra/postgres at all.
+#     A job that is not needed costs no runner at all, instead of a minute
+#     to find out.
+#
 # Environment: GITHUB_SHA, BEFORE (the push's `before`, empty on Run
 # workflow), GITHUB_OUTPUT, GITHUB_STEP_SUMMARY; STAGED_DEPTH (default 50),
 # GHCR_REPOSITORY; GHCR_LOGIN=failed when the job could not log in to GHCR
@@ -172,3 +187,53 @@ fi
 output "audit_base=${base}"
 echo "Base do audit: ${how}."
 summary "Base do audit: ${how}."
+
+# --- the Postgres image's source ---------------------------------------------
+
+postgres=false
+tree=$(git rev-parse --verify --quiet "HEAD:infra/postgres" 2> /dev/null || true)
+if [ -z "$tree" ]; then
+  pg_why="sem infra/postgres neste commit: o job Postgres image não roda"
+elif [ "$MODE" = staging ]; then
+  if [ "${GHCR_LOGIN:-}" = failed ]; then
+    postgres=true
+    pg_why="sem login no GHCR para procurar trajetto-postgres:src-${tree:0:12}: o job Postgres image roda e procura de novo"
+  else
+    status=0
+    found=$(bash "$HERE/ghcr.sh" digest "${REPOSITORY}/trajetto-postgres:src-${tree}") || status=$?
+    if [ "$status" -ne 0 ]; then
+      postgres=true
+      echo "::warning::O GHCR não respondeu sobre trajetto-postgres:src-${tree:0:12}: o job Postgres image roda e procura de novo."
+      pg_why="o GHCR não respondeu sobre trajetto-postgres:src-${tree:0:12}: o job Postgres image roda"
+    elif [ -n "$found" ]; then
+      pg_why="infra/postgres igual ao de trajetto-postgres:src-${tree:0:12}, que já passou e foi publicada: o job Postgres image não roda"
+    else
+      postgres=true
+      pg_why="infra/postgres sem imagem (src-${tree:0:12}): o job Postgres image testa, e o Build publica"
+    fi
+  fi
+else
+  fork=$(fork_point)
+  diff_status=0
+  if [ -n "$fork" ] && [ -n "$BEFORE" ]; then
+    git diff --quiet "$fork" HEAD -- infra/postgres 2> /dev/null || diff_status=$?
+  else
+    diff_status=2
+  fi
+  case "$diff_status" in
+    0) pg_why="a branch não muda infra/postgres desde a staging (${fork:0:7}): o job Postgres image não roda" ;;
+    1)
+      postgres=true
+      pg_why="a branch muda infra/postgres desde a staging (${fork:0:7}): o job Postgres image roda"
+      ;;
+    *)
+      postgres=true
+      pg_why="sem intervalo para comparar infra/postgres: o job Postgres image roda"
+      ;;
+  esac
+fi
+
+output "postgres=${postgres}"
+output "postgres_tree=${tree}"
+echo "Imagem do Postgres: ${pg_why}."
+summary "Imagem do Postgres: ${pg_why}."
