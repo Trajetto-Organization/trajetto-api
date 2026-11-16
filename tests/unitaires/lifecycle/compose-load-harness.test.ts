@@ -54,6 +54,39 @@ describe("the harness topology (LOAD-1)", () => {
     expect(harness).toMatch(/replicas: \$\{LOAD_REPLICAS:-([2-9])\}/);
   });
 
+  // plano-escala F1-04: a run measured against the stock postgres:16-alpine
+  // (shared_buffers 128MB, jit on, parallel workers) measured a database
+  // production does not run. The harness builds the very image of the
+  // servers, and caps it the way the Database is capped.
+  it("runs production's Postgres image, with all its memory derived from the cap it is given", () => {
+    const postgres = harness.slice(
+      harness.indexOf("\n  postgres:\n"),
+      harness.indexOf("\n  redis:\n"),
+    );
+
+    expect(postgres).toMatch(
+      /\n {4}build:\n {6}context: \.\.\/\.\.\/infra\/postgres\n/,
+    );
+    expect(postgres).not.toMatch(/\n {4}image:/);
+    // The same variable sets the container's limit and the wrapper's sum.
+    expect(postgres).toContain(
+      "POSTGRES_MEMORY_LIMIT_MB: ${LOAD_PG_MEMORY_MB:-2048}",
+    );
+    expect(postgres).toMatch(
+      /\n {4}deploy:\n {6}resources:\n {8}limits:\n {10}memory: \$\{LOAD_PG_MEMORY_MB:-2048\}M\n/,
+    );
+    // Only an extra flag, last, as the Database's Args: the preload and the
+    // static parameters (jit off among them) come from the image.
+    expect(postgres).toContain(
+      'command: ["postgres", "-c", "pg_stat_statements.track=all"]',
+    );
+    expect(postgres).not.toContain("shared_preload_libraries");
+    expect(postgres).not.toMatch(/PITR_ARCHIVE|PGBACKREST_/);
+    expect(read(ROOT, "infra", "postgres", "postgres.params")).toMatch(
+      /^jit=off$/m,
+    );
+  });
+
   it("takes an unready replica out of rotation by its readiness endpoint", () => {
     expect(harness).toContain(
       "loadbalancer.healthcheck.path=/health/readiness",

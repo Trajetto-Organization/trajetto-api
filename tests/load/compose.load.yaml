@@ -161,14 +161,27 @@ services:
   # The disposable database: 54321, the port tests/load/seed.ts insists on,
   # so the seed can never touch a real one. Stop trajetto-itest-pg first if
   # it holds the port (or set LOAD_PG_PORT and seed through that).
+  #
+  # Production's own image (infra/postgres, plano-escala F1-04): the same
+  # wrapper, the same static parameters (jit off, no parallel workers,
+  # pg_stat_statements preloaded) and all the memory derived from the cap,
+  # with POSTGRES_MEMORY_LIMIT_MB equal to the container's limit — 2048 MiB,
+  # production's on the single VPS (LOAD_PG_MEMORY_MB to measure another
+  # step). No PITR_ARCHIVE: archiving stays off, as the wrapper writes it.
+  # The extra flag below goes last, as the Database's Args would.
   postgres:
-    image: postgres:16-alpine
-    # pg_stat_statements loaded, for the database side of a run (README).
-    command: ["postgres", "-c", "shared_preload_libraries=pg_stat_statements", "-c", "pg_stat_statements.track=all"]
+    build:
+      context: ../../infra/postgres
+    command: ["postgres", "-c", "pg_stat_statements.track=all"]
     environment:
       POSTGRES_USER: trajetto
       POSTGRES_PASSWORD: ${LOAD_PG_PASSWORD:-trajetto-password}
       POSTGRES_DB: load_test
+      POSTGRES_MEMORY_LIMIT_MB: ${LOAD_PG_MEMORY_MB:-2048}
+    deploy:
+      resources:
+        limits:
+          memory: ${LOAD_PG_MEMORY_MB:-2048}M
     ports:
       - "127.0.0.1:${LOAD_PG_PORT:-54321}:5432"
     healthcheck:

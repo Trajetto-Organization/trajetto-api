@@ -68,6 +68,19 @@ describe("the development database (PG-08)", () => {
       /image: "?postgres:16/,
     );
   });
+
+  // plano-escala F1-04: the servers' image preloads pg_stat_statements, and
+  // the API reads its state ("ready" or "not loaded"); dev answered "not
+  // loaded" where every server answers "ready". The preload only: building
+  // that image compiles pgBackRest, which nobody needs on a laptop.
+  it("preloads pg_stat_statements as the servers' image does, without building it", () => {
+    const database = service(development, "trajetto-database");
+
+    expect(database).toContain(
+      'command: ["postgres", "-c", "shared_preload_libraries=pg_stat_statements"]',
+    );
+    expect(database).not.toMatch(/\n {4}build:/);
+  });
 });
 
 describe("the development services (DOCKER-2)", () => {
