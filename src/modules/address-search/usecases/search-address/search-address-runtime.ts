@@ -17,6 +17,10 @@ import {
   type AddressSearchStore,
 } from "@/shared/services/address-search/address-search-limits";
 import { searchPlaces } from "@/shared/services/address-search/address-search-provider";
+import {
+  ProviderQuotaRepository,
+  type IProviderQuotaRepository,
+} from "@/shared/services/provider-quota/provider-quota-repository";
 import { proofLocationConfigFromEnv } from "@/shared/services/proof-location/proof-location-service";
 
 import {
@@ -53,20 +57,22 @@ let store: AddressSearchStore = unreadableAddressSearchStore;
 let gate: Pick<GeocodingGate, "pause" | "takeSlot"> = closedGate;
 
 /**
- * Wires the search on `redis`. The keys are production's, shared with the
- * deliveries' lookups of every replica; only an E2E file passes keys of its
- * own, so another run on the same Redis never shares its slots or pauses.
+ * Wires the search on `redis`, and its day's counts on Postgres (F2-32).
+ * The keys are production's, shared with the deliveries' lookups of every
+ * replica; only an E2E file passes keys of its own, so another run on the
+ * same Redis never shares its slots or pauses.
  */
 function configureAddressSearch(
   redis: Redis,
   keys: GeocodingKeys = GEOCODING_KEYS,
+  quota: IProviderQuotaRepository = new ProviderQuotaRepository(),
 ): void {
   // Debug, not warn: during an outage every search would write a line, and
   // the connection log already says Redis is gone.
   const onError = (err: unknown) =>
     log.debug({ err }, "address search limits unreadable");
 
-  store = createRedisAddressSearchStore(redis, onError, keys);
+  store = createRedisAddressSearchStore(redis, quota, onError, keys);
   // The search's ceiling in the minute: the background paths stop sooner
   // on the same count (GEOCODING_BACKGROUND_CALLS_PER_MINUTE).
   const rates = geocodingRatesFromEnv();

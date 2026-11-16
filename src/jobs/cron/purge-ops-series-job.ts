@@ -1,5 +1,6 @@
 import { Prisma } from "@prisma/client";
 
+import database from "@/../infra/database";
 import { env } from "@/env";
 import { throwIfPartial } from "@/shared/errors/partial-run-error";
 import { logger } from "@/shared/logging/logger";
@@ -29,6 +30,11 @@ import {
  *
  * Nothing writes an old row: the series only ever insert the current
  * minute or hour, so the purge never races a writer.
+ *
+ * provider_quota_day goes too (plano-escala F2-32): a row per provider,
+ * scope and UTC day, read only for today, kept PROVIDER_QUOTA_RETENTION_DAYS
+ * for a look back at a month's consumption. A few rows a day (one per
+ * company that searched), so one DELETE, first: nothing writes a past day.
  */
 const PURGE_OPS_SERIES_JOB = "purge-ops-series";
 
@@ -43,6 +49,9 @@ const DAY_MS = 24 * 60 * 60 * 1000;
  */
 const MAX_SERIES_ROWS_PER_RUN = 1_000_000;
 
+/** Days of provider_quota_day kept: a month's look back, and some. */
+const PROVIDER_QUOTA_RETENTION_DAYS = 35;
+
 interface OpsSeriesPurgeOptions {
   now?: Date;
   deadline?: number;
@@ -55,6 +64,16 @@ async function purgeOpsSeries({
   deadline = purgeDeadline(now.getTime()),
   maxRows = MAX_SERIES_ROWS_PER_RUN,
 }: OpsSeriesPurgeOptions = {}): Promise<Record<string, BatchDeleteResult>> {
+  const quotaCutoff = new Date(
+    now.getTime() - PROVIDER_QUOTA_RETENTION_DAYS * DAY_MS,
+  )
+    .toISOString()
+    .slice(0, 10);
+
+  const providerQuotaDay = await database.$executeRaw`
+    DELETE FROM "provider_quota_day" WHERE "day" < ${quotaCutoff}::date
+  `;
+
   const snapshotCutoff = new Date(
     now.getTime() - env.PGSS_SNAPSHOT_RETENTION_DAYS * DAY_MS,
   );
@@ -78,7 +97,11 @@ async function purgeOpsSeries({
     deadline,
   });
 
-  return { pgss_snapshot: pgssSnapshot, ops_sample: opsSample };
+  return {
+    provider_quota_day: { deleted: providerQuotaDay, stoppedEarly: false },
+    pgss_snapshot: pgssSnapshot,
+    ops_sample: opsSample,
+  };
 }
 
 /** The run: both purges, the log line, then partial when rows are left. */
@@ -90,10 +113,12 @@ async function runOpsSeriesPurge(
   log.info(
     {
       deleted: {
+        provider_quota_day: results.provider_quota_day.deleted,
         pgss_snapshot: results.pgss_snapshot.deleted,
         ops_sample: results.ops_sample.deleted,
       },
       retentionDays: {
+        provider_quota_day: PROVIDER_QUOTA_RETENTION_DAYS,
         pgss_snapshot: env.PGSS_SNAPSHOT_RETENTION_DAYS,
         ops_sample: env.OPS_SAMPLE_RETENTION_DAYS,
       },
@@ -113,6 +138,7 @@ const purgeOpsSeriesJob: CronJobDefinition = {
 
 export {
   MAX_SERIES_ROWS_PER_RUN,
+  PROVIDER_QUOTA_RETENTION_DAYS,
   PURGE_OPS_SERIES_JOB,
   purgeOpsSeries,
   purgeOpsSeriesJob,

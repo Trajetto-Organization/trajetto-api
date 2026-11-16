@@ -23,6 +23,11 @@ interface GeocodingKeys {
   budget(now: Date): string;
   /** A second's window of the provider's rate (geocoding-gate.ts). */
   second(epochSecond: number): string;
+  /**
+   * A second's window of the proof's reserved rate (geocoding-gate.ts,
+   * createRedisProofGate; plano-escala F2-32).
+   */
+  proofSecond(epochSecond: number): string;
   /** The log of the gated calls of the last 60 s. */
   minute: string;
   /** The account's pause: the job's, and the search's quota and burst. */
@@ -47,6 +52,7 @@ function geocodingKeys(namespace: string): GeocodingKeys {
     // Named after the deliveries, as it was before the search shared it:
     // the old replicas and the new count in the same key.
     second: (epochSecond) => `${namespace}:deliveries:rate:${epochSecond}`,
+    proofSecond: (epochSecond) => `${namespace}:proof:rate:${epochSecond}`,
     minute: `${namespace}:provider:minute`,
     pause: `${namespace}:deliveries:paused`,
     searchPause: `${namespace}:search:paused`,

@@ -642,7 +642,8 @@ class DeliveryGeocodingService {
   }
 
   /**
-   * One provider call: the budget, the spacing, the slot, the call. The
+   * One provider call: the budget, the spacing, the slot, the day's unit,
+   * the call. The
    * spacing counts from the start of the run's last call, so a provider
    * slower to answer than the spacing is not waited for twice.
    */
@@ -662,13 +663,14 @@ class DeliveryGeocodingService {
 
     if (!(await this.slot())) return "NO_SLOT";
 
+    // Counted as it goes out, and only below the day's limit (F2-32): two
+    // replicas at the last unit never both ask. A slot taken for a call
+    // the day no longer pays for is a second's slot, not a lookup.
+    if (!(await this.budget.take(now))) return "BUDGET";
+
     run.lastCallAt = this.clock();
 
-    const outcome = await this.geocode(claim, query);
-
-    await this.budget.spend(now);
-
-    return outcome;
+    return this.geocode(claim, query);
   }
 
   /** The second's slot, waiting for the next second a few times. */

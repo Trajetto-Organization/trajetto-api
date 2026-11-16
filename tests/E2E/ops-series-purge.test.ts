@@ -76,6 +76,7 @@ async function queryidsLeft(): Promise<bigint[]> {
 beforeEach(async () => {
   await prisma.opsSample.deleteMany({});
   await prisma.pgssSnapshot.deleteMany({});
+  await prisma.providerQuotaDay.deleteMany({});
 });
 
 describe("the retention of the operation series", () => {
@@ -92,6 +93,39 @@ describe("the retention of the operation series", () => {
 
     expect(await replicasLeft()).toEqual(["recent"]);
     expect(await queryidsLeft()).toEqual([2n]);
+  });
+
+  // Plano-escala F2-32: the provider's days are read only for today; a
+  // month's look back stays, and the rest goes with the series.
+  it("purges the provider's days past 35 days and keeps the month", async () => {
+    const day = (days: number) => daysAgo(days).toISOString().slice(0, 10);
+
+    for (const [scope, days] of [
+      ["old", 36],
+      ["kept", 34],
+      ["today", 0],
+    ] as const) {
+      await prisma.providerQuotaDay.create({
+        data: {
+          provider: "geocoder",
+          scope,
+          day: new Date(`${day(days)}T00:00:00.000Z`),
+          used: 1,
+        },
+      });
+    }
+
+    const { purgeOpsSeriesJob } =
+      await import("@/jobs/cron/purge-ops-series-job");
+
+    await purgeOpsSeriesJob.handler();
+
+    const left = await prisma.providerQuotaDay.findMany({
+      select: { scope: true },
+      orderBy: { scope: "asc" },
+    });
+
+    expect(left.map((row) => row.scope)).toEqual(["kept", "today"]);
   });
 
   it("ends partial when a run stops with rows still due, after both purges", async () => {

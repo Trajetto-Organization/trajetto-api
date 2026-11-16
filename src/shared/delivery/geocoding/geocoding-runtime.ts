@@ -10,7 +10,18 @@ import { proofLocationConfigFromEnv } from "@/shared/services/proof-location/pro
 import { geocodeAddress } from "@/shared/services/proof-location/address-geocoder";
 
 import { announceSettledLookups } from "./geocoding-announcer";
-import { createRedisGeocodingBudget } from "./geocoding-budget";
+import {
+  ProviderQuotaRepository,
+  quotaDay,
+  type IProviderQuotaRepository,
+} from "@/shared/services/provider-quota/provider-quota-repository";
+
+import {
+  GEOCODER_PROVIDER,
+  GEOCODING_SCOPES,
+  countOf,
+  createGeocodingBudget,
+} from "./geocoding-budget";
 import {
   createRedisGeocodingGate,
   geocodingRatesFromEnv,
@@ -50,11 +61,16 @@ function geocodingRedis(): Redis {
 }
 
 /**
- * The account's pause and today's count in one MGET, only for a run that
- * asked nothing: the log's transition line says why. Unreadable, null —
- * the line waits for a run that can tell.
+ * The account's pause and today's count, only for a run that asked
+ * nothing: the log's transition line says why. The pause and the previous
+ * image's count in one MGET, the day's row beside it (F2-32): the count is
+ * the greater, as the budget reads it. Redis unreadable, null — the line
+ * waits for a run that can tell; the row unreadable, the key's count.
  */
-function redisReadHold(client: Pick<Redis, "mget">): ReadHold {
+function redisReadHold(
+  client: Pick<Redis, "mget">,
+  quota?: Pick<IProviderQuotaRepository, "used">,
+): ReadHold {
   return async (now) => {
     try {
       const [pause, used] = await client.mget(
@@ -62,7 +78,12 @@ function redisReadHold(client: Pick<Redis, "mget">): ReadHold {
         GEOCODING_KEYS.budget(now),
       );
       const reason = pauseReasonOf(pause);
-      const count = Number(used ?? 0);
+      const row = quota
+        ? await quota
+            .used(GEOCODER_PROVIDER, quotaDay(now), [GEOCODING_SCOPES.job])
+            .then((counts) => counts[GEOCODING_SCOPES.job] ?? 0)
+            .catch(() => 0)
+        : 0;
 
       return {
         pause: reason
@@ -72,7 +93,7 @@ function redisReadHold(client: Pick<Redis, "mget">): ReadHold {
               status: pauseStatusOf(pause),
             }
           : null,
-        used: Number.isFinite(count) ? count : null,
+        used: Math.max(countOf(used), row),
       };
     } catch {
       return null;
@@ -84,21 +105,31 @@ function deliveryGeocodingService(): DeliveryGeocodingService {
   const config = proofLocationConfigFromEnv().geocoder;
   const client = geocodingRedis();
   const repository = new DeliveryGeocodingRepository();
+  const quota = new ProviderQuotaRepository();
   const rates = geocodingRatesFromEnv();
 
   return new DeliveryGeocodingService({
     repository,
     geocode: (address, query) =>
       geocodeAddress(address, config, undefined, query),
-    budget: createRedisGeocodingBudget(
-      client,
-      env.DELIVERY_GEOCODING_DAILY_BUDGET,
-      (err) =>
+    // The day in Postgres (F2-32), and the previous image's Redis key kept
+    // in step while it may still serve (F2-36 drops it).
+    budget: createGeocodingBudget({
+      quota,
+      scope: GEOCODING_SCOPES.job,
+      limit: () => env.DELIVERY_GEOCODING_DAILY_BUDGET,
+      legacy: {
+        redis: client,
+        key: GEOCODING_KEYS.budget,
+        onError: (err) =>
+          log.debug({ err }, "geocoding budget's Redis copy unreadable"),
+      },
+      onError: (err) =>
         log.warn(
           { err },
           "geocoding budget unreadable: lookups put off to the next run",
         ),
-    ),
+    }),
     // The background paths' ceiling of the minute: the search's tail is
     // left to it (search-address-runtime.ts).
     gate: createRedisGeocodingGate(client, {
@@ -111,7 +142,7 @@ function deliveryGeocodingService(): DeliveryGeocodingService {
         ),
     }),
     announce: (settled) => announceSettledLookups(repository, settled),
-    readHold: redisReadHold(client),
+    readHold: redisReadHold(client, quota),
     options: {
       batchSize: env.DELIVERY_GEOCODING_BATCH_SIZE,
       spacingMs: spacingFor(rates.perSecond),

@@ -153,6 +153,8 @@ function everyRuleBroken(): OperationalSnapshot[] {
       },
       // The 7 days alone are the whole month's gate (U-12).
       volume: { last24h: 0, last7d: T.approvedGateMonthlyDeliveries },
+      // Past 70% of the provider's day (F2-32).
+      geocodingQuota: { usedToday: 17_501, dailyQuota: 25_000 },
     },
   ];
 }

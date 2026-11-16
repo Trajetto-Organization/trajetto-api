@@ -13,11 +13,15 @@ import {
   DeliveryGeocodingService,
   GEOCODING_RUN_DEFAULTS,
 } from "@/shared/delivery/geocoding/delivery-geocoding-service";
-import { createRedisGeocodingBudget } from "@/shared/delivery/geocoding/geocoding-budget";
+import {
+  GEOCODING_SCOPES,
+  createGeocodingBudget,
+} from "@/shared/delivery/geocoding/geocoding-budget";
 import { DeliveryGeocodingRepository } from "@/shared/delivery/geocoding/geocoding-repository";
 import type { GeocodingGate } from "@/shared/delivery/geocoding/geocoding-gate";
 import { geocodeAddress } from "@/shared/services/proof-location/address-geocoder";
 import { createPrismaClient } from "@/shared/database/database-client";
+import { ProviderQuotaRepository } from "@/shared/services/provider-quota/provider-quota-repository";
 
 import { geocodingTestKeys } from "./support/geocoding-test-keys";
 
@@ -144,6 +148,15 @@ const OPEN_GATE: GeocodingGate = {
   takeSlot: async () => true,
 };
 
+/** The job's day as the provider_quota_day row counts it. */
+async function jobDay(): Promise<number> {
+  const row = await prisma.providerQuotaDay.findFirst({
+    where: { provider: "geocoder", scope: GEOCODING_SCOPES.job },
+  });
+
+  return row?.used ?? 0;
+}
+
 /** One run of the job, against the silent provider and the shared budget. */
 function geocodingRun() {
   return new DeliveryGeocodingService({
@@ -162,12 +175,14 @@ function geocodingRun() {
         undefined,
         query,
       ),
-    budget: createRedisGeocodingBudget(
-      redis,
-      DAILY_BUDGET,
-      undefined,
-      GEOCODING.keys,
-    ),
+    // The day in Postgres (F2-32), and the previous image's Redis copy
+    // kept in step, on this run's keys.
+    budget: createGeocodingBudget({
+      quota: new ProviderQuotaRepository(),
+      scope: GEOCODING_SCOPES.job,
+      limit: () => DAILY_BUDGET,
+      legacy: { redis, key: GEOCODING.keys.budget },
+    }),
     gate: OPEN_GATE,
     // The production batch; no spacing, the provider is local.
     options: { ...GEOCODING_RUN_DEFAULTS, spacingMs: 0, slotWaitMs: 0 },
@@ -295,6 +310,8 @@ describe("a spreadsheet of 1.000 rows", () => {
       stoppedBy: "FAILURES",
     });
     expect(Number(await redis.get(GEOCODING.keys.budget(RUN_AT)))).toBe(streak);
+    // The day itself, in Postgres (F2-32).
+    expect(await jobDay()).toBe(streak);
 
     // Run after run, three more each, until the day's budget is spent.
     const runs = [first];
@@ -310,6 +327,7 @@ describe("a spreadsheet of 1.000 rows", () => {
     expect(Number(await redis.get(GEOCODING.keys.budget(RUN_AT)))).toBe(
       DAILY_BUDGET,
     );
+    expect(await jobDay()).toBe(DAILY_BUDGET);
     expect(runs.reduce((sum, run) => sum + run.failed, 0)).toBe(DAILY_BUDGET);
 
     const tried = await prisma.delivery.count({

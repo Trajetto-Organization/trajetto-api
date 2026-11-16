@@ -3998,6 +3998,7 @@ mais abaixo, é o resumo.
 | `Redis despejou` / `Redis sem teto` / `noeviction`    | o comando personalizado do Database Redis ([seção 10](#10-postgres-e-redis)): `--maxmemory 256mb --maxmemory-policy allkeys-lru`; despejo com o teto certo = memória no limite, ver `used_memory_mb` em `/health/metrics` |
 | `Verificação incompleta: métricas do banco`           | o SQLSTATE diz quem recusou (`57014` = `statement_timeout`, `42501` = permissão)                                                                                                                                          |
 | `Volume de entregas`                                  | segurar a próxima coorte da rampa; subir `APPROVED_GATE_MONTHLY_DELIVERIES` só com um relatório de portão novo em `docs/desempenho` ([runbook](./runbooks/volume-near-gate.md))                                           |
+| `Geocodificação: N consultas hoje`                    | ver o gasto do dia por escopo em `provider_quota_day` e corrigir `LOCATIONIQ_DAILY_QUOTA` ou os orçamentos pela tabela da decisão D40 ([runbook](./runbooks/geocoding-quota-high.md))                                     |
 
 Para trocar uma variável: _Environment_ da Application → **Save** →
 **Deploy** (salvar sozinho não reinicia o contêiner).

@@ -38,6 +38,7 @@ Regras, limiares e como ligar o monitor externo:
 | [redis-memory-policy](./redis-memory-policy.md)     | Redis sem teto de memória ou com noeviction              | Redis respondendo sem maxmemory ou com maxmemory-policy noeviction                            |
 | [proof-signing](./proof-signing.md)                 | Certificado do comprovante vencendo, vencido ou inválido | certificado A1 vence em 30 dias (aviso) ou 7 (crítico), venceu ou não abre                    |
 | [volume-near-gate](./volume-near-gate.md)           | Volume de entregas perto do portão aprovado              | os 7 dias projetados para o mês acima de 70% do portão aprovado, ou o dia acima do teto suave |
+| [geocoding-quota-high](./geocoding-quota-high.md)   | Consumo do dia da geocodificação perto da cota           | as consultas do dia da conta do geocodificador acima de 70% de LOCATIONIQ_DAILY_QUOTA         |
 | [collection-incomplete](./collection-incomplete.md) | Verificação incompleta                                   | uma parte do estado da operação não pôde ser lida                                             |
 
 ## Operação

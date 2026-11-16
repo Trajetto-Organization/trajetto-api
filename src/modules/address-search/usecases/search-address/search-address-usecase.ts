@@ -44,7 +44,8 @@ import type { Viewbox } from "../../schemas/address-search-schemas";
  *    (geocoding-gate.ts: a call a second, 50 in any 60 s, the last ten of
  *    them the search's), waited for a little and never once the person
  *    gave up;
- * 5. the call, counted in both days as it goes out;
+ * 5. the call, counted in both days as it goes out (taken in Postgres,
+ *    both or neither, only below the limits);
  * 6. the ranking (address-search-ranking.ts), and the cache.
  *
  * A refusal (the key, the URL) pauses the search alone for 15 min, never
@@ -461,8 +462,32 @@ class SearchAddressUseCase {
     }
 
     // Counted as the call goes out, whatever comes back: the provider
-    // counts it too.
-    await this.deps.store.spend(request.businessId, now);
+    // counts it too. Taken, not added (F2-32): two searches at the last
+    // unit of the day never both go out.
+    const taken = await this.deps.store.take(request.businessId, now, {
+      platform: settings.dailyBudget,
+      business: settings.businessDailyLimit,
+    });
+
+    if (taken === null) {
+      return {
+        result: {
+          kind: "UNAVAILABLE",
+          reason: "LIMITS_UNREADABLE",
+          retryAfterSeconds: 30,
+        },
+      };
+    }
+
+    if (taken !== "OK") {
+      return {
+        result: {
+          kind: "DAILY_LIMIT",
+          scope: taken,
+          retryAfterSeconds: midnight,
+        },
+      };
+    }
 
     const answer = await this.deps.provider(
       settings.provider,

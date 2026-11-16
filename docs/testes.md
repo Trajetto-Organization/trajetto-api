@@ -314,14 +314,15 @@ e as apaga no fim com `clear`:
 - **roda o portão**: `address-search-http`, pela busca
   (`configureAddressSearch(redis, keys)` depois do `import("@/http")`, numa
   conexão de `readyRequestPathRedis()`, do mesmo tipo da `http.ts`), e
-  `geocoding-gate-redis`, direto em `createRedisGeocodingGate` e
-  `createRedisAddressSearchStore`;
+  `geocoding-gate-redis`, direto em `createRedisGeocodingGate`,
+  `createRedisProofGate` e `createRedisAddressSearchStore`;
 - **grava a pausa e lê a pausa e o orçamento do dia**:
   `delivery-geocoding-routes-http`, pela `geocoding-hold`
   (`createRedisGeocodingHold(redis, teto, keys)`, entregue a
   `configureGeocodingHold` depois do `import("@/http")`);
-- **gasta o orçamento do job**: `import-geocoding-volume`
-  (`createRedisGeocodingBudget(redis, teto, undefined, keys)`).
+- **gasta o orçamento do job**: `import-geocoding-volume` e
+  `provider-quota-contract` (`createGeocodingBudget` com a chave da
+  imagem anterior em `keys.budget`; o dia mesmo fica no banco do arquivo).
 
 Num E2E, nunca grave nem apague uma chave de produção.
 `delivery/geocoding-keys.test.ts` prova que a produção continua nas chaves

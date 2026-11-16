@@ -9,6 +9,7 @@ import {
   GEOCODING_BACKGROUND_CALLS_PER_MINUTE_DEFAULT,
   GEOCODING_CALLS_PER_MINUTE_DEFAULT,
   GEOCODING_CALLS_PER_SECOND_DEFAULT,
+  GEOCODING_PROOF_RESERVED_PER_SECOND_DEFAULT,
 } from "./geocoding-rules";
 
 /**
@@ -34,6 +35,13 @@ import {
  *   background paths stop sooner), shared by everybody — the job, the
  *   lookup after a commit and the search. The job's spacing only spaced
  *   one replica's run.
+ * - The proof's slot (createRedisProofGate, plano-escala F2-32): the
+ *   proof's reverse lookup shares the key and the account, and counted
+ *   nowhere, so a busy job could take the second it needed and the proof
+ *   print without its address. It has a second of its own,
+ *   GEOCODING_PROOF_RESERVED_PER_SECOND calls that nothing else takes,
+ *   and enters the same minute's log, so the job and the search, which
+ *   count that log, yield to it.
  */
 interface GeocodingGate {
   /** Whether lookups are paused; true when Redis does not answer. */
@@ -160,6 +168,43 @@ function pauseStatusOf(value: string | null | undefined): number | null {
 const SLOT_WINDOW_SECONDS = 2;
 
 /**
+ * The proof's slot, in one script: no call while the account's quota or a
+ * burst holds every path (the provider would answer 429, and the proof
+ * would wait 24 h to ask again); then a slot of the proof's own second,
+ * armed like the other's; and the call enters the shared minute's log
+ * without a ceiling of its own there — its second already bounds it, and
+ * the job and the search count it.
+ *
+ * KEYS: the proof's second, the minute's log, the account's pause. ARGV:
+ * the proof's ceiling a second, the second's TTL (s), now (ms), the minute
+ * (ms), the call's member. Answers 1 (a slot), 0 (none this second) or -1
+ * (paused).
+ */
+const TAKE_PROOF_SLOT = [
+  "local pause = redis.call('GET', KEYS[3])",
+  "if pause then",
+  "  local reason = string.match(pause, '^(%S+)')",
+  "  if reason == 'QUOTA' or reason == 'BURST' then",
+  "    return -1",
+  "  end",
+  "end",
+  "local second = tonumber(redis.call('GET', KEYS[1]) or '0')",
+  "if second >= tonumber(ARGV[1]) then",
+  "  return 0",
+  "end",
+  "local now = tonumber(ARGV[3])",
+  "local window = tonumber(ARGV[4])",
+  "redis.call('INCR', KEYS[1])",
+  "if redis.call('PTTL', KEYS[1]) == -1 then",
+  "  redis.call('EXPIRE', KEYS[1], ARGV[2])",
+  "end",
+  "redis.call('ZREMRANGEBYSCORE', KEYS[2], '-inf', now - window)",
+  "redis.call('ZADD', KEYS[2], now, ARGV[5])",
+  "redis.call('PEXPIRE', KEYS[2], window)",
+  "return 1",
+].join("\n");
+
+/**
  * A slot in the second AND the last 60 s, or in neither, in one script: a
  * call refused for the minute must not spend the second's slot, and a
  * background call refused at its ceiling must not enter the minute's log,
@@ -284,8 +329,65 @@ function createRedisGeocodingGate(
   };
 }
 
+/** The proof's answer: a slot, none this second, or the account paused. */
+type ProofSlot = "OK" | "BUSY" | "PAUSED";
+
+/** The proof's reserved lane of the provider's rate (F2-32). */
+interface ProofGate {
+  /** A slot of the proof's own second; BUSY when Redis does not answer. */
+  takeProofSlot(): Promise<ProofSlot>;
+}
+
+function createRedisProofGate(
+  redis: Pick<Redis, "eval">,
+  {
+    perSecond = GEOCODING_PROOF_RESERVED_PER_SECOND_DEFAULT,
+    clock = () => Date.now(),
+    onError = () => undefined,
+    keys = GEOCODING_KEYS,
+  }: {
+    perSecond?: number;
+    clock?: () => number;
+    onError?: (err: unknown) => void;
+    /** Production's unless a test runs the gate on keys of its own. */
+    keys?: GeocodingKeys;
+  } = {},
+): ProofGate {
+  return {
+    async takeProofSlot() {
+      try {
+        const now = clock();
+        const answer = Number(
+          await redis.eval(
+            TAKE_PROOF_SLOT,
+            3,
+            keys.proofSecond(Math.floor(now / 1000)),
+            keys.minute,
+            keys.pause,
+            perSecond,
+            SLOT_WINDOW_SECONDS,
+            now,
+            MINUTE_MS,
+            `${now}:proof:${randomUUID()}`,
+          ),
+        );
+
+        if (answer === 1) return "OK";
+
+        return answer === -1 ? "PAUSED" : "BUSY";
+      } catch (err) {
+        onError(err);
+
+        return "BUSY";
+      }
+    },
+  };
+}
+
 export {
   EXTEND_PAUSE,
+  TAKE_PROOF_SLOT,
+  createRedisProofGate,
   GEOCODING_BACKGROUND_CALLS_PER_MINUTE,
   GEOCODING_CALLS_PER_MINUTE,
   GEOCODING_CALLS_PER_SECOND,
@@ -298,4 +400,10 @@ export {
   pauseStatusOf,
   pauseValue,
 };
-export type { GeocodingGate, GeocodingPauseReason, GeocodingRates };
+export type {
+  GeocodingGate,
+  GeocodingPauseReason,
+  GeocodingRates,
+  ProofGate,
+  ProofSlot,
+};

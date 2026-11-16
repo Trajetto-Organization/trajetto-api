@@ -225,17 +225,21 @@ describe("the GPS address", () => {
       };
     };
 
-    const location = new ProofLocationService({
-      geocoder: {
-        url: "https://geo.example",
-        key: undefined,
-        keyParam: "key",
-        userAgent: "t",
-        timeoutMs: 1000,
+    const location = new ProofLocationService(
+      {
+        geocoder: {
+          url: "https://geo.example",
+          key: undefined,
+          keyParam: "key",
+          userAgent: "t",
+          timeoutMs: 1000,
+        },
+        map: { template: undefined, attribution: undefined, timeoutMs: 100 },
+        fetcher: fetcher as never,
       },
-      map: { template: undefined, attribution: undefined, timeoutMs: 100 },
-      fetcher: fetcher as never,
-    });
+      // The proof's lane admits every lookup (F2-32).
+      { admit: async () => true },
+    );
 
     return { calls, location };
   }

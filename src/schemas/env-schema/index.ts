@@ -10,8 +10,11 @@ import {
   GEOCODING_BATCH_SIZE_DEFAULT,
   GEOCODING_CALLS_PER_MINUTE_DEFAULT,
   GEOCODING_CALLS_PER_SECOND_DEFAULT,
+  GEOCODING_PROOF_RESERVED_PER_SECOND_DEFAULT,
   GEOCODING_RUN_BUDGET_DEFAULT_MS,
   GEOCODING_RUN_BUDGET_MAX_MS,
+  PROOF_REVERSE_DAILY_BUDGET_DEFAULT,
+  geocodingPlanProblems,
 } from "@/shared/delivery/geocoding/geocoding-rules";
 import { isPublicOsmTemplate, isTileTemplate } from "@/shared/map/map-tiles";
 import {
@@ -434,6 +437,57 @@ const envSchema = z
         .min(1_000)
         .max(GEOCODING_RUN_BUDGET_MAX_MS)
         .default(GEOCODING_RUN_BUDGET_DEFAULT_MS),
+    ),
+
+    /**
+     * The proof's reverse lookup on the geocoder's account (plano-escala
+     * F2-32; decision D40). It counted nowhere and could lose its second to
+     * a spreadsheet's job, and a 429 left the receipt without the GPS
+     * address for a day:
+     *
+     * - RESERVED_PER_SECOND: calls a second only the proof takes (the free
+     *   tier's second call, which it had to itself), beside
+     *   GEOCODING_CALLS_PER_SECOND;
+     * - PROOF_REVERSE_DAILY_BUDGET: its lookups a UTC day; 0 switches the
+     *   lookup off (the receipt prints the delivery's address, labelled).
+     *   The default keeps the free tier's day within 90%: job 2,000,
+     *   search 1,000 and proofs 1,500 of 5,000.
+     */
+    GEOCODING_PROOF_RESERVED_PER_SECOND: z.preprocess(
+      (value) => (value === "" ? undefined : value),
+      z.coerce
+        .number()
+        .int()
+        .min(1)
+        .max(1_000)
+        .default(GEOCODING_PROOF_RESERVED_PER_SECOND_DEFAULT),
+    ),
+    PROOF_REVERSE_DAILY_BUDGET: z.preprocess(
+      (value) => (value === "" ? undefined : value),
+      z.coerce
+        .number()
+        .int()
+        .min(0)
+        .max(1_000_000)
+        .default(PROOF_REVERSE_DAILY_BUDGET_DEFAULT),
+    ),
+
+    /**
+     * The LocationIQ plan the account has (decision D40), when the owner
+     * writes it down: its calls a second and its lookups a UTC day. The
+     * boot then checks that the rates and the budgets the geocoder may
+     * spend stay within 90% of them, and the ops heartbeat alerts
+     * (geocoding-quota-high) when today's lookups pass 70% of the day.
+     * Unset, nothing is checked and nothing alerts (the free tier's 2/s
+     * cannot keep a 10% margin with whole calls).
+     */
+    LOCATIONIQ_RATE_PER_SECOND: z.preprocess(
+      (value) => (value === "" ? undefined : value),
+      z.coerce.number().int().min(1).max(10_000).optional(),
+    ),
+    LOCATIONIQ_DAILY_QUOTA: z.preprocess(
+      (value) => (value === "" ? undefined : value),
+      z.coerce.number().int().min(1).max(100_000_000).optional(),
     ),
 
     /**
@@ -1006,6 +1060,18 @@ const envSchema = z
         path: ["GEOCODING_BACKGROUND_CALLS_PER_MINUTE"],
         message:
           "GEOCODING_BACKGROUND_CALLS_PER_MINUTE não pode passar de GEOCODING_CALLS_PER_MINUTE: o fim do minuto é da busca de endereço do painel.",
+      });
+    }
+
+    // The geocoder's share of the provider's plan (F2-32; decision D40):
+    // within 90% of it, so a burst of the proofs or a day that ends late
+    // still meets no 429. Integers on both sides: 0.9 is not exact in a
+    // double, and 18 calls of a plan of 20 must pass.
+    for (const problem of geocodingPlanProblems(env)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: [problem.path],
+        message: problem.message,
       });
     }
 

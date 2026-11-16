@@ -12,10 +12,19 @@ import {
   type GeocodingPauseReason,
 } from "@/shared/delivery/geocoding/geocoding-gate";
 import {
+  GEOCODER_PROVIDER,
+  GEOCODING_SCOPES,
+  countOf,
+  mirror,
+} from "@/shared/delivery/geocoding/geocoding-budget";
+import {
   GEOCODING_KEYS,
   type GeocodingKeys,
 } from "@/shared/delivery/geocoding/geocoding-keys";
-import { countInFixedWindow } from "@/shared/services/fixed-window-counter";
+import {
+  quotaDay,
+  type IProviderQuotaRepository,
+} from "@/shared/services/provider-quota/provider-quota-repository";
 import {
   isSealed,
   openSecret,
@@ -36,7 +45,12 @@ import type { RankedSearch } from "./address-search-ranking";
  *   ("Rua Epitácio Pessoa, 120") are the address typed, near enough. A hit
  *   spends nothing. Unreadable, it is a miss; unwritable, it is skipped.
  * - The counts fail CLOSED, as the job's budget does (geocoding-budget.ts):
- *   unreadable, nothing is asked. They are spent only when a call goes out.
+ *   unreadable, nothing is asked. Since plano-escala F2-32 they live in
+ *   Postgres (provider_quota_day: "address-search" for the platform,
+ *   "address-search:<businessId>" for each company), taken together, both
+ *   or neither, only below their limits, as the call goes out. During the
+ *   rolling deploy the previous image's Redis counts are read and written
+ *   in step (the GREATEST of both), as the job's budget does.
  * - The search's pause holds only the search. A refusal of its endpoint (a
  *   key without the autocomplete, a URL off by a segment) says nothing
  *   about the deliveries' lookups, which call another endpoint and keep
@@ -84,11 +98,20 @@ interface AddressSearchStore {
     seconds: number,
   ): Promise<void>;
 
-  /** The pauses and today's counts in one read; null when unreadable. */
+  /** The pauses and today's counts; null when unreadable. */
   standing(businessId: string, now: Date): Promise<SearchStanding | null>;
 
-  /** One call made: the platform's and the company's day. */
-  spend(businessId: string, now: Date): Promise<void>;
+  /**
+   * One call: a unit of the platform's day and of the company's, both or
+   * neither, only below their limits. OK, or the day that is spent
+   * (the platform's checked first); null when the counts are unreadable
+   * (nothing is asked then).
+   */
+  take(
+    businessId: string,
+    now: Date,
+    limits: { platform: number; business: number },
+  ): Promise<"OK" | "PLATFORM" | "BUSINESS" | null>;
 
   /**
    * Pauses the search alone until `until`; never shortens a longer one.
@@ -185,9 +208,16 @@ function searchPauseOf(
 
 function createRedisAddressSearchStore(
   redis: Pick<Redis, "eval" | "get" | "mget" | "set">,
+  quota: IProviderQuotaRepository,
   onError: (err: unknown) => void = () => undefined,
   keys: GeocodingKeys = GEOCODING_KEYS,
 ): AddressSearchStore {
+  const scopes = (businessId: string) =>
+    [
+      GEOCODING_SCOPES.search,
+      GEOCODING_SCOPES.searchBusiness(businessId),
+    ] as const;
+
   return {
     async cached(businessId, digest) {
       try {
@@ -218,12 +248,21 @@ function createRedisAddressSearchStore(
 
     async standing(businessId, now) {
       try {
-        const [shared, own, platform, business] = await redis.mget(
-          keys.pause,
-          keys.searchPause,
-          keys.searchDay(now),
-          keys.searchBusinessDay(now, businessId),
-        );
+        const [platformScope, businessScope] = scopes(businessId);
+        // The day's rows, and beside them the pauses and the previous
+        // image's counts in one MGET: the counts are the greater of both.
+        const [[shared, own, platform, business], rows] = await Promise.all([
+          redis.mget(
+            keys.pause,
+            keys.searchPause,
+            keys.searchDay(now),
+            keys.searchBusinessDay(now, businessId),
+          ),
+          quota.used(GEOCODER_PROVIDER, quotaDay(now), [
+            platformScope,
+            businessScope,
+          ]),
+        ]);
 
         // A refusal of the deliveries' lookups is theirs: their endpoint,
         // not this one.
@@ -239,8 +278,8 @@ function createRedisAddressSearchStore(
                 }
               : null,
           searchPause: searchPauseOf(own, now),
-          platformUsed: count(platform),
-          businessUsed: count(business),
+          platformUsed: Math.max(count(platform), rows[platformScope] ?? 0),
+          businessUsed: Math.max(count(business), rows[businessScope] ?? 0),
         };
       } catch (err) {
         onError(err);
@@ -249,19 +288,49 @@ function createRedisAddressSearchStore(
       }
     },
 
-    async spend(businessId, now) {
+    async take(businessId, now, limits) {
+      const [platformScope, businessScope] = scopes(businessId);
+      const platformKey = keys.searchDay(now);
+      const businessKey = keys.searchBusinessDay(now, businessId);
+      // The previous image's counts are only a floor: unreadable, 0.
+      const legacy = { redis, onError };
+      const [platformFloor, businessFloor] = await redis
+        .mget(platformKey, businessKey)
+        .then((values) => values.map(countOf))
+        .catch((err) => {
+          onError(err);
+
+          return [0, 0];
+        });
+
       try {
-        await Promise.all([
-          countInFixedWindow(redis, keys.searchDay(now), DAY_WINDOW_SECONDS),
-          countInFixedWindow(
-            redis,
-            keys.searchBusinessDay(now, businessId),
-            DAY_WINDOW_SECONDS,
-          ),
+        const taken = await quota.take(GEOCODER_PROVIDER, quotaDay(now), [
+          {
+            scope: platformScope,
+            limit: limits.platform,
+            floor: platformFloor,
+          },
+          {
+            scope: businessScope,
+            limit: limits.business,
+            floor: businessFloor,
+          },
         ]);
+
+        if (!taken.granted) {
+          return taken.refused === platformScope ? "PLATFORM" : "BUSINESS";
+        }
+
+        await Promise.all([
+          mirror({ ...legacy, key: () => platformKey }, now, taken.used[0]),
+          mirror({ ...legacy, key: () => businessKey }, now, taken.used[1]),
+        ]);
+
+        return "OK";
       } catch (err) {
-        // The call went out: a count lost costs a search or two too many.
         onError(err);
+
+        return null;
       }
     },
 
@@ -290,7 +359,7 @@ const unreadableAddressSearchStore: AddressSearchStore = {
   cached: async () => null,
   remember: async () => undefined,
   standing: async () => null,
-  spend: async () => undefined,
+  take: async () => null,
   pauseSearch: async () => undefined,
 };
 

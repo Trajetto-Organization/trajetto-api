@@ -67,6 +67,73 @@ const GEOCODING_BATCH_SIZE_DEFAULT = 20;
 const GEOCODING_RUN_BUDGET_DEFAULT_MS = 50_000;
 const GEOCODING_RUN_BUDGET_MAX_MS = 55_000;
 
+/**
+ * The proof's reverse lookup (plano-escala F2-32): one call a second of its
+ * own (GEOCODING_PROOF_RESERVED_PER_SECOND), the free tier's second call,
+ * which it had to itself before it was counted; and 1,500 lookups a UTC
+ * day (PROOF_REVERSE_DAILY_BUDGET), so the free tier's 5,000 keep a 10%
+ * margin with the job's 2,000 and the search's 1,000.
+ */
+const GEOCODING_PROOF_RESERVED_PER_SECOND_DEFAULT = 1;
+const PROOF_REVERSE_DAILY_BUDGET_DEFAULT = 1_500;
+
+/** What the geocoder may spend of the provider's plan, and the plan. */
+interface GeocodingPlanSettings {
+  GEOCODING_CALLS_PER_SECOND: number;
+  GEOCODING_PROOF_RESERVED_PER_SECOND: number;
+  DELIVERY_GEOCODING_DAILY_BUDGET: number;
+  ADDRESS_SEARCH_DAILY_BUDGET: number;
+  PROOF_REVERSE_DAILY_BUDGET: number;
+  LOCATIONIQ_RATE_PER_SECOND?: number;
+  LOCATIONIQ_DAILY_QUOTA?: number;
+}
+
+/**
+ * Where the geocoder's rates and budgets pass 90% of the plan the owner
+ * wrote down (decision D40), one problem per side; none when the plan is
+ * not written. The rates a second are the gated paths' and the proof's;
+ * the day is the job's, the search's and the proof's — the same account,
+ * so a burst or a late day still meets no 429. Compared in tenths, with
+ * whole numbers: 0.9 is not exact in a double, and 18 calls of a plan of
+ * 20 must pass.
+ */
+function geocodingPlanProblems(
+  settings: GeocodingPlanSettings,
+): Array<{ path: string; message: string }> {
+  const problems: Array<{ path: string; message: string }> = [];
+  const rate = settings.LOCATIONIQ_RATE_PER_SECOND;
+  const quota = settings.LOCATIONIQ_DAILY_QUOTA;
+
+  if (rate !== undefined) {
+    const spent =
+      settings.GEOCODING_CALLS_PER_SECOND +
+      settings.GEOCODING_PROOF_RESERVED_PER_SECOND;
+
+    if (spent * 10 > rate * 9) {
+      problems.push({
+        path: "LOCATIONIQ_RATE_PER_SECOND",
+        message: `GEOCODING_CALLS_PER_SECOND + GEOCODING_PROOF_RESERVED_PER_SECOND = ${spent} passa de 90% de LOCATIONIQ_RATE_PER_SECOND (${rate}): no máximo ${Math.floor((rate * 9) / 10)} por segundo.`,
+      });
+    }
+  }
+
+  if (quota !== undefined) {
+    const spent =
+      settings.DELIVERY_GEOCODING_DAILY_BUDGET +
+      settings.ADDRESS_SEARCH_DAILY_BUDGET +
+      settings.PROOF_REVERSE_DAILY_BUDGET;
+
+    if (spent * 10 > quota * 9) {
+      problems.push({
+        path: "LOCATIONIQ_DAILY_QUOTA",
+        message: `DELIVERY_GEOCODING_DAILY_BUDGET + ADDRESS_SEARCH_DAILY_BUDGET + PROOF_REVERSE_DAILY_BUDGET = ${spent} passa de 90% de LOCATIONIQ_DAILY_QUOTA (${quota}): no máximo ${Math.floor((quota * 9) / 10)} por dia.`,
+      });
+    }
+  }
+
+  return problems;
+}
+
 export {
   GEOCODING_BACKGROUND_CALLS_PER_MINUTE_DEFAULT,
   GEOCODING_BACKOFF_CAP_MINUTES,
@@ -75,7 +142,11 @@ export {
   GEOCODING_CALLS_PER_MINUTE_DEFAULT,
   GEOCODING_CALLS_PER_SECOND_DEFAULT,
   GEOCODING_MAX_ATTEMPTS,
+  GEOCODING_PROOF_RESERVED_PER_SECOND_DEFAULT,
   GEOCODING_RUN_BUDGET_DEFAULT_MS,
   GEOCODING_RUN_BUDGET_MAX_MS,
+  PROOF_REVERSE_DAILY_BUDGET_DEFAULT,
   geocodingBackoffMinutes,
+  geocodingPlanProblems,
 };
+export type { GeocodingPlanSettings };

@@ -25,6 +25,15 @@ import {
   tileViewport,
 } from "@/shared/services/proof-location/web-mercator";
 import type { ProofDocumentSource } from "@/shared/delivery/proof-document";
+import type { GeocodingBudget } from "@/shared/delivery/geocoding/geocoding-budget";
+import type {
+  ProofGate,
+  ProofSlot,
+} from "@/shared/delivery/geocoding/geocoding-gate";
+import {
+  createProofLookupAdmission,
+  type ProofLookupAdmission,
+} from "@/shared/services/proof-location/proof-lookup-admission";
 import { env } from "@/env";
 import { envSchema } from "@/schemas/env-schema";
 import { definedEnv } from "@/schemas/env-schema/defined-env";
@@ -389,9 +398,13 @@ describe("the address cache on the proof event", () => {
     ...overrides,
   });
 
+  /** The proof's lane open: a slot and a unit for every lookup. */
+  const ADMITTED: ProofLookupAdmission = { admit: async () => true };
+
   function service(
     fetcher: GeocodeFetch,
     url: string | null = "https://geo.example",
+    admission: ProofLookupAdmission = ADMITTED,
   ) {
     const config: ProofLocationConfig = {
       geocoder: {
@@ -405,7 +418,7 @@ describe("the address cache on the proof event", () => {
       fetcher: fetcher as ProofLocationConfig["fetcher"],
     };
 
-    return new ProofLocationService(config);
+    return new ProofLocationService(config, admission);
   }
 
   const answering = (body: unknown) => {
@@ -544,6 +557,51 @@ describe("the address cache on the proof event", () => {
       expect(result).toMatchObject({ source: "PROVIDER", persist: true });
     }
   });
+
+  // Plano-escala F2-32: the lookup shared the geocoder's key and counted
+  // nowhere; it now goes out only with a slot of its reserved rate and a
+  // unit of its day, and without them the receipt prints the fallback and
+  // records nothing, so the next render asks again.
+  it("asks nothing and records nothing when the proof's lane does not admit the lookup", async () => {
+    const { calls, fetcher } = answering({ address: { road: "Rua E" } });
+    const admitted: Date[] = [];
+    const now = new Date("2026-11-16T12:00:00.000Z");
+    const location = service(fetcher, "https://geo.example", {
+      admit: async (at) => {
+        admitted.push(at);
+
+        return false;
+      },
+    });
+
+    expect(await location.resolveAddress(proof(), now)).toEqual({
+      address: null,
+      source: "UNAVAILABLE",
+      persist: false,
+    });
+    expect(calls).toEqual([]);
+    expect(admitted).toEqual([now]);
+  });
+
+  it("asks nothing in a process that never wired the proof's lane", async () => {
+    const { calls, fetcher } = answering({ address: { road: "Rua F" } });
+    const config: ProofLocationConfig = {
+      geocoder: {
+        url: "https://geo.example",
+        key: undefined,
+        keyParam: "key",
+        userAgent: "t",
+        timeoutMs: 100,
+      },
+      map: { template: undefined, attribution: undefined, timeoutMs: 100 },
+      fetcher: fetcher as ProofLocationConfig["fetcher"],
+    };
+
+    expect(
+      await new ProofLocationService(config).resolveAddress(proof()),
+    ).toMatchObject({ source: "UNAVAILABLE", persist: false });
+    expect(calls).toEqual([]);
+  });
 });
 
 describe("the providers the configuration accepts", () => {
@@ -587,5 +645,117 @@ describe("the providers the configuration accepts", () => {
         REVERSE_GEOCODER_URL: "http://nominatim.interno:8080",
       }),
     ).toContain("REVERSE_GEOCODER_URL");
+  });
+});
+
+/**
+ * The proof's lane (plano-escala F2-32; decision D40): a slot of the rate
+ * reserved to it, tried a few times a little apart, never while the
+ * account's quota or a burst holds every path; then a unit of its day.
+ */
+describe("the proof lookup's admission", () => {
+  const NOW = new Date("2026-11-16T12:00:00.000Z");
+
+  function lane(
+    slots: ProofSlot[],
+    units = Number.POSITIVE_INFINITY,
+    sharedSlots?: boolean[],
+  ) {
+    const asked: string[] = [];
+    const taken: Date[] = [];
+    const gate: ProofGate = {
+      async takeProofSlot() {
+        const slot = slots.shift() ?? "BUSY";
+
+        asked.push(slot);
+
+        return slot;
+      },
+    };
+    const budget: GeocodingBudget = {
+      remaining: async () => units - taken.length,
+      async take(now) {
+        if (taken.length >= units) return false;
+
+        taken.push(now);
+
+        return true;
+      },
+    };
+
+    const borrowed: boolean[] = [];
+    const shared = sharedSlots && {
+      async takeSlot() {
+        const slot = sharedSlots.shift() ?? false;
+
+        borrowed.push(slot);
+
+        return slot;
+      },
+    };
+
+    return {
+      asked,
+      taken,
+      borrowed,
+      admission: createProofLookupAdmission({
+        gate,
+        shared,
+        budget,
+        slotTries: 3,
+        slotWaitMs: 0,
+      }),
+    };
+  }
+
+  it("takes a slot, then a unit of the day", async () => {
+    const { admission, asked, taken } = lane(["OK"]);
+
+    expect(await admission.admit(NOW)).toBe(true);
+    expect(asked).toEqual(["OK"]);
+    expect(taken).toEqual([NOW]);
+  });
+
+  it("waits for the next second a few times, then gives up", async () => {
+    const busy = lane(["BUSY", "BUSY", "OK"]);
+
+    expect(await busy.admission.admit(NOW)).toBe(true);
+    expect(busy.asked).toEqual(["BUSY", "BUSY", "OK"]);
+
+    const full = lane(["BUSY", "BUSY", "BUSY", "OK"]);
+
+    expect(await full.admission.admit(NOW)).toBe(false);
+    expect(full.asked).toHaveLength(3);
+    expect(full.taken).toEqual([]);
+  });
+
+  it("borrows a free slot of the shared rate when its own second is full", async () => {
+    // A burst of receipts with the job idle: the shared second is free.
+    const idle = lane(["BUSY"], Number.POSITIVE_INFINITY, [true]);
+
+    expect(await idle.admission.admit(NOW)).toBe(true);
+    expect(idle.borrowed).toEqual([true]);
+    expect(idle.taken).toEqual([NOW]);
+
+    // The job saturated: nothing to borrow, the proof waits for its own.
+    const busy = lane(["BUSY", "OK"], Number.POSITIVE_INFINITY, [false]);
+
+    expect(await busy.admission.admit(NOW)).toBe(true);
+    expect(busy.borrowed).toEqual([false]);
+  });
+
+  it("never asks while the account is paused, and spends no unit", async () => {
+    const { admission, asked, taken } = lane(["PAUSED", "OK"]);
+
+    expect(await admission.admit(NOW)).toBe(false);
+    expect(asked).toEqual(["PAUSED"]);
+    expect(taken).toEqual([]);
+  });
+
+  it("asks nothing once the proof's day is spent", async () => {
+    const { admission } = lane(["OK", "OK"], 1);
+
+    expect(await admission.admit(NOW)).toBe(true);
+    expect(await admission.admit(NOW)).toBe(false);
   });
 });

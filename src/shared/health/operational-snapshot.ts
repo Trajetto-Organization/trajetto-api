@@ -3,6 +3,9 @@ import { container } from "tsyringe";
 
 import database from "@/../infra/database";
 import { RedisConnection } from "@/../infra/cache/redis-connection";
+import { env } from "@/env";
+import { GEOCODER_PROVIDER } from "@/shared/delivery/geocoding/geocoding-budget";
+import { quotaDay } from "@/shared/services/provider-quota/provider-quota-repository";
 
 import { readWebhookQueueMetrics } from "@/shared/integration/webhook-metrics";
 import {
@@ -299,6 +302,30 @@ async function collectOperationalSnapshot(
     undefined,
   );
 
+  // The geocoder's day against the plan (F2-32), only with a quota written
+  // down. The account's scopes only: a scope with a colon is a company's
+  // share of the one before it, already in its count.
+  const dailyQuota = env.LOCATIONIQ_DAILY_QUOTA;
+  const geocodingQuota =
+    dailyQuota !== undefined
+      ? await part(
+          "provider_quota_day",
+          errors,
+          async () => {
+            const [row] = await database.$queryRaw<Array<{ used: number }>>`
+              SELECT COALESCE(SUM("used"), 0)::int AS "used"
+              FROM "provider_quota_day"
+              WHERE "provider" = ${GEOCODER_PROVIDER}
+                AND "day" = ${quotaDay(now)}::date
+                AND strpos("scope", ':') = 0
+            `;
+
+            return { usedToday: Number(row?.used ?? 0), dailyQuota };
+          },
+          undefined,
+        )
+      : undefined;
+
   return {
     now,
     outboxEligibleLagSec,
@@ -317,6 +344,7 @@ async function collectOperationalSnapshot(
     connectionUsagePercent: usage,
     redisOk,
     proofSigning,
+    ...(geocodingQuota && { geocodingQuota }),
     collectionErrors: errors,
   };
 }

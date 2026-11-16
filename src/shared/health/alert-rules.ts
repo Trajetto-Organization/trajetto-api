@@ -102,8 +102,21 @@ interface OperationalSnapshot {
    */
   volume?: VolumeState;
 
+  /**
+   * The geocoder's account today (plano-escala F2-32): the lookups the
+   * day's rows count across its scopes, and the plan's daily quota
+   * (LOCATIONIQ_DAILY_QUOTA). Absent without a quota written down, or
+   * when the rows could not be read, which judges nothing.
+   */
+  geocodingQuota?: GeocodingQuotaState;
+
   /** Parts of the snapshot that could not be read; each one is a reason. */
   collectionErrors: string[];
+}
+
+interface GeocodingQuotaState {
+  usedToday: number;
+  dailyQuota: number;
 }
 
 interface ClusterDatabaseState {
@@ -237,6 +250,13 @@ const DEFAULT_ALERT_THRESHOLDS = {
    * page. Unset is no cap (infinite). Only an alert: nothing is refused.
    */
   dailyDeliverySoftCap: Number.POSITIVE_INFINITY,
+
+  /**
+   * The share of the provider's day that pages (decision D40): at 70% the
+   * owner still has the day's rest to raise the plan or lower a budget
+   * before the 429 holds every path until midnight UTC.
+   */
+  geocodingQuotaRatio: 0.7,
 } as const;
 
 type AlertThresholds = { [K in keyof typeof DEFAULT_ALERT_THRESHOLDS]: number };
@@ -299,6 +319,7 @@ const ALERT_KINDS = [
   "redis-memory-policy",
   "proof-signing",
   "volume-near-gate",
+  "geocoding-quota-high",
   "collection-incomplete",
 ] as const;
 
@@ -754,6 +775,19 @@ function collectAlerts(
     alerts.push(...volumeAlerts(snapshot.volume, thresholds));
   }
 
+  const quota = snapshot.geocodingQuota;
+
+  if (
+    quota &&
+    quota.dailyQuota > 0 &&
+    quota.usedToday > quota.dailyQuota * thresholds.geocodingQuotaRatio
+  ) {
+    alerts.push({
+      code: "geocoding-quota-high",
+      message: `Geocodificação: ${count(quota.usedToday)} consultas hoje (UTC), ${Math.round((quota.usedToday / quota.dailyQuota) * 100)}% de ${count(quota.dailyQuota)} do plano (LOCATIONIQ_DAILY_QUOTA); acima de ${Math.round(thresholds.geocodingQuotaRatio * 100)}%, o resto do dia pode acabar em 429`,
+    });
+  }
+
   const proofSigning = proofSigningReason(snapshot, thresholds);
 
   if (proofSigning) {
@@ -800,6 +834,7 @@ export type {
   ClusterDatabaseState,
   ClusterRedisState,
   CronJobState,
+  GeocodingQuotaState,
   OperationalSnapshot,
   VolumeState,
 };

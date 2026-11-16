@@ -87,6 +87,10 @@ import {
   DeliveryGeocodingRepository,
   type IDeliveryGeocodingRepository,
 } from "@/shared/delivery/geocoding/geocoding-repository";
+import {
+  ProviderQuotaRepository,
+  type IProviderQuotaRepository,
+} from "@/shared/services/provider-quota/provider-quota-repository";
 
 import { ChatRepository } from "@/modules/chat/repositories/chat-repository";
 import { IChatRepository } from "@/modules/chat/repositories/IChat-repository";
@@ -355,6 +359,13 @@ container.registerSingleton<IRouteRepository>(
 container.registerSingleton<IDeliveryGeocodingRepository>(
   "DeliveryGeocodingRepository",
   DeliveryGeocodingRepository,
+);
+
+// A provider's day per scope in Postgres (plano-escala F2-32): the
+// geocoder's budgets today, WhatsApp's per company in wave 13.
+container.registerSingleton<IProviderQuotaRepository>(
+  "ProviderQuotaRepository",
+  ProviderQuotaRepository,
 );
 
 // Separate from the route repository on purpose: a write-heavy stream

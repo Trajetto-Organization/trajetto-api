@@ -7,9 +7,15 @@ import { redisClientOptions } from "@/config/redis-client-options";
 import {
   MINUTE_MS,
   createRedisGeocodingGate,
+  createRedisProofGate,
   pauseReasonOf,
 } from "@/shared/delivery/geocoding/geocoding-gate";
+import {
+  MIRROR_TAKE,
+  WINDOW_SECONDS,
+} from "@/shared/delivery/geocoding/geocoding-budget";
 import { createRedisAddressSearchStore } from "@/shared/services/address-search/address-search-limits";
+import { InMemoryProviderQuotaRepository } from "@/shared/services/provider-quota/in-memory-provider-quota-repository";
 
 import { geocodingTestKeys } from "./support/geocoding-test-keys";
 
@@ -23,6 +29,10 @@ import { geocodingTestKeys } from "./support/geocoding-test-keys";
  * - TAKE_SLOT: one call a second, a ceiling over any 60 s (the sliding
  *   log), both or neither, and a refused try that touches nothing;
  * - EXTEND_PAUSE: a longer pause is never cut short;
+ * - TAKE_PROOF_SLOT (F2-32): the proof's reserved second, whatever the job
+ *   took, in the shared minute's log, never under the account's pause;
+ * - MIRROR_TAKE (F2-32): the previous image's copy of the day, one more
+ *   and never below the row, its window armed once;
  * - the cache's value is sealed in Redis and opens only as it was written.
  *
  * On keys of this run's own (support/geocoding-test-keys.ts), never
@@ -33,6 +43,9 @@ let redis: Redis;
 
 const GEOCODING = geocodingTestKeys();
 const keys = GEOCODING.keys;
+
+/** The proof's runs, each on keys of its own: their pauses differ. */
+const PROOF_RUNS = [geocodingTestKeys(), geocodingTestKeys()];
 
 /** Far from today, so no window of the app's could ever be these. */
 const T0 = Date.UTC(2099, 2, 14, 12, 0, 0);
@@ -59,6 +72,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await GEOCODING.clear(redis);
+  for (const run of PROOF_RUNS) await run.clear(redis);
   redis?.disconnect();
 });
 
@@ -113,6 +127,82 @@ describe("TAKE_SLOT in Redis", () => {
   });
 });
 
+describe("TAKE_PROOF_SLOT in Redis", () => {
+  it("gives the proof its reserved second with the job's second and minute full, and the job then counts it", async () => {
+    const own = PROOF_RUNS[0].keys;
+    const at = T0 + 600_000;
+    const job = (now: number, perMinute: number) =>
+      createRedisGeocodingGate(redis, {
+        keys: own,
+        perMinute,
+        perSecond: 1,
+        clock: () => now,
+      }).takeSlot();
+    const proof = (now: number) =>
+      createRedisProofGate(redis, {
+        keys: own,
+        perSecond: 1,
+        clock: () => now,
+      }).takeProofSlot();
+
+    // The job saturated: its second and its minute (one call) are taken.
+    expect(await job(at, 1)).toBe(true);
+    expect(await job(at + 100, 1)).toBe(false);
+
+    // The proof still has its own second, once.
+    expect(await proof(at + 200)).toBe("OK");
+    expect(await proof(at + 300)).toBe("BUSY");
+    expect(await redis.get(own.proofSecond(at / 1000))).toBe("1");
+
+    // Its call is in the minute's log the job reads: with two a minute,
+    // the job's next second finds the minute full.
+    expect(await redis.zcard(own.minute)).toBe(2);
+    expect(await job(at + 1_000, 2)).toBe(false);
+    expect(await proof(at + 1_000)).toBe("OK");
+  });
+
+  it("never grants while the account's quota or a burst holds every path, and grants under a refusal", async () => {
+    const own = PROOF_RUNS[1].keys;
+    const now = new Date();
+    const after = new Date(now.getTime() + 60_000);
+    const gate = createRedisGeocodingGate(redis, { keys: own });
+    const proof = createRedisProofGate(redis, { keys: own, perSecond: 1000 });
+
+    await gate.pause(after, now, "REFUSED");
+    expect(await proof.takeProofSlot()).toBe("OK");
+
+    await redis.del(own.pause);
+    await gate.pause(after, now, "BURST");
+    expect(await proof.takeProofSlot()).toBe("PAUSED");
+
+    await redis.del(own.pause);
+    await gate.pause(after, now, "QUOTA");
+    expect(await proof.takeProofSlot()).toBe("PAUSED");
+  });
+});
+
+describe("MIRROR_TAKE in Redis", () => {
+  it("adds one, never stays below the row, and arms the window once", async () => {
+    const key = keys.budget(new Date(T0));
+
+    // Evicted: the row's 5 come back, with the day's window.
+    expect(await redis.eval(MIRROR_TAKE, 1, key, 5, WINDOW_SECONDS)).toBe(5);
+    expect(await redis.get(key)).toBe("5");
+
+    const ttl = await redis.ttl(key);
+
+    expect(ttl).toBeGreaterThan(0);
+    expect(ttl).toBeLessThanOrEqual(WINDOW_SECONDS);
+
+    // The old replicas counted past the row: one more, the TTL kept.
+    await redis.set(key, "9", "KEEPTTL");
+
+    expect(await redis.eval(MIRROR_TAKE, 1, key, 6, WINDOW_SECONDS)).toBe(10);
+    expect(await redis.ttl(key)).toBeLessThanOrEqual(ttl);
+    expect(await redis.ttl(key)).toBeGreaterThan(0);
+  });
+});
+
 describe("EXTEND_PAUSE in Redis", () => {
   it("writes a longer pause and never cuts one short", async () => {
     const now = new Date();
@@ -156,7 +246,12 @@ describe("the address search's cache in Redis", () => {
   };
 
   it("keeps the suggestions sealed, and opens only what it wrote", async () => {
-    const store = createRedisAddressSearchStore(redis, undefined, keys);
+    const store = createRedisAddressSearchStore(
+      redis,
+      new InMemoryProviderQuotaRepository(),
+      undefined,
+      keys,
+    );
     const key = keys.searchCache(business, digest);
 
     await store.remember(business, digest, answer, 60);

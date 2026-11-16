@@ -16,6 +16,8 @@ import {
   pauseValue,
 } from "@/shared/delivery/geocoding/geocoding-gate";
 import { GEOCODING_KEYS } from "@/shared/delivery/geocoding/geocoding-keys";
+import { MIRROR_TAKE } from "@/shared/delivery/geocoding/geocoding-budget";
+import { InMemoryProviderQuotaRepository } from "@/shared/services/provider-quota/in-memory-provider-quota-repository";
 import {
   createRedisAddressSearchStore,
   searchPauseOf,
@@ -122,6 +124,20 @@ function fakeRedis() {
           return incr(key, Number(seconds) * 1000);
         }
 
+        // The previous image's copy of the day (geocoding-budget.ts): one
+        // more, and never below the row's count.
+        if (script === MIRROR_TAKE) {
+          const [key, floor, seconds] = rest as [string, number, number];
+          const next = Math.max(
+            incr(key, Number(seconds) * 1000),
+            Number(floor),
+          );
+
+          values.set(key, { value: String(next), ttl: values.get(key)!.ttl });
+
+          return next;
+        }
+
         throw new Error("unexpected script");
       },
     },
@@ -152,6 +168,8 @@ interface Harness {
   }>;
   values: ReturnType<typeof fakeRedis>["values"];
   answers: ProviderAnswer[];
+  /** The day's rows (F2-32): the platform's and each company's. */
+  quota: InMemoryProviderQuotaRepository;
 }
 
 function harness({
@@ -161,10 +179,12 @@ function harness({
   clock = () => NOW,
   slotClock,
   provider,
+  quota = new InMemoryProviderQuotaRepository(),
 }: {
   settings?: Partial<AddressSearchSettings>;
   answers?: ProviderAnswer[];
   redis?: ReturnType<typeof fakeRedis>;
+  quota?: InMemoryProviderQuotaRepository;
   clock?: () => Date;
   /** The gate's clock; by default each slot is a second later. */
   slotClock?: () => number;
@@ -183,7 +203,7 @@ function harness({
 
   const useCase = new SearchAddressUseCase({
     settings: () => ({ ...SETTINGS, ...settings }),
-    store: createRedisAddressSearchStore(redis.redis as never),
+    store: createRedisAddressSearchStore(redis.redis as never, quota),
     gate: createRedisGeocodingGate(redis.redis as never, {
       clock: gateClock,
       perMinute: GEOCODING_CALLS_PER_MINUTE,
@@ -200,7 +220,14 @@ function harness({
     options: { slotWaitMs: 0 },
   });
 
-  return { useCase, calls, lines, values: redis.values, answers: queue };
+  return {
+    useCase,
+    calls,
+    lines,
+    values: redis.values,
+    answers: queue,
+    quota,
+  };
 }
 
 function request(
@@ -219,7 +246,7 @@ function request(
 
 describe("the company's cache", () => {
   it("answers the same search again without the provider or the day", async () => {
-    const { useCase, calls, values } = harness();
+    const { useCase, calls, values, quota } = harness();
 
     const first = await useCase.execute(request());
     const second = await useCase.execute(request());
@@ -234,6 +261,14 @@ describe("the company's cache", () => {
       "1",
     );
     expect(values.get(GEOCODING_KEYS.searchDay(NOW))?.value).toBe("1");
+    // The day itself is in Postgres (F2-32); the keys are the previous
+    // image's copy.
+    expect(
+      await quota.used("geocoder", "2026-11-10", [
+        "address-search",
+        `address-search:${A}`,
+      ]),
+    ).toEqual({ "address-search": 1, [`address-search:${A}`]: 1 });
   });
 
   it("never serves company A's answer to company B", async () => {
@@ -390,7 +425,10 @@ describe("the day's counts", () => {
     const off = () =>
       new SearchAddressUseCase({
         settings: () => ({ ...SETTINGS, provider: null }),
-        store: createRedisAddressSearchStore(fakeRedis().redis as never),
+        store: createRedisAddressSearchStore(
+          fakeRedis().redis as never,
+          new InMemoryProviderQuotaRepository(),
+        ),
         gate: { pause: async () => undefined, takeSlot: async () => false },
         provider: async () => FOUND,
         log: {
@@ -857,5 +895,79 @@ describe("why a refusal stopped the search", () => {
       status: null,
     });
     expect(searchPauseOf(null, NOW)).toBeNull();
+  });
+});
+
+/**
+ * Plano-escala F2-32: the search's day moved from two Redis counters, read
+ * then added to after the call, to two rows in Postgres taken together as
+ * the call goes out. Two searches at the last unit of the day no longer
+ * both go out, and a day that cannot be counted asks nothing.
+ */
+describe("the day's counts in Postgres", () => {
+  it("asks nothing when another search took the company's last unit after the read", async () => {
+    const quota = new InMemoryProviderQuotaRepository();
+    const take = quota.take.bind(quota);
+
+    // Between this search's read and its take, another replica's search
+    // took the company's last unit.
+    quota.take = async (provider, day, units) => {
+      await take(provider, day, [{ scope: `address-search:${A}`, limit: 1 }]);
+
+      return take(provider, day, units);
+    };
+
+    const { useCase, calls } = harness({
+      quota,
+      settings: { businessDailyLimit: 1 },
+    });
+
+    expect(await useCase.execute(request())).toMatchObject({
+      kind: "DAILY_LIMIT",
+      scope: "BUSINESS",
+    });
+    expect(calls).toHaveLength(0);
+    // All or none: the platform's day did not count it.
+    expect(
+      (await quota.used("geocoder", "2026-11-10", ["address-search"]))[
+        "address-search"
+      ],
+    ).toBe(0);
+  });
+
+  it("answers LIMITS_UNREADABLE and asks nothing when the day cannot be taken", async () => {
+    const quota = new InMemoryProviderQuotaRepository();
+
+    quota.take = async () => {
+      throw new Error("connection terminated");
+    };
+
+    const { useCase, calls } = harness({ quota });
+
+    expect(await useCase.execute(request())).toEqual({
+      kind: "UNAVAILABLE",
+      reason: "LIMITS_UNREADABLE",
+      retryAfterSeconds: 30,
+    });
+    expect(calls).toHaveLength(0);
+  });
+
+  it("does not give the day back when Redis loses the previous image's keys", async () => {
+    const redis = fakeRedis();
+    const { useCase, calls } = harness({
+      redis,
+      settings: { businessDailyLimit: 1 },
+    });
+
+    expect(await useCase.execute(request({ query: "Rua Um" }))).toMatchObject({
+      kind: "OK",
+    });
+
+    redis.values.clear();
+
+    expect(await useCase.execute(request({ query: "Rua Dois" }))).toMatchObject(
+      { kind: "DAILY_LIMIT", scope: "BUSINESS" },
+    );
+    expect(calls).toHaveLength(1);
   });
 });

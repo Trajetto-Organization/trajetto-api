@@ -3,8 +3,14 @@ import { join, resolve } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { createRedisGeocodingBudget } from "@/shared/delivery/geocoding/geocoding-budget";
-import { createRedisGeocodingGate } from "@/shared/delivery/geocoding/geocoding-gate";
+import {
+  GEOCODING_SCOPES,
+  createGeocodingBudget,
+} from "@/shared/delivery/geocoding/geocoding-budget";
+import {
+  createRedisGeocodingGate,
+  createRedisProofGate,
+} from "@/shared/delivery/geocoding/geocoding-gate";
 import { createRedisGeocodingHold } from "@/shared/delivery/geocoding/geocoding-hold";
 import {
   GEOCODING_KEYS,
@@ -12,6 +18,7 @@ import {
   type GeocodingKeys,
 } from "@/shared/delivery/geocoding/geocoding-keys";
 import { createRedisAddressSearchStore } from "@/shared/services/address-search/address-search-limits";
+import { InMemoryProviderQuotaRepository } from "@/shared/services/provider-quota/in-memory-provider-quota-repository";
 
 /**
  * The geocoder's keys in Redis (ADR 0002, addendum of 10/11/2026). The
@@ -65,32 +72,50 @@ function recordingRedis() {
   };
 }
 
-/** Every key the four factories reach, with `keys` or with their default. */
+/**
+ * Every key the factories reach, with `keys` or with their default. The
+ * budget's own key is the previous image's copy of the day (F2-32): the
+ * day itself is in Postgres.
+ */
 async function keysTouched(keys?: GeocodingKeys): Promise<string[]> {
   const { redis, touched } = recordingRedis();
+  const quota = new InMemoryProviderQuotaRepository();
   const gate = createRedisGeocodingGate(redis as never, {
     clock: () => NOW.getTime(),
     keys,
   });
-  const budget = createRedisGeocodingBudget(
+  const proofGate = createRedisProofGate(redis as never, {
+    clock: () => NOW.getTime(),
+    keys,
+  });
+  const budget = createGeocodingBudget({
+    quota,
+    scope: GEOCODING_SCOPES.job,
+    limit: () => 2_000,
+    legacy: {
+      redis: redis as never,
+      key: (keys ?? GEOCODING_KEYS).budget,
+    },
+  });
+  const hold = createRedisGeocodingHold(redis as never, () => 2_000, keys);
+  const store = createRedisAddressSearchStore(
     redis as never,
-    2_000,
+    quota,
     undefined,
     keys,
   );
-  const hold = createRedisGeocodingHold(redis as never, () => 2_000, keys);
-  const store = createRedisAddressSearchStore(redis as never, undefined, keys);
 
   await gate.paused(NOW);
   await gate.pause(LATER, NOW, "BURST");
   await gate.takeSlot();
+  await proofGate.takeProofSlot();
   await budget.remaining(NOW);
-  await budget.spend(NOW);
+  await budget.take(NOW);
   await hold.held(NOW);
   await store.cached(BUSINESS, DIGEST);
   await store.remember(BUSINESS, DIGEST, { results: [], weak: false }, 60);
   await store.standing(BUSINESS, NOW);
-  await store.spend(BUSINESS, NOW);
+  await store.take(BUSINESS, NOW, { platform: 1_000, business: 150 });
   await store.pauseSearch("REFUSED", LATER, NOW);
 
   return [...touched].sort();
@@ -107,6 +132,9 @@ const SHARED = [
   `geocoding:search:2026-11-10:${BUSINESS}`,
   `geocoding:search:cache:${BUSINESS}:${DIGEST}`,
 ];
+
+/** The proof's own second (F2-32), which the replicas before it never use. */
+const PROOF = [`geocoding:proof:rate:${SECOND}`];
 
 /** Text files under `dir`, recursively. */
 function sources(dir: string): string[] {
@@ -146,18 +174,19 @@ describe("the geocoder's keys", () => {
     ).toEqual([...SHARED].sort());
   });
 
-  it("are production's in every factory given none: the gate, the budget, the hold and the search", async () => {
-    expect(await keysTouched()).toEqual([...SHARED].sort());
+  it("are production's in every factory given none: the gates, the budget, the hold and the search", async () => {
+    expect(GEOCODING_KEYS.proofSecond(SECOND)).toBe(PROOF[0]);
+    expect(await keysTouched()).toEqual([...SHARED, ...PROOF].sort());
   });
 
   it("are another namespace's alone in every factory given one", async () => {
     const touched = await keysTouched(geocodingKeys("test:run-1:geocoding"));
 
-    expect(touched).toHaveLength(SHARED.length);
+    expect(touched).toHaveLength(SHARED.length + PROOF.length);
 
     for (const key of touched) {
       expect(key.startsWith("test:run-1:geocoding:"), key).toBe(true);
-      expect(SHARED).not.toContain(key);
+      expect([...SHARED, ...PROOF]).not.toContain(key);
     }
   });
 
@@ -188,12 +217,13 @@ describe("the geocoder's keys", () => {
     expect(spelled).toEqual([]);
   });
 
-  it("are wired as production's: http.ts passes no keys to the search nor to the hold", () => {
+  it("are wired as production's: http.ts passes no keys to the search, the hold nor the proof", () => {
     const http = codeLines("src/http.ts").join("\n");
 
     expect(http).toMatch(
       /configureGeocodingHold\(createRedisGeocodingHold\(rateLimitRedis\)\);/,
     );
     expect(http).toMatch(/configureAddressSearch\(rateLimitRedis\);/);
+    expect(http).toMatch(/configureProofLookupAdmission\(rateLimitRedis\);/);
   });
 });

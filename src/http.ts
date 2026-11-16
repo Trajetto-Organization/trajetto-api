@@ -102,6 +102,7 @@ import {
   createRedisGeocodingHold,
 } from "@/shared/delivery/geocoding/geocoding-hold";
 import { configureAddressSearch } from "@/modules/address-search/usecases/search-address/search-address-runtime";
+import { configureProofLookupAdmission } from "@/shared/services/proof-location/proof-lookup-admission";
 
 import { enforceRequestedTenant } from "./modules/middlewares/tenant-authorization";
 import { UPLOAD_TYPES, uploadConfig } from "./config/upload";
@@ -301,6 +302,11 @@ configureGeocodingHold(createRedisGeocodingHold(rateLimitRedis));
 // provider's gate, on the same fail-fast connection — a search is a
 // request a person waits on (address-search/search-address-runtime.ts).
 configureAddressSearch(rateLimitRedis);
+
+// The proof's reverse lookup: the second reserved to it of the provider's
+// rate and its day, on the same fail-fast connection — the receipt is a
+// request a person waits on (proof-location/proof-lookup-admission.ts).
+configureProofLookupAdmission(rateLimitRedis);
 
 /**
  * The limiter goes FIRST in each route's onRequest, not last.

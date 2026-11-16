@@ -1670,6 +1670,28 @@ model PgssBaseline {
   @@map("pgss_baseline")
 }
 
+/// A provider's day, counted per scope (plano-escala F2-32; decision D23):
+/// what is money or a contract must not vanish with a Redis eviction. One
+/// row per provider, scope and UTC day, taken one unit at a time by an
+/// INSERT ... ON CONFLICT DO UPDATE that only counts below the limit
+/// (shared/services/provider-quota). The geocoder's scopes are
+/// "geocoding-job", "address-search", "address-search:<businessId>" and
+/// "proof-reverse"; wave 13 adds "whatsapp:<businessId>". Platform rows,
+/// not a company's: a company's scope carries its id, never its data.
+model ProviderQuotaDay {
+  provider   String
+  scope      String
+  day        DateTime @db.Date
+  used       Int      @default(0)
+  updated_at DateTime @default(now())
+
+  @@id([provider, scope, day])
+  // The nightly retention (purge-ops-series-job.ts) and the day's sum the
+  // ops heartbeat reads for the quota alert.
+  @@index([day])
+  @@map("provider_quota_day")
+}
+
 /// What the last hourly reading saw of pg_stat_statements itself: one row
 /// (CHECK id = 1). A stats_reset that moved is a reset; a dealloc that grew
 /// is evictions.

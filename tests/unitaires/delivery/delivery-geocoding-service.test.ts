@@ -78,6 +78,10 @@ function delivery(id: string, overrides: Record<string, unknown> = {}) {
 /** Street, city and UF only: no fallback to ask. */
 const BARE = { address_number: null, neighborhood: null, cep: null };
 
+/**
+ * The day's budget as the service sees it (geocoding-budget.ts): a unit is
+ * taken as each call goes out, only while one is left.
+ */
 function budgetOf(remaining: number) {
   const spent: Date[] = [];
 
@@ -85,8 +89,12 @@ function budgetOf(remaining: number) {
     async remaining() {
       return remaining - spent.length;
     },
-    async spend(now) {
+    async take(now) {
+      if (spent.length >= remaining) return false;
+
       spent.push(now);
+
+      return true;
     },
   };
 

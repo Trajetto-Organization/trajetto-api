@@ -1402,7 +1402,8 @@ mesma reserva, o mesmo orçamento e o mesmo portão
   fosse o plano do provedor.
 
 `DELIVERY_GEOCODING_DAILY_BUDGET` é o teto do dia, somando as réplicas e os
-dois caminhos (contador no Redis). `tests/E2E/import-geocoding-volume.test.ts`
+dois caminhos (no Postgres, `provider_quota_day`, desde o F2-32).
+`tests/E2E/import-geocoding-volume.test.ts`
 prova isso com uma planilha de 1.000 linhas e um provedor que aceita a
 conexão e nunca responde: o import termina sem chamar o provedor, as 1.000
 entregas ficam na fila sem ponto, e o job drena em lotes até o orçamento.
@@ -1457,8 +1458,22 @@ esgotavam as 5 tentativas em 2 h 30, para sempre. A pausa e a vaga por
 segundo (no máximo `GEOCODING_CALLS_PER_SECOND`, 1 por padrão, somando
 réplicas e caminhos; `geocoding-gate.ts`) ficam no Redis e falham **fechado**, como o orçamento.
 O LocationIQ grátis aceita 2 por segundo por chave, e a outra fica para a
-geocodificação reversa do comprovante, que usa a mesma chave e não passa
-pelo portão: um 429 nela deixaria o PDF sem o endereço do GPS por um dia. A
+geocodificação reversa do comprovante, que usa a mesma chave. Até o F2-32
+ela não passava pelo portão nem contava em lugar nenhum: um job ocupado
+tomava o segundo dela, e um 429 deixava o PDF sem o endereço do GPS por um
+dia. Agora ela tem um segundo só seu (`GEOCODING_PROOF_RESERVED_PER_SECOND`,
+1 por padrão, numa janela própria `geocoding:proof:rate:{segundo}` que nada
+mais toma), entra no mesmo registro do minuto (o job e a busca contam as
+chamadas dela e cedem) e nunca chama durante a pausa de cota ou de pico da
+conta (`TAKE_PROOF_SLOT`). Com o próprio segundo cheio, ela toma uma vaga
+livre da taxa compartilhada, com os tetos da busca: um ERP que abre de uma
+vez os links de vários comprovantes não deve ver a maioria sem endereço com
+o job parado. Depois da vaga ela toma uma unidade do próprio dia
+(`PROOF_REVERSE_DAILY_BUDGET`, escopo `proof-reverse`). Sem vaga em cinco
+tentativas (1,6 s), com a conta pausada ou com o dia gasto, o PDF sai com o endereço
+cadastrado, rotulado, e nada é gravado no evento: a próxima geração pergunta
+de novo (`proof-lookup-admission.ts`, ligado em `http.ts` na conexão
+fail-fast). A
 chave da pausa guarda o motivo junto do prazo (`REFUSED`, `QUOTA` ou
 `BURST`), para a leitura da rota.
 
@@ -1774,10 +1789,24 @@ chave da pausa guarda o motivo junto do prazo (`REFUSED`, `QUOTA` ou
     corrigida no primeiro passo apaga a raiz, como a edição do endereço.
     Idempotente: rodar de novo termina o que faltou e não grava nada.
 - Orçamento: `DELIVERY_GEOCODING_DAILY_BUDGET` consultas por dia (UTC),
-  somando as réplicas e os dois caminhos, num contador de janela fixa no
-  Redis (`shared/delivery/geocoding/geocoding-budget.ts`). Ao contrário dos
-  limites de requisição, falha **fechado**: sem Redis o geocodificador espera
-  o próximo minuto. As taxas vêm do env (F2-31), com os padrões do
+  somando as réplicas e os dois caminhos. Desde o F2-32 (decisão D23) o dia
+  fica no Postgres, na `provider_quota_day` (PK `provider`, `scope`, `day`),
+  e não mais numa chave do Redis que um despejo zerava de graça
+  (`shared/delivery/geocoding/geocoding-budget.ts`, sobre o repositório
+  genérico `shared/services/provider-quota`). Uma unidade é tomada antes da
+  chamada, por um `INSERT … ON CONFLICT DO UPDATE` que só conta abaixo do
+  limite: 50 tomadas ao mesmo tempo com limite 10 concedem exatamente 10. Os escopos da conta do geocodificador são `geocoding-job`,
+  `address-search`, `address-search:<businessId>` e `proof-reverse`; a onda
+  13 acrescenta `whatsapp:<businessId>` na mesma tabela. Durante o rolling
+  deploy, a imagem anterior ainda conta e lê a chave
+  `geocoding:deliveries:{dia}`: cada tomada conta a partir do maior entre a
+  linha e a chave, e escreve a chave de volta com pelo menos o valor da
+  linha (`MIRROR_TAKE`), para as duas imagens contarem o mesmo dia; uma
+  chave despejada lê 0 e a linha vale. O F2-36, um release depois deste em
+  produção, tira a chave. As linhas de mais de 35 dias saem no
+  `purge-ops-series`. Ao contrário dos limites de requisição, falha
+  **fechado**: sem o banco (ou sem o Redis, pelo portão) o geocodificador
+  espera o próximo minuto. As taxas vêm do env (F2-31), com os padrões do
   LocationIQ grátis: `GEOCODING_CALLS_PER_SECOND` (1),
   `GEOCODING_CALLS_PER_MINUTE` (50 em qualquer 60 s, a da busca) e
   `GEOCODING_BACKGROUND_CALLS_PER_MINUTE` (40, a do job e da busca depois
@@ -2002,12 +2031,17 @@ cada passo mais barato que o seguinte:
    14/11/2026 é um código próprio: a busca desligada não volta sozinha, e a
    web vai direto ao clique em vez de dizer "por enquanto" (a web anterior
    trata qualquer 503 desconhecido como indisponível);
-3. uma leitura só no Redis (`MGET`), que falha **fechado**: a pausa da conta,
-   a pausa da busca e as contagens do dia da plataforma e da empresa;
+3. uma leitura que falha **fechado**: a pausa da conta e a pausa da busca no
+   Redis (`MGET`), e as contagens do dia da plataforma e da empresa no
+   Postgres (`provider_quota_day`, escopos `address-search` e
+   `address-search:<businessId>`, desde o F2-32);
 4. a vaga do provedor (`geocoding-gate.ts`), a mesma da localização
    automática: três tentativas a 500 ms, que sempre alcançam o segundo
    seguinte; sem vaga, `503 ADDRESS_SEARCH_BUSY` com `retry-after: 1`;
-5. a chamada, contada nos dois dias quando sai;
+5. a chamada, contada nos dois dias quando sai: uma tomada das duas linhas
+   juntas, as duas ou nenhuma, só abaixo dos limites (duas buscas na última
+   unidade do dia não saem as duas); sem conseguir contar, `503` como no
+   passo 3;
 6. a ordenação e o cache.
 
 A pessoa que digitou de novo cancela o fetch do navegador. O socket da
@@ -2026,14 +2060,19 @@ o status 499.
 
 - por dia: o job (`DELIVERY_GEOCODING_DAILY_BUDGET`, 2.000), a busca
   (`ADDRESS_SEARCH_DAILY_BUDGET`, 1.000, separado do job) e a reversa do
-  comprovante, que não tem orçamento. Cada empresa tem ainda o seu teto
+  comprovante (`PROOF_REVERSE_DAILY_BUDGET`, 1.500, desde o F2-32): 4.500
+  dos 5.000, 90%. Com o plano escrito em `LOCATIONIQ_DAILY_QUOTA` e
+  `LOCATIONIQ_RATE_PER_SECOND` (decisão D40), o boot recusa uma soma dos
+  três orçamentos, ou das chamadas por segundo com a reserva do
+  comprovante, acima de 90% do plano, e o `ops-heartbeat` alerta
+  `geocoding-quota-high` com o dia acima de 70% da cota. Cada empresa tem ainda o seu teto
   (`ADDRESS_SEARCH_BUSINESS_DAILY_LIMIT`, 150), para uma transportadora não
   gastar o dia de todas. Estourado, `429 ADDRESS_SEARCH_DAILY_LIMIT` com
   `retry-after` até a meia-noite UTC;
 - por segundo: job e busca somam no máximo 1, na mesma chave
   `geocoding:deliveries:rate:{segundo}`, que não foi renomeada para réplicas
-  antigas e novas contarem juntas no rolling deploy. A outra vaga fica para a
-  reversa do comprovante;
+  antigas e novas contarem juntas no rolling deploy. A outra vaga é da
+  reversa do comprovante, numa janela só dela;
 - por minuto: em quaisquer 60 s, não no minuto do relógio. O registro é um
   _sorted set_ (`geocoding:provider:minute`), com um membro por chamada e o
   horário dela como nota: o script tira o que tem 60 s ou mais, conta, e só
@@ -3239,27 +3278,27 @@ de carga), está em [`operacao/jobs.md`](./operacao/jobs.md); o
 `cron-registry.test.ts` confere que as agendas daqui batem com ele e que duas
 entradas pesadas não se cruzam.
 
-| Job                                  | Quando (UTC)              | O que faz                                                                                                                                                                                                                                      |
-| ------------------------------------ | ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `ops-heartbeat`                      | a cada minuto             | lê o estado da operação, os números do banco e o Redis, avalia as regras e avisa o monitor externo (`HEALTHCHECK_PING_URL`); depois grava a linha `cluster` do `ops_sample` com as mesmas leituras                                             |
-| `escalate-occurrence-authorizations` | a cada minuto             | pedido de autorização sem resposta da torre em 10 min vai aos administradores, uma vez                                                                                                                                                         |
-| `repair-unticketed-messages`         | a cada minuto             | arquiva em ticket a mensagem gravada sem ticket por uma imagem antiga                                                                                                                                                                          |
-| `geocode-deliveries`                 | a cada minuto             | geocodifica o endereço das entregas abertas sem ponto (as mais novas primeiro), dentro de `DELIVERY_GEOCODING_DAILY_BUDGET` por dia; a criação, a edição do endereço e a rota também pedem logo depois do commit (`geocode-soon.ts`)           |
-| `close-abandoned-imports`            | a cada 5 min              | fecha importação que ficou `IN_PROGRESS` num processo que morreu                                                                                                                                                                               |
-| `snapshot-query-stats`               | de hora em hora (:13)     | grava em `pgss_snapshot` o custo da última hora das 200 consultas mais caras deste banco, pela diferença do `pg_stat_statements` contra a leitura anterior (reset e despejo tratados); sem a biblioteca carregada, não faz nada e avisa no log |
-| `alert-routes-left-open`             | de hora em hora (:07)     | avisa os administradores, uma vez, da rota esquecida em andamento (desde antes de hoje no fuso da empresa ou há mais de 16 h)                                                                                                                  |
-| `reconcile-proof-analysis`           | a cada 10 min             | pede de novo a leitura de IA de um comprovante cujo pedido se perdeu                                                                                                                                                                           |
-| `reconcile-record-analysis`          | a cada 10 min (:05, :15…) | o mesmo para abastecimentos e checklists `pending` sem pedido e com foto legível, de 10 min a 2 dias, sem gastar quota com o histórico                                                                                                         |
-| `check-push-receipts`                | a cada 15 min             | lê os recibos da Expo e desativa aparelhos mortos                                                                                                                                                                                              |
-| `cleanup-expired-refresh-tokens`     | 03:17                     | remove refresh tokens vencidos (em lotes de 5.000, os mais velhos primeiro; com sobra, a execução fica parcial), os push das sessões que sumiram e os aparelhos confiáveis sem login há 210 dias                                               |
-| `cleanup-notification-pipeline`      | 03:30                     | limpa entregas de notificação antigas                                                                                                                                                                                                          |
-| `cleanup-ai-pipeline`                | 03:45                     | limpa pedidos de IA antigos                                                                                                                                                                                                                    |
-| `cleanup-user-history`               | 04:00                     | limpa histórico antigo do usuário (a trilha de auditoria só com `ACTIVITY_RETENTION_DAYS`, nunca abaixo de 365)                                                                                                                                |
-| `driver-position-partitions`         | 04:10                     | cria e remove partições diárias de `driver_position` (90 dias)                                                                                                                                                                                 |
-| `cleanup-webhook-deliveries`         | 04:20                     | remove entregas de webhook resolvidas fora da janela de reenvio                                                                                                                                                                                |
-| `cleanup-api-usage`                  | 04:35                     | remove contadores diários de uso da API pública com mais de 400 dias                                                                                                                                                                           |
-| `purge-ops-series`                   | 04:40                     | apaga em lotes as linhas do `ops_sample` e do `pgss_snapshot` mais velhas que `OPS_SAMPLE_RETENTION_DAYS` e `PGSS_SNAPSHOT_RETENTION_DAYS` (30 dias); com sobra, a execução fica parcial                                                       |
-| `cleanup-orphan-uploads`             | 04:50                     | conta (ou remove, com `UPLOAD_ORPHAN_GC=delete`) objetos do bucket sem linha                                                                                                                                                                   |
+| Job                                  | Quando (UTC)              | O que faz                                                                                                                                                                                                                                                    |
+| ------------------------------------ | ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `ops-heartbeat`                      | a cada minuto             | lê o estado da operação, os números do banco e o Redis, avalia as regras e avisa o monitor externo (`HEALTHCHECK_PING_URL`); depois grava a linha `cluster` do `ops_sample` com as mesmas leituras                                                           |
+| `escalate-occurrence-authorizations` | a cada minuto             | pedido de autorização sem resposta da torre em 10 min vai aos administradores, uma vez                                                                                                                                                                       |
+| `repair-unticketed-messages`         | a cada minuto             | arquiva em ticket a mensagem gravada sem ticket por uma imagem antiga                                                                                                                                                                                        |
+| `geocode-deliveries`                 | a cada minuto             | geocodifica o endereço das entregas abertas sem ponto (as mais novas primeiro), dentro de `DELIVERY_GEOCODING_DAILY_BUDGET` por dia; a criação, a edição do endereço e a rota também pedem logo depois do commit (`geocode-soon.ts`)                         |
+| `close-abandoned-imports`            | a cada 5 min              | fecha importação que ficou `IN_PROGRESS` num processo que morreu                                                                                                                                                                                             |
+| `snapshot-query-stats`               | de hora em hora (:13)     | grava em `pgss_snapshot` o custo da última hora das 200 consultas mais caras deste banco, pela diferença do `pg_stat_statements` contra a leitura anterior (reset e despejo tratados); sem a biblioteca carregada, não faz nada e avisa no log               |
+| `alert-routes-left-open`             | de hora em hora (:07)     | avisa os administradores, uma vez, da rota esquecida em andamento (desde antes de hoje no fuso da empresa ou há mais de 16 h)                                                                                                                                |
+| `reconcile-proof-analysis`           | a cada 10 min             | pede de novo a leitura de IA de um comprovante cujo pedido se perdeu                                                                                                                                                                                         |
+| `reconcile-record-analysis`          | a cada 10 min (:05, :15…) | o mesmo para abastecimentos e checklists `pending` sem pedido e com foto legível, de 10 min a 2 dias, sem gastar quota com o histórico                                                                                                                       |
+| `check-push-receipts`                | a cada 15 min             | lê os recibos da Expo e desativa aparelhos mortos                                                                                                                                                                                                            |
+| `cleanup-expired-refresh-tokens`     | 03:17                     | remove refresh tokens vencidos (em lotes de 5.000, os mais velhos primeiro; com sobra, a execução fica parcial), os push das sessões que sumiram e os aparelhos confiáveis sem login há 210 dias                                                             |
+| `cleanup-notification-pipeline`      | 03:30                     | limpa entregas de notificação antigas                                                                                                                                                                                                                        |
+| `cleanup-ai-pipeline`                | 03:45                     | limpa pedidos de IA antigos                                                                                                                                                                                                                                  |
+| `cleanup-user-history`               | 04:00                     | limpa histórico antigo do usuário (a trilha de auditoria só com `ACTIVITY_RETENTION_DAYS`, nunca abaixo de 365)                                                                                                                                              |
+| `driver-position-partitions`         | 04:10                     | cria e remove partições diárias de `driver_position` (90 dias)                                                                                                                                                                                               |
+| `cleanup-webhook-deliveries`         | 04:20                     | remove entregas de webhook resolvidas fora da janela de reenvio                                                                                                                                                                                              |
+| `cleanup-api-usage`                  | 04:35                     | remove contadores diários de uso da API pública com mais de 400 dias                                                                                                                                                                                         |
+| `purge-ops-series`                   | 04:40                     | apaga em lotes as linhas do `ops_sample` e do `pgss_snapshot` mais velhas que `OPS_SAMPLE_RETENTION_DAYS` e `PGSS_SNAPSHOT_RETENTION_DAYS` (30 dias); com sobra, a execução fica parcial. Antes, os dias da `provider_quota_day` com mais de 35 dias (F2-32) |
+| `cleanup-orphan-uploads`             | 04:50                     | conta (ou remove, com `UPLOAD_ORPHAN_GC=delete`) objetos do bucket sem linha                                                                                                                                                                                 |
 
 O backup diário do Dokploy (03:00 UTC, aba _Backups_ do Database) roda antes do
 primeiro job que apaga dados.
