@@ -3,6 +3,7 @@ import Redis from "ioredis";
 import { env } from "@/env";
 import { redisClientOptions } from "@/config/redis-client-options";
 import { settlesWithin } from "@/shared/lifecycle/deadline";
+import { isDraining } from "@/shared/lifecycle/draining";
 import { logger } from "@/shared/logging/logger";
 import { attachRedisConnectionLog } from "@/shared/services/redis-connection-log";
 import { proofLocationConfigFromEnv } from "@/shared/services/proof-location/proof-location-service";
@@ -12,6 +13,7 @@ import { announceSettledLookups } from "./geocoding-announcer";
 import { createRedisGeocodingBudget } from "./geocoding-budget";
 import {
   createRedisGeocodingGate,
+  geocodingRatesFromEnv,
   pauseDeadlineOf,
   pauseReasonOf,
   pauseStatusOf,
@@ -21,6 +23,7 @@ import { DeliveryGeocodingRepository } from "./geocoding-repository";
 import {
   DeliveryGeocodingService,
   nextUtcMidnight,
+  spacingFor,
   type GeocodingRunResult,
   type ReadHold,
 } from "./delivery-geocoding-service";
@@ -81,6 +84,7 @@ function deliveryGeocodingService(): DeliveryGeocodingService {
   const config = proofLocationConfigFromEnv().geocoder;
   const client = geocodingRedis();
   const repository = new DeliveryGeocodingRepository();
+  const rates = geocodingRatesFromEnv();
 
   return new DeliveryGeocodingService({
     repository,
@@ -95,7 +99,11 @@ function deliveryGeocodingService(): DeliveryGeocodingService {
           "geocoding budget unreadable: lookups put off to the next run",
         ),
     ),
+    // The background paths' ceiling of the minute: the search's tail is
+    // left to it (search-address-runtime.ts).
     gate: createRedisGeocodingGate(client, {
+      perSecond: rates.perSecond,
+      perMinute: rates.backgroundPerMinute,
       onError: (err) =>
         log.warn(
           { err },
@@ -104,6 +112,12 @@ function deliveryGeocodingService(): DeliveryGeocodingService {
     }),
     announce: (settled) => announceSettledLookups(repository, settled),
     readHold: redisReadHold(client),
+    options: {
+      batchSize: env.DELIVERY_GEOCODING_BATCH_SIZE,
+      spacingMs: spacingFor(rates.perSecond),
+      runBudgetMs: env.DELIVERY_GEOCODING_RUN_BUDGET_MS,
+    },
+    stopping: isDraining,
   });
 }
 

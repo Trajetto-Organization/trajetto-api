@@ -2,7 +2,14 @@ import { randomUUID } from "node:crypto";
 
 import type { Redis } from "ioredis";
 
+import { env } from "@/env";
+
 import { GEOCODING_KEYS, type GeocodingKeys } from "./geocoding-keys";
+import {
+  GEOCODING_BACKGROUND_CALLS_PER_MINUTE_DEFAULT,
+  GEOCODING_CALLS_PER_MINUTE_DEFAULT,
+  GEOCODING_CALLS_PER_SECOND_DEFAULT,
+} from "./geocoding-rules";
 
 /**
  * When the geocoder may call the provider at all, across every replica and
@@ -64,33 +71,44 @@ const PAUSE_REASONS: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * One of the provider's two calls a second (LocationIQ's free tier). The
- * other is left to the proof's reverse lookup (proof-location-service),
- * which shares the key and the rate and is not counted here: a proof that
- * met a 429 would print without its address for a day.
- */
-const GEOCODING_CALLS_PER_SECOND = 1;
-
-/**
- * The free tier's other ceiling: 60 calls a minute, the whole account. A
- * call a second already makes 60, and the proof's reverse lookups come on
- * top: the gated calls stop at 50 in any 60 s, leaving ten to the proofs.
- * Without it the 61st call met a 429, the BURST pause, and every path
- * stopped for a minute.
+ * The defaults of the three ceilings (geocoding-rules.ts: LocationIQ's free
+ * tier); a process takes them from the env (geocodingRatesFromEnv), so a
+ * paid plan raises them without a release (plano-escala F2-31).
  *
- * Any 60 s, not the clock's minute: in fixed minutes, 50 calls at the end
- * of one and 50 at the start of the next made 60 within a minute at a call
- * a second — the proofs' ten gone wherever the provider's minute starts.
+ * The minute is any 60 s, not the clock's minute: in fixed minutes, 50
+ * calls at the end of one and 50 at the start of the next made 60 within a
+ * minute at a call a second — the proofs' ten gone wherever the provider's
+ * minute starts.
  */
-const GEOCODING_CALLS_PER_MINUTE = 50;
+const GEOCODING_CALLS_PER_SECOND = GEOCODING_CALLS_PER_SECOND_DEFAULT;
+const GEOCODING_CALLS_PER_MINUTE = GEOCODING_CALLS_PER_MINUTE_DEFAULT;
+const GEOCODING_BACKGROUND_CALLS_PER_MINUTE =
+  GEOCODING_BACKGROUND_CALLS_PER_MINUTE_DEFAULT;
 
-/**
- * Where the job and the lookup after a commit stop, on the same log: the
- * last ten of the 60 s are the search's, which a person is waiting on. A
- * run asks 40 at most (20 claims, two queries each), so the job rarely
- * meets it.
- */
-const GEOCODING_BACKGROUND_CALLS_PER_MINUTE = 40;
+/** The ceilings a gate is built with, as the process's env sets them. */
+interface GeocodingRates {
+  /** Calls in one second, every path but the proof's. */
+  perSecond: number;
+  /** The search's ceiling in any 60 s. */
+  perMinute: number;
+  /** The job's and the lookup after a commit's, below the search's. */
+  backgroundPerMinute: number;
+}
+
+function geocodingRatesFromEnv(
+  source: Pick<
+    typeof env,
+    | "GEOCODING_CALLS_PER_SECOND"
+    | "GEOCODING_CALLS_PER_MINUTE"
+    | "GEOCODING_BACKGROUND_CALLS_PER_MINUTE"
+  > = env,
+): GeocodingRates {
+  return {
+    perSecond: source.GEOCODING_CALLS_PER_SECOND,
+    perMinute: source.GEOCODING_CALLS_PER_MINUTE,
+    backgroundPerMinute: source.GEOCODING_BACKGROUND_CALLS_PER_MINUTE,
+  };
+}
 
 const MINUTE_MS = 60_000;
 
@@ -274,9 +292,10 @@ export {
   MINUTE_MS,
   TAKE_SLOT,
   createRedisGeocodingGate,
+  geocodingRatesFromEnv,
   pauseDeadlineOf,
   pauseReasonOf,
   pauseStatusOf,
   pauseValue,
 };
-export type { GeocodingGate, GeocodingPauseReason };
+export type { GeocodingGate, GeocodingPauseReason, GeocodingRates };

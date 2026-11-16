@@ -4,9 +4,11 @@ import { describe, expect, it } from "vitest";
 
 import {
   DeliveryGeocodingService,
+  GEOCODING_RUN_DEFAULTS,
   REFUSED_PAUSE_MS,
   SHORT_RATE_PAUSE_MS,
   nextUtcMidnight,
+  spacingFor,
   type GeocodingRunOptions,
   type ReadHold,
   type SettledLookup,
@@ -134,12 +136,16 @@ function harness(
     gate = gateOf().gate,
     readHold,
     options = {},
+    clock,
+    stopping,
   }: {
     rows?: ReturnType<typeof delivery>[];
     budget?: GeocodingBudget;
     gate?: GeocodingGate;
     readHold?: ReadHold;
     options?: Partial<GeocodingRunOptions>;
+    clock?: () => number;
+    stopping?: () => boolean;
   } = {},
 ): Harness {
   const repository = new InMemoryDeliveryGeocodingRepository();
@@ -167,6 +173,8 @@ function harness(
       slotWaitMs: 0,
       ...options,
     },
+    clock,
+    stopping,
   });
 
   return { repository, asked, announced, run };
@@ -354,9 +362,14 @@ describe("DeliveryGeocodingService.runOnce", () => {
 
     const result = await h.run.runOnce(NOW);
 
-    expect(result.claimed).toBe(2);
-    expect(h.asked.map((call) => call.id)).toEqual(["routed", "imported-2"]);
-    expect(row(h, "imported-1").geocode_status).toBeNull();
+    // The first batch is the routed stop and the newest row; the run then
+    // claims again (F2-31), for the older one.
+    expect(result.claimed).toBe(3);
+    expect(h.asked.map((call) => call.id)).toEqual([
+      "routed",
+      "imported-2",
+      "imported-1",
+    ]);
   });
 
   it("geocodes the newest deliveries first", async () => {
@@ -1157,5 +1170,271 @@ describe("DeliveryGeocodingService.runFor: right after a commit", () => {
     expect(result).toMatchObject({ released: 1, stoppedBy: "NO_SLOT" });
     expect(h.asked).toEqual([]);
     expect(row(h, "d1").geocode_attempts).toBe(0);
+  });
+});
+
+/**
+ * Plano-escala F2-31: the minute's job claimed one batch of 20 a minute, so
+ * a spreadsheet of 20,000 rows took a day whatever the plan paid for. A run
+ * now claims again while each batch comes back full, until its time
+ * (DELIVERY_GEOCODING_RUN_BUDGET_MS) is up, something stops it or the
+ * process is shutting down; the rates are the env's.
+ */
+describe("the minute's job claims again while the batch comes back full", () => {
+  /**
+   * Deliveries at distinct doors, nothing of one reused by another, and
+   * with nothing to drop for a second query: one call each.
+   */
+  const doors = (count: number) =>
+    Array.from({ length: count }, (_, index) =>
+      delivery(`d${index + 1}`, {
+        ...BARE,
+        street: `Rua ${index + 1}`,
+        created_at: new Date(Date.UTC(2026, 10, 3, 14, index)),
+      }),
+    );
+
+  /** A clock the provider moves by `stepMs` on every call. */
+  function steppingClock(stepMs: number) {
+    let now = 1_000_000;
+
+    return {
+      clock: () => now,
+      step: () => {
+        now += stepMs;
+      },
+    };
+  }
+
+  it("works batch after batch until one comes back short, and adds them up", async () => {
+    const h = harness(() => FOUND_AT_DOOR, {
+      rows: doors(5),
+      options: { batchSize: 2 },
+    });
+
+    const result = await h.run.runOnce(NOW);
+
+    expect(result).toMatchObject({
+      claimed: 5,
+      resolved: 5,
+      released: 0,
+    });
+    expect(result.stoppedBy).toBeUndefined();
+    // Newest first, a batch at a time, and the screens hear each batch.
+    expect(h.asked.map((call) => call.id)).toEqual([
+      "d5",
+      "d4",
+      "d3",
+      "d2",
+      "d1",
+    ]);
+    expect(h.announced.map((batch) => batch.length)).toEqual([2, 2, 1]);
+  });
+
+  it("claims once more after an exact batch, and stops on the empty one", async () => {
+    const h = harness(() => ({ kind: "NOT_FOUND" }), {
+      rows: doors(4),
+      options: { batchSize: 2 },
+    });
+
+    expect(await h.run.runOnce(NOW)).toMatchObject({
+      claimed: 4,
+      notFound: 4,
+    });
+  });
+
+  it("claims no other batch once the run's time is up", async () => {
+    const time = steppingClock(20_000);
+    const h = harness(
+      () => {
+        time.step();
+
+        return { kind: "NOT_FOUND" };
+      },
+      {
+        rows: doors(5),
+        options: { batchSize: 1, runBudgetMs: 50_000 },
+        clock: time.clock,
+      },
+    );
+
+    const result = await h.run.runOnce(NOW);
+
+    // 20 s, 40 s, 60 s: the third batch ends past the 50 s.
+    expect(result.claimed).toBe(3);
+    expect(row(h, "d2").geocode_attempts).toBe(0);
+    expect(row(h, "d1").geocode_attempts).toBe(0);
+  });
+
+  it("claims each batch at its own instant: now moved by the run's time", async () => {
+    const time = steppingClock(20_000);
+    const h = harness(
+      () => {
+        time.step();
+
+        return { kind: "NOT_FOUND" };
+      },
+      {
+        rows: doors(2),
+        options: { batchSize: 1 },
+        clock: time.clock,
+      },
+    );
+
+    await h.run.runOnce(NOW);
+
+    expect(row(h, "d2").geocode_attempted_at).toEqual(NOW);
+    expect(row(h, "d1").geocode_attempted_at).toEqual(
+      new Date(NOW.getTime() + 20_000),
+    );
+  });
+
+  it("gives back what is left of a batch when the time runs out in it", async () => {
+    const time = steppingClock(30_000);
+    const h = harness(
+      () => {
+        time.step();
+
+        return { kind: "NOT_FOUND" };
+      },
+      {
+        rows: doors(3),
+        options: { batchSize: 3, runBudgetMs: 50_000 },
+        clock: time.clock,
+      },
+    );
+
+    const result = await h.run.runOnce(NOW);
+
+    expect(result).toMatchObject({
+      claimed: 3,
+      notFound: 2,
+      released: 1,
+      stoppedBy: "DEADLINE",
+    });
+    // Unasked and unspent: the next run takes it at once.
+    expect(row(h, "d1")).toMatchObject({
+      geocode_status: null,
+      geocode_attempts: 0,
+      geocode_attempted_at: null,
+    });
+  });
+
+  it("claims no other batch once the process is shutting down", async () => {
+    let stopping = false;
+    const h = harness(
+      () => {
+        stopping = true;
+
+        return FOUND_AT_DOOR;
+      },
+      {
+        rows: doors(4),
+        options: { batchSize: 2 },
+        stopping: () => stopping,
+      },
+    );
+
+    expect((await h.run.runOnce(NOW)).claimed).toBe(2);
+  });
+
+  it("stops at the first batch a missing slot stopped", async () => {
+    const h = harness(() => ({ kind: "NOT_FOUND" }), {
+      rows: doors(4),
+      gate: gateOf({ slots: 1 }).gate,
+      options: { batchSize: 1 },
+    });
+
+    const result = await h.run.runOnce(NOW);
+
+    expect(result).toMatchObject({
+      claimed: 2,
+      notFound: 1,
+      released: 1,
+      stoppedBy: "NO_SLOT",
+    });
+    expect(h.asked).toHaveLength(1);
+  });
+
+  it("stops when the day's budget runs out between two batches", async () => {
+    const h = harness(() => ({ kind: "NOT_FOUND" }), {
+      rows: doors(5),
+      budget: budgetOf(2).budget,
+      options: { batchSize: 2 },
+    });
+
+    const result = await h.run.runOnce(NOW);
+
+    expect(result).toMatchObject({ claimed: 2, stoppedBy: "BUDGET" });
+    expect(result.skipped).toBeUndefined();
+    expect(h.asked).toHaveLength(2);
+  });
+
+  it("keeps the reason a later batch stopped, and the pause it set", async () => {
+    const h = harness(
+      (address) =>
+        (address as unknown as { id: string }).id === "d3"
+          ? { kind: "REFUSED", status: 401 }
+          : { kind: "NOT_FOUND" },
+      { rows: doors(4), options: { batchSize: 1 } },
+    );
+
+    const result = await h.run.runOnce(NOW);
+
+    expect(result).toMatchObject({
+      claimed: 2,
+      notFound: 1,
+      released: 1,
+      stoppedBy: "REFUSED",
+      providerStatuses: [401],
+    });
+    expect(result.hold?.pause?.reason).toBe("REFUSED");
+  });
+
+  it("spaces the starts of its calls, and never waits again for a slow answer", async () => {
+    // A spacing of a minute: a run that waited it after an answer that
+    // already took a minute would outlive the test.
+    const time = steppingClock(60_000);
+    const h = harness(
+      () => {
+        time.step();
+
+        return { kind: "NOT_FOUND" };
+      },
+      {
+        rows: doors(3),
+        options: { spacingMs: 60_000, runBudgetMs: 600_000 },
+        clock: time.clock,
+      },
+    );
+
+    expect((await h.run.runOnce(NOW)).notFound).toBe(3);
+  });
+
+  it("waits out the rest of the spacing after a quick answer", async () => {
+    const starts: number[] = [];
+    const h = harness(
+      () => {
+        starts.push(Date.now());
+
+        return { kind: "NOT_FOUND" };
+      },
+      { rows: doors(2), options: { spacingMs: 40 } },
+    );
+
+    await h.run.runOnce(NOW);
+
+    expect(starts[1] - starts[0]).toBeGreaterThanOrEqual(39);
+  });
+
+  it("spaces the calls by the env's rate: a thousand milliseconds over the calls a second", () => {
+    expect(spacingFor(1)).toBe(1_000);
+    expect(spacingFor(16)).toBe(63);
+    expect(spacingFor(17)).toBe(59);
+    expect(GEOCODING_RUN_DEFAULTS).toMatchObject({
+      batchSize: 20,
+      spacingMs: 1_000,
+      runBudgetMs: 50_000,
+    });
   });
 });

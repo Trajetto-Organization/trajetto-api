@@ -3,8 +3,8 @@ import type { Redis } from "ioredis";
 import { env } from "@/env";
 import { logger } from "@/shared/logging/logger";
 import {
-  GEOCODING_CALLS_PER_MINUTE,
   createRedisGeocodingGate,
+  geocodingRatesFromEnv,
   type GeocodingGate,
 } from "@/shared/delivery/geocoding/geocoding-gate";
 import {
@@ -67,10 +67,13 @@ function configureAddressSearch(
     log.debug({ err }, "address search limits unreadable");
 
   store = createRedisAddressSearchStore(redis, onError, keys);
-  // The search's ceiling in the minute: the background paths stop ten
-  // calls sooner on the same count.
+  // The search's ceiling in the minute: the background paths stop sooner
+  // on the same count (GEOCODING_BACKGROUND_CALLS_PER_MINUTE).
+  const rates = geocodingRatesFromEnv();
+
   gate = createRedisGeocodingGate(redis, {
-    perMinute: GEOCODING_CALLS_PER_MINUTE,
+    perSecond: rates.perSecond,
+    perMinute: rates.perMinute,
     onError,
     keys,
   });

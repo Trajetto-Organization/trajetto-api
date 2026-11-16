@@ -5,6 +5,14 @@ import {
   LOCAL_AI_DEFAULT_TIMEOUT_MS,
 } from "@/shared/ai/ai-provider-defaults";
 import { isValidCnpj } from "@/shared/delivery/cnpj";
+import {
+  GEOCODING_BACKGROUND_CALLS_PER_MINUTE_DEFAULT,
+  GEOCODING_BATCH_SIZE_DEFAULT,
+  GEOCODING_CALLS_PER_MINUTE_DEFAULT,
+  GEOCODING_CALLS_PER_SECOND_DEFAULT,
+  GEOCODING_RUN_BUDGET_DEFAULT_MS,
+  GEOCODING_RUN_BUDGET_MAX_MS,
+} from "@/shared/delivery/geocoding/geocoding-rules";
 import { isPublicOsmTemplate, isTileTemplate } from "@/shared/map/map-tiles";
 import {
   DEFAULT_PARTIAL_RETRIES_PER_DAY,
@@ -364,6 +372,68 @@ const envSchema = z
     DELIVERY_GEOCODING_DAILY_BUDGET: z.preprocess(
       (value) => (value === "" ? undefined : value),
       z.coerce.number().int().min(0).max(1_000_000).default(2000),
+    ),
+
+    /**
+     * The provider's rate as the geocoder shares it (plano-escala F2-31):
+     * the job, the lookup after a commit and the panel's search, across
+     * every replica (geocoding-gate.ts). The defaults are LocationIQ's free
+     * tier as it ran until 16/11/2026 (2/s and 60/min for the account): one
+     * call a second, 50 in any 60 s for the search, 40 for the background
+     * paths. A paid plan raises them by env instead of by a release: with
+     * the constants, a spreadsheet of 20,000 rows took 8 to 17 hours.
+     */
+    GEOCODING_CALLS_PER_SECOND: z.preprocess(
+      (value) => (value === "" ? undefined : value),
+      z.coerce
+        .number()
+        .int()
+        .min(1)
+        .max(1_000)
+        .default(GEOCODING_CALLS_PER_SECOND_DEFAULT),
+    ),
+    GEOCODING_CALLS_PER_MINUTE: z.preprocess(
+      (value) => (value === "" ? undefined : value),
+      z.coerce
+        .number()
+        .int()
+        .min(1)
+        .max(60_000)
+        .default(GEOCODING_CALLS_PER_MINUTE_DEFAULT),
+    ),
+    GEOCODING_BACKGROUND_CALLS_PER_MINUTE: z.preprocess(
+      (value) => (value === "" ? undefined : value),
+      z.coerce
+        .number()
+        .int()
+        .min(1)
+        .max(60_000)
+        .default(GEOCODING_BACKGROUND_CALLS_PER_MINUTE_DEFAULT),
+    ),
+
+    /**
+     * The minute's job (F2-31): the deliveries one claim takes, and how long
+     * one run keeps claiming while each claim comes back full. Below the
+     * minute, so a run ends before the next minute's firing; the shutdown
+     * also ends it between two claims.
+     */
+    DELIVERY_GEOCODING_BATCH_SIZE: z.preprocess(
+      (value) => (value === "" ? undefined : value),
+      z.coerce
+        .number()
+        .int()
+        .min(1)
+        .max(500)
+        .default(GEOCODING_BATCH_SIZE_DEFAULT),
+    ),
+    DELIVERY_GEOCODING_RUN_BUDGET_MS: z.preprocess(
+      (value) => (value === "" ? undefined : value),
+      z.coerce
+        .number()
+        .int()
+        .min(1_000)
+        .max(GEOCODING_RUN_BUDGET_MAX_MS)
+        .default(GEOCODING_RUN_BUDGET_DEFAULT_MS),
     ),
 
     /**
@@ -922,6 +992,20 @@ const envSchema = z
         code: z.ZodIssueCode.custom,
         path: ["STOP_GRACE_PERIOD_MS"],
         message,
+      });
+    }
+
+    // The background paths stop below the search on the same minute's log,
+    // leaving its tail to the person typing (geocoding-gate.ts): above it,
+    // a spreadsheet's job would take every call the search could have.
+    if (
+      env.GEOCODING_BACKGROUND_CALLS_PER_MINUTE > env.GEOCODING_CALLS_PER_MINUTE
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["GEOCODING_BACKGROUND_CALLS_PER_MINUTE"],
+        message:
+          "GEOCODING_BACKGROUND_CALLS_PER_MINUTE não pode passar de GEOCODING_CALLS_PER_MINUTE: o fim do minuto é da busca de endereço do painel.",
       });
     }
 

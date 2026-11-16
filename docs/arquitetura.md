@@ -1385,13 +1385,21 @@ mesma reserva, o mesmo orçamento e o mesmo portão
   endereço (queda, recusa, 429) devolve a reserva sem gastar tentativa. A
   planilha e o XML ficam só no job, para que mil linhas não passem na frente
   de todo mundo.
-- **O job `geocode-deliveries`**, a cada minuto, é a garantia, com no máximo
-  o lote (20) por execução. Primeiro as entregas que são parada aberta de
-  rota não encerrada (`claimOpenStops`: a mesma reserva com um `EXISTS` em
-  `route_stop` pelo índice `route_stop_active_delivery_idx`), depois as mais
-  novas. Assim uma parada que a busca logo depois do commit não cobriu (fila
-  cheia, pausa, orçamento, vaga ocupada) não espera atrás de uma planilha de
-  mil linhas importada depois.
+- **O job `geocode-deliveries`**, a cada minuto, é a garantia, um lote
+  (`DELIVERY_GEOCODING_BATCH_SIZE`, 20) por vez. Primeiro as entregas que
+  são parada aberta de rota não encerrada (`claimOpenStops`: a mesma
+  reserva com um `EXISTS` em `route_stop` pelo índice
+  `route_stop_active_delivery_idx`), depois as mais novas. Assim uma parada
+  que a busca logo depois do commit não cobriu (fila cheia, pausa,
+  orçamento, vaga ocupada) não espera atrás de uma planilha de mil linhas
+  importada depois. Desde o plano de escala (F2-31), a execução reserva de
+  novo enquanto o lote volta cheio, nada a parou (pausa, orçamento, vaga,
+  provedor falhando) e o tempo dela
+  (`DELIVERY_GEOCODING_RUN_BUDGET_MS`, 50 s) não acabou; o desligamento
+  também encerra entre dois lotes. O tempo vale dentro do lote: o que
+  sobrou dele volta sem gastar tentativa (`stoppedBy: DEADLINE`). Com um
+  lote por minuto, uma planilha de 20 mil linhas levava o dia, qualquer que
+  fosse o plano do provedor.
 
 `DELIVERY_GEOCODING_DAILY_BUDGET` é o teto do dia, somando as réplicas e os
 dois caminhos (contador no Redis). `tests/E2E/import-geocoding-volume.test.ts`
@@ -1446,8 +1454,8 @@ Antes, todo 404 virava `NOT_FOUND` e 401/403/429 viravam `FAILED` da entrega.
 Uma `REVERSE_GEOCODER_URL` com um segmento errado, uma chave inválida ou uma
 cota estourada marcavam todas as entregas abertas como "não encontrado" ou
 esgotavam as 5 tentativas em 2 h 30, para sempre. A pausa e a vaga por
-segundo (no máximo 1 chamada por segundo, somando réplicas e caminhos;
-`geocoding-gate.ts`) ficam no Redis e falham **fechado**, como o orçamento.
+segundo (no máximo `GEOCODING_CALLS_PER_SECOND`, 1 por padrão, somando
+réplicas e caminhos; `geocoding-gate.ts`) ficam no Redis e falham **fechado**, como o orçamento.
 O LocationIQ grátis aceita 2 por segundo por chave, e a outra fica para a
 geocodificação reversa do comprovante, que usa a mesma chave e não passa
 pelo portão: um 429 nela deixaria o PDF sem o endereço do GPS por um dia. A
@@ -1769,8 +1777,14 @@ chave da pausa guarda o motivo junto do prazo (`REFUSED`, `QUOTA` ou
   somando as réplicas e os dois caminhos, num contador de janela fixa no
   Redis (`shared/delivery/geocoding/geocoding-budget.ts`). Ao contrário dos
   limites de requisição, falha **fechado**: sem Redis o geocodificador espera
-  o próximo minuto. São até 20 entregas por execução, uma chamada por
-  segundo no máximo, no total. O Redis é uma conexão por
+  o próximo minuto. As taxas vêm do env (F2-31), com os padrões do
+  LocationIQ grátis: `GEOCODING_CALLS_PER_SECOND` (1),
+  `GEOCODING_CALLS_PER_MINUTE` (50 em qualquer 60 s, a da busca) e
+  `GEOCODING_BACKGROUND_CALLS_PER_MINUTE` (40, a do job e da busca depois
+  do commit, nunca acima da da busca: o boot recusa). A execução espaça o
+  início das próprias chamadas por 1000 ms / chamadas por segundo, contado
+  do início da anterior: um provedor que demora mais que isso para
+  responder não é esperado duas vezes. O Redis é uma conexão por
   processo, aberta na primeira busca e fechada no desligamento
   (`geocoding-runtime.ts`).
 - Não mexe em `updated_at` (não é edição do cliente).
@@ -1834,8 +1848,8 @@ chave da pausa guarda o motivo junto do prazo (`REFUSED`, `QUOTA` ou
   Cada lote é uma transação curta (o `psql` confirma cada comando): uma linha
   que o motorista ou o painel está gravando é pulada (`SKIP LOCKED`) e entra
   num lote seguinte, e nenhuma escrita espera mais que um lote. `updated_at`
-  não muda. O orçamento do dia continua valendo, e o job drena 20 por minuto,
-  as paradas abertas primeiro. Não há nova tentativa automática de
+  não muda. O orçamento do dia continua valendo, e o job drena na taxa do
+  env, um lote atrás do outro, as paradas abertas primeiro. Não há nova tentativa automática de
   `NOT_FOUND`: a resposta raramente muda, e repetir exigiria trocar o
   predicado do índice parcial.
 

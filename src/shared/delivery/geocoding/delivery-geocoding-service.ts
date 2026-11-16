@@ -13,7 +13,12 @@ import type {
   GeocodingSettlement,
   IDeliveryGeocodingRepository,
 } from "./geocoding-repository";
-import { GEOCODING_MAX_ATTEMPTS } from "./geocoding-rules";
+import {
+  GEOCODING_BATCH_SIZE_DEFAULT,
+  GEOCODING_CALLS_PER_SECOND_DEFAULT,
+  GEOCODING_MAX_ATTEMPTS,
+  GEOCODING_RUN_BUDGET_DEFAULT_MS,
+} from "./geocoding-rules";
 
 /**
  * One run of the geocoding (plan of 02/11/2026, E1; decision D15): claim
@@ -47,18 +52,30 @@ import { GEOCODING_MAX_ATTEMPTS } from "./geocoding-rules";
  * longer spends the provider's day (address-point-reuse.ts).
  *
  * Two entry points. runOnce is the minute's job: the open stops of
- * unfinished routes first (claimOpenStops), then the newest. runFor
- * is the lookup a create, an address edit or a routing starts after its
- * commit (geocode-soon.ts), over those deliveries only: it settles only an
- * answer about the address and gives anything else back to the job. Off
- * the request path, both: no answer waits for the provider.
+ * unfinished routes first (claimOpenStops), then the newest, a batch at a
+ * time, claiming again while each batch comes back full and the run's time
+ * lasts (plano-escala F2-31: one batch a minute put a spreadsheet of 20,000
+ * rows a day behind). runFor is the lookup a create, an address edit or a
+ * routing starts after its commit (geocode-soon.ts), over those deliveries
+ * only: it settles only an answer about the address and gives anything
+ * else back to the job. Off the request path, both: no answer waits for
+ * the provider.
  */
 
 interface GeocodingRunOptions {
-  /** Deliveries claimed per run (the cron runs every minute). */
+  /** Deliveries one claim takes (DELIVERY_GEOCODING_BATCH_SIZE). */
   batchSize: number;
-  /** Pause between two calls, to stay under the provider's rate. */
+  /**
+   * The least time between the starts of two calls of one run, to stay
+   * under the provider's rate: 1000 / GEOCODING_CALLS_PER_SECOND.
+   */
   spacingMs: number;
+  /**
+   * How long the minute's job keeps claiming, and working what it claimed
+   * (DELIVERY_GEOCODING_RUN_BUDGET_MS). Past it, nothing more is asked:
+   * what is left of the batch goes back for the next run.
+   */
+  runBudgetMs: number;
   /** FAILED answers in a row that stop the run: the provider is down. */
   failureStreak: number;
   /** How long to wait for the next second when its slots are taken. */
@@ -67,9 +84,12 @@ interface GeocodingRunOptions {
   slotTries: number;
 }
 
-/** Why a run stopped before its last claim; the rest were released. */
+/**
+ * Why a run stopped before its last claim; the rest were released.
+ * DEADLINE: the job's time ran out mid-batch (runBudgetMs).
+ */
 type GeocodingStop =
-  "REFUSED" | "RATE_LIMITED" | "FAILURES" | "BUDGET" | "NO_SLOT";
+  "REFUSED" | "RATE_LIMITED" | "FAILURES" | "BUDGET" | "NO_SLOT" | "DEADLINE";
 
 /**
  * A settle that ended the lookup — the stop's screen changes: a point, or
@@ -153,16 +173,30 @@ interface DeliveryGeocodingDeps {
   announce?: AnnounceSettled;
   readHold?: ReadHold;
   options?: Partial<GeocodingRunOptions>;
+  /** Milliseconds, for the run's time; Date.now by default. */
+  clock?: () => number;
+  /**
+   * True once the process is shutting down (lifecycle/draining.ts): the
+   * job claims no other batch, so its run ends inside the shutdown's
+   * deadline instead of leaving leased rows behind.
+   */
+  stopping?: () => boolean;
+}
+
+/** The spacing of one run's calls at `perSecond` calls a second. */
+function spacingFor(perSecond: number): number {
+  return Math.ceil(1_000 / Math.max(1, perSecond));
 }
 
 /**
- * One call a second at most, the gate's rate (GEOCODING_CALLS_PER_SECOND):
- * the run spaces its own calls by that much, and the gate holds every
- * replica and path together to it.
+ * One call a second at most by default, the gate's rate
+ * (GEOCODING_CALLS_PER_SECOND): the run spaces the starts of its own calls
+ * by that much, and the gate holds every replica and path together to it.
  */
 const GEOCODING_RUN_DEFAULTS: GeocodingRunOptions = {
-  batchSize: 20,
-  spacingMs: 1_000,
+  batchSize: GEOCODING_BATCH_SIZE_DEFAULT,
+  spacingMs: spacingFor(GEOCODING_CALLS_PER_SECOND_DEFAULT),
+  runBudgetMs: GEOCODING_RUN_BUDGET_DEFAULT_MS,
   failureStreak: 3,
   slotWaitMs: 400,
   slotTries: 3,
@@ -270,9 +304,13 @@ function endsTheLookup(
 const sleep = (ms: number) =>
   new Promise<void>((resolve) => setTimeout(resolve, ms));
 
-/** One run's state: whether a call was made yet, for the spacing. */
+/**
+ * One run's state: when its last call started, for the spacing, and when
+ * it must stop asking (the job's runBudgetMs; never for runFor).
+ */
 interface RunState {
-  calls: number;
+  lastCallAt: number | null;
+  deadline: number;
 }
 
 class DeliveryGeocodingService {
@@ -283,6 +321,8 @@ class DeliveryGeocodingService {
   private readonly announce: AnnounceSettled | undefined;
   private readonly readHold: ReadHold | undefined;
   private readonly options: GeocodingRunOptions;
+  private readonly clock: () => number;
+  private readonly stopping: () => boolean;
 
   constructor(deps: DeliveryGeocodingDeps) {
     this.repository = deps.repository;
@@ -292,6 +332,8 @@ class DeliveryGeocodingService {
     this.announce = deps.announce;
     this.readHold = deps.readHold;
     this.options = { ...GEOCODING_RUN_DEFAULTS, ...deps.options };
+    this.clock = deps.clock ?? Date.now;
+    this.stopping = deps.stopping ?? (() => false);
   }
 
   /**
@@ -299,8 +341,47 @@ class DeliveryGeocodingService {
    * routes first — what a driver will visit and a route page shows, which
    * must not wait behind a newer spreadsheet of a thousand rows — then the
    * newest of the rest, to the batch.
+   *
+   * Then another batch, while the last one came back full, nothing stopped
+   * it (a pause, the budget, the slots, the provider failing, the time) and
+   * the process is not shutting down: a backlog drains at the rate the env
+   * allows instead of a batch a minute (F2-31). Each batch is claimed at
+   * its own instant: `now` moved by the time the run has taken.
    */
   async runOnce(now: Date = new Date()): Promise<GeocodingRunResult> {
+    const started = this.clock();
+    const deadline = started + this.options.runBudgetMs;
+    const at = () => new Date(now.getTime() + (this.clock() - started));
+    const first = await this.runBatch(now, deadline);
+    // The run's own lists: the first batch's were already handed to the
+    // announcer, and the later batches' are added here.
+    const total: GeocodingRunResult = {
+      ...first,
+      providerStatuses: [...first.providerStatuses],
+      settled: [...first.settled],
+    };
+
+    let last = first;
+
+    while (
+      !last.skipped &&
+      !last.stoppedBy &&
+      last.claimed >= this.options.batchSize &&
+      this.clock() < deadline &&
+      !this.stopping()
+    ) {
+      last = await this.runBatch(at(), deadline);
+      absorb(total, last);
+    }
+
+    return total;
+  }
+
+  /** One batch of the minute's job: claim, then work what was claimed. */
+  private async runBatch(
+    now: Date,
+    deadline: number,
+  ): Promise<GeocodingRunResult> {
     const result = emptyResult();
 
     // A paused run claims nothing, not even for a reuse, which needs no
@@ -331,7 +412,7 @@ class DeliveryGeocodingService {
 
     result.claimed = claims.length;
 
-    await this.work(claims, now, "JOB", result);
+    await this.work(claims, now, "JOB", result, deadline);
 
     return result;
   }
@@ -362,7 +443,7 @@ class DeliveryGeocodingService {
 
     result.claimed = claims.length;
 
-    await this.work(claims, now, "SOON", result);
+    await this.work(claims, now, "SOON", result, Number.POSITIVE_INFINITY);
 
     return result;
   }
@@ -385,12 +466,23 @@ class DeliveryGeocodingService {
     now: Date,
     mode: "JOB" | "SOON",
     result: GeocodingRunResult,
+    deadline: number,
   ): Promise<void> {
-    const run: RunState = { calls: 0 };
+    const run: RunState = { lastCallAt: null, deadline };
     let failures = 0;
 
     try {
       for (const [index, claim] of claims.entries()) {
+        // The job's time is up: what is left of the batch goes back
+        // unasked for the next run, instead of holding its lease while a
+        // run of the next minute starts.
+        if (this.clock() >= run.deadline) {
+          result.stoppedBy = "DEADLINE";
+          await this.releaseFrom(claims, index, result);
+
+          return;
+        }
+
         if (await this.reuse(claim, now, result)) continue;
 
         const outcome = await this.lookUp(claim, now, run);
@@ -549,7 +641,11 @@ class DeliveryGeocodingService {
     return answerRank(second) > answerRank(first) ? second : first;
   }
 
-  /** One provider call: the budget, the spacing, the slot, the call. */
+  /**
+   * One provider call: the budget, the spacing, the slot, the call. The
+   * spacing counts from the start of the run's last call, so a provider
+   * slower to answer than the spacing is not waited for twice.
+   */
   private async ask(
     claim: GeocodingClaim,
     query: GeocodeQuery,
@@ -558,13 +654,15 @@ class DeliveryGeocodingService {
   ): Promise<GeocodeOutcome | "BUDGET" | "NO_SLOT"> {
     if ((await this.budget.remaining(now)) <= 0) return "BUDGET";
 
-    if (run.calls > 0 && this.options.spacingMs > 0) {
-      await sleep(this.options.spacingMs);
+    if (run.lastCallAt !== null && this.options.spacingMs > 0) {
+      const wait = run.lastCallAt + this.options.spacingMs - this.clock();
+
+      if (wait > 0) await sleep(wait);
     }
 
     if (!(await this.slot())) return "NO_SLOT";
 
-    run.calls += 1;
+    run.lastCallAt = this.clock();
 
     const outcome = await this.geocode(claim, query);
 
@@ -611,6 +709,32 @@ function emptyResult(): GeocodingRunResult {
   };
 }
 
+/**
+ * A later batch of the same run, added to the run's result: its counts,
+ * its settles and statuses, and why it stopped. A batch that asked
+ * nothing because the budget ran out is the run stopped by it (the next
+ * run, held, says so); a pause set meanwhile by another path says nothing
+ * here either way.
+ */
+function absorb(total: GeocodingRunResult, batch: GeocodingRunResult): void {
+  total.claimed += batch.claimed;
+  total.resolved += batch.resolved;
+  total.coarse += batch.coarse;
+  total.notFound += batch.notFound;
+  total.failed += batch.failed;
+  total.reused += batch.reused;
+  total.released += batch.released;
+  total.providerStatuses.push(...batch.providerStatuses);
+  total.settled.push(...batch.settled);
+
+  if (batch.stoppedBy) {
+    total.stoppedBy = batch.stoppedBy;
+    total.hold = batch.hold;
+  } else if (batch.skipped === "BUDGET") {
+    total.stoppedBy = "BUDGET";
+  }
+}
+
 function tally(
   result: GeocodingRunResult,
   settlement: GeocodingSettlement,
@@ -630,6 +754,7 @@ export {
   pauseReason,
   pauseUntil,
   settlementOf,
+  spacingFor,
 };
 export type {
   AnnounceSettled,
