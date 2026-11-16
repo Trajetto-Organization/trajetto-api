@@ -326,8 +326,6 @@ describe("the schedule map (docs/operacao/jobs.md)", () => {
       "history-window × planted",
       "restore-drill × planted",
     ]);
-    expect(runsOn("seg–sáb, exceto dia 1", new Date("2026-12-01"))).toBe(
-      false,
-    );
+    expect(runsOn("seg–sáb, exceto dia 1", new Date("2026-12-01"))).toBe(false);
   });
 });

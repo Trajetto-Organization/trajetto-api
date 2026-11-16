@@ -336,8 +336,7 @@ class InMemoryUserTokensRepository implements IUsersTokensRepository {
       .filter((item) => item.expires_in < now)
       .sort((a, b) => a.expires_in.getTime() - b.expires_in.getTime());
 
-    const take =
-      Date.now() >= deadline ? 0 : Math.min(maxRows, expired.length);
+    const take = Date.now() >= deadline ? 0 : Math.min(maxRows, expired.length);
     const gone = new Set(expired.slice(0, take));
 
     this.refreshTokenItems = this.refreshTokenItems.filter(

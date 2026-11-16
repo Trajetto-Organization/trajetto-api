@@ -130,7 +130,7 @@ const NEGATIVE_SOURCE: PlantedSource = {
     "await client.$queryRaw`SELECT set_config('app.tenant', ${id}, true)`;",
     'const label = "Set the vehicle up before the first route";',
     'const help = "listen to the driver; prepare the route";',
-    "await client.$executeRaw`ALTER TABLE \"t\" ALTER COLUMN \"c\" SET NOT NULL`;",
+    'await client.$executeRaw`ALTER TABLE "t" ALTER COLUMN "c" SET NOT NULL`;',
   ].join("\n"),
 };
 

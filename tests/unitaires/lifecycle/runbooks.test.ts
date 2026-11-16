@@ -237,7 +237,10 @@ describe("the runbooks", () => {
         text.split("\n").indexOf(section),
       );
 
-      expect(positions.every((position) => position >= 0), name).toBe(true);
+      expect(
+        positions.every((position) => position >= 0),
+        name,
+      ).toBe(true);
       expect(
         [...positions].sort((a, b) => a - b),
         `${name}: sections out of order`,
