@@ -241,16 +241,17 @@ describe("the images", () => {
     ).toEqual(["FROM alpine AS tools", "FROM node:22@sha256:ab AS base"]);
   });
 
-  it.each(["Dockerfile", "infra/ai-ocr/Dockerfile"])(
-    "%s pins every base image by digest",
-    (path) => {
-      const bases = baseImages(read(path));
+  it.each([
+    "Dockerfile",
+    "infra/ai-ocr/Dockerfile",
+    "infra/postgres/Dockerfile",
+  ])("%s pins every base image by digest", (path) => {
+    const bases = baseImages(read(path));
 
-      expect(bases.length).toBeGreaterThan(0);
+    expect(bases.length).toBeGreaterThan(0);
 
-      for (const line of bases) expect(line).toMatch(/@sha256:[0-9a-f]{64}/);
-    },
-  );
+    for (const line of bases) expect(line).toMatch(/@sha256:[0-9a-f]{64}/);
+  });
 
   it("ships without npm-run-all: the entrypoint runs node directly", () => {
     const pkg = JSON.parse(read("package.json"));

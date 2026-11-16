@@ -6,3 +6,8 @@
 # The OCR weights of the AI image (infra/ai-ocr/models), checked by SHA-256
 # in the build: never converted, never diffed as text.
 *.onnx binary
+
+# The trajetto-postgres image (infra/postgres): its scripts in bin/ have no
+# extension, and pgBackRest's ini and the params file break on a carriage
+# return too.
+infra/postgres/** text eol=lf

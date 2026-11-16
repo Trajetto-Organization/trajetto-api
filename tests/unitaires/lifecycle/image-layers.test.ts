@@ -54,6 +54,7 @@ function stage(dockerfile: string, name: string): string[] {
 
 const ai = read("infra/ai-ocr/Dockerfile");
 const api = read("Dockerfile");
+const postgres = read("infra/postgres/Dockerfile");
 
 /** Runtime requirements files (the test stage's is not shipped). */
 const runtimeFiles = readdirSync(resolve(ROOT, "infra/ai-ocr"))
@@ -262,6 +263,8 @@ describe("the AI image's models and code", () => {
 describe.each([
   ["infra/ai-ocr/Dockerfile", ai, "runtime"],
   ["Dockerfile", api, "runner"],
+  // The entrypoint hands it to the server as trajetto.image_revision.
+  ["infra/postgres/Dockerfile", postgres, "runtime"],
 ])("%s carries its commit", (_, dockerfile, last) => {
   it("as APP_COMMIT_SHA, from a GIT_SHA build arg declared after the last RUN", () => {
     const lines = stage(dockerfile, last);

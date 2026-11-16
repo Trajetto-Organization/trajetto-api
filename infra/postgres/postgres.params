@@ -1,0 +1,57 @@
+# Static parameters of the trajetto-postgres image (plano-escala F1-01).
+#
+# One name=value per line, no spaces, no quotes; trajetto-entrypoint.sh
+# passes each one as `-c name=value`, which wins over postgresql.conf and
+# over ALTER SYSTEM, and goes away with the image when it is rolled back.
+#
+# NOT here, on purpose (the entrypoint sets them from the environment): the
+# memory (shared_buffers, effective_cache_size, work_mem,
+# maintenance_work_mem, autovacuum_work_mem, autovacuum_max_workers),
+# max_connections, max_wal_size, max_slot_wal_keep_size, commit_delay,
+# commit_siblings and every archive_* (tests/unitaires/lifecycle/
+# postgres-image.test.ts keeps them out). synchronous_commit stays at its
+# default, on: a 2xx means the row is committed (guarded by
+# tests/unitaires/database/synchronous-commit-guard.test.ts).
+
+# --- pg_stat_statements (F1-05, F1-12) ---------------------------------------
+# Preloaded alone. auto_explain prints plans with their constants (a CPF, an
+# e-mail): the entrypoint adds it only with POSTGRES_AUTO_EXPLAIN=on.
+shared_preload_libraries=pg_stat_statements
+compute_query_id=on
+pg_stat_statements.max=10000
+# BEGIN/COMMIT/SET would crowd the 10,000 entries out of the real statements.
+pg_stat_statements.track_utility=off
+track_io_timing=on
+
+# --- logs without personal data -----------------------------------------------
+# No bind parameter in any log line: the values of a slow or failed
+# statement are the user's data.
+log_parameter_max_length=0
+log_parameter_max_length_on_error=0
+log_min_duration_statement=500ms
+log_lock_waits=on
+log_autovacuum_min_duration=1s
+log_temp_files=0
+
+# --- the planner and the executor ---------------------------------------------
+# JIT compiles for whole milliseconds a query that runs in a few: off.
+jit=off
+# Parallel workers share /dev/shm, which is 64 MB in a Swarm task: a
+# parallel hash of a few work_mem would not fit. Off until the gate B
+# measures dynamic_shared_memory_type=sysv.
+max_parallel_workers_per_gather=0
+max_parallel_maintenance_workers=0
+hash_mem_multiplier=2
+# NVMe/SSD, not spinning disks.
+random_page_cost=1.1
+effective_io_concurrency=200
+
+# --- WAL and checkpoints -------------------------------------------------------
+# replica, never minimal: archiving and a future standby both need it.
+wal_level=replica
+wal_compression=lz4
+checkpoint_timeout=15min
+
+# --- autovacuum ----------------------------------------------------------------
+autovacuum_vacuum_cost_limit=2000
+autovacuum_naptime=15s
