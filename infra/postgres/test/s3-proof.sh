@@ -53,7 +53,9 @@ READ_KEY="read$(random 8)"
 READ_SECRET=$(random 20)
 
 cleanup() {
-  docker ps -aq --filter "name=^${PREFIX}-" | xargs -r docker rm -f > /dev/null 2>&1 || true
+  # -v: MinIO declares a VOLUME (/data); a container removed without it
+  # leaves that anonymous volume behind on every run.
+  docker ps -aq --filter "name=^${PREFIX}-" | xargs -r docker rm -f -v > /dev/null 2>&1 || true
   docker volume rm "$VOLUME" > /dev/null 2>&1 || true
   docker network rm "$NET" > /dev/null 2>&1 || true
   rm -rf "$WORK"
@@ -135,7 +137,7 @@ envfile="${WORK}/db.env"
 # "ready": that one does not count.
 FRESH=yes
 start_db() {
-  docker rm -f "$DB" > /dev/null 2>&1 || true
+  docker rm -f -v "$DB" > /dev/null 2>&1 || true
   local extra=() want=1 logs
   for pair in "$@"; do extra+=(-e "$pair"); done
   if [ "$FRESH" = yes ]; then want=2; fi

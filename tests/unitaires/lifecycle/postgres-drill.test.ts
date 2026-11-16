@@ -616,6 +616,8 @@ describe("the image's S3 proof (infra/postgres/test/s3-proof.sh)", () => {
 
   it("leaves nothing behind: every container, the network and the volume under its prefix", () => {
     expect(proof).toContain('docker ps -aq --filter "name=^${PREFIX}-"');
+    // MinIO declares a VOLUME: without -v every run left one behind.
+    expect(proof).toContain("xargs -r docker rm -f -v");
     expect(proof).toContain('docker volume rm "$VOLUME"');
     expect(proof).toContain('docker network rm "$NET"');
     expect(proof).toMatch(/trap cleanup EXIT/);
