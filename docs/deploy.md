@@ -3701,6 +3701,7 @@ trajetto-api-production=N`, que o próximo deploy desfaz) e refaça o
   | ----------------------------------------------- | ------------------------ | --------------------- | ----------- |
   | teto (`SHUTDOWN_TIMEOUT_MS`)                    | g − clamp(g/8, 1 s, 5 s) | 8,75 s                | 35 s        |
   | dreno (`SHUTDOWN_DRAIN_MS`)                     | 0,3 g                    | 3 s                   | 12 s        |
+  | pedidos em andamento, depois do dreno           | 0,25 g                   | 2,5 s                 | 10 s        |
   | planilha em andamento (`IMPORT_DRAIN_GRACE_MS`) | 0,375 g                  | 3,75 s                | 15 s        |
   | para ela parar / para gravar                    | g/8 / g/20               | 1,25 s / 0,5 s        | 5 s / 2 s   |
   | workers (`SHUTDOWN_WORKERS_MS`)                 | 0,3 g                    | 3 s                   | 12 s        |
@@ -3710,10 +3711,17 @@ trajetto-api-production=N`, que o próximo deploy desfaz) e refaça o
   manda para outra réplica. As conexões ociosas não são fechadas em laço
   (uma fechada enquanto o Traefik escreve um POST nela vira 502, que o Go
   não repete); ficam para o fechamento do HTTP no fim do dreno. Dreno e
-  importação correm juntos desde o SIGTERM; os workers começam depois dos
-  dois e terminam em até 0,85 g, antes do teto. Cada prazo aceita
-  um valor à mão (as variáveis entre parênteses), e um que não cabe no grace
-  derruba o boot com a mensagem. A linha `shutting down` do log traz o
+  importação correm juntos desde o SIGTERM. O fechamento do HTTP espera os
+  pedidos ainda em andamento, e nada mais o limita (o corpo pode levar até
+  120 s para chegar): por isso eles têm até 0,25 g depois do dreno, e
+  passado disso a conexão deles é fechada (o cliente vê o pedido falhar e o
+  manda de novo, como faria depois do teto). Sem esse prazo, um upload
+  lento segurava os workers até o teto, que saía com `exit 1` antes de eles
+  pararem. Os workers começam depois do HTTP e da importação, em até
+  0,55 g, e terminam em até 0,85 g, antes do teto; o que sobra até o teto é
+  do `QUIT` do Redis. Cada prazo aceita um valor à mão (as variáveis entre
+  parênteses; o dos pedidos em andamento não tem), e um que não cabe no
+  grace derruba o boot com a mensagem. A linha `shutting down` do log traz o
   plano, e a `shutdown complete` traz `durationMs`. Desde o SIGTERM, a fila
   de importação recusa planilhas novas (429 `IMPORT_BUSY`), fecha na hora as
   que esperavam ("não iniciada: envie de novo"), dá à que está rodando o

@@ -515,8 +515,10 @@ depois disso, e é por ele que o pipeline sabe que a etapa terminou.
 
 O desligamento é ordenado (`src/shared/lifecycle/shutdown.ts`): a readiness
 passa a 503, a réplica continua atendendo durante o dreno as conexões que o
-Traefik já tem com ela, fecha o tempo real e o HTTP, espera a fila de
-importações drenar, e então fecha os workers e o Redis. Os prazos saem do
+Traefik já tem com ela, fecha o tempo real e o HTTP (os pedidos ainda em
+andamento têm até um quarto do grace; depois, a conexão deles é fechada,
+para não segurar os workers até o teto), espera a fila de importações
+drenar, e então fecha os workers e o Redis. Os prazos saem do
 _Stop Grace Period_ que o Swarm dá ao serviço (`STOP_GRACE_PERIOD_MS`,
 `src/shared/lifecycle/shutdown-plan.ts`): sem a variável, valem os 10 s do
 Docker e tudo termina em menos de 9 s; com `40000`, teto de 35 s e dreno de

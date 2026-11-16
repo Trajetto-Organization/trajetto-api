@@ -75,7 +75,8 @@ let shuttingDown = false;
  * own 10 s is assumed and the whole sequence ends in under 9 s. With the
  * 40 s grace set on the API Application and the variable at 40000: a 35 s
  * watchdog, a 12 s drain, 15 s (then 5 + 2) for the running upload and 12 s
- * for the workers, the figures these steps were tuned against.
+ * for the workers, the figures these steps were tuned against, plus 10 s
+ * after the drain for the requests still in flight.
  *
  * The drain is how long the replica keeps answering after readiness flips
  * to 503. Nothing polls readiness on the way out: Dokploy's Traefik talks to
@@ -120,6 +121,17 @@ async function gracefulShutdown() {
       drainImports: () => importQueue.drain(drainOptionsFrom(shutdownPlan)),
       closeRealtime: closeRealtimeConnections,
       closeHttp: () => app.close(),
+      httpMs: shutdownPlan.httpMs,
+      // Past the plan's deadline, the requests still in flight lose their
+      // connection instead of holding the workers past the watchdog: an
+      // upload still arriving at the phone's pace, a long export.
+      cutHttp: () => {
+        log.warn(
+          { httpMs: shutdownPlan.httpMs },
+          "requests still in flight at the HTTP deadline; closing their connections",
+        );
+        app.server.closeAllConnections();
+      },
       stopWorkers: () =>
         shutdownWorkers({ deadlineMs: shutdownPlan.workersMs }),
       // Closes the Redis pub/sub clients from the Socket.IO adapter

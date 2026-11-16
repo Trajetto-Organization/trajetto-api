@@ -98,6 +98,8 @@ describe("graceful shutdown sequence", () => {
         closeHttp: async () => {
           calls.push("http");
         },
+        httpMs: 10_000,
+        cutHttp: () => calls.push("cut"),
         stopWorkers: async () => {
           calls.push("workers");
         },
@@ -142,6 +144,8 @@ describe("graceful shutdown sequence", () => {
         closeHttp: async () => {
           calls.push("http");
         },
+        httpMs: 10_000,
+        cutHttp: () => calls.push("cut"),
         stopWorkers: async () => {
           calls.push("workers");
         },
@@ -183,6 +187,8 @@ describe("graceful shutdown sequence", () => {
       },
       closeRealtime: () => undefined,
       closeHttp: async () => undefined,
+      httpMs: 10_000,
+      cutHttp: () => undefined,
       stopWorkers: async () => {
         calls.push("workers");
       },
@@ -204,6 +210,8 @@ describe("graceful shutdown sequence", () => {
         drainImports: async () => undefined,
         closeRealtime: () => undefined,
         closeHttp: async () => undefined,
+        httpMs: 10_000,
+        cutHttp: () => undefined,
         stopWorkers: async () => undefined,
         closeRedis: async () => undefined,
       },
@@ -241,11 +249,160 @@ describe("closing the HTTP server with websockets open", () => {
       drainImports: async () => undefined,
       closeRealtime: () => io.engine.close(),
       closeHttp: () => app.close(),
+      httpMs: 10_000,
+      cutHttp: () => app.server.closeAllConnections(),
       stopWorkers: async () => undefined,
       closeRedis: async () => undefined,
     });
 
     expect(Date.now() - started).toBeLessThan(1_500);
+  });
+});
+
+/** What one request ended with: its status and body, or its socket error. */
+interface Outcome {
+  status?: number;
+  body?: string;
+  error?: string;
+}
+
+/** A GET on a connection of its own, settled however it ends. */
+function outcomeOf(port: number, path: string): Promise<Outcome> {
+  return new Promise((resolveOutcome) => {
+    const req = httpRequest(
+      { host: "127.0.0.1", port, path, agent: false },
+      (res) => {
+        let body = "";
+
+        res.setEncoding("utf8");
+        res.on("data", (chunk: string) => {
+          body += chunk;
+        });
+        res.once("end", () => resolveOutcome({ status: res.statusCode, body }));
+        res.once("error", (error) => resolveOutcome({ error: error.message }));
+      },
+    );
+
+    req.once("error", (error) => resolveOutcome({ error: error.message }));
+    req.end();
+  });
+}
+
+/** A server whose route answers when the test says so, or never. */
+async function serverWithSlowRoute(answerAfterMs: number | null): Promise<{
+  app: FastifyInstance;
+  port: number;
+  arrived: Promise<void>;
+}> {
+  const app = fastify();
+
+  let release!: () => void;
+  const released = new Promise<void>((resolveRelease) => {
+    release = resolveRelease;
+  });
+
+  let arrive!: () => void;
+  const arrived = new Promise<void>((resolveArrive) => {
+    arrive = resolveArrive;
+  });
+
+  app.get("/slow", async () => {
+    arrive();
+
+    if (answerAfterMs === null) await released;
+    else
+      await new Promise((resolveLater) =>
+        setTimeout(resolveLater, answerAfterMs),
+      );
+
+    return "done";
+  });
+
+  await app.listen({ host: "127.0.0.1", port: 0 });
+
+  // A handler left waiting must not outlive the test.
+  cleanup.push(async () => {
+    release();
+    await app.close();
+  });
+
+  return { app, port: (app.server.address() as AddressInfo).port, arrived };
+}
+
+/**
+ * A request still in flight when the drain ends no longer holds the
+ * workers back (plano-escala F1-14).
+ *
+ * `app.close()` waits for every request in flight and has no deadline of
+ * its own; the body may take up to 120 s (HTTP_REQUEST_TIMEOUT_MS). An old
+ * app build sending a photo through the multipart adapter on a slow 3G link
+ * held the close past the plan, the watchdog's exit(1) came before the
+ * workers stopped, a cron run was left RUNNING for the sweep to write off as
+ * FAILED and the notification and webhook batches fell back to their leases.
+ * The requests now get the plan's `httpMs`, then their connections are
+ * closed — they were lost to the watchdog anyway — and the workers stop
+ * inside the grace.
+ */
+describe("a request still in flight when the drain ends", () => {
+  it("is cut at the plan's HTTP deadline, and the workers still stop", async () => {
+    const { app, port, arrived } = await serverWithSlowRoute(null);
+    const calls: string[] = [];
+
+    const outcome = outcomeOf(port, "/slow");
+    await arrived;
+
+    const shutdown = runShutdown({
+      markDraining: () => undefined,
+      drainMs: 0,
+      drainImports: async () => undefined,
+      closeRealtime: () => undefined,
+      closeHttp: () => app.close(),
+      httpMs: 300,
+      cutHttp: () => {
+        calls.push("cut");
+        app.server.closeAllConnections();
+      },
+      stopWorkers: async () => {
+        calls.push("workers");
+      },
+      closeRedis: async () => {
+        calls.push("redis");
+      },
+    });
+
+    expect(await settlesWithin(shutdown, 2_000)).toBe(true);
+    expect(calls).toEqual(["cut", "workers", "redis"]);
+
+    // The client learns its request did not complete, and retries it.
+    expect((await outcome).error).toBeDefined();
+  });
+
+  it("lets a request that ends within the deadline finish, untouched", async () => {
+    const { app, port, arrived } = await serverWithSlowRoute(200);
+    const calls: string[] = [];
+
+    const outcome = outcomeOf(port, "/slow");
+    await arrived;
+
+    await runShutdown({
+      markDraining: () => undefined,
+      drainMs: 0,
+      drainImports: async () => undefined,
+      closeRealtime: () => undefined,
+      closeHttp: () => app.close(),
+      httpMs: 5_000,
+      cutHttp: () => {
+        calls.push("cut");
+        app.server.closeAllConnections();
+      },
+      stopWorkers: async () => {
+        calls.push("workers");
+      },
+      closeRedis: async () => undefined,
+    });
+
+    expect(calls).toEqual(["workers"]);
+    expect(await outcome).toEqual({ status: 200, body: "done" });
   });
 });
 
@@ -313,6 +470,8 @@ describe("a draining replica, through the real server", () => {
           drainImports: async () => undefined,
           closeRealtime: () => undefined,
           closeHttp: () => app.close(),
+          httpMs: 10_000,
+          cutHttp: () => app.server.closeAllConnections(),
           stopWorkers: async () => undefined,
           closeRedis: async () => undefined,
         },

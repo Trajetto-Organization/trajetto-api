@@ -1,3 +1,5 @@
+import { settlesWithin } from "./deadline";
+
 /**
  * The order a replica goes away in, kept apart from `server.ts` so it can be
  * tested without booting the application.
@@ -18,7 +20,15 @@
  *    killed the process mid-send. Closing the Socket.IO engine ends them with
  *    "transport close", which the clients answer by reconnecting to another
  *    replica.
- * 3. HTTP, then WORKERS. In-flight requests finish against live services.
+ * 3. HTTP, then WORKERS. In-flight requests finish against live services,
+ *    within the plan's `httpMs`. `app.close()` waits for every one of them
+ *    and has no deadline of its own (a body may take 120 s to arrive): an
+ *    old app build sending a photo through the multipart adapter on a slow
+ *    3G link held it until the watchdog's exit(1), before the workers had
+ *    stopped — a cron run left RUNNING, the batches back to their leases.
+ *    Past the deadline the connections still open are closed (the client
+ *    sees its request fail and sends it again, as it would after the
+ *    watchdog), and the workers stop inside the grace.
  * 4. REDIS LAST. Nothing publishes after the workers stopped.
  *
  * Alongside, from the first instant: the in-process IMPORT QUEUE
@@ -50,7 +60,21 @@ interface ShutdownSteps {
   /** Ends every websocket so the HTTP server can close. */
   closeRealtime: () => void;
 
+  /**
+   * Stops accepting connections and settles once every request in flight
+   * has been answered (Fastify's close).
+   */
   closeHttp: () => Promise<void>;
+
+  /**
+   * How long the requests still in flight get once the drain is over (the
+   * plan's httpMs); past it, `cutHttp`.
+   */
+  httpMs: number;
+
+  /** Ends every HTTP connection still open, in flight or not. */
+  cutHttp: () => void;
+
   stopWorkers: () => Promise<void>;
   closeRedis: () => Promise<void>;
 }
@@ -71,7 +95,11 @@ async function runShutdown(
 
   steps.closeRealtime();
 
-  await steps.closeHttp();
+  const closing = steps.closeHttp();
+
+  if (!(await settlesWithin(closing, steps.httpMs))) steps.cutHttp();
+
+  await closing;
   await imports;
   await steps.stopWorkers();
   await steps.closeRedis();

@@ -420,9 +420,11 @@ As lacunas eram pequenas e reais, e nenhuma pedia broker:
    estornar mesmo com zero contadas, porque a linha em que ela travou ainda
    pode gravar depois da contagem.
 
-   Tudo isso cabe no teto de 35 s: importações até 22 s (15 + 5 + 2), e
-   depois os workers, com até 10 s (12 s no despachante de webhooks: o
-   timeout de 10 s da chamada mais 2 s). São os prazos com o grace de 40 s;
+   Tudo isso cabe no teto de 35 s: importações até 22 s (15 + 5 + 2), o
+   HTTP também (12 s de dreno e até 10 s para os pedidos em andamento,
+   cujas conexões são fechadas depois disso), e então os workers, com até
+   10 s (12 s no despachante de webhooks: o timeout de 10 s da chamada
+   mais 2 s). São os prazos com o grace de 40 s;
    todos saem de `STOP_GRACE_PERIOD_MS` (`src/shared/lifecycle/shutdown-plan.ts`),
    e sem a variável cabem nos 10 s do Docker. A varredura continua como piso para
    SIGKILL, OOM e perda de nó, e escreve o mesmo tipo de relatório (o

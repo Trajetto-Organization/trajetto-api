@@ -19,14 +19,22 @@
  *
  *   watchdog  = g − clamp(g/8, 1 s, 5 s)
  *   drain     = 0.3 g
+ *   http      = 0.25 g for the requests still in flight after the drain
  *   import    = 0.375 g of grace, 0.125 g to stop, 0.05 g for the hand-backs
  *   workers   = 0.3 g
  *
- * Drain and import run side by side from SIGTERM (shutdown.ts), so the
- * workers start by max(drain, import) = 0.55 g and are done by 0.85 g. The
+ * Drain and import run side by side from SIGTERM (shutdown.ts). The HTTP
+ * close comes after the drain and waits for the requests in flight, which
+ * nothing else bounds (a body may take 120 s to arrive); without its own
+ * term a slow upload held the workers back until the watchdog's exit(1).
+ * Drain plus http is 0.55 g, the import queue's end, so the workers start by
+ * max(drain + http, import) = 0.55 g, as before, and are done by 0.85 g. The
  * watchdog is at least 0.875 g above 40 s and g − 1 s below 8 s, which is
- * ≥ 0.85 g only from g ≈ 6.7 s: hence the 7 s floor. The 1 s left between
- * the watchdog and the grace is for pino's flush and the exit.
+ * ≥ 0.85 g only from g ≈ 6.7 s: hence the 7 s floor. What is left before
+ * the watchdog — 250 ms at 10 s, 1 s at 40 s, 50 ms at the floor — is for
+ * the Redis QUITs, a round trip each; a Redis that does not answer is what
+ * the watchdog is for. The 1 s left between the watchdog and the grace is
+ * for pino's flush and the exit.
  *
  * Pure: server.ts builds the plan from the environment, and the env schema
  * runs the same check, so an override that breaks it fails the boot instead
@@ -68,6 +76,12 @@ interface ShutdownPlan {
   /** Then, how long the queue waits for the hand-back writes. */
   importHandBackMs: number;
 
+  /**
+   * Once the drain is over, how long the requests still in flight get to
+   * finish; past it their connections are closed.
+   */
+  httpMs: number;
+
   /** The workers' deadline once the import queue is done. */
   workersMs: number;
 }
@@ -107,6 +121,7 @@ function planShutdown(
     importGraceMs: overrides.importGraceMs ?? share(graceMs, 3, 8),
     importStopGraceMs: share(graceMs, 1, 8),
     importHandBackMs: share(graceMs, 1, 20),
+    httpMs: share(graceMs, 1, 4),
     workersMs: overrides.workersMs ?? share(graceMs, 3, 10),
   };
 }
@@ -130,11 +145,12 @@ function shutdownPlanProblems(plan: ShutdownPlan): string[] {
   }
 
   const imports = importDrainMs(plan);
-  const workersEnd = Math.max(plan.drainMs, imports) + plan.workersMs;
+  const httpEnd = plan.drainMs + plan.httpMs;
+  const workersEnd = Math.max(httpEnd, imports) + plan.workersMs;
 
   if (workersEnd > plan.timeoutMs) {
     problems.push(
-      `O desligamento não cabe em SHUTDOWN_TIMEOUT_MS (${plan.timeoutMs}): o maior entre o dreno (SHUTDOWN_DRAIN_MS, ${plan.drainMs}) e a fila de importação (IMPORT_DRAIN_GRACE_MS ${plan.importGraceMs} + ${plan.importStopGraceMs} + ${plan.importHandBackMs}), mais os workers (SHUTDOWN_WORKERS_MS, ${plan.workersMs}), dá ${workersEnd} ms. Diminua um deles ou aumente STOP_GRACE_PERIOD_MS junto com o Stop Grace Period do serviço.`,
+      `O desligamento não cabe em SHUTDOWN_TIMEOUT_MS (${plan.timeoutMs}): o maior entre o dreno com os pedidos em andamento (SHUTDOWN_DRAIN_MS ${plan.drainMs} + ${plan.httpMs}) e a fila de importação (IMPORT_DRAIN_GRACE_MS ${plan.importGraceMs} + ${plan.importStopGraceMs} + ${plan.importHandBackMs}), mais os workers (SHUTDOWN_WORKERS_MS, ${plan.workersMs}), dá ${workersEnd} ms. Diminua um deles ou aumente STOP_GRACE_PERIOD_MS junto com o Stop Grace Period do serviço.`,
     );
   }
 

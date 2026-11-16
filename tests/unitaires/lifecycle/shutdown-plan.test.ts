@@ -25,9 +25,15 @@ import {
  * override that would not is refused at boot.
  */
 
-/** When the workers are done, counted from SIGTERM (server.ts's order). */
+/**
+ * When the workers are done, counted from SIGTERM (shutdown.ts's order): they
+ * start once the HTTP server is closed — the drain, then at most `httpMs` for
+ * the requests still in flight — and the import queue is done.
+ */
 function workersEndAt(plan: ShutdownPlan): number {
-  return Math.max(plan.drainMs, importDrainMs(plan)) + plan.workersMs;
+  return (
+    Math.max(plan.drainMs + plan.httpMs, importDrainMs(plan)) + plan.workersMs
+  );
 }
 
 /** The minimum a development boot needs. */
@@ -53,8 +59,30 @@ describe("planShutdown", () => {
       importGraceMs: 15_000,
       importStopGraceMs: 5_000,
       importHandBackMs: 2_000,
+      httpMs: 10_000,
       workersMs: 12_000,
     });
+  });
+
+  /**
+   * `app.close()` waits for every request in flight and has no deadline of
+   * its own (the body may take up to 120 s, HTTP_REQUEST_TIMEOUT_MS). The
+   * plan left it out, so a slow upload still in flight after the drain held
+   * the workers back until the watchdog's exit(1): cron runs left RUNNING,
+   * batches back to their leases. The requests now get until the import
+   * queue is done, and the workers still start when they did.
+   */
+  it("gives the requests in flight until the import queue is done, so the workers start when they did", () => {
+    for (const grace of [10_000, 40_000]) {
+      const plan = planShutdown(grace);
+
+      expect(plan.drainMs + plan.httpMs, `g=${grace}`).toBe(
+        importDrainMs(plan),
+      );
+    }
+
+    expect(workersEndAt(planShutdown(10_000))).toBe(8_500);
+    expect(workersEndAt(planShutdown(40_000))).toBe(34_000);
   });
 
   it("ends in under 9 s with Docker's default grace, the one assumed without the variable", () => {
@@ -117,6 +145,18 @@ describe("shutdownPlanProblems", () => {
     expect(problems).toHaveLength(1);
     expect(problems[0]).toMatch(/SHUTDOWN_TIMEOUT_MS/);
     expect(problems[0]).toMatch(/STOP_GRACE_PERIOD_MS/);
+  });
+
+  it("counts the requests in flight after the drain, which a longer drain pushes past the watchdog", () => {
+    // 20 s of drain and 10 s for the requests in flight end at 30 s; the
+    // workers' 12 s after that pass the 35 s watchdog.
+    const problems = shutdownPlanProblems(
+      planShutdown(40_000, { drainMs: 20_000 }),
+    );
+
+    expect(problems).toHaveLength(1);
+    expect(problems[0]).toMatch(/SHUTDOWN_DRAIN_MS/);
+    expect(problems[0]).toMatch(/42000/);
   });
 
   it("refuses steps that would not end before the watchdog", () => {
