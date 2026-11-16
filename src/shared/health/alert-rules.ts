@@ -307,7 +307,9 @@ type AlertKind = (typeof ALERT_KINDS)[number];
 /**
  * Runbooks of incidents no rule names yet (F1-20): a provider down, a
  * reconnect storm, a migration stuck on a lock, a full disk, a PITR
- * restore and the restore drill. They live beside the alerts' runbooks.
+ * restore and the restore drill; and the planned moves between servers
+ * (F1-24): the staging to a Remote Server, production to its own servers.
+ * They live beside the alerts' runbooks.
  */
 const OPERATION_RUNBOOKS = [
   "provider-down",
@@ -316,6 +318,8 @@ const OPERATION_RUNBOOKS = [
   "disk-full",
   "pitr-restore",
   "restore-drill",
+  "staging-remote-server",
+  "producao-servidores-proprios",
 ] as const;
 
 /** One reason to wake the operation: its code and its pt-BR message. */
