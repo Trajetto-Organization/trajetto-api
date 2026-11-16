@@ -74,13 +74,20 @@ export function drainWorkerBacklog(): void {
 
 /**
  * Terminates all workers. `deadlineMs` is the shutdown plan's workers
- * deadline (shared/lifecycle/shutdown-plan.ts), handed to each of them: it
- * can only shorten their own waits, so they are done before the watchdog
- * whatever the stop grace. Without it (a test), each keeps its own.
+ * deadline (shared/lifecycle/shutdown-plan.ts), and it bounds the whole
+ * step: each service in parallel gets it (it can only shorten their own
+ * waits), and the geocoding's Redis close after them gets what is left. So
+ * the step is done before the watchdog whatever the stop grace, and
+ * closeRedis still runs. Without it (a test), each keeps its own.
  */
 export async function shutdownWorkers(
   options: { deadlineMs?: number } = {},
 ): Promise<void> {
+  const deadlineAt =
+    options.deadlineMs === undefined
+      ? undefined
+      : Date.now() + options.deadlineMs;
+
   // The rows age out of /health/metrics on their own once this replica stops
   // writing them; nothing to flush on the way out.
   stopHeartbeatFlush?.();
@@ -95,14 +102,20 @@ export async function shutdownWorkers(
       CronSchedulerService.getInstance().shutdown(options),
 
       // Writes what it is holding on the way out — the batch most likely to
-      // be the one somebody asks about right after a deploy.
-      apiUsageRecorder.shutdown(),
+      // be the one somebody asks about right after a deploy — unless the
+      // database does not answer within the deadline.
+      apiUsageRecorder.shutdown(options),
     ]);
 
     // After the cron: its geocoding run shares this Redis connection. On
     // every replica, like the recorder — the lookup after a commit runs
     // wherever the request was served.
-    await shutdownDeliveryGeocoding();
+    await shutdownDeliveryGeocoding({
+      deadlineMs:
+        deadlineAt === undefined
+          ? undefined
+          : Math.max(0, deadlineAt - Date.now()),
+    });
 
     log.info("workers stopped");
   } catch (error) {

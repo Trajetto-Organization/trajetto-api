@@ -189,14 +189,17 @@ function unlocatedDeliveryIds(
 
 /**
  * On the way out: no new lookups, and the process's Redis connection
- * closed. A lookup still in flight keeps its claim until the back-off
- * lease (15 min) frees it for the job.
+ * closed, within `deadlineMs` when the shutdown gives one (what is left of
+ * its workers step). A lookup still in flight keeps its claim until the
+ * back-off lease (15 min) frees it for the job.
  */
-async function shutdownDeliveryGeocoding(): Promise<void> {
+async function shutdownDeliveryGeocoding(
+  options: { deadlineMs?: number } = {},
+): Promise<void> {
   queue?.close();
   queue = null;
 
-  await closeGeocodingRedis();
+  await closeGeocodingRedis(options);
 }
 
 export {

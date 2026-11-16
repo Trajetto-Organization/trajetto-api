@@ -2,6 +2,7 @@ import Redis from "ioredis";
 
 import { env } from "@/env";
 import { redisClientOptions } from "@/config/redis-client-options";
+import { settlesWithin } from "@/shared/lifecycle/deadline";
 import { logger } from "@/shared/logging/logger";
 import { attachRedisConnectionLog } from "@/shared/services/redis-connection-log";
 import { proofLocationConfigFromEnv } from "@/shared/services/proof-location/proof-location-service";
@@ -267,17 +268,35 @@ const logGeocodingRun = createGeocodingRunLog(
   () => env.DELIVERY_GEOCODING_DAILY_BUDGET,
 );
 
-/** Closes the process's connection; the next use opens another. */
-async function closeGeocodingRedis(): Promise<void> {
+/**
+ * Closes the process's connection; the next use opens another.
+ *
+ * `deadlineMs` is what is left of the shutdown's workers step
+ * (workers/index.ts). A QUIT that Redis does not answer in it — or refuses —
+ * drops the connection instead: the step must end before the watchdog,
+ * and a budget or pause key not written is the job's to redo. Without it,
+ * the QUIT is awaited.
+ */
+async function closeGeocodingRedis(
+  options: { deadlineMs?: number } = {},
+): Promise<void> {
   const client = redis;
 
   redis = null;
 
-  try {
-    await client?.quit();
-  } catch {
-    client?.disconnect();
-  }
+  if (!client) return;
+
+  let refused = false;
+  const quitting = client.quit().catch(() => {
+    refused = true;
+  });
+
+  const answered = await settlesWithin(
+    quitting,
+    options.deadlineMs ?? Infinity,
+  );
+
+  if (!answered || refused) client.disconnect();
 }
 
 export {

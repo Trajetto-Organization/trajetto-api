@@ -1,5 +1,19 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+// Imported here, not inside each test: loading the workers' module graph
+// takes seconds on a busy machine, and inside a test it ran against the
+// test's own 5 s.
+import { AIAnalysisPipelineService } from "@/shared/ai/ai-analysis-pipeline-service";
+import * as geocoding from "@/shared/delivery/geocoding/geocode-soon";
+import {
+  ApiUsageRecorder,
+  apiUsageRecorder,
+} from "@/shared/integration/api-usage-recorder";
+import { WebhookDispatchService } from "@/shared/integration/webhook-dispatch-service";
+import { NotificationPipelineService } from "@/shared/notifications/notification-pipeline-service";
+import { CronSchedulerService } from "@/shared/services/cron-scheduler-service";
+import { shutdownWorkers } from "@/workers";
+
 /**
  * The workers stop within the deadline the shutdown plan gives them
  * (plano-escala F1-14).
@@ -11,9 +25,18 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
  * deadline to all of them, which can only shorten their own: with the 40 s
  * grace nothing changes, with 10 s they are done in 3 s. What a deadline
  * cuts short is recovered by the leases, as before.
+ *
+ * The step is the whole of shutdownWorkers, not only the four services
+ * with a batch in flight: the API usage counter's last flush and the
+ * geocoding's Redis close ran in it with no bound, so a database that
+ * stopped answering mid-deploy held the step until the watchdog's exit(1),
+ * and closeRedis never ran.
  */
 vi.mock("@/../infra/database", () => ({
   default: {
+    // The usage counter's last flush, against a database that no longer
+    // answers (a pool exhausted mid-deploy waits up to pool_timeout, 20 s).
+    $executeRaw: vi.fn(() => new Promise(() => {})),
     scheduledJobExecution: {
       create: vi.fn(async ({ data }: { data: Record<string, unknown> }) => ({
         id: "row",
@@ -30,7 +53,7 @@ vi.mock("@/websocket", () => ({
   sendNotificationToUser: vi.fn(),
 }));
 
-const scheduled: Array<() => Promise<unknown>> = [];
+const scheduled = vi.hoisted(() => [] as Array<() => Promise<unknown>>);
 
 vi.mock("node-cron", () => ({
   default: {
@@ -66,9 +89,6 @@ async function settlesAt(
 
 /** A worker caught in the middle of a batch that never ends. */
 async function busyNotificationPipeline(): Promise<Stoppable> {
-  const { NotificationPipelineService } =
-    await import("@/shared/notifications/notification-pipeline-service");
-
   const pipeline = new (
     NotificationPipelineService as unknown as new () => {
       outboxRunning: boolean;
@@ -80,9 +100,6 @@ async function busyNotificationPipeline(): Promise<Stoppable> {
 }
 
 async function busyAIPipeline(): Promise<Stoppable> {
-  const { AIAnalysisPipelineService } =
-    await import("@/shared/ai/ai-analysis-pipeline-service");
-
   const pipeline = new (
     AIAnalysisPipelineService as unknown as new () => {
       running: boolean;
@@ -94,9 +111,6 @@ async function busyAIPipeline(): Promise<Stoppable> {
 }
 
 async function busyWebhookDispatcher(): Promise<Stoppable> {
-  const { WebhookDispatchService } =
-    await import("@/shared/integration/webhook-dispatch-service");
-
   const dispatcher = new WebhookDispatchService() as unknown as {
     running: boolean;
   };
@@ -106,9 +120,6 @@ async function busyWebhookDispatcher(): Promise<Stoppable> {
 }
 
 async function busyCron(): Promise<Stoppable> {
-  const { CronSchedulerService } =
-    await import("@/shared/services/cron-scheduler-service");
-
   const scheduler = new (
     CronSchedulerService as unknown as new () => {
       registerJob(definition: unknown): void;
@@ -141,6 +152,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.useRealTimers();
+  vi.restoreAllMocks();
 });
 
 describe.each([
@@ -168,24 +180,62 @@ describe.each([
   });
 });
 
-describe("shutdownWorkers", () => {
-  it("hands the plan's deadline to every worker", async () => {
-    const [
-      { NotificationPipelineService },
-      { AIAnalysisPipelineService },
-      { WebhookDispatchService },
-      { CronSchedulerService },
-      { apiUsageRecorder },
-      geocoding,
-    ] = await Promise.all([
-      import("@/shared/notifications/notification-pipeline-service"),
-      import("@/shared/ai/ai-analysis-pipeline-service"),
-      import("@/shared/integration/webhook-dispatch-service"),
-      import("@/shared/services/cron-scheduler-service"),
-      import("@/shared/integration/api-usage-recorder"),
-      import("@/shared/delivery/geocoding/geocode-soon"),
-    ]);
+/** The usage counter holding one bucket, its database gone quiet. */
+async function usageRecorderWithBatch(): Promise<Stoppable> {
+  const recorder = new ApiUsageRecorder();
 
+  recorder.record({
+    apiKeyId: "key",
+    businessId: "business",
+    method: "GET",
+    route: "/integration/v1/deliveries",
+    status: 200,
+  });
+
+  return recorder;
+}
+
+describe("API usage recorder shutdown", () => {
+  it("gives up the last flush at the plan's deadline when the database does not answer", async () => {
+    const at = await settlesAt(
+      await usageRecorderWithBatch(),
+      { deadlineMs: 3_000 },
+      5_000,
+    );
+
+    expect(at).not.toBeNull();
+    expect(at as unknown as number).toBeGreaterThanOrEqual(3_000);
+    expect(at as unknown as number).toBeLessThan(3_100);
+  });
+
+  it("waits for the last flush without a plan, as it always did", async () => {
+    expect(
+      await settlesAt(await usageRecorderWithBatch(), undefined, 30_000),
+    ).toBeNull();
+  });
+});
+
+describe("shutdownWorkers", () => {
+  it("ends within the plan's deadline when the usage counter's last flush hangs", async () => {
+    apiUsageRecorder.record({
+      apiKeyId: "key",
+      businessId: "business",
+      method: "POST",
+      route: "/integration/v1/deliveries",
+      status: 201,
+    });
+
+    const at = await settlesAt(
+      { shutdown: shutdownWorkers },
+      { deadlineMs: 3_000 },
+      5_000,
+    );
+
+    expect(at).not.toBeNull();
+    expect(at as unknown as number).toBeLessThan(3_100);
+  });
+
+  it("hands the plan's deadline to every worker", async () => {
     const spies = [
       vi
         .spyOn(NotificationPipelineService.getInstance(), "shutdown")
@@ -206,12 +256,14 @@ describe("shutdownWorkers", () => {
       undefined,
     );
 
-    const { shutdownWorkers } = await import("@/workers");
-
     await shutdownWorkers({ deadlineMs: 3_000 });
 
     for (const spy of spies) {
       expect(spy).toHaveBeenCalledWith({ deadlineMs: 3_000 });
     }
+
+    expect(apiUsageRecorder.shutdown).toHaveBeenCalledWith({
+      deadlineMs: 3_000,
+    });
   });
 });
