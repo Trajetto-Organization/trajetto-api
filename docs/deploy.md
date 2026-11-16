@@ -44,6 +44,7 @@
 24. [Migrar do Portainer para o Dokploy](#24-migrar-do-portainer-para-o-dokploy)
 25. [Checklist do primeiro deploy](#25-checklist-do-primeiro-deploy)
 26. [Os três repositórios juntos](#26-os-três-repositórios-juntos)
+27. [PITR com pgBackRest](#27-pitr-com-pgbackrest)
 
 ---
 
@@ -725,15 +726,17 @@ com `trajetto-postgres-production:5432`, `trajetto-redis-production:6379` e
 `http://trajetto-ai-production:8080`. Só a API (e a web) têm domínio; nenhum
 serviço publica porta no host. O backup do banco é o do próprio Database
 PostgreSQL (aba _Backups_), que envia as cópias ao Cloudflare R2
-([seção 18](#18-backup-e-restauração)).
+([seção 18](#18-backup-e-restauração)); o PITR vem do pgBackRest da imagem
+`trajetto-postgres`, na staging desde a onda 3 e na produção desde a onda 6
+([seção 27](#27-pitr-com-pgbackrest)).
 
-| Serviço (App Name em produção)    | Tipo no Dokploy       | Imagem                                   | Porta interna  | Réplicas                              | Health                                                                       | Limites                        |
-| --------------------------------- | --------------------- | ---------------------------------------- | -------------- | ------------------------------------- | ---------------------------------------------------------------------------- | ------------------------------ |
-| `trajetto-api-production`         | Application (Docker)  | `trajetto-api:stable`                    | 3333 (domínio) | 2, rolling `start-first` com rollback | liveness no Swarm (`/health/liveness`)                                       | memória 1 GiB, heap 768 MB     |
-| `trajetto-ai-production`          | Application (Docker)  | `trajetto-ai:stable`                     | 8080           | 1                                     | `GET /health` (200 depois do aquecimento)                                    | memória 1 GiB, 2 CPUs          |
-| `trajetto-api-migrate-production` | Application (Docker)  | `trajetto-api-migrate:stable`            | nenhuma        | 1, _Restart Policy_ `none`            | o da imagem: saudável quando a etapa de release terminou; depois fica parado | nenhum (alguns MB parado)      |
-| `trajetto-postgres-production`    | Database → PostgreSQL | `postgres:16-alpine` (fixado por digest) | 5432           | 1                                     | do Dokploy                                                                   | sem teto, de propósito         |
-| `trajetto-redis-production`       | Database → Redis      | `redis:7-alpine`                         | 6379           | 1                                     | do Dokploy                                                                   | memória 512 MiB (dados 256 MB) |
+| Serviço (App Name em produção)    | Tipo no Dokploy       | Imagem                                                                                                                | Porta interna  | Réplicas                              | Health                                                                       | Limites                                         |
+| --------------------------------- | --------------------- | --------------------------------------------------------------------------------------------------------------------- | -------------- | ------------------------------------- | ---------------------------------------------------------------------------- | ----------------------------------------------- |
+| `trajetto-api-production`         | Application (Docker)  | `trajetto-api:stable`                                                                                                 | 3333 (domínio) | 2, rolling `start-first` com rollback | liveness no Swarm (`/health/liveness`)                                       | memória 1 GiB, heap 768 MB                      |
+| `trajetto-ai-production`          | Application (Docker)  | `trajetto-ai:stable`                                                                                                  | 8080           | 1                                     | `GET /health` (200 depois do aquecimento)                                    | memória 1 GiB, 2 CPUs                           |
+| `trajetto-api-migrate-production` | Application (Docker)  | `trajetto-api-migrate:stable`                                                                                         | nenhuma        | 1, _Restart Policy_ `none`            | o da imagem: saudável quando a etapa de release terminou; depois fica parado | nenhum (alguns MB parado)                       |
+| `trajetto-postgres-production`    | Database → PostgreSQL | `trajetto-postgres` por digest ([seção 27](#27-pitr-com-pgbackrest)); antes da troca, `postgres:16-alpine` por digest | 5432           | 1                                     | do Dokploy                                                                   | 2 GiB desde a troca da imagem (antes, sem teto) |
+| `trajetto-redis-production`       | Database → Redis      | `redis:7-alpine`                                                                                                      | 6379           | 1                                     | do Dokploy                                                                   | memória 512 MiB (dados 256 MB)                  |
 
 Em staging, troque `-production` por `-staging` e `:stable` por `:staging`.
 
@@ -772,27 +775,27 @@ O que isso muda no dia a dia:
 
 ### O que cada proteção do compose virou
 
-| O compose fazia                                                                                      | Agora                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| ---------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| variáveis obrigatórias (`${VAR:?mensagem}`) derrubavam o deploy                                      | **API**: o schema de ambiente derruba o boot sem `DATABASE_URL`, `REDIS_URL`, `JWT_*`, `MASTER_USER_*`, `HTTP_REQUEST` e, em produção, sem `RATE_LIMIT_TRUSTED_PROXY` e as `R2_*`. **IA**: o serviço recusa subir com `AI_TOKEN` ausente ou curto. **`APP_ENV`: nada obriga.** Vazia, a API segue o `NODE_ENV=production` da imagem e se comporta como produção; confira no staging                                                                                                                                                                                                                                                                                                                                                                                         |
-| `AI_LOCAL_URL=http://trajetto-ai:8080` fixo                                                          | `AI_LOCAL_URL=http://<App Name da IA>:8080` no Environment da API. **Faltando, a IA fica desligada em silêncio** (a API trata como `none`); confira em _Sistema → Provedores_                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
-| `NODE_OPTIONS` montada de `API_HEAP_MB`; `RATE_LIMIT_TRUSTED_PROXY` com padrão `cloudflare`          | as duas digitadas no Environment da API (`NODE_OPTIONS=--max-old-space-size=768`, `RATE_LIMIT_TRUSTED_PROXY=cloudflare`)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
-| labels do Traefik (`Host()`, `websecure`, certificado, porta 3333, `passHostHeader`)                 | aba _Domains_ da Application: o Dokploy gera o arquivo `/etc/dokploy/traefik/dynamic/<App Name>.yml` com tudo isso (e o redirecionamento HTTP→HTTPS). `ROUTER_PREFIX` não existe mais: os roteadores levam o App Name, único por servidor                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
-| health check do balanceador do Traefik em `/health/readiness` (tirava uma réplica sem banco do ar)   | **lacuna**. O Traefik do Dokploy fala com o endereço virtual do serviço do Swarm (um só destino para as duas réplicas), então um health check ali tiraria o serviço inteiro do ar quando uma réplica falhasse. Não configure. O Swarm só põe uma réplica nova no balanceamento depois de ela passar no healthcheck (liveness), e tira a réplica que está desligando                                                                                                                                                                                                                                                                                                                                                                                                         |
-| `priority=1` no roteador                                                                             | desnecessário: cada ambiente tem o próprio host                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
-| bloco `deploy:` (réplicas, `update_config`, `rollback_config`, `restart_policy`, `resources`)        | _Advanced_ da Application: _Replicas_, _Swarm Settings_ (JSON pronto na [seção 7](#7-montar-o-dokploy-do-zero-staging-e-produção)) e _Resources_                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
-| `stop_grace_period` (40 s na API, 60 s no Postgres)                                                  | API: campo _Stop Grace Period_ do _Swarm Settings_, se a sua versão do Dokploy tiver. Sem ele, o Swarm mata o processo 10 s depois do SIGTERM: **lacuna**, com o contorno `docker service update --stop-grace-period 40s <App Name da API>` no host, que vale até o próximo deploy (o Dokploy reaplica a spec dele). O desligamento ordenado segue a variável `STOP_GRACE_PERIOD_MS` (sem ela, 10 s, e ele termina em menos de 9 s); ela só sobe para `40000` depois de o grace de 40 s aparecer no `inspect`, e o `verify-rollout` reprova o deploy quando ela passa do grace do serviço ([seção 19](#19-réplicas-workers-e-tempo-real)). Postgres: os Databases não têm o campo — rode `CHECKPOINT` antes de qualquer parada planejada ([seção 10](#10-postgres-e-redis)) |
-| `logging: json-file` com rotação por serviço                                                         | rotação **global** no `/etc/docker/daemon.json` do host ([seção 6](#6-preparar-o-servidor-uma-vez)), que vale para todo contêiner                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
-| `docker stack deploy` resolvia a tag para o digest e o fixava na spec                                | o Dokploy faz `pull` da tag e força a atualização do serviço, mas a spec guarda **a tag**, não o digest. Consequências: (1) o rollback automático do Swarm protege só o momento do deploy (as réplicas antigas continuam de pé), mas uma réplica antiga que reinicie depois sobe a imagem nova, que já está no host; (2) `docker service rollback` não volta a imagem ([seção 17](#17-rollback)); (3) a conferência da convergência passou a ler o digest do contêiner de cada task, e não a spec ([seção 14](#14-conferir-a-convergência))                                                                                                                                                                                                                                 |
-| rede interna `backend` (`internal: true`): Postgres, Redis e IA inalcançáveis por outros contêineres | **lacuna**. Tudo fica na `dokploy-network`, junto com a web, o staging e o que mais rodar no Dokploy. A proteção passa a ser: nenhuma porta externa, senha forte no Postgres e no Redis, token na IA, segredos diferentes entre staging e produção                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
-| volume do Postgres com nome fixo (`POSTGRES_VOLUME`)                                                 | o Dokploy cria e nomeia o volume do Database (aparece em _Advanced → Volumes_). A guarda da API contra banco vazio em produção continua valendo                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
-| Postgres preso no manager (`node.role == manager`)                                                   | desnecessário com um nó só. Com mais nós no Swarm, **lacuna**: os Databases não têm campo de placement                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
-| imagem do Postgres fixada (`POSTGRES_IMAGE`)                                                         | campo _Docker Image_ do Database com o digest (`postgres:16-alpine@sha256:…`)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
-| tuning do Postgres e `/dev/shm` em tmpfs (comentados no compose)                                     | tuning: comando personalizado do Database, se a versão tiver ([seção 10](#10-postgres-e-redis)). `/dev/shm`: **lacuna** (use `max_parallel_maintenance_workers=0` se um VACUUM/CREATE INDEX paralelo falhar)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
-| Redis sem persistência, `--maxmemory 256mb --maxmemory-policy allkeys-lru`, senha obrigatória        | senha: o Database Redis sempre tem. O resto: comando personalizado do Database ([seção 10](#10-postgres-e-redis)); se a sua versão não tiver o campo, **lacuna** (Redis com snapshot em disco e sem teto de memória)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| IA com `read_only`, `/tmp` em tmpfs e `cap_drop: ALL`                                                | **lacuna**: a Application não tem esses campos. Continua valendo o usuário 10001 (não root) da imagem, sem domínio e sem porta publicada                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
-| `REDIS_ENFORCE_AUTH` (transição de um Redis sem senha)                                               | não existe mais: o Redis do Dokploy nasce com senha                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| job de migrations na rede `<stack>_backend`, lendo o env de `<stack>_api`                            | a Application `trajetto-api-migrate` de cada ambiente, na `dokploy-network`, com o próprio _Environment_ (só a URL do banco) e o deploy pedido pelo pipeline antes da API ([seção 15](#15-migrations))                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| O compose fazia                                                                                      | Agora                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| ---------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| variáveis obrigatórias (`${VAR:?mensagem}`) derrubavam o deploy                                      | **API**: o schema de ambiente derruba o boot sem `DATABASE_URL`, `REDIS_URL`, `JWT_*`, `MASTER_USER_*`, `HTTP_REQUEST` e, em produção, sem `RATE_LIMIT_TRUSTED_PROXY` e as `R2_*`. **IA**: o serviço recusa subir com `AI_TOKEN` ausente ou curto. **`APP_ENV`: nada obriga.** Vazia, a API segue o `NODE_ENV=production` da imagem e se comporta como produção; confira no staging                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| `AI_LOCAL_URL=http://trajetto-ai:8080` fixo                                                          | `AI_LOCAL_URL=http://<App Name da IA>:8080` no Environment da API. **Faltando, a IA fica desligada em silêncio** (a API trata como `none`); confira em _Sistema → Provedores_                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| `NODE_OPTIONS` montada de `API_HEAP_MB`; `RATE_LIMIT_TRUSTED_PROXY` com padrão `cloudflare`          | as duas digitadas no Environment da API (`NODE_OPTIONS=--max-old-space-size=768`, `RATE_LIMIT_TRUSTED_PROXY=cloudflare`)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| labels do Traefik (`Host()`, `websecure`, certificado, porta 3333, `passHostHeader`)                 | aba _Domains_ da Application: o Dokploy gera o arquivo `/etc/dokploy/traefik/dynamic/<App Name>.yml` com tudo isso (e o redirecionamento HTTP→HTTPS). `ROUTER_PREFIX` não existe mais: os roteadores levam o App Name, único por servidor                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| health check do balanceador do Traefik em `/health/readiness` (tirava uma réplica sem banco do ar)   | **lacuna**. O Traefik do Dokploy fala com o endereço virtual do serviço do Swarm (um só destino para as duas réplicas), então um health check ali tiraria o serviço inteiro do ar quando uma réplica falhasse. Não configure. O Swarm só põe uma réplica nova no balanceamento depois de ela passar no healthcheck (liveness), e tira a réplica que está desligando                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| `priority=1` no roteador                                                                             | desnecessário: cada ambiente tem o próprio host                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| bloco `deploy:` (réplicas, `update_config`, `rollback_config`, `restart_policy`, `resources`)        | _Advanced_ da Application: _Replicas_, _Swarm Settings_ (JSON pronto na [seção 7](#7-montar-o-dokploy-do-zero-staging-e-produção)) e _Resources_                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| `stop_grace_period` (40 s na API, 60 s no Postgres)                                                  | API: campo _Stop Grace Period_ do _Swarm Settings_, se a sua versão do Dokploy tiver. Sem ele, o Swarm mata o processo 10 s depois do SIGTERM: **lacuna**, com o contorno `docker service update --stop-grace-period 40s <App Name da API>` no host, que vale até o próximo deploy (o Dokploy reaplica a spec dele). O desligamento ordenado segue a variável `STOP_GRACE_PERIOD_MS` (sem ela, 10 s, e ele termina em menos de 9 s); ela só sobe para `40000` depois de o grace de 40 s aparecer no `inspect`, e o `verify-rollout` reprova o deploy quando ela passa do grace do serviço ([seção 19](#19-réplicas-workers-e-tempo-real)). Postgres: o Dokploy dá 30 s ao Database, e o F0-01 põe 120 s onde o painel tiver o campo; rode `CHECKPOINT` antes de qualquer parada planejada ([seção 27](#grace-e-placement-do-database)) |
+| `logging: json-file` com rotação por serviço                                                         | rotação **global** no `/etc/docker/daemon.json` do host ([seção 6](#6-preparar-o-servidor-uma-vez)), que vale para todo contêiner                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| `docker stack deploy` resolvia a tag para o digest e o fixava na spec                                | o Dokploy faz `pull` da tag e força a atualização do serviço, mas a spec guarda **a tag**, não o digest. Consequências: (1) o rollback automático do Swarm protege só o momento do deploy (as réplicas antigas continuam de pé), mas uma réplica antiga que reinicie depois sobe a imagem nova, que já está no host; (2) `docker service rollback` não volta a imagem ([seção 17](#17-rollback)); (3) a conferência da convergência passou a ler o digest do contêiner de cada task, e não a spec ([seção 14](#14-conferir-a-convergência))                                                                                                                                                                                                                                                                                            |
+| rede interna `backend` (`internal: true`): Postgres, Redis e IA inalcançáveis por outros contêineres | **lacuna**. Tudo fica na `dokploy-network`, junto com a web, o staging e o que mais rodar no Dokploy. A proteção passa a ser: nenhuma porta externa, senha forte no Postgres e no Redis, token na IA, segredos diferentes entre staging e produção                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| volume do Postgres com nome fixo (`POSTGRES_VOLUME`)                                                 | o Dokploy cria e nomeia o volume do Database (aparece em _Advanced → Volumes_). A guarda da API contra banco vazio em produção continua valendo                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| Postgres preso no manager (`node.role == manager`)                                                   | com um nó só, nada muda. O Dokploy já põe `node.role==manager` em todo serviço com volume, o Database incluído; com mais de um manager, fixe o Database por nó ou label antes de acrescentar o nó ([seção 27](#grace-e-placement-do-database))                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| imagem do Postgres fixada (`POSTGRES_IMAGE`)                                                         | campo _Docker Image_ do Database com o digest (`trajetto-postgres@sha256:…` desde a troca da onda 3; antes, `postgres:16-alpine@sha256:…`)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| tuning do Postgres e `/dev/shm` em tmpfs (comentados no compose)                                     | tuning: os parâmetros vêm da imagem `trajetto-postgres` e a memória do teto, com _Command_ e _Args_ vazios ([seção 27](#27-pitr-com-pgbackrest)). `/dev/shm`: **lacuna**, contornada pela imagem, que desliga os workers paralelos                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| Redis sem persistência, `--maxmemory 256mb --maxmemory-policy allkeys-lru`, senha obrigatória        | senha: o Database Redis sempre tem. O resto: comando personalizado do Database ([seção 10](#10-postgres-e-redis)); se a sua versão não tiver o campo, **lacuna** (Redis com snapshot em disco e sem teto de memória)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| IA com `read_only`, `/tmp` em tmpfs e `cap_drop: ALL`                                                | **lacuna**: a Application não tem esses campos. Continua valendo o usuário 10001 (não root) da imagem, sem domínio e sem porta publicada                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| `REDIS_ENFORCE_AUTH` (transição de um Redis sem senha)                                               | não existe mais: o Redis do Dokploy nasce com senha                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| job de migrations na rede `<stack>_backend`, lendo o env de `<stack>_api`                            | a Application `trajetto-api-migrate` de cada ambiente, na `dokploy-network`, com o próprio _Environment_ (só a URL do banco) e o deploy pedido pelo pipeline antes da API ([seção 15](#15-migrations))                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 
 ## 6. Preparar o servidor (uma vez)
 
@@ -1046,31 +1049,32 @@ a credencial: o deployment da Application termina em `error` com
    PostgreSQL**.
 2. Preencha:
 
-   | Campo             | Valor                                                                                                        |
-   | ----------------- | ------------------------------------------------------------------------------------------------------------ |
-   | Name              | `trajetto-postgres`                                                                                          |
-   | App Name          | `<o App Name sugerido>` (marcador neste documento: `trajetto-postgres-staging` ou `-production`; seção 7.2)  |
-   | Database Name     | `trajetto`                                                                                                   |
-   | Database User     | `trajetto`                                                                                                   |
-   | Database Password | `openssl rand -hex 24` (hex: entra na URL da API sem precisar de escape); guarde no gerenciador de senhas    |
-   | Docker Image      | `postgres:16-alpine` (a mesma versão maior do banco atual e do CI; nunca outra maior sem migração planejada) |
+   | Campo             | Valor                                                                                                                                                                         |
+   | ----------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+   | Name              | `trajetto-postgres`                                                                                                                                                           |
+   | App Name          | `<o App Name sugerido>` (marcador neste documento: `trajetto-postgres-staging` ou `-production`; seção 7.2)                                                                   |
+   | Database Name     | `trajetto`                                                                                                                                                                    |
+   | Database User     | `trajetto`                                                                                                                                                                    |
+   | Database Password | `openssl rand -hex 24` (hex: entra na URL da API sem precisar de escape); guarde no gerenciador de senhas                                                                     |
+   | Docker Image      | `ghcr.io/trajetto-organization/trajetto-postgres@sha256:<digest>` ([seção 27](#27-pitr-com-pgbackrest); o Postgres 16 do CI; nunca outra versão maior sem migração planejada) |
 
 3. **Create**, abra o serviço e clique em **Deploy** (o Database só sobe
    depois disso).
 4. Na aba _General_, confira em _Internal Credentials_: _Internal Host_ = o
    App Name, _Internal Port_ = 5432. Em _External Credentials_, **deixe
    _External Port_ vazio**: o banco não pode ter porta no host.
-5. Fixe a imagem por digest (uma tag flutuante atualizada no Docker Hub
-   reiniciaria e atualizaria o banco num redeploy). No host:
-   ```sh
-   docker image inspect postgres:16-alpine --format '{{index .RepoDigests 0}}'
-   ```
-   e ponha o resultado (`postgres@sha256:…`, escrito como
-   `postgres:16-alpine@sha256:…`) no campo da imagem em _Advanced_; salve e
-   faça **Deploy** de novo.
-6. O backup do banco é a aba _Backups_ deste Database (seção 7.9): diário,
+5. A imagem vai sempre por digest (uma tag flutuante reiniciaria e
+   atualizaria o banco num redeploy), copiado do resumo do run que publicou
+   a `trajetto-postgres`. Um Database criado antes da onda 3 roda a
+   `postgres:16-alpine@sha256:…` e troca de imagem pela
+   [seção 27](#27-pitr-com-pgbackrest).
+6. _Environment_ e _Resources_ da coluna do ambiente na
+   [seção 27](#valores-por-ambiente) (no mínimo `POSTGRES_MEMORY_LIMIT_MB`
+   igual ao _Memory Limit_), com _Command_ e _Args_ vazios; **Deploy**.
+7. O backup do banco é a aba _Backups_ deste Database (seção 7.9): diário,
    para o Cloudflare R2, configurado na
-   [seção 18](#18-backup-e-restauração).
+   [seção 18](#18-backup-e-restauração). O PITR, onde já estiver ligado,
+   segue a [seção 27](#27-pitr-com-pgbackrest).
 
 ### 7.5 Redis (Database)
 
@@ -1872,14 +1876,19 @@ App Name na `dokploy-network`. O backup do Postgres é o do próprio Dokploy
   ([seção 8](#8-primeiro-deploy-na-ordem-com-conferências), passo 4;
   [seção 18](#18-backup-e-restauração)).
 - **Imagem fixada** por digest no campo da imagem
-  ([seção 7.4](#74-postgresql-database), passo 5). Trocar a versão maior
+  ([seção 7.4](#74-postgresql-database), passo 5): a `trajetto-postgres`
+  ([seção 27](#27-pitr-com-pgbackrest)). Trocar a versão maior
   (16 → 17) não é trocar a imagem: exige dump e restore.
 - **Conexões**: cada réplica abre `connection_limit=10` + 1 da readiness.
   Mantenha `réplicas × 11 + migrations (2) + ferramentas` abaixo do
-  `max_connections` (100 por padrão). Os parâmetros da URL estão em
+  `max_connections` (200 na `trajetto-postgres`, por
+  `POSTGRES_MAX_CONNECTIONS`; 100 na `postgres:16-alpine` de antes da
+  troca). Os parâmetros da URL estão em
   [`arquitetura.md`](./arquitetura.md#conexão-com-o-postgres).
-- **Parada planejada**: o Database não tem _Stop Grace Period_ e o Swarm dá
-  10 s antes do SIGKILL; um Postgres morto volta por _crash recovery_. Antes de
+- **Parada planejada**: o Dokploy dá 30 s de _Stop Grace Period_ ao Database
+  (120 s depois do F0-01, onde o painel tiver o campo) antes do SIGKILL; um
+  Postgres morto volta por _crash recovery_
+  ([seção 27](#grace-e-placement-do-database)). Antes de
   qualquer _Stop_, _Redeploy_ ou mudança no Database, force o checkpoint:
   ```sh
   docker exec $(docker ps -q -f name=trajetto-postgres-production | head -n 1) \
@@ -1887,38 +1896,35 @@ App Name na `dokploy-network`. O backup do Postgres é o do próprio Dokploy
   ```
   e junte numa janela só toda mudança (imagem, comando, recursos), porque
   cada uma recria o contêiner.
-- **Mais de um nó no Swarm**: o volume é local e o Database não tem campo de
-  placement. Antes de adicionar nós, planeje (restaurar num nó fixo ou
-  restringir por label via CLI).
+- **Mais de um nó no Swarm**: o volume é local, e o Dokploy prende o
+  Database a um manager (`node.role==manager`), não a um nó. Antes de
+  adicionar nós, fixe o Database por nó ou label
+  ([seção 27](#grace-e-placement-do-database); F4-52, onda 17).
 
 #### Tuning do Postgres
 
-O banco roda com os defaults da imagem (`shared_buffers` 128MB, `work_mem`
-4MB, `random_page_cost` 4). Mudar isso reinicia o Postgres: janela combinada.
-Se a sua versão do Dokploy tiver o campo de comando personalizado nos
-Databases (_Advanced_), use, numa linha só, passando pelo entrypoint da imagem
-(é ele que troca para o usuário `postgres`):
+Os parâmetros vêm da imagem `trajetto-postgres`
+([seção 27](#27-pitr-com-pgbackrest)), versionados em
+`infra/postgres/postgres.params` (logs sem dado pessoal, `jit` e
+paralelismo desligados, `random_page_cost=1.1`, `pg_stat_statements`
+pré-carregado), e toda a memória sai do teto, `POSTGRES_MEMORY_LIMIT_MB`,
+pelo `infra/postgres/trajetto-entrypoint.sh`:
 
-```
-docker-entrypoint.sh postgres -c shared_buffers=1GB -c effective_cache_size=3GB -c work_mem=16MB -c maintenance_work_mem=256MB -c random_page_cost=1.1 -c max_wal_size=2GB -c log_min_duration_statement=1000 -c log_lock_waits=on
-```
+| Teto (MiB) | `shared_buffers` | `effective_cache_size` | `maintenance_work_mem` | `autovacuum_work_mem` | `work_mem` |
+| ---------- | ---------------- | ---------------------- | ---------------------- | --------------------- | ---------- |
+| 576        | 108MB            | 302MB                  | 54MB                   | 27MB                  | 4MB        |
+| 2048       | 448MB            | 1254MB                 | 224MB                  | 112MB                 | 13MB       |
+| 3072       | 704MB            | 1971MB                 | 352MB                  | 176MB                 | 21MB       |
 
-Valores de partida pela RAM reservada ao banco:
-
-| RAM para o Postgres | `shared_buffers` | `effective_cache_size` | `work_mem` | `maintenance_work_mem` |
-| ------------------- | ---------------- | ---------------------- | ---------- | ---------------------- |
-| 2 GB                | 512MB            | 1536MB                 | 8MB        | 128MB                  |
-| 4 GB                | 1GB              | 3GB                    | 16MB       | 256MB                  |
-| 8 GB                | 2GB              | 6GB                    | 32MB       | 512MB                  |
-
-`random_page_cost=1.1` só em SSD/NVMe. `work_mem` vale por operação, por
-conexão: com 2 réplicas × 10 conexões, 32MB vira centenas de MB num pico. O
-Docker dá 64 MB de `/dev/shm` e o Database não tem como aumentar: se um VACUUM
-ou CREATE INDEX paralelo falhar com "could not resize shared memory segment"
-(aconteceu na medição de 10/2026), acrescente
-`-c max_parallel_maintenance_workers=0`. Sem campo de comando, o tuning é uma
-lacuna (os defaults funcionam; só não estão dimensionados). Confira depois:
-`psql -c 'SHOW shared_buffers'`.
+**_Command_ e _Args_ do Database ficam vazios**: eles passam por cima do
+wrapper que soma esses parâmetros. Mudar um valor é mudar o
+`postgres.params` (ou o teto) e trocar o digest, com `CHECKPOINT` antes e
+numa janela combinada. Os workers paralelos ficam desligados porque o
+Docker dá 64 MB de `/dev/shm` e o Database não tem como aumentar (um VACUUM
+paralelo falhou com "could not resize shared memory segment" na medição de
+10/2026). Confira depois: `psql -c 'SHOW shared_buffers'`. Até a troca da
+imagem, o banco de produção roda com os padrões da imagem oficial
+(`shared_buffers` 128MB).
 
 ### Redis
 
@@ -3458,15 +3464,15 @@ próprio Database PostgreSQL no Dokploy**, gravado no Cloudflare R2. O antigo
 serviço `trajetto-backup` (imagem própria, `pg_dump` cifrado com age, heartbeat
 de 1 dia) saiu do código e do pipeline; nada no repositório agenda backup.
 
-|                   |                                                                                                                     |
-| ----------------- | ------------------------------------------------------------------------------------------------------------------- |
-| **Quando**        | uma cópia por dia, às 03:00 UTC (antes do primeiro job que apaga dados, 03:17 UTC)                                  |
-| **Retenção**      | as 30 cópias diárias mais recentes, ou seja, 30 dias; não há cópias semanais nem mensais                            |
-| **RPO**           | até 24 h                                                                                                            |
-| **RTO**           | medido no ensaio de 15/09/2026: 10,5 s de restore para 94 MB (cresce com o volume; a parte lenta é recriar índices) |
-| **Cifra**         | as cópias **não** são cifradas por nós; o R2 cifra tudo em repouso (do lado do provedor)                            |
-| **PITR**          | **não existe** (exigiria WAL archiving com wal-g)                                                                   |
-| **Arquivos (R2)** | fora do dump ("O que o dump não cobre", abaixo)                                                                     |
+|                   |                                                                                                                                                                |
+| ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Quando**        | uma cópia por dia, às 03:00 UTC (antes do primeiro job que apaga dados, 03:17 UTC)                                                                             |
+| **Retenção**      | as 30 cópias diárias mais recentes, ou seja, 30 dias; não há cópias semanais nem mensais                                                                       |
+| **RPO**           | até 24 h                                                                                                                                                       |
+| **RTO**           | medido no ensaio de 15/09/2026: 10,5 s de restore para 94 MB (cresce com o volume; a parte lenta é recriar índices)                                            |
+| **Cifra**         | as cópias **não** são cifradas por nós; o R2 cifra tudo em repouso (do lado do provedor)                                                                       |
+| **PITR**          | não vem deste dump: é o pgBackRest da imagem `trajetto-postgres`, na staging desde a onda 3 e na produção desde a onda 6 ([seção 27](#27-pitr-com-pgbackrest)) |
+| **Arquivos (R2)** | fora do dump ("O que o dump não cobre", abaixo)                                                                                                                |
 
 ### O backup agendado (Dokploy → Database → Backups)
 
@@ -3663,10 +3669,11 @@ cria de −1 a +7 dias).
 
 ### Pendências registradas
 
-WAL archiving/PITR (imagem derivada com wal-g e um restart planejado);
-ensaio mensal com uma cópia real do Dokploy; Bucket Lock nos prefixos de
-prova; réplica de leitura/HA; retenção da trilha por plano (gatilho: mais de
-2 mil motoristas ativos/dia ou `driver_position` acima de 50 GB).
+O PITR da produção (F1b, onda 6; [seção 27](#27-pitr-com-pgbackrest));
+ensaio mensal com uma cópia real do Dokploy; as regras de Bucket Lock
+(`infra/r2/bucket-locks.md`), aplicadas pelo dono; réplica de leitura/HA;
+retenção da trilha por plano (gatilho: mais de 2 mil motoristas ativos/dia
+ou `driver_position` acima de 50 GB).
 
 ## 19. Réplicas, workers e tempo real
 
@@ -4366,15 +4373,24 @@ migração dele), e não apague as versões que `staging-applied`,
 `stable-applied` e a `src-<hash>` mais recente apontam. Na `trajetto-ai`, não apague a versão que a tag `src-<hash>` mais recente
 aponta: sem ela, o próximo push reconstrói a IA (e a reimplanta).
 
+Na `trajetto-postgres` (publicada só quando `infra/postgres` muda, com
+`src-<hash>` e `sha-<7>`; a promoção move `stable` só como referência), não
+apague a versão que o Database de cada ambiente roda (o digest anotado na
+troca, [seção 27](#27-pitr-com-pgbackrest)), nem a da `src-<hash>` mais
+recente, nem a anterior a ela (o alvo da reversão). O pacote é público, e o
+armazenamento de pacotes públicos não conta na cota do GitHub Packages; os
+três privados, sim: limpe-os antes de a cota encher, porque um push que
+não cabe derruba o `Build`.
+
 ## 23. Recursos da VPS e logs
 
-| Serviço     | Limite (onde)                                                         |
-| ----------- | --------------------------------------------------------------------- |
-| API         | 2 × 1 GiB (_Resources_ da Application; heap 768 MB no `NODE_OPTIONS`) |
-| Web         | 768 MiB (limite da Application; ver `trajetto-ui/docs/deploy.md`)     |
-| Redis       | 512 MiB (_Resources_ do Database; dados 256 MB pelo comando)          |
-| trajetto-ai | 1 GiB e 2 CPUs                                                        |
-| Postgres    | sem teto (dimensionado pelo tuning)                                   |
+| Serviço     | Limite (onde)                                                                                                                                                                |
+| ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| API         | 2 × 1 GiB (_Resources_ da Application; heap 768 MB no `NODE_OPTIONS`)                                                                                                        |
+| Web         | 768 MiB (limite da Application; ver `trajetto-ui/docs/deploy.md`)                                                                                                            |
+| Redis       | 512 MiB (_Resources_ do Database; dados 256 MB pelo comando)                                                                                                                 |
+| trajetto-ai | 1 GiB e 2 CPUs                                                                                                                                                               |
+| Postgres    | 2 GiB na produção e 576 MiB na staging (_Resources_ do Database, com `POSTGRES_MEMORY_LIMIT_MB` igual; [seção 27](#valores-por-ambiente)); sem teto antes da troca da imagem |
 
 Mais o Dokploy e o Traefik. Só a produção passa de 3,5 GB sem contar o
 Postgres; **com staging no mesmo host, o dobro** (ou staging com 1 réplica,
@@ -5011,3 +5027,300 @@ Result)` com o `Result` verde seria a saída que não chegou ao chamador:
    sobe no passo 2, e o run do app reexecutado no passo 4 publica a OTA.
    Fora de um lote assim, o app em zod 4 sobe depois da API em zod 4 (o
    passo 3 da ordem do manual da API).
+
+## 27. PITR com pgBackRest
+
+> Plano de escala, itens F1-01 a F1-03, F1-19 e F1-26. O PITR (restaurar o
+> banco até o minuto) liga em etapas: na staging, o F1a (onda 3); na
+> produção, primeiro a troca da imagem **sem** arquivamento (onda 3) e só no
+> fim da onda 6 o F1b, depois que a API deixar de conectar como
+> superusuário (decisão D61: uma injeção de SQL com superusuário leria as
+> chaves do PITR no ambiente do contêiner). O backup do Dokploy
+> ([seção 18](#18-backup-e-restauração)) continua nos dois ambientes, com a
+> mesma agenda e as mesmas 30 cópias.
+
+O Database PostgreSQL passa a rodar a imagem `trajetto-postgres`
+(`infra/postgres`): a `postgres:16-alpine` pelo mesmo digest da CI (o mesmo
+Postgres 16, a mesma musl e a mesma colação, então a troca serve no volume de
+hoje), mais o pgBackRest compilado da fonte, os parâmetros de produção
+(`infra/postgres/postgres.params`), toda a memória derivada do teto e os
+scripts `trajetto-backup` e `trajetto-restore-drill`. O porquê de cada valor
+está nos comentários do `infra/postgres/trajetto-entrypoint.sh`; as travas
+dos buckets, em `infra/r2/bucket-locks.md`; o ensaio, em
+[`runbooks/restore-drill.md`](./runbooks/restore-drill.md).
+
+### Regras do Database
+
+- **Imagem sempre por digest**, copiado do resumo do run que a publicou (o
+  `Build` do `staging.yml` escreve o digest e "troca no Database: ação do
+  dono"):
+  `ghcr.io/trajetto-organization/trajetto-postgres@sha256:<digest>`. O
+  pacote é público, então o Database não precisa de credencial do GHCR.
+  Nenhum passo da CI implanta o Database.
+- **_Command_ e _Args_ do Database ficam VAZIOS.** O _Command_ troca o
+  entrypoint da imagem e o wrapper (`trajetto-entrypoint.sh`) deixa de
+  rodar; os _Args_ trocam o `CMD`, e um valor como o antigo
+  `docker-entrypoint.sh postgres -c …` também pula o wrapper. Sem ele, a
+  memória volta aos padrões do Postgres e o arquivamento desliga sem erro
+  (o alerta `pitr-archive-off` avisa quando `PITR_EXPECTED=true`). Um
+  parâmetro novo vai no `infra/postgres/postgres.params`, versionado, que
+  vai e volta com a imagem; nunca por `ALTER SYSTEM`, que fica no volume e
+  sobrevive à volta do digest.
+- **`CHECKPOINT` antes de cada _Deploy_ do Database**, entre 00h e 05h BRT,
+  com aviso. Cada mudança (imagem, _Environment_, _Resources_) recria o
+  contêiner: junte tudo num _Deploy_ só.
+- **`POSTGRES_MEMORY_LIMIT_MB` igual ao _Memory Limit_**, em MiB. Se o
+  teto do contêiner for menor, o wrapper usa o teto e avisa no log.
+- Nos comandos abaixo, `trajetto-postgres-staging` e
+  `trajetto-postgres-production` são os marcadores dos App Names
+  ([seção 7.2](#72-nomes-name-e-app-name)); o usuário e o banco são os do
+  Database (`trajetto`).
+
+### Valores por ambiente
+
+As variáveis vão no _Environment_ do Database PostgreSQL (não no da API);
+o passo a passo de cada etapa vem a seguir. "—" = não definir. O que cada
+variável faz:
+[`variaveis-de-ambiente.md`, seção 14](./variaveis-de-ambiente.md#14-backup-do-banco).
+
+| Variável ou campo                                                               | Staging (F1a)                                   | Produção, troca (onda 3)            | Produção, F1b (onda 6)                  |
+| ------------------------------------------------------------------------------- | ----------------------------------------------- | ----------------------------------- | --------------------------------------- |
+| _Docker Image_                                                                  | `trajetto-postgres@sha256:<digest>`             | `trajetto-postgres@sha256:<digest>` | `trajetto-postgres@sha256:<digest>`     |
+| _Memory Limit_                                                                  | `603979776`                                     | `2147483648`                        | `2147483648`                            |
+| _CPU Limit_                                                                     | `500000000`                                     | vazio                               | vazio                                   |
+| _Command_ e _Args_                                                              | vazios                                          | vazios                              | vazios                                  |
+| `POSTGRES_MEMORY_LIMIT_MB`                                                      | `576`                                           | `2048`                              | `2048`                                  |
+| `POSTGRES_MAX_WAL_SIZE`                                                         | `1GB`                                           | `8GB`                               | `8GB`                                   |
+| `POSTGRES_MAX_SLOT_WAL_KEEP_SIZE`                                               | `2GB`                                           | —                                   | `4GB`                                   |
+| `PGBACKREST_ARCHIVE_PUSH_QUEUE_MAX`                                             | `1GB`                                           | —                                   | `4GB`                                   |
+| `PGBACKREST_REPO1_S3_ENDPOINT`                                                  | `<ACCOUNT_ID>.r2.cloudflarestorage.com`         | —                                   | `<ACCOUNT_ID>.r2.cloudflarestorage.com` |
+| `PGBACKREST_REPO1_S3_BUCKET`                                                    | `trajetto-pitr-staging`                         | —                                   | `trajetto-pitr-prod`                    |
+| `PGBACKREST_REPO1_S3_KEY`, `PGBACKREST_REPO1_S3_KEY_SECRET`                     | o token de escrita do bucket                    | —                                   | o token de escrita do bucket            |
+| `PGBACKREST_REPO1_CIPHER_PASS`                                                  | `openssl rand -base64 48`, duas cópias no cofre | —                                   | outra, gerada do mesmo jeito            |
+| `PITR_DRILL_REPO1_S3_KEY`, `PITR_DRILL_REPO1_S3_KEY_SECRET`                     | o token só de leitura do bucket                 | —                                   | o token só de leitura do bucket         |
+| `PITR_BACKUP_FULL_PING_URL`, `PITR_BACKUP_DIFF_PING_URL`, `PITR_DRILL_PING_URL` | os três checks do healthchecks.io               | —                                   | os três checks do healthchecks.io       |
+| `PITR_ARCHIVE`                                                                  | `on`, só no passo 7                             | —                                   | `on`, só no passo 3                     |
+| `SHOW shared_buffers` esperado                                                  | `108MB`                                         | `448MB`                             | `448MB`                                 |
+| `SHOW archive_mode` esperado                                                    | `off`, e `on` depois do passo 7                 | `off`                               | `on`                                    |
+| `PITR_EXPECTED` (na `trajetto-api`)                                             | `true`, no passo 10                             | —                                   | `true`, no passo 7                      |
+
+O teto muda por fase (seção 3.2 do plano de escala): a produção vai a 1792
+MiB (`1879048192`) na fase C se o hit ratio passar de 99%, e a 3072 MiB
+(`3221225472`) quando a staging sair da VPS; a staging vai a 1024 MiB no
+2º VPS. Mude o _Memory Limit_ e o `POSTGRES_MEMORY_LIMIT_MB` juntos, no
+mesmo _Deploy_.
+
+### F1a: a staging (onda 3), nesta ordem
+
+A ordem importa: ligar o arquivamento antes da stanza faria todo
+`archive-push` falhar e sujaria o aceite de 7 dias. Antes: os buckets
+`trajetto-pitr-staging` e `trajetto-pitr-prod`, cada um com um token de
+escrita e outro só de leitura, e a senha da cifra no cofre.
+
+1. Anote a colação e a imagem de hoje (para conferir no passo 5 e para a
+   reversão):
+
+   ```sh
+   c=$(docker ps -q -f label=com.docker.swarm.service.name=trajetto-postgres-staging)
+   docker exec "$c" psql -U trajetto -d trajetto -c "SELECT datname, datcollate, datctype, datlocprovider FROM pg_database ORDER BY 1"
+   docker service inspect trajetto-postgres-staging --format '{{.Spec.TaskTemplate.ContainerSpec.Image}}'
+   ```
+
+2. Database → _Environment_: as variáveis da coluna da staging na tabela
+   acima, **sem** `PITR_ARCHIVE`. **Save**.
+3. _Advanced → Resources_: _Memory Limit_ `603979776` e _CPU Limit_
+   `500000000`. Confira que _Command_ e _Args_ estão vazios. **Save**.
+4. `CHECKPOINT`, depois _General → Docker Image_ com o digest → **Save** →
+   **Deploy**:
+
+   ```sh
+   docker exec "$c" psql -U trajetto -d trajetto -c 'CHECKPOINT'
+   ```
+
+5. Confira, com o contêiner novo:
+
+   ```sh
+   c=$(docker ps -q -f label=com.docker.swarm.service.name=trajetto-postgres-staging)
+   docker exec "$c" psql -U trajetto -d trajetto -Atc 'SHOW shared_buffers'           # 108MB
+   docker exec "$c" psql -U trajetto -d trajetto -Atc 'SHOW shared_preload_libraries' # pg_stat_statements
+   docker exec "$c" psql -U trajetto -d trajetto -Atc 'SHOW archive_mode'             # off
+   docker exec "$c" psql -U trajetto -d trajetto -Atc 'SHOW trajetto.image_revision'  # o commit da imagem
+   docker exec "$c" psql -U trajetto -d trajetto -c "SELECT datname, datcollate, datctype, datlocprovider FROM pg_database ORDER BY 1"
+   curl -s -o /dev/null -w '%{http_code}\n' https://api-staging.intrajetto.com/health/readiness   # 200
+   ```
+
+   A colação tem de ser a do passo 1, linha por linha. O
+   `pg_stat_statements` aparece como `ready` no `/health/metrics`.
+
+6. R2 → `trajetto-pitr-staging` → _Settings → Bucket Lock_: a regra de
+   `archive/trajetto/1`, 14 dias (`infra/r2/bucket-locks.md`). Depois, a
+   stanza, e logo em seguida a cópia crua do `backup.info` e do
+   `archive.info` para o cofre (o mesmo documento diz por quê):
+
+   ```sh
+   docker exec -u postgres "$c" pgbackrest --stanza=trajetto stanza-create
+   docker exec -u postgres "$c" pgbackrest --stanza=trajetto repo-get --raw backup/trajetto/backup.info > backup.info.stanza
+   docker exec -u postgres "$c" pgbackrest --stanza=trajetto repo-get --raw archive/trajetto/archive.info > archive.info.stanza
+   ```
+
+7. Database → _Environment_: `PITR_ARCHIVE=on` → **Save** → `CHECKPOINT` →
+   **Deploy**. No log do Database: "arquivamento ligado".
+8. A prova do repositório, um full, um `archive-get` e as estatísticas do
+   archiver zeradas (para o aceite contar só daqui em diante):
+
+   ```sh
+   c=$(docker ps -q -f label=com.docker.swarm.service.name=trajetto-postgres-staging)
+   docker exec -u postgres "$c" pgbackrest --stanza=trajetto check
+   docker exec -u postgres "$c" trajetto-backup full
+   docker exec -u postgres "$c" pgbackrest --stanza=trajetto info
+   seg=$(docker exec "$c" psql -U trajetto -d trajetto -Atc 'SELECT last_archived_wal FROM pg_stat_archiver')
+   docker exec -u postgres "$c" pgbackrest --stanza=trajetto archive-get "$seg" /tmp/archive-get-teste
+   docker exec "$c" rm -f /tmp/archive-get-teste
+   docker exec "$c" psql -U trajetto -d trajetto -c "SELECT pg_stat_reset_shared('archiver')"
+   ```
+
+   O `trajetto-backup full` termina com uma linha
+   `{"result":"ok","type":"full",…}`. Anote a hora do fim dele: o aceite
+   conta 7 dias a partir dela.
+
+9. O ensaio, à mão, na janela, com a api e a web da staging em 0 réplicas
+   ([runbooks/restore-drill.md](./runbooks/restore-drill.md)):
+
+   ```sh
+   docker exec "$c" cat /usr/local/bin/trajetto-restore-drill | bash -s -- --from "$c"
+   ```
+
+   Anote o `rto_seconds` e o `loss_seconds` do resumo.
+
+10. `trajetto-api` da staging → _Environment_: `PITR_EXPECTED=true` →
+    **Save** → **Deploy**.
+
+Depois, os Schedule Jobs (abaixo) e a prova do Bucket Lock
+(`infra/r2/bucket-locks.md`, "Primeiro na staging").
+
+### Troca da imagem na produção, sem arquivamento (onda 3)
+
+A produção ganha o `pg_stat_statements` e a memória certa, e continua sem
+PITR: nenhuma `PGBACKREST_*` e nenhum `PITR_ARCHIVE`. O dump do Dokploy
+segue sendo o backup dela (RPO de 24 h).
+
+1. Os mesmos passos 1 a 5 do F1a, com `trajetto-postgres-production`, a
+   coluna "Produção, troca" da tabela (`POSTGRES_MEMORY_LIMIT_MB=2048`,
+   `POSTGRES_MAX_WAL_SIZE=8GB`), _Memory Limit_ `2147483648` e _CPU Limit_
+   vazio.
+2. Esperado: `SHOW shared_buffers` = `448MB`, `SHOW archive_mode` = `off`,
+   o `pg_stat_statements` em `ready` no `/health/metrics`, a colação igual
+   à anotada e a readiness de `https://api.intrajetto.com` em 200.
+
+### F1b: o PITR na produção (fim da onda 6)
+
+Pré-condições: `DATABASE_REQUIRE_RUNTIME_ROLE=true` na produção há 7 dias
+ou mais; o F1a com 7 dias verdes; no `trajetto-pitr-prod`, a regra de
+Bucket Lock de `archive/trajetto/1` (e a de `backup/trajetto/2` só se a
+prova da staging passou).
+
+1. Database de produção → _Environment_: acrescente as variáveis da coluna
+   "Produção, F1b", **sem** `PITR_ARCHIVE` → **Save** → `CHECKPOINT` →
+   **Deploy**.
+2. A stanza e a cópia para o cofre, como no passo 6 do F1a, com
+   `trajetto-postgres-production`.
+3. `PITR_ARCHIVE=on` → **Save** → `CHECKPOINT` → **Deploy**.
+4. O passo 8 do F1a (`check`, `trajetto-backup full`, `info`, um
+   `archive-get` e o `pg_stat_reset_shared('archiver')`).
+5. Os Schedule Jobs da produção (abaixo).
+6. O ensaio à mão, na janela e com teto (passo 9 do F1a).
+7. `trajetto-api` de produção → `PITR_EXPECTED=true` → **Deploy**.
+
+### Os Schedule Jobs do servidor
+
+Dokploy → _Schedules_ do servidor (tipo _Server_), um por linha, cada um
+com o seu check no healthchecks.io (a URL do check vai no _Environment_ do
+Database, nas variáveis da tabela acima). O script vem dentro da imagem do
+banco, na mesma versão do pgBackRest. Só a staging por enquanto; a produção
+ganha os seus no passo 5 do F1b, com `trajetto-postgres-production`.
+
+| Job                   | Agenda (UTC)  | Comando (staging)                                                                                                                                                          | Check                                        |
+| --------------------- | ------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------- |
+| backup diferencial    | `0 5 * * 0-5` | `docker exec -u postgres $(docker ps -q -f label=com.docker.swarm.service.name=trajetto-postgres-staging) trajetto-backup diff`                                            | `PITR_BACKUP_DIFF_PING_URL`, período de 26 h |
+| backup completo       | `0 5 * * 6`   | `docker exec -u postgres $(docker ps -q -f label=com.docker.swarm.service.name=trajetto-postgres-staging) trajetto-backup full`                                            | `PITR_BACKUP_FULL_PING_URL`, 7 dias e 2 h    |
+| ensaio de restauração | `45 5 1 * *`  | `c=$(docker ps -q -f label=com.docker.swarm.service.name=trajetto-postgres-staging); docker exec "$c" cat /usr/local/bin/trajetto-restore-drill \| bash -s -- --from "$c"` | `PITR_DRILL_PING_URL`, 32 dias               |
+
+Os horários seguem o mapa do plano (decisão D28): o dump do Dokploy às
+03:00, os expurgos até 04:50, o pgBackRest às 05:00 com o full no sábado e
+o ensaio no dia 1 às 05:45. Estas agendas não são diárias e por isso ficam
+fora da [seção 18](#18-backup-e-restauração): o teste `legal-facts` da web
+lê toda agenda das seções que falam do Keep do dump como a agenda dele. Um
+`/fail` do backup traz o motivo (`archive-gap` pede um full:
+[runbooks/wal-archive-stalled.md](./runbooks/wal-archive-stalled.md)); um
+`/fail` do ensaio, o motivo do
+[runbook do ensaio](./runbooks/restore-drill.md).
+
+### Aceite: 7 dias no `ops_sample`
+
+Contados do fim do primeiro full (passo 8), na linha `cluster` de cada
+minuto: `failed_count` = 0 e o último segmento arquivado há menos de 120 s
+em pelo menos 99% das linhas. O `ts` é UTC, sem fuso:
+
+```sql
+WITH janela AS (
+  SELECT ts,
+         metrics->'database'->>'archive_mode' AS archive_mode,
+         (metrics->'database'->'archiver'->>'failed_count')::bigint AS falhas,
+         (metrics->'database'->'archiver'->>'last_archived_age_seconds')::float8 AS lag_s
+  FROM ops_sample
+  WHERE role = 'cluster'
+    AND ts >= '<fim do full, UTC>'::timestamp
+    AND ts < '<fim do full, UTC>'::timestamp + interval '7 days'
+)
+SELECT count(*) AS linhas,                                         -- perto de 10080
+       count(*) FILTER (WHERE archive_mode = 'on') AS com_arquivo,  -- todas
+       max(falhas) AS falhas,                                       -- 0
+       round(100.0 * count(*) FILTER (WHERE lag_s < 120) / nullif(count(*), 0), 2) AS pct_lag_ok -- >= 99
+FROM janela;
+```
+
+Uma linha sem leitura do archiver (`null`) conta contra. Depois do aceite,
+o ensaio anota o RTO e a perda: esse é o portão da onda.
+
+### Reversão
+
+- **Do arquivamento**, na ordem inversa: `PITR_EXPECTED` fora da
+  `trajetto-api` (**Deploy**), depois `PITR_ARCHIVE` fora do Database →
+  `CHECKPOINT` → **Deploy**. O wrapper grava `archive_mode=off` explícito.
+- **Da imagem**: o digest anotado no passo 1, com `CHECKPOINT` antes. Os
+  parâmetros entram como `-c` (nada no `postgresql.auto.conf`), então
+  voltar o digest volta a configuração junto. Se algo foi por
+  `ALTER SYSTEM` numa emergência, desfaça antes, ou a imagem antiga, sem o
+  pgBackRest, falharia em todo arquivamento e encheria o `pg_wal`:
+
+  ```sql
+  ALTER SYSTEM RESET archive_command;
+  ALTER SYSTEM SET archive_mode = off;
+  ```
+
+- As `PGBACKREST_*` podem ficar no _Environment_ depois da volta: a imagem
+  antiga não as lê.
+
+### Grace e placement do Database
+
+- **Grace**: o Dokploy v0.30.10 cria o serviço do Database com um _Stop
+  Grace Period_ de 30 s (não os 10 s do Docker puro), com o update
+  stop-first. Onde o painel tiver o campo, o F0-01 põe `120000000000` (120
+  s). Confira; o valor sai em nanossegundos (`null` = 10 s):
+
+  ```sh
+  docker service inspect trajetto-postgres-production --format '{{json .Spec.TaskTemplate.ContainerSpec.StopGracePeriod}}'
+  ```
+
+  O `CHECKPOINT` antes de cada parada continua: ele encurta o desligamento,
+  qualquer que seja o grace.
+
+- **Placement**: o Dokploy v0.30.10 põe `node.role==manager` em todo
+  serviço com volume, e o Database tem o dele. Com um nó só, nada muda.
+  Com mais de um manager, o Swarm poderia subir o banco noutro manager, sem
+  o volume local: antes de acrescentar um nó, fixe o Database pelo nome do
+  nó ou por label (F4-52, onda 17). Confira:
+
+  ```sh
+  docker service inspect trajetto-postgres-production --format '{{json .Spec.TaskTemplate.Placement}}'
+  ```
