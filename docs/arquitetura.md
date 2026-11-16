@@ -525,7 +525,12 @@ Docker e tudo termina em menos de 9 s; com `40000`, teto de 35 s e dreno de
 `Connection: close`, e o Traefik leva a conexão seguinte para outra
 réplica; fora dele, uma conexão é renovada a cada
 `HTTP_MAX_REQUESTS_PER_SOCKET` requisições (1.000), para uma réplica nova
-receber a parte dela (`src/config/http-server.ts`). O dreno das importações
+receber a parte dela (`src/config/http-server.ts`). Nenhuma rota define o
+cabeçalho `Connection` (só o dreno): o Node pula a própria lógica de
+keep-alive quando a resposta já o traz, e uma listagem NDJSON que forçava
+`keep-alive` desligava o `close` do teto; o Traefik mandava mais um pedido
+pela conexão, e o Node respondia 503 sem passar pelo Fastify (achado do
+ensaio de rolling, `tests/load/swarm-rolling.sh`). O dreno das importações
 começa no primeiro instante do SIGTERM (ver [Arquivos](#arquivos)).
 
 Separar workers do HTTP é possível com a mesma imagem (`WORKERS_ENABLED=false`

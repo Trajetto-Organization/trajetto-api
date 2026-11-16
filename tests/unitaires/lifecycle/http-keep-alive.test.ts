@@ -200,3 +200,83 @@ describe("requests per keep-alive connection", () => {
     APP_BOOT_TIMEOUT_MS,
   );
 });
+
+/**
+ * The cap must hold whatever the response is (found by the rolling
+ * rehearsal, plano-escala LOAD-06).
+ *
+ * The NDJSON listings set `Connection: keep-alive` themselves
+ * (config/stream-utils.ts). Node skips its own keep-alive logic when a
+ * response names its Connection, so when the capped response of a
+ * connection was a listing it said keep-alive instead of close: Traefik
+ * used the connection once more, and Node answered that request 503 (a
+ * request past maxRequestsPerSocket), with no log line. The Swarm
+ * rehearsal measured nine to sixteen such 503s per run at 50 req/s. The
+ * listing now leaves the header to Node, which also keeps the drain's
+ * close (closeConnectionWhileDraining) the only one the API sets.
+ */
+describe("a listing as the capped response", () => {
+  it("says close, and the request after it opens another connection", async () => {
+    const { default: fastify } = await import("fastify");
+    const { sendAsNDJSON } = await import("@/config/stream-utils");
+
+    const server = fastify({ maxRequestsPerSocket: 2 });
+
+    server.get("/list", (_request, reply) =>
+      sendAsNDJSON({
+        reply,
+        dataPromise: Promise.resolve({ data: [{ id: 1 }], total: 1 }),
+        page: 1,
+        pageSize: 20,
+      }),
+    );
+
+    await server.listen({ host: "127.0.0.1", port: 0 });
+    cleanup.push(() => server.close());
+
+    const { port } = server.server.address() as AddressInfo;
+    const agent = new Agent({ keepAlive: true, maxSockets: 1 });
+
+    cleanup.push(() => agent.destroy());
+
+    const read = () =>
+      new Promise<{ status: number; connection?: string; socket: Socket }>(
+        (done, reject) => {
+          const req = httpRequest(
+            { host: "127.0.0.1", port, path: "/list", agent },
+            (res) => {
+              res.resume();
+              res.once("end", () =>
+                done({
+                  status: res.statusCode ?? 0,
+                  connection: res.headers.connection,
+                  socket: req.socket as Socket,
+                }),
+              );
+            },
+          );
+
+          req.once("error", reject);
+          req.end();
+        },
+      );
+
+    const first = await read();
+    const capped = await read();
+    const after = await read();
+
+    expect(first.connection).toBe("keep-alive");
+    expect(capped.connection).toBe("close");
+    expect(after.status).toBe(200);
+    expect(after.socket).not.toBe(first.socket);
+  });
+
+  it("leaves the Connection header of a listing to Node", () => {
+    const sources = readFileSync(
+      resolve(process.cwd(), "src", "config", "stream-utils.ts"),
+      "utf8",
+    );
+
+    expect(sources).not.toMatch(/header\(\s*["']connection["']/i);
+  });
+});
