@@ -28,23 +28,26 @@
 #            answer, and every replaced replica logged "shutdown complete"
 #            and exited 0 — the shutdown fit the grace (F1-14, F1-15).
 #   scale    from ROLLING_REPLICAS to ROLLING_SCALE_TO (6) under the same
-#            load: over ROLLING_BALANCE_WINDOW seconds (300) after the new
-#            replicas are healthy, the busiest replica served at most
-#            ROLLING_BALANCE_MAX (1.3) times the average. Without
-#            HTTP_MAX_REQUESTS_PER_SOCKET the keep-alive connections Traefik
-#            already holds never move, and the new replicas sit idle.
+#            load: over the balance window after the new replicas are
+#            healthy, the busiest replica served at most ROLLING_BALANCE_MAX
+#            (1.3) times the average. Without HTTP_MAX_REQUESTS_PER_SOCKET
+#            the keep-alive connections Traefik already holds never move,
+#            and the new replicas sit idle.
 #
-# The replicas get HTTP_MAX_REQUESTS_PER_SOCKET=100 here, not production's
-# 1000 (ROLLING_MAX_REQUESTS_PER_SOCKET). At 50 req/s through one Traefik
-# with about one request in flight, a socket of 1000 carries twenty seconds
-# of the WHOLE load: the 5-minute window holds some fifteen sockets, each
-# replica's count comes out in steps of 1000 and the ratio measures how they
-# fell (1.48 measured on 15/11/2026 with the cap working). With 100 the
-# window holds 150 sockets and the ratio measures the spread. The mechanism
-# under test is the same — the cap closes the socket with `Connection:
-# close` and the next one lands elsewhere — and a build without the cap
-# still leaves the new replicas idle. Production's own number is checked at
-# production's rates, by the burn-in of a new server (portão B).
+# The replicas run production's cap: HTTP_MAX_REQUESTS_PER_SOCKET is left
+# unset, as on the Dokploy Application, and the image's default applies
+# (PRODUCTION_SOCKET_REQUESTS below, src/config/http-server.ts). What the
+# ratio measures depends on how many connections are renewed inside the
+# window: through one Traefik a connection carries `cap` requests, so the
+# window sees rate × window / cap renewals. With 15 (a 5-minute window at
+# 50 req/s and 1000 per connection) it measured how they fell — 1.48 on
+# 15/11/2026, with the cap working — and with 150 (100 per connection) it
+# measured 1.00: the Swarm hands new connections out in turn, so the
+# busiest replica is about one connection above the average. Sixty
+# renewals bring that to ~1.1, so the window defaults to the larger of
+# 300 s and 60 × cap / rate: 1200 s at 50 req/s with production's 1000.
+# ROLLING_MAX_REQUESTS_PER_SOCKET=100 is the quick check of the mechanism
+# alone (a 300 s window); its verdict says it is not production's value.
 #
 # It refuses a node that is already in a Swarm with services: that is what
 # a Dokploy server looks like, production's included. On a node outside any
@@ -68,9 +71,12 @@
 #   ROLLING_LOAD_DURATION   load around the update (default 6m)
 #   ROLLING_SCALE_SETTLE    seconds the new replicas get to turn healthy
 #                           (default 180)
-#   ROLLING_BALANCE_WINDOW / ROLLING_BALANCE_MAX   300 / 1.3
+#   ROLLING_BALANCE_WINDOW  seconds the spread is measured over (default
+#                           the larger of 300 and 60 renewals at the cap;
+#                           see above)
+#   ROLLING_BALANCE_MAX     1.3
 #   ROLLING_MAX_REQUESTS_PER_SOCKET  the replicas' HTTP_MAX_REQUESTS_PER_SOCKET
-#                           (default 100; see above)
+#                           (default unset: production's; see above)
 #   ROLLING_MEMORY         memory limit per replica (default 1024M, as
 #                           production)
 #   ROLLING_PG_PORT         host port of the throwaway Postgres, for the seed
@@ -99,9 +105,9 @@ RATE="${ROLLING_RATE:-50}"
 GRACE="${ROLLING_STOP_GRACE:-40s}"
 LOAD_DURATION="${ROLLING_LOAD_DURATION:-6m}"
 SCALE_SETTLE="${ROLLING_SCALE_SETTLE:-180}"
-BALANCE_WINDOW="${ROLLING_BALANCE_WINDOW:-300}"
+BALANCE_WINDOW="${ROLLING_BALANCE_WINDOW:-}"
 BALANCE_MAX="${ROLLING_BALANCE_MAX:-1.3}"
-SOCKET_REQUESTS="${ROLLING_MAX_REQUESTS_PER_SOCKET:-100}"
+SOCKET_REQUESTS="${ROLLING_MAX_REQUESTS_PER_SOCKET:-}"
 MEMORY="${ROLLING_MEMORY:-1024M}"
 PG_PORT="${ROLLING_PG_PORT:-54391}"
 ADVERTISE="${ROLLING_ADVERTISE_ADDR:-127.0.0.1}"
@@ -120,6 +126,13 @@ EDGE="$PREFIX-edge"
 PG="$PREFIX-pg"
 REDIS="$PREFIX-redis"
 ROUTES="$PREFIX-edge-routes"
+
+# The image's HTTP_MAX_REQUESTS_PER_SOCKET when the variable is unset
+# (HTTP_MAX_REQUESTS_PER_SOCKET_DEFAULT; swarm-rolling-script.test keeps
+# them equal), and how many connection renewals the balance window must
+# hold for the ratio to measure the spread (see above).
+PRODUCTION_SOCKET_REQUESTS=1000
+BALANCE_RENEWALS=60
 
 FAILURES=0
 CREATED_SWARM=0
@@ -163,11 +176,35 @@ integer ROLLING_REPLICAS "$REPLICAS"
 integer ROLLING_SCALE_TO "$SCALE_TO"
 integer ROLLING_RATE "$RATE"
 integer ROLLING_SCALE_SETTLE "$SCALE_SETTLE"
-integer ROLLING_BALANCE_WINDOW "$BALANCE_WINDOW"
 integer ROLLING_PG_PORT "$PG_PORT"
-integer ROLLING_MAX_REQUESTS_PER_SOCKET "$SOCKET_REQUESTS"
+[ -z "$SOCKET_REQUESTS" ] || integer ROLLING_MAX_REQUESTS_PER_SOCKET "$SOCKET_REQUESTS"
 
+[ "$RATE" -ge 1 ] || refuse "ROLLING_RATE precisa ser ao menos 1."
 [ "$SCALE_TO" -gt "$REPLICAS" ] || refuse "ROLLING_SCALE_TO ($SCALE_TO) precisa passar de ROLLING_REPLICAS ($REPLICAS)."
+
+# The cap the replicas run with, and the window that holds enough of its
+# renewals (0 is no cap: the window stays at 300 s and the new replicas sit
+# idle, which is what the question must catch).
+CAP="${SOCKET_REQUESTS:-$PRODUCTION_SOCKET_REQUESTS}"
+
+if [ -z "$BALANCE_WINDOW" ]; then
+  BALANCE_WINDOW=300
+
+  if [ "$CAP" -gt 0 ]; then
+    needed=$(((BALANCE_RENEWALS * CAP + RATE - 1) / RATE))
+    [ "$needed" -le "$BALANCE_WINDOW" ] || BALANCE_WINDOW="$needed"
+  fi
+fi
+
+integer ROLLING_BALANCE_WINDOW "$BALANCE_WINDOW"
+
+if [ "$CAP" -eq 0 ]; then
+  CAP_LABEL="sem teto por conexão"
+elif [ "$CAP" -eq "$PRODUCTION_SOCKET_REQUESTS" ]; then
+  CAP_LABEL="teto de $CAP pedidos por conexão, o da produção"
+else
+  CAP_LABEL="teto de $CAP pedidos por conexão, não o da produção ($PRODUCTION_SOCKET_REQUESTS): só o mecanismo"
+fi
 
 case "$PG_PORT" in
   5432 | 3001 | 3333) refuse "ROLLING_PG_PORT=$PG_PORT é de outro serviço; escolha uma porta livre." ;;
@@ -291,8 +328,10 @@ API_ENV=(
   -e RATE_LIMIT_TRUSTED_PROXY=xff
   -e WORKERS_ENABLED=true
   -e "STOP_GRACE_PERIOD_MS=$GRACE_MS"
-  -e "HTTP_MAX_REQUESTS_PER_SOCKET=$SOCKET_REQUESTS"
 )
+
+# Unset unless asked: the Application does not set it either.
+[ -z "$SOCKET_REQUESTS" ] || API_ENV+=(-e "HTTP_MAX_REQUESTS_PER_SOCKET=$SOCKET_REQUESTS")
 
 wait_for() {
   # wait_for <seconds> <what> <command...>
@@ -514,7 +553,7 @@ if asked rolling; then
 fi
 
 if asked scale; then
-  say "2. Escala de $REPLICAS para $SCALE_TO sob $RATE req/s: máximo/média ≤ $BALANCE_MAX"
+  say "2. Escala de $REPLICAS para $SCALE_TO sob $RATE req/s: máximo/média ≤ $BALANCE_MAX em $BALANCE_WINDOW s ($CAP_LABEL)"
 
   start_load scale "$((20 + SCALE_SETTLE + BALANCE_WINDOW + 20))s"
   sleep 20
@@ -550,7 +589,7 @@ if asked scale; then
       }')"
     balanced=$?
 
-    echo "  $verdict"
+    echo "  $verdict; $CAP_LABEL"
     [ "$balanced" -eq 0 ] || failed "a carga não se espalhou nas réplicas novas ($verdict; o teto é $BALANCE_MAX)."
   fi
 

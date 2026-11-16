@@ -511,15 +511,20 @@ ROLLING_IMAGE=trajetto-api:rolling ROLLING_MIGRATE_IMAGE=trajetto-api-migrate:ro
   `ROLLING_RATE` (50 req/s) do `rolling.js`. Aprova com **zero** 5xx, zero
   pedidos sem resposta e cada réplica substituída com saída 0 e a linha
   `shutdown complete` no log (o desligamento coube no grace).
-- **Pergunta 2, escala**: de 3 para 6 réplicas sob a mesma carga; nos 300 s
+- **Pergunta 2, escala**: de 3 para 6 réplicas sob a mesma carga; na janela
   depois de as novas ficarem saudáveis, a mais ocupada atende no máximo 1,3
   vez a média (contagem das linhas `request completed` de cada réplica). As
-  réplicas recebem `HTTP_MAX_REQUESTS_PER_SOCKET=100`, não os 1.000 da
-  produção: a 50 req/s por um Traefik só, com ~1 pedido em voo, um socket de
-  1.000 leva 20 s de toda a carga, a janela tem uns 15 sockets e a razão mede
-  como eles caíram (1,48 medido com o limite funcionando). Com 100 são ~150
-  sockets e a razão mede o espalhamento. O número da produção é conferido no
-  ritmo da produção, no burn-in de um servidor novo (portão B do plano).
+  réplicas rodam com o teto da produção: `HTTP_MAX_REQUESTS_PER_SOCKET` fica
+  sem valor, como na Application, e vale o padrão da imagem (1.000 pedidos
+  por conexão). O que a razão mede depende de quantas conexões se renovam na
+  janela (ritmo × janela ÷ teto): com 15 (300 s a 50 req/s com 1.000) ela
+  mediu como elas caíram (1,48 em 15/11/2026, com o teto funcionando); com
+  150 (teto de 100) mediu 1,00, porque o Swarm entrega as conexões novas em
+  rodízio e a réplica mais ocupada fica uma conexão acima da média. Por isso
+  a janela é a maior entre 300 s e 60 renovações: 1.200 s a 50 req/s, e o
+  passo de escala leva uns 24 min. `ROLLING_MAX_REQUESTS_PER_SOCKET=100` é a
+  conferência rápida só do mecanismo (janela de 300 s), e o veredito diz que
+  não é o valor da produção.
 - `ROLLING_STOP_GRACE=10s` ensaia o Dokploy sem o campo _Stop Grace Period_
   (o padrão de 10 s do Docker); `ROLLING_STEPS=rolling` faz só a primeira
   pergunta; `ROLLING_KEEP=1` deixa tudo de pé para olhar.

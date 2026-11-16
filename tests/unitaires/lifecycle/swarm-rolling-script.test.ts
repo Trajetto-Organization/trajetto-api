@@ -3,6 +3,7 @@ import { resolve } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
+import { HTTP_MAX_REQUESTS_PER_SOCKET_DEFAULT } from "@/config/http-server";
 import { envSchema } from "@/schemas/env-schema";
 import { definedEnv } from "@/schemas/env-schema/defined-env";
 
@@ -320,22 +321,60 @@ describe.skipIf(!bash)(
         expect(parsed.success, JSON.stringify(parsed.error?.issues)).toBe(true);
       });
 
-      it("renews sockets every 100 requests, so a 5-minute window can see the spread", () => {
-        // At 50 req/s and ~1 request in flight, production's 1000 per socket
-        // leaves ~15 sockets in the window: the ratio would measure the dice
-        // (1.48 measured with the cap working). The header says why.
+      /**
+       * The scale question is about the configuration that ships. The
+       * replicas ran with 100 requests per connection, not production's
+       * 1000, so "max/avg 1.00" said nothing about the default, and a
+       * regression that only shows at the shipped value would pass. Now the
+       * variable is left unset, as on the Dokploy Application, and the
+       * window is sized for that cap instead.
+       */
+      it("runs the replicas with production's cap: the variable unset, as on the Application", () => {
         expect(rehearse().status).toBe(0);
-        expect(apiCreate()).toContain("-e HTTP_MAX_REQUESTS_PER_SOCKET=100 ");
+        expect(apiCreate()).not.toContain("HTTP_MAX_REQUESTS_PER_SOCKET");
 
-        expect(
-          rehearse({ ROLLING_MAX_REQUESTS_PER_SOCKET: "1000" }).status,
-        ).toBe(0);
-        const creates = box
+        // The figure the script sizes the window with is the image's own.
+        expect(read("tests", "load", "swarm-rolling.sh")).toContain(
+          `PRODUCTION_SOCKET_REQUESTS=${HTTP_MAX_REQUESTS_PER_SOCKET_DEFAULT}\n`,
+        );
+      });
+
+      it("measures the spread over at least 60 connection renewals at that cap: 1200 s at 50 req/s", () => {
+        // 15 renewals (the old 5-minute window at 1000 per connection)
+        // measured how they fell, 1.48 with the cap working.
+        for (let id = 1; id <= 6; id += 1) box.file(`count-c${id}`, "500\n");
+
+        const result = rehearse({
+          ROLLING_STEPS: "scale",
+          ROLLING_BALANCE_WINDOW: "",
+        });
+
+        expect(result.status, result.stdout).toBe(0);
+        expect(result.stdout).toContain("em 1200 s");
+        expect(result.stdout).toContain("o da produção");
+
+        const k6 = box
           .calls("docker")
-          .filter((line) => line.includes("--name t-rolling-api "));
+          .find((line) => line.includes("--name t-rolling-k6-scale "));
 
-        expect(creates[creates.length - 1]).toContain(
-          "-e HTTP_MAX_REQUESTS_PER_SOCKET=1000 ",
+        // 20 s before the scale, 180 s to turn healthy, the window, 20 s.
+        expect(k6).toContain("-e ROLLING_DURATION=1420s ");
+      });
+
+      it("takes a smaller cap by hand as a check of the mechanism only, and says so", () => {
+        for (let id = 1; id <= 6; id += 1) box.file(`count-c${id}`, "500\n");
+
+        const result = rehearse({
+          ROLLING_STEPS: "scale",
+          ROLLING_BALANCE_WINDOW: "",
+          ROLLING_MAX_REQUESTS_PER_SOCKET: "100",
+        });
+
+        expect(result.status, result.stdout).toBe(0);
+        expect(apiCreate()).toContain("-e HTTP_MAX_REQUESTS_PER_SOCKET=100 ");
+        expect(result.stdout).toContain("em 300 s");
+        expect(result.stdout).toContain(
+          "não o da produção (1000): só o mecanismo",
         );
       });
 
