@@ -145,4 +145,27 @@ describe("flushing the usage counter", () => {
 
     expect(Number(posts.count)).toBe(1);
   });
+
+  /**
+   * The shutdown now bounds the last flush by the plan's workers deadline
+   * (plano-escala F1-14), so a database that stops answering cannot hold
+   * the replica past the watchdog. Against a database that answers, the
+   * bound must cost nothing: the batch is written, as before.
+   */
+  it("writes the last batch on shutdown within the plan's deadline", async () => {
+    const counter = new ApiUsageRecorder();
+
+    counter.record({ ...CALL, apiKeyId, method: "DELETE", status: 204 });
+    counter.record({ ...CALL, apiKeyId, method: "DELETE", status: 204 });
+
+    await counter.shutdown({ deadlineMs: 3_000 });
+
+    expect(counter.pending()).toBe(0);
+
+    const deletes = await prisma.apiKeyUsageDaily.findFirstOrThrow({
+      where: { apiKeyId, method: "DELETE" },
+    });
+
+    expect(Number(deletes.count)).toBe(2);
+  });
 });
