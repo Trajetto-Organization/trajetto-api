@@ -44,6 +44,7 @@
 | Staging e produção: IA            | aba _Environment_ da Application **`trajetto-ai`**                                                                                                                                | seção 9 (`AI_TOKEN`, `OCR_THREADS`, `AI_MAX_QUEUE`)                                                                                                               |
 | Staging e produção: migrations    | aba _Environment_ da Application **`trajetto-api-migrate`**                                                                                                                       | seção 2: só a `DATABASE_URL` sem tetos de runtime (e, numa instalação nova, o bootstrap e o usuário master, uma vez)                                              |
 | Staging e produção: backup        | o dump: nenhuma variável, aba _Backups_ do Database PostgreSQL no Dokploy. O PITR e a memória do banco: aba _Environment_ do **Database PostgreSQL** (imagem `trajetto-postgres`) | seção 14; a API não lê nenhuma delas                                                                                                                              |
+| Produção: cópia fora da conta     | aba _Environment_ da Application **`trajetto-offsite`** (só na produção)                                                                                                          | seção 14: as `OFFSITE_*`, lidas pelo `infra/r2/offsite-copy.sh`                                                                                                   |
 | Staging e produção: banco e Redis | campos dos Databases **PostgreSQL** e **Redis** do Dokploy (usuário, senha, banco, imagem, comando)                                                                               | não são variáveis de ambiente que você digita; a seção 13 diz quais campos e onde cada valor reaparece. No PostgreSQL, _Command_ e _Args_ ficam vazios (seção 14) |
 | CI (validação)                    | bloco `env:` dos workflows                                                                                                                                                        | valores fixos de teste, sem segredo (banco e Redis dos service containers)                                                                                        |
 | CI (deploy)                       | _environments_ `staging` e `production` do GitHub e variáveis do repositório                                                                                                      | seção 16                                                                                                                                                          |
@@ -225,17 +226,17 @@ REDIS_URL=redis://:<SENHA DO REDIS>@<APP NAME DO REDIS>:6379
 
 ## 6. Arquivos (R2)
 
-| Variável                        | Obrig.      | Segredo | Formato / padrão                             | Dev                             | Staging               | Produção                                           | Para quê                                      |
-| ------------------------------- | ----------- | ------- | -------------------------------------------- | ------------------------------- | --------------------- | -------------------------------------------------- | --------------------------------------------- |
-| `UPLOAD_STORAGE_TYPE`           | prod (`r2`) |         | `local`\|`r2`; padrão `local`                | `local`                         | `r2`                  | `r2`                                               | onde ficam fotos, assinaturas e PDFs          |
-| `UPLOAD_LOCAL_PATH`             | não         |         | caminho; padrão `./tmp`                      | `./tmp`                         | `./tmp`               | `./tmp`                                            | pasta do modo `local`                         |
-| `UPLOAD_SIGNED_URL_TTL_SECONDS` | não         |         | 60–3600; padrão `900`                        | —                               | —                     | —                                                  | validade das URLs assinadas                   |
-| `UPLOAD_ORPHAN_GC`              | não         |         | `off`\|`dry-run`\|`delete`; padrão `dry-run` | `dry-run`                       | `dry-run`             | `dry-run`, depois `delete` após ler alguns resumos | coletor noturno de objetos sem linha          |
-| `R2_ACCOUNT_ID`                 | prod        |         | id da conta Cloudflare                       | vazio                           | da conta              | da conta                                           |                                               |
-| `R2_BUCKET_NAME`                | prod        |         | nome                                         | vazio                           | **bucket de staging** | bucket de produção                                 | bucket **privado** de fotos (com CORS da web) |
-| `R2_ACCESS_KEY_ID`              | prod        | 🔒      |                                              | vazio                           | token de staging      | token de produção                                  | credencial S3 do R2                           |
-| `R2_SECRET_ACCESS_KEY`          | prod        | 🔒      |                                              | vazio                           | idem                  | idem                                               |                                               |
-| `R2_ENDPOINT`                   | não         |         | URL                                          | só nos testes de upload (MinIO) | —                     | —                                                  | endpoint S3 alternativo (path-style)          |
+| Variável                        | Obrig.      | Segredo | Formato / padrão                             | Dev                             | Staging               | Produção                                           | Para quê                                                                                                                          |
+| ------------------------------- | ----------- | ------- | -------------------------------------------- | ------------------------------- | --------------------- | -------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| `UPLOAD_STORAGE_TYPE`           | prod (`r2`) |         | `local`\|`r2`; padrão `local`                | `local`                         | `r2`                  | `r2`                                               | onde ficam fotos, assinaturas e PDFs                                                                                              |
+| `UPLOAD_LOCAL_PATH`             | não         |         | caminho; padrão `./tmp`                      | `./tmp`                         | `./tmp`               | `./tmp`                                            | pasta do modo `local`                                                                                                             |
+| `UPLOAD_SIGNED_URL_TTL_SECONDS` | não         |         | 60–3600; padrão `900`                        | —                               | —                     | —                                                  | validade das URLs assinadas                                                                                                       |
+| `UPLOAD_ORPHAN_GC`              | não         |         | `off`\|`dry-run`\|`delete`; padrão `dry-run` | `dry-run`                       | `dry-run`             | `dry-run`, depois `delete` após ler alguns resumos | coletor noturno de objetos sem linha; um apagamento que o Bucket Lock recusa é pulado e contado (`locked`), sem falhar a execução |
+| `R2_ACCOUNT_ID`                 | prod        |         | id da conta Cloudflare                       | vazio                           | da conta              | da conta                                           |                                                                                                                                   |
+| `R2_BUCKET_NAME`                | prod        |         | nome                                         | vazio                           | **bucket de staging** | bucket de produção                                 | bucket **privado** de fotos (com CORS da web)                                                                                     |
+| `R2_ACCESS_KEY_ID`              | prod        | 🔒      |                                              | vazio                           | token de staging      | token de produção                                  | credencial S3 do R2                                                                                                               |
+| `R2_SECRET_ACCESS_KEY`          | prod        | 🔒      |                                              | vazio                           | idem                  | idem                                               |                                                                                                                                   |
+| `R2_ENDPOINT`                   | não         |         | URL                                          | só nos testes de upload (MinIO) | —                     | —                                                  | endpoint S3 alternativo (path-style)                                                                                              |
 
 ## 7. WhatsApp (Meta)
 
@@ -442,6 +443,26 @@ vazios: eles passam por cima do wrapper.
 Todo nome `PGBACKREST_*` vira a opção de mesmo nome do pgBackRest e ganha
 do `pgbackrest.conf` da imagem: um nome errado não avisa. Do lado da API, só
 `PITR_EXPECTED` (seção 12) muda com o PITR.
+
+### Cópia dos comprovantes fora da conta (Application `trajetto-offsite`)
+
+Só na produção. A Application roda o rclone oficial e, toda semana, o
+`infra/r2/offsite-copy.sh` copia `deliveryProofs/` e `deliveryPhotos/` do
+bucket de uploads para o bucket `trajetto-offsite`, numa conta Cloudflare
+secundária, com Expiration de 90 dias e Bucket Lock de 30. Montagem, agenda
+e conferência: `infra/r2/offsite-copy.md`. A API não lê nenhuma delas, e
+nenhum dos dois tokens é o da API.
+
+| Variável                                          | Segredo | Valor                                                               | Para quê                                          |
+| ------------------------------------------------- | ------- | ------------------------------------------------------------------- | ------------------------------------------------- |
+| `OFFSITE_SOURCE_ENDPOINT`                         |         | `https://<ACCOUNT_ID da conta principal>.r2.cloudflarestorage.com`  | a origem                                          |
+| `OFFSITE_SOURCE_BUCKET`                           |         | o mesmo `R2_BUCKET_NAME` da `trajetto-api` de produção              | o bucket de uploads                               |
+| `OFFSITE_SOURCE_KEY`, `OFFSITE_SOURCE_KEY_SECRET` | 🔒      | token _Object Read only_ só do bucket de uploads                    | ler sem poder apagar                              |
+| `OFFSITE_DEST_ENDPOINT`                           |         | `https://<ACCOUNT_ID da conta secundária>.r2.cloudflarestorage.com` | o destino; igual à origem, o script recusa        |
+| `OFFSITE_DEST_BUCKET`                             |         | `trajetto-offsite`                                                  | a cópia                                           |
+| `OFFSITE_DEST_KEY`, `OFFSITE_DEST_KEY_SECRET`     | 🔒      | token _Object Read & Write_ só do `trajetto-offsite`                | gravar a cópia                                    |
+| `OFFSITE_PREFIXES`                                |         | — (padrão `deliveryProofs/ deliveryPhotos/`)                        | o que é copiado                                   |
+| `OFFSITE_PING_URL`                                | 🔒      | URL do check (7 dias, tolerância de 6 h)                            | o resultado de cada semana (`/fail` com o motivo) |
 
 Do script manual `infra/scripts/backup-postgres.sh` (dump à mão antes de uma
 operação arriscada; passadas na linha de comando, não são variáveis de

@@ -17,6 +17,9 @@ const log = logger.child({ component: "cron", job: "cleanup-orphan-uploads" });
  * that keep it from touching a live object (age window, key format, reference
  * lookups) live in orphan-uploads.ts.
  *
+ * An orphan a Bucket Lock holds is skipped and counted (`locked`), and the
+ * run still succeeds: the lock is policy, not a fault (plano-escala F1-23).
+ *
  * Cron: "50 4 * * *" → daily at 04:50, after the other cleanups.
  */
 const cleanupOrphanUploadsJob: CronJobDefinition = {
@@ -29,6 +32,17 @@ const cleanupOrphanUploadsJob: CronJobDefinition = {
     if (!summary) return;
 
     log.info({ summary }, "orphan upload sweep finished");
+
+    if (summary.locked > 0) {
+      // Its own line, never the "could not be deleted" one an alert keys on.
+      // Only deliveryProofs/ is locked today, and the collector never scans
+      // it: a count here is a lock on another prefix or a token that cannot
+      // delete (infra/r2/bucket-locks.md).
+      log.warn(
+        { locked: summary.locked },
+        "orphan uploads held by a bucket lock were skipped",
+      );
+    }
 
     if (summary.failed > 0) {
       // Each failure was logged with its key by tryDeleteFile; this is the

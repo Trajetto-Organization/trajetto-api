@@ -91,6 +91,34 @@ function isLocalFileMissing(error: unknown): boolean {
   return (error as { code?: string }).code === "ENOENT";
 }
 
+/** What became of a delete: gone, held back by a lock, or failed. */
+type StorageDeleteOutcome = "deleted" | "locked" | "failed";
+
+/**
+ * Whether storage refused a delete because a lock holds the object: R2's
+ * Bucket Lock rules (infra/r2/bucket-locks.md) and S3's Object Lock. That is
+ * a policy saying "not yet", not a fault, and the orphan collector counts it
+ * apart (plano-escala F1-23). An AccessDenied reads the same way, which also
+ * covers a token without delete permission: in doubt the object stays (ADR
+ * 0006), and the collector says how many it held back.
+ */
+const LOCK_REFUSAL = /^(?:AccessDenied|ObjectLocked\w*)$/;
+
+/** A failure's message for the log, whatever was thrown. */
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function isLockRefusal(error: unknown): boolean {
+  if (typeof error !== "object" || error === null) return false;
+
+  const { name, Code } = error as { name?: unknown; Code?: unknown };
+
+  return [name, Code].some(
+    (value) => typeof value === "string" && LOCK_REFUSAL.test(value),
+  );
+}
+
 /** Final: the object is not there and will not appear. */
 const uploadedObjectNotFound = (): AppError =>
   new AppError(
@@ -253,6 +281,46 @@ class UploadService {
    * asks is whether it is gone, not whether this call removed it.
    */
   async tryDeleteFile(filePath: string): Promise<boolean> {
+    const { outcome, key, error } = await this.removeObject(filePath);
+
+    if (outcome !== "deleted") {
+      log.error(
+        { key, error: errorMessage(error) },
+        "storage object could not be deleted",
+      );
+    }
+
+    return outcome === "deleted";
+  }
+
+  /**
+   * `tryDeleteFile` for the orphan collector, which must tell a delete a
+   * Bucket Lock refused ("locked": skipped, counted, tried again on a later
+   * night while the object is in the window) from one that failed. Never
+   * throws either; a failure is logged with its key, a lock is not (the
+   * collector's summary counts them).
+   */
+  async deleteFileOutcome(filePath: string): Promise<StorageDeleteOutcome> {
+    const { outcome, key, error } = await this.removeObject(filePath);
+
+    if (outcome === "failed") {
+      log.error(
+        { key, error: errorMessage(error) },
+        "storage object could not be deleted",
+      );
+    } else if (outcome === "locked") {
+      log.debug({ key }, "storage object held by a lock; delete skipped");
+    }
+
+    return outcome;
+  }
+
+  /** The delete itself, without logging: the callers say what it meant. */
+  private async removeObject(filePath: string): Promise<{
+    outcome: StorageDeleteOutcome;
+    key: string;
+    error?: unknown;
+  }> {
     let normalizedFilePath = filePath;
 
     try {
@@ -273,7 +341,7 @@ class UploadService {
           this.within("housekeeping"),
         );
 
-        return true;
+        return { outcome: "deleted", key: normalizedFilePath };
       }
 
       const fullPath = path.join(
@@ -287,17 +355,13 @@ class UploadService {
         if (!isLocalFileMissing(error)) throw error;
       }
 
-      return true;
+      return { outcome: "deleted", key: normalizedFilePath };
     } catch (error) {
-      log.error(
-        {
-          key: normalizedFilePath,
-          error: error instanceof Error ? error.message : String(error),
-        },
-        "storage object could not be deleted",
-      );
-
-      return false;
+      return {
+        outcome: isLockRefusal(error) ? "locked" : "failed",
+        key: normalizedFilePath,
+        error,
+      };
     }
   }
 
@@ -953,3 +1017,4 @@ class UploadService {
 }
 
 export { R2_CLIENT_TIMEOUTS, R2_DEADLINES_MS, UploadService, createR2Client };
+export type { StorageDeleteOutcome };

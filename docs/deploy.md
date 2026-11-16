@@ -3636,10 +3636,13 @@ real do Dokploy (restore pela aba _Backups_ num Database descartável).
 
 - **Bucket R2** (fotos de checklist e de entrega, assinaturas, anexos,
   avatares): o banco guarda só as chaves. Fotos de entrega e assinaturas são
-  prova documental. O R2 não tem versioning pela API S3: o equivalente é um
-  **Bucket Lock** nos prefixos `deliveryProofs/` e `deliveryPhotos/` com o
-  prazo legal de guarda, e uma cópia periódica (`rclone sync`) para outro
-  bucket com um token que a API não tem.
+  prova documental. O R2 não tem versioning pela API S3: o equivalente é o
+  **Bucket Lock** em `deliveryProofs/` (90 dias; `infra/r2/bucket-locks.md`)
+  e a **cópia semanal dos comprovantes** (`deliveryProofs/` e
+  `deliveryPhotos/`) para um bucket noutra conta Cloudflare, com um token
+  que a API não tem: `rclone copy`, nunca `sync`, com Expiration de 90 dias
+  no destino, para o que a LGPD manda apagar sair também da cópia
+  (`infra/r2/offsite-copy.md`).
 - **Segredos**: as cópias vivas são o _Environment_ de cada Application no
   Dokploy e o seu gerenciador de senhas. Perder `JWT_SECRET_REFRESH_TOKEN`
   desloga todo mundo. Perder `WEBHOOK_SECRETS_KEY` **não é recuperável**: os
