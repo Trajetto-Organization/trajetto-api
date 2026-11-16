@@ -3823,7 +3823,11 @@ staging"); o mesmo rolling já foi ensaiado antes num Swarm local
    resumo do k6 diz em qual superfície). 2: recusou começar (a mensagem diz
    por quê). 3: uma sonda abortou tudo, a readiness da produção piorou
    (p95 acima de 2× a base ou 3 falhas) ou o host ficou com iowait acima de
-   20% ou steal acima de 10%: não repita na mesma noite.
+   20% ou steal acima de 10%: não repita na mesma noite. A base e a sonda
+   são o p95 de 12 amostras, e o limite nunca fica abaixo de 20 ms (o dobro
+   de uma base de poucos ms é ruído): de uma base de 10 ms para cima, vale
+   exatamente o 2×. O piso muda com `BURN_IN_PROBE_FLOOR_MS`, até 50; o
+   roteiro recusa mais que isso, para a sonda nunca ficar desligada.
 
 Os contêineres saem com o roteiro (`--rm`); os dados da empresa de carga
 ficam e são reaproveitados na próxima vez (rotas do dia, veículos e

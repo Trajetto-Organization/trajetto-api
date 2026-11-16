@@ -557,8 +557,12 @@ empresa 'Carga (staging)' e o administrador dela são do dono).
   escrever**. Os tokens ficam na memória do script, nunca em disco.
 - **As sondas abortam tudo**: a `/health/readiness` da produção (uma ida ao
   banco, pelo Traefik do próprio host) com p95 acima de 2× a base medida antes
-  da carga (e do piso de 50 ms) ou 3 falhas; o `vmstat` do host com iowait
-  acima de 20% ou steal acima de 10%. O k6 roda limitado
+  da carga, ou 3 falhas; a base e a sonda são o p95 de 12 amostras, e o
+  limite nunca fica abaixo do piso de 20 ms (o dobro de uma base de poucos
+  ms é ruído), que vai no máximo a 50 ms
+  (`BURN_IN_PROBE_FLOOR_MS`; acima disso o roteiro recusa, para a sonda não
+  ficar desligada); o `vmstat` do host com iowait acima de 20% ou steal
+  acima de 10%. O k6 roda limitado
   (`--cpus 0.5 --memory 256m`).
 - Saída: 0 aprovado (zero 5xx), 1 reprovado, 2 recusou começar, 3 abortado
   por uma sonda.

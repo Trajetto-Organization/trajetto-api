@@ -20,13 +20,16 @@
 #      dokploy-network, against Traefik with staging's Host: it signs in as
 #      the administrator of 'Carga (staging)' and prepares drivers, routes
 #      and deliveries through the API. The tokens it prints stay in memory.
-#   3. Measures production's /health/readiness (a database round trip) six
-#      times: the base.
+#   3. Measures production's /health/readiness (a database round trip)
+#      twelve times: the base, the p95 of twelve samples, which is the
+#      statistic the probe below judges by.
 #   4. Runs tests/load/rolling.js in k6 (`--cpus 0.5 --memory 256m`) on
 #      dokploy-network against Traefik, and every BURN_IN_PROBE_EVERY
 #      seconds aborts everything when:
-#        - production's readiness p95 passes 2× the base (and the floor of
-#          BURN_IN_PROBE_FLOOR_MS), or fails 3 times;
+#        - production's readiness p95 (the last twelve samples) passes 2×
+#          the base, or fails 3 times. Twice a base of a few ms is noise,
+#          so the limit is never under BURN_IN_PROBE_FLOOR_MS (20): from a
+#          10 ms base up it is exactly the plan's 2×;
 #        - vmstat on the host shows iowait above 20% or steal above 10%.
 #
 # Environment (optional unless marked):
@@ -46,8 +49,10 @@
 #   BURN_IN_PROBE_RESOLVE  the address curl resolves the probe host to
 #                       (127.0.0.1: the host's own Traefik; empty = DNS)
 #   BURN_IN_PROBE_EVERY seconds between samples (5)
-#   BURN_IN_PROBE_FLOOR_MS  the smallest p95 that aborts (50): twice a
-#                       3 ms base is noise, not a production in trouble
+#   BURN_IN_PROBE_FLOOR_MS  the smallest p95 that aborts (20; at most 50):
+#                       twice a 3 ms base is noise, not a production in
+#                       trouble. Capped, so a value left in the shell
+#                       cannot switch the latency probe off
 #   BURN_IN_PREFIX      name of the two containers it runs (trajetto-burn-in)
 #
 # Exits 0 when the load passed (zero 5xx), 1 when it failed, 2 when it
@@ -68,13 +73,18 @@ MAX_VUS="${BURN_IN_MAX_VUS:-100}"
 PROBE_URL="${BURN_IN_PROBE_URL:-https://api.intrajetto.com/health/readiness}"
 PROBE_RESOLVE="${BURN_IN_PROBE_RESOLVE-127.0.0.1}"
 PROBE_EVERY="${BURN_IN_PROBE_EVERY:-5}"
-PROBE_FLOOR_MS="${BURN_IN_PROBE_FLOOR_MS:-50}"
+PROBE_FLOOR_MS="${BURN_IN_PROBE_FLOOR_MS:-20}"
 NAME="${BURN_IN_PREFIX:-trajetto-burn-in}"
 
 # The caps of plano-escala section 6 (2): staging on the single VPS.
 MAX_RATE=30
 MAX_SECONDS=600
 MAX_SOCKETS=200
+# Above this the floor, not production's base, decides when the latency
+# probe aborts: a 25 ms base could double unseen.
+MAX_PROBE_FLOOR_MS=50
+# Samples in the base and in each judgement of the probe (its p95).
+PROBE_SAMPLES=12
 # The load window, UTC (docs/operacao/jobs.md, `load-window`).
 WINDOW_FROM=360
 WINDOW_TO=480
@@ -99,6 +109,8 @@ integer BURN_IN_PROBE_FLOOR_MS "$PROBE_FLOOR_MS"
   || refuse "BURN_IN_RATE=$RATE: na staging o teto é $MAX_RATE req/s (a VPS é a mesma da produção)."
 [ "$MAX_VUS" -ge 1 ] && [ "$MAX_VUS" -le "$MAX_SOCKETS" ] \
   || refuse "BURN_IN_MAX_VUS=$MAX_VUS: o teto é $MAX_SOCKETS sockets."
+[ "$PROBE_FLOOR_MS" -le "$MAX_PROBE_FLOOR_MS" ] \
+  || refuse "BURN_IN_PROBE_FLOOR_MS=$PROBE_FLOOR_MS: o teto é $MAX_PROBE_FLOOR_MS ms. Acima disso o piso, e não a base da produção, decide quando a sonda aborta."
 
 case "$DURATION" in
   *[!0-9]*m | m) refuse "BURN_IN_DURATION inválida: '$DURATION' (use 90s ou 10m)." ;;
@@ -193,14 +205,14 @@ probe() {
     | awk '{ printf "%s %d\n", $1, $2 * 1000 }'
 }
 
-# p95 of the last 12 samples that answered 200.
+# p95 of the last PROBE_SAMPLES samples that answered 200.
 p95() {
-  awk '$1 == 200 { print $2 }' "$WORK/probe.log" | tail -n 12 | sort -n \
+  awk '$1 == 200 { print $2 }' "$WORK/probe.log" | tail -n "$PROBE_SAMPLES" | sort -n \
     | awk '{ v[NR] = $1 } END { if (NR == 0) { print 0; exit } i = int(NR * 0.95 + 0.999); if (i > NR) i = NR; print v[i] }'
 }
 
 : > "$WORK/probe.log"
-for _ in 1 2 3 4 5 6; do
+for _ in $(seq 1 "$PROBE_SAMPLES"); do
   probe >> "$WORK/probe.log"
   sleep 2
 done

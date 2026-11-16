@@ -54,14 +54,20 @@ describe.skipIf(!bash)(
       );
       box.stub("sleep", "exit 0");
       box.stub("vmstat", `cat "${box.root}/vmstat.txt"`);
-      // The first six calls are the base; after them, the mode file decides.
+      // The first twelve calls are the base (the base file, 4 ms unless
+      // set; base-late for the last six of them); after them, the mode file
+      // decides.
       box.stub(
         "curl",
         `n=$(cat "${box.root}/curl-count" 2>/dev/null || echo 0); n=$((n + 1)); echo "$n" > "${box.root}/curl-count"
 mode=$(cat "${box.root}/curl-mode" 2>/dev/null || echo calm)
-if [ "$n" -le 6 ]; then printf '200 0.004'; exit 0; fi
+base=$(cat "${box.root}/base" 2>/dev/null || echo 0.004)
+if [ "$n" -le 6 ]; then printf '200 %s' "$base"; exit 0; fi
+if [ "$n" -le 12 ]; then printf '200 %s' "$(cat "${box.root}/base-late" 2>/dev/null || echo "$base")"; exit 0; fi
 case "$mode" in
   slow) printf '200 0.400' ;;
+  tripled) printf '200 0.045' ;;
+  noisy) printf '200 0.022' ;;
   fail) printf '000 5.000' ;;
   *) printf '200 0.005' ;;
 esac`,
@@ -249,6 +255,46 @@ exit 0`,
         expect(
           box.calls("docker").some((call) => call.startsWith("docker stop")),
         ).toBe(true);
+      });
+
+      /**
+       * The plan aborts at twice the base. The floor that keeps a few-ms
+       * base from aborting on noise stood at 50 ms, so a 15 ms base could
+       * triple before the probe moved; and with no cap of its own, a large
+       * BURN_IN_PROBE_FLOOR_MS left in the shell switched it off.
+       */
+      it("at twice the base once the base is above half the floor, as the plan says", () => {
+        box.file("base", "0.015\n");
+        box.file("curl-mode", "tripled\n");
+
+        const result = burnIn();
+
+        expect(result.status, result.stderr).toBe(3);
+        expect(result.stderr).toContain("p95 45 ms (base 15 ms, teto 30 ms)");
+      });
+
+      it("takes the base over twelve samples, the statistic the probe judges by", () => {
+        // The probe's p95 of twelve samples is their maximum; a base of six
+        // sat below it on the readiness' own spread, and only the floor kept
+        // that from aborting a calm night.
+        box.file("base", "0.004\n");
+        box.file("base-late", "0.012\n");
+        box.file("curl-mode", "noisy\n");
+
+        const result = burnIn();
+
+        expect(result.status, result.stderr).toBe(0);
+        expect(result.stdout).toContain("p95 12 ms; aborta acima de 24 ms");
+      });
+
+      it("refuses a floor above 50 ms, which would switch the latency probe off", () => {
+        const result = burnIn({ BURN_IN_PROBE_FLOOR_MS: "100000" });
+
+        expect(result.status).toBe(2);
+        expect(result.stderr).toContain("BURN_IN_PROBE_FLOOR_MS");
+        expect(box.calls("docker")).toEqual([]);
+
+        expect(burnIn({ BURN_IN_PROBE_FLOOR_MS: "50" }).status).toBe(0);
       });
 
       it("when production's readiness fails three times", () => {
