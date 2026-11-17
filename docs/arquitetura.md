@@ -3382,6 +3382,19 @@ continua de pé depois:
   índice único de `deliveryId`, dois workers ainda gravam uma linha só. No
   feed de atividades (ordenado pelo id), a linha fica na posição do instante
   em que o evento foi expandido, não no da gravação.
+- a chave de um evento do outbox que o chamador informou (uma chave de
+  envio, a chave fixa de um aviso) e a `mergeKey` de um grupo (B6) ganham
+  uma linha em `outbox_event_key` (F5-02), na transação do evento, com a
+  chave como chave primária. A chave repetida continua um P2002 para quem
+  publica. O `publishOnce` toma a chave antes de gravar o evento (um
+  `INSERT` com `ON CONFLICT DO NOTHING`). O `publishMerged` toma ou acha a
+  chave do grupo e faz `UPDATE` do evento que ela nomeia enquanto ele está
+  PENDING: duas transações do mesmo grupo caem numa linha só, com ou sem o
+  índice único legado de `eventKey` (que sai na onda 10, F5-06). A chave
+  aleatória de um evento sem chave não colide e não ganha linha. Um evento
+  que a imagem anterior gravou sob a chave sem a linha dela (o rolling) é
+  adotado, nunca duplicado. O expurgo noturno apaga a chave com o evento
+  publicado e, depois de 90 dias, a que ficou sem evento.
 
 Cada linha da `notification_delivery` leva a empresa do evento em
 `business_id` (F3-09), copiada na expansão, com um índice parcial por raia

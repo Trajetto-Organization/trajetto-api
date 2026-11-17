@@ -1266,6 +1266,28 @@ model DomainOutboxEvent {
   @@map("domain_outbox_event")
 }
 
+/// The outbox's idempotency keys (plano-escala F5-02): one row per event
+/// written under a key its caller gave (a submission id, a deterministic
+/// notice key) or a group's mergeKey, in the event's own transaction. The
+/// queues are partitioned by day on their id later in the plan (F5-09),
+/// where the global unique on domain_outbox_event.eventKey cannot stay;
+/// this primary key is what keeps a repeated key a P2002 for the caller,
+/// publishOnce once per key and two merges of one group a single row
+/// (outbox-service.ts). The random key of an event without one never
+/// collides and gets no row. No foreign key, so the queues can be dropped
+/// by day: the keys go with their events in the nightly purge
+/// (cleanup-notification-pipeline).
+model OutboxEventKey {
+  event_key  String   @id
+  /// The domain_outbox_event the key wrote (no foreign key, see above).
+  event_id   String
+  created_at DateTime @default(now())
+
+  // The purge's sweep of keys whose event is gone walks the oldest first.
+  @@index([created_at])
+  @@map("outbox_event_key")
+}
+
 model NotificationDelivery {
   id            String @id @default(uuid(7))
   outboxEventId String

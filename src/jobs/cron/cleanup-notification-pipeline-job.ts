@@ -87,6 +87,23 @@ const MAX_UNTIED_RECEIPTS_PER_RUN = 100_000;
  */
 const HEARTBEAT_RETENTION_DAYS = 1;
 
+/**
+ * Keys of outbox_event_key whose event is gone (plano-escala F5-02): a
+ * FAILED event purged after its 90 days, or an event the previous image
+ * purged during a rolling deploy without its key. Only keys older than the
+ * failures' retention, so a key never goes while its event may still be
+ * there; the PUBLISHED purge takes the keys of its own events with them.
+ */
+const MAX_ORPHAN_KEYS_PER_RUN = 100_000;
+
+/** The keys of outbox_event_key whose event no longer exists. */
+function orphanKeysSql(createdBefore: Date): Prisma.Sql {
+  return Prisma.sql`"created_at" < ${createdBefore} AND NOT EXISTS (
+    SELECT 1 FROM "domain_outbox_event" e
+    WHERE e."id" = "outbox_event_key"."event_id"
+  )`;
+}
+
 interface PurgeResult {
   deleted: number;
   archived: number;
@@ -115,6 +132,11 @@ interface PurgeResult {
  * Now the cost follows what is purged: the due events come from the partial
  * index on processedAt, and their deliveries from the outboxEventId index.
  * Idempotent: the archive's key is the delivery id (ON CONFLICT DO NOTHING).
+ *
+ * The events' keys go in the same statement (plano-escala F5-02): a key row
+ * of outbox_event_key outliving its event would say "already published"
+ * forever. Through the key's primary key, and only the row that names this
+ * event.
  */
 function publishedPurgeBatchSql(
   publishedBefore: Date,
@@ -122,7 +144,7 @@ function publishedPurgeBatchSql(
 ): Prisma.Sql {
   return Prisma.sql`
     WITH batch AS (
-      SELECT "id", "topic", "businessId"
+      SELECT "id", "eventKey", "topic", "businessId"
       FROM "domain_outbox_event"
       WHERE "status" = 'PUBLISHED' AND "processedAt" < ${publishedBefore}
       ORDER BY "processedAt"
@@ -156,6 +178,12 @@ function publishedPurgeBatchSql(
       DELETE FROM "domain_outbox_event" e
       USING batch b
       WHERE e."id" = b."id"
+      RETURNING 1
+    ),
+    keys AS (
+      DELETE FROM "outbox_event_key" k
+      USING batch b
+      WHERE k."event_key" = b."eventKey" AND k."event_id" = b."id"
       RETURNING 1
     )
     SELECT
@@ -302,6 +330,16 @@ const cleanupNotificationPipelineJob: CronJobDefinition = {
       deadline,
     });
 
+    // The keys the FAILED purge above left without their event (F5-02).
+    const orphanKeys = await deleteInBatches({
+      table: Prisma.sql`"outbox_event_key"`,
+      where: orphanKeysSql(failedBefore),
+      orderBy: Prisma.sql`"created_at"`,
+      key: Prisma.sql`"event_key"`,
+      maxRows: MAX_ORPHAN_KEYS_PER_RUN,
+      deadline,
+    });
+
     // Each batch copies the failed deliveries of the events it deletes, in
     // the same statement: the cascade from a purged event takes its
     // deliveries (publishedPurgeBatchSql).
@@ -325,6 +363,7 @@ const cleanupNotificationPipelineJob: CronJobDefinition = {
       {
         publishedEvents: published.deleted,
         failedEvents: failed.deleted,
+        orphanOutboxKeys: orphanKeys.deleted,
         cronExecutions: executions.deleted + heartbeatExecutions.deleted,
         archivedDeadLetters: published.archived,
         expiredDeadLetters: archiveExpired.deleted,
@@ -340,6 +379,7 @@ const cleanupNotificationPipelineJob: CronJobDefinition = {
       notification_provider_receipt: untiedReceipts,
       notification_dead_letter: archiveExpired,
       "domain_outbox_event (FAILED)": failed,
+      outbox_event_key: orphanKeys,
       "domain_outbox_event (PUBLISHED)": published,
     });
   },
