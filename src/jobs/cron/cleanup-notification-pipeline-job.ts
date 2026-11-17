@@ -29,7 +29,7 @@ const PUBLISHED_RETENTION_DAYS = 30;
  *
  * Both kinds: an event that failed to fan out (kept in domain_outbox_event),
  * and a delivery that failed to send. The latter belongs to a PUBLISHED event,
- * whose purge at 30 days cascades to it, so it is copied to
+ * whose purge at 30 days takes it with it, so it is copied to
  * notification_dead_letter by the same statement that deletes the event
  * (publishedPurgeBatchSql) and kept there for these 90 days, counted from the
  * failure.
@@ -74,7 +74,7 @@ const MAX_JOB_EXECUTIONS_PER_RUN = 100_000;
 /**
  * Provider receipts no delivery claims (deliveryId NULL: a callback for a
  * message sent before the delivery id travelled with it, or for a row
- * already purged). The cascade that takes the tied ones never reaches them,
+ * already purged). The purge that takes the tied ones never reaches them,
  * so they get the same 30 days here (UNTIED_RECEIPT_RETENTION_DAYS, in
  * receipt-id.ts: the day such a receipt's id starts with is held inside
  * it). The ceiling is belt and braces: they are a small fraction of the
@@ -115,25 +115,51 @@ interface PurgeResult {
 }
 
 /**
+ * The deliveries of the events in `batch` and their receipts, deleted in
+ * the batch's own statement (plano-escala F5-05): `deliveries` returns
+ * their ids and `receipts` deletes by them.
+ *
+ * The foreign keys of today cascade the same rows when the event goes;
+ * wave 10 (F5-06) drops them, and a purge that counted on them would leave
+ * every delivery behind. With the keys still there, the cascade at the end
+ * of the statement finds nothing left to delete. `= ANY (ARRAY(...))` and
+ * not a join: the ids go to the outboxEventId and deliveryId indexes as
+ * one array each, where a join let the planner hash the whole index of a
+ * table that keeps a month of rows (pinned in
+ * tests/E2E/notification-purge-plan.test.ts).
+ */
+const EVENT_FAMILY_SQL = Prisma.sql`
+    deliveries AS (
+      DELETE FROM "notification_delivery"
+      WHERE "outboxEventId" = ANY (ARRAY(SELECT "id" FROM batch))
+      RETURNING "id"
+    ),
+    receipts AS (
+      DELETE FROM "notification_provider_receipt"
+      WHERE "deliveryId" = ANY (ARRAY(SELECT "id" FROM deliveries))
+    )`;
+
+/**
  * One batch of the PUBLISHED purge, with the dead-letter archive inside it
  * (OUTBOX-18).
  *
- * Deliveries belong to their event and go with it by cascade, 30 days after
- * the event was processed — the failed ones and their providerMessageId
+ * A delivery belongs to its event and goes with it, 30 days after the
+ * event was processed — the failed ones and their providerMessageId
  * included, which is what support needs five weeks later. So the batch
  * copies the FAILED deliveries of the events it is about to delete into
  * notification_dead_letter, with everything needed to answer "what failed,
  * for whom and why" without the event, the delivery or the recipient.
  *
- * One statement, so the copy and the delete commit together: data-modifying
- * CTEs share one snapshot, and the cascade runs as an end-of-statement
- * trigger, after the INSERT has read the deliveries. The archive used to be a
- * separate walk before the purge, and its last statement read EVERY retained
- * failure (to find the few whose event was due) — past the 30 s
- * statement_timeout at the target scale, which stopped the purge every night.
- * Now the cost follows what is purged: the due events come from the partial
- * index on processedAt, and their deliveries from the outboxEventId index.
- * Idempotent: the archive's key is the delivery id (ON CONFLICT DO NOTHING).
+ * One statement, so the copy and the deletes commit together:
+ * data-modifying CTEs share one snapshot, so the INSERT reads the
+ * deliveries the `deliveries` CTE deletes (EVENT_FAMILY_SQL). The archive
+ * used to be a separate walk before the purge, and its last statement read
+ * EVERY retained failure (to find the few whose event was due) — past the
+ * 30 s statement_timeout at the target scale, which stopped the purge every
+ * night. Now the cost follows what is purged: the due events come from the
+ * partial index on processedAt, and their deliveries from the outboxEventId
+ * index. Idempotent: the archive's key is the delivery id (ON CONFLICT DO
+ * NOTHING).
  *
  * The events' keys go in the same statement (plano-escala F5-02): a key row
  * of outbox_event_key outliving its event would say "already published"
@@ -176,6 +202,7 @@ function publishedPurgeBatchSql(
       ON CONFLICT ("id") DO NOTHING
       RETURNING 1
     ),
+    ${EVENT_FAMILY_SQL},
     removed AS (
       DELETE FROM "domain_outbox_event" e
       USING batch b
@@ -199,33 +226,75 @@ function duePublishedSql(publishedBefore: Date): Prisma.Sql {
   return Prisma.sql`"status" = 'PUBLISHED' AND "processedAt" < ${publishedBefore}`;
 }
 
+/** What the FAILED purge matches: events that gave up long enough ago. */
+function dueFailedSql(failedBefore: Date): Prisma.Sql {
+  return Prisma.sql`"status" = 'FAILED' AND "updated_at" < ${failedBefore}`;
+}
+
 /**
- * Deletes due PUBLISHED events in batches, archiving their failed deliveries
- * on the way, until none is left, the cap is reached or the deadline passes.
- * Each batch is its own statement, so no transaction outlives a batch.
- * Stopped by the cap or the deadline, it asks whether an event is still due
- * before calling the run partial (as deleteInBatches does).
+ * One batch of the FAILED purge (plano-escala F5-05).
+ *
+ * An event that failed to expand usually has no delivery; one that a
+ * replica expanded after losing its lease, and that then failed under the
+ * new owner, does. The cascade took those with the event, so the batch
+ * takes them explicitly, with their receipts (EVENT_FAMILY_SQL). The keys
+ * of these events are left to the orphan-key sweep, as before.
  */
-async function purgePublishedEvents(
-  publishedBefore: Date,
-  deadline: number,
-): Promise<PurgeResult> {
+function failedPurgeBatchSql(failedBefore: Date, limit: number): Prisma.Sql {
+  return Prisma.sql`
+    WITH batch AS (
+      SELECT "id"
+      FROM "domain_outbox_event"
+      WHERE ${dueFailedSql(failedBefore)}
+      LIMIT ${limit}
+      FOR UPDATE SKIP LOCKED
+    ),
+    ${EVENT_FAMILY_SQL},
+    removed AS (
+      DELETE FROM "domain_outbox_event" e
+      USING batch b
+      WHERE e."id" = b."id"
+      RETURNING 1
+    )
+    SELECT
+      (SELECT count(*) FROM removed)::int AS deleted,
+      0 AS archived
+  `;
+}
+
+/**
+ * Deletes due events in batches of one statement each (`batchSql`), with
+ * their family, until none is left, the cap is reached or the deadline
+ * passes. Each batch is its own statement, so no transaction outlives a
+ * batch. Stopped by the cap or the deadline, it asks whether an event is
+ * still due before calling the run partial (as deleteInBatches does).
+ */
+async function purgeEvents({
+  batchSql,
+  due,
+  maxRows,
+  deadline,
+}: {
+  batchSql: (limit: number) => Prisma.Sql;
+  due: Prisma.Sql;
+  maxRows: number;
+  deadline: number;
+}): Promise<PurgeResult> {
   let deleted = 0;
   let archived = 0;
 
   const table = Prisma.sql`"domain_outbox_event"`;
-  const due = duePublishedSql(publishedBefore);
 
-  while (deleted < MAX_PUBLISHED_PER_RUN) {
+  while (deleted < maxRows) {
     if (Date.now() >= deadline) {
       return { deleted, archived, stoppedEarly: await anyLeft(table, due) };
     }
 
-    const limit = Math.min(DELETE_BATCH_SIZE, MAX_PUBLISHED_PER_RUN - deleted);
+    const limit = Math.min(DELETE_BATCH_SIZE, maxRows - deleted);
 
     const [batch] = await databaseBatch.$queryRaw<
       Array<{ deleted: number; archived: number }>
-    >(publishedPurgeBatchSql(publishedBefore, limit));
+    >(batchSql(limit));
 
     deleted += batch.deleted;
     archived += batch.archived;
@@ -246,9 +315,10 @@ async function purgePublishedEvents(
  * These tables are work queues, not archives: every event and delivery row
  * exists to be processed once and consulted rarely. Without pruning, the
  * `FOR UPDATE SKIP LOCKED` claims scan an ever-growing table for the same
- * handful of pending rows. Deliveries go with their event via cascade — the
- * FAILED ones copied to notification_dead_letter in the same statement, where
- * they stay 90 days (publishedPurgeBatchSql).
+ * handful of pending rows. Deliveries and their receipts go with their
+ * event, in the event's own statement and not by cascade (F5-05) — the
+ * FAILED ones copied to notification_dead_letter in the same statement,
+ * where they stay 90 days (publishedPurgeBatchSql).
  *
  * Deletes run in bounded batches (see batch-delete.ts) rather than one
  * `deleteMany`: at the target volume a single statement would be a
@@ -325,9 +395,9 @@ const cleanupNotificationPipelineJob: CronJobDefinition = {
       deadline,
     });
 
-    const failed = await deleteInBatches({
-      table: Prisma.sql`"domain_outbox_event"`,
-      where: Prisma.sql`"status" = 'FAILED' AND "updated_at" < ${failedBefore}`,
+    const failed = await purgeEvents({
+      batchSql: (limit) => failedPurgeBatchSql(failedBefore, limit),
+      due: dueFailedSql(failedBefore),
       maxRows: MAX_FAILED_PER_RUN,
       deadline,
     });
@@ -342,10 +412,15 @@ const cleanupNotificationPipelineJob: CronJobDefinition = {
       deadline,
     });
 
-    // Each batch copies the failed deliveries of the events it deletes, in
-    // the same statement: the cascade from a purged event takes its
-    // deliveries (publishedPurgeBatchSql).
-    const published = await purgePublishedEvents(publishedBefore, deadline);
+    // Each batch copies the failed deliveries of the events it deletes and
+    // deletes the deliveries and their receipts, in the same statement
+    // (publishedPurgeBatchSql).
+    const published = await purgeEvents({
+      batchSql: (limit) => publishedPurgeBatchSql(publishedBefore, limit),
+      due: duePublishedSql(publishedBefore),
+      maxRows: MAX_PUBLISHED_PER_RUN,
+      deadline,
+    });
 
     if (goneReplicas.count > 0) {
       log.info(
@@ -387,4 +462,8 @@ const cleanupNotificationPipelineJob: CronJobDefinition = {
   },
 };
 
-export { cleanupNotificationPipelineJob, publishedPurgeBatchSql };
+export {
+  cleanupNotificationPipelineJob,
+  failedPurgeBatchSql,
+  publishedPurgeBatchSql,
+};

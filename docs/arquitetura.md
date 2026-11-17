@@ -3419,6 +3419,36 @@ continua de pé depois:
   fato continuam uma linha só sem o índice único de provedor, mensagem e
   status (que sai na onda 10).
 
+**Exclusões sem cascata nas filas (F5-05).** A `notification_delivery`, os
+recibos e a `webhook_delivery` dependem hoje de `ON DELETE CASCADE` em
+`user`, `external_recipient`, `webhook_endpoint`, `business` e no próprio
+evento. Essas chaves saem na onda 10 (F5-06), então cada exclusão já leva as
+suas linhas na mesma transação, antes da linha de que elas dependem
+(`src/shared/notifications/queue-row-cleanup.ts`):
+
+- usuário (`deleteUser`, `deleteMasterUserKeepingOne`): as entregas
+  endereçadas a ele e os recibos delas. O `endSessionsAndClearInbox` apaga
+  só as que ainda iam sair (PENDING e PROCESSING), com os recibos;
+- endpoint de webhook: as `webhook_delivery` dele, sempre filtradas pela
+  empresa;
+- empresa: as `webhook_delivery` dela e as entregas endereçadas aos
+  usuários e aos destinatários externos dela, com os recibos;
+- o expurgo noturno: cada lote de eventos PUBLISHED ou FAILED apaga, no
+  mesmo comando, as entregas dos eventos e os recibos delas, pelos ids em
+  `= ANY (ARRAY(...))` (o plano está preso em
+  `tests/E2E/notification-purge-plan.test.ts`).
+
+Uma linha gravada por uma transação que terminou depois de a exclusão ler a
+fila escapa dela. Ela fecha como FAILED com `lastError` começando por
+`recipient_gone:`, na hora, sem chamar provedor nem gastar retentativa
+(decisão D54): o usuário apagado, o destinatário externo apagado, o autor
+apagado de uma linha da trilha e o endpoint apagado de um webhook. O
+`tests/unitaires/database/queue-deletion-paths.test.ts` lista todo caminho
+que apaga uma dessas linhas-mãe e cobra a limpeza de cada um (a reversão de
+uma importação, que apaga entregas e com elas os destinatários externos,
+fica com o `recipient_gone`), e o `tests/E2E/queue-no-cascade.test.ts` tira
+as FKs no banco do arquivo e prova que nada sobra.
+
 Cada linha da `notification_delivery` leva a empresa do evento em
 `business_id` (F3-09), copiada na expansão, com um índice parcial por raia
 (`business_id`, `availableAt`) com o mesmo predicado do claim da raia. É o

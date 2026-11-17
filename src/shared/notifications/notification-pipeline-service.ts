@@ -33,6 +33,7 @@ import { recordExpoTickets } from "./provider-receipts";
 import {
   formatDeliveryError,
   providerDetailOf,
+  recipientGoneError,
   suppressedChannels,
   type ProviderErrorDetail,
 } from "./delivery-diagnostics";
@@ -202,6 +203,18 @@ class NonRetryableDeliveryError extends Error {
     readonly detail?: ProviderErrorDetail,
   ) {
     super(message);
+  }
+}
+
+/**
+ * Whoever the row addressed was deleted (plano-escala F5-05, D54): closed
+ * FAILED as `recipient_gone`, before any provider is called. The cascade
+ * of today never leaves such a row; without the foreign keys (F5-06) one
+ * written while the deletion ran can outlive it.
+ */
+class RecipientGoneError extends NonRetryableDeliveryError {
+  constructor(what: string) {
+    super(recipientGoneError(what));
   }
 }
 
@@ -1841,9 +1854,7 @@ class NotificationPipelineService {
     });
 
     if (!external) {
-      throw new NonRetryableDeliveryError(
-        "External recipient no longer exists",
-      );
+      throw new RecipientGoneError("External recipient no longer exists");
     }
 
     // Asked to stop between the row being created and the worker reaching it.
@@ -2036,25 +2047,43 @@ class NotificationPipelineService {
       await import("@/modules/activity/usecases/create-activity/create-activity-usecase");
 
     const createActivityUseCase = container.resolve(CreateActivityUseCase);
+    const performedBy = this.requireUserId(delivery);
 
-    await createActivityUseCase.execute({
-      type: rendered.type,
-      action: rendered.action,
-      entityId: rendered.entityId,
-      description: rendered.description,
-      status: rendered.status,
-      performedBy: this.requireUserId(delivery),
-      businessId: event.businessId,
-      tenantName: rendered.tenantName,
-      visibilityLevel: rendered.visibilityLevel,
-      performingUserRole: rendered.performingUserRole,
+    try {
+      await createActivityUseCase.execute({
+        type: rendered.type,
+        action: rendered.action,
+        entityId: rendered.entityId,
+        description: rendered.description,
+        status: rendered.status,
+        performedBy,
+        businessId: event.businessId,
+        tenantName: rendered.tenantName,
+        visibilityLevel: rendered.visibilityLevel,
+        performingUserRole: rendered.performingUserRole,
 
-      // Makes this write idempotent, the same way IN_APP already is. The
-      // audit trail is our own table, so a duplicate here is entirely
-      // preventable — and a trail that double-counts is worse than one that
-      // is merely incomplete, because it is confidently wrong.
-      deliveryId: delivery.id,
-    });
+        // Makes this write idempotent, the same way IN_APP already is. The
+        // audit trail is our own table, so a duplicate here is entirely
+        // preventable — and a trail that double-counts is worse than one
+        // that is merely incomplete, because it is confidently wrong.
+        deliveryId: delivery.id,
+      });
+    } catch (error) {
+      // The trail's row names its actor by a foreign key, so an actor
+      // deleted since the event fails the write. Asked only on that path:
+      // the happy one pays no lookup. The cascade of today took this row
+      // with the actor; it closes the same way (F5-05, D54).
+      const actor = await database.user.findUnique({
+        where: { id: performedBy },
+        select: { id: true },
+      });
+
+      if (!actor) {
+        throw new RecipientGoneError("Activity actor no longer exists");
+      }
+
+      throw error;
+    }
 
     // No provider: the activity trail is our own table.
     return undefined;
@@ -2092,7 +2121,7 @@ class NotificationPipelineService {
       const user = await userRepository.findUserById(userId);
 
       if (!user) {
-        throw new NonRetryableDeliveryError("Recipient user no longer exists");
+        throw new RecipientGoneError("Recipient user no longer exists");
       }
 
       return user;

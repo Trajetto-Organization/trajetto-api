@@ -45,6 +45,7 @@ import {
 } from "./webhook-destination";
 
 import { withRetryJitter } from "@/shared/notifications/pipeline-rules";
+import { recipientGoneError } from "@/shared/notifications/delivery-diagnostics";
 import { hasModuleSwitchedOff } from "@/shared/entitlements/entitlement-service";
 import { workerHeartbeat } from "@/shared/health/worker-heartbeat";
 import { logger } from "@/shared/logging/logger";
@@ -930,8 +931,16 @@ class WebhookDispatchService {
       where: { id: row.endpointId },
     });
 
+    // Deleting an endpoint takes its rows in the same transaction
+    // (queue-row-cleanup.ts); one written while the deletion ran closes
+    // here, without a call, as recipient_gone (plano-escala F5-05, D54).
     if (!endpoint) {
-      await this.markFailed(row, null, "Endpoint no longer exists");
+      await this.markFailed(
+        row,
+        null,
+        recipientGoneError("Endpoint no longer exists"),
+        { countFailure: false },
+      );
       return;
     }
 

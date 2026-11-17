@@ -32,6 +32,7 @@ import {
 } from "../dtos/user-dto";
 
 import { buildSearchOr } from "@/shared/pagination/search-or";
+import { deleteQueueRowsOfUser } from "@/shared/notifications/queue-row-cleanup";
 import { resolveOrderBy } from "@/shared/pagination/list-query";
 
 import {
@@ -264,11 +265,16 @@ class UserRepository implements IUserRepository {
     // same request and reported as the current state.
     forgetRequestCache();
 
-    const deletedUser = await (tx ?? this.prisma).user.delete({
-      where: { id: userId },
-    });
+    // The user's queue rows go first, in the same transaction: the cascade
+    // that takes them today leaves with wave 10 (queue-row-cleanup.ts). A
+    // delete that fails (P2025, a RESTRICT key) rolls them back with it.
+    const remove = async (client: Prisma.TransactionClient) => {
+      await deleteQueueRowsOfUser(client, userId);
 
-    return deletedUser;
+      return client.user.delete({ where: { id: userId } });
+    };
+
+    return tx ? remove(tx) : this.prisma.$transaction(remove);
   }
 
   /**
@@ -296,6 +302,9 @@ class UserRepository implements IUserRepository {
       // The target must be among the locked rows: a non-MASTER or an already
       // deleted id is a refusal, not a silent no-op.
       if (!masters.some((master) => master.id === userId)) return null;
+
+      // Its queue rows first, as deleteUser does.
+      await deleteQueueRowsOfUser(tx, userId);
 
       return tx.user.delete({ where: { id: userId } });
     };
@@ -871,25 +880,30 @@ class UserRepository implements IUserRepository {
   ): Promise<void> {
     forgetRequestCache();
 
-    // One statement: the bump, the deletions and the caller's own write
+    // One transaction: the bump, the deletions and the caller's own write
     // commit or roll back together.
-    await (tx ?? this.prisma).user.update({
-      where: { id: userId },
-      data: {
-        session_version: { increment: 1 },
-        RefreshToken: { deleteMany: {} },
-        PushDeviceToken: { deleteMany: {} },
-        Notification: { deleteMany: {} },
-        // What was fanned out to them and not delivered yet was addressed to
-        // the old role or company: left in place, an IN_APP row would land in
-        // the emptied inbox (another tenant's plates and values) and an
-        // e-mail would carry it outside. DELIVERED and FAILED rows stay: they
-        // are the ledger, and hold no message.
-        NotificationDelivery: {
-          deleteMany: { status: { in: ["PENDING", "PROCESSING"] } },
+    const clear = async (client: Prisma.TransactionClient) => {
+      await client.user.update({
+        where: { id: userId },
+        data: {
+          session_version: { increment: 1 },
+          RefreshToken: { deleteMany: {} },
+          PushDeviceToken: { deleteMany: {} },
+          Notification: { deleteMany: {} },
         },
-      },
-    });
+      });
+
+      // What was fanned out to them and not delivered yet was addressed to
+      // the old role or company: left in place, an IN_APP row would land in
+      // the emptied inbox (another tenant's plates and values) and an
+      // e-mail would carry it outside. DELIVERED and FAILED rows stay: they
+      // are the ledger, and hold no message. With their receipts (a push
+      // in flight already has Expo's ticket), which the cascade takes
+      // today and wave 10 no longer will (queue-row-cleanup.ts).
+      await deleteQueueRowsOfUser(client, userId, { unsentOnly: true });
+    };
+
+    await (tx ? clear(tx) : this.prisma.$transaction(clear));
   }
 
   async updateWhatsAppSettings({

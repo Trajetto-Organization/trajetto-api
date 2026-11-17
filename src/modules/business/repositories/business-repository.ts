@@ -23,6 +23,7 @@ import database from "@/../infra/database";
 import { buildSearchOr } from "@/shared/pagination/search-or";
 import { resolveOrderBy } from "@/shared/pagination/list-query";
 import { insensitiveEquals } from "@/shared/utils/like-pattern";
+import { deleteQueueRowsOfBusiness } from "@/shared/notifications/queue-row-cleanup";
 
 class BusinessRepository implements IBusinessRepository {
   constructor(private prisma = database) {}
@@ -241,13 +242,16 @@ class BusinessRepository implements IBusinessRepository {
     businessId: string,
     tx?: Prisma.TransactionClient,
   ): Promise<Business> {
-    const deleteBusiness = await (tx ?? this.prisma).business.delete({
-      where: {
-        id: businessId,
-      },
-    });
+    // Its queue rows first, in the same transaction: the cascade that takes
+    // them today leaves with wave 10 (queue-row-cleanup.ts). A delete that
+    // fails (P2025, a RESTRICT key) rolls them back with it.
+    const remove = async (client: Prisma.TransactionClient) => {
+      await deleteQueueRowsOfBusiness(client, businessId);
 
-    return deleteBusiness;
+      return client.business.delete({ where: { id: businessId } });
+    };
+
+    return tx ? remove(tx) : this.prisma.$transaction(remove);
   }
 
   async findBusinessById(businessId: string): Promise<Business | null> {

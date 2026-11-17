@@ -223,10 +223,31 @@ function suppressedChannels(
   return suppressed;
 }
 
+/**
+ * The word a queue row closes with when whoever it addressed was deleted —
+ * a user, an external recipient, a webhook endpoint (plano-escala F5-05,
+ * decision D54). FAILED at once, with no call to the provider and no retry.
+ *
+ * Today the foreign keys of the queues cascade the deletion and such a row
+ * never exists. Wave 10 (F5-06) drops them: a deletion takes its rows
+ * explicitly (queue-row-cleanup.ts), and a row it could not see — written
+ * by a transaction that committed after the deletion read the queue — is
+ * accepted until the day's partition is dropped, closing with this. At the
+ * start of lastError, so the dead letter and the alerts can search for it.
+ */
+const RECIPIENT_GONE = "recipient_gone";
+
+/** `recipient_gone: Recipient user no longer exists`. */
+function recipientGoneError(what: string): string {
+  return `${RECIPIENT_GONE}: ${what}`;
+}
+
 export {
+  RECIPIENT_GONE,
   formatDeliveryError,
   isCredentialFailure,
   providerDetailOf,
+  recipientGoneError,
   suppressedChannels,
 };
 export type { DeliveryProvider, ProviderErrorDetail, SuppressionReason };
