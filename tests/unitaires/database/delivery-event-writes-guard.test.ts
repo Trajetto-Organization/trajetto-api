@@ -23,7 +23,10 @@ import { describe, expect, it } from "vitest";
  *    whose `data` (an upsert's `update`) names another column, or is not an
  *    object the parser can read; `.delete/deleteMany` always;
  *  - a nested write through a relation to the trail (`events`,
- *    `deliveryEvents`) that updates, upserts, deletes or sets;
+ *    `deliveryEvents`) that updates, upserts, deletes or sets, or that
+ *    connects or disconnects a row that exists (connect, disconnect,
+ *    connectOrCreate): Prisma turns those into an UPDATE of the event's
+ *    foreign key (occurrenceId, routeId, apiKeyId), not a GPS column;
  *  - raw SQL: `UPDATE delivery_event` with another column in its SET,
  *    `DELETE FROM delivery_event`, `TRUNCATE delivery_event`;
  *  - a batch purge (`table: Prisma.sql\`"delivery_event"\``).
@@ -56,6 +59,9 @@ const NESTED_MUTATIONS = new Set([
   "delete",
   "deleteMany",
   "set",
+  "connect",
+  "disconnect",
+  "connectOrCreate",
 ]);
 
 const TRAIL_TABLE = String.raw`(?:"?public"?\.)?"?delivery_event(?:_part)?"?(?![\w])`;
@@ -332,6 +338,24 @@ describe("the scan, on planted code", () => {
       "a nested update through the delivery",
       `await prisma.delivery.update({ where, data: { events: { updateMany: { where: {}, data: { note: "" } } } } });`,
       ["events.updateMany aninhado"],
+    ],
+    // connect, disconnect and connectOrCreate rewrite the foreign key of
+    // a row that exists: an UPDATE of occurrenceId, routeId or apiKeyId,
+    // which only batch may do.
+    [
+      "a nested connect through the occurrence",
+      `await prisma.deliveryOccurrence.update({ where, data: { events: { connect: [{ id }] } } });`,
+      ["events.connect aninhado"],
+    ],
+    [
+      "a nested disconnect through the route",
+      `await tx.route.update({ where, data: { events: { disconnect: { id } } } });`,
+      ["events.disconnect aninhado"],
+    ],
+    [
+      "a nested connectOrCreate through the delivery",
+      `await prisma.delivery.update({ where, data: { deliveryEvents: { connectOrCreate: { where: { id }, create } } } });`,
+      ["deliveryEvents.connectOrCreate aninhado"],
     ],
     [
       "a raw update of another column",
