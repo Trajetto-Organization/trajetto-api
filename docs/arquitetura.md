@@ -3383,6 +3383,13 @@ continua de pé depois:
   feed de atividades (ordenado pelo id), a linha fica na posição do instante
   em que o evento foi expandido, não no da gravação.
 
+Cada linha da `notification_delivery` leva a empresa do evento em
+`business_id` (F3-09), copiada na expansão, com um índice parcial por raia
+(`business_id`, `availableAt`) com o mesmo predicado do claim da raia. É o
+preparo do claim justo por empresa (F3-10): hoje a raia ainda é tomada pela
+ordem de vencimento, sem olhar a empresa. Sem cópia das linhas antigas: elas
+e os eventos da própria plataforma ficam com `NULL`, o balde "sem empresa".
+
 ## Crons
 
 Registrados em `src/jobs/cron/index.ts`. Horário em UTC (o contêiner não tem

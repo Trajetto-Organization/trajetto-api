@@ -815,7 +815,10 @@ class NotificationPipelineService {
     // the rows above were a no-op and so is the mark.
     await database.$transaction([
       database.notificationDelivery.createMany({
-        data: rows,
+        // Every row carries the event's company (plano-escala F3-09): the
+        // fair claim of the lanes takes them company by company. NULL for
+        // the platform's own events, the claim's "no company" bucket.
+        data: rows.map((row) => ({ ...row, business_id: event.businessId })),
         skipDuplicates: true,
       }),
       database.domainOutboxEvent.updateMany({

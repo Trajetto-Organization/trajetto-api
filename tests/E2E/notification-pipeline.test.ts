@@ -269,6 +269,29 @@ describe("an event, end to end", () => {
 });
 
 /**
+ * plano-escala F3-09: every row an event expands into carries the event's
+ * company, the key the fair claim of the lanes (F3-10) takes them by. A row
+ * without it would sit in the "no company" bucket and lose its turn to
+ * every company that has one.
+ */
+describe("the rows an event expands into", () => {
+  it("each carry the event's company", async () => {
+    const eventId = await publish();
+
+    await pipeline.runOutboxCycle();
+
+    const rows = await deliveriesOf(eventId);
+
+    expect(rows.length).toBeGreaterThan(0);
+    expect(new Set(rows.map((row) => row.business_id))).toEqual(
+      new Set([BUSINESS]),
+    );
+
+    await drain();
+  });
+});
+
+/**
  * Nobody is notified of what they just did (14/11/2026): a bill one
  * registers for oneself rang one's own bell (and its realtime toast right
  * after the form's "success"), e-mail and WhatsApp. The trail entry stays.

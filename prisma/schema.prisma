@@ -1283,6 +1283,16 @@ model NotificationDelivery {
 
   channel NotificationChannel
 
+  /// The event's company, copied when it expands (plano-escala F3-09), so
+  /// the fair claim of wave 12 (F3-10) can take each lane company by
+  /// company. No foreign key and no backfill: the rows from before, and
+  /// the platform's own events, are NULL, the claim's "no company" bucket.
+  /// Indexed per lane in raw SQL, with the lane's claim predicate:
+  /// notification_delivery_business_internal_idx and _external_idx
+  /// (business_id, availableAt), migration and prisma/concurrent
+  /// 20261117210000_notification_delivery_business.
+  business_id String?
+
   status         NotificationDeliveryStatus @default(PENDING)
   attempts       Int                        @default(0)
   availableAt    DateTime                   @default(now())
