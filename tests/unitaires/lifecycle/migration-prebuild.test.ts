@@ -336,6 +336,59 @@ describe("indexes on hot tables, from prisma/concurrent on", () => {
   });
 });
 
+/**
+ * The planner settings of prisma/concurrent (F2-22): a statistics target, a
+ * storage parameter, an extended statistics object. The step skips a new
+ * database, so a migration makes the same statement there (the E2E
+ * template, `yarn dev`, the shadow database), guarded by the catalog so
+ * that, where the step already ran, it neither repeats nor waits for the
+ * lock of a vacuum. Spelled the same in both, so they cannot drift apart.
+ */
+function settingsMissingFromMigrations(
+  migrations: Migration[],
+  files: ConcurrentFile[],
+): string[] {
+  const code = migrations.map((migration) =>
+    codeOf(migration.sql).replace(/\s+/g, " "),
+  );
+
+  return files.flatMap((file) =>
+    file.statements
+      .filter(
+        (statement) =>
+          statement.kind === "alter-table" ||
+          statement.kind === "create-statistics",
+      )
+      .filter((statement) => !code.some((sql) => sql.includes(statement.sql)))
+      .map((statement) => `${file.name}: ${statement.sql}`),
+  );
+}
+
+describe("planner settings of prisma/concurrent", () => {
+  it("are each made by a migration too, word for word", () => {
+    const { files, errors } = loadConcurrentFiles(CONCURRENT_DIR);
+
+    expect(errors).toEqual([]);
+    expect(settingsMissingFromMigrations(allMigrations(), files)).toEqual([]);
+  });
+
+  it("and a setting no migration makes is named", () => {
+    const parsed = parseConcurrentFile(
+      "20261201000000_stats.sql",
+      '-- requires-table: delivery\nALTER TABLE "delivery" ALTER COLUMN "code" SET STATISTICS 500;',
+    );
+
+    expect(
+      settingsMissingFromMigrations(
+        [{ name: "20261201000000_other", sql: "SELECT 1;" }],
+        [parsed.file!],
+      ),
+    ).toEqual([
+      '20261201000000_stats.sql: ALTER TABLE "delivery" ALTER COLUMN "code" SET STATISTICS 500',
+    ]);
+  });
+});
+
 describe("the hot-table check", () => {
   const HOT = ["delivery_event"];
 

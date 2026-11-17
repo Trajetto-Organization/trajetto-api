@@ -1,6 +1,6 @@
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 
 import type pg from "pg";
 import {
@@ -610,5 +610,39 @@ describe("the online DDL before the migrations", () => {
     );
 
     expect((await prebuild()).files[0].status).toBe("applied");
+  });
+
+  /**
+   * The repository's own files on a database the migrations built (this
+   * file's clone of the template): every one finds its work done. A
+   * migration that left out, or spelled differently, something its
+   * prisma/concurrent file makes would show here as "applied" — the
+   * statistics of F2-22 are made by a migration on a new database and by
+   * the file everywhere else.
+   */
+  it("finds the repository's own files already done where the migrations ran", async () => {
+    const { files, errors } = loadConcurrentFiles(
+      resolve(process.cwd(), "prisma/concurrent"),
+    );
+
+    expect(errors).toEqual([]);
+    expect(files.length).toBeGreaterThan(0);
+
+    const client = await openReleaseClient(URL(), "e2e-prebuild-own");
+
+    try {
+      const outcome = await runPrebuild(client, files, {
+        lockTimeoutMs: 3_000,
+        lockRetries: 0,
+        log,
+      });
+
+      expect(outcome.newDatabase).toBe(false);
+      expect(outcome.files.filter((file) => file.status !== "skipped")).toEqual(
+        [],
+      );
+    } finally {
+      await client.end();
+    }
   });
 });

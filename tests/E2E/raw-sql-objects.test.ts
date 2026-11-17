@@ -153,7 +153,126 @@ const CHECKS: Record<string, string> = {
   release_step_state_status_check: `CHECK ((status = ANY (ARRAY['applied'::text, 'skipped'::text, 'pending'::text, 'failed'::text, 'retired'::text])))`,
 };
 
+/**
+ * The planner's settings, also only in migration SQL (plano-escala F2-22):
+ * schema.prisma has no word for them and `migrate diff` ignores them, yet
+ * the plans of the hot tables lean on them. A target that drops back to the
+ * default puts the long tail's estimates 20 to 200 times off again
+ * (tests/E2E/query-plans-scale.test.ts); a scale factor that goes back to
+ * 20% lets a 5M-row table pile up a million dead rows.
+ */
+const STATISTICS_TARGETS: Record<string, number> = {
+  "activity.businessId": 1000,
+  "delivery.businessId": 1000,
+  "delivery_event.businessId": 1000,
+  "delivery_occurrence.businessId": 1000,
+  "route.businessId": 1000,
+  "webhook_delivery.businessId": 1000,
+};
+
+/**
+ * `pg_get_statisticsobjdef` (columns in table order): dependencies only,
+ * why in prisma/concurrent/20261117180000_tenant_statistics.sql.
+ */
+const EXTENDED_STATISTICS: Record<string, string> = {
+  delivery_business_driver_stats: `CREATE STATISTICS public.delivery_business_driver_stats (dependencies) ON "businessId", "driverId" FROM delivery`,
+  delivery_business_status_stats: `CREATE STATISTICS public.delivery_business_status_stats (dependencies) ON status, "businessId" FROM delivery`,
+  route_business_driver_stats: `CREATE STATISTICS public.route_business_driver_stats (dependencies) ON "businessId", "driverId" FROM route`,
+  route_business_status_stats: `CREATE STATISTICS public.route_business_status_stats (dependencies) ON status, "businessId" FROM route`,
+};
+
+const HOT_AUTOVACUUM = [
+  "autovacuum_vacuum_scale_factor=0.02",
+  "autovacuum_analyze_scale_factor=0.01",
+];
+
+// The queues: claims rewrite each row in place (fillfactor 70 leaves room
+// for the HOT update) and the dead rows are vacuumed early and cheaply
+// (20260908120000_harden_queue_tables, 20260916170000_integrations).
+const QUEUE_AUTOVACUUM = [
+  "autovacuum_vacuum_scale_factor=0.01",
+  "autovacuum_analyze_scale_factor=0.01",
+  "autovacuum_vacuum_cost_delay=2",
+  "fillfactor=70",
+];
+
+/** `pg_class.reloptions` of every table that has any. */
+const STORAGE_PARAMETERS: Record<string, string[]> = {
+  // F2-22.
+  delivery: HOT_AUTOVACUUM,
+  delivery_occurrence: HOT_AUTOVACUUM,
+  route: HOT_AUTOVACUUM,
+  route_stop: HOT_AUTOVACUUM,
+  ai_analysis_request: QUEUE_AUTOVACUUM,
+  ai_analysis_unit: QUEUE_AUTOVACUUM,
+  domain_outbox_event: QUEUE_AUTOVACUUM,
+  notification_delivery: QUEUE_AUTOVACUUM,
+  webhook_delivery: [
+    "autovacuum_vacuum_scale_factor=0.01",
+    "autovacuum_analyze_scale_factor=0.01",
+    "fillfactor=70",
+  ],
+  // One upserted row per key and day (20260916230000_api_usage).
+  api_key_usage_daily: [
+    "autovacuum_vacuum_scale_factor=0.02",
+    "autovacuum_analyze_scale_factor=0.02",
+  ],
+  // One row per driver, rewritten on every flush: HOT room since F2-13.
+  driver_last_position: [
+    "autovacuum_vacuum_scale_factor=0.05",
+    "autovacuum_analyze_scale_factor=0.05",
+    "fillfactor=80",
+  ],
+};
+
 type Client = Pick<Prisma.TransactionClient, "$queryRaw">;
+
+/** Every column with a statistics target of its own, as `table.column`. */
+async function statisticsTargets(client: Client): Promise<Map<string, number>> {
+  const rows = await client.$queryRaw<Array<{ name: string; target: number }>>`
+    SELECT c.relname || '.' || a.attname AS name, a.attstattarget::int AS target
+    FROM pg_attribute a
+    JOIN pg_class c ON c.oid = a.attrelid
+    WHERE c.relnamespace = 'public'::regnamespace
+      AND c.relkind IN ('r', 'p')
+      AND a.attnum > 0 AND NOT a.attisdropped
+      AND coalesce(a.attstattarget, -1) <> -1
+  `;
+
+  return new Map(rows.map((row) => [row.name, row.target]));
+}
+
+async function extendedStatistics(
+  client: Client,
+): Promise<Map<string, string>> {
+  const rows = await client.$queryRaw<
+    Array<{ name: string; definition: string }>
+  >`
+    SELECT stxname AS name, pg_get_statisticsobjdef(oid) AS definition
+    FROM pg_statistic_ext
+    WHERE stxnamespace = 'public'::regnamespace
+  `;
+
+  return new Map(rows.map((row) => [row.name, row.definition]));
+}
+
+/** Partitions made by the job are left out: they copy nothing of these. */
+async function storageParameters(
+  client: Client,
+): Promise<Map<string, string[]>> {
+  const rows = await client.$queryRaw<
+    Array<{ name: string; options: string[] }>
+  >`
+    SELECT c.relname AS name, c.reloptions AS options
+    FROM pg_class c
+    WHERE c.relnamespace = 'public'::regnamespace
+      AND c.relkind IN ('r', 'p')
+      AND c.reloptions IS NOT NULL
+      AND NOT c.relispartition
+  `;
+
+  return new Map(rows.map((row) => [row.name, row.options]));
+}
 
 /**
  * Every index Prisma could not have created: a predicate, an expression, an
@@ -217,6 +336,40 @@ async function drift(client: Client): Promise<string[]> {
       problems.push(`CHECK alterado: ${name}\n  hoje: ${actual}`);
   }
 
+  const targets = await statisticsTargets(client);
+
+  for (const [name, expected] of Object.entries(STATISTICS_TARGETS)) {
+    const actual = targets.get(name);
+
+    if (actual !== expected) {
+      problems.push(
+        `alvo de estatística alterado: ${name} (hoje ${actual ?? "padrão"})`,
+      );
+    }
+  }
+
+  const statistics = await extendedStatistics(client);
+
+  for (const [name, expected] of Object.entries(EXTENDED_STATISTICS)) {
+    const actual = statistics.get(name);
+
+    if (actual === undefined) problems.push(`estatística ausente: ${name}`);
+    else if (actual !== expected)
+      problems.push(`estatística alterada: ${name}\n  hoje: ${actual}`);
+  }
+
+  const parameters = await storageParameters(client);
+
+  for (const [name, expected] of Object.entries(STORAGE_PARAMETERS)) {
+    const actual = parameters.get(name) ?? [];
+
+    if ([...actual].sort().join(",") !== [...expected].sort().join(",")) {
+      problems.push(
+        `parâmetros de ${name} alterados: hoje ${actual.join(", ") || "nenhum"}`,
+      );
+    }
+  }
+
   return problems;
 }
 
@@ -236,6 +389,23 @@ describe("objects that only exist in migration SQL", () => {
     ).toEqual([]);
     expect(
       [...checks.keys()].filter((name) => !(name in CHECKS)).sort(),
+    ).toEqual([]);
+
+    // Nor a planner setting nobody wrote down (F2-22).
+    expect(
+      [...(await statisticsTargets(prisma)).keys()]
+        .filter((name) => !(name in STATISTICS_TARGETS))
+        .sort(),
+    ).toEqual([]);
+    expect(
+      [...(await extendedStatistics(prisma)).keys()]
+        .filter((name) => !(name in EXTENDED_STATISTICS))
+        .sort(),
+    ).toEqual([]);
+    expect(
+      [...(await storageParameters(prisma)).keys()]
+        .filter((name) => !(name in STORAGE_PARAMETERS))
+        .sort(),
     ).toEqual([]);
   });
 
@@ -261,6 +431,14 @@ describe("objects that only exist in migration SQL", () => {
           `ALTER TABLE "notification_delivery" DROP CONSTRAINT "notification_delivery_one_recipient"`,
         );
 
+        // And a planner setting (F2-22) back to the default.
+        await tx.$executeRawUnsafe(
+          `ALTER TABLE "delivery" ALTER COLUMN "businessId" SET STATISTICS -1`,
+        );
+        await tx.$executeRawUnsafe(
+          `DROP STATISTICS "route_business_driver_stats"`,
+        );
+
         const problems = await drift(tx);
 
         throw Object.assign(new Error("rollback"), { problems });
@@ -270,12 +448,14 @@ describe("objects that only exist in migration SQL", () => {
         return error.problems;
       });
 
-    expect(seen).toHaveLength(3);
+    expect(seen).toHaveLength(5);
     expect(seen).toEqual(
       expect.arrayContaining([
         "índice ausente: notification_delivery_external_event_channel_idx",
         expect.stringContaining("índice alterado: webhook_delivery_claim_idx"),
         "CHECK ausente: notification_delivery_one_recipient",
+        "alvo de estatística alterado: delivery.businessId (hoje padrão)",
+        "estatística ausente: route_business_driver_stats",
       ]),
     );
 

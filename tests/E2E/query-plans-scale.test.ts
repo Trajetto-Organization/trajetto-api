@@ -47,6 +47,7 @@ interface PlanNode {
   "Node Type": string;
   "Relation Name"?: string;
   "Index Name"?: string;
+  "Plan Rows"?: number;
   "Actual Rows"?: number;
   "Actual Loops"?: number;
   "Rows Removed by Filter"?: number;
@@ -765,12 +766,12 @@ describe("the ticket inbox", () => {
  * stops of 500 other companies arrive. Scoped to the company, the work stays
  * where it was (±10%); unscoped, the picker's hash took every one of them.
  *
- * The app's count is held by rows, not buffers. Its outer side is one
- * driver's deliveries, which the planner underestimates 20× here (it
- * multiplies the company's share by the driver's, the same fact twice), so
- * it probes route_stop once per delivery — bounded by the company too, but
- * each probe pays the index's depth, which grows with the platform. The
- * statistics of F2-22 are what fix that estimate.
+ * The app's count also needs the planner to know one driver's deliveries
+ * (F2-22). Without the dependency statistics it multiplied the company's
+ * share of the rows by the driver's, the same fact twice, planned 48 rows
+ * for 1,000 and probed route_stop once per delivery: bounded by the company
+ * too, but each probe pays the index's depth, which grows with the
+ * platform (638 → 3,631 buffers here).
  *
  * Last in the file on purpose: the rows it adds would move the cases above.
  */
@@ -784,16 +785,15 @@ describe("with 150,000 open stops of 500 other companies", () => {
     return (plan["Shared Hit Blocks"] ?? 0) + (plan["Shared Read Blocks"] ?? 0);
   }
 
-  const count = () =>
-    statementsOf(() =>
-      new DeliveryRepository(capture).countPendingForDriver(CARRIER, DRIVER),
-    );
-
   type Statement = { query: string; params: string };
   type Measured = { buffers: number; shape: string };
 
   /** The queries whose work must not change when the tail arrives. */
   const SAME_WORK: Record<string, () => Promise<Statement[]>> = {
+    "the app's pending count": () =>
+      statementsOf(() =>
+        new DeliveryRepository(capture).countPendingForDriver(CARRIER, DRIVER),
+      ),
     "the route builder's picker, every query of it": async () =>
       only(
         await statementsOf(() =>
@@ -914,13 +914,35 @@ describe("with 150,000 open stops of 500 other companies", () => {
     ).toBe(TENANTS * STOPS_PER_TENANT);
   });
 
-  it("the app's pending count reads none of their stops", async () => {
-    const [statement] = await count();
-    const plan = await planOf(statement);
+  // The long tail's estimate (F2-22): one driver's deliveries, of the big
+  // carrier and of one of the 500 small ones, planned within 10× of what
+  // the scan found. Rows of the scan, before the anti-join takes any out.
+  it("plans one driver's deliveries within 10× of the real count, a small company's too", async () => {
+    for (const [businessId, driverId] of [
+      [CARRIER, DRIVER],
+      ["tail-7", "tail-driver-7"],
+    ]) {
+      const [statement] = await statementsOf(() =>
+        new DeliveryRepository(capture).countPendingForDriver(
+          businessId,
+          driverId,
+        ),
+      );
+      const plan = await planOf(statement);
+      const scans = scanNodes(plan, "delivery");
 
-    expect(rowsTouched(plan, "route_stop"), describePlan(plan)).toBeLessThan(
-      1_000,
-    );
+      expect(scans.length, describePlan(plan)).toBeGreaterThan(0);
+
+      for (const scan of scans) {
+        const planned = Math.max(1, scan["Plan Rows"] ?? 0);
+        const found = Math.max(1, scan["Actual Rows"] ?? 0);
+
+        expect(
+          Math.max(planned, found) / Math.min(planned, found),
+          `${businessId}: ${planned} planejadas, ${found} lidas (${describePlan(plan)})`,
+        ).toBeLessThanOrEqual(10);
+      }
+    }
   });
 
   for (const [name, run] of Object.entries(SAME_WORK)) {

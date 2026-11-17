@@ -2449,6 +2449,35 @@ constrói é essa segunda passada, com CONCURRENTLY, antes de a API nova
 subir. O `migration-prebuild.test.ts` cobra o bloco e a declaração da
 coluna.
 
+**Ajustes do planejador (plano de escala, F2-22).** O mesmo passo aplica o
+alvo de estatística de uma coluna (`SET STATISTICS`), os parâmetros de
+armazenamento (`SET (...)`, como os do autovacuum) e as estatísticas
+estendidas (`CREATE STATISTICS`). Cada um pega SHARE UPDATE EXCLUSIVE, a
+trava de todo vacuum e ANALYZE (as escritas seguem), e é pulado quando o
+catálogo já o tem, sem pegar trava. A migration de mesmo nome faz o mesmo
+só onde o catálogo não tem (banco novo, ou `PREBUILD_ONLINE_DDL=off`), num
+bloco `DO $$` que confere antes de cada comando. O
+`migration-prebuild.test.ts` cobra que cada comando do arquivo esteja na
+migration, escrito igual, e o `prebuild-online-ddl.test.ts`, que um banco
+migrado não deixa nada para o passo. Os de hoje estão em
+`prisma/concurrent/20261117180000_tenant_statistics.sql`:
+
+- alvo 1000 em `businessId` de `delivery`, `delivery_event`, `route`,
+  `delivery_occurrence`, `activity` e `webhook_delivery` (o planejador
+  guarda as 1000 empresas mais comuns, e não 100);
+- dependências `(businessId, status)` e `(businessId, driverId)` de
+  `delivery` e `route` (um motorista é de uma empresa só; sem isso a conta
+  de um motorista saía de 20 a 200 vezes menor);
+- autovacuum a 2% e ANALYZE a 1% das linhas em `delivery`, `route`,
+  `route_stop` e `delivery_occurrence`.
+
+Para conferir num banco:
+
+```sql
+SELECT stxname, pg_get_statisticsobjdef(oid) FROM pg_statistic_ext;
+SELECT relname, reloptions FROM pg_class WHERE reloptions IS NOT NULL;
+```
+
 - Cada espera de lock tem `lock_timeout` (`PREBUILD_LOCK_TIMEOUT_MS`, 3 s) e
   é repetida (`PREBUILD_LOCK_RETRIES`, 20). Esgotadas, a etapa falha (a API
   não é implantada) e o próximo deploy a roda de novo; um CIC longo é para a
@@ -4381,6 +4410,26 @@ GROUP BY 1, 2
 ORDER BY exec_ms DESC
 LIMIT 10;
 ```
+
+**O custo de planejar (plano de escala, F2-22).** O alvo de estatística
+1000 deixa as listas do planejador maiores, e o plano pede planejamento
+p95 abaixo de 2 ms nas consultas quentes. O `pg_stat_statements` só mede o
+planejamento com `track_planning`, que custa um pouco em toda consulta: ligue
+por 7 dias depois da release com as estatísticas por empresa e desligue
+depois. Fica no catálogo do banco, e não no `postgresql.auto.conf`; rode no
+`psql` do Database com o usuário dono (o superusuário do contêiner):
+
+```sql
+ALTER DATABASE trajetto SET pg_stat_statements.track_planning = on;
+-- sete dias depois
+ALTER DATABASE trajetto RESET pg_stat_statements.track_planning;
+```
+
+Vale para as conexões novas: o pool troca as dele aos poucos, e um Deploy
+da `trajetto-api` acelera. Nesses dias, `total_plan_time_ms / calls` no
+`pgss_snapshot` dá o planejamento médio de cada consulta; acima de 2 ms
+numa consulta quente, o caminho é baixar o alvo daquela coluna (um arquivo
+novo em `prisma/concurrent` e a migration de mesmo nome).
 
 ### Expurgos parciais
 
