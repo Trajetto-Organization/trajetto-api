@@ -722,7 +722,8 @@ class ImportRepository implements IImportRepository {
     // The removable criteria are repeated for the same reason as the route's
     // status: a delivery that was worked, or put on a route, between the read
     // and here is not deleted. The open-stop test is the company's (F2-21):
-    // each batch used to hash every open stop of the platform.
+    // unscoped, the planner could hash every open stop of the platform for
+    // each batch.
     const removedDeliveries =
       deletableIds.length > 0
         ? await tx.delivery.deleteMany({

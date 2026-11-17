@@ -755,8 +755,9 @@ describe("the ticket inbox", () => {
  *
  * The cases above hold the route_stop reads under a fixed number of pages
  * with three open stops on the platform. That bound says nothing about the
- * other companies' OPEN stops: Prisma's `stops: { none }` is an uncorrelated
- * NOT IN, so every open stop of the platform went into its hash. The scale
+ * other companies' OPEN stops: Prisma 7 sends `stops: { none }` as a NOT
+ * EXISTS that the planner runs as a hash anti-join over a page's worth of
+ * deliveries, and every open stop of the platform went into its hash. The scale
  * plan's 5M deliveries a month put ~150,000 stops open at any moment across
  * 3,600 carriers, and each of them was read by every company's count.
  *

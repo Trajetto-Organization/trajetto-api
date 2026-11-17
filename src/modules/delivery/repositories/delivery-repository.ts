@@ -142,8 +142,9 @@ async function withListRelations<
  * route's own departure. This is what keeps the two dispatch models — batch
  * assignment and routes — from writing over each other while both exist.
  *
- * Scoped to the company's open routes (plan F2-21): unscoped, the count the
- * app asks on every refresh hashed every open stop of the platform.
+ * Scoped to the company's open routes (plan F2-21): unscoped, the planner
+ * could hash every open stop of the platform for the count the app asks on
+ * every refresh.
  */
 function notOnARoute(businessId: string): Prisma.DeliveryWhereInput {
   return notOnAnOpenStop(businessId);

@@ -21,12 +21,13 @@ const HELD_STOP_STATUSES: RouteStopStatus[] = ["PENDING", "ARRIVED"];
 /**
  * "Not on an open stop", inside one company (plan F2-21).
  *
- * Prisma compiles `stops: { none: … }` to an UNCORRELATED
- * `id NOT IN (SELECT "deliveryId" FROM route_stop WHERE …)`: Postgres builds
- * the hash once from every row the subquery returns. With only the stop's
- * status in it, that was every open stop of the platform — a few hundred
- * today, ~150,000 at the scale plan's target, read on every count of the
- * driver's app and on every query of the route builder's picker.
+ * Prisma 7 sends `stops: { none: … }` as a NOT EXISTS correlated on the
+ * delivery's id (Prisma 6 sent an uncorrelated NOT IN). Over a page's worth
+ * of deliveries the planner runs it as a hash anti-join, building the hash
+ * from every row the subquery returns before the correlation. With only the
+ * stop's status in it, that was every open stop of the platform — a few
+ * hundred today, ~150,000 at the scale plan's target, read on every query
+ * of the route builder's picker (tests/E2E/query-plans-scale.test.ts).
  *
  * The tenant's open routes bound it. route_stop has no businessId of its
  * own, so the company comes through the route, and the route's status keeps
