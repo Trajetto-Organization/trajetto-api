@@ -10,6 +10,7 @@ import {
   healthSchemas,
 } from "./documentation/health-documentation";
 
+import { clientRateLimitKey } from "@/config/rate-limit";
 import { env } from "@/env";
 import { ensureAuthenticated } from "@/modules/middlewares/ensure-authenticated";
 import { verifyUserRole } from "@/modules/middlewares/verify-user-role";
@@ -265,6 +266,15 @@ async function healthRoutes(app: FastifyInstance) {
    * of a route that does not exist (callNotFound: the same handler, the same
    * body), so the route's existence is not given away. Read on the app's
    * pool: one indexed read of a handful of rows, at most 30 a minute.
+   *
+   * The 30 a minute counts only requests that carried the token. A
+   * `config.rateLimit` would run before the handler and put the limiter's
+   * `x-ratelimit-*` headers on the 404 as well (and a 429 on the 31st probe),
+   * which a path nobody registered never has: whoever probes would learn
+   * the route is there. So the route opts out of the plugin's hook and runs
+   * its own bucket once the token matched. Probing with wrong tokens is then
+   * as unlimited here as probing any missing path, and the token is 32+
+   * random characters, compared in constant time.
    */
   const rolloutStatusToken = rolloutToken(env.ROLLOUT_STATUS_TOKEN);
 
@@ -274,21 +284,32 @@ async function healthRoutes(app: FastifyInstance) {
     );
   }
 
+  // Namespaced: no other `app.rateLimit()` bucket can share these keys.
+  const rolloutCeiling = app.rateLimit({
+    max: 30,
+    timeWindow: "1 minute",
+    keyGenerator: (request) => `health-rollout:${clientRateLimitKey(request)}`,
+  });
+
   app.get(
     "/health/rollout",
     {
-      config: { rateLimit: { max: 30, timeWindow: "1 minute" } },
+      // The bucket is `rolloutCeiling`, applied after the token (above).
+      config: { rateLimit: false },
       // No `security` entry: the bearer is the pipeline's token, not a
       // session, and this route never answers 401 or 403 (only the 404).
       schema: {
         tags: ["health"],
         summary: "Estado da etapa de release (para o pipeline)",
         description:
-          "O que a etapa de release deixou: os passos de `infra/sql` e `prisma/post-deploy` pendentes ou que falharam, e quando ela rodou pela última vez. O pipeline lê antes de cada deploy e roda a etapa de novo quando há um passo pendente. Exige `Authorization: Bearer <ROLLOUT_STATUS_TOKEN>`; sem o token configurado, sem o cabeçalho ou com um valor errado, responde o mesmo 404 de uma rota que não existe. Até 30 pedidos por minuto, sem cache.",
+          "O que a etapa de release deixou: os passos de `infra/sql` e `prisma/post-deploy` pendentes ou que falharam, e quando ela rodou pela última vez. O pipeline lê antes de cada deploy e roda a etapa de novo quando há um passo pendente. Exige `Authorization: Bearer <ROLLOUT_STATUS_TOKEN>`; sem o token configurado, sem o cabeçalho ou com um valor errado, responde o mesmo 404 de uma rota que não existe, sem os cabeçalhos do limitador. Com o token, até 30 pedidos por minuto, sem cache.",
         response: {
           200: healthResponses.rolloutStatus,
           404: errorResponse.describe(
             "ROUTE_NOT_FOUND: sem token, token errado ou token não configurado (a mesma resposta de uma rota que não existe).",
+          ),
+          429: errorResponse.describe(
+            "RATE_LIMITED: mais de 30 pedidos com o token no último minuto. Espere o `retry-after`. Sem o token certo, a resposta é sempre o 404.",
           ),
         },
       },
@@ -299,6 +320,9 @@ async function healthRoutes(app: FastifyInstance) {
       ) {
         return reply.callNotFound();
       }
+
+      // Throws the 429 (with its headers) past the ceiling.
+      await rolloutCeiling.call(app, request, reply);
 
       const status = await readRolloutStatus(database, buildInfo.commit);
 

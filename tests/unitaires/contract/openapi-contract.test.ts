@@ -56,6 +56,10 @@ const ANONYMOUS = [
   "GET /health",
   "GET /health/liveness",
   "GET /health/readiness",
+  // The release step's state, for the pipeline (U-11): behind its own
+  // bearer, ROLLOUT_STATUS_TOKEN, not a session; without it, the 404 of a
+  // path that does not exist.
+  "GET /health/rollout",
   "GET /integration/v1/catalogue",
   // The integrator's proof_url (L7): the signed link is the authorisation,
   // as for the printed QR of verify-proof.

@@ -16,9 +16,10 @@ import { createPrismaClient } from "@/shared/database/database-client";
  * ROLLOUT_STATUS_TOKEN.
  *
  * Without the header, or with a wrong token, the answer is byte for byte
- * the 404 of a route that does not exist: whoever probes it learns nothing.
- * With the token: the pending and failed steps and the last run, never
- * cached.
+ * the 404 of a route that does not exist, headers included (no
+ * `x-ratelimit-*`, never a 429): whoever probes it learns nothing. With the
+ * token: the pending and failed steps and the last run, never cached, at
+ * most 30 a minute.
  */
 // Before any import reads the environment: it is parsed once.
 const TOKEN = vi.hoisted(() => {
@@ -67,7 +68,69 @@ async function unknownRoute() {
   };
 }
 
+/**
+ * A missing path of the same length (so the same content-length), and the
+ * headers whose values change from one call to the next (the date, a
+ * request id): only their presence can be compared.
+ */
+const SAME_LENGTH_UNKNOWN = "/health/rolloux";
+
+async function unknownHeaders() {
+  const first = await get(SAME_LENGTH_UNKNOWN);
+  const second = await get(SAME_LENGTH_UNKNOWN);
+  const volatile = new Set(
+    Object.keys(first.headers).filter(
+      (name) => first.headers[name] !== second.headers[name],
+    ),
+  );
+
+  return { headers: second.headers, volatile };
+}
+
 describe("GET /health/rollout", () => {
+  it("carries the same headers as a missing path, the limiter's included", async () => {
+    const response = await get(
+      "/health/rollout",
+      "Bearer e2e-wrong-token-0123456789abcdef0123456789abcd",
+    );
+    const unknown = await unknownHeaders();
+
+    expect(response.statusCode).toBe(404);
+    expect(Object.keys(response.headers).sort()).toEqual(
+      Object.keys(unknown.headers).sort(),
+    );
+    for (const [name, value] of Object.entries(unknown.headers)) {
+      if (unknown.volatile.has(name)) continue;
+      expect(response.headers[name], name).toEqual(value);
+    }
+    expect(
+      Object.keys(response.headers).filter((name) =>
+        name.startsWith("x-ratelimit"),
+      ),
+    ).toEqual([]);
+  });
+
+  it("never turns a probe without the token into a 429", async () => {
+    const statuses = new Set<number>();
+
+    for (let probe = 0; probe < 35; probe += 1) {
+      statuses.add((await get("/health/rollout")).statusCode);
+    }
+
+    expect([...statuses]).toEqual([404]);
+  });
+
+  it("counts the requests that carry the token, at most 30 a minute", async () => {
+    const first = await get("/health/rollout", `Bearer ${TOKEN}`);
+    const second = await get("/health/rollout", `Bearer ${TOKEN}`);
+
+    expect(first.statusCode).toBe(200);
+    expect(first.headers["x-ratelimit-limit"]).toBe("30");
+    expect(Number(second.headers["x-ratelimit-remaining"])).toBe(
+      Number(first.headers["x-ratelimit-remaining"]) - 1,
+    );
+  });
+
   it.each([
     ["without a token", undefined],
     [
