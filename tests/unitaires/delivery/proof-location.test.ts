@@ -758,4 +758,23 @@ describe("the proof lookup's admission", () => {
     expect(await admission.admit(NOW)).toBe(true);
     expect(await admission.admit(NOW)).toBe(false);
   });
+
+  // Review of plano-escala F2-32: the slot came before the day, and a slot
+  // enters the minute's log the job and the search count. With the
+  // proof's day spent or switched off (0), receipts opened at a second's
+  // pace kept that log full and starved the other paths for nothing.
+  it("takes no slot, its own or a shared one, once the day is spent or off", async () => {
+    const spent = lane(["OK", "OK"], 1, [true, true]);
+
+    expect(await spent.admission.admit(NOW)).toBe(true);
+    expect(await spent.admission.admit(NOW)).toBe(false);
+    expect(spent.asked).toEqual(["OK"]);
+    expect(spent.borrowed).toEqual([]);
+
+    const off = lane(["BUSY", "OK"], 0, [true]);
+
+    expect(await off.admission.admit(NOW)).toBe(false);
+    expect(off.asked).toEqual([]);
+    expect(off.borrowed).toEqual([]);
+  });
 });

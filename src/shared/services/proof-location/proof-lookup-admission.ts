@@ -30,6 +30,10 @@ import {
  * provider's 429 left the receipt without the GPS address for a day. Now
  * it takes, in this order:
  *
+ * 0. nothing at all once its day is spent or switched off (a read of the
+ *    day, below): a slot enters the minute's log the job and the search
+ *    count, so receipts opened while the day pays for no lookup would
+ *    starve them for a minute each (review of F2-32);
  * 1. a slot of its own second (GEOCODING_PROOF_RESERVED_PER_SECOND, which
  *    nothing else takes) or, when that one is full, a free slot of the
  *    shared rate (the search's ceilings): a burst of receipts opened at
@@ -71,6 +75,10 @@ function createProofLookupAdmission({
 }: ProofLookupAdmissionOptions): ProofLookupAdmission {
   return {
     async admit(now) {
+      // The day before the slot, as the job's call reads it (ask in
+      // delivery-geocoding-service.ts); the take below still decides.
+      if ((await budget.remaining(now)) <= 0) return false;
+
       for (let attempt = 1; attempt <= slotTries; attempt += 1) {
         const slot = await gate.takeProofSlot();
 

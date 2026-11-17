@@ -1487,7 +1487,10 @@ conta (`TAKE_PROOF_SLOT`). Com o próprio segundo cheio, ela toma uma vaga
 livre da taxa compartilhada, com os tetos da busca: um ERP que abre de uma
 vez os links de vários comprovantes não deve ver a maioria sem endereço com
 o job parado. Depois da vaga ela toma uma unidade do próprio dia
-(`PROOF_REVERSE_DAILY_BUDGET`, escopo `proof-reverse`). Sem vaga em cinco
+(`PROOF_REVERSE_DAILY_BUDGET`, escopo `proof-reverse`). Com o dia gasto ou
+desligado (0), ela nem toma vaga: a vaga entra no registro do minuto que o
+job e a busca contam, e comprovantes abertos sem nada a perguntar os
+deixariam parados (revisão do F2-32). Sem vaga em cinco
 tentativas (1,6 s), com a conta pausada ou com o dia gasto, o PDF sai com o endereço
 cadastrado, rotulado, e nada é gravado no evento: a próxima geração pergunta
 de novo (`proof-lookup-admission.ts`, ligado em `http.ts` na conexão
