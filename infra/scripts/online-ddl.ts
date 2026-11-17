@@ -234,8 +234,11 @@ const DROP_INDEX = new RegExp(
   String.raw`^DROP\s+INDEX\s+CONCURRENTLY\s+IF\s+EXISTS\s+(${IDENT})$`,
   "i",
 );
+// ONE subcommand per statement, and nothing nested in the parameter list:
+// `SET (...), ALTER COLUMN ... TYPE ...` also ends in ")", and would rewrite
+// the table under ACCESS EXCLUSIVE with only lock_timeout bounding the wait.
 const ALTER_TABLE = new RegExp(
-  String.raw`^ALTER\s+TABLE\s+(${IDENT})\s+(?:ALTER\s+COLUMN\s+${IDENT}\s+SET\s+STATISTICS\s+-?\d+|(?:SET|RESET)\s*\([^;]+\))$`,
+  String.raw`^ALTER\s+TABLE\s+(${IDENT})\s+(?:ALTER\s+COLUMN\s+${IDENT}\s+SET\s+STATISTICS\s+-?\d+|(?:SET|RESET)\s*\([^()]+\))$`,
   "i",
 );
 const CREATE_STATISTICS = new RegExp(

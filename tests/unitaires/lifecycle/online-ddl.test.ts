@@ -88,6 +88,20 @@ describe("a prisma/concurrent file", () => {
     ["a DO block", "DO $$ BEGIN PERFORM 1; END $$;"],
     ["data", "UPDATE delivery_event SET status = 'X';"],
     ["a transaction", "BEGIN;"],
+    // One ALTER TABLE may carry several subcommands: a storage parameter
+    // must not smuggle in a rewrite under ACCESS EXCLUSIVE.
+    [
+      "a storage parameter chained to a column rewrite",
+      "ALTER TABLE delivery_event SET (fillfactor = 90), ALTER COLUMN code TYPE bigint USING (code::bigint);",
+    ],
+    [
+      "a storage parameter chained to a new checked column",
+      "ALTER TABLE delivery_event RESET (fillfactor), ADD COLUMN x int CHECK (x > 0);",
+    ],
+    [
+      "a statistics target chained to another subcommand",
+      "ALTER TABLE delivery_event ALTER COLUMN code SET STATISTICS 100, ALTER COLUMN code SET NOT NULL;",
+    ],
   ])("refuses %s, and runs nothing of the file", (_case, sql) => {
     const { file, errors } = parseConcurrentFile(
       "3_bad.sql",

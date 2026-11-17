@@ -75,9 +75,12 @@ E, no topo, toda tabela que o arquivo toca:
 -- requires-column: delivery_event.txid
 ```
 
-Sem `DO $$`, sem `ON ONLY`, sem schema no nome. DDL com pré-condição (uma
-troca de tabela, um `OWNER TO`) vai em `prisma/post-deploy`, depois das
-migrations.
+Sem `DO $$`, sem `ON ONLY`, sem schema no nome. Um subcomando por
+`ALTER TABLE`, e nada entre parênteses dentro da lista de parâmetros: um
+`SET (...)` encadeado a outro subcomando (um `ALTER COLUMN ... TYPE`, um
+`ADD COLUMN ... CHECK`) reescreveria a tabela sob lock exclusivo e é
+recusado. DDL com pré-condição (uma troca de tabela, um `OWNER TO`) vai em
+`prisma/post-deploy`, depois das migrations.
 
 ## Como roda
 
