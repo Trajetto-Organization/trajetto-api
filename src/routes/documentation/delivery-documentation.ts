@@ -287,6 +287,14 @@ const deliveryRowEntity = z.object({
     .int()
     .optional()
     .describe("Quantas vezes o endereço foi consultado no geocodificador."),
+  // Review of plano-escala F2-33: the date of a copied verdict. Optional,
+  // as above: a body written by the previous API does not have it.
+  geocode_verdict_at: responseDateTime()
+    .nullable()
+    .optional()
+    .describe(
+      "Quando o geocodificador deu a resposta sem ponto (NOT_FOUND ou COARSE) que esta entrega copiou de outra da mesma empresa na mesma porta: a janela de reaproveitamento conta dela. Nula na resposta da própria entrega, em qualquer outro resultado e depois de editar o endereço. Uso interno, nenhuma tela lê.",
+    ),
   // Batch of 14/11/2026 (API-04): the door the point reuse matches on.
   // Optional, as above: a body written by the previous API does not have it.
   address_key: z

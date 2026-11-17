@@ -1696,7 +1696,7 @@ describe("the verdict about the same door", () => {
   const claimAtDoor = (id = "new", overrides: Record<string, unknown> = {}) =>
     delivery(id, { address_key: DOOR, ...overrides });
 
-  it("settles NOT_FOUND without asking, keeps the verdict's date, and the screens hear", async () => {
+  it("settles NOT_FOUND without asking, keeps the verdict's date apart, and the screens hear", async () => {
     const budget = budgetOf(1_000);
     const h = harness(() => FOUND_AT_DOOR, {
       rows: [judged(10), claimAtDoor()],
@@ -1717,9 +1717,12 @@ describe("the verdict about the same door", () => {
       geocode_status: "NOT_FOUND",
       latitude: null,
       geo_source: null,
-      // The provider's answer's date, not the claim's: a copy of the copy
-      // never stretches the window.
-      geocode_attempted_at: new Date(NOW.getTime() - 10 * DAY_MS),
+      // Review of F2-33: the claim's instant, the API's "last attempt" —
+      // never before the delivery existed. The provider's answer's date
+      // goes in a column of its own, which the window reads: a copy of the
+      // copy never stretches it.
+      geocode_attempted_at: NOW,
+      geocode_verdict_at: new Date(NOW.getTime() - 10 * DAY_MS),
     });
     expect(h.announced).toEqual([
       [{ id: "new", businessId: BUSINESS, kind: "NOT_FOUND" }],
@@ -1746,14 +1749,15 @@ describe("the verdict about the same door", () => {
 
   it("asks the provider again once the verdict is older than the window, and a copy never renews it", async () => {
     // The provider's answer is 31 days old; a delivery took it as a copy
-    // 5 days ago, keeping its date.
+    // 5 days ago, keeping its date apart from its own claim's.
     const h = harness(() => ({ kind: "NOT_FOUND" }), {
       rows: [
         judged(31),
         claimAtDoor("copy", {
           geocode_status: "NOT_FOUND",
           geocode_attempts: 1,
-          geocode_attempted_at: new Date(NOW.getTime() - 31 * DAY_MS),
+          geocode_attempted_at: new Date(NOW.getTime() - 5 * DAY_MS),
+          geocode_verdict_at: new Date(NOW.getTime() - 31 * DAY_MS),
         }),
         claimAtDoor(),
       ],
@@ -1764,8 +1768,12 @@ describe("the verdict about the same door", () => {
     expect(result).toMatchObject({ reusedVerdicts: 0, notFound: 1 });
     // Asked again: the full address, then street, city and UF alone.
     expect(new Set(h.asked.map((call) => call.id))).toEqual(new Set(["new"]));
-    // The new answer opens a new window for the next one at the door.
-    expect(row(h, "new").geocode_attempted_at).toEqual(NOW);
+    // The new answer opens a new window for the next one at the door: its
+    // own, dated by its claim.
+    expect(row(h, "new")).toMatchObject({
+      geocode_attempted_at: NOW,
+      geocode_verdict_at: null,
+    });
   });
 
   it("asks as before with GEOCODING_VERDICT_REUSE_DAYS at 0", async () => {

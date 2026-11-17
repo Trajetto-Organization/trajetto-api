@@ -71,6 +71,7 @@ const CLEARED_ADDRESS_POINT = {
   geocode_status: null,
   geocode_attempted_at: null,
   geocode_attempts: 0,
+  geocode_verdict_at: null,
   geo_copied_from: null,
 } as const;
 

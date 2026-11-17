@@ -44,6 +44,13 @@ interface GeocodingRow {
   address_key?: string | null;
   /** The root a copied point came from (address-point-reuse.ts). */
   geo_copied_from?: string | null;
+  /** The date of a copied verdict (review of plano-escala F2-33). */
+  geocode_verdict_at?: Date | null;
+}
+
+/** The date a verdict without a point stands on (VERDICT_DATE's twin). */
+function verdictDateOf(row: GeocodingRow): Date | null {
+  return row.geocode_verdict_at ?? row.geocode_attempted_at;
 }
 
 /**
@@ -186,13 +193,12 @@ class InMemoryDeliveryGeocodingRepository implements IDeliveryGeocodingRepositor
           row.id !== claim.id &&
           (row.geocode_status === "NOT_FOUND" ||
             row.geocode_status === "COARSE") &&
-          row.geocode_attempted_at !== null &&
-          row.geocode_attempted_at.getTime() >= since.getTime(),
+          (verdictDateOf(row)?.getTime() ?? Number.NEGATIVE_INFINITY) >=
+            since.getTime(),
       )
       .sort(
         (a, b) =>
-          b.geocode_attempted_at!.getTime() -
-            a.geocode_attempted_at!.getTime() ||
+          verdictDateOf(b)!.getTime() - verdictDateOf(a)!.getTime() ||
           (a.id < b.id ? 1 : a.id > b.id ? -1 : 0),
       );
 
@@ -200,7 +206,7 @@ class InMemoryDeliveryGeocodingRepository implements IDeliveryGeocodingRepositor
       newest && {
         geocode_status: newest.geocode_status,
         geo_precision: newest.geo_precision,
-        decidedAt: newest.geocode_attempted_at,
+        decidedAt: verdictDateOf(newest),
       },
     );
   }
@@ -259,13 +265,13 @@ class InMemoryDeliveryGeocodingRepository implements IDeliveryGeocodingRepositor
         break;
     }
 
-    // A copied verdict keeps the date of the answer it copies.
-    if (
+    // A copied verdict keeps the date of the answer it copies, apart from
+    // the claim's instant; every other outcome clears it (verdictAtOf).
+    row.geocode_verdict_at =
       (settlement.kind === "NOT_FOUND" || settlement.kind === "COARSE") &&
       settlement.decidedAt
-    ) {
-      row.geocode_attempted_at = new Date(settlement.decidedAt.getTime());
-    }
+        ? new Date(settlement.decidedAt.getTime())
+        : null;
 
     return true;
   }

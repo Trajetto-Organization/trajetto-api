@@ -185,17 +185,28 @@ interface IDeliveryGeocodingRepository {
 }
 
 /**
- * A copied verdict keeps the date of the answer it copies, in the column
- * the window reads: a delivery that copies a copy never stretches the
- * window, and the door is asked again once the provider's own answer is
- * older than it. The claim's guard reads the column before the write.
+ * A copied verdict keeps the date of the answer it copies in a column of
+ * its own, which the window reads before the claim's instant: a delivery
+ * that copies a copy never stretches the window, and the door is asked
+ * again once the provider's own answer is older than it. It went in
+ * geocode_attempted_at until the review of F2-33, which the API documents
+ * as the last attempt: a delivery created today read a last attempt weeks
+ * before it existed. Every other outcome writes NULL, so the column says
+ * only what it says.
  */
-function decidedAtOf(settlement: GeocodingSettlement): Prisma.Sql {
+function verdictAtOf(settlement: GeocodingSettlement): Date | null {
   return (settlement.kind === "NOT_FOUND" || settlement.kind === "COARSE") &&
     settlement.decidedAt
-    ? Prisma.sql`, "geocode_attempted_at" = ${settlement.decidedAt}`
-    : Prisma.empty;
+    ? settlement.decidedAt
+    : null;
 }
+
+/**
+ * The date a verdict without a point stands on: the copied answer's for a
+ * copy, the claim's instant for the delivery's own answer (and for every
+ * row the previous image wrote, which copies none).
+ */
+const VERDICT_DATE = Prisma.sql`COALESCE("geocode_verdict_at", "geocode_attempted_at")`;
 
 /** A row of the door as the verdict it is; null for anything else. */
 function verdictOf(
@@ -360,7 +371,8 @@ class DeliveryGeocodingRepository implements IDeliveryGeocodingRepository {
 
     // delivery_address_key_idx down to the door's rows without a source
     // (geo_source IS NULL is an index condition, the key's equality proves
-    // the predicate): the not-located ones, a handful even at a busy door.
+    // the predicate): the not-located ones, a handful even at a busy door,
+    // dated and ordered by the answer each one stands on.
     const [row] = await this.prisma.$queryRaw<
       Array<{
         geocode_status: "NOT_FOUND" | "COARSE";
@@ -369,7 +381,7 @@ class DeliveryGeocodingRepository implements IDeliveryGeocodingRepository {
       }>
     >`
       SELECT "geocode_status", "geo_precision",
-        "geocode_attempted_at" AS "decidedAt"
+        ${VERDICT_DATE} AS "decidedAt"
       FROM "delivery"
       WHERE "businessId" = ${claim.businessId}
         AND "address_key" = ${key}
@@ -377,8 +389,8 @@ class DeliveryGeocodingRepository implements IDeliveryGeocodingRepository {
         AND "latitude" IS NULL
         AND "id" <> ${claim.id}
         AND "geocode_status" IN ('NOT_FOUND', 'COARSE')
-        AND "geocode_attempted_at" >= ${since}
-      ORDER BY "geocode_attempted_at" DESC, "id" DESC
+        AND ${VERDICT_DATE} >= ${since}
+      ORDER BY ${VERDICT_DATE} DESC, "id" DESC
       LIMIT 1
     `;
 
@@ -395,6 +407,7 @@ class DeliveryGeocodingRepository implements IDeliveryGeocodingRepository {
     // image left on a row without a point goes with it.
     const copiedFrom =
       settlement.kind === "RESOLVED" ? (settlement.copiedFrom ?? null) : null;
+    const verdictAt = verdictAtOf(settlement);
     const set = (() => {
       switch (settlement.kind) {
         case "RESOLVED":
@@ -405,18 +418,22 @@ class DeliveryGeocodingRepository implements IDeliveryGeocodingRepository {
             "geo_updated_at" = ${now},
             "geo_precision" = ${settlement.precision}::"DeliveryGeoPrecision",
             "geocode_status" = 'RESOLVED',
-            "geo_copied_from" = ${copiedFrom}`;
+            "geo_copied_from" = ${copiedFrom},
+            "geocode_verdict_at" = NULL`;
         case "COARSE":
           return Prisma.sql`
             "geo_precision" = ${settlement.precision}::"DeliveryGeoPrecision",
             "geocode_status" = 'COARSE',
-            "geo_copied_from" = NULL${decidedAtOf(settlement)}`;
+            "geo_copied_from" = NULL,
+            "geocode_verdict_at" = ${verdictAt}`;
         case "NOT_FOUND":
           return Prisma.sql`"geocode_status" = 'NOT_FOUND',
-            "geo_copied_from" = NULL${decidedAtOf(settlement)}`;
+            "geo_copied_from" = NULL,
+            "geocode_verdict_at" = ${verdictAt}`;
         case "FAILED":
           return Prisma.sql`"geocode_status" = 'FAILED',
-            "geo_copied_from" = NULL`;
+            "geo_copied_from" = NULL,
+            "geocode_verdict_at" = NULL`;
       }
     })();
     // A copy is written only while its root still holds the point, the

@@ -527,6 +527,8 @@ const PLAN_2026_11_NULLABLE_COLUMNS: Array<[string, string]> = [
   // which one a copied point came from
   ["delivery", "address_key"],
   ["delivery", "geo_copied_from"],
+  // Review of plano-escala F2-33: the date of a copied verdict
+  ["delivery", "geocode_verdict_at"],
 ];
 
 describe("final phase: new columns", () => {

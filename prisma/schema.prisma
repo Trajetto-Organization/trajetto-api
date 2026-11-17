@@ -3371,6 +3371,15 @@ model Delivery {
   geocode_status       DeliveryGeocodeStatus?
   geocode_attempted_at DateTime?
   geocode_attempts     Int                    @default(0)
+  /// The date of a copied verdict (review of plano-escala F2-33; migration
+  /// 20261117130000): set only on a NOT_FOUND or COARSE taken from another
+  /// delivery of the company at the same door, to the date of the
+  /// provider's answer it copies. The reuse window reads it before
+  /// geocode_attempted_at, so a copy of a copy never stretches the window,
+  /// while geocode_attempted_at stays the claim's instant (the API's last
+  /// attempt). Null on the delivery's own answer, on any other outcome and
+  /// after an address edit; meaningful only with NOT_FOUND or COARSE.
+  geocode_verdict_at   DateTime?
   /// Which deliveries of the company stand at the same door (14/11/2026;
   /// src/shared/delivery/address-key.ts): the SHA-256 of the canonical
   /// street, number, district, city and UF, never the CEP. A delivery

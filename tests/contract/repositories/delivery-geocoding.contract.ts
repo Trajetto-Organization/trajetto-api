@@ -205,6 +205,8 @@ interface PlacedColumns {
   status: "PENDING" | "IN_TRANSIT" | "DELIVERED" | "CANCELLED";
   geocode_status: "RESOLVED" | "COARSE" | "NOT_FOUND" | "FAILED" | null;
   geocode_attempted_at: Date | null;
+  /** The date of a copied verdict (review of F2-33). */
+  geocode_verdict_at: Date | null;
 }
 
 interface GeocodingHarness {
@@ -217,6 +219,8 @@ interface GeocodingHarness {
   read(id: string): Promise<GeocodingState>;
   /** The delivery's geocode_attempted_at as stored. */
   attemptedAt(id: string): Promise<Date | null>;
+  /** The delivery's geocode_verdict_at as stored. */
+  verdictAt(id: string): Promise<Date | null>;
   /** A dispatcher pinning the point by hand (route-repository's pin). */
   pin(id: string): Promise<void>;
   /** update-delivery's address change (CLEARED_ADDRESS_POINT). */
@@ -563,7 +567,12 @@ function deliveryGeocodingContract(harness: () => GeocodingHarness): void {
       expect(await h.repo.reusableVerdict(claim, SINCE)).toBeNull();
     });
 
-    it("writes a copied verdict with the date of the answer it copies", async () => {
+    // Review of F2-33: the copy wrote the copied answer's date over
+    // geocode_attempted_at, which the API documents as the last attempt —
+    // a delivery created today read a last attempt weeks before it
+    // existed. The claim's instant stays there; the copied date has a
+    // column of its own.
+    it("writes a copied verdict with the date of the answer it copies, apart from its claim's", async () => {
       const h = harness();
       const [claim] = await h.repo.claim(1, NOW);
 
@@ -579,14 +588,52 @@ function deliveryGeocodingContract(harness: () => GeocodingHarness): void {
         latitude: null,
         geo_source: null,
       });
-      expect(await h.attemptedAt(F.open)).toEqual(minute(900));
+      expect(await h.attemptedAt(F.open)).toEqual(NOW);
+      expect(await h.verdictAt(F.open)).toEqual(minute(900));
 
-      // The provider's own answer keeps the claim's instant.
+      // The provider's own answer keeps the claim's instant, and no
+      // copied date.
       const [next] = await h.repo.claim(1, NOW);
 
       await h.repo.settle(next, { kind: "NOT_FOUND" }, NOW);
 
       expect(await h.attemptedAt(next.id)).toEqual(NOW);
+      expect(await h.verdictAt(next.id)).toBeNull();
+    });
+
+    it("dates a copy by the answer it copied, for the window and the order", async () => {
+      const h = harness();
+      const [claim] = await h.repo.claim(1, NOW);
+      const door = deliveryAddressKey(claim);
+
+      // A copy settled lately (990) of an answer older (850) than the
+      // provider's own answer about the door (900): the own one is newer.
+      await h.place(F.notFound, {
+        address_key: door,
+        geocode_attempted_at: minute(900),
+      });
+      await h.place(F.coarse, {
+        address_key: door,
+        geo_precision: "NEIGHBORHOOD",
+        geocode_attempted_at: minute(990),
+        geocode_verdict_at: minute(850),
+      });
+
+      expect(await h.repo.reusableVerdict(claim, minute(0))).toEqual({
+        kind: "NOT_FOUND",
+        decidedAt: minute(900),
+      });
+
+      // Alone at the door, the copy reads as its answer's date: out of a
+      // window that starts after it, whatever its claim's instant.
+      await h.place(F.notFound, { address_key: null });
+
+      expect(await h.repo.reusableVerdict(claim, minute(0))).toEqual({
+        kind: "COARSE",
+        precision: "NEIGHBORHOOD",
+        decidedAt: minute(850),
+      });
+      expect(await h.repo.reusableVerdict(claim, minute(860))).toBeNull();
     });
   });
 

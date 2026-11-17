@@ -91,6 +91,16 @@ const harnesses: Record<Kind, () => GeocodingHarness> = {
         )?.geocode_attempted_at ?? null
       );
     },
+    async verdictAt(id) {
+      return (
+        (
+          await prisma.delivery.findUnique({
+            where: { id },
+            select: { geocode_verdict_at: true },
+          })
+        )?.geocode_verdict_at ?? null
+      );
+    },
     async place(id, columns) {
       await prisma.delivery.update({ where: { id }, data: columns });
     },
@@ -146,6 +156,12 @@ const harnesses: Record<Kind, () => GeocodingHarness> = {
     async attemptedAt(id) {
       return (
         memory.deliveries.find((row) => row.id === id)?.geocode_attempted_at ??
+        null
+      );
+    },
+    async verdictAt(id) {
+      return (
+        memory.deliveries.find((row) => row.id === id)?.geocode_verdict_at ??
         null
       );
     },
@@ -234,8 +250,10 @@ describe("delivery geocoding queue (prisma only)", () => {
             AND "geo_source" IS NULL AND "latitude" IS NULL
             AND "id" <> 'x'
             AND "geocode_status" IN ('NOT_FOUND', 'COARSE')
-            AND "geocode_attempted_at" >= now() - interval '30 days'
-          ORDER BY "geocode_attempted_at" DESC, "id" DESC LIMIT 1`,
+            AND COALESCE("geocode_verdict_at", "geocode_attempted_at")
+              >= now() - interval '30 days'
+          ORDER BY COALESCE("geocode_verdict_at", "geocode_attempted_at") DESC,
+            "id" DESC LIMIT 1`,
       );
 
       expect(plan.map((row) => row["QUERY PLAN"]).join("\n")).toContain(

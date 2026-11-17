@@ -180,6 +180,7 @@ interface UpdateDeliveryProps {
   geocode_status?: "RESOLVED" | null;
   geocode_attempted_at?: null;
   geocode_attempts?: 0;
+  geocode_verdict_at?: null;
   address_key?: string | null;
   geo_copied_from?: string | null;
 }

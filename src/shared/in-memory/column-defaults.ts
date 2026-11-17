@@ -64,6 +64,8 @@ const DELIVERY_COLUMN_DEFAULTS = {
   geocode_status: null,
   geocode_attempted_at: null,
   geocode_attempts: 0,
+  // Review of plano-escala F2-33: the date of a copied verdict.
+  geocode_verdict_at: null,
   // 14/11/2026: which deliveries of the company stand at the same door, and
   // which one a copied point came from.
   address_key: null,

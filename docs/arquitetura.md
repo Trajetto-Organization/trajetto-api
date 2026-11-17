@@ -1700,9 +1700,13 @@ chave da pausa guarda o motivo junto do prazo (`REFUSED`, `QUOTA` ou
     empresa na mesma porta há menos de `GEOCODING_VERDICT_REUSE_DAYS` (30;
     plano de escala F2-33, `reusableVerdict`). Achando, grava o mesmo
     veredito (com o nível, no `COARSE`) sem chamar o provedor, e o
-    `geocode_attempted_at` da cópia fica com a data da resposta copiada:
+    `geocode_verdict_at` da cópia fica com a data da resposta copiada (a
+    janela lê `COALESCE("geocode_verdict_at", "geocode_attempted_at")`):
     copiar uma cópia nunca estica a janela, e passada ela a próxima entrega
-    da porta pergunta de novo. Um endereço ruim custa uma consulta a cada 30
+    da porta pergunta de novo. O `geocode_attempted_at` da cópia continua
+    sendo o instante da reserva, a "última tentativa" que a API documenta;
+    até a revisão do F2-33 a data copiada ia nele, e uma entrega criada hoje
+    dizia ter sido tentada semanas antes de existir. Um endereço ruim custa uma consulta a cada 30
     dias por empresa, não uma por entrega da planilha. Nunca entre empresas.
     A cópia fica sem ponto e sem fonte, como a resposta do provedor: o pino
     que alguém fizer depois na porta chega a ela pela propagação. A linha
