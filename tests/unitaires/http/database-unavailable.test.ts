@@ -439,12 +439,13 @@ describe("the global error handler", () => {
     });
   }
 
+  // The statement_timeout (57014) is not an outage, and no longer a 500
+  // either: 503 SERVICE_BUSY (plano-escala U-13, database-error-map.test.ts).
   for (const kind of [
     "bug",
     "not-found",
     "plain-error",
     "raw-sql-error",
-    "raw-statement-timeout",
     "raw-undecodable-column",
     "v7-commit-write-conflict",
   ]) {

@@ -6,6 +6,7 @@ import { INTEGRATION_IDEMPOTENCY_KEY_PATTERN } from "@/modules/integration/useca
 import { NOT_CANCELLABLE_STATUSES } from "@/shared/integration/cancel-delivery-rules";
 import { DATABASE_RETRY_AFTER_SECONDS } from "@/shared/errors/database-unavailable";
 
+import { SERVICE_BUSY_DESCRIPTION } from "./database-busy-documentation";
 import { integrationResponses } from "./integration-documentation";
 import {
   publicBusinessRateLimitResponse,
@@ -175,7 +176,7 @@ const integrationCancelResponses = {
   // The route's own words stand alone: the transform does not add the keyed
   // routes' generic 503, which speaks of the Idempotency-Key (mergeResponse).
   unavailable: publicServiceUnavailableResponse.describe(
-    `SERVICE_UNAVAILABLE: o banco de dados está indisponível por instantes. Transitório: espere o \`retry-after\` (${DATABASE_RETRY_AFTER_SECONDS} s) e repita. Um 503 não garante que nada foi gravado, e repetir é seguro do mesmo jeito: uma entrega já cancelada responde 200 com \`idempotent-replayed: true\`. O corpo traz \`requestId\`.`,
+    `SERVICE_UNAVAILABLE: o banco de dados está indisponível por instantes. Transitório: espere o \`retry-after\` (${DATABASE_RETRY_AFTER_SECONDS} s) e repita. ${SERVICE_BUSY_DESCRIPTION} Um 503 não garante que nada foi gravado, e repetir é seguro do mesmo jeito: uma entrega já cancelada responde 200 com \`idempotent-replayed: true\`. O corpo traz \`requestId\`.`,
   ),
 };
 

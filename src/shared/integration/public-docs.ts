@@ -32,6 +32,7 @@ import {
 import { MAX_API_KEY_AUTH_FAILURES_PER_MINUTE } from "./integration-rate-guard";
 
 import { DATABASE_RETRY_AFTER_SECONDS } from "@/shared/errors/database-unavailable";
+import { SERVICE_BUSY_RETRY_AFTER_SECONDS } from "@/shared/errors/database-error-map";
 
 import {
   SCALAR_SCRIPT,
@@ -285,8 +286,8 @@ const PUBLIC_INFO = {
     "exceções de texto fixo ou técnico: no 400 `MALFORMED_REQUEST` é o motivo",
     "do leitor de JSON, em inglês; no 500 `INTERNAL_ERROR` é",
     "`Internal server error`. Um 500 `INTERNAL_ERROR` e um",
-    "503 `SERVICE_UNAVAILABLE` trazem `requestId`. Toda resposta, de sucesso ou",
-    "de erro, traz o cabeçalho",
+    "503 `SERVICE_UNAVAILABLE` ou `SERVICE_BUSY` trazem `requestId`. Toda",
+    "resposta, de sucesso ou de erro, traz o cabeçalho",
     "`x-request-id`: é o que o suporte pede para encontrar uma chamada.",
     "",
     "## Limites",
@@ -299,7 +300,9 @@ const PUBLIC_INFO = {
     "minuto. Passar de qualquer teto responde 429 `RATE_LIMITED` com o",
     "cabeçalho `retry-after`, em segundos: espere esse tempo antes de repetir.",
     "Com o banco de dados indisponível por instantes, a resposta é 503",
-    `\`SERVICE_UNAVAILABLE\` com \`retry-after\` de ${DATABASE_RETRY_AFTER_SECONDS} s. Repita com espera`,
+    `\`SERVICE_UNAVAILABLE\` com \`retry-after\` de ${DATABASE_RETRY_AFTER_SECONDS} s; com ele ocupado (um registro`,
+    "disputado por outro pedido, ou uma consulta que passou do tempo), 503",
+    `\`SERVICE_BUSY\` com \`retry-after\` de ${SERVICE_BUSY_RETRY_AFTER_SECONDS} s. Repita com espera`,
     "crescente, nunca em laço.",
     "",
     "## Webhooks",

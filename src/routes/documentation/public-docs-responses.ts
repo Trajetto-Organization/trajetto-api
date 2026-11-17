@@ -2,6 +2,8 @@ import { z } from "zod";
 
 import { DATABASE_RETRY_AFTER_SECONDS } from "@/shared/errors/database-unavailable";
 
+import { SERVICE_BUSY_DESCRIPTION } from "./database-busy-documentation";
+
 declare module "fastify" {
   interface FastifySchema {
     /**
@@ -89,14 +91,14 @@ const publicInternalErrorResponse = z
 
 const publicServiceUnavailableResponse = z
   .object({
-    code: z.enum(["SERVICE_UNAVAILABLE"]),
+    code: z.enum(["SERVICE_UNAVAILABLE", "SERVICE_BUSY"]),
     message: z.string(),
     requestId: z
       .string()
       .describe("O mesmo valor do cabeçalho `x-request-id`."),
   })
   .describe(
-    `SERVICE_UNAVAILABLE: o banco de dados está indisponível por instantes. Transitório: espere o \`retry-after\` (${DATABASE_RETRY_AFTER_SECONDS} s) e repita. Um 503 não garante que nada foi gravado: numa escrita que pede \`Idempotency-Key\`, repita com o mesmo valor. O corpo traz \`requestId\`.`,
+    `SERVICE_UNAVAILABLE: o banco de dados está indisponível por instantes. Transitório: espere o \`retry-after\` (${DATABASE_RETRY_AFTER_SECONDS} s) e repita. ${SERVICE_BUSY_DESCRIPTION} Um 503 não garante que nada foi gravado: numa escrita que pede \`Idempotency-Key\`, repita com o mesmo valor. O corpo traz \`requestId\`.`,
   );
 
 export {

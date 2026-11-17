@@ -163,6 +163,7 @@ describe("AUTH_BUSY (bcrypt gate)", () => {
       "AUTH_BUSY",
       "AUTH_SESSION_UNAVAILABLE",
       "SERVICE_UNAVAILABLE",
+      "SERVICE_BUSY",
     ]);
   });
 });
@@ -306,7 +307,7 @@ describe("merged code lists", () => {
     );
     // A code both sides list appears once.
     expect(responses["503"].properties.code.description).toBe(
-      "Um destes: SERVICE_UNAVAILABLE, AUTH_SESSION_UNAVAILABLE.",
+      "Um destes: SERVICE_UNAVAILABLE, AUTH_SESSION_UNAVAILABLE, SERVICE_BUSY.",
     );
   });
 });

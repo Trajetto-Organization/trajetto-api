@@ -13,6 +13,7 @@ import { isUpgradeExempt } from "@/shared/http/client-version";
 import { MAX_API_KEY_AUTH_FAILURES_PER_MINUTE } from "@/shared/integration/integration-rate-guard";
 import { BUSINESS_API_RATE_PER_MINUTE } from "@/shared/integration/api-key-rules";
 import { DATABASE_RETRY_AFTER_SECONDS } from "@/shared/errors/database-unavailable";
+import { SERVICE_BUSY_DESCRIPTION } from "./database-busy-documentation";
 import { EXPORTS_PER_REPLICA } from "@/shared/services/export/export-slots";
 
 import { ndjsonDocFor, type NdjsonDoc } from "./ndjson";
@@ -655,13 +656,13 @@ function unavailableSchema(response: JsonSchema): JsonSchema {
         ...(Array.isArray(own?.enum) ? { enum: own.enum } : {}),
         description:
           codeDescriptionOf(response) ??
-          "SERVICE_UNAVAILABLE (banco indisponível) ou o código da dependência que caiu.",
+          "SERVICE_UNAVAILABLE (banco indisponível), SERVICE_BUSY (banco ocupado) ou o código da dependência que caiu.",
       },
       message: MESSAGE_PROPERTY,
       requestId: {
         ...REQUEST_ID_PROPERTY,
         description:
-          "Só em SERVICE_UNAVAILABLE: o mesmo valor do cabeçalho `x-request-id`.",
+          "Só em SERVICE_UNAVAILABLE e SERVICE_BUSY: o mesmo valor do cabeçalho `x-request-id`.",
       },
     },
     required: ["code", "message", ...(requiresRequestId ? ["requestId"] : [])],
@@ -953,8 +954,8 @@ function openapiTransform(input: TransformInput): {
       responses,
       "503",
       errorBody(
-        "AUTH_SESSION_UNAVAILABLE: não foi possível verificar a sessão agora (banco indisponível). SERVICE_UNAVAILABLE: o banco caiu depois da sessão conferida (traz `requestId`). Transitório: espere o `retry-after` e repita; numa escrita, com o mesmo `Idempotency-Key`. NÃO é logout — não descarte a sessão.",
-        ["AUTH_SESSION_UNAVAILABLE", "SERVICE_UNAVAILABLE"],
+        `AUTH_SESSION_UNAVAILABLE: não foi possível verificar a sessão agora (banco indisponível). SERVICE_UNAVAILABLE: o banco caiu depois da sessão conferida (traz \`requestId\`). ${SERVICE_BUSY_DESCRIPTION} Transitório: espere o \`retry-after\` e repita; numa escrita, com o mesmo \`Idempotency-Key\`. NÃO é logout — não descarte a sessão.`,
+        ["AUTH_SESSION_UNAVAILABLE", "SERVICE_UNAVAILABLE", "SERVICE_BUSY"],
         { "retry-after": RETRY_AFTER_HEADER },
       ),
     );
@@ -1006,8 +1007,8 @@ function openapiTransform(input: TransformInput): {
       responses,
       "503",
       errorBody(
-        `SERVICE_UNAVAILABLE: o banco de dados está indisponível por instantes. Transitório: espere o \`retry-after\` (${DATABASE_RETRY_AFTER_SECONDS} s) e repita. Um 503 não garante que nada foi gravado: numa escrita que pede \`Idempotency-Key\`, repita com o mesmo valor. O corpo traz \`requestId\`.`,
-        ["SERVICE_UNAVAILABLE"],
+        `SERVICE_UNAVAILABLE: o banco de dados está indisponível por instantes. Transitório: espere o \`retry-after\` (${DATABASE_RETRY_AFTER_SECONDS} s) e repita. ${SERVICE_BUSY_DESCRIPTION} Um 503 não garante que nada foi gravado: numa escrita que pede \`Idempotency-Key\`, repita com o mesmo valor. O corpo traz \`requestId\`.`,
+        ["SERVICE_UNAVAILABLE", "SERVICE_BUSY"],
         { "retry-after": RETRY_AFTER_HEADER },
       ),
     );

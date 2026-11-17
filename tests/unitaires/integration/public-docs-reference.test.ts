@@ -3,6 +3,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { APP_BOOT_TIMEOUT_MS } from "../../support/app-boot";
 
 import { DATABASE_RETRY_AFTER_SECONDS } from "@/shared/errors/database-unavailable";
+import { SERVICE_BUSY_RETRY_AFTER_SECONDS } from "@/shared/errors/database-error-map";
 import {
   API_SCOPES,
   BUSINESS_API_RATE_PER_MINUTE,
@@ -218,12 +219,21 @@ describe("what every answer carries", () => {
     for (const { id, operation } of keyed()) {
       const schema = jsonSchema(operation.responses["503"]);
 
+      // SERVICE_BUSY: a lock wait or a statement past its ceiling, in the
+      // outage's shape (plano-escala U-13).
       expect(schema?.properties?.code?.enum, id).toEqual([
         "SERVICE_UNAVAILABLE",
+        "SERVICE_BUSY",
       ]);
       expect(schema?.required, id).toContain("requestId");
       expect(operation.responses["503"].description, id).toContain(
         `${DATABASE_RETRY_AFTER_SECONDS} s`,
+      );
+      expect(operation.responses["503"].description, id).toContain(
+        `SERVICE_BUSY: o banco de dados está ocupado`,
+      );
+      expect(operation.responses["503"].description, id).toContain(
+        `${SERVICE_BUSY_RETRY_AFTER_SECONDS} s`,
       );
     }
   });

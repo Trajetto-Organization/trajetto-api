@@ -152,6 +152,7 @@ async function publicRoutes(app: FastifyInstance) {
               "PROOF_SIGNING_FAILED",
               "STORAGE_UNAVAILABLE",
               "SERVICE_UNAVAILABLE",
+              "SERVICE_BUSY",
             ],
           ),
         },

@@ -289,8 +289,8 @@ const proofDocumentResponses = {
    * down is the error handler's 503.
    */
   verifyProofUnavailable: codedRefusal(
-    "Não foi possível conferir agora. STORAGE_UNAVAILABLE: o armazenamento não respondeu ao ler o arquivo — o documento pode estar íntegro, e isso nunca é respondido como `intact: false`. SERVICE_UNAVAILABLE: o banco de dados está indisponível por instantes. Transitório: espere o `retry-after` e repita.",
-    ["STORAGE_UNAVAILABLE", "SERVICE_UNAVAILABLE"],
+    "Não foi possível conferir agora. STORAGE_UNAVAILABLE: o armazenamento não respondeu ao ler o arquivo — o documento pode estar íntegro, e isso nunca é respondido como `intact: false`. SERVICE_UNAVAILABLE: o banco de dados está indisponível por instantes. SERVICE_BUSY: o banco de dados está ocupado e a espera passou do limite. Transitório: espere o `retry-after` e repita.",
+    ["STORAGE_UNAVAILABLE", "SERVICE_UNAVAILABLE", "SERVICE_BUSY"],
   ),
 
   internalServerError: z.object({

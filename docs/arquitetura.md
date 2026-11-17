@@ -4081,6 +4081,24 @@ agora nomeia o **índice** (`driver_businessId_cpf_key`) em
 isso os índices parciais da rota são lidos por `active_vehicle` e
 `active_delivery`.
 
+**Banco ocupado vira 503 `SERVICE_BUSY`, não 500** (plano de escala, U-13):
+a espera por um lock que passou do `lock_timeout` (55P03; vale também para
+os `pg_advisory_xact_lock` que serializam os códigos, as cotas e os quadros
+de uma empresa) e a instrução cancelada pelo `statement_timeout` (57014) não
+são defeito nem queda: o servidor está de pé e o mesmo pedido passa daqui a
+pouco. O tratador de erro responde 503 com `retry-after: 2`, a frase "O
+sistema está ocupado; tente de novo em instantes." e o `requestId`, no
+formato do `SERVICE_UNAVAILABLE`. Nada é repetido no servidor: o Postgres
+desfez a transação, e repetir uma escrita é do cliente (com a
+`Idempotency-Key` onde a rota pede). O mapa é
+`src/shared/errors/database-error-map.ts`, que confia só nas classes do
+Prisma e no `DriverAdapterError` cru do COMMIT. O log tem mensagem própria
+(`Database busy while processing request`): `warn` para o lock, `error` para
+o `statement_timeout`, que ainda pede investigação (um plano ruim, um índice
+que falta). Provas: `tests/unitaires/http/database-error-map.test.ts` e
+`tests/E2E/lock-timeout-mapping.test.ts` (uma disputa por chave de advisory
+lock, pela rota de verdade).
+
 **Conflito de serialização no COMMIT chega sem classe do Prisma**: quando o
 Postgres recusa o COMMIT de uma `$transaction` interativa com 40001 — o caso
 comum do isolamento serializável entre duas transações que só leem e inserem,

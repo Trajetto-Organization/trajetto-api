@@ -164,8 +164,10 @@ describe("the refusals of the public API (DOCS-04)", () => {
         response[status].description;
     };
 
+    // Both codes of the hook (SERVICE_BUSY since plano-escala U-13), in the
+    // route's own words.
     const own =
-      "SERVICE_UNAVAILABLE: o banco caiu. Repetir é seguro sem chave nenhuma.";
+      "SERVICE_UNAVAILABLE: o banco caiu. SERVICE_BUSY: o banco está ocupado. Repetir é seguro sem chave nenhuma.";
     const described = keyedRoute({
       503: z.object({ code: z.string(), message: z.string() }).describe(own),
       429: z

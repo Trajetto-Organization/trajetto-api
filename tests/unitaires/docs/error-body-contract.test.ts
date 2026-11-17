@@ -71,6 +71,26 @@ beforeAll(async () => {
     );
   });
 
+  // A lock wait past lock_timeout (plano-escala U-13): 503 SERVICE_BUSY,
+  // in the outage's shape.
+  app.get(`${PROBE}/database-busy`, { schema: hidden }, async () => {
+    throw new Prisma.PrismaClientKnownRequestError("Raw query failed.", {
+      code: "P2010",
+      clientVersion: "test",
+      meta: {
+        driverAdapterError: Object.assign(new Error("postgres"), {
+          name: "DriverAdapterError",
+          cause: {
+            kind: "postgres",
+            originalCode: "55P03",
+            code: "55P03",
+            originalMessage: "canceling statement due to lock timeout",
+          },
+        }),
+      },
+    });
+  });
+
   // With the diagnostic the log reads (ADDRESS_SEARCH_DISABLED): never
   // in the body.
   app.get(`${PROBE}/busy`, { schema: hidden }, async () => {
@@ -264,6 +284,10 @@ describe("the published error schemas (strict)", () => {
       method: "GET",
       url: `${PROBE}/database-down`,
     });
+    await capture("databaseBusy", {
+      method: "GET",
+      url: `${PROBE}/database-busy`,
+    });
     await capture("busy", { method: "GET", url: `${PROBE}/busy` });
     await capture("invalidKey", {
       method: "GET",
@@ -286,6 +310,7 @@ describe("the published error schemas (strict)", () => {
       "UNIQUE_CONFLICT",
     );
     expect(bodies.databaseDown.status).toBe(503);
+    expect(bodies.databaseBusy.status).toBe(503);
     expect(bodies.busy.status).toBe(503);
     expect(bodies.invalidKey.status).toBe(401);
 
@@ -294,7 +319,10 @@ describe("the published error schemas (strict)", () => {
       expect(typeof captured.body.code).toBe("string");
     }
     expect(bodies.databaseDown.headers["retry-after"]).toBeDefined();
+    expect(bodies.databaseBusy.headers["retry-after"]).toBe("2");
     expect(bodies.busy.headers["retry-after"]).toBeDefined();
+    expect(bodies.databaseBusy.body.code).toBe("SERVICE_BUSY");
+    expect(typeof bodies.databaseBusy.body.requestId).toBe("string");
     // The diagnostic is for the log: the body is the code and the message.
     expect(bodies.busy.body).toEqual({
       code: "SERVICE_BUSY",
@@ -318,13 +346,23 @@ describe("the published error schemas (strict)", () => {
     if (status === 500) return [bodies.internal.body];
 
     if (status === 503) {
-      // The keyed routes can only be refused by the outage (enum); the
-      // session routes also by a dependency's own 503.
-      const onlyOutage = schema.properties?.code?.enum?.length === 1;
+      // The keyed routes can only be refused by the database (an enum of
+      // the outage and the busy answer, both with requestId); the session
+      // routes also by a dependency's own 503.
+      const enumerated: unknown[] | undefined = schema.properties?.code?.enum;
+      const onlyDatabase =
+        Array.isArray(enumerated) &&
+        enumerated.every(
+          (code) => code === "SERVICE_UNAVAILABLE" || code === "SERVICE_BUSY",
+        );
 
-      return onlyOutage
-        ? [bodies.databaseDown.body]
-        : [bodies.databaseDown.body, bodies.busy.body];
+      return onlyDatabase
+        ? [bodies.databaseDown.body, bodies.databaseBusy.body]
+        : [
+            bodies.databaseDown.body,
+            bodies.databaseBusy.body,
+            bodies.busy.body,
+          ];
     }
 
     if (status >= 400 && status < 500) {

@@ -75,6 +75,7 @@ import {
   DATABASE_RETRY_AFTER_SECONDS,
   isDatabaseUnavailable,
 } from "./shared/errors/database-unavailable";
+import { databaseBusyAnswer } from "./shared/errors/database-error-map";
 
 import {
   endRequestContext,
@@ -747,6 +748,17 @@ app.setErrorHandler((thrown, request, reply) => {
     isDatabaseUnavailable(error);
 
   /**
+   * The database is up but busy: a lock wait or a statement ran past its
+   * ceiling (lock_timeout, also on the advisory locks; statement_timeout).
+   * It used to be the 500 below; it is a 503 with a short Retry-After now
+   * (plano-escala U-13, database-error-map.ts).
+   */
+  const databaseBusy =
+    !isAppError && !isValidationError && !isBodyTooLarge && !isDatabaseDown
+      ? databaseBusyAnswer(error)
+      : null;
+
+  /**
    * A unique index or a foreign key the use case did not map (batch of
    * 14/11/2026). Both are answers about the data — the loser of a race for
    * the same e-mail, a delete that met a reference committed after the
@@ -755,7 +767,11 @@ app.setErrorHandler((thrown, request, reply) => {
    * (prisma-conflict.ts); the use cases that know better map their own.
    */
   const databaseConflict =
-    !isAppError && !isValidationError && !isBodyTooLarge && !isDatabaseDown
+    !isAppError &&
+    !isValidationError &&
+    !isBodyTooLarge &&
+    !isDatabaseDown &&
+    !databaseBusy
       ? prismaConflictFloor(
           error,
           request.method === "DELETE" ? "delete" : "write",
@@ -768,7 +784,7 @@ app.setErrorHandler((thrown, request, reply) => {
       ? 400
       : isAppError
         ? error.statusCode
-        : isDatabaseDown
+        : isDatabaseDown || databaseBusy
           ? 503
           : databaseConflict
             ? databaseConflict.statusCode
@@ -816,6 +832,22 @@ app.setErrorHandler((thrown, request, reply) => {
       },
       "Unmapped database conflict answered as 409",
     );
+  } else if (databaseBusy) {
+    // A message of its own, so an alert on bugs does not page for
+    // contention. A lock wait that ran out is load: warn. A statement that
+    // ran into its ceiling is still worth a look (a plan gone bad, a
+    // missing index), so that one stays at error level.
+    const busyContext = {
+      ...logContext,
+      sqlState: databaseBusy.sqlState,
+      reason: databaseBusy.reason,
+    };
+
+    if (databaseBusy.reason === "statement_timeout") {
+      request.log.error(busyContext, "Database busy while processing request");
+    } else {
+      request.log.warn(busyContext, "Database busy while processing request");
+    }
   } else if (isDatabaseDown || isSessionCheckOutage) {
     // Still error level — it is ours — but a message of its own, so an alert
     // on bugs does not page for an outage the readiness probe already sees.
@@ -903,6 +935,23 @@ app.setErrorHandler((thrown, request, reply) => {
       reply.header("x-error-code", databaseConflict.code),
       databaseConflict.statusCode,
       { code: databaseConflict.code, message: databaseConflict.message },
+    );
+  }
+
+  if (databaseBusy) {
+    // Postgres rolled the transaction back; nothing is retried here. The
+    // body has the outage's shape (requestId included), so a client that
+    // reads the published 503 needs nothing new to handle it.
+    return sendError(
+      reply
+        .header("retry-after", String(databaseBusy.retryAfterSeconds))
+        .header("x-error-code", databaseBusy.code),
+      503,
+      {
+        code: databaseBusy.code,
+        message: databaseBusy.message,
+        requestId: request.id,
+      },
     );
   }
 
