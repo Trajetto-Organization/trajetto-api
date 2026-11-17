@@ -150,12 +150,35 @@ function secondsParameter(url: URL, name: string): number | undefined {
 }
 
 /**
+ * A pool's own statement ceiling, over the URL's (plano-escala F3-16): the
+ * read bulkhead's 10 s and the batch pool's 30 min, on the same URL as the
+ * runtime until each gets a login of its own.
+ */
+interface StatementCeiling {
+  /** Sent as `-c statement_timeout=<ms>` after the URL's own options. */
+  statementTimeoutMs: number;
+}
+
+/**
+ * How much longer than the statement ceiling the client waits for an
+ * answer: Postgres cancels the statement first and says so, and only a
+ * connection that went silent past that is cut by the client.
+ */
+const QUERY_TIMEOUT_MARGIN_MS = 30_000;
+
+/**
  * The pool settings a database URL asks for. An empty URL gives pg's
  * defaults (the environment check of src/env refuses to boot without one;
  * this only keeps a module import from throwing in a script or a test).
+ *
+ * With a `ceiling`, the pool's statements get that statement_timeout
+ * instead of the URL's (Postgres applies the last `-c` of a name), and a
+ * `socket_timeout` shorter than it is raised past it: a 60 s socket
+ * timeout would cut the batch pool's half-hour VACUUM at one minute.
  */
 function poolSettingsFrom(
   databaseUrl: string | undefined,
+  ceiling?: StatementCeiling,
 ): DatabasePoolSettings {
   if (!databaseUrl) {
     return {
@@ -196,10 +219,19 @@ function poolSettingsFrom(
   // In the connection string, not in the Pool config: pg lets a URL's
   // `options` replace the config's, so this is the one place it cannot be
   // lost (sessionOptions).
+  const options = sessionOptions(url.searchParams.get("options"));
+
   url.searchParams.set(
     "options",
-    sessionOptions(url.searchParams.get("options")),
+    ceiling
+      ? `${options} -c statement_timeout=${Math.round(ceiling.statementTimeoutMs)}`
+      : options,
   );
+
+  const queryTimeoutMs =
+    socketTimeout === undefined || socketTimeout === 0
+      ? undefined
+      : Math.round(socketTimeout * 1000);
 
   return {
     connectionString: url.toString(),
@@ -210,14 +242,17 @@ function poolSettingsFrom(
     // 0 is "no limit" in Prisma 6; pg reads 0 the same way, but undefined is
     // clearer in the config dump.
     queryTimeoutMs:
-      socketTimeout === undefined || socketTimeout === 0
-        ? undefined
-        : Math.round(socketTimeout * 1000),
+      ceiling && queryTimeoutMs !== undefined
+        ? Math.max(
+            queryTimeoutMs,
+            Math.round(ceiling.statementTimeoutMs) + QUERY_TIMEOUT_MARGIN_MS,
+          )
+        : queryTimeoutMs,
     // pg reads 0 as "never close an idle connection", Prisma 6 the same.
     idleTimeoutMs: Math.round(idleLifetime * 1000),
     maxLifetimeSeconds: Math.round(maxLifetime),
   };
 }
 
-export { PRISMA_ONLY_PARAMETERS, poolSettingsFrom };
-export type { DatabasePoolSettings };
+export { PRISMA_ONLY_PARAMETERS, QUERY_TIMEOUT_MARGIN_MS, poolSettingsFrom };
+export type { DatabasePoolSettings, StatementCeiling };

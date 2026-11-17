@@ -3957,6 +3957,25 @@ sem FIN nem RST), `tests/E2E/runtime-database-timeouts.test.ts`,
 `tests/E2E/pool-pressure.test.ts` e
 `tests/unitaires/lifecycle/database-dead-connection-params.test.ts`.
 
+**Os dois pools de lado** (plano de escala, F3-16): `infra/database.ts`
+exporta, além do cliente da aplicação, o `databaseRead` (as leituras pesadas,
+em `DATABASE_READ_URL`, ou na `DATABASE_URL` sem ela; 3 conexões, 10 s por
+statement) e o `databaseBatch` (a manutenção do cron: expurgos, partições,
+métricas pesadas do banco e o `pg_stat_statements`, em `BATCH_DATABASE_URL`,
+ou na `DATABASE_URL`; 3 conexões, 30 min por statement, URL sempre direta).
+Cada um é um pool próprio, para o que roda nele não tomar as conexões das
+requisições. Os dois são preguiçosos: o cliente nasce no primeiro uso e o pool
+só abre conexão para um statement, fechando-a depois do tempo ocioso da URL;
+sem as variáveis, são no máximo 3 conexões a mais por pool, e só enquanto um
+deles trabalha. O teto vai no `options` depois do da URL (vale o último
+`-c`), e um `socket_timeout` menor que ele sobe para o teto mais 30 s. Quem
+usa cada um é uma lista fechada, na guarda
+`tests/unitaires/database/database-read-guard.test.ts`: o `databaseRead`
+nunca num middleware, na admissão de socket, num claim de fila, numa chave
+de idempotência ou num CAS, e o `databaseBatch` só nos crons e no que eles
+chamam. Provas: `tests/unitaires/database/pool-config.test.ts` e
+`tests/E2E/runtime-database-pools.test.ts`.
+
 **A sessão abre sempre em UTC**: as colunas `DateTime` do schema são
 `timestamp(3)` sem fuso, gravadas em UTC, e o SQL cru das filas e das
 métricas as compara com `now()` (`"availableAt" <= now()`,

@@ -25,6 +25,8 @@ const SECRET_ENV_KEYS = [
   "MAP_TILE_URL_DARK",
   // Connection strings carry the password.
   "DATABASE_URL",
+  "DATABASE_READ_URL",
+  "BATCH_DATABASE_URL",
   "REDIS_URL",
   "JWT_SECRET",
   "JWT_SECRET_REFRESH_TOKEN",

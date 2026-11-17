@@ -8,6 +8,8 @@ import {
   PRISMA_ONLY_PARAMETERS,
   poolSettingsFrom,
 } from "@/shared/database/pool-config";
+import { envSchema } from "@/schemas/env-schema";
+import { definedEnv } from "@/schemas/env-schema/defined-env";
 import { probeUrl } from "@/shared/health/readiness-probe";
 
 import { fakePostgres } from "../../support/fake-postgres";
@@ -234,5 +236,105 @@ describe("a malformed parameter", () => {
 
   it("an empty URL gives the defaults, so importing a module never throws", () => {
     expect(poolSettingsFrom(undefined).connectionString).toBe("");
+  });
+});
+
+/**
+ * The side pools' own statement ceilings (plano-escala F3-16): the read
+ * bulkhead's 10 s and the batch pool's 30 min, on the runtime's URL until
+ * each has a login of its own. Postgres applies the LAST `-c` of a name, so
+ * the pool's ceiling goes after the URL's; and the URL's 60 s
+ * socket_timeout would cut the batch pool's half-hour VACUUM at one
+ * minute, so a ceiling above it raises the client's wait past it.
+ */
+describe("a side pool's statement ceiling", () => {
+  const runtime = productionDatabaseUrl("DATABASE_URL").toString();
+
+  it("goes after the URL's own statement_timeout, which it overrules", () => {
+    const read = poolSettingsFrom(runtime, { statementTimeoutMs: 10_000 });
+
+    expect(new URL(read.connectionString).searchParams.get("options")).toBe(
+      "-c statement_timeout=30000 -c lock_timeout=5000 -c idle_in_transaction_session_timeout=60000 -c TimeZone=UTC -c statement_timeout=10000",
+    );
+
+    // Under the socket timeout: Postgres cancels first, the client waits.
+    expect(read.queryTimeoutMs).toBe(60_000);
+  });
+
+  it("raises the client's wait past a ceiling longer than socket_timeout", () => {
+    const batch = poolSettingsFrom(runtime, {
+      statementTimeoutMs: 30 * 60_000,
+    });
+
+    expect(batch.queryTimeoutMs).toBe(30 * 60_000 + 30_000);
+    expect(new URL(batch.connectionString).searchParams.get("options")).toMatch(
+      / -c statement_timeout=1800000$/,
+    );
+  });
+
+  it("leaves a URL with no options or no socket_timeout as the ceiling alone", () => {
+    const bare = poolSettingsFrom(
+      "postgresql://u:p@db.example.com:5432/app?schema=public",
+      { statementTimeoutMs: 10_000 },
+    );
+
+    expect(new URL(bare.connectionString).searchParams.get("options")).toBe(
+      "-c TimeZone=UTC -c statement_timeout=10000",
+    );
+    expect(bare.queryTimeoutMs).toBeUndefined();
+  });
+
+  it("changes nothing without a ceiling", () => {
+    expect(poolSettingsFrom(runtime)).toEqual(
+      poolSettingsFrom(runtime, undefined),
+    );
+  });
+});
+
+/**
+ * The side pools' URLs in the environment (F3-16). The batch pool runs the
+ * partition job's DETACH … CONCURRENTLY and session SET ROLE (F3-20), which
+ * PgBouncer in transaction mode breaks in silence: a URL through it
+ * refuses the boot instead. Empty is absent: both fall back to
+ * DATABASE_URL.
+ */
+describe("the side pools' URLs in the environment", () => {
+  const BASE = {
+    NODE_ENV: "development",
+    REDIS_URL: "redis://localhost:6379",
+    HTTP_REQUEST: "http://localhost:3000",
+    JWT_SECRET: "a".repeat(32),
+    JWT_SECRET_REFRESH_TOKEN: "b".repeat(32),
+    MASTER_USER_EMAIL: "master@example.com",
+    MASTER_USER_INITIAL_PASSWORD: "x",
+  };
+  const DIRECT =
+    "postgresql://trajetto_batch:secret@db.example.com:5432/app?schema=public";
+
+  const parse = (overrides: Record<string, string>) =>
+    envSchema.safeParse(definedEnv({ ...BASE, ...overrides }));
+
+  it("are optional, empty included", () => {
+    const parsed = parse({ DATABASE_READ_URL: "", BATCH_DATABASE_URL: "" });
+
+    expect(parsed.success).toBe(true);
+    expect(parsed.data?.DATABASE_READ_URL).toBeUndefined();
+    expect(parsed.data?.BATCH_DATABASE_URL).toBeUndefined();
+  });
+
+  it("take a direct postgres URL", () => {
+    expect(
+      parse({ DATABASE_READ_URL: DIRECT, BATCH_DATABASE_URL: DIRECT }).success,
+    ).toBe(true);
+  });
+
+  it("refuse anything else, and a batch URL through PgBouncer", () => {
+    expect(parse({ DATABASE_READ_URL: "redis://x:6379" }).success).toBe(false);
+    expect(
+      parse({ BATCH_DATABASE_URL: DIRECT.replace(":5432", ":6432") }).success,
+    ).toBe(false);
+    expect(
+      parse({ BATCH_DATABASE_URL: `${DIRECT}&pgbouncer=true` }).success,
+    ).toBe(false);
   });
 });

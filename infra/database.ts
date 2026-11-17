@@ -1,7 +1,10 @@
 import type pg from "pg";
 import type { PrismaClient } from "@prisma/client";
 
-import { createDatabaseClient } from "../src/shared/database/database-client";
+import {
+  createDatabaseClient,
+  type DatabaseConnection,
+} from "../src/shared/database/database-client";
 
 /**
  * How long an interactive transaction may wait for a connection, and run.
@@ -65,8 +68,109 @@ const prisma = connection.client;
 /** The pg Pool behind the client: /health/metrics and the minute log line. */
 const databasePool = connection.pool;
 
+/**
+ * The two side pools (plano-escala F3-16, section 2.4 of the plan), each on
+ * its own small pool so that what it runs cannot take the connections the
+ * requests need:
+ *
+ *  - databaseRead, the bulkhead of the heavy reads (exports, long lists):
+ *    DATABASE_READ_URL, else DATABASE_URL; 3 connections, 10 s a
+ *    statement. From wave 17 its URL may point at the standby. Who may use
+ *    it is a closed list (tests/unitaires/database/database-read-guard.test.ts):
+ *    never a middleware, a socket admission, a queue claim, an idempotency
+ *    key or a compare-and-set, which must read the primary's latest write.
+ *  - databaseBatch, the maintenance (purges, partitions, the heavy
+ *    metrics, pg_stat_statements): BATCH_DATABASE_URL, else DATABASE_URL;
+ *    3 connections, 30 min a statement, a direct URL (never PgBouncer).
+ *    After the cut of the database roles it is the trajetto_batch login,
+ *    the one with pg_read_all_stats and the partition owner's role.
+ *
+ * Lazy twice over: the client is only built on the first use (a
+ * PrismaClient is not free, and most processes never touch one of them),
+ * and its pool opens a connection only for a statement and closes it after
+ * the URL's idle lifetime. With neither URL set, at most 3 more
+ * connections per side pool, and only while one is in use.
+ *
+ * The `-read`/`-batch` suffix of application_name comes with F3-02.
+ */
+const READ_POOL = { max: 3, statementTimeoutMs: 10_000 } as const;
+const BATCH_POOL = { max: 3, statementTimeoutMs: 30 * 60_000 } as const;
+
+/** A URL from the environment; empty counts as absent. */
+function environmentUrl(name: string): string | undefined {
+  const value = process.env[name]?.trim();
+
+  return value ? value : undefined;
+}
+
+/** A PrismaClient built on its first property access. */
+function lazyClient(build: () => DatabaseConnection<PrismaClient>): {
+  client: PrismaClient;
+  pool: () => pg.Pool | null;
+} {
+  let connection: DatabaseConnection<PrismaClient> | null = null;
+  const current = () => (connection ??= build());
+
+  const client = new Proxy({} as PrismaClient, {
+    get(_target, property) {
+      const target = current().client;
+      const value = Reflect.get(target, property, target) as unknown;
+
+      // The client's own methods ($queryRaw, $transaction…) need it as
+      // `this`; a model delegate (`.user`) is returned as it is.
+      return typeof value === "function" &&
+        typeof property === "string" &&
+        property.startsWith("$")
+        ? value.bind(target)
+        : value;
+    },
+  });
+
+  return { client, pool: () => connection?.pool() ?? null };
+}
+
+function sidePool(
+  url: () => string | undefined,
+  pool: { max: number; statementTimeoutMs: number },
+) {
+  return lazyClient(() => {
+    const { client, pool: current } = createDatabaseClient(
+      { log: [], transactionOptions: TRANSACTION_OPTIONS },
+      {
+        url,
+        overrides: { max: pool.max },
+        ceiling: { statementTimeoutMs: pool.statementTimeoutMs },
+      },
+    );
+
+    return { client: client as unknown as PrismaClient, pool: current };
+  });
+}
+
+const read = sidePool(() => environmentUrl("DATABASE_READ_URL"), READ_POOL);
+const batch = sidePool(() => environmentUrl("BATCH_DATABASE_URL"), BATCH_POOL);
+
+/** The heavy reads' bulkhead: a closed list of callers only. */
+const databaseRead = read.client;
+
+/** The maintenance pool: crons, partitions, heavy metrics. */
+const databaseBatch = batch.client;
+
+/** The pools behind them, null until the first statement. */
+const databaseReadPool = read.pool;
+const databaseBatchPool = batch.pool;
+
 export default prisma;
-export { TRANSACTION_OPTIONS, databasePool };
+export {
+  BATCH_POOL,
+  READ_POOL,
+  TRANSACTION_OPTIONS,
+  databaseBatch,
+  databaseBatchPool,
+  databasePool,
+  databaseRead,
+  databaseReadPool,
+};
 
 if (process.env.NODE_ENV !== "production") {
   globalForPrisma.prisma = prisma;

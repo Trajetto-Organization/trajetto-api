@@ -42,6 +42,32 @@ import {
 /** 32 characters of `openssl rand -base64` are ~192 bits: out of offline reach. */
 const JWT_SECRET_MIN_LENGTH = 32;
 
+/** A postgres:// or postgresql:// URL that parses. */
+function isPostgresUrl(value: string): boolean {
+  try {
+    return /^postgres(ql)?:$/.test(new URL(value).protocol);
+  } catch {
+    return false;
+  }
+}
+
+const POSTGRES_URL_MESSAGE =
+  "precisa ser uma URL postgresql:// (o mesmo formato da DATABASE_URL)";
+
+/** A URL through PgBouncer: its port, or Prisma's pgbouncer=true. */
+function throughPgBouncer(value: string): boolean {
+  try {
+    const url = new URL(value);
+
+    return (
+      url.port === "6432" ||
+      url.searchParams.get("pgbouncer")?.toLowerCase() === "true"
+    );
+  } catch {
+    return false;
+  }
+}
+
 /** A node hostname, a slot number or node id, a service name: no spaces. */
 const SWARM_LABEL = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 
@@ -96,6 +122,30 @@ const envSchema = z
     HEALTHCHECK_FAIL_URL: z.preprocess(
       (value) => (value === "" ? undefined : value),
       z.string().url().optional(),
+    ),
+
+    // The side pools of infra/database.ts (plano-escala F3-16): the heavy
+    // reads' bulkhead and the maintenance pool, 3 connections each. Unset,
+    // both use DATABASE_URL, as everything did before. They carry a
+    // password: never logged (logger.ts censors them by name). The batch
+    // URL must reach Postgres directly: the partition job detaches with
+    // CONCURRENTLY and switches role on its session, which PgBouncer in
+    // transaction mode silently breaks, so a 6432 port or pgbouncer=true
+    // refuses the boot.
+    DATABASE_READ_URL: z.preprocess(
+      (value) => (value === "" ? undefined : value),
+      z.string().refine(isPostgresUrl, POSTGRES_URL_MESSAGE).optional(),
+    ),
+    BATCH_DATABASE_URL: z.preprocess(
+      (value) => (value === "" ? undefined : value),
+      z
+        .string()
+        .refine(isPostgresUrl, POSTGRES_URL_MESSAGE)
+        .refine(
+          (value) => !throughPgBouncer(value),
+          "BATCH_DATABASE_URL vai direto ao Postgres (porta 5432, sem pgbouncer=true): o job de partições usa uma sessão própria.",
+        )
+        .optional(),
     ),
 
     REDIS_URL: z.string(),
