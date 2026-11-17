@@ -1163,3 +1163,77 @@ describe("the last two stops settled at the same instant", () => {
     expect(truck.status).toBe("ACTIVE");
   }, 30_000);
 });
+
+/**
+ * The invariant the company-scoped anti-join stands on (plan F2-21).
+ *
+ * "Not on an open stop" now looks for the stop through the company's routes
+ * that have not ended (src/shared/route/open-stop-anti-join.ts), instead of
+ * hashing every open stop of the platform. That gives the same answer only
+ * while an open stop never outlives its route, and never sits on another
+ * company's route. If one did, the picker would offer a delivery the partial
+ * unique index then refuses, and the import's undo would delete a delivery
+ * from under a stop.
+ *
+ * Last in the file: every route above was created, run, settled, cancelled or
+ * closed by the real repository, and the check reads all of them.
+ */
+describe("an open stop lives only on an open route of its delivery's company", () => {
+  it("holds after every route this file ended", async () => {
+    // The one way to end a route the cases above do not take.
+    const user = await prisma.user.create({
+      data: {
+        name: "Despachante",
+        email: "despachante-ciclo@exemplo.com.br",
+        password: "nao-usado",
+        role: "BUSINESS_ADMIN",
+        businessId: CARRIER,
+      },
+    });
+    const worked = await seedDelivery();
+    const left = await seedDelivery();
+    const routeId = await runningRoute([worked, left]);
+
+    await repository.settleStopForDelivery(worked, CARRIER, {
+      from: ["PENDING", "ARRIVED"],
+      status: "COMPLETED",
+      completed_at: new Date(),
+    });
+    await repository.closeWithPending(routeId, CARRIER, {
+      reason: "Fim do turno",
+      actorId: user.id,
+      at: new Date(),
+    });
+
+    const strays = await prisma.$queryRaw<
+      Array<{ id: string; route: string; status: string }>
+    >`
+      SELECT s."id", r."id" AS "route", r."status"::text AS "status"
+      FROM "route_stop" s
+      JOIN "route" r ON r."id" = s."routeId"
+      JOIN "delivery" d ON d."id" = s."deliveryId"
+      WHERE s."status" IN ('PENDING', 'ARRIVED')
+        AND (r."status" NOT IN ('PLANNED', 'RELEASED', 'IN_PROGRESS')
+             OR r."businessId" <> d."businessId")
+    `;
+
+    expect(strays).toEqual([]);
+
+    // And the file did end routes that had stops open, each way: a check
+    // over routes that never ended would prove nothing.
+    const ended = await prisma.route.groupBy({
+      by: ["status"],
+      where: {
+        businessId: CARRIER,
+        status: { in: ["COMPLETED", "CANCELLED"] },
+        stops: { some: { status: "CANCELLED" } },
+      },
+      _count: true,
+    });
+
+    expect(ended.map((row) => row.status).sort()).toEqual([
+      "CANCELLED",
+      "COMPLETED",
+    ]);
+  });
+});

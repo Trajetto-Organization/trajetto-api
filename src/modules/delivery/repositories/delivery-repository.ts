@@ -15,6 +15,7 @@ import {
 import { DeliveryStatus } from "@/shared/delivery/delivery-rules";
 import { refreshStopGroupKeysOfDelivery } from "@/shared/delivery/stop-group";
 import { openStopsOnRoutesLeftOpen } from "@/shared/route/routes-left-open-query";
+import { notOnAnOpenStop } from "@/shared/route/open-stop-anti-join";
 import type { OperationDay } from "@/modules/route/repositories/IOperation-day-repository";
 
 import {
@@ -140,10 +141,13 @@ async function withListRelations<
  * A delivery that belongs to a route leaves WITH that route, through the
  * route's own departure. This is what keeps the two dispatch models — batch
  * assignment and routes — from writing over each other while both exist.
+ *
+ * Scoped to the company's open routes (plan F2-21): unscoped, the count the
+ * app asks on every refresh hashed every open stop of the platform.
  */
-const NOT_ON_A_ROUTE: Prisma.DeliveryWhereInput = {
-  stops: { none: { status: { in: ["PENDING", "ARRIVED"] } } },
-};
+function notOnARoute(businessId: string): Prisma.DeliveryWhereInput {
+  return notOnAnOpenStop(businessId);
+}
 
 /**
  * The tenant of a delivery, for the rows that copy it.
@@ -1401,7 +1405,7 @@ class DeliveryRepository implements IDeliveryRepository {
         businessId,
         driverId,
         status: "PENDING",
-        ...NOT_ON_A_ROUTE,
+        ...notOnARoute(businessId),
         ...(createdUpTo && { created_at: { lte: createdUpTo } }),
       },
     });
@@ -1420,7 +1424,7 @@ class DeliveryRepository implements IDeliveryRepository {
         businessId,
         driverId,
         status: "PENDING",
-        ...NOT_ON_A_ROUTE,
+        ...notOnARoute(businessId),
         ...(createdUpTo && { created_at: { lte: createdUpTo } }),
       },
       data: { status: "IN_TRANSIT" },

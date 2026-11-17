@@ -20,6 +20,7 @@ import type {
 import { Prisma } from "@prisma/client";
 
 import { OPEN_STOP_STATUSES } from "@/shared/route/route-rules";
+import { notOnAnOpenStop } from "@/shared/route/open-stop-anti-join";
 
 import { ImportReversalLeaseLostError } from "../usecases/errors/import-errors";
 import {
@@ -720,7 +721,8 @@ class ImportRepository implements IImportRepository {
     //
     // The removable criteria are repeated for the same reason as the route's
     // status: a delivery that was worked, or put on a route, between the read
-    // and here is not deleted.
+    // and here is not deleted. The open-stop test is the company's (F2-21):
+    // each batch used to hash every open stop of the platform.
     const removedDeliveries =
       deletableIds.length > 0
         ? await tx.delivery.deleteMany({
@@ -730,7 +732,7 @@ class ImportRepository implements IImportRepository {
               status: "PENDING",
               events: { none: WORKED_EVENT },
               occurrences: { none: {} },
-              stops: { none: { status: { in: OPEN_STOP_STATUSES } } },
+              ...notOnAnOpenStop(businessId),
             },
           })
         : { count: 0 };

@@ -3040,6 +3040,17 @@ D54).
   cursor (`cursor`/`meta.nextCursor`, chave (dia previsto sem dia por
   último, criação, id)), com `total` e `facets` só na primeira página; `page`
   continua aceito para o painel em uso.
+- **"Fora de parada aberta" dentro da empresa (plano de escala, F2-21):**
+  o seletor "Adicionar entregas", a contagem e a partida em lote do app
+  (`countPendingForDriver`/`startDriverRoute`) e o desfazer da importação
+  procuram a parada aberta pelas rotas não encerradas da própria empresa
+  (`notOnAnOpenStop`, `src/shared/route/open-stop-anti-join.ts`), e não
+  mais por toda parada aberta da plataforma. A resposta é a mesma porque
+  encerrar ou cancelar uma rota cancela as paradas abertas dela na mesma
+  transação; `route-lifecycle.test.ts` guarda essa invariante e
+  `query-plans-scale.test.ts` mede o seletor com 150 mil paradas abertas de
+  500 outras empresas. O índice `route_stop (status, deliveryId)` sai uma
+  release depois (F2-21b).
 - **O que aconteceu com o veículo (F3, leitura):** `get-route` traz
   `checklists` (`route_start`/`route_end`, o mais recente de cada momento,
   o formato do `my-deliveries`) e `fuels`; `null` com Gestão de Frotas

@@ -2,7 +2,7 @@ import type { Prisma } from "@prisma/client";
 
 import { AppError } from "@/shared/errors/AppError";
 import { buildSearchOr } from "@/shared/pagination/search-or";
-import { OPEN_STOP_STATUSES } from "@/shared/route/route-rules";
+import { notOnAnOpenStop } from "@/shared/route/open-stop-anti-join";
 import type { DeliveryKind } from "@/shared/delivery/delivery-kind";
 
 /**
@@ -10,8 +10,10 @@ import type { DeliveryKind } from "@/shared/delivery/delivery-kind";
  *
  * The same predicate as the partial unique index `route_stop_active_delivery_idx`
  * (status IN PENDING/ARRIVED), so the picker offers exactly the deliveries the
- * database would accept on a new stop. A FAILED delivery only comes back after
- * the re-delivery decision moves it to PENDING, as today.
+ * database would accept on a new stop. It is asked through the company's
+ * routes that have not ended, where every open stop lives (F2-21). A FAILED
+ * delivery only comes back after the re-delivery decision moves it to
+ * PENDING, as today.
  */
 type UnroutedFacet = "city" | "uf" | "kind" | "shipper";
 
@@ -261,8 +263,10 @@ function unroutedDeliveriesWhere(
     { businessId: query.businessId },
     { status: "PENDING" },
 
-    // The anti-join on the partial unique index (D3).
-    { stops: { none: { status: { in: OPEN_STOP_STATUSES } } } },
+    // The anti-join on the partial unique index (D3), inside the company's
+    // open routes (F2-21): unscoped, each of the picker's queries hashed
+    // every open stop of the platform.
+    notOnAnOpenStop(query.businessId),
   ];
 
   const search = query.search?.trim();

@@ -749,3 +749,195 @@ describe("the ticket inbox", () => {
     });
   }
 });
+
+/**
+ * The route anti-join of a long tail of companies (plan F2-21).
+ *
+ * The cases above hold the route_stop reads under a fixed number of pages
+ * with three open stops on the platform. That bound says nothing about the
+ * other companies' OPEN stops: Prisma's `stops: { none }` is an uncorrelated
+ * NOT IN, so every open stop of the platform went into its hash. The scale
+ * plan's 5M deliveries a month put ~150,000 stops open at any moment across
+ * 3,600 carriers, and each of them was read by every company's count.
+ *
+ * So the same queries are measured twice: before and after 150,000 open
+ * stops of 500 other companies arrive. Scoped to the company, the work stays
+ * where it was (±10%); unscoped, the picker's hash took every one of them.
+ *
+ * The app's count is held by rows, not buffers. Its outer side is one
+ * driver's deliveries, which the planner underestimates 20× here (it
+ * multiplies the company's share by the driver's, the same fact twice), so
+ * it probes route_stop once per delivery — bounded by the company too, but
+ * each probe pays the index's depth, which grows with the platform. The
+ * statistics of F2-22 are what fix that estimate.
+ *
+ * Last in the file on purpose: the rows it adds would move the cases above.
+ */
+describe("with 150,000 open stops of 500 other companies", () => {
+  const TENANTS = 500;
+  const STOPS_PER_TENANT = 300;
+  const ROUTES_PER_TENANT = 10;
+
+  /** All the buffers a statement touched, every node and loop included. */
+  function buffersOf(plan: PlanNode): number {
+    return (plan["Shared Hit Blocks"] ?? 0) + (plan["Shared Read Blocks"] ?? 0);
+  }
+
+  const count = () =>
+    statementsOf(() =>
+      new DeliveryRepository(capture).countPendingForDriver(CARRIER, DRIVER),
+    );
+
+  type Statement = { query: string; params: string };
+  type Measured = { buffers: number; shape: string };
+
+  /** The queries whose work must not change when the tail arrives. */
+  const SAME_WORK: Record<string, () => Promise<Statement[]>> = {
+    "the route builder's picker, every query of it": async () =>
+      only(
+        await statementsOf(() =>
+          new RouteRepository(capture).listUnroutedDeliveries({
+            businessId: CARRIER,
+            page: 1,
+            pageSize: 20,
+            includeUnscheduled: true,
+          }),
+        ),
+        /"route_stop"/,
+      ),
+  };
+
+  async function measure(statements: Statement[]): Promise<Measured[]> {
+    const measured: Measured[] = [];
+
+    for (const statement of statements) {
+      // Twice: hit + read counts both, but a cold first run can also pull an
+      // index's inner page that a warm run never asks for again.
+      await planOf(statement);
+      const plan = await planOf(statement);
+
+      measured.push({ buffers: buffersOf(plan), shape: describePlan(plan) });
+    }
+
+    return measured;
+  }
+
+  const before = new Map<string, Measured[]>();
+
+  beforeAll(async () => {
+    for (const [name, run] of Object.entries(SAME_WORK)) {
+      before.set(name, await measure(await run()));
+    }
+
+    await sql(
+      `INSERT INTO business (id, corporate_reason, cep, city, uf, street, address_number, cnpj, cnae,
+                             responsible_name, telephone, email, updated_at)
+       SELECT 'tail-' || n, 'Cauda ' || n, '01001000', 'São Paulo', 'SP', 'Rua', '1',
+              (71000000000000 + n)::text, '4930202', 'Responsável', '11999999999',
+              'tail-' || n || '@exemplo.com.br', now()
+       FROM generate_series(1, $1::int) n`,
+      TENANTS,
+    );
+
+    await sql(
+      `INSERT INTO shipper (id, name, "businessId", updated_at)
+       SELECT 'tail-shipper-' || n, 'Embarcador', 'tail-' || n, now()
+       FROM generate_series(1, $1::int) n`,
+      TENANTS,
+    );
+
+    await sql(
+      `INSERT INTO driver (id, name, birth_date, cnh, cpf, rg, cep, city, uf, street, address_number,
+                           status, contract_type, "businessId", updated_at)
+       SELECT 'tail-driver-' || n, 'Motorista', '1985-01-01', lpad(n::text, 11, '7'), lpad(n::text, 11, '8'),
+              'RG', '01001000', 'São Paulo', 'SP', 'Rua', '1', 'ACTIVE', 'OWNED', 'tail-' || n, now()
+       FROM generate_series(1, $1::int) n`,
+      TENANTS,
+    );
+
+    // Their open routes, in every status that holds a stop.
+    await sql(
+      `INSERT INTO route (id, code, scheduled_date, status, "businessId", "driverId", updated_at)
+       SELECT 'tail-route-' || n || '-' || g, g, current_date,
+              (ARRAY['PLANNED','RELEASED','IN_PROGRESS'])[1 + g % 3]::"RouteStatus",
+              'tail-' || n, 'tail-driver-' || n, now()
+       FROM generate_series(1, $1::int) n, generate_series(1, $2::int) g`,
+      TENANTS,
+      ROUTES_PER_TENANT,
+    );
+
+    // One delivery per open stop (the partial unique index allows no less),
+    // their ids interleaved with everybody else's as random UUIDs are.
+    await sql(
+      `INSERT INTO delivery (id, recipient_name, city, uf, street, status, "businessId", "shipperId",
+                             "driverId", kind, created_at, updated_at)
+       SELECT md5('tail-' || n || '-' || k)::uuid::text, 'Cliente', 'São Paulo', 'SP', 'Rua',
+              (CASE WHEN (1 + k % $3::int) % 3 = 0 THEN 'IN_TRANSIT' ELSE 'PENDING' END)::"DeliveryStatus",
+              'tail-' || n, 'tail-shipper-' || n, 'tail-driver-' || n, 'DELIVERY', now(), now()
+       FROM generate_series(1, $1::int) n, generate_series(1, $2::int) k`,
+      TENANTS,
+      STOPS_PER_TENANT,
+      ROUTES_PER_TENANT,
+    );
+
+    await sql(
+      `INSERT INTO route_stop (id, sequence, status, "routeId", "deliveryId", updated_at)
+       SELECT gen_random_uuid()::text, k,
+              (CASE WHEN k % 7 = 0 THEN 'ARRIVED' ELSE 'PENDING' END)::"RouteStopStatus",
+              'tail-route-' || n || '-' || (1 + k % $3::int), md5('tail-' || n || '-' || k)::uuid::text, now()
+       FROM generate_series(1, $1::int) n, generate_series(1, $2::int) k`,
+      TENANTS,
+      STOPS_PER_TENANT,
+      ROUTES_PER_TENANT,
+    );
+
+    for (const table of [
+      "business",
+      "driver",
+      "delivery",
+      "route",
+      "route_stop",
+    ]) {
+      await sql(`VACUUM (ANALYZE) "${table}"`);
+    }
+  }, 600_000);
+
+  it("has them all open", async () => {
+    expect(
+      await prisma.routeStop.count({
+        where: {
+          status: { in: ["PENDING", "ARRIVED"] },
+          route: { businessId: { startsWith: "tail-" } },
+        },
+      }),
+    ).toBe(TENANTS * STOPS_PER_TENANT);
+  });
+
+  it("the app's pending count reads none of their stops", async () => {
+    const [statement] = await count();
+    const plan = await planOf(statement);
+
+    expect(rowsTouched(plan, "route_stop"), describePlan(plan)).toBeLessThan(
+      1_000,
+    );
+  });
+
+  for (const [name, run] of Object.entries(SAME_WORK)) {
+    it(`${name} reads what it read without them (±10%)`, async () => {
+      const statements = await run();
+      const after = await measure(statements);
+      const baseline = before.get(name)!;
+
+      expect(after).toHaveLength(baseline.length);
+
+      after.forEach(({ buffers, shape }, index) => {
+        const was = baseline[index];
+
+        expect(
+          Math.abs(buffers - was.buffers),
+          `${statements[index].query} | ${was.buffers} buffers (${was.shape}) → ${buffers} buffers (${shape})`,
+        ).toBeLessThanOrEqual(Math.max(1, Math.ceil(was.buffers * 0.1)));
+      });
+    });
+  }
+});
