@@ -122,7 +122,9 @@ import { recordHttpResponse } from "./shared/health/http-metrics";
 import {
   loadSheddingOptions,
   pressureSignals,
+  sheddingNow,
 } from "./shared/http/load-shedding";
+import { registerSheddingProbe } from "./shared/health/pressure-level";
 import { shedClassOf, type ShedClass } from "./shared/http/shed-classes";
 import { databasePool } from "@/../infra/database";
 
@@ -643,6 +645,10 @@ pressureSignals.pool = databasePool;
 pressureSignals.databaseUrl = process.env.DATABASE_URL;
 
 app.register(fastifyUnderPressure, loadSheddingOptions());
+
+// While the replica refuses requests, the flushes of the positions that do
+// get through are told to wait the most (pressure-level.ts, F2-26).
+registerSheddingProbe(sheddingNow);
 
 // Every finished response, refusals and 404s included: the status class, the
 // latency per route group and, on POST /route/positions, the app contract

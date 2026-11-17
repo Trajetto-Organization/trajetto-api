@@ -1139,6 +1139,20 @@ const envSchema = z
     ),
 
     /**
+     * The GPS positions' own gate inside SHED_MODE=enforce (plano-escala
+     * F2-25, shared/http/shed-classes.ts). An app build without back-off
+     * answers a 503 by sending again at once, so `auto` (the default)
+     * refuses positions only while 90% of the replica's POSTs of the last
+     * ten minutes come from the app contract that backs off (8); `observe`
+     * never refuses them; `enforce` refuses them whatever the adoption.
+     * Empty counts as absent.
+     */
+    SHED_POSITIONS_MODE: z.preprocess(
+      (value) => (value === "" ? undefined : value),
+      z.enum(["auto", "observe", "enforce"]).default("auto"),
+    ),
+
+    /**
      * How often each replica re-checks, in the database, the sessions of its
      * sockets (±25% jitter). The safety net of revocation: the frame that
      * drops a socket travels through Redis and is lost if Redis blinks, so

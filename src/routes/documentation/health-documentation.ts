@@ -1087,6 +1087,38 @@ const healthResponses = {
           .describe(
             "SHED_MODE: `observe` só conta; `enforce` recusa com 503 SERVICE_BUSY e Retry-After.",
           ),
+        positions: z
+          .object({
+            mode: z
+              .enum(["auto", "observe", "enforce"])
+              .describe(
+                "SHED_POSITIONS_MODE: `auto` só recusa posições com 90% da janela no contrato 8 ou maior; `observe` nunca; `enforce` sempre que a réplica está ocupada.",
+              ),
+            total: z
+              .number()
+              .describe(
+                "POST /route/positions dos últimos 10 minutos desta réplica (a janela de `http.positions_contracts`).",
+              ),
+            adopted: z
+              .number()
+              .describe(
+                "Desses, os do contrato 8 ou maior, o app que espera o Retry-After.",
+              ),
+            share: z
+              .number()
+              .nullable()
+              .describe(
+                "adopted / total; null sem envio na janela (a porta fica fechada).",
+              ),
+            open: z
+              .boolean()
+              .describe(
+                "Se, com SHED_MODE=enforce, as posições podem ser recusadas agora.",
+              ),
+          })
+          .describe(
+            "A porta das posições (plano de escala F2-25): um app antigo, sem recuo, responde a um 503 reenviando na hora.",
+          ),
         under_pressure: z
           .number()
           .describe(

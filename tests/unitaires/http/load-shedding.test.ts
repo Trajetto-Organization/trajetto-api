@@ -8,6 +8,7 @@ import {
   handlePressure,
   loadSheddingOptions,
   pressureSignals,
+  type PositionsGateState,
   type ShedMode,
 } from "@/shared/http/load-shedding";
 import { shedClassOf } from "@/shared/http/shed-classes";
@@ -20,8 +21,9 @@ import { shedClassOf } from "@/shared/http/shed-classes";
  * before switching. In enforce the refusal is a 503 SERVICE_BUSY with
  * Retry-After, decided by the route's class and the whole reading — not by
  * the one threshold the plugin happens to report first. The GPS positions
- * are never refused here: an app build without back-off answers a 503 by
- * sending again at once, so they wait for the fleet's contract (F2-25).
+ * are refused only through their own gate: an app build without back-off
+ * answers a 503 by sending again at once, so they wait for the fleet's
+ * contract (F2-25, positions-shed-gate.test.ts).
  */
 
 function requestFor(
@@ -40,16 +42,29 @@ const CALM = { eventLoopUtilized: 0.4, eventLoopDelay: 10 };
 const PRESSED = { eventLoopUtilized: 0.96, eventLoopDelay: 20 };
 const DROWNING = { eventLoopUtilized: 0.99, eventLoopDelay: 20 };
 
+const SHUT: PositionsGateState = {
+  mode: "auto",
+  total: 0,
+  adopted: 0,
+  share: null,
+  open: false,
+};
+
 function run(
   mode: ShedMode,
   method: string,
   url: string,
   usage: { eventLoopUtilized: number; eventLoopDelay: number },
+  gate: PositionsGateState = SHUT,
 ) {
-  const metrics = createShedMetrics({ mode: () => mode });
+  const metrics = createShedMetrics({
+    mode: () => mode,
+    positions: () => gate,
+  });
   const outcome = handlePressure(requestFor(method, url, usage), {} as never, {
     metrics,
     mode: () => mode,
+    positionsOpen: () => gate.open,
   });
 
   return { outcome, metrics };
@@ -149,12 +164,49 @@ describe("enforce", () => {
     }
   });
 
-  it("only counts the positions: they wait for the fleet's contract", async () => {
+  it("only counts the positions while their gate is shut", async () => {
     const { outcome, metrics } = run(
       "enforce",
       "POST",
       "/route/positions",
       DROWNING,
+    );
+
+    expect(await refusalOf(outcome)).toBeNull();
+    expect(metrics.snapshot().would_shed).toEqual({ positions: 1 });
+    expect(metrics.sheddingSince(5_000)).toBe(false);
+  });
+
+  it("refuses the positions with 120 s once the gate is open, and says it is shedding", async () => {
+    const open = { ...SHUT, total: 10, adopted: 10, share: 1, open: true };
+    const { outcome, metrics } = run(
+      "enforce",
+      "POST",
+      "/route/positions",
+      PRESSED,
+      open,
+    );
+
+    expect(await refusalOf(outcome)).toEqual({
+      status: 503,
+      code: "SERVICE_BUSY",
+      retryAfter: 120,
+    });
+    expect(metrics.snapshot()).toMatchObject({
+      shed: { positions: 1 },
+      positions: open,
+    });
+    expect(metrics.sheddingSince(5_000)).toBe(true);
+  });
+
+  it("never refuses the positions in observe, gate open or not", async () => {
+    const open = { ...SHUT, total: 10, adopted: 10, share: 1, open: true };
+    const { outcome, metrics } = run(
+      "observe",
+      "POST",
+      "/route/positions",
+      DROWNING,
+      open,
     );
 
     expect(await refusalOf(outcome)).toBeNull();
@@ -179,6 +231,7 @@ describe("the counters", () => {
     const metrics = createShedMetrics({
       now: () => clock,
       mode: () => "observe",
+      positions: () => SHUT,
     });
 
     metrics.recordPressure(["elu", "lag"]);
@@ -188,6 +241,7 @@ describe("the counters", () => {
     expect(metrics.rotate()).toEqual({
       window_seconds: 60,
       mode: "observe",
+      positions: SHUT,
       under_pressure: 1,
       reasons: { elu: 1, lag: 1 },
       would_shed: { tower: 1 },

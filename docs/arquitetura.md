@@ -4782,8 +4782,9 @@ toda resposta do `POST /route/positions` diz em `data.nextFlushAfterMs`
 quanto ele deve esperar antes do próximo envio, pela utilização do laço de
 eventos (ELU) da réplica que respondeu, na última janela de 5 s: abaixo de
 70%, `POSITIONS_FLUSH_AFTER_MS` (60 s); de 70% a 90%, o dobro (120 s); a
-partir de 90%, ou com descarte de carga ativo (o descarte chega na onda 9 e
-se registra por `registerSheddingProbe`), 300 s, o teto do app. A leitura é
+partir de 90%, ou com a réplica tendo recusado alguma requisição nos
+últimos 5 s pelo descarte de carga (`registerSheddingProbe`, de
+`src/http.ts`), 300 s, o teto do app. A leitura é
 um contador em memória: nenhuma consulta, nenhum Redis, nenhum timer, e o
 orçamento de statements do envio não muda (o E2E
 `driver-positions-statement-budget` confere). O campo é opcional no schema:
@@ -4809,8 +4810,14 @@ e recebe o próprio 503, como antes. Com `SHED_MODE=observe` (o padrão) nada
 rota, na seção `shedding` do `/health/metrics` e do `ops_sample`. No
 `enforce`, a recusa é 503 `SERVICE_BUSY` com `Retry-After` de 5 s (120 s nas
 posições), antes do limitador, da sessão e de qualquer consulta, e com o
-`x-request-id`. As posições só contam, em qualquer modo, até o app novo
-estar na frota (F2-25). O `/docs` e a referência pública ficam de fora: são
+`x-request-id`. As posições têm uma porta própria (F2-25): um app antigo,
+sem recuo, responde a um 503 reenviando na hora, então com
+`SHED_POSITIONS_MODE=auto` (o padrão) elas só são recusadas enquanto 90% dos
+`POST /route/positions` dos últimos 10 minutos da réplica vierem do contrato
+8 ou maior, o app que espera o `Retry-After` (120 s nelas); sem envio na
+janela, ou com contrato desconhecido, a porta fica fechada e elas só contam.
+`observe` nunca as recusa, e `enforce` recusa qualquer que seja a adoção. A
+porta aparece em `shedding.positions` (o modo, a janela e se está aberta). O `/docs` e a referência pública ficam de fora: são
 registrados antes do plugin e já têm limite e cache.
 
 **Régua de rampa** (`src/shared/health/volume-gauge.ts`, U-12): cada

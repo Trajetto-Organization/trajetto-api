@@ -151,7 +151,91 @@ function shouldShed(shedClass: ShedClass, reading: PressureReading): boolean {
     : loopPressed;
 }
 
+/**
+ * The positions' gate (plano-escala F2-25): when the GPS flush may be
+ * refused at all.
+ *
+ * An app build without back-off answers a 503 by sending the same batch
+ * again at once, so refusing the positions of a fleet still on old builds
+ * multiplies the traffic it meant to shed. Contract 8 of the app (F2-27)
+ * waits Retry-After, with jitter, and keeps the points on the phone. So,
+ * with `SHED_POSITIONS_MODE=auto` (the default), the positions are refused
+ * only while at least 90% of the POSTs of the last ten minutes on THIS
+ * replica came from contract 8 or above — the adoption window of
+ * shared/health/http-metrics.ts, where only a driver's session and the
+ * version gate's 426 count (a forged header cannot open the gate).
+ *
+ * `observe` keeps them counted only, whatever the adoption; `enforce` opens
+ * the gate whatever it. Both under `SHED_MODE`: in observe nothing is ever
+ * refused.
+ */
+const POSITIONS_SHED_MODES = ["auto", "observe", "enforce"] as const;
+
+type PositionsShedMode = (typeof POSITIONS_SHED_MODES)[number];
+
+/** The app contract that backs off (F2-27). */
+const POSITIONS_SHED_MIN_CONTRACT = 8;
+
+/** The share of the window that must come from it. */
+const POSITIONS_SHED_MIN_ADOPTION = 0.9;
+
+interface PositionsAdoption {
+  /** POSTs in the window. */
+  total: number;
+  /** Of those, from contract POSITIONS_SHED_MIN_CONTRACT or above. */
+  adopted: number;
+  /** adopted / total; null with no POST in the window. */
+  share: number | null;
+}
+
+/**
+ * The adoption of the window's contracts. `unknown` (no header: the oldest
+ * builds) and `other` (past the sixteen values kept, so unknown too) count
+ * as old: a guess must keep the gate shut, never open it.
+ */
+function positionsAdoption(
+  byContract: Readonly<Record<string, number>>,
+): PositionsAdoption {
+  let total = 0;
+  let adopted = 0;
+
+  for (const [key, count] of Object.entries(byContract)) {
+    if (!Number.isFinite(count) || count <= 0) continue;
+
+    total += count;
+
+    if (/^\d+$/.test(key) && Number(key) >= POSITIONS_SHED_MIN_CONTRACT) {
+      adopted += count;
+    }
+  }
+
+  return { total, adopted, share: total > 0 ? adopted / total : null };
+}
+
+/**
+ * Whether the positions may be refused under pressure. A window with no
+ * POST says nothing about the fleet (a replica that just started): shut.
+ */
+function positionsMayBeShed(
+  mode: PositionsShedMode,
+  adoption: PositionsAdoption,
+): boolean {
+  if (mode === "enforce") return true;
+  if (mode === "observe") return false;
+
+  return (
+    adoption.share !== null && adoption.share >= POSITIONS_SHED_MIN_ADOPTION
+  );
+}
+
 export {
+  POSITIONS_SHED_MIN_ADOPTION,
+  POSITIONS_SHED_MIN_CONTRACT,
+  POSITIONS_SHED_MODES,
+  positionsAdoption,
+  positionsMayBeShed,
+  type PositionsAdoption,
+  type PositionsShedMode,
   SHED_CLASSES,
   SHED_CLASS_BY_GROUP,
   SHED_CLASS_EXCEPTIONS,

@@ -2,11 +2,15 @@ import type { FastifyReply, FastifyRequest } from "fastify";
 
 import { env } from "@/env";
 import { ServiceBusyError } from "@/shared/errors/service-busy-error";
+import { httpMetrics } from "@/shared/health/http-metrics";
 import { poolLimitOf, type PoolStats } from "@/shared/health/pool-metrics";
 import { routeGroupOf, type RouteGroup } from "@/shared/health/route-groups";
 import {
   SHED_THRESHOLDS,
+  positionsAdoption,
+  positionsMayBeShed,
   shouldShed,
+  type PositionsShedMode,
   type PressureReading,
   type ShedClass,
 } from "@/shared/http/shed-classes";
@@ -31,9 +35,13 @@ import {
  * SERVICE_BUSY with Retry-After (5 s; 120 s for the GPS positions, the
  * app's own back-off), answered before the session lookup or any query.
  *
- * The positions are counted and never refused here, whatever the mode: an
- * app build without back-off answers a 503 by sending again at once, so the
- * positions wait for the fleet's contract (F2-25).
+ * The GPS positions have a gate of their own (F2-25, shed-classes.ts): an
+ * app build without back-off answers a 503 by sending again at once, so
+ * they are refused only while the replica's window shows the fleet on the
+ * contract that backs off (`SHED_POSITIONS_MODE=auto`, the default), and
+ * counted in `would_shed` otherwise. Each refusal also tells the positions
+ * hint (pressure-level.ts) that the replica is shedding, so the flushes that
+ * do get through are spaced out the most.
  */
 
 type ShedMode = "observe" | "enforce";
@@ -47,9 +55,23 @@ const POSITIONS_SHED_RETRY_AFTER_SECONDS = 120;
 /** Which threshold the request arrived under. */
 type PressureReason = "elu" | "lag" | "pool";
 
+/** The positions' gate as the handler sees it now. */
+interface PositionsGateState {
+  mode: PositionsShedMode;
+  /** POSTs of the replica's last ten minutes. */
+  total: number;
+  /** Of those, from the contract that backs off. */
+  adopted: number;
+  /** adopted / total, 4 decimals; null with no POST in the window. */
+  share: number | null;
+  /** Whether, under SHED_MODE=enforce, the positions may be refused. */
+  open: boolean;
+}
+
 interface ShedWindowSample {
   window_seconds: number;
   mode: ShedMode;
+  positions: PositionsGateState;
   /** Requests that arrived while a threshold was crossed. */
   under_pressure: number;
   /** What was crossed, per request (one request may count in several). */
@@ -65,6 +87,9 @@ interface ShedMetrics {
   recordWouldShed(group: RouteGroup): void;
   recordShed(group: RouteGroup): void;
 
+  /** Whether a request was refused in the last `windowMs`. */
+  sheddingSince(windowMs: number): boolean;
+
   /** The current window, without resetting it. */
   snapshot(): ShedWindowSample;
 
@@ -72,18 +97,66 @@ interface ShedMetrics {
   rotate(): ShedWindowSample;
 }
 
+/**
+ * The gate, read from the adoption window at most once a second: under a
+ * flood of positions the handler runs for each of them.
+ */
+function createPositionsGate({
+  now = Date.now,
+  mode = () => env.SHED_POSITIONS_MODE as PositionsShedMode,
+  contracts = () => httpMetrics.positionsContracts().by_contract,
+}: {
+  now?: () => number;
+  mode?: () => PositionsShedMode;
+  contracts?: () => Readonly<Record<string, number>>;
+} = {}): () => PositionsGateState {
+  let memo: { at: number; state: PositionsGateState } | null = null;
+
+  return () => {
+    const at = now();
+    const current = mode();
+
+    if (memo && memo.state.mode === current && at - memo.at < 1_000) {
+      return memo.state;
+    }
+
+    const adoption = positionsAdoption(contracts());
+
+    const state: PositionsGateState = {
+      mode: current,
+      total: adoption.total,
+      adopted: adoption.adopted,
+      share:
+        adoption.share === null
+          ? null
+          : Math.round(adoption.share * 10_000) / 10_000,
+      open: positionsMayBeShed(current, adoption),
+    };
+
+    memo = { at, state };
+
+    return state;
+  };
+}
+
+/** The process's gate, over the process's adoption window. */
+const positionsGate = createPositionsGate();
+
 function createShedMetrics({
   now = Date.now,
   mode = () => env.SHED_MODE as ShedMode,
+  positions = positionsGate,
 }: {
   now?: () => number;
   mode?: () => ShedMode;
+  positions?: () => PositionsGateState;
 } = {}): ShedMetrics {
   let startedAt = now();
   let underPressure = 0;
   let reasons = new Map<PressureReason, number>();
   let wouldShed = new Map<RouteGroup, number>();
   let shed = new Map<RouteGroup, number>();
+  let lastShedAt: number | null = null;
 
   const add = <K>(counts: Map<K, number>, key: K) =>
     counts.set(key, (counts.get(key) ?? 0) + 1);
@@ -97,6 +170,7 @@ function createShedMetrics({
     return {
       window_seconds: Math.round((now() - startedAt) / 100) / 10,
       mode: mode(),
+      positions: positions(),
       under_pressure: underPressure,
       reasons: object(reasons),
       would_shed: object(wouldShed),
@@ -112,7 +186,13 @@ function createShedMetrics({
 
     recordWouldShed: (group) => add(wouldShed, group),
 
-    recordShed: (group) => add(shed, group),
+    recordShed(group) {
+      add(shed, group);
+      lastShedAt = now();
+    },
+
+    sheddingSince: (windowMs) =>
+      lastShedAt !== null && now() - lastShedAt < windowMs,
 
     snapshot,
 
@@ -132,6 +212,17 @@ function createShedMetrics({
 
 /** The process-wide counters: the handler writes them, the sample reads them. */
 const shedMetrics = createShedMetrics();
+
+/**
+ * How long after a refusal the replica still counts as shedding for the
+ * positions hint: the Retry-After of the other routes.
+ */
+const SHEDDING_HINT_WINDOW_MS = 5_000;
+
+/** The probe of pressure-level.ts: refused anything in the last 5 s. */
+function sheddingNow(): boolean {
+  return shedMetrics.sheddingSince(SHEDDING_HINT_WINDOW_MS);
+}
 
 /**
  * The signals the plugin's `healthCheck` reads, on an object so a test can
@@ -187,7 +278,12 @@ function handlePressure(
   {
     metrics = shedMetrics,
     mode = () => env.SHED_MODE as ShedMode,
-  }: { metrics?: ShedMetrics; mode?: () => ShedMode } = {},
+    positionsOpen = () => positionsGate().open,
+  }: {
+    metrics?: ShedMetrics;
+    mode?: () => ShedMode;
+    positionsOpen?: () => boolean;
+  } = {},
 ): Promise<void> | undefined {
   const usage = (
     request.server as unknown as { memoryUsage?: () => PluginReading }
@@ -209,8 +305,10 @@ function handlePressure(
   const group = routeGroupOf(request.method, request.routeOptions?.url);
   const counted: RouteGroup = group ?? "other";
 
-  // The positions wait for the fleet's contract (F2-25): counted only.
-  const enforced = mode() === "enforce" && counted !== "positions";
+  // The positions wait for the fleet's contract (F2-25): counted only
+  // while the gate is shut.
+  const enforced =
+    mode() === "enforce" && (counted !== "positions" || positionsOpen());
 
   if (!enforced) {
     metrics.recordWouldShed(counted);
@@ -255,13 +353,18 @@ function loadSheddingOptions() {
 
 export {
   POSITIONS_SHED_RETRY_AFTER_SECONDS,
+  SHEDDING_HINT_WINDOW_MS,
   SHED_RETRY_AFTER_SECONDS,
+  createPositionsGate,
   createShedMetrics,
   handlePressure,
   loadSheddingOptions,
+  positionsGate,
   pressureSignals,
+  sheddingNow,
   shedMetrics,
   shedRetryAfterSeconds,
+  type PositionsGateState,
   type PressureReason,
   type ShedMetrics,
   type ShedMode,

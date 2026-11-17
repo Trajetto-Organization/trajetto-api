@@ -17,8 +17,9 @@ import { createPrismaClient } from "@/shared/database/database-client";
  *  - enforce refuses a deferrable route (the tower) with 503 SERVICE_BUSY,
  *    Retry-After and the request id, BEFORE the session lookup;
  *  - enforce still serves what is interactive (the pool alone never refuses
- *    it), what is critical, and the GPS positions (they wait for the
- *    fleet's contract, F2-25);
+ *    it), what is critical, and the GPS positions while their gate is shut
+ *    (an empty window: they wait for the fleet's contract, F2-25), and
+ *    refuses them with the app's 120 s once it is open;
  *  - with the loop drowning, an interactive route is refused too.
  */
 const prisma = createPrismaClient();
@@ -186,6 +187,28 @@ describe("a replica whose pool is saturated", () => {
 
       // Not refused for load: the answer is the session's, as always.
       expect((await call("POST", "/route/positions")).statusCode).toBe(401);
+    });
+
+    // With the positions' gate forced open (F2-25): the same refusal, with
+    // the app's own wait, still before the session.
+    it("refuses the positions with 120 s once their gate is open", async () => {
+      const saved = env.SHED_POSITIONS_MODE;
+      env.SHED_POSITIONS_MODE = "enforce";
+
+      try {
+        await vi.waitFor(
+          async () => {
+            const refused = await call("POST", "/route/positions");
+
+            expect(refused.statusCode).toBe(503);
+            expect(refused.headers["retry-after"]).toBe("120");
+          },
+          // The gate is read at most once a second.
+          { timeout: 5_000, interval: 250 },
+        );
+      } finally {
+        env.SHED_POSITIONS_MODE = saved;
+      }
     });
 
     it("refuses an interactive read once the loop is drowning", async () => {

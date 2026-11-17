@@ -105,6 +105,12 @@ interface HttpMetrics {
   /** One POST /route/positions; undefined when it named no contract. */
   recordPositionsContract(contract: number | undefined): void;
 
+  /**
+   * The positions' contracts of the last ten minutes alone, without
+   * copying the groups: what the positions' load shedding reads (F2-25).
+   */
+  positionsContracts(): PositionsContracts;
+
   /** The current window, without resetting it. */
   snapshot(): HttpWindowSnapshot;
 
@@ -268,6 +274,8 @@ function createHttpMetrics({
       slot.counts.set(key, (slot.counts.get(key) ?? 0) + 1);
       totals.set(key, (totals.get(key) ?? 0) + 1);
     },
+
+    positionsContracts: contracts,
 
     snapshot,
 

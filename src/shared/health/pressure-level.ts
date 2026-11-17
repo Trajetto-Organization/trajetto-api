@@ -119,9 +119,10 @@ function createEluWindow({
 const processElu = createEluWindow();
 
 /**
- * Whether the replica is shedding load right now. Nothing sheds yet: the
- * load-shedding item (wave 9) registers its probe here, and while it does,
- * the hint is the longest one.
+ * Whether the replica is shedding load right now: http.ts registers the
+ * probe of shared/http/load-shedding.ts (a request refused in the last 5 s),
+ * and while it says so, the hint is the longest one. In SHED_MODE=observe
+ * nothing is refused, so the hint never changes for it.
  */
 let sheddingProbe: () => boolean = () => false;
 
