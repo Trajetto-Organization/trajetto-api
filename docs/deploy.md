@@ -2172,7 +2172,7 @@ _Add environment secret_ / _Add environment variable_.
 | variable | `SWARM_API_SERVICE`                                                                     | `trajetto-api-staging` (o App Name da API)                                                                                                                                                                                                                    | só com `ROLLOUT_VERIFY=ssh`                                                                |
 | secret   | `ROLLOUT_STATUS_TOKEN`                                                                  | o mesmo valor do `ROLLOUT_STATUS_TOKEN` da `trajetto-api` de staging (`openssl rand -hex 32`): o deploy lê os passos pendentes da etapa de release em `<API_PUBLIC_URL>/health/rollout` ([seção 15](#quando-a-etapa-roda)); sem ele, aviso e a regra de antes |
 | variable | `RELEASE_SERIALIZE_WITH_APPLICATION_ID`                                                 | o applicationId da `trajetto-api-migrate` de **produção**: na VPS única a etapa de staging espera a de produção terminar. Sai quando a staging for para o 2º VPS                                                                                              |
-| variable | `RELEASE_TIMEOUT_SECONDS`                                                               | opcional (vazio = 1800): quanto o deploy espera a etapa de release                                                                                                                                                                                            |
+| variable | `RELEASE_TIMEOUT_SECONDS`                                                               | opcional (vazio = 1800, teto 3600): quanto a etapa de release pode levar no deploy, a espera pela do outro ambiente incluída                                                                                                                                  |
 | secrets  | `DEPLOY_SSH_HOST`, `DEPLOY_SSH_USER`, `DEPLOY_SSH_KNOWN_HOSTS`, `DEPLOY_VERIFY_SSH_KEY` | conferência do rollout ([seção 14](#14-conferir-a-convergência)); podem ficar no repositório, já que os dois ambientes dividem o host                                                                                                                         | só com `ROLLOUT_VERIFY=ssh`                                                                |
 
 Sem o `DOKPLOY_MIGRATE_APPLICATION_ID`, com os outros três definidos, o job
@@ -2194,7 +2194,7 @@ roda a partir de `main`):
 | variable | `SWARM_API_SERVICE`                                                                     | `trajetto-api-production`                                                                                                                                                                              |
 | secret   | `ROLLOUT_STATUS_TOKEN`                                                                  | o mesmo valor do `ROLLOUT_STATUS_TOKEN` da `trajetto-api` de produção (outro valor, não o do staging); lido em `<API_PUBLIC_URL>/health/rollout`, então a `API_PUBLIC_URL` precisa existir aqui também |
 | variable | `RELEASE_SERIALIZE_WITH_APPLICATION_ID`                                                 | o applicationId da `trajetto-api-migrate` de **staging**                                                                                                                                               |
-| variable | `RELEASE_TIMEOUT_SECONDS`                                                               | opcional (vazio = 1800)                                                                                                                                                                                |
+| variable | `RELEASE_TIMEOUT_SECONDS`                                                               | opcional (vazio = 1800, teto 3600)                                                                                                                                                                     |
 | secrets  | `DEPLOY_SSH_HOST`, `DEPLOY_SSH_USER`, `DEPLOY_SSH_KNOWN_HOSTS`, `DEPLOY_VERIFY_SSH_KEY` | conferência do rollout (só sem `ROLLOUT_VERIFY=http`)                                                                                                                                                  |
 
 Os quatro `DOKPLOY_*` obrigatórios de um environment (`DOKPLOY_URL`,
@@ -2475,7 +2475,13 @@ coluna.
   `trajetto-api-migrate` para a etapa rodar de novo.
 - Uma release com um índice grande pode passar dos 30 min que o deploy
   espera a etapa: suba a variável `RELEASE_TIMEOUT_SECONDS` do environment
-  do GitHub antes ([seção 13](#13-configurar-o-github)).
+  do GitHub antes ([seção 13](#13-configurar-o-github)), até 3600 s. É um
+  prazo só para a etapa inteira, a espera pela etapa do outro ambiente
+  incluída; acima do teto vale 3600, com aviso, porque o job do deploy tem
+  120 min e a IA, a API e a conferência do rollout vêm depois. Um build
+  maior que isso roda fora do pipeline: **Deploy** na
+  `trajetto-api-migrate` pelo painel, espere `Running` e rode o pipeline
+  de novo.
 
 ### Depois das migrations: `infra/sql` e `prisma/post-deploy`
 
@@ -2576,7 +2582,8 @@ deploy.
    `trajetto-api-migrate` (seguro) volta a pôr um `done` nele.
 3. Lê as tarefas a cada 5 s até uma tarefa **nova** ficar `Running` (ou
    `Complete`: sucesso) ou `Failed`/`Rejected`/`Orphaned` (falha), por até
-   30 min (`RELEASE_TIMEOUT_SECONDS`). Só as novas contam: com o _Update
+   30 min (`RELEASE_TIMEOUT_SECONDS`, até 60, menos o que a espera pela
+   etapa do outro ambiente já gastou). Só as novas contam: com o _Update
    Config_ padrão do Dokploy (_start-first_, _rollback_), uma etapa que falha
    deixa a tarefa anterior, parada e saudável, em `Running`.
 4. Sucesso: move `<ambiente>-applied` e segue para a IA e a API. Falha: o

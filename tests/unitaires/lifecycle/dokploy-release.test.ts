@@ -67,6 +67,8 @@ interface Call {
   method: string;
   path: string;
   key: string | undefined;
+  /** When the fake received it (Date.now()). */
+  at: number;
 }
 
 let server: Server | undefined;
@@ -105,6 +107,11 @@ async function fakeDokploy(options: {
     deployments?: Array<
       Array<{ deploymentId: string; status: string; createdAt?: string }>
     >;
+    /**
+     * In place of the walk of its tasks: `Starting` for this long from the
+     * first read of them, `Running` after.
+     */
+    busyForMs?: number;
   };
 }) {
   const calls: Call[] = [];
@@ -114,6 +121,7 @@ async function fakeDokploy(options: {
   let taskFailures = options.taskFailures ?? 0;
   let otherReads = 0;
   let otherDeploymentReads = 0;
+  let otherFirstRead: number | undefined;
 
   server = createServer((request: IncomingMessage, response) => {
     request.resume();
@@ -124,6 +132,7 @@ async function fakeDokploy(options: {
         method: request.method ?? "",
         path,
         key: request.headers["x-api-key"] as string | undefined,
+        at: Date.now(),
       });
       response.setHeader("content-type", "application/json");
 
@@ -163,7 +172,20 @@ async function fakeDokploy(options: {
           `/api/docker.getServiceContainersByAppName?appName=${other.appName}`
       ) {
         const walk = other.tasks;
-        const tasks = walk[Math.min(otherReads++, walk.length - 1)] ?? [];
+        let tasks = walk[Math.min(otherReads++, walk.length - 1)] ?? [];
+
+        if (other.busyForMs !== undefined) {
+          otherFirstRead ??= Date.now();
+          tasks = [
+            {
+              containerId: "p1",
+              currentState:
+                Date.now() - otherFirstRead < other.busyForMs
+                  ? "Starting 1 second ago"
+                  : "Running 1 second ago",
+            },
+          ];
+        }
 
         response.end(
           JSON.stringify(
@@ -538,9 +560,32 @@ describe("the release step on Dokploy", { timeout: 30_000 }, () => {
     });
 
     expect(result.status).toBe(1);
-    expect(result.output).toContain("não terminou em 0.2s");
+    expect(result.output).toContain("não terminou no prazo");
+    expect(result.output).toContain("0.2s no total");
     expect(result.output).toContain(
       "uma migration nunca é interrompida no meio",
+    );
+  });
+
+  /**
+   * The deploy job has 120 min, and after this step it still deploys the
+   * AI and the API and checks the rollout: a longer wait let GitHub kill
+   * the job halfway through them.
+   */
+  it("caps the environment's timeout at 3600 s, with a warning", async () => {
+    const fake = await fakeDokploy({
+      before: [OLD_IDLE],
+      after: [[{ containerId: "new", currentState: "Running 1 second ago" }]],
+    });
+
+    const result = await release({
+      ...valid(fake),
+      RELEASE_TIMEOUT_SECONDS: "7200",
+    });
+
+    expect(result.status, result.output).toBe(0);
+    expect(result.output).toContain(
+      '::warning::RELEASE_TIMEOUT_SECONDS="7200" passa do teto de 3600 s',
     );
   });
 
@@ -709,6 +754,43 @@ describe("the release step on Dokploy", { timeout: 30_000 }, () => {
       expect(result.status, result.output).toBe(0);
       expect(result.output).not.toContain("está rodando");
       expect(result.output).toContain("tomado como travado");
+    });
+
+    /**
+     * RELEASE_TIMEOUT_SECONDS is ONE budget: the time spent waiting for
+     * the other environment comes off the wait for this one's outcome,
+     * instead of each getting the whole of it (twice the job's share).
+     */
+    it("spends one budget on the other environment's release and on its own", async () => {
+      const fake = await fakeDokploy({
+        before: [OLD_IDLE],
+        // This one's release never ends: the run stops at the budget.
+        after: [
+          [
+            { containerId: "new", currentState: "Starting 1 second ago" },
+            OLD_IDLE,
+          ],
+        ],
+        other: { id: OTHER, appName: OTHER_NAME, tasks: [], busyForMs: 2_000 },
+      });
+
+      const result = await release({
+        ...valid(fake),
+        RELEASE_SERIALIZE_WITH_APPLICATION_ID: OTHER,
+        RELEASE_TIMEOUT_SECONDS: "5",
+      });
+
+      const deploy = fake.calls.find((call) =>
+        call.path.startsWith("/api/application.deploy"),
+      );
+      const last = fake.calls[fake.calls.length - 1];
+
+      expect(result.status).toBe(1);
+      expect(result.output).toContain("não terminou no prazo");
+      expect(deploy).toBeDefined();
+      // About 5 - 2 = 3 s of its own; the whole budget again would be 5.
+      expect(last.at - deploy!.at).toBeGreaterThan(2_000);
+      expect(last.at - deploy!.at).toBeLessThan(4_500);
     });
 
     it("does not wait when the other one is idle", async () => {

@@ -54,7 +54,9 @@
  *   DOKPLOY_APP_LABEL         its name in messages (default trajetto-api-migrate)
  *   RELEASE_IMAGE             the image the Application must run, e.g.
  *                             ghcr.io/trajetto-organization/trajetto-api-migrate:staging
- *   RELEASE_TIMEOUT_SECONDS   how long to wait for the outcome (default 1800)
+ *   RELEASE_TIMEOUT_SECONDS   how long the whole step may take, the wait on the
+ *                             other environment included (default 1800, at
+ *                             most 3600)
  *   RELEASE_POLL_SECONDS      interval between reads of the tasks (default 5)
  *   RELEASE_SERIALIZE_WITH_APPLICATION_ID
  *                             the OTHER environment's release Application:
@@ -122,16 +124,37 @@ const BASE = baseUrl(env.DOKPLOY_URL);
 const APPLICATION_ID = env.DOKPLOY_APPLICATION_ID;
 const IMAGE = env.RELEASE_IMAGE.trim().toLowerCase();
 /**
- * The patience for the outcome, from the environment's variable
+ * The ceiling of RELEASE_TIMEOUT_SECONDS. The deploy job has 120 min
+ * (staging.yml, production.yml), and after this step it still moves the
+ * tags, deploys the AI and the API (with their retries) and checks the
+ * rollout: a longer wait let GitHub kill the job halfway through those,
+ * which must never be cut, with the API's and the AI's tags apart. A
+ * build that needs more runs outside the pipeline (Deploy on
+ * trajetto-api-migrate in the panel, docs/deploy.md).
+ */
+const MAX_RELEASE_TIMEOUT_SECONDS = 3600;
+
+/**
+ * The patience for the whole step, from the environment's variable
  * RELEASE_TIMEOUT_SECONDS (vars of the GitHub environment, through the
  * deploy action; F2-01): a release with a long prisma/concurrent build
- * needs more than the default 30 min. Not a positive number: the default,
- * with a warning (a typo must not turn the wait into zero).
+ * needs more than the default 30 min. ONE budget for the wait on the other
+ * environment's release and for this one's outcome. Not a positive number:
+ * the default, with a warning (a typo must not turn the wait into zero);
+ * above the ceiling: the ceiling, with a warning.
  */
 function releaseTimeoutMs(raw) {
   if (raw === undefined || raw.trim() === "") return 1800 * 1000;
 
   const seconds = Number(raw);
+
+  if (Number.isFinite(seconds) && seconds > MAX_RELEASE_TIMEOUT_SECONDS) {
+    console.log(
+      `::warning::RELEASE_TIMEOUT_SECONDS="${raw}" passa do teto de ${MAX_RELEASE_TIMEOUT_SECONDS} s (o job do deploy tem 120 min, e a IA, a API e a conferência do rollout ainda vêm depois desta etapa); vale ${MAX_RELEASE_TIMEOUT_SECONDS}.`,
+    );
+
+    return MAX_RELEASE_TIMEOUT_SECONDS * 1000;
+  }
 
   if (Number.isFinite(seconds) && seconds > 0) return seconds * 1000;
 
@@ -143,6 +166,14 @@ function releaseTimeoutMs(raw) {
 }
 
 const TIMEOUT_MS = releaseTimeoutMs(env.RELEASE_TIMEOUT_SECONDS);
+
+/**
+ * The least of the budget this step's own release must still have when
+ * the wait on the other environment ends: that wait gives up this much
+ * before the budget does, so this run never starts a release only to give
+ * up on it at once.
+ */
+const MIN_OWN_WINDOW_MS = Math.min(120_000, TIMEOUT_MS / 2);
 const POLL_MS = Number(env.RELEASE_POLL_SECONDS || 5) * 1000;
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -387,24 +418,27 @@ async function otherReleaseActivity(otherId, otherName) {
  * serialization guards memory, not data. Still releasing at the deadline:
  * this run fails before touching the database, saying which Application
  * holds it.
+ *
+ * Returns how long it waited, which the budget of this release's own
+ * outcome loses (RELEASE_TIMEOUT_SECONDS is one budget for both).
  */
 async function waitForTheOtherRelease() {
   const other = (env.RELEASE_SERIALIZE_WITH_APPLICATION_ID ?? "").trim();
 
-  if (!other) return;
+  if (!other) return 0;
 
   if (!/^[A-Za-z0-9_-]{1,64}$/.test(other)) {
     console.log(
       "::warning::RELEASE_SERIALIZE_WITH_APPLICATION_ID tem formato inesperado (copie o id da URL da trajetto-api-migrate do outro ambiente); a etapa segue sem esperar.",
     );
-    return;
+    return 0;
   }
 
   if (other === APPLICATION_ID) {
     console.log(
       `::warning::RELEASE_SERIALIZE_WITH_APPLICATION_ID aponta para a própria ${LABEL} deste ambiente; ela deve ser a do OUTRO ambiente. A etapa segue sem esperar.`,
     );
-    return;
+    return 0;
   }
 
   let otherName;
@@ -419,14 +453,14 @@ async function waitForTheOtherRelease() {
     console.log(
       `::warning::Não foi possível ler a trajetto-api-migrate do outro ambiente (${redact(error.message)}); a etapa segue sem esperar por ela.`,
     );
-    return;
+    return 0;
   }
 
   if (!/^[a-zA-Z0-9.\-_]+$/.test(otherName)) {
     console.log(
       "::warning::O Dokploy não informou o appName da trajetto-api-migrate do outro ambiente; a etapa segue sem esperar por ela.",
     );
-    return;
+    return 0;
   }
 
   const started = Date.now();
@@ -442,7 +476,7 @@ async function waitForTheOtherRelease() {
       console.log(
         `::warning::Falha ao ler o estado de ${otherName} (${redact(error.message)}); a etapa segue sem esperar.`,
       );
-      return;
+      return Date.now() - started;
     }
 
     for (const warning of activity.warnings) {
@@ -458,7 +492,7 @@ async function waitForTheOtherRelease() {
           `Migrations: esperou ~${seconds}s a etapa de release do outro ambiente (${otherName}) terminar; uma por vez na VPS.`,
         );
       }
-      return;
+      return Date.now() - started;
     }
 
     if (!announced) {
@@ -468,7 +502,7 @@ async function waitForTheOtherRelease() {
       announced = true;
     }
 
-    if (Date.now() - started >= TIMEOUT_MS) {
+    if (Date.now() - started >= TIMEOUT_MS - MIN_OWN_WINDOW_MS) {
       fail(
         `A etapa de release do outro ambiente (${otherName}) segue rodando há ${seconds}s (${activity.busy.join("; ")}): esta não começou, e nada foi migrado nem implantado. Acompanhe a ${otherName} no Dokploy (Logs) e rode de novo quando ela terminar; para não esperar, apague a variável RELEASE_SERIALIZE_WITH_APPLICATION_ID do environment do GitHub.`,
       );
@@ -495,7 +529,10 @@ async function main() {
 
   if (wrong) fail(`Etapa de release não rodou: ${wrong} Nada foi migrado.`);
 
-  await waitForTheOtherRelease();
+  // One budget for both waits: what the other environment took, this
+  // release's outcome no longer has. (The deploy call in between keeps the
+  // bounds of dokploy-deploy.mjs, as every service's deploy does.)
+  const ownBudgetMs = TIMEOUT_MS - (await waitForTheOtherRelease());
 
   const appName = app.appName;
   let current = [];
@@ -581,7 +618,7 @@ async function main() {
   let last = { kind: "waiting", task: null };
   let lastSeen = "";
 
-  while (Date.now() - started < TIMEOUT_MS) {
+  while (Date.now() - started < ownBudgetMs) {
     let fresh;
 
     try {
@@ -630,8 +667,8 @@ async function main() {
 
   fail(
     last.task
-      ? `A etapa de release de ${LABEL} não terminou em ${TIMEOUT_MS / 1000}s (a tarefa está ${last.task.currentState}). Ela segue no servidor — uma migration nunca é interrompida no meio; a API não foi implantada. Acompanhe em Logs; quando terminar, o próximo run a encontra aplicada ou a roda de novo.`
-      : `O Dokploy aceitou o deploy de ${LABEL}, mas nenhuma tarefa nova apareceu em ${TIMEOUT_MS / 1000}s. A API não foi implantada. Confira a Application no painel (Logs, e se o serviço existe).`,
+      ? `A etapa de release de ${LABEL} não terminou no prazo (RELEASE_TIMEOUT_SECONDS, ${TIMEOUT_MS / 1000}s no total, a espera pela do outro ambiente incluída; a tarefa está ${last.task.currentState}). Ela segue no servidor — uma migration nunca é interrompida no meio; a API não foi implantada. Acompanhe em Logs; quando terminar, o próximo run a encontra aplicada ou a roda de novo.`
+      : `O Dokploy aceitou o deploy de ${LABEL}, mas nenhuma tarefa nova apareceu no prazo (${TIMEOUT_MS / 1000}s no total). A API não foi implantada. Confira a Application no painel (Logs, e se o serviço existe).`,
   );
 }
 

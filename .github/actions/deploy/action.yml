@@ -65,7 +65,7 @@ inputs:
     description: "vars.SWARM_API_SERVICE do environment"
     default: ""
   release-timeout-seconds:
-    description: "vars.RELEASE_TIMEOUT_SECONDS do environment: quanto esperar a etapa de release (vazio = 1800)"
+    description: "vars.RELEASE_TIMEOUT_SECONDS do environment: quanto a etapa de release pode levar, a espera pela do outro ambiente incluída (vazio = 1800; teto 3600)"
     default: ""
   force-release:
     description: "true: roda a etapa de release mesmo com a imagem de migração já aplicada (Run workflow com force_release)"
