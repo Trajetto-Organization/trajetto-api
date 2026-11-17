@@ -27,7 +27,8 @@
  *      migration still running when a second deploy arrives). Anything off
  *      fails here, before the database is touched, saying what to change.
  *   1b. On the single VPS, the other environment's release step first: while
- *      its task is `Starting`, this one waits (U-11).
+ *      Dokploy still deploys it, or its task has not reached `Running`, this
+ *      one waits (U-11).
  *   2. The service's tasks before the deploy: docker.getServiceContainersByAppName,
  *      the list behind the panel's Logs tab. Dokploy answers an empty list
  *      on any stderr from `docker service ps`, so an empty one is read three
@@ -297,18 +298,95 @@ function outcome(fresh) {
 const LOGS = `O log da migration está no Dokploy: Application ${LABEL} → Logs (o Swarm guarda o da tarefa que falhou).`;
 
 /**
+ * A task that has not reached `Running` yet: Swarm's states before it, the
+ * image pull (`Preparing`) and the migration itself (`Starting`, until the
+ * image's healthcheck sees the marker) included.
+ */
+const IN_FLIGHT = new Set([
+  "New",
+  "Allocated",
+  "Pending",
+  "Assigned",
+  "Accepted",
+  "Preparing",
+  "Ready",
+  "Starting",
+]);
+
+/**
+ * A Dokploy deployment `running` for longer than this is taken as stuck (a
+ * Dokploy restart leaves them so), not as a release in progress: the same
+ * patience dokploy-deploy.mjs gives one attempt by default.
+ */
+const STUCK_DEPLOYMENT_MS = 15 * 60 * 1000;
+
+/**
+ * What the other environment's release Application is doing right now: the
+ * reasons to wait (empty when it is idle), and the warnings to print once.
+ * Throws when Dokploy cannot say.
+ */
+async function otherReleaseActivity(otherId, otherName) {
+  const busy = [];
+  const warnings = [];
+
+  for (const task of await tasks(otherName)) {
+    if (IN_FLIGHT.has(task.status)) busy.push(`tarefa ${task.currentState}`);
+  }
+
+  const deployments = await get(
+    `/api/deployment.all?applicationId=${encodeURIComponent(otherId)}`,
+  );
+
+  if (!Array.isArray(deployments)) {
+    throw new Error("resposta inesperada de deployment.all (não é uma lista)");
+  }
+
+  for (const deployment of deployments) {
+    if (deployment?.status !== "running") continue;
+
+    const createdAt = Date.parse(String(deployment.createdAt ?? ""));
+
+    if (
+      Number.isFinite(createdAt) &&
+      Date.now() - createdAt < STUCK_DEPLOYMENT_MS
+    ) {
+      busy.push("deploy em andamento no Dokploy (baixando a imagem)");
+    } else {
+      warnings.push(
+        `::warning::O deployment ${redact(deployment.deploymentId ?? "?")} de ${otherName} está 'running' no Dokploy há mais de ${STUCK_DEPLOYMENT_MS / 60_000} min (ou sem data): tomado como travado, não como uma etapa em andamento.`,
+      );
+    }
+  }
+
+  return { busy, warnings };
+}
+
+/**
  * One release step at a time on the VPS (plano-escala U-11): while the
  * OTHER environment's release Application (RELEASE_SERIALIZE_WITH_APPLICATION_ID,
- * a variable of the GitHub environment) has a task `Starting` — migrating —
- * this one waits before deploying its own. Staging and production share one
- * host until staging moves to its own server, and the memory plan counts
- * one migrate at a time (plano-escala-execucao, section 3).
+ * a variable of the GitHub environment) is releasing, this one waits before
+ * deploying its own. Staging and production share one host until staging
+ * moves to its own server, and the memory plan counts one migrate at a time
+ * (plano-escala-execucao, section 3).
+ *
+ * "Releasing" is the whole span, not only the migration: a Dokploy
+ * deployment of it still `running` (Dokploy pulls the image before it
+ * updates the service, and the tasks show nothing new meanwhile), and any
+ * task before `Running` (`Preparing` while Swarm pulls, then `Starting`
+ * while it migrates). Watching `Starting` alone let a release that was
+ * still pulling slip past the check, and both then migrated at once.
+ *
+ * Both environments check each other, and the check runs right before this
+ * one's own deploy; two runs that read each other within the same second
+ * can still both go, since Dokploy offers no lock to take. A rare overlap
+ * costs memory for a few minutes, never data: each step works on its own
+ * database.
  *
  * Unset: nothing to wait for. Unreadable (a wrong id, Dokploy not
  * answering): a warning, and the step goes ahead as before — the
- * serialization guards memory, not data. Still `Starting` after the
- * release timeout: this run fails before touching the database, saying
- * which Application holds it.
+ * serialization guards memory, not data. Still releasing at the deadline:
+ * this run fails before touching the database, saying which Application
+ * holds it.
  */
 async function waitForTheOtherRelease() {
   const other = (env.RELEASE_SERIALIZE_WITH_APPLICATION_ID ?? "").trim();
@@ -353,24 +431,28 @@ async function waitForTheOtherRelease() {
 
   const started = Date.now();
   let announced = false;
+  const warned = new Set();
 
   for (;;) {
-    let starting;
+    let activity;
 
     try {
-      starting = (await tasks(otherName)).filter(
-        (task) => task.status === "Starting",
-      );
+      activity = await otherReleaseActivity(other, otherName);
     } catch (error) {
       console.log(
-        `::warning::Falha ao ler as tarefas de ${otherName} (${redact(error.message)}); a etapa segue sem esperar.`,
+        `::warning::Falha ao ler o estado de ${otherName} (${redact(error.message)}); a etapa segue sem esperar.`,
       );
       return;
     }
 
+    for (const warning of activity.warnings) {
+      if (!warned.has(warning)) console.log(warning);
+      warned.add(warning);
+    }
+
     const seconds = Math.round((Date.now() - started) / 1000);
 
-    if (starting.length === 0) {
+    if (activity.busy.length === 0) {
       if (announced) {
         summary(
           `Migrations: esperou ~${seconds}s a etapa de release do outro ambiente (${otherName}) terminar; uma por vez na VPS.`,
@@ -381,14 +463,14 @@ async function waitForTheOtherRelease() {
 
     if (!announced) {
       console.log(
-        `[release] A etapa de release do outro ambiente (${otherName}) está rodando: esperando ela terminar antes de começar esta (uma migração por vez na VPS).`,
+        `[release] A etapa de release do outro ambiente (${otherName}) está rodando (${activity.busy.join("; ")}): esperando ela terminar antes de começar esta (uma migração por vez na VPS).`,
       );
       announced = true;
     }
 
     if (Date.now() - started >= TIMEOUT_MS) {
       fail(
-        `A etapa de release do outro ambiente (${otherName}) segue em Starting há ${seconds}s: esta não começou, e nada foi migrado nem implantado. Acompanhe a ${otherName} no Dokploy (Logs) e rode de novo quando ela terminar; para não esperar, apague a variável RELEASE_SERIALIZE_WITH_APPLICATION_ID do environment do GitHub.`,
+        `A etapa de release do outro ambiente (${otherName}) segue rodando há ${seconds}s (${activity.busy.join("; ")}): esta não começou, e nada foi migrado nem implantado. Acompanhe a ${otherName} no Dokploy (Logs) e rode de novo quando ela terminar; para não esperar, apague a variável RELEASE_SERIALIZE_WITH_APPLICATION_ID do environment do GitHub.`,
       );
     }
 

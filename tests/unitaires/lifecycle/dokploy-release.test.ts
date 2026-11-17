@@ -95,9 +95,17 @@ async function fakeDokploy(options: {
   taskFailures?: number;
   /**
    * The other environment's release Application (U-11): its id, appName
-   * and the walk of its tasks, one read at a time (the last one repeats).
+   * and the walk of its tasks, one read at a time (the last one repeats),
+   * and of its Dokploy deployments (none when absent).
    */
-  other?: { id: string; appName: string; tasks: Task[][] };
+  other?: {
+    id: string;
+    appName: string;
+    tasks: Task[][];
+    deployments?: Array<
+      Array<{ deploymentId: string; status: string; createdAt?: string }>
+    >;
+  };
 }) {
   const calls: Call[] = [];
   let deployed = false;
@@ -105,6 +113,7 @@ async function fakeDokploy(options: {
   let readsBefore = 0;
   let taskFailures = options.taskFailures ?? 0;
   let otherReads = 0;
+  let otherDeploymentReads = 0;
 
   server = createServer((request: IncomingMessage, response) => {
     request.resume();
@@ -133,6 +142,17 @@ async function fakeDokploy(options: {
             applicationId: other.id,
             appName: other.appName,
           }),
+        );
+        return;
+      }
+
+      if (other && path === `/api/deployment.all?applicationId=${other.id}`) {
+        const walk = other.deployments ?? [[]];
+
+        response.end(
+          JSON.stringify(
+            walk[Math.min(otherDeploymentReads++, walk.length - 1)] ?? [],
+          ),
         );
         return;
       }
@@ -590,6 +610,107 @@ describe("the release step on Dokploy", { timeout: 30_000 }, () => {
       );
     });
 
+    /**
+     * The other one's release before its migration: Dokploy pulls the
+     * image (its deployment `running`, the tasks still the old ones), then
+     * Swarm prepares the new task. Watching `Starting` alone let both
+     * windows through, and the two releases then migrated at once.
+     */
+    it("waits while the other one's new task is still pulling its image", async () => {
+      const fake = await fakeDokploy({
+        before: [OLD_IDLE],
+        after: DONE_NEW,
+        other: {
+          id: OTHER,
+          appName: OTHER_NAME,
+          tasks: [
+            [{ containerId: "p1", currentState: "Preparing 2 seconds ago" }],
+            [{ containerId: "p1", currentState: "Starting 1 second ago" }],
+            [{ containerId: "p1", currentState: "Running 1 second ago" }],
+          ],
+        },
+      });
+
+      const result = await release({
+        ...valid(fake),
+        RELEASE_SERIALIZE_WITH_APPLICATION_ID: OTHER,
+      });
+      const paths = fake.calls.map((call) => call.path);
+
+      expect(result.status, result.output).toBe(0);
+      expect(result.output).toContain("tarefa Preparing");
+      expect(paths.filter((path) => path.includes(OTHER_NAME))).toHaveLength(3);
+      expect(
+        paths.lastIndexOf(
+          `/api/docker.getServiceContainersByAppName?appName=${OTHER_NAME}`,
+        ),
+      ).toBeLessThan(
+        paths.findIndex((path) => path.startsWith("/api/application.deploy")),
+      );
+    });
+
+    it("waits while Dokploy still deploys the other one, before any new task", async () => {
+      const now = new Date().toISOString();
+      const fake = await fakeDokploy({
+        before: [OLD_IDLE],
+        after: DONE_NEW,
+        other: {
+          id: OTHER,
+          appName: OTHER_NAME,
+          tasks: [[{ containerId: "p0", currentState: "Running 2 hours ago" }]],
+          deployments: [
+            [{ deploymentId: "p-dep-2", status: "running", createdAt: now }],
+            [{ deploymentId: "p-dep-2", status: "running", createdAt: now }],
+            [{ deploymentId: "p-dep-2", status: "done", createdAt: now }],
+          ],
+        },
+      });
+
+      const result = await release({
+        ...valid(fake),
+        RELEASE_SERIALIZE_WITH_APPLICATION_ID: OTHER,
+      });
+      const paths = fake.calls.map((call) => call.path);
+      const otherHistory = `/api/deployment.all?applicationId=${OTHER}`;
+
+      expect(result.status, result.output).toBe(0);
+      expect(result.output).toContain("deploy em andamento no Dokploy");
+      expect(paths.filter((path) => path === otherHistory)).toHaveLength(3);
+      expect(paths.lastIndexOf(otherHistory)).toBeLessThan(
+        paths.findIndex((path) => path.startsWith("/api/application.deploy")),
+      );
+    });
+
+    it("takes a deployment 'running' for over 15 min as stuck, and goes ahead with a warning", async () => {
+      const fake = await fakeDokploy({
+        before: [OLD_IDLE],
+        after: DONE_NEW,
+        other: {
+          id: OTHER,
+          appName: OTHER_NAME,
+          tasks: [[{ containerId: "p0", currentState: "Running 2 hours ago" }]],
+          deployments: [
+            [
+              {
+                deploymentId: "p-dep-1",
+                status: "running",
+                createdAt: new Date(Date.now() - 60 * 60 * 1000).toISOString(),
+              },
+            ],
+          ],
+        },
+      });
+
+      const result = await release({
+        ...valid(fake),
+        RELEASE_SERIALIZE_WITH_APPLICATION_ID: OTHER,
+      });
+
+      expect(result.status, result.output).toBe(0);
+      expect(result.output).not.toContain("está rodando");
+      expect(result.output).toContain("tomado como travado");
+    });
+
     it("does not wait when the other one is idle", async () => {
       const fake = await fakeDokploy({
         before: [OLD_IDLE],
@@ -630,7 +751,7 @@ describe("the release step on Dokploy", { timeout: 30_000 }, () => {
       });
 
       expect(result.status).toBe(1);
-      expect(result.output).toContain(`(${OTHER_NAME}) segue em Starting`);
+      expect(result.output).toContain(`(${OTHER_NAME}) segue rodando`);
       expect(routes(fake.calls)).not.toContain("/api/application.deploy");
     });
 

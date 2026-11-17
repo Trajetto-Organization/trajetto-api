@@ -2533,10 +2533,16 @@ mostra qual.
 **Uma migração por vez na VPS.** Com a variável
 `RELEASE_SERIALIZE_WITH_APPLICATION_ID` (o applicationId da
 `trajetto-api-migrate` do **outro** ambiente), a etapa espera enquanto a do
-outro ambiente tem tarefa `Starting`; passado o prazo
-(`RELEASE_TIMEOUT_SECONDS`), o passo falha sem tocar no banco. Sem a
-variável, ou sem conseguir ler a outra Application, segue sem esperar (com
-aviso). Sai quando a staging for para o próprio servidor.
+outro ambiente está em andamento: um deployment dela `running` no Dokploy
+(baixando a imagem) ou uma tarefa que ainda não chegou a `Running`
+(`Preparing`, `Starting`); passado o prazo (`RELEASE_TIMEOUT_SECONDS`), o
+passo falha sem tocar no banco. Um deployment `running` há mais de 15 min
+é tomado como travado (aviso, sem espera). Sem a variável, ou sem
+conseguir ler a outra Application, segue sem esperar (com aviso). As duas
+etapas conferem uma à outra logo antes do próprio deploy; duas que leem no
+mesmo segundo ainda podem rodar juntas (o Dokploy não tem trava), o que
+custa memória por alguns minutos, nunca dado. Sai quando a staging for
+para o próprio servidor.
 
 ### Como a etapa roda
 
