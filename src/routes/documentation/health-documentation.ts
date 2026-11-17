@@ -681,8 +681,9 @@ const healthResponses = {
           oldest_partition_starts_at: z.string().nullable(),
           retention_days: z
             .number()
+            .nullable()
             .describe(
-              "Dias de linhas guardados; as partições mais velhas são destacadas e apagadas pelo job partition-maintenance.",
+              "Dias de linhas guardados; as partições mais velhas são destacadas e apagadas pelo job partition-maintenance. null: a tabela é guardada inteira e o job nunca destaca nem apaga partição dela (a casca da trilha das entregas, delivery_event_part).",
             ),
           runway_ok: z
             .boolean()

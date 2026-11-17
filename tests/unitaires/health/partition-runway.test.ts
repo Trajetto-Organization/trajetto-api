@@ -69,6 +69,7 @@ describe("partitionTableState", () => {
   const trail: PartitionedTable = {
     table: "driver_position",
     grain: "day",
+    key: "timestamp",
     lookahead: 7,
     requiredBehind: 1,
     requiredAhead: 1,

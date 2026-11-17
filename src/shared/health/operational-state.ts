@@ -289,7 +289,8 @@ interface PartitionTableMetrics {
   lookahead_days: number | null;
   last_partition_ends_at: string | null;
   oldest_partition_starts_at: string | null;
-  retention_days: number;
+  /** Null: a kept table, nothing is ever detached (F2-16). */
+  retention_days: number | null;
 
   /** At least 3 days ahead (partition-runway-low under it). */
   runway_ok: boolean;

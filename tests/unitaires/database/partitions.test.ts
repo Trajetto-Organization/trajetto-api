@@ -8,6 +8,7 @@ import { definedEnv } from "@/schemas/env-schema/defined-env";
 import {
   addGrains,
   freezeWindow,
+  partitionBound,
   partitionName,
   partitionStartFromName,
   plannedPartitions,
@@ -38,6 +39,7 @@ const trail = registeredPartitions({
 const monthly: PartitionedTable = {
   table: "delivery_event_part",
   grain: "month",
+  key: "uuid7",
   lookahead: 2,
   requiredBehind: 0,
   requiredAhead: 1,
@@ -129,6 +131,48 @@ describe("the partition registry", () => {
 
     expect(addGrains("day", lastDropped, 1)).toEqual(
       retentionCutoff(trail, NIGHT),
+    );
+  });
+
+  // plano-escala F2-16: the delivery trail's shell. Its bounds are ids,
+  // and nothing of it is ever detached: a wrong bound refuses events, a
+  // retention would drop the delivery history the legal opinion keeps.
+  it("keeps the delivery trail's shell monthly on its uuid v7 id, three months ahead and never dropped", () => {
+    const shell = registeredPartitions().find(
+      (table) => table.table === "delivery_event_part",
+    );
+
+    expect(shell).toMatchObject({
+      grain: "month",
+      key: "uuid7",
+      lookahead: 3,
+      requiredBehind: 1,
+      requiredAhead: 1,
+      retentionDays: null,
+    });
+
+    const planned = plannedPartitions(shell as PartitionedTable, NIGHT);
+
+    expect(planned.map((each) => [each.name, each.required])).toEqual([
+      ["delivery_event_part_202610", true],
+      ["delivery_event_part_202611", true],
+      ["delivery_event_part_202612", true],
+      ["delivery_event_part_202701", false],
+      ["delivery_event_part_202702", false],
+    ]);
+
+    // Kept: the cutoff is the epoch, which no partition ends before.
+    expect(retentionCutoff(shell as PartitionedTable, NIGHT)).toEqual(
+      new Date(0),
+    );
+  });
+
+  it("writes a bound in the key's own terms: a UTC timestamp, or the smallest uuid v7 of the instant", () => {
+    expect(partitionBound(trail, day("2026-11-17"))).toBe(
+      "'2026-11-17T00:00:00.000Z'",
+    );
+    expect(partitionBound(monthly, day("2026-11-01"))).toBe(
+      "'01a19467-e800-0000-0000-000000000000'",
     );
   });
 

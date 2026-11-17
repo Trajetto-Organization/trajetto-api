@@ -481,9 +481,17 @@ describe("what the operations screens read by tenant", () => {
       await prisma.$executeRawUnsafe(
         `
         INSERT INTO delivery_event (id, type, "deliveryId", "businessId", created_at)
-        SELECT gen_random_uuid()::text, '${type}'::"DeliveryEventType",
+        SELECT substr(k.h, 1, 8) || '-' || substr(k.h, 9, 4) || '-7' ||
+                 substr(k.r, 1, 3) || '-8' || substr(k.r, 4, 3) || '-' || substr(k.r, 7, 12),
+               '${type}'::"DeliveryEventType",
                d.id, d."businessId", d.created_at + interval '5 minutes'
         FROM delivery d
+        -- A uuid v7 of the event's instant, as Prisma mints it: the trail is
+        -- partitioned by month on its id (plano-escala F2-16).
+        CROSS JOIN LATERAL (
+          SELECT lpad(to_hex((extract(epoch FROM d.created_at + interval '5 minutes') * 1000)::bigint), 12, '0') AS h,
+                 md5(random()::text || d.id) AS r
+        ) AS k
         WHERE d."businessId" IN ($1, $2)
         `,
         CARRIER,

@@ -36,6 +36,15 @@ const SCHEMA_DRIFT_ALLOWLIST: readonly DriftAllowance[] = [
     statement: 'DROP INDEX "support_ticket_all_inbox_idx"',
     why: 'The "Todos" inbox orders by last_message_at DESC NULLS LAST, which Prisma cannot declare: raw SQL in migration 20261007120000_db_perf_indexes, noted on the SupportTicket model.',
   },
+  {
+    statement: 'DROP TABLE "delivery_event_part"',
+    why: "The partitioned shell of the delivery trail (plano-escala F2-16), migration 20261117200000_delivery_event_part: Prisma cannot declare a table partitioned by RANGE on its id, and no model may write it before the copy window of wave 11 (F2-17), which fills it and renames it to delivery_event, the table the DeliveryEvent model maps. No `until`: the window only runs where the owner approved it (HISTORY_WINDOW_APPROVED), so the E2E database keeps the shell; F2-17 takes this entry out when it changes that.",
+  },
+  {
+    statement:
+      /^ALTER TABLE "delivery_event_part" DROP CONSTRAINT "delivery_event_part_(deliveryId|reportedById|routeId|reasonId|occurrenceId|apiKeyId)_fkey"$/,
+    why: "The six foreign keys of the same shell (migrations 20261117200100 to 20261117200600, one each), with the definitions of delivery_event's own: they go with the table above.",
+  },
 ];
 
 export { SCHEMA_DRIFT_ALLOWLIST, type DriftAllowance };

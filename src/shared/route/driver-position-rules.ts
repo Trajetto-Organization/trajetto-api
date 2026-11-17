@@ -1,3 +1,5 @@
+import { uuid7Instant } from "@/shared/time/uuid7-floor";
+
 /**
  * What counts as a usable position, and how many of them a screen gets.
  *
@@ -264,7 +266,11 @@ interface PartitionRange {
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-/** One edge of a bound as pg_get_expr prints it: 'timestamp', MINVALUE or MAXVALUE. */
+/**
+ * One edge of a bound as pg_get_expr prints it: 'timestamp', a uuid v7
+ * floor (a table partitioned on its id, plano-escala F2-16), MINVALUE or
+ * MAXVALUE. Either literal comes back as the epoch ms it starts at.
+ */
 function parseBoundEdge(edge: string): number | null {
   if (/^MINVALUE$/i.test(edge)) return -Infinity;
   if (/^MAXVALUE$/i.test(edge)) return Infinity;
@@ -272,6 +278,10 @@ function parseBoundEdge(edge: string): number | null {
   const literal = /^'(.+)'$/.exec(edge)?.[1];
 
   if (!literal) return null;
+
+  const idInstant = uuid7Instant(literal);
+
+  if (idInstant !== null) return idInstant;
 
   // recorded_at is `timestamp without time zone` holding UTC, so a bare
   // literal is UTC. An explicit offset ("+03", "+05:30") is honoured.

@@ -219,11 +219,15 @@ function scan(file: string, text: string): Finding[] {
       }
     }
 
-    // A batch purge of the trail: deleteInBatches({ table: … }).
+    // A batch purge of the trail: deleteInBatches({ table: Prisma.sql`…` }).
+    // Only SQL counts: a bare name (the partition registry's `table:
+    // "delivery_event_part"`, plano-escala F2-16) names a table, it does
+    // not write one.
     if (
       ts.isPropertyAssignment(node) &&
       ts.isIdentifier(node.name) &&
       node.name.text === "table" &&
+      !ts.isStringLiteralLike(node.initializer) &&
       new RegExp(TRAIL_TABLE).test(node.initializer.getText(source))
     ) {
       report(node, "expurgo em lote");
@@ -381,6 +385,11 @@ describe("the scan, on planted code", () => {
       "a batch purge",
       'await deleteInBatches({ table: Prisma.sql`"delivery_event"`, where, maxRows: 1000 });',
       ["expurgo em lote"],
+    ],
+    [
+      "a registry entry that only names the partitioned trail",
+      `const shell = { table: "delivery_event_part", grain: "month" };`,
+      [],
     ],
   ])("refuse %s", (_case, code, expected) => {
     expect(planted(code)).toEqual(expected);

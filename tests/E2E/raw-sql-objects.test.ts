@@ -112,6 +112,13 @@ const INDEXES: Record<string, string> = {
   // 0. The expression must stay the one the feed and the feed-txid-regressed
   // probe send (COALESCE("txid", 0)), or the planner ignores it.
   delivery_event_feed_idx: `CREATE INDEX delivery_event_feed_idx ON public.delivery_event USING btree ("businessId", COALESCE(txid, (0)::bigint), id)`,
+  // The same four on the trail's partitioned shell (plano-escala F2-16),
+  // named *_part_* until the copy window renames them; each partition's
+  // copy is a clone of these (partitions are left out below).
+  delivery_event_part_reasonId_partial_idx: `CREATE INDEX "delivery_event_part_reasonId_partial_idx" ON ONLY public.delivery_event_part USING btree ("reasonId") WHERE ("reasonId" IS NOT NULL)`,
+  delivery_event_part_occurrenceId_partial_idx: `CREATE INDEX "delivery_event_part_occurrenceId_partial_idx" ON ONLY public.delivery_event_part USING btree ("occurrenceId") WHERE ("occurrenceId" IS NOT NULL)`,
+  delivery_event_part_apiKeyId_partial_idx: `CREATE INDEX "delivery_event_part_apiKeyId_partial_idx" ON ONLY public.delivery_event_part USING btree ("apiKeyId") WHERE ("apiKeyId" IS NOT NULL)`,
+  delivery_event_part_feed_idx: `CREATE INDEX delivery_event_part_feed_idx ON ONLY public.delivery_event_part USING btree ("businessId", COALESCE(txid, (0)::bigint), id)`,
   // A delivery's and a route's tickets, and the SET NULL paths of the
   // ticket's context and people (decision 14.5).
   support_ticket_deliveryId_partial_idx: `CREATE INDEX "support_ticket_deliveryId_partial_idx" ON public.support_ticket USING btree ("deliveryId") WHERE ("deliveryId" IS NOT NULL)`,
@@ -165,6 +172,7 @@ const STATISTICS_TARGETS: Record<string, number> = {
   "activity.businessId": 1000,
   "delivery.businessId": 1000,
   "delivery_event.businessId": 1000,
+  "delivery_event_part.businessId": 1000,
   "delivery_occurrence.businessId": 1000,
   "route.businessId": 1000,
   "webhook_delivery.businessId": 1000,
@@ -235,6 +243,7 @@ async function statisticsTargets(client: Client): Promise<Map<string, number>> {
     JOIN pg_class c ON c.oid = a.attrelid
     WHERE c.relnamespace = 'public'::regnamespace
       AND c.relkind IN ('r', 'p')
+      AND NOT c.relispartition
       AND a.attnum > 0 AND NOT a.attisdropped
       AND coalesce(a.attstattarget, -1) <> -1
   `;
@@ -289,6 +298,9 @@ async function rawIndexes(client: Client): Promise<Map<string, string>> {
     JOIN pg_namespace n ON n.oid = ct.relnamespace
     WHERE n.nspname = 'public'
       AND ct.relkind IN ('r', 'p')
+      -- A partition's index is the clone of its parent's, pinned there;
+      -- the partitions' names carry their dates (plano-escala F2-16).
+      AND NOT ct.relispartition
       AND (
         i.indpred IS NOT NULL
         OR i.indexprs IS NOT NULL

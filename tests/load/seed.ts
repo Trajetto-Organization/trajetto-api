@@ -181,12 +181,21 @@ async function seedHistory(
   await prisma.$executeRawUnsafe(
     `
     INSERT INTO "delivery_event" ("id", "type", "deliveryId", "businessId", "created_at")
-    SELECT gen_random_uuid()::text, step.type::"DeliveryEventType", d."id",
-           d."businessId", d."created_at" + step.after
+    SELECT substr(k.h, 1, 8) || '-' || substr(k.h, 9, 4) || '-7' ||
+             substr(k.r, 1, 3) || '-8' || substr(k.r, 4, 3) || '-' || substr(k.r, 7, 12),
+           step.type::"DeliveryEventType", d."id", d."businessId", k.at
     FROM "delivery" d
     CROSS JOIN (
       VALUES ('ARRIVAL', interval '90 minutes'), ('PROOF', interval '2 hours')
     ) AS step(type, after)
+    -- A uuid v7 minted from the event's own instant, as Prisma's uuid(7)
+    -- does: the trail is partitioned by month on its id (plano-escala
+    -- F2-16), and a random v4 id would land in no month at all.
+    CROSS JOIN LATERAL (
+      SELECT d."created_at" + step.after AS at,
+             lpad(to_hex((extract(epoch FROM d."created_at" + step.after) * 1000)::bigint), 12, '0') AS h,
+             md5(random()::text) AS r
+    ) AS k
     WHERE d."businessId" = $1 AND d."code" LIKE 'HIS-%'
     `,
     businessId,

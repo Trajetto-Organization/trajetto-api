@@ -7,6 +7,7 @@ import { asPartitionOwner } from "@/shared/database/partition-owner";
 import {
   addGrains,
   freezeWindow,
+  partitionBound,
   plannedPartitions,
   partitionStartFromName,
   registeredPartitions,
@@ -109,9 +110,6 @@ const errorMessage = (error: unknown) =>
 
 const quote = (name: string) => `"${name.replace(/"/g, '""')}"`;
 
-/** A bound as Postgres reads it for a `timestamp` column: UTC, no zone. */
-const boundLiteral = (at: Date) => `'${at.toISOString()}'`;
-
 interface AttachedPartition {
   name: string;
   /** Epoch ms; null when the bound is DEFAULT or unreadable. */
@@ -209,7 +207,7 @@ async function createPartition(
         );
         await tx.$executeRawUnsafe(
           `ALTER TABLE ${quote(table.table)} ATTACH PARTITION ${quote(planned.name)}
-             FOR VALUES FROM (${boundLiteral(planned.from)}) TO (${boundLiteral(planned.to)})`,
+             FOR VALUES FROM (${partitionBound(table, planned.from)}) TO (${partitionBound(table, planned.to)})`,
         );
 
         return owner;

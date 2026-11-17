@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { randomUUID } from "node:crypto";
+import { v7 as uuidV7 } from "uuid";
 
 import { collectAlerts } from "@/shared/health/alert-rules";
 import { createPrismaClient } from "@/shared/database/database-client";
@@ -186,7 +187,7 @@ describe("the guard against a stamp from another cluster", () => {
     // A row from before the column: NULL, as every legacy event is.
     await prisma.$executeRaw`
       INSERT INTO "delivery_event" ("id", "type", "note", "deliveryId", "businessId", "txid")
-      VALUES (${randomUUID()}, 'NOTE'::"DeliveryEventType", 'legado', ${deliveryId}, ${CARRIER}, NULL)
+      VALUES (${uuidV7()}, 'NOTE'::"DeliveryEventType", 'legado', ${deliveryId}, ${CARRIER}, NULL)
     `;
 
     const state = await readFeedTxidState(prisma);
@@ -199,7 +200,9 @@ describe("the guard against a stamp from another cluster", () => {
 
   it("fires when a stamp is ahead of the cluster, as after a logical restore", async () => {
     const before = await readFeedTxidState(prisma);
-    const restored = randomUUID();
+    // Event ids are uuid v7, as Prisma mints them (the trail is partitioned
+    // by month on its id, plano-escala F2-16).
+    const restored = uuidV7();
 
     // The simulation: an event whose stamp came from the old cluster's
     // counter, far ahead of this one's.
