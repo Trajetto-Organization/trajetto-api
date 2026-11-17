@@ -18,6 +18,10 @@ import { isDraining } from "@/shared/lifecycle/draining";
 import { buildInfo, buildInfoShape } from "@/shared/build-info";
 import { NotificationPipelineService } from "@/shared/notifications/notification-pipeline-service";
 import {
+  listFailedEvents,
+  replayFailedEvents,
+} from "@/shared/notifications/outbox-dead-letter";
+import {
   deadLetterCountSql,
   deadLetterPageSql,
   type DeadLetterRow,
@@ -610,9 +614,12 @@ async function healthRoutes(app: FastifyInstance) {
    *
    * An event that never fanned out has no delivery rows, so it never appears
    * in /health/dead-letter; the metrics showed only a count of them. This
-   * lists which ones and why. FAILED events are few and found through the
-   * (status, availableAt) index. MASTER-only, like the rest: it spans every
-   * tenant.
+   * lists which ones and why: the FAILED events still in the queue table
+   * (30 days) and the copies moved to outbox_event_dead_letter, kept 90
+   * days from the failure (plano-escala F5-10, outbox-dead-letter.ts).
+   * Failures are few; the live ones come through the (status, availableAt)
+   * index and the copies through failedAt. MASTER-only, like the rest: it
+   * spans every tenant.
    */
   app.get(
     "/health/dead-letter/events",
@@ -624,7 +631,7 @@ async function healthRoutes(app: FastifyInstance) {
         tags: ["health"],
         summary: "Eventos do outbox que falharam (dead letter)",
         description:
-          "Lista paginada dos eventos do outbox que esgotaram as tentativas de expansão, da falha mais recente para a mais antiga. Eles nunca geraram envios, por isso /health/dead-letter não os mostra. Só MASTER: abrange todas as empresas.",
+          "Lista paginada dos eventos do outbox que esgotaram as tentativas de expansão, da falha mais recente para a mais antiga. Eles nunca geraram envios, por isso /health/dead-letter não os mostra. Junta os dois lugares em que uma falha fica: a fila do outbox, nos primeiros 30 dias (`archived: false`), e o arquivo dos eventos que falharam, até `OUTBOX_FAILED_RETENTION_DAYS` (90) dias depois da falha (`archived: true`). Os dois podem ser reprocessados por POST /health/dead-letter/events/replay; um arquivado já reprocessado sai da lista. Só MASTER: abrange todas as empresas.",
         querystring: healthSchemas.deadLetterEventsQuery,
         response: {
           200: healthResponses.deadLetterEvents,
@@ -636,35 +643,18 @@ async function healthRoutes(app: FastifyInstance) {
         typeof healthSchemas.deadLetterEventsQuery
       >;
 
-      const where = { status: "FAILED" as const };
-
-      const total = await database.domainOutboxEvent.count({ where });
-
-      const events = await database.domainOutboxEvent.findMany({
-        where,
-        orderBy: { updated_at: "desc" },
-        skip: (page - 1) * pageSize,
-        take: pageSize,
-        select: {
-          id: true,
-          topic: true,
-          businessId: true,
-          attempts: true,
-          lastError: true,
-          created_at: true,
-          updated_at: true,
-        },
-      });
+      const { rows, total } = await listFailedEvents(page, pageSize);
 
       return reply.status(200).send({
-        data: events.map((event) => ({
+        data: rows.map((event) => ({
           id: event.id,
           topic: event.topic,
           businessId: event.businessId,
           attempts: event.attempts,
           lastError: deadLetterError(event.lastError),
           created_at: event.created_at.toISOString(),
-          failedAt: event.updated_at.toISOString(),
+          failedAt: event.failedAt.toISOString(),
+          archived: event.archived,
         })),
         total,
         page,
@@ -763,7 +753,7 @@ async function healthRoutes(app: FastifyInstance) {
         tags: ["health"],
         summary: "Reprocessa eventos do outbox que falharam",
         description:
-          "Devolve os eventos FAILED indicados (de GET /health/dead-letter/events) para PENDING, com as tentativas zeradas, e acorda o pipeline para expandi-los de novo. Eventos em qualquer outro estado são ignorados, então repetir o pedido não reprocessa nada duas vezes. A expansão é idempotente: só cria os envios que o evento ainda não tinha criado. Até 100 ids por pedido e 10 pedidos por minuto por usuário. O registro durável de quem pediu é a linha de log de aviso `failed outbox events requeued by hand` (usuário, ids e quantos voltaram); o `lastError` do evento mostra quem e quando só até a próxima expansão, que o substitui numa falha e o limpa quando o evento é publicado. Só MASTER: abrange todas as empresas.",
+          "Reprocessa os eventos que falharam indicados (de GET /health/dead-letter/events) e acorda o pipeline para expandi-los de novo. Um evento ainda na fila (`archived: false`) volta para PENDING com as tentativas zeradas, e a expansão idempotente só cria os envios que ele ainda não tinha criado. Um evento arquivado (`archived: true`, guardado até 90 dias depois da falha) vira um evento NOVO, com id e chave próprios e o mesmo tópico, empresa, autor e conteúdo; o arquivado guarda qual evento ele virou e sai da lista. Ids em qualquer outro estado (um evento que já saiu de FAILED, um arquivado já reprocessado, um id desconhecido) são ignorados, então repetir o pedido não reprocessa nada duas vezes. `requeued` conta os dois casos. Até 100 ids por pedido e 10 pedidos por minuto por usuário. O registro durável de quem pediu é a linha de log de aviso `failed outbox events requeued by hand` (usuário, ids, quantos voltaram e o evento novo de cada arquivado); o `lastError` do evento mostra quem e quando só até a próxima expansão, que o substitui numa falha e o limpa quando o evento é publicado. Só MASTER: abrange todas as empresas.",
         body: healthSchemas.deadLetterEventsReplayBody,
         response: {
           200: healthResponses.deadLetterEventsReplay,
@@ -776,29 +766,22 @@ async function healthRoutes(app: FastifyInstance) {
         typeof healthSchemas.deadLetterEventsReplayBody
       >;
 
-      const result = await database.domainOutboxEvent.updateMany({
-        where: { id: { in: eventIds }, status: "FAILED" },
-        data: {
-          status: "PENDING",
-          attempts: 0,
-          availableAt: new Date(),
-          leaseExpiresAt: null,
-          lastError: `Reenfileirado manualmente em ${new Date().toISOString()} por ${request.user.id}`,
-        },
-      });
+      const result = await replayFailedEvents(eventIds, request.user.id);
+      const requeued = result.requeued + result.recreated.length;
 
       request.log.warn(
         {
           userId: request.user.id,
           eventIds,
-          requeued: result.count,
+          requeued,
+          recreated: result.recreated,
         },
         "failed outbox events requeued by hand",
       );
 
       NotificationPipelineService.getInstance().wake();
 
-      return reply.status(200).send({ requeued: result.count });
+      return reply.status(200).send({ requeued });
     },
   );
 }

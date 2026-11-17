@@ -442,7 +442,11 @@ describe("without the foreign keys of the queues", () => {
     const purged = [await newDelivery(old, { userId: user })];
 
     const [batch] = await prisma.$queryRaw<Array<{ deleted: number }>>(
-      failedPurgeBatchSql(new Date(Date.now() - 90 * DAY_MS), 5_000),
+      failedPurgeBatchSql(
+        new Date(Date.now() - 90 * DAY_MS),
+        new Date(Date.now() - 90 * DAY_MS),
+        5_000,
+      ),
     );
 
     expect(batch.deleted).toBe(1);

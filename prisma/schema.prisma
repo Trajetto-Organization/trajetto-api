@@ -1500,6 +1500,52 @@ model NotificationDeadLetter {
   @@map("notification_dead_letter")
 }
 
+/// An outbox event that exhausted its expansions, moved out of
+/// domain_outbox_event by the nightly purge (plano-escala F5-10).
+///
+/// A FAILED event stays in the queue table 30 days, like a PUBLISHED one:
+/// the queues become partitioned by day (F5-09), and a day is dropped
+/// whole (F5-11). Then the purge copies it here and deletes it, in one
+/// statement, and the copy is kept OUTBOX_FAILED_RETENTION_DAYS (90) from
+/// the failure — the same 90 days a FAILED event always had. GET
+/// /health/dead-letter/events lists both places; a replay requeues an
+/// event still in the queue table and creates a NEW event from a copy
+/// here (outbox-dead-letter.ts).
+///
+/// No foreign keys: the row must outlive the event, the company and the
+/// actor it names, so everything a replay needs is copied.
+model OutboxEventDeadLetter {
+  /// The event's own id, so archiving the same event twice is a no-op.
+  id String @id
+
+  eventKey      String
+  topic         String
+  aggregateType String
+  aggregateId   String
+  businessId    String?
+  actorId       String?
+  payload       Json
+  attempts      Int
+  lastError     String?
+  correlationId String?
+
+  /// When the event was published and when it gave up (its updated_at),
+  /// both copied.
+  created_at DateTime
+  failedAt   DateTime
+
+  archived_at DateTime @default(now())
+
+  /// Set by the replay, with the event it created: a second replay of the
+  /// same copy is a no-op, and the listing leaves it out.
+  replayed_at       DateTime?
+  replayed_event_id String?
+
+  /// The listing (newest failure first) and the archive's own purge.
+  @@index([failedAt])
+  @@map("outbox_event_dead_letter")
+}
+
 enum NotificationCategory {
   FINES
   MAINTENANCE

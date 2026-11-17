@@ -1,6 +1,7 @@
 import { Prisma } from "@prisma/client";
 
 import { databaseBatch } from "@/../infra/database";
+import { env } from "@/env";
 import { throwIfPartial } from "@/shared/errors/partial-run-error";
 import { CronJobDefinition } from "@/shared/services/cron-scheduler-service";
 import { logger } from "@/shared/logging/logger";
@@ -21,20 +22,26 @@ const log = logger.child({
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-/** Published events have served their purpose; a month covers any audit look. */
+/**
+ * Published events have served their purpose; a month covers any audit
+ * look. A FAILED event leaves the queue table at the same age, moved to
+ * its dead letter (plano-escala F5-10): the queues become partitioned by
+ * day, and a day is dropped whole (F5-11).
+ */
 const PUBLISHED_RETENTION_DAYS = 30;
 
-/**
- * Failures stay longer — they are the ones someone may still investigate.
+/*
+ * Failures stay longer — they are the ones someone may still investigate:
+ * OUTBOX_FAILED_RETENTION_DAYS (90), counted from the failure, read on
+ * every run.
  *
- * Both kinds: an event that failed to fan out (kept in domain_outbox_event),
- * and a delivery that failed to send. The latter belongs to a PUBLISHED event,
+ * Both kinds, each in its dead letter: an event that failed to fan out,
+ * moved to outbox_event_dead_letter at 30 days (failedPurgeBatchSql), and
+ * a delivery that failed to send. The latter belongs to a PUBLISHED event,
  * whose purge at 30 days takes it with it, so it is copied to
  * notification_dead_letter by the same statement that deletes the event
- * (publishedPurgeBatchSql) and kept there for these 90 days, counted from the
- * failure.
+ * (publishedPurgeBatchSql).
  */
-const FAILED_RETENTION_DAYS = 90;
 
 const JOB_EXECUTION_RETENTION_DAYS = 30;
 
@@ -91,10 +98,11 @@ const HEARTBEAT_RETENTION_DAYS = 1;
 
 /**
  * Keys of outbox_event_key whose event is gone (plano-escala F5-02): a
- * FAILED event purged after its 90 days, or an event the previous image
- * purged during a rolling deploy without its key. Only keys older than the
- * failures' retention, so a key never goes while its event may still be
- * there; the PUBLISHED purge takes the keys of its own events with them.
+ * FAILED event moved to its dead letter at 30 days (F5-10), or an event the
+ * previous image purged during a rolling deploy without its key. Only keys
+ * older than the failures' retention, so a key keeps saying "already
+ * published" as long as the failure is kept anywhere; the PUBLISHED purge
+ * takes the keys of its own events with them.
  */
 const MAX_ORPHAN_KEYS_PER_RUN = 100_000;
 
@@ -226,28 +234,58 @@ function duePublishedSql(publishedBefore: Date): Prisma.Sql {
   return Prisma.sql`"status" = 'PUBLISHED' AND "processedAt" < ${publishedBefore}`;
 }
 
-/** What the FAILED purge matches: events that gave up long enough ago. */
+/** What the FAILED move matches: events that gave up long enough ago. */
 function dueFailedSql(failedBefore: Date): Prisma.Sql {
   return Prisma.sql`"status" = 'FAILED' AND "updated_at" < ${failedBefore}`;
 }
 
 /**
- * One batch of the FAILED purge (plano-escala F5-05).
+ * One batch of the FAILED move: the events that gave up before
+ * `failedBefore` go to outbox_event_dead_letter and leave the queue table
+ * (plano-escala F5-10), in one statement — the copy and the delete share
+ * one snapshot and commit together, so an event is always in exactly one
+ * of the two places. Idempotent: the copy's key is the event's id (ON
+ * CONFLICT DO NOTHING). The copy is kept OUTBOX_FAILED_RETENTION_DAYS from
+ * the failure, and replayed as a new event (outbox-dead-letter.ts); an
+ * event that failed before `keptFrom` is already past that and is only
+ * deleted (a night the purge did not run, or a retention just lowered).
  *
  * An event that failed to expand usually has no delivery; one that a
  * replica expanded after losing its lease, and that then failed under the
  * new owner, does. The cascade took those with the event, so the batch
- * takes them explicitly, with their receipts (EVENT_FAMILY_SQL). The keys
- * of these events are left to the orphan-key sweep, as before.
+ * takes them explicitly, with their receipts (EVENT_FAMILY_SQL, F5-05).
+ * The keys of these events are left to the orphan-key sweep, as before.
  */
-function failedPurgeBatchSql(failedBefore: Date, limit: number): Prisma.Sql {
+function failedPurgeBatchSql(
+  failedBefore: Date,
+  keptFrom: Date,
+  limit: number,
+): Prisma.Sql {
   return Prisma.sql`
     WITH batch AS (
-      SELECT "id"
+      SELECT
+        "id", "eventKey", "topic", "aggregateType", "aggregateId",
+        "businessId", "actorId", "payload", "attempts", "lastError",
+        "correlationId", "created_at", "updated_at"
       FROM "domain_outbox_event"
       WHERE ${dueFailedSql(failedBefore)}
       LIMIT ${limit}
       FOR UPDATE SKIP LOCKED
+    ),
+    archived AS (
+      INSERT INTO "outbox_event_dead_letter" (
+        "id", "eventKey", "topic", "aggregateType", "aggregateId",
+        "businessId", "actorId", "payload", "attempts", "lastError",
+        "correlationId", "created_at", "failedAt"
+      )
+      SELECT
+        b."id", b."eventKey", b."topic", b."aggregateType", b."aggregateId",
+        b."businessId", b."actorId", b."payload", b."attempts", b."lastError",
+        b."correlationId", b."created_at", b."updated_at"
+      FROM batch b
+      WHERE b."updated_at" >= ${keptFrom}
+      ON CONFLICT ("id") DO NOTHING
+      RETURNING 1
     ),
     ${EVENT_FAMILY_SQL},
     removed AS (
@@ -258,7 +296,7 @@ function failedPurgeBatchSql(failedBefore: Date, limit: number): Prisma.Sql {
     )
     SELECT
       (SELECT count(*) FROM removed)::int AS deleted,
-      0 AS archived
+      (SELECT count(*) FROM archived)::int AS archived
   `;
 }
 
@@ -343,7 +381,9 @@ const cleanupNotificationPipelineJob: CronJobDefinition = {
       Date.now() - PUBLISHED_RETENTION_DAYS * DAY_MS,
     );
 
-    const failedBefore = new Date(Date.now() - FAILED_RETENTION_DAYS * DAY_MS);
+    const failedBefore = new Date(
+      Date.now() - env.OUTBOX_FAILED_RETENTION_DAYS * DAY_MS,
+    );
     const executionsBefore = new Date(
       Date.now() - JOB_EXECUTION_RETENTION_DAYS * DAY_MS,
     );
@@ -385,7 +425,7 @@ const cleanupNotificationPipelineJob: CronJobDefinition = {
       deadline,
     });
 
-    // The archive's own retention, counted from the failure. failedAt is
+    // The archives' own retention, counted from the failure. failedAt is
     // indexed, so the scan starts at the oldest rows and stops at the batch.
     const archiveExpired = await deleteInBatches({
       table: Prisma.sql`"notification_dead_letter"`,
@@ -395,14 +435,25 @@ const cleanupNotificationPipelineJob: CronJobDefinition = {
       deadline,
     });
 
-    const failed = await purgeEvents({
-      batchSql: (limit) => failedPurgeBatchSql(failedBefore, limit),
-      due: dueFailedSql(failedBefore),
+    const eventArchiveExpired = await deleteInBatches({
+      table: Prisma.sql`"outbox_event_dead_letter"`,
+      where: Prisma.sql`"failedAt" < ${failedBefore}`,
+      orderBy: Prisma.sql`"failedAt"`,
       maxRows: MAX_FAILED_PER_RUN,
       deadline,
     });
 
-    // The keys the FAILED purge above left without their event (F5-02).
+    // FAILED events leave the queue table at the PUBLISHED events' age,
+    // copied to their dead letter (F5-10).
+    const failed = await purgeEvents({
+      batchSql: (limit) =>
+        failedPurgeBatchSql(publishedBefore, failedBefore, limit),
+      due: dueFailedSql(publishedBefore),
+      maxRows: MAX_FAILED_PER_RUN,
+      deadline,
+    });
+
+    // The keys the FAILED moves left without their event (F5-02).
     const orphanKeys = await deleteInBatches({
       table: Prisma.sql`"outbox_event_key"`,
       where: orphanKeysSql(failedBefore),
@@ -444,6 +495,8 @@ const cleanupNotificationPipelineJob: CronJobDefinition = {
         cronExecutions: executions.deleted + heartbeatExecutions.deleted,
         archivedDeadLetters: published.archived,
         expiredDeadLetters: archiveExpired.deleted,
+        archivedFailedEvents: failed.archived,
+        expiredFailedEvents: eventArchiveExpired.deleted,
       },
       "notification pipeline purged",
     );
@@ -455,6 +508,7 @@ const cleanupNotificationPipelineJob: CronJobDefinition = {
       "scheduled_job_execution (ops-heartbeat)": heartbeatExecutions,
       notification_provider_receipt: untiedReceipts,
       notification_dead_letter: archiveExpired,
+      outbox_event_dead_letter: eventArchiveExpired,
       "domain_outbox_event (FAILED)": failed,
       outbox_event_key: orphanKeys,
       "domain_outbox_event (PUBLISHED)": published,

@@ -216,7 +216,11 @@ describe("one batch of the nightly purge", () => {
     // scan of them per batch would cost every night what the ledger keeps.
     for (const purge of [
       statement(),
-      failedPurgeBatchSql(new Date(Date.now() - 90 * DAY_MS), 5_000),
+      failedPurgeBatchSql(
+        new Date(Date.now() - 90 * DAY_MS),
+        new Date(Date.now() - 90 * DAY_MS),
+        5_000,
+      ),
     ]) {
       const receiptReads = readsOf(
         flatten(await genericPlan(purge)),
@@ -237,7 +241,11 @@ describe("one batch of the nightly purge", () => {
   it("reads the FAILED purge's deliveries by event, never a scan", async () => {
     const nodes = flatten(
       await genericPlan(
-        failedPurgeBatchSql(new Date(Date.now() - 90 * DAY_MS), 5_000),
+        failedPurgeBatchSql(
+          new Date(Date.now() - 90 * DAY_MS),
+          new Date(Date.now() - 90 * DAY_MS),
+          5_000,
+        ),
       ),
     );
 

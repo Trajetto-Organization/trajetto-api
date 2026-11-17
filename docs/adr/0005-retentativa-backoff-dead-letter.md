@@ -31,7 +31,7 @@ As constantes vivem em `src/shared/notifications/pipeline-rules.ts`,
 | O que falhou                | Consulta                               | Reenvio                                                                                                                                         |
 | --------------------------- | -------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
 | entrega de notificação      | `GET /health/dead-letter`              | `POST /health/dead-letter/replay`                                                                                                               |
-| evento do outbox (expansão) | `GET /health/dead-letter/events`       | `POST /health/dead-letter/events/replay` (28/10/2026)                                                                                           |
+| evento do outbox (expansão) | `GET /health/dead-letter/events`       | `POST /health/dead-letter/events/replay` (28/10/2026; o arquivado vira um evento novo, 17/11/2026)                                              |
 | webhook                     | `GET /integrations/webhook-deliveries` | `POST /integrations/webhook-delivery/:id/business/:businessId/resend` (linha nova, mesmo `X-Trajetto-Event-Id`, permissão `integration_manage`) |
 | leitura de IA               | o registro mostra a falha              | botão "Verificar com IA"                                                                                                                        |
 
@@ -39,7 +39,11 @@ As rotas de `/health/dead-letter*` são só do MASTER e têm rate limit
 (`src/routes/health-routes.ts`). O
 reenvio de eventos aceita até 100 ids por vez, move só linhas em `FAILED`,
 zera as tentativas e a expansão idempotente cria só as entregas que
-faltavam. Quem pediu e quando ficam na linha de log de aviso
+faltavam. Desde o plano de escala (F5-10) o evento FAILED sai da fila aos
+30 dias para a `outbox_event_dead_letter` e fica lá até
+`OUTBOX_FAILED_RETENTION_DAYS` (90) dias depois da falha. A listagem junta
+os dois lugares, e o reenvio de um arquivado cria um evento novo a partir
+dele (o original já saiu da fila), uma vez só. Quem pediu e quando ficam na linha de log de aviso
 `failed outbox events requeued by hand` (com os ids e quantos voltaram), que
 é o registro durável; o `lastError` do evento mostra o mesmo só até a próxima
 expansão, que o substitui numa falha e o limpa ao publicar.

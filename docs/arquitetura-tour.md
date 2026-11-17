@@ -710,7 +710,9 @@ que rodam dentro de cada réplica da API (`src/workers/index.ts`, ligados por
   28/10/2026, `POST /health/dead-letter/events/replay` para os eventos (até 100
   ids; a expansão idempotente só cria o que faltava). Quem pediu fica na linha
   de log `failed outbox events requeued by hand`; o `lastError` do evento só
-  mostra isso até a próxima expansão.
+  mostra isso até a próxima expansão. Depois de 30 dias o evento FAILED vai
+  para a `outbox_event_dead_letter` (até 90 dias da falha), continua na
+  listagem e o reenvio dele cria um evento novo.
 - **Crons sem duplicar.** Um lease por `(jobName, scheduledFor)` garante uma
   execução por horário com várias réplicas (`src/jobs/cron/index.ts`).
 - **Por que não um broker.** A `main` antiga tinha RabbitMQ (legado, removido

@@ -506,7 +506,11 @@ const healthResponses = {
       pending: z
         .number()
         .describe("Events waiting to be claimed — queue depth."),
-      failed: z.number().describe("Events that exhausted their retries."),
+      failed: z
+        .number()
+        .describe(
+          "Events that exhausted their retries and are still kept: FAILED in the queue (30 days) or in its dead letter, not replayed (90 days from the failure).",
+        ),
       oldest_pending_seconds: z
         .number()
         .nullable()
@@ -1202,7 +1206,7 @@ const healthResponses = {
     requeued: z
       .number()
       .describe(
-        "Quantos dos eventos indicados estavam FAILED e voltaram para a fila do outbox.",
+        "Quantos dos eventos indicados voltaram para a fila do outbox: os que ainda estavam FAILED na fila, de volta a PENDING, mais os arquivados que viraram um evento novo.",
       ),
   }),
   deadLetterReplayInvalid: codedRefusal(
@@ -1216,7 +1220,11 @@ const healthResponses = {
   deadLetterEvents: z.object({
     data: z.array(
       z.object({
-        id: z.string().describe("domain_outbox_event id."),
+        id: z
+          .string()
+          .describe(
+            "domain_outbox_event id (the original event's, for an archived one).",
+          ),
         topic: z.string(),
         businessId: z
           .string()
@@ -1233,9 +1241,18 @@ const healthResponses = {
         failedAt: z
           .string()
           .describe("Last transition — in practice, when it gave up."),
+        archived: z
+          .boolean()
+          .describe(
+            "false: still FAILED in the outbox queue (its first 30 days); a replay puts it back to PENDING. true: moved to outbox_event_dead_letter, kept OUTBOX_FAILED_RETENTION_DAYS (90) from the failure; a replay creates a new event from it.",
+          ),
       }),
     ),
-    total: z.number().describe("Total FAILED outbox events."),
+    total: z
+      .number()
+      .describe(
+        "Total failed outbox events: the live FAILED ones plus the archived ones not replayed yet.",
+      ),
     page: z.number(),
     pageSize: z.number(),
     totalPages: z.number(),
@@ -1260,7 +1277,7 @@ const healthSchemas = {
       .min(1, "Informe ao menos um evento.")
       .max(100, "No máximo 100 eventos por vez.")
       .describe(
-        "IDs de domain_outbox_event em FAILED (os de GET /health/dead-letter/events) para expandir de novo. Eventos em qualquer outro estado são ignorados.",
+        "IDs dos eventos que falharam (os de GET /health/dead-letter/events, na fila ou arquivados) para expandir de novo. Ids em qualquer outro estado são ignorados.",
       ),
   }),
   /**

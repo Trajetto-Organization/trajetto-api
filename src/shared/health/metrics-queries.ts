@@ -311,12 +311,18 @@ function outboxPendingSql(): Prisma.Sql {
  * above: that one reads created_at from the heap, and a FILTER would drag
  * every FAILED row ever kept through the same heap read; alone, this is an
  * index-only count on (status, availableAt).
+ *
+ * Plus the copies in outbox_event_dead_letter not replayed yet: a FAILED
+ * event leaves the queue table at 30 days (plano-escala F5-10), and the
+ * count still says how many failures are kept, as it always did.
  */
 function outboxFailedSql(): Prisma.Sql {
   return Prisma.sql`
-    SELECT count(*)::int AS n
-    FROM "domain_outbox_event"
-    WHERE "status" = 'FAILED'
+    SELECT (
+      (SELECT count(*) FROM "domain_outbox_event" WHERE "status" = 'FAILED')
+      + (SELECT count(*) FROM "outbox_event_dead_letter"
+         WHERE "replayed_at" IS NULL)
+    )::int AS n
   `;
 }
 

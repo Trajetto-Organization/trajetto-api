@@ -875,6 +875,19 @@ const envSchema = z
       z.coerce.number().int().min(30).max(3_650).default(90),
     ),
 
+    // The dead letters' retention (plano-escala F5-10): days a failure is
+    // kept, counted from when it gave up — a FAILED outbox event (in the
+    // queue table for 30 days, then in outbox_event_dead_letter) and a
+    // FAILED delivery (notification_dead_letter) — before the nightly
+    // cleanup-notification-pipeline removes it. 90 is what the job always
+    // kept. Over 30 only: a FAILED event leaves the queue table at 30 days,
+    // and a retention of 30 or less would expire it the night it is
+    // copied.
+    OUTBOX_FAILED_RETENTION_DAYS: z.preprocess(
+      (value) => (value === "" ? undefined : value),
+      z.coerce.number().int().min(31).max(3_650).default(90),
+    ),
+
     // The bell's retention (plano-escala F5-14): days a read notification
     // and an unread one are kept before the nightly cleanup-user-history
     // removes them, as the job always did (90 and 180). An env so the
