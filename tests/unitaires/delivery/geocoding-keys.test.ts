@@ -97,7 +97,12 @@ async function keysTouched(keys?: GeocodingKeys): Promise<string[]> {
       key: (keys ?? GEOCODING_KEYS).budget,
     },
   });
-  const hold = createRedisGeocodingHold(redis as never, () => 2_000, keys);
+  const hold = createRedisGeocodingHold(
+    redis as never,
+    () => 2_000,
+    keys,
+    quota,
+  );
   const store = createRedisAddressSearchStore(
     redis as never,
     quota,

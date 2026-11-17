@@ -1540,9 +1540,13 @@ chave da pausa guarda o motivo junto do prazo (`REFUSED`, `QUOTA` ou
   `REFUSED` (chave ou URL erradas, renovada a cada 15 min) ou `QUOTA` (cota
   do dia do provedor, até a meia-noite UTC), ou o orçamento do dia gasto. A
   pausa de um minuto (`BURST`) não suspende. É um `MGET` na conexão de
-  limites (`rate-limit`, que falha rápido), ligada em `http.ts`, e só quando
-  alguma parada da rota leria `SEARCHING`. Sem resposta do Redis, nada fica
-  suspenso, e o prazo de 10 min ainda encerra o ícone.
+  limites (`rate-limit`, que falha rápido), ligada em `http.ts`, mais a
+  linha do dia na `provider_quota_day` (escopo `geocoding-job`), e só quando
+  alguma parada da rota leria `SEARCHING`. A linha é o dia desde o F2-32: a
+  chave do Redis é só a cópia da imagem anterior, que um despejo zera e o
+  F2-36 tira (revisão do F2-32); com a chave já no limite, a linha não é
+  lida. Sem resposta do Redis nem do banco, nada fica suspenso, e o prazo de
+  10 min ainda encerra o ícone.
 - `geo_precision` só onde a resposta do geocodificador ainda vale: no ponto
   que ele achou (`GEOCODER`, como a geocerca lê em `addressPrecisionOf`) e
   no bairro ou cidade a que ele só chegou (`COARSE`, sem ponto). Um pino

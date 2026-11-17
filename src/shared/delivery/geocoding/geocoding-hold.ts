@@ -2,7 +2,17 @@ import type { Redis } from "ioredis";
 
 import { env } from "@/env";
 import { logger } from "@/shared/logging/logger";
+import {
+  ProviderQuotaRepository,
+  quotaDay,
+  type IProviderQuotaRepository,
+} from "@/shared/services/provider-quota/provider-quota-repository";
 
+import {
+  GEOCODER_PROVIDER,
+  GEOCODING_SCOPES,
+  countOf,
+} from "./geocoding-budget";
 import { pauseReasonOf } from "./geocoding-gate";
 import { GEOCODING_KEYS, type GeocodingKeys } from "./geocoding-keys";
 
@@ -21,9 +31,14 @@ const log = logger.child({ component: "geocoding-hold" });
  * A burst's minute is not a hold: the next minute's run asks again.
  *
  * One MGET on the request path's fail-fast connection (the rate-limit one,
- * wired in http.ts), and only when a stop of the route could read as
- * SEARCHING. When Redis does not answer, nothing is held: the time bound
- * of address-lookup-state.ts still ends the spinner.
+ * wired in http.ts) — the pause, and the previous image's copy of the day
+ * — and the day's row in Postgres (provider_quota_day, the job's scope),
+ * only when a stop of the route could read as SEARCHING. The row is the
+ * day since F2-32: the key is a mirror written on each take, which an
+ * eviction once the day is spent leaves at 0 (a refused take writes no
+ * mirror), and F2-36 drops it (review of F2-32). The row is not read when
+ * the key already says the day is spent. When neither answers, nothing is
+ * held: the time bound of address-lookup-state.ts still ends the spinner.
  */
 interface GeocodingHold {
   held(now: Date): Promise<boolean>;
@@ -33,26 +48,47 @@ function createRedisGeocodingHold(
   redis: Pick<Redis, "mget">,
   dailyLimit: () => number = () => env.DELIVERY_GEOCODING_DAILY_BUDGET,
   keys: GeocodingKeys = GEOCODING_KEYS,
+  quota: Pick<IProviderQuotaRepository, "used"> = new ProviderQuotaRepository(),
 ): GeocodingHold {
+  /** The job's row of the day; 0 when unreadable. */
+  const rowOf = async (now: Date): Promise<number> => {
+    try {
+      const counts = await quota.used(GEOCODER_PROVIDER, quotaDay(now), [
+        GEOCODING_SCOPES.job,
+      ]);
+
+      return counts[GEOCODING_SCOPES.job] ?? 0;
+    } catch (err) {
+      log.debug({ err }, "geocoding hold: the day's row unreadable");
+
+      return 0;
+    }
+  };
+
   return {
     async held(now) {
+      let pause: string | null = null;
+      let mirrored: string | null = null;
+
       try {
-        const [pause, used] = await redis.mget(keys.pause, keys.budget(now));
-        const reason = pauseReasonOf(pause);
-
-        if (reason === "REFUSED" || reason === "QUOTA") return true;
-
-        const limit = dailyLimit();
-        const spent = Number(used ?? 0);
-
-        return limit > 0 && Number.isFinite(spent) && spent >= limit;
+        [pause, mirrored] = await redis.mget(keys.pause, keys.budget(now));
       } catch (err) {
         // Debug, not warn: during an outage every route read would write a
         // line, and the connection log already says Redis is gone.
         log.debug({ err }, "geocoding hold unreadable");
-
-        return false;
       }
+
+      const reason = pauseReasonOf(pause);
+
+      if (reason === "REFUSED" || reason === "QUOTA") return true;
+
+      const limit = dailyLimit();
+
+      if (limit <= 0) return false;
+
+      if (countOf(mirrored) >= limit) return true;
+
+      return (await rowOf(now)) >= limit;
     },
   };
 }
