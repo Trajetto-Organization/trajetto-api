@@ -387,6 +387,7 @@ function operationalSnapshotSql(since: Date): Prisma.Sql {
  */
 const HOT_TABLES = [
   "driver_position",
+  "driver_position_v2",
   "delivery_event",
   "activity",
   "notification",

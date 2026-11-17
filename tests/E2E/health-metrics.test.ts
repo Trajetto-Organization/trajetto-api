@@ -501,12 +501,18 @@ describe("the database's own numbers", () => {
       (entry: { table: string }) => entry.table === "driver_position",
     );
 
-    const roots = tables.filter((name: string) => name === "driver_position");
-    const leaks = tables.filter((n: string) => /^driver_position_/.test(n));
+    const roots = tables.filter((name: string) =>
+      /^driver_position(_v2)?$/.test(name),
+    );
+    // A daily partition of either trail (the lean one since plano-escala
+    // F2-10) reported on its own.
+    const leaks = tables.filter((n: string) =>
+      /^driver_position(_v2)?_\d{8}$/.test(n),
+    );
 
     // The migration creates several daily partitions ahead.
     expect(trail.partitions).toBeGreaterThan(1);
-    expect(roots).toEqual(["driver_position"]);
+    expect(roots.sort()).toEqual(["driver_position", "driver_position_v2"]);
     expect(leaks).toEqual([]);
     expect(tables).toContain("notification_delivery");
   });

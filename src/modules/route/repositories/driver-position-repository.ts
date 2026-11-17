@@ -25,11 +25,13 @@ const log = logger.child({ component: "driver-position" });
 /**
  * Postgres' refusal of a row no partition covers (SQLSTATE 23514). Prisma
  * surfaces it as an unknown request error, so the message is all there is.
+ * The lean trail's name (plano-escala F2-10), and the legacy one's, which
+ * the image before it writes.
  */
 function isMissingPartition(error: unknown): boolean {
   return (
     error instanceof Error &&
-    /no partition of relation \\?"?driver_position\\?"? found for row/i.test(
+    /no partition of relation \\?"?driver_position(?:_v2)?\\?"? found for row/i.test(
       error.message,
     )
   );
@@ -103,13 +105,16 @@ class DriverPositionRepository implements IDriverPositionRepository {
     }
   }
 
-  /** Every range partition of driver_position, as pg_get_expr prints it. */
+  /**
+   * Every range partition of the trail the flush writes (driver_position_v2,
+   * plano-escala F2-10), as pg_get_expr prints it.
+   */
   private async partitionRanges(): Promise<PartitionRange[]> {
     const rows = await this.prisma.$queryRaw<{ bound: string | null }[]>`
       SELECT pg_get_expr(c."relpartbound", c."oid") AS "bound"
       FROM "pg_inherits" i
       JOIN "pg_class" c ON c."oid" = i."inhrelid"
-      WHERE i."inhparent" = '"driver_position"'::regclass
+      WHERE i."inhparent" = '"driver_position_v2"'::regclass
     `;
 
     return rows
@@ -155,8 +160,9 @@ class DriverPositionRepository implements IDriverPositionRepository {
 
         recorded_at: ping.recorded_at,
       })),
-      // (driverId, recorded_at) is unique since
-      // 20260924090800_driver_position_dedupe: a batch resent after a lost
+      // (driverId, recorded_at) is the lean trail's primary key (plano-escala
+      // F2-10; a unique index on the legacy table since
+      // 20260924090800_driver_position_dedupe): a batch resent after a lost
       // response is absorbed (ON CONFLICT DO NOTHING) instead of failing the
       // whole request, and `count` is only what was new.
       skipDuplicates: true,
@@ -303,21 +309,53 @@ class DriverPositionRepository implements IDriverPositionRepository {
     // second lock, and the one that holds when somebody adds a caller that
     // forgot the first. Half-open, like the business day: a point at
     // midnight belongs to the day it starts, not to both.
+    //
+    // Both trails while the legacy one exists (plano-escala F2-10): the
+    // lean one (uuid columns, read as text) and the legacy one, which the
+    // previous image writes during a rolling deploy and which holds the
+    // days before the switch. A batch resent across the two images is in
+    // both: DISTINCT ON the instant keeps one, the lean one's. Each side
+    // goes down its own (driverId, recorded_at) index; the casts are
+    // explicit because Prisma 7 sends the parameters untyped.
     const rows = await this.prisma.$queryRaw<
       Array<StoredPosition & { total: number }>
     >(Prisma.sql`
-      WITH "trail" AS (
+      WITH "points" AS (
+        SELECT DISTINCT ON ("recorded_at")
+          "driverId", "routeId", "latitude", "longitude", "accuracy",
+          "speed", "heading", "battery", "recorded_at"
+        FROM (
+          SELECT
+            "driverId"::text AS "driverId", "routeId"::text AS "routeId",
+            "latitude", "longitude", "accuracy", "speed", "heading",
+            "battery", "recorded_at", 0 AS "source"
+          FROM "driver_position_v2"
+          WHERE "businessId" = ${businessId}::uuid
+            AND "driverId" = ${driverId}::uuid
+            AND "recorded_at" >= ${from}
+            AND "recorded_at" < ${to}
+            ${routeId ? Prisma.sql`AND "routeId" = ${routeId}::uuid` : Prisma.empty}
+          UNION ALL
+          SELECT
+            "driverId", "routeId",
+            "latitude", "longitude", "accuracy", "speed", "heading",
+            "battery", "recorded_at", 1 AS "source"
+          FROM "driver_position"
+          WHERE "businessId" = ${businessId}::text
+            AND "driverId" = ${driverId}::text
+            AND "recorded_at" >= ${from}
+            AND "recorded_at" < ${to}
+            ${routeId ? Prisma.sql`AND "routeId" = ${routeId}::text` : Prisma.empty}
+        ) "both"
+        ORDER BY "recorded_at", "source"
+      ),
+      "trail" AS (
         SELECT
           "driverId", "routeId", "latitude", "longitude", "accuracy",
           "speed", "heading", "battery", "recorded_at",
           (row_number() OVER (ORDER BY "recorded_at") - 1)::int AS "rn",
           (count(*) OVER ())::int AS "total"
-        FROM "driver_position"
-        WHERE "businessId" = ${businessId}
-          AND "driverId" = ${driverId}
-          AND "recorded_at" >= ${from}
-          AND "recorded_at" < ${to}
-          ${routeId ? Prisma.sql`AND "routeId" = ${routeId}` : Prisma.empty}
+        FROM "points"
       )
       SELECT
         "driverId", "routeId", "latitude", "longitude", "accuracy",

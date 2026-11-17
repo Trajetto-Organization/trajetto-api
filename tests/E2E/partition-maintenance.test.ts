@@ -214,12 +214,20 @@ describe("partition-maintenance on driver_position", () => {
     );
     // Named like a partition, detached, but still inside the retention.
     const recent = partitionName(trail, addGrains("day", today(), -30));
-    // Another table's partition: driver_position_v2 is not driver_position.
-    const otherTable = "driver_position_v2_20000101";
+    // A table the registry does not know, whose name starts the same:
+    // driver_position_v9 is not driver_position.
+    const otherTable = "driver_position_v9_20000101";
+    // The lean trail's own leftover (plano-escala F2-10): its entry drops
+    // it, and the legacy entry does not count it.
+    const leanLeftover = "driver_position_v2_20000101";
 
     for (const name of [leftover, recent, otherTable]) {
       await admin.query(`CREATE TABLE "${name}" (LIKE driver_position)`);
     }
+
+    await admin.query(
+      `CREATE TABLE "${leanLeftover}" (LIKE driver_position_v2)`,
+    );
 
     try {
       const outcome = await maintainPartitions();
@@ -228,8 +236,12 @@ describe("partition-maintenance on driver_position", () => {
       expect(await exists(leftover)).toBe(false);
       expect(await exists(recent)).toBe(true);
       expect(await exists(otherTable)).toBe(true);
+      expect(outcome.driver_position_v2.dropped).toBeGreaterThanOrEqual(1);
+      expect(await exists(leanLeftover)).toBe(false);
     } finally {
-      await admin.query(`DROP TABLE IF EXISTS "${recent}", "${otherTable}"`);
+      await admin.query(
+        `DROP TABLE IF EXISTS "${recent}", "${otherTable}", "${leanLeftover}"`,
+      );
     }
   });
 

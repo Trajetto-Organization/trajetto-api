@@ -6,8 +6,9 @@ import { env } from "@/env";
  * partitions are made, which ones must exist right now, and how long its
  * data is kept.
  *
- * One registry instead of a job per table: the trail is the first, and the
- * plan adds the lean trail, the event and activity shells and the queues.
+ * One registry instead of a job per table: the trail was the first, the
+ * lean trail came next (F2-10), and the plan adds the event and activity
+ * shells and the queues.
  * Each new one is an entry here, and the job, the metrics
  * (`partitions.<table>` on /health/metrics) and the alerts follow it. Every
  * table here is also in infra/sql/10-partitions.sql, which makes
@@ -78,20 +79,30 @@ interface PartitionEnv {
  * trail by default: enough to answer "onde o caminhão estava no dia 12"
  * in a dispute; the legal record of a delivery is its proof and events.
  * A day stops changing once the app's offline buffer (7 days) is past it.
+ *
+ * driver_position_v2: the lean trail (plano-escala F2-10), where the
+ * positions are written from the release that brought it; the same days,
+ * the same lookahead and the same retention. The legacy driver_position
+ * stays kept as before until a later release drops it (F2-12): the image
+ * before this one writes there during a rolling deploy or after a
+ * rollback, and an empty day ahead costs nothing, while a missing one
+ * refuses every position of the old image.
  */
 function registeredPartitions(
   values: PartitionEnv = env,
 ): readonly PartitionedTable[] {
+  const trail = {
+    grain: "day",
+    lookahead: values.DRIVER_POSITION_PARTITION_LOOKAHEAD_DAYS,
+    requiredBehind: 1,
+    requiredAhead: 1,
+    retentionDays: values.DRIVER_POSITION_RETENTION_DAYS,
+    settleDays: 8,
+  } as const;
+
   return [
-    {
-      table: "driver_position",
-      grain: "day",
-      lookahead: values.DRIVER_POSITION_PARTITION_LOOKAHEAD_DAYS,
-      requiredBehind: 1,
-      requiredAhead: 1,
-      retentionDays: values.DRIVER_POSITION_RETENTION_DAYS,
-      settleDays: 8,
-    },
+    { table: "driver_position", ...trail },
+    { table: "driver_position_v2", ...trail },
   ];
 }
 

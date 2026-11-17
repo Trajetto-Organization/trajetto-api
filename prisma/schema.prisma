@@ -3058,7 +3058,48 @@ model DriverLastPosition {
   @@map("driver_last_position")
 }
 
-/// Where a driver was, while a route of theirs was running.
+/// Where a driver was, while a route of theirs was running: the lean trail
+/// (plano-escala F2-10), table driver_position_v2.
+///
+/// The only table in the product that grows with TIME rather than with a
+/// business event: up to about 2.400 points per driver in a ten-hour day
+/// (see DriverPositionLegacy for the cadence). Each row keeps only what the
+/// trail is read by, about 204 bytes against the legacy 565, measured on
+/// interleaved flushes: the point IS (driverId, recorded_at), so that is
+/// the primary key and the resend's dedupe (the insert skips duplicates);
+/// no surrogate id, no created_at, no index by company (the one reader is
+/// one driver's trail, down the primary key); the ids as uuid, not text.
+/// Partitioned by day in the database (the migration does it), purged by
+/// dropping a day; no foreign key, as before.
+model DriverPosition {
+  driverId   String  @db.Uuid
+  businessId String  @db.Uuid
+  routeId    String? @db.Uuid
+
+  latitude  Float
+  longitude Float
+
+  accuracy Float?
+  speed    Float?
+  heading  Float?
+
+  battery Int? @db.SmallInt
+
+  /// When the DEVICE recorded it, never when it arrived.
+  recorded_at DateTime
+
+  /// Contains the partition key, so it stays local to each partition.
+  @@id([driverId, recorded_at])
+  @@map("driver_position_v2")
+}
+
+/// The LEGACY trail (plano-escala F2-10): where a driver was, while a route
+/// of theirs was running, until the lean trail (DriverPosition, table
+/// driver_position_v2) replaced it. Nothing writes here once the release
+/// with F2-10 is live; DriverPositionRepository.listTrail still reads it,
+/// with the lean one, until DRIVER_POSITION_RETENTION_DAYS has passed and
+/// a later release drops it (F2-12). The partition job keeps its days in
+/// the meantime, so a rollback to the image before writes here again.
 ///
 /// The only table in the product that grows with TIME rather than with a
 /// business event. The app takes a point every 15 s AND 50 m on Android
@@ -3074,7 +3115,7 @@ model DriverLastPosition {
 /// INSERT check the referenced table, and this is the hottest write path in
 /// the product for data whose only reader is a map. An orphan position is a
 /// dot that does not draw, not corruption.
-model DriverPosition {
+model DriverPositionLegacy {
   id String @default(uuid(7))
 
   driverId   String

@@ -186,7 +186,11 @@ describe.skipIf(!bash)(
     it("can leave the trail's rows out, keeping its schema", () => {
       expect(backup({ BACKUP_EXCLUDE_TRAIL: "true" }).status).toBe(0);
       expect(dumpCall()).toContain(
-        "--exclude-table-data-and-children=public.driver_position",
+        "--exclude-table-data-and-children=public.driver_position ",
+      );
+      // The lean trail too (plano-escala F2-10).
+      expect(dumpCall()).toContain(
+        "--exclude-table-data-and-children=public.driver_position_v2",
       );
     });
 
@@ -195,7 +199,10 @@ describe.skipIf(!bash)(
 
       expect(status).toBe(0);
       expect(dumpCall()).toContain(
-        "--table-and-children=public.driver_position",
+        "--table-and-children=public.driver_position ",
+      );
+      expect(dumpCall()).toContain(
+        "--table-and-children=public.driver_position_v2",
       );
       expect(files.find((name) => name.endsWith(".dump"))).toMatch(
         /^trajetto-trail-\d{8}T\d{6}Z\.dump$/,

@@ -662,7 +662,9 @@ async function victimSnapshot(): Promise<Record<string, string>> {
   const tables = await prisma.$queryRaw<Array<{ table_name: string }>>`
     SELECT table_name FROM information_schema.columns
     WHERE table_schema = 'public' AND column_name = 'businessId'
-      AND table_name NOT LIKE 'driver_position_%'
+      -- The trails' daily partitions; each parent covers its own
+      -- (driver_position, and driver_position_v2 since plano-escala F2-10).
+      AND table_name !~ '^driver_position(_v2)?_[0-9]{8}$'
     ORDER BY table_name
   `;
 

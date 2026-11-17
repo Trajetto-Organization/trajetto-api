@@ -859,7 +859,8 @@ const envSchema = z
     ),
 
     // The GPS trail's partitions (plano-escala F2-08): how many days of
-    // driver_position are kept, and how many days ahead the nightly
+    // the trail are kept, in both of its tables (driver_position_v2 and the
+    // legacy driver_position, F2-10), and how many days ahead the nightly
     // partition-maintenance job keeps partitions made. 90 days is the
     // retention the trail always had; lower it only once the trail archive
     // (F2-11) copies a day before its partition is dropped, because a

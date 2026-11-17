@@ -488,8 +488,9 @@ describe("the partitioned table", () => {
 
     const today = new Date().toISOString().slice(0, 10).replace(/-/g, "");
 
+    // The lean trail's partition (plano-escala F2-10): where a flush lands.
     const rows = await prisma.$queryRawUnsafe<Array<{ total: bigint }>>(
-      `SELECT count(*)::bigint AS total FROM "driver_position_${today}"`,
+      `SELECT count(*)::bigint AS total FROM "driver_position_v2_${today}"`,
     );
 
     expect(Number(rows[0].total)).toBe(3);
@@ -593,13 +594,11 @@ describe("what a phone sends and what survives", () => {
       where: { businessId: CARRIER },
     });
 
+    // Twenty minutes ago, as the phone said: not the arrival, which the
+    // lean trail (plano-escala F2-10) does not even keep.
     expect(
       Math.abs(stored.recorded_at.getTime() - recordedAt.getTime()),
     ).toBeLessThan(1000);
-
-    expect(stored.created_at.getTime()).toBeGreaterThan(
-      stored.recorded_at.getTime(),
-    );
   });
 });
 
@@ -1049,7 +1048,11 @@ describe("the trail's day is the company's day", () => {
   async function ensurePartitionsFor(points: Date[]): Promise<void> {
     const { partitionName, registeredPartitions } =
       await import("@/shared/database/partitions");
-    const [trail] = registeredPartitions();
+    // The lean trail (plano-escala F2-10): where the points are written and
+    // where the seeds below put them.
+    const trail = registeredPartitions().find(
+      (entry) => entry.table === "driver_position_v2",
+    )!;
     const days = new Set(
       points.map((point) => point.toISOString().slice(0, 10)),
     );
@@ -1059,7 +1062,7 @@ describe("the trail's day is the company's day", () => {
       const to = new Date(from.getTime() + 24 * 60 * 60 * 1000);
 
       await prisma.$executeRawUnsafe(
-        `CREATE TABLE IF NOT EXISTS "${partitionName(trail, from)}" PARTITION OF "driver_position"
+        `CREATE TABLE IF NOT EXISTS "${partitionName(trail, from)}" PARTITION OF "driver_position_v2"
            FOR VALUES FROM ('${from.toISOString()}') TO ('${to.toISOString()}')`,
       );
     }

@@ -359,10 +359,28 @@ describe("one point per driver per instant", () => {
 
     expect(second).toBe(0);
     expect(
-      await prisma.driverPosition.count({
+      await prisma.driverPositionLegacy.count({
         where: { driverId: "driver-resend" },
       }),
     ).toBe(1);
+  });
+
+  it("is the lean trail's primary key, so a resend is absorbed there too", async () => {
+    // plano-escala F2-10: driver_position_v2 has no surrogate id; the point
+    // IS (driverId, recorded_at).
+    const insert = `
+      INSERT INTO "driver_position_v2"
+        ("driverId", "businessId", "latitude", "longitude", "recorded_at")
+      VALUES ($1::uuid, $2::uuid, -23.5, -46.6, date_trunc('minute', now()))
+      ON CONFLICT DO NOTHING`;
+    const driverId = "018fe5a0-0000-7000-8000-0000000000d1";
+    const businessId = "018fe5a0-0000-7000-8000-0000000000b1";
+
+    await prisma.$executeRawUnsafe(insert, driverId, businessId);
+    const second = await prisma.$executeRawUnsafe(insert, driverId, businessId);
+
+    expect(second).toBe(0);
+    expect(await prisma.driverPosition.count({ where: { driverId } })).toBe(1);
   });
 });
 
