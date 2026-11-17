@@ -22,8 +22,12 @@ const log = logger.child({ component: "ddl-connection" });
  * (tests/unitaires/database/pgbouncer-compat.test.ts): its URL never goes
  * through PgBouncer.
  *
- * Before the cut of the database roles it opens on DATABASE_URL (today a
- * superuser); from F3-20 on, on BATCH_DATABASE_URL. Opened when the job
+ * It opens on BATCH_DATABASE_URL, the trajetto_batch login after the cut
+ * of the database roles (plano-escala F3-20): the one login that is a
+ * member of trajetto_partitions, so the SET ROLE below is how the job may
+ * detach and drop without a superuser. Without that URL (production
+ * before the cut, development, the tests) it opens on DATABASE_URL, the
+ * superuser of today, as the maintenance pool does. Opened when the job
  * has something for it to do, closed at the end of the run.
  */
 
@@ -67,11 +71,30 @@ function lockTimeoutLiteral(value: string): string {
   return value;
 }
 
+/**
+ * The URL of the DDL connection: BATCH_DATABASE_URL, else DATABASE_URL.
+ * Empty counts as absent, as everywhere in the environment. Read when the
+ * connection opens, never at import: the batch pool reads it the same way.
+ */
+function ddlDatabaseUrl(
+  environment: NodeJS.ProcessEnv = process.env,
+): string | undefined {
+  for (const name of ["BATCH_DATABASE_URL", "DATABASE_URL"]) {
+    const value = environment[name]?.trim();
+
+    if (value) return value;
+  }
+
+  return undefined;
+}
+
 async function openDdlConnection(
-  databaseUrl: string | undefined = process.env.DATABASE_URL,
+  databaseUrl: string | undefined = ddlDatabaseUrl(),
 ): Promise<DdlConnection> {
   if (!databaseUrl) {
-    throw new Error("a conexão de DDL das partições precisa de DATABASE_URL");
+    throw new Error(
+      "a conexão de DDL das partições precisa de BATCH_DATABASE_URL ou DATABASE_URL",
+    );
   }
 
   const settings = poolSettingsFrom(databaseUrl);
@@ -142,5 +165,5 @@ async function openDdlConnection(
   };
 }
 
-export { DDL_STATEMENT_TIMEOUT, openDdlConnection };
+export { DDL_STATEMENT_TIMEOUT, ddlDatabaseUrl, openDdlConnection };
 export type { DdlConnection };

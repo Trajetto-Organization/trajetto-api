@@ -48,8 +48,9 @@ const log = logger.child({ component: "cron", job: "partition-maintenance" });
  *  - The DDL runs as trajetto_partitions, the owner (F2-07), wherever that
  *    role already owns the table: after the cut of the database roles the
  *    batch login can only act through it. The transactions and the catalog
- *    reads go through the maintenance pool, databaseBatch (F3-18); the DDL
- *    connection still opens on DATABASE_URL until F3-20.
+ *    reads go through the maintenance pool, databaseBatch (F3-18), and the
+ *    DDL connection opens on the same BATCH_DATABASE_URL (F3-20): both
+ *    are the trajetto_batch login after the cut, DATABASE_URL before it.
  *
  *  - On Sundays, the parent is ANALYZEd (autovacuum never analyzes a
  *    partitioned parent, and the planner reads its statistics) and the

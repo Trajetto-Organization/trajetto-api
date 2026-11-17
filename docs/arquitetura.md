@@ -3990,6 +3990,16 @@ o que o usuário pode ler: antes, um `current_setting` de
 `shared_preload_libraries` sem `pg_read_all_settings` derrubava a leitura
 inteira. Prova: `tests/E2E/maintenance-batch-pool.test.ts`.
 
+A conexão DDL do job de partições (`src/shared/database/ddl-connection.ts`,
+a do `DETACH … CONCURRENTLY` e do `VACUUM (FREEZE)`, fora de transação)
+abre na mesma `BATCH_DATABASE_URL` (F3-20), e na `DATABASE_URL` só sem
+ela. Depois do corte, as duas conexões do job são o login
+`trajetto_batch`, que só cria, anexa, destaca e apaga partições por ser
+membro do `trajetto_partitions`: `SET LOCAL ROLE` nas transações do pool,
+`SET ROLE` e `RESET ROLE` na sessão da conexão DDL. Prova:
+`tests/E2E/database-roles.test.ts`, com um login que é membro só do
+`trajetto_batch`.
+
 **A sessão abre sempre em UTC**: as colunas `DateTime` do schema são
 `timestamp(3)` sem fuso, gravadas em UTC, e o SQL cru das filas e das
 métricas as compara com `now()` (`"availableAt" <= now()`,

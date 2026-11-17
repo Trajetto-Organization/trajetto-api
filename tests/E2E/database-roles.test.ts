@@ -1,14 +1,26 @@
+import { randomBytes } from "node:crypto";
 import { resolve } from "node:path";
 
 import type pg from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
+import { databaseBatch } from "@/../infra/database";
 import { openReleaseClient } from "infra/scripts/release-connection";
 import {
   listReleaseSteps,
   runReleaseSteps,
   type ReleaseStep,
 } from "infra/scripts/release-step-runner";
+import { maintainPartitions } from "@/jobs/cron/partition-maintenance-job";
+import { openDdlConnection } from "@/shared/database/ddl-connection";
+import { PARTITION_OWNER_ROLE } from "@/shared/database/partition-owner";
+import {
+  addGrains,
+  grainStart,
+  partitionName,
+  registeredPartitions,
+  retentionCutoff,
+} from "@/shared/database/partitions";
 
 /**
  * The runtime's database roles (plano-escala F3-19):
@@ -27,7 +39,7 @@ import {
  * other E2E file running beside this one: nothing here changes a role or
  * a membership, only this database's grants.
  */
-const URL = () => process.env.DATABASE_URL as string;
+const databaseUrl = () => process.env.DATABASE_URL as string;
 const STEP = "infra/sql/20-runtime-roles.sql";
 
 const ROLES = [
@@ -55,7 +67,7 @@ let step: ReleaseStep;
 const log = { info: () => undefined, warn: () => undefined };
 
 async function runStep() {
-  const client = await openReleaseClient(URL(), "e2e-database-roles");
+  const client = await openReleaseClient(databaseUrl(), "e2e-database-roles");
 
   try {
     const outcome = await runReleaseSteps(client, [step], {
@@ -165,7 +177,7 @@ async function asRole(role: string, sql: string): Promise<string | null> {
 }
 
 beforeAll(async () => {
-  admin = await openReleaseClient(URL(), "e2e-database-roles-admin");
+  admin = await openReleaseClient(databaseUrl(), "e2e-database-roles-admin");
 
   const found = listReleaseSteps(resolve(process.cwd())).find(
     (each) => each.step === STEP,
@@ -447,3 +459,159 @@ async function schemaName(): Promise<string> {
 
   return rows[0].schema;
 }
+
+/**
+ * The partition job as the batch login of the cut (plano-escala F3-20).
+ *
+ * After the cut, the only login the nightly job has is trajetto_batch: no
+ * superuser, no owner of anything. It creates tomorrow's partitions,
+ * attaches them, detaches and drops the ones past the retention only
+ * through trajetto_partitions, the owner role it is a member of — SET
+ * LOCAL ROLE in the batch pool's transactions, SET ROLE on the DDL
+ * connection's session. Both now open on BATCH_DATABASE_URL. A login made
+ * here for the test, a member of trajetto_batch and of nothing else, runs
+ * the real job; it is dropped at the end (a role belongs to the cluster).
+ */
+describe("the partition job as a login that is only a member of trajetto_batch", () => {
+  const DAY_MS = 24 * 60 * 60 * 1000;
+  const [trail] = registeredPartitions();
+  const login = `e2e_batch_${randomBytes(4).toString("hex")}`;
+  const password = randomBytes(16).toString("hex");
+
+  /** This file's database, as the test login. */
+  function loginUrl(): string {
+    const url = new URL(process.env.DATABASE_URL as string);
+
+    url.username = login;
+    url.password = password;
+
+    return url.toString();
+  }
+
+  async function ownerOf(name: string): Promise<string | null> {
+    const { rows } = await admin.query<{ owner: string }>(
+      `SELECT pg_get_userbyid(relowner)::text AS owner
+         FROM pg_class WHERE oid = to_regclass(quote_ident($1))`,
+      [name],
+    );
+
+    return rows[0]?.owner ?? null;
+  }
+
+  /** The job's two connections on the login, as BATCH_DATABASE_URL sets. */
+  async function asBatchLogin<T>(work: () => Promise<T>): Promise<T> {
+    // The pool reads its URL when it connects: a disconnect makes the next
+    // statement build it again.
+    await databaseBatch.$disconnect();
+    process.env.BATCH_DATABASE_URL = loginUrl();
+
+    try {
+      return await work();
+    } finally {
+      await databaseBatch.$disconnect();
+      delete process.env.BATCH_DATABASE_URL;
+    }
+  }
+
+  beforeAll(async () => {
+    // Test-only: a release never gives a role LOGIN (infra-sql-rules).
+    await admin.query(
+      `CREATE ROLE ${login} LOGIN PASSWORD '${password}' NOSUPERUSER NOCREATEDB NOCREATEROLE`,
+    );
+    await admin.query(`GRANT trajetto_batch TO ${login}`);
+  });
+
+  afterAll(async () => {
+    await admin.query(`DROP OWNED BY ${login}`).catch(() => undefined);
+    await admin.query(`DROP ROLE IF EXISTS ${login}`);
+  });
+
+  it("opens the DDL connection and the batch pool as that login", async () => {
+    await asBatchLogin(async () => {
+      const ddl = await openDdlConnection();
+
+      try {
+        const [row] = await ddl.query<{ user: string }>(
+          "SELECT session_user::text AS user",
+        );
+
+        expect(row.user).toBe(login);
+      } finally {
+        await ddl.close();
+      }
+
+      const [pool] = await databaseBatch.$queryRaw<Array<{ user: string }>>`
+        SELECT session_user::text AS "user"
+      `;
+
+      expect(pool.user).toBe(login);
+    });
+  });
+
+  it("creates, attaches, detaches and drops partitions with nothing but trajetto_batch", async () => {
+    const { rows: login_ } = await admin.query<{
+      rolsuper: boolean;
+      member_of: string[];
+    }>(
+      `SELECT r.rolsuper,
+              ARRAY(SELECT g.rolname::text FROM pg_auth_members m
+                      JOIN pg_roles g ON g.oid = m.roleid
+                     WHERE m.member = r.oid) AS member_of
+         FROM pg_roles r WHERE r.rolname = $1`,
+      [login],
+    );
+
+    expect(login_[0]).toEqual({
+      rolsuper: false,
+      member_of: ["trajetto_batch"],
+    });
+
+    const today = grainStart("day", new Date());
+    const farthest = partitionName(
+      trail,
+      addGrains("day", today, trail.lookahead),
+    );
+    const expiredDay = new Date(retentionCutoff(trail).getTime() - DAY_MS);
+    const expired = partitionName(trail, expiredDay);
+
+    // Tomorrow's farthest day missing, and a day past the retention made
+    // by the owner role, as the job itself made it on its night.
+    await admin.query(`DROP TABLE IF EXISTS "${farthest}"`);
+    await admin.query("BEGIN");
+    await admin.query(`SET LOCAL ROLE ${PARTITION_OWNER_ROLE}`);
+    await admin.query(
+      `CREATE TABLE IF NOT EXISTS "${expired}" PARTITION OF "driver_position"
+         FOR VALUES FROM ('${expiredDay.toISOString()}')
+         TO ('${addGrains("day", expiredDay, 1).toISOString()}')`,
+    );
+    await admin.query("COMMIT");
+
+    expect(await ownerOf(expired)).toBe(PARTITION_OWNER_ROLE);
+
+    const outcome = await asBatchLogin(() =>
+      maintainPartitions({ tables: [trail] }),
+    );
+
+    expect(outcome.driver_position).toMatchObject({
+      ownerOk: true,
+      missingNow: [],
+    });
+    expect(outcome.driver_position.created).toBeGreaterThanOrEqual(1);
+    expect(outcome.driver_position.dropped).toBeGreaterThanOrEqual(1);
+
+    // Created and attached as the owner role; detached and dropped.
+    expect(await ownerOf(farthest)).toBe(PARTITION_OWNER_ROLE);
+    expect(await ownerOf(expired)).toBeNull();
+
+    const { rows } = await admin.query<{ attached: boolean }>(
+      `SELECT EXISTS (
+         SELECT 1 FROM pg_inherits
+          WHERE inhparent = 'driver_position'::regclass
+            AND inhrelid = to_regclass(quote_ident($1))
+       ) AS attached`,
+      [farthest],
+    );
+
+    expect(rows[0].attached).toBe(true);
+  });
+});
