@@ -50,6 +50,28 @@ function section(text: string, heading: string): string {
   return found[0];
 }
 
+/** A `### ` part of a section, from its heading to the next one. */
+function subsection(text: string, heading: string): string {
+  const found = text
+    .split(/^(?=### )/m)
+    .filter((part) => part.startsWith(`### ${heading}`));
+
+  expect(found, heading).toHaveLength(1);
+
+  return found[0];
+}
+
+/**
+ * The built-in roles that run a program or read or write a file of the
+ * Database's server: with one of them, `COPY … FROM PROGRAM 'env'` or
+ * `pg_read_file('/proc/self/environ')` hands over the PITR keys.
+ */
+const SERVER_ROLES = [
+  "pg_execute_server_program",
+  "pg_read_server_files",
+  "pg_write_server_files",
+];
+
 const PITR = section(deploy, "27. PITR com pgBackRest");
 const BACKUP = section(deploy, "18. Backup e restauração");
 const DATABASE_VARIABLES = section(variables, "14. Backup do banco");
@@ -262,6 +284,45 @@ describe("section 27 of the deploy guide", () => {
     expect(sample).toMatch(/archiver: database\.archiver,/);
     expect(metrics).toMatch(/failed_count: number \| null;/);
     expect(metrics).toMatch(/last_archived_age_seconds: number \| null;/);
+  });
+
+  it("has the F1b prove the runtime cut and the lock before the keys go into the Database", () => {
+    // D61 and F1-25: the F1b's step 1 writes the repository's write key and
+    // cipher into the environment of the Database's container. A login that
+    // can run a program or read a server file (a superuser, or a member of
+    // one of these built-in roles) would read them there and delete the
+    // backups. So, before step 1, the owner proves that no login but the
+    // Database's own user can, that the runtime has run as its own role
+    // (the flag and the boot line the API really writes), and that the
+    // production bucket's lock rule is the one infra/r2 documents.
+    const f1b = subsection(PITR, "F1b");
+    const keys = f1b.search(/^1\. Database de produção/m);
+    const before = f1b.slice(0, keys);
+    const query = commands(before).join("\n");
+    const roleCheck = read("src/shared/database/runtime-role-check.ts");
+    const productionLock =
+      /\|\s*`trajetto-pitr-prod`\s*\|\s*`([^`]+)`\s*\|\s*14\s*\|[^\n]*F1b/.exec(
+        read("infra/r2/bucket-locks.md"),
+      )?.[1];
+
+    expect(keys).toBeGreaterThan(0);
+    expect(Object.keys(envShape())).toContain("DATABASE_REQUIRE_RUNTIME_ROLE");
+    expect(before).toContain("`DATABASE_REQUIRE_RUNTIME_ROLE=true`");
+    expect(roleCheck).toContain('"database role checked"');
+    expect(before).toContain("`database role checked`");
+    expect(query).toMatch(/FROM pg_stat_activity/);
+    expect(query).toMatch(/FROM pg_roles/);
+
+    for (const power of [
+      "rolcanlogin",
+      "rolsuper",
+      ...SERVER_ROLES.map((role) => `'${role}'`),
+    ]) {
+      expect(query, power).toContain(power);
+    }
+
+    expect(productionLock).toBe("archive/trajetto/1");
+    expect(before).toContain(`\`${productionLock}\``);
   });
 
   it("never tells anyone to fill the Database's Command or Args", () => {

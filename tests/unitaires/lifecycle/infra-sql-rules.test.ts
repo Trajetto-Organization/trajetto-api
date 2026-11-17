@@ -14,7 +14,9 @@ import { describe, expect, it } from "vitest";
  * So a role is only ever created NOLOGIN, and only when missing; login and
  * password stay the owner's, by hand. And no Prisma migration names a role:
  * migrations run once and are history, and a restore with --no-owner would
- * lose what they granted — that convergence is infra/sql's job.
+ * lose what they granted — that convergence is infra/sql's job. Nor may a
+ * step give any role the powers that read the Database's server (the PITR's
+ * keys are there, F1-25).
  *
  * Every step file also says what it did, in the NOTICE the runner reads
  * (release-step-runner.ts): without it the step fails at release time; here
@@ -43,6 +45,23 @@ const FORBIDDEN: Array<[RegExp, string]> = [
   [/\bDROP\s+(?:ROLE|USER)\b/i, "DROP ROLE"],
   [/\bCREATE\s+USER\b/i, "CREATE USER"],
   [/\bALTER\s+USER\b/i, "ALTER USER"],
+  // The PITR's write key and cipher live in the environment of the
+  // Database's container (plano-escala D61, F1-25). A runtime role that is
+  // a superuser, a member of a built-in role that runs a program or reads
+  // or writes a server file, or allowed a server-side file function would
+  // read them there (`COPY … FROM PROGRAM 'env'`, `lo_import` of
+  // /proc/self/environ) and delete the backups. The roles' cut is what
+  // keeps an SQL injection away from them; a release step must never undo
+  // it. (NOSUPERUSER has no word boundary before SUPERUSER.)
+  [/\b(?:CREATE|ALTER)\s+ROLE\b[^;']*\bSUPERUSER\b/i, "role com SUPERUSER"],
+  [
+    /\bpg_(?:execute_server_program|read_server_files|write_server_files)\b/i,
+    "role que roda programa ou lê arquivo do servidor",
+  ],
+  [
+    /\b(?:lo_import|lo_export|pg_read_file|pg_read_binary_file)\b/i,
+    "função que lê ou grava arquivo do servidor",
+  ],
 ];
 
 /** The rules of one infra/sql (or post-deploy) file. */
@@ -193,8 +212,34 @@ GRANT USAGE ON SCHEMA public TO trajetto_app;
     ],
     ["DROP ROLE", `${GOOD}\nDROP ROLE trajetto_old;`, "10-x.sql: DROP ROLE"],
     ["CREATE USER", `${GOOD}\nCREATE USER x;`, "10-x.sql: CREATE USER"],
+    [
+      "a superuser, through EXECUTE",
+      `${GOOD}\nDO $$ BEGIN EXECUTE format('ALTER ROLE %I SUPERUSER', 'trajetto_batch'); END $$;`,
+      "10-x.sql: role com SUPERUSER",
+    ],
+    [
+      "a role that reads the server's files",
+      `${GOOD}\nGRANT pg_read_server_files TO trajetto_batch;`,
+      "10-x.sql: role que roda programa ou lê arquivo do servidor",
+    ],
+    [
+      "a role that runs a program, from a list",
+      `${GOOD}\nDO $$ DECLARE r text; BEGIN FOREACH r IN ARRAY ARRAY['pg_monitor', 'pg_execute_server_program'] LOOP EXECUTE format('GRANT %I TO trajetto_batch', r); END LOOP; END $$;`,
+      "10-x.sql: role que roda programa ou lê arquivo do servidor",
+    ],
+    [
+      "a server-side file function",
+      `${GOOD}\nGRANT EXECUTE ON FUNCTION lo_import(text) TO trajetto_app;`,
+      "10-x.sql: função que lê ou grava arquivo do servidor",
+    ],
   ])("refuse %s", (_case, sql, problem) => {
     expect(stepProblems("10-x.sql", sql)).toContain(problem);
+  });
+
+  it("accept a role that is explicitly not a superuser", () => {
+    expect(
+      stepProblems("10-x.sql", `${GOOD}\nALTER ROLE trajetto_app NOSUPERUSER;`),
+    ).toEqual([]);
   });
 
   it("refuse a role created with LOGIN, or without the existence check", () => {

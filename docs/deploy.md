@@ -5423,7 +5423,63 @@ segue sendo o backup dela (RPO de 24 h).
 Pré-condições: `DATABASE_REQUIRE_RUNTIME_ROLE=true` na produção há 7 dias
 ou mais; o F1a com 7 dias verdes; no `trajetto-pitr-prod`, a regra de
 Bucket Lock de `archive/trajetto/1` (e a de `backup/trajetto/2` só se a
-prova da staging passou).
+prova da staging passou). Até o F1b, o RPO da produção é o do dump do
+Dokploy, 24 h; o dump continua depois dele.
+
+O passo 1 põe a chave de escrita e a cifra do repositório no ambiente do
+contêiner do banco. Um login que rode um programa ou leia um arquivo do
+servidor (um superusuário, ou um membro de `pg_execute_server_program`,
+`pg_read_server_files` ou `pg_write_server_files`) as leria ali, com um
+`COPY … FROM PROGRAM 'env'`, e apagaria os backups (decisão D61). O corte
+dos roles tira esse poder do runtime, e a trava guarda os últimos 14 dias
+mesmo de quem tiver a chave. Por isso, na noite do F1b, antes do passo 1,
+confira:
+
+- **O runtime no próprio role há 7 dias.** No histórico de deploys da
+  `trajetto-api` de produção, o _Deploy_ com
+  `DATABASE_REQUIRE_RUNTIME_ROLE=true` tem 7 dias ou mais; desde ele,
+  nenhum `permission denied` (42501) no log, e o boot de cada réplica
+  escreveu `database role checked` com `superuser: false` e
+  `tablesOwner: false`. Toda Application de runtime que já existir (as das
+  ondas seguintes) entra na mesma conta. A `trajetto-api-migrate` continua
+  com o usuário do Database: ela não atende requisição.
+
+- **Nenhum login, além do usuário do Database, com o poder de ler o
+  servidor, e nenhuma conexão do runtime como ele.** No `psql` do Database
+  de produção:
+
+  ```sh
+  docker exec -it $(docker ps -q -f label=com.docker.swarm.service.name=trajetto-postgres-production) psql -U trajetto -d trajetto
+  ```
+
+  ```sql
+  SELECT rolname FROM pg_roles
+   WHERE rolcanlogin AND rolname <> current_user
+     AND (rolsuper
+          OR pg_has_role(oid, 'pg_execute_server_program', 'MEMBER')
+          OR pg_has_role(oid, 'pg_read_server_files', 'MEMBER')
+          OR pg_has_role(oid, 'pg_write_server_files', 'MEMBER'));
+  SELECT usename, application_name, count(*) FROM pg_stat_activity
+   WHERE backend_type = 'client backend' GROUP BY 1, 2 ORDER BY 1, 2;
+  ```
+
+  A primeira volta vazia (a membresia indireta conta). Na segunda, o
+  usuário do Database (`trajetto`) aparece só no próprio `psql` (e no
+  `pg_dump` do backup do Dokploy, se for a hora dele); o runtime conecta
+  como `trajetto_http` e `trajetto_batch`. Qualquer outra linha: pare
+  aqui, sem as chaves, e tire o poder ou o login
+  (`ALTER ROLE <role> NOLOGIN;`) antes de voltar a este passo. A etapa de
+  release nunca dá esses poderes: o `infra-sql-rules.test.ts` recusa um
+  `infra/sql` que os conceda.
+
+- **A trava no bucket.** R2 → `trajetto-pitr-prod` →
+  _Settings → Bucket Lock_: a regra de `archive/trajetto/1`, 14 dias, já
+  salva, antes do `stanza-create` (`infra/r2/bucket-locks.md`, "Na
+  produção"). A prova do **Delete** recusado é a da staging: na produção,
+  sem a regra, ela apagaria um WAL de verdade.
+
+- **O F1a verde.** A consulta do aceite (abaixo) na staging, com os 7 dias
+  contados do full dela, e o ensaio da staging anotado.
 
 1. Database de produção → _Environment_: acrescente as variáveis da coluna
    "Produção, F1b", **sem** `PITR_ARCHIVE` → **Save** → `CHECKPOINT` →
@@ -5463,9 +5519,10 @@ lê toda agenda das seções que falam do Keep do dump como a agenda dele. Um
 
 ### Aceite: 7 dias no `ops_sample`
 
-Contados do fim do primeiro full (passo 8), na linha `cluster` de cada
-minuto: `failed_count` = 0 e o último segmento arquivado há menos de 120 s
-em pelo menos 99% das linhas. O `ts` é UTC, sem fuso:
+Contados do fim do primeiro full (o passo 8 do F1a; o passo 4 do F1b), na
+linha `cluster` de cada minuto: `failed_count` = 0 e o último segmento
+arquivado há menos de 120 s em pelo menos 99% das linhas. O `ts` é UTC,
+sem fuso:
 
 ```sql
 WITH janela AS (
@@ -5486,7 +5543,10 @@ FROM janela;
 ```
 
 Uma linha sem leitura do archiver (`null`) conta contra. Depois do aceite,
-o ensaio anota o RTO e a perda: esse é o portão da onda.
+o ensaio anota o RTO e a perda, e esse é o portão da onda: o
+`rto_seconds` abaixo de 3600 (1 h) e o `loss_seconds` de até 120 (2 min),
+os alvos do [`slo.md`](./slo.md). Anote os dois em
+[Ensaiar a restauração](#ensaiar-a-restauração).
 
 ### Reversão
 
