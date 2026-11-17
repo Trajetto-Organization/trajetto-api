@@ -1,5 +1,6 @@
 import { Prisma } from "@prisma/client";
 
+import { env } from "@/env";
 import { CronJobDefinition } from "@/shared/services/cron-scheduler-service";
 import { logger } from "@/shared/logging/logger";
 import { throwIfPartial } from "@/shared/errors/partial-run-error";
@@ -10,29 +11,27 @@ const log = logger.child({ component: "cron", job: "cleanup-user-history" });
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-/**
- * Read bell notifications: 90 days.
+/*
+ * The bell's two windows are NOTIFICATION_READ_RETENTION_DAYS (90) and
+ * NOTIFICATION_UNREAD_RETENTION_DAYS (180), read from the environment on
+ * every run since plano-escala F5-14 — the monthly partitions of the bell
+ * (F5-15) drop months by the same numbers.
  *
- * A read notification is a receipt, not a record. The thing it points at —
- * the fine, the service order, the account payable — lives in its own table
- * with its own retention, and the audit narrative lives in `activity`. The
- * bell feed is paginated newest-first (see
- * NotificationRepository.listUserNotificationsWithCursor) and nobody scrolls
- * a quarter of a year back through it. Matching the outbox's 30-day
- * retention would have been defensible too; 90 days is the conservative
- * side of that call.
- */
-const READ_NOTIFICATION_RETENTION_DAYS = 90;
-
-/**
- * Unread bell notifications: 180 days, double the read window.
+ * Read: a read notification is a receipt, not a record. The thing it
+ * points at — the fine, the service order, the account payable — lives in
+ * its own table with its own retention, and the audit narrative lives in
+ * `activity`. The bell feed is paginated newest-first (see
+ * NotificationRepository.listUserNotificationsWithCursor) and nobody
+ * scrolls a quarter of a year back through it. Matching the outbox's
+ * 30-day retention would have been defensible too; 90 days is the
+ * conservative side of that call.
  *
- * An unread notification is still an open loop for the user, and it is the
- * only place that signal exists — deleting it silently drops the unread
- * badge that was the whole point. Six months is well past "they are never
- * going to read it" while never being the reason someone misses something.
+ * Unread: double the read window. An unread notification is still an open
+ * loop for the user, and it is the only place that signal exists —
+ * deleting it silently drops the unread badge that was the whole point.
+ * Six months is well past "they are never going to read it" while never
+ * being the reason someone misses something.
  */
-const UNREAD_NOTIFICATION_RETENTION_DAYS = 180;
 
 /**
  * Same sizing logic as the outbox purge: notifications are created roughly
@@ -194,19 +193,19 @@ const cleanupUserHistoryJob: CronJobDefinition = {
     const deadline = purgeDeadline();
 
     const readBefore = new Date(
-      Date.now() - READ_NOTIFICATION_RETENTION_DAYS * DAY_MS,
+      Date.now() - env.NOTIFICATION_READ_RETENTION_DAYS * DAY_MS,
     );
 
     const unreadBefore = new Date(
-      Date.now() - UNREAD_NOTIFICATION_RETENTION_DAYS * DAY_MS,
+      Date.now() - env.NOTIFICATION_UNREAD_RETENTION_DAYS * DAY_MS,
     );
 
     // Two passes sharing the run's ceiling and deadline (see
-    // notificationPurgePasses). Deleting a notification can never resurrect
-    // a duplicate through the `deliveryId` unique constraint: the delivery
-    // that created it is terminal within minutes and its row is
-    // cascade-deleted with the outbox event at 30 days, long before the
-    // shortest window here.
+    // notificationPurgePasses). Deleting a notification can never let its
+    // delivery ring again: the notification's id is the delivery's (and
+    // its `deliveryId` is unique until F5-15), the delivery is terminal
+    // within minutes and goes with its event at 30 days, and neither
+    // window can be set under 30 (the env schema refuses it).
     const notifications = { deleted: 0, stoppedEarly: false };
 
     for (const pass of notificationPurgePasses(readBefore, unreadBefore)) {

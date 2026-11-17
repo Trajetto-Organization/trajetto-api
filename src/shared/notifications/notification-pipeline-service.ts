@@ -1541,6 +1541,10 @@ class NotificationPipelineService {
     try {
       const notification = await database.notification.create({
         data: {
+          // The delivery's id (plano-escala F5-14): a retried IN_APP hits
+          // the primary key, with or without the unique on deliveryId,
+          // which goes when the bell is partitioned by month (F5-15).
+          id: delivery.id,
           userId,
           type: rendered.type,
           title: rendered.title,
@@ -1564,10 +1568,13 @@ class NotificationPipelineService {
         created_at: notification.created_at,
       });
     } catch (error) {
-      // Unique deliveryId hit: a previous attempt already created the row
-      // (crash before the DELIVERED mark). Done — and no duplicate emit. If
-      // that attempt died before ITS emit, the toast is lost: the emit is
-      // at-most-once by design, the bell is the truth (ADR 0003).
+      // The row is there (primary key or unique deliveryId): a previous
+      // attempt already created it (crash before the DELIVERED mark). Done —
+      // and no duplicate emit. If that attempt died before ITS emit, the
+      // toast is lost: the emit is at-most-once by design, the bell is the
+      // truth (ADR 0003). A row the image before F5-14 wrote under a random
+      // id is caught by the unique deliveryId, which stays until F5-15 —
+      // releases after any delivery of that image stopped being retried.
       if (
         error instanceof Prisma.PrismaClientKnownRequestError &&
         error.code === "P2002"
