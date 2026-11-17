@@ -495,7 +495,11 @@ produção e o `vmstat` do host abortando tudo), e a `staging-fixture.mjs`
 prepara pela API os dados da empresa 'Carga (staging)';
 `staging-burn-in.test.ts` e `staging-fixture.test.ts` executam os dois com
 stubs ([`deploy.md`](./deploy.md#ensaio-de-carga-na-staging-burn-in)). O
-`seed.ts` prepara o banco `load_test` (empresas, motoristas, histórico) e os
+`seed.ts` prepara o banco `load_test` (empresas, motoristas, histórico); com
+`LOAD_TIER` (`tiny`, `100k`, `1m`, `5m` ou `prod-like`, plano de escala
+LOAD-02) a população vem em SQL de massa, com cauda longa de Zipf, as 150 mil
+paradas abertas e as filas assentadas (`load-tier-presets.test.ts` guarda os
+números e o contrato entre o TypeScript e o SQL). Os
 `mint-*.ts` criam as contas das suítes de navegador da web e do app. Medido em
 07/10/2026 com a imagem de produção: o joelho é ~110–120 req/s por réplica com
 histórico. Tudo em `tests/load/README.md`.

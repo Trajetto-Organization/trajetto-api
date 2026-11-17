@@ -1,9 +1,10 @@
 import { randomUUID } from "node:crypto";
-import { writeFileSync, mkdirSync } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { basename, dirname, resolve } from "node:path";
 
 import { hash } from "bcrypt";
 import { sign } from "jsonwebtoken";
+import pg from "pg";
 
 import auth from "../../src/config/auth";
 import { ensureDefaultOccurrenceTypes } from "../../src/shared/delivery/default-occurrence-types";
@@ -14,7 +15,15 @@ import {
   dateOnlyFromKey,
 } from "../../src/shared/time/business-day";
 import { assertDisposableDatabase } from "./lib/disposable-database";
+import {
+  loadTierFromEnv,
+  seedTierFiles,
+  tierSettings,
+  type LoadTierCounts,
+  type LoadTierName,
+} from "./lib/load-tiers";
 import { createPrismaClient } from "@/shared/database/database-client";
+import { poolSettingsFrom } from "@/shared/database/pool-config";
 
 /**
  * The dataset the load scripts run against.
@@ -875,8 +884,119 @@ async function seedMobileE2E(): Promise<void> {
   console.log(`[Mobile E2E] Fixture escrita em ${MOBILE_E2E_OUT}`);
 }
 
+/**
+ * The tier's population, in SQL (plano-escala LOAD-02): the files of
+ * tests/load/seed-tiers, in order, on one session that holds the tier's
+ * counts as settings (load.<name>) and their temporary tables. Row by row
+ * through Prisma, the 1m rung would take a day; with generate_series it is
+ * minutes, each file timed in the output.
+ *
+ * Its own pg client, not Prisma's pool: a file is many statements, which
+ * only the simple query protocol runs in one call, and the session's temp
+ * tables must outlive each file. synchronous_commit off: a disposable
+ * database that crashes mid-seed is seeded again, and every commit waiting
+ * for its WAL flush is minutes of nothing. The bulk load also drops the
+ * secondary indexes (05-indexes-off.sql, rebuilt by 85-indexes-on.sql) and
+ * skips the row-by-row foreign key checks (95-references.sql checks them
+ * at the end): measured at the 100k rung, the deliveries went from 4,6
+ * thousand rows a second to 39 thousand.
+ */
+async function seedTier(tier: {
+  name: LoadTierName;
+  counts: LoadTierCounts;
+}): Promise<void> {
+  const settings = poolSettingsFrom(process.env.DATABASE_URL as string);
+  const client = new pg.Client({
+    connectionString: settings.connectionString,
+    application_name: "trajetto-load-seed",
+  });
+  const started = Date.now();
+
+  console.log(`[Load] Degrau ${tier.name}: ${JSON.stringify(tier.counts)}`);
+
+  await client.connect();
+
+  try {
+    if (settings.schema) {
+      await client.query(
+        `SET search_path TO "${settings.schema.replace(/"/g, '""')}"`,
+      );
+    }
+
+    await client.query("SET TimeZone = 'UTC'");
+    await client.query("SET synchronous_commit = off");
+
+    // The foreign keys unchecked row by row while the tier loads: most of
+    // its time, measured (95-references.sql checks them once at the end).
+    // Only a superuser may; anyone else loads with the checks, slower.
+    const replica = await client
+      .query("SET session_replication_role = replica")
+      .then(() => true)
+      .catch(() => false);
+
+    if (!replica) {
+      console.warn(
+        "[Load] Sem superusuário: as chaves estrangeiras são conferidas linha a linha, e o degrau leva mais tempo.",
+      );
+    }
+
+    await client.query("SET statement_timeout = 0");
+    await client.query("SET work_mem = '256MB'");
+
+    for (const [name, value] of Object.entries(tierSettings(tier.counts))) {
+      await client.query("SELECT set_config($1, $2, false)", [name, value]);
+    }
+
+    const files = seedTierFiles();
+
+    // 05-indexes-off.sql drops the secondary indexes for the bulk load: a
+    // file that fails after it must not leave the database without them.
+    const indexesOn = files.find(
+      (file) => basename(file) === "85-indexes-on.sql",
+    );
+
+    for (const file of files) {
+      const fileStarted = Date.now();
+
+      try {
+        await client.query(readFileSync(file, "utf8"));
+      } catch (error) {
+        if (indexesOn && file !== indexesOn) {
+          console.error(
+            `[Load] ${basename(file)} falhou; reconstruindo os índices antes de sair…`,
+          );
+          await client
+            .query(readFileSync(indexesOn, "utf8"))
+            .catch((restore) =>
+              console.error(
+                "[Load] Os índices não voltaram: rode o 85-indexes-on.sql à mão ou recrie o banco.",
+                restore,
+              ),
+            );
+        }
+
+        throw error;
+      }
+
+      console.log(
+        `[Load] ${basename(file)}: ${((Date.now() - fileStarted) / 1000).toFixed(1)} s`,
+      );
+    }
+  } finally {
+    await client.end();
+  }
+
+  console.log(
+    `[Load] Degrau ${tier.name} semeado em ${((Date.now() - started) / 60_000).toFixed(1)} min`,
+  );
+}
+
 async function main(): Promise<void> {
   assertDisposableDatabase();
+
+  // Read before anything is written: an unknown tier or a prod-like without
+  // its counts stops here, with nothing half-seeded.
+  const tier = loadTierFromEnv();
 
   if (MOBILE_E2E) {
     await seedMobileE2E();
@@ -901,13 +1021,17 @@ async function main(): Promise<void> {
     );
   }
 
+  // With a tier, Prisma seeds only the tenant the load points at (its
+  // users and tokens need bcrypt and JWT); the population is the tier's SQL.
+  const tenants = tier ? 1 : TENANTS;
+
   console.log(
-    `[Load] Semeando ${TENANTS} tenants × ${DELIVERIES_PER_TENANT} entregas…`,
+    `[Load] Semeando ${tenants} tenants × ${DELIVERIES_PER_TENANT} entregas…`,
   );
 
   let primary: Awaited<ReturnType<typeof seedTenant>> = null;
 
-  for (let index = 0; index < TENANTS; index += 1) {
+  for (let index = 0; index < tenants; index += 1) {
     const result = await seedTenant(index, index === 0);
 
     if (result) primary = result;
@@ -918,6 +1042,8 @@ async function main(): Promise<void> {
   }
 
   if (!primary) throw new Error("O tenant principal não foi semeado.");
+
+  if (tier) await seedTier(tier);
 
   const context: LoadContext = {
     baseUrl: process.env.LOAD_BASE_URL ?? "http://host.docker.internal:3334",

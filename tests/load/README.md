@@ -111,6 +111,92 @@ src/server.ts`) e o k6 pelo Docker com
 Esse caminho cruza a fronteira WSL2/Windows a cada requisição: serve para
 achar gargalo, não para número de capacidade.
 
+### Seed por degrau (`LOAD_TIER`, plano de escala LOAD-02)
+
+Com `LOAD_TIER`, o `seed.ts` semeia pelo Prisma só o tenant que a carga
+mede (usuários e tokens precisam de bcrypt e JWT) e a população inteira em
+SQL de massa (`generate_series`), pelos arquivos `NN-*.sql` de
+[`seed-tiers/`](./seed-tiers), em ordem e numa sessão só, que guarda as
+contagens do degrau como configurações `load.<nome>`
+([`lib/load-tiers.ts`](./lib/load-tiers.ts)). Sem `LOAD_TIER`, nada muda: os
+`LOAD_TENANTS` tenants iguais de sempre.
+
+| degrau      | transportadoras (Zipf) | pequenas | entregas    | dias | motoristas | trilha                      | para quê                                       |
+| ----------- | ---------------------- | -------- | ----------- | ---- | ---------- | --------------------------- | ---------------------------------------------- |
+| `tiny`      | 10                     | 20       | 5 mil       | 30   | 40         | 2 dias × 48 pontos          | conferir o SQL em segundos                     |
+| `100k`      | 100                    | 500      | 300 mil     | 180  | 400        | 7 dias × 240 pontos         | o portão do 100k                               |
+| `1m`        | 720                    | 500      | 3 milhões   | 90   | 4 mil      | 2 dias × 240 pontos         | o portão do 1M                                 |
+| `5m`        | 3.600                  | 500      | 15 milhões  | 90   | 20 mil     | 30 dias × 240 pontos        | o portão do 5M (clone temporário do alvo)      |
+| `prod-like` | as da produção         | 0        | as da prod. | idem | idem       | a média por motorista e dia | os ensaios das ondas 10 e 11, só com contagens |
+
+- **Cauda longa:** a transportadora de posição k recebe k^-1,1 das entregas
+  e dos motoristas (Zipf, s = 1,1), pelo menos um de cada. No `100k`, a
+  primeira tem 23 % das entregas e a última, 442. O planejador escolhe
+  planos diferentes para um `businessId` com 23 % de uma tabela e para um
+  com 0,1 %, e tenants iguais não medem nenhum dos dois.
+- **Paradas abertas:** 150 mil paradas `PENDING`, em rotas liberadas hoje,
+  nas 500 empresas pequenas (o caso dos planos do anti-join, F2-21).
+- **Por entrega:** dois eventos (chegada e comprovante), uma linha de
+  `activity` e uma ocorrência a cada vinte; as entregas dos últimos 7 dias
+  em rotas, uma por motorista e dia.
+- **Filas assentadas:** 30 dias de eventos `PUBLISHED` (com a chave em
+  `outbox_event_key`), entregas de notificação `DELIVERED` (com
+  `business_id`), sino e webhooks entregues: o estado de regime que as
+  varreduras das filas atravessam.
+- **Ids:** uuid v7 cunhado no SQL a partir do instante de cada linha (a
+  trilha das entregas é particionada pelo id); só as `activity_v4` linhas
+  de `prod-like` levam v4, como as antigas da produção, para o ensaio da
+  re-chave (onda 11).
+- **Carga em massa:** os índices não únicos das tabelas grandes saem antes
+  (`05-indexes-off.sql`) e voltam depois (`85-indexes-on.sql`, que o
+  `seed.ts` roda também quando um arquivo falha), e, com superusuário, as
+  chaves estrangeiras não são conferidas linha a linha
+  (`session_replication_role = replica`); o `95-references.sql` confere
+  as referências uma vez no fim e falha se alguma quebrou.
+
+```bash
+# Um degrau, no banco descartável (a guarda de lib/disposable-database.ts
+# continua: 54321 ou a LOAD_PG_PORT, em localhost), já migrado.
+LOAD_TIER=100k LOAD_BASE_URL=http://traefik \
+  DATABASE_URL="postgresql://trajetto:trajetto-password@localhost:54321/load_test?schema=public" \
+  npx tsx tests/load/seed.ts
+```
+
+**`prod-like`:** recebe só as CONTAGENS da produção, nunca uma linha dela.
+
+1. Na produção, só leitura, rode
+   [`seed-tiers/prod-counts.sql`](./seed-tiers/prod-counts.sql) (Dokploy →
+   Database da produção → terminal → `psql`, colando o arquivo): ele abre
+   uma transação `READ ONLY`, imprime uma linha JSON de contagens e faz
+   `ROLLBACK`.
+2. Na máquina que semeia, passe essa linha (ou o caminho de um arquivo com
+   ela) em `LOAD_PROD_COUNTS`. O seed recusa qualquer chave que não seja
+   uma das contagens, e qualquer valor que não seja inteiro ≥ 0.
+3. O Database descartável dos ensaios fica no servidor: a guarda só aceita
+   localhost, então o caminho é um túnel para ele numa porta local
+   declarada em `LOAD_PG_PORT`, com o banco já migrado
+   (`yarn prisma:migrate:deploy` pelo mesmo túnel). Apague o Database no
+   fim.
+
+**Medido** (17/11/2026, nesta máquina: Docker Desktop, 16 vCPUs, Postgres
+16 num contêiner de 2 GiB com a configuração do harness: shared_buffers
+448 MB, `max_wal_size` 8 GB, `checkpoint_timeout` 15 min):
+
+| degrau | tempo do seed | banco   | o que mais pesa                                                 |
+| ------ | ------------- | ------- | --------------------------------------------------------------- |
+| `tiny` | 9 s           | —       | —                                                               |
+| `100k` | 1,6 min       | 1,5 GiB | a volta dos índices (39 s) e as entregas com o histórico (22 s) |
+
+Antes da carga em massa, o mesmo `100k` levava 4,0 min: 4,6 mil entregas por
+segundo com os 20 índices de `delivery` (um GIN de trigramas entre eles) e as
+chaves estrangeiras conferidas linha a linha; sem os dois, 39 mil.
+
+**O `1m` não foi medido aqui:** ele ocupa ~15 GiB, mais o WAL, e esta máquina
+tinha 16 GB livres. A projeção linear do `100k` dá 16 a 20 min (a volta dos
+índices cresce um pouco mais que linear), abaixo dos 30 min do aceite. A
+medida fica para uma máquina com ≥ 40 GB livres (a bancada do G-02 serve),
+anotada aqui com o tempo de cada arquivo que o `seed.ts` imprime.
+
 ### Contas das suítes de navegador (web)
 
 As suítes de navegador da web (`trajetto-ui/tests/ui`, `tests/a11y`,
