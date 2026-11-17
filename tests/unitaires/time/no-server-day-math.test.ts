@@ -72,6 +72,20 @@ const ALLOWED: Entry[] = [
       "Partition names follow the partitions' own UTC day bounds, not a company's day.",
   },
   {
+    file: "src/shared/services/provider-quota/provider-quota-repository.ts",
+    pattern: "utc-day-key",
+    count: 1,
+    reason:
+      "A provider's quota day (provider_quota_day.day) is the provider's own: LocationIQ resets the plan at UTC midnight, the same day for every company.",
+  },
+  {
+    file: "src/jobs/cron/purge-ops-series-job.ts",
+    pattern: "utc-day-key",
+    count: 1,
+    reason:
+      "The cutoff of provider_quota_day compares with that UTC quota day, never a company's day.",
+  },
+  {
     file: "src/shared/delivery/geocoding/geocoding-keys.ts",
     pattern: "utc-day-key",
     count: 1,
