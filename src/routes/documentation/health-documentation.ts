@@ -657,6 +657,56 @@ const healthResponses = {
         }),
       )
       .describe("Every scheduled job and how its runs went."),
+    partitions: z
+      .record(
+        z.string(),
+        z.object({
+          partitions: z
+            .number()
+            .describe("Partições anexadas, uma com DETACH pendente inclusive."),
+          lookahead_days: z
+            .number()
+            .nullable()
+            .describe(
+              "Dias inteiros até o fim da última partição; null sem nenhuma. Sem partição DEFAULT: depois dela, o INSERT é recusado.",
+            ),
+          last_partition_ends_at: z.string().nullable(),
+          oldest_partition_starts_at: z.string().nullable(),
+          retention_days: z
+            .number()
+            .describe(
+              "Dias de linhas guardados; as partições mais velhas são destacadas e apagadas pelo job partition-maintenance.",
+            ),
+          runway_ok: z
+            .boolean()
+            .describe(
+              "Pelo menos 3 dias à frente; abaixo disso, o alerta partition-runway-low.",
+            ),
+          lookahead_ok: z
+            .boolean()
+            .describe(
+              "Pelo menos 5 dias à frente; abaixo disso, o alerta partition-lookahead-low. O job deixa cerca de 7.",
+            ),
+          detach_pending: z
+            .number()
+            .describe(
+              "Partições que um DETACH CONCURRENTLY deixou pela metade; o job termina na noite seguinte.",
+            ),
+          stuck: z
+            .array(z.string())
+            .describe(
+              "Partições que passaram da retenção há mais de 3 dias e continuam anexadas (alerta partition-stuck).",
+            ),
+          owner_ok: z
+            .boolean()
+            .describe(
+              "O role trajetto_partitions é dono do pai e de todas as partições (infra/sql/10-partitions.sql): o job roda como ele, o que um runtime sem superusuário exige.",
+            ),
+        }),
+      )
+      .describe(
+        "Cada tabela particionada do registro (src/shared/database/partitions.ts), pelo nome.",
+      ),
     driver_position: z
       .object({
         partition_runway_days: z
@@ -672,7 +722,9 @@ const healthResponses = {
             "At least 3 days of runway. The nightly job keeps about 7.",
           ),
       })
-      .describe("Partitions of the GPS trail table ahead of today."),
+      .describe(
+        "Partitions of the GPS trail table ahead of today. Alias of partitions.driver_position kept for the web's Sistema screen; read partitions instead.",
+      ),
     runtime: z
       .object({
         replica: z

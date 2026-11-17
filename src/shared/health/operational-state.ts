@@ -4,6 +4,12 @@ import {
   PARTIAL_RUN_MARKER,
   isPartialRunMessage,
 } from "@/shared/errors/partial-run-error";
+import { PARTITION_OWNER_ROLE } from "@/shared/database/partition-owner";
+import {
+  registeredPartitions,
+  retentionCutoff,
+  type PartitionedTable,
+} from "@/shared/database/partitions";
 import {
   parsePartitionBound,
   type PartitionRange,
@@ -14,8 +20,9 @@ import { isStuck } from "./worker-heartbeat";
 /**
  * The state of the machinery behind the queues, for /health/metrics: which
  * workers are alive on which replica (OBS-10), when each cron job last
- * succeeded (OBS-10, INV-07) and how many days of driver_position partitions
- * are left (INV-07). Each read is a handful of rows from a small table.
+ * succeeded (OBS-10, INV-07) and how the partitions of every registered
+ * table stand (INV-07, plano-escala F2-09). Each read is a handful of rows
+ * from a small table or from the catalog.
  */
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -32,6 +39,22 @@ const HEARTBEAT_VISIBLE_MS = 10 * 60 * 1000;
  * inserts are a few days from being refused (no DEFAULT partition).
  */
 const RUNWAY_MIN_DAYS = 3;
+
+/**
+ * Below this, the lookahead is being eaten (plano-escala F2-09): the job
+ * keeps 7 days ahead, so right before its run there are 6; under 5 means
+ * two nights in a row without it, with days still left to act before a
+ * position or a queue row is refused. The earlier warning of the two.
+ */
+const LOOKAHEAD_MIN_DAYS = 5;
+
+/**
+ * A partition past the retention by more than this is stuck: three nights
+ * of the job failing to detach or drop it (a lock that never came, a
+ * DETACH left pending, a permission). The disk keeps it until somebody
+ * looks.
+ */
+const PARTITION_STUCK_GRACE_DAYS = 3;
 
 interface WorkerMetrics {
   replica: string;
@@ -257,28 +280,179 @@ function partitionRunway(
   };
 }
 
-/** The attached partitions of driver_position, from the catalogue. */
-async function readPartitionRunway(now = new Date()): Promise<PartitionRunway> {
-  const bounds = await database.$queryRaw<Array<{ bound: string }>>`
-    SELECT pg_get_expr(c.relpartbound, c.oid) AS bound
-    FROM pg_inherits i
-    JOIN pg_class c ON c.oid = i.inhrelid
-    WHERE i.inhparent = '"driver_position"'::regclass
-  `;
+/** One partitioned table on /health/metrics (`partitions.<table>`). */
+interface PartitionTableMetrics {
+  /** Attached partitions, a pending detach included. */
+  partitions: number;
 
-  const ranges = bounds
-    .map((row) => parsePartitionBound(row.bound))
+  /** Whole days until the last partition ends; null when there is none. */
+  lookahead_days: number | null;
+  last_partition_ends_at: string | null;
+  oldest_partition_starts_at: string | null;
+  retention_days: number;
+
+  /** At least 3 days ahead (partition-runway-low under it). */
+  runway_ok: boolean;
+
+  /** At least 5 days ahead (partition-lookahead-low under it). */
+  lookahead_ok: boolean;
+
+  /** Partitions a DETACH … CONCURRENTLY left half-way. */
+  detach_pending: number;
+
+  /** Partitions past the retention by more than 3 days: never dropped. */
+  stuck: string[];
+
+  /**
+   * trajetto_partitions owns the parent and every partition
+   * (infra/sql/10-partitions.sql): the job can run as it, which is what a
+   * runtime without a superuser needs.
+   */
+  owner_ok: boolean;
+}
+
+interface PartitionCatalogRow {
+  relname: string;
+  bound: string | null;
+  detach_pending: boolean;
+  owned: boolean;
+}
+
+/**
+ * How one table's partitions stand. Pure: the catalog's rows, the
+ * registry's entry and an instant. A table that keeps no lookahead (one
+ * being retired, whose rows go to its successor) is not judged on it.
+ */
+function partitionTableState(
+  table: PartitionedTable,
+  parent: { owned: boolean } | null,
+  rows: readonly PartitionCatalogRow[],
+  now: Date = new Date(),
+): PartitionTableMetrics {
+  const ranged = rows.map((row) => ({
+    row,
+    range: row.bound ? parsePartitionBound(row.bound) : null,
+  }));
+  const ranges = ranged
+    .map((each) => each.range)
     .filter((range): range is PartitionRange => range !== null);
 
-  return partitionRunway(ranges, now);
+  const runway = partitionRunway(ranges, now);
+  const judged = table.lookahead > 0;
+  const days = runway.partition_runway_days;
+  const unbounded = ranges.length > 0 && days === null && runway.runway_ok;
+
+  const stuckBy =
+    retentionCutoff(table, now).getTime() - PARTITION_STUCK_GRACE_DAYS * DAY_MS;
+  const starts = ranges
+    .map((range) => range.from)
+    .filter((from) => Number.isFinite(from));
+
+  return {
+    partitions: rows.length,
+    lookahead_days: days,
+    last_partition_ends_at: runway.last_partition_ends_at,
+    oldest_partition_starts_at:
+      starts.length > 0 ? new Date(Math.min(...starts)).toISOString() : null,
+    retention_days: table.retentionDays,
+    runway_ok: !judged || runway.runway_ok,
+    lookahead_ok:
+      !judged || unbounded || (days !== null && days >= LOOKAHEAD_MIN_DAYS),
+    detach_pending: rows.filter((row) => row.detach_pending).length,
+    stuck: ranged
+      .filter(({ range }) => range !== null && range.to <= stuckBy)
+      .map(({ row }) => row.relname)
+      .sort(),
+    owner_ok: parent !== null && parent.owned && rows.every((row) => row.owned),
+  };
+}
+
+/**
+ * Every registered table's partitions, from the catalog, in one statement:
+ * the bounds, the pending detaches and whether trajetto_partitions owns
+ * each one. A registered table that does not exist reads as having no
+ * partition, which is what it means for an insert.
+ */
+async function readPartitionStates(
+  now: Date = new Date(),
+  tables: readonly PartitionedTable[] = registeredPartitions(),
+): Promise<Record<string, PartitionTableMetrics>> {
+  const rows = await database.$queryRawUnsafe<
+    Array<{
+      parent: string;
+      parent_owned: boolean;
+      relname: string | null;
+      bound: string | null;
+      detach_pending: boolean | null;
+      owned: boolean;
+    }>
+  >(
+    `SELECT t.name AS parent,
+            coalesce(p.relowner = r.oid, false) AS parent_owned,
+            c.relname::text AS relname,
+            pg_get_expr(c.relpartbound, c.oid) AS bound,
+            i.inhdetachpending AS detach_pending,
+            coalesce(c.relowner = r.oid, false) AS owned
+       FROM unnest($1::text[]) AS t(name)
+       JOIN pg_class p ON p.oid = to_regclass(quote_ident(t.name))
+       LEFT JOIN pg_roles r ON r.rolname = $2
+       LEFT JOIN pg_inherits i ON i.inhparent = p.oid
+       LEFT JOIN pg_class c ON c.oid = i.inhrelid`,
+    tables.map((table) => table.table),
+    PARTITION_OWNER_ROLE,
+  );
+
+  return Object.fromEntries(
+    tables.map((table) => {
+      const own = rows.filter((row) => row.parent === table.table);
+      const parent = own.length > 0 ? { owned: own[0].parent_owned } : null;
+      const partitions = own
+        .filter((row) => row.relname !== null)
+        .map((row) => ({
+          relname: row.relname as string,
+          bound: row.bound,
+          detach_pending: row.detach_pending === true,
+          owned: row.owned,
+        }));
+
+      return [table.table, partitionTableState(table, parent, partitions, now)];
+    }),
+  );
+}
+
+/**
+ * The shape /health/metrics had before the registry, kept as the
+ * `driver_position` alias for one release: the web's Sistema screen reads
+ * it (trajetto-ui, system-metrics).
+ */
+function legacyRunway(
+  state: PartitionTableMetrics | undefined,
+): PartitionRunway {
+  if (!state) return partitionRunway([]);
+
+  return {
+    partition_runway_days: state.lookahead_days,
+    last_partition_ends_at: state.last_partition_ends_at,
+    runway_ok: state.runway_ok,
+  };
 }
 
 export {
   HEARTBEAT_VISIBLE_MS,
+  LOOKAHEAD_MIN_DAYS,
+  PARTITION_STUCK_GRACE_DAYS,
   RUNWAY_MIN_DAYS,
+  legacyRunway,
   partitionRunway,
+  partitionTableState,
   readCronJobs,
-  readPartitionRunway,
+  readPartitionStates,
   readWorkerHeartbeats,
 };
-export type { CronJobMetrics, PartitionRunway, WorkerMetrics };
+export type {
+  CronJobMetrics,
+  PartitionCatalogRow,
+  PartitionRunway,
+  PartitionTableMetrics,
+  WorkerMetrics,
+};

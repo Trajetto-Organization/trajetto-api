@@ -67,6 +67,14 @@ interface OperationalSnapshot {
   partitionRunwayOk: boolean;
   partitionRunwayDays: number | null;
 
+  /**
+   * Every registered partitioned table (plano-escala F2-09), as
+   * operational-state.ts judged it. When present, it replaces the two
+   * driver_position fields above for the alerts; absent on a snapshot that
+   * did not read it, which judges driver_position by them as before.
+   */
+  partitions?: PartitionAlertState[];
+
   /** Workers with no sign of progress for too long, on live replicas. */
   stuckWorkers: Array<{ replica: string; worker: string }>;
 
@@ -112,6 +120,22 @@ interface OperationalSnapshot {
 
   /** Parts of the snapshot that could not be read; each one is a reason. */
   collectionErrors: string[];
+}
+
+interface PartitionAlertState {
+  table: string;
+
+  /** Whole days until the last partition ends; null when there is none. */
+  lookaheadDays: number | null;
+
+  /** Under 3 days ahead: a few nights from refused inserts. */
+  runwayOk: boolean;
+
+  /** Under 5 days ahead: the job has missed two nights. */
+  lookaheadOk: boolean;
+
+  /** Partitions past the retention by more than 3 days, still there. */
+  stuck: string[];
 }
 
 interface GeocodingQuotaState {
@@ -286,6 +310,63 @@ function alertThresholdsFromEnv(values: {
   };
 }
 
+/** How many names of stuck partitions a message carries. */
+const STUCK_NAMES_SHOWN = 3;
+
+/**
+ * The partitions of each registered table (F2-09): runway-low (under 3
+ * days, inserts about to be refused) or, before it, lookahead-low (under
+ * 5, the job missed two nights), never both for one table; and stuck, a
+ * partition past the retention the job keeps failing to drop. A snapshot
+ * without the per-table states judges driver_position's runway alone, as
+ * before.
+ */
+function partitionAlerts(snapshot: OperationalSnapshot): Alert[] {
+  if (!snapshot.partitions) {
+    return snapshot.partitionRunwayOk
+      ? []
+      : [
+          {
+            code: "partition-runway-low",
+            message: `driver_position: restam ${snapshot.partitionRunwayDays ?? 0} dia(s) de partições — sem elas o INSERT de posição é recusado`,
+          },
+        ];
+  }
+
+  const alerts: Alert[] = [];
+
+  for (const table of snapshot.partitions) {
+    const days = table.lookaheadDays ?? 0;
+
+    if (!table.runwayOk) {
+      alerts.push({
+        code: "partition-runway-low",
+        message: `${table.table}: restam ${days} dia(s) de partições — sem elas o INSERT é recusado`,
+      });
+    } else if (!table.lookaheadOk) {
+      alerts.push({
+        code: "partition-lookahead-low",
+        message: `${table.table}: só ${days} dia(s) de partições à frente (o mínimo é 5) — o job partition-maintenance não as criou em noites seguidas`,
+      });
+    }
+
+    if (table.stuck.length > 0) {
+      const shown = table.stuck.slice(0, STUCK_NAMES_SHOWN).join(", ");
+      const more =
+        table.stuck.length > STUCK_NAMES_SHOWN
+          ? ` e mais ${table.stuck.length - STUCK_NAMES_SHOWN}`
+          : "";
+
+      alerts.push({
+        code: "partition-stuck",
+        message: `${table.table}: ${table.stuck.length} partição(ões) passaram da retenção há mais de 3 dias e continuam no banco (${shown}${more}) — o job partition-maintenance não consegue destacá-las ou apagá-las`,
+      });
+    }
+  }
+
+  return alerts;
+}
+
 /**
  * Every alert's stable code (plano-escala F1-20): the name of its runbook,
  * docs/runbooks/<code>.md, and what a reader of the log or of the check
@@ -307,6 +388,8 @@ const ALERT_KINDS = [
   "cron-partial-stuck",
   "cron-overdue",
   "partition-runway-low",
+  "partition-lookahead-low",
+  "partition-stuck",
   "worker-stuck",
   "connection-usage-high",
   "redis-down",
@@ -736,12 +819,7 @@ function collectAlerts(
 
   alerts.push(...cronAlerts(snapshot, thresholds));
 
-  if (!snapshot.partitionRunwayOk) {
-    alerts.push({
-      code: "partition-runway-low",
-      message: `driver_position: restam ${snapshot.partitionRunwayDays ?? 0} dia(s) de partições — sem elas o INSERT de posição é recusado`,
-    });
-  }
+  alerts.push(...partitionAlerts(snapshot));
 
   for (const worker of snapshot.stuckWorkers) {
     alerts.push({
@@ -836,5 +914,6 @@ export type {
   CronJobState,
   GeocodingQuotaState,
   OperationalSnapshot,
+  PartitionAlertState,
   VolumeState,
 };

@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   DEFAULT_ALERT_THRESHOLDS,
   alertThresholdsFromEnv,
+  collectAlerts,
   evaluateAlerts,
   type OperationalSnapshot,
 } from "@/shared/health/alert-rules";
@@ -361,6 +362,95 @@ describe("the machinery behind the queues", () => {
 
     expect(reasons).toHaveLength(1);
     expect(reasons[0]).toContain("2");
+  });
+
+  /**
+   * Every registered partitioned table (plano-escala F2-09). The runway
+   * alert at 3 days arrived with inserts a few nights from refused; the
+   * lookahead alert at 5 is the warning with time to act, and a partition
+   * past its retention that the job keeps failing to drop has its own code.
+   * One alert per table and threshold, never both lookahead codes at once.
+   */
+  describe("the registered partitioned tables", () => {
+    const table = (
+      overrides: Partial<{
+        lookaheadDays: number | null;
+        runwayOk: boolean;
+        lookaheadOk: boolean;
+        stuck: string[];
+      }> = {},
+    ) => ({
+      table: "driver_position",
+      lookaheadDays: 7,
+      runwayOk: true,
+      lookaheadOk: true,
+      stuck: [],
+      ...overrides,
+    });
+
+    const codes = (partitions: ReturnType<typeof table>[]) =>
+      collectAlerts({ ...healthy(), partitions }).map((alert) => alert.code);
+
+    it("say nothing with a week ahead and nothing stuck", () => {
+      expect(codes([table()])).toEqual([]);
+    });
+
+    it("warn with 4 days ahead, before the runway alert", () => {
+      const alerts = collectAlerts({
+        ...healthy(),
+        partitions: [table({ lookaheadDays: 4, lookaheadOk: false })],
+      });
+
+      expect(alerts.map((alert) => alert.code)).toEqual([
+        "partition-lookahead-low",
+      ]);
+      expect(alerts[0].message).toContain("driver_position: só 4 dia(s)");
+    });
+
+    it("page with the runway alert alone under 3 days", () => {
+      expect(
+        codes([
+          table({ lookaheadDays: 2, runwayOk: false, lookaheadOk: false }),
+        ]),
+      ).toEqual(["partition-runway-low"]);
+    });
+
+    it("name the stuck partitions, a few of them", () => {
+      const alerts = collectAlerts({
+        ...healthy(),
+        partitions: [
+          table({
+            stuck: [
+              "driver_position_20260101",
+              "driver_position_20260102",
+              "driver_position_20260103",
+              "driver_position_20260104",
+            ],
+          }),
+        ],
+      });
+
+      expect(alerts.map((alert) => alert.code)).toEqual(["partition-stuck"]);
+      expect(alerts[0].message).toContain("4 partição(ões)");
+      expect(alerts[0].message).toContain("e mais 1");
+    });
+
+    it("judge every table, and ignore the old driver_position fields when they are there", () => {
+      expect(
+        codes([table(), table({ lookaheadDays: 4, lookaheadOk: false })])
+          .length,
+      ).toBe(1);
+
+      // The per-table states replace the legacy fields.
+      expect(
+        collectAlerts({
+          ...healthy(),
+          partitionRunwayOk: false,
+          partitionRunwayDays: 2,
+          partitions: [table()],
+        }),
+      ).toEqual([]);
+    });
   });
 
   it("pages on a stuck worker", () => {

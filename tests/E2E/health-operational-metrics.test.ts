@@ -624,6 +624,71 @@ describe("a stuck worker or cron job shows up (OBS-10)", () => {
 });
 
 describe("the driver_position partition runway (INV-07)", () => {
+  it("reports every registered table under partitions, with driver_position as the old alias", async () => {
+    const { partitionMaintenanceJob } =
+      await import("@/jobs/cron/partition-maintenance-job");
+
+    await partitionMaintenanceJob.handler();
+
+    const body = (await metrics(masterToken)).json();
+    const trail = body.partitions.driver_position;
+
+    expect(trail).toMatchObject({
+      lookahead_ok: true,
+      runway_ok: true,
+      retention_days: 90,
+      detach_pending: 0,
+      stuck: [],
+      // infra/sql/10-partitions.sql ran in the template, and the job made
+      // its partitions as the role.
+      owner_ok: true,
+    });
+    expect(trail.lookahead_days).toBeGreaterThanOrEqual(6);
+    expect(trail.partitions).toBeGreaterThanOrEqual(9);
+
+    // One release of the old shape: the web's Sistema screen reads it.
+    expect(body.driver_position).toEqual({
+      partition_runway_days: trail.lookahead_days,
+      last_partition_ends_at: trail.last_partition_ends_at,
+      runway_ok: true,
+    });
+  });
+
+  it("raises partition-lookahead-low with 4 days ahead, and nothing once the job runs again", async () => {
+    const { partitionMaintenanceJob } =
+      await import("@/jobs/cron/partition-maintenance-job");
+    const { collectOperationalSnapshot } =
+      await import("@/shared/health/operational-snapshot");
+    const { collectAlerts } = await import("@/shared/health/alert-rules");
+    const { addGrains, grainStart, partitionName, registeredPartitions } =
+      await import("@/shared/database/partitions");
+
+    const [table] = registeredPartitions();
+    const today = grainStart("day", new Date());
+
+    await partitionMaintenanceJob.handler();
+
+    // Two nights without the job and a bit: the days from today + 5 on
+    // were never made.
+    for (let offset = 5; offset <= table.lookahead; offset += 1) {
+      await prisma.$executeRawUnsafe(
+        `DROP TABLE IF EXISTS "${partitionName(table, addGrains("day", today, offset))}"`,
+      );
+    }
+
+    const codes = async () =>
+      collectAlerts(await collectOperationalSnapshot()).map(
+        (alert) => alert.code,
+      );
+
+    expect(await codes()).toContain("partition-lookahead-low");
+    expect(await codes()).not.toContain("partition-runway-low");
+
+    await partitionMaintenanceJob.handler();
+
+    expect(await codes()).not.toContain("partition-lookahead-low");
+  });
+
   it("reports how many days of partitions are left", async () => {
     const { partitionMaintenanceJob } =
       await import("@/jobs/cron/partition-maintenance-job");

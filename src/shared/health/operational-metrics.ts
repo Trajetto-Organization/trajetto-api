@@ -18,8 +18,9 @@ import {
   operationalSnapshotSql,
 } from "@/shared/health/metrics-queries";
 import {
+  legacyRunway,
   readCronJobs,
-  readPartitionRunway,
+  readPartitionStates,
   readWorkerHeartbeats,
 } from "@/shared/health/operational-state";
 import { CronSchedulerService } from "@/shared/services/cron-scheduler-service";
@@ -152,13 +153,16 @@ async function collectOperationalMetrics() {
   );
 
   // The machinery behind the queues: a worker hung on one replica, a cron
-  // job that stopped succeeding, a partition runway running out (OBS-10,
-  // INV-07). Each is a few rows of a small table, one statement each.
+  // job that stopped succeeding, partitions running out or never dropped
+  // (OBS-10, INV-07, F2-09). Each is one statement on a small table or on
+  // the catalog.
   const workers = await readWorkerHeartbeats();
   const cronJobs = await readCronJobs(
     CronSchedulerService.getInstance().registeredJobs(),
   );
-  const driverPosition = await readPartitionRunway();
+  // Every registered partitioned table (plano-escala F2-09), in one
+  // statement on the catalog.
+  const partitions = await readPartitionStates();
 
   // The database's own numbers (plano-escala F1-06): one more statement,
   // pg_wal when this user may list it, and the sizes from a five-minute
@@ -291,7 +295,10 @@ async function collectOperationalMetrics() {
     },
     workers,
     cron_jobs: cronJobs,
-    driver_position: driverPosition,
+    partitions,
+    // The shape before the registry, for one release: the web's Sistema
+    // screen reads it.
+    driver_position: legacyRunway(partitions.driver_position),
     runtime,
     // Per replica, since it started (decisions 14.2–14.4, 14.8).
     legacy_contracts: legacyContractUsage(),

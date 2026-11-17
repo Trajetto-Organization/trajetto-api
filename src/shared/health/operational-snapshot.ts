@@ -24,7 +24,8 @@ import { connectionUsagePercent } from "./metrics-math";
 import { deliveryBacklogSql } from "./metrics-queries";
 import {
   readCronJobs,
-  readPartitionRunway,
+  legacyRunway,
+  readPartitionStates,
   readWorkerHeartbeats,
 } from "./operational-state";
 
@@ -241,12 +242,18 @@ async function collectOperationalSnapshot(
     [],
   );
 
-  const runway = await part(
-    "driver_position (partições)",
+  // Every registered table's partitions (F2-09): the runway of each, the
+  // earlier lookahead warning, and partitions past the retention that were
+  // never dropped.
+  const partitionStates = await part(
+    "partições",
     errors,
-    () => readPartitionRunway(now),
+    () => readPartitionStates(now),
     null,
   );
+  const runway = partitionStates
+    ? legacyRunway(partitionStates.driver_position)
+    : null;
 
   // Replicas gone for more than a few minutes are already left out by the
   // reader, so a deploy that replaced every replica pages nobody.
@@ -340,6 +347,15 @@ async function collectOperationalSnapshot(
     // a runway that cannot be read is not reported twice.
     partitionRunwayOk: runway?.runway_ok ?? true,
     partitionRunwayDays: runway?.partition_runway_days ?? null,
+    ...(partitionStates && {
+      partitions: Object.entries(partitionStates).map(([table, state]) => ({
+        table,
+        lookaheadDays: state.lookahead_days,
+        runwayOk: state.runway_ok,
+        lookaheadOk: state.lookahead_ok,
+        stuck: state.stuck,
+      })),
+    }),
     stuckWorkers,
     connectionUsagePercent: usage,
     redisOk,

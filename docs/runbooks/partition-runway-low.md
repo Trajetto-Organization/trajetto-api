@@ -1,10 +1,12 @@
-# partition-runway-low — Partições de posição acabando
+# partition-runway-low — Partições acabando
 
-**Dispara quando:** driver_position com menos de 3 dias de partições à frente.
+**Dispara quando:** uma tabela particionada do registro
+(`src/shared/database/partitions.ts`; hoje, `driver_position`) tem menos de 3
+dias de partições à frente.
 
 ## O que significa
 
-A tabela de posições é particionada por dia, e restam poucos dias de partições criadas. Sem a partição do dia, o INSERT de posição é **recusado** e o mapa do motorista para.
+A tabela é particionada (a de posições, por dia), e restam poucos dias de partições criadas. Sem a partição do dia, o INSERT é **recusado**: para a trilha, o mapa do motorista para. O aviso anterior, com 5 dias, é o `partition-lookahead-low`.
 
 ## Primeira ação
 
@@ -13,7 +15,7 @@ A tabela de posições é particionada por dia, e restam poucos dias de partiç�
 
 ## Como confirmar
 
-`/health/metrics` mostra a folga de partições de volta a 7 dias e o motivo some.
+`partitions.<tabela>.lookahead_days` em `/health/metrics` volta a 6 ou 7 dias e o motivo some.
 
 ## Quando escalar
 

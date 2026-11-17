@@ -156,6 +156,27 @@ function everyRuleBroken(): OperationalSnapshot[] {
       // Past 70% of the provider's day (F2-32).
       geocodingQuota: { usedToday: 17_501, dailyQuota: 25_000 },
     },
+    {
+      ...healthy(),
+      // The registry's tables (F2-09): one under the 5-day lookahead, one
+      // with a partition never dropped.
+      partitions: [
+        {
+          table: "driver_position",
+          lookaheadDays: 4,
+          runwayOk: true,
+          lookaheadOk: false,
+          stuck: [],
+        },
+        {
+          table: "delivery_event_part",
+          lookaheadDays: 40,
+          runwayOk: true,
+          lookaheadOk: true,
+          stuck: ["delivery_event_part_202501"],
+        },
+      ],
+    },
   ];
 }
 
