@@ -181,10 +181,6 @@ servidor** num banco molde, e o banco de cada arquivo é um
   `release_step_state` preenchida (`E2E/release-steps.test.ts`). Um passo
   que falha deixa o molde sem marca. O `prisma/concurrent` não roda ali: num
   banco novo ele pula, e as migrations criam os índices.
-- O ambiente `prisma` é instalado como pacote (`file:`), uma **cópia** em
-  `node_modules/vitest-environment-prisma`: depois de mudar
-  `prisma/vitest-environment-prisma/`, rode `yarn install --force` (ou copie
-  os arquivos) antes dos E2E locais; o CI instala do zero.
 - Um construtor por servidor: todo arquivo pega o mesmo _advisory lock_ no
   banco `postgres` antes de olhar, então o primeiro migra e os outros
   esperam e o acham pronto (a ordem dos comandos, o molde não marcado
@@ -211,6 +207,20 @@ servidor** num banco molde, e o banco de cada arquivo é um
   `node_modules` ([Comandos](#comandos)): depois de puxar esta mudança, rode
   `yarn install --force`, senão o E2E segue com a cópia antiga (que migra
   por arquivo, mais lento, mas certo).
+
+### O gate de drift do schema
+
+`E2E/schema-drift.test.ts` roda
+`prisma migrate diff --from-config-datasource --to-schema prisma/schema.prisma --script`
+(as flags do Prisma 7.10.1; `--from-migrations` exigiria um banco sombra) do
+banco do arquivo, um clone do molde, até o `schema.prisma`. Todo statement
+que o diff imprime precisa estar na lista comentada de
+`E2E/support/schema-drift-allowlist.ts`, com o porquê. Um `@@index` no
+schema sem a migration dele reprova (o próprio teste prova), e também uma
+entrada que não casa com nada (tire da lista) ou passada da data `until`,
+que toda entrada de um estado temporário leva (as tabelas `*_legacy` da
+janela do histórico, uma coluna entre expandir e contrair). Hoje a lista tem
+três índices que o Prisma não sabe declarar (trigrama e `NULLS LAST`).
 
 ### Processos e os jobs paralelos do CI
 

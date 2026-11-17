@@ -4215,8 +4215,12 @@ posterior a `LAST_MIGRATION_IN_PRODUCTION` e falha em qualquer statement da
 tabela acima sobre um objeto que a produção já tem, a menos que o arquivo traga
 o marcador com o motivo. Atualize `LAST_MIGRATION_IN_PRODUCTION` depois de
 cada release de produção. `tests/E2E/schema-expand-contract.test.ts` prova o
-expandir/contrair contra um banco real. Operação (job, P3009, contract
-pendente): [`deploy.md`](./deploy.md#15-migrations).
+expandir/contrair contra um banco real, e `tests/E2E/schema-drift.test.ts`
+confere que o banco que as migrations constroem é o que o `schema.prisma`
+descreve (`prisma migrate diff`, com uma lista de exceções explicada e
+datada em `tests/E2E/support/schema-drift-allowlist.ts`): um `@@index` sem
+migration reprova. Operação (job, P3009, contract pendente):
+[`deploy.md`](./deploy.md#15-migrations).
 
 **Coluna que vira opcional, na prática.** Na release N o campo já é opcional
 no `schema.prisma` (o client desta release lê NULL sem erro) e todo leitor
