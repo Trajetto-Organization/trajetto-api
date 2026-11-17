@@ -1,6 +1,7 @@
 import type { PrismaClient } from "@prisma/client";
 
 import { isDatabaseUnavailable } from "@/shared/errors/database-unavailable";
+import { settlesWithin } from "@/shared/lifecycle/deadline";
 import { logger } from "@/shared/logging/logger";
 
 import { openDdlConnection, type DdlConnection } from "./ddl-connection";
@@ -241,5 +242,45 @@ async function verifyRuntimeRole(
   return verdict;
 }
 
-export { RUNTIME_ROLE_SQL, judgeRuntimeRole, verifyRuntimeRole };
+/**
+ * How long the boot waits for the check. A database that drops packets
+ * instead of refusing them leaves each connection hanging until its own
+ * connect_timeout (5 s in the runtime URL), and there are two of them; the
+ * boot did not wait for the database before this check existed, and must
+ * not start to because of it.
+ */
+const BOOT_CHECK_DEADLINE_MS = 12_000;
+
+/**
+ * The check as the boot runs it: past the deadline it is abandoned, as one
+ * the database did not answer, and the boot goes on. A refusal that comes
+ * in time still stops it.
+ */
+async function checkRuntimeRoleAtBoot(
+  options: VerifyRuntimeRoleOptions & { deadlineMs?: number },
+): Promise<void> {
+  const deadlineMs = options.deadlineMs ?? BOOT_CHECK_DEADLINE_MS;
+  const check = verifyRuntimeRole(options);
+
+  if (await settlesWithin(check, deadlineMs)) {
+    await check;
+    return;
+  }
+
+  // Settles later, unheard: never an unhandled rejection.
+  check.catch(() => undefined);
+
+  (options.log ?? log).error(
+    { deadlineMs },
+    "database role not checked at boot: no answer within the deadline",
+  );
+}
+
+export {
+  BOOT_CHECK_DEADLINE_MS,
+  RUNTIME_ROLE_SQL,
+  checkRuntimeRoleAtBoot,
+  judgeRuntimeRole,
+  verifyRuntimeRole,
+};
 export type { RoleCheckInput, RoleCheckVerdict, RuntimeRole };

@@ -46,7 +46,7 @@ import { logger } from "./shared/logging/logger";
 import "./shared/services/proof-signing/proof-signing-service";
 import type { ProofSigningService } from "./shared/services/proof-signing/proof-signing-service";
 
-import { verifyRuntimeRole } from "./shared/database/runtime-role-check";
+import { checkRuntimeRoleAtBoot } from "./shared/database/runtime-role-check";
 
 import prisma, { databasePool } from "../infra/database";
 
@@ -181,7 +181,7 @@ async function bootstrap() {
     // DATABASE_REQUIRE_RUNTIME_ROLE=true. The cron runs where the workers
     // do (WORKERS_ENABLED).
     verifyDatabaseRole: async () => {
-      await verifyRuntimeRole({
+      await checkRuntimeRoleAtBoot({
         client: prisma,
         require: env.DATABASE_REQUIRE_RUNTIME_ROLE,
         runsCron: env.WORKERS_ENABLED,

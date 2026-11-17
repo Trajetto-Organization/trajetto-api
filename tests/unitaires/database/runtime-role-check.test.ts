@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { DatabaseUnavailableError } from "@/shared/database/pg-driver";
 import type { DdlConnection } from "@/shared/database/ddl-connection";
 import {
+  checkRuntimeRoleAtBoot,
   judgeRuntimeRole,
   verifyRuntimeRole,
   type RuntimeRole,
@@ -291,5 +292,45 @@ describe("verifyRuntimeRole", () => {
     });
 
     expect(probe.open).not.toHaveBeenCalled();
+  });
+});
+
+describe("checkRuntimeRoleAtBoot", () => {
+  // A database that drops packets leaves the connection hanging until its
+  // own timeout. The boot did not wait for the database before this check;
+  // it must not start to because of it.
+  it("gives up past its deadline and lets the boot go on", async () => {
+    const error = vi.fn();
+    const hanging = {
+      $queryRawUnsafe: vi.fn(() => new Promise<never>(() => undefined)),
+    };
+
+    await expect(
+      checkRuntimeRoleAtBoot({
+        client: hanging as never,
+        require: true,
+        runsCron: false,
+        batchUrl: undefined,
+        deadlineMs: 20,
+        log: { info: vi.fn(), warn: vi.fn(), error },
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(error).toHaveBeenCalledWith(
+      { deadlineMs: 20 },
+      "database role not checked at boot: no answer within the deadline",
+    );
+  });
+
+  it("still refuses in time with the flag", async () => {
+    await expect(
+      checkRuntimeRoleAtBoot({
+        client: { $queryRawUnsafe: async () => [OWNER] } as never,
+        require: true,
+        runsCron: false,
+        batchUrl: undefined,
+        log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+      }),
+    ).rejects.toThrow("superusuário");
   });
 });

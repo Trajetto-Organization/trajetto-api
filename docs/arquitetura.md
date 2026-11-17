@@ -519,8 +519,9 @@ com que role o runtime conecta (plano de escala, F3-21;
 dono das tabelas, um aviso a cada boot; com
 `DATABASE_REQUIRE_RUNTIME_ROLE=true`, o boot é recusado, e também o de um
 processo com o cron sem a `BATCH_DATABASE_URL` ou cujo login de batch não
-consegue `SET ROLE trajetto_partitions`. Um banco que não responde nunca
-impede o boot (a readiness segura a réplica). Prova:
+consegue `SET ROLE trajetto_partitions`. Um banco que não responde, ou não
+responde em 12 s, nunca impede nem segura o boot (a readiness segura a
+réplica). Prova:
 `tests/E2E/runtime-role-smoke.test.ts`, com a API inteira como os logins
 `trajetto_http` e `trajetto_batch`.
 
