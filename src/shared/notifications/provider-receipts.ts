@@ -11,6 +11,8 @@ import {
   type MetaTemplateUpdate,
 } from "@/shared/providers/whatsapp-provider/meta-webhook";
 
+import { receiptIdFor } from "./receipt-id";
+
 /**
  * The provider receipts ledger (notification_provider_receipt): what a
  * provider said about a message after it accepted it.
@@ -22,9 +24,12 @@ import {
  * the message. Two wamids under one delivery is a duplicate send; a 'failed'
  * after DELIVERED is a message the provider accepted and then lost.
  *
- * Writes are idempotent (createMany skipDuplicates over the unique key):
- * Meta repeats a callback it did not see a 200 for, and a receipts run can
- * overlap the next one.
+ * Writes are idempotent (createMany skipDuplicates): Meta repeats a
+ * callback it did not see a 200 for, and a receipts run can overlap the
+ * next one. Every row's id is decided by the fact it records
+ * (receipt-id.ts, plano-escala F5-04), so a repeat is a conflict on the
+ * primary key, with or without the unique (provider, message id, status)
+ * that wave 10 drops (F5-06).
  */
 const log = logger.child({ component: "provider-receipts" });
 
@@ -146,9 +151,11 @@ async function recordMetaStatuses(reports: MetaStatusReport[]): Promise<void> {
   if (reports.length === 0) return;
 
   const tied = await tieToDeliveries(reports);
+  const now = new Date();
 
   await database.notificationProviderReceipt.createMany({
     data: tied.map((report) => ({
+      id: receiptIdFor({ ...report, provider: "meta" }, now),
       deliveryId: report.deliveryId,
       provider: "meta",
       providerMessageId: report.providerMessageId,
@@ -288,14 +295,26 @@ async function recordExpoTickets(
 ): Promise<void> {
   if (tickets.length === 0) return;
 
+  const now = new Date();
+
   await database.notificationProviderReceipt.createMany({
     data: tickets.map((ticket) => ({
+      id: receiptIdFor(
+        {
+          deliveryId,
+          provider: "expo",
+          providerMessageId: ticket.id,
+          status: "ticket",
+          occurredAt: now,
+        },
+        now,
+      ),
       deliveryId,
       provider: "expo",
       providerMessageId: ticket.id,
       status: "ticket",
       pushToken: ticket.token,
-      occurredAt: new Date(),
+      occurredAt: now,
     })),
     skipDuplicates: true,
   });

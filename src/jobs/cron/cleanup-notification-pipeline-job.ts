@@ -4,6 +4,7 @@ import { databaseBatch } from "@/../infra/database";
 import { throwIfPartial } from "@/shared/errors/partial-run-error";
 import { CronJobDefinition } from "@/shared/services/cron-scheduler-service";
 import { logger } from "@/shared/logging/logger";
+import { UNTIED_RECEIPT_RETENTION_DAYS } from "@/shared/notifications/receipt-id";
 
 import {
   anyLeft,
@@ -74,10 +75,11 @@ const MAX_JOB_EXECUTIONS_PER_RUN = 100_000;
  * Provider receipts no delivery claims (deliveryId NULL: a callback for a
  * message sent before the delivery id travelled with it, or for a row
  * already purged). The cascade that takes the tied ones never reaches them,
- * so they get the same 30 days here. The ceiling is belt and braces: they are
- * a small fraction of the callbacks.
+ * so they get the same 30 days here (UNTIED_RECEIPT_RETENTION_DAYS, in
+ * receipt-id.ts: the day such a receipt's id starts with is held inside
+ * it). The ceiling is belt and braces: they are a small fraction of the
+ * callbacks.
  */
-const UNTIED_RECEIPT_RETENTION_DAYS = 30;
 const MAX_UNTIED_RECEIPTS_PER_RUN = 100_000;
 
 /**

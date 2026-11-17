@@ -1447,6 +1447,9 @@ model NotificationProviderReceipt {
 
   created_at DateTime @default(now())
 
+  // Every writer also sets the id from this same key (receipt-id.ts,
+  // plano-escala F5-04), so a repeated report is a primary-key conflict
+  // too: the unique can go when the table is partitioned (F5-06).
   @@unique([provider, providerMessageId, status])
   @@index([deliveryId])
   // The receipts job (Expo tickets not checked yet) and the metrics (failed

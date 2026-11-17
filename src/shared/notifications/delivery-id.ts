@@ -57,9 +57,7 @@ const UUID_V7 =
  * version starts with random bits, not a time, so its created_at stands in.
  */
 function eventInstantMs(event: DeliveryIdEvent): number {
-  const minted = UUID_V7.test(event.id) ? uuid7Instant(event.id) : null;
-
-  return minted ?? new Date(event.created_at).getTime();
+  return uuid7InstantOf(event.id) ?? new Date(event.created_at).getTime();
 }
 
 function recipientKey(recipient: DeliveryIdRecipient): string {
@@ -76,22 +74,17 @@ function recipientKey(recipient: DeliveryIdRecipient): string {
   );
 }
 
-/** The id of the delivery of `event` to `recipient` on `channel`. */
-function deliveryIdFor(
-  event: DeliveryIdEvent,
-  recipient: DeliveryIdRecipient,
-  channel: NotificationChannel,
-): string {
-  const ms = Math.max(0, Math.floor(eventInstantMs(event)));
-
-  // Ids, the recipient's kind and an enum name: none of them holds a "|".
-  const digest = createHash("sha256")
-    .update(`${event.id}|${recipientKey(recipient)}|${channel}`)
-    .digest();
+/**
+ * A uuid v7 that starts with `ms` and carries, in its other 74 bits, the
+ * SHA-256 of `key`: the same key under the same millisecond is always the
+ * same id. Shared by every queue row whose id is decided by what it is.
+ */
+function uuid7FromKey(ms: number, key: string): string {
+  const digest = createHash("sha256").update(key).digest();
 
   const bytes = Buffer.alloc(16);
 
-  bytes.writeUIntBE(ms, 0, 6);
+  bytes.writeUIntBE(Math.max(0, Math.floor(ms)), 0, 6);
   bytes[6] = 0x70 | (digest[0] & 0x0f);
   bytes[7] = digest[1];
   bytes[8] = 0x80 | (digest[2] & 0x3f);
@@ -102,5 +95,23 @@ function deliveryIdFor(
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }
 
-export { deliveryIdFor, eventInstantMs };
+/** The millisecond a uuid v7 starts with; null for any other text. */
+function uuid7InstantOf(id: string): number | null {
+  return UUID_V7.test(id) ? uuid7Instant(id) : null;
+}
+
+/** The id of the delivery of `event` to `recipient` on `channel`. */
+function deliveryIdFor(
+  event: DeliveryIdEvent,
+  recipient: DeliveryIdRecipient,
+  channel: NotificationChannel,
+): string {
+  // Ids, the recipient's kind and an enum name: none of them holds a "|".
+  return uuid7FromKey(
+    eventInstantMs(event),
+    `${event.id}|${recipientKey(recipient)}|${channel}`,
+  );
+}
+
+export { deliveryIdFor, eventInstantMs, uuid7FromKey, uuid7InstantOf };
 export type { DeliveryIdEvent, DeliveryIdRecipient };

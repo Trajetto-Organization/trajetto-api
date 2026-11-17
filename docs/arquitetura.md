@@ -3408,6 +3408,16 @@ continua de pé depois:
   partição em que o evento também está. A janela de 24 h do
   `/health/metrics` (`deliveryIdFloor`) passa a contar as entregas pelo
   instante do evento, não pelo da expansão.
+- cada recibo de provedor (`notification_provider_receipt`) nasce com um
+  id decidido pelo fato que ele registra (F5-04,
+  `src/shared/notifications/receipt-id.ts`):
+  um hash do provedor, do id da mensagem e do status, com o milissegundo
+  da entrega na frente quando o recibo está ligado a uma (o dia do evento)
+  e, quando não está, a meia-noite (UTC) do `occurredAt`, presa entre hoje
+  e o dia mais antigo da retenção dos recibos soltos (30 dias). A Meta e o
+  Svix repetem o que não viram responder 2xx, e três chamadas do mesmo
+  fato continuam uma linha só sem o índice único de provedor, mensagem e
+  status (que sai na onda 10).
 
 Cada linha da `notification_delivery` leva a empresa do evento em
 `business_id` (F3-09), copiada na expansão, com um índice parcial por raia
