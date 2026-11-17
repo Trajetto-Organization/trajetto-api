@@ -3,6 +3,7 @@ import type {
   PublicRoute,
 } from "@/shared/integration/public-shapes";
 
+import type { EventCursor } from "../cursor";
 import type { StoredDelivery } from "../usecases/create-delivery/replay-fingerprint";
 
 interface CursorPage<T> {
@@ -20,6 +21,20 @@ interface IntegrationListProps {
 
   updated_since?: string;
   status?: string;
+}
+
+/**
+ * The feed's page: the position the cursor names, already parsed (F2-04),
+ * instead of the cursor's text. A malformed cursor never gets here: the
+ * parser refuses it with 400 INVALID_CURSOR.
+ */
+interface IntegrationEventListProps {
+  businessId: string;
+
+  limit: number;
+  position?: EventCursor | null;
+
+  updated_since?: string;
 }
 
 /**
@@ -56,7 +71,7 @@ interface IIntegrationRepository {
    * a firewall cannot receive a call, and telling them "expose an endpoint or
    * get nothing" is how an integration project dies.
    */
-  listEvents: (props: IntegrationListProps) => Promise<
+  listEvents: (props: IntegrationEventListProps) => Promise<
     CursorPage<{
       id: string;
       topic: string;
@@ -89,4 +104,9 @@ interface IIntegrationRepository {
   } | null>;
 }
 
-export type { CursorPage, IIntegrationRepository, IntegrationListProps };
+export type {
+  CursorPage,
+  IIntegrationRepository,
+  IntegrationEventListProps,
+  IntegrationListProps,
+};

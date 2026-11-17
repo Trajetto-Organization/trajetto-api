@@ -31,6 +31,7 @@ import {
 } from "./documentation/integration-write-documentation";
 import {
   publicBadRequestResponse,
+  publicEventsBadRequestResponse,
   publicBusinessRateLimitResponse,
   publicInternalErrorResponse,
   publicNotFoundResponse,
@@ -322,7 +323,7 @@ async function integrationRoutes(app: FastifyInstance) {
         querystring: integrationSchemas.listEvents,
         response: {
           200: integrationResponses.eventPage,
-          400: publicBadRequestResponse,
+          400: publicEventsBadRequestResponse,
           429: publicBusinessRateLimitResponse,
           500: publicInternalErrorResponse,
           503: publicServiceUnavailableResponse,

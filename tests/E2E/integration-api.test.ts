@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { randomUUID } from "node:crypto";
 
+import { formatEventCursorV2 } from "@/modules/integration/cursor";
 import { generateApiKey } from "@/shared/integration/api-key-rules";
 import { createPrismaClient } from "@/shared/database/database-client";
 
@@ -364,6 +365,86 @@ describe("paging by cursor", () => {
     const response = await call("/deliveries?limit=200", readKey);
 
     expect(response.json().next_cursor).toBeNull();
+  });
+});
+
+/**
+ * The cursor of /events (plano-escala F2-04): this release reads the v2
+ * form the commit-order feed of wave 10 will emit, still by the id, and
+ * keeps emitting the legacy id, so the image before it never meets a cursor
+ * it cannot read. Anything else is 400 INVALID_CURSOR: a garbage cursor
+ * used to answer an empty last page, which an integrator reads as "up to
+ * date".
+ */
+describe("the events cursor", () => {
+  const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+  async function walk(toCursor: (next: string) => string): Promise<string[]> {
+    const seen: string[] = [];
+    let cursor: string | null = null;
+
+    for (let page = 0; page < 20; page += 1) {
+      const response = await call(
+        `/events?limit=2${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`,
+        readKey,
+      );
+
+      expect(response.statusCode, response.body).toBe(200);
+
+      const body = response.json();
+
+      for (const event of body.data) seen.push(event.id);
+
+      if (!body.next_cursor) break;
+
+      // Still the legacy id: v2 is only read by this release.
+      expect(body.next_cursor).toMatch(UUID);
+
+      cursor = toCursor(body.next_cursor);
+    }
+
+    return seen;
+  }
+
+  it("walks the same events with the legacy id and with a v2 cursor", async () => {
+    await prisma.deliveryEvent.createMany({
+      data: Array.from({ length: 5 }, (_, index) => ({
+        type: "NOTE" as const,
+        note: `Cursor ${index}`,
+        deliveryId: ourDelivery,
+        businessId: CARRIER,
+      })),
+    });
+
+    const legacy = await walk((next) => next);
+    const v2 = await walk((next) =>
+      formatEventCursorV2({ epoch: 1, txid: 12_345n, id: next, floorMs: 0 }),
+    );
+
+    expect(legacy.length).toBeGreaterThanOrEqual(5);
+    expect(new Set(legacy).size).toBe(legacy.length);
+    expect(v2).toEqual(legacy);
+  }, 60_000);
+
+  it("refuses a cursor it cannot read with 400 INVALID_CURSOR", async () => {
+    const id = "018f5000-0000-7000-8000-000000000001";
+
+    for (const cursor of [
+      "abc",
+      `v2.1.2.${id}`,
+      `v2.01.2.${id}.0`,
+      `v2.1.-2.${id}.0`,
+      `v3.1.2.${id}.0`,
+      `v2.1.2.${id.toUpperCase()}.0`,
+    ]) {
+      const response = await call(
+        `/events?cursor=${encodeURIComponent(cursor)}`,
+        readKey,
+      );
+
+      expect(response.statusCode, cursor).toBe(400);
+      expect(response.json().code, cursor).toBe("INVALID_CURSOR");
+    }
   });
 });
 

@@ -7,6 +7,7 @@ import { relatedTo, rowsByKey } from "@/shared/database/related-rows";
 import type {
   CursorPage,
   IIntegrationRepository,
+  IntegrationEventListProps,
   IntegrationListProps,
 } from "./IIntegration-repository";
 
@@ -307,9 +308,9 @@ class IntegrationRepository implements IIntegrationRepository {
   async listEvents({
     businessId,
     limit,
-    cursor,
+    position,
     updated_since,
-  }: IntegrationListProps): Promise<
+  }: IntegrationEventListProps): Promise<
     CursorPage<{
       id: string;
       topic: string;
@@ -363,7 +364,10 @@ class IntegrationRepository implements IIntegrationRepository {
       orderBy: { id: "asc" },
 
       take: limit + 1,
-      ...(cursor && { skip: 1, cursor: { id: cursor } }),
+      // By the id, for the legacy cursor and for v2 alike (F2-04): this
+      // release reads v2 and still walks and emits by id; the commit order
+      // of the txid is F2-05's.
+      ...(position && { skip: 1, cursor: { id: position.id } }),
     });
 
     const { page, next_cursor } = cursorPage(rows, limit);

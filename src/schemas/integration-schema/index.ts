@@ -150,7 +150,20 @@ const integrationRouteListSchema = integrationListSchema.extend({
 // No `status`: the event feed never applied one, and publishing a filter that
 // does not filter has an ERP syncing the wrong thing. A caller still sending
 // it is not refused — the key is dropped, as it always was in effect.
-const integrationEventListSchema = integrationListSchema;
+/**
+ * /events takes the same page, with a cursor the feed parses itself
+ * (plano-escala F2-04): the last event's id, or the v2 form the commit-order
+ * feed of wave 10 emits; anything else is 400 INVALID_CURSOR. Opaque to the
+ * integrator either way.
+ */
+const integrationEventListSchema = integrationListSchema.extend({
+  cursor: z
+    .string()
+    .optional()
+    .describe(
+      "O `next_cursor` da página anterior, sem alterar: é opaco, e o formato pode mudar entre versões (as duas formas seguem aceitas). Um cursor que não é um `next_cursor` dá 400 INVALID_CURSOR.",
+    ),
+});
 
 const integrationIdParamSchema = z.object({
   id: z.string().uuid("Identificador inválido."),

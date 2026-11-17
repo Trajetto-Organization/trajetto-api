@@ -60,6 +60,25 @@ const publicBadRequestResponse = publicErrorBody([
     "Requisição recusada: VALIDATION_ERROR (um campo ou parâmetro inválido; uma frase por campo em `issues`) ou MALFORMED_REQUEST (corpo que não é JSON válido). Corrija antes de repetir.",
   );
 
+/**
+ * /integration/v1/events also refuses a cursor it cannot read (plano-escala
+ * F2-04): the legacy id or a v2 cursor, nothing else. A garbage cursor used
+ * to come back as an empty last page, which an integrator reads as "up to
+ * date".
+ */
+const publicEventsBadRequestResponse = publicErrorBody([
+  "VALIDATION_ERROR",
+  "MALFORMED_REQUEST",
+  "INVALID_CURSOR",
+])
+  .extend({
+    message: publicBadRequestResponse.shape.message,
+    issues: publicBadRequestResponse.shape.issues,
+  })
+  .describe(
+    "Requisição recusada: VALIDATION_ERROR (um parâmetro inválido; uma frase por parâmetro em `issues`), MALFORMED_REQUEST ou INVALID_CURSOR (um `cursor` que não é o `next_cursor` de uma página: recomece sem cursor, ou com `updated_since`). Corrija antes de repetir.",
+  );
+
 const publicNotFoundResponse = publicErrorBody(["NOT_FOUND"]).describe(
   "NOT_FOUND: não existe, ou é de outra empresa. As duas respostas são iguais de propósito, para uma chave não confirmar os ids de outra empresa.",
 );
@@ -104,6 +123,7 @@ const publicServiceUnavailableResponse = z
 export {
   publicBadRequestResponse,
   publicBusinessRateLimitResponse,
+  publicEventsBadRequestResponse,
   publicErrorBody,
   publicInternalErrorResponse,
   publicNotFoundResponse,

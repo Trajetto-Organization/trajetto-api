@@ -3,6 +3,7 @@ import { container } from "tsyringe";
 
 import { z } from "zod";
 
+import { parseEventCursor } from "../../cursor";
 import { IIntegrationRepository } from "../../repositories/IIntegration-repository";
 
 import {
@@ -108,7 +109,16 @@ class IntegrationReadController {
     request: FastifyRequest,
     reply: FastifyReply,
   ): Promise<void> => {
-    const result = await this.repository().listEvents(this.scope(request));
+    const { businessId, limit, cursor, updated_since } = this.scope(request);
+
+    // The legacy id or v2 (F2-04); anything else is 400 INVALID_CURSOR, not
+    // the empty page that read as "up to date".
+    const result = await this.repository().listEvents({
+      businessId,
+      limit,
+      position: cursor ? parseEventCursor(cursor) : null,
+      updated_since,
+    });
 
     return reply.status(200).send(result);
   };
