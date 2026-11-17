@@ -158,6 +158,15 @@ function everyRuleBroken(): OperationalSnapshot[] {
       // A logical restore into a new cluster without `pg_resetwal -e`
       // (F2-03): the history's txids are ahead of the cluster's counter.
       feedTxid: { newest: 5_000_000n, next: 1_000n },
+      // A PITR the release step has not seen yet (U-14): the timeline moved.
+      clusterEpoch: {
+        stored: {
+          epoch: 1,
+          systemIdentifier: "7300000000000000001",
+          timeline: 1,
+        },
+        current: { systemIdentifier: "7300000000000000001", timeline: 2 },
+      },
     },
     {
       ...healthy(),

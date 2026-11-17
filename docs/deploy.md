@@ -2499,7 +2499,11 @@ A ordem inteira da etapa é `prisma/concurrent` → `prisma migrate deploy` →
   `CONNECT` do banco (`tests/unitaires/lifecycle/infra-sql-rules.test.ts`
   cobra, também no SQL montado em texto).
   O login e a senha de qualquer role são sempre seus, à mão. Nenhuma
-  migration do Prisma referencia um role.
+  migration do Prisma referencia um role. O `50-cluster-epoch.sql` (plano
+  de escala, U-14) mantém a época do cluster na tabela `cluster_epoch`: ela
+  sobe quando o `system_identifier` ou a timeline do Postgres mudam (um
+  PITR, um promote, um cluster novo), e o `ops-heartbeat` alerta
+  `cluster-epoch-stale` até a etapa rodar depois de um deles.
 - **`prisma/post-deploy`**: DDL com pré-condição (por exemplo, a troca das
   filas, que espera todas as imagens vivas anunciarem a capability).
 - Cada arquivo testa o próprio estado e termina com um `RAISE NOTICE`
@@ -3800,8 +3804,9 @@ Num incidente real (banco perdido):
 
 Por que o passo 4 é sempre: um banco restaurado traz `_prisma_migrations`
 e passa pela guarda de banco vazio, mas um restore com `--no-owner` perde
-os donos e os grants que o `infra/sql` mantém (e, com a onda 7, a época do
-cluster muda), e só a etapa os devolve. Se o dump é mais velho que o build
+os donos e os grants que o `infra/sql` mantém (e, num cluster novo ou
+depois de um PITR, a época do cluster tem de subir), e só a etapa os
+devolve. Se o dump é mais velho que o build
 no ar, a API ainda recusa subir até as migrations que faltam rodarem. Não
 conte com o pipeline para isso: a tag `<ambiente>-applied` diz que a imagem
 de migração já rodou **no banco de antes**, e a `release_step_state` veio
@@ -4247,6 +4252,7 @@ mais abaixo, é o resumo.
 | `Volume de entregas`                                  | segurar a próxima coorte da rampa; subir `APPROVED_GATE_MONTHLY_DELIVERIES` só com um relatório de portão novo em `docs/desempenho` ([runbook](./runbooks/volume-near-gate.md))                                           |
 | `Geocodificação: N consultas hoje`                    | ver o gasto do dia por escopo em `provider_quota_day` e corrigir `LOCATIONIQ_DAILY_QUOTA` ou os orçamentos pela tabela da decisão D40 ([runbook](./runbooks/geocoding-quota-high.md))                                     |
 | `Feed da integração: o maior txid`                    | um restore lógico num cluster novo sem o `pg_resetwal -e`: API em 0 réplicas, a época certa e o `pg_resetwal` com o Database parado ([runbook](./runbooks/feed-txid-regressed.md))                                        |
+| `Época do cluster`                                    | um PITR, um promote ou um cluster novo que a etapa de release ainda não viu: **Deploy** na `trajetto-api-migrate` (ou _Run workflow_ com `force_release`) ([runbook](./runbooks/cluster-epoch-stale.md))                  |
 
 Para trocar uma variável: _Environment_ da Application → **Save** →
 **Deploy** (salvar sozinho não reinicia o contêiner).

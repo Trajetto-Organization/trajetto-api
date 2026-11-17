@@ -1592,6 +1592,26 @@ model ReleaseStepState {
   @@map("release_step_state")
 }
 
+/// Which history of the cluster the database lives in (plano-escala U-14):
+/// one row, an epoch bumped by the release step (infra/sql/50-cluster-epoch.sql)
+/// whenever the cluster's system_identifier (a new cluster: a logical
+/// restore, a pg_upgrade) or timeline (a PITR, a promote) changed. After a
+/// PITR or a failover transaction ids are handed out again; the integration
+/// feed's cursor carries this epoch (F2-04, F2-05) so it never mistakes a
+/// reused id for one it already served. The ops heartbeat alerts
+/// cluster-epoch-stale while the pair differs from the cluster's. The
+/// single-row CHECK (id = 1) is raw SQL, pinned in
+/// tests/E2E/raw-sql-objects.test.ts. Read by raw SQL only.
+model ClusterEpoch {
+  id                Int      @id @db.SmallInt
+  epoch             Int
+  system_identifier BigInt
+  timeline          Int
+  changed_at        DateTime @db.Timestamptz(6)
+
+  @@map("cluster_epoch")
+}
+
 /// The scale plan's series (plano-escala F1, item F1-08): one row per
 /// process per minute, written by a local timer with jitter in every process
 /// (never a cron: the election would leave a single writer), so the triggers

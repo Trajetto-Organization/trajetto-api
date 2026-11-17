@@ -20,6 +20,7 @@ import { PROVIDER_PAUSED_MARKER } from "@/shared/ai/provider-failure";
 import "@/shared/services/proof-signing/proof-signing-service";
 import type { ProofSigningService } from "@/shared/services/proof-signing/proof-signing-service";
 import type { OperationalSnapshot } from "./alert-rules";
+import { readClusterEpochState } from "./cluster-epoch";
 import { readFeedTxidState } from "./feed-txid";
 import { connectionUsagePercent } from "./metrics-math";
 import { deliveryBacklogSql } from "./metrics-queries";
@@ -343,6 +344,15 @@ async function collectOperationalSnapshot(
     null,
   );
 
+  // The cluster's epoch against the cluster (U-14): one row and two
+  // pg_control functions, on the maintenance pool.
+  const clusterEpoch = await part(
+    "cluster_epoch",
+    errors,
+    () => readClusterEpochState(databaseBatch),
+    null,
+  );
+
   return {
     now,
     outboxEligibleLagSec,
@@ -372,6 +382,7 @@ async function collectOperationalSnapshot(
     proofSigning,
     ...(geocodingQuota && { geocodingQuota }),
     ...(feedTxid && { feedTxid }),
+    ...(clusterEpoch && { clusterEpoch }),
     collectionErrors: errors,
   };
 }

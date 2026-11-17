@@ -1,5 +1,9 @@
 import { isCredentialFailure } from "@/shared/notifications/delivery-diagnostics";
 
+import {
+  clusterEpochStaleReason,
+  type ClusterEpochState,
+} from "./cluster-epoch";
 import { feedTxidRegressed, type FeedTxidState } from "./feed-txid";
 
 /**
@@ -127,6 +131,14 @@ interface OperationalSnapshot {
    * nothing.
    */
   feedTxid?: FeedTxidState;
+
+  /**
+   * The cluster's epoch row against the cluster (plano-escala U-14): the
+   * stored system_identifier and timeline, and the cluster's own. Absent
+   * before the table exists, or when it could not be read, which judges
+   * nothing.
+   */
+  clusterEpoch?: ClusterEpochState;
 
   /** Parts of the snapshot that could not be read; each one is a reason. */
   collectionErrors: string[];
@@ -414,6 +426,7 @@ const ALERT_KINDS = [
   "volume-near-gate",
   "geocoding-quota-high",
   "feed-txid-regressed",
+  "cluster-epoch-stale",
   "collection-incomplete",
 ] as const;
 
@@ -884,6 +897,19 @@ function collectAlerts(
     alerts.push({
       code: "feed-txid-regressed",
       message: `Feed da integração: o maior txid gravado em delivery_event (${snapshot.feedTxid.newest}) não está abaixo do próximo xid do cluster (${snapshot.feedTxid.next}); veio de outro cluster (um restore lógico sem o pg_resetwal -e) e os eventos novos ficariam para trás do cursor dos integradores`,
+    });
+  }
+
+  // A PITR, a promote or a new cluster (U-14) the release step has not
+  // seen yet: transaction ids are being reused under the old epoch.
+  const epochStale = snapshot.clusterEpoch
+    ? clusterEpochStaleReason(snapshot.clusterEpoch)
+    : null;
+
+  if (epochStale) {
+    alerts.push({
+      code: "cluster-epoch-stale",
+      message: `Época do cluster: ${epochStale}; rode a etapa de release (Deploy na trajetto-api-migrate) para o cursor do feed da integração não confundir os xids reaproveitados`,
     });
   }
 
