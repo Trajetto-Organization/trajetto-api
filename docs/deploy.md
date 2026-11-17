@@ -3714,6 +3714,51 @@ já estão no banco (não há o que aplicar), e os seeds dela rodam de novo,
 idempotentes. Um build anterior à imagem de migração pula a etapa
 ([seção 15](#15-migrations)).
 
+### A trilha numa volta para antes da onda 7
+
+Da onda 7 do plano de escala em diante (F2-10), as posições vão para a
+trilha enxuta `driver_position_v2`, e a tela da trilha lê as duas tabelas.
+Uma imagem de antes dela só conhece a `driver_position`: voltar o código
+para ela tira da tela da trilha todo ponto gravado pela imagem nova. O mapa
+da torre não sente (a última posição é a mesma tabela nas duas), e os pontos
+não se perdem: ficam na v2, que a imagem velha não lê nem apaga.
+
+1. Depois de a volta convergir, traga os pontos de volta com
+   `prisma/backfills/driver-position-v2-to-legacy.sql`, no `psql` do
+   Database com o usuário dono (o arquivo copiado para o host, ou colado no
+   `psql`), repetindo até a resposta ser `INSERT 0 0`. Cada rodada copia até
+   100 mil pontos, numa transação própria:
+
+   ```sh
+   docker exec -i $(docker ps -q -f label=com.docker.swarm.service.name=trajetto-postgres-production) \
+     psql -U trajetto -d trajetto -v ON_ERROR_STOP=1 < ./driver-position-v2-to-legacy.sql
+   ```
+
+   Um ponto que já está na legada (o mesmo motorista no mesmo instante,
+   gravado pela imagem velha durante o rolling) fica como está, e um dia que
+   a legada já não tem partição fica de fora. Nada sai da v2: a imagem da
+   onda 7, de volta, lê as duas e conta o ponto uma vez. Um
+   `INSERT … SELECT` direto não serve: o `id` da legada é `TEXT NOT NULL`
+   sem padrão no banco, os ids são `uuid` de um lado e texto do outro, e um
+   dia sem partição na legada derruba o comando inteiro
+   (`tests/E2E/driver-position-rollback.test.ts` roda o arquivo).
+
+2. Na volta para a frente (a imagem da onda 7 de novo), os pontos que a
+   imagem velha gravou já estão na legada, que a tela lê. Mas a imagem velha
+   não conhece a v2 e não cria as partições dela: depois de uma volta mais
+   longa que `DRIVER_POSITION_PARTITION_LOOKAHEAD_DAYS` (7 dias), a v2 não
+   tem a partição de hoje, e nenhuma migration a cria. O job
+   `partition-maintenance` está sem sucesso há mais de 26 h, então a
+   varredura de recuperação dos crons o roda 1 minuto depois do boot
+   (`partitions.driver_position_v2` no `/health/metrics`). Até lá, todo
+   POST de posições responde 5xx (o app guarda os pontos e reenvia; nada se
+   perde) e o mapa da torre para, porque a trilha e a última posição são
+   gravadas na mesma transação. Para não ter esse minuto, faça essa volta
+   para a frente fora do horário das rotas.
+
+3. A retirada da legada (F2-12) conta a retenção a partir da volta para a
+   frente: durante a volta, a legada recebeu pontos de novo.
+
 ### Quando o Swarm desiste de um serviço
 
 Nenhuma Application tem limite de tentativas (`MaxAttempts: 0`). Se uma
@@ -3942,7 +3987,10 @@ bytes por linha, contra uns 565 da legada): sem id, sem `created_at`, com a
 chave primária `(driverId, recorded_at)` e os ids como `uuid`. A legada
 `driver_position` fica, só lida, até passar a retenção e uma release
 seguinte a apagar (F2-12); a tela da trilha lê as duas e conta uma vez o
-ponto que estiver nas duas. O backup do Dokploy leva sempre
+ponto que estiver nas duas. Numa volta do código para antes da onda 7, os
+pontos da v2 voltam para a legada pelo passo de
+[A trilha numa volta para antes da onda 7](#a-trilha-numa-volta-para-antes-da-onda-7).
+O backup do Dokploy leva sempre
 a base inteira, trilha inclusive: quando o dump passar a levar tempo demais
 (e a segurar um snapshot que impede o autovacuum das filas), a decisão volta
 para cá. O `backup-postgres.sh` (manual) tem dois controles só dele, passados
