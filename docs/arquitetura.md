@@ -1381,7 +1381,9 @@ mesma reserva, o mesmo orçamento e o mesmo portão
   empresa). A resposta da requisição nunca espera o provedor, e nada disso
   derruba a requisição. É uma execução por vez por processo, numa fila de no
   máximo 100 ids (o resto fica para o job, com uma linha de log
-  `address lookup queue full`). Resposta que não é sobre o
+  `address lookup queue full`). Cada execução leva no máximo um lote
+  (`DELIVERY_GEOCODING_BATCH_SIZE`) de uma empresa, e o resto dela volta
+  para o fim da fila. Resposta que não é sobre o
   endereço (queda, recusa, 429) devolve a reserva sem gastar tentativa. A
   planilha e o XML ficam só no job, para que mil linhas não passem na frente
   de todo mundo.

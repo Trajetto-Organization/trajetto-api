@@ -1,3 +1,4 @@
+import { env } from "@/env";
 import { logger } from "@/shared/logging/logger";
 
 import { GEOCODING_RUN_DEFAULTS } from "./delivery-geocoding-service";
@@ -138,12 +139,19 @@ class GeocodeSoonQueue {
 let queue: GeocodeSoonQueue | null = null;
 
 function soonQueue(): GeocodeSoonQueue {
-  queue ??= new GeocodeSoonQueue(async (businessId, ids) => {
-    logGeocodingRun(
-      "soon",
-      await deliveryGeocodingService().runFor(businessId, ids),
-    );
-  });
+  // A chunk is the run's batch, from the same env: runFor looks up a batch
+  // at most, and a larger chunk's ids past it were neither asked nor
+  // queued again (review of plano-escala F2-31).
+  queue ??= new GeocodeSoonQueue(
+    async (businessId, ids) => {
+      logGeocodingRun(
+        "soon",
+        await deliveryGeocodingService().runFor(businessId, ids),
+      );
+    },
+    SOON_PENDING_MAX,
+    env.DELIVERY_GEOCODING_BATCH_SIZE,
+  );
 
   return queue;
 }

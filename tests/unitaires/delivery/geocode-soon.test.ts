@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const runtime = vi.hoisted(() => ({
-  runFor: vi.fn(async () => {
+  runFor: vi.fn(async (..._args: unknown[]): Promise<unknown> => {
     throw new Error("connection terminated");
   }),
 }));
@@ -39,11 +39,13 @@ function deferred() {
 const saved = {
   url: env.REVERSE_GEOCODER_URL,
   budget: env.DELIVERY_GEOCODING_DAILY_BUDGET,
+  batch: env.DELIVERY_GEOCODING_BATCH_SIZE,
 };
 
 afterEach(async () => {
   env.REVERSE_GEOCODER_URL = saved.url;
   env.DELIVERY_GEOCODING_DAILY_BUDGET = saved.budget;
+  env.DELIVERY_GEOCODING_BATCH_SIZE = saved.batch;
   runtime.runFor.mockClear();
   await shutdownDeliveryGeocoding();
 });
@@ -184,6 +186,36 @@ describe("geocodeSoon", () => {
 
     await vi.waitFor(() => expect(runtime.runFor).toHaveBeenCalledTimes(1));
     expect(runtime.runFor).toHaveBeenCalledWith("a", ["d1"]);
+  });
+
+  // Review of plano-escala F2-31: the queue handed chunks of the default
+  // batch (20) to a run that looks up DELIVERY_GEOCODING_BATCH_SIZE of
+  // them, and the ids past it were neither asked nor queued again.
+  it("hands the run chunks of the env's batch, so no id is dropped", async () => {
+    env.REVERSE_GEOCODER_URL = "https://geocoder.example/v1";
+    env.DELIVERY_GEOCODING_DAILY_BUDGET = 100;
+    env.DELIVERY_GEOCODING_BATCH_SIZE = 3;
+    runtime.runFor.mockImplementation(async () => undefined);
+
+    try {
+      geocodeSoon(
+        "a",
+        Array.from({ length: 7 }, (_, index) => `d${index + 1}`),
+      );
+
+      await vi.waitFor(() => expect(runtime.runFor).toHaveBeenCalledTimes(3));
+
+      const chunks = runtime.runFor.mock.calls.map(
+        (call) => (call as unknown as [string, string[]])[1],
+      );
+
+      expect(chunks.map((ids) => ids.length)).toEqual([3, 3, 1]);
+      expect(chunks.flat()).toHaveLength(7);
+    } finally {
+      runtime.runFor.mockImplementation(async () => {
+        throw new Error("connection terminated");
+      });
+    }
   });
 });
 
