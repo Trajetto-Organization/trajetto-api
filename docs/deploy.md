@@ -1926,6 +1926,104 @@ paralelo falhou com "could not resize shared memory segment" na medição de
 imagem, o banco de produção roda com os padrões da imagem oficial
 (`shared_buffers` 128MB).
 
+### Roles do banco: logins, URLs e conexões
+
+Até o corte (plano de escala, onda 6), o runtime conecta como o usuário do
+Database, superusuário e dono de todas as tabelas: uma injeção de SQL ali
+leria as chaves do PITR e apagaria os backups. O corte troca as URLs do
+runtime por logins que só têm o que cada processo precisa. A etapa de
+release cria os roles e os grants em toda release
+(`infra/sql/20-runtime-roles.sql`), sempre **NOLOGIN**; o login e a senha
+são do dono, à mão, e nunca entram num arquivo do repositório nem num SQL
+com a senha escrita.
+
+| Role                  | O que pode                                                                                                                        | Quem usa                                        |
+| --------------------- | --------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------- |
+| `trajetto_app`        | o grupo (nunca um login): lê e grava toda tabela, menos a trilha das entregas e as tabelas da etapa de release, que só lê         | ninguém direto; os três abaixo são membros      |
+| `trajetto_http`       | o grupo; na trilha (`delivery_event`), lê, insere e preenche o endereço do GPS do comprovante; `statement_timeout` de 30 s        | as requisições (API, tempo real, ingestão)      |
+| `trajetto_worker`     | igual ao `trajetto_http`                                                                                                          | os workers (onda 12)                            |
+| `trajetto_batch`      | o grupo; na trilha, lê, altera e apaga; membro do `trajetto_partitions` e dos roles de estatística; `statement_timeout` de 30 min | o cron: expurgos, partições, métricas pesadas   |
+| `trajetto_read`       | só SELECT, fora do grupo; `statement_timeout` de 10 s                                                                             | as leituras pesadas (onda 12)                   |
+| `trajetto_partitions` | dono das tabelas particionadas e das partições (`infra/sql/10-partitions.sql`)                                                    | só por `SET ROLE`, a partir do `trajetto_batch` |
+
+Todos levam `lock_timeout` de 5 s e `idle_in_transaction_session_timeout`
+de 60 s no próprio role, além dos da URL. Cada URL, com o login, o
+`connection_limit` e o destino de cada Application, está em
+[`variaveis-de-ambiente.md`](./variaveis-de-ambiente.md#2-banco-de-dados); o
+formato é o mesmo de hoje, trocando só o usuário, a senha e o
+`connection_limit`:
+
+```
+DATABASE_URL=postgresql://trajetto_http:<SENHA>@trajetto-postgres-production:5432/trajetto?schema=public&connection_limit=10&pool_timeout=20&connect_timeout=5&socket_timeout=60&max_idle_connection_lifetime=300&options=-c%20statement_timeout%3D30000%20-c%20lock_timeout%3D5000%20-c%20idle_in_transaction_session_timeout%3D60000
+BATCH_DATABASE_URL=postgresql://trajetto_batch:<SENHA>@trajetto-postgres-production:5432/trajetto?schema=public&connection_limit=3
+```
+
+Na staging, `-staging` no lugar de `-production`, com senhas diferentes
+por ambiente. A `trajetto-api-migrate` continua com o usuário do Database:
+é ela que cria as tabelas e roda o `infra/sql`.
+
+**A conta das conexões** (`max_connections` 200 na `trajetto-postgres`): no
+papel `all`, cada réplica abre até 10 (requisições) + 3 (batch) + 1 (a
+readiness). Com as 2 réplicas de hoje, mais a `trajetto-api-migrate` (2) e
+as ferramentas (8: `psql`, o backup do Dokploy, o pgBackRest, o
+monitoramento), 2 × (10 + 3 + 1) + 2 + 8 = 38 de 200. O pool de leitura
+(`databaseRead`) abre até mais 3 por réplica quando entrar em uso, mesmo
+sem `DATABASE_READ_URL`: 2 × 17 + 10 = 44. Depois da separação (onda 12),
+some cada linha da tabela de
+[`variaveis-de-ambiente.md`](./variaveis-de-ambiente.md#2-banco-de-dados)
+vezes as réplicas da Application, e mantenha a soma abaixo de 200 com
+folga.
+
+**O corte, na staging** (uma semana antes da produção):
+
+1. Um `psql` no Database, no host:
+
+   ```sh
+   docker exec -it $(docker ps -q -f label=com.docker.swarm.service.name=trajetto-postgres-staging) psql -U trajetto -d trajetto
+   ```
+
+2. Para `trajetto_http`, `trajetto_worker`, `trajetto_batch` e
+   `trajetto_read`: `ALTER ROLE <role> LOGIN;` e depois o meta-comando
+   `\password <role>`, que pede a senha duas vezes e a envia já cifrada.
+   Nunca escreva a senha num SQL: ela ficaria no histórico e nos logs.
+   Gere cada senha com `openssl rand -hex 32` e guarde no cofre.
+3. `trajetto-api` → _Environment_: a `DATABASE_URL` com `trajetto_http` e
+   `connection_limit=10` (as `options` ficam como estão) e a
+   `BATCH_DATABASE_URL` com `trajetto_batch` e `connection_limit=3`,
+   direta. A `trajetto-api-migrate` fica como está.
+4. **Deploy**. No log do boot, `database role checked` com
+   `superuser: false` e `tablesOwner: false`, e nenhuma linha "O runtime
+   conecta ao banco como …". No `psql`, nenhuma conexão do runtime como
+   `trajetto`:
+
+   ```sql
+   SELECT usename, application_name, count(*) FROM pg_stat_activity GROUP BY 1, 2;
+   ```
+
+5. Exercite login, criação de entrega, posições do app, comprovante,
+   planilha e webhook. Uma rota com 500 e `permission denied` (42501) no
+   log é um grant que faltou: volte a URL (abaixo) e abra o problema.
+6. `DATABASE_REQUIRE_RUNTIME_ROLE=true` → **Deploy**. A partir daí, um boot
+   como o dono, ou com o cron sem a `BATCH_DATABASE_URL`, é recusado.
+7. No dia seguinte, depois das 04:10 UTC, a partição de amanhã existe e é
+   do `trajetto_partitions`, criada pelo `trajetto_batch`:
+   `partitions.driver_position.owner_ok` em `/health/metrics`, ou
+
+   ```sql
+   SELECT relname, pg_get_userbyid(relowner) FROM pg_class
+    WHERE relname LIKE 'driver_position_%' ORDER BY relname DESC LIMIT 3;
+   ```
+
+**Na produção**: promova a onda 6 e, uma semana depois do corte na
+staging, os mesmos passos com `trajetto-postgres-production`. O PITR da
+produção ([seção 27](#f1b-o-pitr-na-produção-fim-da-onda-6)) só depois de
+7 dias com `DATABASE_REQUIRE_RUNTIME_ROLE=true` sem erro novo.
+
+**Reversão**: primeiro `DATABASE_REQUIRE_RUNTIME_ROLE=false` (com ela
+`true`, um boot como o dono é recusado), depois as URLs de volta ao
+usuário do Database → **Deploy**. Os roles e os logins ficam, sem uso;
+para tirar o acesso de um login, `ALTER ROLE <role> NOLOGIN;` à mão.
+
 ### Redis
 
 - **Senha obrigatória**: o Database Redis sempre nasce com senha. Qualquer
