@@ -1,7 +1,7 @@
 import { Prisma } from "@prisma/client";
 import { container } from "tsyringe";
 
-import database from "@/../infra/database";
+import database, { databaseBatch } from "@/../infra/database";
 import { RedisConnection } from "@/../infra/cache/redis-connection";
 import { env } from "@/env";
 import { GEOCODER_PROVIDER } from "@/shared/delivery/geocoding/geocoding-budget";
@@ -20,6 +20,7 @@ import { PROVIDER_PAUSED_MARKER } from "@/shared/ai/provider-failure";
 import "@/shared/services/proof-signing/proof-signing-service";
 import type { ProofSigningService } from "@/shared/services/proof-signing/proof-signing-service";
 import type { OperationalSnapshot } from "./alert-rules";
+import { readFeedTxidState } from "./feed-txid";
 import { connectionUsagePercent } from "./metrics-math";
 import { deliveryBacklogSql } from "./metrics-queries";
 import {
@@ -333,6 +334,15 @@ async function collectOperationalSnapshot(
         )
       : undefined;
 
+  // The feed's stamp against the cluster (F2-03): one probe per tenant down
+  // the feed's index, on the maintenance pool like the cluster's numbers.
+  const feedTxid = await part(
+    "delivery_event (txid)",
+    errors,
+    () => readFeedTxidState(databaseBatch),
+    null,
+  );
+
   return {
     now,
     outboxEligibleLagSec,
@@ -361,6 +371,7 @@ async function collectOperationalSnapshot(
     redisOk,
     proofSigning,
     ...(geocodingQuota && { geocodingQuota }),
+    ...(feedTxid && { feedTxid }),
     collectionErrors: errors,
   };
 }

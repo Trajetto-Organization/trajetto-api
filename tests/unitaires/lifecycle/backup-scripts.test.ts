@@ -41,6 +41,16 @@ case "$1" in
         exit "\${STUB_TOC_EXIT:-0}" ;;
       *pg_isready*) exit 0 ;;
       *pg_restore*) cat > /dev/null; exit 0 ;;
+      *pg_snapshot_xmax*)
+        # The feed's txid state: the first answer from STUB_TXID_FIRST
+        # ("ok" when unset), every later one from STUB_TXID_THEN.
+        if [ -n "\${STUB_TXID_SEEN:-}" ] && [ -f "\$STUB_TXID_SEEN" ]; then
+          echo "\${STUB_TXID_THEN:-ok}"
+        else
+          [ -n "\${STUB_TXID_SEEN:-}" ] && touch "\$STUB_TXID_SEEN"
+          echo "\${STUB_TXID_FIRST:-ok}"
+        fi
+        exit 0 ;;
       *psql*) echo "  _prisma_migrations: 1"; exit 0 ;;
     esac ;;
 esac
@@ -261,6 +271,76 @@ describe.skipIf(!bash)("the restore drill", () => {
     expect(
       box.calls("npx").filter((call) => call.includes("migrate deploy")),
     ).toEqual([]);
+  });
+
+  /**
+   * The integration feed's stamp (plano-escala F2-03): a dump restored into
+   * a new cluster brings delivery_event.txid values from the old one while
+   * the new one counts from zero, and every later event would sort behind
+   * the integrators' cursors. The drill sets the xid epoch with
+   * `pg_resetwal -e` on the stopped server, then checks again.
+   */
+  describe("the feed's xid epoch", () => {
+    const resetwal = () =>
+      box.calls("docker").filter((call) => call.includes("pg_resetwal"));
+
+    it("leaves the cluster alone when the stored txids are behind it", () => {
+      const { status, stdout, stderr } = restore({
+        STUB_TXID_SEEN: `${box.root}/txid-seen`,
+      });
+
+      expect(status, stdout + stderr).toBe(0);
+      expect(resetwal()).toEqual([]);
+      expect(
+        box.calls("docker").filter((call) => call.startsWith("docker stop")),
+      ).toEqual([]);
+    });
+
+    it("sets the epoch on the stopped server and starts it again", () => {
+      const { status, stdout, stderr } = restore({
+        STUB_TXID_SEEN: `${box.root}/txid-seen`,
+        STUB_TXID_FIRST: "regressed 3",
+      });
+
+      expect(status, stdout + stderr).toBe(0);
+
+      const calls = box.calls("docker");
+      const stop = calls.findIndex((call) =>
+        call.startsWith("docker stop drill-under-test"),
+      );
+      const reset = calls.findIndex((call) => call.includes("pg_resetwal"));
+      const starts = calls
+        .map((call, index) => ({ call, index }))
+        .filter(({ call }) => call.startsWith("docker run -d"));
+
+      expect(stop).toBeGreaterThan(-1);
+      expect(reset).toBeGreaterThan(stop);
+      expect(calls[reset]).toContain("-v drill-under-test-data:");
+      expect(calls[reset]).toMatch(/ -e 3 \/var\/lib\/postgresql\/data$/);
+      // Started once for the restore, once more after the epoch.
+      expect(starts).toHaveLength(2);
+      expect(starts[1].index).toBeGreaterThan(reset);
+      expect(stdout).toContain("época do xid em 3");
+    });
+
+    it("fails when the epoch did not put the next xid above the history", () => {
+      const { status, stderr } = restore({
+        STUB_TXID_SEEN: `${box.root}/txid-seen`,
+        STUB_TXID_FIRST: "regressed 3",
+        STUB_TXID_THEN: "regressed 3",
+      });
+
+      expect(status).not.toBe(0);
+      expect(stderr).toContain("pg_resetwal -e 3");
+    });
+
+    it("removes the drill's data volume at the end", () => {
+      restore();
+
+      expect(box.calls("docker")).toContain(
+        "docker volume rm -f drill-under-test-data",
+      );
+    });
   });
 
   it("refuses a dump whose checksum does not match, before starting anything", () => {

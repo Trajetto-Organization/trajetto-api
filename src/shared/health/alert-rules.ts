@@ -1,5 +1,7 @@
 import { isCredentialFailure } from "@/shared/notifications/delivery-diagnostics";
 
+import { feedTxidRegressed, type FeedTxidState } from "./feed-txid";
+
 /**
  * When the operation must be woken up (OBS-03). Pure: the ops heartbeat job
  * gathers an OperationalSnapshot, these rules turn it into alerts, each with
@@ -117,6 +119,14 @@ interface OperationalSnapshot {
    * when the rows could not be read, which judges nothing.
    */
   geocodingQuota?: GeocodingQuotaState;
+
+  /**
+   * The integration feed's stamp against the cluster (plano-escala F2-03):
+   * the largest delivery_event.txid stored and the next xid. Absent until
+   * the feed's index is valid, or when it could not be read, which judges
+   * nothing.
+   */
+  feedTxid?: FeedTxidState;
 
   /** Parts of the snapshot that could not be read; each one is a reason. */
   collectionErrors: string[];
@@ -403,6 +413,7 @@ const ALERT_KINDS = [
   "proof-signing",
   "volume-near-gate",
   "geocoding-quota-high",
+  "feed-txid-regressed",
   "collection-incomplete",
 ] as const;
 
@@ -863,6 +874,16 @@ function collectAlerts(
     alerts.push({
       code: "geocoding-quota-high",
       message: `Geocodificação: ${count(quota.usedToday)} consultas hoje (UTC), ${Math.round((quota.usedToday / quota.dailyQuota) * 100)}% de ${count(quota.dailyQuota)} do plano (LOCATIONIQ_DAILY_QUOTA); acima de ${Math.round(thresholds.geocodingQuotaRatio * 100)}%, o resto do dia pode acabar em 429`,
+    });
+  }
+
+  // A logical restore into a new cluster without `pg_resetwal -e`
+  // (F2-03): from here on every new event sorts behind the integrators'
+  // cursors, silently.
+  if (snapshot.feedTxid && feedTxidRegressed(snapshot.feedTxid)) {
+    alerts.push({
+      code: "feed-txid-regressed",
+      message: `Feed da integração: o maior txid gravado em delivery_event (${snapshot.feedTxid.newest}) não está abaixo do próximo xid do cluster (${snapshot.feedTxid.next}); veio de outro cluster (um restore lógico sem o pg_resetwal -e) e os eventos novos ficariam para trás do cursor dos integradores`,
     });
   }
 

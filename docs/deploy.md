@@ -3784,6 +3784,12 @@ Num incidente real (banco perdido):
    até o próximo deploy). Desligue o backup agendado (_Enabled_) enquanto
    restaura.
 3. Restaure pela aba _Backups_ (acima) ou pelo caminho manual (abaixo).
+   Num Database **novo** (o passo 1, ou outro servidor), confira o txid do
+   feed da integração antes de seguir: o dump traz os txids do cluster
+   antigo, e o novo conta do zero. A consulta, a época e o `pg_resetwal -e`
+   com o Database parado estão no runbook
+   [feed-txid-regressed](./runbooks/feed-txid-regressed.md) (plano de
+   escala, F2-03); o ensaio do `restore-postgres.sh` faz o mesmo sozinho.
 4. **Sempre**, antes de subir o runtime: rode a etapa de release no banco
    restaurado. **Deploy** na Application `trajetto-api-migrate` do ambiente
    (ou GitHub → Actions → staging/production → _Run workflow_ com
@@ -3857,8 +3863,14 @@ da produção** (`POSTGRES_IMAGE`; a do campo de imagem do Database), restaura
 com `--exit-on-error`, confere o `.sha256` se existir e roda `prisma migrate
 status` contra o banco restaurado — a verificação que importa ("Database
 schema is up to date!"; um dump mais velho que o código falha com "Dump
-anterior ao código: há migrations pendentes"). O contêiner é removido ao
-final (`KEEP_CONTAINER=true` preserva).
+anterior ao código: há migrations pendentes"). Depois confere o txid do
+feed da integração (plano de escala, F2-03): o cluster do ensaio é novo e
+conta do zero, então, quando os txids do dump estão à frente dele, o
+script para o Postgres, roda o `pg_resetwal -e` com a época certa e
+confere de novo, como o runbook
+[feed-txid-regressed](./runbooks/feed-txid-regressed.md) manda fazer num
+Database novo. O contêiner e o volume de dados (`<contêiner>-data`) são
+removidos ao final (`KEEP_CONTAINER=true` preserva).
 
 Ensaios feitos: 14/09/2026 (72 migrations do zero, 49 tabelas, 2 s, os cinco
 índices de SQL cru e o `pg_trgm` sobreviveram) e 15/09/2026 com volume (banco
@@ -4234,6 +4246,7 @@ mais abaixo, é o resumo.
 | `Verificação incompleta: métricas do banco`           | o SQLSTATE diz quem recusou (`57014` = `statement_timeout`, `42501` = permissão)                                                                                                                                          |
 | `Volume de entregas`                                  | segurar a próxima coorte da rampa; subir `APPROVED_GATE_MONTHLY_DELIVERIES` só com um relatório de portão novo em `docs/desempenho` ([runbook](./runbooks/volume-near-gate.md))                                           |
 | `Geocodificação: N consultas hoje`                    | ver o gasto do dia por escopo em `provider_quota_day` e corrigir `LOCATIONIQ_DAILY_QUOTA` ou os orçamentos pela tabela da decisão D40 ([runbook](./runbooks/geocoding-quota-high.md))                                     |
+| `Feed da integração: o maior txid`                    | um restore lógico num cluster novo sem o `pg_resetwal -e`: API em 0 réplicas, a época certa e o `pg_resetwal` com o Database parado ([runbook](./runbooks/feed-txid-regressed.md))                                        |
 
 Para trocar uma variável: _Environment_ da Application → **Save** →
 **Deploy** (salvar sozinho não reinicia o contêiner).

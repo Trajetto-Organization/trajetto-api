@@ -107,6 +107,11 @@ const INDEXES: Record<string, string> = {
   delivery_event_apiKeyId_partial_idx: `CREATE INDEX "delivery_event_apiKeyId_partial_idx" ON public.delivery_event USING btree ("apiKeyId") WHERE ("apiKeyId" IS NOT NULL)`,
   delivery_occurrence_authorizedById_partial_idx: `CREATE INDEX "delivery_occurrence_authorizedById_partial_idx" ON public.delivery_occurrence USING btree ("authorizedById") WHERE ("authorizedById" IS NOT NULL)`,
   delivery_event_reasonId_partial_idx: `CREATE INDEX "delivery_event_reasonId_partial_idx" ON public.delivery_event USING btree ("reasonId") WHERE ("reasonId" IS NOT NULL)`,
+  // The integration feed in commit order (plano-escala F2-03, F2-05): one
+  // tenant's events by (txid, id), the rows from before the column read as
+  // 0. The expression must stay the one the feed and the feed-txid-regressed
+  // probe send (COALESCE("txid", 0)), or the planner ignores it.
+  delivery_event_feed_idx: `CREATE INDEX delivery_event_feed_idx ON public.delivery_event USING btree ("businessId", COALESCE(txid, (0)::bigint), id)`,
   // A delivery's and a route's tickets, and the SET NULL paths of the
   // ticket's context and people (decision 14.5).
   support_ticket_deliveryId_partial_idx: `CREATE INDEX "support_ticket_deliveryId_partial_idx" ON public.support_ticket USING btree ("deliveryId") WHERE ("deliveryId" IS NOT NULL)`,

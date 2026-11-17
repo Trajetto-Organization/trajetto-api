@@ -3875,6 +3875,17 @@ model DeliveryEvent {
 
   created_at DateTime @default(now())
 
+  /// The id of the transaction that wrote the row (pg_current_xact_id(),
+  /// the 64-bit xid8): commit order for the integration feed (plano-escala
+  /// F2-03, F2-05), the same for every event of one transaction. Filled by
+  /// the database's DEFAULT only; NULL on the rows from before it, read as
+  /// 0. `@ignore`: Prisma never reads or writes it, and a BigInt in a
+  /// response would break the JSON. The feed's index
+  /// ("businessId", COALESCE("txid", 0), "id") is an expression Prisma
+  /// cannot declare: raw SQL in migrations/20261117140000_delivery_event_txid
+  /// and prisma/concurrent, pinned in tests/E2E/raw-sql-objects.test.ts.
+  txid BigInt? @default(dbgenerated("((pg_current_xact_id())::text)::bigint")) @ignore
+
   // ([deliveryId]) removed: (deliveryId, created_at) below serves every
   // lookup by delivery; a second copy on the 3M-row table only cost writes
   // and disk.

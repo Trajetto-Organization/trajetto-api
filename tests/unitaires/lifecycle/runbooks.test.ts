@@ -155,6 +155,9 @@ function everyRuleBroken(): OperationalSnapshot[] {
       volume: { last24h: 0, last7d: T.approvedGateMonthlyDeliveries },
       // Past 70% of the provider's day (F2-32).
       geocodingQuota: { usedToday: 17_501, dailyQuota: 25_000 },
+      // A logical restore into a new cluster without `pg_resetwal -e`
+      // (F2-03): the history's txids are ahead of the cluster's counter.
+      feedTxid: { newest: 5_000_000n, next: 1_000n },
     },
     {
       ...healthy(),
