@@ -329,12 +329,16 @@ function createRedisGeocodingGate(
   };
 }
 
-/** The proof's answer: a slot, none this second, or the account paused. */
-type ProofSlot = "OK" | "BUSY" | "PAUSED";
+/**
+ * The proof's answer: a slot, none this second, the account paused, or
+ * no answer at all from Redis — which the proof's lane reads apart from a
+ * full second (proof-lookup-admission.ts).
+ */
+type ProofSlot = "OK" | "BUSY" | "PAUSED" | "UNREADABLE";
 
 /** The proof's reserved lane of the provider's rate (F2-32). */
 interface ProofGate {
-  /** A slot of the proof's own second; BUSY when Redis does not answer. */
+  /** A slot of the proof's own second; UNREADABLE when Redis does not answer. */
   takeProofSlot(): Promise<ProofSlot>;
 }
 
@@ -378,7 +382,7 @@ function createRedisProofGate(
       } catch (err) {
         onError(err);
 
-        return "BUSY";
+        return "UNREADABLE";
       }
     },
   };

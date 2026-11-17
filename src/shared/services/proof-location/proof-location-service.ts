@@ -43,7 +43,9 @@ interface AddressResolution {
 
   /** Whether to write it on the event; false when the answer is a cache hit
    * or the lookup was skipped for lack of capacity (the replica's lookups
-   * in flight, the proof's slot of the provider's rate, its day). */
+   * in flight, the proof's slot of the provider's rate, its day). Nothing
+   * written, a regeneration of the receipt asks again; the document
+   * rendered now keeps the fallback. */
   persist: boolean;
 }
 
@@ -96,7 +98,9 @@ function configFromEnv(): ProofLocationConfig {
  * The reverse lookup goes out only when the proof's lane admits it
  * (proof-lookup-admission.ts, plano-escala F2-32): a slot of the rate
  * reserved to the proof, and a unit of its day. Not admitted, the receipt
- * prints the fallback and records nothing, so the next render asks again.
+ * prints the fallback and records nothing on the event. The receipt is
+ * rendered once and stored (get-proof-document-usecase.ts), so that
+ * document keeps the fallback; only a regeneration asks again.
  */
 @registry([
   {
@@ -159,8 +163,8 @@ class ProofLocationService {
         now,
       );
 
-      // No slot of the proof's rate, or its day spent: the same fallback,
-      // unrecorded.
+      // No slot of the proof's rate, the account paused, or its day spent:
+      // the same fallback, unrecorded.
       if (!admitted) {
         return { address: null, source: "UNAVAILABLE", persist: false };
       }

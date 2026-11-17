@@ -44,9 +44,15 @@ import {
  *    every path;
  * 2. a unit of its own day ("proof-reverse", PROOF_REVERSE_DAILY_BUDGET).
  *
- * Both fail CLOSED, as the rest of the geocoder: unreadable, the receipt
- * prints the labelled fallback and records nothing, so the next one asks
- * again. Unwired (unit tests, scripts), nothing is admitted.
+ * The day fails CLOSED, as the rest of the geocoder. The rate does not
+ * (review of F2-32): the receipt is rendered once, on its first opening,
+ * and stored, and a lookup not admitted prints the labelled fallback in
+ * it for good — nothing is recorded on the event, so only a regeneration
+ * asks again. Before F2-32 the lookup did not depend on Redis, so a Redis
+ * that does not answer goes back to what bounded it then: the replica's
+ * lookups in flight (MAX_CONCURRENT_LOOKUPS), with the day's unit still
+ * taken. The job and the search, failing closed without Redis, ask nothing
+ * meanwhile. Unwired (unit tests, scripts), nothing is admitted.
  */
 interface ProofLookupAdmission {
   admit(now: Date): Promise<boolean>;
@@ -84,6 +90,10 @@ function createProofLookupAdmission({
 
         // The account is held: the provider would only answer 429.
         if (slot === "PAUSED") return false;
+
+        // No answer from Redis: the rate as it was before the lane, the
+        // day as always (above).
+        if (slot === "UNREADABLE") return budget.take(now);
 
         // The slot first, the day's unit after: a slot not used is a
         // second's, a unit not used is a lookup of the day.

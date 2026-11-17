@@ -1492,9 +1492,16 @@ desligado (0), ela nem toma vaga: a vaga entra no registro do minuto que o
 job e a busca contam, e comprovantes abertos sem nada a perguntar os
 deixariam parados (revisão do F2-32). Sem vaga em cinco
 tentativas (1,6 s), com a conta pausada ou com o dia gasto, o PDF sai com o endereço
-cadastrado, rotulado, e nada é gravado no evento: a próxima geração pergunta
-de novo (`proof-lookup-admission.ts`, ligado em `http.ts` na conexão
-fail-fast). A
+cadastrado, rotulado, e nada é gravado no evento (`proof-lookup-admission.ts`,
+ligado em `http.ts` na conexão fail-fast). O comprovante é gerado uma vez,
+na primeira abertura, e guardado: esse documento fica com o endereço
+cadastrado, e só uma nova geração (`regenerate=true`, com escrita em
+`delivery_manage`) pergunta de novo. Por isso o Redis sem resposta não é
+motivo para deixar de perguntar (revisão do F2-32): antes do F2-32 a busca
+não dependia dele, e sem ele ela volta ao limite de então (4 buscas em voo
+por réplica), ainda tomando a unidade do dia no Postgres, que continua
+falhando **fechado**. O job e a busca do painel, sem Redis, não perguntam
+nada nesse tempo. A
 chave da pausa guarda o motivo junto do prazo (`REFUSED`, `QUOTA` ou
 `BURST`), para a leitura da rota.
 

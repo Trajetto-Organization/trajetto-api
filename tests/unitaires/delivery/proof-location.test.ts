@@ -26,9 +26,10 @@ import {
 } from "@/shared/services/proof-location/web-mercator";
 import type { ProofDocumentSource } from "@/shared/delivery/proof-document";
 import type { GeocodingBudget } from "@/shared/delivery/geocoding/geocoding-budget";
-import type {
-  ProofGate,
-  ProofSlot,
+import {
+  createRedisProofGate,
+  type ProofGate,
+  type ProofSlot,
 } from "@/shared/delivery/geocoding/geocoding-gate";
 import {
   createProofLookupAdmission,
@@ -561,7 +562,8 @@ describe("the address cache on the proof event", () => {
   // Plano-escala F2-32: the lookup shared the geocoder's key and counted
   // nowhere; it now goes out only with a slot of its reserved rate and a
   // unit of its day, and without them the receipt prints the fallback and
-  // records nothing, so the next render asks again.
+  // records nothing on the event: the first document is stored that way,
+  // and only a regeneration asks again.
   it("asks nothing and records nothing when the proof's lane does not admit the lookup", async () => {
     const { calls, fetcher } = answering({ address: { road: "Rua E" } });
     const admitted: Date[] = [];
@@ -757,6 +759,43 @@ describe("the proof lookup's admission", () => {
 
     expect(await admission.admit(NOW)).toBe(true);
     expect(await admission.admit(NOW)).toBe(false);
+  });
+
+  // Review of plano-escala F2-32: the receipt is rendered once and stored,
+  // so a lookup put off is an address lost for good. Before F2-32 the
+  // lookup did not depend on Redis; a Redis that does not answer must not
+  // become a new reason to store receipts without it. The rate goes back
+  // to what bounded it then (the replica's lookups in flight), and the
+  // day, in Postgres, still decides.
+  it("asks with a unit of the day when Redis does not answer, as before the lane", async () => {
+    const unreadable = lane(["UNREADABLE", "OK"], Number.POSITIVE_INFINITY, [
+      true,
+    ]);
+
+    expect(await unreadable.admission.admit(NOW)).toBe(true);
+    expect(unreadable.asked).toEqual(["UNREADABLE"]);
+    expect(unreadable.borrowed).toEqual([]);
+    expect(unreadable.taken).toEqual([NOW]);
+
+    // The day still fails closed: spent, nothing is asked.
+    const spent = lane(["UNREADABLE"], 0);
+
+    expect(await spent.admission.admit(NOW)).toBe(false);
+  });
+
+  it("tells a Redis that does not answer from a full second", async () => {
+    const errors: unknown[] = [];
+    const gate = createRedisProofGate(
+      {
+        eval: async () => {
+          throw new Error("Connection is closed.");
+        },
+      } as never,
+      { onError: (err) => errors.push(err) },
+    );
+
+    expect(await gate.takeProofSlot()).toBe("UNREADABLE");
+    expect(errors).toHaveLength(1);
   });
 
   // Review of plano-escala F2-32: the slot came before the day, and a slot
