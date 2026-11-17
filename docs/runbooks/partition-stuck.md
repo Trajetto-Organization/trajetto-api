@@ -25,6 +25,38 @@ retenção prometida não é cumprida.
    etapa de release de novo.
 4. Logo depois de baixar a retenção, o alerta aparece até a primeira noite:
    rode o job à mão para destacar o que passou a ser antigo.
+5. Trilha com o arquivo ligado (`TRAIL_ARCHIVE_ENABLED=true`): o dia só sai
+   depois de ir para o R2 com a soma conferida. Procure no log do job:
+   - `trail archive enabled but not configured`: falta o bucket ou o token
+     (o campo `missing` diz qual); preencha no _Environment_ da
+     `trajetto-api` e faça o deploy;
+   - `trail archive failed`: o R2 não respondeu ou o token não tem acesso
+     ao bucket de arquivo; a noite seguinte tenta de novo;
+   - `trail archive out of time`: o orçamento da execução
+     (`CRON_PURGE_RUN_BUDGET_MS`) acabou antes; o dia continua na noite
+     seguinte, do ponto em que parou;
+   - `trail archive does not add up`: a soma do manifesto não bate com o
+     `count` da partição. Compare as duas:
+
+     ```sql
+     SELECT "businessId", status, row_count
+       FROM archive_manifest WHERE partition_name = '<partição>';
+     ```
+
+     Uma linha de empresa que não tem mais linhas na partição (apagadas
+     depois de arquivadas) é a causa comum: apague essa linha do manifesto
+     e o objeto dela no bucket de arquivo, e rode o job;
+
+   - `detached trail day without a verified archive is kept`: um dia
+     destacado numa noite antiga sem o arquivo conferido. Para arquivá-lo,
+     anexe de volta e rode o job:
+
+     ```sql
+     ALTER TABLE <pai> ATTACH PARTITION <tabela>
+       FOR VALUES FROM ('<início>') TO ('<fim>');
+     ```
+
+     Para descartá-lo sem arquivo, `DROP TABLE` à mão.
 
 ## Como confirmar
 

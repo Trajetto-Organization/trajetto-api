@@ -4,6 +4,10 @@ import {
   LOCAL_AI_DEFAULT_MAX_CONCURRENCY,
   LOCAL_AI_DEFAULT_TIMEOUT_MS,
 } from "@/shared/ai/ai-provider-defaults";
+import {
+  ARCHIVE_STORAGE_CLASSES,
+  missingArchiveSettings,
+} from "@/shared/archive/archive-settings";
 import { throughPgBouncer } from "@/shared/database/pgbouncer-url";
 import { isValidCnpj } from "@/shared/delivery/cnpj";
 import {
@@ -863,6 +867,48 @@ const envSchema = z
       z.coerce.number().int().min(7).max(60).default(7),
     ),
 
+    // The trail's archive (plano-escala F2-11, decision D3): with
+    // TRAIL_ARCHIVE_ENABLED=true, the partition job copies a day of the
+    // trail to the ARCHIVE bucket (one gzipped CSV per company, written
+    // down in archive_manifest) before dropping it, and keeps the day when
+    // the copy does not add up. Off by default: the job drops as it always
+    // did until the bucket exists. The archive has a bucket and a token of
+    // its own (never the uploads' ones: that bucket's objects must not
+    // expire), on the uploads' R2 account (R2_ACCOUNT_ID, or R2_ENDPOINT).
+    // Enabled without them, the boot only warns, and the job keeps every
+    // expired day instead of dropping it unarchived (the partition-stuck
+    // alert follows). STANDARD_IA by default: the archive is written once
+    // and read only for a dispute or a legal request.
+    // TRAIL_ARCHIVE_RETENTION_DAYS is the archive bucket's Expiration rule
+    // on `trail/`, set by hand in R2 to the same number; the code purges
+    // the manifest rows a week after their objects expire.
+    TRAIL_ARCHIVE_ENABLED: z
+      .preprocess(
+        (value) => (value === "" ? undefined : value),
+        z.enum(["true", "false"]).default("false"),
+      )
+      .transform((value) => value === "true"),
+    TRAIL_ARCHIVE_BUCKET: z.preprocess(
+      (value) => (value === "" ? undefined : value),
+      z.string().optional(),
+    ),
+    ARCHIVE_R2_ACCESS_KEY_ID: z.preprocess(
+      (value) => (value === "" ? undefined : value),
+      z.string().optional(),
+    ),
+    ARCHIVE_R2_SECRET_ACCESS_KEY: z.preprocess(
+      (value) => (value === "" ? undefined : value),
+      z.string().optional(),
+    ),
+    ARCHIVE_STORAGE_CLASS: z.preprocess(
+      (value) => (value === "" ? undefined : value),
+      z.enum(ARCHIVE_STORAGE_CLASSES).default("STANDARD_IA"),
+    ),
+    TRAIL_ARCHIVE_RETENTION_DAYS: z.preprocess(
+      (value) => (value === "" ? undefined : value),
+      z.coerce.number().int().min(30).max(3_650).default(180),
+    ),
+
     // The trail's submission keys (plano-escala F2-14, decision D3): days
     // a row of delivery_event_submission is kept before the nightly
     // cleanup-delivery-event-submissions removes it. A key only matters
@@ -1314,6 +1360,23 @@ const envSchema = z
           message:
             "TURNSTILE_SECRET_KEY é obrigatório em staging e produção: sem ele o formulário público de orçamento fica sem verificação de robô.",
         });
+      }
+    }
+
+    // The trail archive switched on without its bucket or token
+    // (plano-escala F2-11): a warning and not an error, because a missing
+    // new setting must never stop a deploy. The partition job then keeps
+    // every expired day of the trail instead of dropping it unarchived,
+    // and says so in its log; the partition-stuck alert follows.
+    if (env.TRAIL_ARCHIVE_ENABLED) {
+      const missing = missingArchiveSettings(env);
+
+      if (missing.length > 0) {
+        console.warn(
+          `[env] TRAIL_ARCHIVE_ENABLED=true sem ${missing.join(", ")}: o ` +
+            "job de partições guarda os dias vencidos da trilha em vez de " +
+            "apagá-los sem arquivo.",
+        );
       }
     }
 

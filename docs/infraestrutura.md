@@ -1487,12 +1487,14 @@ Rotação: [seção 13.3](#133-rotacionar-um-segredo).
 
 **Buckets** (menu da conta → _R2_):
 
-| Bucket                     | Para quê                                                                             | Acesso                                    |
-| -------------------------- | ------------------------------------------------------------------------------------ | ----------------------------------------- |
-| `trajetto-staging-storage` | fotos, assinaturas, anexos e avatares do staging                                     | privado; só URL assinada de curta duração |
-| `trajetto-prod-storage`    | o mesmo, de produção                                                                 | privado; só URL assinada                  |
-| `trajetto-backups`         | dumps do Postgres; prefixo `trajetto-staging/` (e, previsto, `trajetto-production/`) | privado; só o Dokploy escreve             |
-| `trajetto-backups-prod`    | bucket próprio para os dumps de produção (recomendado)                               | **A confirmar com o dono:** se foi criado |
+| Bucket                     | Para quê                                                                             | Acesso                                                                                                                                      |
+| -------------------------- | ------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| `trajetto-staging-storage` | fotos, assinaturas, anexos e avatares do staging                                     | privado; só URL assinada de curta duração                                                                                                   |
+| `trajetto-prod-storage`    | o mesmo, de produção                                                                 | privado; só URL assinada                                                                                                                    |
+| `trajetto-backups`         | dumps do Postgres; prefixo `trajetto-staging/` (e, previsto, `trajetto-production/`) | privado; só o Dokploy escreve                                                                                                               |
+| `trajetto-backups-prod`    | bucket próprio para os dumps de produção (recomendado)                               | **A confirmar com o dono:** se foi criado                                                                                                   |
+| `trajetto-archive-staging` | o arquivo da trilha de GPS do staging (`trail/`, plano de escala F2-11)              | privado; **a criar** depois da onda 8; _Object lifecycle rules_: prefixo `trail/`, _Delete after_ 180 dias (`TRAIL_ARCHIVE_RETENTION_DAYS`) |
+| `trajetto-archive-prod`    | o mesmo, de produção                                                                 | privado; **a criar** depois da promoção da onda 8; a mesma regra de 180 dias em `trail/`                                                    |
 
 Os buckets de fotos foram criados em 24/10/2026. Nenhum bucket tem domínio
 próprio: o `assets.intrajetto.com` chegou a ser ligado ao bucket de produção e
@@ -1511,11 +1513,13 @@ o upload do navegador falha sem aparecer em log nenhum.
 **Tokens** (_R2 → Manage API Tokens_; um por bucket, _Object Read & Write_ só
 naquele bucket):
 
-| Token                                                       | Bucket                     | Onde fica                                                      |
-| ----------------------------------------------------------- | -------------------------- | -------------------------------------------------------------- |
-| `trajetto-upload-token`                                     | `trajetto-prod-storage`    | `R2_ACCESS_KEY_ID` e `R2_SECRET_ACCESS_KEY` da API de produção |
-| token de staging (sugerido `trajetto-staging-upload-token`) | `trajetto-staging-storage` | as mesmas variáveis da API de staging                          |
-| token do bucket de backup                                   | `trajetto-backups`         | só no _S3 Destination_ do Dokploy                              |
+| Token                                                                   | Bucket                     | Onde fica                                                                               |
+| ----------------------------------------------------------------------- | -------------------------- | --------------------------------------------------------------------------------------- |
+| `trajetto-upload-token`                                                 | `trajetto-prod-storage`    | `R2_ACCESS_KEY_ID` e `R2_SECRET_ACCESS_KEY` da API de produção                          |
+| token de staging (sugerido `trajetto-staging-upload-token`)             | `trajetto-staging-storage` | as mesmas variáveis da API de staging                                                   |
+| token do bucket de backup                                               | `trajetto-backups`         | só no _S3 Destination_ do Dokploy                                                       |
+| token do arquivo de staging (sugerido `trajetto-staging-archive-token`) | `trajetto-archive-staging` | `ARCHIVE_R2_ACCESS_KEY_ID` e `ARCHIVE_R2_SECRET_ACCESS_KEY` da API de staging (a criar) |
+| token do arquivo de produção (sugerido `trajetto-archive-token`)        | `trajetto-archive-prod`    | as mesmas variáveis da API de produção (a criar)                                        |
 
 **A confirmar com o dono:** o nome real do token de staging; se existe token
 e destino próprios para o backup de produção; e para que serve o

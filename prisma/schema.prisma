@@ -3250,6 +3250,87 @@ model DriverPositionLegacy {
   @@map("driver_position")
 }
 
+/// What became of a company's rows of one archived partition
+/// (plano-escala F2-11): ARCHIVED, an object in the archive bucket;
+/// PENDING, an upload that started (its key is known before the first byte
+/// goes up); SKIPPED, the rows of a company that no longer exists, left out
+/// on purpose and counted.
+enum ArchiveObjectStatus {
+  PENDING
+  ARCHIVED
+  SKIPPED
+}
+
+/// One company's rows of one partition, archived to R2 before the
+/// partition is dropped (plano-escala F2-11): the trail's days today, at
+/// trail/<yyyymmdd>/<businessId>.csv.gz. The nightly partition job only
+/// drops a day whose rows here add up to its count (ArchivePartition).
+///
+/// No foreign keys: a row must outlive its company, so the company's exit
+/// can still find and delete its objects (deleteTrailArchive), and outlive
+/// the partition it describes. Purged a week after the bucket's
+/// Expiration (TRAIL_ARCHIVE_RETENTION_DAYS) removed its object.
+model ArchiveManifest {
+  id String @id @default(uuid(7))
+
+  /// The parent the rows came from: driver_position_v2, or the legacy
+  /// driver_position.
+  source_table String
+
+  /// The partition, by the registry's name (driver_position_v2_20261001).
+  partition_name String
+
+  businessId String
+
+  /// Where the object is, or would have been for a SKIPPED company.
+  object_key String
+
+  status ArchiveObjectStatus @default(PENDING)
+
+  /// The CSV's rows (header aside), or the rows left out when SKIPPED;
+  /// null while PENDING.
+  row_count Int?
+
+  /// The object's bytes and the sha256 of exactly those bytes (the gzip),
+  /// so a download checks with sha256sum.
+  byte_size BigInt?
+  sha256    String?
+
+  created_at  DateTime  @default(now())
+  archived_at DateTime?
+
+  /// One object per company per partition: a rerun after a crash finds
+  /// the row and rewrites the same key.
+  @@unique([partition_name, businessId])
+  /// deleteTrailArchive, by company.
+  @@index([businessId])
+  /// The manifest's purge, oldest first.
+  @@index([created_at])
+  @@map("archive_manifest")
+}
+
+/// A partition whose archive was checked (plano-escala F2-11): its
+/// manifest added up to its count, taken after the uploads. Only then is
+/// the day detached and dropped; a day detached on an earlier night and
+/// left behind is dropped only with its row here.
+model ArchivePartition {
+  partition_name String @id
+
+  source_table String
+
+  /// count(*) of the partition when it was checked.
+  row_count BigInt
+
+  /// The objects written for it (the companies archived).
+  objects Int
+
+  verified_at DateTime @default(now())
+
+  /// The purge, with the manifest's.
+  @@index([verified_at])
+  @@map("archive_partition")
+}
+
 /// Where a customer's system wants to be told things.
 model WebhookEndpoint {
   id String @id @default(uuid(7))

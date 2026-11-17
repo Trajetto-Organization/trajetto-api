@@ -1,4 +1,11 @@
 import { databaseBatch } from "@/../infra/database";
+import { env } from "@/env";
+import { missingArchiveSettings } from "@/shared/archive/archive-settings";
+import { archiveStorageFromEnv } from "@/shared/archive/archive-storage";
+import {
+  createTrailArchiveGate,
+  type TrailArchiveGate,
+} from "@/shared/archive/trail-archive";
 import {
   openDdlConnection,
   type DdlConnection,
@@ -57,6 +64,15 @@ const log = logger.child({ component: "cron", job: "partition-maintenance" });
  *    partitioned parent, and the planner reads its statistics) and the
  *    partitions that settled in the last two weeks are frozen, so the
  *    anti-wraparound vacuum never has to read them again.
+ *
+ *  - With TRAIL_ARCHIVE_ENABLED, a day of the trail past the retention is
+ *    archived to R2 and checked against archive_manifest before its
+ *    DETACH (src/shared/archive/trail-archive.ts, plano-escala F2-11). A
+ *    day that does not add up, or that the run's budget did not reach, is
+ *    kept attached for the next night, and the partition-stuck alert
+ *    counts it after three; a day detached on an earlier night is dropped
+ *    only with its archive verified. The archive starts no new company
+ *    past CRON_PURGE_RUN_BUDGET_MS, so the run stays inside its lease.
  *
  * Cron: "10 4 * * *" → daily at 04:10 UTC, after the 03:00 pg_dump: a
  * DETACH … CONCURRENTLY waits for every transaction that has the parent
@@ -176,6 +192,25 @@ interface MaintenanceDeps {
   tables: readonly PartitionedTable[];
   openDdl: () => Promise<DdlConnection>;
   sleep: (ms: number) => Promise<void>;
+  /** Null: the trail archive is off, and expired days are dropped as is. */
+  trailArchive: TrailArchiveGate | null;
+}
+
+/**
+ * The trail archive as this environment configures it (plano-escala
+ * F2-11): null while TRAIL_ARCHIVE_ENABLED is off. On, without the bucket
+ * or the token, it is a gate that keeps every expired day and says why.
+ */
+function trailArchiveFromEnv(): TrailArchiveGate | null {
+  if (!env.TRAIL_ARCHIVE_ENABLED) return null;
+
+  return createTrailArchiveGate({
+    db: databaseBatch,
+    storage: archiveStorageFromEnv(env),
+    missing: missingArchiveSettings(env),
+    deadline: Date.now() + env.CRON_PURGE_RUN_BUDGET_MS,
+    retentionDays: env.TRAIL_ARCHIVE_RETENTION_DAYS,
+  });
 }
 
 /**
@@ -244,6 +279,10 @@ interface TableOutcome {
   finalized: number;
   dropped: number;
   frozen: number;
+  /** Days of the trail archived and verified this run, then detached. */
+  archived: number;
+  /** Days past the retention kept for their archive (also postponed). */
+  held: number;
   analyzed: boolean;
   /** False when a DDL ran as the session's user, not as the owner role. */
   ownerOk: boolean;
@@ -410,6 +449,27 @@ async function removeBehind(
     .sort((a, b) => (a.to ?? 0) - (b.to ?? 0));
 
   for (const partition of mayDetach ? expired : []) {
+    if (table.archive && deps.trailArchive) {
+      const archived =
+        partition.from !== null &&
+        partition.to !== null &&
+        (await deps.trailArchive.ensureArchived(parent, {
+          name: partition.name,
+          from: new Date(partition.from),
+          to: new Date(partition.to),
+        }));
+
+      // Kept attached, so still readable through the parent: the next
+      // night archives what is missing and checks again.
+      if (!archived) {
+        outcome.held += 1;
+        outcome.postponed += 1;
+        continue;
+      }
+
+      outcome.archived += 1;
+    }
+
     const detached = await ddl(
       connection,
       parent,
@@ -429,6 +489,16 @@ async function removeBehind(
   // What is detached and past the retention, the nights before included:
   // DROP takes ACCESS EXCLUSIVE on the detached table alone, not the parent.
   for (const name of await detachedLeftovers(table, cutoff)) {
+    if (
+      table.archive &&
+      deps.trailArchive &&
+      !(await deps.trailArchive.mayDropDetached(parent, name))
+    ) {
+      outcome.held += 1;
+      outcome.postponed += 1;
+      continue;
+    }
+
     const dropped = await ddl(
       connection,
       name,
@@ -493,6 +563,10 @@ async function maintainPartitions(
     openDdl: () => openDdlConnection(),
     sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
     ...overrides,
+    trailArchive:
+      overrides.trailArchive === undefined
+        ? trailArchiveFromEnv()
+        : overrides.trailArchive,
   };
 
   // Opened on the first statement that needs it, once per run: one that
@@ -504,6 +578,10 @@ async function maintainPartitions(
   const outcomes: Record<string, TableOutcome> = {};
   const missingNow: string[] = [];
 
+  // The archives of companies that left, and the manifest's purge: never
+  // in the way of the partitions (the gate swallows its own failures).
+  await deps.trailArchive?.housekeeping();
+
   try {
     for (const table of deps.tables) {
       const outcome: TableOutcome = {
@@ -512,6 +590,8 @@ async function maintainPartitions(
         finalized: 0,
         dropped: 0,
         frozen: 0,
+        archived: 0,
+        held: 0,
         analyzed: false,
         ownerOk: true,
         missingNow: [],

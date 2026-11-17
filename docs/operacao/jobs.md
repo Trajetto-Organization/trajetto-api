@@ -73,7 +73,11 @@ Colunas:
   roda depois do backup das 03:00 de propósito: o `DETACH … CONCURRENTLY`
   espera as transações que já tinham a tabela aberta, e o `pg_dump` segura
   uma até o fim. Aos domingos ele também faz o `ANALYZE` do pai e o
-  `VACUUM (FREEZE)` das partições assentadas.
+  `VACUUM (FREEZE)` das partições assentadas. Com o arquivo da trilha
+  ligado (`TRAIL_ARCHIVE_ENABLED`, onda 8), ele envia o dia vencido ao R2
+  antes de apagá-lo e para de começar empresa nova no
+  `CRON_PURGE_RUN_BUDGET_MS`; o que sobrar fica para a noite seguinte. Na
+  escala do 5M o arquivo vira um job próprio (F3-28).
 - **`pgbackrest-diff` e `pgbackrest-full`:** o backup físico do PITR, que
   ainda não existe: chega com a imagem `trajetto-postgres` (onda 3 na
   staging, onda 6 na produção). Diferencial de domingo a sexta, completo no

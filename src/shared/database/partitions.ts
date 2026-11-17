@@ -60,6 +60,13 @@ interface PartitionedTable {
    * from then on it is frozen on Sundays (VACUUM FREEZE), once.
    */
   settleDays: number;
+
+  /**
+   * "trail": with TRAIL_ARCHIVE_ENABLED, a day past the retention is copied
+   * to the archive bucket and checked against archive_manifest before it is
+   * detached and dropped (plano-escala F2-11). Absent: dropped as is.
+   */
+  archive?: "trail";
 }
 
 /** One partition the registry wants, `from` inclusive and `to` exclusive. */
@@ -96,6 +103,8 @@ interface PartitionEnv {
  * trail by default: enough to answer "onde o caminhão estava no dia 12"
  * in a dispute; the legal record of a delivery is its proof and events.
  * A day stops changing once the app's offline buffer (7 days) is past it.
+ * With TRAIL_ARCHIVE_ENABLED, a day past the retention is archived to R2
+ * and checked before it is dropped (F2-11), in both trail tables.
  *
  * driver_position_v2: the lean trail (plano-escala F2-10), where the
  * positions are written from the release that brought it; the same days,
@@ -127,6 +136,7 @@ function registeredPartitions(
     requiredAhead: 1,
     retentionDays: values.DRIVER_POSITION_RETENTION_DAYS,
     settleDays: 8,
+    archive: "trail",
   } as const;
 
   return [

@@ -38,6 +38,9 @@ const SECRET_ENV_KEYS = [
   "RESEND_WEBHOOK_SECRET",
   "R2_ACCESS_KEY_ID",
   "R2_SECRET_ACCESS_KEY",
+  // The trail archive's own token (plano-escala F2-11).
+  "ARCHIVE_R2_ACCESS_KEY_ID",
+  "ARCHIVE_R2_SECRET_ACCESS_KEY",
   "AI_LOCAL_TOKEN",
   // Whoever holds the check's URL can silence the alert.
   "HEALTHCHECK_PING_URL",
