@@ -16,6 +16,9 @@ export default defineConfig({
     // deploy`. Moved to release/ with the seeds: only the release image
     // runs it.
     "prebuild-online-ddl": "./infra/scripts/prebuild-online-ddl.ts",
+    // The steps right after it (infra/sql, prisma/post-deploy), with their
+    // state in release_step_state. Release image only, as above.
+    "release-steps": "./infra/scripts/release-steps.ts",
     // Run once in the production container after WEBHOOK_SECRETS_KEY is
     // set: seals the webhook credentials written before it.
     "seal-webhook-secrets": "./infra/scripts/seal-webhook-secrets.ts",

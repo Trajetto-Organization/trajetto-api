@@ -23,6 +23,7 @@ const server = vi.hoisted(() => {
     /** name → marked as a template */
     databases: new Map<string, boolean>(),
     migrateFails: false,
+    stepsFail: false,
     holder: null as object | null,
     waiting: [] as Array<() => void>,
   };
@@ -33,6 +34,7 @@ const server = vi.hoisted(() => {
       state.log = [];
       state.databases = new Map();
       state.migrateFails = false;
+      state.stepsFail = false;
       state.holder = null;
       state.waiting = [];
     },
@@ -113,6 +115,9 @@ vi.mock("node:child_process", () => ({
 
     server.state.log.push(`${command} into ${database}`);
     if (server.state.migrateFails) throw new Error("migration failed");
+    if (server.state.stepsFail && command.includes("release:steps")) {
+      throw new Error("release step failed");
+    }
   },
 }));
 
@@ -165,6 +170,10 @@ describe("the E2E template's name", () => {
     ["the schema", "prisma/schema.prisma"],
     ["the Prisma config", "prisma.config.ts"],
     ["another Prisma CLI", "node_modules/prisma/package.json"],
+    // F5-08: the template is a database as a release leaves it.
+    ["a step of infra/sql", "infra/sql/10-roles.sql"],
+    ["a post-deploy step", "prisma/post-deploy/10-swap.sql"],
+    ["the steps' runner", "infra/scripts/release-step-runner.ts"],
   ])("changes with %s", (_, path) => {
     const before = templateName(root);
 
@@ -192,6 +201,10 @@ describe("the E2E template's name", () => {
       "prisma/schema.prisma",
       "prisma.config.ts",
       "node_modules/prisma/package.json",
+      "infra/sql",
+      "prisma/post-deploy",
+      "infra/scripts/release-steps.ts",
+      "infra/scripts/release-step-runner.ts",
     ]);
     expect(templateName()).toMatch(/^trajetto_tpl_[0-9a-f]{16}$/);
   });
@@ -230,9 +243,25 @@ describe("the E2E template's builder", () => {
       `list others than ${name}`,
       `CREATE DATABASE "${name}"`,
       `${MIGRATE} into ${name}`,
+      `yarn release:steps into ${name}`,
       `ALTER DATABASE "${name}" WITH IS_TEMPLATE true ALLOW_CONNECTIONS false`,
       "end",
     ]);
+  });
+
+  // The steps after the migrations are part of the template: one that
+  // fails leaves it unmarked, never cloned.
+  it("leaves the template unmarked when a step after the migrations fails", async () => {
+    const name = templateName(root);
+
+    server.state.stepsFail = true;
+
+    await expect(ensureTemplate(BASE, root)).rejects.toThrow(
+      "release step failed",
+    );
+
+    expect(server.state.databases.get(name)).toBe(false);
+    expect(server.state.holder).toBeNull();
   });
 
   it("hands a marked template back as it is: no migrate, no drop", async () => {

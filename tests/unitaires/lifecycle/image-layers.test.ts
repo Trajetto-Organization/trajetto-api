@@ -316,7 +316,7 @@ describe("the API image's build stage", () => {
     const builder = stage(api, "builder");
 
     expect(builder[builder.length - 1]).toBe(
-      "RUN yarn build && mkdir release && mv build/seed.js build/import-violation-codes.js build/prebuild-online-ddl.js release/ && mkdir -p prisma/concurrent",
+      "RUN yarn build && mkdir release && mv build/seed.js build/import-violation-codes.js build/prebuild-online-ddl.js build/release-steps.js release/ && mkdir -p prisma/concurrent prisma/post-deploy infra/sql",
     );
     expect(read("tsup.config.ts")).toMatch(
       /seed: "\.\/infra\/scripts\/seed\.ts"/,
@@ -565,6 +565,8 @@ describe("the release image (trajetto-api-migrate)", () => {
       "COPY --from=builder --chown=nodejs:nodejs /app/prisma/schema.prisma ./migrate/prisma/schema.prisma",
       "COPY --from=builder --chown=nodejs:nodejs /app/prisma/migrations ./migrate/prisma/migrations",
       "COPY --from=builder --chown=nodejs:nodejs /app/prisma/concurrent ./migrate/prisma/concurrent",
+      "COPY --from=builder --chown=nodejs:nodejs /app/prisma/post-deploy ./migrate/prisma/post-deploy",
+      "COPY --from=builder --chown=nodejs:nodejs /app/infra/sql ./migrate/infra/sql",
       "COPY --from=builder --chown=nodejs:nodejs /app/release/ ./build/",
     ]);
     // A later layer would only hide files: nothing runs or deletes here.

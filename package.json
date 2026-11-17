@@ -6,7 +6,7 @@
   "license": "UNLICENSED",
   "description": "Back-end do Trajetto (Node.js + Fastify + Prisma + PostgreSQL + Redis): API multiempresa dos módulos Frotas e Entregas, com tempo real (Socket.IO), filas no Postgres, crons, IA local de leitura de imagens, comprovante em PDF assinado e a API pública com webhooks. Atende o painel web (trajetto-ui), o app do motorista (trajetto-mobile) e as integrações dos clientes.",
   "scripts": {
-    "dev": "run-s prisma:generate database:dev:up redis:dev:up wait-for-postgres release:prebuild prisma:migrate:deploy",
+    "dev": "run-s prisma:generate database:dev:up redis:dev:up wait-for-postgres release:prebuild prisma:migrate:deploy release:steps",
     "postdev": "run-s seed seed:infringement dev:server",
     "build": "tsup",
     "start": "sh -c \"test -f infra/scripts/docker-entrypoint.sh && exec sh infra/scripts/docker-entrypoint.sh || exec sh ./docker-entrypoint.sh\"",
@@ -28,6 +28,7 @@
     "prisma:migrate:deploy": "prisma migrate deploy",
     "prisma:migrate:reset": "prisma migrate reset",
     "release:prebuild": "tsx infra/scripts/prebuild-online-ddl.ts prisma/concurrent",
+    "release:steps": "tsx infra/scripts/release-steps.ts .",
     "prisma:studio": "prisma studio",
     "seed": "tsx infra/scripts/seed.ts",
     "seed:infringement": "tsx infra/scripts/import-violation-codes.ts",

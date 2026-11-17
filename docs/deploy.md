@@ -2356,6 +2356,35 @@ antes" dos comentários de migration saiu daí.
   espera a etapa: suba a variável `RELEASE_TIMEOUT_SECONDS` do environment
   do GitHub antes ([seção 13](#13-configurar-o-github)).
 
+### Depois das migrations: `infra/sql` e `prisma/post-deploy`
+
+A ordem inteira da etapa é `prisma/concurrent` → `prisma migrate deploy` →
+`infra/sql/*.sql` → `prisma/post-deploy/*.sql` → seeds
+(`build/release-steps.js` roda os dois do meio; o molde do E2E e o
+`yarn dev` rodam o mesmo).
+
+- **`infra/sql`**: roles, donos e grants, em ordem de nome, em **toda**
+  release. Um `pg_restore --no-owner` (restore, PITR, failover) apaga grants
+  e donos, e só um arquivo reaplicado converge. Esses arquivos só criam
+  roles `NOLOGIN`, e só quando faltam; nunca mexem em `LOGIN`, senha nem
+  `DROP ROLE` (`tests/unitaires/lifecycle/infra-sql-rules.test.ts` cobra).
+  O login e a senha de qualquer role são sempre seus, à mão. Nenhuma
+  migration do Prisma referencia um role.
+- **`prisma/post-deploy`**: DDL com pré-condição (por exemplo, a troca das
+  filas, que espera todas as imagens vivas anunciarem a capability).
+- Cada arquivo testa o próprio estado e termina com um `RAISE NOTICE`
+  `'applied: …'`, `'skipped: …'` (já feito) ou `'pending: …'` (espera um
+  estado). O resultado de cada um, e o da execução (`@release`), fica na
+  tabela `release_step_state`; um arquivo sem esse aviso, ou com erro,
+  reprova a etapa, e os seguintes e os seeds não rodam. Um arquivo que saiu
+  do repositório vira `retired`. As regras de cada pasta estão no
+  `README.md` dela.
+- No log da `trajetto-api-migrate`, as linhas `[release-steps]` dizem o que
+  cada passo fez.
+- Emergência: `POST_DEPLOY_STEPS=off` no _Environment_ da
+  `trajetto-api-migrate` pula o `prisma/post-deploy` (o estado dos passos
+  fica como estava; o `infra/sql` continua). Tire depois.
+
 ### Como a etapa roda
 
 A Application `trajetto-api-migrate` é igual às outras (provider Docker,

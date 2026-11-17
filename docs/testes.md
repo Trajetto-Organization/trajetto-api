@@ -171,9 +171,20 @@ servidor** num banco molde, e o banco de cada arquivo é um
 
 - O nome do molde é `trajetto_tpl_<hash>` do que o `migrate deploy` lê:
   `prisma/migrations`, o `schema.prisma`, o `prisma.config.ts` e a versão da
-  CLI (`node_modules/prisma/package.json`), sem contar fim de linha. Uma
-  migration nova é outro molde; os de outras chaves são apagados
-  (`env/prisma-test-template.test.ts`).
+  CLI (`node_modules/prisma/package.json`), mais os passos que a etapa de
+  release roda depois dele (`infra/sql`, `prisma/post-deploy` e o
+  `infra/scripts/release-steps.ts` que os roda), sem contar fim de linha.
+  Uma migration ou um passo novo é outro molde; os de outras chaves são
+  apagados (`env/prisma-test-template.test.ts`).
+- Depois das migrations o construtor roda `yarn release:steps`, como a etapa
+  de release: o molde sai como uma release deixa o banco, com a
+  `release_step_state` preenchida (`E2E/release-steps.test.ts`). Um passo
+  que falha deixa o molde sem marca. O `prisma/concurrent` não roda ali: num
+  banco novo ele pula, e as migrations criam os índices.
+- O ambiente `prisma` é instalado como pacote (`file:`), uma **cópia** em
+  `node_modules/vitest-environment-prisma`: depois de mudar
+  `prisma/vitest-environment-prisma/`, rode `yarn install --force` (ou copie
+  os arquivos) antes dos E2E locais; o CI instala do zero.
 - Um construtor por servidor: todo arquivo pega o mesmo _advisory lock_ no
   banco `postgres` antes de olhar, então o primeiro migra e os outros
   esperam e o acham pronto (a ordem dos comandos, o molde não marcado
@@ -188,8 +199,10 @@ servidor** num banco molde, e o banco de cada arquivo é um
   de uma migration), os dados que as migrations inserem e o
   `_prisma_migrations` inteiro (`E2E/test-database-template.test.ts`).
   Nenhuma migration mexe fora do próprio banco (role, `ALTER DATABASE`,
-  `ALTER SYSTEM`), então nada se perde na cópia. Só o `finished_at` das
-  migrations é a hora do molde, minutos antes.
+  `ALTER SYSTEM`), então nada se perde na cópia; os roles que o `infra/sql`
+  cria são do servidor, ao lado de todo clone, e os grants vão no catálogo
+  copiado. Só o `finished_at` das migrations é a hora do molde, minutos
+  antes.
 - **Duas execuções ao mesmo tempo, com migrations diferentes, no mesmo
   Postgres** quebram uma à outra (cada uma apaga o molde da outra). No CI
   cada job tem o próprio Postgres; na máquina, não rode duas árvores

@@ -1,6 +1,6 @@
 import { execSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 
 import pg from "pg";
@@ -20,7 +20,9 @@ import { adminConnection, connectionFor } from "./database-url";
  * the extensions the migrations install (pg_trgm, pg_stat_statements) and
  * the rows they insert included — and no migration touches anything outside
  * its database (no role, no ALTER DATABASE, no ALTER SYSTEM), so nothing is
- * lost in the copy.
+ * lost in the copy. The roles infra/sql creates after them belong to the
+ * server, beside every clone, and the grants to them are in the copied
+ * catalog.
  *
  * The name carries the key of what `migrate deploy` reads: a new migration,
  * a schema or config change, or another CLI version is another template, and
@@ -37,12 +39,21 @@ import { adminConnection, connectionFor } from "./database-url";
  * is also what CREATE DATABASE … TEMPLATE needs (no other session on it).
  */
 
-/** Everything `prisma migrate deploy` reads. */
+/**
+ * Everything `prisma migrate deploy` reads, and the steps the release step
+ * runs after it (infra/sql, prisma/post-deploy and their runner): the
+ * template is a database as a release leaves it (plano-escala F5-08). A
+ * path that does not exist counts as empty.
+ */
 const TEMPLATE_INPUTS = [
   "prisma/migrations",
   "prisma/schema.prisma",
   "prisma.config.ts",
   "node_modules/prisma/package.json",
+  "infra/sql",
+  "prisma/post-deploy",
+  "infra/scripts/release-steps.ts",
+  "infra/scripts/release-step-runner.ts",
 ];
 
 const TEMPLATE_PREFIX = "trajetto_tpl_";
@@ -55,6 +66,8 @@ const TEMPLATE_PREFIX = "trajetto_tpl_";
 const TEMPLATE_LOCK = 742_017_311;
 
 function filesUnder(path: string): string[] {
+  if (!existsSync(path)) return [];
+
   if (!statSync(path).isDirectory()) return [path];
 
   return readdirSync(path).flatMap((entry) => filesUnder(join(path, entry)));
@@ -144,6 +157,17 @@ async function ensureTemplate(
     await admin.query(`CREATE DATABASE ${quoteIdent(name)}`);
 
     execSync("yarn prisma migrate deploy", {
+      cwd: root,
+      stdio: "pipe",
+      env: { ...process.env, DATABASE_URL: connectionFor(baseUrl, name) },
+    });
+
+    // Then infra/sql and prisma/post-deploy, as the release step runs them
+    // after the migrations: every clone starts from the state a release
+    // leaves, its release_step_state included. prisma/concurrent is not
+    // run: on a new database it skips, and the migrations built the
+    // indexes.
+    execSync("yarn release:steps", {
       cwd: root,
       stdio: "pipe",
       env: { ...process.env, DATABASE_URL: connectionFor(baseUrl, name) },

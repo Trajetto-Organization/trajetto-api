@@ -67,6 +67,10 @@ beforeEach(() => {
     "build/prebuild-online-ddl.js",
     nodeStub("prebuild-online-ddl", "STUB_PREBUILD_EXIT"),
   );
+  box.file(
+    "build/release-steps.js",
+    nodeStub("release-steps", "STUB_STEPS_EXIT"),
+  );
   box.file("build/seed.js", nodeStub("seed", "STUB_SEED_EXIT"));
   box.file(
     "build/import-violation-codes.js",
@@ -178,6 +182,33 @@ describe.skipIf(!sh)("the release step (`migrate` mode)", () => {
     },
   );
 
+  // infra/sql and prisma/post-deploy (plano-escala F5-08): after the
+  // migrations, before the seeds, from the CLI's directory as their root.
+  it("runs the steps after the migrations and before the seeds", () => {
+    const { status, calls } = entrypoint(["migrate"], {
+      MIGRATION_DATABASE_URL: "postgresql://migration",
+    });
+    const at = (prefix: string) =>
+      calls.findIndex((line) => line.startsWith(prefix));
+
+    expect(status, calls.join(" | ")).toBe(0);
+    expect(calls[at("release-steps ")]).toBe(
+      "release-steps migrate DATABASE_URL=postgresql://migration",
+    );
+    expect(at("release-steps ")).toBeGreaterThan(at("prisma migrate deploy"));
+    expect(at("release-steps ")).toBeLessThan(at("seed "));
+  });
+
+  it("stops before the seeds when a step fails", () => {
+    const { status, called } = entrypoint(["migrate"], {
+      STUB_STEPS_EXIT: "1",
+    });
+
+    expect(status).not.toBe(0);
+    expect(called("prisma migrate deploy")).toBe(true);
+    expect(called("seed ")).toBe(false);
+  });
+
   it("does nothing at all when the database is refused", () => {
     const { status, calls } = entrypoint(["migrate"], { STUB_WAIT_EXIT: "1" });
 
@@ -237,6 +268,7 @@ describe.skipIf(!sh)(
           /^prebuild-online-ddl migrate\/prisma\/concurrent DATABASE_URL=/,
         ),
         expect.stringMatching(/^prisma migrate deploy cwd=migrate /),
+        expect.stringMatching(/^release-steps migrate DATABASE_URL=/),
         expect.stringMatching(/^seed DATABASE_URL=/),
         expect.stringMatching(/^import-violation-codes DATABASE_URL=/),
         `touch ${MARKER}`,
@@ -247,6 +279,7 @@ describe.skipIf(!sh)(
     it.each([
       ["the database is refused", { STUB_WAIT_EXIT: "1" }],
       ["the online DDL fails", { STUB_PREBUILD_EXIT: "1" }],
+      ["a step after the migrations fails", { STUB_STEPS_EXIT: "1" }],
       ["a migration fails", { STUB_PRISMA_EXIT: "1" }],
       ["a seed fails", { STUB_SEED_EXIT: "1" }],
       ["the violation-code import fails", { STUB_IMPORT_EXIT: "1" }],
@@ -372,12 +405,12 @@ describe.skipIf(!sh)("which connection each step uses", () => {
     const { calls } = entrypoint(["migrate"], env);
 
     const schemaSteps = calls.filter((line) =>
-      /^(prebuild-online-ddl |prisma migrate deploy|seed |import-violation-codes )/.test(
+      /^(prebuild-online-ddl |prisma migrate deploy|release-steps |seed |import-violation-codes )/.test(
         line,
       ),
     );
 
-    expect(schemaSteps).toHaveLength(4);
+    expect(schemaSteps).toHaveLength(5);
     for (const line of schemaSteps) {
       expect(line).toContain("DATABASE_URL=postgresql://migration");
     }

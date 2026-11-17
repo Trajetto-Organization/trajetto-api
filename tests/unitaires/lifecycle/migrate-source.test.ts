@@ -92,6 +92,7 @@ describe("the release image's source key", () => {
     expect(releaseEntryPoints().sort()).toEqual([
       "infra/scripts/import-violation-codes.ts",
       "infra/scripts/prebuild-online-ddl.ts",
+      "infra/scripts/release-steps.ts",
       "infra/scripts/seed.ts",
       "infra/scripts/wait-for-postgres.ts",
     ]);
@@ -217,6 +218,8 @@ describe.skipIf(!bash)("the key, computed", () => {
     const DIRECTORIES = new Set([
       "prisma/migrations",
       "prisma/concurrent",
+      "prisma/post-deploy",
+      "infra/sql",
       "src/shared/database",
     ]);
 
@@ -272,6 +275,9 @@ describe.skipIf(!bash)("the key, computed", () => {
     // F2-01: a push with only a new online index must rebuild the image
     // and run the step, or the index never reaches the database.
     ["a new online index", "prisma/concurrent/20261201000000_new.sql"],
+    // F5-08: the same for a step after the migrations.
+    ["a new step of infra/sql", "infra/sql/10-roles.sql"],
+    ["a new post-deploy step", "prisma/post-deploy/10-swap.sql"],
   ])("changes with %s", (_case, path) => {
     const before = key().stdout;
 

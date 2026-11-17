@@ -83,6 +83,13 @@ if [ "$MODE" = "migrate" ] || [ "$MODE" = "release" ]; then
 
   (cd "$CLI_DIR" && DATABASE_URL="$SCHEMA_URL" ./node_modules/.bin/prisma migrate deploy)
 
+  # infra/sql (roles, owners, grants: reapplied every release) and
+  # prisma/post-deploy (DDL that waits for a precondition), AFTER the
+  # migrations and before the seeds (plano-escala F5-08, D17). Each file's
+  # outcome lands in release_step_state; a 'pending' one makes the next
+  # deploy run this step again. A failed one stops here.
+  DATABASE_URL="$SCHEMA_URL" node build/release-steps.js "$CLI_DIR"
+
   # Strict: `set -e` turns a seed failure into a failed release step, which
   # is the point — the step is watched, a replica's boot log is not. Both
   # seeds are idempotent and exit 0 when there is nothing left to do.

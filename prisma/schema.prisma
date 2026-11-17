@@ -1576,6 +1576,22 @@ model WorkerHeartbeat {
   @@map("worker_heartbeat")
 }
 
+/// What each step the release step runs after `migrate deploy` last did
+/// (plano-escala F5-08): one row per file of infra/sql and prisma/post-deploy,
+/// keyed by its path, plus the run itself under "@release". Written only by
+/// infra/scripts/release-steps.ts; read by GET /health/rollout, whose pending
+/// steps make the next deploy run the release step again (U-11). The status
+/// is one of applied, skipped, pending, failed or retired (a CHECK in the
+/// migration).
+model ReleaseStepState {
+  step       String   @id
+  status     String
+  detail     String?
+  updated_at DateTime @default(now())
+
+  @@map("release_step_state")
+}
+
 /// The scale plan's series (plano-escala F1, item F1-08): one row per
 /// process per minute, written by a local timer with jitter in every process
 /// (never a cron: the election would leave a single writer), so the triggers

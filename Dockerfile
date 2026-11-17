@@ -133,8 +133,8 @@ COPY . .
 # the migrate stage's COPY of an empty one from failing.
 RUN yarn build \
     && mkdir release \
-    && mv build/seed.js build/import-violation-codes.js build/prebuild-online-ddl.js release/ \
-    && mkdir -p prisma/concurrent
+    && mv build/seed.js build/import-violation-codes.js build/prebuild-online-ddl.js build/release-steps.js release/ \
+    && mkdir -p prisma/concurrent prisma/post-deploy infra/sql
 
 # ================================
 # Stage: Production dependencies
@@ -346,9 +346,11 @@ CMD ["./docker-entrypoint.sh"]
 # The CLI keeps to migrate/: its node_modules, prisma.config.ts and the
 # schema with its migrations, where `prisma migrate deploy` runs from
 # (docker-entrypoint.sh), and prisma/concurrent beside them, the online DDL
-# that runs right before it (build/prebuild-online-ddl.js). The seeds and
-# the infraction table go where the seeds read them, beside the API's
-# build: build/ and the working directory.
+# that runs right before it (build/prebuild-online-ddl.js), and the steps
+# that run right after it, infra/sql and prisma/post-deploy
+# (build/release-steps.js, with migrate/ as their root). The seeds and the
+# infraction table go where the seeds read them, beside the API's build:
+# build/ and the working directory.
 # Most stable first, as in the runner.
 FROM runner AS migrate
 
@@ -360,6 +362,8 @@ COPY --from=builder --chown=nodejs:nodejs /app/prisma.config.ts ./migrate/prisma
 COPY --from=builder --chown=nodejs:nodejs /app/prisma/schema.prisma ./migrate/prisma/schema.prisma
 COPY --from=builder --chown=nodejs:nodejs /app/prisma/migrations ./migrate/prisma/migrations
 COPY --from=builder --chown=nodejs:nodejs /app/prisma/concurrent ./migrate/prisma/concurrent
+COPY --from=builder --chown=nodejs:nodejs /app/prisma/post-deploy ./migrate/prisma/post-deploy
+COPY --from=builder --chown=nodejs:nodejs /app/infra/sql ./migrate/infra/sql
 COPY --from=builder --chown=nodejs:nodejs /app/release/ ./build/
 
 # The release step's outcome, as Swarm reports it (docker-entrypoint.sh,
