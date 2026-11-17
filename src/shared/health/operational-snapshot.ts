@@ -1,7 +1,7 @@
 import { Prisma } from "@prisma/client";
 import { container } from "tsyringe";
 
-import database, { databaseBatch } from "@/../infra/database";
+import database from "@/../infra/database";
 import { RedisConnection } from "@/../infra/cache/redis-connection";
 import { env } from "@/env";
 import { GEOCODER_PROVIDER } from "@/shared/delivery/geocoding/geocoding-budget";
@@ -105,8 +105,19 @@ async function part<T>(
   }
 }
 
+/** The client of the cluster-wide checks (F2-03, U-14); see below. */
+type MaintenanceClient = Pick<Prisma.TransactionClient, "$queryRaw">;
+
+/**
+ * `maintenance` runs the cluster-wide checks (the feed's txid, the
+ * cluster's epoch): the ops heartbeat passes the maintenance pool,
+ * databaseBatch, which only the crons may import
+ * (tests/unitaires/database/database-read-guard.test.ts); a test calling
+ * this directly reads them on the app's pool.
+ */
 async function collectOperationalSnapshot(
   now: Date = new Date(),
+  maintenance: MaintenanceClient = database,
 ): Promise<OperationalSnapshot> {
   const errors: string[] = [];
   const since = new Date(now.getTime() - FAILURE_WINDOW_MS);
@@ -336,20 +347,21 @@ async function collectOperationalSnapshot(
       : undefined;
 
   // The feed's stamp against the cluster (F2-03): one probe per tenant down
-  // the feed's index, on the maintenance pool like the cluster's numbers.
+  // the feed's index, on the maintenance client (the heartbeat passes
+  // databaseBatch).
   const feedTxid = await part(
     "delivery_event (txid)",
     errors,
-    () => readFeedTxidState(databaseBatch),
+    () => readFeedTxidState(maintenance),
     null,
   );
 
   // The cluster's epoch against the cluster (U-14): one row and two
-  // pg_control functions, on the maintenance pool.
+  // pg_control functions, on the same client.
   const clusterEpoch = await part(
     "cluster_epoch",
     errors,
-    () => readClusterEpochState(databaseBatch),
+    () => readClusterEpochState(maintenance),
     null,
   );
 

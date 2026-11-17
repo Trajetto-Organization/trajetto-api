@@ -74,7 +74,12 @@ const opsHeartbeatJob: CronJobDefinition = {
   schedule: "* * * * *",
   quiet: true,
   handler: async (run) => {
-    const snapshot = await collectOperationalSnapshot();
+    // The cluster-wide checks of the snapshot (the feed's txid, the
+    // cluster's epoch) on the maintenance pool too.
+    const snapshot = await collectOperationalSnapshot(
+      new Date(),
+      databaseBatch,
+    );
 
     // Called directly (a test), the run has no slot: this minute stands in.
     const slot = run?.scheduledFor ?? new Date(snapshot.now);
