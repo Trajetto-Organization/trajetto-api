@@ -7,6 +7,8 @@ import { RouteRepository } from "@/modules/route/repositories/route-repository";
 import { OperationDayRepository } from "@/modules/route/repositories/operation-day-repository";
 import { fanOutWebhookEvents } from "@/shared/integration/webhook-dispatch-service";
 import { createPrismaClient } from "@/shared/database/database-client";
+import { env } from "@/env";
+import { withStatusTrail } from "../support/status-trail";
 
 /**
  * Every status a delivery ever had has its line (plano-escala F2-06).
@@ -24,8 +26,16 @@ import { createPrismaClient } from "@/shared/database/database-client";
  * says the status the row has. Through the real repositories, against
  * Postgres: the RETURNING, the one insert per batch and the commit they
  * share are what is under test.
+ *
+ * The lines are written only with DELIVERY_STATUS_TRAIL_ENABLED (off by
+ * default: the image before this release reads them wrongly while it still
+ * serves). On for every describe here but the last, which holds the
+ * default: the status moves and the batch departure still hands its
+ * deliveries to the webhooks, with no line.
  */
 const prisma = createPrismaClient();
+
+withStatusTrail();
 const deliveries = new DeliveryRepository(prisma);
 const routes = new RouteRepository(prisma);
 
@@ -486,5 +496,68 @@ describe("what a departure costs", () => {
     expect(rows).toHaveLength(50);
     expect(new Set(rows.map((row) => row.sourceEventId)).size).toBe(50);
     expect(new Set(sequences).size).toBe(50);
+  });
+});
+
+// Last: its deliveries have no lines, and the invariant above reads the
+// whole company.
+describe("with the status lines off (the default)", () => {
+  beforeAll(() => {
+    env.DELIVERY_STATUS_TRAIL_ENABLED = false;
+  });
+
+  afterAll(() => {
+    env.DELIVERY_STATUS_TRAIL_ENABLED = true;
+  });
+
+  it("creates, sends out, adds and brings back with no line, as the image before it did", async () => {
+    const first = await newDelivery();
+    const routeId = await runningRoute([first]);
+    const late = await newDelivery();
+
+    await routes.addStops(routeId, CARRIER, [late]);
+
+    const statusOf = async (id: string) =>
+      (await prisma.delivery.findUniqueOrThrow({ where: { id } })).status;
+
+    expect([await statusOf(first), await statusOf(late)]).toEqual([
+      "IN_TRANSIT",
+      "IN_TRANSIT",
+    ]);
+
+    await routes.transitionRoute(routeId, CARRIER, {
+      expectedStatus: "IN_PROGRESS",
+      status: "CANCELLED",
+      cancellation_reason: "Caminhão quebrou",
+    });
+
+    expect([await statusOf(first), await statusOf(late)]).toEqual([
+      "PENDING",
+      "PENDING",
+    ]);
+    expect(await trailOf(first)).toEqual([]);
+    expect(await trailOf(late)).toEqual([]);
+  });
+
+  it("moves the app's old batch departure and hands it to the webhooks, with no line", async () => {
+    const loose = await newDelivery({ driverId: DRIVER });
+
+    const handed: string[] = [];
+    const moved = await deliveries.startDriverRoute(
+      CARRIER,
+      DRIVER,
+      undefined,
+      async (departed) => {
+        handed.push(...departed.map((delivery) => delivery.id));
+      },
+    );
+
+    expect(moved).toBeGreaterThanOrEqual(1);
+    expect(handed).toContain(loose);
+    expect(
+      (await prisma.delivery.findUniqueOrThrow({ where: { id: loose } }))
+        .status,
+    ).toBe("IN_TRANSIT");
+    expect(await trailOf(loose)).toEqual([]);
   });
 });

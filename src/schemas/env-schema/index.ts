@@ -921,6 +921,27 @@ const envSchema = z
       z.coerce.number().int().min(30).max(3_650).default(90),
     ),
 
+    // The status lines a delivery gets by itself (plano-escala F2-06): with
+    // true, its creation writes a STATUS_CHANGE from nothing to PENDING, and
+    // what a route moves on its own (the departure, a stop added to a
+    // running route, the return of a route cancelled or closed with
+    // pending stops, the app's old batch departure) writes a SYSTEM
+    // STATUS_CHANGE per delivery that moved. Off by default, because the
+    // image before this release, which still serves during the rolling
+    // deploy and is the target of a code rollback, reads those lines as
+    // work and as a person's change: its import undo would keep every
+    // delivery the import made, its /integration/v1/events would announce
+    // the creation as `delivery.pending`, its tower could no longer approve
+    // an occurrence the departure followed, and its tower feed would fill
+    // with them. On once that image is gone for good (docs/deploy.md). The
+    // departure's `delivery.in_transit` webhooks do not depend on it.
+    DELIVERY_STATUS_TRAIL_ENABLED: z
+      .preprocess(
+        (value) => (value === "" ? undefined : value),
+        z.enum(["true", "false"]).default("false"),
+      )
+      .transform((value) => value === "true"),
+
     // The dead letters' retention (plano-escala F5-10): days a failure is
     // kept, counted from when it gave up — a FAILED outbox event (in the
     // queue table for 30 days, then in outbox_event_dead_letter) and a

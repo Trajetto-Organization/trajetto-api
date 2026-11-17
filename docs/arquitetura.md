@@ -2818,7 +2818,11 @@ D32).
   tipos; o feed da torre e a API pública os deixam de fora). Cancelar a rota
   grava, na mesma transação, `ROUTE_REMOVED` com a nota "Rota N cancelada:
   motivo" em cada entrega que volta ao pool.
-- **Toda mudança de status tem a sua linha (plano de escala, F2-06):** a
+- **Toda mudança de status tem a sua linha (plano de escala, F2-06), com
+  `DELIVERY_STATUS_TRAIL_ENABLED=true`** (desligada por padrão: a imagem de
+  antes da onda 7 lê essas linhas errado enquanto ainda atende;
+  `src/shared/delivery/status-trail.ts` e
+  [`deploy.md`](./deploy.md#as-linhas-de-status-da-entrega-onda-7)): a
   criação grava um `STATUS_CHANGE` de nada para `PENDING` (ator `USER`, ou
   `INTEGRATION` com a chave), e o que a rota move sozinha grava um
   `STATUS_CHANGE` com ator `SYSTEM` e o `routeId`, por entrega que mudou, na
@@ -2829,8 +2833,9 @@ D32).
   saída manda um `delivery.in_transit` por entrega (`announceMany`, um lote:
   a leitura dos endpoints, a sequência e as linhas em três comandos, um só
   sem assinante). A linha do tempo diz "Entrega criada" e "Saiu para entrega
-  (Rota N)". O feed da torre deixa de fora a criação e as linhas `SYSTEM` (a
-  rota tem a linha dela); a regra de autorização da torre só conta a
+  (Rota N)". Desligada, o status muda e a saída manda o
+  `delivery.in_transit` do mesmo jeito, só sem as linhas. O feed da torre
+  deixa de fora a criação e as linhas `SYSTEM` (a rota tem a linha dela); a regra de autorização da torre só conta a
   mudança de status de uma pessoa ou de uma chave; o desfazer da importação
   não conta a criação como trabalho; o feed `/integration/v1/events` mostra a
   criação como `delivery.created`. A invariante (a última linha com status

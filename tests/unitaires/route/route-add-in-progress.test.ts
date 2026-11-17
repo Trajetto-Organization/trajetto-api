@@ -21,7 +21,10 @@ import type { OutboxService } from "@/shared/notifications/outbox-service";
 import type { Driver } from "@/modules/driver/dtos/driver-dto";
 import type { Vehicle } from "@/modules/vehicle/dtos/vehicle-dto";
 import type { User } from "@/modules/user/dtos/user-dto";
-import { withoutCreationLine } from "../../support/status-trail";
+import {
+  withStatusTrail,
+  withoutCreationLine,
+} from "../../support/status-trail";
 import type { CreateDeliveryProps } from "@/modules/delivery/dtos/delivery-dto";
 
 /**
@@ -333,6 +336,9 @@ describe("adding a delivery to a route that already left", () => {
 });
 
 describe("Reentregar", () => {
+  // The departure's SYSTEM line is asserted below (F2-06).
+  withStatusTrail();
+
   async function failedDelivery(): Promise<string> {
     const id = await seedDelivery({ recipient_name: "Ausente ontem" });
 

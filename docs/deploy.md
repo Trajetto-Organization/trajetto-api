@@ -3759,6 +3759,43 @@ não se perdem: ficam na v2, que a imagem velha não lê nem apaga.
 3. A retirada da legada (F2-12) conta a retenção a partir da volta para a
    frente: durante a volta, a legada recebeu pontos de novo.
 
+### As linhas de status da entrega (onda 7)
+
+O F2-06 (plano de escala) faz toda mudança de status deixar a sua linha no
+histórico da entrega: a criação ("Entrega criada", de nada para Pendente) e
+o que a rota move sozinha (a saída, a parada incluída em rota em andamento,
+a volta à base de uma rota cancelada ou encerrada com pendências, a saída em
+lote antiga do app), uma linha `SYSTEM` por entrega. A imagem desta release
+já sabe ler essas linhas; a de antes da onda 7, que ainda atende durante o
+rolling e é o destino de uma volta do código, lê errado:
+
+- o desfazer da importação conta a linha da criação como trabalho e não
+  remove nenhuma entrega da planilha;
+- o `/integration/v1/events` chama a criação de `delivery.pending`, um
+  tópico fora do catálogo, e o integrador passa o cursor por cima dela;
+- a torre conta a linha `SYSTEM` da saída como mudança feita por alguém e
+  não consegue mais aprovar a ocorrência pedida antes dela;
+- o feed da torre mostra uma linha por entrega a cada saída, e os fatos da
+  rua saem do limite da tela.
+
+Por isso a escrita só começa com `DELIVERY_STATUS_TRAIL_ENABLED=true` no
+_Environment_ da `trajetto-api`, desligada por padrão: a release leva os
+leitores, e o dono liga a escrita quando não sobra imagem velha, como a
+regra do enum novo, que só é gravado na release seguinte. Desligada, a
+entrega muda de status e a saída manda o `delivery.in_transit` como
+sempre, só sem essas linhas.
+
+1. Na staging, ligue depois de a release da onda 7 convergir; é o que faz
+   aparecer a linha do tempo nova ("Entrega criada", "Saiu para entrega
+   (Rota N)").
+2. Na produção, ligue só depois de a release estar no ar e de nenhuma volta
+   para antes dela estar prevista.
+3. Antes de voltar o código para antes da onda 7, desligue (**Save** e
+   **Deploy**) para parar as linhas novas. As que já foram gravadas ficam, e
+   a imagem velha as lê como na lista acima: desfaça à mão a importação feita
+   enquanto ela estava ligada, e avise o integrador que um
+   `delivery.pending` sem `status_from` é a criação.
+
 ### Quando o Swarm desiste de um serviço
 
 Nenhuma Application tem limite de tentativas (`MaxAttempts: 0`). Se uma

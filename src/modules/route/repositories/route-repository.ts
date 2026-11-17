@@ -21,6 +21,7 @@ import {
 import { resolveTimeZone } from "@/shared/time/business-day";
 import { utcInstant } from "@/shared/database/utc-instant";
 import type { DeliveryStatus } from "@/shared/delivery/delivery-rules";
+import { deliveryStatusTrailEnabled } from "@/shared/delivery/status-trail";
 import { routeClosedWithPendingNote } from "@/shared/route/route-left-open";
 import { assignStopGroupKeys } from "@/shared/delivery/stop-group";
 import { deliveryAddressKey } from "@/shared/delivery/address-key";
@@ -1652,17 +1653,22 @@ class RouteRepository implements IRouteRepository {
 
     if (moved.length === 0) return [];
 
-    await tx.deliveryEvent.createMany({
-      data: moved.map(({ id }) => ({
-        type: "STATUS_CHANGE" as const,
-        deliveryId: id,
-        businessId: route.businessId,
-        routeId: route.id,
-        status_from: from,
-        status_to: to,
-        actor: "SYSTEM" as const,
-      })),
-    });
+    // The lines only with DELIVERY_STATUS_TRAIL_ENABLED: the image before
+    // this one reads a SYSTEM line as a person's change (status-trail.ts).
+    // The status moves, and the departure's webhooks go, either way.
+    if (deliveryStatusTrailEnabled()) {
+      await tx.deliveryEvent.createMany({
+        data: moved.map(({ id }) => ({
+          type: "STATUS_CHANGE" as const,
+          deliveryId: id,
+          businessId: route.businessId,
+          routeId: route.id,
+          status_from: from,
+          status_to: to,
+          actor: "SYSTEM" as const,
+        })),
+      });
+    }
 
     return moved.map(({ id }) => id);
   }

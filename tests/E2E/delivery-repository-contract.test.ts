@@ -20,9 +20,14 @@ import {
   seedVehicle,
 } from "../contract/seed";
 import { createPrismaClient } from "@/shared/database/database-client";
+import { withStatusTrail } from "../support/status-trail";
 
 /** Decision 13.2: the delivery contract against Postgres and the twin. */
 const prisma = createPrismaClient();
+
+// The detail's creation line is part of the contract (F2-06): on before
+// the seeds below, which make the deliveries.
+withStatusTrail();
 
 const prismaRepo = new DeliveryRepository(prisma);
 const memory = new InMemoryDeliveryRepository();

@@ -36,7 +36,10 @@ import type { Vehicle } from "@/modules/vehicle/dtos/vehicle-dto";
 import { DeliveryNotFoundError } from "@/modules/delivery/usecases/errors/delivery-errors";
 
 import { InMemoryWebhookFanOutService } from "@/shared/integration/in-memory/in-memory-webhook-fan-out-service";
-import { withoutCreationLine } from "../../support/status-trail";
+import {
+  withStatusTrail,
+  withoutCreationLine,
+} from "../../support/status-trail";
 
 // Nothing here asserts on webhooks; the use cases simply require one.
 const webhookStub = new InMemoryWebhookFanOutService();
@@ -294,6 +297,9 @@ function makeStartRoute(repos: ReturnType<typeof makeRepositories>) {
 }
 
 describe("driver surface: start route", () => {
+  // The batch departure's SYSTEM lines are asserted below (F2-06).
+  withStatusTrail();
+
   it("moves the driver's pending batch and is idempotent on resend", async () => {
     const repos = makeRepositories();
     webhookStub.reset();

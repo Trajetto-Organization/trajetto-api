@@ -107,6 +107,7 @@ import type {
 } from "../../dtos/route-dto";
 
 import type { RouteStatus, RouteStopStatus } from "@/shared/route/route-rules";
+import { deliveryStatusTrailEnabled } from "@/shared/delivery/status-trail";
 
 /**
  * A stand-in for Postgres, and the rules it enforces are not decoration.
@@ -577,13 +578,18 @@ class InMemoryRouteRepository implements IRouteRepository {
     };
   }
 
-  /** The SYSTEM line moveDeliveryStatus writes for each row it moved (F2-06). */
+  /**
+   * The SYSTEM line moveDeliveryStatus writes for each row it moved (F2-06),
+   * only with DELIVERY_STATUS_TRAIL_ENABLED, as the real one.
+   */
   private pushStatusChange(
     deliveryId: string,
     route: Pick<Route, "id" | "businessId">,
     from: string,
     to: string,
   ): void {
+    if (!deliveryStatusTrailEnabled()) return;
+
     this.events.push({
       type: "STATUS_CHANGE",
       deliveryId,

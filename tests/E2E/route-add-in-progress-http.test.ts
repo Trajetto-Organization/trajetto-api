@@ -8,6 +8,7 @@ import {
   type FleetDriverSeed,
 } from "./support/fleet-driver-seed";
 import { createPrismaClient } from "@/shared/database/database-client";
+import { withStatusTrail } from "../support/status-trail";
 
 /**
  * Adding to a running route and "Reentregar" (K12, decision D30), through
@@ -224,6 +225,9 @@ describe("adding to a route in progress", () => {
 });
 
 describe("Reentregar", () => {
+  // The departure's SYSTEM line is asserted below (F2-06).
+  withStatusTrail();
+
   it("puts a failed delivery back with the reason and on the running route, in one transaction", async () => {
     const routeId = await runningRoute();
     const failed = await seedDelivery("FAILED");

@@ -21,6 +21,7 @@ import { refreshStopGroupKeysOfDelivery } from "@/shared/delivery/stop-group";
 import { openStopsOnRoutesLeftOpen } from "@/shared/route/routes-left-open-query";
 import { notOnAnOpenStop } from "@/shared/route/open-stop-anti-join";
 import { utcInstant } from "@/shared/database/utc-instant";
+import { deliveryStatusTrailEnabled } from "@/shared/delivery/status-trail";
 import type { OperationDay } from "@/modules/route/repositories/IOperation-day-repository";
 
 import {
@@ -326,17 +327,21 @@ class DeliveryRepository implements IDeliveryRepository {
       // STATUS_CHANGE from nothing, so every status the row ever had has
       // its line and the last line always says the status it has. By the
       // key that created it, or the panel (an import is a panel action).
-      await client.deliveryEvent.create({
-        data: {
-          type: "STATUS_CHANGE",
-          deliveryId: created.id,
-          businessId: created.businessId,
-          status_from: null,
-          status_to: created.status,
-          actor: created.apiKeyId ? "INTEGRATION" : "USER",
-          apiKeyId: created.apiKeyId ?? null,
-        },
-      });
+      // Only with DELIVERY_STATUS_TRAIL_ENABLED: the image before this one
+      // reads the line as work and as a `delivery.pending` (status-trail.ts).
+      if (deliveryStatusTrailEnabled()) {
+        await client.deliveryEvent.create({
+          data: {
+            type: "STATUS_CHANGE",
+            deliveryId: created.id,
+            businessId: created.businessId,
+            status_from: null,
+            status_to: created.status,
+            actor: created.apiKeyId ? "INTEGRATION" : "USER",
+            apiKeyId: created.apiKeyId ?? null,
+          },
+        });
+      }
 
       return created;
     };
@@ -1492,18 +1497,22 @@ class DeliveryRepository implements IDeliveryRepository {
 
       if (moved.length === 0) return 0;
 
-      await tx.deliveryEvent.createMany({
-        data: moved.map((delivery) => ({
-          type: "STATUS_CHANGE" as const,
-          deliveryId: delivery.id,
-          businessId,
-          status_from: "PENDING" as const,
-          status_to: "IN_TRANSIT" as const,
-          actor: "SYSTEM" as const,
-          // The tap's moment, for one the app queued offline.
-          occurred_at: createdUpTo ?? null,
-        })),
-      });
+      // The lines only with DELIVERY_STATUS_TRAIL_ENABLED (status-trail.ts);
+      // the webhooks below go either way.
+      if (deliveryStatusTrailEnabled()) {
+        await tx.deliveryEvent.createMany({
+          data: moved.map((delivery) => ({
+            type: "STATUS_CHANGE" as const,
+            deliveryId: delivery.id,
+            businessId,
+            status_from: "PENDING" as const,
+            status_to: "IN_TRANSIT" as const,
+            actor: "SYSTEM" as const,
+            // The tap's moment, for one the app queued offline.
+            occurred_at: createdUpTo ?? null,
+          })),
+        });
+      }
 
       await onStarted?.(moved, tx);
 

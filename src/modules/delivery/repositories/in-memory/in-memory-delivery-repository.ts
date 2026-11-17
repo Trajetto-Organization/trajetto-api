@@ -32,6 +32,7 @@ import {
   twinLenderHolds,
 } from "@/shared/delivery/geocoding/address-point-propagation";
 import { CLEARED_ADDRESS_POINT } from "@/shared/delivery/address-point";
+import { deliveryStatusTrailEnabled } from "@/shared/delivery/status-trail";
 import type { OperationDay } from "@/modules/route/repositories/IOperation-day-repository";
 
 import {
@@ -1357,7 +1358,11 @@ class InMemoryDeliveryRepository implements IDeliveryRepository {
     return pending.length;
   }
 
-  /** One STATUS_CHANGE line, with the columns the Prisma insert leaves null. */
+  /**
+   * One STATUS_CHANGE line, with the columns the Prisma insert leaves null.
+   * Only the F2-06 lines come through here, and like the real ones only with
+   * DELIVERY_STATUS_TRAIL_ENABLED (status-trail.ts).
+   */
   private pushStatusChange(
     delivery: Delivery,
     line: {
@@ -1369,6 +1374,8 @@ class InMemoryDeliveryRepository implements IDeliveryRepository {
       occurred_at?: Date | null;
     },
   ): void {
+    if (!deliveryStatusTrailEnabled()) return;
+
     this.events.push({
       ...withColumnDefaults(DELIVERY_EVENT_COLUMN_DEFAULTS, {
         type: "STATUS_CHANGE" as const,
