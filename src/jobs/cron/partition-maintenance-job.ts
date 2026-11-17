@@ -300,9 +300,15 @@ async function createAhead(
   }
 }
 
-/** Runs one statement on the DDL connection; false (and a warning) on failure. */
+/**
+ * Runs one statement on the DDL connection; false (and a warning) on
+ * failure — a connection that did not open included (a Database away, a
+ * URL through PgBouncer that ddl-connection.ts refuses): that statement
+ * waits for the next night, and the run goes on to the partitions ahead
+ * of every other table.
+ */
 async function ddl(
-  connection: DdlConnection,
+  connection: () => Promise<DdlConnection>,
   relation: string,
   sql: string,
   lockTimeout: string,
@@ -310,7 +316,9 @@ async function ddl(
   what: { table: string; partition: string; step: string },
 ): Promise<boolean> {
   try {
-    const asOwner = await connection.runAs(relation, sql, lockTimeout);
+    const asOwner = await (
+      await connection()
+    ).runAs(relation, sql, lockTimeout);
 
     if (!asOwner) outcome.ownerOk = false;
 
@@ -383,7 +391,7 @@ async function removeBehind(
 
   for (const partition of attached.filter((each) => each.detachPending)) {
     const finalized = await ddl(
-      await connection(),
+      connection,
       parent,
       `ALTER TABLE ${quote(parent)} DETACH PARTITION ${quote(partition.name)} FINALIZE`,
       DETACH_LOCK_TIMEOUT,
@@ -405,7 +413,7 @@ async function removeBehind(
 
   for (const partition of mayDetach ? expired : []) {
     const detached = await ddl(
-      await connection(),
+      connection,
       parent,
       `ALTER TABLE ${quote(parent)} DETACH PARTITION ${quote(partition.name)} CONCURRENTLY`,
       DETACH_LOCK_TIMEOUT,
@@ -424,7 +432,7 @@ async function removeBehind(
   // DROP takes ACCESS EXCLUSIVE on the detached table alone, not the parent.
   for (const name of await detachedLeftovers(table, cutoff)) {
     const dropped = await ddl(
-      await connection(),
+      connection,
       name,
       `DROP TABLE IF EXISTS ${quote(name)}`,
       DROP_LOCK_TIMEOUT,
@@ -441,7 +449,7 @@ async function removeBehind(
   // SKIP_LOCKED: a table someone else is vacuuming is left for next week,
   // never waited for.
   outcome.analyzed = await ddl(
-    await connection(),
+    connection,
     parent,
     `ANALYZE (SKIP_LOCKED) ${quote(parent)}`,
     DETACH_LOCK_TIMEOUT,
@@ -461,7 +469,7 @@ async function removeBehind(
 
   for (const partition of settled) {
     const frozen = await ddl(
-      await connection(),
+      connection,
       partition.name,
       `VACUUM (FREEZE, SKIP_LOCKED) ${quote(partition.name)}`,
       DETACH_LOCK_TIMEOUT,
@@ -489,12 +497,11 @@ async function maintainPartitions(
     ...overrides,
   };
 
-  let ddlConnection: DdlConnection | null = null;
-  const connection = async () => {
-    ddlConnection ??= await deps.openDdl();
-
-    return ddlConnection;
-  };
+  // Opened on the first statement that needs it, once per run: one that
+  // failed to open fails every later statement the same way, without
+  // waiting for a connect timeout each time.
+  let opening: Promise<DdlConnection> | null = null;
+  const connection = () => (opening ??= deps.openDdl());
 
   const outcomes: Record<string, TableOutcome> = {};
   const missingNow: string[] = [];
@@ -542,7 +549,11 @@ async function maintainPartitions(
     }
   } finally {
     // The last line of every path: the session goes back to its own role.
-    if (ddlConnection) await (ddlConnection as DdlConnection).close();
+    const opened = await (opening as Promise<DdlConnection> | null)?.catch(
+      () => null,
+    );
+
+    if (opened) await opened.close();
   }
 
   if (missingNow.length > 0) {

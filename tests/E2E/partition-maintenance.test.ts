@@ -288,4 +288,48 @@ describe("partition-maintenance on driver_position", () => {
 
     expect(rows[0].n).toBeGreaterThan(0);
   });
+
+  it("postpones the removal when the DDL connection cannot open, and still keeps every table ahead", async () => {
+    // A connection refused before it opens (a URL through PgBouncer, which
+    // ddl-connection.ts refuses) or a Database away at 04:10: what it would
+    // have detached waits for the next night. It must not cost tomorrow's
+    // partitions of the tables after it, or the pings of the day after
+    // would be refused with no partition to land in.
+    const tables = registeredPartitions();
+    const lean = tables.find((table) => table.table !== trail.table);
+
+    if (!lean) throw new Error("o registro tem uma tabela só");
+
+    const cutoff = retentionCutoff(trail);
+    const expired = partitionName(trail, new Date(cutoff.getTime() - DAY_MS));
+    const farthest = partitionName(
+      lean,
+      addGrains("day", today(), lean.lookahead),
+    );
+
+    await maintainPartitions({ now: new Date(cutoff.getTime() + 60_000) });
+    await admin.query(`DROP TABLE IF EXISTS "${farthest}"`);
+
+    let opened = 0;
+    const outcome = await maintainPartitions({
+      tables,
+      openDdl: async () => {
+        opened += 1;
+        throw new Error("a conexão de DDL não abriu");
+      },
+    });
+
+    expect(outcome[trail.table]).toMatchObject({ dropped: 0, missingNow: [] });
+    expect(outcome[trail.table].postponed).toBeGreaterThanOrEqual(1);
+    expect(await exists(expired)).toBe(true);
+    expect(outcome[lean.table].created).toBeGreaterThanOrEqual(1);
+    expect(await exists(farthest)).toBe(true);
+    // One attempt for the whole run, not one per step.
+    expect(opened).toBe(1);
+
+    // The next night, with the connection back, does what waited.
+    await maintainPartitions();
+
+    expect(await exists(expired)).toBe(false);
+  });
 });

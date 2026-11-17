@@ -4,6 +4,7 @@ import {
   LOCAL_AI_DEFAULT_MAX_CONCURRENCY,
   LOCAL_AI_DEFAULT_TIMEOUT_MS,
 } from "@/shared/ai/ai-provider-defaults";
+import { throughPgBouncer } from "@/shared/database/pgbouncer-url";
 import { isValidCnpj } from "@/shared/delivery/cnpj";
 import {
   GEOCODING_BACKGROUND_CALLS_PER_MINUTE_DEFAULT,
@@ -53,20 +54,6 @@ function isPostgresUrl(value: string): boolean {
 
 const POSTGRES_URL_MESSAGE =
   "precisa ser uma URL postgresql:// (o mesmo formato da DATABASE_URL)";
-
-/** A URL through PgBouncer: its port, or Prisma's pgbouncer=true. */
-function throughPgBouncer(value: string): boolean {
-  try {
-    const url = new URL(value);
-
-    return (
-      url.port === "6432" ||
-      url.searchParams.get("pgbouncer")?.toLowerCase() === "true"
-    );
-  } catch {
-    return false;
-  }
-}
 
 /** A node hostname, a slot number or node id, a service name: no spaces. */
 const SWARM_LABEL = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;

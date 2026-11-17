@@ -37,6 +37,25 @@ describe("ddlDatabaseUrl", () => {
     expect(ddlDatabaseUrl({})).toBeUndefined();
   });
 
+  // The DDL connection switches its SESSION's role (SET ROLE
+  // trajetto_partitions) and runs DETACH … CONCURRENTLY. Through PgBouncer
+  // in transaction mode the SET would stay on a pooled server connection
+  // that the next client's transaction gets: a request running as the
+  // owner of the trail. The env refuses a BATCH_DATABASE_URL through it;
+  // the fallback to DATABASE_URL (through PgBouncer from wave 17 on) must
+  // be refused too, before a byte goes out.
+  it.each([
+    ["the PgBouncer port", "postgresql://u:x@127.0.0.1:6432/trajetto"],
+    [
+      "Prisma's pgbouncer=true",
+      "postgresql://u:x@127.0.0.1:5432/trajetto?pgbouncer=TRUE",
+    ],
+  ])("refuses a URL through %s, naming the batch URL", async (_case, url) => {
+    await expect(openDdlConnection(url)).rejects.toThrow(
+      /PgBouncer[\s\S]*BATCH_DATABASE_URL/,
+    );
+  });
+
   it("refuses to open without a URL, naming both variables", async () => {
     await expect(openDdlConnection("")).rejects.toThrow(
       "a conexão de DDL das partições precisa de BATCH_DATABASE_URL ou DATABASE_URL",

@@ -3,6 +3,7 @@ import pg from "pg";
 import { logger } from "@/shared/logging/logger";
 
 import { AS_OWNER_SQL, PARTITION_OWNER_ROLE } from "./partition-owner";
+import { throughPgBouncer } from "./pgbouncer-url";
 import { poolSettingsFrom } from "./pool-config";
 
 const log = logger.child({ component: "ddl-connection" });
@@ -20,7 +21,13 @@ const log = logger.child({ component: "ddl-connection" });
  * pooled connection into somebody else's request. It is also why this file
  * is the one exception of the PgBouncer guard
  * (tests/unitaires/database/pgbouncer-compat.test.ts): its URL never goes
- * through PgBouncer.
+ * through PgBouncer. The env refuses a BATCH_DATABASE_URL through it, and
+ * this file refuses any URL through it before connecting — the fallback to
+ * DATABASE_URL included, which goes through PgBouncer from wave 17 on in
+ * the processes that use it (docs/variaveis-de-ambiente.md). There, a
+ * process that runs the cron needs BATCH_DATABASE_URL; without it the job
+ * postpones what needs this connection and says so in its log, and never
+ * leaves a SET ROLE on a pooled server connection.
  *
  * It opens on BATCH_DATABASE_URL, the trajetto_batch login after the cut
  * of the database roles (plano-escala F3-20): the one login that is a
@@ -105,6 +112,12 @@ async function openDdlConnection(
   if (!databaseUrl) {
     throw new Error(
       "a conexão de DDL das partições precisa de BATCH_DATABASE_URL ou DATABASE_URL",
+    );
+  }
+
+  if (throughPgBouncer(databaseUrl)) {
+    throw new Error(
+      "a conexão de DDL das partições não passa pelo PgBouncer (porta 6432 ou pgbouncer=true): ela troca o role da própria sessão. Defina a BATCH_DATABASE_URL direto no Postgres (porta 5432) na Application que roda o cron.",
     );
   }
 
