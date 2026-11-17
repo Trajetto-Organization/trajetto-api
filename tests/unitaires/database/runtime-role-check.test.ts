@@ -256,6 +256,65 @@ describe("verifyRuntimeRole", () => {
     ).rejects.toThrow("login recusado (SQLSTATE 28P01)");
   });
 
+  it.each([
+    ["no password that matches", "28P01"],
+    ["no pg_hba line, or a role without LOGIN", "28000"],
+    ["a database that does not exist", "3D000"],
+    ["CONNECT not granted on the database", "42501"],
+  ])(
+    "refuses a batch login Postgres rejects for its configuration (%s), with the flag",
+    async (_case, code) => {
+      await expect(
+        verifyRuntimeRole({
+          client: client(HTTP) as never,
+          require: true,
+          runsCron: true,
+          batchUrl: BATCH_URL,
+          openDdl: async () => {
+            throw Object.assign(new Error("refused"), { code });
+          },
+          log: quiet(),
+        }),
+      ).rejects.toThrow(`login recusado (SQLSTATE ${code})`);
+    },
+  );
+
+  // The outages isDatabaseUnavailable knows, met on connect during a
+  // rolling deploy or a restart of the Database: the main pool's check
+  // only logs them, and so does this one. Node's socket errnos have five
+  // letters too, and are the network.
+  it.each([
+    ["no connection slot left", "53300"],
+    ["the server starting up", "57P03"],
+    ["the server shutting down", "57P01"],
+    ["the connection failing", "08006"],
+    ["a broken pipe", "EPIPE"],
+    ["an interrupted call", "EINTR"],
+  ])(
+    "lets the boot go on when the batch login meets %s, even with the flag",
+    async (_case, code) => {
+      const log = quiet();
+
+      await expect(
+        verifyRuntimeRole({
+          client: client(HTTP) as never,
+          require: true,
+          runsCron: true,
+          batchUrl: BATCH_URL,
+          openDdl: async () => {
+            throw Object.assign(new Error("away"), { code });
+          },
+          log,
+        }),
+      ).resolves.toEqual({ fatal: [], warnings: [] });
+
+      expect(log.error).toHaveBeenCalledWith(
+        { detail: "away" },
+        expect.stringContaining("did not answer"),
+      );
+    },
+  );
+
   it("lets the boot go on when neither connection answers, even with the flag", async () => {
     const log = quiet();
 

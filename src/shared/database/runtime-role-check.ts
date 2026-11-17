@@ -118,13 +118,25 @@ function judgeRuntimeRole(input: RoleCheckInput): RoleCheckVerdict {
   return verdict;
 }
 
-/** A SQLSTATE means Postgres answered; anything else is the network. */
-function sqlStateOf(error: unknown): string | undefined {
+/**
+ * The SQLSTATEs of a login Postgres refuses for what it is, which a retry
+ * will not change: a wrong password (28P01), a login it does not accept
+ * (28000: no pg_hba line, a role without LOGIN), a database that does not
+ * exist (3D000), CONNECT not granted on it (42501).
+ *
+ * Any other code on connect is the database away or busy, never the
+ * configuration: no slot left (53300), starting or shutting down (57P0x),
+ * the connection failing (class 08) — the outages isDatabaseUnavailable
+ * knows, met by a rolling deploy at max_connections or a restart of the
+ * Database — and Node's socket errnos (EPIPE, EINTR…), five letters too.
+ * Those are logged and the boot goes on, as for the main pool.
+ */
+const LOGIN_REFUSED = new Set(["28P01", "28000", "3D000", "42501"]);
+
+function loginRefusalOf(error: unknown): string | undefined {
   const code = (error as { code?: unknown } | null)?.code;
 
-  return typeof code === "string" && /^[0-9A-Z]{5}$/.test(code)
-    ? code
-    : undefined;
+  return typeof code === "string" && LOGIN_REFUSED.has(code) ? code : undefined;
 }
 
 async function probePartitionRole(
@@ -136,10 +148,10 @@ async function probePartitionRole(
   try {
     connection = await openDdl(batchUrl);
   } catch (error) {
-    const state = sqlStateOf(error);
+    const state = loginRefusalOf(error);
 
-    // A wrong password (28P01) or a database that does not exist (3D000)
-    // is the configuration; a refused connection is the database away.
+    // Only a refusal of the login itself is the configuration; anything
+    // else is the database away (LOGIN_REFUSED above).
     return state
       ? { state: "refused", detail: `login recusado (SQLSTATE ${state})` }
       : {
