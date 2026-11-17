@@ -2494,8 +2494,10 @@ A ordem inteira da etapa é `prisma/concurrent` → `prisma migrate deploy` →
 - **`infra/sql`**: roles, donos e grants, em ordem de nome, em **toda**
   release. Um `pg_restore --no-owner` (restore, PITR, failover) apaga grants
   e donos, e só um arquivo reaplicado converge. Esses arquivos só criam
-  roles `NOLOGIN`, e só quando faltam; nunca mexem em `LOGIN`, senha nem
-  `DROP ROLE` (`tests/unitaires/lifecycle/infra-sql-rules.test.ts` cobra).
+  roles `NOLOGIN`, e só quando faltam; nunca mexem em `LOGIN`, senha,
+  validade, limite de conexões, nome nem `DROP ROLE`, nem tiram o
+  `CONNECT` do banco (`tests/unitaires/lifecycle/infra-sql-rules.test.ts`
+  cobra, também no SQL montado em texto).
   O login e a senha de qualquer role são sempre seus, à mão. Nenhuma
   migration do Prisma referencia um role.
 - **`prisma/post-deploy`**: DDL com pré-condição (por exemplo, a troca das

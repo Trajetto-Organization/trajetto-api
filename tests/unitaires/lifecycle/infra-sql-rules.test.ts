@@ -21,6 +21,14 @@ import { describe, expect, it } from "vitest";
  * Every step file also says what it did, in the NOTICE the runner reads
  * (release-step-runner.ts): without it the step fails at release time; here
  * it fails first.
+ *
+ * A denylist of words missed the other ways to lock a role out (VALID
+ * UNTIL, CONNECTION LIMIT 0, a REVOKE CONNECT on the database) and a
+ * statement glued from string pieces (`'ALTER ROLE ' || r || ' PASSWORD '`).
+ * So an ALTER ROLE is held to what a step needs (SET, RESET, and the NO…
+ * attributes that only take powers away), the database itself is out of
+ * bounds but for SET and RESET, and every rule reads the code with its
+ * string literals opened up.
  */
 const ROOT = process.cwd();
 
@@ -29,6 +37,39 @@ function codeOf(sql: string): string {
   return sql.replace(/\/\*[\s\S]*?\*\//g, " ").replace(/--[^\n]*/g, " ");
 }
 
+/**
+ * The code with its string literals opened up: the quotes and the `||`
+ * that glue the pieces of a dynamic statement taken out, so
+ * `'ALTER ROLE ' || quote_ident(r) || ' PASSWORD ' || p` reads as the
+ * statement it runs. A literal that only mentions a keyword (a NOTICE) is
+ * then read as code too: reword it.
+ */
+function flatOf(code: string): string {
+  return code.replace(/\|\|/g, " ").replace(/'/g, " ");
+}
+
+/**
+ * A role or database as a step names it: an identifier, a quoted one, a
+ * format() placeholder (%I) or the call that quotes it (quote_ident(r)).
+ */
+const NAME = String.raw`(?:"(?:[^"]|"")+"|%(?:\d+\$)?[IsL]|[A-Za-z_][\w$.]*(?:\s*\([^()]*\))?)`;
+
+/**
+ * The only ALTER ROLE a step may run: a setting (SET, RESET, also IN
+ * DATABASE), or attributes that only take powers away. Anything else
+ * (LOGIN, NOLOGIN, PASSWORD, VALID UNTIL, CONNECTION LIMIT, RENAME,
+ * INHERIT, an attribute from a variable) is the owner's, by hand.
+ */
+const ALLOWED_ALTER_ROLE = new RegExp(
+  String.raw`^\s+${NAME}\s+(?:(?:IN\s+DATABASE\s+${NAME}\s+)?(?:SET|RESET)\b|(?:WITH\s+)?(?:NO(?:SUPERUSER|CREATEDB|CREATEROLE|REPLICATION|BYPASSRLS)\b\s*)+(?=[;,)]|$))`,
+  "i",
+);
+
+const ALLOWED_ALTER_DATABASE = new RegExp(
+  String.raw`^\s+${NAME}\s+(?:SET|RESET)\b`,
+  "i",
+);
+
 /** The dollar-quoted bodies of a script: `DO $$ ... $$`, functions. */
 function dollarBlocks(code: string): string[] {
   return [...code.matchAll(/\$([A-Za-z_]\w*)?\$([\s\S]*?)\$\1\$/g)].map(
@@ -36,12 +77,17 @@ function dollarBlocks(code: string): string[] {
   );
 }
 
+/** Read on the opened-up code (flatOf): up to the statement's end. */
 const FORBIDDEN: Array<[RegExp, string]> = [
   [
-    /\bALTER\s+(?:ROLE|USER)\b[^;']*\b(?:NO)?LOGIN\b/i,
+    /\bALTER\s+(?:ROLE|USER)\b[^;]*\b(?:NO)?LOGIN\b/i,
     "ALTER ROLE com LOGIN/NOLOGIN",
   ],
-  [/\bALTER\s+(?:ROLE|USER)\b[^;']*\bPASSWORD\b/i, "ALTER ROLE com PASSWORD"],
+  [/\bALTER\s+(?:ROLE|USER)\b[^;]*\bPASSWORD\b/i, "ALTER ROLE com PASSWORD"],
+  // The runtime's connection, refused at the door: the database's CONNECT
+  // taken away, or every grant of a role dropped with it.
+  [/\bREVOKE\b[^;]*\bON\s+DATABASE\b/i, "REVOKE no DATABASE (CONNECT)"],
+  [/\bDROP\s+OWNED\b/i, "DROP OWNED"],
   [/\bDROP\s+(?:ROLE|USER)\b/i, "DROP ROLE"],
   [/\bCREATE\s+USER\b/i, "CREATE USER"],
   [/\bALTER\s+USER\b/i, "ALTER USER"],
@@ -53,7 +99,7 @@ const FORBIDDEN: Array<[RegExp, string]> = [
   // /proc/self/environ) and delete the backups. The roles' cut is what
   // keeps an SQL injection away from them; a release step must never undo
   // it. (NOSUPERUSER has no word boundary before SUPERUSER.)
-  [/\b(?:CREATE|ALTER)\s+ROLE\b[^;']*\bSUPERUSER\b/i, "role com SUPERUSER"],
+  [/\b(?:CREATE|ALTER)\s+ROLE\b[^;]*\bSUPERUSER\b/i, "role com SUPERUSER"],
   [
     /\bpg_(?:execute_server_program|read_server_files|write_server_files)\b/i,
     "role que roda programa ou lê arquivo do servidor",
@@ -64,13 +110,31 @@ const FORBIDDEN: Array<[RegExp, string]> = [
   ],
 ];
 
+const ALTER_ROLE_OUTSIDE =
+  "ALTER ROLE fora de SET, RESET e NO… (login, senha, validade, limite de conexões e nome são do dono)";
+
 /** The rules of one infra/sql (or post-deploy) file. */
 function stepProblems(name: string, sql: string): string[] {
   const code = codeOf(sql);
+  const flat = flatOf(code);
   const problems: string[] = [];
 
   for (const [pattern, what] of FORBIDDEN) {
-    if (pattern.test(code)) problems.push(`${name}: ${what}`);
+    if (pattern.test(flat)) problems.push(`${name}: ${what}`);
+  }
+
+  for (const [, rest] of flat.matchAll(/\bALTER\s+ROLE\b([^;]*)/gi)) {
+    if (!ALLOWED_ALTER_ROLE.test(rest)) {
+      problems.push(`${name}: ${ALTER_ROLE_OUTSIDE}`);
+      break;
+    }
+  }
+
+  for (const [, rest] of flat.matchAll(/\bALTER\s+DATABASE\b([^;]*)/gi)) {
+    if (!ALLOWED_ALTER_DATABASE.test(rest)) {
+      problems.push(`${name}: ALTER DATABASE fora de SET e RESET`);
+      break;
+    }
   }
 
   const creates = [...code.matchAll(/\bCREATE\s+ROLE\b[^;']*(?=;|'|$)/gi)].map(
@@ -234,6 +298,67 @@ GRANT USAGE ON SCHEMA public TO trajetto_app;
     ],
   ])("refuse %s", (_case, sql, problem) => {
     expect(stepProblems("10-x.sql", sql)).toContain(problem);
+  });
+
+  it.each([
+    [
+      "an expiry date",
+      `${GOOD}\nALTER ROLE trajetto_app VALID UNTIL '2000-01-01';`,
+      `10-x.sql: ${ALTER_ROLE_OUTSIDE}`,
+    ],
+    [
+      "no connections at all",
+      `${GOOD}\nALTER ROLE trajetto CONNECTION LIMIT 0;`,
+      `10-x.sql: ${ALTER_ROLE_OUTSIDE}`,
+    ],
+    [
+      "a new name",
+      `${GOOD}\nALTER ROLE trajetto RENAME TO trajetto_old;`,
+      `10-x.sql: ${ALTER_ROLE_OUTSIDE}`,
+    ],
+    [
+      "a password glued from string pieces",
+      `${GOOD}\nDO $$ DECLARE r text := 'trajetto'; p text := 'x'; BEGIN EXECUTE 'ALTER ROLE ' || quote_ident(r) || ' PASSWORD ' || quote_literal(p); END $$;`,
+      "10-x.sql: ALTER ROLE com PASSWORD",
+    ],
+    [
+      "an attribute that comes from a variable",
+      `${GOOD}\nDO $$ DECLARE attr text := 'NOLOGIN'; BEGIN EXECUTE format('ALTER ROLE %I %s', 'trajetto', attr); END $$;`,
+      `10-x.sql: ${ALTER_ROLE_OUTSIDE}`,
+    ],
+    [
+      "the database's CONNECT taken away",
+      `${GOOD}\nREVOKE CONNECT ON DATABASE trajetto FROM PUBLIC;`,
+      "10-x.sql: REVOKE no DATABASE (CONNECT)",
+    ],
+    [
+      "every grant of a role dropped",
+      `${GOOD}\nDROP OWNED BY trajetto_app;`,
+      "10-x.sql: DROP OWNED",
+    ],
+    [
+      "the database closed to connections",
+      `${GOOD}\nALTER DATABASE trajetto ALLOW_CONNECTIONS false;`,
+      "10-x.sql: ALTER DATABASE fora de SET e RESET",
+    ],
+  ])("refuse what locks the runtime out: %s", (_case, sql, problem) => {
+    expect(stepProblems("10-x.sql", sql)).toContain(problem);
+  });
+
+  it("accept the settings a step keeps on a role or on the database", () => {
+    expect(
+      stepProblems(
+        "10-x.sql",
+        [
+          GOOD,
+          "ALTER ROLE trajetto_app SET statement_timeout = '30s';",
+          "ALTER ROLE trajetto_app IN DATABASE trajetto RESET work_mem;",
+          "ALTER ROLE trajetto_batch WITH NOCREATEDB NOCREATEROLE;",
+          "ALTER DATABASE trajetto SET work_mem = '8MB';",
+          "DO $$ BEGIN EXECUTE format('ALTER ROLE %I SET %I = %L', 'trajetto_app', 'lock_timeout', '5s'); END $$;",
+        ].join("\n"),
+      ),
+    ).toEqual([]);
   });
 
   it("accept a role that is explicitly not a superuser", () => {

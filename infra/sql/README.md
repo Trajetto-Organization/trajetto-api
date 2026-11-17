@@ -31,9 +31,21 @@ etapa antes de subir o runtime (`docs/deploy.md`, seção 15).
 `tests/unitaires/lifecycle/infra-sql-rules.test.ts` reprova:
 
 - `CREATE ROLE` fora de um teste de existência, ou sem `NOLOGIN`;
-- `ALTER ROLE` com `LOGIN`, `NOLOGIN` ou `PASSWORD`, `CREATE USER` e
-  `DROP ROLE` (ou `DROP USER`);
-- um arquivo sem o `RAISE NOTICE` de estado;
+- `ALTER ROLE` que não seja `SET`, `RESET` (também `IN DATABASE`) ou
+  atributos que só tiram poder (`NOSUPERUSER`, `NOCREATEDB`,
+  `NOCREATEROLE`, `NOREPLICATION`, `NOBYPASSRLS`): `LOGIN`, `NOLOGIN`,
+  `PASSWORD`, `VALID UNTIL`, `CONNECTION LIMIT`, `RENAME` e um atributo
+  vindo de variável ficam de fora;
+- `CREATE USER`, `DROP ROLE` (ou `DROP USER`) e `DROP OWNED`;
+- `REVOKE` no banco (`ON DATABASE`, o `CONNECT`) e `ALTER DATABASE` que
+  não seja `SET` ou `RESET` (`CONNECTION LIMIT`, `ALLOW_CONNECTIONS`);
+- um arquivo sem o `RAISE NOTICE` de estado.
+
+As regras leem o SQL dinâmico também: um comando montado de pedaços de texto
+(`'ALTER ROLE ' || quote_ident(r) || ' PASSWORD ' || ...`) conta como o
+comando que ele roda. Um texto de `NOTICE` que só cita uma dessas palavras
+também é lido assim: reescreva a frase. O teste também reprova:
+
 - uma migration do Prisma que referencia um role: `CREATE ROLE`,
   `ALTER ROLE`, `DROP ROLE`, `GRANT`, `REVOKE`, `OWNER TO` ou `SET ROLE`.
 
