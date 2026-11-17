@@ -13,7 +13,11 @@ import { isUpgradeExempt } from "@/shared/http/client-version";
 import { MAX_API_KEY_AUTH_FAILURES_PER_MINUTE } from "@/shared/integration/integration-rate-guard";
 import { BUSINESS_API_RATE_PER_MINUTE } from "@/shared/integration/api-key-rules";
 import { DATABASE_RETRY_AFTER_SECONDS } from "@/shared/errors/database-unavailable";
-import { SERVICE_BUSY_DESCRIPTION } from "./database-busy-documentation";
+import {
+  LOAD_SHED_DESCRIPTION,
+  LOAD_SHED_NOTE,
+  SERVICE_BUSY_DESCRIPTION,
+} from "./database-busy-documentation";
 import { EXPORTS_PER_REPLICA } from "@/shared/services/export/export-slots";
 
 import { ndjsonDocFor, type NdjsonDoc } from "./ndjson";
@@ -784,6 +788,7 @@ function openapiTransform(input: TransformInput): {
   const config = (route.config ?? {}) as {
     rateLimit?: unknown;
     openapi?: { module?: string };
+    shedClass?: string;
   };
 
   const permissions = guards.flatMap((guard) =>
@@ -954,7 +959,7 @@ function openapiTransform(input: TransformInput): {
       responses,
       "503",
       errorBody(
-        `AUTH_SESSION_UNAVAILABLE: não foi possível verificar a sessão agora (banco indisponível). SERVICE_UNAVAILABLE: o banco caiu depois da sessão conferida (traz \`requestId\`). ${SERVICE_BUSY_DESCRIPTION} Transitório: espere o \`retry-after\` e repita; numa escrita, com o mesmo \`Idempotency-Key\`. NÃO é logout — não descarte a sessão.`,
+        `AUTH_SESSION_UNAVAILABLE: não foi possível verificar a sessão agora (banco indisponível). SERVICE_UNAVAILABLE: o banco caiu depois da sessão conferida (traz \`requestId\`). ${SERVICE_BUSY_DESCRIPTION} ${LOAD_SHED_NOTE} Transitório: espere o \`retry-after\` e repita; numa escrita, com o mesmo \`Idempotency-Key\`. NÃO é logout — não descarte a sessão.`,
         ["AUTH_SESSION_UNAVAILABLE", "SERVICE_UNAVAILABLE", "SERVICE_BUSY"],
         { "retry-after": RETRY_AFTER_HEADER },
       ),
@@ -1040,6 +1045,33 @@ function openapiTransform(input: TransformInput): {
         ["EXPORT_BUSY"],
         { "retry-after": RETRY_AFTER_HEADER },
       ),
+    );
+  }
+
+  // Load shedding (shared/http/load-shedding.ts): with SHED_MODE=enforce a
+  // pressed replica answers any route that is not critical with 503
+  // SERVICE_BUSY before anything runs. Merged last, and only into a 503
+  // that does not name SERVICE_BUSY yet: one that does (the session's, the
+  // API key's) already tells the client to wait for Retry-After, and the
+  // public reference does not change.
+  const unavailable = responses["503"];
+
+  if (
+    config.shedClass &&
+    config.shedClass !== "critical" &&
+    !(
+      unavailable &&
+      `${descriptionOf(unavailable)} ${codeDescriptionOf(unavailable) ?? ""}`.includes(
+        "SERVICE_BUSY",
+      )
+    )
+  ) {
+    mergeResponse(
+      responses,
+      "503",
+      errorBody(LOAD_SHED_DESCRIPTION, ["SERVICE_BUSY"], {
+        "retry-after": RETRY_AFTER_HEADER,
+      }),
     );
   }
 

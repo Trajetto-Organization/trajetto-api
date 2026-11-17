@@ -4144,15 +4144,15 @@ não mudou de formato. O `pg` ignora os parâmetros do Prisma 6, então
 `src/shared/database/pool-config.ts` lê cada um e os entrega ao pool de forma
 explícita:
 
-| Parâmetro                      | Valor                                                                                 | Vira no `pg`                         | Por quê                                                                                                                                                                                   |
-| ------------------------------ | ------------------------------------------------------------------------------------- | ------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `connection_limit`             | 10                                                                                    | `max` do Pool                        | pool por réplica; orçamento: réplicas × (10 + 1 da readiness) + migrations (2) + ferramentas < `max_connections`                                                                          |
-| `pool_timeout`                 | 20 s                                                                                  | `connectionTimeoutMillis` do Pool    | espera por uma conexão livre; estourou, a requisição falha com 503 + Retry-After em vez de esperar para sempre (sem o parâmetro, 10 s, o padrão do Prisma 6)                              |
-| `connect_timeout`              | 5 s                                                                                   | `connectionTimeoutMillis` do Client  | abrir uma conexão nova; o `pg-pool` também limita a abertura pelo `pool_timeout`, então vale o menor dos dois, como no Prisma 6 (o `pool_timeout` cobria a espera e a abertura)           |
-| `socket_timeout`               | 60 s                                                                                  | `query_timeout` do Client            | uma query sem resposta falha (503 + Retry-After) e a conexão dela é fechada; acima do `statement_timeout` para um servidor vivo responder antes                                           |
-| `max_idle_connection_lifetime` | 300 s                                                                                 | `idleTimeoutMillis` do Pool          | conexão ociosa há 5 min é fechada; o IPVS do Swarm esquece um fluxo ocioso aos 900 s, e escrever num fluxo esquecido trava sem erro (sem o parâmetro, 300 s; o padrão do `pg` seria 10 s) |
-| `options`                      | `statement_timeout=30s`, `lock_timeout=5s`, `idle_in_transaction_session_timeout=60s` | enviado na conexão, + `TimeZone=UTC` | tetos do lado do servidor; e a sessão sempre em UTC, que o pool acrescenta no fim (sem `options` na URL, vai só ele), a menos que a própria URL defina `TimeZone` (parágrafo abaixo)      |
-| `schema`                       | `public`                                                                              | opção `schema` do adapter            | o schema das queries                                                                                                                                                                      |
+| Parâmetro                      | Valor                                                                                 | Vira no `pg`                         | Por quê                                                                                                                                                                                                                                                                                         |
+| ------------------------------ | ------------------------------------------------------------------------------------- | ------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `connection_limit`             | 10                                                                                    | `max` do Pool                        | pool por réplica; orçamento: réplicas × (10 + 1 da readiness) + migrations (2) + ferramentas < `max_connections`                                                                                                                                                                                |
+| `pool_timeout`                 | 5 s                                                                                   | `connectionTimeoutMillis` do Pool    | espera por uma conexão livre; estourou, a requisição falha com 503 + Retry-After em vez de esperar para sempre (sem o parâmetro, 10 s, o padrão do Prisma 6). Era 20 s até o descarte de carga (plano de escala F2-24): com o pool cheio, 5 s devolvem a resposta antes de a fila atrás crescer |
+| `connect_timeout`              | 5 s                                                                                   | `connectionTimeoutMillis` do Client  | abrir uma conexão nova; o `pg-pool` também limita a abertura pelo `pool_timeout`, então vale o menor dos dois (hoje iguais), como no Prisma 6 (o `pool_timeout` cobria a espera e a abertura)                                                                                                   |
+| `socket_timeout`               | 60 s                                                                                  | `query_timeout` do Client            | uma query sem resposta falha (503 + Retry-After) e a conexão dela é fechada; acima do `statement_timeout` para um servidor vivo responder antes                                                                                                                                                 |
+| `max_idle_connection_lifetime` | 300 s                                                                                 | `idleTimeoutMillis` do Pool          | conexão ociosa há 5 min é fechada; o IPVS do Swarm esquece um fluxo ocioso aos 900 s, e escrever num fluxo esquecido trava sem erro (sem o parâmetro, 300 s; o padrão do `pg` seria 10 s)                                                                                                       |
+| `options`                      | `statement_timeout=30s`, `lock_timeout=5s`, `idle_in_transaction_session_timeout=60s` | enviado na conexão, + `TimeZone=UTC` | tetos do lado do servidor; e a sessão sempre em UTC, que o pool acrescenta no fim (sem `options` na URL, vai só ele), a menos que a própria URL defina `TimeZone` (parágrafo abaixo)                                                                                                            |
+| `schema`                       | `public`                                                                              | opção `schema` do adapter            | o schema das queries                                                                                                                                                                                                                                                                            |
 
 O `keepAlive` do TCP fica ligado (com o tempo do sistema), como no driver do
 Prisma 6. Provas: `tests/unitaires/database/pool-config.test.ts` (o mapeamento
@@ -4789,6 +4789,29 @@ orçamento de statements do envio não muda (o E2E
 `driver-positions-statement-budget` confere). O campo é opcional no schema:
 a réplica anterior de um rolling deploy não o manda, e o app trata a
 ausência como o intervalo dele.
+
+**Descarte de carga** (`src/shared/http/load-shedding.ts` e
+`src/shared/http/shed-classes.ts`, F2-24): o `@fastify/under-pressure` fica
+registrado uma vez, com os limiares mais baixos (laço de eventos acima de
+95% de utilização ou com mais de 300 ms de atraso, ou mais pedidos esperando
+conexão do banco do que o pool tem, conferido a cada segundo), e chama o
+tratador para toda requisição que chega com a réplica assim. Quem decide é a
+classe da rota, gravada em `config.shedClass` quando a rota é registrada: o
+grupo de `route-groups.ts` dá a classe, com exceções escritas à mão.
+`critical` sempre passa (os envios do motorista, as fotos deles, o refresh,
+o logout, a revogação, o catálogo público, que é um documento fixo, e o
+`/health/*`); `deferrable` é recusado já no
+primeiro limiar (as posições, a torre e o painel, as exportações);
+`interactive`, o resto, só acima de 98% ou de 1 s de atraso. O pool cheio
+sozinho só recusa o que pode esperar: o resto espera o `pool_timeout` (5 s)
+e recebe o próprio 503, como antes. Com `SHED_MODE=observe` (o padrão) nada
+é recusado: o tratador só conta o que o `enforce` recusaria, por grupo de
+rota, na seção `shedding` do `/health/metrics` e do `ops_sample`. No
+`enforce`, a recusa é 503 `SERVICE_BUSY` com `Retry-After` de 5 s (120 s nas
+posições), antes do limitador, da sessão e de qualquer consulta, e com o
+`x-request-id`. As posições só contam, em qualquer modo, até o app novo
+estar na frota (F2-25). O `/docs` e a referência pública ficam de fora: são
+registrados antes do plugin e já têm limite e cache.
 
 **Régua de rampa** (`src/shared/health/volume-gauge.ts`, U-12): cada
 processo conta as entregas que criou, **depois** do commit da transação que

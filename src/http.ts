@@ -14,6 +14,7 @@ import fastify, {
 
 import fastifyRateLimit from "@fastify/rate-limit";
 import fastifyCompress from "@fastify/compress";
+import fastifyUnderPressure from "@fastify/under-pressure";
 
 import fastifyStatic from "@fastify/static";
 
@@ -118,6 +119,12 @@ import {
   clientVersionForLog,
 } from "./shared/http/client-version";
 import { recordHttpResponse } from "./shared/health/http-metrics";
+import {
+  loadSheddingOptions,
+  pressureSignals,
+} from "./shared/http/load-shedding";
+import { shedClassOf, type ShedClass } from "./shared/http/shed-classes";
+import { databasePool } from "@/../infra/database";
 
 const app = fastify({
   // The process's one logger (LOG_LEVEL, same format as the workers'). The
@@ -377,6 +384,30 @@ Object.assign(moveRateLimiterFirst, { [Symbol.for("skip-override")]: true });
 
 app.register(moveRateLimiterFirst);
 
+/**
+ * Load shedding, part 1 (plano-escala F2-24): each route carries its class
+ * in `config.shedClass`, decided here when it is registered
+ * (shared/http/shed-classes.ts) unless the route declares one. A new
+ * object, never the route's own: a config shared by several routes must
+ * not take the class of the first. The plugin itself is registered further
+ * down, after the request id.
+ */
+app.addHook("onRoute", (routeOptions) => {
+  const declared = (
+    routeOptions.config as { shedClass?: ShedClass } | undefined
+  )?.shedClass;
+  const methods = Array.isArray(routeOptions.method)
+    ? routeOptions.method
+    : [routeOptions.method];
+
+  routeOptions.config = {
+    ...routeOptions.config,
+    shedClass:
+      declared ??
+      shedClassOf(String(methods[0]).toUpperCase(), routeOptions.url),
+  };
+});
+
 /*
   Below the limiter, and that is the whole point — see the comment on the
   register right after this one. Registered above it, the /docs routes were
@@ -595,6 +626,23 @@ app.addHook(
   "onRequest",
   clientUpgradeGate(env.MIN_MOBILE_CONTRACT, env.MOBILE_STORE_URL),
 );
+
+/**
+ * Load shedding, part 2 (plano-escala F2-24, shared/http/load-shedding.ts).
+ *
+ * Fastify keeps hooks and plugins in the order they are written, so the
+ * plugin's onRequest runs here: after the request id (a refusal carries it,
+ * like every other) and the version gate (an old build is still told to
+ * update), and before the routes' own hooks — a shed request costs no
+ * rate-limit round trip, no session lookup and no query. The /docs pages
+ * and the public reference, registered above, are never shed: they are
+ * rate limited and read no table. `SHED_MODE=observe` (the default) never
+ * refuses anything.
+ */
+pressureSignals.pool = databasePool;
+pressureSignals.databaseUrl = process.env.DATABASE_URL;
+
+app.register(fastifyUnderPressure, loadSheddingOptions());
 
 // Every finished response, refusals and 404s included: the status class, the
 // latency per route group and, on POST /route/positions, the app contract

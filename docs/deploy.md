@@ -1220,7 +1220,7 @@ pipeline avisa "deploy de trajetto-ai pulado" e segue).
    NODE_OPTIONS=--max-old-space-size=768
    LOG_LEVEL=info
 
-   DATABASE_URL=postgresql://trajetto:<SENHA_DO_POSTGRES>@trajetto-postgres-production:5432/trajetto?schema=public&connection_limit=10&pool_timeout=20&connect_timeout=5&socket_timeout=60&max_idle_connection_lifetime=300&options=-c%20statement_timeout%3D30000%20-c%20lock_timeout%3D5000%20-c%20idle_in_transaction_session_timeout%3D60000
+   DATABASE_URL=postgresql://trajetto:<SENHA_DO_POSTGRES>@trajetto-postgres-production:5432/trajetto?schema=public&connection_limit=10&pool_timeout=5&connect_timeout=5&socket_timeout=60&max_idle_connection_lifetime=300&options=-c%20statement_timeout%3D30000%20-c%20lock_timeout%3D5000%20-c%20idle_in_transaction_session_timeout%3D60000
    ALLOW_EMPTY_DATABASE_BOOTSTRAP=false
    RUN_MIGRATIONS_ON_BOOT=false
 
@@ -1954,7 +1954,7 @@ formato é o mesmo de hoje, trocando só o usuário, a senha e o
 `connection_limit`:
 
 ```
-DATABASE_URL=postgresql://trajetto_http:<SENHA>@trajetto-postgres-production:5432/trajetto?schema=public&connection_limit=10&pool_timeout=20&connect_timeout=5&socket_timeout=60&max_idle_connection_lifetime=300&options=-c%20statement_timeout%3D30000%20-c%20lock_timeout%3D5000%20-c%20idle_in_transaction_session_timeout%3D60000
+DATABASE_URL=postgresql://trajetto_http:<SENHA>@trajetto-postgres-production:5432/trajetto?schema=public&connection_limit=10&pool_timeout=5&connect_timeout=5&socket_timeout=60&max_idle_connection_lifetime=300&options=-c%20statement_timeout%3D30000%20-c%20lock_timeout%3D5000%20-c%20idle_in_transaction_session_timeout%3D60000
 BATCH_DATABASE_URL=postgresql://trajetto_batch:<SENHA>@trajetto-postgres-production:5432/trajetto?schema=public&connection_limit=3
 ```
 
@@ -4395,7 +4395,11 @@ e do 426 do portão de versão, nunca de um 401
 (`src/shared/health/http-metrics.ts`), e a seção `deliveries`: as entregas
 que o processo criou no minuto (`created`), contadas depois de cada commit
 (criação no painel, pela integração, planilha e XML;
-`src/shared/health/volume-gauge.ts`). As colunas dizem de quem é a
+`src/shared/health/volume-gauge.ts`), e a seção `shedding`: as requisições
+que chegaram com a réplica ocupada (`under_pressure`, e o que estava ocupado
+em `reasons`) e, por grupo de rota, o que o descarte de carga recusou
+(`shed`) ou recusaria no `SHED_MODE=observe` (`would_shed`;
+`src/shared/http/load-shedding.ts`). As colunas dizem de quem é a
 linha: `role` (`all` com `WORKERS_ENABLED=true`, `http` com `false`),
 `replica` (o hostname do contêiner, mais `/<slot>` com `SWARM_TASK_SLOT`) e
 `commit`. Com as variáveis de identidade do Swarm no _Environment_ da

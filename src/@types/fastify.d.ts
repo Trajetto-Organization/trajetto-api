@@ -6,6 +6,7 @@ import type { ZodType } from "zod";
 import { UserRole } from "@/modules/user/dtos/user-dto";
 import { PermissionKey } from "@/config/permissions";
 import type { AccessClaims } from "@/shared/auth/access-token-once";
+import type { ShedClass } from "@/shared/http/shed-classes";
 
 interface Permission {
   permissionKey: string;
@@ -28,6 +29,12 @@ declare module "fastify" {
    * route accepts. `module` is set by `requireModuleForPlugin`.
    */
   interface FastifyContextConfig {
+    /**
+     * Whether a pressed replica may refuse the route (plano-escala F2-24).
+     * Set for every route at registration (src/http.ts, onRoute) from
+     * shared/http/shed-classes.ts; a route may declare its own.
+     */
+    shedClass?: ShedClass;
     openapi?: {
       body?: ZodType;
       headers?: ZodType;

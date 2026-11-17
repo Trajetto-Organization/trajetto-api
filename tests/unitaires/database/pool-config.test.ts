@@ -33,13 +33,20 @@ describe("the production runtime DATABASE_URL", () => {
     expect(settings.max).toBe(10);
   });
 
+  // 5 s since the load shedding (plano-escala F2-24); it was 20 s. A request
+  // that finds the pool full gets its 503 with Retry-After at once instead of
+  // holding the client while the queue behind it grows.
   it("fails a request that waits pool_timeout for a connection, instead of waiting forever", () => {
-    expect(settings.poolTimeoutMs).toBe(20_000);
+    expect(settings.poolTimeoutMs).toBe(5_000);
   });
 
-  it("gives up on opening a connection after connect_timeout, inside pool_timeout (which bounds it too)", () => {
+  // Equal since pool_timeout went to 5 s: the opening gives up at the smaller
+  // of the two, and either way within 5 s.
+  it("gives up on opening a connection after connect_timeout, within pool_timeout (which bounds it too)", () => {
     expect(settings.connectTimeoutMs).toBe(5_000);
-    expect(settings.connectTimeoutMs).toBeLessThan(settings.poolTimeoutMs);
+    expect(settings.connectTimeoutMs).toBeLessThanOrEqual(
+      settings.poolTimeoutMs,
+    );
   });
 
   it("bounds a query that never gets an answer by socket_timeout", () => {

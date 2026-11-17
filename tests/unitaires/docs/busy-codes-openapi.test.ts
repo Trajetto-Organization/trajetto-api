@@ -219,6 +219,9 @@ describe("every ServiceBusyError code", () => {
         "ADDRESS_SEARCH_DISABLED",
         "ADDRESS_SEARCH_UNAVAILABLE",
         "ADDRESS_SEARCH_DAILY_LIMIT",
+        // Load shedding (plano-escala F2-24): the same code the database's
+        // lock and statement ceilings answer with.
+        "SERVICE_BUSY",
       ]),
     );
 

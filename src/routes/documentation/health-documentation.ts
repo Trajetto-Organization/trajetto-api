@@ -1073,6 +1073,45 @@ const healthResponses = {
       .describe(
         "Requisições HTTP desta réplica: classes de status, latência por grupo de rota e contratos do app nas posições. Por réplica, como `runtime`; as linhas de ops_sample trazem todas.",
       ),
+    // plano-escala F2-24. Optional: an API that predates it, still answering
+    // during a rolling deploy, sends none.
+    shedding: z
+      .object({
+        window_seconds: z
+          .number()
+          .describe(
+            "Segundos que a janela cobre: até um minuto, quando a linha de ops_sample a zera.",
+          ),
+        mode: z
+          .enum(["observe", "enforce"])
+          .describe(
+            "SHED_MODE: `observe` só conta; `enforce` recusa com 503 SERVICE_BUSY e Retry-After.",
+          ),
+        under_pressure: z
+          .number()
+          .describe(
+            "Requisições que chegaram com a réplica ocupada: laço de eventos acima de 95% ou com mais de 300 ms de atraso, ou mais pedidos esperando conexão do banco do que o pool tem.",
+          ),
+        reasons: z
+          .record(z.string(), z.number())
+          .describe(
+            "O que estava ocupado, por requisição: `elu` (utilização do laço de eventos), `lag` (atraso do laço) e `pool` (fila do pool do banco). Uma requisição pode contar em mais de um.",
+          ),
+        would_shed: z
+          .record(z.string(), z.number())
+          .describe(
+            "Por grupo de rota: o que o enforce teria recusado e passou (o modo observe, e as posições até a adoção do contrato do app).",
+          ),
+        shed: z
+          .record(z.string(), z.number())
+          .describe(
+            "Por grupo de rota: o que foi recusado com 503 SERVICE_BUSY.",
+          ),
+      })
+      .optional()
+      .describe(
+        "Descarte de carga desta réplica (src/shared/http/load-shedding.ts), por réplica, como `http`; as linhas de ops_sample trazem todas.",
+      ),
     // plano-escala F1-22. Optional: an API that predates it, still answering
     // during a rolling deploy, sends none.
     volume: z

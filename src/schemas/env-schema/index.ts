@@ -1126,6 +1126,19 @@ const envSchema = z
     ),
 
     /**
+     * Load shedding (plano-escala F2-24, shared/http/load-shedding.ts): what
+     * a pressed replica does with the requests it could turn away. `observe`
+     * (the default) only counts them in the `shedding` section of
+     * /health/metrics and of the ops_sample row; `enforce` answers them 503
+     * SERVICE_BUSY with Retry-After. Observe first, for seven days: a wrong
+     * class would refuse real work. Empty counts as absent.
+     */
+    SHED_MODE: z.preprocess(
+      (value) => (value === "" ? undefined : value),
+      z.enum(["observe", "enforce"]).default("observe"),
+    ),
+
+    /**
      * How often each replica re-checks, in the database, the sessions of its
      * sockets (±25% jitter). The safety net of revocation: the frame that
      * drops a socket travels through Redis and is lost if Redis blinks, so

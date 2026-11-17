@@ -33,6 +33,7 @@ import {
   withClusterSample,
 } from "@/shared/health/database-metrics";
 import { httpMetrics } from "@/shared/health/http-metrics";
+import { shedMetrics } from "@/shared/http/load-shedding";
 import { alertThresholdsFromEnv } from "@/shared/health/alert-rules";
 import {
   readLatestTotals,
@@ -323,6 +324,10 @@ async function collectOperationalMetrics() {
     // positions' contracts (plano-escala F1-09) — per replica, like
     // `runtime`; the ops_sample rows carry every replica's.
     http: httpMetrics.snapshot(),
+    // What load shedding refused, or would have refused in observe, since
+    // the ops_sample row of the last minute (plano-escala F2-24): per
+    // replica, like `http`.
+    shedding: shedMetrics.snapshot(),
     // The newest quarter-hour sums of the cluster rows against the approved
     // gate (plano-escala F1-22): what the volume-near-gate alert judges.
     volume,
