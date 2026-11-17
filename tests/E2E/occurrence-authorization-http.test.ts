@@ -1457,9 +1457,15 @@ describe("who files a request, and when its attempt is over (review r1)", () => 
 
     expect(after.status).toBe("PENDING");
     expect(await webhooksAbout(deliveryId, "delivery.failed")).toHaveLength(0);
+    // No one moved its status: the only line is the route's own, the load
+    // back to the base when it was cancelled (F2-06).
     expect(
       await prisma.deliveryEvent.count({
-        where: { deliveryId, type: "STATUS_CHANGE" },
+        where: {
+          deliveryId,
+          type: "STATUS_CHANGE",
+          actor: { not: "SYSTEM" },
+        },
       }),
     ).toBe(0);
   });

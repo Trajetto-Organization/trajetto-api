@@ -105,6 +105,8 @@ interface OperationRows {
     occurrenceId: string | null;
     type: string;
     actor: string;
+    /** Optional so the fixtures written before F2-06 still type-check. */
+    status_from?: DeliveryStatusName | null;
     status_to: DeliveryStatusName | null;
     occurred_at: Date | null;
     created_at: Date;
@@ -549,7 +551,16 @@ class InMemoryOperationDayRepository implements IOperationDayRepository {
           event.businessId === businessId &&
           isWithinDay(event.created_at, day) &&
           // The real query's `type NOT IN` (decision 14.7).
-          !(PLANNING_EVENT_TYPES as readonly string[]).includes(event.type),
+          !(PLANNING_EVENT_TYPES as readonly string[]).includes(event.type) &&
+          // And its NOT on the status lines a delivery gets by itself
+          // (F2-06): its creation, and a route's SYSTEM moves.
+          !(
+            event.type === "STATUS_CHANGE" &&
+            // An explicit null: a fixture that leaves the key out is an
+            // older line with a status it came from.
+            ((event.status_from === null && event.status_to === "PENDING") ||
+              event.actor === "SYSTEM")
+          ),
       ),
     );
 

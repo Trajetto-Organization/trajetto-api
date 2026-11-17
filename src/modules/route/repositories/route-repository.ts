@@ -19,6 +19,8 @@ import {
   type RouteStopStatus,
 } from "@/shared/route/route-rules";
 import { resolveTimeZone } from "@/shared/time/business-day";
+import { utcInstant } from "@/shared/database/utc-instant";
+import type { DeliveryStatus } from "@/shared/delivery/delivery-rules";
 import { routeClosedWithPendingNote } from "@/shared/route/route-left-open";
 import { assignStopGroupKeys } from "@/shared/delivery/stop-group";
 import { deliveryAddressKey } from "@/shared/delivery/address-key";
@@ -1581,13 +1583,9 @@ class RouteRepository implements IRouteRepository {
       // pool it came from. Only IN_TRANSIT moves: a delivery the dispatcher
       // had already cancelled stays cancelled, and one still PENDING never
       // left.
-      await tx.delivery.updateMany({
-        where: {
-          id: { in: openDeliveryIds },
-          businessId: route.businessId,
-          status: "IN_TRANSIT",
-        },
-        data: { status: "PENDING" },
+      await this.moveDeliveryStatus(tx, route, openDeliveryIds, {
+        from: "IN_TRANSIT",
+        to: "PENDING",
       });
 
       await tx.delivery.updateMany({
@@ -1613,15 +1611,60 @@ class RouteRepository implements IRouteRepository {
     // the filter is what makes a re-run of the departure a no-op rather than
     // a load dragged back onto the street.
     if (route.status === "IN_PROGRESS") {
-      await tx.delivery.updateMany({
-        where: {
-          id: { in: openDeliveryIds },
-          businessId: route.businessId,
-          status: "PENDING",
-        },
-        data: { status: "IN_TRANSIT" },
+      await this.moveDeliveryStatus(tx, route, openDeliveryIds, {
+        from: "PENDING",
+        to: "IN_TRANSIT",
       });
     }
+  }
+
+  /**
+   * A status the route moves for its deliveries, with its line on each trail
+   * (plano-escala F2-06): `UPDATE … RETURNING id`, then one SYSTEM
+   * STATUS_CHANGE per row that moved, in one insert, in the same commit.
+   *
+   * The departure was an updateMany that only said how many moved, so the
+   * load went "Em rota" with no line: the trail's last status disagreed with
+   * the row, and the integration feed never said `delivery.in_transit`. Only
+   * the rows the UPDATE matched get a line — one already resolved, or
+   * cancelled while its stop waited, did not move and says nothing.
+   *
+   * Raw because RETURNING is: the status filter in the `where` keeps it the
+   * conditional write it was, and the tenant is said again.
+   */
+  private async moveDeliveryStatus(
+    tx: Prisma.TransactionClient | typeof database,
+    route: Pick<Route, "id" | "businessId">,
+    deliveryIds: string[],
+    { from, to }: { from: DeliveryStatus; to: DeliveryStatus },
+  ): Promise<string[]> {
+    if (deliveryIds.length === 0) return [];
+
+    const moved = await tx.$queryRaw<Array<{ id: string }>>`
+      UPDATE "delivery"
+         SET "status" = ${to}::"DeliveryStatus",
+             "updated_at" = ${utcInstant(new Date())}
+       WHERE "id" IN (${Prisma.join(deliveryIds)})
+         AND "businessId" = ${route.businessId}
+         AND "status" = ${from}::"DeliveryStatus"
+      RETURNING "id"
+    `;
+
+    if (moved.length === 0) return [];
+
+    await tx.deliveryEvent.createMany({
+      data: moved.map(({ id }) => ({
+        type: "STATUS_CHANGE" as const,
+        deliveryId: id,
+        businessId: route.businessId,
+        routeId: route.id,
+        status_from: from,
+        status_to: to,
+        actor: "SYSTEM" as const,
+      })),
+    });
+
+    return moved.map(({ id }) => id);
   }
 
   /**
@@ -1934,17 +1977,22 @@ class RouteRepository implements IRouteRepository {
       // PENDING delivery on a running route is refused at arrival and proof.
       const mirrored = await tx.delivery.updateMany({
         where: { id: { in: deliveryIds }, businessId, status: "PENDING" },
-        data: {
-          driverId: route.driverId,
-          vehicleId: route.vehicleId,
-          ...(route.status === "IN_PROGRESS" && {
-            status: "IN_TRANSIT" as const,
-          }),
-        },
+        data: { driverId: route.driverId, vehicleId: route.vehicleId },
       });
 
       if (mirrored.count !== new Set(deliveryIds).size) {
         throw new DeliveryNoLongerRoutableError();
+      }
+
+      // The status apart, so each one that left gets its line (F2-06). The
+      // rows are this transaction's since the write above: all of them move.
+      if (route.status === "IN_PROGRESS") {
+        await this.moveDeliveryStatus(
+          tx,
+          { id: routeId, businessId },
+          deliveryIds,
+          { from: "PENDING", to: "IN_TRANSIT" },
+        );
       }
 
       const planVersion = await this.bumpPlanVersion(tx, routeId);

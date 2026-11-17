@@ -94,6 +94,9 @@ interface EventSource {
   /** INTEGRATION (L9): the API key that acted, named in place of a person. */
   apiKey?: { name: string } | null;
 
+  /** The route it happened on, by number: "Saiu para entrega (Rota 12)". */
+  route?: { code: number } | null;
+
   /** OCCURRENCE (TWR-6): the occurrence row this event records. */
   occurrenceId?: string | null;
 }
@@ -149,6 +152,22 @@ function titleForEvent(event: EventSource): string {
         : "Entrega comprovada";
 
     case "STATUS_CHANGE": {
+      // The lines a delivery gets by itself (F2-06), said as what happened
+      // rather than as a status pair: where it began, and the departure.
+      if (!event.status_from && event.status_to === "PENDING") {
+        return "Entrega criada";
+      }
+
+      if (
+        event.actor === "SYSTEM" &&
+        event.status_from === "PENDING" &&
+        event.status_to === "IN_TRANSIT"
+      ) {
+        return event.route
+          ? `Saiu para entrega (Rota ${event.route.code})`
+          : "Saiu para entrega";
+      }
+
       const from = event.status_from
         ? DELIVERY_STATUS_LABELS[event.status_from]
         : "—";

@@ -21,6 +21,7 @@ import type { OutboxService } from "@/shared/notifications/outbox-service";
 import type { User } from "@/modules/user/dtos/user-dto";
 import type { CreateDeliveryProps } from "@/modules/delivery/dtos/delivery-dto";
 import type { OccurrenceType } from "@/modules/occurrence-type/dtos/occurrence-type-dto";
+import { withoutCreationLine } from "../../support/status-trail";
 
 /**
  * One submission key, one fact (item K13).
@@ -195,7 +196,9 @@ describe("an arrival key", () => {
 
     // The second delivery has no arrival: nothing pretended it had one.
     expect(
-      context.deliveries.events.filter((e) => e.deliveryId === second),
+      withoutCreationLine(context.deliveries.events).filter(
+        (e) => e.deliveryId === second,
+      ),
     ).toHaveLength(0);
   });
 

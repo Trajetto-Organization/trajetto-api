@@ -16,6 +16,7 @@ import { DeliveryStatus } from "@/shared/delivery/delivery-rules";
 import { refreshStopGroupKeysOfDelivery } from "@/shared/delivery/stop-group";
 import { openStopsOnRoutesLeftOpen } from "@/shared/route/routes-left-open-query";
 import { notOnAnOpenStop } from "@/shared/route/open-stop-anti-join";
+import { utcInstant } from "@/shared/database/utc-instant";
 import type { OperationDay } from "@/modules/route/repositories/IOperation-day-repository";
 
 import {
@@ -28,6 +29,8 @@ import {
   CreateDeliveryEventProps,
   DeliveryEventRecord,
   DeliveryItemInput,
+  DepartedDelivery,
+  DepartureHook,
   ListOccurrencesProps,
   ListOccurrencesResult,
   OccurrenceAuthorizationStatus,
@@ -293,7 +296,7 @@ class DeliveryRepository implements IDeliveryRepository {
             ? found
             : null;
 
-      return client.delivery.create({
+      const created = await client.delivery.create({
         data: {
           ...delivery,
           code: delivery.code || null,
@@ -314,6 +317,24 @@ class DeliveryRepository implements IDeliveryRepository {
             }),
         },
       });
+
+      // The trail starts where the delivery does (plano-escala F2-06): a
+      // STATUS_CHANGE from nothing, so every status the row ever had has
+      // its line and the last line always says the status it has. By the
+      // key that created it, or the panel (an import is a panel action).
+      await client.deliveryEvent.create({
+        data: {
+          type: "STATUS_CHANGE",
+          deliveryId: created.id,
+          businessId: created.businessId,
+          status_from: null,
+          status_to: created.status,
+          actor: created.apiKeyId ? "INTEGRATION" : "USER",
+          apiKeyId: created.apiKeyId ?? null,
+        },
+      });
+
+      return created;
     };
 
     // Every caller in the code brings its transaction (the row and its
@@ -679,7 +700,7 @@ class DeliveryRepository implements IDeliveryRepository {
       ),
     ]);
 
-    const [reasons, apiKeys, occurrenceTypes] = await Promise.all([
+    const [reasons, apiKeys, occurrenceTypes, routes] = await Promise.all([
       rowsByKey(
         events.map((event) => event.reasonId),
         (ids) =>
@@ -716,6 +737,16 @@ class DeliveryRepository implements IDeliveryRepository {
             },
           }),
       ),
+      // The route an event happened on, by its number: "Saiu para entrega
+      // (Rota 12)" (F2-06). The delivery's company, said again.
+      rowsByKey(
+        events.map((event) => event.routeId),
+        (ids) =>
+          this.prisma.route.findMany({
+            where: { id: { in: ids }, businessId: row.businessId },
+            select: { id: true, code: true },
+          }),
+      ),
     ]);
 
     return {
@@ -727,6 +758,7 @@ class DeliveryRepository implements IDeliveryRepository {
         reportedBy: relatedTo(people, event.reportedById),
         reason: relatedTo(reasons, event.reasonId),
         apiKey: relatedTo(apiKeys, event.apiKeyId),
+        route: relatedTo(routes, event.routeId),
       })),
       occurrences: occurrences.map((occurrence) => ({
         ...occurrence,
@@ -1416,22 +1448,65 @@ class DeliveryRepository implements IDeliveryRepository {
     businessId: string,
     driverId: string,
     createdUpTo?: Date,
+    onStarted?: DepartureHook,
   ): Promise<number> {
-    // Naturally idempotent: a resend finds nothing left to move. A tap sent
-    // late moves only what existed when it was made (MOB-08): the batch is
-    // picked now, and a delivery created since was never on the phone.
-    const result = await this.prisma.delivery.updateMany({
-      where: {
-        businessId,
-        driverId,
-        status: "PENDING",
-        ...notOnARoute(businessId),
-        ...(createdUpTo && { created_at: { lte: createdUpTo } }),
-      },
-      data: { status: "IN_TRANSIT" },
-    });
+    const run = async (tx: Prisma.TransactionClient) => {
+      // Naturally idempotent: a resend finds nothing left to move. A tap
+      // sent late moves only what existed when it was made (MOB-08): the
+      // batch is picked now, and a delivery created since was never on the
+      // phone.
+      //
+      // RETURNING (plano-escala F2-06): the rows that moved, for their
+      // STATUS_CHANGE lines and webhooks in this same commit — updateMany
+      // only said how many. Raw, so the "not on a route" test is the
+      // correlated NOT EXISTS over the company's open routes, with the
+      // statuses spelled out (notOnAnOpenStop is the Prisma form of it).
+      const moved = await tx.$queryRaw<DepartedDelivery[]>`
+        UPDATE "delivery" d
+           SET "status" = 'IN_TRANSIT', "updated_at" = ${utcInstant(new Date())}
+         WHERE d."businessId" = ${businessId}
+           AND d."driverId" = ${driverId}
+           AND d."status" = 'PENDING'
+           ${
+             createdUpTo
+               ? Prisma.sql`AND d."created_at" <= ${utcInstant(createdUpTo)}`
+               : Prisma.empty
+           }
+           AND NOT EXISTS (
+             SELECT 1
+               FROM "route_stop" s
+               JOIN "route" r ON r."id" = s."routeId"
+              WHERE s."deliveryId" = d."id"
+                AND s."status" IN ('PENDING', 'ARRIVED')
+                AND r."businessId" = ${businessId}
+                AND r."status" IN ('PLANNED', 'RELEASED', 'IN_PROGRESS')
+           )
+        RETURNING d."id", d."businessId", d."code", d."invoice_key",
+                  d."invoice_number", d."recipient_name", d."city", d."uf",
+                  d."status"::text AS "status"
+      `;
 
-    return result.count;
+      if (moved.length === 0) return 0;
+
+      await tx.deliveryEvent.createMany({
+        data: moved.map((delivery) => ({
+          type: "STATUS_CHANGE" as const,
+          deliveryId: delivery.id,
+          businessId,
+          status_from: "PENDING" as const,
+          status_to: "IN_TRANSIT" as const,
+          actor: "SYSTEM" as const,
+          // The tap's moment, for one the app queued offline.
+          occurred_at: createdUpTo ?? null,
+        })),
+      });
+
+      await onStarted?.(moved, tx);
+
+      return moved.length;
+    };
+
+    return this.prisma.$transaction(run);
   }
 
   async findEventBySubmissionId(

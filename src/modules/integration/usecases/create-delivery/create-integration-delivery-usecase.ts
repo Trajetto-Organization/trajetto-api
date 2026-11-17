@@ -72,10 +72,11 @@ interface CreateIntegrationDeliveryResult {
  * index (of what an API key created, never of a panel submission), and the
  * row and its `delivery.created` in one transaction.
  *
- * What marks the origin is the row's `apiKeyId`. The panel's create writes
- * no DeliveryEvent (there is no "created" event type), and neither does this:
- * a NOTE would surface in the event feed as `delivery.note`, a fact that did
- * not happen.
+ * What marks the origin is the row's `apiKeyId`. The repository's create
+ * writes the trail's first line, a STATUS_CHANGE from nothing to PENDING by
+ * this key (F2-06), which the event feed shows as `delivery.created`; this
+ * use case writes no other event (a NOTE would surface as `delivery.note`,
+ * a fact that did not happen).
  */
 @injectable()
 class CreateIntegrationDeliveryUseCase {

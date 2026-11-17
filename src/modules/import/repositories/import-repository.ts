@@ -135,11 +135,14 @@ const IMPORT_SUMMARY_COLUMNS = {
 /**
  * A delivery event that means somebody worked the delivery: every type but
  * the plan's own ROUTE_ADDED, which the upload writes for the routes it
- * builds (PLAN_ONLY_EVENT_TYPES). The same filter in the route decision, the
- * batch's count and the delete's re-check, so the three cannot disagree.
+ * builds (PLAN_ONLY_EVENT_TYPES), and the creation line every delivery
+ * starts with (F2-06), which the upload itself wrote. The same filter in the
+ * route decision, the batch's count and the delete's re-check, so the three
+ * cannot disagree.
  */
 const WORKED_EVENT = {
   type: { notIn: [...PLAN_ONLY_EVENT_TYPES] },
+  NOT: { type: "STATUS_CHANGE", status_from: null, status_to: "PENDING" },
 } satisfies Prisma.DeliveryEventWhereInput;
 
 class ImportRepository implements IImportRepository {

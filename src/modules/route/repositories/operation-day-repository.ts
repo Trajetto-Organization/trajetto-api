@@ -421,6 +421,14 @@ class OperationDayRepository implements IOperationDayRepository {
         // on the street (decision 14.7): the planning lines stay in the
         // delivery's own timeline, out of the tower's feed.
         type: { notIn: [...PLANNING_EVENT_TYPES] },
+        // Nor the status lines a delivery gets by itself (F2-06): its
+        // creation, and what a route's departure or ending moved. The route
+        // has its own line ("Rota N iniciada"); fifty of these would push
+        // every fact of the street out of the newest `limit`.
+        NOT: [
+          { type: "STATUS_CHANGE", status_from: null, status_to: "PENDING" },
+          { type: "STATUS_CHANGE", actor: "SYSTEM" },
+        ],
       },
       orderBy: [{ created_at: "desc" }, { id: "desc" }],
       take: limit,

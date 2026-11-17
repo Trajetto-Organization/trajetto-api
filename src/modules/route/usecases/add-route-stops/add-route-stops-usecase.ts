@@ -13,7 +13,10 @@ import { AppError } from "@/shared/errors/AppError";
 import { ROUTE_STATUS_LABELS } from "@/shared/route/route-rules";
 
 import { WebhookFanOutService } from "@/shared/integration/webhook-fan-out-service";
-import { deliveryAssignedPayload } from "@/shared/integration/announce";
+import {
+  deliveryAssignedPayload,
+  deliveryEventPayload,
+} from "@/shared/integration/announce";
 
 import { assertDeliveriesRoutable } from "../shared/routable-deliveries";
 import {
@@ -245,6 +248,22 @@ class AddRouteStopsUseCase {
         // On a running route these left now: "saiu para entrega", in this
         // commit, as the departure tells its own load (K12).
         if (result.status === "IN_PROGRESS") {
+          // And the customers' systems hear `delivery.in_transit`, as at the
+          // departure (F2-06): the load went "Em rota" in this commit.
+          await this.webhooks.announceMany(
+            "delivery.in_transit",
+            businessId,
+            deliveries.map((delivery) =>
+              deliveryEventPayload({
+                ...delivery,
+                id: delivery.id!,
+                businessId,
+                status: "IN_TRANSIT",
+              }),
+            ),
+            tx,
+          );
+
           for (const delivery of deliveries) {
             if (!hasSomebodyToTell(delivery)) continue;
 

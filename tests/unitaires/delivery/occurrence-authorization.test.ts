@@ -29,6 +29,7 @@ import {
   sendOccurrenceAuthorizationToBusiness,
   sendOccurrenceDecisionToDriver,
 } from "@/websocket";
+import { withoutCreationLine } from "../../support/status-trail";
 
 /**
  * Decisions 6.2 and 6.3 on the in-memory twins: the report of a type that
@@ -316,7 +317,7 @@ describe("a driver's report of a type that asks the tower", () => {
     );
 
     // On the trail and the feed (TWR-6), linked to the occurrence.
-    expect(context.deliveries.events).toMatchObject([
+    expect(withoutCreationLine(context.deliveries.events)).toMatchObject([
       { type: "OCCURRENCE", occurrenceId: result.id, actor: "DRIVER_APP" },
     ]);
 
@@ -1209,7 +1210,7 @@ describe("who files a request, and when its attempt is over (review r1)", () => 
       form_answers: ANSWERS,
     });
 
-    expect(context.deliveries.events[0]).toMatchObject({
+    expect(withoutCreationLine(context.deliveries.events)[0]).toMatchObject({
       type: "OCCURRENCE",
       routeId: ROUTE_A,
     });
@@ -1237,7 +1238,9 @@ describe("who files a request, and when its attempt is over (review r1)", () => 
     expect(context.deliveries.deliveries[0].status).toBe("IN_TRANSIT");
     expect(context.webhooks.topics()).toEqual([]);
     expect(
-      context.deliveries.events.some((event) => event.type === "STATUS_CHANGE"),
+      withoutCreationLine(context.deliveries.events).some(
+        (event) => event.type === "STATUS_CHANGE",
+      ),
     ).toBe(false);
   });
 

@@ -1065,6 +1065,16 @@ describe("two surfaces acting on the same route at once", () => {
 
     // Departed once: one announcement, not one per request.
     expect(webhookStub.forTopic("route.started")).toHaveLength(1);
+
+    // And the load that left, once per delivery, in the departure's commit
+    // (F2-06): the catalogue's `delivery.in_transit`.
+    expect(
+      webhookStub.forTopic("delivery.in_transit").map((event) => ({
+        delivery: event.payload.delivery_id,
+        status: event.payload.status,
+        transactional: event.transactional,
+      })),
+    ).toEqual([{ delivery, status: "IN_TRANSIT", transactional: true }]);
   });
 
   it("refuses the dispatcher cancelling while the driver departs", async () => {

@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { withoutCreationLine } from "../../support/status-trail";
 
 /**
  * POST /integration/v1/deliveries/:id/cancel, the use case (L9, D49): the
@@ -179,7 +180,7 @@ const input = (deliveryId: string, businessId = BUSINESS) => ({
 });
 
 function eventsOf(context: Context, deliveryId: string) {
-  return context.deliveries.events.filter(
+  return withoutCreationLine(context.deliveries.events).filter(
     (event) => event.deliveryId === deliveryId,
   );
 }

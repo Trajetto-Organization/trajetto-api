@@ -152,6 +152,11 @@ class InMemoryOccurrenceAuthorizationRepository implements IOccurrenceAuthorizat
       (event) =>
         event.deliveryId === delivery.id &&
         event.type === "STATUS_CHANGE" &&
+        // A person's (or a key's) move, as the SQL: the lines a departure or
+        // a route ending writes by itself (F2-06) are the route's doing, and
+        // the creation line comes before any request.
+        event.actor !== "SYSTEM" &&
+        !(event.status_from === null && event.status_to === "PENDING") &&
         event.created_at.getTime() > occurrence.created_at.getTime(),
     );
 

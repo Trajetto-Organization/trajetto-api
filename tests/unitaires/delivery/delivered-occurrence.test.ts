@@ -29,6 +29,7 @@ import type {
 import type { NotificationTopic } from "@/shared/notifications/notification-types";
 import type { User } from "@/modules/user/dtos/user-dto";
 import type { CreateDeliveryProps } from "@/modules/delivery/dtos/delivery-dto";
+import { withoutCreationLine } from "../../support/status-trail";
 
 /**
  * Decision 14.3 on the in-memory twins (design §4.3–§4.7): proving a delivery
@@ -483,9 +484,9 @@ describe("a DELIVERED type that asks the tower", () => {
       delivery_status: "IN_TRANSIT",
     });
     expect(context.deliveries.deliveries[0].status).toBe("IN_TRANSIT");
-    expect(context.deliveries.events.map((event) => event.type)).toEqual([
-      "OCCURRENCE",
-    ]);
+    expect(
+      withoutCreationLine(context.deliveries.events).map((event) => event.type),
+    ).toEqual(["OCCURRENCE"]);
     expect(context.webhooks.topics()).toEqual([]);
     expect(context.audits.audits).toHaveLength(0);
 

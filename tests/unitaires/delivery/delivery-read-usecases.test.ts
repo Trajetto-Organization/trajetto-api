@@ -105,7 +105,7 @@ describe("GetDeliveryUseCase", () => {
     };
 
     expect(detail.id).toBe(id);
-    expect(detail.events[0]).toMatchObject({
+    expect(detail.events.find((event) => event.photo)).toMatchObject({
       photo: "https://signed.example/proofs/photo.jpg",
       signature: "https://signed.example/proofs/signature.png",
     });

@@ -319,7 +319,7 @@ async function integrationRoutes(app: FastifyInstance) {
         "x-scopes": ["events:read"],
         summary: "Listar eventos (polling)",
         description:
-          "Oferecido AO LADO dos webhooks e não no lugar deles: um cliente atrás de firewall não consegue receber uma chamada, e dizer a ele 'exponha um endpoint ou fique sem nada' é como um projeto de integração morre. Lê do histórico permanente das entregas: consultar uma semana para trás não encontra buracos. Ordem do `id` crescente; aqui `updated_since` filtra pela hora em que o evento chegou ao Trajetto (`created_at` maior ou igual), não por `occurred_at`.",
+          "Oferecido AO LADO dos webhooks e não no lugar deles: um cliente atrás de firewall não consegue receber uma chamada, e dizer a ele 'exponha um endpoint ou fique sem nada' é como um projeto de integração morre. Lê do histórico permanente das entregas: consultar uma semana para trás não encontra buracos. Ordem do `id` crescente; aqui `updated_since` filtra pela hora em que o evento chegou ao Trajetto (`created_at` maior ou igual), não por `occurred_at`. Toda mudança de status aparece: a criação da entrega como `delivery.created`, a saída de uma rota como um `delivery.in_transit` por entrega que saiu e a volta à base de uma rota cancelada ou encerrada com pendências como `delivery.pending` (`data.status_from` diz de onde veio; nulo na criação).",
         querystring: integrationSchemas.listEvents,
         response: {
           200: integrationResponses.eventPage,

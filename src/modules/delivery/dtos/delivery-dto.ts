@@ -1,3 +1,5 @@
+import type { Prisma } from "@prisma/client";
+
 import { DeliveryStatus } from "@/shared/delivery/delivery-rules";
 import type { DeliveryKind } from "@/shared/delivery/delivery-kind";
 import type { SortOrder } from "@/shared/pagination/list-query";
@@ -448,6 +450,31 @@ interface DeliveryEventRecord {
   client_submission_id: string | null;
 }
 
+/**
+ * A delivery a departure just put on the street (plano-escala F2-06): what
+ * its `delivery.in_transit` webhook carries (deliveryEventPayload).
+ */
+interface DepartedDelivery {
+  id: string;
+  businessId: string;
+  code: string | null;
+  invoice_key: string | null;
+  invoice_number: string | null;
+  recipient_name: string;
+  city: string;
+  uf: string;
+  status: string;
+}
+
+/**
+ * Called inside the departure's transaction with what moved, so its
+ * webhooks commit with it (the import's undo hands its removals the same way).
+ */
+type DepartureHook = (
+  departed: DepartedDelivery[],
+  tx: Prisma.TransactionClient,
+) => Promise<void>;
+
 export {
   Delivery,
   DeliveryItemInput,
@@ -468,4 +495,6 @@ export {
   DeliveryEventActor,
   CreateDeliveryEventProps,
   DeliveryEventRecord,
+  DepartedDelivery,
+  DepartureHook,
 };

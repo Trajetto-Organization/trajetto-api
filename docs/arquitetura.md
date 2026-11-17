@@ -2818,6 +2818,25 @@ D32).
   tipos; o feed da torre e a API pública os deixam de fora). Cancelar a rota
   grava, na mesma transação, `ROUTE_REMOVED` com a nota "Rota N cancelada:
   motivo" em cada entrega que volta ao pool.
+- **Toda mudança de status tem a sua linha (plano de escala, F2-06):** a
+  criação grava um `STATUS_CHANGE` de nada para `PENDING` (ator `USER`, ou
+  `INTEGRATION` com a chave), e o que a rota move sozinha grava um
+  `STATUS_CHANGE` com ator `SYSTEM` e o `routeId`, por entrega que mudou, na
+  mesma transação: a saída da rota (`PENDING` → `IN_TRANSIT`, por
+  `UPDATE … RETURNING id` e um `createMany`), a parada incluída em rota em
+  andamento, a volta à base de uma rota cancelada ou encerrada com
+  pendências (`IN_TRANSIT` → `PENDING`) e a saída em lote antiga do app. A
+  saída manda um `delivery.in_transit` por entrega (`announceMany`, um lote:
+  a leitura dos endpoints, a sequência e as linhas em três comandos, um só
+  sem assinante). A linha do tempo diz "Entrega criada" e "Saiu para entrega
+  (Rota N)". O feed da torre deixa de fora a criação e as linhas `SYSTEM` (a
+  rota tem a linha dela); a regra de autorização da torre só conta a
+  mudança de status de uma pessoa ou de uma chave; o desfazer da importação
+  não conta a criação como trabalho; o feed `/integration/v1/events` mostra a
+  criação como `delivery.created`. A invariante (a última linha com status
+  diz o status da entrega) é conferida em
+  `tests/E2E/delivery-status-change-invariant.test.ts`, com a mesma consulta
+  que confere a staging.
 - **Rota com tudo cancelado fica Cancelada (K8, D32):** a rota que fecha sem
   nenhuma parada resolvida (`routeClosingStatus`) vira `CANCELLED` com o
   motivo "Todas as paradas canceladas", sem `completed_at`; o webhook e o

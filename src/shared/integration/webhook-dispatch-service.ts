@@ -204,9 +204,18 @@ async function envelopeBody(
     SELECT nextval('webhook_event_seq') AS "sequence"
   `;
 
+  return envelopeOf(eventId, Number(sequence), topic, payload);
+}
+
+function envelopeOf(
+  eventId: string,
+  sequence: number,
+  topic: string,
+  payload: Record<string, unknown>,
+): string {
   return JSON.stringify({
     id: eventId,
-    sequence: Number(sequence),
+    sequence,
     topic,
     created_at: new Date().toISOString(),
     data: payload,
@@ -415,6 +424,105 @@ async function fanOutWebhookEvent(
       endpoints: rows.length,
     },
     "webhook event fanned out",
+  );
+
+  return rows.length;
+}
+
+/**
+ * Many events of one company in one go (plano-escala F2-06): a route that
+ * leaves with fifty stops says `delivery.in_transit` fifty times.
+ *
+ * One at a time that was three statements per event (the endpoints, the
+ * sequence, the rows) — 150 for one departure, inside its transaction, and
+ * 50 even for a company with no endpoint at all. Here: the endpoints once
+ * (and nothing more when nobody listens), every sequence number in one
+ * statement, every row in one insert. Each event keeps its own id, sequence
+ * and signed body, exactly as `fanOutWebhookEvent` would have written it.
+ *
+ * An endpoint that wants one of the topics and is switched off (the
+ * breaker) needs the FOR SHARE read of the single path, so the batch hands
+ * the events to it one by one: rare, and correct.
+ */
+async function fanOutWebhookEvents(
+  events: FanOutEvent[],
+  tx?: Prisma.TransactionClient,
+): Promise<number> {
+  if (events.length === 0) return 0;
+
+  if (events.length === 1) return fanOutWebhookEvent(events[0], tx);
+
+  const businessId = events[0].businessId;
+
+  if (events.some((event) => event.businessId !== businessId)) {
+    throw new Error("fanOutWebhookEvents: one company per batch");
+  }
+
+  const client = tx ?? database;
+
+  const endpoints = await client.webhookEndpoint.findMany({
+    where: { businessId, is_active: true },
+  });
+
+  const wanting = (topic: string) =>
+    endpoints.filter((endpoint) => endpointWantsTopic(endpoint.topics, topic));
+
+  if (events.every((event) => wanting(event.topic).length === 0)) return 0;
+
+  if (
+    events.some((event) =>
+      wanting(event.topic).some((endpoint) => endpoint.disabled_at !== null),
+    )
+  ) {
+    let total = 0;
+
+    for (const event of events) total += await fanOutWebhookEvent(event, tx);
+
+    return total;
+  }
+
+  // In the caller's transaction, after its write, like envelopeBody: the
+  // numbers follow the order of the facts, and the events in the order
+  // given.
+  const drawn = await client.$queryRaw<Array<{ sequence: bigint }>>`
+    SELECT nextval('webhook_event_seq') AS "sequence"
+    FROM generate_series(1, ${events.length}::int)
+  `;
+  const sequences = drawn
+    .map((row) => Number(row.sequence))
+    .sort((a, b) => a - b);
+
+  const rows = events.flatMap((event, index) => {
+    const eventId = event.sourceEventId ?? uuidV7();
+    const body = envelopeOf(
+      eventId,
+      sequences[index],
+      event.topic,
+      event.payload,
+    );
+
+    return wanting(event.topic).map((endpoint) => ({
+      endpointId: endpoint.id,
+      businessId,
+      topic: event.topic,
+      sourceEventId: eventId,
+      payload: JSON.parse(body) as Prisma.InputJsonValue,
+      signed_body: body,
+      signature: fanOutSignature(endpoint.secret, body),
+    }));
+  });
+
+  await client.webhookDelivery.createMany({ data: rows });
+
+  log.info(
+    {
+      correlationId: getRequestContext()?.requestId ?? null,
+      topics: [...new Set(events.map((event) => event.topic))],
+      events: events.length,
+      businessId,
+      endpoints: rows.length,
+    },
+    "webhook events fanned out",
   );
 
   return rows.length;
@@ -1427,6 +1535,7 @@ const webhookDispatchService = WebhookDispatchService.getInstance();
 export {
   WebhookDispatchService,
   fanOutWebhookEvent,
+  fanOutWebhookEvents,
   queueWebhookPing,
   releaseHeldRowIfEndpointBack,
   releaseHeldWebhookDeliveriesOfBusiness,

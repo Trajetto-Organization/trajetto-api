@@ -187,6 +187,7 @@ function makeContext() {
       deliveryRepository,
       vehicleRepository,
       notificationService,
+      webhooks.asService(),
     ),
     arrival: new RegisterDeliveryArrivalUseCase(
       userRepository,

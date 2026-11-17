@@ -249,6 +249,11 @@ interface PlanEventMirror {
   occurred_at?: Date | null;
   created_at: Date;
 
+  /** STATUS_CHANGE (F2-06): what a departure or a route ending moved. */
+  status_from?: string | null;
+  status_to?: string | null;
+  actor?: string;
+
   /** E4/E5: the geofence record of an arrival, a proof or an occurrence. */
   geofence_outcome?: "INSIDE" | "OUTSIDE" | "NOT_EVALUATED" | null;
   distance_m?: number | null;
@@ -572,6 +577,27 @@ class InMemoryRouteRepository implements IRouteRepository {
     };
   }
 
+  /** The SYSTEM line moveDeliveryStatus writes for each row it moved (F2-06). */
+  private pushStatusChange(
+    deliveryId: string,
+    route: Pick<Route, "id" | "businessId">,
+    from: string,
+    to: string,
+  ): void {
+    this.events.push({
+      type: "STATUS_CHANGE",
+      deliveryId,
+      businessId: route.businessId,
+      routeId: route.id,
+      reportedById: null,
+      note: null,
+      status_from: from,
+      status_to: to,
+      actor: "SYSTEM",
+      created_at: new Date(),
+    });
+  }
+
   private mirror(route: Route, actorId?: string | null): void {
     const ending = route.status === "COMPLETED" || route.status === "CANCELLED";
 
@@ -626,7 +652,15 @@ class InMemoryRouteRepository implements IRouteRepository {
 
       if (ending) {
         // The load that left and never arrived goes back to the pool.
-        if (delivery.status === "IN_TRANSIT") delivery.status = "PENDING";
+        if (delivery.status === "IN_TRANSIT") {
+          delivery.status = "PENDING";
+          this.pushStatusChange(
+            stop.deliveryId,
+            route,
+            "IN_TRANSIT",
+            "PENDING",
+          );
+        }
 
         continue;
       }
@@ -635,6 +669,7 @@ class InMemoryRouteRepository implements IRouteRepository {
       // route leaving. Only PENDING moves — an outcome already recorded stands.
       if (route.status === "IN_PROGRESS" && delivery.status === "PENDING") {
         delivery.status = "IN_TRANSIT";
+        this.pushStatusChange(stop.deliveryId, route, "PENDING", "IN_TRANSIT");
       }
     }
   }
@@ -1608,9 +1643,11 @@ class InMemoryRouteRepository implements IRouteRepository {
         delivery.driverId = route.driverId;
         delivery.vehicleId = route.vehicleId;
 
-        // On a running route the load leaves now, as the real write does.
+        // On a running route the load leaves now, as the real write does,
+        // with its line (F2-06).
         if (route.status === "IN_PROGRESS" && delivery.status === "PENDING") {
           delivery.status = "IN_TRANSIT";
+          this.pushStatusChange(deliveryId, route, "PENDING", "IN_TRANSIT");
         }
       }
     }

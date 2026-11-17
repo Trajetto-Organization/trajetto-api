@@ -10,6 +10,7 @@ import { deliveryAddressKey } from "@/shared/delivery/address-key";
 import { CLEARED_ADDRESS_POINT } from "@/shared/delivery/address-point";
 
 import { expectPrismaCode, fixedId, minute, type Kind } from "../support";
+import { withoutCreationLine } from "../../support/status-trail";
 
 /**
  * The delivery repository's contract (decision 13.2): the listing, the
@@ -685,6 +686,8 @@ function deliveryRepositoryContract(harness: () => DeliveryHarness): void {
         import: unknown;
         events: Array<{
           type: string;
+          status_from: string | null;
+          status_to: string | null;
           reason: { name: string } | null;
           reportedBy: { name: string } | null;
         }>;
@@ -719,8 +722,17 @@ function deliveryRepositoryContract(harness: () => DeliveryHarness): void {
         license_plate: FIXTURE.plate,
       });
 
+      // The creation line (F2-06), and the status change with its reason.
       expect(
-        detail.events.map((event) => [
+        detail.events.filter(
+          (event) =>
+            event.type === "STATUS_CHANGE" &&
+            event.status_from === null &&
+            event.status_to === "PENDING",
+        ),
+      ).toHaveLength(1);
+      expect(
+        withoutCreationLine(detail.events).map((event) => [
           event.type,
           event.reason?.name,
           event.reportedBy?.name,

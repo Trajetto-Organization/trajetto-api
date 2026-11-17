@@ -18,7 +18,10 @@ import {
 } from "@/shared/delivery/customer-notice";
 
 import { WebhookFanOutService } from "@/shared/integration/webhook-fan-out-service";
-import { routeEventPayload } from "@/shared/integration/announce";
+import {
+  deliveryEventPayload,
+  routeEventPayload,
+} from "@/shared/integration/announce";
 
 import {
   canTransitionRoute,
@@ -332,6 +335,28 @@ class StartRouteUseCase {
             }),
           });
         }
+
+        // Each load that left, to the customers' systems (plano-escala
+        // F2-06): the catalogue promised `delivery.in_transit` and only the
+        // panel's status change by hand ever sent it, so an ERP learned a
+        // route left from `route.started` and never which documents went.
+        // One batch for the whole route: a few statements, not three per
+        // stop.
+        await this.webhooks.announceMany(
+          "delivery.in_transit",
+          businessId,
+          departed.flatMap((delivery) =>
+            delivery
+              ? [
+                  deliveryEventPayload(
+                    { ...delivery, businessId, status: "IN_TRANSIT" },
+                    startedAt,
+                  ),
+                ]
+              : [],
+          ),
+          tx,
+        );
 
         // In the SAME transaction as the departure, for the reason the outbox
         // rows above are: an event queued after the commit is an event a crash

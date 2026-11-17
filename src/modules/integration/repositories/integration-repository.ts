@@ -142,6 +142,7 @@ function cursorPage<T extends { id: string }>(
  */
 function publicEventTopic(event: {
   type: string;
+  status_from?: string | null;
   status_to: string | null;
   occurrence?: {
     authorization_status: string | null;
@@ -156,6 +157,12 @@ function publicEventTopic(event: {
     case "ON_THE_WAY":
       return "delivery.on_the_way";
     case "STATUS_CHANGE":
+      // The line every delivery starts with (F2-06): from nothing is its
+      // creation, the webhook's `delivery.created`, not a `delivery.pending`.
+      if (event.status_from === null && event.status_to === "PENDING") {
+        return "delivery.created";
+      }
+
       return `delivery.${(event.status_to ?? "").toLowerCase()}`;
     case "OCCURRENCE": {
       // Decision 14.3: a delivery request (DELIVERED) is not a problem. Its

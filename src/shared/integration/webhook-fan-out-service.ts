@@ -4,7 +4,10 @@ import { Prisma } from "@prisma/client";
 
 import { logger } from "@/shared/logging/logger";
 
-import { fanOutWebhookEvent } from "./webhook-dispatch-service";
+import {
+  fanOutWebhookEvent,
+  fanOutWebhookEvents,
+} from "./webhook-dispatch-service";
 import type { WebhookTopic } from "./webhook-catalogue";
 
 const log = logger.child({ component: "webhook-fan-out" });
@@ -51,6 +54,35 @@ class WebhookFanOutService {
       log.error(
         { err: error, topic, businessId },
         "webhook event could not be queued",
+      );
+    }
+  }
+
+  /**
+   * One topic for many documents of one company — a route's departure says
+   * `delivery.in_transit` for each delivery that left — in a few statements
+   * instead of three per event (fanOutWebhookEvents). Same rules as
+   * `announce`: inside the caller's transaction it throws with it.
+   */
+  async announceMany(
+    topic: WebhookTopic,
+    businessId: string,
+    payloads: Array<Record<string, unknown>>,
+    tx?: Prisma.TransactionClient,
+  ): Promise<void> {
+    if (payloads.length === 0) return;
+
+    try {
+      await fanOutWebhookEvents(
+        payloads.map((payload) => ({ topic, businessId, payload })),
+        tx,
+      );
+    } catch (error) {
+      if (tx) throw error;
+
+      log.error(
+        { err: error, topic, businessId, events: payloads.length },
+        "webhook events could not be queued",
       );
     }
   }

@@ -181,7 +181,19 @@ class GetDeliveryUseCase {
         null,
     );
 
-    return { ...detail, occurrences, events, timeline, messageOptOut };
+    return {
+      ...detail,
+      occurrences,
+      // The route's number fed the timeline's "Saiu para entrega (Rota N)"
+      // (F2-06); the events keep their documented shape, routeId included.
+      events: events.map((event) => {
+        const { route: _route, ...kept } = event as Record<string, unknown>;
+
+        return kept;
+      }),
+      timeline,
+      messageOptOut,
+    };
   }
 }
 

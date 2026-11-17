@@ -13,6 +13,7 @@ import {
   CreateOccurrenceProps,
   CreateDeliveryEventProps,
   DeliveryEventRecord,
+  DepartureHook,
   ListOccurrencesProps,
   ListOccurrencesResult,
   OccurrenceAuthorizationStatus,
@@ -210,12 +211,15 @@ interface IDeliveryRepository {
   ) => Promise<number>;
   /**
    * PENDING -> IN_TRANSIT for the driver's batch; returns how many moved.
-   * `createdUpTo`: only deliveries created at or before it (the tap).
+   * `createdUpTo`: only deliveries created at or before it (the tap). Each
+   * one that moved gets its STATUS_CHANGE line, and `onStarted` gets them
+   * inside the same transaction (its webhooks), F2-06.
    */
   startDriverRoute: (
     businessId: string,
     driverId: string,
     createdUpTo?: Date,
+    onStarted?: DepartureHook,
   ) => Promise<number>;
   /** Same scoping, and the same reason, as `findOccurrenceBySubmissionId`. */
   findEventBySubmissionId: (

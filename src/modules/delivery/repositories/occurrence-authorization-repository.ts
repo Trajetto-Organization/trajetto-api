@@ -62,6 +62,8 @@ const ATTEMPT_IS_LIVE = Prisma.sql`(
       FROM "delivery_event" sc
      WHERE sc."deliveryId" = o."deliveryId"
        AND sc."type" = 'STATUS_CHANGE'
+       AND sc."actor" <> 'SYSTEM'
+       AND NOT (sc."status_from" IS NULL AND sc."status_to" = 'PENDING')
        AND sc."created_at" > o."created_at"
   )
   AND (

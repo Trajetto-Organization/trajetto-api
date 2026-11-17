@@ -244,14 +244,26 @@ describe("Reentregar", () => {
       where: { deliveryId: failed, type: "STATUS_CHANGE" },
     });
 
-    expect(lines).toEqual([
-      expect.objectContaining({
-        status_from: "FAILED",
-        status_to: "PENDING",
-        reasonId,
-        note: "Cliente ligou",
-      }),
-    ]);
+    // The redelivery by the dispatcher, and the departure on the running
+    // route by itself (F2-06), in the same commit: the same instant, so in
+    // no order the ids can promise.
+    expect(lines).toHaveLength(2);
+    expect(lines).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          status_from: "FAILED",
+          status_to: "PENDING",
+          reasonId,
+          note: "Cliente ligou",
+        }),
+        expect.objectContaining({
+          status_from: "PENDING",
+          status_to: "IN_TRANSIT",
+          actor: "SYSTEM",
+          routeId,
+        }),
+      ]),
+    );
   });
 
   it("does not show the new stop the previous attempt's answer on the driver's card", async () => {

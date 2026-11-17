@@ -181,6 +181,7 @@ function makeContext() {
       deliveryRepository,
       vehicleRepository,
       notificationService,
+      webhooks.asService(),
     ),
   };
 }

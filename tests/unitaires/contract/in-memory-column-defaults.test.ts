@@ -303,7 +303,10 @@ describe("in-memory repositories return null for the new nullable columns", () =
       occurrenceId: "occurrence-1",
     } as never);
 
-    expect(asRecord(deliveries.events[1]).occurrenceId).toBe("occurrence-1");
+    // The last one: the create wrote the trail's first line (F2-06).
+    expect(
+      asRecord(deliveries.events[deliveries.events.length - 1]).occurrenceId,
+    ).toBe("occurrence-1");
   });
 
   it("occurrence type: no form yet", async () => {

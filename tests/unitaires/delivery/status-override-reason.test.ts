@@ -17,6 +17,7 @@ import type {
 } from "@/modules/delivery/dtos/delivery-dto";
 
 import { InMemoryWebhookFanOutService } from "@/shared/integration/in-memory/in-memory-webhook-fan-out-service";
+import { withoutCreationLine } from "../../support/status-trail";
 
 // Nothing here asserts on webhooks; the use cases simply require one.
 const webhookStub = new InMemoryWebhookFanOutService();
@@ -261,7 +262,7 @@ describe("the reason the override has to carry", () => {
       }),
     ).rejects.toThrow();
 
-    expect(context.deliveryRepository.events).toEqual([]);
+    expect(withoutCreationLine(context.deliveryRepository.events)).toEqual([]);
   });
 });
 
@@ -279,9 +280,11 @@ describe("what the override leaves behind", () => {
     });
 
     expect(storedDelivery(delivery.id).status).toBe("CANCELLED");
-    expect(context.deliveryRepository.events).toHaveLength(1);
+    expect(withoutCreationLine(context.deliveryRepository.events)).toHaveLength(
+      1,
+    );
 
-    const [event] = context.deliveryRepository.events;
+    const [event] = withoutCreationLine(context.deliveryRepository.events);
 
     expect(event).toMatchObject({
       type: "STATUS_CHANGE",
@@ -352,10 +355,12 @@ describe("what the override leaves behind", () => {
       reasonId: REASON,
     });
 
-    expect(context.deliveryRepository.events).toHaveLength(2);
+    expect(withoutCreationLine(context.deliveryRepository.events)).toHaveLength(
+      2,
+    );
 
     expect(
-      context.deliveryRepository.events.map((event) => [
+      withoutCreationLine(context.deliveryRepository.events).map((event) => [
         event.status_from,
         event.status_to,
       ]),
@@ -379,7 +384,7 @@ describe("what the override leaves behind", () => {
       }),
     ).rejects.toMatchObject({ code: "INVALID_STATUS_TRANSITION" });
 
-    expect(context.deliveryRepository.events).toEqual([]);
+    expect(withoutCreationLine(context.deliveryRepository.events)).toEqual([]);
   });
 });
 

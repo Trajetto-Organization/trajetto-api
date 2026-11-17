@@ -97,6 +97,10 @@ const KEEP_REASON = {
  * in the same commit (the reassignment) or writes a ROUTE_REMOVED — taken
  * off, moved, the route cancelled or closed with pending stops after it
  * went out on the street — which still counts.
+ *
+ * Nor the creation line (a STATUS_CHANGE from nothing to PENDING, F2-06),
+ * which every delivery starts with: the repository's WORKED_EVENT leaves it
+ * out of the count by its statuses, as it is a type that otherwise counts.
  */
 const PLAN_ONLY_EVENT_TYPES = ["ROUTE_ADDED"] as const;
 

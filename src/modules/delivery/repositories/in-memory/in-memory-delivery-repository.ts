@@ -1,4 +1,5 @@
 import { v7 as uuidV7 } from "uuid";
+import type { Prisma } from "@prisma/client";
 import {
   IDeliveryRepository,
   DeliveryStatusPatch,
@@ -75,6 +76,7 @@ import {
   CreateOccurrenceProps,
   CreateDeliveryEventProps,
   DeliveryEventRecord,
+  DepartureHook,
   ListOccurrencesProps,
   ListOccurrencesResult,
   OccurrenceAuthorizationStatus,
@@ -303,6 +305,14 @@ class InMemoryDeliveryRepository implements IDeliveryRepository {
 
     this.deliveries.push(newDelivery);
     this.deliveryItems.set(newDelivery.id!, asStoredItems(items ?? []));
+
+    // The trail's first line, as the Prisma create writes it (F2-06).
+    this.pushStatusChange(newDelivery, {
+      from: null,
+      to: "PENDING",
+      actor: newDelivery.apiKeyId ? "INTEGRATION" : "USER",
+      apiKeyId: newDelivery.apiKeyId ?? null,
+    });
 
     if (deliveryData.client_submission_id) {
       this.submissions.set(
@@ -1299,6 +1309,7 @@ class InMemoryDeliveryRepository implements IDeliveryRepository {
     businessId: string,
     driverId: string,
     createdUpTo?: Date,
+    onStarted?: DepartureHook,
   ): Promise<number> {
     const pending = this.deliveries.filter(
       (delivery) =>
@@ -1314,9 +1325,68 @@ class InMemoryDeliveryRepository implements IDeliveryRepository {
 
     for (const delivery of pending) {
       delivery.status = "IN_TRANSIT";
+
+      // Its line, SYSTEM, at the tap's moment (F2-06), as the real one.
+      this.pushStatusChange(delivery, {
+        from: "PENDING",
+        to: "IN_TRANSIT",
+        actor: "SYSTEM",
+        occurred_at: createdUpTo ?? null,
+      });
+    }
+
+    if (pending.length > 0 && onStarted) {
+      // No transaction to join: the hook gets a placeholder, as the other
+      // twins hand their callbacks.
+      await onStarted(
+        pending.map((delivery) => ({
+          id: delivery.id!,
+          businessId,
+          code: delivery.code ?? null,
+          invoice_key: delivery.invoice_key ?? null,
+          invoice_number: delivery.invoice_number ?? null,
+          recipient_name: delivery.recipient_name,
+          city: delivery.city,
+          uf: delivery.uf,
+          status: "IN_TRANSIT",
+        })),
+        {} as Prisma.TransactionClient,
+      );
     }
 
     return pending.length;
+  }
+
+  /** One STATUS_CHANGE line, with the columns the Prisma insert leaves null. */
+  private pushStatusChange(
+    delivery: Delivery,
+    line: {
+      from: DeliveryStatus | null;
+      to: DeliveryStatus;
+      actor: "USER" | "INTEGRATION" | "SYSTEM";
+      apiKeyId?: string | null;
+      routeId?: string | null;
+      occurred_at?: Date | null;
+    },
+  ): void {
+    this.events.push({
+      ...withColumnDefaults(DELIVERY_EVENT_COLUMN_DEFAULTS, {
+        type: "STATUS_CHANGE" as const,
+        deliveryId: delivery.id!,
+      }),
+      businessId: delivery.businessId,
+      status_from: line.from,
+      status_to: line.to,
+      actor: line.actor,
+      apiKeyId: line.apiKeyId ?? null,
+      reportedById: null,
+      reasonId: null,
+      note: null,
+      routeId: line.routeId ?? null,
+      occurred_at: line.occurred_at ?? null,
+      id: uuidV7(),
+      created_at: new Date(),
+    });
   }
 
   async findEventBySubmissionId(

@@ -37,6 +37,7 @@ import type { CreateDeliveryProps } from "@/modules/delivery/dtos/delivery-dto";
 import type { OccurrenceType } from "@/modules/occurrence-type/dtos/occurrence-type-dto";
 
 import { InMemoryWebhookFanOutService } from "@/shared/integration/in-memory/in-memory-webhook-fan-out-service";
+import { withoutCreationLine } from "../../support/status-trail";
 
 /**
  * The route and the deliveries on it, as one moving thing.
@@ -323,6 +324,7 @@ function makeContext() {
       deliveryRepository,
       vehicleRepository,
       notificationService,
+      webhookStub.asService(),
     ),
   };
 }
@@ -546,7 +548,9 @@ describe("proving an address the driver never announced arriving at", () => {
     // The stop only moves from PENDING, so the time the driver actually got
     // there survives. Two ARRIVAL events, one arrival time.
     expect(stopFor(delivery)[0].arrived_at).toBe(firstArrival);
-    expect(context.deliveryRepository.events).toHaveLength(2);
+    expect(withoutCreationLine(context.deliveryRepository.events)).toHaveLength(
+      2,
+    );
   });
 
   it("records the arrival once however often the outbox resends it", async () => {
@@ -566,7 +570,9 @@ describe("proving an address the driver never announced arriving at", () => {
     await context.arrival.execute(request);
     await context.arrival.execute(request);
 
-    expect(context.deliveryRepository.events).toHaveLength(1);
+    expect(withoutCreationLine(context.deliveryRepository.events)).toHaveLength(
+      1,
+    );
     expect(stopFor(delivery)[0].status).toBe("ARRIVED");
   });
 });

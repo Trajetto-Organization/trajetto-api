@@ -21,6 +21,7 @@ import type { OutboxService } from "@/shared/notifications/outbox-service";
 import type { Driver } from "@/modules/driver/dtos/driver-dto";
 import type { Vehicle } from "@/modules/vehicle/dtos/vehicle-dto";
 import type { User } from "@/modules/user/dtos/user-dto";
+import { withoutCreationLine } from "../../support/status-trail";
 import type { CreateDeliveryProps } from "@/modules/delivery/dtos/delivery-dto";
 
 /**
@@ -358,7 +359,7 @@ describe("Reentregar", () => {
     });
 
     expect(
-      context.deliveries.events.filter(
+      withoutCreationLine(context.deliveries.events).filter(
         (event) =>
           event.deliveryId === failed && event.type === "STATUS_CHANGE",
       ),
@@ -415,7 +416,8 @@ describe("Reentregar", () => {
     );
   });
 
-  it("adds a pending delivery sent along without a status line", async () => {
+  // F2-06: the only line is the route's own, the SYSTEM departure.
+  it("adds a pending delivery sent along without a redelivery line", async () => {
     const routeId = await runningRoute();
     const pending = await seedDelivery();
 
@@ -428,11 +430,24 @@ describe("Reentregar", () => {
     });
 
     expect(
-      context.deliveries.events.filter(
+      withoutCreationLine(context.deliveries.events).filter(
         (event) =>
           event.deliveryId === pending && event.type === "STATUS_CHANGE",
       ),
     ).toEqual([]);
+    expect(
+      context.routes.events.filter(
+        (event) =>
+          event.deliveryId === pending && event.type === "STATUS_CHANGE",
+      ),
+    ).toEqual([
+      expect.objectContaining({
+        actor: "SYSTEM",
+        status_from: "PENDING",
+        status_to: "IN_TRANSIT",
+        routeId,
+      }),
+    ]);
     expect(delivery(pending).status).toBe("IN_TRANSIT");
   });
 });

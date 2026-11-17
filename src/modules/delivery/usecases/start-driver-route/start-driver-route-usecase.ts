@@ -9,6 +9,8 @@ import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-n
 
 import { DELIVERY_STATUS_LABELS } from "@/shared/delivery/delivery-rules";
 import { AppError } from "@/shared/errors/AppError";
+import { WebhookFanOutService } from "@/shared/integration/webhook-fan-out-service";
+import { deliveryEventPayload } from "@/shared/integration/announce";
 
 interface StartDriverRouteRequest {
   userId: string;
@@ -72,6 +74,8 @@ class StartDriverRouteUseCase {
     private vehicle: IVehicleRepository,
     @inject("NotificationService")
     private notificationService: NotificationService,
+    @inject("WebhookFanOutService")
+    private webhooks: WebhookFanOutService,
   ) {}
 
   async execute({
@@ -178,10 +182,22 @@ class StartDriverRouteUseCase {
     }
 
     try {
+      // Each delivery that left says `delivery.in_transit` to the
+      // customers' systems in the departure's own commit, as a route's
+      // departure does (F2-06).
       const started = await this.delivery.startDriverRoute(
         businessId,
         findUser.driverId,
         createdUpTo,
+        (departed, tx) =>
+          this.webhooks.announceMany(
+            "delivery.in_transit",
+            businessId,
+            departed.map((delivery) =>
+              deliveryEventPayload(delivery, occurredAt ?? null),
+            ),
+            tx,
+          ),
       );
 
       if (started > 0) {
