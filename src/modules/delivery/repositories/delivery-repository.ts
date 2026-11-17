@@ -399,6 +399,7 @@ class DeliveryRepository implements IDeliveryRepository {
     sort,
     order,
     leftOpenBefore,
+    skipFacets,
     ...requested
   }: ListDeliveriesProps): Promise<ListDeliveriesPage> {
     const skip = (page - 1) * pageSize;
@@ -414,6 +415,28 @@ class DeliveryRepository implements IDeliveryRepository {
     // page and the three counts below read those rows instead of the
     // company's whole history each.
     const filters = await narrowDeliverySearch(this.prisma, periodic);
+
+    // `facets=skip` (plano-escala F2-30): a client turning pages under the
+    // same filters already has the counts, so the grouped read over the
+    // company's history — the heaviest statement of the board — is not run
+    // again for page 2, 3, 4. The rows are the same read as below.
+    if (skipFacets) {
+      const rows = await this.prisma.delivery.findMany({
+        skip,
+        take: pageSize,
+        where: deliveryListWhere(filters),
+        orderBy: resolveOrderBy(DELIVERY_SORT, { sort, order }),
+      });
+
+      return {
+        data: (await withListRelations(this.prisma, rows)) as Delivery[],
+        periodApplied,
+        statusCounts: [],
+        shipperOptions: [],
+        driverOptions: [],
+        facetsSkipped: true,
+      };
+    }
 
     // The page and the counts side by side (the two connections a screen may
     // hold). The counts replace a count(*): the pager total and the cards

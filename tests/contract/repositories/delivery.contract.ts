@@ -497,6 +497,24 @@ function deliveryRepositoryContract(harness: () => DeliveryHarness): void {
   });
 
   describe("listDeliveries", () => {
+    // facets=skip (plano-escala F2-30): the same rows, nothing counted.
+    it("with skipFacets returns the same page and no count", async () => {
+      const counted = await list({ page: 2, pageSize: 2 });
+      const skipped = await list({ page: 2, pageSize: 2, skipFacets: true });
+
+      expect(skipped.data.map((row) => row.id)).toEqual(
+        counted.data.map((row) => row.id),
+      );
+      expect(skipped).toMatchObject({
+        statusCounts: [],
+        shipperOptions: [],
+        driverOptions: [],
+        facetsSkipped: true,
+      });
+      expect(counted.facetsSkipped).toBeUndefined();
+      expect(counted.statusCounts.length).toBeGreaterThan(0);
+    });
+
     it("lists one company, newest first, the id breaking a created_at tie, and pages", async () => {
       const h = harness();
       const tie = [h.id("d4"), h.id("d5")].sort().reverse();

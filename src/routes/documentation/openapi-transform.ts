@@ -34,6 +34,10 @@ import {
   codesOf,
 } from "./common-responses";
 
+// The documented ceiling is the default: the env may move it per
+// environment, and the document is one for all of them.
+const LIST_MAX_OFFSET_TEXT = "10.000";
+
 /**
  * The OpenAPI document, completed from what the routes actually run.
  *
@@ -1062,6 +1066,22 @@ function openapiTransform(input: TransformInput): {
         `EXPORT_BUSY: já há uma exportação desta empresa em andamento, ou ${EXPORTS_PER_REPLICA} exportações ao mesmo tempo neste servidor. Chega antes do primeiro byte do arquivo. Espere o \`retry-after\` e repita.`,
         ["EXPORT_BUSY"],
         { "retry-after": RETRY_AFTER_HEADER },
+      ),
+    );
+  }
+
+  // The offset ceiling (shared/pagination/offset-ceiling.ts): every route
+  // whose querystring pages by `page` and `pageSize`.
+  const queryFields = ((schema as { querystring?: JsonSchema }).querystring
+    ?.properties ?? {}) as Record<string, unknown>;
+
+  if ("page" in queryFields && "pageSize" in queryFields) {
+    mergeResponse(
+      responses,
+      "400",
+      errorBody(
+        `LIST_OFFSET_TOO_DEEP: a página começa na linha ${LIST_MAX_OFFSET_TEXT} ou depois (\`LIST_MAX_OFFSET\`): ninguém lê a lista tão longe virando páginas. Filtre (o período, o status ou a busca) ou use a exportação para ver além.`,
+        ["LIST_OFFSET_TOO_DEEP"],
       ),
     );
   }

@@ -367,6 +367,7 @@ class InMemoryDeliveryRepository implements IDeliveryRepository {
     sort,
     order,
     leftOpenBefore,
+    skipFacets,
     ...requested
   }: ListDeliveriesProps): Promise<ListDeliveriesPage> {
     const { filters, periodApplied } = this.resolveDeliveryPeriod(requested);
@@ -432,6 +433,18 @@ class InMemoryDeliveryRepository implements IDeliveryRepository {
     );
 
     const skip = (page - 1) * pageSize;
+
+    // As the Prisma read: the page only, nothing counted (F2-30).
+    if (skipFacets) {
+      return {
+        data: sorted.slice(skip, skip + pageSize),
+        periodApplied,
+        statusCounts: [],
+        shipperOptions: [],
+        driverOptions: [],
+        facetsSkipped: true,
+      };
+    }
 
     const group = (list: Delivery[], by: (d: Delivery) => string | null) => {
       const counts = new Map<string | null, number>();

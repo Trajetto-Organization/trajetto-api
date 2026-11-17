@@ -51,6 +51,13 @@ const listDeliverySchema = listPagesSchema
       ),
     ...sortFields(DELIVERY_SORT_KEYS, DELIVERY_SORT_FALLBACK),
     ...deliveryListFilterFields,
+    // plano-escala F2-30: list-only, the export does not take it.
+    facets: z
+      .enum(["skip"], { error: "facets aceita só o valor skip." })
+      .optional()
+      .describe(
+        "`skip`: só a página, sem contar nada (sem `total`, sem os cartões e sem as opções dos filtros; `searchMeta.facetsSkipped` = true). Para quem vira a página com os mesmos filtros e já tem as contagens da página anterior. As linhas são as mesmas.",
+      ),
   })
   .superRefine(refineDeliveryPeriod);
 

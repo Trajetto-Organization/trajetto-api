@@ -199,6 +199,13 @@ interface ListDeliveriesProps extends DeliveryListFilters {
    * the open stops of the documents the "Em Rota" card counts.
    */
   leftOpenBefore?: Date;
+
+  /**
+   * `facets=skip` (plano-escala F2-30): the page only. No count, no facet,
+   * no left-open share — a client turning pages under the same filters
+   * already has them. The rows are the same as without it.
+   */
+  skipFacets?: boolean;
 }
 
 /** A catalog facet's options, labelled from the company's own records. */
@@ -231,6 +238,15 @@ interface ListDeliveriesPage {
    * many. Routes holding none are left out. Absent without `leftOpenBefore`.
    */
   leftOpenRoutes?: Array<{ started_at: Date | null; open: number }>;
+
+  /** With `skipFacets`: nothing was counted, the counts above are empty. */
+  facetsSkipped?: boolean;
+}
+
+/** The meta line of a page read with `facets=skip`: no count at all. */
+interface SkippedDeliveryListMeta {
+  facetsSkipped: true;
+  period: DeliveryListSearchMeta["period"];
 }
 
 interface ListDeliveriesResult {
@@ -238,6 +254,12 @@ interface ListDeliveriesResult {
   total: number;
   /** Rides along in the NDJSON meta line — the cards and the filters. */
   meta?: DeliveryListSearchMeta;
+}
+
+/** A page read with `facets=skip`: no total, nothing counted. */
+interface SkippedListDeliveriesResult {
+  data: Delivery[];
+  meta: SkippedDeliveryListMeta;
 }
 
 interface CreateOccurrenceProps {
@@ -483,6 +505,7 @@ export {
   ListDeliveriesProps,
   ListDeliveriesPage,
   ListDeliveriesResult,
+  SkippedListDeliveriesResult,
   DeliveryFacetOption,
   CreateOccurrenceProps,
   GeofenceOutcome,

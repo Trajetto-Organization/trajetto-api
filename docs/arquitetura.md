@@ -636,7 +636,17 @@ nas réplicas HTTP e uma Application `worker`), só por gatilho medido:
 - **Listagens.** As tabelas do painel usam paginação por página (offset) com
   resposta NDJSON: linhas e uma linha final `meta` com `total`, `page`,
   `pageSize` e `searchMeta` (cartões e filtros contados no servidor). Os
-  seletores com busca usam cursor.
+  seletores com busca usam cursor. Uma página que começa na linha
+  `LIST_MAX_OFFSET` (10.000) ou depois responde 400 `LIST_OFFSET_TOO_DEEP`,
+  com uma frase que manda filtrar (período, status, busca) ou exportar, e a
+  web prende o pager na mesma linha: o OFFSET lê e descarta toda linha antes
+  da página (plano de escala F2-30, decisão D42;
+  `src/shared/pagination/offset-ceiling.ts`, um `preHandler` global depois
+  da validação, para toda rota com `page` e `pageSize`). Na lista de
+  entregas, `facets=skip` traz só a página, sem `total`, cartões nem opções
+  dos filtros (`searchMeta.facetsSkipped`): é para quem vira a página com os
+  mesmos filtros e já tem as contagens, a leitura agrupada mais pesada da
+  tela.
 - **Logs.** JSON (pino), uma linha por requisição com `reqId`, `userId`,
   `businessId` e o cabeçalho de versão do cliente; credenciais censuradas por
   nome.

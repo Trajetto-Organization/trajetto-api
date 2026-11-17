@@ -9,7 +9,7 @@ import { inheritedOpenStopsDoc } from "@/routes/documentation/inherited-open-sto
  * filters, each counted with every other filter applied, plus the period the
  * numbers cover.
  */
-const deliveryListSearchMetaDoc = searchMetaDoc(
+const fullDeliveryListSearchMetaDoc = searchMetaDoc(
   {
     statusCounts: z
       .record(z.string(), z.number().int())
@@ -43,5 +43,21 @@ const deliveryListSearchMetaDoc = searchMetaDoc(
   },
   ["status", "shipperId", "driverId"],
 );
+
+/**
+ * With `facets=skip` (plano-escala F2-30) only the period rides along: the
+ * cards, the options and `inherited` are not counted, and the meta line has
+ * no `total`.
+ */
+const deliveryListSearchMetaDoc = fullDeliveryListSearchMetaDoc
+  .partial()
+  .extend({
+    facetsSkipped: z
+      .literal(true)
+      .optional()
+      .describe(
+        "Presente com `facets=skip`: nada foi contado, então não vêm `total`, `statusCounts`, `facets` nem `inherited`; use os da página anterior com os mesmos filtros.",
+      ),
+  });
 
 export { deliveryListSearchMetaDoc };

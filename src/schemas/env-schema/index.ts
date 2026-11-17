@@ -1179,6 +1179,20 @@ const envSchema = z
     ),
 
     /**
+     * How deep an offset listing of the panel may page (plano-escala F2-30,
+     * decision D42, shared/pagination/offset-ceiling.ts): a page starting at
+     * or past this row answers 400 LIST_OFFSET_TOO_DEEP, which tells the
+     * person to filter or export. Nobody reads row 50,000 by turning pages,
+     * and Postgres reads and drops every row before the page. The web stops
+     * its pager at 10,000 too. 0 turns the ceiling off. Empty counts as
+     * absent.
+     */
+    LIST_MAX_OFFSET: z.preprocess(
+      (value) => (value === "" ? undefined : value),
+      z.coerce.number().int().min(0).max(100_000_000).default(10_000),
+    ),
+
+    /**
      * How often each replica re-checks, in the database, the sessions of its
      * sockets (±25% jitter). The safety net of revocation: the frame that
      * drops a socket travels through Redis and is lost if Redis blinks, so

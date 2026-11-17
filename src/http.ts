@@ -107,6 +107,7 @@ import { configureAddressSearch } from "@/modules/address-search/usecases/search
 import { configureProofLookupAdmission } from "@/shared/services/proof-location/proof-lookup-admission";
 
 import { enforceRequestedTenant } from "./modules/middlewares/tenant-authorization";
+import { rejectDeepListOffset } from "./shared/pagination/offset-ceiling";
 import { UPLOAD_TYPES, uploadConfig } from "./config/upload";
 
 import { isOriginAllowed } from "./config/cors-origin";
@@ -668,6 +669,12 @@ app.addHook("onSend", closeConnectionWhileDraining);
 // after body parsing, which `onRequest` (where `ensureAuthenticated` lives)
 // cannot do — without it a `businessId` sent in the body bypasses the check.
 app.addHook("preHandler", enforceRequestedTenant);
+
+// An offset listing past LIST_MAX_OFFSET rows (10,000) answers 400
+// LIST_OFFSET_TOO_DEEP: filter or export instead (plano-escala F2-30,
+// shared/pagination/offset-ceiling.ts). After validation, where `page` and
+// `pageSize` are numbers.
+app.addHook("preHandler", rejectDeepListOffset);
 
 // NUL and lone surrogates crash the query engine (500 at error level) on
 // every route that stores or searches text; refused as a 400 before any

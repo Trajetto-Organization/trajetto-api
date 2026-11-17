@@ -29,11 +29,12 @@ class ListDeliveryController {
       period,
       from,
       to,
+      facets,
     } = request.query as z.infer<typeof listDeliverySchema>;
 
     const listDeliveryUseCase = container.resolve(ListDeliveryUseCase);
 
-    const deliveriesPromise = listDeliveryUseCase.execute({
+    const listRequest = {
       userId: id,
       businessId,
       page,
@@ -48,7 +49,13 @@ class ListDeliveryController {
       period,
       from,
       to,
-    });
+    };
+
+    // `facets=skip` (plano-escala F2-30): the page only, nothing counted.
+    const deliveriesPromise =
+      facets === "skip"
+        ? listDeliveryUseCase.executePageOnly(listRequest)
+        : listDeliveryUseCase.execute(listRequest);
 
     await sendAsNDJSON({
       reply,
