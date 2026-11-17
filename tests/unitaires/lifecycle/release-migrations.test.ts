@@ -486,3 +486,174 @@ describe.skipIf(!bash)("the promote's release image, read", () => {
     expect(result.outputs.ai).toBe("");
   });
 });
+
+/**
+ * The release step runs again with the same image (plano-escala U-11,
+ * D19): with force_release, or when the last run left a step of infra/sql
+ * or prisma/post-deploy pending or failed — read in /health/rollout with
+ * the environment's ROLLOUT_STATUS_TOKEN (rollout-pending.mjs, stubbed
+ * here; run for real in rollout-pending.test.ts). Without the token, or
+ * when the API cannot tell, today's rule, with a warning.
+ */
+describe.skipIf(!bash)("running the step again with the same image", () => {
+  /** rollout-pending.mjs stubbed: prints STUB_PENDING, or fails. */
+  function stubPending() {
+    box.file(
+      ".github/scripts/rollout-pending.mjs",
+      [
+        'import { appendFileSync } from "node:fs";',
+        'appendFileSync("asked", "x");',
+        "if (process.env.STUB_PENDING_FAIL) { console.error(process.env.STUB_PENDING_FAIL); process.exit(1); }",
+        'process.stdout.write(process.env.STUB_PENDING ?? "");',
+      ].join("\n"),
+    );
+  }
+
+  const decide = (env: Record<string, string>) => {
+    stubGhcr();
+    stubPending();
+
+    return runBlock(
+      box,
+      stepOf(deploy, DECIDE).run,
+      {
+        ENVIRONMENT: "staging",
+        TAG: "staging",
+        PRESPLIT: "false",
+        MIGRATE_DIGEST: DIGEST,
+        STUB_APPLIED: DIGEST,
+        FORCE_RELEASE: "false",
+        ROLLOUT_STATUS_TOKEN: "",
+        API_URL: "https://api.example.com",
+        ...env,
+      },
+      box.root,
+    );
+  };
+
+  const asked = () => {
+    try {
+      return readFileSync(`${box.root}/asked`, "utf8").length;
+    } catch {
+      return 0;
+    }
+  };
+
+  it("runs it with force_release, without asking the API", () => {
+    const result = decide({ FORCE_RELEASE: "true", ROLLOUT_STATUS_TOKEN: "t" });
+
+    expect(result.status, result.log).toBe(0);
+    expect(result.outputs).toEqual({ run: "true" });
+    expect(result.log).toContain("::notice::Migrations: force_release");
+    expect(result.summary).toContain("forçada");
+    expect(asked()).toBe(0);
+  });
+
+  it("runs it when the last release left a step pending, even with the image it applied", () => {
+    const result = decide({
+      ROLLOUT_STATUS_TOKEN: "t",
+      STUB_PENDING: "prisma/post-deploy/10-swap.sql",
+    });
+
+    expect(result.status, result.log).toBe(0);
+    expect(result.outputs).toEqual({ run: "true" });
+    expect(result.log).toContain(
+      "deixou passos pendentes (prisma/post-deploy/10-swap.sql)",
+    );
+    expect(result.summary).toContain("prisma/post-deploy/10-swap.sql");
+  });
+
+  it("skips it when nothing is pending", () => {
+    const result = decide({ ROLLOUT_STATUS_TOKEN: "t", STUB_PENDING: "" });
+
+    expect(result.status, result.log).toBe(0);
+    expect(result.outputs).toEqual({ run: "false" });
+    expect(asked()).toBe(1);
+    expect(result.log).not.toContain("::warning::");
+  });
+
+  it("keeps today's rule, with a warning, without the token", () => {
+    const result = decide({ STUB_PENDING: "prisma/post-deploy/10-swap.sql" });
+
+    expect(result.status, result.log).toBe(0);
+    expect(result.outputs).toEqual({ run: "false" });
+    expect(result.log).toContain(
+      "::warning::Sem o secret ROLLOUT_STATUS_TOKEN no environment staging",
+    );
+    expect(asked()).toBe(0);
+  });
+
+  it("keeps today's rule, with the reason, when the API cannot tell", () => {
+    const result = decide({
+      ROLLOUT_STATUS_TOKEN: "t",
+      STUB_PENDING_FAIL: "respondeu 404: a API ainda não tem a rota",
+    });
+
+    expect(result.status, result.log).toBe(0);
+    expect(result.outputs).toEqual({ run: "false" });
+    expect(result.log).toContain(
+      "::warning::Não deu para ler os passos pendentes de staging (respondeu 404: a API ainda não tem a rota",
+    );
+  });
+
+  it("never asks the API when the image is new: it runs anyway", () => {
+    const result = decide({
+      ROLLOUT_STATUS_TOKEN: "t",
+      STUB_APPLIED: OLDER,
+    });
+
+    expect(result.outputs).toEqual({ run: "true" });
+    expect(asked()).toBe(0);
+  });
+
+  it("ignores force_release, saying so, for a build without a release image", () => {
+    const result = decide({
+      PRESPLIT: "true",
+      MIGRATE_DIGEST: "",
+      FORCE_RELEASE: "true",
+    });
+
+    expect(result.status, result.log).toBe(0);
+    expect(result.outputs).toEqual({ run: "false" });
+    expect(result.log).toContain("::warning::force_release ignorado");
+  });
+});
+
+describe("force_release and the pending steps, wired", () => {
+  it("is a Run workflow input of staging and production, handed to the action", () => {
+    for (const workflow of [staging, production]) {
+      expect(workflow.text).toMatch(
+        /\n {6}force_release:\n {8}description: .+\n {8}type: boolean\n/,
+      );
+    }
+
+    for (const job of [
+      jobOf(staging, "deploy-staging"),
+      jobOf(production, "promote-production"),
+    ]) {
+      expect(input(job, "force-release"), job.name).toBe(
+        "${{ inputs.force_release == true }}",
+      );
+      expect(input(job, "rollout-status-token"), job.name).toBe(
+        "${{ secrets.ROLLOUT_STATUS_TOKEN }}",
+      );
+      expect(
+        input(job, "release-serialize-with-application-id"),
+        job.name,
+      ).toBe("${{ vars.RELEASE_SERIALIZE_WITH_APPLICATION_ID }}");
+    }
+  });
+
+  it("reaches the decision and the release step through env, never inline", () => {
+    const decideStep = stepOf(deploy, DECIDE).text;
+
+    expect(decideStep).toContain("FORCE_RELEASE: ${{ inputs.force-release }}");
+    expect(decideStep).toContain(
+      "ROLLOUT_STATUS_TOKEN: ${{ inputs.rollout-status-token }}",
+    );
+    expect(decideStep).toContain("API_URL: ${{ inputs.api-public-url }}");
+    expect(stepOf(deploy, RELEASE).text).toContain(
+      "RELEASE_SERIALIZE_WITH_APPLICATION_ID: ${{ inputs.release-serialize-with-application-id }}",
+    );
+  });
+});

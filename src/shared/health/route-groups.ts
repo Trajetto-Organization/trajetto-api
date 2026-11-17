@@ -376,6 +376,7 @@ const ROUTE_GROUP_TABLE: Readonly<Record<RouteGroup, readonly string[]>> = {
     "GET /health",
     "GET /health/liveness",
     "GET /health/readiness",
+    "GET /health/rollout",
     "GET /health/metrics",
     "GET /health/providers",
     "GET /health/dead-letter",

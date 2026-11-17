@@ -25,7 +25,11 @@ on:
   # built last, not the build someone chose — and an invalid one is refused
   # by the evidence before anything else runs. `force_ai_build` redeploys
   # production's AI even when its digest did not change (nothing is ever
-  # built here).
+  # built here). `force_release` runs the release step even when
+  # production's database already applied the build's release image: a
+  # pending step (the queue swap), or a database just restored
+  # (plano-escala U-11). With the tag production runs now, it changes
+  # nothing else.
   workflow_dispatch:
     inputs:
       image_tag:
@@ -33,6 +37,10 @@ on:
         required: true
       force_ai_build:
         description: "Reimplanta a trajetto-ai mesmo sem mudança"
+        type: boolean
+        required: false
+      force_release:
+        description: "Roda a etapa de release (migrations e passos) mesmo com a imagem de migração já aplicada"
         type: boolean
         required: false
 
@@ -407,6 +415,9 @@ jobs:
           api-public-url: ${{ vars.API_PUBLIC_URL }}
           swarm-api-service: ${{ vars.SWARM_API_SERVICE }}
           release-timeout-seconds: ${{ vars.RELEASE_TIMEOUT_SECONDS }}
+          force-release: ${{ inputs.force_release == true }}
+          rollout-status-token: ${{ secrets.ROLLOUT_STATUS_TOKEN }}
+          release-serialize-with-application-id: ${{ vars.RELEASE_SERIALIZE_WITH_APPLICATION_ID }}
           require-branch-head: "false"
           restore-api-tag: "false"
           mark-staged: "false"

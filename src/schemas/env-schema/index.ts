@@ -868,6 +868,21 @@ const envSchema = z
     DOCS_PASSWORD: z.string().optional(),
 
     /**
+     * The token of GET /health/rollout (plano-escala U-11, D21): the
+     * pipeline reads there whether a release step ended 'pending' and runs
+     * the step again on the next deploy. Without it (empty counts as
+     * absent), or with fewer than 32 characters, the route answers the same
+     * 404 as a route that does not exist, to everyone, and the deploy only
+     * runs the step when the release image changed (as before). A short
+     * value never stops the boot: the route stays closed and the boot log
+     * says why. A different value per environment (`openssl rand -hex 32`).
+     */
+    ROLLOUT_STATUS_TOKEN: z.preprocess(
+      (value) => (value === "" ? undefined : value),
+      z.string().optional(),
+    ),
+
+    /**
      * Cloudflare Turnstile, verified by the API on the public quote form
      * (src/shared/security/turnstile.ts). The same secret the web holds.
      *

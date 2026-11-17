@@ -408,6 +408,45 @@ const healthResponses = {
         "O ambiente desta API (`APP_ENV`): `staging` ou `production` nas Applications do Dokploy, `development` fora delas. A web confere no boot que é o mesmo dela.",
       ),
   }),
+  rolloutStatus: z.object({
+    commit: z
+      .string()
+      .nullable()
+      .describe(
+        "O commit do build que responde; null num build local, sem commit.",
+      ),
+    release: z.object({
+      pending: z
+        .array(
+          z.object({
+            step: z
+              .string()
+              .describe(
+                "O arquivo do passo: `infra/sql/<nome>.sql` ou `prisma/post-deploy/<nome>.sql`.",
+              ),
+            status: z
+              .enum(["pending", "failed"])
+              .describe(
+                "`pending`: o passo espera um estado (uma capability, um lock); `failed`: a última execução dele falhou.",
+              ),
+            detail: z
+              .string()
+              .nullable()
+              .describe("O que o passo disse no último aviso, ou o erro."),
+            updatedAt: z.string().describe("Quando o passo rodou (ISO)."),
+          }),
+        )
+        .describe(
+          "Passos que fazem o próximo deploy rodar a etapa de release de novo, mesmo sem imagem de migração nova.",
+        ),
+      lastRunAt: z
+        .string()
+        .nullable()
+        .describe(
+          "Quando a etapa de release terminou (ou falhou) pela última vez; null antes da primeira.",
+        ),
+    }),
+  }),
   readinessCheck: z.object({
     status: z
       .enum(["ready", "not ready", "draining"])

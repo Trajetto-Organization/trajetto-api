@@ -152,3 +152,11 @@ docker exec "$CONTAINER" psql -U postgres -d "$DB_NAME" -t -c \
 
 echo
 echo "Drill complete."
+echo
+# A real restore (never this drill) is followed by the release step BEFORE
+# the runtime comes back: it reapplies infra/sql's owners and grants, which
+# a --no-owner restore loses, and the migrations a dump older than the code
+# lacks (plano-escala U-11; docs/deploy.md, Backup e restauração).
+echo "Num restore de verdade: rode a etapa de release no banco restaurado ANTES de subir a API"
+echo "(Deploy na trajetto-api-migrate, ou Run workflow com force_release). Ela devolve os"
+echo "roles, os grants e as migrations que faltam; o pipeline sozinho pularia a etapa."

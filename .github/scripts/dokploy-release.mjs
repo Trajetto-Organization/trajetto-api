@@ -26,6 +26,8 @@
  *      signal), one replica, and no `stop-first` update order (it stops a
  *      migration still running when a second deploy arrives). Anything off
  *      fails here, before the database is touched, saying what to change.
+ *   1b. On the single VPS, the other environment's release step first: while
+ *      its task is `Starting`, this one waits (U-11).
  *   2. The service's tasks before the deploy: docker.getServiceContainersByAppName,
  *      the list behind the panel's Logs tab. Dokploy answers an empty list
  *      on any stderr from `docker service ps`, so an empty one is read three
@@ -53,6 +55,9 @@
  *                             ghcr.io/trajetto-organization/trajetto-api-migrate:staging
  *   RELEASE_TIMEOUT_SECONDS   how long to wait for the outcome (default 1800)
  *   RELEASE_POLL_SECONDS      interval between reads of the tasks (default 5)
+ *   RELEASE_SERIALIZE_WITH_APPLICATION_ID
+ *                             the OTHER environment's release Application:
+ *                             wait while it migrates (waitForTheOtherRelease)
  *   ...and the DOKPLOY_* knobs of dokploy-deploy.mjs, handed over to it.
  */
 import { spawnSync } from "node:child_process";
@@ -291,6 +296,106 @@ function outcome(fresh) {
 
 const LOGS = `O log da migration está no Dokploy: Application ${LABEL} → Logs (o Swarm guarda o da tarefa que falhou).`;
 
+/**
+ * One release step at a time on the VPS (plano-escala U-11): while the
+ * OTHER environment's release Application (RELEASE_SERIALIZE_WITH_APPLICATION_ID,
+ * a variable of the GitHub environment) has a task `Starting` — migrating —
+ * this one waits before deploying its own. Staging and production share one
+ * host until staging moves to its own server, and the memory plan counts
+ * one migrate at a time (plano-escala-execucao, section 3).
+ *
+ * Unset: nothing to wait for. Unreadable (a wrong id, Dokploy not
+ * answering): a warning, and the step goes ahead as before — the
+ * serialization guards memory, not data. Still `Starting` after the
+ * release timeout: this run fails before touching the database, saying
+ * which Application holds it.
+ */
+async function waitForTheOtherRelease() {
+  const other = (env.RELEASE_SERIALIZE_WITH_APPLICATION_ID ?? "").trim();
+
+  if (!other) return;
+
+  if (!/^[A-Za-z0-9_-]{1,64}$/.test(other)) {
+    console.log(
+      "::warning::RELEASE_SERIALIZE_WITH_APPLICATION_ID tem formato inesperado (copie o id da URL da trajetto-api-migrate do outro ambiente); a etapa segue sem esperar.",
+    );
+    return;
+  }
+
+  if (other === APPLICATION_ID) {
+    console.log(
+      `::warning::RELEASE_SERIALIZE_WITH_APPLICATION_ID aponta para a própria ${LABEL} deste ambiente; ela deve ser a do OUTRO ambiente. A etapa segue sem esperar.`,
+    );
+    return;
+  }
+
+  let otherName;
+
+  try {
+    const app = await get(
+      `/api/application.one?applicationId=${encodeURIComponent(other)}`,
+    );
+
+    otherName = String(app?.appName ?? "");
+  } catch (error) {
+    console.log(
+      `::warning::Não foi possível ler a trajetto-api-migrate do outro ambiente (${redact(error.message)}); a etapa segue sem esperar por ela.`,
+    );
+    return;
+  }
+
+  if (!/^[a-zA-Z0-9.\-_]+$/.test(otherName)) {
+    console.log(
+      "::warning::O Dokploy não informou o appName da trajetto-api-migrate do outro ambiente; a etapa segue sem esperar por ela.",
+    );
+    return;
+  }
+
+  const started = Date.now();
+  let announced = false;
+
+  for (;;) {
+    let starting;
+
+    try {
+      starting = (await tasks(otherName)).filter(
+        (task) => task.status === "Starting",
+      );
+    } catch (error) {
+      console.log(
+        `::warning::Falha ao ler as tarefas de ${otherName} (${redact(error.message)}); a etapa segue sem esperar.`,
+      );
+      return;
+    }
+
+    const seconds = Math.round((Date.now() - started) / 1000);
+
+    if (starting.length === 0) {
+      if (announced) {
+        summary(
+          `Migrations: esperou ~${seconds}s a etapa de release do outro ambiente (${otherName}) terminar; uma por vez na VPS.`,
+        );
+      }
+      return;
+    }
+
+    if (!announced) {
+      console.log(
+        `[release] A etapa de release do outro ambiente (${otherName}) está rodando: esperando ela terminar antes de começar esta (uma migração por vez na VPS).`,
+      );
+      announced = true;
+    }
+
+    if (Date.now() - started >= TIMEOUT_MS) {
+      fail(
+        `A etapa de release do outro ambiente (${otherName}) segue em Starting há ${seconds}s: esta não começou, e nada foi migrado nem implantado. Acompanhe a ${otherName} no Dokploy (Logs) e rode de novo quando ela terminar; para não esperar, apague a variável RELEASE_SERIALIZE_WITH_APPLICATION_ID do environment do GitHub.`,
+      );
+    }
+
+    await sleep(POLL_MS);
+  }
+}
+
 async function main() {
   let app;
 
@@ -307,6 +412,8 @@ async function main() {
   const wrong = misconfiguration(app ?? {});
 
   if (wrong) fail(`Etapa de release não rodou: ${wrong} Nada foi migrado.`);
+
+  await waitForTheOtherRelease();
 
   const appName = app.appName;
   let current = [];

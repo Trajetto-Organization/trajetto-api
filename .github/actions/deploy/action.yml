@@ -67,6 +67,15 @@ inputs:
   release-timeout-seconds:
     description: "vars.RELEASE_TIMEOUT_SECONDS do environment: quanto esperar a etapa de release (vazio = 1800)"
     default: ""
+  force-release:
+    description: "true: roda a etapa de release mesmo com a imagem de migração já aplicada (Run workflow com force_release)"
+    default: "false"
+  rollout-status-token:
+    description: "secrets.ROLLOUT_STATUS_TOKEN: lê os passos pendentes em GET <api-public-url>/health/rollout"
+    default: ""
+  release-serialize-with-application-id:
+    description: "vars.RELEASE_SERIALIZE_WITH_APPLICATION_ID: a trajetto-api-migrate do outro ambiente, que esta espera terminar"
+    default: ""
   require-branch-head:
     description: "true: só o run da cabeça da branch implanta (staging)"
     default: "false"
@@ -280,6 +289,14 @@ runs:
     # applied every migration such a build knows. Any other build without a
     # release image never gets here (Staging evidence fails it). GHCR not
     # answering fails here (ghcr.sh), before anything moved.
+    #
+    # The same image runs the step again in two cases (plano-escala U-11,
+    # D19): `force-release` (Run workflow with force_release), and a step of
+    # infra/sql or prisma/post-deploy that the last run left pending or
+    # failed, read in GET <api-public-url>/health/rollout with the
+    # environment's ROLLOUT_STATUS_TOKEN (.github/scripts/rollout-pending.mjs).
+    # Without the token, or when the API cannot tell (a build from before
+    # the route, no API_PUBLIC_URL), the rule is today's, with a warning.
     - name: Decide migrations
       id: migrations
       if: steps.head.outputs.current == 'true' && steps.dokploy.outputs.enabled == 'true'
@@ -289,6 +306,9 @@ runs:
         TAG: ${{ inputs.tag }}
         MIGRATE_DIGEST: ${{ inputs.migrate-digest }}
         PRESPLIT: ${{ inputs.migrate-presplit }}
+        FORCE_RELEASE: ${{ inputs.force-release }}
+        ROLLOUT_STATUS_TOKEN: ${{ inputs.rollout-status-token }}
+        API_URL: ${{ inputs.api-public-url }}
       run: |
         case "$ENVIRONMENT" in
           production) where="produção" ;;
@@ -297,6 +317,9 @@ runs:
         if [ "$PRESPLIT" = "true" ]; then
           echo "run=false" >> "$GITHUB_OUTPUT"
           echo "::notice::O build é anterior à imagem de migração (trajetto-api-migrate): o banco de ${where} já aplicou todas as migrations dele, e a etapa de release não roda."
+          if [ "$FORCE_RELEASE" = "true" ]; then
+            echo "::warning::force_release ignorado: este build não tem imagem de migração."
+          fi
           echo "Migrations: etapa pulada; o build é anterior à imagem de migração." >> "$GITHUB_STEP_SUMMARY"
           exit 0
         fi
@@ -305,12 +328,41 @@ runs:
           exit 1
         fi
         applied=$(bash .github/scripts/ghcr.sh digest "ghcr.io/trajetto-organization/trajetto-api-migrate:${TAG}-applied")
-        if [ -n "$applied" ] && [ "$applied" = "$MIGRATE_DIGEST" ]; then
+        if [ -z "$applied" ] || [ "$applied" != "$MIGRATE_DIGEST" ]; then
+          echo "run=true" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+        if [ "$FORCE_RELEASE" = "true" ]; then
+          echo "run=true" >> "$GITHUB_OUTPUT"
+          echo "::notice::Migrations: force_release: a etapa de release roda de novo em ${where}, com a imagem que o banco já aplicou (${MIGRATE_DIGEST})."
+          echo "Migrations: etapa **forçada** (force_release) com ${MIGRATE_DIGEST}." >> "$GITHUB_STEP_SUMMARY"
+          exit 0
+        fi
+        skip() {
           echo "run=false" >> "$GITHUB_OUTPUT"
           echo "::notice::Migrations: o banco de ${where} já aplicou trajetto-api-migrate@${MIGRATE_DIGEST} (migrations e seeds sem mudança); a etapa de release não roda."
           echo "Migrations: sem mudança; o banco de ${where} já aplicou ${MIGRATE_DIGEST}." >> "$GITHUB_STEP_SUMMARY"
+        }
+        if [ -z "$ROLLOUT_STATUS_TOKEN" ]; then
+          skip
+          echo "::warning::Sem o secret ROLLOUT_STATUS_TOKEN no environment ${ENVIRONMENT}: um passo pendente da etapa de release (infra/sql, prisma/post-deploy) só roda de novo com uma imagem de migração nova ou com force_release (docs/deploy.md, seção 15)."
+          exit 0
+        fi
+        err=$(mktemp)
+        if pending=$(node .github/scripts/rollout-pending.mjs 2> "$err"); then
+          rm -f "$err"
+          if [ -n "$pending" ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::Migrations: a última etapa de release de ${where} deixou passos pendentes (${pending}); ela roda de novo com a mesma imagem."
+            echo "Migrations: etapa de novo pelos passos pendentes: ${pending}." >> "$GITHUB_STEP_SUMMARY"
+          else
+            skip
+          fi
         else
-          echo "run=true" >> "$GITHUB_OUTPUT"
+          reason=$(head -c 400 "$err")
+          rm -f "$err"
+          skip
+          echo "::warning::Não deu para ler os passos pendentes de ${where} (${reason}); a etapa só roda com uma imagem de migração nova ou com force_release, como antes."
         fi
 
     # The release Application runs `:<tag>`: the tag moves to this build's
@@ -346,6 +398,7 @@ runs:
         DOKPLOY_APP_LABEL: trajetto-api-migrate
         RELEASE_IMAGE: ghcr.io/trajetto-organization/trajetto-api-migrate:${{ inputs.tag }}
         RELEASE_TIMEOUT_SECONDS: ${{ inputs.release-timeout-seconds }}
+        RELEASE_SERIALIZE_WITH_APPLICATION_ID: ${{ inputs.release-serialize-with-application-id }}
       run: node .github/scripts/dokploy-release.mjs
 
     # Only now, after the step finished: the next run compares with this.

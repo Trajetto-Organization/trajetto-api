@@ -11,7 +11,7 @@ Voltar o banco a um instante anterior ao incidente. Com o PITR ligado (F1a na st
 1. Escolha o instante (antes do incidente) e anote em UTC.
 2. Pare a API (réplicas `0`) e o backup agendado, como em [deploy.md, Restaurar a partir do R2](../deploy.md#restaurar-a-partir-do-r2).
 3. Com PITR: restaure com o pgBackRest até o instante (`--type=time`) num Database novo, nunca por cima da única cópia; os comandos exatos vêm com a imagem nova do Postgres e entram aqui junto dela. Sem PITR: restaure o dump pela aba _Backups_ do Database.
-4. Dê **Deploy** na `trajetto-api-migrate` antes de voltar as réplicas (o banco restaurado pode estar atrás do código).
+4. **Sempre**, antes de subir o runtime: rode a etapa de release no banco restaurado, com **Deploy** na `trajetto-api-migrate` (ou _Run workflow_ com `force_release`, na produção com a `image_tag` que está no ar), e espere `Running`. O banco restaurado pode estar atrás do código, e a etapa devolve os roles, os grants e a época do cluster que um restore perde; a `release_step_state` e a tag `<ambiente>-applied` vêm de antes do restore, então o pipeline sozinho pularia a etapa.
 5. Volte as réplicas da API para `2` e religue o backup.
 
 ## Como confirmar

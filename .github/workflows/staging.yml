@@ -52,11 +52,19 @@ on:
   # under infra/ai-ocr changed — the AI is otherwise reused by its source and
   # redeployed only when its digest changes: a fix that reached the base
   # image without a digest bump, or an AI that drifted from its tag, needs
-  # this.
+  # this. `force_release` runs the release step (prisma/concurrent,
+  # migrate deploy, infra/sql, prisma/post-deploy, seeds) even when the
+  # database already applied this release image: a pending step that must
+  # not wait for the next deploy, or a database that was restored
+  # (plano-escala U-11).
   workflow_dispatch:
     inputs:
       force_ai_build:
         description: "Testa, reconstrói e reimplanta a trajetto-ai mesmo sem mudança em infra/ai-ocr"
+        type: boolean
+        required: false
+      force_release:
+        description: "Roda a etapa de release (migrations e passos) mesmo com a imagem de migração já aplicada"
         type: boolean
         required: false
 
@@ -1125,6 +1133,9 @@ jobs:
           api-public-url: ${{ vars.API_PUBLIC_URL }}
           swarm-api-service: ${{ vars.SWARM_API_SERVICE }}
           release-timeout-seconds: ${{ vars.RELEASE_TIMEOUT_SECONDS }}
+          force-release: ${{ inputs.force_release == true }}
+          rollout-status-token: ${{ secrets.ROLLOUT_STATUS_TOKEN }}
+          release-serialize-with-application-id: ${{ vars.RELEASE_SERIALIZE_WITH_APPLICATION_ID }}
           require-branch-head: "true"
           restore-api-tag: "true"
           mark-staged: "true"

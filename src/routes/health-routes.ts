@@ -24,6 +24,12 @@ import {
 import { probeDatabase } from "@/shared/health/readiness-probe";
 import { readOperationalMetrics } from "@/shared/health/operational-metrics";
 import { readProviderReadiness } from "@/shared/health/provider-readiness";
+import {
+  readRolloutStatus,
+  ROLLOUT_TOKEN_MIN_LENGTH,
+  rolloutToken,
+  rolloutTokenMatches,
+} from "@/shared/health/rollout-status";
 import { errorResponse } from "./documentation/common-responses";
 import { redactEmails } from "@/shared/logging/redact-email";
 
@@ -248,6 +254,55 @@ async function healthRoutes(app: FastifyInstance) {
       return reply
         .status(200)
         .send({ status: "alive", ...buildInfo, environment: env.APP_ENV });
+    },
+  );
+
+  /**
+   * The release step's state, for the pipeline (plano-escala U-11): a step
+   * that ended 'pending' or 'failed' makes the next deploy run the release
+   * step again, even with the same release image. Behind
+   * ROLLOUT_STATUS_TOKEN; without it, or with a wrong one, this is the 404
+   * of a route that does not exist (callNotFound: the same handler, the same
+   * body), so the route's existence is not given away. Read on the app's
+   * pool: one indexed read of a handful of rows, at most 30 a minute.
+   */
+  const rolloutStatusToken = rolloutToken(env.ROLLOUT_STATUS_TOKEN);
+
+  if (env.ROLLOUT_STATUS_TOKEN && !rolloutStatusToken) {
+    app.log.warn(
+      `ROLLOUT_STATUS_TOKEN has fewer than ${ROLLOUT_TOKEN_MIN_LENGTH} characters: GET /health/rollout stays closed (404)`,
+    );
+  }
+
+  app.get(
+    "/health/rollout",
+    {
+      config: { rateLimit: { max: 30, timeWindow: "1 minute" } },
+      // No `security` entry: the bearer is the pipeline's token, not a
+      // session, and this route never answers 401 or 403 (only the 404).
+      schema: {
+        tags: ["health"],
+        summary: "Estado da etapa de release (para o pipeline)",
+        description:
+          "O que a etapa de release deixou: os passos de `infra/sql` e `prisma/post-deploy` pendentes ou que falharam, e quando ela rodou pela última vez. O pipeline lê antes de cada deploy e roda a etapa de novo quando há um passo pendente. Exige `Authorization: Bearer <ROLLOUT_STATUS_TOKEN>`; sem o token configurado, sem o cabeçalho ou com um valor errado, responde o mesmo 404 de uma rota que não existe. Até 30 pedidos por minuto, sem cache.",
+        response: {
+          200: healthResponses.rolloutStatus,
+          404: errorResponse.describe(
+            "ROUTE_NOT_FOUND: sem token, token errado ou token não configurado (a mesma resposta de uma rota que não existe).",
+          ),
+        },
+      },
+    },
+    async (request, reply) => {
+      if (
+        !rolloutTokenMatches(request.headers.authorization, rolloutStatusToken)
+      ) {
+        return reply.callNotFound();
+      }
+
+      const status = await readRolloutStatus(database, buildInfo.commit);
+
+      return reply.header("cache-control", "no-store").status(200).send(status);
     },
   );
 

@@ -2063,16 +2063,19 @@ _Add environment secret_ / _Add environment variable_.
 
 **`staging`** (sem revisores; o deploy de staging é automático):
 
-| Tipo     | Nome                                                                                    | Valor                                                                                                                                                                                                      | Obrigatório?                                                                               |
-| -------- | --------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
-| secret   | `DOKPLOY_URL`                                                                           | URL do painel, **https**: `https://dokploy.intrajetto.com`, pela Cloudflare (nunca o IP, que o firewall fecha; o script recusa http)                                                                       | sim (com os três abaixo; nenhum dos quatro = deploy pulado com aviso)                      |
-| secret   | `DOKPLOY_API_KEY`                                                                       | a chave da seção 7.10                                                                                                                                                                                      | sim                                                                                        |
-| secret   | `DOKPLOY_API_APPLICATION_ID`                                                            | applicationId da `trajetto-api` de staging                                                                                                                                                                 | sim                                                                                        |
-| secret   | `DOKPLOY_MIGRATE_APPLICATION_ID`                                                        | applicationId da `trajetto-api-migrate` de staging ([seção 15](#15-migrations))                                                                                                                            | sim                                                                                        |
-| secret   | `DOKPLOY_AI_APPLICATION_ID`                                                             | applicationId da `trajetto-ai` de staging                                                                                                                                                                  | não (sem ele: aviso e a IA não é atualizada)                                               |
-| variable | `API_PUBLIC_URL`                                                                        | a origem pública da API de staging, `https://api-staging.intrajetto.com` (sem barra no fim): o pipeline espera a `/health/liveness` dela responder o commit novo ([seção 14](#14-conferir-a-convergência)) | sim, enquanto `ROLLOUT_VERIFY` não for `off` nem `ssh` (é a conferência padrão do staging) |
-| variable | `SWARM_API_SERVICE`                                                                     | `trajetto-api-staging` (o App Name da API)                                                                                                                                                                 | só com `ROLLOUT_VERIFY=ssh`                                                                |
-| secrets  | `DEPLOY_SSH_HOST`, `DEPLOY_SSH_USER`, `DEPLOY_SSH_KNOWN_HOSTS`, `DEPLOY_VERIFY_SSH_KEY` | conferência do rollout ([seção 14](#14-conferir-a-convergência)); podem ficar no repositório, já que os dois ambientes dividem o host                                                                      | só com `ROLLOUT_VERIFY=ssh`                                                                |
+| Tipo     | Nome                                                                                    | Valor                                                                                                                                                                                                                                                         | Obrigatório?                                                                               |
+| -------- | --------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
+| secret   | `DOKPLOY_URL`                                                                           | URL do painel, **https**: `https://dokploy.intrajetto.com`, pela Cloudflare (nunca o IP, que o firewall fecha; o script recusa http)                                                                                                                          | sim (com os três abaixo; nenhum dos quatro = deploy pulado com aviso)                      |
+| secret   | `DOKPLOY_API_KEY`                                                                       | a chave da seção 7.10                                                                                                                                                                                                                                         | sim                                                                                        |
+| secret   | `DOKPLOY_API_APPLICATION_ID`                                                            | applicationId da `trajetto-api` de staging                                                                                                                                                                                                                    | sim                                                                                        |
+| secret   | `DOKPLOY_MIGRATE_APPLICATION_ID`                                                        | applicationId da `trajetto-api-migrate` de staging ([seção 15](#15-migrations))                                                                                                                                                                               | sim                                                                                        |
+| secret   | `DOKPLOY_AI_APPLICATION_ID`                                                             | applicationId da `trajetto-ai` de staging                                                                                                                                                                                                                     | não (sem ele: aviso e a IA não é atualizada)                                               |
+| variable | `API_PUBLIC_URL`                                                                        | a origem pública da API de staging, `https://api-staging.intrajetto.com` (sem barra no fim): o pipeline espera a `/health/liveness` dela responder o commit novo ([seção 14](#14-conferir-a-convergência))                                                    | sim, enquanto `ROLLOUT_VERIFY` não for `off` nem `ssh` (é a conferência padrão do staging) |
+| variable | `SWARM_API_SERVICE`                                                                     | `trajetto-api-staging` (o App Name da API)                                                                                                                                                                                                                    | só com `ROLLOUT_VERIFY=ssh`                                                                |
+| secret   | `ROLLOUT_STATUS_TOKEN`                                                                  | o mesmo valor do `ROLLOUT_STATUS_TOKEN` da `trajetto-api` de staging (`openssl rand -hex 32`): o deploy lê os passos pendentes da etapa de release em `<API_PUBLIC_URL>/health/rollout` ([seção 15](#quando-a-etapa-roda)); sem ele, aviso e a regra de antes |
+| variable | `RELEASE_SERIALIZE_WITH_APPLICATION_ID`                                                 | o applicationId da `trajetto-api-migrate` de **produção**: na VPS única a etapa de staging espera a de produção terminar. Sai quando a staging for para o 2º VPS                                                                                              |
+| variable | `RELEASE_TIMEOUT_SECONDS`                                                               | opcional (vazio = 1800): quanto o deploy espera a etapa de release                                                                                                                                                                                            |
+| secrets  | `DEPLOY_SSH_HOST`, `DEPLOY_SSH_USER`, `DEPLOY_SSH_KNOWN_HOSTS`, `DEPLOY_VERIFY_SSH_KEY` | conferência do rollout ([seção 14](#14-conferir-a-convergência)); podem ficar no repositório, já que os dois ambientes dividem o host                                                                                                                         | só com `ROLLOUT_VERIFY=ssh`                                                                |
 
 Sem o `DOKPLOY_MIGRATE_APPLICATION_ID`, com os outros três definidos, o job
 falha logo no começo ("configuração parcial"), antes de qualquer tag andar: a
@@ -2083,15 +2086,18 @@ aprovar uma ida para produção) e, em _Deployment branches and tags_,
 _Selected branches and tags_ → `main` (o _Run workflow_ de rollback também
 roda a partir de `main`):
 
-| Tipo     | Nome                                                                                    | Valor                                                                                      |
-| -------- | --------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
-| secret   | `DOKPLOY_URL`, `DOKPLOY_API_KEY`                                                        | os mesmos do staging (um painel só)                                                        |
-| secret   | `DOKPLOY_API_APPLICATION_ID`                                                            | applicationId da `trajetto-api` de produção                                                |
-| secret   | `DOKPLOY_MIGRATE_APPLICATION_ID`                                                        | applicationId da `trajetto-api-migrate` de produção ([seção 15](#15-migrations))           |
-| secret   | `DOKPLOY_AI_APPLICATION_ID`                                                             | applicationId da `trajetto-ai` de produção                                                 |
-| variable | `API_PUBLIC_URL`                                                                        | a origem pública da API de produção; só é lida com `ROLLOUT_VERIFY=http` neste environment |
-| variable | `SWARM_API_SERVICE`                                                                     | `trajetto-api-production`                                                                  |
-| secrets  | `DEPLOY_SSH_HOST`, `DEPLOY_SSH_USER`, `DEPLOY_SSH_KNOWN_HOSTS`, `DEPLOY_VERIFY_SSH_KEY` | conferência do rollout (só sem `ROLLOUT_VERIFY=http`)                                      |
+| Tipo     | Nome                                                                                    | Valor                                                                                                                                                                                                  |
+| -------- | --------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| secret   | `DOKPLOY_URL`, `DOKPLOY_API_KEY`                                                        | os mesmos do staging (um painel só)                                                                                                                                                                    |
+| secret   | `DOKPLOY_API_APPLICATION_ID`                                                            | applicationId da `trajetto-api` de produção                                                                                                                                                            |
+| secret   | `DOKPLOY_MIGRATE_APPLICATION_ID`                                                        | applicationId da `trajetto-api-migrate` de produção ([seção 15](#15-migrations))                                                                                                                       |
+| secret   | `DOKPLOY_AI_APPLICATION_ID`                                                             | applicationId da `trajetto-ai` de produção                                                                                                                                                             |
+| variable | `API_PUBLIC_URL`                                                                        | a origem pública da API de produção; lida com `ROLLOUT_VERIFY=http` e para os passos pendentes da etapa de release (com o `ROLLOUT_STATUS_TOKEN`)                                                      |
+| variable | `SWARM_API_SERVICE`                                                                     | `trajetto-api-production`                                                                                                                                                                              |
+| secret   | `ROLLOUT_STATUS_TOKEN`                                                                  | o mesmo valor do `ROLLOUT_STATUS_TOKEN` da `trajetto-api` de produção (outro valor, não o do staging); lido em `<API_PUBLIC_URL>/health/rollout`, então a `API_PUBLIC_URL` precisa existir aqui também |
+| variable | `RELEASE_SERIALIZE_WITH_APPLICATION_ID`                                                 | o applicationId da `trajetto-api-migrate` de **staging**                                                                                                                                               |
+| variable | `RELEASE_TIMEOUT_SECONDS`                                                               | opcional (vazio = 1800)                                                                                                                                                                                |
+| secrets  | `DEPLOY_SSH_HOST`, `DEPLOY_SSH_USER`, `DEPLOY_SSH_KNOWN_HOSTS`, `DEPLOY_VERIFY_SSH_KEY` | conferência do rollout (só sem `ROLLOUT_VERIFY=http`)                                                                                                                                                  |
 
 Os quatro `DOKPLOY_*` obrigatórios de um environment (`DOKPLOY_URL`,
 `DOKPLOY_API_KEY`, `DOKPLOY_API_APPLICATION_ID` e
@@ -2384,6 +2390,37 @@ A ordem inteira da etapa é `prisma/concurrent` → `prisma migrate deploy` →
 - Emergência: `POST_DEPLOY_STEPS=off` no _Environment_ da
   `trajetto-api-migrate` pula o `prisma/post-deploy` (o estado dos passos
   fica como estava; o `infra/sql` continua). Tire depois.
+
+### Quando a etapa roda
+
+O passo _Decide migrations_ da ação de deploy roda a etapa quando:
+
+1. a imagem de migração do build não é a que o banco do ambiente já aplicou
+   (a tag `<ambiente>-applied`; o caso de sempre); ou
+2. o _Run workflow_ veio com `force_release` (no `staging.yml`, que refaz
+   o caminho todo do staging; no `production.yml`, com a `image_tag` que
+   está no ar). É o que se usa depois de um restore, de um failover, ou para
+   um passo pendente que não pode esperar o próximo deploy; ou
+3. a última etapa deixou um passo de `infra/sql` ou `prisma/post-deploy`
+   `pending` ou `failed`: o deploy lê `GET <API_PUBLIC_URL>/health/rollout`
+   com o secret `ROLLOUT_STATUS_TOKEN` do environment (o mesmo valor da
+   variável da `trajetto-api`) e roda a etapa de novo, com a mesma imagem.
+   O resumo do run diz quais passos.
+
+Sem o `ROLLOUT_STATUS_TOKEN` (ou quando a API não responde a rota: um build
+anterior a ela, um token diferente, sem `API_PUBLIC_URL`), vale só o caso 1
+e o 2, com um aviso no run. A rota responde 404, igual a uma rota que não
+existe, sem o token certo; 30 pedidos por minuto, sem cache. Um passo
+pendente para sempre roda a etapa a cada deploy (1 a 2 min): o resumo do run
+mostra qual.
+
+**Uma migração por vez na VPS.** Com a variável
+`RELEASE_SERIALIZE_WITH_APPLICATION_ID` (o applicationId da
+`trajetto-api-migrate` do **outro** ambiente), a etapa espera enquanto a do
+outro ambiente tem tarefa `Starting`; passado o prazo
+(`RELEASE_TIMEOUT_SECONDS`), o passo falha sem tocar no banco. Sem a
+variável, ou sem conseguir ler a outra Application, segue sem esperar (com
+aviso). Sai quando a staging for para o próprio servidor.
 
 ### Como a etapa roda
 
@@ -3616,17 +3653,22 @@ Num incidente real (banco perdido):
    até o próximo deploy). Desligue o backup agendado (_Enabled_) enquanto
    restaura.
 3. Restaure pela aba _Backups_ (acima) ou pelo caminho manual (abaixo).
-4. Volte as réplicas da API para `2` (**Save** → **Deploy**) e religue o
+4. **Sempre**, antes de subir o runtime: rode a etapa de release no banco
+   restaurado. **Deploy** na Application `trajetto-api-migrate` do ambiente
+   (ou GitHub → Actions → staging/production → _Run workflow_ com
+   `force_release`, na produção com a `image_tag` que está no ar) e espere
+   a tarefa ficar `Running` (aba _Logs_: "etapa de release concluída").
+5. Volte as réplicas da API para `2` (**Save** → **Deploy**) e religue o
    backup.
 
-Um banco restaurado traz `_prisma_migrations` e passa pela guarda de banco
-vazio. Se o dump é mais velho que o build no ar, a API recusa subir até as
-migrations que faltam rodarem: antes de voltar as réplicas (passo 4), dê
-**Deploy** na Application `trajetto-api-migrate` do ambiente e espere a
-tarefa ficar `Running` (aba _Logs_: "etapa de release concluída"). Não conte
-com o pipeline para isso: a tag `<ambiente>-applied` diz que a imagem de
-migração já rodou **no banco de antes**, e o próximo run pularia a etapa. O
-Deploy manual aplica as migrations que o dump não tem
+Por que o passo 4 é sempre: um banco restaurado traz `_prisma_migrations`
+e passa pela guarda de banco vazio, mas um restore com `--no-owner` perde
+os donos e os grants que o `infra/sql` mantém (e, com a onda 7, a época do
+cluster muda), e só a etapa os devolve. Se o dump é mais velho que o build
+no ar, a API ainda recusa subir até as migrations que faltam rodarem. Não
+conte com o pipeline para isso: a tag `<ambiente>-applied` diz que a imagem
+de migração já rodou **no banco de antes**, e a `release_step_state` veio
+do dump, então o próximo run pularia a etapa
 ([seção 15](#15-migrations)).
 
 **Caminho manual** (baixar a cópia e restaurar à mão):
