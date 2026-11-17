@@ -86,14 +86,17 @@ class InMemoryActivityRepository implements IActivityRepository {
     // the pipeline is idempotent would be proving the opposite.
     if (activityData.deliveryId) {
       const existing = this.activities.find(
-        (entry) => entry.deliveryId === activityData.deliveryId,
+        (entry) =>
+          entry.id === activityData.deliveryId ||
+          entry.deliveryId === activityData.deliveryId,
       );
 
       if (existing) return existing;
     }
 
     const activity: Activity = {
-      id: uuidV7(),
+      // The pipeline's delivery id is the row's id (plano-escala F2-15).
+      id: activityData.deliveryId ?? uuidV7(),
       deliveryId: activityData.deliveryId ?? null,
       type: activityData.type,
       action: activityData.action,

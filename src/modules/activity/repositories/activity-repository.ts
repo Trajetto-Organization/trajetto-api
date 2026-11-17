@@ -107,38 +107,43 @@ class ActivityRepository implements IActivityRepository {
 
     /**
      * A write coming from the notification pipeline is idempotent by its
-     * delivery id.
+     * delivery id, which is also the row's own id (plano-escala F2-15).
      *
-     * The empty `update` is the point: an activity that already exists is
-     * left exactly as it was recorded the first time, timestamps included.
+     * The activity trail becomes a table partitioned by month on its id
+     * (F2-18, wave 11), and there the global unique on `deliveryId` cannot
+     * stay: the primary key becomes the anchor, so a redelivery of the same
+     * notification_delivery (a uuid v7, minted when the event expanded)
+     * writes the same id. Until then both indexes hold, and the row the
+     * previous image wrote under a random id is still found by `deliveryId`:
+     * first by id, then by deliveryId (the fallback goes after the copy
+     * window, U-10), and only then the insert.
      *
-     * It is NOT one statement, though. Prisma only turns an upsert into
-     * `INSERT ... ON CONFLICT` when `update` has something to set; with an
-     * empty one it runs a SELECT and then an INSERT, and two workers
-     * recording the same delivery at once both pass the SELECT (measured in
-     * tests/E2E/repository-guards.test.ts). The loser's P2002 on `deliveryId`
-     * means the row it wanted to write is there, so it is read and returned
-     * instead of failing the delivery into a retry.
+     * An activity that already exists is left exactly as it was recorded
+     * the first time, timestamps included. Two workers recording the same
+     * delivery at once both pass the reads (measured in
+     * tests/E2E/repository-guards.test.ts); the loser's P2002, on either
+     * index, means the row it wanted to write is there, so it is read and
+     * returned instead of failing the delivery into a retry.
      */
     if (activityData.deliveryId) {
       const deliveryId = activityData.deliveryId;
+      const recorded = () => this.findPipelineActivity(deliveryId);
+
+      const existing = await recorded();
+      if (existing) return existing;
 
       try {
-        return await this.prisma.activity.upsert({
-          where: { deliveryId },
-          create: data,
-          update: {},
+        return await this.prisma.activity.create({
+          data: { ...data, id: deliveryId },
         });
       } catch (error) {
         if (
           error instanceof Prisma.PrismaClientKnownRequestError &&
           error.code === "P2002"
         ) {
-          const existing = await this.prisma.activity.findUnique({
-            where: { deliveryId },
-          });
+          const winner = await recorded();
 
-          if (existing) return existing;
+          if (winner) return winner;
         }
 
         throw error;
@@ -148,6 +153,19 @@ class ActivityRepository implements IActivityRepository {
     const activity = await client.activity.create({ data });
 
     return activity;
+  }
+
+  /**
+   * The row the pipeline recorded for a notification_delivery: under its
+   * id (F2-15), or under the random id the previous image gave it.
+   */
+  private async findPipelineActivity(
+    deliveryId: string,
+  ): Promise<Activity | null> {
+    return (
+      (await this.prisma.activity.findUnique({ where: { id: deliveryId } })) ??
+      (await this.prisma.activity.findFirst({ where: { deliveryId } }))
+    );
   }
 
   /**

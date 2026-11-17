@@ -3369,6 +3369,20 @@ usava RabbitMQ para e-mail, WhatsApp e verificação por IA; a revisão de
 28/10/2026 e os gatilhos para um dia adotar broker (só por medição) estão no
 [ADR 0001](./adr/0001-filas-e-mensageria.md).
 
+**Chaves que sobrevivem à partição (plano de escala, onda 8).** As tabelas
+que vão ser particionadas por `RANGE(id)` não comportam índice único fora da
+chave de partição, então cada garantia de "uma vez só" ganha uma âncora que
+continua de pé depois:
+
+- a linha da trilha de auditoria que o pipeline grava (canal `ACTIVITY`)
+  tem o id da `notification_delivery` que a gerou (F2-15). O reenvio da
+  mesma entrega acha a linha pela chave primária, e a linha que a imagem
+  anterior gravou com outro id, pelo `deliveryId` (esse caminho sai depois
+  da janela de cópia da onda 11, no U-10). Quando a `activity` perder o
+  índice único de `deliveryId`, dois workers ainda gravam uma linha só. No
+  feed de atividades (ordenado pelo id), a linha fica na posição do instante
+  em que o evento foi expandido, não no da gravação.
+
 ## Crons
 
 Registrados em `src/jobs/cron/index.ts`. Horário em UTC (o contêiner não tem
