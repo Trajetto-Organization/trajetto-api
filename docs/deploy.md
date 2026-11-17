@@ -1937,14 +1937,14 @@ release cria os roles e os grants em toda release
 são do dono, à mão, e nunca entram num arquivo do repositório nem num SQL
 com a senha escrita.
 
-| Role                  | O que pode                                                                                                                        | Quem usa                                        |
-| --------------------- | --------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------- |
-| `trajetto_app`        | o grupo (nunca um login): lê e grava toda tabela, menos a trilha das entregas e as tabelas da etapa de release, que só lê         | ninguém direto; os três abaixo são membros      |
-| `trajetto_http`       | o grupo; na trilha (`delivery_event`), lê, insere e preenche o endereço do GPS do comprovante; `statement_timeout` de 30 s        | as requisições (API, tempo real, ingestão)      |
-| `trajetto_worker`     | igual ao `trajetto_http`                                                                                                          | os workers (onda 12)                            |
-| `trajetto_batch`      | o grupo; na trilha, lê, altera e apaga; membro do `trajetto_partitions` e dos roles de estatística; `statement_timeout` de 30 min | o cron: expurgos, partições, métricas pesadas   |
-| `trajetto_read`       | só SELECT, fora do grupo; `statement_timeout` de 10 s                                                                             | as leituras pesadas (onda 12)                   |
-| `trajetto_partitions` | dono das tabelas particionadas e das partições (`infra/sql/10-partitions.sql`)                                                    | só por `SET ROLE`, a partir do `trajetto_batch` |
+| Role                  | O que pode                                                                                                                                                     | Quem usa                                        |
+| --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------- |
+| `trajetto_app`        | o grupo (nunca um login): lê e grava toda tabela, menos a trilha das entregas e as tabelas da etapa de release, que só lê                                      | ninguém direto; os três abaixo são membros      |
+| `trajetto_http`       | o grupo; na trilha (`delivery_event`), lê, insere e preenche o endereço do GPS do comprovante; `statement_timeout` de 30 s                                     | as requisições (API, tempo real, ingestão)      |
+| `trajetto_worker`     | igual ao `trajetto_http`                                                                                                                                       | os workers (onda 12)                            |
+| `trajetto_batch`      | o grupo; na trilha, lê, altera e apaga; membro do `trajetto_partitions` e dos roles de estatística; `statement_timeout` de 30 min                              | o cron: expurgos, partições, métricas pesadas   |
+| `trajetto_read`       | só SELECT, fora do grupo; `statement_timeout` de 10 s                                                                                                          | as leituras pesadas (onda 12)                   |
+| `trajetto_partitions` | dono das tabelas particionadas e das partições (`infra/sql/10-partitions.sql`); no schema, só cria, altera e apaga tabelas (`infra/sql/15-untrusted-code.sql`) | só por `SET ROLE`, a partir do `trajetto_batch` |
 
 Todos levam `lock_timeout` de 5 s e `idle_in_transaction_session_timeout`
 de 60 s no próprio role, além dos da URL. Cada URL, com o login, o
@@ -5579,6 +5579,31 @@ confira:
   (`ALTER ROLE <role> NOLOGIN;`) antes de voltar a este passo. A etapa de
   release nunca dá esses poderes: o `infra-sql-rules.test.ts` recusa um
   `infra/sql` que os conceda.
+
+- **Nenhum código no schema de quem não é o dono.** O `trajetto_batch` é
+  membro do `trajetto_partitions`, que tem CREATE no schema para as
+  partições; uma função ou um operador criado ali com as credenciais do
+  batch rodaria como superusuário na release seguinte (CVE-2018-1058). No
+  mesmo `psql`:
+
+  ```sql
+  SELECT evtenabled FROM pg_event_trigger
+   WHERE evtname = 'trajetto_untrusted_code';
+  SELECT 'função' AS tipo, p.oid::regprocedure::text AS nome,
+         pg_get_userbyid(p.proowner) AS dono
+    FROM pg_proc p JOIN pg_roles r ON r.oid = p.proowner
+   WHERE p.pronamespace = 'public'::regnamespace AND NOT r.rolsuper
+  UNION ALL
+  SELECT 'operador', o.oid::regoperator::text, pg_get_userbyid(o.oprowner)
+    FROM pg_operator o JOIN pg_roles r ON r.oid = o.oprowner
+   WHERE o.oprnamespace = 'public'::regnamespace AND NOT r.rolsuper;
+  ```
+
+  A primeira devolve `O` (ligado); a segunda volta vazia. Sem a linha do
+  event trigger, rode a etapa de release (`infra/sql/15-untrusted-code.sql`);
+  com uma função ou um operador na segunda, pare aqui, sem as chaves:
+  descubra quem criou, apague e troque a senha do login dele antes de
+  voltar.
 
 - **A trava no bucket.** R2 → `trajetto-pitr-prod` →
   _Settings → Bucket Lock_: a regra de `archive/trajetto/1`, 14 dias, já

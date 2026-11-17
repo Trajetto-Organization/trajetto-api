@@ -14,7 +14,8 @@
 --
 -- What it does, idempotently, on every release (infra/sql/README.md):
 --   1. creates the role NOLOGIN when it is missing;
---   2. gives it USAGE and CREATE on the schema the migrations use;
+--   2. gives it USAGE and CREATE on the schema the migrations use (for
+--      tables only: 15-untrusted-code.sql refuses it any other object);
 --   3. makes it the owner of each registered parent and of every partition
 --      under it. `ALTER TABLE parent OWNER TO` does not reach the
 --      partitions, and a partition someone created by hand in an incident
