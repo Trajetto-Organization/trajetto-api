@@ -40,16 +40,24 @@ import {
  * count), the quoted strings and heredocs of the shell scripts, and the
  * .sql files. Python under infra/ai-ocr never connects to the database.
  *
- * The only exception will be the dedicated DDL connection (F2-08/F3-20),
- * which runs DETACH … CONCURRENTLY outside a transaction with a session
- * SET ROLE; it is listed in DDL_CONNECTION_ALLOWLIST when it lands.
+ * The exceptions are the connections that never go through PgBouncer and
+ * need a session on purpose, listed in DDL_CONNECTION_ALLOWLIST: the
+ * release step's own (CREATE INDEX CONCURRENTLY and the idempotent steps,
+ * F2-01/F5-08, whose session SETs bound each step; release-connection.ts
+ * refuses a URL through PgBouncer) and the dedicated DDL connection of the
+ * partition job (F2-08/F3-20), which runs DETACH … CONCURRENTLY outside a
+ * transaction with a session SET ROLE.
  */
 const ROOT = process.cwd();
 const SCANNED_DIRS = ["src", "infra"];
 const CODE_EXTENSIONS = new Set([".ts", ".tsx", ".js", ".mjs", ".cjs"]);
 
-/** Files allowed a session: the dedicated DDL connection only. None yet. */
-const DDL_CONNECTION_ALLOWLIST: string[] = [];
+/** Files allowed a session: direct connections that refuse PgBouncer. */
+const DDL_CONNECTION_ALLOWLIST: string[] = [
+  "infra/scripts/online-ddl.ts",
+  "infra/scripts/release-connection.ts",
+  "infra/scripts/release-step-runner.ts",
+];
 
 interface Finding {
   file: string;
