@@ -13,6 +13,10 @@ import {
 } from "../usecases/errors/delivery-errors";
 
 import { DeliveryStatus } from "@/shared/delivery/delivery-rules";
+import {
+  recordEventSubmission,
+  submittedEventId,
+} from "@/shared/delivery/event-submission";
 import { refreshStopGroupKeysOfDelivery } from "@/shared/delivery/stop-group";
 import { openStopsOnRoutesLeftOpen } from "@/shared/route/routes-left-open-query";
 import { notOnAnOpenStop } from "@/shared/route/open-stop-anti-join";
@@ -1513,17 +1517,39 @@ class DeliveryRepository implements IDeliveryRepository {
     clientSubmissionId: string,
     businessId: string,
   ): Promise<DeliveryEventRecord | null> {
+    const select = {
+      id: true,
+      type: true,
+      deliveryId: true,
+    } as const;
+
+    // The key's own table first (plano-escala F2-14). A key whose event
+    // went with its delivery reads as absent, like before.
+    const eventId = await submittedEventId(
+      this.prisma,
+      clientSubmissionId,
+      businessId,
+    );
+
+    if (eventId) {
+      const event = await this.prisma.deliveryEvent.findFirst({
+        where: { id: eventId, businessId },
+        select,
+      });
+
+      if (event) {
+        return { ...event, client_submission_id: clientSubmissionId };
+      }
+    }
+
+    // The legacy column: what the previous image writes during the rolling
+    // deploy. Goes with the legacy unique, after the copy window (U-10).
     return this.prisma.deliveryEvent.findFirst({
       where: {
         client_submission_id: clientSubmissionId,
         delivery: { businessId },
       },
-      select: {
-        id: true,
-        type: true,
-        deliveryId: true,
-        client_submission_id: true,
-      },
+      select: { ...select, client_submission_id: true },
     });
   }
 
@@ -1691,13 +1717,46 @@ class DeliveryRepository implements IDeliveryRepository {
     eventData: CreateDeliveryEventProps,
     tx?: Prisma.TransactionClient,
   ): Promise<void> {
-    const client = tx ?? this.prisma;
+    const key = eventData.client_submission_id ?? null;
 
-    await client.deliveryEvent.create({
+    const write = async (client: Prisma.TransactionClient): Promise<void> => {
+      const businessId = await tenantOfDelivery(client, eventData.deliveryId);
+      const event = await this.insertDeliveryEvent(
+        client,
+        eventData,
+        businessId,
+      );
+
+      // The key and its event commit together (plano-escala F2-14).
+      if (key) {
+        await recordEventSubmission(client, {
+          clientSubmissionId: key,
+          eventId: event.id,
+          businessId,
+        });
+      }
+    };
+
+    if (tx) return write(tx);
+
+    // Two statements with a key: a transaction of their own. Without one,
+    // the single insert it always was.
+    if (key) return this.prisma.$transaction(write);
+
+    return write(this.prisma);
+  }
+
+  private insertDeliveryEvent(
+    client: Prisma.TransactionClient,
+    eventData: CreateDeliveryEventProps,
+    businessId: string,
+  ): Promise<{ id: string }> {
+    return client.deliveryEvent.create({
+      select: { id: true },
       data: {
         type: eventData.type,
         deliveryId: eventData.deliveryId,
-        businessId: await tenantOfDelivery(client, eventData.deliveryId),
+        businessId,
         reportedById: eventData.reportedById ?? null,
 
         // Defaults to USER because that is what every source was until the
@@ -1776,11 +1835,14 @@ class DeliveryRepository implements IDeliveryRepository {
         throw new DeliveryStatusConflictError();
       }
 
-      await client.deliveryEvent.create({
+      const businessId = await tenantOfDelivery(client, eventData.deliveryId);
+
+      const proof = await client.deliveryEvent.create({
+        select: { id: true },
         data: {
           type: "PROOF",
           deliveryId: eventData.deliveryId,
-          businessId: await tenantOfDelivery(client, eventData.deliveryId),
+          businessId,
           reportedById: eventData.reportedById,
           latitude: eventData.latitude ?? null,
           longitude: eventData.longitude ?? null,
@@ -1804,6 +1866,15 @@ class DeliveryRepository implements IDeliveryRepository {
           geofence_outcome: eventData.geofence_outcome ?? null,
         },
       });
+
+      // The proof's key commits with it (plano-escala F2-14).
+      if (eventData.client_submission_id) {
+        await recordEventSubmission(client, {
+          clientSubmissionId: eventData.client_submission_id,
+          eventId: proof.id,
+          businessId,
+        });
+      }
 
       // Decision 6.3: the proof wins over a request still waiting for the
       // tower. After the delivery row, the order every writer of a delivery

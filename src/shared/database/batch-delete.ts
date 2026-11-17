@@ -55,6 +55,13 @@ interface BatchDeleteParams {
    * a matching index it would force a sort of the entire match set.
    */
   orderBy?: Prisma.Sql;
+
+  /**
+   * The table's single-column key, quoted, when it is not "id": the batch
+   * is picked by it. delivery_event_submission's key is the submission key
+   * itself (plano-escala F2-14).
+   */
+  key?: Prisma.Sql;
 }
 
 interface BatchDeleteResult {
@@ -105,6 +112,7 @@ async function deleteInBatches({
   maxRows,
   deadline,
   orderBy,
+  key = Prisma.sql`"id"`,
   client = database,
 }: BatchDeleteParams): Promise<BatchDeleteResult> {
   const ordering = orderBy ? Prisma.sql`ORDER BY ${orderBy}` : Prisma.empty;
@@ -120,8 +128,8 @@ async function deleteInBatches({
 
     const removed = await client.$executeRaw`
       DELETE FROM ${table}
-      WHERE "id" IN (
-        SELECT "id" FROM ${table}
+      WHERE ${key} IN (
+        SELECT ${key} FROM ${table}
         WHERE ${where}
         ${ordering}
         LIMIT ${limit}

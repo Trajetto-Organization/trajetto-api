@@ -834,6 +834,22 @@ function deliveryRepositoryContract(harness: () => DeliveryHarness): void {
         await h.repo.findOccurrenceBySubmissionId("occ-sub-1", B),
       ).toBeNull();
     });
+
+    // plano-escala F2-14: the Prisma side answers from
+    // delivery_event_submission, the twin from its own list; same answer.
+    it("find an event by its submission key in its company only", async () => {
+      const h = harness();
+
+      expect(
+        await h.repo.findEventBySubmissionId("evt-sub-1", A),
+      ).toMatchObject({
+        type: "STATUS_CHANGE",
+        deliveryId: h.id("d1"),
+        client_submission_id: "evt-sub-1",
+      });
+      expect(await h.repo.findEventBySubmissionId("evt-sub-1", B)).toBeNull();
+      expect(await h.repo.findEventBySubmissionId("nope", A)).toBeNull();
+    });
   });
 
   describe("the exports", () => {

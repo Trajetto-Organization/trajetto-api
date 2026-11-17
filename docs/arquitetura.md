@@ -2887,6 +2887,18 @@ D32).
   único na tabela inteira e a busca do reenvio só vê a empresa). Antes era 500
   ou o sucesso do registro alheio. Trocar o índice por um por empresa fica
   para uma release de contract.
+- **Chave de envio da trilha numa tabela própria (plano de escala F2-14):**
+  a chegada, o comprovante e o "a caminho" gravam a chave também em
+  `delivery_event_submission` (chave primária = a chave; o evento e a
+  empresa ao lado; sem FK), na mesma transação do evento. É o que segura a
+  chave quando a `delivery_event` virar particionada por mês (onda 11), que
+  não comporta índice único fora da chave de partição. A chave primária tem
+  o nome da coluna, então o P2002 dela e o do índice único legado seguem o
+  mesmo caminho de reenvio ou `409 SUBMISSION_ID_REUSED`. A busca do reenvio
+  lê a tabela nova e, sem achar, a coluna legada (o que a imagem anterior
+  grava durante o rolling; sai no U-10). A migration copiou as chaves que já
+  existiam; o cron `cleanup-delivery-event-submissions` apaga as mais velhas
+  que `DELIVERY_EVENT_SUBMISSION_RETENTION_DAYS` (90 dias).
 - **Exclusão em corrida (K16):** o P2003 da FK na exclusão de embarcador,
   motivo de status e tipo de ocorrência vira o mesmo 409 da contagem
   (`isForeignKeyViolation`).
@@ -3393,6 +3405,7 @@ entradas pesadas não se cruzam.
 | `cleanup-webhook-deliveries`         | 04:20                     | remove entregas de webhook resolvidas fora da janela de reenvio                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 | `cleanup-api-usage`                  | 04:35                     | remove contadores diários de uso da API pública com mais de 400 dias                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
 | `purge-ops-series`                   | 04:40                     | apaga em lotes as linhas do `ops_sample` e do `pgss_snapshot` mais velhas que `OPS_SAMPLE_RETENTION_DAYS` e `PGSS_SNAPSHOT_RETENTION_DAYS` (30 dias); com sobra, a execução fica parcial. Antes, os dias da `provider_quota_day` com mais de 35 dias (F2-32)                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| `cleanup-delivery-event-submissions` | 04:45                     | apaga em lotes as chaves de envio da trilha (`delivery_event_submission`) mais velhas que `DELIVERY_EVENT_SUBMISSION_RETENTION_DAYS` (90 dias, F2-14); com sobra, a execução fica parcial                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | `cleanup-orphan-uploads`             | 04:50                     | conta (ou remove, com `UPLOAD_ORPHAN_GC=delete`) objetos do bucket sem linha                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 
 O backup diário do Dokploy (03:00 UTC, aba _Backups_ do Database) roda antes do

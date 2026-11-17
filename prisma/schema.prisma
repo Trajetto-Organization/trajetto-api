@@ -3984,6 +3984,31 @@ model DeliveryEvent {
   @@map("delivery_event")
 }
 
+/// The driver app's submission keys of the trail (plano-escala F2-14): one
+/// row per delivery_event written with a client_submission_id, in the same
+/// transaction as the event. delivery_event moves to a table partitioned by
+/// month on its id (F2-16, F2-17), and a partitioned table cannot hold a
+/// unique index without the partition key: the global "this key was already
+/// used" moves here, to the primary key. Named after the column on purpose:
+/// a P2002 of either unique (this one, or the legacy
+/// delivery_event_client_submission_id_key while it exists) names
+/// client_submission_id, and every caller takes the same replay-or-409 path.
+/// No foreign key: the trail's partitions are detached and dropped by month,
+/// and nothing here may hold them. Purged after
+/// DELIVERY_EVENT_SUBMISSION_RETENTION_DAYS (cleanup-delivery-event-submissions).
+model DeliveryEventSubmission {
+  client_submission_id String   @id(map: "delivery_event_submission_client_submission_id_pkey")
+  /// The delivery_event the key wrote (its id; no foreign key, see above).
+  event_id             String
+  /// The event's company: the replay lookup answers only inside it.
+  businessId           String
+  created_at           DateTime @default(now())
+
+  // The nightly purge walks the oldest rows first.
+  @@index([created_at])
+  @@map("delivery_event_submission")
+}
+
 // ============================================================================
 // Chat SAC × driver (Deliveries module, slice 6)
 //

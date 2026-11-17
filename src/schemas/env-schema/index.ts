@@ -863,6 +863,18 @@ const envSchema = z
       z.coerce.number().int().min(7).max(60).default(7),
     ),
 
+    // The trail's submission keys (plano-escala F2-14, decision D3): days
+    // a row of delivery_event_submission is kept before the nightly
+    // cleanup-delivery-event-submissions removes it. A key only matters
+    // while the driver app could still resend it; under 30 is refused,
+    // because a phone left off for weeks still flushes its outbox, and a
+    // resend past the purge would become a second event once the legacy
+    // unique goes (wave 11).
+    DELIVERY_EVENT_SUBMISSION_RETENTION_DAYS: z.preprocess(
+      (value) => (value === "" ? undefined : value),
+      z.coerce.number().int().min(30).max(3_650).default(90),
+    ),
+
     // Which node, slot and service this task is (plano-escala F4-50): the
     // container's hostname is a container id that changes every deploy and
     // names no machine, and with a second node "the slow replica" has to.

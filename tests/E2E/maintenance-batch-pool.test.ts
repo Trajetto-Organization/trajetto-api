@@ -4,6 +4,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { databaseBatch } from "@/../infra/database";
 import { cleanupApiUsageJob } from "@/jobs/cron/cleanup-api-usage-job";
+import { cleanupDeliveryEventSubmissionsJob } from "@/jobs/cron/cleanup-delivery-event-submissions-job";
 import { cleanupExpiredRefreshTokensJob } from "@/jobs/cron/cleanup-expired-refresh-tokens-job";
 import { cleanupNotificationPipelineJob } from "@/jobs/cron/cleanup-notification-pipeline-job";
 import { opsHeartbeatJob } from "@/jobs/cron/ops-heartbeat-job";
@@ -79,6 +80,7 @@ afterAll(async () => {
 describe("the maintenance on the batch pool", () => {
   const jobs = [
     cleanupApiUsageJob,
+    cleanupDeliveryEventSubmissionsJob,
     cleanupExpiredRefreshTokensJob,
     cleanupNotificationPipelineJob,
     purgeOpsSeriesJob,

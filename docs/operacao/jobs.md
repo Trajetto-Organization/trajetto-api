@@ -39,6 +39,7 @@ Colunas:
 | `cleanup-webhook-deliveries`         | `src/jobs/cron`                                 | `20 4 * * *`               | todo dia              | 04:20–04:25            | sim    | hoje                           |
 | `cleanup-api-usage`                  | `src/jobs/cron`                                 | `35 4 * * *`               | todo dia              | 04:35–04:40            | sim    | hoje                           |
 | `purge-ops-series`                   | `src/jobs/cron`                                 | `40 4 * * *`               | todo dia              | 04:40–04:45            | sim    | hoje                           |
+| `cleanup-delivery-event-submissions` | `src/jobs/cron`                                 | `45 4 * * *`               | todo dia              | 04:45–04:50            | sim    | onda 8                         |
 | `cleanup-orphan-uploads`             | `src/jobs/cron`                                 | `50 4 * * *`               | todo dia              | 04:50–04:55            | sim    | hoje                           |
 | `pgbackrest-diff`                    | Dokploy (Schedule Job)                          | `0 5 * * 0-5`              | dom–sex               | 05:00–05:45            | sim    | onda 3 (staging), 6 (produção) |
 | `pgbackrest-full`                    | Dokploy (Schedule Job)                          | `0 5 * * 6`                | sáb                   | 05:00–05:45            | sim    | onda 3 (staging), 6 (produção) |

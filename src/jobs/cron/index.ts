@@ -20,6 +20,7 @@ import { geocodeDeliveriesJob } from "./geocode-deliveries-job";
 import { alertRoutesLeftOpenJob } from "./alert-routes-left-open-job";
 import { snapshotQueryStatsJob } from "./snapshot-query-stats-job";
 import { purgeOpsSeriesJob } from "./purge-ops-series-job";
+import { cleanupDeliveryEventSubmissionsJob } from "./cleanup-delivery-event-submissions-job";
 
 /**
  * It records all the application's cron jobs.
@@ -96,6 +97,10 @@ function registerCronJobs(): void {
   // Nightly (04:40): the series past their retention (30 days), ops_sample
   // and pgss_snapshot, in batches and partial when rows are left (F1-13).
   scheduler.registerJob(purgeOpsSeriesJob);
+
+  // Nightly (04:45): the trail's submission keys past their retention (90
+  // days), in batches and partial when rows are left (F2-14).
+  scheduler.registerJob(cleanupDeliveryEventSubmissionsJob);
 }
 
 export { registerCronJobs };
