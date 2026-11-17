@@ -39,3 +39,15 @@ etapa antes de subir o runtime (`docs/deploy.md`, seção 15).
 
 O login e a senha de qualquer role são sempre do dono, à mão no Postgres: um
 release nunca tranca o runtime fora do banco.
+
+## Os arquivos
+
+| Arquivo             | O que garante                                                                                                                                                                                                                                                                                         |
+| ------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `10-partitions.sql` | o role `trajetto_partitions` (NOLOGIN), com USAGE e CREATE no schema, dono de cada tabela particionada e de todas as partições (plano de escala, F2-07). O job de partições cria, anexa, destaca e apaga como esse role, e é por ele que um login sem superusuário faz isso depois do corte dos roles |
+
+O `10-partitions.sql` troca o dono só do que tem outro dono, com
+`lock_timeout` de 3 s por tabela: uma tabela cujo lock não veio fica
+`pending` e o próximo release tenta de novo. A lista de tabelas é a do
+registro de partições (`src/shared/database/partitions.ts`), mais as que o
+plano ainda vai criar; uma tabela que não existe é pulada.
