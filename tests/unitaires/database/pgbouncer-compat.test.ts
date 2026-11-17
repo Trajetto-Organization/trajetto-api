@@ -57,6 +57,7 @@ const DDL_CONNECTION_ALLOWLIST: string[] = [
   "infra/scripts/online-ddl.ts",
   "infra/scripts/release-connection.ts",
   "infra/scripts/release-step-runner.ts",
+  "src/shared/database/ddl-connection.ts",
 ];
 
 interface Finding {

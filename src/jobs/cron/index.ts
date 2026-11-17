@@ -5,7 +5,7 @@ import { cleanupNotificationPipelineJob } from "./cleanup-notification-pipeline-
 
 import { cleanupAIPipelineJob } from "./cleanup-ai-pipeline-job";
 import { cleanupUserHistoryJob } from "./cleanup-user-history-job";
-import { driverPositionPartitionsJob } from "./driver-position-partitions-job";
+import { partitionMaintenanceJob } from "./partition-maintenance-job";
 import { cleanupOrphanUploadsJob } from "./cleanup-orphan-uploads-job";
 import { checkPushReceiptsJob } from "./check-push-receipts-job";
 import { cleanupWebhookDeliveriesJob } from "./cleanup-webhook-deliveries-job";
@@ -43,9 +43,10 @@ function registerCronJobs(): void {
   // bound at all (db-perf 10/2026).
   scheduler.registerJob(cleanupApiUsageJob);
 
-  // Both halves of one invariant: a partition for every day we care
-  // about. A missing one is not a warning — the insert is refused.
-  scheduler.registerJob(driverPositionPartitionsJob);
+  // Both halves of one invariant, for every partitioned table of the
+  // registry: a partition for every grain we care about, none past the
+  // retention. A missing one is not a warning — the insert is refused.
+  scheduler.registerJob(partitionMaintenanceJob);
 
   // Dry-run unless UPLOAD_ORPHAN_GC says otherwise: counts stored objects
   // that never became a row, and removes them only when switched on.

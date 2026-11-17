@@ -35,7 +35,7 @@ Colunas:
 | `cleanup-notification-pipeline`      | `src/jobs/cron`                                 | `30 3 * * *`               | todo dia              | 03:30–03:35            | sim    | hoje                           |
 | `cleanup-ai-pipeline`                | `src/jobs/cron`                                 | `45 3 * * *`               | todo dia              | 03:45–03:50            | sim    | hoje                           |
 | `cleanup-user-history`               | `src/jobs/cron`                                 | `0 4 * * *`                | todo dia              | 04:00–04:05            | sim    | hoje                           |
-| `driver-position-partitions`         | `src/jobs/cron`                                 | `10 4 * * *`               | todo dia              | 04:10–04:15            | sim    | hoje                           |
+| `partition-maintenance`              | `src/jobs/cron`                                 | `10 4 * * *`               | todo dia              | 04:10–04:15            | sim    | onda 6                         |
 | `cleanup-webhook-deliveries`         | `src/jobs/cron`                                 | `20 4 * * *`               | todo dia              | 04:20–04:25            | sim    | hoje                           |
 | `cleanup-api-usage`                  | `src/jobs/cron`                                 | `35 4 * * *`               | todo dia              | 04:35–04:40            | sim    | hoje                           |
 | `purge-ops-series`                   | `src/jobs/cron`                                 | `40 4 * * *`               | todo dia              | 04:40–04:45            | sim    | hoje                           |
@@ -68,6 +68,11 @@ Colunas:
   ([arquitetura.md, Crons](../arquitetura.md#crons)). Cada um para no
   orçamento; com sobra, a execução fica parcial e o catch-up a repete na
   janela das parciais ([deploy.md, Expurgos parciais](../deploy.md#expurgos-parciais)).
+  O `partition-maintenance` (onda 6, no lugar do `driver-position-partitions`)
+  roda depois do backup das 03:00 de propósito: o `DETACH … CONCURRENTLY`
+  espera as transações que já tinham a tabela aberta, e o `pg_dump` segura
+  uma até o fim. Aos domingos ele também faz o `ANALYZE` do pai e o
+  `VACUUM (FREEZE)` das partições assentadas.
 - **`pgbackrest-diff` e `pgbackrest-full`:** o backup físico do PITR, que
   ainda não existe: chega com a imagem `trajetto-postgres` (onda 3 na
   staging, onda 6 na produção). Diferencial de domingo a sexta, completo no

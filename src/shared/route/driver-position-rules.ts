@@ -338,7 +338,7 @@ function splitByPartition<T extends { recorded_at: Date }>(
 /**
  * Whether a partition for this instant may still appear.
  *
- * The nightly driver-position-partitions job creates from YESTERDAY (UTC)
+ * The nightly partition-maintenance job creates from YESTERDAY (UTC)
  * through its lookahead on every run, and never behind that. So a point from
  * before yesterday with no partition has none for good — the migration's
  * first day, a gap left by nights the job missed — and is dropped. A point

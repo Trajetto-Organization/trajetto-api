@@ -8,7 +8,7 @@ A tabela de posições é particionada por dia, e restam poucos dias de partiç�
 
 ## Primeira ação
 
-1. Veja no log o erro do job `driver-position-partitions` (04:10 UTC).
+1. Veja no log o erro do job `partition-maintenance` (04:10 UTC).
 2. Rode o job de novo: ele é idempotente. Um `lock_timeout` (alguém segurando a tabela) se resolve rodando fora do horário do backup.
 
 ## Como confirmar

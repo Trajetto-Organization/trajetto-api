@@ -793,6 +793,23 @@ const envSchema = z
       z.coerce.number().int().min(14).max(3_650).default(30),
     ),
 
+    // The GPS trail's partitions (plano-escala F2-08): how many days of
+    // driver_position are kept, and how many days ahead the nightly
+    // partition-maintenance job keeps partitions made. 90 days is the
+    // retention the trail always had; lower it only once the trail archive
+    // (F2-11) copies a day before its partition is dropped, because a
+    // dropped day is gone. The lookahead can only grow: under 7 days, the
+    // partition-lookahead-low alert (under 5 days ahead) would fire before
+    // every nightly run.
+    DRIVER_POSITION_RETENTION_DAYS: z.preprocess(
+      (value) => (value === "" ? undefined : value),
+      z.coerce.number().int().min(1).max(3_650).default(90),
+    ),
+    DRIVER_POSITION_PARTITION_LOOKAHEAD_DAYS: z.preprocess(
+      (value) => (value === "" ? undefined : value),
+      z.coerce.number().int().min(7).max(60).default(7),
+    ),
+
     // Which node, slot and service this task is (plano-escala F4-50): the
     // container's hostname is a container id that changes every deploy and
     // names no machine, and with a second node "the slow replica" has to.

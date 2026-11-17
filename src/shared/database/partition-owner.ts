@@ -8,8 +8,25 @@ const PARTITION_OWNER_ROLE = "trajetto_partitions";
 
 type TransactionSql = Pick<
   Prisma.TransactionClient,
-  "$queryRaw" | "$executeRawUnsafe"
+  "$queryRawUnsafe" | "$executeRawUnsafe"
 >;
+
+/**
+ * Whether this session may act as the role on `$1` (a table name): the
+ * role owns it and the session's user is a member of the role (a
+ * superuser is a member of every role). A table that does not exist is
+ * "no". Shared by the transactions below and the DDL connection
+ * (ddl-connection.ts), which asks before each statement.
+ */
+const AS_OWNER_SQL = `
+  SELECT coalesce(
+    c.relowner = r.oid AND pg_has_role(current_user, r.oid, 'MEMBER'),
+    false
+  ) AS as_owner
+  FROM (SELECT to_regclass(quote_ident($1)) AS rel) target
+  LEFT JOIN pg_catalog.pg_class c ON c.oid = target.rel
+  LEFT JOIN pg_catalog.pg_roles r ON r.rolname = $2
+`;
 
 /**
  * Runs the rest of `tx` as the owner of the partitions, when it can.
@@ -34,15 +51,11 @@ async function asPartitionOwner(
   tx: TransactionSql,
   parent: string,
 ): Promise<boolean> {
-  const [row] = await tx.$queryRaw<Array<{ as_owner: boolean }>>`
-    SELECT coalesce(
-      c.relowner = r.oid AND pg_has_role(current_user, r.oid, 'MEMBER'),
-      false
-    ) AS as_owner
-    FROM (SELECT to_regclass(quote_ident(${parent})) AS rel) target
-    LEFT JOIN pg_catalog.pg_class c ON c.oid = target.rel
-    LEFT JOIN pg_catalog.pg_roles r ON r.rolname = ${PARTITION_OWNER_ROLE}
-  `;
+  const [row] = await tx.$queryRawUnsafe<Array<{ as_owner: boolean }>>(
+    AS_OWNER_SQL,
+    parent,
+    PARTITION_OWNER_ROLE,
+  );
 
   if (!row?.as_owner) return false;
 
@@ -53,4 +66,4 @@ async function asPartitionOwner(
   return true;
 }
 
-export { PARTITION_OWNER_ROLE, asPartitionOwner };
+export { AS_OWNER_SQL, PARTITION_OWNER_ROLE, asPartitionOwner };

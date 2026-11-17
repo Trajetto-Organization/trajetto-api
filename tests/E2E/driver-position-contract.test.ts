@@ -128,10 +128,10 @@ beforeAll(async () => {
 
   // Yesterday's and today's partitions: the day's first minute before the
   // company's midnight may sit in either.
-  const { driverPositionPartitionsJob } =
-    await import("@/jobs/cron/driver-position-partitions-job");
+  const { partitionMaintenanceJob } =
+    await import("@/jobs/cron/partition-maintenance-job");
 
-  await driverPositionPartitionsJob.handler();
+  await partitionMaintenanceJob.handler();
 
   for (const [name, repository] of both()) {
     const flush = (pings: AcceptedPing[]) =>

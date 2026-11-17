@@ -5,6 +5,7 @@ import { randomUUID } from "node:crypto";
 import { sign } from "jsonwebtoken";
 
 import auth from "@/config/auth";
+import { env } from "@/env";
 
 import {
   businessDateKey,
@@ -855,10 +856,12 @@ describe("keeping the partitions ahead of the trucks", () => {
   }
 
   it("creates the week ahead, so a missed night costs nothing", async () => {
-    const { driverPositionPartitionsJob, PARTITION_LOOKAHEAD_DAYS } =
-      await import("@/jobs/cron/driver-position-partitions-job");
+    const { partitionMaintenanceJob } =
+      await import("@/jobs/cron/partition-maintenance-job");
+    const PARTITION_LOOKAHEAD_DAYS =
+      env.DRIVER_POSITION_PARTITION_LOOKAHEAD_DAYS;
 
-    await driverPositionPartitionsJob.handler();
+    await partitionMaintenanceJob.handler();
 
     const partitions = await attachedPartitions();
 
@@ -870,19 +873,20 @@ describe("keeping the partitions ahead of the trucks", () => {
   });
 
   it("runs twice without complaining", async () => {
-    const { driverPositionPartitionsJob } =
-      await import("@/jobs/cron/driver-position-partitions-job");
+    const { partitionMaintenanceJob } =
+      await import("@/jobs/cron/partition-maintenance-job");
 
     // Two replicas run this at the same second. The race between "does it
     // exist" and "create it" is exactly the kind that only shows up in
     // production.
-    await driverPositionPartitionsJob.handler();
-    await expect(driverPositionPartitionsJob.handler()).resolves.not.toThrow();
+    await partitionMaintenanceJob.handler();
+    await expect(partitionMaintenanceJob.handler()).resolves.not.toThrow();
   });
 
   it("drops a day past the retention, and only that day", async () => {
-    const { driverPositionPartitionsJob, PARTITION_RETENTION_DAYS } =
-      await import("@/jobs/cron/driver-position-partitions-job");
+    const { partitionMaintenanceJob } =
+      await import("@/jobs/cron/partition-maintenance-job");
+    const PARTITION_RETENTION_DAYS = env.DRIVER_POSITION_RETENTION_DAYS;
 
     const stale = nameFor(-(PARTITION_RETENTION_DAYS + 5));
     const staleDay = new Date();
@@ -900,7 +904,7 @@ describe("keeping the partitions ahead of the trucks", () => {
 
     expect(await attachedPartitions()).toContain(stale);
 
-    await driverPositionPartitionsJob.handler();
+    await partitionMaintenanceJob.handler();
 
     const after = await attachedPartitions();
 
@@ -1043,8 +1047,9 @@ describe("the trail's day is the company's day", () => {
    * created a week ahead, so a day's partition exists before its points).
    */
   async function ensurePartitionsFor(points: Date[]): Promise<void> {
-    const { partitionName } =
-      await import("@/jobs/cron/driver-position-partitions-job");
+    const { partitionName, registeredPartitions } =
+      await import("@/shared/database/partitions");
+    const [trail] = registeredPartitions();
     const days = new Set(
       points.map((point) => point.toISOString().slice(0, 10)),
     );
@@ -1054,7 +1059,7 @@ describe("the trail's day is the company's day", () => {
       const to = new Date(from.getTime() + 24 * 60 * 60 * 1000);
 
       await prisma.$executeRawUnsafe(
-        `CREATE TABLE IF NOT EXISTS "${partitionName(from)}" PARTITION OF "driver_position"
+        `CREATE TABLE IF NOT EXISTS "${partitionName(trail, from)}" PARTITION OF "driver_position"
            FOR VALUES FROM ('${from.toISOString()}') TO ('${to.toISOString()}')`,
       );
     }
@@ -1106,10 +1111,10 @@ describe("the trail's day is the company's day", () => {
 
   it("reads an explicit day in the company's zone", async () => {
     // Yesterday, so its partitions exist: the job keeps the day before.
-    const { driverPositionPartitionsJob } =
-      await import("@/jobs/cron/driver-position-partitions-job");
+    const { partitionMaintenanceJob } =
+      await import("@/jobs/cron/partition-maintenance-job");
 
-    await driverPositionPartitionsJob.handler();
+    await partitionMaintenanceJob.handler();
 
     const yesterday = businessDateKey(
       new Date(Date.now() - 24 * 60 * 60 * 1000),
@@ -1131,10 +1136,10 @@ describe("the trail's day is the company's day", () => {
     // Rio Branco (UTC-5): its day is [05:00Z, 05:00Z of the next day). A
     // window in the server's zone — UTC in the container, São Paulo on a
     // laptop — loses the late evening, whichever of the two runs this.
-    const { driverPositionPartitionsJob } =
-      await import("@/jobs/cron/driver-position-partitions-job");
+    const { partitionMaintenanceJob } =
+      await import("@/jobs/cron/partition-maintenance-job");
 
-    await driverPositionPartitionsJob.handler();
+    await partitionMaintenanceJob.handler();
 
     const RIO_BRANCO = "America/Rio_Branco";
     const today = businessDateKey(new Date(), RIO_BRANCO);

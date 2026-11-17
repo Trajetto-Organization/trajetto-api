@@ -514,7 +514,7 @@ describe("a stuck worker or cron job shows up (OBS-10)", () => {
 
     await prisma.scheduledJobExecution.create({
       data: {
-        jobName: "driver-position-partitions",
+        jobName: "partition-maintenance",
         scheduledFor: new Date(minute.getTime() - 6 * 60 * MINUTE_MS),
         status: "SUCCEEDED",
         finishedAt: new Date(minute.getTime() - 6 * 60 * MINUTE_MS + 2_000),
@@ -539,7 +539,7 @@ describe("a stuck worker or cron job shows up (OBS-10)", () => {
     }>;
 
     const partitions = cron.find(
-      (entry) => entry.job === "driver-position-partitions",
+      (entry) => entry.job === "partition-maintenance",
     );
 
     expect(partitions?.last_status).toBe("SUCCEEDED");
@@ -625,10 +625,10 @@ describe("a stuck worker or cron job shows up (OBS-10)", () => {
 
 describe("the driver_position partition runway (INV-07)", () => {
   it("reports how many days of partitions are left", async () => {
-    const { driverPositionPartitionsJob } =
-      await import("@/jobs/cron/driver-position-partitions-job");
+    const { partitionMaintenanceJob } =
+      await import("@/jobs/cron/partition-maintenance-job");
 
-    await driverPositionPartitionsJob.handler();
+    await partitionMaintenanceJob.handler();
 
     const body = (await metrics(masterToken)).json();
 
