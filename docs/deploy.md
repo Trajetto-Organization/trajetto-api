@@ -2447,6 +2447,12 @@ antes" dos comentários de migration saiu daí.
 - Um índice que um CIC deixou inválido é removido com DROP INDEX
   CONCURRENTLY e refeito; numa tabela particionada, o passo cria o índice
   no pai com `ON ONLY`, um CIC por partição e um `ATTACH` de cada.
+- Quando a etapa desiste de um índice (duplicata num `UNIQUE`, lock que não
+  veio), ela remove o que o CIC deixou antes de falhar: a API segue no
+  build anterior, e um `UNIQUE` inválido recusaria as duplicatas que ele
+  grava. Se a remoção também não conseguir o lock, o log da
+  `trajetto-api-migrate` traz o `DROP INDEX CONCURRENTLY` para rodar à mão,
+  fora do pico.
 - No fim, nenhum índice que o passo administra pode estar inválido. Outros
   índices inválidos do banco aparecem como aviso no log da
   `trajetto-api-migrate` (linhas `[prebuild]`): confira e refaça à mão.

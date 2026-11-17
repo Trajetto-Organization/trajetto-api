@@ -59,6 +59,14 @@ migrations.
   atrás dele.
 - Um índice que ficou inválido (um CIC que caiu no meio) é removido com
   `DROP INDEX CONCURRENTLY` e refeito.
+- Quando o passo desiste de um índice (uma duplicata num `UNIQUE`, um lock
+  que não veio em nenhuma tentativa), ele remove o que o CIC deixou antes
+  de sair com erro: a release falhou, a versão anterior segue servindo, e
+  um `UNIQUE` inválido continuaria recusando as duplicatas que ela grava.
+  Numa tabela particionada, um `UNIQUE` que falha numa partição sai
+  inteiro (o pai e as partições já anexadas); um índice comum fica, e a
+  próxima execução continua de onde parou. Se nem a remoção conseguir o
+  lock, o log diz o `DROP` a rodar à mão.
 - Tabela particionada: o passo cria o índice no pai com `ON ONLY`, faz um
   CIC em cada partição e as anexa (`ALTER INDEX ... ATTACH PARTITION`); o
   índice do pai fica válido com a última.

@@ -56,6 +56,8 @@ async function prebuild(
     lockTimeoutMs?: number;
     lockRetries?: number;
     searchPath?: string;
+    /** In place of the short pause between lock retries. */
+    pause?: (ms: number) => Promise<void>;
   } = {},
 ): Promise<PrebuildOutcome> {
   const { files, errors } = loadConcurrentFiles(dir);
@@ -73,7 +75,7 @@ async function prebuild(
       lockTimeoutMs: options.lockTimeoutMs ?? 3_000,
       lockRetries: options.lockRetries ?? 20,
       log,
-      sleep: (ms) => sleep(Math.min(ms, 100)),
+      sleep: options.pause ?? ((ms) => sleep(Math.min(ms, 100))),
     });
   } finally {
     await client.end();
@@ -271,6 +273,101 @@ describe("the online DDL before the migrations", () => {
 
     // Duplicates: a unique violation is not a lock wait, and is not retried.
     await expect(prebuild()).rejects.toThrow();
+  });
+
+  /**
+   * The release failed, so the previous image keeps serving: a UNIQUE
+   * index the failed CIC left behind (invalid, but ready) would go on
+   * refusing the duplicates that image writes until someone dropped it.
+   */
+  it("drops the half-built UNIQUE index it gave up on, so the running version keeps writing", async () => {
+    await admin.query("UPDATE prebuild_probe SET dup = 7 WHERE id IN (1, 2)");
+
+    concurrentFile(
+      "20261201000000_dup.sql",
+      "-- requires-column: prebuild_probe.dup\nCREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS prebuild_probe_dup3_key ON prebuild_probe (dup);",
+    );
+
+    await expect(prebuild()).rejects.toMatchObject({ code: "23505" });
+
+    expect(await indexValid("prebuild_probe_dup3_key")).toBeNull();
+    await expect(
+      admin.query(
+        "INSERT INTO prebuild_probe (v, note, dup) VALUES (1, 'old image', 7)",
+      ),
+    ).resolves.toBeDefined();
+    expect(
+      lines.some((line) =>
+        line.includes("prebuild_probe_dup3_key, que a construção deixou"),
+      ),
+    ).toBe(true);
+  });
+
+  it("drops the index a CIC left behind when the lock retries ran out", async () => {
+    concurrentFile(
+      "20261201000000_probe.sql",
+      "-- requires-table: prebuild_probe\nCREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS prebuild_probe_id_v_key ON prebuild_probe (id, v);",
+    );
+
+    // An open writing transaction the CIC waits for, past every retry; it
+    // ends only during the clean-up's own retries.
+    const blocker = await openReleaseClient(URL(), "e2e-blocker");
+
+    await blocker.query("BEGIN");
+    await blocker.query(
+      "INSERT INTO prebuild_probe (v, note) VALUES (2, 'long')",
+    );
+
+    let pauses = 0;
+
+    try {
+      await expect(
+        prebuild({
+          lockTimeoutMs: 200,
+          lockRetries: 1,
+          pause: async () => {
+            pauses += 1;
+            // 1: the CIC's retry; 2: the clean-up's first retry.
+            if (pauses === 2) await blocker.query("COMMIT");
+          },
+        }),
+      ).rejects.toThrow(/o lock não veio em 2 tentativas/);
+    } finally {
+      await blocker.end();
+    }
+
+    expect(pauses).toBe(2);
+    expect(await indexValid("prebuild_probe_id_v_key")).toBeNull();
+    expect(lines.some((line) => line.includes("foi removido"))).toBe(true);
+  });
+
+  it("drops a partitioned UNIQUE index whole when one partition fails, attached partitions included", async () => {
+    // A duplicate in the second partition only: the first one builds and
+    // attaches before the second fails.
+    await admin.query(
+      "INSERT INTO prebuild_parted (at, v) VALUES ('2026-02-10', 777777), ('2026-02-10', 777777)",
+    );
+
+    concurrentFile(
+      "20261201000000_parted.sql",
+      "-- requires-table: prebuild_parted\nCREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS prebuild_parted_u_key ON prebuild_parted (at, v);",
+    );
+
+    await expect(prebuild()).rejects.toMatchObject({ code: "23505" });
+
+    expect(await indexValid("prebuild_parted_u_key")).toBeNull();
+    expect(
+      await indexValid("prebuild_parted_a_prebuild_parted_u_key"),
+    ).toBeNull();
+    expect(
+      await indexValid("prebuild_parted_b_prebuild_parted_u_key"),
+    ).toBeNull();
+    // The first partition takes a duplicate again, as before the release.
+    await expect(
+      admin.query(
+        "INSERT INTO prebuild_parted (at, v) SELECT at, v FROM prebuild_parted_a LIMIT 1",
+      ),
+    ).resolves.toBeDefined();
   });
 
   it("builds a partitioned table's index ON ONLY, one CIC and one ATTACH per partition", async () => {

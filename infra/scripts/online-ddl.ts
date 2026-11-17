@@ -38,10 +38,15 @@ import { quoteIdent } from "./release-connection";
  * gives up its place in the lock queue instead of stalling the writers that
  * queue behind it. A CIC that failed halfway leaves an INVALID index (still
  * maintained on every write, never used by a plan), which the next attempt
- * drops concurrently and builds again. A partitioned table has no CIC: the
- * index goes on the parent ON ONLY (catalog only), each partition gets its
- * own CIC, and each is attached; the parent turns valid with the last one.
- * At the end, no index this step manages may be invalid.
+ * drops concurrently and builds again; when the step gives up on a build
+ * (a duplicate under UNIQUE, the retries spent), it drops what that build
+ * left before exiting, because a half-built UNIQUE index keeps refusing
+ * writes the previous image, still serving, may legally make. A partitioned
+ * table has no CIC: the index goes on the parent ON ONLY (catalog only),
+ * each partition gets its own CIC, and each is attached; the parent turns
+ * valid with the last one (a UNIQUE tree that fails halfway is dropped
+ * whole; a plain one is resumed by the next run). At the end, no index this
+ * step manages may be invalid.
  */
 
 const DEFAULT_LOCK_TIMEOUT_MS = 3_000;
@@ -448,6 +453,14 @@ function partitionIndexName(partition: string, parentIndex: string): string {
   return `${name.slice(0, MAX_IDENTIFIER_BYTES - 9)}_${hash}`;
 }
 
+/** A CREATE INDEX of a file, as the partitioned build takes it apart. */
+interface IndexSpec {
+  name: string;
+  table: string;
+  unique: boolean;
+  definition: string;
+}
+
 interface PrebuildLog {
   info(message: string): void;
   warn(message: string): void;
@@ -586,6 +599,50 @@ async function runPrebuild(
     return rows[0].valid ? "valid" : "invalid";
   }
 
+  /**
+   * Drops what a build of this step left behind when it gave up, before the
+   * step exits with the error. A CIC that fails (a duplicate under UNIQUE,
+   * a lock that never came) leaves its index INVALID, and one that got as
+   * far as `indisready` is still maintained on every write: a UNIQUE one
+   * keeps refusing the duplicates the previous image, still serving after
+   * the failed release, may legally write, until someone drops it by hand.
+   * A plain index goes concurrently; a partitioned one (which has no
+   * CONCURRENTLY) with a plain DROP under the same lock_timeout, which also
+   * takes the partitions' indexes attached to it. A valid index is only
+   * dropped when `alsoValid` says this step built it for the tree being
+   * undone. When the drop itself fails, the log says what to run by hand.
+   */
+  async function dropUnfinished(
+    label: string,
+    names: string[],
+    alsoValid = false,
+  ) {
+    for (const name of names) {
+      try {
+        const index = await relation(name);
+
+        if (!index) continue;
+        if (!alsoValid && (await indexState(name)) === "valid") continue;
+
+        const sql =
+          index.kind === "I"
+            ? `DROP INDEX IF EXISTS ${quoteIdent(name)}`
+            : `DROP INDEX CONCURRENTLY IF EXISTS ${quoteIdent(name)}`;
+
+        await withLockRetries(label, () =>
+          client.query(sql).then(() => undefined),
+        );
+        log.warn(
+          `${label}: o índice ${name}, que a construção deixou pela metade, foi removido (${index.kind === "I" ? "DROP com lock_timeout" : "CONCURRENTLY"}).`,
+        );
+      } catch (error) {
+        log.warn(
+          `${label}: o índice ${name}, que a construção deixou pela metade, NÃO foi removido (${error instanceof Error ? error.message : String(error)}). Ele pesa em toda escrita e, se for UNIQUE, recusa duplicatas que a versão no ar grava: rode à mão, fora do pico, DROP INDEX CONCURRENTLY IF EXISTS ${quoteIdent(name)}; (num índice particionado, DROP INDEX IF EXISTS ${quoteIdent(name)};).`,
+        );
+      }
+    }
+  }
+
   /** A plain table's index, built concurrently; true when it built one. */
   async function ensurePlainIndex(
     label: string,
@@ -596,27 +653,33 @@ async function runPrebuild(
 
     const startedAt = Date.now();
 
-    await withLockRetries(label, async () => {
-      const state = await indexState(name);
+    try {
+      await withLockRetries(label, async () => {
+        const state = await indexState(name);
 
-      if (state === "valid") return;
+        if (state === "valid") return;
 
-      if (state === "invalid") {
-        log.warn(
-          `${label}: ${name} está inválido (um CIC caiu no meio); refazendo.`,
-        );
-        await client.query(
-          `DROP INDEX CONCURRENTLY IF EXISTS ${quoteIdent(name)}`,
+        if (state === "invalid") {
+          log.warn(
+            `${label}: ${name} está inválido (um CIC caiu no meio); refazendo.`,
+          );
+          await client.query(
+            `DROP INDEX CONCURRENTLY IF EXISTS ${quoteIdent(name)}`,
+          );
+        }
+
+        await client.query(sql);
+      });
+
+      if ((await indexState(name)) !== "valid") {
+        throw new PrebuildError(
+          `${label}: ${name} continua inválido depois do CIC.`,
         );
       }
+    } catch (error) {
+      await dropUnfinished(label, [name]);
 
-      await client.query(sql);
-    });
-
-    if ((await indexState(name)) !== "valid") {
-      throw new PrebuildError(
-        `${label}: ${name} continua inválido depois do CIC.`,
-      );
+      throw error;
     }
 
     log.info(
@@ -633,12 +696,7 @@ async function runPrebuild(
    */
   async function ensurePartitionedIndex(
     label: string,
-    statement: {
-      name: string;
-      table: string;
-      unique: boolean;
-      definition: string;
-    },
+    statement: IndexSpec,
     depth = 0,
   ): Promise<boolean> {
     if (depth > 3) {
@@ -647,10 +705,37 @@ async function runPrebuild(
       );
     }
 
+    if ((await indexState(statement.name)) === "valid") return false;
+
+    // The partitions' indexes this call built, attached or not yet.
+    const built: string[] = [];
+
+    try {
+      return await buildPartitionedIndex(label, statement, depth, built);
+    } catch (error) {
+      // A UNIQUE tree left halfway enforces on every partition already
+      // attached (and on each new one, cloned from the parent) what the
+      // previous image never had to respect: it goes, whole. A plain one
+      // only costs writes, and the next run resumes it where it stopped.
+      // The parent first: its DROP takes the attached ones along, and what
+      // is left (built, never attached) is still a UNIQUE index of ours.
+      if (statement.unique) {
+        await dropUnfinished(label, [statement.name]);
+        await dropUnfinished(label, built, true);
+      }
+
+      throw error;
+    }
+  }
+
+  async function buildPartitionedIndex(
+    label: string,
+    statement: IndexSpec,
+    depth: number,
+    built: string[],
+  ): Promise<boolean> {
     const unique = statement.unique ? "UNIQUE " : "";
     let changed = false;
-
-    if ((await indexState(statement.name)) === "valid") return false;
 
     if ((await indexState(statement.name)) === "missing") {
       await withLockRetries(label, () =>
@@ -708,6 +793,8 @@ async function runPrebuild(
           `CREATE ${unique}INDEX CONCURRENTLY IF NOT EXISTS ${quoteIdent(childIndex)} ON ${quoteIdent(partition.name)} ${statement.definition}`,
         );
       }
+
+      built.push(childIndex);
 
       await withLockRetries(label, () =>
         client
