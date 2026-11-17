@@ -46,7 +46,9 @@ import { logger } from "./shared/logging/logger";
 import "./shared/services/proof-signing/proof-signing-service";
 import type { ProofSigningService } from "./shared/services/proof-signing/proof-signing-service";
 
-import { databasePool } from "../infra/database";
+import { verifyRuntimeRole } from "./shared/database/runtime-role-check";
+
+import prisma, { databasePool } from "../infra/database";
 
 /**
  * The process's own lines — boot, shutdown, unhandled rejections — through the
@@ -174,6 +176,19 @@ async function bootstrap() {
   // The order and the reasons live in shared/lifecycle/startup.ts: workers
   // armed before the listener, the backlog drained only once realtime is up.
   await runStartup({
+    // Which role the runtime connects as (plano-escala F3-21): a warning
+    // while it is the owner; a refused boot with
+    // DATABASE_REQUIRE_RUNTIME_ROLE=true. The cron runs where the workers
+    // do (WORKERS_ENABLED).
+    verifyDatabaseRole: async () => {
+      await verifyRuntimeRole({
+        client: prisma,
+        require: env.DATABASE_REQUIRE_RUNTIME_ROLE,
+        runsCron: env.WORKERS_ENABLED,
+        batchUrl: env.BATCH_DATABASE_URL,
+      });
+    },
+
     // Opens the proof signing certificate and logs only its state and dates,
     // so a bad PFX or password is in the deploy log (decision 14.8).
     inspectCertificates: () => {

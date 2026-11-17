@@ -43,6 +43,37 @@ describe("a replica starting", () => {
     ]);
   });
 
+  // plano-escala F3-21: the role check comes first, and a refusal (the
+  // flag DATABASE_REQUIRE_RUNTIME_ROLE) stops the boot before any worker,
+  // cron or listener exists.
+  it("checks the database role before anything else", async () => {
+    const { steps, options } = recorder();
+
+    await runStartup({
+      ...options,
+      verifyDatabaseRole: async () => {
+        steps.push("verifyDatabaseRole");
+      },
+    });
+
+    expect(steps[0]).toBe("verifyDatabaseRole");
+  });
+
+  it("starts nothing when the role check refuses", async () => {
+    const { steps, options } = recorder();
+
+    await expect(
+      runStartup({
+        ...options,
+        verifyDatabaseRole: async () => {
+          throw new Error("superusuário");
+        },
+      }),
+    ).rejects.toThrow("superusuário");
+
+    expect(steps).toEqual([]);
+  });
+
   it("does not drain when realtime failed to start", async () => {
     const { steps, options } = recorder();
 

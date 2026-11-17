@@ -54,8 +54,19 @@ interface DdlConnection {
    */
   runAs(relation: string, sql: string, lockTimeout: string): Promise<boolean>;
 
+  /**
+   * Whether this login may SET ROLE trajetto_partitions at all, whatever
+   * table: the boot's check of the cut (runtime-role-check.ts, F3-21).
+   * False when Postgres refuses it (42501) or the role does not exist
+   * (42704); the session is put back either way.
+   */
+  canActAsPartitionOwner(): Promise<boolean>;
+
   close(): Promise<void>;
 }
+
+/** SET ROLE refused: no membership (42501), or no such role (42704). */
+const ROLE_REFUSED = new Set(["42501", "42704"]);
 
 /** A Postgres identifier, quoted. */
 function quoteIdent(name: string): string {
@@ -156,6 +167,22 @@ async function openDdlConnection(
       }
 
       return asOwner;
+    },
+
+    async canActAsPartitionOwner() {
+      try {
+        await client.query(`SET ROLE ${PARTITION_OWNER_ROLE}`);
+
+        return true;
+      } catch (error) {
+        if (ROLE_REFUSED.has(String((error as { code?: unknown }).code))) {
+          return false;
+        }
+
+        throw error;
+      } finally {
+        await client.query("RESET ROLE").catch(() => undefined);
+      }
     },
 
     async close() {

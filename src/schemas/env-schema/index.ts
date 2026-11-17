@@ -148,6 +148,21 @@ const envSchema = z
         .optional(),
     ),
 
+    // The cut of the database roles (plano-escala F3-21): the boot always
+    // warns when the runtime connects as a superuser or as the tables'
+    // owner; `true` turns that into a refused boot, and also requires, in a
+    // process that runs the cron, BATCH_DATABASE_URL and a DDL connection
+    // that can SET ROLE trajetto_partitions (without them the partitions of
+    // the next days stop being created, in silence). `false` until the owner
+    // switched the URLs to the trajetto_* logins (docs/deploy.md). Empty
+    // counts as absent.
+    DATABASE_REQUIRE_RUNTIME_ROLE: z
+      .preprocess(
+        (value) => (value === "" ? undefined : value),
+        z.enum(["true", "false"]).default("false"),
+      )
+      .transform((value) => value === "true"),
+
     REDIS_URL: z.string(),
     HTTP_REQUEST: z.string(),
     API_HTTP_REQUEST: z.string().optional(),

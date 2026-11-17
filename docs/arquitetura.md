@@ -513,6 +513,17 @@ roda os seeds e fica parado; a importação dos códigos de infração
 só, e um lote que falha falha a etapa. O `HEALTHCHECK` da imagem só passa
 depois disso, e é por ele que o pipeline sabe que a etapa terminou.
 
+Já no servidor, o primeiro passo (`src/shared/lifecycle/startup.ts`) confere
+com que role o runtime conecta (plano de escala, F3-21;
+`src/shared/database/runtime-role-check.ts`): enquanto for superusuário ou o
+dono das tabelas, um aviso a cada boot; com
+`DATABASE_REQUIRE_RUNTIME_ROLE=true`, o boot é recusado, e também o de um
+processo com o cron sem a `BATCH_DATABASE_URL` ou cujo login de batch não
+consegue `SET ROLE trajetto_partitions`. Um banco que não responde nunca
+impede o boot (a readiness segura a réplica). Prova:
+`tests/E2E/runtime-role-smoke.test.ts`, com a API inteira como os logins
+`trajetto_http` e `trajetto_batch`.
+
 O desligamento é ordenado (`src/shared/lifecycle/shutdown.ts`): a readiness
 passa a 503, a réplica continua atendendo durante o dreno as conexões que o
 Traefik já tem com ela, fecha o tempo real e o HTTP (os pedidos ainda em
