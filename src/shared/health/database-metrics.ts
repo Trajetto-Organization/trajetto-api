@@ -9,6 +9,7 @@ import {
   databaseCoreSql,
   databaseSizesSql,
   databaseWalSql,
+  latestClusterDatabaseSql,
 } from "@/shared/health/metrics-queries";
 import {
   pgStatStatementsStateFromCatalog,
@@ -99,6 +100,12 @@ interface DatabaseMetrics {
   };
   sizes: DatabaseSizes | null;
   collection_errors: DatabaseCollectionError[];
+
+  /**
+   * When the parts this login may not read came from the cron's newest
+   * cluster sample instead (withClusterSample); absent when all is live.
+   */
+  sampled_at?: string | null;
 }
 
 interface DatabaseCoreRow {
@@ -181,6 +188,29 @@ function parametersOf(
   ) as Record<DatabaseParameter, string | null>;
 }
 
+/**
+ * pg_stat_statements' state from the catalog; null when unknown. The
+ * preload list is readable only with pg_read_all_settings: without it the
+ * row carries no shared_preload_libraries, and an installed extension is
+ * unknown, not "not_loaded" (the cron's sample says, F3-18).
+ */
+function pgssStateOf(
+  row: DatabaseCoreRow | undefined,
+): PgStatStatementsState | null {
+  if (!row || row.pgss_installed === null) return null;
+
+  const preload = row.parameters?.shared_preload_libraries;
+
+  if (row.pgss_installed && (preload === null || preload === undefined)) {
+    return null;
+  }
+
+  return pgStatStatementsStateFromCatalog({
+    installed: row.pgss_installed,
+    sharedPreloadLibraries: preload,
+  });
+}
+
 function coreOf(
   row: DatabaseCoreRow | undefined,
 ): Omit<DatabaseMetrics, "pg_wal" | "sizes" | "collection_errors"> {
@@ -223,14 +253,7 @@ function coreOf(
         })
       : null,
     parameters: parametersOf(row?.parameters ?? null),
-    pg_stat_statements:
-      row && row.pgss_installed !== null
-        ? pgStatStatementsStateFromCatalog({
-            installed: row.pgss_installed,
-            sharedPreloadLibraries:
-              row.parameters?.shared_preload_libraries ?? null,
-          })
-        : null,
+    pg_stat_statements: pgssStateOf(row),
   };
 }
 
@@ -366,20 +389,139 @@ async function collectDatabaseMetrics({
   };
 }
 
+/**
+ * How old the cron's cluster sample may be and still stand in for a live
+ * read: the row is written every minute, so five is a heartbeat that
+ * missed a few, not one that stopped.
+ */
+const CLUSTER_SAMPLE_MAX_AGE_MS = 5 * 60 * 1000;
+
+interface ClusterDatabaseSample {
+  ts: Date;
+  database: {
+    stats_cluster_wide?: boolean | null;
+    oldest_write_xact_seconds?: number | null;
+    oldest_snapshot_seconds?: number | null;
+    oldest_snapshot_xmin_age?: number | null;
+    pg_wal?: DatabaseMetrics["pg_wal"] | null;
+    pg_stat_statements?: PgStatStatementsState | null;
+  } | null;
+}
+
+/**
+ * The live reading, with what this login may not see taken from the cron's
+ * newest cluster sample (plano-escala F3-18). Pure.
+ *
+ * After the cut of the database roles the runtime connects as
+ * trajetto_http, which has neither pg_read_all_stats (the other roles'
+ * sessions come back without xact_start, backend_xid and backend_xmin, so
+ * the oldest write and the oldest snapshot read null) nor pg_monitor
+ * (pg_ls_waldir is refused), nor pg_read_all_settings (the preload list,
+ * so pg_stat_statements' state is unknown). The process with the cron reads them on the
+ * maintenance pool, as trajetto_batch, into the cluster row of every
+ * minute; this reads that row instead of answering null. Only the parts
+ * this login could not read are replaced, only from a sample that could,
+ * and only from a recent one; `sampled_at` says when it was read. With a
+ * superuser, as today, nothing changes.
+ */
+function mergeClusterSample(
+  live: DatabaseMetrics,
+  sample: ClusterDatabaseSample | null,
+  now: Date = new Date(),
+): DatabaseMetrics {
+  if (!sample?.database) return live;
+  if (now.getTime() - sample.ts.getTime() > CLUSTER_SAMPLE_MAX_AGE_MS) {
+    return live;
+  }
+
+  const sampled = sample.database;
+  const sessions =
+    live.stats_cluster_wide === false && sampled.stats_cluster_wide === true;
+  const wal =
+    live.pg_wal.readable === false && sampled.pg_wal?.readable === true;
+  const pgss =
+    live.pg_stat_statements === null &&
+    sampled.pg_stat_statements !== null &&
+    sampled.pg_stat_statements !== undefined;
+
+  if (!sessions && !wal && !pgss) return live;
+
+  return {
+    ...live,
+    ...(sessions && {
+      oldest_write_xact_seconds: ageOrNull(sampled.oldest_write_xact_seconds),
+      oldest_snapshot_seconds: ageOrNull(sampled.oldest_snapshot_seconds),
+      oldest_snapshot_xmin_age: finiteOrNull(sampled.oldest_snapshot_xmin_age),
+      stats_cluster_wide: true,
+    }),
+    ...(wal &&
+      sampled.pg_wal && {
+        pg_wal: {
+          readable: true,
+          files: finiteOrNull(sampled.pg_wal.files),
+          bytes: finiteOrNull(sampled.pg_wal.bytes),
+        },
+      }),
+    ...(pgss && { pg_stat_statements: sampled.pg_stat_statements }),
+    sampled_at: sample.ts.toISOString(),
+  };
+}
+
+/**
+ * The live reading, completed from the cron's sample when this login may
+ * not read everything (mergeClusterSample). One more statement only then;
+ * a sample that cannot be read leaves the live reading as it is.
+ */
+async function withClusterSample(
+  live: DatabaseMetrics,
+  client: Client = database,
+  now: Date = new Date(),
+): Promise<DatabaseMetrics> {
+  if (
+    live.stats_cluster_wide !== false &&
+    live.pg_wal.readable !== false &&
+    live.pg_stat_statements !== null
+  ) {
+    return live;
+  }
+
+  try {
+    const [sample] = await client.$queryRaw<ClusterDatabaseSample[]>(
+      latestClusterDatabaseSql(
+        new Date(now.getTime() - CLUSTER_SAMPLE_MAX_AGE_MS),
+      ),
+    );
+
+    return mergeClusterSample(
+      live,
+      sample ? { ...sample, ts: new Date(sample.ts) } : null,
+      now,
+    );
+  } catch (error) {
+    log.warn({ err: error }, "cluster sample read failed");
+
+    return live;
+  }
+}
+
 /** For tests: the next cached read goes to the database again. */
 function resetDatabaseSizesCache(): void {
   sizesMemo.reset();
 }
 
 export {
+  CLUSTER_SAMPLE_MAX_AGE_MS,
   DATABASE_SIZES_TTL_MS,
   cacheHitRatio,
   collectDatabaseMetrics,
   createTimedMemo,
+  mergeClusterSample,
   readDatabaseSizes,
   resetDatabaseSizesCache,
+  withClusterSample,
 };
 export type {
+  ClusterDatabaseSample,
   DatabaseCollectionError,
   DatabaseMetrics,
   DatabaseSizes,

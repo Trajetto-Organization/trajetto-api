@@ -3976,6 +3976,20 @@ de idempotência ou num CAS, e o `databaseBatch` só nos crons e no que eles
 chamam. Provas: `tests/unitaires/database/pool-config.test.ts` e
 `tests/E2E/runtime-database-pools.test.ts`.
 
+No `databaseBatch` rodam hoje (F3-18): os expurgos noturnos (o
+`deleteInBatches` dos crons e os repositórios que o expurgo de tokens
+chama), o job `partition-maintenance`, o `snapshot-query-stats` e as
+leituras do próprio banco que o `ops-heartbeat` faz para os alertas e para
+a linha `cluster` do `ops_sample`. A eleição do cron continua no pool da
+aplicação. Depois do corte dos roles, o login do runtime (`trajetto_http`)
+não lê as sessões dos outros roles, o `pg_wal` nem a lista de bibliotecas
+pré-carregadas; o `/health/metrics` toma essas partes da linha `cluster`
+mais nova (até 5 min), que o cron leu como `trajetto_batch`, e diz quando
+em `database.sampled_at`. Os parâmetros vêm do `pg_settings`, que só lista
+o que o usuário pode ler: antes, um `current_setting` de
+`shared_preload_libraries` sem `pg_read_all_settings` derrubava a leitura
+inteira. Prova: `tests/E2E/maintenance-batch-pool.test.ts`.
+
 **A sessão abre sempre em UTC**: as colunas `DateTime` do schema são
 `timestamp(3)` sem fuso, gravadas em UTC, e o SQL cru das filas e das
 métricas as compara com `now()` (`"availableAt" <= now()`,

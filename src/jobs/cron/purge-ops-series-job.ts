@@ -1,6 +1,6 @@
 import { Prisma } from "@prisma/client";
 
-import database from "@/../infra/database";
+import { databaseBatch } from "@/../infra/database";
 import { env } from "@/env";
 import { throwIfPartial } from "@/shared/errors/partial-run-error";
 import { logger } from "@/shared/logging/logger";
@@ -70,7 +70,7 @@ async function purgeOpsSeries({
     .toISOString()
     .slice(0, 10);
 
-  const providerQuotaDay = await database.$executeRaw`
+  const providerQuotaDay = await databaseBatch.$executeRaw`
     DELETE FROM "provider_quota_day" WHERE "day" < ${quotaCutoff}::date
   `;
 

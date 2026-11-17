@@ -1,3 +1,4 @@
+import { databaseBatch } from "@/../infra/database";
 import { DriverTrustedDeviceRepository } from "@/modules/user/repositories/driver-trusted-device-repository";
 import { UserTokensRepository } from "@/modules/user/repositories/user-tokens-repository";
 import { throwIfPartial } from "@/shared/errors/partial-run-error";
@@ -28,7 +29,8 @@ const cleanupExpiredRefreshTokensJob: CronJobDefinition = {
   schedule: "17 3 * * *",
 
   async handler() {
-    const tokens = new UserTokensRepository();
+    // On the maintenance pool (F3-18), like every nightly purge.
+    const tokens = new UserTokensRepository(databaseBatch);
 
     const expired = await tokens.deleteExpiredUserRefreshTokens(new Date(), {
       deadline: purgeDeadline(),
@@ -43,7 +45,9 @@ const cleanupExpiredRefreshTokensJob: CronJobDefinition = {
 
     // The CPF login already ignores them; this only keeps the table to the
     // phones that still count.
-    const phones = await new DriverTrustedDeviceRepository().deleteStale();
+    const phones = await new DriverTrustedDeviceRepository(
+      databaseBatch,
+    ).deleteStale();
     log.info({ deleted: phones }, "stale trusted driver phones removed");
 
     // Expired tokens left: FAILED "[partial]", after the other steps ran.

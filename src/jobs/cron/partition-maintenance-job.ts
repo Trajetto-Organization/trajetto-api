@@ -1,4 +1,4 @@
-import database from "@/../infra/database";
+import { databaseBatch } from "@/../infra/database";
 import {
   openDdlConnection,
   type DdlConnection,
@@ -47,7 +47,9 @@ const log = logger.child({ component: "cron", job: "partition-maintenance" });
  *
  *  - The DDL runs as trajetto_partitions, the owner (F2-07), wherever that
  *    role already owns the table: after the cut of the database roles the
- *    batch login can only act through it.
+ *    batch login can only act through it. The transactions and the catalog
+ *    reads go through the maintenance pool, databaseBatch (F3-18); the DDL
+ *    connection still opens on DATABASE_URL until F3-20.
  *
  *  - On Sundays, the parent is ANALYZEd (autovacuum never analyzes a
  *    partitioned parent, and the planner reads its statistics) and the
@@ -121,14 +123,13 @@ interface AttachedPartition {
 async function readAttached(
   table: string,
 ): Promise<AttachedPartition[] | null> {
-  const [parent] = await database.$queryRawUnsafe<Array<{ present: boolean }>>(
-    "SELECT to_regclass(quote_ident($1)) IS NOT NULL AS present",
-    table,
-  );
+  const [parent] = await databaseBatch.$queryRawUnsafe<
+    Array<{ present: boolean }>
+  >("SELECT to_regclass(quote_ident($1)) IS NOT NULL AS present", table);
 
   if (!parent?.present) return null;
 
-  const rows = await database.$queryRawUnsafe<
+  const rows = await databaseBatch.$queryRawUnsafe<
     Array<{ relname: string; bound: string; detach_pending: boolean }>
   >(
     `SELECT c.relname::text AS relname,
@@ -194,7 +195,7 @@ async function createPartition(
 ): Promise<CreateOutcome> {
   for (let attempt = 1; ; attempt += 1) {
     try {
-      const asOwner = await database.$transaction(async (tx) => {
+      const asOwner = await databaseBatch.$transaction(async (tx) => {
         await tx.$executeRawUnsafe(
           `SET LOCAL lock_timeout = '${ATTACH_LOCK_TIMEOUT}'`,
         );
@@ -332,7 +333,7 @@ async function detachedLeftovers(
   table: PartitionedTable,
   cutoff: Date,
 ): Promise<string[]> {
-  const rows = await database.$queryRawUnsafe<Array<{ relname: string }>>(
+  const rows = await databaseBatch.$queryRawUnsafe<Array<{ relname: string }>>(
     `SELECT c.relname::text AS relname
        FROM pg_class c
        JOIN pg_namespace n ON n.oid = c.relnamespace

@@ -1,6 +1,6 @@
 import { Prisma } from "@prisma/client";
 
-import database from "@/../infra/database";
+import { databaseBatch } from "@/../infra/database";
 import { env } from "@/env";
 import { readPgStatStatementsState } from "@/shared/health/pg-stat-statements-state";
 import {
@@ -45,6 +45,11 @@ import type {
  *
  * The query texts may carry literals: they stay in pgss_snapshot, read with
  * psql, and no route serves them (docs/deploy.md, Séries de operação).
+ *
+ * It runs on the maintenance pool, databaseBatch (plano-escala F3-18):
+ * after the cut of the database roles only that login, trajetto_batch,
+ * holds pg_read_all_stats, without which the other roles' statements come
+ * back with no queryid and no text.
  */
 const SNAPSHOT_QUERY_STATS_JOB = "snapshot-query-stats";
 
@@ -58,7 +63,7 @@ const INSERT_CHUNK_ROWS = 1_000;
 
 const quoteIdent = (name: string) => `"${name.replace(/"/g, '""')}"`;
 
-type Client = Pick<typeof database, "$queryRaw">;
+type Client = Pick<typeof databaseBatch, "$queryRaw">;
 
 interface PgssInfo {
   dealloc: number;
@@ -227,11 +232,11 @@ async function snapshotQueryStats({
   takenAt: Date;
   top?: number;
 }): Promise<SnapshotOutcome> {
-  const schema = await extensionSchema(database);
-  const info = await readInfo(database, schema);
-  const current = await readStatements(database, schema);
-  const state = await database.pgssState.findUnique({ where: { id: 1 } });
-  const baseline = state ? await readBaseline(database) : [];
+  const schema = await extensionSchema(databaseBatch);
+  const info = await readInfo(databaseBatch, schema);
+  const current = await readStatements(databaseBatch, schema);
+  const state = await databaseBatch.pgssState.findUnique({ where: { id: 1 } });
+  const baseline = state ? await readBaseline(databaseBatch) : [];
 
   // No state is the first run; a stats_reset that moved is a reset. Either
   // way the view's counters are what happened since stats_reset.
@@ -241,13 +246,13 @@ async function snapshotQueryStats({
       (info.stats_reset?.getTime() ?? null);
 
   const diff = diffStatements({ current, baseline, reset, top });
-  const texts = await readTexts(database, schema, diff.top);
+  const texts = await readTexts(databaseBatch, schema, diff.top);
   const periodStart = (reset ? info.stats_reset : state?.taken_at) ?? takenAt;
 
   // dealloc counts from the last reset: across one, the run cannot tell.
   const previousDealloc = state && !reset ? Number(state.dealloc) : null;
 
-  await database.$transaction(async (tx) => {
+  await databaseBatch.$transaction(async (tx) => {
     for (const chunk of chunks(diff.top, INSERT_CHUNK_ROWS)) {
       await tx.pgssSnapshot.createMany({
         data: chunk.map((row) => ({
@@ -330,7 +335,7 @@ function snapshotQueryStatsHandler({
   snapshot = snapshotQueryStats,
 }: Partial<SnapshotJobDeps> = {}): (run?: CronRun) => Promise<void> {
   return async (run) => {
-    const state = await readState();
+    const state = await readState(databaseBatch);
 
     if (state !== "ready") {
       log.warn(

@@ -3,10 +3,15 @@ import { describe, expect, it, vi } from "vitest";
 import type { Prisma } from "@prisma/client";
 
 import {
+  CLUSTER_SAMPLE_MAX_AGE_MS,
   DATABASE_SIZES_TTL_MS,
   cacheHitRatio,
   collectDatabaseMetrics,
   createTimedMemo,
+  mergeClusterSample,
+  withClusterSample,
+  type ClusterDatabaseSample,
+  type DatabaseMetrics,
 } from "@/shared/health/database-metrics";
 import {
   pgStatStatementsStateFromCatalog,
@@ -322,5 +327,150 @@ describe("pg_stat_statements from the catalog", () => {
     );
     expect(preloadsPgStatStatements("pg_stat_statements_extra")).toBe(false);
     expect(preloadsPgStatStatements("auto_explain")).toBe(false);
+  });
+});
+
+/**
+ * After the cut of the database roles (plano-escala F3-18), the runtime's
+ * login (trajetto_http) may not read the other roles' sessions (no
+ * pg_read_all_stats) nor pg_wal (no pg_monitor): the oldest write, the
+ * oldest snapshot and pg_wal would read null on /health/metrics. The cron
+ * process reads them on the maintenance pool into the cluster row of every
+ * minute, and the API takes those parts from there: only those, only from a
+ * sample that could read them, only from a recent one.
+ */
+describe("the cron's cluster sample on /health/metrics", () => {
+  const NOW = new Date("2026-11-17T12:00:00Z");
+
+  function live(overrides: Partial<DatabaseMetrics> = {}): DatabaseMetrics {
+    return {
+      xid_age: 1,
+      xid_age_database: 1,
+      mxid_age: 1,
+      cache_hit_ratio: 0.99,
+      blocks_hit: 99,
+      blocks_read: 1,
+      oldest_write_xact_seconds: null,
+      oldest_snapshot_seconds: null,
+      oldest_snapshot_xmin_age: null,
+      stats_cluster_wide: false,
+      archiver: null,
+      hot_tables: [],
+      parameters: null,
+      pg_stat_statements: null,
+      pg_wal: { readable: false, files: null, bytes: null },
+      sizes: null,
+      collection_errors: [],
+      ...overrides,
+    };
+  }
+
+  const sample = (
+    ageMs: number,
+    overrides: Partial<NonNullable<ClusterDatabaseSample["database"]>> = {},
+  ): ClusterDatabaseSample => ({
+    ts: new Date(NOW.getTime() - ageMs),
+    database: {
+      stats_cluster_wide: true,
+      oldest_write_xact_seconds: 42,
+      oldest_snapshot_seconds: 50,
+      oldest_snapshot_xmin_age: 7,
+      pg_wal: { readable: true, files: 12, bytes: 12 * 16 * 1024 ** 2 },
+      pg_stat_statements: "ready",
+      ...overrides,
+    },
+  });
+
+  it("fills what this login could not read from a recent sample, and says when it was read", () => {
+    const merged = mergeClusterSample(live(), sample(60_000), NOW);
+
+    expect(merged).toMatchObject({
+      oldest_write_xact_seconds: 42,
+      oldest_snapshot_seconds: 50,
+      oldest_snapshot_xmin_age: 7,
+      stats_cluster_wide: true,
+      pg_wal: { readable: true, files: 12 },
+      // The preload list needs pg_read_all_settings: unknown live.
+      pg_stat_statements: "ready",
+      sampled_at: "2026-11-17T11:59:00.000Z",
+      // The rest stays live.
+      cache_hit_ratio: 0.99,
+    });
+  });
+
+  it("keeps a live reading that could see everything, as today's superuser", () => {
+    const superuser = live({
+      stats_cluster_wide: true,
+      oldest_write_xact_seconds: 1,
+      pg_wal: { readable: true, files: 3, bytes: 3 },
+      pg_stat_statements: "not_loaded",
+    });
+
+    expect(mergeClusterSample(superuser, sample(60_000), NOW)).toBe(superuser);
+  });
+
+  it("ignores a sample that is too old, absent, or could not read either", () => {
+    expect(
+      mergeClusterSample(live(), sample(CLUSTER_SAMPLE_MAX_AGE_MS + 1), NOW),
+    ).toEqual(live());
+    expect(mergeClusterSample(live(), null, NOW)).toEqual(live());
+    expect(
+      mergeClusterSample(
+        live(),
+        sample(60_000, {
+          stats_cluster_wide: false,
+          pg_wal: { readable: false, files: null, bytes: null },
+          pg_stat_statements: null,
+        }),
+        NOW,
+      ),
+    ).toEqual(live());
+  });
+
+  it("leaves pg_stat_statements unknown, not 'not_loaded', when the preload list is unreadable", async () => {
+    const withoutPreload = {
+      ...CORE_ROW,
+      parameters: Object.fromEntries(
+        Object.entries(CORE_ROW.parameters ?? {}).filter(
+          ([name]) => name !== "shared_preload_libraries",
+        ),
+      ),
+    };
+    const client = {
+      $queryRaw: vi.fn(async (sql: Sql) =>
+        partOf(sql) === "core" ? [withoutPreload] : [],
+      ),
+    } as unknown as Client;
+
+    const metrics = await collectDatabaseMetrics({ client, sizes: "skip" });
+
+    expect(metrics.pg_stat_statements).toBeNull();
+    expect(metrics.parameters?.shared_preload_libraries).toBeNull();
+  });
+
+  it("reads the sample only when the live reading needs it, and survives a refusal", async () => {
+    const $queryRaw = vi.fn(async () => [sample(60_000)]);
+    const client = { $queryRaw } as unknown as Client;
+    const superuser = live({
+      stats_cluster_wide: true,
+      pg_wal: { readable: true, files: 1, bytes: 1 },
+      pg_stat_statements: "ready",
+    });
+
+    expect(await withClusterSample(superuser, client, NOW)).toBe(superuser);
+    expect($queryRaw).not.toHaveBeenCalled();
+
+    expect((await withClusterSample(live(), client, NOW)).sampled_at).toBe(
+      "2026-11-17T11:59:00.000Z",
+    );
+    expect($queryRaw).toHaveBeenCalledTimes(1);
+
+    const refusing = {
+      $queryRaw: vi.fn(async () => {
+        throw new Error("relation ops_sample: permission denied");
+      }),
+    } as unknown as Client;
+
+    expect(await withClusterSample(live(), refusing, NOW)).toEqual(live());
   });
 });

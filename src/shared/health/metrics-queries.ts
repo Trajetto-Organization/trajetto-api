@@ -449,19 +449,18 @@ const DATABASE_PARAMETERS = [
  *  - the safe parameters and what pg_stat_statements needs: whether the
  *    extension exists and whether the library is preloaded. A preloaded
  *    library is proof it loaded, because the server does not start when it
- *    cannot; the view itself is not read here;
+ *    cannot; the view itself is not read here. The parameters come through
+ *    pg_settings, which lists only what this user may read: a
+ *    current_setting() of shared_preload_libraries without
+ *    pg_read_all_settings fails the WHOLE statement (42501), which is what
+ *    the runtime's own login would get after the cut of the database roles
+ *    (F3-18). An unreadable one is absent, read as null;
  *  - whether this user may list pg_wal (the second read).
  *
  * clock_timestamp(), not now(): a transaction that began after this one did
  * would otherwise read a negative age.
  */
 function databaseCoreSql(): Prisma.Sql {
-  const parameters = Prisma.join(
-    DATABASE_PARAMETERS.map(
-      (name) => Prisma.sql`${name}::text, current_setting(${name}, true)`,
-    ),
-  );
-
   return Prisma.sql`
     SELECT
       (SELECT max(age(datfrozenxid)) FROM pg_database)::float8 AS xid_age,
@@ -493,7 +492,9 @@ function databaseCoreSql(): Prisma.Sql {
           AND coalesce(root.relname, c.relname) = ANY(${[...HOT_TABLES]}::text[])
         GROUP BY 1
       ) t) AS hot_tables,
-      json_build_object(${parameters}) AS parameters,
+      (SELECT json_object_agg(s.name, current_setting(s.name))
+         FROM pg_settings s
+        WHERE s.name = ANY(${[...DATABASE_PARAMETERS]}::text[])) AS parameters,
       EXISTS (
         SELECT 1 FROM pg_extension WHERE extname = 'pg_stat_statements'
       ) AS pgss_installed,
@@ -562,6 +563,24 @@ function databaseSizesSql(): Prisma.Sql {
   `;
 }
 
+/**
+ * The database block of the newest cluster row (ops_sample, role
+ * 'cluster') written after `since` (plano-escala F3-18): what the cron
+ * process read on the maintenance pool, with pg_read_all_stats and
+ * pg_monitor, that the runtime's own login may not read after the cut of
+ * the database roles. A backward walk of the ts index, a few rows per
+ * minute.
+ */
+function latestClusterDatabaseSql(since: Date): Prisma.Sql {
+  return Prisma.sql`
+    SELECT ts, metrics->'database' AS database
+    FROM ops_sample
+    WHERE ts > ${since} AND role = 'cluster'
+    ORDER BY ts DESC
+    LIMIT 1
+  `;
+}
+
 export {
   DATABASE_PARAMETERS,
   HOT_TABLES,
@@ -580,6 +599,7 @@ export {
   deliveryBacklogSql,
   deliveryIdFloor,
   failedByChannelSql,
+  latestClusterDatabaseSql,
   queueTableStatsSql,
   webhookFailedSinceSql,
   whatsappFailedSinceSql,

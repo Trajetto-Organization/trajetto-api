@@ -1,6 +1,6 @@
 import { Prisma } from "@prisma/client";
 
-import database from "@/../infra/database";
+import { databaseBatch } from "@/../infra/database";
 import { throwIfPartial } from "@/shared/errors/partial-run-error";
 import { CronJobDefinition } from "@/shared/services/cron-scheduler-service";
 import { logger } from "@/shared/logging/logger";
@@ -193,7 +193,7 @@ async function purgePublishedEvents(
 
     const limit = Math.min(DELETE_BATCH_SIZE, MAX_PUBLISHED_PER_RUN - deleted);
 
-    const [batch] = await database.$queryRaw<
+    const [batch] = await databaseBatch.$queryRaw<
       Array<{ deleted: number; archived: number }>
     >(publishedPurgeBatchSql(publishedBefore, limit));
 
@@ -268,7 +268,7 @@ const cleanupNotificationPipelineJob: CronJobDefinition = {
       deadline,
     });
 
-    const goneReplicas = await database.workerHeartbeat.deleteMany({
+    const goneReplicas = await databaseBatch.workerHeartbeat.deleteMany({
       where: {
         updated_at: {
           lt: new Date(Date.now() - HEARTBEAT_RETENTION_DAYS * DAY_MS),

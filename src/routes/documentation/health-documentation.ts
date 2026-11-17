@@ -295,6 +295,13 @@ const databaseMetricsShape = {
     .describe(
       "Tamanho do banco e das tabelas quentes (com índices e TOAST, partições somadas).",
     ),
+  sampled_at: z
+    .string()
+    .nullable()
+    .optional()
+    .describe(
+      "Quando as partes que o login do runtime não pode ler (as sessões dos outros roles e o pg_wal) vieram da última amostra do cron (ops_sample, papel cluster, lida no pool de manutenção), e não da leitura ao vivo. Ausente quando tudo é ao vivo, como com o superusuário de hoje.",
+    ),
   collection_errors: z
     .array(
       z.object({

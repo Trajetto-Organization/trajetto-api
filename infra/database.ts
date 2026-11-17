@@ -147,8 +147,22 @@ function sidePool(
   });
 }
 
-const read = sidePool(() => environmentUrl("DATABASE_READ_URL"), READ_POOL);
-const batch = sidePool(() => environmentUrl("BATCH_DATABASE_URL"), BATCH_POOL);
+/**
+ * A test that put its own client on globalThis before importing the app
+ * (the statement budgets and the plan checks count every statement the app
+ * sends) gets the side pools' statements on it too: a purge moved to the
+ * batch pool must still be counted and explained. Never in production,
+ * where nothing puts a client there.
+ */
+const testClient = globalForPrisma.prisma
+  ? { client: globalForPrisma.prisma, pool: connection.pool }
+  : null;
+
+const read =
+  testClient ?? sidePool(() => environmentUrl("DATABASE_READ_URL"), READ_POOL);
+const batch =
+  testClient ??
+  sidePool(() => environmentUrl("BATCH_DATABASE_URL"), BATCH_POOL);
 
 /** The heavy reads' bulkhead: a closed list of callers only. */
 const databaseRead = read.client;

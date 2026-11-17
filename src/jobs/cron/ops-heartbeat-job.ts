@@ -1,3 +1,4 @@
+import { databaseBatch } from "@/../infra/database";
 import { CronJobDefinition } from "@/shared/services/cron-scheduler-service";
 
 import { env } from "@/env";
@@ -12,6 +13,7 @@ import {
   withClusterReadings,
   type ClusterReadings,
 } from "@/shared/health/cluster-sample";
+import { collectDatabaseMetrics } from "@/shared/health/database-metrics";
 import { sendHeartbeat } from "@/shared/health/heartbeat-client";
 import { collectOperationalSnapshot } from "@/shared/health/operational-snapshot";
 
@@ -78,7 +80,16 @@ const opsHeartbeatJob: CronJobDefinition = {
     const slot = run?.scheduledFor ?? new Date(snapshot.now);
     if (!run) slot.setUTCSeconds(0, 0);
 
-    const readings = await readClusterReadings(slot);
+    // The database's numbers on the maintenance pool (F3-18): after the
+    // cut of the database roles only trajetto_batch sees the other
+    // sessions and pg_wal. The election stays on the app's pool.
+    const readings = await readClusterReadings(slot, {
+      readDatabase: (withSizes) =>
+        collectDatabaseMetrics({
+          client: databaseBatch,
+          sizes: withSizes ? "fresh" : "skip",
+        }),
+    });
 
     await sendHeartbeat(heartbeatReasons(snapshot, readings));
 

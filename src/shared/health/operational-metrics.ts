@@ -28,7 +28,10 @@ import { readPrismaPool } from "@/shared/health/pool-metrics";
 import { runtimeMetrics } from "@/shared/health/runtime-metrics";
 import { providerMetrics } from "@/shared/health/provider-metrics";
 import { readRedisMetrics } from "@/shared/health/redis-metrics";
-import { collectDatabaseMetrics } from "@/shared/health/database-metrics";
+import {
+  collectDatabaseMetrics,
+  withClusterSample,
+} from "@/shared/health/database-metrics";
 import { httpMetrics } from "@/shared/health/http-metrics";
 import { alertThresholdsFromEnv } from "@/shared/health/alert-rules";
 import {
@@ -168,7 +171,12 @@ async function collectOperationalMetrics() {
   // pg_wal when this user may list it, and the sizes from a five-minute
   // copy. After the others, one at a time; it never throws, a part that
   // fails is a collection error.
-  const databaseMetrics = await collectDatabaseMetrics();
+  // After the cut of the database roles this login may not read the other
+  // sessions nor pg_wal: those parts come from the cron's newest cluster
+  // sample (F3-18), one more statement only then.
+  const databaseMetrics = await withClusterSample(
+    await collectDatabaseMetrics(),
+  );
 
   // The limits the ops heartbeat judges with, as this environment set them
   // (ops-heartbeat-job.ts reads the same function).
