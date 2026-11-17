@@ -3054,7 +3054,13 @@ model DriverLastPosition {
 
   updated_at DateTime @updatedAt
 
-  @@index([businessId, recorded_at(sort: Desc)])
+  /// By company only (plano-escala F2-13): every flush rewrites recorded_at,
+  /// and an index holding it made every rewrite a non-HOT update (a new
+  /// entry in each index, a dead one for the vacuum). With no indexed
+  /// column changed, and fillfactor 80 (raw SQL in
+  /// migrations/20261117170000_driver_last_position_hot), the rewrite stays
+  /// on its page. The tower sorts a company's few rows (one per driver).
+  @@index([businessId])
   @@map("driver_last_position")
 }
 

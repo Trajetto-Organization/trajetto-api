@@ -273,6 +273,14 @@ vazia; sem filtro, uma fase sem arquivo falha. Para um arquivo só, continue com
 como antes). `quality/e2e-replica-isolation.test.ts` falha se um arquivo que
 sobe réplicas ficar fora da lista ou se a lista citar um que não sobe mais.
 
+A mesma fase de um arquivo por vez recebe os arquivos que medem algo que o
+cluster inteiro perturba (`SERIAL_E2E_FILES`, no mesmo arquivo): o Postgres só
+limpa as versões mortas de uma página abaixo da transação mais velha ainda
+aberta em **qualquer** banco do cluster, e não só no banco do arquivo. Uma
+escrita aberta no banco de outro arquivo segura a limpeza de que o update HOT
+precisa (`driver-last-position-hot.test.ts`, plano de escala F2-13), como
+seguraria o horizonte do feed da integração (F2-05).
+
 A fase de réplicas é a que mais pede memória: `resilience-replica-drain.test.ts`
 sobe 10 réplicas ao mesmo tempo. Numa réplica Linux do CI (11/11/2026) o job
 chegou a 2,8 GB contando o cache de páginas, contra 1,3 GB na fase `shared`;

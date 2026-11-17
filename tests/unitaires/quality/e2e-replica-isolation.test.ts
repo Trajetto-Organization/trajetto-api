@@ -9,6 +9,7 @@ import {
   E2E_PHASE_REPLICAS,
   E2E_PHASE_SHARED,
   REPLICA_E2E_FILES,
+  SERIAL_E2E_FILES,
   replicaFileGlobs,
 } from "../../E2E/support/replica-files";
 
@@ -96,6 +97,22 @@ describe("the list of E2E files that start replicas", () => {
     expect(mm.isMatch("route-lifecycle.test.ts", replicaFileGlobs())).toBe(
       false,
     );
+  });
+});
+
+/**
+ * The files that measure what the whole cluster disturbs (the xmin horizon
+ * every database shares, plano-escala F2-13) run in the same
+ * one-file-at-a-time phase, without starting replicas.
+ */
+describe("the cluster-sensitive files", () => {
+  it("exist and run in the one-file-at-a-time phase", () => {
+    for (const name of SERIAL_E2E_FILES) {
+      expect(e2eFiles, name).toContain(name);
+      expect(mm.isMatch(`tests/E2E/${name}`, replicaFileGlobs()), name).toBe(
+        true,
+      );
+    }
   });
 });
 

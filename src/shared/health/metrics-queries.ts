@@ -380,7 +380,8 @@ function operationalSnapshotSql(since: Date): Prisma.Sql {
 /**
  * The tables whose growth and churn the scale plan watches (plano-escala,
  * "Tabelas quentes por tempo" and the mutable state beside them): the GPS
- * trail, the delivery history, the audit trail, the bell, the sessions, the
+ * trail (both tables, F2-10) and the drivers' last position (rewritten on
+ * every flush, F2-13), the delivery history, the audit trail, the bell, the sessions, the
  * queues, the deliveries themselves and the series. A partitioned one is
  * reported once, by its root, with its partitions summed: the trail is ~90
  * daily partitions, and a row per partition would bury the number.
@@ -388,6 +389,7 @@ function operationalSnapshotSql(since: Date): Prisma.Sql {
 const HOT_TABLES = [
   "driver_position",
   "driver_position_v2",
+  "driver_last_position",
   "delivery_event",
   "activity",
   "notification",
