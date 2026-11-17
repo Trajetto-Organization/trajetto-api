@@ -53,7 +53,10 @@ com 300 mil entregas.
 - **Verificação do JWT:** a tentativa de ler o segredo como chave pública
   custava ~7% da CPU de uma réplica, duas vezes por requisição autenticada.
   Correção: `src/shared/security/jwt-verify-key.ts`; teste
-  `tests/unitaires/security/jwt-verify-key.test.ts`.
+  `tests/unitaires/security/jwt-verify-key.test.ts`. Desde a onda 9 do plano
+  de escala, a assinatura é conferida uma vez só por requisição
+  (`src/shared/auth/access-token-once.ts`; teste
+  `tests/unitaires/security/access-token-once.test.ts`).
 - **Dashboard:** rotular cada linha no SQL levava ~300 ms por visita (298 ms
   em média) e era um quarto da CPU do banco a 120 req/s. Correção:
   `src/modules/dashboard/repositories/period-buckets.ts`; teste

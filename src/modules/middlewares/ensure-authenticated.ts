@@ -1,7 +1,4 @@
 import { FastifyReply, FastifyRequest } from "fastify";
-import { verify } from "jsonwebtoken";
-
-import auth from "@/config/auth";
 
 import { DriverRepository } from "../driver/repositories/driver-repository";
 import { UserRepository } from "../user/repositories/user-repository";
@@ -12,14 +9,7 @@ import { assertSessionEligible } from "../user/services/session-eligibility";
 import { AppError } from "@/shared/errors/AppError";
 import { isDatabaseUnavailable } from "@/shared/errors/database-unavailable";
 import { authorizeRequestedTenant } from "./tenant-authorization";
-import { hmacVerifyKey } from "@/shared/security/jwt-verify-key";
-
-interface AccessTokenPayload {
-  sub?: string;
-  tokenType?: string;
-  sessionVersion?: number;
-  familyId?: string;
-}
+import { verifyAccessTokenOnce } from "@/shared/auth/access-token-once";
 
 async function ensureAuthenticated(
   request: FastifyRequest,
@@ -46,7 +36,7 @@ async function ensureAuthenticated(
   }
 
   /**
-   * The token itself, and ONLY the token, inside this try.
+   * The token itself, and ONLY the token, decides a 401 here.
    *
    * Everything after it — the user lookup, the session check — talks to the
    * database, and a database that is down is not an invalid token. It used to
@@ -56,21 +46,21 @@ async function ensureAuthenticated(
    * authenticated route answered 401 after 4,3 s. Thirty seconds of a database
    * blip would have logged out every driver in the field, mid-route, with no
    * way back in until signal and credentials lined up.
+   *
+   * The signature is checked once per request: the rate limiter, which runs
+   * first, already did it, and its verdict is reused here.
    */
-  let payload: AccessTokenPayload;
+  const verdict = verifyAccessTokenOnce(request, token);
 
-  try {
-    payload = verify(
-      token,
-      hmacVerifyKey(auth.secret_token),
-    ) as AccessTokenPayload;
-  } catch (error) {
+  if (!verdict.valid) {
     throw new AppError(
       "Token de autenticação inválido ou expirado.",
       401,
       "AUTH_TOKEN_INVALID",
     );
   }
+
+  const { payload } = verdict;
 
   if (
     !payload.sub ||

@@ -6,8 +6,9 @@ import { createSecretKey, type KeyObject } from "node:crypto";
  * jsonwebtoken 9 turns a string secret into a key on EVERY verify, and it tries
  * `createPublicKey` first: OpenSSL 3 walks its PEM/DER decoders over the
  * secret, throws, and only then does it fall back to `createSecretKey`. Every
- * authenticated request verifies twice (the rate-limit key and the session),
- * and under load that failed parse was ~7% of a replica's CPU (the load of
+ * authenticated request verified twice then (the rate-limit key and the
+ * session; once since shared/auth/access-token-once.ts), and under load that
+ * failed parse was ~7% of a replica's CPU (the load of
  * 07/10/2026, docs/desempenho/README.md). A KeyObject skips straight to the
  * HMAC check; the algorithms allowed stay the same (HS256/384/512 for a
  * secret).

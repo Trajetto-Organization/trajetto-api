@@ -172,7 +172,11 @@ flowchart TD
   da rota, então um token em loop recebe 429 sem custar a busca da sessão
   (`src/http.ts`, `src/config/rate-limit.ts`). Sem Redis, o pedido passa: o
   limite falha aberto.
-- **Acesso.** `ensureAuthenticated` confere o JWT e a versão da sessão. No
+- **Acesso.** `ensureAuthenticated` confere o JWT e a versão da sessão. A
+  assinatura do token é conferida uma vez só por pedido: o limitador confere
+  primeiro e o `ensureAuthenticated` reaproveita o veredito, com os mesmos
+  códigos de recusa; as claims ficam em `request.accessClaims`, que ainda não
+  provam a sessão (`src/shared/auth/access-token-once.ts`). No
   `preHandler` vêm o guard de tenant (só ali o corpo já foi lido), a empresa
   ativa, o módulo contratado e a permissão (`src/modules/middlewares/`). Os
   passos 2 e 3 detalham.

@@ -5,6 +5,7 @@ import type { ZodType } from "zod";
 
 import { UserRole } from "@/modules/user/dtos/user-dto";
 import { PermissionKey } from "@/config/permissions";
+import type { AccessClaims } from "@/shared/auth/access-token-once";
 
 interface Permission {
   permissionKey: string;
@@ -35,6 +36,12 @@ declare module "fastify" {
   }
 
   interface FastifyRequest {
+    /**
+     * Who the access token names, from its signature alone, set by the first
+     * check of this request (shared/auth/access-token-once.ts). The session is
+     * not validated yet when the limiter reads it: never authorize by it.
+     */
+    accessClaims?: AccessClaims;
     user: {
       id: string;
       role: UserRole;
