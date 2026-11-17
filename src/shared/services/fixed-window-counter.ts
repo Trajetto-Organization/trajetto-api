@@ -35,4 +35,46 @@ async function countInFixedWindow(
   return Number(await redis.eval(COUNT_AND_ARM_WINDOW, 1, key, windowSeconds));
 }
 
-export { COUNT_AND_ARM_WINDOW, countInFixedWindow };
+/**
+ * The same window, spending `cost` units at once (the panel budget,
+ * plano-escala F2-28: a tower read costs more than a detail). Returns the
+ * total after this call and the window's remaining time, so a refusal can
+ * say exactly when to come back.
+ */
+const SPEND_AND_ARM_WINDOW = [
+  "local count = redis.call('INCRBY', KEYS[1], ARGV[2])",
+  "local ttl = redis.call('PTTL', KEYS[1])",
+  "if ttl == -1 then",
+  "  redis.call('EXPIRE', KEYS[1], ARGV[1])",
+  "  ttl = tonumber(ARGV[1]) * 1000",
+  "end",
+  "return { count, ttl }",
+].join("\n");
+
+/** Throws when Redis does: callers fail open. */
+async function spendInFixedWindow(
+  redis: Pick<Redis, "eval">,
+  key: string,
+  windowSeconds: number,
+  cost: number,
+): Promise<{ total: number; resetInMs: number }> {
+  const [total, ttl] = (await redis.eval(
+    SPEND_AND_ARM_WINDOW,
+    1,
+    key,
+    windowSeconds,
+    cost,
+  )) as [number, number];
+
+  return {
+    total: Number(total),
+    resetInMs: Number(ttl) > 0 ? Number(ttl) : windowSeconds * 1000,
+  };
+}
+
+export {
+  COUNT_AND_ARM_WINDOW,
+  SPEND_AND_ARM_WINDOW,
+  countInFixedWindow,
+  spendInFixedWindow,
+};

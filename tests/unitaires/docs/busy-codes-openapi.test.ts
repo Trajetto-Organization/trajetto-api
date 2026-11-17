@@ -174,7 +174,12 @@ describe("IMPORT_BUSY (import queue)", () => {
     (id) => {
       const tooMany = responseOf(id, "429");
 
-      expect(listedCodes(tooMany)).toEqual(["IMPORT_BUSY", "RATE_LIMITED"]);
+      // TENANT_BUSY: the company's panel budget (plano-escala F2-28).
+      expect(listedCodes(tooMany)).toEqual([
+        "IMPORT_BUSY",
+        "RATE_LIMITED",
+        "TENANT_BUSY",
+      ]);
       expect(tooMany.description).toContain("reiniciando");
       expect(tooMany.headers?.["retry-after"]).toBeDefined();
     },
@@ -222,6 +227,8 @@ describe("every ServiceBusyError code", () => {
         // Load shedding (plano-escala F2-24): the same code the database's
         // lock and statement ceilings answer with.
         "SERVICE_BUSY",
+        // The company's panel budget, with its person's slice (F2-28).
+        "TENANT_BUSY",
       ]),
     );
 
@@ -254,7 +261,7 @@ describe("merged code lists", () => {
 
     for (const { id, response } of exports) {
       expect(codeDescription(response), id).toBe(
-        "Um destes: RATE_LIMITED, EXPORT_BUSY.",
+        "Um destes: RATE_LIMITED, TENANT_BUSY, EXPORT_BUSY.",
       );
     }
   });
@@ -282,7 +289,7 @@ describe("merged code lists", () => {
       "Um destes: AUTH_TOKEN_MISSING, AUTH_TOKEN_INVALID, AUTH_SESSION_INVALID, AUTH_SESSION_INVALIDATED.",
     );
     expect(responses["429"].properties.code.description).toBe(
-      "Um destes: RATE_LIMITED.",
+      "Um destes: RATE_LIMITED, TENANT_BUSY.",
     );
   });
 
@@ -306,7 +313,7 @@ describe("merged code lists", () => {
     });
 
     expect(responses["429"].properties.code.description).toBe(
-      "Um destes: PROBE_BUSY, RATE_LIMITED.",
+      "Um destes: PROBE_BUSY, RATE_LIMITED, TENANT_BUSY.",
     );
     // A code both sides list appears once.
     expect(responses["503"].properties.code.description).toBe(

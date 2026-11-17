@@ -144,6 +144,7 @@ describe("an authenticated request", () => {
       sub: "user-1",
       role: "BUSINESS_ADMIN",
       businessId: "business-1",
+      driverId: null,
     });
   });
 
@@ -158,6 +159,7 @@ describe("an authenticated request", () => {
       sub: "user-1",
       role: "MASTER",
       businessId: null,
+      driverId: null,
     });
   });
 

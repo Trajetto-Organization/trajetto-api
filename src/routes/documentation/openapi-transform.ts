@@ -1033,6 +1033,24 @@ function openapiTransform(input: TransformInput): {
     );
   }
 
+  // The companies' panel budget (shared/integration/panel-budget.ts),
+  // charged inside ensureAuthenticated and refused only in enforce. Never
+  // on a MASTER-only route: the MASTER never pays.
+  if (
+    onRequest.includes(ensureAuthenticated) &&
+    !(roles.length > 0 && roles.every((role) => role === "MASTER"))
+  ) {
+    mergeResponse(
+      responses,
+      "429",
+      errorBody(
+        "TENANT_BUSY: a sua empresa gastou o orçamento de requisições do painel neste minuto, ou você sozinho gastou a sua parte dele (um quarto, por padrão); a Torre, as listas e as exportações custam mais que um detalhe. Só com o orçamento ligado (`TENANT_PANEL_BUDGET_MODE=enforce`) e nunca para a sessão do motorista nem do MASTER. Espere o `retry-after` (o fim do minuto) e repita.",
+        ["TENANT_BUSY"],
+        { "retry-after": RETRY_AFTER_HEADER },
+      ),
+    );
+  }
+
   // Every export streams through ExportPipeline, which takes a slot first
   // (shared/services/export/export-slots.ts): one export per company and
   // three per replica at a time.

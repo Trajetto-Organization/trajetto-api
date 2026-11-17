@@ -3533,7 +3533,8 @@ primeiro job que apaga dados.
 nenhum é fonte de verdade:
 
 - contadores de rate limit (HTTP, handshake do socket e falhas de chave da
-  API pública), que falham aberto;
+  API pública) e do orçamento do painel por empresa (`panel-user:<id>` e
+  `panel:<empresa>`, um minuto cada; abaixo), que falham aberto;
 - o intervalo por destinatário do "esqueci minha senha"
   (`src/shared/security/mail-cooldown.ts`): no máximo um e-mail por endereço
   a cada 60 s, venha o pedido de onde vier (`SET NX EX`). A chave é um HMAC
@@ -4819,6 +4820,28 @@ janela, ou com contrato desconhecido, a porta fica fechada e elas só contam.
 `observe` nunca as recusa, e `enforce` recusa qualquer que seja a adoção. A
 porta aparece em `shedding.positions` (o modo, a janela e se está aberta). O `/docs` e a referência pública ficam de fora: são
 registrados antes do plugin e já têm limite e cache.
+
+**Orçamento do painel por empresa** (`src/shared/integration/panel-budget.ts`,
+F2-28, decisão D41): o limitador segura uma pessoa em 300 requisições por
+minuto, seja o que for; a Torre e uma exportação pesam o mesmo que um
+detalhe. Toda requisição de uma sessão do painel gasta também unidades do
+minuto da empresa (`TENANT_PANEL_BUDGET_PER_MINUTE`, 6.000): um detalhe 1, a
+Torre 3, uma lista 5 (10 nas entregas e nas rotas pedidas sem período), uma
+exportação 20 (`config.panelCost` muda o de uma rota). São duas cobranças em
+volta da busca da sessão no `ensureAuthenticated`: **antes** dela, só a
+fatia da pessoa (`panel-user:<sub>`, até `TENANT_PANEL_USER_SHARE`, um
+quarto, do orçamento da empresa), pela assinatura do token já conferida;
+**depois** dela, a da empresa (`panel:<businessId>`), com a empresa que o
+banco confirmou. Um token revogado em laço é recusado antes da consulta e
+nunca chega ao orçamento da empresa, e uma pessoa sozinha não gasta mais que
+a fatia dela. A sessão do motorista e a do MASTER nunca pagam, nem a API
+pública (as chaves têm os tetos delas). Com `TENANT_PANEL_BUDGET_MODE=observe`
+(o padrão) nada é recusado: o que o `enforce` recusaria vai para a seção
+`panel_budget` do `/health/metrics` e do `ops_sample`, e a requisição acima
+da fatia da pessoa também não é cobrada da empresa, para o contador mostrar
+o que o `enforce` faria. No `enforce`, a recusa é 429 `TENANT_BUSY` com
+`Retry-After` até o fim do minuto; `off` não gasta nada. Sem Redis, passa
+(falha aberta).
 
 **Régua de rampa** (`src/shared/health/volume-gauge.ts`, U-12): cada
 processo conta as entregas que criou, **depois** do commit da transação que

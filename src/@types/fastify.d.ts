@@ -35,6 +35,12 @@ declare module "fastify" {
      * shared/http/shed-classes.ts; a route may declare its own.
      */
     shedClass?: ShedClass;
+    /**
+     * Units of the company's panel budget one request spends (plano-escala
+     * F2-28, shared/integration/panel-budget.ts); absent, the route's group
+     * decides.
+     */
+    panelCost?: number;
     openapi?: {
       body?: ZodType;
       headers?: ZodType;

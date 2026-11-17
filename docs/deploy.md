@@ -4399,7 +4399,10 @@ que o processo criou no minuto (`created`), contadas depois de cada commit
 que chegaram com a réplica ocupada (`under_pressure`, e o que estava ocupado
 em `reasons`) e, por grupo de rota, o que o descarte de carga recusou
 (`shed`) ou recusaria no `SHED_MODE=observe` (`would_shed`;
-`src/shared/http/load-shedding.ts`). As colunas dizem de quem é a
+`src/shared/http/load-shedding.ts`), e a seção `panel_budget`: o que o
+orçamento do painel por empresa cobrou, recusou ou recusaria no
+`TENANT_PANEL_BUDGET_MODE=observe`, na fatia da pessoa (`user`) e na
+empresa (`tenant`; `src/shared/integration/panel-budget.ts`). As colunas dizem de quem é a
 linha: `role` (`all` com `WORKERS_ENABLED=true`, `http` com `false`),
 `replica` (o hostname do contêiner, mais `/<slot>` com `SWARM_TASK_SLOT`) e
 `commit`. Com as variáveis de identidade do Swarm no _Environment_ da

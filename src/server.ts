@@ -37,6 +37,7 @@ import {
 } from "./shared/health/ops-sample";
 import { httpMetrics } from "./shared/health/http-metrics";
 import { shedMetrics } from "./shared/http/load-shedding";
+import { panelBudgetMetrics } from "./shared/integration/panel-budget";
 import {
   VOLUME_SECTION,
   rotateDeliveriesCreated,
@@ -239,6 +240,10 @@ async function bootstrap() {
       // the minute, per route group (plano-escala F2-24). The owner reads
       // seven days of it before SHED_MODE=enforce.
       registerSampleSection("shedding", () => shedMetrics.rotate());
+
+      // What the companies' panel budgets charged, and refused or would
+      // refuse in observe, in the minute (plano-escala F2-28).
+      registerSampleSection("panel_budget", () => panelBudgetMetrics.rotate());
 
       // The deliveries this process created in the minute, counted after
       // each commit; the ops heartbeat sums them into the cluster row

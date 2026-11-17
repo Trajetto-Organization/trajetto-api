@@ -33,6 +33,7 @@ const guard = {
   authFailuresBlocked: vi.fn(),
   recordAuthFailure: vi.fn(),
   allowBusiness: vi.fn(),
+  spendPanelBudget: vi.fn(),
 };
 const repository = { findCredentialByPrefix: vi.fn(), touchLastUsed: vi.fn() };
 

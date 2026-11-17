@@ -140,6 +140,12 @@ const providerChannelMetrics = z.object({
 });
 
 /** Status classes of http-metrics.ts; 429 and 503 also inside 4xx and 5xx. */
+// The panel budget's counters per scope (plano-escala F2-28).
+const budgetScopeCounts = z.object({
+  user: z.number(),
+  tenant: z.number(),
+});
+
 const httpClassCounts = z.object({
   "2xx": z.number(),
   "3xx": z.number(),
@@ -1143,6 +1149,47 @@ const healthResponses = {
       .optional()
       .describe(
         "Descarte de carga desta réplica (src/shared/http/load-shedding.ts), por réplica, como `http`; as linhas de ops_sample trazem todas.",
+      ),
+    // plano-escala F2-28. Optional: an API that predates it, still answering
+    // during a rolling deploy, sends none.
+    panel_budget: z
+      .object({
+        window_seconds: z
+          .number()
+          .describe(
+            "Segundos que a janela cobre: até um minuto, quando a linha de ops_sample a zera.",
+          ),
+        mode: z
+          .enum(["off", "observe", "enforce"])
+          .describe(
+            "TENANT_PANEL_BUDGET_MODE: `observe` só conta; `enforce` recusa com 429 TENANT_BUSY e Retry-After; `off` não gasta nada.",
+          ),
+        budget_per_minute: z
+          .number()
+          .describe(
+            "TENANT_PANEL_BUDGET_PER_MINUTE: as unidades por minuto de cada empresa.",
+          ),
+        user_share: z
+          .number()
+          .describe(
+            "TENANT_PANEL_USER_SHARE: a fatia de cada pessoa no orçamento da empresa.",
+          ),
+        charged: budgetScopeCounts.describe(
+          "Requisições que gastaram do orçamento: `user` na fatia da pessoa (antes da sessão), `tenant` no da empresa (depois).",
+        ),
+        would_refuse: budgetScopeCounts.describe(
+          "Acima do orçamento e deixadas passar pelo modo observe.",
+        ),
+        refused: budgetScopeCounts.describe("Recusadas com 429 TENANT_BUSY."),
+        unavailable: z
+          .number()
+          .describe(
+            "O Redis não respondeu: passaram sem contar (falha aberta).",
+          ),
+      })
+      .optional()
+      .describe(
+        "O orçamento do painel por empresa (src/shared/integration/panel-budget.ts), por réplica, como `http`; as linhas de ops_sample trazem todas.",
       ),
     // plano-escala F1-22. Optional: an API that predates it, still answering
     // during a rolling deploy, sends none.

@@ -1153,6 +1153,32 @@ const envSchema = z
     ),
 
     /**
+     * Each company's panel budget (plano-escala F2-28, decision D41,
+     * shared/integration/panel-budget.ts): units a minute a company's panel
+     * sessions may spend (a detail 1, the tower 3, a list 5 or 10, an export
+     * 20), each person at most TENANT_PANEL_USER_SHARE of it, charged
+     * before the session lookup. Drivers and the MASTER never pay.
+     * `observe` (the default) only counts, in the `panel_budget` section of
+     * /health/metrics and of the ops_sample row; `enforce` answers 429
+     * TENANT_BUSY with Retry-After; `off` spends nothing. Empty counts as
+     * absent.
+     */
+    TENANT_PANEL_BUDGET_MODE: z.preprocess(
+      (value) => (value === "" ? undefined : value),
+      z.enum(["off", "observe", "enforce"]).default("observe"),
+    ),
+    TENANT_PANEL_BUDGET_PER_MINUTE: z.preprocess(
+      (value) => (value === "" ? undefined : value),
+      z.coerce.number().int().min(1).max(1_000_000).default(6_000),
+    ),
+    // A share, not a count: a person's slice grows with the company's
+    // budget. Above 0 and at most 1 (a person may spend all of it).
+    TENANT_PANEL_USER_SHARE: z.preprocess(
+      (value) => (value === "" ? undefined : value),
+      z.coerce.number().gt(0).max(1).default(0.25),
+    ),
+
+    /**
      * How often each replica re-checks, in the database, the sessions of its
      * sockets (±25% jitter). The safety net of revocation: the frame that
      * drops a socket travels through Redis and is lost if Redis blinks, so

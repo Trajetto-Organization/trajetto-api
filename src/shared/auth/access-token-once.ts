@@ -39,6 +39,8 @@ interface AccessClaims {
   sub: string;
   role: string | null;
   businessId: string | null;
+  /** Set on a driver's session: the panel budget exempts it (F2-28). */
+  driverId: string | null;
 }
 
 type AccessTokenVerdict =
@@ -57,6 +59,7 @@ function claimsOf(payload: AccessTokenPayload): AccessClaims | undefined {
     role: typeof payload.role === "string" ? payload.role : null,
     businessId:
       typeof payload.businessId === "string" ? payload.businessId : null,
+    driverId: typeof payload.driverId === "string" ? payload.driverId : null,
   };
 }
 

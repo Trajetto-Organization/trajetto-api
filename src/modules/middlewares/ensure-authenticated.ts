@@ -10,6 +10,10 @@ import { AppError } from "@/shared/errors/AppError";
 import { isDatabaseUnavailable } from "@/shared/errors/database-unavailable";
 import { authorizeRequestedTenant } from "./tenant-authorization";
 import { verifyAccessTokenOnce } from "@/shared/auth/access-token-once";
+import {
+  chargePanelTenant,
+  chargePanelUser,
+} from "@/shared/integration/panel-budget";
 
 async function ensureAuthenticated(
   request: FastifyRequest,
@@ -74,6 +78,11 @@ async function ensureAuthenticated(
       "AUTH_TOKEN_INVALID",
     );
   }
+
+  // The person's slice of their company's panel budget, before the lookup:
+  // a revoked token in a loop is refused here, at the cost of one Redis
+  // call, and never reaches the company's budget (plano-escala F2-28).
+  await chargePanelUser(request, payload);
 
   try {
     const userRepository = new UserRepository();
@@ -163,6 +172,9 @@ async function ensureAuthenticated(
       "AUTH_SESSION_UNAVAILABLE",
     );
   }
+
+  // The company's panel budget, with the company the lookup just confirmed.
+  await chargePanelTenant(request);
 }
 
 export { ensureAuthenticated };

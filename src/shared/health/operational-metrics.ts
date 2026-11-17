@@ -34,6 +34,7 @@ import {
 } from "@/shared/health/database-metrics";
 import { httpMetrics } from "@/shared/health/http-metrics";
 import { shedMetrics } from "@/shared/http/load-shedding";
+import { panelBudgetMetrics } from "@/shared/integration/panel-budget";
 import { alertThresholdsFromEnv } from "@/shared/health/alert-rules";
 import {
   readLatestTotals,
@@ -328,6 +329,9 @@ async function collectOperationalMetrics() {
     // the ops_sample row of the last minute (plano-escala F2-24): per
     // replica, like `http`.
     shedding: shedMetrics.snapshot(),
+    // The companies' panel budgets on this replica since the last minute's
+    // ops_sample row (plano-escala F2-28): charged, refused, would refuse.
+    panel_budget: panelBudgetMetrics.snapshot(),
     // The newest quarter-hour sums of the cluster rows against the approved
     // gate (plano-escala F1-22): what the volume-near-gate alert judges.
     volume,

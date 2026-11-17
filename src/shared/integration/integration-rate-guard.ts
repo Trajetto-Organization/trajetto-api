@@ -1,6 +1,9 @@
 import type { Redis } from "ioredis";
 
-import { countInFixedWindow } from "@/shared/services/fixed-window-counter";
+import {
+  countInFixedWindow,
+  spendInFixedWindow,
+} from "@/shared/services/fixed-window-counter";
 
 /**
  * Counters for the public API that the per-key limiter cannot provide.
@@ -23,7 +26,9 @@ import { countInFixedWindow } from "@/shared/services/fixed-window-counter";
  * over many addresses are the edge's job (ADR 0002).
  *
  * Redis holds only counters here, and every error fails open (ADR 0002): an
- * outage must cost the limit, never a customer's call.
+ * outage must cost the limit, never a customer's call. The panel's budgets
+ * per company (panel-budget.ts) spend through the same guard, on the same
+ * fail-fast connection.
  */
 const MAX_API_KEY_AUTH_FAILURES_PER_MINUTE = 30;
 
@@ -36,6 +41,15 @@ interface IntegrationRateGuard {
   recordAuthFailure(address: string): Promise<void>;
   /** One more call for this company, true while it is within `max` a minute. */
   allowBusiness(businessId: string, max: number): Promise<boolean>;
+  /**
+   * Spends `cost` units of a panel budget in this minute (plano-escala
+   * F2-28, shared/integration/panel-budget.ts): the total after it and when
+   * the minute ends. Null when Redis did not answer: the caller fails open.
+   */
+  spendPanelBudget(
+    key: string,
+    cost: number,
+  ): Promise<{ total: number; resetInMs: number } | null>;
 }
 
 const authFailureKey = (address: string): string =>
@@ -70,6 +84,14 @@ function createIntegrationRateGuard(
       }
     },
 
+    async spendPanelBudget(key, cost) {
+      try {
+        return await spendInFixedWindow(redis, key, WINDOW_SECONDS, cost);
+      } catch {
+        return null;
+      }
+    },
+
     async allowBusiness(businessId, max) {
       try {
         return (
@@ -91,6 +113,7 @@ const unlimitedIntegrationRateGuard: IntegrationRateGuard = {
   authFailuresBlocked: async () => false,
   recordAuthFailure: async () => undefined,
   allowBusiness: async () => true,
+  spendPanelBudget: async () => null,
 };
 
 // Wired in http.ts with the rate-limit Redis connection.
