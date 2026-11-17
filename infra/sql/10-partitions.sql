@@ -27,11 +27,23 @@
 -- step) and the ones the plan adds later (the lean trail, the event and
 -- activity shells); a table that does not exist yet is skipped.
 --
--- A change of owner takes ACCESS EXCLUSIVE on that one table: every ping
--- INSERT waits behind it. So each wait is bounded at 3 s, and a table whose
--- lock did not come is 'pending', retried by the next release (U-11)
--- instead of failing it; the same for a privilege the migration user lacks,
--- which must never stop a deploy of the API.
+-- A change of owner takes ACCESS EXCLUSIVE on the table, and the whole
+-- file is one transaction (infra/sql/README.md): every lock it takes is
+-- held until its COMMIT. Once the parent is reowned, every ping INSERT and
+-- every read of it waits for the end of the file, the waits on each
+-- partition after it included. So the lock waits of the whole file share
+-- ONE budget of 3 s, under the runtime URL's lock_timeout of 5 s (a ping
+-- waits and lands, never a 503): each wait gets what is left of it, and
+-- once it is spent a table changes owner only if its lock is free at once.
+-- A table whose lock did not come is 'pending', retried by the next
+-- release (U-11) instead of failing it; the same for a privilege the
+-- migration user lacks, which must never stop a deploy of the API.
+--
+-- The parent goes first on purpose: an INSERT locks the parent, then the
+-- partition it lands in. Reowning the partitions first and the parent
+-- last would take the same two locks in the other order, and a ping that
+-- came in between would deadlock with the step (one of the two aborted).
+-- In the INSERT's order, the step only waits, or gives up.
 DO $$
 DECLARE
   parents CONSTANT text[] := ARRAY[
@@ -41,6 +53,8 @@ DECLARE
     'activity_part'
   ];
   owner_name CONSTANT name := 'trajetto_partitions';
+  lock_budget CONSTANT interval := interval '3 seconds';
+  budget_ends timestamptz;
   target_schema CONSTANT name := current_schema();
   owner_oid oid;
   parent_name text;
@@ -52,6 +66,7 @@ DECLARE
   schema_granted boolean := false;
   reowned integer := 0;
 BEGIN
+  -- For the schema's GRANT below; the tables have the budget.
   SET LOCAL lock_timeout = '3s';
 
   SELECT r.oid INTO owner_oid
@@ -112,6 +127,18 @@ BEGIN
       WHERE c.relowner <> owner_oid
       ORDER BY tree.level, c.relname
     LOOP
+      -- The budget starts with the first lock and is never renewed; past
+      -- it, 1 ms: only a lock that is free right now.
+      budget_ends := coalesce(budget_ends, clock_timestamp() + lock_budget);
+      PERFORM set_config(
+        'lock_timeout',
+        greatest(
+          1,
+          ceil(extract(epoch FROM budget_ends - clock_timestamp()) * 1000)
+        )::bigint || 'ms',
+        true
+      );
+
       BEGIN
         EXECUTE format('ALTER TABLE %s OWNER TO %I', member_rel.rel, owner_name);
         reowned := reowned + 1;

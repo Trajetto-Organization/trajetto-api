@@ -70,9 +70,14 @@ de um PITR ou de um failover os xids voltam a ser usados, e a época separa as
 duas histórias. Até a etapa rodar, o `ops-heartbeat` alerta
 `cluster-epoch-stale`.
 
-O `10-partitions.sql` troca o dono só do que tem outro dono, com
-`lock_timeout` de 3 s por tabela: uma tabela cujo lock não veio fica
-`pending` e o próximo release tenta de novo. A lista de tabelas é a do
+O `10-partitions.sql` troca o dono só do que tem outro dono. Como o arquivo
+é uma transação, o lock do pai fica preso até o fim e cada ping espera
+junto: por isso as esperas do arquivo inteiro dividem **um** orçamento de
+3 s (abaixo do `lock_timeout` de 5 s da URL do runtime), e, gasto o
+orçamento, uma tabela só troca de dono se o lock estiver livre na hora. Uma
+tabela cujo lock não veio fica `pending` e o próximo release tenta de novo.
+O pai vem antes das partições, na ordem do INSERT (pai, depois partição): a
+ordem inversa travaria um ping no meio do caminho em deadlock. A lista de tabelas é a do
 registro de partições (`src/shared/database/partitions.ts`), mais as que o
 plano ainda vai criar; uma tabela que não existe é pulada.
 

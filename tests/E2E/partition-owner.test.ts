@@ -1,7 +1,7 @@
 import { resolve } from "node:path";
 
 import type pg from "pg";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { openReleaseClient } from "infra/scripts/release-connection";
 import {
@@ -197,6 +197,85 @@ describe("infra/sql/10-partitions.sql", () => {
     expect(await runStep()).toMatchObject({ status: "applied" });
     expect(await notOwned()).toEqual([]);
   });
+
+  it("keeps a ping waiting one budget of 3 s at most, however many partitions are busy", async () => {
+    // The file is one transaction: the parent's ACCESS EXCLUSIVE, taken
+    // first, is held until the COMMIT. Each partition that waited its own
+    // 3 s after it added 3 s to every ping INSERT and every read of the
+    // parent, past the runtime URL's lock_timeout of 5 s with two of them:
+    // a 503 for each ping. The waits now share one budget.
+    const [busyA, busyB, free] = await partitions();
+
+    await admin.query(`ALTER TABLE "driver_position" OWNER TO current_user`);
+
+    for (const name of [busyA, busyB, free]) {
+      await admin.query(`ALTER TABLE "${name}" OWNER TO current_user`);
+    }
+
+    // Two partitions held as an anti-wraparound VACUUM holds one: it does
+    // not yield to the waiter. LOCK on a partition leaves the parent free.
+    const holders = await Promise.all(
+      [busyA, busyB].map(async (name) => {
+        const holder = await openReleaseClient(URL(), "e2e-partition-holder");
+
+        await holder.query("BEGIN");
+        await holder.query(`LOCK TABLE "${name}" IN ACCESS SHARE MODE`);
+
+        return holder;
+      }),
+    );
+    const ping = await openReleaseClient(URL(), "e2e-partition-ping");
+
+    try {
+      const startedAt = Date.now();
+      const stepRun = runStep();
+
+      // The step is waiting on a busy partition: the parent is its now.
+      await vi.waitFor(
+        async () => {
+          const { rows } = await admin.query<{ waiting: number }>(
+            `SELECT count(*)::int AS waiting FROM pg_stat_activity
+              WHERE application_name = 'e2e-partition-owner'
+                AND wait_event_type = 'Lock'`,
+          );
+
+          expect(rows[0].waiting).toBe(1);
+        },
+        { timeout: 5_000, interval: 20 },
+      );
+
+      // A read of the parent, as the control tower's: it waits for the
+      // step's COMMIT, as a ping INSERT would.
+      const pingStartedAt = Date.now();
+
+      await ping.query(`SELECT count(*) FROM "driver_position" WHERE false`);
+
+      const pingWaited = Date.now() - pingStartedAt;
+      const pending = await stepRun;
+      const elapsed = Date.now() - startedAt;
+
+      expect(pending).toMatchObject({ step: STEP, status: "pending" });
+      expect(pending?.detail).toContain(busyA);
+      expect(pending?.detail).toContain(busyB);
+      expect(pingWaited, `a leitura esperou ${pingWaited} ms`).toBeLessThan(
+        4_000,
+      );
+      expect(elapsed, `levou ${elapsed} ms`).toBeLessThan(4_500);
+      // The free partition still changed owner: once the budget is spent,
+      // a lock that is free at once is still taken.
+      expect(await notOwned()).toEqual([busyA, busyB].sort());
+    } finally {
+      for (const holder of holders) {
+        await holder.query("ROLLBACK").catch(() => undefined);
+        await holder.end();
+      }
+
+      await ping.end();
+    }
+
+    expect(await runStep()).toMatchObject({ status: "applied" });
+    expect(await notOwned()).toEqual([]);
+  }, 30_000);
 });
 
 describe("asPartitionOwner", () => {
