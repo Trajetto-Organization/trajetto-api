@@ -167,7 +167,9 @@ depois de um rollback. Expandir/contrair sempre: nada de DROP/RENAME/tipo
 novo/`SET NOT NULL` sobre o que a produção lê sem a fase de contract (marcador
 `-- contract-phase:`), enum novo só gravado na release seguinte
 (`-- enum-expand:`), `DROP NOT NULL` idem (`-- nullable-expand:`),
-`SET lock_timeout = '5s'` em tabela quente, `CREATE INDEX IF NOT EXISTS`. O
+`SET lock_timeout = '5s'` em tabela quente, `CREATE INDEX IF NOT EXISTS` (índice
+novo em tabela quente: o mesmo índice num arquivo de `prisma/concurrent/`,
+que a etapa de release roda com CONCURRENTLY antes do `migrate deploy`). O
 guard é `tests/unitaires/lifecycle/migration-safety.test.ts`. **Nunca edite
 uma migration já aplicada em algum banco** (nem um comentário: muda o
 checksum). Detalhes: `docs/arquitetura.md` ("Migrations: expandir e contrair").

@@ -115,7 +115,28 @@ function baseUrl(raw) {
 const BASE = baseUrl(env.DOKPLOY_URL);
 const APPLICATION_ID = env.DOKPLOY_APPLICATION_ID;
 const IMAGE = env.RELEASE_IMAGE.trim().toLowerCase();
-const TIMEOUT_MS = Number(env.RELEASE_TIMEOUT_SECONDS || 1800) * 1000;
+/**
+ * The patience for the outcome, from the environment's variable
+ * RELEASE_TIMEOUT_SECONDS (vars of the GitHub environment, through the
+ * deploy action; F2-01): a release with a long prisma/concurrent build
+ * needs more than the default 30 min. Not a positive number: the default,
+ * with a warning (a typo must not turn the wait into zero).
+ */
+function releaseTimeoutMs(raw) {
+  if (raw === undefined || raw.trim() === "") return 1800 * 1000;
+
+  const seconds = Number(raw);
+
+  if (Number.isFinite(seconds) && seconds > 0) return seconds * 1000;
+
+  console.log(
+    `::warning::RELEASE_TIMEOUT_SECONDS="${raw}" não é um número positivo de segundos; vale o padrão, 1800.`,
+  );
+
+  return 1800 * 1000;
+}
+
+const TIMEOUT_MS = releaseTimeoutMs(env.RELEASE_TIMEOUT_SECONDS);
 const POLL_MS = Number(env.RELEASE_POLL_SECONDS || 5) * 1000;
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));

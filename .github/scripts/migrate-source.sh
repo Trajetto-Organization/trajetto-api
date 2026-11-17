@@ -37,6 +37,7 @@ PATHS=(
   prisma.config.ts
   prisma/schema.prisma
   prisma/migrations
+  prisma/concurrent
   tabela-codigo-infracoes-renainf-xlsx.xlsx
   infra/database.ts
   infra/scripts/docker-entrypoint.sh
@@ -45,6 +46,9 @@ PATHS=(
   infra/scripts/schema-guard.ts
   infra/scripts/seed.ts
   infra/scripts/import-violation-codes.ts
+  infra/scripts/prebuild-online-ddl.ts
+  infra/scripts/online-ddl.ts
+  infra/scripts/release-connection.ts
   src/shared/database
 )
 

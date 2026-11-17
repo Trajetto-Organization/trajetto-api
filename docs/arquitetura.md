@@ -4191,11 +4191,19 @@ e RETURNING e insere sem as colunas que não conhece. Então:
 
 Tabelas e tipos criados depois da última migration de produção estão livres.
 Em tabelas quentes: `SET lock_timeout = '5s';` no topo, `CREATE INDEX IF NOT
-EXISTS`, uma tabela quente por migration; tabela grande → construa o índice à
-mão antes com `CREATE INDEX CONCURRENTLY IF NOT EXISTS`, confira `indisvalid`
-e deixe a migration com o mesmo `IF NOT EXISTS` (vira no-op). Se o índice lê
-colunas que a própria migration cria, o roteiro do comentário cria antes, à
-mão, os tipos e as colunas, e a migration tem de aceitar isso: `CREATE TYPE`
+EXISTS`, uma tabela quente por migration. Índice novo numa tabela quente
+(`HOT_TABLES`, em `src/shared/health/metrics-queries.ts`): o mesmo índice,
+com o mesmo nome, num arquivo de `prisma/concurrent/` com CREATE INDEX
+CONCURRENTLY IF NOT EXISTS, que a etapa de release roda **antes** do
+`migrate deploy`, com `lock_timeout` e novas tentativas, refazendo um índice
+inválido; a migration mantém o `IF NOT EXISTS` e vira no-op
+(`prisma/concurrent/README.md`; `migration-prebuild.test.ts` cobra o par nas
+migrations depois de `20261116120000`). As colunas que ele lê chegam numa
+release anterior:
+o passo pula um arquivo cujas colunas ainda não existem. Nas migrations de
+antes desse passo, o roteiro era construir o índice à mão; se o índice lia
+colunas que a própria migration criava, o roteiro do comentário criava antes,
+à mão, os tipos e as colunas, e a migration tem de aceitar isso: `CREATE TYPE`
 dentro de `DO $$ BEGIN ... EXCEPTION WHEN duplicate_object THEN NULL; END $$;`
 e `ADD COLUMN IF NOT EXISTS` (sem isso o deploy para em `42710` e trava as
 seguintes; `tests/unitaires/lifecycle/migration-prebuild.test.ts` confere as

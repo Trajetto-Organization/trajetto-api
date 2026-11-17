@@ -100,6 +100,23 @@ describe("the deploy action", () => {
     );
   });
 
+  // F2-01: a release whose prisma/concurrent builds a big index needs
+  // more than 30 min; the patience is the environment's variable, empty
+  // being the default (dokploy-release.mjs).
+  it("waits for the step as long as the environment's RELEASE_TIMEOUT_SECONDS says", () => {
+    expect(stepOf(deploy, RELEASE).text).toContain(
+      "RELEASE_TIMEOUT_SECONDS: ${{ inputs.release-timeout-seconds }}\n",
+    );
+    for (const job of [
+      jobOf(staging, "deploy-staging"),
+      jobOf(production, "promote-production"),
+    ]) {
+      expect(input(job, "release-timeout-seconds"), job.name).toBe(
+        "${{ vars.RELEASE_TIMEOUT_SECONDS }}",
+      );
+    }
+  });
+
   it("moves `:<tag>` before the deploy and `:<tag>-applied` only after it, both by digest", () => {
     expect(stepOf(deploy, MOVE).run).toMatch(
       /ghcr\.sh tag \\\n\s+"ghcr\.io\/trajetto-organization\/trajetto-api-migrate:\$\{TAG\}" \\\n\s+"ghcr\.io\/trajetto-organization\/trajetto-api-migrate@\$\{MIGRATE_DIGEST\}"/,

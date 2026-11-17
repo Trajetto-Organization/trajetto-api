@@ -308,13 +308,15 @@ describe("the API image's build stage", () => {
     expect(generate + 1).toBeLessThan(builder.indexOf("COPY . ."));
   });
 
-  // The seeds are the release step's: only the `migrate` stage copies
-  // release/, back into its build/.
+  // The seeds and the release step's scripts are the release step's: only
+  // the `migrate` stage copies release/, back into its build/. The SQL
+  // directories of the step may hold only a README (.dockerignore drops
+  // Markdown), so they are made to exist for the migrate stage's COPY.
   it("moves the seeds out of build/, in the RUN that built them", () => {
     const builder = stage(api, "builder");
 
     expect(builder[builder.length - 1]).toBe(
-      "RUN yarn build && mkdir release && mv build/seed.js build/import-violation-codes.js release/",
+      "RUN yarn build && mkdir release && mv build/seed.js build/import-violation-codes.js build/prebuild-online-ddl.js release/ && mkdir -p prisma/concurrent",
     );
     expect(read("tsup.config.ts")).toMatch(
       /seed: "\.\/infra\/scripts\/seed\.ts"/,
@@ -562,6 +564,7 @@ describe("the release image (trajetto-api-migrate)", () => {
       "COPY --from=builder --chown=nodejs:nodejs /app/prisma.config.ts ./migrate/prisma.config.ts",
       "COPY --from=builder --chown=nodejs:nodejs /app/prisma/schema.prisma ./migrate/prisma/schema.prisma",
       "COPY --from=builder --chown=nodejs:nodejs /app/prisma/migrations ./migrate/prisma/migrations",
+      "COPY --from=builder --chown=nodejs:nodejs /app/prisma/concurrent ./migrate/prisma/concurrent",
       "COPY --from=builder --chown=nodejs:nodejs /app/release/ ./build/",
     ]);
     // A later layer would only hide files: nothing runs or deletes here.

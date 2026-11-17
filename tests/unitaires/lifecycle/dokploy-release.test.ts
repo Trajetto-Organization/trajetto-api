@@ -489,6 +489,23 @@ describe("the release step on Dokploy", { timeout: 30_000 }, () => {
     );
   });
 
+  it("keeps the default patience, with a warning, when the environment's timeout is not a number", async () => {
+    const fake = await fakeDokploy({
+      before: [OLD_IDLE],
+      after: [[{ containerId: "new", currentState: "Running 1 second ago" }]],
+    });
+
+    const result = await release({
+      ...valid(fake),
+      RELEASE_TIMEOUT_SECONDS: "30min",
+    });
+
+    expect(result.status, result.output).toBe(0);
+    expect(result.output).toContain(
+      '::warning::RELEASE_TIMEOUT_SECONDS="30min" não é um número positivo de segundos; vale o padrão, 1800.',
+    );
+  });
+
   it("fails at the timeout when no new task ever shows up", async () => {
     const fake = await fakeDokploy({ before: [OLD_IDLE], after: [[OLD_IDLE]] });
 

@@ -2308,6 +2308,7 @@ ser alvo de rollback ("Configurar a Application `trajetto-api-migrate`",
 passo 7, abaixo).
 
 O modo `release` do entrypoint (o comando padrão da imagem de migração) roda
+`build/prebuild-online-ddl.js` (o `prisma/concurrent`, logo abaixo),
 `prisma migrate deploy` (de `/app/migrate`, onde estão o CLI e o
 `prisma.config.ts`), `build/seed.js` e `build/import-violation-codes.js` de
 forma **estrita**, sem subir o servidor: qualquer erro reprova a etapa. Os
@@ -2322,6 +2323,38 @@ falhada.
 
 As regras para escrever uma migration (expandir/contrair, `lock_timeout`,
 índices) estão em [`arquitetura.md`](./arquitetura.md#migrations-expandir-e-contrair).
+
+### `prisma/concurrent`: os índices antes das migrations
+
+Um `CREATE INDEX` comum segura as escritas da tabela durante todo o build, e
+o Prisma roda cada migration numa transação, onde o CREATE INDEX
+CONCURRENTLY não roda. O índice de uma tabela quente vai então num arquivo
+de `prisma/concurrent/` (as regras estão no `README.md` dessa pasta), que a
+etapa roda **antes** do `prisma migrate deploy`, com CONCURRENTLY; a
+migration mantém o `CREATE INDEX IF NOT EXISTS` com o mesmo nome, que acha o
+índice pronto e não faz nada (num banco novo, o molde do E2E ou o
+`yarn dev`, ela o constrói com a tabela vazia). O roteiro "construa à mão
+antes" dos comentários de migration saiu daí.
+
+- Cada espera de lock tem `lock_timeout` (`PREBUILD_LOCK_TIMEOUT_MS`, 3 s) e
+  é repetida (`PREBUILD_LOCK_RETRIES`, 20). Esgotadas, a etapa falha (a API
+  não é implantada) e o próximo deploy a roda de novo; um CIC longo é para a
+  madrugada.
+- Um índice que um CIC deixou inválido é removido com DROP INDEX
+  CONCURRENTLY e refeito; numa tabela particionada, o passo cria o índice
+  no pai com `ON ONLY`, um CIC por partição e um `ATTACH` de cada.
+- No fim, nenhum índice que o passo administra pode estar inválido. Outros
+  índices inválidos do banco aparecem como aviso no log da
+  `trajetto-api-migrate` (linhas `[prebuild]`): confira e refaça à mão.
+- A etapa **recusa** uma URL do PgBouncer (porta 6432 ou `pgbouncer=true`)
+  e sai com 64 antes de tocar no banco: CIC, o lock do `migrate deploy` e os
+  passos depois dele precisam de uma sessão própria no Postgres.
+- Emergência: `PREBUILD_ONLINE_DDL=off` no _Environment_ da
+  `trajetto-api-migrate` desliga o passo (as migrations passam a construir
+  esses índices com lock); tire depois.
+- Uma release com um índice grande pode passar dos 30 min que o deploy
+  espera a etapa: suba a variável `RELEASE_TIMEOUT_SECONDS` do environment
+  do GitHub antes ([seção 13](#13-configurar-o-github)).
 
 ### Como a etapa roda
 

@@ -64,6 +64,9 @@ inputs:
   swarm-api-service:
     description: "vars.SWARM_API_SERVICE do environment"
     default: ""
+  release-timeout-seconds:
+    description: "vars.RELEASE_TIMEOUT_SECONDS do environment: quanto esperar a etapa de release (vazio = 1800)"
+    default: ""
   require-branch-head:
     description: "true: só o run da cabeça da branch implanta (staging)"
     default: "false"
@@ -342,6 +345,7 @@ runs:
         DOKPLOY_APPLICATION_ID: ${{ inputs.dokploy-migrate-application-id }}
         DOKPLOY_APP_LABEL: trajetto-api-migrate
         RELEASE_IMAGE: ghcr.io/trajetto-organization/trajetto-api-migrate:${{ inputs.tag }}
+        RELEASE_TIMEOUT_SECONDS: ${{ inputs.release-timeout-seconds }}
       run: node .github/scripts/dokploy-release.mjs
 
     # Only now, after the step finished: the next run compares with this.

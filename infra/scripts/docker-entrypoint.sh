@@ -74,6 +74,13 @@ if [ "$MODE" = "migrate" ] || [ "$MODE" = "release" ]; then
   # on migrate's advisory lock. Only the server keeps the timed connection.
   SCHEMA_URL="${MIGRATION_DATABASE_URL:-$DATABASE_URL}"
 
+  # prisma/concurrent BEFORE the migrations (plano-escala F2-01, D20): the
+  # indexes of hot tables built with CREATE INDEX CONCURRENTLY, so the
+  # migration's own `CREATE INDEX IF NOT EXISTS` finds them and does
+  # nothing instead of holding the writes for the whole build. It also
+  # refuses a URL through PgBouncer (exit 64), before anything runs.
+  DATABASE_URL="$SCHEMA_URL" node build/prebuild-online-ddl.js "$CLI_DIR/prisma/concurrent"
+
   (cd "$CLI_DIR" && DATABASE_URL="$SCHEMA_URL" ./node_modules/.bin/prisma migrate deploy)
 
   # Strict: `set -e` turns a seed failure into a failed release step, which

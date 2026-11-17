@@ -406,6 +406,7 @@ jobs:
           rollout-verify: ${{ vars.ROLLOUT_VERIFY }}
           api-public-url: ${{ vars.API_PUBLIC_URL }}
           swarm-api-service: ${{ vars.SWARM_API_SERVICE }}
+          release-timeout-seconds: ${{ vars.RELEASE_TIMEOUT_SECONDS }}
           require-branch-head: "false"
           restore-api-tag: "false"
           mark-staged: "false"

@@ -126,11 +126,15 @@ RUN find node_modules/.prisma -name '*.d.ts' -delete
 
 COPY . .
 
-# The seeds belong to the release step, not to the API: they go to release/,
-# which only the `migrate` stage copies (back into its build/).
+# The seeds and the release step's own scripts belong to the release step,
+# not to the API: they go to release/, which only the `migrate` stage copies
+# (back into its build/). The release step's SQL directories may hold only
+# their README, which .dockerignore leaves out (**/*.md): `mkdir -p` keeps
+# the migrate stage's COPY of an empty one from failing.
 RUN yarn build \
     && mkdir release \
-    && mv build/seed.js build/import-violation-codes.js release/
+    && mv build/seed.js build/import-violation-codes.js build/prebuild-online-ddl.js release/ \
+    && mkdir -p prisma/concurrent
 
 # ================================
 # Stage: Production dependencies
@@ -341,8 +345,10 @@ CMD ["./docker-entrypoint.sh"]
 #
 # The CLI keeps to migrate/: its node_modules, prisma.config.ts and the
 # schema with its migrations, where `prisma migrate deploy` runs from
-# (docker-entrypoint.sh). The seeds and the infraction table go where the
-# seeds read them, beside the API's build: build/ and the working directory.
+# (docker-entrypoint.sh), and prisma/concurrent beside them, the online DDL
+# that runs right before it (build/prebuild-online-ddl.js). The seeds and
+# the infraction table go where the seeds read them, beside the API's
+# build: build/ and the working directory.
 # Most stable first, as in the runner.
 FROM runner AS migrate
 
@@ -353,6 +359,7 @@ COPY --from=builder --chown=nodejs:nodejs /app/tabela-codigo-infracoes-renainf-x
 COPY --from=builder --chown=nodejs:nodejs /app/prisma.config.ts ./migrate/prisma.config.ts
 COPY --from=builder --chown=nodejs:nodejs /app/prisma/schema.prisma ./migrate/prisma/schema.prisma
 COPY --from=builder --chown=nodejs:nodejs /app/prisma/migrations ./migrate/prisma/migrations
+COPY --from=builder --chown=nodejs:nodejs /app/prisma/concurrent ./migrate/prisma/concurrent
 COPY --from=builder --chown=nodejs:nodejs /app/release/ ./build/
 
 # The release step's outcome, as Swarm reports it (docker-entrypoint.sh,
