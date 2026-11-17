@@ -3395,6 +3395,19 @@ continua de pé depois:
   que a imagem anterior gravou sob a chave sem a linha dela (o rolling) é
   adotado, nunca duplicado. O expurgo noturno apaga a chave com o evento
   publicado e, depois de 90 dias, a que ficou sem evento.
+- cada linha da `notification_delivery` nasce com um id decidido pelo que
+  ela é (F5-03,
+  `src/shared/notifications/delivery-id.ts`):
+  o layout de um uuid v7 com o milissegundo do evento na frente e, no
+  resto, um hash do evento, do destinatário (usuário ou externo) e do
+  canal. A segunda expansão do mesmo evento (a retentativa depois de uma
+  queda, ou a réplica que tomou o evento) calcula as mesmas chaves
+  primárias, e o `skipDuplicates` não grava nada de novo, com ou sem os
+  índices únicos parciais de evento, destinatário e canal (que saem na
+  onda 10, F5-06). Todas as entregas de um evento ficam no dia dele, a
+  partição em que o evento também está. A janela de 24 h do
+  `/health/metrics` (`deliveryIdFloor`) passa a contar as entregas pelo
+  instante do evento, não pelo da expansão.
 
 Cada linha da `notification_delivery` leva a empresa do evento em
 `business_id` (F3-09), copiada na expansão, com um índice parcial por raia

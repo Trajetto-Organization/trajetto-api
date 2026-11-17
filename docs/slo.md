@@ -127,7 +127,9 @@ WHERE role = 'cluster' AND ts > now() - interval '24 hours';
   mostrou. O que o provedor disse depois fica em `providerStatus`.
 - A janela lê um intervalo da chave primária (uuid v7), não o `created_at`,
   que não tem índice nessa tabela (`deliveryIdFloor`, em
-  `src/shared/health/metrics-queries.ts`). As linhas entregues ficam 30 dias.
+  `src/shared/health/metrics-queries.ts`). O id de cada entrega começa pelo
+  milissegundo do evento (F5-03), então a janela pega as entregas dos
+  eventos das últimas 24 h. As linhas entregues ficam 30 dias.
 
 ```sql
 -- p95 depois do fato por canal, nas últimas 24 h

@@ -67,13 +67,17 @@ function queueTableStatsSql(): Prisma.Sql {
 }
 
 /**
- * The smallest uuid v7 a delivery minted at or after `since` can carry.
+ * The smallest id a delivery of an event published at or after `since` can
+ * carry.
  *
  * A uuid v7 starts with its millisecond timestamp in hex, so its text sorts
- * in time order. Relies on NotificationDelivery.id being `@default(uuid(7))`,
- * minted by the client at insert — pinned by
- * tests/unitaires/health/delivery-id-floor.test.ts. Same technique as
- * eventIdFloor in integration-repository.ts.
+ * in time order. The pipeline writes every delivery under
+ * `deliveryIdFor` (notifications/delivery-id.ts, plano-escala F5-03): the
+ * uuid v7 layout with the EVENT's millisecond, not the expansion's. So the
+ * floor counts deliveries by the instant of their event; the column's
+ * `@default(uuid(7))` only serves rows written outside the pipeline. Both
+ * pinned by tests/unitaires/health/delivery-id-floor.test.ts. Same
+ * technique as eventIdFloor in integration-repository.ts.
  */
 function deliveryIdFloor(since: Date): string {
   const hex = Math.max(0, since.getTime()).toString(16).padStart(12, "0");
@@ -97,9 +101,11 @@ function deliveryIdFloor(since: Date): string {
  *
  * The pkey is a btree: a range of it touches the window's rows wherever they
  * sit. No created_at predicate on purpose — with one, the planner may still
- * pick the BRIN. The id's millisecond is the client's clock at insert, within
- * milliseconds of created_at; for a 24-hour counter that is the same window.
- * tests/E2E/health-metrics-window-scan.test.ts builds the churned table.
+ * pick the BRIN. The id's millisecond is the event's (deliveryIdFloor):
+ * within milliseconds of created_at when the event expands at once, and
+ * earlier by the queue's wait when it does not; for a 24-hour counter that
+ * is the same window. tests/E2E/health-metrics-window-scan.test.ts builds
+ * the churned table.
  */
 function deliveriesInWindowSql(since: Date): Prisma.Sql {
   return Prisma.sql`

@@ -21,6 +21,7 @@ import { readRecipientEmails } from "@/shared/delivery/recipient-email";
 import type { IExternalRecipientRepository } from "@/modules/delivery/repositories/IExternal-recipient-repository";
 import { SUPPRESSED_ADDRESS_REASON } from "./customer-message-suppression";
 
+import { deliveryIdFor } from "./delivery-id";
 import { getNotificationPolicy } from "./notification-policy";
 import { sendExpoPushMessages } from "./push-provider";
 import { inAppPushData, withPushOwner } from "./push-data";
@@ -809,16 +810,26 @@ class NotificationPipelineService {
       });
     }
 
-    // skipDuplicates + the (event, user, channel) unique key make a re-run
-    // after a crash a no-op instead of a second batch of notifications. The
-    // PUBLISHED mark is fenced: if this worker lost the row to another replica
-    // the rows above were a no-op and so is the mark.
+    // skipDuplicates makes a re-run after a crash, or by a replica that took
+    // the event over, a no-op instead of a second batch of notifications:
+    // every row's id is decided by its event, recipient and channel
+    // (delivery-id.ts, plano-escala F5-03), so a second expansion computes
+    // the same primary keys. The (event, recipient, channel) unique indexes
+    // still say the same until wave 10 drops them (F5-06), and keep the rows
+    // the previous image wrote under random ids, during the rolling deploy,
+    // from gaining a twin. The PUBLISHED mark is fenced: if this worker lost
+    // the row to another replica the rows above were a no-op and so is the
+    // mark.
     await database.$transaction([
       database.notificationDelivery.createMany({
         // Every row carries the event's company (plano-escala F3-09): the
         // fair claim of the lanes takes them company by company. NULL for
         // the platform's own events, the claim's "no company" bucket.
-        data: rows.map((row) => ({ ...row, business_id: event.businessId })),
+        data: rows.map((row) => ({
+          ...row,
+          id: deliveryIdFor(event, row, row.channel),
+          business_id: event.businessId,
+        })),
         skipDuplicates: true,
       }),
       database.domainOutboxEvent.updateMany({
