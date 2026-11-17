@@ -19,6 +19,8 @@ Com a imagem `trajetto-postgres` (plano de escala, F1-02), o `trajetto-restore-d
 
 O ensaio da staging (F1a) restaura os dados da própria staging e roda no servidor dela.
 
+Ao terminar, com sucesso ou falha (um `docker stop` também), o ensaio apaga a cópia restaurada: ela tem os dados pessoais da produção, e um volume nomeado (`--volume`) sobrevive ao contêiner. Ele só apaga o que restaurou: num diretório que não estava vazio, para com `drill-dirty` sem tocar em nada.
+
 O guarda de disco soma ao banco o WAL que a recuperação guarda no `pg_wal` até cada _restartpoint_: até 1 GB do próprio ensaio mais o `POSTGRES_MAX_WAL_SIZE` do Database (a distância entre dois checkpoints dele; 8 GB se faltar), ou menos, se o arquivo tem menos WAL desde o backup. Com o `archive_timeout` de 60 s, cada minuto é um segmento inteiro de 16 MiB: um backup de um dia deixa uns 22 GiB para reproduzir, e o teto é o que segura o disco. O ensaio mensal, 45 minutos depois do backup diário, conta pouco mais que o banco.
 
 ## Primeira ação
@@ -31,10 +33,15 @@ O guarda de disco soma ao banco o WAL que a recuperação guarda no `pg_wal` at�
    docker exec "$c" cat /usr/local/bin/trajetto-restore-drill | bash -s -- --from "$c"
    ```
 
-   O script sai do próprio contêiner do banco, lê o _Environment_ dele, troca a chave de escrita pela de leitura e cria o contêiner do ensaio. Opções: `--target='2026-12-01 05:00:00+00'` (até um instante, em vez do fim do arquivo), `--repo=2` (o segundo repositório) e `--volume=<volume>` (o degrau do `prod-db-2`).
+   O script sai do próprio contêiner do banco, lê o _Environment_ dele, troca a chave de escrita pela de leitura e cria o contêiner do ensaio. Opções: `--target='2026-12-01 05:00:00+00'` (até um instante, em vez do fim do arquivo), `--repo=2` (o segundo repositório) e `--volume=<volume>` (o degrau do `prod-db-2`: um volume só do ensaio, nunca o do Database).
 
 3. O ping `/fail` com `drill-disk` (o backup, mais o WAL da recuperação, passa de `PITR_DRILL_MAX_DISK_FRACTION`, padrão 0,5, do disco livre; a mensagem diz quanto de cada) ou `drill-ram` (o servidor tem menos RAM livre que o teto do ensaio) não restaurou nada: mova o ensaio para o próximo degrau da tabela, ou rode na janela com a staging em 0.
 4. O `drill-config` diz qual variável falta no _Environment_ do Database (o token de leitura, normalmente). Os outros motivos (`drill-restore`, `drill-recovery`, `drill-migrations`, `drill-checks`) trazem as últimas linhas do pgBackRest ou do Postgres, sem segredo.
+5. O `drill-dirty` com `--volume` diz que um ensaio anterior morreu sem apagar a cópia (um `docker kill`, o servidor reiniciado). Confira que o volume é o do ensaio, nunca o do Database, e esvazie-o com a imagem do banco, trocando `<volume-do-ensaio>`:
+
+   ```sh
+   docker run --rm --entrypoint sh -v <volume-do-ensaio>:/v "$(docker inspect --format '{{.Config.Image}}' "$c")" -c 'rm -rf /v/* /v/.[!.]* /v/..?*'
+   ```
 
 ## Como confirmar
 

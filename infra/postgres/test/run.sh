@@ -22,8 +22,9 @@
 #     to a time between two batches of rows that brings back the first only;
 #   - trajetto-backup and trajetto-restore-drill (F1-02) for real, pinging
 #     a local listener: a diff with no hole pings success; the drill
-#     restores the newest backup, starts it with archive_mode=off and reads
-#     _prisma_migrations, the counts and the ops_sample marker;
+#     restores the newest backup, starts it with archive_mode=off, reads
+#     _prisma_migrations, the counts and the ops_sample marker, and leaves
+#     nothing of the copy behind;
 #   - the archive queue cap: with the repository gone and a tiny cap,
 #     archive-push reports the segments archived and drops them, pg_wal stops
 #     growing, and the log says so; with the repository back, the next diff
@@ -368,8 +369,10 @@ summary=$(grep '^{"result":"ok"' "$LOG") || fail "o ensaio não imprimiu o resum
 [[ "$summary" =~ \"rto_seconds\":[0-9]+, ]] || fail "o ensaio não mediu o RTO: ${summary}"
 grep -q '^/drill {"result":"ok"' "$PINGS_LOG" || fail "o ensaio não pingou o sucesso"
 if grep -q "$PGBACKREST_REPO1_CIPHER_PASS" "$LOG" "$PINGS_LOG"; then fail "a senha da cifra vazou no ensaio"; fi
+# The copy holds personal data: the drill wipes it when it ends.
+[ -z "$(ls -A "${WORK}/drill" 2> /dev/null)" ] || fail "o ensaio deixou a cópia restaurada em ${WORK}/drill"
 rm -rf "${WORK}/drill"
-ok "trajetto-restore-drill: restaura, sobe sem arquivar, lê migrations, contagens e o marcador, e pinga"
+ok "trajetto-restore-drill: restaura, sobe sem arquivar, lê migrations, contagens e o marcador, pinga e apaga a cópia"
 echo "  ${summary}"
 
 # --- the archive queue cap -------------------------------------------------------

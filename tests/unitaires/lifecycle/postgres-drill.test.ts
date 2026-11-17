@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
@@ -130,6 +130,15 @@ case "$command" in
       */*/*/*) dir=\${path##*/}; grep "^$dir" "$STUB_SEGMENTS" || true ;;
     esac ;;
   restore)
+    # A cluster lands in --pg1-path, a dotfile included, even when the
+    # restore then fails half-way.
+    for arg in "$@"; do
+      case "$arg" in --pg1-path=*) data=\${arg#--pg1-path=} ;; esac
+    done
+    if [ -n "\${data:-}" ]; then
+      mkdir -p "$data/base/1" && echo 16 > "$data/PG_VERSION"
+      : > "$data/base/1/1259"; : > "$data/.restored-dotfile"
+    fi
     if [ -n "\${STUB_RESTORE_ERROR:-}" ]; then echo "$STUB_RESTORE_ERROR" >&2; exit 1; fi
     : ;;
 esac
@@ -657,6 +666,8 @@ describe.skipIf(!bash)("trajetto-restore-drill in its container", () => {
       // The archive's newest segment: by default ten after the backup's
       // start, a short replay (11 segments of 16 MiB).
       archiveMax = seg(12),
+      // What the started server does after recording its arguments.
+      server = "exec tail -f /dev/null",
     }: {
       env?: Record<string, string>;
       size?: string;
@@ -665,6 +676,7 @@ describe.skipIf(!bash)("trajetto-restore-drill in its container", () => {
       psql?: Record<string, string>;
       dirty?: boolean;
       archiveMax?: string | null;
+      server?: string;
     } = {},
   ) {
     const data = `${box.root}/data`;
@@ -677,7 +689,7 @@ describe.skipIf(!bash)("trajetto-restore-drill in its container", () => {
     box.stub("chown", "exit 0");
     box.stub(
       "trajetto-entrypoint.sh",
-      `for arg in "$@"; do printf '%s\\n' "$arg"; done > "${box.root}/server-argv"\nexec tail -f /dev/null`,
+      `for arg in "$@"; do printf '%s\\n' "$arg"; done > "${box.root}/server-argv"\n${server}`,
     );
     const answers = {
       recovery: "f",
@@ -748,8 +760,10 @@ exit 0`,
     const serverArgv = existsSync(`${box.root}/server-argv`)
       ? readFileSync(`${box.root}/server-argv`, "utf8").split("\n")
       : [];
+    // What the drill left in PGDATA.
+    const left = existsSync(data) ? readdirSync(data) : [];
 
-    return { ...result, serverArgv };
+    return { ...result, serverArgv, left };
   }
 
   const restores = () =>
@@ -896,7 +910,67 @@ exit 0`,
 
     expect(result.status).toBe(1);
     expect(restores()).toEqual([]);
+    // Not the drill's to wipe either.
+    expect(result.left).toEqual(["PG_VERSION"]);
     expect(last(box.calls("wget"))).toContain('"reason":"drill-dirty"');
+  });
+
+  describe("wipes the copy it restored when it ends: production's personal data never outlives the drill, in a named volume either", () => {
+    it.each([
+      ["a drill that passes", {}, 0],
+      [
+        "a check that fails",
+        { psql: { migrations: "120 1 20261115140000_pgss_snapshot" } },
+        4,
+      ],
+      [
+        "a restore that fails half-way",
+        { env: { STUB_RESTORE_ERROR: "ERROR: [039]: broken" } },
+        4,
+      ],
+    ])("%s", (_, options, status) => {
+      const result = inside(["--inside"], options);
+
+      expect(result.status).toBe(status);
+      expect(restores()).toHaveLength(1);
+      expect(result.left).toEqual([]);
+      expect(result.stderr).toContain("cópia restaurada apagada");
+    });
+
+    it("when a docker stop (the image's STOPSIGNAL, INT) ends it mid-recovery", () => {
+      box.stub(
+        "sleep",
+        `if [ ! -e "${box.root}/stopped" ]; then : > "${box.root}/stopped"; kill -INT "$PPID"; fi
+exit 0`,
+      );
+
+      const result = inside(["--inside"], { psql: { recovery: "t" } });
+
+      expect(result.status).toBe(130);
+      expect(result.left).toEqual([]);
+      expect(result.stdout).not.toContain('"result":"ok"');
+    });
+
+    it("when a TERM ends it, once, even if a second signal comes", () => {
+      // The first two sleeps each send the drill a TERM: one while it
+      // waits for the recovery, one while it waits for a server that
+      // ignores TERM to stop.
+      box.stub(
+        "sleep",
+        `n=$(cat "${box.root}/terms" 2> /dev/null || echo 0)
+if [ "$n" -lt 2 ]; then echo $((n + 1)) > "${box.root}/terms"; kill -TERM "$PPID"; fi
+exit 0`,
+      );
+
+      const result = inside(["--inside"], {
+        psql: { recovery: "t" },
+        server: "trap '' TERM; exec tail -f /dev/null",
+      });
+
+      expect(result.status).toBe(143);
+      expect(result.left).toEqual([]);
+      expect(result.stdout).not.toContain('"result":"ok"');
+    });
   });
 
   it("restores to an instant with --target, and measures the loss against it", () => {
@@ -970,6 +1044,10 @@ describe("the image", () => {
     expect(test).toContain("trajetto-restore-drill --inside");
     expect(test).toContain(
       '^/backup-diff/fail {"result":"fail","reason":"archive-gap"',
+    );
+    // ...and the drill, for real, leaves nothing of the copy behind.
+    expect(test).toContain(
+      '[ -z "$(ls -A "${WORK}/drill" 2> /dev/null)" ] || fail',
     );
   });
 });

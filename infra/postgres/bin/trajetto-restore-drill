@@ -41,11 +41,16 @@
 #   4. _prisma_migrations (applied, none half-way), the counts of the main
 #      tables, and the marker: max(ts) of ops_sample's 'cluster' rows, one a
 #      minute; the loss is the drill's start (or the target) minus it;
-#   5. the JSON summary on stdout and in the ping.
+#   5. the JSON summary on stdout and in the ping;
+#   6. at the end, whatever the result (a docker stop included), the copy
+#      is wiped from PGDATA: it holds production's personal data, and a
+#      named volume (--volume) outlives the container. Only what the drill
+#      restored: it never restores over anything (drill-dirty).
 #
 # Options: --repo=2 (the second repository, F5-34), --target=<timestamp
 # with zone>, --volume=<docker volume> (host half: restore into it instead
-# of the container's own disk, from the prod-db-2 on), --network=<docker
+# of the container's own disk, from the prod-db-2 on; a volume of the
+# drill's own, empty, and left empty), --network=<docker
 # network> (host half: when the repository is only reachable there, as in
 # the image's S3 proof; R2 needs none).
 #
@@ -153,10 +158,29 @@ ping() {
 LOG=$(mktemp)
 WORKDIR=""
 SERVER=""
+RESTORED=""
+
+# wipe_copy: everything in PGDATA, which held nothing before the restore
+# (the drill-dirty check). The copy is production's personal data, and a
+# named volume (--volume) outlives the container: without this, it stayed
+# there for good, and the next month's drill stopped at drill-dirty.
+wipe_copy() {
+  local entries
+  shopt -s dotglob nullglob
+  entries=("$PGDATA"/*)
+  shopt -u dotglob nullglob
+  if [ "${#entries[@]}" -gt 0 ]; then rm -rf -- "${entries[@]}" 2> /dev/null || true; fi
+  if [ -n "$(ls -A "$PGDATA" 2> /dev/null)" ]; then
+    echo "trajetto-restore-drill: AVISO: a cópia restaurada ficou em ${PGDATA}: apague à mão (docs/runbooks/restore-drill.md)." >&2
+  else
+    echo "trajetto-restore-drill: cópia restaurada apagada de ${PGDATA}." >&2
+  fi
+}
+
 # SIGTERM (a smart shutdown: no client is left by then), then at most a
-# minute before the container's end takes the rest: the copy is thrown away
-# either way. Not SIGINT: a job started in the background of a script
-# ignores it unless it sets its own handler.
+# minute before the KILL; then the copy goes, whatever the result. Not
+# SIGINT: a job started in the background of a script ignores it unless it
+# sets its own handler.
 cleanup() {
   if [ -n "$SERVER" ]; then
     kill -TERM "$SERVER" 2> /dev/null || true
@@ -167,6 +191,7 @@ cleanup() {
     kill -KILL "$SERVER" 2> /dev/null || true
     wait "$SERVER" 2> /dev/null || true
   fi
+  if [ -n "$RESTORED" ]; then wipe_copy; fi
   rm -f "$LOG"
   if [ -n "$WORKDIR" ]; then rm -rf "$WORKDIR"; fi
 }
@@ -287,6 +312,19 @@ if [ "$MODE" = host ]; then
 fi
 
 # --- the container half --------------------------------------------------------------
+
+# A docker stop (INT: the image keeps the official postgres's STOPSIGNAL;
+# the drill is the container's PID 1, which ignores a signal it has no
+# handler for), a Ctrl-C through docker start --attach, a TERM or a HUP
+# end through cleanup too, and with it the wipe. Once: a second signal
+# never cuts the wipe short.
+on_signal() {
+  trap '' TERM INT HUP
+  exit "$1"
+}
+trap 'on_signal 143' TERM
+trap 'on_signal 130' INT
+trap 'on_signal 129' HUP
 
 for name in "${!PGBACKREST_REPO@}" "${!PITR_@}"; do
   case "$name" in
@@ -416,6 +454,8 @@ if [ -n "$TARGET" ]; then
   restore_args+=(--type=time "--target=${TARGET}" --target-action=promote)
 fi
 restore_started=$(date +%s)
+# From here on, whatever lands in PGDATA is the drill's, and goes at the end.
+RESTORED=yes
 pgbr "${restore_args[@]}" restore > "$LOG" 2>&1 \
   || fail 4 drill-restore "pgbackrest restore de ${label} falhou"
 restored=$(date +%s)
