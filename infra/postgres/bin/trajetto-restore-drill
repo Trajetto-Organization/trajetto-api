@@ -25,16 +25,19 @@
 #   (the I/O weight only where the kernel supports it), deleting the
 #   environment file before it starts. Inside, `--inside`:
 #
-#   1. the disk and the RAM first: the newest backup's database size must
-#      fit in PITR_DRILL_MAX_DISK_FRACTION (0.5) of the free disk, and the
-#      host must have the container's cap free; otherwise /fail with
+#   1. the disk and the RAM first: the newest backup's database size, plus
+#      the WAL the recovery keeps in pg_wal (the drill's own max_wal_size
+#      plus the Database's POSTGRES_MAX_WAL_SIZE, or less when the archive
+#      holds less since the backup), must fit in
+#      PITR_DRILL_MAX_DISK_FRACTION (0.5) of the free disk, and the host
+#      must have the container's cap free; otherwise /fail with
 #      'drill-disk' or 'drill-ram', and the runbook moves the drill;
 #   2. pgbackrest restore --archive-mode=off (to the end of the archive, or
 #      --target=<instant> with --type=time);
 #   3. the server through the image's own entrypoint (recovery refuses a
 #      max_connections below the primary's), with -c archive_mode=off
-#      -c listen_addresses= -c shared_buffers=128MB on top, and only the
-#      local socket, trusted, for this container alone;
+#      -c listen_addresses= -c shared_buffers=128MB -c max_wal_size=1GB on
+#      top, and only the local socket, trusted, for this container alone;
 #   4. _prisma_migrations (applied, none half-way), the counts of the main
 #      tables, and the marker: max(ts) of ops_sample's 'cluster' rows, one a
 #      minute; the loss is the drill's start (or the target) minus it;
@@ -243,7 +246,9 @@ if [ "$MODE" = host ]; then
     fi
     [ -n "${db_env[PGBACKREST_REPO${n}_CIPHER_PASS]:-}" ] || missing+=("PGBACKREST_REPO${n}_CIPHER_PASS")
   done
-  for name in POSTGRES_USER POSTGRES_DB POSTGRES_MAX_CONNECTIONS PITR_DRILL_PING_URL PITR_DRILL_MAX_DISK_FRACTION PITR_DRILL_TIMEOUT_SECONDS; do
+  # POSTGRES_MAX_WAL_SIZE: how far apart the Database's checkpoints can be,
+  # which the disk guard needs (the drill's server runs its own, on top).
+  for name in POSTGRES_USER POSTGRES_DB POSTGRES_MAX_CONNECTIONS POSTGRES_MAX_WAL_SIZE PITR_DRILL_PING_URL PITR_DRILL_MAX_DISK_FRACTION PITR_DRILL_TIMEOUT_SECONDS; do
     if [ -n "${db_env[$name]:-}" ]; then put "$name" "${db_env[$name]}"; fi
   done
   # The derived memory matches the container's cap; the drill's own
@@ -300,6 +305,27 @@ MEMINFO=${TRAJETTO_MEMINFO:-/proc/meminfo}
 CGROUP_ROOT=${TRAJETTO_CGROUP_ROOT:-/sys/fs/cgroup}
 [[ "$FRACTION" =~ ^0?\.[0-9]+$|^1(\.0+)?$ ]] || FRACTION=0.5
 [[ "$TIMEOUT" =~ ^[0-9]{1,6}$ ]] || TIMEOUT=3600
+# The copy's own max_wal_size, never the Database's (8GB in production,
+# sized for its writes): the segments a replay keeps in pg_wal grow with it,
+# on the disk production uses.
+DRILL_MAX_WAL=1GB
+
+# mib_of <Postgres size>: MiB of a size the wrapper accepts (MB, GB, TB).
+mib_of() {
+  [[ "$1" =~ ^([1-9][0-9]{0,6})(MB|GB|TB)$ ]] || return 1
+  case "${BASH_REMATCH[2]}" in
+    MB) echo "$((BASH_REMATCH[1]))" ;;
+    GB) echo "$((BASH_REMATCH[1] * 1024))" ;;
+    TB) echo "$((BASH_REMATCH[1] * 1048576))" ;;
+  esac
+}
+
+# segno_of <segment name>: its position, at the image's 16 MiB a segment
+# (256 to a log file); empty for anything else.
+segno_of() {
+  [[ "$1" =~ ^[0-9A-F]{24}$ ]] || return 0
+  echo "$((16#${1:8:8} * 256 + 16#${1:16:8}))"
+}
 
 as_postgres() { if [ "$(id -u)" = 0 ]; then gosu postgres "$@"; else "$@"; fi; }
 pgbr() { as_postgres pgbackrest --stanza="$STANZA" --repo="$REPO" "$@"; }
@@ -319,12 +345,16 @@ pgbr info > "$LOG" 2>&1 || fail 4 drill-info "pgbackrest info falhou (o token de
 newest=$(awk '
   /^ *db \(current\)/ { current = 1; next }
   /^ *db \(/ { current = 0 }
+  current && /^ *wal archive min\/max / { split($NF, range, "/"); archive_max = range[2] }
   current && /^ *(full|diff|incr) backup: / { label = $3 }
+  current && /^ *wal start\/stop: / { wal_start = $3 }
   current && /^ *database size: / { size = $3; sub(/,$/, "", size) }
-  END { if (label != "") print label, size }
+  END {
+    if (label != "") print label, size, (wal_start == "" ? "-" : wal_start), (archive_max == "" ? "-" : archive_max)
+  }
 ' "$LOG")
 [ -n "$newest" ] || fail 4 drill-no-backup "o repositório não tem backup da base atual"
-read -r label size_text <<< "$newest"
+read -r label size_text wal_start archive_max <<< "$newest"
 
 # pgBackRest prints sizes in 1024-based units with one decimal (29.3MB).
 size_bytes=$(awk -v s="$size_text" 'BEGIN {
@@ -341,11 +371,27 @@ size_bytes=$(awk -v s="$size_text" 'BEGIN {
 }')
 [ -n "$size_bytes" ] || fail 4 drill-info "tamanho do backup ilegível: ${size_text}"
 
+# The WAL the recovery keeps. Each segment restore_command fetches stays in
+# pg_wal until a restartpoint, and a restartpoint only happens at a
+# checkpoint the Database wrote: up to the drill's own max_wal_size plus the
+# Database's distance between checkpoints, at most its max_wal_size (the
+# wrapper's 8GB when unset or unreadable). With archive_timeout=60s every
+# minute is a whole segment, so a day-old backup replays some 22 GiB; the
+# bound only gives way to the WAL there is since the backup's start.
+source_wal_mib=$(mib_of "${POSTGRES_MAX_WAL_SIZE:-}") || source_wal_mib=$(mib_of 8GB)
+wal_mib=$(($(mib_of "$DRILL_MAX_WAL") + source_wal_mib))
+first_seg=$(segno_of "$wal_start")
+last_seg=$(segno_of "$archive_max")
+if [ -n "$first_seg" ] && [ -n "$last_seg" ] && [ "$last_seg" -ge "$first_seg" ] \
+  && [ $(((last_seg - first_seg + 1) * 16)) -lt "$wal_mib" ]; then
+  wal_mib=$(((last_seg - first_seg + 1) * 16))
+fi
+
 mkdir -p "$PGDATA"
 free_kb=$(df -Pk "$PGDATA" | awk 'NR == 2 { print $4 }')
 [[ "$free_kb" =~ ^[0-9]+$ ]] || fail 4 drill-info "df não leu o disco de ${PGDATA}"
-if awk -v need="$size_bytes" -v free="$free_kb" -v f="$FRACTION" 'BEGIN { exit !(need > free * 1024 * f) }'; then
-  fail 3 drill-disk "o backup ${label} restaura ${size_text}, e o disco tem $((free_kb / 1024)) MiB livres: passa de ${FRACTION} do livre. Mova o ensaio (docs/runbooks/restore-drill.md)"
+if awk -v need="$size_bytes" -v wal="$wal_mib" -v free="$free_kb" -v f="$FRACTION" 'BEGIN { exit !(need + wal * 1048576 > free * 1024 * f) }'; then
+  fail 3 drill-disk "o backup ${label} restaura ${size_text}, mais até ${wal_mib} MiB de WAL na recuperação, e o disco tem $((free_kb / 1024)) MiB livres: passa de ${FRACTION} do livre. Mova o ensaio (docs/runbooks/restore-drill.md)"
 fi
 
 cap_mb=1024
@@ -386,8 +432,8 @@ printf 'local all all trust\n' > "$hba"
 chmod 0644 "$hba"
 
 trajetto-entrypoint.sh postgres -c archive_mode=off -c listen_addresses= \
-  -c shared_buffers=128MB -c "unix_socket_directories=${SOCKET}" \
-  -c "hba_file=${hba}" > "$LOG" 2>&1 &
+  -c shared_buffers=128MB -c "max_wal_size=${DRILL_MAX_WAL}" \
+  -c "unix_socket_directories=${SOCKET}" -c "hba_file=${hba}" > "$LOG" 2>&1 &
 SERVER=$!
 
 ready=""

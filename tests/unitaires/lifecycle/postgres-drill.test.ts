@@ -45,7 +45,10 @@ const SECRETS = [
   PING,
 ];
 
-/** `pgbackrest info` as 2.60.1 prints it (captured from the image). */
+/**
+ * `pgbackrest info` as 2.60.1 prints it (captured from the image). The
+ * archive's newest segment can be moved, or left out (`none present`).
+ */
 function info(
   backups: Array<{
     type: "full" | "diff";
@@ -54,6 +57,7 @@ function info(
     stop: string;
     size?: string;
   }>,
+  archiveMax: string | null = "0000000100000001000000FF",
 ): string {
   return [
     "stanza: trajetto",
@@ -61,7 +65,9 @@ function info(
     "    cipher: aes-256-cbc",
     "",
     "    db (current)",
-    "        wal archive min/max (16): 000000010000000000000001/0000000100000001000000FF",
+    archiveMax === null
+      ? "        wal archive min/max (16): none present"
+      : `        wal archive min/max (16): 000000010000000000000001/${archiveMax}`,
     "",
     ...backups.flatMap((backup) => [
       `        ${backup.type} backup: ${backup.label}`,
@@ -457,6 +463,15 @@ exit 0`,
     return { ...result, created, envfile };
   }
 
+  it("hands the drill the Database's max_wal_size, which bounds the WAL its recovery keeps", () => {
+    const result = host(["--from", "db-container"], {
+      env: [...dbEnv, "POSTGRES_MAX_WAL_SIZE=1GB"],
+    });
+
+    expect(result.status).toBe(0);
+    expect(result.created).toContain("POSTGRES_MAX_WAL_SIZE=1GB\n");
+  });
+
   it("creates the drill from the Database's own image, capped, with the read-only key in place of the write key", () => {
     const result = host(["--from", "db-container"]);
 
@@ -639,6 +654,9 @@ describe.skipIf(!bash)("trajetto-restore-drill in its container", () => {
       availableKb = 8 * 1024 * 1024,
       psql = {},
       dirty = false,
+      // The archive's newest segment: by default ten after the backup's
+      // start, a short replay (11 segments of 16 MiB).
+      archiveMax = seg(12),
     }: {
       env?: Record<string, string>;
       size?: string;
@@ -646,6 +664,7 @@ describe.skipIf(!bash)("trajetto-restore-drill in its container", () => {
       availableKb?: number;
       psql?: Record<string, string>;
       dirty?: boolean;
+      archiveMax?: string | null;
     } = {},
   ) {
     const data = `${box.root}/data`;
@@ -703,15 +722,18 @@ exit 0`,
           PITR_DRILL_MAX_DISK_FRACTION: "",
           STUB_INFO: box.file(
             "info.txt",
-            info([
-              {
-                type: "full",
-                label: "20261115-050000F",
-                start: seg(2),
-                stop: seg(2),
-                size,
-              },
-            ]),
+            info(
+              [
+                {
+                  type: "full",
+                  label: "20261115-050000F",
+                  start: seg(2),
+                  stop: seg(2),
+                  size,
+                },
+              ],
+              archiveMax,
+            ),
           ),
           TRAJETTO_MEMINFO: box.file(
             "meminfo",
@@ -786,6 +808,79 @@ exit 0`,
     });
 
     expect(result.status).toBe(0);
+  });
+
+  describe("counts the WAL the recovery keeps in pg_wal, not only the database", () => {
+    // Staging's case: a 300 MB database, 10 GiB free, so 5 GiB allowed.
+    const small = { size: "300.0MB", freeKb: 10 * 1024 * 1024 };
+    // A day-old backup: archive_timeout=60s makes every minute a whole
+    // 16 MiB segment, some 22.5 GiB of WAL to replay.
+    const dayOfWal = seg(2 + 1440);
+
+    it.each([
+      ["the Database's 8GB", { POSTGRES_MAX_WAL_SIZE: "8GB" }],
+      ["no POSTGRES_MAX_WAL_SIZE (the wrapper's 8GB)", {}],
+      [
+        "an unreadable one (the wrapper's 8GB)",
+        { POSTGRES_MAX_WAL_SIZE: "8G" },
+      ],
+    ])(
+      "aborts with drill-disk when the database fits but its WAL does not: %s",
+      (_, env) => {
+        const result = inside(["--inside"], {
+          ...small,
+          archiveMax: dayOfWal,
+          env,
+        });
+
+        expect(result.status).toBe(3);
+        expect(restores()).toEqual([]);
+        expect(result.stderr).toContain("FALHOU (drill-disk)");
+        // 1 GiB of the drill's own plus 8 GiB of the primary's checkpoints.
+        expect(result.stderr).toContain("até 9216 MiB de WAL");
+        expect(last(box.calls("wget"))).toContain('"reason":"drill-disk"');
+      },
+    );
+
+    it("lets the same drill run when the Database's checkpoints are 1GB apart (staging)", () => {
+      const result = inside(["--inside"], {
+        ...small,
+        archiveMax: dayOfWal,
+        env: { POSTGRES_MAX_WAL_SIZE: "1GB" },
+      });
+
+      expect(result.status).toBe(0);
+    });
+
+    it("counts only the WAL there is to replay when that is less", () => {
+      const result = inside(["--inside"], {
+        ...small,
+        env: { POSTGRES_MAX_WAL_SIZE: "8GB" },
+      });
+
+      expect(result.status).toBe(0);
+    });
+
+    it("assumes the bound when the archive's end is unreadable", () => {
+      expect(
+        inside(["--inside"], {
+          ...small,
+          archiveMax: null,
+          env: { POSTGRES_MAX_WAL_SIZE: "8GB" },
+        }).status,
+      ).toBe(3);
+    });
+
+    it("starts the copy with its own max_wal_size, whatever the Database runs", () => {
+      const result = inside(["--inside"], {
+        env: { POSTGRES_MAX_WAL_SIZE: "8GB" },
+      });
+
+      expect(result.status).toBe(0);
+      expect(result.serverArgv.join(" ")).toContain(
+        "-c shared_buffers=128MB -c max_wal_size=1GB",
+      );
+    });
   });
 
   it("aborts when the server has less RAM free than the drill's cap", () => {
