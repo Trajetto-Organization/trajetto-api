@@ -7,6 +7,7 @@ import {
   GEOCODING_RUN_DEFAULTS,
   REFUSED_PAUSE_MS,
   SHORT_RATE_PAUSE_MS,
+  lanesFor,
   nextUtcMidnight,
   spacingFor,
   type GeocodingRunOptions,
@@ -138,7 +139,10 @@ interface Harness {
 }
 
 function harness(
-  answer: (address: GeocodableAddress, query: GeocodeQuery) => GeocodeOutcome,
+  answer: (
+    address: GeocodableAddress,
+    query: GeocodeQuery,
+  ) => GeocodeOutcome | Promise<GeocodeOutcome>,
   {
     rows = [],
     budget = budgetOf(1_000).budget,
@@ -1445,6 +1449,219 @@ describe("the minute's job claims again while the batch comes back full", () => 
       spacingMs: 1_000,
       runBudgetMs: 50_000,
     });
+  });
+});
+
+/**
+ * Review of plano-escala F2-31: a run asked one address at a time, so it
+ * made one call per provider answer whatever the env allowed — about 3 a
+ * second with the provider's 300 ms, against the 16 or 17 of a paid plan,
+ * and a spreadsheet of 20,000 rows missed its two hours. A run now keeps
+ * up to `lanes` lookups waiting on the provider, one per call a second the
+ * env allows; the spacing, the slot, the day's unit, one lookup per door
+ * and the stops hold as before.
+ */
+describe("the lanes: lookups of one run waiting on the provider at once", () => {
+  const doors = (count: number) =>
+    Array.from({ length: count }, (_, index) =>
+      delivery(`d${index + 1}`, {
+        ...BARE,
+        street: `Rua ${index + 1}`,
+        created_at: new Date(Date.UTC(2026, 10, 3, 14, index)),
+      }),
+    );
+
+  const idOf = (address: GeocodableAddress) =>
+    (address as unknown as { id: string }).id;
+
+  const after = <T>(ms: number, value: T) =>
+    new Promise<T>((resolve) => setTimeout(() => resolve(value), ms));
+
+  /** A provider that answers after `ms`, counting the calls in flight. */
+  function slowProvider(
+    ms: number,
+    answerOf: (id: string) => GeocodeOutcome = () => ({ kind: "NOT_FOUND" }),
+    delayOf: (id: string) => number = () => ms,
+  ) {
+    let inFlight = 0;
+    let most = 0;
+    const starts: number[] = [];
+
+    return {
+      answer: async (address: GeocodableAddress) => {
+        const id = idOf(address);
+
+        inFlight += 1;
+        most = Math.max(most, inFlight);
+        starts.push(Date.now());
+
+        try {
+          return await after(delayOf(id), answerOf(id));
+        } finally {
+          inFlight -= 1;
+        }
+      },
+      most: () => most,
+      starts,
+    };
+  }
+
+  it("keeps as many lookups in flight as its lanes, and one by default", async () => {
+    const wide = slowProvider(30);
+    const h = harness(wide.answer, {
+      rows: doors(8),
+      options: { lanes: 4 },
+    });
+
+    expect(await h.run.runOnce(NOW)).toMatchObject({
+      claimed: 8,
+      notFound: 8,
+      released: 0,
+    });
+    expect(wide.most()).toBe(4);
+
+    const narrow = slowProvider(5);
+
+    await harness(narrow.answer, { rows: doors(3) }).run.runOnce(NOW);
+
+    expect(narrow.most()).toBe(1);
+  });
+
+  it("takes its lanes from the env's rate: one per call a second, never more than a batch", () => {
+    expect(lanesFor(1, 20)).toBe(1);
+    expect(lanesFor(16, 20)).toBe(16);
+    expect(lanesFor(17, 10)).toBe(10);
+    expect(GEOCODING_RUN_DEFAULTS.lanes).toBe(1);
+  });
+
+  it("still spaces the starts of the calls of its lanes", async () => {
+    const provider = slowProvider(100);
+    const h = harness(provider.answer, {
+      rows: doors(3),
+      options: { lanes: 3, spacingMs: 30 },
+    });
+
+    await h.run.runOnce(NOW);
+
+    const starts = [...provider.starts].sort((a, b) => a - b);
+
+    expect(starts).toHaveLength(3);
+    expect(starts[1] - starts[0]).toBeGreaterThanOrEqual(29);
+    expect(starts[2] - starts[1]).toBeGreaterThanOrEqual(29);
+    // In flight together: the second started before the first answered.
+    expect(provider.most()).toBeGreaterThan(1);
+  });
+
+  it("asks once about a door: the other claims there wait for its answer", async () => {
+    const provider = slowProvider(20, () => FOUND_AT_DOOR);
+    const h = harness(provider.answer, {
+      rows: ["a", "b", "c", "d"].map((id, index) =>
+        delivery(id, {
+          address_key: deliveryAddressKey(delivery(id)),
+          created_at: new Date(NOW.getTime() - (index + 1) * 60_000),
+        }),
+      ),
+      options: { lanes: 4 },
+    });
+
+    expect(await h.run.runOnce(NOW)).toMatchObject({
+      resolved: 1,
+      reused: 3,
+    });
+    expect(h.asked).toHaveLength(1);
+  });
+
+  /**
+   * The day as another replica spends it meanwhile: room to claim, and
+   * only `units` left by the time the calls go out.
+   */
+  function spentElsewhere(units: number): GeocodingBudget {
+    let taken = 0;
+
+    return {
+      remaining: async () => 100,
+      take: async () => {
+        if (taken >= units) return false;
+
+        taken += 1;
+
+        return true;
+      },
+    };
+  }
+
+  it("gives back the claims of the lanes that had not asked when the budget runs out", async () => {
+    const provider = slowProvider(20);
+    const h = harness(provider.answer, {
+      rows: doors(6),
+      budget: spentElsewhere(2),
+      options: { lanes: 3 },
+    });
+
+    const result = await h.run.runOnce(NOW);
+
+    expect(result).toMatchObject({
+      claimed: 6,
+      notFound: 2,
+      released: 4,
+      stoppedBy: "BUDGET",
+    });
+    expect(h.asked).toHaveLength(2);
+  });
+
+  it("pauses on one lane's refusal, settles the answers already on their way, and gives the rest back", async () => {
+    const { gate, pauses } = gateOf();
+    const provider = slowProvider(
+      50,
+      (id) =>
+        id === "d5" ? { kind: "REFUSED", status: 401 } : { kind: "NOT_FOUND" },
+      (id) => (id === "d5" ? 5 : 50),
+    );
+    const h = harness(provider.answer, {
+      rows: doors(5),
+      gate,
+      options: { lanes: 3 },
+    });
+
+    const result = await h.run.runOnce(NOW);
+
+    expect(result).toMatchObject({
+      claimed: 5,
+      notFound: 2,
+      released: 3,
+      stoppedBy: "REFUSED",
+      providerStatuses: [401],
+    });
+    expect(h.asked.map((call) => call.id).sort()).toEqual(["d3", "d4", "d5"]);
+    expect(pauses).toHaveLength(1);
+    // The refused one and the two never asked: as before their claim.
+    for (const id of ["d5", "d2", "d1"]) {
+      expect(row(h, id)).toMatchObject({
+        geocode_status: null,
+        geocode_attempts: 0,
+      });
+    }
+  });
+
+  it("keeps the provider's pause as the reason over a stop another lane met first", async () => {
+    const provider = slowProvider(40, () => ({
+      kind: "RATE_LIMITED",
+      status: 429,
+      scope: "SHORT",
+    }));
+    const h = harness(provider.answer, {
+      rows: doors(3),
+      budget: spentElsewhere(1),
+      options: { lanes: 2 },
+    });
+
+    const result = await h.run.runOnce(NOW);
+
+    expect(result).toMatchObject({
+      released: 3,
+      stoppedBy: "RATE_LIMITED",
+    });
+    expect(result.hold?.pause?.reason).toBe("BURST");
   });
 });
 

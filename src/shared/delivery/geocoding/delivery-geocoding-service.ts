@@ -4,6 +4,7 @@ import {
   type GeocodeOutcome,
   type GeocodeQuery,
 } from "@/shared/services/proof-location/address-geocoder";
+import { deliveryAddressKey } from "@/shared/delivery/address-key";
 
 import { fallbackAgrees } from "./fallback-agreement";
 import type { GeocodingBudget } from "./geocoding-budget";
@@ -23,8 +24,9 @@ import {
 
 /**
  * One run of the geocoding (plan of 02/11/2026, E1; decision D15): claim
- * open deliveries without a point, ask the provider one at a time within
- * the day's budget and the second's slot, and settle each one:
+ * open deliveries without a point, ask the provider within the day's
+ * budget and the second's slot, a few lookups at once (the lanes, below),
+ * and settle each one:
  *
  * - ADDRESS or STREET: the point, geo_source GEOCODER, and the level;
  * - NEIGHBORHOOD or CITY: COARSE, with the level but no point — the geofence
@@ -70,6 +72,24 @@ import {
  * only: it settles only an answer about the address and gives anything
  * else back to the job. Off the request path, both: no answer waits for
  * the provider.
+ *
+ * The lanes (review of plano-escala F2-31): a run asked one address at a
+ * time, so it made at most one call per provider answer — about 3 a
+ * second with LocationIQ's 300 ms from Brazil, whatever
+ * GEOCODING_CALLS_PER_SECOND said, and the 16 or 17 a second of a paid
+ * plan were out of reach. Now up to `lanes` lookups of a run wait on the
+ * provider at once (lanesFor: one per call a second the env allows, so
+ * the rate holds for answers up to a second), their starts still spaced
+ * by spacingMs and every call still through the gate's slot and the day's
+ * unit. The claims are taken up in order, one at a time (the reuse reads
+ * included, so the database sees one query of the run at a time but for
+ * the settles), and a claim at a door a lane is asking about waits for
+ * that answer: the point or the verdict it brings is the claim's, without
+ * a second call. Whatever stops the run (the time, the budget, the slots,
+ * a pause, the failures) stops the lanes that have not asked yet, and
+ * their claims go back unasked; an answer already on its way is settled.
+ * With one lane — one call a second, the default — the run is the one it
+ * was, call after call.
  */
 
 interface GeocodingRunOptions {
@@ -92,6 +112,11 @@ interface GeocodingRunOptions {
   slotWaitMs: number;
   /** How many times to try for a slot before giving the run back. */
   slotTries: number;
+  /**
+   * How many lookups of one run may wait on the provider at once
+   * (lanesFor); 1 asks one address after another.
+   */
+  lanes: number;
   /**
    * How many days a NOT_FOUND or COARSE answer about a door stands for the
    * company's other deliveries there (GEOCODING_VERDICT_REUSE_DAYS); 0
@@ -211,6 +236,18 @@ function spacingFor(perSecond: number): number {
 }
 
 /**
+ * The lanes of a run at `perSecond` calls a second: as many lookups in
+ * flight as calls a second, so the run keeps the rate while the provider
+ * answers within a second (LocationIQ answers Brazil in about 300 ms); a
+ * slower provider gets proportionally fewer calls, never more than the
+ * rate. One at the default rate: the run of before. Never more than a
+ * batch, which is all a run has to ask about at once.
+ */
+function lanesFor(perSecond: number, batchSize: number): number {
+  return Math.max(1, Math.min(Math.ceil(perSecond), Math.floor(batchSize)));
+}
+
+/**
  * One call a second at most by default, the gate's rate
  * (GEOCODING_CALLS_PER_SECOND): the run spaces the starts of its own calls
  * by that much, and the gate holds every replica and path together to it.
@@ -222,6 +259,7 @@ const GEOCODING_RUN_DEFAULTS: GeocodingRunOptions = {
   failureStreak: 3,
   slotWaitMs: 400,
   slotTries: 3,
+  lanes: 1,
   verdictReuseDays: GEOCODING_VERDICT_REUSE_DAYS_DEFAULT,
 };
 
@@ -330,12 +368,36 @@ const sleep = (ms: number) =>
   new Promise<void>((resolve) => setTimeout(resolve, ms));
 
 /**
- * One run's state: when its last call started, for the spacing, and when
- * it must stop asking (the job's runBudgetMs; never for runFor).
+ * One batch's state, shared by its lanes: when its last call started (or
+ * is due to start: a lane books its start before it waits), for the
+ * spacing; when it must stop asking (the job's runBudgetMs; never for
+ * runFor); the failures in a row; and whether something stopped it, so a
+ * lane that has not asked yet asks nothing.
  */
 interface RunState {
   lastCallAt: number | null;
   deadline: number;
+  failures: number;
+  halted: boolean;
+}
+
+/** Why a lane asked nothing: the batch stopped while it waited its turn. */
+type LookupStop = "BUDGET" | "NO_SLOT" | "STOPPED";
+
+/**
+ * The stops that are the provider's own answer: the run's diagnosis (the
+ * pause it set, the status), kept over a stop of the run's own — the
+ * time, the budget, a slot — another lane met first.
+ */
+function isProviderStop(stop: GeocodingStop | undefined): boolean {
+  return stop === "REFUSED" || stop === "RATE_LIMITED";
+}
+
+/** A claim's door within its company, or null for an address without one. */
+function doorOf(claim: GeocodingClaim): string | null {
+  const key = deliveryAddressKey(claim);
+
+  return key ? `${claim.businessId}:${key}` : null;
 }
 
 class DeliveryGeocodingService {
@@ -486,6 +548,15 @@ class DeliveryGeocodingService {
     };
   }
 
+  /**
+   * The batch's claims, in their order, through the lanes. The loop takes
+   * the next claim when a lane is free, skipping (for now) one at a door a
+   * lane is asking about, runs the reuses, and hands what is left to a
+   * lane. When something stops the batch, the loop takes no other claim,
+   * waits for the lanes, and gives back every claim nobody asked about.
+   * An error (the database, say) waits for the lanes too, then goes up as
+   * before, the claims not yet worked left to their lease.
+   */
   private async work(
     claims: GeocodingClaim[],
     now: Date,
@@ -493,101 +564,204 @@ class DeliveryGeocodingService {
     result: GeocodingRunResult,
     deadline: number,
   ): Promise<void> {
-    const run: RunState = { lastCallAt: null, deadline };
-    let failures = 0;
+    const run: RunState = {
+      lastCallAt: null,
+      deadline,
+      failures: 0,
+      halted: false,
+    };
+    const lanes = new Set<Promise<void>>();
+    /** The doors a lane is asking about, each with its lane. */
+    const asking = new Map<string, Promise<void>>();
+    const doors = new Map(claims.map((claim) => [claim, doorOf(claim)]));
+    const waiting = [...claims];
+    const unasked: GeocodingClaim[] = [];
+    const errors: unknown[] = [];
 
     try {
-      for (const [index, claim] of claims.entries()) {
-        // The job's time is up: what is left of the batch goes back
-        // unasked for the next run, instead of holding its lease while a
-        // run of the next minute starts.
-        if (this.clock() >= run.deadline) {
-          result.stoppedBy = "DEADLINE";
-          await this.releaseFrom(claims, index, result);
-
-          return;
-        }
-
-        if (await this.reuse(claim, now, result)) continue;
-
-        if (await this.reuseVerdict(claim, now, result)) continue;
-
-        const outcome = await this.lookUp(claim, now, run);
-
-        // No budget or no slot left: nothing more is asked in this run.
-        if (typeof outcome === "string") {
-          result.stoppedBy = outcome;
-          await this.releaseFrom(claims, index, result);
-
-          return;
-        }
-
-        if (outcome.kind === "REFUSED" || outcome.kind === "RATE_LIMITED") {
-          const until = pauseUntil(outcome, now);
-          const reason = pauseReason(outcome);
-
-          result.providerStatuses.push(outcome.status);
-          result.stoppedBy = outcome.kind;
-          result.hold = {
-            pause: { reason, until, status: outcome.status },
-            used: null,
-          };
-
-          // The status goes with the pause, so the log and the health page
-          // say which answer of the provider holds every replica.
-          await this.gate.pause(until, now, reason, outcome.status);
-          await this.releaseFrom(claims, index, result);
-
-          return;
-        }
-
-        if (mode === "SOON" && !isAboutTheAddress(outcome)) {
-          if (outcome.kind === "FAILED") {
-            result.providerStatuses.push(outcome.status);
+      try {
+        while (waiting.length > 0 && !run.halted) {
+          if (lanes.size >= this.options.lanes) {
+            await Promise.race(lanes);
+            continue;
           }
 
-          result.stoppedBy = "FAILURES";
-          await this.releaseFrom(claims, index, result);
+          const next = waiting.findIndex((claim) => {
+            const door = doors.get(claim);
 
-          return;
-        }
-
-        const settlement = settlementOf(outcome);
-        const written = await this.repository.settle(claim, settlement, now);
-
-        tally(result, settlement);
-
-        if (written && endsTheLookup(settlement, claim)) {
-          result.settled.push({
-            id: claim.id,
-            businessId: claim.businessId,
-            kind: settlement.kind,
+            return !door || !asking.has(door);
           });
+
+          // Every claim left is at a door being asked about: its answer
+          // first.
+          if (next < 0) {
+            await Promise.race(lanes);
+            continue;
+          }
+
+          const [claim] = waiting.splice(next, 1);
+
+          // The job's time is up: what is left of the batch goes back
+          // unasked for the next run, instead of holding its lease while a
+          // run of the next minute starts.
+          if (this.clock() >= run.deadline) {
+            this.stop(run, result, "DEADLINE");
+            waiting.unshift(claim);
+            break;
+          }
+
+          if (await this.reuse(claim, now, result)) continue;
+
+          if (await this.reuseVerdict(claim, now, result)) continue;
+
+          const door = doors.get(claim) ?? null;
+          const lane: Promise<void> = this.askAbout(
+            claim,
+            now,
+            mode,
+            run,
+            result,
+            unasked,
+          )
+            .catch((err: unknown) => {
+              run.halted = true;
+              errors.push(err);
+            })
+            .finally(() => {
+              lanes.delete(lane);
+
+              if (door) asking.delete(door);
+            });
+
+          lanes.add(lane);
+
+          if (door) asking.set(door, lane);
         }
-
-        if (settlement.kind !== "FAILED") {
-          failures = 0;
-          continue;
-        }
-
-        result.providerStatuses.push(
-          outcome.kind === "FAILED" ? outcome.status : null,
-        );
-        failures += 1;
-
-        if (failures >= this.options.failureStreak) {
-          result.stoppedBy = "FAILURES";
-          await this.releaseFrom(claims, index + 1, result);
-
-          return;
-        }
+      } catch (err) {
+        run.halted = true;
+        errors.push(err);
       }
+
+      await Promise.all(lanes);
+
+      if (errors.length > 0) throw errors[0];
+
+      await this.giveBack([...unasked, ...waiting], result);
     } finally {
       // Whatever ended the run, the screens hear about what it settled.
       if (this.announce && result.settled.length > 0) {
         await this.announce(result.settled);
       }
     }
+  }
+
+  /**
+   * One lane: the lookup of a claim and what follows from its answer —
+   * the settle, a stop of the batch, or the claim back to the list of the
+   * unasked.
+   */
+  private async askAbout(
+    claim: GeocodingClaim,
+    now: Date,
+    mode: "JOB" | "SOON",
+    run: RunState,
+    result: GeocodingRunResult,
+    unasked: GeocodingClaim[],
+  ): Promise<void> {
+    const outcome = await this.lookUp(claim, now, run);
+
+    // No budget or no slot left, or the batch stopped while this lane
+    // waited: nothing more is asked in this run.
+    if (typeof outcome === "string") {
+      if (outcome !== "STOPPED") this.stop(run, result, outcome);
+
+      unasked.push(claim);
+
+      return;
+    }
+
+    if (outcome.kind === "REFUSED" || outcome.kind === "RATE_LIMITED") {
+      const until = pauseUntil(outcome, now);
+      const reason = pauseReason(outcome);
+
+      result.providerStatuses.push(outcome.status);
+      this.stop(run, result, outcome.kind, {
+        pause: { reason, until, status: outcome.status },
+        used: null,
+      });
+      unasked.push(claim);
+
+      // The status goes with the pause, so the log and the health page say
+      // which answer of the provider holds every replica. A pause never
+      // shortens another (EXTEND_PAUSE): two lanes may both set one.
+      await this.gate.pause(until, now, reason, outcome.status);
+
+      return;
+    }
+
+    if (mode === "SOON" && !isAboutTheAddress(outcome)) {
+      if (outcome.kind === "FAILED") {
+        result.providerStatuses.push(outcome.status);
+      }
+
+      this.stop(run, result, "FAILURES");
+      unasked.push(claim);
+
+      return;
+    }
+
+    const settlement = settlementOf(outcome);
+    const written = await this.repository.settle(claim, settlement, now);
+
+    tally(result, settlement);
+
+    if (written && endsTheLookup(settlement, claim)) {
+      result.settled.push({
+        id: claim.id,
+        businessId: claim.businessId,
+        kind: settlement.kind,
+      });
+    }
+
+    if (settlement.kind !== "FAILED") {
+      run.failures = 0;
+
+      return;
+    }
+
+    result.providerStatuses.push(
+      outcome.kind === "FAILED" ? outcome.status : null,
+    );
+    run.failures += 1;
+
+    if (run.failures >= this.options.failureStreak) {
+      this.stop(run, result, "FAILURES");
+    }
+  }
+
+  /**
+   * Stops the batch: no lane that has not asked yet asks. The first reason
+   * is the run's, unless the provider's own answer (a refusal, a 429)
+   * comes after it: that one, with its pause, is the diagnosis.
+   */
+  private stop(
+    run: RunState,
+    result: GeocodingRunResult,
+    reason: GeocodingStop,
+    hold?: GeocodingHoldState,
+  ): void {
+    run.halted = true;
+
+    if (
+      result.stoppedBy &&
+      (isProviderStop(result.stoppedBy) || !isProviderStop(reason))
+    ) {
+      return;
+    }
+
+    result.stoppedBy = reason;
+
+    if (hold) result.hold = hold;
   }
 
   /**
@@ -701,7 +875,7 @@ class DeliveryGeocodingService {
     claim: GeocodingClaim,
     now: Date,
     run: RunState,
-  ): Promise<GeocodeOutcome | "BUDGET" | "NO_SLOT"> {
+  ): Promise<GeocodeOutcome | LookupStop> {
     const first = await this.ask(claim, "FREE_TEXT", now, run);
 
     if (typeof first === "string") return first;
@@ -721,22 +895,34 @@ class DeliveryGeocodingService {
 
   /**
    * One provider call: the budget, the spacing, the slot, the day's unit,
-   * the call. The
-   * spacing counts from the start of the run's last call, so a provider
-   * slower to answer than the spacing is not waited for twice.
+   * the call. The spacing counts from the start of the run's last call, so
+   * a provider slower to answer than the spacing is not waited for twice;
+   * a lane books its start before it waits, so the next lane starts a
+   * spacing after it, and asks nothing if the batch stopped meanwhile.
    */
   private async ask(
     claim: GeocodingClaim,
     query: GeocodeQuery,
     now: Date,
     run: RunState,
-  ): Promise<GeocodeOutcome | "BUDGET" | "NO_SLOT"> {
+  ): Promise<GeocodeOutcome | LookupStop> {
+    if (run.halted) return "STOPPED";
+
     if ((await this.budget.remaining(now)) <= 0) return "BUDGET";
 
-    if (run.lastCallAt !== null && this.options.spacingMs > 0) {
-      const wait = run.lastCallAt + this.options.spacingMs - this.clock();
+    if (this.options.spacingMs > 0) {
+      const start =
+        run.lastCallAt === null
+          ? this.clock()
+          : Math.max(this.clock(), run.lastCallAt + this.options.spacingMs);
+
+      run.lastCallAt = start;
+
+      const wait = start - this.clock();
 
       if (wait > 0) await sleep(wait);
+
+      if (run.halted) return "STOPPED";
     }
 
     if (!(await this.slot())) return "NO_SLOT";
@@ -746,7 +932,7 @@ class DeliveryGeocodingService {
     // the day no longer pays for is a second's slot, not a lookup.
     if (!(await this.budget.take(now))) return "BUDGET";
 
-    run.lastCallAt = this.clock();
+    run.lastCallAt = Math.max(run.lastCallAt ?? 0, this.clock());
 
     return this.geocode(claim, query);
   }
@@ -764,12 +950,11 @@ class DeliveryGeocodingService {
     return false;
   }
 
-  private async releaseFrom(
+  private async giveBack(
     claims: GeocodingClaim[],
-    from: number,
     result: GeocodingRunResult,
   ): Promise<void> {
-    for (const claim of claims.slice(from)) {
+    for (const claim of claims) {
       if (await this.repository.release(claim)) result.released += 1;
     }
   }
@@ -832,6 +1017,7 @@ export {
   GEOCODING_RUN_DEFAULTS,
   REFUSED_PAUSE_MS,
   SHORT_RATE_PAUSE_MS,
+  lanesFor,
   nextUtcMidnight,
   pauseReason,
   pauseUntil,

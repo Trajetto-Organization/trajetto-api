@@ -33,6 +33,7 @@ import { GEOCODING_KEYS } from "./geocoding-keys";
 import { DeliveryGeocodingRepository } from "./geocoding-repository";
 import {
   DeliveryGeocodingService,
+  lanesFor,
   nextUtcMidnight,
   spacingFor,
   type GeocodingRunResult,
@@ -146,6 +147,9 @@ function deliveryGeocodingService(): DeliveryGeocodingService {
     options: {
       batchSize: env.DELIVERY_GEOCODING_BATCH_SIZE,
       spacingMs: spacingFor(rates.perSecond),
+      // As many lookups waiting on the provider as calls a second: one
+      // at a time held a run to one call per answer (F2-31 review).
+      lanes: lanesFor(rates.perSecond, env.DELIVERY_GEOCODING_BATCH_SIZE),
       runBudgetMs: env.DELIVERY_GEOCODING_RUN_BUDGET_MS,
       verdictReuseDays: env.GEOCODING_VERDICT_REUSE_DAYS,
     },

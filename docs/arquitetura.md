@@ -1400,6 +1400,22 @@ mesma reserva, o mesmo orçamento e o mesmo portão
   sobrou dele volta sem gastar tentativa (`stoppedBy: DEADLINE`). Com um
   lote por minuto, uma planilha de 20 mil linhas levava o dia, qualquer que
   fosse o plano do provedor.
+- **As faixas** (revisão do F2-31). A execução perguntava um endereço de
+  cada vez: fazia no máximo uma chamada por resposta do provedor, umas 3
+  por segundo com os 300 ms do LocationIQ a partir do Brasil, qualquer que
+  fosse `GEOCODING_CALLS_PER_SECOND`. Agora até uma consulta por chamada
+  por segundo do env espera o provedor ao mesmo tempo (`lanesFor`: 1 no
+  padrão, que é a execução de antes; 16 ou 17 nos planos pagos, nunca mais
+  que o lote), o que mantém a taxa com respostas de até 1 s. Um provedor
+  mais lento recebe proporcionalmente menos, nunca mais que a taxa. O
+  início das chamadas continua espaçado, e cada uma continua passando pela
+  vaga do portão e pela unidade do dia. As reservas são tratadas em ordem,
+  uma de cada vez, com as leituras de reaproveitamento; uma entrega numa
+  porta que outra faixa está consultando espera essa resposta e leva o
+  ponto ou o veredito dela, sem segunda chamada. O que para a execução
+  (tempo, orçamento, vaga, pausa, falhas) para as faixas que ainda não
+  perguntaram, e as reservas delas voltam sem gastar tentativa; a resposta
+  que já está a caminho é gravada.
 
 `DELIVERY_GEOCODING_DAILY_BUDGET` é o teto do dia, somando as réplicas e os
 dois caminhos (no Postgres, `provider_quota_day`, desde o F2-32).
@@ -1827,7 +1843,8 @@ chave da pausa guarda o motivo junto do prazo (`REFUSED`, `QUOTA` ou
   do commit, nunca acima da da busca: o boot recusa). A execução espaça o
   início das próprias chamadas por 1000 ms / chamadas por segundo, contado
   do início da anterior: um provedor que demora mais que isso para
-  responder não é esperado duas vezes. O Redis é uma conexão por
+  responder não é esperado duas vezes, e até uma consulta por chamada por
+  segundo espera a resposta ao mesmo tempo (as faixas). O Redis é uma conexão por
   processo, aberta na primeira busca e fechada no desligamento
   (`geocoding-runtime.ts`).
 - Não mexe em `updated_at` (não é edição do cliente).
