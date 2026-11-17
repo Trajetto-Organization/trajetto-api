@@ -577,9 +577,10 @@ qualquer `exclude` em `src/`), `reportOnFailure: true`.
   fica vermelho e nenhuma imagem é construída.
 - **E2E**: `yarn test:coverage:e2e` roda em lotes de 8 arquivos (cada lote
   escreve `coverage/e2e/NN`; um lote que morre sem relatório é refeito em duas
-  metades) e, depois deles, os arquivos que sobem réplicas, um por lote (a
-  mesma separação do `yarn test:e2e`); junta tudo em `coverage/e2e-only` e,
-  com a unitária, em `coverage/all`. Rode numa árvore parada: o script recusa
+  metades) e, depois deles, os arquivos da fase de um arquivo por vez (os
+  que sobem réplicas e os sensíveis ao cluster, `SERIAL_E2E_FILES`), um por
+  lote (a mesma separação do `yarn test:e2e`); junta tudo em
+  `coverage/e2e-only` e, com a unitária, em `coverage/all`. Rode numa árvore parada: o script recusa
   juntar se `src/` mudou durante os lotes.
 
 ## Mutação
