@@ -74,6 +74,43 @@ describe("a prisma/concurrent file", () => {
     expect(file?.statements[0]).toMatchObject({ unique: true, name: "a_idx" });
   });
 
+  // The step reads these back from the catalog before running them again
+  // (F2-22): each takes the lock of every vacuum and ANALYZE, and the step
+  // runs on every release.
+  it("reads what each ALTER TABLE leaves in the catalog, so a second run can skip it", () => {
+    const { file, errors } = parseConcurrentFile(
+      "4_effects.sql",
+      [
+        HEADER,
+        'ALTER TABLE delivery_event ALTER COLUMN "businessId" SET STATISTICS 1000;',
+        "ALTER TABLE delivery_event ALTER COLUMN Status SET STATISTICS -1;",
+        "ALTER TABLE delivery_event SET (autovacuum_vacuum_scale_factor = 0.02, Toast.Autovacuum_Enabled = 'off');",
+        "ALTER TABLE delivery_event RESET (fillfactor, autovacuum_enabled);",
+        "ALTER TABLE delivery_event SET (fillfactor = 90 + 0);",
+      ].join("\n"),
+    );
+
+    expect(errors).toEqual([]);
+    expect(
+      file?.statements.map((statement) =>
+        statement.kind === "alter-table" ? statement.effect : statement.kind,
+      ),
+    ).toEqual([
+      { kind: "statistics", column: "businessId", target: 1000 },
+      { kind: "statistics", column: "status", target: -1 },
+      {
+        kind: "set",
+        options: [
+          { key: "autovacuum_vacuum_scale_factor", value: "0.02" },
+          { key: "toast.autovacuum_enabled", value: "off" },
+        ],
+      },
+      { kind: "reset", keys: ["fillfactor", "autovacuum_enabled"] },
+      // Not a plain value: no effect to read, so it simply runs every time.
+      null,
+    ]);
+  });
+
   it.each([
     [
       "a plain CREATE INDEX (holds the writes)",

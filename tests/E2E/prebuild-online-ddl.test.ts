@@ -532,4 +532,83 @@ describe("the online DDL before the migrations", () => {
     expect(await indexValid("prebuild_probe_old_idx")).toBeNull();
     expect((await prebuild()).files[0].status).toBe("skipped");
   });
+
+  /**
+   * The planner settings (F2-22): a column's statistics target, the
+   * autovacuum scale factors and an extended statistics object. Each takes
+   * SHARE UPDATE EXCLUSIVE, the lock every autovacuum and ANALYZE holds, and
+   * the step runs every file on every release: repeating them would queue
+   * each release behind whatever vacuum is running on the hot tables (an
+   * anti-wraparound one does not yield), and fail it when the retries ran
+   * out. Once in effect they are read from the catalog and not run again.
+   */
+  it("sets statistics and storage parameters, and a second run takes no lock at all", async () => {
+    concurrentFile(
+      "20261201000000_stats.sql",
+      [
+        "-- requires-table: prebuild_probe",
+        'ALTER TABLE prebuild_probe ALTER COLUMN "v" SET STATISTICS 1000;',
+        "ALTER TABLE prebuild_probe SET (autovacuum_vacuum_scale_factor = 0.02, autovacuum_analyze_scale_factor = 0.01);",
+        "CREATE STATISTICS IF NOT EXISTS prebuild_probe_v_note_stats (mcv, dependencies) ON v, note FROM prebuild_probe;",
+      ].join("\n"),
+    );
+
+    expect((await prebuild()).files[0].status).toBe("applied");
+
+    const { rows } = await admin.query<{
+      target: number | null;
+      options: string[] | null;
+      stats: string[];
+    }>(
+      `SELECT
+         (SELECT attstattarget::int FROM pg_attribute
+           WHERE attrelid = 'prebuild_probe'::regclass AND attname = 'v') AS target,
+         (SELECT reloptions FROM pg_class WHERE oid = 'prebuild_probe'::regclass) AS options,
+         ARRAY(SELECT stxname::text FROM pg_statistic_ext
+                WHERE stxrelid = 'prebuild_probe'::regclass) AS stats`,
+    );
+
+    expect(rows[0]).toEqual({
+      target: 1000,
+      options: [
+        "autovacuum_vacuum_scale_factor=0.02",
+        "autovacuum_analyze_scale_factor=0.01",
+      ],
+      stats: ["prebuild_probe_v_note_stats"],
+    });
+
+    // A vacuum's lock, held for the whole second run.
+    const vacuum = await openReleaseClient(URL(), "e2e-vacuum");
+
+    await vacuum.query("BEGIN");
+    await vacuum.query(
+      "LOCK TABLE prebuild_probe IN SHARE UPDATE EXCLUSIVE MODE",
+    );
+
+    try {
+      const second = await prebuild({ lockTimeoutMs: 200, lockRetries: 1 });
+
+      expect(second.files).toEqual([
+        expect.objectContaining({
+          status: "skipped",
+          detail: "já estava feito",
+        }),
+      ]);
+      expect(second.retries).toBe(0);
+    } finally {
+      await vacuum.query("ROLLBACK");
+      await vacuum.end();
+    }
+
+    // A different value is not "in effect": it runs again.
+    concurrentFile(
+      "20261201000000_stats.sql",
+      [
+        "-- requires-table: prebuild_probe",
+        'ALTER TABLE prebuild_probe ALTER COLUMN "v" SET STATISTICS 500;',
+      ].join("\n"),
+    );
+
+    expect((await prebuild()).files[0].status).toBe("applied");
+  });
 });

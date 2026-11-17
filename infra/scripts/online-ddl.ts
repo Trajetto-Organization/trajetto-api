@@ -55,7 +55,10 @@ import { quoteIdent } from "./release-connection";
  * each partition gets its own CIC, and each is attached; the parent turns
  * valid with the last one (a UNIQUE tree that fails halfway is dropped
  * whole; a plain one is resumed by the next run). At the end, no index this
- * step manages may be invalid.
+ * step manages may be invalid. An ALTER TABLE or a CREATE STATISTICS whose
+ * result is already in the catalog is not run again: each takes SHARE UPDATE
+ * EXCLUSIVE, the lock of every vacuum and ANALYZE (an anti-wraparound one
+ * does not yield), and this step runs on every release.
  */
 
 const DEFAULT_LOCK_TIMEOUT_MS = 3_000;
@@ -144,8 +147,24 @@ type Statement =
       definition: string;
     }
   | { kind: "drop-index"; sql: string; name: string }
-  | { kind: "alter-table"; sql: string; table: string }
+  | {
+      kind: "alter-table";
+      sql: string;
+      table: string;
+      /** What it leaves in the catalog, when that can be read back. */
+      effect: AlterEffect | null;
+    }
   | { kind: "create-statistics"; sql: string; name: string; table: string };
+
+/**
+ * The catalog state an ALTER TABLE of the whitelist leaves: a column's
+ * statistics target (pg_attribute.attstattarget) or storage parameters
+ * (pg_class.reloptions), set or reset.
+ */
+type AlterEffect =
+  | { kind: "statistics"; column: string; target: number }
+  | { kind: "set"; options: Array<{ key: string; value: string }> }
+  | { kind: "reset"; keys: string[] };
 
 interface ConcurrentFile {
   name: string;
@@ -238,13 +257,65 @@ const DROP_INDEX = new RegExp(
 // `SET (...), ALTER COLUMN ... TYPE ...` also ends in ")", and would rewrite
 // the table under ACCESS EXCLUSIVE with only lock_timeout bounding the wait.
 const ALTER_TABLE = new RegExp(
-  String.raw`^ALTER\s+TABLE\s+(${IDENT})\s+(?:ALTER\s+COLUMN\s+${IDENT}\s+SET\s+STATISTICS\s+-?\d+|(?:SET|RESET)\s*\([^()]+\))$`,
+  String.raw`^ALTER\s+TABLE\s+(${IDENT})\s+(?:ALTER\s+COLUMN\s+(${IDENT})\s+SET\s+STATISTICS\s+(-?\d+)|(SET|RESET)\s*\(([^()]+)\))$`,
   "i",
+);
+const OPTION_KEY = String.raw`[A-Za-z_][A-Za-z0-9_.]*`;
+const OPTION_PAIR = new RegExp(
+  String.raw`^(${OPTION_KEY})\s*=\s*('[^']*'|[A-Za-z0-9_.+-]+)$`,
 );
 const CREATE_STATISTICS = new RegExp(
   String.raw`^CREATE\s+STATISTICS\s+IF\s+NOT\s+EXISTS\s+(${IDENT})\s+(?:\([^)]*\)\s+)?ON\s+.+\s+FROM\s+(${IDENT})$`,
   "i",
 );
+
+/**
+ * What an ALTER TABLE leaves in the catalog, or null when its parameter
+ * list is not plain `key = value` pairs (that one always runs, as before).
+ */
+function alterEffect(match: RegExpExecArray): AlterEffect | null {
+  if (match[2]) {
+    return {
+      kind: "statistics",
+      column: identifier(match[2]),
+      target: Number(match[3]),
+    };
+  }
+
+  const items = match[5].split(",").map((item) => item.trim());
+
+  if (match[4].toUpperCase() === "RESET") {
+    return items.every((item) => new RegExp(`^${OPTION_KEY}$`).test(item))
+      ? { kind: "reset", keys: items.map((item) => item.toLowerCase()) }
+      : null;
+  }
+
+  const options: Array<{ key: string; value: string }> = [];
+
+  for (const item of items) {
+    const pair = OPTION_PAIR.exec(item);
+
+    if (!pair) return null;
+
+    options.push({
+      key: pair[1].toLowerCase(),
+      value: pair[2].replace(/^'(.*)'$/, "$1"),
+    });
+  }
+
+  return { kind: "set", options };
+}
+
+/** Postgres keeps a parameter as it was written: 0.02 and 0.020 are one. */
+function sameOptionValue(stored: string, wanted: string): boolean {
+  const numeric = /^[+-]?(?:\d+\.?\d*|\.\d+)$/;
+
+  if (numeric.test(stored) && numeric.test(wanted)) {
+    return Number(stored) === Number(wanted);
+  }
+
+  return stored.toLowerCase() === wanted.toLowerCase();
+}
 
 function classify(sql: string): Statement | null {
   let match = CREATE_INDEX.exec(sql);
@@ -266,7 +337,14 @@ function classify(sql: string): Statement | null {
 
   match = ALTER_TABLE.exec(sql);
 
-  if (match) return { kind: "alter-table", sql, table: identifier(match[1]) };
+  if (match) {
+    return {
+      kind: "alter-table",
+      sql,
+      table: identifier(match[1]),
+      effect: alterEffect(match),
+    };
+  }
 
   match = CREATE_STATISTICS.exec(sql);
 
@@ -841,6 +919,67 @@ async function runPrebuild(
     return changed;
   }
 
+  /** Whether an ALTER TABLE or a CREATE STATISTICS already holds. */
+  async function inEffect(statement: Statement): Promise<boolean> {
+    if (statement.kind === "create-statistics") {
+      const { rows } = await client.query(
+        `SELECT 1 FROM pg_statistic_ext s
+           JOIN pg_namespace n ON n.oid = s.stxnamespace
+          WHERE n.nspname = current_schema() AND s.stxname = $1`,
+        [statement.name],
+      );
+
+      return rows.length > 0;
+    }
+
+    if (statement.kind !== "alter-table" || !statement.effect) return false;
+
+    const { effect } = statement;
+
+    if (effect.kind === "statistics") {
+      // -1 is "the default target"; Postgres 17 keeps that as NULL.
+      const { rows } = await client.query<{ target: number | null }>(
+        `SELECT a.attstattarget::int AS target
+           FROM pg_attribute a
+           JOIN pg_class c ON c.oid = a.attrelid
+           JOIN pg_namespace n ON n.oid = c.relnamespace
+          WHERE n.nspname = current_schema() AND c.relname = $1
+            AND a.attname = $2 AND NOT a.attisdropped`,
+        [statement.table, effect.column],
+      );
+
+      return rows.length > 0 && (rows[0].target ?? -1) === effect.target;
+    }
+
+    const { rows } = await client.query<{ options: string[] | null }>(
+      `SELECT c.reloptions AS options
+         FROM pg_class c
+         JOIN pg_namespace n ON n.oid = c.relnamespace
+        WHERE n.nspname = current_schema() AND c.relname = $1`,
+      [statement.table],
+    );
+
+    if (rows.length === 0) return false;
+
+    const current = new Map(
+      (rows[0].options ?? []).map((option) => {
+        const at = option.indexOf("=");
+
+        return [option.slice(0, at).toLowerCase(), option.slice(at + 1)];
+      }),
+    );
+
+    if (effect.kind === "reset") {
+      return effect.keys.every((key) => !current.has(key));
+    }
+
+    return effect.options.every(({ key, value }) => {
+      const stored = current.get(key);
+
+      return stored !== undefined && sameOptionValue(stored, value);
+    });
+  }
+
   async function missingRequirements(file: ConcurrentFile): Promise<string[]> {
     const missing: string[] = [];
 
@@ -924,6 +1063,11 @@ async function runPrebuild(
         continue;
       }
 
+      // Already in the catalog: not run again. Each of these takes SHARE
+      // UPDATE EXCLUSIVE, the lock of every vacuum and ANALYZE, and the step
+      // runs on every release (F2-22).
+      if (await inEffect(statement)) continue;
+
       await withLockRetries(label, () =>
         client.query(statement.sql).then(() => undefined),
       );
@@ -981,6 +1125,7 @@ export {
   prebuildSettings,
   PrebuildError,
   runPrebuild,
+  type AlterEffect,
   type ConcurrentFile,
   type PrebuildOutcome,
   type PrebuildPhase,

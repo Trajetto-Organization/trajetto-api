@@ -103,6 +103,13 @@ recusado. DDL com pré-condição (uma troca de tabela, um `OWNER TO`) vai em
   índice do pai fica válido com a última.
 - No fim, nenhum índice que o passo administra pode estar inválido; outros
   inválidos aparecem como aviso no log.
+- Um `ALTER TABLE` (alvo de estatística, parâmetro de armazenamento) ou um
+  `CREATE STATISTICS` que já está no catálogo (`pg_attribute`, `reloptions`,
+  `pg_statistic_ext`) não roda de novo: cada um pega SHARE UPDATE EXCLUSIVE,
+  a trava de todo vacuum e ANALYZE, e um vacuum antiwraparound não cede a
+  vez. Repetido a cada release, ele faria a etapa esperar atrás do vacuum e
+  falhar quando as tentativas acabassem. Um parâmetro que não é
+  `chave = valor` simples roda sempre.
 - A segunda execução não faz nada. Um banco sem `_prisma_migrations` (novo)
   pula a primeira passada inteira; na segunda, as migrations já criaram
   tudo com as tabelas vazias, e ela não faz nada.
