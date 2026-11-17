@@ -4311,12 +4311,15 @@ CONCURRENTLY IF NOT EXISTS, que a etapa de release roda **antes** do
 `migrate deploy`, com `lock_timeout` e novas tentativas, refazendo um índice
 inválido; a migration mantém o `IF NOT EXISTS` e vira no-op
 (`prisma/concurrent/README.md`; `migration-prebuild.test.ts` cobra o par nas
-migrations depois de `20261116120000`). As colunas que ele lê chegam numa
-release anterior:
-o passo pula um arquivo cujas colunas ainda não existem. Nas migrations de
-antes desse passo, o roteiro era construir o índice à mão; se o índice lia
-colunas que a própria migration criava, o roteiro do comentário criava antes,
-à mão, os tipos e as colunas, e a migration tem de aceitar isso: `CREATE TYPE`
+migrations depois de `20261116120000`). Se o índice lê uma coluna que a
+mesma release acrescenta, o passo pula o arquivo antes das migrations e o
+aplica numa segunda passada logo depois delas; a migration então só
+constrói o índice com a tabela vazia (um bloco `DO $$` que confere se a
+tabela tem linha, o do `prisma/concurrent/README.md`), e o arquivo declara
+a coluna em `-- requires-column` (o mesmo teste cobra os dois). Nas
+migrations de antes desse passo, o roteiro era construir o índice à mão; se
+o índice lia colunas que a própria migration criava, o roteiro do comentário
+criava antes, à mão, os tipos e as colunas, e a migration tem de aceitar isso: `CREATE TYPE`
 dentro de `DO $$ BEGIN ... EXCEPTION WHEN duplicate_object THEN NULL; END $$;`
 e `ADD COLUMN IF NOT EXISTS` (sem isso o deploy para em `42710` e trava as
 seguintes; `tests/unitaires/lifecycle/migration-prebuild.test.ts` confere as

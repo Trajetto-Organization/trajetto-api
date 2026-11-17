@@ -6,7 +6,7 @@ import type pg from "pg";
 /**
  * The steps after `prisma migrate deploy` (plano-escala F5-08, D17, D18):
  *
- *   prisma/concurrent → migrate deploy → infra/sql/*.sql → prisma/post-deploy/*.sql → seeds
+ *   prisma/concurrent → migrate deploy → prisma/concurrent (after) → infra/sql/*.sql → prisma/post-deploy/*.sql → seeds
  *
  * infra/sql holds what belongs to the cluster rather than to a migration:
  * roles, ownership and grants. It runs on EVERY release, in name order,

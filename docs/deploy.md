@@ -2440,6 +2440,15 @@ migration mantém o `CREATE INDEX IF NOT EXISTS` com o mesmo nome, que acha o
 `yarn dev`, ela o constrói com a tabela vazia). O roteiro "construa à mão
 antes" dos comentários de migration saiu daí.
 
+O passo roda de novo logo **depois** do `prisma migrate deploy` (linhas
+`[postbuild]` no log), para o arquivo que a primeira passada pulou porque a
+coluna ainda não existia: uma coluna e o índice dela na mesma release. A
+migration desse índice o constrói só com a tabela vazia (o bloco `DO $$`
+do `README.md`, que confere se a tabela tem linha), e com linhas quem o
+constrói é essa segunda passada, com CONCURRENTLY, antes de a API nova
+subir. O `migration-prebuild.test.ts` cobra o bloco e a declaração da
+coluna.
+
 - Cada espera de lock tem `lock_timeout` (`PREBUILD_LOCK_TIMEOUT_MS`, 3 s) e
   é repetida (`PREBUILD_LOCK_RETRIES`, 20). Esgotadas, a etapa falha (a API
   não é implantada) e o próximo deploy a roda de novo; um CIC longo é para a
@@ -2460,8 +2469,10 @@ antes" dos comentários de migration saiu daí.
   e sai com 64 antes de tocar no banco: CIC, o lock do `migrate deploy` e os
   passos depois dele precisam de uma sessão própria no Postgres.
 - Emergência: `PREBUILD_ONLINE_DDL=off` no _Environment_ da
-  `trajetto-api-migrate` desliga o passo (as migrations passam a construir
-  esses índices com lock); tire depois.
+  `trajetto-api-migrate` desliga as duas passadas (as migrations passam a
+  construir esses índices com lock, menos o de uma coluna da mesma
+  release, que fica faltando); tire depois e dê Deploy na
+  `trajetto-api-migrate` para a etapa rodar de novo.
 - Uma release com um índice grande pode passar dos 30 min que o deploy
   espera a etapa: suba a variável `RELEASE_TIMEOUT_SECONDS` do environment
   do GitHub antes ([seção 13](#13-configurar-o-github)).
@@ -2469,6 +2480,7 @@ antes" dos comentários de migration saiu daí.
 ### Depois das migrations: `infra/sql` e `prisma/post-deploy`
 
 A ordem inteira da etapa é `prisma/concurrent` → `prisma migrate deploy` →
+`prisma/concurrent` de novo (o que a release acabou de criar) →
 `infra/sql/*.sql` → `prisma/post-deploy/*.sql` → seeds
 (`build/release-steps.js` roda os dois do meio; o molde do E2E e o
 `yarn dev` rodam o mesmo).

@@ -17,6 +17,7 @@ import {
   loadConcurrentFiles,
   runPrebuild,
   type PrebuildOutcome,
+  type PrebuildPhase,
 } from "infra/scripts/online-ddl";
 import { openReleaseClient } from "infra/scripts/release-connection";
 
@@ -31,7 +32,9 @@ import { openReleaseClient } from "infra/scripts/release-connection";
  * that failed halfway leaves an INVALID index, which the next run drops and
  * builds again; a partitioned table gets the index ON ONLY plus one CIC and
  * one ATTACH per partition; the second run does nothing; a database without
- * the table (or without `_prisma_migrations`) skips. Scratch tables in the
+ * the table (or without `_prisma_migrations`) skips, and a column the same
+ * release adds gets its index from the pass after the migrations, the
+ * migration building it only on an empty table. Scratch tables in the
  * file's own database: the step works by name, on any table.
  */
 const URL = () => process.env.DATABASE_URL as string;
@@ -56,6 +59,7 @@ async function prebuild(
     lockTimeoutMs?: number;
     lockRetries?: number;
     searchPath?: string;
+    phase?: PrebuildPhase;
     /** In place of the short pause between lock retries. */
     pause?: (ms: number) => Promise<void>;
   } = {},
@@ -74,6 +78,7 @@ async function prebuild(
     return await runPrebuild(client, files, {
       lockTimeoutMs: options.lockTimeoutMs ?? 3_000,
       lockRetries: options.lockRetries ?? 20,
+      phase: options.phase,
       log,
       sleep: options.pause ?? ((ms) => sleep(Math.min(ms, 100))),
     });
@@ -140,6 +145,7 @@ beforeEach(async () => {
   await admin.query(`
     DROP TABLE IF EXISTS prebuild_probe;
     DROP TABLE IF EXISTS prebuild_parted;
+    DROP TABLE IF EXISTS prebuild_empty;
     CREATE TABLE prebuild_probe (id bigserial PRIMARY KEY, v int, note text, dup int);
     INSERT INTO prebuild_probe (v, note) SELECT g % 100, 'seed' FROM generate_series(1, 5000) g;
     CREATE TABLE prebuild_parted (id bigserial, at date NOT NULL, v int) PARTITION BY RANGE (at);
@@ -421,6 +427,78 @@ describe("the online DDL before the migrations", () => {
       "skipped",
     ]);
     expect(await indexValid("prebuild_probe_later_idx")).toBeNull();
+  });
+
+  /**
+   * A column and its index in the same release (the whole scale plan ships
+   * in one push): before the migrations the column is not there, the
+   * migration builds the index only on an empty table, and the pass after
+   * the migrations builds it on the live one, concurrently.
+   */
+  it("builds after the migrations the index of a column the same release adds", async () => {
+    concurrentFile(
+      "20261201000000_fresh.sql",
+      "-- requires-column: prebuild_probe.fresh\nCREATE INDEX CONCURRENTLY IF NOT EXISTS prebuild_probe_fresh_idx ON prebuild_probe (fresh);",
+    );
+
+    const before = await prebuild();
+
+    expect(before.files).toEqual([
+      expect.objectContaining({
+        status: "skipped",
+        detail: expect.stringContaining("o passo depois das migrations"),
+      }),
+    ]);
+
+    // The migration's form (migration-prebuild.test.ts): the column, and
+    // the index only when the table is empty.
+    const migration = (table: string) =>
+      `ALTER TABLE ${table} ADD COLUMN IF NOT EXISTS fresh int;
+       DO $$ BEGIN
+         IF NOT EXISTS (SELECT 1 FROM "${table}" LIMIT 1) THEN
+           CREATE INDEX IF NOT EXISTS ${table}_fresh_idx ON ${table} (fresh);
+         END IF;
+       END $$;`;
+
+    await admin.query(migration("prebuild_probe"));
+    expect(await indexValid("prebuild_probe_fresh_idx")).toBeNull();
+
+    // On a new database the same migration builds it, the table empty.
+    await admin.query("CREATE TABLE prebuild_empty (id int)");
+    await admin.query(migration("prebuild_empty"));
+    expect(await indexValid("prebuild_empty_fresh_idx")).toBe(true);
+
+    const writer = startWriter();
+
+    await sleep(50);
+
+    const after = await prebuild({ phase: "after" });
+    const { slowest, writes } = await writer.stop();
+
+    expect(after.files).toEqual([
+      expect.objectContaining({ status: "applied" }),
+    ]);
+    expect(await indexValid("prebuild_probe_fresh_idx")).toBe(true);
+    expect(writes).toBeGreaterThan(0);
+    expect(slowest).toBeLessThan(1_000);
+  });
+
+  it("warns, after the migrations, about a file whose column no migration created", async () => {
+    concurrentFile(
+      "20261201000000_stale.sql",
+      "-- requires-column: prebuild_probe.gone\nCREATE INDEX CONCURRENTLY IF NOT EXISTS prebuild_probe_gone_idx ON prebuild_probe (gone);",
+    );
+
+    const outcome = await prebuild({ phase: "after" });
+
+    expect(outcome.files[0].status).toBe("skipped");
+    expect(
+      lines.some(
+        (line) =>
+          line.startsWith("warn ") &&
+          line.includes("mesmo depois das migrations"),
+      ),
+    ).toBe(true);
   });
 
   it("skips the whole step on a new database, before any migration", async () => {

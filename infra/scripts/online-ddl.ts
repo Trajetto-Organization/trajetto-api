@@ -8,7 +8,8 @@ import { quoteIdent } from "./release-connection";
 
 /**
  * prisma/concurrent: the DDL that must not lock a hot table, run by the
- * release step BEFORE `prisma migrate deploy` (plano-escala F2-01, D20).
+ * release step BEFORE `prisma migrate deploy` (plano-escala F2-01, D20),
+ * and once more right after it for what the migrations made possible.
  *
  * A plain CREATE INDEX holds a SHARE lock on its table for the whole build,
  * and every write waits behind it; on the trail or the delivery history that
@@ -29,9 +30,17 @@ import { quoteIdent } from "./release-connection";
  *   CREATE STATISTICS IF NOT EXISTS <name> ... FROM <table>
  * Every table a file touches is declared up front, `-- requires-table:
  * <table>` (and `-- requires-column: <table>.<column>` for the columns its
- * index reads): a database without them (new, or still before the migration
- * that creates them) skips the file, and the migration builds the index
- * itself. A database without `_prisma_migrations` (a new one) skips the step.
+ * index reads): a database without them skips the file. A database without
+ * `_prisma_migrations` (a new one) skips the whole pass, and the migrations
+ * build the indexes on empty tables.
+ *
+ * The same pass runs again AFTER `migrate deploy` (phase `after`), for the
+ * files the first one skipped: a column and its index ship in ONE release
+ * (the whole scale plan goes out in one push), so before the migrations the
+ * column is not there yet. Its migration then builds the index only on an
+ * empty table (`IF NOT EXISTS (SELECT 1 FROM <table> LIMIT 1)`, which
+ * migration-prebuild.test.ts demands), and with rows the second pass builds
+ * it here, concurrently, before the new API is deployed.
  *
  * Every lock wait is bounded by lock_timeout (PREBUILD_LOCK_TIMEOUT_MS, 3 s)
  * and retried (PREBUILD_LOCK_RETRIES, 20): a CIC behind a long transaction
@@ -466,10 +475,17 @@ interface PrebuildLog {
   warn(message: string): void;
 }
 
+/**
+ * When the pass runs: `before` the migrations (the default), or `after`
+ * them, for the files whose tables or columns the migrations just created.
+ */
+type PrebuildPhase = "before" | "after";
+
 interface PrebuildOptions {
   lockTimeoutMs: number;
   lockRetries: number;
   log: PrebuildLog;
+  phase?: PrebuildPhase;
   sleep?: (ms: number) => Promise<void>;
 }
 
@@ -512,6 +528,7 @@ async function runPrebuild(
   options: PrebuildOptions,
 ): Promise<PrebuildOutcome> {
   const { log } = options;
+  const phase = options.phase ?? "before";
   const sleep = options.sleep ?? defaultSleep;
   const outcome: PrebuildOutcome = {
     newDatabase: false,
@@ -849,10 +866,21 @@ async function runPrebuild(
     const missing = await missingRequirements(file);
 
     if (missing.length > 0) {
-      const detail = `falta ${missing.join(", ")}; a migration que os cria constrói o que for preciso`;
+      // Before the migrations: the release itself brings them, and the
+      // pass after the migrations builds the file then (with the rows a
+      // live table has, the migration's CREATE INDEX does nothing). After
+      // them: no migration creates them, so the file is stale.
+      if (phase === "before") {
+        const detail = `falta ${missing.join(", ")}; o passo depois das migrations o aplica`;
 
-      log.info(`${file.name}: pulado (${detail}).`);
-      outcome.files.push({ file: file.name, status: "skipped", detail });
+        log.info(`${file.name}: pulado (${detail}).`);
+        outcome.files.push({ file: file.name, status: "skipped", detail });
+      } else {
+        const detail = `falta ${missing.join(", ")} mesmo depois das migrations; nenhuma migration os cria (arquivo velho?)`;
+
+        log.warn(`${file.name}: pulado (${detail}).`);
+        outcome.files.push({ file: file.name, status: "skipped", detail });
+      }
       continue;
     }
 
@@ -952,5 +980,6 @@ export {
   runPrebuild,
   type ConcurrentFile,
   type PrebuildOutcome,
+  type PrebuildPhase,
   type Statement,
 };

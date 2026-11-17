@@ -418,3 +418,253 @@ describe("the hot-table check", () => {
     ).toEqual([]);
   });
 });
+
+/**
+ * A column and its index in the SAME release (the owner's decision of
+ * 16/11/2026: the whole scale plan ships in one push, F2-03's feed index
+ * among it). prisma/concurrent runs before `migrate deploy`, when the
+ * column is not there yet, so it skips the file; a plain `CREATE INDEX IF
+ * NOT EXISTS` in the migration would then build the index on production's
+ * live table under a SHARE lock, every write waiting, and the run would
+ * stay green.
+ *
+ * So the step runs prisma/concurrent again right after the migrations, and
+ * the migration builds such an index only on an EMPTY table (a new
+ * database: the E2E template, `yarn dev`, Prisma's shadow database), in
+ * the form the README shows:
+ *
+ *   DO $$
+ *   BEGIN
+ *     IF NOT EXISTS (SELECT 1 FROM "<table>" LIMIT 1) THEN
+ *       CREATE INDEX IF NOT EXISTS ...;
+ *     END IF;
+ *   END $$;
+ *
+ * With rows, the block does nothing, and the second pass builds the index
+ * concurrently. Which columns arrive "in the same release" cannot be read
+ * from the repository, so every column some migration adds with ADD COLUMN
+ * counts: for one that is long in production, the block is a harmless
+ * no-op (the first pass built the index already). And the file must say
+ * which of those columns its index reads (`-- requires-column`): without
+ * it, the first pass would try the CIC on a column that does not exist yet
+ * and fail the release.
+ */
+const IDENT = String.raw`(?:"(?:[^"]|"")+"|[A-Za-z_][\w$]*)`;
+const QUALIFIED = String.raw`(?:(?:"public"|public)\.)?(${IDENT})`;
+
+/** table → the columns some migration adds to it with ADD COLUMN. */
+function columnsAddedBy(migrations: Migration[]): Map<string, Set<string>> {
+  const added = new Map<string, Set<string>>();
+  const alter = new RegExp(
+    String.raw`ALTER\s+TABLE\s+(?:IF\s+EXISTS\s+)?(?:ONLY\s+)?${QUALIFIED}([^;]*)`,
+    "gi",
+  );
+  const addColumn = new RegExp(
+    String.raw`\bADD\s+COLUMN\s+(?:IF\s+NOT\s+EXISTS\s+)?(${IDENT})`,
+    "gi",
+  );
+
+  for (const { sql } of migrations) {
+    for (const [, table, rest] of codeOf(sql).matchAll(alter)) {
+      for (const [, column] of rest.matchAll(addColumn)) {
+        const columns = added.get(unquote(table)) ?? new Set<string>();
+
+        columns.add(unquote(column));
+        added.set(unquote(table), columns);
+      }
+    }
+  }
+
+  return added;
+}
+
+/** The identifiers an index definition names (string literals left out). */
+function identifiersOf(definition: string): Set<string> {
+  const names = new Set<string>();
+  let rest = definition.replace(/'(?:[^']|'')*'/g, " ");
+
+  rest = rest.replace(/"((?:[^"]|"")+)"/g, (_quoted, name: string) => {
+    names.add(name.replace(/""/g, '"'));
+
+    return " ";
+  });
+
+  for (const [word] of rest.matchAll(/[A-Za-z_][\w$]*/g)) {
+    names.add(word.toLowerCase());
+  }
+
+  return names;
+}
+
+/** `name@table` of each CREATE INDEX a migration runs only on an empty table. */
+function emptyTableIndexes(sql: string): Set<string> {
+  const guarded = new Set<string>();
+  const guard = new RegExp(
+    String.raw`IF\s+NOT\s+EXISTS\s*\(\s*SELECT\s+1\s+FROM\s+(?:ONLY\s+)?${QUALIFIED}\s+LIMIT\s+1\s*\)\s+THEN([\s\S]*?)\bEND\s+IF\b`,
+    "gi",
+  );
+
+  for (const [, , block] of codeOf(sql).matchAll(
+    /\bDO\s+(\$[A-Za-z_]*\$)([\s\S]*?)\1/gi,
+  )) {
+    for (const [, table, body] of block.matchAll(guard)) {
+      for (const index of indexesCreatedBy(body)) {
+        if (index.table === unquote(table)) {
+          guarded.add(`${index.name}@${index.table}`);
+        }
+      }
+    }
+  }
+
+  return guarded;
+}
+
+/** What a column and its index in one release would get wrong. */
+function sameReleaseProblems(
+  migrations: Migration[],
+  files: ConcurrentFile[],
+): string[] {
+  const added = columnsAddedBy(migrations);
+  const problems: string[] = [];
+
+  for (const file of files) {
+    for (const statement of file.statements) {
+      if (statement.kind !== "create-index") continue;
+
+      const addedHere = added.get(statement.table) ?? new Set<string>();
+      const declared = file.requiresColumns
+        .filter((each) => each.table === statement.table)
+        .map((each) => each.column);
+
+      for (const column of identifiersOf(statement.definition)) {
+        if (addedHere.has(column) && !declared.includes(column)) {
+          problems.push(
+            `${file.name}: o índice ${statement.name} lê ${statement.table}.${column}, que uma migration acrescenta (ADD COLUMN): declare -- requires-column: ${statement.table}.${column}`,
+          );
+        }
+      }
+
+      const late = declared.filter((column) => addedHere.has(column));
+
+      if (late.length === 0) continue;
+
+      for (const migration of migrations) {
+        if (migration.name <= LAST_MIGRATION_BEFORE_PREBUILD) continue;
+
+        const guarded = emptyTableIndexes(migration.sql);
+
+        for (const index of indexesCreatedBy(migration.sql)) {
+          if (index.name !== statement.name) continue;
+          if (guarded.has(`${index.name}@${index.table}`)) continue;
+
+          problems.push(
+            `${migration.name}: o índice ${index.name} lê ${late.map((column) => `${statement.table}.${column}`).join(", ")}, que pode chegar nesta mesma release: construa-o só com a tabela vazia (IF NOT EXISTS (SELECT 1 FROM "${statement.table}" LIMIT 1), prisma/concurrent/README.md); com linhas, o prisma/concurrent o faz depois das migrations`,
+          );
+        }
+      }
+    }
+  }
+
+  return problems;
+}
+
+describe("a column and its index in one release", () => {
+  it("the repository's files declare such columns, and their migrations build only on an empty table", () => {
+    const { files, errors } = loadConcurrentFiles(CONCURRENT_DIR);
+
+    expect(errors).toEqual([]);
+    expect(sameReleaseProblems(allMigrations(), files)).toEqual([]);
+  });
+});
+
+describe("the same-release check", () => {
+  const file = (sql: string): ConcurrentFile => {
+    const parsed = parseConcurrentFile("20261201000000_feed.sql", sql);
+
+    if (!parsed.file) throw new Error(parsed.errors.join("\n"));
+
+    return parsed.file;
+  };
+
+  const ADD_TXID = {
+    name: "20261201000000_txid",
+    sql: 'ALTER TABLE "delivery_event" ADD COLUMN "txid" BIGINT,\nADD COLUMN "other" TEXT;',
+  };
+
+  const FEED = file(
+    '-- requires-column: delivery_event.txid\nCREATE INDEX CONCURRENTLY IF NOT EXISTS "feed_idx" ON "delivery_event" ("businessId", (COALESCE("txid", 0)), "id");',
+  );
+
+  const guardedIndex = (table: string) => ({
+    name: "20261201000100_feed",
+    sql: [
+      "-- With rows, prisma/concurrent builds it after the migrations.",
+      "DO $$",
+      "BEGIN",
+      `  IF NOT EXISTS (SELECT 1 FROM "${table}" LIMIT 1) THEN`,
+      '    CREATE INDEX IF NOT EXISTS "feed_idx" ON "delivery_event"("businessId", (COALESCE("txid", 0)), "id");',
+      "  END IF;",
+      "END $$;",
+    ].join("\n"),
+  });
+
+  it("refuses the plain build of an index whose column arrives in the same release", () => {
+    expect(
+      sameReleaseProblems(
+        [
+          ADD_TXID,
+          {
+            name: "20261201000100_feed",
+            sql: 'CREATE INDEX IF NOT EXISTS "feed_idx" ON "delivery_event"("businessId", (COALESCE("txid", 0)), "id");',
+          },
+        ],
+        [FEED],
+      ),
+    ).toEqual([
+      '20261201000100_feed: o índice feed_idx lê delivery_event.txid, que pode chegar nesta mesma release: construa-o só com a tabela vazia (IF NOT EXISTS (SELECT 1 FROM "delivery_event" LIMIT 1), prisma/concurrent/README.md); com linhas, o prisma/concurrent o faz depois das migrations',
+    ]);
+  });
+
+  it("accepts the build guarded by an empty table, and only by the index's own table", () => {
+    expect(
+      sameReleaseProblems([ADD_TXID, guardedIndex("delivery_event")], [FEED]),
+    ).toEqual([]);
+    expect(
+      sameReleaseProblems([ADD_TXID, guardedIndex("route")], [FEED]),
+    ).toHaveLength(1);
+  });
+
+  it("refuses a file that reads an added column without declaring it", () => {
+    const undeclared = file(
+      '-- requires-table: delivery_event\nCREATE INDEX CONCURRENTLY IF NOT EXISTS "other_idx" ON "delivery_event" (other) WHERE status = \'txid\';',
+    );
+
+    expect(sameReleaseProblems([ADD_TXID], [undeclared])).toEqual([
+      "20261201000000_feed.sql: o índice other_idx lê delivery_event.other, que uma migration acrescenta (ADD COLUMN): declare -- requires-column: delivery_event.other",
+    ]);
+  });
+
+  it("leaves alone the columns that came with their table, and the old history", () => {
+    const created = {
+      name: "20261201000000_ledger",
+      sql: 'CREATE TABLE "ledger" ("id" TEXT NOT NULL, "txid" BIGINT);\nCREATE INDEX IF NOT EXISTS "ledger_idx" ON "ledger"("txid");',
+    };
+    const ledger = file(
+      '-- requires-column: ledger.txid\nCREATE INDEX CONCURRENTLY IF NOT EXISTS "ledger_idx" ON "ledger" ("txid");',
+    );
+
+    expect(sameReleaseProblems([created], [ledger])).toEqual([]);
+    expect(
+      sameReleaseProblems(
+        [
+          { ...ADD_TXID, name: "20260101000000_txid" },
+          {
+            name: "20260101000100_feed",
+            sql: 'CREATE INDEX IF NOT EXISTS "feed_idx" ON "delivery_event"("txid");',
+          },
+        ],
+        [FEED],
+      ),
+    ).toEqual([]);
+  });
+});

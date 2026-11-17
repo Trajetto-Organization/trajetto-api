@@ -1,7 +1,8 @@
 # prisma/concurrent
 
 DDL que não pode travar uma tabela quente, rodado pela etapa de release
-**antes** do `prisma migrate deploy` (plano de escala, F2-01 e decisão D20).
+**antes** do `prisma migrate deploy` (plano de escala, F2-01 e decisão D20)
+e de novo logo depois dele, para o que a própria release acabou de criar.
 Quem roda é `infra/scripts/prebuild-online-ddl.ts` (na imagem
 `trajetto-api-migrate`, como `build/prebuild-online-ddl.js`); a regra está em
 `infra/scripts/online-ddl.ts`.
@@ -23,10 +24,37 @@ roda. Então:
    migration nova que cria índice numa tabela quente sem o arquivo daqui, e
    um arquivo daqui sem a migration correspondente.
 
-As colunas que o índice lê precisam existir **antes** da release do índice:
-o passo roda antes das migrations, e um arquivo cujas tabelas ou colunas
-ainda não existem é pulado (a migration constrói o índice sem
-CONCURRENTLY).
+### Coluna e índice na mesma release
+
+O passo roda **duas vezes**: antes do `prisma migrate deploy` e logo
+depois dele. Um arquivo cujas tabelas ou colunas ainda não existem é pulado
+na primeira passada e aplicado na segunda, quando a migration já as criou.
+É o caso de uma coluna nova e do índice dela na mesma release (o plano de
+escala sai inteiro num push só): antes das migrations a coluna não existe.
+
+Nesse caso a migration **não pode** construir o índice com a tabela cheia,
+porque ela roda antes da segunda passada e seguraria as escritas durante o
+build. Ela o constrói só com a tabela vazia (um banco novo: o molde do E2E,
+o `yarn dev`, o banco sombra do Prisma), e com linhas quem constrói é a
+segunda passada, com CONCURRENTLY, antes de a API nova subir:
+
+```sql
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM "delivery_event" LIMIT 1) THEN
+    CREATE INDEX IF NOT EXISTS "delivery_event_feed_idx" ON "delivery_event" ("businessId", (COALESCE("txid", 0)), "id");
+  END IF;
+END $$;
+```
+
+O arquivo daqui declara `-- requires-column` de toda coluna que o índice
+lê e que uma migration acrescenta com `ADD COLUMN`; sem isso a primeira
+passada tentaria o CIC numa coluna que ainda não existe e a etapa falharia.
+O `migration-prebuild.test.ts` cobra as duas coisas: a declaração e o bloco
+acima na migration (para qualquer coluna acrescentada com `ADD COLUMN`,
+porque o repositório não sabe o que já está em produção; para uma coluna
+antiga o bloco é um no-op). Com `PREBUILD_ONLINE_DDL=off`, um índice assim
+fica faltando até a etapa rodar de novo com o passo ligado.
 
 ## O que pode entrar
 
@@ -73,7 +101,10 @@ migrations.
 - No fim, nenhum índice que o passo administra pode estar inválido; outros
   inválidos aparecem como aviso no log.
 - A segunda execução não faz nada. Um banco sem `_prisma_migrations` (novo)
-  pula o passo inteiro.
+  pula a primeira passada inteira; na segunda, as migrations já criaram
+  tudo com as tabelas vazias, e ela não faz nada.
+- Depois das migrations, um arquivo cujas tabelas ou colunas continuam
+  faltando vira aviso no log (nenhuma migration as cria: arquivo velho).
 - `PREBUILD_ONLINE_DDL=off` na Application `trajetto-api-migrate` desliga o
   passo, só em emergência.
 

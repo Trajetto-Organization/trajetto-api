@@ -83,6 +83,12 @@ if [ "$MODE" = "migrate" ] || [ "$MODE" = "release" ]; then
 
   (cd "$CLI_DIR" && DATABASE_URL="$SCHEMA_URL" ./node_modules/.bin/prisma migrate deploy)
 
+  # prisma/concurrent once more, for the files the first pass skipped: a
+  # column and its index ship in the same release, so the column only
+  # exists now. Its migration built the index only on an empty table; with
+  # rows, it is built here, concurrently, before the new API deploys.
+  DATABASE_URL="$SCHEMA_URL" node build/prebuild-online-ddl.js "$CLI_DIR/prisma/concurrent" --after-migrate
+
   # infra/sql (roles, owners, grants: reapplied every release) and
   # prisma/post-deploy (DDL that waits for a precondition), AFTER the
   # migrations and before the seeds (plano-escala F5-08, D17). Each file's
