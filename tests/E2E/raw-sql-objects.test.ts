@@ -140,6 +140,9 @@ const CHECKS: Record<string, string> = {
   // Scale plan F1-12: pgss_state holds the state of the last query-stats
   // snapshot, one row only; the hourly job upserts it and never logs there.
   pgss_state_single_row: `CHECK ((id = 1))`,
+  // Plano-escala F5-08: a release step's state is one of the five words
+  // infra/scripts/release-step-runner.ts writes, and nothing else.
+  release_step_state_status_check: `CHECK ((status = ANY (ARRAY['applied'::text, 'skipped'::text, 'pending'::text, 'failed'::text, 'retired'::text])))`,
 };
 
 type Client = Pick<Prisma.TransactionClient, "$queryRaw">;
