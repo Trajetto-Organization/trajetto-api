@@ -2954,6 +2954,12 @@ o caminho que resolve.
       mesma linha: quem grava primeiro ganha. Reativada antes, a empresa
       fica inteira; depois do PURGING, `409 BUSINESS_PURGE_RUNNING`. Nunca
       uma empresa viva pela metade;
+    - apaga primeiro os objetos dela no bucket de uploads, página por
+      página (`r2-purge.ts`, F3-26b): os prefixos da empresa, os avatares
+      dos usuários e os comprovantes de cada entrega, enquanto os ids
+      deles ainda existem. Um objeto que o Bucket Lock segura conta como
+      retido e não falha o job; ele sai quando a trava acaba
+      (`infra/r2/bucket-locks.md`);
     - apaga na ordem do plano (`purge-plan.ts`): o filho antes do pai, para
       nenhum lote bater num RESTRICT (a pausa antes do motorista) nem
       disparar uma cascata de tamanho desconhecido. Cada lote é uma

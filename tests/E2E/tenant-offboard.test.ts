@@ -29,6 +29,7 @@ import {
 } from "@/shared/jobs/tenant-offboard/tenant-offboard-job";
 import { hashSecret } from "@/shared/security/bcrypt-gate";
 import type { NotificationService } from "@/shared/services/notification-service";
+import type { StorageDeleteOutcome } from "@/shared/services/upload-service";
 
 import { seedSweepCarrier, type CarrierIds } from "./support/idor-sweep-seed";
 import { someoneWaitsOnALock } from "./support/lock-wait";
@@ -59,6 +60,36 @@ let masterId: string;
 
 const archive = new InMemoryArchiveStorage();
 
+/**
+ * The uploads bucket of these tests: the R2's listing and delete, with the
+ * Bucket Lock of deliveryProofs/ (infra/r2/bucket-locks.md) refusing a
+ * delete the way R2 does.
+ */
+class FakeBucket {
+  readonly objects = new Set<string>();
+  readonly lockedPrefixes = ["deliveryProofs/"];
+
+  async listObjectKeys(prefix: string, startAfter?: string, maxKeys = 1000) {
+    return [...this.objects]
+      .filter((key) => key.startsWith(prefix))
+      .filter((key) => startAfter === undefined || key > startAfter)
+      .sort()
+      .slice(0, maxKeys);
+  }
+
+  async deleteFileOutcome(key: string): Promise<StorageDeleteOutcome> {
+    if (this.lockedPrefixes.some((prefix) => key.startsWith(prefix))) {
+      return "locked";
+    }
+
+    this.objects.delete(key);
+
+    return "deleted";
+  }
+}
+
+const bucket = new FakeBucket();
+
 function deps(overrides: Partial<TenantOffboardDeps> = {}): TenantOffboardDeps {
   return {
     db: databaseBatch,
@@ -66,6 +97,8 @@ function deps(overrides: Partial<TenantOffboardDeps> = {}): TenantOffboardDeps {
     trailNow: () => true,
     activities: () =>
       container.resolve<NotificationService>("NotificationService"),
+    uploads: () => bucket,
+    storagePageSize: 2,
     ...overrides,
   };
 }
@@ -288,6 +321,24 @@ async function seedExtras(ids: CarrierIds): Promise<void> {
       provider: "local",
       model: "ocr",
       status: "SUCCEEDED",
+    },
+  });
+
+  // Its objects in the uploads bucket: three photos (two pages), the
+  // user's avatar and a locked proof of a delivery with its document.
+  for (const name of ["1.jpg", "2.jpg", "3.jpg"]) {
+    bucket.objects.add(`odometerPhotos/${ids.businessId}/${name}`);
+  }
+  bucket.objects.add(`avatars/${ids.userId}/me.jpg`);
+  bucket.objects.add(`deliveryProofs/${ids.deliveryId}/sha.pdf`);
+  await prisma.deliveryProofDocument.create({
+    data: {
+      deliveryId: ids.deliveryId,
+      businessId: ids.businessId,
+      storage_key: `deliveryProofs/${ids.deliveryId}/sha.pdf`,
+      sha256: "0".repeat(64),
+      verification_token: randomUUID(),
+      size_bytes: 1,
     },
   });
 
@@ -522,6 +573,19 @@ describe("purging a company", () => {
     // The platform's own audit line about the purge is the one row more.
     expect(after).toEqual({ ...before, activity: before.activity + 1 });
 
+    // Its uploads went, but the proof the bucket's lock holds (retained);
+    // the other company's are all there.
+    expect([...bucket.objects].sort()).toEqual(
+      [
+        `avatars/${kept.userId}/me.jpg`,
+        `deliveryProofs/${gone.deliveryId}/sha.pdf`,
+        `deliveryProofs/${kept.deliveryId}/sha.pdf`,
+        ...["1.jpg", "2.jpg", "3.jpg"].map(
+          (name) => `odometerPhotos/${kept.businessId}/${name}`,
+        ),
+      ].sort(),
+    );
+
     // The other company's archive stays; this one's object and row went.
     expect([...archive.objects.keys()]).toEqual([
       `trail/20261101/${kept.businessId}.csv.gz`,
@@ -581,6 +645,7 @@ describe("purging a company", () => {
     expect(progress.phase).toBe("done");
     expect(progress.deleted).toBeGreaterThan(50);
     expect(progress.maxTransactionMs).toBeLessThan(5_000);
+    expect(progress.storage).toMatchObject({ deleted: 4, retained: 1 });
   });
 });
 
@@ -596,8 +661,8 @@ describe("a purge stopped half-way", () => {
 
     const first = await claimPurge();
 
-    // A SIGTERM at the eighth checkpoint: rolled back with its batch.
-    await expect(handler.run(contextOf(first, 8))).rejects.toBeInstanceOf(
+    // A SIGTERM at the 25th checkpoint, past the bucket: rolled back with its batch.
+    await expect(handler.run(contextOf(first, 25))).rejects.toBeInstanceOf(
       JobStoppedError,
     );
     expect(await store.giveBack(first.id, first.attempts)).toBe(true);

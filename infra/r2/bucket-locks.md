@@ -185,6 +185,29 @@ restore do diff subiu com as duas levas de linhas.
 Um `archive.info` sobrescrito volta do mesmo jeito (a cópia do cofre, como
 `archive.info` e `archive.info.copy`), sem o passo 3: ele não lista o WAL.
 
+## A saída de uma empresa e a trava
+
+O expurgo de uma empresa (o job `TENANT_OFFBOARD`, plano de escala F3-26b,
+`src/shared/jobs/tenant-offboard/r2-purge.ts`) lista e apaga, página por
+página, os objetos dela no bucket de uploads: os prefixos
+`<tipo>/<businessId>/` (fotos, anexos do chat, planilhas guardadas), os
+avatares `avatars/<userId>/` de cada usuário dela e os comprovantes
+`deliveryProofs/<deliveryId>/` de cada entrega com comprovante. Um objeto
+que a trava segura não falha o job: ele conta como retido (o log
+`purged company's objects held by a bucket lock were retained` traz o
+número, e o cursor do job também, em `progress.storage.retained`) e fica
+no bucket. Qualquer outra falha faz o job tentar de novo, do ponto onde
+parou.
+
+Os retidos saem quando a trava acaba, por uma regra de _Expiration_ no
+prefixo, que vale para os comprovantes de todas as empresas. Hoje o
+`deliveryProofs/` não tem regra de _Expiration_: depois do parecer sobre o
+prazo legal (a trava vai a 1825 dias), o dono cria em _R2 → bucket de
+uploads → Settings → Object lifecycle rules_ uma regra no `deliveryProofs/`
+com o mesmo prazo da trava, ou um pouco mais. Sem ela, os comprovantes de
+uma empresa excluída ficam no bucket até alguém apagá-los à mão, já fora
+da trava.
+
 ## O que a trava não cobre
 
 - O `backup.info` e o `archive.info`: o cofre acima.

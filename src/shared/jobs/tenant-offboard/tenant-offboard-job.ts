@@ -9,6 +9,7 @@ import { deleteTrailArchive } from "@/shared/archive/trail-archive";
 import type { JobContext, JobHandler } from "@/shared/jobs/job-runner";
 import { logger } from "@/shared/logging/logger";
 import type { NotificationService } from "@/shared/services/notification-service";
+import type { UploadService } from "@/shared/services/upload-service";
 
 import {
   PURGE_BATCH_START,
@@ -25,6 +26,12 @@ import {
   scanBatchSql,
   scanChunkSql,
 } from "./purge-batch";
+import {
+  freshStorageCursor,
+  purgeStoragePage,
+  type PurgeObjectStorage,
+  type StorageCursor,
+} from "./r2-purge";
 import {
   TENANT_PURGE_PLAN,
   isDeletingStep,
@@ -51,24 +58,25 @@ const log = logger.child({ component: "jobs", kind: "TENANT_OFFBOARD" });
  *     MASTER who reactivated first finds the company whole (the job ends
  *     without deleting anything); one who clicks after the PURGING commit
  *     reads 409 BUSINESS_PURGE_RUNNING. Never half a company alive;
- *  2. rows: the plan (purge-plan.ts), step by step, batch by batch, each
+ *  2. storage: the company's objects in the uploads bucket, page by page
+ *     (r2-purge.ts, F3-26b), before its users and deliveries go: their ids
+ *     are the prefixes of the avatars and of the proofs. An object the
+ *     bucket's lock holds is counted as retained and left to its lock;
+ *  3. rows: the plan (purge-plan.ts), step by step, batch by batch, each
  *     batch with the cursor in its own transaction of at most
  *     TENANT_PURGE_TRANSACTION_MS (purge-batch.ts); the GPS trail only with
  *     TENANT_PURGE_TRAIL_NOW, otherwise it leaves by the DROP of its days;
- *  3. trail-archive: the company's archived trail objects and their
+ *  4. trail-archive: the company's archived trail objects and their
  *     manifest rows (deleteTrailArchive). Without the archive configured,
  *     the nightly housekeeping takes them once it is;
- *  4. finish: the company's other jobs, and the company itself: PURGED,
+ *  5. finish: the company's other jobs, and the company itself: PURGED,
  *     a tombstone without the responsible person's contact (the MASTER's
  *     list says the data is gone) — or removed, for the old "Deletar" of an
  *     empty company, which frees its CNPJ as it always did. A line in the
  *     platform's audit trail says when.
- *
- * The objects of the uploads bucket go in their own phase (r2-purge.ts,
- * F3-26b).
  */
 
-type OffboardPhase = "rows" | "trail-archive" | "finish" | "done";
+type OffboardPhase = "storage" | "rows" | "trail-archive" | "finish" | "done";
 
 interface OffboardProgress {
   v: 1;
@@ -86,6 +94,9 @@ interface OffboardProgress {
   /** Rows deleted so far, and the longest transaction (ms). */
   deleted: number;
   maxTransactionMs: number;
+
+  /** Where the purge of the uploads bucket stands. */
+  storage: StorageCursor;
 }
 
 interface OffboardPayload {
@@ -109,6 +120,8 @@ interface TenantOffboardDeps {
   archiveStorage: () => ArchiveStorage | null;
   trailNow: () => boolean;
   activities: () => Pick<NotificationService, "createActivityIfEnabled">;
+  uploads: () => PurgeObjectStorage;
+  storagePageSize?: number;
 }
 
 /**
@@ -125,12 +138,13 @@ const TOMBSTONE_RESPONSIBLE = "Removido";
 function freshProgress(): OffboardProgress {
   return {
     v: 1,
-    phase: "rows",
+    phase: "storage",
     step: 0,
     cursor: "",
     batch: PURGE_BATCH_START,
     deleted: 0,
     maxTransactionMs: 0,
+    storage: freshStorageCursor(),
   };
 }
 
@@ -333,7 +347,7 @@ async function runBatch(
 }
 
 /**
- * Phase 2: every step of the plan from the cursor's, batch by batch, each
+ * Phase 3: every step of the plan from the cursor's, batch by batch, each
  * batch committed with the next cursor.
  */
 async function purgeRows(
@@ -430,7 +444,55 @@ async function purgeRows(
   return { ...current, phase: "trail-archive", cursor: "" };
 }
 
-/** Phase 3: the company's archived trail, objects and manifest rows. */
+/**
+ * Phase 2: the company's objects in the uploads bucket, a page at a time,
+ * each page's cursor written before the next.
+ */
+async function purgeStorage(
+  deps: TenantOffboardDeps,
+  job: JobContext,
+  businessId: string,
+  progress: OffboardProgress,
+): Promise<OffboardProgress> {
+  const storage = {
+    db: deps.db,
+    storage: deps.uploads(),
+    pageSize: deps.storagePageSize,
+  };
+  let cursor: StorageCursor = progress.storage;
+
+  for (;;) {
+    job.throwIfStopped();
+
+    const next = await purgeStoragePage(storage, businessId, cursor);
+
+    if (next === null) break;
+
+    cursor = next;
+    await job.checkpoint({ ...progress, storage: cursor });
+  }
+
+  if (cursor.retained > 0) {
+    log.warn(
+      { jobId: job.id, businessId, retained: cursor.retained },
+      "purged company's objects held by a bucket lock were retained; they leave when the lock ends",
+    );
+  }
+
+  log.info(
+    {
+      jobId: job.id,
+      businessId,
+      objects: cursor.deleted,
+      retained: cursor.retained,
+    },
+    "purged company's uploads removed",
+  );
+
+  return { ...progress, phase: "rows", storage: cursor };
+}
+
+/** Phase 4: the company's archived trail, objects and manifest rows. */
 async function purgeTrailArchive(
   deps: TenantOffboardDeps,
   job: JobContext,
@@ -467,7 +529,7 @@ async function purgeTrailArchive(
 }
 
 /**
- * Phase 4: the company's other jobs, then the company itself — the
+ * Phase 5: the company's other jobs, then the company itself — the
  * tombstone or, for the old "Deletar", the row — and the audit line, in
  * one transaction with the last cursor.
  */
@@ -559,6 +621,11 @@ function createTenantOffboardJob(deps: TenantOffboardDeps): JobHandler {
         progress = freshProgress();
       }
 
+      if (progress.phase === "storage") {
+        progress = await purgeStorage(deps, job, payload.businessId, progress);
+        await job.checkpoint(progress);
+      }
+
       if (progress.phase === "rows") {
         progress = await purgeRows(deps, job, payload.businessId, progress);
         await job.checkpoint(progress);
@@ -588,6 +655,7 @@ const tenantOffboardJob: JobHandler = createTenantOffboardJob({
   trailNow: () => env.TENANT_PURGE_TRAIL_NOW,
   activities: () =>
     container.resolve<NotificationService>("NotificationService"),
+  uploads: () => container.resolve<UploadService>("UploadService"),
 });
 
 export {
