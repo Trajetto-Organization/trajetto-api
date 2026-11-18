@@ -1029,6 +1029,9 @@ describe("claims the docs make about the code", () => {
 
     for (const name of [
       "README.md",
+      MAP_DOC,
+      "CLAUDE.md",
+      "AGENTS.md",
       "docs/deploy.md",
       "docs/adr/README.md",
       "docs/adr/0012-papeis-de-processo.md",

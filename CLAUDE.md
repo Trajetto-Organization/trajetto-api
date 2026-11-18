@@ -174,6 +174,33 @@ guard é `tests/unitaires/lifecycle/migration-safety.test.ts`. **Nunca edite
 uma migration já aplicada em algum banco** (nem um comentário: muda o
 checksum). Detalhes: `docs/arquitetura.md` ("Migrations: expandir e contrair").
 
+## Papéis de processo (resumo de `docs/arquitetura.md`)
+
+- A imagem `trajetto-api` roda em uma Application por papel, escolhido por
+  `PROCESS_ROLE` (`src/shared/lifecycle/process-role.ts`, ADR 0012): `all`
+  (tudo num processo: o padrão e a produção de hoje), `api` (HTTP e
+  sockets), `worker` (filas e cron), `scheduler` (só o cron),
+  `worker-external` (só a raia `external`), `realtime` (só sockets) e
+  `ingest` (só `POST /route/positions`). O papel é um preset de
+  `WORKERS_ENABLED`, `CRON_ENABLED`, `WORKER_QUEUES` e `SOCKETS_ENABLED`, e
+  a variável explícita ganha dele. Sem a Application de um papel, o código
+  dele fica inerte; o dono as cria pelo guia de `docs/deploy.md`, seção 19.
+- A superfície HTTP é do papel (`src/shared/http/http-surface.ts`): os
+  papéis sem tráfego respondem só `/health*`, e fora dela vale o 404 de
+  rota inexistente. Uma rota nova só existe nos papéis `all` e `api`, a
+  menos que entre ali.
+- Cada processo reivindica no Postgres só as filas do seu `WORKER_QUEUES`;
+  quem grava numa fila que não consome manda, depois do commit, a dica de
+  despertar pelo Redis (`src/shared/wake/`). A dica pode se perder (a
+  varredura cobre) e nunca leva estado de negócio.
+- Todo processo grava a sua linha no `process_heartbeat` (papel, commit,
+  filas, cron, sockets e a impressão da configuração); o deploy espera cada
+  papel no commit novo (`ROLLOUT_ROLES_EXPECTED`), e os alertas acusam fila
+  sem consumidor e processo de outro ambiente no banco.
+- Cada papel tem o seu login do banco e `connection_limit` (as conexões
+  por papel estão em `docs/arquitetura.md`) e o teto de memória conferido
+  no boot (`MEMORY_BUDGET_MODE`).
+
 ## Testes (resumo de `docs/testes.md`)
 
 - Vermelho antes de verde; títulos em inglês; um teste por garantia, com o
@@ -253,7 +280,8 @@ checksum). Detalhes: `docs/arquitetura.md` ("Migrations: expandir e contrair").
   de ajustar o teste.
 - O deploy chama a API do Dokploy por `.github/scripts/dokploy-deploy.mjs`
   (`application.deploy` com a chave de API e o id de cada Application, na
-  ordem IA → API); a web usa o mesmo script, numa cópia
+  ordem IA → papéis de fila → API → papéis de borda, por
+  `.github/scripts/deploy-roles.sh`); a web usa o mesmo script, numa cópia
   idêntica (um teste da web compara as duas), e repete até 6 vezes, com
   espera crescente (20 → 160 s), um deploy que termina em erro, registrando
   o motivo que o Dokploy deu.

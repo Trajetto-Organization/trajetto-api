@@ -3,6 +3,8 @@ import { join, relative, resolve } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
+import { PROCESS_ROLES } from "@/shared/lifecycle/process-role";
+
 /**
  * The repository's own documentation stays one set, and stays reachable.
  *
@@ -111,5 +113,25 @@ describe("the agent guides", () => {
     expect(read("CLAUDE.md").split("\n")[0]).toMatch(/^# CLAUDE\.md/);
     expect(read("AGENTS.md").split("\n")[0]).toMatch(/^# AGENTS\.md/);
     expect(body("CLAUDE.md")).toBe(body("AGENTS.md"));
+  });
+
+  // The roles (plano-escala X-38): a fresh agent session reads the guide
+  // first, and a role it never heard of is a route added where the role
+  // cannot serve it, or a queue claimed in the wrong process.
+  it("summarise every process role the code knows, as docs/arquitetura.md does", () => {
+    const summary = read("CLAUDE.md")
+      .split("\n## ")
+      .find((part) => part.startsWith("Papéis de processo"));
+    const table = read("docs/arquitetura.md")
+      .split("\n### ")
+      .find((part) => part.startsWith("Os papéis\n"));
+
+    expect(summary).toBeDefined();
+    expect(table).toBeDefined();
+
+    for (const role of PROCESS_ROLES) {
+      expect(summary, role).toContain(`\`${role}\``);
+      expect(table, role).toMatch(new RegExp(`^\\| \`${role}\``, "m"));
+    }
   });
 });
