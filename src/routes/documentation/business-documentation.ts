@@ -15,6 +15,7 @@ import { updateAILimitSchema } from "@/schemas/update-ai-limit-schema";
 import { updateVehicleLimitSchema } from "@/schemas/update-vehicle-limit-schema";
 
 import { confirmDeletionCodeSchema } from "@/schemas/confirm-deletion-code-schema";
+import { scheduleBusinessPurgeSchema } from "@/schemas/schedule-business-purge-schema";
 import {
   businessSettingsValuesSchema,
   updateBusinessSettingsSchema,
@@ -62,6 +63,7 @@ const businessSchemas = {
     enabled: z.boolean().describe("Habilitar (true) ou desabilitar (false)."),
   }),
   confirmDeletionCode: confirmDeletionCodeSchema,
+  scheduleBusinessPurge: scheduleBusinessPurgeSchema,
   // Plan of 02/11/2026 (M1).
   updateBusinessSettings: updateBusinessSettingsSchema,
 };
@@ -99,6 +101,26 @@ const businessSettingsView = businessSettingsValuesSchema.extend({
       "Quem salvou por último; nulo sem alteração ou se a conta foi excluída.",
     ),
 });
+
+/**
+ * The scheduled purge of a company (plano-escala F3-25), on every line of
+ * the MASTER's list: what the screen says and when the Reativar button
+ * shows.
+ */
+const purgeFields = {
+  purge_state: z
+    .enum(["SCHEDULED", "PURGING", "PURGED"])
+    .nullable()
+    .describe(
+      "Exclusão agendada: nulo quando nunca foi agendada (uma empresa só desativada fica nula); SCHEDULED enquanto espera (a empresa está inativa e pode ser reativada); PURGING quando os dados começaram a ser apagados (sem volta); PURGED quando terminou.",
+    ),
+  deactivated_at: responseDateTime()
+    .nullable()
+    .describe("Quando a exclusão foi agendada e a empresa, desativada."),
+  purge_after: responseDateTime()
+    .nullable()
+    .describe("A partir de quando os dados da empresa são apagados."),
+};
 
 /** An error body with the `code` a client branches on (decision 11.3). */
 const codedError = (description: string) =>
@@ -139,6 +161,7 @@ const businessResponses = {
     telephone: z.string(),
     cnpj: z.string(),
     is_active: z.boolean(),
+    ...purgeFields,
     timezone: z
       .string()
       .describe("Fuso horário da empresa (IANA), um dos fusos do Brasil."),
@@ -186,6 +209,34 @@ const businessResponses = {
     message: z.string().default("Status da empresa atualizado com sucesso!"),
     is_active: z.boolean(),
   }),
+  businessToggleConflict: codedError(
+    "TOGGLE_CONFLICT: o status mudou enquanto a tela estava aberta. BUSINESS_PURGE_SCHEDULED: a exclusão da empresa está agendada; use a reativação (POST /business/cancel-business-purge/:businessId). BUSINESS_PURGE_RUNNING ou BUSINESS_PURGED: a exclusão já começou ou terminou.",
+  ),
+  businessPurgeScheduled: z.object({
+    message: z.string(),
+    data: z.object({
+      id: z.string(),
+      is_active: z.boolean(),
+      ...purgeFields,
+    }),
+  }),
+  businessPurgeCancelled: z.object({
+    message: z.string(),
+    data: z.object({
+      id: z.string(),
+      is_active: z.boolean(),
+      ...purgeFields,
+    }),
+  }),
+  schedulePurgeErrors: codedError(
+    "VALIDATION_ERROR: corpo ou parâmetro inválido (com `issues`). BUSINESS_PURGE_CONFIRMATION_MISMATCH: a confirmação não é a razão social da empresa.",
+  ),
+  schedulePurgeConflict: codedError(
+    "BUSINESS_PURGE_ALREADY_SCHEDULED: a exclusão já está agendada. BUSINESS_PURGE_RUNNING: a exclusão já começou. BUSINESS_PURGED: os dados já foram excluídos.",
+  ),
+  cancelPurgeConflict: codedError(
+    "BUSINESS_PURGE_NOT_SCHEDULED: a empresa não tem exclusão agendada (uma empresa só desativada volta pelo ativar). BUSINESS_PURGE_RUNNING: a exclusão já começou e não pode mais ser desfeita. BUSINESS_PURGED: os dados já foram excluídos.",
+  ),
 
   // Common error responses
   internalServerError: internalErrorResponse,

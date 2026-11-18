@@ -7,6 +7,7 @@ import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-n
 import { BusinessNotFoundError } from "../errors/business-not-found-error";
 import { ToggleConflictError } from "../errors/toggle-conflict-error";
 import { assertCallerRole } from "../errors/business-role-guard";
+import { purgeRefusal } from "../errors/business-purge-errors";
 
 import { NotificationService } from "@/shared/services/notification-service";
 import { sendSecurityEventToBusiness } from "@/websocket";
@@ -40,6 +41,13 @@ class ToggleBusinessActiveUseCase {
 
     if (!existingBusiness) {
       throw new BusinessNotFoundError();
+    }
+
+    // A company whose purge was scheduled is not toggled (plano-escala
+    // F3-25): activated here, it would be purged active on the day. Its way
+    // back is the reactivation, which cancels the purge with it.
+    if (existingBusiness.purge_state) {
+      throw purgeRefusal(existingBusiness.purge_state, "toggle");
     }
 
     /**

@@ -50,6 +50,32 @@ interface IBusinessRepository {
     { businessData, businessId }: UpdateBusiness,
     tx?: Prisma.TransactionClient,
   ) => Promise<Business>;
+
+  /**
+   * Schedules the company's purge (plano-escala F3-25): inactive from now
+   * (`deactivated_at`), SCHEDULED, the data going on `purgeAfter`. Only a
+   * company never scheduled (`purge_state` NULL) moves: null otherwise, or
+   * when it does not exist. The conditional write is the lock against a
+   * second click.
+   */
+  schedulePurge: (
+    businessId: string,
+    purgeAfter: Date,
+    tx?: Prisma.TransactionClient,
+  ) => Promise<Business | null>;
+
+  /**
+   * Reactivates a company whose purge is SCHEDULED: active again, the purge
+   * columns cleared. Only from SCHEDULED — a purge that started (PURGING)
+   * is never undone: null then, or when the company does not exist.
+   */
+  cancelPurge: (
+    businessId: string,
+    tx?: Prisma.TransactionClient,
+  ) => Promise<Business | null>;
+
+  /** The SCHEDULED companies whose purge falls in [from, to). */
+  findScheduledPurges: (from: Date, to: Date) => Promise<Business[]>;
   deleteBusiness: (
     businessId: string,
     tx?: Prisma.TransactionClient,

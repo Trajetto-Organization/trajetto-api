@@ -117,6 +117,15 @@ model Business {
   email            String  @unique
   is_active        Boolean @default(true)
 
+  /// The scheduled purge (plano-escala F3-25): NULL until a MASTER schedules
+  /// it — every company of before stays NULL, inactive or not, and is never
+  /// purged — then SCHEDULED (inactive since deactivated_at, the data going
+  /// on purge_after), PURGING (the TENANT_OFFBOARD job started: no way back)
+  /// and PURGED. Reactivating is allowed only while SCHEDULED.
+  purge_state    BusinessPurgeState?
+  deactivated_at DateTime?
+  purge_after    DateTime?
+
   /// IANA zone of the carrier's operation: what "today", "the last N days",
   /// the AI quota month and every daily bucket mean for this company. Brazil
   /// has four zones and there are carriers in MT, MS, RO, AM, AC and RR, so a
@@ -1774,6 +1783,14 @@ model ProcessHeartbeat {
 
   @@index([updated_at])
   @@map("process_heartbeat")
+}
+
+/// Where a company's scheduled purge stands (plano-escala F3-25; see
+/// Business.purge_state). Never scheduled is NULL.
+enum BusinessPurgeState {
+  SCHEDULED
+  PURGING
+  PURGED
 }
 
 /// What a durable job does (plano-escala F3-22). A kind no process has a

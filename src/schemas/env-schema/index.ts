@@ -1471,6 +1471,17 @@ const envSchema = z
       z.coerce.number().int().min(1).max(3_650).default(90),
     ),
 
+    // Days between a MASTER scheduling a company's purge and the purge
+    // (plano-escala F3-25): the company is inactive at once, its admins are
+    // told then and 7 days before, and until the day comes the MASTER can
+    // reactivate it with everything in place. The purge is irreversible, so
+    // never less than 8 days (the reminder goes 7 days before). Empty counts
+    // as absent.
+    TENANT_PURGE_AFTER_DAYS: z.preprocess(
+      (value) => (value === "" ? undefined : value),
+      z.coerce.number().int().min(8).max(365).default(30),
+    ),
+
     // The bell's retention (plano-escala F5-14): days a read notification
     // and an unread one are kept before the nightly cleanup-user-history
     // removes them, as the job always did (90 and 180). An env so the

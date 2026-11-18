@@ -538,10 +538,14 @@ async function fanOutWebhookEvent(
   // breaker, `disabled_at`) is different — it used to drop every event while
   // it was open, and seven hours of an outage were lost for good. Those rows
   // are written now, held (see below), and go out once the endpoint is saved.
+  // A company whose purge was scheduled (plano-escala F3-25) announces
+  // nothing more: its data is on its way out, and its ERP was told the
+  // company is gone, not each delivery a cron still touches.
   const endpoints = await client.webhookEndpoint.findMany({
     where: {
       businessId: event.businessId,
       is_active: true,
+      business: { purge_state: null },
     },
   });
 
@@ -700,8 +704,9 @@ async function fanOutWebhookEvents(
 
   const client = tx ?? database;
 
+  // As fanOutWebhookEvent: nothing for a company whose purge is scheduled.
   const endpoints = await client.webhookEndpoint.findMany({
-    where: { businessId, is_active: true },
+    where: { businessId, is_active: true, business: { purge_state: null } },
   });
 
   const wanting = (topic: string) =>

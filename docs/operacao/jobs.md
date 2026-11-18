@@ -59,6 +59,7 @@ Colunas:
 | `check-push-receipts`                | `src/jobs/cron`                                 | `*/15 * * * *`             | todo dia              | —                      | não    | hoje                           |
 | `alert-routes-left-open`             | `src/jobs/cron`                                 | `7 * * * *`                | todo dia              | —                      | não    | hoje                           |
 | `snapshot-query-stats`               | `src/jobs/cron`                                 | `13 * * * *`               | todo dia              | —                      | não    | hoje                           |
+| `remind-business-purge`              | `src/jobs/cron`                                 | `0 12 * * *`               | todo dia              | —                      | não    | onda 14                        |
 | `cloudflare-ranges`                  | GitHub Actions                                  | `0 9 * * 1`                | seg                   | —                      | não    | hoje                           |
 
 ## O que cada entrada é

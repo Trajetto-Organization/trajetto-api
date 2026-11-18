@@ -11,6 +11,8 @@ import { DeleteBusinessController } from "@/modules/business/usecases/delete-bus
 
 import { UpdateBusinessController } from "@/modules/business/usecases/update-business/update-business-controller";
 import { ToggleBusinessActiveController } from "@/modules/business/usecases/toggle-business-active/toggle-business-active-controller";
+import { ScheduleBusinessPurgeController } from "@/modules/business/usecases/schedule-business-purge/schedule-business-purge-controller";
+import { CancelBusinessPurgeController } from "@/modules/business/usecases/cancel-business-purge/cancel-business-purge-controller";
 
 import { RequestBusinessDeletionController } from "@/modules/business/usecases/request-business-deletion/request-business-deletion-controller";
 import { UpdateAILimitController } from "@/modules/business/usecases/update-ai-limit/update-ai-limit-controller";
@@ -53,6 +55,8 @@ const requestBusinessDeletionController =
 
 const updateBusinessController = new UpdateBusinessController();
 const toggleBusinessActiveController = new ToggleBusinessActiveController();
+const scheduleBusinessPurgeController = new ScheduleBusinessPurgeController();
+const cancelBusinessPurgeController = new CancelBusinessPurgeController();
 
 const updateAILimitController = new UpdateAILimitController();
 const updateVehicleLimitController = new UpdateVehicleLimitController();
@@ -450,11 +454,64 @@ async function businessRoutes(app: FastifyInstance) {
           200: businessResponses.businessToggled,
           400: businessResponses.businessParamErrors,
           404: businessResponses.businessNotFoundCodedPath,
+          409: businessResponses.businessToggleConflict,
           500: businessResponses.internalServerError,
         },
       },
     },
     toggleBusinessActiveController.handle,
+  );
+
+  // The scheduled purge (plano-escala F3-25): separate from the toggle on
+  // purpose — deactivating keeps everything, scheduling the purge deletes
+  // it TENANT_PURGE_AFTER_DAYS later.
+  app.post(
+    "/schedule-business-purge/:businessId",
+    {
+      onRequest: [ensureAuthenticated],
+      preHandler: [verifyUserRole(["MASTER"])],
+      schema: {
+        security: [{ bearerAuth: [] }],
+        tags: ["business"],
+        summary: "Agenda a exclusão dos dados de uma empresa",
+        description:
+          "Só MASTER. A ação explícita de excluir uma empresa, separada do ativar/inativar (uma empresa inativa por falta de pagamento nunca é excluída sozinha). Confirma com a razão social digitada (`confirmation`). Na hora: a empresa fica inativa (todos os usuários perdem o acesso, as sessões terminam, as chaves de API param e os webhooks deixam de sair), `purge_state` vira SCHEDULED e `purge_after` marca quando os dados serão apagados, TENANT_PURGE_AFTER_DAYS dias depois (30 por padrão). Os administradores da empresa recebem um e-mail agora e outro 7 dias antes. Até `purge_after`, POST /business/cancel-business-purge/:businessId reativa a empresa com tudo no lugar; depois que a exclusão começa (PURGING), não há volta.",
+        params: businessSchemas.updateDeleteBusiness,
+        body: businessSchemas.scheduleBusinessPurge,
+        response: {
+          200: businessResponses.businessPurgeScheduled,
+          400: businessResponses.schedulePurgeErrors,
+          404: businessResponses.businessNotFoundCodedPath,
+          409: businessResponses.schedulePurgeConflict,
+          500: businessResponses.internalServerError,
+        },
+      },
+    },
+    scheduleBusinessPurgeController.handle,
+  );
+
+  app.post(
+    "/cancel-business-purge/:businessId",
+    {
+      onRequest: [ensureAuthenticated],
+      preHandler: [verifyUserRole(["MASTER"])],
+      schema: {
+        security: [{ bearerAuth: [] }],
+        tags: ["business"],
+        summary: "Cancela a exclusão agendada e reativa a empresa",
+        description:
+          "Só MASTER, e só enquanto a exclusão está agendada (`purge_state` SCHEDULED): a empresa volta a ficar ativa, com todos os dados no lugar, e os usuários entram de novo. Uma exclusão que já começou (PURGING) é recusada com 409 BUSINESS_PURGE_RUNNING; uma empresa sem exclusão agendada (inclusive uma só inativa), com 409 BUSINESS_PURGE_NOT_SCHEDULED.",
+        params: businessSchemas.updateDeleteBusiness,
+        response: {
+          200: businessResponses.businessPurgeCancelled,
+          400: businessResponses.businessParamErrors,
+          404: businessResponses.businessNotFoundCodedPath,
+          409: businessResponses.cancelPurgeConflict,
+          500: businessResponses.internalServerError,
+        },
+      },
+    },
+    cancelBusinessPurgeController.handle,
   );
 }
 

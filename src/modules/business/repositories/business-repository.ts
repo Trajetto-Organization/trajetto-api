@@ -218,8 +218,10 @@ class BusinessRepository implements IBusinessRepository {
     tx?: Prisma.TransactionClient,
   ): Promise<Business | null> {
     const toggle = async (transaction: Prisma.TransactionClient) => {
+      // Never a company whose purge was scheduled (F3-25): its way back is
+      // the reactivation, which also cancels the purge.
       const { count } = await transaction.business.updateMany({
-        where: { id: businessId, is_active: expectedActive },
+        where: { id: businessId, is_active: expectedActive, purge_state: null },
         data: { is_active: !expectedActive },
       });
 
@@ -230,6 +232,58 @@ class BusinessRepository implements IBusinessRepository {
 
     // The caller's transaction when it has one (the audit entry joins it).
     return tx ? toggle(tx) : this.prisma.$transaction(toggle);
+  }
+
+  async schedulePurge(
+    businessId: string,
+    purgeAfter: Date,
+    tx?: Prisma.TransactionClient,
+  ): Promise<Business | null> {
+    const client = tx ?? this.prisma;
+    const { count } = await client.business.updateMany({
+      where: { id: businessId, purge_state: null },
+      data: {
+        is_active: false,
+        deactivated_at: new Date(),
+        purge_state: "SCHEDULED",
+        purge_after: purgeAfter,
+      },
+    });
+
+    if (count === 0) return null;
+
+    return client.business.findUnique({
+      where: { id: businessId },
+    }) as Promise<Business | null>;
+  }
+
+  async cancelPurge(
+    businessId: string,
+    tx?: Prisma.TransactionClient,
+  ): Promise<Business | null> {
+    const client = tx ?? this.prisma;
+    const { count } = await client.business.updateMany({
+      where: { id: businessId, purge_state: "SCHEDULED" },
+      data: {
+        is_active: true,
+        deactivated_at: null,
+        purge_state: null,
+        purge_after: null,
+      },
+    });
+
+    if (count === 0) return null;
+
+    return client.business.findUnique({
+      where: { id: businessId },
+    }) as Promise<Business | null>;
+  }
+
+  async findScheduledPurges(from: Date, to: Date): Promise<Business[]> {
+    return this.prisma.business.findMany({
+      where: { purge_state: "SCHEDULED", purge_after: { gte: from, lt: to } },
+      orderBy: { purge_after: "asc" },
+    }) as Promise<Business[]>;
   }
 
   async updateBusiness(

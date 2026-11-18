@@ -421,6 +421,56 @@ function businessRepositoryContract(harness: () => BusinessHarness): void {
       expect(await repo.toggleBusinessActive(MISSING, true)).toBeNull();
     });
 
+    it("moves the scheduled purge only along its states, and the toggle never past it", async () => {
+      // Plano-escala F3-25: NULL → SCHEDULED (inactive) → back to NULL
+      // (active) by the cancel only; a second schedule, a cancel of nothing
+      // and a toggle of a scheduled company write nothing. D ends as it was.
+      const { repo } = harness();
+      const purgeAfter = new Date(Date.UTC(2026, 11, 20, 3, 0, 0));
+
+      expect(await repo.cancelPurge(D)).toBeNull();
+
+      const scheduled = await repo.schedulePurge(D, purgeAfter);
+
+      expect(scheduled).toMatchObject({
+        id: D,
+        is_active: false,
+        purge_state: "SCHEDULED",
+      });
+      expect(scheduled?.deactivated_at).toBeInstanceOf(Date);
+      expect(new Date(scheduled!.purge_after!).getTime()).toBe(
+        purgeAfter.getTime(),
+      );
+
+      expect(await repo.schedulePurge(D, new Date())).toBeNull();
+      expect(await repo.toggleBusinessActive(D, false)).toBeNull();
+      expect(await repo.schedulePurge(MISSING, purgeAfter)).toBeNull();
+
+      expect(
+        idsOf(
+          await repo.findScheduledPurges(
+            new Date(purgeAfter.getTime() - 1),
+            new Date(purgeAfter.getTime() + 1),
+          ),
+        ),
+      ).toEqual([D]);
+      expect(
+        await repo.findScheduledPurges(
+          new Date(purgeAfter.getTime() + 1),
+          new Date(purgeAfter.getTime() + 86_400_000),
+        ),
+      ).toEqual([]);
+
+      expect(await repo.cancelPurge(D)).toMatchObject({
+        id: D,
+        is_active: true,
+        purge_state: null,
+        deactivated_at: null,
+        purge_after: null,
+      });
+      expect(await repo.cancelPurge(D)).toBeNull();
+    });
+
     it("counts what points at a company, per company", async () => {
       const { repo, addDependents } = harness();
 

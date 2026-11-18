@@ -22,6 +22,7 @@ import { snapshotQueryStatsJob } from "./snapshot-query-stats-job";
 import { purgeOpsSeriesJob } from "./purge-ops-series-job";
 import { cleanupDeliveryEventSubmissionsJob } from "./cleanup-delivery-event-submissions-job";
 import { cleanupBackgroundJobsJob } from "./cleanup-background-jobs-job";
+import { remindBusinessPurgeJob } from "./remind-business-purge-job";
 
 /**
  * It records all the application's cron jobs.
@@ -41,6 +42,10 @@ function registerCronJobs(): void {
   // Finished durable jobs past their retention (plano-escala F3-22): 30
   // days a success, 90 a failure.
   scheduler.registerJob(cleanupBackgroundJobsJob);
+
+  // Daily: the administrators of a company whose purge is 7 days away are
+  // reminded, while a MASTER can still reactivate it (F3-25).
+  scheduler.registerJob(remindBusinessPurgeJob);
 
   // Settled webhook rows past the replay window (+1 day of grace).
   scheduler.registerJob(cleanupWebhookDeliveriesJob);

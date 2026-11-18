@@ -232,6 +232,7 @@ interface IBackgroundJobRepository {
     kind: BackgroundJobKind,
     subjectId: string,
     businessId: string | null,
+    tx?: JobTransaction,
   ): Promise<number>;
 
   /** The live job of `kind` and `subjectId`, or null. */
@@ -520,8 +521,9 @@ class BackgroundJobRepository implements IBackgroundJobRepository {
     kind: BackgroundJobKind,
     subjectId: string,
     businessId: string | null,
+    tx?: JobTransaction,
   ): Promise<number> {
-    return this.prisma.$executeRaw`
+    return (tx ?? this.prisma).$executeRaw`
       UPDATE "background_job"
       SET "status" = 'CANCELLED', "finished_at" = now(), "updated_at" = now()
       WHERE "kind" = ${kind}::"BackgroundJobKind"

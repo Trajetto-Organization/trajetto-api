@@ -273,10 +273,57 @@ class InMemoryBusinessRepository implements IBusinessRepository {
 
     if (!business) return null;
     if (business.is_active !== expectedActive) return null;
+    // Like the real one: a scheduled purge is undone only by cancelPurge.
+    if (business.purge_state) return null;
 
     business.is_active = !expectedActive;
 
     return business;
+  }
+
+  async schedulePurge(
+    businessId: string,
+    purgeAfter: Date,
+  ): Promise<Business | null> {
+    const business = this.business.find((item) => item.id === businessId);
+
+    if (!business || business.purge_state) return null;
+
+    business.is_active = false;
+    business.deactivated_at = new Date();
+    business.purge_state = "SCHEDULED";
+    business.purge_after = purgeAfter;
+
+    return business;
+  }
+
+  async cancelPurge(businessId: string): Promise<Business | null> {
+    const business = this.business.find((item) => item.id === businessId);
+
+    if (!business || business.purge_state !== "SCHEDULED") return null;
+
+    business.is_active = true;
+    business.deactivated_at = null;
+    business.purge_state = null;
+    business.purge_after = null;
+
+    return business;
+  }
+
+  async findScheduledPurges(from: Date, to: Date): Promise<Business[]> {
+    return this.business
+      .filter(
+        (business) =>
+          business.purge_state === "SCHEDULED" &&
+          business.purge_after != null &&
+          new Date(business.purge_after) >= from &&
+          new Date(business.purge_after) < to,
+      )
+      .sort(
+        (left, right) =>
+          new Date(left.purge_after!).getTime() -
+          new Date(right.purge_after!).getTime(),
+      );
   }
 
   async updateBusiness({
