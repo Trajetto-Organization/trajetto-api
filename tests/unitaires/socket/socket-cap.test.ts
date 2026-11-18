@@ -86,16 +86,64 @@ describe("the ceiling", () => {
     ).toMatchObject({ cap: 3_072, source: "descriptors" });
   });
 
-  it("leaves a limit too low for the reserve out, and says so", () => {
-    // 1,024 descriptors minus 1,024 would be no realtime at all: a
-    // misconfigured host warns at boot instead of refusing every socket.
+  it("never goes back to the setting on a limit too low for the reserve", () => {
+    // That is the host where the sockets do run the process out of
+    // descriptors: 1,900 sockets admitted under 2,000, and the next
+    // Postgres connect fails with EMFILE, the whole replica down. The
+    // reserve shrinks instead: 1,024 sockets, or half the descriptors on a
+    // host with fewer than 2,048, and the boot warns.
+    expect(
+      effectiveSocketCap({
+        maxConnections: 5_000,
+        fdLimit: 2_000,
+        fdReserve: 1_024,
+      }),
+    ).toEqual({
+      cap: 1_000,
+      fdLimit: 2_000,
+      source: "descriptors",
+      fdTooLow: true,
+    });
     expect(
       effectiveSocketCap({
         maxConnections: 5_000,
         fdLimit: 1_024 + FD_CAP_MIN - 1,
         fdReserve: 1_024,
       }),
-    ).toMatchObject({ cap: 5_000, source: "connections", fdTooLow: true });
+    ).toMatchObject({ cap: 1_023, source: "descriptors", fdTooLow: true });
+
+    // 1,024 minus 1,024 would be no realtime at all; half of it is some.
+    expect(
+      effectiveSocketCap({
+        maxConnections: 5_000,
+        fdLimit: 1_024,
+        fdReserve: 1_024,
+      }),
+    ).toMatchObject({ cap: 512, source: "descriptors", fdTooLow: true });
+
+    // A big reserve on a big host keeps most of it: 1,024 sockets.
+    expect(
+      effectiveSocketCap({
+        maxConnections: 5_000,
+        fdLimit: 4_500,
+        fdReserve: 4_096,
+      }),
+    ).toMatchObject({ cap: 1_024, source: "descriptors", fdTooLow: true });
+
+    // Never 0, which the admission reads as no ceiling at all.
+    expect(
+      effectiveSocketCap({ maxConnections: 5_000, fdLimit: 1, fdReserve: 1 }),
+    ).toMatchObject({ cap: 1, source: "descriptors" });
+  });
+
+  it("keeps the setting when it is the smaller, even on a low limit", () => {
+    expect(
+      effectiveSocketCap({
+        maxConnections: 300,
+        fdLimit: 1_024,
+        fdReserve: 1_024,
+      }),
+    ).toMatchObject({ cap: 300, source: "connections", fdTooLow: true });
   });
 
   it("is off, descriptors included, with the setting at 0: the rollback", () => {

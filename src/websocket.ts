@@ -617,10 +617,14 @@ async function initializeSocketIO(httpServer: Server): Promise<SocketIOServer> {
 
   if (cap.fdTooLow) {
     log.warn(
-      { fd_limit: cap.fdLimit, fd_reserve: env.SOCKET_FD_RESERVE },
+      {
+        fd_limit: cap.fdLimit,
+        fd_reserve: env.SOCKET_FD_RESERVE,
+        socket_cap: cap.cap,
+      },
       "the file descriptor limit is too low for SOCKET_FD_RESERVE: the " +
-        "descriptors are left out of the socket ceiling; raise the " +
-        "container's nofile limit",
+        "reserve shrinks to keep the socket ceiling at socket_cap; raise " +
+        "the container's nofile limit",
     );
   }
 

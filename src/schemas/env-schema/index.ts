@@ -1350,8 +1350,10 @@ const envSchema = z
      * shared/socket/socket-cap.ts): the replica holds at most the process's
      * soft descriptor limit minus this, so the sockets never take the
      * descriptors Postgres, Redis, HTTP and the uploads need (EMFILE takes
-     * the whole replica down, not only realtime). 0 leaves the descriptors
-     * out of the ceiling. Empty counts as absent.
+     * the whole replica down, not only realtime). On a limit so low that it
+     * would leave fewer than 1,024 sockets, the reserve shrinks (1,024
+     * sockets, or half the descriptors under 2,048) and the boot warns.
+     * 0 leaves the descriptors out of the ceiling. Empty counts as absent.
      */
     SOCKET_FD_RESERVE: z.preprocess(
       (value) => (value === "" ? undefined : value),

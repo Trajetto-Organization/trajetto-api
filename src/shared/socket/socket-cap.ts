@@ -19,9 +19,13 @@ import { readFileSync } from "node:fs";
  * its soft limit to the hard one when it starts, so the file says what the
  * process ended up with, which `ulimit -n` in a shell does not. Off Linux,
  * or unreadable, only the setting applies. A limit so low that the reserve
- * would leave fewer than 1,024 sockets is a misconfigured host, and turning
- * it into a ceiling would refuse realtime on its own: the descriptor part is
- * left out and the boot warns instead (`fdTooLow`).
+ * would leave fewer than 1,024 sockets is a misconfigured host, and the
+ * boot warns (`fdTooLow`). It is also the host where the sockets do run the
+ * process out of descriptors, so the descriptors stay in the ceiling and
+ * the reserve shrinks instead: 1,024 sockets, or half the descriptors under
+ * 2,048. Leaving them out sent the ceiling back to SOCKET_MAX_CONNECTIONS,
+ * and the replica to EMFILE; taking the reserve whole, 1,024 descriptors
+ * minus 1,024 would refuse every socket.
  *
  * SOCKET_MAX_CONNECTIONS=0 is the documented rollback and turns the whole
  * ceiling off, the descriptors' part included; SOCKET_FD_RESERVE=0 leaves
@@ -71,6 +75,26 @@ interface SocketCap {
   fdTooLow: boolean;
 }
 
+/**
+ * The sockets the descriptors allow: the limit minus the reserve, while
+ * that leaves at least FD_CAP_MIN. Below it the reserve shrinks instead of
+ * the descriptors dropping out of the ceiling, which sent it back to
+ * SOCKET_MAX_CONNECTIONS on exactly the host where sockets run the process
+ * out of descriptors: FD_CAP_MIN sockets, or half the descriptors on a host
+ * with fewer than twice that. Never 0, which reads as no ceiling at all.
+ */
+function descriptorsCeiling(fdLimit: number, fdReserve: number): number {
+  const fromDescriptors = fdLimit - fdReserve;
+
+  if (fromDescriptors >= FD_CAP_MIN) return fromDescriptors;
+
+  return Math.max(
+    1,
+    fromDescriptors,
+    Math.min(FD_CAP_MIN, Math.floor(fdLimit / 2)),
+  );
+}
+
 function effectiveSocketCap({
   maxConnections,
   fdLimit,
@@ -86,11 +110,13 @@ function effectiveSocketCap({
     return { cap: 0, fdLimit, source: "off", fdTooLow: false };
   }
 
-  const fromDescriptors =
-    fdReserve > 0 && fdLimit !== null ? fdLimit - fdReserve : null;
+  let fdCap: number | null = null;
+  let fdTooLow = false;
 
-  const fdTooLow = fromDescriptors !== null && fromDescriptors < FD_CAP_MIN;
-  const fdCap = fromDescriptors !== null && !fdTooLow ? fromDescriptors : null;
+  if (fdReserve > 0 && fdLimit !== null) {
+    fdCap = descriptorsCeiling(fdLimit, fdReserve);
+    fdTooLow = fdLimit - fdReserve < FD_CAP_MIN;
+  }
 
   return fdCap !== null && fdCap < maxConnections
     ? { cap: fdCap, fdLimit, source: "descriptors", fdTooLow }

@@ -3777,9 +3777,13 @@ F5-31, `src/shared/socket/socket-cap.ts`):
   com `EMFILE`, derrubando a réplica inteira em vez de recusar um handshake.
   O `fd_soft` sai de `/proc/self/limits` no boot (o Node sobe o limite
   _soft_ até o _hard_ ao iniciar, então o arquivo diz o que o processo tem
-  de fato). Fora do Linux vale só a variável. Um limite tão baixo que a
-  reserva deixaria menos de 1.024 sockets fica de fora do teto, e o boot
-  avisa: virar teto recusaria o tempo real sozinho.
+  de fato). Fora do Linux vale só a variável. Num limite tão baixo que a
+  reserva deixaria menos de 1.024 sockets, a reserva encolhe: o teto fica em
+  1.024 sockets, ou na metade dos descritores abaixo de 2.048, e o boot
+  avisa para subir o `nofile`. É justamente o host em que os sockets levam o
+  processo ao `EMFILE`, então os descritores nunca saem do teto (voltar aos
+  5.000 derrubava a réplica), e a reserva inteira (1.024 menos 1.024)
+  recusaria todo socket.
   `SOCKET_MAX_CONNECTIONS=0` é a reversão e desliga o teto inteiro, o dos
   descritores junto; `SOCKET_FD_RESERVE=0` tira só os descritores. `socket_cap` e
   `fd_limit` saem na seção `realtime` do `/health/metrics` e do
