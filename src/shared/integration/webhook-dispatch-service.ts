@@ -12,6 +12,7 @@ import {
   WEBHOOK_MAX_ATTEMPTS,
   WEBHOOK_CLAIM_LOCK,
   WEBHOOK_CLAIM_MAX_ENDPOINTS,
+  WEBHOOK_CLAIM_MAX_WALKS,
   WEBHOOK_CLAIM_WINDOW,
   WEBHOOK_DRAIN_BUDGET_MS,
   WEBHOOK_LEASE_SECONDS,
@@ -62,7 +63,8 @@ import { ContinuousPool } from "@/shared/queue/continuous-pool";
 import {
   columnOf,
   fairClaimSql,
-  nextFairCursor,
+  fairWalkOf,
+  walkFairLap,
 } from "@/shared/queue/fair-claim";
 import {
   EXHAUSTED_CLOSE_INTERVAL_MS,
@@ -220,11 +222,22 @@ function webhookClaimSql(
  * With `hostCap` (F3-14), the same over each destination host: an
  * endpoint of a host at its cap gets no share, and the rows found for
  * endpoints of one host are cut, in the claim's order, at what the host
- * has left (the fair claim's group cap). Exported for the plan tests,
- * which measure this very statement.
+ * has left (the fair claim's group cap).
+ *
+ * The walk comes back even when nothing is claimed (the fair claim's
+ * reportsWalk): with no fill behind the shares, a walk of
+ * WEBHOOK_CLAIM_MAX_ENDPOINTS endpoints with nothing to take must move the
+ * cursor and let the claim walk on (`lapEnd`, `wrapped`; claimCapped), or
+ * every claim would visit the same endpoints and never reach the ones
+ * after them. Exported for the plan tests, which measure this very
+ * statement.
  */
 function webhookCappedClaimSql(input: {
   cursor: string;
+  /** Where the claim's lap ends (fair-claim.ts, walkFairLap). */
+  lapEnd?: string;
+  /** The lap already went past the last endpoint. */
+  wrapped?: boolean;
   limit: number;
   endpointCap: number;
   perEndpoint: number;
@@ -297,6 +310,7 @@ function webhookCappedClaimSql(input: {
       share: (endpoint) =>
         Prisma.sql`LEAST(${rowsPerEndpoint}::int, ${input.endpointCap}::int - coalesce((SELECT "in_flight"."busy" FROM "in_flight" WHERE "in_flight"."endpointId" = ${endpoint}), 0)${hostShare(endpoint)})`,
       fill: false,
+      reportsWalk: true,
       groupCap:
         hostCap > 0
           ? { of: hostOf, room: (host) => hostRoom(host) }
@@ -310,6 +324,8 @@ function webhookCappedClaimSql(input: {
     },
     {
       cursor: input.cursor,
+      lapEnd: input.lapEnd,
+      wrapped: input.wrapped,
       limit: input.limit,
       rowsPerTenant: rowsPerEndpoint,
       maxTenants: WEBHOOK_CLAIM_MAX_ENDPOINTS,
@@ -1264,6 +1280,16 @@ class WebhookDispatchService {
    * for the claim and the claim's snapshot, taken after the lock, sees the
    * rows every claim before it took. No interactive transaction: the two
    * statements go together and nothing holds the connection in between.
+   *
+   * A walk that visited its WEBHOOK_CLAIM_MAX_ENDPOINTS endpoints without
+   * anything to take is followed by another from where it stopped, each
+   * one such transaction, until something is claimed or the lap closes
+   * (walkFairLap, at most WEBHOOK_CLAIM_MAX_WALKS). The cursor moves with
+   * every walk, empty or not: the claim of before stopped at 64 endpoints
+   * and kept the cursor when it took nothing, so 64 endpoints in a row
+   * with nothing claimable (parked for a paused endpoint for up to 30
+   * days, in backoff, in flight, at the cap of their host) held every
+   * other customer's webhooks behind them.
    */
   private async claimCapped(
     limit: number,
@@ -1272,29 +1298,36 @@ class WebhookDispatchService {
   ): Promise<ClaimedWebhook[]> {
     const rowFloor = await claimFloors.predicate("webhooks", "row");
 
-    const [, claimed] = await database.$transaction([
-      database.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${WEBHOOK_CLAIM_LOCK}, 0))`,
-      database.$queryRaw<
-        Array<ClaimedWebhook & { fairCursor?: string | null }>
-      >(
-        webhookCappedClaimSql({
-          cursor: this.endpointCursor,
-          limit,
-          endpointCap: env.WEBHOOK_ENDPOINT_GLOBAL_CONCURRENCY,
-          perEndpoint: WEBHOOK_PER_ENDPOINT_CONCURRENCY,
-          hostCap: env.WEBHOOK_HOST_GLOBAL_CONCURRENCY,
-          busyEndpoints: [...busyEndpoints],
-          floor,
-          rowFloor,
-        }),
-      ),
-    ]);
+    const lap = await walkFairLap<ClaimedWebhook>({
+      cursor: this.endpointCursor,
+      maxWalks: WEBHOOK_CLAIM_MAX_WALKS,
+      onCursor: (cursor) => {
+        this.endpointCursor = cursor;
+      },
+      walk: async ({ cursor, lapEnd, wrapped }) => {
+        const [, result] = await database.$transaction([
+          database.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${WEBHOOK_CLAIM_LOCK}, 0))`,
+          database.$queryRaw<ClaimedWebhook[]>(
+            webhookCappedClaimSql({
+              cursor,
+              lapEnd,
+              wrapped,
+              limit,
+              endpointCap: env.WEBHOOK_ENDPOINT_GLOBAL_CONCURRENCY,
+              perEndpoint: WEBHOOK_PER_ENDPOINT_CONCURRENCY,
+              hostCap: env.WEBHOOK_HOST_GLOBAL_CONCURRENCY,
+              busyEndpoints: [...busyEndpoints],
+              floor,
+              rowFloor,
+            }),
+          ),
+        ]);
 
-    this.endpointCursor = nextFairCursor(claimed, this.endpointCursor);
+        return fairWalkOf(result);
+      },
+    });
 
-    for (const row of claimed) delete row.fairCursor;
-
-    return claimed;
+    return lap.rows;
   }
 
   private async deliver(row: ClaimedWebhook): Promise<void> {

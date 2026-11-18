@@ -4,7 +4,9 @@ import { describe, expect, it } from "vitest";
 import {
   columnOf,
   fairClaimSql,
+  fairWalkOf,
   nextFairCursor,
+  walkFairLap,
   type FairQueue,
 } from "@/shared/queue/fair-claim";
 
@@ -324,5 +326,276 @@ describe("the cursor", () => {
 
   it("stays when nothing was claimed", () => {
     expect(nextFairCursor([], "a")).toBe("a");
+  });
+});
+
+describe("a queue whose walk comes back with an empty claim (F3-13 review)", () => {
+  // The webhooks have no fill behind their shares: a walk that met only
+  // endpoints with nothing to take (parked, in backoff, at a cap) returned
+  // no row, so the cursor never moved and every claim walked the same 64
+  // endpoints. The walk now comes back even then, with whether its visit
+  // bound cut it short.
+  const reporting: FairQueue = {
+    table: "webhook_delivery",
+    tenant: "endpointId",
+    dueAt: "availableAt",
+    indexed: (alias) =>
+      Prisma.sql`${columnOf(alias, "status")} IN ('PENDING', 'PROCESSING')`,
+    due: (alias) => Prisma.sql`${columnOf(alias, "availableAt")} <= now()`,
+    share: () => Prisma.sql`${2}::int`,
+    fill: false,
+    reportsWalk: true,
+    set: Prisma.sql`"status" = 'PROCESSING'`,
+    returning: `"id", "endpointId"`,
+  };
+
+  const plain = { ...input, floor: Prisma.empty, rowFloor: Prisma.empty };
+  const flat = (sql: Prisma.Sql) => sql.text.replace(/\s+/g, " ");
+
+  it("returns the walk's row joined to what it claimed, never no row", () => {
+    const text = flat(fairClaimSql(reporting, plain));
+
+    expect(text).toContain('"claimed" AS ( UPDATE "webhook_delivery" SET');
+    expect(text).toContain('RETURNING "id", "endpointId" )');
+    expect(text).toContain(
+      'SELECT "claimed".*, "walk_end"."tenant" AS "fairCursor", "walk_end"."cut" AS "fairCut", "walk_end"."wrapped" AS "fairWrapped" FROM "walk_end" LEFT JOIN "claimed" ON true',
+    );
+
+    // The queues that fill keep the statement of before.
+    expect(flat(fairClaimSql(queue, input))).not.toContain('"claimed" AS (');
+  });
+
+  it("says when a visit bound stopped the walk, and when it ended in the wrap", () => {
+    const text = flat(fairClaimSql(reporting, plain));
+
+    expect(text).toMatch(
+      /"walk_end" \("tenant", "cut", "wrapped"\) AS \( SELECT coalesce\(.*?\), \(SELECT "n" FROM "after_end"\) >= \$\d+::int OR coalesce\(\(SELECT max\("n"\) FROM "before"\), 0\) >= \$\d+::int, EXISTS \(SELECT 1 FROM "before"\) \)/,
+    );
+  });
+
+  it("wraps up to the lap's end, which is the cursor unless given", () => {
+    const own = fairClaimSql(reporting, plain);
+    const lap = fairClaimSql(reporting, { ...plain, lapEnd: "lap-start" });
+
+    expect(own.values).not.toContain("lap-start");
+    expect(lap.values).toContain("lap-start");
+    expect(lap.values).toContain(input.cursor);
+
+    // Each step of the wrap is bound by the lap's end.
+    const bounds = [
+      ...flat(lap).matchAll(/"(?:first|next)"\."tenant" <= \$(\d+)/g),
+    ];
+
+    expect(bounds).toHaveLength(2);
+
+    for (const [, placeholder] of bounds) {
+      expect(lap.values[Number(placeholder) - 1]).toBe("lap-start");
+    }
+  });
+
+  it("past the last company, walks only up to the lap's end, without the NULL bucket or the wrap", () => {
+    const text = flat(
+      fairClaimSql(reporting, { ...plain, lapEnd: "lap-start", wrapped: true }),
+    );
+
+    expect(text).toMatch(
+      /WHERE "first"\."tenant" IS NOT NULL AND "first"\."tenant" <= \$\d+::text UNION ALL/,
+    );
+    expect(text).toMatch(
+      /WHERE "next"\."tenant" IS NOT NULL AND "next"\."tenant" <= \$\d+::text AND "after"\."n" </,
+    );
+    expect(text).toMatch(/"after_end"\."n" < \$\d+::int AND false THEN/);
+    expect(text).toMatch(/<> '' AND false \) AS "first"/);
+
+    // Not past it: the walk from the cursor is unbounded, and the bucket
+    // and the wrap are read.
+    const open = flat(fairClaimSql(reporting, { ...plain, lapEnd: "x" }));
+
+    expect(open).toMatch(/"after_end"\."n" < \$\d+::int AND true THEN/);
+    expect(open).toMatch(/<> '' AND true \) AS "first"/);
+    expect(open).toMatch(
+      /AS "first" WHERE "first"\."tenant" IS NOT NULL UNION ALL/,
+    );
+  });
+});
+
+describe("the walk read back (fairWalkOf)", () => {
+  it("is the walk alone when nothing was claimed", () => {
+    expect(
+      fairWalkOf([
+        {
+          id: null,
+          endpointId: null,
+          fairCursor: "e-64",
+          fairCut: true,
+          fairWrapped: false,
+        },
+      ]),
+    ).toEqual({ rows: [], cursor: "e-64", cut: true, wrapped: false });
+  });
+
+  it("keeps the claimed rows without the walk's columns", () => {
+    const walk = fairWalkOf([
+      {
+        id: "r1",
+        endpointId: "e-7",
+        fairCursor: "e-9",
+        fairCut: false,
+        fairWrapped: true,
+      },
+      {
+        id: "r2",
+        endpointId: "e-9",
+        fairCursor: "e-9",
+        fairCut: false,
+        fairWrapped: true,
+      },
+    ]);
+
+    expect(walk.rows).toEqual([
+      { id: "r1", endpointId: "e-7" },
+      { id: "r2", endpointId: "e-9" },
+    ]);
+    expect(walk).toMatchObject({ cursor: "e-9", cut: false, wrapped: true });
+  });
+
+  it("starts over when there is nothing to read", () => {
+    expect(fairWalkOf([])).toEqual({
+      rows: [],
+      cursor: "",
+      cut: false,
+      wrapped: false,
+    });
+  });
+});
+
+describe("a lap of walks (walkFairLap)", () => {
+  /**
+   * The statement's walk over `companies` (sorted, as the index orders
+   * them), with a visit bound of `bound` and a claim of one row: from the
+   * cursor up (only up to lapEnd once wrapped), then, short of the bound
+   * and not wrapped yet, the wrap from the first company up to lapEnd.
+   */
+  function circle(companies: string[], claimable: Set<string>, bound = 3) {
+    const visits: string[][] = [];
+
+    const walk = async (at: {
+      cursor: string;
+      lapEnd: string;
+      wrapped: boolean;
+    }) => {
+      const seen: string[] = [];
+
+      // Visits up to `bound` of `pool`: the first claimable one, or none.
+      const visit = (pool: string[]) => {
+        for (const company of pool.slice(0, bound)) {
+          seen.push(company);
+
+          if (claimable.has(company)) return { found: company, cut: false };
+        }
+
+        return { found: null, cut: pool.length >= bound };
+      };
+
+      const after = visit(
+        companies.filter(
+          (company) =>
+            company > at.cursor && (!at.wrapped || company <= at.lapEnd),
+        ),
+      );
+
+      let { found, cut } = after;
+      let endedInWrap = false;
+
+      if (found === null && !cut && !at.wrapped && at.lapEnd !== "") {
+        const visitedBefore = seen.length;
+        const before = visit(
+          companies.filter((company) => company <= at.lapEnd),
+        );
+
+        found = before.found;
+        cut = before.cut;
+        endedInWrap = seen.length > visitedBefore;
+      }
+
+      visits.push(seen);
+
+      return {
+        rows: found ? [found] : [],
+        cursor: seen[seen.length - 1] ?? "",
+        cut,
+        wrapped: endedInWrap,
+      };
+    };
+
+    return { walk, visits };
+  }
+
+  const companies = Array.from(
+    { length: 10 },
+    (_, n) => `c${String(n).padStart(2, "0")}`,
+  );
+
+  it("walks on past companies with nothing to take until it claims", async () => {
+    const { walk, visits } = circle(companies, new Set(["c08"]));
+
+    const lap = await walkFairLap({ cursor: "", maxWalks: 64, walk });
+
+    expect(lap).toEqual({ rows: ["c08"], cursor: "c08", walks: 3 });
+    expect(visits.flat()).toEqual(companies.slice(0, 9));
+  });
+
+  it("reaches, past the wrap, a company before the cursor it started from", async () => {
+    const { walk, visits } = circle(companies, new Set(["c05"]));
+
+    const lap = await walkFairLap({ cursor: "c06", maxWalks: 64, walk });
+
+    expect(lap.rows).toEqual(["c05"]);
+    expect(visits).toEqual([
+      ["c07", "c08", "c09"],
+      ["c00", "c01", "c02"],
+      ["c03", "c04", "c05"],
+    ]);
+  });
+
+  it("closes the lap at the cursor it started from when nothing is claimable", async () => {
+    const { walk, visits } = circle(companies, new Set());
+    const heard: string[] = [];
+
+    const lap = await walkFairLap({
+      cursor: "c06",
+      maxWalks: 64,
+      walk,
+      onCursor: (cursor) => heard.push(cursor),
+    });
+
+    // Every company once, in order from the cursor, and no walk more.
+    expect(visits.flat()).toEqual([
+      "c07",
+      "c08",
+      "c09",
+      "c00",
+      "c01",
+      "c02",
+      "c03",
+      "c04",
+      "c05",
+      "c06",
+    ]);
+    expect(lap).toEqual({ rows: [], cursor: "c06", walks: 4 });
+    expect(heard).toEqual(["c09", "c02", "c05", "c06"]);
+  });
+
+  it("stops at its walks and leaves the rest of the lap to the next claim", async () => {
+    const { walk } = circle(companies, new Set(["c09"]));
+
+    const lap = await walkFairLap({ cursor: "", maxWalks: 2, walk });
+
+    expect(lap).toEqual({ rows: [], cursor: "c05", walks: 2 });
+
+    // The next claim starts where this one stopped.
+    const next = await walkFairLap({ cursor: lap.cursor, maxWalks: 2, walk });
+
+    expect(next.rows).toEqual(["c09"]);
   });
 });

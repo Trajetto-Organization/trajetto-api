@@ -6,7 +6,10 @@ import type { AddressInfo } from "node:net";
 import { env } from "@/env";
 import { WebhookEndpointRepository } from "@/modules/integration/repositories/webhook-endpoint-repository";
 import { createPrismaClient } from "@/shared/database/database-client";
-import { destinationHostOf } from "@/shared/integration/webhook-dispatch-rules";
+import {
+  WEBHOOK_CLAIM_MAX_ENDPOINTS,
+  destinationHostOf,
+} from "@/shared/integration/webhook-dispatch-rules";
 import {
   WebhookDispatchService,
   fanOutWebhookEvent,
@@ -29,7 +32,11 @@ import {
  *  - F3-14: the endpoints of one destination host (an aggregator's ERP)
  *    never hold more than WEBHOOK_HOST_GLOBAL_CONCURRENCY open on it
  *    together, an endpoint with no host recorded has no host cap, and the
- *    host is written with the URL and filled for the endpoints without.
+ *    host is written with the URL and filled for the endpoints without;
+ *  - more endpoints with nothing to take than one walk visits (rows parked
+ *    for 30 days, an aggregator's host at its cap) never hold back the
+ *    endpoints after them, the lap wraps up to the cursor it started from,
+ *    and it closes, claiming nothing, when nothing is due.
  */
 const prisma = createPrismaClient();
 
@@ -363,4 +370,195 @@ describe("the endpoints of one destination host (F3-14)", () => {
 
     expect(after.updated_at).toEqual(before.updated_at);
   });
+});
+
+describe("endpoints with nothing to take ahead of the cursor (F3-13 review)", () => {
+  // The capped claim walked at most WEBHOOK_CLAIM_MAX_ENDPOINTS endpoints,
+  // probed every endpoint with a row in the queue (due or not), filled
+  // nothing past the shares and kept the cursor when it took nothing. So
+  // 64 endpoints in a row with nothing claimable — rows parked for a
+  // paused endpoint for up to 30 days, or an aggregator's endpoints at
+  // their host's cap — held every webhook after them: each claim visited
+  // the same 64 and came back empty.
+  const RUN = WEBHOOK_CLAIM_MAX_ENDPOINTS + 6;
+
+  /** Endpoint ids that sort in the order of `n`; a run leaves gaps. */
+  const idOf = (n: number) =>
+    `018f8000-0000-7000-8000-${n.toString(16).padStart(12, "0")}`;
+
+  const LATE = idOf(0xffffff);
+
+  async function seedRun(options: {
+    count: number;
+    host?: string;
+    availableAt: Date;
+    first?: number;
+  }): Promise<string[]> {
+    const ids = Array.from({ length: options.count }, (_, n) =>
+      idOf(((options.first ?? 0x1000) + n) * 0x10),
+    );
+
+    await prisma.webhookEndpoint.createMany({
+      data: ids.map((id, n) => ({
+        id,
+        name: `Endpoint ${n}`,
+        url: `https://${options.host ?? "parado.example.com"}/hook/${n}`,
+        destination_host: options.host ?? null,
+        secret: "whsec_teste_do_teto_global",
+        topics: ["delivery.delivered"],
+        businessId: CARRIER,
+        is_active: true,
+      })),
+    });
+
+    await prisma.webhookDelivery.createMany({
+      data: ids.map((endpointId) => ({
+        endpointId,
+        topic: "delivery.delivered",
+        payload: { delivery_id: endpointId },
+        signature: "sig",
+        status: "PENDING" as const,
+        availableAt: options.availableAt,
+        businessId: CARRIER,
+      })),
+    });
+
+    return ids;
+  }
+
+  async function seedLate(rows: number, id = LATE): Promise<void> {
+    await prisma.webhookEndpoint.create({
+      data: {
+        id,
+        name: "Receptor de outro cliente",
+        url: `${baseUrl}/late`,
+        destination_host: destinationHostOf(`${baseUrl}/late`),
+        secret: "whsec_teste_do_teto_global",
+        topics: ["delivery.delivered"],
+        businessId: CARRIER,
+        is_active: true,
+      },
+    });
+
+    await prisma.webhookDelivery.createMany({
+      data: Array.from({ length: rows }, (_, n) => ({
+        endpointId: id,
+        topic: "delivery.delivered",
+        payload: { delivery_id: `late-${n}` },
+        signature: "sig",
+        status: "PENDING" as const,
+        availableAt: new Date(Date.now() - 60_000),
+        businessId: CARRIER,
+      })),
+    });
+  }
+
+  const thirtyDaysAhead = () => new Date(Date.now() + 30 * 24 * 3_600_000);
+
+  it("reaches an endpoint with due rows behind more parked endpoints than one walk visits", async () => {
+    const parked = await seedRun({
+      count: RUN,
+      availableAt: thirtyDaysAhead(),
+    });
+    await seedLate(3);
+
+    await new WebhookDispatchService(async () => ({
+      allowed: true,
+    })).processBatch();
+
+    expect(arrivals.filter((path) => path === "/late")).toHaveLength(3);
+
+    // The parked rows stay parked, their attempts untouched.
+    const held = await prisma.webhookDelivery.findMany({
+      where: { endpointId: { in: parked } },
+    });
+
+    expect(held).toHaveLength(RUN);
+    expect(held.every((row) => row.status === "PENDING")).toBe(true);
+    expect(held.every((row) => row.attempts === 0)).toBe(true);
+  }, 60_000);
+
+  it("reaches another host's endpoint behind an aggregator's endpoints at their host's cap", async () => {
+    env.WEBHOOK_HOST_GLOBAL_CONCURRENCY = 1;
+
+    // An aggregator's ERP: one endpoint per tenant, every one with a due
+    // row, and the host already at its cap with one call in flight.
+    const aggregator = await seedRun({
+      count: RUN,
+      host: "erp.example.com",
+      availableAt: new Date(Date.now() - 60_000),
+    });
+
+    await prisma.webhookDelivery.create({
+      data: {
+        endpointId: aggregator[0],
+        topic: "delivery.delivered",
+        payload: { delivery_id: "em-voo" },
+        signature: "sig",
+        status: "PROCESSING",
+        attempts: 1,
+        availableAt: new Date(Date.now() + 5 * 60_000),
+        leaseExpiresAt: new Date(Date.now() + 5 * 60_000),
+        businessId: CARRIER,
+      },
+    });
+
+    await seedLate(1);
+
+    await new WebhookDispatchService(async () => ({
+      allowed: true,
+    })).processBatch();
+
+    expect(arrivals).toEqual(["/late"]);
+
+    // Nothing of the aggregator's left the queue past its host's cap.
+    const claimed = await prisma.webhookDelivery.count({
+      where: { endpointId: { in: aggregator }, status: { not: "PENDING" } },
+    });
+
+    expect(claimed).toBe(1);
+  }, 60_000);
+
+  it("reaches an endpoint before the cursor through the wrap, past more than one walk", async () => {
+    // The cursor sits after a hundred parked endpoints; the endpoint with
+    // due rows sorts after the first walk's worth of them, so the lap
+    // wraps, is cut, and goes on from the wrap up to where it started.
+    const parked = await seedRun({
+      count: 130,
+      availableAt: thirtyDaysAhead(),
+    });
+    await seedLate(
+      2,
+      idOf((0x1000 + WEBHOOK_CLAIM_MAX_ENDPOINTS - 1) * 0x10 + 1),
+    );
+
+    const dispatcher = new WebhookDispatchService(async () => ({
+      allowed: true,
+    }));
+
+    // Where an earlier claim of this process stopped (private on purpose:
+    // nothing but the claim moves it).
+    (dispatcher as unknown as { endpointCursor: string }).endpointCursor =
+      parked[100];
+
+    await dispatcher.processBatch();
+
+    expect(arrivals.filter((path) => path === "/late")).toHaveLength(2);
+  }, 60_000);
+
+  it("closes the lap and claims nothing when no endpoint has anything due", async () => {
+    await seedRun({ count: 2 * RUN, availableAt: thirtyDaysAhead() });
+
+    const claimed = await new WebhookDispatchService(async () => ({
+      allowed: true,
+    })).processBatch();
+
+    expect(claimed).toBe(0);
+    expect(arrivals).toEqual([]);
+    expect(
+      await prisma.webhookDelivery.count({
+        where: { businessId: CARRIER, status: "PENDING", attempts: 0 },
+      }),
+    ).toBe(2 * RUN);
+  }, 60_000);
 });

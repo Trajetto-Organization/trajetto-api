@@ -279,7 +279,14 @@ deixa depois das linhas em voo do endpoint (`PROCESSING` com lease vivo,
 de qualquer processo), contadas uma vez por claim. As linhas são travadas
 enquanto a volta as lê, pulando as que outra transação segura, então a
 parte de um endpoint nunca se gasta numa linha que o claim não pode
-pegar. A contagem só vale com um claim por vez: cada um toma um
+pegar. Sem as mais velhas enchendo o que a volta não encheu (as partes são
+o teto), uma volta que visitou 64 endpoints sem nada para pegar (linhas
+guardadas de um endpoint pausado por até 30 dias, em espera de nova
+tentativa ou em voo, um endpoint ou um host no teto) não encerra a busca:
+o cursor anda com ela mesmo quando nada foi reivindicado, e o claim segue
+dali, cada volta numa transação curta, até pegar alguma linha ou voltar ao
+cursor de onde partiu (no máximo 64 voltas, 4.096 endpoints; o resto fica
+para o claim seguinte). A contagem só vale com um claim por vez: cada um toma um
 `pg_advisory_xact_lock` na mesma transação, antes do comando, e o solta no
 commit; nenhuma chamada HTTP acontece com ele. A imagem anterior, no
 rolling, reivindica sem o lock e sem o teto global, até sair.

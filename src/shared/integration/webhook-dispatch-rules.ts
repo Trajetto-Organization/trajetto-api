@@ -116,11 +116,22 @@ function destinationHostOf(url: string): string | null {
 }
 
 /**
- * Endpoints one capped claim visits at most, from its rotating cursor: each
- * costs two short index probes, and the walk stops as soon as it found the
- * rows the free slots take.
+ * Endpoints one walk of a capped claim visits at most, from its rotating
+ * cursor: each costs two short index probes, and the walk stops as soon as
+ * it found the rows the free slots take.
  */
 const WEBHOOK_CLAIM_MAX_ENDPOINTS = 64;
+
+/**
+ * Walks one capped claim makes at most (fair-claim.ts, walkFairLap): a
+ * walk that visited WEBHOOK_CLAIM_MAX_ENDPOINTS endpoints with nothing to
+ * take (rows parked for a paused or switched-off endpoint, rows in backoff
+ * or in flight, an endpoint or a host at its cap) goes on from where it
+ * stopped, each walk a short transaction of its own, until the lap closes.
+ * 64 walks reach 4,096 endpoints, more than the 3,600 tenants of the scale
+ * plan; past that, the next claim goes on from where this one stopped.
+ */
+const WEBHOOK_CLAIM_MAX_WALKS = 64;
 
 /**
  * The advisory lock the capped claims take, one claim at a time across
@@ -323,6 +334,7 @@ export {
   RESPONSE_BODY_LIMIT,
   WEBHOOK_CLAIM_LOCK,
   WEBHOOK_CLAIM_MAX_ENDPOINTS,
+  WEBHOOK_CLAIM_MAX_WALKS,
   WEBHOOK_CLAIM_WINDOW,
   WEBHOOK_CONCURRENCY,
   WEBHOOK_ENDPOINT_GLOBAL_CONCURRENCY,
