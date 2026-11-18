@@ -414,6 +414,11 @@ jobs:
           rollout-verify: ${{ vars.ROLLOUT_VERIFY }}
           api-public-url: ${{ vars.API_PUBLIC_URL }}
           swarm-api-service: ${{ vars.SWARM_API_SERVICE }}
+          swarm-worker-service: ${{ vars.SWARM_WORKER_SERVICE }}
+          swarm-scheduler-service: ${{ vars.SWARM_SCHEDULER_SERVICE }}
+          swarm-worker-external-service: ${{ vars.SWARM_WORKER_EXTERNAL_SERVICE }}
+          swarm-ingest-service: ${{ vars.SWARM_INGEST_SERVICE }}
+          swarm-realtime-service: ${{ vars.SWARM_REALTIME_SERVICE }}
           release-timeout-seconds: ${{ vars.RELEASE_TIMEOUT_SECONDS }}
           force-release: ${{ inputs.force_release == true }}
           rollout-status-token: ${{ secrets.ROLLOUT_STATUS_TOKEN }}

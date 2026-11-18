@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, type IncomingMessage, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { resolve } from "node:path";
@@ -465,6 +465,147 @@ describe.skipIf(!sh)("the API rollout check (verify-rollout.sh)", () => {
     });
   });
 
+  /**
+   * plano-escala X-07: every service the deploy ships is checked on its
+   * own (the roles run the API's image under their own App Name), and the
+   * grace each one really has is printed. ROLLOUT_REQUIRE_GRACE=true, set
+   * in the host's forced command, holds the API's image and the
+   * PgBouncer's to the plan's 40 s; the web and the backup are only
+   * printed.
+   */
+  describe("the grace of every service (X-07)", () => {
+    const converged: Step[] = [
+      { inspect: `${spec(NEW)}|completed|2`, tasks: [task(NEW), task(NEW)] },
+    ];
+
+    /** A converged service of another repository of the organisation. */
+    function other(image: string, env: Record<string, string> = {}) {
+      const repo = `ghcr.io/trajetto-organization/${image}`;
+
+      return rollout(
+        [
+          {
+            inspect: `${repo}:stable@${NEW}|completed|1`,
+            tasks: [
+              `t${++taskIds}|${repo}:stable@${NEW}|Running 5 seconds ago`,
+            ],
+          },
+        ],
+        [`${image}-staging`, `${repo}@${NEW}`],
+        env,
+      );
+    }
+
+    it("prints the grace in the line that says the service converged", () => {
+      writeFileSync(
+        `${box.root}/grace`,
+        "40000000000|STOP_GRACE_PERIOD_MS=40000\n",
+      );
+
+      const result = rollout(converged);
+
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout).toContain(
+        `ok: ${SERVICE} roda ${NEW} em 2 réplica(s) (update: completed) grace=40s`,
+      );
+    });
+
+    it("checks a role's service with the API's image, its variable included", () => {
+      writeFileSync(`${box.root}/grace`, "null|STOP_GRACE_PERIOD_MS=40000\n");
+
+      const result = rollout(converged, ["trajetto-worker-staging", IMAGE]);
+
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain("passa de 10000 ms");
+    });
+
+    it.each([
+      "trajetto-pgbouncer",
+      "trajetto-worker",
+      "trajetto-scheduler",
+      "trajetto-worker-external",
+      "trajetto-realtime",
+      "trajetto-ingest",
+    ])("accepts the image %s", (image) => {
+      writeFileSync(`${box.root}/grace`, "90000000000|\n");
+
+      const result = other(image);
+
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout).toContain("grace=90s");
+    });
+
+    it("refuses an image of the organisation it does not know", () => {
+      const result = rollout(converged, [
+        SERVICE,
+        `ghcr.io/trajetto-organization/trajetto-evil@${NEW}`,
+      ]);
+
+      expect(result.status).toBe(2);
+      expect(box.calls("docker")).toEqual([]);
+    });
+
+    it("only prints the web's grace, even when it cannot be read", () => {
+      writeFileSync(`${box.root}/grace`, "garbage\n");
+
+      const result = other("trajetto-ui", { ROLLOUT_REQUIRE_GRACE: "true" });
+
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout).toContain("grace=ilegível");
+    });
+
+    describe("with ROLLOUT_REQUIRE_GRACE=true", () => {
+      const required = { ROLLOUT_REQUIRE_GRACE: "true" };
+
+      it("fails the API on Docker's 10 s default, saying what to set", () => {
+        const result = rollout(converged, undefined, required);
+
+        expect(result.status).not.toBe(0);
+        expect(result.stderr).toContain(
+          "é 10s (o padrão do Docker), abaixo dos 40s que ROLLOUT_REQUIRE_GRACE=true exige",
+        );
+        expect(result.stderr).toContain("40000000000 ns");
+      });
+
+      it("passes the API at 40 s", () => {
+        writeFileSync(
+          `${box.root}/grace`,
+          "40000000000|STOP_GRACE_PERIOD_MS=40000\n",
+        );
+
+        const result = rollout(converged, undefined, required);
+
+        expect(result.status, result.stderr).toBe(0);
+        expect(result.stdout).toContain("grace=40s");
+      });
+
+      it("fails the PgBouncer under 40 s", () => {
+        writeFileSync(`${box.root}/grace`, "30000000000|\n");
+
+        const result = other("trajetto-pgbouncer", required);
+
+        expect(result.status).not.toBe(0);
+        expect(result.stderr).toContain("é 30s");
+      });
+
+      it("never fails the web or the backup for their grace", () => {
+        for (const image of ["trajetto-ui", "trajetto-backup"]) {
+          rmSync(`${box.root}/ps.n`, { force: true });
+          rmSync(`${box.root}/inspect.n`, { force: true });
+
+          const result = other(image, required);
+
+          expect(result.status, `${image}: ${result.stderr}`).toBe(0);
+          expect(result.stdout).toContain("grace=10s");
+        }
+      });
+
+      it("keeps the old behaviour without it: the API on 10 s passes", () => {
+        expect(rollout(converged).status).toBe(0);
+      });
+    });
+  });
+
   it("fails at the deadline when the update never ends", () => {
     const result = rollout(
       [{ inspect: `${spec(NEW)}|updating|2`, tasks: [task(NEW), task(OLD)] }],
@@ -735,6 +876,57 @@ describe("the API deploy waits for convergence", () => {
   const OFF = "Report the rollout as unverified";
   const names = stepNames(apiAction);
   const text = (name: string) => stepOf(apiAction, name).text;
+
+  // plano-escala X-07: the roles' services too, one call each, in the
+  // deploy's order: the workers before the API's own call, the edge roles
+  // after their deploy, through deploy-roles.sh verify.
+  it("checks each role's service over SSH in the deploy's order", () => {
+    const ssh = text(SSH);
+
+    expect(ssh.indexOf("deploy-roles.sh verify before-api")).toBeGreaterThan(
+      -1,
+    );
+    expect(ssh.indexOf("deploy-roles.sh verify before-api")).toBeLessThan(
+      ssh.indexOf(
+        '"$SERVICE ghcr.io/trajetto-organization/trajetto-api@${DIGEST}"',
+      ),
+    );
+    expect(ssh).toContain("STATE_FILE: ${{ runner.temp }}/deploy-roles.state");
+
+    const edge = "Wait for the edge roles to converge";
+
+    expect(names.indexOf(edge)).toBeGreaterThan(
+      names.indexOf("Deploy the edge roles (Dokploy)"),
+    );
+    expect(conditionOf(stepOf(apiAction, edge))).toBe(
+      "steps.head.outputs.current == 'true' && steps.verify.outputs.mode == 'ssh'",
+    );
+    expect(text(edge)).toContain("deploy-roles.sh verify after-api");
+
+    for (const role of [
+      "worker",
+      "scheduler",
+      "worker-external",
+      "ingest",
+      "realtime",
+    ]) {
+      const variable = `SWARM_${role.toUpperCase().replace("-", "_")}_SERVICE`;
+      const step = ["ingest", "realtime"].includes(role) ? text(edge) : ssh;
+
+      expect(step, role).toContain(
+        `${variable}: \${{ inputs.swarm-${role}-service }}`,
+      );
+
+      for (const [workflow, job, caller_] of [
+        [apiStaging, "deploy-staging", "Deploy to staging"],
+        [apiProduction, "promote-production", "Deploy to production"],
+      ] as const) {
+        expect(caller(workflow, job, caller_), `${job} ${role}`).toContain(
+          `swarm-${role}-service: \${{ vars.${variable} }}`,
+        );
+      }
+    }
+  });
 
   it("checks the running digest over SSH after the API's own deploy", () => {
     expect(names.indexOf("Deploy the API (Dokploy)")).toBeGreaterThan(-1);

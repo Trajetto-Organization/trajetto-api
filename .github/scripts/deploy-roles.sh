@@ -14,6 +14,10 @@
 #                                Dokploy deploy failed goes back to what it
 #                                named before (only with RESTORE_TAGS=true,
 #                                staging)
+#   deploy-roles.sh verify before-api | after-api
+#                                the Swarm check over SSH (X-07), one call
+#                                of infra/scripts/verify-rollout.sh per role
+#                                this run deployed, in the deploy's order
 #
 # Each role's Application pulls `trajetto-api:<tag>-<role>`, never the API's
 # `<tag>`. One tag for all would let the Swarm pull the new build out of
@@ -38,6 +42,9 @@
 # DOKPLOY_WORKER_APPLICATION_ID, DOKPLOY_SCHEDULER_APPLICATION_ID,
 # DOKPLOY_WORKER_EXTERNAL_APPLICATION_ID, DOKPLOY_INGEST_APPLICATION_ID and
 # DOKPLOY_REALTIME_APPLICATION_ID. DEPLOY_SCRIPT is dokploy-deploy.mjs.
+# The `verify` phase: SSH_TARGET (`user@host`), SSH_KEY_FILE (default
+# ~/.ssh/verify_key, written by the action's SSH step) and each role's
+# App Name in SWARM_<ROLE>_SERVICE (SWARM_WORKER_EXTERNAL_SERVICE...).
 set -euo pipefail
 
 REPO=ghcr.io/trajetto-organization/trajetto-api
@@ -49,7 +56,7 @@ AFTER_API=(ingest realtime)
 ROLES=("${BEFORE_API[@]}" "${AFTER_API[@]}")
 
 usage() {
-  echo "uso: deploy-roles.sh before-api | after-api | follow | restore" >&2
+  echo "uso: deploy-roles.sh before-api | after-api | follow | restore | verify before-api|after-api" >&2
   exit 2
 }
 
@@ -63,6 +70,13 @@ summary() {
 id_of() {
   local name
   name="DOKPLOY_$(printf '%s' "$1" | tr '[:lower:]-' '[:upper:]_')_APPLICATION_ID"
+  printf '%s' "${!name:-}"
+}
+
+# SWARM_WORKER_EXTERNAL_SERVICE for worker-external: the role's App Name.
+service_of() {
+  local name
+  name="SWARM_$(printf '%s' "$1" | tr '[:lower:]-' '[:upper:]_')_SERVICE"
   printf '%s' "${!name:-}"
 }
 
@@ -171,9 +185,61 @@ restore() {
   done < "$STATE_FILE"
 }
 
+# The proof each role deployed by this run converged, as the API's own
+# check over SSH (plano-escala X-07): Dokploy's `done` only means the
+# manager accepted the spec, and a role whose new task failed its
+# healthcheck is rolled back by Swarm with the old build still running.
+# One call of the host's verify-rollout per role, in the deploy's order,
+# with the API's digest (every role runs the API's image). A role that was
+# not deployed (absent, or failed: the run is red already) is not checked;
+# a deployed one without its SWARM_<ROLE>_SERVICE is a warning, never a
+# guess at its name. A role that does not converge fails the step, and the
+# checks after it do not run.
+verify_phase() {
+  local role service checked=""
+
+  if [ -z "${API_DIGEST:-}" ] || [ -z "${SSH_TARGET:-}" ]; then
+    echo "::error::deploy-roles.sh verify precisa de API_DIGEST e SSH_TARGET." >&2
+    exit 1
+  fi
+
+  for role in "$@"; do
+    [ "$(status_of "$role")" = "deployed" ] || continue
+
+    service=$(service_of "$role")
+
+    if [ -z "$service" ]; then
+      echo "::warning::trajetto-${role} foi implantada, mas falta a variável SWARM_$(printf '%s' "$role" | tr '[:lower:]-' '[:upper:]_')_SERVICE (o App Name dela) no environment do GitHub: a conferência por SSH dela não roda (docs/deploy.md, seção 14)."
+      continue
+    fi
+
+    if ! ssh -i "${SSH_KEY_FILE:-$HOME/.ssh/verify_key}" -o BatchMode=yes \
+      -o StrictHostKeyChecking=yes -o ServerAliveInterval=30 \
+      -o ServerAliveCountMax=6 \
+      "$SSH_TARGET" "$service ${REPO}@${API_DIGEST}"; then
+      echo "::error::trajetto-${role} (${service}) não convergiu para ${API_DIGEST}: o Swarm reverteu o update ou ele não terminou no prazo. Detalhe no host: docker service ps --no-trunc ${service}."
+      exit 1
+    fi
+
+    checked="$checked $service"
+    summary "trajetto-${role}: ${service} convergiu para ${API_DIGEST}."
+  done
+
+  if [ -n "$checked" ]; then
+    echo "[deploy-roles] conferidos por SSH:${checked}"
+  fi
+}
+
 case "${1:-}" in
   before-api) deploy_phase "${BEFORE_API[@]}" ;;
   after-api) deploy_phase "${AFTER_API[@]}" ;;
+  verify)
+    case "${2:-}" in
+      before-api) verify_phase "${BEFORE_API[@]}" ;;
+      after-api) verify_phase "${AFTER_API[@]}" ;;
+      *) usage ;;
+    esac
+    ;;
   follow) follow ;;
   restore) restore ;;
   *) usage ;;

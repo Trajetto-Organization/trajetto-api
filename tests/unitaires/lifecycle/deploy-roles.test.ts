@@ -326,6 +326,136 @@ describe.skipIf(!hasShell("bash"))("deploy-roles.sh", () => {
     });
   });
 
+  /**
+   * plano-escala X-07: the Swarm check over SSH, one call of the host's
+   * verify-rollout per role this run deployed, in the deploy's order, with
+   * the API's digest. A role not deployed is not checked; a deployed one
+   * without its App Name is a warning; one that does not converge stops
+   * the checks after it.
+   */
+  describe("verify", () => {
+    function verify(phase: string, env: Record<string, string> = {}) {
+      return run("bash", SCRIPT, ["verify", phase], {
+        bin: box.bin,
+        cwd: process.cwd(),
+        env: {
+          API_DIGEST: API,
+          STATE_FILE: state,
+          SSH_TARGET: "deploy@example.com",
+          SSH_KEY_FILE: `${box.root}/verify_key`,
+          GITHUB_STEP_SUMMARY: `${box.root}/summary`,
+          ...env,
+        },
+      });
+    }
+
+    const services = {
+      SWARM_WORKER_SERVICE: "trajetto-worker-staging",
+      SWARM_SCHEDULER_SERVICE: "trajetto-scheduler-staging",
+      SWARM_WORKER_EXTERNAL_SERVICE: "trajetto-worker-external-staging",
+      SWARM_INGEST_SERVICE: "trajetto-ingest-staging",
+      SWARM_REALTIME_SERVICE: "trajetto-realtime-staging",
+    };
+
+    beforeEach(() => {
+      // The forced command's two words are the last argument; a service
+      // whose name starts with `trajetto-scheduler` does not converge.
+      box.stub(
+        "ssh",
+        [
+          'for last in "$@"; do :; done',
+          `printf '%s\n' "$last" >> "${box.root}/ssh"`,
+          'case "$last" in trajetto-scheduler*) exit 1 ;; esac',
+        ].join("\n"),
+      );
+    });
+
+    const sshCalls = () =>
+      existsSync(`${box.root}/ssh`)
+        ? readFileSync(`${box.root}/ssh`, "utf8").split("\n").filter(Boolean)
+        : [];
+
+    it("checks each deployed role in the deploy's order, with the API's digest", () => {
+      writeFileSync(
+        state,
+        ["worker deployed -", "worker-external deployed -", "ingest deployed -"]
+          .map((line) => `${line}\n`)
+          .join(""),
+      );
+
+      const before = verify("before-api", services);
+      const after = verify("after-api", services);
+
+      expect(before.status, before.stderr).toBe(0);
+      expect(after.status, after.stderr).toBe(0);
+      expect(sshCalls()).toEqual([
+        `trajetto-worker-staging ${REPO}@${API}`,
+        `trajetto-worker-external-staging ${REPO}@${API}`,
+        `trajetto-ingest-staging ${REPO}@${API}`,
+      ]);
+
+      const call = box.calls("ssh")[0];
+
+      expect(call).toContain("-o BatchMode=yes");
+      expect(call).toContain("-o StrictHostKeyChecking=yes");
+      expect(call).toContain(`-i ${box.root}/verify_key`);
+      expect(call).toContain("deploy@example.com");
+    });
+
+    it("checks nothing that this run did not deploy", () => {
+      writeFileSync(
+        state,
+        ROLES.map((role) => `${role} absent -\n`).join("") +
+          "worker failed -\n",
+      );
+
+      expect(verify("before-api", services).status).toBe(0);
+      expect(verify("after-api", services).status).toBe(0);
+      expect(sshCalls()).toEqual([]);
+    });
+
+    it("warns, without guessing a name, when a deployed role has no App Name", () => {
+      writeFileSync(state, "worker deployed -\n");
+
+      const result = verify("before-api");
+
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout).toContain(
+        "::warning::trajetto-worker foi implantada, mas falta a variável SWARM_WORKER_SERVICE",
+      );
+      expect(sshCalls()).toEqual([]);
+    });
+
+    it("fails on a role that does not converge, and checks none after it", () => {
+      writeFileSync(
+        state,
+        [
+          "worker deployed -",
+          "scheduler deployed -",
+          "worker-external deployed -",
+        ]
+          .map((line) => `${line}\n`)
+          .join(""),
+      );
+
+      const result = verify("before-api", services);
+
+      expect(result.status).not.toBe(0);
+      expect(result.stdout).toContain(
+        "::error::trajetto-scheduler (trajetto-scheduler-staging) não convergiu",
+      );
+      expect(sshCalls()).toEqual([
+        `trajetto-worker-staging ${REPO}@${API}`,
+        `trajetto-scheduler-staging ${REPO}@${API}`,
+      ]);
+    });
+
+    it("refuses a phase it does not know, and runs without its target", () => {
+      expect(verify("everything").status).toBe(2);
+      expect(verify("before-api", { SSH_TARGET: "" }).status).toBe(1);
+    });
+  });
+
   it("refuses a phase it does not know", () => {
     expect(roles("everything").status).toBe(2);
   });

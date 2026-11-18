@@ -70,6 +70,21 @@ inputs:
   swarm-api-service:
     description: "vars.SWARM_API_SERVICE do environment"
     default: ""
+  swarm-worker-service:
+    description: "vars.SWARM_WORKER_SERVICE: o App Name da trajetto-worker (conferência por SSH)"
+    default: ""
+  swarm-scheduler-service:
+    description: "vars.SWARM_SCHEDULER_SERVICE: o App Name da trajetto-scheduler (idem)"
+    default: ""
+  swarm-worker-external-service:
+    description: "vars.SWARM_WORKER_EXTERNAL_SERVICE: o App Name da trajetto-worker-external (idem)"
+    default: ""
+  swarm-ingest-service:
+    description: "vars.SWARM_INGEST_SERVICE: o App Name da trajetto-ingest (idem)"
+    default: ""
+  swarm-realtime-service:
+    description: "vars.SWARM_REALTIME_SERVICE: o App Name da trajetto-realtime (idem)"
+    default: ""
   release-timeout-seconds:
     description: "vars.RELEASE_TIMEOUT_SECONDS do environment: quanto a etapa de release pode levar, a espera pela do outro ambiente incluída (vazio = 1800; teto 3600)"
     default: ""
@@ -580,8 +595,12 @@ runs:
     # own (failure_action: rollback) and the old build keeps serving — a
     # green run with nothing deployed. This waits on the manager, through
     # an SSH key restricted to infra/scripts/verify-rollout.sh (read-only),
-    # until the API service runs this digest on every replica with the
-    # update completed, and fails on a rollback or at the timeout.
+    # until each service runs this digest on every replica with the update
+    # completed, and fails on a rollback or at the timeout. One call per
+    # service, in the deploy's order (plano-escala X-07): the roles this
+    # run deployed before the API (deploy-roles.sh verify, each by its
+    # SWARM_<ROLE>_SERVICE), then the API; the edge roles after their own
+    # deploy, below.
     - name: Wait for the rollout to converge
       id: verify-ssh
       if: steps.head.outputs.current == 'true' && steps.verify.outputs.mode == 'ssh'
@@ -593,6 +612,10 @@ runs:
         SSH_USER: ${{ inputs.deploy-ssh-user }}
         SSH_KEY: ${{ inputs.deploy-verify-ssh-key }}
         SSH_KNOWN_HOSTS: ${{ inputs.deploy-ssh-known-hosts }}
+        STATE_FILE: ${{ runner.temp }}/deploy-roles.state
+        SWARM_WORKER_SERVICE: ${{ inputs.swarm-worker-service }}
+        SWARM_SCHEDULER_SERVICE: ${{ inputs.swarm-scheduler-service }}
+        SWARM_WORKER_EXTERNAL_SERVICE: ${{ inputs.swarm-worker-external-service }}
       run: |
         missing=""
         [ -n "$DIGEST" ] || missing="$missing DIGEST"
@@ -609,6 +632,8 @@ runs:
         printf '%s\n' "$SSH_KEY" > ~/.ssh/verify_key
         chmod 600 ~/.ssh/verify_key
         printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+        API_DIGEST="$DIGEST" SSH_TARGET="$SSH_USER@$SSH_HOST" \
+          bash .github/scripts/deploy-roles.sh verify before-api
         ssh -i ~/.ssh/verify_key -o BatchMode=yes -o StrictHostKeyChecking=yes \
           -o ServerAliveInterval=30 -o ServerAliveCountMax=6 \
           "$SSH_USER@$SSH_HOST" "$SERVICE ghcr.io/trajetto-organization/trajetto-api@${DIGEST}"
@@ -645,6 +670,21 @@ runs:
         DOKPLOY_INGEST_APPLICATION_ID: ${{ inputs.dokploy-ingest-application-id }}
         DOKPLOY_REALTIME_APPLICATION_ID: ${{ inputs.dokploy-realtime-application-id }}
       run: bash .github/scripts/deploy-roles.sh after-api
+
+    # The edge roles' own Swarm check, after their deploy (X-07): the same
+    # key and host as the API's, one call per role this run deployed.
+    - name: Wait for the edge roles to converge
+      id: verify-ssh-edge
+      if: steps.head.outputs.current == 'true' && steps.verify.outputs.mode == 'ssh'
+      shell: bash
+      env:
+        API_DIGEST: ${{ inputs.api-digest }}
+        SSH_HOST: ${{ inputs.deploy-ssh-host }}
+        SSH_USER: ${{ inputs.deploy-ssh-user }}
+        STATE_FILE: ${{ runner.temp }}/deploy-roles.state
+        SWARM_INGEST_SERVICE: ${{ inputs.swarm-ingest-service }}
+        SWARM_REALTIME_SERVICE: ${{ inputs.swarm-realtime-service }}
+      run: SSH_TARGET="$SSH_USER@$SSH_HOST" bash .github/scripts/deploy-roles.sh verify after-api
 
     # Every role on this build (plano-escala F3-31b): the API's check above
     # proves only the API, and a worker whose new task failed its

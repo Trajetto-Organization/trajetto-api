@@ -30,15 +30,28 @@
 #   - every task meant to run is Running that digest, as many as the replicas
 #     asked for, and no task of another image is left.
 #
-# Then, for the API only, the stop grace (plano-escala F1-16): the API
-# derives every deadline of its graceful shutdown from STOP_GRACE_PERIOD_MS
-# (src/shared/lifecycle/shutdown-plan.ts). Set above the Stop Grace Period
-# the service really has, every deploy SIGKILLs the old replicas halfway
-# through their shutdown, and the rollout converges all the same. So the
-# check fails, saying what to change, when the variable passes the grace.
+# Then the stop grace, read from the spec the service settled on and
+# printed as `grace=<s>s` (plano-escala X-07):
+#   - for the API's image (the API and every role that runs it: worker,
+#     scheduler, worker-external, realtime, ingest), F1-16: the process
+#     derives every deadline of its graceful shutdown from
+#     STOP_GRACE_PERIOD_MS (src/shared/lifecycle/shutdown-plan.ts). Set
+#     above the Stop Grace Period the service really has, every deploy
+#     SIGKILLs the old replicas halfway through their shutdown, and the
+#     rollout converges all the same. So the check fails, saying what to
+#     change, when the variable passes the grace;
+#   - with ROLLOUT_REQUIRE_GRACE=true (set in the forced command, on the
+#     host), the API's image and the PgBouncer's fail below 40 s, the
+#     plan's floor for them (Docker's default is 10 s, which cuts the drain
+#     of a deploy). The web and the backup are only printed.
+#
+# One call per service the deploy shipped, in the deploy's order: the
+# roles before the API (worker, scheduler, worker-external), the API, then
+# the edge roles (ingest, realtime); .github/scripts/deploy-roles.sh
+# `verify` makes the roles' calls.
 #
 # Usage, on the manager (the service is the Application's appName in Dokploy,
-# the repository variable SWARM_API_SERVICE):
+# the GitHub variable SWARM_API_SERVICE, or SWARM_<ROLE>_SERVICE for a role):
 #   verify-rollout.sh trajetto-api-x1y2z3 ghcr.io/trajetto-organization/trajetto-api@sha256:<digest>
 #
 # From CI, through an SSH key restricted to this script (a forced command in
@@ -48,6 +61,8 @@
 # Environment (optional):
 #   ROLLOUT_TIMEOUT_SECONDS  how long to wait for convergence (default 600)
 #   ROLLOUT_POLL_SECONDS     interval between checks (default 5)
+#   ROLLOUT_REQUIRE_GRACE    `true`: the API's image and the PgBouncer's fail
+#                            with a Stop Grace Period below 40 s
 #
 # See docs/deploy.md.
 set -eu
@@ -86,7 +101,9 @@ if ! matches "$SERVICE" '[A-Za-z0-9][A-Za-z0-9_.-]{0,127}'; then
 fi
 
 # A digest, never a tag: `stable` and `staging` can move while this waits.
-if ! matches "$IMAGE" 'ghcr\.io/trajetto-organization/trajetto-(api|ui|backup)@sha256:[0-9a-f]{64}'; then
+# The roles run the API's image today; their own names are accepted so a
+# role that gets an image of its own later needs no new copy of this file.
+if ! matches "$IMAGE" 'ghcr\.io/trajetto-organization/trajetto-(api|ui|backup|pgbouncer|worker|scheduler|worker-external|realtime|ingest)@sha256:[0-9a-f]{64}'; then
   echo "[verify-rollout] ERRO: imagem inválida: '${IMAGE}'" >&2
   echo "[verify-rollout] esperado ghcr.io/trajetto-organization/<imagem>@sha256:<digest>" >&2
   exit 2
@@ -96,6 +113,29 @@ REPO="${IMAGE%@*}"
 DIGEST="${IMAGE#*@}"
 TIMEOUT="${ROLLOUT_TIMEOUT_SECONDS:-600}"
 POLL="${ROLLOUT_POLL_SECONDS:-5}"
+
+# The floor ROLLOUT_REQUIRE_GRACE=true holds the API's image and the
+# PgBouncer's to (the plan's 40 s; Docker's default is 10 s).
+REQUIRED_GRACE_MS=40000
+
+# The API's image and the names a role's own image would take: processes
+# that read STOP_GRACE_PERIOD_MS.
+api_image() {
+  case "$REPO" in
+    */trajetto-api | */trajetto-worker | */trajetto-scheduler | */trajetto-worker-external | */trajetto-realtime | */trajetto-ingest) return 0 ;;
+  esac
+  return 1
+}
+
+# Held to the floor with ROLLOUT_REQUIRE_GRACE=true.
+grace_required() {
+  [ "${ROLLOUT_REQUIRE_GRACE:-}" = "true" ] || return 1
+  api_image && return 0
+  case "$REPO" in
+    */trajetto-pgbouncer) return 0 ;;
+  esac
+  return 1
+}
 
 if ! docker service inspect "$SERVICE" > /dev/null 2>&1; then
   echo "[verify-rollout] ERRO: o serviço '${SERVICE}' não existe neste manager." >&2
@@ -141,43 +181,57 @@ task_digest() {
   fi
 }
 
-# Whether the service's Stop Grace Period covers the API's
-# STOP_GRACE_PERIOD_MS. Both come from the spec: the grace (absent: Docker's
-# 10 s) and that one variable (absent or empty: the API's own 10 000),
-# filtered inside docker's template, so no other value of the Environment
-# (secrets among them) ever reaches this script. The daemon hands the
-# container the grace in whole seconds, so it is counted that way. A
-# repeated variable counts its last entry, as the container's environment
-# does. Fails the run on a mismatch; returns 1 when the spec could not be
-# read, and the caller polls again.
-stop_grace_covers() {
-  case "$REPO" in
-    */trajetto-api) ;;
-    *) return 0 ;;
-  esac
+# The service's Stop Grace Period, judged on the spec the service settled
+# on. Both values come from the spec: the grace (absent: Docker's 10 s) and,
+# for the API's image, that one variable (absent or empty: the API's own
+# 10 000), filtered inside docker's template, so no other value of the
+# Environment (secrets among them) ever reaches this script. The daemon
+# hands the container the grace in whole seconds, so it is counted that way.
+# A repeated variable counts its last entry, as the container's environment
+# does. Sets GRACE (`<s>s`, or `ilegível`). Fails the run on a mismatch, or
+# below the floor with ROLLOUT_REQUIRE_GRACE=true; returns 1 when the spec
+# could not be read for a service whose grace is judged, and the caller
+# polls again (a service only printed passes, `grace=ilegível`).
+check_grace() {
+  GRACE="ilegível"
 
-  grace_info="$(docker service inspect "$SERVICE" --format '{{json .Spec.TaskTemplate.ContainerSpec.StopGracePeriod}}|{{range .Spec.TaskTemplate.ContainerSpec.Env}}{{if eq (index (split . "=") 0) "STOP_GRACE_PERIOD_MS"}}{{println .}}{{end}}{{end}}' 2> /dev/null)" || return 1
+  grace_info="$(docker service inspect "$SERVICE" --format '{{json .Spec.TaskTemplate.ContainerSpec.StopGracePeriod}}|{{range .Spec.TaskTemplate.ContainerSpec.Env}}{{if eq (index (split . "=") 0) "STOP_GRACE_PERIOD_MS"}}{{println .}}{{end}}{{end}}' 2> /dev/null)" || grace_info=""
 
   case "$grace_info" in
     *'|'*) ;;
-    *) return 1 ;;
+    *)
+      if api_image || grace_required; then return 1; fi
+      return 0
+      ;;
   esac
 
   grace_ns="${grace_info%%|*}"
-  declared="$(printf '%s\n' "${grace_info#*|}" | tail -n 1)"
-  declared="${declared#STOP_GRACE_PERIOD_MS=}"
 
   case "$grace_ns" in
     "" | null)
       grace_ms=10000
       grace_from="o padrão do Docker"
       ;;
-    *[!0-9]*) return 1 ;;
+    *[!0-9]*)
+      if api_image || grace_required; then return 1; fi
+      return 0
+      ;;
     *)
       grace_ms=$((grace_ns / 1000000000 * 1000))
       grace_from="o Stop Grace Period do serviço"
       ;;
   esac
+
+  GRACE="$((grace_ms / 1000))s"
+
+  if grace_required && [ "$grace_ms" -lt "$REQUIRED_GRACE_MS" ]; then
+    fail "o Stop Grace Period de ${SERVICE} é ${GRACE} (${grace_from}), abaixo dos $((REQUIRED_GRACE_MS / 1000))s que ROLLOUT_REQUIRE_GRACE=true exige: o Swarm corta o desligamento ordenado no meio a cada deploy. Ponha ${REQUIRED_GRACE_MS}000000 ns em Advanced → Swarm Settings → Stop Grace Period da Application (docs/deploy.md, seção 7.7) e faça o Deploy de novo."
+  fi
+
+  api_image || return 0
+
+  declared="$(printf '%s\n' "${grace_info#*|}" | tail -n 1)"
+  declared="${declared#STOP_GRACE_PERIOD_MS=}"
 
   case "$declared" in
     "")
@@ -269,8 +323,8 @@ EOF
     && { [ -z "$STATE" ] || [ "$STATE" = completed ] || [ "$STATE" = rollback_completed ]; } \
     && [ "$READY" -gt 0 ] && [ "$READY" -eq "$TOTAL" ] && [ "$READY" -ge "${WANT:-1}" ]; then
     # Converged: the grace is judged on the spec the service settled on.
-    if stop_grace_covers; then
-      echo "[verify-rollout] ok: ${SERVICE} roda ${DIGEST} em ${READY} réplica(s) (update: ${STATE:-nenhum})"
+    if check_grace; then
+      echo "[verify-rollout] ok: ${SERVICE} roda ${DIGEST} em ${READY} réplica(s) (update: ${STATE:-nenhum}) grace=${GRACE}"
       exit 0
     fi
 
