@@ -1337,6 +1337,20 @@ const envSchema = z
     ),
 
     /**
+     * How long a cluster-wide question of the Socket.IO adapter
+     * (`fetchSockets` for the chat's presence, a `serverSideEmit` with an
+     * acknowledgement) waits for every replica (plano-escala F4-51). Two
+     * seconds: the library's five held an HTTP request hostage to the
+     * slowest replica, and with more replicas there are more chances of a
+     * slow one. Presence falls back to the replica's own sockets when the
+     * wait runs out. Empty counts as absent.
+     */
+    SOCKET_ADAPTER_REQUESTS_TIMEOUT_MS: z.preprocess(
+      (value) => (value === "" ? undefined : value),
+      z.coerce.number().int().min(100).max(30_000).default(2_000),
+    ),
+
+    /**
      * Key (32 bytes base64, `openssl rand -base64 32`) that encrypts webhook
      * signing secrets and headers at rest (src/shared/integration/secret-box.ts).
      * Optional: without it production stores them in clear and the boot warns;

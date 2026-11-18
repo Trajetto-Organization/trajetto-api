@@ -71,6 +71,9 @@ let strangerProfile = "";
 const REPLICA_REDIS = process.env.REDIS_URL ?? "redis://localhost:6379";
 const REPLICA_ADAPTER_KEY = `socket.io-e2e-${randomUUID()}`;
 
+/** The cluster-wide wait the replicas are started with (F4-51). */
+const ADAPTER_REQUESTS_TIMEOUT_MS = 1_500;
+
 const replicas: Replica[] = [];
 
 interface TestSocket {
@@ -259,6 +262,9 @@ beforeAll(async () => {
       await startReplica({
         REDIS_URL: REPLICA_REDIS,
         SOCKET_ADAPTER_KEY: REPLICA_ADAPTER_KEY,
+        // Not the default, so the test sees the variable reach the adapter
+        // of every replica (plano-escala F4-51).
+        SOCKET_ADAPTER_REQUESTS_TIMEOUT_MS: String(ADAPTER_REQUESTS_TIMEOUT_MS),
       }),
     );
   }
@@ -460,5 +466,34 @@ describe("and the reach is still the carrier's", () => {
       await heard,
       "o evento de uma transportadora chegou a outra ao cruzar réplicas",
     ).toBeNull();
+  });
+});
+
+/**
+ * No affinity, three replicas (plano-escala F4-51): the Swarm spreads the
+ * sockets and nothing pins a client to one, so the cluster-wide questions
+ * go through the adapter. Presence is the one the product reads on every
+ * chat thread list: asked from a replica holding none of the sockets, the
+ * answer must come from the other two, within the wait the environment set.
+ */
+describe("presence across three replicas", () => {
+  it("is answered by the replicas that hold the sockets", async () => {
+    const online = await replicas[0].online([
+      WATCHER_ON_TWO,
+      WATCHER_ON_THREE,
+      STRANGER,
+    ]);
+
+    expect([...online].sort()).toEqual(
+      [WATCHER_ON_TWO, WATCHER_ON_THREE, STRANGER].sort(),
+    );
+  });
+
+  it("and every replica's adapter waits what SOCKET_ADAPTER_REQUESTS_TIMEOUT_MS says", async () => {
+    for (const replica of replicas) {
+      expect(await replica.adapter()).toEqual({
+        requestsTimeout: ADAPTER_REQUESTS_TIMEOUT_MS,
+      });
+    }
   });
 });

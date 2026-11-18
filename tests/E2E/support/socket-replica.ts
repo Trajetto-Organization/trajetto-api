@@ -5,6 +5,7 @@ import "reflect-metadata";
 import { createServer } from "node:http";
 
 import {
+  getOnlineUserIds,
   initializeSocketIO,
   sendDriverPositionToBusiness,
   sendRouteEventToBusiness,
@@ -26,10 +27,13 @@ import {
  * a line in is "emit this", a line out is "done". Anything richer would be a
  * second network to debug when the first one is what is under test.
  *
- * One question goes the other way: `members` answers which of THIS replica's
+ * Questions go the other way too: `members` answers which of THIS replica's
  * sockets are in a room (`MEMBERS <id> <json>`), read from its own room
  * index. The tests wait on that instead of sleeping while the replica reads
- * the database before a join or a leave.
+ * the database before a join or a leave. `online` asks the CLUSTER which of
+ * these users are connected, through the adapter (`ONLINE <id> <json>`), and
+ * `adapter` says how the replica's adapter was built (`ADAPTER <id> <json>`;
+ * plano-escala F4-51).
  */
 const port = Number(process.argv[2]);
 
@@ -42,8 +46,11 @@ interface Command {
     | "securityToBusiness"
     | "securityToUser"
 
-    // A question, not an emit: `payload` is { id, room }.
-    | "members";
+    // Questions, not emits: `payload` is { id, room }, { id, userIds } and
+    // { id }.
+    | "members"
+    | "online"
+    | "adapter";
   businessId: string;
   payload: Record<string, unknown>;
 }
@@ -99,6 +106,32 @@ function run(line: string): void {
 
     process.stdout.write(
       `MEMBERS ${String(command.payload.id)} ${JSON.stringify(members)}\n`,
+    );
+
+    return;
+  }
+
+  if (command.kind === "online") {
+    const userIds = (command.payload.userIds as string[]) ?? [];
+
+    void getOnlineUserIds(userIds).then((online) =>
+      process.stdout.write(
+        `ONLINE ${String(command.payload.id)} ${JSON.stringify(online)}\n`,
+      ),
+    );
+
+    return;
+  }
+
+  if (command.kind === "adapter") {
+    const adapter = io?.of("/").adapter as unknown as {
+      requestsTimeout?: number;
+    };
+
+    process.stdout.write(
+      `ADAPTER ${String(command.payload.id)} ${JSON.stringify({
+        requestsTimeout: adapter?.requestsTimeout ?? null,
+      })}\n`,
     );
 
     return;
