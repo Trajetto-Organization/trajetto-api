@@ -44,6 +44,7 @@ Regras, limiares e como ligar o monitor externo:
 | [geocoding-quota-high](./geocoding-quota-high.md)       | Consumo do dia da geocodificação perto da cota           | as consultas do dia da conta do geocodificador acima de 70% de LOCATIONIQ_DAILY_QUOTA                                     |
 | [feed-txid-regressed](./feed-txid-regressed.md)         | Txid do feed à frente do cluster                         | o maior delivery_event.txid gravado não está abaixo do próximo xid do cluster (restore lógico sem o pg_resetwal -e)       |
 | [cluster-epoch-stale](./cluster-epoch-stale.md)         | Época do cluster velha                                   | o system_identifier ou a timeline do Postgres mudaram (PITR, promote, cluster novo) e a etapa de release não rodou depois |
+| [feed-epoch-conversion](./feed-epoch-conversion.md)     | Cursor do feed de outra época do cluster                 | o feed converteu, nos últimos 15 min, um cursor emitido antes de um PITR, promote ou restore                              |
 | [collection-incomplete](./collection-incomplete.md)     | Verificação incompleta                                   | uma parte do estado da operação não pôde ser lida                                                                         |
 
 ## Operação

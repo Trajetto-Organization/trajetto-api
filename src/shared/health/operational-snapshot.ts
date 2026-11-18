@@ -61,6 +61,13 @@ const REDIS_TIMEOUT_MS = 2_000;
 const SOCKET_SAMPLE_WINDOW_MS = 3 * 60 * 1000;
 
 /**
+ * The feed's epoch conversions alert for a quarter of an hour after they
+ * happen: long enough to be seen across a few heartbeats, short enough to
+ * clear by itself once the integrators hold cursors of the new epoch.
+ */
+const FEED_CONVERSION_WINDOW_MS = 15 * 60 * 1000;
+
+/**
  * The AI reader's refusal of our token: LocalOcrHttpError messages start with
  * the status ("401 unauthorized: …"). The older alternatives match
  * Anthropic-era rows still in the 180-day window.
@@ -339,6 +346,26 @@ async function collectOperationalSnapshot(
     undefined,
   );
 
+  // The feed's conversions of a cursor of another epoch (F2-05), from the
+  // processes' rows of the last minutes: only the process that served the
+  // page knows it converted one.
+  const feedEpochConversions = await part(
+    "ops_sample (feed)",
+    errors,
+    async () => {
+      const [row] = await database.$queryRaw<Array<{ total: number | null }>>`
+        SELECT (sum(("metrics" -> 'feed' ->> 'epoch_conversions')::int))::int AS total
+        FROM "ops_sample"
+        WHERE "ts" >= ${new Date(now.getTime() - FEED_CONVERSION_WINDOW_MS)}
+          AND "role" <> 'cluster'
+          AND "metrics" -> 'feed' ->> 'epoch_conversions' IS NOT NULL
+      `;
+
+      return Number(row?.total ?? 0);
+    },
+    undefined,
+  );
+
   const redisOk = await pingRedis();
 
   // The proof signing certificate (design §7.4): read from the process's own
@@ -434,6 +461,7 @@ async function collectOperationalSnapshot(
     ...(feedTxid && { feedTxid }),
     ...(clusterEpoch && { clusterEpoch }),
     ...(sockets && { sockets }),
+    ...(feedEpochConversions !== undefined && { feedEpochConversions }),
     collectionErrors: errors,
   };
 }

@@ -39,7 +39,10 @@ const REPLICA_E2E_FILES = [
  * pruning a HOT update needs (plano-escala F2-13), as it would freeze the
  * integration feed's horizon (F2-05). Not checked for replicas.
  */
-const SERIAL_E2E_FILES = ["driver-last-position-hot.test.ts"] as const;
+const SERIAL_E2E_FILES = [
+  "driver-last-position-hot.test.ts",
+  "integration-feed-commit-order.test.ts",
+] as const;
 
 /** E2E_PHASE values (vite.config.mts). Unset: every file, as always. */
 const E2E_PHASE_SHARED = "shared";

@@ -827,6 +827,30 @@ const envSchema = z
         }),
     ),
 
+    // The order of /integration/v1/events (plano-escala F2-05). "id" is
+    // the walk every release before this one does, with the legacy cursor;
+    // "commit" walks in commit order (delivery_event.txid, up to the oldest
+    // transaction still open) and emits the v2 cursor, so no event that
+    // commits late is ever skipped. "id" by default because the image
+    // before this one cannot read a v2 cursor: during the rolling deploy,
+    // or after a rollback to it, an integrator holding one would get empty
+    // pages. Switched to "commit" by hand once this release serves alone
+    // in the environment; from then on the rollback floor is this release.
+    INTEGRATION_FEED_ORDER: z.preprocess(
+      (value) => (value === "" ? undefined : value),
+      z.enum(["id", "commit"]).default("id"),
+    ),
+
+    // How far behind the request /integration/v1/deliveries and /routes put
+    // their sync_watermark (plano-escala F2-05): the updated_since to use
+    // for the next sync. A row's updated_at is the moment its writer built
+    // it, and the write commits later (60 s at most, the import reversal),
+    // on a replica whose clock may differ; 2 min covers both. At least 60 s.
+    SYNC_WATERMARK_MARGIN_MS: z.preprocess(
+      (value) => (value === "" ? undefined : value),
+      z.coerce.number().int().min(60_000).max(86_400_000).default(120_000),
+    ),
+
     // pg_wal past this many GiB pages: it lives on the disk both
     // productions share, and an archive that cannot reach R2 grows it.
     // Normal use is 1-2 GB; 12 by default, 8 on the single VPS.

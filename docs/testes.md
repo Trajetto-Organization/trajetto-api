@@ -278,8 +278,10 @@ cluster inteiro perturba (`SERIAL_E2E_FILES`, no mesmo arquivo): o Postgres só
 limpa as versões mortas de uma página abaixo da transação mais velha ainda
 aberta em **qualquer** banco do cluster, e não só no banco do arquivo. Uma
 escrita aberta no banco de outro arquivo segura a limpeza de que o update HOT
-precisa (`driver-last-position-hot.test.ts`, plano de escala F2-13), como
-seguraria o horizonte do feed da integração (F2-05).
+precisa (`driver-last-position-hot.test.ts`, plano de escala F2-13), e
+segura o horizonte do feed da integração pela ordem de commit
+(`integration-feed-commit-order.test.ts`, F2-05: as transações abertas de
+propósito dele também segurariam as dos outros arquivos).
 
 A fase de réplicas é a que mais pede memória: `resilience-replica-drain.test.ts`
 sobe 10 réplicas ao mesmo tempo. Numa réplica Linux do CI (11/11/2026) o job

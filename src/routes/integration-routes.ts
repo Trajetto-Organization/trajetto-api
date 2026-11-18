@@ -207,7 +207,7 @@ async function integrationRoutes(app: FastifyInstance) {
         "x-scopes": ["deliveries:read"],
         summary: "Listar entregas",
         description:
-          "Paginação por CURSOR: passe o `next_cursor` da resposta anterior em `cursor`. A ordem é a do `id`, crescente (UUID v7, a ordem de criação). `updated_since` (ISO 8601) traz só o que mudou a partir daquele instante (`updated_at` maior ou igual), que é o que um ERP usa para sincronizar sem reler tudo. Cada objeto carrega os TRÊS identificadores — o nosso id, o `code` do seu ERP e a chave da NF-e quando existir — porque uma integração que só casa por um deles quebra na primeira vez que o ERP do cliente muda como numera as coisas.",
+          "Paginação por CURSOR: passe o `next_cursor` da resposta anterior em `cursor`. A ordem é a do `id`, crescente (UUID v7, a ordem de criação). `updated_since` (ISO 8601) traz só o que mudou a partir daquele instante (`updated_at` maior ou igual), que é o que um ERP usa para sincronizar sem reler tudo: na próxima sincronização, use o `sync_watermark` da primeira página desta. Cada objeto carrega os TRÊS identificadores — o nosso id, o `code` do seu ERP e a chave da NF-e quando existir — porque uma integração que só casa por um deles quebra na primeira vez que o ERP do cliente muda como numera as coisas.",
         querystring: integrationSchemas.listDeliveries,
         // 401, 403 and the key's 429 come from ensureApiKey, through the
         // OpenAPI transform, with their codes.
@@ -264,7 +264,7 @@ async function integrationRoutes(app: FastifyInstance) {
         "x-scopes": ["routes:read"],
         summary: "Listar rotas",
         description:
-          "Mesma paginação por cursor das entregas, na ordem do `id` crescente (a ordem de criação); `updated_since` filtra por `updated_at` maior ou igual. As paradas vêm na ordem que o despachante escolheu, com a entrega de cada uma pelos três identificadores.",
+          "Mesma paginação por cursor das entregas, na ordem do `id` crescente (a ordem de criação); `updated_since` filtra por `updated_at` maior ou igual, e o `sync_watermark` da primeira página é o da próxima sincronização. As paradas vêm na ordem que o despachante escolheu, com a entrega de cada uma pelos três identificadores.",
         querystring: integrationSchemas.listRoutes,
         response: {
           200: integrationResponses.routePage,
@@ -319,7 +319,7 @@ async function integrationRoutes(app: FastifyInstance) {
         "x-scopes": ["events:read"],
         summary: "Listar eventos (polling)",
         description:
-          "Oferecido AO LADO dos webhooks e não no lugar deles: um cliente atrás de firewall não consegue receber uma chamada, e dizer a ele 'exponha um endpoint ou fique sem nada' é como um projeto de integração morre. Lê do histórico permanente das entregas: consultar uma semana para trás não encontra buracos. Ordem do `id` crescente; aqui `updated_since` filtra pela hora em que o evento chegou ao Trajetto (`created_at` maior ou igual), não por `occurred_at`. Toda mudança de status aparece: a criação da entrega como `delivery.created`, a saída de uma rota como um `delivery.in_transit` por entrega que saiu e a volta à base de uma rota cancelada ou encerrada com pendências como `delivery.pending` (`data.status_from` diz de onde veio; nulo na criação).",
+          "Oferecido AO LADO dos webhooks e não no lugar deles: um cliente atrás de firewall não consegue receber uma chamada, e dizer a ele 'exponha um endpoint ou fique sem nada' é como um projeto de integração morre. Lê do histórico permanente das entregas: consultar uma semana para trás não encontra buracos. A ordem é a da leitura do feed, não a do `id`: não ordene nem compare ids ou cursores, siga o `next_cursor` e, na última página, guarde o `resume_cursor` para a próxima consulta. O mesmo evento pode vir mais de uma vez (um cursor antigo, ou de antes de uma restauração do banco, é convertido sem pular nada): deduplique pelo `id` do evento. Aqui `updated_since` filtra pela hora em que o evento chegou ao Trajetto (`created_at` maior ou igual), não por `occurred_at`. Toda mudança de status aparece: a criação da entrega como `delivery.created`, a saída de uma rota como um `delivery.in_transit` por entrega que saiu e a volta à base de uma rota cancelada ou encerrada com pendências como `delivery.pending` (`data.status_from` diz de onde veio; nulo na criação).",
         querystring: integrationSchemas.listEvents,
         response: {
           200: integrationResponses.eventPage,

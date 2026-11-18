@@ -365,7 +365,11 @@ describe("the introduction", () => {
   it("states the order of the lists and the incremental sync recipe", () => {
     expect(description()).toMatch(/ordem do `id`, crescente/);
     expect(description()).toContain("UUID v7");
-    expect(description()).toMatch(/instante em que a varredura COMEÇA/);
+    // The recipe of F2-05: the first page's sync_watermark, and the
+    // feed's resume_cursor, with the duplicates deduplicated by id.
+    expect(description()).toMatch(/`sync_watermark` da PRIMEIRA página/);
+    expect(description()).toMatch(/guarde\s+o `resume_cursor`/);
+    expect(description()).toMatch(/deduplique pelo `id` do evento/);
     expect(description()).toMatch(/deduplique pelo `id`/i);
   });
 

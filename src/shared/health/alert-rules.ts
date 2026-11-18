@@ -148,6 +148,13 @@ interface OperationalSnapshot {
    */
   sockets?: SocketUsageState[];
 
+  /**
+   * Cursors of another cluster epoch the integration feed converted in the
+   * last minutes (plano-escala F2-05), summed from the processes' ops_sample
+   * rows. Absent when the rows could not be read, which judges nothing.
+   */
+  feedEpochConversions?: number;
+
   /** Parts of the snapshot that could not be read; each one is a reason. */
   collectionErrors: string[];
 }
@@ -449,6 +456,7 @@ const ALERT_KINDS = [
   "geocoding-quota-high",
   "feed-txid-regressed",
   "cluster-epoch-stale",
+  "feed-epoch-conversion",
   "collection-incomplete",
 ] as const;
 
@@ -946,6 +954,16 @@ function collectAlerts(
     alerts.push({
       code: "cluster-epoch-stale",
       message: `Época do cluster: ${epochStale}; rode a etapa de release (Deploy na trajetto-api-migrate) para o cursor do feed da integração não confundir os xids reaproveitados`,
+    });
+  }
+
+  // A cursor emitted before a PITR, a promote or a logical restore (F2-05):
+  // the feed sent that integrator a stretch of events again, by design,
+  // and the customer should hear it from us before their ERP shows it.
+  if ((snapshot.feedEpochConversions ?? 0) > 0) {
+    alerts.push({
+      code: "feed-epoch-conversion",
+      message: `Feed da integração: ${snapshot.feedEpochConversions} cursor(es) de outra época do cluster convertido(s) nos últimos minutos; os eventos desde o piso de cada um foram enviados de novo (a integração deduplica pelo id)`,
     });
   }
 

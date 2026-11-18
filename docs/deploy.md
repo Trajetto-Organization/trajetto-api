@@ -3796,6 +3796,44 @@ sempre, só sem essas linhas.
    enquanto ela estava ligada, e avise o integrador que um
    `delivery.pending` sem `status_from` é a criação.
 
+### O feed de eventos pela ordem de commit (onda 10)
+
+O F2-05 (plano de escala) faz o `/integration/v1/events` andar pela ordem
+de commit (`delivery_event.txid`, até a transação mais antiga ainda aberta)
+e devolver o cursor `v2`, com a época do cluster: um evento que confirma
+tarde não fica mais para trás do cursor de quem já passou. A imagem de
+antes do plano de escala só lê o cursor antigo (o id do evento). Com um
+`v2` na mão, ela responde páginas vazias, e o integrador para de receber
+eventos sem erro: durante o rolling, ou para sempre depois de uma volta do
+código para ela.
+
+Por isso a ordem nova só vale com `INTEGRATION_FEED_ORDER=commit` no
+_Environment_ da `trajetto-api`, `id` por padrão (o caminho de sempre, com
+o cursor antigo). As respostas já trazem os campos novos nos dois modos:
+`resume_cursor` no `/events` e `sync_watermark` no `/deliveries` e no
+`/routes`.
+
+1. Na staging, ligue depois de a release da onda 10 convergir (nenhuma
+   task da imagem anterior em `docker service ps`), **Save** e **Deploy**.
+   Confira uma página do `/integration/v1/events` com uma chave de teste:
+   o `next_cursor` e o `resume_cursor` começam com `v2.`.
+2. Na produção, ligue do mesmo jeito, só depois de a release estar no ar e
+   de nenhuma volta para antes dela estar prevista. Desde a virada, **o
+   piso de rollback do código é esta release**: a imagem anterior não lê
+   os cursores que os integradores guardaram.
+3. Para voltar o modo, `INTEGRATION_FEED_ORDER=id`: o cursor `v2` continua
+   aceito e é lido pelo id do evento, como no F2-04. Um cursor antigo que
+   chega com o modo `commit` é convertido (o contador
+   `feed.legacy_conversions` da `ops_sample`), sem pular nada.
+
+Um cursor `v2` de outra época (um PITR, um promote, um restore lógico) é
+convertido pelo piso dele, e os eventos desde então vão de novo: o alerta
+[feed-epoch-conversion](./runbooks/feed-epoch-conversion.md) avisa para
+falar com os clientes. Um INSERT em `delivery_event` mais de 240 s depois
+do início da transação é recusado (`TJ001`,
+[runbook](./runbooks/delivery-event-writer-bound.md)): é o que mantém o
+piso do feed seguro.
+
 ### Quando o Swarm desiste de um serviço
 
 Nenhuma Application tem limite de tentativas (`MaxAttempts: 0`). Se uma
@@ -4444,6 +4482,7 @@ mais abaixo, é o resumo.
 | `Geocodificação: N consultas hoje`                    | ver o gasto do dia por escopo em `provider_quota_day` e corrigir `LOCATIONIQ_DAILY_QUOTA` ou os orçamentos pela tabela da decisão D40 ([runbook](./runbooks/geocoding-quota-high.md))                                     |
 | `Feed da integração: o maior txid`                    | um restore lógico num cluster novo sem o `pg_resetwal -e`: API em 0 réplicas, a época certa e o `pg_resetwal` com o Database parado ([runbook](./runbooks/feed-txid-regressed.md))                                        |
 | `Época do cluster`                                    | um PITR, um promote ou um cluster novo que a etapa de release ainda não viu: **Deploy** na `trajetto-api-migrate` (ou _Run workflow_ com `force_release`) ([runbook](./runbooks/cluster-epoch-stale.md))                  |
+| `Feed da integração: N cursor(es) de outra época`     | esperado logo depois de um PITR, promote ou restore: avisar os clientes de polling que um trecho de eventos veio de novo e deve ser deduplicado pelo `id` ([runbook](./runbooks/feed-epoch-conversion.md))                |
 
 Para trocar uma variável: _Environment_ da Application → **Save** →
 **Deploy** (salvar sozinho não reinicia o contêiner).

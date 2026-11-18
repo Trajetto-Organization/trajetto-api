@@ -4126,6 +4126,30 @@ OpenStreetMap são recusados.
   descartável desliga os gatilhos da sessão com
   `session_replication_role = replica`. Runbook:
   [delivery-event-writer-bound](./runbooks/delivery-event-writer-bound.md).
+- **Feed pela ordem de commit** (plano de escala F2-05, com
+  `INTEGRATION_FEED_ORDER=commit`; `id` por padrão, o caminho antigo): o
+  `/integration/v1/events` anda por `(COALESCE(txid, 0), id)` no índice
+  `delivery_event_feed_idx` e serve só `txid` abaixo do `xmin` do snapshot
+  (`pg_snapshot_xmin(pg_current_snapshot())`): toda transação até o último
+  `txid` servido já terminou, e um evento que confirma tarde cai sempre
+  depois do cursor. O cursor é o `v2.<época>.<txid>.<id>.<piso>` do F2-04,
+  agora emitido (`src/modules/integration/commit-order.ts`); o histórico de
+  antes da coluna (`txid` nulo, lido como 0) vem primeiro, em ordem de id e
+  sem piso. São três leituras curtas: a época com o `xmin`, as chaves da
+  página e as linhas pelo id, com o mesmo `select` do caminho antigo. Um
+  cursor antigo (o id) ou de outra época (`cluster_epoch`, U-14) é
+  convertido, nunca recusado: recomeça no menor `txid` dos eventos que
+  podem não ter sido vistos (os de id acima do cursor antigo; os do piso
+  em diante, na outra época), ou no `xmin` se for menor. As duas conversões
+  repetem eventos e nunca pulam, e o contrato público manda deduplicar pelo
+  `id`; a de época conta em `feed.epoch_conversions` da `ops_sample` e
+  alerta `feed-epoch-conversion`. `resume_cursor` (onde a próxima consulta
+  começa, também na última página) e o `sync_watermark` do `/deliveries` e
+  do `/routes` (a leitura menos `SYNC_WATERMARK_MARGIN_MS`, o
+  `updated_since` da próxima sincronização) saem nos dois modos. O `xmin` é
+  do cluster inteiro: uma transação aberta em qualquer banco segura o feed
+  (atrasa, não pula), por isso o E2E de duas conexões
+  (`integration-feed-commit-order`) roda na fase de um arquivo por vez.
 - **WhatsApp (Meta Cloud API)**: cada mensagem tem o seu modelo de
   utilidade em `pt_BR` (plano de 02/11/2026, B1/B2): 17 internos, um por
   evento e público (`src/shared/notifications/whatsapp-templates.ts`), e 4 ao

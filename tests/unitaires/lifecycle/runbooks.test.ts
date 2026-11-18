@@ -169,6 +169,8 @@ function everyRuleBroken(): OperationalSnapshot[] {
         },
         current: { systemIdentifier: "7300000000000000001", timeline: 2 },
       },
+      // And an integrator's cursor from before it, converted (F2-05).
+      feedEpochConversions: 1,
     },
     {
       ...healthy(),

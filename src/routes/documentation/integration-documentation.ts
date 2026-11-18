@@ -160,6 +160,25 @@ const cursorPage = <T extends z.ZodType>(item: T) =>
       ),
   });
 
+/** /deliveries and /routes: the page plus the next sync's starting point. */
+const syncedPage = <T extends z.ZodType>(item: T) =>
+  cursorPage(item).extend({
+    sync_watermark: responseDateTime().describe(
+      "O `updated_since` da próxima sincronização: o instante desta leitura menos uma margem de 2 minutos, que cobre uma gravação que confirma durante a leitura e a diferença entre relógios. Guarde o da PRIMEIRA página da varredura (um documento de uma página já lida que muda no meio da varredura fica acima dele). O que vier de novo na próxima por causa da sobreposição, deduplique pelo `id`, ficando com o `updated_at` mais recente.",
+    ),
+  });
+
+/** /events: the page plus where the next poll starts, last page included. */
+const eventPage = <T extends z.ZodType>(item: T) =>
+  cursorPage(item).extend({
+    resume_cursor: z
+      .string()
+      .nullable()
+      .describe(
+        "Onde a próxima consulta começa, também na última página: guarde-o e passe em `cursor` quando voltar a perguntar. Depois de ler uma página com `next_cursor`, ele é o mesmo cursor. Nulo só sem `cursor` e sem evento a ler.",
+      ),
+  });
+
 /** `?businessId=`, which only a MASTER sends; the tenant check refuses others. */
 const businessQuery = z.object({
   businessId: z
@@ -185,14 +204,14 @@ const integrationSchemas = {
 };
 
 const integrationResponses = {
-  deliveryPage: cursorPage(publicDelivery),
+  deliveryPage: syncedPage(publicDelivery),
   delivery: publicDelivery,
   deliveryCancellation: publicDeliveryCancellation,
 
-  routePage: cursorPage(publicRoute),
+  routePage: syncedPage(publicRoute),
   route: publicRoute,
 
-  eventPage: cursorPage(
+  eventPage: eventPage(
     z.object({
       id: z.string(),
       topic: z.string(),

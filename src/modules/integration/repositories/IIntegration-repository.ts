@@ -78,7 +78,14 @@ interface IIntegrationRepository {
       occurred_at: string;
       delivery: { id: string; code: string | null; invoice_key: string | null };
       data: Record<string, unknown>;
-    }>
+    }> & {
+      /**
+       * Where the next poll starts, also on the last page (F2-05): the
+       * position after the last event read, or where this page began when
+       * it read none. Null only without a cursor and with nothing to read.
+       */
+      resume_cursor: string | null;
+    }
   >;
 
   /**
