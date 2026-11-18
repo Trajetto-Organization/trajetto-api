@@ -207,6 +207,25 @@ async function collectOperationalSnapshot(
     null,
   );
 
+  // The durable jobs (F3-22): the oldest due PENDING job, on the partial
+  // background_job_due_idx ("availableAt") WHERE status IN ('PENDING',
+  // 'PROCESSING'), a range that stops at now().
+  const jobEligibleLagSec = await part(
+    "background_job",
+    errors,
+    async () => {
+      const [row] = await database.$queryRaw<Array<{ lag: number | null }>>`
+        SELECT EXTRACT(EPOCH FROM (now() - MIN("availableAt")))::float AS lag
+        FROM "background_job"
+        WHERE "status" IN ('PENDING', 'PROCESSING')
+          AND "status" = 'PENDING' AND "availableAt" <= now()
+      `;
+
+      return row?.lag ?? null;
+    },
+    null,
+  );
+
   // Newest first, on the partial notification_delivery_failed_idx
   // ("updated_at", "channel") WHERE status = 'FAILED': a range on its
   // leading column that stops at the sample.
@@ -556,6 +575,7 @@ async function collectOperationalSnapshot(
     deliveryEligibleLagSec,
     webhookDueLagSec,
     aiEligibleLagSec,
+    jobEligibleLagSec,
     deliveryFailures,
     aiCredentialFailures,
     aiProviderPausedRequests,

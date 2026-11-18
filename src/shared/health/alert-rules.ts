@@ -56,6 +56,13 @@ interface OperationalSnapshot {
   /** Oldest PENDING AI analysis already due. */
   aiEligibleLagSec: number | null;
 
+  /**
+   * Oldest PENDING durable job already due (plano-escala F3-22): a job of
+   * background_job nobody claimed. Absent when the collector did not read
+   * it, which judges nothing.
+   */
+  jobEligibleLagSec?: number | null;
+
   /** Deliveries that gave up recently (the collector's window), newest first. */
   deliveryFailures: Array<{ channel: string; lastError: string | null }>;
 
@@ -313,6 +320,14 @@ const DEFAULT_ALERT_THRESHOLDS = {
   aiLagSec: 15 * 60,
 
   /**
+   * A durable job due and unclaimed (F3-22, the job-overdue rule): the
+   * worker's sweep is 2 s and the role all's 30 s, and a job's lease runs
+   * out within 2 min of its process dying; ten minutes is a queue that
+   * nobody runs, or a kind no process has a handler for.
+   */
+  jobOverdueSec: 10 * 60,
+
+  /**
    * Terminal failures of ONE channel inside the collector's window. A few
    * are customer data (a number without WhatsApp, a mailbox that is gone);
    * this many at once is the channel itself.
@@ -514,6 +529,7 @@ const ALERT_KINDS = [
   "channel-failure-burst",
   "ai-provider-paused",
   "ai-credential",
+  "job-overdue",
   "cron-lease-expired",
   "cron-partial-stuck",
   "cron-overdue",
@@ -847,6 +863,16 @@ function measuredQueues(
     ],
     ["webhooks", "Webhooks de integração", snapshot.webhookDueLagSec],
     ["ai", "Análises de IA", snapshot.aiEligibleLagSec],
+    // Only when read (F3-22): an older collector judges nothing of it.
+    ...(snapshot.jobEligibleLagSec !== undefined
+      ? [
+          [
+            "jobs",
+            "Jobs duráveis (importação, estorno, exclusão de empresa)",
+            snapshot.jobEligibleLagSec,
+          ] as [WorkerQueue, string, number | null],
+        ]
+      : []),
   ];
 }
 
@@ -1049,6 +1075,12 @@ function collectAlerts(
       "Análises de IA",
       snapshot.aiEligibleLagSec,
       thresholds.aiLagSec,
+    ),
+    lagAlert(
+      "job-overdue",
+      "Jobs duráveis (importação, estorno, exclusão de empresa)",
+      snapshot.jobEligibleLagSec ?? null,
+      thresholds.jobOverdueSec,
     ),
   );
 

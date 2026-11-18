@@ -1776,6 +1776,76 @@ model ProcessHeartbeat {
   @@map("process_heartbeat")
 }
 
+/// What a durable job does (plano-escala F3-22). A kind no process has a
+/// handler for is never claimed: it waits for the release that brings one.
+enum BackgroundJobKind {
+  SPREADSHEET_IMPORT
+  IMPORT_REVERSAL
+  TENANT_OFFBOARD
+  USER_ANONYMIZE
+  PARTITION_ARCHIVE
+  ROLLUP_BACKFILL
+}
+
+enum BackgroundJobStatus {
+  PENDING
+  PROCESSING
+  SUCCEEDED
+  FAILED
+  CANCELLED
+}
+
+/// The durable jobs of the `jobs` queue (plano-escala F3-22): claimed with
+/// the fair claim and SKIP LOCKED, leased for 120 s and renewed every 40 s,
+/// the progress written under a fence on `attempts`
+/// (src/shared/jobs/job-runner.ts). Written and read by
+/// src/shared/jobs/background-job-repository.ts only.
+model BackgroundJob {
+  /// uuid v7: time-ordered, so new rows land at the end of the index.
+  id   String            @id @default(uuid(7))
+  kind BackgroundJobKind
+
+  /// The company the job works for; null for the platform's own (an
+  /// archive, a backfill). No relation on purpose: a company's purge is a
+  /// job that outlives the company.
+  businessId String?
+
+  /// The domain record the job works on (the upload, the user, the
+  /// company): one live job per kind and subject.
+  subjectId String?
+
+  status         BackgroundJobStatus @default(PENDING)
+  availableAt    DateTime            @default(now())
+  attempts       Int                 @default(0)
+  maxAttempts    Int                 @default(5)
+  leaseExpiresAt DateTime?
+
+  /// The process holding the lease (its heartbeat replica), for the logs.
+  leaseOwner String?
+
+  /// The cursor the job resumes from, written under the fence.
+  progress Json?
+
+  /// What the job was asked to do; never a secret.
+  payload Json @default("{}")
+
+  lastError String?
+
+  created_at  DateTime  @default(now())
+  updated_at  DateTime  @default(now()) @updatedAt
+  finished_at DateTime?
+
+  // Raw SQL, not declared here (Prisma cannot express a partial index;
+  // 20261119100000_background_job):
+  // background_job_fair_idx ("businessId", "availableAt") and
+  // background_job_due_idx ("availableAt"), both WHERE status IN
+  // ('PENDING', 'PROCESSING'), for the claim; and the unique
+  // background_job_live_subject_key ("kind", "subjectId") over the same
+  // statuses, one live job per subject.
+  @@index([status, finished_at])
+  @@map("background_job")
+}
+
 /// The hourly cost of the top statements (plano-escala F1-12): the
 /// difference of pg_stat_statements' cumulative counters between two hourly
 /// readings, for the 200 most expensive statements of the hour, by role.

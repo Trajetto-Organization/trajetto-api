@@ -1416,6 +1416,20 @@ const envSchema = z
       z.coerce.number().int().min(31).max(3_650).default(90),
     ),
 
+    // The durable jobs' retention (plano-escala F3-22): days a finished
+    // background_job row is kept, counted from when it ended, before the
+    // nightly cleanup-background-jobs removes it. A success is only the
+    // trace of what ran (30); a failure is what somebody comes back to read
+    // (90). The job's own record (the upload, the company) keeps its trail.
+    BACKGROUND_JOB_SUCCEEDED_RETENTION_DAYS: z.preprocess(
+      (value) => (value === "" ? undefined : value),
+      z.coerce.number().int().min(1).max(3_650).default(30),
+    ),
+    BACKGROUND_JOB_FAILED_RETENTION_DAYS: z.preprocess(
+      (value) => (value === "" ? undefined : value),
+      z.coerce.number().int().min(1).max(3_650).default(90),
+    ),
+
     // The bell's retention (plano-escala F5-14): days a read notification
     // and an unread one are kept before the nightly cleanup-user-history
     // removes them, as the job always did (90 and 180). An env so the

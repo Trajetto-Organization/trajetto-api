@@ -91,6 +91,10 @@ import {
   ProviderQuotaRepository,
   type IProviderQuotaRepository,
 } from "@/shared/services/provider-quota/provider-quota-repository";
+import {
+  BackgroundJobRepository,
+  type IBackgroundJobRepository,
+} from "@/shared/jobs/background-job-repository";
 
 import { ChatRepository } from "@/modules/chat/repositories/chat-repository";
 import { IChatRepository } from "@/modules/chat/repositories/IChat-repository";
@@ -366,6 +370,13 @@ container.registerSingleton<IDeliveryGeocodingRepository>(
 container.registerSingleton<IProviderQuotaRepository>(
   "ProviderQuotaRepository",
   ProviderQuotaRepository,
+);
+
+// The durable jobs' table (plano-escala F3-22): the use cases that enqueue
+// a long job (an upload, a large undo, a company's purge) take it here.
+container.registerSingleton<IBackgroundJobRepository>(
+  "BackgroundJobRepository",
+  BackgroundJobRepository,
 );
 
 // Separate from the route repository on purpose: a write-heavy stream

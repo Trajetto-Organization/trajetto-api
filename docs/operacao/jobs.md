@@ -34,6 +34,7 @@ Colunas:
 | `cleanup-expired-refresh-tokens`     | `src/jobs/cron`                                 | `17 3 * * *`               | todo dia              | 03:17–03:22            | sim    | hoje                           |
 | `cleanup-notification-pipeline`      | `src/jobs/cron`                                 | `30 3 * * *`               | todo dia              | 03:30–03:35            | sim    | hoje                           |
 | `cleanup-ai-pipeline`                | `src/jobs/cron`                                 | `45 3 * * *`               | todo dia              | 03:45–03:50            | sim    | hoje                           |
+| `cleanup-background-jobs`            | `src/jobs/cron`                                 | `52 3 * * *`               | todo dia              | 03:52–03:57            | sim    | onda 14                        |
 | `cleanup-user-history`               | `src/jobs/cron`                                 | `0 4 * * *`                | todo dia              | 04:00–04:05            | sim    | hoje                           |
 | `partition-maintenance`              | `src/jobs/cron`                                 | `10 4 * * *`               | todo dia              | 04:10–04:15            | sim    | onda 6                         |
 | `cleanup-webhook-deliveries`         | `src/jobs/cron`                                 | `20 4 * * *`               | todo dia              | 04:20–04:25            | sim    | hoje                           |

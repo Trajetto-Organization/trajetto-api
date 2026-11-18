@@ -6,6 +6,8 @@ import { WebhookDispatchService } from "../shared/integration/webhook-dispatch-s
 import { apiUsageRecorder } from "../shared/integration/api-usage-recorder";
 import { shutdownDeliveryGeocoding } from "../shared/delivery/geocoding/geocode-soon";
 import { closeProviderRateBucket } from "../shared/notifications/provider-rate-bucket";
+import { JobRunner } from "../shared/jobs/job-runner";
+import { registerJobHandlers } from "../shared/jobs/job-handlers";
 
 import { registerCronJobs } from "../jobs/cron";
 import { env } from "../env";
@@ -79,6 +81,13 @@ export async function initializeWorkers(): Promise<void> {
       services.push(WebhookDispatchService.getInstance().initialize());
     }
 
+    // The durable jobs (plano-escala F3-22): in the role `all` the api runs
+    // its own; in a split fleet, the worker.
+    if (consumesQueue(env, "jobs")) {
+      registerJobHandlers();
+      services.push(JobRunner.getInstance().initialize());
+    }
+
     await Promise.all(services);
 
     // The hints of the processes that enqueue without claiming (the api
@@ -93,6 +102,7 @@ export async function initializeWorkers(): Promise<void> {
         NotificationPipelineService.getInstance().wakeLane("external"),
       webhooks: () => WebhookDispatchService.getInstance().wake(),
       ai: () => AIAnalysisPipelineService.getInstance().wake(),
+      jobs: () => JobRunner.getInstance().wake(),
     });
 
     // Every replica writes where its workers were last seen, so a cycle hung
@@ -168,6 +178,10 @@ export async function shutdownWorkers(
       AIAnalysisPipelineService.getInstance().shutdown(options),
       WebhookDispatchService.getInstance().shutdown(options),
       CronSchedulerService.getInstance().shutdown(options),
+
+      // Each running job stops at its next checkpoint and goes back to the
+      // queue; one past the deadline is left to its lease.
+      JobRunner.getInstance().shutdown(options),
 
       // Writes what it is holding on the way out — the batch most likely to
       // be the one somebody asks about right after a deploy — unless the

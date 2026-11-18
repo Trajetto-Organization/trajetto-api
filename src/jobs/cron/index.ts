@@ -21,6 +21,7 @@ import { alertRoutesLeftOpenJob } from "./alert-routes-left-open-job";
 import { snapshotQueryStatsJob } from "./snapshot-query-stats-job";
 import { purgeOpsSeriesJob } from "./purge-ops-series-job";
 import { cleanupDeliveryEventSubmissionsJob } from "./cleanup-delivery-event-submissions-job";
+import { cleanupBackgroundJobsJob } from "./cleanup-background-jobs-job";
 
 /**
  * It records all the application's cron jobs.
@@ -36,6 +37,10 @@ function registerCronJobs(): void {
 
   scheduler.registerJob(cleanupAIPipelineJob);
   scheduler.registerJob(cleanupUserHistoryJob);
+
+  // Finished durable jobs past their retention (plano-escala F3-22): 30
+  // days a success, 90 a failure.
+  scheduler.registerJob(cleanupBackgroundJobsJob);
 
   // Settled webhook rows past the replay window (+1 day of grace).
   scheduler.registerJob(cleanupWebhookDeliveriesJob);

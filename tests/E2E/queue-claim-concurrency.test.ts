@@ -68,7 +68,8 @@ type QueueTable =
   | "webhook_delivery"
   | "domain_outbox_event"
   | "notification_delivery"
-  | "ai_analysis_request";
+  | "ai_analysis_request"
+  | "background_job";
 
 /**
  * Locks `ids` in a transaction on the holder connection and keeps them locked
@@ -203,6 +204,7 @@ beforeEach(async () => {
   await prisma.notificationDelivery.deleteMany({});
   await prisma.domainOutboxEvent.deleteMany({});
   await prisma.aIAnalysisRequest.deleteMany({});
+  await prisma.backgroundJob.deleteMany({});
 });
 
 afterAll(async () => {
@@ -693,6 +695,107 @@ describe("ai_analysis_request", () => {
           where: { id: period.id },
         }),
       ).toMatchObject({ reservedUnits: 0, consumedUnits: REQUESTS });
+    },
+  );
+});
+
+// ---------------------------------------------------------------------------
+// background_job (plano-escala F3-22)
+// ---------------------------------------------------------------------------
+
+describe("background_job", () => {
+  /** `count` due jobs, each of its own company (one per company per claim). */
+  async function queueJobs(count: number): Promise<string[]> {
+    const ids: string[] = [];
+
+    for (let index = 0; index < count; index += 1) {
+      const job = await prisma.backgroundJob.create({
+        data: {
+          kind: "SPREADSHEET_IMPORT",
+          businessId: `018fd000-0000-7000-8000-${String(index).padStart(12, "0")}`,
+          payload: { index },
+        },
+      });
+
+      ids.push(job.id);
+    }
+
+    return ids;
+  }
+
+  async function runners(count: number, ran: string[]) {
+    const { JobRunner } = await import("@/shared/jobs/job-runner");
+    const { BackgroundJobRepository } =
+      await import("@/shared/jobs/background-job-repository");
+
+    return Array.from({ length: count }, (_, index) => {
+      const runner = new JobRunner({
+        store: new BackgroundJobRepository(prisma),
+        sweepIntervalMs: 60_000,
+        owner: () => `replica-${index}`,
+      });
+
+      runner.register("SPREADSHEET_IMPORT", {
+        run: async (job) => {
+          ran.push(job.id);
+          // Long enough for the other replicas to claim beside it.
+          await new Promise((resolve) => setTimeout(resolve, 20));
+        },
+      });
+
+      return runner;
+    });
+  }
+
+  it(
+    "skips the jobs another replica holds and runs the rest",
+    { timeout: 60_000 },
+    async () => {
+      const ids = await queueJobs(6);
+      const held = ids.slice(0, 2);
+      const ran: string[] = [];
+      const [runner] = await runners(1, ran);
+
+      const release = await holdRows("background_job", held);
+
+      try {
+        await withinBudget(runner.processBatch(), "a fila de jobs duráveis");
+
+        expect(ran.sort()).toEqual(ids.slice(2).sort());
+
+        const heldRows = await prisma.backgroundJob.findMany({
+          where: { id: { in: held } },
+        });
+
+        expect(heldRows.map((row) => `${row.status}:${row.attempts}`)).toEqual(
+          held.map(() => "PENDING:0"),
+        );
+      } finally {
+        await release();
+      }
+    },
+  );
+
+  it(
+    "is drained by three replicas at once with every job run exactly once",
+    { timeout: 90_000 },
+    async () => {
+      const ids = await queueJobs(30);
+      const ran: string[] = [];
+
+      await Promise.all(
+        (await runners(3, ran)).map((runner) => runner.processBatch()),
+      );
+
+      // A replica whose claim came back short stops; whatever is left is
+      // drained by another pass, never twice.
+      for (const runner of await runners(1, ran)) await runner.processBatch();
+
+      expect(ran.length).toBe(ids.length);
+      expect(new Set(ran).size).toBe(ids.length);
+      expect(
+        await prisma.backgroundJob.count({ where: { status: "SUCCEEDED" } }),
+      ).toBe(ids.length);
     },
   );
 });
