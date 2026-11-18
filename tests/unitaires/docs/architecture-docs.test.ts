@@ -1010,6 +1010,37 @@ describe("claims the docs make about the code", () => {
     expect(readme).toMatch(/\]\(\.\/docs\/arquitetura-tour\.md\)/);
     expect(architecture).toMatch(/\]\(\.\/arquitetura-tour\.md\)/);
   });
+
+  // ADR 0004 left splitting the workers from the HTTP to a measured
+  // trigger. On 15/11/2026 the owner decided to write all the scale code
+  // now: ADR 0012 replaced it, and the roles' code ships inert until the
+  // owner creates each Application. A doc still saying the code waits for
+  // a trigger tells the next reader the roles do not exist. The broker
+  // stays trigger-only (ADR 0001): a paragraph about it may say so.
+  it("do not say the roles' code waits for a measured trigger (ADR 0012)", () => {
+    const adr = read(join(ROOT, "docs/adr/0004-workers-no-mesmo-processo.md"));
+
+    expect(existsSync(join(ROOT, "docs/adr/0012-papeis-de-processo.md"))).toBe(
+      true,
+    );
+    expect(adr).toMatch(
+      /\*\*Status:\*\* substituído pelo \[ADR 0012\]\(\.\/0012-papeis-de-processo\.md\)/,
+    );
+
+    for (const name of [
+      "README.md",
+      "docs/deploy.md",
+      "docs/adr/README.md",
+      "docs/adr/0012-papeis-de-processo.md",
+    ]) {
+      const stale = read(join(ROOT, name))
+        .split(/\n\s*\n|\n(?=\s*(?:[-*]|\d+\.)\s)|\n(?=\|)|\n(?=#)/)
+        .filter((chunk) => /só\s+por\s+gatilho/i.test(chunk))
+        .filter((chunk) => !/broker/i.test(chunk));
+
+      expect(stale, name).toEqual([]);
+    }
+  });
 });
 
 /** `![label](https://img.shields.io/badge/<label>-<version>-<color>…)` */

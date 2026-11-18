@@ -4330,7 +4330,8 @@ papel `all`, a produção de hoje: uma Application `trajetto-api` faz tudo)
 ou separados, cada um com o próprio _Environment_, teto, réplicas e tag
 (`<tag>-<papel>`). O código de todos os papéis já está na imagem; separar
 é decisão de capacidade, e cada Application nasce quando a régua da
-[seção 23](#23-recursos-da-vps-e-logs) deixa. Sem a Application de um
+[seção 23](#23-recursos-da-vps-e-logs) deixa
+([ADR 0012](./adr/0012-papeis-de-processo.md)). Sem a Application de um
 papel, nada muda. Em qualquer papel, as filas no Postgres são
 reivindicadas com `FOR UPDATE SKIP LOCKED` e lease, e os crons têm uma
 execução por horário graças a um lease no banco: N processos não duplicam

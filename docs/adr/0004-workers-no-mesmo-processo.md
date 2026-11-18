@@ -1,6 +1,10 @@
 # ADR 0004 — Workers no mesmo processo da API
 
-- **Status:** aceito. ADR da fase final.
+- **Status:** substituído pelo [ADR 0012](./0012-papeis-de-processo.md) em
+  18/11/2026 (plano de escala, onda 12). Era um ADR aceito da fase final, e
+  o texto abaixo fica como o registro da decisão de antes: a separação
+  deixou de esperar um gatilho medido para o código, e cada papel virou uma
+  Application da mesma imagem.
 - **Escopo:** `trajetto-api`.
 - **Origem deste arquivo:** o texto integral ficava na pasta `docs/` da raiz
   do workspace, que não é versionada e está vazia. Este arquivo foi
@@ -25,8 +29,9 @@ papéis, mas **só por gatilho medido**.
 
 ## Quando separar
 
-Os gatilhos estão em
-[`deploy.md` → Criar a Application de um papel](../deploy.md#criar-a-application-de-um-papel):
+Os gatilhos ficavam na seção _Separar os workers do HTTP_ do `deploy.md`,
+que deu lugar ao guia dos papéis
+([`deploy.md` → Criar a Application de um papel](../deploy.md#criar-a-application-de-um-papel)):
 
 - espera no pool visível em `/health/metrics` (`runtime.prisma_pool`) nos
   horários de dreno;

@@ -14,20 +14,21 @@ nesses arquivos.
 
 ## Índice
 
-| ADR                                                | Decisão                                                                  | Status                         |
-| -------------------------------------------------- | ------------------------------------------------------------------------ | ------------------------------ |
-| [0001](./0001-filas-e-mensageria.md)               | O Postgres é a fila; nenhum broker, só por gatilho medido                | aceito (revisto em 28/10/2026) |
-| [0002](./0002-redis-descartavel.md)                | Redis descartável: só chaves que podem sumir, nunca fonte de verdade     | aceito (adendo de 10/11/2026)  |
-| [0003](./0003-outbox-transacional.md)              | Outbox transacional: o evento nasce na transação do dado                 | aceito                         |
-| [0004](./0004-workers-no-mesmo-processo.md)        | Workers no mesmo processo da API, separáveis por flag com a mesma imagem | aceito                         |
-| [0005](./0005-retentativa-backoff-dead-letter.md)  | Retentativa com backoff, dead letter e reenvio por id                    | aceito                         |
-| [0006](./0006-idempotencia-de-efeitos-externos.md) | Idempotência de efeitos externos; na dúvida, guardar o objeto            | aceito                         |
-| [0007](./0007-tempo-real-at-most-once.md)          | Tempo real distribuído no máximo uma vez; a verdade está no banco        | aceito                         |
-| [0008](./0008-escala-horizontal.md)                | Escala horizontal com réplicas idênticas, sem cookie sticky              | aceito                         |
-| [0009](./0009-comprovante-publico-por-token.md)    | Comprovante público por token com prazo                                  | aceito                         |
-| [0010](./0010-ia-local.md)                         | IA local (OCR em CPU, `trajetto-ai`); o provedor externo saiu            | aceito                         |
-| [0011](./0011-orm-prisma-6-7-8.md)                 | ORM: Prisma 7.10.1 com adapter-pg (go na 2ª tentativa); o 8 não saiu     | aceito                         |
-| [0014](./0014-filas-particionadas.md)              | As quatro filas particionadas por dia, pelo id, a tabela de hoje legada  | aceito                         |
+| ADR                                                | Decisão                                                                  | Status                                 |
+| -------------------------------------------------- | ------------------------------------------------------------------------ | -------------------------------------- |
+| [0001](./0001-filas-e-mensageria.md)               | O Postgres é a fila; nenhum broker, só por gatilho medido                | aceito (revisto em 28/10/2026)         |
+| [0002](./0002-redis-descartavel.md)                | Redis descartável: só chaves que podem sumir, nunca fonte de verdade     | aceito (adendos de 10/11 e 18/11/2026) |
+| [0003](./0003-outbox-transacional.md)              | Outbox transacional: o evento nasce na transação do dado                 | aceito                                 |
+| [0004](./0004-workers-no-mesmo-processo.md)        | Workers no mesmo processo da API, separáveis por flag com a mesma imagem | substituído pelo 0012 em 18/11/2026    |
+| [0005](./0005-retentativa-backoff-dead-letter.md)  | Retentativa com backoff, dead letter e reenvio por id                    | aceito                                 |
+| [0006](./0006-idempotencia-de-efeitos-externos.md) | Idempotência de efeitos externos; na dúvida, guardar o objeto            | aceito                                 |
+| [0007](./0007-tempo-real-at-most-once.md)          | Tempo real distribuído no máximo uma vez; a verdade está no banco        | aceito                                 |
+| [0008](./0008-escala-horizontal.md)                | Escala horizontal com réplicas idênticas, sem cookie sticky              | aceito (adendo de 18/11/2026)          |
+| [0009](./0009-comprovante-publico-por-token.md)    | Comprovante público por token com prazo                                  | aceito                                 |
+| [0010](./0010-ia-local.md)                         | IA local (OCR em CPU, `trajetto-ai`); o provedor externo saiu            | aceito                                 |
+| [0011](./0011-orm-prisma-6-7-8.md)                 | ORM: Prisma 7.10.1 com adapter-pg (go na 2ª tentativa); o 8 não saiu     | aceito                                 |
+| [0012](./0012-papeis-de-processo.md)               | Papéis de processo: uma imagem, uma Application por papel                | aceito em 18/11/2026                   |
+| [0014](./0014-filas-particionadas.md)              | As quatro filas particionadas por dia, pelo id, a tabela de hoje legada  | aceito                                 |
 
 ## Outras decisões registradas
 

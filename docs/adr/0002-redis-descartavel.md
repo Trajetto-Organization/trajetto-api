@@ -1,8 +1,9 @@
 # ADR 0002 — Redis descartável
 
 - **Status:** aceito. ADR da fase final, ampliado depois sem mudar a regra
-  (veja _Os usos de hoje_) e com o adendo de 10/11/2026 (as chaves do
-  geocodificador e o cache da busca de endereço).
+  (veja _Os usos de hoje_), com o adendo de 10/11/2026 (as chaves do
+  geocodificador e o cache da busca de endereço) e o de 18/11/2026 (o canal
+  do despertar entre processos, [ADR 0012](./0012-papeis-de-processo.md)).
 - **Escopo:** `trajetto-api`.
 - **Origem deste arquivo:** o texto integral ficava na pasta `docs/` da raiz
   do workspace, que não é versionada e está vazia. Este arquivo foi
@@ -20,20 +21,22 @@ aberto, e o pub/sub do adapter do Socket.IO entre réplicas.
 
 ## Os usos de hoje
 
-Os quatro últimos vieram depois do texto original e seguem a mesma regra:
-chave curta e expiração própria. O intervalo do "esqueci minha senha" e as
-fotos falham aberto, como o rate limit. O ticket de socket e o geocodificador
+Os cinco últimos vieram depois do texto original e seguem a mesma regra:
+chave curta e expiração própria, ou mensagem que não fica guardada. O
+intervalo do "esqueci minha senha" e as fotos falham aberto, como o rate
+limit, e o despertar só perde velocidade (veja o adendo de 18/11/2026). O ticket de socket e o geocodificador
 falham fechado: sem Redis, a web não abre socket novo e nada é perguntado ao
 provedor (veja o adendo de 10/11/2026, abaixo).
 
-| Uso                                                | Onde                                                                                                                                                                      | Sem Redis                                                                                                                                   |
-| -------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
-| rate limit (HTTP, handshake, chave de API)         | `src/http.ts` (`skipOnError: true`), `src/shared/socket/handshake-rate-limit.ts`, `src/shared/integration/integration-rate-guard.ts`                                      | o pedido passa sem limite                                                                                                                   |
-| pub/sub do Socket.IO                               | `src/shared/socket/adapter-redis.ts`                                                                                                                                      | cada réplica só alcança os próprios sockets                                                                                                 |
-| tickets de socket da web (30 s, uso único)         | `src/shared/socket/socket-ticket.ts`; o Redis guarda só o hash                                                                                                            | a web não abre socket novo; o resto funciona                                                                                                |
-| intervalo de 60 s do "esqueci minha senha"         | `src/shared/security/mail-cooldown.ts` (`SET NX EX`, chave = HMAC do e-mail)                                                                                              | o e-mail sai                                                                                                                                |
-| fotos curtas de leituras da plataforma             | `src/shared/cache/snapshot-cache.ts`: prontidão dos provedores (30 s, ou 5 s com provedor transitório) e o dashboard global do MASTER (60 s)                              | cada réplica calcula a sua                                                                                                                  |
-| geocodificador e busca de endereço (`geocoding:*`) | `src/shared/delivery/geocoding/geocoding-keys.ts` (as chaves), `geocoding-gate.ts`, `geocoding-budget.ts` e `src/shared/services/address-search/address-search-limits.ts` | nada é perguntado ao provedor (falha fechada): a entrega espera o próximo minuto, a busca responde 503 e o clique no mapa continua gravando |
+| Uso                                                            | Onde                                                                                                                                                                      | Sem Redis                                                                                                                                   |
+| -------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| rate limit (HTTP, handshake, chave de API)                     | `src/http.ts` (`skipOnError: true`), `src/shared/socket/handshake-rate-limit.ts`, `src/shared/integration/integration-rate-guard.ts`                                      | o pedido passa sem limite                                                                                                                   |
+| pub/sub do Socket.IO                                           | `src/shared/socket/adapter-redis.ts`                                                                                                                                      | cada réplica só alcança os próprios sockets                                                                                                 |
+| tickets de socket da web (30 s, uso único)                     | `src/shared/socket/socket-ticket.ts`; o Redis guarda só o hash                                                                                                            | a web não abre socket novo; o resto funciona                                                                                                |
+| intervalo de 60 s do "esqueci minha senha"                     | `src/shared/security/mail-cooldown.ts` (`SET NX EX`, chave = HMAC do e-mail)                                                                                              | o e-mail sai                                                                                                                                |
+| fotos curtas de leituras da plataforma                         | `src/shared/cache/snapshot-cache.ts`: prontidão dos provedores (30 s, ou 5 s com provedor transitório) e o dashboard global do MASTER (60 s)                              | cada réplica calcula a sua                                                                                                                  |
+| despertar entre processos (`<SOCKET_ADAPTER_KEY>:wake:<fila>`) | `src/shared/wake/wake-bus.ts` e `wake-listener.ts`, pelo cliente de `src/shared/redis/pubsub-redis.ts`                                                                    | o trabalho espera a varredura da fila (2 s no `worker`)                                                                                     |
+| geocodificador e busca de endereço (`geocoding:*`)             | `src/shared/delivery/geocoding/geocoding-keys.ts` (as chaves), `geocoding-gate.ts`, `geocoding-budget.ts` e `src/shared/services/address-search/address-search-limits.ts` | nada é perguntado ao provedor (falha fechada): a entrega espera o próximo minuto, a busca responde 503 e o clique no mapa continua gravando |
 
 Fora do cache da busca de endereço (adendo de 10/11/2026), nenhum dado de
 empresa nem de pessoa entra em cache. A trava de senha por conta fica no
@@ -111,6 +114,37 @@ e a busca) rodam sob um prefixo próprio por execução
 `tests/unitaires/delivery/geocoding-keys.test.ts` prova que a produção
 continua no prefixo compartilhado.
 
+## Adendo de 18/11/2026: o canal do despertar entre processos
+
+Com os papéis de processo ([ADR 0012](./0012-papeis-de-processo.md)), quem
+grava trabalho numa fila deixa de ser quem a consome: a `api` publica um
+evento, e o `worker` o expande. Para o worker não esperar a varredura, quem
+gravou avisa pelo pub/sub do Redis (plano de escala F3-04). A regra deste
+ADR continua valendo:
+
+- **é uma dica, não a fila.** O trabalho já está no Postgres quando o aviso
+  sai (depois do commit). Perdido (Redis fora, assinatura caindo), ele custa
+  a varredura: 2 s num `worker`. Nenhum estado de negócio passa pelo
+  Redis;
+- **o canal é `<SOCKET_ADAPTER_KEY>:wake:<fila>`**, fora dos padrões que o
+  adapter do Socket.IO assina: o adapter nunca lê uma dica, e uma dica
+  nunca chega a um socket. O `SOCKET_ADAPTER_KEY` separa dois ambientes
+  que dividam um Redis, como no adapter;
+- **o corpo é a réplica de quem publicou** (e a versão da mensagem): nunca
+  uma empresa, uma linha ou um id. Cem milissegundos juntam uma rajada num
+  aviso só. No papel `all` (a produção de hoje), o processo que grava
+  consome tudo e se acorda sozinho: nenhum PUBLISH;
+- **o cliente é o do pub/sub** (`src/shared/redis/pubsub-redis.ts`): com
+  `PUBSUB_REDIS_URL`, o adapter e as dicas vão juntos para um Redis só
+  deles, também descartável; sem ela, ficam na `REDIS_URL`. Quando a
+  assinatura volta depois de uma queda, quem escuta acorda todas as filas
+  uma vez;
+- **a readiness não olha o despertar**, como não olha o Redis.
+
+Nada muda na persistência (RDB e AOF desligados) nem no backup. Prova:
+`tests/unitaires/wake/wake-bus.test.ts` e o despertar entre réplicas de
+`tests/E2E/process-roles-replicas.test.ts`.
+
 ## Fontes
 
 - [`arquitetura.md` → Redis e tempo real](../arquitetura.md#redis-e-tempo-real)
@@ -121,3 +155,5 @@ continua no prefixo compartilhado.
 - Adendo de 10/11/2026: [`arquitetura.md` → Busca de endereço](../arquitetura.md#busca-de-endereço-fixar-no-mapa)
   e os comentários de `geocoding-keys.ts`, `geocoding-gate.ts`,
   `geocoding-budget.ts` e `address-search-limits.ts`.
+- Adendo de 18/11/2026: [`deploy.md` → 19. Papéis da mesma imagem](../deploy.md#19-papéis-da-mesma-imagem)
+  (Despertar entre processos) e o comentário de `src/shared/wake/wake-bus.ts`.

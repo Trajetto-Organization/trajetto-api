@@ -714,9 +714,11 @@ versão do cliente, sem segredo e sem URL assinada.
   sem sessão, lock nem fila nele; cache só das fotos curtas de plataforma do
   MASTER e das respostas da busca de endereço (por empresa, chave HMAC, valor
   cifrado, falha fechada).
-- **Workers no mesmo processo**
-  ([ADR 0004](./docs/adr/0004-workers-no-mesmo-processo.md)), separáveis com a
-  mesma imagem (`WORKERS_ENABLED=false`) só por gatilho medido.
+- **Papéis de processo**
+  ([ADR 0012](./docs/adr/0012-papeis-de-processo.md), no lugar do 0004): a
+  mesma imagem roda numa Application por papel (`PROCESS_ROLE`: `api`,
+  `worker`, `scheduler`…); sem a Application de um papel, o processo faz
+  tudo, como antes.
 - **Tempo real _at-most-once_**
   ([ADR 0007](./docs/adr/0007-tempo-real-at-most-once.md)): a verdade está no
   banco.
