@@ -414,6 +414,10 @@ function operationalSnapshotSql(since: Date): Prisma.Sql {
  * queues, the deliveries themselves and the series. A partitioned one is
  * reported once, by its root, with its partitions summed: the trail is ~90
  * daily partitions, and a row per partition would bury the number.
+ *
+ * The chat's messages too (plano-escala U-08, decision D12): kept forever
+ * unless CHAT_MESSAGE_RETENTION_DAYS says otherwise, their rows and size are
+ * what that decision is taken on.
  */
 const HOT_TABLES = [
   "driver_position",
@@ -432,6 +436,7 @@ const HOT_TABLES = [
   "route",
   "route_stop",
   "delivery_occurrence",
+  "chat_message",
   "ops_sample",
 ] as const;
 

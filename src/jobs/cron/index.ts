@@ -23,6 +23,7 @@ import { purgeOpsSeriesJob } from "./purge-ops-series-job";
 import { cleanupDeliveryEventSubmissionsJob } from "./cleanup-delivery-event-submissions-job";
 import { cleanupBackgroundJobsJob } from "./cleanup-background-jobs-job";
 import { remindBusinessPurgeJob } from "./remind-business-purge-job";
+import { purgeChatMessagesJob } from "./purge-chat-messages-job";
 
 /**
  * It records all the application's cron jobs.
@@ -49,6 +50,10 @@ function registerCronJobs(): void {
 
   // Settled webhook rows past the replay window (+1 day of grace).
   scheduler.registerJob(cleanupWebhookDeliveriesJob);
+
+  // Nightly (04:25): the chat's messages past CHAT_MESSAGE_RETENTION_DAYS,
+  // with their attachments. Opt-in: unset, it deletes nothing (U-08).
+  scheduler.registerJob(purgeChatMessagesJob);
 
   // API usage counts past 400 days (the screen reads 90): the table had no
   // bound at all (db-perf 10/2026).

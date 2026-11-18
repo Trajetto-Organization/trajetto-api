@@ -38,6 +38,7 @@ Colunas:
 | `cleanup-user-history`               | `src/jobs/cron`                                 | `0 4 * * *`                | todo dia              | 04:00–04:05            | sim    | hoje                           |
 | `partition-maintenance`              | `src/jobs/cron`                                 | `10 4 * * *`               | todo dia              | 04:10–04:15            | sim    | onda 6                         |
 | `cleanup-webhook-deliveries`         | `src/jobs/cron`                                 | `20 4 * * *`               | todo dia              | 04:20–04:25            | sim    | hoje                           |
+| `purge-chat-messages`                | `src/jobs/cron`                                 | `25 4 * * *`               | todo dia              | 04:25–04:30            | sim    | onda 14                        |
 | `cleanup-api-usage`                  | `src/jobs/cron`                                 | `35 4 * * *`               | todo dia              | 04:35–04:40            | sim    | hoje                           |
 | `purge-ops-series`                   | `src/jobs/cron`                                 | `40 4 * * *`               | todo dia              | 04:40–04:45            | sim    | hoje                           |
 | `cleanup-delivery-event-submissions` | `src/jobs/cron`                                 | `45 4 * * *`               | todo dia              | 04:45–04:50            | sim    | onda 8                         |

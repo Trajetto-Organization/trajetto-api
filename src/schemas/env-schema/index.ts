@@ -1546,6 +1546,19 @@ const envSchema = z
       z.coerce.number().int().min(30).max(3_650).default(180),
     ),
 
+    // The chat's opt-in retention (plano-escala U-08, decision D12, pending
+    // a lawyer's review): with a number, the nightly purge-chat-messages
+    // deletes the messages older than that many days, with their
+    // attachments. Unset (or empty), nothing is ever deleted: removing a
+    // customer's conversations by default would be a destructive surprise.
+    // Under 365 is refused, as for ACTIVITY_RETENTION_DAYS: a conversation
+    // is evidence of what the base told the driver, and a shorter window is
+    // far likelier a typo than a decision.
+    CHAT_MESSAGE_RETENTION_DAYS: z.preprocess(
+      (value) => (value === "" ? undefined : value),
+      z.coerce.number().int().min(365).max(3_650).optional(),
+    ),
+
     // Which node, slot and service this task is (plano-escala F4-50): the
     // container's hostname is a container id that changes every deploy and
     // names no machine, and with a second node "the slow replica" has to.
