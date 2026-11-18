@@ -234,24 +234,121 @@ isso. Em desenvolvimento, eles vão para o Ethereal.
 | Redis                                        | `docker compose ... exec redis redis-cli info stats`                                                                                                                                                          |
 | conexões WebSocket                           | **sem contador exposto hoje** — lacuna registrada junto das cenas abaixo                                                                                                                                      |
 
-Cenas que ainda não existem (auth/refresh, frota, escrita de entregas,
-upload, envio de chat, SSE de notificações, escrita da API pública, WebSocket
-em volume) estão listadas como lacuna em `docs/PENDENCIAS-DO-USUARIO.md`: as
-cinco abaixo medem leitura, a trilha de posições e o chat lido.
+Cenas que ainda não existem (frota, escrita da API pública, WebSocket em
+volume, que é o `socket-fleet` do LOAD-05) estão listadas como lacuna em
+`docs/PENDENCIAS-DO-USUARIO.md`.
 
-As quatro cenas, em ordem de utilidade:
+As cenas, em ordem de utilidade (as cinco últimas são do plano de escala,
+LOAD-03, mais abaixo):
 
-| arquivo     | pergunta                                                 |
-| ----------- | -------------------------------------------------------- |
-| `smoke.js`  | as outras três estão medindo alguma coisa real?          |
-| `load.js`   | uma hora movimentada cabe?                               |
-| `spike.js`  | a frota inteira chegando de uma vez quebra ou enfileira? |
-| `stress.js` | onde é o teto, e o que estoura primeiro?                 |
-| `soak.js`   | trinta minutos depois ainda está de pé?                  |
+| arquivo           | pergunta                                                                              |
+| ----------------- | ------------------------------------------------------------------------------------- |
+| `smoke.js`        | as outras estão medindo alguma coisa real?                                            |
+| `load.js`         | uma hora movimentada cabe?                                                            |
+| `spike.js`        | a frota inteira chegando de uma vez quebra ou enfileira?                              |
+| `stress.js`       | onde é o teto, e o que estoura primeiro?                                              |
+| `soak.js`         | trinta minutos depois ainda está de pé?                                               |
+| `write-mix.js`    | as escritas juntas (posições, sino, presign, chat, entrega e refresh) cabem?          |
+| `positions.js`    | a trilha de N motoristas, cada um com o próprio token e honrando o `nextFlushAfterMs` |
+| `tower.js`        | 50 abas da Torre de uma empresa e 500 empresas com 2 abas, no tique espalhado         |
+| `noisy-tenant.js` | uma empresa a 10× tira o p95 das outras 20 do lugar?                                  |
+| `outage.js`       | 2 min sem a API: os celulares de contrato 7 e 8 martelam a volta?                     |
 
 `smoke.js` primeiro, sempre: um teste de estresse contra uma URL que responde
 404 reporta um p95 lindo, e essa é a forma mais comum de uma suíte de carga
 mentir.
+
+### As cenas do plano de escala (LOAD-03)
+
+Cada uma grava o resumo com `--summary-export`, numa pasta montada no k6 (o
+`/load` do harness é só leitura; `tests/load/results/` fica fora do Git), e o
+aceite que compara janelas da mesma corrida sai de `lib/verdicts.mjs`, que lê
+esse JSON:
+
+```bash
+H="docker compose --env-file .env -f tests/load/compose.load.yaml --profile k6"
+R="-v $PWD/tests/load/results:/results"
+
+$H run --rm $R k6 run --summary-export /results/write-mix.json /load/write-mix.js
+$H run --rm $R k6 run --summary-export /results/positions.json /load/positions.js
+$H run --rm $R k6 run --summary-export /results/tower.json /load/tower.js
+$H run --rm $R k6 run --summary-export /results/noisy-tenant.json /load/noisy-tenant.js
+$H run --rm $R k6 run --summary-export /results/outage.json /load/outage.js
+$H run --rm $R -e SPIKE_ACCEPTANCE=true k6 run --summary-export /results/spike.json /load/spike.js
+
+node tests/load/lib/verdicts.mjs noisy-tenant tests/load/results/noisy-tenant.json
+node tests/load/lib/verdicts.mjs outage tests/load/results/outage.json
+node tests/load/lib/verdicts.mjs spike tests/load/results/spike.json
+```
+
+O seed traz o que elas pedem: o embarcador do tenant principal
+(`shipperId`), uma sessão de BUSINESS_ADMIN em cada uma de
+`LOAD_PANEL_TENANTS` outras empresas com Entregas (20 por padrão; a Torre
+pede 500, com `LOAD_TENANTS` ou um `LOAD_TIER` que tenha essas empresas) e
+`LOAD_REFRESH_SESSIONS` sessões com refresh token de verdade (200), cada uma
+de uma família, para o refresh do `write-mix.js`.
+
+- **`write-mix.js`** (`WRITE_RATE`, 40/s por `WRITE_DURATION`, 3 min): posições
+  35, a lista do sino em NDJSON (`/notification/stream`) 25, o presign de uma
+  foto do canhoto 15, uma mensagem do escritório para o motorista 13 e uma
+  entrega cadastrada no painel 12. O refresh roda num cenário próprio
+  (`WRITE_REFRESH_VUS`, 20, a cada `WRITE_REFRESH_EVERY_S`, 30 s): o refresh
+  token gira a cada uso e cada sessão é de um VU só (`exec.vu.idInTest`),
+  porque duas usando a mesma acionariam a detecção de reuso, que encerra a
+  sessão. Por isso `LOAD_REFRESH_SESSIONS` ≥ `WRITE_MAX_VUS` +
+  `WRITE_REFRESH_VUS`; o VU sem sessão própria pula e conta em
+  `refresh_sessions_missing`, que reprova.
+- **`positions.js`** (`POSITIONS_DRIVERS`, até os tokens do fixture, por
+  `POSITIONS_DURATION`, 10 min): cada VU é um motorista e faz o que o app do
+  contrato 8 faz (F2-27): manda os pontos do minuto e espera o maior entre o
+  próprio minuto e o `nextFlushAfterMs` da resposta (60, 120 ou 300 s), preso
+  em [1 min, 5 min]; uma recusa espera o backoff, nunca menos que o
+  Retry-After. O POST/s sai da frota, não do harness: os ~333 POST/s da régua
+  no 5M são vinte mil motoristas (`LOAD_PRIMARY_DRIVERS`). `POSITIONS_CONTRACT=7`
+  manda como o app antigo, sem ler a dica.
+- **`tower.js`** (`TOWER_PRIMARY_TABS` 50, `TOWER_TENANTS` 500,
+  `TOWER_TABS_PER_TENANT` 2, `TOWER_PERIOD_MS` 60000, `TOWER_DURATION` 10
+  min): cada aba lê a Torre e o sino a cada tique, no período alinhado ao
+  relógio mais um deslocamento sorteado no período inteiro (F2-29, D25). Uma
+  leitura recusada com Retry-After segura as próximas por max(Retry-After,
+  período), como o `readsHeldUntil` da web.
+- **`noisy-tenant.js`** (`NOISY_NORMALS` 20, `NOISY_TENANT_RATE` 3 leituras/s
+  por empresa, `NOISY_FACTOR` 10, `NOISY_BASELINE` 3 min, `NOISY_DURATION` 3
+  min): primeiro só as normais (`stage:baseline`), depois o tenant principal
+  a dez vezes ao lado delas (`stage:noisy`), alternando Torre, quadro e
+  rotas (3, 10 e 10 no orçamento do painel). O aceite: o p95 das normais muda
+  no máximo 10% e nenhuma leitura delas falha; com
+  `TENANT_PANEL_BUDGET_MODE=enforce` nas réplicas, o barulhento também
+  precisa receber 429 (`'{"expectThrottle":true}'` como terceiro argumento do
+  verdicts).
+- **`outage.js`** (`OUTAGE_PHONES`, `OUTAGE_CONTRACT` 7, 8 ou `mixed` com
+  `OUTAGE_CONTRACT8_SHARE` 0,9, `OUTAGE_BASE` 2 min, `OUTAGE_DOWN` 2 min,
+  `OUTAGE_AFTER` 3 min): cada VU é um celular de um contrato. O 7 reenvia com
+  o próximo fix, 15 s depois, em todos ao mesmo tempo, e despeja o acúmulo de
+  uma vez; o 8 espera o backoff com jitter e manda o acúmulo em pedaços de 200
+  pontos, de 0,5 a 2 s um do outro. Com `OUTAGE_MODE=simulated` (o padrão) a
+  queda é o `OUTAGE_URL`, uma porta fechada que recusa na hora; com
+  `external`, a cena continua mandando para a API e outra coisa a derruba na
+  janela que o setup imprime (`docker compose stop` das réplicas). O aceite
+  (com ≥ 90% de contrato 8): POST/s no máximo 1,2× a base durante a queda e
+  1,5× no primeiro minuto depois (passe `baseSeconds` e `downSeconds` ao
+  verdicts quando mudar os tempos).
+- **`spike.js`** ganhou o aceite do descarte de carga (F2-24), com
+  `SPIKE_ACCEPTANCE=true` e `SHED_MODE=enforce` nas réplicas: 0 falha de
+  produto, p95 abaixo de 1 s, nada acima de 10 s, e cada janela de calma
+  depois de uma parede (`window:recovery`, 45 e 60 s) de volta abaixo de 1 s.
+  Sem a variável, ficam os limiares medidos de sempre.
+
+Duas mudanças de régua valem para todas as cenas desde 17/11/2026:
+
+- uma recusa 429 ou 503 **com Retry-After** é uma resposta, em qualquer
+  superfície: conta em `surface_throttled` ou `surface_shed`, nunca em
+  `surface_failures` (`record` em `lib/api.js`). Antes só as três superfícies
+  que listavam o 429 tinham isso, e o descarte de carga fazendo o seu
+  trabalho apareceria como produto quebrando;
+- no `lib/mix.js`, as posições pesam 10 de 83 (12%), e não mais 34 (um
+  terço): ~333 POST/s de ~3.000 requisições por segundo no degrau de 5M. Um
+  número medido antes dessa data veio do mix mais pesado em posições.
 
 ## O que foi medido, e o que mudou por causa disso
 

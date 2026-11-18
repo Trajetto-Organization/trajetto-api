@@ -146,7 +146,31 @@ function executed(scenario: string): Set<string> {
   return new Set(called.map((name) => tags.get(name) ?? `?${name}`));
 }
 
-const SCENARIOS = ["smoke.js", "load.js", "stress.js", "spike.js", "soak.js"];
+const SCENARIOS = [
+  "smoke.js",
+  "load.js",
+  "stress.js",
+  "spike.js",
+  "soak.js",
+  // plano-escala LOAD-03.
+  "write-mix.js",
+  "positions.js",
+  "tower.js",
+  "noisy-tenant.js",
+  "outage.js",
+];
+
+/** The k6 scenes judged elsewhere: rolling.js by swarm-rolling-script. */
+const OTHER_SCENES = ["rolling.js"];
+
+/** The scenes plano-escala LOAD-03 added, with what their verdict reads. */
+const LOAD_03_SCENES = [
+  "write-mix.js",
+  "positions.js",
+  "tower.js",
+  "noisy-tenant.js",
+  "outage.js",
+];
 
 describe("every threshold has something to judge (LOAD-2)", () => {
   it("knows the tag of every surface", () => {
@@ -329,6 +353,90 @@ describe("the socket client the cross-replica script uses (LOAD-3)", () => {
     const { loadSocketClient } = await load();
 
     expect(typeof (await loadSocketClient())).toBe("function");
+  });
+});
+
+/**
+ * The scenes of the scale plan (LOAD-03). A scene nobody lists is a scene
+ * nobody runs: every k6 file of tests/load is here or judged elsewhere, and
+ * in the README's table. Each one prints p99 too and names in its
+ * thresholds the tagged numbers its acceptance compares, so the
+ * summary-export (`--summary-export`) carries them to lib/verdicts.mjs.
+ */
+describe("the scenes (LOAD-03)", () => {
+  const readme = read(LOAD, "README.md");
+
+  it("lists every k6 scene of the harness", () => {
+    const scenes = readdirSync(LOAD).filter((file) => file.endsWith(".js"));
+
+    expect(
+      scenes.filter(
+        (scene) => !SCENARIOS.includes(scene) && !OTHER_SCENES.includes(scene),
+      ),
+    ).toEqual([]);
+  });
+
+  it.each(SCENARIOS)("%s is in the README's table of scenes", (scene) => {
+    expect(readme).toMatch(
+      new RegExp(`\\| \`${scene.replace(".", "\\.")}\` +\\|`),
+    );
+  });
+
+  it.each(LOAD_03_SCENES)(
+    "%s summarises p99 and is run with its summary-export",
+    (scene) => {
+      expect(read(LOAD, scene)).toContain(
+        "summaryTrendStats: SUMMARY_TREND_STATS",
+      );
+      expect(readme).toContain(
+        `--summary-export /results/${scene.replace(".js", "")}.json`,
+      );
+    },
+  );
+
+  it("tags what the noisy-tenant and outage verdicts compare", () => {
+    const noisy = read(LOAD, "noisy-tenant.js");
+    const outage = read(LOAD, "outage.js");
+
+    expect(noisy).toMatch(
+      /breakdownOf\("class", \["normal", "noisy"\], "stage", \[\s*"baseline",\s*"noisy",?\s*\]\)/,
+    );
+    expect(outage).toContain("outage_attempts{stage:${stage}}");
+  });
+
+  it("gives the spike its acceptance behind SPIKE_ACCEPTANCE", () => {
+    const spike = read(LOAD, "spike.js");
+
+    expect(spike).toContain('__ENV.SPIKE_ACCEPTANCE === "true"');
+    expect(spike).toContain('surface_failures: ["rate==0"]');
+    expect(spike).toContain('surface_latency: ["p(95)<1000", "max<10000"]');
+    expect(spike).toContain(
+      '"surface_latency{window:recovery}": ["p(95)<1000"]',
+    );
+  });
+
+  it("weighs the positions in the mix by the corrected ruler (~1 request in 9)", () => {
+    const mix = read(LOAD, "lib", "mix.js");
+    const weights = [
+      ...mix.matchAll(/weight: (\d+), run: \(([^)]*)\) => surfaces\.(\w+)\(/g),
+    ];
+    const total = weights.reduce((sum, match) => sum + Number(match[1]), 0);
+    const positions = weights.find((match) => match[3] === "recordPositions");
+
+    // ~333 POST/s of ~3,000 requests a second at the 5M step: 11%.
+    const share = Number(positions?.[1]) / total;
+
+    expect(share).toBeGreaterThan(0.09);
+    expect(share).toBeLessThan(0.15);
+  });
+
+  it("never counts a refusal with Retry-After as a failure", () => {
+    const api = read(LOAD, "lib", "api.js");
+
+    expect(api).toMatch(
+      /const refused =\s*\(response\.status === 429 \|\| response\.status === 503\) &&\s*retryAfterOf\(response\) !== null;/,
+    );
+    expect(api).toContain("expected.includes(r.status) || refused");
   });
 });
 

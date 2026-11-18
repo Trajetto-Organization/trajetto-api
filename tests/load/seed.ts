@@ -7,6 +7,7 @@ import { sign } from "jsonwebtoken";
 import pg from "pg";
 
 import auth from "../../src/config/auth";
+import { issueSessionTokenPair } from "../../src/modules/user/services/session-service";
 import { ensureDefaultOccurrenceTypes } from "../../src/shared/delivery/default-occurrence-types";
 import { generateApiKey } from "../../src/shared/integration/api-key-rules";
 import {
@@ -81,6 +82,29 @@ const MANAGERS = Number(process.env.LOAD_MANAGERS ?? 50);
  * load points at, spread over the LOAD_PRIMARY_HISTORY_DAYS before today, with
  * two events each and an occurrence on one in twenty: a carrier after a season.
  */
+/**
+ * Panel sessions of OTHER companies (plano-escala LOAD-03): tower.js reads
+ * the Torre of 500 companies, two tabs each, and noisy-tenant.js needs
+ * twenty normal companies beside the noisy one. One BUSINESS_ADMIN per
+ * company, the first LOAD_PANEL_TENANTS companies with Entregas other than
+ * the primary, whether they came from this seed or from a tier's SQL.
+ */
+const PANEL_TENANTS = Math.max(
+  0,
+  Math.floor(Number(process.env.LOAD_PANEL_TENANTS ?? 20)),
+);
+
+/**
+ * Sessions with a REAL refresh token, for write-mix.js's refresh: each
+ * rotates on every refresh and belongs to one VU (the reuse detection ends
+ * a session refreshed twice with the same token). One user of the primary
+ * company, one family per session.
+ */
+const REFRESH_SESSIONS = Math.max(
+  0,
+  Math.floor(Number(process.env.LOAD_REFRESH_SESSIONS ?? 200)),
+);
+
 const PRIMARY_HISTORY = Math.max(
   0,
   Math.floor(Number(process.env.LOAD_PRIMARY_DELIVERIES ?? 0)),
@@ -109,6 +133,15 @@ interface LoadContext {
   deliveryIds: string[];
   driverIds: string[];
   routeIds: string[];
+
+  /** The primary company's shipper, for write-mix.js's delivery. */
+  shipperId: string;
+
+  /** One admin session per other company (LOAD_PANEL_TENANTS). */
+  panelTenants: Array<{ businessId: string; token: string }>;
+
+  /** Real refresh tokens, one family each (LOAD_REFRESH_SESSIONS). */
+  refreshSessions: string[];
 }
 
 /**
@@ -489,7 +522,112 @@ async function seedTenant(index: number, primary: boolean) {
     deliveryIds: deliveries.slice(0, 200).map((delivery) => delivery.id),
     driverIds,
     routeIds,
+    shipperId: shipper.id,
   };
+}
+
+/**
+ * One BUSINESS_ADMIN session in each of the first `count` companies with
+ * Entregas other than `primaryId` (LOAD_PANEL_TENANTS). Users and families
+ * in two batches: 500 companies one round trip at a time is minutes.
+ */
+async function seedPanelTenants(
+  primaryId: string,
+  count: number,
+): Promise<Array<{ businessId: string; token: string }>> {
+  if (count === 0) return [];
+
+  const companies = await prisma.$queryRaw<Array<{ id: string }>>`
+    SELECT b."id"
+    FROM "business" b
+    JOIN "business_entitlement" e
+      ON e."businessId" = b."id" AND e."module" = 'DELIVERIES' AND e."enabled"
+    WHERE b."id" <> ${primaryId}
+    ORDER BY b."id"
+    LIMIT ${count}
+  `;
+
+  const sessions = companies.map((company, index) => ({
+    businessId: company.id,
+    userId: randomUUID(),
+    familyId: randomUUID(),
+    index,
+  }));
+
+  await prisma.user.createMany({
+    data: sessions.map((session) => ({
+      id: session.userId,
+      name: `Gestora vizinha ${session.index}`,
+      email: `vizinha-${session.index}-${randomUUID()}@exemplo.com.br`,
+      password: "nao-usado",
+      role: "BUSINESS_ADMIN" as const,
+      businessId: session.businessId,
+    })),
+  });
+
+  await prisma.refreshToken.createMany({
+    data: sessions.map((session) => ({
+      userId: session.userId,
+      token_hash: randomUUID(),
+      jti: randomUUID(),
+      family_id: session.familyId,
+      expires_in: new Date(Date.now() + 12 * 60 * 60 * 1000),
+    })),
+  });
+
+  if (sessions.length < count) {
+    console.warn(
+      `[Load] LOAD_PANEL_TENANTS=${count}, mas só há ${sessions.length} outras empresas com Entregas: suba LOAD_TENANTS ou use um LOAD_TIER.`,
+    );
+  }
+
+  return sessions.map((session) => ({
+    businessId: session.businessId,
+    token: tokenFor(session.userId, session.familyId, {
+      role: "BUSINESS_ADMIN",
+      businessId: session.businessId,
+      driverId: null,
+    }),
+  }));
+}
+
+/**
+ * `count` sessions of one admin of the primary company, each with a real
+ * refresh token: signed and hashed the way a login stores it
+ * (issueSessionTokenPair), so POST /user/refresh-token rotates it.
+ */
+async function seedRefreshSessions(
+  businessId: string,
+  count: number,
+): Promise<string[]> {
+  if (count === 0) return [];
+
+  const user = await prisma.user.create({
+    data: {
+      id: randomUUID(),
+      name: "Gestora da renovação",
+      email: `renovacao-${randomUUID()}@exemplo.com.br`,
+      password: "nao-usado",
+      role: "BUSINESS_ADMIN",
+      businessId,
+    },
+  });
+
+  const pairs = Array.from({ length: count }, () =>
+    issueSessionTokenPair(user as never),
+  );
+
+  await prisma.refreshToken.createMany({
+    data: pairs.map((pair) => ({
+      userId: user.id,
+      token_hash: pair.refreshTokenHash,
+      jti: pair.refreshJti,
+      family_id: pair.familyId,
+      expires_in: pair.expiresAt,
+    })),
+  });
+
+  return pairs.map((pair) => pair.refresh_token);
 }
 
 /**
@@ -1045,9 +1183,21 @@ async function main(): Promise<void> {
 
   if (tier) await seedTier(tier);
 
+  // After the tier: its companies count for the panel sessions too.
+  const panelTenants = await seedPanelTenants(
+    primary.businessId,
+    PANEL_TENANTS,
+  );
+  const refreshSessions = await seedRefreshSessions(
+    primary.businessId,
+    REFRESH_SESSIONS,
+  );
+
   const context: LoadContext = {
     baseUrl: process.env.LOAD_BASE_URL ?? "http://host.docker.internal:3334",
     ...primary,
+    panelTenants,
+    refreshSessions,
   };
 
   mkdirSync(dirname(OUT), { recursive: true });
