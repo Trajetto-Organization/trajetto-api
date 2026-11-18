@@ -1124,6 +1124,8 @@ class WebhookDispatchService {
    * and the host still empty; a URL that does not parse stays empty (no
    * host cap; the send refuses it). Raw SQL so the endpoint's updated_at,
    * which the screen shows, does not move. Public so a test can run it.
+   * A host that is set but stale (the image of before changed the URL) is
+   * the send's to correct: alignDestinationHost.
    */
   async fillDestinationHosts(): Promise<number> {
     const missing = await database.webhookEndpoint.findMany({
@@ -1148,6 +1150,43 @@ class WebhookDispatchService {
     }
 
     return filled;
+  }
+
+  /**
+   * Puts the endpoint's destination host back in step with its URL when
+   * they differ (plano-escala F3-14). The image of before, during a
+   * rolling deploy or a rollback that can last days, changes the URL
+   * without touching the column it does not know, and the minute's fill
+   * only writes the hosts that are empty: the endpoint's calls were
+   * counted against the old host's room, starving that host's other
+   * endpoints, and never against the new host's cap. Checked on every
+   * send, before the call, so the call and the ones after it are counted
+   * against the host they go to. Raw SQL guarded by the URL read, so
+   * updated_at does not move and a newer edit is never undone; a failure
+   * only logs: the host cap paces the calls, it guards nothing.
+   */
+  private async alignDestinationHost(endpoint: {
+    id: string;
+    url: string;
+    destination_host: string | null;
+  }): Promise<void> {
+    const host = destinationHostOf(endpoint.url);
+
+    if (endpoint.destination_host === host) return;
+
+    try {
+      await database.$executeRaw`
+        UPDATE "webhook_endpoint" SET "destination_host" = ${host}
+        WHERE "id" = ${endpoint.id}
+          AND "url" = ${endpoint.url}
+          AND "destination_host" IS DISTINCT FROM ${host}
+      `;
+    } catch (error) {
+      log.warn(
+        { err: error, endpointId: endpoint.id },
+        "webhook destination host could not be brought in step with the URL",
+      );
+    }
   }
 
   /**
@@ -1381,6 +1420,10 @@ class WebhookDispatchService {
       await this.park(row);
       return;
     }
+
+    // The host this call is counted against (F3-14), in step with the URL
+    // before the call goes out.
+    await this.alignDestinationHost(endpoint);
 
     const stored = await database.webhookDelivery.findUnique({
       where: { id: row.id },

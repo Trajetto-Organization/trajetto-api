@@ -300,7 +300,10 @@ desliga) limita as chamadas em voo a um host somando todos os endpoints
 dele: no mesmo claim, um endpoint de host já no teto não recebe parte, e
 as linhas achadas para endpoints do mesmo host são cortadas, na ordem do
 claim, no que o host ainda tem. Host nulo (um endpoint salvo pela imagem
-anterior, até o minuto do despachante preenchê-lo) conta como sem teto.
+anterior, até o minuto do despachante preenchê-lo) conta como sem teto. Um
+host que ficou para trás porque a imagem anterior trocou a URL (no rolling
+ou num rollback, que não conhecem a coluna) é corrigido antes do envio
+seguinte do endpoint, que confere o host com a URL a cada chamada.
 
 **Tetos globais dos provedores (F3-15a).** A concorrência das raias é por
 processo, então cada processo a mais multiplica o que a Meta, a Resend e o

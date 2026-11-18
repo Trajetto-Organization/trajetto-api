@@ -32,7 +32,9 @@ import {
  *  - F3-14: the endpoints of one destination host (an aggregator's ERP)
  *    never hold more than WEBHOOK_HOST_GLOBAL_CONCURRENCY open on it
  *    together, an endpoint with no host recorded has no host cap, and the
- *    host is written with the URL and filled for the endpoints without;
+ *    host is written with the URL, filled for the endpoints without, and
+ *    put back in step at the next send when an older image changed the
+ *    URL;
  *  - more endpoints with nothing to take than one walk visits (rows parked
  *    for 30 days, an aggregator's host at its cap) never hold back the
  *    endpoints after them, the lap wraps up to the cursor it started from,
@@ -370,6 +372,31 @@ describe("the endpoints of one destination host (F3-14)", () => {
 
     expect(after.updated_at).toEqual(before.updated_at);
   });
+
+  it("follows a URL the image of before changed, at the endpoint's next send", async () => {
+    // The backfill wrote the host; a rollback's image, which does not
+    // know the column, changed the URL and left it behind. The minute's
+    // fill writes only empty hosts, so the calls kept being counted
+    // against the old host's room and never against the new host's cap.
+    const id = await seedEndpoint("/moved");
+
+    await prisma.$executeRaw`
+      UPDATE "webhook_endpoint" SET "destination_host" = 'erp-a.example.com'
+      WHERE "id" = ${id}
+    `;
+
+    await queueEvents(1);
+    await drainWith(dispatchers());
+
+    expect(arrivals).toEqual(["/moved"]);
+
+    const after = await prisma.webhookEndpoint.findUniqueOrThrow({
+      where: { id },
+    });
+
+    expect(after.url).toBe(`${baseUrl}/moved`);
+    expect(after.destination_host).toBe(destinationHostOf(`${baseUrl}/moved`));
+  }, 60_000);
 });
 
 describe("endpoints with nothing to take ahead of the cursor (F3-13 review)", () => {
