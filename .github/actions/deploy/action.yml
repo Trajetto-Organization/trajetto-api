@@ -2,9 +2,11 @@ name: Deploy the API
 description: >-
   The deploy of one environment, the same for staging and production: the
   migrations through the Dokploy Application trajetto-api-migrate when the
-  database has not applied this release image, then the AI, then the API,
-  each tag moved by digest right before its own deploy, then the proof that
-  the environment serves this build. Called by the job that carries the
+  database has not applied this release image, then the AI, then the
+  Applications of the API's image in another role (worker, scheduler,
+  worker-external), then the API and the proof that the environment serves
+  this build, then the edge roles (ingest, realtime), each tag moved by
+  digest right before its own deploy. Called by the job that carries the
   environment (staging.yml, production.yml), so there is one approval and
   the secrets stay in the environment: they come in as inputs, because a
   composite action cannot read `secrets` or `vars` itself.
@@ -16,13 +18,17 @@ description: >-
 # What is per environment comes in as inputs:
 #
 #   staging    tag `staging`, the digests the Build job just pushed, only
-#              from the branch head, both tags put back after a failed
+#              from the branch head, every tag put back after a failed
 #              Dokploy deploy, the public liveness as the default check,
 #              and `staged-<7>` written last;
 #   production tag `stable`, the digests `Staging evidence` read before the
 #              approval, only the AI's tag put back (a failed promote is
 #              fixed by promoting again), the Swarm check over SSH as the
 #              default, no marker.
+#
+# The roles (worker, scheduler, worker-external, ingest, realtime) run the
+# API's digest under `<tag>-<role>`, so a rollback (production.yml with
+# image_tag) takes them all with the API.
 #
 # Before Dokploy exists (none of its secrets), the tags still move, so the
 # build the environment would run is always visible in GHCR, and the deploy
@@ -99,6 +105,21 @@ inputs:
     default: ""
   dokploy-ai-application-id:
     description: "secrets.DOKPLOY_AI_APPLICATION_ID"
+    default: ""
+  dokploy-worker-application-id:
+    description: "secrets.DOKPLOY_WORKER_APPLICATION_ID: a trajetto-worker (vazio = o papel não é implantado; a tag dele segue a da API)"
+    default: ""
+  dokploy-scheduler-application-id:
+    description: "secrets.DOKPLOY_SCHEDULER_APPLICATION_ID: a trajetto-scheduler (idem)"
+    default: ""
+  dokploy-worker-external-application-id:
+    description: "secrets.DOKPLOY_WORKER_EXTERNAL_APPLICATION_ID: a trajetto-worker-external (idem)"
+    default: ""
+  dokploy-ingest-application-id:
+    description: "secrets.DOKPLOY_INGEST_APPLICATION_ID: a trajetto-ingest (idem)"
+    default: ""
+  dokploy-realtime-application-id:
+    description: "secrets.DOKPLOY_REALTIME_APPLICATION_ID: a trajetto-realtime (idem)"
     default: ""
   deploy-ssh-host:
     description: "secrets.DEPLOY_SSH_HOST"
@@ -450,8 +471,32 @@ runs:
         DOKPLOY_OPTIONAL: "true"
       run: node .github/scripts/dokploy-deploy.mjs
 
-    # The API's tag, once the AI it calls is in place. Unconditional: the
-    # API Application runs the environment's tag, so THIS is what ships.
+    # The Applications that run the API's image in another role
+    # (plano-escala F3-31a), before the API: the worker that expands what
+    # the new API publishes, the scheduler, the worker-external. Each pulls
+    # `trajetto-api:<tag>-<role>`, moved to the API's digest right before
+    # its own deploy (.github/scripts/deploy-roles.sh). A role without its
+    # Application id is a notice; a failed one fails here, and the API is
+    # not deployed.
+    - name: Deploy the worker roles (Dokploy)
+      id: deploy-roles-before
+      if: steps.head.outputs.current == 'true' && steps.dokploy.outputs.enabled == 'true'
+      shell: bash
+      env:
+        TAG: ${{ inputs.tag }}
+        API_DIGEST: ${{ inputs.api-digest }}
+        STATE_FILE: ${{ runner.temp }}/deploy-roles.state
+        DOKPLOY_ENABLED: "true"
+        DOKPLOY_URL: ${{ inputs.dokploy-url }}
+        DOKPLOY_API_KEY: ${{ inputs.dokploy-api-key }}
+        DOKPLOY_WORKER_APPLICATION_ID: ${{ inputs.dokploy-worker-application-id }}
+        DOKPLOY_SCHEDULER_APPLICATION_ID: ${{ inputs.dokploy-scheduler-application-id }}
+        DOKPLOY_WORKER_EXTERNAL_APPLICATION_ID: ${{ inputs.dokploy-worker-external-application-id }}
+      run: bash .github/scripts/deploy-roles.sh before-api
+
+    # The API's tag, once the AI it calls and the workers behind it are in
+    # place. Unconditional: the API Application runs the environment's tag,
+    # so THIS is what ships.
     - name: Move the API tag to this build
       id: move-api
       if: steps.head.outputs.current == 'true'
@@ -579,6 +624,39 @@ runs:
         echo "::warning::ROLLOUT_VERIFY=off: o run não confere se o Swarm terminou o rollout ou o reverteu. Confira 'docker service ps --no-trunc <appName da Application da API>' no host."
         echo "Rollout de ${where} NÃO verificado (ROLLOUT_VERIFY=off)." >> "$GITHUB_STEP_SUMMARY"
 
+    # The edge roles after the API (plano-escala F3-31a): the ingest of the
+    # positions and the realtime, which take traffic the API also takes.
+    # Only once the API's check passed: an API that did not converge stops
+    # them too. Same rules as the workers' step.
+    - name: Deploy the edge roles (Dokploy)
+      id: deploy-roles-after
+      if: steps.head.outputs.current == 'true' && steps.dokploy.outputs.enabled == 'true'
+      shell: bash
+      env:
+        TAG: ${{ inputs.tag }}
+        API_DIGEST: ${{ inputs.api-digest }}
+        STATE_FILE: ${{ runner.temp }}/deploy-roles.state
+        DOKPLOY_ENABLED: "true"
+        DOKPLOY_URL: ${{ inputs.dokploy-url }}
+        DOKPLOY_API_KEY: ${{ inputs.dokploy-api-key }}
+        DOKPLOY_INGEST_APPLICATION_ID: ${{ inputs.dokploy-ingest-application-id }}
+        DOKPLOY_REALTIME_APPLICATION_ID: ${{ inputs.dokploy-realtime-application-id }}
+      run: bash .github/scripts/deploy-roles.sh after-api
+
+    # Once everything is green, the roles that were not deployed (no
+    # Application id yet, or no Dokploy at all) get their tag on the API's
+    # digest, as the API's own tag moves without Dokploy: an Application
+    # created later starts on the build the environment runs. A role's tag
+    # GHCR does not move is a warning, never a red run.
+    - name: Move the tags of the roles not deployed
+      if: steps.head.outputs.current == 'true'
+      shell: bash
+      env:
+        TAG: ${{ inputs.tag }}
+        API_DIGEST: ${{ inputs.api-digest }}
+        STATE_FILE: ${{ runner.temp }}/deploy-roles.state
+      run: bash .github/scripts/deploy-roles.sh follow
+
     # The marker the PR check and the promote require, as in trajetto-ui:
     # written last, so only a build that passed the scan (Image scan),
     # became staging's tags, was deployed by Dokploy and — when the check
@@ -610,7 +688,9 @@ runs:
     # check: a check that timed out may sit on a build that did converge.
     # The API's tag only where restore-api-tag says so (staging): in
     # production a failed promote is fixed by promoting again (or rolling
-    # back), which moves `stable` on purpose.
+    # back), which moves `stable` on purpose. The same for a role's tag
+    # (deploy-roles.sh restore): back only on staging, and only the role
+    # whose deploy failed.
     - name: Put the tags back after a failed deploy
       if: steps.head.outputs.current == 'true' && steps.dokploy.outputs.enabled == 'true' && failure()
       shell: bash
@@ -621,6 +701,7 @@ runs:
         PREVIOUS_AI: ${{ steps.current.outputs.ai }}
         API_DEPLOY: ${{ steps.deploy-api.outcome }}
         AI_DEPLOY: ${{ steps.deploy-ai.outcome }}
+        STATE_FILE: ${{ runner.temp }}/deploy-roles.state
       run: |
         restore() {
           if [ -z "$2" ]; then
@@ -633,3 +714,4 @@ runs:
         }
         if [ "$AI_DEPLOY" = "failure" ]; then restore trajetto-ai "$PREVIOUS_AI"; fi
         if [ "$API_DEPLOY" = "failure" ] && [ "$RESTORE_API" = "true" ]; then restore trajetto-api "$PREVIOUS_API"; fi
+        RESTORE_TAGS="$RESTORE_API" bash .github/scripts/deploy-roles.sh restore

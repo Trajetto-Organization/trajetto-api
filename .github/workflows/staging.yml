@@ -1144,6 +1144,11 @@ jobs:
           dokploy-api-application-id: ${{ secrets.DOKPLOY_API_APPLICATION_ID }}
           dokploy-migrate-application-id: ${{ secrets.DOKPLOY_MIGRATE_APPLICATION_ID }}
           dokploy-ai-application-id: ${{ secrets.DOKPLOY_AI_APPLICATION_ID }}
+          dokploy-worker-application-id: ${{ secrets.DOKPLOY_WORKER_APPLICATION_ID }}
+          dokploy-scheduler-application-id: ${{ secrets.DOKPLOY_SCHEDULER_APPLICATION_ID }}
+          dokploy-worker-external-application-id: ${{ secrets.DOKPLOY_WORKER_EXTERNAL_APPLICATION_ID }}
+          dokploy-ingest-application-id: ${{ secrets.DOKPLOY_INGEST_APPLICATION_ID }}
+          dokploy-realtime-application-id: ${{ secrets.DOKPLOY_REALTIME_APPLICATION_ID }}
           deploy-ssh-host: ${{ secrets.DEPLOY_SSH_HOST }}
           deploy-ssh-user: ${{ secrets.DEPLOY_SSH_USER }}
           deploy-verify-ssh-key: ${{ secrets.DEPLOY_VERIFY_SSH_KEY }}

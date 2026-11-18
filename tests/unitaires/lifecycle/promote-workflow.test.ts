@@ -533,12 +533,18 @@ describe.skipIf(!hasShell("bash"))("before Dokploy exists", () => {
 
   it("follows the answer in the deploy and its checks; the staged marker does not", () => {
     // Before Dokploy exists the tags are all there is (as in the web), and
-    // the marker still runs only after every step before it passed.
+    // the marker still runs only after every step before it passed; so do
+    // the tags of the roles not deployed (plano-escala F3-31a), which
+    // follow the API's digest with or without Dokploy.
     const after = deploy.steps.slice(at("Deploy the API (Dokploy)"));
+    const tagsOnly = [
+      "Mark this build as staged",
+      "Move the tags of the roles not deployed",
+    ];
 
     expect(after.length).toBeGreaterThan(4);
     for (const step of after) {
-      if (step.name === "Mark this build as staged") {
+      if (tagsOnly.includes(step.name)) {
         expect(conditionOf(step)).not.toContain("dokploy");
         continue;
       }
