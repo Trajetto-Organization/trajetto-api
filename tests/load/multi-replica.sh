@@ -311,25 +311,39 @@ fi
 if asked 8; then
   say "== 8. Cada cron roda uma vez por minuto agendado? =="
   #
-  # The election's unique (jobName, scheduledFor) keeps one run per firing
-  # however many processes run the cron; with the split fleet, only the
-  # worker runs it. The minute-by-minute ops-heartbeat ran exactly once in
-  # each of the last three complete minutes since the first cron process
-  # started, no job ran twice in a slot, and every live process with the
-  # cron is a worker.
-  if runs="$(psql_value "SELECT coalesce(string_agg(to_char(m.slot, 'HH24:MI') || '=' || (SELECT count(*) FROM scheduled_job_execution e WHERE e.\"jobName\" = 'ops-heartbeat' AND e.\"scheduledFor\" = m.slot), ' ' ORDER BY m.slot), '') FROM generate_series(date_trunc('minute', now()) - interval '3 minutes', date_trunc('minute', now()) - interval '1 minute', interval '1 minute') AS m(slot) WHERE m.slot > (SELECT min(started_at) FROM process_heartbeat WHERE $LIVE AND cron)")" \
-    && twice="$(psql_value "SELECT count(*) FROM (SELECT 1 FROM scheduled_job_execution WHERE \"scheduledFor\" > now() - interval '15 minutes' GROUP BY \"jobName\", \"scheduledFor\" HAVING count(*) > 1) AS d")" \
+  # The election's unique (jobName, scheduledFor) keeps at most one row per
+  # firing, so its rows prove a minute was not missed, never that it ran
+  # once: a firing run twice could not show there at all (it used to be
+  # grouped by that very pair, a count that could only be 0). What a run
+  # does shows it: each run of the ops-heartbeat writes the cluster's
+  # ops_sample row stamped with its minute, and nothing keeps that table to
+  # one row a minute, so two rows in one minute are two runs. For each of
+  # the last three complete minutes since the first cron process started:
+  # the election's row exactly once and the run's own row exactly once; and
+  # every live process with the cron is a worker.
+  slots="FROM generate_series(date_trunc('minute', now()) - interval '3 minutes', date_trunc('minute', now()) - interval '1 minute', interval '1 minute') AS m(slot) WHERE m.slot > (SELECT min(started_at) FROM process_heartbeat WHERE $LIVE AND cron)"
+
+  if runs="$(psql_value "SELECT coalesce(string_agg(to_char(m.slot, 'HH24:MI') || '=' || (SELECT count(*) FROM scheduled_job_execution e WHERE e.\"jobName\" = 'ops-heartbeat' AND e.\"scheduledFor\" = m.slot), ' ' ORDER BY m.slot), '') $slots")" \
+    && effects="$(psql_value "SELECT coalesce(string_agg(to_char(m.slot, 'HH24:MI') || '=' || (SELECT count(*) FROM ops_sample o WHERE o.role = 'cluster' AND o.ts = m.slot), ' ' ORDER BY m.slot), '') $slots")" \
     && cron="$(psql_value "SELECT coalesce(string_agg(DISTINCT role, ',' ORDER BY role), '') FROM process_heartbeat WHERE $LIVE AND cron")"; then
     echo "  ops-heartbeat por minuto: ${runs:-nenhum minuto completo ainda}"
+    echo "  linhas cluster do ops_sample por minuto: ${effects:-nenhum minuto completo ainda}"
     echo "  com o cron: ${cron:-ninguém}"
 
     if [ -z "$runs" ]; then
       failed "nenhum minuto completo desde que o cron subiu: rode este passo de novo daqui a 2 minutos."
-    elif printf '%s\n' "$runs" | tr ' ' '\n' | grep -vq '=1$'; then
-      failed "o ops-heartbeat não rodou exatamente uma vez em cada minuto: $runs."
+    else
+      if printf '%s\n' "$runs" | tr ' ' '\n' | grep -vq '=1$'; then
+        failed "o ops-heartbeat não rodou exatamente uma vez em cada minuto: $runs."
+      fi
+
+      if printf '%s\n' "$effects" | tr ' ' '\n' | grep -Eq '=([2-9]|[1-9][0-9]+)$'; then
+        failed "o ops-heartbeat rodou mais de uma vez no mesmo minuto (linhas cluster do ops_sample: $effects)."
+      elif printf '%s\n' "$effects" | tr ' ' '\n' | grep -vq '=1$'; then
+        failed "minuto sem a linha cluster do ops_sample ($effects): o ops-heartbeat não terminou nele, ou o harness roda com OPS_SAMPLE_ENABLED=false."
+      fi
     fi
 
-    [ "$twice" = "0" ] || failed "$twice disparo(s) de cron com mais de uma execução."
     [ "$cron" = "worker" ] || failed "quem roda o cron: '${cron:-ninguém}', não só o worker."
   else
     failed "não foi possível consultar o scheduled_job_execution no Postgres do harness."

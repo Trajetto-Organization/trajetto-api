@@ -783,10 +783,14 @@ harness roda o `worker`:
    e a dica de despertar precisa aparecer no canal `*:wake:outbox` do Redis.
    Sem a dica, o passo reprova mesmo quando a varredura de 2 s do worker
    pegou o evento a tempo por sorte.
-8. **Cada cron roda uma vez por minuto agendado?** O `ops-heartbeat` rodou
-   exatamente uma vez em cada um dos últimos três minutos completos desde que
-   o cron subiu, nenhum disparo rodou duas vezes e só o `worker` tem o cron.
-   Logo depois do `up`, espere uns 4 minutos antes deste passo.
+8. **Cada cron roda uma vez por minuto agendado?** Em cada um dos últimos
+   três minutos completos desde que o cron subiu, o `ops-heartbeat` tem
+   exatamente uma linha da eleição no `scheduled_job_execution` (nenhum
+   minuto perdido) e exatamente uma linha `cluster` no `ops_sample`, a que
+   cada execução grava com o seu minuto (nenhum minuto rodado duas vezes: a
+   eleição guarda uma linha por minuto por construção, e só o efeito da
+   execução mostra uma segunda); e só o `worker` tem o cron. Logo depois do
+   `up`, espere uns 4 minutos antes deste passo.
 
 ```bash
 LOAD_API_ROLE=api docker compose --env-file .env \

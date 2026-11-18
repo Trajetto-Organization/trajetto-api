@@ -923,8 +923,8 @@ case " $* " in
       *worker_heartbeat*) echo "\${STUB_STRAYS:-0}" ;;
       *"AT TIME ZONE"*) echo "2026-11-18 12:00:00" ;;
       *chat-message.sent*) echo "\${STUB_TAKEN-150}" ;;
+      *"role = 'cluster'"*) echo "\${STUB_EFFECTS-10:01=1 10:02=1 10:03=1}" ;;
       *generate_series*) echo "\${STUB_RUNS-10:01=1 10:02=1 10:03=1}" ;;
-      *"HAVING count"*) echo "\${STUB_TWICE:-0}" ;;
       *"AND cron"*) echo "\${STUB_CRON-worker}" ;;
       *) echo "\${STUB_STUCK:-0}" ;;
     esac ;;
@@ -1139,9 +1139,14 @@ describe.skipIf(!bash)("multi-replica.sh (LOAD-1, LOAD-3)", () => {
         "quem roda o cron: 'api,worker'",
       ],
       [
-        "a slot that ran twice",
-        { STUB_TWICE: "1" },
-        "1 disparo(s) de cron com mais de uma execução",
+        "a minute the heartbeat ran twice",
+        { STUB_EFFECTS: "10:01=1 10:02=2 10:03=1" },
+        "o ops-heartbeat rodou mais de uma vez no mesmo minuto",
+      ],
+      [
+        "a minute whose run left no row of its own",
+        { STUB_EFFECTS: "10:01=1 10:02=0 10:03=1" },
+        "OPS_SAMPLE_ENABLED=false",
       ],
       [
         "no complete minute yet",
@@ -1153,6 +1158,38 @@ describe.skipIf(!bash)("multi-replica.sh (LOAD-1, LOAD-3)", () => {
 
       expect(result.status).not.toBe(0);
       expect(result.stdout).toContain(says);
+    });
+
+    // Review of wave 12: the check of a firing run twice grouped
+    // scheduled_job_execution by (jobName, scheduledFor), the table's own
+    // unique, so it could never find one. It counts the run's own row now,
+    // in a table with nothing keeping it to one a minute.
+    it("counts the runs of a minute where a second one would show", () => {
+      const script = readFileSync(
+        repoFile("tests/load/multi-replica.sh"),
+        "utf8",
+      );
+      const schema = readFileSync(repoFile("prisma/schema.prisma"), "utf8");
+      const model = (name: string) =>
+        /model (\w+) \{[\s\S]*?\n\}/g.exec(
+          schema.slice(schema.indexOf(`model ${name} {`)),
+        )?.[0] ?? "";
+
+      expect(model("ScheduledJobExecution")).toContain(
+        "@@unique([jobName, scheduledFor])",
+      );
+      expect(model("OpsSample")).toContain("ts DateTime");
+      expect(model("OpsSample")).not.toMatch(/@@(unique|id)\(/);
+
+      const step = script.slice(
+        script.indexOf("if asked 8; then"),
+        script.indexOf('say "== CPU e memória agora =="'),
+      );
+
+      expect(step).toContain(
+        "FROM ops_sample o WHERE o.role = 'cluster' AND o.ts = m.slot",
+      );
+      expect(step).not.toMatch(/GROUP BY \\"jobName\\", \\"scheduledFor\\"/);
     });
   });
 
