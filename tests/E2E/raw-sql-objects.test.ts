@@ -47,6 +47,11 @@ const INDEXES: Record<string, string> = {
   notification_delivery_business_internal_idx: `CREATE INDEX notification_delivery_business_internal_idx ON ONLY public.notification_delivery USING btree (business_id, "availableAt") WHERE ((status = ANY (ARRAY['PENDING'::"NotificationDeliveryStatus", 'PROCESSING'::"NotificationDeliveryStatus"])) AND (channel = ANY (ARRAY['IN_APP'::"NotificationChannel", 'ACTIVITY'::"NotificationChannel", 'PUSH'::"NotificationChannel"])))`,
   notification_delivery_business_external_idx: `CREATE INDEX notification_delivery_business_external_idx ON ONLY public.notification_delivery USING btree (business_id, "availableAt") WHERE ((status = ANY (ARRAY['PENDING'::"NotificationDeliveryStatus", 'PROCESSING'::"NotificationDeliveryStatus"])) AND (channel = ANY (ARRAY['EMAIL'::"NotificationChannel", 'WHATSAPP'::"NotificationChannel"])))`,
   webhook_delivery_claim_idx: `CREATE INDEX webhook_delivery_claim_idx ON ONLY public.webhook_delivery USING btree ("availableAt") WHERE (status = ANY (ARRAY['PENDING'::"WebhookDeliveryStatus", 'PROCESSING'::"WebhookDeliveryStatus"]))`,
+  // The minute's close of the exhausted rows (plano-escala F3-08): only the
+  // rows in flight, by when their lease ends, whatever is queued.
+  domain_outbox_event_processing_lease_idx: `CREATE INDEX domain_outbox_event_processing_lease_idx ON ONLY public.domain_outbox_event USING btree ("leaseExpiresAt") WHERE (status = 'PROCESSING'::"OutboxEventStatus")`,
+  notification_delivery_processing_lease_idx: `CREATE INDEX notification_delivery_processing_lease_idx ON ONLY public.notification_delivery USING btree ("leaseExpiresAt") WHERE (status = 'PROCESSING'::"NotificationDeliveryStatus")`,
+  webhook_delivery_processing_lease_idx: `CREATE INDEX webhook_delivery_processing_lease_idx ON ONLY public.webhook_delivery USING btree ("leaseExpiresAt") WHERE (status = 'PROCESSING'::"WebhookDeliveryStatus")`,
   delivery_proof_audit_queue_idx: `CREATE INDEX delivery_proof_audit_queue_idx ON public.delivery_proof_audit USING btree ("businessId", created_at) WHERE (status = 'PENDING'::"ProofAuditStatus")`,
   // The geocoding job's claim (plan of 02/11/2026, E1): the open deliveries
   // still without a point and not settled by the geocoder, newest first.
