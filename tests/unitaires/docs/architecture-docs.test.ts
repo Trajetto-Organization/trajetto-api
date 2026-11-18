@@ -1046,6 +1046,70 @@ describe("claims the docs make about the code", () => {
   });
 });
 
+describe("the inventory of the Applications (infraestrutura.md §5.12)", () => {
+  /**
+   * The inventory is the record of what the Dokploy panel has (plano-escala
+   * X-40); the ceilings of deploy.md §19 are what the owner types into it.
+   * An Application sized there and missing here is one nobody records once
+   * it exists, and one listed here and not sized there is one nobody knows
+   * how to create.
+   */
+  const between = (text: string, start: string, end: string) => {
+    const from = text.indexOf(start);
+
+    expect(from, start).toBeGreaterThanOrEqual(0);
+
+    const to = text.indexOf(end, from + start.length);
+
+    return text.slice(from, to < 0 ? undefined : to);
+  };
+
+  /** The Applications of the table under `**<environment>**`. */
+  const applications = (text: string, environment: string) => {
+    const lines = between(text, `**${environment}**`, "\n\n**")
+      .split("\n")
+      .filter((line) => line.startsWith("|"))
+      .slice(2);
+
+    return lines
+      .map((line) => line.split("|")[1].match(/`(trajetto-[a-z-]+)`/)?.[1])
+      .sort();
+  };
+
+  const deploy = read(join(ROOT, "docs/deploy.md"));
+  const infra = read(join(ROOT, "docs/infraestrutura.md"));
+  const ceilings = () =>
+    between(deploy, "### Tetos por Application e por fase", "\n### ");
+  const inventory = () =>
+    between(infra, "### 5.12 Inventário das Applications", "\n---\n");
+
+  it.each(["Produção", "Staging"])(
+    "names in %s every Application the ceilings size, and no other",
+    (environment) => {
+      const sized = applications(ceilings(), environment);
+
+      expect(sized.length).toBeGreaterThan(10);
+      expect(sized).not.toContain(undefined);
+      expect(applications(inventory(), environment)).toEqual(sized);
+    },
+  );
+
+  it("says where the monitors run and keeps the measurements of F0-09", () => {
+    expect(infra).toMatch(/^### 4\.7 A máquina medida \(F0-09\)$/m);
+    expect(infra).toMatch(/^### 10\.4 Onde rodam os monitores$/m);
+
+    const monitors = between(
+      infra,
+      "### 10.4 Onde rodam os monitores",
+      "\n---\n",
+    );
+
+    for (const monitor of ["healthchecks.io", "Uptime Kuma", "Beszel"]) {
+      expect(monitors, monitor).toContain(monitor);
+    }
+  });
+});
+
 /** `![label](https://img.shields.io/badge/<label>-<version>-<color>…)` */
 function badges(text: string): { label: string; version: string }[] {
   return [...text.matchAll(/img\.shields\.io\/badge\/([^"?)\s]+)/g)].map(

@@ -406,8 +406,11 @@ o Auto Backup da região US-central teve problemas de desempenho (cópias
 atrasadas e restauração temporariamente indisponível).
 **A confirmar com o dono:** se ele continua ligado, a retenção e o custo.
 
-O orçamento de memória dos serviços está em
-[`deploy.md` → Recursos da VPS e logs](./deploy.md#23-recursos-da-vps-e-logs).
+O orçamento de memória, CPU e disco dos serviços está em
+[`deploy.md` → Recursos da VPS e logs](./deploy.md#23-recursos-da-vps-e-logs);
+o inventário das Applications, na
+[seção 5.12](#512-inventário-das-applications-por-environment), e as
+medições da máquina, na [seção 4.7](#47-a-máquina-medida-f0-09).
 
 ### 4.2 SSH e console de emergência
 
@@ -611,6 +614,25 @@ de reiniciar, rode `CHECKPOINT` nos dois Postgres, o de staging e o de
 produção ([`deploy.md` → Postgres e Redis](./deploy.md#10-postgres-e-redis)). Depois,
 confira `docker service ls` (todos os serviços com as réplicas de pé) e a
 [seção 13.7](#137-conferir-a-borda-depois-de-mexer-na-cloudflare).
+
+### 4.7 A máquina medida (F0-09)
+
+O orçamento da VPS ([`deploy.md` → 23](./deploy.md#23-recursos-da-vps-e-logs))
+parte de números ESTIMADOS até estas medições (plano de escala F0-09).
+Repita cada uma em 2 dias úteis: um dia atípico engana.
+
+| Medida                                          | Como                                                                              | Valor                      | O que decide                                                                                  |
+| ----------------------------------------------- | --------------------------------------------------------------------------------- | -------------------------- | --------------------------------------------------------------------------------------------- |
+| CPU roubada (_steal_)                           | `vmstat 1 600` às 10h e às 15h BRT, a coluna `st`                                 | **A confirmar com o dono** | acima de 5%, a produção precisa de CPU dedicada (VDS), não de mais réplicas                   |
+| RAM visível e usada no pico                     | `free -m` no pico                                                                 | **A confirmar com o dono** | a RAM visível (~11.980 MiB ESTIMADO) e a reserva do host (1.280 MiB) das réguas R1 e R2       |
+| Uso de cada contêiner no pico                   | `docker stats --no-stream` no pico                                                | **A confirmar com o dono** | os tetos de cada Application ([seção 5.12](#512-inventário-das-applications-por-environment)) |
+| RSS de pico em 7 dias da web e da IA (produção) | Beszel, o gráfico de cada contêiner                                               | **A confirmar com o dono** | o teto da web: 640 MiB com o pico abaixo de 500, 512 MiB abaixo de 380                        |
+| Latência Brasil → VPS                           | `mtr` ou `ping` para `api.intrajetto.com` de uma rede móvel em São Paulo          | **A confirmar com o dono** | se reprovar o SLO, volta a pergunta da região dos servidores                                  |
+| Swap                                            | `swapon --show`                                                                   | **A confirmar com o dono** | tem de voltar vazio (F0-11; [`deploy.md` → 23](./deploy.md#sem-swap-o-earlyoom-no-lugar))     |
+| earlyoom                                        | `systemctl is-active earlyoom` e `journalctl -u earlyoom -n 20` (a lista evitada) | **A confirmar com o dono** | `active`, evitando o `postgres`, o `dockerd`, o `containerd`, o `traefik` e o Dokploy         |
+
+Anote aqui o valor e a data de cada uma, sem nenhum IP nem nome de máquina
+(seção 1).
 
 ---
 
@@ -1015,6 +1037,64 @@ v0.30.10 instalado. Sem ele, o serviço fica com os 10 s do Docker, e o
 desligamento ordenado da API cabe neles enquanto `STOP_GRACE_PERIOD_MS` não
 estiver definida (desde 15/11/2026); `40000` só depois de o `inspect`
 mostrar os 40 s.
+
+### 5.12 Inventário das Applications por environment
+
+Cada Application e Database da VPS, com a imagem, o papel e o teto e as
+réplicas que o plano de escala dá à fase de hoje (**A**, ondas 0 a 11) e à
+próxima (**B**, ondas 12 e 13, em que a staging ganha o worker). Os tetos
+vão em MiB; no painel, em bytes (1 MiB = `1048576`) e nano-CPU (1 CPU =
+`1000000000`). A tabela de todas as fases, com os bytes, e o passo a
+passo de cada Application de papel estão em
+[`deploy.md` → Tetos por Application e por fase](./deploy.md#tetos-por-application-e-por-fase)
+e [Criar a Application de um papel](./deploy.md#criar-a-application-de-um-papel).
+Uma Application de papel só existe depois de o dono criá-la: até lá, a
+linha diz "a criar", e o código dela fica inerte.
+
+**A confirmar com o dono:** que o painel tem estes valores (os tetos da
+staging do F0-07, as 2 réplicas da produção do F0-02, o _Stop Grace Period_
+de 40 s do F0-01 e a migrate com 384 MiB); o último estado lido no painel
+está na [seção 5.2](#52-environments-projetos-e-serviços). Ao criar uma
+Application ou mudar um teto, atualize a linha dela no mesmo dia.
+
+**Produção**
+
+| Application                  | Imagem                                                           | Papel             | _Domain_ / _Path_                        | Hoje (A)                                         | B (onda 12)            | Estado                              |
+| ---------------------------- | ---------------------------------------------------------------- | ----------------- | ---------------------------------------- | ------------------------------------------------ | ---------------------- | ----------------------------------- |
+| Database `trajetto-postgres` | `trajetto-postgres@sha256` (onda 3; antes, `postgres:16-alpine`) | —                 | —                                        | 2048 (sem teto até a troca da imagem), CPU livre | igual                  | existe                              |
+| Database `trajetto-redis`    | `redis:7-alpine`                                                 | —                 | —                                        | 512, `maxmemory 256mb`                           | igual                  | existe                              |
+| `trajetto-ai`                | `trajetto-ai:stable`                                             | —                 | —                                        | 1 × 1024, 2 CPU                                  | igual                  | existe                              |
+| `trajetto-api`               | `trajetto-api:stable`                                            | `all`             | `api.intrajetto.com`, `/`                | 2 × 1024, CPU livre, heap 768                    | 2 × 1024, heap 576     | existe                              |
+| `trajetto-api-migrate`       | `trajetto-api-migrate:stable`                                    | release           | —                                        | 384, transitório                                 | igual                  | existe                              |
+| `trajetto-offsite`           | `rclone@sha256`                                                  | —                 | —                                        | 64                                               | igual                  | **A confirmar com o dono** (onda 3) |
+| `trajetto-ui`                | `trajetto-ui:stable`                                             | —                 | `www.intrajetto.com`                     | 2 × 768 (640 se o RSS de pico < 500)             | 2 × 640                | existe                              |
+| `trajetto-worker`            | `trajetto-api:stable-worker`                                     | `worker`          | —                                        | —                                                | — (nasce na onda 14)   | a criar                             |
+| `trajetto-pgbouncer`         | `trajetto-pgbouncer:stable`                                      | —                 | —                                        | —                                                | — (nasce na onda 17)   | a criar                             |
+| `trajetto-scheduler`         | `trajetto-api:stable-scheduler`                                  | `scheduler`       | —                                        | —                                                | — (no prod-1, onda 22) | a criar                             |
+| `trajetto-worker-external`   | `trajetto-api:stable-worker-external`                            | `worker-external` | —                                        | —                                                | — (no prod-1, onda 22) | a criar                             |
+| `trajetto-realtime`          | `trajetto-api:stable-realtime`                                   | `realtime`        | `api.intrajetto.com`, `/socket.io`       | —                                                | — (no prod-1, onda 22) | a criar                             |
+| `trajetto-ingest`            | `trajetto-api:stable-ingest`                                     | `ingest`          | `api.intrajetto.com`, `/route/positions` | —                                                | — (pelo gatilho)       | a criar                             |
+
+**Staging**
+
+| Application                  | Imagem                                                           | Papel             | _Domain_ / _Path_                                | Hoje (A)                       | B (onda 12)                | Estado            |
+| ---------------------------- | ---------------------------------------------------------------- | ----------------- | ------------------------------------------------ | ------------------------------ | -------------------------- | ----------------- |
+| Database `trajetto-postgres` | `trajetto-postgres@sha256` (onda 3; antes, `postgres:16-alpine`) | —                 | —                                                | 576, 0,5 CPU                   | igual                      | existe            |
+| Database `trajetto-redis`    | `redis:7-alpine`                                                 | —                 | —                                                | 160, 0,1 CPU, `maxmemory 64mb` | igual                      | existe            |
+| `trajetto-ai`, sempre ligada | `trajetto-ai:staging`                                            | —                 | —                                                | 768, 1 CPU                     | igual                      | existe            |
+| `trajetto-api`               | `trajetto-api:staging`                                           | `all`; `api` em B | `api-staging.intrajetto.com`, `/`                | 576, 0,5 CPU, heap 400         | 576, heap 320, papel `api` | existe            |
+| `trajetto-api-migrate`       | `trajetto-api-migrate:staging`                                   | release           | —                                                | 384, transitório               | igual                      | existe            |
+| `trajetto-ui`                | `trajetto-ui:staging`                                            | —                 | `staging.intrajetto.com`                         | 320, 0,25 CPU                  | igual                      | existe            |
+| `trajetto-worker`            | `trajetto-api:staging-worker`                                    | `worker`          | —                                                | —                              | 448, 0,25 CPU, heap 256    | a criar (onda 12) |
+| `trajetto-pgbouncer`         | `trajetto-pgbouncer:staging`                                     | —                 | —                                                | —                              | — (no 2º VPS, onda 17)     | a criar           |
+| `trajetto-scheduler`         | `trajetto-api:staging-scheduler`                                 | `scheduler`       | —                                                | —                              | — (no 2º VPS, onda 18)     | a criar           |
+| `trajetto-worker-external`   | `trajetto-api:staging-worker-external`                           | `worker-external` | —                                                | —                              | — (no 2º VPS, onda 18)     | a criar           |
+| `trajetto-realtime`          | `trajetto-api:staging-realtime`                                  | `realtime`        | `api-staging.intrajetto.com`, `/socket.io`       | —                              | — (no 2º VPS, onda 18)     | a criar           |
+| `trajetto-ingest`            | `trajetto-api:staging-ingest`                                    | `ingest`          | `api-staging.intrajetto.com`, `/route/positions` | —                              | — (no 2º VPS, onda 18)     | a criar           |
+
+Os papéis usam a mesma imagem da API, cada um com a sua tag, e não gastam
+disco a mais. A soma de cada fase, contra a RAM da VPS, está em
+[`deploy.md` → 23](./deploy.md#23-recursos-da-vps-e-logs).
 
 ---
 
@@ -2020,6 +2100,22 @@ mudar os dois.
 - um ensaio de restauração com uma cópia real do Dokploy;
 - backup dos objetos do R2.
 
+### 10.4 Onde rodam os monitores
+
+Um monitor que roda na mesma VPS que vigia não avisa quando ela cai, e,
+nela, divide a RAM com a produção: o Uptime Kuma e o hub do Beszel somam
+~192 MiB (ESTIMADO) e tiram a folga das fases B e C do orçamento
+([`deploy.md` → 23](./deploy.md#23-recursos-da-vps-e-logs)). Antes do
+`trajetto-worker` da staging (onda 12), os dois saem do host, ou a fase
+segue pela régua do uso medido (R2).
+
+| Monitor                                  | O que vigia                                                                           | Onde roda                                                                      |
+| ---------------------------------------- | ------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------ |
+| healthchecks.io (_dead man's switch_)    | o ping de cada minuto do `ops-heartbeat` e o `/fail` com os motivos                   | fora da VPS (serviço externo); o check de produção: **A confirmar com o dono** |
+| Uptime Kuma (`uptime.intrajetto.com`)    | **A confirmar com o dono**; o plano pede a readiness da API e o health da web (F0-08) | **A confirmar com o dono**; o alvo é fora da VPS                               |
+| Beszel: o hub (`monitor.intrajetto.com`) | os gráficos e os alertas; o plano pede o disco a 85% pelo Telegram (F0-08)            | **A confirmar com o dono**; o alvo é fora da VPS                               |
+| Beszel: o agente                         | CPU, RAM, disco e contêineres do host                                                 | na VPS (conta na reserva de 1.280 MiB do host)                                 |
+
 ---
 
 ## 11. Inventário de tokens e credenciais
@@ -2656,6 +2752,14 @@ derruba o sistema, depois o que abre uma brecha, depois o resto.
       [Seção 5.2](#52-environments-projetos-e-serviços).
 - [ ] **Tela do domínio do painel** na v0.30.10.
       [Seção 5.1](#51-o-painel).
+- [ ] **Medições da máquina** (F0-09): _steal_, RAM, `docker stats` e RSS
+      no pico, latência Brasil → VPS, swap e earlyoom, em 2 dias úteis.
+      [Seção 4.7](#47-a-máquina-medida-f0-09).
+- [ ] **Inventário das Applications** conferido no painel (tetos,
+      réplicas, grace e a `trajetto-offsite`), e se a v0.30.10 tem as
+      variáveis compartilhadas do environment, que o guia dos papéis usa
+      ([`deploy.md` → Criar a Application de um papel](./deploy.md#criar-a-application-de-um-papel),
+      passo 3). [Seção 5.12](#512-inventário-das-applications-por-environment).
 - [ ] **Plano do LocationIQ.** O grátis (5.000 por dia, 2 por segundo, 60 por
       minuto, a conta inteira) é dividido entre a localização automática das
       entregas (2.000 por dia), a busca do "Fixar no mapa" (1.000 por dia, 150
@@ -2698,8 +2802,10 @@ derruba o sistema, depois o que abre uma brecha, depois o resto.
       Auto Backup da Contabo. [Seção 10.2](#102-backups).
 - [ ] Monitores de uptime externos (o que o Uptime Kuma já vigia e onde ele
       roda; o que o Beszel vigia e se alerta), alerta de validade dos
-      certificados da origem e heartbeat de backup.
-      [Seções 10.1](#101-o-que-existe) e [10.3](#103-o-que-falta).
+      certificados da origem e heartbeat de backup. O Kuma e o hub do
+      Beszel fora da VPS antes do `trajetto-worker` da staging.
+      [Seções 10.1](#101-o-que-existe), [10.3](#103-o-que-falta) e
+      [10.4](#104-onde-rodam-os-monitores).
 - [ ] Proteção dos objetos do R2: Bucket Lock nos prefixos de prova e cópia
       periódica. [Seção 6.10](#610-r2).
 - [ ] O nome real do token R2 de staging, e se a produção tem token e
