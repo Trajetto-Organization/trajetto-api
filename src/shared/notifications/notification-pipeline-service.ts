@@ -23,6 +23,12 @@ import {
   providerOfChannel,
   type Provider,
 } from "./provider-caps";
+import { OutboxService } from "./outbox-service";
+import {
+  whatsAppDailyQuota,
+  type WhatsAppQuotaVerdict,
+} from "./whatsapp-daily-quota";
+import { shiftDateKey } from "@/shared/time/business-day";
 import {
   EXHAUSTED_CLOSE_INTERVAL_MS,
   closeExhaustedInBatches,
@@ -517,8 +523,19 @@ class RetryableDeliveryError extends Error {
 /**
  * Not this build's to handle: a topic or channel it does not know yet. The row
  * goes back untouched — no attempt spent — for a newer replica to take.
+ * Also a message past its company's daily WhatsApp quota (plano-escala
+ * F3-15b), which waits `until` the company's next business day; `waiting`
+ * is what lastError says it waits for.
  */
-class DeferredDeliveryError extends Error {}
+class DeferredDeliveryError extends Error {
+  constructor(
+    message: string,
+    readonly until?: Date,
+    readonly waiting: string = "aguardando uma versão que conheça o tópico",
+  ) {
+    super(message);
+  }
+}
 
 /**
  * The pipeline stopped WAITING on a send; the send itself is still in flight
@@ -2365,6 +2382,10 @@ class NotificationPipelineService {
       throw error;
     }
 
+    // The company's daily quota, last: only a message that would be sent
+    // now counts (plano-escala F3-15b).
+    await this.takeWhatsAppQuota(delivery);
+
     const whatsAppProvider =
       container.resolve<IWhatsAppProvider>("WhatsAppProvider");
 
@@ -2377,6 +2398,75 @@ class NotificationPipelineService {
     });
 
     return this.whatsAppOutcome(result);
+  }
+
+  /**
+   * One message of the company's daily WhatsApp quota (plano-escala
+   * F3-15b; whatsapp-daily-quota.ts), right before the call to Meta. Past
+   * the quota the row waits for the company's next business day without
+   * spending an attempt (DeferredDeliveryError), and the admins are told,
+   * once that day. With the quota off, nothing is read.
+   */
+  private async takeWhatsAppQuota(delivery: ClaimedDelivery): Promise<void> {
+    const businessId = delivery.event?.businessId ?? null;
+    const verdict = await whatsAppDailyQuota.take(businessId);
+
+    if (verdict.allowed) return;
+
+    await this.noticeWhatsAppQuota(businessId!, verdict).catch((error) => {
+      log.error(
+        { ...this.deliveryLogFields(delivery), err: error },
+        "daily WhatsApp quota notice could not be published",
+      );
+    });
+
+    throw new DeferredDeliveryError(
+      `Cota diária de WhatsApp da empresa atingida (${verdict.limit} por dia)`,
+      verdict.until,
+      `aguardando o próximo dia da empresa, ${verdict.until.toISOString()}`,
+    );
+  }
+
+  /**
+   * The admins' notice of the day: one outbox event per company and
+   * business day, its key the dedupe. A second message held the same day
+   * meets the key already written and publishes nothing.
+   */
+  private async noticeWhatsAppQuota(
+    businessId: string,
+    verdict: Extract<WhatsAppQuotaVerdict, { allowed: false }>,
+  ): Promise<void> {
+    const outbox = new OutboxService();
+    const resumesOn = shiftDateKey(verdict.day, 1);
+
+    try {
+      await database.$transaction(async (tx) => {
+        await outbox.publish(tx, {
+          topic: "whatsapp-quota.reached",
+          aggregateType: "business",
+          aggregateId: businessId,
+          businessId,
+          actorId: null,
+          payload: {
+            businessId,
+            day: verdict.day,
+            limit: verdict.limit,
+            resumesOn,
+          },
+          eventKey: `whatsapp-quota.reached:${businessId}:${verdict.day}`,
+        });
+      });
+    } catch (error) {
+      // Already told today: the day's key is taken.
+      if (
+        error instanceof Prisma.PrismaClientKnownRequestError &&
+        error.code === "P2002"
+      ) {
+        return;
+      }
+
+      throw error;
+    }
   }
 
   /**
@@ -2622,6 +2712,9 @@ class NotificationPipelineService {
       );
     }
 
+    // The company's daily quota counts the customers' messages too.
+    await this.takeWhatsAppQuota(delivery);
+
     const whatsAppProvider =
       container.resolve<IWhatsAppProvider>("WhatsAppProvider");
 
@@ -2751,14 +2844,16 @@ class NotificationPipelineService {
     const message = error instanceof Error ? error.message : String(error);
 
     if (error instanceof DeferredDeliveryError) {
-      // Not ours yet: back to the queue as it was, without spending one of
-      // its attempts, for a replica that knows this topic.
+      // Not ours yet (or not today: the company's WhatsApp quota): back to
+      // the queue as it was, without spending one of its attempts, for a
+      // replica that knows this topic or for the company's next day.
       await this.settleDelivery(delivery, {
         status: "PENDING",
         attempts: { decrement: 1 },
-        availableAt: new Date(Date.now() + UNKNOWN_TOPIC_RECHECK_MS),
+        availableAt:
+          error.until ?? new Date(Date.now() + UNKNOWN_TOPIC_RECHECK_MS),
         leaseExpiresAt: null,
-        lastError: `${message} (aguardando uma versão que conheça o tópico)`,
+        lastError: `${message} (${error.waiting})`,
       }).catch((updateError) => {
         log.error(
           { ...this.deliveryLogFields(delivery), err: updateError },

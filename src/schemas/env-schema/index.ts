@@ -898,6 +898,20 @@ const envSchema = z
     EMAIL_GLOBAL_CONCURRENCY: providerGlobalConcurrency(),
     PUSH_GLOBAL_CONCURRENCY: providerGlobalConcurrency(),
 
+    // Each company's daily WhatsApp quota (plano-escala F3-15b; decision
+    // D46; shared/notifications/whatsapp-daily-quota.ts): messages a day,
+    // counted per call to Meta in provider_quota_day (scope
+    // whatsapp:<businessId>) on the company's business day. Past it, the
+    // message waits, without spending an attempt, for the company's next
+    // business day, never falls back to e-mail, and the admins get one
+    // notice in the bell that day. 0 (the default) is no quota, until the
+    // conversation with Meta about the portfolio's messaging tier. Empty
+    // counts as absent.
+    WHATSAPP_DAILY_QUOTA_PER_TENANT: z.preprocess(
+      (value) => (value === "" ? undefined : value),
+      z.coerce.number().int().min(0).max(1_000_000).default(0),
+    ),
+
     // The owner's floor for the divisor of the providers' global caps
     // (above): how many processes are expected to claim a provider lane
     // (2 once the trajetto-worker runs two replicas). A process that has

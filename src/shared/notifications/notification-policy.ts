@@ -52,6 +52,7 @@ import {
   masterUserWelcomedPolicy,
 } from "./policies/master-user-policies";
 import { webhookEndpointDisabledPolicy } from "./policies/webhook-endpoint-policies";
+import { whatsAppQuotaReachedPolicy } from "./policies/whatsapp-quota-policy";
 import { proofAIFeedbackPolicy } from "./policies/proof-ai-feedback-policy";
 import {
   driverAccessNewDevicePolicy,
@@ -132,6 +133,8 @@ const notificationPolicies: {
   "delivery.failed": deliveryFailedPolicy,
 
   "webhook-endpoint.disabled": webhookEndpointDisabledPolicy,
+
+  "whatsapp-quota.reached": whatsAppQuotaReachedPolicy,
 
   "delivery-proof.ai-flagged": proofAIFeedbackPolicy,
 

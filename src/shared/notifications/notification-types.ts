@@ -705,6 +705,24 @@ interface WebhookEndpointDisabledPayload {
 }
 
 /**
+ * A company spent its daily WhatsApp quota (plano-escala F3-15b): told to
+ * its admins once a day, the first time a message waits for the next day.
+ * The messages are held, not lost, and none goes by e-mail instead.
+ */
+interface WhatsAppQuotaReachedPayload {
+  businessId: string;
+
+  /** The company's business day the quota ran out on (YYYY-MM-DD). */
+  day: string;
+
+  /** Messages a day (WHATSAPP_DAILY_QUOTA_PER_TENANT). */
+  limit: number;
+
+  /** The business day the held messages go out on (YYYY-MM-DD). */
+  resumesOn: string;
+}
+
+/**
  * A driver's login reached by a phone it did not trust (wave 2): the QR code
  * consumed on a new phone, or a password created right after one. Told to the
  * company's admins — never to the manager who issued the QR, who knows — so a
@@ -773,6 +791,9 @@ interface TopicPayloadMap {
   // after a QR code, to the company's admins.
   "driver-access.new_device": DriverAccessPayload;
   "driver-access.password_created": DriverAccessPayload;
+
+  // Plano-escala F3-15b: the company's daily WhatsApp quota ran out.
+  "whatsapp-quota.reached": WhatsAppQuotaReachedPayload;
 }
 
 type NotificationTopic = keyof TopicPayloadMap;
@@ -1111,4 +1132,5 @@ export type {
   PolicyDeps,
   NotificationPolicyEntry,
   WebhookEndpointDisabledPayload,
+  WhatsAppQuotaReachedPayload,
 };

@@ -312,6 +312,21 @@ parte e devolve na hora, sem gastar tentativa, o que pegou a mais, então
 nenhuma linha espera o provedor com o lease correndo. Concorrência não
 limita taxa; o balde de taxa por provedor é o F3-15c.
 
+**Cota diária de WhatsApp por empresa (F3-15b).** Todas as empresas mandam
+WhatsApp pela mesma conta da plataforma na Meta: a rajada de uma
+transportadora gasta o nível de mensagens e a nota de qualidade de que
+todas dependem. Com `WHATSAPP_DAILY_QUOTA_PER_TENANT` acima de 0 (`0`, o
+padrão, é sem cota, até a conversa com a Meta), cada chamada à Meta toma
+uma unidade da `provider_quota_day` (provedor `whatsapp`, escopo
+`whatsapp:<businessId>`, o dia de negócio da empresa no fuso dela), no
+Postgres, porque o que é contrato não pode sumir num despejo do Redis
+(`src/shared/notifications/whatsapp-daily-quota.ts`). Passou da cota, a
+linha volta para a fila sem gastar tentativa, com `availableAt` no começo
+do próximo dia de negócio da empresa, e nunca cai para o e-mail. Os
+administradores recebem o aviso `whatsapp-quota.reached` no sino, uma vez
+por dia: a chave do evento no outbox (`whatsapp-quota.reached:<empresa>:<dia>`)
+é a deduplicação.
+
 - **DLQ:** o status `FAILED`.
   - `GET /health/dead-letter` com `POST /health/dead-letter/replay` cobre
     as entregas.
