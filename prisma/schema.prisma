@@ -1543,6 +1543,14 @@ model OutboxEventDeadLetter {
   replayed_at       DateTime?
   replayed_event_id String?
 
+  /// The deliveries the event already had, DELIVERED or FAILED, which the
+  /// move deletes with it (a replica that lost the lease expanded it, and
+  /// it failed under the new owner): recipient, channel, status, attempts,
+  /// deliveredAt and the provider's id and status, times in epoch ms. The
+  /// replay gives them back to the new event, so its expansion creates only
+  /// what the original never had. Null when there were none.
+  settled_deliveries Json?
+
   /// The listing (newest failure first) and the archive's own purge.
   @@index([failedAt])
   @@map("outbox_event_dead_letter")

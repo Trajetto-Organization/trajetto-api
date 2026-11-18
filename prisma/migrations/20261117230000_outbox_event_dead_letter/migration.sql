@@ -11,6 +11,13 @@
 -- after the failure: GET /health/dead-letter/events lists both places, and
 -- a replay of a copy creates a new event.
 --
+-- settled_deliveries: the deliveries the event already had, DELIVERED or
+-- FAILED (an event a replica expanded after losing its lease, then failed
+-- under the new owner), which the move deletes with it. The replay gives
+-- them back to the new event, so its expansion creates only the
+-- deliveries the original never had, as the replay of a live event does,
+-- and nobody gets the same message twice. NULL when there were none.
+--
 -- No foreign key: the copy outlives the event, the company and the actor.
 -- The index on failedAt serves the listing (newest first) and the
 -- archive's own purge (oldest first).
@@ -38,6 +45,7 @@ CREATE TABLE IF NOT EXISTS "outbox_event_dead_letter" (
     "archived_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "replayed_at" TIMESTAMP(3),
     "replayed_event_id" TEXT,
+    "settled_deliveries" JSONB,
 
     CONSTRAINT "outbox_event_dead_letter_pkey" PRIMARY KEY ("id")
 );

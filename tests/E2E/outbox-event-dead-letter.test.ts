@@ -312,6 +312,169 @@ describe("the dead letter of outbox events", () => {
     ).toBeGreaterThan(0);
   });
 
+  // A replica that lost an event's lease can still expand it, the
+  // deliveries go out, and the event then fails under the new owner. The
+  // move deletes those deliveries with the event. A copy replayed as a new
+  // event (new id, so new delivery ids) used to expand every recipient
+  // again: whoever had the WhatsApp, the e-mail or the bell got it twice.
+  // A live replay creates only the deliveries the event never had; so must
+  // a copy's.
+  /**
+   * An event expanded for `registrationUserId`, whose deliveries all went
+   * out, and which then failed 45 days ago: moved by the purge.
+   */
+  async function expandedThenFailed(registrationUserId: string) {
+    const event = await prisma.domainOutboxEvent.create({
+      data: {
+        eventKey: `dead-letter:${randomUUID()}`,
+        topic: "account-payable.created",
+        aggregateType: "account-payable",
+        aggregateId: randomUUID(),
+        businessId: BUSINESS,
+        actorId: MASTER,
+        correlationId: randomUUID(),
+        payload: {
+          accountPayableId: randomUUID(),
+          businessId: BUSINESS,
+          amount: 150,
+          serviceOrderId: null,
+          registrationUserId,
+        },
+      },
+    });
+
+    await pipeline.runOutboxCycle();
+
+    const original = await prisma.notificationDelivery.findMany({
+      where: { outboxEventId: event.id },
+    });
+
+    expect(original.length).toBeGreaterThan(0);
+
+    // They went out; then the event failed under the replica that took it
+    // over, 45 days ago.
+    const deliveredAt = new Date(Date.now() - 45 * DAY_MS);
+
+    await prisma.notificationDelivery.updateMany({
+      where: { outboxEventId: event.id },
+      data: {
+        status: "DELIVERED",
+        attempts: 1,
+        deliveredAt,
+        providerMessageId: "mensagem-original",
+      },
+    });
+    await prisma.$executeRaw`
+      UPDATE "domain_outbox_event"
+      SET "status" = 'FAILED', "attempts" = 10, "processedAt" = NULL,
+          "lastError" = 'Falhou depois de expandir',
+          "updated_at" = ${deliveredAt}
+      WHERE "id" = ${event.id}
+    `;
+
+    await runPurge();
+
+    return { event, original, deliveredAt };
+  }
+
+  it("replays a copy without sending again what the original already delivered", async () => {
+    vi.spyOn(pipeline, "wake").mockImplementation(() => undefined);
+
+    const { event, original, deliveredAt } =
+      await expandedThenFailed(RECIPIENT);
+
+    expect(
+      await prisma.notificationDelivery.count({
+        where: { outboxEventId: event.id },
+      }),
+    ).toBe(0);
+
+    expect((await replayEvents([event.id])).json()).toEqual({ requeued: 1 });
+
+    const copy = await prisma.outboxEventDeadLetter.findUniqueOrThrow({
+      where: { id: event.id },
+    });
+
+    await pipeline.runOutboxCycle();
+
+    expect(
+      (
+        await prisma.domainOutboxEvent.findUniqueOrThrow({
+          where: { id: copy.replayed_event_id! },
+        })
+      ).status,
+    ).toBe("PUBLISHED");
+
+    const replayed = await prisma.notificationDelivery.findMany({
+      where: { outboxEventId: copy.replayed_event_id! },
+    });
+    const recipient = (row: {
+      userId: string | null;
+      externalRecipientId: string | null;
+      channel: string;
+    }) => `${row.userId ?? ""}|${row.externalRecipientId ?? ""}|${row.channel}`;
+
+    expect(replayed.map(recipient).sort()).toEqual(
+      original.map(recipient).sort(),
+    );
+
+    // Nothing left to send: every one is the delivery that already went.
+    for (const row of replayed) {
+      expect(row).toMatchObject({
+        status: "DELIVERED",
+        attempts: 1,
+        deliveredAt,
+        providerMessageId: "mensagem-original",
+        business_id: BUSINESS,
+      });
+    }
+  });
+
+  // The recipient left between the move and the replay: there is no row to
+  // give back to them (the foreign key would refuse it, and the expansion
+  // no longer reaches them), and the replay must not fail for it.
+  it("replays a copy whose recipient was deleted since, leaving that delivery out", async () => {
+    vi.spyOn(pipeline, "wake").mockImplementation(() => undefined);
+
+    const leaving = await prisma.user.create({
+      data: {
+        name: "Pessoa que saiu",
+        email: `dead-letter-${randomUUID()}@example.com`,
+        password: "nao-usado",
+        role: "BUSINESS_ADMIN",
+        businessId: BUSINESS,
+      },
+    });
+
+    const { event, original } = await expandedThenFailed(leaving.id);
+
+    expect(original.some((row) => row.userId === leaving.id)).toBe(true);
+
+    await prisma.user.delete({ where: { id: leaving.id } });
+
+    const response = await replayEvents([event.id]);
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ requeued: 1 });
+
+    const copy = await prisma.outboxEventDeadLetter.findUniqueOrThrow({
+      where: { id: event.id },
+    });
+    const restored = await prisma.notificationDelivery.findMany({
+      where: { outboxEventId: copy.replayed_event_id! },
+    });
+
+    expect(restored.some((row) => row.userId === leaving.id)).toBe(false);
+    // The others the original reached are back, already delivered.
+    expect(restored.map((row) => row.userId).sort()).toEqual(
+      original
+        .filter((row) => row.userId !== leaving.id)
+        .map((row) => row.userId)
+        .sort(),
+    );
+    expect(restored.every((row) => row.status === "DELIVERED")).toBe(true);
+  });
+
   it("requeues a live FAILED event in place, and a copy, in one request", async () => {
     vi.spyOn(pipeline, "wake").mockImplementation(() => undefined);
 

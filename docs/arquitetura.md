@@ -3463,7 +3463,15 @@ nada muda. `GET /health/dead-letter/events` junta os dois lugares
 PENDING e transforma o arquivado num evento novo (id e chave próprios,
 mesmo tópico, empresa, autor e conteúdo), marcando no arquivado qual evento
 ele virou: o segundo clique não faz nada
-(`src/shared/notifications/outbox-dead-letter.ts`). A mesma variável
+(`src/shared/notifications/outbox-dead-letter.ts`). Um evento que uma
+réplica expandiu depois de perder o lease, e que falhou com o novo dono, já
+tinha mandado as suas entregas, e a mudança para o arquivo as apaga junto.
+Por isso ela guarda no arquivado as entregas concluídas (DELIVERED ou
+FAILED, em `settled_deliveries`), e o replay as devolve ao evento novo, com
+os ids que a expansão dele calcula (`delivery-id.ts`): a expansão pula essas
+e cria só as que o original nunca criou, como no replay do evento da fila,
+e quem já recebeu não recebe de novo. Um destinatário apagado nesse meio
+tempo fica de fora. A mesma variável
 governa o arquivo das entregas que falharam (`notification_dead_letter`).
 
 **Exclusões sem cascata nas filas (F5-05).** A `notification_delivery`, os

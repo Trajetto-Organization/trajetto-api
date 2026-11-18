@@ -254,7 +254,11 @@ function dueFailedSql(failedBefore: Date): Prisma.Sql {
  * replica expanded after losing its lease, and that then failed under the
  * new owner, does. The cascade took those with the event, so the batch
  * takes them explicitly, with their receipts (EVENT_FAMILY_SQL, F5-05).
- * The keys of these events are left to the orphan-key sweep, as before.
+ * The ones that already went out (DELIVERED) or gave up (FAILED) are
+ * recorded in the copy first (settled_deliveries): the replay gives them
+ * back to the new event, whose expansion then skips them, so a recipient
+ * who had the message does not get it again. The keys of these events are
+ * left to the orphan-key sweep, as before.
  */
 function failedPurgeBatchSql(
   failedBefore: Date,
@@ -276,12 +280,36 @@ function failedPurgeBatchSql(
       INSERT INTO "outbox_event_dead_letter" (
         "id", "eventKey", "topic", "aggregateType", "aggregateId",
         "businessId", "actorId", "payload", "attempts", "lastError",
-        "correlationId", "created_at", "failedAt"
+        "correlationId", "created_at", "failedAt", "settled_deliveries"
       )
       SELECT
         b."id", b."eventKey", b."topic", b."aggregateType", b."aggregateId",
         b."businessId", b."actorId", b."payload", b."attempts", b."lastError",
-        b."correlationId", b."created_at", b."updated_at"
+        b."correlationId", b."created_at", b."updated_at",
+        -- Read in the statement's snapshot, before the deliveries CTE
+        -- deletes them; per event, through the outboxEventId index.
+        (
+          SELECT jsonb_agg(
+            jsonb_build_object(
+              'userId', d."userId",
+              'externalRecipientId', d."externalRecipientId",
+              'channel', d."channel",
+              'status', d."status",
+              'attempts', d."attempts",
+              'deliveredAt',
+                (extract(epoch FROM d."deliveredAt") * 1000)::bigint,
+              'lastError', d."lastError",
+              'providerMessageId', d."providerMessageId",
+              'providerStatus', d."providerStatus",
+              'providerStatusAt',
+                (extract(epoch FROM d."providerStatusAt") * 1000)::bigint
+            )
+            ORDER BY d."id"
+          )
+          FROM "notification_delivery" d
+          WHERE d."outboxEventId" = b."id"
+            AND d."status" IN ('DELIVERED', 'FAILED')
+        )
       FROM batch b
       WHERE b."updated_at" >= ${keptFrom}
       ON CONFLICT ("id") DO NOTHING
