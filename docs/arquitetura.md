@@ -4639,10 +4639,16 @@ vai também na casca, na mesma migration:
 casca, porque tabela particionada não comporta índice único sem a chave de
 partição (a unicidade da chave de envio mora na
 `delivery_event_submission`, F2-14). FK nova que referencia uma tabela
-quente vai uma por migration, num `DO` com `lock_timeout` de 1 s e novas
-tentativas (o modelo é a `20261117200100_delivery_event_part_delivery_fk`):
-criar FK pega SHARE ROW EXCLUSIVE na tabela referenciada, e as escritas
-nela esperam enquanto a migration espera o lock. A casca não está no
+quente vai uma por migration, num `DO` com novas tentativas (o modelo é a
+`20261117200100_delivery_event_part_delivery_fk`): criar FK pega SHARE ROW
+EXCLUSIVE na tabela referenciada, e as escritas nela esperam enquanto a
+migration espera o lock. Cada tentativa espera um segundo a mais que o
+`deadlock_timeout` (2 s no padrão): o Postgres só cancela um autovacuum que
+segura a tabela na checagem de deadlock de quem espera, que roda no
+`deadlock_timeout`, e um `lock_timeout` do mesmo tamanho desiste antes do
+cancelamento. `tests/unitaires/lifecycle/migration-lock-timeout.test.ts`
+recusa, em `prisma/`, um `lock_timeout` que não passe de 1 s ou que não
+seja calculado do `deadlock_timeout`. A casca não está no
 `schema.prisma` (o Prisma não declara tabela particionada pelo id, e nada a
 grava antes da janela): a lista de exceções do gate de drift explica as
 linhas dela.

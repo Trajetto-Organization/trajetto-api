@@ -10,8 +10,13 @@
 -- open transaction that wrote "route"), every new write there queues
 -- behind it:
 --   a departure, a stop settled, a route edit.
--- So each attempt waits at most 1 s (lock_timeout) and gives way for 1 s
--- before the next one, up to 30 attempts. A lock that never comes fails
+-- So each attempt waits one second longer than deadlock_timeout (2 s by
+-- default, lock_timeout) and gives way for 1 s before the next one, up to
+-- 30 attempts. Longer than deadlock_timeout because an autovacuum holding
+-- the table is cancelled only by the waiter's deadlock check, at
+-- deadlock_timeout: a lock_timeout of the same length fires in the same
+-- wake-up, before the cancel, and no attempt would ever get the table from
+-- a long autovacuum. A lock that never comes fails
 -- the migration: the release step stops before the API, nothing of this
 -- file stays, and `prisma migrate resolve --rolled-back` (docs/deploy.md,
 -- P3009) lets the next run try again. The constraint is added only where
@@ -34,7 +39,11 @@ BEGIN
     RETURN;
   END IF;
 
-  PERFORM set_config('lock_timeout', '1s', true);
+  PERFORM set_config(
+    'lock_timeout',
+    (floor(extract(epoch FROM current_setting('deadlock_timeout')::interval) * 1000) + 1000)::bigint || 'ms',
+    true
+  );
 
   LOOP
     BEGIN
