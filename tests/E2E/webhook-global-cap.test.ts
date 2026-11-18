@@ -4,7 +4,9 @@ import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 
 import { env } from "@/env";
+import { WebhookEndpointRepository } from "@/modules/integration/repositories/webhook-endpoint-repository";
 import { createPrismaClient } from "@/shared/database/database-client";
+import { destinationHostOf } from "@/shared/integration/webhook-dispatch-rules";
 import {
   WebhookDispatchService,
   fanOutWebhookEvent,
@@ -23,7 +25,11 @@ import {
  *    more than four, and every event still arrives (and, with the cap
  *    off, the claim of before lets the three send six at once: red);
  *  - a second endpoint's events go out while the first is at its cap;
- *  - the cap is read at every claim.
+ *  - the cap is read at every claim;
+ *  - F3-14: the endpoints of one destination host (an aggregator's ERP)
+ *    never hold more than WEBHOOK_HOST_GLOBAL_CONCURRENCY open on it
+ *    together, an endpoint with no host recorded has no host cap, and the
+ *    host is written with the URL and filled for the endpoints without.
  */
 const prisma = createPrismaClient();
 
@@ -35,12 +41,17 @@ const HOLD_MS = 250;
 let server: Server;
 let baseUrl: string;
 
-/** Requests open now and at most, per path; arrivals in order. */
+/** Requests open now and at most, per path and in all; arrivals in order. */
 const open = new Map<string, number>();
 const peak = new Map<string, number>();
+let openTotal = 0;
+let peakTotal = 0;
 let arrivals: string[] = [];
 
-const saved = env.WEBHOOK_ENDPOINT_GLOBAL_CONCURRENCY;
+const saved = {
+  endpoint: env.WEBHOOK_ENDPOINT_GLOBAL_CONCURRENCY,
+  host: env.WEBHOOK_HOST_GLOBAL_CONCURRENCY,
+};
 
 /** Three dispatchers, as three worker processes would run them. */
 function dispatchers(): WebhookDispatchService[] {
@@ -49,11 +60,17 @@ function dispatchers(): WebhookDispatchService[] {
   );
 }
 
-async function seedEndpoint(path: string): Promise<string> {
+async function seedEndpoint(
+  path: string,
+  options: { withHost?: boolean } = {},
+): Promise<string> {
   const endpoint = await prisma.webhookEndpoint.create({
     data: {
       name: `Receptor ${path}`,
       url: `${baseUrl}${path}`,
+      destination_host: options.withHost
+        ? destinationHostOf(`${baseUrl}${path}`)
+        : null,
       secret: "whsec_teste_do_teto_global",
       topics: ["delivery.delivered"],
       businessId: CARRIER,
@@ -110,10 +127,13 @@ beforeAll(async () => {
 
       open.set(path, now);
       peak.set(path, Math.max(peak.get(path) ?? 0, now));
+      openTotal += 1;
+      peakTotal = Math.max(peakTotal, openTotal);
       arrivals.push(path);
 
       setTimeout(() => {
         open.set(path, (open.get(path) ?? 1) - 1);
+        openTotal -= 1;
         response.writeHead(200, { "Content-Type": "text/plain" });
         response.end("ok");
       }, HOLD_MS);
@@ -145,15 +165,19 @@ beforeAll(async () => {
 beforeEach(async () => {
   open.clear();
   peak.clear();
+  openTotal = 0;
+  peakTotal = 0;
   arrivals = [];
   env.WEBHOOK_ENDPOINT_GLOBAL_CONCURRENCY = 4;
+  env.WEBHOOK_HOST_GLOBAL_CONCURRENCY = 16;
 
   await prisma.webhookDelivery.deleteMany({ where: { businessId: CARRIER } });
   await prisma.webhookEndpoint.deleteMany({ where: { businessId: CARRIER } });
 });
 
 afterAll(async () => {
-  env.WEBHOOK_ENDPOINT_GLOBAL_CONCURRENCY = saved;
+  env.WEBHOOK_ENDPOINT_GLOBAL_CONCURRENCY = saved.endpoint;
+  env.WEBHOOK_HOST_GLOBAL_CONCURRENCY = saved.host;
 
   await prisma.webhookDelivery.deleteMany({ where: { businessId: CARRIER } });
   await prisma.webhookEndpoint.deleteMany({ where: { businessId: CARRIER } });
@@ -238,4 +262,105 @@ describe("an endpoint at its cap", () => {
 
     expect(bBeforeHalfOfA).toBeGreaterThanOrEqual(6);
   }, 60_000);
+});
+
+describe("the endpoints of one destination host (F3-14)", () => {
+  // Six endpoints on one server, as an aggregator's ERP receives one
+  // endpoint per tenant: the cap per endpoint alone lets them hold 6 × 4
+  // open on it at once.
+  const PATHS = ["/h1", "/h2", "/h3", "/h4", "/h5", "/h6"];
+
+  it("never hold more requests open on it together than the host cap", async () => {
+    env.WEBHOOK_HOST_GLOBAL_CONCURRENCY = 5;
+
+    for (const path of PATHS) await seedEndpoint(path, { withHost: true });
+
+    await queueEvents(6);
+    await drainWith(dispatchers());
+
+    expect(arrivals).toHaveLength(36);
+    expect(peakTotal).toBeLessThanOrEqual(5);
+  }, 90_000);
+
+  it("held more than that with the host cap off", async () => {
+    env.WEBHOOK_HOST_GLOBAL_CONCURRENCY = 0;
+
+    for (const path of PATHS) await seedEndpoint(path, { withHost: true });
+
+    await queueEvents(6);
+    await drainWith(dispatchers());
+
+    expect(arrivals).toHaveLength(36);
+    expect(peakTotal).toBeGreaterThan(5);
+  }, 90_000);
+
+  it("leaves an endpoint with no host recorded out of the host cap", async () => {
+    env.WEBHOOK_HOST_GLOBAL_CONCURRENCY = 5;
+
+    // As an older image saves them, until the minute fills the host.
+    for (const path of PATHS) await seedEndpoint(path);
+
+    await queueEvents(6);
+    await drainWith(dispatchers());
+
+    expect(arrivals).toHaveLength(36);
+    expect(peakTotal).toBeGreaterThan(5);
+  }, 90_000);
+
+  it("is written with the URL, and filled for the endpoints without one", async () => {
+    const repository = new WebhookEndpointRepository(prisma as never);
+
+    const created = await repository.createWithinQuota(
+      CARRIER,
+      {
+        name: "ERP do agregador",
+        url: "https://Api.Example.com./webhooks?tenant=1",
+        secret: "selado",
+        topics: ["delivery.delivered"],
+        headers: null,
+        is_active: true,
+      },
+      10,
+    );
+
+    const hostOf = async () =>
+      (
+        await prisma.webhookEndpoint.findUniqueOrThrow({
+          where: { id: created!.id },
+        })
+      ).destination_host;
+
+    expect(await hostOf()).toBe("api.example.com");
+
+    await repository.update(created!.id, CARRIER, {
+      name: "ERP do agregador",
+      url: "https://outro.example.com:8443/hook",
+      topics: ["delivery.delivered"],
+      is_active: true,
+    });
+
+    expect(await hostOf()).toBe("outro.example.com");
+
+    // Saved by the image of before: no host until the minute's fill.
+    await prisma.webhookEndpoint.update({
+      where: { id: created!.id },
+      data: { destination_host: null },
+    });
+
+    const before = await prisma.webhookEndpoint.findUniqueOrThrow({
+      where: { id: created!.id },
+    });
+
+    const filled = await dispatchers()[0].fillDestinationHosts();
+
+    expect(filled).toBeGreaterThanOrEqual(1);
+    expect(await hostOf()).toBe("outro.example.com");
+
+    // The screen's "updated at" does not move for it.
+    const after = await prisma.webhookEndpoint.findUniqueOrThrow({
+      where: { id: created!.id },
+    });
+
+    expect(after.updated_at).toEqual(before.updated_at);
+  });
 });

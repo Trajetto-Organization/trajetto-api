@@ -892,6 +892,20 @@ const envSchema = z
       z.coerce.number().int().min(0).max(64).default(4),
     ),
 
+    // Webhook calls in flight to ONE destination host, across every
+    // endpoint pointed at it and every dispatcher (plano-escala F3-14;
+    // decision D8): an aggregator's ERP (Comprovei/Fusion) gets one
+    // endpoint per tenant at the same host, and the cap per endpoint alone
+    // would let it receive four times its tenants at once. 16 by default,
+    // confirmed by the owner with the receiver's rate. Only with the cap
+    // per endpoint on (above), whose claim applies it; an endpoint with no
+    // host recorded yet has no host cap. 0 turns it off. Empty counts as
+    // absent.
+    WEBHOOK_HOST_GLOBAL_CONCURRENCY: z.preprocess(
+      (value) => (value === "" ? undefined : value),
+      z.coerce.number().int().min(0).max(256).default(16),
+    ),
+
     // The spreadsheet read off the event loop (plano-escala F3-23b;
     // modules/import/services/spreadsheet-worker.ts): how many worker
     // threads may read an upload at once in this process (0 reads on the

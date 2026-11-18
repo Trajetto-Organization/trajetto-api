@@ -284,6 +284,17 @@ pegar. A contagem só vale com um claim por vez: cada um toma um
 commit; nenhuma chamada HTTP acontece com ele. A imagem anterior, no
 rolling, reivindica sem o lock e sem o teto global, até sair.
 
+**Teto por host de destino (F3-14).** O ERP de um agregador
+(Comprovei/Fusion) recebe um endpoint por empresa, todos no mesmo host: só
+o teto por endpoint deixaria ele receber 4 vezes o número de empresas de
+uma vez. `webhook_endpoint.destination_host` guarda o host da URL, em
+minúsculas, gravado com ela, e `WEBHOOK_HOST_GLOBAL_CONCURRENCY` (16; `0`
+desliga) limita as chamadas em voo a um host somando todos os endpoints
+dele: no mesmo claim, um endpoint de host já no teto não recebe parte, e
+as linhas achadas para endpoints do mesmo host são cortadas, na ordem do
+claim, no que o host ainda tem. Host nulo (um endpoint salvo pela imagem
+anterior, até o minuto do despachante preenchê-lo) conta como sem teto.
+
 - **DLQ:** o status `FAILED`.
   - `GET /health/dead-letter` com `POST /health/dead-letter/replay` cobre
     as entregas.

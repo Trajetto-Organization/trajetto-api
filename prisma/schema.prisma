@@ -3418,6 +3418,14 @@ model WebhookEndpoint {
 
   consecutive_failures Int @default(0)
 
+  /// The URL's host, lower case (plano-escala F3-14): the dispatcher caps
+  /// the calls in flight to one host across every endpoint pointed at it
+  /// (WEBHOOK_HOST_GLOBAL_CONCURRENCY), the case of an aggregator's ERP that
+  /// receives every tenant's events. Written with the URL; null on rows an
+  /// older image saved until the dispatcher's minute fills it, and null
+  /// counts as no host cap.
+  destination_host String?
+
   business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
   businessId String
 

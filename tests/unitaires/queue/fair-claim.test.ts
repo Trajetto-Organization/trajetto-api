@@ -271,6 +271,38 @@ describe("a queue whose shares are caps (F3-13)", () => {
     );
   });
 
+  it("cuts what the endpoints of one group found at the group's room (F3-14)", () => {
+    // Two endpoints of one host each take what the host had left, unless
+    // the rows found are ranked within the host and cut at its room.
+    const grouped = fairClaimSql(
+      {
+        ...capped,
+        groupCap: {
+          of: (endpoint) =>
+            Prisma.sql`(SELECT "host" FROM "endpoint" WHERE "id" = ${endpoint})`,
+          room: (host) =>
+            Prisma.sql`${16}::int - coalesce((SELECT "busy" FROM "hosts" WHERE "host" = ${host}), 0)`,
+        },
+      },
+      { ...input, floor: Prisma.empty, rowFloor: Prisma.empty },
+    ).text.replace(/\s+/g, " ");
+
+    expect(grouped).toContain(
+      'PARTITION BY "g"."group" ORDER BY "c"."pass", "c"."turn", "c"."ord", "c"."id"',
+    );
+    expect(grouped).toContain(
+      'SELECT (SELECT "host" FROM "endpoint" WHERE "id" = "c"."tenant") AS "group"',
+    );
+    expect(grouped).toMatch(
+      /WHERE "ranked"\."group" IS NULL OR "ranked"\."rank" <= \$\d+::int - coalesce\(\(SELECT "busy" FROM "hosts" WHERE "host" = "ranked"\."group"\), 0\)/,
+    );
+    expect(grouped).toContain('JOIN "admitted" AS "candidates"');
+
+    // Without it, the candidates go straight to the lock.
+    expect(text).toContain('JOIN "candidates" AS "candidates"');
+    expect(text).not.toContain('"admitted"');
+  });
+
   it("takes nothing outside the walk", () => {
     expect(text).toContain(
       '"oldest" ("id", "ord") AS ( SELECT NULL::text, NULL::bigint WHERE false )',

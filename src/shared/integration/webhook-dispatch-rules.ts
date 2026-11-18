@@ -87,6 +87,35 @@ const WEBHOOK_CLAIM_WINDOW = 500;
 const WEBHOOK_ENDPOINT_GLOBAL_CONCURRENCY = 4;
 
 /**
+ * The cap per destination host (plano-escala F3-14), the default of
+ * WEBHOOK_HOST_GLOBAL_CONCURRENCY: calls in flight to one host across
+ * every endpoint pointed at it and every dispatcher. An aggregator's ERP
+ * (Comprovei/Fusion) receives every tenant's endpoint at one host: four
+ * per endpoint times their tenants would be what it took at once.
+ */
+const WEBHOOK_HOST_GLOBAL_CONCURRENCY = 16;
+
+/**
+ * The host an endpoint's calls go to, as the host cap groups them: the
+ * URL's host name, lower case, without a trailing dot (`Api.Example.com.`
+ * and `api.example.com` are one server). Null for a URL that does not
+ * parse: no group, no host cap (the send itself refuses it).
+ */
+function destinationHostOf(url: string): string | null {
+  let host: string;
+
+  try {
+    host = new URL(url).hostname;
+  } catch {
+    return null;
+  }
+
+  const normalized = host.toLowerCase().replace(/\.+$/, "");
+
+  return normalized === "" ? null : normalized;
+}
+
+/**
  * Endpoints one capped claim visits at most, from its rotating cursor: each
  * costs two short index probes, and the walk stops as soon as it found the
  * rows the free slots take.
@@ -297,6 +326,7 @@ export {
   WEBHOOK_CLAIM_WINDOW,
   WEBHOOK_CONCURRENCY,
   WEBHOOK_ENDPOINT_GLOBAL_CONCURRENCY,
+  WEBHOOK_HOST_GLOBAL_CONCURRENCY,
   WEBHOOK_DRAIN_BUDGET_MS,
   WEBHOOK_LEASE_SECONDS,
   WEBHOOK_PER_ENDPOINT_BATCH,
@@ -304,6 +334,7 @@ export {
   WEBHOOK_RETRY_DELAYS_MS,
   WEBHOOK_TIMEOUT_MS,
   assertWebhookLeaseInvariant,
+  destinationHostOf,
   endpointShare,
   isWebhookPermanent,
   isWebhookSuccess,

@@ -18,6 +18,7 @@ import {
   WEBHOOK_PER_ENDPOINT_BATCH,
   WEBHOOK_TIMEOUT_MS,
   assertWebhookLeaseInvariant,
+  destinationHostOf,
   isOutsideReplayWindow,
   isWebhookPermanent,
   isWebhookSuccess,
@@ -214,7 +215,12 @@ function webhookClaimSql(
  * the caller takes WEBHOOK_CLAIM_LOCK in the same transaction, before this
  * statement, whose snapshot then sees every claim committed before it.
  * `busyEndpoints` are this process's endpoints at their per-process cap
- * (F3-07), left out as in webhookClaimSql. Exported for the plan tests,
+ * (F3-07), left out as in webhookClaimSql.
+ *
+ * With `hostCap` (F3-14), the same over each destination host: an
+ * endpoint of a host at its cap gets no share, and the rows found for
+ * endpoints of one host are cut, in the claim's order, at what the host
+ * has left (the fair claim's group cap). Exported for the plan tests,
  * which measure this very statement.
  */
 function webhookCappedClaimSql(input: {
@@ -222,15 +228,48 @@ function webhookCappedClaimSql(input: {
   limit: number;
   endpointCap: number;
   perEndpoint: number;
+  /** Calls in flight to one destination host (F3-14); 0: no host cap. */
+  hostCap?: number;
   busyEndpoints?: readonly string[];
   floor: Prisma.Sql;
   rowFloor: Prisma.Sql;
 }): Prisma.Sql {
   const busy = input.busyEndpoints ?? [];
+  const hostCap = input.hostCap ?? 0;
   const rowsPerEndpoint = Math.min(
     WEBHOOK_PER_ENDPOINT_BATCH,
     input.perEndpoint,
   );
+
+  // The host cap (plano-escala F3-14): the rows in flight summed by the
+  // destination host of their endpoint, once per claim. An endpoint with
+  // no host (written by an older image, not yet filled) has no host cap.
+  const hostInFlight =
+    hostCap > 0
+      ? Prisma.sql`,
+      "host_in_flight" ("host", "busy") AS MATERIALIZED (
+        SELECT "e"."destination_host", sum("f"."busy")::int
+        FROM "in_flight" AS "f"
+        JOIN "webhook_endpoint" AS "e" ON "e"."id" = "f"."endpointId"
+        WHERE "e"."destination_host" IS NOT NULL
+        GROUP BY "e"."destination_host"
+      )`
+      : Prisma.empty;
+
+  const hostOf = (endpoint: Prisma.Sql) =>
+    Prisma.sql`(SELECT "e"."destination_host" FROM "webhook_endpoint" AS "e" WHERE "e"."id" = ${endpoint})`;
+
+  const hostRoom = (host: Prisma.Sql) =>
+    Prisma.sql`${hostCap}::int - coalesce((SELECT "h"."busy" FROM "host_in_flight" AS "h" WHERE "h"."host" = ${host}), 0)`;
+
+  // A host already at its cap gives its endpoints no share, so the walk
+  // goes on to the other hosts' instead of finding rows it would then drop.
+  // The exact cut, between endpoints of one host in the same claim, is the
+  // group cap's.
+  const hostShare = (endpoint: Prisma.Sql) =>
+    hostCap > 0
+      ? Prisma.sql`, coalesce((SELECT ${hostRoom(Prisma.raw(`"e"."destination_host"`))} FROM "webhook_endpoint" AS "e" WHERE "e"."id" = ${endpoint} AND "e"."destination_host" IS NOT NULL), ${rowsPerEndpoint}::int)`
+      : Prisma.empty;
 
   const notBusy = (alias: string | null) =>
     busy.length > 0
@@ -254,10 +293,14 @@ function webhookCappedClaimSql(input: {
         SELECT "endpointId", count(*)::int FROM "webhook_delivery"
         WHERE "status" = 'PROCESSING' AND "leaseExpiresAt" > now()${input.floor}
         GROUP BY "endpointId"
-      )`,
+      )${hostInFlight}`,
       share: (endpoint) =>
-        Prisma.sql`LEAST(${rowsPerEndpoint}::int, ${input.endpointCap}::int - coalesce((SELECT "in_flight"."busy" FROM "in_flight" WHERE "in_flight"."endpointId" = ${endpoint}), 0))`,
+        Prisma.sql`LEAST(${rowsPerEndpoint}::int, ${input.endpointCap}::int - coalesce((SELECT "in_flight"."busy" FROM "in_flight" WHERE "in_flight"."endpointId" = ${endpoint}), 0)${hostShare(endpoint)})`,
       fill: false,
+      groupCap:
+        hostCap > 0
+          ? { of: hostOf, room: (host) => hostRoom(host) }
+          : undefined,
       set: Prisma.sql`
         "status" = 'PROCESSING',
         "leaseExpiresAt" = now() + make_interval(secs => ${WEBHOOK_LEASE_SECONDS}),
@@ -991,10 +1034,15 @@ class WebhookDispatchService {
     }, SWEEP_INTERVAL_MS);
 
     // The exhausted rows, closed off the claim's path (plano-escala F3-08):
-    // once now, then every minute.
+    // once now, then every minute. The same minute fills the destination
+    // host of the endpoints an older image saved without one (F3-14).
     const sweepExhausted = () => {
       this.closeExhausted().catch((error) => {
         log.error({ err: error }, "exhausted webhooks close failed");
+      });
+
+      this.fillDestinationHosts().catch((error) => {
+        log.error({ err: error }, "webhook destination hosts fill failed");
       });
     };
 
@@ -1045,6 +1093,40 @@ class WebhookDispatchService {
     });
 
     return this.closingExhausted;
+  }
+
+  /**
+   * Writes the destination host of the endpoints that have none
+   * (plano-escala F3-14): the ones the image of before saved during the
+   * rolling deploy, which the cap per host would otherwise never count.
+   * Up to 100 a minute, by id, only while the URL is still the one read
+   * and the host still empty; a URL that does not parse stays empty (no
+   * host cap; the send refuses it). Raw SQL so the endpoint's updated_at,
+   * which the screen shows, does not move. Public so a test can run it.
+   */
+  async fillDestinationHosts(): Promise<number> {
+    const missing = await database.webhookEndpoint.findMany({
+      where: { destination_host: null },
+      select: { id: true, url: true },
+      take: 100,
+    });
+
+    let filled = 0;
+
+    for (const endpoint of missing) {
+      const host = destinationHostOf(endpoint.url);
+
+      if (host === null) continue;
+
+      filled += await database.$executeRaw`
+        UPDATE "webhook_endpoint" SET "destination_host" = ${host}
+        WHERE "id" = ${endpoint.id}
+          AND "url" = ${endpoint.url}
+          AND "destination_host" IS NULL
+      `;
+    }
+
+    return filled;
   }
 
   /**
@@ -1195,6 +1277,7 @@ class WebhookDispatchService {
           limit,
           endpointCap: env.WEBHOOK_ENDPOINT_GLOBAL_CONCURRENCY,
           perEndpoint: WEBHOOK_PER_ENDPOINT_CONCURRENCY,
+          hostCap: env.WEBHOOK_HOST_GLOBAL_CONCURRENCY,
           busyEndpoints: [...busyEndpoints],
           floor,
           rowFloor,

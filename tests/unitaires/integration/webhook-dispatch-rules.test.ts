@@ -11,6 +11,7 @@ import {
   WEBHOOK_RETRY_DELAYS_MS,
   WEBHOOK_TIMEOUT_MS,
   assertWebhookLeaseInvariant,
+  destinationHostOf,
   endpointShare,
   isWebhookPermanent,
   isWebhookSuccess,
@@ -205,5 +206,34 @@ describe("an endpoint's share of a capped claim", () => {
     expect(WEBHOOK_ENDPOINT_GLOBAL_CONCURRENCY).toBe(
       2 * WEBHOOK_PER_ENDPOINT_CONCURRENCY,
     );
+  });
+});
+
+/**
+ * The host the cap per destination host groups endpoints by (plano-escala
+ * F3-14): one server however its URL is spelled.
+ */
+describe("an endpoint's destination host", () => {
+  it("is the URL's host, lower case, without port, user, path or trailing dot", () => {
+    expect(destinationHostOf("https://Api.Example.com/hook")).toBe(
+      "api.example.com",
+    );
+    expect(
+      destinationHostOf("https://user:senha@api.example.com:8443/x?y=1#z"),
+    ).toBe("api.example.com");
+    expect(destinationHostOf("https://api.example.com./hook")).toBe(
+      "api.example.com",
+    );
+  });
+
+  it("keeps an IPv6 literal in brackets, as the backfill does", () => {
+    expect(destinationHostOf("https://[2001:db8::1]:443/h")).toBe(
+      "[2001:db8::1]",
+    );
+  });
+
+  it("is none for a URL that does not parse: no group, no host cap", () => {
+    expect(destinationHostOf("não é uma url")).toBeNull();
+    expect(destinationHostOf("")).toBeNull();
   });
 });

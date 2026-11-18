@@ -1,6 +1,7 @@
 import { Prisma } from "@prisma/client";
 
 import database from "@/../infra/database";
+import { destinationHostOf } from "@/shared/integration/webhook-dispatch-rules";
 import { deleteQueueRowsOfWebhookEndpoint } from "@/shared/notifications/queue-row-cleanup";
 
 import type {
@@ -40,6 +41,9 @@ class WebhookEndpointRepository implements IWebhookEndpointRepository {
         data: {
           name: data.name,
           url: data.url,
+          // With the URL, always: the dispatcher's cap per destination host
+          // groups the endpoints by it (plano-escala F3-14).
+          destination_host: destinationHostOf(data.url),
           secret: data.secret,
           topics: data.topics,
           headers: headersValue(data.headers),
@@ -61,6 +65,7 @@ class WebhookEndpointRepository implements IWebhookEndpointRepository {
       data: {
         name: data.name,
         url: data.url,
+        destination_host: destinationHostOf(data.url),
         topics: data.topics,
 
         // Omitted keeps what is stored: the web form has no headers field,

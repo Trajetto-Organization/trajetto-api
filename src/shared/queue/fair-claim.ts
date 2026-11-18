@@ -110,6 +110,20 @@ interface FairQueue {
    */
   with?: Prisma.Sql;
 
+  /**
+   * A cap over groups of companies (plano-escala F3-14: the webhook
+   * endpoints of one destination host). The walk's shares are per company,
+   * so two companies of one group could each take what the group has left;
+   * the rows found are ranked within their company's group, in the claim's
+   * order, and those past the group's room are left out. `of` gives a
+   * company's group (NULL: no group, no cap), `room` what a group may still
+   * take.
+   */
+  groupCap?: {
+    of: (company: Prisma.Sql) => Prisma.Sql;
+    room: (group: Prisma.Sql) => Prisma.Sql;
+  };
+
   /** What the claim writes. */
   set: Prisma.Sql;
 
@@ -259,6 +273,29 @@ function fairClaimSql(queue: FairQueue, input: FairClaimInput): Prisma.Sql {
 
   const prelude = queue.with ? Prisma.sql`${queue.with},` : Prisma.empty;
 
+  // The group cap's cut (see `groupCap`): the candidates ranked within
+  // their company's group, kept while within the group's room.
+  const admitted = queue.groupCap
+    ? Prisma.sql`
+    "admitted" ("id", "pass", "turn", "ord", "tenant") AS (
+      SELECT "id", "pass", "turn", "ord", "tenant" FROM (
+        SELECT "c"."id", "c"."pass", "c"."turn", "c"."ord", "c"."tenant",
+               "g"."group",
+               row_number() OVER (
+                 PARTITION BY "g"."group"
+                 ORDER BY "c"."pass", "c"."turn", "c"."ord", "c"."id"
+               ) AS "rank"
+        FROM "candidates" AS "c"
+        CROSS JOIN LATERAL (
+          SELECT ${queue.groupCap.of(Prisma.raw(`"c"."tenant"`))} AS "group"
+        ) AS "g"
+      ) AS "ranked"
+      WHERE "ranked"."group" IS NULL
+         OR "ranked"."rank" <= ${queue.groupCap.room(Prisma.raw(`"ranked"."group"`))}
+    ),`
+    : Prisma.empty;
+  const pool = Prisma.raw(queue.groupCap ? `"admitted"` : `"candidates"`);
+
   // Without the fill, no row outside the walk: the shares are the claim.
   const oldest =
     queue.fill === false
@@ -328,28 +365,28 @@ function fairClaimSql(queue: FairQueue, input: FairClaimInput): Prisma.Sql {
         AND "before"."n" < ${maxTenants}
         AND "before"."found" < ${limit}
     ),
-    "fair" ("id", "turn", "ord") AS (
-      SELECT "row"."id", "visits"."turn", "row"."ord"
+    "fair" ("id", "turn", "ord", "tenant") AS (
+      SELECT "row"."id", "visits"."turn", "row"."ord", "visits"."tenant"
       FROM (
-        SELECT "n" AS "turn", "ids" FROM "after"
+        SELECT "n" AS "turn", "ids", "tenant" FROM "after"
         UNION ALL
-        SELECT ${nullTurn}, "ids" FROM "nulls"
+        SELECT ${nullTurn}, "ids", NULL::text FROM "nulls"
         UNION ALL
-        SELECT ${nullTurn} + "n", "ids" FROM "before"
+        SELECT ${nullTurn} + "n", "ids", "tenant" FROM "before"
       ) AS "visits"
       CROSS JOIN LATERAL unnest("visits"."ids") WITH ORDINALITY AS "row" ("id", "ord")
     ),
     "oldest" ("id", "ord") AS (
       ${oldest}
     ),
-    "candidates" ("id", "pass", "turn", "ord") AS (
-      SELECT DISTINCT ON ("id") "id", "pass", "turn", "ord" FROM (
-        SELECT "id", 0 AS "pass", "turn", "ord" FROM "fair"
+    "candidates" ("id", "pass", "turn", "ord", "tenant") AS (
+      SELECT DISTINCT ON ("id") "id", "pass", "turn", "ord", "tenant" FROM (
+        SELECT "id", 0 AS "pass", "turn", "ord", "tenant" FROM "fair"
         UNION ALL
-        SELECT "id", 1, 0, "ord" FROM "oldest"
+        SELECT "id", 1, 0, "ord", NULL::text FROM "oldest"
       ) AS "both"
       ORDER BY "id", "pass"
-    ),
+    ),${admitted}
     "walk_end" ("tenant") AS (
       SELECT coalesce(
         (SELECT "tenant" FROM "before" ORDER BY "n" DESC LIMIT 1),
@@ -360,7 +397,7 @@ function fairClaimSql(queue: FairQueue, input: FairClaimInput): Prisma.Sql {
     UPDATE ${table} SET ${queue.set}
     WHERE "id" IN (
       SELECT "row"."id" FROM ${table} AS "row"
-      JOIN "candidates" ON "candidates"."id" = "row"."id"
+      JOIN ${pool} AS "candidates" ON "candidates"."id" = "row"."id"
       -- Checked again under the lock: another process may have taken it.
       WHERE ${queue.indexed("row")} AND ${queue.due("row")}${input.rowFloor}
       ORDER BY "candidates"."pass", "candidates"."turn",

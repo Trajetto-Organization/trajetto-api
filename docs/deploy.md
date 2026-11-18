@@ -4452,6 +4452,10 @@ qualquer `worker` ×2: sem ele, cada despachante a mais multiplica o que o
 ERP do cliente recebe. O 4 é o que as duas réplicas da produção já mandam
 hoje; o valor final vem da taxa que a Comprovei/Fusion confirmar (pedido
 comercial da onda 13). `0` volta ao teto só por processo.
+`WEBHOOK_HOST_GLOBAL_CONCURRENCY` (16, F3-14) faz o mesmo por host de
+destino, somando todos os endpoints apontados para ele: o caso do ERP de um
+agregador, que recebe um endpoint por empresa no mesmo host. Só vale com o
+teto por endpoint ligado; `0` o desliga.
 
 **Orçamento de memória (U-15).** No boot, cada processo soma o heap
 principal (o `--max-old-space-size` do `NODE_OPTIONS`), as threads da

@@ -2,6 +2,8 @@ import { randomUUID } from "node:crypto";
 
 import type { Prisma } from "@prisma/client";
 
+import { destinationHostOf } from "@/shared/integration/webhook-dispatch-rules";
+
 import type {
   CreateWebhookEndpointData,
   IWebhookEndpointRepository,
@@ -15,6 +17,8 @@ interface InMemoryWebhookEndpoint extends WebhookEndpointSummary {
   previous_secret: string | null;
   previous_secret_expires_at: Date | null;
   headers: Prisma.InputJsonValue | null;
+  /** The URL's host, written with it (plano-escala F3-14). */
+  destination_host: string | null;
   businessId: string;
   updated_at: Date;
 }
@@ -49,6 +53,7 @@ class InMemoryWebhookEndpointRepository implements IWebhookEndpointRepository {
       id: randomUUID(),
       name: data.name,
       url: data.url,
+      destination_host: destinationHostOf(data.url),
       secret: data.secret,
       previous_secret: null,
       previous_secret_expires_at: null,
@@ -78,6 +83,7 @@ class InMemoryWebhookEndpointRepository implements IWebhookEndpointRepository {
 
     endpoint.name = data.name;
     endpoint.url = data.url;
+    endpoint.destination_host = destinationHostOf(data.url);
     endpoint.topics = [...data.topics];
 
     if (data.headers !== undefined) endpoint.headers = data.headers;
