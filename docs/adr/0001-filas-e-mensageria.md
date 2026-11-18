@@ -168,18 +168,21 @@ com nova conta de req/s contra o joelho, e não uma decisão de arquitetura.
 
 ### 5. Retentativa, DLQ, concorrência, timeout, backpressure, métricas, idempotência e recuperação
 
-| Fila               | Lease                     | Concorrência                                | Retentativas (backoff, jitter ±20%)                                  | Tentativas | Timeout da chamada                                            |
-| ------------------ | ------------------------- | ------------------------------------------- | -------------------------------------------------------------------- | ---------- | ------------------------------------------------------------- |
-| outbox (expansão)  | 60 s, renovado por evento | lote de 10                                  | 30 s, 2 min, 10 min, 30 min                                          | 5          | —                                                             |
-| entregas (2 raias) | 180 s                     | 5 por raia, lote de 20                      | 30 s, 2 min, 10 min, 30 min, 1 h, 3 h (~4h40); `Retry-After` até 1 h | 7          | backstop de 15 s por entrega; SMTP, Meta e Expo com 10 s cada |
-| webhooks           | 120 s                     | 5; por endpoint lote de 10 e 2 em paralelo  | 30 s, 2 min, 10 min, 1 h, 6 h                                        | 6          | 10 s; resposta lida até 8 kB                                  |
-| IA                 | 300 s                     | 4 (limitada por `AI_LOCAL_MAX_CONCURRENCY`) | 30 s, 2 min, 10 min; leitor ocupado: 5–15 s                          | 4          | leitor 15 s; foto do R2 com prazo de 15 s                     |
+| Fila               | Lease                     | Concorrência                                                                                      | Retentativas (backoff, jitter ±20%)                                  | Tentativas | Timeout da chamada                                            |
+| ------------------ | ------------------------- | ------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------- | ---------- | ------------------------------------------------------------- |
+| outbox (expansão)  | 60 s, renovado por evento | 1 por vez (`OUTBOX_EXPANSION_CONCURRENCY`), lote de 10                                            | 30 s, 2 min, 10 min, 30 min                                          | 5          | —                                                             |
+| entregas (2 raias) | 180 s                     | 5 por raia (`NOTIFICATION_INTERNAL_CONCURRENCY`, `NOTIFICATION_EXTERNAL_CONCURRENCY`), lote de 20 | 30 s, 2 min, 10 min, 30 min, 1 h, 3 h (~4h40); `Retry-After` até 1 h | 7          | backstop de 15 s por entrega; SMTP, Meta e Expo com 10 s cada |
+| webhooks           | 120 s                     | 5 (`WEBHOOK_CONCURRENCY`); por endpoint lote de 10 e 2 em paralelo                                | 30 s, 2 min, 10 min, 1 h, 6 h                                        | 6          | 10 s; resposta lida até 8 kB                                  |
+| IA                 | 300 s                     | 4 (`AI_CONCURRENCY`, limitada por `AI_LOCAL_MAX_CONCURRENCY`)                                     | 30 s, 2 min, 10 min; leitor ocupado: 5–15 s                          | 4          | leitor 15 s; foto do R2 com prazo de 15 s                     |
 
 Constantes em `src/shared/notifications/pipeline-rules.ts`,
 `src/shared/integration/webhook-dispatch-rules.ts`,
 `src/shared/ai/ai-rules.ts` e `ai-analysis-pipeline-service.ts`. Os
 invariantes de lease (`ceil(lote/concorrência) × timeout < lease`) são
-verificados no import do módulo e no boot.
+verificados no import do módulo e no boot. A concorrência de cada fila vem
+do _Environment_ desde a onda 12 do plano de escala (F3-05; padrões iguais
+às constantes de antes, de 1 a 32): o invariante é conferido com o valor
+dado, e um valor que não cabe no lease para o boot.
 
 - **DLQ:** o status `FAILED`.
   - `GET /health/dead-letter` com `POST /health/dead-letter/replay` cobre

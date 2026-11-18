@@ -46,6 +46,11 @@ import {
   resolveProcessRole,
 } from "@/shared/lifecycle/process-role";
 import {
+  QUEUE_CONCURRENCY_DEFAULTS,
+  QUEUE_CONCURRENCY_MAX,
+  type QueueConcurrencyVariable,
+} from "@/shared/lifecycle/queue-config";
+import {
   DEFAULT_STOP_GRACE_PERIOD_MS,
   MAX_STOP_GRACE_PERIOD_MS,
   MIN_STOP_GRACE_PERIOD_MS,
@@ -67,6 +72,22 @@ function isPostgresUrl(value: string): boolean {
 
 const POSTGRES_URL_MESSAGE =
   "precisa ser uma URL postgresql:// (o mesmo formato da DATABASE_URL)";
+
+/**
+ * One queue's concurrency (plano-escala F3-05): 1 to 32, today's constant
+ * when absent or empty.
+ */
+function queueConcurrency(name: QueueConcurrencyVariable) {
+  return z.preprocess(
+    (value) => (value === "" ? undefined : value),
+    z.coerce
+      .number()
+      .int()
+      .min(1)
+      .max(QUEUE_CONCURRENCY_MAX)
+      .default(QUEUE_CONCURRENCY_DEFAULTS[name]),
+  );
+}
 
 /** A node hostname, a slot number or node id, a service name: no spaces. */
 const SWARM_LABEL = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
@@ -705,14 +726,18 @@ const envSchema = z
       z.coerce.number().int().positive().default(LOCAL_AI_DEFAULT_TIMEOUT_MS),
     ),
 
-    /** Reads in flight per replica: the service reads one at a time. */
+    // Reads in flight per replica: the service reads one at a time, so 1
+    // while there is one trajetto-ai instance. The ceiling was 4; it follows
+    // the queue's (plano-escala F3-05), because a worker in front of several
+    // AI instances keeps one reading in flight per instance. The pipeline
+    // takes the smaller of this and AI_CONCURRENCY.
     AI_LOCAL_MAX_CONCURRENCY: z.preprocess(
       (value) => (value === "" ? undefined : value),
       z.coerce
         .number()
         .int()
         .min(1)
-        .max(4)
+        .max(QUEUE_CONCURRENCY_MAX)
         .default(LOCAL_AI_DEFAULT_MAX_CONCURRENCY),
     ),
 
@@ -815,6 +840,25 @@ const envSchema = z
       (value) => (value === "" ? undefined : value),
       z.coerce.number().int().min(500).max(60_000).optional(),
     ),
+
+    // How many rows of each queue this process works on at once
+    // (plano-escala F3-05; shared/lifecycle/queue-config.ts). Absent, the
+    // constants of before: 5 per delivery lane, 1 outbox event at a time, 5
+    // webhooks and 4 AI readings. 1 to 32; the lanes and the webhooks also
+    // check, when their module loads, that a batch still fits its lease
+    // with the value given (below 2 it does not, and the boot stops). Empty
+    // counts as absent.
+    NOTIFICATION_INTERNAL_CONCURRENCY: queueConcurrency(
+      "NOTIFICATION_INTERNAL_CONCURRENCY",
+    ),
+    NOTIFICATION_EXTERNAL_CONCURRENCY: queueConcurrency(
+      "NOTIFICATION_EXTERNAL_CONCURRENCY",
+    ),
+    OUTBOX_EXPANSION_CONCURRENCY: queueConcurrency(
+      "OUTBOX_EXPANSION_CONCURRENCY",
+    ),
+    WEBHOOK_CONCURRENCY: queueConcurrency("WEBHOOK_CONCURRENCY"),
+    AI_CONCURRENCY: queueConcurrency("AI_CONCURRENCY"),
 
     // The graceful shutdown (plano-escala F1-14). STOP_GRACE_PERIOD_MS is the
     // Stop Grace Period the Swarm really gives this service, in ms: every

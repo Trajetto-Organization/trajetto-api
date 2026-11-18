@@ -126,8 +126,11 @@ assertAILeaseInvariant({
  * other, so the second row sat with its lease running behind the first
  * (GAP2-2). The reader lowers it (maxConcurrency): the local OCR reads one
  * photo at a time, so a replica keeps AI_LOCAL_MAX_CONCURRENCY in flight.
+ * AI_CONCURRENCY in the environment (plano-escala F3-05), the 4 of before
+ * by default; the lease is renewed before every call, so it enters no lease
+ * invariant.
  */
-const AI_CONCURRENCY = 4;
+const AI_CONCURRENCY = env.AI_CONCURRENCY;
 
 /**
  * How long a request the reader turned away as busy (its queue full, HTTP

@@ -31,7 +31,15 @@ import {
   runtimeMetrics,
   startRuntimeMetrics,
 } from "./shared/health/runtime-metrics";
-import { readPrismaPool } from "./shared/health/pool-metrics";
+import {
+  connectionLimitOf,
+  readPrismaPool,
+} from "./shared/health/pool-metrics";
+import {
+  QUEUE_CONCURRENCY_VARIABLES,
+  poolHeadroomWarning,
+  type QueueConcurrency,
+} from "./shared/lifecycle/queue-config";
 import {
   createOpsSampler,
   opsSampleIdentity,
@@ -205,6 +213,11 @@ async function bootstrap() {
   // that overrode the preset of a role somebody asked for is a warning: a
   // WORKERS_ENABLED=true copied from the old Environment would keep the
   // api's workers in silence. Names only, never a value.
+  // How many rows of each queue it works on at once (plano-escala F3-05).
+  const concurrency = Object.fromEntries(
+    QUEUE_CONCURRENCY_VARIABLES.map((name) => [name, env[name]]),
+  ) as QueueConcurrency;
+
   const processRole = {
     role: env.PROCESS_ROLE,
     workers: env.WORKERS_ENABLED,
@@ -215,12 +228,30 @@ async function bootstrap() {
     pipeline_sweep_ms: env.PIPELINE_SWEEP_INTERVAL_MS,
     webhook_sweep_ms: env.WEBHOOK_SWEEP_INTERVAL_MS,
     overrides: env.PROCESS_ROLE_OVERRIDES,
+    concurrency,
   };
 
   if (env.PROCESS_ROLE_OVERRIDES.length > 0) {
     log.warn(processRole, "process role resolved");
   } else {
     log.info(processRole, "process role resolved");
+  }
+
+  // The slots that only talk to the database against the pool they share
+  // with everything else: a warning, never a refused boot (queue-config.ts).
+  const poolLimit = connectionLimitOf(process.env.DATABASE_URL);
+  const poolWarning = poolHeadroomWarning({
+    concurrency,
+    workersEnabled: env.WORKERS_ENABLED,
+    queues: env.WORKER_QUEUES,
+    poolLimit,
+  });
+
+  if (poolWarning) {
+    log.warn(
+      { concurrency, pool_limit: poolLimit, detail: poolWarning },
+      "queue concurrency takes the whole database pool",
+    );
   }
 
   // The order and the reasons live in shared/lifecycle/startup.ts: workers

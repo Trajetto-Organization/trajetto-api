@@ -11,7 +11,6 @@ import {
   RESPONSE_READ_LIMIT_BYTES,
   WEBHOOK_MAX_ATTEMPTS,
   WEBHOOK_CLAIM_WINDOW,
-  WEBHOOK_CONCURRENCY,
   WEBHOOK_DRAIN_BUDGET_MS,
   WEBHOOK_LEASE_SECONDS,
   WEBHOOK_PER_ENDPOINT_BATCH,
@@ -57,6 +56,7 @@ import {
   withoutRequestContext,
 } from "@/shared/http/request-context";
 import { consumesQueue } from "@/shared/lifecycle/process-role";
+import { assertWithVariable } from "@/shared/lifecycle/queue-config";
 
 import { v7 as uuidV7 } from "uuid";
 
@@ -167,7 +167,19 @@ function webhookClaimSql(floor: Prisma.Sql): Prisma.Sql {
     `;
 }
 
-assertWebhookLeaseInvariant(BATCH_SIZE);
+/**
+ * Calls in flight per process (plano-escala F3-05): WEBHOOK_CONCURRENCY,
+ * whose default is the 5 of before (webhook-dispatch-rules.ts). At most 2
+ * of them to one endpoint, whatever it says.
+ */
+const WEBHOOK_CONCURRENCY = env.WEBHOOK_CONCURRENCY;
+
+// With the environment's value: a concurrency too low for the batch would
+// let the lease run out under calls still in flight, and the customer's
+// system would receive those events twice. The boot stops instead.
+assertWithVariable("WEBHOOK_CONCURRENCY", WEBHOOK_CONCURRENCY, () =>
+  assertWebhookLeaseInvariant(BATCH_SIZE, WEBHOOK_CONCURRENCY),
+);
 
 interface ClaimedWebhook {
   id: string;

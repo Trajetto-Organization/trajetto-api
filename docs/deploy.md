@@ -4308,6 +4308,25 @@ consome (o `external` de um `worker` com `worker-external`) são avisadas.
 Quem escuta acorda todas as filas uma vez quando a assinatura volta depois
 de uma queda do Redis.
 
+**Concorrência das filas (F3-05).** Quantas linhas de cada fila um
+processo trabalha ao mesmo tempo vem do _Environment_:
+`NOTIFICATION_INTERNAL_CONCURRENCY` e `NOTIFICATION_EXTERNAL_CONCURRENCY`
+(5 por raia), `OUTBOX_EXPANSION_CONCURRENCY` (1: um evento depois do
+outro), `WEBHOOK_CONCURRENCY` (5) e `AI_CONCURRENCY` (4, limitado ainda
+por `AI_LOCAL_MAX_CONCURRENCY`). Sem elas, as constantes de antes, número
+por número; cada uma vai de 1 a 32. Um lote precisa terminar dentro do
+lease do seu claim, senão outro processo reivindica o que este ainda
+envia e o destinatário recebe duas vezes: as raias e os webhooks conferem
+isso ao carregar, com o valor dado, e abaixo de 2 o boot para com a
+variável no erro (`... não cabe no lease da fila`). O boot loga os valores
+em `process role resolved` (`concurrency`) e avisa com
+`queue concurrency takes the whole database pool` quando as vagas só de
+banco deste processo (a expansão do outbox mais a raia `internal`) somam o
+`connection_limit` da `DATABASE_URL` ou mais: não sobraria conexão para o
+HTTP, os claims das outras filas e o cron. É aviso, não recusa. Acima do
+lote (20 nas raias e nos webhooks, 10 no outbox), um valor maior não muda
+nada.
+
 - **Tempo real com várias réplicas**: o evento emitido numa réplica chega ao
   cliente conectado em outra pelo pub/sub do Redis
   (`@socket.io/redis-adapter`). Todas as réplicas precisam do mesmo

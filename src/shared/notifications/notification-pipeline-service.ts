@@ -49,7 +49,6 @@ import {
 
 import {
   DELIVERY_BATCH_SIZE,
-  DELIVERY_CONCURRENCY,
   DELIVERY_LANES,
   DELIVERY_LEASE_SECONDS,
   DELIVERY_MAX_ATTEMPTS,
@@ -70,6 +69,10 @@ import {
   type DeliveryLane,
 } from "./pipeline-rules";
 import {
+  assertWithVariable,
+  type QueueConcurrencyVariable,
+} from "@/shared/lifecycle/queue-config";
+import {
   recordAcceptedOutcome,
   recordDeadline,
 } from "@/shared/resilience/record-accepted-outcome";
@@ -87,6 +90,15 @@ import { emailLogoUrl } from "@/shared/providers/mail-provider/email-logo";
 const SWEEP_INTERVAL_MS = env.PIPELINE_SWEEP_INTERVAL_MS;
 
 const OUTBOX_BATCH_SIZE = 10;
+
+/**
+ * Events of one claimed batch expanded at the same time (plano-escala
+ * F3-05): OUTBOX_EXPANSION_CONCURRENCY, 1 by default — one after the other,
+ * as before. Each event renews its own lease right before its expansion, so
+ * no batch invariant depends on it; several at once only bring the tail of
+ * the batch forward, the overlap several replicas already had.
+ */
+const OUTBOX_EXPANSION_CONCURRENCY = env.OUTBOX_EXPANSION_CONCURRENCY;
 
 /**
  * The outbox's claim: the oldest due events, PENDING ones and PROCESSING
@@ -169,10 +181,38 @@ const SUPPRESSED_LOG_LIMIT = 50;
  */
 const log = logger.child({ component: "notification-pipeline" });
 
-// Fails at import time if batch/concurrency/timeout ever outgrow the lease.
-// Silently breaking this invariant means a second replica reclaiming rows
-// that are still being sent - a duplicate WhatsApp, not a slow one.
-assertDeliveryLeaseInvariant(DELIVERY_BATCH_SIZE);
+/**
+ * Deliveries in flight per lane (plano-escala F3-05), each lane with its
+ * variable: 5 and 5 by default, the DELIVERY_CONCURRENCY of before. A
+ * worker-external that only waits on the providers can take more e-mail at
+ * once without the bell's lane following it.
+ */
+const LANE_CONCURRENCY_VARIABLE: Record<
+  DeliveryLane,
+  QueueConcurrencyVariable
+> = {
+  internal: "NOTIFICATION_INTERNAL_CONCURRENCY",
+  external: "NOTIFICATION_EXTERNAL_CONCURRENCY",
+};
+
+const LANE_CONCURRENCY: Record<DeliveryLane, number> = {
+  internal: env.NOTIFICATION_INTERNAL_CONCURRENCY,
+  external: env.NOTIFICATION_EXTERNAL_CONCURRENCY,
+};
+
+// Fails at import time if batch/concurrency/timeout ever outgrow the lease,
+// now with each lane's value from the environment: the boot stops on a
+// concurrency too low for the batch. Silently breaking this invariant means
+// a second replica reclaiming rows that are still being sent - a duplicate
+// WhatsApp, not a slow one.
+for (const lane of Object.keys(LANE_CONCURRENCY) as DeliveryLane[]) {
+  assertWithVariable(
+    LANE_CONCURRENCY_VARIABLE[lane],
+    LANE_CONCURRENCY[lane],
+    () =>
+      assertDeliveryLeaseInvariant(DELIVERY_BATCH_SIZE, LANE_CONCURRENCY[lane]),
+  );
+}
 
 /**
  * A user's channels that leave the product: the ones a policy's
@@ -617,31 +657,46 @@ class NotificationPipelineService {
 
         workerHeartbeat.progress("notification-outbox");
 
-        for (const event of events) {
-          try {
-            // One lease covers the whole batch, and the batch is expanded
-            // event after event. Under a saturated pool the tail used to
-            // start after the lease ran out, when another replica had
-            // already reclaimed it — and both expanded it (OUTBOX-21).
-            if (!(await this.renewEventLease(event))) {
-              log.warn(
-                {
-                  outboxEventId: event.id,
-                  correlationId: event.correlationId ?? null,
-                  topic: event.topic,
-                  attempt: event.attempts,
-                },
-                "notification event reclaimed by another replica before its expansion; left to it",
-              );
+        // OUTBOX_EXPANSION_CONCURRENCY events at a time over a shared
+        // cursor, as the lanes do; with 1, the loop of before.
+        let cursor = 0;
 
-              continue;
+        const expandNext = async (): Promise<void> => {
+          while (cursor < events.length) {
+            const event = events[cursor++];
+
+            try {
+              // One lease covers the whole batch, and the batch is expanded
+              // event after event. Under a saturated pool the tail used to
+              // start after the lease ran out, when another replica had
+              // already reclaimed it — and both expanded it (OUTBOX-21).
+              if (!(await this.renewEventLease(event))) {
+                log.warn(
+                  {
+                    outboxEventId: event.id,
+                    correlationId: event.correlationId ?? null,
+                    topic: event.topic,
+                    attempt: event.attempts,
+                  },
+                  "notification event reclaimed by another replica before its expansion; left to it",
+                );
+
+                continue;
+              }
+
+              await this.expandEvent(event);
+            } catch (error) {
+              await this.recordEventFailure(event, error);
             }
-
-            await this.expandEvent(event);
-          } catch (error) {
-            await this.recordEventFailure(event, error);
           }
-        }
+        };
+
+        await Promise.all(
+          Array.from(
+            { length: Math.min(OUTBOX_EXPANSION_CONCURRENCY, events.length) },
+            expandNext,
+          ),
+        );
 
         if (events.length < OUTBOX_BATCH_SIZE) break;
       }
@@ -1157,7 +1212,7 @@ class NotificationPipelineService {
 
         await Promise.all(
           Array.from(
-            { length: Math.min(DELIVERY_CONCURRENCY, deliveries.length) },
+            { length: Math.min(LANE_CONCURRENCY[lane], deliveries.length) },
             worker,
           ),
         );

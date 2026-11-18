@@ -126,7 +126,8 @@ describe("the environment", () => {
     const parsed = envSchema.safeParse({
       ...base,
       AI_LOCAL_TOKEN: "short",
-      AI_LOCAL_MAX_CONCURRENCY: "9",
+      // Past the queues' ceiling of 32 (plano-escala F3-05).
+      AI_LOCAL_MAX_CONCURRENCY: "33",
     });
 
     const paths = parsed.success

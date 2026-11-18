@@ -43,7 +43,11 @@ const RESPONSE_READ_LIMIT_BYTES = 8 * 1024;
 /** How long a claimed row stays invisible to other replicas. */
 const WEBHOOK_LEASE_SECONDS = 120;
 
-/** How many of one batch are in flight at once. */
+/**
+ * How many of one batch are in flight at once: the default of the
+ * WEBHOOK_CONCURRENCY variable (plano-escala F3-05), which the dispatcher
+ * asserts against the lease when it loads.
+ */
 const WEBHOOK_CONCURRENCY = 5;
 
 /**

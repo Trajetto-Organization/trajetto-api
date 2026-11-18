@@ -30,7 +30,12 @@ const DELIVERY_LEASE_SECONDS = 180;
 /** How many deliveries one claim takes (the batch the lease must cover). */
 const DELIVERY_BATCH_SIZE = 20;
 
-/** How many deliveries of one batch run at the same time. */
+/**
+ * How many deliveries of one batch run at the same time: the default of
+ * each lane's variable, NOTIFICATION_INTERNAL_CONCURRENCY and
+ * NOTIFICATION_EXTERNAL_CONCURRENCY (plano-escala F3-05), which the
+ * pipeline asserts against the lease when it loads.
+ */
 const DELIVERY_CONCURRENCY = 5;
 
 /**
