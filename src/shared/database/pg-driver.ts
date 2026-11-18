@@ -311,14 +311,16 @@ function clientClass(connectTimeoutMs: number): typeof pg.Client {
  * trajetto_capability_ready (plano-escala F5-07) reads a session with NO
  * name in this database as a process that cannot announce what it runs,
  * the image from before this one, and holds every contraction back while
- * one is connected. F3-02 adds the role's suffix.
+ * one is connected. The runtime's pools name their role instead
+ * (`trajetto-worker`, `trajetto-api-read`…, plano-escala F3-02,
+ * pool-config.ts); this is what a script's pool, with no role, carries.
  */
 const DEFAULT_APPLICATION_NAME = "trajetto-api";
 
 function createPool(settings: DatabasePoolSettings): pg.Pool {
   const pool = new pg.Pool({
     connectionString: settings.connectionString || undefined,
-    application_name: DEFAULT_APPLICATION_NAME,
+    application_name: settings.applicationName ?? DEFAULT_APPLICATION_NAME,
     max: settings.max,
     connectionTimeoutMillis: settings.poolTimeoutMs,
     idleTimeoutMillis: settings.idleTimeoutMs,

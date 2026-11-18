@@ -1,6 +1,8 @@
 import type { PrismaClient } from "@prisma/client";
 
 import { createPrismaClient } from "@/shared/database/database-client";
+import { runtimeApplicationName } from "@/shared/database/pool-config";
+import { processRoleFromEnvironment } from "@/shared/lifecycle/process-role";
 
 /**
  * The readiness probe's own database connection (OBS-11).
@@ -62,7 +64,16 @@ function probeClient(): PrismaClient {
   if (!client) {
     client = createPrismaClient(
       {},
-      { url: probeUrl(process.env.DATABASE_URL ?? "") },
+      {
+        url: probeUrl(process.env.DATABASE_URL ?? ""),
+        // `trajetto-<role>-probe` in pg_stat_activity (plano-escala F3-02).
+        overrides: {
+          applicationName: runtimeApplicationName(
+            processRoleFromEnvironment(process.env),
+            "probe",
+          ),
+        },
+      },
     ) as unknown as PrismaClient;
   }
 

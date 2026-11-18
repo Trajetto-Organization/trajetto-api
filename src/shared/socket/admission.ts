@@ -183,6 +183,7 @@ const HANDSHAKE_REFUSALS = [
   "connections",
   "inflight",
   "engine_capacity",
+  "sockets_disabled",
   "address_budget",
   "rate_limited",
   "too_many_connections",

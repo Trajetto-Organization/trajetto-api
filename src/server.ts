@@ -191,6 +191,7 @@ async function bootstrap() {
     workers: env.WORKERS_ENABLED,
     cron: env.CRON_ENABLED,
     queues: env.WORKER_QUEUES,
+    sockets: env.SOCKETS_ENABLED,
     http_surface: env.HTTP_SURFACE,
     pipeline_sweep_ms: env.PIPELINE_SWEEP_INTERVAL_MS,
     webhook_sweep_ms: env.WEBHOOK_SWEEP_INTERVAL_MS,

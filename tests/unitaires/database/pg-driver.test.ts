@@ -274,8 +274,11 @@ describe("the sessions' name", () => {
    * before this one. So every pool of this build names its sessions, and a
    * name the URL sets on purpose still wins.
    */
-  async function nameOf(url: string): Promise<string | undefined> {
-    const pool = createPool(poolSettingsFrom(url));
+  async function nameOf(
+    url: string,
+    applicationName?: string,
+  ): Promise<string | undefined> {
+    const pool = createPool({ ...poolSettingsFrom(url), applicationName });
 
     try {
       // pg-pool builds each client as `new this.Client(this.options)`.
@@ -302,6 +305,20 @@ describe("the sessions' name", () => {
     expect(
       await nameOf(
         "postgresql://u:p@127.0.0.1:1/d?application_name=psql-a-mao",
+      ),
+    ).toBe("psql-a-mao");
+  });
+
+  // The runtime's pools name their role (plano-escala F3-02), only where
+  // the URL names nothing.
+  it("is the role's when the runtime gives one, and the URL's still wins", async () => {
+    expect(
+      await nameOf("postgresql://u:p@127.0.0.1:1/d", "trajetto-worker"),
+    ).toBe("trajetto-worker");
+    expect(
+      await nameOf(
+        "postgresql://u:p@127.0.0.1:1/d?application_name=psql-a-mao",
+        "trajetto-worker",
       ),
     ).toBe("psql-a-mao");
   });

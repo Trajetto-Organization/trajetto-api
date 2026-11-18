@@ -676,14 +676,29 @@ async function initializeSocketIO(httpServer: Server): Promise<SocketIOServer> {
      * running: hundreds of drivers behind one CGNAT reconnecting in a deploy
      * no longer use it up.
      *
-     * Before it, and never charged: a replica past its socket ceiling by the
-     * in-flight headroom refuses the upgrade outright (admission.ts). Below
-     * that, the middleware refuses with the wait the clients honour.
+     * Before it, and never charged: a process whose role takes no sockets
+     * (SOCKETS_ENABLED=false, plano-escala F3-02: a worker, a scheduler,
+     * the api once the realtime role exists) refuses every upgrade, and a
+     * replica past its socket ceiling by the in-flight headroom refuses the
+     * upgrade outright (admission.ts). Below that, the middleware refuses
+     * with the wait the clients honour.
      *
      * Fails open like every counter (ADR 0002): the limiter never rejects,
      * and should it ever, the connection is admitted rather than refused.
      */
     allowRequest: (request, callback) => {
+      // The first check, so nothing is charged or counted against a budget:
+      // hundreds of drivers behind one CGNAT sent here by a misrouted
+      // Domain must not lock their address out of the process that does
+      // take sockets (U-01). A refused upgrade carries no data the
+      // browser's or the app's WebSocket could read, so the clients wait
+      // their own backoff, as for engine_capacity.
+      if (!env.SOCKETS_ENABLED) {
+        handshakeMetrics.refuse("sockets_disabled");
+
+        return callback("SOCKET_UNAVAILABLE", false);
+      }
+
       if (engineOverCapacity(io?.engine.clientsCount ?? 0, admissionLimits())) {
         handshakeMetrics.refuse("engine_capacity");
 

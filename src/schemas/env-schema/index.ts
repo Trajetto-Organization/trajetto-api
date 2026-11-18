@@ -762,6 +762,22 @@ const envSchema = z
         .optional(),
     ),
 
+    // Whether Socket.IO admits connections on this process (plano-escala
+    // F3-02). With `false`, the upgrade is refused at the engine with
+    // SOCKET_UNAVAILABLE, before any budget and without charging the
+    // address; the server and its Redis adapter stay up, so what this
+    // process emits still reaches the sockets of the others. Absent, the
+    // role's preset decides (`true` for all and api, `false` for worker).
+    // Empty counts as absent.
+    SOCKETS_ENABLED: z
+      .preprocess(
+        (value) => (value === "" ? undefined : value),
+        z.enum(["true", "false"]).optional(),
+      )
+      .transform((value) =>
+        value === undefined ? undefined : value === "true",
+      ),
+
     // The pipelines' background sweep. 30 s while every replica wakes its
     // own pipelines on publish; a dedicated worker polls faster (the worker
     // preset sets 2 s), because a publish on an HTTP replica does not wake

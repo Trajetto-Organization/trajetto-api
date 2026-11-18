@@ -5,6 +5,21 @@ import {
   createDatabaseClient,
   type DatabaseConnection,
 } from "../src/shared/database/database-client";
+import {
+  runtimeApplicationName,
+  type RuntimePool,
+} from "../src/shared/database/pool-config";
+import { processRoleFromEnvironment } from "../src/shared/lifecycle/process-role";
+
+/**
+ * The application_name of this process's pools (plano-escala F3-02):
+ * `trajetto-<role>` for the main one, `-read` and `-batch` for the side
+ * pools, read from PROCESS_ROLE when the pool is built. Unless the URL
+ * names one, which wins.
+ */
+function applicationName(pool?: RuntimePool): string | undefined {
+  return runtimeApplicationName(processRoleFromEnvironment(process.env), pool);
+}
 
 /**
  * How long an interactive transaction may wait for a connection, and run.
@@ -38,10 +53,13 @@ const TRANSACTION_OPTIONS = { maxWait: 10_000, timeout: 15_000 } as const;
  * flight. tests/E2E/database-reconnect.test.ts proves the recovery.
  */
 const prismaClientSingleton = () => {
-  const { client, pool } = createDatabaseClient({
-    log: process.env.NODE_ENV === "development" ? ["query"] : [],
-    transactionOptions: TRANSACTION_OPTIONS,
-  });
+  const { client, pool } = createDatabaseClient(
+    {
+      log: process.env.NODE_ENV === "development" ? ["query"] : [],
+      transactionOptions: TRANSACTION_OPTIONS,
+    },
+    { overrides: { applicationName: applicationName() } },
+  );
 
   // Typed back as PrismaClient, as before: every repository takes one.
   return { client: client as unknown as PrismaClient, pool };
@@ -91,7 +109,8 @@ const databasePool = connection.pool;
  * the URL's idle lifetime. With neither URL set, at most 3 more
  * connections per side pool, and only while one is in use.
  *
- * The `-read`/`-batch` suffix of application_name comes with F3-02.
+ * Their sessions say which they are: `trajetto-<role>-read` and
+ * `trajetto-<role>-batch` in pg_stat_activity (F3-02).
  */
 const READ_POOL = { max: 3, statementTimeoutMs: 10_000 } as const;
 const BATCH_POOL = { max: 3, statementTimeoutMs: 30 * 60_000 } as const;
@@ -132,13 +151,14 @@ function lazyClient(build: () => DatabaseConnection<PrismaClient>): {
 function sidePool(
   url: () => string | undefined,
   pool: { max: number; statementTimeoutMs: number },
+  name: RuntimePool,
 ) {
   return lazyClient(() => {
     const { client, pool: current } = createDatabaseClient(
       { log: [], transactionOptions: TRANSACTION_OPTIONS },
       {
         url,
-        overrides: { max: pool.max },
+        overrides: { max: pool.max, applicationName: applicationName(name) },
         ceiling: { statementTimeoutMs: pool.statementTimeoutMs },
       },
     );
@@ -159,10 +179,11 @@ const testClient = globalForPrisma.prisma
   : null;
 
 const read =
-  testClient ?? sidePool(() => environmentUrl("DATABASE_READ_URL"), READ_POOL);
+  testClient ??
+  sidePool(() => environmentUrl("DATABASE_READ_URL"), READ_POOL, "read");
 const batch =
   testClient ??
-  sidePool(() => environmentUrl("BATCH_DATABASE_URL"), BATCH_POOL);
+  sidePool(() => environmentUrl("BATCH_DATABASE_URL"), BATCH_POOL, "batch");
 
 /** The heavy reads' bulkhead: a closed list of callers only. */
 const databaseRead = read.client;

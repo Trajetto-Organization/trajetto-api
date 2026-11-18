@@ -6,8 +6,8 @@
  * pipelines, the webhook dispatcher and the cron — and the only switch was
  * WORKERS_ENABLED. Splitting the work into Applications, the way ADR 0004
  * named, needs finer switches: which queues a process claims
- * (WORKER_QUEUES), whether it runs the cron (CRON_ENABLED), and which routes
- * it answers.
+ * (WORKER_QUEUES), whether it runs the cron (CRON_ENABLED), whether it
+ * takes sockets (SOCKETS_ENABLED), and which routes it answers.
  *
  * PROCESS_ROLE is a PRESET and a LABEL, with every explicit variable winning
  * over the preset:
@@ -91,6 +91,14 @@ interface RolePreset {
   WORKERS_ENABLED: boolean;
   CRON_ENABLED: boolean;
   WORKER_QUEUES: readonly WorkerQueue[];
+
+  /**
+   * Whether Socket.IO admits connections here (plano-escala F3-02). The
+   * server and its Redis adapter exist either way, so what this process
+   * emits still reaches the sockets of the others.
+   */
+  SOCKETS_ENABLED: boolean;
+
   HTTP_SURFACE: HttpSurface;
 
   /** Only where the role polls faster than the defaults below. */
@@ -114,18 +122,21 @@ const ROLE_PRESETS: Readonly<Record<ProcessRole, Readonly<RolePreset>>> = {
     WORKERS_ENABLED: true,
     CRON_ENABLED: true,
     WORKER_QUEUES: WORKER_QUEUE_NAMES,
+    SOCKETS_ENABLED: true,
     HTTP_SURFACE: "all",
   },
   api: {
     WORKERS_ENABLED: false,
     CRON_ENABLED: false,
     WORKER_QUEUES: [],
+    SOCKETS_ENABLED: true,
     HTTP_SURFACE: "all",
   },
   worker: {
     WORKERS_ENABLED: true,
     CRON_ENABLED: true,
     WORKER_QUEUES: WORKER_QUEUE_NAMES,
+    SOCKETS_ENABLED: false,
     HTTP_SURFACE: "health",
     PIPELINE_SWEEP_INTERVAL_MS: DEDICATED_SWEEP_INTERVAL_MS,
     WEBHOOK_SWEEP_INTERVAL_MS: DEDICATED_SWEEP_INTERVAL_MS,
@@ -136,18 +147,21 @@ const ROLE_PRESETS: Readonly<Record<ProcessRole, Readonly<RolePreset>>> = {
     WORKERS_ENABLED: true,
     CRON_ENABLED: true,
     WORKER_QUEUES: [],
+    SOCKETS_ENABLED: false,
     HTTP_SURFACE: "health",
   },
   realtime: {
     WORKERS_ENABLED: false,
     CRON_ENABLED: false,
     WORKER_QUEUES: [],
+    SOCKETS_ENABLED: true,
     HTTP_SURFACE: "realtime",
   },
   "worker-external": {
     WORKERS_ENABLED: true,
     CRON_ENABLED: false,
     WORKER_QUEUES: ["external"],
+    SOCKETS_ENABLED: false,
     HTTP_SURFACE: "health",
     PIPELINE_SWEEP_INTERVAL_MS: DEDICATED_SWEEP_INTERVAL_MS,
   },
@@ -155,6 +169,7 @@ const ROLE_PRESETS: Readonly<Record<ProcessRole, Readonly<RolePreset>>> = {
     WORKERS_ENABLED: false,
     CRON_ENABLED: false,
     WORKER_QUEUES: [],
+    SOCKETS_ENABLED: false,
     HTTP_SURFACE: "ingest",
   },
 };
@@ -212,6 +227,7 @@ interface ExplicitRoleSettings {
   WORKERS_ENABLED?: boolean;
   CRON_ENABLED?: boolean;
   WORKER_QUEUES?: readonly WorkerQueue[];
+  SOCKETS_ENABLED?: boolean;
   PIPELINE_SWEEP_INTERVAL_MS?: number;
   WEBHOOK_SWEEP_INTERVAL_MS?: number;
 }
@@ -229,6 +245,9 @@ interface ResolvedProcessRole {
 
   /** The queues this process claims; none without WORKERS_ENABLED. */
   WORKER_QUEUES: readonly WorkerQueue[];
+
+  /** Socket.IO admits connections here (F3-02). */
+  SOCKETS_ENABLED: boolean;
 
   PIPELINE_SWEEP_INTERVAL_MS: number;
   WEBHOOK_SWEEP_INTERVAL_MS: number;
@@ -269,6 +288,7 @@ function resolveProcessRole(
   const workersEnabled = explicit.WORKERS_ENABLED ?? preset.WORKERS_ENABLED;
   const cronEnabled = explicit.CRON_ENABLED ?? preset.CRON_ENABLED;
   const queues = explicit.WORKER_QUEUES ?? preset.WORKER_QUEUES;
+  const socketsEnabled = explicit.SOCKETS_ENABLED ?? preset.SOCKETS_ENABLED;
 
   const pipelineSweep =
     explicit.PIPELINE_SWEEP_INTERVAL_MS ??
@@ -306,6 +326,13 @@ function resolveProcessRole(
       overrides.push("WORKER_QUEUES");
     }
 
+    if (
+      explicit.SOCKETS_ENABLED !== undefined &&
+      explicit.SOCKETS_ENABLED !== preset.SOCKETS_ENABLED
+    ) {
+      overrides.push("SOCKETS_ENABLED");
+    }
+
     for (const name of [
       "PIPELINE_SWEEP_INTERVAL_MS",
       "WEBHOOK_SWEEP_INTERVAL_MS",
@@ -327,11 +354,33 @@ function resolveProcessRole(
     WORKERS_ENABLED: workersEnabled,
     CRON_ENABLED: workersEnabled && cronEnabled,
     WORKER_QUEUES: workersEnabled ? queues : [],
+    SOCKETS_ENABLED: socketsEnabled,
     PIPELINE_SWEEP_INTERVAL_MS: pipelineSweep,
     WEBHOOK_SWEEP_INTERVAL_MS: webhookSweep,
     HTTP_SURFACE: preset.HTTP_SURFACE,
     PROCESS_ROLE_OVERRIDES: overrides,
   };
+}
+
+/**
+ * The role a process's own environment names, read straight from the
+ * variables (plano-escala F3-02): for the database pools, which are built
+ * by infra/database.ts before (and without) the env schema. Mirrors
+ * resolveProcessRole's label; a name outside the list is no label at all
+ * (the schema then refuses the boot anyway).
+ */
+function processRoleFromEnvironment(
+  environment: Record<string, string | undefined>,
+): ProcessRole | undefined {
+  const raw = environment.PROCESS_ROLE?.trim();
+
+  if (raw) {
+    return (PROCESS_ROLES as readonly string[]).includes(raw)
+      ? (raw as ProcessRole)
+      : undefined;
+  }
+
+  return environment.WORKERS_ENABLED?.trim() === "false" ? "api" : "all";
 }
 
 /** The part of the environment the queue checks read. */
@@ -369,6 +418,7 @@ export {
   consumesAnyQueue,
   consumesQueue,
   parseWorkerQueues,
+  processRoleFromEnvironment,
   resolveProcessRole,
 };
 export type {

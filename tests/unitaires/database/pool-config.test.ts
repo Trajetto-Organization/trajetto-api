@@ -7,7 +7,9 @@ import {
 import {
   PRISMA_ONLY_PARAMETERS,
   poolSettingsFrom,
+  runtimeApplicationName,
 } from "@/shared/database/pool-config";
+import { processRoleFromEnvironment } from "@/shared/lifecycle/process-role";
 import { envSchema } from "@/schemas/env-schema";
 import { definedEnv } from "@/schemas/env-schema/defined-env";
 import { probeUrl } from "@/shared/health/readiness-probe";
@@ -343,5 +345,49 @@ describe("the side pools' URLs in the environment", () => {
     expect(
       parse({ BATCH_DATABASE_URL: `${DIRECT}&pgbouncer=true` }).success,
     ).toBe(false);
+  });
+});
+
+/**
+ * Which process and which pool a session is (plano-escala F3-02): with the
+ * roles, pg_stat_activity has to tell the worker's connections from the
+ * api's, and the bulkhead from the requests, or the connection budget per
+ * role (ADR 0008) is a guess again.
+ */
+describe("the runtime pools' application_name", () => {
+  it("is trajetto-<role>, with the side pool's or the probe's suffix", () => {
+    expect(runtimeApplicationName("worker")).toBe("trajetto-worker");
+    expect(runtimeApplicationName("api", "read")).toBe("trajetto-api-read");
+    expect(runtimeApplicationName("all", "batch")).toBe("trajetto-all-batch");
+    expect(runtimeApplicationName("api", "probe")).toBe("trajetto-api-probe");
+  });
+
+  it("takes the role from the process's own variables, legacy included", () => {
+    expect(processRoleFromEnvironment({})).toBe("all");
+    expect(processRoleFromEnvironment({ PROCESS_ROLE: "worker" })).toBe(
+      "worker",
+    );
+    expect(processRoleFromEnvironment({ WORKERS_ENABLED: "false" })).toBe(
+      "api",
+    );
+    expect(
+      processRoleFromEnvironment({ PROCESS_ROLE: "", WORKERS_ENABLED: "" }),
+    ).toBe("all");
+  });
+
+  it("leaves the default name to a role nobody knows (the boot refuses it)", () => {
+    expect(processRoleFromEnvironment({ PROCESS_ROLE: "wroker" })).toBe(
+      undefined,
+    );
+    expect(runtimeApplicationName(undefined, "read")).toBeUndefined();
+  });
+
+  it("is never read from the URL nor written into it", () => {
+    const settings = poolSettingsFrom(
+      "postgresql://u:p@db:5432/trajetto?connection_limit=3",
+    );
+
+    expect(settings.applicationName).toBeUndefined();
+    expect(settings.connectionString).not.toContain("application_name");
   });
 });

@@ -43,6 +43,7 @@ interface Resolved {
   WORKERS_ENABLED: boolean;
   CRON_ENABLED: boolean;
   WORKER_QUEUES: readonly string[];
+  SOCKETS_ENABLED: boolean;
   PIPELINE_SWEEP_INTERVAL_MS: number;
   WEBHOOK_SWEEP_INTERVAL_MS: number;
   HTTP_SURFACE: string;
@@ -74,6 +75,7 @@ describe("without PROCESS_ROLE", () => {
       WORKERS_ENABLED: true,
       CRON_ENABLED: true,
       WORKER_QUEUES: ALL_QUEUES,
+      SOCKETS_ENABLED: true,
       PIPELINE_SWEEP_INTERVAL_MS: 30_000,
       WEBHOOK_SWEEP_INTERVAL_MS: 5_000,
       HTTP_SURFACE: "all",
@@ -104,6 +106,7 @@ describe("without PROCESS_ROLE", () => {
         WORKERS_ENABLED: "",
         CRON_ENABLED: "",
         WORKER_QUEUES: "",
+        SOCKETS_ENABLED: "",
         PIPELINE_SWEEP_INTERVAL_MS: "",
         WEBHOOK_SWEEP_INTERVAL_MS: "",
       }),
@@ -113,22 +116,42 @@ describe("without PROCESS_ROLE", () => {
 
 describe("each role's preset", () => {
   it.each([
-    // role, workers, cron, queues, pipeline sweep, webhook sweep, surface
-    ["all", true, true, ALL_QUEUES, 30_000, 5_000, "all"],
-    ["api", false, false, [], 30_000, 5_000, "all"],
-    ["worker", true, true, ALL_QUEUES, 2_000, 2_000, "health"],
-    ["scheduler", true, true, [], 30_000, 5_000, "health"],
-    ["realtime", false, false, [], 30_000, 5_000, "realtime"],
-    ["worker-external", true, false, ["external"], 2_000, 5_000, "health"],
-    ["ingest", false, false, [], 30_000, 5_000, "ingest"],
+    // role, workers, cron, queues, sockets, pipeline sweep, webhook sweep,
+    // surface
+    ["all", true, true, ALL_QUEUES, true, 30_000, 5_000, "all"],
+    ["api", false, false, [], true, 30_000, 5_000, "all"],
+    ["worker", true, true, ALL_QUEUES, false, 2_000, 2_000, "health"],
+    ["scheduler", true, true, [], false, 30_000, 5_000, "health"],
+    ["realtime", false, false, [], true, 30_000, 5_000, "realtime"],
+    [
+      "worker-external",
+      true,
+      false,
+      ["external"],
+      false,
+      2_000,
+      5_000,
+      "health",
+    ],
+    ["ingest", false, false, [], false, 30_000, 5_000, "ingest"],
   ] as const)(
     "%s",
-    (role, workers, cron, queues, pipelineSweep, webhookSweep, surface) => {
+    (
+      role,
+      workers,
+      cron,
+      queues,
+      sockets,
+      pipelineSweep,
+      webhookSweep,
+      surface,
+    ) => {
       expect(parse({ PROCESS_ROLE: role })).toMatchObject({
         PROCESS_ROLE: role,
         WORKERS_ENABLED: workers,
         CRON_ENABLED: cron,
         WORKER_QUEUES: queues,
+        SOCKETS_ENABLED: sockets,
         PIPELINE_SWEEP_INTERVAL_MS: pipelineSweep,
         WEBHOOK_SWEEP_INTERVAL_MS: webhookSweep,
         HTTP_SURFACE: surface,
@@ -169,6 +192,13 @@ describe("an explicit variable", () => {
       "WORKER_QUEUES",
       "PIPELINE_SWEEP_INTERVAL_MS",
     ]);
+  });
+
+  it("names SOCKETS_ENABLED=false on the api once the realtime role exists", () => {
+    const api = parse({ PROCESS_ROLE: "api", SOCKETS_ENABLED: "false" });
+
+    expect(api.SOCKETS_ENABLED).toBe(false);
+    expect(api.PROCESS_ROLE_OVERRIDES).toEqual(["SOCKETS_ENABLED"]);
   });
 
   it("names WORKERS_ENABLED=true copied into the api, which keeps its workers", () => {

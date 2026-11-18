@@ -65,6 +65,14 @@ interface DatabasePoolSettings {
 
   /** A connection is retired after this many seconds; 0 never. */
   maxLifetimeSeconds: number;
+
+  /**
+   * The name the pool's sessions carry in pg_stat_activity unless the URL
+   * names one (plano-escala F3-02; runtimeApplicationName below): never
+   * read from the URL here, set by the runtime's pools as an override.
+   * Absent, pg-driver.ts's default.
+   */
+  applicationName?: string;
 }
 
 /** pg's own default pool size. */
@@ -166,6 +174,28 @@ interface StatementCeiling {
  */
 const QUERY_TIMEOUT_MARGIN_MS = 30_000;
 
+/** Which of the runtime's pools a session belongs to, besides the main one. */
+type RuntimePool = "read" | "batch" | "probe";
+
+/**
+ * The application_name of a runtime pool (plano-escala F3-02):
+ * `trajetto-<role>`, plus `-read`, `-batch` or `-probe` for the side pools
+ * and the readiness probe. With roles, pg_stat_activity tells the worker's
+ * sessions from the api's and the bulkhead from the requests: the
+ * connection budget per role (ADR 0008) is then read, not guessed. It only
+ * fills the gap: an application_name in the URL wins (pg reads the
+ * connection string over the config). Without a role (an invalid
+ * PROCESS_ROLE, which the env check refuses anyway), the default name.
+ */
+function runtimeApplicationName(
+  role: string | undefined,
+  pool?: RuntimePool,
+): string | undefined {
+  if (!role) return undefined;
+
+  return pool ? `trajetto-${role}-${pool}` : `trajetto-${role}`;
+}
+
 /**
  * The pool settings a database URL asks for. An empty URL gives pg's
  * defaults (the environment check of src/env refuses to boot without one;
@@ -254,5 +284,10 @@ function poolSettingsFrom(
   };
 }
 
-export { PRISMA_ONLY_PARAMETERS, QUERY_TIMEOUT_MARGIN_MS, poolSettingsFrom };
-export type { DatabasePoolSettings, StatementCeiling };
+export {
+  PRISMA_ONLY_PARAMETERS,
+  QUERY_TIMEOUT_MARGIN_MS,
+  poolSettingsFrom,
+  runtimeApplicationName,
+};
+export type { DatabasePoolSettings, RuntimePool, StatementCeiling };

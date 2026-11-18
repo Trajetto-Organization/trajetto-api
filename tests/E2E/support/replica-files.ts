@@ -20,6 +20,7 @@
 const REPLICA_E2E_FILES = [
   "control-tower-socket-chain.test.ts",
   "multi-replica-events.test.ts",
+  "process-roles-replicas.test.ts",
   "resilience-crash-after-accept.test.ts",
   "resilience-database-loss.test.ts",
   "resilience-provider-outage.test.ts",

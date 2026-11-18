@@ -4236,19 +4236,19 @@ graças a um lease no banco: N réplicas não duplicam nada.
 **Papéis da mesma imagem (`PROCESS_ROLE`, plano de escala F3-01).** A
 mesma imagem roda como várias Applications, cada uma com um papel:
 
-| Papel             | Workers | Cron | Filas (`WORKER_QUEUES`) | Varreduras | Rotas que atende                     |
-| ----------------- | ------- | ---- | ----------------------- | ---------- | ------------------------------------ |
-| `all` (o padrão)  | sim     | sim  | todas                   | 30 s e 5 s | todas                                |
-| `api`             | não     | não  | nenhuma                 | —          | todas                                |
-| `worker`          | sim     | sim  | todas                   | 2 s e 2 s  | só `/health*`                        |
-| `scheduler`       | sim     | sim  | `none`                  | —          | só `/health*`                        |
-| `realtime`        | não     | não  | nenhuma                 | —          | só `/health*` (e o `/socket.io`)     |
-| `worker-external` | sim     | não  | `external`              | 2 s        | só `/health*`                        |
-| `ingest`          | não     | não  | nenhuma                 | —          | `/health*` e `POST /route/positions` |
+| Papel             | Workers | Cron | Filas (`WORKER_QUEUES`) | Sockets | Varreduras | Rotas que atende                     |
+| ----------------- | ------- | ---- | ----------------------- | ------- | ---------- | ------------------------------------ |
+| `all` (o padrão)  | sim     | sim  | todas                   | sim     | 30 s e 5 s | todas                                |
+| `api`             | não     | não  | nenhuma                 | sim     | —          | todas                                |
+| `worker`          | sim     | sim  | todas                   | não     | 2 s e 2 s  | só `/health*`                        |
+| `scheduler`       | sim     | sim  | `none`                  | não     | —          | só `/health*`                        |
+| `realtime`        | não     | não  | nenhuma                 | sim     | —          | só `/health*` (e o `/socket.io`)     |
+| `worker-external` | sim     | não  | `external`              | não     | 2 s        | só `/health*`                        |
+| `ingest`          | não     | não  | nenhuma                 | não     | —          | `/health*` e `POST /route/positions` |
 
 O papel é um preset: ele preenche `WORKERS_ENABLED`, `CRON_ENABLED`,
-`WORKER_QUEUES`, `PIPELINE_SWEEP_INTERVAL_MS` e `WEBHOOK_SWEEP_INTERVAL_MS`,
-e toda variável dada explicitamente ganha dele. O boot loga
+`WORKER_QUEUES`, `SOCKETS_ENABLED`, `PIPELINE_SWEEP_INTERVAL_MS` e
+`WEBHOOK_SWEEP_INTERVAL_MS`, e toda variável dada explicitamente ganha dele. O boot loga
 `process role resolved`, com o que ficou valendo; em aviso, com
 `overrides`, quando uma variável contrariou o preset (um
 `WORKERS_ENABLED=true` copiado do _Environment_ antigo deixaria a API com
@@ -4257,7 +4257,14 @@ os workers). Sem `PROCESS_ROLE`, tudo fica como antes (`all`; com
 404 de rota inexistente: um contêiner de outro environment na
 `dokploy-network` não alcança as rotas de um worker. O registro dos crons
 existe em todo processo (o `/health/metrics` lista os jobs em qualquer
-réplica); só o `CRON_ENABLED` os agenda.
+réplica); só o `CRON_ENABLED` os agenda. Sem sockets
+(`SOCKETS_ENABLED=false`), o processo recusa o upgrade com
+`SOCKET_UNAVAILABLE`, sem cobrar o endereço, mas mantém o servidor Socket.IO
+e o adapter: o que o worker emite chega ao socket conectado na API
+(`tests/E2E/process-roles-replicas.test.ts`). Cada pool se identifica no
+`pg_stat_activity` pelo papel: `trajetto-<papel>` no principal,
+`-read`, `-batch` e `-probe` nos laterais e na readiness (um
+`application_name` na URL ganha).
 
 - **Tempo real com várias réplicas**: o evento emitido numa réplica chega ao
   cliente conectado em outra pelo pub/sub do Redis

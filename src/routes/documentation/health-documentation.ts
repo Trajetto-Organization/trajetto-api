@@ -982,7 +982,7 @@ const healthResponses = {
             refused: z
               .record(z.string(), z.number())
               .describe(
-                "Refusals by reason, zero-filled: connections and inflight (the replica's ceilings, with retryAfterMs), engine_capacity (past the ceiling, at the upgrade), address_budget, rate_limited (the user's budget), too_many_connections (the user's sockets here), unavailable (Postgres or Redis failed) and credential (token, ticket or session). Only credential and address_budget are kept on the address's budget.",
+                "Refusals by reason, zero-filled: connections and inflight (the replica's ceilings, with retryAfterMs), engine_capacity (past the ceiling, at the upgrade), sockets_disabled (a process whose role takes no sockets: SOCKETS_ENABLED=false), address_budget, rate_limited (the user's budget), too_many_connections (the user's sockets here), unavailable (Postgres or Redis failed) and credential (token, ticket or session). Only credential and address_budget are kept on the address's budget.",
               ),
           })
           .describe(
