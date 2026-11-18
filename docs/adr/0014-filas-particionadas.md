@@ -122,12 +122,53 @@ o comentário (`COMMENT ON TABLE <fila> IS NULL`).
 
 ## Medir a trava antes da produção
 
-Na staging, com o seed `LOAD_TIER=prod-like` num Database descartável e as
-filas ainda comuns (o passo `pending` à espera da capability), em duas
-sessões do `psql`:
+Num Database descartável da staging (1 GiB, 0,5 CPU, folga de disco de 2×
+o banco da produção mais 20 GB, a API e a web da staging em 0), pelo túnel
+e com o repositório na sua máquina, como o seed `prod-like` pede
+(`tests/load/README.md`). Nunca pelo _Run workflow_: a etapa de release
+roda no Database da staging, não no descartável.
+
+1. Migre só com `yarn prisma:migrate:deploy`, sem a etapa de release: num
+   banco sem empresa a troca roda na hora, e as filas já estariam
+   particionadas antes do seed.
+2. Semeie com `LOAD_TIER=prod-like`. Com empresas no banco, a troca espera
+   todo processo vivo anunciar a capability, e ali não há processo nenhum:
+   sem o anúncio, o passo fica `pending` para sempre. Faça o anúncio à mão,
+   só neste banco, na mesma sessão que roda a troca (a prontidão lê os
+   últimos 5 minutos de `ops_sample`):
+
+   ```sql
+   -- psql "$DATABASE_URL", na raiz do repositório
+   \i prisma/post-deploy/00-queue-swap-ready.sql
+
+   INSERT INTO ops_sample (id, ts, role, replica, metrics)
+   VALUES (
+     gen_random_uuid()::text,
+     now() AT TIME ZONE 'UTC',
+     'all',
+     'ensaio-da-troca',
+     '{"v": 1, "capabilities": ["queue-partition-agnostic-v1", "notification-partition-agnostic-v1"]}'
+   );
+
+   \i prisma/post-deploy/10-queue-partition-swap.sql
+   \i prisma/post-deploy/20-notification-partition-swap.sql
+   ```
+
+3. Leia o `NOTICE` de cada passo:
+   `tempos: <fila> em N s (espera E s, trava T s, validação V s)`. A trava
+   é o tempo sob `ACCESS EXCLUSIVE` (só catálogo, perto de zero), a espera
+   é o que cada consulta à fila esperaria atrás do pedido dela, e a
+   validação é a leitura da tabela inteira, que não segura ninguém. O
+   aceite é espera mais trava abaixo de 3 s em cada fila; a validação diz
+   quanto a troca vai somar à etapa de release da produção.
+   Uma fila com mais de 2 M linhas estimadas fica `skipped` (grande
+   demais para a etapa); para medir também a dela, rode
+   `SET trajetto.swap_window = 'on';` na sessão antes dos `\i`.
+
+Com outra carga no banco, uma segunda sessão do `psql` mostra quem espera
+por uma fila, e há quanto tempo, a cada 200 ms:
 
 ```sql
--- sessão 1: quem espera por uma fila, e há quanto tempo, a cada 200 ms
 SELECT now() - a.query_start AS espera, l.relation::regclass, l.mode, a.application_name
 FROM pg_locks l
 JOIN pg_stat_activity a ON a.pid = l.pid
@@ -138,9 +179,7 @@ ORDER BY espera DESC;
 \watch 0.2
 ```
 
-Na sessão 2, o _Run workflow_ com `force_release` (ou a etapa da
-`trajetto-api-migrate`). O aceite é nenhuma espera acima de 3 s; o log da
-etapa diz quanto cada fila levou (`… em N s`).
+Apague o Database no fim.
 
 ## Consequências
 

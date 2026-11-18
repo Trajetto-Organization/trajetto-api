@@ -1,6 +1,8 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { v7 as uuidV7 } from "uuid";
 
 import { createPrismaClient } from "@/shared/database/database-client";
@@ -565,5 +567,38 @@ describe("a serving database", () => {
       detail: expect.stringContaining("webhook_delivery (~3000000 linhas)"),
     });
     expect(await kind("webhook_delivery")).toBe("r");
+  });
+
+  // The rehearsal of ADR 0014 ("Medir a trava antes da produção"): a copy
+  // seeded with prod-like has companies and no process at all, so the swap
+  // waits for an announcement that never comes, unless the one the ADR
+  // gives is made by hand; and the step's NOTICE is the measurement.
+  it("swaps a seeded copy once the ADR's announcement is in, and says what each table cost", async () => {
+    await unpartitionQueues(["notification_provider_receipt"], {
+      hold: false,
+    });
+    await prisma.opsSample.deleteMany({});
+
+    expect(await runPostDeployStep(STEP)).toMatchObject({
+      status: "pending",
+      detail: expect.stringContaining("queue-partition-agnostic-v1"),
+    });
+
+    const adr = readFileSync(
+      resolve(process.cwd(), "docs", "adr", "0014-filas-particionadas.md"),
+      "utf8",
+    );
+    const announcement = /INSERT INTO ops_sample[^;]*;/.exec(adr)?.[0];
+
+    expect(announcement).toBeDefined();
+    await prisma.$executeRawUnsafe(announcement as string);
+
+    const outcome = await runPostDeployStep(STEP);
+
+    expect(outcome.status).toBe("applied");
+    expect(outcome.detail).toMatch(
+      /tempos: notification_provider_receipt em \d+\.\d{2} s \(espera \d+\.\d{2} s, trava \d+\.\d{2} s, validação \d+\.\d{2} s\)/,
+    );
+    expect(await kind("notification_provider_receipt")).toBe("p");
   });
 });

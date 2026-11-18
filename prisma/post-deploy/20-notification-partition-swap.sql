@@ -45,12 +45,13 @@
 --
 -- The locks: each attempt waits at most 3 s (or one second longer than
 -- deadlock_timeout), three times; while an ACCESS EXCLUSIVE waits, every
--- read of the bell queues behind it, and the wait of B holds up nobody. B
--- reads the whole table, so a bell with more than 2 M rows is left plain,
--- 'skipped', for a window of its own: this file run by hand after
--- SET trajetto.swap_window = 'on'. A lock that does not come, an id at or
--- past the cutoff or an error keeps it plain and the step 'pending'; the
--- swap never fails a deploy. The way back is
+-- read of the bell queues behind it, and the wait of B holds up nobody (the
+-- NOTICE says how long each took: 'tempos: notification em N s (espera,
+-- trava, validação)'). B reads the whole table, so a bell with more than
+-- 2 M rows is left plain, 'skipped', for a window of its own: this file run
+-- by hand after SET trajetto.swap_window = 'on'. A lock that does not come,
+-- an id at or past the cutoff or an error keeps it plain and the step
+-- 'pending'; the swap never fails a deploy. The way back is
 -- prisma/post-deploy/rollback/unpartition-queue.sql with
 -- trajetto.unpartition_queue = 'notification'.
 -- ----------------------------------------------------------------------------
@@ -100,6 +101,16 @@ DECLARE
   failed text[] := ARRAY[]::text[];
   guards_left text[] := ARRAY[]::text[];
   guard_note text;
+  -- What each swap cost, for the step's log: the waits for ACCESS
+  -- EXCLUSIVE (every query of the table queues behind them), the time it
+  -- was held, and the validation (which holds up nobody).
+  started_at timestamptz;
+  lock_asked timestamptz;
+  locked_at timestamptz;
+  waited interval;
+  held_for interval;
+  validated interval;
+  timings text[] := ARRAY[]::text[];
   owner_kept boolean := false;
   -- Set by hand for a window of its own (docs/adr/0014-filas-particionadas.md):
   -- the size cap is the release step's, not the swap's.
@@ -167,6 +178,10 @@ BEGIN
     legacy := queue || '_legacy';
     guard := queue || '_swap_cutoff';
     state := 'go';
+    started_at := clock_timestamp();
+    waited := interval '0';
+    held_for := interval '0';
+    validated := interval '0';
 
     cutoff_at := date_trunc('month', timezone('UTC', now())) + interval '1 month';
 
@@ -191,7 +206,10 @@ BEGIN
 
       LOOP
         BEGIN
+          lock_asked := clock_timestamp();
           EXECUTE format('LOCK TABLE %I IN ACCESS EXCLUSIVE MODE', queue);
+          locked_at := clock_timestamp();
+          waited := waited + (locked_at - lock_asked);
 
           -- Under the lock, as it is now: another run may have swapped it.
           IF (SELECT c.relkind FROM pg_catalog.pg_class c
@@ -218,9 +236,11 @@ BEGIN
 
           EXECUTE format('ALTER TABLE %I ADD CONSTRAINT %I CHECK ("id" < %L) NOT VALID', queue, guard, cutoff);
           guard_valid := false;
+          held_for := held_for + (clock_timestamp() - locked_at);
           EXIT;
         EXCEPTION
           WHEN lock_not_available OR deadlock_detected THEN
+            waited := waited + (clock_timestamp() - lock_asked);
             attempt := attempt + 1;
 
             IF attempt >= max_attempts THEN
@@ -247,7 +267,9 @@ BEGIN
 
       LOOP
         BEGIN
+          lock_asked := clock_timestamp();
           EXECUTE format('ALTER TABLE %I VALIDATE CONSTRAINT %I', queue, guard);
+          validated := clock_timestamp() - lock_asked;
           EXIT;
         EXCEPTION
           WHEN lock_not_available OR deadlock_detected THEN
@@ -280,7 +302,10 @@ BEGIN
 
       LOOP
         BEGIN
+          lock_asked := clock_timestamp();
           EXECUTE format('LOCK TABLE %I IN ACCESS EXCLUSIVE MODE', queue);
+          locked_at := clock_timestamp();
+          waited := waited + (locked_at - lock_asked);
 
           IF (SELECT c.relkind FROM pg_catalog.pg_class c
               WHERE c.oid = to_regclass(quote_ident(queue))) <> 'r' THEN
@@ -469,11 +494,13 @@ BEGIN
             END;
           END IF;
 
+          held_for := held_for + (clock_timestamp() - locked_at);
           swapped := swapped || queue;
           state := 'swapped';
           EXIT;
         EXCEPTION
           WHEN lock_not_available OR deadlock_detected THEN
+            waited := waited + (clock_timestamp() - lock_asked);
             attempt := attempt + 1;
 
             IF attempt >= max_attempts THEN
@@ -491,6 +518,17 @@ BEGIN
       END LOOP;
 
       COMMIT;
+    END IF;
+
+    IF state = 'swapped' THEN
+      timings := timings || format(
+        '%s em %s s (espera %s s, trava %s s, validação %s s)',
+        queue,
+        to_char(extract(epoch FROM clock_timestamp() - started_at), 'FM9999990.00'),
+        to_char(extract(epoch FROM waited), 'FM9999990.00'),
+        to_char(extract(epoch FROM held_for), 'FM9999990.00'),
+        to_char(extract(epoch FROM validated), 'FM9999990.00')
+      );
     END IF;
 
     -- The parent's statistics, outside the lock: autovacuum never analyzes
@@ -585,12 +623,14 @@ BEGIN
       CASE WHEN cardinality(out_of_range) > 0 THEN format('id fora da faixa v7, o sino fica comum até o expurgo levá-lo: %s', array_to_string(out_of_range, ', ')) END,
       CASE WHEN cardinality(failed) > 0 THEN format('erro, a tabela voltou ao que era: %s', array_to_string(failed, ', ')) END,
       format('já trocadas: %s', coalesce(nullif(array_to_string(swapped, ', '), ''), 'nenhuma')),
+      CASE WHEN cardinality(timings) > 0 THEN format('tempos: %s', array_to_string(timings, ', ')) END,
       'o próximo release tenta de novo'
     );
   ELSE
     RAISE NOTICE 'applied: %', concat_ws(
       '; ',
       format('sino particionado por mês, a tabela de antes anexada como notification_legacy: %s', array_to_string(swapped, ', ')),
+      CASE WHEN cardinality(timings) > 0 THEN format('tempos: %s', array_to_string(timings, ', ')) END,
       CASE WHEN owner_kept THEN format('o dono %s fica para o infra/sql/10-partitions.sql', owner_role) END,
       CASE WHEN cardinality(too_big) > 0 THEN format('grandes demais, exigem uma janela própria: %s', array_to_string(too_big, ', ')) END,
       CASE WHEN cardinality(held) > 0 THEN format('desfeitas à mão: %s', array_to_string(held, ', ')) END

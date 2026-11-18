@@ -3871,10 +3871,13 @@ A troca das filas (`10-queue-partition-swap.sql`) tem estes cuidados a mais:
   pôr a guarda `CHECK ("id" < corte) NOT VALID` e, depois, para a troca, que
   só mexe no catálogo. A leitura da tabela inteira (o `VALIDATE` da guarda)
   fica entre as duas, sob `SHARE UPDATE EXCLUSIVE`, com as escritas
-  seguindo. Meça na staging antes da produção, com o seed `prod-like`, pelo
-  SQL de `pg_locks` do
-  [ADR 0014](./adr/0014-filas-particionadas.md#medir-a-trava-antes-da-produção).
-  O aceite é nenhuma espera acima de 3 s.
+  seguindo. O `NOTICE` do passo diz, por fila trocada, a espera, a trava e
+  a validação (`tempos: …`). Meça na staging antes da produção, num
+  Database descartável com o seed `prod-like`, rodando os passos à mão como
+  diz o
+  [ADR 0014](./adr/0014-filas-particionadas.md#medir-a-trava-antes-da-produção)
+  (o _Run workflow_ rodaria no Database da staging, não no descartável). O
+  aceite é espera mais trava abaixo de 3 s em cada fila.
 - **A guarda que ficou.** Se o passo terminar `pending` com
   `a restrição <fila>_swap_cutoff ficou em …` (o lock para tirá-la não
   veio), ou se a etapa morrer no meio da troca (o passo fica `failed`), a
