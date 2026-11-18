@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  EPOCH_CHANGE_WINDOW_MS,
   ZERO_ID,
   convertedPosition,
   cursorOf,
@@ -21,9 +22,18 @@ import { uuid7Floor } from "@/shared/time/uuid7-floor";
  * still commit one); the cursor a page hands back reads as the same
  * position; and the history from before the txid column (txid 0, ids not
  * guaranteed v7) is never cut by a floor.
+ *
+ * And which conversions of another epoch page feed-epoch-conversion: the
+ * cursor is not signed, so only one the cluster's history backs (a recent
+ * change past the first epoch, and a last event older than it) is an
+ * "epoch" one; any other is "stray", converted the same and paging nobody,
+ * or any API key could raise an incident.
  */
 const MARGIN = 600_000;
 const NOW = Date.parse("2026-11-18T12:00:00.000Z");
+
+/** The current epoch began a minute ago: a PITR, a promote, a restore. */
+const CHANGED = NOW - 60_000;
 
 /** A uuid v7 minted at `ms`. */
 function v7At(ms: number): string {
@@ -80,7 +90,7 @@ describe("a cursor of another epoch", () => {
     const floor = NOW - MARGIN;
     const cursor = parseEventCursor(`v2.2.900.${v7At(NOW)}.${floor}`);
 
-    expect(feedStart(cursor, 3, MARGIN, NOW)).toEqual({
+    expect(feedStart(cursor, 3, MARGIN, NOW, CHANGED)).toEqual({
       kind: "convert",
       reason: "epoch",
       scan: { from: uuid7Floor(floor) },
@@ -91,7 +101,7 @@ describe("a cursor of another epoch", () => {
   it("converts from the very first event when it carries no floor", () => {
     const cursor = parseEventCursor(`v2.2.0.${v7At(NOW)}.0`);
 
-    expect(feedStart(cursor, 3, MARGIN, NOW)).toMatchObject({
+    expect(feedStart(cursor, 3, MARGIN, NOW, CHANGED)).toMatchObject({
       reason: "epoch",
       scan: { from: ZERO_ID },
       floorMs: 0,
@@ -101,8 +111,50 @@ describe("a cursor of another epoch", () => {
   it("includes epoch 0, the one a database without the epoch row reads", () => {
     const cursor = parseEventCursor(`v2.0.5.${v7At(NOW)}.0`);
 
-    expect(feedStart(cursor, 1, MARGIN, NOW)).toMatchObject({
+    expect(feedStart(cursor, 1, MARGIN, NOW, CHANGED)).toMatchObject({
       kind: "convert",
+      scan: { from: ZERO_ID },
+    });
+  });
+});
+
+describe("a cursor of another epoch the cluster's history does not back", () => {
+  const floor = NOW - 2 * 3_600_000;
+  const cursor = parseEventCursor(`v2.999.1.${v7At(NOW)}.${floor}`);
+  const stray = {
+    kind: "convert",
+    reason: "stray",
+    scan: { from: uuid7Floor(floor) },
+    floorMs: floor,
+  };
+
+  it("is stray on the first epoch, which no change ever made", () => {
+    expect(feedStart(cursor, 1, MARGIN, NOW, NOW - 3 * 3_600_000)).toEqual(
+      stray,
+    );
+  });
+
+  it("is stray when the change is older than the window", () => {
+    expect(
+      feedStart(cursor, 3, MARGIN, NOW, NOW - EPOCH_CHANGE_WINDOW_MS - 1),
+    ).toEqual(stray);
+    expect(EPOCH_CHANGE_WINDOW_MS).toBe(7 * 24 * 60 * 60 * 1000);
+  });
+
+  it("is stray when its last event is newer than the change", () => {
+    // Its floor is the last event served minus the margin: a cursor
+    // emitted before the change cannot hold an event after it.
+    expect(feedStart(cursor, 3, MARGIN, NOW, floor - 1)).toEqual(stray);
+  });
+
+  it("is stray when the epoch's start is unknown", () => {
+    expect(feedStart(cursor, 3, MARGIN, NOW, null)).toEqual(stray);
+    expect(feedStart(cursor, 3, MARGIN, NOW)).toEqual(stray);
+  });
+
+  it("is an epoch conversion within the window of a change it predates", () => {
+    expect(feedStart(cursor, 3, MARGIN, NOW, floor)).toEqual({
+      ...stray,
       reason: "epoch",
     });
   });

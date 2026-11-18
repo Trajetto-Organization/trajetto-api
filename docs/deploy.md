@@ -3829,7 +3829,9 @@ o cursor antigo). As respostas já trazem os campos novos nos dois modos:
 Um cursor `v2` de outra época (um PITR, um promote, um restore lógico) é
 convertido pelo piso dele, e os eventos desde então vão de novo: o alerta
 [feed-epoch-conversion](./runbooks/feed-epoch-conversion.md) avisa para
-falar com os clientes. Um INSERT em `delivery_event` mais de 240 s depois
+falar com os clientes, até 7 dias depois de a época mudar. Um cursor com
+uma época que a história do cluster não sustenta (o cursor não é assinado)
+é convertido igual, conta em `feed.stray_epoch_conversions` e não alerta. Um INSERT em `delivery_event` mais de 240 s depois
 do início da transação é recusado (`TJ001`,
 [runbook](./runbooks/delivery-event-writer-bound.md)): é o que mantém o
 piso do feed seguro.

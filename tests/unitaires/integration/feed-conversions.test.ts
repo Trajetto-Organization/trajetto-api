@@ -22,7 +22,10 @@ import {
  *  - A conversion of a cursor of another cluster epoch pages
  *    feed-epoch-conversion: the events since its floor went out again, and
  *    the customers should hear it from us. A legacy conversion does not:
- *    it is every integrator's first poll after the switch.
+ *    it is every integrator's first poll after the switch. Nor does a
+ *    stray one (another epoch the cluster's history does not back), which
+ *    anybody with an API key can send: it has a count of its own, outside
+ *    the one the alert sums.
  *  - sync_watermark is the read's start minus SYNC_WATERMARK_MARGIN_MS.
  */
 const NOW = new Date("2026-11-18T12:00:00Z");
@@ -54,14 +57,19 @@ describe("the feed's counts", () => {
     countFeedConversion("epoch");
     countFeedConversion("legacy");
     countFeedConversion("legacy");
+    countFeedConversion("stray");
+    countFeedConversion("stray");
+    countFeedConversion("stray");
 
     expect(takeFeedCounts()).toEqual({
       epoch_conversions: 1,
       legacy_conversions: 2,
+      stray_epoch_conversions: 3,
     });
     expect(takeFeedCounts()).toEqual({
       epoch_conversions: 0,
       legacy_conversions: 0,
+      stray_epoch_conversions: 0,
     });
   });
 });

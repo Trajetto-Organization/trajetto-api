@@ -13,12 +13,22 @@ import { registerSampleSection } from "@/shared/health/ops-sample";
  * feed-epoch-conversion, so somebody tells the customers that a stretch of
  * events was sent again. The legacy conversions are the integrators still
  * on the id walk's cursor: they fall to zero once each has polled once.
+ * The stray ones are cursors of another epoch the cluster's history does
+ * not back (commit-order.ts says when): edited by hand, carried over from
+ * another environment, or an integrator back long after a change. Counted
+ * so somebody can look, never paged on: anybody with an API key can send
+ * one.
  */
 
-const counts = { epoch_conversions: 0, legacy_conversions: 0 };
+const counts = {
+  epoch_conversions: 0,
+  legacy_conversions: 0,
+  stray_epoch_conversions: 0,
+};
 
-function countFeedConversion(reason: "epoch" | "legacy"): void {
+function countFeedConversion(reason: "epoch" | "legacy" | "stray"): void {
   if (reason === "epoch") counts.epoch_conversions += 1;
+  else if (reason === "stray") counts.stray_epoch_conversions += 1;
   else counts.legacy_conversions += 1;
 }
 
@@ -26,11 +36,13 @@ function countFeedConversion(reason: "epoch" | "legacy"): void {
 function takeFeedCounts(): {
   epoch_conversions: number;
   legacy_conversions: number;
+  stray_epoch_conversions: number;
 } {
   const taken = { ...counts };
 
   counts.epoch_conversions = 0;
   counts.legacy_conversions = 0;
+  counts.stray_epoch_conversions = 0;
 
   return taken;
 }

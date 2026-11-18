@@ -484,16 +484,26 @@ class IntegrationRepository implements IIntegrationRepository {
     const marginMs = env.FEED_FLOOR_MARGIN_MS;
 
     const [horizon] = await this.prisma.$queryRaw<
-      Array<{ epoch: number | null; xmin: string }>
+      Array<{ epoch: number | null; changed_at: Date | null; xmin: string }>
     >`
-      SELECT (SELECT "epoch" FROM "cluster_epoch" WHERE "id" = 1) AS "epoch",
+      SELECT e."epoch", e."changed_at",
              (pg_snapshot_xmin(pg_current_snapshot()))::text AS "xmin"
+      FROM (SELECT 1) one
+      LEFT JOIN "cluster_epoch" e ON e."id" = 1
     `;
 
     // No epoch row yet (the release step has not run on this database):
-    // epoch 0, which the first epoch (1) converts, at least once.
+    // epoch 0, which the first epoch (1) converts, at least once. When the
+    // epoch began decides whether another epoch in a cursor is that change
+    // reaching the integrator (paged) or a stray claim (counted only).
     const epoch = horizon?.epoch ?? 0;
-    const start = feedStart(position, epoch, marginMs);
+    const start = feedStart(
+      position,
+      epoch,
+      marginMs,
+      Date.now(),
+      horizon?.changed_at ? horizon.changed_at.getTime() : null,
+    );
 
     let from: FeedPosition | null =
       start.kind === "position" ? start.position : null;
@@ -529,6 +539,17 @@ class IntegrationRepository implements IIntegrationRepository {
             floorMs: start.floorMs,
           },
           "integration feed: cursor of another cluster epoch converted from its floor; events since then are sent again",
+        );
+      } else if (start.reason === "stray") {
+        // Not the cluster's doing: info, and no page (feed-metrics.ts).
+        logger.info(
+          {
+            businessId,
+            cursorEpoch: position?.epoch ?? null,
+            epoch,
+            floorMs: start.floorMs,
+          },
+          "integration feed: cursor of another epoch with no recent epoch change behind it (edited, from another environment, or long after a change) converted from its floor",
         );
       }
     }

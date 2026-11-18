@@ -1,12 +1,14 @@
 # feed-epoch-conversion — Cursor do feed de outra época do cluster
 
-**Dispara quando:** nos últimos 15 minutos, o feed `/integration/v1/events` converteu pelo menos um cursor emitido noutra época do cluster.
+**Dispara quando:** nos últimos 15 minutos, o feed `/integration/v1/events` converteu pelo menos um cursor emitido noutra época do cluster, até 7 dias depois de a época mudar.
 
 ## O que significa
 
 Com `INTEGRATION_FEED_ORDER=commit` (plano de escala F2-05), o feed anda pela ordem de commit, e o cursor que cada integrador guarda leva a época do cluster (`cluster_epoch`, [cluster-epoch-stale](./cluster-epoch-stale.md)). Depois de um PITR, de um promote ou de um restore lógico, a etapa de release sobe a época e os ids de transação voltam a ser usados: um cursor da época anterior não diz mais onde o integrador parou. Por isso o feed não o lê como está nem o recusa: ele o **converte** pelo piso do próprio cursor (o `created_at` do último evento servido menos `FEED_FLOOR_MARGIN_MS`) e devolve de novo tudo o que foi gravado desde então, sem pular nada. A integração recebe eventos repetidos e, pelo contrato público, deduplica pelo `id` do evento.
 
 Cada processo conta as conversões no minuto (`metrics.feed.epoch_conversions` da `ops_sample`), e o `ops-heartbeat` soma as dos últimos 15 minutos. O alerta é esperado logo depois de um PITR, promote ou restore, e some sozinho quando todo integrador consultou uma vez com o cursor novo.
+
+O cursor não é assinado: a época dentro dele é só o que o integrador manda. Por isso só conta para o alerta a conversão que a história do cluster sustenta: a época passou da primeira, mudou há no máximo 7 dias (`cluster_epoch.changed_at`) e o último evento do cursor é anterior à mudança. Qualquer outra (um cursor editado à mão, um trazido de outro ambiente, como o de um ERP apontado para a staging e depois para a produção, ou o de um integrador que voltou mais de 7 dias depois) é convertida do mesmo jeito, sem pular nada, mas conta em `metrics.feed.stray_epoch_conversions` e não alerta: uma chave de API sozinha não abre incidente. O log a registra em `info`, na linha `integration feed: cursor of another epoch with no recent epoch change behind it`, com o `businessId`.
 
 ## Primeira ação
 

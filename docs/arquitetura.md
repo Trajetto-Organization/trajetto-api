@@ -4267,7 +4267,12 @@ OpenStreetMap são recusados.
   em diante, na outra época), ou no `xmin` se for menor. As duas conversões
   repetem eventos e nunca pulam, e o contrato público manda deduplicar pelo
   `id`; a de época conta em `feed.epoch_conversions` da `ops_sample` e
-  alerta `feed-epoch-conversion`. `resume_cursor` (onde a próxima consulta
+  alerta `feed-epoch-conversion` só quando a história do cluster a
+  sustenta (o cursor não é assinado): a época passou da primeira, mudou há
+  no máximo 7 dias e o último evento do cursor é anterior à mudança. Outra
+  época qualquer no cursor (editado, de outro ambiente, de um integrador
+  que voltou dias depois) é convertida igual, conta em
+  `feed.stray_epoch_conversions` e não alerta. `resume_cursor` (onde a próxima consulta
   começa, também na última página) e o `sync_watermark` do `/deliveries` e
   do `/routes` (a leitura menos `SYNC_WATERMARK_MARGIN_MS`, o
   `updated_since` da próxima sincronização) saem nos dois modos. O `xmin` é

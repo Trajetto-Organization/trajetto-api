@@ -23,6 +23,11 @@ import { takeFeedCounts } from "@/shared/integration/feed-metrics";
  * carries the new epoch, and the conversion is counted and pages
  * feed-epoch-conversion.
  *
+ * The cursor is not signed, so only a conversion the cluster's history
+ * backs pages (a recent change, older than the cursor's last event): a
+ * cursor of an epoch that never was, sent by anybody with an API key, is
+ * converted the same and only counted apart.
+ *
  * The epoch is moved by hand here, as the cluster-epoch E2E simulates a
  * promote. One connection only, so the shared phase is fine: another
  * file's open transaction only delays the page, which is waited for.
@@ -37,6 +42,7 @@ const SHIPPER = "018f5d00-0000-7000-8000-0000000000f1";
 let deliveryId: string;
 let token: string;
 let epochBefore: number;
+let changedBefore: Date;
 
 beforeAll(async () => {
   env.INTEGRATION_FEED_ORDER = "commit";
@@ -93,11 +99,14 @@ beforeAll(async () => {
 
   token = key.token;
 
-  const [row] = await prisma.$queryRaw<Array<{ epoch: number }>>`
-    SELECT "epoch" FROM "cluster_epoch" WHERE "id" = 1
+  const [row] = await prisma.$queryRaw<
+    Array<{ epoch: number; changed_at: Date }>
+  >`
+    SELECT "epoch", "changed_at" FROM "cluster_epoch" WHERE "id" = 1
   `;
 
   epochBefore = row.epoch;
+  changedBefore = row.changed_at;
 
   ({ app } = await import("@/http"));
   await app.ready();
@@ -107,7 +116,9 @@ afterAll(async () => {
   env.INTEGRATION_FEED_ORDER = "id";
 
   await prisma.$executeRaw`
-    UPDATE "cluster_epoch" SET "epoch" = ${epochBefore} WHERE "id" = 1
+    UPDATE "cluster_epoch"
+    SET "epoch" = ${epochBefore}, "changed_at" = ${changedBefore}
+    WHERE "id" = 1
   `;
   await app?.close();
   await prisma.$disconnect();
@@ -171,7 +182,9 @@ describe("a cursor of the epoch before", () => {
 
     // A promote, as the release step would record it.
     await prisma.$executeRaw`
-      UPDATE "cluster_epoch" SET "epoch" = ${epochBefore + 1} WHERE "id" = 1
+      UPDATE "cluster_epoch"
+      SET "epoch" = ${epochBefore + 1}, "changed_at" = now()
+      WHERE "id" = 1
     `;
 
     await note("d");
@@ -197,6 +210,37 @@ describe("a cursor of the epoch before", () => {
     // The new cursor is read as it is: nothing again.
     expect((await drain(after.resume!)).notes).toEqual([]);
   }, 120_000);
+
+  it("converts a cursor of an epoch the cluster never had the same way, and does not page", async () => {
+    // A week and more after the change: an epoch in a cursor is only the
+    // integrator's claim by now.
+    await prisma.$executeRaw`
+      UPDATE "cluster_epoch"
+      SET "changed_at" = now() - interval '8 days'
+      WHERE "id" = 1
+    `;
+    takeFeedCounts();
+
+    const forged = `v2.999.1.${randomUUID()}.0`;
+    const result = await vi.waitFor(
+      async () => {
+        const page = await drain(forged);
+
+        // From its floor (none): everything again, nothing skipped.
+        expect(page.notes).toEqual(["a", "b", "c", "d"]);
+
+        return page;
+      },
+      { timeout: 45_000, interval: 200 },
+    );
+
+    expect(parseEventCursor(result.resume!).epoch).toBe(epochBefore + 1);
+
+    const counts = takeFeedCounts();
+
+    expect(counts.epoch_conversions).toBe(0);
+    expect(counts.stray_epoch_conversions).toBeGreaterThan(0);
+  }, 60_000);
 
   it("pages feed-epoch-conversion from the processes' rows", async () => {
     const { collectOperationalSnapshot } =

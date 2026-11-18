@@ -28,7 +28,25 @@ import { uuid7Floor, uuid7Instant } from "@/shared/time/uuid7-floor";
  *    so its txid means nothing here): the walk restarts at the smallest
  *    txid among the events at or above its floor, which is the created_at
  *    of the last event served minus FEED_FLOOR_MARGIN_MS.
+ *
+ * The cursor is not signed, so another epoch in it is only a claim. It is
+ * converted the same way whoever made it (the integrator only ever gets
+ * its own company's events again), but only a claim the cluster backs is
+ * an "epoch" conversion, the one feed-epoch-conversion pages on, telling
+ * operators to warn the customers that events went out again: the epoch
+ * did change (it is past the first one), less than EPOCH_CHANGE_WINDOW_MS
+ * ago, and the cursor's last event is older than that change. Any other
+ * ("stray": a cursor edited by hand, one carried over from another
+ * environment, or an integrator back long after the change) is counted
+ * apart and pages nobody: an API key alone must not raise an incident.
  */
+
+/**
+ * How long after an epoch change a cursor of another epoch still reads as
+ * that change reaching an integrator: integrators poll every few minutes,
+ * and a week covers one that polls once a week.
+ */
+const EPOCH_CHANGE_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 
 /** The smallest id text: (txid, ZERO_ID) is before every event of txid. */
 const ZERO_ID = "00000000-0000-0000-0000-000000000000";
@@ -49,7 +67,12 @@ type FeedStart =
   | { kind: "position"; position: FeedPosition }
   | {
       kind: "convert";
-      reason: "legacy" | "epoch";
+      /**
+       * legacy: the id walk's cursor; epoch: a cursor from before the
+       * cluster's recent epoch change; stray: another epoch the cluster's
+       * history does not back (see above).
+       */
+      reason: "legacy" | "epoch" | "stray";
       /** The events that may be unseen: ids above, or ids from, this one. */
       scan: { above: string } | { from: string };
       floorMs: number;
@@ -75,11 +98,33 @@ function legacyFloorMs(id: string, marginMs: number, nowMs: number): number {
   return Math.max(0, instant - marginMs);
 }
 
+/**
+ * Whether a cursor of another epoch, with this floor, is the cluster's
+ * epoch change reaching an integrator: the epoch moved past the first one
+ * (1 is where every cluster starts, not a change), within the window, and
+ * the cursor's last event predates the move.
+ */
+function backedByEpochChange(
+  floorMs: number,
+  currentEpoch: number,
+  epochChangedAtMs: number | null,
+  nowMs: number,
+): boolean {
+  return (
+    currentEpoch >= 2 &&
+    epochChangedAtMs !== null &&
+    nowMs - epochChangedAtMs <= EPOCH_CHANGE_WINDOW_MS &&
+    floorMs <= epochChangedAtMs
+  );
+}
+
 function feedStart(
   cursor: EventCursor | null | undefined,
   currentEpoch: number,
   marginMs: number,
   nowMs: number = Date.now(),
+  /** When the current epoch began (cluster_epoch.changed_at); null: unknown. */
+  epochChangedAtMs: number | null = null,
 ): FeedStart {
   if (!cursor) return { kind: "beginning" };
 
@@ -99,7 +144,14 @@ function feedStart(
     // may not exist, and an event committed late below it may be unseen.
     return {
       kind: "convert",
-      reason: "epoch",
+      reason: backedByEpochChange(
+        floorMs,
+        currentEpoch,
+        epochChangedAtMs,
+        nowMs,
+      )
+        ? "epoch"
+        : "stray",
       scan: { from: floorMs > 0 ? uuid7Floor(floorMs) : ZERO_ID },
       floorMs,
     };
@@ -152,7 +204,9 @@ function cursorOf(position: FeedPosition, epoch: number): string {
 }
 
 export {
+  EPOCH_CHANGE_WINDOW_MS,
   ZERO_ID,
+  backedByEpochChange,
   convertedPosition,
   cursorOf,
   feedStart,
