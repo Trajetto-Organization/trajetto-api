@@ -480,8 +480,10 @@ type AlertKind = (typeof ALERT_KINDS)[number];
  * reconnect storm, a migration stuck on a lock, a full disk, a PITR
  * restore and the restore drill; and the planned moves between servers
  * (F1-24): the staging to a Remote Server, production to its own servers;
- * and the planned windows, such as the history's copy window (F2-17).
- * They live beside the alerts' runbooks.
+ * the planned windows, such as the history's copy window (F2-17); and the
+ * operation of the scale plan's second phase (F2-35): a frozen feed, a
+ * missing partition, a pending detach, load shedding, a noisy company and
+ * the trail's archive. They live beside the alerts' runbooks.
  */
 const OPERATION_RUNBOOKS = [
   "provider-down",
@@ -494,6 +496,12 @@ const OPERATION_RUNBOOKS = [
   "producao-servidores-proprios",
   "delivery-event-writer-bound",
   "history-window",
+  "feed-frozen",
+  "partition-missing",
+  "partition-detach-pending",
+  "load-shedding",
+  "noisy-tenant",
+  "trail-archive",
 ] as const;
 
 /** One reason to wake the operation: its code and its pt-BR message. */

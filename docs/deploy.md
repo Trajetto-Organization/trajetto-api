@@ -3912,6 +3912,41 @@ a janela, a conferência e a volta nos 14 dias) está no
 inválido ou intervalo de mais de 24 h não aprova nada (o log da etapa diz
 por quê). Apague a variável depois da janela.
 
+### O trem de releases do plano de escala (as datas das contrações)
+
+O plano de escala sai inteiro numa release só (decisão do dono de
+16/11/2026: um push, API → web → app, e uma promoção para a produção),
+com a imagem anterior servindo durante o rolling. Por isso nada que tira
+alguma coisa vai junto com o que a expande: cada contração espera a sua
+condição, e a ordem abaixo é a do trem. A release é **N**; as datas de
+exemplo supõem N na produção em 30/11/2026 e a janela do histórico em
+06/12/2026 (troque pelas suas e anote na tabela quando cada uma rodar).
+
+| Passo                                                                                                                                                                                               | O que sai                                                                                                                              | Quando, no mais cedo                                                                               | Exemplo    | Como                                                                                                                                          |
+| --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- | ---------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| Contrações com capability (onda 10): `03-route-stop-status-index.sql`, `05-queue-contract.sql`, `07-notification-contract.sql`, `10-queue-partition-swap.sql`, `20-notification-partition-swap.sql` | o índice global das paradas, as FKs e uniques das filas e do sino, a troca das filas e do sino por tabelas particionadas               | no deploy seguinte ao rolling de N convergir (todo processo vivo anuncia a capability)             | 30/11/2026 | sozinhas, pela etapa de release; para não esperar, _Run workflow_ com `force_release` ([acima](#contrações-que-esperam-a-capability-onda-10)) |
+| Janela do histórico: `30-delivery-event-window.sql` e `31-activity-window.sql` (F2-17, F2-18)                                                                                                       | `delivery_event` e `activity` comuns viram particionadas; as de antes ficam como `*_legacy`                                            | o primeiro domingo, 03:00 BRT, depois de N na produção e do ensaio na staging, com o aviso de 48 h | 06/12/2026 | `HISTORY_WINDOW_APPROVED` na `trajetto-api-migrate` e `force_release` ([runbook](./runbooks/history-window.md))                               |
+| U-03                                                                                                                                                                                                | as posições na sala de operações (fica só `positions:<businessId>`)                                                                    | ≥ 1 semana com a web X-32 na produção                                                              | 07/12/2026 | push próprio da onda 20                                                                                                                       |
+| F2-20                                                                                                                                                                                               | `delivery_event_legacy`, `activity_legacy`, a consulta do id antigo (`trajetto_activity_rekey`) e as entradas datadas do gate de drift | ≥ 14 dias depois da janela                                                                         | 20/12/2026 | push próprio da onda 20; o `DO` da migration recusa antes disso                                                                               |
+| F2-23                                                                                                                                                                                               | os índices sem uso                                                                                                                     | ≥ 30 dias de `pg_stat_statements` na produção                                                      | 30/12/2026 | push próprio da onda 20, pelo relatório de uso                                                                                                |
+| F2-36                                                                                                                                                                                               | a dupla escrita do orçamento no Redis                                                                                                  | uma release depois do F2-32 na produção                                                            | N+1        | push próprio da onda 20                                                                                                                       |
+| U-10                                                                                                                                                                                                | os caminhos de compatibilidade vencidos e o `warn` do orçamento de memória                                                             | 2 releases depois de N, com os valores da seção 3 do plano aplicados nos dois environments         | N+2        | push próprio da onda 20                                                                                                                       |
+| F2-12                                                                                                                                                                                               | a `driver_position` legada                                                                                                             | ≥ `DRIVER_POSITION_RETENTION_DAYS` (90) depois do F2-10 na produção                                | 28/02/2027 | push próprio da onda 20                                                                                                                       |
+| U-09                                                                                                                                                                                                | o dump do Dokploy, trocado pelo pgBackRest                                                                                             | quando o dono decidir, com o PITR conferido                                                        | —          | o texto, a documentação e o teste já prontos                                                                                                  |
+
+Regras do trem:
+
+- **Uma contração nunca vai na mesma release da expansão de que ela
+  depende.** As da onda 20 ficam fora da branch `staging` até a data delas
+  chegar, cada uma num push.
+- **Depois que uma contração roda, o piso de rollback do código é a
+  release dela**: a imagem anterior não aguenta o que ela tirou
+  ([Rollback](#17-rollback)).
+- A janela do histórico é a única que pede aprovação por intervalo: um
+  hotfix promovido depois de N nunca a dispara sem aviso.
+- Antes de cada contração datada, confira a data nesta tabela e anote a do
+  dia em que rodou.
+
 ### Quando o Swarm desiste de um serviço
 
 Nenhuma Application tem limite de tentativas (`MaxAttempts: 0`). Se uma
