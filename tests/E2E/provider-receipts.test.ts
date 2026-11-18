@@ -126,16 +126,34 @@ async function seedDelivery(
 }
 
 /**
- * This file's rows only: E2E files run in parallel. Deliveries go with their
- * events, tied receipts with their deliveries; the untied Meta and Expo ones
- * are this file's own (delivery-provider-truth writes the Resend ones).
+ * This file's rows only. Each queue by hand, as the purge does since the
+ * contraction (F5-06): no cascade from an event to its deliveries nor from a
+ * delivery to its receipts. The untied Meta and Expo receipts are this
+ * file's own (delivery-provider-truth writes the Resend ones).
  */
 async function cleanTables(): Promise<void> {
+  const events = await prisma.domainOutboxEvent.findMany({
+    where: { businessId: BUSINESS },
+    select: { id: true },
+  });
+  const deliveries = await prisma.notificationDelivery.findMany({
+    where: { outboxEventId: { in: events.map((row) => row.id) } },
+    select: { id: true },
+  });
+
+  await prisma.notificationProviderReceipt.deleteMany({
+    where: {
+      OR: [
+        { deliveryId: { in: deliveries.map((row) => row.id) } },
+        { deliveryId: null, provider: { in: ["meta", "expo"] } },
+      ],
+    },
+  });
+  await prisma.notificationDelivery.deleteMany({
+    where: { id: { in: deliveries.map((row) => row.id) } },
+  });
   await prisma.domainOutboxEvent.deleteMany({
     where: { businessId: BUSINESS },
-  });
-  await prisma.notificationProviderReceipt.deleteMany({
-    where: { deliveryId: null, provider: { in: ["meta", "expo"] } },
   });
   await prisma.pushDeviceToken.deleteMany({ where: { userId: USER } });
 }

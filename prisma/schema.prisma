@@ -191,7 +191,6 @@ model Business {
   apiKeyUsage              ApiKeyUsageDaily[]
   driverPositions          DriverLastPosition[]
   webhookEndpoints         WebhookEndpoint[]
-  webhookDeliveries        WebhookDelivery[]
   deliveryMessageTemplates DeliveryMessageTemplate[]
 
   driverPauses DriverPause[]
@@ -337,7 +336,6 @@ model User {
   TwoFactorConfirmation  TwoFactorConfirmation?
   KanbanCard             KanbanCard[]
   PendingDeletion        PendingDeletion[]
-  NotificationDelivery   NotificationDelivery[]
   NotificationPreference NotificationPreference[]
   PushDeviceToken        PushDeviceToken[]
   Import                 Import[]
@@ -1226,7 +1224,7 @@ enum ScheduledJobExecutionStatus {
 
 model DomainOutboxEvent {
   id            String  @id @default(uuid(7))
-  eventKey      String  @unique
+  eventKey      String
   topic         String
   aggregateType String
   aggregateId   String
@@ -1247,8 +1245,6 @@ model DomainOutboxEvent {
   /// published outside a request (cron, workers). Not indexed: it is read
   /// while investigating, never on a hot path.
   correlationId String?
-
-  deliveries NotificationDelivery[]
 
   created_at DateTime @default(now())
   updated_at DateTime @updatedAt
@@ -1328,7 +1324,7 @@ model NotificationDelivery {
   // twice" when a customer reports a duplicate.
   //
   // Kept as long as the row: 30 days after the event was processed for a
-  // DELIVERED row (the purge cascades from the event). A FAILED row is copied
+  // DELIVERED row (the purge takes it with its event). A FAILED row is copied
   // to NotificationDeadLetter before that purge and kept there for 90 days.
   providerMessageId String?
 
@@ -1341,12 +1337,11 @@ model NotificationDelivery {
   providerStatus   String?
   providerStatusAt DateTime?
 
-  event DomainOutboxEvent @relation(fields: [outboxEventId], references: [id], onDelete: Cascade)
-  user  User?             @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  externalRecipient ExternalRecipient? @relation(fields: [externalRecipientId], references: [id], onDelete: Cascade)
-
-  receipts NotificationProviderReceipt[]
+  // No relation to the event, the user nor the external recipient since
+  // F5-06 (plano-escala): the queues are dropped by day, and a foreign key
+  // would hold the drop. Each deletion takes its own queue rows instead
+  // (F5-05), and a delivery whose recipient is gone closes as
+  // recipient_gone.
 
   created_at DateTime @default(now())
   updated_at DateTime @updatedAt
@@ -1358,11 +1353,12 @@ model NotificationDelivery {
   // gap at the provider (the delivery id is Resend's idempotency key);
   // WhatsApp and push cannot.
   //
-  // Enforced by TWO PARTIAL unique indexes in raw SQL (see
-  // migrations/20260916090000_external_recipient), one per kind of recipient:
-  // a plain @@unique over a nullable column treats every NULL as distinct in
-  // Postgres, so the external rows would have had no uniqueness at all and a
-  // retried event would have inserted a second WhatsApp row.
+  // Enforced by the id since F5-06 (plano-escala): it is decided by the
+  // event, the recipient and the channel (src/shared/notifications/
+  // delivery-id.ts), so a retried expansion computes the same primary keys.
+  // Until then two PARTIAL unique indexes in raw SQL did it
+  // (migrations/20260916090000_external_recipient; dropped by
+  // 20261118120000_queue_contract and prisma/post-deploy/05-queue-contract.sql).
   //
   // No ([status, availableAt]) index: the claim runs on one partial index per
   // delivery lane (raw SQL, created in
@@ -1380,9 +1376,12 @@ model NotificationDelivery {
   //     WHERE "providerMessageId" IS NOT NULL — a provider callback that
   //     carries only the provider's own id.
   //
-  // ([outboxEventId]) is for the purge: the cascade from a deleted event
-  // deletes by outboxEventId alone, which the partial uniques cannot serve —
-  // without it, one sequential scan per purged event.
+  // ([outboxEventId]) is for the purge: it deletes an event's deliveries by
+  // outboxEventId alone — without it, one sequential scan per purged event.
+  //
+  // No unique on (event, recipient, channel) since F5-06: the delivery's id
+  // is decided by them (deliveryIdFor, F5-03), and the primary key keeps an
+  // event expanded twice to one row per recipient and channel.
   //
   // No index on created_at, on purpose. A BRIN was tried (20260924091100) and
   // dropped (20260924130000): every claim and settle moves `status`, so no
@@ -1415,8 +1414,8 @@ model NotificationProviderReceipt {
 
   /// Null when the report names a message no delivery can be tied to (a row
   /// already purged, or a send that predates the delivery id travelling with
-  /// the message). Cascade: the ledger lives as long as what it explains.
-  delivery   NotificationDelivery? @relation(fields: [deliveryId], references: [id], onDelete: Cascade)
+  /// the message). No foreign key since F5-06: the queues are dropped by
+  /// day, and the purge takes the receipts with their delivery.
   deliveryId String?
 
   /// 'meta' | 'resend' | 'expo'. Text rather than an enum: a provider is
@@ -1452,7 +1451,7 @@ model NotificationProviderReceipt {
   // no row holds yet (insertReceipts): the unique can go when the table is
   // partitioned (F5-06), with a plain index on the same columns for that
   // read.
-  @@unique([provider, providerMessageId, status])
+  @@index([provider, providerMessageId, status], map: "notification_provider_receipt_fact_idx")
   @@index([deliveryId])
   // The receipts job (Expo tickets not checked yet) and the metrics (failed
   // reports in the last 24 hours) both ask "this provider, this status,
@@ -2747,8 +2746,6 @@ model ExternalRecipient {
   business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
   businessId String
 
-  deliveries NotificationDelivery[]
-
   created_at DateTime @default(now())
   updated_at DateTime @updatedAt
 
@@ -3375,8 +3372,6 @@ model WebhookEndpoint {
   business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
   businessId String
 
-  deliveries WebhookDelivery[]
-
   created_at DateTime @default(now())
   updated_at DateTime @updatedAt
 
@@ -3394,7 +3389,6 @@ model WebhookEndpoint {
 model WebhookDelivery {
   id String @id @default(uuid(7))
 
-  endpoint   WebhookEndpoint @relation(fields: [endpointId], references: [id], onDelete: Cascade)
   endpointId String
 
   topic String
@@ -3444,7 +3438,9 @@ model WebhookDelivery {
   /// which is the first question when a duplicate is reported.
   resent_from_id String?
 
-  business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  // No relation to the endpoint nor the company since F5-06: the queues
+  // are dropped by day; deleting an endpoint or a company takes its rows
+  // explicitly (F5-05).
   businessId String
 
   created_at DateTime @default(now())

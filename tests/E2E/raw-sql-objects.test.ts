@@ -58,9 +58,9 @@ const INDEXES: Record<string, string> = {
   // only what still waits (decision 6.3).
   delivery_occurrence_pending_authorization_idx: `CREATE INDEX delivery_occurrence_pending_authorization_idx ON public.delivery_occurrence USING btree ("businessId", created_at) WHERE (authorization_status = 'PENDING'::"OccurrenceAuthorizationStatus")`,
 
-  // Dedupe: the unique keys `createMany({ skipDuplicates })` leans on.
-  notification_delivery_user_event_channel_idx: `CREATE UNIQUE INDEX notification_delivery_user_event_channel_idx ON public.notification_delivery USING btree ("outboxEventId", "userId", channel) WHERE ("userId" IS NOT NULL)`,
-  notification_delivery_external_event_channel_idx: `CREATE UNIQUE INDEX notification_delivery_external_event_channel_idx ON public.notification_delivery USING btree ("outboxEventId", "externalRecipientId", channel) WHERE ("externalRecipientId" IS NOT NULL)`,
+  // No dedupe index on notification_delivery since F5-06: the delivery's
+  // id is decided by (event, recipient, channel) (F5-03), and the primary
+  // key is what `createMany({ skipDuplicates })` leans on.
 
   // Invariants no code path checks before writing: the P2002 IS the check.
   route_stop_active_delivery_idx: `CREATE UNIQUE INDEX route_stop_active_delivery_idx ON public.route_stop USING btree ("deliveryId") WHERE (status = ANY (ARRAY['PENDING'::"RouteStopStatus", 'ARRIVED'::"RouteStopStatus"]))`,
@@ -427,14 +427,14 @@ describe("objects that only exist in migration SQL", () => {
 
   it("and the guard notices when one goes missing or changes shape", async () => {
     /**
-     * The control: inside a transaction that is rolled back, drop a dedupe
+     * The control: inside a transaction that is rolled back, drop a partial
      * index, rebuild a claim index on another column and drop the CHECK. DDL
      * is transactional in Postgres, so nothing survives the test.
      */
     const seen = await prisma
       .$transaction(async (tx) => {
         await tx.$executeRawUnsafe(
-          `DROP INDEX "notification_delivery_external_event_channel_idx"`,
+          `DROP INDEX "notification_delivery_failed_idx"`,
         );
 
         await tx.$executeRawUnsafe(`DROP INDEX "webhook_delivery_claim_idx"`);
@@ -467,7 +467,7 @@ describe("objects that only exist in migration SQL", () => {
     expect(seen).toHaveLength(5);
     expect(seen).toEqual(
       expect.arrayContaining([
-        "índice ausente: notification_delivery_external_event_channel_idx",
+        "índice ausente: notification_delivery_failed_idx",
         expect.stringContaining("índice alterado: webhook_delivery_claim_idx"),
         "CHECK ausente: notification_delivery_one_recipient",
         "alvo de estatística alterado: delivery.businessId (hoje padrão)",

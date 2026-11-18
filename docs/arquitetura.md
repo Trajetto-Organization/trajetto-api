@@ -3408,7 +3408,7 @@ continua de pé depois:
   `INSERT` com `ON CONFLICT DO NOTHING`). O `publishMerged` toma ou acha a
   chave do grupo e faz `UPDATE` do evento que ela nomeia enquanto ele está
   PENDING: duas transações do mesmo grupo caem numa linha só, com ou sem o
-  índice único legado de `eventKey` (que sai na onda 10, F5-06). A chave
+  índice único legado de `eventKey` (que sai com o F5-06). A chave
   aleatória de um evento sem chave não colide e não ganha linha. Um evento
   que a imagem anterior gravou sob a chave sem a linha dela (o rolling) é
   adotado, nunca duplicado. O expurgo noturno apaga a chave com o evento
@@ -3421,8 +3421,8 @@ continua de pé depois:
   canal. A segunda expansão do mesmo evento (a retentativa depois de uma
   queda, ou a réplica que tomou o evento) calcula as mesmas chaves
   primárias, e o `skipDuplicates` não grava nada de novo, com ou sem os
-  índices únicos parciais de evento, destinatário e canal (que saem na
-  onda 10, F5-06). Todas as entregas de um evento ficam no dia dele, a
+  índices únicos parciais de evento, destinatário e canal (que saem com
+  o F5-06). Todas as entregas de um evento ficam no dia dele, a
   partição em que o evento também está. A janela de 24 h do
   `/health/metrics` (`deliveryIdFloor`) passa a contar as entregas pelo
   instante do evento, não pelo da expansão.
@@ -3435,15 +3435,15 @@ continua de pé depois:
   e o dia mais antigo da retenção dos recibos soltos (30 dias). A Meta e o
   Svix repetem o que não viram responder 2xx, e três chamadas do mesmo
   fato continuam uma linha só sem o índice único de provedor, mensagem e
-  status (que sai na onda 10). O id sozinho não garante isso: a cópia que
+  status (que sai com o F5-06). O id sozinho não garante isso: a cópia que
   chega antes de o worker gravar o wamid fica solta e a que chega depois
   fica ligada, e um recibo solto preso em hoje e repetido amanhã muda de
   dia; os dois calculam outro id. Por isso quem grava (`insertReceipts`,
   em `provider-receipts.ts`) tranca cada fato com
   `pg_advisory_xact_lock`, lê quais deles o livro já tem com qualquer id
   e grava só os outros; a primeira linha fica como chegou. A leitura usa
-  o índice de provedor, mensagem e status, que a onda 10 troca por um não
-  único.
+  o índice de provedor, mensagem e status, que o F5-06 troca pelo
+  `notification_provider_receipt_fact_idx`, não único.
 - a notificação do sino nasce com o id da `notification_delivery` IN_APP
   que a criou (F5-14). Um IN_APP enviado de novo (a queda antes do
   DELIVERED, dois workers ao mesmo tempo) bate na chave primária e não
@@ -3478,10 +3478,10 @@ tempo fica de fora. A mesma variável
 governa o arquivo das entregas que falharam (`notification_dead_letter`).
 
 **Exclusões sem cascata nas filas (F5-05).** A `notification_delivery`, os
-recibos e a `webhook_delivery` dependem hoje de `ON DELETE CASCADE` em
-`user`, `external_recipient`, `webhook_endpoint`, `business` e no próprio
-evento. Essas chaves saem na onda 10 (F5-06), então cada exclusão já leva as
-suas linhas na mesma transação, antes da linha de que elas dependem
+recibos e a `webhook_delivery` dependiam de `ON DELETE CASCADE` em `user`,
+`external_recipient`, `webhook_endpoint`, `business` e no próprio evento.
+Essas chaves saem com o F5-06, então cada exclusão leva as suas linhas na
+mesma transação, antes da linha de que elas dependem
 (`src/shared/notifications/queue-row-cleanup.ts`):
 
 - usuário (`deleteUser`, `deleteMasterUserKeepingOne`): as entregas
@@ -3504,8 +3504,27 @@ apagado de uma linha da trilha e o endpoint apagado de um webhook. O
 `tests/unitaires/database/queue-deletion-paths.test.ts` lista todo caminho
 que apaga uma dessas linhas-mãe e cobra a limpeza de cada um (a reversão de
 uma importação, que apaga entregas e com elas os destinatários externos,
-fica com o `recipient_gone`), e o `tests/E2E/queue-no-cascade.test.ts` tira
-as FKs no banco do arquivo e prova que nada sobra.
+fica com o `recipient_gone`), e o `tests/E2E/queue-no-cascade.test.ts`
+prova que nada sobra sem as FKs.
+
+**A contração das filas (F5-06).** As quatro filas ficam sem chave
+estrangeira e sem unique além da chave primária, o que a partição por dia
+do F5-09 exige: saem as seis FKs (da `notification_delivery` para o evento,
+o usuário e o destinatário externo; do recibo para a entrega; da
+`webhook_delivery` para o endpoint e a empresa) e os quatro uniques
+(`eventKey` do outbox, os dois parciais de evento, destinatário e canal, e o
+de provedor, mensagem e status do recibo, que fica como o índice comum
+`notification_provider_receipt_fact_idx`). O `schema.prisma` já não tem
+essas relações: as leituras que passavam por elas buscam a outra tabela
+pela chave (o monitor de webhooks e o reenvio leem o endpoint à parte). Num
+banco sem empresa, a migration `20261118120000_queue_contract` tira tudo; num
+banco que serve, o passo `prisma/post-deploy/05-queue-contract.sql` espera
+todo processo vivo anunciar `queue-partition-agnostic-v1`, copia de novo
+para `outbox_event_key` a chave de todo evento sem a sua (o que a imagem
+anterior gravou no rolling) e tira um de cada vez, cada um na sua
+transação, deixando para o próximo release o que não pegou o lock. Desde o
+`applied`, o piso de rollback é esta release
+([deploy.md](./deploy.md#contrações-que-esperam-a-capability-onda-10)).
 
 Cada linha da `notification_delivery` leva a empresa do evento em
 `business_id` (F3-09), copiada na expansão, com um índice parcial por raia

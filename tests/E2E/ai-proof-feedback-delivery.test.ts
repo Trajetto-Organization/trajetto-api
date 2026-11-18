@@ -250,10 +250,13 @@ describe("a receipt reading that looks wrong", () => {
     });
 
     // Push and in-app, never e-mail.
+    // By the event's id: no relation between the queues since F5-06.
+    const flagged = await prisma.domainOutboxEvent.findMany({
+      where: { topic: "delivery-proof.ai-flagged", aggregateId: deliveryId },
+      select: { id: true },
+    });
     const deliveries = await prisma.notificationDelivery.findMany({
-      where: {
-        event: { topic: "delivery-proof.ai-flagged", aggregateId: deliveryId },
-      },
+      where: { outboxEventId: { in: flagged.map((event) => event.id) } },
     });
 
     expect(

@@ -260,12 +260,18 @@ describe("new tables", () => {
     expect((await columnsOf(table)).size).toBeGreaterThan(0);
   });
 
-  it("dedupes a provider's retried callback", async () => {
+  it("reads a provider's retried callback by its fact, with no unique since F5-06", async () => {
+    // insertReceipts locks each fact and reads which ones the ledger holds
+    // (plano-escala F5-04): the unique left with the contraction (F5-06),
+    // its columns stayed as a plain index for that read.
     expect(
       await indexDefinition(
         "notification_provider_receipt_provider_providerMessageId_st_key",
       ),
-    ).toMatch(/UNIQUE INDEX .*\(provider, "providerMessageId", status\)/);
+    ).toBeNull();
+    expect(
+      await indexDefinition("notification_provider_receipt_fact_idx"),
+    ).toMatch(/^CREATE INDEX .*\(provider, "providerMessageId", status\)/);
   });
 });
 

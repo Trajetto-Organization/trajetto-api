@@ -184,7 +184,7 @@ describe("adding to a route in progress", () => {
 
     expect(dispatched).toBe(1);
 
-    const push = await prisma.domainOutboxEvent.findUnique({
+    const push = await prisma.domainOutboxEvent.findFirst({
       where: { eventKey: `route:${routeId}:plan:2` },
     });
 

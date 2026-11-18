@@ -2,6 +2,8 @@ import { Prisma, WebhookDeliveryStatus } from "@prisma/client";
 
 import database from "@/../infra/database";
 
+import { relatedTo, rowsByKey } from "@/shared/database/related-rows";
+
 import { buildResendRow } from "@/shared/integration/webhook-resend";
 import {
   queueWebhookPing,
@@ -79,7 +81,7 @@ class WebhookDeliveryRepository implements IWebhookDeliveryRepository {
           availableAt: true,
           leaseExpiresAt: true,
           created_at: true,
-          endpoint: { select: { id: true, name: true, url: true } },
+          endpointId: true,
         },
       }),
 
@@ -135,8 +137,27 @@ class WebhookDeliveryRepository implements IWebhookDeliveryRepository {
 
     const p95 = latency[0]?.p95;
 
+    // The endpoints of the page, by primary key: no relation to them since
+    // F5-06 (the queues are dropped by day). Deleting an endpoint takes its
+    // rows (F5-05); a row whose endpoint is gone anyway is left out, as
+    // the foreign key's cascade left it out before.
+    const endpoints = await rowsByKey(
+      rows.map((row) => row.endpointId),
+      (ids) =>
+        this.prisma.webhookEndpoint.findMany({
+          where: { id: { in: ids }, businessId },
+          select: { id: true, name: true, url: true },
+        }),
+    );
+
+    const page = rows.flatMap(({ endpointId, ...row }) => {
+      const endpoint = relatedTo(endpoints, endpointId);
+
+      return endpoint ? [{ ...row, endpoint }] : [];
+    });
+
     return {
-      rows,
+      rows: page,
       counted,
       delivered: countOf(WebhookDeliveryStatus.DELIVERED),
       failed: countOf(WebhookDeliveryStatus.FAILED),
@@ -149,10 +170,19 @@ class WebhookDeliveryRepository implements IWebhookDeliveryRepository {
     id: string,
     businessId: string,
   ): Promise<ResendableDelivery | null> {
-    return this.prisma.webhookDelivery.findFirst({
+    const row = await this.prisma.webhookDelivery.findFirst({
       where: { id, businessId },
-      include: { endpoint: { select: { is_active: true, disabled_at: true } } },
     });
+
+    if (!row) return null;
+
+    // Read apart since F5-06 (no relation): an endpoint gone is a row gone.
+    const endpoint = await this.prisma.webhookEndpoint.findFirst({
+      where: { id: row.endpointId, businessId },
+      select: { is_active: true, disabled_at: true },
+    });
+
+    return endpoint ? { ...row, endpoint } : null;
   }
 
   async createResend(

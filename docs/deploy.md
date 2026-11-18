@@ -3845,9 +3845,10 @@ enquanto houver um processo sem a capability, ou uma sessão sem nome no
 banco (a imagem de antes do plano). Num banco sem empresa a migration do
 mesmo item já fez a mudança.
 
-| Passo                            | Item   | O que tira                                        | Capability                    |
-| -------------------------------- | ------ | ------------------------------------------------- | ----------------------------- |
-| `03-route-stop-status-index.sql` | F2-21b | o índice global `route_stop (status, deliveryId)` | `route-stop-open-by-route-v1` |
+| Passo                            | Item   | O que tira                                                                                                                                                                                                                                    | Capability                    |
+| -------------------------------- | ------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------- |
+| `03-route-stop-status-index.sql` | F2-21b | o índice global `route_stop (status, deliveryId)`                                                                                                                                                                                             | `route-stop-open-by-route-v1` |
+| `05-queue-contract.sql`          | F5-06  | as chaves estrangeiras e os uniques das quatro filas (`domain_outbox_event`, `notification_delivery`, `notification_provider_receipt`, `webhook_delivery`), depois de copiar para `outbox_event_key` a chave de todo evento que não tem a sua | `queue-partition-agnostic-v1` |
 
 1. No primeiro deploy desta release a etapa roda com a imagem anterior no
    ar e os passos ficam `pending` (o `/health/rollout` mostra em

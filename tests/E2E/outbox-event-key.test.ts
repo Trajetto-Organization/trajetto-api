@@ -19,11 +19,13 @@ import { OutboxService } from "@/shared/notifications/outbox-service";
  * partitioned by day later in the plan, and that unique cannot stay; so
  * each promise has to hold through outbox_event_key alone.
  *
- * This file proves them twice: with the legacy unique as it is today, and
- * after dropping it from its own database, as the contraction of wave 10
- * (F5-06) will. In between, what the rolling deploy leaves: an event the
- * previous image wrote under a key without the key's row is adopted, never
- * doubled. And the nightly purge takes each key with its event.
+ * This file proves them twice: with the legacy unique as a serving
+ * database still has it until the contraction of wave 10 runs (F5-06;
+ * built here, since the E2E template starts contracted), and after
+ * dropping it, as that contraction does. In between, what the rolling
+ * deploy leaves: an event the previous image wrote under a key without the
+ * key's row is adopted, never doubled. And the nightly purge takes each
+ * key with its event.
  */
 const prisma = createPrismaClient();
 const otherConnection = createPrismaClient();
@@ -210,6 +212,14 @@ function promises(label: string): void {
     });
   });
 }
+
+// A serving database until the contraction's step runs: the template is
+// a new database, which the migration already contracted.
+beforeAll(async () => {
+  await prisma.$executeRawUnsafe(
+    `CREATE UNIQUE INDEX IF NOT EXISTS "domain_outbox_event_eventKey_key" ON "domain_outbox_event"("eventKey")`,
+  );
+});
 
 promises("with the legacy unique on eventKey");
 

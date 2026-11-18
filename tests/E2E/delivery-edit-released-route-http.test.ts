@@ -152,7 +152,7 @@ describe("an edit to a delivery on a released route", () => {
       }),
     ]);
 
-    const push = await prisma.domainOutboxEvent.findUnique({
+    const push = await prisma.domainOutboxEvent.findFirst({
       where: { eventKey: `route:${routeId}:plan:3` },
     });
 
