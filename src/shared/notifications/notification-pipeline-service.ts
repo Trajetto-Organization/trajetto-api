@@ -121,12 +121,23 @@ const OUTBOX_BATCH_SIZE = 10;
 const OUTBOX_EXPANSION_CONCURRENCY = env.OUTBOX_EXPANSION_CONCURRENCY;
 
 /**
- * The outbox's claim: the oldest due events, PENDING ones and PROCESSING
- * ones whose lease ran out, under a lease of their own. `floor` is the
- * partitioned queue's claim floor (queue-claim-floor.ts, plano-escala
+ * The outbox's claim: the due events, PENDING ones and PROCESSING ones whose
+ * lease ran out, oldest due first, under a lease of their own. `floor` is
+ * the partitioned queue's claim floor (queue-claim-floor.ts, plano-escala
  * F5-13), or nothing: on the claim and on the UPDATE, so both prune the
  * days that hold nothing in flight. Exported for the plan tests, which
  * measure this very statement.
+ *
+ * By due time since F3-11, as the lanes since 20260924091000: the claim
+ * writes the lease end into availableAt as well as leaseExpiresAt, so one
+ * range on domain_outbox_event_due_idx ("availableAt", partial on the
+ * claimable statuses) covers both halves of the queue and stops at now().
+ * It ordered by created_at under an OR, and the events waiting out a retry
+ * sat at the head of the index, read by every claim. The explicit lease
+ * check stays for the events an older image claimed without moving
+ * availableAt (the rolling deploy, a rollback): they must not be taken
+ * while their lease lives. domain_outbox_event_claim_idx (created_at),
+ * which that image still reads, leaves in the contraction of wave 20.
  */
 function outboxClaimSql(
   floor: Prisma.Sql,
@@ -136,13 +147,16 @@ function outboxClaimSql(
       UPDATE "domain_outbox_event" SET
         "status" = 'PROCESSING',
         "leaseExpiresAt" = now() + make_interval(secs => ${OUTBOX_LEASE_SECONDS}),
+        "availableAt" = now() + make_interval(secs => ${OUTBOX_LEASE_SECONDS}),
         "attempts" = "attempts" + 1
       WHERE "id" IN (
         SELECT "id" FROM "domain_outbox_event"
-        WHERE (("status" = 'PENDING' AND "availableAt" <= now())
-           OR ("status" = 'PROCESSING' AND "leaseExpiresAt" < now()
-               AND "attempts" < ${OUTBOX_MAX_ATTEMPTS}))${floor}
-        ORDER BY "created_at"
+        WHERE "status" IN ('PENDING', 'PROCESSING')
+          AND "availableAt" <= now()
+          AND ("status" = 'PENDING'
+            OR ("leaseExpiresAt" < now()
+                AND "attempts" < ${OUTBOX_MAX_ATTEMPTS}))${floor}
+        ORDER BY "availableAt"
         LIMIT ${limit}
         FOR UPDATE SKIP LOCKED
       )${floor}
@@ -220,6 +234,44 @@ function laneFairQueue(lane: DeliveryLane): FairQueue {
         "attempts" = "attempts" + 1`,
     returning: `"id", "outboxEventId", "userId", "externalRecipientId", "channel", "attempts"`,
   };
+}
+
+/**
+ * The outbox as the fair claim walks it (plano-escala F3-11): the events by
+ * company, through domain_outbox_event_fair_idx ("businessId",
+ * "availableAt") with the claim's statuses, and the same SET, due rule and
+ * RETURNING as outboxClaimSql. NULL is the platform's own events.
+ */
+const OUTBOX_FAIR_QUEUE: FairQueue = {
+  table: "domain_outbox_event",
+  tenant: "businessId",
+  dueAt: "availableAt",
+  indexed: (alias) =>
+    Prisma.sql`${columnOf(alias, "status")} IN ('PENDING', 'PROCESSING')`,
+  due: (alias) =>
+    Prisma.sql`${columnOf(alias, "availableAt")} <= now() AND (${columnOf(alias, "status")} = 'PENDING' OR (${columnOf(alias, "leaseExpiresAt")} < now() AND ${columnOf(alias, "attempts")} < ${OUTBOX_MAX_ATTEMPTS}::int))`,
+  set: Prisma.sql`
+      "status" = 'PROCESSING',
+      "leaseExpiresAt" = now() + make_interval(secs => ${OUTBOX_LEASE_SECONDS}),
+      "availableAt" = now() + make_interval(secs => ${OUTBOX_LEASE_SECONDS}),
+      "attempts" = "attempts" + 1`,
+  returning: `"id", "topic", "payload", "businessId", "actorId", "attempts", "created_at", "correlationId", "aggregateType", "aggregateId"`,
+};
+
+/**
+ * The outbox's fair claim, company by company from `cursor` (see
+ * claimEvents). Exported for the plan tests, which measure this very
+ * statement.
+ */
+function outboxFairClaimSql(input: {
+  cursor: string;
+  limit: number;
+  rowsPerTenant: number;
+  maxTenants: number;
+  floor: Prisma.Sql;
+  rowFloor: Prisma.Sql;
+}): Prisma.Sql {
+  return fairClaimSql(OUTBOX_FAIR_QUEUE, input);
 }
 
 /**
@@ -513,6 +565,9 @@ class NotificationPipelineService {
     internal: "",
     external: "",
   };
+
+  /** The outbox's, the same way (F3-11). */
+  private outboxFairCursor = "";
 
   /**
    * Set when the replica starts going away. The pools stop claiming and
@@ -935,9 +990,12 @@ class NotificationPipelineService {
    * it a second time. The database clock, like the claim.
    */
   private async renewEventLease(event: ClaimedEvent): Promise<boolean> {
+    // The due time follows the lease, as the claim writes it (F3-11): the
+    // event stays out of the claims' range for as long as it is held.
     const renewed = await database.$executeRaw`
       UPDATE "domain_outbox_event" SET
-        "leaseExpiresAt" = now() + make_interval(secs => ${OUTBOX_LEASE_SECONDS})
+        "leaseExpiresAt" = now() + make_interval(secs => ${OUTBOX_LEASE_SECONDS}),
+        "availableAt" = now() + make_interval(secs => ${OUTBOX_LEASE_SECONDS})
       WHERE "id" = ${event.id}
         AND "status" = 'PROCESSING'
         AND "attempts" = ${event.attempts}
@@ -955,6 +1013,32 @@ class NotificationPipelineService {
     // (attempts < OUTBOX_MAX_ATTEMPTS) and closed by the minute's sweep
     // (closeExhausted, plano-escala F3-08), not here: the claim is one
     // statement, whatever is queued.
+    //
+    // The fair claim (plano-escala F3-11), with the lanes' switch: a
+    // carrier's twenty thousand events no longer hold another company's
+    // bell behind them, the expansion being the first step of every
+    // notification.
+    if (env.QUEUE_FAIR_CLAIM_ENABLED) {
+      const claimed = await database.$queryRaw<
+        Array<ClaimedEvent & { fairCursor?: string | null }>
+      >(
+        outboxFairClaimSql({
+          cursor: this.outboxFairCursor,
+          limit,
+          rowsPerTenant: env.QUEUE_FAIR_ROWS_PER_TENANT,
+          maxTenants: env.QUEUE_FAIR_MAX_TENANTS,
+          floor,
+          rowFloor: await claimFloors.predicate("outbox", "row"),
+        }),
+      );
+
+      this.outboxFairCursor = nextFairCursor(claimed, this.outboxFairCursor);
+
+      for (const event of claimed) delete event.fairCursor;
+
+      return claimed;
+    }
+
     return database.$queryRaw<ClaimedEvent[]>(outboxClaimSql(floor, limit));
   }
 
@@ -2636,4 +2720,5 @@ export {
   deliveryClaimSql,
   deliveryFairClaimSql,
   outboxClaimSql,
+  outboxFairClaimSql,
 };

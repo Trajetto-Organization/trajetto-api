@@ -236,6 +236,21 @@ recursivo no índice `(business_id, availableAt)` da raia (F3-09): duas
 sondagens curtas por empresa visitada, nunca a leitura das linhas de uma
 empresa grande (`src/shared/queue/fair-claim.ts`).
 
+**Outbox pelo vencimento e por empresa (F3-11).** O claim do outbox
+ordenava por `created_at`, sob um OR das `PENDING` vencidas e das
+`PROCESSING` com o lease vencido, e os eventos em espera de nova
+tentativa ficavam na frente do índice, lidos por todo claim. Agora ele
+grava o fim do lease em `availableAt` (como as raias e os webhooks, e a
+renovação antes de cada expansão também) e reivindica um intervalo de
+`domain_outbox_event_due_idx`, que para em `now()`. Com
+`QUEUE_FAIR_CLAIM_ENABLED`, o outbox anda pelas empresas como as raias,
+por `domain_outbox_event_fair_idx` (`businessId`, `availableAt`): a
+expansão é o primeiro passo de toda notificação, então uma enchente de
+eventos de uma transportadora deixa de segurar o sino das outras. O
+índice antigo, `domain_outbox_event_claim_idx` (`created_at`), que a
+imagem anterior ainda lê no rolling e num rollback, sai na contração da
+onda 20.
+
 - **DLQ:** o status `FAILED`.
   - `GET /health/dead-letter` com `POST /health/dead-letter/replay` cobre
     as entregas.

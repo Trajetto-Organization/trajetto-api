@@ -18,8 +18,8 @@ import { createPrismaClient } from "@/shared/database/database-client";
 import { uuid7Sql } from "./support/uuid7-sql";
 
 /**
- * The fair claim of the delivery lanes, company by company (plano-escala
- * F3-10).
+ * The fair claim of the delivery lanes and of the outbox, company by
+ * company (plano-escala F3-10 and F3-11).
  *
  * The lanes took their oldest due rows, whoever they belonged to. A carrier
  * that fired sixty e-mails a moment before a small company's one put that
@@ -34,7 +34,10 @@ import { uuid7Sql } from "./support/uuid7-sql";
  *    company;
  *  - one company alone still gets full claims;
  *  - rows another process holds are skipped, never waited on, and rows in
- *    backoff or in flight are left alone.
+ *    backoff or in flight are left alone;
+ *  - the outbox: B's event expands in the first claim of A's flood, and,
+ *    fair or not, it is claimed by due time, the events waiting out a
+ *    retry no longer in front of it.
  */
 const prisma = createPrismaClient();
 const holder = createPrismaClient();
@@ -394,5 +397,102 @@ describe("what the walk leaves to the oldest", () => {
       release();
       await transaction;
     }
+  });
+});
+
+/** `count` PENDING events of `business` due `dueAt` (SQL), created `age` ago. */
+async function eventsOf(
+  business: string,
+  count: number,
+  dueAt: string,
+  age: string,
+): Promise<string[]> {
+  const rows = await prisma.$queryRawUnsafe<Array<{ id: string }>>(
+    `
+    INSERT INTO "domain_outbox_event" (
+      "id", "eventKey", "topic", "aggregateType", "aggregateId", "businessId",
+      "payload", "status", "availableAt", "created_at", "updated_at"
+    )
+    SELECT ${uuid7Sql(`now() - interval '${age}'`)}, 'fair:' || gen_random_uuid(),
+           'account-payable.created', 'account-payable', gen_random_uuid()::text,
+           $1, '{}'::jsonb, 'PENDING', ${dueAt}, now() - interval '${age}', now()
+    FROM generate_series(1, ${count})
+    RETURNING "id"
+    `,
+    business,
+  );
+
+  return rows.map((row) => row.id);
+}
+
+/** The outbox's claim, as the pool calls it (private on purpose). */
+function claimEventsOf(pipeline: Pipeline) {
+  return (limit: number) =>
+    (
+      pipeline as unknown as {
+        claimEvents: (limit: number) => Promise<ClaimedRow[]>;
+      }
+    ).claimEvents(limit);
+}
+
+describe("the outbox (F3-11)", () => {
+  it("expands the other company's event in the first claim of a flood", async () => {
+    await eventsOf(A, 40, "now() - interval '10 minutes'", "10 minutes");
+    const [mine] = await eventsOf(B, 1, "now()", "1 second");
+
+    const claimed = await claimEventsOf(await newPipeline())(10);
+
+    expect(claimed).toHaveLength(10);
+    expect(claimed.map((row) => row.id)).toContain(mine);
+  });
+
+  it("claims by due time, the events waiting out a retry no longer in front", async () => {
+    env.QUEUE_FAIR_CLAIM_ENABLED = false;
+
+    // Older, but in backoff: created first, due in an hour.
+    await eventsOf(A, 30, "now() + interval '1 hour'", "2 hours");
+    const [due] = await eventsOf(
+      B,
+      1,
+      "now() - interval '1 second'",
+      "1 second",
+    );
+
+    const claimed = await claimEventsOf(await newPipeline())(1);
+
+    expect(claimed.map((row) => row.id)).toEqual([due]);
+
+    // The lease end is the due time now: out of the claims' range while
+    // it is held.
+    const [row] = await prisma.domainOutboxEvent.findMany({
+      where: { id: due },
+    });
+
+    expect(row.status).toBe("PROCESSING");
+    expect(row.availableAt.getTime()).toBe(row.leaseExpiresAt!.getTime());
+    expect(row.availableAt.getTime()).toBeGreaterThan(Date.now());
+  });
+
+  it("leaves an event claimed by the image of before alone while its lease lives", async () => {
+    env.QUEUE_FAIR_CLAIM_ENABLED = false;
+
+    // That image did not move availableAt: due by it, held by its lease.
+    const [held] = await eventsOf(
+      A,
+      1,
+      "now() - interval '1 minute'",
+      "1 minute",
+    );
+
+    await prisma.domainOutboxEvent.update({
+      where: { id: held },
+      data: {
+        status: "PROCESSING",
+        attempts: 1,
+        leaseExpiresAt: new Date(Date.now() + 60_000),
+      },
+    });
+
+    expect(await claimEventsOf(await newPipeline())(5)).toEqual([]);
   });
 });

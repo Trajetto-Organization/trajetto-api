@@ -8,6 +8,7 @@ import {
   deliveryClaimSql,
   deliveryFairClaimSql,
   outboxClaimSql,
+  outboxFairClaimSql,
 } from "@/shared/notifications/notification-pipeline-service";
 import {
   DELIVERY_LANES,
@@ -346,6 +347,18 @@ describe("the close of the exhausted rows (F3-08)", () => {
 describe("the claims, one statement each, in front of the backlog", () => {
   const CLAIMS: Array<[string, () => Prisma.Sql]> = [
     ["the outbox", () => outboxClaimSql(Prisma.empty, 5)],
+    [
+      "the outbox's fair claim (F3-11)",
+      () =>
+        outboxFairClaimSql({
+          cursor: "",
+          limit: 5,
+          rowsPerTenant: 2,
+          maxTenants: 64,
+          floor: Prisma.empty,
+          rowFloor: Prisma.empty,
+        }),
+    ],
     ["the external lane", () => deliveryClaimSql("external", Prisma.empty, 5)],
     ["the webhooks", () => webhookClaimSql(Prisma.empty, 5)],
   ];
