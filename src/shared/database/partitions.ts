@@ -23,7 +23,7 @@ import { uuid7Floor } from "@/shared/time/uuid7-floor";
 type PartitionGrain = "day" | "month";
 
 /** The gates a registered table may name (PartitionedTable.dropGate). */
-type PartitionDropGateName = "notification-family";
+type PartitionDropGateName = "notification-family" | "webhook-deliveries";
 
 /**
  * What the partition key is: a `timestamp` column (the trail's recorded_at)
@@ -138,6 +138,8 @@ interface PartitionEnv {
   OUTBOX_PUBLISHED_RETENTION_DAYS?: number;
   /** Days past the retention before a queue day is stuck; 3 when absent. */
   QUEUE_PARTITION_STUCK_ALERT_DAYS?: number;
+  /** Days of the webhook ledger kept (F5-12); 31 when absent. */
+  WEBHOOK_DELIVERY_RETENTION_DAYS?: number;
 }
 
 /** The queues' lookahead when the environment does not say (F5-07). */
@@ -148,6 +150,12 @@ const OUTBOX_PUBLISHED_RETENTION_DAYS_DEFAULT = 30;
 
 /** The queues' grace before partition-stuck when the environment does not say. */
 const QUEUE_PARTITION_STUCK_ALERT_DAYS_DEFAULT = 3;
+
+/**
+ * The webhook ledger's retention when the environment does not say: the
+ * replay window (REPLAY_WINDOW_DAYS, 30) plus a day of grace.
+ */
+const WEBHOOK_DELIVERY_RETENTION_DAYS_DEFAULT = 31;
 
 /**
  * The queues' storage parameters, one partition at a time: a claim rewrites
@@ -181,8 +189,10 @@ const WEBHOOK_DELIVERY_RELOPTIONS = [
  * one day of ids each) leaves by day after OUTBOX_PUBLISHED_RETENTION_DAYS
  * (F5-11), through the notification-family gate: never with a row in
  * flight, its failures copied to the dead letters and its keys dropped
- * first. The webhook ledger is kept here (its purge in batches) until its
- * own retention by day (F5-12).
+ * first. The webhook ledger leaves by day after
+ * WEBHOOK_DELIVERY_RETENTION_DAYS (F5-12, at least the replay window plus
+ * a day), through the webhook-deliveries gate: never a day the dispatcher
+ * still owns a row of.
  */
 function queuePartitions(values: PartitionEnv): PartitionedTable[] {
   const queue = {
@@ -219,6 +229,10 @@ function queuePartitions(values: PartitionEnv): PartitionedTable[] {
     {
       table: "webhook_delivery",
       ...queue,
+      retentionDays:
+        values.WEBHOOK_DELIVERY_RETENTION_DAYS ??
+        WEBHOOK_DELIVERY_RETENTION_DAYS_DEFAULT,
+      dropGate: "webhook-deliveries",
       reloptions: WEBHOOK_DELIVERY_RELOPTIONS,
     },
   ];
@@ -433,6 +447,7 @@ export {
   OUTBOX_PUBLISHED_RETENTION_DAYS_DEFAULT,
   QUEUE_PARTITION_LOOKAHEAD_DAYS_DEFAULT,
   QUEUE_PARTITION_STUCK_ALERT_DAYS_DEFAULT,
+  WEBHOOK_DELIVERY_RETENTION_DAYS_DEFAULT,
   FREEZE_LOOKBACK_DAYS,
   addGrains,
   freezeWindow,

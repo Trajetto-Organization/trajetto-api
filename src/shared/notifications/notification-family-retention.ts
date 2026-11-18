@@ -8,8 +8,8 @@ import type {
   PartitionDropGate,
   PartitionToDrop,
 } from "@/shared/database/partition-drop-gate";
+import { queueLegacyBound } from "@/shared/database/queue-legacy-bound";
 import { logger } from "@/shared/logging/logger";
-import { parsePartitionBound } from "@/shared/route/driver-position-rules";
 import { uuid7Floor } from "@/shared/time/uuid7-floor";
 
 const log = logger.child({ component: "notification-family-retention" });
@@ -43,39 +43,15 @@ function idRange(from: string | null, to: string, alias?: string): Prisma.Sql {
 }
 
 /**
- * Whether the three tables are partitioned, and below which id every row
- * is still in a legacy partition: the smallest start of a day partition
- * among the three (plano-escala F5-09, F5-11). Rows under it are the plain
- * tables' of before the swap, which the nightly purge keeps deleting in
- * batches until the legacy partitions are dropped; rows over it leave with
- * their day. Null while any of the three is still a plain table: the
- * purge in batches then keeps every row, as before the swap.
+ * Below which id every row of the family is still in a legacy partition
+ * (queueLegacyBound), the bound of the purge in batches; null while any of
+ * the three is a plain table, and the purge then keeps every row, as
+ * before the swap.
  */
-async function notificationFamilyLegacyBound(
+function notificationFamilyLegacyBound(
   db: FamilyClient,
 ): Promise<string | null> {
-  const rows = await db.$queryRaw<
-    Array<{ parent: string; partitioned: boolean; bound: string | null }>
-  >`
-    SELECT t.name AS parent,
-           coalesce(p.relkind = 'p', false) AS partitioned,
-           pg_get_expr(c.relpartbound, c.oid) AS bound
-    FROM unnest(${[...NOTIFICATION_FAMILY]}::text[]) AS t(name)
-    LEFT JOIN pg_class p ON p.oid = to_regclass(quote_ident(t.name))
-    LEFT JOIN pg_inherits i ON i.inhparent = p.oid
-    LEFT JOIN pg_class c ON c.oid = i.inhrelid
-  `;
-
-  if (rows.length === 0 || rows.some((row) => !row.partitioned)) return null;
-
-  const starts = rows
-    .map((row) => (row.bound ? parsePartitionBound(row.bound)?.from : null))
-    .filter(
-      (from): from is number =>
-        typeof from === "number" && Number.isFinite(from),
-    );
-
-  return starts.length > 0 ? uuid7Floor(Math.min(...starts)) : null;
+  return queueLegacyBound(db, NOTIFICATION_FAMILY);
 }
 
 /** Whether all three are partitioned: the gate drops nothing before it. */

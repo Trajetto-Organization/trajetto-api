@@ -42,9 +42,9 @@ etapa de release roda em todo deploy e que não faz nada enquanto não pode:
    `_legacy` e ela vira `<fila>_legacy`; nasce o pai particionado com as
    mesmas colunas, padrões e CHECKs, a chave primária e cada índice com o
    nome original; um `CHECK ("id" < corte)` validado prova que a legada cabe
-   abaixo do corte (a única varredura da troca), e o `ATTACH … FROM
-(MINVALUE) TO (corte)` anexa os índices dela aos do pai, sem reconstruir
-   nenhum. O corte é a próxima meia-noite UTC.
+   abaixo do corte (a única varredura da troca), e o `ATTACH` como a
+   partição de `MINVALUE` até o corte anexa os índices dela aos do pai, sem
+   reconstruir nenhum. O corte é a próxima meia-noite UTC.
 3. **Os dias à frente.** Uma semana de partições a partir do corte, com os
    parâmetros de armazenamento que a tabela comum tinha (o pai particionado
    não os aceita), os alvos de estatística das colunas, os grants da tabela

@@ -45,6 +45,17 @@ retenção prometida não é cumprida.
      pendente, ou desfeita à mão); o `/health/rollout` diz qual;
    - `out of time` ou `could not be prepared`: a noite seguinte tenta de
      novo.
+
+   No registro de webhooks (`webhook_delivery`, F5-12), o dia só sai sem
+   linha que o despachante ainda tem; o log do componente
+   `webhook-delivery-retention` diz:
+
+   `webhook delivery day still owned by the dispatcher`
+
+   Uma linha retida para um endpoint pausado fecha sozinha quando a janela
+   de reenvio acaba; uma `PROCESSING` velha é um despachante parado (veja
+   `webhook-lag`).
+
 6. Trilha com o arquivo ligado (`TRAIL_ARCHIVE_ENABLED=true`): o dia só sai
    depois de ir para o R2 com a soma conferida. Procure no log do job:
    - `trail archive enabled but not configured`: falta o bucket ou o token

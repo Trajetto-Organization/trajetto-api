@@ -26,6 +26,7 @@ import {
 } from "@/shared/database/partitions";
 import { sqlStateOf } from "@/shared/errors/prisma-error-meta";
 import { logger } from "@/shared/logging/logger";
+import { createWebhookDeliveryGate } from "@/shared/integration/webhook-delivery-retention";
 import { createNotificationFamilyGate } from "@/shared/notifications/notification-family-retention";
 import { parsePartitionBound } from "@/shared/route/driver-position-rules";
 import type { CronJobDefinition } from "@/shared/services/cron-scheduler-service";
@@ -238,10 +239,11 @@ function trailArchiveFromEnv(): TrailArchiveGate | null {
 }
 
 /**
- * The gates of the registered tables (plano-escala F5-11): the
- * notification family's day goes only settled, its failures in the dead
- * letters and its keys gone. Both share the run's budget with the trail
- * archive, CRON_PURGE_RUN_BUDGET_MS.
+ * The gates of the registered tables: the notification family's day goes
+ * only settled, its failures in the dead letters and its keys gone
+ * (plano-escala F5-11); the webhook ledger's, only with no row the
+ * dispatcher still owns (F5-12). The family's copies share the run's
+ * budget with the trail archive, CRON_PURGE_RUN_BUDGET_MS.
  */
 function dropGatesFromEnv(): MaintenanceDeps["dropGates"] {
   return {
@@ -250,6 +252,7 @@ function dropGatesFromEnv(): MaintenanceDeps["dropGates"] {
       deadline: Date.now() + env.CRON_PURGE_RUN_BUDGET_MS,
       failedRetentionDays: env.OUTBOX_FAILED_RETENTION_DAYS,
     }),
+    "webhook-deliveries": createWebhookDeliveryGate({ db: databaseBatch }),
   };
 }
 

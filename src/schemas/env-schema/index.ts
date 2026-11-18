@@ -1020,6 +1020,20 @@ const envSchema = z
       z.coerce.number().int().min(30).max(90).default(30),
     ),
 
+    // How long the webhook ledger keeps a row (plano-escala F5-12): the
+    // nightly purge in batches deletes the settled rows older than this
+    // and, once the swap of F5-09 made webhook_delivery partitioned, the
+    // partition-maintenance job drops whole days past it, never one with a
+    // row the dispatcher still owns. At least the replay window
+    // (REPLAY_WINDOW_DAYS, 30) plus a day: a resend of anything younger
+    // than 30 days is accepted, from its created_at, and the day of grace
+    // keeps a row a person sees as resendable from vanishing before the
+    // click. 31 is what the job always kept.
+    WEBHOOK_DELIVERY_RETENTION_DAYS: z.preprocess(
+      (value) => (value === "" ? undefined : value),
+      z.coerce.number().int().min(31).max(365).default(31),
+    ),
+
     // Days a queue's partition may stay past its retention before the
     // partition-stuck alert pages (plano-escala F5-11). A day held by a
     // row in flight is a queue that stopped, worth a look after three

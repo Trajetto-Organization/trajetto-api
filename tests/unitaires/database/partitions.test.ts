@@ -9,6 +9,7 @@ import {
   OUTBOX_PUBLISHED_RETENTION_DAYS_DEFAULT,
   QUEUE_PARTITION_LOOKAHEAD_DAYS_DEFAULT,
   QUEUE_PARTITION_STUCK_ALERT_DAYS_DEFAULT,
+  WEBHOOK_DELIVERY_RETENTION_DAYS_DEFAULT,
   addGrains,
   freezeWindow,
   partitionBound,
@@ -19,6 +20,7 @@ import {
   retentionCutoff,
   type PartitionedTable,
 } from "@/shared/database/partitions";
+import { REPLAY_WINDOW_DAYS } from "@/shared/integration/webhook-dispatch-rules";
 import { uuid7Floor } from "@/shared/time/uuid7-floor";
 
 /**
@@ -253,7 +255,7 @@ describe("the queues in the registry", () => {
     expect(QUEUE_PARTITION_STUCK_ALERT_DAYS_DEFAULT).toBe(3);
   });
 
-  it("drop the notification family by day through its gate, and keep the webhooks for now", () => {
+  it("drop the notification family and the webhook ledger by day, each through its gate", () => {
     // F5-11: the events, deliveries and receipts leave whole days after
     // OUTBOX_PUBLISHED_RETENTION_DAYS, settled first by the gate.
     const byTable = Object.fromEntries(
@@ -272,8 +274,14 @@ describe("the queues in the registry", () => {
     }
 
     expect(OUTBOX_PUBLISHED_RETENTION_DAYS_DEFAULT).toBe(30);
-    expect(byTable.webhook_delivery).toMatchObject({ retentionDays: null });
-    expect(byTable.webhook_delivery.dropGate).toBeUndefined();
+    // F5-12: the ledger leaves after the replay window plus a day.
+    expect(byTable.webhook_delivery).toMatchObject({
+      retentionDays: WEBHOOK_DELIVERY_RETENTION_DAYS_DEFAULT,
+      dropGate: "webhook-deliveries",
+    });
+    expect(WEBHOOK_DELIVERY_RETENTION_DAYS_DEFAULT).toBe(
+      REPLAY_WINDOW_DAYS + 1,
+    );
 
     const configured = registeredPartitions({
       DRIVER_POSITION_RETENTION_DAYS: 90,
@@ -406,6 +414,23 @@ describe("the queues' retention environment", () => {
     expect(parse({ QUEUE_PARTITION_STUCK_ALERT_DAYS: "0" }).success).toBe(
       false,
     );
+  });
+
+  it("keeps the webhook ledger at least the replay window plus a day", () => {
+    // A resend of anything younger than REPLAY_WINDOW_DAYS is accepted,
+    // from its created_at: a shorter retention would drop a row a person
+    // can still resend (F5-12).
+    expect(parse({}).data?.WEBHOOK_DELIVERY_RETENTION_DAYS).toBe(
+      REPLAY_WINDOW_DAYS + 1,
+    );
+    expect(
+      parse({ WEBHOOK_DELIVERY_RETENTION_DAYS: String(REPLAY_WINDOW_DAYS) })
+        .success,
+    ).toBe(false);
+    expect(
+      parse({ WEBHOOK_DELIVERY_RETENTION_DAYS: "45" }).data
+        ?.WEBHOOK_DELIVERY_RETENTION_DAYS,
+    ).toBe(45);
   });
 
   it("refuses a dead letter that keeps a failure no longer than the queue did", () => {

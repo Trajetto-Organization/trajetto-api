@@ -1,10 +1,11 @@
 import { Prisma } from "@prisma/client";
 
+import { databaseBatch } from "@/../infra/database";
+import { env } from "@/env";
+import { queueLegacyBound } from "@/shared/database/queue-legacy-bound";
 import { CronJobDefinition } from "@/shared/services/cron-scheduler-service";
 import { logger } from "@/shared/logging/logger";
 import { throwIfPartial } from "@/shared/errors/partial-run-error";
-
-import { REPLAY_WINDOW_DAYS } from "@/shared/integration/webhook-dispatch-rules";
 
 import { deleteInBatches, purgeDeadline } from "./batch-delete";
 
@@ -15,8 +16,10 @@ const log = logger.child({
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-/**
- * How long a settled webhook row is kept: the replay window plus one day.
+/*
+ * How long a settled webhook row is kept: WEBHOOK_DELIVERY_RETENTION_DAYS,
+ * the replay window plus one day by default and never less (the env
+ * refuses it).
  *
  * The window is what the contract promises (a resend of anything younger is
  * accepted) and it is measured from the row's own created_at, like the
@@ -24,8 +27,14 @@ const DAY_MS = 24 * 60 * 60 * 1000;
  * sees in the monitor as resendable is never deleted between the listing and
  * the click. A resend is a NEW row with its own created_at, so the copy
  * always outlives the original and neither is removed early.
+ *
+ * Once the swap of F5-09 made webhook_delivery partitioned by day, a day
+ * past the retention leaves whole in the partition-maintenance job
+ * (F5-12, the webhook-deliveries gate), and the batches below only reach
+ * the legacy partition (every id under queueLegacyBound): a DELETE in the
+ * days the DROP takes would be the dead rows and the WAL the partitions
+ * exist to avoid.
  */
-const WEBHOOK_DELIVERY_RETENTION_DAYS = REPLAY_WINDOW_DAYS + 1;
 
 /**
  * Ceiling on rows removed per run.
@@ -45,8 +54,13 @@ const MAX_DELIVERIES_PER_RUN = 2_000_000;
  * status IN ('DELIVERED','FAILED'). A bound parameter cannot, in a generic
  * plan. Exported so the plan can be tested with the exact predicate.
  */
-function settledWebhookDeliveriesBefore(cutoff: Date): Prisma.Sql {
-  return Prisma.sql`"status" IN ('DELIVERED', 'FAILED') AND "created_at" < ${cutoff}`;
+function settledWebhookDeliveriesBefore(
+  cutoff: Date,
+  idBelow: string | null = null,
+): Prisma.Sql {
+  return Prisma.sql`"status" IN ('DELIVERED', 'FAILED') AND "created_at" < ${cutoff}${
+    idBelow === null ? Prisma.empty : Prisma.sql` AND "id" < ${idBelow}`
+  }`;
 }
 
 /**
@@ -76,12 +90,15 @@ const cleanupWebhookDeliveriesJob: CronJobDefinition = {
     const deadline = purgeDeadline();
 
     const cutoff = new Date(
-      Date.now() - WEBHOOK_DELIVERY_RETENTION_DAYS * DAY_MS,
+      Date.now() - env.WEBHOOK_DELIVERY_RETENTION_DAYS * DAY_MS,
     );
+
+    // Null while the ledger is a plain table: every row, as always.
+    const idBelow = await queueLegacyBound(databaseBatch, ["webhook_delivery"]);
 
     const result = await deleteInBatches({
       table: Prisma.sql`"webhook_delivery"`,
-      where: settledWebhookDeliveriesBefore(cutoff),
+      where: settledWebhookDeliveriesBefore(cutoff, idBelow),
       orderBy: Prisma.sql`"created_at"`,
       maxRows: MAX_DELIVERIES_PER_RUN,
       deadline,
@@ -90,7 +107,7 @@ const cleanupWebhookDeliveriesJob: CronJobDefinition = {
     log.info(
       {
         deleted: result.deleted,
-        retentionDays: WEBHOOK_DELIVERY_RETENTION_DAYS,
+        retentionDays: env.WEBHOOK_DELIVERY_RETENTION_DAYS,
       },
       "settled webhook deliveries purged",
     );
@@ -100,8 +117,4 @@ const cleanupWebhookDeliveriesJob: CronJobDefinition = {
   },
 };
 
-export {
-  cleanupWebhookDeliveriesJob,
-  settledWebhookDeliveriesBefore,
-  WEBHOOK_DELIVERY_RETENTION_DAYS,
-};
+export { cleanupWebhookDeliveriesJob, settledWebhookDeliveriesBefore };
