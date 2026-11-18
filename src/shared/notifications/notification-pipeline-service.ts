@@ -25,6 +25,11 @@ import {
 } from "./provider-caps";
 import { OutboxService } from "./outbox-service";
 import {
+  countProviderThrottle,
+  providerRateBucket,
+  throttlePauseMs,
+} from "./provider-rate-bucket";
+import {
   whatsAppDailyQuota,
   type WhatsAppQuotaVerdict,
 } from "./whatsapp-daily-quota";
@@ -62,6 +67,7 @@ import {
   providerDetailOf,
   recipientGoneError,
   suppressedChannels,
+  throttledProviderOf,
   type ProviderErrorDetail,
 } from "./delivery-diagnostics";
 import {
@@ -2078,6 +2084,9 @@ class NotificationPipelineService {
       );
     }
 
+    // One notification per device is what Expo counts (plano-escala F3-15c).
+    await this.paceProvider("push", devices.length);
+
     const { deliveredAny, invalidTokens, tickets } = await sendExpoPushMessages(
       devices.map((device) => device.token),
       // The delivery id rides along: the app can tell a repeated tray message
@@ -2293,6 +2302,9 @@ class NotificationPipelineService {
     mailProvider: IMailProvider,
     message: Parameters<IMailProvider["sendMail"]>[0],
   ): Promise<string | undefined> {
+    // Both e-mail paths go through here: one request each (F3-15c).
+    await this.paceProvider("email");
+
     try {
       const sent = await mailProvider.sendMail(message);
 
@@ -2305,6 +2317,7 @@ class NotificationPipelineService {
           provider: "email",
           smtpCode: error.code,
           smtpReply: error.responseCode,
+          ...(error.throttled && { throttled: true }),
         };
 
         if (!error.retryable) {
@@ -2382,6 +2395,10 @@ class NotificationPipelineService {
       throw error;
     }
 
+    // The platform's rate (F3-15c) before the company's quota: a message
+    // put off by the rate must not have spent a unit of the company's day.
+    await this.paceProvider("whatsapp");
+
     // The company's daily quota, last: only a message that would be sent
     // now counts (plano-escala F3-15b).
     await this.takeWhatsAppQuota(delivery);
@@ -2398,6 +2415,36 @@ class NotificationPipelineService {
     });
 
     return this.whatsAppOutcome(result);
+  }
+
+  /**
+   * The provider's place in its rate (plano-escala F3-15c;
+   * provider-rate-bucket.ts), right before its call: with the rate off,
+   * nothing is read and nothing waits. A place within a second is kept and
+   * waited for here, in the slot; one further ahead sends the row back to
+   * the queue at that place, without spending an attempt
+   * (DeferredDeliveryError).
+   */
+  private async paceProvider(provider: Provider, cost = 1): Promise<void> {
+    const verdict = await providerRateBucket.take(provider, cost);
+
+    if (verdict.kind === "off") return;
+
+    if (verdict.kind === "go") {
+      if (verdict.waitMs > 0) {
+        await new Promise((done) => setTimeout(done, verdict.waitMs));
+      }
+
+      return;
+    }
+
+    throw new DeferredDeliveryError(
+      `Taxa de envio do provedor ${provider} no teto`,
+      new Date(Date.now() + Math.max(verdict.retryInMs, 1)),
+      verdict.local
+        ? "aguardando a vez na taxa do provedor (parte deste processo, Redis fora)"
+        : "aguardando a vez na taxa do provedor",
+    );
   }
 
   /**
@@ -2712,7 +2759,9 @@ class NotificationPipelineService {
       );
     }
 
-    // The company's daily quota counts the customers' messages too.
+    // The rate first, as above; the company's daily quota counts the
+    // customers' messages too.
+    await this.paceProvider("whatsapp");
     await this.takeWhatsAppQuota(delivery);
 
     const whatsAppProvider =
@@ -2843,17 +2892,23 @@ class NotificationPipelineService {
   ): Promise<void> {
     const message = error instanceof Error ? error.message : String(error);
 
-    if (error instanceof DeferredDeliveryError) {
-      // Not ours yet (or not today: the company's WhatsApp quota): back to
-      // the queue as it was, without spending one of its attempts, for a
-      // replica that knows this topic or for the company's next day.
+    const deferred =
+      error instanceof DeferredDeliveryError
+        ? error
+        : await this.throttleDeferral(delivery, error);
+
+    if (deferred) {
+      // Not ours yet (or not today: the company's WhatsApp quota; or not
+      // now: the provider's rate): back to the queue as it was, without
+      // spending one of its attempts, for a replica that knows this topic,
+      // for the company's next day or for the provider's next place.
       await this.settleDelivery(delivery, {
         status: "PENDING",
         attempts: { decrement: 1 },
         availableAt:
-          error.until ?? new Date(Date.now() + UNKNOWN_TOPIC_RECHECK_MS),
+          deferred.until ?? new Date(Date.now() + UNKNOWN_TOPIC_RECHECK_MS),
         leaseExpiresAt: null,
-        lastError: `${message} (${error.waiting})`,
+        lastError: `${deferred.message} (${deferred.waiting})`,
       }).catch((updateError) => {
         log.error(
           { ...this.deliveryLogFields(delivery), err: updateError },
@@ -2921,6 +2976,60 @@ class NotificationPipelineService {
         "notification delivery failure could not be recorded",
       );
     });
+  }
+
+  /**
+   * A provider's refusal for rate (plano-escala F3-15c): Meta's 130429 or
+   * 429, the e-mail provider's, Expo's 429. Always counted for the
+   * provider-throttled alert. With the provider's rate on, it holds the
+   * provider for every process (the bucket's TAT moves past the pause) and
+   * the row waits as long, without spending an attempt: the refusal was
+   * about the platform's pace, not this message. With the rate off, null:
+   * the failure is handled as before.
+   */
+  private async throttleDeferral(
+    delivery: ClaimedDelivery,
+    error: unknown,
+  ): Promise<DeferredDeliveryError | null> {
+    const detail = providerDetailOf(error, delivery.channel);
+    const provider = throttledProviderOf(detail);
+
+    if (!provider) return null;
+
+    countProviderThrottle(provider);
+
+    if (!providerRateBucket.enabled(provider)) return null;
+
+    const retryAfterMs =
+      error instanceof RetryableDeliveryError ? error.retryAfterMs : undefined;
+    const pauseMs = throttlePauseMs(retryAfterMs);
+
+    await providerRateBucket.penalize(provider, pauseMs);
+
+    // The row waits the provider's own Retry-After when it is longer than
+    // the bucket's pause (capped at an hour, as any Retry-After).
+    const waitMs = honourRetryAfter(pauseMs, retryAfterMs);
+    const stored = formatDeliveryError(
+      error instanceof Error ? error.message : String(error),
+      detail,
+    );
+
+    log.warn(
+      {
+        ...this.deliveryLogFields(delivery),
+        provider,
+        pauseMs,
+        nextAttemptAt: new Date(Date.now() + waitMs).toISOString(),
+        error: stored,
+      },
+      "provider refused for rate; the provider is held and the delivery waits without spending an attempt",
+    );
+
+    return new DeferredDeliveryError(
+      stored,
+      new Date(Date.now() + waitMs),
+      "aguardando a taxa do provedor, que pediu para diminuir o ritmo",
+    );
   }
 
   /** The ids a delivery's log lines are found by (OBS-06). */

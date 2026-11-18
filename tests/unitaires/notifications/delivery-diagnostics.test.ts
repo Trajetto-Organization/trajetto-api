@@ -6,6 +6,7 @@ import {
   isCredentialFailure,
   providerDetailOf,
   suppressedChannels,
+  throttledProviderOf,
 } from "@/shared/notifications/delivery-diagnostics";
 
 /**
@@ -97,6 +98,34 @@ describe("reading the detail off a thrown error", () => {
       providerDetailOf(new Error("boom"), NotificationChannel.EMAIL),
     ).toBeUndefined();
     expect(providerDetailOf("boom", NotificationChannel.PUSH)).toBeUndefined();
+  });
+});
+
+/**
+ * Plano-escala F3-15c: a provider's refusal for RATE, which the
+ * provider-throttled alert counts and which, with the provider's rate on,
+ * waits without spending an attempt. Meta's pair limit is one recipient
+ * written to too often, not the platform's pace.
+ */
+describe("a refusal for rate, recognised from the detail", () => {
+  it.each([
+    [{ provider: "whatsapp", httpStatus: 400, errorCode: 130429 }, "whatsapp"],
+    [{ provider: "whatsapp", httpStatus: 429 }, "whatsapp"],
+    [{ provider: "whatsapp", errorCode: "130429" }, "whatsapp"],
+    [{ provider: "email", smtpReply: 451, throttled: true }, "email"],
+    [{ provider: "push", httpStatus: 429 }, "push"],
+  ] as const)("%o is %s's", (detail, provider) => {
+    expect(throttledProviderOf(detail)).toBe(provider);
+  });
+
+  it.each([
+    { provider: "whatsapp", httpStatus: 400, errorCode: 131056 },
+    { provider: "whatsapp", httpStatus: 401, errorCode: 190 },
+    { provider: "email", smtpReply: 452 },
+    { provider: "push", httpStatus: 503 },
+    undefined,
+  ] as const)("not %o", (detail) => {
+    expect(throttledProviderOf(detail)).toBeNull();
   });
 });
 

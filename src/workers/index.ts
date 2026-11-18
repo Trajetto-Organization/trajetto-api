@@ -5,6 +5,7 @@ import { AIAnalysisPipelineService } from "../shared/ai/ai-analysis-pipeline-ser
 import { WebhookDispatchService } from "../shared/integration/webhook-dispatch-service";
 import { apiUsageRecorder } from "../shared/integration/api-usage-recorder";
 import { shutdownDeliveryGeocoding } from "../shared/delivery/geocoding/geocode-soon";
+import { closeProviderRateBucket } from "../shared/notifications/provider-rate-bucket";
 
 import { registerCronJobs } from "../jobs/cron";
 import { env } from "../env";
@@ -136,7 +137,8 @@ export function drainWorkerBacklog(): void {
  * Terminates all workers. `deadlineMs` is the shutdown plan's workers
  * deadline (shared/lifecycle/shutdown-plan.ts), and it bounds the whole
  * step: each service in parallel gets it (it can only shorten their own
- * waits), and the geocoding's Redis close after them gets what is left. So
+ * waits), and the Redis closes after them (the geocoding's, the providers'
+ * rate bucket's) get what is left. So
  * the step is done before the watchdog whatever the stop grace, and
  * closeRedis still runs. Without it (a test), each keeps its own.
  */
@@ -173,15 +175,21 @@ export async function shutdownWorkers(
       apiUsageRecorder.shutdown(options),
     ]);
 
-    // After the cron: its geocoding run shares this Redis connection. On
-    // every replica, like the recorder — the lookup after a commit runs
-    // wherever the request was served.
-    await shutdownDeliveryGeocoding({
+    const left = {
       deadlineMs:
         deadlineAt === undefined
           ? undefined
           : Math.max(0, deadlineAt - Date.now()),
-    });
+    };
+
+    // After the cron: its geocoding run shares this Redis connection. On
+    // every replica, like the recorder — the lookup after a commit runs
+    // wherever the request was served. The providers' rate bucket after
+    // the lanes that take from it (F3-15c); never opened, nothing to close.
+    await Promise.all([
+      shutdownDeliveryGeocoding(left),
+      closeProviderRateBucket(left),
+    ]);
 
     log.info("workers stopped");
   } catch (error) {

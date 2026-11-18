@@ -312,6 +312,28 @@ parte e devolve na hora, sem gastar tentativa, o que pegou a mais, então
 nenhuma linha espera o provedor com o lease correndo. Concorrência não
 limita taxa; o balde de taxa por provedor é o F3-15c.
 
+**Balde de taxa por provedor (F3-15c).** Os contratos são taxas (80
+mensagens por segundo na Meta, 10 requisições na Resend, 600 notificações
+no Expo), e quatro vagas com envios de 100 ms já dão ~40 requisições por
+segundo. `WHATSAPP_SENDS_PER_SECOND`, `EMAIL_REQUESTS_PER_SECOND` e
+`PUSH_NOTIFICATIONS_PER_SECOND` (`0`, o padrão, é desligado: nenhuma
+conexão, nenhuma espera, o 429 tratado como antes) ligam um balde GCRA sem
+rajada no Redis, por provedor, que todos os processos dividem
+(`src/shared/notifications/provider-rate-bucket.ts`): a chave guarda o
+instante em que o próximo envio pode começar, no relógio do próprio Redis,
+e cada envio reserva a sua vez (um push a três celulares são três). Uma vez
+a até 1 s é esperada na vaga; uma mais longe devolve a linha para a fila,
+com `availableAt` nela, sem gastar tentativa. Um 429 do provedor (o 130429
+da Meta, a recusa por taxa da Resend, o 429 do Expo) empurra a chave para
+depois da pausa pedida (1 s sem Retry-After, até 1 min com ele), e a linha
+espera o mesmo, sem gastar tentativa. A chave é um contador de ritmo, não
+estado de negócio: perdê-la num despejo custa no máximo um segundo de taxa.
+Com o Redis fora, vale a divisão do F3-15a: cada processo fica com a taxa
+dividida pelo divisor estável da raia, localmente. O alerta
+`provider-throttled` soma as recusas por taxa das últimas 24 h (seção
+`provider_rate` das linhas `ops_sample`) e é o gatilho para ligar o balde
+(decisão D45).
+
 **Cota diária de WhatsApp por empresa (F3-15b).** Todas as empresas mandam
 WhatsApp pela mesma conta da plataforma na Meta: a rajada de uma
 transportadora gasta o nível de mensagens e a nota de qualidade de que

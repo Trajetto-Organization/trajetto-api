@@ -126,6 +126,14 @@ interface OperationalSnapshot {
   geocodingQuota?: GeocodingQuotaState;
 
   /**
+   * The providers' refusals for rate in the last 24 h (plano-escala
+   * F3-15c): Meta's 130429 or 429, the e-mail provider's, Expo's 429,
+   * summed from the processes' ops_sample rows. Absent when the rows could
+   * not be read, which judges nothing.
+   */
+  providerThrottled?: ProviderThrottleState;
+
+  /**
    * The integration feed's stamp against the cluster (plano-escala F2-03):
    * the largest delivery_event.txid stored and the next xid. Absent until
    * the feed's index is valid, or when it could not be read, which judges
@@ -231,6 +239,12 @@ interface PartitionAlertState {
 interface GeocodingQuotaState {
   usedToday: number;
   dailyQuota: number;
+}
+
+interface ProviderThrottleState {
+  whatsapp: number;
+  email: number;
+  push: number;
 }
 
 interface ClusterDatabaseState {
@@ -524,6 +538,7 @@ const ALERT_KINDS = [
   "proof-signing",
   "volume-near-gate",
   "geocoding-quota-high",
+  "provider-throttled",
   "feed-txid-regressed",
   "cluster-epoch-stale",
   "feed-epoch-conversion",
@@ -1153,6 +1168,31 @@ function collectAlerts(
     });
   }
 
+  // A provider refused for rate (F3-15c; decision D45): the trigger to turn
+  // its bucket on, or to look at the value when it already is. One in the
+  // last 24 h is enough: the platform's single account is what a provider
+  // throttles, and a contract broken at Meta reaches every company.
+  const throttled = snapshot.providerThrottled;
+
+  if (throttled && throttled.whatsapp + throttled.email + throttled.push > 0) {
+    const parts = [
+      throttled.whatsapp > 0
+        ? `WhatsApp ${count(throttled.whatsapp)} (Meta 130429/429; WHATSAPP_SENDS_PER_SECOND)`
+        : null,
+      throttled.email > 0
+        ? `e-mail ${count(throttled.email)} (Resend; EMAIL_REQUESTS_PER_SECOND)`
+        : null,
+      throttled.push > 0
+        ? `push ${count(throttled.push)} (Expo 429; PUSH_NOTIFICATIONS_PER_SECOND)`
+        : null,
+    ].filter((part): part is string => part !== null);
+
+    alerts.push({
+      code: "provider-throttled",
+      message: `Provedores recusaram por taxa nas últimas 24 h: ${parts.join(", ")}; ligue o balde de taxa do provedor abaixo do limite do contrato, ou baixe o valor se ele já está ligado`,
+    });
+  }
+
   // A logical restore into a new cluster without `pg_resetwal -e`
   // (F2-03): from here on every new event sorts behind the integrators'
   // cursors, silently.
@@ -1237,6 +1277,7 @@ export type {
   PartitionAlertState,
   MemoryBudgetState,
   ProcessFleetState,
+  ProviderThrottleState,
   SocketUsageState,
   VolumeState,
 };

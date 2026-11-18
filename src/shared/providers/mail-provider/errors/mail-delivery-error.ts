@@ -15,6 +15,13 @@ class MailDeliveryError extends Error {
   /** SMTP numeric reply (e.g. 421, 550), when the server answered. */
   public readonly responseCode?: number;
 
+  /**
+   * The provider refused for RATE (plano-escala F3-15c): what the
+   * provider-throttled alert counts, and, with EMAIL_REQUESTS_PER_SECOND on,
+   * a send that waits for the bucket without spending an attempt.
+   */
+  public readonly throttled: boolean;
+
   public readonly cause?: unknown;
 
   constructor(
@@ -23,6 +30,7 @@ class MailDeliveryError extends Error {
       retryable: boolean;
       code?: string;
       responseCode?: number;
+      throttled?: boolean;
       cause?: unknown;
     },
   ) {
@@ -33,9 +41,24 @@ class MailDeliveryError extends Error {
 
     this.code = options.code;
     this.responseCode = options.responseCode;
+    this.throttled = options.throttled ?? false;
 
     this.cause = options.cause;
   }
+}
+
+/**
+ * A refusal for rate, in the server's words. SMTP has no 429: Resend
+ * answers its rate limit on the SMTP relay with a reply whose code is not
+ * documented ("the rate limit is the same as the API"), so the words decide
+ * — "too many requests", "rate limit", "throttl…", or the API's 429 quoted
+ * in the text — whatever the code. A full mailbox (452) or a greylisting
+ * (450) says none of them, and stays what it was.
+ */
+const RATE_REFUSAL = /too many requests|rate[ _-]?limit|throttl|\b429\b/i;
+
+function isRateRefusal(text: string): boolean {
+  return RATE_REFUSAL.test(text);
 }
 
 /**
@@ -122,6 +145,10 @@ function toMailDeliveryError(
 
   const cause = redactedCause(error, originalMessage, code, responseCode);
 
+  // Counted, and paced when the rate is on (F3-15c); the retry decision
+  // below stays the code's, as before.
+  const throttled = isRateRefusal(originalMessage);
+
   if (typeof responseCode === "number") {
     // 5xx is a permanent SMTP refusal; 4xx asks the sender to come back later.
     const retryable = responseCode < 500;
@@ -130,6 +157,7 @@ function toMailDeliveryError(
       retryable,
       code,
       responseCode,
+      throttled,
       cause,
     });
   }
@@ -138,6 +166,7 @@ function toMailDeliveryError(
     return new MailDeliveryError(message, {
       retryable: false,
       code,
+      throttled,
       cause,
     });
   }
@@ -146,6 +175,7 @@ function toMailDeliveryError(
     return new MailDeliveryError(message, {
       retryable: true,
       code,
+      throttled,
       cause,
     });
   }
@@ -155,6 +185,7 @@ function toMailDeliveryError(
   return new MailDeliveryError(message, {
     retryable: true,
     code,
+    throttled,
     cause,
   });
 }

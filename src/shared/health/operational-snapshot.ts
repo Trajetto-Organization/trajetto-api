@@ -70,6 +70,13 @@ const SOCKET_SAMPLE_WINDOW_MS = 3 * 60 * 1000;
 const FEED_CONVERSION_WINDOW_MS = 15 * 60 * 1000;
 
 /**
+ * The providers' refusals for rate alert for a day after they happen
+ * (plano-escala F3-15c): the trigger is "a 429 or a 130429 in the day",
+ * and the owner turns the bucket on, or lowers it, before it clears.
+ */
+const PROVIDER_THROTTLE_WINDOW_MS = 24 * 60 * 60 * 1000;
+
+/**
  * The AI reader's refusal of our token: LocalOcrHttpError messages start with
  * the status ("401 unauthorized: …"). The older alternatives match
  * Anthropic-era rows still in the 180-day window.
@@ -408,6 +415,40 @@ async function collectOperationalSnapshot(
     undefined,
   );
 
+  // The providers' refusals for rate (F3-15c), from the processes' rows of
+  // the last 24 h: only the process that sent knows the provider said 429.
+  // On the ts index; the rows of a process that never heard one carry no
+  // section.
+  const providerThrottled = await part(
+    "ops_sample (provider_rate)",
+    errors,
+    async () => {
+      const [row] = await database.$queryRaw<
+        Array<{
+          whatsapp: number | null;
+          email: number | null;
+          push: number | null;
+        }>
+      >`
+        SELECT
+          (sum(("metrics" -> 'provider_rate' -> 'throttled' ->> 'whatsapp')::int))::int AS whatsapp,
+          (sum(("metrics" -> 'provider_rate' -> 'throttled' ->> 'email')::int))::int AS email,
+          (sum(("metrics" -> 'provider_rate' -> 'throttled' ->> 'push')::int))::int AS push
+        FROM "ops_sample"
+        WHERE "ts" >= ${new Date(now.getTime() - PROVIDER_THROTTLE_WINDOW_MS)}
+          AND "role" <> 'cluster'
+          AND "metrics" -> 'provider_rate' -> 'throttled' IS NOT NULL
+      `;
+
+      return {
+        whatsapp: Number(row?.whatsapp ?? 0),
+        email: Number(row?.email ?? 0),
+        push: Number(row?.push ?? 0),
+      };
+    },
+    undefined,
+  );
+
   // The live processes (plano-escala F3-34): which queues have a consumer,
   // which commits run, and whether a process of the other environment
   // writes here. One row per process, on the updated_at index.
@@ -553,6 +594,7 @@ async function collectOperationalSnapshot(
     ...(memoryBudgets && { memoryBudgets }),
     ...(processes && { processes }),
     ...(feedEpochConversions !== undefined && { feedEpochConversions }),
+    ...(providerThrottled && { providerThrottled }),
     collectionErrors: errors,
   };
 }

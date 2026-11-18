@@ -60,3 +60,44 @@ describe("toMailDeliveryError", () => {
     ).toBe(false);
   });
 });
+
+/**
+ * Plano-escala F3-15c: SMTP has no 429, and Resend's relay does not
+ * document the code of its rate refusal ("the rate limit is the same as
+ * the API"). The words mark it, whatever the code, so the alert counts it
+ * and the bucket can hold the provider; whether it is retried stays the
+ * code's decision, as before.
+ */
+describe("a refusal for rate", () => {
+  it.each([
+    ["Too many requests. You can only make 10 requests per second.", 451],
+    ["rate_limit_exceeded", 550],
+    ["Rate limit reached, slow down", undefined],
+    ["Message throttled", 421],
+    ["429 Too Many Requests", undefined],
+  ])("is marked: %s", (text, responseCode) => {
+    const error = toMailDeliveryError(
+      Object.assign(new Error(text), { responseCode }),
+      "Falha",
+    );
+
+    expect(error.throttled).toBe(true);
+    expect(error.retryable).toBe(
+      responseCode === undefined ? true : responseCode < 500,
+    );
+  });
+
+  it.each([
+    ["452 4.2.2 Mailbox full", 452],
+    ["450 Greylisted, try again later", 450],
+    ["550 5.1.1 User unknown <x@example.com>", 550],
+    ["connection reset", undefined],
+  ])("is not: %s", (text, responseCode) => {
+    expect(
+      toMailDeliveryError(
+        Object.assign(new Error(text), { responseCode }),
+        "Falha",
+      ).throttled,
+    ).toBe(false);
+  });
+});

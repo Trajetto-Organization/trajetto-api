@@ -7,9 +7,9 @@ import { describe, expect, it } from "vitest";
  * Which Redis each client talks to (plano-escala F5-01).
  *
  * The counters (rate limits, handshakes, tickets, the geocoder's budget,
- * the cache of /health) live on REDIS_URL; the pub/sub (the Socket.IO
- * adapter, the wake between processes, later the WhatsApp lane and the
- * emitter) may get a Redis of its own, PUBSUB_REDIS_URL, by the trigger of
+ * the providers' rate bucket, the cache of /health) live on REDIS_URL;
+ * the pub/sub (the Socket.IO adapter, the wake between processes, later
+ * the WhatsApp lane and the emitter) may get a Redis of its own, PUBSUB_REDIS_URL, by the trigger of
  * the plan's section 7. That split only holds while every pub/sub client
  * comes from src/shared/redis/pubsub-redis.ts: one built anywhere else on
  * REDIS_URL would keep subscribing to the old Redis after the switch, and
@@ -30,6 +30,7 @@ const CLIENT_MAP: Record<string, string[]> = {
   "src/websocket.ts": ["env.REDIS_URL"],
   "src/shared/socket/socket-ticket.ts": ["env.REDIS_URL"],
   "src/shared/delivery/geocoding/geocoding-runtime.ts": ["env.REDIS_URL"],
+  "src/shared/notifications/provider-rate-bucket.ts": ["env.REDIS_URL"],
   "infra/cache/redis-connection.ts": ["env.REDIS_URL"],
 
   // The adapter's pair, built from the URL the factory hands it.

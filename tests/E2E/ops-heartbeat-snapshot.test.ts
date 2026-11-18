@@ -394,3 +394,81 @@ describe("the processes of process_heartbeat", () => {
     );
   });
 });
+
+/**
+ * The providers' refusals for rate (plano-escala F3-15c): each process
+ * counts the 429s and the 130429s it heard in its ops_sample row, and the
+ * elected heartbeat sums the last 24 h, the trigger to turn the provider's
+ * rate bucket on. Measured as the difference our rows make: other files
+ * may write rows of their own at the same time.
+ */
+describe("the providers' refusals for rate", () => {
+  const LOUD = `wfl-throttled-${randomUUID().slice(0, 8)}`;
+  const QUIET = `wfl-quiet-${randomUUID().slice(0, 8)}`;
+
+  const row = (
+    replica: string,
+    minutesAgo: number,
+    throttled?: Record<string, number>,
+  ) => ({
+    ts: new Date(Date.now() - minutesAgo * 60_000),
+    role: "all",
+    replica,
+    metrics: {
+      v: 1,
+      ...(throttled && {
+        provider_rate: {
+          throttled: { whatsapp: 0, email: 0, push: 0, ...throttled },
+          deferred: { whatsapp: 0, email: 0, push: 0 },
+          local: { whatsapp: 0, email: 0, push: 0 },
+        },
+      }),
+    },
+  });
+
+  afterAll(async () => {
+    await prisma.opsSample.deleteMany({
+      where: { replica: { in: [LOUD, QUIET] } },
+    });
+  });
+
+  it("are summed over the last 24 h and page provider-throttled", async () => {
+    const { collectOperationalSnapshot } =
+      await import("@/shared/health/operational-snapshot");
+    const { collectAlerts, DEFAULT_ALERT_THRESHOLDS } =
+      await import("@/shared/health/alert-rules");
+
+    const before = await collectOperationalSnapshot();
+
+    expect(before.collectionErrors).toEqual([]);
+    expect(before.providerThrottled).toBeDefined();
+
+    await prisma.opsSample.createMany({
+      data: [
+        row(LOUD, 3, { whatsapp: 2 }),
+        row(LOUD, 20 * 60, { email: 1, push: 4 }),
+        // A day and an hour ago: out of the window.
+        row(LOUD, 25 * 60, { whatsapp: 50 }),
+        // A process that heard none writes no section.
+        row(QUIET, 1),
+      ],
+    });
+
+    const after = await collectOperationalSnapshot();
+
+    expect(after.collectionErrors).toEqual([]);
+    expect({
+      whatsapp:
+        after.providerThrottled!.whatsapp - before.providerThrottled!.whatsapp,
+      email: after.providerThrottled!.email - before.providerThrottled!.email,
+      push: after.providerThrottled!.push - before.providerThrottled!.push,
+    }).toEqual({ whatsapp: 2, email: 1, push: 4 });
+
+    const paged = collectAlerts(after, DEFAULT_ALERT_THRESHOLDS, {
+      pitrExpected: false,
+    }).filter((alert) => alert.code === "provider-throttled");
+
+    expect(paged).toHaveLength(1);
+    expect(paged[0].message).toContain("WHATSAPP_SENDS_PER_SECOND");
+  });
+});

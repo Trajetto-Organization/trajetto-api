@@ -86,6 +86,17 @@ function providerGlobalConcurrency() {
 }
 
 /**
+ * A provider's rate a second (F3-15c): 0 to 1000, 0 = off. The bucket's
+ * interval is whole milliseconds, so 1000 is the most it can space.
+ */
+function providerRatePerSecond() {
+  return z.preprocess(
+    (value) => (value === "" ? undefined : value),
+    z.coerce.number().int().min(0).max(1000).default(0),
+  );
+}
+
+/**
  * One queue's concurrency (plano-escala F3-05): 1 to 32, today's constant
  * when absent or empty.
  */
@@ -922,6 +933,24 @@ const envSchema = z
       (value) => (value === "" ? undefined : value),
       z.coerce.number().int().min(0).max(64).default(0),
     ),
+
+    // The providers' RATE across every process (plano-escala F3-15c;
+    // decision D45; shared/notifications/provider-rate-bucket.ts): sends a
+    // second to Meta (WhatsApp), requests a second to the e-mail provider,
+    // and notifications a second to Expo (a push to three phones is three).
+    // The global caps above bound the sends in flight, never the sends a
+    // second: four slots of 100 ms sends are ~40 a second against Resend's
+    // 10. A GCRA bucket in Redis spaces them; a send whose place is more
+    // than a second away goes back to the queue without spending an
+    // attempt, and a provider's 429 (Meta's 130429) holds every process
+    // for its pause, the row waiting too, without spending an attempt.
+    // Without Redis, each process keeps its share (rate / the lane's live
+    // processes). 0 (the default) is off: no Redis connection, no pacing,
+    // a 429 handled as before. Proposed once a 429 shows up: 60, 8 and
+    // 500, under the contracts' 80, 10 and 600. Empty counts as absent.
+    WHATSAPP_SENDS_PER_SECOND: providerRatePerSecond(),
+    EMAIL_REQUESTS_PER_SECOND: providerRatePerSecond(),
+    PUSH_NOTIFICATIONS_PER_SECOND: providerRatePerSecond(),
 
     // Webhook calls in flight to ONE endpoint across every process that
     // claims the webhooks (plano-escala F3-13; decision D8): the claim

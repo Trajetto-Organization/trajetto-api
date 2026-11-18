@@ -28,7 +28,8 @@ type RedisRole =
   | "socket-ticket"
   | "socket-pub"
   | "socket-sub"
-  | "geocoding-budget";
+  | "geocoding-budget"
+  | "provider-rate";
 
 const KEEP_ALIVE_MS = 10_000;
 const SOCKET_TIMEOUT_MS = 5_000;
@@ -111,6 +112,24 @@ function redisClientOptions(role: RedisRole): RedisOptions {
         maxRetriesPerRequest: 1,
         enableOfflineQueue: true,
         commandTimeout: 1_000,
+        socketTimeout: SOCKET_TIMEOUT_MS,
+        keepAlive: KEEP_ALIVE_MS,
+        lazyConnect: false,
+      };
+
+    case "provider-rate":
+      // The providers' rate bucket (plano-escala F3-15c;
+      // shared/notifications/provider-rate-bucket.ts): one connection per
+      // process, opened by the first send of a provider whose rate is on,
+      // never otherwise. It sits before a send, never in a request's path.
+      // The offline queue lets the first command wait for the fresh
+      // connection; half a second bounds a hung Redis, and past it the
+      // process paces by its own share of the rate instead.
+      return {
+        connectionName: "trajetto-provider-rate",
+        maxRetriesPerRequest: 1,
+        enableOfflineQueue: true,
+        commandTimeout: 500,
         socketTimeout: SOCKET_TIMEOUT_MS,
         keepAlive: KEEP_ALIVE_MS,
         lazyConnect: false,
