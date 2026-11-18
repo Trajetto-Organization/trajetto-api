@@ -4113,6 +4113,19 @@ OpenStreetMap são recusados.
   que chega depois do cancelamento vira evidência, como no painel.
 - **Autenticação da chave** (L5): uma consulta por chamada; a busca da
   credencial traz junto a linha DELIVERIES de `BusinessEntitlement`.
+- **Escritores do histórico limitados** (plano de escala U-16, D66): um
+  gatilho por comando em `delivery_event` e na casca `delivery_event_part`
+  (`trajetto_delivery_event_writer_bound`, migration
+  `20261118100000_delivery_event_writer_bound`) recusa com o SQLSTATE
+  `TJ001` o INSERT de uma transação aberta há mais de 240 s, e a transação
+  volta atrás inteira. É o que deixa o feed `/integration/v1/events` começar
+  cada página num piso de ids, o `created_at` do último evento servido menos
+  `FEED_FLOOR_MARGIN_MS` (10 min; o boot recusa menos que o dobro do limite,
+  `src/modules/integration/feed-floor.ts`), sem pular um evento gravado
+  tarde. Grave o histórico em transações curtas; uma carga de massa num banco
+  descartável desliga os gatilhos da sessão com
+  `session_replication_role = replica`. Runbook:
+  [delivery-event-writer-bound](./runbooks/delivery-event-writer-bound.md).
 - **WhatsApp (Meta Cloud API)**: cada mensagem tem o seu modelo de
   utilidade em `pt_BR` (plano de 02/11/2026, B1/B2): 17 internos, um por
   evento e público (`src/shared/notifications/whatsapp-templates.ts`), e 4 ao

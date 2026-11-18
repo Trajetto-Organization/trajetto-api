@@ -470,6 +470,7 @@ const OPERATION_RUNBOOKS = [
   "restore-drill",
   "staging-remote-server",
   "producao-servidores-proprios",
+  "delivery-event-writer-bound",
 ] as const;
 
 /** One reason to wake the operation: its code and its pt-BR message. */

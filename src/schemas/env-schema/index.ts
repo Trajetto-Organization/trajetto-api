@@ -24,6 +24,10 @@ import {
 } from "@/shared/delivery/geocoding/geocoding-rules";
 import { isPublicOsmTemplate, isTileTemplate } from "@/shared/map/map-tiles";
 import {
+  FEED_FLOOR_DEFAULT_MARGIN_MS,
+  feedFloorMarginProblem,
+} from "@/modules/integration/feed-floor";
+import {
   DEFAULT_PARTIAL_RETRIES_PER_DAY,
   DEFAULT_PARTIAL_RETRY_WINDOW_UTC,
   DEFAULT_PURGE_RUN_BUDGET_MS,
@@ -798,6 +802,29 @@ const envSchema = z
     LONG_WRITE_XACT_ALERT_SECONDS: z.preprocess(
       (value) => (value === "" ? undefined : value),
       z.coerce.number().int().min(10).max(3_600).default(120),
+    ),
+
+    // The integration feed's floor (plano-escala U-16, F2-05): each page of
+    // /integration/v1/events starts its index scan at the created_at of the
+    // last event it served minus this margin. A trigger refuses an INSERT
+    // into delivery_event more than 240 s into its transaction, so an event
+    // not served yet was written at most 240 s before the last one; twice
+    // that is the least the boot accepts (feedFloorMarginProblem), the rest
+    // absorbing the clocks of the API and the database. 10 min by default.
+    FEED_FLOOR_MARGIN_MS: z.preprocess(
+      (value) => (value === "" ? undefined : value),
+      z.coerce
+        .number()
+        .int()
+        .max(86_400_000)
+        .default(FEED_FLOOR_DEFAULT_MARGIN_MS)
+        .superRefine((value, ctx) => {
+          const problem = feedFloorMarginProblem(value);
+
+          if (problem) {
+            ctx.addIssue({ code: z.ZodIssueCode.custom, message: problem });
+          }
+        }),
     ),
 
     // pg_wal past this many GiB pages: it lives on the disk both
