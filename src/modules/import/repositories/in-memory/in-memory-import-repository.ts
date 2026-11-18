@@ -404,16 +404,25 @@ class InMemoryImportRepository implements IImportRepository {
     {
       onRemoved,
       batchSize = REVERSAL_BATCH_SIZE,
-    }: { onRemoved?: ReversalRemovedHook; batchSize?: number },
+      beforeBatch,
+    }: {
+      onRemoved?: ReversalRemovedHook;
+      batchSize?: number;
+      beforeBatch?: () => void;
+    },
   ): Promise<ReversalResult> {
     let current = progress;
 
     try {
       if (!current.routesDone) {
+        beforeBatch?.();
+
         current = this.reverseRoutes(importId, businessId, lease, current);
       }
 
       for (;;) {
+        beforeBatch?.();
+
         const step = await this.reverseDeliveryBatch(
           importId,
           businessId,

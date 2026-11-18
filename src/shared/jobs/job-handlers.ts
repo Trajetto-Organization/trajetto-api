@@ -1,3 +1,4 @@
+import { importReversalJob } from "@/modules/import/services/import-reversal-job";
 import { spreadsheetImportJob } from "@/modules/import/services/spreadsheet-import-job";
 
 import { JobRunner } from "./job-runner";
@@ -11,8 +12,9 @@ import { JobRunner } from "./job-runner";
 function registerJobHandlers(
   runner: JobRunner = JobRunner.getInstance(),
 ): void {
-  // The spreadsheet upload (F3-23a).
+  // The spreadsheet upload (F3-23a) and its large undo (F3-24).
   runner.register("SPREADSHEET_IMPORT", spreadsheetImportJob);
+  runner.register("IMPORT_REVERSAL", importReversalJob);
 }
 
 export { registerJobHandlers };

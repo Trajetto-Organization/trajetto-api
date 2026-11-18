@@ -4159,6 +4159,15 @@ de vez fecha a importação dizendo que foi uma falha do servidor. O arquivo é
 apagado no fim; numa falha, fica 7 dias (o `cleanup-background-jobs` o
 apaga depois e só então deixa o job ser expurgado).
 
+Com o mesmo flag, o estorno acima de `REVERSAL_INLINE_LIMIT` (500) vira o
+job `IMPORT_REVERSAL` (plano de escala F3-24): o pedido toma o lease e
+responde `202` com o estado RUNNING, como antes, e o job roda os lotes de 60
+s no processo que consome a fila `jobs`, longe do HTTP. O job é a única
+execução daquele estorno (um job vivo por importação): ao começar, toma o
+lease de quem o tiver e retoma do progresso gravado no registro; um segundo
+clique com o job vivo só acompanha. No SIGTERM ele para entre dois lotes,
+solta o lease e volta à fila; o próximo processo termina.
+
 **E-mail do destinatário: importações e painel** (10/11/2026,
 `src/shared/delivery/recipient-email.ts`). A coluna "E-mail" e o `dest/email`
 da nota entravam sem conferência no `recipient_email` (TEXT). Daí iam, a cada

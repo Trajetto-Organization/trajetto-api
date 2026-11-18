@@ -4,7 +4,7 @@
 
 ## O que significa
 
-Alguma sessão, em qualquer banco do cluster, tem uma transação com xid aberta há mais que o limite. Ela segura o horizonte do vacuum (as linhas mortas não saem) e, com o feed de integração, segura o feed. A reversão de importação roda até 60 s dentro do HTTP: por isso o limite é 120 s até ela virar job.
+Alguma sessão, em qualquer banco do cluster, tem uma transação com xid aberta há mais que o limite. Ela segura o horizonte do vacuum (as linhas mortas não saem) e, com o feed de integração, segura o feed. Sem `IMPORT_DURABLE_JOBS`, a reversão de importação grande roda até 60 s por lote dentro do HTTP, e por isso o limite padrão é 120 s; com ele ligado (onda 14), ela vira um job da fila `jobs`, fora do HTTP, e o dono baixa o limite para 60 s.
 
 ## Primeira ação
 

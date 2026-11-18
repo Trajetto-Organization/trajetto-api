@@ -180,7 +180,16 @@ interface IImportRepository {
     businessId: string,
     lease: Date,
     progress: ReversalProgress,
-    options: { onRemoved?: ReversalRemovedHook; batchSize?: number },
+    options: {
+      onRemoved?: ReversalRemovedHook;
+      batchSize?: number;
+      /**
+       * Called before each batch: throws to stop between two of them (the
+       * durable job asked to stop, F3-24). The lease goes, the progress
+       * stays, as for any failure.
+       */
+      beforeBatch?: () => void;
+    },
   ) => Promise<ReversalResult>;
 }
 

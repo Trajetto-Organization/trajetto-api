@@ -500,12 +500,19 @@ class ImportRepository implements IImportRepository {
     {
       onRemoved,
       batchSize = REVERSAL_BATCH_SIZE,
-    }: { onRemoved?: ReversalRemovedHook; batchSize?: number },
+      beforeBatch,
+    }: {
+      onRemoved?: ReversalRemovedHook;
+      batchSize?: number;
+      beforeBatch?: () => void;
+    },
   ): Promise<ReversalResult> {
     let current = progress;
 
     try {
       if (!current.routesDone) {
+        beforeBatch?.();
+
         current = await this.prisma.$transaction(
           (tx) => this.reverseRoutes(tx, importId, businessId, lease, current),
           REVERSAL_TRANSACTION_OPTIONS,
@@ -513,6 +520,8 @@ class ImportRepository implements IImportRepository {
       }
 
       for (;;) {
+        beforeBatch?.();
+
         const step = await this.prisma.$transaction(
           (tx) =>
             this.reverseDeliveryBatch(
