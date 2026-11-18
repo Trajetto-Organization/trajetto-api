@@ -386,8 +386,15 @@ class JobRunner {
     }, this.renewEveryMs);
     renew.unref?.();
 
+    // A job runs for minutes inside one cycle (a 20 thousand row upload, a
+    // company's purge): every look at the stop and every checkpoint is the
+    // sign of progress the worker-stuck rule reads, or a long job would
+    // read as a hung cycle after ten minutes.
     const throwIfStopped = () => {
-      if (!controller.signal.aborted) return;
+      if (!controller.signal.aborted) {
+        workerHeartbeat.progress("background-jobs");
+        return;
+      }
 
       const reason: unknown = controller.signal.reason;
 

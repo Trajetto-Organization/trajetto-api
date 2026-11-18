@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { JobRunner, type JobContext } from "@/shared/jobs/job-runner";
+import { workerHeartbeat } from "@/shared/health/worker-heartbeat";
 import { InMemoryBackgroundJobRepository } from "@/shared/jobs/in-memory/in-memory-background-job-repository";
 import {
   JobLeaseLostError,
@@ -283,6 +284,37 @@ describe("the job runner", () => {
     await expect(store.checkpoint(id, 1, { next: 4 })).rejects.toBeInstanceOf(
       JobLeaseLostError,
     );
+  });
+
+  it("beats the worker's heartbeat at every checkpoint of a long job", async () => {
+    // A job runs for minutes inside one cycle: without a beat per
+    // checkpoint, the worker-stuck rule took it for a hung cycle.
+    const store = new InMemoryBackgroundJobRepository();
+    const runner = runnerOn(store);
+    const progress = vi.spyOn(workerHeartbeat, "progress");
+
+    runner.register("SPREADSHEET_IMPORT", {
+      run: async (job) => {
+        progress.mockClear();
+
+        for (let row = 0; row < 3; row += 1) {
+          await job.checkpoint({ next: row + 1 });
+        }
+
+        expect(
+          progress.mock.calls.filter(
+            ([worker]) => worker === "background-jobs",
+          ),
+        ).toHaveLength(3);
+      },
+    });
+
+    const id = await enqueue(store);
+
+    await runner.processBatch();
+
+    expect(statusOf(store, id).status).toBe("SUCCEEDED");
+    progress.mockRestore();
   });
 
   it("runs one job of a company at a time when its kind caps it", async () => {
