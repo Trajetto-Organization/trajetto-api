@@ -8,7 +8,8 @@
 --     -f prisma/post-deploy/rollback/unpartition-queue.sql
 --
 -- `trajetto.unpartition_queue` names one queue, several separated by
--- commas, or `all` for the four. Without it the script refuses to run.
+-- commas, or `all` for the four and the bell (notification, F5-15).
+-- Without it the script refuses to run.
 --
 -- What it does, one transaction per queue, under the table's ACCESS
 -- EXCLUSIVE lock (every read and write of that queue waits for it):
@@ -37,7 +38,8 @@ DECLARE
     'domain_outbox_event',
     'notification_delivery',
     'notification_provider_receipt',
-    'webhook_delivery'
+    'webhook_delivery',
+    'notification'
   ];
   hold_marker CONSTANT text := 'trajetto:swap-hold';
   wanted text := nullif(trim(current_setting('trajetto.unpartition_queue', true)), '');

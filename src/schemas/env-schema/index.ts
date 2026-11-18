@@ -1075,8 +1075,9 @@ const envSchema = z
     // The bell's retention (plano-escala F5-14): days a read notification
     // and an unread one are kept before the nightly cleanup-user-history
     // removes them, as the job always did (90 and 180). An env so the
-    // monthly partitions of the bell (F5-15) drop months by the same
-    // numbers. Under 30 is refused: a notification must outlive its
+    // monthly partitions of the bell (F5-15) follow: a month is dropped
+    // once past the unread one, which covers both, and the bell's reads
+    // look no further back (bell-id-range.ts). Under 30 is refused: a notification must outlive its
     // delivery (30 days, with its event), or a re-sent IN_APP would find
     // no row to collide with and ring twice.
     NOTIFICATION_READ_RETENTION_DAYS: z.preprocess(

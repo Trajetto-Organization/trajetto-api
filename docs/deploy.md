@@ -3845,11 +3845,13 @@ enquanto houver um processo sem a capability, ou uma sessão sem nome no
 banco (a imagem de antes do plano). Num banco sem empresa a migration do
 mesmo item já fez a mudança.
 
-| Passo                            | Item   | O que tira                                                                                                                                                                                                                                    | Capability                    |
-| -------------------------------- | ------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------- |
-| `03-route-stop-status-index.sql` | F2-21b | o índice global `route_stop (status, deliveryId)`                                                                                                                                                                                             | `route-stop-open-by-route-v1` |
-| `05-queue-contract.sql`          | F5-06  | as chaves estrangeiras e os uniques das quatro filas (`domain_outbox_event`, `notification_delivery`, `notification_provider_receipt`, `webhook_delivery`), depois de copiar para `outbox_event_key` a chave de todo evento que não tem a sua | `queue-partition-agnostic-v1` |
-| `10-queue-partition-swap.sql`    | F5-09  | as quatro filas comuns: cada uma vira particionada por dia pelo id, com a tabela de hoje anexada como `<fila>_legacy` ([ADR 0014](./adr/0014-filas-particionadas.md)); espera também o `05-queue-contract.sql`                                | `queue-partition-agnostic-v1` |
+| Passo                                | Item   | O que tira                                                                                                                                                                                                                                    | Capability                           |
+| ------------------------------------ | ------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------ |
+| `03-route-stop-status-index.sql`     | F2-21b | o índice global `route_stop (status, deliveryId)`                                                                                                                                                                                             | `route-stop-open-by-route-v1`        |
+| `05-queue-contract.sql`              | F5-06  | as chaves estrangeiras e os uniques das quatro filas (`domain_outbox_event`, `notification_delivery`, `notification_provider_receipt`, `webhook_delivery`), depois de copiar para `outbox_event_key` a chave de todo evento que não tem a sua | `queue-partition-agnostic-v1`        |
+| `07-notification-contract.sql`       | F5-15  | as chaves estrangeiras do sino (`notification`) para `user` e `business` e o unique de `deliveryId`; espera também não haver entrega IN_APP em voo com notificação gravada pela imagem anterior com outro id                                  | `notification-partition-agnostic-v1` |
+| `10-queue-partition-swap.sql`        | F5-09  | as quatro filas comuns: cada uma vira particionada por dia pelo id, com a tabela de hoje anexada como `<fila>_legacy` ([ADR 0014](./adr/0014-filas-particionadas.md)); espera também o `05-queue-contract.sql`                                | `queue-partition-agnostic-v1`        |
+| `20-notification-partition-swap.sql` | F5-15  | o sino comum: vira particionado por mês pelo id, com a tabela de hoje anexada como `notification_legacy`; espera também o `07-notification-contract.sql`                                                                                      | `notification-partition-agnostic-v1` |
 
 1. No primeiro deploy desta release a etapa roda com a imagem anterior no
    ar e os passos ficam `pending` (o `/health/rollout` mostra em
@@ -3870,10 +3872,12 @@ A troca das filas (`10-queue-partition-swap.sql`) tem três cuidados a mais:
   staging antes da produção, com o seed `prod-like`, pelo SQL de `pg_locks`
   do [ADR 0014](./adr/0014-filas-particionadas.md#medir-a-trava-antes-da-produção).
   O aceite é nenhuma espera acima de 3 s.
-- **Fila grande demais.** Com mais de 2 M linhas estimadas a fila fica comum
-  e o passo diz `skipped: … exige uma janela própria`. Numa janela com os
-  workers parados (`WORKERS_ENABLED=false` na `trajetto-api`), rode a etapa
-  de novo com o expurgo em dia, ou deixe a fila comum: o código serve os
+- **Fila grande demais.** Com mais de 2 M linhas estimadas a fila (ou o
+  sino, F5-15, que na escala alvo passa disso) fica comum e o passo diz
+  `skipped: … exige uma janela própria`. Numa janela com os workers parados
+  (`WORKERS_ENABLED=false` na `trajetto-api`), rode o arquivo à mão no
+  Database, depois de `SET trajetto.swap_window = 'on'` na mesma sessão do
+  `psql`, com o expurgo em dia; ou deixe a tabela comum: o código serve os
   dois jeitos.
 - **Os planos.** Com as filas trocadas, as reivindicações planejam um mês
   de partições. Meça na staging o p95 do planejamento delas (o

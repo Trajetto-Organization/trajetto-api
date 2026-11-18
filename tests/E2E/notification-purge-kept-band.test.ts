@@ -3,6 +3,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { PrismaClient } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 import { createPrismaClient } from "@/shared/database/database-client";
+import { withParentNames } from "./support/partition-plan";
 
 /**
  * The band of notifications the nightly purge keeps, and how often it reads it.
@@ -121,7 +122,11 @@ async function analyze(query: string, params: unknown[]): Promise<PlanNode> {
         Array<{ "QUERY PLAN": Array<{ Plan: PlanNode }> }>
       >(`EXPLAIN (ANALYZE, FORMAT JSON) ${query}`, ...params);
 
-      throw new RolledBack(plan[0]["QUERY PLAN"][0].Plan);
+      // The bell is partitioned by month since F5-15: each partition and
+      // its index read as the parent's.
+      throw new RolledBack(
+        await withParentNames(tx, plan[0]["QUERY PLAN"][0].Plan),
+      );
     });
   } catch (error) {
     if (error instanceof RolledBack) return error.plan as PlanNode;

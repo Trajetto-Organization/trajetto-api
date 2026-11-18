@@ -26,8 +26,9 @@
 -- The parents are the tables the partition job keeps
 -- (src/shared/database/partitions.ts; a unit test keeps the two lists in
 -- step) and the ones the plan adds later (the lean trail, the event and
--- activity shells, the four queues); a table that does not exist yet, or
--- is not partitioned yet (the queues until their swap, F5-09), is skipped.
+-- activity shells, the four queues, the bell); a table that does not exist
+-- yet, or is not partitioned yet (the queues until their swap, F5-09, the
+-- bell until its own, F5-15), is skipped.
 --
 -- A change of owner takes ACCESS EXCLUSIVE on the table, and the whole
 -- file is one transaction (infra/sql/README.md): every lock it takes is
@@ -56,7 +57,8 @@ DECLARE
     'domain_outbox_event',
     'notification_delivery',
     'notification_provider_receipt',
-    'webhook_delivery'
+    'webhook_delivery',
+    'notification'
   ];
   owner_name CONSTANT name := 'trajetto_partitions';
   lock_budget CONSTANT interval := interval '3 seconds';

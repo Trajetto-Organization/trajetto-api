@@ -141,8 +141,7 @@ model Business {
   branches  Branch[]
   suppliers Supplier[]
 
-  Activity     Activity[]
-  Notification Notification[]
+  Activity Activity[]
 
   chatThreads    ChatThread[]
   supportTickets SupportTicket[]
@@ -310,7 +309,6 @@ model User {
   serviceOrders          ServiceOrder[] // Responsible user
   accountsPayable        AccountPayable[] @relation("AccountPayableResponsible")
   accountsPayableCreated AccountPayable[] @relation("AccountPayableCreatedBy")
-  Notification           Notification[]
   Activity               Activity[]
 
   two_factor_enabled Boolean @default(false)
@@ -1136,22 +1134,27 @@ model Activity {
 
 // For notifications targeted to specific users
 model Notification {
-  id         String    @id @default(uuid(7))
+  id         String  @id @default(uuid(7))
   type       String // "service-order", "vehicle", etc.
   title      String
   message    String
   link       String?
-  read       Boolean   @default(false)
+  read       Boolean @default(false)
   entityId   String?
+  /// The company the notification is about. No foreign key since F5-15
+  /// (plano-escala): the bell is partitioned by month and a month is
+  /// dropped whole; deleting a company takes its bell rows in SQL
+  /// (queue-row-cleanup.ts).
   businessId String?
-  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
-  userId     String // recipient user ID
-  business   Business? @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  /// The recipient. No foreign key either: deleting a user takes the
+  /// user's bell in the same statement as their deliveries.
+  userId     String
 
-  // Set when the notification pipeline created this row. The unique
-  // constraint is what makes the IN_APP channel idempotent: a delivery
-  // retried after a crash can't insert the same notification twice.
-  deliveryId String? @unique
+  /// Set when the notification pipeline created this row. Its id is the
+  /// delivery's (F5-14), so a delivery retried after a crash meets the
+  /// primary key; the unique this column had leaves with the monthly
+  /// partitions of F5-15, where a unique must include the id.
+  deliveryId String?
 
   created_at DateTime @default(now())
   updated_at DateTime @updatedAt

@@ -3579,6 +3579,22 @@ por padrão até o dono medir na staging. O `/health/metrics` soma o inchaço
 de cada fila pelas partições dela (`queue_tables[].partitions`), e a folga
 das partições está em `partitions.<fila>`.
 
+**O sino particionado por mês (F5-15).** O sino (`notification`) perde as
+chaves estrangeiras para `user` e `business` e o unique de `deliveryId`
+(o id da notificação é o da entrega, F5-14; excluir um usuário ou uma
+empresa leva o sino dela pelo `queue-row-cleanup.ts`), pelo passo
+`prisma/post-deploy/07-notification-contract.sql`, que espera a capability
+`notification-partition-agnostic-v1` e nenhuma entrega IN_APP em voo com
+notificação gravada pela imagem anterior com outro id. Depois, o
+`20-notification-partition-swap.sql` o troca por uma tabela particionada
+por mês pelo id, como as filas, com a tabela de hoje como
+`notification_legacy` e dois meses à frente; o `partition-maintenance`
+apaga o mês que passou de `NOTIFICATION_UNREAD_RETENTION_DAYS` (180, que
+cobre também as lidas). A lista, as contagens e o "marcar todas como lidas"
+pedem ids do primeiro dia do mês da notificação mais velha que a retenção
+guarda até um dia à frente (`src/shared/notifications/bell-id-range.ts`):
+no máximo sete meses, e nenhum dos feitos à frente.
+
 O registro de webhooks (`webhook_delivery`) sai do mesmo jeito depois de
 `WEBHOOK_DELIVERY_RETENTION_DAYS` (31), pelo portão `webhook-deliveries`
 (`src/shared/integration/webhook-delivery-retention.ts`, F5-12): o dia só

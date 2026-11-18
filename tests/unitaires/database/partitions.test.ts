@@ -6,6 +6,8 @@ import { describe, expect, it } from "vitest";
 import { envSchema } from "@/schemas/env-schema";
 import { definedEnv } from "@/schemas/env-schema/defined-env";
 import {
+  NOTIFICATION_LOOKAHEAD_MONTHS,
+  NOTIFICATION_UNREAD_RETENTION_DAYS_DEFAULT,
   OUTBOX_PUBLISHED_RETENTION_DAYS_DEFAULT,
   QUEUE_PARTITION_LOOKAHEAD_DAYS_DEFAULT,
   QUEUE_PARTITION_STUCK_ALERT_DAYS_DEFAULT,
@@ -230,7 +232,7 @@ describe("the queues in the registry", () => {
     registeredPartitions({
       DRIVER_POSITION_RETENTION_DAYS: 90,
       DRIVER_POSITION_PARTITION_LOOKAHEAD_DAYS: 7,
-    }).filter((table) => table.plainUntilSwap);
+    }).filter((table) => table.plainUntilSwap && table.grain === "day");
 
   it("are the four, daily by id, plain until the swap", () => {
     expect(queues().map((table) => table.table)).toEqual([
@@ -342,7 +344,7 @@ describe("the queues in the registry", () => {
       DRIVER_POSITION_RETENTION_DAYS: 90,
       DRIVER_POSITION_PARTITION_LOOKAHEAD_DAYS: 7,
       QUEUE_PARTITION_LOOKAHEAD_DAYS: 14,
-    }).filter((table) => table.plainUntilSwap);
+    }).filter((table) => table.plainUntilSwap && table.grain === "day");
 
     expect(configured.every((table) => table.lookahead === 14)).toBe(true);
 
@@ -364,6 +366,46 @@ describe("the queues in the registry", () => {
 
     expect(parse("6").success).toBe(false);
     expect(empty.success && empty.data?.QUEUE_PARTITION_LOOKAHEAD_DAYS).toBe(7);
+  });
+});
+
+/**
+ * The bell (plano-escala F5-15): monthly on its uuid v7 id from the swap
+ * of 20-notification-partition-swap.sql on, two months ahead, a month
+ * dropped whole past the unread retention (every row then past both), no
+ * gate: nothing in the bell is ever in flight.
+ */
+describe("the bell in the registry", () => {
+  it("is monthly by id, plain until its swap, and kept as long as an unread notification", () => {
+    const [bell] = registeredPartitions({
+      DRIVER_POSITION_RETENTION_DAYS: 90,
+      DRIVER_POSITION_PARTITION_LOOKAHEAD_DAYS: 7,
+    }).filter((table) => table.table === "notification");
+
+    expect(bell).toMatchObject({
+      grain: "month",
+      key: "uuid7",
+      lookahead: NOTIFICATION_LOOKAHEAD_MONTHS,
+      requiredBehind: 1,
+      requiredAhead: 1,
+      retentionDays: NOTIFICATION_UNREAD_RETENTION_DAYS_DEFAULT,
+      plainUntilSwap: true,
+    });
+    expect(bell.dropGate).toBeUndefined();
+    expect(NOTIFICATION_UNREAD_RETENTION_DAYS_DEFAULT).toBe(180);
+    expect(plannedPartitions(bell, NIGHT).map((each) => each.name)).toEqual([
+      "notification_202610",
+      "notification_202611",
+      "notification_202612",
+      "notification_202701",
+    ]);
+    expect(
+      registeredPartitions({
+        DRIVER_POSITION_RETENTION_DAYS: 90,
+        DRIVER_POSITION_PARTITION_LOOKAHEAD_DAYS: 7,
+        NOTIFICATION_UNREAD_RETENTION_DAYS: 365,
+      }).find((table) => table.table === "notification")?.retentionDays,
+    ).toBe(365);
   });
 });
 

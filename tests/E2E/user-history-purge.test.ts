@@ -3,6 +3,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { PrismaClient } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 import { createPrismaClient } from "@/shared/database/database-client";
+import { withParentNames } from "./support/partition-plan";
 
 /**
  * The nightly purge of bell notifications: what it deletes, and how far its
@@ -182,9 +183,12 @@ describe("the notification purge", () => {
       );
     });
 
-    const root = (
-      plan[0]["QUERY PLAN"] as unknown as Array<{ Plan: PlanNode }>
-    )[0].Plan;
+    // The bell is partitioned by month since F5-15: each partition and its
+    // index read as the parent's.
+    const root = await withParentNames(
+      prisma,
+      (plan[0]["QUERY PLAN"] as unknown as Array<{ Plan: PlanNode }>)[0].Plan,
+    );
 
     const scans = nodesOn(root, "notification_created_at_idx");
 

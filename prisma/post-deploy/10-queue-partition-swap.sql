@@ -55,7 +55,8 @@
 -- queues behind it, so the wait is the pause the queue sees. Under the
 -- lock the swap only scans the table once (the CHECK), so a table with
 -- more than 2 M rows (pg_class.reltuples) is left plain, 'skipped': its
--- swap needs a window of its own (docs/adr/0014-filas-particionadas.md).
+-- swap needs a window of its own (docs/adr/0014-filas-particionadas.md),
+-- where this file is run by hand after SET trajetto.swap_window = 'on'.
 -- An error in one table rolls that table back and leaves the step
 -- 'pending' with the message: the swap never fails a deploy.
 --
@@ -108,6 +109,9 @@ DECLARE
   out_of_range text[] := ARRAY[]::text[];
   failed text[] := ARRAY[]::text[];
   owner_kept boolean := false;
+  -- Set by hand for a window of its own (docs/adr/0014-filas-particionadas.md):
+  -- the size cap is the release step's, not the swap's.
+  in_window CONSTANT boolean := coalesce(current_setting('trajetto.swap_window', true), '') = 'on';
 BEGIN
   FOREACH queue IN ARRAY queues LOOP
     SELECT c.relkind::text AS kind,
@@ -121,7 +125,7 @@ BEGIN
 
     IF starts_with(plain.note, hold_marker) THEN
       held := held || queue;
-    ELSIF plain.reltuples > max_rows THEN
+    ELSIF plain.reltuples > max_rows AND NOT in_window THEN
       too_big := too_big || format('%s (~%s linhas)', queue, plain.reltuples::bigint);
     ELSE
       left_over := left_over || queue;

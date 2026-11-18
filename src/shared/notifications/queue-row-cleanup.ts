@@ -12,13 +12,16 @@ import { Prisma } from "@prisma/client";
  * So each deletion takes its own rows, in its own transaction, before the
  * row they hang off — the same rows the cascade takes, no more:
  *
- *  - a user: the deliveries addressed to them, and their receipts;
+ *  - a user: the deliveries addressed to them, and their receipts, and
+ *    their bell (notification), whose keys leave with F5-15;
  *  - a webhook endpoint: its webhook deliveries;
  *  - a company: its webhook deliveries, and the deliveries addressed to its
  *    users and to its external recipients (both go by cascade from the
- *    company), with their receipts. The use case refuses a company that
- *    still has users; the repository does not rely on it. The deliveries
- *    of the platform's own users about the company are not its rows.
+ *    company), with their receipts, and every bell row about it (the
+ *    company's key on notification cascades today, whoever the row is
+ *    for). The use case refuses a company that still has users; the
+ *    repository does not rely on it. The deliveries of the platform's own
+ *    users about the company are not its rows.
  *
  * A row written by a transaction that committed after the deletion read
  * the queue escapes it. The pipeline closes such a row as recipient_gone,
@@ -40,9 +43,12 @@ type Queries = Pick<Prisma.TransactionClient, "$executeRaw">;
 const UNSENT = Prisma.sql`('PENDING', 'PROCESSING')`;
 
 /**
- * The deliveries addressed to a user and their receipts. `unsentOnly`
- * keeps the ledger (DELIVERED and FAILED rows) when the user stays and
- * only what was still to be sent must go.
+ * The deliveries addressed to a user and their receipts, and the user's
+ * bell. `unsentOnly` keeps the ledger (DELIVERED and FAILED rows) when the
+ * user stays and only what was still to be sent must go; the bell goes
+ * either way (the inbox of a user who stays is emptied with it, the
+ * sessions' end of endSessionsAndClearInbox), through its
+ * ("userId", created_at) index.
  */
 async function deleteQueueRowsOfUser(
   db: Queries,
@@ -50,7 +56,11 @@ async function deleteQueueRowsOfUser(
   { unsentOnly = false }: { unsentOnly?: boolean } = {},
 ): Promise<void> {
   await db.$executeRaw`
-    WITH deliveries AS (
+    WITH bell AS (
+      DELETE FROM "notification"
+      WHERE "userId" = ${userId}
+    ),
+    deliveries AS (
       DELETE FROM "notification_delivery"
       WHERE "userId" = ${userId}
         ${unsentOnly ? Prisma.sql`AND "status" IN ${UNSENT}` : Prisma.empty}
@@ -81,9 +91,16 @@ async function deleteQueueRowsOfBusiness(
   db: Queries,
   businessId: string,
 ): Promise<void> {
+  // The bell has no index by company (it is never read by one): the scan
+  // is the one the cascade on its key did, on the rare deletion of a
+  // company.
   await db.$executeRaw`
     WITH webhooks AS (
       DELETE FROM "webhook_delivery"
+      WHERE "businessId" = ${businessId}
+    ),
+    bell AS (
+      DELETE FROM "notification"
       WHERE "businessId" = ${businessId}
     ),
     to_users AS (

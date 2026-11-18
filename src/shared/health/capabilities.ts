@@ -28,10 +28,17 @@
  *  - route-stop-open-by-route-v1: "not on an open stop" looks for the stop
  *    through the company's open routes (F2-21), never through the global
  *    route_stop ("status", "deliveryId") index that F2-21b drops.
+ *  - notification-partition-agnostic-v1: nothing writes or reads the bell
+ *    (notification) through its foreign keys, their cascades or the unique
+ *    on deliveryId. A notification's id is its delivery's, so a retried
+ *    IN_APP meets the primary key (F5-14), and deleting a user or a company
+ *    takes its bell rows in SQL (queue-row-cleanup.ts). What the
+ *    contraction and the monthly swap of F5-15 need.
  */
 const PROCESS_CAPABILITIES = [
   "queue-partition-agnostic-v1",
   "route-stop-open-by-route-v1",
+  "notification-partition-agnostic-v1",
 ] as const;
 
 type ProcessCapability = (typeof PROCESS_CAPABILITIES)[number];

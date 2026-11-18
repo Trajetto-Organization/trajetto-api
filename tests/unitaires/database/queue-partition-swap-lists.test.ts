@@ -32,15 +32,36 @@ const REGISTERED = registeredPartitions({
   DRIVER_POSITION_RETENTION_DAYS: 90,
   DRIVER_POSITION_PARTITION_LOOKAHEAD_DAYS: 7,
 })
-  .filter((table) => table.plainUntilSwap)
+  .filter((table) => table.plainUntilSwap && table.grain === "day")
   .map((table) => table.table)
   .sort();
+
+const BELL_STEP = read("prisma/post-deploy/20-notification-partition-swap.sql");
+const PARTITIONS_SQL = read("infra/sql/10-partitions.sql");
 
 describe("the queues' swap to partitioned tables", () => {
   it("swaps, and puts back, the four queues the partition registry keeps", () => {
     expect(REGISTERED).toHaveLength(4);
     expect(queuesOf(STEP)).toEqual(REGISTERED);
-    expect(queuesOf(ROLLBACK)).toEqual(REGISTERED);
+    // The way back serves the bell's swap too (F5-15).
+    expect(queuesOf(ROLLBACK)).toEqual([...REGISTERED, "notification"].sort());
+  });
+
+  it("swaps the bell by month in a step of its own, owned like the queues", () => {
+    // F5-15: the registry keeps it once swapped, and infra/sql makes
+    // trajetto_partitions its owner; a bell the step swapped and the job
+    // did not know would run out of months.
+    expect(queuesOf(BELL_STEP)).toEqual(["notification"]);
+    expect(BELL_STEP).toContain(
+      "trajetto_capability_ready('notification-partition-agnostic-v1'",
+    );
+    expect(BELL_STEP).toContain(
+      "07-notification-contract.sql) ainda não tirou",
+    );
+    expect(BELL_STEP).toContain("make_interval(months => day_offset)");
+    expect(PARTITIONS_SQL).toMatch(
+      /'webhook_delivery',\s+'notification'\s+\];/,
+    );
   });
 
   it("asks for the capability and the contraction before it locks anything", () => {

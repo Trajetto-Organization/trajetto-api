@@ -29,7 +29,8 @@ type QueueTable = (typeof QUEUE_TABLES)[number];
  * the swap step finds a plain table to swap. Returns the script's NOTICE.
  */
 async function unpartitionQueues(
-  queues: readonly QueueTable[] = QUEUE_TABLES,
+  // The four queues, or the bell ("notification", F5-15).
+  queues: readonly (QueueTable | "notification")[] = QUEUE_TABLES,
   { hold = true }: { hold?: boolean } = {},
 ): Promise<string> {
   const client = await openReleaseClient(

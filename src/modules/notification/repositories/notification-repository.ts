@@ -1,6 +1,9 @@
 import database from "@/../infra/database";
 import { NotificationPreference } from "@prisma/client";
 
+import { env } from "@/env";
+import { bellIdRange } from "@/shared/notifications/bell-id-range";
+
 import {
   Notification,
   CreateNotificationProps,
@@ -14,12 +17,21 @@ import {
   UpsertPreferenceInput,
 } from "./INotification-repository";
 
+/**
+ * The ids the bell's reads look at (bell-id-range.ts, plano-escala F5-15):
+ * on the bell partitioned by month, the months the retention keeps and
+ * none of the ones made ahead.
+ */
+function keptIds() {
+  return bellIdRange(env.NOTIFICATION_UNREAD_RETENTION_DAYS);
+}
+
 class NotificationRepository implements INotificationRepository {
   constructor(private prisma = database) {}
 
   async markAllAsRead(userId: string): Promise<number> {
     const result = await this.prisma.notification.updateMany({
-      where: { userId, read: false },
+      where: { userId, read: false, id: keptIds() },
       data: { read: true },
     });
 
@@ -34,7 +46,7 @@ class NotificationRepository implements INotificationRepository {
     // The user leads the where (the (userId, read, created_at) index): only
     // the caller's own rows can ever be touched.
     const flipped = await this.prisma.notification.updateManyAndReturn({
-      where: { userId, type, entityId, read: false },
+      where: { userId, type, entityId, read: false, id: keptIds() },
       data: { read: true },
       select: { id: true },
     });
@@ -91,7 +103,7 @@ class NotificationRepository implements INotificationRepository {
     includeRead = true,
     cursor,
   }: ListNotificationsParams): Promise<CursorPaginatedNotifications> {
-    const whereClause: any = { userId };
+    const whereClause: any = { userId, id: keptIds() };
 
     if (!includeRead) {
       whereClause.read = false;
@@ -161,6 +173,7 @@ class NotificationRepository implements INotificationRepository {
       where: {
         userId,
         read: false,
+        id: keptIds(),
       },
     });
   }

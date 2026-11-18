@@ -140,6 +140,8 @@ interface PartitionEnv {
   QUEUE_PARTITION_STUCK_ALERT_DAYS?: number;
   /** Days of the webhook ledger kept (F5-12); 31 when absent. */
   WEBHOOK_DELIVERY_RETENTION_DAYS?: number;
+  /** Days the bell keeps an unread notification (F5-14); 180 when absent. */
+  NOTIFICATION_UNREAD_RETENTION_DAYS?: number;
 }
 
 /** The queues' lookahead when the environment does not say (F5-07). */
@@ -150,6 +152,12 @@ const OUTBOX_PUBLISHED_RETENTION_DAYS_DEFAULT = 30;
 
 /** The queues' grace before partition-stuck when the environment does not say. */
 const QUEUE_PARTITION_STUCK_ALERT_DAYS_DEFAULT = 3;
+
+/** Months of the bell's partitions kept made ahead of the current one. */
+const NOTIFICATION_LOOKAHEAD_MONTHS = 2;
+
+/** The bell's unread retention when the environment does not say (F5-14). */
+const NOTIFICATION_UNREAD_RETENTION_DAYS_DEFAULT = 180;
 
 /**
  * The webhook ledger's retention when the environment does not say: the
@@ -271,6 +279,17 @@ function queuePartitions(values: PartitionEnv): PartitionedTable[] {
  * nothing is detached or dropped until the legal opinion (decision D3).
  *
  * The four queues: see queuePartitions. Plain tables until the swap.
+ *
+ * notification, the bell (plano-escala F5-15): monthly on its uuid v7 id
+ * (a notification's id is its delivery's, its event's millisecond) from
+ * the swap of prisma/post-deploy/20-notification-partition-swap.sql on, a
+ * plain table until then. Two months ahead; the month behind and the next
+ * one must exist (an event of the last day of a month notifies in the
+ * next). A month leaves whole once it is past the unread retention
+ * (NOTIFICATION_UNREAD_RETENTION_DAYS, 180 days): by then every row in it
+ * is past both retentions, read or not, and nothing in the bell is ever in
+ * flight, so no gate. The nightly purge in batches keeps taking the read
+ * rows past their 90 days inside the months still kept.
  */
 function registeredPartitions(
   values: PartitionEnv = env,
@@ -300,6 +319,19 @@ function registeredPartitions(
       settleDays: 7,
     },
     ...queuePartitions(values),
+    {
+      table: "notification",
+      grain: "month",
+      key: "uuid7",
+      lookahead: NOTIFICATION_LOOKAHEAD_MONTHS,
+      requiredBehind: 1,
+      requiredAhead: 1,
+      retentionDays:
+        values.NOTIFICATION_UNREAD_RETENTION_DAYS ??
+        NOTIFICATION_UNREAD_RETENTION_DAYS_DEFAULT,
+      settleDays: 7,
+      plainUntilSwap: true,
+    },
   ];
 }
 
@@ -444,6 +476,8 @@ function freezeWindow(
 
 export {
   DELIVERY_EVENT_LOOKAHEAD_MONTHS,
+  NOTIFICATION_LOOKAHEAD_MONTHS,
+  NOTIFICATION_UNREAD_RETENTION_DAYS_DEFAULT,
   OUTBOX_PUBLISHED_RETENTION_DAYS_DEFAULT,
   QUEUE_PARTITION_LOOKAHEAD_DAYS_DEFAULT,
   QUEUE_PARTITION_STUCK_ALERT_DAYS_DEFAULT,

@@ -119,6 +119,9 @@ etapa diz quanto cada fila levou (`… em N s`).
   e os testes semeiam com `tests/E2E/support/uuid7-sql.ts`.
 - A retenção passa a ser por dia (F5-11, F5-12); enquanto a partição legada
   existir, o expurgo em lotes continua valendo para ela.
+- O sino (`notification`) segue o mesmo caminho, por mês (F5-15):
+  `07-notification-contract.sql` e `20-notification-partition-swap.sql`,
+  com a mesma volta (`trajetto.unpartition_queue = 'notification'`).
 - Uma consulta sem o id no filtro lê todas as partições: os planos com as
   39 partições que a retenção guarda são conferidos por
   `tests/E2E/query-plans-partitioned-queues.test.ts` (F5-13). As

@@ -889,7 +889,6 @@ class UserRepository implements IUserRepository {
           session_version: { increment: 1 },
           RefreshToken: { deleteMany: {} },
           PushDeviceToken: { deleteMany: {} },
-          Notification: { deleteMany: {} },
         },
       });
 
@@ -899,7 +898,9 @@ class UserRepository implements IUserRepository {
       // e-mail would carry it outside. DELIVERED and FAILED rows stay: they
       // are the ledger, and hold no message. With their receipts (a push
       // in flight already has Expo's ticket), which the cascade takes
-      // today and wave 10 no longer will (queue-row-cleanup.ts).
+      // today and wave 10 no longer will (queue-row-cleanup.ts). And the
+      // inbox itself, the bell, emptied by the same statement (the
+      // relation that did it leaves with F5-15).
       await deleteQueueRowsOfUser(client, userId, { unsentOnly: true });
     };
 
