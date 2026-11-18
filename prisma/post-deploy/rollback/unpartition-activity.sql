@@ -16,10 +16,15 @@
 -- lock):
 --
 --   1. the rows the partitioned table got after the window go back to the
---      plain one: every id not in activity_legacy from an hour before its
---      newest uuid v7 on. The rows the window re-keyed are not among them:
---      their new ids are of their created_at, long before, and the plain
---      table still has them under the old ones;
+--      plain one. A row written since has an id minted at its write, past
+--      the newest uuid v7 of activity_legacy, or, from the notification
+--      pipeline, the id of its notification_delivery (F2-15), minted when
+--      the event expanded: hours or days older when a backlog or a retry's
+--      backoff held it. Its created_at is always the write's. So every row
+--      from an hour before either newest on, the id or the created_at of
+--      activity_legacy, is a candidate (both indexed), and goes back
+--      unless the plain table already has it: under its id, or as the old
+--      row the window re-keyed into it (same created_at, its re-key);
 --   2. the names go back: the partitioned table, its indexes, constraints
 --      and partitions become the empty shell activity_part again
 --      (truncated), and activity_legacy becomes activity;
@@ -45,6 +50,7 @@ DECLARE
   newest_ms bigint;
   floor_hex text;
   floor_id text := '';
+  created_floor timestamp;
   restored bigint := 0;
   member record;
 BEGIN
@@ -77,7 +83,11 @@ BEGIN
     AND a.attnum > 0
     AND NOT a.attisdropped;
 
-  -- 1. What came after the window: past the newest v7 the plain table has.
+  -- 1. What came after the window: past the newest v7 the plain table
+  --    has, or written after its newest row (an hour back for the
+  --    transactions in flight around the window). A created_at ahead of
+  --    the clock is left out: it would push the floor past the rows to
+  --    bring back.
   SELECT max("id") INTO newest FROM "activity_legacy" WHERE "id" ~ v7_pattern;
 
   IF newest IS NOT NULL THEN
@@ -86,20 +96,29 @@ BEGIN
     floor_id := substr(floor_hex, 1, 8) || '-' || substr(floor_hex, 9, 4) || '-0000-0000-000000000000';
   END IF;
 
+  SELECT max("created_at") - interval '1 hour' INTO created_floor
+  FROM "activity_legacy"
+  WHERE "created_at" <= (now() AT TIME ZONE 'UTC');
+
   -- Without a v7 to start from, every row of the partitioned table is a
-  -- candidate, and the re-keyed ones are told apart by their re-key.
+  -- candidate. The re-keyed copies are told apart by their re-key, looked
+  -- up by created_at, which the window copied as it was.
   EXECUTE format(
     'INSERT INTO "activity_legacy" (%s)
      SELECT %s FROM "activity" p
-     WHERE p."id" >= %L
-       AND NOT EXISTS (SELECT 1 FROM "activity_legacy" l WHERE l."id" = p."id")%s',
+     WHERE (p."id" >= %L OR p."created_at" >= %L::timestamp)
+       AND NOT EXISTS (SELECT 1 FROM "activity_legacy" l WHERE l."id" = p."id")
+       AND NOT EXISTS (
+         SELECT 1 FROM "activity_legacy" l
+         WHERE l."created_at" = p."created_at"
+           AND l."id" !~ %L
+           AND trajetto_activity_rekey(l."id", l."created_at") = p."id"
+       )',
     columns_list,
     select_list,
     floor_id,
-    CASE WHEN floor_id = '' THEN format(
-      ' AND NOT EXISTS (SELECT 1 FROM "activity_legacy" l WHERE l."id" !~ %L AND trajetto_activity_rekey(l."id", l."created_at") = p."id")',
-      v7_pattern
-    ) ELSE '' END
+    created_floor,
+    v7_pattern
   );
 
   GET DIAGNOSTICS restored = ROW_COUNT;

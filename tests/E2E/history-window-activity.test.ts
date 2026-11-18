@@ -56,6 +56,7 @@ let admin: pg.Client;
 let seed: FleetDriverSeed;
 const v4Ids: string[] = [];
 const v7Ids: string[] = [];
+let latePipelineId: string;
 
 async function rows<T extends pg.QueryResultRow>(
   sql: string,
@@ -386,6 +387,32 @@ describe("inside it", () => {
     expect(await prisma.activity.count({ where: { deliveryId } })).toBe(1);
   });
 
+  // A notification held back by a backlog or a retry's backoff: its
+  // activity is written after the window, under the id of its
+  // notification_delivery, minted when the event expanded, hours before
+  // the newest row the plain table kept (F2-15).
+  it("records a late pipeline activity under a delivery id minted hours before the window", async () => {
+    latePipelineId = uuidV7({ msecs: Date.now() - 3 * 3_600_000 });
+
+    const row = await new ActivityRepository(prisma).createActivity({
+      type: "Entrega",
+      action: "update",
+      entityId: randomUUID(),
+      description: "Entrega concluída (notificação atrasada)",
+      status: "Atualizado",
+      performedBy: seed.driverUserId,
+      businessId: seed.businessId,
+      deliveryId: latePipelineId,
+    });
+
+    expect(row.id).toBe(latePipelineId);
+    expect(
+      await rows(`SELECT 1 FROM "activity_legacy" WHERE "id" = $1`, [
+        latePipelineId,
+      ]),
+    ).toHaveLength(0);
+  });
+
   it("re-keys the same way on every run, and a second run does nothing", async () => {
     const [first] = await rows<{ id: string }>(
       `SELECT trajetto_activity_rekey($1, $2::timestamp) AS id`,
@@ -431,6 +458,10 @@ describe("the way back", () => {
     // The old ids, not their re-keyed copies; nothing twice.
     for (const old of v4Ids) expect(back).toContain(old);
     expect(new Set(back).size).toBe(back.length);
+
+    // Written after the window under an id older than the newest one the
+    // plain table kept: back too, not truncated away with the shell.
+    expect(back).toContain(latePipelineId);
     expect(back).toHaveLength(newIds.length);
     expect(await new ActivityRepository(prisma).dataVersion()).toBe("1");
 
