@@ -30,8 +30,10 @@
 -- How, in one transaction:
 --   1. LOCK delivery_event IN SHARE ROW EXCLUSIVE MODE: every write of the
 --      trail waits from here to the COMMIT (the measured pause), every read
---      goes on. Each attempt waits at most 10 s for the lock, three times,
---      each attempt a transaction of its own;
+--      goes on. A write of the API waits only its own lock_timeout (5 s)
+--      and fails with a 503 SERVICE_BUSY (docs/runbooks/history-window.md
+--      says what the users see). Each attempt waits at most 10 s for the
+--      lock, three times, each attempt a transaction of its own;
 --   2. the catch-up of delivery_event_submission: the keys the previous
 --      image wrote only on delivery_event since the migration of F2-14
 --      backfilled them;

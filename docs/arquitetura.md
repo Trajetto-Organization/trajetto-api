@@ -4984,8 +4984,10 @@ depois nunca roda a janela de surpresa, e o molde do E2E e o `yarn dev`
 ficam com a tabela comum que a produção tem até a janela dela. Dentro do
 intervalo, espera (`pending`) todo processo vivo anunciar
 `history-partition-agnostic-v1`, e então, numa transação: `LOCK` em SHARE
-ROW EXCLUSIVE (as escritas esperam, as leituras seguem; 10 s por
-tentativa, três), a recuperação das chaves de envio que a imagem anterior
+ROW EXCLUSIVE (as leituras seguem; uma escrita espera até o próprio
+`lock_timeout`, 5 s na API, e falha com 503 `SERVICE_BUSY`, por isso o
+aviso de 48 h fala em erros; o lock da janela espera 10 s por tentativa,
+três), a recuperação das chaves de envio que a imagem anterior
 gravou só na coluna, o `INSERT … SELECT` de toda linha com o `txid` como
 está (NULL continua NULL; o DEFAULT carimbaria o histórico com o xid da
 cópia e todo poller com cursor v2 receberia tudo de novo), as contagens

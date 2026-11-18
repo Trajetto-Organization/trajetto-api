@@ -31,7 +31,9 @@
 -- F2-15).
 --
 -- How, in one transaction: LOCK activity IN SHARE ROW EXCLUSIVE MODE (the
--- writes of the trail wait, the reads go on; 10 s per attempt, three), the
+-- writes of the trail wait, a write of the API only its own lock_timeout
+-- of 5 s before its 503 SERVICE_BUSY, and the reads go on; 10 s per
+-- attempt, three), the
 -- INSERT ... SELECT with the re-key, the counts of both tables compared, the
 -- lock raised to ACCESS EXCLUSIVE for the renames (30 s), activity and what
 -- it owns renamed to activity_legacy (14 days; wave 20 drops it) and the

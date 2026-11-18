@@ -5,6 +5,11 @@ import { describe, expect, it } from "vitest";
 
 import { HISTORY_WINDOW_SETTING } from "infra/scripts/release-step-runner";
 import {
+  SERVICE_BUSY_CODE,
+  SERVICE_BUSY_MESSAGE,
+  SERVICE_BUSY_RETRY_AFTER_SECONDS,
+} from "@/shared/errors/database-error-map";
+import {
   ALERT_KINDS,
   DEFAULT_ALERT_THRESHOLDS,
   OPERATION_RUNBOOKS,
@@ -552,5 +557,36 @@ describe("the history-window runbook (plano-escala F2-17, F2-18)", () => {
       before.indexOf("\\i prisma/post-deploy/31-activity-window.sql"),
     ).toBeGreaterThan(trail);
     expect(before).not.toContain("rode a etapa de novo");
+  });
+
+  // The window holds SHARE ROW EXCLUSIVE on the trail for the whole copy,
+  // up to the 60 s the gate allows, while a write of the API waits only the
+  // lock_timeout of its URL and then fails (U-13). The runbook and the
+  // 48 h notice it dictates have to say what users get: an error to
+  // repeat, not a short wait.
+  it("tells what a write gets during the pause: the 503 SERVICE_BUSY after the API's lock_timeout", () => {
+    const runtimeUrl = /^# DATABASE_URL=.*$/m.exec(
+      readFileSync(resolve(process.cwd(), ".env.example"), "utf8"),
+    )?.[0];
+    const lockTimeoutMs = Number(
+      /lock_timeout%3D(\d+)/.exec(runtimeUrl ?? "")?.[1],
+    );
+
+    expect(lockTimeoutMs).toBeGreaterThan(0);
+    expect(text).toContain(
+      `espera o lock no máximo o \`lock_timeout\` da API (${lockTimeoutMs / 1000} s`,
+    );
+    expect(text).toContain(`**503 \`${SERVICE_BUSY_CODE}\`**`);
+    expect(text).toContain(
+      `\`Retry-After\` de ${SERVICE_BUSY_RETRY_AFTER_SECONDS} s`,
+    );
+    expect(text).toContain(`"${SERVICE_BUSY_MESSAGE}"`);
+
+    const notice = before.slice(before.indexOf("48 h antes"));
+
+    expect(notice).toMatch(
+      /^48 h antes: [^\n]*falham com 503 `SERVICE_BUSY`[^\n]*mesma `Idempotency-Key`/,
+    );
+    expect(text).not.toMatch(/gravações [^\n.]*esperam/);
   });
 });

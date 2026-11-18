@@ -8,7 +8,7 @@ A linha do tempo das entregas (`delivery_event`) cresce para sempre e é lida po
 
 A cópia é o passo `prisma/post-deploy/30-delivery-event-window.sql` da etapa de release e **só roda dentro do intervalo** `HISTORY_WINDOW_APPROVED` do _Environment_ da `trajetto-api-migrate`: dois instantes ISO com fuso, separados por `/`, no máximo 24 h, por exemplo `2026-12-06T06:00:00Z/2026-12-06T07:30:00Z`. Fora dele, ou sem ele, o passo termina `skipped: aguardando janela`; um hotfix promovido depois nunca dispara a janela sem aviso. Dentro dele, o passo espera (`pending`) todo processo vivo anunciar `history-partition-agnostic-v1` e então, numa transação:
 
-1. trava as escritas da `delivery_event` (as leituras seguem): esse é o tempo de pausa, medido;
+1. trava as escritas da `delivery_event` (as leituras seguem): esse é o tempo de pausa, medido (o que ele faz com quem grava está logo abaixo);
 2. recupera em `delivery_event_submission` as chaves de envio que a imagem anterior gravou só na coluna;
 3. copia toda linha para a casca com o `txid` como está (NULL continua NULL): um integrador com cursor v2 não recebe nada repetido nem perde nada;
 4. confere as contagens;
@@ -17,6 +17,8 @@ A cópia é o passo `prisma/post-deploy/30-delivery-event-window.sql` da etapa d
 O registro de atividades (`activity`, F2-18) vai na mesma janela, pelo passo seguinte, `prisma/post-deploy/31-activity-window.sql`, com a mesma aprovação e a mesma capability: as escritas da `activity` param enquanto toda linha é copiada para a casca `activity_part`, e todo id de antes da troca para uuid v7 (09/2025, um uuid v4 aleatório) ganha um v7 do próprio `created_at`, o mesmo em toda rodada (a função `trajetto_activity_rekey`). A tabela de antes vira `activity_legacy`, com os ids antigos, por 14 dias; a partição de antes do primeiro mês vira `activity_older`. A linha do tempo aberta numa aba antes da janela recomeça do topo sozinha (o cabeçalho `x-trajetto-data-version` passa de `1` a `2`).
 
 O `applied:` diz quantas linhas foram copiadas (e, na `activity`, quantos ids foram re-chaveados) e a pausa de escrita (`pausa de escrita de N s`). Um lock que não veio, um erro ou contagens diferentes deixam tudo como estava e o passo diz `pending:` com o motivo: dá para rodar de novo dentro do intervalo.
+
+**O que a pausa faz com quem grava.** Uma gravação não espera a pausa inteira: espera o lock no máximo o `lock_timeout` da API (5 s, nas `options` da `DATABASE_URL` e nos logins por papel) e então falha sem gravar nada (a transação volta), com **503 `SERVICE_BUSY`** e `Retry-After` de 2 s. Vale para toda gravação que passa pela linha do tempo (criar entrega, mudar status, comprovante, ocorrência) e pela `activity`, que entra na transação de quase toda ação do painel, do app e da API pública: durante cada pausa, quase nada se grava. O app repete sozinho (respeita o `Retry-After`), a web mostra "O sistema está ocupado; tente de novo em instantes." e o usuário tenta de novo, e o integrador precisa repetir o pedido com a mesma `Idempotency-Key`. As leituras seguem, mas cada gravação que espera ocupa uma conexão do pool por até 5 s, e uma leitura pode receber 503 se o pool encher. Por isso o portão é a pausa do ensaio abaixo de 60 s, e o aviso de 48 h fala em erros, não em lentidão.
 
 ## Primeira ação
 
@@ -51,7 +53,7 @@ O `applied:` diz quantas linhas foram copiadas (e, na `activity`, quantos ids fo
    ```
 
 2. Anote a pausa do `NOTICE:  applied:` de cada passo (`pausa de escrita de N s`; à mão não há linha em `release_step_state`) num arquivo `docs/desempenho/<data>-janela-delivery-event.md`. O portão é **pausa de escrita abaixo de 60 s** em cada passo; acima disso, não faça a janela na produção e chame quem cuida do plano. Apague o Database descartável no fim.
-3. Escolha a janela (padrão: domingo, 03:00 BRT, 06:00 UTC) e avise clientes e integradores 48 h antes: durante a pausa, as gravações da linha do tempo e do registro de atividades esperam, e o feed `/integration/v1/events` atrasa (não pula evento).
+3. Escolha a janela (padrão: domingo, 03:00 BRT, 06:00 UTC) e avise clientes e integradores 48 h antes: durante a pausa de cada passo (até 1 minuto, pelo ensaio), as gravações que passam pela linha do tempo ou pelo registro de atividades, quase todas, falham com 503 `SERVICE_BUSY` e `Retry-After`; o integrador repete o pedido com a mesma `Idempotency-Key`, o app repete sozinho e, no painel, o usuário tenta de novo. As leituras seguem, e o feed `/integration/v1/events` atrasa (não pula evento).
 4. Confira que o full semanal do pgBackRest rodou no sábado.
 
 **Na janela:**
