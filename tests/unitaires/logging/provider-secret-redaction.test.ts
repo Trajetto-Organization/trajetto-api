@@ -38,6 +38,8 @@ const PROVIDER_SECRETS = [
   // The side pools of plano-escala F3-16.
   "DATABASE_READ_URL",
   "BATCH_DATABASE_URL",
+  // The pub/sub's own Redis (plano-escala F5-01).
+  "PUBSUB_REDIS_URL",
   "JWT_SECRET",
   "HEALTHCHECK_PING_URL",
   "WEBHOOK_SECRETS_KEY",

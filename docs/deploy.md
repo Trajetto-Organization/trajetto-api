@@ -4293,7 +4293,12 @@ FROM process_heartbeat ORDER BY role, replica;
 - **Tempo real com várias réplicas**: o evento emitido numa réplica chega ao
   cliente conectado em outra pelo pub/sub do Redis
   (`@socket.io/redis-adapter`). Todas as réplicas precisam do mesmo
-  `REDIS_URL` e do mesmo `SOCKET_ADAPTER_KEY`. Provado em
+  `REDIS_URL` e do mesmo `SOCKET_ADAPTER_KEY`. Todo cliente de pub/sub sai
+  de `src/shared/redis/pubsub-redis.ts` (F5-01): com `PUBSUB_REDIS_URL`, o
+  adapter e as dicas entre processos vão juntos para um Redis só deles, e os
+  contadores ficam na `REDIS_URL`; sem ela, nada muda. Ligue em todas as
+  Applications do environment no mesmo deploy (`redis-role-map.test.ts`
+  guarda o mapa dos clientes). Provado em
   `tests/E2E/multi-replica-events.test.ts`. Sem cookie sticky: WebSocket fica
   na réplica por natureza.
 - **Escalar a API**: _Advanced → Cluster Settings → Replicas_ da Application

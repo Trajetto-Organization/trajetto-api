@@ -28,6 +28,8 @@ const SECRET_ENV_KEYS = [
   "DATABASE_READ_URL",
   "BATCH_DATABASE_URL",
   "REDIS_URL",
+  // The pub/sub's own Redis (plano-escala F5-01).
+  "PUBSUB_REDIS_URL",
   "JWT_SECRET",
   "JWT_SECRET_REFRESH_TOKEN",
   "META_WHATSAPP_ACCESS_TOKEN",

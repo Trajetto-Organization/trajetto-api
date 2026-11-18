@@ -164,6 +164,27 @@ const envSchema = z
       .transform((value) => value === "true"),
 
     REDIS_URL: z.string(),
+
+    // A Redis of its own for the pub/sub (plano-escala F5-01): the Socket.IO
+    // adapter's frames and the hints between processes (the wake). Unset,
+    // the pub/sub stays on REDIS_URL, as always; the counters (rate limit,
+    // handshakes, tickets, the geocoder's budget) stay on REDIS_URL either
+    // way. Only for the trigger of the plan's section 7 (the Redis's CPU or
+    // its output buffers), and the same value on every Application of an
+    // environment, or the adapter splits the realtime in two. It carries the
+    // password: never logged (logger.ts censors it by name). Empty counts as
+    // absent.
+    PUBSUB_REDIS_URL: z.preprocess(
+      (value) => (value === "" ? undefined : value),
+      z
+        .string()
+        .refine(
+          (value) => /^rediss?:\/\//.test(value),
+          "PUBSUB_REDIS_URL precisa ser uma URL redis:// ou rediss:// (o mesmo formato da REDIS_URL)",
+        )
+        .optional(),
+    ),
+
     HTTP_REQUEST: z.string(),
     API_HTTP_REQUEST: z.string().optional(),
     JWT_SECRET: z.string(),

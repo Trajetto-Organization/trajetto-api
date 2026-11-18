@@ -82,10 +82,13 @@ import {
   socketTicketStore,
 } from "@/shared/socket/socket-ticket";
 import {
-  createAdapterRedisClients,
   socketAdapterOptions,
   waitForAdapterRedis,
 } from "@/shared/socket/adapter-redis";
+import {
+  adapterClients as createPubSubAdapterClients,
+  closePubSub,
+} from "@/shared/redis/pubsub-redis";
 import {
   jitteredInterval,
   judgeConnection,
@@ -772,7 +775,10 @@ async function initializeSocketIO(httpServer: Server): Promise<SocketIOServer> {
   // So the replica starts, logs that realtime is degraded, and the adapter
   // starts delivering across replicas the moment Redis answers — the sub
   // connection waits for it, and ioredis re-subscribes on every reconnect.
-  const adapterClients = createAdapterRedisClients(env.REDIS_URL, (error) =>
+  //
+  // From the pub/sub factory (plano-escala F5-01): the pub/sub's own Redis
+  // when there is one, REDIS_URL otherwise, as before.
+  const adapterClients = createPubSubAdapterClients((error) =>
     reportAdapterPublishFailure(error),
   );
 
@@ -2567,6 +2573,10 @@ async function shutdownSocketIO(): Promise<void> {
     await adapterSubClient?.quit();
     await handshakeRedis?.quit();
     await closeSocketTicketStore();
+
+    // The hints' pub/sub (the wake, F3-04): last, after everything that
+    // could still publish one.
+    await closePubSub();
   } catch {
     // Best-effort no shutdown — does not interfere with shutdown due to a quit error.
   } finally {
