@@ -595,4 +595,40 @@ describe("deleteTrailArchive and the housekeeping", () => {
 
     expect(rows.map((row) => row.object_key)).toEqual([presentKey]);
   });
+
+  it("treats a company whose purge started as gone, and a scheduled one as kept", async () => {
+    // plano-escala F3-26a: from PURGING on, the company's archive goes
+    // (the purge deletes it, the housekeeping catches what it missed); a
+    // SCHEDULED company can still be reactivated with everything in place.
+    const storage = new InMemoryArchiveStorage();
+    const purged = await company();
+    const scheduled = await company();
+
+    await admin.query(
+      `UPDATE business SET purge_state = 'PURGED' WHERE id = $1`,
+      [purged],
+    );
+    await admin.query(
+      `UPDATE business SET purge_state = 'SCHEDULED', purge_after = now() + interval '1 day' WHERE id = $1`,
+      [scheduled],
+    );
+
+    for (const businessId of [purged, scheduled]) {
+      const key = `trail/20261004/${businessId}.csv.gz`;
+
+      storage.objects.set(key, Buffer.from("z"));
+      await admin.query(
+        `INSERT INTO archive_manifest (id, source_table, partition_name, "businessId",
+           object_key, status, row_count, archived_at)
+         VALUES ($1, 'driver_position_v2', 'driver_position_v2_20261004', $2, $3, 'ARCHIVED', 1, now())`,
+        [randomUUID(), businessId, key],
+      );
+    }
+
+    await gateWith(storage).housekeeping();
+
+    expect([...storage.objects.keys()]).toEqual([
+      `trail/20261004/${scheduled}.csv.gz`,
+    ]);
+  });
 });

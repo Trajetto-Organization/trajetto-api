@@ -43,9 +43,9 @@ const log = logger.child({ component: "trail-archive" });
  *    is not uploaded again: a run cut short by its budget resumes where it
  *    stopped on the next night.
  *
- * The rows of a company that no longer exists are not archived: the
- * company's deletion took everything else of it, and its archive goes the
- * same way. They are written down as SKIPPED (with their count, so the sum
+ * The rows of a company that no longer exists, or whose purge started
+ * (PURGING, PURGED), are not archived: the company's deletion took
+ * everything else of it, and its archive goes the same way. They are written down as SKIPPED (with their count, so the sum
  * still adds up) and leave with the partition. The night's housekeeping
  * also deletes the archives of companies deleted since they were archived
  * (deleteTrailArchive), and purges the manifest rows whose objects the
@@ -105,6 +105,17 @@ const TRAIL_ARCHIVE_PAGE_SIZE = 5_000;
  * its object is an object deleteTrailArchive can no longer find.
  */
 const MANIFEST_PURGE_SLACK_DAYS = 7;
+
+/**
+ * A company whose trail is archived: one that exists and is not being
+ * purged. From PURGING on (plano-escala F3-26a) its trail is a deleted
+ * company's: a day still holding its rows is SKIPPED, and its archived
+ * objects go with the purge or with the housekeeping. A SCHEDULED one is
+ * still archived: it can be reactivated with everything in place.
+ */
+function keptCompany(alias: string): string {
+  return `(${alias}."purge_state" IS NULL OR ${alias}."purge_state" = 'SCHEDULED'::"BusinessPurgeState")`;
+}
 
 /** Companies whose archives one night's housekeeping deletes, at most. */
 const GONE_COMPANIES_PER_RUN = 100;
@@ -357,7 +368,8 @@ async function archiveTrailPartition(
       ? []
       : (
           await db.$queryRawUnsafe<Array<{ id: string }>>(
-            `SELECT "id" FROM "business" WHERE "id" = ANY($1::text[])`,
+            `SELECT b."id" FROM "business" b
+              WHERE b."id" = ANY($1::text[]) AND ${keptCompany("b")}`,
             ids,
           )
         ).map((row) => row.id),
@@ -721,7 +733,10 @@ function createTrailArchiveGate(
           `SELECT DISTINCT m."businessId" AS business_id
              FROM "archive_manifest" m
             WHERE m."status" <> 'SKIPPED'::"ArchiveObjectStatus"
-              AND NOT EXISTS (SELECT 1 FROM "business" b WHERE b."id" = m."businessId")
+              AND NOT EXISTS (
+                SELECT 1 FROM "business" b
+                 WHERE b."id" = m."businessId" AND ${keptCompany("b")}
+              )
             LIMIT ${GONE_COMPANIES_PER_RUN}`,
         );
 

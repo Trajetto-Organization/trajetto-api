@@ -28,6 +28,10 @@ import { resolveTimeZone } from "@/shared/time/business-day";
 import database from "@/../infra/database";
 import { emailLogoUrl } from "@/shared/providers/mail-provider/email-logo";
 import { withMailbox } from "@/modules/user/services/user-mailbox";
+import type { IBackgroundJobRepository } from "@/shared/jobs/background-job-repository";
+import { wakeJobsAfterCommit } from "@/shared/jobs/job-wake";
+
+import { purgeRefusal } from "../errors/business-purge-errors";
 
 const log = logger.child({ component: "business" });
 
@@ -37,6 +41,21 @@ const roleLabels: Record<string, string> = {
   BUSINESS_USER: "Usuário",
 };
 
+/**
+ * Deletes a company with the code the MASTER got by e-mail: the old
+ * "Deletar", for a company with no branch, user or driver left.
+ *
+ * Since plano-escala F3-26a it no longer deletes inside the request. The
+ * cascade of one DELETE held every row of the company for as long as it
+ * took (15 s and more for a company whose ERP created deliveries through
+ * the API), and the purge job does the same in short batches. So, in one
+ * transaction: the company inactive and SCHEDULED for now, the
+ * TENANT_OFFBOARD job enqueued with `removeRow` (the job removes the
+ * company's row at the end, freeing its CNPJ as the old delete did, instead
+ * of the tombstone of a scheduled purge), and the audit line as before.
+ * The answer is the same; the company leaves the list once the job ends,
+ * seconds later for an empty company.
+ */
 @injectable()
 class DeleteBusinessUseCase {
   constructor(
@@ -48,6 +67,8 @@ class DeleteBusinessUseCase {
     private pendingDeletion: IPendingDeletionProvider,
     @inject("NotificationService")
     private notificationService: NotificationService,
+    @inject("BackgroundJobRepository")
+    private jobs: IBackgroundJobRepository,
   ) {}
 
   async execute(
@@ -114,6 +135,12 @@ class DeleteBusinessUseCase {
       throw new BusinessDeletionCodeInvalidError();
     }
 
+    // A company whose purge is already on its way keeps it: the code does
+    // not start a second one.
+    if (existingBusiness.purge_state) {
+      throw purgeRefusal(existingBusiness.purge_state, "schedule");
+    }
+
     // Snapshot info BEFORE deletion (for notification email + activity log)
     const businessSnapshot = {
       name: existingBusiness.corporate_reason,
@@ -121,10 +148,29 @@ class DeleteBusinessUseCase {
       timeZone: existingBusiness.timezone,
     };
 
+    let businessDeleted: Business | null;
+
     try {
-      // The deletion and its audit entry commit together (OUTBOX-10).
-      const businessDeleted = await database.$transaction(async (tx) => {
-        const deleted = await this.business.deleteBusiness(businessId, tx);
+      // The purge's schedule, its job and the audit entry commit together
+      // (OUTBOX-10); the job deletes the rows and the company.
+      businessDeleted = await database.$transaction(async (tx) => {
+        const deleted = await this.business.schedulePurge(
+          businessId,
+          new Date(),
+          tx,
+        );
+
+        if (!deleted) return null;
+
+        await this.jobs.enqueue(
+          {
+            kind: "TENANT_OFFBOARD",
+            businessId,
+            subjectId: businessId,
+            payload: { businessId, scheduledById: userId, removeRow: true },
+          },
+          tx,
+        );
 
         await this.notificationService.createActivityIfEnabled(
           {
@@ -144,32 +190,52 @@ class DeleteBusinessUseCase {
 
         return deleted;
       });
-
-      await this.pendingDeletion.deletePendingDeletion(pending.id);
-
-      // Notify other MASTER users (excluding the deleter)
-      this.notifyOtherMasters({
-        deleterId: findUser.id,
-        deleterName: findUser.name,
-        deleterEmail: findUser.email,
-        deleterRole: roleLabels[findUser.role] || findUser.role,
-        businessName: businessSnapshot.name,
-        businessCnpj: businessSnapshot.cnpj,
-        businessTimeZone: businessSnapshot.timeZone,
-      }).catch((err) => {
-        log.warn(
-          { err, businessId },
-          "masters could not be notified about a business deletion",
-        );
-      });
-
-      return businessDeleted;
     } catch (error) {
       throw new AppError(
         "Houve um erro ao tentar deletar a empresa! Por favor, tente novamente.",
         500,
       );
     }
+
+    if (!businessDeleted) {
+      // Another MASTER scheduled or deleted it meanwhile: said as such.
+      const now = await this.business.findBusinessById(businessId);
+
+      if (!now) throw new BusinessNotFoundError();
+
+      throw purgeRefusal(now.purge_state ?? "SCHEDULED", "schedule");
+    }
+
+    // The code is spent. The purge's own step takes it too, and a job
+    // claimed by another process's sweep in between may already have.
+    await this.pendingDeletion
+      .deletePendingDeletion(pending.id)
+      .catch((err: unknown) => {
+        log.debug(
+          { err, businessId },
+          "pending deletion already gone with the purge",
+        );
+      });
+
+    wakeJobsAfterCommit();
+
+    // Notify other MASTER users (excluding the deleter)
+    this.notifyOtherMasters({
+      deleterId: findUser.id,
+      deleterName: findUser.name,
+      deleterEmail: findUser.email,
+      deleterRole: roleLabels[findUser.role] || findUser.role,
+      businessName: businessSnapshot.name,
+      businessCnpj: businessSnapshot.cnpj,
+      businessTimeZone: businessSnapshot.timeZone,
+    }).catch((err) => {
+      log.warn(
+        { err, businessId },
+        "masters could not be notified about a business deletion",
+      );
+    });
+
+    return businessDeleted;
   }
 
   private async notifyOtherMasters(params: {

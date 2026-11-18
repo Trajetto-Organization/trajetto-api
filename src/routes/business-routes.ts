@@ -422,7 +422,7 @@ async function businessRoutes(app: FastifyInstance) {
         tags: ["business"],
         summary: "Confirma a exclusão de uma empresa (com o código)",
         description:
-          "Segundo passo da exclusão. Valida o código de 6 dígitos recebido por e-mail e exclui a empresa de vez. Depois, os demais MASTER recebem um aviso de auditoria por e-mail, com a data no fuso da empresa excluída.",
+          "Segundo passo da exclusão. Valida o código de 6 dígitos recebido por e-mail e entrega a empresa ao job de exclusão (TENANT_OFFBOARD): ela fica inativa na hora, e o job apaga os dados em lotes e, no fim, a própria empresa, o que libera o CNPJ. A resposta não espera o job; uma empresa vazia sai da lista em segundos. Depois, os demais MASTER recebem um aviso de auditoria por e-mail, com a data no fuso da empresa excluída.",
         params: businessSchemas.updateDeleteBusiness,
         body: businessSchemas.confirmDeletionCode,
         response: {

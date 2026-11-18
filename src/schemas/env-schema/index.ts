@@ -1482,6 +1482,21 @@ const envSchema = z
       z.coerce.number().int().min(8).max(365).default(30),
     ),
 
+    // Whether a company's purge (plano-escala F3-26a) deletes its GPS trail
+    // now, driver by driver through the trail's primary key, instead of
+    // leaving it to the DROP of its daily partitions
+    // (DRIVER_POSITION_RETENTION_DAYS). Off by default: the company has
+    // been inactive since the purge was scheduled, so its trail is days
+    // from its DROP anyway, and the batches of the trail are the heaviest
+    // of the purge. On for a legal request that cannot wait. Empty counts
+    // as absent.
+    TENANT_PURGE_TRAIL_NOW: z
+      .preprocess(
+        (value) => (value === "" ? undefined : value),
+        z.enum(["true", "false"]).default("false"),
+      )
+      .transform((value) => value === "true"),
+
     // The bell's retention (plano-escala F5-14): days a read notification
     // and an unread one are kept before the nightly cleanup-user-history
     // removes them, as the job always did (90 and 180). An env so the

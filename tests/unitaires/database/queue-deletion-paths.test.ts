@@ -70,6 +70,14 @@ const PATHS: Record<string, { through: string } | { tolerated: string }> = {
   },
   "src/modules/integration/repositories/webhook-endpoint-repository.ts#delete":
     { through: "deleteQueueRowsOfWebhookEndpoint(" },
+  // A company's purge (F3-26a) removes the company's row last, for the
+  // old "Deletar": every queue row of the company left with the plan's own
+  // steps before (purge-plan.ts, tenant-purge-plan and tenant-offboard
+  // prove it), and the bell rows of the platform's users about it leave
+  // with the bell's retention.
+  "src/shared/jobs/tenant-offboard/tenant-offboard-job.ts#finishPurge": {
+    tolerated: "F3-26a",
+  },
   // Reverting an import deletes its deliveries; their external recipients
   // go by cascade, and the notifications addressed to them, once the keys
   // are gone, close as recipient_gone and leave with the event's purge.

@@ -2945,8 +2945,39 @@ o caminho que resolve.
   - O ativar/inativar recusa uma empresa com a exclusão agendada
     (`409 BUSINESS_PURGE_SCHEDULED`): ativada por ali, ela seria excluída
     ativa no dia.
-  - O expurgo em si (o job, em lotes, na ordem das FKs) entra com o F3-26a;
-    até lá o job espera, porque nenhum processo tem o handler dele.
+  - **O expurgo** (o job `TENANT_OFFBOARD`, plano de escala F3-26a,
+    `src/shared/jobs/tenant-offboard/`), pelo pool de manutenção
+    (`databaseBatch`, o login `trajetto_batch` depois do corte dos papéis):
+    - começa com `SELECT … FOR UPDATE` na empresa e grava PURGING na mesma
+      transação, só a partir de SCHEDULED com `purge_after` vencido; senão
+      termina sem apagar nada. O Reativar é um `UPDATE` condicional na
+      mesma linha: quem grava primeiro ganha. Reativada antes, a empresa
+      fica inteira; depois do PURGING, `409 BUSINESS_PURGE_RUNNING`. Nunca
+      uma empresa viva pela metade;
+    - apaga na ordem do plano (`purge-plan.ts`): o filho antes do pai, para
+      nenhum lote bater num RESTRICT (a pausa antes do motorista) nem
+      disparar uma cascata de tamanho desconhecido. Cada lote é uma
+      transação com o cursor do job, com `statement_timeout`,
+      `lock_timeout` e o teto de 5 s da transação; o lote que estoura volta
+      com a metade das linhas. O `tenant-purge-plan` (unitário, pelo
+      `schema.prisma`) e o `tenant-offboard` (E2E, pelo catálogo do banco)
+      falham quando uma tabela com linhas da empresa fica fora do plano ou
+      um filho vem depois do pai;
+    - o que ele deixa, e o que leva: as filas sem índice por empresa (os
+      eventos publicados, as chaves de envio, o sino dos usuários da
+      plataforma sobre a empresa) saem pela retenção de cada uma; a trilha
+      de GPS sai pelo DROP da partição do dia, ou na hora com
+      `TENANT_PURGE_TRAIL_NOW`; o arquivo da trilha (objetos e
+      `archive_manifest`) sai com `deleteTrailArchive`, e a partir do
+      PURGING o arquivo da noite trata a empresa como excluída;
+    - termina com a empresa PURGED: uma lápide sem o nome e o contato do
+      responsável (a lista do MASTER diz "Os dados da empresa foram
+      apagados"), e uma linha na auditoria da plataforma.
+  - **O "Deletar" com o código por e-mail** (a empresa sem filial, usuário
+    nem motorista) também passa pelo job: a confirmação agenda a exclusão
+    para agora (`removeRow`) e responde como antes; o job apaga em lotes e,
+    no fim, remove a linha da empresa, o que libera o CNPJ como o DELETE de
+    antes, sem a cascata de 15 s dentro do pedido.
 
 ## Entregas na rota: casos de borda
 
@@ -3752,8 +3783,8 @@ e os eventos da própria plataforma ficam com `NULL`, o balde "sem empresa".
 
 **Jobs duráveis (`background_job`, plano de escala F3-22).** O trabalho
 longo que vivia na memória de quem atendeu o pedido (a planilha de 20 mil
-linhas, o estorno grande e, nas ondas seguintes, a exclusão de uma empresa
-e a anonimização de uma pessoa) vira uma linha de `background_job`, com o
+linhas, o estorno grande, a exclusão de uma empresa e a anonimização de
+uma pessoa) vira uma linha de `background_job`, com o
 tipo (`kind`), a empresa (`businessId`, nulo nos da plataforma), o registro
 em que ele trabalha (`subjectId`: um job vivo por tipo e registro), o
 `payload` e o cursor (`progress`). Quem consome a fila `jobs` do

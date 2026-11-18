@@ -515,7 +515,7 @@ const businessResponses = {
     "BUSINESS_IN_USE: a empresa ainda tem filiais, usuários ou motoristas vinculados; a mensagem traz as contagens.",
   ),
   businessDeletionConflict: codedError(
-    "BUSINESS_IN_USE: a empresa ainda tem filiais, usuários ou motoristas vinculados; a mensagem traz as contagens. BUSINESS_DELETION_NOT_REQUESTED: não há pedido de exclusão desta empresa por este usuário — peça a exclusão (POST) antes de confirmar.",
+    "BUSINESS_IN_USE: a empresa ainda tem filiais, usuários ou motoristas vinculados; a mensagem traz as contagens. BUSINESS_DELETION_NOT_REQUESTED: não há pedido de exclusão desta empresa por este usuário — peça a exclusão (POST) antes de confirmar. BUSINESS_PURGE_ALREADY_SCHEDULED, BUSINESS_PURGE_RUNNING, BUSINESS_PURGED: a exclusão desta empresa já foi agendada, já começou ou já terminou; o código não começa outra.",
   ),
   requestBusinessDeletionErrors: codedError(
     "VALIDATION_ERROR: parâmetro inválido (com `issues`).",
