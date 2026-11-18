@@ -59,8 +59,8 @@ O `applied:` diz quantas linhas foram copiadas (e, na `activity`, quantos ids fo
 **Na janela:**
 
 1. Dokploy → `trajetto-api-migrate` da produção → _Environment_ → `HISTORY_WINDOW_APPROVED=<início ISO>/<fim ISO>` → _Save_.
-2. GitHub → _Actions_ → `production` → _Run workflow_ com `force-release` = true, e aprove o environment `production`.
-3. Acompanhe a task da `trajetto-api-migrate` até terminar e leia o `applied:` do `30-delivery-event-window.sql` e do `31-activity-window.sql`. Um `pending:` dentro do intervalo: leia o motivo; se for o lock ou a capability, rode o _Run workflow_ de novo enquanto o intervalo durar (o passo que já rodou diz `skipped`).
+2. Rode a etapa de release da produção **sem trocar de build**: Dokploy → `trajetto-api-migrate` da produção → **Deploy** (ela roda a imagem `:stable`, a que está no ar), ou GitHub → _Actions_ → `production` → _Run workflow_ com `image_tag` = a tag que a produção roda agora (o `sha-<7>` da última promoção verde, no resumo do _Staging evidence_ dela) e `force_release` marcado, e aprove o environment `production`. Nunca uma tag mais nova: o `image_tag` é obrigatório, e um build novo seria promovido para a produção na mesma noite, junto com a cópia, o que esta aprovação existe para evitar.
+3. Acompanhe a task da `trajetto-api-migrate` até terminar e leia o `applied:` do `30-delivery-event-window.sql` e do `31-activity-window.sql`. Um `pending:` dentro do intervalo: leia o motivo; se for o lock ou a capability, rode a etapa de novo pelo passo 2, do mesmo jeito, enquanto o intervalo durar (o passo que já rodou diz `skipped`).
 4. Confira o `/health/metrics` (as partições de `delivery_event` e de `activity` sem alerta), o feed de um integrador e o Registro de Atividades no painel.
 5. Rode um full do pgBackRest logo depois (_Schedules_ → backup full → _Run now_).
 6. Apague o `HISTORY_WINDOW_APPROVED` do _Environment_.

@@ -589,4 +589,53 @@ describe("the history-window runbook (plano-escala F2-17, F2-18)", () => {
     );
     expect(text).not.toMatch(/gravações [^\n.]*esperam/);
   });
+
+  // At 03:00 the owner fills the production workflow's form: image_tag is
+  // required with no default, and a newer tag than production's would ship
+  // a build together with the copy window, the surprise the approval
+  // exists to prevent. The steps name the form's inputs as it shows them.
+  it("runs the window's release step without changing the build, by the inputs production.yml has", () => {
+    const workflow = readFileSync(
+      resolve(process.cwd(), ".github/workflows/production.yml"),
+      "utf8",
+    ).replace(/\r\n/g, "\n");
+    const dispatch = workflow.slice(
+      workflow.indexOf("  workflow_dispatch:"),
+      workflow.indexOf("\npermissions:"),
+    );
+    const inputs = [...dispatch.matchAll(/^ {6}([a-z_]+):$/gm)].map(
+      (match) => match[1],
+    );
+    const imageTag = dispatch.slice(dispatch.indexOf("      image_tag:"));
+
+    expect(inputs).toEqual(
+      expect.arrayContaining(["image_tag", "force_release"]),
+    );
+    expect(imageTag).toMatch(
+      /^ {6}image_tag:\n(?: {8}.*\n)*? {8}required: true$/m,
+    );
+    expect(imageTag.split(/\n {6}[a-z_]+:\n/)[0]).not.toContain("default:");
+
+    const during = text.slice(
+      text.indexOf("**Na janela"),
+      text.indexOf("**A volta"),
+    );
+
+    expect(during).toContain("**sem trocar de build**");
+    expect(during).toContain("`image_tag` = a tag que a produção roda agora");
+    expect(during).toContain("`force_release` marcado");
+    expect(during).toContain("Nunca uma tag mais nova");
+    expect(text).not.toContain("force-release");
+
+    const variables = readFileSync(
+      resolve(process.cwd(), "docs/variaveis-de-ambiente.md"),
+      "utf8",
+    );
+    const approvalRow = variables
+      .split("\n")
+      .find((line) => line.startsWith("| `HISTORY_WINDOW_APPROVED`"));
+
+    expect(approvalRow).toContain("a `image_tag` que está no ar");
+    expect(approvalRow).not.toContain("force-release");
+  });
 });
