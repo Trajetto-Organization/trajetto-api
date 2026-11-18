@@ -18,8 +18,9 @@ import { createPrismaClient } from "@/shared/database/database-client";
  * Without the header, or with a wrong token, the answer is byte for byte
  * the 404 of a route that does not exist, headers included (no
  * `x-ratelimit-*`, never a 429): whoever probes it learns nothing. With the
- * token: the pending and failed steps and the last run, never cached, at
- * most 30 a minute.
+ * token: the pending and failed steps and the last run, the live processes
+ * (F3-31b) and the database's image revision, never cached, at most 30 a
+ * minute.
  */
 // Before any import reads the environment: it is parsed once.
 const TOKEN = vi.hoisted(() => {
@@ -196,19 +197,22 @@ describe("GET /health/rollout", () => {
 
     // A local build has no commit (build-info.ts); a CI one has it.
     expect(body.commit === null || typeof body.commit === "string").toBe(true);
-    expect(body).toEqual({
-      commit: body.commit,
-      release: {
-        pending: [
-          {
-            step: "prisma/post-deploy/10-swap.sql",
-            status: "pending",
-            detail: "esperando a capability",
-            updatedAt: "2026-11-17T10:00:00.000Z",
-          },
-        ],
-        lastRunAt: "2026-11-17T10:00:00.000Z",
-      },
+    expect(Object.keys(body).sort()).toEqual([
+      "commit",
+      "database",
+      "release",
+      "roles",
+    ]);
+    expect(body.release).toEqual({
+      pending: [
+        {
+          step: "prisma/post-deploy/10-swap.sql",
+          status: "pending",
+          detail: "esperando a capability",
+          updatedAt: "2026-11-17T10:00:00.000Z",
+        },
+      ],
+      lastRunAt: "2026-11-17T10:00:00.000Z",
     });
   });
 
@@ -217,5 +221,103 @@ describe("GET /health/rollout", () => {
 
     expect(response.statusCode).toBe(200);
     expect(response.json().release).toEqual({ pending: [], lastRunAt: null });
+  });
+});
+
+/**
+ * plano-escala F3-31b: the live processes, from process_heartbeat, for the
+ * deploy's wait-for-roles.mjs. Grouped and counted by role, environment,
+ * commit, fingerprint, queues, cron and sockets; a row out of the live
+ * window does not count; and no hostname, replica or node ever leaves.
+ */
+describe("GET /health/rollout, the roles", () => {
+  const COMMIT = `e2e-roles-${Date.now().toString(36)}`;
+  const REPLICAS = [1, 2, 3, 4].map((n) => `wfl-roles-host-${n}-${COMMIT}`);
+  const NODE = `wfl-roles-node-${COMMIT}`;
+
+  afterAll(async () => {
+    await prisma.processHeartbeat.deleteMany({
+      where: { replica: { in: REPLICAS } },
+    });
+  });
+
+  it("counts the live processes by what the deploy compares, never by host", async () => {
+    const row = (replica: string, extra: Record<string, unknown>) => ({
+      replica,
+      role: "worker",
+      app_env: "staging",
+      build_commit: COMMIT,
+      config_fingerprint: "0123456789abcdef",
+      node_hostname: NODE,
+      queues: ["outbox", "internal"],
+      cron: true,
+      sockets: false,
+      started_at: new Date(),
+      ...extra,
+    });
+
+    await prisma.processHeartbeat.createMany({
+      data: [
+        row(REPLICAS[0], {}),
+        row(REPLICAS[1], {}),
+        row(REPLICAS[2], {
+          role: "api",
+          queues: [],
+          cron: false,
+          sockets: true,
+        }),
+        // Stopped beating two minutes ago: no longer a live process.
+        row(REPLICAS[3], { updated_at: new Date(Date.now() - 120_000) }),
+      ],
+    });
+
+    const response = await get("/health/rollout", `Bearer ${TOKEN}`);
+
+    expect(response.statusCode).toBe(200);
+
+    const body = response.json();
+    const ours = body.roles.processes.filter(
+      (group: { commit: string | null }) => group.commit === COMMIT,
+    );
+
+    expect(body.roles).toMatchObject({
+      liveWindowSeconds: 90,
+      queues: ["outbox", "internal", "external", "webhooks", "ai", "jobs"],
+    });
+    expect(typeof body.roles.appEnv).toBe("string");
+    expect(ours).toEqual([
+      {
+        role: "api",
+        appEnv: "staging",
+        commit: COMMIT,
+        fingerprint: "0123456789abcdef",
+        queues: [],
+        cron: false,
+        sockets: true,
+        count: 1,
+      },
+      {
+        role: "worker",
+        appEnv: "staging",
+        commit: COMMIT,
+        fingerprint: "0123456789abcdef",
+        queues: ["outbox", "internal"],
+        cron: true,
+        sockets: false,
+        count: 2,
+      },
+    ]);
+
+    const raw = response.body;
+
+    for (const name of [...REPLICAS, NODE]) expect(raw).not.toContain(name);
+
+    // The stock postgres image carries no revision; trajetto-postgres
+    // carries its commit (or `dev`).
+    expect(Object.keys(body.database)).toEqual(["imageRevision"]);
+    expect(
+      body.database.imageRevision === null ||
+        /^[0-9A-Za-z._-]{1,64}$/.test(body.database.imageRevision),
+    ).toBe(true);
   });
 });

@@ -2195,6 +2195,7 @@ _Add environment secret_ / _Add environment variable_.
 | variable | `API_PUBLIC_URL`                                                                                                                                                                  | a origem pública da API de staging, `https://api-staging.intrajetto.com` (sem barra no fim): o pipeline espera a `/health/liveness` dela responder o commit novo ([seção 14](#14-conferir-a-convergência))                                                    | sim, enquanto `ROLLOUT_VERIFY` não for `off` nem `ssh` (é a conferência padrão do staging) |
 | variable | `SWARM_API_SERVICE`                                                                                                                                                               | `trajetto-api-staging` (o App Name da API)                                                                                                                                                                                                                    | só com `ROLLOUT_VERIFY=ssh`                                                                |
 | secret   | `ROLLOUT_STATUS_TOKEN`                                                                                                                                                            | o mesmo valor do `ROLLOUT_STATUS_TOKEN` da `trajetto-api` de staging (`openssl rand -hex 32`): o deploy lê os passos pendentes da etapa de release em `<API_PUBLIC_URL>/health/rollout` ([seção 15](#quando-a-etapa-roda)); sem ele, aviso e a regra de antes |
+| variable | `ROLLOUT_ROLES_EXPECTED`                                                                                                                                                          | os papéis que o deploy espera no commit novo ([seção 14](#os-papéis-da-mesma-imagem-rollout_roles_expected)): `all` enquanto só existe a `trajetto-api`; `api,worker` quando a `trajetto-worker` de staging existir (onda 12)                                 | não (sem ela, a conferência por papel não roda)                                            |
 | variable | `RELEASE_SERIALIZE_WITH_APPLICATION_ID`                                                                                                                                           | o applicationId da `trajetto-api-migrate` de **produção**: na VPS única a etapa de staging espera a de produção terminar. Sai quando a staging for para o 2º VPS                                                                                              |
 | variable | `RELEASE_TIMEOUT_SECONDS`                                                                                                                                                         | opcional (vazio = 1800, teto 3600): quanto a etapa de release pode levar no deploy, a espera pela do outro ambiente incluída                                                                                                                                  |
 | secrets  | `DEPLOY_SSH_HOST`, `DEPLOY_SSH_USER`, `DEPLOY_SSH_KNOWN_HOSTS`, `DEPLOY_VERIFY_SSH_KEY`                                                                                           | conferência do rollout ([seção 14](#14-conferir-a-convergência)); podem ficar no repositório, já que os dois ambientes dividem o host                                                                                                                         | só com `ROLLOUT_VERIFY=ssh`                                                                |
@@ -2218,6 +2219,7 @@ roda a partir de `main`):
 | variable | `API_PUBLIC_URL`                                                                                                                                                                  | a origem pública da API de produção; lida com `ROLLOUT_VERIFY=http` e para os passos pendentes da etapa de release (com o `ROLLOUT_STATUS_TOKEN`)                                                      |
 | variable | `SWARM_API_SERVICE`                                                                                                                                                               | `trajetto-api-production`                                                                                                                                                                              |
 | secret   | `ROLLOUT_STATUS_TOKEN`                                                                                                                                                            | o mesmo valor do `ROLLOUT_STATUS_TOKEN` da `trajetto-api` de produção (outro valor, não o do staging); lido em `<API_PUBLIC_URL>/health/rollout`, então a `API_PUBLIC_URL` precisa existir aqui também |
+| variable | `ROLLOUT_ROLES_EXPECTED`                                                                                                                                                          | `all` até a `trajetto-worker` de produção existir (onda 14); depois, `api,worker` ([seção 14](#os-papéis-da-mesma-imagem-rollout_roles_expected)). Sem ela, a conferência por papel não roda           |
 | variable | `RELEASE_SERIALIZE_WITH_APPLICATION_ID`                                                                                                                                           | o applicationId da `trajetto-api-migrate` de **staging**                                                                                                                                               |
 | variable | `RELEASE_TIMEOUT_SECONDS`                                                                                                                                                         | opcional (vazio = 1800, teto 3600)                                                                                                                                                                     |
 | secrets  | `DEPLOY_SSH_HOST`, `DEPLOY_SSH_USER`, `DEPLOY_SSH_KNOWN_HOSTS`, `DEPLOY_VERIFY_SSH_KEY`                                                                                           | conferência do rollout (só sem `ROLLOUT_VERIFY=http`)                                                                                                                                                  |
@@ -2377,6 +2379,46 @@ docker service inspect trajetto-api-production --format '{{json .Spec.TaskTempla
 
 Desligar (só numa emergência, e fica registrado no resumo do run): variável
 `ROLLOUT_VERIFY=off`.
+
+### Os papéis da mesma imagem (`ROLLOUT_ROLES_EXPECTED`)
+
+As duas conferências acima provam a API. Com o worker (e, depois, os outros
+papéis) como Application própria, um worker cuja task nova não passou no
+healthcheck volta ao build anterior pelo Swarm e continua consumindo as
+filas nele, com a API já no commit novo. Por isso, depois do deploy dos
+papéis de borda, roda mais um passo (plano de escala F3-31b):
+
+- O quê: `.github/scripts/wait-for-roles.mjs`, no runner do GitHub (testado
+  em `tests/unitaires/lifecycle/wait-for-roles.test.ts`).
+- Lê: `GET <API_PUBLIC_URL>/health/rollout`, com o `ROLLOUT_STATUS_TOKEN`
+  do environment, a cada 5 s. A resposta traz os processos vivos do
+  `process_heartbeat`, contados por papel, ambiente, commit, impressão da
+  configuração, filas, cron e sockets, sem nome de máquina, réplica ou nó.
+- Passa quando, por **90 s seguidos**: cada papel de
+  `ROLLOUT_ROLES_EXPECTED` tem um processo vivo no commit deste run; nenhum
+  processo deste ambiente roda outro commit; toda fila tem consumidor e
+  algum processo roda o cron (contados pela união dos processos no commit
+  novo); e todos os processos vivos têm a mesma impressão da configuração.
+- O papel `all` vale por api, worker e scheduler, dos dois lados: um
+  processo em `all` cobre `ROLLOUT_ROLES_EXPECTED=api,worker`, e o valor
+  `all` pede os três cobertos. A produção usa `all` até ter o worker dela
+  (onda 14); a staging, `api,worker` desde que o worker existe.
+- Falha quando: 600 s sem a janela fechar (um papel que não sobe, uma fila
+  sem consumidor, ninguém com o cron), Environments que divergem (duas
+  impressões), um processo do outro ambiente apontado para este banco, ou
+  um papel desconhecido na variável.
+- Não roda: sem o secret `ROLLOUT_STATUS_TOKEN` ou sem a variável
+  `ROLLOUT_ROLES_EXPECTED` (aviso, e o run é o de antes), com
+  `ROLLOUT_VERIFY=off`, num build anterior a esta conferência (a resposta
+  sem os processos: aviso) e quando a rota responde 404 três vezes seguidas
+  (um build anterior à rota, ou um token diferente do da API: aviso).
+
+À mão (o token nunca vai para a linha de comando de outra pessoa nem para
+um log):
+
+```sh
+curl -s -H "Authorization: Bearer $ROLLOUT_STATUS_TOKEN" https://api-staging.intrajetto.com/health/rollout
+```
 
 ## 15. Migrations
 

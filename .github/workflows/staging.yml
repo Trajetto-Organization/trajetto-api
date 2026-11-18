@@ -1135,6 +1135,7 @@ jobs:
           release-timeout-seconds: ${{ vars.RELEASE_TIMEOUT_SECONDS }}
           force-release: ${{ inputs.force_release == true }}
           rollout-status-token: ${{ secrets.ROLLOUT_STATUS_TOKEN }}
+          rollout-roles-expected: ${{ vars.ROLLOUT_ROLES_EXPECTED }}
           release-serialize-with-application-id: ${{ vars.RELEASE_SERIALIZE_WITH_APPLICATION_ID }}
           require-branch-head: "true"
           restore-api-tag: "true"

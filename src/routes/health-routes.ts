@@ -304,9 +304,9 @@ async function healthRoutes(app: FastifyInstance) {
       // session, and this route never answers 401 or 403 (only the 404).
       schema: {
         tags: ["health"],
-        summary: "Estado da etapa de release (para o pipeline)",
+        summary: "Estado da etapa de release e dos processos (para o pipeline)",
         description:
-          "O que a etapa de release deixou: os passos de `infra/sql` e `prisma/post-deploy` pendentes ou que falharam, e quando ela rodou pela última vez. O pipeline lê antes de cada deploy e roda a etapa de novo quando há um passo pendente. Exige `Authorization: Bearer <ROLLOUT_STATUS_TOKEN>`; sem o token configurado, sem o cabeçalho ou com um valor errado, responde o mesmo 404 de uma rota que não existe, sem os cabeçalhos do limitador. Com o token, até 30 pedidos por minuto, sem cache.",
+          "O que a etapa de release deixou: os passos de `infra/sql` e `prisma/post-deploy` pendentes ou que falharam, e quando ela rodou pela última vez. O pipeline lê antes de cada deploy e roda a etapa de novo quando há um passo pendente. Traz também os processos vivos (`process_heartbeat`), contados por papel, ambiente, commit, impressão da configuração, filas, cron e sockets, sem nome de máquina, réplica ou nó: depois do deploy, o pipeline espera cada papel esperado no commit novo, toda fila com consumidor, um processo com o cron e uma impressão só. E o `trajetto.image_revision` do banco. Exige `Authorization: Bearer <ROLLOUT_STATUS_TOKEN>`; sem o token configurado, sem o cabeçalho ou com um valor errado, responde o mesmo 404 de uma rota que não existe, sem os cabeçalhos do limitador. Com o token, até 30 pedidos por minuto, sem cache.",
         response: {
           200: healthResponses.rolloutStatus,
           404: errorResponse.describe(
@@ -328,7 +328,11 @@ async function healthRoutes(app: FastifyInstance) {
       // Throws the 429 (with its headers) past the ceiling.
       await rolloutCeiling.call(app, request, reply);
 
-      const status = await readRolloutStatus(database, buildInfo.commit);
+      const status = await readRolloutStatus(
+        database,
+        buildInfo.commit,
+        env.APP_ENV,
+      );
 
       return reply.header("cache-control", "no-store").status(200).send(status);
     },

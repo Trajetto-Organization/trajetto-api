@@ -468,6 +468,74 @@ const healthResponses = {
           "Quando a etapa de release terminou (ou falhou) pela última vez; null antes da primeira.",
         ),
     }),
+    roles: z
+      .object({
+        appEnv: z
+          .string()
+          .describe(
+            "O `APP_ENV` do processo que responde: os processos deste ambiente. Um grupo com outro `appEnv` é um processo de outro ambiente apontado para este banco.",
+          ),
+        liveWindowSeconds: z
+          .number()
+          .int()
+          .describe(
+            "Só contam os processos que gravaram o heartbeat nestes segundos (90).",
+          ),
+        queues: z
+          .array(z.string())
+          .describe(
+            "Todas as filas que este build conhece: cada uma precisa de um processo vivo que a consuma.",
+          ),
+        processes: z
+          .array(
+            z.object({
+              role: z
+                .string()
+                .describe(
+                  "O `PROCESS_ROLE` do processo: `all`, `api`, `worker`, `scheduler`, `realtime`, `worker-external` ou `ingest`.",
+                ),
+              appEnv: z.string().describe("O `APP_ENV` do processo."),
+              commit: z
+                .string()
+                .nullable()
+                .describe(
+                  "O commit do build do processo; null num build local.",
+                ),
+              fingerprint: z
+                .string()
+                .nullable()
+                .describe(
+                  "A impressão da configuração (16 hex: segredos, ambiente, banco e Redis, nunca os valores); null até o processo ler a identidade do banco e do Redis.",
+                ),
+              queues: z
+                .array(z.string())
+                .describe("As filas que o processo consome."),
+              cron: z.boolean().describe("O processo roda o cron."),
+              sockets: z.boolean().describe("O processo aceita sockets."),
+              count: z
+                .number()
+                .int()
+                .describe(
+                  "Quantos processos vivos têm exatamente estes campos.",
+                ),
+            }),
+          )
+          .describe(
+            "Os processos vivos, agrupados pelo que o pipeline compara; nunca o nome da máquina, da réplica ou do nó.",
+          ),
+      })
+      .nullable()
+      .describe(
+        "Os processos vivos (plano de escala F3-31b); null quando o `process_heartbeat` não pôde ser lido (o pipeline pergunta de novo).",
+      ),
+    database: z.object({
+      imageRevision: z
+        .string()
+        .nullable()
+        .describe(
+          "O `SHOW trajetto.image_revision`: o commit da imagem `trajetto-postgres`; null em outra imagem.",
+        ),
+    }),
   }),
   readinessCheck: z.object({
     status: z

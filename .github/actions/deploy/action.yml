@@ -77,7 +77,10 @@ inputs:
     description: "true: roda a etapa de release mesmo com a imagem de migração já aplicada (Run workflow com force_release)"
     default: "false"
   rollout-status-token:
-    description: "secrets.ROLLOUT_STATUS_TOKEN: lê os passos pendentes em GET <api-public-url>/health/rollout"
+    description: "secrets.ROLLOUT_STATUS_TOKEN: lê os passos pendentes e os processos em GET <api-public-url>/health/rollout"
+    default: ""
+  rollout-roles-expected:
+    description: "vars.ROLLOUT_ROLES_EXPECTED do environment: os papéis que precisam rodar o build (ex. all, ou api,worker); vazio = a conferência por papel não roda"
     default: ""
   release-serialize-with-application-id:
     description: "vars.RELEASE_SERIALIZE_WITH_APPLICATION_ID: a trajetto-api-migrate do outro ambiente, que esta espera terminar"
@@ -642,6 +645,29 @@ runs:
         DOKPLOY_INGEST_APPLICATION_ID: ${{ inputs.dokploy-ingest-application-id }}
         DOKPLOY_REALTIME_APPLICATION_ID: ${{ inputs.dokploy-realtime-application-id }}
       run: bash .github/scripts/deploy-roles.sh after-api
+
+    # Every role on this build (plano-escala F3-31b): the API's check above
+    # proves only the API, and a worker whose new task failed its
+    # healthcheck is rolled back by Swarm with the old one still claiming
+    # the queues. GET <api-public-url>/health/rollout counts the live
+    # processes (process_heartbeat), and wait-for-roles.mjs waits until each
+    # role of ROLLOUT_ROLES_EXPECTED runs this commit, every queue has a
+    # consumer, some process runs the cron and all of them share one
+    # configuration fingerprint, for 90 s, within 600 s. `all` covers api,
+    # worker and scheduler (D22: production expects `all` until its worker
+    # exists). Without the token or the variable, a notice and the run is
+    # today's; a build older than the roles is skipped with a notice;
+    # ROLLOUT_VERIFY=off skips it with the other checks.
+    - name: Wait for every role to run this build
+      id: verify-roles
+      if: steps.head.outputs.current == 'true' && steps.dokploy.outputs.enabled == 'true' && steps.verify.outputs.mode != 'off'
+      shell: bash
+      env:
+        API_URL: ${{ inputs.api-public-url }}
+        ROLLOUT_STATUS_TOKEN: ${{ inputs.rollout-status-token }}
+        ROLLOUT_ROLES_EXPECTED: ${{ inputs.rollout-roles-expected }}
+        EXPECTED_SHA: ${{ inputs.expected-commit }}
+      run: node .github/scripts/wait-for-roles.mjs
 
     # Once everything is green, the roles that were not deployed (no
     # Application id yet, or no Dokploy at all) get their tag on the API's

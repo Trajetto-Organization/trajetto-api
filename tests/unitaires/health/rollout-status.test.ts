@@ -41,10 +41,41 @@ describe("the rollout token", () => {
   });
 });
 
+/**
+ * A database whose release_step_state answers `steps` and whose raw reads
+ * answer, in order: the live processes (or throw), then the image revision.
+ */
+function databaseOf(
+  steps: unknown[],
+  processes: unknown[] | Error = [],
+  revision: string | null = null,
+) {
+  const findMany = vi.fn().mockResolvedValue(steps);
+  const queryRaw = vi.fn(
+    (strings: TemplateStringsArray, ..._values: unknown[]) =>
+      strings.join("?").includes("process_heartbeat")
+        ? processes instanceof Error
+          ? Promise.reject(processes)
+          : Promise.resolve(processes)
+        : Promise.resolve([{ revision }]),
+  );
+
+  return {
+    database: {
+      releaseStepState: { findMany },
+      $queryRaw: queryRaw,
+    } as never,
+    findMany,
+    queryRaw,
+  };
+}
+
+const QUEUES = ["outbox", "internal", "external", "webhooks", "ai", "jobs"];
+
 describe("the answer", () => {
   it("lists the pending and failed steps, and when the release step last ran", async () => {
     const at = new Date("2026-11-17T12:00:00.000Z");
-    const findMany = vi.fn().mockResolvedValue([
+    const { database, findMany } = databaseOf([
       { step: "@release", status: "applied", detail: "x", updated_at: at },
       {
         step: "prisma/post-deploy/10-swap.sql",
@@ -54,24 +85,19 @@ describe("the answer", () => {
       },
     ]);
 
-    const status = await readRolloutStatus(
-      { releaseStepState: { findMany } } as never,
-      "abc1234",
-    );
+    const status = await readRolloutStatus(database, "abc1234", "staging");
 
-    expect(status).toEqual({
-      commit: "abc1234",
-      release: {
-        pending: [
-          {
-            step: "prisma/post-deploy/10-swap.sql",
-            status: "pending",
-            detail: "esperando a capability",
-            updatedAt: "2026-11-17T12:00:00.000Z",
-          },
-        ],
-        lastRunAt: "2026-11-17T12:00:00.000Z",
-      },
+    expect(status.commit).toBe("abc1234");
+    expect(status.release).toEqual({
+      pending: [
+        {
+          step: "prisma/post-deploy/10-swap.sql",
+          status: "pending",
+          detail: "esperando a capability",
+          updatedAt: "2026-11-17T12:00:00.000Z",
+        },
+      ],
+      lastRunAt: "2026-11-17T12:00:00.000Z",
     });
     expect(findMany).toHaveBeenCalledWith({
       where: {
@@ -83,13 +109,101 @@ describe("the answer", () => {
 
   it("has no last run before the first release step", async () => {
     const status = await readRolloutStatus(
-      { releaseStepState: { findMany: async () => [] } } as never,
+      databaseOf([]).database,
       null,
+      "production",
     );
 
     expect(status).toEqual({
       commit: null,
       release: { pending: [], lastRunAt: null },
+      roles: {
+        appEnv: "production",
+        liveWindowSeconds: 90,
+        queues: QUEUES,
+        processes: [],
+      },
+      database: { imageRevision: null },
     });
+  });
+});
+
+/**
+ * plano-escala F3-31b: the live processes, for wait-for-roles.mjs. Grouped
+ * by everything the deploy compares and counted, never named: the answer
+ * carries no hostname, replica or node, so a leaked token maps nothing.
+ */
+describe("the roles", () => {
+  const group = {
+    role: "worker",
+    app_env: "staging",
+    build_commit: "abc1234",
+    config_fingerprint: "0123456789abcdef",
+    queues: ["outbox", "internal"],
+    cron: true,
+    sockets: false,
+    count: 2,
+  };
+
+  it("counts the live processes by role, environment, commit and configuration", async () => {
+    const { database, queryRaw } = databaseOf([], [group], "f00dfeed");
+
+    const status = await readRolloutStatus(database, "abc1234", "staging");
+
+    expect(status.roles).toEqual({
+      appEnv: "staging",
+      liveWindowSeconds: 90,
+      queues: QUEUES,
+      processes: [
+        {
+          role: "worker",
+          appEnv: "staging",
+          commit: "abc1234",
+          fingerprint: "0123456789abcdef",
+          queues: ["outbox", "internal"],
+          cron: true,
+          sockets: false,
+          count: 2,
+        },
+      ],
+    });
+    expect(status.database).toEqual({ imageRevision: "f00dfeed" });
+
+    const read = (queryRaw.mock.calls[0][0] as TemplateStringsArray).join("?");
+
+    expect(read).toContain('"updated_at" > now() - make_interval(secs => ?)');
+    expect(queryRaw.mock.calls[0][1]).toBe(90);
+    expect(read).not.toContain("replica");
+    expect(read).not.toContain("node_hostname");
+  });
+
+  it("answers the release half when process_heartbeat cannot be read", async () => {
+    const at = new Date("2026-11-17T12:00:00.000Z");
+    const { database } = databaseOf(
+      [
+        {
+          step: "infra/sql/10-x.sql",
+          status: "failed",
+          detail: null,
+          updated_at: at,
+        },
+      ],
+      new Error('relation "process_heartbeat" does not exist'),
+    );
+
+    const status = await readRolloutStatus(database, "abc1234", "staging");
+
+    expect(status.release.pending).toHaveLength(1);
+    expect(status.roles).toBeNull();
+  });
+
+  it("reads an empty image revision as none", async () => {
+    const status = await readRolloutStatus(
+      databaseOf([], [], "").database,
+      null,
+      "staging",
+    );
+
+    expect(status.database.imageRevision).toBeNull();
   });
 });
