@@ -544,6 +544,13 @@ class DeferredDeliveryError extends Error {
 }
 
 /**
+ * How the lastError of a message the company's WhatsApp quota holds starts
+ * (plano-escala F3-15b): heldReleaseAt finds the messages already held by
+ * it. No `%` nor `_` in it: it goes into a LIKE as it is.
+ */
+const WHATSAPP_QUOTA_HELD = "Cota diária de WhatsApp da empresa atingida";
+
+/**
  * The pipeline stopped WAITING on a send; the send itself is still in flight
  * and may yet be accepted. Not an outcome of the delivery — see
  * `runOneDelivery` for what happens instead of a retry.
@@ -2467,8 +2474,9 @@ class NotificationPipelineService {
    * One message of the company's daily WhatsApp quota (plano-escala
    * F3-15b; whatsapp-daily-quota.ts), right before the call to Meta. Past
    * the quota the row waits for the company's next business day without
-   * spending an attempt (DeferredDeliveryError), and the admins are told,
-   * once that day. With the quota off, nothing is read.
+   * spending an attempt (DeferredDeliveryError), in the order it was held
+   * (heldReleaseAt), and the admins are told, once that day. With the
+   * quota off, nothing is read.
    */
   private async takeWhatsAppQuota(delivery: ClaimedDelivery): Promise<void> {
     const businessId = delivery.event?.businessId ?? null;
@@ -2484,10 +2492,56 @@ class NotificationPipelineService {
     });
 
     throw new DeferredDeliveryError(
-      `Cota diária de WhatsApp da empresa atingida (${verdict.limit} por dia)`,
-      verdict.until,
+      `${WHATSAPP_QUOTA_HELD} (${verdict.limit} por dia)`,
+      await this.heldReleaseAt(delivery, businessId!, verdict.until),
       `aguardando o próximo dia da empresa, ${verdict.until.toISOString()}`,
     );
+  }
+
+  /**
+   * When a message the company's quota holds goes out (plano-escala
+   * F3-15b): one millisecond after the last one already held for the same
+   * day, or at the day's start for the first. Held all at the start of
+   * the day, they became due at one instant, and the claims, which order
+   * by availableAt alone (the lane's index has nothing after it), took
+   * them in no order: the next day's quota went to any of them, and an
+   * older message could be held again behind newer ones, against the
+   * notice that says they go out in the order they came. The held ones
+   * are told by their lastError (WHATSAPP_QUOTA_HELD), not by the window
+   * alone: a retry scheduled past midnight (backoffs reach 3 h) must not
+   * push the held messages behind it. One backward probe of the company's
+   * fair index, notification_delivery_business_external_idx; two messages
+   * held at the same instant may share a millisecond, the order they had
+   * anyway. A failed probe holds the message for the day's start, as
+   * before: the order is never worth a lost hold.
+   */
+  private async heldReleaseAt(
+    delivery: ClaimedDelivery,
+    businessId: string,
+    dayStart: Date,
+  ): Promise<Date> {
+    try {
+      const [last] = await database.$queryRaw<Array<{ at: Date | null }>>`
+        SELECT max("availableAt") AS "at" FROM "notification_delivery"
+        WHERE "business_id" = ${businessId}
+          AND "status" IN ('PENDING', 'PROCESSING')
+          AND "channel" IN ('EMAIL', 'WHATSAPP')
+          AND "status" = 'PENDING'
+          AND "channel" = 'WHATSAPP'
+          AND "availableAt" >= ${dayStart}
+          AND "availableAt" < ${new Date(dayStart.getTime() + 86_400_000)}
+          AND "lastError" LIKE ${`${WHATSAPP_QUOTA_HELD}%`}
+      `;
+
+      return last?.at ? new Date(last.at.getTime() + 1) : dayStart;
+    } catch (error) {
+      log.warn(
+        { ...this.deliveryLogFields(delivery), err: error },
+        "the place of a message held by the WhatsApp quota could not be read; it waits for the day's start",
+      );
+
+      return dayStart;
+    }
   }
 
   /**

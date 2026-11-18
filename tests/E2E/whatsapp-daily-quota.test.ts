@@ -211,6 +211,61 @@ describe("the company's daily WhatsApp quota", () => {
     expect(day).toEqual({ used: 3, day: today });
   });
 
+  it("holds them a millisecond apart from the company's next day, in the order they were held", async () => {
+    // All held at the day's start, they became due at one instant, and
+    // the claims (by availableAt alone) took them in no order: the next
+    // day's quota went to any of them, against the bell's "na ordem em
+    // que chegaram".
+    env.WHATSAPP_DAILY_QUOTA_PER_TENANT = 1;
+
+    const today = businessDateKey(new Date(), TIME_ZONE);
+    const start = businessDayStart(shiftDateKey(today, 1), TIME_ZONE);
+
+    // A retry of another message scheduled past midnight is not one of
+    // the held: they do not queue behind it.
+    const retry = await prisma.notificationDelivery.create({
+      data: {
+        outboxEventId: randomUUID(),
+        userId: ACTOR,
+        channel: "WHATSAPP",
+        status: "PENDING",
+        attempts: 3,
+        availableAt: new Date(start.getTime() + 2 * 3_600_000),
+        business_id: BUSINESS,
+        lastError: "[whatsapp http=500] Falha temporária da Meta",
+      },
+    });
+
+    // One at a time: the order they are held in is the order they came.
+    const events: string[] = [];
+
+    for (let n = 0; n < 4; n += 1) {
+      events.push(await publish());
+      await drain();
+    }
+
+    expect(whatsapp.sent).toHaveLength(1);
+
+    const rows = await whatsAppRows();
+    const held = events
+      .map((event) => rows.find((row) => row.outboxEventId === event)!)
+      .filter((row) => row.status === "PENDING");
+
+    expect(held).toHaveLength(3);
+    expect(
+      held.map((row) => row.availableAt.getTime() - start.getTime()),
+    ).toEqual([0, 1, 2]);
+
+    // The retry keeps its own time.
+    expect(
+      (
+        await prisma.notificationDelivery.findUniqueOrThrow({
+          where: { id: retry.id },
+        })
+      ).availableAt.getTime(),
+    ).toBe(start.getTime() + 2 * 3_600_000);
+  });
+
   it("tells the admins once a day, in the bell only, however many wait", async () => {
     env.WHATSAPP_DAILY_QUOTA_PER_TENANT = 1;
 

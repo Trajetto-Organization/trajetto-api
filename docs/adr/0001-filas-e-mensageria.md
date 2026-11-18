@@ -359,7 +359,12 @@ uma unidade da `provider_quota_day` (provedor `whatsapp`, escopo
 Postgres, porque o que é contrato não pode sumir num despejo do Redis
 (`src/shared/notifications/whatsapp-daily-quota.ts`). Passou da cota, a
 linha volta para a fila sem gastar tentativa, com `availableAt` no começo
-do próximo dia de negócio da empresa, e nunca cai para o e-mail. Os
+do próximo dia de negócio da empresa, um milissegundo depois da última já
+guardada para aquele dia: todas no mesmo instante saíam em qualquer ordem,
+e uma mais velha podia ficar para o dia seguinte atrás de mais novas. A
+guardada se reconhece pelo começo do `lastError`, então uma nova tentativa
+de outra mensagem marcada para depois da meia-noite não empurra as
+guardadas. Nunca cai para o e-mail. Os
 administradores recebem o aviso `whatsapp-quota.reached` no sino, uma vez
 por dia: a chave do evento no outbox (`whatsapp-quota.reached:<empresa>:<dia>`)
 é a deduplicação.
