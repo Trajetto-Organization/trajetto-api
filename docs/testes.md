@@ -501,7 +501,12 @@ mede a conexão, as quedas e a volta depois de um restart; pela borda
 (`--via-edge`), com os tetos dela (20 handshakes/s, 10 min, a `load-window`,
 1.000 sockets na VPS única) e as sondas do burn-in.
 `socket-fleet.test.ts` roda a frota contra um Socket.IO no loopback, com 8
-origens e um restart ([`deploy.md`](./deploy.md#frota-de-sockets-pela-borda-load-05)). O
+origens e um restart ([`deploy.md`](./deploy.md#frota-de-sockets-pela-borda-load-05)).
+`gate.sh` (LOAD-08) roda um portão de capacidade a partir do gerador, que
+nunca é o alvo (recusa um `TARGET_HOST_IP` desta máquina e os hosts da
+produção e da staging), e escreve o relatório em `docs/desempenho`;
+`gate-script.test.ts` o executa com stubs, e `performance-reports.test.ts`
+recusa um relatório sem o commit, sem o digest ou sem o gerador. O
 `seed.ts` prepara o banco `load_test` (empresas, motoristas, histórico); com
 `LOAD_TIER` (`tiny`, `100k`, `1m`, `5m` ou `prod-like`, plano de escala
 LOAD-02) a população vem em SQL de massa, com cauda longa de Zipf, as 150 mil

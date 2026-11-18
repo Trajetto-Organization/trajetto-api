@@ -18,6 +18,37 @@ no formato do [`TEMPLATE.md`](./TEMPLATE.md). O nome do arquivo é
   ([runbook](../runbooks/volume-near-gate.md)) avisa quando as entregas dos
   últimos 7 dias, projetadas para o mês, passam de 70% dele.
 - Um relatório aprovado não se edita: um portão refeito é um arquivo novo.
+- O gerador de carga é sempre outra máquina (plano de escala, D71): um k6
+  no próprio alvo prova só a contenção.
+
+## Como um relatório nasce
+
+O `tests/load/gate.sh B|100k|1m|5m` roda a partir do gerador (o passo a
+passo e as variáveis em
+[`tests/load/README.md`](../../tests/load/README.md), "Portão"):
+
+1. Recusa antes de tudo: os hosts da produção (`api.intrajetto.com`, `www`
+   e o domínio), os da staging, e um `TARGET_HOST_IP` que seja um IP do
+   próprio gerador (loopback, qualquer interface, ou um nome que resolva
+   para uma delas).
+2. Roda as cenas do portão (as do `tests/load/lib/gate-report.mjs`) contra
+   o alvo vazio e coleta, do alvo pelo SSH, o hostname, o `nproc`, a
+   memória, o `vmstat 5` da corrida inteira (o steal), o `docker stats` no
+   meio de cada cena, as imagens por digest e o top 20 do
+   `pg_stat_statements`; do `/health/liveness` do alvo, o commit servido;
+   do gerador, o hostname, o IP de onde ele chega ao alvo e o `nproc`.
+3. Escreve aqui `<data>-<degrau>.md`, no formato do
+   [`TEMPLATE.md`](./TEMPLATE.md), com uma linha por critério da seção 6 do
+   plano. O que nenhuma cena do harness mede ainda (as filas do LOAD-04, a
+   escala de 3 para 6, o PITR…) sai "pendente", com o jeito de medir; o
+   resultado sai "incompleto" até o dono preencher essas linhas.
+
+**O que impede de versionar** (`tests/unitaires/docs/performance-reports.test.ts`):
+um relatório sem o commit, sem o digest da `trajetto-api`, sem o hostname,
+o IP e o `nproc` do gerador, com o resultado fora de aprovado, reprovado ou
+no limite, com um critério que não seja "sim" ou "não", com um campo do
+template ainda em `<…>`, com outro nome que não `<data>-<degrau>.md`, ou
+fora da tabela abaixo.
 
 ## Relatórios
 

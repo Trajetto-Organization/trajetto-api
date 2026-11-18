@@ -1,9 +1,14 @@
 # Portão `<degrau>` — `<data>`
 
-> Copie este arquivo para `docs/desempenho/<data>-<degrau>.md` e preencha
-> todos os campos. Campo sem valor fica com o motivo ("não medido: …"), nunca
-> em branco. Nenhum IP, token ou e-mail real além do que a seção "Gerador"
-> pede; o host do alvo, só pelo nome.
+> O `tests/load/gate.sh` escreve este arquivo a partir do gerador, com os
+> fatos das duas máquinas e uma linha por critério. À mão, copie para
+> `docs/desempenho/<data>-<degrau>.md` e preencha todos os campos. Campo sem
+> valor fica com o motivo ("não medido: …"), nunca em branco, e nenhum
+> fica com `<…>`. Nenhum IP, token ou e-mail real além do que a seção
+> "O gerador" pede; o host do alvo, só pelo nome. O
+> `performance-reports.test.ts` recusa o relatório sem o commit, sem o
+> digest da `trajetto-api`, sem o hostname, o IP e o `nproc` do gerador, ou
+> com um critério que não seja "sim" ou "não".
 
 ## Resumo
 
@@ -15,11 +20,14 @@
 | `APPROVED_GATE_MONTHLY_DELIVERIES` proposto | `<entregas por mês>` (hoje: `<valor atual>`) |
 | Aprovado por                                | `<nome>` em `<data>`                         |
 
+O `gate.sh` escreve "incompleto" quando o que ele mede passou e há linhas
+pendentes: o dono as preenche e põe o resultado antes de versionar.
+
 ## O que rodou
 
 | Campo     | Valor                                                                   |
 | --------- | ----------------------------------------------------------------------- |
-| Commit    | `<sha>` (API), `<sha>` (web), `<sha>` (app), quando entram              |
+| Commit    | `<sha>` (API, do `/health/liveness` do alvo), `<sha>` (harness)         |
 | Digests   | `trajetto-api@sha256:<…>`, `trajetto-api-migrate@sha256:<…>`, os outros |
 | Seed      | `LOAD_TIER=<…>`, empresas, entregas, motoristas; tempo do seed          |
 | Réplicas  | por papel (api, worker, realtime, ingest…) e o limite de cada uma       |
@@ -37,6 +45,9 @@
 
 ## O gerador
 
+Sempre outra máquina: o `gate.sh` recusa um `TARGET_HOST_IP` que seja um
+IP do gerador.
+
 | Campo    | Valor                                            |
 | -------- | ------------------------------------------------ |
 | Hostname | `<nome>`                                         |
@@ -46,7 +57,8 @@
 
 ## Critérios e números
 
-Uma linha por critério do portão, com o limite e o medido:
+Uma linha por critério do portão, com o limite, o medido e "sim" ou "não"
+em Passou:
 
 | Critério                 | Limite     | Medido | Passou |
 | ------------------------ | ---------- | ------ | ------ |
@@ -57,7 +69,7 @@ Uma linha por critério do portão, com o limite e o medido:
 ## Anexos
 
 - **Resumo do k6** de cada cenário (o `--summary-export`, colado ou como
-  arquivo ao lado).
+  arquivo ao lado) e o JSON do `socket-fleet`.
 - **`docker stats`** do pico (CPU e memória por contêiner).
 - **Top 20 do `pg_stat_statements`** da corrida, por tempo total
   (`pgss_snapshot` da hora, ou a leitura direta).

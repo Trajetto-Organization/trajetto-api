@@ -60,6 +60,11 @@ export const options = {
     "surface_latency{phase:late}": ["p(95)<800"],
     "surface_failures{phase:late}": ["rate<0.01"],
 
+    // Always holds: only so the summary-export carries the start, which the
+    // 100k gate compares the end with (p95 of the end at most 1.2× it;
+    // tests/load/gate.sh, LOAD-08).
+    "surface_latency{phase:early}": ["max>=0"],
+
     /**
      * How much of the load never reached the server.
      *

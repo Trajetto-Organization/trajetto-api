@@ -874,3 +874,56 @@ motoristas que a fixture cria hoje.
 loopback (8 origens em 127.0.0.2–9, uma recusa com `retryAfterMs`, um
 restart que derruba todos) e confere o plano, os tetos da borda, o
 compassador, as sondas e o `merge`.
+
+## Portão (`gate.sh`, LOAD-08)
+
+Os portões de capacidade da seção 6 do plano de escala (B, 100k, 1M e 5M)
+rodam num servidor novo e vazio, com o gerador de carga **noutra máquina**
+(D71: um k6 no próprio alvo prova só a contenção). O `gate.sh` roda no
+gerador, com este repositório clonado e o `yarn install` feito (a cena de
+sockets usa o `socket.io-client` dele), e escreve o relatório em
+[`docs/desempenho`](../../docs/desempenho/README.md):
+
+```bash
+export TARGET_HOST_IP='<ip do alvo>'
+export GATE_TARGET_URL="http://$TARGET_HOST_IP"   # a origem, pela rede privada
+export GATE_TARGET_SSH="root@$TARGET_HOST_IP"     # os fatos do alvo
+GATE_SEED_TIER=100k GATE_TARGET_MACHINE='<provedor, plano, região>' \
+  bash tests/load/gate.sh 100k
+```
+
+- **Recusa antes de tudo**, sem tocar no docker nem no SSH: os hosts da
+  produção (`api.intrajetto.com`, `www`, o domínio) e os da staging; um
+  `TARGET_HOST_IP` que seja desta máquina (loopback, um IP das interfaces,
+  ou um nome do alvo que resolva para um deles); e uma URL que aponte para
+  outro IP que não o `TARGET_HOST_IP`.
+- **As cenas** de cada portão estão em `lib/gate-report.mjs`, com o critério
+  de cada uma: o B roda o `load.js` (30 min, vazão por réplica ≥ 80 req/s,
+  com `GATE_REPLICAS`) e o `rolling.js` (0 respostas 5xx, com o _Redeploy_
+  da api feito à mão quando o roteiro avisa); o 100k roda o load a 200
+  req/s, o soak de 2 h, o pico com o aceite do descarte, 1.000 sockets por
+  60 min (`socket-fleet.mjs`), o rolling a 100 req/s, o vizinho ruidoso e
+  a queda; o 1M e o 5M, o load do degrau e os sockets que um gerador
+  segura. `GATE_SCENES=load` roda só uma cena.
+- **Os fatos**: do alvo, pelo SSH, o hostname, o `nproc`, a memória, o
+  `vmstat 5` da corrida inteira (o steal), o `docker stats` no meio de
+  cada cena, as imagens por digest e o top 20 do `pg_stat_statements`
+  (zerado no começo; só estatística); do `/health/liveness`, o commit
+  servido; do gerador, o hostname, o IP de onde ele chega ao alvo e o
+  `nproc`. Os tokens do seed (`fixtures/load-context.json`, ou
+  `GATE_CONTEXT_FILE`) vão aos contêineres pelo nome da variável, nunca na
+  linha de comando.
+- **O relatório** é `docs/desempenho/<data>-<degrau>.md` (um portão refeito
+  no mesmo dia vira `-2`, `-3`…): uma linha por critério, com o limite, o
+  medido e sim ou não. O que nenhuma cena mede ainda (as filas do LOAD-04,
+  a escala de 3 para 6, o PITR…) sai "pendente", com o jeito de medir, e o
+  resultado sai "incompleto" até o dono preencher. Os resumos brutos ficam
+  em `tests/load/results/gate-<…>`, fora do Git.
+- Saída: 0 aprovado, 1 reprovado, 2 recusou começar, 3 o que ele mede
+  passou e há linhas pendentes.
+
+`gate-script.test.ts` executa o roteiro com stubs (docker, ssh, curl, ip,
+hostname, nproc e sleep): as recusas sem tocar em nada, o relatório com o
+commit, o digest e o gerador, e o reprovado com um 5xx.
+`performance-reports.test.ts` confere todo relatório da pasta e o
+verificador que recusa um sem o commit, sem o digest ou sem o gerador.
