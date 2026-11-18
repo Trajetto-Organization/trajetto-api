@@ -2,6 +2,7 @@ import { importReversalJob } from "@/modules/import/services/import-reversal-job
 import { spreadsheetImportJob } from "@/modules/import/services/spreadsheet-import-job";
 
 import { JobRunner } from "./job-runner";
+import { partitionArchiveJob } from "./partition-archive";
 import { tenantOffboardJob } from "./tenant-offboard/tenant-offboard-job";
 import { userAnonymizeJob } from "./user-anonymize/user-anonymize-job";
 
@@ -24,6 +25,10 @@ function registerJobHandlers(
 
   // A driver or a login who worked, removed and anonymized (F3-27).
   runner.register("USER_ANONYMIZE", userAnonymizeJob);
+
+  // A day of the GPS trail to the archive bucket, off the nightly cron
+  // (F3-28): enqueued by partition-maintenance with TRAIL_ARCHIVE_ENABLED.
+  runner.register("PARTITION_ARCHIVE", partitionArchiveJob);
 }
 
 export { registerJobHandlers };

@@ -4157,12 +4157,18 @@ que apagaria comprovantes), com token próprio, antes de apagar a partição:
   `PENDING` antes do primeiro byte, e a chave é fixa por dia e empresa:
   depois de uma queda, a nova execução reescreve o mesmo objeto, sem
   duplicata;
-- a partição só é destacada e apagada quando a soma do manifesto bate com o
-  `count` dela, tirado depois do envio (`archive_partition` registra isso).
-  Se não bate, se o orçamento da execução (`CRON_PURGE_RUN_BUDGET_MS`) acabou
-  ou se o bucket não respondeu, o dia fica para a noite seguinte, e o alerta
-  `partition-stuck` aparece em três noites
-  ([runbook](./runbooks/partition-stuck.md));
+- desde o F3-28, o cron não arquiva: ele enfileira o job
+  `PARTITION_ARCHIVE` do dia (um job vivo por partição,
+  `src/shared/jobs/partition-archive.ts`) e mantém o dia anexado. O job
+  roda em quem consome a fila `jobs`, em fatias de 60 s com o cursor
+  gravado entre elas; morto no meio (SIGKILL, queda do bucket), a próxima
+  tentativa retoma pelo manifesto, sem objeto repetido;
+- a partição só é destacada e apagada numa noite seguinte, quando a soma do
+  manifesto bate com o `count` dela, tirado depois do envio
+  (`archive_partition` registra isso), e nenhum job do dia está vivo. Se
+  não bate ou se o bucket não respondeu, o job tenta de novo com espera e,
+  esgotado, fica FAILED; o dia fica anexado, e o alerta `partition-stuck`
+  aparece em três noites ([runbook](./runbooks/partition-stuck.md));
 - as linhas de uma empresa que já não existe não são arquivadas (entram no
   manifesto como `SKIPPED`, com a contagem); a faxina da mesma execução
   apaga o arquivo das empresas excluídas depois de arquivadas
@@ -4172,7 +4178,9 @@ que apagaria comprovantes), com token próprio, antes de apagar a partição:
 
 Para ler um dia arquivado (disputa ou pedido legal): R2 → bucket de arquivo →
 o objeto do dia e da empresa; o `sha256` e o `row_count` dele estão em
-`archive_manifest`.
+`archive_manifest`. Antes de entregar, tire as linhas dos motoristas
+removidos e anonimizados (`trail_archive_redaction`, F3-27;
+`withoutRedactedDrivers`).
 
 **Importação de planilha** (`POST /import/import-spreadsheet/:businessId`) é
 assíncrona: o pedido valida embarcador e arquivo (tamanho inflado, células e

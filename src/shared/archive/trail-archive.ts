@@ -607,10 +607,29 @@ interface TrailArchiveGate {
   housekeeping(): Promise<void>;
 }
 
+/**
+ * The PARTITION_ARCHIVE jobs (plano-escala F3-28), as the gate sees them:
+ * with them, the night only enqueues an expired day and keeps it, and the
+ * job archives it off the cron (src/shared/jobs/partition-archive.ts).
+ */
+interface TrailArchiveJobs {
+  /** Whether a job of the partition is still live (pending or running). */
+  running(name: string): Promise<boolean>;
+
+  /** Enqueues the partition's archive: one live job per partition. */
+  enqueue(table: string, partition: TrailPartition): Promise<void>;
+}
+
 interface TrailArchiveGateOptions {
   db: ArchiveDatabase;
   /** Null: enabled without the bucket or the token (`missing` says which). */
   storage: ArchiveStorage | null;
+
+  /**
+   * The jobs that archive a day (F3-28). Absent: the gate archives inline,
+   * inside the night's budget, as it did before the jobs.
+   */
+  jobs?: TrailArchiveJobs;
   missing?: readonly string[];
   /** Epoch ms past which no new company is started. */
   deadline: number;
@@ -663,6 +682,32 @@ function createTrailArchiveGate(
       }
 
       if (storageDown) return false;
+
+      // F3-28: the day goes only once its manifest adds up and no job of it
+      // is still running; until then it is handed to the job and kept.
+      if (options.jobs) {
+        try {
+          if (
+            (await verified(partition.name)) &&
+            !(await options.jobs.running(partition.name))
+          ) {
+            return true;
+          }
+
+          await options.jobs.enqueue(table, partition);
+          log.info(
+            { table, partition: partition.name },
+            "trail day handed to its archive job; kept until its manifest adds up",
+          );
+        } catch (error) {
+          log.warn(
+            { table, partition: partition.name, error: errorMessage(error) },
+            "trail archive job could not be enqueued: the day is kept",
+          );
+        }
+
+        return false;
+      }
 
       try {
         const verdict = await archiveTrailPartition(source, partition, {
@@ -836,6 +881,7 @@ export type {
   ArchiveDatabase,
   ArchiveVerdict,
   TrailArchiveGate,
+  TrailArchiveJobs,
   TrailArchiveGateOptions,
   TrailPartition,
   TrailSource,

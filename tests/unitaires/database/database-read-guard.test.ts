@@ -99,16 +99,18 @@ const READ_FORBIDDEN = [
 /**
  * Who may run on the maintenance pool: the crons and what they call, and
  * the durable jobs that do maintenance of their own (plano-escala F3-23a,
- * F3-26a, F3-27): the release of a stored spreadsheet's object, a
- * company's purge and a person's anonymization, whose batches delete or
- * rewrite what only trajetto_batch may after the cut of the roles (the
- * delivery trail).
+ * F3-26a, F3-27, F3-28): the release of a stored spreadsheet's object, a
+ * company's purge, a person's anonymization and a day of the trail's
+ * archive, whose batches delete or rewrite or read what only
+ * trajetto_batch may after the cut of the roles (the delivery trail, the
+ * trail's partitions).
  */
 const BATCH_ALLOWED: RegExp[] = [
   /^src\/jobs\/cron\/[^/]+\.ts$/,
   /^src\/modules\/import\/services\/import-object-release\.ts$/,
   /^src\/shared\/jobs\/tenant-offboard\/[^/]+\.ts$/,
   /^src\/shared\/jobs\/user-anonymize\/[^/]+\.ts$/,
+  /^src\/shared\/jobs\/partition-archive\.ts$/,
 ];
 
 function filesUnder(dir: string): string[] {

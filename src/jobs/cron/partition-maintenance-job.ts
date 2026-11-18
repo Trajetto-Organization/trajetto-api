@@ -5,6 +5,7 @@ import { archiveStorageFromEnv } from "@/shared/archive/archive-storage";
 import {
   createTrailArchiveGate,
   type TrailArchiveGate,
+  type TrailArchiveJobs,
 } from "@/shared/archive/trail-archive";
 import {
   openDdlConnection,
@@ -25,6 +26,11 @@ import {
   type PlannedPartition,
 } from "@/shared/database/partitions";
 import { sqlStateOf } from "@/shared/errors/prisma-error-meta";
+import {
+  BackgroundJobRepository,
+  type IBackgroundJobRepository,
+} from "@/shared/jobs/background-job-repository";
+import { wakeJobsAfterCommit } from "@/shared/jobs/job-wake";
 import { logger } from "@/shared/logging/logger";
 import { createWebhookDeliveryGate } from "@/shared/integration/webhook-delivery-retention";
 import { createNotificationFamilyGate } from "@/shared/notifications/notification-family-retention";
@@ -71,12 +77,14 @@ const log = logger.child({ component: "cron", job: "partition-maintenance" });
  *
  *  - With TRAIL_ARCHIVE_ENABLED, a day of the trail past the retention is
  *    archived to R2 and checked against archive_manifest before its
- *    DETACH (src/shared/archive/trail-archive.ts, plano-escala F2-11). A
- *    day that does not add up, or that the run's budget did not reach, is
- *    kept attached for the next night, and the partition-stuck alert
- *    counts it after three; a day detached on an earlier night is dropped
- *    only with its archive verified. The archive starts no new company
- *    past CRON_PURGE_RUN_BUDGET_MS, so the run stays inside its lease.
+ *    DETACH (src/shared/archive/trail-archive.ts, plano-escala F2-11).
+ *    Since F3-28 the night does not archive: it enqueues the day's
+ *    PARTITION_ARCHIVE job (src/shared/jobs/partition-archive.ts) and
+ *    keeps the day attached; the day goes on a later night, once its
+ *    manifest adds up and no job of it is still running. A day that does
+ *    not add up is kept, and the partition-stuck alert counts it after
+ *    three nights; a day detached on an earlier night is dropped only
+ *    with its archive verified.
  *
  *  - A table whose rows need something before they go names a gate in the
  *    registry (dropGate): the job asks it before each DETACH, and a "no"
@@ -235,7 +243,39 @@ function trailArchiveFromEnv(): TrailArchiveGate | null {
     missing: missingArchiveSettings(env),
     deadline: Date.now() + env.CRON_PURGE_RUN_BUDGET_MS,
     retentionDays: env.TRAIL_ARCHIVE_RETENTION_DAYS,
+    jobs: partitionArchiveJobs(new BackgroundJobRepository(databaseBatch)),
   });
+}
+
+/**
+ * The PARTITION_ARCHIVE jobs (plano-escala F3-28) on the maintenance pool:
+ * the night enqueues an expired day, and the process that consumes the
+ * `jobs` queue archives it, woken after the enqueue.
+ */
+function partitionArchiveJobs(
+  jobs: IBackgroundJobRepository,
+): TrailArchiveJobs {
+  return {
+    async running(name) {
+      return (await jobs.findLive("PARTITION_ARCHIVE", name)) !== null;
+    },
+
+    async enqueue(table, partition) {
+      const { outcome } = await jobs.enqueue({
+        kind: "PARTITION_ARCHIVE",
+        businessId: null,
+        subjectId: partition.name,
+        payload: {
+          table,
+          name: partition.name,
+          from: partition.from.toISOString(),
+          to: partition.to.toISOString(),
+        },
+      });
+
+      if (outcome === "enqueued") wakeJobsAfterCommit();
+    },
+  };
 }
 
 /**
@@ -767,6 +807,7 @@ export {
   ATTACH_LOCK_TIMEOUT,
   PARTITION_MAINTENANCE_JOB,
   maintainPartitions,
+  partitionArchiveJobs,
   partitionMaintenanceJob,
 };
 export type { MaintenanceDeps, TableOutcome };

@@ -6,13 +6,20 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { databaseBatch } from "infra/database";
 import { openReleaseClient } from "infra/scripts/release-connection";
-import { maintainPartitions } from "@/jobs/cron/partition-maintenance-job";
+import {
+  maintainPartitions,
+  partitionArchiveJobs,
+} from "@/jobs/cron/partition-maintenance-job";
 import { InMemoryArchiveStorage } from "@/shared/archive/in-memory-archive-storage";
 import {
   createTrailArchiveGate,
   deleteTrailArchive,
   type ArchiveDatabase,
+  type TrailArchiveJobs,
 } from "@/shared/archive/trail-archive";
+import { BackgroundJobRepository } from "@/shared/jobs/background-job-repository";
+import { JobRunner } from "@/shared/jobs/job-runner";
+import { createPartitionArchiveJob } from "@/shared/jobs/partition-archive";
 import {
   addGrains,
   partitionName,
@@ -156,11 +163,16 @@ async function manifestOf(partition: string): Promise<ManifestRow[]> {
 
 const gateWith = (
   storage: InMemoryArchiveStorage | null,
-  overrides: { deadline?: number; db?: ArchiveDatabase } = {},
+  overrides: {
+    deadline?: number;
+    db?: ArchiveDatabase;
+    jobs?: TrailArchiveJobs;
+  } = {},
 ) =>
   createTrailArchiveGate({
     db: overrides.db ?? databaseBatch,
     storage,
+    jobs: overrides.jobs,
     missing: storage ? [] : ["TRAIL_ARCHIVE_BUCKET"],
     deadline: overrides.deadline ?? Date.now() + 60_000,
     retentionDays: 180,
@@ -630,5 +642,114 @@ describe("deleteTrailArchive and the housekeeping", () => {
     expect([...storage.objects.keys()]).toEqual([
       `trail/20261004/${scheduled}.csv.gz`,
     ]);
+  });
+});
+
+/** A bucket whose `failOn`-th upload dies half-way, once: a killed process. */
+class DyingStorage extends InMemoryArchiveStorage {
+  private calls = 0;
+
+  constructor(private readonly failOn: number) {
+    super();
+  }
+
+  async put(key: string, body: AsyncIterable<Uint8Array>): Promise<void> {
+    this.calls += 1;
+
+    if (this.calls === this.failOn) {
+      for await (const _chunk of body) {
+        // The bytes went out; the connection did not survive.
+      }
+
+      throw new Error(`conexão perdida no envio de ${key}`);
+    }
+
+    return super.put(key, body);
+  }
+}
+
+describe("the trail archive as a PARTITION_ARCHIVE job", () => {
+  // plano-escala F3-28: the night no longer archives inside its own budget.
+  // It enqueues the day's job and keeps the day; the job archives it on the
+  // process that runs the `jobs` queue and, killed half-way, resumes from
+  // the manifest without a second object; the day leaves on a later night,
+  // with its manifest verified and no job of it still running.
+  it("hands the day to the job, resumes a killed job and drops the day only after it", async () => {
+    const day = expiredDay(34);
+    const name = await attachDay(lean, day);
+    const companies = [await company(), await company(), await company()];
+
+    for (const businessId of companies) {
+      await points("driver_position_v2", businessId, randomUUID(), day, 3);
+    }
+
+    const store = new BackgroundJobRepository(databaseBatch);
+    const storage = new DyingStorage(2);
+    const night = () =>
+      maintainPartitions({
+        tables: [lean],
+        trailArchive: gateWith(storage, { jobs: partitionArchiveJobs(store) }),
+      });
+
+    await night();
+    await night();
+
+    // Kept, and handed to one job however many nights ask.
+    expect(await exists(name)).toBe(true);
+    expect(storage.puts).toEqual([]);
+
+    const jobs = await admin.query<{ id: string; status: string }>(
+      `SELECT id, status::text AS status FROM background_job
+        WHERE kind = 'PARTITION_ARCHIVE' AND "subjectId" = $1`,
+      [name],
+    );
+
+    expect(jobs.rows).toEqual([{ id: expect.any(String), status: "PENDING" }]);
+
+    const runner = () => {
+      const instance = new JobRunner({ store, owner: () => "e2e" });
+
+      instance.register(
+        "PARTITION_ARCHIVE",
+        createPartitionArchiveJob({
+          db: databaseBatch,
+          storage: () => storage,
+          pageSize: 2,
+        }),
+      );
+
+      return instance;
+    };
+
+    // The second upload dies: the attempt fails, one object went up.
+    expect(await runner().processBatch()).toBe(1);
+    expect(storage.puts).toHaveLength(1);
+    expect(await exists(name)).toBe(true);
+
+    // The retry, without waiting for its backoff.
+    await admin.query(
+      `UPDATE background_job SET "availableAt" = now() WHERE id = $1`,
+      [jobs.rows[0].id],
+    );
+    expect(await runner().processBatch()).toBe(1);
+
+    const settled = await admin.query<{ status: string }>(
+      `SELECT status::text AS status FROM background_job WHERE id = $1`,
+      [jobs.rows[0].id],
+    );
+
+    expect(settled.rows[0].status).toBe("SUCCEEDED");
+
+    // One object per company, none twice.
+    const keys = companies.map(
+      (businessId) => `trail/${dayKey(day)}/${businessId}.csv.gz`,
+    );
+
+    expect([...storage.puts].sort()).toEqual([...keys].sort());
+
+    // The next night drops the day.
+    await night();
+
+    expect(await exists(name)).toBe(false);
   });
 });
