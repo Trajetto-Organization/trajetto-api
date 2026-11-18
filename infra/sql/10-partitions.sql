@@ -29,7 +29,8 @@
 -- activity shells, the four queues, the bell, and the tables the shells
 -- become at their copy window, F2-17); a table that does not exist yet, or
 -- is not partitioned yet (the queues until their swap, F5-09, the bell
--- until its own, F5-15, delivery_event until its window), is skipped.
+-- until its own, F5-15, delivery_event and activity until their window),
+-- is skipped.
 --
 -- A change of owner takes ACCESS EXCLUSIVE on the table, and the whole
 -- file is one transaction (infra/sql/README.md): every lock it takes is
@@ -56,6 +57,7 @@ DECLARE
     'delivery_event_part',
     'delivery_event',
     'activity_part',
+    'activity',
     'domain_outbox_event',
     'notification_delivery',
     'notification_provider_receipt',

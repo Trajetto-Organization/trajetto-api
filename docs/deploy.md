@@ -3901,9 +3901,10 @@ promovido depois desta release nunca dispara a janela sem aviso. Dentro
 dele, esperam (`pending`) todo processo vivo anunciar
 `history-partition-agnostic-v1`.
 
-| Passo                          | Item  | O que faz                                                                                                                                                                                               | Capability                      |
-| ------------------------------ | ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------- |
-| `30-delivery-event-window.sql` | F2-17 | copia `delivery_event` para a casca `delivery_event_part` com o `txid` como está, recupera as chaves de envio que só estavam na coluna e troca os nomes; a tabela de antes vira `delivery_event_legacy` | `history-partition-agnostic-v1` |
+| Passo                          | Item  | O que faz                                                                                                                                                                                                                                                    | Capability                      |
+| ------------------------------ | ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------- |
+| `30-delivery-event-window.sql` | F2-17 | copia `delivery_event` para a casca `delivery_event_part` com o `txid` como está, recupera as chaves de envio que só estavam na coluna e troca os nomes; a tabela de antes vira `delivery_event_legacy`                                                      | `history-partition-agnostic-v1` |
+| `31-activity-window.sql`       | F2-18 | copia `activity` para a casca `activity_part`, dando a todo id de antes do uuid v7 um v7 do próprio `created_at` (o mesmo em toda rodada, `trajetto_activity_rekey`); a tabela de antes vira `activity_legacy`, e por 14 dias o id antigo se resolve por ela | `history-partition-agnostic-v1` |
 
 O passo a passo (ensaio na staging com o seed `prod-like`, o aviso de 48 h,
 a janela, a conferência e a volta nos 14 dias) está no

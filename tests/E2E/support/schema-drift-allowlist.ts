@@ -45,6 +45,15 @@ const SCHEMA_DRIFT_ALLOWLIST: readonly DriftAllowance[] = [
       /^ALTER TABLE "delivery_event_part" DROP CONSTRAINT "delivery_event_part_(deliveryId|reportedById|routeId|reasonId|occurrenceId|apiKeyId)_fkey"$/,
     why: "The six foreign keys of the same shell (migrations 20261117200100 to 20261117200600, one each), with the definitions of delivery_event's own: they go with the table above.",
   },
+  {
+    statement: 'DROP TABLE "activity_part"',
+    why: "The partitioned shell of the activity trail (plano-escala F2-18), migration 20261118140000_activity_part: Prisma cannot declare a table partitioned by RANGE on its id, and no model may write it before the copy window (prisma/post-deploy/31-activity-window.sql), which fills it and renames it to activity, the table the Activity model maps. No `until`, for the same reason as delivery_event_part: the window runs only where the owner approved it, so the E2E database keeps the shell.",
+  },
+  {
+    statement:
+      /^ALTER TABLE "activity_part" DROP CONSTRAINT "activity_part_(businessId|performedBy)_fkey"$/,
+    why: "The two foreign keys of the same shell (migrations 20261118140100 and 20261118140200, one each), with the definitions of activity's own: they go with the table above.",
+  },
 ];
 
 export { SCHEMA_DRIFT_ALLOWLIST, type DriftAllowance };

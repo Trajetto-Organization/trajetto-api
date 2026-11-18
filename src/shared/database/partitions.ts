@@ -294,6 +294,14 @@ function queuePartitions(values: PartitionEnv): PartitionedTable[] {
  * (shellUntilWindow), and the same months are kept under the
  * delivery_event entry, a plain table until that night.
  *
+ * activity_part and activity (plano-escala F2-18): the activity trail's
+ * shell and the table it becomes at the same window
+ * (prisma/post-deploy/31-activity-window.sql), kept exactly like the
+ * delivery trail's: monthly on the uuid v7 id, three months ahead (each
+ * ATTACH clones the foreign keys to business and user), nothing detached
+ * by the job. The opt-in purge of ACTIVITY_RETENTION_DAYS keeps deleting
+ * in batches.
+ *
  * The four queues: see queuePartitions. Plain tables until the swap.
  *
  * notification, the bell (plano-escala F5-15): monthly on its uuid v7 id
@@ -336,6 +344,8 @@ function registeredPartitions(
     { table: "driver_position_v2", ...trail },
     { table: "delivery_event_part", ...deliveryTrail, shellUntilWindow: true },
     { table: "delivery_event", ...deliveryTrail, plainUntilSwap: true },
+    { table: "activity_part", ...deliveryTrail, shellUntilWindow: true },
+    { table: "activity", ...deliveryTrail, plainUntilSwap: true },
     ...queuePartitions(values),
     {
       table: "notification",

@@ -180,6 +180,7 @@ const CHECKS: Record<string, string> = {
  */
 const STATISTICS_TARGETS: Record<string, number> = {
   "activity.businessId": 1000,
+  "activity_part.businessId": 1000,
   "delivery.businessId": 1000,
   "delivery_event.businessId": 1000,
   "delivery_event_part.businessId": 1000,

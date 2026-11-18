@@ -196,6 +196,26 @@ describe("the partition registry", () => {
     });
     expect(trail?.shellUntilWindow).toBeUndefined();
 
+    // plano-escala F2-18: the activity trail, kept the same way.
+    const activityShell = tables.find(
+      (table) => table.table === "activity_part",
+    );
+    const activity = tables.find((table) => table.table === "activity");
+
+    expect(activityShell).toMatchObject({ ...shell, table: "activity_part" });
+    expect(activity).toMatchObject({ ...trail, table: "activity" });
+    expect(
+      plannedPartitions(activity as PartitionedTable, NIGHT).map(
+        (each) => each.name,
+      ),
+    ).toEqual([
+      "activity_202610",
+      "activity_202611",
+      "activity_202612",
+      "activity_202701",
+      "activity_202702",
+    ]);
+
     expect(
       plannedPartitions(trail as PartitionedTable, NIGHT).map(
         (each) => each.name,

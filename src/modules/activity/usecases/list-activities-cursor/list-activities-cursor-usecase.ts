@@ -5,6 +5,7 @@ import { IUserRepository } from "@/modules/user/repositories/IUser-repository";
 
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
 import { CursorPaginatedActivities } from "../../dtos/activity-dto";
+import type { ActivityDataVersion } from "@/shared/activity/activity-data-version";
 
 interface ListActivitiesCursorRequest {
   userId: string;
@@ -38,14 +39,16 @@ class ListActivitiesCursorUseCase {
     search,
     periodDays,
     businessId,
-  }: ListActivitiesCursorRequest): Promise<CursorPaginatedActivities> {
+  }: ListActivitiesCursorRequest): Promise<
+    CursorPaginatedActivities & { dataVersion: ActivityDataVersion }
+  > {
     const currentUser = await this.user.findUserById(userId);
 
     if (!currentUser) {
       throw new ResourceNotFoundError();
     }
 
-    return this.activity.listActivitiesWithCursor({
+    const page = await this.activity.listActivitiesWithCursor({
       currentUserRole: currentUser.role,
       businessId:
         currentUser.role === "MASTER"
@@ -57,6 +60,11 @@ class ListActivitiesCursorUseCase {
       search,
       periodDays,
     });
+
+    // Which ids the page is in (plano-escala F2-18): after the copy window
+    // re-keys the trail, a feed a tab kept from before must start over.
+    // Read after the page, one query at a time (connection fan-out).
+    return { ...page, dataVersion: await this.activity.dataVersion() };
   }
 }
 

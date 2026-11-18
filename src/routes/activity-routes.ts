@@ -50,7 +50,7 @@ async function activityRoutes(app: FastifyInstance) {
         tags: ["activity"],
         summary: "Linha do tempo de atividades (cursor, NDJSON)",
         description:
-          "Feed da linha do tempo, mais recentes primeiro, paginado por cursor (o registro é escrito o tempo todo: com páginas por posição, a segunda repetiria linhas da primeira). A janela `period` (7d ou 30d) conta dias civis no fuso da empresa, hoje incluído, e faz parte do contrato do cursor: ao trocá-la, descarte o cursor e recomece. O escopo é o da tabela — o MASTER vê tudo ou uma empresa (`businessId`); o administrador, a própria empresa sem as ações do MASTER, exceto as mudanças do plano dela.",
+          "Feed da linha do tempo, mais recentes primeiro, paginado por cursor (o registro é escrito o tempo todo: com páginas por posição, a segunda repetiria linhas da primeira). A janela `period` (7d ou 30d) conta dias civis no fuso da empresa, hoje incluído, e faz parte do contrato do cursor: ao trocá-la, descarte o cursor e recomece. O escopo é o da tabela — o MASTER vê tudo ou uma empresa (`businessId`); o administrador, a própria empresa sem as ações do MASTER, exceto as mudanças do plano dela. O cabeçalho `x-trajetto-data-version` diz em que geração de ids a página está (`1` até a janela do histórico, `2` depois dela, quando os ids anteriores ao uuid v7 ganham um novo): se ele mudar entre duas páginas, descarte o que já foi lido e o cursor e recomece do topo.",
         querystring: activitySchemas.listActivitiesCursorQuery,
         response: {
           200: ndjsonCursor(

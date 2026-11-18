@@ -15,6 +15,10 @@ import {
 } from "../dtos/activity-dto";
 
 import { presentActivityActors } from "@/shared/activity/actor-presentation";
+import {
+  activityDataVersion,
+  type ActivityDataVersion,
+} from "@/shared/activity/activity-data-version";
 
 import { IActivityRepository } from "./IActivity-repository";
 import { TENANT_VISIBLE } from "@/shared/notifications/policies/business-plan-policies";
@@ -503,6 +507,22 @@ class ActivityRepository implements IActivityRepository {
       topTypeCount: byType[0]?._count._all ?? 0,
       periodDays,
     };
+  }
+
+  /**
+   * The generation of ids the trail serves, from the catalog: the copy
+   * window is what made activity a partitioned table and what re-keyed its
+   * old ids (plano-escala F2-18). One lookup of pg_class by name.
+   */
+  async dataVersion(): Promise<ActivityDataVersion> {
+    const [row] = await this.prisma.$queryRaw<Array<{ partitioned: boolean }>>`
+      SELECT coalesce(
+        (SELECT c.relkind = 'p' FROM pg_class c WHERE c.oid = to_regclass('activity')),
+        false
+      ) AS partitioned
+    `;
+
+    return activityDataVersion(row?.partitioned === true);
   }
 }
 

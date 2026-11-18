@@ -253,6 +253,19 @@ describe("ListActivitiesCursorUseCase", () => {
       code: "USER_NOT_FOUND",
     });
   });
+
+  // plano-escala F2-18: each page says which generation of ids it is in,
+  // and the copy window of the trail changes it.
+  it("says which generation of ids the page is in, before and after the copy window", async () => {
+    const page = () =>
+      feed().execute({ userId: ADMIN_A, limit: 2, periodDays: 30 });
+
+    expect((await page()).dataVersion).toBe("1");
+
+    activities.partitioned = true;
+
+    expect((await page()).dataVersion).toBe("2");
+  });
 });
 
 describe("ListAllActivitiesUseCase", () => {

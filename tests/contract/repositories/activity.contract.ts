@@ -155,6 +155,13 @@ function activityRepositoryContract(harness: () => ActivityHarness): void {
     expect(await found("VEÍCULO")).toEqual([at(1)]);
     expect(await found("%")).toEqual([]);
   });
+
+  // plano-escala F2-18: the feed says which generation of ids it serves,
+  // so a tab open across the copy window starts over. Every contract
+  // database is a plain trail, before its window.
+  it("names the generation of ids of a trail before its copy window", async () => {
+    expect(await harness().repo.dataVersion()).toBe("1");
+  });
 }
 
 export { ACTIVITY_FIXTURE, ACTIVITY_SEED, activityRepositoryContract };

@@ -4851,6 +4851,22 @@ entrega lê do instante do id dela até agora, e a Torre lê o dia com dois
 dias de margem, uma ou duas partições cada
 (`tests/E2E/history-window-plans.test.ts`).
 
+**O registro de atividades na mesma janela (plano de escala, F2-18).** A
+`activity` tem a casca `activity_part` (migrations `20261118140000` a
+`20261118140200`, com as duas FKs e `deliveryId` como índice comum: a
+linha do pipeline já é gravada com o id da entrega de notificação, F2-15)
+e o passo `prisma/post-deploy/31-activity-window.sql`, com a mesma
+aprovação e a mesma capability. A cópia dá a todo id de antes da troca para
+uuid v7 (um v4, aleatório desde o primeiro dígito, que cairia em qualquer
+mês) um v7 do próprio `created_at`, o mesmo em toda rodada
+(`trajetto_activity_rekey`, criada pelo passo); a tabela de antes vira
+`activity_legacy`, por onde o suporte acha o id novo de um id antigo nos 14
+dias ([runbook](./runbooks/history-window.md)). Como os ids mudam, o
+`/activity/list-cursor` manda `x-trajetto-data-version` (`1` na tabela
+comum, `2` na particionada, lido do catálogo;
+`src/shared/activity/activity-data-version.ts`), e a web descarta a linha
+do tempo que uma aba guardava quando ele muda.
+
 O guard `tests/unitaires/lifecycle/migration-safety.test.ts` lê toda migration
 posterior a `LAST_MIGRATION_IN_PRODUCTION` e falha em qualquer statement da
 tabela acima sobre um objeto que a produção já tem, a menos que o arquivo traga

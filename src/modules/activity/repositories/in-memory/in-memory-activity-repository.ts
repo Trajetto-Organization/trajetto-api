@@ -15,6 +15,10 @@ import {
 } from "../../dtos/activity-dto";
 
 import { presentActivityActors } from "@/shared/activity/actor-presentation";
+import {
+  activityDataVersion,
+  type ActivityDataVersion,
+} from "@/shared/activity/activity-data-version";
 import { TENANT_VISIBLE } from "@/shared/notifications/policies/business-plan-policies";
 
 import {
@@ -75,6 +79,17 @@ class InMemoryActivityRepository implements IActivityRepository {
     string,
     { timezone?: string; corporate_reason: string }
   >();
+
+  /**
+   * Whether the trail is the partitioned table of the copy window
+   * (plano-escala F2-18): a plain one, as a database before its window,
+   * unless a test says otherwise.
+   */
+  public partitioned = false;
+
+  async dataVersion(): Promise<ActivityDataVersion> {
+    return activityDataVersion(this.partitioned);
+  }
 
   // The transaction is the real repository's concern; here every write lands.
   async createActivity(
