@@ -56,6 +56,11 @@ import {
 import { consumesQueue } from "@/shared/lifecycle/process-role";
 import { assertWithVariable } from "@/shared/lifecycle/queue-config";
 import { ContinuousPool } from "@/shared/queue/continuous-pool";
+import {
+  EXHAUSTED_CLOSE_INTERVAL_MS,
+  closeExhaustedInBatches,
+  exhaustedCloseSql,
+} from "@/shared/queue/exhausted-close";
 
 import { v7 as uuidV7 } from "uuid";
 
@@ -797,6 +802,10 @@ class WebhookDispatchService {
   private static instance: WebhookDispatchService | null = null;
 
   private timer: NodeJS.Timeout | null = null;
+
+  /** The minute's close of the exhausted rows (closeExhausted, F3-08). */
+  private exhaustedTimer: NodeJS.Timeout | null = null;
+  private closingExhausted: Promise<number> | null = null;
   private running = false;
 
   // Ends a sweep that is still draining when the process is shutting down.
@@ -887,6 +896,20 @@ class WebhookDispatchService {
       });
     }, SWEEP_INTERVAL_MS);
 
+    // The exhausted rows, closed off the claim's path (plano-escala F3-08):
+    // once now, then every minute.
+    const sweepExhausted = () => {
+      this.closeExhausted().catch((error) => {
+        log.error({ err: error }, "exhausted webhooks close failed");
+      });
+    };
+
+    this.exhaustedTimer = setInterval(
+      sweepExhausted,
+      EXHAUSTED_CLOSE_INTERVAL_MS,
+    );
+    sweepExhausted();
+
     // Drain whatever accumulated while the API was down, instead of making the
     // first sweep wait a full interval.
     void this.processBatch().catch((error) => {
@@ -894,6 +917,40 @@ class WebhookDispatchService {
     });
 
     log.info("webhook dispatch worker started");
+  }
+
+  /**
+   * Closes FAILED, with the reason, the rows whose last allowed attempt died
+   * with their process: PROCESSING, lease run out, no attempt left (see
+   * shared/queue/exhausted-close.ts). Every minute and at start; public so a
+   * test can run it. A run that finds one in progress joins it.
+   */
+  closeExhausted(): Promise<number> {
+    this.closingExhausted ??= (async () => {
+      const floor = await claimFloors.predicate("webhooks");
+      const closed = await closeExhaustedInBatches(() =>
+        database.$executeRaw(
+          exhaustedCloseSql({
+            table: "webhook_delivery",
+            maxAttempts: WEBHOOK_MAX_ATTEMPTS,
+            floor,
+          }),
+        ),
+      );
+
+      if (closed > 0) {
+        log.warn(
+          { closed },
+          "webhook deliveries closed: their last allowed attempt died with the process",
+        );
+      }
+
+      return closed;
+    })().finally(() => {
+      this.closingExhausted = null;
+    });
+
+    return this.closingExhausted;
   }
 
   /**
@@ -932,8 +989,10 @@ class WebhookDispatchService {
     this.stopping = true;
 
     if (this.timer) clearInterval(this.timer);
+    if (this.exhaustedTimer) clearInterval(this.exhaustedTimer);
 
     this.timer = null;
+    this.exhaustedTimer = null;
 
     // What the pool claimed and did not start goes back now (see
     // `release`), not after the call it waits behind.
@@ -998,19 +1057,9 @@ class WebhookDispatchService {
     const floor = await claimFloors.predicate("webhooks");
 
     // A row whose last attempt died with the process and has no attempt left
-    // is closed here, with the reason, instead of being claimed again — see
-    // WEBHOOK_MAX_ATTEMPTS.
-    await database.$executeRaw`
-      UPDATE "webhook_delivery" SET
-        "status" = 'FAILED',
-        "leaseExpiresAt" = NULL,
-        "lastError" = 'O processo foi interrompido durante a última tentativa permitida.'
-      WHERE "status" = 'PROCESSING'
-        AND "availableAt" <= now()
-        AND "leaseExpiresAt" < now()
-        AND "attempts" >= ${WEBHOOK_MAX_ATTEMPTS}${floor}
-    `;
-
+    // is left out (attempts < WEBHOOK_MAX_ATTEMPTS) and closed by the
+    // minute's sweep (closeExhausted, plano-escala F3-08), not before every
+    // claim, where the UPDATE read every due row to find the few in flight.
     const claimStartedAtMs = Date.now();
 
     // The lease end goes into availableAt too (same expression, same

@@ -652,7 +652,18 @@ describe("a row whose process died on its last attempt", () => {
       },
     });
 
+    // The claim leaves it alone: nothing is sent, and it is not taken.
     await pipeline.runDeliveryCycle("external");
+
+    const untouched = (await deliveriesOf(eventId)).find(
+      (row) => row.channel === "EMAIL",
+    )!;
+
+    expect(`${untouched.status}:${untouched.attempts}`).toBe("PROCESSING:7");
+
+    // The minute's sweep closes it, off the claim's path (plano-escala
+    // F3-08).
+    expect(await pipeline.closeExhausted()).toBeGreaterThanOrEqual(1);
 
     const email = (await deliveriesOf(eventId)).find(
       (row) => row.channel === "EMAIL",
@@ -661,6 +672,39 @@ describe("a row whose process died on its last attempt", () => {
     expect(email.status).toBe("FAILED");
     expect(email.lastError).toMatch(/interrompido/);
     expect(mail.sent).toHaveLength(0);
+  });
+
+  it("closes an event whose expansion died on its last attempt, and leaves a live lease alone", async () => {
+    const exhausted = await publish();
+    const live = await publish();
+
+    await prisma.domainOutboxEvent.update({
+      where: { id: exhausted },
+      data: {
+        status: "PROCESSING",
+        attempts: 5,
+        leaseExpiresAt: new Date(Date.now() - 60_000),
+      },
+    });
+    await prisma.domainOutboxEvent.update({
+      where: { id: live },
+      data: {
+        status: "PROCESSING",
+        attempts: 5,
+        leaseExpiresAt: new Date(Date.now() + 60_000),
+      },
+    });
+
+    await pipeline.closeExhausted();
+
+    const [closed, inFlight] = await Promise.all([
+      prisma.domainOutboxEvent.findUniqueOrThrow({ where: { id: exhausted } }),
+      prisma.domainOutboxEvent.findUniqueOrThrow({ where: { id: live } }),
+    ]);
+
+    expect(closed.status).toBe("FAILED");
+    expect(closed.lastError).toMatch(/interrompido/);
+    expect(inFlight.status).toBe("PROCESSING");
   });
 });
 

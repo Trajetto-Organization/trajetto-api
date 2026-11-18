@@ -208,6 +208,19 @@ seguinte começa outro. O invariante dos webhooks ganhou uma rodada: um
 claim sai enquanto as chamadas do anterior ainda estão em voo, e as linhas
 dele podem esperar por elas.
 
+A linha cuja última tentativa permitida morreu com o processo (`PROCESSING`,
+lease vencido, tentativas no teto) não é reivindicada de novo e vira
+`FAILED` com o motivo "O processo foi interrompido durante a última
+tentativa permitida.". Até a onda 13 isso rodava antes de cada claim, por
+um UPDATE que achava as linhas pelo índice do próprio claim: toda linha
+vencida, as `PENDING` também, lida para achar as poucas em voo, e uma
+enchente de e-mails vencidos fazia cada claim ler a enchente inteira.
+Desde a F3-08 é um timer de cada processo que consome a fila, uma vez por
+minuto e uma no boot (`src/shared/queue/exhausted-close.ts`), por um índice
+parcial só das linhas em voo (`<fila>_processing_lease_idx`), até 500 por
+UPDATE com `SKIP LOCKED`. A linha leva até um minuto a mais para aparecer
+como `FAILED`; nada sai nesse meio-tempo, porque nenhum claim a pega.
+
 - **DLQ:** o status `FAILED`.
   - `GET /health/dead-letter` com `POST /health/dead-letter/replay` cobre
     as entregas.

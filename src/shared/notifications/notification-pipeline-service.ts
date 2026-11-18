@@ -17,6 +17,11 @@ import { workerHeartbeat } from "@/shared/health/worker-heartbeat";
 import { consumesQueue } from "@/shared/lifecycle/process-role";
 import { announceWake } from "@/shared/wake/wake-bus";
 import { ContinuousPool } from "@/shared/queue/continuous-pool";
+import {
+  EXHAUSTED_CLOSE_INTERVAL_MS,
+  closeExhaustedInBatches,
+  exhaustedCloseSql,
+} from "@/shared/queue/exhausted-close";
 
 import { IMailProvider } from "@/shared/providers/mail-provider/IMail-provider";
 import { MailDeliveryError } from "@/shared/providers/mail-provider/errors/mail-delivery-error";
@@ -415,6 +420,10 @@ class NotificationPipelineService {
   private outboxTimer: NodeJS.Timeout | null = null;
   private deliveryTimers: NodeJS.Timeout[] = [];
 
+  /** The minute's close of the exhausted rows (closeExhausted, F3-08). */
+  private exhaustedTimer: NodeJS.Timeout | null = null;
+  private closingExhausted: Promise<number> | null = null;
+
   private outboxRunning = false;
   private deliveryRunning: Record<DeliveryLane, boolean> = {
     internal: false,
@@ -526,6 +535,20 @@ class NotificationPipelineService {
       );
     }
 
+    // The exhausted rows of the queues this process claims, closed off the
+    // claims' path (plano-escala F3-08): once now, so a replica that comes
+    // back after a crash closes what the crash left, then every minute.
+    if (this.outboxTimer !== null || this.deliveryTimers.length > 0) {
+      const sweep = () => {
+        this.closeExhausted().catch((error) => {
+          log.error({ err: error }, "exhausted rows close failed");
+        });
+      };
+
+      this.exhaustedTimer = setInterval(sweep, EXHAUSTED_CLOSE_INTERVAL_MS);
+      sweep();
+    }
+
     // No drain here. What accumulated while the API was down is drained by
     // the boot once Socket.IO is up (shared/lifecycle/startup.ts): drained
     // now, every in-app row in the backlog reached the bell with no toast,
@@ -627,9 +650,11 @@ class NotificationPipelineService {
 
     if (this.outboxTimer) clearInterval(this.outboxTimer);
     for (const timer of this.deliveryTimers) clearInterval(timer);
+    if (this.exhaustedTimer) clearInterval(this.exhaustedTimer);
 
     this.outboxTimer = null;
     this.deliveryTimers = [];
+    this.exhaustedTimer = null;
 
     // The pools waiting on a slow row look now: what they claimed and did
     // not start goes back at once, instead of waiting out its lease.
@@ -650,6 +675,76 @@ class NotificationPipelineService {
     }
 
     log.info("notification pipeline stopped");
+  }
+
+  /**
+   * Closes FAILED, with the reason, the rows of the queues this process
+   * claims whose last allowed attempt died with their process: PROCESSING,
+   * lease run out, attempts at the ceiling (see shared/queue/
+   * exhausted-close.ts). Every minute and at boot; public so a test can run
+   * it. A run that finds one in progress joins it.
+   */
+  public closeExhausted(): Promise<number> {
+    this.closingExhausted ??= this.closeExhaustedNow().finally(() => {
+      this.closingExhausted = null;
+    });
+
+    return this.closingExhausted;
+  }
+
+  private async closeExhaustedNow(): Promise<number> {
+    let closed = 0;
+
+    if (consumesQueue(env, "outbox")) {
+      const floor = await claimFloors.predicate("outbox");
+      const events = await closeExhaustedInBatches(() =>
+        database.$executeRaw(
+          exhaustedCloseSql({
+            table: "domain_outbox_event",
+            maxAttempts: OUTBOX_MAX_ATTEMPTS,
+            floor,
+          }),
+        ),
+      );
+
+      if (events > 0) {
+        log.warn(
+          { queue: "outbox", closed: events },
+          "notification events closed: their last allowed attempt died with the process",
+        );
+      }
+
+      closed += events;
+    }
+
+    const channels = this.consumedLanes().flatMap(
+      (lane) => DELIVERY_LANES[lane],
+    );
+
+    if (channels.length > 0) {
+      const floor = await claimFloors.predicate("deliveries");
+      const deliveries = await closeExhaustedInBatches(() =>
+        database.$executeRaw(
+          exhaustedCloseSql({
+            table: "notification_delivery",
+            maxAttempts: DELIVERY_MAX_ATTEMPTS,
+            floor,
+            channels,
+          }),
+        ),
+      );
+
+      if (deliveries > 0) {
+        log.warn(
+          { queue: "deliveries", channels, closed: deliveries },
+          "notification deliveries closed: their last allowed attempt died with the process",
+        );
+      }
+
+      closed += deliveries;
+    }
+
+    return closed;
   }
 
   private isBusy(): boolean {
@@ -791,18 +886,10 @@ class NotificationPipelineService {
   ): Promise<ClaimedEvent[]> {
     const floor = await claimFloors.predicate("outbox");
 
-    // A row whose last allowed attempt died with the process is closed, with
-    // the reason, instead of being claimed again — see OUTBOX_MAX_ATTEMPTS.
-    await database.$executeRaw`
-      UPDATE "domain_outbox_event" SET
-        "status" = 'FAILED',
-        "leaseExpiresAt" = NULL,
-        "lastError" = 'O processo foi interrompido durante a última tentativa permitida.'
-      WHERE "status" = 'PROCESSING'
-        AND "leaseExpiresAt" < now()
-        AND "attempts" >= ${OUTBOX_MAX_ATTEMPTS}${floor}
-    `;
-
+    // A row whose last allowed attempt died with the process is left out
+    // (attempts < OUTBOX_MAX_ATTEMPTS) and closed by the minute's sweep
+    // (closeExhausted, plano-escala F3-08), not here: the claim is one
+    // statement, whatever is queued.
     return database.$queryRaw<ClaimedEvent[]>(outboxClaimSql(floor, limit));
   }
 
@@ -1485,30 +1572,14 @@ class NotificationPipelineService {
     lane: DeliveryLane,
     limit: number = DELIVERY_BATCH_SIZE,
   ): Promise<ClaimedDelivery[]> {
-    // Literals, not parameters: with bound values the planner cannot prove
-    // a partial index predicate in a generic plan and falls back to a scan.
-    // Safe to inline — the list is DELIVERY_LANES, constants of this module,
-    // never input.
-    const channels = Prisma.raw(
-      DELIVERY_LANES[lane].map((channel) => `'${channel}'`).join(", "),
-    );
-
     const floor = await claimFloors.predicate("deliveries");
 
-    // A row whose last allowed attempt died with the process is closed, with
-    // the reason, instead of being claimed again — see DELIVERY_MAX_ATTEMPTS.
-    await database.$executeRaw`
-      UPDATE "notification_delivery" SET
-        "status" = 'FAILED',
-        "leaseExpiresAt" = NULL,
-        "lastError" = 'O processo foi interrompido durante a última tentativa permitida.'
-      WHERE "status" = 'PROCESSING'
-        AND "channel" IN (${channels})
-        AND "availableAt" <= now()
-        AND "leaseExpiresAt" < now()
-        AND "attempts" >= ${DELIVERY_MAX_ATTEMPTS}${floor}
-    `;
-
+    // A row whose last allowed attempt died with the process is left out
+    // (attempts < DELIVERY_MAX_ATTEMPTS) and closed by the minute's sweep
+    // (closeExhausted, plano-escala F3-08). Closed here, before every claim,
+    // the UPDATE walked the lane's claim index — every due row, PENDING
+    // ones included — to find the few PROCESSING ones: a flood of due
+    // e-mails made each claim read the whole flood first.
     const claimStartedAtMs = Date.now();
 
     const claimed = await database.$queryRaw<ClaimedDelivery[]>(

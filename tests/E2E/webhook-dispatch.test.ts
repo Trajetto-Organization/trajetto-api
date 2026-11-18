@@ -568,8 +568,12 @@ describe("an endpoint built to hurt the dispatcher", () => {
       },
     });
 
+    // The claim leaves it alone; the minute's sweep closes it (plano-escala
+    // F3-08), off the claim's path.
     expect(await dispatcher.processBatch()).toBe(0);
     expect(received).toHaveLength(0);
+
+    expect(await dispatcher.closeExhausted()).toBe(1);
 
     const [row] = await prisma.webhookDelivery.findMany({
       where: { businessId: CARRIER },
@@ -577,6 +581,7 @@ describe("an endpoint built to hurt the dispatcher", () => {
 
     expect(row.status).toBe("FAILED");
     expect(row.lastError).toMatch(/interrompido/);
+    expect(row.leaseExpiresAt).toBeNull();
   });
 });
 
