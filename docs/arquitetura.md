@@ -3847,11 +3847,17 @@ réplicas idênticas atrás do Traefik, sem
 cookie sticky; o estado está no Postgres; os crons e as filas não duplicam
 trabalho; o adapter Redis leva os eventos. Provado em
 `tests/E2E/multi-replica-events.test.ts` e no harness de carga
-(`tests/load/`). O Socket.IO dispensa afinidade porque os três clientes (a
-web, o app e os scripts de carga) só falam WebSocket, e um socket fica numa
-réplica por natureza; o handshake por _long-polling_, que precisaria cair
-sempre na mesma réplica, o servidor nem oferece
-(`tests/unitaires/socket/websocket-only-clients.test.ts`). Com três réplicas,
+(`tests/load/`). O Socket.IO dispensa afinidade porque o servidor só
+oferece WebSocket, e um socket fica numa réplica por natureza: o handshake
+por _long-polling_, que precisaria cair sempre na mesma réplica, é recusado
+(`tests/unitaires/socket/socket-engine-admission.test.ts`), e um cliente que
+o pedisse nunca ganharia uma sessão presa a uma réplica só. Os três clientes (a web, o app e os scripts de carga) só falam
+WebSocket. O
+`tests/unitaires/socket/websocket-only-clients.test.ts`
+confere o servidor e os scripts de carga na CI da API; a web e o app ele só
+lê onde os três repositórios estão lado a lado, e na CI da API, que baixa só
+este repositório, essas duas partes pulam: o guarda que roda numa mudança
+do cliente é o do repositório dele. Com três réplicas,
 os eventos e a presença atravessam o adapter, e a pergunta a todas as
 réplicas espera no máximo `SOCKET_ADAPTER_REQUESTS_TIMEOUT_MS` (2 s) antes de
 responder com o que tem (plano de escala F4-51).

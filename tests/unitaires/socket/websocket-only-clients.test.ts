@@ -11,11 +11,20 @@ import { describe, expect, it } from "vitest";
  * cross-site socket. That holds only while every client speaks WebSocket
  * alone. A long-polling handshake is a series of HTTP requests that must
  * all reach the replica holding its session in memory; the second one lands
- * elsewhere and the socket never connects. The server already refuses
- * polling (socket-engine-admission.test.ts); this keeps the three clients
- * from asking for it: the web panel, the driver app and the API's own load
- * scripts, which measure what production would do. The adapter carries the
- * events and the presence between replicas (multi-replica-events.test.ts).
+ * elsewhere and the socket never connects.
+ *
+ * What keeps the replicas free of affinity in CI is the server: it offers
+ * WebSocket alone (below) and refuses a polling handshake
+ * (socket-engine-admission.test.ts), so a client that asked for long-polling
+ * would never get a session only one replica knows. The API's own load scripts are checked here too, since they
+ * measure what production would do.
+ *
+ * The web panel and the driver app are read from the sibling checkouts,
+ * which exist only where the three repositories sit side by side. The
+ * API's CI checks out this repository alone, so those two blocks skip there
+ * and prove nothing in CI: a guard that runs on a client's own change
+ * belongs to that client's repository. The adapter carries the events and
+ * the presence between replicas (multi-replica-events.test.ts).
  */
 const API_ROOT = process.cwd();
 const WEB_SOCKET = resolve(API_ROOT, "..", "trajetto-ui", "src", "socket.ts");
@@ -48,7 +57,7 @@ describe("the server", () => {
   });
 });
 
-describe.skipIf(!existsSync(WEB_SOCKET))("the web panel", () => {
+describe.skipIf(!existsSync(WEB_SOCKET))("the web panel, beside it", () => {
   it("connects with WebSocket alone", () => {
     const source = readFileSync(WEB_SOCKET, "utf8");
 
@@ -61,7 +70,7 @@ describe.skipIf(!existsSync(WEB_SOCKET))("the web panel", () => {
   });
 });
 
-describe.skipIf(!existsSync(APP_SOCKET))("the driver app", () => {
+describe.skipIf(!existsSync(APP_SOCKET))("the driver app, beside it", () => {
   it("connects with WebSocket alone", () => {
     const source = readFileSync(APP_SOCKET, "utf8");
 
