@@ -29,6 +29,36 @@
 # guard refuses one without the build's migrations
 # (infra/scripts/schema-guard.ts): started first, every replica exited on
 # the fresh volume.
+#
+# The roles of the same image (plano-escala F3-01, LOAD-01). Without a
+# profile, the harness is the one above: N replicas in PROCESS_ROLE=all,
+# each running everything, as production does until wave 14. Two profiles
+# add the split fleet:
+#
+#   roles     the worker (PROCESS_ROLE=worker, LOAD_WORKER_REPLICAS, 1):
+#             every queue and the cron. With LOAD_API_ROLE=api the replicas
+#             behind Traefik stop claiming and running the cron, which is
+#             staging's phase B and production's phase C:
+#               LOAD_API_ROLE=api docker compose --env-file .env \
+#                 -f tests/load/compose.load.yaml --profile roles up -d --build
+#             (api ×2 without workers, worker ×1; multi-replica.sh steps 6
+#             to 8 check it, and fail if LOAD_API_ROLE was forgotten);
+#   realtime  the sockets' role (PROCESS_ROLE=realtime) behind Traefik on
+#             /socket.io, as the Domain with Path of wave 18; with
+#             LOAD_API_SOCKETS=false the api replicas refuse sockets.
+#
+# A profile cannot change another service's settings, so the api's role is
+# the variable LOAD_API_ROLE and not the profile itself.
+#
+# Swappable images: LOAD_API_IMAGE, LOAD_WORKER_IMAGE and
+# LOAD_REALTIME_IMAGE (the last two default to the first) run a mixed
+# fleet, as during a rolling deploy: build once, then `up` WITHOUT
+# --build, or compose builds this tree under the tag given.
+#
+# Pinned CPU: every service takes a cpuset from LOAD_<SERVICE>_CPUSET
+# (empty: no pinning). tests/load/vps-6vcpu.env puts the whole stack on
+# cores 0-5, like the single VPS's 6 vCPU, and k6 outside them. The cpuset
+# imitates cores, not the VPS's steal: the bench's numbers are indicative.
 name: trajetto-load
 
 # The replicas' environment, shared with `migrate` so the release step sees
@@ -58,11 +88,17 @@ x-api-environment: &api-environment
   # Traefik IS the edge here (no Cloudflare): the peer it appends to
   # X-Forwarded-For is k6's container.
   RATE_LIMIT_TRUSTED_PROXY: xff
-  WORKERS_ENABLED: "true"
+  # The replicas' role (plano-escala F3-01): `all` by default, every queue
+  # and the cron in each replica, exactly the WORKERS_ENABLED=true this
+  # used to say; `api` with the roles profile. The worker and the realtime
+  # services set their own. Empty SOCKETS_ENABLED is the role's preset.
+  PROCESS_ROLE: ${LOAD_API_ROLE:-all}
+  SOCKETS_ENABLED: ${LOAD_API_SOCKETS:-}
 
 services:
   traefik:
     image: traefik:v3.7.13@sha256:24841fe2de7304c149343d877d2923b4c8800a38ba015dea9174c23b20e344a0
+    cpuset: ${LOAD_TRAEFIK_CPUSET:-}
     command:
       - --providers.docker=true
       - --providers.docker.exposedbydefault=false
@@ -105,6 +141,7 @@ services:
       dockerfile: Dockerfile
       target: migrate
     command: ["./docker-entrypoint.sh", "migrate"]
+    cpuset: ${LOAD_API_CPUSET:-}
     environment:
       <<: *api-environment
       ALLOW_EMPTY_DATABASE_BOOTSTRAP: "true"
@@ -121,6 +158,7 @@ services:
       context: ../..
       dockerfile: Dockerfile
       target: runner
+    cpuset: ${LOAD_API_CPUSET:-}
     deploy:
       replicas: ${LOAD_REPLICAS:-2}
       resources:
@@ -158,6 +196,86 @@ services:
       - edge
       - data
 
+  # The worker of the split fleet (profile `roles`): the same image in
+  # PROCESS_ROLE=worker, every queue and the cron, sweeping every 2 s (the
+  # preset) and woken by the api's hints over Redis (F3-04). No route in
+  # Traefik: its HTTP surface is /health only, for the image's healthcheck.
+  # Phase C's ceilings by default (section 3 of the plan): 1 × 1024 MiB with
+  # a 512 heap; LOAD_WORKER_CPUS caps it (1.5 in phase C; empty, none).
+  worker:
+    profiles: ["roles"]
+    image: ${LOAD_WORKER_IMAGE:-${LOAD_API_IMAGE:-trajetto-api:load}}
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+      target: runner
+    cpuset: ${LOAD_WORKER_CPUSET:-}
+    deploy:
+      replicas: ${LOAD_WORKER_REPLICAS:-1}
+      resources:
+        limits:
+          memory: ${LOAD_WORKER_MEMORY_LIMIT:-1024M}
+          cpus: ${LOAD_WORKER_CPUS:-0}
+    environment:
+      <<: *api-environment
+      PROCESS_ROLE: worker
+      SOCKETS_ENABLED: ""
+      NODE_OPTIONS: --max-old-space-size=${LOAD_WORKER_HEAP_MB:-512}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - data
+
+  # The sockets' role (profile `realtime`, wave 18 of the plan): the same
+  # image in PROCESS_ROLE=realtime, which Traefik reaches on /socket.io
+  # before the api's catch-all, the way the Domain with Path does in
+  # Dokploy. The scenes connect over WebSocket only, so one connection
+  # stays on one replica without a sticky cookie.
+  realtime:
+    profiles: ["realtime"]
+    image: ${LOAD_REALTIME_IMAGE:-${LOAD_API_IMAGE:-trajetto-api:load}}
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+      target: runner
+    cpuset: ${LOAD_REALTIME_CPUSET:-}
+    deploy:
+      replicas: ${LOAD_REALTIME_REPLICAS:-1}
+      resources:
+        limits:
+          memory: ${LOAD_REALTIME_MEMORY_LIMIT:-512M}
+    environment:
+      <<: *api-environment
+      PROCESS_ROLE: realtime
+      SOCKETS_ENABLED: ""
+      NODE_OPTIONS: --max-old-space-size=${LOAD_REALTIME_HEAP_MB:-320}
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.load-realtime.rule=PathPrefix(`/socket.io`)
+      - traefik.http.routers.load-realtime.priority=100
+      - traefik.http.routers.load-realtime.entrypoints=web
+      - traefik.http.routers.load-realtime.service=load-realtime
+      - traefik.http.services.load-realtime.loadbalancer.server.port=3333
+      - traefik.http.services.load-realtime.loadbalancer.passHostHeader=true
+      - traefik.http.services.load-realtime.loadbalancer.healthcheck.path=/health/readiness
+      - traefik.http.services.load-realtime.loadbalancer.healthcheck.interval=10s
+      - traefik.http.services.load-realtime.loadbalancer.healthcheck.timeout=5s
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - edge
+      - data
+
   # The disposable database: 54321, the port tests/load/seed.ts insists on,
   # so the seed can never touch a real one. Stop trajetto-itest-pg first if
   # it holds the port (or set LOAD_PG_PORT and seed through that).
@@ -173,6 +291,7 @@ services:
     build:
       context: ../../infra/postgres
     command: ["postgres", "-c", "pg_stat_statements.track=all"]
+    cpuset: ${LOAD_PG_CPUSET:-}
     environment:
       POSTGRES_USER: trajetto
       POSTGRES_PASSWORD: ${LOAD_PG_PASSWORD:-trajetto-password}
@@ -196,6 +315,7 @@ services:
   redis:
     image: redis:7-alpine
     command: ["redis-server", "--save", "", "--appendonly", "no", "--maxmemory", "256mb", "--maxmemory-policy", "allkeys-lru"]
+    cpuset: ${LOAD_REDIS_CPUSET:-}
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -209,6 +329,9 @@ services:
   k6:
     image: grafana/k6:2.2.0@sha256:9bd01d6941fca969cb61bb57d2da5ee9b385fe2aa8881df3798c196564d6ace6
     profiles: ["k6"]
+    # Outside the stack's cores with tests/load/vps-6vcpu.env: the
+    # generator must not take the CPU it measures.
+    cpuset: ${LOAD_K6_CPUSET:-}
     environment:
       LOAD_BASE_URL: http://traefik
     volumes:

@@ -637,6 +637,244 @@ describe("the release step runs before the replicas (LOAD-1)", () => {
 });
 
 /**
+ * plano-escala LOAD-01: the harness with the roles of the same image, the
+ * images swappable and the CPU pinned like the single VPS.
+ *
+ * The scale plan splits the API's image into roles (F3-01): the api only
+ * takes requests, a worker claims the queues and runs the cron. A bench
+ * that only ever ran `all` measured a fleet production stops running in
+ * phase C, and a bench with all the machine's cores measured a server
+ * production does not have. Without a profile the harness stays exactly
+ * what it was; `--profile roles` with LOAD_API_ROLE=api is api ×2 without
+ * workers plus worker ×1.
+ */
+type RoleService = Service & {
+  deploy?: { replicas?: number; resources?: { limits?: { cpus?: number } } };
+  cpuset?: string;
+  labels?: Record<string, string> | string[];
+  networks?: Record<string, unknown>;
+  profiles?: string[];
+};
+
+function renderWith(
+  args: string[],
+  env: Record<string, string> = {},
+): Record<string, RoleService> {
+  const result = spawnSync(
+    "docker",
+    [
+      "compose",
+      ...args,
+      "-f",
+      resolve(LOAD, "compose.load.yaml"),
+      "config",
+      "--format",
+      "json",
+    ],
+    {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        JWT_SECRET: "load-jwt",
+        JWT_SECRET_REFRESH_TOKEN: "load-refresh",
+        ...env,
+      },
+    },
+  );
+
+  if (result.status !== 0)
+    throw new Error(`docker compose config: ${result.stderr}`);
+
+  return JSON.parse(result.stdout).services as Record<string, RoleService>;
+}
+
+describe("the roles of the harness (LOAD-01)", () => {
+  /** The services of the file, by their two-space indentation. */
+  const block = (name: string) => {
+    const start = harness.indexOf(`\n  ${name}:\n`);
+    const end = harness.slice(start + 1).search(/\n {2}[a-z0-9-]+:\n/);
+
+    return harness.slice(start, end === -1 ? undefined : start + 1 + end);
+  };
+
+  it("adds the worker and the realtime only under their profiles", () => {
+    expect(block("worker")).toContain('profiles: ["roles"]');
+    expect(block("realtime")).toContain('profiles: ["realtime"]');
+    expect(block("api")).not.toContain("profiles:");
+    expect(block("worker")).toContain("PROCESS_ROLE: worker");
+    expect(block("realtime")).toContain("PROCESS_ROLE: realtime");
+  });
+
+  it("gives the replicas the role `all` unless LOAD_API_ROLE says otherwise", () => {
+    expect(harness).toContain("PROCESS_ROLE: ${LOAD_API_ROLE:-all}");
+    // The old switch, now the role's preset: an explicit true would keep
+    // the api's workers on whatever LOAD_API_ROLE says.
+    expect(harness).not.toMatch(/^\s+WORKERS_ENABLED:/m);
+  });
+
+  it("lets every role run another image, the API's by default", () => {
+    expect(block("worker")).toContain(
+      "image: ${LOAD_WORKER_IMAGE:-${LOAD_API_IMAGE:-trajetto-api:load}}",
+    );
+    expect(block("realtime")).toContain(
+      "image: ${LOAD_REALTIME_IMAGE:-${LOAD_API_IMAGE:-trajetto-api:load}}",
+    );
+  });
+
+  it("pins every service's CPU by a variable, and the env file covers them all", () => {
+    const variables = [
+      ...harness.matchAll(/cpuset: \$\{(LOAD_\w+_CPUSET):-\}/g),
+    ]
+      .map((match) => match[1])
+      .filter((name, index, all) => all.indexOf(name) === index)
+      .sort();
+    const env = read(LOAD, "vps-6vcpu.env");
+    const values = Object.fromEntries(
+      [...env.matchAll(/^(LOAD_\w+_CPUSET)=(\S+)$/gm)].map((match) => [
+        match[1],
+        match[2],
+      ]),
+    );
+
+    expect(variables).toEqual(
+      [
+        "LOAD_API_CPUSET",
+        "LOAD_K6_CPUSET",
+        "LOAD_PG_CPUSET",
+        "LOAD_REALTIME_CPUSET",
+        "LOAD_REDIS_CPUSET",
+        "LOAD_TRAEFIK_CPUSET",
+        "LOAD_WORKER_CPUSET",
+      ].sort(),
+    );
+    expect(Object.keys(values).sort()).toEqual(variables);
+
+    // The stack on the VPS's six cores, k6 on others.
+    const cores = (set: string) => {
+      const [from, to] = set.split("-").map(Number);
+
+      return Array.from({ length: to - from + 1 }, (_, i) => from + i);
+    };
+    const stack = new Set(
+      Object.entries(values)
+        .filter(([name]) => name !== "LOAD_K6_CPUSET")
+        .flatMap(([, set]) => cores(set)),
+    );
+
+    expect([...stack].sort()).toEqual([0, 1, 2, 3, 4, 5]);
+    expect(cores(values.LOAD_K6_CPUSET).some((core) => stack.has(core))).toBe(
+      false,
+    );
+  });
+
+  describe.skipIf(!hasCompose)("as docker compose renders it", () => {
+    it("is today's harness without a profile", () => {
+      const services = renderWith([]);
+
+      expect(Object.keys(services).sort()).toEqual(
+        ["api", "migrate", "postgres", "redis", "traefik"].sort(),
+      );
+      expect(services.api.environment?.PROCESS_ROLE).toBe("all");
+      expect(services.api.deploy?.replicas).toBe(2);
+      expect(services.api.cpuset).toBeUndefined();
+    });
+
+    it("runs api ×2 without workers and worker ×1 with --profile roles", () => {
+      const services = renderWith(["--profile", "roles"], {
+        LOAD_API_ROLE: "api",
+      });
+      const role = (name: string) => {
+        const parsed = envSchema.safeParse(
+          definedEnv(services[name].environment ?? {}),
+        );
+
+        expect(
+          parsed.success,
+          `${name}: ${JSON.stringify(parsed.error?.format())}`,
+        ).toBe(true);
+
+        return parsed.data!;
+      };
+
+      expect(services.api.deploy?.replicas).toBe(2);
+      expect(services.worker.deploy?.replicas).toBe(1);
+
+      const api = role("api");
+      const worker = role("worker");
+
+      expect(api.PROCESS_ROLE).toBe("api");
+      expect(api.WORKERS_ENABLED).toBe(false);
+      expect(api.WORKER_QUEUES).toEqual([]);
+      expect(api.CRON_ENABLED).toBe(false);
+
+      expect(worker.PROCESS_ROLE).toBe("worker");
+      expect(worker.WORKERS_ENABLED).toBe(true);
+      expect(worker.CRON_ENABLED).toBe(true);
+      expect(worker.WORKER_QUEUES).toEqual([
+        "outbox",
+        "internal",
+        "external",
+        "webhooks",
+        "ai",
+        "jobs",
+      ]);
+      expect(worker.SOCKETS_ENABLED).toBe(false);
+
+      // The worker is off the edge: Traefik never routes to it.
+      expect(Object.keys(services.worker.networks ?? {})).toEqual(["data"]);
+      expect(services.worker.depends_on?.migrate?.condition).toBe(
+        "service_completed_successfully",
+      );
+    });
+
+    it("puts the realtime behind Traefik on /socket.io with --profile realtime", () => {
+      const services = renderWith(["--profile", "realtime"], {
+        LOAD_API_SOCKETS: "false",
+      });
+      const labels = JSON.stringify(services.realtime.labels);
+      const realtime = envSchema.safeParse(
+        definedEnv(services.realtime.environment ?? {}),
+      );
+      const api = envSchema.safeParse(
+        definedEnv(services.api.environment ?? {}),
+      );
+
+      expect(labels).toContain("PathPrefix(`/socket.io`)");
+      expect(labels).toContain(
+        '"traefik.http.services.load-realtime.loadbalancer.healthcheck.path":"/health/readiness"',
+      );
+      expect(realtime.success && realtime.data.PROCESS_ROLE).toBe("realtime");
+      expect(realtime.success && realtime.data.SOCKETS_ENABLED).toBe(true);
+      expect(api.success && api.data.SOCKETS_ENABLED).toBe(false);
+    });
+
+    it("pins the stack to cores 0-5 and k6 outside them with vps-6vcpu.env", () => {
+      const services = renderWith([
+        "--env-file",
+        resolve(LOAD, "vps-6vcpu.env"),
+        "--profile",
+        "roles",
+        "--profile",
+        "k6",
+      ]);
+
+      for (const name of [
+        "traefik",
+        "migrate",
+        "api",
+        "worker",
+        "postgres",
+        "redis",
+      ]) {
+        expect(services[name].cpuset, name).toBe("0-5");
+      }
+
+      expect(services.k6.cpuset).toBe("6-9");
+    });
+  });
+});
+
+/**
  * multi-replica.sh against the harness.
  *
  * Its compose calls carried no --env-file, and the compose file requires

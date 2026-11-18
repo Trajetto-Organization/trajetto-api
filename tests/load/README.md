@@ -113,6 +113,47 @@ src/server.ts`) e o k6 pelo Docker com
 Esse caminho cruza a fronteira WSL2/Windows a cada requisição: serve para
 achar gargalo, não para número de capacidade.
 
+### Papéis, imagens trocáveis e CPU da VPS (plano de escala LOAD-01)
+
+Sem perfil, o harness é o de sempre: N réplicas em `PROCESS_ROLE=all`, cada
+uma com todas as filas e o cron, como a produção até a onda 14. Dois perfis
+sobem a frota dividida em papéis da mesma imagem:
+
+| Perfil     | O que sobe                                                                                                                                              | Com                                                                                         |
+| ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
+| `roles`    | o `worker` (`PROCESS_ROLE=worker`, `LOAD_WORKER_REPLICAS`, padrão 1): todas as filas e o cron, varredura de 2 s, acordado pelas dicas da api pelo Redis | `LOAD_API_ROLE=api`: as réplicas atrás do Traefik param de consumir filas e de rodar o cron |
+| `realtime` | o `realtime` (`PROCESS_ROLE=realtime`) atrás do Traefik em `/socket.io`, como a _Domain_ com _Path_ da onda 18                                          | `LOAD_API_SOCKETS=false`: as réplicas da api recusam socket                                 |
+
+O papel da api é a variável `LOAD_API_ROLE` (padrão `all`), e não o perfil:
+um perfil do compose não muda outro serviço. A frota da fase C (api ×2 sem
+workers, worker ×1):
+
+```bash
+LOAD_API_ROLE=api docker compose --env-file .env \
+  -f tests/load/compose.load.yaml --profile roles up -d --build
+```
+
+Imagens trocáveis: `LOAD_API_IMAGE`, `LOAD_WORKER_IMAGE` e
+`LOAD_REALTIME_IMAGE` (as duas últimas seguem a primeira) sobem uma frota
+mista, como no meio de um rolling. Construa uma vez e suba **sem** `--build`
+(com ele, o compose constrói esta árvore com a tag pedida).
+
+CPU da VPS: `tests/load/vps-6vcpu.env` fixa a pilha inteira nos núcleos 0 a
+5 (a VPS única tem 6 vCPU compartilhadas) e o k6 nos 6 a 9, fora deles, para
+o gerador não tirar CPU do que ele mede. Só numa máquina Linux com 10 núcleos
+ou mais (o Docker recusa um cpuset que a máquina não tem), nunca na VPS:
+
+```bash
+docker compose --env-file .env --env-file tests/load/vps-6vcpu.env \
+  -f tests/load/compose.load.yaml up -d --build
+```
+
+O cpuset imita núcleos, não o _steal_ da VPS: os números da bancada são
+indicativos. A memória de cada fase (seção 3 do plano) vai em
+`API_MEMORY_LIMIT`, `API_HEAP_MB`, `LOAD_WORKER_MEMORY_LIMIT`,
+`LOAD_WORKER_HEAP_MB` e `LOAD_WORKER_CPUS`. O perfil `pgbouncer` do plano
+entra com a imagem `trajetto-pgbouncer` (onda 17), que ainda não existe.
+
 ### Seed por degrau (`LOAD_TIER`, plano de escala LOAD-02)
 
 Com `LOAD_TIER`, o `seed.ts` semeia pelo Prisma só o tenant que a carga
