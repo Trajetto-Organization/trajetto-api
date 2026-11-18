@@ -319,8 +319,13 @@ soluço do banco não pode fazer cada processo achar que está sozinho e
 passar do contrato. Com algum teto ligado, o pool da raia separa as linhas
 por provedor: o claim deixa de fora o canal do provedor que está na sua
 parte e devolve na hora, sem gastar tentativa, o que pegou a mais, então
-nenhuma linha espera o provedor com o lease correndo. Concorrência não
-limita taxa; o balde de taxa por provedor é o F3-15c.
+nenhuma linha espera o provedor com o lease correndo. A parte conta as
+chamadas abertas no provedor, não as vagas do pool: um envio que passou do
+tempo de espera da entrega (`PER_DELIVERY_TIMEOUT_MS`) libera a vaga mas
+continua aberto, e segue contando na parte do provedor até ele responder,
+ou até o fim do lease da entrega; sem isso, um provedor lento recebia uma
+chamada nova para cada uma que ainda não tinha respondido. Concorrência
+não limita taxa; o balde de taxa por provedor é o F3-15c.
 
 **Balde de taxa por provedor (F3-15c).** Os contratos são taxas (80
 mensagens por segundo na Meta, 10 requisições na Resend, 600 notificações

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   DIVISOR_HIGH_WATER_MS,
@@ -18,7 +18,9 @@ import {
  *  - the divisor is the greatest of the live processes, the most seen in
  *    the last ten minutes and the owner's floor, never below 1;
  *  - a failed read keeps the last divisor: a hiccup never makes every
- *    process think it is alone and go past the provider's contract.
+ *    process think it is alone and go past the provider's contract;
+ *  - a call left on the wire past the backstop keeps its place in the
+ *    part until it settles, or until the delivery's lease ends.
  */
 
 describe("a process's part of a global cap", () => {
@@ -152,5 +154,97 @@ describe("the caps of a process", () => {
 
     expect(caps.divisor("external")).toBe(2);
     expect(caps.limitOf("whatsapp")).toBe(2);
+  });
+});
+
+describe("a call left on the wire past the backstop (F3-15a review)", () => {
+  // The pool freed a slot when the pipeline stopped waiting for a send,
+  // while the request stayed open at the provider: with the provider
+  // slow, each slot that hit the backstop started another call, and a
+  // cap of 4 held about 16 open at Resend.
+  const capsOf = (email: number) =>
+    createProviderCaps({
+      globals: () => ({ whatsapp: 0, email, push: 0 }),
+      live: async () => 1,
+      expected: () => 0,
+    });
+
+  const tick = () => new Promise((resolve) => setImmediate(resolve));
+
+  it("keeps its place in the provider's part until the provider answers", async () => {
+    const caps = capsOf(4);
+    await caps.refresh("external");
+
+    let answer!: () => void;
+    const call = new Promise<void>((resolve) => {
+      answer = resolve;
+    });
+
+    caps.holdUntilSettled("email", call, 60_000);
+
+    expect(caps.limitOf("email")).toBe(3);
+    expect(caps.heldOnTheWire("email")).toBe(1);
+
+    answer();
+    await tick();
+
+    expect(caps.limitOf("email")).toBe(4);
+    expect(caps.heldOnTheWire("email")).toBe(0);
+  });
+
+  it("gives the place back when the provider refuses, too", async () => {
+    const caps = capsOf(2);
+    await caps.refresh("external");
+
+    let refuse!: (error: Error) => void;
+    const call = new Promise<void>((_, reject) => {
+      refuse = reject;
+    });
+
+    caps.holdUntilSettled("email", call, 60_000);
+    expect(caps.limitOf("email")).toBe(1);
+
+    refuse(new Error("SMTP 451"));
+    await tick();
+
+    expect(caps.limitOf("email")).toBe(2);
+  });
+
+  it("leaves no room while the calls on the wire fill the part, and never less", async () => {
+    const caps = capsOf(1);
+    await caps.refresh("external");
+
+    caps.holdUntilSettled("email", new Promise(() => undefined), 60_000);
+    caps.holdUntilSettled("email", new Promise(() => undefined), 60_000);
+
+    expect(caps.limitOf("email")).toBe(0);
+  });
+
+  it("stops counting a call that never settles when the lease ends", async () => {
+    vi.useFakeTimers();
+
+    try {
+      const caps = capsOf(4);
+      await caps.refresh("external");
+
+      caps.holdUntilSettled("email", new Promise(() => undefined), 165_000);
+
+      vi.advanceTimersByTime(164_999);
+      expect(caps.limitOf("email")).toBe(3);
+
+      vi.advanceTimersByTime(1);
+      expect(caps.limitOf("email")).toBe(4);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("is no limit for a provider without a cap, held or not", async () => {
+    const caps = capsOf(0);
+    await caps.refresh("external");
+
+    caps.holdUntilSettled("email", new Promise(() => undefined), 60_000);
+
+    expect(caps.limitOf("email")).toBe(Number.POSITIVE_INFINITY);
   });
 });

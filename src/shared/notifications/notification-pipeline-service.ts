@@ -1728,6 +1728,22 @@ class NotificationPipelineService {
           "notification delivery overran its budget; its outcome is recorded when the provider answers",
         );
 
+        // The call is still open at the provider: it keeps its place in
+        // the provider's global cap (F3-15a) until it settles, not only
+        // until this slot frees, or a slow provider would get a new call
+        // for each one it has not answered.
+        const provider = providerOfChannel(delivery.channel);
+
+        if (provider) {
+          providerCaps.holdUntilSettled(
+            provider,
+            work,
+            (delivery.claimStartedAtMs ?? Date.now()) +
+              DELIVERY_LEASE_SECONDS * 1000 -
+              Date.now(),
+          );
+        }
+
         void work
           .then(
             (lateMessageId) =>

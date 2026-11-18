@@ -30,6 +30,14 @@ const log = logger.child({ component: "provider-caps" });
  * floor), never below 1; and when the read fails, the last divisor stands.
  * A process going away gives its part back to the others only ten minutes
  * later: the safe side of a contract.
+ *
+ * The part counts the calls open at the provider, not the pool's slots: a
+ * send that outlives the delivery's backstop (PER_DELIVERY_TIMEOUT_MS)
+ * frees its slot while its request is still on the wire, and a slow
+ * provider, the very case the cap exists for, then received a new call
+ * for every one it had not answered. Such a call is held against its
+ * provider's part (holdUntilSettled) until it settles, or until the
+ * delivery's lease ends, when the row is anybody's again.
  */
 
 type Provider = "whatsapp" | "email" | "push";
@@ -184,6 +192,9 @@ function createProviderCaps(deps: ProviderCapsDeps) {
   const capped = (provider: Provider): boolean =>
     (deps.globals()[provider] ?? 0) > 0;
 
+  /** Calls left on the wire past the backstop, per provider. */
+  const onTheWire = new Map<Provider, number>();
+
   return {
     /** The providers of `lane` that have a global cap. */
     providersOf(lane: DeliveryLane): Provider[] {
@@ -203,8 +214,10 @@ function createProviderCaps(deps: ProviderCapsDeps) {
     },
 
     /**
-     * This process's part of `provider`'s global cap, as last read; Infinity
-     * when the provider has none.
+     * What this process may start of `provider` now: its part of the
+     * global cap, as last read, less its calls still on the wire past the
+     * backstop (0 while they fill it); Infinity when the provider has
+     * none.
      */
     limitOf(provider: Provider): number {
       const part = perProcessCap(
@@ -212,7 +225,49 @@ function createProviderCaps(deps: ProviderCapsDeps) {
         divisors[PROVIDER_LANE[provider]].current(),
       );
 
-      return part ?? Number.POSITIVE_INFINITY;
+      if (part === null) return Number.POSITIVE_INFINITY;
+
+      return Math.max(0, part - (onTheWire.get(provider) ?? 0));
+    },
+
+    /**
+     * Counts `call`, a send the pipeline stopped waiting for, against
+     * `provider`'s part until it settles, or for `ceilingMs` at most (the
+     * rest of the delivery's lease: past it the row may be claimed and
+     * sent again, and a promise that never settles must not take the
+     * part away for good).
+     */
+    holdUntilSettled(
+      provider: Provider,
+      call: Promise<unknown>,
+      ceilingMs: number,
+    ): void {
+      onTheWire.set(provider, (onTheWire.get(provider) ?? 0) + 1);
+
+      let held = true;
+
+      const release = () => {
+        if (!held) return;
+
+        held = false;
+        clearTimeout(ceiling);
+
+        const left = (onTheWire.get(provider) ?? 1) - 1;
+
+        if (left > 0) onTheWire.set(provider, left);
+        else onTheWire.delete(provider);
+      };
+
+      const ceiling = setTimeout(release, Math.max(0, ceilingMs));
+
+      ceiling.unref?.();
+
+      call.then(release, release);
+    },
+
+    /** Calls of `provider` held on the wire now. */
+    heldOnTheWire(provider: Provider): number {
+      return onTheWire.get(provider) ?? 0;
     },
   };
 }
