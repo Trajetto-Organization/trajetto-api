@@ -138,17 +138,30 @@ function fairClaimSql(queue: FairQueue, input: FairClaimInput): Prisma.Sql {
    * One probe: the ids of up to rowsPerTenant due rows of `company`, oldest
    * first. Carried by the walk, so a company is read once.
    */
+  //
+  // The company as a range of one value, ordered by (company, due time), on
+  // purpose: with `= company` the planner drops the company from the order
+  // and may read the queue's due-time index instead, filtering by company.
+  // It does so when the statistics see few companies (a young table, one
+  // carrier alone) — and then a small company behind a flood is found
+  // after the whole flood. Only the fair index gives this order.
   const dueIdsOf = (company: Prisma.Sql) => Prisma.sql`ARRAY(
         SELECT "id" FROM ${table}
-        WHERE ${indexed} AND ${tenant} = ${company} AND ${due}${floor}
-        ORDER BY ${dueAt}
+        WHERE ${indexed}
+          AND ${tenant} >= ${company} AND ${tenant} <= ${company}
+          AND ${due}${floor}
+        ORDER BY ${tenant}, ${dueAt}
         LIMIT ${perTenant}
       )`;
 
-  /** The step of a walk: the company after `previous`, and its due ids. */
+  /**
+   * The step of a walk: the company after `previous`, and its due ids, read
+   * only when there is a company (past the last one, the walk ends).
+   */
   const step = (previous: Prisma.Sql) => Prisma.sql`(
         SELECT "t"."tenant", ${dueIdsOf(Prisma.raw(`"t"."tenant"`))} AS "ids"
         FROM (SELECT ${nextTenant(previous)} AS "tenant" OFFSET 0) AS "t"
+        WHERE "t"."tenant" IS NOT NULL
         OFFSET 0
       )`;
 
@@ -178,7 +191,7 @@ function fairClaimSql(queue: FairQueue, input: FairClaimInput): Prisma.Sql {
         THEN ARRAY(
           SELECT "id" FROM ${table}
           WHERE ${indexed} AND ${tenant} IS NULL AND ${due}${floor}
-          ORDER BY ${dueAt}
+          ORDER BY ${tenant}, ${dueAt}
           LIMIT ${perTenant}
         )
         ELSE ARRAY[]::text[]

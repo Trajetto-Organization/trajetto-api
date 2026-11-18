@@ -56,6 +56,28 @@ describe("the fair claim's statement", () => {
     expect(text).toContain('"next"."tenant" <= $');
   });
 
+  it("reads a company's rows in the fair index's order, never by company equality", () => {
+    // With `business_id = company` the planner drops the company from the
+    // order and, when the statistics see few companies, reads the due-time
+    // index filtering by company: a small company behind a flood was found
+    // after the whole flood (1,168 pages for a claim of five in the plan
+    // test, against ~200). A one-value range ordered by (company, due time)
+    // only the fair index can give.
+    expect(text).toContain(
+      '"business_id" >= "t"."tenant" AND "business_id" <= "t"."tenant"',
+    );
+    expect(text).toContain('ORDER BY "business_id", "availableAt" LIMIT');
+    expect(text).not.toMatch(/"business_id" = "t"\."tenant"/);
+
+    // The NULL bucket, the same order.
+    expect(text).toMatch(
+      /"business_id" IS NULL AND .*? ORDER BY "business_id", "availableAt"/,
+    );
+
+    // Past the last company the walk ends without reading anything more.
+    expect(text).toContain('WHERE "t"."tenant" IS NOT NULL');
+  });
+
   it("inlines the index predicate as literals and casts every bound value", () => {
     expect(text).toContain(
       "\"status\" IN ('PENDING', 'PROCESSING') AND \"channel\" IN ('EMAIL', 'WHATSAPP')",
