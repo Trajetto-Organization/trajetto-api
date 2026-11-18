@@ -126,6 +126,7 @@ import {
   sheddingNow,
 } from "./shared/http/load-shedding";
 import { registerSheddingProbe } from "./shared/health/pressure-level";
+import { httpSurfaceHook } from "./shared/http/http-surface";
 import { shedClassOf, type ShedClass } from "./shared/http/shed-classes";
 import { databasePool } from "@/../infra/database";
 
@@ -650,6 +651,16 @@ app.register(fastifyUnderPressure, loadSheddingOptions());
 // While the replica refuses requests, the flushes of the positions that do
 // get through are told to wait the most (pressure-level.ts, F2-26).
 registerSheddingProbe(sheddingNow);
+
+// The routes this process's role answers (plano-escala F3-01): a worker, a
+// scheduler or a worker-external only /health*, the realtime role the same
+// (Socket.IO answers before Fastify), the ingest role /health* and the
+// positions. The rest gets the 404 of a missing route. The last root
+// onRequest hook, so a hidden route goes through exactly what a missing one
+// does; not registered at all on api and all, which serve everything.
+if (env.HTTP_SURFACE !== "all") {
+  app.addHook("onRequest", httpSurfaceHook(env.HTTP_SURFACE));
+}
 
 // Every finished response, refusals and 404s included: the status class, the
 // latency per route group and, on POST /route/positions, the app contract

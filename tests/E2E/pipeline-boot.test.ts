@@ -95,3 +95,54 @@ describe("starting a pipeline", () => {
     }
   });
 });
+
+/**
+ * A process that claims only some queues (WORKER_QUEUES, plano-escala F3-01)
+ * drains only those at boot: a worker-external drained the bell's backlog
+ * and the AI readings on its own pool, the contention the split removes.
+ */
+describe("draining with a subset of the queues", () => {
+  it("drains the lanes it claims and leaves the AI readings to their worker", async () => {
+    const { env } = await import("@/env");
+    const { NotificationPipelineService } =
+      await import("@/shared/notifications/notification-pipeline-service");
+    const { AIAnalysisPipelineService } =
+      await import("@/shared/ai/ai-analysis-pipeline-service");
+    const { drainWorkerBacklog } = await import("@/workers");
+
+    const mutableEnv = env as unknown as { WORKER_QUEUES: readonly string[] };
+    const queues = mutableEnv.WORKER_QUEUES;
+
+    const notifications = NotificationPipelineService.getInstance();
+    const outbox = vi
+      .spyOn(notifications, "runOutboxCycle")
+      .mockResolvedValue(false);
+    const lanes = vi
+      .spyOn(notifications, "runDeliveryCycle")
+      .mockResolvedValue(undefined);
+    const ai = vi
+      .spyOn(
+        AIAnalysisPipelineService.getInstance() as unknown as {
+          runCycle: () => Promise<void>;
+        },
+        "runCycle",
+      )
+      .mockResolvedValue(undefined);
+
+    mutableEnv.WORKER_QUEUES = ["external"];
+
+    await notifications.initialize();
+
+    try {
+      drainWorkerBacklog();
+      await settle();
+
+      expect(outbox).not.toHaveBeenCalled();
+      expect(lanes.mock.calls).toEqual([["external"]]);
+      expect(ai).not.toHaveBeenCalled();
+    } finally {
+      mutableEnv.WORKER_QUEUES = queues;
+      await notifications.shutdown();
+    }
+  });
+});

@@ -14,6 +14,7 @@ import { sendNotificationToUser } from "@/websocket";
 import { withoutRequestContext } from "@/shared/http/request-context";
 import { logger } from "@/shared/logging/logger";
 import { workerHeartbeat } from "@/shared/health/worker-heartbeat";
+import { consumesQueue } from "@/shared/lifecycle/process-role";
 
 import { IMailProvider } from "@/shared/providers/mail-provider/IMail-provider";
 import { MailDeliveryError } from "@/shared/providers/mail-provider/errors/mail-delivery-error";
@@ -79,7 +80,8 @@ import { emailLogoUrl } from "@/shared/providers/mail-provider/email-logo";
  * exists for what a wake can't cover — scheduled retries, leases orphaned by
  * a dead replica, and events published by another replica — so it can be
  * slow, keeping idle instances (and dev query logs) quiet. A dedicated worker
- * replica (WORKERS_ENABLED) is woken by nobody and polls faster.
+ * (PROCESS_ROLE=worker) is woken by nobody in its own process and polls
+ * faster: its preset sets 2 s.
  */
 const SWEEP_INTERVAL_MS = env.PIPELINE_SWEEP_INTERVAL_MS;
 
@@ -392,13 +394,18 @@ class NotificationPipelineService {
   public async initialize(): Promise<void> {
     this.stopping = false;
 
-    this.outboxTimer = setInterval(() => {
-      this.runOutboxCycle().catch((error) => {
-        log.error({ err: error }, "outbox cycle failed");
-      });
-    }, SWEEP_INTERVAL_MS);
+    // A timer per queue this process claims (WORKER_QUEUES, plano-escala
+    // F3-01): a worker-external sweeps the external lane and nothing else,
+    // and the outbox it does not claim is expanded by another process.
+    if (consumesQueue(env, "outbox")) {
+      this.outboxTimer = setInterval(() => {
+        this.runOutboxCycle().catch((error) => {
+          log.error({ err: error }, "outbox cycle failed");
+        });
+      }, SWEEP_INTERVAL_MS);
+    }
 
-    for (const lane of Object.keys(DELIVERY_LANES) as DeliveryLane[]) {
+    for (const lane of this.consumedLanes()) {
       this.deliveryTimers.push(
         setInterval(() => {
           this.runDeliveryCycle(lane).catch((error) => {
@@ -413,7 +420,17 @@ class NotificationPipelineService {
     // now, every in-app row in the backlog reached the bell with no toast,
     // because `io` did not exist yet (OUTBOX-19).
 
-    log.info("notification pipeline started");
+    log.info(
+      { outbox: this.outboxTimer !== null, lanes: this.consumedLanes() },
+      "notification pipeline started",
+    );
+  }
+
+  /** The delivery lanes this process claims, in their fixed order. */
+  private consumedLanes(): DeliveryLane[] {
+    return (Object.keys(DELIVERY_LANES) as DeliveryLane[]).filter((lane) =>
+      consumesQueue(env, lane),
+    );
   }
 
   /**
@@ -429,18 +446,21 @@ class NotificationPipelineService {
    * drain lasted.
    */
   public wake(): void {
-    // On an HTTP-only replica (WORKERS_ENABLED=false) a publish drains
-    // nothing: the worker service's sweep picks the event up (GAP2-3).
-    if (this.stopping || !env.WORKERS_ENABLED) return;
+    if (this.stopping) return;
+
+    // Only the queues this process claims (WORKER_QUEUES, plano-escala
+    // F3-01). On an HTTP-only replica (WORKERS_ENABLED=false) a publish
+    // drains nothing: the worker service's sweep picks the event up
+    // (GAP2-3).
+    const outbox = consumesQueue(env, "outbox");
+    const lanes = this.consumedLanes();
+
+    if (!outbox && lanes.length === 0) return;
 
     withoutRequestContext(() => {
-      this.runOutboxCycle()
+      (outbox ? this.runOutboxCycle() : Promise.resolve(false))
         .then(() =>
-          Promise.all(
-            (Object.keys(DELIVERY_LANES) as DeliveryLane[]).map((lane) =>
-              this.runDeliveryCycle(lane),
-            ),
-          ),
+          Promise.all(lanes.map((lane) => this.runDeliveryCycle(lane))),
         )
         .catch((error) => {
           log.error({ err: error }, "pipeline wake failed");

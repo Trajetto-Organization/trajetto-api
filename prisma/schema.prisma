@@ -1718,8 +1718,9 @@ model OpsSample {
   /// The end of the minute the row covers.
   ts DateTime
 
-  /// "all" (HTTP and the workers in one process), "http"
-  /// (WORKERS_ENABLED=false), or "cluster" for the elected heartbeat's row.
+  /// The process's PROCESS_ROLE label (plano-escala F3-01: "all", "api",
+  /// "worker"...), or "cluster" for the elected heartbeat's row. Rows
+  /// written before wave 12 say "http" for an HTTP-only replica.
   role String
 
   /// The container's hostname: one per Swarm task.

@@ -4227,11 +4227,37 @@ ou `driver_position` acima de 50 GB).
 ## 19. Réplicas, workers e tempo real
 
 Cada réplica da API roda, no mesmo processo e no mesmo pool: o HTTP, o
-Socket.IO com o adapter Redis e — com `WORKERS_ENABLED=true`, o padrão — os
+Socket.IO com o adapter Redis e — no papel `all`, o padrão — os
 workers (pipeline de notificações, pipeline de IA, dispatcher de webhooks) e o
 agendador de crons. As filas no Postgres são reivindicadas com
 `FOR UPDATE SKIP LOCKED` e lease, e os crons têm uma execução por horário
 graças a um lease no banco: N réplicas não duplicam nada.
+
+**Papéis da mesma imagem (`PROCESS_ROLE`, plano de escala F3-01).** A
+mesma imagem roda como várias Applications, cada uma com um papel:
+
+| Papel             | Workers | Cron | Filas (`WORKER_QUEUES`) | Varreduras | Rotas que atende                     |
+| ----------------- | ------- | ---- | ----------------------- | ---------- | ------------------------------------ |
+| `all` (o padrão)  | sim     | sim  | todas                   | 30 s e 5 s | todas                                |
+| `api`             | não     | não  | nenhuma                 | —          | todas                                |
+| `worker`          | sim     | sim  | todas                   | 2 s e 2 s  | só `/health*`                        |
+| `scheduler`       | sim     | sim  | `none`                  | —          | só `/health*`                        |
+| `realtime`        | não     | não  | nenhuma                 | —          | só `/health*` (e o `/socket.io`)     |
+| `worker-external` | sim     | não  | `external`              | 2 s        | só `/health*`                        |
+| `ingest`          | não     | não  | nenhuma                 | —          | `/health*` e `POST /route/positions` |
+
+O papel é um preset: ele preenche `WORKERS_ENABLED`, `CRON_ENABLED`,
+`WORKER_QUEUES`, `PIPELINE_SWEEP_INTERVAL_MS` e `WEBHOOK_SWEEP_INTERVAL_MS`,
+e toda variável dada explicitamente ganha dele. O boot loga
+`process role resolved`, com o que ficou valendo; em aviso, com
+`overrides`, quando uma variável contrariou o preset (um
+`WORKERS_ENABLED=true` copiado do _Environment_ antigo deixaria a API com
+os workers). Sem `PROCESS_ROLE`, tudo fica como antes (`all`; com
+`WORKERS_ENABLED=false`, `api`). As rotas fora do papel respondem o mesmo
+404 de rota inexistente: um contêiner de outro environment na
+`dokploy-network` não alcança as rotas de um worker. O registro dos crons
+existe em todo processo (o `/health/metrics` lista os jobs em qualquer
+réplica); só o `CRON_ENABLED` os agenda.
 
 - **Tempo real com várias réplicas**: o evento emitido numa réplica chega ao
   cliente conectado em outra pelo pub/sub do Redis
@@ -4472,27 +4498,33 @@ sem reiniciar os workers. Separar é isolamento, não correção de falha.
 2. Crie uma Application `trajetto-worker` (App Name `trajetto-worker-production`)
    com a **mesma** imagem e o mesmo _Environment_ da API, mudando só:
    ```
-   WORKERS_ENABLED=true
-   PIPELINE_SWEEP_INTERVAL_MS=2000
+   PROCESS_ROLE=worker
    DATABASE_URL=postgresql://...?schema=public&connection_limit=4&pool_timeout=10&connect_timeout=5&socket_timeout=60&max_idle_connection_lifetime=300&options=...
    ```
+   e **tirando** `WORKERS_ENABLED`, `CRON_ENABLED`, `WORKER_QUEUES`,
+   `PIPELINE_SWEEP_INTERVAL_MS` e `WEBHOOK_SWEEP_INTERVAL_MS`, se o
+   _Environment_ copiado tiver: o preset do papel põe os valores certos (as
+   varreduras em 2 s), e uma variável explícita ganharia dele.
    Sem domínio, 1 réplica, o mesmo _Swarm Settings_ e _Resources_ da API.
    **Atenção**: a ação de deploy (`.github/actions/deploy`) só faz o deploy
    de `trajetto-ai` e `trajetto-api`. Um worker exige um passo a mais nela
    (outro `DOKPLOY_*_APPLICATION_ID`, entregue pelos dois jobs `Deploy`),
    senão ele fica na versão antiga a cada promoção.
-3. Suba o worker primeiro e confirme nos logs `workers started` e, em
-   `/health/metrics`, os batimentos dos workers vindos dele.
-4. Só então `WORKERS_ENABLED=false` na API. Cada réplica loga
+3. Suba o worker primeiro e confirme nos logs `process role resolved` com
+   `role: worker`, `workers started` e, em `/health/metrics`, os batimentos
+   dos workers vindos dele.
+4. Só então `PROCESS_ROLE=api` na API. Cada réplica loga
+   `process role resolved` com `role: api` e
    `workers disabled on this replica (WORKERS_ENABLED=false)`.
 
-Voltar: `WORKERS_ENABLED=true` na API primeiro, depois remover o worker. O
+Voltar: `PROCESS_ROLE=all` na API primeiro, depois Replicas 0 no worker. O
 worker roda o mesmo `server.ts`, então também tem Socket.IO com o adapter: os
 emits dos pipelines atravessam o Redis até as réplicas HTTP. Numa réplica
 HTTP-only um publish não drena nada; o evento espera a varredura do worker
-(até 2 s com `PIPELINE_SWEEP_INTERVAL_MS=2000`). Testes:
-`tests/unitaires/lifecycle/workers-role-flag.test.ts` e
-`workers-disabled-boot.test.ts`.
+(até 2 s no papel `worker`). Testes:
+`tests/unitaires/lifecycle/process-role.test.ts`, `workers-role-flag.test.ts`,
+`workers-disabled-boot.test.ts`, `worker-queues-external.test.ts` e
+`http-surface.test.ts`.
 
 ### Conexões presas
 
@@ -4647,7 +4679,8 @@ em `reasons`) e, por grupo de rota, o que o descarte de carga recusou
 orçamento do painel por empresa cobrou, recusou ou recusaria no
 `TENANT_PANEL_BUDGET_MODE=observe`, na fatia da pessoa (`user`) e na
 empresa (`tenant`; `src/shared/integration/panel-budget.ts`). As colunas dizem de quem é a
-linha: `role` (`all` com `WORKERS_ENABLED=true`, `http` com `false`),
+linha: `role` (o `PROCESS_ROLE` do processo: `all`, `api`, `worker`…; as
+linhas de antes da onda 12 dizem `http` para uma réplica sem workers),
 `replica` (o hostname do contêiner, mais `/<slot>` com `SWARM_TASK_SLOT`) e
 `commit`. Com as variáveis de identidade do Swarm no _Environment_ da
 `trajetto-api`, digitadas como os modelos do próprio Swarm

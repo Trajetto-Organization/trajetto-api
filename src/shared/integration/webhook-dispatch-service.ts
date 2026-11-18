@@ -1,4 +1,5 @@
 import database from "@/../infra/database";
+import { env } from "@/env";
 
 import { Prisma, WebhookDeliveryStatus } from "@prisma/client";
 
@@ -746,12 +747,13 @@ async function releaseHeldWebhookDeliveriesOfBusiness(
 /**
  * How often a replica looks for work.
  *
- * Five seconds, same as the notification pipeline. A webhook is not a chat
- * message — nobody is watching for it — but an integration that learns about a
- * delivery a minute late is an integration whose customer calls to ask why
- * their ERP is behind.
+ * Five seconds by default (WEBHOOK_SWEEP_INTERVAL_MS, plano-escala F3-01;
+ * the worker preset sets 2 s). A webhook is not a chat message — nobody is
+ * watching for it — but an integration that learns about a delivery a
+ * minute late is an integration whose customer calls to ask why their ERP
+ * is behind.
  */
-const SWEEP_INTERVAL_MS = 5_000;
+const SWEEP_INTERVAL_MS = env.WEBHOOK_SWEEP_INTERVAL_MS;
 
 class WebhookDispatchService {
   private static instance: WebhookDispatchService | null = null;

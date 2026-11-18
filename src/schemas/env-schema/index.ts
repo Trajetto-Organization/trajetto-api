@@ -41,6 +41,11 @@ import {
   POSITIONS_FLUSH_AFTER_MIN_MS,
 } from "@/shared/health/pressure-level";
 import {
+  PROCESS_ROLES,
+  parseWorkerQueues,
+  resolveProcessRole,
+} from "@/shared/lifecycle/process-role";
+import {
   DEFAULT_STOP_GRACE_PERIOD_MS,
   MAX_STOP_GRACE_PERIOD_MS,
   MIN_STOP_GRACE_PERIOD_MS,
@@ -690,23 +695,88 @@ const envSchema = z
         .default(LOCAL_AI_DEFAULT_MAX_CONCURRENCY),
     ),
 
-    // Whether this replica runs the background workers: the notification and
-    // AI pipelines, the webhook dispatcher and the cron (GAP2-3). `false` on
-    // the HTTP replicas ONLY together with a worker service of the same image
-    // left at `true` (docs/deploy.md (Réplicas, workers e tempo real)). Empty counts as absent.
+    // What this process is (plano-escala F3-01, decision D15): a preset and
+    // a label, with every variable below given explicitly winning over the
+    // preset (shared/lifecycle/process-role.ts has the table). Unset, the
+    // process is `all`, today's replica that runs everything; a legacy
+    // WORKERS_ENABLED=false makes it `api`. A name outside the list fails
+    // the boot: a typo must not turn a worker into a copy of the API.
+    // Empty counts as absent.
+    PROCESS_ROLE: z.preprocess(
+      (value) => (value === "" ? undefined : value),
+      z.enum(PROCESS_ROLES).optional(),
+    ),
+
+    // Whether this replica runs the background workers at all: the
+    // notification and AI pipelines, the webhook dispatcher and the cron
+    // (GAP2-3). The master switch: with `false`, no queue and no cron,
+    // whatever WORKER_QUEUES and CRON_ENABLED say. Absent, the role's
+    // preset decides (`true` for all). Empty counts as absent.
     WORKERS_ENABLED: z
       .preprocess(
         (value) => (value === "" ? undefined : value),
-        z.enum(["true", "false"]).default("true"),
+        z.enum(["true", "false"]).optional(),
       )
-      .transform((value) => value === "true"),
+      .transform((value) =>
+        value === undefined ? undefined : value === "true",
+      ),
+
+    // Whether this process runs the cron (plano-escala F3-01). The election
+    // already keeps one run per firing however many processes run it; the
+    // variable keeps the cron's queries off the processes that should not
+    // pay for them (the API once a worker exists, the worker once a
+    // scheduler exists). Absent, the role's preset decides (`true` for all,
+    // as before). Empty counts as absent.
+    CRON_ENABLED: z
+      .preprocess(
+        (value) => (value === "" ? undefined : value),
+        z.enum(["true", "false"]).optional(),
+      )
+      .transform((value) =>
+        value === undefined ? undefined : value === "true",
+      ),
+
+    // Which queues this process claims (plano-escala F3-01): a
+    // comma-separated list of outbox, internal, external, webhooks, ai and
+    // jobs, or `none`. Absent means every queue, as before; `none` is how a
+    // scheduler says "the cron and nothing else". An unknown name fails the
+    // boot: a typo would leave a queue with no process. Empty counts as
+    // absent.
+    WORKER_QUEUES: z.preprocess(
+      (value) =>
+        typeof value === "string" && value.trim() === "" ? undefined : value,
+      z
+        .string()
+        .superRefine((value, ctx) => {
+          const parsed = parseWorkerQueues(value);
+
+          if ("error" in parsed) {
+            ctx.addIssue({ code: "custom", message: parsed.error });
+          }
+        })
+        .transform((value) => {
+          const parsed = parseWorkerQueues(value);
+
+          return "queues" in parsed ? parsed.queues : [];
+        })
+        .optional(),
+    ),
 
     // The pipelines' background sweep. 30 s while every replica wakes its
-    // own pipelines on publish; a dedicated worker polls faster (1-2 s),
-    // because a publish on an HTTP replica no longer wakes it.
+    // own pipelines on publish; a dedicated worker polls faster (the worker
+    // preset sets 2 s), because a publish on an HTTP replica does not wake
+    // it in this process. Absent, the role's preset decides.
     PIPELINE_SWEEP_INTERVAL_MS: z.preprocess(
       (value) => (value === "" ? undefined : value),
-      z.coerce.number().int().min(500).default(30_000),
+      z.coerce.number().int().min(500).optional(),
+    ),
+
+    // The webhook dispatcher's sweep (plano-escala F3-01): 5 s, as it was
+    // hard-coded; 2 s in the worker preset. Absent, the role's preset
+    // decides. Empty counts as absent.
+    WEBHOOK_SWEEP_INTERVAL_MS: z.preprocess(
+      (value) => (value === "" ? undefined : value),
+      z.coerce.number().int().min(500).max(60_000).optional(),
     ),
 
     // The graceful shutdown (plano-escala F1-14). STOP_GRACE_PERIOD_MS is the
@@ -1835,6 +1905,10 @@ const envSchema = z
       (env.NODE_ENV === "production"
         ? ("production" as const)
         : ("development" as const)),
+
+    // The role's preset under the variables given (plano-escala F3-01):
+    // every reader sees the decided values, whoever parsed the environment.
+    ...resolveProcessRole(env),
   }));
 
 export { envSchema };

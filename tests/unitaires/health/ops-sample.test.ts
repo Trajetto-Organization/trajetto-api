@@ -7,7 +7,7 @@ import {
   buildOpsSampleRow,
   createOpsSampler,
   createSampleSections,
-  opsSampleRole,
+  opsSampleIdentity,
   type OpsSampleRow,
   type OpsSampleWindow,
 } from "@/shared/health/ops-sample";
@@ -178,9 +178,10 @@ describe("the ops_sample row", () => {
     expect(http).toHaveBeenCalledTimes(1);
   });
 
-  it("names the role after WORKERS_ENABLED until PROCESS_ROLE exists", () => {
-    expect(opsSampleRole(true)).toBe("all");
-    expect(opsSampleRole(false)).toBe("http");
+  it("labels the row with the process role (PROCESS_ROLE, F3-01)", () => {
+    expect(opsSampleIdentity("all", {}).role).toBe("all");
+    expect(opsSampleIdentity("api", {}).role).toBe("api");
+    expect(opsSampleIdentity("worker", {}).role).toBe("worker");
   });
 });
 

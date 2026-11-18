@@ -180,18 +180,41 @@ process.on("unhandledRejection", (reason) => {
 });
 
 async function bootstrap() {
+  // What this process runs, decided by PROCESS_ROLE and the variables that
+  // override its preset (plano-escala F3-01), before the boot's steps, so
+  // the owner reads the role at the top of a deploy's log. A variable
+  // that overrode the preset of a role somebody asked for is a warning: a
+  // WORKERS_ENABLED=true copied from the old Environment would keep the
+  // api's workers in silence. Names only, never a value.
+  const processRole = {
+    role: env.PROCESS_ROLE,
+    workers: env.WORKERS_ENABLED,
+    cron: env.CRON_ENABLED,
+    queues: env.WORKER_QUEUES,
+    http_surface: env.HTTP_SURFACE,
+    pipeline_sweep_ms: env.PIPELINE_SWEEP_INTERVAL_MS,
+    webhook_sweep_ms: env.WEBHOOK_SWEEP_INTERVAL_MS,
+    overrides: env.PROCESS_ROLE_OVERRIDES,
+  };
+
+  if (env.PROCESS_ROLE_OVERRIDES.length > 0) {
+    log.warn(processRole, "process role resolved");
+  } else {
+    log.info(processRole, "process role resolved");
+  }
+
   // The order and the reasons live in shared/lifecycle/startup.ts: workers
   // armed before the listener, the backlog drained only once realtime is up.
   await runStartup({
     // Which role the runtime connects as (plano-escala F3-21): a warning
     // while it is the owner; a refused boot with
-    // DATABASE_REQUIRE_RUNTIME_ROLE=true. The cron runs where the workers
-    // do (WORKERS_ENABLED).
+    // DATABASE_REQUIRE_RUNTIME_ROLE=true. The batch URL is required where
+    // the cron runs (CRON_ENABLED, plano-escala F3-01).
     verifyDatabaseRole: async () => {
       await checkRuntimeRoleAtBoot({
         client: prisma,
         require: env.DATABASE_REQUIRE_RUNTIME_ROLE,
-        runsCron: env.WORKERS_ENABLED,
+        runsCron: env.CRON_ENABLED,
         batchUrl: env.BATCH_DATABASE_URL,
       });
     },
@@ -222,7 +245,7 @@ async function bootstrap() {
       // OPS_SAMPLE_ENABLED=false.
       const sampler = createOpsSampler({
         enabled: env.OPS_SAMPLE_ENABLED,
-        identity: opsSampleIdentity(env.WORKERS_ENABLED),
+        identity: opsSampleIdentity(env.PROCESS_ROLE),
         log,
       });
 

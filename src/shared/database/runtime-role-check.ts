@@ -21,13 +21,13 @@ import { PARTITION_OWNER_ROLE } from "./partition-owner";
  *  - connected as a superuser or as the tables' owner: a warning on every
  *    boot; with DATABASE_REQUIRE_RUNTIME_ROLE=true, the process does not
  *    start (the flag goes on only after the cut, docs/deploy.md);
- *  - with the flag, a process that runs the cron (WORKERS_ENABLED=true
- *    today) must also have BATCH_DATABASE_URL, and its DDL connection must
- *    be able to SET ROLE trajetto_partitions. Without either, the nightly
- *    job could no longer create tomorrow's partitions of the positions,
- *    and the pings of the day after would be refused with no partition to
- *    land in — in silence, a day later. So it is refused at the boot,
- *    where the deploy shows it.
+ *  - with the flag, a process that runs the cron (CRON_ENABLED=true,
+ *    plano-escala F3-01) must also have BATCH_DATABASE_URL, and its DDL
+ *    connection must be able to SET ROLE trajetto_partitions. Without
+ *    either, the nightly job could no longer create tomorrow's partitions
+ *    of the positions, and the pings of the day after would be refused
+ *    with no partition to land in — in silence, a day later. So it is
+ *    refused at the boot, where the deploy shows it.
  *
  * A database that does not answer proves nothing about the configuration:
  * the check logs it and lets the boot go on, as it always did (readiness
@@ -103,7 +103,7 @@ function judgeRuntimeRole(input: RoleCheckInput): RoleCheckVerdict {
 
   if (!input.batchUrl) {
     verdict.fatal.push(
-      `Com ${FLAG} e o cron neste processo (WORKERS_ENABLED=true), falta a BATCH_DATABASE_URL: sem ela o job de partições não cria as partições de amanhã.`,
+      `Com ${FLAG} e o cron neste processo (CRON_ENABLED=true), falta a BATCH_DATABASE_URL: sem ela o job de partições não cria as partições de amanhã.`,
     );
 
     return verdict;

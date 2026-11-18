@@ -86,7 +86,7 @@ describe("ops_sample", () => {
           },
           providers: [],
         },
-        { role: "http", replica, commit: "abc1234" },
+        { role: "api", replica, commit: "abc1234" },
         { realtime: { local_connections: 5 } },
       ),
     );
@@ -95,7 +95,7 @@ describe("ops_sample", () => {
 
     expect(row).toMatchObject({
       ts: endedAt,
-      role: "http",
+      role: "api",
       replica,
       commit: "abc1234",
       v: 1,

@@ -290,20 +290,20 @@ roda como a Application de mesmo nome, com a URL sem tetos na própria
 Os grupos principais (só nomes; os valores de exemplo do `.env.example` são
 fictícios):
 
-| Grupo               | Variáveis                                                                                                                                              |
-| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| processo            | `NODE_ENV`, `APP_ENV` (`development`, `staging` ou `production`), `PORT`, `LOG_LEVEL`, `WORKERS_ENABLED`                                               |
-| banco               | `DATABASE_URL`, `MIGRATION_DATABASE_URL` (a etapa de release), `POSTGRES_*` (só desenvolvimento), `ALLOW_EMPTY_DATABASE_BOOTSTRAP`                     |
-| Redis e tempo real  | `REDIS_URL`, `SOCKET_ADAPTER_KEY`, `SOCKET_REVALIDATE_MS`                                                                                              |
-| URLs e sessão       | `HTTP_REQUEST` (origem da **web**: CORS, Socket.IO e links), `API_HTTP_REQUEST` (URL pública da própria API), `JWT_SECRET`, `JWT_SECRET_REFRESH_TOKEN` |
-| usuário master      | `MASTER_USER_EMAIL`, `MASTER_USER_INITIAL_PASSWORD`                                                                                                    |
-| borda e anti-bot    | `RATE_LIMIT_TRUSTED_PROXY`, `RATE_LIMIT_EDGE_SECRET`, `RATE_LIMIT_FORWARDER_SECRET` (o mesmo da web), `TURNSTILE_SECRET_KEY`                           |
-| arquivos            | `UPLOAD_STORAGE_TYPE` (`local` ou `r2`), `UPLOAD_LOCAL_PATH`, `UPLOAD_SIGNED_URL_TTL_SECONDS`, `UPLOAD_ORPHAN_GC`, `R2_*`                              |
-| e-mail e WhatsApp   | `RESEND_*`, `META_WHATSAPP_*`                                                                                                                          |
-| IA local            | `AI_PROVIDER` (`local` ou `none`), `AI_LOCAL_URL`, `AI_LOCAL_TOKEN` (= `AI_TOKEN` da `trajetto-ai`), `AI_LOCAL_TIMEOUT_MS`, `AI_LOCAL_MAX_CONCURRENCY` |
-| comprovante         | `PROOF_*`, `REVERSE_GEOCODER_*`                                                                                                                        |
-| app, docs, webhooks | `MIN_MOBILE_CONTRACT`, `MOBILE_STORE_URL`, `DOCS_USER`, `DOCS_PASSWORD`, `WEBHOOK_SECRETS_KEY`, `ACTIVITY_RETENTION_DAYS`                              |
-| monitoramento       | `HEALTHCHECK_PING_URL`, `HEALTHCHECK_FAIL_URL`                                                                                                         |
+| Grupo               | Variáveis                                                                                                                                                           |
+| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| processo            | `NODE_ENV`, `APP_ENV` (`development`, `staging` ou `production`), `PORT`, `LOG_LEVEL`, `PROCESS_ROLE` (o papel), `WORKERS_ENABLED`, `CRON_ENABLED`, `WORKER_QUEUES` |
+| banco               | `DATABASE_URL`, `MIGRATION_DATABASE_URL` (a etapa de release), `POSTGRES_*` (só desenvolvimento), `ALLOW_EMPTY_DATABASE_BOOTSTRAP`                                  |
+| Redis e tempo real  | `REDIS_URL`, `SOCKET_ADAPTER_KEY`, `SOCKET_REVALIDATE_MS`                                                                                                           |
+| URLs e sessão       | `HTTP_REQUEST` (origem da **web**: CORS, Socket.IO e links), `API_HTTP_REQUEST` (URL pública da própria API), `JWT_SECRET`, `JWT_SECRET_REFRESH_TOKEN`              |
+| usuário master      | `MASTER_USER_EMAIL`, `MASTER_USER_INITIAL_PASSWORD`                                                                                                                 |
+| borda e anti-bot    | `RATE_LIMIT_TRUSTED_PROXY`, `RATE_LIMIT_EDGE_SECRET`, `RATE_LIMIT_FORWARDER_SECRET` (o mesmo da web), `TURNSTILE_SECRET_KEY`                                        |
+| arquivos            | `UPLOAD_STORAGE_TYPE` (`local` ou `r2`), `UPLOAD_LOCAL_PATH`, `UPLOAD_SIGNED_URL_TTL_SECONDS`, `UPLOAD_ORPHAN_GC`, `R2_*`                                           |
+| e-mail e WhatsApp   | `RESEND_*`, `META_WHATSAPP_*`                                                                                                                                       |
+| IA local            | `AI_PROVIDER` (`local` ou `none`), `AI_LOCAL_URL`, `AI_LOCAL_TOKEN` (= `AI_TOKEN` da `trajetto-ai`), `AI_LOCAL_TIMEOUT_MS`, `AI_LOCAL_MAX_CONCURRENCY`              |
+| comprovante         | `PROOF_*`, `REVERSE_GEOCODER_*`                                                                                                                                     |
+| app, docs, webhooks | `MIN_MOBILE_CONTRACT`, `MOBILE_STORE_URL`, `DOCS_USER`, `DOCS_PASSWORD`, `WEBHOOK_SECRETS_KEY`, `ACTIVITY_RETENTION_DAYS`                                           |
+| monitoramento       | `HEALTHCHECK_PING_URL`, `HEALTHCHECK_FAIL_URL`                                                                                                                      |
 
 Obrigatórias sempre: `DATABASE_URL`, `REDIS_URL`, `HTTP_REQUEST`, `JWT_SECRET`,
 `JWT_SECRET_REFRESH_TOKEN`, `MASTER_USER_EMAIL`, `MASTER_USER_INITIAL_PASSWORD`.

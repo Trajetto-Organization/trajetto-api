@@ -5,6 +5,7 @@ import type { Prisma } from "@prisma/client";
 import database from "@/../infra/database";
 import { buildInfo } from "@/shared/build-info";
 import { PROCESS_CAPABILITIES } from "@/shared/health/capabilities";
+import type { ProcessRole } from "@/shared/lifecycle/process-role";
 import type { RuntimeWindow } from "@/shared/health/runtime-metrics";
 import { swarmIdentity, type SwarmIdentity } from "@/shared/swarm-identity";
 
@@ -46,16 +47,14 @@ const OPS_SAMPLE_VERSION = 1;
 const OPS_SAMPLE_MAX_JITTER_MS = 15_000;
 
 /**
- * "all" runs HTTP and the workers in one process; "http" is a replica with
- * WORKERS_ENABLED=false. Derived until PROCESS_ROLE exists (it is born once,
- * as a preset and a label, in wave 12): a label set this early would change
- * meaning when it arrives. "cluster" is the elected heartbeat's row.
+ * The process's PROCESS_ROLE label (plano-escala F3-01): "all" runs HTTP and
+ * the workers in one process, "api" is an HTTP-only replica (also what a
+ * legacy WORKERS_ENABLED=false resolves to), "worker", "scheduler" and the
+ * rest name their Applications. Before wave 12 the label was derived from
+ * WORKERS_ENABLED alone, and an HTTP-only replica wrote "http": rows of that
+ * time keep it. "cluster" is the elected heartbeat's row.
  */
-type OpsSampleRole = "all" | "http";
-
-function opsSampleRole(workersEnabled: boolean): OpsSampleRole {
-  return workersEnabled ? "all" : "http";
-}
+type OpsSampleRole = ProcessRole;
 
 interface OpsSampleIdentity {
   role: OpsSampleRole;
@@ -76,13 +75,13 @@ interface OpsSampleIdentity {
 }
 
 function opsSampleIdentity(
-  workersEnabled: boolean,
+  role: ProcessRole,
   swarm: Readonly<SwarmIdentity> = swarmIdentity,
 ): OpsSampleIdentity {
   const hostname = os.hostname();
 
   return {
-    role: opsSampleRole(workersEnabled),
+    role,
     replica: swarm.task_slot ? `${hostname}/${swarm.task_slot}` : hostname,
     commit: buildInfo.commit,
     ...(Object.keys(swarm).length > 0 ? { swarm } : {}),
@@ -297,7 +296,6 @@ export {
   createSampleSections,
   insertOpsSample,
   opsSampleIdentity,
-  opsSampleRole,
   registerSampleSection,
   sampleSections,
 };

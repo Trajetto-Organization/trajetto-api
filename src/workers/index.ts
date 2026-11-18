@@ -10,6 +10,11 @@ import { registerCronJobs } from "../jobs/cron";
 import { env } from "../env";
 import { logger } from "../shared/logging/logger";
 import { startHeartbeatFlush } from "../shared/health/worker-heartbeat";
+import {
+  NOTIFICATION_QUEUES,
+  consumesAnyQueue,
+  consumesQueue,
+} from "../shared/lifecycle/process-role";
 
 const log = logger.child({ component: "workers" });
 
@@ -27,31 +32,61 @@ export async function initializeWorkers(): Promise<void> {
     // HTTP requests, so it runs wherever those are served.
     apiUsageRecorder.initialize();
 
+    // The registry on every process, scheduled or not: /health/metrics
+    // lists every job (and the one that never ran) whichever replica
+    // answers. Registering schedules nothing; initialize() does.
+    registerCronJobs();
+
     // An HTTP-only replica (GAP2-3): no cron, no pipeline timers, and its
     // publishes do not drain — the worker service's sweep picks them up.
     // Socket.IO still starts here (server.ts), so a worker-only replica of
     // the same image keeps reaching every client through the Redis adapter.
     if (!env.WORKERS_ENABLED) {
-      log.info("workers disabled on this replica (WORKERS_ENABLED=false)");
+      log.info(
+        { role: env.PROCESS_ROLE },
+        "workers disabled on this replica (WORKERS_ENABLED=false)",
+      );
       return;
     }
 
-    // Register and initialize cron jobs
-    registerCronJobs();
-    await CronSchedulerService.getInstance().initialize();
+    // The cron only where CRON_ENABLED says (plano-escala F3-01): the
+    // election keeps one run per firing anyway, and the other processes
+    // stop paying for the firings they lose.
+    if (env.CRON_ENABLED) {
+      await CronSchedulerService.getInstance().initialize();
+    }
 
-    // Initialize services in parallel for better performance
-    await Promise.all([
-      NotificationPipelineService.getInstance().initialize(),
-      AIAnalysisPipelineService.getInstance().initialize(),
-      WebhookDispatchService.getInstance().initialize(),
-    ]);
+    // Only the services of the queues this process claims (WORKER_QUEUES):
+    // a scheduler (`none`) starts no pipeline, a worker-external only the
+    // external lane.
+    const services: Array<Promise<void>> = [];
+
+    if (consumesAnyQueue(env, NOTIFICATION_QUEUES)) {
+      services.push(NotificationPipelineService.getInstance().initialize());
+    }
+
+    if (consumesQueue(env, "ai")) {
+      services.push(AIAnalysisPipelineService.getInstance().initialize());
+    }
+
+    if (consumesQueue(env, "webhooks")) {
+      services.push(WebhookDispatchService.getInstance().initialize());
+    }
+
+    await Promise.all(services);
 
     // Every replica writes where its workers were last seen, so a cycle hung
     // on one replica shows on /health/metrics whichever replica answers.
     stopHeartbeatFlush = startHeartbeatFlush();
 
-    log.info("workers started");
+    log.info(
+      {
+        role: env.PROCESS_ROLE,
+        queues: env.WORKER_QUEUES,
+        cron: env.CRON_ENABLED,
+      },
+      "workers started",
+    );
   } catch (error) {
     log.error({ err: error }, "workers could not be started");
     throw error;
@@ -68,8 +103,14 @@ export async function initializeWorkers(): Promise<void> {
 export function drainWorkerBacklog(): void {
   if (!env.WORKERS_ENABLED) return;
 
-  NotificationPipelineService.getInstance().wake();
-  AIAnalysisPipelineService.getInstance().wake();
+  // Only what this process claims (WORKER_QUEUES, plano-escala F3-01).
+  if (consumesAnyQueue(env, NOTIFICATION_QUEUES)) {
+    NotificationPipelineService.getInstance().wake();
+  }
+
+  if (consumesQueue(env, "ai")) {
+    AIAnalysisPipelineService.getInstance().wake();
+  }
 }
 
 /**

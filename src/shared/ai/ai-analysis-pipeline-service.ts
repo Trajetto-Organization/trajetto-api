@@ -1,5 +1,6 @@
 import database from "@/../infra/database";
 import { env } from "@/env";
+import { consumesQueue } from "@/shared/lifecycle/process-role";
 import { AIAnalysisType, AIAnalysisUnit, Prisma } from "@prisma/client";
 
 import { sendAIVerificationEvent } from "@/websocket";
@@ -299,9 +300,10 @@ class AIAnalysisPipelineService {
    * on the alerts published for all of them (OBS-06).
    */
   public wake(): void {
-    // On an HTTP-only replica (WORKERS_ENABLED=false) a request queues its
+    // On a process that does not claim the ai queue (WORKERS_ENABLED=false,
+    // or WORKER_QUEUES without it: plano-escala F3-01) a request queues its
     // analysis and drains nothing: the worker service's sweep takes it.
-    if (!env.WORKERS_ENABLED) return;
+    if (!consumesQueue(env, "ai")) return;
 
     withoutRequestContext(() => {
       this.runCycle().catch((error) => {

@@ -393,7 +393,7 @@ interface ClusterSampleDeps {
 function defaultDeps(): ClusterSampleDeps {
   return {
     enabled: env.OPS_SAMPLE_ENABLED,
-    identity: opsSampleIdentity(env.WORKERS_ENABLED),
+    identity: opsSampleIdentity(env.PROCESS_ROLE),
     write: insertOpsSample,
   };
 }

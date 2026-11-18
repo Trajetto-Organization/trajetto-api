@@ -164,7 +164,7 @@ describe("the log bindings", () => {
 
 describe("the ops_sample identity", () => {
   it("is the hostname alone without the variables", () => {
-    const identity = opsSampleIdentity(true, {});
+    const identity = opsSampleIdentity("all", {});
 
     expect(identity.replica).toBe(os.hostname());
     expect(identity.swarm).toBeUndefined();
@@ -172,15 +172,15 @@ describe("the ops_sample identity", () => {
 
   it("adds the slot to the replica and carries the parts", () => {
     const swarm = { node: "node-1", task_slot: "2", service: "api" };
-    const identity = opsSampleIdentity(false, swarm);
+    const identity = opsSampleIdentity("api", swarm);
 
-    expect(identity.role).toBe("http");
+    expect(identity.role).toBe("api");
     expect(identity.replica).toBe(`${os.hostname()}/2`);
     expect(identity.swarm).toEqual(swarm);
   });
 
   it("keeps the hostname alone when only the node is known", () => {
-    const identity = opsSampleIdentity(true, { node: "node-1" });
+    const identity = opsSampleIdentity("all", { node: "node-1" });
 
     expect(identity.replica).toBe(os.hostname());
     expect(identity.swarm).toEqual({ node: "node-1" });
@@ -194,8 +194,8 @@ describe("the ops_sample identity", () => {
     } as unknown as OpsSampleWindow;
     const swarm = { node: "node-1", task_slot: "2", service: "api" };
 
-    const known = opsSampleIdentity(true, swarm);
-    const unknown = opsSampleIdentity(true, {});
+    const known = opsSampleIdentity("all", swarm);
+    const unknown = opsSampleIdentity("all", {});
 
     const withSwarm = buildOpsSampleRow(window, known, {});
     const without = buildOpsSampleRow(window, unknown, {});
