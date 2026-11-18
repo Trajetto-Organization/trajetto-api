@@ -326,10 +326,27 @@ interface PartitionCatalogRow {
  */
 function partitionTableState(
   table: PartitionedTable,
-  parent: { owned: boolean } | null,
+  parent: { owned: boolean; partitioned?: boolean } | null,
   rows: readonly PartitionCatalogRow[],
   now: Date = new Date(),
 ): PartitionTableMetrics {
+  // A queue before its swap (F5-09) is a plain table with no partition to
+  // judge: neither a runway nor an owner to page about yet.
+  if (table.plainUntilSwap && parent?.partitioned === false) {
+    return {
+      partitions: 0,
+      lookahead_days: null,
+      last_partition_ends_at: null,
+      oldest_partition_starts_at: null,
+      retention_days: table.retentionDays,
+      runway_ok: true,
+      lookahead_ok: true,
+      detach_pending: 0,
+      stuck: [],
+      owner_ok: true,
+    };
+  }
+
   const ranged = rows.map((row) => ({
     row,
     range: row.bound ? parsePartitionBound(row.bound) : null,
@@ -382,6 +399,7 @@ async function readPartitionStates(
     Array<{
       parent: string;
       parent_owned: boolean;
+      parent_partitioned: boolean;
       relname: string | null;
       bound: string | null;
       detach_pending: boolean | null;
@@ -390,6 +408,7 @@ async function readPartitionStates(
   >(
     `SELECT t.name AS parent,
             coalesce(p.relowner = r.oid, false) AS parent_owned,
+            p.relkind = 'p' AS parent_partitioned,
             c.relname::text AS relname,
             pg_get_expr(c.relpartbound, c.oid) AS bound,
             i.inhdetachpending AS detach_pending,
@@ -406,7 +425,13 @@ async function readPartitionStates(
   return Object.fromEntries(
     tables.map((table) => {
       const own = rows.filter((row) => row.parent === table.table);
-      const parent = own.length > 0 ? { owned: own[0].parent_owned } : null;
+      const parent =
+        own.length > 0
+          ? {
+              owned: own[0].parent_owned,
+              partitioned: own[0].parent_partitioned,
+            }
+          : null;
       const partitions = own
         .filter((row) => row.relname !== null)
         .map((row) => ({

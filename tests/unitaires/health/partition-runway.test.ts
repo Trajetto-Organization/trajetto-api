@@ -178,6 +178,36 @@ describe("partitionTableState", () => {
     });
   });
 
+  it("does not judge a queue before its swap, nor after it is left plain", () => {
+    // F5-07: the queues are registered before the swap of F5-09 makes them
+    // partitioned; a plain table has no partition to page about.
+    const queue = {
+      ...trail,
+      table: "domain_outbox_event",
+      plainUntilSwap: true,
+    };
+
+    expect(
+      partitionTableState(queue, { owned: false, partitioned: false }, [], NOW),
+    ).toMatchObject({
+      partitions: 0,
+      runway_ok: true,
+      lookahead_ok: true,
+      owner_ok: true,
+      stuck: [],
+    });
+
+    // Once partitioned, judged like any other table.
+    expect(
+      partitionTableState(queue, { owned: true, partitioned: true }, [], NOW),
+    ).toMatchObject({ runway_ok: false });
+
+    // A table that was never meant to stay plain is judged plain or not.
+    expect(
+      partitionTableState(trail, { owned: true, partitioned: false }, [], NOW),
+    ).toMatchObject({ runway_ok: false });
+  });
+
   it("does not judge the lookahead of a table that keeps none", () => {
     const retired = { ...trail, lookahead: 0 };
     const state = partitionTableState(retired, { owned: true }, [row(-1)], NOW);

@@ -304,9 +304,21 @@ function clientClass(connectTimeoutMs: number): typeof pg.Client {
 }
 
 /** The pool for one Prisma connection: built per `$connect`, ended by `$disconnect`. */
+/**
+ * The name the API's sessions carry in pg_stat_activity when the URL names
+ * none (an application_name in the URL wins: pg reads the connection
+ * string over the config). Not a label for people only: the release step's
+ * trajetto_capability_ready (plano-escala F5-07) reads a session with NO
+ * name in this database as a process that cannot announce what it runs,
+ * the image from before this one, and holds every contraction back while
+ * one is connected. F3-02 adds the role's suffix.
+ */
+const DEFAULT_APPLICATION_NAME = "trajetto-api";
+
 function createPool(settings: DatabasePoolSettings): pg.Pool {
   const pool = new pg.Pool({
     connectionString: settings.connectionString || undefined,
+    application_name: DEFAULT_APPLICATION_NAME,
     max: settings.max,
     connectionTimeoutMillis: settings.poolTimeoutMs,
     idleTimeoutMillis: settings.idleTimeoutMs,
@@ -343,6 +355,7 @@ function createPool(settings: DatabasePoolSettings): pg.Pool {
 }
 
 export {
+  DEFAULT_APPLICATION_NAME,
   DatabaseUnavailableError,
   UNMAPPED_SOCKET_ERRNOS,
   createPool,

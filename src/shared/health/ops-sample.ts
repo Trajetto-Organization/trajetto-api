@@ -4,6 +4,7 @@ import type { Prisma } from "@prisma/client";
 
 import database from "@/../infra/database";
 import { buildInfo } from "@/shared/build-info";
+import { PROCESS_CAPABILITIES } from "@/shared/health/capabilities";
 import type { RuntimeWindow } from "@/shared/health/runtime-metrics";
 import { swarmIdentity, type SwarmIdentity } from "@/shared/swarm-identity";
 
@@ -118,6 +119,7 @@ const RESERVED_SECTION_NAMES = new Set([
   "prisma_pool",
   "providers",
   "swarm",
+  "capabilities",
 ]);
 
 /** A name, not data: lower snake case, short. */
@@ -191,6 +193,10 @@ function buildOpsSampleRow(
       // without the variables is the v=1 document it always was.
       ...(identity.swarm ? { swarm: { ...identity.swarm } } : {}),
       ...sections,
+      // What this build can run beside (F5-07): read by the release step's
+      // trajetto_capability_ready before a contraction. Last, so no section
+      // can stand in for it.
+      capabilities: [...PROCESS_CAPABILITIES],
     },
   };
 }

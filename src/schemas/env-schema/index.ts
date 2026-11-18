@@ -918,6 +918,16 @@ const envSchema = z
       z.coerce.number().int().min(7).max(60).default(7),
     ),
 
+    // How many days ahead the partition job keeps the four queues' daily
+    // partitions (plano-escala F5-07), once the swap of F5-09 made them
+    // partitioned; until then it changes nothing. A week by default, as
+    // the trail: under 7 the partition-lookahead-low alert (under 5 days
+    // ahead) would fire before every nightly run.
+    QUEUE_PARTITION_LOOKAHEAD_DAYS: z.preprocess(
+      (value) => (value === "" ? undefined : value),
+      z.coerce.number().int().min(7).max(60).default(7),
+    ),
+
     // The trail's archive (plano-escala F2-11, decision D3): with
     // TRAIL_ARCHIVE_ENABLED=true, the partition job copies a day of the
     // trail to the ARCHIVE bucket (one gzipped CSV per company, written

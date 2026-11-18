@@ -67,6 +67,24 @@ interface PartitionedTable {
    * detached and dropped (plano-escala F2-11). Absent: dropped as is.
    */
   archive?: "trail";
+
+  /**
+   * A table that is still a plain one, and becomes partitioned only at the
+   * swap of plano-escala F5-09 (prisma/post-deploy): until then the job
+   * leaves it alone, and the metrics and the alerts do not judge its
+   * partitions (it has none to judge). From the swap on, it is kept like
+   * any other entry.
+   */
+  plainUntilSwap?: boolean;
+
+  /**
+   * Storage parameters each new partition gets, as `name=value`: a
+   * partitioned parent cannot hold them (Postgres refuses fillfactor and
+   * the autovacuum settings on it), and `LIKE … INCLUDING …` does not copy
+   * them. The queues' are the ones their plain tables have today
+   * (tests/E2E/raw-sql-objects.test.ts, STORAGE_PARAMETERS).
+   */
+  reloptions?: readonly string[];
 }
 
 /** One partition the registry wants, `from` inclusive and `to` exclusive. */
@@ -91,6 +109,67 @@ const FREEZE_LOOKBACK_DAYS = 14;
 interface PartitionEnv {
   DRIVER_POSITION_RETENTION_DAYS: number;
   DRIVER_POSITION_PARTITION_LOOKAHEAD_DAYS: number;
+  /** Days of the queues' partitions made ahead (F5-07); 7 when absent. */
+  QUEUE_PARTITION_LOOKAHEAD_DAYS?: number;
+}
+
+/** The queues' lookahead when the environment does not say (F5-07). */
+const QUEUE_PARTITION_LOOKAHEAD_DAYS_DEFAULT = 7;
+
+/**
+ * The queues' storage parameters, one partition at a time: a claim rewrites
+ * a row in place (fillfactor 70 leaves room for the HOT update) and their
+ * dead rows are vacuumed early and cheaply. The receipts are appended and
+ * rarely updated, and keep the defaults.
+ */
+const QUEUE_RELOPTIONS = [
+  "autovacuum_vacuum_scale_factor=0.01",
+  "autovacuum_analyze_scale_factor=0.01",
+  "autovacuum_vacuum_cost_delay=2",
+  "fillfactor=70",
+] as const;
+
+const WEBHOOK_DELIVERY_RELOPTIONS = [
+  "autovacuum_vacuum_scale_factor=0.01",
+  "autovacuum_analyze_scale_factor=0.01",
+  "fillfactor=70",
+] as const;
+
+/**
+ * The four queues (plano-escala F5-07), daily by their uuid v7 id from the
+ * swap of F5-09 on. Every id written there is a v7
+ * (tests/unitaires/database/queue-ids-v7-guard.test.ts): a v4 would land
+ * in any day's range. Yesterday, today and tomorrow must exist (an id of a
+ * delivery carries its event's millisecond, and a replica's clock may be
+ * behind); a week ahead by default. Nothing is detached nor dropped by the
+ * job yet: the queues keep their purges in batches until the retention by
+ * day of F5-11 and F5-12. A day stops changing once its rows settle; the
+ * receipts' days settle last (a provider reports for days).
+ */
+function queuePartitions(values: PartitionEnv): PartitionedTable[] {
+  const queue = {
+    grain: "day",
+    key: "uuid7",
+    lookahead:
+      values.QUEUE_PARTITION_LOOKAHEAD_DAYS ??
+      QUEUE_PARTITION_LOOKAHEAD_DAYS_DEFAULT,
+    requiredBehind: 1,
+    requiredAhead: 1,
+    retentionDays: null,
+    settleDays: 3,
+    plainUntilSwap: true,
+  } as const;
+
+  return [
+    { table: "domain_outbox_event", ...queue, reloptions: QUEUE_RELOPTIONS },
+    { table: "notification_delivery", ...queue, reloptions: QUEUE_RELOPTIONS },
+    { table: "notification_provider_receipt", ...queue, settleDays: 8 },
+    {
+      table: "webhook_delivery",
+      ...queue,
+      reloptions: WEBHOOK_DELIVERY_RELOPTIONS,
+    },
+  ];
 }
 
 /**
@@ -124,6 +203,8 @@ interface PartitionEnv {
  * day lands in the month behind); the history before the first month is
  * the legacy partition, FROM (MINVALUE), which the job leaves alone. Kept:
  * nothing is detached or dropped until the legal opinion (decision D3).
+ *
+ * The four queues: see queuePartitions. Plain tables until the swap.
  */
 function registeredPartitions(
   values: PartitionEnv = env,
@@ -152,6 +233,7 @@ function registeredPartitions(
       retentionDays: null,
       settleDays: 7,
     },
+    ...queuePartitions(values),
   ];
 }
 
@@ -296,6 +378,7 @@ function freezeWindow(
 
 export {
   DELIVERY_EVENT_LOOKAHEAD_MONTHS,
+  QUEUE_PARTITION_LOOKAHEAD_DAYS_DEFAULT,
   FREEZE_LOOKBACK_DAYS,
   addGrains,
   freezeWindow,

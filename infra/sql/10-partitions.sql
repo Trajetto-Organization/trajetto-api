@@ -26,7 +26,8 @@
 -- The parents are the tables the partition job keeps
 -- (src/shared/database/partitions.ts; a unit test keeps the two lists in
 -- step) and the ones the plan adds later (the lean trail, the event and
--- activity shells); a table that does not exist yet is skipped.
+-- activity shells, the four queues); a table that does not exist yet, or
+-- is not partitioned yet (the queues until their swap, F5-09), is skipped.
 --
 -- A change of owner takes ACCESS EXCLUSIVE on the table, and the whole
 -- file is one transaction (infra/sql/README.md): every lock it takes is
@@ -51,7 +52,11 @@ DECLARE
     'driver_position',
     'driver_position_v2',
     'delivery_event_part',
-    'activity_part'
+    'activity_part',
+    'domain_outbox_event',
+    'notification_delivery',
+    'notification_provider_receipt',
+    'webhook_delivery'
   ];
   owner_name CONSTANT name := 'trajetto_partitions';
   lock_budget CONSTANT interval := interval '3 seconds';
@@ -117,6 +122,15 @@ BEGIN
     parent_rel := to_regclass(format('%I.%I', target_schema, parent_name));
 
     CONTINUE WHEN parent_rel IS NULL;
+
+    -- The queues are plain tables until the swap of F5-09 makes them
+    -- partitioned (src/shared/database/partitions.ts, plainUntilSwap):
+    -- left to their owner until then. Reowning a hot plain table would hold
+    -- every write of the queue behind its lock for nothing, since no
+    -- partition job runs on it yet.
+    CONTINUE WHEN (
+      SELECT c.relkind FROM pg_catalog.pg_class c WHERE c.oid = parent_rel
+    ) <> 'p';
 
     kept := kept || parent_name;
 

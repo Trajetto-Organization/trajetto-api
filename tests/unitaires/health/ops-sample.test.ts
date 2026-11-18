@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { PROCESS_CAPABILITIES } from "@/shared/health/capabilities";
 import {
   OPS_SAMPLE_MAX_JITTER_MS,
   OPS_SAMPLE_VERSION,
@@ -118,8 +119,28 @@ describe("the ops_sample row", () => {
         prisma_pool: window().runtime.prisma_pool,
         providers: window().providers,
         realtime: { local_connections: 4 },
+        capabilities: [...PROCESS_CAPABILITIES],
       },
     });
+  });
+
+  it("announces this build's capabilities, last, where no section can override them", () => {
+    // The release step's trajetto_capability_ready reads them before a
+    // contraction (F5-07): a section by that name is refused, and the
+    // field is written after the sections.
+    expect(() =>
+      createSampleSections().register("capabilities", () => []),
+    ).toThrow();
+
+    const row = buildOpsSampleRow(window(), IDENTITY, {});
+
+    expect(row.metrics.capabilities).toEqual([
+      "queue-partition-agnostic-v1",
+      "route-stop-open-by-route-v1",
+    ]);
+    const keys = Object.keys(row.metrics);
+
+    expect(keys[keys.length - 1]).toBe("capabilities");
   });
 
   it("carries no key that could name a person or a tenant", () => {

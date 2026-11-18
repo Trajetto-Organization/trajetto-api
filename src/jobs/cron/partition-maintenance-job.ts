@@ -134,15 +134,23 @@ interface AttachedPartition {
   detachPending: boolean;
 }
 
-/** The parent's partitions, from the catalog; null when it does not exist. */
+/**
+ * The parent's partitions, from the catalog; null when it does not exist,
+ * "plain" when it is still a plain table (a queue before its swap, F5-09).
+ */
 async function readAttached(
   table: string,
-): Promise<AttachedPartition[] | null> {
+): Promise<AttachedPartition[] | null | "plain"> {
   const [parent] = await databaseBatch.$queryRawUnsafe<
-    Array<{ present: boolean }>
-  >("SELECT to_regclass(quote_ident($1)) IS NOT NULL AS present", table);
+    Array<{ relkind: string | null }>
+  >(
+    "SELECT (SELECT c.relkind::text FROM pg_class c WHERE c.oid = to_regclass(quote_ident($1))) AS relkind",
+    table,
+  );
 
-  if (!parent?.present) return null;
+  if (!parent?.relkind) return null;
+
+  if (parent.relkind !== "p") return "plain";
 
   const rows = await databaseBatch.$queryRawUnsafe<
     Array<{ relname: string; bound: string; detach_pending: boolean }>
@@ -240,6 +248,14 @@ async function createPartition(
           `CREATE TABLE ${quote(planned.name)}
              (LIKE ${quote(table.table)} INCLUDING DEFAULTS INCLUDING CONSTRAINTS)`,
         );
+
+        // On the new, empty table, before it is attached: the parent
+        // cannot carry them, and LIKE does not copy them (F5-07).
+        if (table.reloptions?.length) {
+          await tx.$executeRawUnsafe(
+            `ALTER TABLE ${quote(planned.name)} SET (${table.reloptions.join(", ")})`,
+          );
+        }
         await tx.$executeRawUnsafe(
           `ALTER TABLE ${quote(table.table)} ATTACH PARTITION ${quote(planned.name)}
              FOR VALUES FROM (${partitionBound(table, planned.from)}) TO (${partitionBound(table, planned.to)})`,
@@ -603,6 +619,24 @@ async function maintainPartitions(
 
       if (attached === null) {
         log.warn({ table: table.table }, "partitioned table not found");
+        continue;
+      }
+
+      // A queue before its swap (F5-09): nothing to keep yet. Any other
+      // table found plain is an incident, and says so.
+      if (attached === "plain") {
+        if (table.plainUntilSwap) {
+          log.info(
+            { table: table.table },
+            "table not partitioned yet (the swap of F5-09): left alone",
+          );
+        } else {
+          log.warn(
+            { table: table.table },
+            "registered table is not partitioned",
+          );
+        }
+
         continue;
       }
 

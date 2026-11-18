@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 import { envSchema } from "@/schemas/env-schema";
 import { definedEnv } from "@/schemas/env-schema/defined-env";
 import {
+  QUEUE_PARTITION_LOOKAHEAD_DAYS_DEFAULT,
   addGrains,
   freezeWindow,
   partitionBound,
@@ -16,6 +17,7 @@ import {
   retentionCutoff,
   type PartitionedTable,
 } from "@/shared/database/partitions";
+import { uuid7Floor } from "@/shared/time/uuid7-floor";
 
 /**
  * The registry the partition-maintenance job, the metrics and the alerts
@@ -209,6 +211,116 @@ describe("the partition registry", () => {
     for (const table of registeredPartitions()) {
       expect(parents, table.table).toContain(table.table);
     }
+  });
+});
+
+/**
+ * The four queues (plano-escala F5-07): daily on their uuid v7 id from the
+ * swap of F5-09 on, a week ahead by default, nothing dropped by the job
+ * yet, each new partition with the storage parameters its plain table has
+ * today (a partitioned parent cannot carry them). Until the swap they are
+ * plain tables the job leaves alone.
+ */
+describe("the queues in the registry", () => {
+  const queues = () =>
+    registeredPartitions({
+      DRIVER_POSITION_RETENTION_DAYS: 90,
+      DRIVER_POSITION_PARTITION_LOOKAHEAD_DAYS: 7,
+    }).filter((table) => table.plainUntilSwap);
+
+  it("are the four, daily by id, plain until the swap, and kept", () => {
+    expect(queues().map((table) => table.table)).toEqual([
+      "domain_outbox_event",
+      "notification_delivery",
+      "notification_provider_receipt",
+      "webhook_delivery",
+    ]);
+
+    for (const table of queues()) {
+      expect(table, table.table).toMatchObject({
+        grain: "day",
+        key: "uuid7",
+        lookahead: QUEUE_PARTITION_LOOKAHEAD_DAYS_DEFAULT,
+        requiredBehind: 1,
+        requiredAhead: 1,
+        retentionDays: null,
+      });
+    }
+
+    expect(QUEUE_PARTITION_LOOKAHEAD_DAYS_DEFAULT).toBe(7);
+  });
+
+  it("make yesterday through a week ahead, bounded by the smallest v7 of each day", () => {
+    const [outbox] = queues();
+    const planned = plannedPartitions(outbox, NIGHT);
+
+    expect(planned).toHaveLength(9);
+    expect(planned[0]).toMatchObject({
+      name: "domain_outbox_event_20261116",
+      required: true,
+    });
+    expect(planned[planned.length - 1].name).toBe(
+      "domain_outbox_event_20261124",
+    );
+    expect(partitionBound(outbox, day("2026-11-17"))).toBe(
+      `'${uuid7Floor(day("2026-11-17"))}'`,
+    );
+  });
+
+  it("give each new partition its table's storage parameters", () => {
+    const options = Object.fromEntries(
+      queues().map((table) => [table.table, table.reloptions ?? []]),
+    );
+
+    expect(options).toEqual({
+      domain_outbox_event: [
+        "autovacuum_vacuum_scale_factor=0.01",
+        "autovacuum_analyze_scale_factor=0.01",
+        "autovacuum_vacuum_cost_delay=2",
+        "fillfactor=70",
+      ],
+      notification_delivery: [
+        "autovacuum_vacuum_scale_factor=0.01",
+        "autovacuum_analyze_scale_factor=0.01",
+        "autovacuum_vacuum_cost_delay=2",
+        "fillfactor=70",
+      ],
+      notification_provider_receipt: [],
+      webhook_delivery: [
+        "autovacuum_vacuum_scale_factor=0.01",
+        "autovacuum_analyze_scale_factor=0.01",
+        "fillfactor=70",
+      ],
+    });
+  });
+
+  it("follow QUEUE_PARTITION_LOOKAHEAD_DAYS, which refuses less than a week", () => {
+    const configured = registeredPartitions({
+      DRIVER_POSITION_RETENTION_DAYS: 90,
+      DRIVER_POSITION_PARTITION_LOOKAHEAD_DAYS: 7,
+      QUEUE_PARTITION_LOOKAHEAD_DAYS: 14,
+    }).filter((table) => table.plainUntilSwap);
+
+    expect(configured.every((table) => table.lookahead === 14)).toBe(true);
+
+    const parse = (value: string) =>
+      envSchema.safeParse(
+        definedEnv({
+          NODE_ENV: "development",
+          REDIS_URL: "redis://localhost:6379",
+          HTTP_REQUEST: "http://localhost:3000",
+          JWT_SECRET: "a".repeat(32),
+          JWT_SECRET_REFRESH_TOKEN: "b".repeat(32),
+          MASTER_USER_EMAIL: "master@example.com",
+          MASTER_USER_INITIAL_PASSWORD: "x",
+          QUEUE_PARTITION_LOOKAHEAD_DAYS: value,
+        }),
+      );
+
+    const empty = parse("");
+
+    expect(parse("6").success).toBe(false);
+    expect(empty.success && empty.data?.QUEUE_PARTITION_LOOKAHEAD_DAYS).toBe(7);
   });
 });
 

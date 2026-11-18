@@ -333,3 +333,70 @@ describe("partition-maintenance on driver_position", () => {
     expect(await exists(expired)).toBe(false);
   });
 });
+
+/**
+ * The queues in the registry (plano-escala F5-07): plain tables until the
+ * swap of F5-09, which the job leaves alone; once partitioned, each new
+ * day gets the storage parameters the plain table had, which a
+ * partitioned parent cannot carry and LIKE does not copy.
+ */
+describe("the queues", () => {
+  it("are left alone while they are plain tables", async () => {
+    const queues = registeredPartitions().filter(
+      (table) => table.plainUntilSwap,
+    );
+
+    expect(queues.map((table) => table.table)).toContain("domain_outbox_event");
+
+    const outcome = await maintainPartitions({ tables: queues });
+
+    for (const table of queues) {
+      expect(outcome[table.table], table.table).toMatchObject({
+        created: 0,
+        missingNow: [],
+      });
+      expect(await exists(partitionName(table, today())), table.table).toBe(
+        false,
+      );
+    }
+  });
+
+  it("give a partitioned queue's new days their storage parameters", async () => {
+    await admin.query(
+      `CREATE TABLE "queue_probe" ("id" text NOT NULL, PRIMARY KEY ("id")) PARTITION BY RANGE ("id")`,
+    );
+
+    const probe = {
+      table: "queue_probe",
+      grain: "day",
+      key: "uuid7",
+      lookahead: 2,
+      requiredBehind: 1,
+      requiredAhead: 1,
+      retentionDays: null,
+      settleDays: 3,
+      plainUntilSwap: true,
+      reloptions: ["fillfactor=70", "autovacuum_vacuum_cost_delay=2"],
+    } as const;
+
+    const outcome = await maintainPartitions({ tables: [probe] });
+
+    expect(outcome.queue_probe).toMatchObject({ created: 4, missingNow: [] });
+
+    const { rows } = await admin.query<{ relname: string; options: string[] }>(
+      `SELECT c.relname::text AS relname, c.reloptions AS options
+         FROM pg_inherits i JOIN pg_class c ON c.oid = i.inhrelid
+        WHERE i.inhparent = 'queue_probe'::regclass
+        ORDER BY 1`,
+    );
+
+    expect(rows).toHaveLength(4);
+
+    for (const row of rows) {
+      expect([...row.options].sort(), row.relname).toEqual([
+        "autovacuum_vacuum_cost_delay=2",
+        "fillfactor=70",
+      ]);
+    }
+  });
+});
