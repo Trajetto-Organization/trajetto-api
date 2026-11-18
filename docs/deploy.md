@@ -5919,16 +5919,16 @@ Na ordem:
 
 ### Quem é quem
 
-|                             | API (`Trajetto-Organization/trajetto-api`)                                                                                                                                                                                                                                                                                                                                                                                                                               | Web (`Trajetto-Organization/trajetto-ui`)                                                                                                                                                                       | App (`Trajetto-Organization/trajetto-mobile`)                                                                   |
-| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
-| Artefato                    | imagens `trajetto-api`, `trajetto-api-migrate` e `trajetto-ai` em `ghcr.io/trajetto-organization/`                                                                                                                                                                                                                                                                                                                                                                       | imagem `ghcr.io/trajetto-organization/trajetto-ui`                                                                                                                                                              | APK/AAB (EAS Build) e OTA (EAS Update)                                                                          |
-| Onde roda                   | Dokploy, projeto `trajetto-api` de cada environment (`staging` e `production`): as Applications `trajetto-api` (2 réplicas, com domínio), `trajetto-api-migrate` (as migrations, antes do deploy que as muda) e `trajetto-ai` (sem domínio), puxando as imagens do GHCR, e os Databases PostgreSQL (com o backup diário do próprio Dokploy para o Cloudflare R2) e Redis                                                                                                 | Dokploy, projeto `trajetto-ui` de cada environment: a Application `trajetto-ui`, puxando a imagem do GHCR                                                                                                       | no celular do motorista (APK interno em staging, Play Store em produção)                                        |
-| Nome no Dokploy / EAS       | App Names `trajetto-api-staging` e `trajetto-api-production` (e `trajetto-api-migrate-*`, `trajetto-ai-*`, `trajetto-postgres-*`, `trajetto-redis-*`)                                                                                                                                                                                                                                                                                                                    | Application `trajetto-ui` no projeto `trajetto-ui` de cada environment (App Names `trajetto-ui-staging` e `trajetto-ui-production`)                                                                             | perfis, ambientes e canais `staging` e `production`                                                             |
-| Como o pipeline publica     | API do Dokploy (`.github/scripts/dokploy-deploy.mjs`): quando as migrations mudaram, primeiro a `trajetto-api-migrate`, esperando a etapa terminar (`dokploy-release.mjs`); depois `application.deploy` de cada Application, na ordem IA → API, a IA só quando o digest muda, acompanhando cada deployment até o fim e disparando de novo, até 6 vezes e com espera crescente, o que termina em erro; depois espera a `/health/liveness` pública responder o commit novo | API do Dokploy com o **mesmo** `.github/scripts/dokploy-deploy.mjs` (cópia comparada por teste): `application.deploy` da Application `trajetto-ui`, acompanhando o deployment, depois espera o `/build-id.json` | `eas update` (OTA) e, quando o canal não tem binário para o runtime do commit (fingerprint), `eas build`        |
-| Secrets de deploy no GitHub | environments `staging` e `production`: `DOKPLOY_URL`, `DOKPLOY_API_KEY`, `DOKPLOY_API_APPLICATION_ID`, `DOKPLOY_MIGRATE_APPLICATION_ID` (obrigatórios) e `DOKPLOY_AI_APPLICATION_ID` (opcional); variáveis `API_PUBLIC_URL` (a conferência pela liveness) e `SWARM_API_SERVICE` (a conferência por SSH)                                                                                                                                                                  | environments `staging` e `production`: `DOKPLOY_URL`, `DOKPLOY_API_KEY` e `DOKPLOY_UI_APPLICATION_ID`                                                                                                           | `EXPO_TOKEN` (repositório) e `EXPO_UPDATE_PRIVATE_KEY` (environments `staging` e `production`)                  |
-| Sem os secrets              | move as tags e pula o deploy com `::notice::`                                                                                                                                                                                                                                                                                                                                                                                                                            | move as tags e pula o deploy com aviso                                                                                                                                                                          | termina verde com aviso, sem publicar                                                                           |
-| De staging para produção    | promove por digest a imagem `sha-<7 do commit>` (tag `staging` → `stable`), sem rebuild, e exige o marcador `staged-<7 do commit>` no mesmo digest                                                                                                                                                                                                                                                                                                                       | igual à API, e exige o marcador `staged-<7 do commit>` no mesmo digest                                                                                                                                          | promove o **commit** verde em staging (a URL da API é embutida no build, então o artefato não pode ser o mesmo) |
-| Rollback                    | _Run workflow_ do `production.yml` com `image_tag=sha-<7>`                                                                                                                                                                                                                                                                                                                                                                                                               | _Run workflow_ do `production.yml` com `image_tag=sha-<7>`                                                                                                                                                      | `ota-rollback.yml` (republica um grupo de OTA)                                                                  |
+|                             | API (`Trajetto-Organization/trajetto-api`)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       | Web (`Trajetto-Organization/trajetto-ui`)                                                                                                                                                                       | App (`Trajetto-Organization/trajetto-mobile`)                                                                   |
+| --------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| Artefato                    | imagens `trajetto-api` (que também roda os papéis de processo, cada um na tag `<tag>-<papel>`), `trajetto-api-migrate` e `trajetto-ai` em `ghcr.io/trajetto-organization/`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       | imagem `ghcr.io/trajetto-organization/trajetto-ui`                                                                                                                                                              | APK/AAB (EAS Build) e OTA (EAS Update)                                                                          |
+| Onde roda                   | Dokploy, projeto `trajetto-api` de cada environment (`staging` e `production`): as Applications `trajetto-api` (com domínio), `trajetto-api-migrate` (as migrations, antes do deploy que as muda), `trajetto-ai` (sem domínio) e, depois de o dono criá-las, as de papel da mesma imagem (`trajetto-worker`, `trajetto-scheduler`, `trajetto-worker-external`, `trajetto-ingest` e `trajetto-realtime`; manual da API, seção 19), puxando as imagens do GHCR, e os Databases PostgreSQL (com o backup diário do próprio Dokploy para o Cloudflare R2) e Redis                                                                                                    | Dokploy, projeto `trajetto-ui` de cada environment: a Application `trajetto-ui`, puxando a imagem do GHCR                                                                                                       | no celular do motorista (APK interno em staging, Play Store em produção)                                        |
+| Nome no Dokploy / EAS       | App Names `trajetto-api-staging` e `trajetto-api-production` (e `trajetto-api-migrate-*`, `trajetto-ai-*`, `trajetto-<papel>-*`, `trajetto-postgres-*`, `trajetto-redis-*`)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      | Application `trajetto-ui` no projeto `trajetto-ui` de cada environment (App Names `trajetto-ui-staging` e `trajetto-ui-production`)                                                                             | perfis, ambientes e canais `staging` e `production`                                                             |
+| Como o pipeline publica     | API do Dokploy (`.github/scripts/dokploy-deploy.mjs`): quando as migrations mudaram, primeiro a `trajetto-api-migrate`, esperando a etapa terminar (`dokploy-release.mjs`); depois `application.deploy` de cada Application, na ordem de "Ordem de cada release" (abaixo), a IA só quando o digest muda e cada papel só com o secret dele (`.github/scripts/deploy-roles.sh`), acompanhando cada deployment até o fim e disparando de novo, até 6 vezes e com espera crescente, o que termina em erro; depois da API, confere a convergência (a `/health/liveness` pública respondendo o commit novo, ou o Swarm por SSH) e só então implanta os papéis de borda | API do Dokploy com o **mesmo** `.github/scripts/dokploy-deploy.mjs` (cópia comparada por teste): `application.deploy` da Application `trajetto-ui`, acompanhando o deployment, depois espera o `/build-id.json` | `eas update` (OTA) e, quando o canal não tem binário para o runtime do commit (fingerprint), `eas build`        |
+| Secrets de deploy no GitHub | environments `staging` e `production`: `DOKPLOY_URL`, `DOKPLOY_API_KEY`, `DOKPLOY_API_APPLICATION_ID`, `DOKPLOY_MIGRATE_APPLICATION_ID` (obrigatórios), `DOKPLOY_AI_APPLICATION_ID` e um `DOKPLOY_<PAPEL>_APPLICATION_ID` por Application de papel (opcionais); variáveis `API_PUBLIC_URL` (a conferência pela liveness), `SWARM_API_SERVICE` e `SWARM_<PAPEL>_SERVICE` (a conferência por SSH) e `ROLLOUT_ROLES_EXPECTED` (os papéis esperados no commit novo)                                                                                                                                                                                                  | environments `staging` e `production`: `DOKPLOY_URL`, `DOKPLOY_API_KEY` e `DOKPLOY_UI_APPLICATION_ID`                                                                                                           | `EXPO_TOKEN` (repositório) e `EXPO_UPDATE_PRIVATE_KEY` (environments `staging` e `production`)                  |
+| Sem os secrets              | move as tags e pula o deploy com `::notice::`; sem o secret de um papel, só ele fica de fora, com aviso, e a tag dele segue a da API                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             | move as tags e pula o deploy com aviso                                                                                                                                                                          | termina verde com aviso, sem publicar                                                                           |
+| De staging para produção    | promove por digest a imagem `sha-<7 do commit>` (tag `staging` → `stable`), sem rebuild, e exige o marcador `staged-<7 do commit>` no mesmo digest                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               | igual à API, e exige o marcador `staged-<7 do commit>` no mesmo digest                                                                                                                                          | promove o **commit** verde em staging (a URL da API é embutida no build, então o artefato não pode ser o mesmo) |
+| Rollback                    | _Run workflow_ do `production.yml` com `image_tag=sha-<7>`; a API e os papéis voltam juntos, porque rodam o mesmo digest                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         | _Run workflow_ do `production.yml` com `image_tag=sha-<7>`                                                                                                                                                      | `ota-rollback.yml` (republica um grupo de OTA)                                                                  |
 
 Regras comuns aos três: a branch `staging` recebe o trabalho (push direto do
 dono ou merge de PR) e todo push nela roda a validação completa e publica o
@@ -6237,7 +6237,10 @@ Result)` com o `Result` verde seria a saída que não chegou ao chamador:
    workflow_ na `staging`): ele roda as migrations e só então faz o deploy
    da IA e da API. Confira `/health/readiness` e, como MASTER na web,
    _Sistema → Provedores_. Por fim, o **backup** na aba _Backups_ do
-   Database PostgreSQL (destino S3 no R2, diário).
+   Database PostgreSQL (destino S3 no R2, diário). As Applications de papel
+   (`trajetto-worker` e as outras) não entram no primeiro deploy: o dono
+   cria cada uma depois, quando o plano de escala pede (manual da API,
+   seção 19).
 5. **Web de staging** (Application `trajetto-ui` do projeto `trajetto-ui` no
    environment `staging`, manual da web): imagem
    `:staging`, `HTTP_REQUEST` e `PUBLIC_API_URL` apontando para a API de
@@ -6270,7 +6273,21 @@ Result)` com o `Result` verde seria a saída que não chegou ao chamador:
 
 1. **API:** merge `staging → main`, aprovação, convergência das réplicas.
    Mudanças de rota seguem expandir e depois contrair: a API nunca tira uma
-   rota que a web ou o app em produção ainda chamam.
+   rota que a web ou o app em produção ainda chamam. Dentro do deploy da
+   API, as Applications vão numa ordem fixa (manual da API, seções 3 e 19):
+   `trajetto-api-migrate` → `trajetto-ai` → `trajetto-worker` →
+   `trajetto-scheduler` → `trajetto-worker-external` → `trajetto-api` →
+   `trajetto-ingest` → `trajetto-realtime`. A etapa de release (a
+   migrate) só roda quando as migrations mudaram, e a IA só quando o digest
+   dela mudou. Os papéis de fila (worker, scheduler e worker-external) vão
+   antes da API; os de borda (ingest e realtime), só depois de a
+   conferência da API passar. Cada papel puxa a própria tag,
+   `<tag>-<papel>`, que anda para o digest da API logo antes do deploy
+   dele, e só é implantado com a Application criada e o secret
+   `DOKPLOY_<PAPEL>_APPLICATION_ID`: sem nenhum, o deploy é migrate → IA →
+   API, como antes do plano de escala. Um papel que falha para tudo o que
+   vem depois, a API inclusive. O `trajetto-pgbouncer`, quando existir
+   (onda 17 do plano de escala), vai antes de todos, e só com digest novo.
 2. **Web:** só depois. O gate de rotas do promote falha se a API de
    produção ainda não serve alguma rota que o build da web chama.
 3. **App:** por último. Se o app passou a enviar algo novo, o
@@ -6278,6 +6295,36 @@ Result)` com o `Result` verde seria a saída que não chegou ao chamador:
    precisa estar em produção; `MIN_MOBILE_CONTRACT` só sobe depois que a OTA
    (ou o binário) com o contrato novo estiver publicada e os contratos
    antigos sumirem dos logs da API.
+
+**Compatibilidade: duas versões ficam no ar juntas.** O rolling sobe a
+réplica nova antes de tirar a anterior, um papel de fila sobe antes da API,
+e um rollback devolve a imagem anterior: por alguns minutos (ou até o
+rollback seguinte), a versão nova e a anterior servem juntas, contra o
+mesmo banco e o mesmo Redis. O worker novo trabalha o que a API anterior
+enfileirou, e a API anterior lê o que o worker novo gravou. Por isso:
+
+- **Expandir antes, contrair depois.** Primeiro vai o release que aceita o
+  novo (a coluna, a rota, o campo, o evento, a mensagem entre processos) e
+  continua aceitando o antigo; a contração, que tira o antigo, só num
+  release seguinte, com a expansão já em produção e, quando o manual da API
+  marca uma data, depois dela. A expansão e a contração que depende dela
+  nunca vão no mesmo release: a imagem anterior, que serve durante o
+  rolling e volta num rollback, ainda usa o que a contração tira. Quando um
+  lote sai num push só, a contração dele vai como passo de
+  `prisma/post-deploy`, que espera todo processo ter a capability (manual
+  da API, seção 17, "Contrações que esperam a capability"), ou fica fora da
+  `staging` até o release seguinte.
+- **A web, do mesmo jeito:** não tira uma Server Action ou rota no mesmo
+  release em que deixa de usá-la, e lê como opcional o campo novo que a API
+  anterior ainda não manda.
+- **O app, por contrato.** Um build antigo fica meses nas ruas (OTA
+  atrasada, aparelho sem rede), e a API aceita todo contrato desde o
+  `MIN_MOBILE_CONTRACT`. O app que passa a enviar algo novo sobe o
+  `CLIENT_CONTRACT`, e a OTA (ou o binário) só sai com a API que aceita o
+  novo já em produção. O `MIN_MOBILE_CONTRACT` só sobe com o aval do dono,
+  depois de a adoção do contrato novo aparecer na conta que a API faz dos
+  envios de posição (`/health/metrics` e o `ops_sample`); no contrato 8,
+  seis semanas depois de pelo menos 95% deles virem do 8.
 
 **O lote das ondas 2 a 5 (contrato 6 do app)**, nesta ordem:
 
@@ -6359,6 +6406,31 @@ Result)` com o `Result` verde seria a saída que não chegou ao chamador:
    sobe no passo 2, e o run do app reexecutado no passo 4 publica a OTA.
    Fora de um lote assim, o app em zod 4 sobe depois da API em zod 4 (o
    passo 3 da ordem do manual da API).
+
+**O lote do plano de escala (contrato 8 do app)**, nesta ordem:
+
+1. **API**, com todas as ondas de código do plano num release só. Sem as
+   Applications de papel, o run implanta migrate → IA → API, como hoje, e
+   cada réplica da API segue fazendo tudo (`PROCESS_ROLE` ausente vale
+   `all`). A imagem que serve durante o rolling, e que volta num rollback,
+   é a de antes do plano: por isso as contrações do plano esperam a
+   capability (manual da API, seção 17) ou ficam para depois (onda 20 do
+   plano). O `trajetto-worker` de staging é criado depois deste deploy
+   (manual da API, seção 19); o de produção, só na onda 14 do plano.
+2. **Web:** só com a API do passo 1 em produção.
+3. **App:** por último, por OTA, sem binário novo, com o contrato 8 (as
+   posições recuam quando a API falha ou pede calma; manual do app,
+   "Versão do contrato e gate com a API"), e só com a API do passo 1 em
+   produção. Nada é recusado por contrato: o app 8 funciona sobre a API
+   anterior, e a API continua aceitando o 7. `MIN_MOBILE_CONTRACT` não
+   muda.
+
+No push para a `staging`, este lote segue a "Ordem do primeiro push com o
+CI novo" (acima): esta seção mudou nos três, e o
+`shared-deploy-section.test.ts` da web e do app a compara com a da
+`staging` da API. A web e o app vão antes e ficam vermelhos nos testes que
+leem a `staging` da API, a API sobe depois, lendo a web e o app novos, e
+os runs mais novos da web e do app são reexecutados.
 
 ## 27. PITR com pgBackRest
 

@@ -286,7 +286,11 @@ checksum). Detalhes: `docs/arquitetura.md` ("Migrations: expandir e contrair").
   espera crescente (20 → 160 s), um deploy que termina em erro, registrando
   o motivo que o Dokploy deu.
 - Entre repositórios: a ordem do primeiro deploy (bancos → IA → migrations →
-  API → backup do banco → web → app), a ordem de cada release (**API → web → app**) e os valores que
+  API → backup do banco → web → app), a ordem de cada release (**API → web →
+  app**; dentro da API, migrate → IA → papéis de fila → API → papéis de
+  borda), as regras de compatibilidade (expandir antes e contrair só num
+  release seguinte, porque a imagem anterior serve durante o rolling e volta
+  num rollback; o app por `CLIENT_CONTRACT`) e os valores que
   precisam casar com a web e o app (`HTTP_REQUEST` = origem da web,
   `RATE_LIMIT_FORWARDER_SECRET`, `TURNSTILE_SECRET_KEY`, R2) estão em
   `docs/deploy.md`, seção "Os três repositórios juntos", igual nos três

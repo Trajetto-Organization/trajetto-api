@@ -2862,8 +2862,5 @@ derruba o sistema, depois o que abre uma brecha, depois o resto.
   ainda não foi criado".
 - `trajetto-api/infra/traefik/README.md`: diz que o apex e o HSTS dele ficam
   no Traefik da web; hoje o redirect é a Redirect Rule da Cloudflare.
-- A seção "Os três repositórios juntos" dos três `deploy.md` ainda diz que o
-  host da API de produção está "a definir" e que a API tem 2 réplicas (seção
-  2.3); ela precisa mudar nos três ao mesmo tempo.
 - `README.md` e `variaveis-de-ambiente.md` da API ainda tratam o host de
   produção como previsto.
