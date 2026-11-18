@@ -2922,6 +2922,37 @@ o caminho que resolve.
 - **Compatibilidade:** os códigos que a web e o app leem continuam os mesmos;
   `USER_DRIVER_LOCKED` e `KANBAN_COLUMN_HAS_CARDS` são novos e chegam ao
   toast da web antiga com a mensagem da API.
+- **Remover e anonimizar uma pessoa que trabalhou** (plano de escala F3-27,
+  decisão D49, LGPD): o motorista que a exclusão recusa por histórico
+  (`POST /driver/anonymize-driver/:driverId/business/:businessId`) e o
+  usuário do painel recusado por `USER_HAS_RECORDS`
+  (`POST /user/anonymize-user/:userId`, com as regras da exclusão de quem
+  pode remover quem; o login de um motorista sai com o motorista,
+  `409 USER_IS_DRIVER_LOGIN`). A rota responde 202 e enfileira o job
+  `USER_ANONYMIZE` (`src/shared/jobs/user-anonymize/`); pedir de novo
+  responde o mesmo job. Recusa o motorista com rota em aberto
+  (`DRIVER_HAS_OPEN_ROUTES`) e quem já foi anonimizado
+  (`DRIVER_ALREADY_ANONYMIZED`, `USER_ALREADY_ANONYMIZED`). O job:
+  - tira do texto da trilha de auditoria da empresa o nome (vira o
+    rótulo) e os documentos, o e-mail e o telefone (viram `***`), em
+    lotes, antes de tudo, enquanto os dados ainda estão nas linhas;
+  - numa transação, troca o nome por "Motorista removido" (ou "Usuário
+    removido"), apaga RG, nascimento, endereço, e-mail, telefone e foto,
+    troca CPF e CNH por um marcador único do motorista, revoga o acesso,
+    apaga as sessões, os aparelhos, o 2FA, os tokens por e-mail, o sino e
+    a última posição, inativa o motorista e grava `anonymized_at`;
+  - apaga a foto do bucket, a trilha de GPS quente dele pela chave
+    primária, em lotes, e o aparelho (`device`, `device_id`) dos eventos
+    de entrega que o login registrou. Esta última parte vai pelo pool de
+    manutenção: depois do corte dos papéis, só o `trajetto_batch` muda
+    uma coluna da trilha das entregas além do endereço do GPS (o
+    `runtime-role-smoke` cobre);
+  - deixa as entregas, os comprovantes, as assinaturas, as mensagens e
+    os registros com o autor anônimo. Na trilha arquivada, o motorista
+    entra em `trail_archive_redaction`, e a restauração de um dia do
+    arquivo deixa as linhas dele de fora (`withoutRedactedDrivers`); os
+    objetos expiram em 180 dias. As filas (os eventos do outbox, o
+    registro dos webhooks) saem pela retenção delas, 30 dias.
 - **Excluir uma empresa com dados** (plano de escala F3-25): uma ação do
   MASTER separada do ativar/inativar, que só bloqueia o acesso e guarda tudo
   (é o que uma empresa recebe por falta de pagamento). A empresa ganha uma

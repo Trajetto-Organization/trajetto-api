@@ -206,6 +206,14 @@ const TENANT_PURGE_PLAN: readonly PurgeStep[] = [
     trail: true,
   },
   {
+    // The drivers a restore of the archived trail leaves out (F3-27): the
+    // company's archive goes whole in the trail-archive phase.
+    kind: "direct",
+    table: "trail_archive_redaction",
+    column: "businessId",
+    key: ["driverId"],
+  },
+  {
     kind: "expires",
     table: "driver_position",
     column: "businessId",

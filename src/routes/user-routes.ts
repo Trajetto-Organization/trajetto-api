@@ -24,6 +24,7 @@ import { ListUsersController } from "@/modules/user/usecases/list-users/list-use
 
 import { UpdateUserController } from "@/modules/user/usecases/update-user/update-user-controller";
 import { DeleteUserController } from "@/modules/user/usecases/delete-user/delete-user-controller";
+import { AnonymizeUserController } from "@/modules/user/usecases/anonymize-user/anonymize-user-controller";
 
 import { EmailVerificationController } from "@/modules/user/usecases/e-mail-verification/e-mail-verification-controller";
 
@@ -94,6 +95,7 @@ const emailVerificationController = new EmailVerificationController();
 
 const getUserController = new GetUserController();
 const deleteUserController = new DeleteUserController();
+const anonymizeUserController = new AnonymizeUserController();
 
 const updateUserPasswordController = new UpdateUserPasswordController();
 const updateUserController = new UpdateUserController();
@@ -628,6 +630,31 @@ async function userRoutes(app: FastifyInstance) {
       },
     },
     deleteUserController.handle,
+  );
+
+  app.post(
+    "/anonymize-user/:userId",
+    {
+      onRequest: [ensureAuthenticated],
+      preHandler: [verifyPermission("user_registration_manage", "write")],
+      schema: {
+        security: [{ bearerAuth: [] }],
+        tags: ["user"],
+        summary: "Remove e anonimiza um usuário com registros",
+        description:
+          "Para o usuário do painel que a exclusão recusa por registros (USER_HAS_RECORDS) e que pediu para sair (plano de escala F3-27, LGPD). Responde 202 e põe na fila o job USER_ANONYMIZE, que apaga o nome (vira 'Usuário removido'), o e-mail, o telefone, a foto, as sessões e os aparelhos, revoga o acesso e mantém o que ele registrou, com o autor anônimo. As regras de quem pode remover quem são as da exclusão: nunca a si mesmo, um Master ou um nível acima do seu (403); usuário de outra empresa responde 404, como um inexistente. O login de um motorista sai com o motorista (409 USER_IS_DRIVER_LOGIN). Pedir de novo responde o mesmo job.",
+        params: userSchemas.updateDeleteUser,
+        response: {
+          202: userResponses.userAnonymizeScheduled,
+          400: userResponses.deleteUserErrors,
+          403: userResponses.anonymizeUserForbiddenErrors,
+          404: userResponses.deleteUserNotFoundErrors,
+          409: userResponses.anonymizeUserConflictErrors,
+          500: userResponses.internalServerError,
+        },
+      },
+    },
+    anonymizeUserController.handle,
   );
 
   app.patch(

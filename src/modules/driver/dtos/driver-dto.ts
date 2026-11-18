@@ -34,6 +34,8 @@ interface Driver {
     is_active?: boolean;
     corporate_reason?: string;
   } | null;
+  /** Removed and anonymized (plano-escala F3-27); null = a person. */
+  anonymized_at?: Date | string | null;
   created_at: Date | string;
   updated_at: Date | string;
 }

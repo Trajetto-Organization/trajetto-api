@@ -44,10 +44,15 @@ const GPS_COLUMNS = new Set([
 
 /**
  * Files whose writes on the trail run on databaseBatch, the trajetto_batch
- * login, with why. Empty today: nothing changes or deletes a row of the
- * trail. A file listed here must use databaseBatch (checked below).
+ * login, with why. A file listed here must use databaseBatch (checked
+ * below).
  */
-const BATCH_WRITERS: Record<string, string> = {};
+const BATCH_WRITERS: Record<string, string> = {
+  // A driver removed and anonymized (plano-escala F3-27, decision D49): the
+  // phone that sent each event (`device`, `device_id`) is the person's.
+  "src/shared/jobs/user-anonymize/user-anonymize-job.ts":
+    "USER_ANONYMIZE clears device and device_id of the events the login reported",
+};
 
 const MODEL_UPDATES = new Set(["update", "updateMany", "updateManyAndReturn"]);
 const MODEL_DELETES = new Set(["delete", "deleteMany"]);

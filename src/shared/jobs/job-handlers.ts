@@ -3,6 +3,7 @@ import { spreadsheetImportJob } from "@/modules/import/services/spreadsheet-impo
 
 import { JobRunner } from "./job-runner";
 import { tenantOffboardJob } from "./tenant-offboard/tenant-offboard-job";
+import { userAnonymizeJob } from "./user-anonymize/user-anonymize-job";
 
 /**
  * The handler of each durable job kind (plano-escala F3-22), registered on
@@ -20,6 +21,9 @@ function registerJobHandlers(
   // A company's purge (F3-26a): claimed only on the day its schedule set,
   // and nothing is deleted unless the company is still SCHEDULED then.
   runner.register("TENANT_OFFBOARD", tenantOffboardJob);
+
+  // A driver or a login who worked, removed and anonymized (F3-27).
+  runner.register("USER_ANONYMIZE", userAnonymizeJob);
 }
 
 export { registerJobHandlers };

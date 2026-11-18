@@ -5,6 +5,7 @@ import { ListDriverController } from "@/modules/driver/usecases/list-driver/list
 
 import { UpdateDriverController } from "@/modules/driver/usecases/update-driver/update-driver-controller";
 import { DeleteDriverController } from "@/modules/driver/usecases/delete-driver/delete-driver-controller";
+import { AnonymizeDriverController } from "@/modules/driver/usecases/anonymize-driver/anonymize-driver-controller";
 
 import { ExportDriverController } from "@/modules/driver/usecases/export-driver/export-driver-controller";
 import { SearchDriverCursorController } from "@/modules/driver/usecases/search-driver-cursor/search-driver-cursor-controller";
@@ -33,6 +34,7 @@ const searchDriverCursorController = new SearchDriverCursorController();
 
 const updateDriverController = new UpdateDriverController();
 const deleteDriverController = new DeleteDriverController();
+const anonymizeDriverController = new AnonymizeDriverController();
 
 async function driverRoutes(app: FastifyInstance) {
   app.post(
@@ -199,6 +201,34 @@ async function driverRoutes(app: FastifyInstance) {
       },
     },
     deleteDriverController.handle,
+  );
+
+  app.post(
+    "/anonymize-driver/:driverId/business/:businessId",
+    {
+      onRequest: [ensureAuthenticated],
+      preHandler: [
+        verifyBusinessActive,
+        verifyPermission("driver_manage", "write"),
+      ],
+      schema: {
+        security: [{ bearerAuth: [] }],
+        tags: ["driver"],
+        summary: "Remove e anonimiza um motorista com histórico",
+        description:
+          "Para o motorista que já trabalhou e que a exclusão recusa por histórico (plano de escala F3-27, LGPD). Responde 202 e põe na fila o job USER_ANONYMIZE, que apaga os dados pessoais dele e do login do app (nome, que vira 'Motorista removido', CPF, RG, CNH, nascimento, endereço, e-mail, telefone, foto, sessões, aparelhos e a trilha de GPS recente) e mantém o histórico (entregas, comprovantes, assinaturas, mensagens) com o autor anônimo. O login perde o acesso. Pedir de novo responde o mesmo job. Motorista de outra empresa responde 404, como um inexistente. Empresa desativada responde 403 TENANT_INACTIVE.",
+        params: driverSchemas.driverBusinessParams,
+        response: {
+          202: driverResponses.driverAnonymizeScheduled,
+          400: driverResponses.validationErrors,
+          403: driverResponses.writeForbidden,
+          404: driverResponses.notFound,
+          409: driverResponses.anonymizeConflicts,
+          500: driverResponses.internalServerError,
+        },
+      },
+    },
+    anonymizeDriverController.handle,
   );
 }
 

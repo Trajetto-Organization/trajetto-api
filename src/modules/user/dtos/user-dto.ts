@@ -93,6 +93,9 @@ interface User {
   /** Last time this user was seen connected — the chat's presence line. */
   last_seen_at?: Date | null;
 
+  /** Removed and anonymized (plano-escala F3-27); null = a person. */
+  anonymized_at?: Date | null;
+
   /** The per-account login brake (see shared/security/login-lockout-rules). */
   failed_login_attempts?: number;
   failed_login_at?: Date | null;

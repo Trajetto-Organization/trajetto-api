@@ -680,6 +680,23 @@ const userResponses = {
     "Excluir é só para o login criado por engano; quem já trabalhou tem o acesso revogado. DRIVER_HAS_OPEN_ROUTES: o usuário é o login de um motorista com rota planejada, liberada ou em andamento (a mesma regra da revogação, com as contagens). USER_HAS_SERVICE_ORDERS ou USER_HAS_ACCOUNT_PAYABLES: o usuário ainda é responsável por ordens de serviço ou por contas a pagar, com a quantidade na mensagem (concluir a OS ou quitar a conta não muda isso: transfira a responsabilidade ou revogue o acesso). USER_HAS_RECORDS: o usuário é autor de registros que a plataforma preserva (eventos de entrega, decisões da torre, ocorrências, revisões de comprovante, mensagens do chat, importações), com a contagem de cada tipo na mensagem; revogue o acesso em vez de excluir.",
   ),
 
+  userAnonymizeScheduled: z
+    .object({
+      message: z.string(),
+      jobId: z.string().describe("O job USER_ANONYMIZE que remove os dados."),
+    })
+    .describe(
+      "A remoção e a anonimização ficaram na fila: os dados pessoais saem em instantes.",
+    ),
+
+  anonymizeUserForbiddenErrors: refusal(
+    "PERMISSION_DENIED (um nível de acesso acima do seu ou um usuário Master) ou USER_CANNOT_BE_DELETED_BY_HIMSELF (a si mesmo).",
+  ),
+
+  anonymizeUserConflictErrors: refusal(
+    "USER_ALREADY_ANONYMIZED: o usuário já foi removido e anonimizado. USER_IS_DRIVER_LOGIN: é o login de um motorista; remova e anonimize o motorista, que leva o login junto.",
+  ),
+
   listUsersErrors: z
     .object({
       message: z

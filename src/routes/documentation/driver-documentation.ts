@@ -126,6 +126,14 @@ const driverResponses = {
   driverCreated: message("Motorista criado com sucesso!"),
   driverUpdated: message("Motorista atualizado com sucesso!"),
   driverDeleted: message("Motorista deletado com sucesso!"),
+  driverAnonymizeScheduled: z
+    .object({
+      message: z.string(),
+      jobId: z.string().describe("O job USER_ANONYMIZE que remove os dados."),
+    })
+    .describe(
+      "A remoção e a anonimização ficaram na fila: os dados pessoais saem em instantes.",
+    ),
 
   driverListItem,
   driverListSearchMeta,
@@ -156,6 +164,9 @@ const driverResponses = {
   ),
   deleteConflicts: errorResponse.describe(
     "O motorista tem histórico, e a resposta é o primeiro motivo encontrado, com a quantidade: DRIVER_HAS_FINES, DRIVER_HAS_FUELS, DRIVER_HAS_CHECKLISTS, DRIVER_HAS_OPERATION (entregas, rotas, mensagens do chat ou atendimentos) ou DRIVER_HAS_PAUSES; inative-o em vez de excluir (o login dele também deixa de entrar no app). Por último, DRIVER_HAS_USER: o motorista sem histórico ainda tem um login do app, que se exclui na tela Usuários antes.",
+  ),
+  anonymizeConflicts: errorResponse.describe(
+    "DRIVER_ALREADY_ANONYMIZED: o motorista já foi removido e anonimizado. DRIVER_HAS_OPEN_ROUTES: ele tem rota planejada, liberada ou em andamento, com as contagens; conclua, cancele ou designe outro motorista antes.",
   ),
   exportErrors: errorResponse.describe(
     "NOTHING_TO_EXPORT (nenhum motorista na busca e nos filtros), BUSINESS_NOT_IDENTIFIED (MASTER sem `businessId`) ou VALIDATION_ERROR.",

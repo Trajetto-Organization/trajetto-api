@@ -778,6 +778,45 @@ function createTrailArchiveGate(
   };
 }
 
+/**
+ * The drivers of a company removed and anonymized (plano-escala F3-27,
+ * decision D49) whose days may still be in the archive: the archived
+ * objects are not rewritten per request, so whatever restores a day of the
+ * archive (a legal request, archive-restore of F5-16) leaves these drivers'
+ * rows out, through withoutRedactedDrivers.
+ */
+async function redactedTrailDrivers(
+  db: ArchiveDatabase,
+  businessId: string,
+): Promise<Set<string>> {
+  const rows = await db.$queryRawUnsafe<Array<{ driver_id: string }>>(
+    `SELECT "driverId" AS driver_id FROM "trail_archive_redaction"
+      WHERE "businessId" = $1`,
+    businessId,
+  );
+
+  return new Set(rows.map((row) => row.driver_id));
+}
+
+/**
+ * A restored day's CSV lines (the header first, TRAIL_CSV_COLUMNS) without
+ * the lines of the redacted drivers. The driver id is the first column and
+ * a uuid, never quoted.
+ */
+function withoutRedactedDrivers(
+  lines: readonly string[],
+  redacted: ReadonlySet<string>,
+): string[] {
+  const [header, ...rows] = lines;
+
+  if (header === undefined) return [];
+
+  return [
+    header,
+    ...rows.filter((line) => !redacted.has(line.split(",", 1)[0])),
+  ];
+}
+
 export {
   GONE_COMPANIES_PER_RUN,
   MANIFEST_PURGE_SLACK_DAYS,
@@ -788,8 +827,10 @@ export {
   createTrailArchiveGate,
   csvCell,
   deleteTrailArchive,
+  redactedTrailDrivers,
   trailArchiveKey,
   trailSourceOf,
+  withoutRedactedDrivers,
 };
 export type {
   ArchiveDatabase,

@@ -342,6 +342,11 @@ async function seedExtras(ids: CarrierIds): Promise<void> {
     },
   });
 
+  // A driver of the company removed and anonymized (F3-27).
+  await prisma.trailArchiveRedaction.create({
+    data: { driverId: randomUUID(), businessId: ids.businessId },
+  });
+
   // An archived day of the trail, object and manifest row.
   const key = `trail/20261101/${ids.businessId}.csv.gz`;
 

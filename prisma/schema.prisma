@@ -382,6 +382,11 @@ model User {
   // último" the SAC sees next to a driver's name in the chat.
   last_seen_at DateTime?
 
+  /// When the login was removed and anonymized (plano-escala F3-27): name,
+  /// e-mail, phone, photo, tokens and devices went; what the person wrote
+  /// stays, under an anonymous author. Null = a person.
+  anonymized_at DateTime?
+
   // Plan of 02/11/2026: the vehicles this person answers for (F1), the
   // company settings they saved last (M1) and the driver's access codes (D3):
   // their own, and the ones they issued as a manager.
@@ -779,6 +784,11 @@ model Driver {
   complement     String?
   status         DriverStatus
   contract_type  ContractType
+
+  /// When the driver was removed and anonymized (plano-escala F3-27): the
+  /// personal data went (name 'Motorista removido', CPF, CNH, address), the
+  /// history stays under this row. Null = a person.
+  anonymized_at DateTime?
 
   business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
   businessId String
@@ -3467,6 +3477,21 @@ model ArchivePartition {
   /// The purge, with the manifest's.
   @@index([verified_at])
   @@map("archive_partition")
+}
+
+/// The drivers removed and anonymized (plano-escala F3-27, decision D49)
+/// whose rows may still be in the trail's archive: rewriting hundreds of
+/// archived objects per request is not done, so whatever restores a day of
+/// the archive leaves these drivers' rows out (trail-archive.ts,
+/// withoutRedactedDrivers). The objects expire with the archive's
+/// retention (180 days); a row here is kept as long as they may exist.
+model TrailArchiveRedaction {
+  driverId   String   @id
+  businessId String
+  created_at DateTime @default(now())
+
+  @@index([businessId])
+  @@map("trail_archive_redaction")
 }
 
 /// Where a customer's system wants to be told things.

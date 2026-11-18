@@ -96,8 +96,20 @@ const READ_FORBIDDEN = [
   /claim/i,
 ];
 
-/** Who may run on the maintenance pool: the crons and what they call. */
-const BATCH_ALLOWED: RegExp[] = [/^src\/jobs\/cron\/[^/]+\.ts$/];
+/**
+ * Who may run on the maintenance pool: the crons and what they call, and
+ * the durable jobs that do maintenance of their own (plano-escala F3-23a,
+ * F3-26a, F3-27): the release of a stored spreadsheet's object, a
+ * company's purge and a person's anonymization, whose batches delete or
+ * rewrite what only trajetto_batch may after the cut of the roles (the
+ * delivery trail).
+ */
+const BATCH_ALLOWED: RegExp[] = [
+  /^src\/jobs\/cron\/[^/]+\.ts$/,
+  /^src\/modules\/import\/services\/import-object-release\.ts$/,
+  /^src\/shared\/jobs\/tenant-offboard\/[^/]+\.ts$/,
+  /^src\/shared\/jobs\/user-anonymize\/[^/]+\.ts$/,
+];
 
 function filesUnder(dir: string): string[] {
   return readdirSync(dir).flatMap((name) => {

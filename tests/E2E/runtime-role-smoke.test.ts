@@ -462,6 +462,56 @@ describe("the runtime as trajetto_http and trajetto_batch", () => {
 
     expect(undone.statusCode, undone.body).toBeLessThan(300);
   });
+
+  it("removes and anonymizes the driver, the events' phone through the batch login", async () => {
+    // plano-escala F3-27: the identity on the request login's grants, the
+    // delivery trail's `device` and `device_id` only as trajetto_batch
+    // (the runtime may change no other column of the trail).
+    await owner.route.updateMany({
+      where: { driverId: fleet.driverId },
+      data: { status: "COMPLETED" },
+    });
+    await owner.deliveryEvent.updateMany({
+      where: { businessId: CARRIER },
+      data: {
+        reportedById: fleet.driverUserId,
+        device: "Moto G (Android 14)",
+        device_id: "android-smoke",
+      },
+    });
+
+    const accepted = await asManager(
+      "POST",
+      `/driver/anonymize-driver/${fleet.driverId}/business/${CARRIER}`,
+    );
+
+    expect(accepted.statusCode, accepted.body).toBe(202);
+
+    const { JobRunner } = await import("@/shared/jobs/job-runner");
+    const { registerJobHandlers } = await import("@/shared/jobs/job-handlers");
+    const runner = new JobRunner({ owner: () => "e2e-smoke" });
+
+    registerJobHandlers(runner);
+
+    expect(await runner.processBatch()).toBe(1);
+
+    expect(
+      await owner.backgroundJob.findUniqueOrThrow({
+        where: { id: accepted.json().jobId },
+      }),
+    ).toMatchObject({ status: "SUCCEEDED" });
+    expect(
+      await owner.deliveryEvent.count({
+        where: {
+          businessId: CARRIER,
+          OR: [{ device: { not: null } }, { device_id: { not: null } }],
+        },
+      }),
+    ).toBe(0);
+    expect(
+      await owner.driver.findUniqueOrThrow({ where: { id: fleet.driverId } }),
+    ).toMatchObject({ name: "Motorista removido", status: "INACTIVE" });
+  });
 });
 
 describe("the boot's check of the role, on the real database", () => {

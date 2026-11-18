@@ -50,7 +50,9 @@ type DriverLockout =
   | "REVOKE_ACCESS"
   | "DEACTIVATE_BRANCH"
   | "DELETE_LOGIN"
-  | "MOVE_LOGIN";
+  | "MOVE_LOGIN"
+  | "ANONYMIZE_DRIVER"
+  | "ANONYMIZE_LOGIN";
 
 /** How each act opens and closes the sentence; the counts and steps are shared. */
 const LOCKOUT_WORDING: Record<
@@ -81,6 +83,16 @@ const LOCKOUT_WORDING: Record<
     refusal: "Não é possível desvincular este login do motorista",
     holder: "o motorista vinculado tem",
     before: "Antes de desvinculá-lo",
+  },
+  ANONYMIZE_DRIVER: {
+    refusal: "Não é possível remover e anonimizar este motorista",
+    holder: "ele tem",
+    before: "Antes de removê-lo",
+  },
+  ANONYMIZE_LOGIN: {
+    refusal: "Não é possível remover e anonimizar este usuário",
+    holder: "o motorista vinculado tem",
+    before: "Antes de removê-lo",
   },
 };
 
