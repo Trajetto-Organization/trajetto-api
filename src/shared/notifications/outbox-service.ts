@@ -12,6 +12,7 @@ import {
 import { logger } from "@/shared/logging/logger";
 
 import { NotificationTopic, TopicPayloadMap } from "./notification-types";
+import { announceWake } from "@/shared/wake/wake-bus";
 
 interface PublishEventInput<T extends NotificationTopic> {
   topic: T;
@@ -385,6 +386,10 @@ class OutboxService {
         import("./notification-pipeline-service")
           .then(({ NotificationPipelineService }) => {
             NotificationPipelineService.getInstance().wake();
+
+            // The processes that claim the outbox, when this one does
+            // not (or more than one does): plano-escala F3-04.
+            announceWake("outbox");
           })
           .catch((error) => {
             logger.error(

@@ -15,6 +15,7 @@ import { withoutRequestContext } from "@/shared/http/request-context";
 import { logger } from "@/shared/logging/logger";
 import { workerHeartbeat } from "@/shared/health/worker-heartbeat";
 import { consumesQueue } from "@/shared/lifecycle/process-role";
+import { announceWake } from "@/shared/wake/wake-bus";
 
 import { IMailProvider } from "@/shared/providers/mail-provider/IMail-provider";
 import { MailDeliveryError } from "@/shared/providers/mail-provider/errors/mail-delivery-error";
@@ -399,9 +400,14 @@ class NotificationPipelineService {
     // and the outbox it does not claim is expanded by another process.
     if (consumesQueue(env, "outbox")) {
       this.outboxTimer = setInterval(() => {
-        this.runOutboxCycle().catch((error) => {
-          log.error({ err: error }, "outbox cycle failed");
-        });
+        // The sweep that expanded events chains into the lanes, as a wake
+        // does (plano-escala F3-04): the deliveries it just wrote do not
+        // wait for the lanes' own sweep.
+        this.runOutboxCycle()
+          .then((processed) => (processed ? this.chainLanes() : undefined))
+          .catch((error) => {
+            log.error({ err: error }, "outbox cycle failed");
+          });
       }, SWEEP_INTERVAL_MS);
     }
 
@@ -434,6 +440,36 @@ class NotificationPipelineService {
   }
 
   /**
+   * After an outbox pass that expanded events: the lanes this process
+   * claims run now, and the ones it does not are announced to the
+   * processes that claim them (a worker without `external` wakes the
+   * worker-external, F3-04).
+   */
+  private async chainLanes(): Promise<void> {
+    for (const lane of Object.keys(DELIVERY_LANES) as DeliveryLane[]) {
+      if (!consumesQueue(env, lane)) announceWake(lane);
+    }
+
+    await Promise.all(
+      this.consumedLanes().map((lane) => this.runDeliveryCycle(lane)),
+    );
+  }
+
+  /**
+   * One lane, now: what another process's hint asks for (wake-listener.ts,
+   * F3-04). Safe at any time, like wake().
+   */
+  public wakeLane(lane: DeliveryLane): void {
+    if (this.stopping || !consumesQueue(env, lane)) return;
+
+    withoutRequestContext(() => {
+      this.runDeliveryCycle(lane).catch((error) => {
+        log.error({ err: error, lane }, "lane wake failed");
+      });
+    });
+  }
+
+  /**
    * Processes pending work now instead of waiting for the sweep. Called right
    * after an outbox publish commits; expansion chains into both delivery
    * lanes, so a freshly created fine notifies within milliseconds. Safe to
@@ -459,9 +495,17 @@ class NotificationPipelineService {
 
     withoutRequestContext(() => {
       (outbox ? this.runOutboxCycle() : Promise.resolve(false))
-        .then(() =>
-          Promise.all(lanes.map((lane) => this.runDeliveryCycle(lane))),
-        )
+        .then((processed) => {
+          // The lanes another process claims hear about the deliveries
+          // this pass wrote (F3-04).
+          if (processed) {
+            for (const lane of Object.keys(DELIVERY_LANES) as DeliveryLane[]) {
+              if (!consumesQueue(env, lane)) announceWake(lane);
+            }
+          }
+
+          return Promise.all(lanes.map((lane) => this.runDeliveryCycle(lane)));
+        })
         .catch((error) => {
           log.error({ err: error }, "pipeline wake failed");
         });

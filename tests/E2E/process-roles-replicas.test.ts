@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { randomUUID } from "node:crypto";
 import { createRequire } from "node:module";
@@ -7,6 +7,13 @@ import { sign } from "jsonwebtoken";
 import auth from "@/config/auth";
 
 import { operationsRoom } from "@/shared/socket/operations-access";
+import {
+  closePubSub,
+  generation,
+  isReady,
+  subscribe,
+} from "@/shared/redis/pubsub-redis";
+import { startWakeListener } from "@/shared/wake/wake-listener";
 
 import { socketClientEntry } from "./support/socket-client";
 import { startReplica, type Replica } from "./support/replica-process";
@@ -22,6 +29,11 @@ import { createPrismaClient } from "@/shared/database/database-client";
  * its Redis adapter stay up in the worker; the only thing switched off is
  * the admission. Two processes, as in production: a worker and an `all`
  * replica, one Redis, one database, one adapter key.
+ *
+ * And the wake between processes (F3-04): an `api` replica that enqueues
+ * work it does not claim publishes the hint on Redis, and the process that
+ * claims the queue (here, this test's own listener) wakes; an `all`
+ * replica, which claims everything and woke itself, publishes nothing.
  */
 const prisma = createPrismaClient();
 
@@ -55,6 +67,7 @@ let connect: (url: string, options: unknown) => TestSocket;
 
 let worker: Replica;
 let api: Replica;
+let apiRole: Replica;
 let watcher: TestSocket | undefined;
 
 function open(port: number, token: string): Promise<TestSocket> {
@@ -189,6 +202,7 @@ beforeAll(async () => {
   // The worker's role, by its preset alone: SOCKETS_ENABLED is not given.
   worker = await startReplica({ ...shared, PROCESS_ROLE: "worker" });
   api = await startReplica({ ...shared, PROCESS_ROLE: "all" });
+  apiRole = await startReplica({ ...shared, PROCESS_ROLE: "api" });
 
   ({ io: connect } = await import(/* @vite-ignore */ socketClientEntry()));
 }, 300_000);
@@ -196,7 +210,8 @@ beforeAll(async () => {
 afterAll(async () => {
   watcher?.disconnect();
 
-  await Promise.all([worker, api].map((replica) => replica?.stop()));
+  await Promise.all([worker, api, apiRole].map((replica) => replica?.stop()));
+  await closePubSub();
 
   await prisma.refreshToken.deleteMany({ where: { userId: WATCHER } });
   await prisma.user.deleteMany({ where: { id: WATCHER } });
@@ -274,5 +289,64 @@ describe("a worker (SOCKETS_ENABLED=false by its preset)", () => {
       "o evento do worker não chegou ao socket conectado na API",
     ).not.toBeNull();
     expect(event!.routeCode).toBe(77);
+  });
+});
+
+describe("the wake between processes", () => {
+  it("reaches the process that claims the queue from an api that does not, and never from an all", async () => {
+    let woken = 0;
+
+    // This process plays the worker: it claims the outbox, listens on the
+    // replicas' channel and names itself apart from them.
+    const stop = startWakeListener(
+      { outbox: () => (woken += 1) },
+      {
+        consumes: (queue) => queue === "outbox",
+        listen: subscribe,
+        generation,
+        channel: (queue) => `${REPLICA_ADAPTER_KEY}:wake:${queue}`,
+        replica: () => "e2e-worker",
+      },
+    );
+
+    try {
+      await vi.waitFor(() => expect(isReady()).toBe(true), {
+        timeout: 15_000,
+        interval: 50,
+      });
+
+      // The api's enqueue, announced until the subscription has its first
+      // hint: the SUBSCRIBE is acknowledged after the connection's ready.
+      await vi.waitFor(
+        async () => {
+          await apiRole.run({
+            kind: "wake",
+            businessId: "",
+            payload: { queue: "outbox" },
+          });
+
+          await new Promise((done) => setTimeout(done, 200));
+
+          expect(woken).toBeGreaterThan(0);
+        },
+        { timeout: 15_000, interval: 50 },
+      );
+
+      // The all replica claims the outbox and woke itself: zero PUBLISH.
+      // A negative, so a window: ten debounces of the bus.
+      woken = 0;
+
+      await api.run({
+        kind: "wake",
+        businessId: "",
+        payload: { queue: "outbox" },
+      });
+
+      await new Promise((done) => setTimeout(done, 1_000));
+
+      expect(woken).toBe(0);
+    } finally {
+      stop();
+    }
   });
 });

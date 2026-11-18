@@ -66,6 +66,15 @@ vi.mock("@/shared/integration/api-usage-recorder", () => ({
   },
 }));
 
+// The wake between processes (F3-04): started where the workers are, after
+// their services; recorded here instead of subscribing to a real Redis.
+vi.mock("@/shared/wake/wake-listener", () => ({
+  startWakeListener: () => {
+    calls.push("wakeListener");
+    return () => undefined;
+  },
+}));
+
 vi.mock("@/shared/health/worker-heartbeat", () => ({
   startHeartbeatFlush: () => {
     calls.push("heartbeat");
@@ -127,6 +136,7 @@ describe("a scheduler (the cron and no queue)", () => {
       "apiUsageRecorder",
       "registerCronJobs",
       "cron",
+      "wakeListener",
       "heartbeat",
     ]);
   });
@@ -145,6 +155,7 @@ describe("a worker-external (the external lane only, no cron)", () => {
       "apiUsageRecorder",
       "registerCronJobs",
       "notifications.initialize",
+      "wakeListener",
       "heartbeat",
       "notifications.wake",
     ]);
@@ -195,6 +206,7 @@ describe("a replica with its workers on (the default)", () => {
         "notifications.initialize",
         "ai.initialize",
         "webhooks.initialize",
+        "wakeListener",
         "heartbeat",
         "notifications.wake",
         "ai.wake",

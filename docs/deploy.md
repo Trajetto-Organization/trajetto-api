@@ -4290,6 +4290,24 @@ SELECT replica, role, app_env, build_commit, config_fingerprint, queues,
 FROM process_heartbeat ORDER BY role, replica;
 ```
 
+**Despertar entre processos (F3-04).** Quem grava trabalho numa fila que
+não consome (a `api` publica um evento, o `worker` o expande) avisa pelo
+pub/sub do Redis, no canal `<SOCKET_ADAPTER_KEY>:wake:<fila>`, fora dos
+padrões que o adapter do Socket.IO assina; os processos que consomem a
+fila acordam o worker dela na hora (`src/shared/wake/`). Um processo que
+consome a fila também avisa quando há mais de um consumidor vivo no
+`process_heartbeat`, para os outros ajudarem; no papel `all` (a produção de
+hoje) ele já acordou a si mesmo, e não publica nada. Cem milissegundos de
+espera juntam uma rajada num aviso só, e o aviso leva só a réplica de quem
+publicou (e a versão da mensagem). Um aviso perdido (Redis fora) custa a
+varredura: 2 s no `worker`. O despachante de webhooks ganhou o mesmo
+despertar: o fan-out que gravou linhas o acorda meio segundo depois do
+commit, em vez de esperar os 5 s da varredura. Depois de expandir eventos,
+a varredura do outbox encadeia as raias, e as raias que o processo não
+consome (o `external` de um `worker` com `worker-external`) são avisadas.
+Quem escuta acorda todas as filas uma vez quando a assinatura volta depois
+de uma queda do Redis.
+
 - **Tempo real com várias réplicas**: o evento emitido numa réplica chega ao
   cliente conectado em outra pelo pub/sub do Redis
   (`@socket.io/redis-adapter`). Todas as réplicas precisam do mesmo

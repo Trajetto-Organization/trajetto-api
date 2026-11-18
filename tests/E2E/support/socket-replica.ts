@@ -46,6 +46,10 @@ interface Command {
     | "securityToBusiness"
     | "securityToUser"
 
+    // Work committed on a queue, as an enqueue on THIS replica announces it
+    // (plano-escala F3-04); `payload` is { queue }.
+    | "wake"
+
     // Questions, not emits: `payload` is { id, room }, { id, userIds } and
     // { id }.
     | "members"
@@ -133,6 +137,15 @@ function run(line: string): void {
         requestsTimeout: adapter?.requestsTimeout ?? null,
       })}\n`,
     );
+
+    return;
+  }
+
+  if (command.kind === "wake") {
+    void import("@/shared/wake/wake-bus").then(({ announceWake }) => {
+      announceWake(command.payload.queue as never);
+      process.stdout.write(`SENT ${command.kind}\n`);
+    });
 
     return;
   }

@@ -52,7 +52,11 @@ import { claimFloors } from "@/shared/database/claim-floors";
 import { workerHeartbeat } from "@/shared/health/worker-heartbeat";
 import { logger } from "@/shared/logging/logger";
 import { providerMetrics } from "@/shared/health/provider-metrics";
-import { getRequestContext } from "@/shared/http/request-context";
+import {
+  getRequestContext,
+  withoutRequestContext,
+} from "@/shared/http/request-context";
+import { consumesQueue } from "@/shared/lifecycle/process-role";
 
 import { v7 as uuidV7 } from "uuid";
 
@@ -764,6 +768,10 @@ class WebhookDispatchService {
   // Ends a sweep that is still draining when the process is shutting down.
   private stopping = false;
 
+  // A wake that found a batch running asks for one more (F3-04): it may
+  // have come after that batch's last claim.
+  private rerun = false;
+
   // Success records still retrying after the batch moved on; shutdown waits.
   private readonly pendingRecords = new Set<Promise<void>>();
 
@@ -816,6 +824,30 @@ class WebhookDispatchService {
     });
 
     log.info("webhook dispatch worker started");
+  }
+
+  /**
+   * Dispatches now instead of waiting for the sweep (plano-escala F3-04):
+   * after a fan-out committed rows here, or when another process's hint
+   * says it did. Only on a dispatcher that was started (initialize) and
+   * claims the webhooks queue; a wake during a batch runs one more batch
+   * after it, never one per wake.
+   */
+  wake(): void {
+    if (this.stopping || !this.timer || !consumesQueue(env, "webhooks")) {
+      return;
+    }
+
+    if (this.running) {
+      this.rerun = true;
+      return;
+    }
+
+    withoutRequestContext(() => {
+      this.processBatch().catch((error) => {
+        log.error({ err: error }, "webhook dispatch wake failed");
+      });
+    });
   }
 
   /**
@@ -910,6 +942,11 @@ class WebhookDispatchService {
     } finally {
       this.running = false;
       workerHeartbeat.endCycle("webhook-dispatch");
+
+      if (this.rerun) {
+        this.rerun = false;
+        setImmediate(() => this.wake());
+      }
     }
   }
 

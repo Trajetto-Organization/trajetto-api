@@ -4,13 +4,46 @@ import { Prisma } from "@prisma/client";
 
 import { logger } from "@/shared/logging/logger";
 
+import { withoutRequestContext } from "@/shared/http/request-context";
+import { announceWake } from "@/shared/wake/wake-bus";
+
 import {
+  WebhookDispatchService,
   fanOutWebhookEvent,
   fanOutWebhookEvents,
 } from "./webhook-dispatch-service";
 import type { WebhookTopic } from "./webhook-catalogue";
 
 const log = logger.child({ component: "webhook-fan-out" });
+
+/**
+ * How long after the fan-out the dispatcher is woken: the rows are written
+ * in the caller's transaction, which commits after this returns. The same
+ * half second the outbox waits (outbox-service.ts); a wake that comes
+ * before the commit finds nothing and the sweep takes the rows.
+ */
+const WAKE_AFTER_COMMIT_MS = 500;
+
+/**
+ * The webhooks no longer wait for the 5 s sweep (plano-escala F3-04): this
+ * process's dispatcher, when it runs one, and the processes that claim the
+ * queue, by the wake hint. Outside the request (INV-12), unref'd, and never
+ * a failure of the operation that announced.
+ */
+function wakeWebhooksAfterCommit(): void {
+  withoutRequestContext(() => {
+    const timer = setTimeout(() => {
+      try {
+        WebhookDispatchService.getInstance().wake();
+        announceWake("webhooks");
+      } catch (error) {
+        log.warn({ err: error }, "webhook dispatcher could not be woken");
+      }
+    }, WAKE_AFTER_COMMIT_MS);
+
+    timer.unref();
+  });
+}
 
 /**
  * Telling the customers' systems that something happened, as an injected
@@ -47,7 +80,12 @@ class WebhookFanOutService {
     tx?: Prisma.TransactionClient,
   ): Promise<void> {
     try {
-      await fanOutWebhookEvent({ topic, businessId, payload }, tx);
+      const queued = await fanOutWebhookEvent(
+        { topic, businessId, payload },
+        tx,
+      );
+
+      if (queued > 0) wakeWebhooksAfterCommit();
     } catch (error) {
       if (tx) throw error;
 
@@ -73,10 +111,12 @@ class WebhookFanOutService {
     if (payloads.length === 0) return;
 
     try {
-      await fanOutWebhookEvents(
+      const queued = await fanOutWebhookEvents(
         payloads.map((payload) => ({ topic, businessId, payload })),
         tx,
       );
+
+      if (queued > 0) wakeWebhooksAfterCommit();
     } catch (error) {
       if (tx) throw error;
 

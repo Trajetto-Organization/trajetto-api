@@ -15,11 +15,16 @@ import {
   consumesAnyQueue,
   consumesQueue,
 } from "../shared/lifecycle/process-role";
+import { startWakeListener } from "../shared/wake/wake-listener";
+import { wakeBus } from "../shared/wake/wake-bus";
 
 const log = logger.child({ component: "workers" });
 
 /** Stops the periodic write of this replica's worker heartbeats (OBS-10). */
 let stopHeartbeatFlush: (() => void) | null = null;
+
+/** Stops listening for the other processes' wake hints (F3-04). */
+let stopWakeListener: (() => void) | null = null;
 
 /**
  * Initializes the worker system and other related services
@@ -74,6 +79,20 @@ export async function initializeWorkers(): Promise<void> {
     }
 
     await Promise.all(services);
+
+    // The hints of the processes that enqueue without claiming (the api
+    // publishes, this worker drains: plano-escala F3-04). Each queue this
+    // process claims, with the worker that drains it here; the sweeps stay
+    // the floor under a hint lost.
+    stopWakeListener = startWakeListener({
+      outbox: () => NotificationPipelineService.getInstance().wake(),
+      internal: () =>
+        NotificationPipelineService.getInstance().wakeLane("internal"),
+      external: () =>
+        NotificationPipelineService.getInstance().wakeLane("external"),
+      webhooks: () => WebhookDispatchService.getInstance().wake(),
+      ai: () => AIAnalysisPipelineService.getInstance().wake(),
+    });
 
     // Every replica writes where its workers were last seen, so a cycle hung
     // on one replica shows on /health/metrics whichever replica answers.
@@ -133,6 +152,12 @@ export async function shutdownWorkers(
   // writing them; nothing to flush on the way out.
   stopHeartbeatFlush?.();
   stopHeartbeatFlush = null;
+
+  // No other process's hint starts a batch now, and this one's pending
+  // hints are dropped: the processes that stay sweep.
+  stopWakeListener?.();
+  stopWakeListener = null;
+  wakeBus.stop();
 
   try {
     // Shutdown services in parallel for better performance
