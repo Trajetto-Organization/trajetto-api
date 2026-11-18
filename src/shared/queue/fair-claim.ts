@@ -75,6 +75,41 @@ interface FairQueue {
    */
   classes?: ReadonlyArray<(alias: string | null) => Prisma.Sql>;
 
+  /**
+   * Keys of the fair index after the due time, the order of a company's
+   * rows that share one (plano-escala F3-13: a webhook endpoint's, by
+   * "id", the order of one transaction's rows). Absent, the due time.
+   */
+  thenBy?: readonly string[];
+
+  /**
+   * How many of a company's due rows one claim may take, an integer SQL
+   * expression on `company`, never above rowsPerTenant (F3-13: what a
+   * webhook endpoint's global cap leaves). Absent, rowsPerTenant.
+   *
+   * A queue with shares locks a company's rows as the walk reads them,
+   * skipping the ones another transaction holds: picked by id and locked
+   * only at the end, a share spent on rows somebody else held would leave
+   * the company's other rows behind them for as long as they were held.
+   * The walk then counts only rows it holds, and the claim takes them.
+   * Such a queue has no rows of no company (the NULL bucket has no share).
+   */
+  share?: (company: Prisma.Sql) => Prisma.Sql;
+
+  /**
+   * Whether the oldest due rows of the queue fill what the walk did not
+   * (the default). A queue whose shares are caps turns it off (F3-13):
+   * the fill would take past them.
+   */
+  fill?: boolean;
+
+  /**
+   * Common table expressions the shares read, computed once per claim
+   * before the walk (F3-13: the rows in flight), as `"name" (...) AS (...)`
+   * separated by commas.
+   */
+  with?: Prisma.Sql;
+
   /** What the claim writes. */
   set: Prisma.Sql;
 
@@ -159,32 +194,44 @@ function fairClaimSql(queue: FairQueue, input: FairClaimInput): Prisma.Sql {
   const classes: ReadonlyArray<((alias: string | null) => Prisma.Sql) | null> =
     queue.classes && queue.classes.length > 0 ? queue.classes : [null];
 
-  const probe = (which: Prisma.Sql, index: number) => {
+  const thenBy =
+    queue.thenBy && queue.thenBy.length > 0
+      ? Prisma.sql`, ${Prisma.join(queue.thenBy.map(quoted), ", ")}`
+      : Prisma.empty;
+
+  const probe = (which: Prisma.Sql, index: number, share?: Prisma.Sql) => {
     const only = classes[index];
     const ofClass = only ? Prisma.sql` AND ${only(null)}` : Prisma.empty;
+
+    // With a share, the rows the company may take, held as they are read
+    // (see `share`); a share of 0 or less reads nothing.
+    const rows = share
+      ? Prisma.sql`GREATEST(0, LEAST(${perTenant}, ${share}))`
+      : perTenant;
+    const lock = share ? Prisma.sql` FOR UPDATE SKIP LOCKED` : Prisma.empty;
 
     return Prisma.sql`ARRAY(
         SELECT "id" FROM ${table}
         WHERE ${indexed}
           AND ${which}${ofClass}
           AND ${due}${floor}
-        ORDER BY ${tenant}, ${dueAt}
-        LIMIT ${perTenant}
+        ORDER BY ${tenant}, ${dueAt}${thenBy}
+        LIMIT ${rows}${lock}
       )`;
   };
 
   // A class after the first is read only while the ones before it came
   // back short, and what they found keeps its place at the front.
-  const dueIdsWhere = (which: Prisma.Sql): Prisma.Sql =>
+  const dueIdsWhere = (which: Prisma.Sql, share?: Prisma.Sql): Prisma.Sql =>
     classes.slice(1).reduce(
       (before, _, offset) => Prisma.sql`(
         SELECT CASE
           WHEN cardinality("p"."ids") >= ${perTenant} THEN "p"."ids"
-          ELSE ("p"."ids" || ${probe(which, offset + 1)})[1:${perTenant}]
+          ELSE ("p"."ids" || ${probe(which, offset + 1, share)})[1:${perTenant}]
         END
         FROM (SELECT ${before} AS "ids" OFFSET 0) AS "p"
       )`,
-      probe(which, 0),
+      probe(which, 0, share),
     );
 
   // The company as a range of one value, ordered by (company, due time), on
@@ -196,6 +243,7 @@ function fairClaimSql(queue: FairQueue, input: FairClaimInput): Prisma.Sql {
   const dueIdsOf = (company: Prisma.Sql) =>
     dueIdsWhere(
       Prisma.sql`${tenant} >= ${company} AND ${tenant} <= ${company}`,
+      queue.share?.(company),
     );
 
   /**
@@ -209,8 +257,22 @@ function fairClaimSql(queue: FairQueue, input: FairClaimInput): Prisma.Sql {
         OFFSET 0
       )`;
 
+  const prelude = queue.with ? Prisma.sql`${queue.with},` : Prisma.empty;
+
+  // Without the fill, no row outside the walk: the shares are the claim.
+  const oldest =
+    queue.fill === false
+      ? Prisma.sql`SELECT NULL::text, NULL::bigint WHERE false`
+      : Prisma.sql`SELECT "id", row_number() OVER (ORDER BY ${dueAt}) FROM (
+        SELECT "id", ${dueAt} FROM ${table}
+        WHERE ${indexed} AND ${due}${floor}
+        ORDER BY ${dueAt}
+        LIMIT ${limit}
+      ) AS "head"`;
+
   return Prisma.sql`
     WITH RECURSIVE
+    ${prelude}
     "after" ("n", "tenant", "found", "ids") AS (
       SELECT 1, "first"."tenant", cardinality("first"."ids"), "first"."ids"
       FROM ${step(cursor)} AS "first"
@@ -278,12 +340,7 @@ function fairClaimSql(queue: FairQueue, input: FairClaimInput): Prisma.Sql {
       CROSS JOIN LATERAL unnest("visits"."ids") WITH ORDINALITY AS "row" ("id", "ord")
     ),
     "oldest" ("id", "ord") AS (
-      SELECT "id", row_number() OVER (ORDER BY ${dueAt}) FROM (
-        SELECT "id", ${dueAt} FROM ${table}
-        WHERE ${indexed} AND ${due}${floor}
-        ORDER BY ${dueAt}
-        LIMIT ${limit}
-      ) AS "head"
+      ${oldest}
     ),
     "candidates" ("id", "pass", "turn", "ord") AS (
       SELECT DISTINCT ON ("id") "id", "pass", "turn", "ord" FROM (

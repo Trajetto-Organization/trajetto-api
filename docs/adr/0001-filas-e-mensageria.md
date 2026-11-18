@@ -168,12 +168,12 @@ com nova conta de req/s contra o joelho, e não uma decisão de arquitetura.
 
 ### 5. Retentativa, DLQ, concorrência, timeout, backpressure, métricas, idempotência e recuperação
 
-| Fila               | Lease                     | Concorrência                                                                                                  | Retentativas (backoff, jitter ±20%)                                  | Tentativas | Timeout da chamada                                            |
-| ------------------ | ------------------------- | ------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------- | ---------- | ------------------------------------------------------------- |
-| outbox (expansão)  | 60 s, renovado por evento | 1 por vez (`OUTBOX_EXPANSION_CONCURRENCY`), claim de até 10, 1 por agregado                                   | 30 s, 2 min, 10 min, 30 min                                          | 5          | —                                                             |
-| entregas (2 raias) | 180 s                     | 5 por raia (`NOTIFICATION_INTERNAL_CONCURRENCY`, `NOTIFICATION_EXTERNAL_CONCURRENCY`), vaga a vaga            | 30 s, 2 min, 10 min, 30 min, 1 h, 3 h (~4h40); `Retry-After` até 1 h | 7          | backstop de 15 s por entrega; SMTP, Meta e Expo com 10 s cada |
-| webhooks           | 120 s                     | 5 (`WEBHOOK_CONCURRENCY`); por endpoint até 10 por claim e 2 em paralelo (`WEBHOOK_PER_ENDPOINT_CONCURRENCY`) | 30 s, 2 min, 10 min, 1 h, 6 h                                        | 6          | 10 s; resposta lida até 8 kB                                  |
-| IA                 | 300 s                     | 4 (`AI_CONCURRENCY`, limitada por `AI_LOCAL_MAX_CONCURRENCY`)                                                 | 30 s, 2 min, 10 min; leitor ocupado: 5–15 s                          | 4          | leitor 15 s; foto do R2 com prazo de 15 s                     |
+| Fila               | Lease                     | Concorrência                                                                                                                                                      | Retentativas (backoff, jitter ±20%)                                  | Tentativas | Timeout da chamada                                            |
+| ------------------ | ------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------- | ---------- | ------------------------------------------------------------- |
+| outbox (expansão)  | 60 s, renovado por evento | 1 por vez (`OUTBOX_EXPANSION_CONCURRENCY`), claim de até 10, 1 por agregado                                                                                       | 30 s, 2 min, 10 min, 30 min                                          | 5          | —                                                             |
+| entregas (2 raias) | 180 s                     | 5 por raia (`NOTIFICATION_INTERNAL_CONCURRENCY`, `NOTIFICATION_EXTERNAL_CONCURRENCY`), vaga a vaga                                                                | 30 s, 2 min, 10 min, 30 min, 1 h, 3 h (~4h40); `Retry-After` até 1 h | 7          | backstop de 15 s por entrega; SMTP, Meta e Expo com 10 s cada |
+| webhooks           | 120 s                     | 5 (`WEBHOOK_CONCURRENCY`); por endpoint 2 em paralelo por processo (`WEBHOOK_PER_ENDPOINT_CONCURRENCY`) e 4 somando todos (`WEBHOOK_ENDPOINT_GLOBAL_CONCURRENCY`) | 30 s, 2 min, 10 min, 1 h, 6 h                                        | 6          | 10 s; resposta lida até 8 kB                                  |
+| IA                 | 300 s                     | 4 (`AI_CONCURRENCY`, limitada por `AI_LOCAL_MAX_CONCURRENCY`)                                                                                                     | 30 s, 2 min, 10 min; leitor ocupado: 5–15 s                          | 4          | leitor 15 s; foto do R2 com prazo de 15 s                     |
 
 Constantes em `src/shared/notifications/pipeline-rules.ts`,
 `src/shared/integration/webhook-dispatch-rules.ts`,
@@ -265,6 +265,24 @@ ainda na porta do cliente, e o veredito é o que o manda refazer a foto;
 um abastecimento lido minutos depois não custa viagem a ninguém. O que a
 volta não encheu, as mais velhas vencidas enchem
 (`ai_analysis_request_due_idx`). Desligado, o claim é a janela de antes.
+
+**Webhooks com teto global por endpoint (F3-13).** O teto de chamadas a um
+mesmo endpoint era por processo (`WEBHOOK_PER_ENDPOINT_CONCURRENCY`, 2):
+com três despachantes, o ERP do cliente recebia seis de uma vez. Com
+`WEBHOOK_ENDPOINT_GLOBAL_CONCURRENCY` (4, o que as duas réplicas da
+produção já mandam; `0` desliga), o claim é em dois níveis: anda pelos
+endpoints com linha vencida, a partir de um cursor que gira em cada
+processo, por um skip scan de `webhook_delivery_endpoint_due_idx`
+(`endpointId`, `availableAt`, `id`), e de cada um pega as linhas vencidas
+em ordem, no máximo o teto por processo e nunca além do que o teto global
+deixa depois das linhas em voo do endpoint (`PROCESSING` com lease vivo,
+de qualquer processo), contadas uma vez por claim. As linhas são travadas
+enquanto a volta as lê, pulando as que outra transação segura, então a
+parte de um endpoint nunca se gasta numa linha que o claim não pode
+pegar. A contagem só vale com um claim por vez: cada um toma um
+`pg_advisory_xact_lock` na mesma transação, antes do comando, e o solta no
+commit; nenhuma chamada HTTP acontece com ele. A imagem anterior, no
+rolling, reivindica sem o lock e sem o teto global, até sair.
 
 - **DLQ:** o status `FAILED`.
   - `GET /health/dead-letter` com `POST /health/dead-letter/replay` cobre

@@ -3,7 +3,10 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { Prisma } from "@prisma/client";
 
 import { createPrismaClient } from "@/shared/database/database-client";
-import { webhookClaimSql } from "@/shared/integration/webhook-dispatch-service";
+import {
+  webhookCappedClaimSql,
+  webhookClaimSql,
+} from "@/shared/integration/webhook-dispatch-service";
 import {
   deliveryClaimSql,
   deliveryFairClaimSql,
@@ -361,6 +364,18 @@ describe("the claims, one statement each, in front of the backlog", () => {
     ],
     ["the external lane", () => deliveryClaimSql("external", Prisma.empty, 5)],
     ["the webhooks", () => webhookClaimSql(Prisma.empty, 5)],
+    [
+      "the webhooks under the global cap per endpoint (F3-13)",
+      () =>
+        webhookCappedClaimSql({
+          cursor: "",
+          limit: 5,
+          endpointCap: 4,
+          perEndpoint: 2,
+          floor: Prisma.empty,
+          rowFloor: Prisma.empty,
+        }),
+    ],
   ];
 
   it.each(CLAIMS)(

@@ -875,6 +875,23 @@ const envSchema = z
       "WEBHOOK_PER_ENDPOINT_CONCURRENCY",
     ),
 
+    // Webhook calls in flight to ONE endpoint across every process that
+    // claims the webhooks (plano-escala F3-13; decision D8): the claim
+    // counts the endpoint's rows in flight under a live lease, under a
+    // lock taken only for the claim, and takes no more than this leaves.
+    // With one process per Application and the per-process cap above, a
+    // second dispatcher (worker ×2, or the api replicas that still
+    // dispatch) would otherwise multiply what a customer's ERP receives at
+    // once. 4 by default: what production's two api replicas at 2 each
+    // already send, so nothing changes until a dispatcher is added. The
+    // owner confirms it with the receiver's rate (Comprovei/Fusion). 0
+    // turns the cap off: the claim of before, oldest first. Empty counts
+    // as absent.
+    WEBHOOK_ENDPOINT_GLOBAL_CONCURRENCY: z.preprocess(
+      (value) => (value === "" ? undefined : value),
+      z.coerce.number().int().min(0).max(64).default(4),
+    ),
+
     // The spreadsheet read off the event loop (plano-escala F3-23b;
     // modules/import/services/spreadsheet-worker.ts): how many worker
     // threads may read an upload at once in this process (0 reads on the

@@ -225,6 +225,59 @@ describe("a queue whose rows are not all equally urgent (F3-12)", () => {
   });
 });
 
+describe("a queue whose shares are caps (F3-13)", () => {
+  // The webhooks: an endpoint's share is what its global cap leaves, read
+  // from the rows in flight counted once per claim, and nothing fills past
+  // the shares.
+  const capped: FairQueue = {
+    table: "webhook_delivery",
+    tenant: "endpointId",
+    dueAt: "availableAt",
+    thenBy: ["id"],
+    indexed: (alias) =>
+      Prisma.sql`${columnOf(alias, "status")} IN ('PENDING', 'PROCESSING')`,
+    due: (alias) => Prisma.sql`${columnOf(alias, "availableAt")} <= now()`,
+    with: Prisma.sql`"in_flight" ("endpointId", "busy") AS MATERIALIZED (SELECT 'x', 0)`,
+    share: (endpoint) =>
+      Prisma.sql`${4}::int - coalesce((SELECT "busy" FROM "in_flight" WHERE "endpointId" = ${endpoint}), 0)`,
+    fill: false,
+    set: Prisma.sql`"status" = 'PROCESSING'`,
+    returning: `"id"`,
+  };
+
+  const text = fairClaimSql(capped, {
+    ...input,
+    floor: Prisma.empty,
+    rowFloor: Prisma.empty,
+  }).text.replace(/\s+/g, " ");
+
+  it("computes what the shares read once, before the walk", () => {
+    expect(text).toMatch(
+      /^ ?WITH RECURSIVE "in_flight" \("endpointId", "busy"\) AS MATERIALIZED .*?, "after" \(/,
+    );
+  });
+
+  it("reads each endpoint's rows up to its share, in the order of the index", () => {
+    expect(text).toMatch(
+      /ORDER BY "endpointId", "availableAt", "id" LIMIT GREATEST\(0, LEAST\(\$\d+::int, \$\d+::int - coalesce\(\(SELECT "busy" FROM "in_flight" WHERE "endpointId" = "t"\."tenant"\), 0\)\)\)/,
+    );
+  });
+
+  it("holds an endpoint's rows as it reads them, past the ones another transaction holds", () => {
+    // Picked by id and locked only at the end, a share spent on held rows
+    // left the endpoint's other rows behind them while they were held.
+    expect(text).toMatch(
+      /"endpointId" = "t"\."tenant"\), 0\)\)\) FOR UPDATE SKIP LOCKED \)/,
+    );
+  });
+
+  it("takes nothing outside the walk", () => {
+    expect(text).toContain(
+      '"oldest" ("id", "ord") AS ( SELECT NULL::text, NULL::bigint WHERE false )',
+    );
+  });
+});
+
 describe("the cursor", () => {
   it("moves to the last company the walk visited", () => {
     expect(

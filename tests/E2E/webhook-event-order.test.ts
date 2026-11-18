@@ -6,6 +6,7 @@ import {
   WebhookDispatchService,
   fanOutWebhookEvent,
 } from "@/shared/integration/webhook-dispatch-service";
+import { env } from "@/env";
 import { buildResendRow } from "@/shared/integration/webhook-resend";
 import { createPrismaClient } from "@/shared/database/database-client";
 
@@ -145,7 +146,24 @@ describe("the sequence of an event", () => {
 });
 
 describe("the claim, between rows that share a timestamp", () => {
-  it("takes them in the order they were created", async () => {
+  // Without the global cap per endpoint (the claim of before) a claim takes
+  // up to ten of one endpoint; under it (plano-escala F3-13), no more than
+  // the process may send to it at once (2). Either way, the first created.
+  it.each([
+    ["without the global cap", 0, 10],
+    ["under the global cap", 4, 2],
+  ])("takes them in the order they were created, %s", async (_, cap, taken) => {
+    const saved = env.WEBHOOK_ENDPOINT_GLOBAL_CONCURRENCY;
+    env.WEBHOOK_ENDPOINT_GLOBAL_CONCURRENCY = cap;
+
+    try {
+      await claimInOrder(taken);
+    } finally {
+      env.WEBHOOK_ENDPOINT_GLOBAL_CONCURRENCY = saved;
+    }
+  });
+
+  async function claimInOrder(taken: number): Promise<void> {
     const endpointId = await seedEndpoint("erp");
 
     // Twelve rows of one transaction: `availableAt` defaults to now(), the
@@ -170,7 +188,7 @@ describe("the claim, between rows that share a timestamp", () => {
       dispatcher as unknown as { claim(): Promise<Array<{ id: string }>> }
     ).claim();
 
-    // At most ten of one endpoint per claim: the ten created first.
-    expect(claimed.map((row) => row.id).sort()).toEqual(ids.slice(0, 10));
-  });
+    // The ones created first.
+    expect(claimed.map((row) => row.id).sort()).toEqual(ids.slice(0, taken));
+  }
 });

@@ -5,10 +5,13 @@ import {
   REPLAY_WINDOW_DAYS,
   RESPONSE_BODY_LIMIT,
   WEBHOOK_CONCURRENCY,
+  WEBHOOK_ENDPOINT_GLOBAL_CONCURRENCY,
   WEBHOOK_LEASE_SECONDS,
+  WEBHOOK_PER_ENDPOINT_CONCURRENCY,
   WEBHOOK_RETRY_DELAYS_MS,
   WEBHOOK_TIMEOUT_MS,
   assertWebhookLeaseInvariant,
+  endpointShare,
   isWebhookPermanent,
   isWebhookSuccess,
   nextWebhookDelayMs,
@@ -171,5 +174,36 @@ describe("the lease, with the per-endpoint lane", () => {
     expect(() =>
       assertWebhookLeaseInvariant(20, 5, 10_000, 120, 20, 1),
     ).toThrow(/lease invariant/);
+  });
+});
+
+/**
+ * The global cap per endpoint (plano-escala F3-13): what one capped claim
+ * may take of an endpoint, whatever the other dispatchers hold.
+ */
+describe("an endpoint's share of a capped claim", () => {
+  it("is what the global cap leaves after the rows in flight in every process", () => {
+    expect(endpointShare(0, 4, 2)).toBe(2);
+    expect(endpointShare(3, 4, 2)).toBe(1);
+    expect(endpointShare(4, 4, 2)).toBe(0);
+  });
+
+  it("is never negative, even past the cap (an older image's claim)", () => {
+    expect(endpointShare(6, 4, 2)).toBe(0);
+  });
+
+  it("never claims past what this process may send to the endpoint at once", () => {
+    // A row claimed past the process's own cap would wait in its pool,
+    // holding a unit of the cap the other dispatchers could send with.
+    expect(endpointShare(0, 16, 2)).toBe(2);
+    expect(endpointShare(0, 16, 32, 10)).toBe(10);
+  });
+
+  it("starts at what production's two api replicas already send to one endpoint", () => {
+    // Two replicas at 2 calls each: nothing changes until a dispatcher is
+    // added (decision D8).
+    expect(WEBHOOK_ENDPOINT_GLOBAL_CONCURRENCY).toBe(
+      2 * WEBHOOK_PER_ENDPOINT_CONCURRENCY,
+    );
   });
 });

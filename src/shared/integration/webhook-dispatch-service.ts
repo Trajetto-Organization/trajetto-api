@@ -10,6 +10,8 @@ import {
   REPLAY_WINDOW_EXPIRED_REASON,
   RESPONSE_READ_LIMIT_BYTES,
   WEBHOOK_MAX_ATTEMPTS,
+  WEBHOOK_CLAIM_LOCK,
+  WEBHOOK_CLAIM_MAX_ENDPOINTS,
   WEBHOOK_CLAIM_WINDOW,
   WEBHOOK_DRAIN_BUDGET_MS,
   WEBHOOK_LEASE_SECONDS,
@@ -56,6 +58,11 @@ import {
 import { consumesQueue } from "@/shared/lifecycle/process-role";
 import { assertWithVariable } from "@/shared/lifecycle/queue-config";
 import { ContinuousPool } from "@/shared/queue/continuous-pool";
+import {
+  columnOf,
+  fairClaimSql,
+  nextFairCursor,
+} from "@/shared/queue/fair-claim";
 import {
   EXHAUSTED_CLOSE_INTERVAL_MS,
   closeExhaustedInBatches,
@@ -183,6 +190,90 @@ function webhookClaimSql(
       )${floor}
       RETURNING "id", "endpointId", "topic", "payload", "attempts", "created_at"
     `;
+}
+
+/**
+ * The webhooks' claim under the global cap per endpoint (plano-escala
+ * F3-13), in two levels: the endpoints with due rows, walked from this
+ * process's rotating cursor by a skip scan of
+ * webhook_delivery_endpoint_due_idx ("endpointId", "availableAt", "id"),
+ * and, of each, its due rows in order: at most `perEndpoint` (what this
+ * process may send to one endpoint at once, so a claimed row never waits
+ * in its pool holding the cap from the other dispatchers) and never past
+ * what `endpointCap` leaves after the endpoint's rows in flight:
+ * PROCESSING under a live lease, whichever process holds them, counted
+ * once per claim off webhook_delivery_processing_lease_idx. The
+ * per-process cap of before could not see the other dispatchers, so a
+ * second worker doubled what a customer's ERP received at once.
+ *
+ * Each endpoint's rows are held as the walk reads them, skipping the ones
+ * another transaction holds, so a share is never spent on a row the claim
+ * cannot take. Nothing fills past the shares (the fair claim's fill is
+ * off): the shares are the cap. The count holds only while one claim runs
+ * at a time, so
+ * the caller takes WEBHOOK_CLAIM_LOCK in the same transaction, before this
+ * statement, whose snapshot then sees every claim committed before it.
+ * `busyEndpoints` are this process's endpoints at their per-process cap
+ * (F3-07), left out as in webhookClaimSql. Exported for the plan tests,
+ * which measure this very statement.
+ */
+function webhookCappedClaimSql(input: {
+  cursor: string;
+  limit: number;
+  endpointCap: number;
+  perEndpoint: number;
+  busyEndpoints?: readonly string[];
+  floor: Prisma.Sql;
+  rowFloor: Prisma.Sql;
+}): Prisma.Sql {
+  const busy = input.busyEndpoints ?? [];
+  const rowsPerEndpoint = Math.min(
+    WEBHOOK_PER_ENDPOINT_BATCH,
+    input.perEndpoint,
+  );
+
+  const notBusy = (alias: string | null) =>
+    busy.length > 0
+      ? Prisma.sql` AND NOT (${columnOf(alias, "endpointId")} = ANY(${[...busy]}::text[]))`
+      : Prisma.empty;
+
+  return fairClaimSql(
+    {
+      table: "webhook_delivery",
+      tenant: "endpointId",
+      dueAt: "availableAt",
+      thenBy: ["id"],
+      indexed: (alias) =>
+        Prisma.sql`${columnOf(alias, "status")} IN ('PENDING', 'PROCESSING')`,
+      // The rule of webhookClaimSql: a range that stops at now(), and the
+      // lease check for rows an older release claimed without moving
+      // availableAt.
+      due: (alias) =>
+        Prisma.sql`${columnOf(alias, "availableAt")} <= now() AND (${columnOf(alias, "status")} = 'PENDING' OR (${columnOf(alias, "status")} = 'PROCESSING' AND ${columnOf(alias, "leaseExpiresAt")} < now() AND ${columnOf(alias, "attempts")} < ${WEBHOOK_MAX_ATTEMPTS}::int))${notBusy(alias)}`,
+      with: Prisma.sql`"in_flight" ("endpointId", "busy") AS MATERIALIZED (
+        SELECT "endpointId", count(*)::int FROM "webhook_delivery"
+        WHERE "status" = 'PROCESSING' AND "leaseExpiresAt" > now()${input.floor}
+        GROUP BY "endpointId"
+      )`,
+      share: (endpoint) =>
+        Prisma.sql`LEAST(${rowsPerEndpoint}::int, ${input.endpointCap}::int - coalesce((SELECT "in_flight"."busy" FROM "in_flight" WHERE "in_flight"."endpointId" = ${endpoint}), 0))`,
+      fill: false,
+      set: Prisma.sql`
+        "status" = 'PROCESSING',
+        "leaseExpiresAt" = now() + make_interval(secs => ${WEBHOOK_LEASE_SECONDS}),
+        "availableAt" = now() + make_interval(secs => ${WEBHOOK_LEASE_SECONDS}),
+        "attempts" = "attempts" + 1`,
+      returning: `"id", "endpointId", "topic", "payload", "attempts", "created_at"`,
+    },
+    {
+      cursor: input.cursor,
+      limit: input.limit,
+      rowsPerTenant: rowsPerEndpoint,
+      maxTenants: WEBHOOK_CLAIM_MAX_ENDPOINTS,
+      floor: input.floor,
+      rowFloor: input.rowFloor,
+    },
+  );
 }
 
 /**
@@ -854,6 +945,9 @@ class WebhookDispatchService {
   // Success records still retrying after the batch moved on; shutdown waits.
   private readonly pendingRecords = new Set<Promise<void>>();
 
+  /** Where this process's next capped claim starts (F3-13). */
+  private endpointCursor = "";
+
   private dispatcher: Dispatcher;
   private fetchImpl: typeof undiciFetch;
 
@@ -1065,11 +1159,52 @@ class WebhookDispatchService {
     // The lease end goes into availableAt too (same expression, same
     // statement, so the two are equal): a row in flight leaves the claim's
     // range until its lease runs out, and the scan never visits it.
-    const claimed = await database.$queryRaw<ClaimedWebhook[]>(
-      webhookClaimSql(floor, limit, [...busyEndpoints]),
-    );
+    const claimed =
+      env.WEBHOOK_ENDPOINT_GLOBAL_CONCURRENCY > 0
+        ? await this.claimCapped(limit, busyEndpoints, floor)
+        : await database.$queryRaw<ClaimedWebhook[]>(
+            webhookClaimSql(floor, limit, [...busyEndpoints]),
+          );
 
     for (const row of claimed) row.claimStartedAtMs = claimStartedAtMs;
+
+    return claimed;
+  }
+
+  /**
+   * The claim under the global cap per endpoint (webhookCappedClaimSql):
+   * the lock and the claim in one transaction, so the lock is held only
+   * for the claim and the claim's snapshot, taken after the lock, sees the
+   * rows every claim before it took. No interactive transaction: the two
+   * statements go together and nothing holds the connection in between.
+   */
+  private async claimCapped(
+    limit: number,
+    busyEndpoints: ReadonlySet<string>,
+    floor: Prisma.Sql,
+  ): Promise<ClaimedWebhook[]> {
+    const rowFloor = await claimFloors.predicate("webhooks", "row");
+
+    const [, claimed] = await database.$transaction([
+      database.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${WEBHOOK_CLAIM_LOCK}, 0))`,
+      database.$queryRaw<
+        Array<ClaimedWebhook & { fairCursor?: string | null }>
+      >(
+        webhookCappedClaimSql({
+          cursor: this.endpointCursor,
+          limit,
+          endpointCap: env.WEBHOOK_ENDPOINT_GLOBAL_CONCURRENCY,
+          perEndpoint: WEBHOOK_PER_ENDPOINT_CONCURRENCY,
+          busyEndpoints: [...busyEndpoints],
+          floor,
+          rowFloor,
+        }),
+      ),
+    ]);
+
+    this.endpointCursor = nextFairCursor(claimed, this.endpointCursor);
+
+    for (const row of claimed) delete row.fairCursor;
 
     return claimed;
   }
@@ -1690,6 +1825,7 @@ class WebhookDispatchService {
 const webhookDispatchService = WebhookDispatchService.getInstance();
 
 export {
+  webhookCappedClaimSql,
   webhookClaimSql,
   WebhookDispatchService,
   fanOutWebhookEvent,

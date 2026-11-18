@@ -77,6 +77,49 @@ const WEBHOOK_PER_ENDPOINT_CONCURRENCY = 2;
 const WEBHOOK_CLAIM_WINDOW = 500;
 
 /**
+ * The global cap per endpoint (plano-escala F3-13): calls in flight to one
+ * endpoint across every dispatcher, the default of
+ * WEBHOOK_ENDPOINT_GLOBAL_CONCURRENCY. Production's two api replicas at
+ * WEBHOOK_PER_ENDPOINT_CONCURRENCY (2) each already send this many, so the
+ * cap only bites once a dispatcher is added (decision D8: confirmed with
+ * the receiver's rate).
+ */
+const WEBHOOK_ENDPOINT_GLOBAL_CONCURRENCY = 4;
+
+/**
+ * Endpoints one capped claim visits at most, from its rotating cursor: each
+ * costs two short index probes, and the walk stops as soon as it found the
+ * rows the free slots take.
+ */
+const WEBHOOK_CLAIM_MAX_ENDPOINTS = 64;
+
+/**
+ * The advisory lock the capped claims take, one claim at a time across
+ * the processes, only for the claim's own transaction (never during a
+ * call): two dispatchers counting the same endpoint's rows in flight at
+ * once would each take what the cap leaves, and send twice as many.
+ */
+const WEBHOOK_CLAIM_LOCK = "webhook-delivery-claim";
+
+/**
+ * How many due rows of an endpoint one capped claim may take: what this
+ * process may send to it at once (its per-process cap, within the claim's
+ * share, WEBHOOK_PER_ENDPOINT_BATCH), never past what the global cap
+ * leaves after the endpoint's rows in flight in every process. A row
+ * claimed past the process's own cap would wait in its pool while holding
+ * a unit of the global cap the other dispatchers could be sending with.
+ * The claim computes the same in SQL; this is the rule, for the tests.
+ */
+function endpointShare(
+  inFlight: number,
+  cap: number,
+  perProcess: number,
+  batch: number = WEBHOOK_PER_ENDPOINT_BATCH,
+): number {
+  return Math.max(0, Math.min(batch, perProcess, cap - inFlight));
+}
+
+/**
  * How long one sweep keeps claiming while there is work.
  *
  * It used to stop after twenty rows and wait five seconds, whatever the
@@ -249,8 +292,11 @@ export {
   WEBHOOK_MAX_ATTEMPTS,
   REPLAY_WINDOW_DAYS,
   RESPONSE_BODY_LIMIT,
+  WEBHOOK_CLAIM_LOCK,
+  WEBHOOK_CLAIM_MAX_ENDPOINTS,
   WEBHOOK_CLAIM_WINDOW,
   WEBHOOK_CONCURRENCY,
+  WEBHOOK_ENDPOINT_GLOBAL_CONCURRENCY,
   WEBHOOK_DRAIN_BUDGET_MS,
   WEBHOOK_LEASE_SECONDS,
   WEBHOOK_PER_ENDPOINT_BATCH,
@@ -258,6 +304,7 @@ export {
   WEBHOOK_RETRY_DELAYS_MS,
   WEBHOOK_TIMEOUT_MS,
   assertWebhookLeaseInvariant,
+  endpointShare,
   isWebhookPermanent,
   isWebhookSuccess,
   nextWebhookDelayMs,
