@@ -158,10 +158,16 @@ const SCENARIOS = [
   "tower.js",
   "noisy-tenant.js",
   "outage.js",
+  // plano-escala LOAD-04.
+  "import-20k.js",
+  "import-geocode.js",
 ];
 
 /** The k6 scenes judged elsewhere: rolling.js by swarm-rolling-script. */
 const OTHER_SCENES = ["rolling.js"];
+
+/** The k6 scenes of plano-escala LOAD-04 (the import's two). */
+const LOAD_04_SCENES = ["import-20k.js", "import-geocode.js"];
 
 /** The scenes plano-escala LOAD-03 added, with what their verdict reads. */
 const LOAD_03_SCENES = [
@@ -385,7 +391,7 @@ describe("the scenes (LOAD-03)", () => {
     );
   });
 
-  it.each(LOAD_03_SCENES)(
+  it.each([...LOAD_03_SCENES, ...LOAD_04_SCENES])(
     "%s summarises p99 and is run with its summary-export",
     (scene) => {
       expect(read(LOAD, scene)).toContain(
@@ -1156,5 +1162,368 @@ describe.skipIf(!bash)("multi-replica.sh (LOAD-1, LOAD-3)", () => {
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain("LOAD_ENV_FILE");
     expect(box.calls("docker")).toEqual([]);
+  });
+});
+
+/**
+ * The queue and import scenes (plano-escala LOAD-04): the drain of 50 000
+ * events and 20 000 notifications, one company's flood of 20 000 external
+ * messages, a spreadsheet of 20 000 lines and the geocoding of 20 000
+ * addresses at the Startup plan's rates.
+ *
+ * What each must not do is reach anything real: the two that write the
+ * queues by SQL refuse every database but the disposable one before they
+ * connect; the import's spreadsheet is the one the importer reads without a
+ * single rejected row (a broken file would measure a list of errors); the
+ * fake geocoder answers what the API parses and refuses what LocationIQ
+ * would; and the harness calls it only when the scene's env file is named.
+ */
+describe("the queue and import scenes (LOAD-04)", () => {
+  const readme = read(LOAD, "README.md");
+  const section = readme.slice(
+    readme.indexOf("### As cenas de fila e importação (LOAD-04)"),
+  );
+  const tsxCli = resolve(ROOT, "node_modules", "tsx", "dist", "cli.mjs");
+
+  it.each([
+    "drain-backlog.mjs",
+    "queue-flood.ts",
+    "import-20k.js",
+    "import-geocode.js",
+  ])("%s is in the README's table of the queue scenes", (scene) => {
+    expect(section).toMatch(
+      new RegExp(`\\| \`${scene.replace(".", "\\.")}\` +\\|`),
+    );
+  });
+
+  it.each(["drain-backlog.mjs", "queue-flood.ts"])(
+    "%s refuses a database that is not the disposable one, before connecting",
+    (scene) => {
+      const source = read(LOAD, scene);
+
+      expect(
+        source.indexOf("assertDisposableDatabase(env.DATABASE_URL"),
+      ).toBeLessThan(source.indexOf("new pg.Client"));
+
+      const result = spawnSync(
+        process.execPath,
+        [tsxCli, resolve(LOAD, scene)],
+        {
+          cwd: ROOT,
+          encoding: "utf8",
+          timeout: 60_000,
+          env: {
+            ...process.env,
+            DATABASE_URL:
+              "postgresql://load:load@db.example.com:5432/load_test",
+            LOAD_PG_PORT: "",
+          },
+        },
+      );
+
+      expect(result.status).not.toBe(0);
+      expect(result.stdout + result.stderr).toContain(
+        "Só no banco descartável",
+      );
+    },
+    60_000,
+  );
+
+  describe("the spreadsheet the import scenes upload", () => {
+    const load = async () =>
+      import(
+        pathToFileURL(resolve(LOAD, "lib", "spreadsheet.js")).href
+      ) as Promise<{
+        MAX_LINES: number;
+        spreadsheetRows(
+          rows: number,
+          marker: string,
+          options: { coordinates: boolean },
+        ): { filename: string; text: string };
+      }>;
+
+    const parse = async (sheet: { filename: string; text: string }) => {
+      const { readSpreadsheet } =
+        await import("@/shared/delivery/spreadsheet-reader");
+      const { parseDeliverySpreadsheet } =
+        await import("@/shared/delivery/spreadsheet-parser");
+
+      return parseDeliverySpreadsheet(
+        await readSpreadsheet(
+          sheet.filename,
+          Buffer.from(sheet.text, "utf8").toString("base64"),
+        ),
+      );
+    };
+
+    it("is read by the importer at its ceiling, every row a delivery with its point", async () => {
+      const { MAX_LINES, spreadsheetRows } = await load();
+      const parsed = await parse(
+        spreadsheetRows(MAX_LINES - 1, "marca", { coordinates: true }),
+      );
+
+      expect(parsed.errors).toEqual([]);
+      expect(parsed.unknownHeaders).toEqual([]);
+      expect(parsed.rows).toHaveLength(MAX_LINES - 1);
+      expect(parsed.rows.every((row) => row.latitude !== null)).toBe(true);
+      expect(new Set(parsed.rows.map((row) => row.code)).size).toBe(
+        MAX_LINES - 1,
+      );
+    }, 30_000);
+
+    it("leaves the point to the geocoder without coordinates", async () => {
+      const { spreadsheetRows } = await load();
+      const parsed = await parse(
+        spreadsheetRows(10, "marca", { coordinates: false }),
+      );
+
+      expect(parsed.errors).toEqual([]);
+      expect(parsed.rows.every((row) => row.latitude === null)).toBe(true);
+    });
+
+    it("defaults to 19 999 rows: the importer counts the header in its 20 000", async () => {
+      const { MAX_LINES, spreadsheetRows } = await load();
+
+      await expect(
+        parse(spreadsheetRows(MAX_LINES, "marca", { coordinates: true })),
+      ).rejects.toMatchObject({ code: "SPREADSHEET_TOO_MANY_ROWS" });
+
+      for (const scene of ["import-20k.js", "import-geocode.js"]) {
+        expect(read(LOAD, scene)).toContain("__ENV.IMPORT_ROWS || 19_999");
+      }
+    });
+  });
+
+  describe("the fake geocoder", () => {
+    type Fake = import("node:http").Server;
+
+    const load = async () =>
+      import(
+        pathToFileURL(resolve(LOAD, "fake-geocoder.mjs")).href
+      ) as Promise<{
+        STARTUP: { perSecond: number; perDay: number };
+        createFakeGeocoder(options: {
+          perSecond?: number;
+          perDay?: number;
+          latencyMs?: number;
+          now?: () => number;
+          tls?: { key: string; cert: string } | null;
+        }): Fake;
+        mintCertificate(
+          forgeDir: string,
+          hosts: string[],
+        ): Promise<{ ca: string; cert: string; key: string }>;
+      }>;
+
+    let server: Fake | undefined;
+
+    afterEach(async () => {
+      await new Promise((done) => server?.close(done) ?? done(undefined));
+      server = undefined;
+    });
+
+    async function start(
+      options: Parameters<
+        Awaited<ReturnType<typeof load>>["createFakeGeocoder"]
+      >[0],
+    ) {
+      const { createFakeGeocoder } = await load();
+
+      server = createFakeGeocoder({ latencyMs: 0, ...options });
+      await new Promise<void>((done) => server!.listen(0, "127.0.0.1", done));
+
+      const address = server.address() as { port: number };
+
+      return `http://127.0.0.1:${address.port}`;
+    }
+
+    it("answers the search the API sends with a point the API reads as an address", async () => {
+      const base = await start({});
+      const { searchUrl, parseNominatimSearch } =
+        await import("@/shared/services/proof-location/address-geocoder");
+      const url = searchUrl(
+        { url: base, key: undefined, keyParam: "key" },
+        {
+          street: "Rua Carga marca",
+          address_number: "12",
+          neighborhood: "Centro",
+          city: "Sao Paulo",
+          uf: "SP",
+          cep: "01001000",
+        },
+      );
+
+      const point = parseNominatimSearch(await (await fetch(url)).json());
+
+      expect(point?.precision).toBe("ADDRESS");
+      expect(point!.latitude).toBeGreaterThan(-24);
+      expect(point!.latitude).toBeLessThan(-23);
+
+      const stats = await (
+        await fetch(`${base}/stats?contains=${encodeURIComponent("marca")}`)
+      ).json();
+
+      expect(stats).toMatchObject({ answered: 1, matching: 1, refused: 0 });
+    });
+
+    it("refuses past the plan's second and day, in LocationIQ's words", async () => {
+      let now = 1_000_000;
+      const base = await start({ perSecond: 2, perDay: 3, now: () => now });
+      const search = async () => {
+        const response = await fetch(`${base}/search?q=Rua%20A`);
+
+        return { status: response.status, body: await response.json() };
+      };
+
+      expect((await search()).status).toBe(200);
+      expect((await search()).status).toBe(200);
+      expect(await search()).toEqual({
+        status: 429,
+        body: { error: "Rate Limited Second" },
+      });
+
+      now += 1_000;
+
+      expect((await search()).status).toBe(200);
+      expect(await search()).toEqual({
+        status: 429,
+        body: { error: "Rate Limited Day" },
+      });
+
+      const stats = await (await fetch(`${base}/stats`)).json();
+
+      expect(stats).toMatchObject({
+        answered: 3,
+        refused: 2,
+        refusedSecond: 1,
+        refusedDay: 1,
+        maxPerSecond: 2,
+      });
+    });
+
+    it("serves HTTPS under a CA of its own, which a client trusts only when given it", async () => {
+      const { mintCertificate } = await load();
+      const minted = await mintCertificate(
+        resolve(ROOT, "node_modules", "node-forge"),
+        ["fake-geocoder", "localhost"],
+      );
+      const { X509Certificate } = await import("node:crypto");
+      const https = await import("node:https");
+
+      expect(new X509Certificate(minted.ca).ca).toBe(true);
+      expect(new X509Certificate(minted.cert).subjectAltName).toContain(
+        "DNS:fake-geocoder",
+      );
+
+      const port = new URL(await start({ tls: minted })).port;
+      const get = (ca?: string) =>
+        new Promise<number>((done, fail) => {
+          https
+            .get(`https://localhost:${port}/health`, { ca }, (response) => {
+              response.resume();
+              done(response.statusCode ?? 0);
+            })
+            .on("error", fail);
+        });
+
+      expect(await get(minted.ca)).toBe(200);
+      await expect(get()).rejects.toThrow();
+    });
+
+    it("defaults to the Startup plan the env file writes down", async () => {
+      const { STARTUP } = await load();
+      const startup = read(LOAD, "geocoder-startup.env");
+
+      expect(startup).toContain(
+        `LOCATIONIQ_RATE_PER_SECOND=${STARTUP.perSecond}`,
+      );
+      expect(startup).toContain(`LOCATIONIQ_DAILY_QUOTA=${STARTUP.perDay}`);
+      expect(harness).toContain(
+        `FAKE_GEOCODER_PER_SECOND: \${LOAD_FAKE_GEOCODER_PER_SECOND:-${STARTUP.perSecond}}`,
+      );
+      expect(harness).toContain(
+        `FAKE_GEOCODER_PER_DAY: \${LOAD_FAKE_GEOCODER_PER_DAY:-${STARTUP.perDay}}`,
+      );
+      // Never a real provider, nor a key, in the file; the fake over
+      // HTTPS, as production demands, under the run's CA.
+      expect(startup).toContain(
+        "REVERSE_GEOCODER_URL=https://fake-geocoder:8090",
+      );
+      expect(startup).toContain("NODE_EXTRA_CA_CERTS=/fakes/ca.pem");
+      expect(startup).not.toMatch(/KEY=|locationiq\.com/i);
+    });
+  });
+
+  it("publishes Redis on loopback only, for the flood's process", () => {
+    expect(harness).toContain('- "127.0.0.1:${LOAD_REDIS_PORT:-56379}:6379"');
+  });
+
+  describe.skipIf(!hasCompose)("as docker compose renders it", () => {
+    it("calls the fake geocoder at the Startup plan only with the scene's env file", () => {
+      const services = renderWith(
+        ["--profile", "fakes", "--profile", "roles"],
+        {
+          LOAD_API_ENV_FILE: "geocoder-startup.env",
+        },
+      );
+      const burnIn = read(LOAD, "staging-burn-in.sh").match(
+        /NODE_IMAGE="(node:[^"]+@sha256:[0-9a-f]{64})"/,
+      );
+
+      expect(services["fake-geocoder"].image).toBe(burnIn?.[1]);
+      expect(
+        (services["fake-geocoder"] as { ports?: unknown[] }).ports ?? [],
+      ).toEqual([]);
+
+      for (const name of ["api", "worker"]) {
+        const parsed = envSchema.safeParse(
+          definedEnv(services[name].environment ?? {}),
+        );
+
+        expect(
+          parsed.success,
+          `${name}: ${JSON.stringify(parsed.error?.format())}`,
+        ).toBe(true);
+        expect(parsed.data?.REVERSE_GEOCODER_URL).toBe(
+          "https://fake-geocoder:8090",
+        );
+        expect(services[name].environment?.NODE_EXTRA_CA_CERTS).toBe(
+          "/fakes/ca.pem",
+        );
+        // After the fake wrote its CA: Node reads the trust once, at start.
+        expect(
+          (services[name].depends_on as Record<string, object> | undefined)?.[
+            "fake-geocoder"
+          ],
+        ).toMatchObject({ condition: "service_healthy", required: false });
+        expect(parsed.data?.GEOCODING_CALLS_PER_SECOND).toBe(17);
+        expect(parsed.data?.DELIVERY_GEOCODING_DAILY_BUDGET).toBe(45_000);
+      }
+
+      const plain = renderWith([]);
+
+      expect(plain["fake-geocoder"]).toBeUndefined();
+      expect(plain.api.environment).not.toHaveProperty("REVERSE_GEOCODER_URL");
+      expect(plain.api.environment).not.toHaveProperty("NODE_EXTRA_CA_CERTS");
+    });
+
+    it("leaves the external lane to the flood's process with LOAD_WORKER_QUEUES", () => {
+      const services = renderWith(["--profile", "roles"], {
+        LOAD_API_ROLE: "api",
+        LOAD_WORKER_QUEUES: "outbox,internal,webhooks,ai",
+      });
+      const worker = envSchema.parse(
+        definedEnv(services.worker.environment ?? {}),
+      );
+      const api = envSchema.parse(definedEnv(services.api.environment ?? {}));
+
+      expect(worker.WORKER_QUEUES).toEqual([
+        "outbox",
+        "internal",
+        "webhooks",
+        "ai",
+      ]);
+      expect(api.WORKER_QUEUES).toEqual([]);
+    });
   });
 });

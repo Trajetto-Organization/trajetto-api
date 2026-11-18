@@ -196,16 +196,53 @@ function spikeVerdict(summary) {
   };
 }
 
+/**
+ * The drain of a backlog (plano-escala LOAD-04): drain-backlog.mjs wrote
+ * its summary (`options.drain`: drained in under 15 minutes, no row
+ * FAILED), and load.js ran beside it. Passes when both hold and the HTTP
+ * stayed in p95 under `p95Ms` (300) without product failures. Without the
+ * drain's summary, it fails: a load run alone proves nothing of a drain.
+ */
+function drainVerdict(summary, options = {}) {
+  const p95Ms = options.p95Ms ?? 300;
+  const drain = options.drain ?? null;
+  const p95 = statOf(summary, "surface_latency", "p(95)");
+  const failures = rateOf(summary, "surface_failures");
+  const reasons = [];
+
+  if (!drain) reasons.push("sem o resumo do drain-backlog.mjs");
+  else if (!drain.pass) reasons.push(...(drain.reasons ?? ["o dreno falhou"]));
+
+  if (p95 === null || p95 >= p95Ms) {
+    reasons.push(
+      `HTTP com p95 de ${p95 ?? "?"} ms durante o dreno (limite ${p95Ms} ms)`,
+    );
+  }
+  if (failures === null || failures > 0.01) {
+    reasons.push("falhas de produto no HTTP durante o dreno");
+  }
+
+  return {
+    pass: reasons.length === 0,
+    drainSeconds: drain?.drainSeconds ?? null,
+    p95,
+    failures,
+    reasons,
+  };
+}
+
 const VERDICTS = {
   "noisy-tenant": noisyTenantVerdict,
   outage: outageVerdict,
   spike: spikeVerdict,
+  drain: drainVerdict,
 };
 
 export {
   OUTAGE_DEFAULTS,
   VERDICTS,
   countOf,
+  drainVerdict,
   metricOf,
   noisyTenantVerdict,
   outageVerdict,
@@ -231,7 +268,14 @@ if (invokedDirectly) {
   }
 
   const summary = JSON.parse(readFileSync(file, "utf8"));
-  const verdict = judge(summary, optionsJson ? JSON.parse(optionsJson) : {});
+  const options = optionsJson ? JSON.parse(optionsJson) : {};
+
+  // The drain's verdict reads the script's own summary by its path.
+  if (typeof options.drainFile === "string") {
+    options.drain = JSON.parse(readFileSync(options.drainFile, "utf8"));
+  }
+
+  const verdict = judge(summary, options);
 
   console.log(JSON.stringify(verdict, null, 2));
   process.exit(verdict.pass ? 0 : 1);

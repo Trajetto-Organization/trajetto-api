@@ -472,6 +472,49 @@ const surfaces = {
     return response;
   },
 
+  /**
+   * A spreadsheet upload (plano-escala LOAD-04): the 202 with the import's
+   * id; the rows are processed after the answer, one import at a time per
+   * replica. 429 IMPORT_BUSY with Retry-After is the queue being full.
+   */
+  importSpreadsheet(file, token, tags = {}) {
+    const response = http.post(
+      `${BASE}/import/import-spreadsheet/${context.businessId}`,
+      JSON.stringify({
+        filename: file.filename,
+        content: file.content,
+        shipperId: context.shipperId,
+      }),
+      {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        tags: { surface: "import.spreadsheet" },
+        timeout: "120s",
+      },
+    );
+
+    record("import.spreadsheet", response, [202], tags);
+
+    return response;
+  },
+
+  /** An import's status and counters, polled until it leaves IN_PROGRESS. */
+  getImport(importId, token, tags = {}) {
+    const response = http.get(
+      `${BASE}/import/get-import/${importId}/business/${context.businessId}`,
+      {
+        headers: { Authorization: `Bearer ${token}` },
+        tags: { surface: "import.get" },
+      },
+    );
+
+    record("import.get", response, [200], tags);
+
+    return response;
+  },
+
   /** The driver's working list, offline-first — one payload per app open. */
   myDeliveries(vu) {
     const response = http.get(

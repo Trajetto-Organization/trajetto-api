@@ -50,6 +50,17 @@
 # A profile cannot change another service's settings, so the api's role is
 # the variable LOAD_API_ROLE and not the profile itself.
 #
+# The queue and import scenes (plano-escala LOAD-04): LOAD_WORKER_QUEUES
+# narrows the worker's queues (empty: the role's preset, every queue), so a
+# process outside the harness can be the only consumer of the external
+# lane (queue-flood.ts); Redis answers on 127.0.0.1:LOAD_REDIS_PORT (56379)
+# for that process; and the `fakes` profile adds the fake geocoder
+# (fake-geocoder.mjs, the Startup plan's limits, over HTTPS with a CA of
+# its own in the fakes-ca volume), which the replicas and the worker call
+# only with LOAD_API_ENV_FILE=geocoder-startup.env, an env file of the
+# API's own variables that also points NODE_EXTRA_CA_CERTS at that CA.
+# Without the file, no geocoder and no CA trusted, as before.
+#
 # Swappable images: LOAD_API_IMAGE, LOAD_WORKER_IMAGE and
 # LOAD_REALTIME_IMAGE (the last two default to the first) run a mixed
 # fleet, as during a rolling deploy: build once, then `up` WITHOUT
@@ -165,6 +176,15 @@ services:
         limits:
           memory: ${API_MEMORY_LIMIT:-1024M}
     environment: *api-environment
+    # The API's own variables for one scene (LOAD-04): read only when the
+    # file is named, never required.
+    env_file:
+      - path: ${LOAD_API_ENV_FILE:-no-extra.env}
+        required: false
+    # The fake geocoder's CA, read only through the env file's
+    # NODE_EXTRA_CA_CERTS; empty without the fakes profile.
+    volumes:
+      - fakes-ca:/fakes:ro
     # Each replica also on its own loopback port (the first free one of the
     # range), for the questions that must hit a SPECIFIC replica: the shared
     # rate limit and a socket event crossing replicas (multi-replica.sh).
@@ -192,6 +212,11 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      # With the fakes profile, after the fake wrote its CA: the trust is
+      # read once, when Node starts.
+      fake-geocoder:
+        condition: service_healthy
+        required: false
     networks:
       - edge
       - data
@@ -220,7 +245,13 @@ services:
       <<: *api-environment
       PROCESS_ROLE: worker
       SOCKETS_ENABLED: ""
+      WORKER_QUEUES: ${LOAD_WORKER_QUEUES:-}
       NODE_OPTIONS: --max-old-space-size=${LOAD_WORKER_HEAP_MB:-512}
+    env_file:
+      - path: ${LOAD_API_ENV_FILE:-no-extra.env}
+        required: false
+    volumes:
+      - fakes-ca:/fakes:ro
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -228,6 +259,9 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      fake-geocoder:
+        condition: service_healthy
+        required: false
     networks:
       - data
 
@@ -316,12 +350,47 @@ services:
     image: redis:7-alpine
     command: ["redis-server", "--save", "", "--appendonly", "no", "--maxmemory", "256mb", "--maxmemory-policy", "allkeys-lru"]
     cpuset: ${LOAD_REDIS_CPUSET:-}
+    # On loopback for the scenes that run a process outside the harness
+    # (queue-flood.ts, LOAD-04).
+    ports:
+      - "127.0.0.1:${LOAD_REDIS_PORT:-56379}:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
       timeout: 3s
       retries: 20
     networks:
+      - data
+
+  # The geocoding provider's stand-in (profile `fakes`, LOAD-04): the
+  # Nominatim-compatible /search with the Startup plan's limits, and /stats
+  # for the import-geocode scene. Nothing of a load run reaches a real
+  # provider. HTTPS, because production refuses a geocoder URL that is not:
+  # it mints a CA of one run with the repository's node-forge and writes it
+  # to fakes-ca once it listens, which is what the healthcheck waits for.
+  # The burn-in's pinned Node image, tests/load read-only.
+  fake-geocoder:
+    profiles: ["fakes"]
+    image: node:22.21.1-alpine3.23@sha256:0340fa682d72068edf603c305bfbc10e23219fb0e40df58d9ea4d6f33a9798bf
+    command: ["node", "/load/fake-geocoder.mjs"]
+    environment:
+      FAKE_GEOCODER_PER_SECOND: ${LOAD_FAKE_GEOCODER_PER_SECOND:-22}
+      FAKE_GEOCODER_PER_DAY: ${LOAD_FAKE_GEOCODER_PER_DAY:-60000}
+      FAKE_GEOCODER_LATENCY_MS: ${LOAD_FAKE_GEOCODER_LATENCY_MS:-150}
+      FAKE_GEOCODER_TLS_DIR: /fakes
+      FAKE_GEOCODER_FORGE: /forge
+      FAKE_GEOCODER_HOSTS: fake-geocoder,localhost
+    volumes:
+      - ./:/load:ro
+      - ../../node_modules/node-forge:/forge:ro
+      - fakes-ca:/fakes
+    healthcheck:
+      test: ["CMD-SHELL", "test -s /fakes/ca.pem"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    networks:
+      - edge
       - data
 
   # On demand only (`--profile k6 run --rm k6 run /load/<scene>.js`): k6 on
@@ -341,6 +410,10 @@ services:
         condition: service_healthy
     networks:
       - edge
+
+volumes:
+  # The fake geocoder's CA of the run (profile `fakes`); empty otherwise.
+  fakes-ca:
 
 networks:
   # Traefik, the replicas and k6. Named, so the provider flag above holds

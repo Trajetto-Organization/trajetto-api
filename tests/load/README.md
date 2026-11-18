@@ -286,21 +286,24 @@ Cenas que ainda não existem (frota, escrita da API pública) estão listadas
 como lacuna em `docs/PENDENCIAS-DO-USUARIO.md`. O WebSocket em volume é o
 `socket-fleet.mjs` (LOAD-05), no fim deste arquivo.
 
-As cenas, em ordem de utilidade (as cinco últimas são do plano de escala,
-LOAD-03, mais abaixo):
+As cenas, em ordem de utilidade (as cinco depois do `soak.js` são do plano
+de escala, LOAD-03, e as duas últimas, das filas e da importação, LOAD-04,
+mais abaixo):
 
-| arquivo           | pergunta                                                                              |
-| ----------------- | ------------------------------------------------------------------------------------- |
-| `smoke.js`        | as outras estão medindo alguma coisa real?                                            |
-| `load.js`         | uma hora movimentada cabe?                                                            |
-| `spike.js`        | a frota inteira chegando de uma vez quebra ou enfileira?                              |
-| `stress.js`       | onde é o teto, e o que estoura primeiro?                                              |
-| `soak.js`         | trinta minutos depois ainda está de pé?                                               |
-| `write-mix.js`    | as escritas juntas (posições, sino, presign, chat, entrega e refresh) cabem?          |
-| `positions.js`    | a trilha de N motoristas, cada um com o próprio token e honrando o `nextFlushAfterMs` |
-| `tower.js`        | 50 abas da Torre de uma empresa e 500 empresas com 2 abas, no tique espalhado         |
-| `noisy-tenant.js` | uma empresa a 10× tira o p95 das outras 20 do lugar?                                  |
-| `outage.js`       | 2 min sem a API: os celulares de contrato 7 e 8 martelam a volta?                     |
+| arquivo             | pergunta                                                                                |
+| ------------------- | --------------------------------------------------------------------------------------- |
+| `smoke.js`          | as outras estão medindo alguma coisa real?                                              |
+| `load.js`           | uma hora movimentada cabe?                                                              |
+| `spike.js`          | a frota inteira chegando de uma vez quebra ou enfileira?                                |
+| `stress.js`         | onde é o teto, e o que estoura primeiro?                                                |
+| `soak.js`           | trinta minutos depois ainda está de pé?                                                 |
+| `write-mix.js`      | as escritas juntas (posições, sino, presign, chat, entrega e refresh) cabem?            |
+| `positions.js`      | a trilha de N motoristas, cada um com o próprio token e honrando o `nextFlushAfterMs`   |
+| `tower.js`          | 50 abas da Torre de uma empresa e 500 empresas com 2 abas, no tique espalhado           |
+| `noisy-tenant.js`   | uma empresa a 10× tira o p95 das outras 20 do lugar?                                    |
+| `outage.js`         | 2 min sem a API: os celulares de contrato 7 e 8 martelam a volta?                       |
+| `import-20k.js`     | uma planilha de 20 mil linhas tira o event loop da api do lugar?                        |
+| `import-geocode.js` | 20 mil endereços ganham o ponto em menos de 2 h, sem passar do plano do geocodificador? |
 
 `smoke.js` primeiro, sempre: um teste de estresse contra uma URL que responde
 404 reporta um p95 lindo, e essa é a forma mais comum de uma suíte de carga
@@ -397,6 +400,119 @@ Duas mudanças de régua valem para todas as cenas desde 17/11/2026:
 - no `lib/mix.js`, as posições pesam 10 de 83 (12%), e não mais 34 (um
   terço): ~333 POST/s de ~3.000 requisições por segundo no degrau de 5M. Um
   número medido antes dessa data veio do mix mais pesado em posições.
+
+### As cenas de fila e importação (LOAD-04)
+
+Quatro cenas para os portões do 100k e do 1M (seção 6 do plano) e para a
+bancada da onda 13. Duas são k6; as outras duas escrevem filas por SQL e
+leem o banco, e por isso são scripts do Node (pelo `tsx`, que lê a guarda de
+`lib/disposable-database.ts`: só 54321 ou a `LOAD_PG_PORT`, em localhost).
+
+| cena                | o que faz                                                                                                                               | aceite                                                                           |
+| ------------------- | --------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
+| `drain-backlog.mjs` | grava 50 mil eventos `activity.recorded` e 20 mil notificações IN_APP vencidos, em 100 empresas, e acompanha o dreno feito pelo harness | dreno em menos de 15 min, nenhuma linha FAILED, e o HTTP em p95 abaixo de 300 ms |
+| `queue-flood.ts`    | 20 mil WhatsApp de uma empresa na raia `external`, com o provedor falso de 300 ms, e 20 outras empresas mandando um a cada 5 s          | o p95 de espera das outras abaixo de 60 s                                        |
+| `import-20k.js`     | uma planilha de 20 mil linhas (com o ponto em cada uma) enquanto o quadro é lido a 5 por segundo                                        | lag p99 do event loop da api abaixo de 100 ms e RSS de pico abaixo do teto       |
+| `import-geocode.js` | 20 mil endereços sem ponto contra o geocodificador falso, nas taxas do plano Startup                                                    | todos com ponto em menos de 2 h, e nenhuma recusa do geocodificador              |
+
+Nada delas sai da máquina: o dreno só toca o nosso banco (as atividades e o
+sino não chamam provedor), a enchente tem o provedor falso no próprio
+processo, e a geocodificação tem o `fake-geocoder.mjs` do perfil `fakes`.
+
+```bash
+H="docker compose --env-file .env -f tests/load/compose.load.yaml"
+R="-v $PWD/tests/load/results:/results"
+DB="postgresql://trajetto:trajetto-password@localhost:54321/load_test?schema=public"
+
+# Dreno (com o worker separado, como a fase C). O load.js mede o HTTP
+# durante o dreno inteiro; o veredito junta os dois resumos.
+LOAD_API_ROLE=api $H --profile roles up -d --build
+$H --profile k6 run --rm $R -e LOAD_DURATION=15m k6 run \
+  --summary-export /results/drain-load.json /load/load.js &
+DATABASE_URL="$DB" npx tsx tests/load/drain-backlog.mjs
+wait
+node tests/load/lib/verdicts.mjs drain tests/load/results/drain-load.json \
+  '{"drainFile":"tests/load/results/drain-backlog.json"}'
+
+# Enchente: este processo é o único consumidor da raia external.
+LOAD_API_ROLE=api LOAD_WORKER_QUEUES=outbox,internal,webhooks,ai \
+  $H --profile roles up -d
+NODE_ENV=test QUEUE_FAIR_CLAIM_ENABLED=true DATABASE_URL="$DB" \
+  REDIS_URL=redis://localhost:56379 npx tsx tests/load/queue-flood.ts
+
+# Planilha de 20 mil linhas; a janela sai na última linha da cena.
+$H --profile k6 run --rm $R k6 run \
+  --summary-export /results/import-20k.json /load/import-20k.js
+DATABASE_URL="$DB" node tests/load/lib/ops-window.mjs --since <início> --until <fim>
+
+# Geocodificação no plano Startup, contra o geocodificador falso.
+LOAD_API_ENV_FILE=geocoder-startup.env $H --profile fakes up -d --build
+$H --profile k6 run --rm $R k6 run \
+  --summary-export /results/import-geocode.json /load/import-geocode.js
+```
+
+- **`drain-backlog.mjs`** (`DRAIN_EVENTS` 50000, `DRAIN_NOTIFICATIONS` 20000,
+  `DRAIN_TENANTS` 100, `DRAIN_LIMIT_MIN` 15, `DRAIN_TIMEOUT_MIN` 30,
+  `DRAIN_POLL_S` 5, `DRAIN_OUT`): os eventos são do administrador de cada
+  empresa, e a expansão faz de cada um uma ACTIVITY; as notificações já vêm
+  expandidas (uma conta a pagar), com o `business_id`. As linhas levam uuid v7
+  do instante, na partição do dia, como o seed. O resumo
+  (`tests/load/results/drain-backlog.json`) tem o tempo, o progresso de
+  cada leitura e as linhas FAILED. Quem drena é o harness: as réplicas em
+  `all`, ou o worker com `--profile roles`. O veredito `drain` reprova sem o
+  resumo do dreno.
+- **`queue-flood.ts`** (`FLOOD_MESSAGES` 20000, `FLOOD_OTHERS` 20,
+  `FLOOD_OTHER_EVERY_S` 5, `FLOOD_DURATION_MIN` 10, `FLOOD_GRACE_MIN` 5,
+  `FLOOD_PROVIDER_MS` 300, `FLOOD_P95_LIMIT_S` 60, `FLOOD_BUSINESS_ID`,
+  `FLOOD_CONTEXT`, `FLOOD_OUT`): roda fora da imagem de propósito. Os
+  provedores da imagem têm o host escrito no código (`graph.facebook.com`,
+  com TLS), e um provedor falso de 300 ms atrás dela pediria uma rota ou um
+  certificado que a produção carregaria junto. O processo roda o
+  `NotificationPipelineService` desta árvore na raia `external`, contra o
+  `load_test` e o Redis do harness (`127.0.0.1:${LOAD_REDIS_PORT:-56379}`),
+  com o WhatsApp falso, como os E2E fazem. Por isso o harness não pode
+  consumir a raia enquanto isso: `LOAD_API_ROLE=api` e, com o worker,
+  `LOAD_WORKER_QUEUES` sem `external`. A espera de uma mensagem é
+  `deliveredAt − created_at`. Com `QUEUE_FAIR_CLAIM_ENABLED=false`, a mesma
+  cena mostra o que a justiça resolve: as outras empresas atrás das 20 mil.
+- **`import-20k.js`** (`IMPORT_ROWS` 19999, `IMPORT_TIMEOUT` 30m,
+  `IMPORT_PROBE_RATE` 5, `IMPORT_PROBE_DURATION` 10m): o importador conta o
+  cabeçalho entre as 20 mil linhas que aceita, então o arquivo tem 19.999
+  entregas. O lag e o RSS são os números de cada réplica, minuto a minuto, nas
+  linhas `ops_sample`; o `lib/ops-window.mjs` julga a janela que a cena
+  imprime no fim (`--roles`, padrão `api,all`; `--lag-p99-ms`, 100;
+  `--rss-limit-mb` quando a linha não traz o teto do cgroup).
+- **`import-geocode.js`** (`IMPORT_ROWS` 19999, `GEOCODE_TIMEOUT` 2h,
+  `GEOCODE_POLL_S` 30, `FAKE_GEOCODER_URL`): com `--profile fakes` e
+  `LOAD_API_ENV_FILE=geocoder-startup.env`, as réplicas e o worker leem o
+  arquivo [`geocoder-startup.env`](./geocoder-startup.env), com variáveis
+  da própria API: o `REVERSE_GEOCODER_URL` do falso e a linha Startup da
+  tabela da decisão D40 (17 por segundo compartilhadas, 2 do comprovante,
+  45 mil por dia para o job). O falso responde em HTTPS, porque a produção
+  recusa um geocodificador sem https: ele cunha uma CA só da corrida com o
+  `node-forge` do repositório, grava-a no volume `fakes-ca` depois de
+  escutar (é o que o healthcheck espera), e o mesmo arquivo põe o
+  `NODE_EXTRA_CA_CERTS` das réplicas nela. Nenhuma outra máquina confia
+  nessa CA. O falso recusa com 429 o que passa
+  de 22 por segundo ou 60 mil no dia (`LOAD_FAKE_GEOCODER_PER_SECOND`,
+  `LOAD_FAKE_GEOCODER_PER_DAY`, `LOAD_FAKE_GEOCODER_LATENCY_MS`), como o
+  LocationIQ, e conta à parte os endereços desta corrida (a rua leva a marca
+  dela). `geocode_ms` vai do 202 ao último endereço respondido, e
+  `geocoder_refused` precisa ficar em 0. Sem o arquivo, o harness segue sem
+  geocodificador.
+
+**Conferido** (18/11/2026, nesta máquina, em escala reduzida, só para provar
+que cada uma roda e mede o que diz; não são números de capacidade): num
+Postgres descartável com o seed de 6 empresas, a enchente de 400 mensagens com
+o falso de 100 ms e a justiça ligada deu p95 de 0,5 s às outras; o dreno de 600
+eventos e 200 notificações saiu em 9 s, sem FAILED, drenado por um processo do
+pipeline no lugar do worker; a importação de 500 linhas levou 10 s; e a de 40
+endereços ganhou o ponto (ADDRESS, pelo GEOCODER) em 7 s, com pico de 16 por
+segundo e nenhuma recusa do falso, contra uma API local com as variáveis do
+`geocoder-startup.env`; de novo com o falso em HTTPS e a CA da corrida no
+`NODE_EXTRA_CA_CERTS`, 30 endereços em 40 s, sem erro de certificado. A
+imagem de produção não foi construída para isso: a rodada de verdade é da
+bancada (Linux com 10 núcleos ou mais e o `vps-6vcpu.env`) e dos portões.
 
 ## O que foi medido, e o que mudou por causa disso
 

@@ -72,6 +72,9 @@ describe("every writing script of tests/load runs the guard", () => {
     "mint-browser-users.ts",
     "mint-password.ts",
     "mint-two-factor-code.ts",
+    // The queue scenes write their backlogs by SQL (plano-escala LOAD-04).
+    "drain-backlog.mjs",
+    "queue-flood.ts",
   ]) {
     it(script, () => {
       const source = readFileSync(

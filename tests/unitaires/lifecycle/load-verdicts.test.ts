@@ -24,6 +24,7 @@ import { describe, expect, it } from "vitest";
 const VERDICTS = resolve(process.cwd(), "tests", "load", "lib", "verdicts.mjs");
 
 type Verdicts = {
+  drainVerdict: (summary: unknown, options?: object) => any;
   noisyTenantVerdict: (summary: unknown, options?: object) => any;
   outageVerdict: (summary: unknown, options?: object) => any;
   spikeVerdict: (summary: unknown) => any;
@@ -206,5 +207,148 @@ describe("the command line", () => {
     expect(spawnSync(process.execPath, [VERDICTS, "nada", file]).status).toBe(
       2,
     );
+  });
+});
+
+/**
+ * The drain (plano-escala LOAD-04): drain-backlog.mjs judged the queues,
+ * load.js measured the HTTP beside it. Both must hold, and a load run
+ * without the drain's summary proves nothing of a drain.
+ */
+describe("the drain verdict", () => {
+  const httpSummary = (p95: number, failures = 0) => ({
+    metrics: {
+      surface_latency: trend(p95),
+      surface_failures: rate(failures),
+    },
+  });
+
+  const drained = { pass: true, drainSeconds: 540, reasons: [] };
+
+  it("passes with the drain in time and the HTTP in p95 under 300 ms", async () => {
+    const { drainVerdict } = await load();
+
+    expect(drainVerdict(httpSummary(240), { drain: drained })).toMatchObject({
+      pass: true,
+      drainSeconds: 540,
+      p95: 240,
+    });
+  });
+
+  it("fails on a slow HTTP, a failed drain, or no drain at all", async () => {
+    const { drainVerdict } = await load();
+
+    expect(drainVerdict(httpSummary(300), { drain: drained }).pass).toBe(false);
+    expect(
+      drainVerdict(httpSummary(200), {
+        drain: { pass: false, reasons: ["drenou em 17 min (limite 15 min)"] },
+      }),
+    ).toMatchObject({
+      pass: false,
+      reasons: ["drenou em 17 min (limite 15 min)"],
+    });
+    expect(drainVerdict(httpSummary(200)).pass).toBe(false);
+    expect(drainVerdict(httpSummary(200, 0.02), { drain: drained }).pass).toBe(
+      false,
+    );
+  });
+
+  it("reads the drain's summary by its path from the command line", () => {
+    const dir = mkdtempSync(join(tmpdir(), "load-verdict-"));
+    const http = join(dir, "drain-load.json");
+    const drain = join(dir, "drain-backlog.json");
+
+    writeFileSync(http, JSON.stringify(httpSummary(120)));
+    writeFileSync(drain, JSON.stringify(drained));
+
+    const result = spawnSync(
+      process.execPath,
+      [VERDICTS, "drain", http, JSON.stringify({ drainFile: drain })],
+      { encoding: "utf8" },
+    );
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout)).toMatchObject({ pass: true });
+  });
+});
+
+/**
+ * The replicas' own numbers over the import's window (plano-escala
+ * LOAD-04, tests/load/lib/ops-window.mjs): the event-loop lag p99 of each
+ * minute and the RSS against the container's ceiling.
+ */
+describe("the ops window verdict", () => {
+  const OPS_WINDOW = resolve(
+    process.cwd(),
+    "tests",
+    "load",
+    "lib",
+    "ops-window.mjs",
+  );
+
+  const loadWindow = () =>
+    import(pathToFileURL(OPS_WINDOW).href) as Promise<{
+      opsWindowVerdict: (rows: object[], options?: object) => any;
+    }>;
+
+  const minute = (
+    replica: string,
+    lag: number | null,
+    rss: number | null,
+    limit: number | null = 1_024,
+  ) => ({
+    replica,
+    role: "api",
+    lag_p99_ms: lag,
+    rss_mb: rss,
+    limit_mb: limit,
+  });
+
+  it("passes when every replica's worst minute stays under the lag and the ceiling", async () => {
+    const { opsWindowVerdict } = await loadWindow();
+    const verdict = opsWindowVerdict([
+      minute("api-1", 20, 500),
+      minute("api-1", 80, 700),
+      minute("api-2", 30, 400),
+    ]);
+
+    expect(verdict.pass).toBe(true);
+    expect(verdict.replicas).toEqual([
+      expect.objectContaining({
+        replica: "api-1",
+        minutes: 2,
+        maxLagP99Ms: 80,
+        maxRssMb: 700,
+        limitMb: 1_024,
+      }),
+      expect.objectContaining({ replica: "api-2", maxLagP99Ms: 30 }),
+    ]);
+  });
+
+  it("fails on one minute past the lag, or an RSS at the ceiling", async () => {
+    const { opsWindowVerdict } = await loadWindow();
+
+    expect(
+      opsWindowVerdict([minute("api-1", 20, 500), minute("api-1", 100, 500)])
+        .pass,
+    ).toBe(false);
+    expect(opsWindowVerdict([minute("api-1", 20, 1_024)]).pass).toBe(false);
+  });
+
+  it("takes the ceiling from the command line when the rows carry none", async () => {
+    const { opsWindowVerdict } = await loadWindow();
+    const rows = [minute("api-1", 20, 600, null)];
+
+    expect(opsWindowVerdict(rows).pass).toBe(false);
+    expect(opsWindowVerdict(rows, { rssLimitMb: 1_024 }).pass).toBe(true);
+  });
+
+  it("never passes an empty window", async () => {
+    const { opsWindowVerdict } = await loadWindow();
+
+    expect(opsWindowVerdict([])).toMatchObject({
+      pass: false,
+      reasons: [expect.stringContaining("nenhuma linha de ops_sample")],
+    });
   });
 });
