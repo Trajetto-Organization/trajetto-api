@@ -86,8 +86,14 @@ describe("the socket server wires the rule where the rooms are decided", () => {
   );
 
   it("classifies the socket at the handshake", () => {
+    // Since plano-escala U-01 the upgrade's request is let go at the
+    // engine's connection, so the marker header comes from what the engine
+    // kept of it; the handshake payload still counts.
     expect(source).toMatch(
-      /socket\.data\.client = socketClientOf\(socket\.handshake\)/,
+      /socket\.data\.client = socketClientOf\(\{\s*headers: engineAttempt\s*\? \{ \[SOCKET_CLIENT_HEADER\]: engineAttempt\.clientHeader \}\s*: socket\.handshake\.headers,\s*auth: socket\.handshake\.auth,/,
+    );
+    expect(source).toMatch(
+      /clientHeader: request\?\.headers\?\.\[SOCKET_CLIENT_HEADER\],\s*\}\);\s*raw\.request = null;/,
     );
   });
 

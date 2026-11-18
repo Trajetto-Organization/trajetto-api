@@ -172,7 +172,10 @@ vi.mock("@/shared/socket/handshake-rate-limit", async (importOriginal) => ({
   ...(await importOriginal<
     typeof import("@/shared/socket/handshake-rate-limit")
   >()),
-  createHandshakeLimiter: () => ({ allow: async () => true }),
+  createHandshakeLimiter: () => ({
+    allow: async () => true,
+    refund: async () => undefined,
+  }),
 }));
 
 const { CARRIER } = fake;

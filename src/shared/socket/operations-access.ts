@@ -28,6 +28,36 @@ function operationsRoom(businessId: string): string {
   return `operations:${businessId}`;
 }
 
+/**
+ * The room of one company's live positions (plano-escala U-01, F2.19), under
+ * the same rule as the operations room (`canWatchOperationsOf`).
+ *
+ * The operations room carries the route events every dispatch screen wants,
+ * and every web tab of the dispatch team is put in it at connect, so each of
+ * them was sent every truck's position every few seconds, on any page of the
+ * panel. Only the tower (the Painel) and a route's detail draw the dots; they
+ * subscribe to this room, and the positions leave the operations room once
+ * those two screens are in production (U-03).
+ */
+function positionsRoom(businessId: string): string {
+  return `positions:${businessId}`;
+}
+
+/**
+ * Where a position goes: the positions room, and the operations room too
+ * while SOCKET_POSITIONS_ON_OPERATIONS_ROOM is on (the default), so a web
+ * build from before the subscription keeps its dots. One emit to both: a
+ * socket in both rooms hears it once.
+ */
+function driverPositionRooms(
+  businessId: string,
+  onOperationsRoom: boolean,
+): string[] {
+  return onOperationsRoom
+    ? [positionsRoom(businessId), operationsRoom(businessId)]
+    : [positionsRoom(businessId)];
+}
+
 interface DeliveryPrincipal {
   /** Resolved at the authenticated handshake, never from a payload. */
   role: UserRole | string | null | undefined;
@@ -133,7 +163,9 @@ function readOperationsBusinessId(payload: unknown): string | null {
 }
 
 export {
+  driverPositionRooms,
   operationsRoom,
+  positionsRoom,
   mayReadDeliveries,
   canWatchOperationsOf,
   readOperationsBusinessId,

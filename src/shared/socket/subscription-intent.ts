@@ -23,7 +23,9 @@
  * into every answer it sends through Redis. It dies with the socket.
  */
 
-type DispatchRoomKind = "operations" | "chat";
+// `positions` since plano-escala U-01: the tower's and the route detail's
+// dots, under the operations room's rule.
+type DispatchRoomKind = "operations" | "chat" | "positions";
 
 /** One subscribe's claim. Compared by identity: two for one company differ. */
 interface SubscriptionTicket {

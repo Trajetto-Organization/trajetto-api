@@ -933,6 +933,41 @@ const healthResponses = {
           .describe(
             "Cross-replica frames dropped while Redis was away, not yet logged.",
           ),
+        handshakes_in_flight: z
+          .number()
+          .describe(
+            "Handshakes in the authentication middleware right now (ceiling SOCKET_HANDSHAKE_MAX_INFLIGHT, plano-escala U-01).",
+          ),
+        handshakes: z
+          .object({
+            window_seconds: z
+              .number()
+              .describe(
+                "Seconds the window covers: up to a minute, when the ops_sample row resets it.",
+              ),
+            handshakes: z
+              .number()
+              .describe(
+                "Handshakes that ran the middleware, admitted or refused.",
+              ),
+            admitted: z.number(),
+            p50_ms: z
+              .number()
+              .nullable()
+              .describe(
+                "Upper bound of the duration bucket holding the median; null with no handshake.",
+              ),
+            p99_ms: z.number().nullable(),
+            max_ms: z.number().nullable(),
+            refused: z
+              .record(z.string(), z.number())
+              .describe(
+                "Refusals by reason, zero-filled: connections and inflight (the replica's ceilings, with retryAfterMs), engine_capacity (past the ceiling, at the upgrade), address_budget, rate_limited (the user's budget), too_many_connections (the user's sockets here), unavailable (Postgres or Redis failed) and credential (token, ticket or session). Only credential and address_budget are kept on the address's budget.",
+              ),
+          })
+          .describe(
+            "This replica's socket handshakes since the last ops_sample row (plano-escala U-01).",
+          ),
       })
       .describe("WebSocket (Socket.IO) of the replica that answered."),
     redis: z

@@ -20,15 +20,28 @@ import { AppError } from "@/shared/errors/AppError";
 
 import {
   canWatchOperationsOf,
+  driverPositionRooms,
   mayReadDeliveries,
   operationsRoom,
+  positionsRoom,
   readOperationsBusinessId,
 } from "@/shared/socket/operations-access";
 import {
+  SOCKET_CLIENT_HEADER,
   joinsOwnDispatchRoomsOnConnect,
   mayLeaveOwnDispatchRooms,
   socketClientOf,
 } from "@/shared/socket/socket-client";
+import {
+  createHandshakeMetrics,
+  createSocketAdmission,
+  engineOverCapacity,
+  handshakeRefusalOf,
+  keepsAddressCharge,
+  type HandshakeWindow,
+  type SocketAdmissionLimits,
+} from "@/shared/socket/admission";
+import { startGradualClose } from "@/shared/socket/gradual-close";
 
 import {
   canSubscribeToChatBusiness,
@@ -170,6 +183,90 @@ function socketAuthenticationError(message: string, code: string): Error {
 }
 
 /**
+ * This replica's ceilings (plano-escala U-01, shared/socket/admission.ts),
+ * read at every handshake.
+ */
+function admissionLimits(): SocketAdmissionLimits {
+  return {
+    maxInflight: env.SOCKET_HANDSHAKE_MAX_INFLIGHT,
+    maxConnections: env.SOCKET_MAX_CONNECTIONS,
+  };
+}
+
+/**
+ * The handshakes in flight and the sockets held, judged before the
+ * credential is read. `clientsCount` is the engine's: every upgrade holds a
+ * file descriptor, the one being judged included, CONNECT or not.
+ */
+const socketAdmission = createSocketAdmission({
+  limits: admissionLimits,
+  connections: () => io?.engine.clientsCount ?? 0,
+});
+
+/**
+ * How long the handshakes take and why they are refused, per minute in the
+ * ops_sample row (the source of the `trajetto-realtime` trigger: handshake
+ * p99 over 1 s during a deploy) and so far on /health/metrics.
+ */
+const handshakeMetrics = createHandshakeMetrics();
+
+/**
+ * A replica at its capacity, said the way the clients wait it out: the code
+ * of every handshake failure that is not about the credential, and the wait
+ * (F2-27 in the app, F2-29 on the web).
+ */
+function capacityRefusal(retryAfterMs: number): Error {
+  const error = new Error(
+    "Tempo real cheio nesta réplica. Tentando de novo em instantes.",
+  ) as Error & { data?: { code: string; retryAfterMs: number } };
+
+  error.data = { code: "SOCKET_UNAVAILABLE", retryAfterMs };
+  return error;
+}
+
+/**
+ * What the engine learned about an upgrade before its request was let go
+ * (`rawSocket.request = null` at the engine's connection): the address
+ * bucket the attempt was charged to, and the client's own marker, which
+ * decides the rooms (socket-client.ts). Keyed by the engine connection and
+ * held beside it, never in `socket.data`.
+ */
+interface EngineAttempt {
+  /** Charged at the engine and not yet settled; null once settled. */
+  addressKey: string | null;
+  clientHeader: string | string[] | undefined;
+}
+
+/** The address bucket each upgrade request was charged to, until it connects. */
+const chargedAddresses = new WeakMap<object, string>();
+
+const engineAttempts = new WeakMap<object, EngineAttempt>();
+
+/**
+ * Settles the address's charge for this handshake, once: given back unless
+ * the outcome was a credential failure (`keepsAddressCharge`). An upgrade
+ * that never sends CONNECT never gets here, and keeps its charge.
+ */
+function settleAddressCharge(
+  socket: Socket,
+  outcome: Error | null | undefined,
+): void {
+  const attempt = engineAttempts.get(socket.conn);
+  const key = attempt?.addressKey;
+
+  if (!attempt || !key) return;
+
+  attempt.addressKey = null;
+
+  if (keepsAddressCharge(outcome)) return;
+
+  // Fails silently, like every counter here (ADR 0002).
+  void Promise.resolve()
+    .then(() => handshakeLimiter.refund(key))
+    .catch(() => undefined);
+}
+
+/**
  * How long one socket's subscription check is reused.
  *
  * A subscribe is a message anyone connected can send in a loop, and each
@@ -271,13 +368,18 @@ function leaveDeliveryRooms(socket: Socket): void {
   socket.data.isDeliveryStaff = false;
 
   for (const room of [...socket.rooms]) {
-    if (room.startsWith("chat-staff:") || room.startsWith("operations:")) {
+    if (
+      room.startsWith("chat-staff:") ||
+      room.startsWith("operations:") ||
+      room.startsWith("positions:")
+    ) {
       socket.leave(room);
     }
   }
 
   socket.data.chatBusinessId = null;
   socket.data.operationsBusinessId = null;
+  socket.data.positionsBusinessId = null;
 
   // A subscribe still waiting may hold a verdict read before the right was
   // lost; it joins nothing when it comes back.
@@ -503,10 +605,25 @@ async function initializeSocketIO(httpServer: Server): Promise<SocketIOServer> {
      * websocket (engine.io answers the upgrade 400, reason in the body), and
      * socket.io-client retries it like any transport error.
      *
+     * Since U-01 the count is given back once the handshake ends in anything
+     * but a credential failure (`settleAddressCharge`), so the budget holds
+     * the failures and the handshakes still running: hundreds of drivers
+     * behind one CGNAT reconnecting in a deploy no longer use it up.
+     *
+     * Before it, and never charged: a replica past its socket ceiling by the
+     * in-flight headroom refuses the upgrade outright (admission.ts). Below
+     * that, the middleware refuses with the wait the clients honour.
+     *
      * Fails open like every counter (ADR 0002): the limiter never rejects,
      * and should it ever, the connection is admitted rather than refused.
      */
     allowRequest: (request, callback) => {
+      if (engineOverCapacity(io?.engine.clientsCount ?? 0, admissionLimits())) {
+        handshakeMetrics.refuse("engine_capacity");
+
+        return callback("SOCKET_UNAVAILABLE", false);
+      }
+
       const address = handshakeAddress(
         {
           address: request.socket.remoteAddress,
@@ -518,16 +635,47 @@ async function initializeSocketIO(httpServer: Server): Promise<SocketIOServer> {
         trustedProxy,
       );
 
+      const key = addressHandshakeKey(address);
+
       // Read at call time: the limiter is built after the server, below.
-      handshakeLimiter
-        .allow(addressHandshakeKey(address), HANDSHAKES_PER_ADDRESS)
-        .then(
-          (allowed) =>
-            callback(allowed ? null : "SOCKET_RATE_LIMITED", allowed),
-          () => callback(null, true),
-        );
+      handshakeLimiter.allow(key, HANDSHAKES_PER_ADDRESS).then(
+        (allowed) => {
+          if (allowed) chargedAddresses.set(request, key);
+          else handshakeMetrics.refuse("address_budget");
+
+          callback(allowed ? null : "SOCKET_RATE_LIMITED", allowed);
+        },
+        () => callback(null, true),
+      );
     },
   });
+
+  /**
+   * The upgrade's request, let go as soon as the connection exists (U-01).
+   *
+   * The engine kept the whole IncomingMessage (headers, the parsed URL, the
+   * socket's own references) for as long as the websocket lived: a few
+   * kilobytes per socket that nothing read after the handshake. What the
+   * handshake does need from it is taken first: the address bucket charged
+   * above and the client's marker header.
+   */
+  io.engine.on(
+    "connection",
+    (raw: {
+      request?: {
+        headers?: Record<string, string | string[] | undefined>;
+      } | null;
+    }) => {
+      const request = raw.request;
+
+      engineAttempts.set(raw, {
+        addressKey: request ? (chargedAddresses.get(request) ?? null) : null,
+        clientHeader: request?.headers?.[SOCKET_CLIENT_HEADER],
+      });
+
+      raw.request = null;
+    },
+  );
 
   // Plug in the Redis adapter BEFORE any `io.use`/`io.on` to ensure
   // that all subsequent `emit` operations route via pub/sub. Without it, an
@@ -595,8 +743,12 @@ async function initializeSocketIO(httpServer: Server): Promise<SocketIOServer> {
   }
 
   // Authentication Middleware for Socket.IO. The address budget already ran
-  // at the engine (`allowRequest` above), before this connection existed.
-  io.use(async (socket, next) => {
+  // at the engine (`allowRequest` above), before this connection existed,
+  // and the admission below runs this only with a pass.
+  const authenticateHandshake = async (
+    socket: Socket,
+    next: (error?: Error) => void,
+  ): Promise<void> => {
     try {
       const token = socket.handshake.auth.token;
       const ticket = socket.handshake.auth.ticket;
@@ -781,7 +933,16 @@ async function initializeSocketIO(httpServer: Server): Promise<SocketIOServer> {
       // The app or the web (wave 4): decides whether the dispatch rooms are
       // joined at connect or only on a screen's subscribe (socket-client.ts).
       // Read before the credential is stripped from the handshake below.
-      socket.data.client = socketClientOf(socket.handshake);
+      // The header from what the engine kept of the request: the request
+      // itself was let go at the engine's connection, above.
+      const engineAttempt = engineAttempts.get(socket.conn);
+
+      socket.data.client = socketClientOf({
+        headers: engineAttempt
+          ? { [SOCKET_CLIENT_HEADER]: engineAttempt.clientHeader }
+          : socket.handshake.headers,
+        auth: socket.handshake.auth,
+      });
 
       // Read once, above, and never again. Kept on the handshake it rode
       // along in every `fetchSockets` answer this socket was part of — a
@@ -838,6 +999,55 @@ async function initializeSocketIO(httpServer: Server): Promise<SocketIOServer> {
         ),
       );
     }
+  };
+
+  /**
+   * The admission (plano-escala U-01, shared/socket/admission.ts), before
+   * the credential is read: a pass while the replica has room for one more
+   * handshake and one more socket, or SOCKET_UNAVAILABLE with the wait.
+   * Every handshake's time and outcome is counted, and the address's charge
+   * settled once it ends.
+   */
+  io.use((socket, next) => {
+    const verdict = socketAdmission.enter();
+
+    if (!verdict.admitted) {
+      handshakeMetrics.refuse(verdict.reason);
+      settleAddressCharge(socket, null);
+
+      return next(capacityRefusal(verdict.retryAfterMs));
+    }
+
+    const startedAt = performance.now();
+    let settled = false;
+
+    const finish = (error?: Error) => {
+      if (settled) return;
+      settled = true;
+
+      verdict.release();
+      handshakeMetrics.record(
+        performance.now() - startedAt,
+        error ? handshakeRefusalOf(error) : null,
+      );
+      settleAddressCharge(socket, error);
+
+      next(error);
+    };
+
+    authenticateHandshake(socket, finish).catch((error: unknown) => {
+      log.error(
+        { error: error instanceof Error ? error.message : String(error) },
+        "socket handshake failed on an infrastructure error",
+      );
+
+      finish(
+        socketAuthenticationError(
+          "Serviço temporariamente indisponível. Tentando reconectar.",
+          "SOCKET_UNAVAILABLE",
+        ),
+      );
+    });
   });
 
   // Manage connections
@@ -1102,6 +1312,81 @@ async function initializeSocketIO(httpServer: Server): Promise<SocketIOServer> {
         socket.data.operationsBusinessId = null;
       } catch {
         // Same as above.
+      } finally {
+        acknowledgeHandled(ack);
+      }
+    });
+
+    /**
+     * The live positions of one company (plano-escala U-01, F2.19): what the
+     * tower and a route's detail subscribe to, and nothing else.
+     *
+     * The operations room's rule, the operations room's steps: another
+     * tenant refused with no query, the staff fact re-read from the
+     * database, the last wish winning (subscription-intent.ts), one company
+     * per socket. Never joined at connect, so any client may leave it.
+     * Silent on refusal; the optional acknowledgement says only "handled".
+     */
+    socket.on("positionsSubscribe", async (payload: unknown, ack: unknown) => {
+      try {
+        const requestedBusinessId = readOperationsBusinessId(payload);
+
+        if (!requestedBusinessId) return;
+
+        const allowedFor = (isDeliveryStaff: boolean) =>
+          canWatchOperationsOf(
+            {
+              role: socket.data.role,
+              businessId: socket.data.businessId,
+              isDeliveryStaff,
+            },
+            requestedBusinessId,
+          );
+
+        if (!allowedFor(true)) return;
+
+        const ticket = subscribeIntents.begin(
+          socket,
+          "positions",
+          requestedBusinessId,
+        );
+
+        const isStaff = await currentDeliveryStaff(socket);
+
+        if (isStaff === null || !allowedFor(isStaff)) return;
+        if (!subscribeIntents.isCurrent(socket, "positions", ticket)) return;
+
+        const previous = socket.data.positionsBusinessId as string | undefined;
+
+        // One company's trucks per socket, as in the operations room.
+        if (previous && previous !== requestedBusinessId) {
+          socket.leave(positionsRoom(previous));
+        }
+
+        socket.join(positionsRoom(requestedBusinessId));
+        socket.data.positionsBusinessId = requestedBusinessId;
+      } catch {
+        // A failed subscription is never worth a dropped connection.
+      } finally {
+        acknowledgeHandled(ack);
+      }
+    });
+
+    socket.on("positionsUnsubscribe", (payload?: unknown, ack?: unknown) => {
+      try {
+        const requestedBusinessId = readOperationsBusinessId(payload);
+
+        if (!requestedBusinessId) return;
+
+        // A subscribe still reading the database joins nothing once back.
+        subscribeIntents.cancel(socket, "positions", requestedBusinessId);
+
+        if (socket.data.positionsBusinessId !== requestedBusinessId) return;
+
+        socket.leave(positionsRoom(requestedBusinessId));
+        socket.data.positionsBusinessId = null;
+      } catch {
+        // Leaving a room is never worth a dropped socket.
       } finally {
         acknowledgeHandled(ack);
       }
@@ -1896,8 +2181,16 @@ const sendDriverPositionToBusiness = (
 ) => {
   if (io) {
     // Where a named person physically is, every few seconds, for a whole
-    // shift. It goes only to the room that has a permission check on it.
-    io.to(operationsRoom(businessId)).emit("driverPosition", event);
+    // shift. It goes only to rooms with a permission check on them: the
+    // positions room, and the operations room while
+    // SOCKET_POSITIONS_ON_OPERATIONS_ROOM is on (plano-escala U-01). One
+    // emit to both, so a socket in both hears it once. Volatile: a dot the
+    // socket cannot take now (its previous frame still being written, a
+    // slow tab) is dropped rather than queued behind the others; the
+    // tower's own cadence read and the next point redraw it.
+    io.to(
+      driverPositionRooms(businessId, env.SOCKET_POSITIONS_ON_OPERATIONS_ROOM),
+    ).volatile.emit("driverPosition", event);
   }
 };
 
@@ -2141,10 +2434,44 @@ async function getOnlineUserIds(userIds: readonly string[]): Promise<string[]> {
  * one with "transport close" — a reason the clients treat as transient, so
  * they reconnect to another replica. `disconnectSockets(true)` would not do:
  * "io server disconnect" tells a client not to come back.
+ *
+ * Since U-01 most sockets are already gone by then, closed in slices over
+ * the drain (`closeRealtimeGradually`); this ends the slices and whatever
+ * they left, the late arrivals included.
  */
 function closeRealtimeConnections(): void {
   stopRevalidation();
+  stopGradualClose?.();
+  stopGradualClose = null;
   io?.engine.close();
+}
+
+let stopGradualClose: (() => void) | null = null;
+
+/**
+ * Closes this replica's sockets in slices over the shutdown's drain, 1/N a
+ * second (plano-escala U-01, shared/socket/gradual-close.ts), with
+ * `socket.conn.close()`: the clients read it as a dropped transport and
+ * reconnect to another replica, spread over the drain instead of all in the
+ * same second. Off with SOCKET_GRADUAL_DRAIN=false (all at once at the end
+ * of the drain, as before) and with no drain.
+ */
+function closeRealtimeGradually(windowMs: number): void {
+  if (!io || !env.SOCKET_GRADUAL_DRAIN || windowMs <= 0) return;
+
+  const namespace = io.of("/");
+
+  stopGradualClose?.();
+  stopGradualClose = startGradualClose({
+    sockets: () => [...namespace.sockets.values()],
+    close: (socket) => socket.conn.close(),
+    windowMs,
+  });
+
+  log.info(
+    { sockets: namespace.sockets.size, windowMs },
+    "closing the sockets in slices over the drain",
+  );
 }
 
 /**
@@ -2192,19 +2519,34 @@ function realtimeMetrics(): {
   adapter: "redis" | "local" | "off";
   adapter_status: string | null;
   dropped_frames_unreported: number;
+  handshakes_in_flight: number;
+  handshakes: HandshakeWindow;
 } {
   return {
     local_connections: io?.engine.clientsCount ?? 0,
     adapter: !io ? "off" : adapterPubClient ? "redis" : "local",
     adapter_status: adapterPubClient?.status ?? null,
     dropped_frames_unreported: droppedFrames.unreported(),
+    // The admission (plano-escala U-01): since the last ops_sample row.
+    handshakes_in_flight: socketAdmission.inflight(),
+    handshakes: handshakeMetrics.snapshot(),
   };
+}
+
+/**
+ * The minute's handshakes for the ops_sample row, then a fresh window:
+ * duration p50/p99 and the refusals by reason (plano-escala U-01).
+ */
+function rotateHandshakeMetrics(): HandshakeWindow {
+  return handshakeMetrics.rotate();
 }
 
 export {
   realtimeMetrics,
+  rotateHandshakeMetrics,
   initializeSocketIO,
   closeRealtimeConnections,
+  closeRealtimeGradually,
   shutdownSocketIO,
   sendNotificationToUser,
   sendNotificationsReadToUser,

@@ -123,6 +123,83 @@ describe("graceful shutdown sequence", () => {
     ]);
   });
 
+  /**
+   * The sockets in slices over the drain (plano-escala U-01): started with
+   * it, over its whole window, before the wait, so the reconnections reach
+   * the other replicas spread instead of all in the same second.
+   */
+  it("spreads the realtime close over the drain, then ends the rest", async () => {
+    const calls: string[] = [];
+
+    await runShutdown(
+      {
+        markDraining: () => calls.push("drain"),
+        drainMs: 12_000,
+        drainImports: async () => {
+          calls.push("imports");
+        },
+        spreadRealtime: (windowMs) => calls.push(`spread:${windowMs}`),
+        closeRealtime: () => calls.push("realtime"),
+        closeHttp: async () => {
+          calls.push("http");
+        },
+        httpMs: 10_000,
+        cutHttp: () => calls.push("cut"),
+        stopWorkers: async () => {
+          calls.push("workers");
+        },
+        closeRedis: async () => {
+          calls.push("redis");
+        },
+      },
+      async (ms) => {
+        calls.push(`wait:${ms}`);
+      },
+    );
+
+    expect(calls).toEqual([
+      "drain",
+      "imports",
+      "spread:12000",
+      "wait:12000",
+      "realtime",
+      "http",
+      "workers",
+      "redis",
+    ]);
+  });
+
+  it("does not spread with no drain, and a spread that throws stops nothing", async () => {
+    const withoutDrain: string[] = [];
+    const steps = (calls: string[], drainMs: number) => ({
+      markDraining: () => calls.push("drain"),
+      drainMs,
+      drainImports: async () => undefined,
+      spreadRealtime: () => {
+        calls.push("spread");
+        throw new Error("sem io");
+      },
+      closeRealtime: () => calls.push("realtime"),
+      closeHttp: async () => undefined,
+      httpMs: 10_000,
+      cutHttp: () => undefined,
+      stopWorkers: async () => undefined,
+      closeRedis: async () => {
+        calls.push("redis");
+      },
+    });
+
+    await runShutdown(steps(withoutDrain, 0), async () => undefined);
+
+    expect(withoutDrain).toEqual(["drain", "realtime", "redis"]);
+
+    const throwing: string[] = [];
+
+    await runShutdown(steps(throwing, 3_000), async () => undefined);
+
+    expect(throwing).toEqual(["drain", "spread", "realtime", "redis"]);
+  });
+
   it("starts the import queue's drain with readiness, and waits for it before the workers", async () => {
     const calls: string[] = [];
 

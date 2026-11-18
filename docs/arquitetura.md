@@ -3582,7 +3582,8 @@ não persiste nada.
 
 **Tempo real** ([ADR 0007](./adr/0007-tempo-real-at-most-once.md)): Socket.IO
 só com WebSocket, salas por usuário,
-sessão, empresa (`business:<id>`) e operação (`operations:<id>`). A
+sessão, empresa (`business:<id>`), operação (`operations:<id>`) e posições
+(`positions:<id>`, abaixo). A
 autorização é relida do banco a cada inscrição; a sessão é relida no banco
 logo depois de o socket entrar nas salas (fecha a janela entre o handshake e
 o join) e revalidada a cada `SOCKET_REVALIDATE_MS` (3 min com jitter). O
@@ -3596,6 +3597,54 @@ verdade está no banco e as telas refazem a consulta ao reconectar. Mudanças de
 catálogo emitem `catalogChanged` `{ businessId, entity }` depois do commit, e
 a web invalida a lista daquela entidade. `SOCKET_ADAPTER_KEY` separa os canais
 de dois ambientes que dividam um Redis (Pub/Sub ignora o número do banco).
+
+**Admissão, sala de posições e dreno** (plano de escala U-01, F2.19;
+`src/shared/socket/admission.ts` e `src/shared/socket/gradual-close.ts`):
+
+- **Dois tetos por réplica**, conferidos antes de ler a credencial: no
+  máximo `SOCKET_HANDSHAKE_MAX_INFLIGHT` handshakes ao mesmo tempo (64; cada
+  um faz três idas ao Postgres) e `SOCKET_MAX_CONNECTIONS` sockets seguros
+  (5.000, contando as conexões do engine, inclusive a que está sendo
+  julgada). Passou de um deles, a recusa sai do middleware como
+  `SOCKET_UNAVAILABLE` com `data.retryAfterMs` de 5 a 10 s, que a web e o app
+  esperam antes de tentar de novo. Não sai do `allowRequest` de propósito: a
+  recusa do engine é um 400 no upgrade, cujo corpo o navegador não deixa o
+  cliente ler, e a espera nunca chegaria. O engine só recusa, barato, quando a
+  réplica passou do teto pela folga dos handshakes em voo.
+- **O orçamento por endereço** (`HANDSHAKES_PER_ADDRESS`, 300 por minuto)
+  passa a guardar só as falhas: cada upgrade continua contado no engine, e a
+  tentativa volta (`refund`) quando o handshake termina em algo que nada diz
+  contra a credencial, como um socket admitido, uma réplica cheia, o banco
+  piscando ou o orçamento do próprio usuário. Token ou ticket ruim, sessão
+  encerrada e o upgrade que nunca manda CONNECT continuam contando. Um CGNAT
+  de operadora põe centenas de motoristas atrás de um endereço, e um deploy
+  reconecta todos em segundos. O orçamento por usuário (30 por minuto) conta
+  toda tentativa, como antes.
+- **O pedido do upgrade é solto** assim que a conexão existe
+  (`rawSocket.request = null`), depois de guardar o que o handshake usa (o
+  balde do endereço e o cabeçalho `x-trajetto-client`).
+- **Métricas**: duração (p50 e p99, pelos baldes) e recusas por motivo, por
+  minuto na seção `realtime` do `ops_sample` (a fonte do gatilho do papel
+  `trajetto-realtime`) e na janela corrente do `/health/metrics`.
+- **Sala `positions:<businessId>`**, com a regra da sala de operações
+  (`positionsSubscribe` e `positionsUnsubscribe`, com o _acknowledgement_
+  "tratado" de sempre). Só o Painel e o detalhe da rota assinam. O
+  `driverPosition` sai `volatile` num emit só para ela e, enquanto
+  `SOCKET_POSITIONS_ON_OPERATIONS_ROOM=true` (padrão), também para a de
+  operações, para a web de antes continuar com os pontos. Quem está nas duas
+  recebe uma vez. Por ser `volatile`, o ponto que chega enquanto o quadro
+  anterior ainda está sendo escrito naquele socket é descartado, em vez de
+  ficar na fila; a leitura periódica da Torre e o ponto seguinte redesenham.
+  O U-03 desliga a variável uma semana depois de a web que
+  assina chegar à produção, e a frota deixa de ir para toda aba do despacho.
+- **Fechamento gradual no dreno**: no desligamento, 1/N dos sockets da réplica
+  por segundo ao longo do `SHUTDOWN_DRAIN_MS` (N = segundos do dreno; 12 com
+  o grace de 40 s), com `socket.conn.close()`, que o cliente lê como queda de
+  transporte e reconecta noutra réplica. O que sobrar, e o que chegar depois,
+  o `engine.close()` do fim do dreno fecha, como antes. Numa réplica com
+  sockets, o dreno não deve ficar abaixo de 10 s (o grace de 40 s dá 12 s; o
+  padrão de 10 s do Docker dá só 3 s).
+  `SOCKET_GRADUAL_DRAIN=false` volta a fechar tudo de uma vez.
 
 A releitura logo depois do join fecha uma janela do handshake. Ele lê a
 sessão no `io.use`, em várias idas ao banco, e o socket só entra nas salas

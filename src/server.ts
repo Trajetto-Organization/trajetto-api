@@ -7,8 +7,10 @@ import { env } from "./env";
 
 import {
   closeRealtimeConnections,
+  closeRealtimeGradually,
   initializeSocketIO,
   realtimeMetrics,
+  rotateHandshakeMetrics,
   shutdownSocketIO,
 } from "./websocket";
 import {
@@ -123,6 +125,9 @@ async function gracefulShutdown() {
       markDraining,
       drainMs: shutdownPlan.drainMs,
       drainImports: () => importQueue.drain(drainOptionsFrom(shutdownPlan)),
+      // 1/N of the sockets a second over the drain (plano-escala U-01), so
+      // their reconnections reach the other replicas spread, not together.
+      spreadRealtime: closeRealtimeGradually,
       closeRealtime: closeRealtimeConnections,
       closeHttp: () => app.close(),
       httpMs: shutdownPlan.httpMs,
@@ -227,7 +232,14 @@ async function bootstrap() {
         const { local_connections, adapter, dropped_frames_unreported } =
           realtimeMetrics();
 
-        return { local_connections, adapter, dropped_frames_unreported };
+        return {
+          local_connections,
+          adapter,
+          dropped_frames_unreported,
+          // The minute's handshakes, duration p50/p99 and refusals by
+          // reason (plano-escala U-01). Reading rotates them.
+          handshakes: rotateHandshakeMetrics(),
+        };
       });
       registerSampleSection("bcrypt", gateStats);
 

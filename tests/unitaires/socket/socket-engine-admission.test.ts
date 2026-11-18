@@ -48,7 +48,10 @@ vi.mock("@/shared/socket/handshake-rate-limit", async (importOriginal) => {
 
   return {
     ...actual,
-    createHandshakeLimiter: () => ({ allow: limiter.allow }),
+    createHandshakeLimiter: () => ({
+      allow: limiter.allow,
+      refund: async () => undefined,
+    }),
   };
 });
 

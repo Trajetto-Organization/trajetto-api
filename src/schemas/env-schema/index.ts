@@ -1201,6 +1201,59 @@ const envSchema = z
     SOCKET_REVALIDATE_MS: z.coerce.number().int().min(1_000).default(180_000),
 
     /**
+     * Socket handshakes one replica runs at once (plano-escala U-01,
+     * shared/socket/admission.ts): past it, the next is refused with
+     * SOCKET_UNAVAILABLE and `retryAfterMs` (5 to 10 s), which the web and
+     * the app wait out, and the address is not charged. Each handshake is
+     * three Postgres round trips, and a deploy moves a replica's sockets to
+     * the others within seconds. 0 turns the ceiling off, the rollback.
+     * Empty counts as absent.
+     */
+    SOCKET_HANDSHAKE_MAX_INFLIGHT: z.preprocess(
+      (value) => (value === "" ? undefined : value),
+      z.coerce.number().int().min(0).max(10_000).default(64),
+    ),
+
+    /**
+     * Sockets one replica holds (plano-escala U-01): past it, refused the
+     * same way. Nothing bounded it, and a replica that took a whole fleet
+     * ran out of file descriptors for Postgres and HTTP too. 0 turns it
+     * off, the rollback. Empty counts as absent.
+     */
+    SOCKET_MAX_CONNECTIONS: z.preprocess(
+      (value) => (value === "" ? undefined : value),
+      z.coerce.number().int().min(0).max(1_000_000).default(5_000),
+    ),
+
+    /**
+     * Whether a driver's position also goes to the operations room, besides
+     * `positions:<businessId>` (plano-escala U-01). On by default, so a web
+     * build from before the positions subscription keeps its dots; turned
+     * off by U-03, a week after the web that subscribes (X-32) reached
+     * production, which stops sending the fleet's GPS to every dispatch tab.
+     */
+    SOCKET_POSITIONS_ON_OPERATIONS_ROOM: z
+      .preprocess(
+        (value) => (value === "" ? undefined : value),
+        z.enum(["true", "false"]).default("true"),
+      )
+      .transform((value) => value === "true"),
+
+    /**
+     * Whether the shutdown closes this replica's sockets in slices over the
+     * drain, 1/N a second with N the drain's seconds (plano-escala U-01,
+     * shared/socket/gradual-close.ts), instead of all at once at its end,
+     * when they all reconnected to the other replicas in the same second.
+     * `false` is the rollback. Empty counts as absent.
+     */
+    SOCKET_GRADUAL_DRAIN: z
+      .preprocess(
+        (value) => (value === "" ? undefined : value),
+        z.enum(["true", "false"]).default("true"),
+      )
+      .transform((value) => value === "true"),
+
+    /**
      * The `nextFlushAfterMs` POST /route/positions answers when the replica
      * is not pressed (plano-escala F2-26): twice it with the event loop over
      * 70%, the app's 5-minute ceiling over 90% or while shedding

@@ -2,8 +2,10 @@ import { describe, expect, it } from "vitest";
 
 import {
   canWatchOperationsOf,
+  driverPositionRooms,
   mayReadDeliveries,
   operationsRoom,
+  positionsRoom,
   readOperationsBusinessId,
   type DeliveryPrincipal,
 } from "@/shared/socket/operations-access";
@@ -169,6 +171,31 @@ describe("the room name", () => {
     // They are different rooms with different audiences; a refactor that
     // collapsed them would restore the leak in one line.
     expect(operationsRoom("empresa-a")).not.toBe("business:empresa-a");
+  });
+});
+
+/**
+ * The positions room (plano-escala U-01): the tower and the route detail
+ * subscribe to it, and the fleet's GPS leaves the operations room every
+ * dispatch tab joins at connect once U-03 turns the flag off.
+ */
+describe("where a driver's position goes", () => {
+  const id = "018fd100-0000-7000-8000-00000000000a";
+
+  it("has a room of its own per company", () => {
+    expect(positionsRoom(id)).toBe(`positions:${id}`);
+    expect(positionsRoom(id)).not.toBe(operationsRoom(id));
+  });
+
+  it("goes to both rooms while the flag is on, so an older web keeps its dots", () => {
+    expect(driverPositionRooms(id, true)).toEqual([
+      positionsRoom(id),
+      operationsRoom(id),
+    ]);
+  });
+
+  it("goes only to the positions room once the flag is off", () => {
+    expect(driverPositionRooms(id, false)).toEqual([positionsRoom(id)]);
   });
 });
 

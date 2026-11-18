@@ -19,7 +19,9 @@ import { settlesWithin } from "./deadline";
  *    driver connected — which in production is always — until the watchdog
  *    killed the process mid-send. Closing the Socket.IO engine ends them with
  *    "transport close", which the clients answer by reconnecting to another
- *    replica.
+ *    replica. Since plano-escala U-01 most of them go before, in slices over
+ *    the drain (`spreadRealtime`): all at once, a replica's whole fleet
+ *    handshook with the replicas left over in the same second.
  * 3. HTTP, then WORKERS. In-flight requests finish against live services,
  *    within the plan's `httpMs`. `app.close()` waits for every one of them
  *    and has no deadline of its own (a body may take 120 s to arrive): an
@@ -57,6 +59,13 @@ interface ShutdownSteps {
    */
   drainImports: () => Promise<void>;
 
+  /**
+   * Starts closing the websockets in slices over the drain (U-01); started
+   * with the drain, only when there is one. Optional: without it every
+   * socket goes at `closeRealtime`.
+   */
+  spreadRealtime?: (windowMs: number) => void;
+
   /** Ends every websocket so the HTTP server can close. */
   closeRealtime: () => void;
 
@@ -91,7 +100,15 @@ async function runShutdown(
   // Not awaited yet: the running upload uses the drain window to finish.
   const imports = steps.drainImports().catch(() => undefined);
 
-  if (steps.drainMs > 0) await sleep(steps.drainMs);
+  if (steps.drainMs > 0) {
+    try {
+      steps.spreadRealtime?.(steps.drainMs);
+    } catch {
+      // Best effort: `closeRealtime` still ends every socket below.
+    }
+
+    await sleep(steps.drainMs);
+  }
 
   steps.closeRealtime();
 

@@ -114,3 +114,48 @@ describe("a fresh bucket", () => {
     expect(await redis.get(key)).toBe("3");
   });
 });
+
+/**
+ * The attempt given back (plano-escala U-01): the address budget keeps only
+ * the failed handshakes, so an admitted one, or one refused because the
+ * replica was full, returns its count. Against the real Redis because the
+ * property is the script's: a DECR on a key whose window already ended
+ * would recreate it at -1 with no TTL, a bucket that never expires.
+ */
+describe("a refunded attempt", () => {
+  it("takes one back and keeps the window", async () => {
+    const key = freshKey();
+    const limiter = createHandshakeLimiter(redis);
+
+    await limiter.allow(key, 10);
+    await limiter.allow(key, 10);
+    await redis.pexpire(key, 5_000);
+
+    await limiter.refund(key);
+
+    expect(await redis.get(key)).toBe("1");
+    expect(await redis.pttl(key)).toBeGreaterThan(0);
+    expect(await redis.pttl(key)).toBeLessThanOrEqual(5_000);
+  });
+
+  it("never goes below zero", async () => {
+    const key = freshKey();
+    const limiter = createHandshakeLimiter(redis);
+
+    await limiter.allow(key, 10);
+    await limiter.refund(key);
+    await limiter.refund(key);
+
+    expect(await redis.get(key)).toBe("0");
+  });
+
+  it("leaves a bucket whose window ended absent", async () => {
+    const key = freshKey();
+    const limiter = createHandshakeLimiter(redis);
+
+    await limiter.refund(key);
+
+    // Not "-1" with no TTL: that bucket would never expire.
+    expect(await redis.exists(key)).toBe(0);
+  });
+});
