@@ -12,9 +12,12 @@ import type { Prisma } from "@prisma/client";
  * with another SOCKET_ADAPTER_KEY emits into channels nobody listens to;
  * one pointed at another database or Redis does its work somewhere else.
  * None of that fails a boot. So each process hashes those settings, with
- * the identities of the database and the Redis it actually reached, and
- * writes the hash in its process_heartbeat row: the deploy's check (F3-31b)
- * fails when two live processes disagree.
+ * the identities of the database and the Redis servers it actually reached
+ * — the counters' and the pub/sub's (F5-01: an Application left with the
+ * pub/sub on the counters' Redis while the others moved to one of its own
+ * emits and wakes where nobody listens) — and writes the hash in its
+ * process_heartbeat row: the deploy's check (F3-31b) fails when two live
+ * processes disagree.
  *
  * Never the values: only a sha256, cut to 16 hex, over every input at once
  * (the JWT keys carry ~192 bits each, so the hash gives nothing back). And
@@ -47,6 +50,12 @@ interface FingerprintIdentities {
 
   /** The counters' Redis server's run_id (INFO server). */
   redis: string;
+
+  /**
+   * The pub/sub's Redis server's run_id: the counters' own when the
+   * pub/sub shares their Redis (shared/redis/pubsub-redis.ts).
+   */
+  pubsub: string;
 }
 
 /** Hex characters kept: 64 bits, plenty to tell two configurations apart. */
@@ -66,7 +75,10 @@ function configFingerprint(
     hash.update(`${name}\0${value === undefined ? "" : String(value)}\0`);
   }
 
-  hash.update(`database\0${identities.database}\0redis\0${identities.redis}\0`);
+  hash.update(
+    `database\0${identities.database}\0redis\0${identities.redis}\0` +
+      `pubsub\0${identities.pubsub}\0`,
+  );
 
   return hash.digest("hex").slice(0, FINGERPRINT_LENGTH);
 }

@@ -178,6 +178,53 @@ describe("stopping", () => {
 });
 
 describe("the fingerprint's identities", () => {
+  const COUNTERS = "run_id:0123456789abcdef0123456789abcdef01234567\r\n";
+  const OTHER = "run_id:fedcba9876543210fedcba9876543210fedcba98\r\n";
+
+  // Review of wave 12: the pub/sub moved to a Redis of its own on one
+  // Application and not on the other gave both the same fingerprint, and
+  // the deploy converged with their events and hints on two Redis servers.
+  it("name the pub/sub's Redis, and tell two processes on two of them apart", async () => {
+    const reader = (pubsubInfo?: () => Promise<string>) =>
+      createFingerprintReader({
+        databaseIdentity: async () => "7350000000000000001/trajetto",
+        redisInfo: async () => COUNTERS,
+        pubsubInfo,
+      });
+
+    const onCounters = await reader()();
+    const onItsOwn = await reader(async () => OTHER)();
+
+    expect(onCounters).toMatch(/^[0-9a-f]{16}$/);
+    expect(onItsOwn).toMatch(/^[0-9a-f]{16}$/);
+    expect(onItsOwn).not.toBe(onCounters);
+
+    // The variable pointing at the counters' own server is the same Redis.
+    expect(await reader(async () => COUNTERS)()).toBe(onCounters);
+  });
+
+  it("wait for the pub/sub's Redis too, then keep the last one read", async () => {
+    let pubsubUp = false;
+
+    const read = createFingerprintReader({
+      databaseIdentity: async () => "7350000000000000001/trajetto",
+      redisInfo: async () => COUNTERS,
+      pubsubInfo: async () => {
+        if (!pubsubUp) throw new Error("down");
+        return OTHER;
+      },
+    });
+
+    expect(await read()).toBeNull();
+
+    pubsubUp = true;
+    const known = await read();
+    expect(known).toMatch(/^[0-9a-f]{16}$/);
+
+    pubsubUp = false;
+    expect(await read()).toBe(known);
+  });
+
   it("are null until both were read, then the last ones read stand in", async () => {
     let databaseUp = false;
     let redisUp = true;

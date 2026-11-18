@@ -65,6 +65,16 @@ vi.mock("ioredis", async () => {
       return this.subscribed.length;
     }
 
+    async info(): Promise<string> {
+      if (this.status !== "ready") {
+        throw new Error(
+          "Stream isn't writeable and enableOfflineQueue options is false",
+        );
+      }
+
+      return "run_id:fedcba9876543210fedcba9876543210fedcba98\r\n";
+    }
+
     async quit(): Promise<"OK"> {
       this.status = "end";
       this.emit("end");
@@ -185,6 +195,45 @@ describe("the hints' publisher", () => {
     ).resolves.toBe(1);
     expect((clients[0] as FakeClient).published).toEqual([
       ["k:wake:ai", "replica-a"],
+    ]);
+  });
+});
+
+/**
+ * The pub/sub's server for the configuration's fingerprint (review of wave
+ * 12): named only when it is not the counters' one, so a process without
+ * the variable opens no connection for it, as before.
+ */
+describe("the pub/sub's server for the fingerprint", () => {
+  it("is nothing to read without a pub/sub Redis of its own", async () => {
+    mutableEnv.REDIS_URL = "redis://counters.example.com:6379";
+    mutableEnv.PUBSUB_REDIS_URL = undefined;
+
+    const pubsub = await import("@/shared/redis/pubsub-redis");
+
+    expect(pubsub.pubsubServerInfo()).toBeNull();
+    expect(opened).toEqual([]);
+  });
+
+  it("is read on the hints' connection, once it is ready, with one", async () => {
+    mutableEnv.REDIS_URL = "redis://counters.example.com:6379";
+    mutableEnv.PUBSUB_REDIS_URL = "redis://pubsub.example.com:6379";
+    connections.readyOnOpen = false;
+
+    const pubsub = await import("@/shared/redis/pubsub-redis");
+    const info = pubsub.pubsubServerInfo();
+
+    expect(info).not.toBeNull();
+
+    const read = info!();
+    const client = clients[0] as EventEmitter & { status: string };
+
+    client.status = "ready";
+    client.emit("ready");
+
+    await expect(read).resolves.toContain("run_id:fedcba98");
+    expect(opened).toEqual([
+      { url: "redis://pubsub.example.com:6379", name: "trajetto-pubsub-pub" },
     ]);
   });
 });

@@ -17,7 +17,9 @@ import {
  * not depend on:
  *
  *  - every setting of the list, and the identities of the database and the
- *    Redis the process reached;
+ *    Redis servers the process reached, the counters' and the pub/sub's
+ *    (review of wave 12: an Application left with the pub/sub on another
+ *    Redis emits and wakes where nobody listens, and the deploy went green);
  *  - never the URL: the same database through PgBouncer or directly, by
  *    one login or another, is the same database (wave 17 switches the
  *    Applications one at a time, and each deploy in between must pass);
@@ -37,6 +39,7 @@ const SETTINGS = {
 const IDENTITIES = {
   database: "7350000000000000001/trajetto",
   redis: "0123456789abcdef0123456789abcdef01234567",
+  pubsub: "0123456789abcdef0123456789abcdef01234567",
 };
 
 describe("the configuration fingerprint", () => {
@@ -85,6 +88,14 @@ describe("the configuration fingerprint", () => {
     ).not.toBe(base);
     expect(
       configFingerprint(SETTINGS, { ...IDENTITIES, redis: "f".repeat(40) }),
+    ).not.toBe(base);
+  });
+
+  it("changes when the pub/sub is on another Redis than the others'", () => {
+    const base = configFingerprint(SETTINGS, IDENTITIES);
+
+    expect(
+      configFingerprint(SETTINGS, { ...IDENTITIES, pubsub: "e".repeat(40) }),
     ).not.toBe(base);
   });
 

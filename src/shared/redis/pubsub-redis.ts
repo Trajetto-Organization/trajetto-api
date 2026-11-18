@@ -41,10 +41,13 @@ const log = logger.child({ component: "pubsub" });
  *    again on every reconnect;
  *  - `isReady()` and `generation()`: whether that subscriber is listening,
  *    and how many times it became so — a listener that sees the generation
- *    change knows it may have missed hints while away.
+ *    change knows it may have missed hints while away;
+ *  - `pubsubServerInfo()`: the pub/sub's server, named for the
+ *    configuration's fingerprint when it is not the counters' one.
  *
  * Lazy: a process that never publishes nor subscribes a hint opens no
- * connection for them.
+ * connection for them — but for the fingerprint's read of a pub/sub Redis
+ * of its own, which opens the hints' one at the first heartbeat.
  */
 
 /** Where the pub/sub lives: its own Redis when there is one. */
@@ -113,6 +116,19 @@ interface HintPublisher {
  * (wake-bus.ts), and the sweep finds the work.
  */
 function publisher(): HintPublisher {
+  const client = hintClient();
+
+  return {
+    publish: async (channel, message) => {
+      await readyWithin(client, HINT_READY_WAIT_MS);
+
+      return client.publish(channel, message);
+    },
+  };
+}
+
+/** The hints' command connection, opened on first use. */
+function hintClient(): Redis {
   if (!hintPublisher) {
     hintPublisher = new Redis(pubsubRedisUrl(), {
       ...redisClientOptions("socket-pub"),
@@ -124,14 +140,28 @@ function publisher(): HintPublisher {
     attachRedisConnectionLog(hintPublisher, "pubsub/pub");
   }
 
-  const client = hintPublisher;
+  return hintPublisher;
+}
 
-  return {
-    publish: async (channel, message) => {
-      await readyWithin(client, HINT_READY_WAIT_MS);
+/**
+ * The pub/sub's Redis as it names itself, for the configuration's
+ * fingerprint (F3-03): `INFO server` of the server the adapter and the
+ * hints reach. Two Applications whose Environments disagree on
+ * PUBSUB_REDIS_URL emit into channels the other never hears, and the
+ * fingerprint must tell them apart. Null when the pub/sub is on REDIS_URL,
+ * whose server the fingerprint already names: no connection is opened for
+ * it, as before the variable. Read on the hints' connection, waiting for it
+ * as a hint does.
+ */
+function pubsubServerInfo(): (() => Promise<string>) | null {
+  if (pubsubRedisUrl() === env.REDIS_URL) return null;
 
-      return client.publish(channel, message);
-    },
+  return async () => {
+    const client = hintClient();
+
+    await readyWithin(client, HINT_READY_WAIT_MS);
+
+    return client.info("server");
   };
 }
 
@@ -233,5 +263,6 @@ export {
   isReady,
   publisher,
   pubsubRedisUrl,
+  pubsubServerInfo,
   subscribe,
 };

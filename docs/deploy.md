@@ -4407,10 +4407,15 @@ impressão é o sha256 (16 hex) de `JWT_SECRET`, `JWT_SECRET_REFRESH_TOKEN`,
 `SOCKET_ADAPTER_KEY`, `WEBHOOK_SECRETS_KEY`, `APP_ENV`, `R2_BUCKET_NAME`,
 `MIN_MOBILE_CONTRACT`, da identidade do banco (o `system_identifier` do
 `cluster_epoch` com o `current_database()`) e do `run_id` do Redis dos
-contadores; nunca um valor, e nunca o host: o mesmo banco visto direto ou
-pelo PgBouncer, por qualquer login, dá a mesma impressão. Ela é recalculada
-a cada batida (um Redis que reinicia muda o `run_id`, e todos convergem em
-30 s) e fica nula até o banco e o Redis responderem uma vez. Para ver:
+contadores e do Redis do pub/sub (o mesmo dos contadores sem
+`PUBSUB_REDIS_URL`; com ela, o processo lê o `INFO server` dele pela
+conexão das dicas de despertar): uma Application com a variável e outra
+sem dão impressões diferentes, e o deploy não fica verde com os eventos e
+as dicas de cada uma num Redis. Nunca um valor, e nunca o host: o mesmo
+banco visto direto ou pelo PgBouncer, por qualquer login, dá a mesma
+impressão. Ela é recalculada a cada batida (um Redis que reinicia muda o
+`run_id`, e todos convergem em 30 s) e fica nula até o banco e os Redis
+responderem uma vez. Para ver:
 
 ```sql
 SELECT replica, role, app_env, build_commit, config_fingerprint, queues,

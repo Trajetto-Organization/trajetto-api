@@ -10,6 +10,7 @@ import {
 import { opsSampleIdentity } from "@/shared/health/ops-sample";
 import type { WorkerQueue } from "@/shared/lifecycle/process-role";
 import { logger } from "@/shared/logging/logger";
+import { pubsubServerInfo } from "@/shared/redis/pubsub-redis";
 import { swarmIdentity } from "@/shared/swarm-identity";
 
 const log = logger.child({ component: "process-heartbeat" });
@@ -128,9 +129,31 @@ function withDeadline<T>(promise: Promise<T>, ms: number): Promise<T> {
 function createFingerprintReader(deps: {
   databaseIdentity: () => Promise<string>;
   redisInfo: () => Promise<string>;
+
+  /**
+   * The pub/sub's Redis, when it is not the counters' one
+   * (pubsubServerInfo); null names the counters' server for both.
+   */
+  pubsubInfo?: (() => Promise<string>) | null;
 }) {
   let database: string | null = null;
   let redis: string | null = null;
+  let pubsub: string | null = null;
+
+  const runIdOf = async (
+    info: () => Promise<string>,
+    last: string | null,
+  ): Promise<string | null> => {
+    try {
+      return (
+        redisRunIdFrom(await withDeadline(info(), SIDE_CALL_DEADLINE_MS)) ??
+        last
+      );
+    } catch {
+      // The last one read stands; null before the first.
+      return last;
+    }
+  };
 
   return async (): Promise<string | null> => {
     try {
@@ -139,18 +162,12 @@ function createFingerprintReader(deps: {
       // The last one read stands; null before the first.
     }
 
-    try {
-      redis =
-        redisRunIdFrom(
-          await withDeadline(deps.redisInfo(), SIDE_CALL_DEADLINE_MS),
-        ) ?? redis;
-    } catch {
-      // Same.
-    }
+    redis = await runIdOf(deps.redisInfo, redis);
+    pubsub = deps.pubsubInfo ? await runIdOf(deps.pubsubInfo, pubsub) : redis;
 
-    if (database === null || redis === null) return null;
+    if (database === null || redis === null || pubsub === null) return null;
 
-    return configFingerprint(env, { database, redis });
+    return configFingerprint(env, { database, redis, pubsub });
   };
 }
 
@@ -283,6 +300,7 @@ function startRuntimeProcessHeartbeat(): ProcessHeartbeat {
       databaseIdentity: () => readDatabaseIdentity(database),
       redisInfo: async () =>
         (await RedisConnection.getInstance().getClient()).info("server"),
+      pubsubInfo: pubsubServerInfo(),
     }),
     write: writeProcessHeartbeat,
     remove: deleteProcessHeartbeat,
