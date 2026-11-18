@@ -234,4 +234,196 @@ describe("the limits the owner types (bytes and nano-CPU)", () => {
       expect(nano, `${cpu} CPU`).toBe(Math.round(cpu * NANO_CPU));
     }
   });
+
+  it("are right in the VPS budget too (§23)", () => {
+    const pairs = memoryPairs(section(23));
+
+    for (const [mib, bytes] of pairs) {
+      expect(bytes, `${mib} MiB`).toBe(mib * MIB);
+    }
+  });
+});
+
+/**
+ * The single VPS's budget (plano-escala X-18): deploy.md §23 sums each
+ * phase's column of the ceilings tables in §19. The owner decides whether
+ * a phase fits from the sums, and creates the Applications from the
+ * tables: a ceiling changed in one place and not in the other makes the
+ * owner create a worker the host has no room for, with no error anywhere
+ * until the kernel kills a container of the production.
+ */
+interface Table {
+  header: string[];
+  rows: string[][];
+}
+
+/** The first table under `marker`, contiguous rows only. */
+function firstTable(text: string, marker: string): Table {
+  const start = text.indexOf(marker);
+
+  expect(start, marker).toBeGreaterThanOrEqual(0);
+
+  const rest = text.slice(start).split("\n");
+  const first = rest.findIndex((line) => line.startsWith("|"));
+  const after = rest.slice(first);
+  const last = after.findIndex((line) => !line.startsWith("|"));
+  const lines = last < 0 ? after : after.slice(0, last);
+  const cells = (line: string) =>
+    line
+      .slice(1, -1)
+      .split("|")
+      .map((cell) => cell.trim());
+
+  return { header: cells(lines[0]), rows: lines.slice(2).map(cells) };
+}
+
+/** "2 × 1024 (`…`), heap 768" → 2048; "igual" → the column before; "—" → 0. */
+function ceiling(cell: string, before: number): number {
+  if (cell === "igual") return before;
+  if (cell.startsWith("—")) return 0;
+
+  const many = cell.match(/^(\d+) × (\d+)/);
+
+  if (many) return Number(many[1]) * Number(many[2]);
+
+  const one = cell.match(/^(\d+)/);
+
+  expect(one, `célula sem teto: ${cell}`).not.toBeNull();
+
+  return Number(one![1]);
+}
+
+/** The stable sum of one phase's column: every Application but the migrate. */
+function phaseSum(ceilings: Table, column: string): number {
+  const first = ceilings.header.indexOf("A");
+  const index = ceilings.header.indexOf(column);
+
+  expect(first, "a coluna da fase A").toBeGreaterThan(0);
+  expect(index, column).toBeGreaterThanOrEqual(first);
+
+  return ceilings.rows
+    .filter((row) => !row[0].includes("trajetto-api-migrate"))
+    .reduce((sum, row) => {
+      let value = 0;
+
+      // "igual" carries the value of the phase before, cell by cell.
+      for (let at = first; at <= index; at += 1) {
+        value = ceiling(row[at], value);
+      }
+
+      return sum + value;
+    }, 0);
+}
+
+/** "7.232" → 7232; "—" → 0; "7.456 (janela de 1 GiB)" → 7456. */
+const thousands = (cell: string) =>
+  cell.startsWith("—")
+    ? 0
+    : Number(cell.match(/^[\d.]+/)![0].replace(/\./g, ""));
+
+describe("the single VPS's budget (deploy.md §23)", () => {
+  const ceilings = () => part(roles, "\n### Tetos por Application e por fase");
+  const production = () => firstTable(ceilings(), "**Produção**");
+  const staging = () => firstTable(ceilings(), "**Staging**");
+  const budget = () => section(23);
+  const sums = () => firstTable(budget(), "A soma por fase");
+
+  // Each row of the sums, and the columns of the ceilings it adds up.
+  const PHASES: [string, string | null, string | null][] = [
+    ["A ", "A", "A"],
+    ["B ", "B", "B"],
+    ["C ", "C", "C"],
+    ["E ", "E (VPS 1 sozinha)", null],
+    ["2º VPS", null, "2º VPS (onda 16 em diante)"],
+  ];
+
+  it("opens with why the first scale customer does not land on this VPS", () => {
+    const opening = budget().split("\n### ")[0];
+
+    expect(opening).toMatch(/não recebe o primeiro cliente de escala/);
+    expect(opening).toMatch(/onda 22/);
+  });
+
+  it.each(PHASES)(
+    "adds up phase %s from the ceilings tables",
+    (label, productionColumn, stagingColumn) => {
+      const row = sums().rows.find((cells) => cells[0].startsWith(label));
+
+      expect(row, label).toBeDefined();
+
+      const [prod, stage, host, stable] = row!.slice(1, 5).map(thousands);
+      const reserve = Number(
+        budget()
+          .match(/\*\*Reserva do host:\*\* ([\d.]+) MiB/)![1]
+          .replace(/\./g, ""),
+      );
+
+      expect(prod).toBe(
+        productionColumn ? phaseSum(production(), productionColumn) : 0,
+      );
+      expect(stage).toBe(
+        stagingColumn ? phaseSum(staging(), stagingColumn) : 0,
+      );
+      expect(host).toBe(reserve);
+      expect(stable).toBe(prod + stage + host);
+    },
+  );
+
+  it("adds the largest transient, and calls R1 met only under its ceiling", () => {
+    const r1 = Number(
+      budget()
+        .match(/\*\*R1 \(tetos\):\*\*[\s\S]*?em até ([\d.]+) MiB/)![1]
+        .replace(/\./g, ""),
+    );
+    const migrate = production().rows.find((row) =>
+      row[0].includes("trajetto-api-migrate"),
+    )!;
+
+    expect(r1).toBe(11_500);
+
+    for (const row of sums().rows) {
+      const stable = thousands(row[4]);
+      const peak = thousands(row[5]);
+      const transient = row[0].startsWith("2º VPS")
+        ? 1024
+        : ceiling(migrate[4], 0);
+
+      expect(peak - stable, row[0]).toBe(transient);
+
+      if (row[6].startsWith("R1 cabe")) {
+        expect(peak, row[0]).toBeLessThanOrEqual(r1);
+      }
+    }
+  });
+
+  it("states the staging's CPU ceilings as the tables add them", () => {
+    const cpu = (column: string) => {
+      const first = staging().header.indexOf("A");
+      const index = staging().header.indexOf(column);
+
+      // A cell that names no CPU keeps the one of the phase before ("576,
+      // heap 320", "igual"); "—" has none.
+      return staging().rows.reduce((sum, row) => {
+        let value = 0;
+
+        for (let at = first; at <= index; at += 1) {
+          const found = row[at].match(/(\d+(?:,\d+)?) CPU/);
+
+          if (found) value = Number(found[1].replace(",", "."));
+          else if (row[at].startsWith("—")) value = 0;
+        }
+
+        return sum + value;
+      }, 0);
+    };
+
+    expect(budget()).toMatch(/somam 2,35 vCPU \(2,6 na B\)/);
+    expect(cpu("A")).toBeCloseTo(2.35, 5);
+    expect(cpu("B")).toBeCloseTo(2.6, 5);
+  });
+
+  it("keeps the host without swap and the earlyoom guarding the Postgres", () => {
+    expect(budget()).toMatch(/\*\*sem arquivo de swap\*\*/);
+    expect(budget()).toMatch(/--avoid '\^\(postgres\|/);
+  });
 });

@@ -5615,20 +5615,120 @@ não cabe derruba o `Build`.
 
 ## 23. Recursos da VPS e logs
 
-| Serviço     | Limite (onde)                                                                                                                                                                |
-| ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| API         | 2 × 1 GiB (_Resources_ da Application; heap 768 MB no `NODE_OPTIONS`)                                                                                                        |
-| Web         | 768 MiB (limite da Application; ver `trajetto-ui/docs/deploy.md`)                                                                                                            |
-| Redis       | 512 MiB (_Resources_ do Database; dados 256 MB pelo comando)                                                                                                                 |
-| trajetto-ai | 1 GiB e 2 CPUs                                                                                                                                                               |
-| Postgres    | 2 GiB na produção e 576 MiB na staging (_Resources_ do Database, com `POSTGRES_MEMORY_LIMIT_MB` igual; [seção 27](#valores-por-ambiente)); sem teto antes da troca da imagem |
+**A VPS única não recebe o primeiro cliente de escala.** Mesmo sozinha
+nela, a produção tem ~1,5–2 vCPU para o HTTP: ~130–170 req/s (ESTIMADO a
+partir dos 8,14 ms MEDIDOS de CPU por requisição), abaixo dos 200 req/s do
+portão do 100k. Esse cliente só entra depois da virada para os servidores
+próprios (o prod-1, com 12 núcleos dedicados, e o prod-db-1), com os
+portões aprovados nos dois (plano de escala, onda 22), e o volume dele
+sobe por coortes até o portão aprovado. Até lá, a VPS de hoje (6 vCPU
+compartilhadas, 12 GB de RAM e 100 GB NVMe) divide a produção e a staging
+pelas réguas abaixo (plano de escala X-18). Os tetos de cada Application,
+fase a fase, estão em
+[Tetos por Application e por fase](#tetos-por-application-e-por-fase).
 
-Mais o Dokploy e o Traefik. Só a produção passa de 3,5 GB sem contar o
-Postgres; **com staging no mesmo host, o dobro** (ou staging com 1 réplica,
-limites menores e sem a IA, `AI_PROVIDER=none`). Os números reais saem de
-`docker stats` sob o harness de carga (`tests/load/README.md`). Sem limite de
-CPU na API de propósito (o throttling do CFS piora o p99); com limite na IA,
-porque o OCR satura todo núcleo que recebe.
+### Memória: a reserva do host, a R1 e a R2
+
+- **Reserva do host:** 1.280 MiB (ESTIMADO): o sistema, o `dockerd`, o
+  Dokploy, o Traefik, o `dokploy-postgres`, o `dokploy-redis` e o agente do
+  Beszel. A RAM visível é de ~11.980 MiB (ESTIMADO; a medição do F0-09
+  confirma com `free -m`).
+- **R1 (tetos):** a soma dos tetos estáveis mais o maior transitório fica
+  em até 11.500 MiB. Os transitórios são uma `trajetto-api-migrate` (384
+  MiB; a de um environment espera a do outro), o k6 do burn-in (256 MiB)
+  ou uma janela de ensaio de 1 GiB, feita com a api e a web da staging em
+  0 réplicas (devolvem 896 MiB) e sem deploy durante ela.
+- **R2 (uso medido):** se a R1 não fechar por até 1.024 MiB, a fase só
+  segue com o p95 da RAM usada no pico em até 70% em 7 dias no Beszel, o
+  earlyoom ativo (abaixo) e nenhum OOM kill de contêiner da produção no
+  `dmesg` em 7 dias. Se nem a R2 fechar, a fase espera o 2º VPS (G-03).
+- Os monitores (o Uptime Kuma e o hub do Beszel), se estiverem no host,
+  somam ~192 MiB (ESTIMADO) e tiram a folga das fases B e C.
+- Os papéis usam a mesma imagem e não gastam disco a mais.
+
+A soma por fase (MiB), da coluna de cada fase nas tabelas de tetos, sem a
+migrate, que é o transitório:
+
+| Fase                          | Produção | Staging | Host  | Soma estável | Com o transitório       | Régua                                                      |
+| ----------------------------- | -------- | ------- | ----- | ------------ | ----------------------- | ---------------------------------------------------------- |
+| A (web de produção em 768)    | 7.232    | 2.400   | 1.280 | 10.912       | 11.296                  | R1 cabe (com os monitores no host, 11.488)                 |
+| B (web em 640)                | 6.976    | 2.848   | 1.280 | 11.104       | 11.488                  | R1 cabe só com a web em 640 e os monitores fora; senão, R2 |
+| C (Postgres 1.792, web 512)   | 6.976    | 2.848   | 1.280 | 11.104       | 11.488                  | R1 cabe só com os dois ajustes medidos; senão, R2 ou G-03  |
+| E (produção sozinha na VPS 1) | 9.344    | —       | 1.280 | 10.624       | 11.008                  | R1 cabe; o limite passa a ser a CPU                        |
+| 2º VPS (staging sozinha)      | —        | 5.152   | 1.280 | 6.432        | 7.456 (janela de 1 GiB) | folga para os ensaios e o standby temporário               |
+
+### CPU na VPS única
+
+Na fase A, os tetos da staging somam 2,35 vCPU (2,6 na B). Mesmo com a
+staging e a IA de produção no teto, sobram pelo menos 1,65 vCPU para a api
+e o Postgres da produção. Na fase E, com o Postgres (~1,5), a IA (2), o
+worker (0,5) e o sistema (0,5), sobram ~1,5–2 vCPU para o HTTP: é o número
+do topo desta seção, e o motivo de o prod-1 vir antes do cliente de
+escala. A api fica sem _CPU Limit_ de propósito (o throttling do CFS
+piora o p99); a IA tem limite, porque o OCR satura todo núcleo que
+recebe. Os números reais saem do `docker stats` sob o harness de carga
+(`tests/load/README.md`), com a pilha presa a 6 núcleos.
+
+### Disco na VPS única
+
+ESTIMADO, no NVMe de 100 GB dividido:
+
+| Item                                                                                               | Hoje → 10k/mês     | 100k/mês                            |
+| -------------------------------------------------------------------------------------------------- | ------------------ | ----------------------------------- |
+| sistema, Docker, Dokploy e `dokploy-postgres`                                                      | ~10 GB             | ~10 GB                              |
+| imagens (com a limpeza diária)                                                                     | ~8 GB              | ~8 GB                               |
+| logs dos contêineres (json-file, 50 MB × 5 × ~20)                                                  | ≤ 5 GB             | ≤ 5 GB                              |
+| banco de produção (dados e índices)                                                                | ~3–5 GB            | ~15–25 GB (trilha de 30 dias ~5 GB) |
+| `pg_wal` da produção (uso normal; com o bucket R2 fora do ar, mais a fila de arquivamento de 4 GB) | 1–2 GB (até 12 GB) | 2–8 GB (até 12 GB)                  |
+| staging (banco, WAL e fila)                                                                        | ≤ 3 GB             | ≤ 3 GB                              |
+| ensaio de restore ou seed descartável (só na janela)                                               | ≤ 50% do livre     | ≤ 50% do livre                      |
+| **Total estável**                                                                                  | ~30–35 GB          | ~45–60 GB                           |
+
+O gatilho de disco é 60%: ele chega perto do 100k, outro motivo para o
+prod-db-1 vir antes do cliente de escala. O alerta de 80% vai por e-mail,
+e o de 85%, pelo Telegram (Beszel).
+
+### Sem swap: o earlyoom no lugar
+
+Com swap no host, o Docker dá a cada contêiner sem `MemorySwap` explícito
+um swap igual ao próprio teto, e o Dokploy não expõe o `--memory-swap`: o
+teto deixaria de matar o processo e passaria a trocar página no NVMe que o
+Postgres da produção usa. Por isso o host fica **sem arquivo de swap**
+(plano de escala F0-11), e a guarda contra o OOM global do kernel é o
+`earlyoom`: com a memória livre abaixo de 4%, ele mata o maior processo,
+evitando `postgres`, `dockerd`, `containerd`, `traefik` e o Dokploy. Um
+processo Node morto volta pelo Swarm em segundos; o Postgres não entra em
+recuperação. O earlyoom escolhe pelo nome do processo: o painel do
+Dokploy roda como `node`, e o que o protege é ser dos menores (o earlyoom
+mata o de maior `oom_score`) e voltar pelo Swarm. Por SSH, fora do
+horário (dono):
+
+1. `swapon --show`. Se houver swap: `swapoff -a` e tire a linha dele do
+   `/etc/fstab`.
+2. `apt install earlyoom`.
+3. Em `/etc/default/earlyoom`:
+
+   ```sh
+   EARLYOOM_ARGS="-m 4 -r 3600 --avoid '^(postgres|dockerd|containerd|traefik|dokploy)$' --prefer '^(node|python3?)$'"
+   ```
+
+4. `systemctl enable --now earlyoom` e `journalctl -u earlyoom -n 20`: o
+   log de partida mostra a lista de exclusão.
+5. Dokploy → _Settings_ → ligue a limpeza diária de imagens.
+
+Aceite: `swapon --show` vazio e `systemctl is-active earlyoom` = `active`.
+Sem swap, um pico real acima da RAM mata uma réplica Node, que volta
+sozinha.
+
+### Quando a VPS única deixa de bastar
+
+- **A RAM não fecha nem pela R2**: a fase espera o 2º VPS (G-03, onda
+  16), que leva a staging para fora; a produção passa à coluna E.
+- **A CPU**: na fase E, o HTTP da produção tem ~1,5–2 vCPU, abaixo do
+  portão do 100k. O prod-1 vem antes do cliente de escala (onda 22).
+- **O disco** passa de 60%, perto do 100k: o banco vai para o prod-db-1.
+- **O steal** medido no F0-09 passa de 5%: a produção precisa de CPU
+  dedicada (VDS), não de mais réplicas.
 
 **Logs**: a rotação é a do `/etc/docker/daemon.json`
 ([seção 6](#6-preparar-o-servidor-uma-vez), passo 3): 50 MB × 5 arquivos por
