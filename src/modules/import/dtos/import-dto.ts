@@ -97,6 +97,9 @@ interface ImportRecord {
  * can ever group again, and the operator deletes two hundred rows by hand.
  */
 interface CreateImportProps {
+  /** Given by the durable import, which names the stored file after it. */
+  id?: string;
+
   source: ImportSource;
   filename: string;
 

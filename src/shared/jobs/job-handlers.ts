@@ -1,3 +1,5 @@
+import { spreadsheetImportJob } from "@/modules/import/services/spreadsheet-import-job";
+
 import { JobRunner } from "./job-runner";
 
 /**
@@ -9,9 +11,8 @@ import { JobRunner } from "./job-runner";
 function registerJobHandlers(
   runner: JobRunner = JobRunner.getInstance(),
 ): void {
-  // Filled by the kinds as they arrive (the spreadsheet import, its undo,
-  // the purge of a company, the anonymization of a person).
-  void runner;
+  // The spreadsheet upload (F3-23a).
+  runner.register("SPREADSHEET_IMPORT", spreadsheetImportJob);
 }
 
 export { registerJobHandlers };

@@ -116,6 +116,33 @@ const SHUTDOWN_ROW: ImportReport["rows"][number] = {
     "podem não ter rota. Estorne esta importação e envie o arquivo de novo.",
 };
 
+/**
+ * A durable import whose job failed for good (plano-escala F3-23a): every
+ * attempt ran into a failure, or the stored file was gone. The deliveries
+ * it created are counted from the rows.
+ */
+const FAILED_ROW: ImportReport["rows"][number] = {
+  line: 1,
+  outcome: "invalid",
+  recipient_name: null,
+  reference: null,
+  message:
+    "Importação interrompida por uma falha do servidor antes de terminar o " +
+    "arquivo. As entregas criadas até ali pertencem a esta importação e " +
+    "podem não ter rota. Estorne esta importação e envie o arquivo de novo.",
+};
+
+/** The same, with nothing created: nothing to undo. */
+const FAILED_EMPTY_ROW: ImportReport["rows"][number] = {
+  line: 1,
+  outcome: "invalid",
+  recipient_name: null,
+  reference: null,
+  message:
+    "Importação interrompida por uma falha do servidor e nenhuma entrega " +
+    "foi criada. Envie o arquivo de novo.",
+};
+
 /** Every column of an upload but its report (Prisma 6.1 has no `omit`). */
 const IMPORT_SUMMARY_COLUMNS = {
   id: true,
@@ -148,9 +175,13 @@ const WORKED_EVENT = {
 class ImportRepository implements IImportRepository {
   constructor(private prisma = database) {}
 
-  async createImport(data: CreateImportProps): Promise<ImportRecord> {
-    const created = await this.prisma.import.create({
+  async createImport(
+    data: CreateImportProps,
+    tx?: Prisma.TransactionClient,
+  ): Promise<ImportRecord> {
+    const created = await (tx ?? this.prisma).import.create({
       data: {
+        ...(data.id && { id: data.id }),
         source: data.source,
         status: "IN_PROGRESS",
         filename: data.filename,
@@ -198,6 +229,11 @@ class ImportRepository implements IImportRepository {
     // import_in_progress_heartbeat_idx: the uploads running right now. Raw,
     // with the status as a literal: Prisma binds it as a parameter, and a
     // generic plan over a parameter cannot prove the partial index.
+    //
+    // An upload a live durable job owns is left alone (F3-23a): waiting in
+    // the queue, its heartbeat is old by design, and a job that died with
+    // its process is resumed by the next claim, not closed. The probe is
+    // background_job_live_subject_key.
     const stale = await this.prisma.$queryRaw<
       Array<{ id: string; businessId: string }>
     >`
@@ -205,6 +241,12 @@ class ImportRepository implements IImportRepository {
       FROM "import"
       WHERE "status" = 'IN_PROGRESS'
         AND "updated_at" < ${staleBefore}
+        AND NOT EXISTS (
+          SELECT 1 FROM "background_job" AS "job"
+          WHERE "job"."kind" = 'SPREADSHEET_IMPORT'
+            AND "job"."subjectId" = "import"."id"
+            AND "job"."status" IN ('PENDING', 'PROCESSING')
+        )
       ORDER BY "updated_at"
       LIMIT ${limit}::int
     `;
@@ -233,8 +275,14 @@ class ImportRepository implements IImportRepository {
   async closeInterruptedImport(
     importId: string,
     businessId: string,
-    stage: "not-started" | "stopped",
+    stage: "not-started" | "stopped" | "failed",
   ): Promise<boolean> {
+    if (stage === "failed") {
+      return this.closeAsInterrupted(importId, businessId, {
+        row: (imported) => (imported === 0 ? FAILED_EMPTY_ROW : FAILED_ROW),
+      });
+    }
+
     return this.closeAsInterrupted(importId, businessId, {
       // "Nothing was created" only when it is true and will stay true: the
       // upload never reached its rows (its stop signal ends it before the
@@ -295,6 +343,18 @@ class ImportRepository implements IImportRepository {
     });
 
     return done.count === 1;
+  }
+
+  async listImportedIdentities(
+    importId: string,
+    businessId: string,
+  ): Promise<
+    Array<{ id: string; invoice_key: string | null; code: string | null }>
+  > {
+    return this.prisma.delivery.findMany({
+      where: { importId, businessId },
+      select: { id: true, invoice_key: true, code: true },
+    });
   }
 
   async findImportById(

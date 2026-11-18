@@ -4,6 +4,10 @@ import { env } from "@/env";
 import { CronJobDefinition } from "@/shared/services/cron-scheduler-service";
 import { logger } from "@/shared/logging/logger";
 import { throwIfPartial } from "@/shared/errors/partial-run-error";
+import {
+  importObjectsKept,
+  releaseImportObjects,
+} from "@/modules/import/services/import-object-release";
 
 import { deleteInBatches, purgeDeadline } from "./batch-delete";
 
@@ -28,7 +32,9 @@ function finishedJobsBefore(
   succeededBefore: Date,
   failedBefore: Date,
 ): Prisma.Sql {
-  return Prisma.sql`(("status" = 'SUCCEEDED' AND "finished_at" < ${succeededBefore}) OR ("status" IN ('FAILED', 'CANCELLED') AND "finished_at" < ${failedBefore}))`;
+  // A durable import whose stored file is still there is kept until the
+  // release below deletes the file (F3-23a).
+  return Prisma.sql`(("status" = 'SUCCEEDED' AND "finished_at" < ${succeededBefore}) OR ("status" IN ('FAILED', 'CANCELLED') AND "finished_at" < ${failedBefore})) AND NOT ${importObjectsKept}`;
 }
 
 /**
@@ -37,6 +43,8 @@ function finishedJobsBefore(
  * CANCELLED one after BACKGROUND_JOB_FAILED_RETENTION_DAYS (90), the
  * failure kept longer because it is what somebody comes back to read.
  * The job's domain record (the upload, the company) keeps its own trail.
+ * Before the purge, the stored files of the durable imports are released:
+ * an hour after a success, seven days after a failure.
  *
  * On the maintenance pool, in bounded batches (batch-delete.ts).
  *
@@ -50,6 +58,10 @@ const cleanupBackgroundJobsJob: CronJobDefinition = {
   async handler() {
     const deadline = purgeDeadline();
     const now = Date.now();
+
+    // The stored files of the durable imports first (F3-23a): a day the
+    // storage does not answer leaves them, and their jobs, for tomorrow.
+    await releaseImportObjects({ now });
 
     const jobs = await deleteInBatches({
       table: Prisma.sql`"background_job"`,

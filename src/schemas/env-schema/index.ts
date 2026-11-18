@@ -1004,6 +1004,36 @@ const envSchema = z
       z.coerce.number().int().min(5_000).max(600_000).default(60_000),
     ),
 
+    // The spreadsheet import as a durable job (plano-escala F3-23a;
+    // modules/import/services/spreadsheet-import-job.ts). Off, an upload is
+    // processed in the memory of the replica that answered it, as before:
+    // a deploy hands it back, a SIGKILL leaves it for the abandoned-import
+    // sweep. On, the file goes to storage and the import to background_job,
+    // where the process that consumes the `jobs` queue reads it and decides
+    // the rows from a cursor that a SIGKILL resumes without doing a row
+    // twice. The same value on every Application: an api with it on and a
+    // worker without would enqueue jobs nobody runs (the job-overdue alert
+    // says so). The in-memory path stays for two releases (U-10).
+    //
+    // Each company may have IMPORT_RUNNING_PER_TENANT imports running at
+    // once and IMPORT_QUEUED_PER_TENANT more waiting; past that the upload
+    // is refused with 429 IMPORT_BUSY and Retry-After, before anything is
+    // written. Empty counts as absent.
+    IMPORT_DURABLE_JOBS: z
+      .preprocess(
+        (value) => (value === "" ? undefined : value),
+        z.enum(["true", "false"]).default("false"),
+      )
+      .transform((value) => value === "true"),
+    IMPORT_RUNNING_PER_TENANT: z.preprocess(
+      (value) => (value === "" ? undefined : value),
+      z.coerce.number().int().min(1).max(4).default(1),
+    ),
+    IMPORT_QUEUED_PER_TENANT: z.preprocess(
+      (value) => (value === "" ? undefined : value),
+      z.coerce.number().int().min(0).max(20).default(5),
+    ),
+
     // The process's memory budget, checked at boot (plano-escala U-15;
     // shared/lifecycle/memory-budget.ts): the main heap, the spreadsheet
     // threads and this reserve for what V8 and the native libraries hold

@@ -26,7 +26,10 @@ interface IImportRepository {
    * success, on a failure the process survives, or by the abandoned-import
    * sweep when it did not.
    */
-  createImport: (data: CreateImportProps) => Promise<ImportRecord>;
+  createImport: (
+    data: CreateImportProps,
+    tx?: Prisma.TransactionClient,
+  ) => Promise<ImportRecord>;
 
   /**
    * Closes it with the counts and the report.
@@ -58,6 +61,10 @@ interface IImportRepository {
    * COMPLETED, with the deliveries it did create counted and one report line
    * saying it stopped — which is what lets the undo, which refuses a RUNNING
    * upload, take it back. Returns how many were closed.
+   *
+   * An upload a live durable job owns (plano-escala F3-23a: PENDING in the
+   * queue, or running with its lease) is never closed here: it is waiting
+   * its turn, or its job resumes it.
    */
   closeAbandonedImports: (staleBefore: Date, limit?: number) => Promise<number>;
 
@@ -67,14 +74,27 @@ interface IImportRepository {
    * COMPLETED report the sweep writes, with the deliveries counted from the
    * rows and the line saying it never reached its rows ("not-started": it
    * was waiting or still reading the file, nothing was created) or was
-   * stopped in them ("stopped"). Only while IN_PROGRESS; answers whether it
-   * closed.
+   * stopped in them ("stopped"). Its durable job failed for good
+   * ("failed", plano-escala F3-23a). Only while IN_PROGRESS; answers whether
+   * it closed.
    */
   closeInterruptedImport: (
     importId: string,
     businessId: string,
-    stage: "not-started" | "stopped",
+    stage: "not-started" | "stopped" | "failed",
   ) => Promise<boolean>;
+
+  /**
+   * The deliveries the upload created, with their identities (the NF-e key,
+   * the order number): a durable import resumed after a crash finds by them
+   * the deliveries of the rows its earlier attempt decided, for the routes.
+   */
+  listImportedIdentities: (
+    importId: string,
+    businessId: string,
+  ) => Promise<
+    Array<{ id: string; invoice_key: string | null; code: string | null }>
+  >;
 
   findImportById: (
     importId: string,

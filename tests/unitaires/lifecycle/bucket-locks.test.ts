@@ -271,8 +271,10 @@ describe("the proofs' prefix", () => {
   it("is never swept by the orphan collector", () => {
     const collector = read("src/shared/services/orphan-uploads.ts");
 
+    // The other server-written namespace may join it (spreadsheetImports,
+    // plano-escala F3-23a); deliveryProofs never leaves.
     expect(collector).toMatch(
-      /type ClientUploadType = Exclude<UploadType, "deliveryProofs">;/,
+      /type ClientUploadType = Exclude<\s*UploadType,\s*"deliveryProofs"(?:\s*\|\s*"[A-Za-z]+")*\s*>;/,
     );
     expect(collector).toMatch(
       /ORPHAN_GC_NAMESPACES: Record<ClientUploadType, NamespaceSpec>/,

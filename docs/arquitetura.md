@@ -4133,6 +4133,26 @@ erro enquanto as entregas continuavam sendo criadas. A listagem
 (`list-imports`) traz só os contadores; o relatório linha a linha vem do
 detalhe (ou de `includeReport=true`).
 
+**Importação como job durável** (plano de escala F3-23a, com
+`IMPORT_DURABLE_JOBS=true`; desligada por padrão, e o caminho em memória
+acima fica por dois releases). O pedido valida como antes, guarda o arquivo
+no armazenamento (prefixo `spreadsheetImports/`, escrito pelo servidor: a web
+não muda) e, numa transação só, abre a importação e enfileira o job
+`SPREADSHEET_IMPORT` na `background_job`, sob o teto da empresa
+(`IMPORT_RUNNING_PER_TENANT` rodando, 1, e `IMPORT_QUEUED_PER_TENANT` na
+fila, 5): passou disso, `429 IMPORT_BUSY` com `retry-after`, sem importação
+aberta e sem arquivo guardado. Quem consome a fila `jobs` lê o arquivo e
+decide as linhas a partir do cursor do job: cada linha que cria entrega grava
+a entrega, o webhook e o cursor na mesma transação, então um SIGKILL retoma
+noutro processo na primeira linha sem commit e o relatório sai igual ao do
+caminho em memória (cada linha guarda uma letra no cursor, e a linha do
+relatório é refeita dela; as rotas já montadas também ficam no cursor). Um
+SIGTERM devolve o job à fila na hora, sem fechar a importação. A varredura
+`close-abandoned-imports` não fecha importação com job vivo; o job que falha
+de vez fecha a importação dizendo que foi uma falha do servidor. O arquivo é
+apagado no fim; numa falha, fica 7 dias (o `cleanup-background-jobs` o
+apaga depois e só então deixa o job ser expurgado).
+
 **E-mail do destinatário: importações e painel** (10/11/2026,
 `src/shared/delivery/recipient-email.ts`). A coluna "E-mail" e o `dest/email`
 da nota entravam sem conferência no `recipient_email` (TEXT). Daí iam, a cada

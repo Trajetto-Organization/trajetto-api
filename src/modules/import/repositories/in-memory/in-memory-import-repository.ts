@@ -74,9 +74,15 @@ class InMemoryImportRepository implements IImportRepository {
   public deliveries: ReversibleDelivery[] = [];
   public routes: ReversibleRoute[] = [];
 
+  /**
+   * The uploads a live durable job owns (F3-23a), which the abandoned-import
+   * sweep leaves alone: the real one reads background_job.
+   */
+  public liveJobImports = new Set<string>();
+
   async createImport(data: CreateImportProps): Promise<ImportRecord> {
     const created: ImportRecord = {
-      id: uuidV7(),
+      id: data.id ?? uuidV7(),
 
       // IN_PROGRESS like the real one. A fake that opened an upload as
       // COMPLETED would let a test prove the undo accepts a running import,
@@ -149,6 +155,7 @@ class InMemoryImportRepository implements IImportRepository {
       .filter(
         (entry) =>
           entry.status === "IN_PROGRESS" &&
+          !this.liveJobImports.has(entry.id) &&
           (this.heartbeats.get(entry.id) ?? new Date(entry.created_at)) <
             staleBefore,
       )
@@ -170,13 +177,24 @@ class InMemoryImportRepository implements IImportRepository {
   async closeInterruptedImport(
     importId: string,
     businessId: string,
-    stage: "not-started" | "stopped",
+    stage: "not-started" | "stopped" | "failed",
   ): Promise<boolean> {
     const found = this.findRecord(importId, businessId);
 
     if (found?.status !== "IN_PROGRESS") return false;
 
     const imported = this.importedBy(found);
+
+    if (stage === "failed") {
+      this.closeAsInterrupted(
+        found,
+        imported === 0
+          ? "Importação interrompida por uma falha do servidor e nenhuma entrega foi criada. Envie o arquivo de novo."
+          : "Importação interrompida por uma falha do servidor antes de terminar o arquivo. As entregas criadas até ali pertencem a esta importação e podem não ter rota. Estorne esta importação e envie o arquivo de novo.",
+      );
+
+      return true;
+    }
 
     // The same choice as the real one: "nothing was created" only when true.
     this.closeAsInterrupted(
@@ -300,6 +318,24 @@ class InMemoryImportRepository implements IImportRepository {
     onRemoved?: ReversalRemovedHook,
   ): Promise<ReversalResult> {
     return reverseWholeImport(this, importId, businessId, onRemoved);
+  }
+
+  async listImportedIdentities(
+    importId: string,
+    businessId: string,
+  ): Promise<
+    Array<{ id: string; invoice_key: string | null; code: string | null }>
+  > {
+    return this.deliveries
+      .filter(
+        (delivery) =>
+          delivery.importId === importId && delivery.businessId === businessId,
+      )
+      .map((delivery) => ({
+        id: delivery.id,
+        invoice_key: delivery.invoice_key ?? null,
+        code: delivery.code ?? null,
+      }));
   }
 
   async countImportDeliveries(

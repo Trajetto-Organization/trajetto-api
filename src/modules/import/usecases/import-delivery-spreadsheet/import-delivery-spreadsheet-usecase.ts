@@ -1,4 +1,5 @@
 import { inject, injectable } from "tsyringe";
+import { v7 as uuidV7 } from "uuid";
 
 import { IUserRepository } from "@/modules/user/repositories/IUser-repository";
 import { IBusinessRepository } from "@/modules/business/repositories/IBusiness-repository";
@@ -19,9 +20,22 @@ import { assertDispatcher } from "@/shared/delivery/dispatcher-guard";
 import { inspectSpreadsheet } from "@/shared/delivery/spreadsheet-reader";
 import { readSpreadsheetOffThread } from "../../services/spreadsheet-worker";
 import {
+  IMPORT_RETRY_AFTER_SECONDS,
   importQueue as defaultImportQueue,
   type ImportQueue,
 } from "../../services/import-queue";
+import {
+  advanceImportProgress,
+  emptyImportProgress,
+  importObjectContentType,
+  importObjectKey,
+  parseImportPayload,
+  parseImportProgress,
+  rowResultFor,
+  type BuiltGroup,
+  type RowCode,
+  type SpreadsheetImportProgress,
+} from "../../services/durable-import";
 import {
   parseDeliverySpreadsheet,
   type ParsedRow,
@@ -57,6 +71,17 @@ import {
   deliveryAssignedPayload,
   deliveryEventPayload,
 } from "@/shared/integration/announce";
+import { env } from "@/env";
+import { ServiceBusyError } from "@/shared/errors/service-busy-error";
+import type { IBackgroundJobRepository } from "@/shared/jobs/background-job-repository";
+import {
+  JobLeaseLostError,
+  JobStoppedError,
+  PermanentJobError,
+} from "@/shared/jobs/job-errors";
+import type { FailedJob, JobContext } from "@/shared/jobs/job-runner";
+import { wakeJobsAfterCommit } from "@/shared/jobs/job-wake";
+import type { UploadService } from "@/shared/services/upload-service";
 
 interface ImportDeliverySpreadsheetRequest {
   userId: string;
@@ -103,6 +128,118 @@ interface ImportProgress {
 
   /** The sheet line being processed; null once every row is decided. */
   line: number | null;
+}
+
+/**
+ * The durable job's own stops: it was asked to stop (SIGTERM) or lost its
+ * lease. Never a row's failure: they end the run, and the runner hands the
+ * job back or leaves it to its new owner.
+ */
+function isJobControlError(error: unknown): boolean {
+  return error instanceof JobLeaseLostError || error instanceof JobStoppedError;
+}
+
+/**
+ * How a durable import builds its routes: the groups an earlier attempt
+ * already built are taken from its cursor, and a group built now writes
+ * itself to the cursor inside its own transaction.
+ */
+interface RouteResume {
+  built: Record<string, BuiltGroup>;
+  save: (
+    key: string,
+    group: BuiltGroup,
+    tx: Prisma.TransactionClient,
+  ) => Promise<void>;
+  committed: (key: string, group: BuiltGroup) => void;
+  throwIfStopped: () => void;
+}
+
+/** The delivery a spreadsheet row creates. */
+function deliveryOfRow(
+  row: ParsedRow,
+  {
+    businessId,
+    shipperId,
+    importId,
+  }: { businessId: string; shipperId: string; importId: string },
+) {
+  return {
+    businessId,
+    shipperId,
+    importId,
+
+    // The "Tipo" column. The parser always read it; until the meeting of
+    // 14/10/2026 nothing wrote it, and a "coleta" row was created as an
+    // "Entrega".
+    kind: row.kind,
+
+    recipient_name: row.recipient_name,
+    recipient_document: row.recipient_document,
+    recipient_telephone: row.recipient_telephone,
+    recipient_email: row.recipient_email,
+
+    cep: row.cep,
+    city: row.city,
+    uf: row.uf,
+    street: row.street,
+    address_number: row.address_number,
+    complement: row.complement,
+    neighborhood: row.neighborhood,
+
+    // The sheet's point (plan of 02/11/2026, E1): stored as the address
+    // point, MANUAL; without it the geocoder finds it.
+    latitude: row.latitude,
+    longitude: row.longitude,
+
+    invoice_key: row.invoice_key,
+    invoice_number: row.invoice_number,
+    code: row.code,
+
+    scheduled_date: row.scheduled_date,
+    notes: row.notes,
+
+    ...(row.item && {
+      items: [
+        {
+          description: row.item.description,
+          quantity: row.item.quantity,
+          unit: row.item.unit,
+          unit_value: row.item.unit_value,
+        },
+      ],
+    }),
+  };
+}
+
+/**
+ * The delivery of an imported row the durable cursor must keep: one with a
+ * route and neither an NF-e key nor an order number, which a resumed run
+ * cannot find again by its identity.
+ */
+function keylessRouted(
+  row: ParsedRow,
+  deliveryId: string,
+): { line: number; deliveryId: string } | undefined {
+  return row.route && !row.invoice_key && !row.code
+    ? { line: row.line, deliveryId }
+    : undefined;
+}
+
+/** A route the import built, with what its rows were told. */
+function builtGroupOf(
+  built: { id: string; code: number; name: string | null; stops: unknown[] },
+  notes: string[],
+): BuiltGroup {
+  return {
+    route: {
+      id: built.id,
+      code: built.code,
+      name: built.name,
+      stops: built.stops.length,
+    },
+    notes: [...notes],
+  };
 }
 
 /** What the rows of one route group have in common. */
@@ -159,6 +296,16 @@ class ImportDeliverySpreadsheetUseCase {
     private notificationService: NotificationService,
     @inject("WebhookFanOutService")
     private webhooks: WebhookFanOutService,
+    // The durable import (plano-escala F3-23a): the job queue and the
+    // storage its file goes to. Optional for the suites that only drive
+    // the in-memory path.
+    @inject("BackgroundJobRepository")
+    private jobs?: IBackgroundJobRepository,
+    @inject("UploadService")
+    private uploads?: Pick<
+      UploadService,
+      "putObject" | "readObject" | "tryDeleteFile"
+    >,
   ) {}
 
   /**
@@ -197,6 +344,8 @@ class ImportDeliverySpreadsheetUseCase {
     request: ImportDeliverySpreadsheetRequest,
     queue: ImportQueue = defaultImportQueue,
   ): Promise<ImportRecord> {
+    if (env.IMPORT_DURABLE_JOBS) return this.startDurable(request);
+
     const { timeZone } = await this.validate(request);
 
     // After the checks that answer 403/404, before anything is written.
@@ -491,163 +640,17 @@ class ImportDeliverySpreadsheetUseCase {
         await this.importRepository.touchImport(record.id, businessId);
       }
 
-      const duplicate = await this.findDuplicate(businessId, shipperId, row);
+      const decided = await this.importRow(row, {
+        businessId,
+        shipperId,
+        importId: record.id,
+      });
 
-      if (duplicate) {
-        rows.push({
-          line: row.line,
-          outcome: "duplicated",
-          recipient_name: row.recipient_name,
-          reference: row.invoice_key ?? row.code,
-          message: duplicate,
-        });
-
-        continue;
+      if (decided.deliveryId) {
+        createdDeliveryIdByLine.set(row.line, decided.deliveryId);
       }
 
-      // Identified by the order alone: no unique index stands behind the pair
-      // (ADR 0006), so the check above is repeated under a lock inside the
-      // insert's transaction.
-      const orderOnly = !row.invoice_key && row.code ? row.code : null;
-
-      try {
-        // The row and its `delivery.created` in one commit, per row — one bad
-        // row still never sinks the batch. The spreadsheet used to announce
-        // nothing, and the company's ERP never learned these documents'
-        // ids.
-        const created = await database.$transaction(async (tx) => {
-          if (orderOnly) {
-            // Two uploads of the same sheet both pass the check above before
-            // either commits. The lock makes the second wait for the first's
-            // commit, and the re-read then sees its row.
-            await this.delivery.lockOrderIdentity(
-              businessId,
-              shipperId,
-              orderOnly,
-              tx,
-            );
-
-            const existing = await this.delivery.findDeliveryByShipperAndCode(
-              businessId,
-              shipperId,
-              orderOnly,
-              tx,
-            );
-
-            if (existing) return null;
-          }
-
-          const delivery = await this.delivery.createDelivery(
-            {
-              businessId,
-              shipperId,
-              importId: record.id,
-
-              // The "Tipo" column. The parser always read it; until the
-              // meeting of 14/10/2026 nothing wrote it, and a "coleta" row
-              // was created as an "Entrega".
-              kind: row.kind,
-
-              recipient_name: row.recipient_name,
-              recipient_document: row.recipient_document,
-              recipient_telephone: row.recipient_telephone,
-              recipient_email: row.recipient_email,
-
-              cep: row.cep,
-              city: row.city,
-              uf: row.uf,
-              street: row.street,
-              address_number: row.address_number,
-              complement: row.complement,
-              neighborhood: row.neighborhood,
-
-              // The sheet's point (plan of 02/11/2026, E1): stored as the
-              // address point, MANUAL; without it the geocoder finds it.
-              latitude: row.latitude,
-              longitude: row.longitude,
-
-              invoice_key: row.invoice_key,
-              invoice_number: row.invoice_number,
-              code: row.code,
-
-              scheduled_date: row.scheduled_date,
-              notes: row.notes,
-
-              ...(row.item && {
-                items: [
-                  {
-                    description: row.item.description,
-                    quantity: row.item.quantity,
-                    unit: row.item.unit,
-                    unit_value: row.item.unit_value,
-                  },
-                ],
-              }),
-            },
-            tx,
-          );
-
-          await this.webhooks.announce(
-            "delivery.created",
-            businessId,
-            deliveryEventPayload({ ...delivery, id: delivery.id! }),
-            tx,
-          );
-
-          return delivery;
-        });
-
-        if (!created) {
-          // Another upload won this order. Left out of createdDeliveryIdByLine,
-          // so the route below does not stop at it a second time.
-          rows.push({
-            line: row.line,
-            outcome: "duplicated",
-            recipient_name: row.recipient_name,
-            reference: row.code,
-            message:
-              "Este pedido já havia sido importado para este embarcador.",
-          });
-
-          continue;
-        }
-
-        // After the row's commit; a row another upload won is not ours.
-        countDeliveriesCreated();
-
-        createdDeliveryIdByLine.set(row.line, created.id!);
-
-        rows.push({
-          line: row.line,
-          outcome: "imported",
-          recipient_name: row.recipient_name,
-          reference: row.invoice_key ?? row.code,
-          // Imported all the same; the note says which e-mail was left out
-          // of the customer notices (recipient-email.ts).
-          message: row.recipient_email_notice,
-        });
-      } catch (error) {
-        // For a row with an access key, the unique index on (businessId,
-        // invoice_key) is the real guard: two operators importing the same
-        // file at the same moment collide in the database, not in the check
-        // above. Order-only rows are guarded by the lock instead, and never
-        // land here as duplicates.
-        const isDuplicateKey =
-          error instanceof Prisma.PrismaClientKnownRequestError &&
-          error.code === "P2002";
-
-        rows.push({
-          line: row.line,
-          outcome: isDuplicateKey ? "duplicated" : "invalid",
-          recipient_name: row.recipient_name,
-          reference: row.invoice_key ?? row.code,
-          message: isDuplicateKey
-            ? row.invoice_key
-              ? "Esta nota já havia sido importada."
-              : "Este pedido já havia sido importado para este embarcador."
-            : "Não foi possível criar esta entrega.",
-        });
-      }
+      rows.push(rowResultFor(row, decided.code));
     }
 
     // Every row is decided; what can still fail now is the routes.
@@ -663,11 +666,44 @@ class ImportDeliverySpreadsheetUseCase {
       timeZone,
     );
 
+    return this.closeRecord(record.id, {
+      userId,
+      businessId,
+      filename,
+      rows,
+      routes,
+      unknownHeaders: parsed.unknownHeaders,
+    });
+  }
+
+  /**
+   * Closes the record with the report — every row decided and the routes
+   * built — and says so in the activity log. The same for the upload run
+   * in memory and for the durable job.
+   */
+  private async closeRecord(
+    importId: string,
+    {
+      userId,
+      businessId,
+      filename,
+      rows,
+      routes,
+      unknownHeaders,
+    }: {
+      userId: string;
+      businessId: string;
+      filename: string;
+      rows: ImportRowResult[];
+      routes: ImportReport["routes"];
+      unknownHeaders: ImportReport["unknownHeaders"];
+    },
+  ): Promise<ImportRecord> {
     const report: ImportReport = {
       imported: rows.filter((row) => row.outcome === "imported").length,
       duplicated: rows.filter((row) => row.outcome === "duplicated").length,
       invalid: rows.filter((row) => row.outcome === "invalid").length,
-      unknownHeaders: parsed.unknownHeaders,
+      unknownHeaders,
 
       // Sorted by line so the report reads like the file the operator is
       // looking at, rather than like the order the code happened to process.
@@ -676,7 +712,7 @@ class ImportDeliverySpreadsheetUseCase {
     };
 
     const finished = await this.importRepository.finishImport(
-      record.id,
+      importId,
       businessId,
       {
         imported: report.imported,
@@ -689,7 +725,7 @@ class ImportDeliverySpreadsheetUseCase {
     this.notificationService.createActivityIfEnabled({
       type: "Entrega",
       action: "create",
-      entityId: record.id,
+      entityId: importId,
       description:
         `Planilha "${filename}" importada: ${report.imported} entrega(s), ` +
         `${report.duplicated} duplicada(s), ${report.invalid} com erro`,
@@ -789,6 +825,474 @@ class ImportDeliverySpreadsheetUseCase {
   }
 
   /**
+   * One row, decided: a duplicate is answered from the reads, a new one is
+   * created with its `delivery.created` in one commit of its own — one bad
+   * row still never sinks the batch. `beforeCommit` runs inside that
+   * transaction once the delivery exists (the durable job's fenced
+   * cursor): it commits with the row, or neither does.
+   */
+  private async importRow(
+    row: ParsedRow,
+    {
+      businessId,
+      shipperId,
+      importId,
+    }: { businessId: string; shipperId: string; importId: string },
+    beforeCommit?: (
+      tx: Prisma.TransactionClient,
+      deliveryId: string,
+    ) => Promise<void>,
+  ): Promise<{ code: RowCode; deliveryId: string | null }> {
+    if (await this.findDuplicate(businessId, shipperId, row)) {
+      return { code: "d", deliveryId: null };
+    }
+
+    // Identified by the order alone: no unique index stands behind the pair
+    // (ADR 0006), so the check above is repeated under a lock inside the
+    // insert's transaction.
+    const orderOnly = !row.invoice_key && row.code ? row.code : null;
+
+    try {
+      // The row and its `delivery.created` in one commit, per row. The
+      // spreadsheet used to announce nothing, and the company's ERP never
+      // learned these documents' ids.
+      const created = await database.$transaction(async (tx) => {
+        if (orderOnly) {
+          // Two uploads of the same sheet both pass the check above before
+          // either commits. The lock makes the second wait for the first's
+          // commit, and the re-read then sees its row.
+          await this.delivery.lockOrderIdentity(
+            businessId,
+            shipperId,
+            orderOnly,
+            tx,
+          );
+
+          const existing = await this.delivery.findDeliveryByShipperAndCode(
+            businessId,
+            shipperId,
+            orderOnly,
+            tx,
+          );
+
+          if (existing) return null;
+        }
+
+        const delivery = await this.delivery.createDelivery(
+          deliveryOfRow(row, { businessId, shipperId, importId }),
+          tx,
+        );
+
+        await this.webhooks.announce(
+          "delivery.created",
+          businessId,
+          deliveryEventPayload({ ...delivery, id: delivery.id! }),
+          tx,
+        );
+
+        await beforeCommit?.(tx, delivery.id!);
+
+        return delivery;
+      });
+
+      // Another upload won this order: a duplicate, and not on our route.
+      if (!created) return { code: "d", deliveryId: null };
+
+      // After the row's commit; a row another upload won is not ours.
+      countDeliveriesCreated();
+
+      return { code: "i", deliveryId: created.id! };
+    } catch (error) {
+      if (isJobControlError(error)) throw error;
+
+      // For a row with an access key, the unique index on (businessId,
+      // invoice_key) is the real guard: two operators importing the same
+      // file at the same moment collide in the database, not in the check
+      // above. Order-only rows are guarded by the lock instead, and never
+      // land here as duplicates.
+      const isDuplicateKey =
+        error instanceof Prisma.PrismaClientKnownRequestError &&
+        error.code === "P2002";
+
+      return { code: isDuplicateKey ? "d" : "x", deliveryId: null };
+    }
+  }
+
+  /**
+   * The upload as a durable job (plano-escala F3-23a, IMPORT_DURABLE_JOBS).
+   *
+   * Refused now what can be refused without the rows, as `start` does
+   * (403/404, 400/413 from the cheap inspection). Then the file goes to
+   * storage (spreadsheetImports/, written by the server: the web does not
+   * change) and, in ONE transaction under the company's cap, the record is
+   * opened and the job enqueued: past IMPORT_RUNNING_PER_TENANT +
+   * IMPORT_QUEUED_PER_TENANT live imports the upload is refused with 429
+   * IMPORT_BUSY and nothing is left behind (the stored file is deleted).
+   * The process that consumes the `jobs` queue runs it (`runJob`).
+   */
+  private async startDurable(
+    request: ImportDeliverySpreadsheetRequest,
+  ): Promise<ImportRecord> {
+    const { timeZone } = await this.validate(request);
+    const { userId, businessId, filename, content, shipperId } = request;
+
+    try {
+      inspectSpreadsheet(filename, content);
+    } catch (error) {
+      throw this.unreadable(error);
+    }
+
+    const jobs = this.jobs;
+    const uploads = this.uploads;
+
+    if (!jobs || !uploads) {
+      throw new Error(
+        "durable import: the job queue or the storage is missing",
+      );
+    }
+
+    const importId = uuidV7();
+    const objectKey = importObjectKey(businessId, importId, filename);
+
+    // A storage that does not answer is the 503 STORAGE_UNAVAILABLE (with
+    // Retry-After) of every server write: nothing was opened.
+    await uploads.putObject(
+      objectKey,
+      Buffer.from(content, "base64"),
+      importObjectContentType(objectKey),
+    );
+
+    let outcome: Awaited<
+      ReturnType<IBackgroundJobRepository["enqueueWithCap"]>
+    >;
+
+    try {
+      outcome = await jobs.enqueueWithCap({
+        kind: "SPREADSHEET_IMPORT",
+        businessId,
+        subjectId: importId,
+        payload: {
+          importId,
+          objectKey,
+          filename,
+          shipperId,
+          userId,
+          timeZone,
+        },
+        limit: env.IMPORT_RUNNING_PER_TENANT + env.IMPORT_QUEUED_PER_TENANT,
+        prepare: async (tx) => {
+          await this.importRepository.createImport(
+            {
+              id: importId,
+              source: "SPREADSHEET",
+              filename,
+              businessId,
+              performedById: userId,
+            },
+            tx,
+          );
+        },
+      });
+    } catch (error) {
+      await uploads.tryDeleteFile(objectKey);
+
+      throw error;
+    }
+
+    if (outcome.outcome === "busy") {
+      await uploads.tryDeleteFile(objectKey);
+
+      throw new ServiceBusyError(
+        "Há muitas importações desta empresa na fila agora. Tente de novo em instantes.",
+        "IMPORT_BUSY",
+        IMPORT_RETRY_AFTER_SECONDS,
+        429,
+      );
+    }
+
+    wakeJobsAfterCommit();
+
+    const record = await this.importRepository.findImportById(
+      importId,
+      businessId,
+    );
+
+    if (!record)
+      throw new Error("durable import: the record just opened is gone");
+
+    return record;
+  }
+
+  /**
+   * The durable import's job (spreadsheet-import-job.ts): reads the stored
+   * file, decides the rows from the cursor, builds the routes and closes the
+   * record. Each row that creates a delivery commits it with the cursor
+   * past it (the job's fenced checkpoint), so a run killed anywhere resumes
+   * on another process at the first row not committed, and the report it
+   * writes is the one the killed run would have written. A stop (SIGTERM)
+   * or a lost lease ends the run at the next row; any other failure is the
+   * runner's to retry, the record still IN_PROGRESS (the abandoned-import
+   * sweep leaves an upload with a live job alone).
+   */
+  async runJob(job: JobContext): Promise<void> {
+    const payload = parseImportPayload(job.payload);
+    const businessId = job.businessId;
+
+    if (!payload || !businessId) {
+      throw new PermanentJobError("durable import: malformed job payload");
+    }
+
+    const { importId, objectKey, filename, shipperId, userId, timeZone } =
+      payload;
+
+    const record = await this.importRepository.findImportById(
+      importId,
+      businessId,
+    );
+
+    if (!record) throw new PermanentJobError("durable import: record is gone");
+
+    // Closed already: by this job before its process died between the
+    // report and the end, or by an operator's undo of the closed report.
+    if (record.status !== "IN_PROGRESS") {
+      await this.releaseObject(objectKey);
+      return;
+    }
+
+    const uploads = this.uploads;
+
+    if (!uploads) throw new Error("durable import: the storage is missing");
+
+    const bytes = await uploads.readObject(objectKey);
+
+    if (!bytes) {
+      throw new PermanentJobError("durable import: the stored file is gone");
+    }
+
+    let parsed: ReturnType<typeof parseDeliverySpreadsheet>;
+
+    try {
+      parsed = parseDeliverySpreadsheet(
+        await this.readMatrix(filename, bytes.toString("base64")),
+      );
+    } catch (error) {
+      // The file itself: closed with the sentence, as the in-memory path.
+      await this.closeUnreadable(importId, businessId, error);
+      await this.releaseObject(objectKey);
+
+      return;
+    }
+
+    const resumed =
+      job.progress === null ? null : parseImportProgress(job.progress);
+
+    if (job.progress !== null && resumed === null) {
+      throw new PermanentJobError("durable import: unreadable cursor");
+    }
+
+    if (resumed && resumed.next > parsed.rows.length) {
+      throw new PermanentJobError("durable import: cursor past the file");
+    }
+
+    let progress = await this.decideRowsDurably(
+      job,
+      parsed,
+      resumed ?? emptyImportProgress(),
+      { businessId, shipperId, importId },
+    );
+
+    // Every row is decided. The report's lines, rebuilt from the outcomes
+    // (this run's and the earlier attempts'), then the routes.
+    const rows: ImportRowResult[] = [
+      ...parsed.errors.map((error) => ({
+        line: error.line,
+        outcome: "invalid" as const,
+        recipient_name: null,
+        reference: error.column,
+        message: error.message,
+      })),
+      ...parsed.rows.map((row, index) =>
+        rowResultFor(row, progress.outcomes[index] as RowCode),
+      ),
+    ];
+
+    const createdDeliveryIdByLine = await this.importedDeliveriesByLine(
+      importId,
+      businessId,
+      parsed.rows,
+      progress,
+    );
+
+    const routes = await this.buildRoutes(
+      userId,
+      businessId,
+      importId,
+      parsed.rows,
+      createdDeliveryIdByLine,
+      rows,
+      timeZone,
+      {
+        built: progress.routes,
+        save: async (key, group, tx) => {
+          await job.checkpoint(
+            { ...progress, routes: { ...progress.routes, [key]: group } },
+            tx,
+          );
+        },
+        committed: (key, group) => {
+          progress = {
+            ...progress,
+            routes: { ...progress.routes, [key]: group },
+          };
+        },
+        throwIfStopped: () => job.throwIfStopped(),
+      },
+    );
+
+    job.throwIfStopped();
+
+    await this.closeRecord(importId, {
+      userId,
+      businessId,
+      filename,
+      rows,
+      routes,
+      unknownHeaders: parsed.unknownHeaders,
+    });
+
+    await this.releaseObject(objectKey);
+  }
+
+  /**
+   * The durable import's job failed for good (its attempts ran out, or its
+   * file is gone): the record closes with the deliveries it created counted
+   * and a line saying why. The stored file stays seven days for whoever
+   * looks into it (import-object-release.ts).
+   */
+  async closeFailedJob(job: FailedJob): Promise<void> {
+    const payload = parseImportPayload(job.payload);
+
+    if (!payload || !job.businessId) return;
+
+    await this.importRepository.closeInterruptedImport(
+      payload.importId,
+      job.businessId,
+      "failed",
+    );
+  }
+
+  /**
+   * The rows from the cursor on, one commit per row that creates, with the
+   * cursor past it in the same commit. The outcomes of rows that create
+   * nothing (duplicates, failures) go down with the next commit, or every
+   * HEARTBEAT_EVERY_ROWS rows: deciding one again after a crash gives the
+   * same answer and writes nothing.
+   */
+  private async decideRowsDurably(
+    job: JobContext,
+    parsed: ReturnType<typeof parseDeliverySpreadsheet>,
+    from: SpreadsheetImportProgress,
+    context: { businessId: string; shipperId: string; importId: string },
+  ): Promise<SpreadsheetImportProgress> {
+    let progress = from;
+
+    for (let index = progress.next; index < parsed.rows.length; index += 1) {
+      job.throwIfStopped();
+
+      if (index > from.next && index % HEARTBEAT_EVERY_ROWS === 0) {
+        await this.importRepository.touchImport(
+          context.importId,
+          context.businessId,
+        );
+        await job.checkpoint(progress);
+      }
+
+      const row = parsed.rows[index];
+      const committed: { progress: SpreadsheetImportProgress | null } = {
+        progress: null,
+      };
+
+      const decided = await this.importRow(
+        row,
+        context,
+        async (tx, deliveryId) => {
+          committed.progress = advanceImportProgress(
+            progress,
+            index,
+            "i",
+            keylessRouted(row, deliveryId),
+          );
+
+          await job.checkpoint(committed.progress, tx);
+        },
+      );
+
+      progress =
+        decided.code === "i" && committed.progress
+          ? committed.progress
+          : advanceImportProgress(progress, index, decided.code);
+    }
+
+    await job.checkpoint(progress);
+
+    return progress;
+  }
+
+  /**
+   * The delivery of every imported row with a route, by its line: found by
+   * the NF-e key or the order number among the upload's deliveries (an
+   * earlier attempt's rows included), or, for a row with neither, from the
+   * cursor.
+   */
+  private async importedDeliveriesByLine(
+    importId: string,
+    businessId: string,
+    parsedRows: ParsedRow[],
+    progress: SpreadsheetImportProgress,
+  ): Promise<Map<number, string>> {
+    const byLine = new Map<number, string>();
+
+    if (
+      !parsedRows.some(
+        (row, index) => row.route && progress.outcomes[index] === "i",
+      )
+    ) {
+      return byLine;
+    }
+
+    const identities = await this.importRepository.listImportedIdentities(
+      importId,
+      businessId,
+    );
+    const byKey = new Map<string, string>();
+    const byCode = new Map<string, string>();
+
+    for (const identity of identities) {
+      if (identity.invoice_key) byKey.set(identity.invoice_key, identity.id);
+      if (identity.code) byCode.set(identity.code, identity.id);
+    }
+
+    parsedRows.forEach((row, index) => {
+      if (!row.route || progress.outcomes[index] !== "i") return;
+
+      const id = row.invoice_key
+        ? byKey.get(row.invoice_key)
+        : row.code
+          ? byCode.get(row.code)
+          : progress.keyless[String(row.line)];
+
+      if (id) byLine.set(row.line, id);
+    });
+
+    return byLine;
+  }
+
+  /** Deletes the stored file; a failure is left to the nightly release. */
+  private async releaseObject(objectKey: string): Promise<void> {
+    await this.uploads?.tryDeleteFile(objectKey);
+  }
+
+  /**
    * The access key when there is one, the order number when there is not.
    *
    * Two different identities because two different files: a company that
@@ -848,6 +1352,7 @@ class ImportDeliverySpreadsheetUseCase {
     createdDeliveryIdByLine: Map<number, string>,
     rows: ImportRowResult[],
     timeZone: string,
+    resume?: RouteResume,
   ): Promise<ImportReport["routes"]> {
     const groups = new Map<string, ParsedRow[]>();
 
@@ -870,10 +1375,33 @@ class ImportDeliverySpreadsheetUseCase {
       }
     };
 
-    for (const group of groups.values()) {
+    for (const [groupKey, group] of groups) {
+      // Built by an earlier attempt of the durable job: its route and what
+      // its rows were told, from the cursor; never built twice.
+      const done = resume?.built[groupKey];
+
+      if (done) {
+        for (const message of done.notes) {
+          for (const row of group) note(row.line, message);
+        }
+
+        created.push(done.route);
+        continue;
+      }
+
+      resume?.throwIfStopped();
+
       // Still alive, for the abandoned-import sweep: a sheet with many route
       // groups spends a while here after its last row.
       await this.importRepository.touchImport(importId, businessId);
+
+      // What every row of the group is told, kept for the durable cursor.
+      const groupNotes: string[] = [];
+      const noteGroup = (message: string) => {
+        groupNotes.push(message);
+
+        for (const row of group) note(row.line, message);
+      };
 
       const [first] = group;
       const route = first.route!;
@@ -885,12 +1413,9 @@ class ImportDeliverySpreadsheetUseCase {
         : null;
 
       if (!findDriver) {
-        for (const row of group) {
-          note(
-            row.line,
-            `Entrega importada, mas a rota não foi criada: motorista com CNH ${route.driverCnh} não encontrado.`,
-          );
-        }
+        noteGroup(
+          `Entrega importada, mas a rota não foi criada: motorista com CNH ${route.driverCnh} não encontrado.`,
+        );
 
         continue;
       }
@@ -899,7 +1424,7 @@ class ImportDeliverySpreadsheetUseCase {
 
       // As the driver not found: the deliveries stay, without a route.
       if (crewIssues({ driver: findDriver }).length > 0) {
-        for (const row of group) note(row.line, driverInactive);
+        noteGroup(driverInactive);
 
         continue;
       }
@@ -918,22 +1443,16 @@ class ImportDeliverySpreadsheetUseCase {
           : [];
 
         if (!findVehicle) {
-          for (const row of group) {
-            note(
-              row.line,
-              `Rota criada sem veículo: placa ${route.vehiclePlate} não encontrada.`,
-            );
-          }
+          noteGroup(
+            `Rota criada sem veículo: placa ${route.vehiclePlate} não encontrada.`,
+          );
         } else if (unavailable?.code === "ROUTE_VEHICLE_UNAVAILABLE") {
           // As the plate not found: the route is built without the truck,
           // for the dispatcher to give it another one before the release.
-          for (const row of group) {
-            note(
-              row.line,
-              `Rota criada sem veículo: o veículo ${unavailable.plate} está ` +
-                `${OUT_OF_OPERATION_LABELS[unavailable.status]}.`,
-            );
-          }
+          noteGroup(
+            `Rota criada sem veículo: o veículo ${unavailable.plate} está ` +
+              `${OUT_OF_OPERATION_LABELS[unavailable.status]}.`,
+          );
         } else {
           vehicleId = findVehicle.id!;
         }
@@ -1003,6 +1522,10 @@ class ImportDeliverySpreadsheetUseCase {
             );
           }
 
+          // The durable job's cursor, with the route: both commit or
+          // neither, so a resume never builds this group again.
+          await resume?.save(groupKey, builtGroupOf(built, groupNotes), tx);
+
           return built;
         });
 
@@ -1017,25 +1540,24 @@ class ImportDeliverySpreadsheetUseCase {
           createdRoute = await build();
         }
 
-        created.push({
-          id: createdRoute.id,
-          code: createdRoute.code,
-          name: createdRoute.name,
-          stops: createdRoute.stops.length,
-        });
+        const builtGroup = builtGroupOf(createdRoute, groupNotes);
+
+        resume?.committed(groupKey, builtGroup);
+        created.push(builtGroup.route);
       } catch (error) {
+        // The durable job stopping or losing its lease is not this route's
+        // failure: nothing of it committed, and the job ends here.
+        if (isJobControlError(error)) throw error;
+
         // Deactivated between the check and the write: said as such.
         const inactive =
           error instanceof AppError && error.code === "ROUTE_DRIVER_INACTIVE";
 
-        for (const row of group) {
-          note(
-            row.line,
-            inactive
-              ? driverInactive
-              : "Entrega importada, mas a rota não pôde ser criada.",
-          );
-        }
+        noteGroup(
+          inactive
+            ? driverInactive
+            : "Entrega importada, mas a rota não pôde ser criada.",
+        );
       }
     }
 
