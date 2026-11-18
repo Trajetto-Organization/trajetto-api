@@ -25,6 +25,7 @@ import { readClusterEpochState } from "./cluster-epoch";
 import { readFeedTxidState } from "./feed-txid";
 import { connectionUsagePercent } from "./metrics-math";
 import { deliveryBacklogSql } from "./metrics-queries";
+import { LIVE_WINDOW_SECONDS } from "./process-heartbeat";
 import {
   readCronJobs,
   legacyRunway,
@@ -407,6 +408,43 @@ async function collectOperationalSnapshot(
     undefined,
   );
 
+  // The live processes (plano-escala F3-34): which queues have a consumer,
+  // which commits run, and whether a process of the other environment
+  // writes here. One row per process, on the updated_at index.
+  const processes = await part(
+    "process_heartbeat",
+    errors,
+    async () => {
+      const rows = await database.$queryRaw<
+        Array<{
+          replica: string;
+          role: string;
+          app_env: string;
+          build_commit: string | null;
+          queues: string[] | null;
+          started_at: Date;
+        }>
+      >`
+        SELECT "replica", "role", "app_env", "build_commit", "queues", "started_at"
+        FROM "process_heartbeat"
+        WHERE "updated_at" > now() - make_interval(secs => ${LIVE_WINDOW_SECONDS})
+      `;
+
+      return {
+        appEnv: env.APP_ENV,
+        live: rows.map((row) => ({
+          replica: row.replica,
+          role: row.role,
+          appEnv: row.app_env,
+          commit: row.build_commit,
+          queues: row.queues ?? [],
+          startedAt: new Date(row.started_at),
+        })),
+      };
+    },
+    undefined,
+  );
+
   const redisOk = await pingRedis();
 
   // The proof signing certificate (design §7.4): read from the process's own
@@ -513,6 +551,7 @@ async function collectOperationalSnapshot(
     ...(clusterEpoch && { clusterEpoch }),
     ...(sockets && { sockets }),
     ...(memoryBudgets && { memoryBudgets }),
+    ...(processes && { processes }),
     ...(feedEpochConversions !== undefined && { feedEpochConversions }),
     collectionErrors: errors,
   };

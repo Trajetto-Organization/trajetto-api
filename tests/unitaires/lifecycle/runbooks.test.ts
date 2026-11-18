@@ -128,6 +128,37 @@ function everyRuleBroken(): OperationalSnapshot[] {
       sockets: [{ replica: "api-1", connections: 4_500, cap: 5_000 }],
       // A replica whose heaps pass its container's ceiling (U-15).
       memoryBudgets: [{ replica: "api-1", totalMb: 1_174, limitMb: 1_024 }],
+      // The fleet (F3-34): the due outbox above with no consumer, two
+      // commits for two days, and a process of the other environment.
+      processes: {
+        appEnv: "production",
+        live: [
+          {
+            replica: "api-1",
+            role: "api",
+            appEnv: "production",
+            commit: "new",
+            queues: [],
+            startedAt: new Date(NOW.getTime() - HOUR),
+          },
+          {
+            replica: "api-2",
+            role: "api",
+            appEnv: "production",
+            commit: "old",
+            queues: [],
+            startedAt: old,
+          },
+          {
+            replica: "stg-worker-1",
+            role: "worker",
+            appEnv: "staging",
+            commit: "new",
+            queues: [],
+            startedAt: old,
+          },
+        ],
+      },
       redisOk: false,
       proofSigning: { state: "EXPIRED", reason: null, notAfter: old },
       collectionErrors: ["worker_heartbeat: relation does not exist"],

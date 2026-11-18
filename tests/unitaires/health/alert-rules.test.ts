@@ -895,3 +895,193 @@ describe("the thresholds the environment sets", () => {
     expect(DEFAULT_ALERT_THRESHOLDS.pgWalBytes).toBe(12 * 1024 ** 3);
   });
 });
+
+/**
+ * plano-escala F3-34: the fleet of process_heartbeat. With the queues in a
+ * worker and the requests in the api, a worker that is down left due rows
+ * with nobody to take them, and the lag rules spoke only after 5 to 30
+ * minutes, without saying why; a role left on the old build ran beside the
+ * new one in silence; and a process of the other environment pointed at
+ * this database (the dokploy-network is shared) took its rows with the
+ * wrong settings.
+ */
+describe("the processes of process_heartbeat", () => {
+  const MIN = 60_000;
+  const ALL_QUEUES = [
+    "outbox",
+    "internal",
+    "external",
+    "webhooks",
+    "ai",
+    "jobs",
+  ];
+
+  const process_ = (
+    replica: string,
+    extra: Partial<
+      NonNullable<OperationalSnapshot["processes"]>["live"][number]
+    > = {},
+  ) => ({
+    replica,
+    role: "api",
+    appEnv: "production",
+    commit: "abc1234",
+    queues: [] as string[],
+    startedAt: new Date(NOW.getTime() - 2 * HOUR),
+    ...extra,
+  });
+
+  const fleet = (
+    ...live: NonNullable<OperationalSnapshot["processes"]>["live"]
+  ): OperationalSnapshot["processes"] => ({ appEnv: "production", live });
+
+  const codes = (snapshot: OperationalSnapshot) =>
+    collectAlerts(snapshot).map((alert) => alert.code);
+
+  it("pages for a queue with a row due past two minutes and no live consumer", () => {
+    const alerts = collectAlerts({
+      ...healthy(),
+      outboxEligibleLagSec: 130,
+      // The api in PROCESS_ROLE=api, and no worker.
+      processes: fleet(process_("api-1"), process_("api-2")),
+    }).filter((alert) => alert.code === "queue-no-consumer");
+
+    expect(alerts).toHaveLength(1);
+    expect(alerts[0].message).toContain("fila outbox");
+    expect(alerts[0].message).toContain("item devido há 130s");
+  });
+
+  it("says nothing while the queue has a consumer, or the row is fresh", () => {
+    expect(
+      codes({
+        ...healthy(),
+        outboxEligibleLagSec: 130,
+        processes: fleet(
+          process_("api-1"),
+          process_("worker-1", { role: "worker", queues: ALL_QUEUES }),
+        ),
+      }),
+    ).not.toContain("queue-no-consumer");
+
+    expect(
+      codes({
+        ...healthy(),
+        outboxEligibleLagSec: 119,
+        processes: fleet(process_("api-1")),
+      }),
+    ).not.toContain("queue-no-consumer");
+  });
+
+  it("names each queue left without a consumer, the lanes apart", () => {
+    const alerts = collectAlerts({
+      ...healthy(),
+      deliveryEligibleLagSec: { internal: 1, external: 600 },
+      webhookDueLagSec: 300,
+      processes: fleet(
+        process_("worker-1", {
+          role: "worker",
+          queues: ["outbox", "internal", "ai", "jobs"],
+        }),
+      ),
+    }).filter((alert) => alert.code === "queue-no-consumer");
+
+    expect(alerts.map((alert) => alert.message)).toEqual([
+      expect.stringContaining("fila external"),
+      expect.stringContaining("fila webhooks"),
+    ]);
+  });
+
+  it("does not count a process of the other environment as a consumer", () => {
+    expect(
+      codes({
+        ...healthy(),
+        outboxEligibleLagSec: 300,
+        processes: fleet(
+          process_("staging-worker", {
+            role: "worker",
+            appEnv: "staging",
+            queues: ALL_QUEUES,
+          }),
+        ),
+      }),
+    ).toEqual(
+      expect.arrayContaining(["queue-no-consumer", "foreign-environment"]),
+    );
+  });
+
+  it("pages for processes on two commits for more than half an hour", () => {
+    const alerts = collectAlerts({
+      ...healthy(),
+      processes: fleet(
+        process_("api-1", { commit: "newcommit00001" }),
+        // The worker left on the old build: started days ago, still there.
+        process_("worker-1", {
+          role: "worker",
+          commit: "oldcommit00001",
+          queues: ALL_QUEUES,
+          startedAt: new Date(NOW.getTime() - 48 * HOUR),
+        }),
+        process_("api-2", {
+          commit: "newcommit00001",
+          startedAt: new Date(NOW.getTime() - 31 * MIN),
+        }),
+      ),
+    }).filter((alert) => alert.code === "mixed-versions");
+
+    expect(alerts).toHaveLength(1);
+    expect(alerts[0].message).toContain("2 commits diferentes");
+    expect(alerts[0].message).toContain("oldcommit000 (1: worker)");
+    expect(alerts[0].message).toContain("newcommit000 (2: api)");
+  });
+
+  it("gives a rolling deploy its half hour, counted from when the new commit arrived", () => {
+    expect(
+      codes({
+        ...healthy(),
+        processes: fleet(
+          process_("api-1", {
+            commit: "new",
+            startedAt: new Date(NOW.getTime() - 29 * MIN),
+          }),
+          process_("worker-1", {
+            role: "worker",
+            commit: "old",
+            queues: ALL_QUEUES,
+            startedAt: new Date(NOW.getTime() - 48 * HOUR),
+          }),
+        ),
+      }),
+    ).not.toContain("mixed-versions");
+  });
+
+  it("pages for a row of another APP_ENV, naming the process", () => {
+    const alerts = collectAlerts({
+      ...healthy(),
+      processes: fleet(
+        process_("api-1", { role: "all", queues: ALL_QUEUES }),
+        process_("stg-worker-1", { role: "worker", appEnv: "staging" }),
+      ),
+    }).filter((alert) => alert.code === "foreign-environment");
+
+    expect(alerts).toHaveLength(1);
+    expect(alerts[0].message).toContain(
+      "1 processo(s) de APP_ENV=staging gravando no banco deste ambiente (production): worker em stg-worker-1",
+    );
+  });
+
+  it("judges nothing without the rows, and nothing in today's single fleet", () => {
+    expect(codes({ ...healthy(), outboxEligibleLagSec: 200 })).not.toContain(
+      "queue-no-consumer",
+    );
+
+    expect(
+      evaluateAlerts({
+        ...healthy(),
+        processes: fleet(
+          process_("api-1", { role: "all", queues: ALL_QUEUES }),
+          process_("api-2", { role: "all", queues: ALL_QUEUES }),
+        ),
+      }),
+    ).toEqual([]);
+  });
+});

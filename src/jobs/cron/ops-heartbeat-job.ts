@@ -37,7 +37,14 @@ import { collectOperationalSnapshot } from "@/shared/health/operational-snapshot
  *    past a billion, a write open past LONG_WRITE_XACT_ALERT_SECONDS,
  *    pg_wal past PG_WAL_ALERT_GIB, Redis evicting keys, or without a
  *    ceiling / with noeviction → /fail too;
+ *  - the fleet of process_heartbeat (plano-escala F3-34): a queue with a
+ *    row due for two minutes and no live consumer in this environment, the
+ *    processes on different commits for half an hour, and a process of
+ *    another APP_ENV writing to this database → /fail. The rows' APP_ENV is
+ *    compared with this process's own (the snapshot carries it);
  *  - the database, the scheduler or every replica gone → no ping at all.
+ *    That includes a split fleet whose only cron process (the worker) is
+ *    down: the api runs no cron, so the silence is what pages.
  *
  * The cluster readings (the database's numbers, Redis, the eviction
  * baseline) are read once, before the ping, because the rules judge them.

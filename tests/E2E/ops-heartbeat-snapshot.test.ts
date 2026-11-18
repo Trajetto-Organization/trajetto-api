@@ -298,3 +298,99 @@ describe("the memory budget of each replica", () => {
     expect(paged.some((alert) => alert.message.includes(FIXED))).toBe(false);
   });
 });
+
+/**
+ * plano-escala F3-34: the fleet of process_heartbeat, as the heartbeat
+ * reads it. With the api in PROCESS_ROLE=api and no worker, a due outbox
+ * event pages as a queue with no consumer; a row of another APP_ENV (a
+ * process of the other environment pointed at this database) pages too;
+ * a row out of the live window counts for nothing.
+ */
+describe("the processes of process_heartbeat", () => {
+  const TAG = randomUUID().slice(0, 8);
+  const API = `wfl-fleet-api-${TAG}`;
+  const FOREIGN = `wfl-fleet-foreign-${TAG}`;
+  const GONE = `wfl-fleet-gone-${TAG}`;
+
+  afterAll(async () => {
+    await prisma.processHeartbeat.deleteMany({
+      where: { replica: { in: [API, FOREIGN, GONE] } },
+    });
+  });
+
+  it("pages for the due outbox with no consumer, and for the other environment's process", async () => {
+    const { env } = await import("@/env");
+    const other = env.APP_ENV === "production" ? "staging" : "production";
+    const row = (replica: string, extra: Record<string, unknown>) => ({
+      replica,
+      role: "api",
+      app_env: env.APP_ENV,
+      build_commit: "e2e-fleet",
+      config_fingerprint: null,
+      node_hostname: null,
+      queues: [] as string[],
+      cron: false,
+      sockets: true,
+      started_at: new Date(),
+      ...extra,
+    });
+
+    await prisma.processHeartbeat.createMany({
+      data: [
+        row(API, {}),
+        row(FOREIGN, {
+          role: "worker",
+          app_env: other,
+          queues: ["outbox", "internal"],
+        }),
+        // A worker that stopped beating minutes ago: not a consumer.
+        row(GONE, {
+          role: "worker",
+          queues: ["outbox", "internal", "external", "webhooks", "ai"],
+          updated_at: new Date(Date.now() - 5 * 60_000),
+        }),
+      ],
+    });
+
+    // Due three minutes ago and never taken.
+    await prisma.domainOutboxEvent.create({
+      data: {
+        eventKey: `ops-heartbeat-fleet:${randomUUID()}`,
+        topic: "account-payable.created",
+        aggregateType: "account-payable",
+        aggregateId: randomUUID(),
+        businessId: BUSINESS,
+        payload: {},
+        status: "PENDING",
+        availableAt: new Date(Date.now() - 3 * 60_000),
+      },
+    });
+
+    const { collectOperationalSnapshot } =
+      await import("@/shared/health/operational-snapshot");
+    const { collectAlerts, DEFAULT_ALERT_THRESHOLDS } =
+      await import("@/shared/health/alert-rules");
+
+    const snapshot = await collectOperationalSnapshot();
+
+    expect(snapshot.collectionErrors).toEqual([]);
+    expect(snapshot.processes?.appEnv).toBe(env.APP_ENV);
+    expect(
+      snapshot.processes?.live.map((process) => process.replica).sort(),
+    ).toEqual([API, FOREIGN].sort());
+
+    const alerts = collectAlerts(snapshot, DEFAULT_ALERT_THRESHOLDS, {
+      pitrExpected: false,
+    });
+    const messages = (code: string) =>
+      alerts.filter((alert) => alert.code === code).map((a) => a.message);
+
+    expect(messages("queue-no-consumer").join(" ")).toContain("fila outbox");
+    expect(messages("foreign-environment")).toEqual([
+      expect.stringContaining(`APP_ENV=${other}`),
+    ]);
+    expect(messages("foreign-environment")[0]).toContain(
+      `worker em ${FOREIGN}`,
+    );
+  });
+});

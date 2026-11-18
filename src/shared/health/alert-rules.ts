@@ -1,3 +1,4 @@
+import type { WorkerQueue } from "@/shared/lifecycle/process-role";
 import { isCredentialFailure } from "@/shared/notifications/delivery-diagnostics";
 
 import {
@@ -162,8 +163,32 @@ interface OperationalSnapshot {
    */
   feedEpochConversions?: number;
 
+  /**
+   * The live processes of process_heartbeat (plano-escala F3-34): which
+   * queues have a consumer, which commits run, and whether a process of
+   * another environment writes to this database. Absent when the rows could
+   * not be read (or by a collector that does not read them), which judges
+   * nothing of it.
+   */
+  processes?: ProcessFleetState;
+
   /** Parts of the snapshot that could not be read; each one is a reason. */
   collectionErrors: string[];
+}
+
+interface ProcessFleetState {
+  /** The APP_ENV of the process that collected: whose rows these should be. */
+  appEnv: string;
+
+  /** Every row beating within the live window (90 s). */
+  live: Array<{
+    replica: string;
+    role: string;
+    appEnv: string;
+    commit: string | null;
+    queues: string[];
+    startedAt: Date;
+  }>;
 }
 
 interface MemoryBudgetState {
@@ -291,6 +316,21 @@ const DEFAULT_ALERT_THRESHOLDS = {
    * the handshakes start being refused with the wait.
    */
   socketCapUsagePercent: 80,
+
+  /**
+   * A queue with a due row and no live consumer (F3-34): the worker of a
+   * split fleet is down or was never created, and the api only enqueues.
+   * Two minutes is past every sweep (2 s on a worker, 30 s on `all`) and a
+   * restart, and before the 5 minutes of the lag rules.
+   */
+  queueNoConsumerSec: 2 * 60,
+
+  /**
+   * Live processes on different commits (F3-34): a deploy rolls every
+   * role within minutes; half an hour is a role whose deploy failed or
+   * whose Application was left out, running the old build beside the new.
+   */
+  mixedVersionsSec: 30 * 60,
 
   /** The A1 certificate is renewed by hand: a month to buy and install it. */
   proofSigningWarningDays: 30,
@@ -470,6 +510,9 @@ const ALERT_KINDS = [
   "connection-usage-high",
   "socket-cap-high",
   "memory-budget",
+  "queue-no-consumer",
+  "mixed-versions",
+  "foreign-environment",
   "redis-down",
   "pitr-archive-off",
   "wal-archive-stalled",
@@ -760,6 +803,131 @@ function volumeAlerts(
   return alerts;
 }
 
+/** How many replica names a message carries. */
+const REPLICAS_SHOWN = 3;
+
+function replicaList(replicas: string[]): string {
+  const shown = replicas.slice(0, REPLICAS_SHOWN).join(", ");
+
+  return replicas.length > REPLICAS_SHOWN
+    ? `${shown} e mais ${replicas.length - REPLICAS_SHOWN}`
+    : shown;
+}
+
+/** The queues whose due rows the snapshot measures, with their lag. */
+function measuredQueues(
+  snapshot: OperationalSnapshot,
+): Array<[WorkerQueue, string, number | null]> {
+  return [
+    ["outbox", "Outbox (expansão de eventos)", snapshot.outboxEligibleLagSec],
+    [
+      "internal",
+      "Entregas internas (in-app, push, atividade)",
+      snapshot.deliveryEligibleLagSec.internal,
+    ],
+    [
+      "external",
+      "Entregas externas (e-mail, WhatsApp)",
+      snapshot.deliveryEligibleLagSec.external,
+    ],
+    ["webhooks", "Webhooks de integração", snapshot.webhookDueLagSec],
+    ["ai", "Análises de IA", snapshot.aiEligibleLagSec],
+  ];
+}
+
+/**
+ * The fleet's rules (plano-escala F3-34), from process_heartbeat:
+ *
+ *  - a queue with a row due for more than two minutes and no live process
+ *    of this environment claiming it: with the api in PROCESS_ROLE=api and
+ *    the worker down, nothing would page until the lag rules' 5 to 30
+ *    minutes, and then without saying why;
+ *  - processes of this environment on different commits for more than half
+ *    an hour, counted from the moment the newest of the commits appeared
+ *    (the oldest start of each one): a role left on the old build. A
+ *    restart only makes the count shorter, never a false page;
+ *  - a row of another APP_ENV: a staging process pointed at production's
+ *    database (or the other way round), claiming its rows with the wrong
+ *    environment's settings. The dokploy-network is shared by both.
+ */
+function processAlerts(
+  snapshot: OperationalSnapshot,
+  fleet: ProcessFleetState,
+  thresholds: AlertThresholds,
+): Alert[] {
+  const alerts: Alert[] = [];
+  const own = fleet.live.filter((process) => process.appEnv === fleet.appEnv);
+
+  for (const [queue, what, lag] of measuredQueues(snapshot)) {
+    if (lag === null || lag <= thresholds.queueNoConsumerSec) continue;
+    if (own.some((process) => process.queues.includes(queue))) continue;
+
+    alerts.push({
+      code: "queue-no-consumer",
+      message: `${what}: item devido há ${seconds(lag)} e nenhum processo vivo deste ambiente consome a fila ${queue} — o worker caiu ou não existe, ou o PROCESS_ROLE e o WORKER_QUEUES das Applications deixaram a fila sem dono`,
+    });
+  }
+
+  const commits = new Map<
+    string,
+    { count: number; since: number; roles: Set<string> }
+  >();
+
+  for (const process of own) {
+    const key = process.commit ?? "sem commit";
+    const entry = commits.get(key) ?? {
+      count: 0,
+      since: process.startedAt.getTime(),
+      roles: new Set<string>(),
+    };
+
+    entry.count += 1;
+    entry.since = Math.min(entry.since, process.startedAt.getTime());
+    entry.roles.add(process.role);
+    commits.set(key, entry);
+  }
+
+  if (commits.size > 1) {
+    const mixedSince = Math.max(
+      ...[...commits.values()].map((entry) => entry.since),
+    );
+    const age = (snapshot.now.getTime() - mixedSince) / 1000;
+
+    if (age > thresholds.mixedVersionsSec) {
+      const list = [...commits.entries()]
+        .map(
+          ([commit, entry]) =>
+            `${commit.slice(0, 12)} (${entry.count}: ${[...entry.roles].sort().join(", ")})`,
+        )
+        .join("; ");
+
+      alerts.push({
+        code: "mixed-versions",
+        message: `Processos deste ambiente em ${commits.size} commits diferentes há mais de ${Math.round(thresholds.mixedVersionsSec / 60)} min: ${list} — um papel ficou no build anterior (deploy dele falhou, ou a Application ficou de fora do deploy)`,
+      });
+    }
+  }
+
+  const foreign = new Map<string, Array<{ role: string; replica: string }>>();
+
+  for (const process of fleet.live) {
+    if (process.appEnv === fleet.appEnv) continue;
+
+    const list = foreign.get(process.appEnv) ?? [];
+    list.push({ role: process.role, replica: process.replica });
+    foreign.set(process.appEnv, list);
+  }
+
+  for (const [appEnv, processes] of foreign) {
+    alerts.push({
+      code: "foreign-environment",
+      message: `${processes.length} processo(s) de APP_ENV=${appEnv} gravando no banco deste ambiente (${fleet.appEnv}): ${replicaList(processes.map((process) => `${process.role} em ${process.replica}`))} — uma Application do outro ambiente está com a DATABASE_URL deste; ele consome as filas daqui com a configuração de lá`,
+    });
+  }
+
+  return alerts;
+}
+
 /** The cron rules: a dead run, partials that never end, no success. */
 function cronAlerts(
   snapshot: OperationalSnapshot,
@@ -950,6 +1118,10 @@ function collectAlerts(
     });
   }
 
+  if (snapshot.processes) {
+    alerts.push(...processAlerts(snapshot, snapshot.processes, thresholds));
+  }
+
   if (!snapshot.redisOk) {
     alerts.push({
       code: "redis-down",
@@ -1064,6 +1236,7 @@ export type {
   OperationalSnapshot,
   PartitionAlertState,
   MemoryBudgetState,
+  ProcessFleetState,
   SocketUsageState,
   VolumeState,
 };
