@@ -39,6 +39,11 @@ const INDEXES: Record<string, string> = {
   // Queue claims: a range on the key under a partial predicate.
   ai_analysis_request_claim_idx: `CREATE INDEX ai_analysis_request_claim_idx ON public.ai_analysis_request USING btree (created_at) WHERE (status = ANY (ARRAY['PENDING'::"AIAnalysisRequestStatus", 'PROCESSING'::"AIAnalysisRequestStatus"]))`,
   ai_analysis_request_fair_claim_idx: `CREATE INDEX ai_analysis_request_fair_claim_idx ON public.ai_analysis_request USING btree ("businessId", created_at) WHERE (status = ANY (ARRAY['PENDING'::"AIAnalysisRequestStatus", 'PROCESSING'::"AIAnalysisRequestStatus"]))`,
+  // The AI queue company by company, the receipt first (plano-escala
+  // F3-12): one fair index per class, and the due range of the fill.
+  ai_analysis_request_proof_fair_idx: `CREATE INDEX ai_analysis_request_proof_fair_idx ON public.ai_analysis_request USING btree ("businessId", "availableAt") WHERE ((status = ANY (ARRAY['PENDING'::"AIAnalysisRequestStatus", 'PROCESSING'::"AIAnalysisRequestStatus"])) AND (type = 'DELIVERY_PROOF'::"AIAnalysisType"))`,
+  ai_analysis_request_other_fair_idx: `CREATE INDEX ai_analysis_request_other_fair_idx ON public.ai_analysis_request USING btree ("businessId", "availableAt") WHERE ((status = ANY (ARRAY['PENDING'::"AIAnalysisRequestStatus", 'PROCESSING'::"AIAnalysisRequestStatus"])) AND (type <> 'DELIVERY_PROOF'::"AIAnalysisType"))`,
+  ai_analysis_request_due_idx: `CREATE INDEX ai_analysis_request_due_idx ON public.ai_analysis_request USING btree ("availableAt") WHERE (status = ANY (ARRAY['PENDING'::"AIAnalysisRequestStatus", 'PROCESSING'::"AIAnalysisRequestStatus"]))`,
   domain_outbox_event_claim_idx: `CREATE INDEX domain_outbox_event_claim_idx ON ONLY public.domain_outbox_event USING btree (created_at) WHERE (status = ANY (ARRAY['PENDING'::"OutboxEventStatus", 'PROCESSING'::"OutboxEventStatus"]))`,
   // The outbox by due time and by company (plano-escala F3-11); the claim
   // index above, by created_at, is the image of before's until wave 20.

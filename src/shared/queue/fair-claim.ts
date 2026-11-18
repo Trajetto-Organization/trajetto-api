@@ -36,6 +36,13 @@ import { Prisma } from "@prisma/client";
  * Every RETURNING row carries `fairCursor`: the last company the walk
  * visited, where the next claim of this process starts. A claim that
  * returns nothing leaves the cursor where it was.
+ *
+ * A queue whose rows are not all equally urgent names `classes` (the AI
+ * queue: the receipt before the refuelling and the checklist, F3-12): a
+ * company's share is read class by class, each through a partial fair
+ * index of its own, and a class is probed only while the ones before it
+ * came back short, so the urgent class costs the same two probes and the
+ * others one more only when it ran out.
  */
 
 /** A queue the fair claim can walk: constants of the code, never input. */
@@ -57,6 +64,16 @@ interface FairQueue {
 
   /** The rows a claim may take, on `alias` (or unqualified). */
   due: (alias: string | null) => Prisma.Sql;
+
+  /**
+   * A company's rows in order of priority (plano-escala F3-12), each a
+   * predicate on `alias` (or unqualified) with a fair index of its own:
+   * the walk reads a company's due rows of the first class, and those of
+   * the next only while the classes before it came back short of
+   * rowsPerTenant. Absent, one class: every row of the company, by due
+   * time.
+   */
+  classes?: ReadonlyArray<(alias: string | null) => Prisma.Sql>;
 
   /** What the claim writes. */
   set: Prisma.Sql;
@@ -135,24 +152,51 @@ function fairClaimSql(queue: FairQueue, input: FairClaimInput): Prisma.Sql {
       )`;
 
   /**
-   * One probe: the ids of up to rowsPerTenant due rows of `company`, oldest
-   * first. Carried by the walk, so a company is read once.
+   * One probe per class: the ids of up to rowsPerTenant due rows of the
+   * company `which` selects, oldest first, the first class's before the
+   * next's (see `classes`). Carried by the walk, so a company is read once.
    */
-  //
+  const classes: ReadonlyArray<((alias: string | null) => Prisma.Sql) | null> =
+    queue.classes && queue.classes.length > 0 ? queue.classes : [null];
+
+  const probe = (which: Prisma.Sql, index: number) => {
+    const only = classes[index];
+    const ofClass = only ? Prisma.sql` AND ${only(null)}` : Prisma.empty;
+
+    return Prisma.sql`ARRAY(
+        SELECT "id" FROM ${table}
+        WHERE ${indexed}
+          AND ${which}${ofClass}
+          AND ${due}${floor}
+        ORDER BY ${tenant}, ${dueAt}
+        LIMIT ${perTenant}
+      )`;
+  };
+
+  // A class after the first is read only while the ones before it came
+  // back short, and what they found keeps its place at the front.
+  const dueIdsWhere = (which: Prisma.Sql): Prisma.Sql =>
+    classes.slice(1).reduce(
+      (before, _, offset) => Prisma.sql`(
+        SELECT CASE
+          WHEN cardinality("p"."ids") >= ${perTenant} THEN "p"."ids"
+          ELSE ("p"."ids" || ${probe(which, offset + 1)})[1:${perTenant}]
+        END
+        FROM (SELECT ${before} AS "ids" OFFSET 0) AS "p"
+      )`,
+      probe(which, 0),
+    );
+
   // The company as a range of one value, ordered by (company, due time), on
   // purpose: with `= company` the planner drops the company from the order
   // and may read the queue's due-time index instead, filtering by company.
   // It does so when the statistics see few companies (a young table, one
   // carrier alone) — and then a small company behind a flood is found
   // after the whole flood. Only the fair index gives this order.
-  const dueIdsOf = (company: Prisma.Sql) => Prisma.sql`ARRAY(
-        SELECT "id" FROM ${table}
-        WHERE ${indexed}
-          AND ${tenant} >= ${company} AND ${tenant} <= ${company}
-          AND ${due}${floor}
-        ORDER BY ${tenant}, ${dueAt}
-        LIMIT ${perTenant}
-      )`;
+  const dueIdsOf = (company: Prisma.Sql) =>
+    dueIdsWhere(
+      Prisma.sql`${tenant} >= ${company} AND ${tenant} <= ${company}`,
+    );
 
   /**
    * The step of a walk: the company after `previous`, and its due ids, read
@@ -188,12 +232,7 @@ function fairClaimSql(queue: FairQueue, input: FairClaimInput): Prisma.Sql {
     "nulls" ("ids") AS (
       SELECT CASE
         WHEN "after_end"."found" < ${limit} AND "after_end"."n" < ${maxTenants}
-        THEN ARRAY(
-          SELECT "id" FROM ${table}
-          WHERE ${indexed} AND ${tenant} IS NULL AND ${due}${floor}
-          ORDER BY ${tenant}, ${dueAt}
-          LIMIT ${perTenant}
-        )
+        THEN ${dueIdsWhere(Prisma.sql`${tenant} IS NULL`)}
         ELSE ARRAY[]::text[]
       END
       FROM "after_end"

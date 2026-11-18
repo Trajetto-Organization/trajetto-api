@@ -251,6 +251,21 @@ eventos de uma transportadora deixa de segurar o sino das outras. O
 imagem anterior ainda lê no rolling e num rollback, sai na contração da
 onda 20.
 
+**IA por empresa, o canhoto primeiro (F3-12).** O claim da IA já tirava a
+primeira leitura de cada empresa antes da segunda de qualquer uma, mas por
+uma janela (`row_number()` por empresa) sobre todo o backlog vencido: uma
+enchente de canhotos de uma transportadora era lida por cada claim. Com
+`QUEUE_FAIR_CLAIM_ENABLED`, a IA anda pelas empresas como as raias e o
+outbox, e dentro de cada empresa lê primeiro os canhotos
+(`ai_analysis_request_proof_fair_idx`) e só depois, se eles não encheram a
+parte da empresa, o abastecimento e o checklist
+(`ai_analysis_request_other_fair_idx`), cada classe por um índice parcial
+próprio (`businessId`, `availableAt`). O canhoto é lido com o motorista
+ainda na porta do cliente, e o veredito é o que o manda refazer a foto;
+um abastecimento lido minutos depois não custa viagem a ninguém. O que a
+volta não encheu, as mais velhas vencidas enchem
+(`ai_analysis_request_due_idx`). Desligado, o claim é a janela de antes.
+
 - **DLQ:** o status `FAILED`.
   - `GET /health/dead-letter` com `POST /health/dead-letter/replay` cobre
     as entregas.

@@ -1259,9 +1259,10 @@ const envSchema = z
       )
       .transform((value) => value === "true"),
 
-    // The fair claim by company (plano-escala F3-10 and F3-11; shared/queue/
-    // fair-claim.ts): the delivery lanes and the outbox take their rows
-    // company by company from a rotating cursor, at most
+    // The fair claim by company (plano-escala F3-10, F3-11 and F3-12;
+    // shared/queue/fair-claim.ts): the delivery lanes, the outbox and the
+    // AI queue (each company's receipts before its other kinds) take their
+    // rows company by company from a rotating cursor, at most
     // QUEUE_FAIR_ROWS_PER_TENANT of one company and QUEUE_FAIR_MAX_TENANTS
     // companies visited per claim, the oldest due rows filling what the
     // walk did not. A carrier that fires twenty thousand notices then no

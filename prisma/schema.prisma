@@ -1963,6 +1963,11 @@ model AIAnalysisRequest {
   // burst cannot starve the others) reads the backlog in (businessId,
   // created_at) order from ai_analysis_request_fair_claim_idx — partial on
   // PENDING/PROCESSING, so raw SQL (20260924091500_ai_analysis_request_fair_claim).
+  //
+  // With QUEUE_FAIR_CLAIM_ENABLED the claim walks the companies instead
+  // (plano-escala F3-12), the receipts first: ai_analysis_request_proof_fair_idx
+  // and ai_analysis_request_other_fair_idx, by (businessId, availableAt), and
+  // ai_analysis_request_due_idx for the fill (raw SQL, 20261118180000_ai_fair).
   @@index([status, availableAt])
   @@index([type, recordId])
   // ON DELETE CASCADE from the usage period.

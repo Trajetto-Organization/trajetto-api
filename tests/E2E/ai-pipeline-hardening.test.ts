@@ -18,7 +18,11 @@ import { ProofAuditRepository } from "@/modules/delivery/repositories/proof-audi
 import { ListProofAuditsUseCase } from "@/modules/delivery/usecases/list-proof-audits/list-proof-audits-usecase";
 import { UserRepository } from "@/modules/user/repositories/user-repository";
 import { UpdateVehicleChecklistUseCase } from "@/modules/vehicle-checklist/usecases/update-vehicle-checklist/update-vehicle-checklist-usecase";
-import { AIAnalysisPipelineService } from "@/shared/ai/ai-analysis-pipeline-service";
+import { env } from "@/env";
+import {
+  AIAnalysisPipelineService,
+  aiFairClaimSql,
+} from "@/shared/ai/ai-analysis-pipeline-service";
 import { quotaPeriodFor } from "@/shared/ai/ai-period";
 import { UploadService } from "@/shared/services/upload-service";
 import { refreshChecklistVerdict } from "@/shared/ai/ai-record-store";
@@ -54,6 +58,8 @@ import { createPrismaClient } from "@/shared/database/database-client";
  * - AI-8: the spend limit pauses the queue instead of failing it.
  * - 6.9: the prompts are blind; the driver hears about a receipt that
  *   looks wrong.
+ * - F3-12: with the fair claim, a company's receipt goes before its other
+ *   kinds, and one company's flood does not hold another's refuelling.
  */
 vi.mock("@/websocket", () => ({ sendAIVerificationEvent: vi.fn() }));
 
@@ -1326,4 +1332,119 @@ describe("a provider that refuses service to everybody (AI-8)", () => {
       expect(pipeline.circuit.snapshot().state).toBe("closed");
     },
   );
+});
+
+/**
+ * The AI queue claimed company by company, the receipt first (plano-escala
+ * F3-12). With QUEUE_FAIR_CLAIM_ENABLED the claim walks the companies with
+ * requests and reads each one's due receipts before its other kinds, each
+ * class through a partial fair index of its own. Bare rows here: the claim
+ * is measured, nothing is read (the period is the fleet's, which the claim
+ * never looks at).
+ */
+describe("the fair claim of the AI queue (F3-12)", () => {
+  const A = "018fdca1-0000-7000-8000-00000000000a";
+  const B = "018fdca1-0000-7000-8000-00000000000b";
+  const C = "018fdca1-0000-7000-8000-00000000000c";
+
+  const saved = {
+    enabled: env.QUEUE_FAIR_CLAIM_ENABLED,
+    rows: env.QUEUE_FAIR_ROWS_PER_TENANT,
+  };
+
+  const claim = (limit: number) =>
+    (
+      pipeline as unknown as {
+        claimRequests: (
+          limit: number,
+        ) => Promise<Array<{ id: string; type: string }>>;
+      }
+    ).claimRequests(limit);
+
+  /** A due request of `businessId`, queued `secondsAgo`. */
+  async function bare(
+    businessId: string,
+    type: "FUEL_ODOMETER" | "CHECKLIST" | "DELIVERY_PROOF",
+    secondsAgo: number,
+  ): Promise<string> {
+    const at = new Date(Date.now() - secondsAgo * SECOND);
+
+    const request = await prisma.aIAnalysisRequest.create({
+      data: {
+        idempotencyKey: randomUUID(),
+        type,
+        recordId: randomUUID(),
+        businessId,
+        periodId,
+        requestedById: randomUUID(),
+        input: {},
+        availableAt: at,
+        created_at: at,
+      },
+    });
+
+    return request.id;
+  }
+
+  beforeAll(() => {
+    env.QUEUE_FAIR_CLAIM_ENABLED = true;
+    env.QUEUE_FAIR_ROWS_PER_TENANT = 2;
+  });
+
+  afterAll(() => {
+    env.QUEUE_FAIR_CLAIM_ENABLED = saved.enabled;
+    env.QUEUE_FAIR_ROWS_PER_TENANT = saved.rows;
+  });
+
+  it("takes B's refuelling in the first claim of A's flood of receipts", async () => {
+    for (let n = 0; n < 10; n += 1) await bare(A, "DELIVERY_PROOF", 300 - n);
+
+    // Newer than every one of A's.
+    const fuel = await bare(B, "FUEL_ODOMETER", 10);
+
+    const claimed = await claim(4);
+
+    expect(claimed).toHaveLength(4);
+    expect(claimed.map((row) => row.id)).toContain(fuel);
+  });
+
+  it("reads a company's receipt before its older refuelling and checklist", async () => {
+    const fuel = await bare(C, "FUEL_ODOMETER", 120);
+    await bare(C, "CHECKLIST", 60);
+    const proof = await bare(C, "DELIVERY_PROOF", 5);
+
+    // Red before: the oldest of the company, the refuelling, went first.
+    const [first] = await claim(1);
+
+    expect(first.id).toBe(proof);
+
+    // The receipts spent, the other kinds follow, oldest first.
+    const [next] = await claim(1);
+
+    expect(next.id).toBe(fuel);
+  });
+
+  it("walks the receipts and the other kinds through their own fair indexes", async () => {
+    const sql = aiFairClaimSql({
+      cursor: "",
+      limit: 4,
+      rowsPerTenant: 2,
+      maxTenants: 64,
+    });
+
+    // `.text` carries Postgres placeholders ($1...); `.sql` uses `?`.
+    const [, plan] = await prisma.$transaction([
+      prisma.$executeRawUnsafe("SET LOCAL enable_seqscan = off"),
+      prisma.$queryRawUnsafe<Array<{ "QUERY PLAN": string }>>(
+        `EXPLAIN ${sql.text}`,
+        ...sql.values,
+      ),
+    ]);
+
+    const text = plan.map((line) => line["QUERY PLAN"]).join("\n");
+
+    expect(text).toContain("ai_analysis_request_proof_fair_idx");
+    expect(text).toContain("ai_analysis_request_other_fair_idx");
+    expect(text).toContain("ai_analysis_request_due_idx");
+  });
 });

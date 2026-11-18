@@ -143,6 +143,88 @@ describe("the fair claim's statement", () => {
   });
 });
 
+/** `value` as a literal inside a RegExp. */
+function escape(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+describe("a queue whose rows are not all equally urgent (F3-12)", () => {
+  // The AI queue: a receipt is read while the driver is still at the door,
+  // so a company's share is its receipts first, through a fair index of
+  // their own, and its other kinds only when the receipts ran short.
+  const ai: FairQueue = {
+    table: "ai_analysis_request",
+    tenant: "businessId",
+    dueAt: "availableAt",
+    indexed: (alias) =>
+      Prisma.sql`${columnOf(alias, "status")} IN ('PENDING', 'PROCESSING')`,
+    due: (alias) => Prisma.sql`${columnOf(alias, "availableAt")} <= now()`,
+    classes: [
+      (alias) => Prisma.sql`${columnOf(alias, "type")} = 'DELIVERY_PROOF'`,
+      (alias) => Prisma.sql`${columnOf(alias, "type")} <> 'DELIVERY_PROOF'`,
+    ],
+    set: Prisma.sql`"status" = 'PROCESSING'`,
+    returning: `"id"`,
+  };
+
+  const text = fairClaimSql(ai, {
+    ...input,
+    floor: Prisma.empty,
+    rowFloor: Prisma.empty,
+  }).text.replace(/\s+/g, " ");
+
+  it("reads a company's first class before the next, each by the fair index's order", () => {
+    const company =
+      '"businessId" >= "t"."tenant" AND "businessId" <= "t"."tenant"';
+
+    // The first class is what the company's share starts from…
+    expect(text).toMatch(
+      new RegExp(
+        String.raw`FROM \(SELECT ARRAY\( SELECT "id" FROM "ai_analysis_request" WHERE .*? AND ` +
+          escape(company) +
+          String.raw` AND "type" = 'DELIVERY_PROOF' AND .*? ORDER BY "businessId", "availableAt" LIMIT \$\d+::int \) AS "ids" OFFSET 0\)`,
+      ),
+    );
+
+    // …and the next one is appended after it, never before.
+    expect(text).toMatch(
+      new RegExp(
+        String.raw`ELSE \("p"\."ids" \|\| ARRAY\( SELECT "id" FROM "ai_analysis_request" WHERE .*? AND ` +
+          escape(company) +
+          String.raw` AND "type" <> 'DELIVERY_PROOF' AND .*? ORDER BY "businessId", "availableAt" LIMIT`,
+      ),
+    );
+  });
+
+  it("probes the next class only while the ones before it came back short", () => {
+    expect(text).toMatch(
+      /WHEN cardinality\("p"\."ids"\) >= \$\d+::int THEN "p"\."ids" ELSE \("p"\."ids" \|\| ARRAY\(/,
+    );
+    // What the first class found keeps its place at the front, cut at the
+    // company's share.
+    expect(text).toMatch(/\)\[1:\$\d+::int\] END/);
+  });
+
+  it("reads the rows of no company class by class too", () => {
+    expect(text).toContain(
+      '"businessId" IS NULL AND "type" = \'DELIVERY_PROOF\'',
+    );
+    expect(text).toContain(
+      '"businessId" IS NULL AND "type" <> \'DELIVERY_PROOF\'',
+    );
+  });
+
+  it("is the one-class statement of before without classes", () => {
+    const plain = fairClaimSql(
+      { ...ai, classes: undefined },
+      { ...input, floor: Prisma.empty, rowFloor: Prisma.empty },
+    ).text;
+
+    expect(plain).not.toContain('cardinality("p"');
+    expect(plain).not.toContain("DELIVERY_PROOF");
+  });
+});
+
 describe("the cursor", () => {
   it("moves to the last company the walk visited", () => {
     expect(
