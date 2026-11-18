@@ -58,7 +58,9 @@ de portão seguem o [`TEMPLATE.md`](../../docs/desempenho/TEMPLATE.md).
 #    trajetto-itest-pg costuma ocupá-la e é compartilhado com as suítes: em
 #    vez de pará-lo, exporte LOAD_PG_PORT (ex.: 54331) para o Postgres do
 #    harness. Os scripts que escrevem (seed.ts, mint-*.ts) aceitam só 54321
-#    ou a LOAD_PG_PORT declarada, em localhost (lib/disposable-database.ts).
+#    ou a LOAD_PG_PORT declarada, em localhost (lib/disposable-database.ts),
+#    e o seed.ts recusa também um banco com qualquer empresa que ele não
+#    criou: a porta diz para onde vai a conexão, não o que há do outro lado.
 docker compose --env-file .env -f tests/load/compose.load.yaml up -d --build
 
 # 2. Um conjunto de dados com MUITOS tenants: a cardinalidade de businessId é
@@ -156,7 +158,8 @@ contagens do degrau como configurações `load.<nome>`
 
 ```bash
 # Um degrau, no banco descartável (a guarda de lib/disposable-database.ts
-# continua: 54321 ou a LOAD_PG_PORT, em localhost), já migrado.
+# continua: 54321 ou a LOAD_PG_PORT, em localhost), já migrado e vazio: com
+# qualquer empresa que o seed não criou, ele para antes de escrever.
 LOAD_TIER=100k LOAD_BASE_URL=http://traefik \
   DATABASE_URL="postgresql://trajetto:trajetto-password@localhost:54321/load_test?schema=public" \
   npx tsx tests/load/seed.ts
@@ -176,7 +179,11 @@ LOAD_TIER=100k LOAD_BASE_URL=http://traefik \
    localhost, então o caminho é um túnel para ele numa porta local
    declarada em `LOAD_PG_PORT`, com o banco já migrado
    (`yarn prisma:migrate:deploy` pelo mesmo túnel). Apague o Database no
-   fim.
+   fim. O Database da produção fica no mesmo servidor, e um túnel para ele
+   passa pela guarda da porta; por isso o seed confere, antes de escrever
+   qualquer linha e de novo antes do `05-indexes-off.sql`, que o banco não
+   tem nenhuma empresa além da que ele mesmo acabou de criar, e para com
+   o nome do banco na mensagem.
 
 **Medido** (17/11/2026, nesta máquina: Docker Desktop, 16 vCPUs, Postgres
 16 num contêiner de 2 GiB com a configuração do harness: shared_buffers
@@ -207,7 +214,7 @@ todos só para o banco descartável de teste:
 
 | script                                     | o que faz                                                                                                                                                                                                                                                                                                      |
 | ------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `seed.ts`                                  | o conjunto de dados (empresas, administradores, motoristas); recusa um banco já semeado: recrie o `load_test` antes de semear de novo                                                                                                                                                                          |
+| `seed.ts`                                  | o conjunto de dados (empresas, administradores, motoristas); recusa um banco já semeado ou com qualquer empresa que ele não criou: recrie o `load_test` antes de semear de novo                                                                                                                                |
 | `mint-master.ts`                           | o MASTER e as sessões de vida longa que as specs do `/admin` abrem por cookie (`fixtures/browser-sessions.json`)                                                                                                                                                                                               |
 | `mint-browser-users.ts`                    | contas reais **com senha**, que entram pelo formulário: MASTER, BUSINESS_ADMIN (e um segundo admin da mesma empresa), BUSINESS_USER com perfil completo, BUSINESS_USER só leitura, conta com 2FA, motorista, empresa sem Entregas e empresa sem Frota. Grava só e-mails e ids em `fixtures/browser-users.json` |
 | `mint-two-factor-code.ts <email> <código>` | troca o código de dois fatores pendente por um que a spec conhece (o real vai por e-mail; o desafio, as tentativas e a validade continuam valendo)                                                                                                                                                             |

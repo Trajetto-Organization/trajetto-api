@@ -71,4 +71,82 @@ function assertDisposableDatabase(
   if (refusal) throw new Error(refusal);
 }
 
-export { assertDisposableDatabase, disposableDatabaseRefusal };
+/**
+ * The seed's second check (plano-escala LOAD-02): is the database EMPTY?
+ *
+ * The port says where the connection goes, not what is there. The prod-like
+ * rung reaches its Database through a tunnel on LOAD_PG_PORT, on the same
+ * server as production's, and a tunnel to the wrong one passes the port
+ * check. With LOAD_TIER the seed then drops the secondary indexes of the
+ * hot tables (05-indexes-off.sql) and loads millions of rows with the
+ * foreign keys unchecked (session_replication_role = replica). So the seed
+ * also refuses a database holding any company it did not write itself: a
+ * freshly migrated one has none, production always has some.
+ *
+ * Counted up to a cap: the answer is "any", and the count is only for the
+ * message.
+ */
+const FOREIGN_COMPANIES_CAP = 100;
+
+const SEED_TARGET_SQL = `
+  SELECT
+    current_database() AS "database",
+    (SELECT count(*)::int FROM (
+       SELECT 1 FROM "business"
+       WHERE "id" IS DISTINCT FROM $1::text
+       LIMIT ${FOREIGN_COMPANIES_CAP}
+     ) AS foreign_company) AS "foreignCompanies"
+`;
+
+interface SeedTarget {
+  database: string;
+  /** Companies other than the seed's own, up to FOREIGN_COMPANIES_CAP. */
+  foreignCompanies: number;
+}
+
+/** Null when the seed may write; otherwise why not, in pt-BR. */
+function seedTargetRefusal(target: SeedTarget): string | null {
+  if (target.foreignCompanies === 0) return null;
+
+  const count =
+    target.foreignCompanies >= FOREIGN_COMPANIES_CAP
+      ? `${FOREIGN_COMPANIES_CAP} ou mais empresas`
+      : target.foreignCompanies === 1
+        ? "1 empresa"
+        : `${target.foreignCompanies} empresas`;
+
+  return (
+    `O banco "${target.database}" já tem ${count} que este seed não criou. ` +
+    "O seed só escreve num banco vazio, recém-migrado: com LOAD_TIER ele " +
+    "tira os índices das tabelas grandes e desliga a conferência das chaves " +
+    "estrangeiras. Confira para onde vai o DATABASE_URL (e o túnel da " +
+    "LOAD_PG_PORT) ou recrie o banco."
+  );
+}
+
+/** Runs one query with positional values and returns its rows. */
+type RowsQuery = (sql: string, values: unknown[]) => Promise<unknown[]>;
+
+/**
+ * Throws unless the database the query reaches has no company besides
+ * `ownCompanyId` (the tenant this run already wrote, or none yet).
+ */
+async function assertSeedTargetEmpty(
+  query: RowsQuery,
+  ownCompanyId: string | null = null,
+): Promise<void> {
+  const [target] = (await query(SEED_TARGET_SQL, [ownCompanyId])) as [
+    SeedTarget,
+  ];
+  const refusal = seedTargetRefusal(target);
+
+  if (refusal) throw new Error(refusal);
+}
+
+export {
+  assertDisposableDatabase,
+  assertSeedTargetEmpty,
+  disposableDatabaseRefusal,
+  seedTargetRefusal,
+};
+export type { SeedTarget };

@@ -15,7 +15,10 @@ import {
   businessDateKey,
   dateOnlyFromKey,
 } from "../../src/shared/time/business-day";
-import { assertDisposableDatabase } from "./lib/disposable-database";
+import {
+  assertDisposableDatabase,
+  assertSeedTargetEmpty,
+} from "./lib/disposable-database";
 import {
   loadTierFromEnv,
   seedTierFiles,
@@ -1039,10 +1042,13 @@ async function seedMobileE2E(): Promise<void> {
  * at the end): measured at the 100k rung, the deliveries went from 4,6
  * thousand rows a second to 39 thousand.
  */
-async function seedTier(tier: {
-  name: LoadTierName;
-  counts: LoadTierCounts;
-}): Promise<void> {
+async function seedTier(
+  tier: {
+    name: LoadTierName;
+    counts: LoadTierCounts;
+  },
+  businessId: string,
+): Promise<void> {
   const settings = poolSettingsFrom(process.env.DATABASE_URL as string);
   const client = new pg.Client({
     connectionString: settings.connectionString,
@@ -1084,6 +1090,15 @@ async function seedTier(tier: {
     for (const [name, value] of Object.entries(tierSettings(tier.counts))) {
       await client.query("SELECT set_config($1, $2, false)", [name, value]);
     }
+
+    // Again on this session, right before 05-indexes-off.sql: the only
+    // company may be the tenant main() just wrote (`businessId`). The check
+    // in main() ran on Prisma's pool; this is the connection that drops
+    // the indexes and turns the foreign key checks off.
+    await assertSeedTargetEmpty(
+      (sql, values) => client.query(sql, values).then((result) => result.rows),
+      businessId,
+    );
 
     const files = seedTierFiles();
 
@@ -1159,6 +1174,14 @@ async function main(): Promise<void> {
     );
   }
 
+  // The port check above says where the connection goes, not what is
+  // there: a tunnel on LOAD_PG_PORT to the wrong Database passes it. A
+  // database with any company is not the empty one this seed is for, and
+  // nothing has been written yet (lib/disposable-database.ts).
+  await assertSeedTargetEmpty((sql, values) =>
+    prisma.$queryRawUnsafe(sql, ...values),
+  );
+
   // With a tier, Prisma seeds only the tenant the load points at (its
   // users and tokens need bcrypt and JWT); the population is the tier's SQL.
   const tenants = tier ? 1 : TENANTS;
@@ -1181,7 +1204,7 @@ async function main(): Promise<void> {
 
   if (!primary) throw new Error("O tenant principal não foi semeado.");
 
-  if (tier) await seedTier(tier);
+  if (tier) await seedTier(tier, primary.businessId);
 
   // After the tier: its companies count for the panel sessions too.
   const panelTenants = await seedPanelTenants(
