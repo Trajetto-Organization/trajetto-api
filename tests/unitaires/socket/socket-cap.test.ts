@@ -98,14 +98,16 @@ describe("the ceiling", () => {
     ).toMatchObject({ cap: 5_000, source: "connections", fdTooLow: true });
   });
 
-  it("keeps the descriptors with the setting off, and nothing with both off", () => {
-    expect(
-      effectiveSocketCap({
-        maxConnections: 0,
-        fdLimit: 8_192,
-        fdReserve: 1_024,
-      }),
-    ).toMatchObject({ cap: 7_168, source: "descriptors" });
+  it("is off, descriptors included, with the setting at 0: the rollback", () => {
+    // SOCKET_MAX_CONNECTIONS=0 is the documented rollback of the ceiling.
+    // Keeping the descriptors' part under it, a replica with fd_soft at
+    // 4,096 still refused at 3,072 sockets, and the rollback did nothing.
+    for (const fdLimit of [4_096, 8_192, 524_288]) {
+      expect(
+        effectiveSocketCap({ maxConnections: 0, fdLimit, fdReserve: 1_024 }),
+        String(fdLimit),
+      ).toEqual({ cap: 0, fdLimit, source: "off", fdTooLow: false });
+    }
     expect(
       effectiveSocketCap({ maxConnections: 0, fdLimit: 8_192, fdReserve: 0 }),
     ).toMatchObject({ cap: 0, source: "off" });

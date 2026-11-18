@@ -3779,7 +3779,9 @@ F5-31, `src/shared/socket/socket-cap.ts`):
   _soft_ até o _hard_ ao iniciar, então o arquivo diz o que o processo tem
   de fato). Fora do Linux vale só a variável. Um limite tão baixo que a
   reserva deixaria menos de 1.024 sockets fica de fora do teto, e o boot
-  avisa: virar teto recusaria o tempo real sozinho. `socket_cap` e
+  avisa: virar teto recusaria o tempo real sozinho.
+  `SOCKET_MAX_CONNECTIONS=0` é a reversão e desliga o teto inteiro, o dos
+  descritores junto; `SOCKET_FD_RESERVE=0` tira só os descritores. `socket_cap` e
   `fd_limit` saem na seção `realtime` do `/health/metrics` e do
   `ops_sample`; o alerta `socket-cap-high` dispara com uma réplica em 80% do
   teto dela ([runbook](./runbooks/socket-cap-high.md)).

@@ -22,6 +22,10 @@ import { readFileSync } from "node:fs";
  * would leave fewer than 1,024 sockets is a misconfigured host, and turning
  * it into a ceiling would refuse realtime on its own: the descriptor part is
  * left out and the boot warns instead (`fdTooLow`).
+ *
+ * SOCKET_MAX_CONNECTIONS=0 is the documented rollback and turns the whole
+ * ceiling off, the descriptors' part included; SOCKET_FD_RESERVE=0 leaves
+ * only the descriptors out.
  */
 
 /** Below this, the descriptor part of the ceiling is not applied. */
@@ -76,27 +80,21 @@ function effectiveSocketCap({
   fdLimit: number | null;
   fdReserve: number;
 }): SocketCap {
+  // The rollback, in one variable: no ceiling at all, the descriptors'
+  // part with it. SOCKET_FD_RESERVE=0 is the one that drops only that part.
+  if (maxConnections <= 0) {
+    return { cap: 0, fdLimit, source: "off", fdTooLow: false };
+  }
+
   const fromDescriptors =
     fdReserve > 0 && fdLimit !== null ? fdLimit - fdReserve : null;
 
   const fdTooLow = fromDescriptors !== null && fromDescriptors < FD_CAP_MIN;
   const fdCap = fromDescriptors !== null && !fdTooLow ? fromDescriptors : null;
 
-  if (maxConnections > 0 && fdCap !== null) {
-    return fdCap < maxConnections
-      ? { cap: fdCap, fdLimit, source: "descriptors", fdTooLow }
-      : { cap: maxConnections, fdLimit, source: "connections", fdTooLow };
-  }
-
-  if (maxConnections > 0) {
-    return { cap: maxConnections, fdLimit, source: "connections", fdTooLow };
-  }
-
-  if (fdCap !== null) {
-    return { cap: fdCap, fdLimit, source: "descriptors", fdTooLow };
-  }
-
-  return { cap: 0, fdLimit, source: "off", fdTooLow };
+  return fdCap !== null && fdCap < maxConnections
+    ? { cap: fdCap, fdLimit, source: "descriptors", fdTooLow }
+    : { cap: maxConnections, fdLimit, source: "connections", fdTooLow };
 }
 
 export {

@@ -1335,8 +1335,10 @@ const envSchema = z
     /**
      * Sockets one replica holds (plano-escala U-01): past it, refused the
      * same way. Nothing bounded it, and a replica that took a whole fleet
-     * ran out of file descriptors for Postgres and HTTP too. 0 turns it
-     * off, the rollback. Empty counts as absent.
+     * ran out of file descriptors for Postgres and HTTP too. The ceiling
+     * applied is the smaller of this and the descriptors' (F5-31,
+     * SOCKET_FD_RESERVE). 0 turns the whole ceiling off, the descriptors'
+     * part included: the rollback. Empty counts as absent.
      */
     SOCKET_MAX_CONNECTIONS: z.preprocess(
       (value) => (value === "" ? undefined : value),
