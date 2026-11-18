@@ -54,6 +54,7 @@ PATHS=(
   infra/scripts/release-steps.ts
   infra/scripts/release-step-runner.ts
   src/shared/database
+  src/shared/lifecycle/process-role.ts
 )
 
 case "${1:-}" in
