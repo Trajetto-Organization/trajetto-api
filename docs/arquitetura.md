@@ -4053,14 +4053,26 @@ importação por vez e deixa até três esperando (`429 IMPORT_BUSY` com
 `IN_PROGRESS`. O arquivo é lido numa _worker thread_ só para ele
 (`src/modules/import/services/spreadsheet-worker.ts`, plano de escala
 F3-23b), com teto de heap próprio (`SPREADSHEET_WORKER_MAX_OLD_MB`) e prazo
-(`SPREADSHEET_READ_TIMEOUT_MS`, 60 s): o exceljs carrega a pasta inteira,
-centenas de MB e segundos de CPU numa grande, e na thread principal isso
-parava todas as requisições e sockets da réplica, e uma pasta maior que o
-heap derrubava o processo inteiro. Agora a que passa do teto encerra só a
-thread, e a importação fecha com "a planilha é grande demais para ser lida
-agora; divida em partes ou tente de novo" (`413 SPREADSHEET_TOO_LARGE`); a
-que passa do prazo, com `503 SPREADSHEET_READ_TIMEOUT`. A thread principal só
-copia o arquivo para lá e as linhas de volta, mil por mensagem. No máximo
+(`SPREADSHEET_READ_TIMEOUT_MS`, 60 s): uma pasta grande custa segundos de
+CPU, e na thread principal isso parava todas as requisições e sockets da
+réplica, e uma pasta maior que o heap derrubava o processo inteiro. Agora a
+que passa do teto encerra só a thread, e a importação fecha com "a planilha
+é grande demais para ser lida agora; divida em partes ou tente de novo"
+(`413 SPREADSHEET_TOO_LARGE`); a que passa do prazo, com
+`503 SPREADSHEET_READ_TIMEOUT`. A thread principal só copia o arquivo para
+lá e as linhas de volta, mil por mensagem, à medida que a thread as lê. O
+.xlsx é lido linha a linha (`src/shared/delivery/xlsx-row-reader.ts`), com
+as mesmas classes do exceljs que o `xlsx.load` usa e as mesmas linhas que
+ele dá: o `xlsx.load` monta um objeto por célula de todas as abas antes da
+primeira linha (~350 bytes por célula, 278 MB numa pasta de 20 mil × 40),
+o que não cabia no teto da thread; linha a linha, só as strings
+compartilhadas ficam até o fim, e a maior pasta que o leitor aceita (20 mil
+× 40, ou o teto inflado todo de texto) cabe em 64 MB. Só a primeira aba é
+aberta: uma pasta com outra aba quebrada, que antes falhava inteira, agora
+importa a primeira. Células mescladas, links e linhas fora de ordem, que só
+se conhecem depois das linhas, voltam ao `xlsx.load` inteiro, como antes, e
+ali uma pasta grande ainda pode passar do teto (o aviso do log diz
+`wholeLoad: true`). No máximo
 `SPREADSHEET_READS_PER_PROCESS` threads (1), as outras leituras esperam a
 vez; com `0`, a leitura volta para a thread principal, dentro do heap dela,
 como antes. No SIGTERM, a fila drena desde o primeiro instante

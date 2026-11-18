@@ -2,15 +2,23 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
 import ExcelJS from "exceljs";
+import WorksheetXform from "exceljs/lib/xlsx/xform/sheet/worksheet-xform";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { envSchema } from "@/schemas/env-schema";
-import { readSpreadsheet } from "@/shared/delivery/spreadsheet-reader";
+import {
+  MAX_SPREADSHEET_CELLS,
+  MAX_SPREADSHEET_ROWS,
+  inspectSpreadsheet,
+  readSpreadsheet,
+} from "@/shared/delivery/spreadsheet-reader";
 import { AppError } from "@/shared/errors/AppError";
 import {
   readSpreadsheetOffThread,
   spreadsheetReadsInFlight,
 } from "@/modules/import/services/spreadsheet-worker";
+
+import { generatedXlsx } from "../delivery/support/xlsx-zip";
 
 /**
  * The spreadsheet read off the event loop (plano-escala F3-23b).
@@ -25,6 +33,11 @@ import {
  *  - the rows are the very ones the in-process reader gives, dates and
  *    rich text included, and exceljs never runs on this thread;
  *  - the reader's own refusals keep their sentence and code;
+ *  - the largest workbooks the reader allows — the most cells, the most
+ *    text — read within the smallest ceiling the plan gives a reading
+ *    thread (96 MB, the staging api): before the row-at-a-time read,
+ *    exceljs's whole load needed ~350 bytes a cell and closed them with a
+ *    413 they never got in the main heap;
  *  - a workbook past the thread's heap is an AppError in pt-BR, and the
  *    process is still here to read the next file;
  *  - a read past the timeout is stopped;
@@ -76,11 +89,12 @@ async function workbook(rows: number, columns = 4): Promise<string> {
   return Buffer.from(buffer as ArrayBuffer).toString("base64");
 }
 
-/** The XLSX loader of THIS thread's copy of exceljs. */
+/**
+ * Sheets parsed by THIS thread's copy of exceljs: by its whole load and by
+ * the row-at-a-time reader, which both parse the sheet with WorksheetXform.
+ */
 function mainThreadLoads() {
-  const xlsx = new ExcelJS.Workbook().xlsx;
-
-  return vi.spyOn(Object.getPrototypeOf(xlsx), "load");
+  return vi.spyOn(WorksheetXform.prototype, "parse");
 }
 
 afterEach(() => {
@@ -146,6 +160,64 @@ describe("a read on the worker thread", () => {
     expect(error).toBeInstanceOf(Error);
     expect(error).not.toBeInstanceOf(AppError);
   }, 30_000);
+});
+
+describe("the largest workbooks the reader allows", () => {
+  /** The smallest ceiling the plan gives a reading thread (staging api). */
+  const SMALLEST_CEILING_MB = 96;
+
+  async function readWithin(content: string) {
+    // Legal: the request's own check lets it through.
+    expect(() => inspectSpreadsheet("maior.xlsx", content)).not.toThrow();
+
+    return readSpreadsheetOffThread("maior.xlsx", content, {
+      slots: 1,
+      maxOldMb: SMALLEST_CEILING_MB,
+    });
+  }
+
+  it("reads the most cells, 20 000 lines × 40 columns", async () => {
+    const columns = MAX_SPREADSHEET_CELLS / MAX_SPREADSHEET_ROWS;
+
+    // An ERP export: a few columns of its own per line, the rest numbers and
+    // the values that repeat (city, status) — the only way 800 000 cells fit
+    // in the inflated ceiling.
+    const content = generatedXlsx({
+      rows: MAX_SPREADSHEET_ROWS,
+      columns,
+      value: (row, column) =>
+        column <= 4
+          ? `Cliente ${row}-${column}`
+          : column % 3 === 0
+            ? row * column
+            : `Valor ${(row * column) % 500}`,
+    }).toString("base64");
+
+    const rows = await readWithin(content);
+
+    expect(rows).toHaveLength(MAX_SPREADSHEET_ROWS);
+    expect(rows[MAX_SPREADSHEET_ROWS - 1]).toHaveLength(columns);
+    expect(rows[MAX_SPREADSHEET_ROWS - 1][0]).toBe(
+      `Cliente ${MAX_SPREADSHEET_ROWS}-1`,
+    );
+  }, 120_000);
+
+  it("reads the most text, every cell a long string of its own", async () => {
+    // 26 columns (the template's), each cell 120 characters no other cell
+    // has: the shared strings, all held for the whole read, fill the
+    // inflated ceiling.
+    const content = generatedXlsx({
+      rows: 6_000,
+      columns: 26,
+      value: (row, column) =>
+        `${row}-${column} `.padEnd(120, "Rua das Flores, sala 2, bloco B "),
+    }).toString("base64");
+
+    const rows = await readWithin(content);
+
+    expect(rows).toHaveLength(6_000);
+    expect(String(rows[5_999][25])).toMatch(/^6000-26 Rua das Flores/);
+  }, 120_000);
 });
 
 describe("a workbook too heavy for the thread", () => {

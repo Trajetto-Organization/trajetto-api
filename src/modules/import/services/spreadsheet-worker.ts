@@ -18,16 +18,22 @@ const log = logger.child({ component: "import" });
 /**
  * Reads an uploaded spreadsheet on a worker thread (plano-escala F3-23b).
  *
- * exceljs loads the whole workbook: hundreds of megabytes of heap and
- * seconds of CPU for a big one (a 20k × 50 sheet cost +329 MB and a second
- * of frozen event loop). On the main thread that froze every request and
+ * A big workbook costs seconds of CPU (a 20k × 50 sheet froze the event
+ * loop for a second). On the main thread that froze every request and
  * socket of the replica while it ran, and a workbook heavier than the heap
  * took the whole process down with it — everybody's requests, not only the
  * upload. Here the thread has a heap ceiling of its own
  * (`resourceLimits.maxOldGenerationSizeMb`): a workbook past it ends the
  * thread, the upload gets a sentence that says so, and the replica keeps
  * serving. The main thread only copies the file over and the rows back, a
- * slice at a time.
+ * slice at a time, as the thread reads them.
+ *
+ * The ceiling holds what the reader allows: the .xlsx is read a row at a
+ * time (shared/delivery/xlsx-row-reader.ts), and a 20k × 40 workbook reads
+ * in under 64 MB, below the 96 MB of the staging api. exceljs's whole load,
+ * ~350 bytes a cell, is left for the workbooks with merged cells or
+ * hyperlinks; for those, a big one can still pass a small ceiling, and the
+ * log says it was the whole load.
  *
  * A thread per read, started for the file and gone after it: reads are
  * rare (one import at a time per replica, import-queue.ts), and a fresh
@@ -150,6 +156,7 @@ function readOnThread(
   return new Promise<CellMatrix>((resolve, reject) => {
     const rows: CellMatrix = [];
     let settled = false;
+    let wholeLoad = false;
 
     const worker = new Worker(entry.file, {
       eval: entry.eval,
@@ -179,6 +186,14 @@ function readOnThread(
         return;
       }
 
+      if (message.type === "restart") {
+        // The thread reads the file again with exceljs's whole load.
+        rows.length = 0;
+        wholeLoad = true;
+
+        return;
+      }
+
       if (message.type === "done") {
         settle(() => resolve(rows));
 
@@ -197,7 +212,7 @@ function readOnThread(
     worker.on("error", (error: Error & { code?: string }) => {
       if (error.code === "ERR_WORKER_OUT_OF_MEMORY") {
         log.warn(
-          { filename: request.filename, maxOldMb },
+          { filename: request.filename, maxOldMb, wholeLoad },
           "spreadsheet read ran out of its heap",
         );
 

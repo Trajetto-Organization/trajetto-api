@@ -4486,7 +4486,11 @@ principal (o `--max-old-space-size` do `NODE_OPTIONS`), as threads da
 planilha (`SPREADSHEET_READS_PER_PROCESS` × `SPREADSHEET_WORKER_MAX_OLD_MB`)
 e a reserva nativa (`NATIVE_RESERVE_MB`, 150) e compara com o `memory.max`
 do cgroup, o _Memory_ da Application. Sem `SPREADSHEET_WORKER_MAX_OLD_MB`,
-a thread recebe o que sobra por leitura, entre 256 e 768 MiB. Com
+a thread recebe o que sobra por leitura, entre 256 e 768 MiB. A thread lê o
+.xlsx linha a linha, e a maior planilha que o leitor aceita cabe em 64 MiB:
+os 96 da api de staging e os 256 da produção a leem; só uma pasta com
+células mescladas ou links volta à leitura inteira do exceljs (~350 bytes
+por célula), que precisa de mais. Com
 `MEMORY_BUDGET_MODE=warn` (o padrão deste release), a conta que não fecha
 vira o aviso `memory budget does not fit` no log, `memory_budget_ok: false`
 no `/health/metrics` e o alerta `memory-budget`; com `enforce`, o boot é
