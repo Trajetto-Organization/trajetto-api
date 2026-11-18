@@ -16,10 +16,8 @@ import { NotificationService } from "@/shared/services/notification-service";
 
 import { assertDispatcher } from "@/shared/delivery/dispatcher-guard";
 
-import {
-  inspectSpreadsheet,
-  readSpreadsheet,
-} from "@/shared/delivery/spreadsheet-reader";
+import { inspectSpreadsheet } from "@/shared/delivery/spreadsheet-reader";
+import { readSpreadsheetOffThread } from "../../services/spreadsheet-worker";
 import {
   importQueue as defaultImportQueue,
   type ImportQueue,
@@ -306,13 +304,18 @@ class ImportDeliverySpreadsheetUseCase {
     };
   }
 
-  /** The file as a matrix of cells, or the sentence that says why not. */
+  /**
+   * The file as a matrix of cells, or the sentence that says why not. Read
+   * on a worker thread with a heap ceiling of its own (spreadsheet-worker.ts):
+   * a workbook too heavy for it says so in the report instead of taking the
+   * replica down.
+   */
   private async readMatrix(
     filename: string,
     content: string,
   ): Promise<unknown[][]> {
     try {
-      return await readSpreadsheet(filename, content);
+      return await readSpreadsheetOffThread(filename, content);
     } catch (error) {
       throw this.unreadable(error);
     }

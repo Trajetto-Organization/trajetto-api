@@ -194,7 +194,15 @@ describe("spreadsheet uploads on a replica that shuts down", () => {
 
     const record = await context.start(200, queue);
 
-    await queue.drain({ graceMs: 60, stopGraceMs: 2_000 });
+    // The file is read on a worker thread first (plano-escala F3-23b; a few
+    // hundred milliseconds under tsx): the stop has to land once the rows
+    // are running, not while the file is still being read.
+    await vi.waitFor(
+      () => expect(context.deliveries.deliveries.length).toBeGreaterThan(0),
+      { timeout: 10_000, interval: 1 },
+    );
+
+    await queue.drain({ graceMs: 0, stopGraceMs: 2_000 });
 
     const closed = await context.imports.findImportById(record.id, BUSINESS);
     const created = context.deliveries.deliveries.length;

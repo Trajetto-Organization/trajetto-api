@@ -30,6 +30,11 @@ export default defineConfig({
     // The receipt renderer's worker thread. proof-pdf-renderer.ts loads it
     // from next to server.js (build/proof-pdf-worker.js) by this name.
     "proof-pdf-worker": "./src/shared/services/proof-pdf-worker.ts",
+    // The spreadsheet reader's worker thread (plano-escala F3-23b).
+    // spreadsheet-worker.ts loads it from next to server.js
+    // (build/spreadsheet-read-worker.js) by this name.
+    "spreadsheet-read-worker":
+      "./src/modules/import/services/spreadsheet-read-worker.ts",
   },
   format: ["cjs"],
   target: "es2020",

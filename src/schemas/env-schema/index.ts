@@ -860,6 +860,27 @@ const envSchema = z
     WEBHOOK_CONCURRENCY: queueConcurrency("WEBHOOK_CONCURRENCY"),
     AI_CONCURRENCY: queueConcurrency("AI_CONCURRENCY"),
 
+    // The spreadsheet read off the event loop (plano-escala F3-23b;
+    // modules/import/services/spreadsheet-worker.ts): how many worker
+    // threads may read an upload at once in this process (0 reads on the
+    // main thread, inside the main heap, as before), each thread's heap
+    // ceiling in MB, and how long one read may take. A workbook past the
+    // ceiling ends its thread with a sentence for the operator instead of
+    // taking the process down. The memory budget of the process counts
+    // reads × ceiling (U-15). Empty counts as absent.
+    SPREADSHEET_READS_PER_PROCESS: z.preprocess(
+      (value) => (value === "" ? undefined : value),
+      z.coerce.number().int().min(0).max(4).default(1),
+    ),
+    SPREADSHEET_WORKER_MAX_OLD_MB: z.preprocess(
+      (value) => (value === "" ? undefined : value),
+      z.coerce.number().int().min(64).max(768).optional(),
+    ),
+    SPREADSHEET_READ_TIMEOUT_MS: z.preprocess(
+      (value) => (value === "" ? undefined : value),
+      z.coerce.number().int().min(5_000).max(600_000).default(60_000),
+    ),
+
     // The graceful shutdown (plano-escala F1-14). STOP_GRACE_PERIOD_MS is the
     // Stop Grace Period the Swarm really gives this service, in ms: every
     // deadline of the sequence is derived from it (shared/lifecycle/

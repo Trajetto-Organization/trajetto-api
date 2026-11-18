@@ -3943,7 +3943,20 @@ fila por réplica (`src/modules/import/services/import-queue.ts`) que roda uma
 importação por vez e deixa até três esperando (`429 IMPORT_BUSY` com
 `retry-after` além disso). O cliente acompanha por
 `GET /import/get-import/:importId/business/:businessId` até `status` sair de
-`IN_PROGRESS`. No SIGTERM, a fila drena desde o primeiro instante
+`IN_PROGRESS`. O arquivo é lido numa _worker thread_ só para ele
+(`src/modules/import/services/spreadsheet-worker.ts`, plano de escala
+F3-23b), com teto de heap próprio (`SPREADSHEET_WORKER_MAX_OLD_MB`) e prazo
+(`SPREADSHEET_READ_TIMEOUT_MS`, 60 s): o exceljs carrega a pasta inteira,
+centenas de MB e segundos de CPU numa grande, e na thread principal isso
+parava todas as requisições e sockets da réplica, e uma pasta maior que o
+heap derrubava o processo inteiro. Agora a que passa do teto encerra só a
+thread, e a importação fecha com "a planilha é grande demais para ser lida
+agora; divida em partes ou tente de novo" (`413 SPREADSHEET_TOO_LARGE`); a
+que passa do prazo, com `503 SPREADSHEET_READ_TIMEOUT`. A thread principal só
+copia o arquivo para lá e as linhas de volta, mil por mensagem. No máximo
+`SPREADSHEET_READS_PER_PROCESS` threads (1), as outras leituras esperam a
+vez; com `0`, a leitura volta para a thread principal, dentro do heap dela,
+como antes. No SIGTERM, a fila drena desde o primeiro instante
 (`ImportQueue.drain`, chamado por `src/shared/lifecycle/shutdown.ts`): recusa
 planilhas novas com `429 IMPORT_BUSY`, fecha na hora as que esperavam
 ("não iniciada: envie o arquivo de novo", sem nenhuma entrega), dá até 15 s
