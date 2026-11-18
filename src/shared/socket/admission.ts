@@ -27,7 +27,7 @@
  * Neither refusal is charged to the address (`keepsAddressCharge`): a mobile
  * carrier's CGNAT puts hundreds of drivers behind one address, and a replica
  * at its capacity during a deploy must not lock them out of realtime for the
- * rest of the minute.
+ * rest of the minute. The user's own limits are charged, as before.
  */
 
 /** The wait a capacity refusal asks for, before the jitter. */
@@ -140,16 +140,20 @@ function engineOverCapacity(
 }
 
 /**
- * The refusals that say nothing against the credential. Their attempt goes
- * back to the address: the replica was full or its database blinked
- * (`SOCKET_UNAVAILABLE`), the user's own budget refused (`SOCKET_RATE_LIMITED`,
- * already counted by user) or the user holds too many sockets here.
+ * The refusals whose attempt goes back to the address: the replica was full
+ * or its database blinked (`SOCKET_UNAVAILABLE`), nobody's fault.
+ *
+ * Not the user's own limits. `SOCKET_RATE_LIMITED` (the user's 30 a minute)
+ * and `SOCKET_TOO_MANY_CONNECTIONS` (the user's sockets on this replica)
+ * stay charged: given back, one valid token — its owner's, or one stolen
+ * from a session not yet expired — looped handshakes from one address with
+ * no bound once its own budget ran out, each still a websocket upgrade, a
+ * signature check and its Redis round trips (and, past the socket ceiling,
+ * the three Postgres reads), and the address never reached the 300 a minute
+ * that cut it off before U-01. A client behaving normally never meets
+ * either, so the drivers behind a CGNAT do not pay for it.
  */
-const NOT_CHARGED_CODES = new Set([
-  "SOCKET_UNAVAILABLE",
-  "SOCKET_RATE_LIMITED",
-  "SOCKET_TOO_MANY_CONNECTIONS",
-]);
+const NOT_CHARGED_CODES = new Set(["SOCKET_UNAVAILABLE"]);
 
 function refusalCode(error: Error | null | undefined): string | null {
   const code = (error as { data?: { code?: unknown } } | null | undefined)?.data
@@ -162,8 +166,9 @@ function refusalCode(error: Error | null | undefined): string | null {
  * Whether a handshake that ended with `error` keeps the attempt the address
  * was charged at the engine. Admitted: no. A refusal with no code, or with
  * any code outside the list above — a missing or bad token, a bad ticket, a
- * session that ended, a user who no longer exists — yes: that is the guessing
- * the address budget exists to bound. Unknown codes are charged.
+ * session that ended, a user who no longer exists, a user over their own
+ * limits — yes: that is the guessing and the looping the address budget
+ * exists to bound. Unknown codes are charged.
  */
 function keepsAddressCharge(error: Error | null | undefined): boolean {
   if (!error) return false;

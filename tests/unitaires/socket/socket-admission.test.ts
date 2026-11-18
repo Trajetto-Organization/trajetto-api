@@ -20,8 +20,10 @@ import {
  * bound it, checked before the credential is read, and their refusal must
  * never be charged to the address: a mobile carrier's CGNAT puts hundreds
  * of drivers behind one, and counted as failures they locked each other out
- * of realtime for the rest of the minute. The wiring into the real
- * Socket.IO server is socket-capacity-admission.test.ts.
+ * of realtime for the rest of the minute. Only the capacity refusals are
+ * given back: a user over their own budget is still charged, or one token
+ * would loop handshakes from one address with no bound. The wiring into the
+ * real Socket.IO server is socket-capacity-admission.test.ts.
  */
 function error(code?: string): Error {
   const failure = new Error("recusado") as Error & { data?: { code: string } };
@@ -173,15 +175,18 @@ describe("what the address keeps", () => {
     expect(keepsAddressCharge(undefined)).toBe(false);
   });
 
-  it("gives it back for a refusal that says nothing against the credential", () => {
-    // A full replica, a database blink, the user's own budget or sockets:
-    // the drivers behind the same CGNAT did nothing wrong.
-    for (const code of [
-      "SOCKET_UNAVAILABLE",
-      "SOCKET_RATE_LIMITED",
-      "SOCKET_TOO_MANY_CONNECTIONS",
-    ]) {
-      expect(keepsAddressCharge(error(code)), code).toBe(false);
+  it("gives it back for a full replica or a database blink", () => {
+    // The drivers behind the same CGNAT did nothing wrong.
+    expect(keepsAddressCharge(error("SOCKET_UNAVAILABLE"))).toBe(false);
+  });
+
+  it("keeps it once the user's own budget or sockets refused", () => {
+    // Given back, one valid token looped handshakes from one address with
+    // no bound at all once its 30 a minute ran out: every attempt still a
+    // websocket upgrade, a signature check and two Redis round trips, and
+    // the 300 a minute that cut the address off before U-01 never reached.
+    for (const code of ["SOCKET_RATE_LIMITED", "SOCKET_TOO_MANY_CONNECTIONS"]) {
+      expect(keepsAddressCharge(error(code)), code).toBe(true);
     }
   });
 

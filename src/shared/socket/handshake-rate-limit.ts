@@ -34,9 +34,11 @@ import { countInFixedWindow } from "@/shared/services/fixed-window-counter";
  *   capacity, the database blinking. A mobile carrier's CGNAT puts hundreds
  *   of drivers behind one address, and a deploy reconnects all of them in
  *   seconds: counted by attempt, the 301st was locked out of realtime for a
- *   minute by colleagues who did nothing wrong. A bad token, a bad ticket and
- *   an upgrade that never sends CONNECT keep their count
- *   (shared/socket/admission.ts, `keepsAddressCharge`);
+ *   minute by colleagues who did nothing wrong. A bad token, a bad ticket,
+ *   a user over their own budget or sockets (or one valid token looped
+ *   handshakes from one address with no bound) and an upgrade that never
+ *   sends CONNECT keep their count (shared/socket/admission.ts,
+ *   `keepsAddressCharge`);
  * - by user, AFTER it verifies and before the queries, to bound the database
  *   work one account can ask for. Every attempt counts there.
  *

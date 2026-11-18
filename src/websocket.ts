@@ -280,9 +280,10 @@ const chargedAddresses = new WeakMap<object, string>();
 const engineAttempts = new WeakMap<object, EngineAttempt>();
 
 /**
- * Settles the address's charge for this handshake, once: given back unless
- * the outcome was a credential failure (`keepsAddressCharge`). An upgrade
- * that never sends CONNECT never gets here, and keeps its charge.
+ * Settles the address's charge for this handshake, once: given back when it
+ * was admitted or refused for capacity, kept for a credential failure or a
+ * user over their own limits (`keepsAddressCharge`). An upgrade that never
+ * sends CONNECT never gets here, and keeps its charge.
  */
 function settleAddressCharge(
   socket: Socket,
@@ -665,10 +666,11 @@ async function initializeSocketIO(httpServer: Server): Promise<SocketIOServer> {
      * websocket (engine.io answers the upgrade 400, reason in the body), and
      * socket.io-client retries it like any transport error.
      *
-     * Since U-01 the count is given back once the handshake ends in anything
-     * but a credential failure (`settleAddressCharge`), so the budget holds
-     * the failures and the handshakes still running: hundreds of drivers
-     * behind one CGNAT reconnecting in a deploy no longer use it up.
+     * Since U-01 the count is given back once the handshake ends admitted or
+     * refused for capacity (`settleAddressCharge`), so the budget holds the
+     * failures, the users over their own limits and the handshakes still
+     * running: hundreds of drivers behind one CGNAT reconnecting in a deploy
+     * no longer use it up.
      *
      * Before it, and never charged: a replica past its socket ceiling by the
      * in-flight headroom refuses the upgrade outright (admission.ts). Below

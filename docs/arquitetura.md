@@ -3728,13 +3728,18 @@ de dois ambientes que dividam um Redis (Pub/Sub ignora o número do banco).
   réplica passou do teto pela folga dos handshakes em voo.
 - **O orçamento por endereço** (`HANDSHAKES_PER_ADDRESS`, 300 por minuto)
   passa a guardar só as falhas: cada upgrade continua contado no engine, e a
-  tentativa volta (`refund`) quando o handshake termina em algo que nada diz
-  contra a credencial, como um socket admitido, uma réplica cheia, o banco
-  piscando ou o orçamento do próprio usuário. Token ou ticket ruim, sessão
-  encerrada e o upgrade que nunca manda CONNECT continuam contando. Um CGNAT
-  de operadora põe centenas de motoristas atrás de um endereço, e um deploy
-  reconecta todos em segundos. O orçamento por usuário (30 por minuto) conta
-  toda tentativa, como antes.
+  tentativa volta (`refund`) quando o handshake termina num socket admitido,
+  numa réplica cheia ou no banco piscando (`SOCKET_UNAVAILABLE`). Token ou
+  ticket ruim, sessão encerrada, o upgrade que nunca manda CONNECT e o
+  usuário acima dos próprios limites (`SOCKET_RATE_LIMITED`, as 30 tentativas
+  por minuto dele, e `SOCKET_TOO_MANY_CONNECTIONS`, os sockets dele na
+  réplica) continuam contando: devolvidas, um token válido, inclusive o de
+  uma sessão revogada que ainda não expirou, repetia handshakes de um
+  endereço sem limite nenhum depois de gastar o próprio orçamento. Um
+  cliente normal não chega a nenhum dos dois. Um CGNAT de operadora põe
+  centenas de motoristas atrás de um endereço, e um deploy reconecta todos
+  em segundos. O orçamento por usuário (30 por minuto) conta toda tentativa,
+  como antes.
 - **O pedido do upgrade é solto** assim que a conexão existe
   (`rawSocket.request = null`), depois de guardar o que o handshake usa (o
   balde do endereço e o cabeçalho `x-trajetto-client`).

@@ -20,8 +20,10 @@ import { waitUntil } from "../../E2E/support/socket-waits";
 
 /**
  * The admission of the real Socket.IO server (plano-escala U-01, F2.19):
- * the two ceilings refuse with the wait the clients honour, and a refusal
- * that says nothing against the credential is never charged to the address.
+ * the two ceilings refuse with the wait the clients honour, and a capacity
+ * refusal is never charged to the address. A user over their own budget or
+ * sockets is: given back, one valid token looped handshakes from one
+ * address with no bound once its own budget ran out.
  *
  * Every connection here comes from 127.0.0.1, which is exactly the case the
  * change is for: hundreds of drivers behind one CGNAT reconnecting during a
@@ -56,7 +58,13 @@ const fake = vi.hoisted(() => {
   const limiter = {
     allowed: [] as string[],
     refunded: [] as string[],
+
+    /** Users whose own budget is spent: their bucket refuses. */
+    spentUsers: new Set<string>(),
   };
+
+  /** Sockets one user may hold here; the real 20 unless a case lowers it. */
+  const perUser = { max: 20 };
 
   const familyOf = (userId: string) => `family-${userId}`;
 
@@ -88,7 +96,7 @@ const fake = vi.hoisted(() => {
     };
   }
 
-  return { CARRIER, families, gates, limiter, familyOf, sessionUser };
+  return { CARRIER, families, gates, limiter, perUser, familyOf, sessionUser };
 });
 
 vi.mock("@/modules/user/repositories/user-repository", () => ({
@@ -150,11 +158,17 @@ vi.mock("@/shared/socket/handshake-rate-limit", async (importOriginal) => ({
   ...(await importOriginal<
     typeof import("@/shared/socket/handshake-rate-limit")
   >()),
+  // Read at each handshake, so a case can lower it.
+  get SOCKET_MAX_CONNECTIONS_PER_USER() {
+    return fake.perUser.max;
+  },
   createHandshakeLimiter: () => ({
     allow: async (key: string) => {
       if (key.startsWith("socket-handshake:ip")) fake.limiter.allowed.push(key);
 
-      return true;
+      const user = /^socket-handshake:user:(.+)$/.exec(key)?.[1];
+
+      return !(user && fake.limiter.spentUsers.has(user));
     },
     refund: async (key: string) => {
       fake.limiter.refunded.push(key);
@@ -256,6 +270,8 @@ afterEach(async () => {
 
   fake.limiter.allowed.length = 0;
   fake.limiter.refunded.length = 0;
+  fake.limiter.spentUsers.clear();
+  fake.perUser.max = 20;
 });
 
 afterAll(async () => {
@@ -340,6 +356,41 @@ describe("a credential failure", () => {
     expect(
       websocket.realtimeMetrics().handshakes.refused.credential,
     ).toBeGreaterThanOrEqual(1);
+  });
+});
+
+describe("a user over their own limits", () => {
+  it("keeps the attempt on the address once the user's budget is spent", async () => {
+    fake.limiter.spentUsers.add(FIRST);
+
+    // One valid token looping handshakes from one address: given back, the
+    // address never reached its 300 a minute and nothing cut it off.
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const refusal = await open(FIRST).outcome;
+
+      expect(refusal?.data?.code).toBe("SOCKET_RATE_LIMITED");
+    }
+
+    expect(fake.limiter.allowed).toEqual([ADDRESS, ADDRESS, ADDRESS]);
+    expect(fake.limiter.refunded).toEqual([]);
+    expect(
+      websocket.realtimeMetrics().handshakes.refused.rate_limited,
+    ).toBeGreaterThanOrEqual(3);
+  });
+
+  it("keeps it for the socket past the user's own ceiling, after the reads", async () => {
+    fake.perUser.max = 1;
+
+    expect(await open(FIRST).outcome).toBeNull();
+
+    const refusal = await open(FIRST).outcome;
+
+    expect(refusal?.data?.code).toBe("SOCKET_TOO_MANY_CONNECTIONS");
+
+    // The admitted one gave its attempt back; the refused one did not. Each
+    // refund is queued before the handshake answers, so both are known.
+    expect(fake.limiter.allowed).toEqual([ADDRESS, ADDRESS]);
+    expect(fake.limiter.refunded).toEqual([ADDRESS]);
   });
 });
 
