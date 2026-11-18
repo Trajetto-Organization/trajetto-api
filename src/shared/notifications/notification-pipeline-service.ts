@@ -22,6 +22,12 @@ import {
   closeExhaustedInBatches,
   exhaustedCloseSql,
 } from "@/shared/queue/exhausted-close";
+import {
+  columnOf,
+  fairClaimSql,
+  nextFairCursor,
+  type FairQueue,
+} from "@/shared/queue/fair-claim";
 
 import { IMailProvider } from "@/shared/providers/mail-provider/IMail-provider";
 import { MailDeliveryError } from "@/shared/providers/mail-provider/errors/mail-delivery-error";
@@ -184,6 +190,55 @@ function deliveryClaimSql(
       )${floor}
       RETURNING "id", "outboxEventId", "userId", "externalRecipientId", "channel", "attempts"
     `;
+}
+
+/**
+ * A delivery lane as the fair claim walks it (plano-escala F3-10;
+ * shared/queue/fair-claim.ts): the lane's rows by company, through the
+ * index notification_delivery_business_<lane>_idx (business_id,
+ * availableAt) with the lane's claim predicate (F3-09), and the same SET,
+ * due rule and RETURNING as deliveryClaimSql.
+ */
+function laneFairQueue(lane: DeliveryLane): FairQueue {
+  // Literals, as in deliveryClaimSql: the partial index is proved from them.
+  const channels = Prisma.raw(
+    DELIVERY_LANES[lane].map((channel) => `'${channel}'`).join(", "),
+  );
+
+  return {
+    table: "notification_delivery",
+    tenant: "business_id",
+    dueAt: "availableAt",
+    indexed: (alias) =>
+      Prisma.sql`${columnOf(alias, "status")} IN ('PENDING', 'PROCESSING') AND ${columnOf(alias, "channel")} IN (${channels})`,
+    due: (alias) =>
+      Prisma.sql`${columnOf(alias, "availableAt")} <= now() AND (${columnOf(alias, "status")} = 'PENDING' OR (${columnOf(alias, "leaseExpiresAt")} < now() AND ${columnOf(alias, "attempts")} < ${DELIVERY_MAX_ATTEMPTS}::int))`,
+    set: Prisma.sql`
+        "status" = 'PROCESSING',
+        "leaseExpiresAt" = now() + make_interval(secs => ${DELIVERY_LEASE_SECONDS}),
+        "availableAt" = now() + make_interval(secs => ${DELIVERY_LEASE_SECONDS}),
+        "attempts" = "attempts" + 1`,
+    returning: `"id", "outboxEventId", "userId", "externalRecipientId", "channel", "attempts"`,
+  };
+}
+
+/**
+ * One delivery lane's fair claim, company by company from `cursor` (see
+ * claimDeliveries). Exported for the plan tests, which measure this very
+ * statement.
+ */
+function deliveryFairClaimSql(
+  lane: DeliveryLane,
+  input: {
+    cursor: string;
+    limit: number;
+    rowsPerTenant: number;
+    maxTenants: number;
+    floor: Prisma.Sql;
+    rowFloor: Prisma.Sql;
+  },
+): Prisma.Sql {
+  return fairClaimSql(laneFairQueue(lane), input);
 }
 
 /**
@@ -447,6 +502,16 @@ class NotificationPipelineService {
   private deliveryCycles: Record<DeliveryLane, Promise<void> | null> = {
     internal: null,
     external: null,
+  };
+
+  /**
+   * Where each lane's next fair claim starts (plano-escala F3-10): the last
+   * company the previous one visited. This process's own; another process
+   * keeps its own, and both rotate.
+   */
+  private fairCursors: Record<DeliveryLane, string> = {
+    internal: "",
+    external: "",
   };
 
   /**
@@ -1582,6 +1647,34 @@ class NotificationPipelineService {
     // e-mails made each claim read the whole flood first.
     const claimStartedAtMs = Date.now();
 
+    // The fair claim (plano-escala F3-10), read on every claim: company by
+    // company from this lane's cursor, at most QUEUE_FAIR_ROWS_PER_TENANT
+    // of one company, the oldest due rows filling the rest. Off, the
+    // oldest due rows of the lane, as before.
+    if (env.QUEUE_FAIR_CLAIM_ENABLED) {
+      const claimed = await database.$queryRaw<
+        Array<ClaimedDelivery & { fairCursor?: string | null }>
+      >(
+        deliveryFairClaimSql(lane, {
+          cursor: this.fairCursors[lane],
+          limit,
+          rowsPerTenant: env.QUEUE_FAIR_ROWS_PER_TENANT,
+          maxTenants: env.QUEUE_FAIR_MAX_TENANTS,
+          floor,
+          rowFloor: await claimFloors.predicate("deliveries", "row"),
+        }),
+      );
+
+      this.fairCursors[lane] = nextFairCursor(claimed, this.fairCursors[lane]);
+
+      for (const delivery of claimed) {
+        delete delivery.fairCursor;
+        delivery.claimStartedAtMs = claimStartedAtMs;
+      }
+
+      return claimed;
+    }
+
     const claimed = await database.$queryRaw<ClaimedDelivery[]>(
       deliveryClaimSql(lane, floor, limit),
     );
@@ -2538,4 +2631,9 @@ class NotificationPipelineService {
   }
 }
 
-export { NotificationPipelineService, deliveryClaimSql, outboxClaimSql };
+export {
+  NotificationPipelineService,
+  deliveryClaimSql,
+  deliveryFairClaimSql,
+  outboxClaimSql,
+};

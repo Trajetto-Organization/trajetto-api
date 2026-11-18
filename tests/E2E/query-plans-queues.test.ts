@@ -6,6 +6,7 @@ import { createPrismaClient } from "@/shared/database/database-client";
 import { webhookClaimSql } from "@/shared/integration/webhook-dispatch-service";
 import {
   deliveryClaimSql,
+  deliveryFairClaimSql,
   outboxClaimSql,
 } from "@/shared/notifications/notification-pipeline-service";
 import {
@@ -40,7 +41,12 @@ import { uuid7Sql } from "./support/uuid7-sql";
  *  - it closes the exhausted rows and nothing else (a live lease, a due
  *    PENDING row);
  *  - the claims, one statement each, read a bounded number of pages with
- *    the backlog in front of them.
+ *    the backlog in front of them;
+ *  - the fair claim of a lane (F3-10), with a long tail: one company with
+ *    a hundred thousand due rows and 3,599 with one each. Its skip scan
+ *    costs two short probes per company it visits, never a read of the big
+ *    one's rows, wherever the cursor stands, and one claim takes rows of
+ *    several companies.
  *
  * On the swapped schema every E2E database runs: the queues partitioned by
  * day, the seeds minting v7 ids (support/uuid7-sql.ts).
@@ -358,4 +364,116 @@ describe("the claims, one statement each, in front of the backlog", () => {
     },
     60_000,
   );
+});
+
+describe("the fair claim of a lane, with a long tail (F3-10)", () => {
+  const BIG = "018fd000-0000-7000-8000-000000000000";
+  const TAIL = 3_599;
+  const BIG_ROWS = 100_000;
+
+  /** Pages the fair claim may read to find and lock five rows. */
+  const MAX_FAIR_PAGES = 300;
+
+  const tailTenant = (n: number) =>
+    `018fd000-0000-7000-8000-${String(n).padStart(12, "0")}`;
+
+  beforeAll(async () => {
+    const at = "now() - interval '5 minutes'";
+
+    await prisma.$executeRawUnsafe(
+      `
+      INSERT INTO "notification_delivery" (
+        "id", "outboxEventId", "userId", "channel", "status", "attempts",
+        "availableAt", "business_id", "created_at", "updated_at"
+      )
+      SELECT ${uuid7Sql(at)}, gen_random_uuid()::text, $1, 'EMAIL', 'PENDING', 0,
+             ${at} - n * interval '1 millisecond', $2, ${at}, now()
+      FROM generate_series(1, ${BIG_ROWS}) AS n
+      `,
+      USER,
+      BIG,
+    );
+
+    await prisma.$executeRawUnsafe(
+      `
+      INSERT INTO "notification_delivery" (
+        "id", "outboxEventId", "userId", "channel", "status", "attempts",
+        "availableAt", "business_id", "created_at", "updated_at"
+      )
+      SELECT ${uuid7Sql(at)}, gen_random_uuid()::text, $1, 'EMAIL', 'PENDING', 0,
+             ${at}, '018fd000-0000-7000-8000-' || lpad(n::text, 12, '0'), ${at}, now()
+      FROM generate_series(1, ${TAIL}) AS n
+      `,
+      USER,
+    );
+
+    await prisma.$executeRawUnsafe('ANALYZE "notification_delivery"');
+  }, 300_000);
+
+  const fair = (cursor: string) =>
+    deliveryFairClaimSql("external", {
+      cursor,
+      limit: 5,
+      rowsPerTenant: 2,
+      maxTenants: 64,
+      floor: Prisma.empty,
+      rowFloor: Prisma.empty,
+    });
+
+  const CURSORS: Array<[string, string]> = [
+    ["from the start", ""],
+    ["just before the big company", "018fc999"],
+    ["in the middle of the tail", tailTenant(1_800)],
+    ["past the last company", "ffffffff"],
+  ];
+
+  it.each(CURSORS)(
+    "reads a bounded number of pages %s",
+    async (where, cursor) => {
+      const plan = await explain(fair(cursor));
+      const pages = pagesToFind(plan);
+
+      expect(noSeqScan(plan)).toEqual([]);
+      expect(
+        pages,
+        `cursor ${where}: ${pages} páginas para um claim justo de 5`,
+      ).toBeLessThan(MAX_FAIR_PAGES);
+    },
+    60_000,
+  );
+
+  it("takes rows of several companies, the big one no more than its share", async () => {
+    await prisma
+      .$transaction(async (tx) => {
+        const rows = await tx.$queryRawUnsafe<
+          Array<{ id: string; fairCursor: string }>
+        >(fair("018fc999").text, ...fair("018fc999").values);
+
+        expect(rows).toHaveLength(5);
+
+        const owners = await tx.$queryRawUnsafe<Array<{ business_id: string }>>(
+          `SELECT "business_id" FROM "notification_delivery" WHERE "id" = ANY($1::text[])`,
+          rows.map((row) => row.id),
+        );
+        const counts = new Map<string, number>();
+
+        for (const owner of owners) {
+          counts.set(
+            owner.business_id,
+            (counts.get(owner.business_id) ?? 0) + 1,
+          );
+        }
+
+        expect(counts.get(BIG)).toBe(2);
+        expect(counts.size).toBeGreaterThanOrEqual(3);
+
+        // The next claim starts after the last company this one visited.
+        expect(rows[0].fairCursor > BIG).toBe(true);
+
+        throw new Error("rollback");
+      })
+      .catch((error: Error) => {
+        if (error.message !== "rollback") throw error;
+      });
+  }, 60_000);
 });

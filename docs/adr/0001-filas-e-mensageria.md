@@ -221,6 +221,21 @@ parcial só das linhas em voo (`<fila>_processing_lease_idx`), até 500 por
 UPDATE com `SKIP LOCKED`. A linha leva até um minuto a mais para aparecer
 como `FAILED`; nada sai nesse meio-tempo, porque nenhum claim a pega.
 
+**Justiça por empresa (F3-10).** As raias pegavam as linhas vencidas mais
+velhas, de quem fossem: uma transportadora que dispara 20 mil avisos punha
+a mensagem de todas as outras empresas atrás deles. Com
+`QUEUE_FAIR_CLAIM_ENABLED=true` (desligado por padrão, até a medida na
+staging), o claim de cada raia anda pelas empresas que têm linhas na
+fila, na ordem dos ids, a partir de um cursor que gira em cada processo,
+e pega até `QUEUE_FAIR_ROWS_PER_TENANT` (2) linhas vencidas de cada uma,
+visitando até `QUEUE_FAIR_MAX_TENANTS` (64); depois da última empresa
+vêm as linhas sem empresa (o balde nulo) e a volta ao começo, até o
+cursor. O que a volta não encheu, as mais velhas da raia enchem, então
+uma empresa sozinha ainda recebe claims cheios. A volta é um skip scan
+recursivo no índice `(business_id, availableAt)` da raia (F3-09): duas
+sondagens curtas por empresa visitada, nunca a leitura das linhas de uma
+empresa grande (`src/shared/queue/fair-claim.ts`).
+
 - **DLQ:** o status `FAILED`.
   - `GET /health/dead-letter` com `POST /health/dead-letter/replay` cobre
     as entregas.

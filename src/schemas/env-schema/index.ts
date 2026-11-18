@@ -1259,6 +1259,32 @@ const envSchema = z
       )
       .transform((value) => value === "true"),
 
+    // The fair claim by company (plano-escala F3-10; shared/queue/
+    // fair-claim.ts): the delivery lanes take their rows company by
+    // company from a rotating cursor, at most
+    // QUEUE_FAIR_ROWS_PER_TENANT of one company and QUEUE_FAIR_MAX_TENANTS
+    // companies visited per claim, the oldest due rows filling what the
+    // walk did not. A carrier that fires twenty thousand notices then no
+    // longer puts every other company's message behind them. Off by
+    // default: the claims stay the oldest-first of before until the owner
+    // turns it on in staging and reads the queues' latency. Read on every
+    // claim, so the switch needs no restart of the logic, only of the
+    // Environment. Empty counts as absent.
+    QUEUE_FAIR_CLAIM_ENABLED: z
+      .preprocess(
+        (value) => (value === "" ? undefined : value),
+        z.enum(["true", "false"]).default("false"),
+      )
+      .transform((value) => value === "true"),
+    QUEUE_FAIR_ROWS_PER_TENANT: z.preprocess(
+      (value) => (value === "" ? undefined : value),
+      z.coerce.number().int().min(1).max(20).default(2),
+    ),
+    QUEUE_FAIR_MAX_TENANTS: z.preprocess(
+      (value) => (value === "" ? undefined : value),
+      z.coerce.number().int().min(1).max(512).default(64),
+    ),
+
     // Days a queue's partition may stay past its retention before the
     // partition-stuck alert pages (plano-escala F5-11). A day held by a
     // row in flight is a queue that stopped, worth a look after three
