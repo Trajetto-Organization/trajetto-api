@@ -6,6 +6,7 @@ import pino from "pino";
 import { sign } from "jsonwebtoken";
 import auth from "@/config/auth";
 import { createPrismaClient } from "@/shared/database/database-client";
+import { v7 as uuidV7 } from "uuid";
 
 /**
  * Contract §32/§33 on the real app and the real database:
@@ -28,7 +29,8 @@ const OTHER_CARRIER = "018fda00-0000-7000-8000-0000000000b2";
 const STAFF = "018fda00-0000-7000-8000-0000000000c1";
 const OTHER_STAFF = "018fda00-0000-7000-8000-0000000000c2";
 
-const EVENT = randomUUID();
+// A v7, as every queue id: the queues are partitioned by it (F5-09).
+const EVENT = uuidV7();
 const CORRELATION = "web-ops-correlation-0001";
 
 let masterToken = "";

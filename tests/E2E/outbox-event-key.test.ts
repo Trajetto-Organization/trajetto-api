@@ -7,6 +7,7 @@ import { v7 as uuidV7 } from "uuid";
 import { env } from "@/env";
 import { createPrismaClient } from "@/shared/database/database-client";
 import { OutboxService } from "@/shared/notifications/outbox-service";
+import { unpartitionQueues } from "./support/queue-partitions";
 
 /**
  * The outbox's keys in a table of their own (plano-escala F5-02).
@@ -214,8 +215,11 @@ function promises(label: string): void {
 }
 
 // A serving database until the contraction's step runs: the template is
-// a new database, which the migration already contracted.
+// a new database, which the migration already contracted, and whose queues
+// the swap of F5-09 partitioned (a partitioned table cannot hold this
+// unique): the outbox goes back to the plain table production still has.
 beforeAll(async () => {
+  await unpartitionQueues(["domain_outbox_event"]);
   await prisma.$executeRawUnsafe(
     `CREATE UNIQUE INDEX IF NOT EXISTS "domain_outbox_event_eventKey_key" ON "domain_outbox_event"("eventKey")`,
   );

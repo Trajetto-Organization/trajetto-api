@@ -28,19 +28,25 @@ afterAll(async () => {
   await prisma.$disconnect();
 });
 
-/** `pg_get_indexdef`, schema-qualified as Postgres prints it. */
+/**
+ * `pg_get_indexdef`, schema-qualified as Postgres prints it. The four
+ * queues are partitioned by day since the swap of plano-escala F5-09
+ * (prisma/post-deploy/10-queue-partition-swap.sql), which every E2E
+ * database has run: a partitioned parent's index prints as `ON ONLY`, and
+ * each partition's is its clone.
+ */
 const INDEXES: Record<string, string> = {
   // Queue claims: a range on the key under a partial predicate.
   ai_analysis_request_claim_idx: `CREATE INDEX ai_analysis_request_claim_idx ON public.ai_analysis_request USING btree (created_at) WHERE (status = ANY (ARRAY['PENDING'::"AIAnalysisRequestStatus", 'PROCESSING'::"AIAnalysisRequestStatus"]))`,
   ai_analysis_request_fair_claim_idx: `CREATE INDEX ai_analysis_request_fair_claim_idx ON public.ai_analysis_request USING btree ("businessId", created_at) WHERE (status = ANY (ARRAY['PENDING'::"AIAnalysisRequestStatus", 'PROCESSING'::"AIAnalysisRequestStatus"]))`,
-  domain_outbox_event_claim_idx: `CREATE INDEX domain_outbox_event_claim_idx ON public.domain_outbox_event USING btree (created_at) WHERE (status = ANY (ARRAY['PENDING'::"OutboxEventStatus", 'PROCESSING'::"OutboxEventStatus"]))`,
-  notification_delivery_claim_internal_idx: `CREATE INDEX notification_delivery_claim_internal_idx ON public.notification_delivery USING btree ("availableAt") WHERE ((status = ANY (ARRAY['PENDING'::"NotificationDeliveryStatus", 'PROCESSING'::"NotificationDeliveryStatus"])) AND (channel = ANY (ARRAY['IN_APP'::"NotificationChannel", 'ACTIVITY'::"NotificationChannel", 'PUSH'::"NotificationChannel"])))`,
-  notification_delivery_claim_external_idx: `CREATE INDEX notification_delivery_claim_external_idx ON public.notification_delivery USING btree ("availableAt") WHERE ((status = ANY (ARRAY['PENDING'::"NotificationDeliveryStatus", 'PROCESSING'::"NotificationDeliveryStatus"])) AND (channel = ANY (ARRAY['EMAIL'::"NotificationChannel", 'WHATSAPP'::"NotificationChannel"])))`,
+  domain_outbox_event_claim_idx: `CREATE INDEX domain_outbox_event_claim_idx ON ONLY public.domain_outbox_event USING btree (created_at) WHERE (status = ANY (ARRAY['PENDING'::"OutboxEventStatus", 'PROCESSING'::"OutboxEventStatus"]))`,
+  notification_delivery_claim_internal_idx: `CREATE INDEX notification_delivery_claim_internal_idx ON ONLY public.notification_delivery USING btree ("availableAt") WHERE ((status = ANY (ARRAY['PENDING'::"NotificationDeliveryStatus", 'PROCESSING'::"NotificationDeliveryStatus"])) AND (channel = ANY (ARRAY['IN_APP'::"NotificationChannel", 'ACTIVITY'::"NotificationChannel", 'PUSH'::"NotificationChannel"])))`,
+  notification_delivery_claim_external_idx: `CREATE INDEX notification_delivery_claim_external_idx ON ONLY public.notification_delivery USING btree ("availableAt") WHERE ((status = ANY (ARRAY['PENDING'::"NotificationDeliveryStatus", 'PROCESSING'::"NotificationDeliveryStatus"])) AND (channel = ANY (ARRAY['EMAIL'::"NotificationChannel", 'WHATSAPP'::"NotificationChannel"])))`,
   // The fair claim of the lanes (plano-escala F3-09, F3-10): the same
   // claim predicate per lane, by company, then due time.
-  notification_delivery_business_internal_idx: `CREATE INDEX notification_delivery_business_internal_idx ON public.notification_delivery USING btree (business_id, "availableAt") WHERE ((status = ANY (ARRAY['PENDING'::"NotificationDeliveryStatus", 'PROCESSING'::"NotificationDeliveryStatus"])) AND (channel = ANY (ARRAY['IN_APP'::"NotificationChannel", 'ACTIVITY'::"NotificationChannel", 'PUSH'::"NotificationChannel"])))`,
-  notification_delivery_business_external_idx: `CREATE INDEX notification_delivery_business_external_idx ON public.notification_delivery USING btree (business_id, "availableAt") WHERE ((status = ANY (ARRAY['PENDING'::"NotificationDeliveryStatus", 'PROCESSING'::"NotificationDeliveryStatus"])) AND (channel = ANY (ARRAY['EMAIL'::"NotificationChannel", 'WHATSAPP'::"NotificationChannel"])))`,
-  webhook_delivery_claim_idx: `CREATE INDEX webhook_delivery_claim_idx ON public.webhook_delivery USING btree ("availableAt") WHERE (status = ANY (ARRAY['PENDING'::"WebhookDeliveryStatus", 'PROCESSING'::"WebhookDeliveryStatus"]))`,
+  notification_delivery_business_internal_idx: `CREATE INDEX notification_delivery_business_internal_idx ON ONLY public.notification_delivery USING btree (business_id, "availableAt") WHERE ((status = ANY (ARRAY['PENDING'::"NotificationDeliveryStatus", 'PROCESSING'::"NotificationDeliveryStatus"])) AND (channel = ANY (ARRAY['IN_APP'::"NotificationChannel", 'ACTIVITY'::"NotificationChannel", 'PUSH'::"NotificationChannel"])))`,
+  notification_delivery_business_external_idx: `CREATE INDEX notification_delivery_business_external_idx ON ONLY public.notification_delivery USING btree (business_id, "availableAt") WHERE ((status = ANY (ARRAY['PENDING'::"NotificationDeliveryStatus", 'PROCESSING'::"NotificationDeliveryStatus"])) AND (channel = ANY (ARRAY['EMAIL'::"NotificationChannel", 'WHATSAPP'::"NotificationChannel"])))`,
+  webhook_delivery_claim_idx: `CREATE INDEX webhook_delivery_claim_idx ON ONLY public.webhook_delivery USING btree ("availableAt") WHERE (status = ANY (ARRAY['PENDING'::"WebhookDeliveryStatus", 'PROCESSING'::"WebhookDeliveryStatus"]))`,
   delivery_proof_audit_queue_idx: `CREATE INDEX delivery_proof_audit_queue_idx ON public.delivery_proof_audit USING btree ("businessId", created_at) WHERE (status = 'PENDING'::"ProofAuditStatus")`,
   // The geocoding job's claim (plan of 02/11/2026, E1): the open deliveries
   // still without a point and not settled by the geocoder, newest first.
@@ -76,12 +82,12 @@ const INDEXES: Record<string, string> = {
   // Reads that stay proportional to what they return.
   delivery_delivered_today_idx: `CREATE INDEX delivery_delivered_today_idx ON public.delivery USING btree ("businessId", delivered_at) INCLUDE ("driverId") WHERE (status = 'DELIVERED'::"DeliveryStatus")`,
   delivery_failed_recent_idx: `CREATE INDEX delivery_failed_recent_idx ON public.delivery USING btree ("businessId", updated_at) INCLUDE ("driverId") WHERE (status = 'FAILED'::"DeliveryStatus")`,
-  notification_delivery_failed_idx: `CREATE INDEX notification_delivery_failed_idx ON public.notification_delivery USING btree (updated_at, channel) WHERE (status = 'FAILED'::"NotificationDeliveryStatus")`,
-  webhook_delivery_failed_idx: `CREATE INDEX webhook_delivery_failed_idx ON public.webhook_delivery USING btree (updated_at) WHERE (status = 'FAILED'::"WebhookDeliveryStatus")`,
-  webhook_delivery_purge_idx: `CREATE INDEX webhook_delivery_purge_idx ON public.webhook_delivery USING btree (created_at) WHERE (status = ANY (ARRAY['DELIVERED'::"WebhookDeliveryStatus", 'FAILED'::"WebhookDeliveryStatus"]))`,
+  notification_delivery_failed_idx: `CREATE INDEX notification_delivery_failed_idx ON ONLY public.notification_delivery USING btree (updated_at, channel) WHERE (status = 'FAILED'::"NotificationDeliveryStatus")`,
+  webhook_delivery_failed_idx: `CREATE INDEX webhook_delivery_failed_idx ON ONLY public.webhook_delivery USING btree (updated_at) WHERE (status = 'FAILED'::"WebhookDeliveryStatus")`,
+  webhook_delivery_purge_idx: `CREATE INDEX webhook_delivery_purge_idx ON ONLY public.webhook_delivery USING btree (created_at) WHERE (status = ANY (ARRAY['DELIVERED'::"WebhookDeliveryStatus", 'FAILED'::"WebhookDeliveryStatus"]))`,
   // The nightly purge of PUBLISHED outbox events, batched by processedAt
   // (publishedPurgeBatchSql; the plan is pinned in notification-purge-plan).
-  domain_outbox_event_published_processed_idx: `CREATE INDEX domain_outbox_event_published_processed_idx ON public.domain_outbox_event USING btree ("processedAt") WHERE (status = 'PUBLISHED'::"OutboxEventStatus")`,
+  domain_outbox_event_published_processed_idx: `CREATE INDEX domain_outbox_event_published_processed_idx ON ONLY public.domain_outbox_event USING btree ("processedAt") WHERE (status = 'PUBLISHED'::"OutboxEventStatus")`,
   // The tickets list's "Meus" and "Sem atendente", and the alert balloon's
   // summary: only what is still open (decision 14.5).
   support_ticket_open_assignee_idx: `CREATE INDEX support_ticket_open_assignee_idx ON public.support_ticket USING btree ("assigneeId", last_message_at DESC) WHERE ((status = 'OPEN'::"SupportTicketStatus") AND ("assigneeId" IS NOT NULL))`,
@@ -131,7 +137,7 @@ const INDEXES: Record<string, string> = {
   support_ticket_assigneeId_partial_idx: `CREATE INDEX "support_ticket_assigneeId_partial_idx" ON public.support_ticket USING btree ("assigneeId") WHERE ("assigneeId" IS NOT NULL)`,
   support_ticket_closedById_partial_idx: `CREATE INDEX "support_ticket_closedById_partial_idx" ON public.support_ticket USING btree ("closedById") WHERE ("closedById" IS NOT NULL)`,
   support_ticket_event_actorId_partial_idx: `CREATE INDEX "support_ticket_event_actorId_partial_idx" ON public.support_ticket_event USING btree ("actorId") WHERE ("actorId" IS NOT NULL)`,
-  notification_delivery_providerMessageId_idx: `CREATE INDEX "notification_delivery_providerMessageId_idx" ON public.notification_delivery USING btree ("providerMessageId") WHERE ("providerMessageId" IS NOT NULL)`,
+  notification_delivery_providerMessageId_idx: `CREATE INDEX "notification_delivery_providerMessageId_idx" ON ONLY public.notification_delivery USING btree ("providerMessageId") WHERE ("providerMessageId" IS NOT NULL)`,
 };
 
 /** `pg_get_constraintdef` of the CHECK constraints. */
@@ -217,13 +223,11 @@ const STORAGE_PARAMETERS: Record<string, string[]> = {
   route_stop: HOT_AUTOVACUUM,
   ai_analysis_request: QUEUE_AUTOVACUUM,
   ai_analysis_unit: QUEUE_AUTOVACUUM,
-  domain_outbox_event: QUEUE_AUTOVACUUM,
-  notification_delivery: QUEUE_AUTOVACUUM,
-  webhook_delivery: [
-    "autovacuum_vacuum_scale_factor=0.01",
-    "autovacuum_analyze_scale_factor=0.01",
-    "fillfactor=70",
-  ],
+  // The four queues are partitioned parents since F5-09, which Postgres
+  // refuses these on: each partition carries them instead (the swap copies
+  // the plain table's, the partition job QUEUE_RELOPTIONS of
+  // src/shared/database/partitions.ts), pinned in
+  // tests/E2E/queue-partition-swap.test.ts.
   // One upserted row per key and day (20260916230000_api_usage).
   api_key_usage_daily: [
     "autovacuum_vacuum_scale_factor=0.02",

@@ -11,6 +11,7 @@ import { WebhookDeliveryRepository } from "@/modules/integration/repositories/we
 import { IntegrationRepository } from "@/modules/integration/repositories/integration-repository";
 import { SupportTicketRepository } from "@/modules/chat/repositories/support-ticket-repository";
 import { createPrismaClient } from "@/shared/database/database-client";
+import { uuid7Sql } from "./support/uuid7-sql";
 
 /**
  * The plans the db-perf pass of 07/10/2026 fixed (docs/desempenho/README.md).
@@ -362,7 +363,7 @@ beforeAll(async () => {
   await sql(
     `INSERT INTO webhook_delivery (id, "endpointId", topic, payload, signature, status, "businessId",
                                    created_at, updated_at, latency_ms)
-     SELECT gen_random_uuid()::text, 'scale-endpoint-' || c.b, 'delivery.status_changed', '{}'::jsonb, 'sig',
+     SELECT ${uuid7Sql("now() - (n || ' seconds')::interval")}, 'scale-endpoint-' || c.b, 'delivery.status_changed', '{}'::jsonb, 'sig',
             'DELIVERED', c.b, now() - (n || ' seconds')::interval, now(), 100 + n % 50
      FROM (VALUES ($1, 3000), ($2, 60000)) AS c(b, total), generate_series(1, c.total) n`,
     CARRIER,

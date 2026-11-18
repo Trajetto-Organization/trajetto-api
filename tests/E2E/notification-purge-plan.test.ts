@@ -8,6 +8,9 @@ import {
   publishedPurgeBatchSql,
 } from "@/jobs/cron/cleanup-notification-pipeline-job";
 import { createPrismaClient } from "@/shared/database/database-client";
+import { v7 as uuidV7 } from "uuid";
+import { withParentNames } from "./support/partition-plan";
+import { unpartitionQueues } from "./support/queue-partitions";
 
 /**
  * What one night of the notification purge costs at the target scale
@@ -83,7 +86,12 @@ async function genericPlan(query: Prisma.Sql): Promise<PlanNode> {
 
     await tx.$executeRawUnsafe(`DEALLOCATE ${name}`);
 
-    return (row["QUERY PLAN"] as Array<{ Plan: PlanNode }>)[0].Plan;
+    // The queues are partitioned since F5-09: each partition read as its
+    // parent, each partition index as the parent's.
+    return withParentNames(
+      tx,
+      (row["QUERY PLAN"] as Array<{ Plan: PlanNode }>)[0].Plan,
+    );
   });
 }
 
@@ -98,6 +106,10 @@ const RETAINED_EVENTS = 4_000;
 const DUE_EVENTS = 200;
 
 beforeAll(async () => {
+  // The batch purge of the plain queues: where the swap of F5-09 still
+  // waits, or is left for a window of its own (more than 2 M rows).
+  await unpartitionQueues();
+
   const user = await prisma.user.create({
     data: {
       name: "Destinatária do Expurgo",
@@ -108,7 +120,7 @@ beforeAll(async () => {
   });
 
   const event = (processedDaysAgo: number) => ({
-    id: randomUUID(),
+    id: uuidV7(),
     eventKey: `purge-${randomUUID()}`,
     topic: "delivery.dispatched",
     aggregateType: "delivery",

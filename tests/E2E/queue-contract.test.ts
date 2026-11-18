@@ -1,4 +1,4 @@
-import { afterAll, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { randomUUID } from "node:crypto";
 import pg from "pg";
@@ -8,6 +8,7 @@ import { createPrismaClient } from "@/shared/database/database-client";
 import { PROCESS_CAPABILITIES } from "@/shared/health/capabilities";
 
 import { runPostDeployStep } from "./support/post-deploy-step";
+import { unpartitionQueues } from "./support/queue-partitions";
 
 /**
  * The four queues lose their foreign keys and uniques (plano-escala F5-06),
@@ -100,8 +101,10 @@ describe("a new database", () => {
       SELECT pg_get_indexdef('notification_provider_receipt_fact_idx'::regclass) AS definition
     `;
 
+    // Partitioned by day since the swap (F5-09), which a new database runs
+    // at once: the parent's index prints as ON ONLY.
     expect(index.definition).toBe(
-      `CREATE INDEX notification_provider_receipt_fact_idx ON public.notification_provider_receipt USING btree (provider, "providerMessageId", status)`,
+      `CREATE INDEX notification_provider_receipt_fact_idx ON ONLY public.notification_provider_receipt USING btree (provider, "providerMessageId", status)`,
     );
   });
 });
@@ -109,6 +112,13 @@ describe("a new database", () => {
 describe("a serving database", () => {
   const legacyKey = `legacy:${randomUUID()}`;
   let legacyEventId: string;
+
+  // Production still has plain queues with their keys: the swap of F5-09
+  // comes after this contraction, and a partitioned table could not hold
+  // the uniques put back below.
+  beforeAll(async () => {
+    await unpartitionQueues();
+  });
 
   it("keeps them while nobody announced it can do without", async () => {
     await asProductionHasThem();

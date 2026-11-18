@@ -11,6 +11,8 @@ import {
 
 import { ENDPOINT_PAUSED_REASON } from "@/shared/integration/webhook-dispatch-rules";
 import { createPrismaClient } from "@/shared/database/database-client";
+import { uuid7Sql } from "./support/uuid7-sql";
+import { Prisma } from "@prisma/client";
 
 /**
  * Releasing what an endpoint held while it was off, when somebody saves it
@@ -132,7 +134,7 @@ async function holdRows(endpointId: string, count: number): Promise<void> {
       "id", "endpointId", "businessId", "topic", "payload", "signature",
       "signed_body", "availableAt", "lastError", "created_at", "updated_at"
     )
-    SELECT gen_random_uuid()::text, ${endpointId}, ${CARRIER}, 'delivery.delivered',
+    SELECT ${Prisma.raw(uuid7Sql("now() - interval '1 day' + g * interval '1 millisecond'"))}, ${endpointId}, ${CARRIER}, 'delivery.delivered',
            '{}'::jsonb, '', '{}', now() + interval '29 days', ${ENDPOINT_PAUSED_REASON},
            now() - interval '1 day' + g * interval '1 millisecond', now()
     FROM generate_series(1, ${count}::int) AS g

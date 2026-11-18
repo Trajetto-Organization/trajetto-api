@@ -27,6 +27,7 @@ nesses arquivos.
 | [0009](./0009-comprovante-publico-por-token.md)    | Comprovante público por token com prazo                                  | aceito                         |
 | [0010](./0010-ia-local.md)                         | IA local (OCR em CPU, `trajetto-ai`); o provedor externo saiu            | aceito                         |
 | [0011](./0011-orm-prisma-6-7-8.md)                 | ORM: Prisma 7.10.1 com adapter-pg (go na 2ª tentativa); o 8 não saiu     | aceito                         |
+| [0014](./0014-filas-particionadas.md)              | As quatro filas particionadas por dia, pelo id, a tabela de hoje legada  | aceito                         |
 
 ## Outras decisões registradas
 

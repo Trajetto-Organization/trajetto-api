@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 
 import { deliveriesInWindowSql } from "@/shared/health/metrics-queries";
 import { createPrismaClient } from "@/shared/database/database-client";
+import { unpartitionQueues } from "./support/queue-partitions";
 
 /**
  * The "created in the last 24 h" counters of /health/metrics read the window,
@@ -48,6 +49,11 @@ interface PlanNode {
 let recentRows = 0;
 
 beforeAll(async () => {
+  // The pages of one plain table and its BRIN: where the swap of F5-09
+  // still waits, or is left for a window of its own. The partitioned
+  // queues' window is in query-plans-partitioned-queues.test.ts.
+  await unpartitionQueues();
+
   await prisma.user.create({
     data: {
       id: USER,
@@ -64,7 +70,7 @@ beforeAll(async () => {
       ("id", "eventKey", "topic", "aggregateType", "aggregateId", "payload",
        "status", "availableAt", "processedAt", "created_at", "updated_at")
     SELECT
-      gen_random_uuid()::text, 'window-old-' || g, 'metrics.window', 'window', g::text, '{}'::jsonb,
+      ${uuid7At("ts", "g::text")}, 'window-old-' || g, 'metrics.window', 'window', g::text, '{}'::jsonb,
       'PUBLISHED', ts, ts, ts, ts
     FROM (
       SELECT g, now() - interval '20 days' + g * interval '15 minutes' AS ts
@@ -110,7 +116,7 @@ beforeAll(async () => {
       ("id", "eventKey", "topic", "aggregateType", "aggregateId", "payload",
        "status", "availableAt", "processedAt", "created_at", "updated_at")
     SELECT
-      gen_random_uuid()::text, 'window-new-' || g, 'metrics.window.new', 'window', g::text, '{}'::jsonb,
+      ${uuid7At("ts", "g::text")}, 'window-new-' || g, 'metrics.window.new', 'window', g::text, '{}'::jsonb,
       'PUBLISHED', ts, ts, ts, ts
     FROM (
       SELECT g, now() - interval '5 minutes' + g * interval '1 second' AS ts

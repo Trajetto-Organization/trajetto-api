@@ -3849,6 +3849,7 @@ mesmo item já fez a mudança.
 | -------------------------------- | ------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------- |
 | `03-route-stop-status-index.sql` | F2-21b | o índice global `route_stop (status, deliveryId)`                                                                                                                                                                                             | `route-stop-open-by-route-v1` |
 | `05-queue-contract.sql`          | F5-06  | as chaves estrangeiras e os uniques das quatro filas (`domain_outbox_event`, `notification_delivery`, `notification_provider_receipt`, `webhook_delivery`), depois de copiar para `outbox_event_key` a chave de todo evento que não tem a sua | `queue-partition-agnostic-v1` |
+| `10-queue-partition-swap.sql`    | F5-09  | as quatro filas comuns: cada uma vira particionada por dia pelo id, com a tabela de hoje anexada como `<fila>_legacy` ([ADR 0014](./adr/0014-filas-particionadas.md)); espera também o `05-queue-contract.sql`                                | `queue-partition-agnostic-v1` |
 
 1. No primeiro deploy desta release a etapa roda com a imagem anterior no
    ar e os passos ficam `pending` (o `/health/rollout` mostra em
@@ -3861,6 +3862,22 @@ mesmo item já fez a mudança.
    contração mais tempo (manter a volta possível), deixe
    `POST_DEPLOY_STEPS=off` na `trajetto-api-migrate` até decidir; tire
    depois.
+
+A troca das filas (`10-queue-partition-swap.sql`) tem três cuidados a mais:
+
+- **A trava.** Cada fila fica sob `ACCESS EXCLUSIVE` enquanto a troca valida
+  que a tabela cabe abaixo do corte (uma leitura dela inteira): meça na
+  staging antes da produção, com o seed `prod-like`, pelo SQL de `pg_locks`
+  do [ADR 0014](./adr/0014-filas-particionadas.md#medir-a-trava-antes-da-produção).
+  O aceite é nenhuma espera acima de 3 s.
+- **Fila grande demais.** Com mais de 2 M linhas estimadas a fila fica comum
+  e o passo diz `skipped: … exige uma janela própria`. Numa janela com os
+  workers parados (`WORKERS_ENABLED=false` na `trajetto-api`), rode a etapa
+  de novo com o expurgo em dia, ou deixe a fila comum: o código serve os
+  dois jeitos.
+- **A volta.** `prisma/post-deploy/rollback/unpartition-queue.sql`, à mão,
+  copia toda linha de volta para uma tabela comum e marca a fila para a
+  troca não voltar sozinha (o passo a passo no ADR 0014).
 
 ### Quando o Swarm desiste de um serviço
 

@@ -8,6 +8,7 @@ import { sign } from "jsonwebtoken";
 import auth from "@/config/auth";
 import { resetOperationalMetricsCache } from "@/shared/health/operational-metrics";
 import { createPrismaClient } from "@/shared/database/database-client";
+import { v7 as uuidV7 } from "uuid";
 
 /**
  * The numbers a MASTER uses to decide when to add capacity.
@@ -86,7 +87,8 @@ const OLDEST_AGE_SECONDS = 600;
  */
 function probe(overrides: Record<string, unknown>) {
   return {
-    id: randomUUID(),
+    // A v7, as every queue id: the queues are partitioned by it (F5-09).
+    id: uuidV7(),
     eventKey: `metrics-probe-${randomUUID()}`,
     topic: "metrics.probe",
     aggregateType: "metrics",

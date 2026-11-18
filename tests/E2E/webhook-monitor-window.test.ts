@@ -8,6 +8,8 @@ import auth from "@/config/auth";
 
 import { MONITOR_LIST_CAP } from "@/schemas/integration-schema";
 import { createPrismaClient } from "@/shared/database/database-client";
+import { uuid7Sql } from "./support/uuid7-sql";
+import { Prisma } from "@prisma/client";
 
 /**
  * The window behind the monitor's cards — and its list.
@@ -319,7 +321,7 @@ describe("a list longer than the monitor counts (DLVB-30)", () => {
         "businessId", "created_at", "updated_at"
       )
       SELECT
-        gen_random_uuid()::text, ${busyEndpointId}, 'delivery.created', '{}'::jsonb,
+        ${Prisma.raw(uuid7Sql("now() - interval '30 minutes'"))}, ${busyEndpointId}, 'delivery.created', '{}'::jsonb,
         'v1=teste', 'DELIVERED'::"WebhookDeliveryStatus", 1,
         now() + interval '30 days', 100, now() - interval '30 minutes',
         ${BUSINESS}, now() - interval '30 minutes', now()

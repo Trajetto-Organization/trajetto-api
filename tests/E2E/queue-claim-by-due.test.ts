@@ -19,6 +19,7 @@ import type { AddressInfo } from "node:net";
 
 import { container } from "tsyringe";
 import { createPrismaClient } from "@/shared/database/database-client";
+import { uuid7Sql } from "./support/uuid7-sql";
 
 /**
  * The queues claim by due time, and a retry storm is not in the way.
@@ -56,6 +57,8 @@ vi.mock("@/../infra/database", async () => {
 
   return {
     default: client,
+    // http.ts reads the pool for the load shedding's pressure (none here).
+    databasePool: () => null,
     TRANSACTION_OPTIONS: { maxWait: 10_000, timeout: 15_000 },
   };
 });
@@ -306,7 +309,7 @@ describe("a WhatsApp outage in the external lane", () => {
         "id", "eventKey", "topic", "aggregateType", "aggregateId", "businessId",
         "payload", "status", "availableAt", "created_at", "updated_at"
       )
-      SELECT gen_random_uuid()::text, 'backlog:' || n, 'account-payable.created',
+      SELECT ${uuid7Sql("now() - interval '2 hours'")}, 'backlog:' || n, 'account-payable.created',
              'account-payable', gen_random_uuid()::text, $1, '{}'::jsonb,
              'PUBLISHED', now() - interval '2 hours',
              now() - interval '2 hours', now()
@@ -321,7 +324,7 @@ describe("a WhatsApp outage in the external lane", () => {
         "id", "outboxEventId", "userId", "channel", "status", "attempts",
         "availableAt", "lastError", "created_at", "updated_at"
       )
-      SELECT gen_random_uuid()::text, e."id", $1, 'WHATSAPP', 'PENDING', 2,
+      SELECT ${uuid7Sql('e."created_at"')}, e."id", $1, 'WHATSAPP', 'PENDING', 2,
              now() + interval '1 hour', 'Meta indisponível', e."created_at", now()
       FROM "domain_outbox_event" e
       WHERE e."eventKey" LIKE 'backlog:%'
@@ -499,7 +502,7 @@ describe("a customer's endpoint down, in the webhook queue", () => {
         "id", "endpointId", "businessId", "topic", "payload", "signature",
         "status", "attempts", "availableAt", "lastError", "created_at", "updated_at"
       )
-      SELECT gen_random_uuid()::text, $1, $2, 'delivery.delivered', '{}'::jsonb,
+      SELECT ${uuid7Sql("now() - interval '2 hours'")}, $1, $2, 'delivery.delivered', '{}'::jsonb,
              'assinatura', 'PENDING', 2, now() + interval '1 hour', 'HTTP 503',
              now() - interval '2 hours' - n * interval '100 milliseconds', now()
       FROM generate_series(1, ${BACKLOG}) AS n
@@ -516,7 +519,7 @@ describe("a customer's endpoint down, in the webhook queue", () => {
         "id", "endpointId", "businessId", "topic", "payload", "signature",
         "status", "attempts", "availableAt", "deliveredAt", "created_at", "updated_at"
       )
-      SELECT gen_random_uuid()::text, $1, $2, 'delivery.delivered', '{}'::jsonb,
+      SELECT ${uuid7Sql("at")}, $1, $2, 'delivery.delivered', '{}'::jsonb,
              'assinatura', 'DELIVERED', 1, at, at, at, at
       FROM (
         SELECT now() - n * interval '2 minutes' AS at

@@ -4,6 +4,7 @@ import { Prisma } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 import { createPrismaClient } from "@/shared/database/database-client";
 import { deliveryIdFor } from "@/shared/notifications/delivery-id";
+import { v7 as uuidV7 } from "uuid";
 
 /**
  * The rules of `notification_delivery` that live only in raw SQL, and the
@@ -211,6 +212,7 @@ describe("the rule that a delivery addresses exactly one recipient", () => {
       SELECT pg_get_constraintdef(oid) AS def
       FROM pg_constraint
       WHERE conname = 'notification_delivery_one_recipient' AND contype = 'c'
+        AND conrelid = '"notification_delivery"'::regclass
     `;
 
     expect(
@@ -227,12 +229,14 @@ describe("the rule that a delivery addresses exactly one recipient", () => {
    * id is decided by the recipient) and sit in the queue forever, claimed
    * and failed on every cycle.
    */
+  // The ids are v7, as every queue id: the queues are partitioned by it
+  // since F5-09, and a v4 would fail for want of a partition first.
   it("refuses a row with no recipient at all", async () => {
     await expect(
       prisma.$executeRaw`
         INSERT INTO "notification_delivery"
           ("id", "outboxEventId", "channel", "updated_at")
-        VALUES (${randomUUID()}, ${outboxEventId}, 'EMAIL', now())
+        VALUES (${uuidV7()}, ${outboxEventId}, 'EMAIL', now())
       `,
     ).rejects.toSatisfy(violatesOneRecipient);
   });
@@ -243,7 +247,7 @@ describe("the rule that a delivery addresses exactly one recipient", () => {
         INSERT INTO "notification_delivery"
           ("id", "outboxEventId", "userId", "externalRecipientId", "channel", "updated_at")
         VALUES
-          (${randomUUID()}, ${outboxEventId}, ${userId}, ${externalRecipientId}, 'EMAIL', now())
+          (${uuidV7()}, ${outboxEventId}, ${userId}, ${externalRecipientId}, 'EMAIL', now())
       `,
     ).rejects.toSatisfy(violatesOneRecipient);
   });
@@ -256,7 +260,7 @@ describe("the rule that a delivery addresses exactly one recipient", () => {
       prisma.$executeRaw`
         INSERT INTO "notification_delivery"
           ("id", "outboxEventId", "userId", "channel", "updated_at")
-        VALUES (${randomUUID()}, ${outboxEventId}, ${userId}, 'PUSH', now())
+        VALUES (${uuidV7()}, ${outboxEventId}, ${userId}, 'PUSH', now())
       `,
     ).resolves.toBe(1);
   });

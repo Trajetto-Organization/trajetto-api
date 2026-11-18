@@ -19,6 +19,11 @@ estado de cada passo fica como estava; tire a variável depois.
 Índice de tabela quente não vem aqui: vai em `prisma/concurrent`, antes das
 migrations.
 
+`rollback/` não é um passo: a etapa só lê os `.sql` desta pasta, não os das
+subpastas. Lá fica a volta de um passo, rodada à mão
+(`rollback/unpartition-queue.sql`, a volta da troca das filas,
+[ADR 0014](../../docs/adr/0014-filas-particionadas.md)).
+
 ## A capability antes de uma contração
 
 Uma contração (tirar uma chave estrangeira ou um unique, trocar uma tabela
