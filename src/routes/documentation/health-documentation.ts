@@ -1299,6 +1299,55 @@ const healthResponses = {
       .describe(
         "A régua de rampa: as entregas criadas contra o portão aprovado, os mesmos números que o alerta volume-near-gate julga. Contagens e o portão, nunca uma empresa. Só avisa: nada recusa entrega.",
       ),
+    // plano-escala U-15. Optional: an API that predates it, still answering
+    // during a rolling deploy, sends none.
+    memory_budget_ok: z
+      .boolean()
+      .nullable()
+      .optional()
+      .describe(
+        "Se o orçamento de memória da réplica que respondeu fecha (heap + threads da planilha + reserva nativa ≤ memory.max do contêiner); null quando não há teto legível para comparar. false dispara o alerta memory-budget.",
+      ),
+    memory_budget: z
+      .object({
+        mode: z
+          .enum(["warn", "enforce"])
+          .describe(
+            "MEMORY_BUDGET_MODE: warn avisa (log, este campo e o alerta); enforce recusa o boot.",
+          ),
+        checked: z
+          .boolean()
+          .describe("false quando não havia teto legível para comparar."),
+        limit_mb: z
+          .number()
+          .nullable()
+          .describe("O memory.max do contêiner, em MiB; null sem teto."),
+        total_mb: z.number().describe("A soma das partes, em MiB."),
+        heap_mb: z
+          .number()
+          .describe(
+            "O heap principal (--max-old-space-size do NODE_OPTIONS; o limite do V8 sem a flag).",
+          ),
+        spreadsheet_reads: z
+          .number()
+          .describe("SPREADSHEET_READS_PER_PROCESS."),
+        spreadsheet_max_old_mb: z
+          .number()
+          .describe(
+            "O teto de heap de cada thread da planilha (SPREADSHEET_WORKER_MAX_OLD_MB, ou o que o orçamento deixa).",
+          ),
+        cpu_pool_threads: z.number(),
+        cpu_pool_thread_max_old_mb: z.number(),
+        native_mb: z.number().describe("NATIVE_RESERVE_MB."),
+        reason: z
+          .string()
+          .nullable()
+          .describe("Por que não foi conferido; null quando foi."),
+      })
+      .optional()
+      .describe(
+        "As partes do orçamento de memória da réplica que respondeu (plano de escala, U-15), as mesmas que o boot conferiu.",
+      ),
   }),
   providerReadiness: z.object({
     checked_at: z.string().describe("Quando as sondas rodaram (ISO 8601)."),

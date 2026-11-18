@@ -42,6 +42,7 @@ import {
   type VolumeTotals,
 } from "@/shared/health/volume-gauge";
 import { env } from "@/env";
+import { processMemoryBudget } from "@/shared/lifecycle/memory-budget";
 import { logger } from "@/shared/logging/logger";
 import { SnapshotCache } from "@/shared/cache/snapshot-cache";
 import { realtimeMetrics } from "@/websocket";
@@ -337,6 +338,30 @@ async function collectOperationalMetrics() {
     // The newest quarter-hour sums of the cluster rows against the approved
     // gate (plano-escala F1-22): what the volume-near-gate alert judges.
     volume,
+    // This replica's memory budget as the boot checked it (plano-escala
+    // U-15): per replica, like `runtime`.
+    ...memoryBudgetMetrics(),
+  };
+}
+
+function memoryBudgetMetrics() {
+  const budget = processMemoryBudget(env);
+
+  return {
+    memory_budget_ok: budget.ok,
+    memory_budget: {
+      mode: budget.mode,
+      checked: budget.checked,
+      limit_mb: budget.limitMb,
+      total_mb: budget.totalMb,
+      heap_mb: budget.parts.heapMb,
+      spreadsheet_reads: budget.parts.spreadsheetReads,
+      spreadsheet_max_old_mb: budget.parts.spreadsheetMaxOldMb,
+      cpu_pool_threads: budget.parts.cpuPoolThreads,
+      cpu_pool_thread_max_old_mb: budget.parts.cpuPoolThreadMaxOldMb,
+      native_mb: budget.parts.nativeMb,
+      reason: budget.reason,
+    },
   };
 }
 

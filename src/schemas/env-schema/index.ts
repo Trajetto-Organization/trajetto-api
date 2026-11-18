@@ -46,6 +46,10 @@ import {
   resolveProcessRole,
 } from "@/shared/lifecycle/process-role";
 import {
+  MEMORY_BUDGET_MODES,
+  NATIVE_RESERVE_DEFAULT_MB,
+} from "@/shared/lifecycle/memory-budget";
+import {
   QUEUE_CONCURRENCY_DEFAULTS,
   QUEUE_CONCURRENCY_MAX,
   type QueueConcurrencyVariable,
@@ -879,6 +883,28 @@ const envSchema = z
     SPREADSHEET_READ_TIMEOUT_MS: z.preprocess(
       (value) => (value === "" ? undefined : value),
       z.coerce.number().int().min(5_000).max(600_000).default(60_000),
+    ),
+
+    // The process's memory budget, checked at boot (plano-escala U-15;
+    // shared/lifecycle/memory-budget.ts): the main heap, the spreadsheet
+    // threads and this reserve for what V8 and the native libraries hold
+    // outside every heap, against the container's memory.max. `warn` (the
+    // default of this release) logs, flags /health/metrics and alerts;
+    // `enforce` refuses the boot, and becomes the default only once the
+    // Environments carry the plan's values (wave 20). Empty counts as
+    // absent.
+    NATIVE_RESERVE_MB: z.preprocess(
+      (value) => (value === "" ? undefined : value),
+      z.coerce
+        .number()
+        .int()
+        .min(0)
+        .max(4_096)
+        .default(NATIVE_RESERVE_DEFAULT_MB),
+    ),
+    MEMORY_BUDGET_MODE: z.preprocess(
+      (value) => (value === "" ? undefined : value),
+      z.enum(MEMORY_BUDGET_MODES).default("warn"),
     ),
 
     // The graceful shutdown (plano-escala F1-14). STOP_GRACE_PERIOD_MS is the

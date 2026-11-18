@@ -221,3 +221,80 @@ describe("the sockets of each replica", () => {
     expect(paged[0].message).toContain(NEAR);
   });
 });
+
+describe("the memory budget of each replica", () => {
+  /**
+   * plano-escala U-15: each process writes in its ops_sample row whether
+   * its heaps and native reserve fit its container's memory.max, and the
+   * heartbeat pages for the newest row of any replica that does not.
+   */
+  const TIGHT = `wfl-tight-${randomUUID().slice(0, 8)}`;
+  const FIXED = `wfl-fixed-${randomUUID().slice(0, 8)}`;
+  const NO_CEILING = `wfl-noceil-${randomUUID().slice(0, 8)}`;
+  const OLD_IMAGE = `wfl-oldmem-${randomUUID().slice(0, 8)}`;
+
+  const row = (
+    replica: string,
+    minutesAgo: number,
+    memoryBudget?: Record<string, string | number | boolean | null>,
+  ) => ({
+    ts: new Date(Date.now() - minutesAgo * 60_000),
+    role: "all",
+    replica,
+    metrics: {
+      v: 1,
+      ...(memoryBudget && { memory_budget: memoryBudget }),
+    },
+  });
+
+  afterAll(async () => {
+    await prisma.opsSample.deleteMany({
+      where: { replica: { in: [TIGHT, FIXED, NO_CEILING, OLD_IMAGE] } },
+    });
+  });
+
+  it("pages for the newest row that does not fit, and for nothing else", async () => {
+    const tight = { ok: false, total_mb: 1_174, limit_mb: 1_024, mode: "warn" };
+    const fits = { ok: true, total_mb: 982, limit_mb: 1_024, mode: "warn" };
+
+    await prisma.opsSample.createMany({
+      data: [
+        row(TIGHT, 0.5, tight),
+        // Fixed by the last deploy: the newest row counts.
+        row(FIXED, 2, tight),
+        row(FIXED, 0.5, fits),
+        // No ceiling to compare with: never judged.
+        row(NO_CEILING, 0.5, {
+          ok: null,
+          total_mb: 918,
+          limit_mb: null,
+          mode: "warn",
+        }),
+        // The previous image during a rolling deploy writes none.
+        row(OLD_IMAGE, 0.5),
+      ],
+    });
+
+    const { collectOperationalSnapshot } =
+      await import("@/shared/health/operational-snapshot");
+    const { collectAlerts, DEFAULT_ALERT_THRESHOLDS } =
+      await import("@/shared/health/alert-rules");
+
+    const snapshot = await collectOperationalSnapshot();
+
+    expect(snapshot.collectionErrors).toEqual([]);
+
+    const ours = (snapshot.memoryBudgets ?? []).filter((replica) =>
+      [TIGHT, FIXED, NO_CEILING, OLD_IMAGE].includes(replica.replica),
+    );
+
+    expect(ours).toEqual([{ replica: TIGHT, totalMb: 1_174, limitMb: 1_024 }]);
+
+    const paged = collectAlerts(snapshot, DEFAULT_ALERT_THRESHOLDS, {
+      pitrExpected: false,
+    }).filter((alert) => alert.code === "memory-budget");
+
+    expect(paged.map((alert) => alert.message).join(" ")).toContain(TIGHT);
+    expect(paged.some((alert) => alert.message.includes(FIXED))).toBe(false);
+  });
+});

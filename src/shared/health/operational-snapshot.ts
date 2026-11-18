@@ -347,6 +347,46 @@ async function collectOperationalSnapshot(
     undefined,
   );
 
+  // Each process's memory budget (plano-escala U-15), from its newest
+  // per-minute row: only the process knows its heap, its threads and its
+  // container's ceiling. Only the ones that do not fit come back; the
+  // previous image's rows (no memory_budget) and a process with no ceiling
+  // to read (ok null) are left out.
+  const memoryBudgets = await part(
+    "ops_sample (memory)",
+    errors,
+    async () => {
+      const rows = await database.$queryRaw<
+        Array<{
+          replica: string;
+          ok: string | null;
+          total_mb: number | null;
+          limit_mb: number | null;
+        }>
+      >`
+        SELECT DISTINCT ON ("replica")
+          "replica",
+          "metrics" -> 'memory_budget' ->> 'ok' AS ok,
+          ("metrics" -> 'memory_budget' ->> 'total_mb')::int AS total_mb,
+          ("metrics" -> 'memory_budget' ->> 'limit_mb')::int AS limit_mb
+        FROM "ops_sample"
+        WHERE "ts" >= ${new Date(now.getTime() - SOCKET_SAMPLE_WINDOW_MS)}
+          AND "role" <> 'cluster'
+          AND "metrics" -> 'memory_budget' IS NOT NULL
+        ORDER BY "replica", "ts" DESC
+      `;
+
+      return rows
+        .filter((row) => row.ok === "false")
+        .map((row) => ({
+          replica: row.replica,
+          totalMb: Number(row.total_mb ?? 0),
+          limitMb: Number(row.limit_mb ?? 0),
+        }));
+    },
+    undefined,
+  );
+
   // The feed's conversions of a cursor of another epoch (F2-05), from the
   // processes' rows of the last minutes: only the process that served the
   // page knows it converted one.
@@ -472,6 +512,7 @@ async function collectOperationalSnapshot(
     ...(feedTxid && { feedTxid }),
     ...(clusterEpoch && { clusterEpoch }),
     ...(sockets && { sockets }),
+    ...(memoryBudgets && { memoryBudgets }),
     ...(feedEpochConversions !== undefined && { feedEpochConversions }),
     collectionErrors: errors,
   };

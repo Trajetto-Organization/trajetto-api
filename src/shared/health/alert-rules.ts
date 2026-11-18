@@ -149,6 +149,13 @@ interface OperationalSnapshot {
   sockets?: SocketUsageState[];
 
   /**
+   * The processes whose memory budget does not fit (plano-escala U-15),
+   * from each one's newest ops_sample row of the last minutes. Absent when
+   * the rows could not be read, which judges nothing.
+   */
+  memoryBudgets?: MemoryBudgetState[];
+
+  /**
    * Cursors of another cluster epoch the integration feed converted in the
    * last minutes (plano-escala F2-05), summed from the processes' ops_sample
    * rows. Absent when the rows could not be read, which judges nothing.
@@ -157,6 +164,12 @@ interface OperationalSnapshot {
 
   /** Parts of the snapshot that could not be read; each one is a reason. */
   collectionErrors: string[];
+}
+
+interface MemoryBudgetState {
+  replica: string;
+  totalMb: number;
+  limitMb: number;
 }
 
 interface SocketUsageState {
@@ -456,6 +469,7 @@ const ALERT_KINDS = [
   "worker-stuck",
   "connection-usage-high",
   "socket-cap-high",
+  "memory-budget",
   "redis-down",
   "pitr-archive-off",
   "wal-archive-stalled",
@@ -926,6 +940,16 @@ function collectAlerts(
     }
   }
 
+  // A process whose heaps and reserve add up past its container's ceiling
+  // (U-15): the first big spreadsheet can take it to an OOM kill of the
+  // whole replica. It booted anyway because MEMORY_BUDGET_MODE=warn.
+  for (const replica of snapshot.memoryBudgets ?? []) {
+    alerts.push({
+      code: "memory-budget",
+      message: `Orçamento de memória da réplica ${replica.replica} não fecha: ${replica.totalMb} MiB de heap, threads e reserva nativa para um teto de ${replica.limitMb} MiB do contêiner; ajuste o NODE_OPTIONS, o SPREADSHEET_WORKER_MAX_OLD_MB ou o Memory da Application`,
+    });
+  }
+
   if (!snapshot.redisOk) {
     alerts.push({
       code: "redis-down",
@@ -1039,6 +1063,7 @@ export type {
   GeocodingQuotaState,
   OperationalSnapshot,
   PartitionAlertState,
+  MemoryBudgetState,
   SocketUsageState,
   VolumeState,
 };

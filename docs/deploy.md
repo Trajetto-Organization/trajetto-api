@@ -4328,6 +4328,18 @@ HTTP, os claims das outras filas e o cron. É aviso, não recusa. Acima do
 lote (20 nas raias e nos webhooks, 10 no outbox), um valor maior não muda
 nada.
 
+**Orçamento de memória (U-15).** No boot, cada processo soma o heap
+principal (o `--max-old-space-size` do `NODE_OPTIONS`), as threads da
+planilha (`SPREADSHEET_READS_PER_PROCESS` × `SPREADSHEET_WORKER_MAX_OLD_MB`)
+e a reserva nativa (`NATIVE_RESERVE_MB`, 150) e compara com o `memory.max`
+do cgroup, o _Memory_ da Application. Sem `SPREADSHEET_WORKER_MAX_OLD_MB`,
+a thread recebe o que sobra por leitura, entre 256 e 768 MiB. Com
+`MEMORY_BUDGET_MODE=warn` (o padrão deste release), a conta que não fecha
+vira o aviso `memory budget does not fit` no log, `memory_budget_ok: false`
+no `/health/metrics` e o alerta `memory-budget`; com `enforce`, o boot é
+recusado. Sem cgroup legível, a conferência é pulada com aviso. O que fazer
+quando não fecha: [runbook memory-budget](./runbooks/memory-budget.md).
+
 - **Tempo real com várias réplicas**: o evento emitido numa réplica chega ao
   cliente conectado em outra pelo pub/sub do Redis
   (`@socket.io/redis-adapter`). Todas as réplicas precisam do mesmo
@@ -4651,6 +4663,7 @@ alerta). Sem `HEALTHCHECK_PING_URL` os motivos só vão para o log
 | Worker travado                              | heartbeat sem progresso há 10 min numa réplica viva                                                                                                                                                                                                                                                          |
 | Postgres                                    | conexões ≥ 80 % de `max_connections`                                                                                                                                                                                                                                                                         |
 | Sockets por réplica                         | os sockets de uma réplica em 80% ou mais do teto dela (`socket_cap`, o menor entre `SOCKET_MAX_CONNECTIONS` e o limite de descritores menos `SOCKET_FD_RESERVE`), pela linha mais nova do `ops_sample` dela nos últimos 3 min (`socket-cap-high`)                                                            |
+| Orçamento de memória                        | a soma do heap principal, das threads da planilha e da reserva nativa de um processo passa do teto do contêiner (`memory.max`), pela linha mais nova do `ops_sample` dele nos últimos 3 min (`memory-budget`; o boot avisa com `MEMORY_BUDGET_MODE=warn` e recusa com `enforce`)                             |
 | Redis                                       | sem resposta ao PING em 2 s                                                                                                                                                                                                                                                                                  |
 | Certificado do comprovante                  | vence em 30 dias (aviso) / 7 dias (crítico), vencido ou inválido                                                                                                                                                                                                                                             |
 | PITR esperado                               | `PITR_EXPECTED=true` e `archive_mode` diferente de `on` (sem a variável, nunca)                                                                                                                                                                                                                              |

@@ -8,6 +8,7 @@ import {
   type CellMatrix,
 } from "@/shared/delivery/spreadsheet-reader";
 import { AppError } from "@/shared/errors/AppError";
+import { processMemoryBudget } from "@/shared/lifecycle/memory-budget";
 import { logger } from "@/shared/logging/logger";
 
 import type { ReadReply, ReadRequest } from "./spreadsheet-read-worker";
@@ -35,13 +36,10 @@ const log = logger.child({ component: "import" });
  *
  * SPREADSHEET_READS_PER_PROCESS threads at most, the rest waiting their
  * turn; the memory budget of the process counts each at its heap ceiling
- * (U-15). With 0, the file is read on the main thread, inside the main
+ * (U-15), and gives the ceiling when the variable does not. With 0, the file is read on the main thread, inside the main
  * heap, as before: a process configured not to read spreadsheets still
  * reads the one that reaches it instead of refusing it.
  */
-
-/** Without SPREADSHEET_WORKER_MAX_OLD_MB: the plan's production value. */
-const SPREADSHEET_WORKER_DEFAULT_MAX_OLD_MB = 256;
 
 /**
  * Rows per message back. A thousand rows of the template's 26 columns
@@ -75,11 +73,13 @@ interface ReadOptions {
   slots?: number;
 }
 
-/** The thread's heap ceiling this process runs with. */
+/**
+ * The thread's heap ceiling this process runs with: SPREADSHEET_WORKER_MAX_OLD_MB,
+ * or, without it, the room the memory budget leaves per read (U-15,
+ * shared/lifecycle/memory-budget.ts), the very figure the boot checked.
+ */
 function spreadsheetWorkerMaxOldMb(): number {
-  return (
-    env.SPREADSHEET_WORKER_MAX_OLD_MB ?? SPREADSHEET_WORKER_DEFAULT_MAX_OLD_MB
-  );
+  return processMemoryBudget(env).parts.spreadsheetMaxOldMb;
 }
 
 let warnedInProcess = false;
@@ -263,7 +263,6 @@ function spreadsheetReadsInFlight(): { running: number; waiting: number } {
 
 export {
   SPREADSHEET_ROWS_PER_MESSAGE,
-  SPREADSHEET_WORKER_DEFAULT_MAX_OLD_MB,
   readSpreadsheetOffThread,
   spreadsheetReadsInFlight,
   spreadsheetWorkerMaxOldMb,

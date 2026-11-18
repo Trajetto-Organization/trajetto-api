@@ -126,6 +126,8 @@ function everyRuleBroken(): OperationalSnapshot[] {
       connectionUsagePercent: 99,
       // A replica at 90% of its socket ceiling (F5-31).
       sockets: [{ replica: "api-1", connections: 4_500, cap: 5_000 }],
+      // A replica whose heaps pass its container's ceiling (U-15).
+      memoryBudgets: [{ replica: "api-1", totalMb: 1_174, limitMb: 1_024 }],
       redisOk: false,
       proofSigning: { state: "EXPIRED", reason: null, notAfter: old },
       collectionErrors: ["worker_heartbeat: relation does not exist"],

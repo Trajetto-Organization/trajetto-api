@@ -41,6 +41,10 @@ import {
   type QueueConcurrency,
 } from "./shared/lifecycle/queue-config";
 import {
+  checkMemoryBudgetAtBoot,
+  rememberMemoryBudget,
+} from "./shared/lifecycle/memory-budget";
+import {
   createOpsSampler,
   opsSampleIdentity,
   registerSampleSection,
@@ -254,6 +258,16 @@ async function bootstrap() {
     );
   }
 
+  // The memory budget (plano-escala U-15): the main heap, the spreadsheet
+  // threads and the native reserve against the container's memory.max.
+  // MEMORY_BUDGET_MODE=warn (the default) logs it, flags /health/metrics
+  // and alerts; enforce refuses the boot here, before anything starts.
+  const memoryBudget = checkMemoryBudgetAtBoot(env, log, {
+    deployed: env.APP_ENV !== "development",
+  });
+
+  rememberMemoryBudget(memoryBudget);
+
   // The order and the reasons live in shared/lifecycle/startup.ts: workers
   // armed before the listener, the backlog drained only once realtime is up.
   await runStartup({
@@ -325,6 +339,16 @@ async function bootstrap() {
         };
       });
       registerSampleSection("bcrypt", gateStats);
+
+      // Whether the memory budget fits (plano-escala U-15): the ops
+      // heartbeat pages for any process whose newest row says it does not
+      // (memory-budget). Null when there was no ceiling to compare with.
+      registerSampleSection("memory_budget", () => ({
+        ok: memoryBudget.ok,
+        total_mb: memoryBudget.totalMb,
+        limit_mb: memoryBudget.limitMb,
+        mode: memoryBudget.mode,
+      }));
 
       // The minute's HTTP counters and histogram per route group, and the
       // positions' contracts of the last ten minutes (F1-09). Reading
