@@ -898,8 +898,9 @@ describe("what the tower reads for the day", () => {
       );
 
     // Each FAILED row's facts are read once, not once per bound of its day.
-    // The status is a filter on (deliveryId), or part of the condition on
-    // (status, deliveryId) since 20261007120000; either way one probe.
+    // The status is a filter on (deliveryId); (status, deliveryId), from
+    // 20261007120000 until F2-21b dropped it, made it part of the
+    // condition. Either way one probe.
     const failureProbes = flatten(plan).filter(
       (node) =>
         node["Relation Name"] === "route_stop" &&

@@ -3834,6 +3834,33 @@ do início da transação é recusado (`TJ001`,
 [runbook](./runbooks/delivery-event-writer-bound.md)): é o que mantém o
 piso do feed seguro.
 
+### Contrações que esperam a capability (onda 10)
+
+O plano de escala sai num push só, e a imagem que ainda serve durante o
+rolling, e que volta num rollback, é a de antes do plano. Por isso as
+contrações da onda 10 não vão em migration: cada uma é um passo de
+`prisma/post-deploy` que pergunta antes a `trajetto_capability_ready`
+([README da pasta](../prisma/post-deploy/README.md)) e fica `pending`
+enquanto houver um processo sem a capability, ou uma sessão sem nome no
+banco (a imagem de antes do plano). Num banco sem empresa a migration do
+mesmo item já fez a mudança.
+
+| Passo                            | Item   | O que tira                                        | Capability                    |
+| -------------------------------- | ------ | ------------------------------------------------- | ----------------------------- |
+| `03-route-stop-status-index.sql` | F2-21b | o índice global `route_stop (status, deliveryId)` | `route-stop-open-by-route-v1` |
+
+1. No primeiro deploy desta release a etapa roda com a imagem anterior no
+   ar e os passos ficam `pending` (o `/health/rollout` mostra em
+   `release.pending`). Depois de o rolling convergir, o deploy seguinte
+   roda a etapa de novo sozinho; para não esperar, _Run workflow_ com
+   `force_release`.
+2. Confira no log da `trajetto-api-migrate` o `applied:` de cada passo.
+3. **Desde o `applied`, o piso de rollback do código é esta release**:
+   a imagem anterior não aguenta o que o passo tirou. Para segurar a
+   contração mais tempo (manter a volta possível), deixe
+   `POST_DEPLOY_STEPS=off` na `trajetto-api-migrate` até decidir; tire
+   depois.
+
 ### Quando o Swarm desiste de um serviço
 
 Nenhuma Application tem limite de tentativas (`MaxAttempts: 0`). Se uma

@@ -2535,16 +2535,11 @@ model RouteStop {
   // A delivery may have at most ONE open stop across all routes. Also a
   // partial unique index in raw SQL — see the migration.
   @@index([deliveryId])
-  // "Not on an open stop" (`stops: { none: { status in PENDING, ARRIVED } }`)
-  // was an uncorrelated NOT IN: Postgres hashed every open stop of the
-  // platform. Prisma binds the status as CAST($n AS enum), which the partial
-  // unique index above cannot match, so without this the hash came from a
-  // scan of every stop ever made (db-perf 10/2026: 150 ms per query, six
-  // queries per route-builder load, one per refresh of the app's list).
-  // Since F2-21 the filter goes through the company's open routes
-  // (src/shared/route/open-stop-anti-join.ts) and no longer needs it; it
-  // leaves one release later (F2-21b), after the old image stops serving.
-  @@index([status, deliveryId])
+  // No ([status, deliveryId]) any more (F2-21b): "not on an open stop" goes
+  // through the company's open routes since F2-21
+  // (src/shared/route/open-stop-anti-join.ts). On a database that serves,
+  // the index leaves by prisma/post-deploy/03-route-stop-status-index.sql
+  // once every live process announces it no longer needs it.
   @@map("route_stop")
 }
 

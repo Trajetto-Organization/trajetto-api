@@ -3095,8 +3095,11 @@ D54).
   encerrar ou cancelar uma rota cancela as paradas abertas dela na mesma
   transação; `route-lifecycle.test.ts` guarda essa invariante e
   `query-plans-scale.test.ts` mede o seletor com 150 mil paradas abertas de
-  500 outras empresas. O índice `route_stop (status, deliveryId)` sai uma
-  release depois (F2-21b).
+  500 outras empresas. O índice `route_stop (status, deliveryId)` sai
+  (F2-21b) num banco novo pela migration
+  `20261118110000_drop_route_stop_status_delivery_idx` e, num banco que
+  serve, pelo passo `prisma/post-deploy/03-route-stop-status-index.sql`,
+  que espera todo processo vivo anunciar `route-stop-open-by-route-v1`.
 - **O que aconteceu com o veículo (F3, leitura):** `get-route` traz
   `checklists` (`route_start`/`route_end`, o mais recente de cada momento,
   o formato do `my-deliveries`) e `fuels`; `null` com Gestão de Frotas
