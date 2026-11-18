@@ -633,8 +633,12 @@ quem consome acorda o laço daquela fila na hora. Cem milissegundos juntam
 uma rajada num aviso só; o corpo é a réplica de quem publicou, nunca uma
 empresa, uma linha ou um id. Um processo que consome a fila também avisa
 quando há outro consumidor vivo, para ajudarem num backlog. No papel `all`,
-o processo se acorda sozinho e não publica nada. Uma dica perdida (Redis
-fora) custa a varredura: 2 s no `worker`
+o processo se acorda sozinho e não publica nada. A conexão que publica abre
+com a primeira dica, e cada dica espera até 1 s por ela pronta (a primeira
+depois do boot e a primeira depois de uma reconexão; sem isso, o Redis
+recusava a primeira dica de todo deploy da `api`). Uma dica perdida (Redis
+fora por mais que isso) custa a varredura, 2 s no `worker`, e o log diz
+`wake hint could not be published`, uma vez por queda
 ([ADR 0002](./adr/0002-redis-descartavel.md), adendo de 18/11/2026). A
 concorrência de cada fila vem do _Environment_ e precisa caber no lease do
 claim: o boot recusa a que não cabe (F3-05).

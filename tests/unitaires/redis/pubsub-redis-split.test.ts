@@ -23,6 +23,9 @@ const opened = vi.hoisted(
 
 const clients = vi.hoisted(() => [] as unknown[]);
 
+/** Whether a new connection is ready at once (else the test says when). */
+const connections = vi.hoisted(() => ({ readyOnOpen: true }));
+
 vi.mock("ioredis", async () => {
   const { EventEmitter: Emitter } = await import("node:events");
 
@@ -35,9 +38,19 @@ vi.mock("ioredis", async () => {
       super();
       opened.push({ url, name: options.connectionName });
       clients.push(this);
+
+      if (connections.readyOnOpen) this.status = "ready";
     }
 
+    // As ioredis with enableOfflineQueue: false: a command before the
+    // connection is ready is refused at once.
     async publish(channel: string, message: string): Promise<number> {
+      if (this.status !== "ready") {
+        throw new Error(
+          "Stream isn't writeable and enableOfflineQueue options is false",
+        );
+      }
+
       this.published.push([channel, message]);
       return 1;
     }
@@ -54,6 +67,7 @@ vi.mock("ioredis", async () => {
 
     async quit(): Promise<"OK"> {
       this.status = "end";
+      this.emit("end");
       return "OK";
     }
   }
@@ -77,6 +91,8 @@ afterEach(async () => {
 
   opened.length = 0;
   clients.length = 0;
+  connections.readyOnOpen = true;
+  vi.useRealTimers();
 });
 
 describe("without PUBSUB_REDIS_URL", () => {
@@ -118,8 +134,65 @@ describe("with PUBSUB_REDIS_URL", () => {
   });
 });
 
+/**
+ * The hints' publisher is opened by the first hint, with no offline queue
+ * (review of wave 12): that first PUBLISH went out while the connection was
+ * still connecting, was refused, and the refusal was swallowed — the first
+ * notification after every api deploy waited for the worker's sweep, and
+ * the wake bus's warning could never fire.
+ */
+describe("the hints' publisher", () => {
+  type FakeClient = EventEmitter & {
+    status: string;
+    published: Array<[string, string]>;
+  };
+
+  it("sends the first hint once its connection is ready, instead of losing it", async () => {
+    connections.readyOnOpen = false;
+
+    const pubsub = await import("@/shared/redis/pubsub-redis");
+    const sent = pubsub.publisher().publish("k:wake:outbox", "replica-a");
+    const client = clients[0] as FakeClient;
+
+    // Connecting: nothing went out yet, and nothing was refused.
+    await Promise.resolve();
+    expect(client.published).toEqual([]);
+
+    client.status = "ready";
+    client.emit("ready");
+
+    await expect(sent).resolves.toBe(1);
+    expect(client.published).toEqual([["k:wake:outbox", "replica-a"]]);
+  });
+
+  it("rejects a hint Redis never takes, so the bus can say so", async () => {
+    vi.useFakeTimers();
+    connections.readyOnOpen = false;
+
+    const pubsub = await import("@/shared/redis/pubsub-redis");
+    const sent = pubsub.publisher().publish("k:wake:outbox", "replica-a");
+    const refused = expect(sent).rejects.toThrow("Stream isn't writeable");
+
+    await vi.advanceTimersByTimeAsync(pubsub.HINT_READY_WAIT_MS);
+    await refused;
+  });
+
+  it("does not wait on a connection that is already ready", async () => {
+    const pubsub = await import("@/shared/redis/pubsub-redis");
+
+    await expect(
+      pubsub.publisher().publish("k:wake:ai", "replica-a"),
+    ).resolves.toBe(1);
+    expect((clients[0] as FakeClient).published).toEqual([
+      ["k:wake:ai", "replica-a"],
+    ]);
+  });
+});
+
 describe("the hints' subscriber", () => {
   it("is one connection, dispatches by channel and counts its generations", async () => {
+    connections.readyOnOpen = false;
+
     const pubsub = await import("@/shared/redis/pubsub-redis");
 
     const heard: string[] = [];

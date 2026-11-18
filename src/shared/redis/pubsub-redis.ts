@@ -32,8 +32,10 @@ const log = logger.child({ component: "pubsub" });
  *  - `adapterClients()`: the adapter's own pair, as before (its subscriber
  *    belongs to the adapter, and its publisher reports dropped frames);
  *  - `publisher()`: one connection for the hints (the wake, F3-04), with no
- *    offline queue: a hint published while Redis is away fails at once and
- *    is lost, which the sweeps exist for;
+ *    offline queue: a hint waits up to a second for the connection to be
+ *    ready (the first one after boot, opened by that very hint, and one
+ *    after a reconnect), and past that fails and is lost, which the sweeps
+ *    exist for. The failure reaches the caller, whose warning says so;
  *  - `subscribe(channel, handler)`: one subscriber connection for the
  *    hints, which waits for Redis however long it takes and subscribes
  *    again on every reconnect;
@@ -62,16 +64,55 @@ function adapterClients(
 let hintPublisher: Redis | null = null;
 let hintSubscriber: Redis | null = null;
 
-/** Hints that could not be published since the process started. */
-let publishFailures = 0;
-
 /** How many times the subscriber became ready (0 = never yet). */
 let subscriberGeneration = 0;
 
 const handlers = new Map<string, Set<(message: string) => void>>();
 
-/** The hints' publisher; a failed publish never reaches the caller. */
-function publisher(): Pick<Redis, "publish"> {
+/**
+ * How long a hint waits for its connection. Without an offline queue,
+ * ioredis refuses a command sent before the connection is ready, and the
+ * publisher is opened by the first hint: that hint was always refused, so
+ * the first notification after every api deploy waited for the worker's
+ * sweep (up to 2 s, past the bell's 1 s target), and so did the first one
+ * after every Redis reconnect. A connection on the same network is ready
+ * in milliseconds; a Redis still away after a second is an outage, and the
+ * sweep covers it. The wait runs on the bus's timer, never in a request.
+ */
+const HINT_READY_WAIT_MS = 1_000;
+
+/** Resolves once the client is ready, has ended, or after `ms`. */
+function readyWithin(client: Redis, ms: number): Promise<void> {
+  if (client.status === "ready") return Promise.resolve();
+
+  return new Promise<void>((resolve) => {
+    const done = () => {
+      clearTimeout(timer);
+      client.off("ready", done);
+      client.off("end", done);
+      resolve();
+    };
+
+    const timer = setTimeout(done, ms);
+
+    // A hint waiting never keeps a stopping process alive.
+    timer.unref();
+    client.once("ready", done);
+    client.once("end", done);
+  });
+}
+
+/** What the bus publishes with: a refused hint rejects. */
+interface HintPublisher {
+  publish(channel: string, message: string): Promise<number>;
+}
+
+/**
+ * The hints' publisher. A publish waits for the connection (above), and
+ * one Redis refuses rejects: the wake bus logs it once per outage
+ * (wake-bus.ts), and the sweep finds the work.
+ */
+function publisher(): HintPublisher {
   if (!hintPublisher) {
     hintPublisher = new Redis(pubsubRedisUrl(), {
       ...redisClientOptions("socket-pub"),
@@ -86,11 +127,11 @@ function publisher(): Pick<Redis, "publish"> {
   const client = hintPublisher;
 
   return {
-    publish: ((channel: string, message: string) =>
-      client.publish(channel, message).catch(() => {
-        publishFailures += 1;
-        return 0;
-      })) as Redis["publish"],
+    publish: async (channel, message) => {
+      await readyWithin(client, HINT_READY_WAIT_MS);
+
+      return client.publish(channel, message);
+    },
   };
 }
 
@@ -171,11 +212,6 @@ function generation(): number {
   return subscriberGeneration;
 }
 
-/** For the realtime numbers: hints lost to a Redis away. */
-function hintPublishFailures(): number {
-  return publishFailures;
-}
-
 /** Closes the hints' connections; the adapter's pair is closed by its owner. */
 async function closePubSub(): Promise<void> {
   const clients = [hintPublisher, hintSubscriber];
@@ -190,10 +226,10 @@ async function closePubSub(): Promise<void> {
 }
 
 export {
+  HINT_READY_WAIT_MS,
   adapterClients,
   closePubSub,
   generation,
-  hintPublishFailures,
   isReady,
   publisher,
   pubsubRedisUrl,
