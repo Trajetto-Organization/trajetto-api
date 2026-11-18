@@ -12,11 +12,14 @@ import {
  * One file of prisma/post-deploy run on this E2E file's database by the
  * release step's own runner (plano-escala F5-08), as the release does it:
  * its session, its lock_timeout, its NOTICE read as the step's state.
- * Returns that state.
+ * `settings` are the session settings the release step would hand every
+ * file (the approved interval of the history window, F2-17). Returns that
+ * state.
  */
 async function runPostDeployStep(
   name: string,
   applicationName = "e2e-post-deploy",
+  settings: Readonly<Record<string, string>> = {},
 ): Promise<{ status: string; detail: string }> {
   const root = mkdtempSync(join(tmpdir(), "trajetto-post-deploy-"));
 
@@ -35,6 +38,7 @@ async function runPostDeployStep(
     const outcome = await runReleaseSteps(client, listReleaseSteps(root), {
       log: { info: () => undefined, warn: () => undefined },
       postDeploy: true,
+      settings,
     });
 
     const [step] = outcome.steps;

@@ -50,7 +50,11 @@ const ROLES = [
   "trajetto_read",
 ] as const;
 
-const TRAIL = new Set(["delivery_event", "delivery_event_part"]);
+const TRAIL = new Set([
+  "delivery_event",
+  "delivery_event_part",
+  "delivery_event_legacy",
+]);
 const RELEASE_TABLES = new Set([
   "_prisma_migrations",
   "release_step_state",

@@ -21,6 +21,7 @@ import { refreshStopGroupKeysOfDelivery } from "@/shared/delivery/stop-group";
 import { openStopsOnRoutesLeftOpen } from "@/shared/route/routes-left-open-query";
 import { notOnAnOpenStop } from "@/shared/route/open-stop-anti-join";
 import { utcInstant } from "@/shared/database/utc-instant";
+import { historyIdRangeSince } from "@/shared/time/history-id-range";
 import { deliveryStatusTrailEnabled } from "@/shared/delivery/status-trail";
 import type { OperationDay } from "@/modules/route/repositories/IOperation-day-repository";
 
@@ -668,6 +669,12 @@ class DeliveryRepository implements IDeliveryRepository {
    * key order as the include.
    */
   async findDeliveryDetailById(deliveryId: string): Promise<unknown | null> {
+    // Nothing happened to a delivery before it existed: its trail runs from
+    // its own id's instant (a uuid v7) to now, which keeps the read on those
+    // months once delivery_event is partitioned by month on its id
+    // (plano-escala F2-17). No bound for an id that is not a v7.
+    const trailIds = historyIdRangeSince(deliveryId);
+
     const found = await this.prisma.delivery.findUnique({
       where: { id: deliveryId },
       include: {
@@ -675,7 +682,10 @@ class DeliveryRepository implements IDeliveryRepository {
         // The trail, newest first: arrivals and proofs from the app, status
         // overrides and notes from the panel. The reason comes along because
         // it is the sentence support is scanning for.
-        events: { orderBy: { created_at: "desc" } },
+        events: {
+          ...(trailIds && { where: { id: trailIds } }),
+          orderBy: { created_at: "desc" },
+        },
         occurrences: { orderBy: { created_at: "desc" } },
 
         /**

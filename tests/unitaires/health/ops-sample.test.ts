@@ -138,6 +138,7 @@ describe("the ops_sample row", () => {
       "queue-partition-agnostic-v1",
       "route-stop-open-by-route-v1",
       "notification-partition-agnostic-v1",
+      "history-partition-agnostic-v1",
     ]);
     const keys = Object.keys(row.metrics);
 

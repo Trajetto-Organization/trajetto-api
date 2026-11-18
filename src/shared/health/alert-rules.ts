@@ -479,7 +479,8 @@ type AlertKind = (typeof ALERT_KINDS)[number];
  * Runbooks of incidents no rule names yet (F1-20): a provider down, a
  * reconnect storm, a migration stuck on a lock, a full disk, a PITR
  * restore and the restore drill; and the planned moves between servers
- * (F1-24): the staging to a Remote Server, production to its own servers.
+ * (F1-24): the staging to a Remote Server, production to its own servers;
+ * and the planned windows, such as the history's copy window (F2-17).
  * They live beside the alerts' runbooks.
  */
 const OPERATION_RUNBOOKS = [
@@ -492,6 +493,7 @@ const OPERATION_RUNBOOKS = [
   "staging-remote-server",
   "producao-servidores-proprios",
   "delivery-event-writer-bound",
+  "history-window",
 ] as const;
 
 /** One reason to wake the operation: its code and its pt-BR message. */

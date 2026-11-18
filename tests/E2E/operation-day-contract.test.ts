@@ -37,6 +37,18 @@ const OTHER = "018fa000-0000-7000-8000-00000000000b";
 const id = (suffix: string) =>
   `018fa000-0000-7000-8000-${suffix.padStart(12, "0")}`;
 
+/**
+ * An event's id as the app mints it: a uuid v7 of the instant it is
+ * written. The tower bounds the day's events by their ids as well as by
+ * created_at (plano-escala F2-17, history-id-range.ts), which holds for
+ * every id minted at the insert; a fixed id from another year would not.
+ */
+const eventId = (key: string, createdAt: Date) => {
+  const hex = createdAt.getTime().toString(16).padStart(12, "0");
+
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-7000-8000-${`e${key}`.padStart(12, "0")}`;
+};
+
 const D1 = id("d1");
 const D2 = id("d2");
 const DX = id("dx");
@@ -121,7 +133,7 @@ function scenario(): OperationRows {
     deliveryKey: string,
     overrides: Partial<OperationRows["events"][number]>,
   ): OperationRows["events"][number] => ({
-    id: id(`e${key}`),
+    id: eventId(key, overrides.created_at ?? at("2026-09-17T12:00:00.000Z")),
     businessId: CARRIER,
     deliveryId: DELIVERY(deliveryKey),
     routeId: null,
@@ -885,7 +897,11 @@ describe("the feed of the day", () => {
       // Blocking, but waiting for a manager: the same line from the event
       // as from the row, and not red (decision 6.3).
       expect(
-        feed.find((entry) => entry.id === `delivery_event:${id("e7")}`),
+        feed.find(
+          (entry) =>
+            entry.id ===
+            `delivery_event:${eventId("7", at("2026-09-17T15:00:00.000Z"))}`,
+        ),
       ).toMatchObject({
         source: "delivery_event",
         detail: "Cliente ausente",

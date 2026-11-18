@@ -25,6 +25,10 @@ import type pg from "pg";
  * Between files the session is put back (role, timeouts): a step's SET must
  * not leak into the next one. Each file runs as one simple query, so a file
  * of several statements without BEGIN runs as one implicit transaction.
+ *
+ * What the environment approves reaches the files as session settings, the
+ * same for every step (RunnerOptions.settings): a file cannot read the
+ * environment, and a setting a step changed is put back with the session.
  */
 
 const STEP_GROUPS = ["infra/sql", "prisma/post-deploy"] as const;
@@ -97,6 +101,12 @@ interface RunnerOptions {
   log: RunnerLog;
   /** POST_DEPLOY_STEPS=off: prisma/post-deploy is left as it is. */
   postDeploy: boolean;
+  /**
+   * Session settings every step starts with, `name → value` (a custom
+   * setting such as trajetto.history_window_approved). A file reads one
+   * with current_setting(name, true); one not given reads NULL.
+   */
+  settings?: Readonly<Record<string, string>>;
 }
 
 interface StepOutcome {
@@ -144,11 +154,21 @@ async function record(
   );
 }
 
-/** The session as each step starts it: own role, no statement ceiling. */
-async function resetSession(client: pg.Client): Promise<void> {
+/**
+ * The session as each step starts it: own role, no statement ceiling, and
+ * the run's settings (a step that changed one does not pass it on).
+ */
+async function resetSession(
+  client: pg.Client,
+  settings: Readonly<Record<string, string>> = {},
+): Promise<void> {
   await client.query(
     `RESET ROLE; SET statement_timeout = 0; SET lock_timeout = '${STEP_LOCK_TIMEOUT}'`,
   );
+
+  for (const [name, value] of Object.entries(settings)) {
+    await client.query("SELECT set_config($1, $2, false)", [name, value]);
+  }
 }
 
 /**
@@ -192,7 +212,7 @@ async function runReleaseSteps(
       notices.push(notice.message ?? "");
     const startedAt = Date.now();
 
-    await resetSession(client);
+    await resetSession(client, options.settings);
     client.on("notice", onNotice);
 
     let failure: string | null = null;
@@ -209,7 +229,7 @@ async function runReleaseSteps(
       // An explicit BEGIN in the file leaves the session in an aborted
       // transaction; outside one this is a harmless warning.
       await client.query("ROLLBACK").catch(() => undefined);
-      await resetSession(client);
+      await resetSession(client, options.settings);
       await record(client, step.step, "failed", failure);
       await record(client, RUN_ROW, "failed", `${step.step}: ${failure}`);
 
@@ -218,7 +238,7 @@ async function runReleaseSteps(
 
     const status = stepStatus(notices);
 
-    await resetSession(client);
+    await resetSession(client, options.settings);
 
     if (!status) {
       const message = `${step.step} terminou sem RAISE NOTICE 'applied: …', 'skipped: …' ou 'pending: …': o passo precisa dizer o que fez.`;
@@ -281,7 +301,93 @@ function postDeployEnabled(env: NodeJS.ProcessEnv): boolean {
   return env.POST_DEPLOY_STEPS?.trim().toLowerCase() !== "off";
 }
 
+/**
+ * The session setting the copy windows of the history read
+ * (prisma/post-deploy/30-delivery-event-window.sql and
+ * 31-activity-window.sql, plano-escala F2-17, F2-18, D39, D68):
+ * `<start>/<end>`, two instants in ISO, UTC.
+ */
+const HISTORY_WINDOW_SETTING = "trajetto.history_window_approved";
+
+/**
+ * The longest interval an approval may cover. The window is an hour of a
+ * night; an interval of days left in the Environment would approve every
+ * deploy inside it, the surprise the approval exists to prevent.
+ */
+const HISTORY_WINDOW_MAX_MS = 24 * 60 * 60 * 1000;
+
+/** An instant with its date, its time and its zone: `Z` or `±hh:mm`. */
+const ISO_INSTANT =
+  /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,3})?)?(?:Z|[+-]\d{2}:\d{2})$/;
+
+type HistoryWindowApproval =
+  | { state: "absent" }
+  | { state: "invalid"; reason: string }
+  | { state: "approved"; from: Date; to: Date; setting: string };
+
+/**
+ * HISTORY_WINDOW_APPROVED, the interval in which the owner approved the copy
+ * windows of delivery_event and activity: `<start>/<end>`, two ISO instants
+ * with their zone, the start before the end and at most 24 h apart (for
+ * example `2026-12-06T06:00:00Z/2026-12-06T07:30:00Z`). Typed by hand in the
+ * Environment of the trajetto-api-migrate Application only, at the start of
+ * the window, and deleted after it. Anything else approves nothing: the
+ * windows stay 'skipped: aguardando janela', and the log says why.
+ */
+function historyWindowApproval(env: NodeJS.ProcessEnv): HistoryWindowApproval {
+  const raw = env.HISTORY_WINDOW_APPROVED?.trim();
+
+  if (!raw) return { state: "absent" };
+
+  const parts = raw.split("/").map((part) => part.trim());
+
+  if (parts.length !== 2) {
+    return {
+      state: "invalid",
+      reason: "espera dois instantes ISO separados por /",
+    };
+  }
+
+  const [from, to] = parts;
+
+  if (!ISO_INSTANT.test(from) || !ISO_INSTANT.test(to)) {
+    return {
+      state: "invalid",
+      reason:
+        "cada instante precisa de data, hora e fuso (Z ou ±hh:mm), como 2026-12-06T06:00:00Z",
+    };
+  }
+
+  const fromDate = new Date(from);
+  const toDate = new Date(to);
+
+  if (Number.isNaN(fromDate.getTime()) || Number.isNaN(toDate.getTime())) {
+    return { state: "invalid", reason: "um dos instantes não é uma data" };
+  }
+
+  if (toDate.getTime() <= fromDate.getTime()) {
+    return { state: "invalid", reason: "o fim não vem depois do início" };
+  }
+
+  if (toDate.getTime() - fromDate.getTime() > HISTORY_WINDOW_MAX_MS) {
+    return {
+      state: "invalid",
+      reason: "o intervalo passa de 24 h; aprove só a janela da madrugada",
+    };
+  }
+
+  return {
+    state: "approved",
+    from: fromDate,
+    to: toDate,
+    setting: `${fromDate.toISOString()}/${toDate.toISOString()}`,
+  };
+}
+
 export {
+  HISTORY_WINDOW_MAX_MS,
+  HISTORY_WINDOW_SETTING,
+  historyWindowApproval,
   listReleaseSteps,
   postDeployEnabled,
   RUN_ROW,
@@ -289,6 +395,7 @@ export {
   STEP_GROUPS,
   StepFailure,
   stepStatus,
+  type HistoryWindowApproval,
   type ReleaseStep,
   type RunOutcome,
 };

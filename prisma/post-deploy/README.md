@@ -22,7 +22,24 @@ migrations.
 `rollback/` não é um passo: a etapa só lê os `.sql` desta pasta, não os das
 subpastas. Lá fica a volta de um passo, rodada à mão
 (`rollback/unpartition-queue.sql`, a volta da troca das filas,
-[ADR 0014](../../docs/adr/0014-filas-particionadas.md)).
+[ADR 0014](../../docs/adr/0014-filas-particionadas.md);
+`rollback/unpartition-delivery-event.sql`, a volta da janela do histórico,
+[runbook](../../docs/runbooks/history-window.md)).
+
+## A janela aprovada por intervalo
+
+Os passos da janela do histórico (`30-delivery-event-window.sql`, plano de
+escala F2-17) não rodam porque a release chegou: rodam só dentro do
+intervalo que o dono aprovou em `HISTORY_WINDOW_APPROVED` (dois instantes
+ISO com fuso, `<início>/<fim>`, no máximo 24 h), no _Environment_ da
+`trajetto-api-migrate`. A etapa entrega o valor a todo arquivo como a
+configuração de sessão `trajetto.history_window_approved`
+(`current_setting('trajetto.history_window_approved', true)`; sem ela, NULL).
+Fora do intervalo, ou sem ele, o passo termina
+`skipped: aguardando janela`, num banco sem empresa também: o molde do E2E
+e o `yarn dev` ficam com a tabela comum, e os E2E da janela aprovam o
+intervalo no próprio banco (`tests/E2E/support/history-window.ts`). Um
+passo assim também pergunta a capability antes, como uma contração.
 
 ## A capability antes de uma contração
 

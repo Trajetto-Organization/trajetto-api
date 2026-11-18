@@ -51,14 +51,15 @@ Regras, limiares e como ligar o monitor externo:
 
 Incidentes que nenhuma regra nomeia ainda e as mudanças de servidor planejadas (`OPERATION_RUNBOOKS`).
 
-| Runbook                                                           | O que é                              | Quando                                                                             |
-| ----------------------------------------------------------------- | ------------------------------------ | ---------------------------------------------------------------------------------- |
-| [provider-down](./provider-down.md)                               | Provedor externo fora                | Meta, Expo, Resend ou LocationIQ fora do ar ou lento                               |
-| [reconnect-storm](./reconnect-storm.md)                           | Tempestade de reconexão              | depois de um deploy ou de uma queda de rede, todos os sockets voltam juntos        |
-| [migration-lock](./migration-lock.md)                             | Migration presa num lock             | a etapa de release espera por um lock e falha pelo lock_timeout                    |
-| [disk-full](./disk-full.md)                                       | Disco do servidor enchendo           | disco do host acima de 80% (e-mail) ou 85% (Telegram)                              |
-| [pitr-restore](./pitr-restore.md)                                 | Restaurar o banco até um momento     | um apagamento acidental, uma migration ruim ou a perda do banco                    |
-| [restore-drill](./restore-drill.md)                               | Ensaio mensal de restauração         | todo mês, no dia 1 às 05:45 UTC, e depois de mudar o backup                        |
-| [staging-remote-server](./staging-remote-server.md)               | A staging num Remote Server (2º VPS) | onda 16 (G-03), depois dos portões no 2º VPS vazio                                 |
-| [producao-servidores-proprios](./producao-servidores-proprios.md) | A produção no prod-1 e no prod-db-1  | onda 22, antes do primeiro cliente de escala                                       |
-| [delivery-event-writer-bound](./delivery-event-writer-bound.md)   | Escrita no histórico recusada        | um erro `TJ001`: INSERT em `delivery_event` numa transação aberta há mais de 240 s |
+| Runbook                                                           | O que é                              | Quando                                                                               |
+| ----------------------------------------------------------------- | ------------------------------------ | ------------------------------------------------------------------------------------ |
+| [provider-down](./provider-down.md)                               | Provedor externo fora                | Meta, Expo, Resend ou LocationIQ fora do ar ou lento                                 |
+| [reconnect-storm](./reconnect-storm.md)                           | Tempestade de reconexão              | depois de um deploy ou de uma queda de rede, todos os sockets voltam juntos          |
+| [migration-lock](./migration-lock.md)                             | Migration presa num lock             | a etapa de release espera por um lock e falha pelo lock_timeout                      |
+| [disk-full](./disk-full.md)                                       | Disco do servidor enchendo           | disco do host acima de 80% (e-mail) ou 85% (Telegram)                                |
+| [pitr-restore](./pitr-restore.md)                                 | Restaurar o banco até um momento     | um apagamento acidental, uma migration ruim ou a perda do banco                      |
+| [restore-drill](./restore-drill.md)                               | Ensaio mensal de restauração         | todo mês, no dia 1 às 05:45 UTC, e depois de mudar o backup                          |
+| [staging-remote-server](./staging-remote-server.md)               | A staging num Remote Server (2º VPS) | onda 16 (G-03), depois dos portões no 2º VPS vazio                                   |
+| [producao-servidores-proprios](./producao-servidores-proprios.md) | A produção no prod-1 e no prod-db-1  | onda 22, antes do primeiro cliente de escala                                         |
+| [delivery-event-writer-bound](./delivery-event-writer-bound.md)   | Escrita no histórico recusada        | um erro `TJ001`: INSERT em `delivery_event` numa transação aberta há mais de 240 s   |
+| [history-window](./history-window.md)                             | Janela do histórico                  | a janela de madrugada aprovada da onda 11, o ensaio antes dela e a volta nos 14 dias |

@@ -26,9 +26,10 @@
 -- The parents are the tables the partition job keeps
 -- (src/shared/database/partitions.ts; a unit test keeps the two lists in
 -- step) and the ones the plan adds later (the lean trail, the event and
--- activity shells, the four queues, the bell); a table that does not exist
--- yet, or is not partitioned yet (the queues until their swap, F5-09, the
--- bell until its own, F5-15), is skipped.
+-- activity shells, the four queues, the bell, and the tables the shells
+-- become at their copy window, F2-17); a table that does not exist yet, or
+-- is not partitioned yet (the queues until their swap, F5-09, the bell
+-- until its own, F5-15, delivery_event until its window), is skipped.
 --
 -- A change of owner takes ACCESS EXCLUSIVE on the table, and the whole
 -- file is one transaction (infra/sql/README.md): every lock it takes is
@@ -53,6 +54,7 @@ DECLARE
     'driver_position',
     'driver_position_v2',
     'delivery_event_part',
+    'delivery_event',
     'activity_part',
     'domain_outbox_event',
     'notification_delivery',

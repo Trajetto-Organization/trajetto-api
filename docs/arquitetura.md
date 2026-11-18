@@ -4822,6 +4822,35 @@ seja calculado do `deadlock_timeout`. A casca não está no
 grava antes da janela): a lista de exceções do gate de drift explica as
 linhas dela.
 
+**A janela de cópia da trilha (plano de escala, F2-17).** A cópia não é
+migration: é o passo `prisma/post-deploy/30-delivery-event-window.sql`, que
+só roda dentro do intervalo `HISTORY_WINDOW_APPROVED` (dois instantes ISO,
+no máximo 24 h, digitados no _Environment_ da `trajetto-api-migrate` no
+começo da janela; `release-steps.ts` os entrega ao SQL como
+`trajetto.history_window_approved`). Fora dele, ou sem ele, o passo termina
+`skipped: aguardando janela`, num banco vazio também: um hotfix promovido
+depois nunca roda a janela de surpresa, e o molde do E2E e o `yarn dev`
+ficam com a tabela comum que a produção tem até a janela dela. Dentro do
+intervalo, espera (`pending`) todo processo vivo anunciar
+`history-partition-agnostic-v1`, e então, numa transação: `LOCK` em SHARE
+ROW EXCLUSIVE (as escritas esperam, as leituras seguem; 10 s por
+tentativa, três), a recuperação das chaves de envio que a imagem anterior
+gravou só na coluna, o `INSERT … SELECT` de toda linha com o `txid` como
+está (NULL continua NULL; o DEFAULT carimbaria o histórico com o xid da
+cópia e todo poller com cursor v2 receberia tudo de novo), as contagens
+conferidas, o lock elevado a ACCESS EXCLUSIVE (30 s) e a troca dos nomes:
+a tabela comum vira `delivery_event_legacy` (14 dias; sai na onda 20), a
+casca e as partições ganham os nomes canônicos (`delivery_event_AAAAMM` e
+`delivery_event_older` para a partição `FROM (MINVALUE)`), com o gatilho
+do U-16. A pausa de escrita medida vai no `detail` do
+`release_step_state`. A volta, nos 14 dias, é
+`prisma/post-deploy/rollback/unpartition-delivery-event.sql`
+([runbook](./runbooks/history-window.md)). As leituras quentes ganham piso
+de id (`src/shared/time/history-id-range.ts`): a linha do tempo de uma
+entrega lê do instante do id dela até agora, e a Torre lê o dia com dois
+dias de margem, uma ou duas partições cada
+(`tests/E2E/history-window-plans.test.ts`).
+
 O guard `tests/unitaires/lifecycle/migration-safety.test.ts` lê toda migration
 posterior a `LAST_MIGRATION_IN_PRODUCTION` e falha em qualquer statement da
 tabela acima sobre um objeto que a produção já tem, a menos que o arquivo traga

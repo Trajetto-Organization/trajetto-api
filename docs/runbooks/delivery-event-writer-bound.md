@@ -27,7 +27,7 @@ FROM pg_trigger
 WHERE tgname IN ('delivery_event_writer_bound', 'delivery_event_part_writer_bound');
 ```
 
-Duas linhas, `tgenabled` = `O` e o argumento `240\000`. Depois da correção, a escrita que falhava passa.
+Duas linhas, `tgenabled` = `O` e o argumento `240\000`. Depois da janela do histórico ([history-window](./history-window.md)) a casca virou a `delivery_event` e só a primeira linha aparece, na tabela particionada; o gatilho da tabela de antes se chama `delivery_event_legacy_writer_bound`. Depois da correção, a escrita que falhava passa.
 
 ## Quando escalar
 

@@ -3,6 +3,8 @@ import * as dotenvExpand from "dotenv-expand";
 
 import { bouncerRefusal, openReleaseClient } from "./release-connection";
 import {
+  HISTORY_WINDOW_SETTING,
+  historyWindowApproval,
   listReleaseSteps,
   postDeployEnabled,
   runReleaseSteps,
@@ -25,6 +27,12 @@ import {
  * POST_DEPLOY_STEPS=off (the trajetto-api-migrate Application only) skips
  * prisma/post-deploy, for an emergency; infra/sql always runs, because the
  * grants it restores are what lets the runtime read and write.
+ *
+ * HISTORY_WINDOW_APPROVED (the same Application, only during the window)
+ * is the interval in which the copy windows of the history may run
+ * (release-step-runner.ts, historyWindowApproval); it reaches them as the
+ * session setting trajetto.history_window_approved. A value that is not
+ * such an interval approves nothing, and the log says why.
  */
 dotenvExpand.expand(dotenv.config());
 
@@ -50,6 +58,18 @@ async function main(): Promise<number> {
     return 64;
   }
 
+  const approval = historyWindowApproval(process.env);
+
+  if (approval.state === "invalid") {
+    console.warn(
+      `${PREFIX} HISTORY_WINDOW_APPROVED ignorada: ${approval.reason}. A janela do histórico não roda.`,
+    );
+  } else if (approval.state === "approved") {
+    console.log(
+      `${PREFIX} janela do histórico aprovada de ${approval.from.toISOString()} a ${approval.to.toISOString()}.`,
+    );
+  }
+
   const steps = listReleaseSteps(root);
   const client = await openReleaseClient(
     url as string,
@@ -59,6 +79,10 @@ async function main(): Promise<number> {
   try {
     await runReleaseSteps(client, steps, {
       postDeploy: postDeployEnabled(process.env),
+      settings:
+        approval.state === "approved"
+          ? { [HISTORY_WINDOW_SETTING]: approval.setting }
+          : {},
       log: {
         info: (message) => console.log(`${PREFIX} ${message}`),
         warn: (message) => console.warn(`${PREFIX} ${message}`),

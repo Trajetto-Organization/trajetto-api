@@ -5,6 +5,7 @@ import database from "@/../infra/database";
 import { relatedTo, rowsByKey } from "@/shared/database/related-rows";
 
 import { dateOnlyFromKey, dateOnlyKey } from "@/shared/time/business-day";
+import { historyIdRange } from "@/shared/time/history-id-range";
 import { openStopsOnRoutesLeftOpen } from "@/shared/route/routes-left-open-query";
 import type { RoutePeriodDays } from "@/shared/route/route-period";
 import {
@@ -267,6 +268,10 @@ class OperationDayRepository implements IOperationDayRepository {
           AND e."type" = 'STATUS_CHANGE'
           AND e."status_to" = 'CANCELLED'
           AND e."created_at" >= ${utc(day.start)}
+          -- The floor of the day's ids (plano-escala F2-17): the months
+          -- since the day, not the whole partitioned history. No ceiling: a
+          -- cancellation backdated into the day is written after it.
+          AND e."id" >= ${historyIdRange(day.start, day.end).gte}::text
           AND LEAST(COALESCE(e."occurred_at", e."created_at"), e."created_at") < ${utc(day.end)}
       ),
       "requeued" AS (
@@ -412,10 +417,15 @@ class OperationDayRepository implements IOperationDayRepository {
     limit: number,
   ): Promise<FeedEntry[]> {
     const inDay = { gte: day.start, lt: day.end };
+    // The ids of the day's rows (plano-escala F2-17): with delivery_event
+    // partitioned by month on its id, the day reads its one or two months,
+    // not the whole history. The same rows: an id is minted at the insert.
+    const dayIds = historyIdRange(day.start, day.end);
 
     const events = await this.prisma.deliveryEvent.findMany({
       where: {
         businessId,
+        id: dayIds,
         created_at: inDay,
         // A stop added to or taken off a plan is not something that happened
         // on the street (decision 14.7): the planning lines stay in the
@@ -453,7 +463,8 @@ class OperationDayRepository implements IOperationDayRepository {
       where: {
         businessId,
         created_at: inDay,
-        events: { none: { type: "OCCURRENCE" } },
+        // Its event is written with it or after it, inside the day's ids.
+        events: { none: { type: "OCCURRENCE", id: { gte: dayIds.gte } } },
         // Only "não entrega" (decision 14.3): a delivery-category occurrence
         // is the proof, already in the feed as its PROOF event, and a pause
         // is not an occurrence of the operation.

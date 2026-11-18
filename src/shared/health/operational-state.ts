@@ -330,9 +330,14 @@ function partitionTableState(
   rows: readonly PartitionCatalogRow[],
   now: Date = new Date(),
 ): PartitionTableMetrics {
-  // A queue before its swap (F5-09) is a plain table with no partition to
-  // judge: neither a runway nor an owner to page about yet.
-  if (table.plainUntilSwap && parent?.partitioned === false) {
+  // A queue before its swap (F5-09), or a history table before its copy
+  // window (F2-17), is a plain table with no partition to judge: neither a
+  // runway nor an owner to page about yet. The window's shell, once the
+  // window renamed it to its table, is gone on purpose: the same.
+  if (
+    (table.plainUntilSwap && parent?.partitioned === false) ||
+    (table.shellUntilWindow && parent === null)
+  ) {
     return {
       partitions: 0,
       lookahead_days: null,

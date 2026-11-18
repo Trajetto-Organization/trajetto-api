@@ -73,12 +73,23 @@ interface PartitionedTable {
 
   /**
    * A table that is still a plain one, and becomes partitioned only at the
-   * swap of plano-escala F5-09 (prisma/post-deploy): until then the job
-   * leaves it alone, and the metrics and the alerts do not judge its
-   * partitions (it has none to judge). From the swap on, it is kept like
-   * any other entry.
+   * swap of plano-escala F5-09 or at a copy window of the history (F2-17,
+   * F2-18), both in prisma/post-deploy: until then the job leaves it alone,
+   * and the metrics and the alerts do not judge its partitions (it has none
+   * to judge). From the swap on, it is kept like any other entry.
    */
   plainUntilSwap?: boolean;
+
+  /**
+   * The empty shell a copy window fills and renames to its table
+   * (plano-escala F2-16, F2-17, F2-18: delivery_event_part becomes
+   * delivery_event, activity_part becomes activity). Kept like any other
+   * entry while it exists, so the months the copy needs are there; once the
+   * window ran it is gone on purpose, and its absence is neither a warning
+   * of the job nor a runway to alert on. Its table has its own entry, plain
+   * until the window (plainUntilSwap).
+   */
+  shellUntilWindow?: boolean;
 
   /**
    * Who decides that a partition past the retention may go, for a queue
@@ -277,6 +288,11 @@ function queuePartitions(values: PartitionEnv): PartitionedTable[] {
  * day lands in the month behind); the history before the first month is
  * the legacy partition, FROM (MINVALUE), which the job leaves alone. Kept:
  * nothing is detached or dropped until the legal opinion (decision D3).
+ * The copy window (prisma/post-deploy/30-delivery-event-window.sql) renames
+ * it to delivery_event, its months to delivery_event_YYYYMM and the legacy
+ * partition to delivery_event_older: from then on the shell is gone
+ * (shellUntilWindow), and the same months are kept under the
+ * delivery_event entry, a plain table until that night.
  *
  * The four queues: see queuePartitions. Plain tables until the swap.
  *
@@ -305,19 +321,21 @@ function registeredPartitions(
     archive: "trail",
   } as const;
 
+  const deliveryTrail = {
+    grain: "month",
+    key: "uuid7",
+    lookahead: DELIVERY_EVENT_LOOKAHEAD_MONTHS,
+    requiredBehind: 1,
+    requiredAhead: 1,
+    retentionDays: null,
+    settleDays: 7,
+  } as const;
+
   return [
     { table: "driver_position", ...trail },
     { table: "driver_position_v2", ...trail },
-    {
-      table: "delivery_event_part",
-      grain: "month",
-      key: "uuid7",
-      lookahead: DELIVERY_EVENT_LOOKAHEAD_MONTHS,
-      requiredBehind: 1,
-      requiredAhead: 1,
-      retentionDays: null,
-      settleDays: 7,
-    },
+    { table: "delivery_event_part", ...deliveryTrail, shellUntilWindow: true },
+    { table: "delivery_event", ...deliveryTrail, plainUntilSwap: true },
     ...queuePartitions(values),
     {
       table: "notification",

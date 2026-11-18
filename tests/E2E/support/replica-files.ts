@@ -42,6 +42,7 @@ const REPLICA_E2E_FILES = [
 const SERIAL_E2E_FILES = [
   "driver-last-position-hot.test.ts",
   "integration-feed-commit-order.test.ts",
+  "integration-feed-across-window.test.ts",
 ] as const;
 
 /** E2E_PHASE values (vite.config.mts). Unset: every file, as always. */

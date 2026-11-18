@@ -22,7 +22,9 @@
 --                    group.
 --
 -- The delivery trail (delivery_event, and delivery_event_part, the
--- partitioned table it moves to later in the plan) is history: http and
+-- partitioned table it moves to later in the plan; after that copy window,
+-- F2-17, delivery_event_legacy, the table of before, for its 14 days) is
+-- history: http and
 -- worker may read it, append to it and fill in the reverse-geocoded
 -- address of a proof (gps_address, gps_address_source, gps_geocoded_at);
 -- only batch may change or delete a row. A path that writes anything else
@@ -71,7 +73,7 @@ DECLARE
     'trajetto_batch'
   ];
   -- The trail: append-only for the runtime, see above.
-  trail_tables CONSTANT text[] := ARRAY['delivery_event', 'delivery_event_part'];
+  trail_tables CONSTANT text[] := ARRAY['delivery_event', 'delivery_event_part', 'delivery_event_legacy'];
   gps_columns CONSTANT text[] := ARRAY[
     'gps_address',
     'gps_address_source',

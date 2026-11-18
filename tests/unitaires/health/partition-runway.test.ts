@@ -226,6 +226,33 @@ describe("partitionTableState", () => {
     ).toMatchObject({ runway_ok: false });
   });
 
+  // plano-escala F2-17: the copy window renames its shell to the table, so
+  // a shell that no longer exists is the state after the window, not a
+  // runway at zero. A table that should exist and does not still alerts.
+  it("does not judge a copy-window shell that is gone, and still judges any other missing table", () => {
+    const shell = {
+      ...trail,
+      table: "delivery_event_part",
+      shellUntilWindow: true,
+    };
+
+    expect(partitionTableState(shell, null, [], NOW)).toMatchObject({
+      partitions: 0,
+      runway_ok: true,
+      lookahead_ok: true,
+      owner_ok: true,
+    });
+
+    // While it exists it is judged like any other table.
+    expect(
+      partitionTableState(shell, { owned: true, partitioned: true }, [], NOW),
+    ).toMatchObject({ runway_ok: false });
+
+    expect(partitionTableState(trail, null, [], NOW)).toMatchObject({
+      runway_ok: false,
+    });
+  });
+
   it("does not judge the lookahead of a table that keeps none", () => {
     const retired = { ...trail, lookahead: 0 };
     const state = partitionTableState(retired, { owned: true }, [row(-1)], NOW);

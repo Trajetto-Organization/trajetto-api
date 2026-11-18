@@ -34,11 +34,22 @@
  *    IN_APP meets the primary key (F5-14), and deleting a user or a company
  *    takes its bell rows in SQL (queue-row-cleanup.ts). What the
  *    contraction and the monthly swap of F5-15 need.
+ *  - history-partition-agnostic-v1: nothing writes or reads the history
+ *    (delivery_event, activity) through a unique other than the primary
+ *    key. A driver's submission key is claimed in delivery_event_submission
+ *    in the same transaction as its event, and the replay looks there and
+ *    on the column (F2-14); an activity of the notification pipeline is
+ *    written under its delivery's id and found by it, or by deliveryId
+ *    (F2-15); every id written there is a uuid v7 (the models' default, or
+ *    a delivery's id). What the copy windows of F2-17 and F2-18 need: the
+ *    partitioned tables keep neither the unique of client_submission_id
+ *    nor that of activity.deliveryId.
  */
 const PROCESS_CAPABILITIES = [
   "queue-partition-agnostic-v1",
   "route-stop-open-by-route-v1",
   "notification-partition-agnostic-v1",
+  "history-partition-agnostic-v1",
 ] as const;
 
 type ProcessCapability = (typeof PROCESS_CAPABILITIES)[number];

@@ -175,6 +175,40 @@ describe("the partition registry", () => {
     );
   });
 
+  // plano-escala F2-17: the copy window renames the shell to delivery_event.
+  // From that night the same months are kept under the trail's own name,
+  // and the shell's absence is the expected state; before it, the trail is
+  // a plain table the job leaves alone.
+  it("keeps the delivery trail under its own name after the window, the shell gone on purpose", () => {
+    const tables = registeredPartitions();
+    const shell = tables.find((table) => table.table === "delivery_event_part");
+    const trail = tables.find((table) => table.table === "delivery_event");
+
+    expect(shell?.shellUntilWindow).toBe(true);
+    expect(trail).toMatchObject({
+      grain: "month",
+      key: "uuid7",
+      lookahead: 3,
+      requiredBehind: 1,
+      requiredAhead: 1,
+      retentionDays: null,
+      plainUntilSwap: true,
+    });
+    expect(trail?.shellUntilWindow).toBeUndefined();
+
+    expect(
+      plannedPartitions(trail as PartitionedTable, NIGHT).map(
+        (each) => each.name,
+      ),
+    ).toEqual([
+      "delivery_event_202610",
+      "delivery_event_202611",
+      "delivery_event_202612",
+      "delivery_event_202701",
+      "delivery_event_202702",
+    ]);
+  });
+
   it("writes a bound in the key's own terms: a UTC timestamp, or the smallest uuid v7 of the instant", () => {
     expect(partitionBound(trail, day("2026-11-17"))).toBe(
       "'2026-11-17T00:00:00.000Z'",

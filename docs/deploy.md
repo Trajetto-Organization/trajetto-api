@@ -3889,6 +3889,28 @@ A troca das filas (`10-queue-partition-swap.sql`) tem três cuidados a mais:
   copia toda linha de volta para uma tabela comum e marca a fila para a
   troca não voltar sozinha (o passo a passo no ADR 0014).
 
+### A janela do histórico (onda 11)
+
+`delivery_event` (F2-17) e `activity` (F2-18) viram particionadas por mês
+pelo id numa janela de madrugada aprovada por você, não num deploy
+qualquer: os passos `30-delivery-event-window.sql` e
+`31-activity-window.sql` de `prisma/post-deploy` só rodam dentro do
+intervalo `HISTORY_WINDOW_APPROVED` da `trajetto-api-migrate` (decisões D39
+e D68). Fora dele terminam `skipped: aguardando janela`, e um hotfix
+promovido depois desta release nunca dispara a janela sem aviso. Dentro
+dele, esperam (`pending`) todo processo vivo anunciar
+`history-partition-agnostic-v1`.
+
+| Passo                          | Item  | O que faz                                                                                                                                                                                               | Capability                      |
+| ------------------------------ | ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------- |
+| `30-delivery-event-window.sql` | F2-17 | copia `delivery_event` para a casca `delivery_event_part` com o `txid` como está, recupera as chaves de envio que só estavam na coluna e troca os nomes; a tabela de antes vira `delivery_event_legacy` | `history-partition-agnostic-v1` |
+
+O passo a passo (ensaio na staging com o seed `prod-like`, o aviso de 48 h,
+a janela, a conferência e a volta nos 14 dias) está no
+[runbook da janela do histórico](./runbooks/history-window.md). Valor
+inválido ou intervalo de mais de 24 h não aprova nada (o log da etapa diz
+por quê). Apague a variável depois da janela.
+
 ### Quando o Swarm desiste de um serviço
 
 Nenhuma Application tem limite de tentativas (`MaxAttempts: 0`). Se uma

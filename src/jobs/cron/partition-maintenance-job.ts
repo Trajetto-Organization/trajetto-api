@@ -684,7 +684,17 @@ async function maintainPartitions(
       const attached = await readAttached(table.table);
 
       if (attached === null) {
-        log.warn({ table: table.table }, "partitioned table not found");
+        // The shell of a copy window is gone once the window renamed it to
+        // its table (F2-17, F2-18): expected, the table's entry keeps it.
+        if (table.shellUntilWindow) {
+          log.info(
+            { table: table.table },
+            "copy-window shell gone (renamed to its table): left alone",
+          );
+        } else {
+          log.warn({ table: table.table }, "partitioned table not found");
+        }
+
         continue;
       }
 
