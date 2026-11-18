@@ -4406,6 +4406,12 @@ provedor Anthropic foi removido e `AI_PROVIDER=anthropic` impede o boot).
 - O serviço lê uma foto por vez, com fila curta (`AI_MAX_QUEUE`); cheio,
   responde 503 `busy` e o pedido volta à fila em 5–15 s sem gastar tentativa
   nem abrir o disjuntor `provider_down`.
+- Cada perfil lê a foto como o app grava (≤ 1600 px). O
+  `OCR_DIGITS_MAX_SIDE` reduziria só a do perfil de dígitos (as caixas voltam
+  nos pixels da foto enviada), mas fica em `0`: a 896 px o canhoto perde a
+  data manuscrita (17/20 → 8/20) e o odômetro, 3 km exatas em 15
+  (`scripts/ai-benchmark/results-2026-11.md`). O `/health` diz o valor em
+  uso (`digitsMaxSide`).
 - Assinatura, fraude por foto de tela, nível de combustível e pneus seguem para
   conferência humana e **não consomem cota**. Uma foto lida é uma unidade da
   cota, contada uma vez. O app faz uma pré-checagem no aparelho, que é só

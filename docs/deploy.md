@@ -1837,12 +1837,12 @@ confere o commit dela de fora (lacuna na
 
 **Como fica conectado**:
 
-| Do lado da API (Application `trajetto-api`)                    | Do lado da IA (Application `trajetto-ai`) | Observação                                                      |
-| -------------------------------------------------------------- | ----------------------------------------- | --------------------------------------------------------------- |
-| `AI_PROVIDER=local`                                            | —                                         | `local` é o padrão; `none` desliga as leituras                  |
-| `AI_LOCAL_URL=http://<App Name da IA>:8080`                    | escuta na 8080                            | o App Name é o nome de rede na `dokploy-network`                |
-| `AI_LOCAL_TOKEN`                                               | `AI_TOKEN`                                | **o mesmo valor**, digitado nas duas Applications               |
-| `AI_LOCAL_TIMEOUT_MS` (15 000), `AI_LOCAL_MAX_CONCURRENCY` (1) | `AI_MAX_QUEUE` (2), `OCR_THREADS` (2)     | opcionais; `OCR_THREADS` = o limite de CPU da Application da IA |
+| Do lado da API (Application `trajetto-api`)                    | Do lado da IA (Application `trajetto-ai`)                        | Observação                                                                                      |
+| -------------------------------------------------------------- | ---------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| `AI_PROVIDER=local`                                            | —                                                                | `local` é o padrão; `none` desliga as leituras                                                  |
+| `AI_LOCAL_URL=http://<App Name da IA>:8080`                    | escuta na 8080                                                   | o App Name é o nome de rede na `dokploy-network`                                                |
+| `AI_LOCAL_TOKEN`                                               | `AI_TOKEN`                                                       | **o mesmo valor**, digitado nas duas Applications                                               |
+| `AI_LOCAL_TIMEOUT_MS` (15 000), `AI_LOCAL_MAX_CONCURRENCY` (1) | `AI_MAX_QUEUE` (2), `OCR_THREADS` (2), `OCR_DIGITS_MAX_SIDE` (0) | opcionais; `OCR_THREADS` = o limite de CPU da Application da IA; `OCR_DIGITS_MAX_SIDE` fica `0` |
 
 Trocar o token: gere outro (`openssl rand -hex 32`), salve em `AI_TOKEN` da
 IA e em `AI_LOCAL_TOKEN` da API e faça **Deploy** das duas, IA primeiro.
@@ -1853,6 +1853,10 @@ token volta a bater. Faça os dois deploys em seguida.
 
 Dimensionamento: pico medido de 0,60–0,63 GiB e p95 de 3,1 s por foto a
 2 CPU / 1 GiB. Mais CPU = suba _CPU Limit_ e `OCR_THREADS` juntos.
+`OCR_DIGITS_MAX_SIDE` reduziria só a foto do odômetro (896 px gasta 44% menos
+CPU por leitura), mas o benchmark de 18/11/2026 perdeu 3 km exatas em 15
+(`scripts/ai-benchmark/results-2026-11.md`): não defina a variável. Ela só
+muda com o conjunto-ouro de fotos reais medido de novo.
 
 Ligue a IA por empresa no `/admin` (limite mensal
 `Business.ai_analysis_limit`; 0 desliga).

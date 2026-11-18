@@ -38,24 +38,33 @@ class FakeOutput:
 
 
 class FakeEngine:
-    """Answers one fixed line; `hold` blocks the read until released."""
+    """Answers one fixed line; `hold` blocks the read until released. `shapes` records what it was given."""
 
     def __init__(self, hold=None):
         self.hold = hold
         self.calls = 0
+        self.shapes = []
         self.entered = threading.Event()
 
     def __call__(self, image):
         self.calls += 1
+        self.shapes.append(image.shape[:2])
         self.entered.set()
         if self.hold is not None:
             self.hold.wait(10)
         return FakeOutput([("N° 000.045.181", 0.97, [[0, 0], [10, 0], [10, 5], [0, 5]])])
 
 
-def start(engines, ready=True, max_queue=2, queue_wait_s=10.0):
+def start(engines, ready=True, max_queue=2, queue_wait_s=10.0, digits_max_side=0):
     logs = []
-    service = server.OcrService(TOKEN, engines, max_queue=max_queue, queue_wait_s=queue_wait_s, log=logs.append)
+    service = server.OcrService(
+        TOKEN,
+        engines,
+        max_queue=max_queue,
+        queue_wait_s=queue_wait_s,
+        log=logs.append,
+        digits_max_side=digits_max_side,
+    )
     if ready:
         service.ready.set()
     http = server.serve(service, host="127.0.0.1", port=0)
@@ -332,6 +341,109 @@ def test_500_on_an_engine_failure_without_its_message(fake):
     assert status == 500
     assert payload == {"error": "engine_error"}
     assert "secret" not in json.dumps(payload)
+
+
+# --- the image size the digits profile reads (F3-30) --------------------------
+#
+# At 896 px on the longest side the receipt's handwritten date fell from
+# 17/20 to 8/20 (scripts/ai-benchmark/results-2026-10.md). So only the
+# digits profile may be shrunk, and only when OCR_DIGITS_MAX_SIDE says so:
+# 0, the default, reads every photo as the app recorded it (<= 1600 px). The
+# digits alone at 896 px lost 3 exact odometers in 15 (results-2026-11.md),
+# so the knob stays off; these tests keep it safe for the day it is turned on.
+
+UNIT_BOX = [[0.0, 0.0], [10.0, 0.0], [10.0, 5.0], [0.0, 5.0]]
+
+
+def jpeg(width, height):
+    from PIL import Image
+
+    buffer = io.BytesIO()
+    Image.new("RGB", (width, height), (200, 200, 200)).save(buffer, format="JPEG")
+    return buffer.getvalue()
+
+
+def test_the_digits_max_side_is_off_by_default_and_a_typo_stops_the_boot():
+    assert server.digits_max_side({}) == 0
+    assert server.digits_max_side({"OCR_DIGITS_MAX_SIDE": ""}) == 0
+    assert server.digits_max_side({"OCR_DIGITS_MAX_SIDE": " 0 "}) == 0
+    assert server.digits_max_side({"OCR_DIGITS_MAX_SIDE": "896"}) == 896
+    assert server.digits_max_side({"OCR_DIGITS_MAX_SIDE": "320"}) == 320
+    assert server.digits_max_side({"OCR_DIGITS_MAX_SIDE": "4096"}) == 4096
+    # A dropped digit ("89") would make the odometer unreadable; a negative
+    # or a decimal is not a size. The service refuses to start, as it does
+    # for OCR_THREADS, instead of reading with a value nobody meant.
+    for raw in ("abc", "-1", "89", "319", "4097", "8.96"):
+        with pytest.raises(SystemExit):
+            server.digits_max_side({"OCR_DIGITS_MAX_SIDE": raw})
+
+
+def test_off_by_default_every_profile_reads_the_photo_as_sent(fake):
+    engines, service, base, _ = fake
+    for profile in server.PROFILES:
+        status, body, _ = call(base, f"/v1/read?profile={profile}", WARMUP)
+        assert status == 200
+        assert engines[profile].shapes[-1] == (1200, 1600)
+        assert body["lines"][0]["box"] == UNIT_BOX
+
+    status, body, _ = call(base, "/health", token=None)
+    assert status == 200
+    assert body["digitsMaxSide"] == 0
+
+
+def test_with_a_max_side_the_digits_read_a_shrunken_copy_and_answer_in_the_photo_s_pixels():
+    engines = {"receipt": FakeEngine(), "digits": FakeEngine()}
+    service, http, base, _ = start(engines, ready=False, digits_max_side=896)
+    try:
+        # The warm-up goes through the same path as a read.
+        service.warm_up()
+        assert engines["digits"].shapes == [(672, 896)]
+        assert engines["receipt"].shapes == [(1200, 1600)]
+
+        status, body, _ = call(base, "/v1/read?profile=digits", WARMUP)
+        assert status == 200
+        assert engines["digits"].shapes[-1] == (672, 896)
+        # The answer describes the photo that was sent, not the copy: the
+        # API places the lines against each other and never sees the copy.
+        assert (body["width"], body["height"]) == (1600, 1200)
+        assert body["lines"][0]["box"] == [[0.0, 0.0], [17.9, 0.0], [17.9, 8.9], [0.0, 8.9]]
+
+        status, body, _ = call(base, "/health", token=None)
+        assert body["digitsMaxSide"] == 896
+    finally:
+        http.shutdown()
+
+
+def test_the_receipt_is_never_shrunk():
+    engines = {"receipt": FakeEngine(), "digits": FakeEngine()}
+    _, http, base, _ = start(engines, digits_max_side=896)
+    try:
+        status, body, _ = call(base, "/v1/read?profile=receipt", WARMUP)
+        assert status == 200
+        assert engines["receipt"].shapes == [(1200, 1600)]
+        assert body["lines"][0]["box"] == UNIT_BOX
+    finally:
+        http.shutdown()
+
+
+@pytest.mark.parametrize(
+    "size,read",
+    [
+        ((640, 480), (480, 640)),  # already within: never enlarged
+        ((896, 600), (600, 896)),  # exactly the limit: read as sent
+        ((900, 1600), (896, 504)),  # portrait: the height is the longest side
+    ],
+)
+def test_the_longest_side_is_what_is_limited(size, read):
+    engines = {"receipt": FakeEngine(), "digits": FakeEngine()}
+    _, http, base, _ = start(engines, digits_max_side=896)
+    try:
+        status, body, _ = call(base, "/v1/read?profile=digits", jpeg(*size))
+        assert status == 200
+        assert engines["digits"].shapes == [read]
+        assert (body["width"], body["height"]) == size
+    finally:
+        http.shutdown()
 
 
 # --- the real engine --------------------------------------------------------
