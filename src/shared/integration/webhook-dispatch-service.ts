@@ -14,10 +14,8 @@ import {
   WEBHOOK_DRAIN_BUDGET_MS,
   WEBHOOK_LEASE_SECONDS,
   WEBHOOK_PER_ENDPOINT_BATCH,
-  WEBHOOK_PER_ENDPOINT_CONCURRENCY,
   WEBHOOK_TIMEOUT_MS,
   assertWebhookLeaseInvariant,
-  inFairPool,
   isOutsideReplayWindow,
   isWebhookPermanent,
   isWebhookSuccess,
@@ -57,6 +55,7 @@ import {
 } from "@/shared/http/request-context";
 import { consumesQueue } from "@/shared/lifecycle/process-role";
 import { assertWithVariable } from "@/shared/lifecycle/queue-config";
+import { ContinuousPool } from "@/shared/queue/continuous-pool";
 
 import { v7 as uuidV7 } from "uuid";
 
@@ -113,8 +112,22 @@ const BATCH_SIZE = 20;
  * F5-13) on every level that reads the table, so each prunes the days that
  * hold nothing in flight. Exported for the plan tests, which measure this
  * very statement.
+ *
+ * `busyEndpoints` are the endpoints at this process's per-endpoint cap
+ * (the continuous pool's busy keys, F3-07): their rows are left in the
+ * table, where no lease runs, instead of claimed to wait in the pool. A
+ * filter on the rows the index range already returns: the plan is the same.
  */
-function webhookClaimSql(floor: Prisma.Sql): Prisma.Sql {
+function webhookClaimSql(
+  floor: Prisma.Sql,
+  limit: number = BATCH_SIZE,
+  busyEndpoints: readonly string[] = [],
+): Prisma.Sql {
+  const notBusy =
+    busyEndpoints.length > 0
+      ? Prisma.sql` AND NOT ("endpointId" = ANY(${[...busyEndpoints]}::text[]))`
+      : Prisma.empty;
+
   return Prisma.sql`
       UPDATE "webhook_delivery" SET
         "status" = 'PROCESSING',
@@ -148,14 +161,14 @@ function webhookClaimSql(floor: Prisma.Sql): Prisma.Sql {
               WHERE "availableAt" <= now()
                 AND ("status" = 'PENDING'
                   OR ("status" = 'PROCESSING' AND "leaseExpiresAt" < now()
-                      AND "attempts" < ${WEBHOOK_MAX_ATTEMPTS}))${floor}
+                      AND "attempts" < ${WEBHOOK_MAX_ATTEMPTS}))${floor}${notBusy}
               ORDER BY "availableAt", "id"
               LIMIT ${WEBHOOK_CLAIM_WINDOW}
             ) AS "head"
           ) AS "ranked"
           WHERE "position" <= ${WEBHOOK_PER_ENDPOINT_BATCH}
           ORDER BY "availableAt", "id"
-          LIMIT ${BATCH_SIZE}
+          LIMIT ${limit}
         )
           -- Checked again under the lock: another replica may have taken it.
           AND (("status" = 'PENDING' AND "availableAt" <= now())
@@ -169,16 +182,25 @@ function webhookClaimSql(floor: Prisma.Sql): Prisma.Sql {
 
 /**
  * Calls in flight per process (plano-escala F3-05): WEBHOOK_CONCURRENCY,
- * whose default is the 5 of before (webhook-dispatch-rules.ts). At most 2
- * of them to one endpoint, whatever it says.
+ * whose default is the 5 of before (webhook-dispatch-rules.ts), and at most
+ * WEBHOOK_PER_ENDPOINT_CONCURRENCY of them to one endpoint (F3-07; 2, the
+ * constant of before).
  */
 const WEBHOOK_CONCURRENCY = env.WEBHOOK_CONCURRENCY;
+const WEBHOOK_PER_ENDPOINT_CONCURRENCY = env.WEBHOOK_PER_ENDPOINT_CONCURRENCY;
 
-// With the environment's value: a concurrency too low for the batch would
+// With the environment's values: a concurrency too low for a claim would
 // let the lease run out under calls still in flight, and the customer's
 // system would receive those events twice. The boot stops instead.
 assertWithVariable("WEBHOOK_CONCURRENCY", WEBHOOK_CONCURRENCY, () =>
-  assertWebhookLeaseInvariant(BATCH_SIZE, WEBHOOK_CONCURRENCY),
+  assertWebhookLeaseInvariant(
+    BATCH_SIZE,
+    WEBHOOK_CONCURRENCY,
+    WEBHOOK_TIMEOUT_MS,
+    WEBHOOK_LEASE_SECONDS,
+    WEBHOOK_PER_ENDPOINT_BATCH,
+    WEBHOOK_PER_ENDPOINT_CONCURRENCY,
+  ),
 );
 
 interface ClaimedWebhook {
@@ -780,9 +802,45 @@ class WebhookDispatchService {
   // Ends a sweep that is still draining when the process is shutting down.
   private stopping = false;
 
-  // A wake that found a batch running asks for one more (F3-04): it may
-  // have come after that batch's last claim.
-  private rerun = false;
+  /**
+   * The dispatcher as a continuous pool (plano-escala F3-07): a claim of up
+   * to 20 when nothing claimed waits for a slot, WEBHOOK_CONCURRENCY calls
+   * in flight and WEBHOOK_PER_ENDPOINT_CONCURRENCY to one endpoint, and the
+   * next claim as soon as a slot frees. The barrier of before sent a batch
+   * and claimed the next one only when its slowest call ended, so a
+   * receiver answering in nine seconds set the pace for every other
+   * customer's webhooks. A slow endpoint now holds its own calls and its
+   * own queued rows; the claims that follow leave it out (skipsBusyKeys)
+   * and keep the other endpoints' rows moving. One cycle claims for
+   * WEBHOOK_DRAIN_BUDGET_MS at most, then ends: the sweep or the wake that
+   * asked meanwhile starts the next one.
+   */
+  private readonly pool = new ContinuousPool<ClaimedWebhook>({
+    slots: () => WEBHOOK_CONCURRENCY,
+    prefetch: BATCH_SIZE,
+    maxPerClaim: BATCH_SIZE,
+    perKey: {
+      limit: WEBHOOK_PER_ENDPOINT_CONCURRENCY,
+      keyOf: (row) => row.endpointId,
+    },
+    skipsBusyKeys: true,
+    claim: (limit, busyEndpoints) => this.claim(limit, busyEndpoints),
+    run: (row) =>
+      this.deliver(row).catch((error) => {
+        // The row keeps its lease and is reclaimed when it expires.
+        log.error(
+          { err: error, deliveryId: row.id, endpointId: row.endpointId },
+          "webhook delivery failed; the lease will recover it",
+        );
+      }),
+    // Once the process is going away, a row not yet started is handed back
+    // rather than sent: the drain waits for the calls in flight, not for
+    // the rest of what was claimed.
+    giveBack: (row) => this.release(row),
+    stopping: () => this.stopping,
+    budgetMs: WEBHOOK_DRAIN_BUDGET_MS,
+    onClaim: () => workerHeartbeat.progress("webhook-dispatch"),
+  });
 
   // Success records still retrying after the batch moved on; shutdown waits.
   private readonly pendingRecords = new Set<Promise<void>>();
@@ -850,8 +908,10 @@ class WebhookDispatchService {
       return;
     }
 
+    // A cycle running claims for it as soon as a slot is free; past its
+    // budget, the next cycle does (processBatch's end).
     if (this.running) {
-      this.rerun = true;
+      this.pool.rescan();
       return;
     }
 
@@ -875,9 +935,13 @@ class WebhookDispatchService {
 
     this.timer = null;
 
+    // What the pool claimed and did not start goes back now (see
+    // `release`), not after the call it waits behind.
+    this.pool.nudge();
+
     // Let the sends in flight finish and be recorded. Returning at once cut
     // every deploy between the customer's answer and our record of it, and
-    // each of those went out again when the lease expired. Rows of the batch
+    // each of those went out again when the lease expired. Rows claimed
     // that had not started are handed back instead of sent (see `release`),
     // so one call timeout bounds the wait; the deadline is the backstop, and
     // fits ADR 0004's watchdog with the workers stopping in parallel.
@@ -895,10 +959,17 @@ class WebhookDispatchService {
     log.info("webhook dispatch worker stopped");
   }
 
+  /**
+   * One cycle of the pool; resolves with the rows it claimed. A call that
+   * finds a cycle running asks it to look at the queue again and returns
+   * 0: one cycle at a time in this process. Other replicas claim their own
+   * rows — the lock is in the database, not here.
+   */
   async processBatch(): Promise<number> {
-    // One batch at a time in this process. Other replicas claim their own
-    // rows — the lock is in the database, not here.
-    if (this.running) return 0;
+    if (this.running) {
+      this.pool.rescan();
+      return 0;
+    }
 
     this.running = true;
 
@@ -906,63 +977,24 @@ class WebhookDispatchService {
     // visible on /health/metrics (OBS-10).
     workerHeartbeat.beginCycle("webhook-dispatch");
 
-    const started = Date.now();
-    let total = 0;
-
     try {
-      // Keep claiming while there is work, within a budget: a backlog drains
-      // at the speed the receivers answer, not twenty rows per sweep.
-      while (!this.stopping) {
-        const claimed = await this.claim();
-
-        workerHeartbeat.progress("webhook-dispatch");
-
-        if (claimed.length === 0) break;
-
-        await inFairPool(
-          claimed,
-          {
-            concurrency: WEBHOOK_CONCURRENCY,
-            perKey: WEBHOOK_PER_ENDPOINT_CONCURRENCY,
-            keyOf: (row) => row.endpointId,
-          },
-          (row) =>
-            // Once the process is going away, a row not yet started is
-            // handed back rather than sent: the drain waits for the calls in
-            // flight, not for the rest of the batch.
-            (this.stopping ? this.release(row) : this.deliver(row)).catch(
-              (error) => {
-                // The row keeps its lease and is reclaimed when it expires.
-                log.error(
-                  {
-                    err: error,
-                    deliveryId: row.id,
-                    endpointId: row.endpointId,
-                  },
-                  "webhook delivery failed; the lease will recover it",
-                );
-              },
-            ),
-        );
-
-        total += claimed.length;
-
-        if (Date.now() - started >= WEBHOOK_DRAIN_BUDGET_MS) break;
-      }
-
-      return total;
+      return await this.pool.drain();
     } finally {
       this.running = false;
       workerHeartbeat.endCycle("webhook-dispatch");
 
-      if (this.rerun) {
-        this.rerun = false;
+      // A wake or a sweep the cycle did not get to answer (it came after
+      // its last look, or past its budget): the next cycle does.
+      if (this.pool.rescanPending && !this.stopping) {
         setImmediate(() => this.wake());
       }
     }
   }
 
-  private async claim(): Promise<ClaimedWebhook[]> {
+  private async claim(
+    limit: number = BATCH_SIZE,
+    busyEndpoints: ReadonlySet<string> = new Set(),
+  ): Promise<ClaimedWebhook[]> {
     const floor = await claimFloors.predicate("webhooks");
 
     // A row whose last attempt died with the process and has no attempt left
@@ -985,7 +1017,7 @@ class WebhookDispatchService {
     // statement, so the two are equal): a row in flight leaves the claim's
     // range until its lease runs out, and the scan never visits it.
     const claimed = await database.$queryRaw<ClaimedWebhook[]>(
-      webhookClaimSql(floor),
+      webhookClaimSql(floor, limit, [...busyEndpoints]),
     );
 
     for (const row of claimed) row.claimStartedAtMs = claimStartedAtMs;

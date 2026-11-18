@@ -61,7 +61,10 @@ const WEBHOOK_CONCURRENCY = 5;
  *
  * Now one claim takes at most WEBHOOK_PER_ENDPOINT_BATCH rows of any single
  * endpoint, and at most WEBHOOK_PER_ENDPOINT_CONCURRENCY calls to one endpoint
- * are in flight at a time; the other slots keep moving.
+ * are in flight at a time in a process; the other slots keep moving. The
+ * second is the default of the variable of the same name (plano-escala
+ * F3-07), which the dispatcher reads; a process's cap, not the endpoint's:
+ * every process that claims the queue runs its own.
  */
 const WEBHOOK_PER_ENDPOINT_BATCH = 10;
 const WEBHOOK_PER_ENDPOINT_CONCURRENCY = 2;
@@ -151,9 +154,17 @@ function nextWebhookDelayMs(attempts: number): number | null {
 }
 
 /**
- * The same invariant the notification pipeline asserts: a batch has to finish
- * inside its lease, or a second replica reclaims rows the first is still
- * sending and the customer's system receives every event twice.
+ * The same invariant the notification pipeline asserts: a claim's rows have
+ * to finish inside its lease, or a second replica reclaims rows the first is
+ * still sending and the customer's system receives every event twice.
+ *
+ * The rounds of one claim through the slots, or of one endpoint's share
+ * through the calls it is allowed, plus one: the dispatcher is a continuous
+ * pool since F3-07 (shared/queue/continuous-pool.ts), so a claim goes out
+ * while the rows of the claims before it are still on the wire, and its own
+ * rows may first wait for those — one call each, at most: a claim goes out
+ * only when nothing taken before waits for a slot, and it leaves out the
+ * endpoints whose rows still wait for theirs.
  */
 function assertWebhookLeaseInvariant(
   batchSize: number,
@@ -165,10 +176,11 @@ function assertWebhookLeaseInvariant(
 ): void {
   // The slower of two bounds: the batch through all the slots, or one
   // endpoint's share through the slots it is allowed.
-  const rounds = Math.max(
-    Math.ceil(batchSize / concurrency),
-    Math.ceil(Math.min(perEndpointBatch, batchSize) / perEndpointConcurrency),
-  );
+  const rounds =
+    Math.max(
+      Math.ceil(batchSize / concurrency),
+      Math.ceil(Math.min(perEndpointBatch, batchSize) / perEndpointConcurrency),
+    ) + 1;
 
   const worstCaseMs = rounds * timeoutMs;
 
@@ -180,58 +192,6 @@ function assertWebhookLeaseInvariant(
         `the batch.`,
     );
   }
-}
-
-/**
- * Runs `work` over `items`, `concurrency` at a time and at most `perKey`
- * per key, taking the next item that may start as soon as a slot frees.
- *
- * Not waves: a wave lasts as long as its slowest member, so one slow call held
- * four free slots idle. `work` is expected to handle its own failures; one
- * that throws anyway does not stop the rest.
- */
-async function inFairPool<T>(
-  items: T[],
-  options: { concurrency: number; perKey: number; keyOf: (item: T) => string },
-  work: (item: T) => Promise<void>,
-): Promise<void> {
-  const waiting = [...items];
-  const inFlight = new Map<string, number>();
-
-  let running = 0;
-
-  await new Promise<void>((done) => {
-    const startWhatCan = () => {
-      if (waiting.length === 0 && running === 0) {
-        done();
-        return;
-      }
-
-      while (running < options.concurrency) {
-        const index = waiting.findIndex(
-          (item) => (inFlight.get(options.keyOf(item)) ?? 0) < options.perKey,
-        );
-
-        if (index < 0) break;
-
-        const [item] = waiting.splice(index, 1);
-        const key = options.keyOf(item);
-
-        inFlight.set(key, (inFlight.get(key) ?? 0) + 1);
-        running += 1;
-
-        work(item)
-          .catch(() => undefined)
-          .finally(() => {
-            inFlight.set(key, (inFlight.get(key) ?? 1) - 1);
-            running -= 1;
-            startWhatCan();
-          });
-      }
-    };
-
-    startWhatCan();
-  });
 }
 
 /**
@@ -298,7 +258,6 @@ export {
   WEBHOOK_RETRY_DELAYS_MS,
   WEBHOOK_TIMEOUT_MS,
   assertWebhookLeaseInvariant,
-  inFairPool,
   isWebhookPermanent,
   isWebhookSuccess,
   nextWebhookDelayMs,

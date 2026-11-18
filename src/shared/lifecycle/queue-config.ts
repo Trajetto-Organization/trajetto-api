@@ -45,8 +45,18 @@ const QUEUE_CONCURRENCY_DEFAULTS = {
   /** Outbox events expanded at the same time: one after the other. */
   OUTBOX_EXPANSION_CONCURRENCY: 1,
 
-  /** Webhook calls in flight (2 per endpoint, whatever this says). */
+  /**
+   * Webhook calls in flight (at most WEBHOOK_PER_ENDPOINT_CONCURRENCY to
+   * one endpoint).
+   */
   WEBHOOK_CONCURRENCY: 5,
+
+  /**
+   * Webhook calls in flight to one endpoint (plano-escala F3-07), the 2 of
+   * before. A process's cap: each process that claims the webhooks runs
+   * its own, so the endpoint sees this times the dispatchers.
+   */
+  WEBHOOK_PER_ENDPOINT_CONCURRENCY: 2,
 
   /** AI readings in flight, lowered by the reader's own maximum. */
   AI_CONCURRENCY: 4,

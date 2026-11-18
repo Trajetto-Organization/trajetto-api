@@ -4432,9 +4432,17 @@ em `process role resolved` (`concurrency`) e avisa com
 `queue concurrency takes the whole database pool` quando as vagas só de
 banco deste processo (a expansão do outbox mais a raia `internal`) somam o
 `connection_limit` da `DATABASE_URL` ou mais: não sobraria conexão para o
-HTTP, os claims das outras filas e o cron. É aviso, não recusa. Acima do
-lote (20 nas raias e nos webhooks, 10 no outbox), um valor maior não muda
-nada.
+HTTP, os claims das outras filas e o cron. É aviso, não recusa.
+
+**Pool contínuo (F3-06 e F3-07).** Desde a onda 13, cada fila é um pool
+contínuo: a vaga que libera reivindica de novo, em vez de esperar o lote
+inteiro terminar. Um valor acima do lote (20 nas raias e nos webhooks, 10
+no outbox) agora vale: o pool reivindica de novo até encher as vagas.
+`WEBHOOK_PER_ENDPOINT_CONCURRENCY` (2, o de antes) é quantas chamadas de um
+mesmo endpoint cada processo faz ao mesmo tempo; um endpoint lento segura
+só essas e as próprias linhas, e os claims seguintes o deixam de fora. Na
+parada, o que foi reivindicado e não começou volta na hora, sem esperar o
+lease.
 
 **Orçamento de memória (U-15).** No boot, cada processo soma o heap
 principal (o `--max-old-space-size` do `NODE_OPTIONS`), as threads da

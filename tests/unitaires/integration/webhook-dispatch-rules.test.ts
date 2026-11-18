@@ -9,7 +9,6 @@ import {
   WEBHOOK_RETRY_DELAYS_MS,
   WEBHOOK_TIMEOUT_MS,
   assertWebhookLeaseInvariant,
-  inFairPool,
   isWebhookPermanent,
   isWebhookSuccess,
   nextWebhookDelayMs,
@@ -156,109 +155,17 @@ describe("the replay window", () => {
   });
 });
 
-describe("the fair pool", () => {
-  const sleep = (ms: number) => new Promise((done) => setTimeout(done, ms));
-
-  it("never runs more than the limit at once, nor more than perKey per key", async () => {
-    let running = 0;
-    let peak = 0;
-    const peakByKey = new Map<string, number>();
-    const runningByKey = new Map<string, number>();
-
-    const items = Array.from({ length: 30 }, (_, index) => ({
-      key: index % 3 === 0 ? "slow" : `fast-${index % 4}`,
-    }));
-
-    await inFairPool(
-      items,
-      { concurrency: 5, perKey: 2, keyOf: (item) => item.key },
-      async (item) => {
-        running += 1;
-        runningByKey.set(item.key, (runningByKey.get(item.key) ?? 0) + 1);
-        peak = Math.max(peak, running);
-        peakByKey.set(
-          item.key,
-          Math.max(peakByKey.get(item.key) ?? 0, runningByKey.get(item.key)!),
-        );
-
-        await sleep(item.key === "slow" ? 20 : 2);
-
-        running -= 1;
-        runningByKey.set(item.key, runningByKey.get(item.key)! - 1);
-      },
-    );
-
-    expect(peak).toBeLessThanOrEqual(5);
-    expect(Math.max(...peakByKey.values())).toBeLessThanOrEqual(2);
-  });
-
-  it("keeps the other slots moving while one key is slow", async () => {
-    // The slow key is held by a gate, not by a longer timer. It used to be
-    // 40 ms against 1 ms, and a loaded machine that stalled the event loop
-    // past 40 ms (a full parallel run) let the slow timers fire first: the
-    // order came from the clock, not from the pool. Now nothing slow can
-    // finish until the gate opens, and the gate opens only after every
-    // pending promise turn ran — what the fast work needs, and all it needs.
-    const finished: string[] = [];
-
-    let openGate!: () => void;
-    const gate = new Promise<void>((open) => {
-      openGate = open;
-    });
-
-    const items = [
-      ...Array.from({ length: 6 }, () => ({ key: "slow" })),
-      ...Array.from({ length: 6 }, (_, index) => ({ key: `fast-${index}` })),
-    ];
-
-    const pool = inFairPool(
-      items,
-      { concurrency: 5, perKey: 2, keyOf: (item) => item.key },
-      async (item) => {
-        if (item.key === "slow") await gate;
-        finished.push(item.key);
-      },
-    );
-
-    // One macrotask turn runs every microtask queued before it: the pool
-    // refills slots on promise settlement alone.
-    await new Promise<void>((turn) => setImmediate(turn));
-
-    // In waves, the fast ones behind the first five would still be waiting
-    // for the slow ones in front: 3 here instead of 6.
-    const fastWhileSlowHeld = [...finished];
-
-    openGate();
-    await pool;
-
-    expect(fastWhileSlowHeld).toHaveLength(6);
-    expect(fastWhileSlowHeld.every((key) => key.startsWith("fast-"))).toBe(
-      true,
-    );
-    expect(finished.indexOf("slow")).toBe(6);
-    expect(finished).toHaveLength(12);
-  });
-
-  it("finishes the rest when one piece of work throws", async () => {
-    const done: number[] = [];
-
-    await inFairPool(
-      [1, 2, 3],
-      { concurrency: 2, perKey: 2, keyOf: () => "k" },
-      async (item) => {
-        if (item === 2) throw new Error("boom");
-        done.push(item);
-      },
-    );
-
-    expect(done.sort()).toEqual([1, 3]);
-  });
-});
-
 describe("the lease, with the per-endpoint lane", () => {
   it("still covers one endpoint's whole share at its reduced concurrency", () => {
-    // 10 rows of one endpoint, 2 at a time, 10 s each: 50 s, inside 120 s.
+    // 10 rows of one endpoint, 2 at a time, 10 s each, behind the call of a
+    // claim before (the continuous pool, F3-07): 60 s, inside 120 s.
     expect(() => assertWebhookLeaseInvariant(20)).not.toThrow();
+
+    // One call at a time per endpoint, the lowest the variable takes:
+    // 10 rounds plus the one before, 110 s, still inside.
+    expect(() =>
+      assertWebhookLeaseInvariant(20, 5, 10_000, 120, 10, 1),
+    ).not.toThrow();
 
     // A lane so narrow it cannot finish its share within the lease is refused.
     expect(() =>

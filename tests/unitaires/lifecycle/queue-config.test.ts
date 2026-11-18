@@ -8,7 +8,10 @@ import {
   poolHeadroomWarning,
 } from "@/shared/lifecycle/queue-config";
 import { DELIVERY_CONCURRENCY } from "@/shared/notifications/pipeline-rules";
-import { WEBHOOK_CONCURRENCY } from "@/shared/integration/webhook-dispatch-rules";
+import {
+  WEBHOOK_CONCURRENCY,
+  WEBHOOK_PER_ENDPOINT_CONCURRENCY,
+} from "@/shared/integration/webhook-dispatch-rules";
 
 /**
  * How many rows of each queue a process works on at once, by environment
@@ -133,6 +136,7 @@ describe("without the variables", () => {
       OUTBOX_EXPANSION_CONCURRENCY: 1,
       WEBHOOK_CONCURRENCY: 5,
       AI_CONCURRENCY: 4,
+      WEBHOOK_PER_ENDPOINT_CONCURRENCY: 2,
     });
 
     // The pipelines' own defaults are the same numbers.
@@ -144,6 +148,9 @@ describe("without the variables", () => {
     );
     expect(QUEUE_CONCURRENCY_DEFAULTS.WEBHOOK_CONCURRENCY).toBe(
       WEBHOOK_CONCURRENCY,
+    );
+    expect(QUEUE_CONCURRENCY_DEFAULTS.WEBHOOK_PER_ENDPOINT_CONCURRENCY).toBe(
+      WEBHOOK_PER_ENDPOINT_CONCURRENCY,
     );
   });
 
@@ -372,6 +379,47 @@ describe("the pipelines run that many at a time", () => {
       await expect(dispatcher.processBatch()).resolves.toBe(12);
 
       expect(tracker.peak).toBe(3);
+    },
+    LOAD_TIMEOUT_MS,
+  );
+
+  it(
+    "sends WEBHOOK_PER_ENDPOINT_CONCURRENCY calls to one endpoint at a time (F3-07)",
+    async () => {
+      for (const [overrides, expected] of [
+        [{}, 2],
+        [{ WEBHOOK_PER_ENDPOINT_CONCURRENCY: 1 }, 1],
+        [{ WEBHOOK_PER_ENDPOINT_CONCURRENCY: 4 }, 4],
+      ] as const) {
+        const { WebhookDispatchService } = await loadUnder<WebhookModule>(
+          "@/shared/integration/webhook-dispatch-service",
+          overrides,
+        );
+
+        const dispatcher = WebhookDispatchService.getInstance() as unknown as {
+          claim: () => Promise<unknown[]>;
+          deliver: () => Promise<void>;
+          processBatch: () => Promise<number>;
+        };
+
+        // Ten rows of one endpoint: the per-endpoint cap is what holds the
+        // pool, not WEBHOOK_CONCURRENCY (5).
+        const rows = Array.from({ length: 10 }, (_, index) => ({
+          id: `webhook-${index}`,
+          endpointId: "endpoint-1",
+        }));
+        const tracker = peakTracker();
+
+        dispatcher.claim = vi
+          .fn()
+          .mockResolvedValueOnce(rows)
+          .mockResolvedValue([]);
+        dispatcher.deliver = vi.fn(tracker.run);
+
+        await expect(dispatcher.processBatch()).resolves.toBe(10);
+
+        expect(tracker.peak).toBe(expected);
+      }
     },
     LOAD_TIMEOUT_MS,
   );

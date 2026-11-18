@@ -864,6 +864,17 @@ const envSchema = z
     WEBHOOK_CONCURRENCY: queueConcurrency("WEBHOOK_CONCURRENCY"),
     AI_CONCURRENCY: queueConcurrency("AI_CONCURRENCY"),
 
+    // Webhook calls in flight to ONE endpoint, per process (plano-escala
+    // F3-07): 2 by default, the constant of before. A slow endpoint holds
+    // this many of the process's calls and nothing else; its other rows
+    // wait in the pool while other endpoints' rows go out. Each process
+    // that claims the webhooks runs its own, so the endpoint receives this
+    // times the dispatchers at once. Any value fits the lease. Empty
+    // counts as absent.
+    WEBHOOK_PER_ENDPOINT_CONCURRENCY: queueConcurrency(
+      "WEBHOOK_PER_ENDPOINT_CONCURRENCY",
+    ),
+
     // The spreadsheet read off the event loop (plano-escala F3-23b;
     // modules/import/services/spreadsheet-worker.ts): how many worker
     // threads may read an upload at once in this process (0 reads on the

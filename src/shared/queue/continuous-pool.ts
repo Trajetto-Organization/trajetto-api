@@ -19,6 +19,13 @@
  * caps the rows of one key in flight (one outbox aggregate at a time, two
  * calls to one endpoint); the others wait in the pool for their key.
  *
+ * A queue whose claim can leave keys out (`skipsBusyKeys`, the webhooks)
+ * also claims past rows that only wait for their key: the next claim names
+ * the keys at their limit and takes other keys' rows for the free slots, so
+ * one slow endpoint holding its two calls and its queued rows does not hold
+ * the rest of the queue. A key at its limit is left out until its waiting
+ * rows have started, so at most one claim's share of a key ever waits.
+ *
  * Stopping: no claim starts, the rows claimed and not started are handed
  * back at once (`giveBack`, a fenced write that undoes the claim) instead of
  * waiting out their lease, and the cycle ends when the rows in flight do.
@@ -48,8 +55,19 @@ interface ContinuousPoolOptions<T> {
   /** At most `limit` rows of one key in flight; the others wait their turn. */
   perKey?: { limit: number; keyOf: (row: T) => string };
 
-  /** Claims up to `limit` rows. A failure ends the cycle once the rest ran. */
-  claim: (limit: number) => Promise<T[]>;
+  /**
+   * Claims up to `limit` rows, leaving out the keys in `busyKeys` when the
+   * claim can (skipsBusyKeys). A failure ends the cycle once the rest ran.
+   */
+  claim: (limit: number, busyKeys: ReadonlySet<string>) => Promise<T[]>;
+
+  /**
+   * The claim takes at most a share of each key and leaves out `busyKeys`
+   * (see above): the pool claims past rows waiting for their key, and only
+   * an empty claim that left no key out says the queue is empty — a short
+   * one may have stopped at a key's share.
+   */
+  skipsBusyKeys?: boolean;
 
   /**
    * One row, start to finish. Expected to settle its own failures; one that
@@ -220,10 +238,12 @@ class ContinuousPool<T> {
           options.budgetMs === undefined ||
           now() - startedAt < options.budgetMs;
 
+        // With a slot free after startWhatCan, every row still waiting
+        // waits for its key, never for a slot.
         const claimNow =
           failure === null &&
           !options.stopping() &&
-          waiting.length === 0 &&
+          (waiting.length === 0 || options.skipsBusyKeys === true) &&
           free > 0 &&
           withinBudget &&
           (this.wanted || (freed && !drained));
@@ -232,15 +252,19 @@ class ContinuousPool<T> {
           // This claim answers every look asked for before it.
           this.wanted = false;
 
+          // A batch ahead only when nothing waits: past waiting rows, just
+          // the free slots, so no row waits for a slot behind another claim.
           const limit = Math.min(
             options.maxPerClaim ?? Number.POSITIVE_INFINITY,
-            Math.max(free, options.prefetch ?? 0),
+            waiting.length === 0 ? Math.max(free, options.prefetch ?? 0) : free,
           );
+
+          const busyKeys = this.busyKeys(byKey);
 
           let rows: T[];
 
           try {
-            rows = await options.claim(limit);
+            rows = await options.claim(limit, busyKeys);
           } catch (error) {
             failure = { error };
             continue;
@@ -249,7 +273,9 @@ class ContinuousPool<T> {
           options.onClaim?.(rows.length);
 
           claimed += rows.length;
-          drained = rows.length < limit;
+          drained = options.skipsBusyKeys
+            ? rows.length === 0 && busyKeys.size === 0
+            : rows.length < limit;
           waiting.push(...rows);
 
           continue;
@@ -279,6 +305,18 @@ class ContinuousPool<T> {
     if (failure) throw failure.error;
 
     return claimed;
+  }
+
+  /** The keys at their limit: a claim that can leaves them out. */
+  private busyKeys(byKey: Map<string, number>): ReadonlySet<string> {
+    const limit = this.options.perKey?.limit;
+    const busy = new Set<string>();
+
+    if (limit === undefined) return busy;
+
+    for (const [key, count] of byKey) if (count >= limit) busy.add(key);
+
+    return busy;
   }
 }
 

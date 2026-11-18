@@ -22,7 +22,10 @@ import {
  *  - stopping: nothing new is claimed, the rows claimed and not started go
  *    back at once, the rows in flight finish;
  *  - a failed claim still lets what it claimed before run, then rejects;
- *  - the budget stops the claiming, not the rows already claimed.
+ *  - the budget stops the claiming, not the rows already claimed;
+ *  - a claim that leaves busy keys out (the webhooks, F3-07) claims past
+ *    the rows waiting for a slow key, and only an empty claim with no key
+ *    left out ends the claiming.
  */
 
 /** A queue of numbered rows, claimed in order, with each claim's limit. */
@@ -464,5 +467,155 @@ describe("the budget", () => {
 
     expect(finished.sort()).toEqual([0, 1, 2, 3]);
     expect(queue.left).toBe(6);
+  });
+});
+
+/**
+ * A queue of rows by key, claimed the way the webhooks' claim does: the
+ * oldest first, at most `share` of one key per claim, the busy keys left
+ * in the table.
+ */
+function keyedQueue(rows: Array<{ id: number; key: string }>, share: number) {
+  const left = [...rows];
+  const busySeen: string[][] = [];
+
+  return {
+    busySeen,
+    get left() {
+      return left.length;
+    },
+    claim: async (limit: number, busy: ReadonlySet<string>) => {
+      busySeen.push([...busy].sort());
+
+      const taken: Array<{ id: number; key: string }> = [];
+      const perKey = new Map<string, number>();
+
+      for (const row of [...left]) {
+        if (taken.length >= limit) break;
+        if (busy.has(row.key)) continue;
+        if ((perKey.get(row.key) ?? 0) >= share) continue;
+
+        perKey.set(row.key, (perKey.get(row.key) ?? 0) + 1);
+        taken.push(row);
+        left.splice(left.indexOf(row), 1);
+      }
+
+      return taken;
+    },
+  };
+}
+
+describe("a claim that leaves the busy keys out", () => {
+  it("keeps the other keys moving past the rows that wait for a slow one", async () => {
+    // The slow endpoint's rows are the oldest. Without claiming past them,
+    // its four queued rows would stop every claim until its calls ended.
+    const held = gate();
+    const rows = [
+      ...Array.from({ length: 6 }, (_, id) => ({ id, key: "slow" })),
+      ...Array.from({ length: 40 }, (_, index) => ({
+        id: 100 + index,
+        key: "fast",
+      })),
+    ];
+    const queue = keyedQueue(rows, 10);
+    const finished: number[] = [];
+    let slowWaitingPeak = 0;
+    let slowClaimed = 0;
+
+    const drained = pool<{ id: number; key: string }>({
+      slots: () => 5,
+      prefetch: 20,
+      maxPerClaim: 20,
+      perKey: { limit: 2, keyOf: (row) => row.key },
+      skipsBusyKeys: true,
+      claim: async (limit, busy) => {
+        const taken = await queue.claim(limit, busy);
+        slowClaimed += taken.filter((row) => row.key === "slow").length;
+        slowWaitingPeak = Math.max(slowWaitingPeak, slowClaimed - 2);
+        return taken;
+      },
+      run: async (row) => {
+        if (row.key === "slow") await held.opened;
+        finished.push(row.id);
+      },
+    }).drain();
+
+    await turn();
+
+    const whileHeld = finished.filter((id) => id >= 100);
+
+    held.open();
+
+    await expect(drained).resolves.toBe(46);
+
+    expect(whileHeld).toHaveLength(40);
+    // The slow key was named busy, so no claim took more of its rows than
+    // the one share that waits for its calls.
+    expect(queue.busySeen.some((busy) => busy.includes("slow"))).toBe(true);
+    expect(slowWaitingPeak).toBeLessThanOrEqual(4);
+    expect(queue.left).toBe(0);
+  });
+
+  it("is not ended by a short claim: only an empty one with no key left out ends it", async () => {
+    // One endpoint with 25 rows and a share of 10 per claim: every claim
+    // is short of the 20 it asked for, and the backlog still drains in one
+    // cycle.
+    const queue = keyedQueue(
+      Array.from({ length: 25 }, (_, id) => ({ id, key: "only" })),
+      10,
+    );
+
+    await expect(
+      pool<{ id: number; key: string }>({
+        slots: () => 5,
+        prefetch: 20,
+        maxPerClaim: 20,
+        perKey: { limit: 2, keyOf: (row) => row.key },
+        skipsBusyKeys: true,
+        claim: queue.claim,
+        run: async () => turn(),
+      }).drain(),
+    ).resolves.toBe(25);
+
+    expect(queue.left).toBe(0);
+  });
+
+  it("does not claim past waiting rows when the claim cannot leave keys out", async () => {
+    // The outbox's claim names no key: rows of a busy key would pile up in
+    // the pool, so the pool waits for them to start before it claims.
+    const held = gate();
+    const queue = keyedQueue(
+      [
+        { id: 1, key: "a" },
+        { id: 2, key: "a" },
+        { id: 3, key: "b" },
+      ],
+      10,
+    );
+    let claims = 0;
+
+    const drained = pool<{ id: number; key: string }>({
+      slots: () => 3,
+      prefetch: 2,
+      maxPerClaim: 2,
+      perKey: { limit: 1, keyOf: (row) => row.key },
+      claim: async (limit, busy) => {
+        claims += 1;
+        return queue.claim(limit, busy);
+      },
+      run: async (row) => {
+        if (row.id === 1) await held.opened;
+      },
+    }).drain();
+
+    await turn();
+
+    // Row 2 waits for key a: no second claim while it waits.
+    expect(claims).toBe(1);
+
+    held.open();
+    await drained;
+
+    expect(queue.left).toBe(0);
   });
 });
