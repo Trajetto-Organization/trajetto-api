@@ -11,7 +11,7 @@ import {
   type MetaTemplateUpdate,
 } from "@/shared/providers/whatsapp-provider/meta-webhook";
 
-import { receiptIdFor } from "./receipt-id";
+import { receiptFactKey, receiptIdFor } from "./receipt-id";
 
 /**
  * The provider receipts ledger (notification_provider_receipt): what a
@@ -24,14 +24,78 @@ import { receiptIdFor } from "./receipt-id";
  * the message. Two wamids under one delivery is a duplicate send; a 'failed'
  * after DELIVERED is a message the provider accepted and then lost.
  *
- * Writes are idempotent (createMany skipDuplicates): Meta repeats a
- * callback it did not see a 200 for, and a receipts run can overlap the
- * next one. Every row's id is decided by the fact it records
- * (receipt-id.ts, plano-escala F5-04), so a repeat is a conflict on the
- * primary key, with or without the unique (provider, message id, status)
- * that wave 10 drops (F5-06).
+ * Writes are idempotent: Meta repeats a callback it did not see a 200 for,
+ * two replicas can take the same one, and a receipts run can overlap the
+ * next one. One row per (provider, message id, status), with or without
+ * the unique that wave 10 drops (F5-06): insertReceipts below.
  */
 const log = logger.child({ component: "provider-receipts" });
+
+type ReceiptRow = Prisma.NotificationProviderReceiptCreateManyInput & {
+  id: string;
+};
+
+/**
+ * Writes receipts, one row per fact (provider, message id, status),
+ * whatever id each copy of the fact computes (plano-escala F5-04).
+ *
+ * The id is decided by the fact in the usual case (receipt-id.ts), and a
+ * repeat is then a primary-key conflict. But its anchor also follows the
+ * tie and the day: the delivery's millisecond when the report is tied,
+ * else midnight of occurredAt held inside the untied retention. A status
+ * Meta sent before the worker recorded the wamid and its repeat after the
+ * commit, or an untied report held at today and repeated tomorrow, are two
+ * ids for one fact. The unique (provider, providerMessageId, status)
+ * absorbs them today; wave 10 (F5-06) drops it, and keeps a plain index on
+ * the same columns for this read. So the write takes a transaction lock
+ * per fact (in key order, so two writers never deadlock), reads which of
+ * its facts the ledger already holds under any id, and inserts only the
+ * others: two replicas taking copies of one fact at once serialize on the
+ * lock, and the second finds the first's row. That row stays as written:
+ * its id is its partition, and its tie is what was known when it arrived.
+ */
+async function insertReceipts(rows: ReceiptRow[]): Promise<void> {
+  if (rows.length === 0) return;
+
+  const facts = new Map<string, ReceiptRow>();
+
+  for (const row of rows) {
+    const key = receiptFactKey(row);
+
+    if (!facts.has(key)) facts.set(key, row);
+  }
+
+  await database.$transaction(async (tx) => {
+    await tx.$executeRaw`
+      SELECT pg_advisory_xact_lock(lock_key)
+      FROM (
+        SELECT DISTINCT hashtextextended('provider-receipt:' || fact, 0) AS lock_key
+        FROM unnest(${[...facts.keys()]}::text[]) AS fact
+        ORDER BY lock_key
+      ) AS locks
+    `;
+
+    const held = await tx.notificationProviderReceipt.findMany({
+      where: {
+        OR: [...facts.values()].map((row) => ({
+          provider: row.provider,
+          providerMessageId: row.providerMessageId,
+          status: row.status,
+        })),
+      },
+      select: { provider: true, providerMessageId: true, status: true },
+    });
+
+    for (const row of held) facts.delete(receiptFactKey(row));
+
+    if (facts.size === 0) return;
+
+    await tx.notificationProviderReceipt.createMany({
+      data: [...facts.values()],
+      skipDuplicates: true,
+    });
+  });
+}
 
 /**
  * Which delivery each report belongs to. The callback data names it when the
@@ -153,8 +217,8 @@ async function recordMetaStatuses(reports: MetaStatusReport[]): Promise<void> {
   const tied = await tieToDeliveries(reports);
   const now = new Date();
 
-  await database.notificationProviderReceipt.createMany({
-    data: tied.map((report) => ({
+  await insertReceipts(
+    tied.map((report) => ({
       id: receiptIdFor({ ...report, provider: "meta" }, now),
       deliveryId: report.deliveryId,
       provider: "meta",
@@ -164,8 +228,7 @@ async function recordMetaStatuses(reports: MetaStatusReport[]): Promise<void> {
       errorMessage: report.errorMessage,
       occurredAt: report.occurredAt,
     })),
-    skipDuplicates: true,
-  });
+  );
 
   await advanceProviderStatus(
     furthestPerDelivery(tied, META_STATUS_RANK),
@@ -324,6 +387,7 @@ export {
   EXPO_STATUS_RANK,
   advanceProviderStatus,
   furthestPerDelivery,
+  insertReceipts,
   logTemplateCategoryUpdates,
   logTemplateUpdates,
   recordExpoTickets,

@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { randomUUID } from "node:crypto";
 
@@ -20,7 +20,9 @@ import { uuid7Instant } from "@/shared/time/uuid7-floor";
  * (provider, providerMessageId, status) that absorbed the repeats: the
  * receipts become partitioned by day on their id. This file drops it from
  * its own database, as that release will, and proves three reports of one
- * fact still make one row — the id is decided by the fact.
+ * fact still make one row — the id is decided by the fact — and so do two
+ * copies whose ids differ (one tied, one not; an untied one held at today
+ * and repeated tomorrow), which the writers dedupe by the fact's key.
  */
 const prisma = createPrismaClient();
 
@@ -169,6 +171,134 @@ describe("without the unique (provider, providerMessageId, status)", () => {
 
     expect(rows).toHaveLength(1);
     expect(rows[0].deliveryId).toBe(delivery.id);
+  });
+
+  // The id's anchor follows the tie: the delivery's millisecond when the
+  // report is tied, midnight of occurredAt otherwise. A Meta status that
+  // arrives before the worker recorded the wamid is untied; its repeat
+  // after the commit is tied, and computes another id for the same fact.
+  it("keeps a Meta status that was untied, then tied, as one row", async () => {
+    const delivery = await seedDelivery("WHATSAPP");
+    const wamid = `wamid.${randomUUID()}`;
+    const report = {
+      providerMessageId: wamid,
+      status: "delivered",
+      occurredAt: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000),
+      deliveryId: null,
+      errorCode: null,
+      errorMessage: null,
+    };
+
+    await recordMetaStatuses([report]);
+
+    // The worker's commit lands between Meta's two copies.
+    await prisma.notificationDelivery.update({
+      where: { id: delivery.id },
+      data: { providerMessageId: wamid },
+    });
+
+    await recordMetaStatuses([{ ...report }]);
+
+    const rows = await prisma.notificationProviderReceipt.findMany({
+      where: { providerMessageId: wamid },
+    });
+
+    expect(rows).toHaveLength(1);
+    // The repeat still moves the delivery's status on.
+    expect(
+      (
+        await prisma.notificationDelivery.findUniqueOrThrow({
+          where: { id: delivery.id },
+        })
+      ).providerStatus,
+    ).toBe("delivered");
+  });
+
+  it("keeps a tied and an untied copy taken at once by two replicas as one row", async () => {
+    const delivery = await seedDelivery("WHATSAPP");
+    const wamid = `wamid.${randomUUID()}`;
+    const report = {
+      providerMessageId: wamid,
+      status: "read",
+      occurredAt: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000),
+      errorCode: null,
+      errorMessage: null,
+    };
+
+    // One copy names the delivery in its callback data, the other names
+    // nothing and its wamid is not recorded: two ids for one fact.
+    await Promise.all([
+      recordMetaStatuses([{ ...report, deliveryId: delivery.id }]),
+      recordMetaStatuses([{ ...report, deliveryId: null }]),
+    ]);
+
+    expect(
+      await prisma.notificationProviderReceipt.count({
+        where: { providerMessageId: wamid },
+      }),
+    ).toBe(1);
+  });
+
+  // An untied report from a clock ahead of ours is held at today: its
+  // repeat on another day computes another id.
+  it("keeps an untied report repeated on another day as one row", async () => {
+    const wamid = `wamid.${randomUUID()}`;
+    const report = {
+      providerMessageId: wamid,
+      status: "sent",
+      occurredAt: new Date(Date.now() + 3 * 24 * 60 * 60 * 1000),
+      deliveryId: null,
+      errorCode: null,
+      errorMessage: null,
+    };
+
+    await recordMetaStatuses([report]);
+
+    vi.useFakeTimers({ toFake: ["Date"] });
+
+    try {
+      vi.setSystemTime(Date.now() + 24 * 60 * 60 * 1000);
+
+      await recordMetaStatuses([{ ...report }]);
+    } finally {
+      vi.useRealTimers();
+    }
+
+    expect(
+      await prisma.notificationProviderReceipt.count({
+        where: { providerMessageId: wamid },
+      }),
+    ).toBe(1);
+  });
+
+  it("keeps a Resend event that was untied, then tied, as one row", async () => {
+    const delivery = await seedDelivery("EMAIL");
+    const emailId = randomUUID();
+    const event = {
+      status: "delivered",
+      emailId,
+      // A Message-ID that names no delivery: tied only once the pipeline
+      // has recorded Resend's id on the delivery.
+      messageId: `<${randomUUID()}@example.com>`,
+      occurredAt: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000),
+      errorCode: null,
+      errorMessage: null,
+    };
+
+    await recordResendEvent(event);
+
+    await prisma.notificationDelivery.update({
+      where: { id: delivery.id },
+      data: { providerMessageId: emailId },
+    });
+
+    await recordResendEvent({ ...event });
+
+    expect(
+      await prisma.notificationProviderReceipt.count({
+        where: { providerMessageId: emailId },
+      }),
+    ).toBe(1);
   });
 
   it("keeps an Expo ticket recorded three times as one row", async () => {

@@ -3432,7 +3432,15 @@ continua de pé depois:
   e o dia mais antigo da retenção dos recibos soltos (30 dias). A Meta e o
   Svix repetem o que não viram responder 2xx, e três chamadas do mesmo
   fato continuam uma linha só sem o índice único de provedor, mensagem e
-  status (que sai na onda 10).
+  status (que sai na onda 10). O id sozinho não garante isso: a cópia que
+  chega antes de o worker gravar o wamid fica solta e a que chega depois
+  fica ligada, e um recibo solto preso em hoje e repetido amanhã muda de
+  dia; os dois calculam outro id. Por isso quem grava (`insertReceipts`,
+  em `provider-receipts.ts`) tranca cada fato com
+  `pg_advisory_xact_lock`, lê quais deles o livro já tem com qualquer id
+  e grava só os outros; a primeira linha fica como chegou. A leitura usa
+  o índice de provedor, mensagem e status, que a onda 10 troca por um não
+  único.
 - a notificação do sino nasce com o id da `notification_delivery` IN_APP
   que a criou (F5-14). Um IN_APP enviado de novo (a queda antes do
   DELIVERED, dois workers ao mesmo tempo) bate na chave primária e não

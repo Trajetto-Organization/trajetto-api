@@ -12,6 +12,7 @@ import {
 import {
   advanceProviderStatus,
   furthestPerDelivery,
+  insertReceipts,
 } from "./provider-receipts";
 import { receiptIdFor } from "./receipt-id";
 
@@ -64,36 +65,31 @@ async function tieToDelivery(
 /**
  * Records one Resend event in the receipts ledger and advances the
  * delivery's providerStatus, never backwards. Idempotent: Svix delivers again
- * whatever it did not see a 2xx for, and the receipt's id, decided by
- * (provider, message id, status), absorbs the repeat. Throws on a database failure, so the route
- * answers 5xx and Svix retries.
+ * whatever it did not see a 2xx for, and insertReceipts keeps one row per
+ * (provider, message id, status), however each copy was tied. Throws on a
+ * database failure, so the route answers 5xx and Svix retries.
  */
 async function recordResendEvent(report: ResendEventReport): Promise<void> {
   const deliveryId = await tieToDelivery(report);
 
-  await database.notificationProviderReceipt.createMany({
-    data: [
-      {
-        // Decided by the fact (receipt-id.ts, F5-04): a repeat is a
-        // conflict on the primary key, with or without the ledger's unique.
-        id: receiptIdFor({
-          deliveryId,
-          provider: "resend",
-          providerMessageId: report.emailId,
-          status: report.status,
-          occurredAt: report.occurredAt,
-        }),
+  await insertReceipts([
+    {
+      id: receiptIdFor({
         deliveryId,
         provider: "resend",
         providerMessageId: report.emailId,
         status: report.status,
-        errorCode: report.errorCode,
-        errorMessage: report.errorMessage,
         occurredAt: report.occurredAt,
-      },
-    ],
-    skipDuplicates: true,
-  });
+      }),
+      deliveryId,
+      provider: "resend",
+      providerMessageId: report.emailId,
+      status: report.status,
+      errorCode: report.errorCode,
+      errorMessage: report.errorMessage,
+      occurredAt: report.occurredAt,
+    },
+  ]);
 
   await advanceProviderStatus(
     furthestPerDelivery(

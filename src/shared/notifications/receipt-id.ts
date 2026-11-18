@@ -28,6 +28,12 @@ import { uuid7FromKey, uuid7InstantOf } from "./delivery-id";
  * The other 74 bits are the SHA-256 of the provider, its message id and the
  * status: the ledger's own key. An Expo ticket keeps the id it was written
  * under ('ticket') when the receipts job moves its status on.
+ *
+ * So the id alone does not make a fact one row: the anchor follows the tie
+ * and, for an untied report held inside the retention, the day it arrived.
+ * A copy that came before the worker recorded the wamid and one after it,
+ * or a held report repeated on another day, compute two ids. The writers
+ * close that by the key itself (insertReceipts, provider-receipts.ts).
  */
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -68,15 +74,26 @@ function receiptAnchorMs(fact: ReceiptFact, now: Date = new Date()): number {
   return Math.max(oldest, reported);
 }
 
-/** The id of the receipt that records `fact`. */
-function receiptIdFor(fact: ReceiptFact, now: Date = new Date()): string {
-  // As a JSON array: the message id is the provider's text, and no
-  // separator inside it can make two facts one key.
-  return uuid7FromKey(
-    receiptAnchorMs(fact, now),
-    JSON.stringify([fact.provider, fact.providerMessageId, fact.status]),
-  );
+/**
+ * The ledger's own key: provider, message id and status. As a JSON array:
+ * the message id is the provider's text, and no separator inside it can
+ * make two facts one key.
+ */
+function receiptFactKey(
+  fact: Pick<ReceiptFact, "provider" | "providerMessageId" | "status">,
+): string {
+  return JSON.stringify([fact.provider, fact.providerMessageId, fact.status]);
 }
 
-export { UNTIED_RECEIPT_RETENTION_DAYS, receiptAnchorMs, receiptIdFor };
+/** The id of the receipt that records `fact`. */
+function receiptIdFor(fact: ReceiptFact, now: Date = new Date()): string {
+  return uuid7FromKey(receiptAnchorMs(fact, now), receiptFactKey(fact));
+}
+
+export {
+  UNTIED_RECEIPT_RETENTION_DAYS,
+  receiptAnchorMs,
+  receiptFactKey,
+  receiptIdFor,
+};
 export type { ReceiptFact };
