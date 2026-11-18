@@ -77,6 +77,14 @@ function isPostgresUrl(value: string): boolean {
 const POSTGRES_URL_MESSAGE =
   "precisa ser uma URL postgresql:// (o mesmo formato da DATABASE_URL)";
 
+/** A provider's global concurrency cap (F3-15a): 0 to 256, 0 = none. */
+function providerGlobalConcurrency() {
+  return z.preprocess(
+    (value) => (value === "" ? undefined : value),
+    z.coerce.number().int().min(0).max(256).default(0),
+  );
+}
+
 /**
  * One queue's concurrency (plano-escala F3-05): 1 to 32, today's constant
  * when absent or empty.
@@ -873,6 +881,32 @@ const envSchema = z
     // counts as absent.
     WEBHOOK_PER_ENDPOINT_CONCURRENCY: queueConcurrency(
       "WEBHOOK_PER_ENDPOINT_CONCURRENCY",
+    ),
+
+    // The providers' global concurrency caps (plano-escala F3-15a; decision
+    // D45; shared/notifications/provider-caps.ts): sends in flight to Meta
+    // (WhatsApp), to the e-mail provider and to Expo (push) across every
+    // process that claims their lane. Each process takes floor(cap /
+    // divisor), never below 1, where the divisor is the live processes of
+    // the lane (process_heartbeat), the most seen in the last ten minutes
+    // and ROLE_EXPECTED_CONSUMERS, whichever is greatest, and stays as it
+    // was when the read fails: a database hiccup must not make every
+    // process think it is alone and go past the provider's contract. 0
+    // (the default) is no global cap: the lane's own concurrency per
+    // process, as before. Empty counts as absent.
+    WHATSAPP_GLOBAL_CONCURRENCY: providerGlobalConcurrency(),
+    EMAIL_GLOBAL_CONCURRENCY: providerGlobalConcurrency(),
+    PUSH_GLOBAL_CONCURRENCY: providerGlobalConcurrency(),
+
+    // The owner's floor for the divisor of the providers' global caps
+    // (above): how many processes are expected to claim a provider lane
+    // (2 once the trajetto-worker runs two replicas). A process that has
+    // not seen the others yet (the first seconds after a deploy, a
+    // heartbeat table that cannot be read) divides by at least this. 0
+    // (the default) leaves the floor at 1. Empty counts as absent.
+    ROLE_EXPECTED_CONSUMERS: z.preprocess(
+      (value) => (value === "" ? undefined : value),
+      z.coerce.number().int().min(0).max(64).default(0),
     ),
 
     // Webhook calls in flight to ONE endpoint across every process that

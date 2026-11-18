@@ -52,14 +52,28 @@ interface ContinuousPoolOptions<T> {
   /** The most rows one claim asks for, whatever is free. */
   maxPerClaim?: number;
 
-  /** At most `limit` rows of one key in flight; the others wait their turn. */
-  perKey?: { limit: number; keyOf: (row: T) => string };
+  /**
+   * At most `limit` rows of one key in flight; the others wait their turn.
+   * The limit may differ by key and change between looks (a provider's
+   * part of its global cap, plano-escala F3-15a), and a row with no key
+   * (undefined) has no limit of its own.
+   */
+  perKey?: {
+    limit: number | ((key: string) => number);
+    keyOf: (row: T) => string | undefined;
+  };
 
   /**
    * Claims up to `limit` rows, leaving out the keys in `busyKeys` when the
-   * claim can (skipsBusyKeys). A failure ends the cycle once the rest ran.
+   * claim can (skipsBusyKeys); `inFlight` is the rows of each key in
+   * flight now, for a claim that keeps only what each key has room for. A
+   * failure ends the cycle once the rest ran.
    */
-  claim: (limit: number, busyKeys: ReadonlySet<string>) => Promise<T[]>;
+  claim: (
+    limit: number,
+    busyKeys: ReadonlySet<string>,
+    inFlight: ReadonlyMap<string, number>,
+  ) => Promise<T[]>;
 
   /**
    * The claim takes at most a share of each key and leaves out `busyKeys`
@@ -200,9 +214,13 @@ class ContinuousPool<T> {
 
       while (waiting.length > 0 && inFlight.size < options.slots()) {
         const index = perKey
-          ? waiting.findIndex(
-              (row) => (byKey.get(perKey.keyOf(row)) ?? 0) < perKey.limit,
-            )
+          ? waiting.findIndex((row) => {
+              const key = perKey.keyOf(row);
+
+              return (
+                key === undefined || (byKey.get(key) ?? 0) < this.limitOf(key)
+              );
+            })
           : 0;
 
         if (index < 0) break;
@@ -264,7 +282,7 @@ class ContinuousPool<T> {
           let rows: T[];
 
           try {
-            rows = await options.claim(limit, busyKeys);
+            rows = await options.claim(limit, busyKeys, new Map(byKey));
           } catch (error) {
             failure = { error };
             continue;
@@ -307,14 +325,24 @@ class ContinuousPool<T> {
     return claimed;
   }
 
+  /** A key's limit at this look. */
+  private limitOf(key: string): number {
+    const limit = this.options.perKey?.limit;
+
+    if (limit === undefined) return Number.POSITIVE_INFINITY;
+
+    return typeof limit === "function" ? limit(key) : limit;
+  }
+
   /** The keys at their limit: a claim that can leaves them out. */
   private busyKeys(byKey: Map<string, number>): ReadonlySet<string> {
-    const limit = this.options.perKey?.limit;
     const busy = new Set<string>();
 
-    if (limit === undefined) return busy;
+    if (this.options.perKey === undefined) return busy;
 
-    for (const [key, count] of byKey) if (count >= limit) busy.add(key);
+    for (const [key, count] of byKey) {
+      if (count >= this.limitOf(key)) busy.add(key);
+    }
 
     return busy;
   }

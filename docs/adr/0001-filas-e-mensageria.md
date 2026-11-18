@@ -295,6 +295,23 @@ as linhas achadas para endpoints do mesmo host são cortadas, na ordem do
 claim, no que o host ainda tem. Host nulo (um endpoint salvo pela imagem
 anterior, até o minuto do despachante preenchê-lo) conta como sem teto.
 
+**Tetos globais dos provedores (F3-15a).** A concorrência das raias é por
+processo, então cada processo a mais multiplica o que a Meta, a Resend e o
+Expo recebem de uma vez, e o contrato com eles é da plataforma.
+`WHATSAPP_GLOBAL_CONCURRENCY`, `EMAIL_GLOBAL_CONCURRENCY` e
+`PUSH_GLOBAL_CONCURRENCY` (`0`, o padrão, é sem teto global) valem para
+todos os processos juntos, e cada um fica com o teto dividido pelos
+processos vivos da raia (`process_heartbeat.queues`), nunca abaixo de 1
+(`src/shared/notifications/provider-caps.ts`). O divisor é o maior entre os
+vivos agora, o maior número visto nos últimos 10 minutos e
+`ROLE_EXPECTED_CONSUMERS`, e uma leitura que falha mantém o último: um
+soluço do banco não pode fazer cada processo achar que está sozinho e
+passar do contrato. Com algum teto ligado, o pool da raia separa as linhas
+por provedor: o claim deixa de fora o canal do provedor que está na sua
+parte e devolve na hora, sem gastar tentativa, o que pegou a mais, então
+nenhuma linha espera o provedor com o lease correndo. Concorrência não
+limita taxa; o balde de taxa por provedor é o F3-15c.
+
 - **DLQ:** o status `FAILED`.
   - `GET /health/dead-letter` com `POST /health/dead-letter/replay` cobre
     as entregas.

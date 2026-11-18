@@ -4457,6 +4457,16 @@ destino, somando todos os endpoints apontados para ele: o caso do ERP de um
 agregador, que recebe um endpoint por empresa no mesmo host. Só vale com o
 teto por endpoint ligado; `0` o desliga.
 
+**Tetos globais dos provedores (F3-15a).** `WHATSAPP_GLOBAL_CONCURRENCY`,
+`EMAIL_GLOBAL_CONCURRENCY` e `PUSH_GLOBAL_CONCURRENCY` (0, sem teto global,
+por padrão) são os envios em voo à Meta, ao provedor de e-mail e ao Expo
+somando todos os processos que consomem a raia; cada processo fica com o
+teto dividido pelos processos vivos dela (o maior número visto em 10 min,
+nunca abaixo de `ROLE_EXPECTED_CONSUMERS` nem de 1). Ligue-os com os
+números que a Meta e a Resend confirmarem, antes de pôr uma segunda
+réplica na raia `external`, e ponha `ROLE_EXPECTED_CONSUMERS` com o número
+de processos que consomem as raias.
+
 **Orçamento de memória (U-15).** No boot, cada processo soma o heap
 principal (o `--max-old-space-size` do `NODE_OPTIONS`), as threads da
 planilha (`SPREADSHEET_READS_PER_PROCESS` × `SPREADSHEET_WORKER_MAX_OLD_MB`)

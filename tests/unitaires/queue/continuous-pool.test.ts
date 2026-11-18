@@ -619,3 +619,84 @@ describe("a claim that leaves the busy keys out", () => {
     expect(queue.left).toBe(0);
   });
 });
+
+/**
+ * Keys whose limit differs and moves (plano-escala F3-15a): a provider's
+ * part of its global cap, by key, read at every look; rows of no key (the
+ * bell, the activity) have no limit of their own.
+ */
+describe("a limit by key", () => {
+  it("holds each key to its own limit and leaves rows of no key alone", async () => {
+    const keyOf = (row: number) =>
+      row % 3 === 0 ? "whatsapp" : row % 3 === 1 ? "email" : undefined;
+    const limits: Record<string, number> = { whatsapp: 1, email: 3 };
+    const queue = queueOf(30);
+
+    const running = new Map<string, number>();
+    const peak = new Map<string, number>();
+
+    await pool<number>({
+      slots: () => 6,
+      perKey: { limit: (key) => limits[key], keyOf },
+      prefetch: 6,
+      claim: queue.claim,
+      run: async (row) => {
+        const key = keyOf(row) ?? "none";
+
+        running.set(key, (running.get(key) ?? 0) + 1);
+        peak.set(key, Math.max(peak.get(key) ?? 0, running.get(key)!));
+
+        await new Promise((resolve) => setTimeout(resolve, 3));
+
+        running.set(key, running.get(key)! - 1);
+      },
+    }).drain();
+
+    expect(queue.left).toBe(0);
+    expect(peak.get("whatsapp")).toBe(1);
+    expect(peak.get("email")).toBeLessThanOrEqual(3);
+    // Rows of no key take what the slots leave, past any key's limit.
+    expect(peak.get("none")).toBeGreaterThan(1);
+  });
+
+  it("tells the claim the busy keys and how many of each are in flight", async () => {
+    const held = gate();
+    const seen: Array<{ busy: string[]; inFlight: Array<[string, number]> }> =
+      [];
+    let next = 0;
+
+    const keyed = pool<{ id: number; key: string }>({
+      slots: () => 4,
+      perKey: { limit: () => 1, keyOf: (row) => row.key },
+      skipsBusyKeys: true,
+      claim: async (limit, busy, inFlight) => {
+        seen.push({ busy: [...busy], inFlight: [...inFlight] });
+
+        if (next > 0) return [];
+
+        next += 1;
+
+        return [{ id: 1, key: "whatsapp" }].slice(0, limit);
+      },
+      run: async () => {
+        await held.opened;
+      },
+    });
+
+    const drained = keyed.drain();
+
+    // A look asked for while the row is on the wire.
+    await turn();
+    keyed.rescan();
+    await turn();
+
+    held.open();
+    await drained;
+
+    expect(seen[0]).toEqual({ busy: [], inFlight: [] });
+    expect(seen[1]).toEqual({
+      busy: ["whatsapp"],
+      inFlight: [["whatsapp", 1]],
+    });
+  });
+});

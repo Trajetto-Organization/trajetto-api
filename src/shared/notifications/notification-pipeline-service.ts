@@ -18,6 +18,12 @@ import { consumesQueue } from "@/shared/lifecycle/process-role";
 import { announceWake } from "@/shared/wake/wake-bus";
 import { ContinuousPool } from "@/shared/queue/continuous-pool";
 import {
+  channelsOf,
+  providerCaps,
+  providerOfChannel,
+  type Provider,
+} from "./provider-caps";
+import {
   EXHAUSTED_CLOSE_INTERVAL_MS,
   closeExhaustedInBatches,
   exhaustedCloseSql,
@@ -175,6 +181,7 @@ function deliveryClaimSql(
   lane: DeliveryLane,
   floor: Prisma.Sql,
   limit: number = DELIVERY_BATCH_SIZE,
+  notChannels: readonly string[] = [],
 ): Prisma.Sql {
   // Literals, not parameters: with bound values the planner cannot prove a
   // partial index predicate in a generic plan and falls back to a scan.
@@ -197,7 +204,7 @@ function deliveryClaimSql(
           AND "availableAt" <= now()
           AND ("status" = 'PENDING'
             OR ("leaseExpiresAt" < now()
-                AND "attempts" < ${DELIVERY_MAX_ATTEMPTS}))${floor}
+                AND "attempts" < ${DELIVERY_MAX_ATTEMPTS}))${floor}${notChannelsSql(null, notChannels)}
         ORDER BY "availableAt"
         LIMIT ${limit}
         FOR UPDATE SKIP LOCKED
@@ -207,13 +214,31 @@ function deliveryClaimSql(
 }
 
 /**
+ * The channels a lane's claim leaves out (plano-escala F3-15a): those of a
+ * provider at this process's part of its global cap. A filter on the rows
+ * the index range already returns; the lane's channel list, from which the
+ * partial index is proved, stays as it is.
+ */
+function notChannelsSql(
+  alias: string | null,
+  notChannels: readonly string[],
+): Prisma.Sql {
+  return notChannels.length > 0
+    ? Prisma.sql` AND NOT (${columnOf(alias, "channel")}::text = ANY(${[...notChannels]}::text[]))`
+    : Prisma.empty;
+}
+
+/**
  * A delivery lane as the fair claim walks it (plano-escala F3-10;
  * shared/queue/fair-claim.ts): the lane's rows by company, through the
  * index notification_delivery_business_<lane>_idx (business_id,
  * availableAt) with the lane's claim predicate (F3-09), and the same SET,
  * due rule and RETURNING as deliveryClaimSql.
  */
-function laneFairQueue(lane: DeliveryLane): FairQueue {
+function laneFairQueue(
+  lane: DeliveryLane,
+  notChannels: readonly string[] = [],
+): FairQueue {
   // Literals, as in deliveryClaimSql: the partial index is proved from them.
   const channels = Prisma.raw(
     DELIVERY_LANES[lane].map((channel) => `'${channel}'`).join(", "),
@@ -226,7 +251,7 @@ function laneFairQueue(lane: DeliveryLane): FairQueue {
     indexed: (alias) =>
       Prisma.sql`${columnOf(alias, "status")} IN ('PENDING', 'PROCESSING') AND ${columnOf(alias, "channel")} IN (${channels})`,
     due: (alias) =>
-      Prisma.sql`${columnOf(alias, "availableAt")} <= now() AND (${columnOf(alias, "status")} = 'PENDING' OR (${columnOf(alias, "leaseExpiresAt")} < now() AND ${columnOf(alias, "attempts")} < ${DELIVERY_MAX_ATTEMPTS}::int))`,
+      Prisma.sql`${columnOf(alias, "availableAt")} <= now() AND (${columnOf(alias, "status")} = 'PENDING' OR (${columnOf(alias, "leaseExpiresAt")} < now() AND ${columnOf(alias, "attempts")} < ${DELIVERY_MAX_ATTEMPTS}::int))${notChannelsSql(alias, notChannels)}`,
     set: Prisma.sql`
         "status" = 'PROCESSING',
         "leaseExpiresAt" = now() + make_interval(secs => ${DELIVERY_LEASE_SECONDS}),
@@ -288,9 +313,12 @@ function deliveryFairClaimSql(
     maxTenants: number;
     floor: Prisma.Sql;
     rowFloor: Prisma.Sql;
+    notChannels?: readonly string[];
   },
 ): Prisma.Sql {
-  return fairClaimSql(laneFairQueue(lane), input);
+  const { notChannels, ...claim } = input;
+
+  return fairClaimSql(laneFairQueue(lane, notChannels), claim);
 }
 
 /**
@@ -1465,8 +1493,37 @@ class NotificationPipelineService {
     }
   }
 
-  /** A lane's continuous pool (see lanePools). */
+  /**
+   * A lane's continuous pool (see lanePools).
+   *
+   * With a provider of the lane under a global cap (plano-escala F3-15a;
+   * provider-caps.ts), its rows are keyed by provider and at most this
+   * process's part of the cap are in flight; the claim leaves the
+   * provider's channels out while it is at its part and keeps no more of
+   * its rows than the part has room for, so a claimed row never waits for
+   * its provider with the lease running. Without one (the default), the
+   * pool of before, exactly.
+   */
   private lanePool(lane: DeliveryLane): ContinuousPool<ClaimedDelivery> {
+    if (providerCaps.providersOf(lane).length > 0) {
+      return new ContinuousPool<ClaimedDelivery>({
+        slots: () => LANE_CONCURRENCY[lane],
+        maxPerClaim: DELIVERY_BATCH_SIZE,
+        perKey: {
+          limit: (provider) => providerCaps.limitOf(provider as Provider),
+          keyOf: (delivery) => providerOfChannel(delivery.channel) ?? undefined,
+        },
+        skipsBusyKeys: true,
+        claim: (limit, busyProviders, inFlight) =>
+          this.claimLaneRows(lane, limit, { busyProviders, inFlight }),
+        run: (delivery) => this.runOneDelivery(delivery),
+        giveBack: (delivery) => this.giveBackDelivery(delivery),
+        stopping: () => this.stopping,
+        onClaim: () =>
+          workerHeartbeat.progress(`notification-delivery-${lane}`),
+      });
+    }
+
     return new ContinuousPool<ClaimedDelivery>({
       slots: () => LANE_CONCURRENCY[lane],
       maxPerClaim: DELIVERY_BATCH_SIZE,
@@ -1498,8 +1555,14 @@ class NotificationPipelineService {
   private async claimLaneRows(
     lane: DeliveryLane,
     limit: number,
+    caps?: {
+      busyProviders: ReadonlySet<string>;
+      inFlight: ReadonlyMap<string, number>;
+    },
   ): Promise<ClaimedDelivery[]> {
-    const deliveries = await this.claimDeliveries(lane, limit);
+    const deliveries = caps
+      ? await this.claimWithinProviderCaps(lane, limit, caps)
+      : await this.claimDeliveries(lane, limit);
 
     if (deliveries.length === 0) return deliveries;
 
@@ -1517,6 +1580,68 @@ class NotificationPipelineService {
     }
 
     return deliveries;
+  }
+
+  /**
+   * A lane's claim under the providers' global caps (plano-escala F3-15a):
+   * the divisor read again (cached by the heartbeat reader), the channels
+   * of the providers at this process's part left out, and, of each capped
+   * provider, only the rows its part has room for kept; the rest go back
+   * at once, as unclaimed (giveBackDelivery: the claim was not an attempt).
+   * A row kept is a row that starts now: none waits for its provider with
+   * the lease running.
+   */
+  private async claimWithinProviderCaps(
+    lane: DeliveryLane,
+    limit: number,
+    caps: {
+      busyProviders: ReadonlySet<string>;
+      inFlight: ReadonlyMap<string, number>;
+    },
+  ): Promise<ClaimedDelivery[]> {
+    await providerCaps.refresh(lane);
+
+    const room = new Map<Provider, number>();
+
+    for (const provider of providerCaps.providersOf(lane)) {
+      room.set(
+        provider,
+        caps.busyProviders.has(provider)
+          ? 0
+          : providerCaps.limitOf(provider) - (caps.inFlight.get(provider) ?? 0),
+      );
+    }
+
+    const full = [...room]
+      .filter(([, left]) => left <= 0)
+      .flatMap(([provider]) => channelsOf(provider));
+
+    const claimed = await this.claimDeliveries(lane, limit, full);
+
+    const kept: ClaimedDelivery[] = [];
+    const over: ClaimedDelivery[] = [];
+
+    for (const delivery of claimed) {
+      const provider = providerOfChannel(delivery.channel);
+      const left = provider ? room.get(provider) : undefined;
+
+      if (left === undefined) {
+        kept.push(delivery);
+      } else if (left > 0) {
+        room.set(provider!, left - 1);
+        kept.push(delivery);
+      } else {
+        over.push(delivery);
+      }
+    }
+
+    if (over.length > 0) {
+      await Promise.allSettled(
+        over.map((delivery) => this.giveBackDelivery(delivery)),
+      );
+    }
+
+    return kept;
   }
 
   /**
@@ -1720,6 +1845,7 @@ class NotificationPipelineService {
   private async claimDeliveries(
     lane: DeliveryLane,
     limit: number = DELIVERY_BATCH_SIZE,
+    notChannels: readonly string[] = [],
   ): Promise<ClaimedDelivery[]> {
     const floor = await claimFloors.predicate("deliveries");
 
@@ -1746,6 +1872,7 @@ class NotificationPipelineService {
           maxTenants: env.QUEUE_FAIR_MAX_TENANTS,
           floor,
           rowFloor: await claimFloors.predicate("deliveries", "row"),
+          notChannels,
         }),
       );
 
@@ -1760,7 +1887,7 @@ class NotificationPipelineService {
     }
 
     const claimed = await database.$queryRaw<ClaimedDelivery[]>(
-      deliveryClaimSql(lane, floor, limit),
+      deliveryClaimSql(lane, floor, limit, notChannels),
     );
 
     for (const delivery of claimed)
