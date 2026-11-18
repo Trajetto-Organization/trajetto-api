@@ -1003,6 +1003,32 @@ const envSchema = z
       )
       .transform((value) => value === "true"),
 
+    // How long the notification family is kept (plano-escala F5-11): the
+    // events, their deliveries and the receipts, 30 days as the nightly
+    // purge always kept them. Once the swap of F5-09 made the three
+    // partitioned, a day leaves whole after this many days (DETACH and
+    // DROP in the partition-maintenance job), never with a row in flight
+    // and with its failures copied to the dead letters first; before the
+    // swap, and for the plain tables' rows of before it, the purge in
+    // batches follows the same number. Under 30 is refused: a receipt
+    // nobody claims is anchored up to 30 days back (receipt-id.ts) and
+    // would land in a day already dropped. Over 90 too: a FAILED event
+    // leaves for its dead letter at this age, and the dead letter keeps it
+    // OUTBOX_FAILED_RETENTION_DAYS from the failure, which must be longer.
+    OUTBOX_PUBLISHED_RETENTION_DAYS: z.preprocess(
+      (value) => (value === "" ? undefined : value),
+      z.coerce.number().int().min(30).max(90).default(30),
+    ),
+
+    // Days a queue's partition may stay past its retention before the
+    // partition-stuck alert pages (plano-escala F5-11). A day held by a
+    // row in flight is a queue that stopped, worth a look after three
+    // nights, as any other stuck partition.
+    QUEUE_PARTITION_STUCK_ALERT_DAYS: z.preprocess(
+      (value) => (value === "" ? undefined : value),
+      z.coerce.number().int().min(1).max(30).default(3),
+    ),
+
     // The dead letters' retention (plano-escala F5-10): days a failure is
     // kept, counted from when it gave up — a FAILED outbox event (in the
     // queue table for 30 days, then in outbox_event_dead_letter) and a
@@ -1465,6 +1491,19 @@ const envSchema = z
         code: z.ZodIssueCode.custom,
         path: ["STOP_GRACE_PERIOD_MS"],
         message,
+      });
+    }
+
+    // A FAILED event leaves the queue for its dead letter at the family's
+    // retention (F5-11): a dead letter that kept it no longer would expire
+    // it the night it is copied.
+    if (
+      env.OUTBOX_FAILED_RETENTION_DAYS <= env.OUTBOX_PUBLISHED_RETENTION_DAYS
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["OUTBOX_FAILED_RETENTION_DAYS"],
+        message: `OUTBOX_FAILED_RETENTION_DAYS (${env.OUTBOX_FAILED_RETENTION_DAYS}) precisa ser maior que OUTBOX_PUBLISHED_RETENTION_DAYS (${env.OUTBOX_PUBLISHED_RETENTION_DAYS}): o evento que falhou vai para o dead letter nessa idade.`,
       });
     }
 

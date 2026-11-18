@@ -5,6 +5,7 @@ import { env } from "@/env";
 import { throwIfPartial } from "@/shared/errors/partial-run-error";
 import { CronJobDefinition } from "@/shared/services/cron-scheduler-service";
 import { logger } from "@/shared/logging/logger";
+import { notificationFamilyLegacyBound } from "@/shared/notifications/notification-family-retention";
 import { UNTIED_RECEIPT_RETENTION_DAYS } from "@/shared/notifications/receipt-id";
 
 import {
@@ -22,13 +23,22 @@ const log = logger.child({
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-/**
+/*
  * Published events have served their purpose; a month covers any audit
- * look. A FAILED event leaves the queue table at the same age, moved to
- * its dead letter (plano-escala F5-10): the queues become partitioned by
- * day, and a day is dropped whole (F5-11).
+ * look: OUTBOX_PUBLISHED_RETENTION_DAYS (30). A FAILED event leaves the
+ * queue table at the same age, moved to its dead letter (plano-escala
+ * F5-10).
+ *
+ * Once the swap of F5-09 made the family (events, deliveries, receipts)
+ * partitioned by day, a day leaves whole at that age, by DETACH and DROP
+ * in the partition-maintenance job (F5-11, the notification-family gate:
+ * settled, its failures copied, its keys dropped). The purges in batches
+ * below then only reach the legacy partitions, the plain tables of before
+ * the swap (every id under notificationFamilyLegacyBound): a DELETE in the
+ * days the DROP takes would be the dead rows and the WAL the partitions
+ * exist to avoid. Once the legacy partitions are dropped too, nothing is
+ * under the bound, and the batches find nothing.
  */
-const PUBLISHED_RETENTION_DAYS = 30;
 
 /*
  * Failures stay longer — they are the ones someone may still investigate:
@@ -136,16 +146,33 @@ interface PurgeResult {
  * table that keeps a month of rows (pinned in
  * tests/E2E/notification-purge-plan.test.ts).
  */
-const EVENT_FAMILY_SQL = Prisma.sql`
+function eventFamilySql(idBelow: string | null): Prisma.Sql {
+  return Prisma.sql`
     deliveries AS (
       DELETE FROM "notification_delivery"
-      WHERE "outboxEventId" = ANY (ARRAY(SELECT "id" FROM batch))
+      WHERE "outboxEventId" = ANY (ARRAY(SELECT "id" FROM batch))${below(idBelow)}
       RETURNING "id"
     ),
     receipts AS (
       DELETE FROM "notification_provider_receipt"
-      WHERE "deliveryId" = ANY (ARRAY(SELECT "id" FROM deliveries))
+      WHERE "deliveryId" = ANY (ARRAY(SELECT "id" FROM deliveries))${below(idBelow)}
     )`;
+}
+
+/**
+ * ` AND "id" < bound` (of `alias`) when the family is partitioned (F5-11):
+ * the legacy partitions only, which the planner prunes to. A delivery's
+ * and a receipt's id carry their event's millisecond, so the deliveries
+ * and receipts of an event under the bound are under it too. Nothing when
+ * the family is plain, so the statement is the one it always was.
+ */
+function below(idBelow: string | null, alias?: string): Prisma.Sql {
+  if (idBelow === null) return Prisma.empty;
+
+  return alias
+    ? Prisma.sql` AND ${Prisma.raw(`"${alias}"."id"`)} < ${idBelow}`
+    : Prisma.sql` AND "id" < ${idBelow}`;
+}
 
 /**
  * One batch of the PUBLISHED purge, with the dead-letter archive inside it
@@ -160,7 +187,7 @@ const EVENT_FAMILY_SQL = Prisma.sql`
  *
  * One statement, so the copy and the deletes commit together:
  * data-modifying CTEs share one snapshot, so the INSERT reads the
- * deliveries the `deliveries` CTE deletes (EVENT_FAMILY_SQL). The archive
+ * deliveries the `deliveries` CTE deletes (eventFamilySql). The archive
  * used to be a separate walk before the purge, and its last statement read
  * EVERY retained failure (to find the few whose event was due) — past the
  * 30 s statement_timeout at the target scale, which stopped the purge every
@@ -177,12 +204,13 @@ const EVENT_FAMILY_SQL = Prisma.sql`
 function publishedPurgeBatchSql(
   publishedBefore: Date,
   limit: number,
+  idBelow: string | null = null,
 ): Prisma.Sql {
   return Prisma.sql`
     WITH batch AS (
       SELECT "id", "eventKey", "topic", "businessId"
       FROM "domain_outbox_event"
-      WHERE "status" = 'PUBLISHED' AND "processedAt" < ${publishedBefore}
+      WHERE "status" = 'PUBLISHED' AND "processedAt" < ${publishedBefore}${below(idBelow)}
       ORDER BY "processedAt"
       LIMIT ${limit}
       FOR UPDATE SKIP LOCKED
@@ -204,13 +232,13 @@ function publishedPurgeBatchSql(
       CROSS JOIN LATERAL (
         SELECT *
         FROM "notification_delivery" f
-        WHERE f."outboxEventId" = b."id" AND f."status" = 'FAILED'
+        WHERE f."outboxEventId" = b."id" AND f."status" = 'FAILED'${below(idBelow, "f")}
         OFFSET 0
       ) d
       ON CONFLICT ("id") DO NOTHING
       RETURNING 1
     ),
-    ${EVENT_FAMILY_SQL},
+    ${eventFamilySql(idBelow)},
     removed AS (
       DELETE FROM "domain_outbox_event" e
       USING batch b
@@ -230,13 +258,19 @@ function publishedPurgeBatchSql(
 }
 
 /** What the PUBLISHED purge matches, for the probe before a partial. */
-function duePublishedSql(publishedBefore: Date): Prisma.Sql {
-  return Prisma.sql`"status" = 'PUBLISHED' AND "processedAt" < ${publishedBefore}`;
+function duePublishedSql(
+  publishedBefore: Date,
+  idBelow: string | null = null,
+): Prisma.Sql {
+  return Prisma.sql`"status" = 'PUBLISHED' AND "processedAt" < ${publishedBefore}${below(idBelow)}`;
 }
 
 /** What the FAILED move matches: events that gave up long enough ago. */
-function dueFailedSql(failedBefore: Date): Prisma.Sql {
-  return Prisma.sql`"status" = 'FAILED' AND "updated_at" < ${failedBefore}`;
+function dueFailedSql(
+  failedBefore: Date,
+  idBelow: string | null = null,
+): Prisma.Sql {
+  return Prisma.sql`"status" = 'FAILED' AND "updated_at" < ${failedBefore}${below(idBelow)}`;
 }
 
 /**
@@ -253,7 +287,7 @@ function dueFailedSql(failedBefore: Date): Prisma.Sql {
  * An event that failed to expand usually has no delivery; one that a
  * replica expanded after losing its lease, and that then failed under the
  * new owner, does. The cascade took those with the event, so the batch
- * takes them explicitly, with their receipts (EVENT_FAMILY_SQL, F5-05).
+ * takes them explicitly, with their receipts (eventFamilySql, F5-05).
  * The ones that already went out (DELIVERED) or gave up (FAILED) are
  * recorded in the copy first (settled_deliveries): the replay gives them
  * back to the new event, whose expansion then skips them, so a recipient
@@ -264,6 +298,7 @@ function failedPurgeBatchSql(
   failedBefore: Date,
   keptFrom: Date,
   limit: number,
+  idBelow: string | null = null,
 ): Prisma.Sql {
   return Prisma.sql`
     WITH batch AS (
@@ -272,7 +307,7 @@ function failedPurgeBatchSql(
         "businessId", "actorId", "payload", "attempts", "lastError",
         "correlationId", "created_at", "updated_at"
       FROM "domain_outbox_event"
-      WHERE ${dueFailedSql(failedBefore)}
+      WHERE ${dueFailedSql(failedBefore, idBelow)}
       LIMIT ${limit}
       FOR UPDATE SKIP LOCKED
     ),
@@ -308,14 +343,14 @@ function failedPurgeBatchSql(
           )
           FROM "notification_delivery" d
           WHERE d."outboxEventId" = b."id"
-            AND d."status" IN ('DELIVERED', 'FAILED')
+            AND d."status" IN ('DELIVERED', 'FAILED')${below(idBelow, "d")}
         )
       FROM batch b
       WHERE b."updated_at" >= ${keptFrom}
       ON CONFLICT ("id") DO NOTHING
       RETURNING 1
     ),
-    ${EVENT_FAMILY_SQL},
+    ${eventFamilySql(idBelow)},
     removed AS (
       DELETE FROM "domain_outbox_event" e
       USING batch b
@@ -406,8 +441,11 @@ const cleanupNotificationPipelineJob: CronJobDefinition = {
     const deadline = purgeDeadline();
 
     const publishedBefore = new Date(
-      Date.now() - PUBLISHED_RETENTION_DAYS * DAY_MS,
+      Date.now() - env.OUTBOX_PUBLISHED_RETENTION_DAYS * DAY_MS,
     );
+
+    // Null while the family is plain: every row, as always (F5-11).
+    const idBelow = await notificationFamilyLegacyBound(databaseBatch);
 
     const failedBefore = new Date(
       Date.now() - env.OUTBOX_FAILED_RETENTION_DAYS * DAY_MS,
@@ -448,7 +486,7 @@ const cleanupNotificationPipelineJob: CronJobDefinition = {
       table: Prisma.sql`"notification_provider_receipt"`,
       where: Prisma.sql`"deliveryId" IS NULL AND "created_at" < ${new Date(
         Date.now() - UNTIED_RECEIPT_RETENTION_DAYS * DAY_MS,
-      )}`,
+      )}${below(idBelow)}`,
       maxRows: MAX_UNTIED_RECEIPTS_PER_RUN,
       deadline,
     });
@@ -475,8 +513,8 @@ const cleanupNotificationPipelineJob: CronJobDefinition = {
     // copied to their dead letter (F5-10).
     const failed = await purgeEvents({
       batchSql: (limit) =>
-        failedPurgeBatchSql(publishedBefore, failedBefore, limit),
-      due: dueFailedSql(publishedBefore),
+        failedPurgeBatchSql(publishedBefore, failedBefore, limit, idBelow),
+      due: dueFailedSql(publishedBefore, idBelow),
       maxRows: MAX_FAILED_PER_RUN,
       deadline,
     });
@@ -495,8 +533,9 @@ const cleanupNotificationPipelineJob: CronJobDefinition = {
     // deletes the deliveries and their receipts, in the same statement
     // (publishedPurgeBatchSql).
     const published = await purgeEvents({
-      batchSql: (limit) => publishedPurgeBatchSql(publishedBefore, limit),
-      due: duePublishedSql(publishedBefore),
+      batchSql: (limit) =>
+        publishedPurgeBatchSql(publishedBefore, limit, idBelow),
+      due: duePublishedSql(publishedBefore, idBelow),
       maxRows: MAX_PUBLISHED_PER_RUN,
       deadline,
     });

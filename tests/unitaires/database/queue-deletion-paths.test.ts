@@ -86,15 +86,16 @@ const PATHS: Record<string, { through: string } | { tolerated: string }> = {
     through: '"notification_provider_receipt"',
   },
   // The purge: each event batch takes its deliveries, and they their
-  // receipts, in the batch's statement.
-  "src/jobs/cron/cleanup-notification-pipeline-job.ts#EVENT_FAMILY_SQL": {
+  // receipts, in the batch's statement (bounded to the legacy partitions
+  // once the family is partitioned, F5-11; the days leave by DROP).
+  "src/jobs/cron/cleanup-notification-pipeline-job.ts#eventFamilySql": {
     through: '"notification_provider_receipt"',
   },
   "src/jobs/cron/cleanup-notification-pipeline-job.ts#publishedPurgeBatchSql": {
-    through: "${EVENT_FAMILY_SQL}",
+    through: "${eventFamilySql(idBelow)}",
   },
   "src/jobs/cron/cleanup-notification-pipeline-job.ts#failedPurgeBatchSql": {
-    through: "${EVENT_FAMILY_SQL}",
+    through: "${eventFamilySql(idBelow)}",
   },
 };
 

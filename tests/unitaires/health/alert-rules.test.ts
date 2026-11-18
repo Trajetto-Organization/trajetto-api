@@ -374,10 +374,13 @@ describe("the machinery behind the queues", () => {
   describe("the registered partitioned tables", () => {
     const table = (
       overrides: Partial<{
+        table: string;
         lookaheadDays: number | null;
         runwayOk: boolean;
         lookaheadOk: boolean;
         stuck: string[];
+        stuckGraceDays: number;
+        dropGate: string;
       }> = {},
     ) => ({
       table: "driver_position",
@@ -433,6 +436,31 @@ describe("the machinery behind the queues", () => {
       expect(alerts.map((alert) => alert.code)).toEqual(["partition-stuck"]);
       expect(alerts[0].message).toContain("4 partição(ões)");
       expect(alerts[0].message).toContain("e mais 1");
+    });
+
+    it("say a queue's day waits for its gate, with the queue's own grace", () => {
+      // F5-11: a day of the notification family leaves only settled, and
+      // its grace is QUEUE_PARTITION_STUCK_ALERT_DAYS.
+      const alerts = collectAlerts({
+        ...healthy(),
+        partitions: [
+          table({
+            table: "domain_outbox_event",
+            stuck: ["domain_outbox_event_20261020"],
+            stuckGraceDays: 5,
+            dropGate: "notification-family",
+          }),
+        ],
+      });
+
+      expect(alerts[0].message).toContain("há mais de 5 dias");
+      expect(alerts[0].message).toContain("sem linha em voo");
+      expect(
+        collectAlerts({
+          ...healthy(),
+          partitions: [table({ stuck: ["driver_position_20260101"] })],
+        })[0].message,
+      ).toContain("há mais de 3 dias");
     });
 
     it("judge every table, and ignore the old driver_position fields when they are there", () => {

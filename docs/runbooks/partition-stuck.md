@@ -25,7 +25,27 @@ retenção prometida não é cumprida.
    etapa de release de novo.
 4. Logo depois de baixar a retenção, o alerta aparece até a primeira noite:
    rode o job à mão para destacar o que passou a ser antigo.
-5. Trilha com o arquivo ligado (`TRAIL_ARCHIVE_ENABLED=true`): o dia só sai
+5. Fila da família de notificação (`domain_outbox_event`,
+   `notification_delivery`, `notification_provider_receipt`; plano de escala
+   F5-11): o dia só sai sem linha em voo, com as falhas copiadas para os
+   dead letters e as três tabelas particionadas, e o alerta conta depois de
+   `QUEUE_PARTITION_STUCK_ALERT_DAYS`. Procure no log do job, componente
+   `notification-family-retention`:
+   - `notification family day still in flight`: há evento ou entrega
+     pendente naquele dia, a fila parou; veja `outbox-lag` e
+     `delivery-lag`, e confira:
+
+     ```sql
+     SELECT status, count(*) FROM domain_outbox_event
+      WHERE tableoid = '<partição>'::regclass GROUP BY 1;
+     ```
+
+   - `notification family not all partitioned yet`: uma das três ainda é
+     comum (a troca `prisma/post-deploy/10-queue-partition-swap.sql`
+     pendente, ou desfeita à mão); o `/health/rollout` diz qual;
+   - `out of time` ou `could not be prepared`: a noite seguinte tenta de
+     novo.
+6. Trilha com o arquivo ligado (`TRAIL_ARCHIVE_ENABLED=true`): o dia só sai
    depois de ir para o R2 com a soma conferida. Procure no log do job:
    - `trail archive enabled but not configured`: falta o bucket ou o token
      (o campo `missing` diz qual); preencha no _Environment_ da

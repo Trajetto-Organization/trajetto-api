@@ -4,6 +4,7 @@ import { container } from "tsyringe";
 import database from "@/../infra/database";
 import { RedisConnection } from "@/../infra/cache/redis-connection";
 import { env } from "@/env";
+import { registeredPartitions } from "@/shared/database/partitions";
 import { GEOCODER_PROVIDER } from "@/shared/delivery/geocoding/geocoding-budget";
 import { quotaDay } from "@/shared/services/provider-quota/provider-quota-repository";
 
@@ -445,13 +446,23 @@ async function collectOperationalSnapshot(
     partitionRunwayOk: runway?.runway_ok ?? true,
     partitionRunwayDays: runway?.partition_runway_days ?? null,
     ...(partitionStates && {
-      partitions: Object.entries(partitionStates).map(([table, state]) => ({
-        table,
-        lookaheadDays: state.lookahead_days,
-        runwayOk: state.runway_ok,
-        lookaheadOk: state.lookahead_ok,
-        stuck: state.stuck,
-      })),
+      partitions: Object.entries(partitionStates).map(([table, state]) => {
+        const entry = registeredPartitions().find(
+          (each) => each.table === table,
+        );
+
+        return {
+          table,
+          lookaheadDays: state.lookahead_days,
+          runwayOk: state.runway_ok,
+          lookaheadOk: state.lookahead_ok,
+          stuck: state.stuck,
+          ...(entry?.stuckGraceDays !== undefined && {
+            stuckGraceDays: entry.stuckGraceDays,
+          }),
+          ...(entry?.dropGate && { dropGate: entry.dropGate }),
+        };
+      }),
     }),
     stuckWorkers,
     connectionUsagePercent: usage,

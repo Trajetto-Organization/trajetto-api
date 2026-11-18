@@ -22,6 +22,9 @@ import { uuid7Floor } from "@/shared/time/uuid7-floor";
 
 type PartitionGrain = "day" | "month";
 
+/** The gates a registered table may name (PartitionedTable.dropGate). */
+type PartitionDropGateName = "notification-family";
+
 /**
  * What the partition key is: a `timestamp` column (the trail's recorded_at)
  * or the row's uuid v7 id (the delivery trail's shell, plano-escala F2-16),
@@ -78,6 +81,26 @@ interface PartitionedTable {
   plainUntilSwap?: boolean;
 
   /**
+   * Who decides that a partition past the retention may go, for a queue
+   * whose rows need something first (plano-escala F5-11, F5-12): a day of
+   * the notification family copies its failures to the dead letters and
+   * drops its events' keys, and no queue loses a day with a row still in
+   * flight. The job asks the gate (src/shared/database/partition-drop-gate.ts)
+   * before each DETACH; a "no" keeps the partition attached for the next
+   * night, and the partition-stuck alert counts it. Absent: the job drops
+   * what is past the retention as is.
+   */
+  dropGate?: PartitionDropGateName;
+
+  /**
+   * Days past the retention before a partition still attached counts as
+   * stuck (the partition-stuck alert); 3 when absent. The queues' follow
+   * QUEUE_PARTITION_STUCK_ALERT_DAYS (F5-11): a day held by a row in
+   * flight is a queue that stopped, not a lock.
+   */
+  stuckGraceDays?: number;
+
+  /**
    * Storage parameters each new partition gets, as `name=value`: a
    * partitioned parent cannot hold them (Postgres refuses fillfactor and
    * the autovacuum settings on it), and `LIKE … INCLUDING …` does not copy
@@ -111,10 +134,20 @@ interface PartitionEnv {
   DRIVER_POSITION_PARTITION_LOOKAHEAD_DAYS: number;
   /** Days of the queues' partitions made ahead (F5-07); 7 when absent. */
   QUEUE_PARTITION_LOOKAHEAD_DAYS?: number;
+  /** Days of the notification family kept (F5-11); 30 when absent. */
+  OUTBOX_PUBLISHED_RETENTION_DAYS?: number;
+  /** Days past the retention before a queue day is stuck; 3 when absent. */
+  QUEUE_PARTITION_STUCK_ALERT_DAYS?: number;
 }
 
 /** The queues' lookahead when the environment does not say (F5-07). */
 const QUEUE_PARTITION_LOOKAHEAD_DAYS_DEFAULT = 7;
+
+/** The notification family's retention when the environment does not say. */
+const OUTBOX_PUBLISHED_RETENTION_DAYS_DEFAULT = 30;
+
+/** The queues' grace before partition-stuck when the environment does not say. */
+const QUEUE_PARTITION_STUCK_ALERT_DAYS_DEFAULT = 3;
 
 /**
  * The queues' storage parameters, one partition at a time: a claim rewrites
@@ -141,10 +174,15 @@ const WEBHOOK_DELIVERY_RELOPTIONS = [
  * (tests/unitaires/database/queue-ids-v7-guard.test.ts): a v4 would land
  * in any day's range. Yesterday, today and tomorrow must exist (an id of a
  * delivery carries its event's millisecond, and a replica's clock may be
- * behind); a week ahead by default. Nothing is detached nor dropped by the
- * job yet: the queues keep their purges in batches until the retention by
- * day of F5-11 and F5-12. A day stops changing once its rows settle; the
- * receipts' days settle last (a provider reports for days).
+ * behind); a week ahead by default. A day stops changing once its rows
+ * settle; the receipts' days settle last (a provider reports for days).
+ *
+ * The notification family (the events, their deliveries and the receipts,
+ * one day of ids each) leaves by day after OUTBOX_PUBLISHED_RETENTION_DAYS
+ * (F5-11), through the notification-family gate: never with a row in
+ * flight, its failures copied to the dead letters and its keys dropped
+ * first. The webhook ledger is kept here (its purge in batches) until its
+ * own retention by day (F5-12).
  */
 function queuePartitions(values: PartitionEnv): PartitionedTable[] {
   const queue = {
@@ -158,12 +196,26 @@ function queuePartitions(values: PartitionEnv): PartitionedTable[] {
     retentionDays: null,
     settleDays: 3,
     plainUntilSwap: true,
+    stuckGraceDays:
+      values.QUEUE_PARTITION_STUCK_ALERT_DAYS ??
+      QUEUE_PARTITION_STUCK_ALERT_DAYS_DEFAULT,
+  } as const;
+  const family = {
+    ...queue,
+    retentionDays:
+      values.OUTBOX_PUBLISHED_RETENTION_DAYS ??
+      OUTBOX_PUBLISHED_RETENTION_DAYS_DEFAULT,
+    dropGate: "notification-family",
   } as const;
 
   return [
-    { table: "domain_outbox_event", ...queue, reloptions: QUEUE_RELOPTIONS },
-    { table: "notification_delivery", ...queue, reloptions: QUEUE_RELOPTIONS },
-    { table: "notification_provider_receipt", ...queue, settleDays: 8 },
+    { table: "domain_outbox_event", ...family, reloptions: QUEUE_RELOPTIONS },
+    {
+      table: "notification_delivery",
+      ...family,
+      reloptions: QUEUE_RELOPTIONS,
+    },
+    { table: "notification_provider_receipt", ...family, settleDays: 8 },
     {
       table: "webhook_delivery",
       ...queue,
@@ -378,7 +430,9 @@ function freezeWindow(
 
 export {
   DELIVERY_EVENT_LOOKAHEAD_MONTHS,
+  OUTBOX_PUBLISHED_RETENTION_DAYS_DEFAULT,
   QUEUE_PARTITION_LOOKAHEAD_DAYS_DEFAULT,
+  QUEUE_PARTITION_STUCK_ALERT_DAYS_DEFAULT,
   FREEZE_LOOKBACK_DAYS,
   addGrains,
   freezeWindow,
@@ -391,6 +445,7 @@ export {
   retentionCutoff,
 };
 export type {
+  PartitionDropGateName,
   PartitionEnv,
   PartitionGrain,
   PartitionKey,

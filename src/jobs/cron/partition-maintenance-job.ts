@@ -10,6 +10,7 @@ import {
   openDdlConnection,
   type DdlConnection,
 } from "@/shared/database/ddl-connection";
+import type { PartitionDropGate } from "@/shared/database/partition-drop-gate";
 import { asPartitionOwner } from "@/shared/database/partition-owner";
 import {
   addGrains,
@@ -19,11 +20,13 @@ import {
   partitionStartFromName,
   registeredPartitions,
   retentionCutoff,
+  type PartitionDropGateName,
   type PartitionedTable,
   type PlannedPartition,
 } from "@/shared/database/partitions";
 import { sqlStateOf } from "@/shared/errors/prisma-error-meta";
 import { logger } from "@/shared/logging/logger";
+import { createNotificationFamilyGate } from "@/shared/notifications/notification-family-retention";
 import { parsePartitionBound } from "@/shared/route/driver-position-rules";
 import type { CronJobDefinition } from "@/shared/services/cron-scheduler-service";
 
@@ -73,6 +76,14 @@ const log = logger.child({ component: "cron", job: "partition-maintenance" });
  *    counts it after three; a day detached on an earlier night is dropped
  *    only with its archive verified. The archive starts no new company
  *    past CRON_PURGE_RUN_BUDGET_MS, so the run stays inside its lease.
+ *
+ *  - A table whose rows need something before they go names a gate in the
+ *    registry (dropGate): the job asks it before each DETACH, and a "no"
+ *    keeps the partition for the next night. The notification family's
+ *    day (plano-escala F5-11) leaves only settled, its failures in the dead
+ *    letters and its keys gone (notification-family-retention.ts); its
+ *    legacy partition, the plain table of before the swap, leaves the same
+ *    way, and a detached one is dropped by name.
  *
  * Cron: "10 4 * * *" → daily at 04:10 UTC, after the 03:00 pg_dump: a
  * DETACH … CONCURRENTLY waits for every transaction that has the parent
@@ -202,6 +213,11 @@ interface MaintenanceDeps {
   sleep: (ms: number) => Promise<void>;
   /** Null: the trail archive is off, and expired days are dropped as is. */
   trailArchive: TrailArchiveGate | null;
+  /**
+   * The gates a registered table names (PartitionedTable.dropGate): a
+   * table whose gate is missing here drops nothing.
+   */
+  dropGates: Partial<Record<PartitionDropGateName, PartitionDropGate>>;
 }
 
 /**
@@ -219,6 +235,22 @@ function trailArchiveFromEnv(): TrailArchiveGate | null {
     deadline: Date.now() + env.CRON_PURGE_RUN_BUDGET_MS,
     retentionDays: env.TRAIL_ARCHIVE_RETENTION_DAYS,
   });
+}
+
+/**
+ * The gates of the registered tables (plano-escala F5-11): the
+ * notification family's day goes only settled, its failures in the dead
+ * letters and its keys gone. Both share the run's budget with the trail
+ * archive, CRON_PURGE_RUN_BUDGET_MS.
+ */
+function dropGatesFromEnv(): MaintenanceDeps["dropGates"] {
+  return {
+    "notification-family": createNotificationFamilyGate({
+      db: databaseBatch,
+      deadline: Date.now() + env.CRON_PURGE_RUN_BUDGET_MS,
+      failedRetentionDays: env.OUTBOX_FAILED_RETENTION_DAYS,
+    }),
+  };
 }
 
 /**
@@ -395,6 +427,12 @@ async function detachedLeftovers(
   table: PartitionedTable,
   cutoff: Date,
 ): Promise<string[]> {
+  // A gated queue's legacy partition (FROM (MINVALUE), the plain table of
+  // before the swap, F5-09) leaves through the gate too: detached, its name
+  // carries no day, and nothing else makes a table by that name (the swap
+  // is one transaction). Never another table's legacy: the trail's history
+  // is kept (decision D3).
+  const legacy = table.dropGate ? [`${table.table}_legacy`] : [];
   const rows = await databaseBatch.$queryRawUnsafe<Array<{ relname: string }>>(
     `SELECT c.relname::text AS relname
        FROM pg_class c
@@ -409,6 +447,8 @@ async function detachedLeftovers(
   return rows
     .map((row) => row.relname)
     .filter((name) => {
+      if (legacy.includes(name)) return true;
+
       const start = partitionStartFromName(table, name);
 
       return (
@@ -484,6 +524,28 @@ async function removeBehind(
       }
 
       outcome.archived += 1;
+    }
+
+    // A gated table (F5-11): the gate settles the day first, or keeps it.
+    if (table.dropGate) {
+      const gate = deps.dropGates[table.dropGate];
+      const mayDrop =
+        gate !== undefined &&
+        partition.to !== null &&
+        (await gate.mayDrop(parent, {
+          name: partition.name,
+          from:
+            partition.from !== null && Number.isFinite(partition.from)
+              ? new Date(partition.from)
+              : null,
+          to: new Date(partition.to),
+        }));
+
+      if (!mayDrop) {
+        outcome.held += 1;
+        outcome.postponed += 1;
+        continue;
+      }
     }
 
     const detached = await ddl(
@@ -583,6 +645,7 @@ async function maintainPartitions(
       overrides.trailArchive === undefined
         ? trailArchiveFromEnv()
         : overrides.trailArchive,
+    dropGates: overrides.dropGates ?? dropGatesFromEnv(),
   };
 
   // Opened on the first statement that needs it, once per run: one that

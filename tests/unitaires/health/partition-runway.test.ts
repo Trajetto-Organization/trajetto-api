@@ -158,6 +158,24 @@ describe("partitionTableState", () => {
     expect(state.detach_pending).toBe(1);
   });
 
+  it("gives a queue the grace of QUEUE_PARTITION_STUCK_ALERT_DAYS", () => {
+    // F5-11: a queue's day is held while a row is in flight; its grace is
+    // its own, here one day where the trail's is three.
+    const queue: PartitionedTable = {
+      ...trail,
+      table: "domain_outbox_event",
+      stuckGraceDays: 1,
+    };
+    const state = partitionTableState(
+      queue,
+      { owned: true },
+      [row(-93), row(-92), row(-91), ...week()],
+      NOW,
+    );
+
+    expect(state.stuck).toEqual(["p-92", "p-93"]);
+  });
+
   it("is not owner_ok with the parent or one partition under another owner", () => {
     expect(
       partitionTableState(trail, { owned: false }, week(), NOW).owner_ok,

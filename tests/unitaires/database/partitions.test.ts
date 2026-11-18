@@ -6,7 +6,9 @@ import { describe, expect, it } from "vitest";
 import { envSchema } from "@/schemas/env-schema";
 import { definedEnv } from "@/schemas/env-schema/defined-env";
 import {
+  OUTBOX_PUBLISHED_RETENTION_DAYS_DEFAULT,
   QUEUE_PARTITION_LOOKAHEAD_DAYS_DEFAULT,
+  QUEUE_PARTITION_STUCK_ALERT_DAYS_DEFAULT,
   addGrains,
   freezeWindow,
   partitionBound,
@@ -228,7 +230,7 @@ describe("the queues in the registry", () => {
       DRIVER_POSITION_PARTITION_LOOKAHEAD_DAYS: 7,
     }).filter((table) => table.plainUntilSwap);
 
-  it("are the four, daily by id, plain until the swap, and kept", () => {
+  it("are the four, daily by id, plain until the swap", () => {
     expect(queues().map((table) => table.table)).toEqual([
       "domain_outbox_event",
       "notification_delivery",
@@ -243,11 +245,44 @@ describe("the queues in the registry", () => {
         lookahead: QUEUE_PARTITION_LOOKAHEAD_DAYS_DEFAULT,
         requiredBehind: 1,
         requiredAhead: 1,
-        retentionDays: null,
+        stuckGraceDays: QUEUE_PARTITION_STUCK_ALERT_DAYS_DEFAULT,
       });
     }
 
     expect(QUEUE_PARTITION_LOOKAHEAD_DAYS_DEFAULT).toBe(7);
+    expect(QUEUE_PARTITION_STUCK_ALERT_DAYS_DEFAULT).toBe(3);
+  });
+
+  it("drop the notification family by day through its gate, and keep the webhooks for now", () => {
+    // F5-11: the events, deliveries and receipts leave whole days after
+    // OUTBOX_PUBLISHED_RETENTION_DAYS, settled first by the gate.
+    const byTable = Object.fromEntries(
+      queues().map((table) => [table.table, table]),
+    );
+
+    for (const name of [
+      "domain_outbox_event",
+      "notification_delivery",
+      "notification_provider_receipt",
+    ]) {
+      expect(byTable[name], name).toMatchObject({
+        retentionDays: OUTBOX_PUBLISHED_RETENTION_DAYS_DEFAULT,
+        dropGate: "notification-family",
+      });
+    }
+
+    expect(OUTBOX_PUBLISHED_RETENTION_DAYS_DEFAULT).toBe(30);
+    expect(byTable.webhook_delivery).toMatchObject({ retentionDays: null });
+    expect(byTable.webhook_delivery.dropGate).toBeUndefined();
+
+    const configured = registeredPartitions({
+      DRIVER_POSITION_RETENTION_DAYS: 90,
+      DRIVER_POSITION_PARTITION_LOOKAHEAD_DAYS: 7,
+      OUTBOX_PUBLISHED_RETENTION_DAYS: 45,
+      QUEUE_PARTITION_STUCK_ALERT_DAYS: 5,
+    }).find((table) => table.table === "notification_delivery");
+
+    expect(configured).toMatchObject({ retentionDays: 45, stuckGraceDays: 5 });
   });
 
   it("make yesterday through a week ahead, bounded by the smallest v7 of each day", () => {
@@ -321,6 +356,75 @@ describe("the queues in the registry", () => {
 
     expect(parse("6").success).toBe(false);
     expect(empty.success && empty.data?.QUEUE_PARTITION_LOOKAHEAD_DAYS).toBe(7);
+  });
+});
+
+describe("the queues' retention environment", () => {
+  const parse = (overrides: Record<string, string>) =>
+    envSchema.safeParse(
+      definedEnv({
+        NODE_ENV: "development",
+        REDIS_URL: "redis://localhost:6379",
+        HTTP_REQUEST: "http://localhost:3000",
+        JWT_SECRET: "a".repeat(32),
+        JWT_SECRET_REFRESH_TOKEN: "b".repeat(32),
+        MASTER_USER_EMAIL: "master@example.com",
+        MASTER_USER_INITIAL_PASSWORD: "x",
+        ...overrides,
+      }),
+    );
+
+  it("keeps the family 30 days and pages after 3, empty included", () => {
+    const variants: Array<Record<string, string>> = [
+      {},
+      {
+        OUTBOX_PUBLISHED_RETENTION_DAYS: "",
+        QUEUE_PARTITION_STUCK_ALERT_DAYS: "",
+      },
+    ];
+
+    for (const overrides of variants) {
+      const parsed = parse(overrides);
+
+      expect(parsed.success).toBe(true);
+      expect(parsed.data).toMatchObject({
+        OUTBOX_PUBLISHED_RETENTION_DAYS: 30,
+        QUEUE_PARTITION_STUCK_ALERT_DAYS: 3,
+      });
+    }
+  });
+
+  it("refuses a family retention an unclaimed receipt's anchor would outlive", () => {
+    // receipt-id.ts anchors a receipt nobody claims up to 30 days back:
+    // a day dropped sooner would refuse it.
+    expect(parse({ OUTBOX_PUBLISHED_RETENTION_DAYS: "29" }).success).toBe(
+      false,
+    );
+    expect(parse({ OUTBOX_PUBLISHED_RETENTION_DAYS: "91" }).success).toBe(
+      false,
+    );
+    expect(parse({ QUEUE_PARTITION_STUCK_ALERT_DAYS: "0" }).success).toBe(
+      false,
+    );
+  });
+
+  it("refuses a dead letter that keeps a failure no longer than the queue did", () => {
+    // A FAILED event moves to its dead letter at the family's retention.
+    const refused = parse({
+      OUTBOX_PUBLISHED_RETENTION_DAYS: "60",
+      OUTBOX_FAILED_RETENTION_DAYS: "60",
+    });
+
+    expect(refused.success).toBe(false);
+    expect(JSON.stringify(refused.error?.issues)).toContain(
+      "OUTBOX_FAILED_RETENTION_DAYS",
+    );
+    expect(
+      parse({
+        OUTBOX_PUBLISHED_RETENTION_DAYS: "60",
+        OUTBOX_FAILED_RETENTION_DAYS: "61",
+      }).success,
+    ).toBe(true);
   });
 });
 

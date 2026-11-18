@@ -360,8 +360,10 @@ function partitionTableState(
   const days = runway.partition_runway_days;
   const unbounded = ranges.length > 0 && days === null && runway.runway_ok;
 
+  // A queue's grace is its own (QUEUE_PARTITION_STUCK_ALERT_DAYS, F5-11).
   const stuckBy =
-    retentionCutoff(table, now).getTime() - PARTITION_STUCK_GRACE_DAYS * DAY_MS;
+    retentionCutoff(table, now).getTime() -
+    (table.stuckGraceDays ?? PARTITION_STUCK_GRACE_DAYS) * DAY_MS;
   const starts = ranges
     .map((range) => range.from)
     .filter((from) => Number.isFinite(from));

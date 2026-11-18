@@ -179,6 +179,15 @@ interface PartitionAlertState {
 
   /** Partitions past the retention by more than 3 days, still there. */
   stuck: string[];
+
+  /** The days of grace before `stuck` (the registry's); 3 when absent. */
+  stuckGraceDays?: number;
+
+  /**
+   * Who drops the table's partitions past the retention, when a gate
+   * settles them first (F5-11): the message says why a day is kept.
+   */
+  dropGate?: string;
 }
 
 interface GeocodingQuotaState {
@@ -409,7 +418,11 @@ function partitionAlerts(snapshot: OperationalSnapshot): Alert[] {
 
       alerts.push({
         code: "partition-stuck",
-        message: `${table.table}: ${table.stuck.length} partição(ões) passaram da retenção há mais de 3 dias e continuam no banco (${shown}${more}) — o job partition-maintenance não consegue destacá-las ou apagá-las`,
+        message: `${table.table}: ${table.stuck.length} partição(ões) passaram da retenção há mais de ${table.stuckGraceDays ?? 3} dias e continuam no banco (${shown}${more}) — o job partition-maintenance não consegue destacá-las ou apagá-las${
+          table.dropGate
+            ? " (numa fila, o dia só sai sem linha em voo, com as falhas nos dead letters e a família toda particionada)"
+            : ""
+        }`,
       });
     }
   }
