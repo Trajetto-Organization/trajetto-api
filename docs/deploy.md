@@ -36,7 +36,7 @@
 16. [Promover para produção](#16-promover-para-produção)
 17. [Rollback](#17-rollback)
 18. [Backup e restauração](#18-backup-e-restauração)
-19. [Réplicas, workers e tempo real](#19-réplicas-workers-e-tempo-real)
+19. [Papéis da mesma imagem](#19-papéis-da-mesma-imagem)
 20. [Alertas e monitoramento](#20-alertas-e-monitoramento)
 21. [Cadeia de suprimentos e segredos](#21-cadeia-de-suprimentos-e-segredos)
 22. [Bucket R2 e retenção no GHCR](#22-bucket-r2-e-retenção-no-ghcr)
@@ -797,27 +797,27 @@ O que isso muda no dia a dia:
 
 ### O que cada proteção do compose virou
 
-| O compose fazia                                                                                      | Agora                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
-| ---------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| variáveis obrigatórias (`${VAR:?mensagem}`) derrubavam o deploy                                      | **API**: o schema de ambiente derruba o boot sem `DATABASE_URL`, `REDIS_URL`, `JWT_*`, `MASTER_USER_*`, `HTTP_REQUEST` e, em produção, sem `RATE_LIMIT_TRUSTED_PROXY` e as `R2_*`. **IA**: o serviço recusa subir com `AI_TOKEN` ausente ou curto. **`APP_ENV`: nada obriga.** Vazia, a API segue o `NODE_ENV=production` da imagem e se comporta como produção; confira no staging                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
-| `AI_LOCAL_URL=http://trajetto-ai:8080` fixo                                                          | `AI_LOCAL_URL=http://<App Name da IA>:8080` no Environment da API. **Faltando, a IA fica desligada em silêncio** (a API trata como `none`); confira em _Sistema → Provedores_                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
-| `NODE_OPTIONS` montada de `API_HEAP_MB`; `RATE_LIMIT_TRUSTED_PROXY` com padrão `cloudflare`          | as duas digitadas no Environment da API (`NODE_OPTIONS=--max-old-space-size=768`, `RATE_LIMIT_TRUSTED_PROXY=cloudflare`)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
-| labels do Traefik (`Host()`, `websecure`, certificado, porta 3333, `passHostHeader`)                 | aba _Domains_ da Application: o Dokploy gera o arquivo `/etc/dokploy/traefik/dynamic/<App Name>.yml` com tudo isso (e o redirecionamento HTTP→HTTPS). `ROUTER_PREFIX` não existe mais: os roteadores levam o App Name, único por servidor                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
-| health check do balanceador do Traefik em `/health/readiness` (tirava uma réplica sem banco do ar)   | **lacuna**. O Traefik do Dokploy fala com o endereço virtual do serviço do Swarm (um só destino para as duas réplicas), então um health check ali tiraria o serviço inteiro do ar quando uma réplica falhasse. Não configure. O Swarm só põe uma réplica nova no balanceamento depois de ela passar no healthcheck (liveness), e tira a réplica que está desligando                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
-| `priority=1` no roteador                                                                             | desnecessário: cada ambiente tem o próprio host                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| bloco `deploy:` (réplicas, `update_config`, `rollback_config`, `restart_policy`, `resources`)        | _Advanced_ da Application: _Replicas_, _Swarm Settings_ (JSON pronto na [seção 7](#7-montar-o-dokploy-do-zero-staging-e-produção)) e _Resources_                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| `stop_grace_period` (40 s na API, 60 s no Postgres)                                                  | API: campo _Stop Grace Period_ do _Swarm Settings_, se a sua versão do Dokploy tiver. Sem ele, o Swarm mata o processo 10 s depois do SIGTERM: **lacuna**, com o contorno `docker service update --stop-grace-period 40s <App Name da API>` no host, que vale até o próximo deploy (o Dokploy reaplica a spec dele). O desligamento ordenado segue a variável `STOP_GRACE_PERIOD_MS` (sem ela, 10 s, e ele termina em menos de 9 s); ela só sobe para `40000` depois de o grace de 40 s aparecer no `inspect`, e o `verify-rollout` reprova o deploy quando ela passa do grace do serviço ([seção 19](#19-réplicas-workers-e-tempo-real)). Postgres: o Dokploy dá 30 s ao Database, e o F0-01 põe 120 s onde o painel tiver o campo; rode `CHECKPOINT` antes de qualquer parada planejada ([seção 27](#grace-e-placement-do-database)) |
-| `logging: json-file` com rotação por serviço                                                         | rotação **global** no `/etc/docker/daemon.json` do host ([seção 6](#6-preparar-o-servidor-uma-vez)), que vale para todo contêiner                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
-| `docker stack deploy` resolvia a tag para o digest e o fixava na spec                                | o Dokploy faz `pull` da tag e força a atualização do serviço, mas a spec guarda **a tag**, não o digest. Consequências: (1) o rollback automático do Swarm protege só o momento do deploy (as réplicas antigas continuam de pé), mas uma réplica antiga que reinicie depois sobe a imagem nova, que já está no host; (2) `docker service rollback` não volta a imagem ([seção 17](#17-rollback)); (3) a conferência da convergência passou a ler o digest do contêiner de cada task, e não a spec ([seção 14](#14-conferir-a-convergência))                                                                                                                                                                                                                                                                                            |
-| rede interna `backend` (`internal: true`): Postgres, Redis e IA inalcançáveis por outros contêineres | **lacuna**. Tudo fica na `dokploy-network`, junto com a web, o staging e o que mais rodar no Dokploy. A proteção passa a ser: nenhuma porta externa, senha forte no Postgres e no Redis, token na IA, segredos diferentes entre staging e produção                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
-| volume do Postgres com nome fixo (`POSTGRES_VOLUME`)                                                 | o Dokploy cria e nomeia o volume do Database (aparece em _Advanced → Volumes_). A guarda da API contra banco vazio em produção continua valendo                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| Postgres preso no manager (`node.role == manager`)                                                   | com um nó só, nada muda. O Dokploy já põe `node.role==manager` em todo serviço com volume, o Database incluído; com mais de um manager, fixe o Database por nó ou label antes de acrescentar o nó ([seção 27](#grace-e-placement-do-database))                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| imagem do Postgres fixada (`POSTGRES_IMAGE`)                                                         | campo _Docker Image_ do Database com o digest (`trajetto-postgres@sha256:…` desde a troca da onda 3; antes, `postgres:16-alpine@sha256:…`)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
-| tuning do Postgres e `/dev/shm` em tmpfs (comentados no compose)                                     | tuning: os parâmetros vêm da imagem `trajetto-postgres` e a memória do teto, com _Command_ e _Args_ vazios ([seção 27](#27-pitr-com-pgbackrest)). `/dev/shm`: **lacuna**, contornada pela imagem, que desliga os workers paralelos                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
-| Redis sem persistência, `--maxmemory 256mb --maxmemory-policy allkeys-lru`, senha obrigatória        | senha: o Database Redis sempre tem. O resto: comando personalizado do Database ([seção 10](#10-postgres-e-redis)); se a sua versão não tiver o campo, **lacuna** (Redis com snapshot em disco e sem teto de memória)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
-| IA com `read_only`, `/tmp` em tmpfs e `cap_drop: ALL`                                                | **lacuna**: a Application não tem esses campos. Continua valendo o usuário 10001 (não root) da imagem, sem domínio e sem porta publicada                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
-| `REDIS_ENFORCE_AUTH` (transição de um Redis sem senha)                                               | não existe mais: o Redis do Dokploy nasce com senha                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
-| job de migrations na rede `<stack>_backend`, lendo o env de `<stack>_api`                            | a Application `trajetto-api-migrate` de cada ambiente, na `dokploy-network`, com o próprio _Environment_ (só a URL do banco) e o deploy pedido pelo pipeline antes da API ([seção 15](#15-migrations))                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| O compose fazia                                                                                      | Agora                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| ---------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| variáveis obrigatórias (`${VAR:?mensagem}`) derrubavam o deploy                                      | **API**: o schema de ambiente derruba o boot sem `DATABASE_URL`, `REDIS_URL`, `JWT_*`, `MASTER_USER_*`, `HTTP_REQUEST` e, em produção, sem `RATE_LIMIT_TRUSTED_PROXY` e as `R2_*`. **IA**: o serviço recusa subir com `AI_TOKEN` ausente ou curto. **`APP_ENV`: nada obriga.** Vazia, a API segue o `NODE_ENV=production` da imagem e se comporta como produção; confira no staging                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| `AI_LOCAL_URL=http://trajetto-ai:8080` fixo                                                          | `AI_LOCAL_URL=http://<App Name da IA>:8080` no Environment da API. **Faltando, a IA fica desligada em silêncio** (a API trata como `none`); confira em _Sistema → Provedores_                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| `NODE_OPTIONS` montada de `API_HEAP_MB`; `RATE_LIMIT_TRUSTED_PROXY` com padrão `cloudflare`          | as duas digitadas no Environment da API (`NODE_OPTIONS=--max-old-space-size=768`, `RATE_LIMIT_TRUSTED_PROXY=cloudflare`)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| labels do Traefik (`Host()`, `websecure`, certificado, porta 3333, `passHostHeader`)                 | aba _Domains_ da Application: o Dokploy gera o arquivo `/etc/dokploy/traefik/dynamic/<App Name>.yml` com tudo isso (e o redirecionamento HTTP→HTTPS). `ROUTER_PREFIX` não existe mais: os roteadores levam o App Name, único por servidor                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| health check do balanceador do Traefik em `/health/readiness` (tirava uma réplica sem banco do ar)   | **lacuna**. O Traefik do Dokploy fala com o endereço virtual do serviço do Swarm (um só destino para as duas réplicas), então um health check ali tiraria o serviço inteiro do ar quando uma réplica falhasse. Não configure. O Swarm só põe uma réplica nova no balanceamento depois de ela passar no healthcheck (liveness), e tira a réplica que está desligando                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| `priority=1` no roteador                                                                             | desnecessário: cada ambiente tem o próprio host                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| bloco `deploy:` (réplicas, `update_config`, `rollback_config`, `restart_policy`, `resources`)        | _Advanced_ da Application: _Replicas_, _Swarm Settings_ (JSON pronto na [seção 7](#7-montar-o-dokploy-do-zero-staging-e-produção)) e _Resources_                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| `stop_grace_period` (40 s na API, 60 s no Postgres)                                                  | API: campo _Stop Grace Period_ do _Swarm Settings_, se a sua versão do Dokploy tiver. Sem ele, o Swarm mata o processo 10 s depois do SIGTERM: **lacuna**, com o contorno `docker service update --stop-grace-period 40s <App Name da API>` no host, que vale até o próximo deploy (o Dokploy reaplica a spec dele). O desligamento ordenado segue a variável `STOP_GRACE_PERIOD_MS` (sem ela, 10 s, e ele termina em menos de 9 s); ela só sobe para `40000` depois de o grace de 40 s aparecer no `inspect`, e o `verify-rollout` reprova o deploy quando ela passa do grace do serviço ([seção 19](#19-papéis-da-mesma-imagem)). Postgres: o Dokploy dá 30 s ao Database, e o F0-01 põe 120 s onde o painel tiver o campo; rode `CHECKPOINT` antes de qualquer parada planejada ([seção 27](#grace-e-placement-do-database)) |
+| `logging: json-file` com rotação por serviço                                                         | rotação **global** no `/etc/docker/daemon.json` do host ([seção 6](#6-preparar-o-servidor-uma-vez)), que vale para todo contêiner                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| `docker stack deploy` resolvia a tag para o digest e o fixava na spec                                | o Dokploy faz `pull` da tag e força a atualização do serviço, mas a spec guarda **a tag**, não o digest. Consequências: (1) o rollback automático do Swarm protege só o momento do deploy (as réplicas antigas continuam de pé), mas uma réplica antiga que reinicie depois sobe a imagem nova, que já está no host; (2) `docker service rollback` não volta a imagem ([seção 17](#17-rollback)); (3) a conferência da convergência passou a ler o digest do contêiner de cada task, e não a spec ([seção 14](#14-conferir-a-convergência))                                                                                                                                                                                                                                                                                     |
+| rede interna `backend` (`internal: true`): Postgres, Redis e IA inalcançáveis por outros contêineres | **lacuna**. Tudo fica na `dokploy-network`, junto com a web, o staging e o que mais rodar no Dokploy. A proteção passa a ser: nenhuma porta externa, senha forte no Postgres e no Redis, token na IA, segredos diferentes entre staging e produção                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| volume do Postgres com nome fixo (`POSTGRES_VOLUME`)                                                 | o Dokploy cria e nomeia o volume do Database (aparece em _Advanced → Volumes_). A guarda da API contra banco vazio em produção continua valendo                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| Postgres preso no manager (`node.role == manager`)                                                   | com um nó só, nada muda. O Dokploy já põe `node.role==manager` em todo serviço com volume, o Database incluído; com mais de um manager, fixe o Database por nó ou label antes de acrescentar o nó ([seção 27](#grace-e-placement-do-database))                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| imagem do Postgres fixada (`POSTGRES_IMAGE`)                                                         | campo _Docker Image_ do Database com o digest (`trajetto-postgres@sha256:…` desde a troca da onda 3; antes, `postgres:16-alpine@sha256:…`)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| tuning do Postgres e `/dev/shm` em tmpfs (comentados no compose)                                     | tuning: os parâmetros vêm da imagem `trajetto-postgres` e a memória do teto, com _Command_ e _Args_ vazios ([seção 27](#27-pitr-com-pgbackrest)). `/dev/shm`: **lacuna**, contornada pela imagem, que desliga os workers paralelos                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| Redis sem persistência, `--maxmemory 256mb --maxmemory-policy allkeys-lru`, senha obrigatória        | senha: o Database Redis sempre tem. O resto: comando personalizado do Database ([seção 10](#10-postgres-e-redis)); se a sua versão não tiver o campo, **lacuna** (Redis com snapshot em disco e sem teto de memória)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| IA com `read_only`, `/tmp` em tmpfs e `cap_drop: ALL`                                                | **lacuna**: a Application não tem esses campos. Continua valendo o usuário 10001 (não root) da imagem, sem domínio e sem porta publicada                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| `REDIS_ENFORCE_AUTH` (transição de um Redis sem senha)                                               | não existe mais: o Redis do Dokploy nasce com senha                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| job de migrations na rede `<stack>_backend`, lendo o env de `<stack>_api`                            | a Application `trajetto-api-migrate` de cada ambiente, na `dokploy-network`, com o próprio _Environment_ (só a URL do banco) e o deploy pedido pelo pipeline antes da API ([seção 15](#15-migrations))                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
 
 ## 6. Preparar o servidor (uma vez)
 
@@ -4320,17 +4320,25 @@ ensaio mensal com uma cópia real do Dokploy; as regras de Bucket Lock
 retenção da trilha por plano (gatilho: mais de 2 mil motoristas ativos/dia
 ou `driver_position` acima de 50 GB).
 
-## 19. Réplicas, workers e tempo real
+## 19. Papéis da mesma imagem
 
-Cada réplica da API roda, no mesmo processo e no mesmo pool: o HTTP, o
-Socket.IO com o adapter Redis e — no papel `all`, o padrão — os
-workers (pipeline de notificações, pipeline de IA, dispatcher de webhooks) e o
-agendador de crons. As filas no Postgres são reivindicadas com
-`FOR UPDATE SKIP LOCKED` e lease, e os crons têm uma execução por horário
-graças a um lease no banco: N réplicas não duplicam nada.
+A imagem `trajetto-api` é uma só e roda em quantas Applications o
+environment tiver, cada uma num papel. O HTTP, o Socket.IO, os workers
+(pipeline de notificações, pipeline de IA, dispatcher de webhooks), o
+agendador de crons e a ingestão de posições vivem juntos num processo (o
+papel `all`, a produção de hoje: uma Application `trajetto-api` faz tudo)
+ou separados, cada um com o próprio _Environment_, teto, réplicas e tag
+(`<tag>-<papel>`). O código de todos os papéis já está na imagem; separar
+é decisão de capacidade, e cada Application nasce quando a régua da
+[seção 23](#23-recursos-da-vps-e-logs) deixa. Sem a Application de um
+papel, nada muda. Em qualquer papel, as filas no Postgres são
+reivindicadas com `FOR UPDATE SKIP LOCKED` e lease, e os crons têm uma
+execução por horário graças a um lease no banco: N processos não duplicam
+nada. O passo a passo de cada Application está em
+[Criar a Application de um papel](#criar-a-application-de-um-papel).
 
-**Papéis da mesma imagem (`PROCESS_ROLE`, plano de escala F3-01).** A
-mesma imagem roda como várias Applications, cada uma com um papel:
+**O papel de cada processo (`PROCESS_ROLE`, plano de escala F3-01).**
+Cada Application escolhe o seu:
 
 | Papel             | Workers | Cron | Filas (`WORKER_QUEUES`) | Sockets | Varreduras | Rotas que atende                     |
 | ----------------- | ------- | ---- | ----------------------- | ------- | ---------- | ------------------------------------ |
@@ -4449,7 +4457,9 @@ quando não fecha: [runbook memory-budget](./runbooks/memory-budget.md).
 - **Escalar a API**: _Advanced → Cluster Settings → Replicas_ da Application
   `trajetto-api` → **Save** → **Deploy** (ou `docker service scale
 trajetto-api-production=N`, que o próximo deploy desfaz) e refaça o
-  orçamento de conexões (`réplicas × 11 + 2 + ferramentas < max_connections`).
+  a conta das conexões
+  ([seção 10](#roles-do-banco-logins-urls-e-conexões); por papel, em
+  [Valores por papel](#valores-por-papel)).
   O Swarm reparte conexões, não requisições: cada conexão keep-alive atende
   até `HTTP_MAX_REQUESTS_PER_SOCKET` requisições (1.000 por padrão) e a
   última resposta sai com `Connection: close`, para a réplica nova receber a
@@ -4494,6 +4504,395 @@ trajetto-api-production=N`, que o próximo deploy desfaz) e refaça o
   Ligar os 40 s: o _Stop Grace Period_ da Application primeiro (conferido no
   `inspect`, [seção 7.7](#77-trajetto-api-application), passo 8), a
   variável depois.
+
+### Criar a Application de um papel
+
+Vale para `trajetto-worker`, `trajetto-scheduler`,
+`trajetto-worker-external`, `trajetto-realtime` e `trajetto-ingest`, em
+qualquer environment (plano de escala X-12). O papel `api` não ganha
+Application: é a `trajetto-api` de sempre, com o _Environment_ trocado.
+Antes de criar, confira a coluna da fase em
+[Tetos por Application e por fase](#tetos-por-application-e-por-fase) e a
+soma da [seção 23](#23-recursos-da-vps-e-logs): papel que não cabe na
+régua espera. O que muda em cada papel está em
+[Valores por papel](#valores-por-papel), e a ordem, em
+[Ordem do corte e da reversão](#ordem-do-corte-e-da-reversão).
+
+1. Dokploy → projeto `trajetto-api` → environment (`staging` ou
+   `production`) → **Create Service → Application**. _Name_
+   `trajetto-<papel>`; _App Name_ `trajetto-<papel>-<environment>` (por
+   exemplo `trajetto-worker-production`; seção 7.2). **Create**.
+2. Aba _General_ → _Provider_ → **Docker**: _Docker Image_
+   `ghcr.io/trajetto-organization/trajetto-api:<staging|stable>-<papel>`
+   (por exemplo `:staging-worker`); _Registry URL_ `ghcr.io`; _Username_ e
+   _Password_ do PAT de leitura do GHCR (seção 7.3). **Save**. Não ligue
+   _Autodeploy_: quem decide o deploy é o workflow. A tag do papel existe
+   desde o primeiro run verde com a ação de deploy da onda 12, que a deixa
+   no digest da API (passo _Move the tags of the roles not deployed_ da
+   seção 3).
+3. Aba _Environment_. As chaves que não podem divergir entre os processos
+   do mesmo environment são `JWT_SECRET`, `JWT_SECRET_REFRESH_TOKEN`,
+   `SOCKET_ADAPTER_KEY`, `WEBHOOK_SECRETS_KEY`, `APP_ENV`,
+   `R2_BUCKET_NAME`, `MIN_MOBILE_CONTRACT`, o banco e o Redis. Se o painel
+   tiver variáveis compartilhadas do environment (a conferir na v0.30.10;
+   nas versões que têm, cada Application as lê como
+   `${{environment.NOME}}`), defina-as lá e use a referência; senão, cole o
+   _Environment_ inteiro da `trajetto-api` do mesmo environment. Nos dois
+   casos, quem confere é a impressão da configuração do
+   `process_heartbeat` (acima): uma chave divergente deixa o
+   `/health/rollout` com duas impressões, e o deploy fica vermelho
+   ([seção 14](#os-papéis-da-mesma-imagem-rollout_roles_expected)). Aplique
+   as mudanças da subseção do papel e **tire**, se a cópia trouxer,
+   `WORKERS_ENABLED`, `CRON_ENABLED`, `WORKER_QUEUES`, `SOCKETS_ENABLED`,
+   `PIPELINE_SWEEP_INTERVAL_MS` e `WEBHOOK_SWEEP_INTERVAL_MS`, menos as que
+   a subseção pede: o preset do `PROCESS_ROLE` põe os valores certos, e uma
+   variável explícita ganharia dele (o boot avisa com `overrides`).
+   **Save**.
+4. Aba _Domains_: só no `realtime` e no `ingest`, e só com _Replicas_ ≥ 1.
+   _Host_ igual ao da API (`api.intrajetto.com`; na staging,
+   `api-staging.intrajetto.com`), _Path_ `/socket.io` (realtime) ou
+   `/route/positions` (ingest), _Strip Path_ **desligado**, _Container
+   Port_ `3333`, HTTPS ligado e _Certificate Provider_ `Let's Encrypt`. O
+   Traefik manda o _Path_ mais longo para esta Application: sem task de pé,
+   cada pedido desse caminho recebe o erro do Traefik, em vez de ir para a
+   `trajetto-api`. Depois, no host, confira a regra em
+   `/etc/dokploy/traefik/dynamic/<App Name>.yml`.
+5. _Advanced → Resources_: _Memory Limit_ e _CPU Limit_ da tabela de tetos,
+   em bytes e nano-CPU (1 MiB = `1048576`; 1 CPU = `1000000000`; "livre" é
+   o campo vazio). **Save**.
+6. _Advanced → Cluster Settings_: _Replicas_ da tabela de tetos. **Save**.
+7. _Advanced → Swarm Settings_ (tempos em nanossegundos; os campos não
+   citados ficam vazios). Cole cada bloco no campo de mesmo nome.
+
+   _Health Check_: o mesmo da `trajetto-api`
+   ([seção 7.7](#77-trajetto-api-application), passo 8), que é o teste da
+   imagem com 5 tentativas em vez das 3 dela. Nunca a readiness: no Swarm,
+   falhar aqui destrói a task.
+
+   ```json
+   {
+     "Test": [
+       "CMD",
+       "wget",
+       "-q",
+       "-O",
+       "/dev/null",
+       "http://127.0.0.1:3333/health/liveness"
+     ],
+     "Interval": 30000000000,
+     "Timeout": 10000000000,
+     "StartPeriod": 30000000000,
+     "Retries": 5
+   }
+   ```
+
+   _Restart Policy_:
+
+   ```json
+   { "Condition": "any", "Delay": 5000000000, "MaxAttempts": 0 }
+   ```
+
+   _Update Config_ (a task nova antes de derrubar a velha, com rollback
+   automático):
+
+   ```json
+   {
+     "Parallelism": 1,
+     "Delay": 5000000000,
+     "FailureAction": "rollback",
+     "Monitor": 30000000000,
+     "Order": "start-first"
+   }
+   ```
+
+   _Rollback Config_:
+
+   ```json
+   {
+     "Parallelism": 1,
+     "Delay": 5000000000,
+     "Monitor": 30000000000,
+     "Order": "start-first"
+   }
+   ```
+
+   _Stop Grace Period_: `40000000000` (40 s). _Placement_: vazio até a
+   onda 17.
+
+8. **Deploy**. Em _Logs_: `process role resolved` com o papel certo e, nos
+   papéis com filas, `workers started`.
+9. Anote o **applicationId** (está na URL da Application). GitHub →
+   _Settings → Environments_ → `staging` ou `production`: o secret
+   `DOKPLOY_<PAPEL>_APPLICATION_ID` (`WORKER`, `SCHEDULER`,
+   `WORKER_EXTERNAL`, `REALTIME` ou `INGEST`) e a variável
+   `SWARM_<PAPEL>_SERVICE` com o App Name. Atualize
+   `ROLLOUT_ROLES_EXPECTED` com o valor da subseção do papel. Do run
+   seguinte em diante, a ação de deploy implanta o papel na ordem da
+   seção 3: worker, scheduler e worker-external antes da API; ingest e
+   realtime depois dela.
+10. Reinstale o `infra/scripts/verify-rollout.sh` no host quando a onda
+    pedir
+    ([seção 14](#pelo-swarm-por-ssh-padrão-na-produção-rollout_verifyssh-no-staging)).
+
+### Valores por papel
+
+| Papel                      | `PROCESS_ROLE`                                  | O que muda no _Environment_ copiado                                                                                                                 | Banco até a onda 16 (direto)                                                                              |
+| -------------------------- | ----------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| `all` (a produção de hoje) | ausente ou `all`                                | —                                                                                                                                                   | `DATABASE_URL` com `trajetto_http` e `connection_limit=10`; `BATCH_DATABASE_URL` com `trajetto_batch` e 3 |
+| `api`                      | `api`                                           | `SPREADSHEET_READS_PER_PROCESS` (1 até a importação durável, depois 0); `SOCKETS_ENABLED=false` depois do realtime                                  | `trajetto_http` com 6; `DATABASE_READ_URL` com `trajetto_read` e 3                                        |
+| `worker`                   | `worker`                                        | `SHUTDOWN_DRAIN_MS=0`; `CRON_ENABLED=false` quando houver scheduler; `WORKER_QUEUES=outbox,internal,webhooks,ai,jobs` quando houver worker-external | `trajetto_worker` com 8; `BATCH_DATABASE_URL` com `trajetto_batch` e 3                                    |
+| `scheduler`                | `scheduler` (o preset põe `WORKER_QUEUES=none`) | `SHUTDOWN_DRAIN_MS=0`                                                                                                                               | `DATABASE_URL` e `BATCH_DATABASE_URL` com `trajetto_batch` e 3, diretas                                   |
+| `worker-external`          | `worker-external`                               | `SHUTDOWN_DRAIN_MS=0`                                                                                                                               | `trajetto_worker` com 4                                                                                   |
+| `realtime`                 | `realtime`                                      | —                                                                                                                                                   | `trajetto_http` com 3                                                                                     |
+| `ingest`                   | `ingest`                                        | —                                                                                                                                                   | `trajetto_http` com 6                                                                                     |
+| `trajetto-api-migrate`     | imagem própria                                  | `POST_DEPLOY_STEPS` (emergência); `HISTORY_WINDOW_APPROVED` (só na janela)                                                                          | o usuário do Database, direto                                                                             |
+
+As URLs têm o formato de sempre: troque só o usuário, a senha, o host e o
+`connection_limit` (o porquê de cada parâmetro está na
+[seção 7.7](#77-trajetto-api-application)). Por exemplo, as do worker de
+produção:
+
+```
+DATABASE_URL=postgresql://trajetto_worker:<SENHA>@trajetto-postgres-production:5432/trajetto?schema=public&connection_limit=8&pool_timeout=5&connect_timeout=5&socket_timeout=60&max_idle_connection_lifetime=300&options=-c%20statement_timeout%3D30000%20-c%20lock_timeout%3D5000%20-c%20idle_in_transaction_session_timeout%3D60000
+BATCH_DATABASE_URL=postgresql://trajetto_batch:<SENHA>@trajetto-postgres-production:5432/trajetto?schema=public&connection_limit=3
+```
+
+Na staging, `-staging` no lugar de `-production`, com as senhas da
+staging. Os logins são os do
+[corte dos roles](#roles-do-banco-logins-urls-e-conexões). Com o PgBouncer
+(onda 17), as URLs do runtime passam por ele; as do batch, a da
+`trajetto-scheduler` e a da migrate continuam diretas.
+
+**Heap dos papéis pequenos.** O plano fixa o heap da api e do worker; o dos
+outros sai da regra do orçamento de memória (acima): heap + 150 MiB de
+reserva nativa ≤ teto, com `SPREADSHEET_READS_PER_PROCESS=0`, arredondado
+para baixo. Para 320 MiB, `NODE_OPTIONS=--max-old-space-size=160`; para
+384, `224`; para 512, `352`. O boot confere a conta (`memory budget fits`).
+
+#### `all` (a produção de hoje)
+
+- **Onde**: a `trajetto-api` de produção até o worker de produção existir
+  (onda 14, se a régua fechar), e a de staging até a onda 12.
+- **_Environment_**: sem `PROCESS_ROLE` (ou `all`) e sem
+  `WORKERS_ENABLED=false`. Na produção, desde a onda 12,
+  `NODE_OPTIONS=--max-old-space-size=576` e
+  `SPREADSHEET_WORKER_MAX_OLD_MB=256` (576 + 256 + 150 = 982 de 1.024; com
+  `MEMORY_BUDGET_MODE=warn`, o boot só avisa se a conta não fechar).
+- **Teto**: 2 × 1024 MiB (`1073741824`) na produção, CPU livre, com a
+  _Domain_ `/` da seção 7.7.
+- **GitHub**: `ROLLOUT_ROLES_EXPECTED=all` (o `all` vale por api, worker e
+  scheduler).
+
+#### `api`
+
+- **Onde**: a `trajetto-api` de sempre, sem Application nova. Na staging,
+  logo depois do worker (onda 12); na produção, depois do worker de
+  produção (onda 14).
+- **_Environment_**: `PROCESS_ROLE=api`, e tire o que o passo 3 manda
+  tirar (um `WORKERS_ENABLED=true` esquecido deixaria os workers na API).
+  `DATABASE_URL` com `trajetto_http` e `connection_limit=6`, e
+  `DATABASE_READ_URL` com `trajetto_read` e 3.
+- **Staging (fase B)**: `NODE_OPTIONS=--max-old-space-size=320` e
+  `SPREADSHEET_WORKER_MAX_OLD_MB=96`, no teto de 576 MiB (`603979776`).
+- **Produção (fase C)**: só com a importação durável (onda 14), que tira a
+  planilha da API: `SPREADSHEET_READS_PER_PROCESS=0`,
+  `NODE_OPTIONS=--max-old-space-size=448` e 2 × 768 MiB (`805306368`).
+  Antes dela, a api da produção não cabe em 768 MiB.
+- **Depois do realtime**: `SOCKETS_ENABLED=false` (ver o corte, abaixo).
+- **Confira**: em _Logs_, `process role resolved` com `role: api` e
+  `workers disabled on this replica (WORKERS_ENABLED=false)`.
+
+#### `worker`
+
+Na staging (fase B, onda 12), nesta ordem:
+
+1. Crie a Application pelos passos acima: _Name_ `trajetto-worker`, _App
+   Name_ `trajetto-worker-staging`, imagem
+   `ghcr.io/trajetto-organization/trajetto-api:staging-worker`.
+2. _Environment_ (a cópia do da `trajetto-api` de staging), mudando:
+   `PROCESS_ROLE=worker`, `SHUTDOWN_DRAIN_MS=0` (sem tráfego, não há o que
+   drenar), `NODE_OPTIONS=--max-old-space-size=256`,
+   `SPREADSHEET_READS_PER_PROCESS=0`, `DATABASE_URL` com `trajetto_worker`
+   e `connection_limit=8`, e `BATCH_DATABASE_URL` com `trajetto_batch` e
+   3, direta. A `DATABASE_READ_URL` não vai: o pool de leitura serve rotas
+   HTTP. O `HEALTHCHECK_PING_URL` fica: o ping sai do processo que roda o
+   cron.
+3. Sem _Domain_. _Replicas_ 1. _Memory Limit_ `469762048` (448 MiB) e _CPU
+   Limit_ `250000000` (0,25 CPU).
+4. _Swarm Settings_: os blocos do passo 7 e o _Stop Grace Period_
+   `40000000000`.
+5. **Deploy**. Em _Logs_: `process role resolved` com `role: worker` e
+   `workers started`.
+6. `trajetto-api` de staging → _Environment_: `PROCESS_ROLE=api`,
+   `NODE_OPTIONS=--max-old-space-size=320`,
+   `SPREADSHEET_WORKER_MAX_OLD_MB=96`, `DATABASE_URL` com `trajetto_http`
+   e `connection_limit=6`, e `DATABASE_READ_URL` com `trajetto_read` e 3 →
+   **Deploy**.
+7. GitHub → environment `staging`: o secret `DOKPLOY_WORKER_APPLICATION_ID`
+   e as variáveis `SWARM_WORKER_SERVICE=trajetto-worker-staging` e
+   `ROLLOUT_ROLES_EXPECTED=api,worker`.
+8. Reinstale o `verify-rollout.sh` no host (passo 10).
+9. Confira: uma notificação chega em menos de 2 s (o despertar); o SQL de
+   duplicatas da eleição
+   ([Staging com 2 réplicas](#staging-com-2-réplicas-plano-de-02112026-k15-decisão-d53),
+   passo 4) volta vazio; e o `/health/rollout` tem os dois papéis no
+   commit (seção 14).
+
+Na produção (fase C, onda 14), só se a régua fechar: a R1 com o Postgres
+de produção em 1.792 MiB (hit ratio > 99% medido) e a web em 2 × 512 MiB;
+senão a R2; senão, o worker espera o 2º VPS. Os mesmos passos, com
+`:stable-worker`, _App Name_ `trajetto-worker-production`, _Memory Limit_
+`1073741824` (1024 MiB), _CPU Limit_ `1500000000` (1,5 CPU),
+`NODE_OPTIONS=--max-old-space-size=512` e, com a importação durável,
+`SPREADSHEET_READS_PER_PROCESS=1` e `SPREADSHEET_WORKER_MAX_OLD_MB=320`; no
+GitHub, o environment `production`, com
+`SWARM_WORKER_SERVICE=trajetto-worker-production` e
+`ROLLOUT_ROLES_EXPECTED=api,worker`. Depois, a `trajetto-api` de produção
+passa ao papel `api` (subseção acima).
+
+**Reversão**: `PROCESS_ROLE=all` na `trajetto-api` PRIMEIRO (**Deploy**, e
+`workers started` no log dela), depois _Replicas_ 0 no worker.
+
+#### `scheduler`
+
+- **Quando**: com o worker em 2 réplicas, para o cron e o pool do batch
+  ficarem num processo só: na staging do 2º VPS (onda 18) e na produção
+  do prod-1 (onda 22).
+- **_Environment_**: `PROCESS_ROLE=scheduler` (o preset põe
+  `WORKER_QUEUES=none`: só o cron, nenhuma fila), `SHUTDOWN_DRAIN_MS=0`,
+  `SPREADSHEET_READS_PER_PROCESS=0`,
+  `NODE_OPTIONS=--max-old-space-size=160`, e a `DATABASE_URL` e a
+  `BATCH_DATABASE_URL` com `trajetto_batch` e `connection_limit=3`, as duas
+  diretas mesmo com o PgBouncer.
+- **Teto**: 320 MiB (`335544320`), 0,25 CPU (`250000000`) na staging; 1 ×
+  320 MiB no prod-1. Sem _Domain_.
+- **GitHub**: `DOKPLOY_SCHEDULER_APPLICATION_ID`,
+  `SWARM_SCHEDULER_SERVICE` e `scheduler` no `ROLLOUT_ROLES_EXPECTED`.
+- **Corte**: com ele de pé, `CRON_ENABLED=false` na `trajetto-worker`.
+  **Reversão**: `CRON_ENABLED=true` no worker PRIMEIRO, depois _Replicas_
+  0 no scheduler.
+
+#### `worker-external`
+
+- **Quando**: na staging do 2º VPS (onda 18); na produção, no prod-1,
+  quando a raia `external` (e-mail e WhatsApp) pedir um processo só dela.
+- **_Environment_**: `PROCESS_ROLE=worker-external` (o preset põe
+  `WORKER_QUEUES=external`, sem cron), `SHUTDOWN_DRAIN_MS=0`,
+  `SPREADSHEET_READS_PER_PROCESS=0`, o heap do teto (160 na staging, 224
+  no prod-1) e a `DATABASE_URL` com `trajetto_worker` e
+  `connection_limit=4`.
+- **Teto**: 320 MiB (`335544320`) na staging; 1 × 384 MiB (`402653184`) no
+  prod-1. Sem _Domain_.
+- **GitHub**: `DOKPLOY_WORKER_EXTERNAL_APPLICATION_ID`,
+  `SWARM_WORKER_EXTERNAL_SERVICE` e `worker-external` no
+  `ROLLOUT_ROLES_EXPECTED`.
+- **Corte**: com ele de pé (`workers started`), tire `external` do worker:
+  `WORKER_QUEUES=outbox,internal,webhooks,ai,jobs` na `trajetto-worker`.
+  **Reversão**: devolva `external` ao worker PRIMEIRO (tire a
+  `WORKER_QUEUES` dele), depois _Replicas_ 0.
+
+#### `realtime`
+
+- **Quando**: na staging do 2º VPS (onda 18), validado pela borda com o
+  [LOAD-05](#frota-de-sockets-pela-borda-load-05); na produção, no prod-1.
+- **_Environment_**: `PROCESS_ROLE=realtime` (sockets sem workers nem
+  cron; o Fastify só responde `/health*`), `SPREADSHEET_READS_PER_PROCESS=0`,
+  o heap do teto (224 na staging, 352 no prod-1) e a `DATABASE_URL` com
+  `trajetto_http` e `connection_limit=3`. O dreno fica: os sockets fecham
+  aos poucos ao longo dele.
+- **_Domain_**: _Path_ `/socket.io` (passo 4), só com _Replicas_ ≥ 1.
+- **Teto**: 384 MiB (`402653184`), 0,25 CPU (`250000000`) na staging; 2 ×
+  512 MiB (`536870912`) no prod-1.
+- **GitHub**: `DOKPLOY_REALTIME_APPLICATION_ID`, `SWARM_REALTIME_SERVICE`
+  e `realtime` no `ROLLOUT_ROLES_EXPECTED`. É o último do deploy.
+- **Corte**: com a _Domain_ e o LOAD-05 aprovado, `SOCKETS_ENABLED=false`
+  na `trajetto-api`. **Reversão**: `SOCKETS_ENABLED=true` na
+  `trajetto-api` PRIMEIRO, depois apague a _Domain_ e _Replicas_ 0.
+
+#### `ingest`
+
+- **Quando**: na staging do 2º VPS (onda 18), para provar o roteamento;
+  na produção, só pelo gatilho (0 réplicas até lá).
+- **_Environment_**: `PROCESS_ROLE=ingest` (só `/health*` e
+  `POST /route/positions`, sem sockets, workers nem cron),
+  `SPREADSHEET_READS_PER_PROCESS=0`, o heap do teto (224 na staging) e a
+  `DATABASE_URL` com `trajetto_http` e `connection_limit=6`.
+- **_Domain_**: _Path_ `/route/positions` (passo 4), só com _Replicas_ ≥ 1.
+- **Teto**: 384 MiB (`402653184`) na staging.
+- **GitHub**: `DOKPLOY_INGEST_APPLICATION_ID`, `SWARM_INGEST_SERVICE` e
+  `ingest` no `ROLLOUT_ROLES_EXPECTED`. Vai logo depois da API.
+- **Corte**: crie com _Replicas_ ≥ 1 e só então a _Domain_. **Reversão**:
+  apague a _Domain_ PRIMEIRO, depois _Replicas_ 0.
+
+### Ordem do corte e da reversão
+
+Regra: uma fila nunca fica sem processo, e a reversão é sempre na ordem
+inversa, mudando primeiro a Application que fica.
+
+| Corte           | Primeiro                                                                        | Depois                                        | Reversão                                                               |
+| --------------- | ------------------------------------------------------------------------------- | --------------------------------------------- | ---------------------------------------------------------------------- |
+| worker          | criar o `trajetto-worker` e conferir `workers started`                          | `PROCESS_ROLE=api` na api                     | `PROCESS_ROLE=all` na api, depois _Replicas_ 0 no worker               |
+| scheduler       | criar o `trajetto-scheduler`                                                    | `CRON_ENABLED=false` no worker                | `CRON_ENABLED=true` no worker, depois _Replicas_ 0 no scheduler        |
+| worker-external | criar o `trajetto-worker-external`                                              | tirar `external` do `WORKER_QUEUES` do worker | devolver `external` ao worker, depois _Replicas_ 0                     |
+| realtime        | criar o `trajetto-realtime` com a _Domain_ `/socket.io` e validar com o LOAD-05 | `SOCKETS_ENABLED=false` na api                | `SOCKETS_ENABLED=true` na api, depois apagar a _Domain_ e _Replicas_ 0 |
+| ingest          | criar o `trajetto-ingest` com réplica ≥ 1                                       | a _Domain_ `/route/positions`                 | apagar a _Domain_, depois _Replicas_ 0                                 |
+| PgBouncer       | criar o `trajetto-pgbouncer` (onda 17)                                          | as URLs, uma Application por vez              | as URLs de volta ao Postgres direto, uma por vez                       |
+
+### Tetos por Application e por fase
+
+Os valores vão em bytes (_Memory Limit_) e nano-CPU (_CPU Limit_), como o
+Dokploy pede: 1 MiB = `1048576`; 1 CPU = `1000000000`. "Livre" quer dizer
+sem _CPU Limit_, de propósito. "Heap" é o `--max-old-space-size` do
+`NODE_OPTIONS`. Cada célula diz réplicas × MiB.
+
+Fases na VPS única: **A** = ondas 0 a 11; **B** = ondas 12 e 13 (a
+staging ganha o worker); **C** = ondas 14 e 15 (a produção ganha o
+worker); **E** = ondas 16 a 21 (a staging já está no 2º VPS, e a produção
+fica sozinha na VPS 1). **prod-1** = onda 22 em diante, nos servidores
+próprios. Até a troca de imagem da onda 3, o Postgres de produção fica sem
+teto (a imagem oficial usa 128 MB de `shared_buffers`); a soma da fase A
+já conta os 2 GiB dele. Se a produção continuar no papel `all` na fase C
+(a R1 não fechou), a api fica com 2 × 1024 e heap 480.
+
+**Produção**
+
+| Application                  | Imagem                        | Papel                      | _Domain_ / _Path_                                         | A                                                       | B                     | C                                                         | E (VPS 1 sozinha)                                    | prod-1                                 |
+| ---------------------------- | ----------------------------- | -------------------------- | --------------------------------------------------------- | ------------------------------------------------------- | --------------------- | --------------------------------------------------------- | ---------------------------------------------------- | -------------------------------------- |
+| Database `trajetto-postgres` | `trajetto-postgres@sha256`    | —                          | —                                                         | 2048 (`2147483648`), CPU livre                          | 2048                  | 1792 (`1879048192`) se o hit ratio > 99%; senão 2048 e R2 | 3072 (`3221225472`)                                  | no prod-db-1 (12 GiB ou mais, a medir) |
+| `trajetto-api`               | `trajetto-api:stable`         | `all` até C; `api` desde C | `api.intrajetto.com`, `/`                                 | 2 × 1024 (`1073741824`), heap 768 (576 desde a onda 12) | 2 × 1024              | 2 × 768 (`805306368`), heap 448                           | 3 × 768                                              | 3 × 768, depois pela ELU               |
+| `trajetto-worker`            | `:stable-worker`              | `worker`                   | —                                                         | —                                                       | —                     | 1 × 1024, 1,5 CPU (`1500000000`), heap 512                | 1 × 1024                                             | 2 × 1024                               |
+| `trajetto-scheduler`         | `:stable-scheduler`           | `scheduler`                | —                                                         | —                                                       | —                     | —                                                         | —                                                    | 1 × 320 (`335544320`)                  |
+| `trajetto-worker-external`   | `:stable-worker-external`     | `worker-external`          | —                                                         | —                                                       | —                     | —                                                         | —                                                    | 1 × 384 (`402653184`)                  |
+| `trajetto-realtime`          | `:stable-realtime`            | `realtime`                 | `api.intrajetto.com`, `/socket.io`                        | —                                                       | —                     | —                                                         | —                                                    | 2 × 512 (`536870912`)                  |
+| `trajetto-ingest`            | `:stable-ingest`              | `ingest`                   | `api.intrajetto.com`, `/route/positions` (só com réplica) | —                                                       | —                     | —                                                         | —                                                    | 0 (pelo gatilho)                       |
+| `trajetto-pgbouncer`         | `trajetto-pgbouncer:stable`   | —                          | —                                                         | —                                                       | —                     | —                                                         | 1 × 64 (`67108864`), 0,25 CPU (`250000000`), onda 17 | 1, depois 2 em nós diferentes          |
+| `trajetto-ui`                | `trajetto-ui:stable`          | —                          | `www.intrajetto.com`                                      | 2 × 768 (`805306368`); 640 se o RSS de pico < 500       | 2 × 640 (`671088640`) | 2 × 512 (`536870912`) se o RSS de pico < 380              | 2 × 640                                              | 2 × 640                                |
+| `trajetto-ai`                | `trajetto-ai`                 | —                          | —                                                         | 1 × 1024, 2 CPU (`2000000000`)                          | igual                 | igual                                                     | igual                                                | 2 × 1024 se a fila de OCR pedir        |
+| Database `trajetto-redis`    | `redis:7-alpine`              | —                          | —                                                         | 512 (`536870912`), `maxmemory 256mb`                    | igual                 | igual                                                     | igual                                                | 512; ~1 GiB no 1M                      |
+| `trajetto-api-migrate`       | `trajetto-api-migrate:stable` | release                    | —                                                         | 384 (`402653184`), transitório                          | igual                 | igual                                                     | igual                                                | igual                                  |
+| `trajetto-offsite`           | `rclone@sha256`               | —                          | —                                                         | 64 (`67108864`)                                         | igual                 | igual                                                     | igual                                                | igual                                  |
+
+**Staging**
+
+| Application                  | Papel                | A                                                          | B                                                   | C                           | 2º VPS (onda 16 em diante)                      |
+| ---------------------------- | -------------------- | ---------------------------------------------------------- | --------------------------------------------------- | --------------------------- | ----------------------------------------------- |
+| Database `trajetto-postgres` | —                    | 576 (`603979776`), 0,5 CPU (`500000000`)                   | igual                                               | igual                       | 1024 (`1073741824`)                             |
+| `trajetto-api`               | `all`; `api` desde B | 576 (`603979776`), 0,5 CPU (`500000000`), heap 400         | 576, heap 320                                       | 512 (`536870912`), heap 288 | 576                                             |
+| `trajetto-worker`            | `worker`             | —                                                          | 448 (`469762048`), 0,25 CPU (`250000000`), heap 256 | 512, heap 224               | 512                                             |
+| `trajetto-scheduler`         | `scheduler`          | —                                                          | —                                                   | —                           | 320 (`335544320`), 0,25 CPU (`250000000`)       |
+| `trajetto-worker-external`   | `worker-external`    | —                                                          | —                                                   | —                           | 320 (`335544320`)                               |
+| `trajetto-realtime`          | `realtime`           | —                                                          | —                                                   | —                           | 384 (`402653184`), 0,25 CPU (`250000000`)       |
+| `trajetto-ingest`            | `ingest`             | —                                                          | —                                                   | —                           | 384 (`402653184`)                               |
+| `trajetto-pgbouncer`         | —                    | —                                                          | —                                                   | —                           | 32 (`33554432`), 0,1 CPU (`100000000`), onda 17 |
+| `trajetto-ui`                | —                    | 320 (`335544320`), 0,25 CPU (`250000000`)                  | igual                                               | igual                       | 384                                             |
+| `trajetto-ai`, sempre ligada | —                    | 768 (`805306368`), 1 CPU (`1000000000`)                    | igual                                               | igual                       | 1024                                            |
+| Database `trajetto-redis`    | —                    | 160 (`167772160`), 0,1 CPU (`100000000`), `maxmemory 64mb` | igual                                               | igual                       | 192 (`201326592`)                               |
+| `trajetto-api-migrate`       | release              | 384 (`402653184`), transitório                             | igual                                               | igual                       | 384                                             |
+
+As somas por fase, as réguas R1 e R2, a CPU e o disco estão na
+[seção 23](#23-recursos-da-vps-e-logs);
+`tests/unitaires/lifecycle/role-guide.test.ts` confere que elas saem
+destas tabelas e que cada valor em bytes é o MiB da célula.
 
 ### Staging com 2 réplicas (plano de 02/11/2026, K15; decisão D53)
 
@@ -4665,47 +5064,6 @@ Depois do G-03 (staging no 2º VPS), os 5.000 sockets pedem
 `FLEET_EDGE_TOPOLOGY=second-vps`, pelo menos 5 origens
 (`FLEET_SOURCE_ADDRESSES`, ou `FLEET_SHARD` em várias máquinas com o mesmo
 `FLEET_START_AT`, e o `merge`) e mais motoristas que os 50 da fixture.
-
-### Separar os workers do HTTP (só por gatilho medido)
-
-Gatilhos (ADR 0001/0004): espera no pool visível em `/health/metrics`
-(`runtime.prisma_pool`) nos horários de dreno; CPU/IO/WAL do Postgres puxados
-por um dreno de backlog enquanto o HTTP sofre; necessidade de publicar o HTTP
-sem reiniciar os workers. Separar é isolamento, não correção de falha.
-
-1. **Orçamento de conexões antes de tudo**: `réplicas_api × 11 + worker ×
-(limite + 1) + migrations (2) + ferramentas` abaixo do `max_connections`
-   (ou PgBouncer antes).
-2. Crie uma Application `trajetto-worker` (App Name `trajetto-worker-production`)
-   com a **mesma** imagem e o mesmo _Environment_ da API, mudando só:
-   ```
-   PROCESS_ROLE=worker
-   DATABASE_URL=postgresql://...?schema=public&connection_limit=4&pool_timeout=10&connect_timeout=5&socket_timeout=60&max_idle_connection_lifetime=300&options=...
-   ```
-   e **tirando** `WORKERS_ENABLED`, `CRON_ENABLED`, `WORKER_QUEUES`,
-   `PIPELINE_SWEEP_INTERVAL_MS` e `WEBHOOK_SWEEP_INTERVAL_MS`, se o
-   _Environment_ copiado tiver: o preset do papel põe os valores certos (as
-   varreduras em 2 s), e uma variável explícita ganharia dele.
-   Sem domínio, 1 réplica, o mesmo _Swarm Settings_ e _Resources_ da API.
-   **Atenção**: a ação de deploy (`.github/actions/deploy`) só faz o deploy
-   de `trajetto-ai` e `trajetto-api`. Um worker exige um passo a mais nela
-   (outro `DOKPLOY_*_APPLICATION_ID`, entregue pelos dois jobs `Deploy`),
-   senão ele fica na versão antiga a cada promoção.
-3. Suba o worker primeiro e confirme nos logs `process role resolved` com
-   `role: worker`, `workers started` e, em `/health/metrics`, os batimentos
-   dos workers vindos dele.
-4. Só então `PROCESS_ROLE=api` na API. Cada réplica loga
-   `process role resolved` com `role: api` e
-   `workers disabled on this replica (WORKERS_ENABLED=false)`.
-
-Voltar: `PROCESS_ROLE=all` na API primeiro, depois Replicas 0 no worker. O
-worker roda o mesmo `server.ts`, então também tem Socket.IO com o adapter: os
-emits dos pipelines atravessam o Redis até as réplicas HTTP. Numa réplica
-HTTP-only um publish não drena nada; o evento espera a varredura do worker
-(até 2 s no papel `worker`). Testes:
-`tests/unitaires/lifecycle/process-role.test.ts`, `workers-role-flag.test.ts`,
-`workers-disabled-boot.test.ts`, `worker-queues-external.test.ts` e
-`http-surface.test.ts`.
 
 ### Conexões presas
 

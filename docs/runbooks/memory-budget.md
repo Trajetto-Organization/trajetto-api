@@ -11,7 +11,7 @@ A leitura da planilha numa thread (F3-23b) deu a ela um heap só dela, **somado*
 ## Primeira ação
 
 1. Veja `memory_budget` em `/health/metrics` da réplica (ou o log do boot): `limit_mb`, `heap_mb`, `spreadsheet_reads`, `spreadsheet_max_old_mb` e `native_mb`.
-2. Aplique os valores da seção 3 do plano de escala na Application certa, no _Environment_ dela no Dokploy, e faça o Deploy. Na `trajetto-api` de produção com 1 GiB: `NODE_OPTIONS=--max-old-space-size=576` e `SPREADSHEET_WORKER_MAX_OLD_MB=256` (576 + 256 + 150 = 982 de 1.024).
+2. Aplique os valores de [`deploy.md` → Tetos por Application e por fase](../deploy.md#tetos-por-application-e-por-fase) na Application certa, no _Environment_ dela no Dokploy, e faça o Deploy. Na `trajetto-api` de produção com 1 GiB: `NODE_OPTIONS=--max-old-space-size=576` e `SPREADSHEET_WORKER_MAX_OLD_MB=256` (576 + 256 + 150 = 982 de 1.024).
 3. Se o heap não pode baixar, suba o _Memory_ da Application (_Advanced → Resources_) e refaça a conta do host antes.
 
 ```sql

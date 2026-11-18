@@ -390,7 +390,7 @@ describe("the two ceilings on staging (LOAD-05, LOAD-09)", () => {
     const deploy = read("docs", "deploy.md");
     const fleet = deploy.slice(
       deploy.indexOf("### Frota de sockets pela borda (LOAD-05)"),
-      deploy.indexOf("### Separar os workers do HTTP"),
+      deploy.indexOf("### Conexões presas"),
     );
 
     expect(fleet).toContain("--via-edge");

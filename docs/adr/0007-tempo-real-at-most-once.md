@@ -51,7 +51,7 @@
 - [`arquitetura.md` → Redis e tempo real](../arquitetura.md#redis-e-tempo-real)
   e o fluxo "Tempo real entre réplicas" em
   [Fluxos em detalhe](../arquitetura.md#fluxos-em-detalhe).
-- [`deploy.md` → 19. Réplicas, workers e tempo real](../deploy.md#19-réplicas-workers-e-tempo-real).
+- [`deploy.md` → 19. Papéis da mesma imagem](../deploy.md#19-papéis-da-mesma-imagem).
 - Prova entre réplicas: `tests/E2E/multi-replica-events.test.ts`.
 - Prova da janela entre o handshake e o join:
   `tests/E2E/socket-revocation.test.ts`, describe

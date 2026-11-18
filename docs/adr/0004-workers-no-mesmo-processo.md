@@ -26,7 +26,7 @@ papéis, mas **só por gatilho medido**.
 ## Quando separar
 
 Os gatilhos estão em
-[`deploy.md` → Separar os workers do HTTP](../deploy.md#separar-os-workers-do-http-só-por-gatilho-medido):
+[`deploy.md` → Criar a Application de um papel](../deploy.md#criar-a-application-de-um-papel):
 
 - espera no pool visível em `/health/metrics` (`runtime.prisma_pool`) nos
   horários de dreno;
@@ -52,5 +52,5 @@ HTTP) está na mesma seção. Testes: `tests/unitaires/lifecycle/workers-role-fl
 ## Fontes
 
 - [`arquitetura.md` → Um processo, vários papéis](../arquitetura.md#um-processo-vários-papéis).
-- [`deploy.md` → 19. Réplicas, workers e tempo real](../deploy.md#19-réplicas-workers-e-tempo-real).
+- [`deploy.md` → 19. Papéis da mesma imagem](../deploy.md#19-papéis-da-mesma-imagem).
 - [ADR 0001 → Quando reabrir a decisão](./0001-filas-e-mensageria.md#quando-reabrir-a-decisão).

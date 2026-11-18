@@ -34,4 +34,4 @@ Staging e produção começam com 2 réplicas da Application `trajetto-api`.
 
 - [`arquitetura.md` → Redis e tempo real](../arquitetura.md#redis-e-tempo-real)
   (Escala horizontal) e [Conexão com o Postgres](../arquitetura.md#conexão-com-o-postgres).
-- [`deploy.md` → 19. Réplicas, workers e tempo real](../deploy.md#19-réplicas-workers-e-tempo-real).
+- [`deploy.md` → 19. Papéis da mesma imagem](../deploy.md#19-papéis-da-mesma-imagem).
