@@ -2,6 +2,8 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { randomUUID } from "node:crypto";
 
+import { v7 as uuidv7 } from "uuid";
+
 import { WebhookDeliveryStatus, type WebhookDelivery } from "@prisma/client";
 
 import { ApiKeyRepository } from "@/modules/integration/repositories/api-key-repository";
@@ -98,7 +100,7 @@ function deliveryRow(
   },
 ): WebhookDelivery {
   return {
-    id: randomUUID(),
+    id: uuidv7(),
     topic: "delivery.created",
     sourceEventId: randomUUID(),
     payload: { id: "delivery-1" },
