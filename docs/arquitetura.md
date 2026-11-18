@@ -3558,6 +3558,27 @@ plano de antes da troca), até elas também saírem. O `DROP` roda às 04:10,
 no job das partições, e não às 03:30, no do expurgo: um
 `DETACH … CONCURRENTLY` espera a transação do `pg_dump` das 03:00.
 
+**Os planos das filas particionadas (F5-13).** Uma reivindicação (claim)
+não filtra pelo id, então planeja e sonda toda partição da fila: com a
+retenção de 30 dias, 39 por fila. O
+`tests/E2E/query-plans-partitioned-queues.test.ts` monta esse mês e confere
+as reivindicações reais (`outboxClaimSql`, `deliveryClaimSql`,
+`webhookClaimSql`, exportadas pelos serviços), a janela de 24 h das métricas
+e o expurgo em lotes contra três portões: índice em toda partição com
+linhas, menos de 300 buffers e p95 do planejamento abaixo de 2 ms. Sem mais
+nada, as reivindicações passam de 2 ms (o dobro ou o triplo, medido); o
+plano B é o intervalo de ids em voo
+(`src/shared/database/queue-claim-floor.ts`, com
+`QUEUE_CLAIM_ID_FLOOR_ENABLED`): cada reivindicação pede ids do início do
+dia da linha em voo mais velha (no máximo ontem) ao fim do dia da mais nova
+(no mínimo amanhã), lido de novo a cada 30 s pelos índices parciais das
+reivindicações, e o planejador poda os outros dias. Uma linha em voo está
+sempre dentro do intervalo por construção; uma que entra em voo fora dele
+espera a próxima leitura; um intervalo que não se lê é nenhum. Desligado
+por padrão até o dono medir na staging. O `/health/metrics` soma o inchaço
+de cada fila pelas partições dela (`queue_tables[].partitions`), e a folga
+das partições está em `partitions.<fila>`.
+
 O registro de webhooks (`webhook_delivery`) sai do mesmo jeito depois de
 `WEBHOOK_DELIVERY_RETENTION_DAYS` (31), pelo portão `webhook-deliveries`
 (`src/shared/integration/webhook-delivery-retention.ts`, F5-12): o dia só

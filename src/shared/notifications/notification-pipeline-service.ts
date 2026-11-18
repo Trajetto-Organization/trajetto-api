@@ -5,6 +5,7 @@ import { container } from "tsyringe";
 
 import database from "@/../infra/database";
 import { env } from "@/env";
+import { claimFloors } from "@/shared/database/claim-floors";
 
 import { IUserRepository } from "@/modules/user/repositories/IUser-repository";
 import { IWhatsAppProvider } from "@/shared/providers/whatsapp-provider/IWhatsApp-provider";
@@ -83,6 +84,70 @@ import { emailLogoUrl } from "@/shared/providers/mail-provider/email-logo";
 const SWEEP_INTERVAL_MS = env.PIPELINE_SWEEP_INTERVAL_MS;
 
 const OUTBOX_BATCH_SIZE = 10;
+
+/**
+ * The outbox's claim: the oldest due events, PENDING ones and PROCESSING
+ * ones whose lease ran out, under a lease of their own. `floor` is the
+ * partitioned queue's claim floor (queue-claim-floor.ts, plano-escala
+ * F5-13), or nothing: on the claim and on the UPDATE, so both prune the
+ * days that hold nothing in flight. Exported for the plan tests, which
+ * measure this very statement.
+ */
+function outboxClaimSql(floor: Prisma.Sql): Prisma.Sql {
+  return Prisma.sql`
+      UPDATE "domain_outbox_event" SET
+        "status" = 'PROCESSING',
+        "leaseExpiresAt" = now() + make_interval(secs => ${OUTBOX_LEASE_SECONDS}),
+        "attempts" = "attempts" + 1
+      WHERE "id" IN (
+        SELECT "id" FROM "domain_outbox_event"
+        WHERE (("status" = 'PENDING' AND "availableAt" <= now())
+           OR ("status" = 'PROCESSING' AND "leaseExpiresAt" < now()
+               AND "attempts" < ${OUTBOX_MAX_ATTEMPTS}))${floor}
+        ORDER BY "created_at"
+        LIMIT ${OUTBOX_BATCH_SIZE}
+        FOR UPDATE SKIP LOCKED
+      )${floor}
+      RETURNING "id", "topic", "payload", "businessId", "actorId", "attempts", "created_at", "correlationId"
+    `;
+}
+
+/**
+ * One delivery lane's claim (claimDeliveries says why it is shaped so),
+ * with the claim floor as in outboxClaimSql. availableAt and
+ * leaseExpiresAt get the same expression in the same statement, so they
+ * are equal: now() does not move within a statement.
+ */
+function deliveryClaimSql(lane: DeliveryLane, floor: Prisma.Sql): Prisma.Sql {
+  // Literals, not parameters: with bound values the planner cannot prove a
+  // partial index predicate in a generic plan and falls back to a scan.
+  // Safe to inline — the list is DELIVERY_LANES, constants of this module,
+  // never input.
+  const channels = Prisma.raw(
+    DELIVERY_LANES[lane].map((channel) => `'${channel}'`).join(", "),
+  );
+
+  return Prisma.sql`
+      UPDATE "notification_delivery" SET
+        "status" = 'PROCESSING',
+        "leaseExpiresAt" = now() + make_interval(secs => ${DELIVERY_LEASE_SECONDS}),
+        "availableAt" = now() + make_interval(secs => ${DELIVERY_LEASE_SECONDS}),
+        "attempts" = "attempts" + 1
+      WHERE "id" IN (
+        SELECT "id" FROM "notification_delivery"
+        WHERE "channel" IN (${channels})
+          AND "status" IN ('PENDING', 'PROCESSING')
+          AND "availableAt" <= now()
+          AND ("status" = 'PENDING'
+            OR ("leaseExpiresAt" < now()
+                AND "attempts" < ${DELIVERY_MAX_ATTEMPTS}))${floor}
+        ORDER BY "availableAt"
+        LIMIT ${DELIVERY_BATCH_SIZE}
+        FOR UPDATE SKIP LOCKED
+      )${floor}
+      RETURNING "id", "outboxEventId", "userId", "externalRecipientId", "channel", "attempts"
+    `;
+}
 
 /**
  * How long shutdown() waits, at most, for the batch in flight. The shutdown
@@ -543,6 +608,8 @@ class NotificationPipelineService {
   }
 
   private async claimEvents(): Promise<ClaimedEvent[]> {
+    const floor = await claimFloors.predicate("outbox");
+
     // A row whose last allowed attempt died with the process is closed, with
     // the reason, instead of being claimed again — see OUTBOX_MAX_ATTEMPTS.
     await database.$executeRaw`
@@ -552,25 +619,10 @@ class NotificationPipelineService {
         "lastError" = 'O processo foi interrompido durante a última tentativa permitida.'
       WHERE "status" = 'PROCESSING'
         AND "leaseExpiresAt" < now()
-        AND "attempts" >= ${OUTBOX_MAX_ATTEMPTS}
+        AND "attempts" >= ${OUTBOX_MAX_ATTEMPTS}${floor}
     `;
 
-    return database.$queryRaw<ClaimedEvent[]>`
-      UPDATE "domain_outbox_event" SET
-        "status" = 'PROCESSING',
-        "leaseExpiresAt" = now() + make_interval(secs => ${OUTBOX_LEASE_SECONDS}),
-        "attempts" = "attempts" + 1
-      WHERE "id" IN (
-        SELECT "id" FROM "domain_outbox_event"
-        WHERE ("status" = 'PENDING' AND "availableAt" <= now())
-           OR ("status" = 'PROCESSING' AND "leaseExpiresAt" < now()
-               AND "attempts" < ${OUTBOX_MAX_ATTEMPTS})
-        ORDER BY "created_at"
-        LIMIT ${OUTBOX_BATCH_SIZE}
-        FOR UPDATE SKIP LOCKED
-      )
-      RETURNING "id", "topic", "payload", "businessId", "actorId", "attempts", "created_at", "correlationId"
-    `;
+    return database.$queryRaw<ClaimedEvent[]>(outboxClaimSql(floor));
   }
 
   /**
@@ -1251,6 +1303,8 @@ class NotificationPipelineService {
       DELIVERY_LANES[lane].map((channel) => `'${channel}'`).join(", "),
     );
 
+    const floor = await claimFloors.predicate("deliveries");
+
     // A row whose last allowed attempt died with the process is closed, with
     // the reason, instead of being claimed again — see DELIVERY_MAX_ATTEMPTS.
     await database.$executeRaw`
@@ -1262,33 +1316,14 @@ class NotificationPipelineService {
         AND "channel" IN (${channels})
         AND "availableAt" <= now()
         AND "leaseExpiresAt" < now()
-        AND "attempts" >= ${DELIVERY_MAX_ATTEMPTS}
+        AND "attempts" >= ${DELIVERY_MAX_ATTEMPTS}${floor}
     `;
 
     const claimStartedAtMs = Date.now();
 
-    // availableAt and leaseExpiresAt get the same expression in the same
-    // statement, so they are equal: now() does not move within a statement.
-    const claimed = await database.$queryRaw<ClaimedDelivery[]>`
-      UPDATE "notification_delivery" SET
-        "status" = 'PROCESSING',
-        "leaseExpiresAt" = now() + make_interval(secs => ${DELIVERY_LEASE_SECONDS}),
-        "availableAt" = now() + make_interval(secs => ${DELIVERY_LEASE_SECONDS}),
-        "attempts" = "attempts" + 1
-      WHERE "id" IN (
-        SELECT "id" FROM "notification_delivery"
-        WHERE "channel" IN (${channels})
-          AND "status" IN ('PENDING', 'PROCESSING')
-          AND "availableAt" <= now()
-          AND ("status" = 'PENDING'
-            OR ("leaseExpiresAt" < now()
-                AND "attempts" < ${DELIVERY_MAX_ATTEMPTS}))
-        ORDER BY "availableAt"
-        LIMIT ${DELIVERY_BATCH_SIZE}
-        FOR UPDATE SKIP LOCKED
-      )
-      RETURNING "id", "outboxEventId", "userId", "externalRecipientId", "channel", "attempts"
-    `;
+    const claimed = await database.$queryRaw<ClaimedDelivery[]>(
+      deliveryClaimSql(lane, floor),
+    );
 
     for (const delivery of claimed)
       delivery.claimStartedAtMs = claimStartedAtMs;
@@ -2242,4 +2277,4 @@ class NotificationPipelineService {
   }
 }
 
-export { NotificationPipelineService };
+export { NotificationPipelineService, deliveryClaimSql, outboxClaimSql };

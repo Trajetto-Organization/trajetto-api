@@ -1034,6 +1034,22 @@ const envSchema = z
       z.coerce.number().int().min(31).max(365).default(31),
     ),
 
+    // The claims' floor of ids in flight (plano-escala F5-13, the plan B of
+    // the 39-partition gate). A claim of a partitioned queue names no id,
+    // so it plans and probes every day the retention keeps, several times
+    // a second on every replica. On, each claim also asks for ids at or
+    // above the start of the day of the oldest row in flight (never later
+    // than yesterday), read again every 30 s, which prunes the days that
+    // hold nothing to claim. Off by default: the claims stay what they
+    // always were until the owner measures the plans on staging. A floor
+    // that cannot be read is none, and a plain queue gets none.
+    QUEUE_CLAIM_ID_FLOOR_ENABLED: z
+      .preprocess(
+        (value) => (value === "" ? undefined : value),
+        z.enum(["true", "false"]).default("false"),
+      )
+      .transform((value) => value === "true"),
+
     // Days a queue's partition may stay past its retention before the
     // partition-stuck alert pages (plano-escala F5-11). A day held by a
     // row in flight is a queue that stopped, worth a look after three

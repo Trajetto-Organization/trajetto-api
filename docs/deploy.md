@@ -3875,6 +3875,12 @@ A troca das filas (`10-queue-partition-swap.sql`) tem três cuidados a mais:
   workers parados (`WORKERS_ENABLED=false` na `trajetto-api`), rode a etapa
   de novo com o expurgo em dia, ou deixe a fila comum: o código serve os
   dois jeitos.
+- **Os planos.** Com as filas trocadas, as reivindicações planejam um mês
+  de partições. Meça na staging o p95 do planejamento delas (o
+  `pg_stat_statements`, `mean_plan_time`, com `pg_stat_statements.track_planning`)
+  e, acima de 2 ms, ligue `QUEUE_CLAIM_ID_FLOOR_ENABLED=true` no
+  _Environment_ da `trajetto-api` (o plano B do F5-13, que poda os dias sem
+  linha em voo); desligar volta às reivindicações de sempre.
 - **A volta.** `prisma/post-deploy/rollback/unpartition-queue.sql`, à mão,
   copia toda linha de volta para uma tabela comum e marca a fila para a
   troca não voltar sozinha (o passo a passo no ADR 0014).

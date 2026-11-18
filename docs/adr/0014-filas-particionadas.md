@@ -119,5 +119,9 @@ etapa diz quanto cada fila levou (`… em N s`).
   e os testes semeiam com `tests/E2E/support/uuid7-sql.ts`.
 - A retenção passa a ser por dia (F5-11, F5-12); enquanto a partição legada
   existir, o expurgo em lotes continua valendo para ela.
-- Uma consulta sem o id no filtro lê todas as partições: os planos com
-  dezenas delas são conferidos à parte (F5-13).
+- Uma consulta sem o id no filtro lê todas as partições: os planos com as
+  39 partições que a retenção guarda são conferidos por
+  `tests/E2E/query-plans-partitioned-queues.test.ts` (F5-13). As
+  reivindicações passam do portão de 2 ms de planejamento sem o intervalo
+  de ids em voo (`QUEUE_CLAIM_ID_FLOOR_ENABLED`), o plano B, que poda os
+  dias sem linha a reivindicar.

@@ -89,7 +89,16 @@ const channelDeliveryMetrics = z.object({
 });
 
 const queueTableBloat = z.object({
-  table: z.string().describe("Physical table name."),
+  table: z
+    .string()
+    .describe(
+      "Table name: the parent, for a queue partitioned by day (its partitions summed).",
+    ),
+  partitions: z
+    .number()
+    .describe(
+      "Physical tables the numbers sum: 1 for a plain table, every partition for a partitioned queue (plano-escala F5-13). 0 when the statistics collector has no line for it.",
+    ),
   n_live_tup: z
     .number()
     .describe("Live tuples estimated by the statistics collector."),
@@ -571,7 +580,7 @@ const healthResponses = {
     queue_tables: z
       .array(queueTableBloat)
       .describe(
-        "Bloat of the queue tables from pg_stat_user_tables. High-churn tables: they are written, claimed and updated on every event.",
+        "Bloat of the queue tables from pg_stat_user_tables, summed over the partitions of a queue partitioned by day. High-churn tables: they are written, claimed and updated on every event.",
       ),
     webhooks: z
       .object({

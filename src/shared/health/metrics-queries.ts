@@ -42,10 +42,15 @@ function laneChannels(lane: DeliveryLane): Prisma.Sql {
   );
 }
 
-/** Tables the dead-tuple watch covers: written, claimed and updated per event. */
+/**
+ * Tables the dead-tuple watch covers: written, claimed and updated per
+ * event. The four queues of plano-escala F5-09 (the receipts joined them
+ * with F5-13) and the AI's.
+ */
 const QUEUE_TABLES = [
   "domain_outbox_event",
   "notification_delivery",
+  "notification_provider_receipt",
   "ai_analysis_request",
   "webhook_delivery",
 ] as const;
@@ -53,16 +58,28 @@ const QUEUE_TABLES = [
 /**
  * n_live_tup / n_dead_tup are the statistics collector's estimates, not a
  * count — cheap to read and precise enough for a threshold.
+ *
+ * Summed per parent (plano-escala F5-13): once a queue is partitioned by
+ * day (F5-09), its parent's own line in pg_stat_user_tables is always
+ * empty and the rows live in its partitions; read by name, the watch
+ * would report a clean table forever. `partitions` is how many physical
+ * tables the sum covers, 1 for a plain one; the folga of each queue's
+ * partitions is `partitions.<table>` on the same endpoint.
  */
 function queueTableStatsSql(): Prisma.Sql {
   return Prisma.sql`
     SELECT
-      relname::text AS table_name,
-      n_live_tup,
-      n_dead_tup,
-      last_autovacuum
-    FROM pg_stat_user_tables
-    WHERE relname = ANY(${[...QUEUE_TABLES]}::text[])
+      coalesce(root.relname, c.relname)::text AS table_name,
+      count(*)::int AS partitions,
+      coalesce(sum(s.n_live_tup), 0)::float8 AS n_live_tup,
+      coalesce(sum(s.n_dead_tup), 0)::float8 AS n_dead_tup,
+      max(s.last_autovacuum) AS last_autovacuum
+    FROM pg_stat_user_tables s
+    JOIN pg_class c ON c.oid = s.relid AND c.relkind = 'r'
+    LEFT JOIN pg_class root ON root.oid = pg_partition_root(c.oid)
+    WHERE s.schemaname = current_schema()
+      AND coalesce(root.relname, c.relname) = ANY(${[...QUEUE_TABLES]}::text[])
+    GROUP BY 1
   `;
 }
 

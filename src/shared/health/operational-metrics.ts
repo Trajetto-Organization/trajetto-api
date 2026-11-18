@@ -115,6 +115,7 @@ interface DeliveryBacklogRow {
 
 interface QueueTableStatsRow {
   table_name: string;
+  partitions?: number;
   n_live_tup: number | string;
   n_dead_tup: number | string;
   last_autovacuum: string | null;
@@ -232,6 +233,7 @@ async function collectOperationalMetrics() {
 
     return {
       table,
+      partitions: row?.partitions ?? 0,
       n_live_tup: live,
       n_dead_tup: dead,
       dead_tuple_percent: deadTuplePercent(live, dead),

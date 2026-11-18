@@ -242,7 +242,7 @@ function publishedPurgeBatchSql(
     removed AS (
       DELETE FROM "domain_outbox_event" e
       USING batch b
-      WHERE e."id" = b."id"
+      WHERE e."id" = b."id"${below(idBelow, "e")}
       RETURNING 1
     ),
     keys AS (
@@ -354,7 +354,7 @@ function failedPurgeBatchSql(
     removed AS (
       DELETE FROM "domain_outbox_event" e
       USING batch b
-      WHERE e."id" = b."id"
+      WHERE e."id" = b."id"${below(idBelow, "e")}
       RETURNING 1
     )
     SELECT

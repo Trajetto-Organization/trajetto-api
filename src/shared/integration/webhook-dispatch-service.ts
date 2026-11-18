@@ -47,6 +47,7 @@ import {
 import { withRetryJitter } from "@/shared/notifications/pipeline-rules";
 import { recipientGoneError } from "@/shared/notifications/delivery-diagnostics";
 import { hasModuleSwitchedOff } from "@/shared/entitlements/entitlement-service";
+import { claimFloors } from "@/shared/database/claim-floors";
 import { workerHeartbeat } from "@/shared/health/worker-heartbeat";
 import { logger } from "@/shared/logging/logger";
 import { providerMetrics } from "@/shared/health/provider-metrics";
@@ -100,6 +101,66 @@ function networkFailureReason(error: unknown): string {
  * hang, lie about its status, or answer with a megabyte of HTML.
  */
 const BATCH_SIZE = 20;
+
+/**
+ * The webhooks' claim (claim() says why it is shaped so), with the
+ * partitioned queue's claim floor (queue-claim-floor.ts, plano-escala
+ * F5-13) on every level that reads the table, so each prunes the days that
+ * hold nothing in flight. Exported for the plan tests, which measure this
+ * very statement.
+ */
+function webhookClaimSql(floor: Prisma.Sql): Prisma.Sql {
+  return Prisma.sql`
+      UPDATE "webhook_delivery" SET
+        "status" = 'PROCESSING',
+        "leaseExpiresAt" = now() + make_interval(secs => ${WEBHOOK_LEASE_SECONDS}),
+        "availableAt" = now() + make_interval(secs => ${WEBHOOK_LEASE_SECONDS}),
+        "attempts" = "attempts" + 1
+      WHERE "id" IN (
+        SELECT "id" FROM "webhook_delivery"
+        WHERE "id" IN (
+          -- The oldest due rows, at most WEBHOOK_PER_ENDPOINT_BATCH of any one
+          -- endpoint: one slow or flooded customer cannot fill the batch.
+          --
+          -- Ties on "availableAt" broken by "id": the rows of one transaction
+          -- share its now(), and uuid v7 ids grow in creation order — without
+          -- it, which events of a transaction went first was up to the plan.
+          SELECT "id" FROM (
+            SELECT "id", "availableAt",
+                   row_number() OVER (
+                     PARTITION BY "endpointId" ORDER BY "availableAt", "id"
+                   ) AS "position"
+            FROM (
+              SELECT "id", "endpointId", "availableAt"
+              FROM "webhook_delivery"
+              -- A range on the index key, so the scan stops at now(): rows
+              -- held for a switched-off endpoint (availableAt up to 30 days
+              -- ahead) and rows in backoff are never visited. A PROCESSING
+              -- row carries its lease end there, so one in flight is out of
+              -- the range and one whose lease ran out is back in it. The
+              -- lease check stays for rows an older release claimed without
+              -- moving availableAt.
+              WHERE "availableAt" <= now()
+                AND ("status" = 'PENDING'
+                  OR ("status" = 'PROCESSING' AND "leaseExpiresAt" < now()
+                      AND "attempts" < ${WEBHOOK_MAX_ATTEMPTS}))${floor}
+              ORDER BY "availableAt", "id"
+              LIMIT ${WEBHOOK_CLAIM_WINDOW}
+            ) AS "head"
+          ) AS "ranked"
+          WHERE "position" <= ${WEBHOOK_PER_ENDPOINT_BATCH}
+          ORDER BY "availableAt", "id"
+          LIMIT ${BATCH_SIZE}
+        )
+          -- Checked again under the lock: another replica may have taken it.
+          AND (("status" = 'PENDING' AND "availableAt" <= now())
+            OR ("status" = 'PROCESSING' AND "leaseExpiresAt" < now()
+                AND "attempts" < ${WEBHOOK_MAX_ATTEMPTS}))${floor}
+        FOR UPDATE SKIP LOCKED
+      )${floor}
+      RETURNING "id", "endpointId", "topic", "payload", "attempts", "created_at"
+    `;
+}
 
 assertWebhookLeaseInvariant(BATCH_SIZE);
 
@@ -851,6 +912,8 @@ class WebhookDispatchService {
   }
 
   private async claim(): Promise<ClaimedWebhook[]> {
+    const floor = await claimFloors.predicate("webhooks");
+
     // A row whose last attempt died with the process and has no attempt left
     // is closed here, with the reason, instead of being claimed again — see
     // WEBHOOK_MAX_ATTEMPTS.
@@ -862,7 +925,7 @@ class WebhookDispatchService {
       WHERE "status" = 'PROCESSING'
         AND "availableAt" <= now()
         AND "leaseExpiresAt" < now()
-        AND "attempts" >= ${WEBHOOK_MAX_ATTEMPTS}
+        AND "attempts" >= ${WEBHOOK_MAX_ATTEMPTS}${floor}
     `;
 
     const claimStartedAtMs = Date.now();
@@ -870,56 +933,9 @@ class WebhookDispatchService {
     // The lease end goes into availableAt too (same expression, same
     // statement, so the two are equal): a row in flight leaves the claim's
     // range until its lease runs out, and the scan never visits it.
-    const claimed = await database.$queryRaw<ClaimedWebhook[]>`
-      UPDATE "webhook_delivery" SET
-        "status" = 'PROCESSING',
-        "leaseExpiresAt" = now() + make_interval(secs => ${WEBHOOK_LEASE_SECONDS}),
-        "availableAt" = now() + make_interval(secs => ${WEBHOOK_LEASE_SECONDS}),
-        "attempts" = "attempts" + 1
-      WHERE "id" IN (
-        SELECT "id" FROM "webhook_delivery"
-        WHERE "id" IN (
-          -- The oldest due rows, at most WEBHOOK_PER_ENDPOINT_BATCH of any one
-          -- endpoint: one slow or flooded customer cannot fill the batch.
-          --
-          -- Ties on "availableAt" broken by "id": the rows of one transaction
-          -- share its now(), and uuid v7 ids grow in creation order — without
-          -- it, which events of a transaction went first was up to the plan.
-          SELECT "id" FROM (
-            SELECT "id", "availableAt",
-                   row_number() OVER (
-                     PARTITION BY "endpointId" ORDER BY "availableAt", "id"
-                   ) AS "position"
-            FROM (
-              SELECT "id", "endpointId", "availableAt"
-              FROM "webhook_delivery"
-              -- A range on the index key, so the scan stops at now(): rows
-              -- held for a switched-off endpoint (availableAt up to 30 days
-              -- ahead) and rows in backoff are never visited. A PROCESSING
-              -- row carries its lease end there, so one in flight is out of
-              -- the range and one whose lease ran out is back in it. The
-              -- lease check stays for rows an older release claimed without
-              -- moving availableAt.
-              WHERE "availableAt" <= now()
-                AND ("status" = 'PENDING'
-                  OR ("status" = 'PROCESSING' AND "leaseExpiresAt" < now()
-                      AND "attempts" < ${WEBHOOK_MAX_ATTEMPTS}))
-              ORDER BY "availableAt", "id"
-              LIMIT ${WEBHOOK_CLAIM_WINDOW}
-            ) AS "head"
-          ) AS "ranked"
-          WHERE "position" <= ${WEBHOOK_PER_ENDPOINT_BATCH}
-          ORDER BY "availableAt", "id"
-          LIMIT ${BATCH_SIZE}
-        )
-          -- Checked again under the lock: another replica may have taken it.
-          AND (("status" = 'PENDING' AND "availableAt" <= now())
-            OR ("status" = 'PROCESSING' AND "leaseExpiresAt" < now()
-                AND "attempts" < ${WEBHOOK_MAX_ATTEMPTS}))
-        FOR UPDATE SKIP LOCKED
-      )
-      RETURNING "id", "endpointId", "topic", "payload", "attempts", "created_at"
-    `;
+    const claimed = await database.$queryRaw<ClaimedWebhook[]>(
+      webhookClaimSql(floor),
+    );
 
     for (const row of claimed) row.claimStartedAtMs = claimStartedAtMs;
 
@@ -1542,6 +1558,7 @@ class WebhookDispatchService {
 const webhookDispatchService = WebhookDispatchService.getInstance();
 
 export {
+  webhookClaimSql,
   WebhookDispatchService,
   fanOutWebhookEvent,
   fanOutWebhookEvents,
