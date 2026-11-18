@@ -16,6 +16,7 @@ import { logger } from "@/shared/logging/logger";
 import { workerHeartbeat } from "@/shared/health/worker-heartbeat";
 import { consumesQueue } from "@/shared/lifecycle/process-role";
 import { announceWake } from "@/shared/wake/wake-bus";
+import { ContinuousPool } from "@/shared/queue/continuous-pool";
 
 import { IMailProvider } from "@/shared/providers/mail-provider/IMail-provider";
 import { MailDeliveryError } from "@/shared/providers/mail-provider/errors/mail-delivery-error";
@@ -89,14 +90,22 @@ import { emailLogoUrl } from "@/shared/providers/mail-provider/email-logo";
  */
 const SWEEP_INTERVAL_MS = env.PIPELINE_SWEEP_INTERVAL_MS;
 
+/**
+ * The events one outbox claim takes when nothing it claimed still waits
+ * (the pool's prefetch, plano-escala F3-06). Each event renews its own
+ * lease right before its expansion, so the ones claimed ahead of a slot
+ * wait without risk.
+ */
 const OUTBOX_BATCH_SIZE = 10;
 
 /**
- * Events of one claimed batch expanded at the same time (plano-escala
- * F3-05): OUTBOX_EXPANSION_CONCURRENCY, 1 by default — one after the other,
- * as before. Each event renews its own lease right before its expansion, so
- * no batch invariant depends on it; several at once only bring the tail of
- * the batch forward, the overlap several replicas already had.
+ * Events expanded at the same time (plano-escala F3-05):
+ * OUTBOX_EXPANSION_CONCURRENCY, 1 by default — one after the other, as
+ * before. Each event renews its own lease right before its expansion, so no
+ * lease invariant depends on it; several at once only bring the queue
+ * forward, the overlap several replicas already had. Never two events of
+ * one aggregate at once in a process (the pool's perKey): the order the
+ * facts happened in is the order their notices are written in.
  */
 const OUTBOX_EXPANSION_CONCURRENCY = env.OUTBOX_EXPANSION_CONCURRENCY;
 
@@ -108,7 +117,10 @@ const OUTBOX_EXPANSION_CONCURRENCY = env.OUTBOX_EXPANSION_CONCURRENCY;
  * days that hold nothing in flight. Exported for the plan tests, which
  * measure this very statement.
  */
-function outboxClaimSql(floor: Prisma.Sql): Prisma.Sql {
+function outboxClaimSql(
+  floor: Prisma.Sql,
+  limit: number = OUTBOX_BATCH_SIZE,
+): Prisma.Sql {
   return Prisma.sql`
       UPDATE "domain_outbox_event" SET
         "status" = 'PROCESSING',
@@ -120,10 +132,11 @@ function outboxClaimSql(floor: Prisma.Sql): Prisma.Sql {
            OR ("status" = 'PROCESSING' AND "leaseExpiresAt" < now()
                AND "attempts" < ${OUTBOX_MAX_ATTEMPTS}))${floor}
         ORDER BY "created_at"
-        LIMIT ${OUTBOX_BATCH_SIZE}
+        LIMIT ${limit}
         FOR UPDATE SKIP LOCKED
       )${floor}
-      RETURNING "id", "topic", "payload", "businessId", "actorId", "attempts", "created_at", "correlationId"
+      RETURNING "id", "topic", "payload", "businessId", "actorId", "attempts", "created_at", "correlationId",
+                "aggregateType", "aggregateId"
     `;
 }
 
@@ -133,7 +146,11 @@ function outboxClaimSql(floor: Prisma.Sql): Prisma.Sql {
  * leaseExpiresAt get the same expression in the same statement, so they
  * are equal: now() does not move within a statement.
  */
-function deliveryClaimSql(lane: DeliveryLane, floor: Prisma.Sql): Prisma.Sql {
+function deliveryClaimSql(
+  lane: DeliveryLane,
+  floor: Prisma.Sql,
+  limit: number = DELIVERY_BATCH_SIZE,
+): Prisma.Sql {
   // Literals, not parameters: with bound values the planner cannot prove a
   // partial index predicate in a generic plan and falls back to a scan.
   // Safe to inline — the list is DELIVERY_LANES, constants of this module,
@@ -157,7 +174,7 @@ function deliveryClaimSql(lane: DeliveryLane, floor: Prisma.Sql): Prisma.Sql {
             OR ("leaseExpiresAt" < now()
                 AND "attempts" < ${DELIVERY_MAX_ATTEMPTS}))${floor}
         ORDER BY "availableAt"
-        LIMIT ${DELIVERY_BATCH_SIZE}
+        LIMIT ${limit}
         FOR UPDATE SKIP LOCKED
       )${floor}
       RETURNING "id", "outboxEventId", "userId", "externalRecipientId", "channel", "attempts"
@@ -165,7 +182,7 @@ function deliveryClaimSql(lane: DeliveryLane, floor: Prisma.Sql): Prisma.Sql {
 }
 
 /**
- * How long shutdown() waits, at most, for the batch in flight. The shutdown
+ * How long shutdown() waits, at most, for the rows in flight. The shutdown
  * plan's workers deadline can only shorten it (shared/lifecycle/
  * shutdown-plan.ts).
  */
@@ -205,6 +222,12 @@ const LANE_CONCURRENCY: Record<DeliveryLane, number> = {
 // concurrency too low for the batch. Silently breaking this invariant means
 // a second replica reclaiming rows that are still being sent - a duplicate
 // WhatsApp, not a slow one.
+//
+// The lanes run as a continuous pool since F3-06 and claim only for a free
+// slot, so a row's worst case is one timeout, well inside this bound: the
+// check is kept as the barrier's, which the pool can only beat, because the
+// image of before reads the same Environment during a rolling deploy and
+// after a rollback, and refuses a value below it.
 for (const lane of Object.keys(LANE_CONCURRENCY) as DeliveryLane[]) {
   assertWithVariable(
     LANE_CONCURRENCY_VARIABLE[lane],
@@ -241,16 +264,30 @@ interface ClaimedEvent {
   attempts: number;
   created_at: Date;
   correlationId: string | null;
+
+  /** The fact's aggregate: one of its events expands at a time (perKey). */
+  aggregateType?: string;
+  aggregateId?: string;
 }
 
 /**
- * The user lookups of the batch in flight, keyed by user id.
+ * The outbox pool's key: the event's aggregate, or the event itself when the
+ * claim did not say (a row of a test double).
+ */
+function aggregateKeyOf(event: ClaimedEvent): string {
+  return event.aggregateType && event.aggregateId
+    ? `${event.aggregateType}:${event.aggregateId}`
+    : `event:${event.id}`;
+}
+
+/**
+ * The user lookups of one claim's rows, keyed by user id.
  *
  * One event fans out to the same person across in-app, e-mail, WhatsApp and
  * push - four deliveries that used to cost four multi-join user queries.
  * Promises are cached, not values, so concurrent workers share one in-flight
- * lookup instead of racing three more. One map per batch, carried by the
- * batch's rows: the two lanes run at the same time and must not share one.
+ * lookup instead of racing three more. One map per claim, carried by the
+ * claim's rows: the two lanes run at the same time and must not share one.
  */
 type RecipientCache = Map<string, Promise<RecipientUser>>;
 
@@ -272,7 +309,7 @@ interface ClaimedDelivery {
 
   recipientCache?: RecipientCache;
 
-  /** Its event, set with the batch: what its log lines are found by. */
+  /** Its event, set with the claim: what it renders and is logged by. */
   event?: ClaimedEventRow;
 
   /**
@@ -385,8 +422,7 @@ class NotificationPipelineService {
   };
 
   /**
-   * The cycle in flight per queue, and whether somebody asked for another
-   * look while it ran.
+   * The cycle in flight per queue.
    *
    * A wake, a sweep tick or a test that found a cycle running used to get
    * `return` and nothing else. When it came after that cycle's LAST claim,
@@ -394,27 +430,56 @@ class NotificationPipelineService {
    * production — although a cycle was right there; and a test that drove
    * the pipeline by hand checked the provider before the send went out
    * (route-stop-on-the-way, red under load). A caller now joins the cycle in
-   * flight and marks it to run once more when it ends: one extra pass for
-   * however many callers arrived, never one per caller.
+   * flight and asks its pool to look again (`rescan`): one claim for however
+   * many callers arrived, never one per caller, and the cycle does not end
+   * before that claim ran.
    */
   private outboxCycle: Promise<boolean> | null = null;
-  private outboxRerun = false;
   private deliveryCycles: Record<DeliveryLane, Promise<void> | null> = {
     internal: null,
     external: null,
   };
-  private deliveryRerun: Record<DeliveryLane, boolean> = {
-    internal: false,
-    external: false,
-  };
 
   /**
-   * Set when the replica starts going away. The drain loops check it between
-   * batches and `wake()` stops starting new ones: shutdown used to only clear
-   * the timers, while a draining loop kept claiming batch after batch until
-   * the process exited under it — with rows still in flight.
+   * Set when the replica starts going away. The pools stop claiming and
+   * hand back what they claimed and did not start, and `wake()` stops
+   * starting new cycles: shutdown used to only clear the timers, while a
+   * draining loop kept claiming batch after batch until the process exited
+   * under it — with rows still in flight.
    */
   private stopping = false;
+
+  /**
+   * The outbox as a continuous pool (plano-escala F3-06): a batch claimed
+   * when nothing claimed still waits, OUTBOX_EXPANSION_CONCURRENCY events
+   * expanding, one per aggregate, and the next claim as soon as a slot
+   * frees instead of after the batch's slowest expansion.
+   */
+  private readonly outboxPool = new ContinuousPool<ClaimedEvent>({
+    slots: () => OUTBOX_EXPANSION_CONCURRENCY,
+    prefetch: OUTBOX_BATCH_SIZE,
+    perKey: { limit: 1, keyOf: aggregateKeyOf },
+    claim: (limit) => this.claimEvents(limit),
+    run: (event) => this.expandClaimedEvent(event),
+    giveBack: (event) => this.giveBackEvent(event),
+    stopping: () => this.stopping,
+    onClaim: () => workerHeartbeat.progress("notification-outbox"),
+  });
+
+  /**
+   * Each delivery lane as a continuous pool (plano-escala F3-06). A row is
+   * claimed only for a free slot (no prefetch): its lease runs from the
+   * claim, and a row claimed ahead would wait with it running. One slow
+   * e-mail now holds its own slot; the barrier of before held the four that
+   * had already finished until it ended.
+   */
+  private readonly lanePools: Record<
+    DeliveryLane,
+    ContinuousPool<ClaimedDelivery>
+  > = {
+    internal: this.lanePool("internal"),
+    external: this.lanePool("external"),
+  };
 
   /**
    * Success records still retrying after the batch moved on (the database
@@ -566,8 +631,13 @@ class NotificationPipelineService {
     this.outboxTimer = null;
     this.deliveryTimers = [];
 
-    // Let the batch in flight finish; the loops take no new one. Leases cover
-    // anything cut off by the deadline.
+    // The pools waiting on a slow row look now: what they claimed and did
+    // not start goes back at once, instead of waiting out its lease.
+    this.outboxPool.nudge();
+    for (const pool of Object.values(this.lanePools)) pool.nudge();
+
+    // Let the rows in flight finish; the pools claim nothing new. Leases
+    // cover anything cut off by the deadline.
     const deadline =
       Date.now() +
       Math.min(PIPELINE_SHUTDOWN_WAIT_MS, options.deadlineMs ?? Infinity);
@@ -604,7 +674,7 @@ class NotificationPipelineService {
    */
   public runOutboxCycle(): Promise<boolean> {
     if (this.outboxCycle) {
-      this.outboxRerun = true;
+      this.outboxPool.rescan();
 
       return this.outboxCycle.catch(() => false);
     }
@@ -624,15 +694,14 @@ class NotificationPipelineService {
 
     try {
       for (;;) {
-        this.outboxRerun = false;
-
         processedAny = (await this.drainOutbox()) || processedAny;
 
-        if (!this.outboxRerun || this.stopping) break;
+        // A look asked for between the pool's last one and its end.
+        if (!this.outboxPool.rescanPending || this.stopping) break;
       }
     } finally {
-      // Same synchronous turn as the last look at `outboxRerun`: a caller
-      // either saw this cycle and was covered by the pass it asked for, or
+      // Same synchronous turn as the last look at `rescanPending`: a caller
+      // either saw this cycle and was covered by the claim it asked for, or
       // finds it gone and starts the next one.
       this.outboxCycle = null;
       this.outboxRunning = false;
@@ -641,70 +710,61 @@ class NotificationPipelineService {
     return processedAny;
   }
 
-  /** One pass: claims batches until a short one says the queue is empty. */
+  /** One cycle of the outbox's pool: until nothing is due nor in flight. */
   private async drainOutbox(): Promise<boolean> {
     // A hung await here keeps the flag set forever; the beats make that
     // visible on /health/metrics (OBS-10).
     workerHeartbeat.beginCycle("notification-outbox");
 
-    let processedAny = false;
-
     try {
-      // Drain: a full batch means there is probably more behind it.
-      while (!this.stopping) {
-        const events = await this.claimEvents();
-        processedAny = processedAny || events.length > 0;
-
-        workerHeartbeat.progress("notification-outbox");
-
-        // OUTBOX_EXPANSION_CONCURRENCY events at a time over a shared
-        // cursor, as the lanes do; with 1, the loop of before.
-        let cursor = 0;
-
-        const expandNext = async (): Promise<void> => {
-          while (cursor < events.length) {
-            const event = events[cursor++];
-
-            try {
-              // One lease covers the whole batch, and the batch is expanded
-              // event after event. Under a saturated pool the tail used to
-              // start after the lease ran out, when another replica had
-              // already reclaimed it — and both expanded it (OUTBOX-21).
-              if (!(await this.renewEventLease(event))) {
-                log.warn(
-                  {
-                    outboxEventId: event.id,
-                    correlationId: event.correlationId ?? null,
-                    topic: event.topic,
-                    attempt: event.attempts,
-                  },
-                  "notification event reclaimed by another replica before its expansion; left to it",
-                );
-
-                continue;
-              }
-
-              await this.expandEvent(event);
-            } catch (error) {
-              await this.recordEventFailure(event, error);
-            }
-          }
-        };
-
-        await Promise.all(
-          Array.from(
-            { length: Math.min(OUTBOX_EXPANSION_CONCURRENCY, events.length) },
-            expandNext,
-          ),
-        );
-
-        if (events.length < OUTBOX_BATCH_SIZE) break;
-      }
+      return (await this.outboxPool.drain()) > 0;
     } finally {
       workerHeartbeat.endCycle("notification-outbox");
     }
+  }
 
-    return processedAny;
+  /** One claimed event, start to settle. Never rejects: the pool goes on. */
+  private async expandClaimedEvent(event: ClaimedEvent): Promise<void> {
+    try {
+      // A claim's lease covers the events it took ahead of a slot, and they
+      // wait for one. Under a saturated pool the last ones used to start
+      // after the lease ran out, when another replica had already reclaimed
+      // them — and both expanded them (OUTBOX-21).
+      if (!(await this.renewEventLease(event))) {
+        log.warn(
+          {
+            outboxEventId: event.id,
+            correlationId: event.correlationId ?? null,
+            topic: event.topic,
+            attempt: event.attempts,
+          },
+          "notification event reclaimed by another replica before its expansion; left to it",
+        );
+
+        return;
+      }
+
+      await this.expandEvent(event);
+    } catch (error) {
+      await this.recordEventFailure(event, error);
+    }
+  }
+
+  /**
+   * An event claimed and never started, handed back on shutdown: the claim
+   * was not an attempt. Fenced like every settling write, and due now, so
+   * the next replica takes it without waiting out the lease.
+   */
+  private async giveBackEvent(event: ClaimedEvent): Promise<void> {
+    await database.domainOutboxEvent.updateMany({
+      where: this.fenced(event),
+      data: {
+        status: "PENDING",
+        attempts: event.attempts - 1,
+        availableAt: new Date(),
+        leaseExpiresAt: null,
+      },
+    });
   }
 
   /**
@@ -726,7 +786,9 @@ class NotificationPipelineService {
     return renewed === 1;
   }
 
-  private async claimEvents(): Promise<ClaimedEvent[]> {
+  private async claimEvents(
+    limit: number = OUTBOX_BATCH_SIZE,
+  ): Promise<ClaimedEvent[]> {
     const floor = await claimFloors.predicate("outbox");
 
     // A row whose last allowed attempt died with the process is closed, with
@@ -741,7 +803,7 @@ class NotificationPipelineService {
         AND "attempts" >= ${OUTBOX_MAX_ATTEMPTS}${floor}
     `;
 
-    return database.$queryRaw<ClaimedEvent[]>(outboxClaimSql(floor));
+    return database.$queryRaw<ClaimedEvent[]>(outboxClaimSql(floor, limit));
   }
 
   /**
@@ -1132,14 +1194,14 @@ class NotificationPipelineService {
    * Public so a test can drive one cycle against a real database.
    *
    * Same contract as `runOutboxCycle`: a call that finds this lane's cycle
-   * running joins it and gets one more pass, instead of returning before
-   * the rows it was called for were claimed.
+   * running joins it and gets a claim of its own before the cycle ends,
+   * instead of returning before the rows it was called for were claimed.
    */
   public runDeliveryCycle(lane: DeliveryLane): Promise<void> {
     const inFlight = this.deliveryCycles[lane];
 
     if (inFlight) {
-      this.deliveryRerun[lane] = true;
+      this.lanePools[lane].rescan();
 
       return inFlight.catch(() => undefined);
     }
@@ -1156,11 +1218,10 @@ class NotificationPipelineService {
   private async runDeliveryPasses(lane: DeliveryLane): Promise<void> {
     try {
       for (;;) {
-        this.deliveryRerun[lane] = false;
-
         await this.drainDeliveries(lane);
 
-        if (!this.deliveryRerun[lane] || this.stopping) break;
+        // A look asked for between the pool's last one and its end.
+        if (!this.lanePools[lane].rescanPending || this.stopping) break;
       }
     } finally {
       this.deliveryCycles[lane] = null;
@@ -1168,60 +1229,72 @@ class NotificationPipelineService {
     }
   }
 
-  /** One pass over a lane: batches until a short one empties it. */
+  /** A lane's continuous pool (see lanePools). */
+  private lanePool(lane: DeliveryLane): ContinuousPool<ClaimedDelivery> {
+    return new ContinuousPool<ClaimedDelivery>({
+      slots: () => LANE_CONCURRENCY[lane],
+      maxPerClaim: DELIVERY_BATCH_SIZE,
+      claim: (limit) => this.claimLaneRows(lane, limit),
+      run: (delivery) => this.runOneDelivery(delivery),
+      giveBack: (delivery) => this.giveBackDelivery(delivery),
+      stopping: () => this.stopping,
+      onClaim: () => workerHeartbeat.progress(`notification-delivery-${lane}`),
+    });
+  }
+
+  /** One cycle of a lane's pool: until nothing is due nor in flight. */
   private async drainDeliveries(lane: DeliveryLane): Promise<void> {
     const beatName = `notification-delivery-${lane}`;
 
     workerHeartbeat.beginCycle(beatName);
 
     try {
-      // Drain: a full batch means there is probably more behind it.
-      while (!this.stopping) {
-        const deliveries = await this.claimDeliveries(lane);
-
-        workerHeartbeat.progress(beatName);
-
-        if (deliveries.length === 0) return;
-
-        const events = await database.domainOutboxEvent.findMany({
-          where: { id: { in: deliveries.map((d) => d.outboxEventId) } },
-        });
-
-        const eventsById = new Map(events.map((event) => [event.id, event]));
-
-        const recipientCache: RecipientCache = new Map();
-
-        for (const delivery of deliveries) {
-          delivery.recipientCache = recipientCache;
-          delivery.event = eventsById.get(delivery.outboxEventId);
-        }
-
-        // Bounded concurrency instead of one-at-a-time: a batch used to
-        // cost the SUM of every provider round-trip. A shared cursor (rather
-        // than fixed slices) keeps every worker busy when the durations are
-        // uneven, which across channels they always are.
-        let cursor = 0;
-
-        const worker = async (): Promise<void> => {
-          while (cursor < deliveries.length) {
-            const delivery = deliveries[cursor++];
-
-            await this.runOneDelivery(delivery, eventsById);
-          }
-        };
-
-        await Promise.all(
-          Array.from(
-            { length: Math.min(LANE_CONCURRENCY[lane], deliveries.length) },
-            worker,
-          ),
-        );
-
-        if (deliveries.length < DELIVERY_BATCH_SIZE) break;
-      }
+      await this.lanePools[lane].drain();
     } finally {
       workerHeartbeat.endCycle(beatName);
     }
+  }
+
+  /**
+   * Claims up to `limit` rows of a lane and reads their events in one query,
+   * the rows of the claim sharing one recipient cache.
+   */
+  private async claimLaneRows(
+    lane: DeliveryLane,
+    limit: number,
+  ): Promise<ClaimedDelivery[]> {
+    const deliveries = await this.claimDeliveries(lane, limit);
+
+    if (deliveries.length === 0) return deliveries;
+
+    const events = await database.domainOutboxEvent.findMany({
+      where: { id: { in: deliveries.map((d) => d.outboxEventId) } },
+    });
+
+    const eventsById = new Map(events.map((event) => [event.id, event]));
+
+    const recipientCache: RecipientCache = new Map();
+
+    for (const delivery of deliveries) {
+      delivery.recipientCache = recipientCache;
+      delivery.event = eventsById.get(delivery.outboxEventId);
+    }
+
+    return deliveries;
+  }
+
+  /**
+   * A row claimed and never started, handed back on shutdown: the claim was
+   * not an attempt. Fenced, and due now, so the next replica takes it
+   * without waiting out the 180 s lease.
+   */
+  private async giveBackDelivery(delivery: ClaimedDelivery): Promise<void> {
+    await this.settleDelivery(delivery, {
+      status: "PENDING",
+      attempts: delivery.attempts - 1,
+      availableAt: new Date(),
+      leaseExpiresAt: null,
+    });
   }
 
   /**
@@ -1242,15 +1315,12 @@ class NotificationPipelineService {
    * and another replica took the row, the late write matches nothing. A call
    * that never settles is reclaimed when the lease expires, as before.
    */
-  private async runOneDelivery(
-    delivery: ClaimedDelivery,
-    eventsById: Map<string, ClaimedEventRow>,
-  ): Promise<void> {
+  private async runOneDelivery(delivery: ClaimedDelivery): Promise<void> {
     let providerMessageId: string | undefined;
     let work: Promise<string | undefined> | undefined;
 
     try {
-      const event = eventsById.get(delivery.outboxEventId);
+      const event = delivery.event;
 
       if (!event) {
         throw new NonRetryableDeliveryError("Outbox event no longer exists");
@@ -1413,6 +1483,7 @@ class NotificationPipelineService {
    */
   private async claimDeliveries(
     lane: DeliveryLane,
+    limit: number = DELIVERY_BATCH_SIZE,
   ): Promise<ClaimedDelivery[]> {
     // Literals, not parameters: with bound values the planner cannot prove
     // a partial index predicate in a generic plan and falls back to a scan.
@@ -1441,7 +1512,7 @@ class NotificationPipelineService {
     const claimStartedAtMs = Date.now();
 
     const claimed = await database.$queryRaw<ClaimedDelivery[]>(
-      deliveryClaimSql(lane, floor),
+      deliveryClaimSql(lane, floor, limit),
     );
 
     for (const delivery of claimed)

@@ -168,12 +168,12 @@ com nova conta de req/s contra o joelho, e não uma decisão de arquitetura.
 
 ### 5. Retentativa, DLQ, concorrência, timeout, backpressure, métricas, idempotência e recuperação
 
-| Fila               | Lease                     | Concorrência                                                                                      | Retentativas (backoff, jitter ±20%)                                  | Tentativas | Timeout da chamada                                            |
-| ------------------ | ------------------------- | ------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------- | ---------- | ------------------------------------------------------------- |
-| outbox (expansão)  | 60 s, renovado por evento | 1 por vez (`OUTBOX_EXPANSION_CONCURRENCY`), lote de 10                                            | 30 s, 2 min, 10 min, 30 min                                          | 5          | —                                                             |
-| entregas (2 raias) | 180 s                     | 5 por raia (`NOTIFICATION_INTERNAL_CONCURRENCY`, `NOTIFICATION_EXTERNAL_CONCURRENCY`), lote de 20 | 30 s, 2 min, 10 min, 30 min, 1 h, 3 h (~4h40); `Retry-After` até 1 h | 7          | backstop de 15 s por entrega; SMTP, Meta e Expo com 10 s cada |
-| webhooks           | 120 s                     | 5 (`WEBHOOK_CONCURRENCY`); por endpoint lote de 10 e 2 em paralelo                                | 30 s, 2 min, 10 min, 1 h, 6 h                                        | 6          | 10 s; resposta lida até 8 kB                                  |
-| IA                 | 300 s                     | 4 (`AI_CONCURRENCY`, limitada por `AI_LOCAL_MAX_CONCURRENCY`)                                     | 30 s, 2 min, 10 min; leitor ocupado: 5–15 s                          | 4          | leitor 15 s; foto do R2 com prazo de 15 s                     |
+| Fila               | Lease                     | Concorrência                                                                                       | Retentativas (backoff, jitter ±20%)                                  | Tentativas | Timeout da chamada                                            |
+| ------------------ | ------------------------- | -------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------- | ---------- | ------------------------------------------------------------- |
+| outbox (expansão)  | 60 s, renovado por evento | 1 por vez (`OUTBOX_EXPANSION_CONCURRENCY`), claim de até 10, 1 por agregado                        | 30 s, 2 min, 10 min, 30 min                                          | 5          | —                                                             |
+| entregas (2 raias) | 180 s                     | 5 por raia (`NOTIFICATION_INTERNAL_CONCURRENCY`, `NOTIFICATION_EXTERNAL_CONCURRENCY`), vaga a vaga | 30 s, 2 min, 10 min, 30 min, 1 h, 3 h (~4h40); `Retry-After` até 1 h | 7          | backstop de 15 s por entrega; SMTP, Meta e Expo com 10 s cada |
+| webhooks           | 120 s                     | 5 (`WEBHOOK_CONCURRENCY`); por endpoint lote de 10 e 2 em paralelo                                 | 30 s, 2 min, 10 min, 1 h, 6 h                                        | 6          | 10 s; resposta lida até 8 kB                                  |
+| IA                 | 300 s                     | 4 (`AI_CONCURRENCY`, limitada por `AI_LOCAL_MAX_CONCURRENCY`)                                      | 30 s, 2 min, 10 min; leitor ocupado: 5–15 s                          | 4          | leitor 15 s; foto do R2 com prazo de 15 s                     |
 
 Constantes em `src/shared/notifications/pipeline-rules.ts`,
 `src/shared/integration/webhook-dispatch-rules.ts`,
@@ -183,6 +183,19 @@ verificados no import do módulo e no boot. A concorrência de cada fila vem
 do _Environment_ desde a onda 12 do plano de escala (F3-05; padrões iguais
 às constantes de antes, de 1 a 32): o invariante é conferido com o valor
 dado, e um valor que não cabe no lease para o boot.
+
+Desde a onda 13 (F3-06), cada fila é um **pool contínuo**
+(`src/shared/queue/continuous-pool.ts`), no lugar da barreira por lote: a
+vaga que libera é a hora de olhar a fila de novo, então uma entrega lenta
+segura só a própria vaga, e não as quatro que já tinham terminado. As raias
+reivindicam só para as vagas livres (o lease corre desde o claim); o outbox
+reivindica um lote de até 10 quando nada do claim anterior espera (cada
+evento renova o lease antes de expandir) e expande um evento por agregado
+por vez. Na parada, o que foi reivindicado e não começou volta na hora, por
+um UPDATE cercado (`PENDING`, `attempts − 1`, `availableAt = now()`), em vez
+de esperar o lease vencer; o que está em voo termina. O invariante das
+raias segue o da barreira, que o pool só melhora, porque a imagem anterior
+lê o mesmo _Environment_ no rolling e num rollback.
 
 - **DLQ:** o status `FAILED`.
   - `GET /health/dead-letter` com `POST /health/dead-letter/replay` cobre
