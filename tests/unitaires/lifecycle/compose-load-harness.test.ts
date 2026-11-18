@@ -898,7 +898,31 @@ case " $* " in
   *" logs "*)
     if [ -n "\${STUB_LOGS_ERROR:-}" ]; then echo "$STUB_LOGS_ERROR" >&2; exit 1; fi
     cat "$STUB_TRAEFIK_LOG" ;;
-  *" exec "*) echo "\${STUB_STUCK:-0}" ;;
+  *" exec "*)
+    # The roles' steps (LOAD-07) ask their own questions; anything else is
+    # step 2's count of stuck rows.
+    case "$*" in
+      *PSUBSCRIBE*)
+        printf 'psubscribe\\n*:wake:outbox\\n1\\n'
+        i=0
+        while [ "$i" -lt "\${STUB_HINTS:-1}" ]; do
+          printf 'pmessage\\n*:wake:outbox\\nk:wake:outbox\\n{}\\n'
+          i=$((i + 1))
+        done ;;
+      *pkill*) ;;
+      *"status = 'PROCESSING'"*) echo "\${STUB_STUCK:-0}" ;;
+      *array_to_string*) printf 'api filas= cron=false\\nworker filas=outbox cron=true\\n' ;;
+      *"cardinality(queues) > 0"*) echo "\${STUB_CLAIMERS-worker}" ;;
+      *"role = 'api'"*) echo 2 ;;
+      *worker_heartbeat*) echo "\${STUB_STRAYS:-0}" ;;
+      *"AT TIME ZONE"*) echo "2026-11-18 12:00:00" ;;
+      *chat-message.sent*) echo "\${STUB_TAKEN-150}" ;;
+      *generate_series*) echo "\${STUB_RUNS-10:01=1 10:02=1 10:03=1}" ;;
+      *"HAVING count"*) echo "\${STUB_TWICE:-0}" ;;
+      *"AND cron"*) echo "\${STUB_CRON-worker}" ;;
+      *) echo "\${STUB_STUCK:-0}" ;;
+    esac ;;
+  *" ps --services "*) printf '%s\\n' \${STUB_SERVICES:-} ;;
   *" ps -q "*) echo c0ffee ;;
   *" stats "*) echo "  trajetto-load-api-1: CPU 1%" ;;
 esac
@@ -906,6 +930,7 @@ exit 0`;
 
 const CURL = `
 case "$*" in
+  *send-message*) printf "\${STUB_SEND_CODE:-201}" ;;
   *http_code*) printf 200 ;;
 esac
 exit 0`;
@@ -993,6 +1018,136 @@ describe.skipIf(!bash)("multi-replica.sh (LOAD-1, LOAD-3)", () => {
 
     expect(result.status).not.toBe(0);
     expect(result.stdout).toMatch(/webhook_delivery tem 3 linha/);
+  });
+
+  /**
+   * plano-escala LOAD-07: the split fleet's questions. Only the worker
+   * claims (the api replicas declare no queue, no queue loop beats outside
+   * the worker); a notification created on the api reaches the worker in
+   * under 2 s through the wake hint, and the run fails without the hint
+   * even when the time alone would pass; and each cron runs once per
+   * scheduled minute, only on the worker.
+   */
+  describe("with the roles of the same image (LOAD-07)", () => {
+    beforeEach(() => {
+      box.stub("sleep", "exit 0");
+    });
+
+    it("joins steps 6 to 8 by itself only when the harness runs the worker", () => {
+      // Every step runs here: node answers nothing, so the socket and the
+      // rate-limit steps fail at once instead of reaching for a replica.
+      box.stub("node", "exit 0");
+
+      const split = multiReplica({
+        STUB_SERVICES: "traefik api worker postgres redis",
+        LOAD_STEPS: "",
+        LOAD_PORTS: "1 2",
+      });
+      const single = multiReplica({
+        STUB_SERVICES: "traefik api postgres redis",
+        LOAD_STEPS: "",
+        LOAD_PORTS: "1 2",
+      });
+
+      expect(split.stdout).toContain("== 6. Só o worker reivindica? ==");
+      expect(split.stdout).toContain("== 8. Cada cron roda");
+      expect(single.stdout).not.toContain("== 6.");
+      expect(single.stdout).toContain("== 5. A vazão sobe? ==");
+    });
+
+    it("passes when only the worker claims, the hint wakes it and the cron runs once", () => {
+      const result = multiReplica({ LOAD_STEPS: "6 7 8" });
+
+      expect(result.status, result.stdout + result.stderr).toBe(0);
+      expect(result.stdout).toContain("envio 1: 150 ms até o worker");
+      expect(result.stdout).toContain("dicas de despertar no canal: 1");
+      expect(result.stdout).toContain("com o cron: worker");
+      expect(result.stdout).not.toContain("FALHOU");
+
+      // The chat goes through an api replica's own port, and the hint is
+      // read from Redis itself.
+      expect(box.calls("curl").join("\n")).toContain(
+        "http://localhost:3341/chat/send-message",
+      );
+      expect(box.calls("docker").join("\n")).toContain(
+        "redis timeout 40 redis-cli PSUBSCRIBE *:wake:outbox",
+      );
+    });
+
+    it("fails when the api replicas claim too (LOAD_API_ROLE forgotten)", () => {
+      const result = multiReplica({
+        LOAD_STEPS: "6",
+        STUB_CLAIMERS: "all,worker",
+      });
+
+      expect(result.status).not.toBe(0);
+      expect(result.stdout).toContain(
+        "quem consome filas: 'all,worker', não só o worker (suba com LOAD_API_ROLE=api",
+      );
+    });
+
+    it("fails on a queue loop beating outside the worker", () => {
+      const result = multiReplica({ LOAD_STEPS: "6", STUB_STRAYS: "2" });
+
+      expect(result.status).not.toBe(0);
+      expect(result.stdout).toContain(
+        "2 laço(s) de fila batendo fora do worker",
+      );
+    });
+
+    it("fails without the wake hint, even when the sweep was quick enough", () => {
+      const result = multiReplica({ LOAD_STEPS: "7", STUB_HINTS: "0" });
+
+      expect(result.status).not.toBe(0);
+      expect(result.stdout).toContain("envio 3: 150 ms até o worker");
+      expect(result.stdout).toContain(
+        "nenhuma dica de despertar no canal *:wake:outbox",
+      );
+    });
+
+    it("fails when the notification takes 2 s or more", () => {
+      const result = multiReplica({ LOAD_STEPS: "7", STUB_TAKEN: "2400" });
+
+      expect(result.status).not.toBe(0);
+      expect(result.stdout).toContain(
+        "o evento do envio 1 levou 2400 ms até o worker, não < 2000",
+      );
+    });
+
+    it("fails when the api refuses the message", () => {
+      const result = multiReplica({ LOAD_STEPS: "7", STUB_SEND_CODE: "401" });
+
+      expect(result.status).not.toBe(0);
+      expect(result.stdout).toContain("respondeu 401, não 201");
+    });
+
+    it.each([
+      [
+        "a minute without the heartbeat",
+        { STUB_RUNS: "10:01=1 10:02=0 10:03=1" },
+        "não rodou exatamente uma vez",
+      ],
+      [
+        "a cron on the api too",
+        { STUB_CRON: "api,worker" },
+        "quem roda o cron: 'api,worker'",
+      ],
+      [
+        "a slot that ran twice",
+        { STUB_TWICE: "1" },
+        "1 disparo(s) de cron com mais de uma execução",
+      ],
+      [
+        "no complete minute yet",
+        { STUB_RUNS: "" },
+        "rode este passo de novo daqui a 2 minutos",
+      ],
+    ])("fails step 8 on %s", (_case, env, says) => {
+      const result = multiReplica({ LOAD_STEPS: "8", ...env });
+
+      expect(result.status).not.toBe(0);
+      expect(result.stdout).toContain(says);
+    });
   });
 
   it("stops before touching docker when the env file is not there", () => {

@@ -653,6 +653,33 @@ obrigatório), e o passo 0 lia o log vazio como "uma réplica só atendeu".
 `LOAD_STEPS="0 2"` faz só algumas perguntas; o roteiro sai com erro se alguma
 falhar.
 
+Com a frota dividida (o perfil `roles` com `LOAD_API_ROLE=api`, plano de
+escala LOAD-07), o roteiro acrescenta sozinho mais três perguntas quando o
+harness roda o `worker`:
+
+6. **Só o worker reivindica?** No `process_heartbeat`, só o `worker` declara
+   filas, há ao menos um processo em `api` e nenhum laço de fila bate no
+   `worker_heartbeat` fora do worker. Esquecer o `LOAD_API_ROLE=api` deixa as
+   réplicas em `all`, consumindo também, e o passo diz isso.
+7. **A notificação criada na api chega ao worker pela dica?** Três mensagens
+   do chat pela porta de uma réplica da api; cada evento do outbox precisa
+   ser processado pelo worker em menos de 2 s (`processedAt` − `created_at`),
+   e a dica de despertar precisa aparecer no canal `*:wake:outbox` do Redis.
+   Sem a dica, o passo reprova mesmo quando a varredura de 2 s do worker
+   pegou o evento a tempo por sorte.
+8. **Cada cron roda uma vez por minuto agendado?** O `ops-heartbeat` rodou
+   exatamente uma vez em cada um dos últimos três minutos completos desde que
+   o cron subiu, nenhum disparo rodou duas vezes e só o `worker` tem o cron.
+   Logo depois do `up`, espere uns 4 minutos antes deste passo.
+
+```bash
+LOAD_API_ROLE=api docker compose --env-file .env \
+  -f tests/load/compose.load.yaml --profile roles up -d --build
+# (seed, como acima; espere uns 4 minutos)
+bash tests/load/multi-replica.sh            # 0 a 8
+LOAD_STEPS="6 7 8" bash tests/load/multi-replica.sh
+```
+
 ### O que foi verificado
 
 **O tráfego se divide.** O access log do Traefik diz qual réplica atendeu cada
