@@ -1034,6 +1034,17 @@ const envSchema = z
       z.coerce.number().int().min(0).max(20).default(5),
     ),
 
+    // Rows per transaction of the durable import (plano-escala F3-23c):
+    // each batch writes its deliveries, their webhook rows and the job's
+    // cursor in one short transaction, far below the 4 minutes a writer of
+    // delivery_event may hold one (U-16); a batch that fails is redone row
+    // by row, the way of before. 1 is row by row. Only with
+    // IMPORT_DURABLE_JOBS. Empty counts as absent.
+    IMPORT_ROWS_PER_TRANSACTION: z.preprocess(
+      (value) => (value === "" ? undefined : value),
+      z.coerce.number().int().min(1).max(500).default(100),
+    ),
+
     // The process's memory budget, checked at boot (plano-escala U-15;
     // shared/lifecycle/memory-budget.ts): the main heap, the spreadsheet
     // threads and this reserve for what V8 and the native libraries hold

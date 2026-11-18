@@ -112,6 +112,14 @@ interface ImportDeliverySpreadsheetRequest {
 const HEARTBEAT_EVERY_ROWS = 25;
 
 /**
+ * A batch's transaction (plano-escala F3-23c). A hundred rows are a second
+ * or two of inserts; the margin is for a database under load, far below the
+ * 4 minutes a writer of delivery_event may hold one (U-16). Past it the
+ * batch rolls back and is redone row by row.
+ */
+const IMPORT_BATCH_TRANSACTION_OPTIONS = { timeout: 30_000, maxWait: 10_000 };
+
+/**
  * The import queue asked the running upload to stop: the replica is shutting
  * down (import-queue.ts). Thrown between two rows, caught by `process`.
  */
@@ -1182,11 +1190,13 @@ class ImportDeliverySpreadsheetUseCase {
   }
 
   /**
-   * The rows from the cursor on, one commit per row that creates, with the
-   * cursor past it in the same commit. The outcomes of rows that create
-   * nothing (duplicates, failures) go down with the next commit, or every
-   * HEARTBEAT_EVERY_ROWS rows: deciding one again after a crash gives the
-   * same answer and writes nothing.
+   * The rows from the cursor on (plano-escala F3-23a and F3-23c): in
+   * batches of IMPORT_ROWS_PER_TRANSACTION, each one a transaction with its
+   * deliveries, their webhook rows and the cursor past it, so a run killed
+   * anywhere resumes at the first batch not committed. A batch that fails
+   * as a whole (a key another upload took in the meantime, a timeout) is
+   * redone row by row, the way of before, each row its own commit with the
+   * cursor; 1 is that way throughout.
    */
   private async decideRowsDurably(
     job: JobContext,
@@ -1194,12 +1204,78 @@ class ImportDeliverySpreadsheetUseCase {
     from: SpreadsheetImportProgress,
     context: { businessId: string; shipperId: string; importId: string },
   ): Promise<SpreadsheetImportProgress> {
+    const perTransaction = Math.max(1, env.IMPORT_ROWS_PER_TRANSACTION);
     let progress = from;
 
-    for (let index = progress.next; index < parsed.rows.length; index += 1) {
+    while (progress.next < parsed.rows.length) {
       job.throwIfStopped();
 
-      if (index > from.next && index % HEARTBEAT_EVERY_ROWS === 0) {
+      const start = progress.next;
+      const end = Math.min(start + perTransaction, parsed.rows.length);
+
+      if (perTransaction > 1) {
+        // Alive, for the abandoned-import sweep and the screen.
+        await this.importRepository.touchImport(
+          context.importId,
+          context.businessId,
+        );
+
+        try {
+          progress = await this.importBatch(
+            job,
+            parsed.rows,
+            { start, end },
+            progress,
+            context,
+          );
+
+          continue;
+        } catch (error) {
+          if (isJobControlError(error)) throw error;
+
+          // Nothing of the batch committed: it is decided again row by
+          // row, the rows that would still fail failing alone.
+          logger.warn(
+            { err: error, importId: context.importId, start, end },
+            "import batch failed; redoing it row by row",
+          );
+        }
+      }
+
+      progress = await this.decideRowsOneByOne(
+        job,
+        parsed.rows,
+        { start, end },
+        progress,
+        context,
+      );
+    }
+
+    await job.checkpoint(progress);
+
+    return progress;
+  }
+
+  /**
+   * One row at a time, each one that creates a delivery committing it with
+   * the cursor past it. The outcomes of rows that create nothing
+   * (duplicates, failures) go down with the next commit, or every
+   * HEARTBEAT_EVERY_ROWS rows: deciding one again after a crash gives the
+   * same answer and writes nothing.
+   */
+  private async decideRowsOneByOne(
+    job: JobContext,
+    rows: ParsedRow[],
+    { start, end }: { start: number; end: number },
+    from: SpreadsheetImportProgress,
+    context: { businessId: string; shipperId: string; importId: string },
+  ): Promise<SpreadsheetImportProgress> {
+    let progress = from;
+
+    for (let index = start; index < end; index += 1) {
+      job.throwIfStopped();
+
+      if (index > 0 && index % HEARTBEAT_EVERY_ROWS === 0) {
         await this.importRepository.touchImport(
           context.importId,
           context.businessId,
@@ -1207,7 +1283,7 @@ class ImportDeliverySpreadsheetUseCase {
         await job.checkpoint(progress);
       }
 
-      const row = parsed.rows[index];
+      const row = rows[index];
       const committed: { progress: SpreadsheetImportProgress | null } = {
         progress: null,
       };
@@ -1233,7 +1309,140 @@ class ImportDeliverySpreadsheetUseCase {
           : advanceImportProgress(progress, index, decided.code);
     }
 
-    await job.checkpoint(progress);
+    return progress;
+  }
+
+  /**
+   * A batch of rows in one transaction (plano-escala F3-23c), deciding each
+   * row as the row-by-row path would:
+   *
+   *  - the duplicates are read for the whole batch at once (the NF-e keys,
+   *    the orders of the rows without a key), and decided in sheet order
+   *    with what the rows before each one create, as the one-row check sees
+   *    the rows committed before it;
+   *  - the orders the batch creates are locked in one order (sorted, so two
+   *    uploads of overlapping files queue instead of deadlocking) and read
+   *    again under the locks: one another upload created meanwhile is a
+   *    duplicate here too;
+   *  - the deliveries, their `delivery.created` rows (announceMany) and the
+   *    cursor past the batch commit together. Any failure rolls the whole
+   *    batch back and the caller redoes it row by row.
+   */
+  private async importBatch(
+    job: JobContext,
+    rows: ParsedRow[],
+    { start, end }: { start: number; end: number },
+    from: SpreadsheetImportProgress,
+    {
+      businessId,
+      shipperId,
+      importId,
+    }: { businessId: string; shipperId: string; importId: string },
+  ): Promise<SpreadsheetImportProgress> {
+    const batch = rows.slice(start, end);
+    const unique = (values: string[]) => [...new Set(values)];
+
+    const [knownKeys, knownOrders] = await Promise.all([
+      this.delivery.findExistingInvoiceKeys(
+        businessId,
+        unique(
+          batch.flatMap((row) => (row.invoice_key ? [row.invoice_key] : [])),
+        ),
+      ),
+      this.delivery.findExistingOrderCodes(
+        businessId,
+        shipperId,
+        unique(
+          batch.flatMap((row) =>
+            !row.invoice_key && row.code ? [row.code] : [],
+          ),
+        ),
+      ),
+    ]);
+
+    const seenKeys = new Set(knownKeys);
+    const seenOrders = new Set(knownOrders);
+
+    const plan = batch.map((row) => {
+      if (row.invoice_key) {
+        if (seenKeys.has(row.invoice_key)) return { row, create: false };
+
+        seenKeys.add(row.invoice_key);
+        if (row.code) seenOrders.add(row.code);
+
+        return { row, create: true };
+      }
+
+      if (row.code) {
+        if (seenOrders.has(row.code)) return { row, create: false };
+
+        seenOrders.add(row.code);
+      }
+
+      return { row, create: true };
+    });
+
+    const orderOnly = unique(
+      plan.flatMap(({ row, create }) =>
+        create && !row.invoice_key && row.code ? [row.code] : [],
+      ),
+    ).sort();
+
+    const { progress, created } = await database.$transaction(async (tx) => {
+      for (const code of orderOnly) {
+        await this.delivery.lockOrderIdentity(businessId, shipperId, code, tx);
+      }
+
+      const lost = await this.delivery.findExistingOrderCodes(
+        businessId,
+        shipperId,
+        orderOnly,
+        tx,
+      );
+
+      const decided: Array<{ code: RowCode; deliveryId: string | null }> = [];
+      const payloads: Array<Record<string, unknown>> = [];
+
+      for (const { row, create } of plan) {
+        if (!create || (!row.invoice_key && row.code && lost.has(row.code))) {
+          decided.push({ code: "d", deliveryId: null });
+          continue;
+        }
+
+        const delivery = await this.delivery.createDelivery(
+          deliveryOfRow(row, { businessId, shipperId, importId }),
+          tx,
+        );
+
+        payloads.push(deliveryEventPayload({ ...delivery, id: delivery.id! }));
+        decided.push({ code: "i", deliveryId: delivery.id! });
+      }
+
+      await this.webhooks.announceMany(
+        "delivery.created",
+        businessId,
+        payloads,
+        tx,
+      );
+
+      const next = decided.reduce(
+        (current, { code, deliveryId }, offset) =>
+          advanceImportProgress(
+            current,
+            start + offset,
+            code,
+            deliveryId ? keylessRouted(batch[offset], deliveryId) : undefined,
+          ),
+        from,
+      );
+
+      await job.checkpoint(next, tx);
+
+      return { progress: next, created: payloads.length };
+    }, IMPORT_BATCH_TRANSACTION_OPTIONS);
+
+    // After the commit.
+    countDeliveriesCreated(created);
 
     return progress;
   }

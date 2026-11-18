@@ -270,6 +270,29 @@ interface IDeliveryRepository {
   ) => Promise<void>;
 
   /**
+   * Which of these NF-e access keys the company already has: the import's
+   * duplicate check for a batch of rows in one read (plano-escala F3-23c),
+   * the same answer findDeliveryByInvoiceKey gives one at a time.
+   */
+  findExistingInvoiceKeys: (
+    businessId: string,
+    invoiceKeys: readonly string[],
+  ) => Promise<Set<string>>;
+
+  /**
+   * Which of these order numbers the company already has for the shipper
+   * (plano-escala F3-23c), as findDeliveryByShipperAndCode answers one at a
+   * time; with `tx`, inside the caller's transaction (after
+   * lockOrderIdentity).
+   */
+  findExistingOrderCodes: (
+    businessId: string,
+    shipperId: string,
+    codes: readonly string[],
+    tx?: Prisma.TransactionClient,
+  ) => Promise<Set<string>>;
+
+  /**
    * The operation, one batch at a time.
    *
    * A generator rather than a list, because an export is the one screen where

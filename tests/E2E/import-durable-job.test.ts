@@ -1,4 +1,12 @@
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import {
+  afterAll,
+  beforeAll,
+  describe,
+  expect,
+  it,
+  onTestFinished,
+  vi,
+} from "vitest";
 
 import { sign } from "jsonwebtoken";
 
@@ -275,6 +283,14 @@ describe("a durable spreadsheet import", () => {
         row("Sexta", "DUR-006", "Rota Sul"),
         row("Sétima", "DUR-007"),
       ];
+
+      // One row per transaction: the run dies at its third row's commit.
+      // The batches' own kill is in import-batch-golden (F3-23c).
+      const perTransaction = env.IMPORT_ROWS_PER_TRANSACTION;
+      env.IMPORT_ROWS_PER_TRANSACTION = 1;
+      onTestFinished(() => {
+        env.IMPORT_ROWS_PER_TRANSACTION = perTransaction;
+      });
 
       const response = await post(csv(sheet));
 

@@ -1436,6 +1436,40 @@ class InMemoryDeliveryRepository implements IDeliveryRepository {
     };
   }
 
+  async findExistingInvoiceKeys(
+    businessId: string,
+    invoiceKeys: readonly string[],
+  ): Promise<Set<string>> {
+    return new Set(
+      this.deliveries
+        .filter(
+          (delivery) =>
+            delivery.businessId === businessId &&
+            delivery.invoice_key &&
+            invoiceKeys.includes(delivery.invoice_key),
+        )
+        .map((delivery) => delivery.invoice_key!),
+    );
+  }
+
+  async findExistingOrderCodes(
+    businessId: string,
+    shipperId: string,
+    codes: readonly string[],
+  ): Promise<Set<string>> {
+    return new Set(
+      this.deliveries
+        .filter(
+          (delivery) =>
+            delivery.businessId === businessId &&
+            delivery.shipperId === shipperId &&
+            delivery.code &&
+            codes.includes(delivery.code),
+        )
+        .map((delivery) => delivery.code!),
+    );
+  }
+
   async findDeliveryByShipperAndCode(
     businessId: string,
     shipperId: string,

@@ -496,6 +496,35 @@ function deliveryRepositoryContract(harness: () => DeliveryHarness): void {
     });
   });
 
+  describe("the import's batch of identities", () => {
+    // Plano-escala F3-23c: the duplicate check of a batch of rows in one
+    // read, the same answer the one-row lookups give.
+    it("finds which NF-e keys and orders of a batch the company already has, never another company's", async () => {
+      const { repo } = harness();
+      const key = SEED[0].data.invoice_key!;
+
+      expect(
+        await repo.findExistingInvoiceKeys(A, [key, "99999999999999999999"]),
+      ).toEqual(new Set([key]));
+      expect(await repo.findExistingInvoiceKeys(C, [key])).toEqual(new Set());
+      expect(await repo.findExistingInvoiceKeys(A, [])).toEqual(new Set());
+
+      expect(
+        await repo.findExistingOrderCodes(A, FIXTURE.shipperA, [
+          "PED-1",
+          "PED-NOVO",
+        ]),
+      ).toEqual(new Set(["PED-1"]));
+      // Another shipper of the same company: another order.
+      expect(
+        await repo.findExistingOrderCodes(A, FIXTURE.shipperA2, ["PED-1"]),
+      ).toEqual(new Set());
+      expect(
+        await repo.findExistingOrderCodes(B, FIXTURE.shipperB, ["PED-1"]),
+      ).toEqual(new Set());
+    });
+  });
+
   describe("listDeliveries", () => {
     // facets=skip (plano-escala F2-30): the same rows, nothing counted.
     it("with skipFacets returns the same page and no count", async () => {

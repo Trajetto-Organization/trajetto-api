@@ -4142,12 +4142,18 @@ não muda) e, numa transação só, abre a importação e enfileira o job
 (`IMPORT_RUNNING_PER_TENANT` rodando, 1, e `IMPORT_QUEUED_PER_TENANT` na
 fila, 5): passou disso, `429 IMPORT_BUSY` com `retry-after`, sem importação
 aberta e sem arquivo guardado. Quem consome a fila `jobs` lê o arquivo e
-decide as linhas a partir do cursor do job: cada linha que cria entrega grava
-a entrega, o webhook e o cursor na mesma transação, então um SIGKILL retoma
-noutro processo na primeira linha sem commit e o relatório sai igual ao do
-caminho em memória (cada linha guarda uma letra no cursor, e a linha do
-relatório é refeita dela; as rotas já montadas também ficam no cursor). Um
-SIGTERM devolve o job à fila na hora, sem fechar a importação. A varredura
+decide as linhas a partir do cursor do job, em lotes de
+`IMPORT_ROWS_PER_TRANSACTION` linhas (100; F3-23c): cada lote grava as
+entregas, as linhas de webhook e o cursor numa transação curta, e um lote que
+falha inteiro é refeito linha a linha, como antes (com `1`, linha a linha o
+tempo todo). Os duplicados do lote são lidos de uma vez e decididos na ordem
+da planilha, como a conferência de uma linha veria; os pedidos que o lote cria
+são travados em ordem e relidos sob a trava. Um SIGKILL retoma noutro
+processo no primeiro lote sem commit, e o relatório sai igual ao do caminho em
+memória (cada linha guarda uma letra no cursor, e a linha do relatório é
+refeita dela; as rotas já montadas também ficam no cursor); o teste dourado
+`import-batch-golden` compara as duas saídas. Um SIGTERM devolve o job à
+fila na hora, sem fechar a importação. A varredura
 `close-abandoned-imports` não fecha importação com job vivo; o job que falha
 de vez fecha a importação dizendo que foi uma falha do servidor. O arquivo é
 apagado no fim; numa falha, fica 7 dias (o `cleanup-background-jobs` o

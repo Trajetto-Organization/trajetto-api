@@ -1620,6 +1620,46 @@ class DeliveryRepository implements IDeliveryRepository {
     return found as Delivery | null;
   }
 
+  async findExistingInvoiceKeys(
+    businessId: string,
+    invoiceKeys: readonly string[],
+  ): Promise<Set<string>> {
+    if (invoiceKeys.length === 0) return new Set();
+
+    // The unique index (businessId, invoice_key) answers each key.
+    const found = await this.prisma.delivery.findMany({
+      where: { businessId, invoice_key: { in: [...invoiceKeys] } },
+      select: { invoice_key: true },
+    });
+
+    return new Set(
+      found
+        .map((delivery) => delivery.invoice_key)
+        .filter((key): key is string => key !== null),
+    );
+  }
+
+  async findExistingOrderCodes(
+    businessId: string,
+    shipperId: string,
+    codes: readonly string[],
+    tx?: Prisma.TransactionClient,
+  ): Promise<Set<string>> {
+    if (codes.length === 0) return new Set();
+
+    const found = await (tx ?? this.prisma).delivery.findMany({
+      where: { businessId, shipperId, code: { in: [...codes] } },
+      select: { code: true },
+      distinct: ["code"],
+    });
+
+    return new Set(
+      found
+        .map((delivery) => delivery.code)
+        .filter((code): code is string => code !== null),
+    );
+  }
+
   async lockOrderIdentity(
     businessId: string,
     shipperId: string,
