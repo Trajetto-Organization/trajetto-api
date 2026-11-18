@@ -1967,7 +1967,8 @@ papel `all`, cada réplica abre até 10 (requisições) + 3 (batch) + 1 (a
 readiness). Com as 2 réplicas de hoje, mais a `trajetto-api-migrate` (2) e
 as ferramentas (8: `psql`, o backup do Dokploy, o pgBackRest, o
 monitoramento), 2 × (10 + 3 + 1) + 2 + 8 = 38 de 200. O pool de leitura
-(`databaseRead`) abre até mais 3 por réplica quando entrar em uso, mesmo
+(`databaseRead`, onde rodam as exportações e as listas pesadas desde a
+onda 12, F3-17) abre até mais 3 por réplica enquanto uma delas roda, mesmo
 sem `DATABASE_READ_URL`: 2 × 17 + 10 = 44. Depois da separação (onda 12),
 some cada linha da tabela de
 [`variaveis-de-ambiente.md`](./variaveis-de-ambiente.md#2-banco-de-dados)

@@ -1,4 +1,4 @@
-import database from "@/../infra/database";
+import database, { databaseRead } from "@/../infra/database";
 
 import { Prisma, type PrismaClient } from "@prisma/client";
 
@@ -319,6 +319,20 @@ function maxId(a: string | null, b: string | null): string | null {
 class IntegrationRepository implements IIntegrationRepository {
   constructor(private prisma = database) {}
 
+  /**
+   * The heavy reads' bulkhead (plano-escala F3-17), for the LISTS of
+   * /integration/v1/deliveries and /routes (one delivery, one route, the
+   * events and the submissions stay on the primary: an ERP reads them right
+   * after its own write): a pool of its own, 3 connections and 10 s a
+   * statement, so a burst of them waits among itself instead of taking the
+   * connections every other request needs. A repository built on another
+   * client (a test's) reads on that client. A getter, so a module that mocks
+   * infra/database without it only needs it when one of these reads runs.
+   */
+  private get read(): typeof this.prisma {
+    return this.prisma === database ? databaseRead : this.prisma;
+  }
+
   async listDeliveries({
     businessId,
     limit,
@@ -326,7 +340,7 @@ class IntegrationRepository implements IIntegrationRepository {
     updated_since,
     status,
   }: IntegrationListProps): Promise<CursorPage<PublicDelivery>> {
-    const rows = await this.prisma.delivery.findMany({
+    const rows = await this.read.delivery.findMany({
       where: {
         businessId,
         ...(status && {
@@ -345,7 +359,7 @@ class IntegrationRepository implements IIntegrationRepository {
 
     const { page, next_cursor } = cursorPage(rows, limit);
 
-    const data = await withStopRoutes(this.prisma, page);
+    const data = await withStopRoutes(this.read, page);
 
     return { data: data.map(toPublicDelivery), next_cursor };
   }
@@ -373,7 +387,7 @@ class IntegrationRepository implements IIntegrationRepository {
     updated_since,
     status,
   }: IntegrationListProps): Promise<CursorPage<PublicRoute>> {
-    const rows = await this.prisma.route.findMany({
+    const rows = await this.read.route.findMany({
       where: {
         businessId,
         ...(status && {

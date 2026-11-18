@@ -1,4 +1,4 @@
-import database from "@/../infra/database";
+import database, { databaseRead } from "@/../infra/database";
 import { Prisma } from "@prisma/client";
 import { Decimal } from "@prisma/client/runtime/client";
 
@@ -48,6 +48,18 @@ const EXPORT_BATCH_SIZE = 1000;
 
 class FineRepository implements IFineRepository {
   constructor(private prisma = database) {}
+
+  /**
+   * The heavy reads' bulkhead (plano-escala F3-17), for the export: a pool of
+   * its own, 3 connections and 10 s a statement, so a burst of them waits
+   * among itself instead of taking the connections every other request needs.
+   * A repository built on another client (a test's) reads on that client. A
+   * getter, so a module that mocks infra/database without it only needs it
+   * when one of these reads runs.
+   */
+  private get read(): typeof this.prisma {
+    return this.prisma === database ? databaseRead : this.prisma;
+  }
 
   // `tx` lets the use case create the fine and its outbox event atomically.
   async createFine(
@@ -210,7 +222,7 @@ class FineRepository implements IFineRepository {
     order: _order,
     ...filters
   }: FineListQuery): Promise<number> {
-    return this.prisma.fine.count({
+    return this.read.fine.count({
       where: fineListWhere(filters, { withFacets: true, todayStart }),
     });
   }
@@ -234,7 +246,7 @@ class FineRepository implements IFineRepository {
     while (true) {
       const fines: Array<
         Prisma.FineGetPayload<{ include: typeof FINE_INCLUDE }>
-      > = await this.prisma.fine.findMany({
+      > = await this.read.fine.findMany({
         where,
         include: FINE_INCLUDE,
         orderBy: [{ created_at: "desc" }, { id: "desc" }],

@@ -13,7 +13,7 @@ import {
   CursorPaginatedDriver,
 } from "../dtos/driver-dto";
 
-import database from "@/../infra/database";
+import database, { databaseRead } from "@/../infra/database";
 
 import { buildSearchOr } from "@/shared/pagination/search-or";
 import { resolveOrderBy } from "@/shared/pagination/list-query";
@@ -100,6 +100,18 @@ async function driverHistoryOf(
 
 class DriverRepository implements IDriverRepository {
   constructor(private prisma = database) {}
+
+  /**
+   * The heavy reads' bulkhead (plano-escala F3-17), for the export: a pool of
+   * its own, 3 connections and 10 s a statement, so a burst of them waits
+   * among itself instead of taking the connections every other request needs.
+   * A repository built on another client (a test's) reads on that client. A
+   * getter, so a module that mocks infra/database without it only needs it
+   * when one of these reads runs.
+   */
+  private get read(): typeof this.prisma {
+    return this.prisma === database ? databaseRead : this.prisma;
+  }
 
   async createDriver(driverData: CreateDriverProps): Promise<Driver> {
     const driverCreated = await this.prisma.driver.create({
@@ -325,7 +337,7 @@ class DriverRepository implements IDriverRepository {
       // The list's own order: the id tiebreaker keeps the cursor stable.
       const drivers: Array<
         Driver & { branch: { corporate_reason: string } | null }
-      > = await this.prisma.driver.findMany({
+      > = await this.read.driver.findMany({
         where,
         include: { branch: { select: { corporate_reason: true } } },
         orderBy,
@@ -429,7 +441,7 @@ class DriverRepository implements IDriverRepository {
   ): Promise<number> {
     // The stream's own where: a count of something else answered a filter
     // that kept nothing with a header-only file.
-    return this.prisma.driver.count({
+    return this.read.driver.count({
       where: driverListWhere(filters, { withFacets: true }),
     });
   }

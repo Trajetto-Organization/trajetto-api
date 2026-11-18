@@ -1,6 +1,6 @@
 import { Prisma } from "@prisma/client";
 
-import database from "@/../infra/database";
+import database, { databaseRead } from "@/../infra/database";
 import {
   ActivitySummary,
   ActivitySummaryProps,
@@ -85,6 +85,19 @@ function facetConditions(
 
 class ActivityRepository implements IActivityRepository {
   constructor(private prisma = database) {}
+
+  /**
+   * The heavy reads' bulkhead (plano-escala F3-17), for the activities' lists
+   * and summary (the scope they filter by is still read on the primary: it is
+   * who may see what): a pool of its own, 3 connections and 10 s a statement,
+   * so a burst of them waits among itself instead of taking the connections
+   * every other request needs. A repository built on another client (a test's)
+   * reads on that client. A getter, so a module that mocks infra/database
+   * without it only needs it when one of these reads runs.
+   */
+  private get read(): typeof this.prisma {
+    return this.prisma === database ? databaseRead : this.prisma;
+  }
 
   async createActivity(
     activityData: CreateActivityProps,
@@ -400,14 +413,14 @@ class ActivityRepository implements IActivityRepository {
     // The count stops one row past ACTIVITY_COUNT_CAP (F2-19): the pager
     // cannot go deeper, and the rest reads "10.000+".
     const [activities, counted] = await Promise.all([
-      this.prisma.activity.findMany({
+      this.read.activity.findMany({
         skip: (page - 1) * pageSize,
         take: pageSize,
         where: whereCondition,
         include: this.includeFor(currentUserRole),
         orderBy: [{ created_at: order }, { id: order }],
       }),
-      this.prisma.activity.count({
+      this.read.activity.count({
         where: whereCondition,
         take: activityCountTake(),
       }),
@@ -450,7 +463,7 @@ class ActivityRepository implements IActivityRepository {
 
     // One row past the page: its existence is the only reliable way to know
     // whether a "load more" button should be there at all.
-    const activities = await this.prisma.activity.findMany({
+    const activities = await this.read.activity.findMany({
       where: whereCondition,
       take: limit + 1,
       ...(cursor && { cursor: { id: cursor }, skip: 1 }),
@@ -493,12 +506,12 @@ class ActivityRepository implements IActivityRepository {
     });
 
     const [byAction, byType] = await Promise.all([
-      this.prisma.activity.groupBy({
+      this.read.activity.groupBy({
         by: ["action"],
         where: whereCondition,
         _count: { _all: true },
       }),
-      this.prisma.activity.groupBy({
+      this.read.activity.groupBy({
         by: ["type"],
         where: whereCondition,
         _count: { _all: true },
@@ -508,7 +521,7 @@ class ActivityRepository implements IActivityRepository {
     ]);
 
     // System actions (no author) are not a person working.
-    const authors = await this.prisma.activity.groupBy({
+    const authors = await this.read.activity.groupBy({
       by: ["performedBy"],
       where: { AND: [whereCondition, { performedBy: { not: null } }] },
     });

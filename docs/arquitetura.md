@@ -4463,11 +4463,29 @@ sem as variáveis, são no máximo 3 conexões a mais por pool, e só enquanto u
 deles trabalha. O teto vai no `options` depois do da URL (vale o último
 `-c`), e um `socket_timeout` menor que ele sobe para o teto mais 30 s. Quem
 usa cada um é uma lista fechada, na guarda
-`tests/unitaires/database/database-read-guard.test.ts`: o `databaseRead`
+`tests/unitaires/database/database-read-guard.test.ts` (no `databaseRead`,
+arquivo a arquivo e método a método): o `databaseRead`
 nunca num middleware, na admissão de socket, num claim de fila, numa chave
 de idempotência ou num CAS, e o `databaseBatch` só nos crons e no que eles
 chamam. Provas: `tests/unitaires/database/pool-config.test.ts` e
 `tests/E2E/runtime-database-pools.test.ts`.
+
+No `databaseRead` rodam hoje (F3-17), método a método: as exportações
+(entregas, ocorrências, veículos, motoristas, abastecimentos, multas,
+ordens de serviço, checklists e contas a pagar, com as contagens que as
+precedem), as listas do MASTER (empresas, orçamentos e usuários master),
+as listas e o resumo de atividades e as LISTAS de
+`/integration/v1/deliveries` e `/integration/v1/routes`. Ficam no
+primário o `/integration/v1/events` e a leitura de uma entrega ou rota (o
+ERP lê logo depois de gravar), a Torre, o escopo das atividades (quem pode
+ver o quê), a admissão, a sessão, os claims, a idempotência e todo CAS. O
+repositório lê o `databaseRead` por um getter `read`; construído com outro
+cliente (o de um teste, o de uma transação), lê nesse mesmo cliente. Três exportações lentas seguram as 3 conexões do `databaseRead` e
+nenhuma do pool principal (`tests/E2E/pool-pressure.test.ts`); a quarta
+espera a vez entre elas, até o `pool_timeout` da URL, e o pool principal
+segue livre para o resto. Cada statement tem o teto de 10 s do pool: uma
+exportação lê em lotes de 1.000 pela chave do keyset, cada um bem abaixo
+disso.
 
 No `databaseBatch` rodam hoje (F3-18): os expurgos noturnos (o
 `deleteInBatches` dos crons e os repositórios que o expurgo de tokens

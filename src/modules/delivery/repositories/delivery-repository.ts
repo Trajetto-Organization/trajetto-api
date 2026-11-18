@@ -42,7 +42,7 @@ import {
   OccurrenceAuthorizationStatus,
 } from "../dtos/delivery-dto";
 
-import database from "@/../infra/database";
+import database, { databaseRead } from "@/../infra/database";
 
 import { buildSearchOr } from "@/shared/pagination/search-or";
 import { resolveOrderBy } from "@/shared/pagination/list-query";
@@ -263,6 +263,18 @@ function keysetAfter(after: ExportKey) {
 
 class DeliveryRepository implements IDeliveryRepository {
   constructor(private prisma = database) {}
+
+  /**
+   * The heavy reads' bulkhead (plano-escala F3-17), for the exports: a pool of
+   * its own, 3 connections and 10 s a statement, so a burst of them waits
+   * among itself instead of taking the connections every other request needs.
+   * A repository built on another client (a test's) reads on that client. A
+   * getter, so a module that mocks infra/database without it only needs it
+   * when one of these reads runs.
+   */
+  private get read(): typeof this.prisma {
+    return this.prisma === database ? databaseRead : this.prisma;
+  }
 
   async createDelivery(
     deliveryData: CreateDeliveryProps,
@@ -1639,11 +1651,11 @@ class DeliveryRepository implements IDeliveryRepository {
     // shows — the period (and its exact-search exception), the id and the
     // driver searches, and every facet, included.
     const { filters: periodic } = await resolveDeliveryPeriod(
-      this.prisma,
+      this.read,
       filters,
     );
     const where = deliveryListWhere(
-      await narrowDeliverySearch(this.prisma, periodic),
+      await narrowDeliverySearch(this.read, periodic),
     );
 
     const batchSize = 1000;
@@ -1651,7 +1663,7 @@ class DeliveryRepository implements IDeliveryRepository {
     let after: ExportKey | null = null;
 
     while (true) {
-      const batch = await this.prisma.delivery.findMany({
+      const batch = await this.read.delivery.findMany({
         where: after ? { AND: [where, ...keysetAfter(after)] } : where,
         include: {
           shipper: { select: { name: true } },
@@ -1697,7 +1709,7 @@ class DeliveryRepository implements IDeliveryRepository {
     // Resolved once for the whole file: the matched ids do not move between
     // batches any more than the term does.
     const where = occurrenceFeedWhere(
-      await narrowOccurrenceSearch(this.prisma, filters),
+      await narrowOccurrenceSearch(this.read, filters),
       { withTypeFacets: true },
     );
 
@@ -1707,7 +1719,7 @@ class DeliveryRepository implements IDeliveryRepository {
     let after: ExportKey | null = null;
 
     while (true) {
-      const batch = await this.prisma.deliveryOccurrence.findMany({
+      const batch = await this.read.deliveryOccurrence.findMany({
         where: after ? { AND: [where, ...keysetAfter(after)] } : where,
         include: {
           occurrenceType: {

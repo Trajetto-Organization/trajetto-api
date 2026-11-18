@@ -1,4 +1,4 @@
-import database from "@/../infra/database";
+import database, { databaseRead } from "@/../infra/database";
 
 import { forgetRequestCache, remember } from "@/shared/http/request-context";
 import { Prisma } from "@prisma/client";
@@ -64,6 +64,18 @@ function withoutPassword<T extends { password?: unknown }>(
 
 class UserRepository implements IUserRepository {
   constructor(private prisma = database) {}
+
+  /**
+   * The heavy reads' bulkhead (plano-escala F3-17), for the MASTER's list of
+   * master users: a pool of its own, 3 connections and 10 s a statement, so a
+   * burst of them waits among itself instead of taking the connections every
+   * other request needs. A repository built on another client (a test's) reads
+   * on that client. A getter, so a module that mocks infra/database without it
+   * only needs it when one of these reads runs.
+   */
+  private get read(): typeof this.prisma {
+    return this.prisma === database ? databaseRead : this.prisma;
+  }
 
   async createUser({
     email,
@@ -1092,20 +1104,20 @@ class UserRepository implements IUserRepository {
     const where = masterListWhere(filters, { withFacets: true });
 
     const [rows, grouped] = await Promise.all([
-      this.prisma.user.findMany({
+      this.read.user.findMany({
         skip: (page - 1) * pageSize,
         take: pageSize,
         where,
         orderBy: resolveOrderBy(USER_SORT, { sort, order }),
       }),
-      this.prisma.user.groupBy({
+      this.read.user.groupBy({
         by: ["role", "access_revoked", "two_factor_enabled", "profileAccessId"],
         where: masterListWhere(filters, { withFacets: false }),
         _count: { _all: true },
       }),
     ]);
 
-    const emailVerified = await this.prisma.user.count({
+    const emailVerified = await this.read.user.count({
       where: { AND: [where, { email_verified: { not: null } }] },
     });
 

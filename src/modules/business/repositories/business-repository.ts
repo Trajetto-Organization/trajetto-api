@@ -18,7 +18,7 @@ import {
   cityLabel,
 } from "../usecases/list-business/business-list";
 
-import database from "@/../infra/database";
+import database, { databaseRead } from "@/../infra/database";
 
 import { buildSearchOr } from "@/shared/pagination/search-or";
 import { resolveOrderBy } from "@/shared/pagination/list-query";
@@ -27,6 +27,18 @@ import { deleteQueueRowsOfBusiness } from "@/shared/notifications/queue-row-clea
 
 class BusinessRepository implements IBusinessRepository {
   constructor(private prisma = database) {}
+
+  /**
+   * The heavy reads' bulkhead (plano-escala F3-17), for the MASTER's list of
+   * companies: a pool of its own, 3 connections and 10 s a statement, so a
+   * burst of them waits among itself instead of taking the connections every
+   * other request needs. A repository built on another client (a test's) reads
+   * on that client. A getter, so a module that mocks infra/database without it
+   * only needs it when one of these reads runs.
+   */
+  private get read(): typeof this.prisma {
+    return this.prisma === database ? databaseRead : this.prisma;
+  }
 
   async createBusiness(
     businessData: CreateBusinessProps,
@@ -84,13 +96,13 @@ class BusinessRepository implements IBusinessRepository {
     };
 
     const [businessRows, grouped] = await Promise.all([
-      this.prisma.business.findMany({
+      this.read.business.findMany({
         skip: (page - 1) * pageSize,
         take: pageSize,
         where: businessListWhere(filters),
         orderBy: resolveOrderBy(BUSINESS_SORT, { sort, order }),
       }),
-      this.prisma.business.groupBy({
+      this.read.business.groupBy({
         by: ["is_active", "uf"],
         where: businessListWhere(filters, { except: "facets" }),
         _count: { _all: true, erp_code: true },
@@ -101,7 +113,7 @@ class BusinessRepository implements IBusinessRepository {
 
     const [cities, fleets] = await Promise.all([
       // By city AND state: two "São José" (SC and SP) are two places.
-      this.prisma.business.groupBy({
+      this.read.business.groupBy({
         by: ["city", "uf"],
         where: businessListWhere(filters),
         _count: { _all: true },
@@ -114,7 +126,7 @@ class BusinessRepository implements IBusinessRepository {
       // platform (a sequential scan of 10.000 vehicles for a page of ten in
       // tests/E2E/query-plans.test.ts), which grows with every carrier.
       pageIds.length > 0
-        ? this.prisma.vehicle.groupBy({
+        ? this.read.vehicle.groupBy({
             by: ["businessId"],
             where: {
               businessId: { in: pageIds },

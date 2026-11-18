@@ -1,6 +1,6 @@
 import { Prisma } from "@prisma/client";
 
-import database from "@/../infra/database";
+import database, { databaseRead } from "@/../infra/database";
 import { IVehicleRepository } from "./IVehicle-repository";
 
 import {
@@ -111,6 +111,18 @@ async function routeDerivedStatus(
 
 class VehicleRepository implements IVehicleRepository {
   constructor(private prisma = database) {}
+
+  /**
+   * The heavy reads' bulkhead (plano-escala F3-17), for the export: a pool of
+   * its own, 3 connections and 10 s a statement, so a burst of them waits
+   * among itself instead of taking the connections every other request needs.
+   * A repository built on another client (a test's) reads on that client. A
+   * getter, so a module that mocks infra/database without it only needs it
+   * when one of these reads runs.
+   */
+  private get read(): typeof this.prisma {
+    return this.prisma === database ? databaseRead : this.prisma;
+  }
 
   async createVehicle(vehicleData: CreateVehicleProps): Promise<Vehicle> {
     const vehicleCreated = await this.prisma.vehicle.create({
@@ -447,7 +459,7 @@ class VehicleRepository implements IVehicleRepository {
           driver: { name: string; cpf: string } | null;
           branch: { corporate_reason: string } | null;
         }
-      > = await this.prisma.vehicle.findMany({
+      > = await this.read.vehicle.findMany({
         where: exportBatchWhere(whereCondition, after),
         include: {
           vehicleType: { select: { description: true } },
@@ -502,7 +514,7 @@ class VehicleRepository implements IVehicleRepository {
   }
 
   async countVehiclesForExport(filters: VehicleListFilters): Promise<number> {
-    return this.prisma.vehicle.count({ where: vehicleListWhere(filters) });
+    return this.read.vehicle.count({ where: vehicleListWhere(filters) });
   }
 
   async searchVehicleWithCursor({

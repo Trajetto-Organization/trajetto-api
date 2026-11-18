@@ -15,7 +15,7 @@ import {
   CursorPaginatedServiceOrderDetail,
 } from "../dtos/service-order-dto";
 
-import database from "@/../infra/database";
+import database, { databaseRead } from "@/../infra/database";
 import { Prisma } from "@prisma/client";
 
 import { buildSearchOr } from "@/shared/pagination/search-or";
@@ -79,6 +79,18 @@ const SERVICE_ORDER_DETAIL_SELECT = {
 
 class ServiceOrderRepository implements IServiceOrderRepository {
   constructor(private prisma = database) {}
+
+  /**
+   * The heavy reads' bulkhead (plano-escala F3-17), for the export: a pool of
+   * its own, 3 connections and 10 s a statement, so a burst of them waits
+   * among itself instead of taking the connections every other request needs.
+   * A repository built on another client (a test's) reads on that client. A
+   * getter, so a module that mocks infra/database without it only needs it
+   * when one of these reads runs.
+   */
+  private get read(): typeof this.prisma {
+    return this.prisma === database ? databaseRead : this.prisma;
+  }
 
   // `tx` lets the use case create the order and its outbox event atomically.
   async createServiceOrder(
@@ -490,7 +502,7 @@ class ServiceOrderRepository implements IServiceOrderRepository {
 
     // Keyset batches in creation order (export-keyset.ts).
     while (true) {
-      const serviceOrders: any = await this.prisma.serviceOrder.findMany({
+      const serviceOrders: any = await this.read.serviceOrder.findMany({
         where: exportBatchWhere(whereCondition, after),
         include: {
           business: { select: { corporate_reason: true } },
@@ -562,7 +574,7 @@ class ServiceOrderRepository implements IServiceOrderRepository {
   async countServiceOrderForExport(
     query: ServiceOrderListQuery,
   ): Promise<number> {
-    return this.prisma.serviceOrder.count({
+    return this.read.serviceOrder.count({
       where: serviceOrderListWhere(query),
     });
   }

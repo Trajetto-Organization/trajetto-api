@@ -1,4 +1,4 @@
-import database from "@/../infra/database";
+import database, { databaseRead } from "@/../infra/database";
 
 import { Decimal } from "@prisma/client/runtime/client";
 import { Prisma } from "@prisma/client";
@@ -178,6 +178,18 @@ async function refuelsNear(
 
 class FuelRepository implements IFuelRepository {
   constructor(private prisma = database) {}
+
+  /**
+   * The heavy reads' bulkhead (plano-escala F3-17), for the export: a pool of
+   * its own, 3 connections and 10 s a statement, so a burst of them waits
+   * among itself instead of taking the connections every other request needs.
+   * A repository built on another client (a test's) reads on that client. A
+   * getter, so a module that mocks infra/database without it only needs it
+   * when one of these reads runs.
+   */
+  private get read(): typeof this.prisma {
+    return this.prisma === database ? databaseRead : this.prisma;
+  }
 
   async createFuel(fuelData: CreateFuelProps): Promise<Fuel> {
     // Calculate total amount if not provided
@@ -742,7 +754,7 @@ class FuelRepository implements IFuelRepository {
     // Keyset batches in creation order (export-keyset.ts): a large export
     // never pays for a growing OFFSET, nor for a sub-selected cursor.
     while (true) {
-      const fuels: any = await this.prisma.fuel.findMany({
+      const fuels: any = await this.read.fuel.findMany({
         where: exportBatchWhere(whereCondition, after),
         include: {
           branch: {
@@ -939,7 +951,7 @@ class FuelRepository implements IFuelRepository {
   }
 
   async countFuelForExport(filters: FuelListFilters): Promise<number> {
-    return this.prisma.fuel.count({
+    return this.read.fuel.count({
       where: fuelListWhere(filters, { withFacets: true }),
     });
   }

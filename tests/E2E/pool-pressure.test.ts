@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto";
+
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { PrismaClient } from "@prisma/client";
@@ -21,6 +23,8 @@ const HOLD_SECONDS = 3;
 
 let database: PrismaClient;
 let observer: PrismaClient;
+let databasePool: () => { waitingCount: number } | null;
+let databaseRead: PrismaClient;
 
 beforeAll(async () => {
   const url = new URL(process.env.DATABASE_URL as string);
@@ -37,11 +41,16 @@ beforeAll(async () => {
 
   process.env.DATABASE_URL = url.toString();
 
-  ({ default: database } = await import("@/../infra/database"));
+  ({
+    default: database,
+    databasePool,
+    databaseRead,
+  } = await import("@/../infra/database"));
 });
 
 afterAll(async () => {
   await database.$disconnect();
+  await databaseRead.$disconnect();
   await observer.$disconnect();
 });
 
@@ -115,5 +124,94 @@ describe("a transaction on a busy pool", () => {
     } finally {
       await bare.$disconnect();
     }
+  }, 30_000);
+});
+
+describe("three slow exports", () => {
+  /**
+   * The heavy reads' bulkhead (plano-escala F3-17): an export reads through
+   * databaseRead, a pool of its own, so three of them stuck on a slow table
+   * hold its three connections and none of the main pool's — the one every
+   * other request, the driver's proof included, needs. Before, three
+   * exports took three connections of the pool of ten, and a burst of them
+   * left the requests waiting their turn.
+   *
+   * The exports are slowed down for real: an observer's transaction holds
+   * the vehicle table, so each export's first batch waits on the lock with
+   * its connection in hand, as an export stuck on a slow plan would.
+   */
+  it("wait on the bulkhead, not on the main pool", async () => {
+    const { VehicleRepository } =
+      await import("@/modules/vehicle/repositories/vehicle-repository");
+    const repository = new VehicleRepository();
+
+    let release: () => void = () => undefined;
+    let locked: () => void = () => undefined;
+    const released = new Promise<void>((resolve) => (release = resolve));
+    const isLocked = new Promise<void>((resolve) => (locked = resolve));
+
+    const holder = observer.$transaction(
+      async (tx) => {
+        await tx.$executeRaw`LOCK TABLE "vehicle" IN ACCESS EXCLUSIVE MODE`;
+        locked();
+        await released;
+      },
+      { maxWait: 5_000, timeout: 30_000 },
+    );
+
+    await isLocked;
+
+    const drain = async () => {
+      let rows = 0;
+
+      for await (const _row of repository.streamVehiclesForExport({
+        businessId: randomUUID(),
+      })) {
+        rows += 1;
+      }
+
+      return rows;
+    };
+
+    const exports = [drain(), drain(), drain()];
+
+    try {
+      // Postgres itself reports the three exports waiting on the lock. The
+      // main pool has two connections: three waiting is already proof that
+      // they are not on it.
+      let waiting = 0;
+
+      for (let attempt = 0; attempt < 100 && waiting < 3; attempt += 1) {
+        const [row] = await observer.$queryRaw<{ waiting: number }[]>`
+          SELECT count(*)::int AS waiting
+          FROM pg_stat_activity
+          WHERE datname = current_database()
+            AND wait_event_type = 'Lock'
+            AND query LIKE '%"vehicle"%'
+        `;
+
+        waiting = row.waiting;
+
+        if (waiting < 3) await new Promise((r) => setTimeout(r, 50));
+      }
+
+      expect(waiting).toBe(3);
+
+      // The main pool answers at once, a transaction included, with
+      // nobody waiting for one of its connections.
+      const started = Date.now();
+
+      await database.$queryRaw`SELECT 1 AS ok`;
+      await database.$transaction(async (tx) => tx.$queryRaw`SELECT 1 AS ok`);
+
+      expect(Date.now() - started).toBeLessThan(1_000);
+      expect(databasePool()?.waitingCount ?? 0).toBe(0);
+    } finally {
+      release();
+      await holder;
+    }
+
+    // And the exports finish once the table is free: nobody to export.
+    await expect(Promise.all(exports)).resolves.toEqual([0, 0, 0]);
   }, 30_000);
 });
