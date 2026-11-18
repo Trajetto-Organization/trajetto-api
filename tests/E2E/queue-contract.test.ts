@@ -6,6 +6,7 @@ import { v7 as uuidV7 } from "uuid";
 
 import { createPrismaClient } from "@/shared/database/database-client";
 import { PROCESS_CAPABILITIES } from "@/shared/health/capabilities";
+import { deliveryIdFor } from "@/shared/notifications/delivery-id";
 
 import { runPostDeployStep } from "./support/post-deploy-step";
 import { unpartitionQueues } from "./support/queue-partitions";
@@ -185,6 +186,65 @@ describe("a serving database", () => {
       },
       { timeout: 15_000, interval: 100 },
     );
+  });
+
+  // The previous image commits an event's deliveries, under ids of its
+  // own, even when its PUBLISHED mark lost the lease; the event goes back
+  // to PENDING if the new owner fails before inserting. This image expands
+  // it again under deliveryIdFor's ids, and only the (event, recipient,
+  // channel) uniques keep each recipient from a second message.
+  it("keeps them while an event to expand has a delivery the previous image wrote under its own id", async () => {
+    const user = await prisma.user.create({
+      data: {
+        name: "Destinatária das Filas",
+        email: `queues-user-${randomUUID()}@example.com`,
+        password: "nao-usado",
+        role: "MASTER",
+      },
+    });
+    const twin = await prisma.notificationDelivery.create({
+      data: {
+        id: uuidV7(),
+        outboxEventId: legacyEventId,
+        userId: user.id,
+        channel: "EMAIL",
+      },
+    });
+
+    expect(await runPostDeployStep(STEP)).toMatchObject({
+      status: "pending",
+      detail: expect.stringContaining(legacyEventId),
+    });
+
+    // A FAILED one too: a replay puts it back to PENDING.
+    await prisma.domainOutboxEvent.update({
+      where: { id: legacyEventId },
+      data: { status: "FAILED" },
+    });
+
+    expect(await runPostDeployStep(STEP)).toMatchObject({
+      status: "pending",
+      detail: expect.stringContaining("outro id"),
+    });
+    expect(await constraints()).toHaveLength(10);
+
+    // Under the id this image computes, the same delivery holds nothing
+    // back: the next test drops them with the event still to expand.
+    const event = await prisma.domainOutboxEvent.update({
+      where: { id: legacyEventId },
+      data: { status: "PENDING" },
+      select: { id: true, created_at: true },
+    });
+
+    await prisma.notificationDelivery.delete({ where: { id: twin.id } });
+    await prisma.notificationDelivery.create({
+      data: {
+        id: deliveryIdFor(event, { userId: user.id }, "EMAIL"),
+        outboxEventId: legacyEventId,
+        userId: user.id,
+        channel: "EMAIL",
+      },
+    });
   });
 
   it("goes one drop at a time, leaving what did not get its lock for the next release", async () => {

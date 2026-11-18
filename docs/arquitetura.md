@@ -3519,8 +3519,12 @@ essas relações: as leituras que passavam por elas buscam a outra tabela
 pela chave (o monitor de webhooks e o reenvio leem o endpoint à parte). Num
 banco sem empresa, a migration `20261118120000_queue_contract` tira tudo; num
 banco que serve, o passo `prisma/post-deploy/05-queue-contract.sql` espera
-todo processo vivo anunciar `queue-partition-agnostic-v1`, copia de novo
-para `outbox_event_key` a chave de todo evento sem a sua (o que a imagem
+todo processo vivo anunciar `queue-partition-agnostic-v1` e nenhum evento
+ainda não publicado ter entrega gravada pela imagem anterior com outro id
+(ela grava as entregas mesmo quando perde a posse do evento, e esta imagem
+o expandiria de novo com os ids do `deliveryIdFor`, que não colidem com os
+dela: só os uniques evitariam a mensagem em dobro), copia de novo para
+`outbox_event_key` a chave de todo evento sem a sua (o que a imagem
 anterior gravou no rolling) e tira um de cada vez, cada um na sua
 transação, deixando para o próximo release o que não pegou o lock. Desde o
 `applied`, o piso de rollback é esta release
