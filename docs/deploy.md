@@ -4266,6 +4266,30 @@ e o adapter: o que o worker emite chega ao socket conectado na API
 `-read`, `-batch` e `-probe` nos laterais e na readiness (um
 `application_name` na URL ganha).
 
+**Quem está vivo (`process_heartbeat`, F3-03).** Todo processo, de qualquer
+papel, mantém uma linha na tabela `process_heartbeat`: `replica` (a mesma
+do `ops_sample`), `role`, `app_env`, `build_commit`, `node_hostname` (com
+`SWARM_NODE_HOSTNAME`), `queues`, `cron`, `sockets`, `started_at`,
+`updated_at` e `config_fingerprint`. A linha é gravada no boot e a cada
+30 s ± 5 s com o `now()` do banco, some no SIGTERM e, se a escrita falhar,
+o processo só avisa (`process heartbeat could not be written`, uma vez por
+queda) e segue atendendo. Uma linha sem batida há 90 s é de um processo
+morto sem SIGTERM; o `purge-ops-series` a apaga depois de 7 dias. A
+impressão é o sha256 (16 hex) de `JWT_SECRET`, `JWT_SECRET_REFRESH_TOKEN`,
+`SOCKET_ADAPTER_KEY`, `WEBHOOK_SECRETS_KEY`, `APP_ENV`, `R2_BUCKET_NAME`,
+`MIN_MOBILE_CONTRACT`, da identidade do banco (o `system_identifier` do
+`cluster_epoch` com o `current_database()`) e do `run_id` do Redis dos
+contadores; nunca um valor, e nunca o host: o mesmo banco visto direto ou
+pelo PgBouncer, por qualquer login, dá a mesma impressão. Ela é recalculada
+a cada batida (um Redis que reinicia muda o `run_id`, e todos convergem em
+30 s) e fica nula até o banco e o Redis responderem uma vez. Para ver:
+
+```sql
+SELECT replica, role, app_env, build_commit, config_fingerprint, queues,
+       cron, sockets, now() - updated_at AS desde
+FROM process_heartbeat ORDER BY role, replica;
+```
+
 - **Tempo real com várias réplicas**: o evento emitido numa réplica chega ao
   cliente conectado em outra pelo pub/sub do Redis
   (`@socket.io/redis-adapter`). Todas as réplicas precisam do mesmo
@@ -4773,7 +4797,9 @@ não pré-carrega a biblioteca (a produção até a imagem nova do Postgres), o
 cron não faz nada e avisa `query stats snapshot skipped`, sem falhar. O
 texto das consultas pode ter literais: fica só no banco, e a leitura é pelo
 `psql`. As linhas ficam `PGSS_SNAPSHOT_RETENTION_DAYS` (30) dias: o mesmo
-`purge-ops-series` das 04:40 UTC as apaga, antes das do `ops_sample`.
+`purge-ops-series` das 04:40 UTC as apaga, antes das do `ops_sample`
+(e, antes de tudo, as linhas do `process_heartbeat` sem batida há 7
+dias).
 
 ```sql
 -- as 10 consultas que mais custaram nas últimas 24 h, por role

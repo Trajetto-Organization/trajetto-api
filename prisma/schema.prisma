@@ -1736,6 +1736,46 @@ model OpsSample {
   @@map("ops_sample")
 }
 
+/// Every process alive, one row each (plano-escala F3-03): its role, the
+/// queues it claims, whether it runs the cron and takes sockets, its build,
+/// its node, its environment and the fingerprint of the configuration that
+/// must not diverge between processes. UPSERTed every 30 s (± 5) with the
+/// database's now(), deleted on SIGTERM, purged after 7 days without a
+/// beat. The wake (F3-04) counts the live consumers of a queue here; the
+/// deploy's check reads the commits and the fingerprints. Read and written
+/// by raw SQL only (src/shared/health/process-heartbeat.ts).
+model ProcessHeartbeat {
+  /// The ops_sample's replica: the container's hostname, plus `/<slot>`.
+  replica String @id
+
+  /// PROCESS_ROLE: all, api, worker, scheduler, realtime...
+  role String
+
+  /// APP_ENV of the process: a row of another environment in this
+  /// database is a process pointed at the wrong one (F3-34).
+  app_env String
+
+  build_commit String?
+
+  /// sha256 (16 hex) of the settings and identities every process must
+  /// share; null until the database's and Redis's identities were read.
+  config_fingerprint String?
+
+  /// SWARM_NODE_HOSTNAME (F4-50); null without it.
+  node_hostname String?
+
+  /// The queues it claims (WORKER_QUEUES, resolved).
+  queues  String[] @default([])
+  cron    Boolean
+  sockets Boolean
+
+  started_at DateTime
+  updated_at DateTime @default(now())
+
+  @@index([updated_at])
+  @@map("process_heartbeat")
+}
+
 /// The hourly cost of the top statements (plano-escala F1-12): the
 /// difference of pg_stat_statements' cumulative counters between two hourly
 /// readings, for the 200 most expensive statements of the hour, by role.

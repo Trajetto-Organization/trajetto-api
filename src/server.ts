@@ -38,6 +38,10 @@ import {
   registerSampleSection,
 } from "./shared/health/ops-sample";
 import { httpMetrics } from "./shared/health/http-metrics";
+import {
+  startRuntimeProcessHeartbeat,
+  type ProcessHeartbeat,
+} from "./shared/health/process-heartbeat";
 import { shedMetrics } from "./shared/http/load-shedding";
 import { panelBudgetMetrics } from "./shared/integration/panel-budget";
 import {
@@ -66,6 +70,13 @@ const log = logger.child({ component: "process" });
  * (GAP3-10). Started once the listener is up.
  */
 let stopRuntimeMetrics: (() => void) | null = null;
+
+/**
+ * This process's row in process_heartbeat (plano-escala F3-03): its role,
+ * queues, cron, sockets, build and configuration fingerprint, every 30 s.
+ * Started once the listener is up; its row goes on SIGTERM.
+ */
+let processHeartbeat: ProcessHeartbeat | null = null;
 
 /**
  * A second SIGTERM (Swarm sends one, then SIGKILL) must not restart the
@@ -102,6 +113,12 @@ async function gracefulShutdown() {
 
   stopRuntimeMetrics?.();
   stopRuntimeMetrics = null;
+
+  // The row goes first, in parallel with the drain: a process on its way
+  // out stops counting as a queue's consumer now, not 90 s later, so the
+  // others wake one that stays (F3-03). Bounded and fail-open on its own.
+  const heartbeatGone = processHeartbeat?.stop() ?? Promise.resolve();
+  processHeartbeat = null;
 
   const startedAt = Date.now();
 
@@ -148,6 +165,8 @@ async function gracefulShutdown() {
     });
 
     clearTimeout(watchdog);
+
+    await heartbeatGone;
 
     log.info({ durationMs: Date.now() - startedAt }, "shutdown complete");
     process.exit(0);
@@ -307,6 +326,10 @@ async function bootstrap() {
         stopMetrics();
         sampler.stop();
       };
+
+      // Who this process is, for the others and for the deploy's check:
+      // every role writes it, the HTTP-only ones included (F3-03).
+      processHeartbeat = startRuntimeProcessHeartbeat();
     },
 
     // Installs the Redis adapter before the first socket can connect. It no

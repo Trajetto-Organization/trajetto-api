@@ -4,6 +4,7 @@ import { databaseBatch } from "@/../infra/database";
 import { env } from "@/env";
 import { throwIfPartial } from "@/shared/errors/partial-run-error";
 import { logger } from "@/shared/logging/logger";
+import { PROCESS_HEARTBEAT_RETENTION_DAYS } from "@/shared/health/process-heartbeat";
 import { CronJobDefinition } from "@/shared/services/cron-scheduler-service";
 
 import {
@@ -35,6 +36,12 @@ import {
  * scope and UTC day, read only for today, kept PROVIDER_QUOTA_RETENTION_DAYS
  * for a look back at a month's consumption. A few rows a day (one per
  * company that searched), so one DELETE, first: nothing writes a past day.
+ *
+ * And process_heartbeat's rows without a beat for 7 days (plano-escala
+ * F3-03): a process that died without its SIGTERM leaves its row, out of
+ * the live window after 90 s but still read by whoever looks at the table.
+ * A handful of rows; a live process rewrites its own every 30 s, so a
+ * stale one is never a process that still runs.
  */
 const PURGE_OPS_SERIES_JOB = "purge-ops-series";
 
@@ -74,6 +81,11 @@ async function purgeOpsSeries({
     DELETE FROM "provider_quota_day" WHERE "day" < ${quotaCutoff}::date
   `;
 
+  const processHeartbeat = await databaseBatch.$executeRaw`
+    DELETE FROM "process_heartbeat"
+    WHERE "updated_at" < ${new Date(now.getTime() - PROCESS_HEARTBEAT_RETENTION_DAYS * DAY_MS)}
+  `;
+
   const snapshotCutoff = new Date(
     now.getTime() - env.PGSS_SNAPSHOT_RETENTION_DAYS * DAY_MS,
   );
@@ -99,6 +111,7 @@ async function purgeOpsSeries({
 
   return {
     provider_quota_day: { deleted: providerQuotaDay, stoppedEarly: false },
+    process_heartbeat: { deleted: processHeartbeat, stoppedEarly: false },
     pgss_snapshot: pgssSnapshot,
     ops_sample: opsSample,
   };
@@ -114,11 +127,13 @@ async function runOpsSeriesPurge(
     {
       deleted: {
         provider_quota_day: results.provider_quota_day.deleted,
+        process_heartbeat: results.process_heartbeat.deleted,
         pgss_snapshot: results.pgss_snapshot.deleted,
         ops_sample: results.ops_sample.deleted,
       },
       retentionDays: {
         provider_quota_day: PROVIDER_QUOTA_RETENTION_DAYS,
+        process_heartbeat: PROCESS_HEARTBEAT_RETENTION_DAYS,
         pgss_snapshot: env.PGSS_SNAPSHOT_RETENTION_DAYS,
         ops_sample: env.OPS_SAMPLE_RETENTION_DAYS,
       },
