@@ -3529,10 +3529,14 @@ transação, deixando para o próximo release o que não pegou o lock. Desde o
 **As filas particionadas por dia (F5-09).** Depois da contração, o passo
 `prisma/post-deploy/10-queue-partition-swap.sql` troca cada fila comum por
 uma tabela particionada por `RANGE ("id")`, um dia UTC por partição, com a
-tabela de hoje anexada como `<fila>_legacy` (`FROM (MINVALUE)` até a próxima
-meia-noite) e uma semana à frente; o job `partition-maintenance` mantém a
-folga dali em diante. A chave primária e os índices do pai têm os nomes de
-sempre, e toda consulta passa pelo pai. Todo id das filas é um v7, então uma
+tabela de hoje anexada como `<fila>_legacy` (`FROM (MINVALUE)` até a
+meia-noite de depois de amanhã) e uma semana a partir dali; o job
+`partition-maintenance` mantém a folga dali em diante. A tabela só fica sob
+`ACCESS EXCLUSIVE` por instantes: uma guarda `CHECK ("id" < corte) NOT VALID`
+entra antes, é validada sem travar as escritas e prova o limite para o
+`ATTACH` não ler nada sob a trava (o dia de folga do corte é o da guarda).
+A chave primária e os índices do pai têm os nomes de sempre, e toda
+consulta passa pelo pai. Todo id das filas é um v7, então uma
 linha cai no dia do seu id, e a entrega e o recibo no dia do seu evento. A
 troca espera a capability, como a contração, deixa comum a fila com mais de
 2 M linhas (pede uma janela) e tem volta à mão

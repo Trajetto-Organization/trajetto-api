@@ -37,14 +37,43 @@ etapa de release roda em todo deploy e que não faz nada enquanto não pode:
    depois de o `05-queue-contract.sql` (F5-06) ter tirado as FKs e os
    uniques. Até lá, `pending`, e o deploy seguinte (ou um _Run workflow_ com
    `force_release`) roda de novo.
-2. **A tabela de hoje vira a partição legada.** Numa transação por fila, sob
-   o `ACCESS EXCLUSIVE` dela: os índices da tabela comum ganham o sufixo
-   `_legacy` e ela vira `<fila>_legacy`; nasce o pai particionado com as
-   mesmas colunas, padrões e CHECKs, a chave primária e cada índice com o
-   nome original; um `CHECK ("id" < corte)` validado prova que a legada cabe
-   abaixo do corte (a única varredura da troca), e o `ATTACH` como a
-   partição de `MINVALUE` até o corte anexa os índices dela aos do pai, sem
-   reconstruir nenhum. O corte é a próxima meia-noite UTC.
+2. **A tabela de hoje vira a partição legada, sem ser lida sob a trava.**
+   Toda gravação numa fila acontece dentro de uma transação de negócio (o
+   `publish(tx)` da mudança de status, do comprovante), que segura as
+   próprias linhas enquanto espera: uma trava `ACCESS EXCLUSIVE` mantida
+   durante a leitura da tabela inteira seguraria toda escrita que publica
+   um evento. Por isso a troca de cada fila são três transações:
+   - **A, a guarda.** Sob o `ACCESS EXCLUSIVE`, por um instante: o maior id
+     (pelo índice da chave primária, sem ler a tabela) precisa estar abaixo
+     do corte, e entra o `CHECK ("id" < corte) NOT VALID`
+     (`<fila>_swap_cutoff`). Dali em diante toda linha nova é conferida
+     contra ele.
+   - **B, a validação.** O `VALIDATE CONSTRAINT` da guarda, a única leitura
+     da tabela inteira, sob `SHARE UPDATE EXCLUSIVE`: leituras e escritas
+     seguem; só um `VACUUM` ou outra DDL da mesma tabela espera.
+   - **C, a troca.** Sob o `ACCESS EXCLUSIVE` de novo, só catálogo: os
+     índices da tabela comum ganham o sufixo `_legacy` e ela vira
+     `<fila>_legacy`; nasce o pai particionado com as mesmas colunas,
+     padrões e CHECKs (menos a guarda, que o `LIKE` copia e o pai tira na
+     hora), a chave primária e cada índice com o nome original; o `ATTACH`
+     como a partição de `MINVALUE` até o corte não lê nada (a guarda
+     validada prova o limite) e anexa os índices dela aos do pai, sem
+     reconstruir nenhum; depois a guarda sai.
+
+   O corte é a primeira meia-noite UTC a pelo menos um dia de distância (a
+   que começa depois de amanhã): o que for gravado até lá cai na partição
+   legada. O dia é a folga da guarda: entre A e C toda gravação é conferida
+   contra ela, e um corte que chegasse antes recusaria as linhas do dia
+   novo. Uma troca que não termina (o lock que não veio, um id no corte,
+   um erro) tira a sua guarda antes de o passo acabar, e o passo tira
+   também a de uma fila que deixa em paz. A guarda que o passo não
+   conseguiu tirar (o lock dela também não veio), ou a de uma execução que
+   morreu entre A e C, tem pelo menos aquele dia: a próxima execução a
+   tira, ou continua dela se o corte ainda é o que escolheria. Até lá o
+   passo fica `pending` e diz a fila e o corte a partir do qual ela
+   recusaria toda gravação (o que fazer está em
+   [deploy.md](../deploy.md#contrações-que-esperam-a-capability-onda-10)).
+
 3. **Os dias à frente.** Uma semana de partições a partir do corte, com os
    parâmetros de armazenamento que a tabela comum tinha (o pai particionado
    não os aceita), os alvos de estatística das colunas, os grants da tabela
@@ -55,14 +84,16 @@ etapa de release roda em todo deploy e que não faz nada enquanto não pode:
 Fica de fora, com o motivo no estado do passo:
 
 - **Um lock que não veio** em 3 s (três tentativas): `pending`; enquanto o
-  passo espera o lock, toda consulta nova àquela fila espera atrás dele, e
-  essa espera é a pausa que a fila sente.
+  passo espera um `ACCESS EXCLUSIVE` (A e C), toda consulta nova àquela
+  fila espera atrás dele, e essa espera é a pausa que a fila sente; a
+  espera da validação (B) não segura ninguém.
 - **Um id no corte ou depois** (um v4 escrito à mão, um relógio adiantado):
   a fila fica comum, `pending`, até o expurgo levá-lo ou o dia chegar.
-- **Mais de 2 M linhas** (`pg_class.reltuples`): `skipped`. A validação do
-  CHECK lê a tabela inteira sob o lock, e com milhões de linhas essa pausa
-  passa do que um deploy pode impor. A troca dessa tabela pede uma janela
-  própria (abaixo).
+- **Mais de 2 M linhas** (`pg_class.reltuples`): `skipped`. A validação da
+  guarda lê a tabela inteira; sem trava sobre as escritas, mas com o disco
+  do servidor compartilhado e o tempo da etapa de release, e com milhões de
+  linhas isso passa do que um deploy deve impor. A troca dessa tabela pede
+  uma janela própria (abaixo).
 - **Um erro qualquer** numa fila desfaz só a troca dela e deixa o passo
   `pending` com a mensagem: a troca nunca reprova um deploy.
 

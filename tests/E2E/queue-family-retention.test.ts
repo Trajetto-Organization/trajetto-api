@@ -15,7 +15,7 @@ import {
 import { receiptIdFor } from "@/shared/notifications/receipt-id";
 import { uuid7Floor } from "@/shared/time/uuid7-floor";
 
-import { unpartitionQueues } from "./support/queue-partitions";
+import { swapCutoff, unpartitionQueues } from "./support/queue-partitions";
 
 /**
  * The notification family leaves by day (plano-escala F5-11), on a real
@@ -35,13 +35,13 @@ import { unpartitionQueues } from "./support/queue-partitions";
 const prisma = createPrismaClient();
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-const startOfUtcDay = (ms: number) => Math.floor(ms / DAY_MS) * DAY_MS;
-const TOMORROW = startOfUtcDay(Date.now()) + DAY_MS;
+/** The swap's first day: the first partition after the legacy one. */
+const FIRST_DAY = swapCutoff("day").getTime();
 const stamp = (ms: number) =>
   new Date(ms).toISOString().slice(0, 10).replace(/-/g, "");
 
 /** Forty days on: the week the swap made is past the 30 days. */
-const LATER = new Date(TOMORROW + 40 * DAY_MS + 4 * 3_600_000);
+const LATER = new Date(FIRST_DAY + 40 * DAY_MS + 4 * 3_600_000);
 
 let userId: string;
 let businessId: string;
@@ -159,10 +159,10 @@ beforeAll(async () => {
   });
   await delivery("legacyDelivery", legacy, "IN_APP", "DELIVERED");
 
-  // Tomorrow's day: a published event with a failed e-mail and its
+  // The swap's first day: a published event with a failed e-mail and its
   // receipt, a failed event whose e-mail went out, and one published long
   // ago (the purge in batches must leave it to the DROP).
-  const published = await event("published", TOMORROW + 3_600_000, {
+  const published = await event("published", FIRST_DAY + 3_600_000, {
     status: "PUBLISHED",
     processedAt: new Date(),
   });
@@ -182,19 +182,19 @@ beforeAll(async () => {
   });
   ids.receipt = receiptIdFor(receipt);
 
-  const gaveUp = await event("failedEvent", TOMORROW + 7_200_000, {
+  const gaveUp = await event("failedEvent", FIRST_DAY + 7_200_000, {
     status: "FAILED",
   });
   await delivery("gaveUpEmail", gaveUp, "EMAIL", "DELIVERED");
 
-  const longAgo = await event("dayPublishedLongAgo", TOMORROW + 9_000_000, {
+  const longAgo = await event("dayPublishedLongAgo", FIRST_DAY + 9_000_000, {
     status: "PUBLISHED",
     processedAt: old,
   });
   await delivery("longAgoDelivery", longAgo, "IN_APP", "DELIVERED");
 
   // The day after: an event still waiting to be expanded.
-  const waiting = await event("waiting", TOMORROW + DAY_MS + 3_600_000, {
+  const waiting = await event("waiting", FIRST_DAY + DAY_MS + 3_600_000, {
     status: "PENDING",
   });
   await delivery("waitingEmail", waiting, "EMAIL", "PENDING");
@@ -203,7 +203,7 @@ beforeAll(async () => {
 describe("the purge in batches on the partitioned family", () => {
   it("reaches only the legacy partitions, leaving the days to the DROP", async () => {
     expect(await notificationFamilyLegacyBound(prisma)).toBe(
-      uuid7Floor(TOMORROW),
+      uuid7Floor(FIRST_DAY),
     );
 
     await cleanupNotificationPipelineJob.handler();
@@ -236,7 +236,7 @@ describe("a day of the family past the retention", () => {
         Array<{ legacy: boolean; day: boolean }>
       >`
         SELECT to_regclass(quote_ident(${`${table}_legacy`})) IS NOT NULL AS legacy,
-               to_regclass(quote_ident(${`${table}_${stamp(TOMORROW)}`})) IS NOT NULL AS day
+               to_regclass(quote_ident(${`${table}_${stamp(FIRST_DAY)}`})) IS NOT NULL AS day
       `;
 
       expect(row, table).toEqual({ legacy: false, day: false });
@@ -291,7 +291,7 @@ describe("a day of the family past the retention", () => {
   });
 
   it("keeps the day with a row in flight, and says it is stuck after the grace", async () => {
-    const day = stamp(TOMORROW + DAY_MS);
+    const day = stamp(FIRST_DAY + DAY_MS);
 
     for (const table of [
       "domain_outbox_event",
@@ -316,7 +316,7 @@ describe("a day of the family past the retention", () => {
 
     // The batches' bound moved up to the day that is left.
     expect(await notificationFamilyLegacyBound(prisma)).toBe(
-      uuid7Floor(TOMORROW + DAY_MS),
+      uuid7Floor(FIRST_DAY + DAY_MS),
     );
   });
 
@@ -331,9 +331,9 @@ describe("a day of the family past the retention", () => {
 
     expect(
       await gate.mayDrop("domain_outbox_event", {
-        name: `domain_outbox_event_${stamp(TOMORROW + 2 * DAY_MS)}`,
-        from: new Date(TOMORROW + 2 * DAY_MS),
-        to: new Date(TOMORROW + 3 * DAY_MS),
+        name: `domain_outbox_event_${stamp(FIRST_DAY + 2 * DAY_MS)}`,
+        from: new Date(FIRST_DAY + 2 * DAY_MS),
+        to: new Date(FIRST_DAY + 3 * DAY_MS),
       }),
     ).toBe(false);
     expect(await notificationFamilyLegacyBound(prisma)).toBeNull();

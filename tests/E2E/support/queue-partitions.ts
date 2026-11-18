@@ -15,6 +15,35 @@ const QUEUE_TABLES = [
 
 type QueueTable = (typeof QUEUE_TABLES)[number];
 
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Where the swap cuts a table (prisma/post-deploy/10-queue-partition-swap.sql
+ * for the queues' days, 20-notification-partition-swap.sql for the bell's
+ * months): the first UTC boundary of the grain at least a day away. Every
+ * row below it stays in the legacy partition, and the partitions the swap
+ * makes start there. The day is the margin of the guard the swap validates
+ * before it takes the lock (CHECK ("id" < cutoff)): an INSERT past the
+ * cutoff would be refused while the guard is on.
+ */
+function swapCutoff(grain: "day" | "month", now = Date.now()): Date {
+  const at = new Date(now);
+  const next = (date: Date, step: number) =>
+    grain === "day"
+      ? new Date(
+          Date.UTC(
+            date.getUTCFullYear(),
+            date.getUTCMonth(),
+            date.getUTCDate() + step,
+          ),
+        )
+      : new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + step, 1));
+
+  const first = next(at, 1);
+
+  return first.getTime() - now < DAY_MS ? next(at, 2) : first;
+}
+
 /**
  * Every E2E database is a clone of a template the release step ran on, and
  * on a database with no company prisma/post-deploy/10-queue-partition-swap.sql
@@ -71,4 +100,4 @@ async function unpartitionQueues(
   }
 }
 
-export { QUEUE_TABLES, unpartitionQueues, type QueueTable };
+export { QUEUE_TABLES, swapCutoff, unpartitionQueues, type QueueTable };

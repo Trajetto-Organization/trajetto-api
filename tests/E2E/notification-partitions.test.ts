@@ -12,7 +12,7 @@ import { PROCESS_CAPABILITIES } from "@/shared/health/capabilities";
 import { uuid7Floor } from "@/shared/time/uuid7-floor";
 
 import { runPostDeployStep } from "./support/post-deploy-step";
-import { unpartitionQueues } from "./support/queue-partitions";
+import { swapCutoff, unpartitionQueues } from "./support/queue-partitions";
 
 /**
  * The bell (notification) partitioned by month on RANGE(id)
@@ -61,6 +61,13 @@ function monthStart(offset: number): number {
 
 const stamp = (ms: number) =>
   new Date(ms).toISOString().slice(0, 7).replace("-", "");
+
+/**
+ * The month the swap's partitions start at: next month, or the one after
+ * when next month is less than a day away (the guard's margin,
+ * swapCutoff).
+ */
+const FIRST_MONTH = swapCutoff("month").getTime() === monthStart(1) ? 1 : 2;
 
 async function kind(): Promise<string> {
   const [row] = await prisma.$queryRaw<Array<{ kind: string }>>`
@@ -180,18 +187,26 @@ describe("a new database", () => {
 
     expect(partitions).toEqual([
       {
-        name: `notification_${stamp(monthStart(1))}`,
-        bound: `FOR VALUES FROM ('${uuid7Floor(monthStart(1))}') TO ('${uuid7Floor(monthStart(2))}')`,
+        name: `notification_${stamp(monthStart(FIRST_MONTH))}`,
+        bound: `FOR VALUES FROM ('${uuid7Floor(monthStart(FIRST_MONTH))}') TO ('${uuid7Floor(monthStart(FIRST_MONTH + 1))}')`,
       },
       {
-        name: `notification_${stamp(monthStart(2))}`,
-        bound: `FOR VALUES FROM ('${uuid7Floor(monthStart(2))}') TO ('${uuid7Floor(monthStart(3))}')`,
+        name: `notification_${stamp(monthStart(FIRST_MONTH + 1))}`,
+        bound: `FOR VALUES FROM ('${uuid7Floor(monthStart(FIRST_MONTH + 1))}') TO ('${uuid7Floor(monthStart(FIRST_MONTH + 2))}')`,
       },
       {
         name: "notification_legacy",
-        bound: `FOR VALUES FROM (MINVALUE) TO ('${uuid7Floor(monthStart(1))}')`,
+        bound: `FOR VALUES FROM (MINVALUE) TO ('${uuid7Floor(monthStart(FIRST_MONTH))}')`,
       },
     ]);
+
+    // The guard that proved the legacy bound is gone, from the legacy
+    // partition and from the parent LIKE copied it to.
+    const [guard] = await prisma.$queryRaw<Array<{ count: number }>>`
+      SELECT count(*)::int AS count FROM pg_constraint WHERE conname = 'notification_swap_cutoff'
+    `;
+
+    expect(guard.count).toBe(0);
 
     expect(await runPostDeployStep(CONTRACT)).toMatchObject({
       status: "skipped",

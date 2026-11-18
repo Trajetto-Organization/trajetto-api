@@ -3865,13 +3865,30 @@ mesmo item já fez a mudança.
    `POST_DEPLOY_STEPS=off` na `trajetto-api-migrate` até decidir; tire
    depois.
 
-A troca das filas (`10-queue-partition-swap.sql`) tem três cuidados a mais:
+A troca das filas (`10-queue-partition-swap.sql`) tem estes cuidados a mais:
 
-- **A trava.** Cada fila fica sob `ACCESS EXCLUSIVE` enquanto a troca valida
-  que a tabela cabe abaixo do corte (uma leitura dela inteira): meça na
-  staging antes da produção, com o seed `prod-like`, pelo SQL de `pg_locks`
-  do [ADR 0014](./adr/0014-filas-particionadas.md#medir-a-trava-antes-da-produção).
+- **A trava.** Cada fila fica sob `ACCESS EXCLUSIVE` só por instantes: para
+  pôr a guarda `CHECK ("id" < corte) NOT VALID` e, depois, para a troca, que
+  só mexe no catálogo. A leitura da tabela inteira (o `VALIDATE` da guarda)
+  fica entre as duas, sob `SHARE UPDATE EXCLUSIVE`, com as escritas
+  seguindo. Meça na staging antes da produção, com o seed `prod-like`, pelo
+  SQL de `pg_locks` do
+  [ADR 0014](./adr/0014-filas-particionadas.md#medir-a-trava-antes-da-produção).
   O aceite é nenhuma espera acima de 3 s.
+- **A guarda que ficou.** Se o passo terminar `pending` com
+  `a restrição <fila>_swap_cutoff ficou em …` (o lock para tirá-la não
+  veio), ou se a etapa morrer no meio da troca (o passo fica `failed`), a
+  guarda fica na tabela comum, e a fila recusa toda gravação a partir do
+  corte dela (a meia-noite UTC de depois de amanhã, para as filas; o
+  primeiro dia de um mês, para o sino; a mensagem e o
+  `pg_get_constraintdef` mostram o id). Antes dele, rode a etapa de novo
+  (_Run workflow_ com `force_release`), que tira a guarda ou termina a
+  troca; ou tire à mão, no `psql` do Database:
+
+  ```sql
+  ALTER TABLE "<fila>" DROP CONSTRAINT "<fila>_swap_cutoff";
+  ```
+
 - **Fila grande demais.** Com mais de 2 M linhas estimadas a fila (ou o
   sino, F5-15, que na escala alvo passa disso) fica comum e o passo diz
   `skipped: … exige uma janela própria`. Numa janela com os workers parados

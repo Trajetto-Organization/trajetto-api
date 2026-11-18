@@ -24,6 +24,7 @@ import {
 import { uuid7Floor } from "@/shared/time/uuid7-floor";
 
 import { withParentNames } from "./support/partition-plan";
+import { swapCutoff } from "./support/queue-partitions";
 import { uuid7Sql } from "./support/uuid7-sql";
 
 /**
@@ -199,14 +200,18 @@ beforeAll(async () => {
   ).id;
 
   // The month: the swap's legacy partition (empty in a new database) goes,
-  // and a day partition per day from 32 days ago to today takes its place,
-  // beside the week ahead the swap made.
+  // and a day partition per day from 32 days ago to a week ahead takes its
+  // place, beside the swap's own days (which start a day later, past the
+  // guard's margin, swapCutoff); the swap's day past the week goes, so each
+  // queue has what the retention keeps.
+  const firstDay = swapCutoff("day").getTime();
+
   for (const queue of QUEUES) {
     const [options] = await prisma.$queryRawUnsafe<
       Array<{ options: string[] | null }>
     >(
       `SELECT c.reloptions AS options FROM pg_class c WHERE c.relname = $1`,
-      `${queue}_${stamp(TODAY + DAY_MS)}`,
+      `${queue}_${stamp(firstDay)}`,
     );
     const withOptions = options.options?.length
       ? ` WITH (${options.options.join(", ")})`
@@ -217,12 +222,24 @@ beforeAll(async () => {
     );
     await prisma.$executeRawUnsafe(`DROP TABLE "${queue}_legacy"`);
 
-    for (let offset = -31; offset <= 0; offset += 1) {
+    for (let offset = -31; offset <= 7; offset += 1) {
       const from = TODAY + offset * DAY_MS;
+
+      if (from >= firstDay) continue;
 
       await prisma.$executeRawUnsafe(
         `CREATE TABLE "${queue}_${stamp(from)}" PARTITION OF "${queue}"
            FOR VALUES FROM ('${uuid7Floor(from)}') TO ('${uuid7Floor(from + DAY_MS)}')${withOptions}`,
+      );
+    }
+
+    for (
+      let from = TODAY + 8 * DAY_MS;
+      from < firstDay + 7 * DAY_MS;
+      from += DAY_MS
+    ) {
+      await prisma.$executeRawUnsafe(
+        `DROP TABLE IF EXISTS "${queue}_${stamp(from)}"`,
       );
     }
   }

@@ -8,6 +8,8 @@ import auth from "@/config/auth";
 import { createPrismaClient } from "@/shared/database/database-client";
 import { v7 as uuidV7 } from "uuid";
 
+import { swapCutoff } from "./support/queue-partitions";
+
 /**
  * How long the webhook ledger keeps a row, and what the monitor reads.
  *
@@ -294,13 +296,13 @@ describe("the monitor's counters", () => {
  * The ledger partitioned by day (plano-escala F5-12): once the swap of
  * F5-09 made webhook_delivery partitioned, the partition-maintenance job
  * drops a whole day past WEBHOOK_DELIVERY_RETENTION_DAYS (31), through the
- * webhook-deliveries gate. The job's clock is moved 32 days past tomorrow,
- * so the day the swap made for tomorrow is past the retention; the resend
+ * webhook-deliveries gate. The job's clock is moved 32 days past the
+ * swap's first day, so that day is past the retention; the resend
  * is asked with the same clock.
  */
 describe("the ledger partitioned by day", () => {
-  const TOMORROW = Math.floor(Date.now() / DAY_MS) * DAY_MS + DAY_MS;
-  const LATER = new Date(TOMORROW + 32 * DAY_MS + 3_600_000);
+  const FIRST_DAY = swapCutoff("day").getTime();
+  const LATER = new Date(FIRST_DAY + 32 * DAY_MS + 3_600_000);
   const stamp = (ms: number) =>
     new Date(ms).toISOString().slice(0, 10).replace(/-/g, "");
 
@@ -328,7 +330,7 @@ describe("the ledger partitioned by day", () => {
   }
 
   it("drops a settled day past the retention and never one the dispatcher still owns", async () => {
-    const settled = await at("DELIVERED", TOMORROW + 3_600_000);
+    const settled = await at("DELIVERED", FIRST_DAY + 3_600_000);
     // Thirty days old on the job's clock: still resendable.
     const resendable = await at(
       "DELIVERED",
@@ -340,7 +342,7 @@ describe("the ledger partitioned by day", () => {
 
     await maintainPartitions({ now: LATER });
 
-    expect(await present(`webhook_delivery_${stamp(TOMORROW)}`)).toBe(false);
+    expect(await present(`webhook_delivery_${stamp(FIRST_DAY)}`)).toBe(false);
     expect(await prisma.webhookDelivery.count({ where: { id: settled } })).toBe(
       0,
     );
