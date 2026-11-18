@@ -232,11 +232,11 @@ isso. Em desenvolvimento, eles vão para o Ethereal.
 | pool do Prisma, backlog das filas, runtime   | `GET /health/metrics` (MASTER; token em `fixtures/browser-sessions.json` do `mint-master.ts`)                                                                                                                 |
 | latência do banco                            | `pg_stat_statements` (pré-carregado pela imagem do banco, como nos servidores, com `pg_stat_statements.track=all` só no harness; `CREATE EXTENSION IF NOT EXISTS pg_stat_statements;` uma vez no `load_test`) |
 | Redis                                        | `docker compose ... exec redis redis-cli info stats`                                                                                                                                                          |
-| conexões WebSocket                           | **sem contador exposto hoje** — lacuna registrada junto das cenas abaixo                                                                                                                                      |
+| conexões WebSocket                           | o resumo JSON do `socket-fleet.mjs` (conexão, quedas e volta; "Frota de sockets", no fim deste arquivo)                                                                                                       |
 
-Cenas que ainda não existem (frota, escrita da API pública, WebSocket em
-volume, que é o `socket-fleet` do LOAD-05) estão listadas como lacuna em
-`docs/PENDENCIAS-DO-USUARIO.md`.
+Cenas que ainda não existem (frota, escrita da API pública) estão listadas
+como lacuna em `docs/PENDENCIAS-DO-USUARIO.md`. O WebSocket em volume é o
+`socket-fleet.mjs` (LOAD-05), no fim deste arquivo.
 
 As cenas, em ordem de utilidade (as cinco últimas são do plano de escala,
 LOAD-03, mais abaixo):
@@ -752,3 +752,125 @@ empresa 'Carga (staging)' e o administrador dela são do dono).
 
 `staging-burn-in.test.ts` e `staging-fixture.test.ts` executam os dois com
 stubs (docker, curl, vmstat, date e um falso da API).
+
+## Frota de sockets (`socket-fleet.mjs`, LOAD-05)
+
+Quantos sockets conectam, quantos caem e em quanto tempo os que caíram
+voltam depois de um restart. Um processo Node segura a frota: cada socket
+é uma conexão própria (`forceNew`), com o próprio token e uma origem, o
+endereço local a que ele se liga (`FLEET_SOURCE_ADDRESSES`). O cliente é o
+`lib/socket-client.mjs`.
+
+**Por que as origens.** A API tem orçamentos de handshake
+(`src/shared/socket/handshake-rate-limit.ts`): 300 por endereço e 30 por
+usuário a cada minuto, e 20 sockets por usuário numa réplica. Uma frota de
+um endereço só mede o limitador, não a frota. Por isso todo handshake, os
+da rampa e cada reconexão depois dela, passa por um compassador que deixa
+cada origem abaixo de `FLEET_ORIGIN_PER_MINUTE` (240; o roteiro recusa 300)
+e cada token abaixo de `FLEET_TOKEN_PER_MINUTE` (20; recusa 30) em
+qualquer janela de 60 s. Endereços IPv6 do mesmo /64 são uma origem só,
+como a API os conta. O plano recusa o que não cabe e diz o que falta:
+
+- sockets por token acima de `FLEET_SOCKETS_PER_TOKEN` (10; no máximo 20,
+  o teto da API por réplica): mais motoristas no seed
+  (`LOAD_PRIMARY_DRIVERS`) ou na fixture;
+- uma rampa (`FLEET_RATE`) acima do que as origens e os tokens deixam;
+- com restart (`FLEET_RESTART_AFTER_S`), mais sockets por origem do que
+  cabem num minuto do orçamento: a volta em até 60 s precisaria passar
+  dele. 1.000 sockets com restart pedem pelo menos 5 origens; as 8 do
+  padrão deixam 125 em cada uma;
+- uma espera depois da rampa que não deixe o restart, a janela dele
+  (`FLEET_RESTART_WINDOW_S`, 120 s) e o minuto da volta.
+
+**Como ele reconecta**, como a web e o app: a recusa com `retryAfterMs`
+(`SOCKET_UNAVAILABLE`, a admissão do U-01) espera o que ela pede; um
+transporte que caiu ou outra recusa que se repete espera 1 s, dobrando até
+30 s, com ±50%; uma recusa da credencial nunca se repete e reprova a
+corrida (os tokens venceram).
+
+**O resumo** sai em JSON no stdout (e em `FLEET_SUMMARY`): o p50, o p95 e o
+p99 do handshake, as recusas por motivo, as quedas (dentro e fora da
+janela do restart, por motivo) e a volta (quantas em até 60 s, p95 e
+máximo), com um critério por linha. Aprova com todos os sockets
+conectados, nenhuma recusa de credencial nem dos limites de handshake,
+cada origem abaixo de 300 por minuto, as origens mínimas
+(`FLEET_MIN_ORIGINS`: 8 direto, 1 pela borda), nenhuma queda fora do
+restart, o restart derrubando sockets (quando ele está no plano) e 99%
+dos derrubados de volta em até 60 s ([SLO](../../docs/slo.md)). Saída: 0
+aprovado, 1 reprovado, 2 recusou começar, 3 abortado por uma sonda.
+`node tests/load/socket-fleet.mjs plan` mostra o plano sem conectar nada.
+
+### No harness: 1.000 sockets de 8 contêineres, com restart
+
+Com o harness de pé e o seed com motoristas para todos os tokens
+(`LOAD_PRIMARY_DRIVERS=200`: 25 tokens por contêiner, 5 sockets cada).
+Cada contêiner é uma origem (um IP na rede do harness) e um pedaço da
+frota (`FLEET_SHARD`); todos começam no mesmo instante (`FLEET_START_AT`):
+
+```bash
+NODE_IMAGE=node:22.21.1-alpine3.23@sha256:0340fa682d72068edf603c305bfbc10e23219fb0e40df58d9ea4d6f33a9798bf
+START=$(( ($(date +%s) + 20) * 1000 ))
+mkdir -p tests/load/results
+
+for i in 1 2 3 4 5 6 7 8; do
+  docker run -d --name trajetto-load-fleet-$i --network trajetto-load-edge \
+    -v "$PWD/tests/load:/load:ro" -v "$PWD/node_modules:/deps/node_modules:ro" \
+    -v "$PWD/tests/load/results:/results" \
+    -e SOCKET_IO_CLIENT_ENTRY=/deps/node_modules/socket.io-client/build/esm/index.js \
+    -e FLEET_URL=http://traefik -e FLEET_SOCKETS=1000 -e FLEET_SHARD=$i/8 \
+    -e FLEET_START_AT=$START -e FLEET_DURATION=6m -e FLEET_RESTART_AFTER_S=60 \
+    -e FLEET_SUMMARY=/results/fleet-$i.json \
+    "$NODE_IMAGE" node /load/socket-fleet.mjs
+done
+
+# Na hora que os contêineres imprimem ("restart às ..."), as réplicas:
+docker logs trajetto-load-fleet-1 2>&1 | grep restart
+docker compose --env-file .env -f tests/load/compose.load.yaml restart api
+
+docker wait trajetto-load-fleet-{1..8}
+node tests/load/socket-fleet.mjs merge tests/load/results/fleet.json \
+  tests/load/results/fleet-{1..8}.json
+docker rm trajetto-load-fleet-{1..8}
+```
+
+O `merge` junta os resumos e julga a frota inteira: as origens somadas, o
+p95 de todos os handshakes e cada queda. Ele recusa um conjunto que não é
+uma frota (alvos diferentes, um shard faltando ou repetido, dois shards no
+mesmo host com o endereço padrão, que seriam uma origem só). Numa máquina
+com vários endereços, um processo só faz o mesmo com
+`FLEET_SOURCE_ADDRESSES`; noutras máquinas (os geradores dos portões),
+`FLEET_SHARD` em cada uma.
+
+### Pela borda, na staging (`--via-edge`)
+
+Pela Cloudflare e pelo Traefik da VPS, à mão, com o passo a passo em
+[`docs/deploy.md`](../../docs/deploy.md#frota-de-sockets-pela-borda-load-05).
+Os sockets passam pelo Traefik e pelo conntrack que a produção usa, por
+isso os tetos próprios, que o roteiro recusa antes de conectar:
+
+- rampa de no máximo 20 handshakes/s e no máximo 10 minutos;
+- só das 06:00 às 08:00 UTC (03:00–05:00 BRT, a `load-window`), nunca no
+  dia 1 nem no domingo;
+- na VPS única, no máximo **1.000 sockets**; 5.000 só depois do G-03 (a
+  staging no 2º VPS), com `FLEET_EDGE_TOPOLOGY=second-vps`;
+- só um host de staging, por nome e em https; a produção nunca, em modo
+  nenhum, e a staging nunca no modo direto.
+
+As sondas são as do burn-in e abortam tudo: a readiness da produção com
+p95 acima de 2× a base (12 amostras antes, piso de 20 ms, até 50 com
+`FLEET_PROBE_FLOOR_MS`) ou 3 falhas, e o iowait do host acima de 20% ou o
+steal acima de 10%, lidos do `/proc/stat` entre duas sondas (os números
+do `vmstat`, sem depender do procps no contêiner).
+
+De um host só (uma origem), o compassador deixa 4 handshakes/s: 1.000
+sockets sobem em ~250 s e cabem nos 10 minutos, mas com restart só cabem
+240 (o minuto da volta). A fixture tem no máximo 50 motoristas: com o
+administrador, 51 tokens, e 1.000 sockets pedem
+`FLEET_SOCKETS_PER_TOKEN=20`. Os 5.000 do 2º VPS pedem mais origens
+(`FLEET_SOURCE_ADDRESSES` ou `FLEET_SHARD` em várias máquinas) e mais
+motoristas que a fixture cria hoje.
+
+`socket-fleet.test.ts` roda a frota de verdade contra um Socket.IO no
+loopback (8 origens em 127.0.0.2–9, uma recusa com `retryAfterMs`, um
+restart que derruba todos) e confere o plano, os tetos da borda, o
+compassador, as sondas e o `merge`.

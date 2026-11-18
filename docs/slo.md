@@ -25,7 +25,7 @@ e se essa fonte já existe hoje.
 | Sino e push depois do fato           | p95 < 10 s (≤ 3 s depois da F3)                                                        | SQL sobre `notification_delivery`, canais `IN_APP` e `PUSH`: o `deliveredAt` menos o `created_at` do evento do outbox                                       | sim                                                                                                                  |
 | E-mail e WhatsApp                    | p95 < 2 min                                                                            | o mesmo SQL, canais `EMAIL` e `WHATSAPP`                                                                                                                    | sim                                                                                                                  |
 | Webhook para endpoint saudável       | p95 < 60 s                                                                             | `webhook_delivery`: o `deliveredAt` menos o `created_at` das linhas entregues na primeira tentativa                                                         | sim                                                                                                                  |
-| Sockets de volta depois de um deploy | 99% em ≤ 60 s                                                                          | a cena de socket dos portões (`socket-fleet`, que mede a volta depois de um restart), no relatório de portão de [`docs/desempenho`](./desempenho/README.md) | não: a cena chega com o LOAD-05                                                                                      |
+| Sockets de volta depois de um deploy | 99% em ≤ 60 s                                                                          | a cena de socket dos portões (`socket-fleet`, que mede a volta depois de um restart), no relatório de portão de [`docs/desempenho`](./desempenho/README.md) | não na produção: é prova de portão, com a cena do LOAD-05 (`tests/load/socket-fleet.mjs`)                            |
 | Feed de integração                   | 0 eventos pulados                                                                      | o E2E de ordem de commit (10 mil intercalações) mais uma reconciliação diária                                                                               | não: o E2E chega com o F2-05; a reconciliação diária ainda sem item no plano                                         |
 | RPO e RTO                            | até 100k: RPO ≤ 2 min e RTO ≤ 1 h; de 1M em diante, com o standby: segundos e ≤ 15 min | o ensaio mensal de restauração ([runbook](./runbooks/restore-drill.md)), que mede o tempo e a perda pela linha-marcador `max(ts)` do `ops_sample`           | não na produção: o PITR da produção chega com o F1-25; até lá o RPO é o do dump diário do Dokploy, 24 h              |
 
@@ -176,9 +176,9 @@ WHERE "created_at" > now() - interval '24 hours'
 
 Esses três não são séries contínuas: são provas de portão e de ensaio.
 
-- **Sockets:** a cena `socket-fleet` (LOAD-05) reinicia a API com os sockets
-  abertos e mede quantos voltam em até 60 s. O número entra no relatório do
-  portão.
+- **Sockets:** a cena `socket-fleet` (LOAD-05, `tests/load/socket-fleet.mjs`)
+  reinicia a API com os sockets abertos e mede quantos voltam em até 60 s; o
+  resumo dela reprova abaixo de 99%. O número entra no relatório do portão.
 - **Feed de integração:** o E2E de ordem de commit (F2-05) prova 0 pulados em
   10 mil intercalações. A reconciliação diária que o plano cita (comparar o que
   o feed serviu com o que foi gravado) não tem item ainda: o dono decide se

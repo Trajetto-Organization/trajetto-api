@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
@@ -351,3 +352,51 @@ exit 0`,
     });
   },
 );
+
+/**
+ * Two runs load staging on the VPS production shares, each with its own
+ * ceilings (plano-escala LOAD-05 and LOAD-09): the burn-in drives HTTP with
+ * at most 200 sockets; the socket fleet through the edge holds up to 1,000
+ * on the single VPS and 5,000 only once staging left for the second VPS
+ * (G-03). Same window, same probes. A ceiling raised in one script, or a
+ * doc that tells the owner another number, would load production's edge
+ * past what the plan accepted.
+ */
+describe("the two ceilings on staging (LOAD-05, LOAD-09)", () => {
+  it("keeps the burn-in's 200 sockets and the fleet's 1,000 and 5,000, in one window", async () => {
+    const script = read("tests", "load", "staging-burn-in.sh");
+    const { EDGE } = (await import(
+      pathToFileURL(resolve(process.cwd(), "tests", "load", "socket-fleet.mjs"))
+        .href
+    )) as {
+      EDGE: {
+        maxRate: number;
+        maxSeconds: number;
+        sockets: Record<string, number>;
+        windowFrom: number;
+        windowTo: number;
+      };
+    };
+
+    expect(script).toContain("MAX_SOCKETS=200\n");
+    expect(EDGE.sockets).toEqual({ "single-vps": 1_000, "second-vps": 5_000 });
+    expect(EDGE.maxRate).toBe(20);
+    expect(EDGE.maxSeconds).toBe(600);
+    expect(script).toContain(`WINDOW_FROM=${EDGE.windowFrom}\n`);
+    expect(script).toContain(`WINDOW_TO=${EDGE.windowTo}\n`);
+  });
+
+  it("tells the owner the same ceilings in docs/deploy.md", () => {
+    const deploy = read("docs", "deploy.md");
+    const fleet = deploy.slice(
+      deploy.indexOf("### Frota de sockets pela borda (LOAD-05)"),
+      deploy.indexOf("### Separar os workers do HTTP"),
+    );
+
+    expect(fleet).toContain("--via-edge");
+    expect(fleet).toContain("até **1.000 sockets**");
+    expect(fleet).toContain("5.000 só depois do G-03");
+    expect(fleet).toContain("FLEET_SOCKETS=1000");
+    expect(deploy).toContain("`BURN_IN_MAX_VUS` até 200");
+  });
+});

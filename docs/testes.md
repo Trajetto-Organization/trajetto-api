@@ -494,7 +494,14 @@ req/s, 10 min e 200 sockets, só na `load-window`, com a readiness da
 produção e o `vmstat` do host abortando tudo), e a `staging-fixture.mjs`
 prepara pela API os dados da empresa 'Carga (staging)';
 `staging-burn-in.test.ts` e `staging-fixture.test.ts` executam os dois com
-stubs ([`deploy.md`](./deploy.md#ensaio-de-carga-na-staging-burn-in)). O
+stubs ([`deploy.md`](./deploy.md#ensaio-de-carga-na-staging-burn-in)).
+`socket-fleet.mjs` (LOAD-05) segura uma frota de sockets de várias origens,
+com cada origem e cada token abaixo dos orçamentos de handshake da API, e
+mede a conexão, as quedas e a volta depois de um restart; pela borda
+(`--via-edge`), com os tetos dela (20 handshakes/s, 10 min, a `load-window`,
+1.000 sockets na VPS única) e as sondas do burn-in.
+`socket-fleet.test.ts` roda a frota contra um Socket.IO no loopback, com 8
+origens e um restart ([`deploy.md`](./deploy.md#frota-de-sockets-pela-borda-load-05)). O
 `seed.ts` prepara o banco `load_test` (empresas, motoristas, histórico); com
 `LOAD_TIER` (`tiny`, `100k`, `1m`, `5m` ou `prod-like`, plano de escala
 LOAD-02) a população vem em SQL de massa, com cauda longa de Zipf, as 150 mil

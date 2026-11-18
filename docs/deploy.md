@@ -4217,6 +4217,75 @@ Os contêineres saem com o roteiro (`--rm`); os dados da empresa de carga
 ficam e são reaproveitados na próxima vez (rotas do dia, veículos e
 motoristas pelo nome e pela placa).
 
+### Frota de sockets pela borda (LOAD-05)
+
+Os sockets da staging pela Cloudflare e pelo Traefik, à mão, para provar a
+conexão, as quedas e a volta depois de um _Redeploy_ (plano de escala
+LOAD-05), nunca capacidade. O roteiro é o `tests/load/socket-fleet.mjs`
+com `--via-edge` (como ele planeja, recusa e julga:
+[`tests/load/README.md`](../tests/load/README.md), "Frota de sockets").
+Os sockets passam pelo Traefik e pelo conntrack que a produção usa, por
+isso os tetos próprios, que o roteiro recusa antes de conectar: rampa de
+até 20 handshakes/s, até 10 minutos, só na `load-window` (06:00–08:00 UTC,
+nunca no dia 1 nem no domingo) e, na VPS única, até **1.000 sockets**
+(5.000 só depois do G-03, com `FLEET_EDGE_TOPOLOGY=second-vps`). As sondas
+são as do burn-in: a readiness da produção (p95 acima de 2× a base ou 3
+falhas) e o iowait ou o steal do host, lidos do `/proc/stat`.
+
+**Uma vez (dono):** a empresa `Carga (staging)` e o administrador dela, do
+burn-in acima, com o limite de veículos em pelo menos 50 (a fixture cria
+um por motorista).
+
+**A cada ensaio**, no host da VPS, com a pasta `tests/load` copiada:
+
+1. Os tokens: a fixture com 50 motoristas, pela borda (51 tokens com o
+   administrador; valem 15 minutos, então rode logo antes):
+
+   ```bash
+   export FIXTURE_ADMIN_EMAIL='<e-mail do administrador de Carga (staging)>'
+   read -rs FIXTURE_ADMIN_PASSWORD; export FIXTURE_ADMIN_PASSWORD
+   NODE_IMAGE=node:22.21.1-alpine3.23@sha256:0340fa682d72068edf603c305bfbc10e23219fb0e40df58d9ea4d6f33a9798bf
+   export FLEET_CONTEXT_JSON="$(docker run --rm -i --network host \
+     --cpus 0.5 --memory 256m -e FIXTURE_ADMIN_EMAIL -e FIXTURE_ADMIN_PASSWORD \
+     -e FIXTURE_BASE_URL=https://api-staging.intrajetto.com -e FIXTURE_DRIVERS=50 \
+     "$NODE_IMAGE" node --input-type=module - < tests/load/staging-fixture.mjs)"
+   ```
+
+2. A frota, num contêiner limitado na rede do host (a origem é o IP da
+   VPS, e a sonda da produção vai ao Traefik do próprio host):
+
+   ```bash
+   FLEET='cd /tmp && npm install --silent --no-save --ignore-scripts socket.io-client@4.8.4 > /dev/null && SOCKET_IO_CLIENT_ENTRY=/tmp/node_modules/socket.io-client/build/esm/index.js node /load/socket-fleet.mjs --via-edge'
+   docker run --rm -i --name trajetto-socket-fleet --network host \
+     --cpus 0.5 --memory 512m -v "$PWD/tests/load:/load:ro" \
+     -e FLEET_CONTEXT_JSON -e FLEET_URL=https://api-staging.intrajetto.com \
+     -e FLEET_SOCKETS=1000 -e FLEET_SOCKETS_PER_TOKEN=20 \
+     "$NODE_IMAGE" sh -c "$FLEET" > fleet.json
+   ```
+
+   De uma origem só, a rampa sobe a 4 handshakes/s (o compassador deixa a
+   origem abaixo de 300 por minuto): 1.000 sockets em uns 250 s.
+
+3. Com restart, troque o tamanho do passo 2 por estas três variáveis (de
+   uma origem, só 240 sockets voltam dentro do minuto do orçamento):
+
+   ```bash
+   -e FLEET_SOCKETS=240 -e FLEET_RESTART_AFTER_S=60 -e FLEET_RESTART_WINDOW_S=240
+   ```
+
+   Na hora que o roteiro imprime (`restart às ...`), no Dokploy: staging →
+   `trajetto-api` → **Deploy**. A janela de 240 s cobre o _Redeploy_ até a
+   réplica antiga sair.
+
+4. Saída 0: aprovado. 1: reprovado (o `fleet.json` diz qual critério). 2:
+   recusou começar (a mensagem diz por quê). 3: uma sonda abortou tudo:
+   não repita na mesma noite.
+
+Depois do G-03 (staging no 2º VPS), os 5.000 sockets pedem
+`FLEET_EDGE_TOPOLOGY=second-vps`, pelo menos 5 origens
+(`FLEET_SOURCE_ADDRESSES`, ou `FLEET_SHARD` em várias máquinas com o mesmo
+`FLEET_START_AT`, e o `merge`) e mais motoristas que os 50 da fixture.
+
 ### Separar os workers do HTTP (só por gatilho medido)
 
 Gatilhos (ADR 0001/0004): espera no pool visível em `/health/metrics`

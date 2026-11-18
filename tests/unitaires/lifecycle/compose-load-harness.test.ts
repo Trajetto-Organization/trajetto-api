@@ -271,12 +271,15 @@ describe("the socket client the cross-replica script uses (LOAD-3)", () => {
       ),
     ).href;
 
-  it("is what the script imports", () => {
-    const script = read(LOAD, "socket-across-replicas.mjs");
+  it.each(["socket-across-replicas.mjs", "socket-fleet.mjs"])(
+    "is what %s imports",
+    (name) => {
+      const script = read(LOAD, name);
 
-    expect(script).toContain('from "./lib/socket-client.mjs"');
-    expect(script).not.toContain("trajetto-fleet-manager-ui/node_modules");
-  });
+      expect(script).toContain('from "./lib/socket-client.mjs"');
+      expect(script).not.toContain("trajetto-fleet-manager-ui/node_modules");
+    },
+  );
 
   const own = pathToFileURL(
     resolve(
@@ -437,6 +440,37 @@ describe("the scenes (LOAD-03)", () => {
       /const refused =\s*\(response\.status === 429 \|\| response\.status === 503\) &&\s*retryAfterOf\(response\) !== null;/,
     );
     expect(api).toContain("expected.includes(r.status) || refused");
+  });
+});
+
+/**
+ * The socket fleet (plano-escala LOAD-05) on the harness: eight containers
+ * on the harness' edge network, one IP each, one shard each, started
+ * together and merged. A README that ran them on the host (one address
+ * behind the published port) or with another Node image than the burn-in's
+ * would measure the limiter or run code nobody pinned.
+ */
+describe("the socket fleet on the harness (LOAD-05)", () => {
+  const readme = read(LOAD, "README.md");
+  const section = readme.slice(readme.indexOf("## Frota de sockets"));
+
+  it("runs eight shards, one container each, on the harness network, and merges them", () => {
+    expect(section).toContain("--network trajetto-load-edge");
+    expect(section).toContain("FLEET_SHARD=$i/8");
+    expect(section).toContain("FLEET_START_AT=$START");
+    expect(section).toContain("FLEET_URL=http://traefik");
+    expect(section).toContain("node tests/load/socket-fleet.mjs merge");
+    expect(harness).toContain("name: trajetto-load-edge");
+  });
+
+  it("pins the burn-in's Node image", () => {
+    const burnIn = read(LOAD, "staging-burn-in.sh");
+    const pinned = burnIn.match(
+      /NODE_IMAGE="(node:[^"]+@sha256:[0-9a-f]{64})"/,
+    );
+
+    expect(pinned?.[1]).toBeTruthy();
+    expect(section).toContain(`NODE_IMAGE=${pinned?.[1]}`);
   });
 });
 
