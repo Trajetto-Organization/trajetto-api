@@ -29,6 +29,13 @@ import { WEBHOOK_CONCURRENCY } from "@/shared/integration/webhook-dispatch-rules
  *  - the database-only slots that take the whole pool are a warning.
  */
 
+/**
+ * Each case below loads a pipeline module anew (the pipeline, its
+ * repositories, the logger): a second or two on a busy machine, past
+ * vitest's 5 s when several files run beside it.
+ */
+const LOAD_TIMEOUT_MS = 30_000;
+
 /** The minimum a development boot needs. */
 const BASE_ENV = {
   NODE_ENV: "development",
@@ -192,44 +199,56 @@ describe("a value out of range", () => {
 });
 
 describe("the lease invariants, with the environment's values", () => {
-  it("stop the boot when a lane's batch no longer fits its lease", async () => {
-    // 20 deliveries one at a time, 15 s each: 300 s against a 180 s lease.
-    await expect(
-      loadUnder("@/shared/notifications/notification-pipeline-service", {
-        NOTIFICATION_EXTERNAL_CONCURRENCY: 1,
-      }),
-    ).rejects.toThrow(/NOTIFICATION_EXTERNAL_CONCURRENCY=1/);
+  it(
+    "stop the boot when a lane's batch no longer fits its lease",
+    async () => {
+      // 20 deliveries one at a time, 15 s each: 300 s against a 180 s lease.
+      await expect(
+        loadUnder("@/shared/notifications/notification-pipeline-service", {
+          NOTIFICATION_EXTERNAL_CONCURRENCY: 1,
+        }),
+      ).rejects.toThrow(/NOTIFICATION_EXTERNAL_CONCURRENCY=1/);
 
-    await expect(
-      loadUnder("@/shared/notifications/notification-pipeline-service", {
-        NOTIFICATION_INTERNAL_CONCURRENCY: 1,
-      }),
-    ).rejects.toThrow(/NOTIFICATION_INTERNAL_CONCURRENCY=1/);
-  });
+      await expect(
+        loadUnder("@/shared/notifications/notification-pipeline-service", {
+          NOTIFICATION_INTERNAL_CONCURRENCY: 1,
+        }),
+      ).rejects.toThrow(/NOTIFICATION_INTERNAL_CONCURRENCY=1/);
+    },
+    LOAD_TIMEOUT_MS,
+  );
 
-  it("stop the boot when the webhooks' batch no longer fits its lease", async () => {
-    // 20 calls one at a time, 10 s each: 200 s against a 120 s lease.
-    await expect(
-      loadUnder("@/shared/integration/webhook-dispatch-service", {
-        WEBHOOK_CONCURRENCY: 1,
-      }),
-    ).rejects.toThrow(/WEBHOOK_CONCURRENCY=1/);
-  });
+  it(
+    "stop the boot when the webhooks' batch no longer fits its lease",
+    async () => {
+      // 20 calls one at a time, 10 s each: 200 s against a 120 s lease.
+      await expect(
+        loadUnder("@/shared/integration/webhook-dispatch-service", {
+          WEBHOOK_CONCURRENCY: 1,
+        }),
+      ).rejects.toThrow(/WEBHOOK_CONCURRENCY=1/);
+    },
+    LOAD_TIMEOUT_MS,
+  );
 
-  it("let the pipelines load with the smallest values that fit", async () => {
-    await expect(
-      loadUnder("@/shared/notifications/notification-pipeline-service", {
-        NOTIFICATION_INTERNAL_CONCURRENCY: 2,
-        NOTIFICATION_EXTERNAL_CONCURRENCY: 2,
-      }),
-    ).resolves.toBeDefined();
+  it(
+    "let the pipelines load with the smallest values that fit",
+    async () => {
+      await expect(
+        loadUnder("@/shared/notifications/notification-pipeline-service", {
+          NOTIFICATION_INTERNAL_CONCURRENCY: 2,
+          NOTIFICATION_EXTERNAL_CONCURRENCY: 2,
+        }),
+      ).resolves.toBeDefined();
 
-    await expect(
-      loadUnder("@/shared/integration/webhook-dispatch-service", {
-        WEBHOOK_CONCURRENCY: 2,
-      }),
-    ).resolves.toBeDefined();
-  });
+      await expect(
+        loadUnder("@/shared/integration/webhook-dispatch-service", {
+          WEBHOOK_CONCURRENCY: 2,
+        }),
+      ).resolves.toBeDefined();
+    },
+    LOAD_TIMEOUT_MS,
+  );
 });
 
 type PipelineModule =
@@ -239,119 +258,136 @@ type WebhookModule =
 type AIModule = typeof import("@/shared/ai/ai-analysis-pipeline-service");
 
 describe("the pipelines run that many at a time", () => {
-  it("expands outbox events one after the other by default, and N with the variable", async () => {
-    for (const [overrides, expected] of [
-      [{}, 1],
-      [{ OUTBOX_EXPANSION_CONCURRENCY: 3 }, 3],
-    ] as const) {
+  it(
+    "expands outbox events one after the other by default, and N with the variable",
+    async () => {
+      for (const [overrides, expected] of [
+        [{}, 1],
+        [{ OUTBOX_EXPANSION_CONCURRENCY: 3 }, 3],
+      ] as const) {
+        const { NotificationPipelineService } = await loadUnder<PipelineModule>(
+          "@/shared/notifications/notification-pipeline-service",
+          overrides,
+        );
+
+        const pipeline =
+          NotificationPipelineService.getInstance() as unknown as {
+            claimEvents: () => Promise<unknown[]>;
+            renewEventLease: () => Promise<boolean>;
+            expandEvent: () => Promise<void>;
+            drainOutbox: () => Promise<boolean>;
+          };
+
+        const events = Array.from({ length: 7 }, (_, index) => ({
+          id: `event-${index}`,
+          topic: "test.topic",
+          attempts: 1,
+        }));
+        const tracker = peakTracker();
+
+        pipeline.claimEvents = vi
+          .fn()
+          .mockResolvedValueOnce(events)
+          .mockResolvedValue([]);
+        pipeline.renewEventLease = vi.fn().mockResolvedValue(true);
+        pipeline.expandEvent = vi.fn(tracker.run);
+
+        await pipeline.drainOutbox();
+
+        expect(pipeline.expandEvent).toHaveBeenCalledTimes(7);
+        expect(tracker.peak).toBe(expected);
+      }
+    },
+    LOAD_TIMEOUT_MS,
+  );
+
+  it(
+    "gives each delivery lane its own concurrency",
+    async () => {
       const { NotificationPipelineService } = await loadUnder<PipelineModule>(
         "@/shared/notifications/notification-pipeline-service",
-        overrides,
+        { NOTIFICATION_INTERNAL_CONCURRENCY: 3 },
       );
 
       const pipeline = NotificationPipelineService.getInstance() as unknown as {
-        claimEvents: () => Promise<unknown[]>;
-        renewEventLease: () => Promise<boolean>;
-        expandEvent: () => Promise<void>;
-        drainOutbox: () => Promise<boolean>;
+        claimDeliveries: () => Promise<unknown[]>;
+        runOneDelivery: () => Promise<void>;
+        drainDeliveries: (lane: string) => Promise<void>;
       };
 
-      const events = Array.from({ length: 7 }, (_, index) => ({
-        id: `event-${index}`,
-        topic: "test.topic",
-        attempts: 1,
+      for (const [lane, expected] of [
+        ["internal", 3],
+        ["external", 5],
+      ] as const) {
+        const deliveries = Array.from({ length: 12 }, (_, index) => ({
+          id: `delivery-${index}`,
+          outboxEventId: "event-1",
+          attempts: 1,
+        }));
+        const tracker = peakTracker();
+
+        pipeline.claimDeliveries = vi
+          .fn()
+          .mockResolvedValueOnce(deliveries)
+          .mockResolvedValue([]);
+        pipeline.runOneDelivery = vi.fn(tracker.run);
+
+        await pipeline.drainDeliveries(lane);
+
+        expect(pipeline.runOneDelivery).toHaveBeenCalledTimes(12);
+        expect(tracker.peak).toBe(expected);
+      }
+    },
+    LOAD_TIMEOUT_MS,
+  );
+
+  it(
+    "sends webhooks WEBHOOK_CONCURRENCY at a time",
+    async () => {
+      const { WebhookDispatchService } = await loadUnder<WebhookModule>(
+        "@/shared/integration/webhook-dispatch-service",
+        { WEBHOOK_CONCURRENCY: 3 },
+      );
+
+      const dispatcher = WebhookDispatchService.getInstance() as unknown as {
+        claim: () => Promise<unknown[]>;
+        deliver: () => Promise<void>;
+        processBatch: () => Promise<number>;
+      };
+
+      // Six endpoints, two rows each: the per-endpoint limit of 2 is not
+      // what holds the pool.
+      const rows = Array.from({ length: 12 }, (_, index) => ({
+        id: `webhook-${index}`,
+        endpointId: `endpoint-${index % 6}`,
       }));
       const tracker = peakTracker();
 
-      pipeline.claimEvents = vi
+      dispatcher.claim = vi
         .fn()
-        .mockResolvedValueOnce(events)
+        .mockResolvedValueOnce(rows)
         .mockResolvedValue([]);
-      pipeline.renewEventLease = vi.fn().mockResolvedValue(true);
-      pipeline.expandEvent = vi.fn(tracker.run);
+      dispatcher.deliver = vi.fn(tracker.run);
 
-      await pipeline.drainOutbox();
+      await expect(dispatcher.processBatch()).resolves.toBe(12);
 
-      expect(pipeline.expandEvent).toHaveBeenCalledTimes(7);
-      expect(tracker.peak).toBe(expected);
-    }
-  });
+      expect(tracker.peak).toBe(3);
+    },
+    LOAD_TIMEOUT_MS,
+  );
 
-  it("gives each delivery lane its own concurrency", async () => {
-    const { NotificationPipelineService } = await loadUnder<PipelineModule>(
-      "@/shared/notifications/notification-pipeline-service",
-      { NOTIFICATION_INTERNAL_CONCURRENCY: 3 },
-    );
+  it(
+    "keeps AI_CONCURRENCY readings in flight, lowered by the reader",
+    async () => {
+      const { AI_CONCURRENCY } = await loadUnder<AIModule>(
+        "@/shared/ai/ai-analysis-pipeline-service",
+        { AI_CONCURRENCY: 12 },
+      );
 
-    const pipeline = NotificationPipelineService.getInstance() as unknown as {
-      claimDeliveries: () => Promise<unknown[]>;
-      runOneDelivery: () => Promise<void>;
-      drainDeliveries: (lane: string) => Promise<void>;
-    };
-
-    for (const [lane, expected] of [
-      ["internal", 3],
-      ["external", 5],
-    ] as const) {
-      const deliveries = Array.from({ length: 12 }, (_, index) => ({
-        id: `delivery-${index}`,
-        outboxEventId: "event-1",
-        attempts: 1,
-      }));
-      const tracker = peakTracker();
-
-      pipeline.claimDeliveries = vi
-        .fn()
-        .mockResolvedValueOnce(deliveries)
-        .mockResolvedValue([]);
-      pipeline.runOneDelivery = vi.fn(tracker.run);
-
-      await pipeline.drainDeliveries(lane);
-
-      expect(pipeline.runOneDelivery).toHaveBeenCalledTimes(12);
-      expect(tracker.peak).toBe(expected);
-    }
-  });
-
-  it("sends webhooks WEBHOOK_CONCURRENCY at a time", async () => {
-    const { WebhookDispatchService } = await loadUnder<WebhookModule>(
-      "@/shared/integration/webhook-dispatch-service",
-      { WEBHOOK_CONCURRENCY: 3 },
-    );
-
-    const dispatcher = WebhookDispatchService.getInstance() as unknown as {
-      claim: () => Promise<unknown[]>;
-      deliver: () => Promise<void>;
-      processBatch: () => Promise<number>;
-    };
-
-    // Six endpoints, two rows each: the per-endpoint limit of 2 is not
-    // what holds the pool.
-    const rows = Array.from({ length: 12 }, (_, index) => ({
-      id: `webhook-${index}`,
-      endpointId: `endpoint-${index % 6}`,
-    }));
-    const tracker = peakTracker();
-
-    dispatcher.claim = vi
-      .fn()
-      .mockResolvedValueOnce(rows)
-      .mockResolvedValue([]);
-    dispatcher.deliver = vi.fn(tracker.run);
-
-    await expect(dispatcher.processBatch()).resolves.toBe(12);
-
-    expect(tracker.peak).toBe(3);
-  });
-
-  it("keeps AI_CONCURRENCY readings in flight, lowered by the reader", async () => {
-    const { AI_CONCURRENCY } = await loadUnder<AIModule>(
-      "@/shared/ai/ai-analysis-pipeline-service",
-      { AI_CONCURRENCY: 12 },
-    );
-
-    expect(AI_CONCURRENCY).toBe(12);
-  });
+      expect(AI_CONCURRENCY).toBe(12);
+    },
+    LOAD_TIMEOUT_MS,
+  );
 });
 
 describe("the pool headroom at boot", () => {
