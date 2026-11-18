@@ -149,3 +149,75 @@ describe("the operational snapshot", () => {
     expect(snapshot.outboxEligibleLagSec ?? 0).toBeLessThan(590);
   });
 });
+
+/**
+ * Each replica's sockets against its ceiling (plano-escala F5-31), read from
+ * its newest ops_sample row: only the process knows its count and its
+ * descriptor limit, and the elected heartbeat judges them all.
+ */
+describe("the sockets of each replica", () => {
+  const NEAR = `wfl-near-${randomUUID().slice(0, 8)}`;
+  const CALM = `wfl-calm-${randomUUID().slice(0, 8)}`;
+  const OLD_IMAGE = `wfl-old-${randomUUID().slice(0, 8)}`;
+
+  const row = (
+    replica: string,
+    minutesAgo: number,
+    realtime: Record<string, number>,
+    role = "all",
+  ) => ({
+    ts: new Date(Date.now() - minutesAgo * 60_000),
+    role,
+    replica,
+    metrics: { v: 1, realtime },
+  });
+
+  afterAll(async () => {
+    await prisma.opsSample.deleteMany({
+      where: { replica: { in: [NEAR, CALM, OLD_IMAGE] } },
+    });
+  });
+
+  it("are read from the newest row of each replica, and page past 80%", async () => {
+    await prisma.opsSample.createMany({
+      data: [
+        // An older, calm row of the same replica: the newest one counts.
+        row(NEAR, 2, { local_connections: 100, socket_cap: 5_000 }),
+        row(NEAR, 0.5, { local_connections: 4_200, socket_cap: 5_000 }),
+        row(CALM, 0.5, { local_connections: 300, socket_cap: 3_072 }),
+        // The previous image during a rolling deploy: no ceiling written.
+        row(OLD_IMAGE, 0.5, { local_connections: 9_999 }),
+        // Too old to be a live replica.
+        row(OLD_IMAGE, 30, { local_connections: 9_999, socket_cap: 100 }),
+      ],
+    });
+
+    const { collectOperationalSnapshot } =
+      await import("@/shared/health/operational-snapshot");
+    const { collectAlerts, DEFAULT_ALERT_THRESHOLDS } =
+      await import("@/shared/health/alert-rules");
+
+    const snapshot = await collectOperationalSnapshot();
+
+    expect(snapshot.collectionErrors).toEqual([]);
+
+    const ours = (snapshot.sockets ?? []).filter((replica) =>
+      [NEAR, CALM, OLD_IMAGE].includes(replica.replica),
+    );
+
+    expect(ours).toEqual(
+      expect.arrayContaining([
+        { replica: NEAR, connections: 4_200, cap: 5_000 },
+        { replica: CALM, connections: 300, cap: 3_072 },
+      ]),
+    );
+    expect(ours).toHaveLength(2);
+
+    const paged = collectAlerts(snapshot, DEFAULT_ALERT_THRESHOLDS, {
+      pitrExpected: false,
+    }).filter((alert) => alert.code === "socket-cap-high");
+
+    expect(paged).toHaveLength(1);
+    expect(paged[0].message).toContain(NEAR);
+  });
+});

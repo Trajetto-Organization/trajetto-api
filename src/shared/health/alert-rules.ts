@@ -140,8 +140,22 @@ interface OperationalSnapshot {
    */
   clusterEpoch?: ClusterEpochState;
 
+  /**
+   * Each replica's sockets against its real ceiling (plano-escala F5-31),
+   * from its newest ops_sample row of the last minutes. Absent when the
+   * rows could not be read, which judges nothing; a replica with no
+   * ceiling (cap 0) is never judged.
+   */
+  sockets?: SocketUsageState[];
+
   /** Parts of the snapshot that could not be read; each one is a reason. */
   collectionErrors: string[];
+}
+
+interface SocketUsageState {
+  replica: string;
+  connections: number;
+  cap: number;
 }
 
 interface PartitionAlertState {
@@ -241,6 +255,13 @@ const DEFAULT_ALERT_THRESHOLDS = {
   cronStaleMs: 26 * 60 * 60 * 1000,
 
   connectionUsagePercent: 80,
+
+  /**
+   * A replica's sockets against its ceiling (F5-31): past 80%, the next
+   * deploy's reconnections no longer fit on the replicas left over, and
+   * the handshakes start being refused with the wait.
+   */
+  socketCapUsagePercent: 80,
 
   /** The A1 certificate is renewed by hand: a month to buy and install it. */
   proofSigningWarningDays: 30,
@@ -414,6 +435,7 @@ const ALERT_KINDS = [
   "partition-stuck",
   "worker-stuck",
   "connection-usage-high",
+  "socket-cap-high",
   "redis-down",
   "pitr-archive-off",
   "wal-archive-stalled",
@@ -859,6 +881,19 @@ function collectAlerts(
     });
   }
 
+  for (const replica of snapshot.sockets ?? []) {
+    if (replica.cap <= 0) continue;
+
+    const percent = Math.round((replica.connections / replica.cap) * 100);
+
+    if (percent >= thresholds.socketCapUsagePercent) {
+      alerts.push({
+        code: "socket-cap-high",
+        message: `Sockets na réplica ${replica.replica}: ${replica.connections} de ${replica.cap} (${percent}% do teto, limite ${thresholds.socketCapUsagePercent}%)`,
+      });
+    }
+  }
+
   if (!snapshot.redisOk) {
     alerts.push({
       code: "redis-down",
@@ -962,5 +997,6 @@ export type {
   GeocodingQuotaState,
   OperationalSnapshot,
   PartitionAlertState,
+  SocketUsageState,
   VolumeState,
 };

@@ -933,6 +933,17 @@ const healthResponses = {
           .describe(
             "Cross-replica frames dropped while Redis was away, not yet logged.",
           ),
+        socket_cap: z
+          .number()
+          .describe(
+            "The replica's real socket ceiling: SOCKET_MAX_CONNECTIONS, lowered to the process's file descriptor limit minus SOCKET_FD_RESERVE (plano-escala F5-31); 0 when no ceiling applies. The socket-cap-high alert pages at 80% of it.",
+          ),
+        fd_limit: z
+          .number()
+          .nullable()
+          .describe(
+            "The process's soft file descriptor limit, read at boot from /proc/self/limits; null off Linux or when unlimited.",
+          ),
         handshakes_in_flight: z
           .number()
           .describe(

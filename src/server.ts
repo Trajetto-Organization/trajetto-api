@@ -229,13 +229,22 @@ async function bootstrap() {
       // The sockets and the password gate of this process, as on
       // /health/metrics: counts only, nobody's id.
       registerSampleSection("realtime", () => {
-        const { local_connections, adapter, dropped_frames_unreported } =
-          realtimeMetrics();
+        const {
+          local_connections,
+          adapter,
+          dropped_frames_unreported,
+          socket_cap,
+          fd_limit,
+        } = realtimeMetrics();
 
         return {
           local_connections,
           adapter,
           dropped_frames_unreported,
+          // The replica's real ceiling (F5-31): the ops heartbeat pages at
+          // 80% of it (socket-cap-high).
+          socket_cap,
+          fd_limit,
           // The minute's handshakes, duration p50/p99 and refusals by
           // reason (plano-escala U-01). Reading rotates them.
           handshakes: rotateHandshakeMetrics(),

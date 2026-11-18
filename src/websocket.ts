@@ -42,6 +42,11 @@ import {
   type SocketAdmissionLimits,
 } from "@/shared/socket/admission";
 import { startGradualClose } from "@/shared/socket/gradual-close";
+import {
+  effectiveSocketCap,
+  readOpenFilesSoftLimit,
+  type SocketCap,
+} from "@/shared/socket/socket-cap";
 
 import {
   canSubscribeToChatBusiness,
@@ -122,6 +127,20 @@ const SOCKET_MAX_MESSAGE_BYTES = 16 * 1024;
 const SOCKET_CONNECT_TIMEOUT_MS = 10_000;
 
 /**
+ * The heartbeat and the compression, pinned (plano-escala F5-31) rather than
+ * left to the library's defaults, which a major version may move. 25 s
+ * between pings keeps each socket's traffic through Cloudflare and Traefik
+ * well under their idle timeouts (100 s at Cloudflare) at one small frame
+ * per socket per 25 s, which is what 5,000 sockets cost the replica in
+ * timers. 20 s without the answer is a dead peer: the app's GPS keeps
+ * going over HTTP and the socket comes back with the network.
+ * permessage-deflate stays off: zlib holds tens of kilobytes per socket,
+ * and the frames here are a few hundred bytes of JSON.
+ */
+const SOCKET_PING_INTERVAL_MS = 25_000;
+const SOCKET_PING_TIMEOUT_MS = 20_000;
+
+/**
  * At most one line a minute while something this file depends on is away
  * (shared/logging/outage-report.ts): Redis for the adapter's frames just
  * below, Postgres for the admission recheck further down.
@@ -183,13 +202,31 @@ function socketAuthenticationError(message: string, code: string): Error {
 }
 
 /**
+ * The replica's real socket ceiling (plano-escala F5-31,
+ * shared/socket/socket-cap.ts): SOCKET_MAX_CONNECTIONS, lowered to the
+ * process's descriptor limit minus SOCKET_FD_RESERVE. Read once, at the
+ * first use: the limit does not change while the process runs.
+ */
+let socketCap: SocketCap | null = null;
+
+function currentSocketCap(): SocketCap {
+  socketCap ??= effectiveSocketCap({
+    maxConnections: env.SOCKET_MAX_CONNECTIONS,
+    fdLimit: readOpenFilesSoftLimit(),
+    fdReserve: env.SOCKET_FD_RESERVE,
+  });
+
+  return socketCap;
+}
+
+/**
  * This replica's ceilings (plano-escala U-01, shared/socket/admission.ts),
  * read at every handshake.
  */
 function admissionLimits(): SocketAdmissionLimits {
   return {
     maxInflight: env.SOCKET_HANDSHAKE_MAX_INFLIGHT,
-    maxConnections: env.SOCKET_MAX_CONNECTIONS,
+    maxConnections: currentSocketCap().cap,
   };
 }
 
@@ -568,6 +605,24 @@ async function initializeSocketIO(httpServer: Server): Promise<SocketIOServer> {
   const trustedProxy = (env.RATE_LIMIT_TRUSTED_PROXY ??
     "none") as TrustedProxyMode;
 
+  // The ceiling on the boot line, so a deploy's log says what this replica
+  // will hold and why (F5-31).
+  const cap = currentSocketCap();
+
+  log.info(
+    { socket_cap: cap.cap, fd_limit: cap.fdLimit, source: cap.source },
+    "socket ceiling",
+  );
+
+  if (cap.fdTooLow) {
+    log.warn(
+      { fd_limit: cap.fdLimit, fd_reserve: env.SOCKET_FD_RESERVE },
+      "the file descriptor limit is too low for SOCKET_FD_RESERVE: the " +
+        "descriptors are left out of the socket ceiling; raise the " +
+        "container's nofile limit",
+    );
+  }
+
   // Create a Socket.IO instance connected to the HTTP server
   io = new SocketIOServer(httpServer, {
     cors: {
@@ -587,6 +642,11 @@ async function initializeSocketIO(httpServer: Server): Promise<SocketIOServer> {
     // A connection that never sends CONNECT never reaches `io.use`; 45 s
     // (the default) was a long time to hold it.
     connectTimeout: SOCKET_CONNECT_TIMEOUT_MS,
+
+    // Pinned (F5-31): see the constants.
+    pingInterval: SOCKET_PING_INTERVAL_MS,
+    pingTimeout: SOCKET_PING_TIMEOUT_MS,
+    perMessageDeflate: false,
 
     // WebSocket only. Both clients have been websocket-only since March (the
     // polling handshake cannot survive more than one replica without
@@ -2521,7 +2581,11 @@ function realtimeMetrics(): {
   dropped_frames_unreported: number;
   handshakes_in_flight: number;
   handshakes: HandshakeWindow;
+  socket_cap: number;
+  fd_limit: number | null;
 } {
+  const cap = currentSocketCap();
+
   return {
     local_connections: io?.engine.clientsCount ?? 0,
     adapter: !io ? "off" : adapterPubClient ? "redis" : "local",
@@ -2530,6 +2594,10 @@ function realtimeMetrics(): {
     // The admission (plano-escala U-01): since the last ops_sample row.
     handshakes_in_flight: socketAdmission.inflight(),
     handshakes: handshakeMetrics.snapshot(),
+    // The real ceiling and the descriptor limit behind it (F5-31); the
+    // socket-cap-high alert compares local_connections with socket_cap.
+    socket_cap: cap.cap,
+    fd_limit: cap.fdLimit,
   };
 }
 

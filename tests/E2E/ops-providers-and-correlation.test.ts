@@ -341,6 +341,17 @@ describe("the operational metrics", () => {
       body.providers.channels.map((c: { channel: string }) => c.channel),
     ).toEqual(["EMAIL", "WHATSAPP", "PUSH", "AI_OCR", "WEBHOOK"]);
     expect(typeof body.realtime.local_connections).toBe("number");
+
+    // The socket admission (plano-escala U-01) and the replica's real
+    // ceiling (F5-31) reach the response through its schema.
+    expect(body.realtime.socket_cap).toBeGreaterThan(0);
+    expect(body.realtime).toHaveProperty("fd_limit");
+    expect(body.realtime.handshakes_in_flight).toBe(0);
+    expect(body.realtime.handshakes.refused).toMatchObject({
+      connections: 0,
+      inflight: 0,
+      credential: 0,
+    });
     expect(body.redis.status).toBe("up");
     expect(body.redis.latency_ms).not.toBeNull();
 

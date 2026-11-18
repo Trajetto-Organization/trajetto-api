@@ -1226,6 +1226,19 @@ const envSchema = z
     ),
 
     /**
+     * File descriptors kept out of the socket ceiling (plano-escala F5-31,
+     * shared/socket/socket-cap.ts): the replica holds at most the process's
+     * soft descriptor limit minus this, so the sockets never take the
+     * descriptors Postgres, Redis, HTTP and the uploads need (EMFILE takes
+     * the whole replica down, not only realtime). 0 leaves the descriptors
+     * out of the ceiling. Empty counts as absent.
+     */
+    SOCKET_FD_RESERVE: z.preprocess(
+      (value) => (value === "" ? undefined : value),
+      z.coerce.number().int().min(0).max(1_000_000).default(1_024),
+    ),
+
+    /**
      * Whether a driver's position also goes to the operations room, besides
      * `positions:<businessId>` (plano-escala U-01). On by default, so a web
      * build from before the positions subscription keeps its dots; turned

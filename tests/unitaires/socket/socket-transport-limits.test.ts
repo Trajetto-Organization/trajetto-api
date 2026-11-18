@@ -82,6 +82,7 @@ const OPEN = 1;
 let server: Server;
 let port = 0;
 let websocket: typeof import("@/websocket");
+let io: Awaited<ReturnType<typeof import("@/websocket").initializeSocketIO>>;
 
 function openRaw(): Promise<RawSocket> {
   return new Promise((done, fail) => {
@@ -111,7 +112,7 @@ beforeAll(async () => {
   port = (server.address() as AddressInfo).port;
 
   websocket = await import("@/websocket");
-  await websocket.initializeSocketIO(server);
+  io = await websocket.initializeSocketIO(server);
 }, 30_000);
 
 afterAll(async () => {
@@ -139,5 +140,43 @@ describe("a message larger than any client of ours sends", () => {
     expect(await closedWithin(socket, 1_500)).toBe(false);
 
     socket.close();
+  });
+});
+
+/**
+ * The heartbeat and the compression (plano-escala F5-31), pinned rather than
+ * left to the library's defaults, which a major version may move: 25 s
+ * between pings keeps every socket under the idle timeouts of Cloudflare
+ * and Traefik at one small frame each, 20 s without the answer is a dead
+ * peer, and permessage-deflate would hold tens of kilobytes of zlib per
+ * socket for frames of a few hundred bytes.
+ */
+describe("the heartbeat and the compression", () => {
+  it("are 25 s, 20 s and off", () => {
+    const opts = io.engine.opts as {
+      pingInterval?: number;
+      pingTimeout?: number;
+      perMessageDeflate?: unknown;
+    };
+
+    expect(opts.pingInterval).toBe(25_000);
+    expect(opts.pingTimeout).toBe(20_000);
+    expect(opts.perMessageDeflate).toBe(false);
+  });
+});
+
+describe("the replica's socket ceiling", () => {
+  it("is reported with the descriptor limit behind it", () => {
+    const { socket_cap, fd_limit } = websocket.realtimeMetrics();
+
+    // The default 5,000, or less where the descriptors say so (F5-31).
+    expect(socket_cap).toBeGreaterThan(0);
+    expect(socket_cap).toBeLessThanOrEqual(5_000);
+
+    if (process.platform === "linux") {
+      expect(fd_limit).toEqual(expect.any(Number));
+    } else {
+      expect(fd_limit).toBeNull();
+    }
   });
 });

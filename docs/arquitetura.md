@@ -3604,8 +3604,8 @@ de dois ambientes que dividam um Redis (Pub/Sub ignora o número do banco).
 - **Dois tetos por réplica**, conferidos antes de ler a credencial: no
   máximo `SOCKET_HANDSHAKE_MAX_INFLIGHT` handshakes ao mesmo tempo (64; cada
   um faz três idas ao Postgres) e `SOCKET_MAX_CONNECTIONS` sockets seguros
-  (5.000, contando as conexões do engine, inclusive a que está sendo
-  julgada). Passou de um deles, a recusa sai do middleware como
+  (5.000, ou o teto efetivo mais abaixo, contando as conexões do engine,
+  inclusive a que está sendo julgada). Passou de um deles, a recusa sai do middleware como
   `SOCKET_UNAVAILABLE` com `data.retryAfterMs` de 5 a 10 s, que a web e o app
   esperam antes de tentar de novo. Não sai do `allowRequest` de propósito: a
   recusa do engine é um 400 no upgrade, cujo corpo o navegador não deixa o
@@ -3645,6 +3645,45 @@ de dois ambientes que dividam um Redis (Pub/Sub ignora o número do banco).
   sockets, o dreno não deve ficar abaixo de 10 s (o grace de 40 s dá 12 s; o
   padrão de 10 s do Docker dá só 3 s).
   `SOCKET_GRADUAL_DRAIN=false` volta a fechar tudo de uma vez.
+
+**Teto efetivo de sockets e os limites de fora da API** (plano de escala
+F5-31, `src/shared/socket/socket-cap.ts`):
+
+- Cada WebSocket é um descritor de arquivo, como cada conexão do Postgres e
+  do Redis e cada keep-alive do HTTP. O teto que a admissão aplica é
+  `socket_cap = min(SOCKET_MAX_CONNECTIONS, fd_soft − SOCKET_FD_RESERVE)`,
+  com a reserva de 1.024 para o que não é socket: sem ela, os sockets
+  levariam os últimos descritores, e o próximo connect do Postgres falharia
+  com `EMFILE`, derrubando a réplica inteira em vez de recusar um handshake.
+  O `fd_soft` sai de `/proc/self/limits` no boot (o Node sobe o limite
+  _soft_ até o _hard_ ao iniciar, então o arquivo diz o que o processo tem
+  de fato). Fora do Linux vale só a variável. Um limite tão baixo que a
+  reserva deixaria menos de 1.024 sockets fica de fora do teto, e o boot
+  avisa: virar teto recusaria o tempo real sozinho. `socket_cap` e
+  `fd_limit` saem na seção `realtime` do `/health/metrics` e do
+  `ops_sample`; o alerta `socket-cap-high` dispara com uma réplica em 80% do
+  teto dela ([runbook](./runbooks/socket-cap-high.md)).
+- `pingInterval` de 25 s, `pingTimeout` de 20 s e `perMessageDeflate`
+  desligado ficam fixos nas opções do servidor e num teste
+  (`tests/unitaires/socket/socket-transport-limits.test.ts`), em vez de
+  depender do padrão da biblioteca. O ping de 25 s mantém cada socket bem
+  abaixo dos 100 s em que a Cloudflare fecha uma conexão ociosa, a um quadro
+  pequeno por socket; a compressão guardaria dezenas de kilobytes de zlib
+  por socket para quadros de poucas centenas de bytes.
+- **Traefik.** Cada WebSocket são duas conexões TCP no Traefik: a do
+  cliente e a dele até a réplica, pelo IP virtual (VIP) do serviço no
+  Swarm. Cada conexão até o VIP gasta uma porta efêmera do Traefik, e a
+  faixa padrão do Linux (`ip_local_port_range`, 32768 a 60999) dá cerca de
+  28 mil portas por destino: algo como 28 mil sockets por VIP e porta. Acima
+  disso, só com outro VIP (o papel `trajetto-realtime` do plano, num serviço
+  próprio) ou com a faixa ampliada no host.
+- **conntrack.** O Swarm faz o balanceamento do VIP com IPVS e NAT, e cada
+  conexão ocupa uma entrada na tabela de conntrack do host
+  (`nf_conntrack_max`), que precisa de folga para duas vezes os sockets mais
+  o HTTP. Tabela cheia descarta conexões novas em silêncio.
+- O dono roda no host e anota `cat /proc/sys/net/ipv4/ip_local_port_range`,
+  `ss -s` e `cat /proc/sys/net/netfilter/nf_conntrack_max`: são os números
+  que dizem quando o teto deixa de ser o da réplica e passa a ser o do host.
 
 A releitura logo depois do join fecha uma janela do handshake. Ele lê a
 sessão no `io.use`, em várias idas ao banco, e o socket só entra nas salas

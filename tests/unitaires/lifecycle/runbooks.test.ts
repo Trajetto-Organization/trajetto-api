@@ -124,6 +124,8 @@ function everyRuleBroken(): OperationalSnapshot[] {
       partitionRunwayDays: 1,
       stuckWorkers: [{ replica: "api-1", worker: "outbox" }],
       connectionUsagePercent: 99,
+      // A replica at 90% of its socket ceiling (F5-31).
+      sockets: [{ replica: "api-1", connections: 4_500, cap: 5_000 }],
       redisOk: false,
       proofSigning: { state: "EXPIRED", reason: null, notAfter: old },
       collectionErrors: ["worker_heartbeat: relation does not exist"],

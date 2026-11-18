@@ -54,6 +54,13 @@ const FAILURE_SAMPLE = 200;
 const REDIS_TIMEOUT_MS = 2_000;
 
 /**
+ * Each process writes its ops_sample row 0–15 s after its minute ends: three
+ * minutes always holds a live replica's newest one, and a replica stopped
+ * longer than that is gone.
+ */
+const SOCKET_SAMPLE_WINDOW_MS = 3 * 60 * 1000;
+
+/**
  * The AI reader's refusal of our token: LocalOcrHttpError messages start with
  * the status ("401 unauthorized: …"). The older alternatives match
  * Anthropic-era rows still in the 180-day window.
@@ -301,6 +308,37 @@ async function collectOperationalSnapshot(
     0,
   );
 
+  // Each replica's sockets against its ceiling (plano-escala F5-31), from
+  // its newest per-minute row: only the process itself knows its count and
+  // its descriptor limit. A replica gone for a few minutes drops out, and
+  // the previous image's rows (no socket_cap) are left out.
+  const sockets = await part(
+    "ops_sample (sockets)",
+    errors,
+    async () => {
+      const rows = await database.$queryRaw<
+        Array<{ replica: string; connections: number; cap: number }>
+      >`
+        SELECT DISTINCT ON ("replica")
+          "replica",
+          ("metrics" -> 'realtime' ->> 'local_connections')::int AS connections,
+          ("metrics" -> 'realtime' ->> 'socket_cap')::int AS cap
+        FROM "ops_sample"
+        WHERE "ts" >= ${new Date(now.getTime() - SOCKET_SAMPLE_WINDOW_MS)}
+          AND "role" <> 'cluster'
+          AND "metrics" -> 'realtime' ->> 'socket_cap' IS NOT NULL
+        ORDER BY "replica", "ts" DESC
+      `;
+
+      return rows.map((row) => ({
+        replica: row.replica,
+        connections: Number(row.connections ?? 0),
+        cap: Number(row.cap ?? 0),
+      }));
+    },
+    undefined,
+  );
+
   const redisOk = await pingRedis();
 
   // The proof signing certificate (design §7.4): read from the process's own
@@ -395,6 +433,7 @@ async function collectOperationalSnapshot(
     ...(geocodingQuota && { geocodingQuota }),
     ...(feedTxid && { feedTxid }),
     ...(clusterEpoch && { clusterEpoch }),
+    ...(sockets && { sockets }),
     collectionErrors: errors,
   };
 }
