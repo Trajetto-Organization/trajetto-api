@@ -4182,6 +4182,26 @@ o objeto do dia e da empresa; o `sha256` e o `row_count` dele estão em
 removidos e anonimizados (`trail_archive_redaction`, F3-27;
 `withoutRedactedDrivers`).
 
+**Pool de CPU** (plano de escala F3-29, `src/shared/cpu-pool/`). O parse
+das NF-e (`POST /delivery/import-xml/:businessId`, até 25 por chamada) e a
+planilha da exportação em Excel rodam em _worker threads_, não no _event
+loop_ dos pedidos: 25 NF-e grandes eram mais de um segundo de CPU parado
+para todas as requisições e sockets da réplica, e o ExcelJS monta o XML de
+cada linha e zipa o arquivo na thread que o roda, durante o download
+inteiro. São até `CPU_POOL_THREADS` threads (padrão 2; `0` faz tudo na
+thread principal, como antes), criadas no primeiro uso, cada uma com teto
+de heap `CPU_POOL_THREAD_MAX_OLD_MB` (que o orçamento de memória do boot
+conta). Uma chamada espera uma thread por até `CPU_POOL_TIMEOUT_MS`, numa
+fila de até `CPU_POOL_MAX_PENDING`; fila cheia é `503 CPU_POOL_BUSY` na
+hora, com `retry-after`; a thread que não responde no prazo é trocada
+(`503 CPU_POOL_TIMEOUT`), e a que morre leva só a chamada dela
+(`503 CPU_POOL_UNAVAILABLE`). A importação de XML lê todos os arquivos
+antes de gravar qualquer coisa, então a recusa do pool chega antes da
+primeira entrega. A exportação em Excel prende uma thread pelo download
+inteiro (as linhas vão em lotes de 500 e os bytes voltam para o socket),
+e as exportações usam no máximo todas as threads menos uma, para a NF-e
+não esperar um download; a recusa chega antes do primeiro byte.
+
 **Importação de planilha** (`POST /import/import-spreadsheet/:businessId`) é
 assíncrona: o pedido valida embarcador e arquivo (tamanho inflado, células e
 linhas contados no zip antes de carregar o .xlsx; `413` acima disso), abre a

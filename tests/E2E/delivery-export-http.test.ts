@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
+import ExcelJS from "exceljs";
 import { sign } from "jsonwebtoken";
 
 import { randomUUID } from "node:crypto";
@@ -359,6 +360,20 @@ describe("exporting the operation", () => {
 
     expect(response.statusCode).toBe(200);
     expect(response.headers["content-type"]).toContain("spreadsheetml");
+
+    // Built on a thread of the CPU pool (plano-escala F3-29): a workbook
+    // that opens, with the CSV's header and one row per record.
+    const csv = (await exportDeliveries()).body;
+    const book = new ExcelJS.Workbook();
+
+    await book.xlsx.load(response.rawPayload as never);
+
+    const sheet = book.getWorksheet("Relatório");
+
+    expect(sheet?.rowCount).toBe(1 + rowsOf(csv).length);
+    expect((sheet?.getRow(1).values as unknown[]).slice(1)).toEqual(
+      parseCsv(csv)[0].map((cell) => String(cell ?? "")),
+    );
   });
 
   it("is refused without a token", async () => {

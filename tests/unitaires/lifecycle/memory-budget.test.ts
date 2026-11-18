@@ -154,6 +154,45 @@ describe("the plan's table", () => {
 
     expect(budget).toMatchObject({ ok: true, totalMb: 256 + 150 });
   });
+
+  it("counts every CPU pool thread at its ceiling (F3-29)", () => {
+    // The api of section 3: staging heap 288 in 512 MiB with one thread,
+    // production heap 448 in 768 MiB with two; no spreadsheet thread.
+    const staging = evaluateMemoryBudget(
+      budgetEnv({
+        SPREADSHEET_READS_PER_PROCESS: 0,
+        CPU_POOL_THREADS: 1,
+        CPU_POOL_THREAD_MAX_OLD_MB: 64,
+      }),
+      system({ limitMb: 512, heapMb: 288 }),
+    );
+    const production = evaluateMemoryBudget(
+      budgetEnv({
+        SPREADSHEET_READS_PER_PROCESS: 0,
+        CPU_POOL_THREADS: 2,
+        CPU_POOL_THREAD_MAX_OLD_MB: 64,
+      }),
+      system({ limitMb: 768, heapMb: 448 }),
+    );
+
+    expect(staging).toMatchObject({ ok: true, totalMb: 288 + 64 + 150 });
+    expect(staging.parts).toMatchObject({
+      cpuPoolThreads: 1,
+      cpuPoolThreadMaxOldMb: 64,
+    });
+    expect(production).toMatchObject({
+      ok: true,
+      totalMb: 448 + 2 * 64 + 150,
+    });
+
+    // Eight threads of 64 do not fit the staging api.
+    expect(
+      evaluateMemoryBudget(
+        budgetEnv({ SPREADSHEET_READS_PER_PROCESS: 0, CPU_POOL_THREADS: 8 }),
+        system({ limitMb: 512, heapMb: 288 }),
+      ),
+    ).toMatchObject({ ok: false, totalMb: 288 + 8 * 64 + 150 });
+  });
 });
 
 describe("the boot", () => {

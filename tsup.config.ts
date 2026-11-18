@@ -35,6 +35,10 @@ export default defineConfig({
     // (build/spreadsheet-read-worker.js) by this name.
     "spreadsheet-read-worker":
       "./src/modules/import/services/spreadsheet-read-worker.ts",
+    // The CPU pool's worker thread (plano-escala F3-29): the NF-e parse and
+    // the Excel export's workbook. cpu-pool.ts loads it from next to
+    // server.js (build/cpu-pool-worker.js) by this name.
+    "cpu-pool-worker": "./src/shared/cpu-pool/cpu-pool-worker.ts",
   },
   format: ["cjs"],
   target: "es2020",

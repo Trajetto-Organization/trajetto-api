@@ -46,6 +46,7 @@ import {
   resolveProcessRole,
 } from "@/shared/lifecycle/process-role";
 import {
+  CPU_POOL_THREAD_DEFAULT_MAX_OLD_MB,
   MEMORY_BUDGET_MODES,
   NATIVE_RESERVE_DEFAULT_MB,
 } from "@/shared/lifecycle/memory-budget";
@@ -1043,6 +1044,37 @@ const envSchema = z
     IMPORT_ROWS_PER_TRANSACTION: z.preprocess(
       (value) => (value === "" ? undefined : value),
       z.coerce.number().int().min(1).max(500).default(100),
+    ),
+
+    // The CPU pool (plano-escala F3-29; shared/cpu-pool): the NF-e parse and
+    // the Excel export's workbook run on worker threads instead of the
+    // request's event loop. CPU_POOL_THREADS threads at most, started on
+    // first use (0 = in process, as before), each with a heap of
+    // CPU_POOL_THREAD_MAX_OLD_MB, which the memory budget counts;
+    // CPU_POOL_MAX_PENDING calls waiting for a thread, past which the call
+    // is refused with 503 CPU_POOL_BUSY; CPU_POOL_TIMEOUT_MS for a call to
+    // get a thread and for the thread to answer (one that does not is
+    // replaced). Empty counts as absent.
+    CPU_POOL_THREADS: z.preprocess(
+      (value) => (value === "" ? undefined : value),
+      z.coerce.number().int().min(0).max(8).default(2),
+    ),
+    CPU_POOL_MAX_PENDING: z.preprocess(
+      (value) => (value === "" ? undefined : value),
+      z.coerce.number().int().min(1).max(256).default(16),
+    ),
+    CPU_POOL_TIMEOUT_MS: z.preprocess(
+      (value) => (value === "" ? undefined : value),
+      z.coerce.number().int().min(1_000).max(120_000).default(20_000),
+    ),
+    CPU_POOL_THREAD_MAX_OLD_MB: z.preprocess(
+      (value) => (value === "" ? undefined : value),
+      z.coerce
+        .number()
+        .int()
+        .min(16)
+        .max(1_024)
+        .default(CPU_POOL_THREAD_DEFAULT_MAX_OLD_MB),
     ),
 
     // The process's memory budget, checked at boot (plano-escala U-15;

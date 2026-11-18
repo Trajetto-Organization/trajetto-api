@@ -1070,6 +1070,20 @@ function openapiTransform(input: TransformInput): {
     );
   }
 
+  // The CPU pool (plano-escala F3-29, shared/cpu-pool): the Excel workbook
+  // of every export and the NF-e of the XML import run on its threads.
+  if (/\/export-[a-z-]+$/.test(url) || /\/import-xml\//.test(url)) {
+    mergeResponse(
+      responses,
+      "503",
+      errorBody(
+        "CPU_POOL_BUSY: as threads que processam arquivos neste servidor (a planilha em Excel da exportação, as NF-e da importação) estão ocupadas e a fila está cheia; CPU_POOL_TIMEOUT: o arquivo demorou demais para ser processado; CPU_POOL_UNAVAILABLE: o processamento foi interrompido. Chega antes de qualquer gravação e antes do primeiro byte do arquivo. Espere o `retry-after` e repita.",
+        ["CPU_POOL_BUSY", "CPU_POOL_TIMEOUT", "CPU_POOL_UNAVAILABLE"],
+        { "retry-after": RETRY_AFTER_HEADER },
+      ),
+    );
+  }
+
   // The offset ceiling (shared/pagination/offset-ceiling.ts): every route
   // whose querystring pages by `page` and `pageSize`.
   const queryFields = ((schema as { querystring?: JsonSchema }).querystring

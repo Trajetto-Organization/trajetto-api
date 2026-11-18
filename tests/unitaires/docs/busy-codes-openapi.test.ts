@@ -229,6 +229,11 @@ describe("every ServiceBusyError code", () => {
         "SERVICE_BUSY",
         // The company's panel budget, with its person's slice (F2-28).
         "TENANT_BUSY",
+        // The CPU pool's line full, a thread that did not answer, a
+        // thread lost (F3-29): every export's 503 and the XML import's.
+        "CPU_POOL_BUSY",
+        "CPU_POOL_TIMEOUT",
+        "CPU_POOL_UNAVAILABLE",
       ]),
     );
 

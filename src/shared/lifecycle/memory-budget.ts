@@ -8,7 +8,8 @@ import { getHeapStatistics } from "node:v8";
  * memory.max — and several heaps live under it: the main one
  * (--max-old-space-size), one per spreadsheet thread
  * (SPREADSHEET_READS_PER_PROCESS × SPREADSHEET_WORKER_MAX_OLD_MB, F3-23b),
- * one per CPU pool thread (F3-29, none yet), and what V8 and the native
+ * one per CPU pool thread (CPU_POOL_THREADS × CPU_POOL_THREAD_MAX_OLD_MB,
+ * F3-29), and what V8 and the native
  * libraries hold outside every heap (NATIVE_RESERVE_MB). Moving the
  * spreadsheet read to a thread gave it a heap of its own ON TOP of the main
  * one: with the 768 MB heap of today in a 1 GiB container, the first big
@@ -37,7 +38,7 @@ import { getHeapStatistics } from "node:v8";
 /** What V8 and the native libraries hold outside every heap. */
 const NATIVE_RESERVE_DEFAULT_MB = 150;
 
-/** One CPU pool thread's heap (F3-29), when the pool exists. */
+/** One CPU pool thread's heap (F3-29) when CPU_POOL_THREAD_MAX_OLD_MB is unset. */
 const CPU_POOL_THREAD_DEFAULT_MAX_OLD_MB = 64;
 
 /**
@@ -188,6 +189,11 @@ function spreadsheetMaxOldMb(input: {
 interface MemoryBudgetEnv {
   SPREADSHEET_READS_PER_PROCESS: number;
   SPREADSHEET_WORKER_MAX_OLD_MB?: number;
+
+  /** The CPU pool's threads and their heap (F3-29); absent = none. */
+  CPU_POOL_THREADS?: number;
+  CPU_POOL_THREAD_MAX_OLD_MB?: number;
+
   NATIVE_RESERVE_MB: number;
   MEMORY_BUDGET_MODE: MemoryBudgetMode;
 }
@@ -223,9 +229,10 @@ function evaluateMemoryBudget(
   env: MemoryBudgetEnv,
   system: MemorySystem = realSystem,
   cpuPool: { threads: number; maxOldMb: number } = {
-    // The CPU pool of F3-29 does not exist yet: nothing to count.
-    threads: 0,
-    maxOldMb: CPU_POOL_THREAD_DEFAULT_MAX_OLD_MB,
+    // The CPU pool of F3-29: every thread it may start, at its ceiling.
+    threads: env.CPU_POOL_THREADS ?? 0,
+    maxOldMb:
+      env.CPU_POOL_THREAD_MAX_OLD_MB ?? CPU_POOL_THREAD_DEFAULT_MAX_OLD_MB,
   },
 ): MemoryBudget {
   const ceiling = cgroupMemoryMaxMb(system.readFile);
@@ -273,8 +280,8 @@ function memoryBudgetMessage(budget: MemoryBudget): string {
     `planilha + ${parts.cpuPoolThreads} × ${parts.cpuPoolThreadMaxOldMb} ` +
     `MiB do pool de CPU + ${parts.nativeMb} MiB de reserva nativa = ` +
     `${budget.totalMb} MiB, acima do teto de ${budget.limitMb} MiB do ` +
-    "contêiner. Baixe o --max-old-space-size do NODE_OPTIONS ou o " +
-    "SPREADSHEET_WORKER_MAX_OLD_MB, ou suba o Memory da Application " +
+    "contêiner. Baixe o --max-old-space-size do NODE_OPTIONS, o " +
+    "SPREADSHEET_WORKER_MAX_OLD_MB ou o CPU_POOL_THREADS, ou suba o Memory da Application " +
     "(docs/runbooks/memory-budget.md)."
   );
 }

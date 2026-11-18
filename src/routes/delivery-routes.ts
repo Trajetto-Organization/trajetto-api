@@ -158,9 +158,11 @@ async function deliveryRoutes(app: FastifyInstance) {
       ],
       bodyLimit: IMPORT_BODY_LIMIT,
 
-      // Up to 25 NF-e per call, parsed synchronously: a large one blocks the
-      // event loop for ~57 ms, so a loop of full imports was seconds of CPU a
-      // second for everyone on the replica.
+      // Up to 25 NF-e per call. A large one took ~57 ms of CPU, which held
+      // the event loop while it was parsed in process: a loop of full
+      // imports was seconds of CPU a second for everyone on the replica.
+      // They are parsed on the CPU pool's threads now (plano-escala F3-29),
+      // and the limit still bounds what one address sends there.
       config: { rateLimit: { max: 10, timeWindow: "1 minute" } },
       schema: {
         security: [{ bearerAuth: [] }],

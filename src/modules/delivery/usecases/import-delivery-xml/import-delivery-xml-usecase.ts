@@ -14,13 +14,18 @@ import {
   ShipperInactiveError,
 } from "@/modules/shipper/usecases/errors/shipper-errors";
 
-import { parseNFeXml, NFeParseError } from "@/shared/delivery/nfe-parser";
+import {
+  NFeParseError,
+  type NFeParsedData,
+} from "@/shared/delivery/nfe-parser";
+import { parseNFeOffThread } from "@/shared/cpu-pool";
 import {
   readRecipientEmails,
   recipientEmailNotice,
   storedRecipientEmail,
 } from "@/shared/delivery/recipient-email";
 import { AppError } from "@/shared/errors/AppError";
+import { ServiceBusyError } from "@/shared/errors/service-busy-error";
 import { assertDispatcher } from "@/shared/delivery/dispatcher-guard";
 import { assertTenantAccess } from "@/modules/middlewares/tenant-authorization";
 
@@ -150,6 +155,32 @@ function issuerNameTaken(issuerName: string): AppError {
  *   spreadsheet: the record exists before the first delivery, each delivery
  *   carries its id, and the upload can be reversed.
  */
+/** A file's parse: the NF-e, or why it is not one. */
+type ParsedFile =
+  { ok: true; parsed: NFeParsedData } | { ok: false; message: string };
+
+/**
+ * One file's parse. The parser's refusal (or any failure of the parser on
+ * that file) makes it an invalid file of the report; the pool's own
+ * refusal (busy, a thread that did not answer) goes up, a 503 for the
+ * whole upload.
+ */
+async function parseFile(file: ImportFile): Promise<ParsedFile> {
+  try {
+    return { ok: true, parsed: await parseNFeOffThread(file.content) };
+  } catch (error) {
+    if (error instanceof ServiceBusyError) throw error;
+
+    return {
+      ok: false,
+      message:
+        error instanceof NFeParseError
+          ? error.message
+          : "Não foi possível interpretar o arquivo.",
+    };
+  }
+}
+
 @injectable()
 class ImportDeliveryXmlUseCase {
   constructor(
@@ -210,6 +241,13 @@ class ImportDeliveryXmlUseCase {
       }
     }
 
+    // Every file parsed first, on the CPU pool (plano-escala F3-29), one at
+    // a time: 25 NF-e no longer hold the replica's event loop, and a pool
+    // that is full refuses the upload (503) before anything is written.
+    const parsedFiles: ParsedFile[] = [];
+
+    for (const file of files) parsedFiles.push(await parseFile(file));
+
     // Opened before the first delivery, so each one carries the upload's id
     // from birth and a process dying mid-way leaves an upload the operator
     // can still reverse (closed by the abandoned-import sweep).
@@ -232,6 +270,7 @@ class ImportDeliveryXmlUseCase {
         results.push(
           await this.importSingleFile({
             file,
+            parsedFile: parsedFiles[index],
             businessId,
             importId: record.id,
             forcedShipperId: shipperId,
@@ -315,6 +354,7 @@ class ImportDeliveryXmlUseCase {
 
   private async importSingleFile({
     file,
+    parsedFile,
     businessId,
     importId,
     forcedShipperId,
@@ -322,28 +362,24 @@ class ImportDeliveryXmlUseCase {
     createdShippers,
   }: {
     file: ImportFile;
+    parsedFile: ParsedFile;
     businessId: string;
     importId: string;
     forcedShipperId?: string;
     scheduled_date?: Date | null;
     createdShippers: string[];
   }): Promise<ImportResultItem> {
-    let parsed;
-
-    try {
-      parsed = parseNFeXml(file.content);
-    } catch (error) {
+    if (!parsedFile.ok) {
       return {
         filename: file.filename,
         outcome: "invalid",
         invoice_key: null,
         recipient_name: null,
-        message:
-          error instanceof NFeParseError
-            ? error.message
-            : "Não foi possível interpretar o arquivo.",
+        message: parsedFile.message,
       };
     }
+
+    const { parsed } = parsedFile;
 
     const existing = await this.delivery.findDeliveryByInvoiceKey(
       businessId,

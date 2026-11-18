@@ -4,14 +4,14 @@
 
 ## O que significa
 
-No boot, cada processo soma o que pode ocupar de memória: o heap principal (o `--max-old-space-size` do `NODE_OPTIONS`), as threads que leem planilhas (`SPREADSHEET_READS_PER_PROCESS` × `SPREADSHEET_WORKER_MAX_OLD_MB`), as threads do pool de CPU quando existirem e a reserva do que o V8 e as bibliotecas nativas seguram fora de todo heap (`NATIVE_RESERVE_MB`, 150). A soma tem de caber no teto do contêiner, o _Memory_ da Application (o `memory.max` do cgroup) — plano de escala, U-15.
+No boot, cada processo soma o que pode ocupar de memória: o heap principal (o `--max-old-space-size` do `NODE_OPTIONS`), as threads que leem planilhas (`SPREADSHEET_READS_PER_PROCESS` × `SPREADSHEET_WORKER_MAX_OLD_MB`), as threads do pool de CPU (`CPU_POOL_THREADS` × `CPU_POOL_THREAD_MAX_OLD_MB`, plano de escala F3-29; padrão 2 × 64) e a reserva do que o V8 e as bibliotecas nativas seguram fora de todo heap (`NATIVE_RESERVE_MB`, 150). A soma tem de caber no teto do contêiner, o _Memory_ da Application (o `memory.max` do cgroup) — plano de escala, U-15.
 
 A leitura da planilha numa thread (F3-23b) deu a ela um heap só dela, **somado** ao principal. Com o heap de 768 MiB de antes num contêiner de 1 GiB, a primeira planilha grande pode levar o processo além do teto, e o kernel mata o contêiner inteiro, com todas as requisições dele. Com `MEMORY_BUDGET_MODE=warn` (o padrão deste release) o processo subiu mesmo assim: o log tem `memory budget does not fit` com as partes, o `/health/metrics` traz `memory_budget_ok: false` e este alerta toca. Com `enforce`, o boot é recusado com a mesma frase.
 
 ## Primeira ação
 
 1. Veja `memory_budget` em `/health/metrics` da réplica (ou o log do boot): `limit_mb`, `heap_mb`, `spreadsheet_reads`, `spreadsheet_max_old_mb` e `native_mb`.
-2. Aplique os valores de [`deploy.md` → Tetos por Application e por fase](../deploy.md#tetos-por-application-e-por-fase) na Application certa, no _Environment_ dela no Dokploy, e faça o Deploy. Na `trajetto-api` de produção com 1 GiB: `NODE_OPTIONS=--max-old-space-size=576` e `SPREADSHEET_WORKER_MAX_OLD_MB=256` (576 + 256 + 150 = 982 de 1.024).
+2. Aplique os valores de [`deploy.md` → Tetos por Application e por fase](../deploy.md#tetos-por-application-e-por-fase) na Application certa, no _Environment_ dela no Dokploy, e faça o Deploy. Na `trajetto-api` de produção com 1 GiB: `NODE_OPTIONS=--max-old-space-size=576` e `SPREADSHEET_WORKER_MAX_OLD_MB=256` (576 + 256 + 150 = 982 de 1.024); com o pool de CPU no padrão (2 × 64), a soma passa do teto até a onda 14 baixar o heap (`NODE_OPTIONS=--max-old-space-size=480`, 480 + 256 + 128 + 150 = 1.014). `CPU_POOL_THREADS=0` tira o pool da conta, e o parse das NF-e e a planilha da exportação voltam para a thread principal.
 3. Se o heap não pode baixar, suba o _Memory_ da Application (_Advanced → Resources_) e refaça a conta do host antes.
 
 ```sql
