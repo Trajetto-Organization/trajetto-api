@@ -5,7 +5,10 @@ import { container } from "tsyringe";
 
 import { ListAllActivitiesUseCase } from "./list-all-activities-usecase";
 
-import { listActivitiesSchema } from "@/schemas/list-activities-schema";
+import {
+  ACTIVITY_TABLE_PERIODS,
+  listActivitiesSchema,
+} from "@/schemas/list-activities-schema";
 import { sendAsNDJSON } from "@/config/stream-utils";
 
 class ListAllActivitiesController {
@@ -24,6 +27,7 @@ class ListAllActivitiesController {
       type,
       action,
       role: roles,
+      period,
     } = request.query as z.infer<typeof listActivitiesSchema>;
 
     const listAllActivitiesUseCase = container.resolve(
@@ -44,6 +48,7 @@ class ListAllActivitiesController {
         actions: action,
         roles,
         order,
+        periodDays: period ? ACTIVITY_TABLE_PERIODS[period] : undefined,
       }),
       page,
       pageSize,

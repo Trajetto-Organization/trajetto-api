@@ -1311,6 +1311,39 @@ const envSchema = z
     ),
 
     /**
+     * How far before a period's first day the activity listings look by id
+     * (plano-escala F2-19, src/shared/activity/activity-period.ts). From the
+     * copy window of wave 11 on, activity is partitioned by month on its id,
+     * and a period read only by created_at plans and reads every month; the
+     * id floor keeps it on the one or two the period is in. The margin
+     * covers an id minted before its row's created_at: a replica's clock,
+     * and an activity of the notification pipeline, whose id is its
+     * delivery's, written when the delivery ran. 0 turns the floor off (the
+     * reads by created_at alone, as before). Empty counts as absent.
+     */
+    ACTIVITY_ID_FLOOR_MARGIN_MS: z.preprocess(
+      (value) => (value === "" ? undefined : value),
+      z.coerce
+        .number()
+        .int()
+        .min(0)
+        .max(31 * 24 * 60 * 60 * 1000)
+        .default(2 * 24 * 60 * 60 * 1000),
+    ),
+
+    /**
+     * Up to how many rows the activity table counts (plano-escala F2-19,
+     * decision D42): past it the total reads "10.000+" (`totalCapped`), and
+     * the count stops reading there instead of going through the whole
+     * trail for a number the pager cannot reach anyway (LIST_MAX_OFFSET).
+     * 0 counts every row, as before. Empty counts as absent.
+     */
+    ACTIVITY_COUNT_CAP: z.preprocess(
+      (value) => (value === "" ? undefined : value),
+      z.coerce.number().int().min(0).max(100_000_000).default(10_000),
+    ),
+
+    /**
      * How often each replica re-checks, in the database, the sessions of its
      * sockets (±25% jitter). The safety net of revocation: the frame that
      * drops a socket travels through Redis and is lost if Redis blinks, so

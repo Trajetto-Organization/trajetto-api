@@ -67,11 +67,23 @@ interface ListRecentActivitiesProps extends ActivityListFilters {
   userId: string;
   /** Only `created_at` is ordered on the server (indexed); default desc. */
   order?: "asc" | "desc";
+  /**
+   * The table's window in civil days of the company's zone (plano-escala
+   * F2-19); absent, the whole trail.
+   */
+  periodDays?: number;
 }
 
 interface ListActivityProps {
   data: Activity[];
+  /** Capped at ACTIVITY_COUNT_CAP (F2-19): see `meta.totalCapped`. */
   total: number;
+  meta: {
+    /** There are more rows than `total` ("10.000+"). */
+    totalCapped: boolean;
+    /** The window the table read; null for the whole trail. */
+    periodDays: number | null;
+  };
 }
 
 /** A fixed number of the newest rows, with no page and no total. */

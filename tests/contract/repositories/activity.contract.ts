@@ -25,10 +25,13 @@ const F = ACTIVITY_FIXTURE;
 
 /**
  * Ids in creation order (uuid v7 sorts by time; these sort by their suffix).
- * The feed orders by id desc.
+ * The feed orders by id desc. Of this hour, as the app mints them when the
+ * row is written: a period's listing bounds the ids too (plano-escala
+ * F2-19), and an id of another year would fall outside it.
  */
+const MINTED = Date.now().toString(16).padStart(12, "0");
 const at = (n: number) =>
-  `018fde00-0000-7000-8000-${String(n).padStart(12, "0")}`;
+  `${MINTED.slice(0, 8)}-${MINTED.slice(8, 12)}-7000-8000-${String(n).padStart(12, "0")}`;
 
 interface ActivitySeed {
   id: string;

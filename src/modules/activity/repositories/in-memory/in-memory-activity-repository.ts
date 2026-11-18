@@ -16,6 +16,10 @@ import {
 
 import { presentActivityActors } from "@/shared/activity/actor-presentation";
 import {
+  activityIdRange,
+  cappedActivityTotal,
+} from "@/shared/activity/activity-period";
+import {
   activityDataVersion,
   type ActivityDataVersion,
 } from "@/shared/activity/activity-data-version";
@@ -312,8 +316,13 @@ class InMemoryActivityRepository implements IActivityRepository {
         ? resolveTimeZone(this.businesses.get(scopeBusinessId)?.timezone)
         : DEFAULT_BUSINESS_TIMEZONE;
       const { start } = businessDaysRange(new Date(), timeZone, periodDays);
+      const ids = activityIdRange(start);
 
-      rows = rows.filter((row) => time(row.created_at) >= start.getTime());
+      rows = rows.filter(
+        (row) =>
+          time(row.created_at) >= start.getTime() &&
+          (ids === null || (row.id >= ids.gte && row.id < ids.lt)),
+      );
     }
 
     return rows;
@@ -377,6 +386,7 @@ class InMemoryActivityRepository implements IActivityRepository {
     actions,
     roles,
     order = "desc",
+    periodDays,
   }: ListRecentActivitiesProps): Promise<ListActivityProps> {
     // orderBy [{ created_at: order }, { id: order }], as Postgres sorts it.
     const rows = this.scope({
@@ -384,6 +394,7 @@ class InMemoryActivityRepository implements IActivityRepository {
       businessId,
       search,
       userId,
+      periodDays,
       filters: { statuses, types, actions, roles },
     }).sort(
       (a, b) =>
@@ -395,6 +406,8 @@ class InMemoryActivityRepository implements IActivityRepository {
     );
 
     const start = (page - 1) * pageSize;
+    // The count stops past ACTIVITY_COUNT_CAP, as the Prisma one (F2-19).
+    const { total, totalCapped } = cappedActivityTotal(rows.length);
 
     return {
       data: presentActivityActors(
@@ -403,7 +416,8 @@ class InMemoryActivityRepository implements IActivityRepository {
           .map((row) => this.joined(row, currentUserRole)),
         currentUserRole,
       ),
-      total: rows.length,
+      total,
+      meta: { totalCapped, periodDays: periodDays ?? null },
     };
   }
 

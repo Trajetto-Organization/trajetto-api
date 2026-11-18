@@ -5,7 +5,7 @@ import { responseDateTime } from "./response-date";
 
 import { errorResponse, internalErrorResponse } from "./common-responses";
 import { activitySummarySchema } from "@/schemas/activity-summary-schema";
-import { cursorMeta } from "./ndjson";
+import { cursorMeta, offsetMetaWith } from "./ndjson";
 
 const activitySchemas = {
   activitySummaryQuery: activitySummarySchema,
@@ -104,6 +104,22 @@ const activityResponses = {
       periodDays: z.number(),
     }),
   }),
+  // The table's total stops at ACTIVITY_COUNT_CAP (plano-escala F2-19).
+  activityListMeta: offsetMetaWith(
+    z.object({
+      totalCapped: z
+        .boolean()
+        .describe(
+          "true quando há mais linhas que `total` (o teto de contagem, 10.000): mostre `10.000+`. O paginador não passa disso (LIST_OFFSET_TOO_DEEP); filtre pelo período ou exporte.",
+        ),
+      periodDays: z
+        .number()
+        .nullable()
+        .describe(
+          "A janela da tabela, em dias (`period`); null para o registro inteiro.",
+        ),
+    }),
+  ),
   // The cursor feed sends no total at all, and says which window it read.
   activityCursorMeta: cursorMeta(
     {

@@ -27,10 +27,13 @@ async function activityRoutes(app: FastifyInstance) {
         tags: ["activity"],
         summary: "Lista o registro de atividades (tabela)",
         description:
-          "O registro de atividades em páginas, mais recentes primeiro (`order=asc` inverte). Filtra no servidor, sobre o registro inteiro e não sobre a página: `status`, `type`, `action` e `role` (um ou mais valores do catálogo, separados por vírgula). O status filtrado também encontra as grafias antigas do mesmo status. `role=DRIVER` são as ações do motorista pelo aplicativo; `PLATFORM`/`MASTER`, as da equipe Trajetto. O MASTER vê todas as empresas ou uma (`businessId`); o administrador vê a própria empresa, sem as ações do MASTER exceto as mudanças do plano dela.",
+          "O registro de atividades em páginas, mais recentes primeiro (`order=asc` inverte). Filtra no servidor, sobre o registro inteiro e não sobre a página: `status`, `type`, `action` e `role` (um ou mais valores do catálogo, separados por vírgula). O status filtrado também encontra as grafias antigas do mesmo status. `role=DRIVER` são as ações do motorista pelo aplicativo; `PLATFORM`/`MASTER`, as da equipe Trajetto. O MASTER vê todas as empresas ou uma (`businessId`); o administrador vê a própria empresa, sem as ações do MASTER exceto as mudanças do plano dela. `period` (7d, 30d, 90d ou 365d) recorta a tabela em dias civis no fuso da empresa; sem ele, o registro inteiro. O total para de contar em 10.000: acima disso, `meta.searchMeta.totalCapped` vem true e o total é 10.000 (mostre `10.000+`).",
         querystring: activitySchemas.listAllActivitiesQuery,
         response: {
-          200: ndjsonList(activityResponses.activityRow),
+          200: ndjsonList(
+            activityResponses.activityRow,
+            activityResponses.activityListMeta,
+          ),
           400: activityResponses.listActivitiesErrors,
           403: activityResponses.activityForbidden,
           500: activityResponses.internalServerError,

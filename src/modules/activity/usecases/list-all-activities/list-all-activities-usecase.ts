@@ -20,6 +20,8 @@ interface ListAllActivitiesRequest extends ActivityListFilters {
   pageSize: number;
   search?: string;
   order?: "asc" | "desc";
+  /** The table's window in days (F2-19); absent, the whole trail. */
+  periodDays?: number;
 }
 
 /**
@@ -48,6 +50,7 @@ class ListAllActivitiesUseCase {
     actions,
     roles,
     order,
+    periodDays,
   }: ListAllActivitiesRequest): Promise<ListActivityProps> {
     const user = await this.userRepository.findUserById(userId);
 
@@ -69,6 +72,7 @@ class ListAllActivitiesUseCase {
         actions,
         roles,
         order,
+        periodDays,
       });
     } catch (error) {
       throw new AppError("Erro ao listar todas as atividades", 500);

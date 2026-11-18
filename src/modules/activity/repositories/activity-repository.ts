@@ -16,6 +16,11 @@ import {
 
 import { presentActivityActors } from "@/shared/activity/actor-presentation";
 import {
+  activityCountTake,
+  activityIdRange,
+  cappedActivityTotal,
+} from "@/shared/activity/activity-period";
+import {
   activityDataVersion,
   type ActivityDataVersion,
 } from "@/shared/activity/activity-data-version";
@@ -296,6 +301,12 @@ class ActivityRepository implements IActivityRepository {
       const { start } = businessDaysRange(new Date(), timeZone, periodDays);
 
       and.push({ created_at: { gte: start } });
+
+      // The same period as ids (plano-escala F2-19): with the trail
+      // partitioned by month on its id, it reads the months it is in.
+      const ids = activityIdRange(start);
+
+      if (ids) and.push({ id: ids });
     }
 
     return and.length > 0 ? { AND: and } : {};
@@ -375,16 +386,20 @@ class ActivityRepository implements IActivityRepository {
     actions,
     roles,
     order = "desc",
+    periodDays,
   }: ListRecentActivitiesProps): Promise<ListActivityProps> {
     const whereCondition = await this.buildActivityScope({
       currentUserRole,
       businessId,
       search,
       userId,
+      periodDays,
       filters: { statuses, types, actions, roles },
     });
 
-    const [activities, total] = await Promise.all([
+    // The count stops one row past ACTIVITY_COUNT_CAP (F2-19): the pager
+    // cannot go deeper, and the rest reads "10.000+".
+    const [activities, counted] = await Promise.all([
       this.prisma.activity.findMany({
         skip: (page - 1) * pageSize,
         take: pageSize,
@@ -394,12 +409,16 @@ class ActivityRepository implements IActivityRepository {
       }),
       this.prisma.activity.count({
         where: whereCondition,
+        take: activityCountTake(),
       }),
     ]);
+
+    const { total, totalCapped } = cappedActivityTotal(counted);
 
     return {
       data: presentActivityActors(activities, currentUserRole),
       total,
+      meta: { totalCapped, periodDays: periodDays ?? null },
     };
   }
 

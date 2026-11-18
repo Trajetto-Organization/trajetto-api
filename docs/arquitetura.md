@@ -4867,6 +4867,19 @@ comum, `2` na particionada, lido do catálogo;
 `src/shared/activity/activity-data-version.ts`), e a web descarta a linha
 do tempo que uma aba guardava quando ele muda.
 
+**O período das atividades vira faixa de ids (plano de escala, F2-19).** Toda
+listagem de atividades com período (a linha do tempo, os cartões e a tabela
+com `period`: 7d, 30d, 90d ou 365d) leva também uma faixa de ids, de
+`ACTIVITY_ID_FLOOR_MARGIN_MS` (2 dias) antes do primeiro instante até uma
+hora depois de agora (`src/shared/activity/activity-period.ts`): na tabela
+particionada, o período lê um ou dois meses. O `created_at` continua
+decidindo o que entra; a faixa só tira da leitura os meses que não podem
+ter a resposta, e a margem cobre a atividade do pipeline, que leva o id da
+entrega de notificação. A tabela para de contar em `ACTIVITY_COUNT_CAP`
+(10.000): acima disso o total vem 10.000 com `searchMeta.totalCapped`, e a
+web mostra o teto do paginador. Sem `period` (a web de antes), a tabela lê
+o registro inteiro, com a contagem também limitada. `0` desliga cada um.
+
 O guard `tests/unitaires/lifecycle/migration-safety.test.ts` lê toda migration
 posterior a `LAST_MIGRATION_IN_PRODUCTION` e falha em qualquer statement da
 tabela acima sobre um objeto que a produção já tem, a menos que o arquivo traga
