@@ -489,13 +489,45 @@ runs:
         DOKPLOY_OPTIONAL: "true"
       run: node .github/scripts/dokploy-deploy.mjs
 
+    # Which proof of the rollout runs: the environment's ROLLOUT_VERIFY, or
+    # its default when the variable is empty (staging: the public liveness;
+    # production: the Swarm tasks over SSH). Exactly one check runs — an
+    # unknown value falls back to the default, with a warning, never to
+    # none — and only `off` skips them, logged. Picked before the roles'
+    # deploy: their own check runs before the API's tag moves.
+    - name: Pick the rollout check
+      id: verify
+      if: steps.head.outputs.current == 'true' && steps.dokploy.outputs.enabled == 'true'
+      shell: bash
+      env:
+        ROLLOUT_VERIFY: ${{ inputs.rollout-verify }}
+        DEFAULT: ${{ inputs.verify-default }}
+      run: |
+        case "$DEFAULT" in
+          http | ssh) ;;
+          *)
+            echo "::error::verify-default precisa ser http ou ssh (recebido: '${DEFAULT}')."
+            exit 1
+            ;;
+        esac
+        case "$ROLLOUT_VERIFY" in
+          http | ssh | off) mode=$ROLLOUT_VERIFY ;;
+          "") mode=$DEFAULT ;;
+          *)
+            mode=$DEFAULT
+            echo "::warning::ROLLOUT_VERIFY='${ROLLOUT_VERIFY}' não é http, ssh nem off: vale a conferência padrão deste ambiente (${DEFAULT})."
+            ;;
+        esac
+        echo "mode=${mode}" >> "$GITHUB_OUTPUT"
+
     # The Applications that run the API's image in another role
     # (plano-escala F3-31a), before the API: the worker that expands what
     # the new API publishes, the scheduler, the worker-external. Each pulls
     # `trajetto-api:<tag>-<role>`, moved to the API's digest right before
     # its own deploy (.github/scripts/deploy-roles.sh). A role without its
     # Application id is a notice; a failed one fails here, and the API is
-    # not deployed.
+    # not deployed — nor is it when a deployed one does not come up (the
+    # next step).
     - name: Deploy the worker roles (Dokploy)
       id: deploy-roles-before
       if: steps.head.outputs.current == 'true' && steps.dokploy.outputs.enabled == 'true'
@@ -511,6 +543,59 @@ runs:
         DOKPLOY_SCHEDULER_APPLICATION_ID: ${{ inputs.dokploy-scheduler-application-id }}
         DOKPLOY_WORKER_EXTERNAL_APPLICATION_ID: ${{ inputs.dokploy-worker-external-application-id }}
       run: bash .github/scripts/deploy-roles.sh before-api
+
+    # The proof the roles deployed above came up on this build, before the
+    # API's tag moves (plano-escala F3-31a; review of wave 12). Dokploy's
+    # `done` only means the manager accepted the spec: a worker whose new
+    # task refuses to boot (F3-01 refuses a typo in WORKER_QUEUES on
+    # purpose) is rolled back by Swarm, the old build keeps claiming every
+    # queue, and the API must not ship on top of it. Over SSH, the host's
+    # verify-rollout for each role this run deployed (X-07); without SSH,
+    # /health/rollout through the API still on the previous build, scoped
+    # to those roles (wait-for-roles.mjs, `roles`). A run that deployed no
+    # role checks nothing; ROLLOUT_VERIFY=off skips it with the others.
+    - name: Wait for the worker roles to converge
+      id: verify-roles-before
+      if: steps.head.outputs.current == 'true' && steps.dokploy.outputs.enabled == 'true' && steps.verify.outputs.mode != 'off'
+      shell: bash
+      env:
+        MODE: ${{ steps.verify.outputs.mode }}
+        DIGEST: ${{ inputs.api-digest }}
+        SERVICE: ${{ inputs.swarm-api-service }}
+        SSH_HOST: ${{ inputs.deploy-ssh-host }}
+        SSH_USER: ${{ inputs.deploy-ssh-user }}
+        SSH_KEY: ${{ inputs.deploy-verify-ssh-key }}
+        SSH_KNOWN_HOSTS: ${{ inputs.deploy-ssh-known-hosts }}
+        STATE_FILE: ${{ runner.temp }}/deploy-roles.state
+        SWARM_WORKER_SERVICE: ${{ inputs.swarm-worker-service }}
+        SWARM_SCHEDULER_SERVICE: ${{ inputs.swarm-scheduler-service }}
+        SWARM_WORKER_EXTERNAL_SERVICE: ${{ inputs.swarm-worker-external-service }}
+        API_URL: ${{ inputs.api-public-url }}
+        ROLLOUT_STATUS_TOKEN: ${{ inputs.rollout-status-token }}
+        EXPECTED_SHA: ${{ inputs.expected-commit }}
+      run: |
+        if [ "$MODE" != "ssh" ]; then
+          API_DIGEST="$DIGEST" VERIFY_MODE=http \
+            bash .github/scripts/deploy-roles.sh verify before-api
+          exit 0
+        fi
+        missing=""
+        [ -n "$DIGEST" ] || missing="$missing DIGEST"
+        [ -n "$SERVICE" ] || missing="$missing vars.SWARM_API_SERVICE"
+        [ -n "$SSH_HOST" ] || missing="$missing secrets.DEPLOY_SSH_HOST"
+        [ -n "$SSH_USER" ] || missing="$missing secrets.DEPLOY_SSH_USER"
+        [ -n "$SSH_KEY" ] || missing="$missing secrets.DEPLOY_VERIFY_SSH_KEY"
+        [ -n "$SSH_KNOWN_HOSTS" ] || missing="$missing secrets.DEPLOY_SSH_KNOWN_HOSTS"
+        if [ -n "$missing" ]; then
+          echo "::error::Faltam${missing}: sem eles o run não prova que o Swarm terminou o rollout, e a API não é implantada (docs/deploy.md, \"Conferir a convergência\"). Sem SSH, use ROLLOUT_VERIFY=http (a conferência pela liveness pública); para pular de propósito: ROLLOUT_VERIFY=off."
+          exit 1
+        fi
+        install -m 700 -d ~/.ssh
+        printf '%s\n' "$SSH_KEY" > ~/.ssh/verify_key
+        chmod 600 ~/.ssh/verify_key
+        printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+        API_DIGEST="$DIGEST" SSH_TARGET="$SSH_USER@$SSH_HOST" VERIFY_MODE=ssh \
+          bash .github/scripts/deploy-roles.sh verify before-api
 
     # The API's tag, once the AI it calls and the workers behind it are in
     # place. Unconditional: the API Application runs the environment's tag,
@@ -538,36 +623,6 @@ runs:
         DOKPLOY_APPLICATION_ID: ${{ inputs.dokploy-api-application-id }}
         DOKPLOY_APP_LABEL: trajetto-api
       run: node .github/scripts/dokploy-deploy.mjs
-
-    # Which proof of the rollout runs: the environment's ROLLOUT_VERIFY, or
-    # its default when the variable is empty (staging: the public liveness;
-    # production: the Swarm tasks over SSH). Exactly one check runs — an
-    # unknown value falls back to the default, with a warning, never to
-    # none — and only `off` skips them, logged.
-    - name: Pick the rollout check
-      id: verify
-      if: steps.head.outputs.current == 'true' && steps.dokploy.outputs.enabled == 'true'
-      shell: bash
-      env:
-        ROLLOUT_VERIFY: ${{ inputs.rollout-verify }}
-        DEFAULT: ${{ inputs.verify-default }}
-      run: |
-        case "$DEFAULT" in
-          http | ssh) ;;
-          *)
-            echo "::error::verify-default precisa ser http ou ssh (recebido: '${DEFAULT}')."
-            exit 1
-            ;;
-        esac
-        case "$ROLLOUT_VERIFY" in
-          http | ssh | off) mode=$ROLLOUT_VERIFY ;;
-          "") mode=$DEFAULT ;;
-          *)
-            mode=$DEFAULT
-            echo "::warning::ROLLOUT_VERIFY='${ROLLOUT_VERIFY}' não é http, ssh nem off: vale a conferência padrão deste ambiente (${DEFAULT})."
-            ;;
-        esac
-        echo "mode=${mode}" >> "$GITHUB_OUTPUT"
 
     # The no-SSH proof: the public API's /health/liveness answers the commit
     # its image was built from, and wait-for-version.mjs polls it through
@@ -598,9 +653,9 @@ runs:
     # until each service runs this digest on every replica with the update
     # completed, and fails on a rollback or at the timeout. One call per
     # service, in the deploy's order (plano-escala X-07): the roles this
-    # run deployed before the API (deploy-roles.sh verify, each by its
-    # SWARM_<ROLE>_SERVICE), then the API; the edge roles after their own
-    # deploy, below.
+    # run deployed before the API were checked before its tag moved
+    # (above); this is the API's; the edge roles', after their own deploy,
+    # below.
     - name: Wait for the rollout to converge
       id: verify-ssh
       if: steps.head.outputs.current == 'true' && steps.verify.outputs.mode == 'ssh'
@@ -612,10 +667,6 @@ runs:
         SSH_USER: ${{ inputs.deploy-ssh-user }}
         SSH_KEY: ${{ inputs.deploy-verify-ssh-key }}
         SSH_KNOWN_HOSTS: ${{ inputs.deploy-ssh-known-hosts }}
-        STATE_FILE: ${{ runner.temp }}/deploy-roles.state
-        SWARM_WORKER_SERVICE: ${{ inputs.swarm-worker-service }}
-        SWARM_SCHEDULER_SERVICE: ${{ inputs.swarm-scheduler-service }}
-        SWARM_WORKER_EXTERNAL_SERVICE: ${{ inputs.swarm-worker-external-service }}
       run: |
         missing=""
         [ -n "$DIGEST" ] || missing="$missing DIGEST"
@@ -632,8 +683,6 @@ runs:
         printf '%s\n' "$SSH_KEY" > ~/.ssh/verify_key
         chmod 600 ~/.ssh/verify_key
         printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
-        API_DIGEST="$DIGEST" SSH_TARGET="$SSH_USER@$SSH_HOST" \
-          bash .github/scripts/deploy-roles.sh verify before-api
         ssh -i ~/.ssh/verify_key -o BatchMode=yes -o StrictHostKeyChecking=yes \
           -o ServerAliveInterval=30 -o ServerAliveCountMax=6 \
           "$SSH_USER@$SSH_HOST" "$SERVICE ghcr.io/trajetto-organization/trajetto-api@${DIGEST}"

@@ -32,10 +32,19 @@
  * 404s in a row. Without the token or without ROLLOUT_ROLES_EXPECTED, the
  * check does not run, and the run is today's.
  *
+ * WAIT_ROLES_SCOPE=roles is the same wait for only the roles a deploy has
+ * just shipped, before the API's turn (deploy-roles.sh verify, without
+ * SSH): the API still runs the previous build and answers for them, so only
+ * the listed roles are judged — each has a live process on the expected
+ * commit and none on another, the role taken as written (`all` is the API
+ * of before, never a worker) — and an API too old to list the processes
+ * makes it step aside with a notice, whatever commit it answers.
+ *
  * Environment:
  *   API_URL                 the environment's public API origin (vars.API_PUBLIC_URL)
  *   ROLLOUT_STATUS_TOKEN    the environment's secret (the same as the API's)
  *   ROLLOUT_ROLES_EXPECTED  vars.ROLLOUT_ROLES_EXPECTED, e.g. `all` or `api,worker`
+ *   WAIT_ROLES_SCOPE        `environment` (default) or `roles` (above)
  *   EXPECTED_SHA            the commit the deployed image was built from (7-40 hex)
  *   WAIT_TIMEOUT_SECONDS    how long to wait in total (default 600, at most 600)
  *   WAIT_POLL_SECONDS       interval between requests (default 5)
@@ -109,8 +118,21 @@ if (expectedRoles.length === 0 || unknownRoles.length > 0) {
   );
 }
 
+const scopeRaw = (env.WAIT_ROLES_SCOPE ?? "").trim().toLowerCase();
+
+if (scopeRaw !== "" && scopeRaw !== "environment" && scopeRaw !== "roles") {
+  fail(
+    `WAIT_ROLES_SCOPE='${scopeRaw.slice(0, 40)}' precisa ser environment ou roles.`,
+  );
+}
+
+/** Only the listed roles, before the API's deploy (see the top). */
+const ROLES_ONLY = scopeRaw === "roles";
+
 /** Every role that must have a live process, `all` expanded. */
-const NEEDED = [...new Set(expectedRoles.flatMap(covers))];
+const NEEDED = ROLES_ONLY
+  ? [...new Set(expectedRoles)]
+  : [...new Set(expectedRoles.flatMap(covers))];
 
 let url;
 
@@ -195,10 +217,42 @@ const short = (sha) =>
   typeof sha === "string" ? sha.slice(0, 12) : "sem commit";
 
 /**
+ * What still keeps the listed roles from having converged, in the scope
+ * `roles`: each with a live process of this environment on the expected
+ * commit, and none on another. Nothing else is theirs to judge: the API and
+ * the queues it may still consume are on the previous build by design.
+ */
+function pendingOfRoles(roles) {
+  const live = Array.isArray(roles?.processes) ? roles.processes : [];
+  const own = live.filter((group) => group.appEnv === roles.appEnv);
+  const count = (groups) =>
+    groups.reduce((total, group) => total + Number(group.count ?? 0), 0);
+  const reasons = [];
+
+  for (const role of NEEDED) {
+    const groups = own.filter((group) => group.role === role);
+
+    for (const group of groups.filter((one) => !isExpected(one.commit))) {
+      reasons.push(
+        `${count([group])} processo(s) ${role} ainda em ${short(group.commit)}`,
+      );
+    }
+
+    if (!groups.some((group) => isExpected(group.commit))) {
+      reasons.push(`nenhum processo vivo do papel ${role} no commit novo`);
+    }
+  }
+
+  return reasons;
+}
+
+/**
  * What still keeps the environment from having converged, in pt-BR; an
  * empty list is converged.
  */
 function pendingOf(roles) {
+  if (ROLES_ONLY) return pendingOfRoles(roles);
+
   const live = Array.isArray(roles?.processes) ? roles.processes : [];
   const reasons = [];
 
@@ -309,6 +363,16 @@ async function main() {
         const body = result.body;
 
         if (body?.roles === undefined) {
+          // Before the API's deploy, the API answering is the previous
+          // build by design: one too old to list the processes has nothing
+          // to say about the roles, whatever commit it answers.
+          if (ROLES_ONLY) {
+            skip(
+              "notice",
+              `a API no ar (${short(body?.commit)}) é anterior à conferência por papel: os papéis implantados antes dela não são conferidos neste run.`,
+            );
+          }
+
           if (isExpected(body?.commit)) {
             skip(
               "notice",
@@ -338,7 +402,7 @@ async function main() {
 
             if (now - since >= STABLE_MS) {
               summary(
-                `Papéis: ${expectedRoles.join(",")} em ${EXPECTED} há ${Math.round((now - since) / 1000)}s (${describe(body.roles)}).`,
+                `${ROLES_ONLY ? "Papéis antes da API" : "Papéis"}: ${expectedRoles.join(",")} em ${EXPECTED} há ${Math.round((now - since) / 1000)}s (${describe(body.roles)}).`,
               );
               return;
             }
@@ -361,10 +425,14 @@ async function main() {
     }
 
     if (now >= deadline) {
+      const stopped = ROLES_ONLY
+        ? " A API não foi implantada: o ambiente segue nela, no build anterior."
+        : "";
+
       fail(
         since === null
-          ? `Os papéis de ${expectedRoles.join(",")} não convergiram para ${EXPECTED} em ${TIMEOUT_MS / 1000}s: ${lastPending.join("; ")}. Confira o log da Application de cada papel no Dokploy e 'docker service ps --no-trunc <App Name>' no host.`
-          : `Os papéis convergiram há só ${Math.round((now - since) / 1000)}s, menos que a janela de ${STABLE_MS / 1000}s, ao fim de ${TIMEOUT_MS / 1000}s.`,
+          ? `Os papéis de ${expectedRoles.join(",")} não convergiram para ${EXPECTED} em ${TIMEOUT_MS / 1000}s: ${lastPending.join("; ")}. Confira o log da Application de cada papel no Dokploy e 'docker service ps --no-trunc <App Name>' no host.${stopped}`
+          : `Os papéis convergiram há só ${Math.round((now - since) / 1000)}s, menos que a janela de ${STABLE_MS / 1000}s, ao fim de ${TIMEOUT_MS / 1000}s.${stopped}`,
       );
     }
 

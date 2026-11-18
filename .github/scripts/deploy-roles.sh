@@ -15,9 +15,12 @@
 #                                named before (only with RESTORE_TAGS=true,
 #                                staging)
 #   deploy-roles.sh verify before-api | after-api
-#                                the Swarm check over SSH (X-07), one call
-#                                of infra/scripts/verify-rollout.sh per role
-#                                this run deployed, in the deploy's order
+#                                the proof the roles this run deployed came
+#                                up on the build: over SSH (X-07), one call
+#                                of infra/scripts/verify-rollout.sh per role,
+#                                in the deploy's order; with VERIFY_MODE=http,
+#                                /health/rollout through the API
+#                                (wait-for-roles.mjs, scope `roles`)
 #
 # Each role's Application pulls `trajetto-api:<tag>-<role>`, never the API's
 # `<tag>`. One tag for all would let the Swarm pull the new build out of
@@ -42,9 +45,12 @@
 # DOKPLOY_WORKER_APPLICATION_ID, DOKPLOY_SCHEDULER_APPLICATION_ID,
 # DOKPLOY_WORKER_EXTERNAL_APPLICATION_ID, DOKPLOY_INGEST_APPLICATION_ID and
 # DOKPLOY_REALTIME_APPLICATION_ID. DEPLOY_SCRIPT is dokploy-deploy.mjs.
-# The `verify` phase: SSH_TARGET (`user@host`), SSH_KEY_FILE (default
-# ~/.ssh/verify_key, written by the action's SSH step) and each role's
-# App Name in SWARM_<ROLE>_SERVICE (SWARM_WORKER_EXTERNAL_SERVICE...).
+# The `verify` phase: VERIFY_MODE (`ssh`, the default, or `http`); over
+# SSH, SSH_TARGET (`user@host`), SSH_KEY_FILE (default ~/.ssh/verify_key,
+# written by the action's SSH step) and each role's App Name in
+# SWARM_<ROLE>_SERVICE (SWARM_WORKER_EXTERNAL_SERVICE...); over http,
+# wait-for-roles.mjs's own (API_URL, ROLLOUT_STATUS_TOKEN, EXPECTED_SHA),
+# run as WAIT_ROLES_SCRIPT (default .github/scripts/wait-for-roles.mjs).
 set -euo pipefail
 
 REPO=ghcr.io/trajetto-organization/trajetto-api
@@ -198,6 +204,16 @@ restore() {
 verify_phase() {
   local role service checked=""
 
+  if [ "${VERIFY_MODE:-ssh}" = "http" ]; then
+    verify_http "$@"
+    return
+  fi
+
+  if [ "${VERIFY_MODE:-ssh}" != "ssh" ]; then
+    echo "::error::VERIFY_MODE precisa ser ssh ou http (recebido: '${VERIFY_MODE}')." >&2
+    exit 1
+  fi
+
   if [ -z "${API_DIGEST:-}" ] || [ -z "${SSH_TARGET:-}" ]; then
     echo "::error::deploy-roles.sh verify precisa de API_DIGEST e SSH_TARGET." >&2
     exit 1
@@ -228,6 +244,32 @@ verify_phase() {
   if [ -n "$checked" ]; then
     echo "[deploy-roles] conferidos por SSH:${checked}"
   fi
+}
+
+# The same proof without SSH (staging's default check): the API still on
+# the previous build answers /health/rollout for the roles this run
+# deployed, and wait-for-roles.mjs, scoped to them, waits until each has a
+# live process on the new commit and none on another, for its window. A
+# worker whose new task refused to boot (F3-01) never gets there, and the
+# step fails before the API's tag moves. Nothing deployed, nothing to wait
+# for; no token, or an API too old to answer, and the script steps aside
+# with a notice, as the check after the API does.
+verify_http() {
+  local role deployed=""
+
+  for role in "$@"; do
+    if [ "$(status_of "$role")" = "deployed" ]; then
+      deployed="${deployed:+$deployed,}$role"
+    fi
+  done
+
+  if [ -z "$deployed" ]; then
+    echo "[deploy-roles] nenhum papel implantado nesta fase: nada a conferir."
+    return 0
+  fi
+
+  ROLLOUT_ROLES_EXPECTED="$deployed" WAIT_ROLES_SCOPE=roles \
+    node "${WAIT_ROLES_SCRIPT:-.github/scripts/wait-for-roles.mjs}"
 }
 
 case "${1:-}" in

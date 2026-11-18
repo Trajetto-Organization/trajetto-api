@@ -999,11 +999,16 @@ describe.skipIf(!hasShell("bash"))("the rollout check of the deploy", () => {
     expect(result.output).toBe("");
   });
 
+  // Picked before the worker roles' deploy: their own check runs before
+  // the API's tag moves, in the same mode (review of wave 12).
   it("follows the pick, each check on its own value, after the API's deploy", () => {
     const names = stepNames(deploy);
 
     expect(names.indexOf(PICK)).toBe(
-      names.indexOf("Deploy the API (Dokploy)") + 1,
+      names.indexOf("Deploy the worker roles (Dokploy)") - 1,
+    );
+    expect(names.indexOf(PICK)).toBeLessThan(
+      names.indexOf("Deploy the API (Dokploy)"),
     );
     expect(conditionOf(stepOf(deploy, PICK))).toBe(
       "steps.head.outputs.current == 'true' && steps.dokploy.outputs.enabled == 'true'",

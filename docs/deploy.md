@@ -412,7 +412,9 @@ script por `env`, nunca colados no `run:`. Os passos, em ordem:
    etapa terminou ou falhou) e **Record the migrations as applied**, só
    quando é preciso, e antes de qualquer tag da API ou da IA andar.
 6. **Move the AI tag to this build** e **Deploy the AI service (Dokploy)**
-   (a IA vai antes, porque a API a chama; só se o digest mudou).
+   (a IA vai antes, porque a API a chama; só se o digest mudou). Depois,
+   **Pick the rollout check**: qual conferência roda (passo 9), escolhida
+   antes dos papéis, porque a deles vem antes da API.
 7. **Deploy the worker roles (Dokploy)** (plano de escala F3-31a,
    `.github/scripts/deploy-roles.sh before-api`): as Applications de papel
    que vão antes da API, na ordem `trajetto-worker` → `trajetto-scheduler`
@@ -422,13 +424,21 @@ script por `env`, nunca colados no `run:`. Os passos, em ordem:
    para todas deixaria o Swarm puxar o build novo fora de ordem num
    reinício de task. Papel sem o secret `DOKPLOY_<PAPEL>_APPLICATION_ID` =
    aviso, e não é implantado; um deploy de papel que falha para tudo o que
-   vem depois, a API inclusive.
+   vem depois, a API inclusive. Em seguida, **Wait for the worker roles to
+   converge**: o `done` do Dokploy só diz que o Swarm aceitou a spec, e um
+   worker cuja task nova recusa o boot (um erro de digitação em
+   `WORKER_QUEUES`, que o boot recusa de propósito) volta ao build anterior
+   pelo Swarm. Por isso, antes de a tag da API andar, cada papel implantado
+   aqui precisa estar no build novo: no modo `ssh`, pelo `verify-rollout.sh`
+   de cada um; no `http`, pelo `/health/rollout` da API ainda no build
+   anterior (`wait-for-roles.mjs` só com esses papéis, abaixo). Um papel
+   que não sobe falha o run, e a API não é implantada.
 8. **Move the API tag to this build** e **Deploy the API (Dokploy)**. Na
    produção, `stable` da API passou a andar só depois do deploy da IA, como
    no staging.
-9. **Pick the rollout check** e a conferência: **Wait for the API to serve
-   this build** (`http`, a liveness pública), **Wait for the rollout to
-   converge** (`ssh`, o Swarm) ou **Report the rollout as unverified**
+9. A conferência da API, a escolhida no passo 6: **Wait for the API to
+   serve this build** (`http`, a liveness pública), **Wait for the rollout
+   to converge** (`ssh`, o Swarm) ou **Report the rollout as unverified**
    (`off`). Valor vazio ou desconhecido de `ROLLOUT_VERIFY` = o padrão do
    ambiente (staging `http`, produção `ssh`), com aviso no desconhecido:
    exatamente uma conferência roda, salvo `off`.
@@ -2331,8 +2341,9 @@ promovido. São dois jeitos, escolhidos pela variável `ROLLOUT_VERIFY`
   — o App Name da API e o digest que este run publicou.
 - Uma chamada por serviço implantado, na ordem do deploy (plano de escala
   X-07): os papéis implantados antes da API (`trajetto-worker`,
-  `trajetto-scheduler`, `trajetto-worker-external`), a API e, depois do
-  deploy deles, os de borda (`trajetto-ingest`, `trajetto-realtime`). Cada
+  `trajetto-scheduler`, `trajetto-worker-external`), antes de a tag da API
+  andar, a API e, depois do deploy deles, os de borda (`trajetto-ingest`,
+  `trajetto-realtime`). Cada
   papel entra pelo App Name da variável `SWARM_<PAPEL>_SERVICE` do
   environment, com o digest da API (todos rodam a imagem dela), por
   `.github/scripts/deploy-roles.sh verify`. Um papel que o run não
@@ -2441,6 +2452,14 @@ papéis de borda, roda mais um passo (plano de escala F3-31b):
   `ROLLOUT_VERIFY=off`, num build anterior a esta conferência (a resposta
   sem os processos: aviso) e quando a rota responde 404 três vezes seguidas
   (um build anterior à rota, ou um token diferente do da API: aviso).
+- Antes da API, sem SSH (`ROLLOUT_VERIFY=http`, o padrão da staging): o
+  mesmo script, com `WAIT_ROLES_SCOPE=roles`, espera só os papéis que o
+  run acabou de implantar antes da API (`deploy-roles.sh verify`, passo 7
+  da lista acima). A API que responde ainda é a do build anterior, então
+  só esses papéis são julgados: cada um com um processo vivo no commit
+  novo e nenhum em outro, pelo nome do papel (o `all` da API anterior não
+  vale por um worker). Uma API anterior a esta conferência só avisa, e o
+  primeiro deploy que traz o passo não confere os papéis antes da API.
 
 À mão (o token nunca vai para a linha de comando de outra pessoa nem para
 um log):

@@ -454,6 +454,88 @@ describe.skipIf(!hasShell("bash"))("deploy-roles.sh", () => {
       expect(verify("everything").status).toBe(2);
       expect(verify("before-api", { SSH_TARGET: "" }).status).toBe(1);
     });
+
+    // Without SSH (staging's default check), the proof is /health/rollout
+    // through the API still on the previous build, scoped to the roles
+    // this run deployed: before this, the http mode had no check of the
+    // roles until the API had shipped.
+    describe("over http", () => {
+      beforeEach(() => {
+        // wait-for-roles.mjs: records what it was asked to wait for, and
+        // fails when the roles list names the scheduler.
+        box.stub(
+          "node",
+          [
+            `printf '%s %s %s\\n' "$1" "$ROLLOUT_ROLES_EXPECTED" "$WAIT_ROLES_SCOPE" >> "${box.root}/waits"`,
+            'case "$ROLLOUT_ROLES_EXPECTED" in *scheduler*) exit 1 ;; esac',
+          ].join("\n"),
+        );
+      });
+
+      const waits = () =>
+        existsSync(`${box.root}/waits`)
+          ? readFileSync(`${box.root}/waits`, "utf8")
+              .split("\n")
+              .filter(Boolean)
+          : [];
+
+      it("waits for the roles this run deployed, in order, scoped to them", () => {
+        writeFileSync(
+          state,
+          [
+            "worker deployed -",
+            "scheduler absent -",
+            "worker-external deployed -",
+            "ingest deployed -",
+          ]
+            .map((line) => `${line}\n`)
+            .join(""),
+        );
+
+        const result = verify("before-api", {
+          VERIFY_MODE: "http",
+          SSH_TARGET: "",
+        });
+
+        expect(result.status, result.stderr).toBe(0);
+        expect(waits()).toEqual([
+          ".github/scripts/wait-for-roles.mjs worker,worker-external roles",
+        ]);
+        expect(sshCalls()).toEqual([]);
+      });
+
+      it("fails when a deployed role does not come up", () => {
+        writeFileSync(state, "worker deployed -\nscheduler deployed -\n");
+
+        const result = verify("before-api", { VERIFY_MODE: "http" });
+
+        expect(result.status).not.toBe(0);
+        expect(waits()).toEqual([
+          ".github/scripts/wait-for-roles.mjs worker,scheduler roles",
+        ]);
+      });
+
+      it("waits for nothing when the run deployed no role", () => {
+        writeFileSync(
+          state,
+          ROLES.map((role) => `${role} absent -\n`).join(""),
+        );
+
+        const result = verify("before-api", { VERIFY_MODE: "http" });
+
+        expect(result.status, result.stderr).toBe(0);
+        expect(result.stdout).toContain("nada a conferir");
+        expect(waits()).toEqual([]);
+      });
+
+      it("refuses a mode it does not know", () => {
+        writeFileSync(state, "worker deployed -\n");
+
+        expect(verify("before-api", { VERIFY_MODE: "https" }).status).toBe(1);
+        expect(waits()).toEqual([]);
+        expect(sshCalls()).toEqual([]);
+      });
+    });
   });
 
   it("refuses a phase it does not know", () => {
@@ -464,13 +546,14 @@ describe.skipIf(!hasShell("bash"))("deploy-roles.sh", () => {
 describe("the deploy action", () => {
   const at = (name: string) => stepNames(deploy).indexOf(name);
 
-  it("deploys the workers after the AI and before the API, the edge roles once the API's check passed", () => {
+  it("deploys the workers after the AI and proves them up before the API, the edge roles once the API's check passed", () => {
     const order = [
       "Deploy the AI service (Dokploy)",
+      "Pick the rollout check",
       "Deploy the worker roles (Dokploy)",
+      "Wait for the worker roles to converge",
       "Move the API tag to this build",
       "Deploy the API (Dokploy)",
-      "Pick the rollout check",
       "Wait for the API to serve this build",
       "Wait for the rollout to converge",
       "Deploy the edge roles (Dokploy)",
@@ -482,6 +565,129 @@ describe("the deploy action", () => {
     for (const name of order) expect(at(name), name).toBeGreaterThan(-1);
 
     expect(order.map(at)).toEqual([...order.map(at)].sort((a, b) => a - b));
+  });
+
+  // Review of wave 12: Dokploy's `done` only means the manager accepted the
+  // spec, so a worker whose new task refused to boot (F3-01, a typo in
+  // WORKER_QUEUES) let the API ship anyway; its convergence was checked
+  // only after the API's deploy, and never without SSH.
+  describe("the worker roles' check, before the API's tag moves", () => {
+    const CHECK = "Wait for the worker roles to converge";
+
+    it("runs in both modes, and a failure stops the API's tag and deploy", () => {
+      expect(conditionOf(stepOf(deploy, CHECK))).toBe(
+        "steps.head.outputs.current == 'true' && steps.dokploy.outputs.enabled == 'true' && steps.verify.outputs.mode != 'off'",
+      );
+      expect(at(CHECK)).toBe(at("Deploy the worker roles (Dokploy)") + 1);
+
+      // No status function: a failed check skips them.
+      for (const name of [
+        "Move the API tag to this build",
+        "Deploy the API (Dokploy)",
+      ]) {
+        expect(at(name), name).toBeGreaterThan(at(CHECK));
+        expect(conditionOf(stepOf(deploy, name)), name).not.toMatch(
+          /always\(\)|failure\(\)|cancelled\(\)/,
+        );
+      }
+
+      const { text } = stepOf(deploy, CHECK);
+
+      for (const line of [
+        "MODE: ${{ steps.verify.outputs.mode }}",
+        "STATE_FILE: ${{ runner.temp }}/deploy-roles.state",
+        "API_URL: ${{ inputs.api-public-url }}",
+        "ROLLOUT_STATUS_TOKEN: ${{ inputs.rollout-status-token }}",
+        "EXPECTED_SHA: ${{ inputs.expected-commit }}",
+      ]) {
+        expect(text).toContain(line);
+      }
+
+      // The API's own check no longer carries the roles'.
+      expect(
+        stepOf(deploy, "Wait for the rollout to converge").run,
+      ).not.toContain("deploy-roles.sh verify");
+    });
+
+    describe.skipIf(!hasShell("bash"))("its block", () => {
+      let box: Sandbox;
+      let file: string;
+
+      beforeEach(() => {
+        box = sandbox();
+        file = `${box.root}/deploy-roles.state`;
+        writeFileSync(file, "worker deployed -\n");
+        box.stub(
+          "node",
+          `printf '%s %s\\n' "$ROLLOUT_ROLES_EXPECTED" "$WAIT_ROLES_SCOPE" >> "${box.root}/waits"`,
+        );
+        box.stub(
+          "ssh",
+          `for last in "$@"; do :; done; printf '%s\\n' "$last" >> "${box.root}/ssh"`,
+        );
+        // `install -m 700 -d`: Git Bash on Windows cannot set the mode.
+        box.stub("install", 'for last in "$@"; do :; done; mkdir -p "$last"');
+      });
+
+      afterEach(() => box.dispose());
+
+      const block = (env: Record<string, string>) =>
+        runBlock(
+          box,
+          stepOf(deploy, CHECK).run,
+          {
+            HOME: box.root,
+            DIGEST: API,
+            STATE_FILE: file,
+            SWARM_WORKER_SERVICE: "trajetto-worker-staging",
+            ...env,
+          },
+          process.cwd(),
+        );
+
+      const lines = (name: string) =>
+        existsSync(`${box.root}/${name}`)
+          ? readFileSync(`${box.root}/${name}`, "utf8")
+              .split("\n")
+              .filter(Boolean)
+          : [];
+
+      it("waits on /health/rollout for the deployed roles without SSH", () => {
+        const result = block({ MODE: "http" });
+
+        expect(result.status, result.log).toBe(0);
+        expect(lines("waits")).toEqual(["worker roles"]);
+        expect(lines("ssh")).toEqual([]);
+      });
+
+      it("checks each deployed role over SSH, with the key it installs", () => {
+        const result = block({
+          MODE: "ssh",
+          SERVICE: "trajetto-api-staging",
+          SSH_HOST: "deploy.example.com",
+          SSH_USER: "deploy",
+          SSH_KEY: "a key",
+          SSH_KNOWN_HOSTS: "deploy.example.com ssh-ed25519 AAAA",
+        });
+
+        expect(result.status, result.log).toBe(0);
+        expect(lines("ssh")).toEqual([
+          `trajetto-worker-staging ${REPO}@${API}`,
+        ]);
+        expect(readFileSync(`${box.root}/.ssh/verify_key`, "utf8")).toBe(
+          "a key\n",
+        );
+        expect(lines("waits")).toEqual([]);
+      });
+
+      it("fails over SSH without its secrets, saying the API is not deployed", () => {
+        const result = block({ MODE: "ssh", SSH_KEY: "" });
+
+        expect(result.status).toBe(1);
+        expect(result.log).toContain("a API não é implantada");
+        expect(lines("ssh")).toEqual([]);
+      });
+    });
   });
 
   it("runs the roles' deploys only with Dokploy, and their tags' follow without it", () => {

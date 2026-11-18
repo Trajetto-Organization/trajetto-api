@@ -878,18 +878,20 @@ describe("the API deploy waits for convergence", () => {
   const text = (name: string) => stepOf(apiAction, name).text;
 
   // plano-escala X-07: the roles' services too, one call each, in the
-  // deploy's order: the workers before the API's own call, the edge roles
-  // after their deploy, through deploy-roles.sh verify.
+  // deploy's order: the workers before the API's tag moves (review of wave
+  // 12: checked after the API's deploy, a worker that never came up let the
+  // API ship), the edge roles after their deploy, through deploy-roles.sh
+  // verify.
   it("checks each role's service over SSH in the deploy's order", () => {
-    const ssh = text(SSH);
+    const workers = "Wait for the worker roles to converge";
+    const ssh = text(workers);
 
-    expect(ssh.indexOf("deploy-roles.sh verify before-api")).toBeGreaterThan(
-      -1,
+    expect(ssh).toContain("deploy-roles.sh verify before-api");
+    expect(names.indexOf(workers)).toBeGreaterThan(
+      names.indexOf("Deploy the worker roles (Dokploy)"),
     );
-    expect(ssh.indexOf("deploy-roles.sh verify before-api")).toBeLessThan(
-      ssh.indexOf(
-        '"$SERVICE ghcr.io/trajetto-organization/trajetto-api@${DIGEST}"',
-      ),
+    expect(names.indexOf(workers)).toBeLessThan(
+      names.indexOf("Move the API tag to this build"),
     );
     expect(ssh).toContain("STATE_FILE: ${{ runner.temp }}/deploy-roles.state");
 

@@ -362,6 +362,99 @@ describe("waiting for every role to run the deployed build", () => {
   });
 });
 
+/**
+ * The same wait for the roles a deploy has just shipped, before the API's
+ * turn (WAIT_ROLES_SCOPE=roles, review of wave 12). Without SSH there was
+ * no check of the worker until the API had shipped on top of it; here the
+ * API answering is still the previous build, so only the listed roles are
+ * judged.
+ */
+describe("waiting for the roles deployed before the API", () => {
+  const before = (fakeUrl: string, roles = "worker") =>
+    wait({
+      API_URL: fakeUrl,
+      ROLLOUT_ROLES_EXPECTED: roles,
+      WAIT_ROLES_SCOPE: "roles",
+    });
+
+  it("passes on the roles alone, the API still on the previous build", async () => {
+    // The old API, with its own fingerprint and none of the queues, would
+    // keep the whole environment's wait from converging.
+    const fake = await fakeApi([
+      rollout(
+        [
+          all({ commit: OLD, fingerprint: "fedcba9876543210", queues: [] }),
+          worker({ commit: OLD }),
+        ],
+        OLD,
+      ),
+      rollout(
+        [
+          all({ commit: OLD, fingerprint: "fedcba9876543210", queues: [] }),
+          worker(),
+        ],
+        OLD,
+      ),
+    ]);
+
+    const result = await before(fake.url);
+
+    expect(result.status, result.output).toBe(0);
+    expect(result.output).toContain(`Papéis antes da API: worker em ${SHA}`);
+  });
+
+  it("fails, saying the API was not deployed, when the worker never comes up", async () => {
+    const fake = await fakeApi([
+      rollout([api({ commit: OLD }), worker({ commit: OLD })], OLD),
+    ]);
+
+    const result = await before(fake.url);
+
+    expect(result.status).not.toBe(0);
+    expect(result.output).toContain(
+      "nenhum processo vivo do papel worker no commit novo",
+    );
+    expect(result.output).toContain("1 processo(s) worker ainda em");
+    expect(result.output).toContain("A API não foi implantada");
+  });
+
+  it("does not take the API's `all` for a worker", async () => {
+    const fake = await fakeApi([rollout([all()])]);
+
+    const result = await before(fake.url);
+
+    expect(result.status).not.toBe(0);
+    expect(result.output).toContain(
+      "nenhum processo vivo do papel worker no commit novo",
+    );
+  });
+
+  it("steps aside when the API is too old to list the processes, whatever commit it answers", async () => {
+    const fake = await fakeApi([
+      { body: { commit: OLD, release: { pending: [], lastRunAt: null } } },
+    ]);
+
+    const result = await before(fake.url);
+
+    expect(result.status, result.output).toBe(0);
+    expect(result.output).toContain("::notice::");
+    expect(result.output).toContain("anterior à conferência por papel");
+  });
+
+  it("refuses a scope it does not know", async () => {
+    const fake = await fakeApi([rollout([worker()])]);
+
+    const result = await wait({
+      API_URL: fake.url,
+      ROLLOUT_ROLES_EXPECTED: "worker",
+      WAIT_ROLES_SCOPE: "some",
+    });
+
+    expect(result.status).toBe(1);
+    expect(result.output).toContain("WAIT_ROLES_SCOPE");
+  });
+});
+
 describe("what makes it step aside", () => {
   it.each([
     ["without the token", { ROLLOUT_STATUS_TOKEN: "" }, "ROLLOUT_STATUS_TOKEN"],
