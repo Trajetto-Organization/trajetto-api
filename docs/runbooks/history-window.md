@@ -22,8 +22,35 @@ O `applied:` diz quantas linhas foram copiadas (e, na `activity`, quantos ids fo
 
 **Antes (uma semana antes da janela):**
 
-1. Ensaio na staging, num Database descartável (decisão D70: 1 GiB, 0,5 CPU, folga de disco de 2× o banco mais 20 GB, a API e a web da staging em 0 réplicas): migre o banco (a etapa de release roda e o passo fica `skipped: aguardando janela`), semeie com `LOAD_TIER=prod-like` (só as contagens da produção) e rode a etapa de novo com `HISTORY_WINDOW_APPROVED` cobrindo o agora.
-2. Anote a pausa de cada `applied:` (no log da etapa, ou na consulta de `release_step_state` abaixo) num arquivo `docs/desempenho/<data>-janela-delivery-event.md`. O portão é **pausa de escrita abaixo de 60 s** em cada passo; acima disso, não faça a janela na produção e chame quem cuida do plano.
+1. Ensaio na staging, num Database descartável (decisão D70: 1 GiB, 0,5 CPU, folga de disco de 2× o banco mais 20 GB, a API e a web da staging em 0 réplicas), pelo túnel e com o repositório na sua máquina, como o seed `prod-like` pede (`tests/load/README.md`). **Nunca pelo _Run workflow_ nem pela `trajetto-api-migrate`**: a etapa de release roda no Database da staging, não no descartável, e o `HISTORY_WINDOW_APPROVED` da staging fica vazio.
+
+   Migre o descartável só com `yarn prisma:migrate:deploy` pelo túnel (as cascas `delivery_event_part` e `activity_part` vêm das migrations), semeie com `LOAD_TIER=prod-like` (só as contagens da produção) e rode os dois passos à mão no `psql`, na raiz do repositório. Com empresas no banco, cada passo espera todo processo vivo anunciar `history-partition-agnostic-v1`, e ali não há processo nenhum: sem o anúncio, fica `pending` para sempre. O anúncio vai à mão, só neste banco, numa linha de `ops_sample` antes de cada passo (a prontidão lê os últimos 5 minutos). A aprovação é a configuração `trajetto.history_window_approved` da sessão, a mesma que a etapa de release monta do `HISTORY_WINDOW_APPROVED`, aqui das próximas 6 horas:
+
+   ```sql
+   -- psql "$DATABASE_URL" (o túnel para o Database descartável), na raiz do repositório
+   \i prisma/post-deploy/00-queue-swap-ready.sql
+
+   SELECT set_config(
+     'trajetto.history_window_approved',
+     to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') || '/'
+       || to_char(now() AT TIME ZONE 'UTC' + interval '6 hours', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'),
+     false
+   );
+
+   INSERT INTO ops_sample (id, ts, role, replica, metrics)
+   VALUES (gen_random_uuid()::text, now() AT TIME ZONE 'UTC', 'all', 'ensaio-da-janela',
+           '{"v": 1, "capabilities": ["history-partition-agnostic-v1"]}');
+
+   \i prisma/post-deploy/30-delivery-event-window.sql
+
+   INSERT INTO ops_sample (id, ts, role, replica, metrics)
+   VALUES (gen_random_uuid()::text, now() AT TIME ZONE 'UTC', 'all', 'ensaio-da-janela',
+           '{"v": 1, "capabilities": ["history-partition-agnostic-v1"]}');
+
+   \i prisma/post-deploy/31-activity-window.sql
+   ```
+
+2. Anote a pausa do `NOTICE:  applied:` de cada passo (`pausa de escrita de N s`; à mão não há linha em `release_step_state`) num arquivo `docs/desempenho/<data>-janela-delivery-event.md`. O portão é **pausa de escrita abaixo de 60 s** em cada passo; acima disso, não faça a janela na produção e chame quem cuida do plano. Apague o Database descartável no fim.
 3. Escolha a janela (padrão: domingo, 03:00 BRT, 06:00 UTC) e avise clientes e integradores 48 h antes: durante a pausa, as gravações da linha do tempo e do registro de atividades esperam, e o feed `/integration/v1/events` atrasa (não pula evento).
 4. Confira que o full semanal do pgBackRest rodou no sábado.
 

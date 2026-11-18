@@ -4026,7 +4026,11 @@ dele, esperam (`pending`) todo processo vivo anunciar
 
 O passo a passo (ensaio na staging com o seed `prod-like`, o aviso de 48 h,
 a janela, a conferência e a volta nos 14 dias) está no
-[runbook da janela do histórico](./runbooks/history-window.md). Valor
+[runbook da janela do histórico](./runbooks/history-window.md). O ensaio
+roda os dois passos à mão, no `psql`, num Database descartável: ali não há
+processo nenhum para anunciar a capability, então o anúncio e a aprovação
+são feitos na sessão (sem eles, os passos ficam `pending` para sempre), e
+o _Run workflow_ rodaria no Database da staging, não no descartável. Valor
 inválido ou intervalo de mais de 24 h não aprova nada (o log da etapa diz
 por quê). Apague a variável depois da janela.
 

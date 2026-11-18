@@ -90,9 +90,83 @@ async function unpartitionHistory(
   }
 }
 
+/**
+ * The rehearsal block of docs/runbooks/history-window.md ("Antes", step 1),
+ * replayed the way psql runs it: one session, each `\i <file>` the file's
+ * text, every other statement up to the `;` that ends its line, comment
+ * lines skipped. Returns the NOTICE lines each `\i` printed, by file.
+ *
+ * The owner types this block on a disposable database seeded with
+ * prod-like, with no process of the API at all (D70); a block that cannot
+ * reach 'applied' there leaves the gate of wave 11 (the write pause under
+ * 60 s) with nothing to measure.
+ */
+async function replayRunbookRehearsal(): Promise<Record<string, string>> {
+  const runbook = readFileSync(
+    resolve(process.cwd(), "docs", "runbooks", "history-window.md"),
+    "utf8",
+  );
+  const block =
+    /```sql\n((?:(?!```)[\s\S])*\\i prisma\/post-deploy\/30-delivery-event-window\.sql(?:(?!```)[\s\S])*)```/.exec(
+      runbook,
+    )?.[1];
+
+  if (!block) {
+    throw new Error(
+      "o runbook history-window.md não tem o bloco do ensaio (\\i prisma/post-deploy/30-delivery-event-window.sql)",
+    );
+  }
+
+  const client = await openReleaseClient(
+    process.env.DATABASE_URL as string,
+    "psql",
+  );
+  const notices: Record<string, string> = {};
+  let printed: string[] = [];
+
+  client.on("notice", (notice) => printed.push(notice.message ?? ""));
+
+  try {
+    let statement = "";
+
+    for (const raw of block.split("\n")) {
+      const line = raw.trim();
+
+      if (statement === "" && (line === "" || line.startsWith("--"))) continue;
+
+      const include = /^\\i\s+(\S+)$/.exec(line);
+
+      if (include) {
+        printed = [];
+        await client.query(
+          readFileSync(resolve(process.cwd(), include[1]), "utf8"),
+        );
+        notices[include[1]] = printed.join("\n");
+        continue;
+      }
+
+      statement += `${line}\n`;
+
+      if (line.endsWith(";")) {
+        await client.query(statement);
+        statement = "";
+      }
+    }
+
+    if (statement.trim() !== "") {
+      throw new Error(`instrução sem ';' no bloco do runbook: ${statement}`);
+    }
+
+    return notices;
+  } finally {
+    await client.end();
+  }
+}
+
 export {
   approvedEarlier,
   approvedNow,
+  replayRunbookRehearsal,
   runHistoryWindow,
   unpartitionHistory,
   type HistoryWindowStep,

@@ -18,6 +18,7 @@ import { seedFleetDriver } from "./support/fleet-driver-seed";
 import {
   approvedEarlier,
   approvedNow,
+  replayRunbookRehearsal,
   runHistoryWindow,
   unpartitionHistory,
 } from "./support/history-window";
@@ -368,4 +369,37 @@ describe("the way back", () => {
     await unpartitionHistory("delivery_event", { hold: false });
     expect(await kind("delivery_event")).toBe("r");
   });
+});
+
+// The rehearsal of docs/runbooks/history-window.md ("Antes"): a disposable
+// copy seeded with prod-like has companies and no process of the API at all
+// (D70: staging at 0), so nobody announces the capability and both steps
+// wait for good, unless the runbook's block makes the announcement and the
+// approval by hand in the psql session. Its NOTICEs are the gate's measure.
+describe("the runbook's rehearsal", () => {
+  it("reaches 'applied' on both steps of a seeded copy with no process, and gives the pause", async () => {
+    await prisma.opsSample.deleteMany({});
+
+    const waiting = await runHistoryWindow(STEP);
+
+    expect(waiting.status).toBe("pending");
+    expect(waiting.detail).toContain("history-partition-agnostic-v1");
+
+    const printed = await replayRunbookRehearsal();
+
+    expect(printed["prisma/post-deploy/30-delivery-event-window.sql"]).toMatch(
+      /^applied: delivery_event particionada por mês, .*pausa de escrita de [\d.]+ s/,
+    );
+    expect(printed["prisma/post-deploy/31-activity-window.sql"]).toMatch(
+      /^applied: activity particionada por mês, .*pausa de escrita de [\d.]+ s/,
+    );
+    expect(await kind("delivery_event")).toBe("p");
+    expect(await kind("activity")).toBe("p");
+
+    // Back to what the template has.
+    await unpartitionHistory("delivery_event", { hold: false });
+    await unpartitionHistory("activity", { hold: false });
+    expect(await kind("delivery_event")).toBe("r");
+    expect(await kind("activity")).toBe("r");
+  }, 60_000);
 });

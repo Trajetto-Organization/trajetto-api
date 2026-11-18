@@ -3,6 +3,7 @@ import { join, resolve } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
+import { HISTORY_WINDOW_SETTING } from "infra/scripts/release-step-runner";
 import {
   ALERT_KINDS,
   DEFAULT_ALERT_THRESHOLDS,
@@ -507,5 +508,49 @@ describe("the server runbooks (plano-escala F1-24)", () => {
         /[\w.%+-]+@(?!example\.com)[a-z0-9-]+(?:\.[a-z0-9-]+)*\.[a-z]{2,}/i,
       );
     }
+  });
+});
+
+/**
+ * The history window (plano-escala F2-17, F2-18, wave 11): the owner
+ * follows this runbook on a disposable copy first, then in production at
+ * night, and every step has to work as it is written.
+ */
+describe("the history-window runbook (plano-escala F2-17, F2-18)", () => {
+  const text = readFileSync(
+    resolve(RUNBOOKS, "history-window.md"),
+    "utf8",
+  ).replace(/\r\n/g, "\n");
+  const before = text.slice(
+    text.indexOf("**Antes"),
+    text.indexOf("**Na janela"),
+  );
+
+  // The rehearsal's copy has companies and no process of the API (D70:
+  // staging at 0), so nobody announces the capability unless the block
+  // does, and the release step, by the Run workflow or the
+  // trajetto-api-migrate, runs on the staging Database instead of the
+  // disposable one. tests/E2E/history-window-delivery-event.test.ts
+  // replays the block itself.
+  it("rehearses by hand on the disposable copy, the announcement and the approval in the session", () => {
+    expect(before).toContain(
+      "**Nunca pelo _Run workflow_ nem pela `trajetto-api-migrate`**",
+    );
+    expect(before).toContain("yarn prisma:migrate:deploy");
+    expect(before).toContain("\\i prisma/post-deploy/00-queue-swap-ready.sql");
+    expect(before).toContain(`'${HISTORY_WINDOW_SETTING}'`);
+    expect(
+      before.match(/"capabilities": \["history-partition-agnostic-v1"\]/g),
+    ).toHaveLength(2);
+
+    const trail = before.indexOf(
+      "\\i prisma/post-deploy/30-delivery-event-window.sql",
+    );
+
+    expect(trail).toBeGreaterThan(-1);
+    expect(
+      before.indexOf("\\i prisma/post-deploy/31-activity-window.sql"),
+    ).toBeGreaterThan(trail);
+    expect(before).not.toContain("rode a etapa de novo");
   });
 });
