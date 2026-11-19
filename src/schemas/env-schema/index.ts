@@ -10,6 +10,10 @@ import {
 } from "@/shared/archive/archive-settings";
 import { throughPgBouncer } from "@/shared/database/pgbouncer-url";
 import { pooledUrlProblem } from "@/shared/database/pool-config";
+import {
+  pgBouncerStatsHostsProblem,
+  pgBouncerStatsUrlProblem,
+} from "@/shared/health/pgbouncer-stats-config";
 import { isValidCnpj } from "@/shared/delivery/cnpj";
 import {
   GEOCODING_BACKGROUND_CALLS_PER_MINUTE_DEFAULT,
@@ -206,15 +210,41 @@ const envSchema = z
       (value) => (value === "" ? undefined : value),
       z.string().superRefine(refusePooledUrlProblem).optional(),
     ),
-    BATCH_DATABASE_URL: z.preprocess(
+
+    // PgBouncer's console, read by the process with the cron once a minute
+    // for /health/metrics and the alerts (plano-escala F4-36,
+    // shared/health/pgbouncer-metrics.ts). The URL is the stats login's
+    // (pgbouncer_stats, SHOW only) on the console database `pgbouncer`;
+    // any other login refuses the boot: the admin one (PAUSE, KILL,
+    // SHUTDOWN) stays with the owner, never in an Application. It carries
+    // the password: never logged (logger.ts censors it by name). The hosts
+    // are `tasks.<App Name>`, so every task of the service is read; unset,
+    // the URL's host. Both unset (the default), nothing is read and
+    // `pgbouncer` is null. Empty counts as absent.
+    PGBOUNCER_STATS_URL: z.preprocess(
       (value) => (value === "" ? undefined : value),
       z
         .string()
-        .refine(isPostgresUrl, POSTGRES_URL_MESSAGE)
-        .refine(
-          (value) => !throughPgBouncer(value),
-          "BATCH_DATABASE_URL vai direto ao Postgres (porta 5432, sem pgbouncer=true): o job de partições usa uma sessão própria.",
-        )
+        .superRefine((value, ctx) => {
+          const problem = pgBouncerStatsUrlProblem(value);
+
+          if (problem) {
+            ctx.addIssue({ code: z.ZodIssueCode.custom, message: problem });
+          }
+        })
+        .optional(),
+    ),
+    PGBOUNCER_STATS_HOSTS: z.preprocess(
+      (value) => (value === "" ? undefined : value),
+      z
+        .string()
+        .superRefine((value, ctx) => {
+          const problem = pgBouncerStatsHostsProblem(value);
+
+          if (problem) {
+            ctx.addIssue({ code: z.ZodIssueCode.custom, message: problem });
+          }
+        })
         .optional(),
     ),
 

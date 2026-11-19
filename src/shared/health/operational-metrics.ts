@@ -28,6 +28,7 @@ import { readPrismaPool } from "@/shared/health/pool-metrics";
 import { runtimeMetrics } from "@/shared/health/runtime-metrics";
 import { providerMetrics } from "@/shared/health/provider-metrics";
 import { readRedisMetrics } from "@/shared/health/redis-metrics";
+import { readLatestPgBouncerSample } from "@/shared/health/pgbouncer-metrics";
 import {
   collectDatabaseMetrics,
   withClusterSample,
@@ -183,6 +184,12 @@ async function collectOperationalMetrics() {
     await collectDatabaseMetrics(),
   );
 
+  // PgBouncer's consoles (plano-escala F4-36): never read from here, only
+  // by the process with the cron, once a minute; this takes its newest
+  // cluster row (up to 5 min), one statement on the ts index. Null when
+  // that row has none: not configured, or the series switched off.
+  const pgbouncer = await readLatestPgBouncerSample(database);
+
   // The limits the ops heartbeat judges with, as this environment set them
   // (ops-heartbeat-job.ts reads the same function).
   const thresholds = alertThresholdsFromEnv(env);
@@ -331,6 +338,9 @@ async function collectOperationalMetrics() {
     providers: providerMetrics.snapshot(),
     realtime: realtimeMetrics(),
     redis: await redis,
+    // PgBouncer's pools, traffic and server connections, as the cron read
+    // them (plano-escala F4-36), with `sampled_at`; null without them.
+    pgbouncer,
     // This replica's HTTP counters, histogram per route group and the
     // positions' contracts (plano-escala F1-09) — per replica, like
     // `runtime`; the ops_sample rows carry every replica's.

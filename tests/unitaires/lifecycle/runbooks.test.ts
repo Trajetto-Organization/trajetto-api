@@ -215,6 +215,35 @@ function everyRuleBroken(): OperationalSnapshot[] {
       },
       // And an integrator's cursor from before it, converted (F2-05).
       feedEpochConversions: 1,
+      // PgBouncer (F4-36): one task silent, a client waiting 3 s for a
+      // server connection, the database at 54 of its 60.
+      pgbouncer: {
+        status: "partial",
+        read_at: NOW.toISOString(),
+        error: null,
+        instances: [
+          {
+            address: "10.0.1.7",
+            status: "down",
+            error: "ECONNREFUSED",
+            pools: [],
+            databases: [],
+            stats: [],
+          },
+        ],
+        totals: {
+          instances: 2,
+          instances_up: 1,
+          cl_active: 40,
+          cl_waiting: 3,
+          maxwait_seconds: T.pgbouncerMaxWaitSec + 1,
+          maxwait_pool: "trajetto/trajetto_http",
+          server_connections: 54,
+          server_usage_percent: 90,
+          server_usage_database: "trajetto",
+          paused_databases: 0,
+        },
+      },
     },
     {
       ...healthy(),

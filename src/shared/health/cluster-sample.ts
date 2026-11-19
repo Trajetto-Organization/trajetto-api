@@ -16,6 +16,11 @@ import {
   type OpsSampleRow,
 } from "@/shared/health/ops-sample";
 import {
+  readPgBouncerMetrics,
+  type PgBouncerMetrics,
+} from "@/shared/health/pgbouncer-metrics";
+import { pgBouncerStatsConfig } from "@/shared/health/pgbouncer-stats-config";
+import {
   readRedisMetrics,
   type RedisMetrics,
 } from "@/shared/health/redis-metrics";
@@ -62,6 +67,10 @@ const log = logger.child({ component: "ops-heartbeat" });
  * stops the write, as the rest of the series; the readings still feed the
  * alerts, without the eviction baseline (no rows to compare with). Infra
  * numbers only.
+ *
+ * From wave 17 it also carries PgBouncer's consoles (plano-escala F4-36,
+ * pgbouncer-metrics.ts), read here and only here, by the stats login, when
+ * PGBOUNCER_STATS_URL is set: absent from the row otherwise.
  */
 
 /** Sizes and hot tables ride on the quarter-hour rows. */
@@ -112,6 +121,7 @@ function buildClusterSampleRow({
   database,
   redis,
   volume = null,
+  pgbouncer = null,
 }: {
   slot: Date;
   identity: OpsSampleIdentity;
@@ -119,6 +129,7 @@ function buildClusterSampleRow({
   database: DatabaseMetrics;
   redis: RedisMetrics;
   volume?: VolumeReading | null;
+  pgbouncer?: PgBouncerMetrics | null;
 }): OpsSampleRow {
   return {
     ts: slot,
@@ -145,6 +156,8 @@ function buildClusterSampleRow({
       redis,
       // Absent when unread: a null would read as "zero created".
       ...(volume ? { [VOLUME_SECTION]: volumeSection(volume, slot) } : {}),
+      // Absent when not configured: /health/metrics answers null then.
+      ...(pgbouncer ? { pgbouncer } : {}),
       collection_errors: partNames(snapshot.collectionErrors),
     },
   };
@@ -182,6 +195,12 @@ interface ClusterReadings {
    * switched off (no rows to sum). Absent on readings built before it.
    */
   volume?: VolumeReading | null;
+
+  /**
+   * PgBouncer's consoles (F4-36); null when PGBOUNCER_STATS_URL is not
+   * set. Absent on readings built before it.
+   */
+  pgbouncer?: PgBouncerMetrics | null;
 }
 
 /**
@@ -247,6 +266,7 @@ interface ClusterReadDeps {
   readRedis: () => Promise<RedisMetrics>;
   readBaseline: (slot: Date) => Promise<ClusterBaseline | null>;
   readVolume: (slot: Date) => Promise<VolumeReading | null>;
+  readPgBouncer: () => Promise<PgBouncerMetrics | null>;
 }
 
 function defaultReadDeps(): ClusterReadDeps {
@@ -259,6 +279,7 @@ function defaultReadDeps(): ClusterReadDeps {
     // With the series off there are no rows to sum: unread, not zero.
     readVolume: async (slot) =>
       env.OPS_SAMPLE_ENABLED ? readVolume(slot) : null,
+    readPgBouncer: () => readPgBouncerMetrics(pgBouncerStatsConfig(env)),
   };
 }
 
@@ -271,7 +292,7 @@ async function readClusterReadings(
   slot: Date,
   deps: Partial<ClusterReadDeps> = {},
 ): Promise<ClusterReadings> {
-  const { readDatabase, readRedis, readBaseline, readVolume } = {
+  const { readDatabase, readRedis, readBaseline, readVolume, readPgBouncer } = {
     ...defaultReadDeps(),
     ...deps,
   };
@@ -305,11 +326,25 @@ async function readClusterReadings(
     );
   }
 
+  // Not the pool either, and fail-open on its own (pgbouncer-metrics.ts):
+  // a console that does not answer is a `down` instance the alert names.
+  let pgbouncer: PgBouncerMetrics | null = null;
+
+  try {
+    pgbouncer = await readPgBouncer();
+  } catch (error) {
+    log.warn(
+      { err: error, ts: slot.toISOString() },
+      "cluster pgbouncer read failed",
+    );
+  }
+
   return {
     database: databaseMetrics,
     redis,
     redisEvictions: evictionsSince(redis, baseline, slot),
     volume,
+    pgbouncer,
   };
 }
 
@@ -377,6 +412,7 @@ function withClusterReadings(
           },
         }
       : {}),
+    ...(readings.pgbouncer ? { pgbouncer: readings.pgbouncer } : {}),
     collectionErrors: [
       ...snapshot.collectionErrors,
       ...unreadParts(metrics.collection_errors),
@@ -421,6 +457,7 @@ async function recordClusterSample(
         database: readings.database,
         redis: readings.redis,
         volume: readings.volume,
+        pgbouncer: readings.pgbouncer,
       }),
     );
   } catch (error) {

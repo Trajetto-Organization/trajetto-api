@@ -30,6 +30,8 @@ const SECRET_ENV_KEYS = [
   "REDIS_URL",
   // The pub/sub's own Redis (plano-escala F5-01).
   "PUBSUB_REDIS_URL",
+  // PgBouncer's stats login (plano-escala F4-36): SHOW only, still a password.
+  "PGBOUNCER_STATS_URL",
   "JWT_SECRET",
   "JWT_SECRET_REFRESH_TOKEN",
   "META_WHATSAPP_ACCESS_TOKEN",

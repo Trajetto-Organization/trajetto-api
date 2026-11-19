@@ -6,6 +6,7 @@ import {
   type ClusterEpochState,
 } from "./cluster-epoch";
 import { feedTxidRegressed, type FeedTxidState } from "./feed-txid";
+import type { PgBouncerMetrics } from "./pgbouncer-metrics";
 
 /**
  * When the operation must be woken up (OBS-03). Pure: the ops heartbeat job
@@ -196,6 +197,13 @@ interface OperationalSnapshot {
    * nothing of it.
    */
   processes?: ProcessFleetState;
+
+  /**
+   * PgBouncer's consoles, as the process with the cron read them this
+   * minute (plano-escala F4-36). Absent or null when PGBOUNCER_STATS_URL is
+   * not set, which judges nothing.
+   */
+  pgbouncer?: PgBouncerMetrics | null;
 
   /** Parts of the snapshot that could not be read; each one is a reason. */
   collectionErrors: string[];
@@ -432,6 +440,20 @@ const DEFAULT_ALERT_THRESHOLDS = {
    * before the 429 holds every path until midnight UTC.
    */
   geocodingQuotaRatio: 0.7,
+
+  /**
+   * A client waiting this long for one of PgBouncer's server connections
+   * pages (plano-escala F4-36): the image drops the waiting client with
+   * query_wait_timeout at 5 s, a 503, so 2 s is the pool already short.
+   */
+  pgbouncerMaxWaitSec: 2,
+
+  /**
+   * PgBouncer's server connections of a database against its
+   * max_db_connections: at 80% the next burst queues (and the 1M gate
+   * asks for under 70% sustained, docs/desempenho).
+   */
+  pgbouncerServerUsageRatio: 0.8,
 } as const;
 
 type AlertThresholds = { [K in keyof typeof DEFAULT_ALERT_THRESHOLDS]: number };
@@ -569,6 +591,9 @@ const ALERT_KINDS = [
   "feed-txid-regressed",
   "cluster-epoch-stale",
   "feed-epoch-conversion",
+  "pgbouncer-down",
+  "pgbouncer-clients-waiting",
+  "pgbouncer-server-saturation",
   "collection-incomplete",
 ] as const;
 
@@ -846,6 +871,62 @@ function volumeAlerts(
 }
 
 /** How many replica names a message carries. */
+/** How many silent PgBouncer tasks a message names. */
+const PGBOUNCER_DOWN_SHOWN = 3;
+
+/**
+ * PgBouncer's consoles (plano-escala F4-36): a task that did not answer
+ * the stats login, a client waiting for a server connection, and a
+ * database's server connections near max_db_connections.
+ */
+function pgBouncerAlerts(
+  metrics: PgBouncerMetrics,
+  thresholds: AlertThresholds,
+): Alert[] {
+  const alerts: Alert[] = [];
+  const { totals } = metrics;
+
+  if (metrics.status !== "up") {
+    const down = metrics.instances.filter(
+      (instance) => instance.status === "down",
+    );
+    const shown = down
+      .slice(0, PGBOUNCER_DOWN_SHOWN)
+      .map((instance) => `${instance.address}: ${excerpt(instance.error)}`);
+    const more =
+      down.length > PGBOUNCER_DOWN_SHOWN
+        ? ` e mais ${down.length - PGBOUNCER_DOWN_SHOWN}`
+        : "";
+
+    alerts.push({
+      code: "pgbouncer-down",
+      message:
+        metrics.instances.length === 0
+          ? `PgBouncer sem endereço para ler pelo login de estatística (${excerpt(metrics.error)}): confira PGBOUNCER_STATS_HOSTS e a Application trajetto-pgbouncer`
+          : `PgBouncer sem resposta pelo login de estatística em ${down.length} de ${metrics.instances.length} tarefa(s) (${shown.join("; ")}${more})`,
+    });
+  }
+
+  if (totals.maxwait_seconds >= thresholds.pgbouncerMaxWaitSec) {
+    alerts.push({
+      code: "pgbouncer-clients-waiting",
+      message: `PgBouncer com cliente esperando conexão de servidor há ${seconds(totals.maxwait_seconds)} no pool ${totals.maxwait_pool ?? "?"} (${totals.cl_waiting} esperando; o query_wait_timeout responde 503 aos 5 s)`,
+    });
+  }
+
+  if (
+    totals.server_usage_percent !== null &&
+    totals.server_usage_percent >= thresholds.pgbouncerServerUsageRatio * 100
+  ) {
+    alerts.push({
+      code: "pgbouncer-server-saturation",
+      message: `PgBouncer usando ${Math.round(totals.server_usage_percent)}% das conexões de servidor do banco ${totals.server_usage_database ?? "?"} (max_db_connections; limite ${Math.round(thresholds.pgbouncerServerUsageRatio * 100)}%)`,
+    });
+  }
+
+  return alerts;
+}
+
 const REPLICAS_SHOWN = 3;
 
 function replicaList(replicas: string[]): string {
@@ -1204,6 +1285,10 @@ function collectAlerts(
   }
 
   if (snapshot.redis) alerts.push(...redisAlerts(snapshot.redis));
+
+  if (snapshot.pgbouncer) {
+    alerts.push(...pgBouncerAlerts(snapshot.pgbouncer, thresholds));
+  }
 
   if (snapshot.volume) {
     alerts.push(...volumeAlerts(snapshot.volume, thresholds));

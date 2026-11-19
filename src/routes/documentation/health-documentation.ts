@@ -1194,6 +1194,111 @@ const healthResponses = {
       .describe(
         "Redis as the API sees it: PING latency and INFO numbers. Never the address nor a key; with Redis down, every number is null.",
       ),
+    // plano-escala F4-36. Optional: an API that predates it, still answering
+    // during a rolling deploy, sends none.
+    pgbouncer: z
+      .object({
+        status: z
+          .enum(["up", "partial", "down"])
+          .describe(
+            "up: toda tarefa do PgBouncer respondeu ao login de estatística; partial: parte delas; down: nenhuma (ou nenhum endereço). Dispara o alerta pgbouncer-down.",
+          ),
+        read_at: z.string().describe("Quando o cron leu os consoles."),
+        sampled_at: z
+          .string()
+          .describe(
+            "O minuto da linha cluster do ops_sample que trouxe a leitura.",
+          ),
+        error: z
+          .string()
+          .nullable()
+          .describe(
+            "Por que nada foi lido (um nome que o DNS não conhece); null quando houve endereço.",
+          ),
+        instances: z
+          .array(
+            z.object({
+              address: z
+                .string()
+                .describe("O endereço da tarefa (tasks.<App Name>)."),
+              status: z.enum(["up", "down"]),
+              error: z
+                .string()
+                .nullable()
+                .describe(
+                  "Por que não respondeu: o código ou as palavras do PgBouncer, nunca a URL.",
+                ),
+              pools: z.array(
+                z.object({
+                  database: z.string(),
+                  user: z.string(),
+                  cl_active: z.number(),
+                  cl_waiting: z
+                    .number()
+                    .describe("Clientes esperando uma conexão de servidor."),
+                  sv_active: z.number(),
+                  sv_idle: z.number(),
+                  sv_used: z.number(),
+                  maxwait_seconds: z
+                    .number()
+                    .describe("A espera do cliente mais antigo, em segundos."),
+                  pool_mode: z.string().nullable(),
+                }),
+              ),
+              databases: z.array(
+                z.object({
+                  name: z.string(),
+                  pool_size: z.number(),
+                  max_connections: z
+                    .number()
+                    .describe("max_db_connections; 0 é sem teto."),
+                  current_connections: z.number(),
+                  paused: z.boolean(),
+                  disabled: z.boolean(),
+                }),
+              ),
+              stats: z.array(
+                z.object({
+                  database: z.string(),
+                  xact_per_second: z.number(),
+                  query_per_second: z.number(),
+                  avg_xact_time_us: z.number(),
+                  avg_query_time_us: z.number(),
+                  avg_wait_time_us: z.number(),
+                }),
+              ),
+            }),
+          )
+          .describe(
+            "Cada tarefa lida, com o SHOW POOLS, SHOW STATS e SHOW DATABASES dela.",
+          ),
+        totals: z.object({
+          instances: z.number(),
+          instances_up: z.number(),
+          cl_active: z.number(),
+          cl_waiting: z.number(),
+          maxwait_seconds: z
+            .number()
+            .describe(
+              "A maior espera por conexão de servidor; a partir de 2 s dispara pgbouncer-clients-waiting.",
+            ),
+          maxwait_pool: z.string().nullable(),
+          server_connections: z.number(),
+          server_usage_percent: z
+            .number()
+            .nullable()
+            .describe(
+              "O banco mais cheio contra o max_db_connections dele; a partir de 80% dispara pgbouncer-server-saturation.",
+            ),
+          server_usage_database: z.string().nullable(),
+          paused_databases: z.number(),
+        }),
+      })
+      .nullable()
+      .optional()
+      .describe(
+        "O PgBouncer (plano de escala, F4-36), lido uma vez por minuto só pelo processo com o cron, pelo login de estatística (só SHOW), e trazido aqui da linha cluster mais nova do ops_sample (até 5 min). null sem PGBOUNCER_STATS_URL na Application que roda o cron, ou com o OPS_SAMPLE_ENABLED=false.",
+      ),
     // plano-escala F1-09. Optional: an API that predates it, still answering
     // during a rolling deploy, sends none.
     http: z

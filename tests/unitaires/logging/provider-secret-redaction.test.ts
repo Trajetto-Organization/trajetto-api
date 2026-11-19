@@ -40,6 +40,8 @@ const PROVIDER_SECRETS = [
   "BATCH_DATABASE_URL",
   // The pub/sub's own Redis (plano-escala F5-01).
   "PUBSUB_REDIS_URL",
+  // PgBouncer's stats login (plano-escala F4-36).
+  "PGBOUNCER_STATS_URL",
   "JWT_SECRET",
   "HEALTHCHECK_PING_URL",
   "WEBHOOK_SECRETS_KEY",
