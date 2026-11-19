@@ -369,6 +369,23 @@ function partitionMayStillBeCreated(
   return recordedAt.getTime() >= todayUtc - DAY_MS;
 }
 
+/**
+ * Postgres' refusal of a row no partition covers (SQLSTATE 23514). Prisma
+ * surfaces it as an unknown request error, so the message is all there is.
+ * The lean trail's name (plano-escala F2-10), and the legacy one's, which
+ * the image before it writes. Shared by the repository's fallback and the
+ * group commit's breaker (plano-escala F5-19), which must not count one
+ * flush's old point as the path being unhealthy.
+ */
+function isMissingPartition(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    /no partition of relation \\?"?driver_position(?:_v2)?\\?"? found for row/i.test(
+      error.message,
+    )
+  );
+}
+
 export {
   APP_MAX_BUFFERED,
   FUTURE_TOLERANCE_MS,
@@ -379,6 +396,7 @@ export {
   acceptPings,
   downsample,
   hasRealCoordinates,
+  isMissingPartition,
   isPositionFresh,
   latestPing,
   parsePartitionBound,

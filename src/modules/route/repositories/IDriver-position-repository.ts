@@ -32,6 +32,20 @@ interface RecordedBatch {
   advanced: boolean;
 }
 
+/** One flush of one driver: what recordBatch and writeBatchMany take. */
+interface PositionWrite {
+  driverId: string;
+  businessId: string;
+  routeId: string | null;
+  /**
+   * The running route's departure. A point recorded before it is stored
+   * without the route (routeOfPing): a backlog is not credited to a route
+   * that had not left yet.
+   */
+  routeStartedAt?: Date | null;
+  pings: AcceptedPing[];
+}
+
 interface LivePosition extends StoredPosition {
   driverName: string | null;
   vehiclePlate: string | null;
@@ -59,18 +73,22 @@ interface IDriverPositionRepository {
    * partition can ever hold is dropped on its own instead of failing the
    * flush (INV-14).
    */
-  recordBatch: (props: {
-    driverId: string;
-    businessId: string;
-    routeId: string | null;
-    /**
-     * The running route's departure. A point recorded before it is stored
-     * without the route (routeOfPing): a backlog is not credited to a route
-     * that had not left yet.
-     */
-    routeStartedAt?: Date | null;
-    pings: AcceptedPing[];
-  }) => Promise<RecordedBatch>;
+  recordBatch: (props: PositionWrite) => Promise<RecordedBatch>;
+
+  /**
+   * Many flushes, of one driver or many, in ONE transaction (plano-escala
+   * F5-18): the write of the group commit (position-write-buffer.ts), which
+   * turns the fleet's ~333 flushes a second into a few commits.
+   *
+   * Each flush is answered exactly as recordBatch would have answered it,
+   * had the flushes run one after the other in the order given: a point
+   * two flushes share is stored once and counted by the first, and
+   * `advanced` follows the driver's last position through them. `dropped`
+   * is always 0: a point no partition holds fails the whole call, nothing
+   * is written, and the caller redoes each flush through recordBatch, which
+   * drops it on its own (INV-14). Any other failure also writes nothing.
+   */
+  writeBatchMany: (writes: PositionWrite[]) => Promise<RecordedBatch[]>;
 
   /**
    * The latest position of every driver who reported today.
@@ -134,6 +152,7 @@ interface IDriverPositionRepository {
 export type {
   IDriverPositionRepository,
   LivePosition,
+  PositionWrite,
   RecordedBatch,
   StoredPosition,
 };

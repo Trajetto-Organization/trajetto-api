@@ -5,6 +5,7 @@ import database from "@/../infra/database";
 import { logger } from "@/shared/logging/logger";
 
 import {
+  isMissingPartition,
   parsePartitionBound,
   partitionMayStillBeCreated,
   routeOfPing,
@@ -16,25 +17,100 @@ import {
 import type {
   IDriverPositionRepository,
   LivePosition,
+  PositionWrite,
   RecordedBatch,
   StoredPosition,
 } from "./IDriver-position-repository";
 
 const log = logger.child({ component: "driver-position" });
 
-/**
- * Postgres' refusal of a row no partition covers (SQLSTATE 23514). Prisma
- * surfaces it as an unknown request error, so the message is all there is.
- * The lean trail's name (plano-escala F2-10), and the legacy one's, which
- * the image before it writes.
- */
-function isMissingPartition(error: unknown): boolean {
-  return (
-    error instanceof Error &&
-    /no partition of relation \\?"?driver_position(?:_v2)?\\?"? found for row/i.test(
-      error.message,
-    )
-  );
+/** A point of the trail, by its key (driverId, recorded_at). */
+function trailKey(driverId: string, ms: number): string {
+  return `${driverId}|${ms}`;
+}
+
+interface PlannedRow {
+  driverId: string;
+  businessId: string;
+  routeId: string | null;
+  ping: AcceptedPing;
+}
+
+interface BatchPlan {
+  /** Every point once, under the first flush that has it. */
+  trail: PlannedRow[];
+  /** trailKey → the index of that flush. */
+  owners: Map<string, number>;
+  /** Each driver's newest point of the batch, and whose it is. */
+  newest: Map<string, PlannedRow>;
+  /** Each driver's flushes with points, in the batch's order. */
+  byDriver: Map<string, number[]>;
+  /** Each flush's newest instant (ms), null for an empty flush. */
+  latest: Array<number | null>;
+}
+
+/** What writeBatchMany sends, decided in memory. */
+function planBatch(writes: PositionWrite[]): BatchPlan {
+  const plan: BatchPlan = {
+    trail: [],
+    owners: new Map(),
+    newest: new Map(),
+    byDriver: new Map(),
+    latest: [],
+  };
+
+  writes.forEach((write, index) => {
+    const route = write.routeId
+      ? { id: write.routeId, started_at: write.routeStartedAt ?? null }
+      : null;
+
+    for (const ping of write.pings) {
+      const key = trailKey(write.driverId, ping.recorded_at.getTime());
+
+      if (plan.owners.has(key)) continue;
+
+      plan.owners.set(key, index);
+      plan.trail.push({
+        driverId: write.driverId,
+        businessId: write.businessId,
+        // By when the point was recorded, as recordBatch (IDEMP-16).
+        routeId: routeOfPing(ping.recorded_at, route),
+        ping,
+      });
+    }
+
+    if (write.pings.length === 0) {
+      plan.latest.push(null);
+      return;
+    }
+
+    // The flush's newest point; of two at one instant, the first.
+    const top = write.pings.reduce((a, b) =>
+      b.recorded_at > a.recorded_at ? b : a,
+    );
+
+    plan.latest.push(top.recorded_at.getTime());
+    plan.byDriver.set(write.driverId, [
+      ...(plan.byDriver.get(write.driverId) ?? []),
+      index,
+    ]);
+
+    // The driver's row moves to its newest point of the batch, written as
+    // the first flush that reached it has it: the one recordBatch would
+    // have let through the "only newer" guard.
+    const held = plan.newest.get(write.driverId);
+
+    if (!held || top.recorded_at > held.ping.recorded_at) {
+      plan.newest.set(write.driverId, {
+        driverId: write.driverId,
+        businessId: write.businessId,
+        routeId: routeOfPing(top.recorded_at, route),
+        ping: top,
+      });
+    }
+  });
+
+  return plan;
 }
 
 class DriverPositionRepository implements IDriverPositionRepository {
@@ -46,13 +122,7 @@ class DriverPositionRepository implements IDriverPositionRepository {
     routeId,
     routeStartedAt = null,
     pings,
-  }: {
-    driverId: string;
-    businessId: string;
-    routeId: string | null;
-    routeStartedAt?: Date | null;
-    pings: AcceptedPing[];
-  }): Promise<RecordedBatch> {
+  }: PositionWrite): Promise<RecordedBatch> {
     if (pings.length === 0) return { stored: 0, dropped: 0, advanced: false };
 
     const owner = {
@@ -141,8 +211,16 @@ class DriverPositionRepository implements IDriverPositionRepository {
     },
     pings: AcceptedPing[],
   ): Promise<{ stored: number; advanced: boolean }> {
+    // In device time, as writeBatchMany inserts them (stable: of two points
+    // at one instant the first in the body still wins). The insert takes a
+    // lock on each new key in that order; a flush resent while the group
+    // commit wrote the same points in another order could deadlock with it.
+    const ordered = [...pings].sort(
+      (a, b) => a.recorded_at.getTime() - b.recorded_at.getTime(),
+    );
+
     const insertTrail = this.prisma.driverPosition.createMany({
-      data: pings.map((ping) => ({
+      data: ordered.map((ping) => ({
         driverId,
         businessId,
         // By when the point was recorded: a backlog from before this
@@ -221,6 +299,181 @@ class DriverPositionRepository implements IDriverPositionRepository {
     // The upsert's row count is the guard's verdict: 1 when the row was
     // inserted or moved forward, 0 when the stored fix was already newer.
     return { stored: count, advanced: lastPositionRows > 0 };
+  }
+
+  /**
+   * Many flushes in one transaction (plano-escala F5-18), answered as
+   * recordBatch answers each one in turn (IDriverPositionRepository).
+   *
+   * Three statements whatever the number of flushes, and one commit:
+   *
+   *  1. the trail, every point of every flush in one INSERT … SELECT FROM
+   *     unnest(…) ON CONFLICT DO NOTHING, with the casts written out
+   *     (Prisma 7 binds raw parameters untyped). A point two flushes share
+   *     is sent once, under the first, so `stored` counts it there, as the
+   *     second recordBatch would have found it already stored. RETURNING
+   *     names what was new;
+   *  2. the drivers' last positions as they are now, FOR UPDATE: what
+   *     `advanced` is decided against when a driver has several flushes in
+   *     the batch;
+   *  3. the last positions, one row per driver (the newest point of its
+   *     flushes), in one multi-row upsert under recordBatch's "only newer"
+   *     guard. RETURNING names the drivers it moved.
+   *
+   * Every lock is taken in one order, by driver and then by instant: the
+   * trail's keys (the INSERT's ORDER BY), then the last positions (the FOR
+   * UPDATE's, which the upsert then finds already held). Two batches on two
+   * replicas wait for each other, never in a circle.
+   */
+  async writeBatchMany(writes: PositionWrite[]): Promise<RecordedBatch[]> {
+    const results: RecordedBatch[] = writes.map(() => ({
+      stored: 0,
+      dropped: 0,
+      advanced: false,
+    }));
+
+    const plan = planBatch(writes);
+
+    if (plan.trail.length === 0) return results;
+
+    const { trail } = plan;
+    const drivers = [...plan.newest.keys()].sort();
+    const newest = drivers.map((driverId) => plan.newest.get(driverId)!);
+
+    const insertTrail = this.prisma.$queryRaw<
+      Array<{ driverId: string; ms: bigint }>
+    >`
+      INSERT INTO "driver_position_v2" (
+        "driverId", "businessId", "routeId",
+        "latitude", "longitude",
+        "accuracy", "speed", "heading", "battery",
+        "recorded_at"
+      )
+      SELECT
+        p."driverId", p."businessId", p."routeId",
+        p."latitude", p."longitude",
+        p."accuracy", p."speed", p."heading", p."battery",
+        p."at"::timestamptz AT TIME ZONE 'UTC'
+      FROM unnest(
+        ${trail.map((row) => row.driverId)}::uuid[],
+        ${trail.map((row) => row.businessId)}::uuid[],
+        ${trail.map((row) => row.routeId)}::uuid[],
+        ${trail.map((row) => row.ping.latitude)}::float8[],
+        ${trail.map((row) => row.ping.longitude)}::float8[],
+        ${trail.map((row) => row.ping.accuracy)}::float8[],
+        ${trail.map((row) => row.ping.speed)}::float8[],
+        ${trail.map((row) => row.ping.heading)}::float8[],
+        ${trail.map((row) => row.ping.battery)}::int2[],
+        ${trail.map((row) => row.ping.recorded_at.toISOString())}::text[]
+      ) AS p(
+        "driverId", "businessId", "routeId",
+        "latitude", "longitude",
+        "accuracy", "speed", "heading", "battery",
+        "at"
+      )
+      ORDER BY 1, 10
+      ON CONFLICT DO NOTHING
+      RETURNING
+        "driverId"::text AS "driverId",
+        floor(extract(epoch FROM "recorded_at") * 1000)::bigint AS "ms"
+    `;
+
+    const lockLastPositions = this.prisma.$queryRaw<
+      Array<{ driverId: string; ms: bigint }>
+    >`
+      SELECT
+        "driverId",
+        floor(extract(epoch FROM "recorded_at") * 1000)::bigint AS "ms"
+      FROM "driver_last_position"
+      WHERE "driverId" = ANY(${drivers}::text[])
+      ORDER BY "driverId"
+      FOR UPDATE
+    `;
+
+    const upsertLastPositions = this.prisma.$queryRaw<
+      Array<{ driverId: string }>
+    >`
+      INSERT INTO "driver_last_position" (
+        "driverId", "businessId", "routeId",
+        "latitude", "longitude",
+        "accuracy", "speed", "heading", "battery",
+        "recorded_at", "updated_at"
+      )
+      SELECT
+        l."driverId", l."businessId", l."routeId",
+        l."latitude", l."longitude",
+        l."accuracy", l."speed", l."heading", l."battery",
+        l."at"::timestamptz AT TIME ZONE 'UTC', now()
+      FROM unnest(
+        ${drivers}::text[],
+        ${newest.map((row) => row.businessId)}::text[],
+        ${newest.map((row) => row.routeId)}::text[],
+        ${newest.map((row) => row.ping.latitude)}::float8[],
+        ${newest.map((row) => row.ping.longitude)}::float8[],
+        ${newest.map((row) => row.ping.accuracy)}::float8[],
+        ${newest.map((row) => row.ping.speed)}::float8[],
+        ${newest.map((row) => row.ping.heading)}::float8[],
+        ${newest.map((row) => row.ping.battery)}::int2[],
+        ${newest.map((row) => row.ping.recorded_at.toISOString())}::text[]
+      ) AS l(
+        "driverId", "businessId", "routeId",
+        "latitude", "longitude",
+        "accuracy", "speed", "heading", "battery",
+        "at"
+      )
+      ORDER BY l."driverId"
+      ON CONFLICT ("driverId") DO UPDATE SET
+        "businessId" = EXCLUDED."businessId",
+        "routeId" = EXCLUDED."routeId",
+        "latitude" = EXCLUDED."latitude",
+        "longitude" = EXCLUDED."longitude",
+        "accuracy" = EXCLUDED."accuracy",
+        "speed" = EXCLUDED."speed",
+        "heading" = EXCLUDED."heading",
+        "battery" = EXCLUDED."battery",
+        "recorded_at" = EXCLUDED."recorded_at",
+        "updated_at" = now()
+      WHERE "driver_last_position"."recorded_at" < EXCLUDED."recorded_at"
+      RETURNING "driverId"
+    `;
+
+    const [inserted, before, moved] = await this.prisma.$transaction([
+      insertTrail,
+      lockLastPositions,
+      upsertLastPositions,
+    ]);
+
+    for (const row of inserted) {
+      const owner = plan.owners.get(trailKey(row.driverId, Number(row.ms)));
+
+      if (owner !== undefined) results[owner].stored += 1;
+    }
+
+    const stored = new Map(
+      before.map((row) => [row.driverId, Number(row.ms)] as const),
+    );
+    const movedDrivers = new Set(moved.map((row) => row.driverId));
+
+    // `advanced`, flush by flush, as the guard would have answered each in
+    // turn: newer than what was stored and than the driver's earlier
+    // flushes in the batch. The upsert has the last word: when it kept the
+    // stored row (a newer fix was already there), none of them moved it.
+    for (const [driverId, indexes] of plan.byDriver) {
+      if (!movedDrivers.has(driverId)) continue;
+
+      let current = stored.get(driverId) ?? null;
+
+      for (const index of indexes) {
+        const latest = plan.latest[index]!;
+
+        if (current === null || latest > current) {
+          results[index].advanced = true;
+          current = latest;
+        }
+      }
+    }
+
+    return results;
   }
 
   /**

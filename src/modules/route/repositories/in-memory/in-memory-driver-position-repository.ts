@@ -1,12 +1,9 @@
-import {
-  downsample,
-  routeOfPing,
-  type AcceptedPing,
-} from "@/shared/route/driver-position-rules";
+import { downsample, routeOfPing } from "@/shared/route/driver-position-rules";
 
 import type {
   IDriverPositionRepository,
   LivePosition,
+  PositionWrite,
   RecordedBatch,
   StoredPosition,
 } from "../IDriver-position-repository";
@@ -44,13 +41,7 @@ class InMemoryDriverPositionRepository implements IDriverPositionRepository {
     routeId,
     routeStartedAt = null,
     pings,
-  }: {
-    driverId: string;
-    businessId: string;
-    routeId: string | null;
-    routeStartedAt?: Date | null;
-    pings: AcceptedPing[];
-  }): Promise<RecordedBatch> {
+  }: PositionWrite): Promise<RecordedBatch> {
     if (pings.length === 0) return { stored: 0, dropped: 0, advanced: false };
 
     const route = routeId ? { id: routeId, started_at: routeStartedAt } : null;
@@ -108,6 +99,18 @@ class InMemoryDriverPositionRepository implements IDriverPositionRepository {
     }
 
     return { stored, dropped: 0, advanced };
+  }
+
+  /**
+   * The flushes one after the other: the contract writeBatchMany keeps in
+   * one transaction (plano-escala F5-18). Nothing here can fail half-way.
+   */
+  async writeBatchMany(writes: PositionWrite[]): Promise<RecordedBatch[]> {
+    const results: RecordedBatch[] = [];
+
+    for (const write of writes) results.push(await this.recordBatch(write));
+
+    return results;
   }
 
   async listLatestByBusiness(
