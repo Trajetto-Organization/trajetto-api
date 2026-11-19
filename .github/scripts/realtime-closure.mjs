@@ -10,12 +10,16 @@
  * (.github/scripts/deploy-roles.sh):
  *
  *  - `trajetto.realtime-source`: a sha256 over the files of the realtime's
- *    import closure (from src/websocket.ts and the boot) plus what turns
- *    them into a running process: the dependencies (package.json's and
- *    yarn.lock), the Prisma schema (the client selects every column of a
- *    model it knows, so a realtime on an older schema would break on the
- *    contraction of a column it still selects) and the build config. A
- *    route outside the closure changes nothing here;
+ *    import closure (from src/websocket.ts, the boot and the wait for
+ *    Postgres the entrypoint runs before it) plus what turns them into a
+ *    running process: the dependencies (package.json's and yarn.lock), the
+ *    Prisma schema (the client selects every column of a model it knows, so
+ *    a realtime on an older schema would break on the contraction of a
+ *    column it still selects), the build config and the image itself (the
+ *    Dockerfile, which pins the Node binary and the Alpine base the socket
+ *    server runs on, what the build context leaves out, and the entrypoint
+ *    script). A route outside the closure changes nothing here; a new Node
+ *    or Alpine digest (a CVE fix) deploys the realtime with the rest;
  *  - `trajetto.contract-epoch`: the migrations in the contract phase
  *    (`-- contract-phase:`) plus the versions of the messages between
  *    processes (src/shared/socket/messages.ts). It only grows: a new
@@ -54,6 +58,9 @@ const ROOTS = [
   "src/http.ts",
   // The only routes the realtime answers (src/shared/http/http-surface.ts).
   "src/routes/health-routes.ts",
+  // Run by docker-entrypoint.sh before server.js, in every replica's boot
+  // (build/wait-for-postgres.js --require-migrations).
+  "infra/scripts/wait-for-postgres.ts",
 ];
 
 /**
@@ -66,13 +73,25 @@ const BOUNDARIES = new Set([
   "src/modules/import/services/import-queue.ts",
 ]);
 
-/** What else turns the closure into the running process. */
+/**
+ * What else turns the closure into the running process: the dependencies,
+ * the schema, the build config, and the image the process runs in. The
+ * Dockerfile pins the Node binary and the Alpine runtime base by digest (a
+ * security bump changes only it), `.dockerignore` decides what the build
+ * sees, and the entrypoint runs before the server. Any change to them
+ * deploys the realtime, even one to another stage of the Dockerfile: a
+ * spare deploy costs a drain, a missed one leaves the socket server on an
+ * old runtime for up to REALTIME_MAX_LAG_DAYS.
+ */
 const BUILD_INPUTS = [
   "package.json",
   "yarn.lock",
   "prisma/schema.prisma",
   "tsconfig.json",
   "tsup.config.ts",
+  "Dockerfile",
+  ".dockerignore",
+  "infra/scripts/docker-entrypoint.sh",
 ];
 
 const LIST_FILE = ".github/realtime-closure.txt";

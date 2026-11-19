@@ -5185,9 +5185,13 @@ passa ao papel `api` (subseção acima).
   dreno), então ele só é implantado quando o que ele executa mudou. A
   imagem leva dois labels, calculados no job `Build` por
   `.github/scripts/realtime-closure.mjs`: `trajetto.realtime-source` (o
-  hash do fecho de imports a partir de `src/websocket.ts` e do boot,
-  listado em `.github/realtime-closure.txt`, mais as dependências, o
-  `schema.prisma` e a configuração do build) e `trajetto.contract-epoch`
+  hash do fecho de imports a partir de `src/websocket.ts`, do boot e da
+  espera pelo Postgres que o entrypoint roda antes dele, listado em
+  `.github/realtime-closure.txt`, mais as dependências, o `schema.prisma`,
+  a configuração do build e a própria imagem: o `Dockerfile`, que fixa por
+  digest o Node e o Alpine em que o socket roda, o `.dockerignore` e o
+  `docker-entrypoint.sh`; uma troca de digest por CVE implanta o realtime
+  junto com o resto) e `trajetto.contract-epoch`
   (as migrations de contract mais as versões das mensagens entre
   processos, `src/shared/socket/messages.ts`). O deploy compara com a
   imagem que a tag `<tag>-realtime` aponta e implanta quando: o _Run

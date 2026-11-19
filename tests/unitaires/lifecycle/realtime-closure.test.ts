@@ -166,6 +166,20 @@ describe("the labels, on a small repository", () => {
         "export const messages = MESSAGE_VERSIONS;",
       ].join("\n"),
     );
+    write(
+      "infra/scripts/wait-for-postgres.ts",
+      'import { refusal } from "./schema-guard";\nexport const wait = refusal;\n',
+    );
+    write("infra/scripts/schema-guard.ts", "export const refusal = 1;\n");
+    write(
+      "infra/scripts/docker-entrypoint.sh",
+      "#!/bin/sh\nnode build/wait-for-postgres.js\nexec node build/server.js\n",
+    );
+    write(
+      "Dockerfile",
+      "FROM node:22.21.1-alpine3.23@sha256:aaa AS node\nFROM alpine:3.23.7@sha256:bbb AS base\n",
+    );
+    write(".dockerignore", "node_modules\n");
     write("package.json", '{ "dependencies": {} }\n');
     write("yarn.lock", "# lock\n");
     write("prisma/schema.prisma", "model User {\n  id String @id\n}\n");
@@ -182,6 +196,8 @@ describe("the labels, on a small repository", () => {
 
     expect(list).toEqual(
       [
+        "infra/scripts/schema-guard.ts",
+        "infra/scripts/wait-for-postgres.ts",
         "src/http.ts",
         "src/routes/health-routes.ts",
         "src/server.ts",
@@ -210,6 +226,19 @@ describe("the labels, on a small repository", () => {
     ["src/shared/c.ts", "export const c = 2;\n"],
     ["yarn.lock", "# lock 2\n"],
     ["prisma/schema.prisma", "model User {\n  id String @id\n  x String?\n}\n"],
+    // The image the socket server runs in: a Node or Alpine digest bump (a
+    // CVE fix) must not leave it on the old runtime for up to 7 days.
+    [
+      "Dockerfile",
+      "FROM node:22.21.2-alpine3.23@sha256:ccc AS node\nFROM alpine:3.23.7@sha256:bbb AS base\n",
+    ],
+    [".dockerignore", "node_modules\ncoverage\n"],
+    [
+      "infra/scripts/docker-entrypoint.sh",
+      "#!/bin/sh\nnode build/wait-for-postgres.js --require-migrations x\nexec node build/server.js\n",
+    ],
+    // The boot's wait for Postgres, run before server.js.
+    ["infra/scripts/schema-guard.ts", "export const refusal = 2;\n"],
   ])("moves when %s changes: the realtime is deployed", (path, text) => {
     const before = source();
 

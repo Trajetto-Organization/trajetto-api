@@ -4,6 +4,9 @@
 # names, deploys trajetto-realtime; anything else does not.
 infra/cache/redis-connection.ts
 infra/database.ts
+infra/scripts/database-bootstrap-guard.ts
+infra/scripts/schema-guard.ts
+infra/scripts/wait-for-postgres.ts
 src/config/auth.ts
 src/config/cors-origin.ts
 src/config/http-server.ts
