@@ -780,6 +780,170 @@ function createHistoryArchiveScheduler(
   };
 }
 
+/** What partition-maintenance asks before a history partition leaves. */
+interface HistoryDropGate {
+  /**
+   * Whether the partition, past HISTORY_ATTACHED_MONTHS, may be detached:
+   * only when its archive was verified AFTER it became due (the final
+   * pass, which writes again every object older than that), no archive
+   * job of it is live, and the count of its rows now is the one verified.
+   * Otherwise the final pass is enqueued and the partition stays.
+   */
+  ensureArchived(
+    table: string,
+    partition: { name: string; from: Date; to: Date },
+  ): Promise<boolean>;
+
+  /** Whether a history partition detached and not dropped may go. */
+  mayDropDetached(table: string, name: string): Promise<boolean>;
+}
+
+interface HistoryDropGateOptions {
+  db: ArchiveDatabase;
+  /** The history's retention, in days (historyRetentionDays). */
+  retentionDays: number;
+  jobs: {
+    running(name: string): Promise<boolean>;
+    enqueue(
+      table: string,
+      partition: { name: string; from: Date; to: Date },
+      options: { rewriteBefore: Date },
+    ): Promise<void>;
+  };
+  now?: () => number;
+}
+
+/**
+ * The history's DROP gate (plano-escala F5-17). Never throws: a failure is
+ * logged and answered as "kept". The DROP itself is partition-maintenance's
+ * (DETACH ... CONCURRENTLY, then DROP); this only decides whether it may.
+ *
+ * The final pass is what makes the copy the last word: a month is written
+ * in place after it closes (a proof's address geocoded later, a person
+ * anonymized), so the archive checked at the month's close may not be the
+ * month the DROP removes. Written again after the month became due, and
+ * its count checked again on the night of the DROP, it is.
+ */
+function createHistoryDropGate(
+  options: HistoryDropGateOptions,
+): HistoryDropGate {
+  const now = options.now ?? Date.now;
+  const { db } = options;
+
+  const verified = async (name: string) =>
+    (
+      await db.$queryRawUnsafe<Array<{ verified_at: Date; row_count: string }>>(
+        `SELECT "verified_at", "row_count"::text AS row_count
+           FROM "archive_partition" WHERE "partition_name" = $1`,
+        name,
+      )
+    )[0] ?? null;
+
+  return {
+    async ensureArchived(table, partition) {
+      const source = historySourceOf(table);
+
+      if (!source) return false;
+
+      const range: HistoryPartition = {
+        name: partition.name,
+        from: Number.isFinite(partition.from.getTime())
+          ? partition.from.getTime()
+          : Number.NEGATIVE_INFINITY,
+        to: partition.to.getTime(),
+      };
+      const dueAt = new Date(range.to + options.retentionDays * DAY_MS);
+
+      try {
+        if (await options.jobs.running(partition.name)) return false;
+
+        const archive = await verified(partition.name);
+
+        if (
+          !archive ||
+          new Date(archive.verified_at).getTime() < dueAt.getTime()
+        ) {
+          await options.jobs.enqueue(table, partition, {
+            rewriteBefore: dueAt,
+          });
+          log.info(
+            { table, partition: partition.name },
+            "history partition due: its final archive was enqueued; kept until it is verified",
+          );
+
+          return false;
+        }
+
+        const ids = idRange(range, 1);
+        const [live] = await db.$queryRawUnsafe<Array<{ rows: string }>>(
+          `SELECT count(*)::text AS rows FROM ${quote(source.table)} WHERE ${ids.sql}`,
+          ...ids.params,
+        );
+        const [manifest] = await db.$queryRawUnsafe<
+          Array<{ rows: string; pending: number }>
+        >(
+          `SELECT coalesce(sum("row_count"), 0)::text AS rows,
+                  count(*) FILTER (WHERE "status" = 'PENDING')::int AS pending
+             FROM "archive_manifest" WHERE "partition_name" = $1`,
+          partition.name,
+        );
+
+        if (
+          live?.rows !== archive.row_count ||
+          manifest?.rows !== archive.row_count ||
+          Number(manifest?.pending ?? 0) > 0
+        ) {
+          await options.jobs.enqueue(table, partition, {
+            rewriteBefore: new Date(now()),
+          });
+          log.warn(
+            {
+              table,
+              partition: partition.name,
+              rows: live?.rows,
+              archived: archive.row_count,
+            },
+            "history partition changed since its final archive: archived again, kept",
+          );
+
+          return false;
+        }
+
+        return true;
+      } catch (error) {
+        log.warn(
+          { table, partition: partition.name, error: errorMessage(error) },
+          "history drop check failed: the partition is kept",
+        );
+
+        return false;
+      }
+    },
+
+    async mayDropDetached(table, name) {
+      if (!historySourceOf(table)) return false;
+
+      try {
+        if (await verified(name)) return true;
+      } catch (error) {
+        log.warn(
+          { table, partition: name, error: errorMessage(error) },
+          "history drop check failed: the detached partition is kept",
+        );
+
+        return false;
+      }
+
+      log.warn(
+        { table, partition: name },
+        "detached history partition without a verified archive is kept",
+      );
+
+      return false;
+    },
+  };
+}
+
 export {
   ACTIVITY_ARCHIVE_COLUMNS,
   CREATED_AT_SLACK_MS,
@@ -791,6 +955,7 @@ export {
   PLATFORM_SUBJECT,
   archiveHistoryPartition,
   createHistoryArchiveScheduler,
+  createHistoryDropGate,
   historyArchiveKey,
   historyCsvCell,
   historyCsvLine,
@@ -801,6 +966,7 @@ export {
 export type {
   AttachedHistoryPartition,
   HistoryArchiveOptions,
+  HistoryDropGate,
   HistoryArchiveScheduler,
   HistoryPartition,
   HistorySource,

@@ -68,8 +68,13 @@ interface PartitionedTable {
    * "trail": with TRAIL_ARCHIVE_ENABLED, a day past the retention is copied
    * to the archive bucket and checked against archive_manifest before it is
    * detached and dropped (plano-escala F2-11). Absent: dropped as is.
+   *
+   * "history": the delivery history (plano-escala F5-17). A partition past
+   * the retention leaves only through the history's gate, which needs its
+   * archive written again after it became due and a count that still
+   * matches; without the gate it is never detached.
    */
-  archive?: "trail";
+  archive?: "trail" | "history";
 
   /**
    * A table that is still a plain one, and becomes partitioned only at the
@@ -153,6 +158,26 @@ interface PartitionEnv {
   WEBHOOK_DELIVERY_RETENTION_DAYS?: number;
   /** Days the bell keeps an unread notification (F5-14); 180 when absent. */
   NOTIFICATION_UNREAD_RETENTION_DAYS?: number;
+  /** The history's DROP (F5-17); off when absent. */
+  HISTORY_DROP_ENABLED?: boolean;
+  /** Months of history kept attached (F5-17); 24 when absent. */
+  HISTORY_ATTACHED_MONTHS?: number;
+}
+
+/** The history's attached months when the environment does not say (F5-17). */
+const HISTORY_ATTACHED_MONTHS_DEFAULT = 24;
+
+/**
+ * The history's retention, in days, from its attached months: 31 a month,
+ * so a partition never leaves before that many calendar months. Null (kept)
+ * unless the DROP is switched on.
+ */
+function historyRetentionDays(values: PartitionEnv): number | null {
+  if (values.HISTORY_DROP_ENABLED !== true) return null;
+
+  return (
+    (values.HISTORY_ATTACHED_MONTHS ?? HISTORY_ATTACHED_MONTHS_DEFAULT) * 31
+  );
 }
 
 /** The queues' lookahead when the environment does not say (F5-07). */
@@ -302,6 +327,14 @@ function queuePartitions(values: PartitionEnv): PartitionedTable[] {
  * by the job. The opt-in purge of ACTIVITY_RETENTION_DAYS keeps deleting
  * in batches.
  *
+ * Both history tables, once partitioned, leave a partition only with
+ * HISTORY_DROP_ENABLED (plano-escala F5-17, off until the lawyer's
+ * opinion), HISTORY_ATTACHED_MONTHS (24) after it ends, and only through
+ * the history's gate: archived again after it became due, the manifest
+ * adding up to a count taken that night (shared/archive/history-archive.ts).
+ * Their foreign keys stay: a DETACH keeps them on the detached table, and
+ * its DROP takes them with it.
+ *
  * The four queues: see queuePartitions. Plain tables until the swap.
  *
  * notification, the bell (plano-escala F5-15): monthly on its uuid v7 id
@@ -343,9 +376,21 @@ function registeredPartitions(
     { table: "driver_position", ...trail },
     { table: "driver_position_v2", ...trail },
     { table: "delivery_event_part", ...deliveryTrail, shellUntilWindow: true },
-    { table: "delivery_event", ...deliveryTrail, plainUntilSwap: true },
+    {
+      table: "delivery_event",
+      ...deliveryTrail,
+      plainUntilSwap: true,
+      archive: "history",
+      retentionDays: historyRetentionDays(values),
+    },
     { table: "activity_part", ...deliveryTrail, shellUntilWindow: true },
-    { table: "activity", ...deliveryTrail, plainUntilSwap: true },
+    {
+      table: "activity",
+      ...deliveryTrail,
+      plainUntilSwap: true,
+      archive: "history",
+      retentionDays: historyRetentionDays(values),
+    },
     ...queuePartitions(values),
     {
       table: "notification",
@@ -504,6 +549,7 @@ function freezeWindow(
 
 export {
   DELIVERY_EVENT_LOOKAHEAD_MONTHS,
+  HISTORY_ATTACHED_MONTHS_DEFAULT,
   NOTIFICATION_LOOKAHEAD_MONTHS,
   NOTIFICATION_UNREAD_RETENTION_DAYS_DEFAULT,
   OUTBOX_PUBLISHED_RETENTION_DAYS_DEFAULT,
@@ -514,6 +560,7 @@ export {
   addGrains,
   freezeWindow,
   grainStart,
+  historyRetentionDays,
   partitionBound,
   partitionName,
   partitionStartFromName,

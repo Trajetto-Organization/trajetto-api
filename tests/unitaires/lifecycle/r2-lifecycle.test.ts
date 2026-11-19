@@ -122,11 +122,16 @@ describe("infra/r2/archive-lifecycle.json, the archive bucket", () => {
     });
   });
 
-  it("expires the history at no less than five years (decision D3)", () => {
+  it("expires the history at no less than HISTORY_ARCHIVE_RETENTION_YEARS (decision D3)", () => {
     const history = rule("trajetto-expire-history");
+    const years = defaultOf("HISTORY_ARCHIVE_RETENTION_YEARS") as number;
 
+    expect(years).toBe(5);
     expect(history?.Filter).toEqual({ Prefix: "archive/" });
-    expect(history?.Expiration?.Days).toBeGreaterThanOrEqual(5 * 365 + 2);
+    // Every year of 365 days, and a leap day every four.
+    expect(history?.Expiration?.Days).toBeGreaterThanOrEqual(
+      years * 365 + Math.ceil(years / 4),
+    );
   });
 
   it("writes nothing that moves storage class: the archive is born in STANDARD_IA", () => {

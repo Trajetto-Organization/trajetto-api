@@ -4,8 +4,10 @@ import { missingArchiveSettings } from "@/shared/archive/archive-settings";
 import { archiveStorageFromEnv } from "@/shared/archive/archive-storage";
 import {
   createHistoryArchiveScheduler,
+  createHistoryDropGate,
   historySourceOf,
   type HistoryArchiveScheduler,
+  type HistoryDropGate,
   type HistoryPartition,
 } from "@/shared/archive/history-archive";
 import {
@@ -22,6 +24,7 @@ import { asPartitionOwner } from "@/shared/database/partition-owner";
 import {
   addGrains,
   freezeWindow,
+  historyRetentionDays,
   partitionBound,
   plannedPartitions,
   partitionStartFromName,
@@ -240,6 +243,13 @@ interface MaintenanceDeps {
    * partitioned, to their PARTITION_ARCHIVE jobs.
    */
   historyArchive: HistoryArchiveScheduler | null;
+
+  /**
+   * Null: the history's DROP is off (plano-escala F5-17), and no partition
+   * of delivery_event or activity is ever detached, whatever the registry
+   * says. On, the gate decides each one.
+   */
+  historyDrop: HistoryDropGate | null;
 }
 
 /**
@@ -285,6 +295,23 @@ function historyArchiveFromEnv(): HistoryArchiveScheduler | null {
 }
 
 /**
+ * The history's DROP gate as this environment configures it (plano-escala
+ * F5-17): null while HISTORY_DROP_ENABLED is off, the default until the
+ * lawyer's opinion.
+ */
+function historyDropFromEnv(): HistoryDropGate | null {
+  const retentionDays = historyRetentionDays(env);
+
+  if (retentionDays === null) return null;
+
+  return createHistoryDropGate({
+    db: databaseBatch,
+    retentionDays,
+    jobs: partitionArchiveJobs(new BackgroundJobRepository(databaseBatch)),
+  });
+}
+
+/**
  * The PARTITION_ARCHIVE jobs (plano-escala F3-28) on the maintenance pool:
  * the night enqueues an expired day, and the process that consumes the
  * `jobs` queue archives it, woken after the enqueue.
@@ -297,7 +324,7 @@ function partitionArchiveJobs(
       return (await jobs.findLive("PARTITION_ARCHIVE", name)) !== null;
     },
 
-    async enqueue(table, partition) {
+    async enqueue(table, partition, options) {
       // A FROM (MINVALUE) partition (the history's `_older`, F5-16) has no
       // instant to give: an empty `from`.
       const { outcome } = await jobs.enqueue({
@@ -311,6 +338,9 @@ function partitionArchiveJobs(
             ? partition.from.toISOString()
             : "",
           to: partition.to.toISOString(),
+          ...(options?.rewriteBefore
+            ? { rewriteBefore: options.rewriteBefore.toISOString() }
+            : {}),
         },
       });
 
@@ -518,7 +548,13 @@ async function detachedLeftovers(
   // carries no day, and nothing else makes a table by that name (the swap
   // is one transaction). Never another table's legacy: the trail's history
   // is kept (decision D3).
-  const legacy = table.dropGate ? [`${table.table}_legacy`] : [];
+  // The history's `_older` (the copy window's FROM (MINVALUE), F5-17)
+  // likewise: its name carries no month, and only its gate lets it go.
+  const legacy = table.dropGate
+    ? [`${table.table}_legacy`]
+    : table.archive === "history"
+      ? [`${table.table}_older`]
+      : [];
   const rows = await databaseBatch.$queryRawUnsafe<Array<{ relname: string }>>(
     `SELECT c.relname::text AS relname
        FROM pg_class c
@@ -590,12 +626,24 @@ async function removeBehind(
     .filter((partition) => !partition.detachPending && pastRetention(partition))
     .sort((a, b) => (a.to ?? 0) - (b.to ?? 0));
 
+  // The trail's archive decides a trail day (dropped as is when it is
+  // off); the history's gate decides a history partition, and without it
+  // nothing of the history is detached (F5-17).
+  const archiveGate =
+    table.archive === "trail"
+      ? deps.trailArchive
+      : table.archive === "history"
+        ? deps.historyDrop
+        : null;
+  const mustArchive = table.archive === "history" || archiveGate !== null;
+
   for (const partition of mayDetach ? expired : []) {
-    if (table.archive && deps.trailArchive) {
+    if (mustArchive) {
       const archived =
+        archiveGate !== null &&
         partition.from !== null &&
         partition.to !== null &&
-        (await deps.trailArchive.ensureArchived(parent, {
+        (await archiveGate.ensureArchived(parent, {
           name: partition.name,
           from: new Date(partition.from),
           to: new Date(partition.to),
@@ -654,9 +702,9 @@ async function removeBehind(
   // DROP takes ACCESS EXCLUSIVE on the detached table alone, not the parent.
   for (const name of await detachedLeftovers(table, cutoff)) {
     if (
-      table.archive &&
-      deps.trailArchive &&
-      !(await deps.trailArchive.mayDropDetached(parent, name))
+      mustArchive &&
+      (archiveGate === null ||
+        !(await archiveGate.mayDropDetached(parent, name)))
     ) {
       outcome.held += 1;
       outcome.postponed += 1;
@@ -736,6 +784,10 @@ async function maintainPartitions(
       overrides.historyArchive === undefined
         ? historyArchiveFromEnv()
         : overrides.historyArchive,
+    historyDrop:
+      overrides.historyDrop === undefined
+        ? historyDropFromEnv()
+        : overrides.historyDrop,
   };
 
   // Opened on the first statement that needs it, once per run: one that

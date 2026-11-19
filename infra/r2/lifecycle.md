@@ -49,8 +49,9 @@ Os objetos do arquivo já nascem na _Infrequent Access_
 regra do `archive/` (o histórico das entregas, F5-16) só vai para o bucket
 com `--with-history-expiration`: até o parecer, o script a deixa de fora e
 nada do histórico arquivado é apagado. Os 1830 dias passam um pouco dos 5
-anos da decisão D3, contados do dia em que o mês foi arquivado, depois de
-fechado: nenhum objeto sai antes do prazo.
+anos de `HISTORY_ARCHIVE_RETENTION_YEARS` (decisão D3), contados do dia em
+que o objeto foi escrito (o mês fechado, ou a passada final antes do DROP
+do F5-17): nenhum objeto sai antes do prazo.
 
 ## Rodar
 
@@ -103,8 +104,8 @@ do Node. Rode do repositório, no Git Bash ou num Linux.
 
 Depois do parecer jurídico, a regra do histórico entra no bucket de arquivo
 com o mesmo comando e `--with-history-expiration`. Se o prazo decidido não
-for de 5 anos, mude antes os `Days` da regra `trajetto-expire-history`; o
-teste confere que ela nunca fica abaixo de 5 anos.
+for de 5 anos, mude antes os `Days` da regra `trajetto-expire-history` e o
+`HISTORY_ARCHIVE_RETENTION_YEARS`; o teste confere que os dois andam juntos.
 
 A regra de _Expiration_ do `deliveryProofs/` que o `infra/r2/bucket-locks.md`
 prevê para depois do parecer (o mesmo prazo da trava) entra neste JSON, numa

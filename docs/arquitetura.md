@@ -4380,6 +4380,29 @@ node build/archive-restore.js delivery_event 2026-11 <businessId>
 Quem pediu apaga a tabela ao terminar. Provas: o E2E `history-archive` (com
 o R2 falso) e o unitário `history-archive-rules`.
 
+**DROP do histórico** (plano de escala F5-17, desligado até o parecer
+jurídico). Com `HISTORY_DROP_ENABLED=true`, a partição de `delivery_event` ou
+de `activity` sai do banco `HISTORY_ATTACHED_MONTHS` (24) depois do fim dela,
+pelo mesmo `DETACH … CONCURRENTLY` e `DROP` das outras tabelas do cron, e só
+pelo portão do histórico (`createHistoryDropGate`):
+
+- o arquivo da partição precisa ter sido conferido **depois** de ela vencer.
+  O da virada do mês não basta, porque o mês é reescrito no lugar depois
+  (o endereço de um comprovante, uma anonimização): o portão enfileira a
+  passada final (`PARTITION_ARCHIVE` com `rewriteBefore`, que reescreve todo
+  objeto mais velho que o vencimento) e guarda a partição até ela conferir;
+- na noite do DROP, a contagem da partição e a soma do manifesto precisam
+  bater com a conferida; senão ela é arquivada de novo e fica;
+- sem o portão (flag desligada), nenhuma partição do histórico é destacada,
+  nem a `_older`. As FKs ficam: o `DETACH` as leva para a tabela destacada,
+  e o `DROP` some com elas. O manifesto e os objetos ficam, pelo prazo de
+  `HISTORY_ARCHIVE_RETENTION_YEARS` (a Expiration do bucket).
+
+Falta, antes de ligar: um mês já apagado não é reescrito por uma
+anonimização posterior (o objeto não tem mais de onde sair); o parecer diz
+se a anonimização alcança o arquivo. Prova: o E2E `history-drop` e o
+unitário `history-drop-rules`.
+
 **Pool de CPU** (plano de escala F3-29, `src/shared/cpu-pool/`). O parse
 das NF-e (`POST /delivery/import-xml/:businessId`, até 25 por chamada) e a
 planilha da exportação em Excel rodam em _worker threads_, não no _event

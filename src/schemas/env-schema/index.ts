@@ -1598,6 +1598,37 @@ const envSchema = z
       )
       .transform((value) => value === "true"),
 
+    // The history's DROP (plano-escala F5-17, decision D3, a legal flag):
+    // with true, the partition job detaches and drops a partition of
+    // delivery_event or activity HISTORY_ATTACHED_MONTHS after it ends, and
+    // only when its archive (F5-16) was written again after it became due
+    // and its manifest adds up to a count taken that night; otherwise the
+    // month stays attached and is archived again. False, the default,
+    // until the lawyer's opinion: nothing of the history is ever deleted.
+    // Needs HISTORY_ARCHIVE_ENABLED: without the archive nothing is
+    // verified, so nothing leaves.
+    HISTORY_DROP_ENABLED: z
+      .preprocess(
+        (value) => (value === "" ? undefined : value),
+        z.enum(["true", "false"]).default("false"),
+      )
+      .transform((value) => value === "true"),
+    // Months of history kept in the database, counted from a partition's
+    // end (31 days a month, so never fewer). 12 to 120.
+    HISTORY_ATTACHED_MONTHS: z.preprocess(
+      (value) => (value === "" ? undefined : value),
+      z.coerce.number().int().min(12).max(120).default(24),
+    ),
+    // Years the archive keeps the history (the legal term, decision D3):
+    // the archive bucket's Expiration on `archive/`
+    // (infra/r2/archive-lifecycle.json, applied only after the opinion)
+    // is set to no less than this. It must outlast the months kept
+    // attached, or the archive would expire before the DROP.
+    HISTORY_ARCHIVE_RETENTION_YEARS: z.preprocess(
+      (value) => (value === "" ? undefined : value),
+      z.coerce.number().int().min(1).max(30).default(5),
+    ),
+
     // The trail's submission keys (plano-escala F2-14, decision D3): days
     // a row of delivery_event_submission is kept before the nightly
     // cleanup-delivery-event-submissions removes it. A key only matters
@@ -2516,6 +2547,26 @@ const envSchema = z
             "apagá-los sem arquivo.",
         );
       }
+    }
+
+    // The months kept attached end before the archive does (F5-17).
+    if (
+      env.HISTORY_ATTACHED_MONTHS >=
+      env.HISTORY_ARCHIVE_RETENTION_YEARS * 12
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["HISTORY_ATTACHED_MONTHS"],
+        message: `HISTORY_ATTACHED_MONTHS (${env.HISTORY_ATTACHED_MONTHS}) precisa ser menor que HISTORY_ARCHIVE_RETENTION_YEARS × 12 (${env.HISTORY_ARCHIVE_RETENTION_YEARS * 12}): o arquivo do histórico tem de durar mais que os meses no banco.`,
+      });
+    }
+
+    // The DROP without the archive drops nothing (F5-17): said at boot.
+    if (env.HISTORY_DROP_ENABLED && !env.HISTORY_ARCHIVE_ENABLED) {
+      console.warn(
+        "[env] HISTORY_DROP_ENABLED=true sem HISTORY_ARCHIVE_ENABLED: " +
+          "sem arquivo conferido, nenhum mês do histórico sai do banco.",
+      );
     }
 
     // The same for the history's archive (F5-16): nothing is archived, and

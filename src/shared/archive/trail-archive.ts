@@ -617,8 +617,16 @@ interface TrailArchiveJobs {
   /** Whether a job of the partition is still live (pending or running). */
   running(name: string): Promise<boolean>;
 
-  /** Enqueues the partition's archive: one live job per partition. */
-  enqueue(table: string, partition: TrailPartition): Promise<void>;
+  /**
+   * Enqueues the partition's archive: one live job per partition. The
+   * history's DROP (F5-17) asks for every object written before
+   * `rewriteBefore` to be written again.
+   */
+  enqueue(
+    table: string,
+    partition: TrailPartition,
+    options?: { rewriteBefore?: Date },
+  ): Promise<void>;
 }
 
 interface TrailArchiveGateOptions {
