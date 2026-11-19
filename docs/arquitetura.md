@@ -5114,6 +5114,20 @@ em `tests/E2E/session-statement-budget.test.ts` (a sessão do HTTP e do
 handshake, e cada motivo de recusa com o mesmo código nos dois modos) e em
 `tests/E2E/driver-positions-statement-budget.test.ts`.
 
+**Orçamento de statements das rotas quentes do painel** (plano de escala
+F4-06): `tests/E2E/panel-statement-budgets.test.ts` fixa quantos statements
+custa cada leitura que o painel repete o dia inteiro (a torre, o resumo da
+operação, o `/route/live`, a visão geral e as tendências do dashboard, o
+sino em `/notification/stream` e as páginas 1 e 2 da lista de entregas) e
+cada envio do motorista numa parada (a chegada e o comprovante), num dia de
+uma transportadora. O número é exato: um statement a mais reprova, porque
+query nova em caminho quente é decisão escrita no teste com o porquê; um a
+menos também reprova, pedindo para baixar o número no mesmo commit, senão a
+folga deixa passar o próximo sem ninguém ver. A conta vai do começo da
+requisição até o banco ficar quieto, então o que ela deixa rodando depois
+da resposta (a linha de atividade de um envio) entra no custo dela; `BEGIN`
+e `COMMIT` não contam. A sessão é a de `SESSION_LOOKUP_MODE=single`.
+
 **Plano com os valores a cada execução**: o `pg` manda statements sem nome, e
 o Postgres planeja cada execução com os valores; o Prisma 6 nomeava os
 statements e, depois de cinco execuções, caía no plano genérico. Query cara de
