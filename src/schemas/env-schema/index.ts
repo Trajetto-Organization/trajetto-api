@@ -1095,7 +1095,9 @@ const envSchema = z
     // of up to 100 messages; each row keeps its own checks, its own
     // tickets (by position, never another row's) and its own fenced
     // settling, and a 5xx from Expo puts the group back without spending
-    // an attempt. 1 (the default) is one call per delivery, as before.
+    // an attempt. The group's rows take one database turn at a time
+    // (push-group-turn.ts), so a group costs the pool what its slot does.
+    // 1 (the default) is one call per delivery, as before.
     // Empty counts as absent.
     PUSH_BATCH_SIZE: z.preprocess(
       (value) => (value === "" ? undefined : value),

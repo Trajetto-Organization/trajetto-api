@@ -5039,7 +5039,12 @@ OpenStreetMap são recusados.
   enviada não é atribuída a ninguém. Cada linha fecha com o seu cercamento,
   um 5xx devolve o grupo sem gastar tentativa (pelo cronograma da idade,
   `pushOutageDelayMs`), e um 400 de várias entregas é reenviado uma por
-  chamada.
+  chamada. As linhas de um grupo vão ao banco uma de cada vez
+  (`push-group-turn.ts`): cada uma faz as suas leituras com a vez, solta a
+  vez enquanto espera a chamada e a retoma para fechar. Todas juntas, um
+  grupo de 20 em cada uma das 5 vagas da raia eram 100 entregas no pool de
+  10; com a vez, o grupo custa ao pool o que a vaga dele custa, como a
+  conferência de folga do boot (`queue-config.ts`) conta.
 - **Turnstile**: o formulário público de orçamento é verificado pela própria
   API; com `TURNSTILE_SECRET_KEY` definida, pedido sem token é recusado.
 

@@ -64,6 +64,7 @@ import {
   type PushSendResult,
 } from "./push-provider";
 import { PushBatchGate } from "./push-batch-gate";
+import { PushGroupTurn } from "./push-group-turn";
 import { inAppPushData, withPushOwner } from "./push-data";
 import {
   WhatsAppTemplateMismatchError,
@@ -613,6 +614,12 @@ interface ClaimedDelivery {
 
   /** The push group this row sends with (U-06); absent: a call of its own. */
   pushGate?: PushBatchGate;
+
+  /**
+   * The group's database turn (U-06, push-group-turn.ts): the row lets it
+   * go while it waits on the group's call, and takes it back to settle.
+   */
+  pushTurn?: PushGroupTurn;
 }
 
 /** The slice of an outbox row a delivery needs to render itself. */
@@ -2100,18 +2107,27 @@ class NotificationPipelineService {
    * slot carried one push per round trip to Expo, however long the queue
    * behind it. A push row whose claim came back full (a backlog) claims
    * up to PUSH_BATCH_SIZE − 1 more due push rows of its lane, for the slot
-   * it already holds. They start at once, every row its own delivery
-   * (runOneDelivery: its checks, its render, its devices, its backstop and
-   * its fenced settling), and only the send is shared, through the gate:
-   * one call of up to 100 messages, each row getting back the tickets at
-   * its own positions (sendExpoPushBatch).
+   * it already holds. Every row is its own delivery (runOneDelivery: its
+   * checks, its render, its devices, its backstop and its fenced
+   * settling), and only the send is shared, through the gate: one call of
+   * up to 100 messages, each row getting back the tickets at its own
+   * positions (sendExpoPushBatch).
+   *
+   * The rows take one database turn at a time (push-group-turn.ts): each
+   * does its reads holding it, lets it go while it waits on the call, and
+   * takes it back to settle. All at once, a group of 20 in each of the
+   * lane's 5 slots was 100 deliveries on the pool of 10, behind which the
+   * HTTP requests and the other lanes waited; with the turn, the group
+   * costs the pool what its slot does, as the boot's headroom check
+   * (queue-config.ts) counts it. A row waits for its first turn before its
+   * backstop starts, so the wait never counts against it.
    *
    * The extra rows are claimed only for this start and never wait for a
-   * slot, so the lease holds as for any row, and a stop has none of them
-   * to hand back: once the process stops, no group claims more, and the
-   * group in flight ends as any row in flight does. Under the providers'
-   * global cap (F3-15a), the group is the one call its first row's slot
-   * stands for.
+   * slot, so the lease holds as for any row (their turns add milliseconds
+   * of reads per row, far inside it), and a stop has none of them to hand
+   * back: once the process stops, no group claims more, and the group in
+   * flight ends as any row in flight does. Under the providers' global cap
+   * (F3-15a), the group is the one call its first row's slot stands for.
    */
   private async runPushGroup(first: ClaimedDelivery): Promise<void> {
     let companions: ClaimedDelivery[] = [];
@@ -2159,12 +2175,23 @@ class NotificationPipelineService {
       PUSH_BATCH_GATE_WAIT_MS,
     );
 
+    const turn = new PushGroupTurn();
+
     for (const row of pushRows) row.pushGate = gate;
+    for (const row of group) row.pushTurn = turn;
 
     await Promise.all(
-      group.map((row) =>
-        this.runOneDelivery(row).finally(() => gate.leave(row.id)),
-      ),
+      group.map(async (row) => {
+        try {
+          await turn.enter(row.id);
+          await this.runOneDelivery(row);
+        } finally {
+          // However the row ended, its backstop included: the turn goes
+          // on, and the call stops waiting for it.
+          turn.close(row.id);
+          gate.leave(row.id);
+        }
+      }),
     );
   }
 
@@ -2780,6 +2807,10 @@ class NotificationPipelineService {
     gate: PushBatchGate,
     request: PushRequest,
   ): Promise<PushSendResult> {
+    // The group's turn goes on while this row waits on the call: the
+    // others still do their reads, and the call gathers every row.
+    delivery.pushTurn?.exit(delivery.id);
+
     try {
       return await gate.submit(delivery.id, request);
     } catch (error) {
@@ -2802,6 +2833,10 @@ class NotificationPipelineService {
         new Date(Date.now() + withRetryJitter(waitMs)),
         "aguardando o Expo voltar, sem gastar tentativa",
       );
+    } finally {
+      // Back in line for the settling writes (at once for a row its
+      // backstop already ended: push-group-turn.ts).
+      await delivery.pushTurn?.enter(delivery.id);
     }
   }
 

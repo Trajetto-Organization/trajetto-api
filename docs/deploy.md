@@ -4794,8 +4794,11 @@ espera é o degrau do cronograma pela idade da linha; passadas ~4 h 40, a
 falha volta a gastar tentativa), e um 400 numa chamada de várias entregas
 é reenviado uma entrega por chamada, para só a culpada falhar. Numa parada,
 nenhum grupo reivindica mais, e o que está no ar termina como qualquer
-linha. Ligue com `20` na Application que consome a raia `internal` quando a
-fila de push crescer; `1` desliga.
+linha. As linhas de um grupo vão ao banco uma de cada vez (só a chamada
+ao Expo é compartilhada), então o grupo ocupa uma conexão do pool como a
+vaga dele: `20` não pede `connection_limit` maior. Ligue com `20` na
+Application que consome a raia `internal` quando a fila de push crescer;
+`1` desliga.
 
 **Orçamento de memória (U-15).** No boot, cada processo soma o heap
 principal (o `--max-old-space-size` do `NODE_OPTIONS`), as threads da

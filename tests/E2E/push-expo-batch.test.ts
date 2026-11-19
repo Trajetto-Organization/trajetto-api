@@ -254,6 +254,62 @@ describe("push deliveries in batches to Expo", () => {
     );
   });
 
+  // A group's rows used to do their reads and writes all at once: with
+  // PUSH_BATCH_SIZE=20 and the lane's 5 slots, up to 100 deliveries hit the
+  // pool of 10 together, behind which the HTTP requests and the other
+  // lanes of the process waited, while the boot's headroom check counted 5.
+  // Each group now takes one database turn at a time (push-group-turn.ts),
+  // so the lane never does more database work at once than its slots.
+  it("never does more of the group's database work at once than the lane has slots", async () => {
+    const prototype = NotificationPipelineService.prototype as unknown as {
+      findRecipient: (...args: unknown[]) => Promise<unknown>;
+    };
+    const original = prototype.findRecipient;
+    let inFlight = 0;
+    let most = 0;
+
+    const slow = vi
+      .spyOn(prototype, "findRecipient")
+      .mockImplementation(async function (this: unknown, ...args: unknown[]) {
+        inFlight += 1;
+        most = Math.max(most, inFlight);
+
+        try {
+          // Long enough for every row of a group to be in its reads
+          // together when nothing makes them take turns.
+          await new Promise((resolve) => setTimeout(resolve, 25));
+
+          return await original.apply(this, args);
+        } finally {
+          inFlight -= 1;
+        }
+      });
+
+    try {
+      fake.behave("push", expoLedger().behaviour());
+
+      await publishReleasesTo(
+        prisma,
+        seed,
+        drivers.map((driver) => driver.userId),
+      );
+
+      await drain();
+    } finally {
+      slow.mockRestore();
+    }
+
+    const rows = await pushRows();
+
+    expect(
+      rows.every((row) => row.status === "DELIVERED" && row.attempts === 1),
+    ).toBe(true);
+    // Still batched: the turns hold the database work, not the call.
+    expect(fake.callsOf("push").length).toBeLessThan(drivers.length / 2);
+    expect(most).toBeGreaterThan(0);
+    expect(most).toBeLessThanOrEqual(env.NOTIFICATION_INTERNAL_CONCURRENCY);
+  });
+
   it("send one call per delivery with PUSH_BATCH_SIZE 1, as before", async () => {
     env.PUSH_BATCH_SIZE = 1;
 
