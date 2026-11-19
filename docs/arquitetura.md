@@ -4283,6 +4283,15 @@ batida com menos de 90 s, lida do primário por qualquer processo, inclusive
 um sem sockets. A linha que um processo morto deixou é varrida pelos outros
 depois dos 90 s, com a última batida como "visto por último". Presença é
 enfeite: uma falha é registrada uma vez e a batida seguinte acerta.
+Durante o rolling que traz a U-05, a réplica da imagem anterior segura
+sockets e nunca bate: os motoristas dela não têm linha e apareceriam
+offline na lista até ela drenar. Por isso, enquanto o adapter tiver mais
+servidores (`serverCount`, o `PUBSUB NUMSUB` do canal de pedidos) do que
+processos vivos com `sockets` no `process_heartbeat`, o processo com
+sockets também pergunta ao cluster pelos logins que as batidas não
+nomearam, como antes da U-05 (`createLegacyPeerCheck`, relido a cada
+15 s; uma leitura que falha conta como "talvez"). Com todos os processos
+batendo, o cluster nunca é perguntado.
 
 ## Arquivos
 

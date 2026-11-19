@@ -4,10 +4,17 @@ import { randomUUID } from "node:crypto";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 
+import { createAdapter } from "@socket.io/redis-adapter";
+import Redis from "ioredis";
 import { sign } from "jsonwebtoken";
-import type { Server as SocketIOServer } from "socket.io";
+import {
+  Server as LegacySocketServer,
+  type Server as SocketIOServer,
+} from "socket.io";
 
 import auth from "@/config/auth";
+import { env } from "@/env";
+import { socketAdapterOptions } from "@/shared/socket/adapter-redis";
 
 import { chatStaffRoom } from "@/modules/chat/usecases/shared/chat-access-rules";
 import {
@@ -416,4 +423,64 @@ describe("a driver whose signal drops", () => {
       }
     },
   );
+});
+
+describe("a replica of the image before U-05, during the rolling deploy", () => {
+  // The previous image holds sockets and never beats presence: its drivers
+  // have no row in user_presence. The new replicas answered the thread list
+  // from the beats alone, so every driver on the old replica read offline
+  // until it drained; before U-05 the list asked every replica. While the
+  // adapter has a server that does not beat, the list asks the cluster for
+  // the logins the beats did not name.
+  it("still shows its drivers online on the thread list", async () => {
+    const legacyUser = randomUUID();
+    const legacyHttp = createServer();
+
+    await new Promise<void>((done) => legacyHttp.listen(0, "127.0.0.1", done));
+
+    const pub = new Redis(process.env.REDIS_URL ?? "redis://localhost:6379");
+    const sub = pub.duplicate();
+    const legacy = new LegacySocketServer(legacyHttp, {
+      transports: ["websocket"],
+    });
+
+    legacy.adapter(createAdapter(pub, sub, socketAdapterOptions(env)));
+    legacy.on("connection", async (socket) => {
+      const userId = String(socket.handshake.auth.userId);
+
+      socket.data.userId = userId;
+      await socket.join(`user:${userId}`);
+      socket.emit("joined");
+    });
+
+    const client = connect(
+      `http://127.0.0.1:${(legacyHttp.address() as AddressInfo).port}`,
+      {
+        auth: { userId: legacyUser },
+        transports: ["websocket"],
+        reconnection: false,
+      },
+    );
+
+    try {
+      await new Promise<void>((done, reject) => {
+        const timer = setTimeout(() => reject(new Error("timeout")), 10_000);
+
+        client.on("joined", () => {
+          clearTimeout(timer);
+          done();
+        });
+      });
+
+      expect(
+        await prisma.userPresence.count({ where: { user_id: legacyUser } }),
+      ).toBe(0);
+      expect(await io.getOnlineUserIds([legacyUser])).toEqual([legacyUser]);
+    } finally {
+      client.disconnect();
+      await new Promise<void>((done) => legacy.close(() => done()));
+      pub.disconnect();
+      sub.disconnect();
+    }
+  });
 });

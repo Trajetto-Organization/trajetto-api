@@ -594,12 +594,72 @@ function readOnlineUserIds(
   return store.online(userIds, now);
 }
 
+/** How long one answer of the legacy peers' check is reused. */
+const LEGACY_PEERS_CACHE_MS = 15_000;
+
+/**
+ * Whether a process that never beats presence may hold sockets in this
+ * cluster: a replica of the image before U-05, while the rolling deploy
+ * that ships U-05 still has it serving. Its drivers have no row in
+ * user_presence, so the beats alone read them offline, and the SAC's
+ * thread list showed them offline until the old replica drained; before
+ * U-05 the list asked every replica, which saw them.
+ *
+ * Every subscriber of the adapter's request channel holds sockets
+ * (`serverCount`, PUBSUB NUMSUB: a process without sockets uses the
+ * emitter and subscribes to nothing, U-07), and every process of this
+ * image with sockets writes a live process_heartbeat row with `sockets`.
+ * More servers than such rows is a peer that does not beat: the caller
+ * asks the cluster for the logins the beats did not name, as before U-05.
+ * Equal, the beats are the whole answer and the cluster is never asked.
+ *
+ * Read at most once every LEGACY_PEERS_CACHE_MS. A read that fails is
+ * "maybe": asking the cluster costs a request, a wrong "offline" is what
+ * the SAC sees.
+ */
+function createLegacyPeerCheck(deps: {
+  serverCount: () => Promise<number>;
+  beatingSocketProcesses: () => Promise<number>;
+  now?: () => number;
+}): () => Promise<boolean> {
+  const now = deps.now ?? Date.now;
+  let cache: { at: number; legacy: boolean } | null = null;
+  let reading: Promise<void> | null = null;
+
+  const refresh = async (): Promise<void> => {
+    try {
+      const [servers, beating] = await Promise.all([
+        deps.serverCount(),
+        deps.beatingSocketProcesses(),
+      ]);
+
+      cache = { at: now(), legacy: servers > beating };
+    } catch {
+      cache = { at: now(), legacy: true };
+    }
+  };
+
+  return async () => {
+    if (!cache || now() - cache.at >= LEGACY_PEERS_CACHE_MS) {
+      reading ??= refresh().finally(() => {
+        reading = null;
+      });
+
+      await reading;
+    }
+
+    return cache?.legacy ?? true;
+  };
+}
+
 export {
+  LEGACY_PEERS_CACHE_MS,
   PRESENCE_CHUNK,
   PRESENCE_HEARTBEAT_MS,
   PRESENCE_ONLINE_WINDOW_MS,
   PRESENCE_SWEEP_LIMIT,
   PRESENCE_TOUCH_BATCH_MS,
+  createLegacyPeerCheck,
   createPresenceStore,
   createPresenceTracker,
   readOnlineUserIds,

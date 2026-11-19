@@ -322,6 +322,23 @@ async function readLiveConsumers(): Promise<Map<string, number>> {
 }
 
 /**
+ * How many live processes of this environment hold sockets: what the
+ * chat's presence compares with the adapter's servers to find a replica
+ * that does not beat (shared/socket/presence.ts, createLegacyPeerCheck).
+ */
+async function readLiveSocketProcesses(): Promise<number> {
+  const [row] = await database.$queryRaw<Array<{ processes: number }>>`
+    SELECT count(*)::int AS processes
+    FROM "process_heartbeat"
+    WHERE "sockets"
+      AND "app_env" = ${env.APP_ENV}
+      AND "updated_at" > now() - make_interval(secs => ${LIVE_WINDOW_SECONDS})
+  `;
+
+  return row?.processes ?? 0;
+}
+
+/**
  * The live consumers of each queue, read at most once every 30 s per
  * process. A read that fails keeps the last answer; with none yet, the
  * count is null ("unknown"), and a caller decides what unknown means.
@@ -369,6 +386,7 @@ export {
   deleteProcessHeartbeat,
   liveConsumers,
   readLiveConsumers,
+  readLiveSocketProcesses,
   startProcessHeartbeat,
   startRuntimeProcessHeartbeat,
   writeProcessHeartbeat,

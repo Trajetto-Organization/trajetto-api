@@ -56,12 +56,14 @@ import {
   templateLaneFrame,
 } from "@/shared/socket/messages";
 import {
+  createLegacyPeerCheck,
   createPresenceStore,
   createPresenceTracker,
   readOnlineUserIds,
   type PresenceSubject,
   type PresenceTracker,
 } from "@/shared/socket/presence";
+import { readLiveSocketProcesses } from "@/shared/health/process-heartbeat";
 import {
   effectiveSocketCap,
   readOpenFilesSoftLimit,
@@ -2810,6 +2812,13 @@ const sendChatDeliveredEvent = (
  * sockets are online too, before their first beat lands. Presence is
  * decoration: a failed read answers what this process can see, never a
  * failed request.
+ *
+ * While a replica that never beats may hold sockets (the image before
+ * U-05, during the rolling deploy that ships it: legacySocketPeers), a
+ * process with sockets also asks the cluster for the logins the beats did
+ * not name, as the list did before U-05: without it, every driver on the
+ * old replica read offline until it drained. Once every socket process
+ * beats, the cluster is never asked.
  */
 async function getOnlineUserIds(userIds: readonly string[]): Promise<string[]> {
   if (userIds.length === 0) return [];
@@ -2825,7 +2834,63 @@ async function getOnlineUserIds(userIds: readonly string[]): Promise<string[]> {
     log.warn({ err: error }, "presence could not be read: local view only");
   }
 
+  const missing = wanted.filter((userId) => !online.has(userId));
+
+  if (
+    missing.length > 0 &&
+    io &&
+    env.SOCKETS_ENABLED &&
+    (await legacySocketPeers())
+  ) {
+    for (const userId of await usersConnectedInCluster(missing)) {
+      online.add(userId);
+    }
+  }
+
   return wanted.filter((userId) => online.has(userId));
+}
+
+/**
+ * Whether the adapter has more servers than live processes beating
+ * presence (shared/socket/presence.ts, createLegacyPeerCheck).
+ */
+const legacySocketPeers = createLegacyPeerCheck({
+  serverCount: async () => (io ? await io.of("/").adapter.serverCount() : 0),
+  beatingSocketProcesses: readLiveSocketProcesses,
+});
+
+/**
+ * Which of these logins have a socket anywhere in the cluster, asked
+ * through the adapter on their own rooms (never the company's: a page
+ * names at most a page of drivers). Redis away or a replica too slow is
+ * nobody more: presence is decoration.
+ */
+async function usersConnectedInCluster(
+  userIds: readonly string[],
+): Promise<string[]> {
+  if (!io) return [];
+
+  const wanted = new Set(userIds);
+  let sockets: Array<{ data: { userId?: unknown } }>;
+
+  try {
+    sockets = await io
+      .in(userIds.map((userId) => `user:${userId}`))
+      .fetchSockets();
+  } catch {
+    return [];
+  }
+
+  return [
+    ...new Set(
+      sockets
+        .map((socket) => socket.data.userId)
+        .filter(
+          (userId): userId is string =>
+            typeof userId === "string" && wanted.has(userId),
+        ),
+    ),
+  ];
 }
 
 /**
