@@ -2,11 +2,13 @@ import { randomUUID } from "node:crypto";
 
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { env } from "@/env";
 import { createPrismaClient } from "@/shared/database/database-client";
 import { readDatabaseIdentity } from "@/shared/health/config-fingerprint";
 import {
   deleteProcessHeartbeat,
   readLiveConsumers,
+  readLiveSocketProcesses,
   startRuntimeProcessHeartbeat,
   writeProcessHeartbeat,
   type ProcessHeartbeatRow,
@@ -118,6 +120,39 @@ describe("the live consumers", () => {
       internal: 1,
       external: 2,
     });
+  });
+});
+
+// The chat's presence compares them with the adapter's servers to find a
+// replica that holds sockets and never beats presence: the image before
+// U-05 during the rolling deploy that ships it (shared/socket/presence.ts).
+// A count that included a worker, another environment or a dead process
+// would hide that replica, and its drivers would read offline.
+describe("the live socket processes", () => {
+  it("count this environment's processes with sockets that beat within 90 s", async () => {
+    const here = { app_env: env.APP_ENV, queues: [], cron: false };
+
+    await writeProcessHeartbeat(row("api-a", { ...here, sockets: true }));
+    await writeProcessHeartbeat(
+      row("realtime-a", { ...here, role: "realtime", sockets: true }),
+    );
+    await writeProcessHeartbeat(row("worker-a", { app_env: env.APP_ENV }));
+    await writeProcessHeartbeat(
+      row("other-env", {
+        ...here,
+        app_env: `${env.APP_ENV}-other`,
+        sockets: true,
+      }),
+    );
+    await writeProcessHeartbeat(row("dead-api", { ...here, sockets: true }));
+
+    await prisma.$executeRaw`
+      UPDATE "process_heartbeat"
+      SET "updated_at" = now() - interval '2 minutes'
+      WHERE "replica" = 'dead-api'
+    `;
+
+    expect(await readLiveSocketProcesses()).toBe(2);
   });
 });
 
