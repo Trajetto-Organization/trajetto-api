@@ -26,7 +26,11 @@ import { driverUniqueViolation } from "../errors/driver-unique-violation";
 import { NotificationService } from "@/shared/services/notification-service";
 import { assertTenantAccess } from "@/modules/middlewares/tenant-authorization";
 
-import { sendCatalogChangedEvent, sendSecurityEventToUser } from "@/websocket";
+import {
+  announceSessionRevocation,
+  sendCatalogChangedEvent,
+  sendSecurityEventToUser,
+} from "@/websocket";
 
 import { Driver, UpdateDriverProps } from "../../dtos/driver-dto";
 
@@ -146,6 +150,16 @@ class UpdateDriverUseCase {
     }
 
     sendCatalogChangedEvent(businessId, "driver");
+
+    // A driver moved to another branch may be locked out by it (an inactive
+    // branch): the session cache of this replica drops theirs now, and the
+    // others read the trigger's row at once (plano-escala F5-23).
+    if (
+      changes.branchId !== undefined &&
+      changes.branchId !== findDriverById.branchId
+    ) {
+      announceSessionRevocation("driver", driverId);
+    }
 
     /**
      * An inactive driver keeps nothing on the server (plan of 02/11/2026, D5).

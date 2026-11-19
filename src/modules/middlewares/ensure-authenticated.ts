@@ -2,17 +2,47 @@ import { FastifyReply, FastifyRequest } from "fastify";
 
 import { DriverRepository } from "../driver/repositories/driver-repository";
 
+import type { User } from "../user/dtos/user-dto";
 import { assertSessionEligible } from "../user/services/session-eligibility";
-import { lookUpSession } from "../user/services/session-lookup";
+import {
+  lookUpSession,
+  reuseSessionUser,
+} from "../user/services/session-lookup";
 
 import { AppError } from "@/shared/errors/AppError";
 import { isDatabaseUnavailable } from "@/shared/errors/database-unavailable";
 import { authorizeRequestedTenant } from "./tenant-authorization";
 import { verifyAccessTokenOnce } from "@/shared/auth/access-token-once";
 import {
+  sessionCache,
+  sessionCacheKey,
+  sessionCacheable,
+} from "@/shared/auth/session-cache";
+import {
   chargePanelTenant,
   chargePanelUser,
 } from "@/shared/integration/panel-budget";
+
+/**
+ * What the session cache keeps for a route that opted in (plano-escala
+ * F5-23, shared/auth/session-cache.ts): the user as the lookup loaded it,
+ * for this request's memory, and the request.user built from it.
+ */
+interface CachedSession {
+  user: User;
+  requestUser: FastifyRequest["user"];
+}
+
+/** Names who and which tenant on every later log line (OBS-06). */
+function nameTheCaller(request: FastifyRequest, reply: FastifyReply): void {
+  const identity = {
+    userId: request.user.id,
+    businessId: request.user.businessId ?? null,
+  };
+
+  request.log = request.log.child(identity);
+  reply.log = reply.log.child(identity);
+}
 
 async function ensureAuthenticated(
   request: FastifyRequest,
@@ -83,6 +113,41 @@ async function ensureAuthenticated(
   // call, and never reaches the company's budget (plano-escala F2-28).
   await chargePanelUser(request, payload);
 
+  /**
+   * The session cache, only on the routes that opt in (the positions and
+   * the tower) and only while SESSION_CACHE_TTL_MS is on: a session that
+   * passed the whole check a moment ago, on this same token, and that no
+   * revocation named since (ADR 0015). The tenant guard still runs on every
+   * request: it depends on what this request asks for.
+   */
+  const cache =
+    request.routeOptions?.config?.sessionCache === true &&
+    sessionCache<CachedSession>().enabled()
+      ? sessionCache<CachedSession>()
+      : null;
+  const cacheKey = cache
+    ? sessionCacheKey(payload.sub, payload.familyId, payload.sessionVersion)
+    : null;
+  const cached = cache && cacheKey ? cache.read(cacheKey) : null;
+
+  if (cached) {
+    // A copy per request: nothing a request does to its user reaches the
+    // next one.
+    const { user, requestUser } = structuredClone(cached);
+
+    reuseSessionUser(user);
+    request.user = requestUser;
+    nameTheCaller(request, reply);
+    authorizeRequestedTenant(request);
+
+    await chargePanelTenant(request);
+    return;
+  }
+
+  // Before the read: a revocation that lands while it runs makes the cache
+  // refuse what it read.
+  const since = cache?.epoch() ?? 0;
+
   try {
     /**
      * The user with its company, profile and driver, and the refresh-token
@@ -141,12 +206,31 @@ async function ensureAuthenticated(
     // Every later line of this request — the error handler's, and the
     // "request completed" line written from the reply's logger — names who
     // and which tenant, so logs can be filtered by either (OBS-06).
-    const identity = { userId: user.id, businessId: user.businessId ?? null };
-
-    request.log = request.log.child(identity);
-    reply.log = reply.log.child(identity);
+    nameTheCaller(request, reply);
 
     authorizeRequestedTenant(request);
+
+    // Kept only after the whole check passed, the tenant guard included,
+    // and never a MASTER's.
+    if (cache && cacheKey && sessionCacheable(user.role)) {
+      cache.store(
+        cacheKey,
+        structuredClone({ user, requestUser: request.user }),
+        {
+          userId: user.id,
+          familyId: payload.familyId,
+          businessId: user.businessId ?? null,
+          driverId: user.driverId ?? null,
+          branchId: driver?.branchId ?? null,
+          profileAccessId: user.profileAccessId ?? null,
+        },
+        {
+          since,
+          notAfter:
+            typeof payload.exp === "number" ? payload.exp * 1_000 : undefined,
+        },
+      );
+    }
   } catch (error) {
     if (error instanceof AppError) throw error;
 

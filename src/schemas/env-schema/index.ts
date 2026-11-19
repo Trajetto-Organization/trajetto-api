@@ -2082,6 +2082,24 @@ const envSchema = z
     ),
 
     /**
+     * The session cache (plano-escala F5-23, shared/auth/session-cache.ts,
+     * docs/adr/0015-cache-de-sessao.md), in ms: how long a session that
+     * passed the whole check is reused, in this process's memory, by the
+     * two routes that opt in (POST /route/positions and GET
+     * /route/control-tower), never for a MASTER. A revocation drops it at
+     * once on the replica that made it and within the revocation feed's
+     * second on the others; with the feed not fresh (off, or the log
+     * unreadable) every request reads the database. 0, the default, turns
+     * it off: production keeps it at 0 until the gate's ABBA shows the
+     * gain and the owner accepts in writing the one second of the other
+     * replicas. At most 15000. Empty counts as absent.
+     */
+    SESSION_CACHE_TTL_MS: z.preprocess(
+      (value) => (value === "" ? undefined : value),
+      z.coerce.number().int().min(0).max(15_000).default(0),
+    ),
+
+    /**
      * Socket handshakes one replica runs at once (plano-escala U-01,
      * shared/socket/admission.ts): past it, the next is refused with
      * SOCKET_UNAVAILABLE and `retryAfterMs` (5 to 10 s), which the web and

@@ -27,6 +27,8 @@ interface AccessTokenPayload {
   role?: string;
   businessId?: string | null;
   driverId?: string | null;
+  /** Seconds since the epoch, as jsonwebtoken writes it. */
+  exp?: number;
 }
 
 /**

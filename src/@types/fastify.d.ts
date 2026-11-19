@@ -41,6 +41,13 @@ declare module "fastify" {
      * decides.
      */
     panelCost?: number;
+    /**
+     * Whether ensureAuthenticated may answer from the session cache
+     * (plano-escala F5-23, shared/auth/session-cache.ts, ADR 0015): only
+     * the positions and the tower, and only while SESSION_CACHE_TTL_MS is
+     * on. Absent everywhere else: the session is read on every request.
+     */
+    sessionCache?: boolean;
     openapi?: {
       body?: ZodType;
       headers?: ZodType;

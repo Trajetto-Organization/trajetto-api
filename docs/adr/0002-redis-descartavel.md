@@ -42,7 +42,8 @@ provedor (veja o adendo de 10/11/2026, abaixo).
 
 Fora do cache da busca de endereço (adendo de 10/11/2026), nenhum dado de
 empresa nem de pessoa entra em cache no Redis. Na memória do processo, só a
-foto por empresa do adendo de 19/11/2026. A trava de senha por conta fica no
+foto por empresa do adendo de 19/11/2026 e o cache de sessão do
+[ADR 0015](./0015-cache-de-sessao.md), desligado por padrão. A trava de senha por conta fica no
 Postgres justamente porque o rate limit do Redis falha aberto (comentário de
 `failed_login_attempts` em `prisma/schema.prisma`).
 

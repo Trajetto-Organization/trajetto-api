@@ -4173,8 +4173,8 @@ ler um campo que nenhum gatilho cobre. O log guarda 7 dias (o expurgo
 noturno do refresh token apaga o resto).
 
 **Feed de revogação** (F5-22, `src/shared/auth/revocation-feed.ts`): cada
-processo que guarda sessões (hoje os sockets; o cache de sessão da F5-23
-depois) lê o log no primário a cada `REVOCATION_FEED_POLL_MS` (1 s), a
+processo que guarda sessões (os sockets e o cache de sessão da F5-23) lê o
+log no primário a cada `REVOCATION_FEED_POLL_MS` (1 s), a
 partir do último id visto, e entrega `(kind, subject)` uma vez a quem
 escuta. É o caminho de uma revogação feita direto no banco: chega em até
 2 s. O caminho rápido são os helpers de segurança do `src/websocket.ts`
@@ -4209,6 +4209,26 @@ depois; agora cai em até 2 s. Prova: o describe
 `"a revocation written only by SQL, on a replica with the feed"` de
 `tests/E2E/socket-revocation.test.ts`; as outras réplicas daquele arquivo
 rodam com o feed desligado, para cada caso provar o mecanismo que nomeia.
+
+**Cache de sessão** (F5-23, `src/shared/auth/session-cache.ts`,
+[ADR 0015](./adr/0015-cache-de-sessao.md)): desligado por padrão
+(`SESSION_CACHE_TTL_MS=0`, no máximo 15 s). Ligado, o `ensureAuthenticated`
+das duas rotas que pedem (`config.sessionCache`: `POST /route/positions` e
+`GET /route/control-tower`) reaproveita, na memória do processo, a sessão
+que passou pela conferência inteira, pela chave usuário, família e
+`session_version` do token, e deixa o usuário na memória da requisição como
+a consulta única deixaria. O token é conferido sempre, e o guard de tenant e
+o orçamento do painel rodam em toda requisição. Nunca um MASTER, nunca além
+da validade do token, no máximo 10.000 sessões por processo. Falha fechada:
+sem o feed de revogação fresco, toda requisição lê o banco. Uma revogação
+tira a sessão na hora na réplica que revoga (os helpers de segurança chamam
+`forgetCachedSessions`; filial desativada e motorista trocado de filial
+chamam `announceSessionRevocation`) e em até 1 s nas outras, pelo feed; um
+`gap` esvazia o cache; uma leitura que cruzou uma revogação não é guardada.
+Os números saem na seção `session_cache` do `ops_sample`. Provas: os
+unitários `session-cache` e `ensure-authenticated-session-cache` e o E2E
+`session-cache-revocation` (logout na mesma réplica recusado na requisição
+seguinte; em outra réplica, em até 1 s com o pub/sub e em até 2 s sem ele).
 
 **Escala horizontal** ([ADR 0008](./adr/0008-escala-horizontal.md)): N
 réplicas idênticas atrás do Traefik, sem

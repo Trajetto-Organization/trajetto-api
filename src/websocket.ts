@@ -125,6 +125,8 @@ import {
 } from "@/shared/socket/admission-recheck";
 import { withoutRequestContext } from "@/shared/http/request-context";
 import { revocationFeed } from "@/shared/auth/revocation-feed";
+import { forgetCachedSessions } from "@/shared/auth/session-cache";
+import type { SessionRevocationKind } from "@/shared/auth/session-revocation";
 import { logger } from "@/shared/logging/logger";
 import { createOutageReport } from "@/shared/logging/outage-report";
 import {
@@ -2042,8 +2044,18 @@ function endSessionsIn(room: string): void {
  * hints the others to (shared/auth/revocation-feed.ts), whether or not
  * this process holds sockets. The row itself was written by a trigger in
  * the revoking transaction; the nudge only makes it travel faster.
+ *
+ * The subject's sessions also leave this process's session cache here
+ * (plano-escala F5-23), before the request that revoked answers: on the
+ * replica that revokes, the invalidation is synchronous; the others hear
+ * it from the feed.
  */
-function nudgeRevocationFeed(): void {
+function nudgeRevocationFeed(
+  kind: SessionRevocationKind,
+  subjectId: string,
+): void {
+  forgetCachedSessions(kind, subjectId);
+
   try {
     revocationFeed().nudge();
   } catch (error) {
@@ -2052,9 +2064,22 @@ function nudgeRevocationFeed(): void {
   }
 }
 
+/**
+ * A revocation committed by a path that sends no security event (a branch
+ * switched off, a driver moved to another branch): its sessions leave this
+ * process's cache now and the feed reads the trigger's row at once, here
+ * and, by the hint, on the others.
+ */
+const announceSessionRevocation = (
+  kind: SessionRevocationKind,
+  subjectId: string,
+) => {
+  nudgeRevocationFeed(kind, subjectId);
+};
+
 // Function to send security event to a specific user
 const sendSecurityEventToUser = (userId: string, event: { reason: string }) => {
-  nudgeRevocationFeed();
+  nudgeRevocationFeed("user", userId);
 
   if (out) {
     out.to(`user:${userId}`).emit("securityAction", event);
@@ -2070,7 +2095,7 @@ const sendSecurityEventToSession = (
   sessionId: string,
   event: { reason: string },
 ) => {
-  nudgeRevocationFeed();
+  nudgeRevocationFeed("refresh_family", sessionId);
 
   if (out) {
     out.to(`session:${sessionId}`).emit("securityAction", event);
@@ -2256,7 +2281,7 @@ const sendSecurityEventToBusiness = (
   businessId: string,
   event: { reason: string },
 ) => {
-  nudgeRevocationFeed();
+  nudgeRevocationFeed("business", businessId);
 
   if (out) {
     out.to(`business:${businessId}`).emit("securityAction", event);
@@ -2293,7 +2318,7 @@ const sendEntitlementsChangedEvent = (
   event: { module: string; enabled: boolean },
 ) => {
   // A module switched off narrows every session of the company.
-  nudgeRevocationFeed();
+  nudgeRevocationFeed("business", businessId);
 
   if (out) {
     out.to(`business:${businessId}`).emit("entitlementsChanged", event);
@@ -2960,6 +2985,7 @@ export {
   sendAIVerificationEvent,
   sendSecurityEventToUser,
   sendSecurityEventToSession,
+  announceSessionRevocation,
   adoptSessionVersion,
   sendSecurityEventToBusiness,
   sendEntitlementsChangedEvent,

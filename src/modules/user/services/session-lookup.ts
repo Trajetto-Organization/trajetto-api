@@ -1,9 +1,14 @@
 import { env } from "@/env";
+import { rememberRow } from "@/shared/http/request-context";
+import { rememberBusinessZone } from "@/shared/time/business-time-zone";
 
 import type { User } from "../dtos/user-dto";
 
 import { SessionRepository } from "../repositories/session-repository";
-import { UserRepository } from "../repositories/user-repository";
+import {
+  UserRepository,
+  userRequestKey,
+} from "../repositories/user-repository";
 import { UserTokensRepository } from "../repositories/user-tokens-repository";
 
 /**
@@ -63,5 +68,17 @@ async function lookUpSession(
   return { user, familyActive: async () => hasActiveFamily };
 }
 
-export { lookUpSession };
+/**
+ * A session served by the session cache (plano-escala F5-23): its user is
+ * left in this request's memory exactly as the one-statement lookup leaves
+ * it, so the use case and the gates of the request read it from there
+ * instead of asking findUserById for it (which, with its relations, costs
+ * more than the lookup the cache saved). The copy is the request's own.
+ */
+function reuseSessionUser(user: User): void {
+  rememberRow(userRequestKey(user.id), user);
+  rememberBusinessZone(user.businessId, user.business);
+}
+
+export { lookUpSession, reuseSessionUser };
 export type { LoadedSession };

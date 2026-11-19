@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const socket = vi.hoisted(() => ({
   catalogChanged: [] as Array<{ businessId: string; entity: string }>,
   securityEvents: [] as Array<{ userId: string; reason: string }>,
+  revocations: [] as Array<{ kind: string; subjectId: string }>,
 }));
 
 // The realtime side effects are observed, not the thing being proven: what
@@ -13,6 +14,9 @@ vi.mock("@/websocket", () => ({
   },
   sendSecurityEventToUser: (userId: string, payload: { reason: string }) => {
     socket.securityEvents.push({ userId, reason: payload.reason });
+  },
+  announceSessionRevocation: (kind: string, subjectId: string) => {
+    socket.revocations.push({ kind, subjectId });
   },
 }));
 
@@ -56,6 +60,7 @@ const ADMIN_A = "018fe400-0000-7000-8000-0000000000a1";
 const ADMIN_B = "018fe400-0000-7000-8000-0000000000b1";
 const MASTER = "018fe400-0000-7000-8000-0000000000f1";
 const DRIVER_USER = "018fe400-0000-7000-8000-0000000000d9";
+const BRANCH_A2 = "018fe400-0000-7000-8000-0000000000a2";
 
 const notificationStub = {
   createActivityIfEnabled: () => undefined,
@@ -123,6 +128,7 @@ function makeContext() {
     tokens,
     enrollments,
     trustedDevices,
+    branches,
     drivers,
     pauses,
     routes: routeRepository.routes,
@@ -166,6 +172,7 @@ beforeEach(() => {
   context = makeContext();
   socket.catalogChanged.length = 0;
   socket.securityEvents.length = 0;
+  socket.revocations.length = 0;
 });
 
 function seedRoute(driverId: string, status: Route["status"]) {
@@ -432,6 +439,35 @@ describe("the catalogue announces its changes (decision 2.3)", () => {
     ).rejects.toThrow();
 
     expect(socket.catalogChanged).toEqual([]);
+  });
+});
+
+// Plano-escala F5-23: a driver moved to another branch may be locked out by
+// it, and a cached session must leave this replica's session cache before
+// the edit answers. Any other edit announces nothing.
+describe("moving a driver to another branch", () => {
+  it("announces the driver's revocation, and an edit of anything else does not", async () => {
+    const driver = await context.create.execute(driverData(A), ADMIN_A);
+    // An inactive branch of the same company: the move the cache must see.
+    context.branches.branches.push({
+      id: BRANCH_A2,
+      businessId: A,
+      corporate_reason: "Filial Norte",
+      is_active: false,
+    } as never);
+
+    await context.update.execute({ city: "Campinas" }, driver.id, ADMIN_A, A);
+    expect(socket.revocations).toEqual([]);
+
+    await context.update.execute(
+      { branchId: BRANCH_A2 },
+      driver.id,
+      ADMIN_A,
+      A,
+    );
+    expect(socket.revocations).toEqual([
+      { kind: "driver", subjectId: driver.id },
+    ]);
   });
 });
 

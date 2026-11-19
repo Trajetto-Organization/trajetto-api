@@ -715,7 +715,12 @@ async function routeRoutes(app: FastifyInstance) {
        * leaves room for a device draining its outbox after a dead zone
        * without letting one run away.
        */
-      config: { rateLimit: { max: 120, timeWindow: "1 minute" } },
+      config: {
+        rateLimit: { max: 120, timeWindow: "1 minute" },
+        // The session cache may answer (plano-escala F5-23, ADR 0015):
+        // off unless SESSION_CACHE_TTL_MS is set.
+        sessionCache: true,
+      },
       onRequest: [ensureAuthenticated],
       preHandler: [
         verifyBusinessActive,
@@ -748,6 +753,9 @@ async function routeRoutes(app: FastifyInstance) {
   app.get(
     "/control-tower",
     {
+      // The session cache may answer (plano-escala F5-23, ADR 0015): off
+      // unless SESSION_CACHE_TTL_MS is set.
+      config: { sessionCache: true },
       onRequest: [ensureAuthenticated],
       // allowDriver:false (plan of 02/11/2026, H5): defence in depth in front
       // of the use case's own refusal — the driver's delivery_manage grant is

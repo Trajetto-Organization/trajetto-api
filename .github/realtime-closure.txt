@@ -254,6 +254,7 @@ src/shared/ai/ai-realtime.ts
 src/shared/archive/archive-settings.ts
 src/shared/auth/access-token-once.ts
 src/shared/auth/revocation-feed.ts
+src/shared/auth/session-cache.ts
 src/shared/auth/session-revocation.ts
 src/shared/brazil/uf-names.ts
 src/shared/build-info.ts

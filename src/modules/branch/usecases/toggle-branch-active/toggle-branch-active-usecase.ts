@@ -14,7 +14,10 @@ import { ToggleConflictError } from "@/modules/business/usecases/errors/toggle-c
 import { assertTenantAccess } from "@/modules/middlewares/tenant-authorization";
 
 import { NotificationService } from "@/shared/services/notification-service";
-import { sendCatalogChangedEvent } from "@/websocket";
+import {
+  announceSessionRevocation,
+  sendCatalogChangedEvent,
+} from "@/websocket";
 
 import type { IDriverRepository } from "@/modules/driver/repositories/IDriver-repository";
 import { totalOpenRoutes } from "@/modules/driver/driver-rules";
@@ -91,6 +94,11 @@ class ToggleBranchActiveUseCase {
     }
 
     const newStatus = updatedBranch.is_active;
+
+    // An inactive branch ends its drivers' sessions: they leave the session
+    // cache of this replica now, and the others read the trigger's row at
+    // once (plano-escala F5-23).
+    if (!newStatus) announceSessionRevocation("branch", branchId);
 
     const statusLabel = newStatus ? "Ativo" : "Inativo";
 

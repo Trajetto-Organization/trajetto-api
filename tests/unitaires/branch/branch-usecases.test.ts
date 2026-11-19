@@ -3,8 +3,12 @@ import "reflect-metadata";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const sendCatalogChangedEvent = vi.hoisted(() => vi.fn());
+const announceSessionRevocation = vi.hoisted(() => vi.fn());
 
-vi.mock("@/websocket", () => ({ sendCatalogChangedEvent }));
+vi.mock("@/websocket", () => ({
+  sendCatalogChangedEvent,
+  announceSessionRevocation,
+}));
 
 // The deletion e-mails are beside the point here.
 vi.mock("@/shared/services/transactional-mail-service", () => ({
@@ -282,6 +286,27 @@ describe("catalogChanged branch", () => {
       [A, "branch"],
       [A, "driver"],
     ]);
+  });
+
+  // Plano-escala F5-23: an inactive branch ends its drivers' sessions, and
+  // a cached one must leave this replica's session cache before the
+  // toggle answers, not at the feed's next read.
+  it("announces the branch's revocation when it is switched off, only then", async () => {
+    const { create, toggle } = setup();
+
+    const created = await create.execute(branch(), A, "adminA");
+
+    announceSessionRevocation.mockClear();
+    await toggle.execute(created.id, A, "adminA");
+
+    expect(announceSessionRevocation.mock.calls).toEqual([
+      ["branch", created.id],
+    ]);
+
+    announceSessionRevocation.mockClear();
+    await toggle.execute(created.id, A, "adminA");
+
+    expect(announceSessionRevocation).not.toHaveBeenCalled();
   });
 
   it("is not emitted when the write is refused", async () => {

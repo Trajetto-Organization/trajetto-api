@@ -209,6 +209,9 @@ const SESSION_CHECK_COVERAGE: Readonly<Record<string, readonly string[]>> = {
   "user.role": ["user.role"],
   "user.businessId": ["user.businessId"],
   "user.driverId": ["user.driverId"],
+  // The profile's id: the subject the session cache (F5-23) drops a
+  // manager's session by when the profile's permissions change.
+  "user.profileAccessId": ["user.profileAccessId"],
   "user.profileAccess": [
     "user.profileAccessId",
     "permission.permissionKey",
