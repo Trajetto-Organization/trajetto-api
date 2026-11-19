@@ -630,6 +630,7 @@ const OPERATION_RUNBOOKS = [
   "pgbouncer",
   "failover-standby",
   "drills",
+  "swarm-multi-no",
 ] as const;
 
 /** One reason to wake the operation: its code and its pt-BR message. */

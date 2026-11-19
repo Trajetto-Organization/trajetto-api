@@ -6,7 +6,7 @@
 
 O PgBouncer fica entre as Applications do runtime e o Postgres, em modo transaction: muitos clientes dividem poucas conexões de servidor, e cada transação vai para a conexão que estiver livre. Ele também é o endpoint estável do failover: as URLs apontam para ele, e trocar o primário é trocar só o `PGBOUNCER_PRIMARY_HOST` dele. A imagem, a configuração e as senhas estão em [deploy.md, PgBouncer](../deploy.md#pgbouncer-a-imagem-trajetto-pgbouncer-onda-17).
 
-**Onde e quando.** Primeiro a staging, já no 2º VPS (G-03). Uma semana depois, a produção da VPS 1, e só depois de a staging sair da VPS única (regra R1 da seção 3 do plano de escala): os tetos da tabela abaixo foram somados sem a staging na VPS 1. Uma réplica, start-first. Duas réplicas em nós diferentes só quando houver nós (onda 23, com a constraint `trajetto.db` e `max_replicas_per_node=1`).
+**Onde e quando.** Primeiro a staging, já no 2º VPS (G-03). Uma semana depois, a produção da VPS 1, e só depois de a staging sair da VPS única (regra R1 da seção 3 do plano de escala): os tetos da tabela abaixo foram somados sem a staging na VPS 1. Uma réplica, start-first. Duas réplicas em nós diferentes só quando houver nós (onda 23, com a constraint `trajetto.db`, `MaxReplicas` 1, o rolling stop-first e o `PGBOUNCER_MAX_DB_CONNECTIONS` de cada uma pela metade: [swarm-multi-no](./swarm-multi-no.md)).
 
 **Antes de tudo**, o corte dos roles (onda 6) precisa estar feito no ambiente: o `auth_query` não serve superusuário nem o dono das tabelas, então as URLs do runtime já usam os logins `trajetto_*` ([deploy.md, roles do banco](../deploy.md#roles-do-banco-logins-urls-e-conexões)).
 
@@ -56,7 +56,7 @@ Cada par de banco e login tem até `default_pool_size` (20) conexões de servido
    - Update Config: `{ "Parallelism": 1, "Delay": 5000000000, "FailureAction": "rollback", "Monitor": 30000000000, "Order": "start-first" }`
    - Rollback Config: `{ "Parallelism": 1, "Delay": 5000000000, "Monitor": 30000000000, "Order": "start-first" }`
    - Stop Grace Period: `90000000000`
-   - Placement: só depois dos labels do nó (onda 17, F4-52): `{ "Constraints": ["node.labels.trajetto.db==true"] }`
+   - Placement: só depois dos labels do nó (onda 17, F4-52): `{ "Constraints": ["node.labels.trajetto.db==true"] }`, sem `MaxReplicas` enquanto houver uma réplica só: com start-first, a task nova ficaria sem vaga ([swarm-multi-no](./swarm-multi-no.md))
 7. **Deploy**. Em _Logs_: a linha `trajetto-pgbouncer: imagem <commit>; trajetto e trajetto_probe em trajetto-postgres-staging:5432; …` e nenhum `ERRO`.
 8. GitHub → Settings → Environments → `staging`: o secret `DOKPLOY_PGBOUNCER_APPLICATION_ID` (o applicationId da Application, na URL dela) e a variável `SWARM_PGBOUNCER_SERVICE=trajetto-pgbouncer-staging`. Sem o secret, o CI só move a tag e não implanta.
 9. Reinstale o `infra/scripts/verify-rollout.sh` no host ([deploy.md, 14](../deploy.md#14-conferir-a-convergência)): a versão nova aceita `trajetto-pgbouncer`.

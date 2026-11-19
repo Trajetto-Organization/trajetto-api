@@ -789,6 +789,22 @@ PostgreSQL (aba _Backups_), que envia as cópias ao Cloudflare R2
 
 Em staging, troque `-production` por `-staging` e `:stable` por `:staging`.
 
+### Nós, labels e placement (onda 17)
+
+Cada ambiente roda num nó só, e o Swarm põe tudo nele. Desde a onda 17
+(plano de escala F4-52, decisão D59), o nó leva os labels `trajetto.app`,
+`trajetto.db`, `trajetto.ai` e `trajetto.edge`, e cada serviço leva a
+constraint que diz em que tipo de nó ele pode rodar (_Advanced → Swarm
+Settings → Placement_): o banco e o PgBouncer em `trajetto.db`, com o
+banco e o Redis presos também ao hostname do nó do volume; a IA em
+`trajetto.ai`; a API, os papéis, a migração e a web em `trajetto.app`, a
+API com até 4 réplicas por nó. No nó único nada muda de lugar (medido num
+Swarm descartável: as tasks ficam no mesmo nó), e o segundo nó passa a ser
+só adicionar. A tabela de cada serviço, a ordem (os labels antes das
+constraints; os Databases só na janela do Postgres), o que foi medido e o
+procedimento de um nó novo estão em
+[runbooks/swarm-multi-no.md](./runbooks/swarm-multi-no.md).
+
 ## 5. Applications em vez de Compose: o que mudou e o que ficou de fora
 
 Até 21/10/2026 a API subia como **um app Compose do tipo Docker Stack** com o
@@ -838,7 +854,7 @@ O que isso muda no dia a dia:
 | `docker stack deploy` resolvia a tag para o digest e o fixava na spec                                | o Dokploy faz `pull` da tag e força a atualização do serviço, mas a spec guarda **a tag**, não o digest. Consequências: (1) o rollback automático do Swarm protege só o momento do deploy (as réplicas antigas continuam de pé), mas uma réplica antiga que reinicie depois sobe a imagem nova, que já está no host; (2) `docker service rollback` não volta a imagem ([seção 17](#17-rollback)); (3) a conferência da convergência passou a ler o digest do contêiner de cada task, e não a spec ([seção 14](#14-conferir-a-convergência))                                                                                                                                                                                                                                                                                     |
 | rede interna `backend` (`internal: true`): Postgres, Redis e IA inalcançáveis por outros contêineres | **lacuna**. Tudo fica na `dokploy-network`, junto com a web, o staging e o que mais rodar no Dokploy. A proteção passa a ser: nenhuma porta externa, senha forte no Postgres e no Redis, token na IA, segredos diferentes entre staging e produção                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
 | volume do Postgres com nome fixo (`POSTGRES_VOLUME`)                                                 | o Dokploy cria e nomeia o volume do Database (aparece em _Advanced → Volumes_). A guarda da API contra banco vazio em produção continua valendo                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
-| Postgres preso no manager (`node.role == manager`)                                                   | com um nó só, nada muda. O Dokploy já põe `node.role==manager` em todo serviço com volume, o Database incluído; com mais de um manager, fixe o Database por nó ou label antes de acrescentar o nó ([seção 27](#grace-e-placement-do-database))                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| Postgres preso no manager (`node.role == manager`)                                                   | com um nó só, nada muda. O Dokploy já põe `node.role==manager` em todo serviço com volume, o Database incluído; desde a onda 17, o Database fica preso ao label `trajetto.db` e ao hostname do nó do volume, antes de qualquer nó novo ([swarm-multi-no](./runbooks/swarm-multi-no.md))                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 | imagem do Postgres fixada (`POSTGRES_IMAGE`)                                                         | campo _Docker Image_ do Database com o digest (`trajetto-postgres@sha256:…` desde a troca da onda 3; antes, `postgres:16-alpine@sha256:…`)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
 | tuning do Postgres e `/dev/shm` em tmpfs (comentados no compose)                                     | tuning: os parâmetros vêm da imagem `trajetto-postgres` e a memória do teto, com _Command_ e _Args_ vazios ([seção 27](#27-pitr-com-pgbackrest)). `/dev/shm`: **lacuna**, contornada pela imagem, que desliga os workers paralelos                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
 | Redis sem persistência, `--maxmemory 256mb --maxmemory-policy allkeys-lru`, senha obrigatória        | senha: o Database Redis sempre tem. O resto: comando personalizado do Database ([seção 10](#10-postgres-e-redis)); se a sua versão não tiver o campo, **lacuna** (Redis com snapshot em disco e sem teto de memória)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
@@ -1015,6 +1031,12 @@ já baixou. Desfazer: tirar a linha do `gai.conf`, apagar o _drop-in_ e
 Staging e produção são **os mesmos passos**, feitos duas vezes: uma no
 environment `staging` e outra no `production`, cada uma no projeto
 `trajetto-api`. Faça staging primeiro, inteiro, e só depois produção.
+
+Antes do primeiro serviço, o nó recebe os quatro labels, e cada serviço
+criado abaixo (os Databases, a IA, a API, a migração, o PgBouncer e os
+papéis, mais a web no projeto `trajetto-ui`) leva a constraint dele em
+_Advanced → Swarm Settings → Placement_, pela tabela de
+[runbooks/swarm-multi-no.md](./runbooks/swarm-multi-no.md) (onda 17).
 
 ### 7.1 O que muda entre staging e produção
 
@@ -1464,6 +1486,10 @@ trajetto-api-production` no host depois de cada deploy (o deploy seguinte
    ponha `STOP_GRACE_PERIOD_MS=40000` no _Environment_ (passo 3) →
    **Save** → **Deploy**: o desligamento passa a ter teto de 35 s. Sem a
    variável, ele cabe nos 10 s do Docker.
+
+   _Placement_ (onda 17, depois dos labels do nó; até 4 réplicas por nó,
+   [runbooks/swarm-multi-no.md](./runbooks/swarm-multi-no.md)):
+   `{ "Constraints": ["node.labels.trajetto.app==true"], "MaxReplicas": 4 }`.
 
 9. **Deploy**, depois de a `trajetto-api-migrate` ter rodado a etapa de
    release (seção 7.12; num banco vazio, a seção 8, passo 4). No primeiro
@@ -1950,9 +1976,11 @@ App Name na `dokploy-network`. O backup do Postgres é o do próprio Dokploy
   e junte numa janela só toda mudança (imagem, comando, recursos), porque
   cada uma recria o contêiner.
 - **Mais de um nó no Swarm**: o volume é local, e o Dokploy prende o
-  Database a um manager (`node.role==manager`), não a um nó. Antes de
-  adicionar nós, fixe o Database por nó ou label
-  ([seção 27](#grace-e-placement-do-database); F4-52, onda 17).
+  Database a um manager (`node.role==manager`), não a um nó. Desde a onda
+  17 o Placement dele pede o label `trajetto.db` e o hostname do nó do
+  volume, aplicado na janela do Postgres e antes de qualquer nó novo
+  ([seção 27](#grace-e-placement-do-database);
+  [runbooks/swarm-multi-no.md](./runbooks/swarm-multi-no.md)).
 
 #### Tuning do Postgres
 
@@ -4926,8 +4954,10 @@ régua espera. O que muda em cada papel está em
    }
    ```
 
-   _Stop Grace Period_: `40000000000` (40 s). _Placement_: vazio até a
-   onda 17.
+   _Stop Grace Period_: `40000000000` (40 s). _Placement_:
+   `{ "Constraints": ["node.labels.trajetto.app==true"] }`, depois dos
+   labels do nó (onda 17,
+   [runbooks/swarm-multi-no.md](./runbooks/swarm-multi-no.md)).
 
 8. **Deploy**. Em _Logs_: `process role resolved` com o papel certo e, nos
    papéis com filas, `workers started`.
@@ -7128,8 +7158,12 @@ os alvos do [`slo.md`](./slo.md). Anote os dois em
 - **Placement**: o Dokploy v0.30.10 põe `node.role==manager` em todo
   serviço com volume, e o Database tem o dele. Com um nó só, nada muda.
   Com mais de um manager, o Swarm poderia subir o banco noutro manager, sem
-  o volume local: antes de acrescentar um nó, fixe o Database pelo nome do
-  nó ou por label (F4-52, onda 17). Confira:
+  o volume local. Por isso, desde a onda 17 (F4-52), o Placement do
+  Database é
+  `{ "Constraints": ["node.labels.trajetto.db==true", "node.hostname==<nó do volume>"] }`,
+  aplicado no _Deploy_ da janela do Postgres, depois dos labels do nó e
+  antes de qualquer nó novo
+  ([runbooks/swarm-multi-no.md](./runbooks/swarm-multi-no.md)). Confira:
 
   ```sh
   docker service inspect trajetto-postgres-production --format '{{json .Spec.TaskTemplate.Placement}}'

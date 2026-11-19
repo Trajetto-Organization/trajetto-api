@@ -1029,8 +1029,9 @@ reiniciou o painel e a configuração do Traefik; as aplicações não caíram.
 ### 5.11 Lacunas conhecidas
 
 Sem health check no balanceador do Traefik, rede `dokploy-network` compartilhada
-por tudo, IA sem `read_only`, Databases sem _placement_ e o _Stop Grace Period_
-que depende da versão. Detalhe e contornos em
+por tudo, IA sem `read_only`, Databases sem _placement_ até os labels e as
+constraints da onda 17 ([runbooks/swarm-multi-no.md](./runbooks/swarm-multi-no.md))
+e o _Stop Grace Period_ que depende da versão. Detalhe e contornos em
 [`deploy.md` → 5](./deploy.md#5-applications-em-vez-de-compose-o-que-mudou-e-o-que-ficou-de-fora).
 **A confirmar com o dono:** se o campo _Stop Grace Period_ existe no Dokploy
 v0.30.10 instalado. Sem ele, o serviço fica com os 10 s do Docker, e o

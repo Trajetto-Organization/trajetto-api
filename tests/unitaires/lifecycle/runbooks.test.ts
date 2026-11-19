@@ -776,3 +776,183 @@ describe("the pgbouncer runbook (plano-escala F4-39)", () => {
     expect(back).toContain("a `READINESS_DATABASE_URL` vazia");
   });
 });
+
+/**
+ * Labels, placement and a new Swarm node (plano-escala F4-52, wave 17). The
+ * labels and the constraints go on the single node first, where nothing
+ * moves, so that the second node is only "add" (decision D59). Each trap
+ * below was measured on a throwaway single-node Swarm (Docker 27.5.1), and
+ * each one takes a service down the day the runbook stops steering around
+ * it: a constraint whose label the node lacks, a label removed under a
+ * running service, and MaxReplicas with no free slot for a start-first
+ * rolling.
+ */
+describe("the swarm-multi-no runbook (plano-escala F4-52)", () => {
+  const text = readFileSync(
+    resolve(RUNBOOKS, "swarm-multi-no.md"),
+    "utf8",
+  ).replace(/\r\n/g, "\n");
+  const section = (start: string, end?: string) => {
+    const from = text.indexOf(start);
+
+    expect(from, start).toBeGreaterThanOrEqual(0);
+
+    return text.slice(from, end ? text.indexOf(end) : undefined);
+  };
+  /** The constraint table's row of one service, by its first cell. */
+  const row = (service: string) =>
+    text.split("\n").find((line) => line.startsWith(`| ${service} `)) ?? "";
+
+  it("is an operation runbook, listed in the index", () => {
+    expect(OPERATION_RUNBOOKS).toContain("swarm-multi-no");
+  });
+
+  it("labels the node in one command and checks it before any constraint", () => {
+    const single = section("### No nó único", "### Um nó novo");
+    const labels = single.indexOf(
+      "docker node update --label-add trajetto.app=true --label-add trajetto.db=true --label-add trajetto.ai=true --label-add trajetto.edge=true <nó>",
+    );
+    const inspect = single.indexOf(
+      "docker node inspect <nó> --format '{{json .Spec.Labels}}'",
+    );
+    const placement = single.indexOf("_Advanced → Swarm Settings → Placement_");
+
+    expect(labels).toBeGreaterThan(0);
+    expect(inspect).toBeGreaterThan(labels);
+    expect(placement).toBeGreaterThan(inspect);
+  });
+
+  it("gives every service of both projects its constraint", () => {
+    const app = '`{ "Constraints": ["node.labels.trajetto.app==true"] }`';
+    const expected: Array<[string, string]> = [
+      [
+        "`trajetto-postgres` (Database)",
+        '`{ "Constraints": ["node.labels.trajetto.db==true", "node.hostname==<nó do volume>"] }`',
+      ],
+      [
+        "`trajetto-redis` (Database)",
+        '`{ "Constraints": ["node.hostname==<nó do volume>"] }`',
+      ],
+      [
+        "`trajetto-pgbouncer` ×1",
+        '`{ "Constraints": ["node.labels.trajetto.db==true"] }`',
+      ],
+      [
+        "`trajetto-pgbouncer` ×2 (onda 23)",
+        '`{ "Constraints": ["node.labels.trajetto.db==true"], "MaxReplicas": 1 }`',
+      ],
+      [
+        "`trajetto-ai`",
+        '`{ "Constraints": ["node.labels.trajetto.ai==true"] }`',
+      ],
+      [
+        "`trajetto-api`",
+        '`{ "Constraints": ["node.labels.trajetto.app==true"], "MaxReplicas": 4 }`',
+      ],
+      ["`trajetto-worker`", app],
+      ["`trajetto-scheduler`", app],
+      ["`trajetto-worker-external`", app],
+      ["`trajetto-realtime`", app],
+      ["`trajetto-ingest`", app],
+      ["`trajetto-api-migrate`", app],
+      ["`trajetto-ui` (projeto `trajetto-ui`)", app],
+    ];
+
+    for (const [service, placement] of expected) {
+      expect(row(service), service).toContain(placement);
+    }
+
+    // Two PgBouncers on two nodes only roll stop-first: start-first with
+    // MaxReplicas 1 leaves the new task Pending forever (measured).
+    expect(row("`trajetto-pgbouncer` ×2 (onda 23)")).toContain(
+      '`"Order": "stop-first"`',
+    );
+    expect(row("`trajetto-pgbouncer` ×1").split("|")[2]).not.toContain(
+      "MaxReplicas",
+    );
+    // Dokploy's default for a service with a volume is what goes away.
+    expect(text).not.toMatch(/\|[^|\n]*`\{[^`]*node\.role==manager/);
+  });
+
+  it("keeps the traps it measured in sight", () => {
+    for (const fact of [
+      "Docker 27.5.1",
+      "no suitable node",
+      "max replicas per node limit exceed",
+      "assigned node no longer meets constraints",
+      "**Nunca tire um label** de um nó enquanto um serviço que o exige roda nele",
+      "4 × (nós `trajetto.app`) − 1",
+      "`PGBOUNCER_MAX_DB_CONNECTIONS`",
+      "`PROOF_SIGNING_PFX_BASE64`",
+      "`ROLLOUT_VERIFY=http`",
+      "`SWARM_NODE_HOSTNAME={{.Node.Hostname}}`",
+    ]) {
+      expect(text, fact).toContain(fact);
+    }
+  });
+
+  it("puts the Databases' placement in the Postgres window, never outside it", () => {
+    const single = section("### No nó único", "### Um nó novo");
+
+    expect(single).toContain("`PAUSE trajetto;`");
+    expect(single).toContain("`CHECKPOINT;`");
+    expect(single).toContain("`RESUME trajetto;`");
+    expect(single).toContain("nunca fora dela");
+  });
+
+  it("opens the Swarm's ports on the private network only, with ESP for an encrypted overlay", () => {
+    const node = section("### Um nó novo", "## Como confirmar");
+
+    for (const port of ["2377/tcp", "7946/tcp", "7946/udp", "4789/udp"]) {
+      expect(node).toContain(port);
+    }
+
+    expect(node).toContain("**protocolo IP 50 (ESP)**");
+    expect(node).toContain("**As portas do Swarm só na rede privada**");
+    expect(node).toContain("_Cluster → Add Node_");
+    expect(node).toContain("**worker**");
+    // The GHCR pull on a worker node, staging first, before any other label.
+    expect(node).toMatch(/\*\*O teste de pull do GHCR\*\*, na staging/);
+    expect(node.indexOf("**O teste de pull do GHCR**")).toBeLessThan(
+      node.indexOf("--label-add trajetto.db=true"),
+    );
+  });
+
+  it("accepts the single node by the same docker service ps before and after", () => {
+    const confirm = section("## Como confirmar", "## Quando escalar");
+
+    expect(text).toContain("> ~/placement-antes.txt");
+    expect(text).toContain("> ~/placement-depois.txt");
+    expect(confirm).toContain(
+      "diff ~/placement-antes.txt ~/placement-depois.txt",
+    );
+  });
+
+  it("names services by their App Name markers and carries no address or secret", () => {
+    for (const match of text.matchAll(
+      /docker service (?:inspect|ps) ([^\s`]+)/g,
+    )) {
+      expect(match[1]).toMatch(
+        /^(?:"\$s"|trajetto-[a-z-]+-(?:staging|production))$/,
+      );
+    }
+
+    expect(text).not.toMatch(/\b(?:\d{1,3}\.){3}\d{1,3}\b/);
+    expect(text).not.toMatch(/SWMTKN-/);
+    expect(text).not.toMatch(
+      /[\w.%+-]+@(?!example\.com)[a-z0-9-]+(?:\.[a-z0-9-]+)*\.[a-z]{2,}/i,
+    );
+  });
+
+  it("is where the Dokploy guide and the PgBouncer runbook send the placement", () => {
+    const deploy = readFileSync(
+      resolve(process.cwd(), "docs/deploy.md"),
+      "utf8",
+    ).replace(/\r\n/g, "\n");
+    const pgbouncer = readFileSync(resolve(RUNBOOKS, "pgbouncer.md"), "utf8");
+
+    expect(deploy).toContain("(./runbooks/swarm-multi-no.md");
+    expect(deploy).not.toMatch(/_Placement_: vazio até a\s+onda 17/);
+    expect(pgbouncer).toContain("(./swarm-multi-no.md");
+  });
+});
