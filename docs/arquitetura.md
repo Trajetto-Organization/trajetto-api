@@ -4881,8 +4881,19 @@ as listas e o resumo de atividades e as LISTAS de
 primário o `/integration/v1/events` e a leitura de uma entrega ou rota (o
 ERP lê logo depois de gravar), a Torre, o escopo das atividades (quem pode
 ver o quê), a admissão, a sessão, os claims, a idempotência e todo CAS. O
-repositório lê o `databaseRead` por um getter `read`; construído com outro
-cliente (o de um teste, o de uma transação), lê nesse mesmo cliente. Três exportações lentas seguram as 3 conexões do `databaseRead` e
+repositório lê por um getter `read`, que desde a onda 17 (F4-42) chama o
+`readDatabase()`: o standby enquanto o replica-guard o abona, o
+`databaseRead` no resto do tempo e sempre sem `DATABASE_REPLICA_URL`;
+construído com outro cliente (o de um teste, o de uma transação), lê nesse
+mesmo cliente. É a lista fechada do standby, e por isso só de LISTAS: um
+GET por id logo depois de um POST daria 404, e um caminho de escrita
+decidiria sobre uma linha de até 15 s atrás. A guarda
+`tests/unitaires/database/read-routing-guard.test.ts` confere método a
+método que cada um é uma lista, uma exportação, uma contagem ou um resumo,
+que o `readDatabase` só aparece nesses getters, e que nenhum middleware,
+admissão de socket, claim ou worker de fila, idempotência, create ou
+cancelamento da integração (e o replay), coletor de uploads órfãos,
+expurgo de empresa, anonimização nem usecase que escreve chama um deles. Três exportações lentas seguram as 3 conexões do `databaseRead` e
 nenhuma do pool principal (`tests/E2E/pool-pressure.test.ts`); a quarta
 espera a vez entre elas, até o `pool_timeout` da URL, e o pool principal
 segue livre para o resto. Cada statement tem o teto de 10 s do pool: uma

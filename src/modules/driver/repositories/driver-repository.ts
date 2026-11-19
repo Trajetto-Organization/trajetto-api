@@ -13,7 +13,7 @@ import {
   CursorPaginatedDriver,
 } from "../dtos/driver-dto";
 
-import database, { databaseRead } from "@/../infra/database";
+import database, { readDatabase } from "@/../infra/database";
 
 import { buildSearchOr } from "@/shared/pagination/search-or";
 import { resolveOrderBy } from "@/shared/pagination/list-query";
@@ -108,9 +108,12 @@ class DriverRepository implements IDriverRepository {
    * A repository built on another client (a test's) reads on that client. A
    * getter, so a module that mocks infra/database without it only needs it
    * when one of these reads runs.
+   * With DATABASE_REPLICA_URL, readDatabase() sends them to the standby
+   * while the replica guard vouches for it: lists only (plano-escala F4-42,
+   * tests/unitaires/database/read-routing-guard.test.ts).
    */
   private get read(): typeof this.prisma {
-    return this.prisma === database ? databaseRead : this.prisma;
+    return this.prisma === database ? readDatabase() : this.prisma;
   }
 
   async createDriver(driverData: CreateDriverProps): Promise<Driver> {

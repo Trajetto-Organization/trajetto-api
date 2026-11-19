@@ -8,8 +8,9 @@ import { describe, expect, it } from "vitest";
  * Who may use the two side pools of infra/database.ts (plano-escala F3-16,
  * section 2.4 of the plan). Each is a closed list, kept here:
  *
- *  - databaseRead is the heavy reads' bulkhead, and from wave 17 its URL
- *    may point at the standby, seconds behind the primary. A middleware, a
+ *  - databaseRead is the heavy reads' bulkhead; from wave 17 its closed
+ *    list reads through readDatabase(), which may send it to the standby,
+ *    seconds behind the primary (read-routing-guard.test.ts). A middleware, a
  *    socket admission, a queue claim, an idempotency key or a
  *    compare-and-set reading it would decide on a stale row: a revoked
  *    session let through, a job claimed twice, a write replayed. Those
@@ -172,7 +173,8 @@ function bulkheadMethods(file: string, text: string): string[] {
         (ts.isPropertyAccessExpression(child) &&
           child.expression.kind === ts.SyntaxKind.ThisKeyword &&
           child.name.text === "read") ||
-        (ts.isIdentifier(child) && child.text === "databaseRead")
+        (ts.isIdentifier(child) &&
+          (child.text === "databaseRead" || child.text === "readDatabase"))
       ) {
         found = true;
 
@@ -217,10 +219,16 @@ function importersOf(name: string): string[] {
 }
 
 describe("the side pools of infra/database.ts", () => {
-  it("lets only the closed list's files import databaseRead", () => {
-    expect(importersOf("databaseRead")).toEqual(
+  it("lets only the closed list's files read the bulkhead, through readDatabase", () => {
+    // From wave 17 (plano-escala F4-42) the closed list reads through
+    // readDatabase(), which is databaseRead unless a standby the replica
+    // guard vouches for is configured; nobody imports databaseRead itself,
+    // so no read skips that choice. What may go to the standby is
+    // read-routing-guard.test.ts's.
+    expect(importersOf("readDatabase")).toEqual(
       Object.keys(READ_ALLOWED).sort(),
     );
+    expect(importersOf("databaseRead")).toEqual([]);
   });
 
   it("lets only the closed list's methods read through it, in each file", () => {

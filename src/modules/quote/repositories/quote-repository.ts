@@ -7,7 +7,7 @@ import {
   UpdateQuoteProps,
 } from "../dtos/quote-dto";
 
-import database, { databaseRead } from "@/../infra/database";
+import database, { readDatabase } from "@/../infra/database";
 
 import { QUOTE_SORT, quoteListWhere } from "../usecases/list-quotes/quote-list";
 
@@ -24,9 +24,12 @@ class QuoteRepository implements IQuoteRepository {
    * request needs. A repository built on another client (a test's) reads on
    * that client. A getter, so a module that mocks infra/database without it
    * only needs it when one of these reads runs.
+   * With DATABASE_REPLICA_URL, readDatabase() sends them to the standby
+   * while the replica guard vouches for it: lists only (plano-escala F4-42,
+   * tests/unitaires/database/read-routing-guard.test.ts).
    */
   private get read(): typeof this.prisma {
-    return this.prisma === database ? databaseRead : this.prisma;
+    return this.prisma === database ? readDatabase() : this.prisma;
   }
 
   async createQuote(quoteData: CreateQuoteProps): Promise<Quote> {
