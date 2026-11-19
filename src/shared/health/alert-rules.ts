@@ -607,7 +607,8 @@ type AlertKind = (typeof ALERT_KINDS)[number];
  * the planned windows, such as the history's copy window (F2-17); and the
  * operation of the scale plan's second phase (F2-35): a frozen feed, a
  * missing partition, a pending detach, load shedding, a noisy company and
- * the trail's archive. They live beside the alerts' runbooks.
+ * the trail's archive; and the adoption and the operation of PgBouncer
+ * (F4-39). They live beside the alerts' runbooks.
  */
 const OPERATION_RUNBOOKS = [
   "provider-down",
@@ -626,6 +627,7 @@ const OPERATION_RUNBOOKS = [
   "load-shedding",
   "noisy-tenant",
   "trail-archive",
+  "pgbouncer",
 ] as const;
 
 /** One reason to wake the operation: its code and its pt-BR message. */

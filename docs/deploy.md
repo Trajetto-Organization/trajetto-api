@@ -2180,6 +2180,41 @@ deploy a implanta:
   do build escolhido, como a IA. Um deploy do Dokploy que falha devolve a
   tag dela nos dois ambientes.
 
+**A adoção** (plano de escala F4-39) é um passo a passo do dono, no
+[runbook do PgBouncer](./runbooks/pgbouncer.md): a Application
+`trajetto-pgbouncer` (32 MiB e 0,1 CPU na staging do 2º VPS; 64 MiB e
+0,25 CPU na produção da VPS 1, só depois de a staging sair dela; uma
+réplica start-first, com _Stop Grace Period_ de 90 s), as URLs trocadas
+uma Application por vez, a semana de observação, o reinício planejado do
+Postgres (`PAUSE trajetto`, `CHECKPOINT`, redeploy do Database,
+`RESUME trajetto`, no console de administração que só o dono abre), o
+rolling sob o burn-in e a volta ao Postgres direto. O que a API faz com
+ele:
+
+- **A URL pelo PgBouncer** (porta 6432 com `pgbouncer=true`) leva só o
+  `TimeZone` no `options`, e cada conexão vive até 60 s, para a tarefa
+  antiga de um rolling ficar sem cliente antes dos 90 s; o boot recusa o
+  resto (F4-31).
+- **As recusas dele** viram 503 com `Retry-After`, nunca 500: o pool cheio
+  (`query_wait_timeout`, 5 s) e o teto de clientes são `SERVICE_BUSY`; o
+  PgBouncer sem entrar no Postgres, a conexão de servidor que morreu e a
+  tarefa antiga recusando login são `SERVICE_UNAVAILABLE` (F4-32).
+- **As métricas**: o processo com o cron lê o console de cada tarefa por
+  `pgbouncer_stats` (só `SHOW`), uma vez por minuto, e o `/health/metrics`
+  mostra `pgbouncer`, com os alertas `pgbouncer-down`,
+  `pgbouncer-clients-waiting` e `pgbouncer-server-saturation` (F4-36).
+  Variáveis: `PGBOUNCER_STATS_URL` e `PGBOUNCER_STATS_HOSTS`, na
+  Application que roda o cron.
+- **A readiness** vai ao alias `trajetto_probe`, com 2 conexões só dela,
+  pela `READINESS_DATABASE_URL`: um pool das requisições saturado não tira
+  todas as réplicas do ar juntas (F4-37).
+- **As sessões do PgBouncer têm nome**: a do `auth_query` chega como
+  `trajetto-pgbouncer-auth`, por um padrão do role, para a checagem das
+  contrações da etapa de release não a ler como a imagem antiga.
+- **Nunca pelo PgBouncer**: a `BATCH_DATABASE_URL` e a URL da
+  `trajetto-api-migrate`, que usam sessão própria; o boot e a etapa de
+  release as recusam na porta 6432.
+
 ### Redis
 
 - **Senha obrigatória**: o Database Redis sempre nasce com senha. Qualquer

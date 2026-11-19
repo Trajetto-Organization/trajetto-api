@@ -673,3 +673,106 @@ describe("the history-window runbook (plano-escala F2-17, F2-18)", () => {
     expect(approvalRow).not.toContain("force-release");
   });
 });
+
+/**
+ * The adoption of PgBouncer (plano-escala F4-39, wave 17): the owner
+ * creates the Application and switches the URLs by this runbook, first on
+ * the staging of the 2nd VPS, then in production, and restarts Postgres by
+ * it. What would break the staging, the production or the contractions if
+ * written wrong is pinned here.
+ */
+describe("the pgbouncer runbook (plano-escala F4-39)", () => {
+  const text = readFileSync(resolve(RUNBOOKS, "pgbouncer.md"), "utf8").replace(
+    /\r\n/g,
+    "\n",
+  );
+  const section = (start: string, end?: string) =>
+    text.slice(text.indexOf(start), end ? text.indexOf(end) : undefined);
+
+  it("is an operation runbook, listed in the index", () => {
+    expect(OPERATION_RUNBOOKS).toContain("pgbouncer");
+  });
+
+  it("sizes the Application as the plan's ceilings, start-first with 90 s of grace", () => {
+    for (const value of [
+      "`33554432`",
+      "`100000000`",
+      "`67108864`",
+      "`250000000`",
+      "`90000000000`",
+      '"Order": "start-first"',
+      '"FailureAction": "rollback"',
+      "`PGBOUNCER_MAX_DB_CONNECTIONS=60`",
+      "`DOKPLOY_PGBOUNCER_APPLICATION_ID`",
+      "`SWARM_PGBOUNCER_SERVICE=trajetto-pgbouncer-staging`",
+    ]) {
+      expect(text, value).toContain(value);
+    }
+
+    // Production on the first VPS only once staging left it (rule R1).
+    expect(text).toMatch(/depois de a staging sair da VPS única/);
+  });
+
+  it("never sends the batch nor the migration URL through PgBouncer, and keeps the admin login with the owner", () => {
+    const rows = text
+      .split("\n")
+      .filter(
+        (line) =>
+          line.includes("`BATCH_DATABASE_URL`") ||
+          line.includes("`MIGRATION_DATABASE_URL`"),
+      )
+      .filter((line) => line.startsWith("|"));
+
+    expect(rows.length).toBeGreaterThanOrEqual(2);
+    for (const row of rows) expect(row).toContain("direto");
+
+    expect(text).toContain(
+      "O login de administração (`pgbouncer_admin`) nunca entra no _Environment_ de nenhuma Application além da própria `trajetto-pgbouncer`",
+    );
+  });
+
+  it("switches the URLs one Application at a time, with no options and the readiness on the alias", () => {
+    const switching = section(
+      "### Trocar as URLs",
+      "### Reinício planejado do Postgres",
+    );
+
+    expect(switching).toContain("uma Application por vez");
+    expect(switching).toContain("6432/trajetto?");
+    expect(switching).toContain("6432/trajetto_probe?");
+    expect(switching).toContain("pgbouncer=true");
+    expect(switching).not.toMatch(/options=/);
+    expect(switching).toContain("`READINESS_DATABASE_URL`");
+    expect(switching).toContain(
+      "`PGBOUNCER_STATS_HOSTS=tasks.trajetto-pgbouncer-staging`",
+    );
+  });
+
+  it("restarts Postgres by PAUSE, CHECKPOINT, the Database's Deploy and RESUME, in that order", () => {
+    const restart = section(
+      "### Reinício planejado do Postgres",
+      "### Redeploy do PgBouncer",
+    );
+    const order = [
+      "`PAUSE trajetto;`",
+      "`CHECKPOINT;`",
+      "**Deploy**",
+      "`RESUME trajetto;`",
+    ].map((step) => restart.indexOf(step));
+
+    expect(order.every((position) => position >= 0)).toBe(true);
+    expect([...order].sort((a, b) => a - b)).toEqual(order);
+    expect(restart).toContain(
+      "`psql -h 127.0.0.1 -p 6432 -U pgbouncer_admin pgbouncer`",
+    );
+    // What a request meets during the pause: the 503 of F4-32.
+    expect(restart).toContain("503 `SERVICE_BUSY`");
+  });
+
+  it("goes back to Postgres directly one Application at a time, in reverse order", () => {
+    const back = section("**Voltar ao Postgres direto**");
+
+    expect(back).toContain("na ordem inversa da troca");
+    expect(back).toContain("a `READINESS_DATABASE_URL` vazia");
+  });
+});

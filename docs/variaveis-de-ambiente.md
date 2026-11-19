@@ -225,6 +225,9 @@ DATABASE_URL=postgresql://<USUÁRIO>:<SENHA>@<APP NAME DO PGBOUNCER>:6432/<BANCO
 A `BATCH_DATABASE_URL` e a URL da `trajetto-api-migrate` continuam
 diretas no Postgres, sempre (a
 [seção do PgBouncer em `deploy.md`](./deploy.md#pgbouncer-a-imagem-trajetto-pgbouncer-onda-17)).
+Quem vai pelo PgBouncer, com que login e quantas conexões, e a troca das
+URLs, uma Application por vez, estão no
+[runbook do PgBouncer](./runbooks/pgbouncer.md).
 
 **O usuário de cada URL** (plano de escala, X-15). Até o corte dos roles, o
 `<USUÁRIO>` de todas é o do Database, superusuário e dono das tabelas.
