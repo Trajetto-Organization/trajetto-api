@@ -23,10 +23,11 @@ const ROWS_PER_BATCH = 500;
  * pool (src/shared/cpu-pool): ExcelJS turns every row into XML and zips the
  * file synchronously, on whichever thread runs it, for the whole download.
  * Here the rows go to the thread in batches, and its bytes come back to be
- * written on the socket. The pool is asked before the headers: a pool that
- * is full is still a plain 503 CPU_POOL_BUSY the client can show. With
- * CPU_POOL_THREADS=0, or without the thread's file, the workbook is built
- * here, as before.
+ * written on the socket. The pool is asked before the headers: a thread
+ * that fails to start the workbook is still a plain 503 the client can
+ * show. With no thread free for a workbook (the others held by exports),
+ * with CPU_POOL_THREADS=0, or without the thread's file, the workbook is
+ * built here, as before: an export never waits for another one's download.
  */
 class ExcelWriter implements ExportWriter {
   private workbook: ExcelJS.stream.xlsx.WorkbookWriter | null = null;
@@ -57,7 +58,7 @@ class ExcelWriter implements ExportWriter {
 
       // A download that ends early (the client left, a failure after the
       // 200) gives the thread back at once.
-      res.once("close", () => this.session?.abort());
+      if (this.session) res.once("close", () => this.session?.abort());
     }
 
     // 1. Configure headers at the Node.js level

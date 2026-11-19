@@ -1070,7 +1070,9 @@ const envSchema = z
     // CPU_POOL_MAX_PENDING calls waiting for a thread, past which the call
     // is refused with 503 CPU_POOL_BUSY; CPU_POOL_TIMEOUT_MS for a call to
     // get a thread and for the thread to answer (one that does not is
-    // replaced). Empty counts as absent.
+    // replaced). A workbook never waits for a thread: with none free for it
+    // (all but one at most hold workbooks), it is built in process, as
+    // before. Empty counts as absent.
     CPU_POOL_THREADS: z.preprocess(
       (value) => (value === "" ? undefined : value),
       z.coerce.number().int().min(0).max(8).default(2),

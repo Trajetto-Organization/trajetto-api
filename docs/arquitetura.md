@@ -4221,7 +4221,12 @@ antes de gravar qualquer coisa, então a recusa do pool chega antes da
 primeira entrega. A exportação em Excel prende uma thread pelo download
 inteiro (as linhas vão em lotes de 500 e os bytes voltam para o socket),
 e as exportações usam no máximo todas as threads menos uma, para a NF-e
-não esperar um download; a recusa chega antes do primeiro byte.
+não esperar um download. Uma exportação nunca espera na fila: se as
+threads que ela pode usar já estão com outras exportações, a planilha é
+montada na thread principal, como antes do pool, e o arquivo sai na hora
+(com o padrão de 2 threads, a primeira exportação vai para a thread e as
+outras, até as três do `EXPORT_BUSY`, rodam como antes). Uma falha do pool
+ao abrir a planilha chega antes do primeiro byte.
 
 **Importação de planilha** (`POST /import/import-spreadsheet/:businessId`) é
 assíncrona: o pedido valida embarcador e arquivo (tamanho inflado, células e

@@ -1,4 +1,5 @@
 import { monitorEventLoopDelay } from "node:perf_hooks";
+import { PassThrough } from "node:stream";
 
 import ExcelJS from "exceljs";
 import { afterEach, describe, expect, it } from "vitest";
@@ -6,6 +7,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { CpuPool, type CpuPoolSettings } from "@/shared/cpu-pool/cpu-pool";
 import { parseNFeOffThread } from "@/shared/cpu-pool";
 import { NFeParseError, parseNFeXml } from "@/shared/delivery/nfe-parser";
+import { ExcelWriter } from "@/shared/services/export/writers/excel-writer";
 
 /**
  * The CPU pool (plano-escala F3-29), with real worker threads (the source
@@ -21,6 +23,8 @@ import { NFeParseError, parseNFeXml } from "@/shared/delivery/nfe-parser";
  *  - each thread gets the heap ceiling CPU_POOL_THREAD_MAX_OLD_MB;
  *  - an Excel workbook built on a thread is a real .xlsx with every row,
  *    and a workbook session leaves a thread for the short tasks;
+ *  - an export that finds no thread free for a workbook builds it in
+ *    process at once, never waiting in line for another one's download;
  *  - with CPU_POOL_THREADS=0 the work runs in process, as before.
  */
 
@@ -139,10 +143,10 @@ describe("the CPU pool", () => {
   it("refuses at once when the line is full, and serves the line in order", async () => {
     // One thread, held by a workbook; one call may wait.
     const pool = poolWith({ threads: 1, maxPending: 1 });
-    const session = await pool.openWorkbook(
+    const session = (await pool.openWorkbook(
       [{ header: "A", key: "a" }],
       () => undefined,
-    );
+    ))!;
 
     const waiting = parseNFeOffThread(nfe(), pool);
 
@@ -204,13 +208,13 @@ describe("the CPU pool", () => {
   it("builds an Excel workbook on a thread, every row in it", async () => {
     const pool = poolWith();
     const chunks: Buffer[] = [];
-    const session = await pool.openWorkbook(
+    const session = (await pool.openWorkbook(
       [
         { header: "Destinatário", key: "name" },
         { header: "Valor", key: "value", width: 12 },
       ],
       (bytes) => chunks.push(Buffer.from(bytes)),
-    );
+    ))!;
 
     for (let batch = 0; batch < 3; batch += 1) {
       await session.write(
@@ -236,20 +240,79 @@ describe("the CPU pool", () => {
 
   it("leaves a thread for the short tasks while a workbook holds one", async () => {
     const pool = poolWith({ threads: 2 });
-    const session = await pool.openWorkbook(
+    const session = (await pool.openWorkbook(
       [{ header: "A", key: "a" }],
       () => undefined,
-    );
+    ))!;
 
-    // A second workbook waits; the NF-e takes the other thread at once.
-    const second = pool.openWorkbook([{ header: "A", key: "a" }], () => {});
-
+    // No thread for a second workbook, at once and without a place in
+    // line; the NF-e takes the other thread at once.
+    expect(
+      await pool.openWorkbook([{ header: "A", key: "a" }], () => {}),
+    ).toBeNull();
+    expect(pool.state().waiting).toBe(0);
     expect((await parseNFeOffThread(nfe(), pool)).invoice_key).toBe(ACCESS_KEY);
-    expect(pool.state().waiting).toBe(1);
 
     await session.end();
-    await (await second).end();
+    expect(
+      await pool.openWorkbook([{ header: "A", key: "a" }], () => {}),
+    ).not.toBeNull();
   }, 30_000);
+
+  it("builds a second export's workbook in process at once, every row in it", async () => {
+    // The defaults' two threads: one may hold a workbook. The second export
+    // used to wait CPU_POOL_TIMEOUT_MS for it and fail with 503
+    // CPU_POOL_BUSY, where before the pool all three exports ran.
+    const pool = poolWith({ threads: 2, timeoutMs: 1_000 });
+    const columns = [{ header: "Destinatário", key: "name" }];
+
+    function download() {
+      const raw = Object.assign(new PassThrough(), {
+        setHeader: () => undefined,
+        writeHead: () => undefined,
+      });
+      const chunks: Buffer[] = [];
+      const ended = new Promise<Buffer>((resolve) =>
+        raw.on("end", () => resolve(Buffer.concat(chunks))),
+      );
+
+      raw.on("data", (chunk: Buffer) => chunks.push(Buffer.from(chunk)));
+
+      return { writer: new ExcelWriter(pool), reply: { raw } as never, ended };
+    }
+
+    const first = download();
+    const second = download();
+
+    await first.writer.start(first.reply, columns, "primeira");
+
+    const started = Date.now();
+
+    await second.writer.start(second.reply, columns, "segunda");
+    expect(Date.now() - started).toBeLessThan(500);
+    expect(pool.state()).toMatchObject({ busy: 1, waiting: 0 });
+
+    for (let index = 0; index < 1_200; index += 1) {
+      await first.writer.writeRow({ name: `Primeira ${index + 1}` });
+      await second.writer.writeRow({ name: `Segunda ${index + 1}` });
+    }
+
+    await Promise.all([first.writer.end(), second.writer.end()]);
+
+    for (const [download, name] of [
+      [first, "Primeira"],
+      [second, "Segunda"],
+    ] as const) {
+      const book = new ExcelJS.Workbook();
+
+      await book.xlsx.load((await download.ended) as never);
+
+      const sheet = book.getWorksheet("Relatório");
+
+      expect(sheet?.rowCount).toBe(1 + 1_200);
+      expect(sheet?.getRow(1_201).values).toEqual([, `${name} 1200`]);
+    }
+  }, 60_000);
 
   it("runs in process with no thread at all", async () => {
     const pool = poolWith({ threads: 0 });

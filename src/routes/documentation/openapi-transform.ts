@@ -1077,7 +1077,7 @@ function openapiTransform(input: TransformInput): {
       responses,
       "503",
       errorBody(
-        "CPU_POOL_BUSY: as threads que processam arquivos neste servidor (a planilha em Excel da exportação, as NF-e da importação) estão ocupadas e a fila está cheia; CPU_POOL_TIMEOUT: o arquivo demorou demais para ser processado; CPU_POOL_UNAVAILABLE: o processamento foi interrompido. Chega antes de qualquer gravação e antes do primeiro byte do arquivo. Espere o `retry-after` e repita.",
+        "CPU_POOL_BUSY: as threads que leem as NF-e da importação neste servidor estão ocupadas e a fila está cheia (a exportação em Excel não espera nem é recusada por isso: sem thread livre, a planilha é montada como antes); CPU_POOL_TIMEOUT: o arquivo demorou demais para ser processado; CPU_POOL_UNAVAILABLE: o processamento foi interrompido. Chega antes de qualquer gravação e antes do primeiro byte do arquivo. Espere o `retry-after` e repita.",
         ["CPU_POOL_BUSY", "CPU_POOL_TIMEOUT", "CPU_POOL_UNAVAILABLE"],
         { "retry-after": RETRY_AFTER_HEADER },
       ),

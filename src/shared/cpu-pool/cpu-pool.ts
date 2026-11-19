@@ -36,7 +36,12 @@ const log = logger.child({ component: "cpu-pool" });
  *
  * A workbook session holds its thread for the whole export, so sessions
  * take at most all threads but one when there are two or more: an export
- * never keeps an NF-e import waiting for its whole download.
+ * never keeps an NF-e import waiting for its whole download. A session
+ * never waits in line either: with every thread it may take already held
+ * by another export, `openWorkbook` answers null at once and the caller
+ * builds that workbook in process, as before the pool. Waiting would hold
+ * the second export for a whole download, or refuse it with 503 after
+ * CPU_POOL_TIMEOUT_MS, where it used to run.
  *
  * With CPU_POOL_THREADS=0, or without the worker's file (neither the build
  * nor the source), the callers run the work in process, as before.
@@ -61,7 +66,6 @@ interface Thread {
 }
 
 interface Waiter {
-  session: boolean;
   grant: (thread: Thread) => void;
   fail: (error: Error) => void;
   timer: NodeJS.Timeout;
@@ -158,7 +162,7 @@ class CpuPool {
 
   /** One task on a thread; its answer, or the error it threw there. */
   async run<T>(task: CpuTask, input: unknown): Promise<T> {
-    const thread = await this.acquire(false);
+    const thread = await this.acquire();
 
     try {
       const reply = await this.send(thread, { type: "task", task, input });
@@ -174,12 +178,27 @@ class CpuPool {
   /**
    * A workbook built on a thread that the session holds until `end` or
    * `abort`; `onChunk` gets the file's bytes in order.
+   *
+   * Null, at once, when no thread may take a workbook now (the others are
+   * held by exports, or the last one is kept for the short tasks): the
+   * caller builds the workbook in process. A session never waits in line.
    */
   async openWorkbook(
     columns: CpuPoolColumn[],
     onChunk: (bytes: Buffer) => void,
-  ): Promise<WorkbookSession> {
-    const thread = await this.acquire(true);
+  ): Promise<WorkbookSession | null> {
+    const free = this.freeThreadFor(true);
+
+    if (!free) {
+      log.info(
+        { threads: this.threads.size, sessions: this.sessions() },
+        "No CPU pool thread free for a workbook; it is built in process",
+      );
+
+      return null;
+    }
+
+    const thread = this.take(free, true);
     const id = (this.nextId += 1);
     let open = true;
 
@@ -243,12 +262,12 @@ class CpuPool {
     return [...this.threads].filter((thread) => thread.session).length;
   }
 
-  /** A free thread, a new one, or a place in line. */
-  private acquire(session: boolean): Promise<Thread> {
+  /** A free thread for a task, a new one, or a place in line. */
+  private acquire(): Promise<Thread> {
     const settings = this.settings();
-    const free = this.freeThreadFor(session);
+    const free = this.freeThreadFor(false);
 
-    if (free) return Promise.resolve(this.take(free, session));
+    if (free) return Promise.resolve(this.take(free, false));
 
     if (this.waiting.length >= settings.maxPending) {
       return Promise.reject(busy());
@@ -256,7 +275,6 @@ class CpuPool {
 
     return new Promise<Thread>((resolve, reject) => {
       const waiter: Waiter = {
-        session,
         grant: resolve,
         fail: reject,
         timer: setTimeout(() => {
@@ -288,7 +306,7 @@ class CpuPool {
     return thread;
   }
 
-  /** The thread back, to the first in line it may serve. */
+  /** The thread back, to the first in line. */
   private release(thread: Thread): void {
     thread.busy = false;
     thread.session = false;
@@ -298,7 +316,7 @@ class CpuPool {
   private serveWaiting(): void {
     for (let at = 0; at < this.waiting.length;) {
       const waiter = this.waiting[at];
-      const free = this.freeThreadFor(waiter.session);
+      const free = this.freeThreadFor(false);
 
       if (!free) {
         at += 1;
@@ -307,7 +325,7 @@ class CpuPool {
 
       this.waiting.splice(at, 1);
       clearTimeout(waiter.timer);
-      waiter.grant(this.take(free, waiter.session));
+      waiter.grant(this.take(free, false));
     }
   }
 
