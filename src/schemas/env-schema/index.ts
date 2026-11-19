@@ -1579,6 +1579,25 @@ const envSchema = z
       z.coerce.number().int().min(30).max(3_650).default(180),
     ),
 
+    // The delivery history's archive (plano-escala F5-16,
+    // shared/archive/history-archive.ts): with true, the partition job
+    // hands every closed month of delivery_event and activity (and the
+    // `_older` partition of the copy window) to a PARTITION_ARCHIVE job,
+    // which copies it to the archive bucket (the trail's: the same bucket,
+    // token and storage class), one gzipped CSV per company under
+    // `archive/<table>/<yyyymm>/`, written down in archive_manifest with
+    // its count and sha256. A copy only: nothing is deleted from the
+    // database (the DROP is F5-17, off until the lawyer's opinion), and a
+    // table still plain (before its copy window) is left alone. Off by
+    // default; enabled without the bucket or the token, the boot only
+    // warns and nothing is archived. At most two months per table a night.
+    HISTORY_ARCHIVE_ENABLED: z
+      .preprocess(
+        (value) => (value === "" ? undefined : value),
+        z.enum(["true", "false"]).default("false"),
+      )
+      .transform((value) => value === "true"),
+
     // The trail's submission keys (plano-escala F2-14, decision D3): days
     // a row of delivery_event_submission is kept before the nightly
     // cleanup-delivery-event-submissions removes it. A key only matters
@@ -2495,6 +2514,19 @@ const envSchema = z
           `[env] TRAIL_ARCHIVE_ENABLED=true sem ${missing.join(", ")}: o ` +
             "job de partições guarda os dias vencidos da trilha em vez de " +
             "apagá-los sem arquivo.",
+        );
+      }
+    }
+
+    // The same for the history's archive (F5-16): nothing is archived, and
+    // nothing of the history is ever deleted without its archive.
+    if (env.HISTORY_ARCHIVE_ENABLED) {
+      const missing = missingArchiveSettings(env);
+
+      if (missing.length > 0) {
+        console.warn(
+          `[env] HISTORY_ARCHIVE_ENABLED=true sem ${missing.join(", ")}: ` +
+            "o histórico de entregas não é arquivado.",
         );
       }
     }

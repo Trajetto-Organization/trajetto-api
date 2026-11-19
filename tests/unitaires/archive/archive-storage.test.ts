@@ -64,6 +64,37 @@ async function* chunks(...sizes: number[]): AsyncGenerator<Uint8Array> {
 const bodyLength = (input: Record<string, unknown>) =>
   (input.Body as Buffer).length;
 
+describe("the S3 archive storage's read (archive-restore, F5-16)", () => {
+  const reading = (answer: () => unknown) =>
+    createS3ArchiveStorage({
+      client: { send: async () => answer() } as never,
+      bucket: "trajetto-archive-staging",
+      storageClass: "STANDARD_IA",
+    });
+
+  it("answers the object's bytes", async () => {
+    const storage = reading(() => ({
+      Body: { transformToByteArray: async () => Uint8Array.from([1, 2, 3]) },
+    }));
+
+    expect(await storage.get("archive/x.csv.gz")).toEqual(
+      Buffer.from([1, 2, 3]),
+    );
+  });
+
+  it("answers null for a key that holds nothing, and throws on anything else", async () => {
+    const missing = reading(() => {
+      throw Object.assign(new Error("not found"), { name: "NoSuchKey" });
+    });
+    const down = reading(() => {
+      throw new Error("R2 indisponível");
+    });
+
+    expect(await missing.get("archive/x.csv.gz")).toBeNull();
+    await expect(down.get("archive/x.csv.gz")).rejects.toThrow(/indisponível/);
+  });
+});
+
 describe("the S3 archive storage", () => {
   it("cuts a multipart upload into parts of exactly the part size, the last one smaller", async () => {
     const { client, sent } = recordingClient();

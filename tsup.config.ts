@@ -27,6 +27,10 @@ export default defineConfig({
     // gives each door's point to its open deliveries still without one.
     "backfill-delivery-address-key":
       "./infra/scripts/backfill-delivery-address-key.ts",
+    // Run by hand in the production container for a legal request
+    // (plano-escala F5-16): a month of a company's history back from the
+    // archive bucket into a table of the archive_restore schema.
+    "archive-restore": "./infra/scripts/archive-restore.ts",
     // The receipt renderer's worker thread. proof-pdf-renderer.ts loads it
     // from next to server.js (build/proof-pdf-worker.js) by this name.
     "proof-pdf-worker": "./src/shared/services/proof-pdf-worker.ts",

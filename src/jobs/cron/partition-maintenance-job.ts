@@ -3,6 +3,12 @@ import { env } from "@/env";
 import { missingArchiveSettings } from "@/shared/archive/archive-settings";
 import { archiveStorageFromEnv } from "@/shared/archive/archive-storage";
 import {
+  createHistoryArchiveScheduler,
+  historySourceOf,
+  type HistoryArchiveScheduler,
+  type HistoryPartition,
+} from "@/shared/archive/history-archive";
+import {
   createTrailArchiveGate,
   type TrailArchiveGate,
   type TrailArchiveJobs,
@@ -227,6 +233,13 @@ interface MaintenanceDeps {
    * table whose gate is missing here drops nothing.
    */
   dropGates: Partial<Record<PartitionDropGateName, PartitionDropGate>>;
+
+  /**
+   * Null: the history's archive is off (plano-escala F5-16). On, the
+   * night hands the closed months of delivery_event and activity, once
+   * partitioned, to their PARTITION_ARCHIVE jobs.
+   */
+  historyArchive: HistoryArchiveScheduler | null;
 }
 
 /**
@@ -248,6 +261,30 @@ function trailArchiveFromEnv(): TrailArchiveGate | null {
 }
 
 /**
+ * The history's archive as this environment configures it (plano-escala
+ * F5-16): null while HISTORY_ARCHIVE_ENABLED is off. On, without the
+ * bucket or the token, a scheduler that archives nothing and says why.
+ */
+function historyArchiveFromEnv(): HistoryArchiveScheduler | null {
+  if (!env.HISTORY_ARCHIVE_ENABLED) return null;
+
+  const missing = missingArchiveSettings(env);
+  const jobs = partitionArchiveJobs(new BackgroundJobRepository(databaseBatch));
+
+  return createHistoryArchiveScheduler({
+    db: databaseBatch,
+    configured: missing.length === 0,
+    missing,
+    enqueue: (table, partition: HistoryPartition) =>
+      jobs.enqueue(table, {
+        name: partition.name,
+        from: new Date(partition.from),
+        to: new Date(partition.to),
+      }),
+  });
+}
+
+/**
  * The PARTITION_ARCHIVE jobs (plano-escala F3-28) on the maintenance pool:
  * the night enqueues an expired day, and the process that consumes the
  * `jobs` queue archives it, woken after the enqueue.
@@ -261,6 +298,8 @@ function partitionArchiveJobs(
     },
 
     async enqueue(table, partition) {
+      // A FROM (MINVALUE) partition (the history's `_older`, F5-16) has no
+      // instant to give: an empty `from`.
       const { outcome } = await jobs.enqueue({
         kind: "PARTITION_ARCHIVE",
         businessId: null,
@@ -268,7 +307,9 @@ function partitionArchiveJobs(
         payload: {
           table,
           name: partition.name,
-          from: partition.from.toISOString(),
+          from: Number.isFinite(partition.from.getTime())
+            ? partition.from.toISOString()
+            : "",
           to: partition.to.toISOString(),
         },
       });
@@ -374,6 +415,8 @@ interface TableOutcome {
   archived: number;
   /** Days past the retention kept for their archive (also postponed). */
   held: number;
+  /** History partitions handed to their archive jobs this run (F5-16). */
+  archiveQueued: number;
   analyzed: boolean;
   /** False when a DDL ran as the session's user, not as the owner role. */
   ownerOk: boolean;
@@ -689,6 +732,10 @@ async function maintainPartitions(
         ? trailArchiveFromEnv()
         : overrides.trailArchive,
     dropGates: overrides.dropGates ?? dropGatesFromEnv(),
+    historyArchive:
+      overrides.historyArchive === undefined
+        ? historyArchiveFromEnv()
+        : overrides.historyArchive,
   };
 
   // Opened on the first statement that needs it, once per run: one that
@@ -714,6 +761,7 @@ async function maintainPartitions(
         frozen: 0,
         archived: 0,
         held: 0,
+        archiveQueued: 0,
         analyzed: false,
         ownerOk: true,
         missingNow: [],
@@ -758,6 +806,15 @@ async function maintainPartitions(
 
       await createAhead(table, attached, outcome, deps);
       await removeBehind(table, attached, outcome, deps, connection);
+
+      // The history's closed months, to their archive jobs (F5-16). Never
+      // in the way of the partitions: the scheduler swallows its failures.
+      if (deps.historyArchive && historySourceOf(table.table)) {
+        outcome.archiveQueued = await deps.historyArchive.enqueueDue(
+          table.table,
+          attached,
+        );
+      }
 
       missingNow.push(...outcome.missingNow);
 

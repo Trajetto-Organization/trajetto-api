@@ -8,6 +8,7 @@ import { v7 as uuidV7 } from "uuid";
 
 import { logger } from "@/shared/logging/logger";
 
+import { ARCHIVE_PLATFORM_SUBJECT } from "./archive-settings";
 import type { ArchiveStorage } from "./archive-storage";
 
 const log = logger.child({ component: "trail-archive" });
@@ -775,9 +776,12 @@ function createTrailArchiveGate(
 
       try {
         const gone = await db.$queryRawUnsafe<Array<{ business_id: string }>>(
+          // The history's platform rows (F5-16) are no company's: never
+          // taken for a company that left.
           `SELECT DISTINCT m."businessId" AS business_id
              FROM "archive_manifest" m
             WHERE m."status" <> 'SKIPPED'::"ArchiveObjectStatus"
+              AND m."businessId" <> '${ARCHIVE_PLATFORM_SUBJECT}'
               AND NOT EXISTS (
                 SELECT 1 FROM "business" b
                  WHERE b."id" = m."businessId" AND ${keptCompany("b")}
@@ -797,14 +801,23 @@ function createTrailArchiveGate(
         const cutoff = iso(
           now() - (options.retentionDays + MANIFEST_PURGE_SLACK_DAYS) * DAY_MS,
         );
+        // Only the trail's rows: the bucket expires `trail/` at the
+        // retention, while the history's manifest (F5-16) is what proves a
+        // month before its DROP and outlives it for the legal term.
+        const trailTables = TRAIL_SOURCES.map((source) => source.table);
         const purgedObjects = await db.$executeRawUnsafe(
           `DELETE FROM "archive_manifest"
-            WHERE coalesce("archived_at", "created_at") < $1::timestamp`,
+            WHERE coalesce("archived_at", "created_at") < $1::timestamp
+              AND "source_table" = ANY($2::text[])`,
           cutoff,
+          trailTables,
         );
         const purgedDays = await db.$executeRawUnsafe(
-          `DELETE FROM "archive_partition" WHERE "verified_at" < $1::timestamp`,
+          `DELETE FROM "archive_partition"
+            WHERE "verified_at" < $1::timestamp
+              AND "source_table" = ANY($2::text[])`,
           cutoff,
+          trailTables,
         );
 
         if (purgedObjects > 0 || purgedDays > 0) {
@@ -876,6 +889,7 @@ export {
   trailArchiveKey,
   trailSourceOf,
   withoutRedactedDrivers,
+  writeGzipObject,
 };
 export type {
   ArchiveDatabase,

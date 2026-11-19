@@ -9,6 +9,14 @@ const ARCHIVE_STORAGE_CLASSES = ["STANDARD", "STANDARD_IA"] as const;
 
 type ArchiveStorageClass = (typeof ARCHIVE_STORAGE_CLASSES)[number];
 
+/**
+ * The subject of the history's rows of no company (plano-escala F5-16):
+ * activity's platform rows, and those of a company deleted since (its
+ * businessId went NULL with it). No company is ever called this, so no
+ * company's exit deletes these objects.
+ */
+const ARCHIVE_PLATFORM_SUBJECT = "_platform";
+
 /** What the archive storage needs from the environment. */
 interface ArchiveStorageEnv {
   TRAIL_ARCHIVE_BUCKET?: string;
@@ -42,5 +50,9 @@ function missingArchiveSettings(
   return missing;
 }
 
-export { ARCHIVE_STORAGE_CLASSES, missingArchiveSettings };
+export {
+  ARCHIVE_PLATFORM_SUBJECT,
+  ARCHIVE_STORAGE_CLASSES,
+  missingArchiveSettings,
+};
 export type { ArchiveStorageClass, ArchiveStorageEnv };

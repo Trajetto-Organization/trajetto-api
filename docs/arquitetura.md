@@ -4342,6 +4342,44 @@ o objeto do dia e da empresa; o `sha256` e o `row_count` dele estão em
 removidos e anonimizados (`trail_archive_redaction`, F3-27;
 `withoutRedactedDrivers`).
 
+**Arquivo do histórico** (plano de escala F5-16,
+`src/shared/archive/history-archive.ts`). Com `HISTORY_ARCHIVE_ENABLED=true`,
+o cron `partition-maintenance` entrega cada partição fechada de
+`delivery_event` e de `activity` (um mês, `<tabela>_AAAAMM`, e a história de
+antes da janela de cópia, `<tabela>_older`), 7 dias depois do fim dela, a um
+job `PARTITION_ARCHIVE`, no máximo dois por tabela por noite:
+
+- um objeto por empresa e partição, CSV em gzip, em
+  `archive/<tabela>/<aaaamm|older>/<businessId>.csv.gz`, com todas as
+  colunas do modelo (o `txid` fica de fora), no mesmo bucket de arquivo da
+  trilha; as linhas de `activity` sem empresa (as da plataforma e as de
+  empresa excluída) vão em `_platform`, que a saída de nenhuma empresa apaga;
+- o CSV separa NULL (célula vazia) de texto vazio (`""`), e cada objeto vira
+  uma linha de `archive_manifest` com contagem e sha256; a partição só é
+  conferida em `archive_partition` quando a soma do manifesto bate com a
+  contagem feita depois do envio. Uma empresa em expurgo fica `SKIPPED`;
+- o histórico é reescrito no lugar depois do fato (a anonimização tira o
+  nome de `activity` e o aparelho de `delivery_event`): a empresa que teve
+  alguém anonimizado depois do objeto ganha o objeto de novo, das linhas já
+  limpas, na noite seguinte. O arquivo nunca guarda o que o banco apagou;
+- é só cópia: nada sai do banco (o DROP é o F5-17), e a tabela ainda não
+  particionada (antes da janela) fica de fora. O congelamento é o
+  `VACUUM FREEZE` de domingo do mesmo cron, como o de toda partição
+  assentada. A faxina da trilha só limpa o manifesto da trilha.
+
+Para um pedido legal, `infra/scripts/archive-restore.ts` devolve a partição
+de uma empresa a uma tabela própria no schema `archive_restore`, depois de
+conferir o sha256, as colunas e a contagem contra o manifesto. No
+contêiner da `trajetto-api`, com a `DATABASE_URL` do usuário do Database só
+nesse comando:
+
+```sh
+node build/archive-restore.js delivery_event 2026-11 <businessId>
+```
+
+Quem pediu apaga a tabela ao terminar. Provas: o E2E `history-archive` (com
+o R2 falso) e o unitário `history-archive-rules`.
+
 **Pool de CPU** (plano de escala F3-29, `src/shared/cpu-pool/`). O parse
 das NF-e (`POST /delivery/import-xml/:businessId`, até 25 por chamada) e a
 planilha da exportação em Excel rodam em _worker threads_, não no _event

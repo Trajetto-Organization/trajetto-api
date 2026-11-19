@@ -3,6 +3,7 @@ import {
   CompleteMultipartUploadCommand,
   CreateMultipartUploadCommand,
   DeleteObjectCommand,
+  GetObjectCommand,
   PutObjectCommand,
   S3Client,
   UploadPartCommand,
@@ -40,6 +41,13 @@ interface ArchiveStorage {
 
   /** Deletes each key; an absent key counts as deleted. */
   deleteMany(keys: readonly string[]): Promise<void>;
+
+  /**
+   * The object's bytes, or null when the key holds nothing: a restore for
+   * a legal request (infra/scripts/archive-restore.ts, plano-escala F5-16).
+   * Nothing in the API reads the archive.
+   */
+  get(key: string): Promise<Buffer | null>;
 }
 
 /**
@@ -175,6 +183,26 @@ function createS3ArchiveStorage(
             )
             .catch(() => undefined);
         }
+
+        throw error;
+      }
+    },
+
+    async get(key) {
+      try {
+        const { Body } = await client.send(
+          new GetObjectCommand({ Bucket: bucket, Key: key }),
+        );
+
+        if (!Body) return null;
+
+        return Buffer.from(
+          await (
+            Body as { transformToByteArray: () => Promise<Uint8Array> }
+          ).transformToByteArray(),
+        );
+      } catch (error) {
+        if ((error as { name?: string }).name === "NoSuchKey") return null;
 
         throw error;
       }

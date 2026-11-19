@@ -32,6 +32,10 @@ class InMemoryArchiveStorage implements ArchiveStorage {
     this.puts.push(key);
   }
 
+  async get(key: string): Promise<Buffer | null> {
+    return this.objects.get(key) ?? null;
+  }
+
   async deleteMany(keys: readonly string[]): Promise<void> {
     for (const key of keys) this.objects.delete(key);
   }

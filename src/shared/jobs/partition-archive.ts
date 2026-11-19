@@ -6,9 +6,14 @@ import {
   type ArchiveStorage,
 } from "@/shared/archive/archive-storage";
 import {
+  archiveHistoryPartition,
+  historySourceOf,
+} from "@/shared/archive/history-archive";
+import {
   archiveTrailPartition,
   trailSourceOf,
   type ArchiveDatabase,
+  type ArchiveVerdict,
 } from "@/shared/archive/trail-archive";
 import type { JobContext, JobHandler } from "@/shared/jobs/job-runner";
 import { PermanentJobError } from "@/shared/jobs/job-errors";
@@ -38,6 +43,13 @@ const log = logger.child({ component: "jobs", kind: "PARTITION_ARCHIVE" });
  * fails the attempt and is retried with the runner's backoff; after the
  * last attempt the job is FAILED and the day stays attached, which the
  * partition-stuck alert counts.
+ *
+ * The same job archives a partition of the delivery history (plano-escala
+ * F5-16, shared/archive/history-archive.ts): a month of delivery_event or
+ * activity, or the `_older` partition, by the table in the payload. The
+ * slices, the checkpoints and the verdict are the same; `from` is empty
+ * for the partition FROM (MINVALUE), and `rewriteBefore` (the DROP's final
+ * pass, F5-17) writes again every object older than it.
  */
 
 interface PartitionArchivePayload {
@@ -47,9 +59,12 @@ interface PartitionArchivePayload {
   /** The partition, by name. */
   name: string;
 
-  /** Its range, ISO. */
+  /** Its range, ISO; `from` is empty for a FROM (MINVALUE) partition. */
   from: string;
   to: string;
+
+  /** History only: rewrite every object written before this, ISO. */
+  rewriteBefore?: string;
 }
 
 interface PartitionArchiveDeps {
@@ -89,10 +104,11 @@ function createPartitionArchiveJob(deps: PartitionArchiveDeps): JobHandler {
     async run(job) {
       const payload = payloadOf(job);
       const source = trailSourceOf(payload.table);
+      const history = historySourceOf(payload.table);
 
-      if (!source) {
+      if (!source && !history) {
         throw new PermanentJobError(
-          `PARTITION_ARCHIVE: ${payload.table} não é uma tabela da trilha`,
+          `PARTITION_ARCHIVE: ${payload.table} não é uma tabela da trilha nem do histórico`,
         );
       }
 
@@ -102,38 +118,67 @@ function createPartitionArchiveJob(deps: PartitionArchiveDeps): JobHandler {
       // whose Environment misses them): said, and the day stays attached.
       if (!storage) {
         throw new PermanentJobError(
-          `arquivo da trilha sem configuração neste processo: ${(deps.missing?.() ?? []).join(", ")}`,
+          `arquivo sem configuração neste processo: ${(deps.missing?.() ?? []).join(", ")}`,
         );
       }
 
-      const partition = {
-        name: payload.name,
-        from: new Date(payload.from),
-        to: new Date(payload.to),
+      const archiveSlice = (): Promise<ArchiveVerdict> => {
+        if (history) {
+          return archiveHistoryPartition(
+            history,
+            {
+              name: payload.name,
+              from: payload.from
+                ? new Date(payload.from).getTime()
+                : Number.NEGATIVE_INFINITY,
+              to: new Date(payload.to).getTime(),
+            },
+            {
+              db: deps.db,
+              storage,
+              deadline: now() + sliceMs,
+              now,
+              pageSize: deps.pageSize,
+              rewriteBefore: payload.rewriteBefore
+                ? new Date(payload.rewriteBefore)
+                : undefined,
+            },
+          );
+        }
+
+        return archiveTrailPartition(
+          source!,
+          {
+            name: payload.name,
+            from: new Date(payload.from),
+            to: new Date(payload.to),
+          },
+          {
+            db: deps.db,
+            storage,
+            deadline: now() + sliceMs,
+            now,
+            pageSize: deps.pageSize,
+          },
+        );
       };
 
       for (let slice = 1; ; slice += 1) {
         job.throwIfStopped();
 
-        const verdict = await archiveTrailPartition(source, partition, {
-          db: deps.db,
-          storage,
-          deadline: now() + sliceMs,
-          now,
-          pageSize: deps.pageSize,
-        });
+        const verdict = await archiveSlice();
 
         if (verdict.verified) {
           log.info(
             { jobId: job.id, partition: payload.name, ...verdict },
-            "trail partition archived",
+            history ? "history partition archived" : "trail partition archived",
           );
           return;
         }
 
         if (verdict.reason !== "budget") {
           throw new Error(
-            `arquivo do dia ${payload.name} não confere: ${verdict.manifestRows} de ${verdict.rows} linhas no manifesto, ${verdict.pending} pendente(s)`,
+            `arquivo de ${payload.name} não confere: ${verdict.manifestRows} de ${verdict.rows} linhas no manifesto, ${verdict.pending} pendente(s)`,
           );
         }
 
